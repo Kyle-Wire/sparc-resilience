@@ -1,4 +1,4 @@
-# SPARC v2.1 — Spatial Analysis and Research Core
+# SPARC — Spatial Analysis and Research Core
 
 **SPARC Labs LLC**
 
