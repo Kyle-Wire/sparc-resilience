@@ -1,0 +1,578 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://kleinfelder.com/sparc/project-schema-v1.json",
+  "title": "SPARC Project Configuration",
+  "description": "Schema for a SPARC spatial regression pipeline project file (project.yml)",
+  "type": "object",
+  "required": ["project", "data", "crs", "predictors"],
+  "additionalProperties": false,
+
+  "properties": {
+
+    "project": {
+      "type": "object",
+      "description": "Project-level metadata",
+      "required": ["name"],
+      "properties": {
+        "name":        {"type": "string", "description": "Human-readable project name"},
+        "description": {"type": "string"},
+        "domain":      {"type": "string", "description": "Domain template used (e.g. uhi, groundwater, air_quality)"},
+        "version":     {"type": "string", "default": "1.0.0"},
+        "author":      {"type": "string"},
+        "response_units": {
+          "type": "string",
+          "default": "°F",
+          "description": "Units of the target/response variable (used in reports and physics priors)"
+        }
+      }
+    },
+
+    "data": {
+      "type": "object",
+      "description": "Input data specification",
+      "required": ["file_path", "target_column", "coord_columns"],
+      "properties": {
+        "file_path":         {"type": "string", "description": "Path to input CSV (absolute or relative to project.yml)"},
+        "target_column":     {"type": "string", "description": "Name of the response/target variable column"},
+        "identifier_column": {"type": "string", "default": "OBJECTID", "description": "Unique row identifier column"},
+        "coord_columns":     {
+          "type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 2,
+          "description": "Two coordinate column names [X/Easting, Y/Northing]"
+        },
+        "areas_of_interest_file": {
+          "type": "string",
+          "description": "Optional CSV mapping locations to named zones/districts for scenario analysis"
+        }
+      }
+    },
+
+    "crs": {
+      "type": "object",
+      "description": "Coordinate reference systems",
+      "required": ["input", "projected"],
+      "properties": {
+        "input":     {"type": "string", "description": "EPSG code of the input data CRS (e.g. EPSG:4326)"},
+        "projected": {"type": "string", "description": "EPSG code of the target projected CRS for spatial analysis"}
+      }
+    },
+
+    "predictors": {
+      "type": "array",
+      "items": {"type": "string"},
+      "minItems": 1,
+      "description": "List of predictor column names in the input data"
+    },
+
+    "physics": {
+      "type": "object",
+      "description": "Physics/domain constraints — priors, caps, monotonicity, causal DAG",
+      "properties": {
+        "priors_file": {
+          "type": "string",
+          "description": "Path to priors YAML (literature coefficients, scale harmonization)"
+        },
+        "caps_file": {
+          "type": "string",
+          "description": "Path to caps YAML (variable bounds, delta constraints, monotonicity)"
+        },
+        "monotone_constraints": {
+          "type": "object",
+          "description": "Per-predictor monotonicity: -1 = decreasing effect, +1 = increasing, 0 = unconstrained",
+          "additionalProperties": {"type": "integer", "enum": [-1, 0, 1]}
+        }
+      }
+    },
+
+    "causal": {
+      "type": "object",
+      "description": "Causal DAG configuration for counterfactual simulation",
+      "properties": {
+        "dag_file": {
+          "type": "string",
+          "description": "Path to causal DAG definition (JSON or YAML — nodes + directed edges)"
+        },
+        "estimator": {
+          "type": "string",
+          "enum": ["ols", "hgb", "dml"],
+          "default": "hgb",
+          "description": "Structural-equation estimator: ols (linear), hgb (HistGradientBoosting, non-linear), or dml (Debiased/Doubly-robust ML, recommended for causal inference)"
+        },
+        "dml_shrinkage": {
+          "type": "number",
+          "default": 0.25,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Physics prior shrinkage weight for DML estimator (reduced vs default since DML is debiased)"
+        },
+        "dml_cv_folds": {
+          "type": "integer",
+          "default": 5,
+          "minimum": 2,
+          "description": "Number of cross-fitting folds for DML estimation"
+        },
+        "spatial_block_size": {
+          "type": ["integer", "null"],
+          "default": null,
+          "description": "Block size in meters for spatial DML cross-fitting (null = auto from correlogram)"
+        },
+        "dag_blend_weight": {
+          "type": "number",
+          "default": 0.5,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Weight for DAG causal coefficients vs physics priors in scenario simulation (higher = more trust in data)"
+        },
+        "estimate_cate": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to estimate Conditional Average Treatment Effects via EconML"
+        },
+        "ipw_enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run IPW ATE estimation alongside backdoor regression"
+        },
+        "gps_enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run Generalized Propensity Score estimation for continuous treatments"
+        },
+        "matching_enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run covariate matching cross-check for ATE estimation"
+        },
+        "doubly_robust": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run doubly-robust estimation via LinearDML (continuous treatment)"
+        },
+        "dose_response": {
+          "type": "boolean",
+          "default": true,
+          "description": "Compute dose-response curves (non-linear treatment effect analysis)"
+        },
+        "bootstrap_n": {
+          "type": "integer",
+          "default": 100,
+          "minimum": 5,
+          "description": "Number of bootstrap iterations for ATE confidence intervals"
+        },
+        "actionable_variables": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Variables that can be intervened on (subset of predictors)"
+        },
+        "fixed_variables": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Variables that cannot change (e.g. Elevation)"
+        },
+        "temporal_edges": {
+          "type": "array",
+          "description": "Time-lagged causal edges for spatiotemporal models (e.g. last month's rainfall causes this month's groundwater level)",
+          "items": {
+            "type": "object",
+            "required": ["source", "target", "lag"],
+            "properties": {
+              "source": {"type": "string", "description": "Source variable name"},
+              "target": {"type": "string", "description": "Target variable name"},
+              "lag":    {"type": "integer", "minimum": 1, "description": "Number of time steps the effect is delayed"}
+            }
+          }
+        },
+        "discovery": {
+          "type": "object",
+          "description": "Causal discovery settings for data-driven DAG validation",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "Run causal discovery algorithms to validate expert DAG"
+            },
+            "methods": {
+              "type": "array",
+              "items": {"type": "string", "enum": ["pc_stable", "lingam", "ges", "pcmci"]},
+              "default": ["pc_stable", "lingam", "ges"],
+              "description": "Which algorithms to run (pcmci requires temporal data)"
+            },
+            "alpha": {
+              "type": "number",
+              "default": 0.05,
+              "description": "Significance level for constraint-based algorithms"
+            },
+            "compare_expert": {
+              "type": "boolean",
+              "default": true,
+              "description": "Compare data-learned DAG with expert DAG"
+            },
+            "consensus_threshold": {
+              "type": "integer",
+              "default": 2,
+              "minimum": 1,
+              "description": "Minimum number of methods agreeing per edge for consensus DAG"
+            }
+          }
+        }
+      }
+    },
+
+    "output": {
+      "type": "object",
+      "properties": {
+        "base_dir": {
+          "type": "string",
+          "default": "output",
+          "description": "Base output directory (relative to project.yml or absolute)"
+        },
+        "stage_dirs": {
+          "type": "object",
+          "properties": {
+            "stage_1": {"type": "string", "default": "Stage_1_Correlogram_Analysis"},
+            "stage_2": {"type": "string", "default": "Stage_2_Spatial_CV"},
+            "stage_3": {"type": "string", "default": "Stage_3_Causal_Validation"},
+            "stage_4": {"type": "string", "default": "Stage_4_Scenarios"},
+            "final":   {"type": "string", "default": "Final_Interpretation_Results"}
+          }
+        }
+      }
+    },
+
+    "pipeline": {
+      "type": "object",
+      "description": "Global pipeline settings",
+      "properties": {
+        "random_seed":       {"type": "integer", "default": 42},
+        "n_spatial_folds":   {"type": "integer", "default": 5, "minimum": 2},
+        "fast_mode":         {"type": "boolean", "default": false},
+        "overwrite_outputs": {"type": "boolean", "default": false},
+        "run_mc_uncertainty": {"type": "boolean", "default": true, "description": "Run Monte-Carlo uncertainty propagation on scenarios"},
+        "n_mc_draws":        {"type": "integer", "default": 50, "minimum": 10, "description": "Number of MC draws for uncertainty propagation"}
+      }
+    },
+
+    "flags": {
+      "type": "object",
+      "description": "Feature flags controlling pipeline behaviour",
+      "properties": {
+        "use_gwen_selection":           {"type": "boolean", "default": true},
+        "include_gwrf_in_ensemble":     {"type": "boolean", "default": true},
+        "use_laplacian_eigenmaps_in_ols": {"type": "boolean", "default": false}
+      }
+    },
+
+    "models": {
+      "type": "object",
+      "description": "Per-model hyperparameters (all optional — sensible defaults used if omitted)",
+      "properties": {
+
+        "gwr": {
+          "type": "object",
+          "properties": {
+            "bandwidth":   {"type": ["integer", "null"], "description": "Adaptive bandwidth (k-NN). null = auto-select."},
+            "kernel":      {"type": "string", "enum": ["gaussian", "bisquare", "exponential"], "default": "gaussian"},
+            "alpha":       {"type": "number", "default": 0.1},
+            "min_points":  {"type": "integer", "default": 50}
+          }
+        },
+
+        "gwrf": {
+          "type": "object",
+          "properties": {
+            "n_estimators":       {"type": "integer", "default": 100},
+            "k_neighbors":        {"type": "integer", "default": 100},
+            "min_samples_leaf":   {"type": "integer", "default": 5},
+            "n_jobs":             {"type": "integer", "default": 1},
+            "subsample_fraction": {"type": ["number", "null"]},
+            "subsample_n":        {"type": ["integer", "null"]}
+          }
+        },
+
+        "ggpgam": {
+          "type": "object",
+          "properties": {
+            "n_splines":       {"type": "integer", "default": 5},
+            "n_spatial_bases": {"type": "integer", "default": 10},
+            "lam":             {"type": "number", "default": 0.6},
+            "max_iter":        {"type": "integer", "default": 100}
+          }
+        },
+
+        "meta_ensemble": {
+          "type": "object",
+          "properties": {
+            "algorithm":        {"type": "string", "enum": ["lightgbm", "xgboost", "catboost", "linear"], "default": "lightgbm"},
+            "n_optuna_trials":  {"type": "integer", "default": 25},
+            "include_base_features": {"type": "boolean", "default": true},
+            "include_laplacian_pca": {"type": "boolean", "default": true}
+          }
+        },
+
+        "deep_kriging": {
+          "type": "object",
+          "properties": {
+            "enabled":       {"type": "boolean", "default": true, "description": "Enable Deep Kriging V2 residual correction when spatial autocorrelation is detected in meta-ensemble residuals."},
+            "version":       {"type": "integer", "enum": [1, 2], "default": 2, "description": "Deep Kriging version. 2 = multi-scale Wendland basis + spatial smoothness (recommended)."},
+            "hidden_layers": {"type": "array", "items": {"type": "integer"}, "default": [64, 32, 16]},
+            "dropout_rate":  {"type": "number", "default": 0.2},
+            "epochs":        {"type": "integer", "default": 100},
+            "learning_rate": {"type": "number", "default": 0.001},
+            "batch_size":    {"type": "integer", "default": 256}
+          }
+        },
+
+        "spatial_cv": {
+          "type": "object",
+          "properties": {
+            "block_size":   {"type": ["number", "null"], "description": "Block size in meters. null = auto-detect from correlogram."},
+            "buffer_size":  {"type": "number", "default": 300},
+            "block_size_source": {"type": "string", "enum": ["user", "correlogram"], "default": "correlogram", "description": "Source of block_size: user-specified or auto-detected from correlogram"},
+            "method":       {"type": "string", "enum": ["block", "kmeans"], "default": "block"},
+            "stratify_y":   {"type": "boolean", "default": true}
+          }
+        }
+      }
+    },
+
+    "gwen": {
+      "type": "object",
+      "description": "GWEN variable selection parameters",
+      "properties": {
+        "sample_size":          {"type": ["integer", "null"], "default": 5000},
+        "k_neighbors":          {"type": "integer", "default": 500},
+        "cv_folds":             {"type": "integer", "default": 5},
+        "selection_threshold":  {"type": "number", "default": 0.1},
+        "l1_ratios":            {"type": "array", "items": {"type": "number"}, "default": [0.1, 0.5, 0.7, 0.9, 0.95, 0.99]},
+        "n_alphas":             {"type": "integer", "default": 100},
+        "spatial_cv":           {"type": "boolean", "default": true, "description": "Use spatial block CV instead of random k-fold"},
+        "stability_folds":     {"type": "integer", "default": 5, "description": "Number of folds for stability scoring (0 to disable)"},
+        "auto_tune":            {"type": "boolean", "default": true, "description": "Auto-suggest hyperparams from correlogram results"},
+        "quick_mode":           {"type": "boolean", "default": false, "description": "Fast mode: fixed alpha, reduced fit locations"},
+        "report_format":        {"type": "string", "enum": ["html", "csv", "both"], "default": "html"}
+      }
+    },
+
+    "laplacian": {
+      "type": "object",
+      "description": "Laplacian Eigenmap feature engineering",
+      "properties": {
+        "n_eigenmaps": {"type": "integer", "default": 150},
+        "k_for_swm":  {"type": "integer", "default": 10}
+      }
+    },
+
+    "scenarios": {
+      "type": "array",
+      "description": "Single-variable intervention scenarios for counterfactual simulation",
+      "items": {
+        "type": "object",
+        "required": ["name", "variable", "increments"],
+        "properties": {
+          "name":        {"type": "string"},
+          "variable":    {"type": "string", "description": "Predictor to intervene on"},
+          "direction":   {"type": "string", "enum": ["increase", "decrease"]},
+          "increments":  {"type": "array", "items": {"type": "number"}, "description": "Absolute delta values to simulate"},
+          "min_val":     {"type": "number"},
+          "max_val":     {"type": "number"},
+          "unit":        {"type": "string"}
+        }
+      }
+    },
+
+    "joint_scenarios": {
+      "type": "array",
+      "description": "Multi-variable joint intervention scenarios",
+      "items": {
+        "type": "object",
+        "required": ["name", "interventions"],
+        "properties": {
+          "name": {"type": "string", "description": "Human-readable scenario name"},
+          "auto_propagate_dag": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether to propagate effects through the causal DAG"
+          },
+          "interventions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["variable", "increment"],
+              "properties": {
+                "variable":  {"type": "string", "description": "Predictor to intervene on"},
+                "direction": {"type": "string", "enum": ["increase", "decrease"]},
+                "increment": {"type": "number", "description": "Absolute delta value"}
+              }
+            },
+            "minItems": 1,
+            "description": "List of simultaneous interventions"
+          }
+        }
+      }
+    },
+
+    "temporal": {
+      "type": "object",
+      "description": "Spatiotemporal configuration for panel/time-series data. When enabled, SPARC treats rows as location×time observations.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable spatiotemporal mode (requires time_column in data)"
+        },
+        "time_column": {
+          "type": "string",
+          "description": "Column name containing timestamps or integer time indices"
+        },
+        "frequency": {
+          "type": "string",
+          "enum": ["hourly", "daily", "weekly", "monthly", "quarterly", "annual", "custom"],
+          "description": "Temporal resolution of the data"
+        },
+        "training_window": {
+          "type": ["integer", "null"],
+          "default": null,
+          "description": "Number of time steps to use for training (null = use all available)"
+        },
+        "validation_window": {
+          "type": ["integer", "null"],
+          "default": null,
+          "description": "Number of future time steps reserved for temporal validation"
+        },
+        "forecast_horizon": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0,
+          "description": "Number of future time steps to forecast beyond the last observed period (0 = no forecasting)"
+        },
+        "lag_features": {
+          "type": "object",
+          "description": "Automatic temporal lag feature generation",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Auto-generate lagged features from predictors"
+            },
+            "lags": {
+              "type": "array",
+              "items": {"type": "integer", "minimum": 1},
+              "default": [1, 2, 3],
+              "description": "Lag steps to create (e.g. [1,2,3] creates t-1, t-2, t-3 features)"
+            },
+            "rolling_windows": {
+              "type": "array",
+              "items": {"type": "integer", "minimum": 2},
+              "default": [],
+              "description": "Rolling window sizes for mean/std aggregation features"
+            },
+            "variables": {
+              "type": "array",
+              "items": {"type": "string"},
+              "description": "Subset of predictors to lag (default: all predictors if omitted)"
+            }
+          }
+        },
+        "temporal_cv": {
+          "type": "object",
+          "description": "Temporal/spatiotemporal cross-validation settings",
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": ["expanding_window", "sliding_window", "spatiotemporal_block"],
+              "default": "expanding_window",
+              "description": "CV strategy: expanding uses growing history, sliding uses fixed window, spatiotemporal_block jointly blocks space and time"
+            },
+            "n_splits": {
+              "type": "integer",
+              "default": 5,
+              "minimum": 2,
+              "description": "Number of temporal folds"
+            },
+            "gap": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0,
+              "description": "Number of time steps to skip between train and test sets (prevents leakage from autocorrelation)"
+            }
+          }
+        },
+        "aggregation": {
+          "type": "object",
+          "description": "Temporal aggregation before spatial modeling",
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": ["none", "mean", "median", "max", "min", "trend_slope"],
+              "default": "none",
+              "description": "How to aggregate multi-temporal data per location. 'none' keeps full panel data."
+            },
+            "period": {
+              "type": ["string", "null"],
+              "default": null,
+              "description": "Aggregation period (e.g. 'monthly', 'annual'). null = aggregate across all time steps."
+            }
+          }
+        }
+      }
+    },
+
+    "benchmark_metrics": {
+      "type": "object",
+      "description": "Extended evaluation metrics for climate model benchmarking (nRMSE, pattern correlation, amplitude ratio)",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Compute benchmark metrics (nRMSE, pattern correlation, amplitude ratio) in Stage 2 evaluation"
+        },
+        "area_weighted": {
+          "type": "boolean",
+          "default": true,
+          "description": "Weight pattern correlation by cos(lat) for gridded data on regular lat-lon grids"
+        },
+        "lat_column": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Column name for latitude (degrees) used in area weighting. null = auto-detect from coord_columns."
+        }
+      }
+    },
+
+    "fingerprint": {
+      "type": "object",
+      "description": "Fingerprinting hybrid layer — project SPARC predictions onto a known forced spatial pattern",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable fingerprint projection post-processing on meta-ensemble predictions"
+        },
+        "pattern_source": {
+          "type": "string",
+          "enum": ["ensemble_mean", "eof", "both"],
+          "default": "ensemble_mean",
+          "description": "Source of the target forced pattern: ensemble-mean truth field, leading EOF of member spread, or both for comparison"
+        },
+        "eof_n_modes": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 1,
+          "description": "Number of EOF modes to retain when pattern_source includes 'eof'"
+        },
+        "blend_alpha": {
+          "type": "number",
+          "default": 0.3,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Blending weight: final = alpha * projected + (1 - alpha) * raw_prediction"
+        },
+        "truth_column": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Column containing the forced-response truth field (e.g. 'tos_trend_forced'). null = auto '{target}_forced'."
+        }
+      }
+    }
+
+  }
+}

@@ -72,9 +72,9 @@ SPARC is a physics-constrained spatial machine-learning pipeline that trains an 
 SPARC executes five stages in sequence. Each stage reads from the previous stage's output, producing a fully traceable chain from raw data to policy-relevant scenario maps.
 
 ```
-Stage 0   GWEN Variable Selection         Geographically-weighted elastic net ranks predictors
+Stage 0   Correlogram Analysis            Moran's I at multiple lags → auto-detect bandwidth & block size
      │
-Stage 1   Correlogram Analysis            Moran's I at multiple lags → auto-detect bandwidth & block size
+Stage 1   GWEN Variable Selection         Geographically-weighted elastic net ranks predictors (optional)
      │
 Stage 2   Spatial Cross-Validation        Train & evaluate four base models + meta-ensemble
      │
@@ -83,13 +83,13 @@ Stage 3   Causal Validation               Estimate causal effects via a DAG with
 Stage 4   Scenario Simulation             Physics-constrained "what-if" predictions with uncertainty
 ```
 
-### Stage 0 — GWEN Variable Selection *(optional)*
+### Stage 0 — Correlogram Analysis
 
-A geographically-weighted elastic net (GWEN) ranks predictor importance across space. A human checkpoint allows review before proceeding.
+Computes Moran's I at multiple distance lags to quantify spatial autocorrelation. Automatically selects optimal bandwidth for GWR/GWRF and block size for spatial cross-validation. Pipeline configuration (bandwidths, block sizes, kernel selection) is auto-wired from the correlogram results.
 
-### Stage 1 — Correlogram Analysis
+### Stage 1 — GWEN Variable Selection *(optional)*
 
-Computes Moran's I at multiple distance lags to quantify spatial autocorrelation. Automatically selects optimal bandwidth for GWR/GWRF and block size for spatial cross-validation.
+A geographically-weighted elastic net (GWEN) ranks predictor importance across space. Uses correlogram-derived bandwidths for spatially-aware feature selection. A human checkpoint allows review before proceeding.
 
 ### Stage 2 — Spatial Cross-Validation & Model Training
 
@@ -186,8 +186,8 @@ sparc run --project ./my_project/project.yml --stage all
 Or run stage-by-stage:
 
 ```powershell
-sparc run -p project.yml -s 0      # GWEN variable selection
-sparc run -p project.yml -s 1      # Correlogram analysis
+sparc run -p project.yml -s 0      # Correlogram analysis
+sparc run -p project.yml -s 1      # GWEN variable selection (optional)
 sparc run -p project.yml -s 2      # Model training
 sparc run -p project.yml -s 3      # Causal validation
 sparc run -p project.yml -s 4      # Scenario simulation
@@ -364,21 +364,27 @@ Internal variability scenarios (AMV, IPO) were also simulated, with AMV showing 
 
 ```
 GW3C_v2.1/
-├── sparc/                   # CLI entry point (sparc init / validate / run / scenario / report)
-├── config/                  # Configuration loader, JSON schema validation
-├── data/                    # Data utilities, temporal helpers
-├── models/                  # OLS, GWR, GWRF, GGPGAM, Deep Kriging, Meta-ensemble, GWEN
-├── features/                # Laplacian eigenmaps, fold-aware spatial features
-├── causal/                  # DAG definition, DoWhy integration, CATE, counterfactuals
-├── evaluation/              # Model evaluation metrics and diagnostics
-├── interventions/           # Scenario simulator, physics priors, extrapolation guards
-├── run/                     # Pipeline orchestration (per-stage executors)
-├── ui/                      # Interactive UI components
+├── sparc/                   # Main package
+│   ├── __main__.py          # CLI entry point (sparc init / validate / run / scenario / report)
+│   ├── config/              # Configuration loader, JSON schema validation
+│   ├── data/                # Data utilities, temporal helpers
+│   ├── models/              # OLS, GWR, GWRF, GGPGAM, Deep Kriging, Meta-ensemble, GWEN
+│   ├── features/            # Laplacian eigenmaps, fold-aware spatial features
+│   ├── causal/              # DAG definition, DoWhy integration, CATE, counterfactuals
+│   ├── evaluation/          # Model evaluation metrics and diagnostics
+│   ├── interventions/       # Scenario simulator, physics priors, extrapolation guards
+│   ├── run/                 # Pipeline orchestration (per-stage executors)
+│   └── ui/                  # Streamlit interactive UI
 ├── templates/               # Domain templates (13 domains)
-├── brown_uhi_run/           # Example completed UHI analysis
-├── MANUAL.md                # Full user manual
-├── PIPELINE_GUIDE.md        # Step-by-step pipeline walkthrough
-└── pyproject.toml           # Package metadata and dependencies
+├── examples/                # Example projects (Brown UHI)
+├── tests/                   # Smoke tests
+├── docs/                    # MANUAL, PIPELINE_GUIDE, CONTRIBUTING
+├── scripts/                 # Helper scripts (Start_SPARC.bat)
+├── run_ui.py                # Launch Streamlit UI
+├── pyproject.toml           # Package metadata and dependencies
+├── README.md
+├── LICENSE
+└── CITATION.cff
 ```
 
 ---
@@ -402,7 +408,7 @@ Every project is driven by a single `project.yml` file with these sections:
 | `scenarios` | No | Single-variable intervention definitions |
 | `joint_scenarios` | No | Multi-variable intervention definitions |
 
-See `MANUAL.md` for the full configuration reference and `PIPELINE_GUIDE.md` for a step-by-step walkthrough.
+See [`docs/MANUAL.md`](docs/MANUAL.md) for the full configuration reference and [`docs/PIPELINE_GUIDE.md`](docs/PIPELINE_GUIDE.md) for a step-by-step walkthrough.
 
 ---
 

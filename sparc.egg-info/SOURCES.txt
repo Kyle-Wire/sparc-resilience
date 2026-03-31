@@ -1,8 +1,6 @@
 LICENSE
 README.md
 pyproject.toml
-data/Areas_of_Interest.csv
-data/brown4.csv
 sparc/__init__.py
 sparc/__main__.py
 sparc.egg-info/PKG-INFO
