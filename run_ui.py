@@ -1,12 +1,11 @@
-"""Launch the SPARC UI.  Usage:  python run_ui.py"""
-import subprocess
-import sys
+"""Launch the SPARC UI.  Usage:  streamlit run run_ui.py"""
+import importlib, runpy, sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
+# Ensure repo root is on sys.path so sparc.* imports work
+_REPO_ROOT = Path(__file__).resolve().parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-if __name__ == "__main__":
-    subprocess.run(
-        [sys.executable, "-m", "streamlit", "run", str(HERE / "sparc" / "ui" / "app.py")],
-        cwd=str(HERE),
-    )
+# Delegate to the real app module
+from sparc.ui import app  # noqa: F401 — Streamlit executes on import
