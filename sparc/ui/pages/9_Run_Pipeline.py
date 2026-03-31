@@ -5,23 +5,103 @@ from pathlib import Path
 import subprocess
 import sys
 import os
+import io
+import zipfile
 
 _REPO = Path(__file__).resolve().parent.parent.parent.parent
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 from sparc.ui.yaml_generator import generate_all
+from sparc.ui.state import is_cloud, get_cloud_working_dir
 
 st.title("Run Pipeline")
 st.markdown("Generate configuration files, validate, and execute the SPARC pipeline.")
 
 # -- Pre-flight checks ---------------------------------------------------------
+_CLOUD = is_cloud()
+
 wd = st.session_state.get("working_dir", "").strip().strip('"').strip("'")
 if not wd:
-    st.warning("Set a **Working Directory** on the Project Setup page before running.")
-    st.stop()
+    if _CLOUD:
+        wd = get_cloud_working_dir()
+        st.session_state["working_dir"] = wd
+    else:
+        st.warning("Set a **Working Directory** on the Project Setup page before running.")
+        st.stop()
 
 project_yml = Path(wd) / "project.yml"
+
+# ==============================================================================
+# CLOUD MODE — generate & download config files
+# ==============================================================================
+if _CLOUD:
+    st.markdown("## Generate & Download Configuration")
+    st.info(
+        "☁️ **Cloud mode** — the full pipeline requires local compute. "
+        "Use this page to generate your configuration files, then download "
+        "and run on your own machine."
+    )
+
+    st.markdown("### How to Run Locally")
+    st.markdown(
+        "**1. Clone the repo** (one-time setup)\n"
+        "```bash\n"
+        "git clone https://github.com/SPARC-Labs-LLC/SPARC_Labs_GW3C.git\n"
+        "cd SPARC_Labs_GW3C\n"
+        "```\n\n"
+        "**2. Install** (one-time setup)\n"
+        "```bash\n"
+        "# Windows\n"
+        "scripts\\Install_SPARC.bat\n\n"
+        "# Mac/Linux\n"
+        "python -m venv .venv && source .venv/bin/activate\n"
+        "pip install -e \".[ui]\"\n"
+        "```\n\n"
+        "**3. Download your config ZIP** below and extract into a project folder\n\n"
+        "**4. Run the pipeline**\n"
+        "```bash\n"
+        "sparc run --project path/to/project.yml --stage all\n"
+        "```\n\n"
+        "Or launch the full UI locally: `scripts\\Start_SPARC.bat` (Windows) "
+        "or `streamlit run run_ui.py` (Mac/Linux)"
+    )
+
+    if st.button("Generate Config Files", use_container_width=True):
+        try:
+            generate_all(wd)
+            st.success("Configuration files generated!")
+            st.session_state["_cloud_config_generated"] = True
+        except Exception as e:
+            st.error(f"Error generating config: {e}")
+
+    if st.session_state.get("_cloud_config_generated"):
+        # Collect all generated files into a ZIP
+        config_files = []
+        for pattern in ["*.yml", "causal/*.yml", "physics/*.yml"]:
+            config_files.extend(Path(wd).glob(pattern))
+
+        if config_files:
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                for fp in config_files:
+                    zf.write(fp, fp.relative_to(wd))
+            buf.seek(0)
+
+            st.download_button(
+                "📥 Download Config (ZIP)",
+                data=buf,
+                file_name=f"{st.session_state.get('project_name', 'sparc')}_config.zip",
+                mime="application/zip",
+                use_container_width=True,
+            )
+
+            # Also show individual file previews
+            for fp in config_files:
+                with st.expander(str(fp.relative_to(wd))):
+                    st.code(fp.read_text(encoding="utf-8"), language="yaml")
+
+    st.stop()  # Skip the local-only sections below
 
 # -- Stage-specific progress milestones ----------------------------------------
 # Each entry is (regex_pattern, progress_fraction, display_label)

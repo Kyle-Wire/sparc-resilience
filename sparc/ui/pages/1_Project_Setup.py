@@ -7,7 +7,7 @@ _REPO = Path(__file__).resolve().parent.parent.parent.parent
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-from sparc.ui.state import load_template, load_from_yaml, available_templates
+from sparc.ui.state import load_template, load_from_yaml, available_templates, is_cloud, get_cloud_working_dir
 
 st.title("Project Setup")
 st.markdown("Configure the basic metadata and working directory for your SPARC project.")
@@ -75,19 +75,30 @@ st.divider()
 
 # ── Working directory ─────────────────────────────────────────────────────────
 st.markdown("## Working Directory")
-st.markdown(
-    "All configuration files (`project.yml`, `dag.yml`, physics files) will be "
-    "written here. Pipeline outputs go into a sub-folder."
-)
-_raw_wd = st.text_input(
-    "Project Folder Path",
-    value=st.session_state["working_dir"],
-    help="Absolute path to the folder where config files will be generated.",
-)
-st.session_state["working_dir"] = _raw_wd.strip().strip('"').strip("'") if _raw_wd else ""
+
+if is_cloud():
+    # On Streamlit Cloud: auto-assign a temp directory, user can't browse local FS
+    cloud_wd = get_cloud_working_dir()
+    st.session_state["working_dir"] = cloud_wd
+    st.info(
+        "☁️ **Cloud mode detected.** A temporary working directory is being used "
+        "automatically. Upload your data on the **Data** page and download "
+        "generated config files from the **Run Pipeline** page."
+    )
+else:
+    st.markdown(
+        "All configuration files (`project.yml`, `dag.yml`, physics files) will be "
+        "written here. Pipeline outputs go into a sub-folder."
+    )
+    _raw_wd = st.text_input(
+        "Project Folder Path",
+        value=st.session_state["working_dir"],
+        help="Absolute path to the folder where config files will be generated.",
+    )
+    st.session_state["working_dir"] = _raw_wd.strip().strip('"').strip("'") if _raw_wd else ""
 
 wd = st.session_state["working_dir"]
-if wd:
+if wd and not is_cloud():
     p = Path(wd)
     if p.exists():
         st.success(f"Folder exists: `{p}`")

@@ -108,12 +108,31 @@ sparc init --template uhi --output ./my_project
 
 **Requirements:** Python 3.10+
 
+### Windows (Easiest)
+
 ```powershell
-cd GW3C_v2.0/GW3C_v2.1
-pip install -e .
+git clone https://github.com/SPARC-Labs-LLC/SPARC_Labs_GW3C.git
+cd SPARC_Labs_GW3C
+scripts\Install_SPARC.bat
 ```
 
-Verify:
+The install script creates a virtual environment, installs all dependencies, and sets up the `sparc` CLI. Once complete:
+
+```powershell
+scripts\Start_SPARC.bat          # Launch the Streamlit UI
+```
+
+### Mac / Linux
+
+```bash
+git clone https://github.com/SPARC-Labs-LLC/SPARC_Labs_GW3C.git
+cd SPARC_Labs_GW3C
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[ui]"
+```
+
+### Verify
 
 ```powershell
 sparc --help
@@ -122,6 +141,20 @@ sparc --help
 ---
 
 ## Quick Start
+
+### Option A: Streamlit UI (Recommended for New Users)
+
+```powershell
+# Windows
+scripts\Start_SPARC.bat
+
+# Mac/Linux
+streamlit run run_ui.py
+```
+
+The UI walks you through template selection, data upload, variable configuration, DAG editing, and pipeline execution — all from your browser.
+
+### Option B: CLI
 
 ```powershell
 # 1. Scaffold from a template
@@ -146,6 +179,12 @@ sparc run -p project.yml -s 2      # Model training
 sparc run -p project.yml -s 3      # Causal validation
 sparc run -p project.yml -s 4      # Scenario simulation
 ```
+
+### Live Demo
+
+Try the UI without installing anything: [SPARC on Streamlit Cloud](https://sparc-labs.streamlit.app)
+
+> **Note:** The cloud demo is for configuration only — it cannot run the pipeline. Generate your config files in the browser, download the ZIP, then run locally with `sparc run --project project.yml --stage all`.
 
 ---
 

@@ -7,6 +7,8 @@ _REPO = Path(__file__).resolve().parent.parent.parent.parent
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
+from sparc.ui.state import is_cloud, get_cloud_working_dir
+
 
 st.title("Data")
 st.markdown("Point to your CSV dataset and map the key columns.")
@@ -14,28 +16,48 @@ st.markdown("Point to your CSV dataset and map the key columns.")
 # ── File path input ───────────────────────────────────────────────────────────
 st.markdown("## Data Source")
 
-tab_path, tab_upload = st.tabs(["File Path (local)", "Upload CSV"])
+_CLOUD = is_cloud()
 
-with tab_path:
-    _raw_csv = st.text_input(
-        "CSV File Path",
-        value=st.session_state["data_file_path"],
-        help="Absolute or relative path to your input CSV.",
-    )
-    st.session_state["data_file_path"] = _raw_csv.strip().strip('"').strip("'") if _raw_csv else ""
 
-with tab_upload:
+def _handle_upload(uploaded):
+    """Save an uploaded file into the working directory and update state."""
+    wd = st.session_state.get("working_dir", "").strip().strip('"').strip("'")
+    if not wd:
+        if _CLOUD:
+            wd = get_cloud_working_dir()
+            st.session_state["working_dir"] = wd
+        else:
+            st.warning("Set a **Working Directory** on the Project Setup page first.")
+            return
+    dest = Path(wd) / uploaded.name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(uploaded.getvalue())
+    st.session_state["data_file_path"] = str(dest)
+    st.success(f"Saved to `{dest}`")
+
+
+if _CLOUD:
+    # ── Cloud mode: upload only ───────────────────────────────────────────────
+    st.info("☁️ **Cloud mode** — upload your CSV file below.")
     uploaded = st.file_uploader("Upload CSV file", type=["csv"])
     if uploaded is not None:
-        wd = st.session_state.get("working_dir", "").strip().strip('"').strip("'")
-        if not wd:
-            st.warning("Set a **Working Directory** on the Project Setup page first.")
-        else:
-            dest = Path(wd) / uploaded.name
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(uploaded.getvalue())
-            st.session_state["data_file_path"] = str(dest)
-            st.success(f"Saved to `{dest}`")
+        _handle_upload(uploaded)
+else:
+    # ── Local mode: tabs for path or upload ───────────────────────────────────
+    tab_path, tab_upload = st.tabs(["File Path (local)", "Upload CSV"])
+
+    with tab_path:
+        _raw_csv = st.text_input(
+            "CSV File Path",
+            value=st.session_state["data_file_path"],
+            help="Absolute or relative path to your input CSV.",
+        )
+        st.session_state["data_file_path"] = _raw_csv.strip().strip('"').strip("'") if _raw_csv else ""
+
+    with tab_upload:
+        uploaded = st.file_uploader("Upload CSV file", type=["csv"])
+        if uploaded is not None:
+            _handle_upload(uploaded)
 
 # ── Load & preview ────────────────────────────────────────────────────────────
 csv_path = st.session_state["data_file_path"]

@@ -7,11 +7,30 @@ that every page reads/writes the same shared state dictionary.
 from __future__ import annotations
 
 import copy
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
 import streamlit as st
 import yaml
+
+
+def is_cloud() -> bool:
+    """Return True when running on Streamlit Community Cloud."""
+    return bool(
+        os.environ.get("STREAMLIT_SHARING_MODE")
+        or os.environ.get("STREAMLIT_SERVER_HEADLESS")  # set on Cloud
+        or os.environ.get("STREAMLIT_RUNTIME_ENV")
+        or os.environ.get("HOME", "").startswith("/home/appuser")  # Cloud default user
+    )
+
+
+def get_cloud_working_dir() -> str:
+    """Return a stable temp directory for cloud deployments."""
+    d = Path(tempfile.gettempdir()) / "sparc_cloud_project"
+    d.mkdir(parents=True, exist_ok=True)
+    return str(d)
 
 # ── Default values (mirrors templates/blank/project.yml) ─────────────────────
 
