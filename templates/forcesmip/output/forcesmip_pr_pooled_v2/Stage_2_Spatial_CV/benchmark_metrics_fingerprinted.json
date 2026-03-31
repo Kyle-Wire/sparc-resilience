@@ -1,0 +1,27 @@
+{
+  "variable": "pr",
+  "fingerprint_source": "ensemble_mean (pr_trend_forced)",
+  "optimal_alphas": {
+    "ols": 0.5,
+    "gwr": 0.5,
+    "gwrf": 0.5,
+    "ggpgam": 0.5,
+    "meta": 0.5
+  },
+  "models": {
+    "gwrf": {
+      "optimal_alpha": 0.5,
+      "r2_forced": 0.2296,
+      "r2_total": 0.2276,
+      "pattern_corr_forced": 0.5439,
+      "amplitude_ratio_forced": 0.7942
+    },
+    "meta": {
+      "optimal_alpha": 0.5,
+      "r2_forced": 0.4694,
+      "r2_total": 0.2307,
+      "pattern_corr_forced": 0.7156,
+      "amplitude_ratio_forced": 0.5216
+    }
+  }
+}

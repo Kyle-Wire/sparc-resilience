@@ -1,0 +1,55 @@
+{
+    "total_features":  7,
+    "selected_features":  [
+                              "GMST_trend",
+                              "AMV_index",
+                              "IPO_index",
+                              "lat_abs",
+                              "land_fraction",
+                              "ocean_basin",
+                              "member_id"
+                          ],
+    "selection_threshold":  0.1,
+    "selection_summary":  {
+                              "selection_rate":  1,
+                              "features_selected":  7,
+                              "features_total":  7
+                          },
+    "feature_importance":  [
+                               {
+                                   "selection_frequency":  1,
+                                   "mean_local_coef":  0.5,
+                                   "feature":  "GMST_trend"
+                               },
+                               {
+                                   "selection_frequency":  1,
+                                   "mean_local_coef":  0.5,
+                                   "feature":  "AMV_index"
+                               },
+                               {
+                                   "selection_frequency":  1,
+                                   "mean_local_coef":  0.5,
+                                   "feature":  "IPO_index"
+                               },
+                               {
+                                   "selection_frequency":  1,
+                                   "mean_local_coef":  0.5,
+                                   "feature":  "lat_abs"
+                               },
+                               {
+                                   "selection_frequency":  1,
+                                   "mean_local_coef":  0.5,
+                                   "feature":  "land_fraction"
+                               },
+                               {
+                                   "selection_frequency":  1,
+                                   "mean_local_coef":  0.5,
+                                   "feature":  "ocean_basin"
+                               },
+                               {
+                                   "selection_frequency":  1,
+                                   "mean_local_coef":  0.5,
+                                   "feature":  "member_id"
+                               }
+                           ]
+}

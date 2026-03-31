@@ -1,0 +1,78 @@
+# Variable Caps & Constraints — Environmental Noise Domain
+
+variable_bounds:
+  traffic_volume_vph:
+    min: 0
+    max: 10000
+    units: "vehicles/hour"
+    physical_justification: "No traffic to rush-hour freeway"
+
+  heavy_truck_pct:
+    min: 0.0
+    max: 100.0
+    units: "%"
+    physical_justification: "Cars only to freight-only route"
+
+  distance_to_road_m:
+    min: 1.0
+    max: 5000.0
+    units: "m"
+    physical_justification: "Right-of-way edge to distant receptor"
+
+  road_speed_kmh:
+    min: 10.0
+    max: 130.0
+    units: "km/h"
+    physical_justification: "Parking lot to high-speed highway"
+
+  building_density_pct:
+    min: 0.0
+    max: 80.0
+    units: "%"
+    physical_justification: "Open field to dense urban block"
+
+  barrier_height_m:
+    min: 0.0
+    max: 8.0
+    units: "m"
+    physical_justification: "No barrier to maximum practical height"
+
+  vegetation_buffer_m:
+    min: 0.0
+    max: 200.0
+    units: "m"
+    physical_justification: "No buffer to deep forested setback"
+
+  elevation_diff_m:
+    min: -20.0
+    max: 20.0
+    units: "m"
+    physical_justification: "Cut road to elevated highway"
+
+  wind_speed_ms:
+    min: 0.0
+    max: 20.0
+    units: "m/s"
+    physical_justification: "Calm to windy"
+
+  temperature_C:
+    min: -20.0
+    max: 45.0
+    units: "°C"
+    physical_justification: "Cold to hot"
+
+delta_constraints:
+  barrier_height_m:
+    max_increase: 6.0
+    max_decrease: 0.0
+    typical_increase: 3.0
+
+  vegetation_buffer_m:
+    max_increase: 50.0
+    max_decrease: 0.0
+    typical_increase: 20.0
+
+  road_speed_kmh:
+    max_increase: 0.0
+    max_decrease: 30.0
+    typical_decrease: 10.0

@@ -1,0 +1,107 @@
+# =============================================================================
+# SPARC Project Configuration — Seismic Hazard / Ground Motion Domain
+# =============================================================================
+# Spatial analysis of peak ground acceleration (PGA) or liquefaction potential
+# as a function of source, path, and site parameters.
+#
+# Key references:
+#   - Boore & Atkinson (2008) — NGA-West GMPE
+#   - Youd et al. (2001) — Liquefaction evaluation (NCEER workshop)
+#   - USGS NSHM — National Seismic Hazard Model
+# =============================================================================
+
+project:
+  name: "Seismic Ground Motion Analysis"
+  description: "Spatial regression of PGA driven by source magnitude, distance, and site conditions"
+  domain: seismic
+  version: "1.0.0"
+  author: ""
+  response_units: "g"
+
+data:
+  file_path: ""
+  target_column: "PGA_g"                       # Peak ground acceleration (g)
+  identifier_column: "station_id"
+  coord_columns: ["longitude", "latitude"]
+
+crs:
+  input: "EPSG:4326"
+  projected: ""
+
+predictors:
+  - magnitude                  # Earthquake moment magnitude (Mw)
+  - distance_to_rupture_km    # Closest distance to fault rupture (km)
+  - Vs30_ms                   # Time-averaged shear-wave velocity, top 30m (m/s)
+  - depth_km                  # Hypocentral depth (km)
+  - fault_mechanism           # Faulting style code: 0=SS, 1=reverse, -1=normal
+  - basin_depth_z1p0_m        # Depth to Vs=1.0 km/s layer (m) — basin amplification
+  - water_table_depth_m       # Depth to water table (m) — liquefaction susceptibility
+  - SPT_N60                   # Standard penetration test corrected blow count
+  - soil_fines_pct            # Fines content of liquefiable layer (%)
+
+physics:
+  priors_file: "physics/priors.yml"
+  caps_file:   "physics/caps.yml"
+  monotone_constraints:
+    magnitude:  1                # Larger earthquake → higher PGA
+    distance_to_rupture_km: -1   # Farther → lower PGA (geometric + anelastic attenuation)
+    Vs30_ms: -1                  # Stiffer site → lower amplification → lower PGA
+    depth_km:  0                 # Non-monotone: shallow crustal vs deep subduction
+    basin_depth_z1p0_m:  1       # Deeper basin → more amplification
+    water_table_depth_m: -1      # Shallower water table → higher liq. risk
+    SPT_N60: -1                  # Denser soil → less liquefaction susceptibility
+
+causal:
+  dag_file: "causal/dag.yml"
+  estimator: "hgb"
+  actionable_variables: []         # Seismic hazard not directly actionable
+  fixed_variables:
+    - magnitude
+    - distance_to_rupture_km
+    - depth_km
+    - fault_mechanism
+    - Vs30_ms
+    - basin_depth_z1p0_m
+
+output:
+  base_dir: "output"
+
+pipeline:
+  random_seed: 42
+  n_spatial_folds: 5
+
+scenarios:
+  - name: "Magnitude 7.0 Event"
+    variable: magnitude
+    direction: increase
+    increments: [0.5, 1.0, 1.5]
+    min_val: 3.0
+    max_val: 9.5
+    unit: "Mw"
+
+  - name: "Site Improvement — Ground Densification"
+    variable: Vs30_ms
+    direction: increase
+    increments: [50, 100, 150, 200]
+    min_val: 100
+    max_val: 1500
+    unit: "m/s"
+
+  - name: "Dewatering — Water Table Lowering"
+    variable: water_table_depth_m
+    direction: increase
+    increments: [1, 2, 3, 5]
+    min_val: 0
+    max_val: 30
+    unit: "m"
+
+# temporal:
+#   enabled: true
+#   time_column: "event_datetime"
+#   frequency: "custom"
+#   lag_features:
+#     enabled: false
+#   temporal_cv:
+#     method: "expanding_window"
+#     n_splits: 5
+#     gap: 0

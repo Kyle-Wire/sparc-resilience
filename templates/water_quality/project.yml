@@ -1,0 +1,121 @@
+# =============================================================================
+# SPARC Project Configuration — Water Quality Domain
+# =============================================================================
+# Spatial analysis of water quality parameters (dissolved oxygen, turbidity)
+# driven by land use, nutrient loading, hydrology, and climate.
+#
+# Key references:
+#   - Streeter-Phelps (1925) — Dissolved oxygen sag
+#   - QUAL2K — Stream water quality model
+#   - EPA 303(d) — Impaired waters / TMDL framework
+# =============================================================================
+
+project:
+  name: "Water Quality Analysis"
+  description: "Spatiotemporal regression of dissolved oxygen driven by nutrient loading, land use, hydrology, and temperature"
+  domain: water_quality
+  version: "1.0.0"
+  author: ""
+  response_units: "mg/L"
+
+data:
+  file_path: ""
+  target_column: "DO_mgL"                     # Dissolved oxygen concentration
+  identifier_column: "station_id"
+  coord_columns: ["longitude", "latitude"]
+
+crs:
+  input: "EPSG:4326"
+  projected: ""
+
+predictors:
+  - temperature_C             # Water temperature (°C)
+  - streamflow_m3s            # Discharge (m³/s)
+  - BOD_mgL                   # Biochemical oxygen demand (mg/L)
+  - total_nitrogen_mgL        # Total nitrogen concentration (mg/L)
+  - total_phosphorus_mgL      # Total phosphorus concentration (mg/L)
+  - agriculture_pct           # Agricultural land use in upstream catchment (%)
+  - impervious_pct            # Impervious surface in upstream catchment (%)
+  - forest_pct                # Forest cover in upstream catchment (%)
+  - precipitation_mm          # Recent precipitation (mm)
+  - distance_to_wwtp_km       # Distance to nearest wastewater treatment plant (km)
+
+physics:
+  priors_file: "physics/priors.yml"
+  caps_file:   "physics/caps.yml"
+  monotone_constraints:
+    temperature_C: -1            # Warmer water → lower DO saturation
+    streamflow_m3s:  1           # More flow → more reaeration
+    BOD_mgL: -1                  # More BOD → more oxygen consumption
+    total_nitrogen_mgL: -1       # Eutrophication → algal decay → lower DO
+    total_phosphorus_mgL: -1     # Same eutrophication pathway
+    agriculture_pct: -1          # Agri runoff → nutrient loading → lower DO
+    impervious_pct: -1           # Urban runoff → thermal + nutrient loading
+    forest_pct:  1               # Forest buffers filter runoff → higher DO
+
+causal:
+  dag_file: "causal/dag.yml"
+  estimator: "dml"
+  actionable_variables:
+    - agriculture_pct
+    - impervious_pct
+    - forest_pct
+    - BOD_mgL
+  fixed_variables:
+    - temperature_C
+    - streamflow_m3s
+    - distance_to_wwtp_km
+
+output:
+  base_dir: "output"
+
+pipeline:
+  random_seed: 42
+  n_spatial_folds: 5
+
+scenarios:
+  - name: "Riparian Buffer Restoration"
+    variable: forest_pct
+    direction: increase
+    increments: [5, 10, 15, 20]
+    min_val: 0
+    max_val: 100
+    unit: "percentage points"
+
+  - name: "Agricultural BMP Implementation"
+    variable: agriculture_pct
+    direction: decrease
+    increments: [5, 10, 15]
+    min_val: 0
+    max_val: 100
+    unit: "percentage points"
+
+  - name: "WWTP Effluent Improvement"
+    variable: BOD_mgL
+    direction: decrease
+    increments: [2, 5, 10]
+    min_val: 0
+    max_val: 50
+    unit: "mg/L"
+
+  - name: "Climate Warming + Water Temperature"
+    variable: temperature_C
+    direction: increase
+    increments: [1, 2, 3]
+    min_val: 0
+    max_val: 40
+    unit: "°C"
+
+# temporal:
+#   enabled: true
+#   time_column: "sample_date"
+#   frequency: "monthly"
+#   lag_features:
+#     enabled: true
+#     lags: [1, 2, 3]
+#     rolling_windows: [3, 6]
+#     variables: [temperature_C, streamflow_m3s, precipitation_mm]
+#   temporal_cv:
+#     method: "expanding_window"
+#     n_splits: 5
+#     gap: 1

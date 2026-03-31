@@ -1,0 +1,55 @@
+# Physics Priors — Groundwater Domain
+# Sources: Healy (2010), Theis (1935), Scanlon et al. (2002)
+
+coefficients:
+  precipitation_mm:
+    value: 0.003
+    units: "m water table rise per mm precipitation"
+    uncertainty: 0.002
+    source_scale: "basin"
+    literature_source: "Healy (2010) Estimating Groundwater Recharge; Crosbie et al. (2013)"
+    confidence: "medium"
+    description: "Recharge fraction varies 5–30% of precipitation"
+
+  recharge_rate_mmyr:
+    value: 0.008
+    units: "m water table rise per mm/yr recharge"
+    uncertainty: 0.004
+    source_scale: "basin"
+    literature_source: "Scanlon et al. (2002) Hydrogeology Journal"
+    confidence: "medium"
+    description: "Depends on specific yield; Sy ~ 0.1–0.3 for unconfined"
+
+  pumping_rate_m3d:
+    value: -0.0015
+    units: "m drawdown per m³/day pumping at 500m distance"
+    uncertainty: 0.001
+    source_scale: "well-field"
+    literature_source: "Theis (1935) equation; Kruseman & de Ridder (1990)"
+    confidence: "high"
+    description: "Drawdown proportional to Q, inversely to T"
+
+  distance_to_river_m:
+    value: -0.002
+    units: "m water table decline per m distance from river"
+    uncertainty: 0.001
+    source_scale: "reach"
+    literature_source: "Winter et al. (1998) USGS Circular 1139"
+    confidence: "medium"
+    description: "Stream-aquifer exchange decays with distance"
+
+  NDVI:
+    value: -0.50
+    units: "m water table change per 0.1 NDVI"
+    uncertainty: 0.30
+    source_scale: "field"
+    literature_source: "Zhang et al. (2001) Water Resources Research; Szilagyi et al. (2013)"
+    confidence: "low"
+    description: "Higher vegetation increases ET, lowers water table"
+
+scale_harmonization:
+  target_resolution: 100
+  factors:
+    "basin":
+      precipitation_mm: 1.0
+      recharge_rate_mmyr: 1.0

@@ -1,0 +1,73 @@
+# Variable Caps & Constraints — Drought Severity Domain
+
+variable_bounds:
+  precipitation_mm:
+    min: 0.0
+    max: 1000.0
+    units: "mm"
+    physical_justification: "Desert to tropical monsoon monthly rainfall"
+
+  temperature_C:
+    min: -30.0
+    max: 50.0
+    units: "°C"
+    physical_justification: "Arctic winter to desert summer"
+
+  potential_ET_mm:
+    min: 0.0
+    max: 400.0
+    units: "mm"
+    physical_justification: "Cold month to hot summer PET"
+
+  soil_moisture_pct:
+    min: 0.0
+    max: 60.0
+    units: "%"
+    physical_justification: "Oven-dry to saturated"
+
+  NDVI:
+    min: -0.1
+    max: 0.9
+    units: "index"
+    physical_justification: "Water/bare to dense vegetation"
+
+  relative_humidity_pct:
+    min: 5.0
+    max: 100.0
+    units: "%"
+    physical_justification: "Extreme arid to fog"
+
+  wind_speed_ms:
+    min: 0.0
+    max: 25.0
+    units: "m/s"
+    physical_justification: "Calm to windy"
+
+  solar_radiation_Wm2:
+    min: 0.0
+    max: 450.0
+    units: "W/m²"
+    physical_justification: "Dark winter to peak summer insolation"
+
+  elevation_m:
+    min: -100.0
+    max: 5000.0
+    units: "m"
+    physical_justification: "Below sea level to high plateau"
+
+  clay_content_pct:
+    min: 0.0
+    max: 80.0
+    units: "%"
+    physical_justification: "Sandy to heavy clay soil"
+
+delta_constraints:
+  temperature_C:
+    max_increase: 4.0
+    max_decrease: 0.0
+    typical_increase: 1.5
+
+  precipitation_mm:
+    max_increase: 0.0
+    max_decrease: 100.0
+    typical_decrease: 30.0

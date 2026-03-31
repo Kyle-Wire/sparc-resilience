@@ -1,0 +1,76 @@
+{
+  "description": "Benchmark metrics with optimal fingerprint post-processing",
+  "fingerprint_source": "ensemble_mean (tos_trend_forced)",
+  "n_valid_rows": 63932,
+  "n_total_rows": 71498,
+  "optimal_alphas": {
+    "ols": 0.5,
+    "gwr": 0.5,
+    "gwrf": 0.5,
+    "ggpgam": 0.5,
+    "meta": 0.5,
+    "final": 0.5
+  },
+  "models": {
+    "ols": {
+      "alpha": 0.5,
+      "r2_forced": 0.5825,
+      "r2_total": 0.4312,
+      "rmse_total": 0.521,
+      "nrmse_forced": 0.6461,
+      "pattern_correlation_forced": 0.8671,
+      "pattern_correlation_forced_weighted": 0.8696,
+      "amplitude_ratio_forced": 0.483
+    },
+    "gwr": {
+      "alpha": 0.5,
+      "r2_forced": 0.8418,
+      "r2_total": 0.7046,
+      "rmse_total": 0.3754,
+      "nrmse_forced": 0.3978,
+      "pattern_correlation_forced": 0.9176,
+      "pattern_correlation_forced_weighted": 0.9313,
+      "amplitude_ratio_forced": 0.928
+    },
+    "gwrf": {
+      "alpha": 0.5,
+      "r2_forced": 0.8495,
+      "r2_total": 0.7589,
+      "rmse_total": 0.3392,
+      "nrmse_forced": 0.3879,
+      "pattern_correlation_forced": 0.9234,
+      "pattern_correlation_forced_weighted": 0.9321,
+      "amplitude_ratio_forced": 0.9693
+    },
+    "ggpgam": {
+      "alpha": 0.5,
+      "r2_forced": 0.8371,
+      "r2_total": 0.695,
+      "rmse_total": 0.3815,
+      "nrmse_forced": 0.4036,
+      "pattern_correlation_forced": 0.9152,
+      "pattern_correlation_forced_weighted": 0.9299,
+      "amplitude_ratio_forced": 0.9295
+    },
+    "meta": {
+      "alpha": 0.5,
+      "r2_forced": 0.8744,
+      "r2_total": 0.7385,
+      "rmse_total": 0.3533,
+      "nrmse_forced": 0.3544,
+      "pattern_correlation_forced": 0.9352,
+      "pattern_correlation_forced_weighted": 0.9452,
+      "amplitude_ratio_forced": 0.9341
+    },
+    "final": {
+      "alpha": 0.5,
+      "r2_forced": 0.8744,
+      "r2_total": 0.7385,
+      "rmse_total": 0.3533,
+      "nrmse_forced": 0.3544,
+      "pattern_correlation_forced": 0.9352,
+      "pattern_correlation_forced_weighted": 0.9452,
+      "amplitude_ratio_forced": 0.9341
+    }
+  }
+}

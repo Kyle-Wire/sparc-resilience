@@ -1,0 +1,105 @@
+project:
+  name: ForceSMIP-SPARC-Pooled-pr
+  description: "Cross-member pooled analysis for pr \u2014 spatially-varying forcing\
+    \ sensitivity"
+  domain: climate_forced_response
+  version: '2.0'
+  response_units: "\xC2\xB0C per 42yr trend"
+data:
+  file_path: data/forcesmip_pr_pooled.csv
+  target_column: pr_trend
+  identifier_column: row_id
+  coord_columns:
+  - lon
+  - lat
+  areas_of_interest_file: data/global_2p5deg_grid.gpkg
+crs:
+  input: EPSG:4326
+  projected: EPSG:6933
+predictors:
+- GMST_trend
+- AMV_index
+- IPO_index
+- lat_abs
+- land_fraction
+- ocean_basin
+- member_id
+physics:
+  priors_file: physics/forcesmip_priors_pr.yml
+  caps_file: physics/forcesmip_caps.yml
+causal:
+  dag_file: causal/forcesmip_dag_pooled.yml
+  estimator: dml
+  dml_shrinkage: 0.3
+  dml_cv_folds: 5
+  dag_blend_weight: 0.7
+  estimate_cate: true
+  ipw_enabled: true
+  doubly_robust: true
+  dose_response: true
+  bootstrap_n: 200
+  actionable_variables:
+  - GMST_trend
+  - AMV_index
+  - IPO_index
+  fixed_variables:
+  - lat_abs
+  - land_fraction
+  - ocean_basin
+  - member_id
+scenarios:
+- name: warming_1C
+  variable: GMST_trend
+  direction: increase
+  increments:
+  - 0.5
+  - 1.0
+  - 1.5
+  unit: "\xB0C global mean"
+- name: AMV_positive
+  variable: AMV_index
+  direction: increase
+  increments:
+  - 0.02
+  - 0.05
+  unit: index units
+- name: IPO_positive
+  variable: IPO_index
+  direction: increase
+  increments:
+  - 0.03
+  - 0.06
+  unit: index units
+output:
+  base_dir: output/forcesmip_pr_pooled
+models:
+  gwr:
+    bandwidth: 2000000
+    kernel: gaussian
+    min_points: 50
+  gwrf:
+    n_estimators: 100
+    k_neighbors: 200
+    min_samples_leaf: 5
+  ggpgam:
+    n_splines: 5
+    n_spatial_bases: 10
+    lam: 0.6
+  meta_ensemble:
+    algorithm: lightgbm
+    n_optuna_trials: 25
+  spatial_cv:
+    block_size: 3000000
+    buffer_size: 500000
+    method: block
+pipeline:
+  random_seed: 42
+  n_spatial_folds: 5
+  fast_mode: false
+  overwrite_outputs: false
+  run_mc_uncertainty: false
+  skip_pdp: false
+flags:
+  use_gwen_selection: true
+  include_gwrf_in_ensemble: true
+  use_laplacian_eigenmaps_in_ols: true

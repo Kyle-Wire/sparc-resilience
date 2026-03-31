@@ -1,0 +1,73 @@
+# Variable Caps & Constraints — Geotechnical / Slope Stability Domain
+
+variable_bounds:
+  slope_angle_deg:
+    min: 0.0
+    max: 90.0
+    units: "degrees"
+    physical_justification: "Flat to vertical cliff"
+
+  soil_cohesion_kPa:
+    min: 0.0
+    max: 200.0
+    units: "kPa"
+    physical_justification: "Cohesionless sand to stiff clay"
+
+  friction_angle_deg:
+    min: 10.0
+    max: 50.0
+    units: "degrees"
+    physical_justification: "Soft clay to dense gravel"
+
+  pore_pressure_ratio:
+    min: 0.0
+    max: 1.0
+    units: "dimensionless"
+    physical_justification: "Dry (ru=0) to fully saturated artesian (ru→1)"
+
+  soil_depth_m:
+    min: 0.1
+    max: 50.0
+    units: "m"
+    physical_justification: "Shallow veneer to deep-seated slide"
+
+  precipitation_mm:
+    min: 0.0
+    max: 1000.0
+    units: "mm"
+    physical_justification: "Dry to extreme multi-day rainfall event"
+
+  vegetation_root_kPa:
+    min: 0.0
+    max: 30.0
+    units: "kPa"
+    physical_justification: "Bare soil to dense forest root mat (Schwarz et al. 2010)"
+
+  soil_unit_weight_kNm3:
+    min: 12.0
+    max: 24.0
+    units: "kN/m³"
+    physical_justification: "Loose dry soil to dense saturated soil"
+
+  seismic_PGA_g:
+    min: 0.0
+    max: 2.0
+    units: "g"
+    physical_justification: "No seismicity to extreme near-fault ground motion"
+
+  distance_to_fault_km:
+    min: 0.0
+    max: 500.0
+    units: "km"
+    physical_justification: "On fault to far-field"
+
+delta_constraints:
+  vegetation_root_kPa:
+    max_increase: 15.0
+    max_decrease: 0.0
+    typical_increase: 5.0
+
+  pore_pressure_ratio:
+    max_increase: 0.0
+    max_decrease: 0.3
+    typical_decrease: 0.1

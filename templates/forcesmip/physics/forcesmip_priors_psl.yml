@@ -1,0 +1,109 @@
+# =============================================================================
+# Physics Priors: Sea-Level Pressure (psl) Forced Response
+# =============================================================================
+# PSL forced trends are subtle and highly pattern-dependent.
+# Coefficients are small relative to natural variability.
+# =============================================================================
+
+coefficients:
+  GHG_forcing_index:
+    value: -0.05
+    units: "hPa per W/m2"
+    uncertainty: 0.30
+    source_scale: "global"
+    literature_source: "IPCC AR6 Chapter 4 — Arctic amplification lowers polar SLP"
+    confidence: "low"
+    description: "GHG-forced SLP change via differential warming"
+    unit_increment: 1.0
+
+  aerosol_forcing_index:
+    value: 0.03
+    units: "hPa per W/m2"
+    uncertainty: 0.35
+    source_scale: "global"
+    literature_source: "IPCC AR6 Chapter 4"
+    confidence: "low"
+    description: "Aerosol-forced circulation change"
+    unit_increment: 1.0
+
+  volcanic_forcing_index:
+    value: 0.02
+    units: "hPa per W/m2"
+    uncertainty: 0.40
+    source_scale: "global"
+    literature_source: "Santer et al. (2014)"
+    confidence: "low"
+    description: "Volcanic forcing on circulation"
+    unit_increment: 1.0
+
+  solar_forcing_index:
+    value: 0.01
+    units: "hPa per W/m2"
+    uncertainty: 0.50
+    source_scale: "global"
+    literature_source: "IPCC AR6"
+    confidence: "low"
+    description: "Solar variability effect on SLP — highly uncertain"
+    unit_increment: 1.0
+
+  ENSO_detrended:
+    value: 0.0
+    units: "hPa per °C"
+    uncertainty: 0.10
+    source_scale: "tropical_pacific"
+    literature_source: "ForceSMIP"
+    confidence: "low"
+    description: "ENSO forced trend effect on SLP"
+    unit_increment: 1.0
+
+  AMV_index:
+    value: 0.0
+    units: "hPa per °C"
+    uncertainty: 0.10
+    source_scale: "north_atlantic"
+    literature_source: "ForceSMIP"
+    confidence: "low"
+    description: "AMV SLP effect"
+    unit_increment: 1.0
+
+  IPO_index:
+    value: 0.0
+    units: "hPa per °C"
+    uncertainty: 0.10
+    source_scale: "pacific"
+    literature_source: "ForceSMIP"
+    confidence: "low"
+    description: "IPO SLP effect"
+    unit_increment: 1.0
+
+  GMST_trend:
+    value: -0.05
+    units: "hPa per °C GMST"
+    uncertainty: 0.30
+    source_scale: "global"
+    literature_source: "Pattern scaling"
+    confidence: "low"
+    description: "SLP pattern scaling — weak"
+    unit_increment: 1.0
+
+scale_harmonization:
+  target_resolution: 278000
+  factors:
+    "global":
+      GHG_forcing_index: 1.0
+      aerosol_forcing_index: 1.0
+      volcanic_forcing_index: 1.0
+      solar_forcing_index: 1.0
+      ENSO_detrended: 1.0
+      AMV_index: 1.0
+      IPO_index: 1.0
+      GMST_trend: 1.0
+
+calibration:
+  shrinkage_weight: 0.3
+  max_deviation: 2.0
+  adaptive_weighting: true
+
+sensitivity:
+  tornado_uncertainty: 20
+  n_samples: 500

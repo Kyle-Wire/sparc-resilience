@@ -1,0 +1,46 @@
+# =============================================================================
+# Variable Caps & Constraints — Blank Template
+# =============================================================================
+# Define hard physical bounds and intervention limits for your predictors.
+#
+# Referenced by: project.yml → physics.caps_file
+# =============================================================================
+
+# Variable Constraints — absolute physical bounds
+# Add one entry per predictor that has known physical limits.
+variable_bounds: {}
+  # Example:
+  # My_Predictor_A:
+  #   min: 0.0
+  #   max: 100.0
+  #   units: "percentage"
+  #   description: "Coverage fraction"
+
+# Intervention Delta Constraints
+delta_constraints: {}
+  # Example:
+  # My_Predictor_A:
+  #   max_increase: 50.0
+  #   max_decrease: 0.0
+  #   typical_increase: 20.0
+
+# Monotonicity Rules
+monotonicity: {}
+  # Example:
+  # My_Predictor_A:
+  #   expected_sign: "negative"
+  #   description: "More of A should decrease the response"
+
+# Capacity Headroom Calculations
+capacity_rules: {}
+
+# Combined Intervention Constraints
+combined_constraints: {}
+
+# Validation Thresholds
+validation:
+  max_single_cell_delta: 10.0
+  typical_max_delta: 5.0
+  max_zone_avg_delta: 4.0
+  sign_violation_action: "error"
+  magnitude_violation_action: "warning"

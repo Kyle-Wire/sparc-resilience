@@ -1,0 +1,359 @@
+{
+  "metadata": {
+    "stage": "causal_validation",
+    "target": "tas_trend",
+    "n_treatments": 4,
+    "n_edges": 5,
+    "dag_file": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\GW3C_v2.0\\GW3C_v2.1\\templates\\forcesmip\\causal\\forcesmip_dag_pooled_v2_tas.yml",
+    "estimator": "dml",
+    "ipw_enabled": true,
+    "gps_enabled": true,
+    "matching_enabled": true,
+    "doubly_robust_enabled": true,
+    "spatial_cate_enabled": true
+  },
+  "direct_effects": {
+    "GMST_trend": {
+      "structural_coeff": 3.0,
+      "ate_backdoor": 1.260502476301736,
+      "cate_mean": -0.233648922531762,
+      "cate_std": 3.4445078414638624,
+      "ate_ipw": 0.6384947403396075,
+      "ate_gps": 1.2091049655977675,
+      "att_matching": 0.7873938208851448,
+      "ate_doubly_robust": 3.680953534922306,
+      "monotone_constraint": 0,
+      "placebo_pass": true,
+      "rcc_pass": true,
+      "data_subset_pass": true,
+      "ucc_pass": true,
+      "e_value": 2.0152287310613435,
+      "bootstrap_ci_lower": 1.2327255792828338,
+      "bootstrap_ci_upper": 1.289702480218221,
+      "bootstrap_se": 0.014921101036362686,
+      "elasticity": 1.0408747413757735,
+      "relative_importance": 0.775917133946166,
+      "estimator_agreement": false,
+      "max_discrepancy_pct": 241.3687280892261
+    },
+    "AMV_index": {
+      "structural_coeff": 9.422873502819936,
+      "ate_backdoor": 2.8447295922700064,
+      "cate_mean": null,
+      "cate_std": null,
+      "ate_ipw": null,
+      "ate_gps": null,
+      "att_matching": null,
+      "ate_doubly_robust": -8.344815054455347,
+      "monotone_constraint": 0,
+      "placebo_pass": true,
+      "rcc_pass": true,
+      "data_subset_pass": true,
+      "ucc_pass": true,
+      "e_value": 1.4456493609229317,
+      "bootstrap_ci_lower": 10.319143248859792,
+      "bootstrap_ci_upper": 11.70464066429294,
+      "bootstrap_se": 0.34835677940841053,
+      "elasticity": -0.0032316425976356257,
+      "relative_importance": 0.08187470533341386,
+      "estimator_agreement": false,
+      "max_discrepancy_pct": 393.34299741988633
+    },
+    "IPO_index": {
+      "structural_coeff": 1.7597040718357768,
+      "ate_backdoor": 3.2469708829795323,
+      "cate_mean": null,
+      "cate_std": null,
+      "ate_ipw": null,
+      "ate_gps": null,
+      "att_matching": null,
+      "ate_doubly_robust": -0.36249408202512384,
+      "monotone_constraint": 0,
+      "placebo_pass": true,
+      "rcc_pass": true,
+      "data_subset_pass": true,
+      "ucc_pass": false,
+      "e_value": 1.230271689298103,
+      "bootstrap_ci_lower": 1.7754057730462343,
+      "bootstrap_ci_upper": 2.356471208189997,
+      "bootstrap_se": 0.14970272602817639,
+      "elasticity": -0.12347882138964218,
+      "relative_importance": 0.14220816072042022,
+      "estimator_agreement": false,
+      "max_discrepancy_pct": 111.16406937694762
+    }
+  },
+  "mediator_propagation": {},
+  "all_structural_coefficients": {
+    "GMST_trend->tas_trend": 3.0,
+    "AMV_index->tas_trend": 9.422873502819936,
+    "AMV_index->GMST_trend": 7.984197274790828,
+    "IPO_index->tas_trend": 1.7597040718357768,
+    "IPO_index->GMST_trend": 1.8410904255727099
+  },
+  "propensity_diagnostics": {
+    "GMST_trend": {
+      "ps_mean": 0.5000343909972548,
+      "ps_std": 0.0671828761982468,
+      "ps_min": 0.44470701356285247,
+      "ps_max": 0.6779317436274179,
+      "extreme_fraction": 0.0,
+      "n_trimmed": 0,
+      "n_total": 103680
+    }
+  },
+  "assumption_diagnostics": {
+    "GMST_trend": {
+      "positivity": {
+        "positivity_ok": true,
+        "violation_rate": 0.0,
+        "violations": [
+          {
+            "confounder": "member_id",
+            "stratum": "(-0.001, 0.9]",
+            "treatment_fraction": 0.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(0.9, 1.8]",
+            "treatment_fraction": 1.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(1.8, 2.7]",
+            "treatment_fraction": 1.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(2.7, 3.6]",
+            "treatment_fraction": 1.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(3.6, 4.5]",
+            "treatment_fraction": 1.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(4.5, 5.4]",
+            "treatment_fraction": 1.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(5.4, 6.3]",
+            "treatment_fraction": 0.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(6.3, 7.2]",
+            "treatment_fraction": 0.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(7.2, 8.1]",
+            "treatment_fraction": 0.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(8.1, 9.0]",
+            "treatment_fraction": 0.0,
+            "n_obs": 10368
+          }
+        ],
+        "propensity_stats": {
+          "mean": 0.4999999779092893,
+          "std": 0.2619521417194596,
+          "min": 0.11513479672485125,
+          "max": 0.8829029554169565,
+          "pct_below_005": 0.0,
+          "pct_above_095": 0.0
+        }
+      },
+      "sutva": {
+        "morans_i": 0.0093,
+        "p_value": 0.097,
+        "sutva_concern": false,
+        "interpretation": "Low spatial autocorrelation in GMST_trend (Moran's I=0.009, p=0.0970). SUTVA assumption is well-supported."
+      }
+    },
+    "AMV_index": {
+      "positivity": {
+        "positivity_ok": true,
+        "violation_rate": 0.0,
+        "violations": [
+          {
+            "confounder": "member_id",
+            "stratum": "(-0.001, 0.9]",
+            "treatment_fraction": 0.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(0.9, 1.8]",
+            "treatment_fraction": 0.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(1.8, 2.7]",
+            "treatment_fraction": 0.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(2.7, 3.6]",
+            "treatment_fraction": 1.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(3.6, 4.5]",
+            "treatment_fraction": 1.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(4.5, 5.4]",
+            "treatment_fraction": 0.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(5.4, 6.3]",
+            "treatment_fraction": 1.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(6.3, 7.2]",
+            "treatment_fraction": 1.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(7.2, 8.1]",
+            "treatment_fraction": 1.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(8.1, 9.0]",
+            "treatment_fraction": 0.0,
+            "n_obs": 10368
+          }
+        ],
+        "propensity_stats": {
+          "mean": 0.5000011804203063,
+          "std": 0.19177026265496244,
+          "min": 0.1988176558789399,
+          "max": 0.8059728464466487,
+          "pct_below_005": 0.0,
+          "pct_above_095": 0.0
+        }
+      },
+      "sutva": {
+        "morans_i": -0.0012,
+        "p_value": 0.447,
+        "sutva_concern": false,
+        "interpretation": "Low spatial autocorrelation in AMV_index (Moran's I=-0.001, p=0.4470). SUTVA assumption is well-supported."
+      }
+    },
+    "IPO_index": {
+      "positivity": {
+        "positivity_ok": true,
+        "violation_rate": 0.0,
+        "violations": [
+          {
+            "confounder": "member_id",
+            "stratum": "(-0.001, 0.9]",
+            "treatment_fraction": 1.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(0.9, 1.8]",
+            "treatment_fraction": 1.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(1.8, 2.7]",
+            "treatment_fraction": 0.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(2.7, 3.6]",
+            "treatment_fraction": 0.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(3.6, 4.5]",
+            "treatment_fraction": 0.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(4.5, 5.4]",
+            "treatment_fraction": 1.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(5.4, 6.3]",
+            "treatment_fraction": 1.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(6.3, 7.2]",
+            "treatment_fraction": 0.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(7.2, 8.1]",
+            "treatment_fraction": 0.0,
+            "n_obs": 10368
+          },
+          {
+            "confounder": "member_id",
+            "stratum": "(8.1, 9.0]",
+            "treatment_fraction": 1.0,
+            "n_obs": 10368
+          }
+        ],
+        "propensity_stats": {
+          "mean": 0.5000001431376416,
+          "std": 0.05281202553217361,
+          "min": 0.39468755265805927,
+          "max": 0.598225831772725,
+          "pct_below_005": 0.0,
+          "pct_above_095": 0.0
+        }
+      },
+      "sutva": {
+        "morans_i": 0.0047,
+        "p_value": 0.232,
+        "sutva_concern": false,
+        "interpretation": "Low spatial autocorrelation in IPO_index (Moran's I=0.005, p=0.2320). SUTVA assumption is well-supported."
+      }
+    }
+  },
+  "dose_response": {
+    "GMST_trend": {
+      "nonlinearity_ratio": 3.6296575096978625,
+      "is_nonlinear": true
+    }
+  }
+}

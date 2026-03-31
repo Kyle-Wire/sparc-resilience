@@ -1,0 +1,34 @@
+{
+  "timestamp": "2026-03-27T15:50:18.220276",
+  "variables": [
+    "GMST_trend",
+    "AMV_index",
+    "IPO_index",
+    "lat_abs",
+    "land_fraction",
+    "ocean_basin",
+    "member_id"
+  ],
+  "physics_signs": {
+    "Pct_Impervious": 1,
+    "Pct_Canopy": -1,
+    "NDVI": -1,
+    "Albedo": -1
+  },
+  "models": {
+    "mgwr": {
+      "description": "Local coefficient surfaces from MGWR",
+      "raw_file": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\GW3C_v2.0\\GW3C_v2.1\\templates\\forcesmip\\output\\forcesmip_tos_pooled\\Stage_2_Spatial_CV\\base_models_full/mgwr_local_coefficients.csv",
+      "corrected_file": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\GW3C_v2.0\\GW3C_v2.1\\templates\\forcesmip\\output\\forcesmip_tos_pooled\\Stage_2_Spatial_CV\\base_models_full/mgwr_local_coefficients_corrected.csv"
+    },
+    "gwrf": {
+      "condition_curves": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\GW3C_v2.0\\GW3C_v2.1\\templates\\forcesmip\\output\\forcesmip_tos_pooled\\spatial_intelligence\\gwrf_pdp\\gwrf_condition_curves.json",
+      "condition_curves_description": "Aggregate PDP with logistic saturation curve fits \u2014 used by Stage 4 for saturation-aware scenario predictions"
+    }
+  },
+  "files": {
+    "mgwr_raw": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\GW3C_v2.0\\GW3C_v2.1\\templates\\forcesmip\\output\\forcesmip_tos_pooled\\Stage_2_Spatial_CV\\base_models_full/mgwr_local_coefficients.csv",
+    "mgwr_corrected": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\GW3C_v2.0\\GW3C_v2.1\\templates\\forcesmip\\output\\forcesmip_tos_pooled\\Stage_2_Spatial_CV\\base_models_full/mgwr_local_coefficients_corrected.csv",
+    "gwrf_condition_curves": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\GW3C_v2.0\\GW3C_v2.1\\templates\\forcesmip\\output\\forcesmip_tos_pooled\\spatial_intelligence\\gwrf_pdp\\gwrf_condition_curves.json"
+  }
+}

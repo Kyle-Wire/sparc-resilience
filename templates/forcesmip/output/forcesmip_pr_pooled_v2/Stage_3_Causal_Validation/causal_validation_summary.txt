@@ -1,0 +1,60 @@
+CAUSAL VALIDATION SUMMARY
+==================================================
+
+ASSUMPTION DIAGNOSTICS
+  GMST_trend:
+    Positivity: violation_rate=0.00%, violations=10
+    SUTVA (Moran's I): I=0.0093, p=0.0840
+  AMV_index:
+    Positivity: violation_rate=0.00%, violations=10
+    SUTVA (Moran's I): I=-0.0012, p=0.4630
+  IPO_index:
+    Positivity: violation_rate=0.00%, violations=10
+    SUTVA (Moran's I): I=0.0047, p=0.2500
+
+DAG STRUCTURE
+  Treatments:  ['GMST_trend', 'AMV_index', 'IPO_index', 'GMST_trend_t-1']
+  Mediators:   []
+  Confounders: ['member_id', 'lat_abs', 'land_fraction', 'ocean_basin']
+  Outcome:     ['pr_trend']
+
+STRUCTURAL COEFFICIENTS (parent -> child)
+                 GMST_trend -> pr_trend         +0.09000
+                  AMV_index -> pr_trend         +0.80590
+                  AMV_index -> GMST_trend       +7.98420
+                  IPO_index -> pr_trend         -0.24640
+                  IPO_index -> GMST_trend       +1.84109
+
+ATE ESTIMATES
+                   Variable    Backdoor         IPW         GPS       Match          DR   Agreement
+  -------------------------  ----------  ----------  ----------  ----------  ----------  ----------
+                 GMST_trend    +0.05041    +0.02260    +0.06467    +0.05850    +2.87582          NO
+                  AMV_index    +0.73023         N/A         N/A         N/A    -0.76666          NO
+                  IPO_index    -0.18667         N/A         N/A         N/A    -4.45834          NO
+             GMST_trend_t-1         N/A         N/A         N/A         N/A         N/A         N/A
+
+CATE (LinearDML)
+                 GMST_trend  mean=+1.86060  std=1.13329
+
+SPATIAL CATE (CausalForestDML)
+                 GMST_trend  mean=-56.43426  std=724.15778
+
+ELASTICITY COEFFICIENTS
+                 GMST_trend  eps = +0.8821
+                  AMV_index  eps = -0.0176
+                  IPO_index  eps = +0.1504
+
+RELATIVE IMPORTANCE
+                 GMST_trend  RI = 0.515
+                  AMV_index  RI = 0.349
+                  IPO_index  RI = 0.136
+
+BOOTSTRAP 95% CONFIDENCE INTERVALS
+                 GMST_trend  [+0.04441, +0.05728]  SE=0.00345
+                  AMV_index  [+0.82817, +1.05427]  SE=0.06303
+                  IPO_index  [-0.40414, -0.18835]  SE=0.05439
+
+REFUTATION TESTS
+                 GMST_trend  placebo=PASS, rcc=PASS, subset=PASS, unobs_cc=PASS, e-value=1.23, RV=0.034
+                  AMV_index  placebo=PASS, rcc=PASS, subset=PASS, unobs_cc=FAIL, e-value=1.25, RV=0.046
+                  IPO_index  placebo=PASS, rcc=PASS, subset=PASS, unobs_cc=FAIL, e-value=1.27, RV=0.052

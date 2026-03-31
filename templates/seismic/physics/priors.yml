@@ -1,0 +1,54 @@
+# Physics Priors — Seismic Ground Motion Domain
+# Sources: Boore & Atkinson (2008), Abrahamson et al. (2014)
+
+coefficients:
+  magnitude:
+    value: 0.45
+    units: "log10(PGA) per unit Mw"
+    uncertainty: 0.10
+    source_scale: "event"
+    literature_source: "Boore & Atkinson (2008) Earthquake Spectra; NGA-West2"
+    confidence: "high"
+    description: "PGA scales as ~10^(0.45*M) — linearized GMPE slope"
+
+  distance_to_rupture_km:
+    value: -0.01
+    units: "g PGA per km (linearized at 20km)"
+    uncertainty: 0.005
+    source_scale: "path"
+    literature_source: "Boore & Atkinson (2008); Abrahamson et al. (2014)"
+    confidence: "high"
+    description: "Geometric + anelastic attenuation with distance"
+
+  Vs30_ms:
+    value: -0.0005
+    units: "g PGA per m/s Vs30 increase"
+    uncertainty: 0.0003
+    source_scale: "site"
+    literature_source: "Boore & Atkinson (2008); Seyhan & Stewart (2014)"
+    confidence: "high"
+    description: "Softer sites amplify more: PGA inversely ∝ Vs30"
+
+  basin_depth_z1p0_m:
+    value: 0.0002
+    units: "g PGA per m basin depth"
+    uncertainty: 0.0001
+    source_scale: "site"
+    literature_source: "Abrahamson et al. (2014); Campbell & Bozorgnia (2014)"
+    confidence: "medium"
+    description: "Basin geometry amplifies long-period motions"
+
+  SPT_N60:
+    value: -0.004
+    units: "g PGA per unit N60 increase (liquefaction adjustment)"
+    uncertainty: 0.002
+    source_scale: "borehole"
+    literature_source: "Youd et al. (2001) ASCE; Boulanger & Idriss (2014)"
+    confidence: "medium"
+    description: "Denser soil resists liquefaction, reducing effective PGA amplification"
+
+scale_harmonization:
+  target_resolution: 100
+  factors:
+    "event":
+      magnitude: 1.0

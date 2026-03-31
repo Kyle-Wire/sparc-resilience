@@ -1,0 +1,135 @@
+# Variable Domain Constraints (Hard Caps)
+# Physical and practical bounds for urban heat intervention variables
+# Date: October 9, 2025
+
+# Variable Constraints
+# Format: [min_value, max_value]
+variable_bounds:
+  Pct_Canopy:
+    min: 0.0
+    max: 100.0
+    units: "percentage points"
+    description: "Tree canopy coverage percentage"
+    physical_justification: "Cannot have negative canopy or exceed 100%"
+    
+  Pct_Impervious:
+    min: 0.0
+    max: 100.0
+    units: "percentage points"
+    description: "Impervious surface coverage percentage"
+    physical_justification: "Cannot have negative impervious or exceed 100%"
+    
+  NDVI:
+    min: -0.1
+    max: 0.9
+    units: "index value"
+    description: "Normalized Difference Vegetation Index"
+    physical_justification: "Water/bare soil can be slightly negative; dense vegetation ~0.8-0.9"
+    
+  Albedo:
+    min: 0.05
+    max: 0.70
+    units: "reflectance fraction"
+    description: "Surface albedo (reflectance)"
+    physical_justification: "Dark asphalt ~0.05; white cool coating ~0.70"
+
+# Intervention Delta Constraints (Change Limits)
+# Maximum single-intervention changes
+delta_constraints:
+  Pct_Canopy:
+    max_increase: 50.0  # pp - aggressive reforestation
+    max_decrease: 0.0   # Cannot remove canopy in cooling interventions
+    typical_increase: 20.0  # pp - moderate intervention
+    
+  Pct_Impervious:
+    max_increase: 0.0   # Cannot add impervious in cooling interventions
+    max_decrease: 50.0  # pp - aggressive depaving
+    typical_decrease: 15.0  # pp - moderate intervention
+    
+  NDVI:
+    max_increase: 0.4   # Large greening project
+    max_decrease: 0.0   # Cannot reduce vegetation in cooling interventions
+    typical_increase: 0.15  # Moderate greening
+    
+  Albedo:
+    max_increase: 0.40  # Dark surface → white coating
+    max_decrease: 0.0   # Cannot darken surfaces in cooling interventions
+    typical_increase: 0.15  # Moderate cool coating
+
+# Monotonicity Rules (Required Sign Compliance)
+# All interventions must follow physical expectations
+monotonicity:
+  Pct_Canopy:
+    expected_sign: "negative"  # More canopy → cooling (negative ΔT)
+    description: "Increasing canopy coverage must cool"
+    
+  Pct_Impervious:
+    expected_sign: "positive"  # More impervious → warming (positive ΔT)
+    # BUT: In interventions, we REDUCE impervious → cooling
+    intervention_sign: "negative"  # Reducing impervious → cooling
+    description: "Decreasing impervious surfaces must cool"
+    
+  NDVI:
+    expected_sign: "negative"  # More vegetation → cooling
+    description: "Increasing vegetation must cool"
+    
+  Albedo:
+    expected_sign: "negative"  # Higher albedo → cooling
+    description: "Increasing reflectance must cool"
+
+# Capacity Headroom Calculations
+# Per-cell maximum feasible change
+capacity_rules:
+  Pct_Canopy:
+    formula: "min(100 - current_canopy, max_increase)"
+    description: "Cannot exceed 100% total coverage"
+    
+  Pct_Impervious:
+    formula: "min(current_impervious, max_decrease)"
+    description: "Cannot reduce below 0%"
+    
+  NDVI:
+    formula: "min(0.9 - current_ndvi, max_increase)"
+    description: "Limited by dense vegetation maximum"
+    
+  Albedo:
+    formula: "min(0.70 - current_albedo, max_increase)"
+    description: "Limited by white coating maximum"
+
+# Combined Intervention Constraints
+# Prevent physically impossible combinations
+combined_constraints:
+  # Canopy and Impervious are mutually exclusive space
+  canopy_impervious_sum:
+    rule: "delta_canopy + current_canopy + delta_impervious + current_impervious <= 100"
+    description: "Total coverage cannot exceed 100%"
+    enforcement: "warning"  # Warn but allow slight exceedance
+    
+  # NDVI must be consistent with canopy
+  ndvi_canopy_consistency:
+    rule: "If delta_canopy > 20, expect delta_ndvi > 0.05"
+    description: "Large canopy increases should increase NDVI"
+    enforcement: "soft"  # Flag for review, don't block
+    
+  # Albedo changes limited by impervious area
+  albedo_impervious_dependency:
+    rule: "Albedo interventions only apply to impervious surfaces"
+    description: "Cool pavement requires impervious surface area"
+    enforcement: "informational"
+
+# Validation Thresholds
+validation:
+  # Predict ΔT magnitude checks
+  max_single_cell_delta_T: 10.0  # °F - unrealistic if exceeded
+  typical_max_delta_T: 5.0       # °F - flag for review if exceeded
+  
+  # Scenario-level checks
+  max_district_avg_delta_T: 4.0  # °F - district average shouldn't exceed
+  
+  # Physics compliance
+  sign_violation_action: "error"      # Block if signs wrong
+  magnitude_violation_action: "warning"  # Warn if too large
+
+# Maximum allowed absolute delta magnitude (z-score units)
+# Applied as a hard clip to all scenario deltas (direct + indirect).
+max_delta_magnitude: 3.0

@@ -1,0 +1,100 @@
+# Causal DAG — Air Quality (PM2.5) Domain
+# References: Jerrett et al. (2005), Di et al. (2019), EPA AP-42
+
+nodes:
+  - name: traffic_density_vkm
+    type: treatment
+    description: "Vehicle-km traveled per km² per day"
+
+  - name: industrial_emissions_tpy
+    type: treatment
+    description: "Nearby industrial PM2.5 emissions (tons/yr)"
+
+  - name: distance_to_road_m
+    type: confounder
+    description: "Distance to nearest major road (m)"
+
+  - name: wind_speed_ms
+    type: confounder
+    description: "Mean wind speed (m/s)"
+
+  - name: mixing_height_m
+    type: mediator
+    description: "Planetary boundary layer height (m)"
+
+  - name: temperature_C
+    type: confounder
+    description: "Ambient temperature (°C)"
+
+  - name: relative_humidity_pct
+    type: confounder
+    description: "Relative humidity (%)"
+
+  - name: NDVI
+    type: treatment
+    description: "Vegetation greenness index"
+
+  - name: population_density_km2
+    type: confounder
+    description: "Population density (people/km²)"
+
+  - name: elevation_m
+    type: confounder
+    description: "Terrain elevation (m)"
+
+  - name: PM25_ugm3
+    type: outcome
+    description: "Ambient PM2.5 concentration (µg/m³)"
+
+edges:
+  - parent: traffic_density_vkm
+    child: PM25_ugm3
+    mechanism: "Tailpipe and tire/brake wear emissions (EPA AP-42)"
+
+  - parent: industrial_emissions_tpy
+    child: PM25_ugm3
+    mechanism: "Point-source primary PM2.5 emissions"
+
+  - parent: distance_to_road_m
+    child: PM25_ugm3
+    mechanism: "Concentration decay with distance from roadway emissions (Zhu et al. 2002)"
+
+  - parent: wind_speed_ms
+    child: PM25_ugm3
+    mechanism: "Wind disperses pollutants — Gaussian plume model (1/u dilution)"
+
+  - parent: wind_speed_ms
+    child: mixing_height_m
+    mechanism: "Higher wind → more mechanical turbulence → deeper PBL"
+
+  - parent: temperature_C
+    child: mixing_height_m
+    mechanism: "Surface heating drives convective PBL growth"
+
+  - parent: temperature_C
+    child: PM25_ugm3
+    mechanism: "Temperature affects secondary aerosol formation and inversion layers"
+
+  - parent: mixing_height_m
+    child: PM25_ugm3
+    mechanism: "Deeper PBL dilutes pollutants over larger volume"
+
+  - parent: relative_humidity_pct
+    child: PM25_ugm3
+    mechanism: "Humidity promotes hygroscopic growth of particles and secondary formation"
+
+  - parent: NDVI
+    child: PM25_ugm3
+    mechanism: "Vegetation canopy filters particles via deposition (Nowak et al. 2006)"
+
+  - parent: population_density_km2
+    child: traffic_density_vkm
+    mechanism: "Higher population drives more vehicle activity"
+
+  - parent: elevation_m
+    child: mixing_height_m
+    mechanism: "Terrain affects boundary layer dynamics and inversions"
+
+  - parent: elevation_m
+    child: PM25_ugm3
+    mechanism: "Valley floors trap pollutants under inversions"

@@ -1,0 +1,13 @@
+{
+  "feature_names": [
+    "GMST_trend",
+    "AMV_index",
+    "IPO_index",
+    "lat_abs",
+    "land_fraction",
+    "ocean_basin",
+    "member_id"
+  ],
+  "n_features": 7,
+  "scaling_applied": false
+}

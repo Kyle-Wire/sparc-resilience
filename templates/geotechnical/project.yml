@@ -1,0 +1,114 @@
+# =============================================================================
+# SPARC Project Configuration — Geotechnical / Slope Stability Domain
+# =============================================================================
+# Spatial analysis of landslide susceptibility or factor of safety driven
+# by slope geometry, soil properties, hydrology, and seismicity.
+#
+# Key references:
+#   - Mohr-Coulomb failure criterion
+#   - Bishop (1955) — Simplified method of slices
+#   - Iverson (2000) — Rainfall-triggered landslides
+# =============================================================================
+
+project:
+  name: "Slope Stability Analysis"
+  description: "Spatial regression of landslide factor of safety driven by slope geometry, soil properties, and rainfall"
+  domain: geotechnical
+  version: "1.0.0"
+  author: ""
+  response_units: "FS"
+
+data:
+  file_path: ""
+  target_column: "factor_of_safety"            # Dimensionless — <1.0 = failure
+  identifier_column: "cell_id"
+  coord_columns: ["longitude", "latitude"]
+
+crs:
+  input: "EPSG:4326"
+  projected: ""
+
+predictors:
+  - slope_angle_deg           # Slope inclination (degrees)
+  - soil_cohesion_kPa         # Effective cohesion c' (kPa)
+  - friction_angle_deg        # Effective friction angle φ' (degrees)
+  - pore_pressure_ratio       # Pore water pressure ratio ru = u/(γ·z)
+  - soil_depth_m              # Depth to bedrock / failure surface (m)
+  - precipitation_mm          # Cumulative rainfall over antecedent period (mm)
+  - vegetation_root_kPa       # Root reinforcement cohesion (kPa)
+  - soil_unit_weight_kNm3     # Unit weight γ (kN/m³)
+  - seismic_PGA_g             # Peak ground acceleration (g)
+  - distance_to_fault_km     # Distance to nearest active fault (km)
+
+physics:
+  priors_file: "physics/priors.yml"
+  caps_file:   "physics/caps.yml"
+  monotone_constraints:
+    slope_angle_deg: -1          # Steeper → lower FoS
+    soil_cohesion_kPa:  1       # More cohesion → higher FoS
+    friction_angle_deg:  1      # Higher friction → higher FoS
+    pore_pressure_ratio: -1     # Higher pore pressure → lower FoS
+    soil_depth_m: -1            # Thicker soil → more driving force
+    precipitation_mm: -1        # More rain → more pore pressure → lower FoS
+    vegetation_root_kPa:  1     # Root reinforcement increases stability
+    seismic_PGA_g: -1           # Seismic load reduces FoS
+
+causal:
+  dag_file: "causal/dag.yml"
+  estimator: "hgb"
+  actionable_variables:
+    - vegetation_root_kPa
+    - pore_pressure_ratio
+  fixed_variables:
+    - slope_angle_deg
+    - soil_cohesion_kPa
+    - friction_angle_deg
+    - soil_depth_m
+    - soil_unit_weight_kNm3
+    - distance_to_fault_km
+
+output:
+  base_dir: "output"
+
+pipeline:
+  random_seed: 42
+  n_spatial_folds: 5
+
+scenarios:
+  - name: "Heavy Rainfall Event"
+    variable: precipitation_mm
+    direction: increase
+    increments: [50, 100, 200, 300]
+    min_val: 0
+    max_val: 1000
+    unit: "mm"
+
+  - name: "Bioengineering — Root Reinforcement"
+    variable: vegetation_root_kPa
+    direction: increase
+    increments: [2, 5, 10, 15]
+    min_val: 0
+    max_val: 30
+    unit: "kPa"
+
+  - name: "Drainage Improvement — Pore Pressure Reduction"
+    variable: pore_pressure_ratio
+    direction: decrease
+    increments: [0.05, 0.10, 0.20, 0.30]
+    min_val: 0
+    max_val: 1.0
+    unit: "ratio"
+
+# temporal:
+#   enabled: true
+#   time_column: "date"
+#   frequency: "daily"
+#   lag_features:
+#     enabled: true
+#     lags: [1, 3, 7, 14]
+#     rolling_windows: [3, 7, 14, 30]
+#     variables: [precipitation_mm, pore_pressure_ratio]
+#   temporal_cv:
+#     method: "expanding_window"
+#     n_splits: 5
+#     gap: 1

@@ -1,0 +1,255 @@
+# =============================================================================
+# SPARC Project Configuration — Urban Heat Island Template
+# =============================================================================
+# This is the complete project template for UHI analysis with SPARC v2.1.
+# Scaffold with:  sparc init --template uhi --output ./my_project
+# Then edit paths, CRS, predictors, and scenarios for your study area.
+#
+# Usage:
+#   sparc validate --project project.yml
+#   sparc run      --project project.yml --stage all
+# =============================================================================
+
+project:
+  name: "Brown University Urban Heat Island Analysis"
+  description: "Spatial regression analysis of ambient air temperature z-scores across the Brown University campus and surrounding Providence neighborhoods"
+  domain: uhi
+  version: "2.1.0"
+  author: "SPARC Labs LLC"
+  response_units: "°F"      # Units for the target variable (used in reports & physics priors)
+
+# ---------------------------------------------------------------------------
+# Input Data
+# ---------------------------------------------------------------------------
+data:
+  file_path: "../data/brown4.csv"              # Relative to this file, or absolute
+  target_column: "AAT_z"                       # Ambient Air Temperature z-score
+  identifier_column: "OBJECTID"                # Unique row ID
+  coord_columns: ["POINT_X", "POINT_Y"]        # [Easting, Northing]
+  areas_of_interest_file: "../data/Areas_of_Interest.csv"  # Optional zone/district mapping
+
+# ---------------------------------------------------------------------------
+# Coordinate Reference Systems
+# ---------------------------------------------------------------------------
+crs:
+  input: "EPSG:3438"          # Rhode Island State Plane (NAD83, feet)
+  projected: "EPSG:26919"     # NAD83 / UTM zone 19N (meters) — used for all spatial ops
+
+# ---------------------------------------------------------------------------
+# Predictor Variables
+# ---------------------------------------------------------------------------
+predictors:
+  - Distance_from_water_m
+  - Pct_Impervious
+  - Pct_Canopy
+  - NDVI
+  - Albedo
+  - Elevation_m
+
+# ---------------------------------------------------------------------------
+# Physics / Domain Constraints
+# ---------------------------------------------------------------------------
+physics:
+  priors_file: "physics/priors.yml"    # Literature-based coefficients
+  caps_file:   "physics/caps.yml"      # Hard bounds, delta limits, monotonicity rules
+
+  # Monotone constraints applied to the meta-ensemble and spatial models.
+  # -1 = more of this variable → lower response (cooling)
+  # +1 = more of this variable → higher response (warming)
+  #  0 = unconstrained
+  monotone_constraints:
+    Pct_Canopy: -1
+    Pct_Impervious: 1
+    NDVI: -1
+    Albedo: -1
+    Elevation_m: 0
+    Distance_from_water_m: 0
+
+# ---------------------------------------------------------------------------
+# Causal DAG (for counterfactual scenario simulation)
+# ---------------------------------------------------------------------------
+causal:
+  dag_file: "causal/dag.yml"
+  estimator: "hgb"              # "hgb" (default, non-linear monotone-constrained) or "ols" (linear)
+  estimate_cate: false          # Set true to run EconML CATE (requires econml package)
+  actionable_variables:
+    - Pct_Canopy
+    - Pct_Impervious
+    - NDVI
+    - Albedo
+  fixed_variables:
+    - Elevation_m
+    - Distance_from_water_m
+
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
+output:
+  base_dir: "output"
+  stage_dirs:
+    stage_1: "Stage_1_Correlogram_Analysis"
+    stage_2: "Stage_2_Spatial_CV"
+    stage_3: "Stage_3_Causal_Validation"
+    stage_4: "Stage_4_Scenarios"
+    final:   "Final_Interpretation_Results"
+
+# ---------------------------------------------------------------------------
+# Pipeline Globals
+# ---------------------------------------------------------------------------
+pipeline:
+  random_seed: 42
+  n_spatial_folds: 5
+  fast_mode: false
+  overwrite_outputs: false
+  run_mc_uncertainty: true       # Run Monte-Carlo uncertainty propagation in Stage 4
+  n_mc_draws: 50                 # Number of MC draws
+
+flags:
+  use_gwen_selection: true
+  include_gwrf_in_ensemble: true
+  use_laplacian_eigenmaps_in_ols: false
+
+# ---------------------------------------------------------------------------
+# Model Hyperparameters
+# ---------------------------------------------------------------------------
+models:
+
+  gwr:
+    bandwidth: null          # null = auto-select via correlogram
+    kernel: "gaussian"
+    alpha: 0.1
+    min_points: 50
+
+  gwrf:
+    n_estimators: 100
+    k_neighbors: 100
+    min_samples_leaf: 5
+    n_jobs: 1
+    subsample_fraction: null
+    subsample_n: null
+
+  ggpgam:
+    n_splines: 5
+    n_spatial_bases: 10
+    lam: 0.6
+    max_iter: 100
+
+  meta_ensemble:
+    algorithm: "lightgbm"
+    n_optuna_trials: 25
+    include_base_features: true
+    include_laplacian_pca: true
+
+  deep_kriging:
+    enabled: true
+    version: 2
+    hidden_layers: [64, 32, 16]
+    dropout_rate: 0.2
+    epochs: 100
+    learning_rate: 0.001
+    batch_size: 256
+
+  spatial_cv:
+    block_size: 300          # Block size in meters (300m for fine-grained urban analysis)
+    buffer_size: 300         # Buffer zone in meters between train/test folds
+    block_size_source: "user" # "user" = honour block_size above; "correlogram" = auto from Stage 1
+    method: "block"
+    stratify_y: true
+
+# ---------------------------------------------------------------------------
+# GWEN Variable Selection
+# ---------------------------------------------------------------------------
+gwen:
+  sample_size: 5000
+  k_neighbors: 500
+  cv_folds: 5
+  selection_threshold: 0.1
+  l1_ratios: [0.1, 0.5, 0.7, 0.9, 0.95, 0.99]
+  n_alphas: 100
+
+# ---------------------------------------------------------------------------
+# Laplacian Eigenmaps
+# ---------------------------------------------------------------------------
+laplacian:
+  n_eigenmaps: 150
+  k_for_swm: 10
+
+# ---------------------------------------------------------------------------
+# Intervention Scenarios (for physics-constrained simulation)
+# ---------------------------------------------------------------------------
+scenarios:
+  - name: "Canopy Increase"
+    variable: Pct_Canopy
+    direction: increase
+    increments: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+    min_val: 0
+    max_val: 100
+    unit: "percentage points"
+
+  - name: "Impervious Decrease"
+    variable: Pct_Impervious
+    direction: decrease
+    increments: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+    min_val: 0
+    max_val: 100
+    unit: "percentage points"
+
+  - name: "Albedo Increase"
+    variable: Albedo
+    direction: increase
+    increments: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
+    min_val: 0.05
+    max_val: 0.70
+    unit: "reflectance"
+
+  - name: "NDVI Increase"
+    variable: NDVI
+    direction: increase
+    increments: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
+    min_val: -0.1
+    max_val: 0.9
+    unit: "index"
+
+# ---------------------------------------------------------------------------
+# Joint (Multi-Variable) Scenarios
+# ---------------------------------------------------------------------------
+# Each joint scenario simultaneously changes multiple predictors in a single
+# simulation pass.  The DAG cross-predictor edges can optionally auto-propagate
+# induced changes to variables not listed (e.g. Canopy ↑ auto-raises NDVI).
+#
+# Combined physical constraints (e.g. Canopy + Impervious ≤ 100%) are enforced
+# automatically inside the simulator.
+# ---------------------------------------------------------------------------
+joint_scenarios:
+  - name: "Green Infrastructure Package"
+    auto_propagate_dag: true
+    interventions:
+      - variable: Pct_Canopy
+        direction: increase
+        increment: 15
+      - variable: Pct_Impervious
+        direction: decrease
+        increment: 15
+      - variable: Albedo
+        direction: increase
+        increment: 0.10
+
+  - name: "Cool-Roof Only"
+    auto_propagate_dag: false
+    interventions:
+      - variable: Albedo
+        direction: increase
+        increment: 0.20
+
+  - name: "Aggressive Greening"
+    auto_propagate_dag: true
+    interventions:
+      - variable: Pct_Canopy
+        direction: increase
+        increment: 30
+      - variable: NDVI
+        direction: increase
+        increment: 0.15
+      - variable: Pct_Impervious
+        direction: decrease
+        increment: 25

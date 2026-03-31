@@ -1,0 +1,27 @@
+# =============================================================================
+# Causal Directed Acyclic Graph — Blank Template
+# =============================================================================
+# Define the causal structure among your variables.
+# Draw visually at https://www.dagitty.net/dags.html, then encode here.
+#
+# Referenced by: project.yml → causal.dag_file
+# =============================================================================
+
+# Nodes — list every variable in the causal system
+nodes: []
+  # - name: My_Predictor_A
+  #   type: treatment       # treatment | mediator | confounder | outcome
+  #   description: ""
+  #
+  # - name: My_Target
+  #   type: outcome
+  #   description: "Response variable"
+
+# Directed edges — parent → child
+edges: []
+  # - parent: My_Predictor_A
+  #   child: My_Target
+  #   mechanism: "Brief causal explanation"
+
+# Structural equations (optional)
+structural_equations: {}

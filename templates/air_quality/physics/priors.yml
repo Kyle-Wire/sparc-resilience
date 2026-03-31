@@ -1,0 +1,63 @@
+# Physics Priors — Air Quality (PM2.5) Domain
+# Sources: Jerrett et al. (2005), Di et al. (2019), HEI (2010)
+
+coefficients:
+  traffic_density_vkm:
+    value: 0.0003
+    units: "µg/m³ per veh·km/km²/day"
+    uncertainty: 0.0002
+    source_scale: "1km"
+    literature_source: "Jerrett et al. (2005) Epidemiology; Beckerman et al. (2008)"
+    confidence: "high"
+    description: "Traffic is primary urban PM2.5 source"
+
+  industrial_emissions_tpy:
+    value: 0.02
+    units: "µg/m³ per ton/yr within 10km"
+    uncertainty: 0.01
+    source_scale: "10km"
+    literature_source: "EPA National Emissions Inventory; Levy et al. (2003)"
+    confidence: "medium"
+    description: "Point source contribution depends on distance and meteorology"
+
+  distance_to_road_m:
+    value: -0.008
+    units: "µg/m³ per m from road"
+    uncertainty: 0.004
+    source_scale: "100m"
+    literature_source: "Zhu et al. (2002) Atmospheric Environment"
+    confidence: "high"
+    description: "Exponential decay: 50% drop within 100-150m downwind"
+
+  wind_speed_ms:
+    value: -1.5
+    units: "µg/m³ per m/s"
+    uncertainty: 0.8
+    source_scale: "station"
+    literature_source: "Gaussian plume 1/u relationship; Oke (1987)"
+    confidence: "medium"
+    description: "Dispersion inversely proportional to wind speed"
+
+  mixing_height_m:
+    value: -0.005
+    units: "µg/m³ per m mixing height"
+    uncertainty: 0.003
+    source_scale: "sounding"
+    literature_source: "Seinfeld & Pandis (2016) Atmospheric Chemistry"
+    confidence: "medium"
+    description: "Deeper PBL → more dilution volume"
+
+  NDVI:
+    value: -8.0
+    units: "µg/m³ per 0.1 NDVI"
+    uncertainty: 5.0
+    source_scale: "250m"
+    literature_source: "Nowak et al. (2006) Urban Forestry; Janhäll (2015)"
+    confidence: "low"
+    description: "Vegetation canopy PM deposition and filtration"
+
+scale_harmonization:
+  target_resolution: 100
+  factors:
+    "1km":
+      traffic_density_vkm: 1.15

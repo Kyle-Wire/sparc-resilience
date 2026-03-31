@@ -1,0 +1,175 @@
+{
+  "metadata": {
+    "created_from": "Global_Hyperparameter_Configuration",
+    "base_config": "config.py",
+    "description": "Pipeline configuration with global hyperparameters for all models (not per-variable)",
+    "configurable_models": [
+      "gwr",
+      "gwrf",
+      "ggpgam",
+      "meta_ensemble",
+      "deep_kriging",
+      "spatial_cv"
+    ],
+    "approach": "global_parameters"
+  },
+  "features": {
+    "selected_features": [
+      "GMST_trend",
+      "AMV_index",
+      "IPO_index",
+      "lat_abs",
+      "land_fraction",
+      "ocean_basin",
+      "member_id"
+    ],
+    "manually_configured": true
+  },
+  "manual_parameters": {
+    "bandwidths": {
+      "GMST_trend": 37.5,
+      "AMV_index": 12.5,
+      "IPO_index": 37.5,
+      "lat_abs": 62.5,
+      "land_fraction": 62.5,
+      "ocean_basin": 62.5,
+      "member_id": 37.5
+    },
+    "block_size": 500.0,
+    "kernel": "gaussian"
+  },
+  "models": {
+    "gwr": {
+      "bandwidth": 44,
+      "kernel": "gaussian",
+      "coords_cols": null,
+      "alpha": 0.1,
+      "min_points": 50
+    },
+    "gwrf": {
+      "n_estimators": 80,
+      "k_neighbors": 250,
+      "min_samples_leaf": 5,
+      "n_jobs": 1,
+      "subsample_fraction": null,
+      "subsample_n": 8000
+    },
+    "ggpgam": {
+      "n_splines": 11,
+      "n_spatial_bases": 50,
+      "lam": 0.4,
+      "fit_intercept": true,
+      "max_iter": 200,
+      "tol": 0.0001,
+      "verbose": false,
+      "callbacks": null,
+      "distribution": "normal",
+      "link": "identity",
+      "dtype": "float64",
+      "scale": null,
+      "fit_linear": false,
+      "constraints": null,
+      "weights": null
+    },
+    "meta_ensemble": {
+      "algorithm": "lightgbm",
+      "alternative_algorithms": [
+        "xgboost",
+        "catboost",
+        "linear"
+      ],
+      "n_optuna_trials": 120,
+      "include_base_features": true,
+      "include_laplacian_pca": true,
+      "use_spatial_cv": true,
+      "cv_folds": 5,
+      "early_stopping": true,
+      "patience": 20,
+      "validation_split": 0.2,
+      "regularization": "l2",
+      "meta_learner_params": {
+        "lightgbm": {
+          "num_leaves": 63
+        },
+        "xgboost": {
+          "objective": "reg:squarederror",
+          "eval_metric": "rmse",
+          "learning_rate": 0.05,
+          "max_depth": 6,
+          "subsample": 0.8,
+          "colsample_bytree": 0.8,
+          "random_state": 42
+        },
+        "catboost": {
+          "objective": "RMSE",
+          "learning_rate": 0.05,
+          "depth": 6,
+          "random_state": 42,
+          "verbose": false
+        }
+      }
+    },
+    "spatial_cv": {
+      "n_folds": 5,
+      "method": "spatial_blocking",
+      "block_size": 500.0,
+      "buffer_size": 300,
+      "stratify_y": true,
+      "buffer_size_auto": true,
+      "min_test_size": 3110,
+      "spatial_autocorr_threshold": 0.1,
+      "overlap_tolerance": 0.05,
+      "clustering_method": "kmeans",
+      "random_state": 42
+    }
+  },
+  "deep_kriging": {
+    "hidden_layers": [
+      64,
+      32
+    ],
+    "activation": "relu",
+    "dropout_rate": 0.15,
+    "batch_size": 1024,
+    "epochs": 100,
+    "learning_rate": 0.001,
+    "optimizer": "adam",
+    "loss": "mse",
+    "metrics": [
+      "mae"
+    ],
+    "use_residuals": true,
+    "use_laplacian_features": true,
+    "validation_split": 0.2,
+    "shuffle": true,
+    "random_state": 42,
+    "early_stopping": {
+      "enabled": true,
+      "patience": 15,
+      "min_delta": 0.0001,
+      "restore_best_weights": true,
+      "monitor": "val_loss"
+    },
+    "regularization": {
+      "l1_factor": 0.0,
+      "l2_factor": 0.0001,
+      "dropout_schedule": "constant"
+    },
+    "adaptive_config": {
+      "reduce_lr_on_plateau": true,
+      "lr_reduction_factor": 0.5,
+      "lr_patience": 10,
+      "min_lr": 1e-07
+    },
+    "callbacks": {
+      "tensorboard": false,
+      "model_checkpoint": true,
+      "csv_logger": true
+    }
+  },
+  "stage_outputs": {
+    "stage_1": "Comprehensive_Hyperparameter_Configuration",
+    "stage_2": "Stage_2_Spatial_CV",
+    "final_output": "Final_Interpretation_Results"
+  }
+}

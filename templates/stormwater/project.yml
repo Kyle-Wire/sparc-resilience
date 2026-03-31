@@ -1,0 +1,110 @@
+# =============================================================================
+# SPARC Project Configuration — Stormwater Runoff Domain
+# =============================================================================
+# Spatial analysis of peak runoff / flood severity as a function of land use,
+# soil, topography, and rainfall.  Supports temporal mode for event-based or
+# continuous rainfall time-series analysis.
+#
+# Key references:
+#   - NRCS TR-55 (1986) — Curve Number method
+#   - EPA SWMM — Green–Ampt infiltration
+#   - Schueler (1994) — Impervious cover model
+# =============================================================================
+
+project:
+  name: "Stormwater Runoff Analysis"
+  description: "Spatial regression of peak runoff depth as a function of land cover, soil, topography, and precipitation"
+  domain: stormwater
+  version: "1.0.0"
+  author: ""
+  response_units: "mm"
+
+data:
+  file_path: ""                                # Path to input CSV
+  target_column: "runoff_depth_mm"             # Peak event runoff depth
+  identifier_column: "site_id"
+  coord_columns: ["longitude", "latitude"]
+  # areas_of_interest_file: ""
+
+crs:
+  input: "EPSG:4326"
+  projected: ""                                # Set to local UTM zone
+
+predictors:
+  - impervious_pct           # Impervious surface cover (%)
+  - canopy_pct               # Tree canopy cover (%)
+  - slope_pct                # Terrain slope (%)
+  - curve_number             # NRCS Curve Number (dimensionless, 30–98)
+  - soil_hydraulic_cond_mmhr # Saturated hydraulic conductivity (mm/hr)
+  - drainage_area_ha         # Contributing drainage area (hectares)
+  - rainfall_depth_mm        # Storm event total rainfall (mm)
+  - antecedent_moisture      # 5-day antecedent rainfall index (mm)
+
+physics:
+  priors_file: "physics/priors.yml"
+  caps_file:   "physics/caps.yml"
+  monotone_constraints:
+    impervious_pct:  1          # More impervious → more runoff
+    canopy_pct: -1              # More canopy → less runoff
+    slope_pct:  1               # Steeper → faster runoff
+    curve_number:  1            # Higher CN → more runoff
+    soil_hydraulic_cond_mmhr: -1  # Higher infiltration → less runoff
+    rainfall_depth_mm:  1       # More rain → more runoff
+
+causal:
+  dag_file: "causal/dag.yml"
+  estimator: "dml"
+  actionable_variables:
+    - impervious_pct
+    - canopy_pct
+    - curve_number
+  fixed_variables:
+    - slope_pct
+    - drainage_area_ha
+    - soil_hydraulic_cond_mmhr
+
+output:
+  base_dir: "output"
+
+pipeline:
+  random_seed: 42
+  n_spatial_folds: 5
+
+scenarios:
+  - name: "Green Infrastructure +10% Canopy"
+    variable: canopy_pct
+    direction: increase
+    increments: [5, 10, 15, 20]
+    min_val: 0
+    max_val: 100
+    unit: "percentage points"
+
+  - name: "Impervious Reduction"
+    variable: impervious_pct
+    direction: decrease
+    increments: [5, 10, 15, 20]
+    min_val: 0
+    max_val: 100
+    unit: "percentage points"
+
+  - name: "Design Storm Increase"
+    variable: rainfall_depth_mm
+    direction: increase
+    increments: [10, 25, 50]
+    min_val: 0
+    max_val: 500
+    unit: "mm"
+
+# temporal:
+#   enabled: true
+#   time_column: "event_date"
+#   frequency: "daily"
+#   lag_features:
+#     enabled: true
+#     lags: [1, 2, 3]
+#     rolling_windows: [3, 7]
+#     variables: [rainfall_depth_mm, antecedent_moisture]
+#   temporal_cv:
+#     method: "expanding_window"
+#     n_splits: 5
+#     gap: 1

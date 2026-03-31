@@ -1,0 +1,27 @@
+{
+  "variable": "psl",
+  "method": "leave_one_out_multi_model_mean",
+  "models": {
+    "gwrf": {
+      "alpha_0.0": {
+        "r2_forced": -0.2346,
+        "r2_total": 0.7663,
+        "pattern_corr_forced": 0.6583,
+        "amplitude_ratio_forced": 1.4051
+      },
+      "alpha_0.3": {
+        "r2_forced": 0.1997,
+        "r2_total": 0.7757,
+        "pattern_corr_forced": 0.7116,
+        "amplitude_ratio_forced": 1.1774
+      },
+      "alpha_0.5": {
+        "r2_forced": 0.3781,
+        "r2_total": 0.7256,
+        "pattern_corr_forced": 0.7504,
+        "amplitude_ratio_forced": 1.0412
+      }
+    },
+    "meta": {}
+  }
+}

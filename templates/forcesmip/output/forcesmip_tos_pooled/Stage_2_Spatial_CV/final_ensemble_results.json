@@ -1,0 +1,54 @@
+{
+  "base_models": {
+    "ols": {
+      "r2": 0.15168313773844755,
+      "rmse": 0.6340742283286537
+    },
+    "gwr": {
+      "r2": 0.5294475609894213,
+      "rmse": 0.4722424968226446
+    },
+    "gwrf": {
+      "r2": 0.6419671184164801,
+      "rmse": 0.4119291340797966
+    },
+    "ggpgam": {
+      "r2": 0.4998245831329623,
+      "rmse": 0.48688032327340014
+    }
+  },
+  "meta_ensemble_standard": {
+    "r2": 0.6400036040716637,
+    "rmse": 0.4130571350212214
+  },
+  "meta_ensemble_enhanced": {
+    "r2": 0.6234347766753512,
+    "rmse": 0.4224556829555502
+  },
+  "meta_ensemble_best": {
+    "r2": 0.6400036040716637,
+    "rmse": 0.4130571350212214,
+    "approach": "Standard"
+  },
+  "spatial_autocorrelation": {
+    "moran_i": NaN,
+    "p_value": 0.001,
+    "autocorr_range": 842248.1191018961,
+    "threshold_met": false
+  },
+  "deep_kriging": {
+    "r2": 0.0,
+    "rmse": 0.0,
+    "executed": false
+  },
+  "final_ensemble": {
+    "r2": 0.6400036040716637,
+    "rmse": 0.4130571350212214
+  },
+  "improvements": {
+    "standard_meta_vs_base": -0.0019635143448164527,
+    "enhanced_meta_vs_base": -0.018532341741128944,
+    "best_meta_vs_base": -0.0019635143448164527,
+    "laplacian_benefit": -0.01656882739631249
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "base_models": {
+    "ols": {
+      "r2": 0.2893686988178741,
+      "rmse": 1.112781045055945,
+      "nrmse": 0.8429895024151404,
+      "pattern_correlation": 0.5385032342828492,
+      "amplitude_ratio": 0.5629036222664059
+    },
+    "gwr": {
+      "r2": 0.7475270943885799,
+      "rmse": 0.6632770063188129,
+      "nrmse": 0.5024668204084924,
+      "pattern_correlation": 0.8659317127884605,
+      "amplitude_ratio": 0.9137920722359376
+    },
+    "gwrf": {
+      "r2": 0.8248870487909628,
+      "rmse": 0.5523911175833344,
+      "nrmse": 0.41846499400671167,
+      "pattern_correlation": 0.9097710188606886,
+      "amplitude_ratio": 0.9623155628579917
+    },
+    "ggpgam": {
+      "r2": 0.6800001832904743,
+      "rmse": 0.7467279678639683,
+      "nrmse": 0.5656852629417931,
+      "pattern_correlation": 0.835156081155226,
+      "amplitude_ratio": 0.9653794681683068
+    }
+  },
+  "meta_ensemble_standard": {
+    "r2": 0.8174090794548635,
+    "rmse": 0.5640623883316269
+  },
+  "meta_ensemble_enhanced": {
+    "r2": 0.8126603176213659,
+    "rmse": 0.5713502775085941
+  },
+  "meta_ensemble_best": {
+    "r2": 0.8174090794548635,
+    "rmse": 0.5640623883316269,
+    "approach": "Standard"
+  },
+  "spatial_autocorrelation": {
+    "moran_i": NaN,
+    "p_value": 0.001,
+    "autocorr_range": 843481.5140969891,
+    "threshold_met": false
+  },
+  "deep_kriging": {
+    "r2": 0.0,
+    "rmse": 0.0,
+    "executed": false
+  },
+  "final_ensemble": {
+    "r2": 0.8174090794548635,
+    "rmse": 0.5640623883316269
+  },
+  "improvements": {
+    "standard_meta_vs_base": -0.007477969336099233,
+    "enhanced_meta_vs_base": -0.012226731169596827,
+    "best_meta_vs_base": -0.007477969336099233,
+    "laplacian_benefit": -0.0047487618334975945
+  }
+}

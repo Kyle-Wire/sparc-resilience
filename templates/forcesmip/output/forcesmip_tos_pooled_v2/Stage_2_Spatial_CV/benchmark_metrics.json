@@ -1,0 +1,34 @@
+{
+  "OLS": {
+    "r2": 0.15168313773844755,
+    "rmse": 0.6340742283286537,
+    "nrmse": 0.9210411838031742,
+    "pattern_correlation": 0.3906049204551906,
+    "pattern_correlation_weighted": 0.38401872165271195,
+    "amplitude_ratio": 0.41908420531016466
+  },
+  "GWR": {
+    "r2": 0.5289441426385983,
+    "rmse": 0.47249504252016805,
+    "nrmse": 0.6863350911627655,
+    "pattern_correlation": 0.7386912293025935,
+    "pattern_correlation_weighted": 0.7305144413394742,
+    "amplitude_ratio": 0.8679120058979601
+  },
+  "GWRF": {
+    "r2": 0.6393211409159822,
+    "rmse": 0.4134484761628323,
+    "nrmse": 0.6005654494591057,
+    "pattern_correlation": 0.8063051900946175,
+    "pattern_correlation_weighted": 0.790532653329039,
+    "amplitude_ratio": 0.9099513103838814
+  },
+  "GGPGAM": {
+    "r2": 0.4998245831329623,
+    "rmse": 0.48688032327340014,
+    "nrmse": 0.7072308087654536,
+    "pattern_correlation": 0.7251100901548707,
+    "pattern_correlation_weighted": 0.7202931091285971,
+    "amplitude_ratio": 0.8856618585849582
+  }
+}

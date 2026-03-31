@@ -1,0 +1,93 @@
+SPARC PIPELINE CONFIGURATION SUMMARY
+==================================================
+
+CONFIGURATION TYPE: Global Hyperparameter Configuration
+APPROACH: Single set of parameters per model type (not per-variable)
+
+SELECTED FEATURES:
+  - GMST_trend
+  - AMV_index
+  - IPO_index
+  - lat_abs
+  - land_fraction
+  - ocean_basin
+  - member_id
+
+MANUAL PARAMETERS:
+--------------------
+Block Size: 500.0m
+Kernel Type: gaussian
+Bandwidths:
+  GMST_trend: 37.5m
+  AMV_index: 12.5m
+  IPO_index: 37.5m
+  lat_abs: 62.5m
+  land_fraction: 62.5m
+  ocean_basin: 62.5m
+  member_id: 37.5m
+
+MODEL-SPECIFIC CONFIGURATIONS:
+------------------------------
+OLS: Baseline model (no configurable hyperparameters)
+
+GWR Parameters:
+  bandwidth: 44
+  kernel: gaussian
+  coords_cols: None
+  alpha: 0.1
+  min_points: 50
+
+GWRF Parameters:
+  n_estimators: 80
+  k_neighbors: 250
+  min_samples_leaf: 5
+  n_jobs: 1
+  subsample_fraction: None
+  subsample_n: 8000
+
+GGPGAM Parameters:
+  n_splines: 11
+  n_spatial_bases: 50
+  lam: 0.4
+  fit_intercept: True
+  max_iter: 200
+  tol: 0.0001
+  verbose: False
+  callbacks: None
+  distribution: normal
+  link: identity
+  dtype: float64
+  scale: None
+  fit_linear: False
+  constraints: None
+  weights: None
+
+SPATIAL CROSS-VALIDATION:
+  Block Size: 500.0m
+  Number of Folds: 5
+  Method: spatial_blocking
+
+DEEP KRIGING:
+  Hidden Layers: [64, 32]
+  Dropout Rate: 0.15
+  Epochs: 100
+  Early Stopping: True (patience: 15)
+  L2 Regularization: 0.0001
+
+META-ENSEMBLE OPTIONS:
+  Primary Algorithm: lightgbm
+  Alternative Algorithms: xgboost, catboost, linear
+  Include Base Features: True
+  Include Laplacian PCA: True
+  Use Spatial CV: True
+  CV Folds: 5
+  Early Stopping: True
+  Patience: 20
+
+NOTES:
+- This configuration uses global hyperparameters (not per-variable)
+- Each model type has a single set of parameters applied globally
+- Parameters can be edited directly in the JSON configuration file
+- To modify parameters, edit the 'models' section for each model type
+- Spatial models use average bandwidth across all variables
+- Use configurator.set_model_hyperparameters() to update programmatically

@@ -1,0 +1,104 @@
+# Causal DAG — Coastal Erosion Domain
+# References: Bruun (1962), Dean (1991), Thieler & Hammar-Klose (2000)
+
+nodes:
+  - name: sig_wave_height_m
+    type: confounder
+    description: "Significant wave height Hs (m)"
+
+  - name: mean_wave_period_s
+    type: confounder
+    description: "Mean wave period (s)"
+
+  - name: tidal_range_m
+    type: confounder
+    description: "Mean tidal range (m)"
+
+  - name: sea_level_rise_mmyr
+    type: treatment
+    description: "Local relative sea-level rise rate (mm/yr)"
+
+  - name: sediment_grain_size_mm
+    type: confounder
+    description: "Median grain size D50 (mm)"
+
+  - name: beach_slope
+    type: mediator
+    description: "Foreshore slope"
+
+  - name: coastal_vegetation_pct
+    type: treatment
+    description: "Vegetated dune / mangrove cover (%)"
+
+  - name: storm_frequency_yr
+    type: confounder
+    description: "Annual storm events exceeding erosion threshold"
+
+  - name: distance_to_inlet_m
+    type: confounder
+    description: "Distance to nearest tidal inlet (m)"
+
+  - name: cliff_height_m
+    type: confounder
+    description: "Bluff/cliff height (m)"
+
+  - name: wave_energy
+    type: mediator
+    description: "Wave energy flux (latent, W/m)"
+
+  - name: shoreline_change_myr
+    type: outcome
+    description: "Annualized shoreline change rate (m/yr, negative = erosion)"
+
+edges:
+  - parent: sig_wave_height_m
+    child: wave_energy
+    mechanism: "Wave energy ∝ Hs² × T (linear wave theory)"
+
+  - parent: mean_wave_period_s
+    child: wave_energy
+    mechanism: "Longer period waves carry more energy per unit crest length"
+
+  - parent: wave_energy
+    child: shoreline_change_myr
+    mechanism: "Higher wave energy increases sediment transport and erosion"
+
+  - parent: sea_level_rise_mmyr
+    child: shoreline_change_myr
+    mechanism: "Bruun rule: recession = SLR / (closure_depth + dune_height) × L (Bruun 1962)"
+
+  - parent: sea_level_rise_mmyr
+    child: beach_slope
+    mechanism: "SLR shifts the equilibrium profile landward"
+
+  - parent: sediment_grain_size_mm
+    child: beach_slope
+    mechanism: "Coarser sediment → steeper equilibrium slope (Dean 1977)"
+
+  - parent: sediment_grain_size_mm
+    child: shoreline_change_myr
+    mechanism: "Coarser grains resist entrainment (Shields parameter)"
+
+  - parent: beach_slope
+    child: shoreline_change_myr
+    mechanism: "Steeper slopes are more susceptible to overwash and scarping"
+
+  - parent: tidal_range_m
+    child: shoreline_change_myr
+    mechanism: "Larger tidal range widens the swash zone and modulates wave attack"
+
+  - parent: coastal_vegetation_pct
+    child: shoreline_change_myr
+    mechanism: "Root binding and wave attenuation by vegetation (Möller et al. 2014)"
+
+  - parent: storm_frequency_yr
+    child: shoreline_change_myr
+    mechanism: "Repeated storm erosion with insufficient recovery time"
+
+  - parent: distance_to_inlet_m
+    child: shoreline_change_myr
+    mechanism: "Tidal inlets capture longshore sediment transport"
+
+  - parent: cliff_height_m
+    child: shoreline_change_myr
+    mechanism: "Higher cliffs supply more sediment per retreat event but fail catastrophically"

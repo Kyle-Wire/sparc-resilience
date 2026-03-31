@@ -1,0 +1,27 @@
+{
+  "variable": "tas",
+  "fingerprint_source": "ensemble_mean (tas_trend_forced)",
+  "optimal_alphas": {
+    "ols": 0.5,
+    "gwr": 0.5,
+    "gwrf": 0.5,
+    "ggpgam": 0.5,
+    "meta": 0.5
+  },
+  "models": {
+    "gwrf": {
+      "optimal_alpha": 0.5,
+      "r2_forced": 0.921,
+      "r2_total": 0.8728,
+      "pattern_corr_forced": 0.9598,
+      "amplitude_ratio_forced": 0.9714
+    },
+    "meta": {
+      "optimal_alpha": 0.5,
+      "r2_forced": 0.9273,
+      "r2_total": 0.8628,
+      "pattern_corr_forced": 0.963,
+      "amplitude_ratio_forced": 0.9576
+    }
+  }
+}

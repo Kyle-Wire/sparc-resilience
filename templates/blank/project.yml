@@ -1,0 +1,175 @@
+# =============================================================================
+# SPARC Project Configuration — Blank Template
+# =============================================================================
+# Fill in every field marked "REQUIRED" to configure a new spatial regression
+# analysis.  Optional sections can be deleted or left as-is for defaults.
+#
+# To create this file for a new project:
+#   sparc init --template blank --output ./my_project
+#
+# Then edit and run:
+#   sparc validate --project project.yml
+#   sparc run --project project.yml
+# =============================================================================
+
+project:
+  name: "My Spatial Analysis"          # REQUIRED — give the project a name
+  description: ""                       # Optional
+  domain: "custom"                      # Domain identifier (for your records)
+  version: "1.0.0"
+  author: ""
+  response_units: ""                    # e.g. "°F", "mg/L", "µg/m³"
+
+# ---------------------------------------------------------------------------
+# Input Data  (REQUIRED)
+# ---------------------------------------------------------------------------
+data:
+  file_path: ""                         # REQUIRED — path to your CSV
+  target_column: ""                     # REQUIRED — response variable column name
+  identifier_column: ""                 # Unique row ID column (or leave blank if none)
+  coord_columns: ["", ""]              # REQUIRED — [X/Easting column, Y/Northing column]
+  # areas_of_interest_file: ""          # Optional — CSV mapping locations to named zones
+
+# ---------------------------------------------------------------------------
+# Coordinate Reference Systems  (REQUIRED)
+# ---------------------------------------------------------------------------
+crs:
+  input: ""                             # REQUIRED — EPSG code of input data (e.g. "EPSG:4326")
+  projected: ""                         # REQUIRED — projected CRS for spatial analysis (e.g. "EPSG:32617")
+
+# ---------------------------------------------------------------------------
+# Predictor Variables  (REQUIRED)
+# ---------------------------------------------------------------------------
+# List every column name from your data that should be used as a predictor.
+predictors:
+  - ""   # Add predictor column names here, one per line
+
+# ---------------------------------------------------------------------------
+# Physics / Domain Constraints  (optional but recommended)
+# ---------------------------------------------------------------------------
+physics:
+  # Point these at your own YAML files (copy from templates/uhi/physics/ as a starting point)
+  # priors_file: "physics/priors.yml"
+  # caps_file:   "physics/caps.yml"
+
+  # Monotone constraints: predictor_name → -1 (decreasing), +1 (increasing), 0 (none)
+  monotone_constraints: {}
+    # Example:
+    # My_Predictor_A: -1
+    # My_Predictor_B:  1
+
+# ---------------------------------------------------------------------------
+# Causal DAG  (optional — needed for counterfactual simulation)
+# ---------------------------------------------------------------------------
+# causal:
+#   dag_file: "causal/dag.yml"
+#   actionable_variables: []
+#   fixed_variables: []
+
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
+output:
+  base_dir: "output"
+  stage_dirs:
+    stage_1: "Stage_1_Correlogram_Analysis"
+    stage_2: "Stage_2_Spatial_CV"
+    stage_3: "Stage_3_Spatial_Intelligence"
+    final:   "Final_Interpretation_Results"
+
+# ---------------------------------------------------------------------------
+# Pipeline Globals
+# ---------------------------------------------------------------------------
+pipeline:
+  random_seed: 42
+  n_spatial_folds: 5
+  fast_mode: false
+  overwrite_outputs: false
+
+flags:
+  use_gwen_selection: true
+  include_gwrf_in_ensemble: true
+  use_laplacian_eigenmaps_in_ols: false
+
+# ---------------------------------------------------------------------------
+# Model Hyperparameters  (all optional — sensible defaults used if omitted)
+# ---------------------------------------------------------------------------
+# Uncomment and edit any section to override defaults.
+
+# models:
+#   gwr:
+#     bandwidth: null
+#     kernel: "gaussian"
+#   gwrf:
+#     n_estimators: 100
+#     k_neighbors: 100
+#   ggpgam:
+#     n_splines: 5
+#     lam: 0.6
+#   meta_ensemble:
+#     algorithm: "lightgbm"
+#     n_optuna_trials: 25
+#   deep_kriging:
+#     enabled: true
+#     version: 2
+#     hidden_layers: [64, 32, 16]
+#     epochs: 100
+#   spatial_cv:
+#     block_size: null
+#     buffer_size: 300
+
+# ---------------------------------------------------------------------------
+# GWEN Variable Selection
+# ---------------------------------------------------------------------------
+# gwen:
+#   sample_size: 5000
+#   k_neighbors: 500
+#   selection_threshold: 0.1
+
+# ---------------------------------------------------------------------------
+# Laplacian Eigenmaps
+# ---------------------------------------------------------------------------
+# laplacian:
+#   n_eigenmaps: 150
+#   k_for_swm: 10
+
+# ---------------------------------------------------------------------------
+# Intervention Scenarios  (optional — for counterfactual simulation)
+# ---------------------------------------------------------------------------
+# scenarios:
+#   - name: "Example Scenario"
+#     variable: My_Predictor_A
+#     direction: increase
+#     increments: [1, 2, 3, 4, 5]
+#     min_val: 0
+#     max_val: 100
+#     unit: "units"
+
+# ---------------------------------------------------------------------------
+# Spatiotemporal Configuration  (optional — for panel / time-series data)
+# ---------------------------------------------------------------------------
+# Enable this section when your data has repeated observations over time.
+# Requires a time column in the CSV (date, timestamp, or integer period).
+#
+# temporal:
+#   enabled: true
+#   time_column: "date"               # Column with timestamps/time indices
+#   frequency: "monthly"              # hourly | daily | weekly | monthly | quarterly | annual | custom
+#   training_window: null             # Number of time steps for training (null = use all)
+#   validation_window: null           # Time steps held out for temporal validation
+#   forecast_horizon: 0              # Future steps to predict (0 = no forecasting)
+#
+#   lag_features:
+#     enabled: true
+#     lags: [1, 2, 3]                 # Create t-1, t-2, t-3 lagged predictors
+#     rolling_windows: [3, 6]         # Rolling mean/std over 3 and 6 periods
+#     variables: []                   # Subset of predictors to lag (empty = all)
+#
+#   temporal_cv:
+#     method: "expanding_window"      # expanding_window | sliding_window | spatiotemporal_block
+#     n_splits: 5
+#     gap: 0                          # Time steps gap between train/test (leak protection)
+#
+#   aggregation:
+#     method: "none"                  # none | mean | median | max | min | trend_slope
+#     period: null                    # Aggregation period (null = all time steps)

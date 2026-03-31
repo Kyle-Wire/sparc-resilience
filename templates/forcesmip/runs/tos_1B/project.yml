@@ -1,0 +1,141 @@
+project:
+  name: ForceSMIP-SPARC
+  description: Causal forced response estimation from climate model ensemble members
+  domain: climate_forced_response
+  version: '1.0'
+  author: Your Name
+  response_units: "\xC2\xB0C per 42yr trend"
+data:
+  file_path: C:\Users\KWire\OneDrive - Kleinfelder\Documents\GitHub\GW3C_v2.0\GW3C_v2.1\templates\forcesmip\data\forcesmip_tos_1B.csv
+  target_column: tos_trend
+  identifier_column: grid_cell_id
+  coord_columns:
+  - lon
+  - lat
+  areas_of_interest_file: C:\Users\KWire\OneDrive - Kleinfelder\Documents\GitHub\GW3C_v2.0\GW3C_v2.1\templates\forcesmip\data\global_2p5deg_grid.gpkg
+crs:
+  input: EPSG:4326
+  projected: EPSG:6933
+predictors:
+- GMST_trend
+- GHG_forcing_index
+- aerosol_forcing_index
+- volcanic_forcing_index
+- solar_forcing_index
+- ENSO_detrended
+- AMV_index
+- IPO_index
+- lat_abs
+- land_fraction
+- ocean_basin
+physics:
+  priors_file: C:\Users\KWire\OneDrive - Kleinfelder\Documents\GitHub\GW3C_v2.0\GW3C_v2.1\templates\forcesmip\physics\forcesmip_priors_tos.yml
+  caps_file: C:\Users\KWire\OneDrive - Kleinfelder\Documents\GitHub\GW3C_v2.0\GW3C_v2.1\templates\forcesmip\physics\forcesmip_caps.yml
+  monotone_constraints:
+    GHG_forcing_index: 1
+    aerosol_forcing_index: -1
+    volcanic_forcing_index: 0
+    solar_forcing_index: 0
+    ENSO_detrended: 0
+    AMV_index: 0
+    IPO_index: 0
+    lat_abs: 0
+    land_fraction: 0
+    ocean_basin: 0
+causal:
+  dag_file: C:\Users\KWire\OneDrive - Kleinfelder\Documents\GitHub\GW3C_v2.0\GW3C_v2.1\templates\forcesmip\causal\forcesmip_dag.yml
+  estimator: dml
+  dml_shrinkage: 0.3
+  dml_cv_folds: 5
+  spatial_block_size: null
+  dag_blend_weight: 0.7
+  estimate_cate: true
+  ipw_enabled: true
+  doubly_robust: true
+  dose_response: true
+  bootstrap_n: 200
+  actionable_variables:
+  - GHG_forcing_index
+  - aerosol_forcing_index
+  fixed_variables:
+  - lat_abs
+  - land_fraction
+  - ocean_basin
+output:
+  base_dir: C:\Users\KWire\OneDrive - Kleinfelder\Documents\GitHub\GW3C_v2.0\GW3C_v2.1\templates\forcesmip\output\forcesmip_tos_1B
+  stage_dirs:
+    stage_1: 01_correlogram
+    stage_2: 02_spatial_cv
+    stage_3: 03_causal
+    stage_4: 04_scenarios
+    final: final
+pipeline:
+  random_seed: 42
+  n_spatial_folds: 5
+  fast_mode: false
+  overwrite_outputs: false
+  run_mc_uncertainty: false
+  n_mc_draws: 500
+  skip_pdp: true
+flags:
+  use_gwen_selection: true
+  include_gwrf_in_ensemble: true
+  use_laplacian_eigenmaps_in_ols: true
+models:
+  gwr:
+    bandwidth: null
+    kernel: gaussian
+    min_points: 50
+  gwrf:
+    n_estimators: 100
+    k_neighbors: 100
+    min_samples_leaf: 5
+  ggpgam:
+    n_splines: 5
+    n_spatial_bases: 10
+    lam: 0.6
+  meta_ensemble:
+    algorithm: lightgbm
+    n_optuna_trials: 25
+  spatial_cv:
+    block_size: null
+    buffer_size: 500000
+    method: block
+gwen:
+  sample_size: null
+  k_neighbors: 200
+  cv_folds: 5
+  selection_threshold: 0.1
+laplacian:
+  n_eigenmaps: 50
+  k_for_swm: 20
+scenarios:
+- name: 2xCO2_forcing
+  variable: GHG_forcing_index
+  direction: increase
+  increments:
+  - 0.5
+  - 1.0
+  - 2.0
+  min_val: 0.0
+  max_val: 10.0
+  unit: W/m2 equivalent
+- name: aerosol_reduction
+  variable: aerosol_forcing_index
+  direction: decrease
+  increments:
+  - 0.25
+  - 0.5
+  - 1.0
+  min_val: -5.0
+  max_val: 0.0
+  unit: W/m2 equivalent
+- name: ENSO_neutral
+  variable: ENSO_detrended
+  direction: decrease
+  increments:
+  - 0.5
+  - 1.0
+  min_val: -3.0
+  max_val: 3.0
+  unit: "\xC2\xB0C"

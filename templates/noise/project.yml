@@ -1,0 +1,108 @@
+# =============================================================================
+# SPARC Project Configuration — Environmental Noise Domain
+# =============================================================================
+# Spatial analysis of equivalent continuous noise levels (Leq) driven by
+# traffic, land use, barriers, and meteorology.
+#
+# Key references:
+#   - FHWA Traffic Noise Model (TNM)
+#   - ISO 9613-2 — Outdoor propagation
+#   - WHO Environmental Noise Guidelines (2018)
+# =============================================================================
+
+project:
+  name: "Environmental Noise Analysis"
+  description: "Spatial regression of noise levels from traffic and industrial sources, accounting for propagation, barriers, and land use"
+  domain: noise
+  version: "1.0.0"
+  author: ""
+  response_units: "dBA"
+
+data:
+  file_path: ""
+  target_column: "Leq_dBA"                    # A-weighted equivalent continuous level
+  identifier_column: "receptor_id"
+  coord_columns: ["longitude", "latitude"]
+
+crs:
+  input: "EPSG:4326"
+  projected: ""
+
+predictors:
+  - traffic_volume_vph         # Hourly traffic volume (vehicles/hour)
+  - heavy_truck_pct            # Heavy truck percentage (%)
+  - distance_to_road_m         # Perpendicular distance to nearest major road (m)
+  - road_speed_kmh             # Posted speed limit (km/h)
+  - building_density_pct       # Building footprint coverage (%)
+  - barrier_height_m           # Noise barrier height (m, 0 = none)
+  - vegetation_buffer_m        # Depth of dense vegetation between source and receptor (m)
+  - elevation_diff_m           # Elevation difference receptor minus road (m)
+  - wind_speed_ms              # Mean wind speed (m/s)
+  - temperature_C              # Ambient temperature (°C)
+
+physics:
+  priors_file: "physics/priors.yml"
+  caps_file:   "physics/caps.yml"
+  monotone_constraints:
+    traffic_volume_vph:  1       # More traffic → more noise
+    heavy_truck_pct:  1          # Trucks are louder
+    distance_to_road_m: -1       # Farther → less noise (geometric spreading)
+    road_speed_kmh:  1           # Faster → louder
+    barrier_height_m: -1         # Taller barrier → less noise
+    vegetation_buffer_m: -1      # Denser buffer → more attenuation
+
+causal:
+  dag_file: "causal/dag.yml"
+  estimator: "hgb"
+  actionable_variables:
+    - barrier_height_m
+    - vegetation_buffer_m
+    - road_speed_kmh
+  fixed_variables:
+    - distance_to_road_m
+    - elevation_diff_m
+
+output:
+  base_dir: "output"
+
+pipeline:
+  random_seed: 42
+  n_spatial_folds: 5
+
+scenarios:
+  - name: "Noise Barrier Installation"
+    variable: barrier_height_m
+    direction: increase
+    increments: [1, 2, 3, 4, 5]
+    min_val: 0
+    max_val: 8
+    unit: "m"
+
+  - name: "Vegetation Buffer Planting"
+    variable: vegetation_buffer_m
+    direction: increase
+    increments: [10, 20, 30, 50]
+    min_val: 0
+    max_val: 100
+    unit: "m"
+
+  - name: "Speed Reduction"
+    variable: road_speed_kmh
+    direction: decrease
+    increments: [10, 20, 30]
+    min_val: 20
+    max_val: 120
+    unit: "km/h"
+
+# temporal:
+#   enabled: true
+#   time_column: "datetime"
+#   frequency: "hourly"
+#   lag_features:
+#     enabled: true
+#     lags: [1, 2, 3]
+#     variables: [traffic_volume_vph, wind_speed_ms]
+#   temporal_cv:
+#     method: "expanding_window"
+#     n_splits: 5
+#     gap: 1

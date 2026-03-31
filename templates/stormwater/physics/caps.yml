@@ -1,0 +1,66 @@
+# Variable Caps & Constraints — Stormwater Runoff Domain
+
+variable_bounds:
+  impervious_pct:
+    min: 0.0
+    max: 100.0
+    units: "percentage"
+    physical_justification: "Cannot be negative or exceed 100%"
+
+  canopy_pct:
+    min: 0.0
+    max: 100.0
+    units: "percentage"
+    physical_justification: "Cannot be negative or exceed 100%"
+
+  slope_pct:
+    min: 0.0
+    max: 100.0
+    units: "percent rise"
+    physical_justification: "Flat to near-vertical"
+
+  curve_number:
+    min: 30
+    max: 98
+    units: "dimensionless"
+    physical_justification: "CN 30 (open space, HSG A) to 98 (fully impervious)"
+
+  soil_hydraulic_cond_mmhr:
+    min: 0.01
+    max: 300.0
+    units: "mm/hr"
+    physical_justification: "Clay ~0.01 to gravel ~300 mm/hr"
+
+  drainage_area_ha:
+    min: 0.01
+    max: 100000.0
+    units: "hectares"
+    physical_justification: "From small lot to large watershed"
+
+  rainfall_depth_mm:
+    min: 0.0
+    max: 500.0
+    units: "mm"
+    physical_justification: "No rain to extreme PMP event"
+
+  antecedent_moisture:
+    min: 0.0
+    max: 200.0
+    units: "mm"
+    physical_justification: "5-day antecedent rainfall total"
+
+delta_constraints:
+  impervious_pct:
+    max_increase: 0.0
+    max_decrease: 30.0
+    typical_decrease: 10.0
+
+  canopy_pct:
+    max_increase: 30.0
+    max_decrease: 0.0
+    typical_increase: 10.0
+
+  curve_number:
+    max_increase: 0.0
+    max_decrease: 20.0
+    typical_decrease: 5.0

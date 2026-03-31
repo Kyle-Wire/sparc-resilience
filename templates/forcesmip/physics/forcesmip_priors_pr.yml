@@ -1,0 +1,111 @@
+# =============================================================================
+# Physics Priors: Precipitation (pr) Forced Response
+# =============================================================================
+# Precipitation responds differently to forcing than temperature:
+#   - GHG: ~2-3% increase per °C warming (Clausius-Clapeyron)
+#   - Aerosol: direct fast response suppresses precip
+#   - Units: mm/day per W/m2 (or % per °C)
+# =============================================================================
+
+coefficients:
+  GHG_forcing_index:
+    value: 0.02
+    units: "mm/day per W/m2"
+    uncertainty: 0.25
+    source_scale: "global"
+    literature_source: "IPCC AR6 Chapter 8 — Clausius-Clapeyron ~2-3%/°C global mean"
+    confidence: "medium"
+    description: "GHG-driven precipitation increase via thermodynamic scaling"
+    unit_increment: 1.0
+
+  aerosol_forcing_index:
+    value: 0.015
+    units: "mm/day per W/m2"
+    uncertainty: 0.30
+    source_scale: "global"
+    literature_source: "IPCC AR6 Chapter 8 — aerosol fast response suppresses precip"
+    confidence: "low"
+    description: "Aerosol-induced precipitation suppression (sign: aerosol forcing is negative)"
+    unit_increment: 1.0
+
+  volcanic_forcing_index:
+    value: -0.01
+    units: "mm/day per W/m2"
+    uncertainty: 0.35
+    source_scale: "global"
+    literature_source: "Iles & Hegerl (2014)"
+    confidence: "low"
+    description: "Volcanic aerosol drying via cooling"
+    unit_increment: 1.0
+
+  solar_forcing_index:
+    value: 0.005
+    units: "mm/day per W/m2"
+    uncertainty: 0.40
+    source_scale: "global"
+    literature_source: "IPCC AR6"
+    confidence: "low"
+    description: "Solar cycle precipitation effect — very uncertain"
+    unit_increment: 1.0
+
+  ENSO_detrended:
+    value: 0.0
+    units: "mm/day per °C"
+    uncertainty: 0.10
+    source_scale: "tropical_pacific"
+    literature_source: "ForceSMIP"
+    confidence: "low"
+    description: "Forced ENSO effect on precipitation"
+    unit_increment: 1.0
+
+  AMV_index:
+    value: 0.0
+    units: "mm/day per °C"
+    uncertainty: 0.10
+    source_scale: "north_atlantic"
+    literature_source: "ForceSMIP"
+    confidence: "low"
+    description: "AMV precipitation effect"
+    unit_increment: 1.0
+
+  IPO_index:
+    value: 0.0
+    units: "mm/day per °C"
+    uncertainty: 0.10
+    source_scale: "pacific"
+    literature_source: "ForceSMIP"
+    confidence: "low"
+    description: "IPO precipitation effect"
+    unit_increment: 1.0
+
+  GMST_trend:
+    value: 0.03
+    units: "mm/day per °C GMST"
+    uncertainty: 0.20
+    source_scale: "global"
+    literature_source: "Clausius-Clapeyron scaling"
+    confidence: "medium"
+    description: "Precipitation scales with GMST"
+    unit_increment: 1.0
+
+scale_harmonization:
+  target_resolution: 278000
+  factors:
+    "global":
+      GHG_forcing_index: 1.0
+      aerosol_forcing_index: 1.0
+      volcanic_forcing_index: 1.0
+      solar_forcing_index: 1.0
+      ENSO_detrended: 1.0
+      AMV_index: 1.0
+      IPO_index: 1.0
+      GMST_trend: 1.0
+
+calibration:
+  shrinkage_weight: 0.3
+  max_deviation: 2.0
+  adaptive_weighting: true
+
+sensitivity:
+  tornado_uncertainty: 20
+  n_samples: 500

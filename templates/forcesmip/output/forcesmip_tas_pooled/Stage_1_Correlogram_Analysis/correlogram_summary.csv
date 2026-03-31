@@ -1,0 +1,9 @@
+Variable,Optimal_Bandwidth,Effective_Range,Block_Size,Best_Kernel,Max_Moran_I,Significant_Lags
+tas_trend,112.5,112.5,500.0,gaussian,0.5531158118149182,16
+GMST_trend,37.5,37.5,12.5,gaussian,0.0,0
+AMV_index,12.5,12.5,12.5,gaussian,0.0,0
+IPO_index,37.5,37.5,12.5,gaussian,0.0,0
+lat_abs,62.5,62.5,62.5,spherical,1.178559792388843,14
+land_fraction,62.5,62.5,62.5,gaussian,0.4015590403501022,11
+ocean_basin,62.5,62.5,162.5,gaussian,0.3844722597982928,13
+member_id,37.5,37.5,12.5,gaussian,0.0,0

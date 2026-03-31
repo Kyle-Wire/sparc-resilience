@@ -1,0 +1,78 @@
+# Variable Caps & Constraints — Air Quality (PM2.5) Domain
+
+variable_bounds:
+  traffic_density_vkm:
+    min: 0.0
+    max: 500000.0
+    units: "veh·km/km²/day"
+    physical_justification: "Rural to dense urban interstate"
+
+  industrial_emissions_tpy:
+    min: 0.0
+    max: 10000.0
+    units: "tons/yr"
+    physical_justification: "No nearby industry to major facility"
+
+  distance_to_road_m:
+    min: 0.0
+    max: 50000.0
+    units: "m"
+    physical_justification: "Roadside to rural"
+
+  wind_speed_ms:
+    min: 0.0
+    max: 25.0
+    units: "m/s"
+    physical_justification: "Calm to very windy"
+
+  mixing_height_m:
+    min: 50.0
+    max: 4000.0
+    units: "m"
+    physical_justification: "Shallow nocturnal inversion to deep convective PBL"
+
+  temperature_C:
+    min: -40.0
+    max: 55.0
+    units: "°C"
+    physical_justification: "Arctic to extreme heat"
+
+  relative_humidity_pct:
+    min: 5.0
+    max: 100.0
+    units: "%"
+    physical_justification: "Arid desert to fog/rain"
+
+  NDVI:
+    min: -0.1
+    max: 0.9
+    units: "index"
+    physical_justification: "Water/bare to dense vegetation"
+
+  population_density_km2:
+    min: 0.0
+    max: 50000.0
+    units: "people/km²"
+    physical_justification: "Wilderness to dense urban core"
+
+  elevation_m:
+    min: -100.0
+    max: 4000.0
+    units: "m"
+    physical_justification: "Below sea level to mountain"
+
+delta_constraints:
+  traffic_density_vkm:
+    max_increase: 0.0
+    max_decrease: 50000.0
+    typical_decrease: 10000.0
+
+  industrial_emissions_tpy:
+    max_increase: 0.0
+    max_decrease: 500.0
+    typical_decrease: 100.0
+
+  NDVI:
+    max_increase: 0.30
+    max_decrease: 0.0
+    typical_increase: 0.10

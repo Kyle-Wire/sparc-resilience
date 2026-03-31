@@ -1,0 +1,78 @@
+# Variable Caps & Constraints — Water Quality Domain
+
+variable_bounds:
+  temperature_C:
+    min: 0.0
+    max: 40.0
+    units: "°C"
+    physical_justification: "Near-freezing to warm tropical stream"
+
+  streamflow_m3s:
+    min: 0.001
+    max: 10000.0
+    units: "m³/s"
+    physical_justification: "Small brook to large river"
+
+  BOD_mgL:
+    min: 0.0
+    max: 100.0
+    units: "mg/L"
+    physical_justification: "Clean water to raw sewage"
+
+  total_nitrogen_mgL:
+    min: 0.0
+    max: 50.0
+    units: "mg/L"
+    physical_justification: "Pristine to heavily impacted"
+
+  total_phosphorus_mgL:
+    min: 0.0
+    max: 5.0
+    units: "mg/L"
+    physical_justification: "Oligotrophic to hypereutrophic"
+
+  agriculture_pct:
+    min: 0.0
+    max: 100.0
+    units: "%"
+    physical_justification: "No agriculture to entirely farmed catchment"
+
+  impervious_pct:
+    min: 0.0
+    max: 100.0
+    units: "%"
+    physical_justification: "Rural to fully urban"
+
+  forest_pct:
+    min: 0.0
+    max: 100.0
+    units: "%"
+    physical_justification: "No forest to fully forested catchment"
+
+  precipitation_mm:
+    min: 0.0
+    max: 500.0
+    units: "mm"
+    physical_justification: "Dry period to extreme storm"
+
+  distance_to_wwtp_km:
+    min: 0.0
+    max: 500.0
+    units: "km"
+    physical_justification: "At discharge point to far upstream"
+
+delta_constraints:
+  agriculture_pct:
+    max_increase: 0.0
+    max_decrease: 20.0
+    typical_decrease: 10.0
+
+  forest_pct:
+    max_increase: 20.0
+    max_decrease: 0.0
+    typical_increase: 10.0
+
+  BOD_mgL:
+    max_increase: 0.0
+    max_decrease: 20.0
+    typical_decrease: 5.0

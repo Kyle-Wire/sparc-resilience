@@ -1,0 +1,152 @@
+# =============================================================================
+# Physics Priors: Sea-Surface Temperature (tos) Forced Response
+# =============================================================================
+# Literature-based coefficients for SST trend attribution.
+# Anchored to IPCC AR6 Chapter 7 forcing sensitivities.
+# =============================================================================
+
+coefficients:
+  GHG_forcing_index:
+    value: 0.8
+    units: "°C per W/m2"
+    uncertainty: 0.15
+    source_scale: "global"
+    literature_source: "IPCC AR6 Chapter 7 — ECS/TCR constraint"
+    confidence: "high"
+    description: "Equilibrium climate sensitivity analog for GHG forcing"
+    unit_increment: 1.0
+
+  aerosol_forcing_index:
+    value: -0.45
+    units: "°C per W/m2"
+    uncertainty: 0.20
+    source_scale: "global"
+    literature_source: "IPCC AR6 Chapter 7 — aerosol ERF"
+    confidence: "medium"
+    description: "Aerosol effective radiative forcing response"
+    unit_increment: 1.0
+
+  volcanic_forcing_index:
+    value: -0.15
+    units: "°C per W/m2"
+    uncertainty: 0.25
+    source_scale: "global"
+    literature_source: "Santer et al. (2014)"
+    confidence: "medium"
+    description: "Volcanic aerosol transient cooling response"
+    unit_increment: 1.0
+
+  solar_forcing_index:
+    value: 0.10
+    units: "°C per W/m2"
+    uncertainty: 0.30
+    source_scale: "global"
+    literature_source: "IPCC AR6 Chapter 7"
+    confidence: "low"
+    description: "Solar cycle contribution to trend"
+    unit_increment: 1.0
+
+  ENSO_detrended:
+    value: 0.0
+    units: "°C per °C"
+    uncertainty: 0.05
+    source_scale: "tropical_pacific"
+    literature_source: "ForceSMIP Fig 12b — sign of forced ENSO trend uncertain"
+    confidence: "low"
+    description: "Forced component of ENSO trend — highly uncertain"
+    unit_increment: 1.0
+
+  AMV_index:
+    value: 0.0
+    units: "°C per °C"
+    uncertainty: 0.10
+    source_scale: "north_atlantic"
+    literature_source: "ForceSMIP Fig 12c — epistemic uncertainty covers full range"
+    confidence: "low"
+    description: "AMV forced component — maximally uncertain per ForceSMIP"
+    unit_increment: 1.0
+
+  IPO_index:
+    value: 0.0
+    units: "°C per °C"
+    uncertainty: 0.10
+    source_scale: "pacific"
+    literature_source: "ForceSMIP — IPO main source of inter-method variance"
+    confidence: "low"
+    description: "IPO forced component"
+    unit_increment: 1.0
+
+  GMST_trend:
+    value: 1.0
+    units: "°C per °C GMST"
+    uncertainty: 0.10
+    source_scale: "global"
+    literature_source: "Pattern scaling assumption"
+    confidence: "high"
+    description: "Local SST scales approximately linearly with GMST"
+    unit_increment: 1.0
+
+  PDO_index:
+    value: 0.0
+    units: "°C per index unit"
+    uncertainty: 0.15
+    source_scale: "pacific"
+    literature_source: "Newman et al. (2016) — PDO as integral of atmospheric forcing"
+    confidence: "low"
+    description: "PDO forced component — mostly internal variability"
+    unit_increment: 1.0
+
+  NAO_index:
+    value: 0.0
+    units: "°C per index unit"
+    uncertainty: 0.15
+    source_scale: "north_atlantic"
+    literature_source: "Hurrell (1995); IPCC AR6 Chapter 3"
+    confidence: "low"
+    description: "NAO forced component — largely internal"
+    unit_increment: 1.0
+
+# Global-scale physical constraints for climate fingerprinting
+global_constraints:
+  gmst_scaling:
+    description: "Local SST response per 1°C of GMST change — pattern scaling assumption"
+    global_mean: 1.0
+    polar_amplification: 1.8
+    polar_amplification_range: [1.5, 2.5]
+    polar_latitude_threshold: 60
+    land_ocean_contrast: 1.4
+    land_ocean_contrast_range: [1.2, 1.7]
+    literature_source: "IPCC AR6 WG1 Ch4 Fig 4.2; Cowtan & Way (2014)"
+
+  amplitude_constraint:
+    description: "Spatial std of predicted field should match observed within tolerance"
+    target_amplitude_ratio: 1.0
+    tolerance: 0.20
+    literature_source: "Santer et al. (2019) — detection & attribution signal amplitude"
+
+scale_harmonization:
+  target_resolution: 278000     # 2.5° ≈ 278 km
+  factors:
+    "global":
+      GHG_forcing_index: 1.0
+      aerosol_forcing_index: 1.0
+      volcanic_forcing_index: 1.0
+      solar_forcing_index: 1.0
+      ENSO_detrended: 1.0
+      AMV_index: 1.0
+      IPO_index: 1.0
+      PDO_index: 1.0
+      NAO_index: 1.0
+      GMST_trend: 1.0
+      GMST_lowfreq: 1.0
+      AMV_lowfreq: 1.0
+      IPO_lowfreq: 1.0
+
+calibration:
+  shrinkage_weight: 0.3
+  max_deviation: 2.0
+  adaptive_weighting: true
+
+sensitivity:
+  tornado_uncertainty: 20
+  n_samples: 500

@@ -1,0 +1,163 @@
+# =============================================================================
+# ForceSMIP-SPARC: Forced Response Estimation via Causal Spatial Regression
+# =============================================================================
+# Template for processing ForceSMIP Tier 1 data through the SPARC pipeline.
+# Uses the fingerprinting approach: cross-sectional trend fields per variable.
+#
+# Run preprocess_forcesmip.py first to convert NetCDF → CSV.
+# Then run one pipeline instance per target variable × evaluation member.
+#
+# Citation:
+#   Wills, R.C.J., et al. (2025): Forced Component Estimation Statistical
+#   Method Intercomparison Project (ForceSMIP), ESS Open Archive,
+#   https://doi.org/10.22541/essoar.175003371.14843115/v1
+# =============================================================================
+
+project:
+  name: "ForceSMIP-SPARC"
+  description: "Causal forced response estimation from climate model ensemble members"
+  domain: "climate_forced_response"
+  version: "1.0"
+  author: "Your Name"
+  response_units: "°C per 42yr trend"
+
+data:
+  # Swap target_column and file_path per run (see run_batch.py)
+  file_path: "data/forcesmip_tos_1A.csv"
+  target_column: "tos_trend"
+  identifier_column: "grid_cell_id"
+  coord_columns: ["lon", "lat"]
+  areas_of_interest_file: "data/global_2p5deg_grid.gpkg"
+
+crs:
+  input: "EPSG:4326"
+  projected: "EPSG:6933"      # WGS 84 / NSIDC EASE-Grid 2.0 Global (equal-area, meters)
+
+predictors:
+  # Forcing timeseries regressors (fingerprinting / MLR-Forcing approach)
+  - "GMST_trend"               # Global mean surface temperature trend
+  - "GHG_forcing_index"        # Greenhouse gas forcing timeseries
+  - "aerosol_forcing_index"    # Anthropogenic aerosol forcing
+  - "volcanic_forcing_index"   # Natural volcanic forcing
+  - "solar_forcing_index"      # Natural solar variability forcing
+  # Internal variability mode indices (confounders)
+  - "ENSO_detrended"           # Detrended Nino3.4
+  - "AMV_index"                # Atlantic Multidecadal Variability
+  - "IPO_index"                # Interdecadal Pacific Oscillation
+  # Spatial / physical covariates
+  - "lat_abs"                  # Absolute latitude (polar amplification)
+  - "land_fraction"            # Land vs ocean fraction
+  - "ocean_basin"              # Encoded basin ID (0=land, 1=Atlantic, ...)
+
+physics:
+  # Swap priors_file per target variable (tos/tas/pr/psl have different physics)
+  priors_file: "physics/forcesmip_priors_tos.yml"
+  caps_file: "physics/forcesmip_caps.yml"
+  monotone_constraints:
+    GHG_forcing_index: 1       # GHG forcing always warms
+    aerosol_forcing_index: -1  # Aerosol forcing always cools
+    volcanic_forcing_index: 0  # Can go either way regionally
+    solar_forcing_index: 0
+    ENSO_detrended: 0
+    AMV_index: 0
+    IPO_index: 0
+    lat_abs: 0
+    land_fraction: 0
+    ocean_basin: 0
+
+causal:
+  dag_file: "causal/forcesmip_dag.yml"
+  estimator: "dml"
+  dml_shrinkage: 0.3
+  dml_cv_folds: 5
+  spatial_block_size: null     # Auto-detect from variogram
+  dag_blend_weight: 0.7
+  estimate_cate: true          # Spatially varying forced response — core ForceSMIP output
+  ipw_enabled: true
+  doubly_robust: true
+  dose_response: true
+  bootstrap_n: 200
+  actionable_variables:
+    - "GHG_forcing_index"
+    - "aerosol_forcing_index"
+  fixed_variables:
+    - "lat_abs"
+    - "land_fraction"
+    - "ocean_basin"
+
+output:
+  base_dir: "output/forcesmip_tos"
+  stage_dirs:
+    stage_1: "01_correlogram"
+    stage_2: "02_spatial_cv"
+    stage_3: "03_causal"
+    stage_4: "04_scenarios"
+    final: "final"
+
+pipeline:
+  random_seed: 42
+  n_spatial_folds: 5
+  fast_mode: false
+  overwrite_outputs: false
+  run_mc_uncertainty: false
+  n_mc_draws: 500
+  skip_pdp: true
+
+flags:
+  use_gwen_selection: true
+  include_gwrf_in_ensemble: true
+  use_laplacian_eigenmaps_in_ols: true
+
+models:
+  gwr:
+    bandwidth: null            # Auto-select via k-NN
+    kernel: "gaussian"
+    min_points: 50
+  gwrf:
+    n_estimators: 100
+    k_neighbors: 100
+    min_samples_leaf: 5
+  ggpgam:
+    n_splines: 5
+    n_spatial_bases: 10
+    lam: 0.6
+  meta_ensemble:
+    algorithm: "lightgbm"
+    n_optuna_trials: 25
+  spatial_cv:
+    block_size: null           # Auto-detect from correlogram (EPSG:6933 meters)
+    buffer_size: 500000        # 500 km buffer in meters
+    method: "block"
+
+gwen:
+  sample_size: null            # Use all data (~10,000 grid cells)
+  k_neighbors: 200
+  cv_folds: 5
+  selection_threshold: 0.1
+
+laplacian:
+  n_eigenmaps: 50              # Fewer than UHI; global patterns are smoother
+  k_for_swm: 20               # More neighbors for sparser global grid
+
+scenarios:
+  - name: "2xCO2_forcing"
+    variable: "GHG_forcing_index"
+    direction: "increase"
+    increments: [0.5, 1.0, 2.0]
+    min_val: 0.0
+    max_val: 10.0
+    unit: "W/m2 equivalent"
+  - name: "aerosol_reduction"
+    variable: "aerosol_forcing_index"
+    direction: "decrease"
+    increments: [0.25, 0.5, 1.0]
+    min_val: -5.0
+    max_val: 0.0
+    unit: "W/m2 equivalent"
+  - name: "ENSO_neutral"
+    variable: "ENSO_detrended"
+    direction: "decrease"
+    increments: [0.5, 1.0]
+    min_val: -3.0
+    max_val: 3.0
+    unit: "°C"

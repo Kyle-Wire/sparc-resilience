@@ -1,0 +1,46 @@
+{
+  "variable": "tas",
+  "method": "leave_one_out_multi_model_mean",
+  "models": {
+    "gwrf": {
+      "alpha_0.0": {
+        "r2_forced": 0.6082,
+        "r2_total": 0.7862,
+        "pattern_corr_forced": 0.8524,
+        "amplitude_ratio_forced": 1.0418
+      },
+      "alpha_0.3": {
+        "r2_forced": 0.7233,
+        "r2_total": 0.8149,
+        "pattern_corr_forced": 0.9029,
+        "amplitude_ratio_forced": 0.9791
+      },
+      "alpha_0.5": {
+        "r2_forced": 0.7653,
+        "r2_total": 0.8036,
+        "pattern_corr_forced": 0.926,
+        "amplitude_ratio_forced": 0.9527
+      }
+    },
+    "meta": {
+      "alpha_0.0": {
+        "r2_forced": 0.6552,
+        "r2_total": 0.7825,
+        "pattern_corr_forced": 0.8742,
+        "amplitude_ratio_forced": 1.0047
+      },
+      "alpha_0.3": {
+        "r2_forced": 0.7426,
+        "r2_total": 0.798,
+        "pattern_corr_forced": 0.9146,
+        "amplitude_ratio_forced": 0.9608
+      },
+      "alpha_0.5": {
+        "r2_forced": 0.7729,
+        "r2_total": 0.7847,
+        "pattern_corr_forced": 0.9311,
+        "amplitude_ratio_forced": 0.9443
+      }
+    }
+  }
+}

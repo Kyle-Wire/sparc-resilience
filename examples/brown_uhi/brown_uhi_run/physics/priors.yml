@@ -1,0 +1,82 @@
+# =============================================================================
+# Physics Priors — Urban Heat Island Domain
+# =============================================================================
+# Literature-based coefficients for UHI intervention analysis.
+# These priors are blended with data-estimated coefficients during scenario
+# simulation.  Edit values and sources for your specific study area.
+#
+# Referenced by: project.yml → physics.priors_file
+# =============================================================================
+
+# Base Coefficients (from peer-reviewed literature)
+coefficients:
+  Pct_Canopy:
+    value: -0.280
+    units: "°F per +10 pp"
+    uncertainty: 0.20
+    source_scale: "100m-500m"
+    literature_source: "Ziter et al. (2019) PNAS; Wong et al. (2021) Urban Climate"
+    confidence: "high"
+    description: "Tree canopy coverage effect on air temperature"
+
+  Pct_Impervious:
+    value: 0.330
+    units: "°F per +10 pp"
+    uncertainty: 0.20
+    source_scale: "100m-500m"
+    literature_source: "Li et al. (2020) Remote Sensing; Zhou et al. (2021) Building Environ."
+    confidence: "high"
+    description: "Impervious surface warming effect"
+
+  Albedo:
+    value: -0.230
+    units: "°F per +0.1"
+    uncertainty: 0.20
+    source_scale: "30m-100m"
+    literature_source: "Santamouris et al. (2011) Solar Energy; Akbari et al. (2009)"
+    confidence: "medium"
+    description: "Surface reflectance cooling effect"
+
+  NDVI:
+    value: -0.270
+    units: "°F per +0.1"
+    uncertainty: 0.20
+    source_scale: "30m-100m"
+    literature_source: "Estoque et al. (2017) Sci Total Environ; Peng et al. (2012) LSA"
+    confidence: "medium"
+    description: "Vegetation index cooling effect"
+
+# Scale Harmonization
+# Correction factors to normalize literature coefficients to target resolution
+scale_harmonization:
+  target_resolution: 30  # meters
+
+  factors:
+    "100-500m":
+      Pct_Canopy: 1.15
+      Pct_Impervious: 1.12
+      Albedo: 1.05
+      NDVI: 1.10
+
+    "500-1000m":
+      Pct_Canopy: 1.25
+      Pct_Impervious: 1.20
+      Albedo: 1.08
+      NDVI: 1.15
+
+    "30-100m":
+      Pct_Canopy: 1.02
+      Pct_Impervious: 1.02
+      Albedo: 1.01
+      NDVI: 1.02
+
+# Local Calibration Settings
+calibration:
+  shrinkage_weight: 0.7     # Weight toward physics (0 = pure local, 1 = pure physics)
+  max_deviation: 0.5        # Maximum allowed deviation from physics (50%)
+  adaptive_weighting: true   # Use local estimate uncertainty for adaptive shrinkage
+
+# Sensitivity Analysis
+sensitivity:
+  tornado_uncertainty: 0.20  # ±20% for tornado analysis
+  n_samples: 1000            # Monte Carlo samples for probabilistic sensitivity

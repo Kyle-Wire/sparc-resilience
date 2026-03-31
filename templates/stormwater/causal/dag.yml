@@ -1,0 +1,84 @@
+# Causal DAG — Stormwater Runoff Domain
+# References: NRCS TR-55, Schueler (1994), EPA SWMM documentation
+
+nodes:
+  - name: impervious_pct
+    type: treatment
+    description: "Impervious surface cover (%)"
+
+  - name: canopy_pct
+    type: treatment
+    description: "Tree canopy cover (%)"
+
+  - name: slope_pct
+    type: confounder
+    description: "Terrain slope (%)"
+
+  - name: curve_number
+    type: mediator
+    description: "NRCS Curve Number — integrates land cover + soil group"
+
+  - name: soil_hydraulic_cond_mmhr
+    type: confounder
+    description: "Saturated hydraulic conductivity (mm/hr)"
+
+  - name: drainage_area_ha
+    type: confounder
+    description: "Contributing drainage area (ha)"
+
+  - name: rainfall_depth_mm
+    type: treatment
+    description: "Storm event total rainfall (mm)"
+
+  - name: antecedent_moisture
+    type: confounder
+    description: "5-day antecedent rainfall index (mm)"
+
+  - name: runoff_depth_mm
+    type: outcome
+    description: "Storm event runoff depth (mm)"
+
+edges:
+  - parent: impervious_pct
+    child: curve_number
+    mechanism: "Impervious surfaces increase effective CN"
+
+  - parent: impervious_pct
+    child: runoff_depth_mm
+    mechanism: "Direct surface runoff — no infiltration on impervious surfaces"
+
+  - parent: canopy_pct
+    child: curve_number
+    mechanism: "Canopy interception reduces effective CN"
+
+  - parent: canopy_pct
+    child: runoff_depth_mm
+    mechanism: "Interception, evapotranspiration, root-zone storage"
+
+  - parent: soil_hydraulic_cond_mmhr
+    child: curve_number
+    mechanism: "Higher K → lower CN (soil group A vs D)"
+
+  - parent: curve_number
+    child: runoff_depth_mm
+    mechanism: "TR-55: Q = (P - 0.2S)^2 / (P + 0.8S), S = 1000/CN - 10"
+
+  - parent: slope_pct
+    child: runoff_depth_mm
+    mechanism: "Steeper slopes reduce time of concentration → higher peak"
+
+  - parent: drainage_area_ha
+    child: runoff_depth_mm
+    mechanism: "Larger contributing area → more total volume"
+
+  - parent: rainfall_depth_mm
+    child: runoff_depth_mm
+    mechanism: "Primary driver — more precipitation = more runoff"
+
+  - parent: antecedent_moisture
+    child: runoff_depth_mm
+    mechanism: "Wet antecedent conditions reduce storage capacity"
+
+  - parent: antecedent_moisture
+    child: curve_number
+    mechanism: "AMC adjustment: wet conditions increase effective CN"

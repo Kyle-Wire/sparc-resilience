@@ -1,0 +1,73 @@
+# Variable Caps & Constraints — Coastal Erosion Domain
+
+variable_bounds:
+  sig_wave_height_m:
+    min: 0.0
+    max: 15.0
+    units: "m"
+    physical_justification: "Calm to extreme storm waves"
+
+  mean_wave_period_s:
+    min: 1.0
+    max: 25.0
+    units: "s"
+    physical_justification: "Wind chop to long-period swell"
+
+  tidal_range_m:
+    min: 0.0
+    max: 15.0
+    units: "m"
+    physical_justification: "Microtidal to macrotidal"
+
+  sea_level_rise_mmyr:
+    min: -5.0
+    max: 30.0
+    units: "mm/yr"
+    physical_justification: "Uplift to subsidence-amplified SLR"
+
+  sediment_grain_size_mm:
+    min: 0.01
+    max: 100.0
+    units: "mm"
+    physical_justification: "Fine silt to cobble"
+
+  beach_slope:
+    min: 0.001
+    max: 0.30
+    units: "rise/run"
+    physical_justification: "Very flat to steep gravel beach"
+
+  coastal_vegetation_pct:
+    min: 0.0
+    max: 100.0
+    units: "%"
+    physical_justification: "Bare sand to fully vegetated"
+
+  storm_frequency_yr:
+    min: 0.0
+    max: 20.0
+    units: "events/yr"
+    physical_justification: "Sheltered coast to exposed open ocean"
+
+  distance_to_inlet_m:
+    min: 0.0
+    max: 100000.0
+    units: "m"
+    physical_justification: "At inlet to mid-barrier island"
+
+  cliff_height_m:
+    min: 0.0
+    max: 100.0
+    units: "m"
+    physical_justification: "Sandy beach to high bluff"
+
+delta_constraints:
+  coastal_vegetation_pct:
+    max_increase: 50.0
+    max_decrease: 0.0
+    typical_increase: 20.0
+
+  sea_level_rise_mmyr:
+    max_increase: 15.0
+    max_decrease: 0.0
+    typical_increase: 5.0

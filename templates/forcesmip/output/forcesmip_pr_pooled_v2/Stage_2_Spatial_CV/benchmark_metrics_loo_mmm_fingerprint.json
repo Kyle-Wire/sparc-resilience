@@ -1,0 +1,46 @@
+{
+  "variable": "pr",
+  "method": "leave_one_out_multi_model_mean",
+  "models": {
+    "gwrf": {
+      "alpha_0.0": {
+        "r2_forced": -1.2449,
+        "r2_total": -0.1419,
+        "pattern_corr_forced": 0.2859,
+        "amplitude_ratio_forced": 1.4166
+      },
+      "alpha_0.3": {
+        "r2_forced": -0.3468,
+        "r2_total": 0.0789,
+        "pattern_corr_forced": 0.361,
+        "amplitude_ratio_forced": 1.0367
+      },
+      "alpha_0.5": {
+        "r2_forced": 0.058,
+        "r2_total": 0.1614,
+        "pattern_corr_forced": 0.4416,
+        "amplitude_ratio_forced": 0.7992
+      }
+    },
+    "meta": {
+      "alpha_0.0": {
+        "r2_forced": -0.031,
+        "r2_total": 0.105,
+        "pattern_corr_forced": 0.4188,
+        "amplitude_ratio_forced": 0.8312
+      },
+      "alpha_0.3": {
+        "r2_forced": 0.2255,
+        "r2_total": 0.1567,
+        "pattern_corr_forced": 0.5125,
+        "amplitude_ratio_forced": 0.6596
+      },
+      "alpha_0.5": {
+        "r2_forced": 0.3367,
+        "r2_total": 0.172,
+        "pattern_corr_forced": 0.5878,
+        "amplitude_ratio_forced": 0.5635
+      }
+    }
+  }
+}

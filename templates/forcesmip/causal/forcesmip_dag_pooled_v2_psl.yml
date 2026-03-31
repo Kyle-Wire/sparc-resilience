@@ -1,0 +1,63 @@
+# =============================================================================
+# ForceSMIP Causal DAG — Cross-Member Pooled Analysis (v2) — PSL
+# =============================================================================
+
+nodes:
+  - name: GMST_trend
+    type: treatment
+    description: "Global mean surface temperature trend — varies across members"
+
+  - name: AMV_index
+    type: treatment
+    description: "Atlantic Multidecadal Variability index"
+
+  - name: IPO_index
+    type: treatment
+    description: "Interdecadal Pacific Oscillation index"
+
+  - name: member_id
+    type: confounder
+    description: "Climate model identity — captures model-specific biases"
+
+  - name: lat_abs
+    type: confounder
+    description: "Absolute latitude — spatial structure"
+
+  - name: land_fraction
+    type: confounder
+    description: "Land coverage fraction"
+
+  - name: ocean_basin
+    type: confounder
+    description: "Ocean basin classification"
+
+  - name: psl_trend
+    type: outcome
+    description: "Local sea-level pressure trend — forced component to isolate"
+
+edges:
+  - parent: GMST_trend
+    child: psl_trend
+    mechanism: "warming-driven changes in atmospheric circulation"
+
+  - parent: AMV_index
+    child: psl_trend
+    mechanism: "Atlantic multidecadal influence on pressure patterns"
+
+  - parent: IPO_index
+    child: psl_trend
+    mechanism: "Pacific decadal influence on pressure patterns"
+
+  - parent: AMV_index
+    child: GMST_trend
+    mechanism: "AMV contribution to global mean temperature"
+
+  - parent: IPO_index
+    child: GMST_trend
+    mechanism: "IPO contribution to global mean temperature"
+
+temporal_edges:
+  - source: GMST_trend
+    target: psl_trend
+    lag: 1
+    description: "Global warming signal propagates to SLP field"

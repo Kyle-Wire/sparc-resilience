@@ -1,0 +1,19 @@
+{
+  "variable": "psl",
+  "fingerprint_source": "ensemble_mean (psl_trend_forced)",
+  "optimal_alphas": {
+    "ols": 0.5,
+    "gwr": 0.5,
+    "gwrf": 0.5,
+    "ggpgam": 0.5
+  },
+  "models": {
+    "gwrf": {
+      "optimal_alpha": 0.5,
+      "r2_forced": 0.7571,
+      "r2_total": 0.7957,
+      "pattern_corr_forced": 0.8928,
+      "amplitude_ratio_forced": 1.0911
+    }
+  }
+}
