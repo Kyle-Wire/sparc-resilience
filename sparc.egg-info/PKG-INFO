@@ -44,7 +44,7 @@ Requires-Dist: pytest-cov>=4.1; extra == "dev"
 Requires-Dist: ruff>=0.1; extra == "dev"
 Dynamic: license-file
 
-# SPARC v2.1 — Spatial Analysis and Research Core
+# SPARC — Spatial Analysis and Research Core
 
 **SPARC Labs LLC**
 

@@ -21,9 +21,6 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-sparc.egg-info
-.streamlit
-
 
 # Environments
 .env
@@ -44,15 +41,12 @@ venv.bak/
 .DS_Store
 Thumbs.db
 
-# Linting / testing caches
-.ruff_cache/
-.pytest_cache/
-.mypy_cache/
-
 # Project-specific
 brown_uhi_run/
 archive/
-data/
+*.bat          # Keep Start_SPARC.bat if you want, but we'll de-emphasize it
+sparc.egg-info/
+data/          # Only keep small samples; gitignore large files
 *.gpkg
-*.nc
+*.nc           # NetCDF files from ForceSMIP/GCMs
 *.pkl
