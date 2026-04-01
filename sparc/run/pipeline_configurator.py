@@ -8,7 +8,7 @@ import os
 import sys
 import json
 import numpy as np
-from pipeline_paths import get_paths
+from sparc.run.pipeline_paths import get_paths
 
 # When installed via `pip install -e .`, the package root is already on sys.path.
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

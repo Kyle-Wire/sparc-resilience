@@ -25,9 +25,9 @@ from tqdm import tqdm
 import psutil
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor
-from pipeline_paths import get_paths
-from spatial_autocorr_comprehensive import SpatialAutocorrelationAnalyzer
-from memory_efficient_spatial_analysis import analyze_model_residuals_morans_i
+from sparc.run.pipeline_paths import get_paths
+from sparc.run.spatial_autocorr_comprehensive import SpatialAutocorrelationAnalyzer
+from sparc.run.memory_efficient_spatial_analysis import analyze_model_residuals_morans_i
 
 # Enhanced hardware optimization settings for high-performance workstations (CPU-only)
 HARDWARE_CONFIG = {
@@ -64,7 +64,7 @@ from libpysal.weights import DistanceBand
 from esda.moran import Moran
 
 # Centralized path management
-from pipeline_paths import get_paths
+from sparc.run.pipeline_paths import get_paths
 
 # When installed via `pip install -e .`, the package root is already on sys.path.
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -77,7 +77,6 @@ from sparc.models.gwr import GWRModel
 from sparc.models.gwrf import GWRFModel
 from sparc.models.ggpgam import GGPGAM_SVC
 from sparc.models.meta_ensemble import MetaEnsemble
-from sparc.models.deep_kriging import DeepKriging
 from sparc.models.deep_kriging_v2 import DeepKrigingV2
 from sparc.evaluation.evaluation import SpatialEvaluator
 from copy import deepcopy
@@ -258,9 +257,10 @@ def estimate_spatial_autocorrelation_range(coords, y, max_distance=None, n_bins=
         max_distance = np.linalg.norm(bounds[1] - bounds[0]) * 0.3
     print("Estimating spatial autocorrelation range...")
     
-    # Downsample to avoid memory overload
+    # Downsample to avoid memory overload (seeded for reproducibility)
     if len(coords) > sample_size:
-        idx = np.random.choice(len(coords), sample_size, replace=False)
+        rng = np.random.RandomState(42)
+        idx = rng.choice(len(coords), sample_size, replace=False)
         coords = coords[idx]
         y = y[idx]
 
@@ -326,7 +326,7 @@ def spatial_kfold_enhanced(X, y, coords, n_splits=5, block_size=None, buffer_siz
         print("Determining optimal block size from target variable autocorrelation...")
         
         try:
-            from spatial_autocorr_comprehensive import SpatialAutocorrelationAnalyzer
+            from sparc.run.spatial_autocorr_comprehensive import SpatialAutocorrelationAnalyzer
             # Use a reasonable max_distance proportional to the spatial extent
             bounds = np.array([coords.min(axis=0), coords.max(axis=0)])
             spatial_extent = np.linalg.norm(bounds[1] - bounds[0])
@@ -373,9 +373,10 @@ def spatial_kfold_enhanced(X, y, coords, n_splits=5, block_size=None, buffer_siz
             block_y = int((y_coord - bounds[0, 1]) / block_size)
             block_assignments[i] = block_x * n_blocks_y + block_y
         
-        # Create folds from blocks
+        # Create folds from blocks (seeded for reproducibility)
         unique_blocks = np.unique(block_assignments)
-        np.random.shuffle(unique_blocks)
+        rng = np.random.RandomState(42)
+        rng.shuffle(unique_blocks)
         
         if stratify_y:
             # Stratify blocks by y distribution
@@ -619,7 +620,9 @@ class EnhancedSpatialCV:
             for param in valid_params:
                 if param in gwr_params:
                     gwr_constructor_params[param] = gwr_params[param]
-            # Pass config-driven sign constraints
+            # Constrained regression is disabled during CV to avoid systematic
+            # bias; sign constraints are applied post-hoc for interpretation only.
+            gwr_constructor_params['use_constrained_regression'] = False
             gwr_constructor_params['sign_constraints'] = self._monotone_constraints
             
             try:
@@ -1352,7 +1355,7 @@ class EnhancedSpatialCV:
         
         # ── DatasetProfiler: adapt model hyper-parameters to this dataset ──
         try:
-            from dataset_profiler import DatasetProfiler
+            from sparc.run.dataset_profiler import DatasetProfiler
             profiler = DatasetProfiler(
                 data,
                 coord_cols=self.base_config['variables']['coordinates'],
@@ -1360,7 +1363,14 @@ class EnhancedSpatialCV:
             )
             print(profiler.summary())
             recs = profiler.recommend_parameters()
-            self.apply_profiler_overrides(recs)
+            # Only apply profiler overrides if explicitly enabled in config;
+            # by default, honour the user-specified hyperparameters.
+            if self.base_config.get('pipeline', {}).get('use_dataset_profiler', False):
+                self.apply_profiler_overrides(recs)
+                print("DatasetProfiler overrides applied.")
+            else:
+                print("DatasetProfiler: profiling only (overrides disabled). "
+                      "Set pipeline.use_dataset_profiler: true to enable.")
             # Persist profile for downstream stages (scenarios, report)
             import json as _json
             profile_path = os.path.join(stage2_dir, 'dataset_profile.json')
@@ -1372,14 +1382,6 @@ class EnhancedSpatialCV:
         X_gwen = data[selected_features].values
         y = data[self.base_config['variables']['target']].values
         coords = data[self.base_config['variables']['coordinates']].values
-        
-        # Use projected coordinates for spatial blocking when available
-        # (load_and_preprocess_data creates projected_X/Y after CRS transform)
-        if 'projected_X' in data.columns and 'projected_Y' in data.columns:
-            proj_coords = data[['projected_X', 'projected_Y']].values
-            print(f"Using projected coordinates for spatial fold generation")
-        else:
-            proj_coords = coords
         
         print(f"Using {len(selected_features)} features: {selected_features}")
         
@@ -1410,23 +1412,15 @@ class EnhancedSpatialCV:
         X_augmented = X_gwen  # NOT X_gwen_scaled!
         feature_names = selected_features
         
-        # Determine block/buffer sizes from project.yml (base_config)
-        # Pipeline config may have legacy values; project.yml is authoritative
-        yml_cv = self.base_config.get('models', {}).get('spatial_cv', {})
-        cv_block_size = yml_cv.get('block_size')  # null → None → auto-detect
-        cv_buffer_size = yml_cv.get('buffer_size', self.get_buffer_size_from_config())
-        
-        # Generate spatial folds using projected coords for proper distance-based blocking
+        # Generate spatial folds
         print("\n=== Generating Spatial Folds ===")
-        print(f"  Block size: {cv_block_size or 'auto-detect'}")
-        print(f"  Buffer size: {cv_buffer_size}")
         folds = spatial_kfold_enhanced(
             X=X_augmented,
             y=y,
-            coords=proj_coords,
+            coords=coords,
             n_splits=5,
-            block_size=cv_block_size,
-            buffer_size=cv_buffer_size,
+            block_size=self.get_block_size_from_config(),
+            buffer_size=self.get_buffer_size_from_config(),
             method='block',
             stratify_y=True
         )
@@ -2432,7 +2426,7 @@ def main(fast_mode=False):
                                 smoothness_weight=0.01
                             )
                         else:
-                            dk_fold = DeepKriging(**dk_params)
+                            dk_fold = DeepKrigingV2(**dk_params)
                         
                         print(f"  Fold {fold_idx+1}: Training on {len(train_idx)} samples, testing on {len(test_idx)} samples")
                         print(f"  Train residuals - Mean: {np.mean(residuals_train):.4f}, Std: {np.std(residuals_train):.4f}")

@@ -15,51 +15,49 @@
   },
   "features": {
     "selected_features": [
-      "GMST_trend",
-      "AMV_index",
-      "IPO_index",
-      "lat_abs",
-      "land_fraction",
-      "ocean_basin",
-      "member_id"
+      "Distance_from_water_m",
+      "Pct_Impervious",
+      "Pct_Canopy",
+      "NDVI",
+      "Albedo",
+      "Elevation_m"
     ],
     "manually_configured": true
   },
   "manual_parameters": {
     "bandwidths": {
-      "GMST_trend": 37.5,
-      "AMV_index": 12.5,
-      "IPO_index": 37.5,
-      "lat_abs": 62.5,
-      "land_fraction": 62.5,
-      "ocean_basin": 62.5,
-      "member_id": 37.5
+      "Distance_from_water_m": 3858.5898795591047,
+      "Pct_Impervious": 9003.376385637912,
+      "Pct_Canopy": 9003.376385637912,
+      "NDVI": 9003.376385637912,
+      "Albedo": 8145.91196795811,
+      "Elevation_m": 16720.55614475612
     },
-    "block_size": 500.0,
+    "block_size": 300.0,
     "kernel": "gaussian"
   },
   "models": {
     "gwr": {
-      "bandwidth": 44,
+      "bandwidth": 9289,
       "kernel": "gaussian",
       "coords_cols": null,
       "alpha": 0.1,
       "min_points": 50
     },
     "gwrf": {
-      "n_estimators": 80,
-      "k_neighbors": 250,
+      "n_estimators": 100,
+      "k_neighbors": 200,
       "min_samples_leaf": 5,
       "n_jobs": 1,
       "subsample_fraction": null,
-      "subsample_n": 8000
+      "subsample_n": 5000
     },
     "ggpgam": {
-      "n_splines": 11,
-      "n_spatial_bases": 50,
-      "lam": 0.4,
+      "n_splines": 9,
+      "n_spatial_bases": 30,
+      "lam": 0.5,
       "fit_intercept": true,
-      "max_iter": 200,
+      "max_iter": 150,
       "tol": 0.0001,
       "verbose": false,
       "callbacks": null,
@@ -78,7 +76,7 @@
         "catboost",
         "linear"
       ],
-      "n_optuna_trials": 120,
+      "n_optuna_trials": 100,
       "include_base_features": true,
       "include_laplacian_pca": true,
       "use_spatial_cv": true,
@@ -112,11 +110,11 @@
     "spatial_cv": {
       "n_folds": 5,
       "method": "spatial_blocking",
-      "block_size": 500.0,
+      "block_size": 300.0,
       "buffer_size": 300,
       "stratify_y": true,
       "buffer_size_auto": true,
-      "min_test_size": 3110,
+      "min_test_size": 1641,
       "spatial_autocorr_threshold": 0.1,
       "overlap_tolerance": 0.05,
       "clustering_method": "kmeans",
@@ -125,13 +123,14 @@
   },
   "deep_kriging": {
     "hidden_layers": [
+      128,
       64,
       32
     ],
     "activation": "relu",
     "dropout_rate": 0.15,
-    "batch_size": 1024,
-    "epochs": 100,
+    "batch_size": 512,
+    "epochs": 120,
     "learning_rate": 0.001,
     "optimizer": "adam",
     "loss": "mse",

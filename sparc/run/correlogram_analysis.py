@@ -21,14 +21,14 @@ _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from pipeline_paths import get_paths
+from sparc.run.pipeline_paths import get_paths
 from sparc.config.config import load_config
 from sparc.data.data_utils import load_and_preprocess_data
 
 warnings.filterwarnings('ignore')
 
 # Import spatial autocorrelation components
-from spatial_autocorr_comprehensive import SpatialAutocorrelationAnalyzer
+from sparc.run.spatial_autocorr_comprehensive import SpatialAutocorrelationAnalyzer
 
 class CorrelogramSpatialAnalyzer:
     """
@@ -439,19 +439,8 @@ def main(fast_mode=False):
     stage1_dir = paths.stage1_dir
     os.makedirs(stage1_dir, exist_ok=True)
     
-    # Get GWEN-selected features OR use base model predictors
-    use_gwen = config['flags'].get('use_gwen_selection', True)
-    if use_gwen:
-        try:
-            with open(paths.gwen_results) as f:
-                gwen_results = json.load(f)
-                selected_features = gwen_results['selected_features']
-                print("Using GWEN-selected features")
-        except FileNotFoundError:
-            print("Warning: GWEN results not found, using base model predictors")
-            selected_features = config['predictors']['base_model']
-    else:
-        selected_features = config['predictors']['base_model']
+    # Stage 0 runs before GWEN, so always use base model predictors
+    selected_features = config['predictors']['base_model']
     
     print(f"Analyzing spatial correlograms for features: {selected_features}")
     
@@ -486,7 +475,7 @@ def main(fast_mode=False):
     coords = data[config['variables']['coordinates']].values
     
     # ── Use DatasetProfiler for data-driven correlogram parameters ───
-    from dataset_profiler import DatasetProfiler
+    from sparc.run.dataset_profiler import DatasetProfiler
     profiler = DatasetProfiler(
         data,
         coord_cols=config['variables']['coordinates'],

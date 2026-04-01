@@ -5,52 +5,50 @@ CONFIGURATION TYPE: Global Hyperparameter Configuration
 APPROACH: Single set of parameters per model type (not per-variable)
 
 SELECTED FEATURES:
-  - GMST_trend
-  - AMV_index
-  - IPO_index
-  - lat_abs
-  - land_fraction
-  - ocean_basin
-  - member_id
+  - Distance_from_water_m
+  - Pct_Impervious
+  - Pct_Canopy
+  - NDVI
+  - Albedo
+  - Elevation_m
 
 MANUAL PARAMETERS:
 --------------------
-Block Size: 500.0m
+Block Size: 300.0m
 Kernel Type: gaussian
 Bandwidths:
-  GMST_trend: 37.5m
-  AMV_index: 12.5m
-  IPO_index: 37.5m
-  lat_abs: 62.5m
-  land_fraction: 62.5m
-  ocean_basin: 62.5m
-  member_id: 37.5m
+  Distance_from_water_m: 3858.5898795591047m
+  Pct_Impervious: 9003.376385637912m
+  Pct_Canopy: 9003.376385637912m
+  NDVI: 9003.376385637912m
+  Albedo: 8145.91196795811m
+  Elevation_m: 16720.55614475612m
 
 MODEL-SPECIFIC CONFIGURATIONS:
 ------------------------------
 OLS: Baseline model (no configurable hyperparameters)
 
 GWR Parameters:
-  bandwidth: 44
+  bandwidth: 9289
   kernel: gaussian
   coords_cols: None
   alpha: 0.1
   min_points: 50
 
 GWRF Parameters:
-  n_estimators: 80
-  k_neighbors: 250
+  n_estimators: 100
+  k_neighbors: 200
   min_samples_leaf: 5
   n_jobs: 1
   subsample_fraction: None
-  subsample_n: 8000
+  subsample_n: 5000
 
 GGPGAM Parameters:
-  n_splines: 11
-  n_spatial_bases: 50
-  lam: 0.4
+  n_splines: 9
+  n_spatial_bases: 30
+  lam: 0.5
   fit_intercept: True
-  max_iter: 200
+  max_iter: 150
   tol: 0.0001
   verbose: False
   callbacks: None
@@ -63,14 +61,14 @@ GGPGAM Parameters:
   weights: None
 
 SPATIAL CROSS-VALIDATION:
-  Block Size: 500.0m
+  Block Size: 300.0m
   Number of Folds: 5
   Method: spatial_blocking
 
 DEEP KRIGING:
-  Hidden Layers: [64, 32]
+  Hidden Layers: [128, 64, 32]
   Dropout Rate: 0.15
-  Epochs: 100
+  Epochs: 120
   Early Stopping: True (patience: 15)
   L2 Regularization: 0.0001
 

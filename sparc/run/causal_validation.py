@@ -43,7 +43,7 @@ if _project_root not in sys.path:
 
 from sparc.config.config import load_config, load_monotone_constraints
 from sparc.data.data_utils import load_and_preprocess_data
-from pipeline_paths import get_paths
+from sparc.run.pipeline_paths import get_paths
 
 
 # ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ from datetime import datetime
 from tqdm import tqdm
 
 # Centralized path management
-from pipeline_paths import get_paths
+from sparc.run.pipeline_paths import get_paths
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
