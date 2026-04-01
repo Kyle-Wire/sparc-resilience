@@ -1,0 +1,9 @@
+{
+  "n_samples": 54701,
+  "mean_nn_distance": 175.35397124791598,
+  "spatial_extent": 42873.22088399005,
+  "point_density": 60.20106682649766,
+  "available_ram_gb": 37.41,
+  "n_features": 6,
+  "size_tier": "large"
+}

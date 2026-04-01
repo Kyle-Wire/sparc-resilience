@@ -1,0 +1,660 @@
+{
+  "variables": [
+    "Pct_Canopy",
+    "Pct_Impervious",
+    "NDVI",
+    "Albedo",
+    "Elevation_m",
+    "Distance_from_water_m",
+    "AAT_z"
+  ],
+  "n_observations": 54701,
+  "methods_run": [
+    "pc_stable",
+    "lingam",
+    "ges",
+    "consensus"
+  ],
+  "learned_graphs": {
+    "pc_stable": {
+      "n_edges": 15,
+      "edges": [
+        [
+          "Pct_Canopy",
+          "Pct_Impervious"
+        ],
+        [
+          "Pct_Canopy",
+          "NDVI"
+        ],
+        [
+          "Pct_Impervious",
+          "NDVI"
+        ],
+        [
+          "Pct_Impervious",
+          "Distance_from_water_m"
+        ],
+        [
+          "Albedo",
+          "Pct_Impervious"
+        ],
+        [
+          "Albedo",
+          "NDVI"
+        ],
+        [
+          "Albedo",
+          "Distance_from_water_m"
+        ],
+        [
+          "Albedo",
+          "AAT_z"
+        ],
+        [
+          "Elevation_m",
+          "Pct_Impervious"
+        ],
+        [
+          "Elevation_m",
+          "NDVI"
+        ],
+        [
+          "Elevation_m",
+          "Distance_from_water_m"
+        ],
+        [
+          "Distance_from_water_m",
+          "NDVI"
+        ],
+        [
+          "AAT_z",
+          "Pct_Impervious"
+        ],
+        [
+          "AAT_z",
+          "NDVI"
+        ],
+        [
+          "AAT_z",
+          "Distance_from_water_m"
+        ]
+      ]
+    },
+    "lingam": {
+      "n_edges": 19,
+      "edges": [
+        [
+          "Pct_Canopy",
+          "Pct_Impervious"
+        ],
+        [
+          "Pct_Canopy",
+          "NDVI"
+        ],
+        [
+          "Pct_Canopy",
+          "Albedo"
+        ],
+        [
+          "Pct_Canopy",
+          "Elevation_m"
+        ],
+        [
+          "Pct_Canopy",
+          "Distance_from_water_m"
+        ],
+        [
+          "Pct_Impervious",
+          "Distance_from_water_m"
+        ],
+        [
+          "Pct_Impervious",
+          "AAT_z"
+        ],
+        [
+          "NDVI",
+          "Pct_Impervious"
+        ],
+        [
+          "NDVI",
+          "Albedo"
+        ],
+        [
+          "NDVI",
+          "Distance_from_water_m"
+        ],
+        [
+          "NDVI",
+          "AAT_z"
+        ],
+        [
+          "Albedo",
+          "Pct_Impervious"
+        ],
+        [
+          "Albedo",
+          "Distance_from_water_m"
+        ],
+        [
+          "Albedo",
+          "AAT_z"
+        ],
+        [
+          "Elevation_m",
+          "Pct_Impervious"
+        ],
+        [
+          "Elevation_m",
+          "NDVI"
+        ],
+        [
+          "Elevation_m",
+          "Distance_from_water_m"
+        ],
+        [
+          "Elevation_m",
+          "AAT_z"
+        ],
+        [
+          "Distance_from_water_m",
+          "AAT_z"
+        ]
+      ]
+    },
+    "ges": {
+      "n_edges": 17,
+      "edges": [
+        [
+          "Pct_Canopy",
+          "Pct_Impervious"
+        ],
+        [
+          "Pct_Canopy",
+          "NDVI"
+        ],
+        [
+          "Pct_Canopy",
+          "Distance_from_water_m"
+        ],
+        [
+          "Pct_Impervious",
+          "NDVI"
+        ],
+        [
+          "Pct_Impervious",
+          "Elevation_m"
+        ],
+        [
+          "Pct_Impervious",
+          "Distance_from_water_m"
+        ],
+        [
+          "Pct_Impervious",
+          "AAT_z"
+        ],
+        [
+          "NDVI",
+          "Elevation_m"
+        ],
+        [
+          "NDVI",
+          "Distance_from_water_m"
+        ],
+        [
+          "NDVI",
+          "AAT_z"
+        ],
+        [
+          "Albedo",
+          "Pct_Impervious"
+        ],
+        [
+          "Albedo",
+          "NDVI"
+        ],
+        [
+          "Albedo",
+          "Distance_from_water_m"
+        ],
+        [
+          "Albedo",
+          "AAT_z"
+        ],
+        [
+          "Distance_from_water_m",
+          "Elevation_m"
+        ],
+        [
+          "Distance_from_water_m",
+          "AAT_z"
+        ],
+        [
+          "AAT_z",
+          "Elevation_m"
+        ]
+      ]
+    },
+    "consensus": {
+      "n_edges": 11,
+      "edges": [
+        [
+          "Pct_Canopy",
+          "Pct_Impervious"
+        ],
+        [
+          "Pct_Canopy",
+          "NDVI"
+        ],
+        [
+          "Pct_Canopy",
+          "Distance_from_water_m"
+        ],
+        [
+          "Albedo",
+          "Pct_Impervious"
+        ],
+        [
+          "Albedo",
+          "NDVI"
+        ],
+        [
+          "Albedo",
+          "Distance_from_water_m"
+        ],
+        [
+          "Albedo",
+          "AAT_z"
+        ],
+        [
+          "Elevation_m",
+          "Pct_Impervious"
+        ],
+        [
+          "Elevation_m",
+          "NDVI"
+        ],
+        [
+          "Elevation_m",
+          "Distance_from_water_m"
+        ],
+        [
+          "AAT_z",
+          "Elevation_m"
+        ]
+      ]
+    }
+  },
+  "expert_comparison_by_method": {
+    "pc_stable": {
+      "shd": 13,
+      "precision": 0.6,
+      "recall": 0.75,
+      "f1": 0.667,
+      "n_expert_edges": 12,
+      "n_learned_edges": 15,
+      "confirmed_edges": [
+        [
+          "Distance_from_water_m",
+          "AAT_z"
+        ],
+        [
+          "Distance_from_water_m",
+          "NDVI"
+        ],
+        [
+          "Pct_Canopy",
+          "Pct_Impervious"
+        ],
+        [
+          "Pct_Canopy",
+          "NDVI"
+        ],
+        [
+          "Albedo",
+          "AAT_z"
+        ],
+        [
+          "NDVI",
+          "AAT_z"
+        ],
+        [
+          "Elevation_m",
+          "Pct_Impervious"
+        ],
+        [
+          "Pct_Impervious",
+          "AAT_z"
+        ],
+        [
+          "Pct_Impervious",
+          "Albedo"
+        ]
+      ],
+      "missing_edges": [
+        [
+          "Pct_Canopy",
+          "AAT_z"
+        ],
+        [
+          "Elevation_m",
+          "AAT_z"
+        ],
+        [
+          "Elevation_m",
+          "Pct_Canopy"
+        ]
+      ],
+      "extra_edges": [
+        [
+          "Albedo",
+          "NDVI"
+        ],
+        [
+          "Albedo",
+          "Distance_from_water_m"
+        ],
+        [
+          "Elevation_m",
+          "NDVI"
+        ],
+        [
+          "Pct_Impervious",
+          "NDVI"
+        ],
+        [
+          "Elevation_m",
+          "Distance_from_water_m"
+        ],
+        [
+          "Pct_Impervious",
+          "Distance_from_water_m"
+        ]
+      ],
+      "n_reversals": 4
+    },
+    "lingam": {
+      "shd": 12,
+      "precision": 0.579,
+      "recall": 0.917,
+      "f1": 0.71,
+      "n_expert_edges": 12,
+      "n_learned_edges": 19,
+      "confirmed_edges": [
+        [
+          "Distance_from_water_m",
+          "AAT_z"
+        ],
+        [
+          "Distance_from_water_m",
+          "NDVI"
+        ],
+        [
+          "Pct_Canopy",
+          "Pct_Impervious"
+        ],
+        [
+          "Pct_Canopy",
+          "NDVI"
+        ],
+        [
+          "Albedo",
+          "AAT_z"
+        ],
+        [
+          "NDVI",
+          "AAT_z"
+        ],
+        [
+          "Elevation_m",
+          "AAT_z"
+        ],
+        [
+          "Elevation_m",
+          "Pct_Impervious"
+        ],
+        [
+          "Pct_Impervious",
+          "AAT_z"
+        ],
+        [
+          "Pct_Impervious",
+          "Albedo"
+        ],
+        [
+          "Elevation_m",
+          "Pct_Canopy"
+        ]
+      ],
+      "missing_edges": [
+        [
+          "Pct_Canopy",
+          "AAT_z"
+        ]
+      ],
+      "extra_edges": [
+        [
+          "NDVI",
+          "Pct_Impervious"
+        ],
+        [
+          "Pct_Canopy",
+          "Distance_from_water_m"
+        ],
+        [
+          "Albedo",
+          "Distance_from_water_m"
+        ],
+        [
+          "NDVI",
+          "Albedo"
+        ],
+        [
+          "Elevation_m",
+          "NDVI"
+        ],
+        [
+          "Elevation_m",
+          "Distance_from_water_m"
+        ],
+        [
+          "Pct_Canopy",
+          "Albedo"
+        ],
+        [
+          "Pct_Impervious",
+          "Distance_from_water_m"
+        ]
+      ],
+      "n_reversals": 3
+    },
+    "ges": {
+      "shd": 13,
+      "precision": 0.588,
+      "recall": 0.833,
+      "f1": 0.69,
+      "n_expert_edges": 12,
+      "n_learned_edges": 17,
+      "confirmed_edges": [
+        [
+          "Distance_from_water_m",
+          "AAT_z"
+        ],
+        [
+          "Distance_from_water_m",
+          "NDVI"
+        ],
+        [
+          "Pct_Canopy",
+          "Pct_Impervious"
+        ],
+        [
+          "Pct_Canopy",
+          "NDVI"
+        ],
+        [
+          "Albedo",
+          "AAT_z"
+        ],
+        [
+          "NDVI",
+          "AAT_z"
+        ],
+        [
+          "Elevation_m",
+          "AAT_z"
+        ],
+        [
+          "Elevation_m",
+          "Pct_Impervious"
+        ],
+        [
+          "Pct_Impervious",
+          "AAT_z"
+        ],
+        [
+          "Pct_Impervious",
+          "Albedo"
+        ]
+      ],
+      "missing_edges": [
+        [
+          "Pct_Canopy",
+          "AAT_z"
+        ],
+        [
+          "Elevation_m",
+          "Pct_Canopy"
+        ]
+      ],
+      "extra_edges": [
+        [
+          "Albedo",
+          "NDVI"
+        ],
+        [
+          "Pct_Canopy",
+          "Distance_from_water_m"
+        ],
+        [
+          "Albedo",
+          "Distance_from_water_m"
+        ],
+        [
+          "Distance_from_water_m",
+          "Elevation_m"
+        ],
+        [
+          "NDVI",
+          "Elevation_m"
+        ],
+        [
+          "Pct_Impervious",
+          "NDVI"
+        ],
+        [
+          "Pct_Impervious",
+          "Distance_from_water_m"
+        ]
+      ],
+      "n_reversals": 4
+    },
+    "consensus": {
+      "shd": 13,
+      "precision": 0.545,
+      "recall": 0.5,
+      "f1": 0.522,
+      "n_expert_edges": 12,
+      "n_learned_edges": 11,
+      "confirmed_edges": [
+        [
+          "Pct_Canopy",
+          "Pct_Impervious"
+        ],
+        [
+          "Pct_Canopy",
+          "NDVI"
+        ],
+        [
+          "Albedo",
+          "AAT_z"
+        ],
+        [
+          "Elevation_m",
+          "AAT_z"
+        ],
+        [
+          "Elevation_m",
+          "Pct_Impervious"
+        ],
+        [
+          "Pct_Impervious",
+          "Albedo"
+        ]
+      ],
+      "missing_edges": [
+        [
+          "Distance_from_water_m",
+          "AAT_z"
+        ],
+        [
+          "Distance_from_water_m",
+          "NDVI"
+        ],
+        [
+          "Pct_Canopy",
+          "AAT_z"
+        ],
+        [
+          "NDVI",
+          "AAT_z"
+        ],
+        [
+          "Pct_Impervious",
+          "AAT_z"
+        ],
+        [
+          "Elevation_m",
+          "Pct_Canopy"
+        ]
+      ],
+      "extra_edges": [
+        [
+          "Albedo",
+          "NDVI"
+        ],
+        [
+          "Pct_Canopy",
+          "Distance_from_water_m"
+        ],
+        [
+          "Albedo",
+          "Distance_from_water_m"
+        ],
+        [
+          "Elevation_m",
+          "NDVI"
+        ],
+        [
+          "Elevation_m",
+          "Distance_from_water_m"
+        ]
+      ],
+      "n_reversals": 2
+    }
+  },
+  "expert_comparison": {
+    "shd": 12,
+    "precision": 0.579,
+    "recall": 0.917,
+    "f1": 0.71,
+    "n_reversals": 3
+  },
+  "dseparation": {
+    "total": 0,
+    "passed": 0,
+    "failed": 0,
+    "pass_rate": 1.0,
+    "violations": []
+  }
+}

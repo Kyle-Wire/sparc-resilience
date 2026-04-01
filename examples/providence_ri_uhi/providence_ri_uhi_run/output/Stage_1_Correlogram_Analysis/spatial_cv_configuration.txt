@@ -1,0 +1,14 @@
+SPATIAL CV CONFIGURATION FROM CORRELOGRAM ANALYSIS
+=======================================================
+
+MODEL BANDWIDTHS:
+  OLS: Global model (no bandwidth)
+  GWR: 9003.4m
+  GWRF: 11147.0m
+  GGPGAM: 13376.4m
+
+OPTIMAL CV BLOCK SIZE: 300m
+
+BLOCK SIZE VALIDATION SUMMARY:
+(This ensures CV blocks are large enough to prevent spatial leakage)
+

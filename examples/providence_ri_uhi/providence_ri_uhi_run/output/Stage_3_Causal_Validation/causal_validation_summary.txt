@@ -1,0 +1,77 @@
+CAUSAL VALIDATION SUMMARY
+==================================================
+
+CAUSAL DISCOVERY
+  SHD: 12
+  Edge precision: 0.579
+  Edge recall:    0.917
+  Edge F1:        0.71
+  d-sep pass rate: 1.0
+
+ASSUMPTION DIAGNOSTICS
+  Pct_Canopy:
+    Positivity: violation_rate=0.00%, violations=0
+    SUTVA (Moran's I): I=0.3594, p=0.0010
+  Pct_Impervious:
+    Positivity: violation_rate=0.00%, violations=0
+    SUTVA (Moran's I): I=0.4512, p=0.0010
+  Albedo:
+    Positivity: violation_rate=0.00%, violations=0
+    SUTVA (Moran's I): I=0.2948, p=0.0010
+
+DAG STRUCTURE
+  Treatments:  ['Pct_Canopy', 'Pct_Impervious', 'Albedo']
+  Mediators:   ['NDVI']
+  Confounders: ['Elevation_m', 'Distance_from_water_m']
+  Outcome:     ['AAT_z']
+
+STRUCTURAL COEFFICIENTS (parent -> child)
+                 Pct_Canopy -> AAT_z            -0.02216
+                 Pct_Canopy -> NDVI             +0.00251
+                 Pct_Canopy -> Pct_Impervious   -0.63047
+             Pct_Impervious -> AAT_z            +0.02234
+             Pct_Impervious -> Albedo           -0.00011
+                       NDVI -> AAT_z            -4.13100
+                     Albedo -> AAT_z            -2.75901
+                Elevation_m -> AAT_z            -0.02207
+                Elevation_m -> Pct_Canopy       +0.55993
+                Elevation_m -> Pct_Impervious   -0.29800
+      Distance_from_water_m -> AAT_z            +0.00119
+      Distance_from_water_m -> NDVI             -0.00004
+
+ATE ESTIMATES
+                   Variable    Backdoor         IPW         GPS       Match          DR   Agreement
+  -------------------------  ----------  ----------  ----------  ----------  ----------  ----------
+                 Pct_Canopy    -0.01525    -0.68532    -0.01949    -1.11352    -0.01885          NO
+             Pct_Impervious    +0.01830    +0.91132    +0.01436    +1.23517    +0.01741          NO
+                     Albedo    -2.78044    -0.35910    -2.79550    +0.06338    -2.94464          NO
+
+CATE (LinearDML)
+                 Pct_Canopy  mean=-0.01935  std=0.00494
+             Pct_Impervious  mean=+0.01785  std=0.00168
+                     Albedo  mean=-2.67613  std=0.76093
+
+SPATIAL CATE (CausalForestDML)
+                 Pct_Canopy  mean=-0.00217  std=0.00166
+             Pct_Impervious  mean=+0.00438  std=0.00165
+                     Albedo  mean=-2.20913  std=1.51005
+
+ELASTICITY COEFFICIENTS
+                 Pct_Canopy  eps = -0.0048
+             Pct_Impervious  eps = +0.0132
+                     Albedo  eps = -0.0127
+
+RELATIVE IMPORTANCE
+             Pct_Impervious  RI = 0.511
+                 Pct_Canopy  RI = 0.379
+                     Albedo  RI = 0.110
+
+BOOTSTRAP 95% CONFIDENCE INTERVALS
+                 Pct_Canopy  [-0.01932, -0.01831]  SE=0.00025
+             Pct_Impervious  [+0.02016, +0.02117]  SE=0.00028
+                     Albedo  [-3.22270, -2.68897]  SE=0.14446
+
+REFUTATION TESTS
+                 Pct_Canopy  placebo=PASS, rcc=PASS, subset=PASS, unobs_cc=PASS, e-value=2.08, RV=0.317
+             Pct_Impervious  placebo=PASS, rcc=PASS, subset=PASS, unobs_cc=PASS, e-value=2.47, RV=0.375
+                     Albedo  placebo=PASS, rcc=PASS, subset=PASS, unobs_cc=PASS, e-value=1.43, RV=0.092

@@ -1,0 +1,12 @@
+{
+  "feature_names": [
+    "Distance_from_water_m",
+    "Pct_Impervious",
+    "Pct_Canopy",
+    "NDVI",
+    "Albedo",
+    "Elevation_m"
+  ],
+  "n_features": 6,
+  "scaling_applied": false
+}

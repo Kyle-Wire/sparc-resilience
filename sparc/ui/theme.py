@@ -131,6 +131,70 @@ def inject_css():
         display: none;
     }}
 
+    /* ── Radio-as-nav: hide circles, add dot+line grid ────── */
+    section[data-testid="stSidebar"] div[role="radiogroup"] {{
+        gap: 0 !important;
+    }}
+
+    /* Each radio label becomes a mini 2-row grid:
+       row 1:  [dot] [label text]
+       row 2:  [connector line]            */
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label {{
+        display: grid !important;
+        grid-template-columns: 18px 1fr;
+        grid-template-rows: auto 14px;
+        align-items: center;
+        gap: 0;
+        padding: 2px 4px !important;
+        margin: 0 !important;
+        cursor: pointer;
+    }}
+    /* Last item: no connector row */
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label:last-child {{
+        grid-template-rows: auto;
+    }}
+
+    /* Hide the native radio circle */
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label > div:first-child {{
+        display: none !important;
+    }}
+
+    /* Label text placement */
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label > div:last-child {{
+        grid-column: 2;
+        grid-row: 1;
+        font-size: 0.88rem;
+        line-height: 1.4;
+        padding-left: 2px;
+    }}
+
+    /* Dot (::before) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label::before {{
+        content: '';
+        grid-column: 1;
+        grid-row: 1;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        justify-self: center;
+        /* colours are set dynamically by app.py */
+    }}
+
+    /* Connector line (::after) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label::after {{
+        content: '';
+        grid-column: 1;
+        grid-row: 2;
+        width: 2px;
+        height: 14px;
+        justify-self: center;
+        border-radius: 1px;
+        /* colour set dynamically by app.py */
+    }}
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label:last-child::after {{
+        display: none;
+    }}
+
     /* ── Primary action buttons (main area) ─────────────────── */
     .stMainBlockContainer .stButton > button {{
         background-color: {PRIMARY};
@@ -186,22 +250,24 @@ def inject_css():
 
 
 def render_sidebar_logo():
-    """Display the SPARC logo + wordmark at the top of the sidebar."""
+    """Display the SPARC logo + wordmark centred at the top of the sidebar."""
     with st.sidebar:
+        # Outer container centres everything and adds breathing room
         st.markdown(
-            "<div style='text-align:center; padding:0.8rem 0 0.2rem;'>",
+            "<div style='text-align:center; padding:1.4rem 0 0.6rem;'>",
             unsafe_allow_html=True,
         )
         if LOGO_PATH.exists():
-            st.image(str(LOGO_PATH), width=130)
+            st.image(str(LOGO_PATH), width=120)
         st.markdown(
-            f"<p style='text-align:center; font-size:0.65rem; "
-            f"letter-spacing:0.06em; color:{GRAY_MID}; "
-            f"margin-top:-4px; margin-bottom:0;'>"
+            f"<p style='text-align:center; font-size:0.60rem; "
+            f"letter-spacing:0.08em; color:{GRAY_MID}; "
+            f"margin-top:2px; margin-bottom:0;'>"
             f"SPATIAL ANALYSIS &amp; RESEARCH CORE</p>"
             f"</div>",
             unsafe_allow_html=True,
         )
+        st.markdown("<div style='margin-bottom:0.6rem;'></div>", unsafe_allow_html=True)
         st.markdown("---")
 
 
