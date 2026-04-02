@@ -100,8 +100,13 @@ def _validate_project_yaml(raw: dict, yaml_path: str) -> None:
     schema_path = Path(__file__).parent / "project_schema.json"
     if not schema_path.exists():
         return  # schema not shipped — skip
-    with open(schema_path, 'r', encoding='utf-8') as fh:
-        schema = json.load(fh)
+    try:
+        with open(schema_path, 'r', encoding='utf-8') as fh:
+            schema = json.load(fh)
+    except (PermissionError, OSError):
+        # Inside a PyInstaller _MEI bundle the extracted file may not be
+        # readable on some Windows configurations — skip validation.
+        return
     jsonschema.validate(instance=raw, schema=schema)
 
 
