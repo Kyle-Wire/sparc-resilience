@@ -34,6 +34,7 @@ dependencies = [
 
     # Deep learning (Deep Kriging)
     "torch>=2.0",
+    "tensorflow>=2.15",
 
     # Causal inference
     "dowhy>=0.11",

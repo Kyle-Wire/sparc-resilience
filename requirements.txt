@@ -18,6 +18,7 @@ pygam>=0.9
 
 # Deep learning
 torch>=2.0
+tensorflow>=2.15
 
 # Causal inference
 dowhy>=0.11
