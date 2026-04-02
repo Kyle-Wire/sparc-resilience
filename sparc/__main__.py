@@ -390,6 +390,18 @@ def cmd_server(args):
 
     port = args.port
     dev = args.dev
+
+    # If a project was specified, set it in the environment so the server
+    # can auto-load it on startup.
+    project_path = getattr(args, 'project', None)
+    if project_path:
+        resolved = str(Path(project_path).resolve())
+        if not Path(resolved).exists():
+            print(f"WARNING: --project file not found: {resolved}", file=sys.stderr)
+        else:
+            os.environ['SPARC_SERVER_PROJECT'] = resolved
+            print(f"Auto-loading project: {resolved}")
+
     print(f"Starting SPARC server on http://127.0.0.1:{port}")
     if dev:
         print("  Dev mode: auto-reload enabled")
@@ -537,6 +549,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help='Port to bind (default: 8008)')
     p_srv.add_argument('--dev', action='store_true',
                        help='Enable auto-reload for development')
+    p_srv.add_argument('--project', '-p', default=None,
+                       help='Path to project.yml to auto-load on startup')
     p_srv.set_defaults(func=cmd_server)
 
     # --- desktop ---

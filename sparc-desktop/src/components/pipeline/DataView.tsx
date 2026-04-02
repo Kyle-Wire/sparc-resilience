@@ -1,6 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { dataPreview, dataSummary, uploadData, listDataFiles, selectDataFile } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
+import { pickCsv } from "@/lib/fileDialogs";
+import DropZone from "@/components/common/DropZone";
 import type { DataSummary, DataPreview } from "@/lib/types";
 
 interface ProjectFile {
@@ -16,10 +18,11 @@ function formatSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export default function DataView() {
+export default function DataView({ onNavigateToProject }: { onNavigateToProject?: () => void }) {
   const [summary, setSummary] = useState<DataSummary | null>(null);
   const [preview, setPreview] = useState<DataPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [noProject, setNoProject] = useState(false);
   const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([]);
   const [projectDir, setProjectDir] = useState<string>("");
   const [showFilePicker, setShowFilePicker] = useState(false);
@@ -31,8 +34,14 @@ export default function DataView() {
       setSummary(s);
       setPreview(p);
       setError(null);
+      setNoProject(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("400") && msg.toLowerCase().includes("no data loaded")) {
+        setNoProject(true);
+      } else {
+        setError(msg);
+      }
     }
   };
 
@@ -54,8 +63,13 @@ export default function DataView() {
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    await uploadFile(file);
+  };
+
+  const uploadFile = useCallback(async (file: File) => {
     try {
       setError(null);
+      setNoProject(false);
       await uploadData(file);
       await reload();
       await loadProjectFiles();
@@ -65,11 +79,17 @@ export default function DataView() {
       setError(msg);
       notify("error", msg);
     }
-  };
+  }, [notify]);
+
+  const handleFileDrop = useCallback(async (files: File[]) => {
+    const file = files[0];
+    if (file) await uploadFile(file);
+  }, [uploadFile]);
 
   const handleSelectFile = async (path: string) => {
     try {
       setError(null);
+      setNoProject(false);
       await selectDataFile(path);
       setShowFilePicker(false);
       await reload();
@@ -82,11 +102,44 @@ export default function DataView() {
     }
   };
 
+  const handleBrowseCsv = async () => {
+    const file = await pickCsv();
+    if (file) await handleSelectFile(file);
+  };
+
+  /* No-project state */
+  if (noProject) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20">
+        <div className="mb-4 text-4xl">📂</div>
+        <h2 className="mb-2 text-lg font-semibold">No project loaded</h2>
+        <p className="mb-6 max-w-sm text-center text-sm text-sparc-gray-600">
+          Load or create a project first, then come back here to manage your data files.
+        </p>
+        {onNavigateToProject && (
+          <button
+            onClick={onNavigateToProject}
+            className="rounded bg-black px-4 py-2 text-sm font-medium text-white hover:bg-sparc-gray-800"
+          >
+            Go to Project Setup
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
+    <DropZone onFileDrop={handleFileDrop} accept={[".csv"]}>
     <div>
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-bold">Data</h1>
         <div className="flex gap-2">
+          <button
+            onClick={handleBrowseCsv}
+            className="rounded border border-sparc-gray-300 bg-white px-4 py-2 text-sm font-medium hover:bg-sparc-gray-100"
+          >
+            Browse Files…
+          </button>
           {projectFiles.length > 0 && (
             <button
               onClick={() => setShowFilePicker(!showFilePicker)}
@@ -173,5 +226,6 @@ export default function DataView() {
         </div>
       )}
     </div>
+    </DropZone>
   );
 }

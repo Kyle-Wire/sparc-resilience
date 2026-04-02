@@ -57,6 +57,34 @@ TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 
 
 # ------------------------------------------------------------------
+# Startup: auto-load project if SPARC_SERVER_PROJECT env var is set
+# ------------------------------------------------------------------
+
+@app.on_event("startup")
+async def _auto_load_project():
+    project_env = os.environ.get("SPARC_SERVER_PROJECT")
+    if not project_env:
+        return
+    resolved = Path(project_env).resolve()
+    if not resolved.exists():
+        print(f"Warning: SPARC_SERVER_PROJECT file not found: {resolved}")
+        return
+    try:
+        from sparc.config.config import load_config
+        import yaml
+        with open(resolved, 'r', encoding='utf-8') as fh:
+            raw_yaml = yaml.safe_load(fh) or {}
+        config = load_config(str(resolved))
+        state.project_path = str(resolved)
+        state.project_config = config
+        state.raw_project_yaml = raw_yaml
+        _load_data_into_state(config)
+        print(f"Auto-loaded project: {resolved}")
+    except Exception as exc:
+        print(f"Warning: auto-load failed for {resolved}: {exc}")
+
+
+# ------------------------------------------------------------------
 # Health
 # ------------------------------------------------------------------
 
@@ -65,6 +93,7 @@ async def health():
     return {
         "status": "ok",
         "project_loaded": state.project_config is not None,
+        "project_path": state.project_path,
         "is_running": state.is_running,
         "current_stage": state.current_stage,
     }

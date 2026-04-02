@@ -8,13 +8,14 @@ interface ShellProps {
   onNavigate: (page: PageName) => void;
   onSettings?: () => void;
   status: HealthResponse | null;
+  projectLoaded?: boolean;
   children: ReactNode;
 }
 
-export default function Shell({ currentPage, onNavigate, onSettings, status, children }: ShellProps) {
+export default function Shell({ currentPage, onNavigate, onSettings, status, projectLoaded, children }: ShellProps) {
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-sparc-gray-100">
-      <Sidebar currentPage={currentPage} onNavigate={onNavigate} onSettings={onSettings} />
+      <Sidebar currentPage={currentPage} onNavigate={onNavigate} onSettings={onSettings} projectLoaded={projectLoaded} />
       <div className="flex flex-1 flex-col">
         <Topbar status={status} />
         <main className="relative flex-1 overflow-auto bg-white p-6 grid-paper">{children}</main>

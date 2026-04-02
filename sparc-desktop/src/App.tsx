@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { useServer } from "@/hooks/useServer";
+import { useProject } from "@/hooks/useProject";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { NotificationContext, useNotificationState } from "@/hooks/useNotifications";
 import NotificationBanner from "@/components/layout/NotificationBanner";
@@ -21,7 +22,7 @@ import RunCompare from "@/components/results/RunCompare";
 import SettingsView from "@/components/pipeline/SettingsView";
 import ChatPanel from "@/components/chat/ChatPanel";
 import { buildSystemPrompt } from "@/lib/prompts";
-import { getConfig, saveConfig, dataSummary, initProject, loadProject } from "@/lib/api";
+import { getConfig, saveConfig, dataSummary, initProject } from "@/lib/api";
 import type { ClaudeAction, DataSummary, ProjectConfig } from "@/lib/types";
 
 type AppPage = PageName | "Settings";
@@ -29,11 +30,21 @@ type AppPage = PageName | "Settings";
 export default function App() {
   const { ready, status } = useServer();
   const notif = useNotificationState();
+  const project = useProject(ready);
   const [page, setPage] = useState<AppPage>("Project");
   const [chatOpen, setChatOpen] = useState(false);
   const [dataCtx, setDataCtx] = useState<{ columns: string[]; target?: string; summary?: Record<string, unknown> } | null>(null);
   // Increment to force child re-render after action dispatch
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // Gate navigation: only Project and Settings are allowed without a loaded project
+  const navigate = useCallback(
+    (p: AppPage) => {
+      if (p !== "Project" && p !== "Settings" && !project.projectLoaded) return;
+      setPage(p);
+    },
+    [project.projectLoaded],
+  );
 
   // Load data context when available for system prompt enrichment
   useEffect(() => {
@@ -69,12 +80,12 @@ export default function App() {
     () => ({
       toggleChat: () => setChatOpen((o) => !o),
       navigateByIndex: (i: number) => {
-        if (i < PAGES.length) setPage(PAGES[i]);
+        if (i < PAGES.length) navigate(PAGES[i]);
       },
-      openSettings: () => setPage("Settings"),
+      openSettings: () => navigate("Settings"),
       refresh: () => setRefreshKey((k) => k + 1),
     }),
-    [],
+    [navigate],
   );
   useKeyboardShortcuts(kbHandlers);
 
@@ -87,8 +98,8 @@ export default function App() {
           const home = prompt("Choose output directory:", `${action.template}_project`);
           if (!home) break;
           const res = await initProject(action.template, home);
-          await loadProject(res.project_yml);
-          setPage("Data");
+          await project.openProject(res.project_yml, { template: action.template });
+          navigate("Data");
           setRefreshKey((k) => k + 1);
           break;
         }
@@ -96,7 +107,7 @@ export default function App() {
           // Navigate to DAG page — edges will be shown as proposals
           // Store proposed edges for DAGView to pick up
           localStorage.setItem("sparc-proposed-edges", JSON.stringify(action.edges));
-          setPage("DAG");
+          navigate("DAG");
           setRefreshKey((k) => k + 1);
           break;
         }
@@ -107,13 +118,13 @@ export default function App() {
               monotone_constraints: action.monotonic_constraints,
             },
           });
-          setPage("Physics");
+          navigate("Physics");
           setRefreshKey((k) => k + 1);
           break;
         }
         case "suggest_predictors": {
           await saveConfig({ predictors: action.predictors });
-          setPage("Variables");
+          navigate("Variables");
           setRefreshKey((k) => k + 1);
           break;
         }
@@ -121,16 +132,26 @@ export default function App() {
     } catch (e) {
       notif.notify("error", e instanceof Error ? e.message : "Action dispatch failed");
     }
-  }, [notif]);
+  }, [notif, project, navigate]);
 
-  if (!ready) return <Splash />;
+  if (!ready || project.rehydrating) return <Splash />;
 
   const renderPage = () => {
     switch (page) {
       case "Project":
-        return <ProjectSetup onProjectLoaded={() => { setPage("Data"); setRefreshKey((k) => k + 1); notif.notify("success", "Project loaded successfully"); }} />;
+        return (
+          <ProjectSetup
+            projectPath={project.projectPath}
+            onProjectLoaded={async (path, meta) => {
+              await project.openProject(path, meta);
+              navigate("Data");
+              setRefreshKey((k) => k + 1);
+              notif.notify("success", "Project loaded successfully");
+            }}
+          />
+        );
       case "Data":
-        return <DataView key={refreshKey} />;
+        return <DataView key={refreshKey} onNavigateToProject={() => navigate("Project")} />;
       case "Variables":
         return <VariablesView key={refreshKey} />;
       case "CRS":
@@ -159,9 +180,10 @@ export default function App() {
     <div className="flex h-screen">
       <Shell
         currentPage={page as PageName}
-        onNavigate={(p) => setPage(p)}
-        onSettings={() => setPage("Settings")}
+        onNavigate={(p) => navigate(p)}
+        onSettings={() => navigate("Settings")}
         status={status}
+        projectLoaded={project.projectLoaded}
       >
         <div className="flex h-full gap-0">
           {/* Chat toggle button */}

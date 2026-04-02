@@ -30,6 +30,7 @@
     "@deck.gl/layers": "^9.2.11",
     "@deck.gl/react": "^9.2.11",
     "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/plugin-dialog": "^2.2.0",
     "@tauri-apps/plugin-shell": "^2.3.5",
     "@tauri-apps/plugin-stronghold": "^2.3.1",
     "@xyflow/react": "^12.10.2",

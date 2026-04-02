@@ -18,9 +18,10 @@ interface SidebarProps {
   currentPage: PageName;
   onNavigate: (page: PageName) => void;
   onSettings?: () => void;
+  projectLoaded?: boolean;
 }
 
-export default function Sidebar({ currentPage, onNavigate, onSettings }: SidebarProps) {
+export default function Sidebar({ currentPage, onNavigate, onSettings, projectLoaded }: SidebarProps) {
   return (
     <aside className="flex h-full w-52 flex-col border-r border-sparc-gray-200 bg-white">
       {/* Logo lockup: cube icon + wordmark */}
@@ -36,20 +37,26 @@ export default function Sidebar({ currentPage, onNavigate, onSettings }: Sidebar
       <nav className="flex-1 overflow-y-auto py-2">
         {PAGES.map((page, i) => {
           const active = page === currentPage;
+          const disabled = page !== "Project" && !projectLoaded;
           return (
             <button
               key={page}
-              onClick={() => onNavigate(page)}
+              onClick={() => !disabled && onNavigate(page)}
+              disabled={disabled}
               className={`group flex w-full items-center gap-2.5 px-4 py-2 text-left text-sm transition-colors ${
-                active
-                  ? "bg-black text-white font-medium"
-                  : "text-sparc-gray-600 hover:bg-sparc-gray-100 hover:text-black"
+                disabled
+                  ? "text-sparc-gray-400 cursor-not-allowed"
+                  : active
+                    ? "bg-black text-white font-medium"
+                    : "text-sparc-gray-600 hover:bg-sparc-gray-100 hover:text-black"
               }`}
             >
               <span className={`flex h-5 w-5 items-center justify-center rounded text-[10px] font-medium tabular-nums ${
-                active
-                  ? "bg-sparc-purple text-white"
-                  : "bg-sparc-gray-200 text-sparc-gray-600 group-hover:bg-sparc-gray-300"
+                disabled
+                  ? "bg-sparc-gray-100 text-sparc-gray-400"
+                  : active
+                    ? "bg-sparc-purple text-white"
+                    : "bg-sparc-gray-200 text-sparc-gray-600 group-hover:bg-sparc-gray-300"
               }`}>{i + 1}</span>
               {page}
             </button>
