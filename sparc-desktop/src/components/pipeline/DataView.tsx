@@ -18,7 +18,7 @@ function formatSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export default function DataView({ onNavigateToProject }: { onNavigateToProject?: () => void }) {
+export default function DataView(_props: { onNavigateToProject?: () => void }) {
   const [summary, setSummary] = useState<DataSummary | null>(null);
   const [preview, setPreview] = useState<DataPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
