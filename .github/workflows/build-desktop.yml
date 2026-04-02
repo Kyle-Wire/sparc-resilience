@@ -57,10 +57,10 @@ jobs:
           # the binary name won't match — skip gracefully (app falls back to Python).
           if [ "${{ runner.os }}" = "Windows" ]; then
             SRC="dist/sparc-sidecar-${{ matrix.target }}.exe"
-            DST="sparc-desktop/src-tauri/binaries/sparc-sidecar-${{ matrix.target }}.exe"
+            DST="sparc-desktop/src-tauri/binaries/sparc-sidecar.exe"
           else
             SRC="dist/sparc-sidecar-${{ matrix.target }}"
-            DST="sparc-desktop/src-tauri/binaries/sparc-sidecar-${{ matrix.target }}"
+            DST="sparc-desktop/src-tauri/binaries/sparc-sidecar"
           fi
           if [ -f "$SRC" ]; then
             cp "$SRC" "$DST"

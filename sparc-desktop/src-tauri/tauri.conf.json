@@ -27,13 +27,22 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "SPARC Labs LLC",
+    "copyright": "© 2025 SPARC Labs LLC",
+    "category": "DeveloperTool",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      }
+    }
   },
   "plugins": {
     "shell": {
