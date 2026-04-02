@@ -22,7 +22,6 @@ export default function DataView({ onNavigateToProject }: { onNavigateToProject?
   const [summary, setSummary] = useState<DataSummary | null>(null);
   const [preview, setPreview] = useState<DataPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [noProject, setNoProject] = useState(false);
   const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([]);
   const [projectDir, setProjectDir] = useState<string>("");
   const [showFilePicker, setShowFilePicker] = useState(false);
@@ -34,11 +33,12 @@ export default function DataView({ onNavigateToProject }: { onNavigateToProject?
       setSummary(s);
       setPreview(p);
       setError(null);
-      setNoProject(false);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      // "No data loaded" is expected when a project has no data file yet — not an error
       if (msg.includes("400") && msg.toLowerCase().includes("no data loaded")) {
-        setNoProject(true);
+        setSummary(null);
+        setPreview(null);
       } else {
         setError(msg);
       }
@@ -69,7 +69,6 @@ export default function DataView({ onNavigateToProject }: { onNavigateToProject?
   const uploadFile = useCallback(async (file: File) => {
     try {
       setError(null);
-      setNoProject(false);
       await uploadData(file);
       await reload();
       await loadProjectFiles();
@@ -89,7 +88,6 @@ export default function DataView({ onNavigateToProject }: { onNavigateToProject?
   const handleSelectFile = async (path: string) => {
     try {
       setError(null);
-      setNoProject(false);
       await selectDataFile(path);
       setShowFilePicker(false);
       await reload();
@@ -106,27 +104,6 @@ export default function DataView({ onNavigateToProject }: { onNavigateToProject?
     const file = await pickCsv();
     if (file) await handleSelectFile(file);
   };
-
-  /* No-project state */
-  if (noProject) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20">
-        <div className="mb-4 text-4xl">📂</div>
-        <h2 className="mb-2 text-lg font-semibold">No project loaded</h2>
-        <p className="mb-6 max-w-sm text-center text-sm text-sparc-gray-600">
-          Load or create a project first, then come back here to manage your data files.
-        </p>
-        {onNavigateToProject && (
-          <button
-            onClick={onNavigateToProject}
-            className="rounded bg-black px-4 py-2 text-sm font-medium text-white hover:bg-sparc-gray-800"
-          >
-            Go to Project Setup
-          </button>
-        )}
-      </div>
-    );
-  }
 
   return (
     <DropZone onFileDrop={handleFileDrop} accept={[".csv"]}>
@@ -178,6 +155,17 @@ export default function DataView({ onNavigateToProject }: { onNavigateToProject?
               ))}
             </ul>
           )}
+        </div>
+      )}
+
+      {/* Empty state: no data file loaded yet */}
+      {!summary && !error && (
+        <div className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-sparc-gray-300 py-16">
+          <div className="mb-3 text-4xl">📄</div>
+          <h2 className="mb-1 text-base font-semibold">No data file loaded</h2>
+          <p className="mb-4 max-w-sm text-center text-sm text-sparc-gray-500">
+            Upload a CSV, browse for a file, select one from your project directory, or drag and drop here.
+          </p>
         </div>
       )}
 
