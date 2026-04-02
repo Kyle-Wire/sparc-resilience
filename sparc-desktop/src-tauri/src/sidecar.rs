@@ -231,7 +231,7 @@ pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
 
     // On Windows, hide the console window so no cmd.exe flash appears.
     #[cfg(target_os = "windows")]
-    let cmd = {
+    let mut cmd = {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         let mut c = Command::new(&python);

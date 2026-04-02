@@ -22,6 +22,9 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             label: macOS-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            label: macOS-x64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             label: Windows-x64
@@ -50,13 +53,21 @@ jobs:
         shell: bash
         run: |
           mkdir -p sparc-desktop/src-tauri/binaries
+          # PyInstaller builds for the host arch; if cross-compiling (e.g. arm64→x86_64)
+          # the binary name won't match — skip gracefully (app falls back to Python).
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cp dist/sparc-sidecar-${{ matrix.target }}.exe \
-               "sparc-desktop/src-tauri/binaries/sparc-sidecar-${{ matrix.target }}.exe"
+            SRC="dist/sparc-sidecar-${{ matrix.target }}.exe"
+            DST="sparc-desktop/src-tauri/binaries/sparc-sidecar-${{ matrix.target }}.exe"
           else
-            cp dist/sparc-sidecar-${{ matrix.target }} \
-               "sparc-desktop/src-tauri/binaries/sparc-sidecar-${{ matrix.target }}"
-            chmod +x "sparc-desktop/src-tauri/binaries/sparc-sidecar-${{ matrix.target }}"
+            SRC="dist/sparc-sidecar-${{ matrix.target }}"
+            DST="sparc-desktop/src-tauri/binaries/sparc-sidecar-${{ matrix.target }}"
+          fi
+          if [ -f "$SRC" ]; then
+            cp "$SRC" "$DST"
+            chmod +x "$DST" 2>/dev/null || true
+            echo "Sidecar copied: $DST"
+          else
+            echo "Sidecar not found for target (cross-compile); app will resolve Python at runtime"
           fi
 
       # ── Node + frontend ─────────────────────────────────────────
