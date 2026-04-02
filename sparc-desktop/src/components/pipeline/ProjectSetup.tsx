@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { listTemplates, initProject, loadProject } from "@/lib/api";
+import { useNotification } from "@/hooks/useNotifications";
 import type { TemplateInfo } from "@/lib/types";
 
 interface Props {
@@ -13,6 +14,7 @@ export default function ProjectSetup({ onProjectLoaded }: Props) {
   const [projectPath, setProjectPath] = useState("");
   const [mode, setMode] = useState<"create" | "open">("create");
   const [status, setStatus] = useState("");
+  const { notify } = useNotification();
 
   useEffect(() => {
     listTemplates().then((r) => setTemplates(r.templates)).catch(() => {});
@@ -27,8 +29,9 @@ export default function ProjectSetup({ onProjectLoaded }: Props) {
       await loadProject(res.project_yml);
       setStatus("Project loaded.");
       onProjectLoaded();
-    } catch (err) {
-      setStatus(`Error: ${err}`);
+    } catch (err: any) {
+      setStatus("");
+      notify("error", err.message ?? String(err));
     }
   };
 
@@ -37,10 +40,11 @@ export default function ProjectSetup({ onProjectLoaded }: Props) {
     setStatus("Loading project...");
     try {
       await loadProject(projectPath);
-      setStatus("Project loaded.");
+      setStatus("");
       onProjectLoaded();
-    } catch (err) {
-      setStatus(`Error: ${err}`);
+    } catch (err: any) {
+      setStatus("");
+      notify("error", err.message ?? String(err));
     }
   };
 

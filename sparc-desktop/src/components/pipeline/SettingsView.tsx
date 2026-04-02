@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
+import { useNotification } from "@/hooks/useNotifications";
 
 export default function SettingsView() {
   const [apiKey, setApiKey] = useState("");
-  const [saved, setSaved] = useState(false);
+  const { notify } = useNotification();
   const [serverPort, setServerPort] = useState("8008");
 
   useEffect(() => {
@@ -16,14 +17,12 @@ export default function SettingsView() {
     } else {
       localStorage.removeItem("anthropic-api-key");
     }
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    notify("success", "API key saved");
   };
 
   const savePort = () => {
     localStorage.setItem("sparc-server-port", serverPort);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    notify("success", "Server port saved (restart required)");
   };
 
   const clearAllData = () => {
@@ -114,12 +113,6 @@ export default function SettingsView() {
           Clear All Stored Data
         </button>
       </section>
-
-      {saved && (
-        <div className="fixed bottom-4 right-4 rounded bg-green-600 px-4 py-2 text-sm text-white shadow-lg">
-          Settings saved
-        </div>
-      )}
     </div>
   );
 }

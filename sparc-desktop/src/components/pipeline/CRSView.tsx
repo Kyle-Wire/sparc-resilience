@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getConfig, saveConfig } from "@/lib/api";
+import { useNotification } from "@/hooks/useNotifications";
 import type { ProjectConfig } from "@/lib/types";
 
 const COMMON_CRS = [
@@ -21,6 +22,7 @@ export default function CRSView() {
   const [projectedCRS, setProjectedCRS] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const { notify } = useNotification();
 
   useEffect(() => {
     getConfig()
@@ -37,8 +39,9 @@ export default function CRSView() {
     try {
       await saveConfig({ crs: { input: inputCRS, projected: projectedCRS } });
       setError(null);
+      notify("success", "CRS saved");
     } catch (e: any) {
-      setError(e.message);
+      notify("error", e.message);
     } finally {
       setSaving(false);
     }
@@ -137,7 +140,6 @@ export default function CRSView() {
         >
           {saving ? "Saving…" : "Save CRS"}
         </button>
-        {error && <p className="text-sm text-red-600">{error}</p>}
       </div>
     </div>
   );

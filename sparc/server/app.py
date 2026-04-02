@@ -262,15 +262,61 @@ async def upload_data(file: UploadFile = File(...)):
         content = await file.read()
         f.write(content)
 
-    # Update config to point to new file
-    state.project_config["data"]["file_path"] = str(dest)
-    state.project_config["paths"]["raw_csv_path"] = str(dest)
-
+    # Update config to point to new file and persist to disk
+    _set_data_path(str(dest))
     _load_data_into_state(state.project_config)
 
     return {
         "status": "uploaded",
         "path": str(dest),
+        "columns": list(state.data.columns) if state.data is not None else [],
+        "row_count": len(state.data) if state.data is not None else 0,
+    }
+
+
+@app.get("/data/files")
+async def list_data_files():
+    """List CSV/Parquet files inside the project's working directory."""
+    if state.project_config is None:
+        raise HTTPException(400, "Load a project first.")
+
+    project_dir = Path(state.project_config["paths"]["project_root"])
+    files: list[dict] = []
+    for ext in ("*.csv", "*.parquet", "*.CSV"):
+        for p in project_dir.rglob(ext):
+            try:
+                rel = p.relative_to(project_dir)
+            except ValueError:
+                rel = p
+            files.append({
+                "name": p.name,
+                "path": str(p),
+                "relative": str(rel),
+                "size": p.stat().st_size,
+            })
+    files.sort(key=lambda f: f["relative"])
+    return {"project_dir": str(project_dir), "files": files}
+
+
+@app.post("/data/select")
+async def select_data_file(path: str = Query(..., description="Absolute path to a data file")):
+    """Select an existing data file (must already be on disk)."""
+    if state.project_config is None:
+        raise HTTPException(400, "Load a project first.")
+
+    resolved = Path(path).resolve()
+    if not resolved.exists():
+        raise HTTPException(404, f"File not found: {resolved}")
+    if resolved.suffix.lower() not in (".csv", ".parquet"):
+        raise HTTPException(400, "Only .csv and .parquet files are supported.")
+
+    # Update config to point to this file and persist to disk
+    _set_data_path(str(resolved))
+    _load_data_into_state(state.project_config)
+
+    return {
+        "status": "selected",
+        "path": str(resolved),
         "columns": list(state.data.columns) if state.data is not None else [],
         "row_count": len(state.data) if state.data is not None else 0,
     }
@@ -576,6 +622,32 @@ async def validate_dag(dag: dict):
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+
+def _set_data_path(abs_path: str) -> None:
+    """Update the data file path in memory *and* persist to project.yml on disk.
+
+    This ensures that pipeline stages that re-read project.yml from disk
+    (e.g. correlogram_analysis via ``load_config()``) see the correct path.
+    """
+    # 1. In-memory config
+    state.project_config["data"]["file_path"] = abs_path
+    state.project_config["paths"]["raw_csv_path"] = abs_path
+
+    # 2. Raw YAML dict (for /project/config GET)
+    if state.raw_project_yaml is not None:
+        state.raw_project_yaml.setdefault("data", {})["file_path"] = abs_path
+
+    # 3. Persist to disk so load_config() in subprocesses picks it up
+    if state.project_path:
+        import yaml
+        yml_path = Path(state.project_path)
+        if yml_path.is_dir():
+            yml_path = yml_path / "project.yml"
+        if yml_path.exists() and state.raw_project_yaml is not None:
+            with open(yml_path, "w", encoding="utf-8") as fh:
+                yaml.dump(state.raw_project_yaml, fh,
+                          default_flow_style=False, sort_keys=False)
+
 
 def _load_data_into_state(config: dict) -> None:
     """Load and preprocess the project's CSV into state.data."""

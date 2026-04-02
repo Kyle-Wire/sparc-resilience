@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getConfig, saveConfig, dataSummary } from "@/lib/api";
+import { useNotification } from "@/hooks/useNotifications";
 import type { ProjectConfig, DataSummary } from "@/lib/types";
 
 export default function VariablesView() {
@@ -7,6 +8,7 @@ export default function VariablesView() {
   const [summary, setSummary] = useState<DataSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const { notify } = useNotification();
 
   useEffect(() => {
     getConfig().then(setConfig).catch((e) => setError(e.message));
@@ -39,8 +41,9 @@ export default function VariablesView() {
     try {
       await saveConfig({ predictors: config.predictors });
       setError(null);
+      notify("success", "Variables saved");
     } catch (e: any) {
-      setError(e.message);
+      notify("error", e.message);
     } finally {
       setSaving(false);
     }
@@ -129,7 +132,6 @@ export default function VariablesView() {
         >
           {saving ? "Saving…" : "Save Variables"}
         </button>
-        {error && <p className="text-sm text-red-600">{error}</p>}
       </div>
     </div>
   );

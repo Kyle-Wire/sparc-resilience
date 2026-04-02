@@ -1,6 +1,8 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { useServer } from "@/hooks/useServer";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+import { NotificationContext, useNotificationState } from "@/hooks/useNotifications";
+import NotificationBanner from "@/components/layout/NotificationBanner";
 import Splash from "@/components/layout/Splash";
 import Shell from "@/components/layout/Shell";
 import type { PageName } from "@/components/layout/Sidebar";
@@ -26,6 +28,7 @@ type AppPage = PageName | "Settings";
 
 export default function App() {
   const { ready, status } = useServer();
+  const notif = useNotificationState();
   const [page, setPage] = useState<AppPage>("Project");
   const [chatOpen, setChatOpen] = useState(false);
   const [dataCtx, setDataCtx] = useState<{ columns: string[]; target?: string; summary?: Record<string, unknown> } | null>(null);
@@ -116,16 +119,16 @@ export default function App() {
         }
       }
     } catch (e) {
-      console.error("Action dispatch failed:", e);
+      notif.notify("error", e instanceof Error ? e.message : "Action dispatch failed");
     }
-  }, []);
+  }, [notif]);
 
   if (!ready) return <Splash />;
 
   const renderPage = () => {
     switch (page) {
       case "Project":
-        return <ProjectSetup onProjectLoaded={() => { setPage("Data"); setRefreshKey((k) => k + 1); }} />;
+        return <ProjectSetup onProjectLoaded={() => { setPage("Data"); setRefreshKey((k) => k + 1); notif.notify("success", "Project loaded successfully"); }} />;
       case "Data":
         return <DataView key={refreshKey} />;
       case "Variables":
@@ -152,6 +155,7 @@ export default function App() {
   };
 
   return (
+    <NotificationContext.Provider value={notif}>
     <div className="flex h-screen">
       <Shell
         currentPage={page as PageName}
@@ -185,6 +189,8 @@ export default function App() {
           )}
         </div>
       </Shell>
+      <NotificationBanner />
     </div>
+    </NotificationContext.Provider>
   );
 }

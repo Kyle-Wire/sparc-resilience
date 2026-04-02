@@ -73,6 +73,12 @@ export async function uploadData(file: File): Promise<ProjectLoadResponse> {
   return res.json();
 }
 
+export const listDataFiles = () =>
+  get<{ project_dir: string; files: { name: string; path: string; relative: string; size: number }[] }>("/data/files");
+
+export const selectDataFile = (path: string) =>
+  post<ProjectLoadResponse>(`/data/select?path=${encodeURIComponent(path)}`);
+
 // ------------------------------------------------------------------
 // Results
 // ------------------------------------------------------------------

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getConfig, saveConfig } from "@/lib/api";
+import { useNotification } from "@/hooks/useNotifications";
 import type { ProjectConfig } from "@/lib/types";
 
 export default function PhysicsView() {
@@ -9,6 +10,7 @@ export default function PhysicsView() {
   const [capsFile, setCapsFile] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const { notify } = useNotification();
 
   useEffect(() => {
     getConfig()
@@ -38,8 +40,9 @@ export default function PhysicsView() {
         },
       });
       setError(null);
+      notify("success", "Physics constraints saved");
     } catch (e: any) {
-      setError(e.message);
+      notify("error", e.message);
     } finally {
       setSaving(false);
     }
@@ -153,7 +156,6 @@ export default function PhysicsView() {
         >
           {saving ? "Saving…" : "Save Physics"}
         </button>
-        {error && <p className="text-sm text-red-600">{error}</p>}
       </div>
     </div>
   );
