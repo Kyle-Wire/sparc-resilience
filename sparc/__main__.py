@@ -10,6 +10,8 @@ Usage
     sparc run      --project project.yml [--stage 1|2|3|all] [--fast]
     sparc scenario --project project.yml [--scenario canopy_increase]
     sparc report   --project project.yml
+    sparc server   [--port 8008] [--dev]
+    sparc desktop  [--port 8008]
 
 If the package is **not** pip-installed you can also run::
 
@@ -378,6 +380,27 @@ def cmd_scenario(args):
         sys.exit(1)
 
 
+def cmd_server(args):
+    """Start the SPARC FastAPI server (used by the desktop app)."""
+    try:
+        import uvicorn
+    except ImportError:
+        print("ERROR: uvicorn not installed. Run: pip install 'sparc[server]'", file=sys.stderr)
+        sys.exit(1)
+
+    port = args.port
+    dev = args.dev
+    print(f"Starting SPARC server on http://127.0.0.1:{port}")
+    if dev:
+        print("  Dev mode: auto-reload enabled")
+    uvicorn.run(
+        "sparc.server.app:app",
+        host="127.0.0.1",
+        port=port,
+        reload=dev,
+    )
+
+
 def cmd_report(args):
     """Generate final interpretation report."""
     project_path = _resolve_project_path(args)
@@ -394,6 +417,70 @@ def cmd_report(args):
     print(f"Generating report for: {config.get('project', {}).get('name', 'Unnamed')}")
     print(f"  Output dir: {paths.output_dir}")
     print(f"  (Report generation integration point — connect to final_interpretation.py)")
+
+
+def cmd_desktop(args):
+    """Launch the SPARC Desktop App (Tauri + FastAPI)."""
+    import subprocess
+    import threading
+
+    # Start the FastAPI server in background
+    port = args.port
+    print(f"Starting SPARC server on http://127.0.0.1:{port}")
+
+    def run_server():
+        try:
+            import uvicorn
+            uvicorn.run("sparc.server.app:app", host="127.0.0.1", port=port, log_level="warning")
+        except ImportError:
+            print("ERROR: uvicorn not installed. Run: pip install 'sparc[server]'", file=sys.stderr)
+
+    server_thread = threading.Thread(target=run_server, daemon=True)
+    server_thread.start()
+
+    # Look for the Tauri binary
+    desktop_dir = Path(__file__).resolve().parent.parent / "sparc-desktop"
+    candidates = [
+        desktop_dir / "src-tauri" / "target" / "release" / "SPARC Desktop",
+        desktop_dir / "src-tauri" / "target" / "release" / "sparc-desktop",
+        desktop_dir / "src-tauri" / "target" / "release" / "sparc-desktop.exe",
+        desktop_dir / "src-tauri" / "target" / "debug" / "SPARC Desktop",
+        desktop_dir / "src-tauri" / "target" / "debug" / "sparc-desktop",
+    ]
+
+    binary = None
+    for c in candidates:
+        if c.exists():
+            binary = c
+            break
+
+    if binary:
+        print(f"Launching desktop app: {binary}")
+        subprocess.run([str(binary)], check=False)
+    else:
+        # Fallback: try pnpm tauri dev
+        print("No compiled binary found. Attempting `pnpm tauri dev`...")
+        try:
+            subprocess.run(["pnpm", "tauri", "dev"], cwd=str(desktop_dir), check=True)
+        except FileNotFoundError:
+            print("ERROR: Neither a compiled SPARC Desktop binary nor pnpm was found.", file=sys.stderr)
+            print("Build the desktop app first: cd sparc-desktop && pnpm tauri build", file=sys.stderr)
+            sys.exit(1)
+
+
+def cmd_ui(args):
+    """Launch the deprecated Streamlit UI."""
+    import warnings
+    warnings.warn(
+        "The Streamlit UI is deprecated. Use 'sparc desktop' or 'sparc server' instead.",
+        DeprecationWarning,
+        stacklevel=1,
+    )
+    print("WARNING: The Streamlit UI is deprecated. Use 'sparc desktop' instead.")
+    print("Starting Streamlit UI anyway...")
+    import subprocess
+    ui_path = Path(__file__).resolve().parent / "ui" / "app.py"
+    subprocess.run([sys.executable, "-m", "streamlit", "run", str(ui_path)], check=False)
 
 
 # ---------------------------------------------------------------------------
@@ -443,6 +530,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_rep = subparsers.add_parser('report', help='Generate final interpretation report')
     p_rep.add_argument('--project', '-p', required=True, help='Path to project.yml')
     p_rep.set_defaults(func=cmd_report)
+
+    # --- server ---
+    p_srv = subparsers.add_parser('server', help='Start the SPARC FastAPI server')
+    p_srv.add_argument('--port', type=int, default=8008,
+                       help='Port to bind (default: 8008)')
+    p_srv.add_argument('--dev', action='store_true',
+                       help='Enable auto-reload for development')
+    p_srv.set_defaults(func=cmd_server)
+
+    # --- desktop ---
+    p_desk = subparsers.add_parser('desktop', help='Launch the SPARC Desktop App')
+    p_desk.add_argument('--port', type=int, default=8008,
+                        help='FastAPI server port (default: 8008)')
+    p_desk.set_defaults(func=cmd_desktop)
+
+    # --- ui (deprecated) ---
+    p_ui = subparsers.add_parser('ui', help='[DEPRECATED] Launch Streamlit UI')
+    p_ui.set_defaults(func=cmd_ui)
 
     return parser
 

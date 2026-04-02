@@ -1,0 +1,269 @@
+use std::fs::OpenOptions;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use tauri::{AppHandle, Manager};
+
+// ─── Platform-specific helpers ───────────────────────────────────────────────
+
+/// Return the user's home directory.
+fn home_dir() -> String {
+    #[cfg(target_os = "windows")]
+    { std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".to_string()) }
+    #[cfg(not(target_os = "windows"))]
+    { std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()) }
+}
+
+/// Return the platform log directory: ~/Library/Logs/SPARC (mac) or %APPDATA%\SPARC\Logs (win).
+fn log_dir() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        let appdata = std::env::var("APPDATA")
+            .unwrap_or_else(|_| format!("{}\\AppData\\Roaming", home_dir()));
+        PathBuf::from(appdata).join("SPARC").join("Logs")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        PathBuf::from(home_dir()).join("Library/Logs/SPARC")
+    }
+}
+
+/// Name of the bundled sidecar binary.
+fn sidecar_name() -> &'static str {
+    #[cfg(target_os = "windows")]
+    { "sparc-sidecar.exe" }
+    #[cfg(not(target_os = "windows"))]
+    { "sparc-sidecar" }
+}
+
+// ─── Python resolution ──────────────────────────────────────────────────────
+
+/// Resolve the best Python interpreter that has the `sparc` package.
+///
+/// macOS / Linux checks:
+///   1. pyenv  — `~/.pyenv/bin/pyenv which python3`
+///   2. Interactive shell — `$SHELL -ic 'which python3'`
+///   3. Well-known paths — Homebrew, system
+///   4. Bare `python3`
+///
+/// Windows checks:
+///   1. pyenv-win — `%USERPROFILE%\.pyenv\pyenv-win\bin\pyenv.bat which python`
+///   2. `py -3` launcher (standard Python.org installs)
+///   3. Well-known paths — AppData, Program Files
+///   4. Bare `python`
+fn resolve_python() -> String {
+    let home = home_dir();
+
+    // ── macOS / Linux ────────────────────────────────────────────────────
+    #[cfg(not(target_os = "windows"))]
+    {
+        // 1. pyenv
+        let pyenv_root = std::env::var("PYENV_ROOT")
+            .unwrap_or_else(|_| format!("{home}/.pyenv"));
+        let pyenv_bin = format!("{pyenv_root}/bin/pyenv");
+
+        if std::path::Path::new(&pyenv_bin).exists() {
+            if let Ok(output) = Command::new(&pyenv_bin)
+                .args(["which", "python3"])
+                .env("PYENV_ROOT", &pyenv_root)
+                .env("PATH", format!(
+                    "{pyenv_root}/bin:{pyenv_root}/shims:/usr/local/bin:/usr/bin:/bin"
+                ))
+                .output()
+            {
+                let p = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !p.is_empty() && std::path::Path::new(&p).exists() {
+                    println!("Resolved python via pyenv: {p}");
+                    return p;
+                }
+            }
+        }
+
+        // 2. Interactive shell (picks up .zshrc / .bashrc)
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+        if let Ok(output) = Command::new(&shell)
+            .args(["-ic", "which python3"])
+            .output()
+        {
+            let p = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !p.is_empty() && !p.contains("not found") && std::path::Path::new(&p).exists() {
+                println!("Resolved python via interactive shell: {p}");
+                return p;
+            }
+        }
+
+        // 3. Well-known paths
+        let candidates = [
+            format!("{home}/.pyenv/shims/python3"),
+            "/usr/local/bin/python3".to_string(),
+            "/opt/homebrew/bin/python3".to_string(),
+        ];
+        for c in &candidates {
+            if std::path::Path::new(c).exists() {
+                println!("Resolved python at well-known path: {c}");
+                return c.clone();
+            }
+        }
+
+        println!("Falling back to bare python3");
+        "python3".to_string()
+    }
+
+    // ── Windows ──────────────────────────────────────────────────────────
+    #[cfg(target_os = "windows")]
+    {
+        // 1. pyenv-win
+        let pyenv_root = std::env::var("PYENV_ROOT").or_else(|_| std::env::var("PYENV"))
+            .unwrap_or_else(|_| format!("{home}\\.pyenv\\pyenv-win"));
+        let pyenv_bat = format!("{pyenv_root}\\bin\\pyenv.bat");
+
+        if std::path::Path::new(&pyenv_bat).exists() {
+            if let Ok(output) = Command::new("cmd")
+                .args(["/C", &pyenv_bat, "which", "python"])
+                .output()
+            {
+                let p = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !p.is_empty() && std::path::Path::new(&p).exists() {
+                    println!("Resolved python via pyenv-win: {p}");
+                    return p;
+                }
+            }
+        }
+
+        // 2. Python Launcher (`py -3`) — ships with python.org installs
+        if let Ok(output) = Command::new("py")
+            .args(["-3", "-c", "import sys; print(sys.executable)"])
+            .output()
+        {
+            if output.status.success() {
+                let p = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !p.is_empty() && std::path::Path::new(&p).exists() {
+                    println!("Resolved python via py launcher: {p}");
+                    return p;
+                }
+            }
+        }
+
+        // 3. Well-known Windows paths
+        let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let candidates = [
+            format!("{localappdata}\\Programs\\Python\\Python311\\python.exe"),
+            format!("{localappdata}\\Programs\\Python\\Python312\\python.exe"),
+            format!("{localappdata}\\Programs\\Python\\Python310\\python.exe"),
+            format!("{home}\\.pyenv\\pyenv-win\\shims\\python.bat"),
+            "C:\\Python311\\python.exe".to_string(),
+            "C:\\Python312\\python.exe".to_string(),
+            "C:\\Python310\\python.exe".to_string(),
+        ];
+        for c in &candidates {
+            if std::path::Path::new(c).exists() {
+                println!("Resolved python at well-known path: {c}");
+                return c.clone();
+            }
+        }
+
+        println!("Falling back to bare python");
+        "python".to_string()
+    }
+}
+
+// ─── Server spawn ────────────────────────────────────────────────────────────
+
+/// Spawn the SPARC FastAPI server.
+///
+/// Strategy (in order):
+///   1. Bundled PyInstaller binary next to the app binary.
+///   2. Resolve the user's Python and run `python -m sparc server`.
+///
+/// Server stdout/stderr go to a platform-appropriate log file.
+pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    let port = "8008";
+
+    // Prepare log file (truncated each launch).
+    let ld = log_dir();
+    std::fs::create_dir_all(&ld).ok();
+    let log_path = ld.join("server.log");
+    let log_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&log_path)
+        .ok();
+    println!("Server log: {}", log_path.display());
+
+    let stdio = |f: &Option<std::fs::File>| -> Stdio {
+        f.as_ref()
+            .and_then(|f| f.try_clone().ok())
+            .map(Stdio::from)
+            .unwrap_or_else(Stdio::inherit)
+    };
+
+    // 1. Bundled sidecar binary.
+    let sidecar_path: Option<PathBuf> = app
+        .path()
+        .resource_dir()
+        .ok()
+        .map(|d: PathBuf| d.join("binaries").join(sidecar_name()));
+
+    if let Some(ref path) = sidecar_path {
+        if path.exists() {
+            match Command::new(path)
+                .args(["server", "--port", port])
+                .stdout(stdio(&log_file))
+                .stderr(stdio(&log_file))
+                .spawn()
+            {
+                Ok(_child) => {
+                    println!("Sidecar server started on port {port}");
+                    return Ok(());
+                }
+                Err(e) => {
+                    println!("Sidecar binary failed: {e}, trying Python fallback");
+                }
+            }
+        } else {
+            println!("No sidecar at {}, trying Python", path.display());
+        }
+    }
+
+    // 2. Resolve Python and spawn.
+    let python = resolve_python();
+    println!("Spawning: {python} -m sparc server --port {port}");
+
+    // On Windows, hide the console window so no cmd.exe flash appears.
+    #[cfg(target_os = "windows")]
+    let cmd = {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let mut c = Command::new(&python);
+        c.args(["-m", "sparc", "server", "--port", port])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(stdio(&log_file))
+            .stderr(stdio(&log_file));
+        c
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut cmd = {
+        let mut c = Command::new(&python);
+        c.args(["-m", "sparc", "server", "--port", port])
+            .stdout(stdio(&log_file))
+            .stderr(stdio(&log_file));
+        c
+    };
+
+    match cmd.spawn() {
+        Ok(_child) => {
+            println!("Server started on port {port} via {python}");
+            return Ok(());
+        }
+        Err(e) => {
+            eprintln!("Failed to start server with {python}: {e}");
+        }
+    }
+
+    eprintln!(
+        "Could not start the SPARC server. \
+         Please run 'python -m sparc server --port {port}' manually."
+    );
+    Ok(())
+}
+

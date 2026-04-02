@@ -50,3 +50,12 @@ data/          # Only keep small samples; gitignore large files
 *.gpkg
 *.nc           # NetCDF files from ForceSMIP/GCMs
 *.pkl
+
+# Desktop app — Node / Rust build artifacts
+sparc-desktop/node_modules/
+sparc-desktop/dist/
+sparc-desktop/src-tauri/target/
+
+# PyInstaller sidecar output
+dist/
+*.spec

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicedoc/static/main/tauri/schemas/config.schema.json",
+  "productName": "SPARC Labs",
+  "version": "1.0.0",
+  "identifier": "com.sparclabs.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "SPARC Labs",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:8008 ws://127.0.0.1:8008 https://api.anthropic.com https://fonts.googleapis.com https://fonts.gstatic.com https://*.openfreemap.org https://*.stamen.com https://basemaps.cartocdn.com https://*.cartocdn.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://*.openfreemap.org https://*.tile.openstreetmap.org https://*.cartocdn.com; script-src 'self'; worker-src 'self' blob:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    }
+  }
+}

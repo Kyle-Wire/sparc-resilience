@@ -33,6 +33,11 @@ Requires-Dist: psutil>=5.9
 Requires-Dist: pyyaml>=6.0
 Requires-Dist: jsonschema>=4.19
 Requires-Dist: pyarrow>=14.0
+Provides-Extra: server
+Requires-Dist: fastapi>=0.111; extra == "server"
+Requires-Dist: uvicorn[standard]>=0.29; extra == "server"
+Requires-Dist: websockets>=12.0; extra == "server"
+Requires-Dist: python-multipart>=0.0.9; extra == "server"
 Provides-Extra: ui
 Requires-Dist: streamlit>=1.30; extra == "ui"
 Provides-Extra: dask

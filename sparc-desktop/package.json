@@ -1,0 +1,43 @@
+{
+  "name": "sparc-desktop",
+  "version": "1.0.0",
+  "description": "SPARC Labs Desktop Application",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "author": "SPARC Labs LLC",
+  "license": "Proprietary",
+  "packageManager": "pnpm@10.33.0",
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.2.2",
+    "@tauri-apps/cli": "^2.10.1",
+    "@types/d3-scale": "^4.0.9",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "sharp": "^0.34.5",
+    "tailwindcss": "^4.2.2",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.3"
+  },
+  "dependencies": {
+    "@dagrejs/dagre": "^3.0.0",
+    "@deck.gl/core": "^9.2.11",
+    "@deck.gl/layers": "^9.2.11",
+    "@deck.gl/react": "^9.2.11",
+    "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/plugin-shell": "^2.3.5",
+    "@tauri-apps/plugin-stronghold": "^2.3.1",
+    "@xyflow/react": "^12.10.2",
+    "d3-scale": "^4.0.2",
+    "maplibre-gl": "^5.21.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-map-gl": "^8.1.0",
+    "recharts": "^3.8.1"
+  }
+}

@@ -1,0 +1,55 @@
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap");
+@import "tailwindcss";
+
+/* ----------------------------------------------------------------
+   SPARC Labs Design Tokens
+   ---------------------------------------------------------------- */
+@theme {
+  --font-sans: "Geist", "Inter", system-ui, sans-serif;
+
+  /* Brand palette */
+  --color-sparc-purple: #602468;
+  --color-sparc-magenta: #9e337d;
+  --color-sparc-pink: #e94d9b;
+  --color-sparc-red: #e94461;
+  --color-sparc-crimson: #e73c25;
+  --color-sparc-orange: #e76c25;
+  --color-sparc-amber: #e79024;
+  --color-sparc-gold: #f0b632;
+  --color-sparc-yellow: #fbdd46;
+
+  /* Neutrals */
+  --color-sparc-gray-100: #f5f5f5;
+  --color-sparc-gray-200: #e5e5e5;
+  --color-sparc-gray-300: #d4d4d4;
+  --color-sparc-gray-600: #737373;
+  --color-sparc-gray-800: #262626;
+}
+
+body {
+  font-family: var(--font-sans);
+}
+
+/* Grid-paper motif for workspace panels (brand guide) */
+.grid-paper {
+  position: relative;
+}
+
+.grid-paper::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--color-sparc-gray-300) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-sparc-gray-300) 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-position: -1px -1px;
+  opacity: 0.06;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.grid-paper > * {
+  position: relative;
+  z-index: 1;
+}

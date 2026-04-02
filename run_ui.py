@@ -1,4 +1,16 @@
-"""Launch the SPARC UI.  Usage:  streamlit run run_ui.py"""
+"""Launch the SPARC UI.  Usage:  streamlit run run_ui.py
+
+.. deprecated:: 2.0.0
+    Use the SPARC Desktop App instead. Run ``sparc server`` + the Tauri app,
+    or ``sparc desktop`` to launch the native desktop application.
+"""
+import warnings
+warnings.warn(
+    "run_ui.py (Streamlit) is deprecated. Use the SPARC Desktop App: "
+    "run 'sparc server' + Tauri desktop app, or 'sparc desktop'.",
+    DeprecationWarning,
+    stacklevel=1,
+)
 import sys
 from pathlib import Path
 
