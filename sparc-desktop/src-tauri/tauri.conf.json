@@ -30,6 +30,7 @@
     "publisher": "SPARC Labs LLC",
     "copyright": "© 2025 SPARC Labs LLC",
     "category": "DeveloperTool",
+    "resources": ["binaries/*"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
