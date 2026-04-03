@@ -309,16 +309,50 @@ def _run_scenarios(config, paths, project_path):
     data = pd.read_csv(csv_path)
 
     dag_file = config.get('causal', {}).get('dag_file')
+    has_dag = dag_file and Path(dag_file).exists()
+    scenario_mode = config.get('pipeline', {}).get('scenario_mode', 'auto')
 
-    # --- Mode 1: DAG coefficient-based (primary) ----------------------
-    if dag_file and Path(dag_file).exists():
-        print("  [Mode 1 — PRIMARY] DAG + MGWR coefficient-based scenario simulation")
-        summary_df, results_gdf = sim.run_with_causal_dag(data, verbose=True)
+    # --- Resolve 'auto' to a concrete mode ----------------------------
+    if scenario_mode == 'auto':
+        scenario_mode = 'hybrid' if has_dag else 'physics'
+
+    # --- Dispatch by scenario_mode ------------------------------------
+    if scenario_mode == 'hybrid':
+        print("  [PRIMARY] Hybrid: Model-consensus direct + DAG indirect")
+        summary_df, results_gdf = sim.run_with_hybrid_reprediction(data, verbose=True)
+    elif scenario_mode == 'model_reprediction':
+        print("  [PRIMARY] Model re-prediction (full consensus delta)")
+        summary_df, results_gdf = sim.run_with_model_reprediction(data, verbose=True)
+    elif scenario_mode == 'dag_coefficient':
+        if has_dag:
+            print("  [PRIMARY] DAG + MGWR coefficient-based scenario simulation")
+            summary_df, results_gdf = sim.run_with_causal_dag(data, verbose=True)
+        else:
+            print("  [PRIMARY] dag_coefficient requested but no DAG — falling back to physics")
+            summary_df, results_gdf = sim.run(verbose=True)
     else:
-        print("  [Mode 1 — PRIMARY] Physics-prior blending (no DAG)")
+        print(f"  [PRIMARY] Physics-prior blending (mode={scenario_mode})")
         summary_df, results_gdf = sim.run(verbose=True)
 
-    print(f"  Coefficient-based summary: {len(summary_df)} rows")
+    print(f"  Scenario summary: {len(summary_df)} rows  (mode={scenario_mode})")
+
+    # --- Conservation checks on scenario results ---------------------
+    try:
+        from sparc.interventions.physics_priors import ConservationChecker
+        import numpy as np
+        checker = ConservationChecker()
+        for scenario in config.get('scenarios', []):
+            var = scenario['variable']
+            for inc in scenario.get('increments', []):
+                direction = scenario.get('direction', 'increase')
+                delta_signed = -inc if direction == 'decrease' else inc
+                col_label = f"total_{var}_{'minus' if delta_signed < 0 else 'plus'}_{str(inc).replace('.', 'p')}"
+                if hasattr(results_gdf, 'columns') and col_label in results_gdf.columns:
+                    deltas = {var: np.full(len(data), delta_signed)}
+                    target_deltas = results_gdf[col_label].values
+                    checker.check(data, deltas, target_deltas=target_deltas, verbose=True)
+    except Exception as e:
+        print(f"  [CONSERVATION] Check skipped ({e})")
 
     # --- Mode 2: Monte-Carlo uncertainty propagation (optional) ------
     run_mc = config.get('pipeline', {}).get('run_mc_uncertainty', False)
@@ -334,6 +368,22 @@ def _run_scenarios(config, paths, project_path):
             print(f"  MC uncertainty propagation failed ({e})")
     else:
         print(f"\n  [Mode 2] MC uncertainty skipped (set run_mc_uncertainty: true, n_mc_draws: {n_mc} to enable)")
+
+    # --- Global Sensitivity Analysis (optional) ----------------------
+    run_sa = config.get('pipeline', {}).get('run_sensitivity_analysis', False)
+    sa_method = config.get('pipeline', {}).get('sensitivity_method', 'morris')
+    if run_sa:
+        try:
+            from sparc.evaluation.sensitivity import SensitivityAnalyzer
+            sa = SensitivityAnalyzer(config, sim)
+            sa_result = sa.run(data, method=sa_method, verbose=True)
+            sa_out = paths.output_dir / f"sensitivity_{sa_method}.csv"
+            sa_result['summary_df'].to_csv(sa_out, index=False)
+            print(f"  Sensitivity analysis saved: {sa_out}")
+        except Exception as e:
+            print(f"  Sensitivity analysis failed ({e})")
+    else:
+        print(f"\n  [SA] Sensitivity analysis skipped (set run_sensitivity_analysis: true to enable)")
 
     return summary_df, results_gdf
 

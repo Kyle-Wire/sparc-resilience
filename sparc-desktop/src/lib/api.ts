@@ -88,6 +88,13 @@ export const getResults = (stage: number, format: "json" | "geojson" = "json") =
 export const getPredictions = (stage: number) =>
   get<unknown>(`/results/${stage}/predictions?format=geojson`);
 
+export const getStagePlots = (stage: number) =>
+  get<{ plots: { name: string; filename: string; path: string }[] }>(`/results/${stage}/plots`);
+
+/** Build a full URL for a stage plot image. */
+export const stagePlotUrl = (stage: number, path: string) =>
+  `${BASE}/results/${stage}/plots/${encodeURIComponent(path)}`;
+
 // ------------------------------------------------------------------
 // Scenarios
 // ------------------------------------------------------------------

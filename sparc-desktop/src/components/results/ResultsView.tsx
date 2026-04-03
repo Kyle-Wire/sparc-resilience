@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { getResults, getPredictions } from "@/lib/api";
+import { getResults, getPredictions, getStagePlots, stagePlotUrl } from "@/lib/api";
 import SpatialMap, { type MapMode } from "@/components/map/SpatialMap";
 import {
   BarChart,
@@ -15,6 +15,7 @@ import {
 
 const STAGES = [
   { value: 0, label: "Stage 0 — Correlogram" },
+  { value: 1, label: "Stage 1 — GWEN" },
   { value: 2, label: "Stage 2 — Spatial CV" },
   { value: 3, label: "Stage 3 — Causal" },
   { value: 4, label: "Stage 4 — Scenarios" },
@@ -27,24 +28,29 @@ const MAP_MODES: { value: MapMode; label: string }[] = [
 ];
 
 export default function ResultsView() {
-  const [stage, setStage] = useState(2);
+  const [stage, setStage] = useState(0);
   const [data, setData] = useState<Record<string, unknown>[] | null>(null);
   const [geojson, setGeojson] = useState<any>(null);
+  const [plots, setPlots] = useState<{ name: string; filename: string; path: string }[]>([]);
+  const [plotIdx, setPlotIdx] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"map" | "table" | "chart">("map");
+  const [tab, setTab] = useState<"plots" | "map" | "table" | "chart">("plots");
   const [mapMode, setMapMode] = useState<MapMode>("scatter");
   const [colorField, setColorField] = useState<string>("");
 
   useEffect(() => {
     setData(null);
     setGeojson(null);
+    setPlots([]);
+    setPlotIdx(0);
     setError(null);
 
-    // Fetch tabular and geospatial results in parallel
+    // Fetch tabular results, geospatial results, and plot list in parallel
     Promise.allSettled([
       getResults(stage),
       getPredictions(stage),
-    ]).then(([tabRes, geoRes]) => {
+      getStagePlots(stage),
+    ]).then(([tabRes, geoRes, plotRes]) => {
       if (tabRes.status === "fulfilled") {
         const r = tabRes.value as any;
         if (r?.rows) setData(r.rows);
@@ -53,8 +59,12 @@ export default function ResultsView() {
         const g = geoRes.value as any;
         if (g?.type === "FeatureCollection") setGeojson(g);
       }
-      if (tabRes.status === "rejected" && geoRes.status === "rejected") {
-        setError(tabRes.reason?.message ?? "Failed to load results");
+      if (plotRes.status === "fulfilled") {
+        const p = plotRes.value as any;
+        if (p?.plots) setPlots(p.plots);
+      }
+      if (tabRes.status === "rejected" && geoRes.status === "rejected" && plotRes.status === "rejected") {
+        setError("No results available for this stage yet. Run the stage first.");
       }
     });
   }, [stage]);
@@ -118,7 +128,7 @@ export default function ResultsView() {
           </div>
         </div>
         <div className="flex gap-1">
-          {(["map", "table", "chart"] as const).map((t) => (
+          {(["plots", "map", "table", "chart"] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -126,7 +136,7 @@ export default function ResultsView() {
                 tab === t ? "bg-sparc-gray-900 text-white" : "border border-sparc-gray-300 hover:bg-sparc-gray-100"
               }`}
             >
-              {t}
+              {t === "plots" ? `Plots (${plots.length})` : t}
             </button>
           ))}
         </div>
@@ -149,6 +159,60 @@ export default function ResultsView() {
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
+        {tab === "plots" && (
+          <div className="flex h-full flex-col">
+            {plots.length === 0 ? (
+              <div className="flex flex-1 items-center justify-center">
+                <p className="text-sm text-sparc-gray-600">No plots available for this stage yet.</p>
+              </div>
+            ) : (
+              <>
+                {/* Navigation bar */}
+                <div className="flex items-center justify-between border-b border-sparc-gray-100 px-4 py-2">
+                  <button
+                    onClick={() => setPlotIdx((i) => Math.max(0, i - 1))}
+                    disabled={plotIdx === 0}
+                    className="rounded border border-sparc-gray-300 px-3 py-1 text-xs font-medium disabled:opacity-30 hover:bg-sparc-gray-100"
+                  >
+                    ← Prev
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={plotIdx}
+                      onChange={(e) => setPlotIdx(Number(e.target.value))}
+                      className="rounded border border-sparc-gray-200 px-2 py-1 text-xs"
+                    >
+                      {plots.map((p, i) => (
+                        <option key={p.path} value={i}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="text-[10px] text-sparc-gray-500">
+                      {plotIdx + 1} / {plots.length}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setPlotIdx((i) => Math.min(plots.length - 1, i + 1))}
+                    disabled={plotIdx >= plots.length - 1}
+                    className="rounded border border-sparc-gray-300 px-3 py-1 text-xs font-medium disabled:opacity-30 hover:bg-sparc-gray-100"
+                  >
+                    Next →
+                  </button>
+                </div>
+                {/* Plot image */}
+                <div className="flex flex-1 items-center justify-center overflow-auto bg-white p-4">
+                  <img
+                    src={stagePlotUrl(stage, plots[plotIdx].path)}
+                    alt={plots[plotIdx].name}
+                    className="max-h-full max-w-full object-contain"
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         {tab === "map" && (
           <div className="flex h-full flex-col">
             {/* Map controls */}

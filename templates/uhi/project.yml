@@ -103,6 +103,15 @@ pipeline:
   overwrite_outputs: false
   run_mc_uncertainty: true       # Run Monte-Carlo uncertainty propagation in Stage 4
   n_mc_draws: 50                 # Number of MC draws
+  # Scenario simulation mode —
+  #   auto (default): hybrid if DAG exists, else physics-only
+  #   hybrid: model-consensus direct + DAG indirect
+  #   dag_coefficient: MGWR+DAG coefficient based
+  #   model_reprediction: full base-model re-prediction
+  scenario_mode: "auto"
+  # Global sensitivity analysis (Morris or Sobol)
+  # run_sensitivity_analysis: true
+  # sensitivity_method: "morris"   # "morris" or "sobol"
 
 flags:
   use_gwen_selection: true

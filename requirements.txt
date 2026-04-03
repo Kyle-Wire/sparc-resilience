@@ -39,5 +39,8 @@ pyyaml>=6.0
 jsonschema>=4.19
 pyarrow>=14.0
 
+# Sensitivity analysis (optional — Morris/Sobol)
+SALib>=1.4
+
 # UI
 streamlit>=1.30

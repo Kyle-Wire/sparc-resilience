@@ -2260,6 +2260,419 @@ class ScenarioSimulator:
         return summary_df, results_gdf
 
     # ------------------------------------------------------------------
+    # Hybrid: Model re-prediction (direct) + DAG (indirect)
+    # ------------------------------------------------------------------
+
+    def run_with_hybrid_reprediction(
+        self,
+        data: pd.DataFrame,
+        verbose: bool = True,
+    ) -> Tuple[pd.DataFrame, Optional[Any]]:
+        """Execute scenarios using a **hybrid** strategy.
+
+        **Direct effect** — base-model consensus delta.  Each base model
+        (OLS, GWR, GWRF, GGPGAM) predicts on the modified feature matrix
+        and the per-model deltas are combined using meta-ensemble weights.
+        This captures *non-linear* learned responses the coefficient
+        approach may miss.
+
+        **Indirect effects** — DAG structural-coefficient propagation
+        through mediator paths.  Intermediate edges use global structural
+        coefficients (OLS/DML backdoor-adjusted); the final edge to the
+        outcome uses per-point MGWR local coefficients for spatial
+        heterogeneity.
+
+        This avoids double-counting because ``_predict_consensus_delta``
+        only modifies the *intervened* variable in the feature matrix
+        (mediator columns stay at baseline), while
+        ``_compute_indirect_effects`` explicitly propagates through
+        mediator paths of length > 2.
+
+        Returns
+        -------
+        summary_df : pd.DataFrame
+        results_gdf : GeoDataFrame | DataFrame
+        """
+        from sparc.causal.counterfactual_engine import CounterfactualEngine
+
+        # ── Load DAG ──────────────────────────────────────────────────
+        engine = None
+        dag_file = self.config.get('causal', {}).get('dag_file')
+        if dag_file and Path(dag_file).exists():
+            try:
+                engine = CounterfactualEngine(self.config)
+                engine.load_dag(dag_file)
+                engine.fit(data)
+            except Exception as e:
+                warnings.warn(f"DAG loading failed ({e}); indirect effects unavailable.")
+                engine = None
+        target_var = engine.roles['outcomes'][0] if engine else self.target_col
+
+        if verbose:
+            if engine is not None:
+                n_edges = len(engine._structural_coeffs)
+                print(f"\n  Hybrid mode: DAG loaded ({n_edges} structural coefficients)")
+                for (p, c), v in sorted(engine._structural_coeffs.items()):
+                    print(f"      {p:30s} -> {c:15s}  coeff={v:+.6f}")
+            else:
+                print("\n  Hybrid mode: no DAG — indirect effects will be zero")
+
+        # ── Baseline predictions ──────────────────────────────────────
+        if verbose:
+            print("\nComputing baseline predictions (all models)...")
+        baseline_pred, ols_bl, gwr_bl, gwrf_bl, ggpgam_bl = self._predict_baseline(
+            data, verbose=verbose,
+        )
+        baseline_base_preds: Dict[str, np.ndarray] = {
+            "ols": ols_bl, "gwr": gwr_bl, "gwrf": gwrf_bl, "ggpgam": ggpgam_bl,
+        }
+
+        results_df = data.copy()
+        results_df["pred_baseline"] = baseline_pred
+
+        if verbose:
+            self._print_priors_table()
+            wstr = ", ".join(f"{k}={v:.3f}" for k, v in self._base_model_weights.items())
+            print(f"\n   Consensus weights: {wstr}")
+            print(f"\n{'='*70}")
+            print("RUNNING SCENARIOS — Hybrid (Model Consensus Direct + DAG Indirect)")
+            print(f"{'='*70}")
+
+        summary_rows: List[dict] = []
+
+        # ── Single-variable scenarios ─────────────────────────────────
+        for scenario in self.scenarios:
+            var_name = scenario["variable"]
+            direction = scenario.get("direction", "increase")
+            increments = scenario.get("increments", [])
+            min_val = scenario.get("min_val", None)
+            max_val = scenario.get("max_val", None)
+            unit = scenario.get("unit", "")
+
+            if verbose:
+                print(f"\n{'─'*50}")
+                print(f"Variable: {var_name}  (direction={direction})")
+                print(f"{'─'*50}")
+
+            for increment in increments:
+                delta_signed = -increment if direction == "decrease" else increment
+                label = f"{var_name}_{'minus' if delta_signed < 0 else 'plus'}_{str(increment).replace('.', 'p')}"
+
+                # 1. Modified values with physical bounds
+                original_vals = data[var_name].values.copy()
+                modified_vals = original_vals + delta_signed
+                if min_val is not None:
+                    modified_vals = np.maximum(modified_vals, min_val)
+                if max_val is not None:
+                    modified_vals = np.minimum(modified_vals, max_val)
+                actual_change = modified_vals - original_vals
+
+                # 2. Diminishing returns
+                threshold = self._get_diminishing_threshold(var_name)
+                effective_change = self._diminishing_return(actual_change, threshold)
+
+                # 3. DIRECT: base-model consensus delta (nonlinear)
+                direct_delta = self._predict_consensus_delta(
+                    data, var_name, modified_vals,
+                    baseline_base_preds=baseline_base_preds,
+                )
+                change_dir = 1.0 if np.mean(actual_change) >= 0 else -1.0
+                direct_delta = self._apply_physics_guardrails(
+                    var_name, direct_delta, change_direction=change_dir,
+                )
+
+                # 4. INDIRECT: DAG mediator pathways + MGWR final edge
+                indirect_delta = np.zeros(len(data))
+                if engine is not None:
+                    indirect_delta = self._compute_indirect_effects(
+                        var_name, effective_change, engine, target_var,
+                    )
+
+                # 5. Total = direct + indirect, magnitude-capped
+                total_delta = direct_delta + indirect_delta
+                _max_mag = float(self.config.get('caps', {}).get('max_delta_magnitude', 3.0))
+                total_delta = np.clip(total_delta, -_max_mag, _max_mag)
+
+                # 6. Extrapolation guard
+                confidence_labels = None
+                if EXTRAPOLATION_GUARD_AVAILABLE:
+                    try:
+                        X_train = data[self.features].values
+                        X_scenario = X_train.copy()
+                        var_idx = self.features.index(var_name)
+                        X_scenario[:, var_idx] = modified_vals
+                        extrap_scores = compute_extrapolation_score(X_scenario, X_train)
+                        confidence_labels = classify_prediction_confidence(
+                            extrap_scores, actual_change, np.std(baseline_pred),
+                        )
+                        results_df[f"confidence_{label}"] = confidence_labels
+                    except Exception as e:
+                        if verbose:
+                            print(f"      [GUARD] Extrapolation check failed: {e}")
+
+                # 7. DAG-only global delta for comparison
+                dag_global_delta = float('nan')
+                if engine is not None:
+                    try:
+                        dag_result = engine.intervene(var_name, delta_signed, data=data)
+                        dag_global_delta = dag_result['predicted_delta_response'].iloc[0]
+                    except Exception:
+                        pass
+
+                # Store per-point results
+                results_df[f"direct_{label}"] = direct_delta
+                results_df[f"indirect_{label}"] = indirect_delta
+                results_df[f"total_{label}"] = total_delta
+                results_df[f"pred_{label}"] = baseline_pred + total_delta
+
+                # Map
+                map_path = self._save_scenario_map(
+                    data, total_delta, f"HYBRID_{label}",
+                    title=f"{var_name} {direction} {increment}{unit}  |  "
+                          f"mean Δ = {np.mean(total_delta):+.4f} (hybrid)",
+                )
+                if map_path and verbose:
+                    print(f"    Map saved: {map_path.name}")
+
+                # Summary stats
+                direct_mean = float(np.mean(direct_delta))
+                indirect_mean = float(np.mean(indirect_delta))
+                total_mean = float(np.mean(total_delta))
+                total_std = float(np.std(total_delta))
+
+                if verbose:
+                    n_spec = int(np.sum(confidence_labels == "SPECULATIVE")) if confidence_labels is not None else 0
+                    print(f"\n  {label}:")
+                    print(f"    Raw Δ:       mean={np.mean(actual_change):+.2f}{unit}  "
+                          f"Eff Δ: mean={np.mean(effective_change):+.2f}")
+                    print(f"    Direct  (model consensus): {direct_mean:+.4f}")
+                    print(f"    Indirect (DAG mediators):   {indirect_mean:+.4f}")
+                    print(f"    Total:    {total_mean:+.4f} ± {total_std:.4f}")
+                    print(f"    DAG-only: {dag_global_delta:+.4f}  (global, for comparison)")
+                    if n_spec > 0:
+                        print(f"    [GUARD] {n_spec} SPECULATIVE cells")
+
+                # Per-area summaries
+                for area_id, area_name in self.area_names.items():
+                    if self.area_column not in data.columns:
+                        continue
+                    mask = data[self.area_column] == area_id
+                    if mask.sum() == 0:
+                        continue
+                    n_cells = int(mask.sum())
+                    a_total = total_delta[mask.values]
+                    a_direct = direct_delta[mask.values]
+                    a_indirect = indirect_delta[mask.values]
+                    a_change = actual_change[mask.values]
+
+                    if verbose:
+                        print(f"    {area_name:20s}  total={a_total.mean():+.4f}±{a_total.std():.4f}"
+                              f"  (direct={a_direct.mean():+.4f}, indirect={a_indirect.mean():+.4f})"
+                              f"  ΔVar={a_change.mean():+.2f}{unit}  (n={n_cells})")
+
+                    summary_rows.append({
+                        "Variable": var_name,
+                        "Scenario": label,
+                        "Increment": increment,
+                        "Direction": direction,
+                        "Area": area_name,
+                        "N_Cells": n_cells,
+                        "Avg_Var_Change": float(a_change.mean()),
+                        "Direct_Delta_Mean": float(a_direct.mean()),
+                        "Indirect_Delta_Mean": float(a_indirect.mean()),
+                        "Total_Delta_Mean": float(a_total.mean()),
+                        "Total_Delta_Std": float(a_total.std()),
+                        "DAG_Global_Delta": dag_global_delta,
+                        "Direct_Method": "model_consensus",
+                        "Indirect_Method": "dag_mgwr" if engine else "none",
+                        "Method": "hybrid",
+                    })
+
+                if not self.area_names:
+                    summary_rows.append({
+                        "Variable": var_name,
+                        "Scenario": label,
+                        "Increment": increment,
+                        "Direction": direction,
+                        "Area": "All",
+                        "N_Cells": len(data),
+                        "Avg_Var_Change": float(np.mean(actual_change)),
+                        "Direct_Delta_Mean": direct_mean,
+                        "Indirect_Delta_Mean": indirect_mean,
+                        "Total_Delta_Mean": total_mean,
+                        "Total_Delta_Std": total_std,
+                        "DAG_Global_Delta": dag_global_delta,
+                        "Direct_Method": "model_consensus",
+                        "Indirect_Method": "dag_mgwr" if engine else "none",
+                        "Method": "hybrid",
+                    })
+
+        # ── Joint scenarios (hybrid mode) ─────────────────────────────
+        joint_scenarios = self.config.get('joint_scenarios', [])
+        if joint_scenarios and verbose:
+            print(f"\n{'='*70}")
+            print(f"JOINT SCENARIOS — Hybrid ({len(joint_scenarios)} defined)")
+            print(f"{'='*70}")
+
+        for joint in joint_scenarios:
+            joint_name = joint.get('name', 'joint_scenario')
+            interventions = joint.get('interventions', [])
+
+            if verbose:
+                print(f"\n{'─'*50}")
+                print(f"Joint Scenario: {joint_name}")
+                for iv in interventions:
+                    print(f"  {iv['variable']} {iv.get('direction', 'increase')} {iv['increment']}")
+                print(f"{'─'*50}")
+
+            # Build jointly-modified DataFrame
+            modified_data = data.copy()
+            actual_changes: Dict[str, np.ndarray] = {}
+            for iv in interventions:
+                vn = iv['variable']
+                inc = iv['increment']
+                d = iv.get('direction', 'increase')
+                delta = -inc if d == 'decrease' else inc
+                orig = data[vn].values.copy()
+                mod = orig + delta
+                single_sc = next((s for s in self.scenarios if s['variable'] == vn), {})
+                bmin = single_sc.get('min_val')
+                bmax = single_sc.get('max_val')
+                if bmin is not None:
+                    mod = np.maximum(mod, bmin)
+                if bmax is not None:
+                    mod = np.minimum(mod, bmax)
+                modified_data[vn] = mod
+                actual_changes[vn] = mod - orig
+
+            # Canopy + Impervious <= 100 constraint
+            if ('Pct_Canopy' in modified_data.columns
+                    and 'Pct_Impervious' in modified_data.columns):
+                total_cover = modified_data['Pct_Canopy'].values + modified_data['Pct_Impervious'].values
+                excess = np.maximum(total_cover - 100.0, 0.0)
+                if np.any(excess > 0):
+                    imp_vals = modified_data['Pct_Impervious'].values
+                    reduction = np.minimum(excess, imp_vals)
+                    modified_data['Pct_Impervious'] = imp_vals - reduction
+                    remaining = excess - reduction
+                    if np.any(remaining > 0):
+                        modified_data['Pct_Canopy'] = modified_data['Pct_Canopy'].values - remaining
+                    if verbose:
+                        n_clipped = int(np.sum(excess > 0))
+                        print(f"  Combined constraint: clipped {n_clipped} cells")
+                    for vn in ('Pct_Canopy', 'Pct_Impervious'):
+                        if vn in actual_changes:
+                            actual_changes[vn] = modified_data[vn].values - data[vn].values
+
+            # Direct: joint consensus delta
+            joint_direct = self._predict_joint_consensus_delta(
+                data, modified_data, baseline_base_preds=baseline_base_preds,
+            )
+            dominant_var = max(actual_changes, key=lambda v: abs(actual_changes[v].mean()))
+            dominant_dir = 1.0 if np.mean(actual_changes[dominant_var]) >= 0 else -1.0
+            joint_direct = self._apply_physics_guardrails(
+                dominant_var, joint_direct, change_direction=dominant_dir,
+            )
+
+            # Indirect: sum DAG indirect for each intervened variable
+            joint_indirect = np.zeros(len(data))
+            if engine is not None:
+                co_intervened = set(actual_changes.keys())
+                for vn, ac in actual_changes.items():
+                    threshold = self._get_diminishing_threshold(vn)
+                    eff = self._diminishing_return(ac, threshold)
+                    skip = co_intervened - {vn}
+                    joint_indirect += self._compute_indirect_effects(
+                        vn, eff, engine, target_var, skip_variables=skip,
+                    )
+
+            joint_total = joint_direct + joint_indirect
+            _max_mag = float(self.config.get('caps', {}).get('max_delta_magnitude', 3.0))
+            joint_total = np.clip(joint_total, -_max_mag, _max_mag)
+
+            label = joint_name.replace(' ', '_')
+            results_df[f"direct_{label}"] = joint_direct
+            results_df[f"indirect_{label}"] = joint_indirect
+            results_df[f"total_{label}"] = joint_total
+            results_df[f"pred_{label}"] = baseline_pred + joint_total
+
+            joint_map = self._save_scenario_map(
+                data, joint_total, f"HYBRID_JOINT_{label}",
+                title=f"Joint: {joint_name}  |  mean Δ = {np.mean(joint_total):+.4f} (hybrid)",
+            )
+            if joint_map and verbose:
+                print(f"    Map saved: {joint_map.name}")
+
+            if verbose:
+                print(f"\n  {joint_name}:")
+                for vn, ac in actual_changes.items():
+                    print(f"    {vn}: mean Δ = {ac.mean():+.2f}")
+                print(f"    Direct  (consensus): {float(np.mean(joint_direct)):+.4f}")
+                print(f"    Indirect (DAG):      {float(np.mean(joint_indirect)):+.4f}")
+                print(f"    Total:               {float(np.mean(joint_total)):+.4f}")
+
+            for area_id, area_name in self.area_names.items():
+                if self.area_column not in data.columns:
+                    continue
+                mask = data[self.area_column] == area_id
+                if mask.sum() == 0:
+                    continue
+                a_delta = joint_total[mask.values]
+                summary_rows.append({
+                    "Variable": "JOINT:" + label,
+                    "Scenario": label,
+                    "Increment": 0,
+                    "Direction": "joint",
+                    "Area": area_name,
+                    "N_Cells": int(mask.sum()),
+                    "Avg_Var_Change": 0.0,
+                    "Direct_Delta_Mean": float(joint_direct[mask.values].mean()),
+                    "Indirect_Delta_Mean": float(joint_indirect[mask.values].mean()),
+                    "Total_Delta_Mean": float(a_delta.mean()),
+                    "Total_Delta_Std": float(a_delta.std()),
+                    "DAG_Global_Delta": float('nan'),
+                    "Direct_Method": "model_consensus_joint",
+                    "Indirect_Method": "dag_mgwr" if engine else "none",
+                    "Method": "hybrid_joint",
+                })
+
+            if not self.area_names:
+                summary_rows.append({
+                    "Variable": "JOINT:" + label,
+                    "Scenario": label,
+                    "Increment": 0,
+                    "Direction": "joint",
+                    "Area": "All",
+                    "N_Cells": len(data),
+                    "Avg_Var_Change": 0.0,
+                    "Direct_Delta_Mean": float(np.mean(joint_direct)),
+                    "Indirect_Delta_Mean": float(np.mean(joint_indirect)),
+                    "Total_Delta_Mean": float(np.mean(joint_total)),
+                    "Total_Delta_Std": float(np.std(joint_total)),
+                    "DAG_Global_Delta": float('nan'),
+                    "Direct_Method": "model_consensus_joint",
+                    "Indirect_Method": "dag_mgwr" if engine else "none",
+                    "Method": "hybrid_joint",
+                })
+
+        # ── Save results ──────────────────────────────────────────────
+        summary_df = pd.DataFrame(summary_rows)
+        summary_path = self.output_dir / "scenario_summary_hybrid.csv"
+        summary_df.to_csv(summary_path, index=False)
+        if verbose:
+            print(f"\n{'='*70}")
+            print(f"Hybrid scenario summary saved: {summary_path}")
+
+        results_gdf = self._to_geodataframe(results_df, data)
+        if results_gdf is not None:
+            gpkg = self.output_dir / "scenario_results_hybrid.gpkg"
+            results_gdf.to_file(gpkg, driver="GPKG")
+            if verbose:
+                print(f"GeoPackage saved: {gpkg}")
+
+        return summary_df, results_gdf
+
+    # ------------------------------------------------------------------
     # Scenario Interpretation Maps
     # ------------------------------------------------------------------
 

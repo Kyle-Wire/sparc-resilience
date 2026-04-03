@@ -34,6 +34,31 @@ class _EventCapture(io.TextIOBase):
     _METRIC_RE = re.compile(r"(r2|rmse|mae|mape)\s*[=:]\s*([\d.]+)", re.IGNORECASE)
     _PCT_RE = re.compile(r"(\d{1,3})%")
 
+    # Phase-based progress markers (pattern → label displayed in the UI)
+    _PHASE_RE: list[tuple[re.Pattern, str]] = [
+        # Stage 0 — Correlogram
+        (re.compile(r"Correlogram Analysis", re.IGNORECASE), "Correlogram analysis"),
+        (re.compile(r"Analyzing\s+(\S+)"), "Analyzing variable"),
+        (re.compile(r"Pipeline Configuration", re.IGNORECASE), "Pipeline configuration"),
+        # Stage 1 — GWEN
+        (re.compile(r"GWEN Variable Selection", re.IGNORECASE), "GWEN variable selection"),
+        (re.compile(r"GWEN SELECTION RATIONALE", re.IGNORECASE), "GWEN results"),
+        # Stage 2 — Spatial CV
+        (re.compile(r"Loading and Preprocessing", re.IGNORECASE), "Loading data"),
+        (re.compile(r"Loading Spatial Folds", re.IGNORECASE), "Loading spatial folds"),
+        (re.compile(r"Training\s+(\S+)\s+across all folds", re.IGNORECASE), "Training model"),
+        (re.compile(r"Training\s+(\S+)\s+on\s+\d+\s+samples", re.IGNORECASE), "Training model"),
+        (re.compile(r"completed.*folds successful", re.IGNORECASE), "Model complete"),
+        (re.compile(r"Generating OOF predictions", re.IGNORECASE), "OOF predictions"),
+        (re.compile(r"Spatial autocorrelation analysis", re.IGNORECASE), "Spatial autocorrelation"),
+        (re.compile(r"Deep Kriging CV", re.IGNORECASE), "Deep Kriging CV"),
+        (re.compile(r"Stage 2 Complete", re.IGNORECASE), "Stage 2 complete"),
+        # Stage 3 — Causal
+        (re.compile(r"Causal Validation", re.IGNORECASE), "Causal validation"),
+        # Stage 4 — Scenarios
+        (re.compile(r"Scenario Simulation", re.IGNORECASE), "Scenario simulation"),
+    ]
+
     def __init__(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
         self._queue = queue
         self._loop = loop
@@ -72,6 +97,13 @@ class _EventCapture(io.TextIOBase):
         m = self._PCT_RE.search(line)
         if m:
             event["progress_pct"] = int(m.group(1))
+
+        # Check for phase markers (used by the frontend progress bar)
+        for pattern, label in self._PHASE_RE:
+            pm = pattern.search(line)
+            if pm:
+                event["phase"] = label
+                break
 
         asyncio.run_coroutine_threadsafe(self._queue.put(event), self._loop)
 

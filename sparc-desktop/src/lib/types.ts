@@ -66,6 +66,8 @@ export interface PipelineEvent {
   metric?: string;
   value?: number;
   progress_pct?: number;
+  /** Human-readable phase label emitted by the server for progress display. */
+  phase?: string;
 }
 
 export interface DagNode {

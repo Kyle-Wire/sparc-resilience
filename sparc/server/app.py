@@ -22,7 +22,7 @@ from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 
 from sparc.server.state import ServerState
 from sparc.server.stream import stream_stage
@@ -436,6 +436,65 @@ async def get_predictions(stage: int, format: str = Query("geojson", regex="^(js
     return _to_json(gdf)
 
 
+@app.get("/results/{stage}/plots")
+async def list_stage_plots(stage: int):
+    """List available plot images for a completed pipeline stage."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+
+    stage_map = {0: paths.stage1_dir, 1: paths.stage1_dir, 2: paths.stage2_dir, 3: paths.stage3_dir, 4: paths.stage4_dir}
+    stage_dir = stage_map.get(stage)
+    if stage_dir is None or not stage_dir.exists():
+        return {"plots": []}
+
+    # Collect PNG/SVG files recursively
+    plots = []
+    for ext in ("*.png", "*.svg"):
+        for f in sorted(stage_dir.rglob(ext)):
+            plots.append({
+                "name": f.stem,
+                "filename": f.name,
+                "path": str(f.relative_to(stage_dir)),
+            })
+    return {"plots": plots}
+
+
+@app.get("/results/{stage}/plots/{file_path:path}")
+async def get_stage_plot(stage: int, file_path: str):
+    """Serve a specific plot image file from a stage output directory."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+
+    stage_map = {0: paths.stage1_dir, 1: paths.stage1_dir, 2: paths.stage2_dir, 3: paths.stage3_dir, 4: paths.stage4_dir}
+    stage_dir = stage_map.get(stage)
+    if stage_dir is None:
+        raise HTTPException(404, "Invalid stage")
+
+    full_path = (stage_dir / file_path).resolve()
+    # Security: ensure the resolved path is within the stage directory
+    if not str(full_path).startswith(str(stage_dir.resolve())):
+        raise HTTPException(403, "Access denied")
+    if not full_path.exists() or not full_path.is_file():
+        raise HTTPException(404, f"Plot not found: {file_path}")
+
+    media = "image/png" if full_path.suffix == ".png" else "image/svg+xml"
+    return FileResponse(full_path, media_type=media)
+
+
 # ------------------------------------------------------------------
 # Scenario endpoints
 # ------------------------------------------------------------------
@@ -463,10 +522,43 @@ async def run_scenarios():
     data = pd.read_csv(csv_path)
 
     dag_file = config.get("causal", {}).get("dag_file")
-    if dag_file and Path(dag_file).exists():
-        summary_df, results_gdf = sim.run_with_causal_dag(data, verbose=True)
+    has_dag = dag_file and Path(dag_file).exists()
+    scenario_mode = config.get("pipeline", {}).get("scenario_mode", "auto")
+
+    if scenario_mode == "auto":
+        scenario_mode = "hybrid" if has_dag else "physics"
+
+    if scenario_mode == "hybrid":
+        summary_df, results_gdf = sim.run_with_hybrid_reprediction(data, verbose=True)
+    elif scenario_mode == "model_reprediction":
+        summary_df, results_gdf = sim.run_with_model_reprediction(data, verbose=True)
+    elif scenario_mode == "dag_coefficient":
+        if has_dag:
+            summary_df, results_gdf = sim.run_with_causal_dag(data, verbose=True)
+        else:
+            summary_df, results_gdf = sim.run(verbose=True)
     else:
         summary_df, results_gdf = sim.run(verbose=True)
+
+    # --- Conservation checks on scenario results ---------------------
+    conservation_violations = []
+    try:
+        import numpy as np
+        from sparc.interventions.physics_priors import ConservationChecker
+        checker = ConservationChecker()
+        for scenario in scenarios:
+            var = scenario['variable']
+            for inc in scenario.get('increments', []):
+                direction = scenario.get('direction', 'increase')
+                delta_signed = -inc if direction == 'decrease' else inc
+                col_label = f"total_{var}_{'minus' if delta_signed < 0 else 'plus'}_{str(inc).replace('.', 'p')}"
+                if hasattr(results_gdf, 'columns') and col_label in results_gdf.columns:
+                    deltas = {var: np.full(len(data), delta_signed)}
+                    target_deltas = results_gdf[col_label].values
+                    violations = checker.check(data, deltas, target_deltas=target_deltas, verbose=True)
+                    conservation_violations.extend(violations)
+    except Exception as e:
+        print(f"  [CONSERVATION] Check skipped ({e})")
 
     state.store_result(4, {"summary": summary_df, "spatial": results_gdf})
 
@@ -474,6 +566,8 @@ async def run_scenarios():
         "status": "complete",
         "n_scenarios": len(scenarios),
         "summary_rows": len(summary_df),
+        "scenario_mode": scenario_mode,
+        "conservation_violations": len(conservation_violations),
     }
 
 

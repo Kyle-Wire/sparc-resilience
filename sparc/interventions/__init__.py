@@ -22,7 +22,9 @@ from .physics_priors import (
     PhysicsPriors,
     ScaleHarmonizer,
     CoefficientCalibrator,
-    PriorSensitivityAnalyzer
+    PriorSensitivityAnalyzer,
+    ConservationChecker,
+    MultiSourcePriorAggregator,
 )
 
 from .config.intervention_config import InterventionConfig
@@ -43,6 +45,8 @@ __all__ = [
     'ScaleHarmonizer',
     'CoefficientCalibrator',
     'PriorSensitivityAnalyzer',
+    'ConservationChecker',
+    'MultiSourcePriorAggregator',
     'InterventionConfig',
     'OOFExtractor',
     'OOFExtractionConfig',

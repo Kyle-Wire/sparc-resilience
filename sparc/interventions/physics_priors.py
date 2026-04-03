@@ -878,6 +878,226 @@ class PriorSensitivityAnalyzer:
         print("="*80 + "\n")
 
 
+# ======================================================================
+# Conservation Checker
+# ======================================================================
+
+class ConservationChecker:
+    """Post-hoc check that scenario deltas obey physical conservation rules.
+
+    Rules checked:
+      1. **Area balance** — Pct_Canopy + Pct_Impervious cannot exceed 100.
+      2. **Energy balance** — Albedo increase must not *increase* temperature.
+      3. **Sign consistency** — Each variable's delta must have the
+         physically expected sign (e.g., more canopy → cooler).
+
+    Usage::
+
+        checker = ConservationChecker(physics_priors)
+        violations = checker.check(scenario_results_df, deltas_dict)
+    """
+
+    def __init__(self, priors: Optional["PhysicsPriors"] = None):
+        self.priors = priors or PhysicsPriors()
+        # Expected sign of temperature delta per unit increase in variable
+        self._expected_signs: Dict[str, float] = {}
+        for var, coeff in self.priors.coefficients.items():
+            self._expected_signs[var] = 1.0 if coeff.coefficient > 0 else -1.0
+
+    def check(
+        self,
+        data: "pd.DataFrame",
+        deltas: Dict[str, "np.ndarray"],
+        target_deltas: Optional["np.ndarray"] = None,
+        verbose: bool = True,
+    ) -> list:
+        """Run all conservation checks.
+
+        Parameters
+        ----------
+        data : DataFrame
+            Original baseline data (before scenarios).
+        deltas : dict
+            ``{variable_name: np.ndarray}`` of per-cell variable changes.
+        target_deltas : np.ndarray, optional
+            Per-cell predicted change in target variable.
+        verbose : bool
+            Print violations.
+
+        Returns
+        -------
+        list of dicts
+            Each dict: ``rule``, ``variable``, ``n_violations``,
+            ``fraction``, ``description``.
+        """
+        import numpy as np
+        violations = []
+
+        # 1. Area balance
+        if 'Pct_Canopy' in data.columns and 'Pct_Impervious' in data.columns:
+            canopy = data['Pct_Canopy'].values + (deltas.get('Pct_Canopy', 0) if isinstance(deltas.get('Pct_Canopy'), type(data['Pct_Canopy'].values)) else deltas.get('Pct_Canopy', 0))
+            imp = data['Pct_Impervious'].values + (deltas.get('Pct_Impervious', 0) if isinstance(deltas.get('Pct_Impervious'), type(data['Pct_Impervious'].values)) else deltas.get('Pct_Impervious', 0))
+            total = canopy + imp
+            bad = total > 100.0 + 1e-6
+            if hasattr(bad, 'any') and bad.any():
+                violations.append({
+                    'rule': 'area_balance',
+                    'variable': 'Canopy+Impervious',
+                    'n_violations': int(bad.sum()),
+                    'fraction': float(bad.mean()),
+                    'description': f'{int(bad.sum())} cells exceed 100% land cover',
+                })
+
+        # 2. Sign consistency
+        if target_deltas is not None:
+            import numpy as np
+            for var, delta_arr in deltas.items():
+                if var not in self._expected_signs:
+                    continue
+                expected = self._expected_signs[var]
+                mean_var_change = float(np.mean(delta_arr))
+                mean_target_change = float(np.mean(target_deltas))
+                if mean_var_change == 0:
+                    continue
+                actual_sign = np.sign(mean_target_change / mean_var_change)
+                if actual_sign != expected and not np.isnan(actual_sign):
+                    violations.append({
+                        'rule': 'sign_consistency',
+                        'variable': var,
+                        'n_violations': 1,
+                        'fraction': 1.0,
+                        'description': (
+                            f'Expected sign={expected:+.0f} but got {actual_sign:+.0f} '
+                            f'(mean Δvar={mean_var_change:+.3f}, mean Δtarget={mean_target_change:+.4f})'
+                        ),
+                    })
+
+        # 3. Energy balance (albedo-specific)
+        if 'Albedo' in deltas and target_deltas is not None:
+            import numpy as np
+            alb_delta = deltas['Albedo']
+            mask_up = alb_delta > 0
+            if hasattr(mask_up, 'any') and mask_up.any():
+                bad = target_deltas[mask_up] > 0
+                if hasattr(bad, 'any') and bad.any():
+                    violations.append({
+                        'rule': 'energy_balance',
+                        'variable': 'Albedo',
+                        'n_violations': int(bad.sum()),
+                        'fraction': float(bad.sum()) / float(mask_up.sum()),
+                        'description': (
+                            f'{int(bad.sum())}/{int(mask_up.sum())} cells with '
+                            f'albedo increase have temperature increase'
+                        ),
+                    })
+
+        if verbose and violations:
+            print("\n  [CONSERVATION] Violations detected:")
+            for v in violations:
+                print(f"    {v['rule']:20s} | {v['variable']:20s} | {v['description']}")
+        elif verbose:
+            print("\n  [CONSERVATION] All checks passed.")
+
+        return violations
+
+
+# ======================================================================
+# Multi-Source Prior Aggregator
+# ======================================================================
+
+class MultiSourcePriorAggregator:
+    """Combine physics coefficients from multiple literature sources.
+
+    Each source provides a coefficient ± uncertainty for a variable.
+    The aggregator produces a consensus via inverse-variance weighting (IVW).
+
+    Usage::
+
+        agg = MultiSourcePriorAggregator()
+        agg.add_source('Ziter2019', 'Pct_Canopy', coeff=-0.30, uncertainty=0.15)
+        agg.add_source('Wong2021',  'Pct_Canopy', coeff=-0.40, uncertainty=0.20)
+        consensus = agg.aggregate()  # {var: PhysicsCoefficient}
+    """
+
+    def __init__(self, shrinkage: float = 0.0):
+        self.shrinkage = max(0.0, min(1.0, shrinkage))
+        self._sources: list = []
+
+    def add_source(
+        self,
+        source_name: str,
+        variable: str,
+        coeff: float,
+        uncertainty: float = 0.2,
+        units: str = "",
+        source_scale: str = "100m-1km",
+        confidence: str = "medium",
+    ):
+        """Register a single coefficient from a literature source."""
+        self._sources.append({
+            'source': source_name,
+            'variable': variable,
+            'coeff': coeff,
+            'uncertainty': uncertainty,
+            'units': units,
+            'source_scale': source_scale,
+            'confidence': confidence,
+        })
+
+    def aggregate(self) -> Dict[str, PhysicsCoefficient]:
+        """Inverse-variance-weighted aggregation per variable."""
+        import numpy as np
+
+        by_var: Dict[str, list] = {}
+        for s in self._sources:
+            by_var.setdefault(s['variable'], []).append(s)
+
+        consensus: Dict[str, PhysicsCoefficient] = {}
+        for var, entries in by_var.items():
+            coeffs = np.array([e['coeff'] for e in entries])
+            uncerts = np.array([max(abs(e['uncertainty']), 1e-8) for e in entries])
+
+            sigmas = np.array([
+                max(abs(c * u), abs(u), 1e-8) for c, u in zip(coeffs, uncerts)
+            ])
+            ivw = 1.0 / sigmas ** 2
+            ivw_norm = ivw / ivw.sum()
+
+            eq_weight = np.ones(len(coeffs)) / len(coeffs)
+            w = (1 - self.shrinkage) * ivw_norm + self.shrinkage * eq_weight
+
+            agg_coeff = float(np.dot(w, coeffs))
+            agg_uncert = float(np.max(uncerts))
+
+            conf_rank = {'high': 3, 'medium': 2, 'low': 1}
+            best = max(entries, key=lambda e: conf_rank.get(e['confidence'], 0))
+
+            consensus[var] = PhysicsCoefficient(
+                variable=var,
+                coefficient=agg_coeff,
+                units=best['units'],
+                uncertainty=agg_uncert,
+                source_scale=best['source_scale'],
+                literature_source=f"IVW({len(entries)} sources)",
+                confidence=best['confidence'],
+            )
+
+        return consensus
+
+    def print_summary(self):
+        """Print aggregation details."""
+        consensus = self.aggregate()
+        print("\n" + "=" * 70)
+        print("MULTI-SOURCE PRIOR AGGREGATION")
+        print("=" * 70)
+        for var, pc in sorted(consensus.items()):
+            n = sum(1 for s in self._sources if s['variable'] == var)
+            lo, hi = pc.get_range()
+            print(f"  {var:25s}  coeff={pc.coefficient:+.4f}  [{lo:+.4f}, {hi:+.4f}]  "
+                  f"({n} sources, conf={pc.confidence})")
+        print("=" * 70)
+
+
 # Example usage and testing
 if __name__ == "__main__":
     print("\n" + "="*80)

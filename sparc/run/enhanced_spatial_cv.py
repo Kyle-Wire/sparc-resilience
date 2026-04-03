@@ -969,6 +969,20 @@ class EnhancedSpatialCV:
                     pcorr = _evaluator.calculate_pattern_correlation(y, oof_predictions[:, model_idx])
                     aratio = _evaluator.calculate_amplitude_ratio(y, oof_predictions[:, model_idx])
                     msg += f", nRMSE = {nrmse:.4f}, PatCorr = {pcorr:.4f}, AmpRatio = {aratio:.4f}"
+                    # Extreme-value / tail metrics
+                    ext = _evaluator.calculate_extreme_metrics(y, oof_predictions[:, model_idx])
+                    msg += (f"\n        Tail-lo RMSE={ext['tail_low_rmse']:.4f}  "
+                            f"Tail-hi RMSE={ext['tail_high_rmse']:.4f}  "
+                            f"Extreme ratio={ext['extreme_rmse_ratio']:.2f}")
+                    # Baseline skill scores
+                    coords_arr = None
+                    if hasattr(self, 'coords') and self.coords is not None:
+                        coords_arr = self.coords
+                    bl = _evaluator.calculate_baseline_comparisons(
+                        y, oof_predictions[:, model_idx], coords=coords_arr,
+                    )
+                    msg += (f"\n        Skill vs global-mean={bl['skill_vs_global_mean']:.4f}  "
+                            f"vs spatial-KNN={bl['skill_vs_spatial_knn']:.4f}")
                 print(msg)
             except Exception as e:
                 print(f"ERROR calculating performance for {model_name}: {e}")
@@ -1308,6 +1322,18 @@ class EnhancedSpatialCV:
                         perf['pattern_correlation'] = _evaluator.calculate_pattern_correlation(y, oof_predictions[:, i])
                         perf['amplitude_ratio'] = _evaluator.calculate_amplitude_ratio(y, oof_predictions[:, i])
                         msg += f", nRMSE = {perf['nrmse']:.4f}, PatCorr = {perf['pattern_correlation']:.4f}, AmpRatio = {perf['amplitude_ratio']:.4f}"
+                        ext = _evaluator.calculate_extreme_metrics(y, oof_predictions[:, i])
+                        perf.update(ext)
+                        msg += (f"\n        Tail-lo RMSE={ext['tail_low_rmse']:.4f}  "
+                                f"Tail-hi RMSE={ext['tail_high_rmse']:.4f}  "
+                                f"Extreme ratio={ext['extreme_rmse_ratio']:.2f}")
+                        coords_arr = getattr(self, 'coords', None)
+                        bl = _evaluator.calculate_baseline_comparisons(
+                            y, oof_predictions[:, i], coords=coords_arr,
+                        )
+                        perf.update(bl)
+                        msg += (f"\n        Skill vs global-mean={bl['skill_vs_global_mean']:.4f}  "
+                                f"vs spatial-KNN={bl['skill_vs_spatial_knn']:.4f}")
                     performance_summary['individual_models'][model_name] = perf
                     print(msg)
                 except Exception as e:
@@ -1451,6 +1477,18 @@ class EnhancedSpatialCV:
                 perf['pattern_correlation'] = _evaluator.calculate_pattern_correlation(y, oof_predictions[:, i])
                 perf['amplitude_ratio'] = _evaluator.calculate_amplitude_ratio(y, oof_predictions[:, i])
                 msg += f", nRMSE = {perf['nrmse']:.4f}, PatCorr = {perf['pattern_correlation']:.4f}, AmpRatio = {perf['amplitude_ratio']:.4f}"
+                ext = _evaluator.calculate_extreme_metrics(y, oof_predictions[:, i])
+                perf.update(ext)
+                msg += (f"\n        Tail-lo RMSE={ext['tail_low_rmse']:.4f}  "
+                        f"Tail-hi RMSE={ext['tail_high_rmse']:.4f}  "
+                        f"Extreme ratio={ext['extreme_rmse_ratio']:.2f}")
+                coords_arr = getattr(self, 'coords', None)
+                bl = _evaluator.calculate_baseline_comparisons(
+                    y, oof_predictions[:, i], coords=coords_arr,
+                )
+                perf.update(bl)
+                msg += (f"\n        Skill vs global-mean={bl['skill_vs_global_mean']:.4f}  "
+                        f"vs spatial-KNN={bl['skill_vs_spatial_knn']:.4f}")
             performance_summary['individual_models'][model_name] = perf
             print(msg)
         
@@ -2031,6 +2069,7 @@ def main(fast_mode=False):
                     lap_scaler = _SS()
                     laplacian_train = lap_scaler.fit_transform(laplacian_train)
                     laplacian_test = lap_scaler.transform(laplacian_test)
+
                 except Exception as lap_e:
                     print(f"  Fold {fold_idx+1}: Fold-aware Laplacian failed ({lap_e}), using global fallback")
                     laplacian_train = X_laplacian[train_idx]
@@ -2071,6 +2110,7 @@ def main(fast_mode=False):
         
         # Train final enhanced meta-model on full dataset
         print("Training final enhanced meta-ensemble model on full dataset...")
+
         final_meta_model_v2 = MetaEnsemble(**meta_params)
         final_meta_model_v2.fit(base_predictions, y, coords, 
                                laplacian_features=X_laplacian, 
