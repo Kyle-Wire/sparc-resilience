@@ -206,7 +206,7 @@ SPARC ships as a **native desktop application** built with Tauri v2 and React �
 **Study area:** Brown University campus and surrounding Providence, RI neighborhoods
 **Target variable:** Ambient Air Temperature z-score (AAT_z, °F)
 **Observations:** 54,701 spatial points at ~30 m resolution
-**CRS:** EPSG:3438 (RI State Plane) → EPSG:26919 (UTM 19N)
+**CRS:** EPSG:3438 (RI State Plane)
 **Predictors:** Pct_Canopy, Pct_Impervious, NDVI, Albedo, Elevation_m, Distance_from_water_m
 
 ### Stage 2 — Model Performance (Out-of-Fold R²)
