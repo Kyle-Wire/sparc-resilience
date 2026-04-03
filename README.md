@@ -2,22 +2,62 @@
 
 **SPARC Labs LLC**
 
-SPARC is a physics-constrained spatial machine-learning pipeline that trains an ensemble of geographically-weighted models, validates causal relationships via directed acyclic graphs (DAGs), and simulates "what-if" intervention scenarios with built-in uncertainty quantification. It is designed to be domain-agnostic: a single codebase serves urban heat islands, climate forcing attribution, groundwater, air quality, and more — driven entirely by a `project.yml` configuration file.
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![DOI](https://img.shields.io/badge/DOI-10.1016%2Fj.uclim.2025.102671-green.svg)](https://doi.org/10.1016/j.uclim.2025.102671)
+[![License](https://img.shields.io/badge/license-Contact%20for%20License-grey.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#installation)
+[![Academic Partnerships](https://img.shields.io/badge/open%20for-Academic%20Partnerships-8A2BE2.svg)](mailto:sparcurbanlabs@gmail.com)
+
+**SPARC turns environmental and infrastructure data into causal, uncertainty-quantified intervention scenarios — powered by physics-constrained spatial machine learning.**
+
+Published in [*Urban Climate* (2025)](https://doi.org/10.1016/j.uclim.2025.102671), SPARC has demonstrated **91.5% R²** on urban heat island prediction in Providence, RI, and has been applied to **ForceSMIP climate forcing attribution** at global scale. The pipeline trains geographically-weighted model ensembles, validates causal relationships via directed acyclic graphs (DAGs), and simulates "what-if" scenarios with built-in uncertainty quantification — all from a single `project.yml` configuration file across **13 domain templates**.
+
+> **Get started:** [Watch the demo](#see-sparc-in-action) · [Try it locally](#quick-start) · [Download the desktop app](#desktop-app) · Interested in piloting? [Contact us](mailto:sparcurbanlabs@gmail.com)
 
 ---
 
 ## Table of Contents
 
+- [See SPARC in Action](#see-sparc-in-action)
 - [Pipeline Architecture](#pipeline-architecture)
 - [Supported Domains](#supported-domains)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [Desktop App](#desktop-app)
 - [Results: Urban Heat Island (Brown UHI)](#results-urban-heat-island-brown-uhi)
 - [Results: ForceSMIP Climate Forcing Attribution](#results-forcesmip-climate-forcing-attribution)
+- [Interpreting Results](#interpreting-results)
+- [Limitations & Assumptions](#limitations--assumptions)
+- [Roadmap](#roadmap)
 - [Project Structure](#project-structure)
 - [Configuration Reference](#configuration-reference)
 - [Dependencies](#dependencies)
 - [License](#license)
+
+---
+
+## See SPARC in Action
+
+<!-- VIDEO: Replace this comment with your screen recording embed (1–2 minutes).
+     Example: [![Watch the demo](docs/screenshots/video-thumbnail.png)](https://your-video-url-here)
+     Suggested text: "Watch how SPARC runs a neighborhood heat scenario with interventions and uncertainty" -->
+
+**🎬 Video coming soon** — Watch how SPARC runs a neighborhood heat scenario with interventions and uncertainty.
+
+### Screenshots
+
+| | |
+|:---:|:---:|
+| ![Project Setup](docs/screenshots/01-project-setup.png) | ![Data Upload](docs/screenshots/02-data-upload.png) |
+| *Project setup and template selection* | *Data upload and preview* |
+| ![DAG Builder](docs/screenshots/03-dag-builder.png) | ![Physics Config](docs/screenshots/04-physics-config.png) |
+| *Visual causal DAG editor* | *Physics constraints and priors* |
+| ![Pipeline Running](docs/screenshots/05-pipeline-running.png) | ![Results Maps](docs/screenshots/06-results-maps.png) |
+| *Pipeline execution with live progress* | *Spatial results and model diagnostics* |
+| ![Scenario Tables](docs/screenshots/07-scenario-tables.png) | ![Uncertainty](docs/screenshots/08-uncertainty.png) |
+| *Intervention scenario comparison* | *Monte Carlo uncertainty bands* |
+
+> **Note:** Add your own screenshots to `docs/screenshots/` using the filenames above.
 
 ---
 
@@ -180,11 +220,26 @@ sparc run -p project.yml -s 3      # Causal validation
 sparc run -p project.yml -s 4      # Scenario simulation
 ```
 
-### Live Demo
+---
 
-Try the UI without installing anything: [SPARC on Streamlit Cloud](https://sparc-labs.streamlit.app)
+## Desktop App
 
-> **Note:** The cloud demo is for configuration only — it cannot run the pipeline. Generate your config files in the browser, download the ZIP, then run locally with `sparc run --project project.yml --stage all`.
+SPARC ships as a **native desktop application** built with Tauri v2 and React — no browser or cloud required. Your data stays on your machine.
+
+**Status:** Fully functional core pipeline. Currently polishing additional features including Claude-assisted project setup, a visual DAG editor, and GPU-accelerated spatial maps via deck.gl.
+
+**Interested in piloting?** Contact [sparcurbanlabs@gmail.com](mailto:sparcurbanlabs@gmail.com) for early access.
+
+<!-- DESKTOP SCREENSHOTS: Add 2–3 screenshots of the desktop app to docs/screenshots/ -->
+<!-- ![Desktop App](docs/screenshots/desktop-01.png) -->
+<!-- ![Desktop Spatial Map](docs/screenshots/desktop-02.png) -->
+
+**Key features:**
+- Runs entirely offline — no cloud, no API keys required for the core pipeline
+- Native performance via Tauri v2 (lightweight ~15 MB, not Electron)
+- Claude-powered guided project setup (optional, bring your own API key)
+- Interactive spatial visualization with deck.gl and MapLibre GL
+- Visual drag-and-drop DAG editor
 
 ---
 
@@ -350,6 +405,67 @@ Internal variability scenarios (AMV, IPO) were also simulated, with AMV showing 
 | **Refutation tests** | All pass | GMST passes; modes partially |
 | **Scenarios** | Policy levers (plant trees, increase albedo) | Forcing increments (GHG warming) |
 | **Key result** | +10 pp canopy → −0.26 z cooling | +1°C GMST → +1.35°C local SST |
+
+---
+
+## Interpreting Results
+
+SPARC produces a rich set of outputs across its five stages. Here is a quick reference for the most important metrics:
+
+| Metric | What It Means | Good Values |
+|--------|---------------|-------------|
+| **R² (out-of-fold)** | Fraction of spatial variance explained by the model | > 0.7 for most domains; > 0.9 is excellent |
+| **RMSE** | Average prediction error in the target's units | Lower is better; compare across models |
+| **E-value** | How strong an unmeasured confounder would need to be to nullify a causal estimate | > 1.5 suggests moderate robustness; > 2.0 is strong |
+| **Refutation tests** | Placebo, random confounder, subset, and unobserved confounding checks | All four should pass (p > 0.05 or estimate ≈ 0 for placebo) |
+| **MC percentiles (5th / 50th / 95th)** | Credible interval from Monte Carlo uncertainty propagation | Narrow bands = high confidence; wide bands = interpret cautiously |
+| **Mode 1** | Ensemble re-prediction under modified inputs | Captures full non-linear model interactions |
+| **Mode 2** | DAG coefficients × local MGWR weights | Captures spatial heterogeneity and causal mediation |
+| **Mode 3** | Monte Carlo draws over coefficient uncertainty | Produces credible intervals, not point estimates |
+
+### Quick checklist for reading scenario tables
+
+1. **Check the "Avg. Actual Change" column** — did the physics constraints cap the intervention? If actual < requested, bounds were hit.
+2. **Compare Mode 1 vs. Mode 2** — large disagreement may indicate non-linear effects the DAG doesn't capture.
+3. **Look at the Std column** — high standard deviation means the effect varies significantly across space (spatial heterogeneity).
+4. **Review MC percentiles** — if the 5th and 95th percentiles have the same sign, the direction of effect is robust.
+5. **Check diminishing returns** — for large interventions (e.g., +50 pp canopy), the √ taper compresses gains. This is by design.
+
+For a comprehensive plain-language guide, see [`docs/INTERPRETATION_GUIDE.md`](docs/INTERPRETATION_GUIDE.md).
+
+---
+
+## Limitations & Assumptions
+
+Transparency builds trust. Here is what SPARC does well, where it has boundaries, and what to keep in mind when interpreting results.
+
+| Area | What to Know |
+|------|-------------|
+| **Observational data** | SPARC works with observational (non-experimental) data. Causal estimates depend on the correctness of the user-defined DAG and the assumption that there are no unmeasured confounders. E-values quantify how strong a hidden confounder would need to be to overturn a finding, but they are sensitivity bounds — not proof of causation. |
+| **Spatial stationarity** | Geographically-weighted models assume that spatial relationships are locally smooth. Abrupt regime changes (e.g., a coastline, a policy boundary) may violate this assumption. |
+| **Physics constraints are user-specified** | Monotone signs, variable caps, priors, and diminishing-return tapers reflect domain knowledge encoded by the analyst. They improve plausibility but are not ground truth — review them critically for each application. |
+| **Extrapolation** | Scenarios that push variables beyond the training data range trigger extrapolation guards (Mahalanobis distance), but out-of-distribution predictions should always be interpreted cautiously. |
+| **Uncertainty quantification** | Monte Carlo draws are parametric (sampled over estimated coefficient distributions). True epistemic uncertainty — from model mis-specification or missing variables — may be wider than reported intervals. |
+| **Resolution sensitivity** | Performance varies with data density and resolution. The Providence UHI study (30 m, R² = 0.915) benefited from dense local data; coarser grids like ForceSMIP (2.5°, R² = 0.642) naturally yield lower explanatory power. |
+| **Cross-sectional design** | The current pipeline models spatial variation at a single time slice. Longitudinal causal claims (e.g., "planting trees *will* cool a neighborhood over 10 years") require temporal extensions not yet implemented. |
+| **Causal discovery** | Automated structure learning (PC-stable, LiNGAM, GES) is provided as a diagnostic, not a replacement for expert DAG specification. Edge F1 against expert graphs is typically 0.6–0.8. |
+
+We actively work to reduce these limitations in each release. If you encounter an edge case or have domain-specific feedback, please [open an issue](https://github.com/SPARC-Labs-LLC/SPARC_Labs_GW3C/issues) or contact [sparcurbanlabs@gmail.com](mailto:sparcurbanlabs@gmail.com).
+
+---
+
+## Roadmap
+
+SPARC is under active development. Key directions on the horizon:
+
+| Initiative | Description |
+|-----------|-------------|
+| **GCM Downscaling & Climate Emulation** | Statistical and hybrid downscaling of global climate model outputs to local scales, enabling rapid scenario evaluation without full GCM runs. |
+| **Domain Expansion** | Additional environmental and infrastructure templates — extending beyond the current 13 domains into new areas such as environmental remediation, transportation resilience, and public health. |
+| **Planetary Expansion** | Extraterrestrial applications including optimal lunar roadway mapping and surface characterization for off-Earth infrastructure planning. |
+| **Hybrid Physics Integration** | Tighter coupling between numerical physics models and the ML pipeline — using physics simulators as priors, constraints, or co-training signals rather than post-hoc guardrails. |
+
+Have ideas or want to collaborate? Reach out at [sparcurbanlabs@gmail.com](mailto:sparcurbanlabs@gmail.com).
 
 ---
 
