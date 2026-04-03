@@ -149,8 +149,8 @@ def create_gwen_diagnostic_plots(gwen_model, feature_names, output_dir):
     
     # 3. Alpha vs L1 ratio parameter space
     ax3 = axes[1, 0]
-    alphas = [model.alpha_ for model in gwen_model.local_models]
-    l1_ratios = [model.l1_ratio_ for model in gwen_model.local_models]
+    alphas = [getattr(m, 'alpha_', m.alpha) for m in gwen_model.local_models]
+    l1_ratios = [getattr(m, 'l1_ratio_', m.l1_ratio) for m in gwen_model.local_models]
     scatter = ax3.scatter(alphas, l1_ratios, alpha=0.6, c=range(len(alphas)), 
                          cmap='viridis', s=30)
     ax3.set_xlabel('Selected Alpha (log scale)', fontweight='bold')
