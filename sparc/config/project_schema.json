@@ -348,8 +348,10 @@
         "selection_threshold":  {"type": "number", "default": 0.1},
         "l1_ratios":            {"type": "array", "items": {"type": "number"}, "default": [0.1, 0.5, 0.7, 0.9, 0.95, 0.99]},
         "n_alphas":             {"type": "integer", "default": 100},
-        "spatial_cv":           {"type": "boolean", "default": true, "description": "Use spatial block CV instead of random k-fold"},
-        "stability_folds":     {"type": "integer", "default": 5, "description": "Number of folds for stability scoring (0 to disable)"},
+        "spatial_cv":           {"type": "boolean", "default": false, "description": "Use spatial block CV instead of random k-fold (default: false; standard k-fold is sufficient for screening)"},
+        "block_size":           {"type": ["number", "null"], "default": null, "description": "Block size in meters for GWEN spatial CV. If null, inherits from models.spatial_cv.block_size"},
+        "local_cv":             {"type": "boolean", "default": false, "description": "Run per-location ElasticNetCV. When false, reuse global alpha for local models (much faster)"},
+        "stability_folds":     {"type": "integer", "default": 0, "description": "Number of folds for stability scoring (0 to disable; overkill for screening)"},
         "auto_tune":            {"type": "boolean", "default": true, "description": "Auto-suggest hyperparams from correlogram results"},
         "quick_mode":           {"type": "boolean", "default": false, "description": "Fast mode: fixed alpha, reduced fit locations"},
         "report_format":        {"type": "string", "enum": ["html", "csv", "both"], "default": "html"}

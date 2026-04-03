@@ -125,6 +125,9 @@ flags:
 #   sample_size: 5000
 #   k_neighbors: 500
 #   selection_threshold: 0.1
+#   spatial_cv: false             # Standard k-fold is sufficient for screening
+#   local_cv: false               # Reuse global alpha for local models (much faster)
+#   stability_folds: 0            # 0 = disabled; set to 5 for full stability scoring
 
 # ---------------------------------------------------------------------------
 # Laplacian Eigenmaps

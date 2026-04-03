@@ -37,7 +37,8 @@ class GWENModel:
     
     def __init__(self, k_neighbors=None, cv_folds=5, n_alphas=100,
                  l1_ratios=[0.1, 0.5, 0.7, 0.9, 0.95, 0.99], sample_size=None,
-                 quick_mode=False, n_jobs=1, spatial_cv_folds=None):
+                 quick_mode=False, n_jobs=1, spatial_cv_folds=None,
+                 local_cv=True):
         self.k_neighbors = k_neighbors
         self.cv_folds = cv_folds
         self.n_alphas = n_alphas
@@ -46,6 +47,7 @@ class GWENModel:
         self.quick_mode = quick_mode
         self.n_jobs = n_jobs
         self.spatial_cv_folds = spatial_cv_folds  # list of (train_idx, test_idx) tuples
+        self.local_cv = local_cv  # If False, reuse global alpha for local models (much faster)
         self.scaler = StandardScaler()
         self.global_model = None
         self.local_models = None
@@ -128,10 +130,11 @@ class GWENModel:
         
         # Train local models
         print("\n4. Training local models...")
-        # In quick_mode, use fixed alpha/l1_ratio from global model (skip CV)
-        use_global_alpha = self.quick_mode and self.global_model is not None
+        # Skip per-location CV when quick_mode is on OR local_cv is disabled
+        use_global_alpha = (self.quick_mode or not self.local_cv) and self.global_model is not None
         if use_global_alpha:
-            print("   Quick mode: using global alpha/l1_ratio (no per-location CV)")
+            reason = "Quick mode" if self.quick_mode else "local_cv=False"
+            print(f"   {reason}: using global alpha/l1_ratio (no per-location CV)")
 
         for i in tqdm(range(len(coords)), desc="Training"):
             local_indices = indices[i]

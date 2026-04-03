@@ -134,6 +134,9 @@ gwen:
   k_neighbors: 200
   cv_folds: 5
   selection_threshold: 0.1
+  spatial_cv: false             # Standard k-fold is sufficient for screening
+  local_cv: false               # Reuse global alpha for local models (much faster)
+  stability_folds: 0            # 0 = disabled; set to 5 for full stability scoring
 
 laplacian:
   n_eigenmaps: 50              # Fewer than UHI; global patterns are smoother

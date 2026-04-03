@@ -624,17 +624,24 @@ def main(config_path=None, fast_mode=False):
 
         # Build spatial block folds if spatial_cv is enabled
         spatial_folds = None
-        use_spatial = gwen_cfg.get('spatial_cv', True)  # default: True
+        use_spatial = gwen_cfg.get('spatial_cv', False)  # default: False — standard k-fold is sufficient for screening
         if use_spatial and not fast_mode:
             try:
                 print("   Building spatial block CV folds for GWEN...")
+                # Inherit block_size from models.spatial_cv if not set in gwen config
+                gwen_block = gwen_cfg.get('block_size')
+                if gwen_block is None:
+                    gwen_block = config.get('models', {}).get('spatial_cv', {}).get('block_size')
+                    if gwen_block is not None:
+                        print(f"   Using shared block size from spatial_cv config: {gwen_block}m")
                 spatial_folds = _make_spatial_folds(
                     coords, n_splits=gwen_params.get('cv_folds', 5),
-                    block_size=gwen_cfg.get('block_size'),
+                    block_size=gwen_block,
                 )
             except Exception as e:
                 print(f"   Warning: Could not create spatial folds ({e}), falling back to standard CV")
 
+        local_cv = gwen_cfg.get('local_cv', False)  # default: False — use global alpha for local models
         gwen = GWENModel(
             k_neighbors=gwen_params['k_neighbors'],
             sample_size=gwen_params.get('sample_size'),
@@ -644,6 +651,7 @@ def main(config_path=None, fast_mode=False):
             quick_mode=fast_mode,
             n_jobs=-1 if fast_mode else 1,
             spatial_cv_folds=spatial_folds,
+            local_cv=local_cv,
         )
         
         print(f"   K-neighbors: {gwen.k_neighbors}")
@@ -675,9 +683,9 @@ def main(config_path=None, fast_mode=False):
         print(f"   [OK] Feature selection completed")
         print(f"   [OK] Diagnostics generated and saved")
 
-        # Stability scoring (skip in fast mode)
+        # Stability scoring (skip in fast mode; disabled by default)
         stability_df = pd.DataFrame()
-        stability_folds = gwen_cfg.get('stability_folds', 5)
+        stability_folds = gwen_cfg.get('stability_folds', 0)  # default: 0 — disabled; overkill for screening
         if not fast_mode and stability_folds > 0:
             print("\n7b. Computing stability scores across spatial folds...")
             try:

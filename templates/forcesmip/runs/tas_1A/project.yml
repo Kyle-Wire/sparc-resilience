@@ -106,6 +106,9 @@ gwen:
   k_neighbors: 200
   cv_folds: 5
   selection_threshold: 0.1
+  spatial_cv: false
+  local_cv: false
+  stability_folds: 0
 laplacian:
   n_eigenmaps: 50
   k_for_swm: 20

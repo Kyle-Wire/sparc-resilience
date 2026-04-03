@@ -175,6 +175,10 @@ gwen:
   selection_threshold: 0.1
   l1_ratios: [0.1, 0.5, 0.7, 0.9, 0.95, 0.99]
   n_alphas: 100
+  spatial_cv: false             # Standard k-fold is sufficient for screening
+  local_cv: false               # Reuse global alpha for local models (much faster)
+  stability_folds: 0            # 0 = disabled; set to 5 for full stability scoring
+  # block_size: null            # Inherits from models.spatial_cv.block_size when spatial_cv is true
 
 # ---------------------------------------------------------------------------
 # Laplacian Eigenmaps
