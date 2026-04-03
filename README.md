@@ -151,22 +151,18 @@ sparc init --template uhi --output ./my_project
 ### Windows (Easiest)
 
 ```powershell
-git clone https://github.com/SPARC-Labs-LLC/SPARC_Labs_GW3C.git
-cd SPARC_Labs_GW3C
+git clone https://github.com/Kyle-Wire/sparc-resilience.git
+cd sparc-resilience
 scripts\Install_SPARC.bat
 ```
 
-The install script creates a virtual environment, installs all dependencies, and sets up the `sparc` CLI. Once complete:
-
-```powershell
-scripts\Start_SPARC.bat          # Launch the Streamlit UI
-```
+The install script creates a virtual environment, installs all dependencies, and sets up the `sparc` CLI.
 
 ### Mac / Linux
 
 ```bash
-git clone https://github.com/SPARC-Labs-LLC/SPARC_Labs_GW3C.git
-cd SPARC_Labs_GW3C
+git clone https://github.com/Kyle-Wire/sparc-resilience.git
+cd sparc-resilience
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[ui]"
@@ -182,17 +178,9 @@ sparc --help
 
 ## Quick Start
 
-### Option A: Streamlit UI (Recommended for New Users)
+### Option A: Desktop App (Recommended for New Users)
 
-```powershell
-# Windows
-scripts\Start_SPARC.bat
-
-# Mac/Linux
-streamlit run run_ui.py
-```
-
-The UI walks you through template selection, data upload, variable configuration, DAG editing, and pipeline execution — all from your browser.
+See the [Desktop App](#desktop-app) section for the full-featured native experience with guided setup, spatial visualization, and visual DAG editing.
 
 ### Option B: CLI
 
@@ -328,7 +316,7 @@ Diminishing returns are visible beyond ~15 pp, where the √ taper begins to lim
 | +0.20 | +0.197 | −0.384 | 0.528 |
 | +0.30 | +0.285 | −0.450 | 0.606 |
 
-#### Monte Carlo Uncertainty (10 draws, selected scenarios)
+#### Monte Carlo Uncertainty (Preliminary — 10 draws)
 
 | Scenario | MC Mean | MC 5th %ile | MC 95th %ile |
 |----------|---------|-------------|--------------|
@@ -336,6 +324,8 @@ Diminishing returns are visible beyond ~15 pp, where the √ taper begins to lim
 | Canopy +30 pp | −0.017 | −0.018 | −0.017 |
 | Impervious −20 pp | −0.025 | −0.029 | −0.023 |
 | Albedo +0.10 | −0.097 | −0.104 | −0.091 |
+
+> **Note:** These intervals were generated with only 10 Monte Carlo draws due to compute-time constraints and are preliminary. The narrow credible intervals reflect the limited draw count — production runs should use 500–1,000+ draws for robust uncertainty quantification. Updated results will be published in a future release.
 
 ---
 
@@ -450,7 +440,7 @@ Transparency builds trust. Here is what SPARC does well, where it has boundaries
 | **Cross-sectional design** | The current pipeline models spatial variation at a single time slice. Longitudinal causal claims (e.g., "planting trees *will* cool a neighborhood over 10 years") require temporal extensions not yet implemented. |
 | **Causal discovery** | Automated structure learning (PC-stable, LiNGAM, GES) is provided as a diagnostic, not a replacement for expert DAG specification. Edge F1 against expert graphs is typically 0.6–0.8. |
 
-We actively work to reduce these limitations in each release. If you encounter an edge case or have domain-specific feedback, please [open an issue](https://github.com/SPARC-Labs-LLC/SPARC_Labs_GW3C/issues) or contact [sparcurbanlabs@gmail.com](mailto:sparcurbanlabs@gmail.com).
+We actively work to reduce these limitations in each release. If you encounter an edge case or have domain-specific feedback, please [open an issue](https://github.com/Kyle-Wire/sparc-resilience/issues) or contact [sparcurbanlabs@gmail.com](mailto:sparcurbanlabs@gmail.com).
 
 ---
 
@@ -483,13 +473,13 @@ GW3C_v2.1/
 │   ├── evaluation/          # Model evaluation metrics and diagnostics
 │   ├── interventions/       # Scenario simulator, physics priors, extrapolation guards
 │   ├── run/                 # Pipeline orchestration (per-stage executors)
-│   └── ui/                  # Streamlit interactive UI
+│   └── ui/                  # Interactive UI
 ├── templates/               # Domain templates (13 domains)
 ├── examples/                # Example projects (Brown UHI)
 ├── tests/                   # Smoke tests
-├── docs/                    # MANUAL, PIPELINE_GUIDE, CONTRIBUTING
-├── scripts/                 # Helper scripts (Start_SPARC.bat)
-├── run_ui.py                # Launch Streamlit UI
+├── docs/                    # MANUAL, PIPELINE_GUIDE, CONTRIBUTING, INTERPRETATION_GUIDE
+├── sparc-desktop/           # Tauri v2 + React desktop application
+├── scripts/                 # Helper scripts
 ├── pyproject.toml           # Package metadata and dependencies
 ├── README.md
 ├── LICENSE
