@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="sparc/ui/assets/logo.png" alt="SPARC Labs" width="280">
+  <img src="docs/screenshots/logo-readme.png" alt="SPARC Labs" width="280">
 </p>
 
 # SPARC — Spatial Analysis and Research Core
