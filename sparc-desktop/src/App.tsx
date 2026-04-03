@@ -18,7 +18,7 @@ import ScenariosView from "@/components/pipeline/ScenariosView";
 import ModelsView from "@/components/pipeline/ModelsView";
 import PipelineRun from "@/components/pipeline/PipelineRun";
 import ResultsView from "@/components/results/ResultsView";
-import RunCompare from "@/components/results/RunCompare";
+import ReportView from "@/components/results/ReportView";
 import SettingsView from "@/components/pipeline/SettingsView";
 import ChatPanel from "@/components/chat/ChatPanel";
 import { buildSystemPrompt } from "@/lib/prompts";
@@ -168,8 +168,8 @@ export default function App() {
         return <PipelineRun />;
       case "Results":
         return <ResultsView />;
-      case "Compare":
-        return <RunCompare />;
+      case "Report":
+        return <ReportView />;
       case "Settings":
         return <SettingsView />;
     }

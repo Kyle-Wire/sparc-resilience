@@ -157,3 +157,192 @@ export interface ChatMessage {
   content: string;
   actions?: ClaudeAction[];
 }
+
+// ------------------------------------------------------------------
+// Correlogram
+// ------------------------------------------------------------------
+export interface CorrelogramVariableResult {
+  variable: string;
+  optimal_bandwidth: number;
+  effective_range: number;
+  optimal_block_size: number;
+  best_kernel: string;
+  max_moran_i: number;
+  significant_lags: number;
+  correlogram_results: {
+    lag_distances: number[];
+    morans_i_values: number[];
+    z_scores: number[];
+    p_values: number[];
+  };
+  spatial_parameters?: Record<string, unknown>;
+}
+
+export interface CorrelogramData {
+  metadata?: Record<string, unknown>;
+  individual_results: Record<string, CorrelogramVariableResult>;
+  model_bandwidths?: Record<string, number | null>;
+  spatial_cv_configuration?: Record<string, unknown>;
+}
+
+// ------------------------------------------------------------------
+// GWEN
+// ------------------------------------------------------------------
+export interface GwenRow {
+  [key: string]: unknown;
+}
+
+// ------------------------------------------------------------------
+// Causal
+// ------------------------------------------------------------------
+export interface DirectEffect {
+  structural_coeff: number;
+  ate_backdoor?: number;
+  cate_mean?: number;
+  cate_std?: number;
+  ate_ipw?: number;
+  ate_gps?: number;
+  att_matching?: number;
+  ate_doubly_robust?: number;
+  monotone_constraint?: number;
+  placebo_pass?: boolean;
+  rcc_pass?: boolean;
+  data_subset_pass?: boolean;
+  ucc_pass?: boolean;
+  e_value?: number;
+  bootstrap_ci_lower?: number;
+  bootstrap_ci_upper?: number;
+  bootstrap_se?: number;
+  estimator_agreement?: boolean;
+  max_discrepancy_pct?: number;
+  elasticity?: number;
+  relative_importance?: number;
+}
+
+export interface MediationDecomposition {
+  direct_effect: number;
+  direct_se?: number;
+  indirect_total: number;
+  indirect_se?: number;
+  total_effect: number;
+  total_se?: number;
+  indirect_paths?: {
+    mediator: string;
+    beta_T_M: number;
+    beta_M_Y: number;
+    indirect_effect: number;
+    sobel_se?: number;
+    significant?: boolean;
+  }[];
+  mediation_proportion?: number;
+}
+
+export interface CausalResults {
+  metadata?: Record<string, unknown>;
+  direct_effects?: Record<string, DirectEffect>;
+  mediator_propagation?: Record<string, Record<string, number>>;
+  all_structural_coefficients?: Record<string, number>;
+  propensity_diagnostics?: Record<string, Record<string, unknown>>;
+  assumption_diagnostics?: Record<string, Record<string, unknown>>;
+  mediation_decomposition?: Record<string, MediationDecomposition>;
+  dose_response?: Record<string, Record<string, unknown>>;
+  discovery_summary?: Record<string, unknown>;
+}
+
+// ------------------------------------------------------------------
+// PDP Curves
+// ------------------------------------------------------------------
+export interface PdpVariable {
+  pdp?: {
+    grid_values: number[];
+    pdp_values: number[];
+    pdp_std?: number[];
+  };
+  curve_fit?: {
+    curve_type: string;
+    parameters: Record<string, number>;
+    saturation_point?: number;
+    r2?: number;
+  };
+  grid_values?: number[];
+  pdp_values?: number[];
+}
+
+export type PdpCurves = Record<string, PdpVariable>;
+
+// ------------------------------------------------------------------
+// Dose-Response
+// ------------------------------------------------------------------
+export interface DoseResponseTreatment {
+  dose_levels: number[];
+  marginal_effects: number[];
+  dose_means?: number[];
+  bandwidth?: number;
+  nonlinearity_ratio?: number;
+  is_nonlinear?: boolean;
+}
+
+export type DoseResponseData = Record<string, DoseResponseTreatment>;
+
+// ------------------------------------------------------------------
+// Causal Diagnostics
+// ------------------------------------------------------------------
+export interface CausalDiagnosticsTreatment {
+  cumulative_effect_curve?: {
+    fractions: number[];
+    cum_effects: number[];
+    random_baseline?: number;
+    area_ratio?: number;
+  };
+  calibration?: {
+    bin_cate_mean: number[];
+    bin_ate: number[];
+    is_monotone?: boolean;
+    rank_correlation?: number;
+    rank_pvalue?: number;
+  };
+  rate_score?: number;
+}
+
+export type CausalDiagnostics = Record<string, CausalDiagnosticsTreatment>;
+
+// ------------------------------------------------------------------
+// Scenario Detail
+// ------------------------------------------------------------------
+export interface ScenarioSummaryRow {
+  [key: string]: unknown;
+}
+
+export interface ScenarioDetail {
+  geojson: GeoJsonData;
+  summary: ScenarioSummaryRow[];
+}
+
+export interface GeoJsonFeature {
+  type: "Feature";
+  geometry: { type: string; coordinates: unknown };
+  properties: Record<string, unknown>;
+}
+
+export interface GeoJsonData {
+  type: "FeatureCollection";
+  features: GeoJsonFeature[];
+}
+
+// ------------------------------------------------------------------
+// Report
+// ------------------------------------------------------------------
+export interface ReportPayload {
+  project?: Record<string, unknown>;
+  data_summary?: Record<string, unknown>;
+  predictors?: string[];
+  causal?: Record<string, unknown>;
+  physics?: Record<string, unknown>;
+  pipeline?: Record<string, unknown>;
+  correlogram?: Record<string, Record<string, unknown>>;
+  gwen?: Record<string, unknown>[];
+  spatial_cv_models?: string[];
+  causal_results?: CausalResults;
+  scenario_summary?: ScenarioSummaryRow[];
+  plots?: Record<string, { name: string; filename: string; path: string; stage: number }[]>;
+}

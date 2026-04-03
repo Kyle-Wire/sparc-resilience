@@ -9,7 +9,7 @@ const PAGES = [
   "Models",
   "Run",
   "Results",
-  "Compare",
+  "Report",
 ] as const;
 
 export type PageName = (typeof PAGES)[number];

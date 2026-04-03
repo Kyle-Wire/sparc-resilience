@@ -1,6 +1,24 @@
 import { useEffect, useState } from "react";
-import { getConfig, runScenarios } from "@/lib/api";
+import { getConfig, saveConfig, runScenarios } from "@/lib/api";
 import type { ProjectConfig } from "@/lib/types";
+
+const ESTIMATOR_OPTIONS = [
+  {
+    value: "dml",
+    label: "DML",
+    description: "Debiased Machine Learning — K-fold cross-fitting for unbiased causal estimates",
+  },
+  {
+    value: "hgb",
+    label: "HGB",
+    description: "Histogram Gradient Boosting — Non-linear treatment effect estimation",
+  },
+  {
+    value: "ols",
+    label: "OLS",
+    description: "Ordinary Least Squares — Linear backdoor-adjusted causal estimation",
+  },
+] as const;
 
 export default function ScenariosView() {
   const [config, setConfig] = useState<ProjectConfig | null>(null);
@@ -18,8 +36,19 @@ export default function ScenariosView() {
 
   const actionable = config?.causal?.actionable_variables ?? [];
   const fixed = config?.causal?.fixed_variables ?? [];
-  const estimator = config?.causal?.estimator ?? "hgb";
+  const estimator = config?.causal?.estimator ?? "dml";
   const dagBlend = config?.causal?.dag_blend_weight ?? 0.5;
+
+  const handleEstimatorChange = async (value: string) => {
+    try {
+      await saveConfig({ causal: { ...config?.causal, estimator: value } });
+      setConfig((prev) =>
+        prev ? { ...prev, causal: { ...prev.causal, estimator: value } } : prev,
+      );
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
 
   const run = async () => {
     setRunning(true);
@@ -70,7 +99,20 @@ export default function ScenariosView() {
           <p className="text-xs font-semibold uppercase text-sparc-gray-500">
             Causal Estimator
           </p>
-          <p className="font-mono text-sm">{estimator}</p>
+          <select
+            value={estimator}
+            onChange={(e) => handleEstimatorChange(e.target.value)}
+            className="w-full rounded border border-sparc-gray-200 px-2 py-1.5 text-sm font-mono focus:border-sparc-purple focus:outline-none"
+          >
+            {ESTIMATOR_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label} — {opt.description}
+              </option>
+            ))}
+          </select>
+          <p className="text-[10px] text-sparc-gray-400">
+            {ESTIMATOR_OPTIONS.find((o) => o.value === estimator)?.description}
+          </p>
         </div>
         <div className="rounded border border-sparc-gray-200 p-4 space-y-2">
           <p className="text-xs font-semibold uppercase text-sparc-gray-500">

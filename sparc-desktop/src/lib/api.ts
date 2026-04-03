@@ -12,6 +12,14 @@ import type {
   DagDefinition,
   DagValidation,
   ProjectConfig,
+  CorrelogramData,
+  CausalResults,
+  PdpCurves,
+  DoseResponseData,
+  CausalDiagnostics,
+  ScenarioDetail,
+  ReportPayload,
+  GeoJsonData,
 } from "./types";
 
 const BASE = "http://127.0.0.1:8008";
@@ -138,6 +146,36 @@ export const saveConfig = (config: Partial<ProjectConfig>) =>
 // ------------------------------------------------------------------
 export const generateReport = (format: "markdown" | "json" = "markdown") =>
   post<{ markdown: string; report?: unknown }>(`/report/generate?format=${format}`);
+
+// ------------------------------------------------------------------
+// Structured results
+// ------------------------------------------------------------------
+export const getCorrelogramData = () =>
+  get<CorrelogramData>("/results/correlogram");
+
+export const getGwenData = () =>
+  get<{ rows: Record<string, unknown>[] }>("/results/gwen");
+
+export const getSpatialCvPredictions = () =>
+  get<GeoJsonData>("/results/spatial_cv/predictions");
+
+export const getCausalResults = () =>
+  get<CausalResults>("/results/causal");
+
+export const getDoseResponseCurves = () =>
+  get<DoseResponseData>("/results/causal/dose_response");
+
+export const getCausalDiagnostics = () =>
+  get<CausalDiagnostics>("/results/causal/diagnostics");
+
+export const getPdpCurves = () =>
+  get<PdpCurves>("/results/pdp_curves");
+
+export const getScenarioDetail = () =>
+  get<ScenarioDetail>("/results/scenarios/detail");
+
+export const getReportData = () =>
+  get<ReportPayload>("/results/report");
 
 // ------------------------------------------------------------------
 // WebSocket helper

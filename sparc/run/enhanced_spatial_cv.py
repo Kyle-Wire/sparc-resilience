@@ -930,6 +930,34 @@ class EnhancedSpatialCV:
         # Save OOF predictions
         oof_df = pd.DataFrame(oof_predictions, columns=model_names)
         oof_df.to_csv(os.path.join(output_dir, 'optimized_oof_predictions.csv'), index=False)
+
+        # Save spatial predictions as GeoPackage (with geometry from input data)
+        try:
+            import geopandas as gpd
+            # Access the source GeoDataFrame from the parent pipeline
+            src_data = getattr(self, '_source_geodataframe', None)
+            if src_data is not None and hasattr(src_data, 'geometry') and len(src_data) == len(oof_predictions):
+                target_col = self.base_config.get('variables', {}).get('target', 'target')
+                gpkg_gdf = gpd.GeoDataFrame(geometry=src_data.geometry.values, crs=src_data.crs)
+                # Add observed target
+                if target_col in src_data.columns:
+                    gpkg_gdf['observed'] = src_data[target_col].values
+                # Add identifier if available
+                id_col = self.base_config.get('variables', {}).get('identifier')
+                if id_col and id_col in src_data.columns:
+                    gpkg_gdf['identifier'] = src_data[id_col].values
+                # Add model predictions and residuals
+                for i, mname in enumerate(model_names):
+                    gpkg_gdf[f'pred_{mname}'] = oof_predictions[:, i]
+                    if target_col in src_data.columns:
+                        gpkg_gdf[f'residual_{mname}'] = oof_predictions[:, i] - src_data[target_col].values
+                gpkg_path = os.path.join(output_dir, 'spatial_cv_predictions.gpkg')
+                gpkg_gdf.to_file(gpkg_path, driver='GPKG')
+                print(f"Spatial CV predictions saved to: {gpkg_path}")
+            else:
+                print("  [INFO] Source GeoDataFrame not available for gpkg export")
+        except Exception as e:
+            print(f"  [WARNING] Could not save spatial predictions gpkg: {e}")
         
         # Check for and handle NaN values in OOF predictions
         print("\n=== Checking OOF predictions for NaN values ===")
@@ -1272,6 +1300,9 @@ class EnhancedSpatialCV:
                 target_crs=self.base_config['crs']['target_projected'],
                 output_dir=self.base_config.get('output', {}).get('base_dir'),
             )
+
+            # Store reference for gpkg export
+            self._source_geodataframe = data
             
             available_features = data.columns.tolist()
             selected_features = [f for f in selected_features if f in available_features]
@@ -1374,6 +1405,9 @@ class EnhancedSpatialCV:
             target_crs=self.base_config['crs']['target_projected'],
             output_dir=self.base_config.get('output', {}).get('base_dir'),
         )
+
+        # Store reference to the source GeoDataFrame for gpkg export
+        self._source_geodataframe = data
         
         # Filter features to only those available
         available_features = data.columns.tolist()
