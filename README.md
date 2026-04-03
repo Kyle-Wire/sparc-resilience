@@ -146,38 +146,6 @@ sparc init --template uhi --output ./my_project
 
 ---
 
-## Installation
-
-**Requirements:** Python 3.10+
-
-### Windows (Easiest)
-
-```powershell
-git clone https://github.com/Kyle-Wire/sparc-resilience.git
-cd sparc-resilience
-scripts\Install_SPARC.bat
-```
-
-The install script creates a virtual environment, installs all dependencies, and sets up the `sparc` CLI.
-
-### Mac / Linux
-
-```bash
-git clone https://github.com/Kyle-Wire/sparc-resilience.git
-cd sparc-resilience
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[ui]"
-```
-
-### Verify
-
-```powershell
-sparc --help
-```
-
----
-
 ## Quick Start
 
 ### Option A: Desktop App (Recommended for New Users)
