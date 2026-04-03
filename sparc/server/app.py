@@ -398,7 +398,360 @@ async def run_stream(ws: WebSocket):
 
 
 # ------------------------------------------------------------------
-# Results endpoints
+# Structured results endpoints (MUST be defined before /results/{stage}
+# so FastAPI matches exact paths before the parameterized catch-all)
+# ------------------------------------------------------------------
+
+@app.get("/results/correlogram")
+async def get_correlogram_data():
+    """Return correlogram analysis results with per-variable lag/Moran's I data."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+    import json as _json
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+
+    candidates = [
+        paths.stage1_dir / "correlogram_analysis_results.json",
+        paths.stage1_dir / "correlogram_results.json",
+    ]
+    found = next((p for p in candidates if p.exists()), None)
+    if found is None:
+        raise HTTPException(404, "Correlogram results not found. Run Stage 0 first.")
+
+    with open(found, "r", encoding="utf-8") as fh:
+        return _json.load(fh)
+
+
+@app.get("/results/gwen")
+async def get_gwen_data():
+    """Return GWEN variable importance as a row-oriented table."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+    import json as _json
+    import pandas as pd
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+
+    # Try CSV first, then JSON
+    csv_path = paths.stage1_dir / "gwen_variable_importance.csv"
+    json_path = paths.stage1_dir / "gwen_results.json"
+
+    if csv_path.exists():
+        df = pd.read_csv(csv_path)
+        return {"rows": df.to_dict(orient="records")}
+    elif json_path.exists():
+        with open(json_path, "r", encoding="utf-8") as fh:
+            return _json.load(fh)
+    else:
+        raise HTTPException(404, "GWEN results not found. Run Stage 1 first.")
+
+
+@app.get("/results/spatial_cv/predictions")
+async def get_spatial_cv_predictions():
+    """Return spatial CV predictions as GeoJSON (from gpkg with geometry)."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+
+    gpkg_path = paths.stage2_dir / "spatial_cv_predictions.gpkg"
+    if not gpkg_path.exists():
+        raise HTTPException(404, "Spatial CV predictions gpkg not found. Run Stage 2 first.")
+
+    import geopandas as gpd
+    gdf = gpd.read_file(gpkg_path)
+    # Reproject to WGS84 for web display
+    if gdf.crs is not None and str(gdf.crs) != "EPSG:4326":
+        gdf = gdf.to_crs(epsg=4326)
+    return gdf.__geo_interface__
+
+
+@app.get("/results/causal")
+async def get_causal_results():
+    """Return causal validation results (coefficients, effects, diagnostics)."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+    import json as _json
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+
+    coeff_path = paths.stage3_dir / "scenario_coefficients.json"
+    if not coeff_path.exists():
+        raise HTTPException(404, "Causal results not found. Run Stage 3 first.")
+
+    with open(coeff_path, "r", encoding="utf-8") as fh:
+        return _json.load(fh)
+
+
+@app.get("/results/causal/dose_response")
+async def get_dose_response():
+    """Return dose-response curves if available."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+    import json as _json
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+
+    dr_path = paths.stage3_dir / "dose_response_curves.json"
+    if not dr_path.exists():
+        raise HTTPException(404, "Dose-response data not available")
+
+    with open(dr_path, "r", encoding="utf-8") as fh:
+        return _json.load(fh)
+
+
+@app.get("/results/causal/diagnostics")
+async def get_causal_diagnostics():
+    """Return CATE diagnostics (calibration, cumulative effects, RATE)."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+    import json as _json
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+
+    diag_path = paths.stage3_dir / "causal_diagnostics.json"
+    if not diag_path.exists():
+        raise HTTPException(404, "Causal diagnostics not available")
+
+    with open(diag_path, "r", encoding="utf-8") as fh:
+        return _json.load(fh)
+
+
+@app.get("/results/pdp_curves")
+async def get_pdp_curves():
+    """Return GWRF partial dependence / condition curves."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+    import json as _json
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+
+    # Check both possible locations
+    candidates = [
+        paths.spatial_analysis_dir / "gwrf_pdp" / "gwrf_condition_curves.json",
+        paths.stage2_dir / "spatial_intelligence" / "gwrf_pdp" / "gwrf_condition_curves.json",
+        paths.stage2_dir / "gwrf_pdp" / "gwrf_condition_curves.json",
+    ]
+    found = next((p for p in candidates if p.exists()), None)
+    if found is None:
+        raise HTTPException(404, "PDP curve data not found. Run Stage 2 first.")
+
+    with open(found, "r", encoding="utf-8") as fh:
+        return _json.load(fh)
+
+
+@app.get("/results/scenarios/detail")
+async def get_scenario_detail():
+    """Return scenario results as GeoJSON with delta columns + summary table."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+    import pandas as pd
+    import numpy as np
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+
+    # Load scenario spatial results
+    gpkg_path = paths.stage4_dir / "scenario_results.gpkg"
+    geojson_data = None
+    if gpkg_path.exists():
+        import geopandas as gpd
+        gdf = gpd.read_file(gpkg_path)
+
+        # Compute delta columns (scenario prediction - baseline)
+        baseline_col = None
+        for col in gdf.columns:
+            if "baseline" in col.lower() and "pred" in col.lower():
+                baseline_col = col
+                break
+        if baseline_col is None:
+            baseline_col = next((c for c in gdf.columns if c == "pred_baseline"), None)
+
+        if baseline_col is not None:
+            pred_cols = [c for c in gdf.columns if c.startswith("pred_") and c != baseline_col]
+            for pc in pred_cols:
+                delta_col = pc.replace("pred_", "delta_")
+                try:
+                    gdf[delta_col] = gdf[pc].astype(float) - gdf[baseline_col].astype(float)
+                except Exception:
+                    pass
+
+        # Reproject to WGS84 for web display
+        if gdf.crs is not None and str(gdf.crs) != "EPSG:4326":
+            gdf = gdf.to_crs(epsg=4326)
+        geojson_data = gdf.__geo_interface__
+    else:
+        # Fall back to in-memory result
+        result = state.get_result(4)
+        if result is None:
+            raise HTTPException(404, "No scenario results found. Run scenarios first.")
+        spatial = result.get("spatial", result) if isinstance(result, dict) else result
+        import geopandas as gpd
+        if isinstance(spatial, gpd.GeoDataFrame):
+            if spatial.crs is not None and str(spatial.crs) != "EPSG:4326":
+                spatial = spatial.to_crs(epsg=4326)
+            geojson_data = spatial.__geo_interface__
+        else:
+            raise HTTPException(404, "No spatial scenario results available")
+
+    # Load summary CSV
+    summary_data = []
+    summary_path = paths.stage4_dir / "scenario_summary.csv"
+    if summary_path.exists():
+        summary_df = pd.read_csv(summary_path)
+        summary_data = summary_df.to_dict(orient="records")
+
+    return {"geojson": geojson_data, "summary": summary_data}
+
+
+@app.get("/results/report")
+async def get_report_data():
+    """Compile all stage results into a structured payload for the report view."""
+    import pandas as pd
+    import json as _json
+
+    cfg = state.project_config or {}
+
+    report: dict[str, Any] = {}
+
+    # Project info
+    raw = state.raw_project_yaml or {}
+    report["project"] = raw.get("project", {})
+    report["data_summary"] = state.data_summary or {}
+
+    # Predictors
+    predictors = cfg.get("predictors", {})
+    if isinstance(predictors, list):
+        report["predictors"] = predictors
+    elif isinstance(predictors, dict):
+        report["predictors"] = predictors.get("base_model", [])
+    else:
+        report["predictors"] = []
+
+    # Causal + physics + pipeline config
+    report["causal"] = cfg.get("causal", {})
+    report["physics"] = cfg.get("physics", {})
+    report["pipeline"] = cfg.get("pipeline", {})
+
+    # Stage-specific structured data
+    from sparc.run.pipeline_paths import PipelinePaths
+    try:
+        paths = PipelinePaths.from_config(cfg)
+    except Exception:
+        paths = None
+
+    # Correlogram summary
+    if paths:
+        corr_path = paths.stage1_dir / "correlogram_analysis_results.json"
+        if not corr_path.exists():
+            corr_path = paths.stage1_dir / "correlogram_results.json"
+        if corr_path.exists():
+            with open(corr_path, "r", encoding="utf-8") as fh:
+                corr_data = _json.load(fh)
+            # Extract just the summary metrics per variable
+            individual = corr_data.get("individual_results", {})
+            report["correlogram"] = {
+                var: {
+                    "optimal_bandwidth": info.get("optimal_bandwidth"),
+                    "effective_range": info.get("effective_range"),
+                    "max_moran_i": info.get("max_moran_i"),
+                }
+                for var, info in individual.items()
+            }
+
+    # GWEN summary
+    if paths:
+        csv_path = paths.stage1_dir / "gwen_variable_importance.csv"
+        if csv_path.exists():
+            df = pd.read_csv(csv_path)
+            report["gwen"] = df.to_dict(orient="records")
+
+    # Spatial CV performance
+    if paths:
+        oof_path = paths.stage2_dir / "optimized_oof_predictions.csv"
+        if oof_path.exists():
+            oof_df = pd.read_csv(oof_path)
+            report["spatial_cv_models"] = list(oof_df.columns)
+
+    # Causal coefficients
+    if paths:
+        coeff_path = paths.stage3_dir / "scenario_coefficients.json"
+        if coeff_path.exists():
+            with open(coeff_path, "r", encoding="utf-8") as fh:
+                report["causal_results"] = _json.load(fh)
+
+    # Scenario summary
+    if paths:
+        summary_path = paths.stage4_dir / "scenario_summary.csv"
+        if summary_path.exists():
+            summary_df = pd.read_csv(summary_path)
+            report["scenario_summary"] = summary_df.to_dict(orient="records")
+
+    # Plot URLs per stage
+    plot_stages: dict[str, list] = {}
+    for stage_num, stage_dir in [(0, paths.stage1_dir if paths else None),
+                                  (2, paths.stage2_dir if paths else None),
+                                  (3, paths.stage3_dir if paths else None),
+                                  (4, paths.stage4_dir if paths else None)]:
+        if stage_dir and stage_dir.exists():
+            plots = []
+            for ext in ("*.png", "*.svg"):
+                for f in sorted(stage_dir.rglob(ext)):
+                    plots.append({
+                        "name": f.stem,
+                        "filename": f.name,
+                        "path": str(f.relative_to(stage_dir)),
+                        "stage": stage_num,
+                    })
+            if plots:
+                plot_stages[f"stage_{stage_num}"] = plots
+    report["plots"] = plot_stages
+
+    return report
+
+
+# ------------------------------------------------------------------
+# Results endpoints (parameterized — MUST come after named routes above)
 # ------------------------------------------------------------------
 
 @app.get("/results/{stage}")
@@ -904,355 +1257,3 @@ def _to_json(data: Any) -> Any:
     if isinstance(data, dict):
         return data
     return {"data": str(data)}
-
-
-# ------------------------------------------------------------------
-# Structured results endpoints
-# ------------------------------------------------------------------
-
-@app.get("/results/correlogram")
-async def get_correlogram_data():
-    """Return correlogram analysis results with per-variable lag/Moran's I data."""
-    if state.project_config is None:
-        raise HTTPException(400, "No project loaded")
-
-    from sparc.run.pipeline_paths import PipelinePaths
-    import json as _json
-
-    try:
-        paths = PipelinePaths.from_config(state.project_config)
-    except Exception:
-        raise HTTPException(404, "Cannot resolve output paths")
-
-    candidates = [
-        paths.stage1_dir / "correlogram_analysis_results.json",
-        paths.stage1_dir / "correlogram_results.json",
-    ]
-    found = next((p for p in candidates if p.exists()), None)
-    if found is None:
-        raise HTTPException(404, "Correlogram results not found. Run Stage 0 first.")
-
-    with open(found, "r", encoding="utf-8") as fh:
-        return _json.load(fh)
-
-
-@app.get("/results/gwen")
-async def get_gwen_data():
-    """Return GWEN variable importance as a row-oriented table."""
-    if state.project_config is None:
-        raise HTTPException(400, "No project loaded")
-
-    from sparc.run.pipeline_paths import PipelinePaths
-    import json as _json
-    import pandas as pd
-
-    try:
-        paths = PipelinePaths.from_config(state.project_config)
-    except Exception:
-        raise HTTPException(404, "Cannot resolve output paths")
-
-    # Try CSV first, then JSON
-    csv_path = paths.stage1_dir / "gwen_variable_importance.csv"
-    json_path = paths.stage1_dir / "gwen_results.json"
-
-    if csv_path.exists():
-        df = pd.read_csv(csv_path)
-        return {"rows": df.to_dict(orient="records")}
-    elif json_path.exists():
-        with open(json_path, "r", encoding="utf-8") as fh:
-            return _json.load(fh)
-    else:
-        raise HTTPException(404, "GWEN results not found. Run Stage 1 first.")
-
-
-@app.get("/results/spatial_cv/predictions")
-async def get_spatial_cv_predictions():
-    """Return spatial CV predictions as GeoJSON (from gpkg with geometry)."""
-    if state.project_config is None:
-        raise HTTPException(400, "No project loaded")
-
-    from sparc.run.pipeline_paths import PipelinePaths
-
-    try:
-        paths = PipelinePaths.from_config(state.project_config)
-    except Exception:
-        raise HTTPException(404, "Cannot resolve output paths")
-
-    gpkg_path = paths.stage2_dir / "spatial_cv_predictions.gpkg"
-    if not gpkg_path.exists():
-        raise HTTPException(404, "Spatial CV predictions gpkg not found. Run Stage 2 first.")
-
-    import geopandas as gpd
-    gdf = gpd.read_file(gpkg_path)
-    # Reproject to WGS84 for web display
-    if gdf.crs is not None and str(gdf.crs) != "EPSG:4326":
-        gdf = gdf.to_crs(epsg=4326)
-    return gdf.__geo_interface__
-
-
-@app.get("/results/causal")
-async def get_causal_results():
-    """Return causal validation results (coefficients, effects, diagnostics)."""
-    if state.project_config is None:
-        raise HTTPException(400, "No project loaded")
-
-    from sparc.run.pipeline_paths import PipelinePaths
-    import json as _json
-
-    try:
-        paths = PipelinePaths.from_config(state.project_config)
-    except Exception:
-        raise HTTPException(404, "Cannot resolve output paths")
-
-    coeff_path = paths.stage3_dir / "scenario_coefficients.json"
-    if not coeff_path.exists():
-        raise HTTPException(404, "Causal results not found. Run Stage 3 first.")
-
-    with open(coeff_path, "r", encoding="utf-8") as fh:
-        return _json.load(fh)
-
-
-@app.get("/results/causal/dose_response")
-async def get_dose_response():
-    """Return dose-response curves if available."""
-    if state.project_config is None:
-        raise HTTPException(400, "No project loaded")
-
-    from sparc.run.pipeline_paths import PipelinePaths
-    import json as _json
-
-    try:
-        paths = PipelinePaths.from_config(state.project_config)
-    except Exception:
-        raise HTTPException(404, "Cannot resolve output paths")
-
-    dr_path = paths.stage3_dir / "dose_response_curves.json"
-    if not dr_path.exists():
-        raise HTTPException(404, "Dose-response data not available")
-
-    with open(dr_path, "r", encoding="utf-8") as fh:
-        return _json.load(fh)
-
-
-@app.get("/results/causal/diagnostics")
-async def get_causal_diagnostics():
-    """Return CATE diagnostics (calibration, cumulative effects, RATE)."""
-    if state.project_config is None:
-        raise HTTPException(400, "No project loaded")
-
-    from sparc.run.pipeline_paths import PipelinePaths
-    import json as _json
-
-    try:
-        paths = PipelinePaths.from_config(state.project_config)
-    except Exception:
-        raise HTTPException(404, "Cannot resolve output paths")
-
-    diag_path = paths.stage3_dir / "causal_diagnostics.json"
-    if not diag_path.exists():
-        raise HTTPException(404, "Causal diagnostics not available")
-
-    with open(diag_path, "r", encoding="utf-8") as fh:
-        return _json.load(fh)
-
-
-@app.get("/results/pdp_curves")
-async def get_pdp_curves():
-    """Return GWRF partial dependence / condition curves."""
-    if state.project_config is None:
-        raise HTTPException(400, "No project loaded")
-
-    from sparc.run.pipeline_paths import PipelinePaths
-    import json as _json
-
-    try:
-        paths = PipelinePaths.from_config(state.project_config)
-    except Exception:
-        raise HTTPException(404, "Cannot resolve output paths")
-
-    # Check both possible locations
-    candidates = [
-        paths.spatial_analysis_dir / "gwrf_pdp" / "gwrf_condition_curves.json",
-        paths.stage2_dir / "spatial_intelligence" / "gwrf_pdp" / "gwrf_condition_curves.json",
-        paths.stage2_dir / "gwrf_pdp" / "gwrf_condition_curves.json",
-    ]
-    found = next((p for p in candidates if p.exists()), None)
-    if found is None:
-        raise HTTPException(404, "PDP curve data not found. Run Stage 2 first.")
-
-    with open(found, "r", encoding="utf-8") as fh:
-        return _json.load(fh)
-
-
-@app.get("/results/scenarios/detail")
-async def get_scenario_detail():
-    """Return scenario results as GeoJSON with delta columns + summary table."""
-    if state.project_config is None:
-        raise HTTPException(400, "No project loaded")
-
-    from sparc.run.pipeline_paths import PipelinePaths
-    import pandas as pd
-    import numpy as np
-
-    try:
-        paths = PipelinePaths.from_config(state.project_config)
-    except Exception:
-        raise HTTPException(404, "Cannot resolve output paths")
-
-    # Load scenario spatial results
-    gpkg_path = paths.stage4_dir / "scenario_results.gpkg"
-    geojson_data = None
-    if gpkg_path.exists():
-        import geopandas as gpd
-        gdf = gpd.read_file(gpkg_path)
-
-        # Compute delta columns (scenario prediction - baseline)
-        baseline_col = None
-        for col in gdf.columns:
-            if "baseline" in col.lower() and "pred" in col.lower():
-                baseline_col = col
-                break
-        if baseline_col is None:
-            baseline_col = next((c for c in gdf.columns if c == "pred_baseline"), None)
-
-        if baseline_col is not None:
-            pred_cols = [c for c in gdf.columns if c.startswith("pred_") and c != baseline_col]
-            for pc in pred_cols:
-                delta_col = pc.replace("pred_", "delta_")
-                try:
-                    gdf[delta_col] = gdf[pc].astype(float) - gdf[baseline_col].astype(float)
-                except Exception:
-                    pass
-
-        # Reproject to WGS84 for web display
-        if gdf.crs is not None and str(gdf.crs) != "EPSG:4326":
-            gdf = gdf.to_crs(epsg=4326)
-        geojson_data = gdf.__geo_interface__
-    else:
-        # Fall back to in-memory result
-        result = state.get_result(4)
-        if result is None:
-            raise HTTPException(404, "No scenario results found. Run scenarios first.")
-        spatial = result.get("spatial", result) if isinstance(result, dict) else result
-        import geopandas as gpd
-        if isinstance(spatial, gpd.GeoDataFrame):
-            if spatial.crs is not None and str(spatial.crs) != "EPSG:4326":
-                spatial = spatial.to_crs(epsg=4326)
-            geojson_data = spatial.__geo_interface__
-        else:
-            raise HTTPException(404, "No spatial scenario results available")
-
-    # Load summary CSV
-    summary_data = []
-    summary_path = paths.stage4_dir / "scenario_summary.csv"
-    if summary_path.exists():
-        summary_df = pd.read_csv(summary_path)
-        summary_data = summary_df.to_dict(orient="records")
-
-    return {"geojson": geojson_data, "summary": summary_data}
-
-
-@app.get("/results/report")
-async def get_report_data():
-    """Compile all stage results into a structured payload for the report view."""
-    import pandas as pd
-    import json as _json
-
-    cfg = state.project_config or {}
-
-    report: dict[str, Any] = {}
-
-    # Project info
-    raw = state.raw_project_yaml or {}
-    report["project"] = raw.get("project", {})
-    report["data_summary"] = state.data_summary or {}
-
-    # Predictors
-    predictors = cfg.get("predictors", {})
-    if isinstance(predictors, list):
-        report["predictors"] = predictors
-    elif isinstance(predictors, dict):
-        report["predictors"] = predictors.get("base_model", [])
-    else:
-        report["predictors"] = []
-
-    # Causal + physics + pipeline config
-    report["causal"] = cfg.get("causal", {})
-    report["physics"] = cfg.get("physics", {})
-    report["pipeline"] = cfg.get("pipeline", {})
-
-    # Stage-specific structured data
-    from sparc.run.pipeline_paths import PipelinePaths
-    try:
-        paths = PipelinePaths.from_config(cfg)
-    except Exception:
-        paths = None
-
-    # Correlogram summary
-    if paths:
-        corr_path = paths.stage1_dir / "correlogram_analysis_results.json"
-        if not corr_path.exists():
-            corr_path = paths.stage1_dir / "correlogram_results.json"
-        if corr_path.exists():
-            with open(corr_path, "r", encoding="utf-8") as fh:
-                corr_data = _json.load(fh)
-            # Extract just the summary metrics per variable
-            individual = corr_data.get("individual_results", {})
-            report["correlogram"] = {
-                var: {
-                    "optimal_bandwidth": info.get("optimal_bandwidth"),
-                    "effective_range": info.get("effective_range"),
-                    "max_moran_i": info.get("max_moran_i"),
-                }
-                for var, info in individual.items()
-            }
-
-    # GWEN summary
-    if paths:
-        csv_path = paths.stage1_dir / "gwen_variable_importance.csv"
-        if csv_path.exists():
-            df = pd.read_csv(csv_path)
-            report["gwen"] = df.to_dict(orient="records")
-
-    # Spatial CV performance
-    if paths:
-        oof_path = paths.stage2_dir / "optimized_oof_predictions.csv"
-        if oof_path.exists():
-            oof_df = pd.read_csv(oof_path)
-            report["spatial_cv_models"] = list(oof_df.columns)
-
-    # Causal coefficients
-    if paths:
-        coeff_path = paths.stage3_dir / "scenario_coefficients.json"
-        if coeff_path.exists():
-            with open(coeff_path, "r", encoding="utf-8") as fh:
-                report["causal_results"] = _json.load(fh)
-
-    # Scenario summary
-    if paths:
-        summary_path = paths.stage4_dir / "scenario_summary.csv"
-        if summary_path.exists():
-            summary_df = pd.read_csv(summary_path)
-            report["scenario_summary"] = summary_df.to_dict(orient="records")
-
-    # Plot URLs per stage
-    plot_stages: dict[str, list] = {}
-    for stage_num, stage_dir in [(0, paths.stage1_dir if paths else None),
-                                  (2, paths.stage2_dir if paths else None),
-                                  (3, paths.stage3_dir if paths else None),
-                                  (4, paths.stage4_dir if paths else None)]:
-        if stage_dir and stage_dir.exists():
-            plots = []
-            for ext in ("*.png", "*.svg"):
-                for f in sorted(stage_dir.rglob(ext)):
-                    plots.append({
-                        "name": f.stem,
-                        "filename": f.name,
-                        "path": str(f.relative_to(stage_dir)),
-                        "stage": stage_num,
-                    })
-            if plots:
-                plot_stages[f"stage_{stage_num}"] = plots
-    report["plots"] = plot_stages
-
-    return report
