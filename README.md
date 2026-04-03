@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="sparc/ui/assets/logo.png" alt="SPARC Labs" width="280">
+</p>
+
 # SPARC — Spatial Analysis and Research Core
 
 **SPARC Labs LLC**
@@ -49,15 +53,13 @@ Published in [*Urban Climate* (2025)](https://doi.org/10.1016/j.uclim.2025.10267
 | | |
 |:---:|:---:|
 | ![Project Setup](docs/screenshots/01-project-setup.png) | ![Data Upload](docs/screenshots/02-data-upload.png) |
-| *Project setup and template selection* | *Data upload and preview* |
+| *Project setup and template selection* | *Data upload and preview — 54,701 rows at a glance* |
 | ![DAG Builder](docs/screenshots/03-dag-builder.png) | ![Physics Config](docs/screenshots/04-physics-config.png) |
-| *Visual causal DAG editor* | *Physics constraints and priors* |
-| ![Pipeline Running](docs/screenshots/05-pipeline-running.png) | ![Results Maps](docs/screenshots/06-results-maps.png) |
-| *Pipeline execution with live progress* | *Spatial results and model diagnostics* |
-| ![Scenario Tables](docs/screenshots/07-scenario-tables.png) | ![Uncertainty](docs/screenshots/08-uncertainty.png) |
-| *Intervention scenario comparison* | *Monte Carlo uncertainty bands* |
-
-> **Note:** Add your own screenshots to `docs/screenshots/` using the filenames above.
+| *Visual causal DAG editor with drag-and-drop edges* | *Physics constraints: monotone signs, priors, and caps* |
+| ![Models & Pipeline](docs/screenshots/05-models.png) | ![Pipeline Running](docs/screenshots/06-pipeline_running.png) |
+| *Model configuration and feature flags* | *Pipeline execution with live terminal output* |
+| ![Correlogram Results](docs/screenshots/07-correlogram_results.png) | ![Spatial CV Results](docs/screenshots/08-spatial_cv_table.png) |
+| *Stage 0 correlogram — auto-detected bandwidths and block sizes* | *Stage 2 results — meta-ensemble predictions vs. actuals* |
 
 ---
 
