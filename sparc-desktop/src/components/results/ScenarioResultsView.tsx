@@ -153,6 +153,7 @@ export default function ScenarioResultsView() {
       </div>
 
       {/* Map */}
+      {detail.geojson && (
       <div className="rounded-lg border border-sparc-gray-200 overflow-hidden" style={{ minHeight: 400 }}>
         <SpatialMap
           geojson={detail.geojson as any}
@@ -161,6 +162,7 @@ export default function ScenarioResultsView() {
           height="400px"
         />
       </div>
+      )}
 
       {/* Summary section */}
       {detail.summary && detail.summary.length > 0 && (

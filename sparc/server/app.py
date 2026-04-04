@@ -728,11 +728,21 @@ async def get_scenario_detail():
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
-    # Load scenario spatial results
-    gpkg_path = paths.stage4_dir / "scenario_results.gpkg"
-    print(f"[SPARC] Scenario lookup: {gpkg_path} exists={gpkg_path.exists()}")
+    # Load scenario spatial results (check canonical name + mode-specific variants)
+    gpkg_path = None
+    for gpkg_name in (
+        "scenario_results.gpkg",
+        "scenario_results_dag.gpkg",
+        "scenario_results_hybrid.gpkg",
+        "scenario_results_reprediction.gpkg",
+    ):
+        candidate = paths.stage4_dir / gpkg_name
+        if candidate.exists():
+            gpkg_path = candidate
+            break
+    print(f"[SPARC] Scenario gpkg lookup: {gpkg_path} found={gpkg_path is not None}")
     geojson_data = None
-    if gpkg_path.exists():
+    if gpkg_path is not None:
         import geopandas as gpd
         gdf = gpd.read_file(gpkg_path)
 
@@ -761,23 +771,27 @@ async def get_scenario_detail():
     else:
         # Fall back to in-memory result
         result = state.get_result(4)
-        if result is None:
-            raise HTTPException(404, "No scenario results found. Run scenarios first.")
-        spatial = result.get("spatial", result) if isinstance(result, dict) else result
-        import geopandas as gpd
-        if isinstance(spatial, gpd.GeoDataFrame):
-            if spatial.crs is not None and str(spatial.crs) != "EPSG:4326":
-                spatial = spatial.to_crs(epsg=4326)
-            geojson_data = spatial.__geo_interface__
-        else:
-            raise HTTPException(404, "No spatial scenario results available")
+        if result is not None:
+            spatial = result.get("spatial", result) if isinstance(result, dict) else result
+            import geopandas as gpd
+            if isinstance(spatial, gpd.GeoDataFrame):
+                if spatial.crs is not None and str(spatial.crs) != "EPSG:4326":
+                    spatial = spatial.to_crs(epsg=4326)
+                geojson_data = spatial.__geo_interface__
 
-    # Load summary CSV
+    # Load summary CSV (check all mode variants)
     summary_data = []
-    summary_path = paths.stage4_dir / "scenario_summary.csv"
-    if summary_path.exists():
-        summary_df = pd.read_csv(summary_path)
-        summary_data = summary_df.to_dict(orient="records")
+    for summary_name in (
+        "scenario_summary.csv",
+        "scenario_summary_dag.csv",
+        "scenario_summary_hybrid.csv",
+        "scenario_summary_reprediction.csv",
+    ):
+        summary_path = paths.stage4_dir / summary_name
+        if summary_path.exists():
+            summary_df = pd.read_csv(summary_path)
+            summary_data = summary_df.to_dict(orient="records")
+            break
 
     return {"geojson": geojson_data, "summary": summary_data}
 
@@ -815,8 +829,19 @@ async def get_report_data():
     from sparc.run.pipeline_paths import PipelinePaths
     try:
         paths = PipelinePaths.from_config(cfg)
-    except Exception:
+    except Exception as exc:
+        print(f"[SPARC] Report: PipelinePaths error: {exc}")
         paths = None
+
+    if paths:
+        print(f"[SPARC] Report: output_dir={paths.output_dir}")
+        print(f"[SPARC] Report: stage3_dir={paths.stage3_dir} exists={paths.stage3_dir.exists()}")
+        print(f"[SPARC] Report: stage4_dir={paths.stage4_dir} exists={paths.stage4_dir.exists()}")
+        coeff_check = paths.stage3_dir / "scenario_coefficients.json"
+        print(f"[SPARC] Report: coeff_path={coeff_check} exists={coeff_check.exists()}")
+        if paths.stage4_dir.exists():
+            s4_files = list(paths.stage4_dir.glob("*"))
+            print(f"[SPARC] Report: stage4 files={[f.name for f in s4_files]}")
 
     # Correlogram summary (Stage 0)
     if paths:
@@ -853,19 +878,36 @@ async def get_report_data():
             oof_df = pd.read_csv(oof_path)
             report["spatial_cv_models"] = list(oof_df.columns)
 
-    # Causal coefficients
+    # Causal coefficients (Stage 3)
     if paths:
         coeff_path = paths.stage3_dir / "scenario_coefficients.json"
         if coeff_path.exists():
             with open(coeff_path, "r", encoding="utf-8") as fh:
                 report["causal_results"] = _json.load(fh)
+        # Also load dose-response curves if available
+        dr_path = paths.stage3_dir / "dose_response_curves.json"
+        if dr_path.exists():
+            with open(dr_path, "r", encoding="utf-8") as fh:
+                report["dose_response"] = _json.load(fh)
+        # Propensity diagnostics
+        prop_path = paths.stage3_dir / "propensity_diagnostics.json"
+        if prop_path.exists():
+            with open(prop_path, "r", encoding="utf-8") as fh:
+                report["propensity_diagnostics"] = _json.load(fh)
 
-    # Scenario summary
+    # Scenario summary (check all mode variants)
     if paths:
-        summary_path = paths.stage4_dir / "scenario_summary.csv"
-        if summary_path.exists():
-            summary_df = pd.read_csv(summary_path)
-            report["scenario_summary"] = summary_df.to_dict(orient="records")
+        for scenario_name in (
+            "scenario_summary.csv",
+            "scenario_summary_dag.csv",
+            "scenario_summary_hybrid.csv",
+            "scenario_summary_reprediction.csv",
+        ):
+            summary_path = paths.stage4_dir / scenario_name
+            if summary_path.exists():
+                summary_df = pd.read_csv(summary_path)
+                report["scenario_summary"] = summary_df.to_dict(orient="records")
+                break
 
     # Plot URLs per stage
     plot_stages: dict[str, list] = {}

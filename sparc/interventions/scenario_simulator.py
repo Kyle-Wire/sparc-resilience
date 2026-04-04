@@ -1948,6 +1948,8 @@ class ScenarioSimulator:
         if results_gdf is not None:
             gpkg = self.output_dir / "scenario_results_dag.gpkg"
             results_gdf.to_file(gpkg, driver="GPKG")
+            # Also write canonical name so the UI always finds a spatial file
+            results_gdf.to_file(self.output_dir / "scenario_results.gpkg", driver="GPKG")
             if verbose:
                 print(f"GeoPackage saved: {gpkg}")
 
@@ -2371,6 +2373,7 @@ class ScenarioSimulator:
         if results_gdf is not None:
             gpkg = self.output_dir / "scenario_results_reprediction.gpkg"
             results_gdf.to_file(gpkg, driver="GPKG")
+            results_gdf.to_file(self.output_dir / "scenario_results.gpkg", driver="GPKG")
             if verbose:
                 print(f"GeoPackage saved: {gpkg}")
 
@@ -2784,6 +2787,7 @@ class ScenarioSimulator:
         if results_gdf is not None:
             gpkg = self.output_dir / "scenario_results_hybrid.gpkg"
             results_gdf.to_file(gpkg, driver="GPKG")
+            results_gdf.to_file(self.output_dir / "scenario_results.gpkg", driver="GPKG")
             if verbose:
                 print(f"GeoPackage saved: {gpkg}")
 
