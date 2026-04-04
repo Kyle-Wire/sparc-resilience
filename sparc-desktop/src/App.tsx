@@ -17,6 +17,7 @@ import DAGView from "@/components/pipeline/DAGView";
 import PhysicsView from "@/components/pipeline/PhysicsView";
 import ScenariosView from "@/components/pipeline/ScenariosView";
 import ModelsView from "@/components/pipeline/ModelsView";
+import DataProcessingView from "@/components/pipeline/DataProcessingView";
 import PipelineRun from "@/components/pipeline/PipelineRun";
 import ResultsView from "@/components/results/ResultsView";
 import ReportView from "@/components/results/ReportView";
@@ -153,6 +154,8 @@ export default function App() {
         );
       case "Data":
         return <DataView key={refreshKey} onNavigateToProject={() => navigate("Project")} />;
+      case "Processing":
+        return <DataProcessingView key={refreshKey} />;
       case "Variables":
         return <VariablesView key={refreshKey} />;
       case "CRS":
@@ -184,6 +187,8 @@ export default function App() {
         currentPage={page as PageName}
         onNavigate={(p) => navigate(p)}
         onSettings={() => navigate("Settings")}
+        onToggleChat={() => setChatOpen((o) => !o)}
+        chatOpen={chatOpen}
         status={status}
         projectLoaded={project.projectLoaded}
       >
@@ -192,27 +197,17 @@ export default function App() {
           <div className="flex-1">
             {renderPage()}
           </div>
-
-          {/* Retro AI Assistant toggle button — bottom-left */}
-          <button
-            onClick={() => setChatOpen(!chatOpen)}
-            className={`retro-toggle fixed left-20 bottom-4 z-50 rounded px-3 py-1.5 text-xs font-bold transition-colors ${
-              chatOpen
-                ? "bg-sparc-gray-800 text-white hover:bg-black"
-                : "bg-sparc-purple text-white hover:bg-sparc-magenta"
-            }`}
-          >
-            {chatOpen ? "✕ CLOSE" : "▸ AI ASSISTANT"}
-          </button>
-
-          {/* Chat panel — bottom-left popup, retro style */}
-          {chatOpen && (
-            <div className="retro-box retro-pop-in fixed left-20 bottom-14 z-40 w-96 bg-white overflow-hidden"
-                 style={{ height: "min(480px, calc(100vh - 120px))" }}>
-              <ChatPanel onAction={handleAction} systemPrompt={systemPrompt} onClose={() => setChatOpen(false)} />
-            </div>
-          )}
         </div>
+
+        {/* Chat panel — anchored to sidebar, slide-up */}
+        {chatOpen && (
+          <div
+            className="retro-box retro-pop-in fixed left-52 bottom-0 z-40 w-96 bg-white overflow-hidden border-t border-r border-sparc-gray-200 shadow-lg"
+            style={{ height: "min(480px, calc(100vh - 120px))" }}
+          >
+            <ChatPanel onAction={handleAction} systemPrompt={systemPrompt} onClose={() => setChatOpen(false)} />
+          </div>
+        )}
       </Shell>
       <NotificationBanner />
     </div>

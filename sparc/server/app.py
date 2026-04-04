@@ -20,7 +20,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Query, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Query, Body, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 
@@ -556,7 +556,32 @@ async def get_spatial_cv_predictions():
 
     gpkg_path = paths.stage2_dir / "spatial_cv_predictions.gpkg"
     print(f"[SPARC] Spatial CV lookup: {gpkg_path} exists={gpkg_path.exists()}")
-    if not gpkg_path.exists():
+
+    gdf = None
+
+    if gpkg_path.exists():
+        import geopandas as gpd
+        gdf = gpd.read_file(gpkg_path)
+    else:
+        # ---- Fallback: reconstruct from CSV + source geometry ----
+        csv_path = paths.stage2_dir / "final_ensemble_predictions.csv"
+        oof_path = paths.stage2_dir / "optimized_oof_predictions.csv"
+        source_csv = csv_path if csv_path.exists() else (oof_path if oof_path.exists() else None)
+
+        if source_csv is not None and state.data is not None:
+            import pandas as pd, geopandas as gpd
+            pred_df = pd.read_csv(source_csv)
+            src = state.data
+            if len(pred_df) == len(src):
+                gdf = gpd.GeoDataFrame(pred_df, geometry=src.geometry.values, crs=src.crs)
+                print(f"[SPARC] Reconstructed GPKG from {source_csv.name} + source geometry")
+                # Persist for next time
+                try:
+                    gdf.to_file(gpkg_path, driver="GPKG")
+                except Exception as exc:
+                    print(f"[SPARC] Could not persist reconstructed gpkg: {exc}")
+
+    if gdf is None:
         found = list(paths.stage2_dir.glob("*")) if paths.stage2_dir.exists() else []
         found_str = ", ".join(f.name for f in found[:20]) if found else "(directory empty or missing)"
         raise HTTPException(
@@ -565,8 +590,6 @@ async def get_spatial_cv_predictions():
             f"Files present: {found_str}",
         )
 
-    import geopandas as gpd
-    gdf = gpd.read_file(gpkg_path)
     # Reproject to WGS84 for web display
     if gdf.crs is not None and str(gdf.crs) != "EPSG:4326":
         gdf = gdf.to_crs(epsg=4326)
@@ -589,6 +612,24 @@ async def get_causal_results():
 
     coeff_path = paths.stage3_dir / "scenario_coefficients.json"
     print(f"[SPARC] Causal lookup: {coeff_path} exists={coeff_path.exists()}")
+
+    # Try primary file first, then fallback to causal_validation_summary
+    if coeff_path.exists():
+        with open(coeff_path, "r", encoding="utf-8") as fh:
+            return _json.load(fh)
+
+    # Fallback: try other known causal output files
+    alt_path = paths.stage3_dir / "causal_validation_summary.txt"
+    diag_path = paths.stage3_dir / "causal_diagnostics.json"
+    if diag_path.exists():
+        with open(diag_path, "r", encoding="utf-8") as fh:
+            return _json.load(fh)
+
+    # Check in-memory results
+    mem_result = state.get_result(3)
+    if mem_result is not None:
+        return mem_result
+
     if not coeff_path.exists():
         found = list(paths.stage3_dir.glob("*")) if paths.stage3_dir.exists() else []
         found_str = ", ".join(f.name for f in found[:20]) if found else "(directory empty or missing)"
@@ -597,9 +638,6 @@ async def get_causal_results():
             f"Causal results not found. Looked in: {paths.stage3_dir}. "
             f"Files present: {found_str}",
         )
-
-    with open(coeff_path, "r", encoding="utf-8") as fh:
-        return _json.load(fh)
 
 
 @app.get("/results/causal/dose_response")
@@ -958,7 +996,8 @@ async def run_scenarios():
         raise HTTPException(400, "No project loaded")
 
     scenarios = state.project_config.get("scenarios", [])
-    if not scenarios:
+    interaction_scenarios = state.project_config.get("interaction_scenarios", [])
+    if not scenarios and not interaction_scenarios:
         raise HTTPException(400, "No scenarios defined in project.yml")
 
     # Run synchronously for now; a production version would use
@@ -1016,7 +1055,7 @@ async def run_scenarios():
 
     return {
         "status": "complete",
-        "n_scenarios": len(scenarios),
+        "n_scenarios": len(scenarios) + len(interaction_scenarios),
         "summary_rows": len(summary_df),
         "scenario_mode": scenario_mode,
         "conservation_violations": len(conservation_violations),
@@ -1037,6 +1076,86 @@ async def scenario_results(format: str = Query("geojson", regex="^(json|geojson)
         return _to_json(result["summary"])
 
     return _to_json(result)
+
+
+# ------------------------------------------------------------------
+# Physics defaults endpoint
+# ------------------------------------------------------------------
+
+@app.get("/physics/defaults")
+async def physics_defaults():
+    """Return default literature-based physics priors."""
+    try:
+        from sparc.interventions.physics_priors import PhysicsPriors
+        pp = PhysicsPriors()
+        return {
+            k: c.to_dict() for k, c in pp.coefficients.items()
+        }
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# ------------------------------------------------------------------
+# Data Processing endpoints
+# ------------------------------------------------------------------
+
+@app.post("/data/fishnet")
+async def create_fishnet_endpoint(body: dict = Body(...)):
+    """Create a fishnet grid from bounds + resolution, optionally clip to boundary."""
+    from sparc.data.processing import create_fishnet, clip_to_boundary
+
+    bounds = body.get("bounds")  # [minx, miny, maxx, maxy]
+    resolution = body.get("resolution", 100)
+    crs = body.get("crs", "EPSG:4326")
+
+    if not bounds or len(bounds) != 4:
+        raise HTTPException(400, "bounds must be [minx, miny, maxx, maxy]")
+
+    gdf = create_fishnet(tuple(bounds), resolution, crs)
+
+    boundary_path = body.get("boundary_path")
+    if boundary_path and Path(boundary_path).exists():
+        import geopandas as _gpd
+        boundary = _gpd.read_file(boundary_path)
+        if boundary.crs and boundary.crs.to_string() != crs:
+            boundary = boundary.to_crs(crs)
+        gdf = clip_to_boundary(gdf, boundary)
+
+    # Persist to project directory
+    if state.project_config:
+        out_dir = Path(state.project_config.get("paths", {}).get("project_dir", "."))
+        out_path = out_dir / "fishnet.gpkg"
+        gdf.to_file(out_path, driver="GPKG")
+
+    return {"n_cells": len(gdf), "columns": list(gdf.columns)}
+
+
+@app.post("/data/zonal_stats")
+async def zonal_stats_endpoint(body: dict = Body(...)):
+    """Compute zonal statistics for raster layers on a fishnet."""
+    from sparc.data.processing import run_zonal_stats
+    import geopandas as _gpd
+
+    fishnet_path = body.get("fishnet_path")
+    raster_paths = body.get("raster_paths", [])
+    stats = body.get("stats", "mean")
+
+    if not fishnet_path or not Path(fishnet_path).exists():
+        raise HTTPException(400, "fishnet_path not found")
+    if not raster_paths:
+        raise HTTPException(400, "raster_paths required")
+
+    gdf = _gpd.read_file(fishnet_path)
+    gdf = run_zonal_stats(gdf, raster_paths, stats=stats)
+
+    out_path = Path(fishnet_path).with_name("fishnet_with_stats.gpkg")
+    gdf.to_file(out_path, driver="GPKG")
+
+    # Also export CSV for pipeline consumption
+    csv_path = out_path.with_suffix(".csv")
+    gdf.drop(columns=["geometry"]).to_csv(csv_path, index=False)
+
+    return {"n_cells": len(gdf), "columns": list(gdf.columns), "csv_path": str(csv_path)}
 
 
 # ------------------------------------------------------------------

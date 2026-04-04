@@ -55,7 +55,7 @@ class GWENModel:
         self.sample_indices = None
         self._nn_indices = None  # Cached k-NN indices
         
-    def fit(self, X, y, coords):
+    def fit(self, X, y, coords, feature_names=None):
         """
         Fit the GWEN model.
         
@@ -67,11 +67,14 @@ class GWENModel:
             Target values
         coords : array-like, shape (n_samples, 2)
             Spatial coordinates (X, Y) for each sample
+        feature_names : list, optional
+            Names of the features. If None, will use X0, X1, etc.
         """
         print("1. Scaling features...")
         X = np.asarray(X)
         y = np.asarray(y)
         coords = np.asarray(coords)
+        self.feature_names_ = feature_names if feature_names is not None else [f'X{i}' for i in range(X.shape[1])]
         
         # Apply sampling if specified (or force smaller sample in quick_mode)
         effective_sample = self.sample_size
@@ -163,7 +166,7 @@ class GWENModel:
         # Compute feature importance
         local_coefs = np.array(local_coefs)
         self.feature_importance = pd.DataFrame({
-            'feature': range(X.shape[1]),
+            'feature': self.feature_names_,
             'global_coef': self.global_model.coef_,
             'mean_local_coef': np.mean(np.abs(local_coefs), axis=0),
             'std_local_coef': np.std(np.abs(local_coefs), axis=0),
@@ -284,13 +287,19 @@ class GWENModel:
             raise ValueError("Model must be fitted before getting selected predictors")
         
         if feature_names is None:
+            feature_names = getattr(self, 'feature_names_', None)
+        if feature_names is None:
             feature_names = [f'X{i}' for i in range(self.feature_importance.shape[0])]
         
         # Select predictors based on selection frequency
         selected_mask = self.feature_importance['selection_frequency'] >= threshold
-        selected_indices = self.feature_importance[selected_mask]['feature'].values
+        selected_features = self.feature_importance[selected_mask]['feature'].values.tolist()
         
-        selected_predictors = [feature_names[int(idx)] for idx in selected_indices]
+        # If feature column already stores real names, return directly
+        if all(isinstance(f, str) for f in selected_features):
+            selected_predictors = selected_features
+        else:
+            selected_predictors = [feature_names[int(idx)] for idx in selected_features]
         
         print(f"Selected {len(selected_predictors)} predictors with selection frequency >= {threshold}")
         print(f"Selected predictors: {selected_predictors}")

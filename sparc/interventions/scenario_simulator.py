@@ -115,6 +115,7 @@ class ScenarioSimulator:
 
         # Scenarios (from project.yml)
         self.scenarios: List[dict] = config.get("scenarios", [])
+        self.interaction_scenarios: List[dict] = config.get("interaction_scenarios", [])
 
         # Models (populated by load_models())
         self._models: Dict[str, Any] = {}
@@ -1106,6 +1107,110 @@ class ScenarioSimulator:
         return coef * (actual_change / unit) * spatial_mult
 
     # ------------------------------------------------------------------
+    # Interaction (multi-variable) scenarios
+    # ------------------------------------------------------------------
+
+    def run_interaction_scenarios(
+        self,
+        baseline_df: pd.DataFrame,
+        baseline_pred: np.ndarray,
+        spatial_multiplier: np.ndarray,
+        target_mask: "pd.Series",
+        results_df: pd.DataFrame,
+        cate_multipliers: Dict[str, np.ndarray],
+        verbose: bool = True,
+    ) -> List[dict]:
+        """Run interaction scenarios that modify multiple variables simultaneously.
+
+        Each interaction scenario applies all leg deltas at once and sums the
+        physics-predicted response deltas.
+
+        Returns a list of summary dicts (same schema as single-variable rows).
+        """
+        rows: List[dict] = []
+        for ix_sc in self.interaction_scenarios:
+            name = ix_sc.get("name", "interaction")
+            legs = ix_sc.get("legs", [])
+            if not legs:
+                continue
+
+            if verbose:
+                leg_desc = ", ".join(f"{l['variable']}Δ{l['delta']:+g}" for l in legs)
+                print(f"\n--- Interaction: {name} ({leg_desc}) ---")
+
+            combined_delta = np.zeros(target_mask.sum(), dtype=float)
+            label_parts: List[str] = []
+
+            for leg in legs:
+                var_name = leg["variable"]
+                delta = float(leg.get("delta", 0))
+                if delta == 0 or var_name not in baseline_df.columns:
+                    continue
+
+                original = baseline_df.loc[target_mask, var_name].values
+                modified = original + delta
+
+                # Clip to physics bounds from scenario config
+                sc_cfg = next((s for s in self.scenarios if s["variable"] == var_name), {})
+                min_val = sc_cfg.get("min_val")
+                max_val = sc_cfg.get("max_val")
+                if min_val is not None:
+                    modified = np.maximum(modified, min_val)
+                if max_val is not None:
+                    modified = np.minimum(modified, max_val)
+
+                actual_change = modified - original
+
+                if var_name in cate_multipliers:
+                    full_cate = cate_multipliers[var_name]
+                    if len(full_cate) == len(baseline_pred):
+                        sm = full_cate[target_mask]
+                    else:
+                        sm = spatial_multiplier[target_mask]
+                else:
+                    sm = spatial_multiplier[target_mask]
+
+                combined_delta += self._physics_delta(var_name, actual_change, sm)
+                sign = "plus" if delta >= 0 else "minus"
+                label_parts.append(f"{var_name}_{sign}_{str(abs(delta)).replace('.', 'p')}")
+
+            scenario_label = "ix_" + "__".join(label_parts)
+            scenario_pred = baseline_pred.copy()
+            scenario_pred[target_mask] = baseline_pred[target_mask] + combined_delta
+            results_df[f"pred_{scenario_label}"] = scenario_pred
+
+            # Per-area summaries
+            for area_id, area_name in self.area_names.items():
+                mask = baseline_df[self.area_column] == area_id if self.area_column else pd.Series(True, index=baseline_df.index)
+                if mask.sum() == 0:
+                    continue
+                rows.append({
+                    "scenario": name,
+                    "label": scenario_label,
+                    "area": area_name,
+                    "n_cells": int(mask.sum()),
+                    "baseline_mean": float(baseline_pred[mask].mean()),
+                    "scenario_mean": float(scenario_pred[mask].mean()),
+                    "delta_mean": float((scenario_pred[mask] - baseline_pred[mask]).mean()),
+                })
+
+            if not self.area_names:
+                rows.append({
+                    "scenario": name,
+                    "label": scenario_label,
+                    "area": "all",
+                    "n_cells": int(target_mask.sum()),
+                    "baseline_mean": float(baseline_pred[target_mask].mean()),
+                    "scenario_mean": float(scenario_pred[target_mask].mean()),
+                    "delta_mean": float(combined_delta.mean()),
+                })
+
+            if verbose:
+                print(f"   Combined delta mean: {combined_delta.mean():.4f}")
+
+        return rows
+
+    # ------------------------------------------------------------------
     # Core run
     # ------------------------------------------------------------------
 
@@ -1283,6 +1388,18 @@ class ScenarioSimulator:
                         "Elasticity": elasticity_map.get(var_name),
                         "CATE_multiplier_used": var_name in cate_multipliers,
                     })
+
+        # --- Interaction (multi-variable) scenarios ---
+        if self.interaction_scenarios:
+            if verbose:
+                print(f"\n{'='*70}")
+                print(f"6. RUNNING INTERACTION SCENARIOS ({len(self.interaction_scenarios)})")
+                print(f"{'='*70}")
+            ix_rows = self.run_interaction_scenarios(
+                baseline_df, baseline_pred, spatial_multiplier,
+                target_mask, results_df, cate_multipliers, verbose=verbose,
+            )
+            summary_rows.extend(ix_rows)
 
         summary_df = pd.DataFrame(summary_rows)
 

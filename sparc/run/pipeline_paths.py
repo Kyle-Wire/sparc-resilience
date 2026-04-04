@@ -301,6 +301,51 @@ class PipelinePaths:
     @property
     def laplacian_tsne_coords(self):
         return self.spatial_analysis_dir / "laplacian_tsne_coordinates.csv"
+
+    # Stage 1 additional files
+    @property
+    def correlogram_csv(self):
+        return self.stage1_dir / "correlogram_analysis_results.csv"
+
+    @property
+    def correlogram_json(self):
+        return self.stage1_dir / "correlogram_analysis_results.json"
+
+    # Stage 2 additional files
+    @property
+    def ensemble_predictions_gpkg(self):
+        return self.stage2_dir / "final_ensemble_predictions.gpkg"
+
+    @property
+    def model_metrics_csv(self):
+        return self.stage2_dir / "model_performance_metrics.csv"
+
+    @property
+    def feature_scaler(self):
+        return self.stage2_dir / "feature_scaler.pkl"
+
+    # Stage 3 additional files
+    @property
+    def causal_diagnostics(self):
+        return self.stage3_dir / "causal_diagnostics.json"
+
+    # Stage 4 additional files
+    @property
+    def scenario_report(self):
+        return self.stage4_dir / "scenario_report.txt"
+
+    # Fishnet / data processing
+    @property
+    def fishnet_gpkg(self):
+        return self.output_dir / "fishnet.gpkg"
+
+    @property
+    def fishnet_with_stats(self):
+        return self.output_dir / "fishnet_with_stats.gpkg"
+
+    def ensure_all_stage_dirs(self):
+        """Ensure every stage directory (and parents) exists."""
+        self._ensure_directories()
     
     # Data files (with fallback logic)
     def get_data_file(self):

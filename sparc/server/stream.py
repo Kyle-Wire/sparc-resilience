@@ -247,6 +247,21 @@ def _execute_stage(
     project_path = state.project_path
     os.environ["SPARC_PROJECT"] = project_path or ""
 
+    # ---- Guard against WinError 5 on Windows sidecar/service ----
+    # When launched as a sidecar the USERPROFILE may resolve to
+    # C:\WINDOWS\system32\config\systemprofile which is not writable.
+    # Redirect to the project directory (or temp) so libraries that
+    # call os.path.expanduser() or appdirs don't fail.
+    _sys_prefix = os.path.join(os.environ.get("SYSTEMROOT", r"C:\WINDOWS"), "system32", "config")
+    _profile = os.environ.get("USERPROFILE", "")
+    if _profile.startswith(_sys_prefix) or not _profile:
+        fallback_home = str(Path(project_path).parent) if project_path else os.environ.get("TEMP", "")
+        os.environ["USERPROFILE"] = fallback_home
+        os.environ["HOME"] = fallback_home
+        os.environ["LOCALAPPDATA"] = os.path.join(fallback_home, ".local")
+        print(f"[SPARC] Redirected USERPROFILE from system path to: {fallback_home}")
+    # ---- End guard ----
+
     # Lazy import to avoid pulling the full dep tree on server start
     from sparc.config.config import load_config  # noqa: F811
     from sparc.run.pipeline_paths import PipelinePaths

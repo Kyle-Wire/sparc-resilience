@@ -34,6 +34,7 @@ export default function DataView(_props: { onNavigateToProject?: () => void }) {
   const [geojson, setGeojson] = useState<GeoJsonData | null>(null);
   const [showMap, setShowMap] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
+  const [statsVar, setStatsVar] = useState<string>("");
   const { notify } = useNotification();
 
   const reload = async () => {
@@ -199,38 +200,53 @@ export default function DataView(_props: { onNavigateToProject?: () => void }) {
         </div>
       )}
 
-      {/* Numeric Summary Stats */}
-      {summary && Object.keys(summary.numeric_summary).length > 0 && (
-        <div className="mb-6">
-          <h2 className="mb-2 text-sm font-semibold">Variable Summary Statistics</h2>
-          <div className="overflow-auto rounded border border-sparc-gray-200">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="border-b border-sparc-gray-200 bg-sparc-gray-100">
-                  <th className="px-3 py-2 font-medium">Variable</th>
-                  <th className="px-3 py-2 font-medium text-right">Mean</th>
-                  <th className="px-3 py-2 font-medium text-right">Median</th>
-                  <th className="px-3 py-2 font-medium text-right">Std Dev</th>
-                  <th className="px-3 py-2 font-medium text-right">Min</th>
-                  <th className="px-3 py-2 font-medium text-right">Max</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Object.entries(summary.numeric_summary).map(([col, stats]) => (
-                  <tr key={col} className="border-b border-sparc-gray-100 hover:bg-sparc-gray-100/50">
-                    <td className="px-3 py-1.5 font-mono text-xs">{col}</td>
-                    <td className="px-3 py-1.5 tabular-nums text-right">{stats.mean.toFixed(3)}</td>
-                    <td className="px-3 py-1.5 tabular-nums text-right">{(stats.median ?? stats.mean).toFixed(3)}</td>
-                    <td className="px-3 py-1.5 tabular-nums text-right">{stats.std.toFixed(3)}</td>
-                    <td className="px-3 py-1.5 tabular-nums text-right">{stats.min.toFixed(3)}</td>
-                    <td className="px-3 py-1.5 tabular-nums text-right">{stats.max.toFixed(3)}</td>
-                  </tr>
+      {/* Per-variable Summary Stats — dropdown + blocky cards */}
+      {summary && Object.keys(summary.numeric_summary).length > 0 && (() => {
+        const numericCols = Object.keys(summary.numeric_summary);
+        const activeVar = statsVar || numericCols[0] || "";
+        const stats = summary.numeric_summary[activeVar];
+        return (
+          <div className="mb-6">
+            <div className="mb-3 flex items-center gap-3">
+              <h2 className="text-sm font-semibold">Variable Statistics</h2>
+              <select
+                value={activeVar}
+                onChange={(e) => setStatsVar(e.target.value)}
+                className="rounded border border-sparc-gray-300 px-2 py-1 text-xs font-mono focus:border-sparc-purple focus:outline-none"
+              >
+                {numericCols.map((col) => (
+                  <option key={col} value={col}>{col}</option>
                 ))}
-              </tbody>
-            </table>
+              </select>
+            </div>
+            {stats && (
+              <div className="grid grid-cols-4 gap-3">
+                {[
+                  { label: "Min", value: stats.min },
+                  { label: "Max", value: stats.max },
+                  { label: "Mean", value: stats.mean },
+                  { label: "Median", value: stats.median ?? stats.mean },
+                  { label: "Std Dev", value: stats.std },
+                  { label: "Count", value: stats.count ?? summary.row_count },
+                  { label: "25th Pctl", value: stats["25%"] ?? stats.q25 },
+                  { label: "75th Pctl", value: stats["75%"] ?? stats.q75 },
+                ].filter((s) => s.value != null).map((s) => (
+                  <div key={s.label} className="rounded border border-sparc-gray-200 bg-white px-4 py-3">
+                    <div className="text-lg font-bold tabular-nums">
+                      {typeof s.value === "number"
+                        ? Number.isInteger(s.value)
+                          ? s.value.toLocaleString()
+                          : s.value.toFixed(3)
+                        : String(s.value)}
+                    </div>
+                    <div className="text-[10px] font-medium uppercase tracking-wide text-sparc-gray-500">{s.label}</div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Map Viewport */}
       {summary && (
@@ -276,14 +292,14 @@ export default function DataView(_props: { onNavigateToProject?: () => void }) {
             )}
           </div>
           {showMap && (
-            <div className="rounded border border-sparc-gray-200 overflow-hidden" style={{ height: 360 }}>
+            <div className="rounded border border-sparc-gray-200 overflow-hidden" style={{ height: 520 }}>
               {mapError ? (
                 <div className="flex items-center justify-center h-full bg-sparc-gray-50">
                   <p className="text-sm text-sparc-crimson px-4 text-center">Map error: {mapError}</p>
                 </div>
               ) : (
                 <MapErrorBoundary>
-                  <SpatialMap geojson={geojson as any} colorField={mapVar || undefined} height="360px" />
+                  <SpatialMap geojson={geojson as any} colorField={mapVar || undefined} height="520px" />
                 </MapErrorBoundary>
               )}
             </div>

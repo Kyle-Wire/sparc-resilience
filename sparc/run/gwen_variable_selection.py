@@ -661,7 +661,7 @@ def main(config_path=None, fast_mode=False):
         # Fit GWEN model
         print("\n5. Fitting GWEN model...")
         print("   This may take several minutes depending on data size...")
-        gwen.fit(X, y, coords)
+        gwen.fit(X, y, coords, feature_names=feature_names)
         print("   [OK] GWEN model fitted successfully")
         
         # Get variable importance and selected features  

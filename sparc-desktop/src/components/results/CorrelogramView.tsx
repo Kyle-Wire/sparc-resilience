@@ -13,11 +13,17 @@ import {
   Legend,
 } from "recharts";
 
-/** Format axis ticks to even integers only. */
-function evenIntTick(value: number): string {
-  const rounded = Math.round(value);
-  if (rounded % 2 !== 0) return "";
-  return rounded.toLocaleString();
+/** Format lag ticks at 500 m intervals. */
+function lagTick500(value: number): string {
+  if (value % 500 !== 0) return "";
+  return value.toLocaleString();
+}
+
+/** Build an array of 500 m-interval tick values up to the given maximum. */
+function buildLagTicks(maxLag: number): number[] {
+  const ticks: number[] = [];
+  for (let t = 0; t <= maxLag + 500; t += 500) ticks.push(t);
+  return ticks;
 }
 
 export default function CorrelogramView() {
@@ -153,6 +159,19 @@ export default function CorrelogramView() {
       prev.includes(varName) ? prev.filter((v) => v !== varName) : [...prev, varName],
     );
   }, []);
+
+  // Compute max lag for ticks
+  const maxLag = useMemo(() => {
+    if (!data?.individual_results) return 5000;
+    let ml = 0;
+    for (const v of Object.values(data.individual_results)) {
+      const lags = (v as any)?.correlogram_results?.lag_distances;
+      if (lags && lags.length) ml = Math.max(ml, lags[lags.length - 1]);
+    }
+    return ml || 5000;
+  }, [data]);
+
+  const lagTicks = useMemo(() => buildLagTicks(maxLag), [maxLag]);
 
   const COLORS = ["#602468", "#a44eb4", "#f0a0b0", "#fbdd46", "#4a90d9", "#e74c3c"];
 
@@ -293,14 +312,18 @@ export default function CorrelogramView() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
                 <XAxis
                   dataKey="lag"
+                  type="number"
                   tick={{ fontSize: 10 }}
-                  tickFormatter={evenIntTick}
+                  ticks={lagTicks}
+                  tickFormatter={lagTick500}
                   allowDecimals={false}
+                  domain={[0, 'dataMax']}
                   label={{ value: "Lag Distance (m)", position: "insideBottom", offset: -4, fontSize: 11 }}
                 />
                 <YAxis
                   tick={{ fontSize: 10 }}
-                  allowDecimals={false}
+                  domain={[-0.2, 1]}
+                  allowDecimals
                   label={{ value: "Moran's I", angle: -90, position: "insideLeft", fontSize: 11 }}
                 />
                 <Tooltip contentStyle={{ fontSize: 11 }} />
@@ -331,14 +354,18 @@ export default function CorrelogramView() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
                 <XAxis
                   dataKey="lag"
+                  type="number"
                   tick={{ fontSize: 10 }}
-                  tickFormatter={evenIntTick}
+                  ticks={lagTicks}
+                  tickFormatter={lagTick500}
                   allowDecimals={false}
+                  domain={[0, 'dataMax']}
                   label={{ value: "Lag Distance (m)", position: "insideBottom", offset: -4, fontSize: 11 }}
                 />
                 <YAxis
                   tick={{ fontSize: 10 }}
-                  allowDecimals={false}
+                  domain={[-0.2, 1]}
+                  allowDecimals
                   label={{ value: "Moran's I", angle: -90, position: "insideLeft", fontSize: 11 }}
                 />
                 <Tooltip

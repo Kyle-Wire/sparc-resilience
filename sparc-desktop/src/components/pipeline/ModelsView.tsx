@@ -4,12 +4,27 @@ import type { ProjectConfig } from "@/lib/types";
 
 /** Model names with human-readable labels. */
 const MODEL_SECTIONS: { key: string; label: string; description: string }[] = [
+  { key: "ols", label: "OLS", description: "Ordinary Least Squares (baseline)" },
   { key: "gwr", label: "GWR", description: "Geographically Weighted Regression" },
   { key: "gwrf", label: "GWRF", description: "Geographically Weighted Random Forest" },
   { key: "ggpgam", label: "GGPGAM", description: "Geographically-Guided Penalised GAM" },
   { key: "meta_ensemble", label: "Meta-Ensemble", description: "Stacked model ensemble (LightGBM default)" },
   { key: "deep_kriging", label: "Deep Kriging", description: "Neural residual correction with spatial basis" },
-  { key: "spatial_cv", label: "Spatial CV", description: "Cross-validation strategy" },
+];
+
+const SPATIAL_CV_METHODS = [
+  { value: "buffered_block", label: "Buffered Block", description: "Spatially-aware block CV with buffer zones (default)" },
+  { value: "spatial_loo", label: "Spatial LOO", description: "Leave-one-out with spatial exclusion buffer" },
+  { value: "random_block", label: "Random Block", description: "Randomised spatial blocks without buffering" },
+  { value: "spatial_kfold", label: "Spatial K-Fold", description: "K-means clustering of coordinates into folds" },
+] as const;
+
+const GWEN_PARAMS_SCHEMA: { key: string; label: string; type: "number" | "select"; options?: string[] }[] = [
+  { key: "n_neighbors", label: "K-Neighbors", type: "number" },
+  { key: "selection_threshold", label: "Selection Threshold", type: "number" },
+  { key: "max_features", label: "Max Features", type: "number" },
+  { key: "n_alphas", label: "N Alphas", type: "number" },
+  { key: "cv_folds", label: "CV Folds", type: "number" },
 ];
 
 function ParamEditor({
@@ -73,6 +88,9 @@ function ParamEditor({
 export default function ModelsView() {
   const [config, setConfig] = useState<ProjectConfig | null>(null);
   const [models, setModels] = useState<Record<string, Record<string, unknown>>>({});
+  const [enabledModels, setEnabledModels] = useState<Record<string, boolean>>({});
+  const [gwenConfig, setGwenConfig] = useState<Record<string, unknown>>({});
+  const [cvMethod, setCvMethod] = useState("buffered_block");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -81,6 +99,14 @@ export default function ModelsView() {
       .then((c) => {
         setConfig(c);
         setModels(c.models ?? {});
+        // Initialize enabled state — default all to true
+        const enabled: Record<string, boolean> = {};
+        for (const { key } of MODEL_SECTIONS) {
+          enabled[key] = c.models?.[key]?.enabled !== false;
+        }
+        setEnabledModels(enabled);
+        setGwenConfig(c.gwen ?? {});
+        setCvMethod(c.models?.spatial_cv?.method ?? c.pipeline?.cv_method ?? "buffered_block");
       })
       .catch((e) => setError(e.message));
   }, []);
@@ -95,7 +121,13 @@ export default function ModelsView() {
   const save = async () => {
     setSaving(true);
     try {
-      await saveConfig({ models });
+      // Merge enabled flags into each model section
+      const mergedModels = { ...models };
+      for (const { key } of MODEL_SECTIONS) {
+        mergedModels[key] = { ...(mergedModels[key] ?? {}), enabled: enabledModels[key] !== false };
+      }
+      mergedModels.spatial_cv = { ...(mergedModels.spatial_cv ?? {}), method: cvMethod };
+      await saveConfig({ models: mergedModels, gwen: gwenConfig });
       setError(null);
     } catch (e: any) {
       setError(e.message);
@@ -181,22 +213,91 @@ export default function ModelsView() {
         </div>
       )}
 
-      {/* Model sections */}
-      <div className="space-y-4">
-        {MODEL_SECTIONS.map(({ key, label, description }) => (
-          <details key={key} className="rounded border border-sparc-gray-200">
-            <summary className="cursor-pointer px-4 py-3 hover:bg-sparc-gray-50">
-              <span className="font-semibold text-sm">{label}</span>
-              <span className="ml-2 text-xs text-sparc-gray-500">{description}</span>
-            </summary>
-            <div className="border-t border-sparc-gray-100 px-4 py-3">
-              <ParamEditor
-                params={models[key] ?? {}}
-                onChange={(k, v) => updateParam(key, k, v)}
-              />
+      {/* GWEN Variable Selection */}
+      <div className="rounded border border-sparc-gray-200">
+        <div className="px-4 py-3 bg-sparc-gray-50 border-b border-sparc-gray-100">
+          <span className="font-semibold text-sm">GWEN Variable Selection</span>
+          <span className="ml-2 text-xs text-sparc-gray-500">Geographically Weighted Elastic Net — feature selection</span>
+        </div>
+        <div className="px-4 py-3 space-y-2">
+          {GWEN_PARAMS_SCHEMA.map(({ key, label, type }) => (
+            <div key={key} className="flex items-center gap-3">
+              <label className="w-40 shrink-0 text-xs font-mono text-sparc-gray-600">{label}</label>
+              {type === "number" ? (
+                <input
+                  type="number"
+                  value={gwenConfig[key] != null ? Number(gwenConfig[key]) : ""}
+                  placeholder="auto"
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setGwenConfig((prev) => ({
+                      ...prev,
+                      [key]: v === "" ? null : v.includes(".") ? parseFloat(v) : parseInt(v, 10),
+                    }));
+                  }}
+                  className="w-32 rounded border border-sparc-gray-300 px-2 py-1 text-xs font-mono focus:border-sparc-purple focus:outline-none"
+                />
+              ) : null}
             </div>
-          </details>
-        ))}
+          ))}
+        </div>
+      </div>
+
+      {/* Spatial CV Method */}
+      <div className="rounded border border-sparc-gray-200 p-4">
+        <h3 className="mb-2 text-sm font-semibold">Spatial Cross-Validation</h3>
+        <div className="space-y-2">
+          {SPATIAL_CV_METHODS.map((m) => (
+            <label key={m.value} className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="radio"
+                name="cv_method"
+                value={m.value}
+                checked={cvMethod === m.value}
+                onChange={() => setCvMethod(m.value)}
+                className="accent-sparc-purple"
+              />
+              <span className="text-sm font-medium">{m.label}</span>
+              <span className="text-xs text-sparc-gray-500">{m.description}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {/* Model sections with toggles */}
+      <div className="space-y-4">
+        {MODEL_SECTIONS.map(({ key, label, description }) => {
+          const enabled = enabledModels[key] !== false;
+          return (
+            <details key={key} className={`rounded border ${enabled ? "border-sparc-gray-200" : "border-sparc-gray-100 opacity-60"}`}>
+              <summary className="cursor-pointer px-4 py-3 hover:bg-sparc-gray-50 flex items-center justify-between">
+                <div>
+                  <span className="font-semibold text-sm">{label}</span>
+                  <span className="ml-2 text-xs text-sparc-gray-500">{description}</span>
+                </div>
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setEnabledModels((prev) => ({ ...prev, [key]: !prev[key] }));
+                  }}
+                  className={`ml-4 shrink-0 rounded px-3 py-1 text-xs font-medium transition-colors ${
+                    enabled
+                      ? "bg-sparc-purple text-white"
+                      : "bg-sparc-gray-200 text-sparc-gray-500"
+                  }`}
+                >
+                  {enabled ? "ON" : "OFF"}
+                </button>
+              </summary>
+              <div className="border-t border-sparc-gray-100 px-4 py-3">
+                <ParamEditor
+                  params={models[key] ?? {}}
+                  onChange={(k, v) => updateParam(key, k, v)}
+                />
+              </div>
+            </details>
+          );
+        })}
       </div>
 
       {error && config && <p className="text-sm text-red-600">{error}</p>}

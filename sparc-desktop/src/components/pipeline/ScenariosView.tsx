@@ -11,6 +11,16 @@ interface Scenario {
   unit?: string;
 }
 
+interface InteractionLeg {
+  variable: string;
+  delta: number;
+}
+
+interface InteractionScenario {
+  name: string;
+  legs: InteractionLeg[];
+}
+
 const ESTIMATOR_OPTIONS = [
   {
     value: "dml",
@@ -35,6 +45,7 @@ export default function ScenariosView() {
   const [running, setRunning] = useState(false);
   const [summary, setSummary] = useState<DataSummary | null>(null);
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
+  const [interactions, setInteractions] = useState<InteractionScenario[]>([]);
   const [result, setResult] = useState<{
     status: string;
     n_scenarios: number;
@@ -47,6 +58,7 @@ export default function ScenariosView() {
       .then((c) => {
         setConfig(c);
         setScenarios((c.scenarios ?? []) as Scenario[]);
+        setInteractions(((c as any).interaction_scenarios ?? []) as InteractionScenario[]);
       })
       .catch((e) => setError(e.message));
     dataSummary().then(setSummary).catch(() => {});
@@ -91,14 +103,56 @@ export default function ScenariosView() {
     );
   };
 
+  const addInteraction = () => {
+    const vars = actionable.length > 0 ? actionable : numericCols;
+    setInteractions((prev) => [
+      ...prev,
+      {
+        name: `Interaction ${prev.length + 1}`,
+        legs: vars.slice(0, 2).map((v) => ({ variable: v, delta: 1 })),
+      },
+    ]);
+  };
+
+  const removeInteraction = (idx: number) =>
+    setInteractions((prev) => prev.filter((_, i) => i !== idx));
+
+  const updateInteraction = (idx: number, patch: Partial<InteractionScenario>) =>
+    setInteractions((prev) => prev.map((s, i) => (i === idx ? { ...s, ...patch } : s)));
+
+  const addLeg = (idx: number) => {
+    const vars = actionable.length > 0 ? actionable : numericCols;
+    setInteractions((prev) =>
+      prev.map((s, i) =>
+        i === idx ? { ...s, legs: [...s.legs, { variable: vars[0] ?? "", delta: 1 }] } : s
+      )
+    );
+  };
+
+  const removeLeg = (scIdx: number, legIdx: number) =>
+    setInteractions((prev) =>
+      prev.map((s, i) =>
+        i === scIdx ? { ...s, legs: s.legs.filter((_, j) => j !== legIdx) } : s
+      )
+    );
+
+  const updateLeg = (scIdx: number, legIdx: number, patch: Partial<InteractionLeg>) =>
+    setInteractions((prev) =>
+      prev.map((s, i) =>
+        i === scIdx
+          ? { ...s, legs: s.legs.map((l, j) => (j === legIdx ? { ...l, ...patch } : l)) }
+          : s
+      )
+    );
+
   const saveScenarios = useCallback(async () => {
     try {
-      await saveConfig({ scenarios });
+      await saveConfig({ scenarios, interaction_scenarios: interactions });
       notify("success", "Scenarios saved");
     } catch (e: any) {
       notify("error", e.message);
     }
-  }, [scenarios, notify]);
+  }, [scenarios, interactions, notify]);
 
   const run = async () => {
     await saveScenarios();
@@ -337,6 +391,79 @@ export default function ScenariosView() {
                 />
               </div>
             )}
+          </div>
+        ))}
+      </div>
+
+      {/* Interaction (Multi-Variable) Scenarios */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold">Interaction Scenarios ({interactions.length})</h3>
+            <p className="text-xs text-sparc-gray-500">Simultaneous changes to multiple variables</p>
+          </div>
+          <button
+            onClick={addInteraction}
+            className="rounded border border-sparc-gray-300 px-3 py-1.5 text-xs font-medium hover:bg-sparc-gray-100"
+          >
+            + Add Interaction
+          </button>
+        </div>
+
+        {interactions.length === 0 && (
+          <div className="rounded border-2 border-dashed border-sparc-gray-300 p-6 text-center">
+            <p className="text-sm text-sparc-gray-500">
+              No interaction scenarios. Add one to model simultaneous multi-variable changes.
+            </p>
+          </div>
+        )}
+
+        {interactions.map((ix, idx) => (
+          <div key={idx} className="rounded border border-sparc-gray-200 p-4 space-y-3">
+            <div className="flex items-center gap-3">
+              <input
+                value={ix.name}
+                onChange={(e) => updateInteraction(idx, { name: e.target.value })}
+                className="flex-1 rounded border border-sparc-gray-300 px-2 py-1 text-sm font-medium focus:border-sparc-purple focus:outline-none"
+                placeholder="Interaction name"
+              />
+              <button onClick={() => removeInteraction(idx)} className="text-xs text-red-500 hover:underline">
+                Remove
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              {ix.legs.map((leg, li) => (
+                <div key={li} className="flex items-center gap-2 pl-3 border-l-2 border-sparc-purple/30">
+                  <select
+                    value={leg.variable}
+                    onChange={(e) => updateLeg(idx, li, { variable: e.target.value })}
+                    className="rounded border border-sparc-gray-300 px-2 py-1 text-xs font-mono focus:border-sparc-purple focus:outline-none"
+                  >
+                    {(actionable.length > 0 ? actionable : numericCols).map((v) => (
+                      <option key={v} value={v}>{v}</option>
+                    ))}
+                  </select>
+                  <span className="text-xs text-sparc-gray-500">Δ</span>
+                  <input
+                    type="number"
+                    value={leg.delta}
+                    onChange={(e) => updateLeg(idx, li, { delta: parseFloat(e.target.value) || 0 })}
+                    className="w-24 rounded border border-sparc-gray-300 px-2 py-1 text-xs font-mono focus:border-sparc-purple focus:outline-none"
+                  />
+                  {ix.legs.length > 1 && (
+                    <button onClick={() => removeLeg(idx, li)} className="text-xs text-red-400 hover:text-red-600">✕</button>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <button
+              onClick={() => addLeg(idx)}
+              className="text-xs text-sparc-purple hover:underline"
+            >
+              + Add variable
+            </button>
           </div>
         ))}
       </div>

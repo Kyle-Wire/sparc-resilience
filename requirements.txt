@@ -10,6 +10,7 @@ libpysal>=4.7
 esda>=2.5
 mgwr>=2.2
 pyproj>=3.6
+rasterstats>=0.19
 
 # Modeling
 lightgbm>=4.0
