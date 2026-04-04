@@ -20,6 +20,7 @@ import type {
   ScenarioDetail,
   ReportPayload,
   GeoJsonData,
+  PipelineEvent,
 } from "./types";
 
 const BASE = "http://127.0.0.1:8008";
@@ -52,6 +53,16 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 export const health = () => get<HealthResponse>("/health");
 
 // ------------------------------------------------------------------
+// Pipeline run events (reconnection support)
+// ------------------------------------------------------------------
+export interface RunEventsResponse {
+  is_running: boolean;
+  current_stage: number | null;
+  events: PipelineEvent[];
+}
+export const getRunEvents = () => get<RunEventsResponse>("/run/events");
+
+// ------------------------------------------------------------------
 // Project
 // ------------------------------------------------------------------
 export const loadProject = (path: string) =>
@@ -72,6 +83,9 @@ export const listTemplates = () =>
 export const dataSummary = () => get<DataSummary>("/data/summary");
 
 export const dataPreview = (n = 50) => get<DataPreview>(`/data/preview?n=${n}`);
+
+export const dataGeoJson = (variable?: string) =>
+  get<GeoJsonData>(variable ? `/data/geojson?variable=${encodeURIComponent(variable)}` : "/data/geojson");
 
 export async function uploadData(file: File): Promise<ProjectLoadResponse> {
   const form = new FormData();

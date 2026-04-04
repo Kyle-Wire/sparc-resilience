@@ -3,6 +3,7 @@ import { useServer } from "@/hooks/useServer";
 import { useProject } from "@/hooks/useProject";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { NotificationContext, useNotificationState } from "@/hooks/useNotifications";
+import { PipelineProvider } from "@/hooks/PipelineProvider";
 import NotificationBanner from "@/components/layout/NotificationBanner";
 import Splash from "@/components/layout/Splash";
 import Shell from "@/components/layout/Shell";
@@ -177,6 +178,7 @@ export default function App() {
 
   return (
     <NotificationContext.Provider value={notif}>
+    <PipelineProvider serverReady={ready}>
     <div className="flex h-screen">
       <Shell
         currentPage={page as PageName}
@@ -186,33 +188,35 @@ export default function App() {
         projectLoaded={project.projectLoaded}
       >
         <div className="flex h-full gap-0">
-          {/* Chat toggle button */}
-          <button
-            onClick={() => setChatOpen(!chatOpen)}
-            className={`fixed right-4 top-12 z-10 rounded px-3 py-1.5 text-xs font-medium transition-colors ${
-              chatOpen
-                ? "bg-sparc-gray-800 text-white hover:bg-black"
-                : "bg-black text-white hover:bg-sparc-purple"
-            }`}
-          >
-            {chatOpen ? "✕ Close" : "AI Assistant"}
-          </button>
-
           {/* Main content */}
-          <div className={`flex-1 ${chatOpen ? "mr-80" : ""}`}>
+          <div className="flex-1">
             {renderPage()}
           </div>
 
-          {/* Chat panel */}
+          {/* Retro AI Assistant toggle button — bottom-left */}
+          <button
+            onClick={() => setChatOpen(!chatOpen)}
+            className={`retro-toggle fixed left-20 bottom-4 z-50 rounded px-3 py-1.5 text-xs font-bold transition-colors ${
+              chatOpen
+                ? "bg-sparc-gray-800 text-white hover:bg-black"
+                : "bg-sparc-purple text-white hover:bg-sparc-magenta"
+            }`}
+          >
+            {chatOpen ? "✕ CLOSE" : "▸ AI ASSISTANT"}
+          </button>
+
+          {/* Chat panel — bottom-left popup, retro style */}
           {chatOpen && (
-            <div className="fixed right-0 top-10 bottom-0 w-80 border-l border-sparc-gray-200 bg-white shadow-lg">
-              <ChatPanel onAction={handleAction} systemPrompt={systemPrompt} />
+            <div className="retro-box retro-pop-in fixed left-20 bottom-14 z-40 w-96 bg-white overflow-hidden"
+                 style={{ height: "min(480px, calc(100vh - 120px))" }}>
+              <ChatPanel onAction={handleAction} systemPrompt={systemPrompt} onClose={() => setChatOpen(false)} />
             </div>
           )}
         </div>
       </Shell>
       <NotificationBanner />
     </div>
+    </PipelineProvider>
     </NotificationContext.Provider>
   );
 }

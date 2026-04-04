@@ -33,6 +33,13 @@ export default function Sidebar({ currentPage, onNavigate, onSettings, projectLo
         </div>
       </div>
 
+      {/* No-project badge */}
+      {!projectLoaded && (
+        <div className="mx-3 mt-2 rounded bg-sparc-amber/15 px-3 py-1.5 text-center text-[10px] font-medium text-sparc-orange">
+          No project loaded
+        </div>
+      )}
+
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto py-2">
         {PAGES.map((page, i) => {
@@ -43,6 +50,7 @@ export default function Sidebar({ currentPage, onNavigate, onSettings, projectLo
               key={page}
               onClick={() => !disabled && onNavigate(page)}
               disabled={disabled}
+              title={disabled ? "Load a project first from the Project page" : `Go to ${page}`}
               className={`group flex w-full items-center gap-2.5 px-4 py-2 text-left text-sm transition-colors ${
                 disabled
                   ? "text-sparc-gray-400 cursor-not-allowed"

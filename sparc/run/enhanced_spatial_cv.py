@@ -1084,6 +1084,7 @@ class EnhancedSpatialCV:
         # Train each model across all folds in parallel
         for model_idx, (model, model_name) in enumerate(zip(models, model_names)):
             print(f"\n=== Training {model_name} across all folds in parallel ===")
+            print(f"[MODEL_START] {model_name} ({model_idx+1}/{n_models})")
             
             # Prepare fold data for this specific model
             fold_data_list = [
@@ -1179,6 +1180,7 @@ class EnhancedSpatialCV:
                         oof_predictions[test_idx, model_idx] = np.mean(y_train)
             
             print(f"{model_name} completed: {completed_folds}/{len(folds)} folds successful")
+            print(f"[MODEL_DONE] {model_name} ({model_idx+1}/{n_models})")
         
         
         # Aggregate OOF intelligence if extraction was enabled
@@ -1222,6 +1224,8 @@ class EnhancedSpatialCV:
                 print(f"Train: {len(train_idx)}, Test: {len(test_idx)}")
                 
                 for model_idx, (model, model_name) in enumerate(zip(models, model_names)):
+                    if fold_idx == 0:
+                        print(f"[MODEL_START] {model_name} ({model_idx+1}/{n_models})")
                     try:
                         print(f"    Training {model_name} on {len(train_idx)} samples...")
                         start_time = time.time()

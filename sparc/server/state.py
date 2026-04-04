@@ -24,17 +24,29 @@ class ServerState:
     models: dict[str, Any] = field(default_factory=dict)
     is_running: bool = False
     current_stage: int | None = None
+    event_buffer: list[dict] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def set_running(self, stage: int) -> None:
         with self._lock:
             self.is_running = True
             self.current_stage = stage
+            self.event_buffer.clear()
 
     def set_idle(self) -> None:
         with self._lock:
             self.is_running = False
             self.current_stage = None
+
+    def buffer_event(self, event: dict) -> None:
+        """Append an event to the in-memory buffer for reconnecting clients."""
+        with self._lock:
+            self.event_buffer.append(event)
+
+    def get_buffered_events(self) -> list[dict]:
+        """Return a snapshot of all buffered events."""
+        with self._lock:
+            return list(self.event_buffer)
 
     def store_result(self, stage: int, result: Any) -> None:
         with self._lock:

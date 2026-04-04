@@ -34,6 +34,19 @@ class _EventCapture(io.TextIOBase):
     _METRIC_RE = re.compile(r"(r2|rmse|mae|mape)\s*[=:]\s*([\d.]+)", re.IGNORECASE)
     _PCT_RE = re.compile(r"(\d{1,3})%")
 
+    # Structured model-level markers emitted by enhanced_spatial_cv.py
+    _MODEL_START_RE = re.compile(r"\[MODEL_START\]\s+(\w+)\s+\((\d+)/(\d+)\)")
+    _MODEL_DONE_RE = re.compile(r"\[MODEL_DONE\]\s+(\w+)\s+\((\d+)/(\d+)\)")
+
+    # Stage 2 model weight map (% of total stage 2 progress)
+    _MODEL_WEIGHTS: dict[str, tuple[int, int]] = {
+        # model_name → (start_pct, end_pct) within stage 2
+        "ols":     (5, 15),
+        "gwr":     (15, 35),
+        "gwrf":    (35, 55),
+        "ggpgam":  (55, 70),
+    }
+
     # Phase-based progress markers (pattern → label displayed in the UI)
     _PHASE_RE: list[tuple[re.Pattern, str]] = [
         # Stage 0 — Correlogram
@@ -46,12 +59,14 @@ class _EventCapture(io.TextIOBase):
         # Stage 2 — Spatial CV
         (re.compile(r"Loading and Preprocessing", re.IGNORECASE), "Loading data"),
         (re.compile(r"Loading Spatial Folds", re.IGNORECASE), "Loading spatial folds"),
+        (re.compile(r"Generating Spatial Folds", re.IGNORECASE), "Generating spatial folds"),
         (re.compile(r"Training\s+(\S+)\s+across all folds", re.IGNORECASE), "Training model"),
         (re.compile(r"Training\s+(\S+)\s+on\s+\d+\s+samples", re.IGNORECASE), "Training model"),
         (re.compile(r"completed.*folds successful", re.IGNORECASE), "Model complete"),
         (re.compile(r"Generating OOF predictions", re.IGNORECASE), "OOF predictions"),
-        (re.compile(r"Spatial autocorrelation analysis", re.IGNORECASE), "Spatial autocorrelation"),
         (re.compile(r"Deep Kriging CV", re.IGNORECASE), "Deep Kriging CV"),
+        (re.compile(r"Meta.?[Ee]nsemble", re.IGNORECASE), "Meta-ensemble"),
+        (re.compile(r"Spatial autocorrelation analysis", re.IGNORECASE), "Spatial autocorrelation"),
         (re.compile(r"Stage 2 Complete", re.IGNORECASE), "Stage 2 complete"),
         # Stage 3 — Causal
         (re.compile(r"Causal Validation", re.IGNORECASE), "Causal validation"),
@@ -98,12 +113,40 @@ class _EventCapture(io.TextIOBase):
         if m:
             event["progress_pct"] = int(m.group(1))
 
+        # Detect model-level start/done markers for checkpoint progress
+        m_start = self._MODEL_START_RE.search(line)
+        if m_start:
+            model_name = m_start.group(1)
+            model_idx = int(m_start.group(2))
+            model_total = int(m_start.group(3))
+            event["phase"] = f"Training {model_name.upper()}"
+            event["model"] = model_name
+            event["model_index"] = model_idx
+            event["model_total"] = model_total
+            w = self._MODEL_WEIGHTS.get(model_name)
+            if w:
+                event["progress_pct"] = w[0]
+
+        m_done = self._MODEL_DONE_RE.search(line)
+        if m_done:
+            model_name = m_done.group(1)
+            model_idx = int(m_done.group(2))
+            model_total = int(m_done.group(3))
+            event["phase"] = f"{model_name.upper()} complete"
+            event["model"] = model_name
+            event["model_index"] = model_idx
+            event["model_total"] = model_total
+            w = self._MODEL_WEIGHTS.get(model_name)
+            if w:
+                event["progress_pct"] = w[1]
+
         # Check for phase markers (used by the frontend progress bar)
-        for pattern, label in self._PHASE_RE:
-            pm = pattern.search(line)
-            if pm:
-                event["phase"] = label
-                break
+        if "phase" not in event:
+            for pattern, label in self._PHASE_RE:
+                pm = pattern.search(line)
+                if pm:
+                    event["phase"] = label
+                    break
 
         asyncio.run_coroutine_threadsafe(self._queue.put(event), self._loop)
 
@@ -175,6 +218,7 @@ async def stream_stage(
         event = await queue.get()
         if event is None:
             break
+        state.buffer_event(event)
         yield event
 
 

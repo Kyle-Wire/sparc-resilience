@@ -9,9 +9,10 @@ const FALLBACK_SYSTEM_PROMPT = buildSystemPrompt("general");
 interface ChatPanelProps {
   onAction?: (action: ClaudeAction) => void;
   systemPrompt?: string;
+  onClose?: () => void;
 }
 
-export default function ChatPanel({ onAction, systemPrompt }: ChatPanelProps) {
+export default function ChatPanel({ onAction, systemPrompt, onClose }: ChatPanelProps) {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("anthropic-api-key") ?? "");
   const [input, setInput] = useState("");
   const [showKeyInput, setShowKeyInput] = useState(!apiKey);
@@ -60,7 +61,26 @@ export default function ChatPanel({ onAction, systemPrompt }: ChatPanelProps) {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col retro-scanlines">
+      {/* Retro title bar */}
+      <div className="flex items-center justify-between bg-sparc-purple px-3 py-2">
+        <span
+          className="text-xs font-bold tracking-widest text-white"
+          style={{ fontFamily: '"Courier New", Courier, monospace' }}
+        >
+          ▸ AI ASSISTANT
+        </span>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="text-white/70 hover:text-white text-xs font-bold"
+            style={{ fontFamily: '"Courier New", Courier, monospace' }}
+          >
+            [✕]
+          </button>
+        )}
+      </div>
+
       {/* Messages */}
       <div className="flex-1 overflow-auto p-3 space-y-3">
         {messages.length === 0 && (

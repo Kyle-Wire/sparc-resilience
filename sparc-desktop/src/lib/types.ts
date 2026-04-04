@@ -47,7 +47,7 @@ export interface DataSummary {
   column_count: number;
   columns: string[];
   dtypes: Record<string, string>;
-  numeric_summary: Record<string, { mean: number; std: number; min: number; max: number }>;
+  numeric_summary: Record<string, { mean: number; median: number; std: number; min: number; max: number }>;
   crs?: string;
   bbox?: { minx: number; miny: number; maxx: number; maxy: number };
 }
@@ -68,6 +68,12 @@ export interface PipelineEvent {
   progress_pct?: number;
   /** Human-readable phase label emitted by the server for progress display. */
   phase?: string;
+  /** Model name for model-level checkpoint events (e.g. "gwr", "ols"). */
+  model?: string;
+  /** 1-based index of current model in the sequence. */
+  model_index?: number;
+  /** Total number of models being trained. */
+  model_total?: number;
 }
 
 export interface DagNode {

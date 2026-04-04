@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { getCorrelogramData } from "@/lib/api";
 import type { CorrelogramData } from "@/lib/types";
 import {
@@ -13,11 +13,19 @@ import {
   Legend,
 } from "recharts";
 
+/** Format axis ticks to even integers only. */
+function evenIntTick(value: number): string {
+  const rounded = Math.round(value);
+  if (rounded % 2 !== 0) return "";
+  return rounded.toLocaleString();
+}
+
 export default function CorrelogramView() {
   const [data, setData] = useState<CorrelogramData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedVar, setSelectedVar] = useState<string>("");
   const [compareVars, setCompareVars] = useState<string[]>([]);
+  const chartWrapperRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     getCorrelogramData()
@@ -53,7 +61,6 @@ export default function CorrelogramView() {
     const { lag_distances, morans_i_values } = selectedResult.correlogram_results;
     for (let i = 1; i < morans_i_values.length; i++) {
       if (morans_i_values[i - 1] > 0 && morans_i_values[i] <= 0) {
-        // Linear interpolation for precise crossing
         const frac =
           morans_i_values[i - 1] / (morans_i_values[i - 1] - morans_i_values[i]);
         return lag_distances[i - 1] + frac * (lag_distances[i] - lag_distances[i - 1]);
@@ -86,6 +93,67 @@ export default function CorrelogramView() {
     return { rows, vars: allVars };
   }, [data, selectedVar, compareVars]);
 
+  // --- Download handlers ---
+  const downloadPng = useCallback(() => {
+    if (!chartWrapperRef.current) return;
+    const svg = chartWrapperRef.current.querySelector("svg");
+    if (!svg) return;
+    const svgData = new XMLSerializer().serializeToString(svg);
+    const canvas = document.createElement("canvas");
+    const rect = svg.getBoundingClientRect();
+    canvas.width = rect.width * 2;
+    canvas.height = rect.height * 2;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.scale(2, 2);
+    const img = new Image();
+    img.onload = () => {
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+      const link = document.createElement("a");
+      link.download = `correlogram_${selectedVar || "chart"}.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    };
+    img.src = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(svgData)));
+  }, [selectedVar]);
+
+  const downloadSvg = useCallback(() => {
+    if (!chartWrapperRef.current) return;
+    const svg = chartWrapperRef.current.querySelector("svg");
+    if (!svg) return;
+    const svgData = new XMLSerializer().serializeToString(svg);
+    const blob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
+    const link = document.createElement("a");
+    link.download = `correlogram_${selectedVar || "chart"}.svg`;
+    link.href = URL.createObjectURL(blob);
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }, [selectedVar]);
+
+  const downloadCsv = useCallback(() => {
+    if (!chartData.length) return;
+    const header = "lag_distance,morans_i,z_score,p_value";
+    const rows = chartData.map((r) =>
+      `${r.lag},${r.morans_i},${r.z_score ?? ""},${r.p_value ?? ""}`,
+    );
+    const csv = [header, ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const link = document.createElement("a");
+    link.download = `correlogram_${selectedVar || "data"}.csv`;
+    link.href = URL.createObjectURL(blob);
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }, [chartData, selectedVar]);
+
+  // --- Compare dropdown handler ---
+  const toggleCompareVar = useCallback((varName: string) => {
+    setCompareVars((prev) =>
+      prev.includes(varName) ? prev.filter((v) => v !== varName) : [...prev, varName],
+    );
+  }, []);
+
   const COLORS = ["#602468", "#a44eb4", "#f0a0b0", "#fbdd46", "#4a90d9", "#e74c3c"];
 
   if (error) {
@@ -107,7 +175,7 @@ export default function CorrelogramView() {
   return (
     <div className="flex h-full flex-col">
       {/* Controls */}
-      <div className="flex items-center gap-3 border-b border-sparc-gray-100 px-4 py-2">
+      <div className="flex flex-wrap items-center gap-3 border-b border-sparc-gray-100 px-4 py-2">
         <label className="text-xs text-sparc-gray-600">Variable:</label>
         <select
           value={selectedVar}
@@ -121,23 +189,47 @@ export default function CorrelogramView() {
           ))}
         </select>
 
+        {/* Compare dropdown */}
         <label className="ml-4 text-xs text-sparc-gray-600">Compare:</label>
-        <select
-          multiple
-          value={compareVars}
-          onChange={(e) =>
-            setCompareVars(Array.from(e.target.selectedOptions, (o) => o.value))
-          }
-          className="h-7 rounded border border-sparc-gray-200 px-2 text-[10px]"
-        >
-          {variables
-            .filter((v) => v !== selectedVar)
-            .map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-        </select>
+        <div className="relative">
+          <details className="group">
+            <summary className="cursor-pointer rounded border border-sparc-gray-200 px-2 py-1 text-xs select-none">
+              {compareVars.length === 0
+                ? "Select variables…"
+                : `${compareVars.length} selected`}
+            </summary>
+            <div className="absolute z-10 mt-1 max-h-48 w-48 overflow-auto rounded border border-sparc-gray-200 bg-white shadow-md">
+              <button
+                onClick={() =>
+                  setCompareVars(
+                    compareVars.length === variables.length - 1
+                      ? []
+                      : variables.filter((v) => v !== selectedVar),
+                  )
+                }
+                className="w-full border-b border-sparc-gray-100 px-3 py-1.5 text-left text-[10px] font-medium text-sparc-purple hover:bg-sparc-gray-50"
+              >
+                {compareVars.length === variables.length - 1 ? "Clear all" : "Select all"}
+              </button>
+              {variables
+                .filter((v) => v !== selectedVar)
+                .map((v) => (
+                  <label
+                    key={v}
+                    className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-xs hover:bg-sparc-gray-50"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={compareVars.includes(v)}
+                      onChange={() => toggleCompareVar(v)}
+                      className="h-3 w-3"
+                    />
+                    {v}
+                  </label>
+                ))}
+            </div>
+          </details>
+        </div>
         {compareVars.length > 0 && (
           <button
             onClick={() => setCompareVars([])}
@@ -146,6 +238,31 @@ export default function CorrelogramView() {
             Clear
           </button>
         )}
+
+        {/* Download buttons */}
+        <div className="ml-auto flex gap-1">
+          <button
+            onClick={downloadPng}
+            className="rounded border border-sparc-gray-200 px-2 py-1 text-[10px] text-sparc-gray-600 hover:bg-sparc-gray-50"
+            title="Download chart as PNG"
+          >
+            ↓ PNG
+          </button>
+          <button
+            onClick={downloadSvg}
+            className="rounded border border-sparc-gray-200 px-2 py-1 text-[10px] text-sparc-gray-600 hover:bg-sparc-gray-50"
+            title="Download chart as SVG"
+          >
+            ↓ SVG
+          </button>
+          <button
+            onClick={downloadCsv}
+            className="rounded border border-sparc-gray-200 px-2 py-1 text-[10px] text-sparc-gray-600 hover:bg-sparc-gray-50"
+            title="Download raw data as CSV"
+          >
+            ↓ CSV
+          </button>
+        </div>
       </div>
 
       {/* Metric card */}
@@ -164,7 +281,7 @@ export default function CorrelogramView() {
       )}
 
       {/* Chart */}
-      <div className="flex-1 overflow-auto p-4">
+      <div className="flex-1 overflow-auto p-4" ref={chartWrapperRef}>
         {compareVars.length > 0 && overlayData ? (
           /* Multi-variable overlay */
           <div>
@@ -177,10 +294,13 @@ export default function CorrelogramView() {
                 <XAxis
                   dataKey="lag"
                   tick={{ fontSize: 10 }}
+                  tickFormatter={evenIntTick}
+                  allowDecimals={false}
                   label={{ value: "Lag Distance (m)", position: "insideBottom", offset: -4, fontSize: 11 }}
                 />
                 <YAxis
                   tick={{ fontSize: 10 }}
+                  allowDecimals={false}
                   label={{ value: "Moran's I", angle: -90, position: "insideLeft", fontSize: 11 }}
                 />
                 <Tooltip contentStyle={{ fontSize: 11 }} />
@@ -212,10 +332,13 @@ export default function CorrelogramView() {
                 <XAxis
                   dataKey="lag"
                   tick={{ fontSize: 10 }}
+                  tickFormatter={evenIntTick}
+                  allowDecimals={false}
                   label={{ value: "Lag Distance (m)", position: "insideBottom", offset: -4, fontSize: 11 }}
                 />
                 <YAxis
                   tick={{ fontSize: 10 }}
+                  allowDecimals={false}
                   label={{ value: "Moran's I", angle: -90, position: "insideLeft", fontSize: 11 }}
                 />
                 <Tooltip

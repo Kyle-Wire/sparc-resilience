@@ -275,6 +275,28 @@ async def data_preview(n: int = Query(50, ge=1, le=500)):
     return {"rows": df.to_dict(orient="records"), "total": len(state.data)}
 
 
+@app.get("/data/geojson")
+async def data_geojson(variable: str | None = Query(None)):
+    """Return raw data as GeoJSON, optionally filtered to a single variable for map coloring."""
+    if state.data is None:
+        raise HTTPException(400, "No data loaded.")
+
+    df = state.data
+    if not hasattr(df, "geometry") or df.geometry is None:
+        raise HTTPException(400, "Loaded data has no geometry column.")
+
+    if variable:
+        if variable not in df.columns:
+            raise HTTPException(400, f"Column '{variable}' not found.")
+        subset = df[["geometry", variable]].copy()
+    else:
+        # Return just geometry + first 5 numeric cols to keep payload small
+        numeric_cols = list(df.select_dtypes(include="number").columns[:5])
+        subset = df[["geometry"] + numeric_cols].copy()
+
+    return subset.__geo_interface__
+
+
 @app.post("/data/upload")
 async def upload_data(file: UploadFile = File(...)):
     """Accept a CSV upload, store it, and load into state."""
@@ -395,6 +417,20 @@ async def run_stream(ws: WebSocket):
     finally:
         if ws.client_state.name != "DISCONNECTED":
             await ws.close()
+
+
+@app.get("/run/events")
+async def get_run_events():
+    """Return buffered events for the current (or most recent) pipeline run.
+
+    Allows a client that reconnects (e.g. navigated away) to catch up on
+    events it missed without needing to re-open the WebSocket.
+    """
+    return {
+        "is_running": state.is_running,
+        "current_stage": state.current_stage,
+        "events": state.get_buffered_events(),
+    }
 
 
 # ------------------------------------------------------------------
@@ -1167,6 +1203,7 @@ def _compute_summary(st: ServerState) -> dict:
         "numeric_summary": {
             c: {
                 "mean": float(numeric[c].mean()),
+                "median": float(numeric[c].median()),
                 "std": float(numeric[c].std()),
                 "min": float(numeric[c].min()),
                 "max": float(numeric[c].max()),

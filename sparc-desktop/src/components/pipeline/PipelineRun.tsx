@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { usePipelineStream } from "@/hooks/usePipelineStream";
+import { usePipeline } from "@/hooks/PipelineProvider";
 import type { PipelineEvent } from "@/lib/types";
 
 const STAGES = [
@@ -10,11 +10,21 @@ const STAGES = [
   { value: 4, label: "4 — Scenarios" },
 ];
 
-/** Heuristic phase ordering used to derive a visual progress %. */
+/**
+ * Model-level weight map for Stage 2 progress.
+ * Each model contributes a slice of the overall stage progress.
+ */
+const STAGE2_MODEL_WEIGHTS: Record<string, [number, number]> = {
+  ols:     [5,  15],
+  gwr:     [15, 35],
+  gwrf:    [35, 55],
+  ggpgam:  [55, 70],
+};
+
+/** Heuristic phase ordering for non-Stage-2 stages. */
 const STAGE_PHASES: Record<number, string[]> = {
   0: ["Correlogram analysis", "Analyzing variable", "Pipeline configuration"],
   1: ["GWEN variable selection", "GWEN results"],
-  2: ["Loading data", "Loading spatial folds", "Training model", "Model complete", "OOF predictions", "Spatial autocorrelation", "Deep Kriging CV", "Stage 2 complete"],
   3: ["Causal validation"],
   4: ["Scenario simulation"],
 };
@@ -28,8 +38,42 @@ function phaseProgress(stage: number | undefined, phase: string | undefined): nu
   return Math.round(((idx + 1) / phases.length) * 100);
 }
 
+/** Extract model-checkpoint progress for Stage 2. */
+function modelCheckpointProgress(events: PipelineEvent[]): number | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.progress_pct !== undefined && e.model) {
+      return e.progress_pct;
+    }
+  }
+  return null;
+}
+
+/** Build a list of model milestones for the progress bar visualization. */
+function getModelMilestones(events: PipelineEvent[]): { name: string; done: boolean; pct: number }[] {
+  const models = Object.entries(STAGE2_MODEL_WEIGHTS).map(([name, [, endPct]]) => ({
+    name: name.toUpperCase(),
+    done: false,
+    pct: endPct,
+  }));
+
+  const doneModels = new Set<string>();
+  for (const e of events) {
+    if (e.phase?.includes("complete") && e.model) {
+      doneModels.add(e.model);
+    }
+  }
+  for (const m of models) {
+    if (doneModels.has(m.name.toLowerCase())) {
+      m.done = true;
+    }
+  }
+
+  return models;
+}
+
 export default function PipelineRun() {
-  const { events, isRunning, error, startStage, cancel } = usePipelineStream();
+  const { events, isRunning, error, currentStage, startStage, cancel } = usePipeline();
   const [logOpen, setLogOpen] = useState(true);
   const logRef = useRef<HTMLDivElement>(null);
 
@@ -51,12 +95,21 @@ export default function PipelineRun() {
   const logs = events.filter((e) => e.type === "log");
   const complete = events.find((e) => e.type === "complete");
 
-  // Progress: use explicit progress_pct if available, else derive from phase
+  // Progress: prefer model checkpoint progress for Stage 2, else phase heuristic
   const latestPhaseEvent = [...events].reverse().find((e) => e.phase);
   const currentPhase = latestPhaseEvent?.phase ?? null;
-  const currentStage = latestPhaseEvent?.stage ?? lastMetric?.stage;
-  const explicitPct = [...events].reverse().find((e) => e.progress_pct !== undefined)?.progress_pct;
-  const progressPct = explicitPct ?? phaseProgress(currentStage, currentPhase ?? undefined);
+  const latestStage = currentStage ?? latestPhaseEvent?.stage ?? lastMetric?.stage;
+
+  const checkpointPct = latestStage === 2 ? modelCheckpointProgress(events) : null;
+  const explicitPct = checkpointPct ?? [...events].reverse().find((e) => e.progress_pct !== undefined)?.progress_pct;
+  const progressPct = explicitPct ?? phaseProgress(latestStage, currentPhase ?? undefined);
+
+  // Model milestones for Stage 2
+  const modelMilestones = latestStage === 2 ? getModelMilestones(events) : [];
+
+  // Current model info
+  const latestModelEvent = [...events].reverse().find((e) => e.model);
+  const currentModel = latestModelEvent?.model?.toUpperCase() ?? null;
 
   return (
     <div>
@@ -97,17 +150,41 @@ export default function PipelineRun() {
           <div className="mb-1 flex items-center justify-between text-xs">
             <span className="font-medium text-sparc-gray-700">
               {complete ? "Complete" : currentPhase ?? "Running…"}
+              {currentModel && isRunning && !complete ? ` — ${currentModel}` : ""}
             </span>
             <span className="tabular-nums text-sparc-gray-500">
               {complete ? "100" : progressPct}%
             </span>
           </div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-sparc-gray-200">
+          <div className="relative h-2 w-full overflow-hidden rounded-full bg-sparc-gray-200">
             <div
               className={`h-full rounded-full transition-all duration-500 ${complete ? "bg-green-500" : "bg-sparc-purple"}`}
               style={{ width: `${complete ? 100 : progressPct}%` }}
             />
+            {/* Model milestone markers for Stage 2 */}
+            {modelMilestones.map((m) => (
+              <div
+                key={m.name}
+                className="absolute top-0 h-full w-px bg-sparc-gray-400"
+                style={{ left: `${m.pct}%` }}
+                title={m.name}
+              />
+            ))}
           </div>
+          {/* Model milestone labels for Stage 2 */}
+          {modelMilestones.length > 0 && (
+            <div className="relative mt-1 h-4 text-[9px] text-sparc-gray-500">
+              {modelMilestones.map((m) => (
+                <span
+                  key={m.name}
+                  className={`absolute -translate-x-1/2 ${m.done ? "font-bold text-green-600" : ""}`}
+                  style={{ left: `${m.pct}%` }}
+                >
+                  {m.done ? "✓ " : ""}{m.name}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

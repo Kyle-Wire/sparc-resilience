@@ -53,3 +53,73 @@ body {
   position: relative;
   z-index: 1;
 }
+
+/* ----------------------------------------------------------------
+   Retro Game-Style AI Assistant
+   ---------------------------------------------------------------- */
+
+/* Pixel border via box-shadow (4px pixel blocks) */
+.retro-box {
+  --px: 4px;
+  --border-color: var(--color-sparc-purple);
+  box-shadow:
+    /* outer border pixels */
+    calc(-1 * var(--px)) 0 0 0 var(--border-color),
+    var(--px)            0 0 0 var(--border-color),
+    0 calc(-1 * var(--px)) 0 0 var(--border-color),
+    0 var(--px)            0 0 var(--border-color),
+    /* corners */
+    calc(-1 * var(--px)) calc(-1 * var(--px)) 0 0 var(--border-color),
+    var(--px) calc(-1 * var(--px)) 0 0 var(--border-color),
+    calc(-1 * var(--px)) var(--px) 0 0 var(--border-color),
+    var(--px) var(--px) 0 0 var(--border-color),
+    /* double-thick left/right */
+    calc(-2 * var(--px)) 0 0 0 var(--border-color),
+    calc(2 * var(--px))  0 0 0 var(--border-color),
+    0 calc(-2 * var(--px)) 0 0 var(--border-color),
+    0 calc(2 * var(--px))  0 0 var(--border-color);
+}
+
+/* Scanline overlay */
+.retro-scanlines::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.03) 2px,
+    rgba(0, 0, 0, 0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Pop-up animation from bottom-left origin */
+@keyframes retro-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.85) translateY(12px);
+  }
+  60% {
+    transform: scale(1.02) translateY(-2px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.retro-pop-in {
+  animation: retro-pop 0.25s ease-out forwards;
+  transform-origin: bottom left;
+}
+
+/* Pixel-style toggle button */
+.retro-toggle {
+  font-family: "Courier New", Courier, monospace;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  image-rendering: pixelated;
+}

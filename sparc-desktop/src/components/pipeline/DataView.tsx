@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from "react";
-import { dataPreview, dataSummary, uploadData, listDataFiles, selectDataFile } from "@/lib/api";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { dataPreview, dataSummary, dataGeoJson, uploadData, listDataFiles, selectDataFile } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import { pickCsv } from "@/lib/fileDialogs";
 import DropZone from "@/components/common/DropZone";
-import type { DataSummary, DataPreview } from "@/lib/types";
+import SpatialMap from "@/components/map/SpatialMap";
+import type { DataSummary, DataPreview, GeoJsonData } from "@/lib/types";
 
 interface ProjectFile {
   name: string;
@@ -25,6 +26,12 @@ export default function DataView(_props: { onNavigateToProject?: () => void }) {
   const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([]);
   const [projectDir, setProjectDir] = useState<string>("");
   const [showFilePicker, setShowFilePicker] = useState(false);
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
+  const [sortCol, setSortCol] = useState<string | null>(null);
+  const [sortAsc, setSortAsc] = useState(true);
+  const [mapVar, setMapVar] = useState<string>("");
+  const [geojson, setGeojson] = useState<GeoJsonData | null>(null);
+  const [showMap, setShowMap] = useState(false);
   const { notify } = useNotification();
 
   const reload = async () => {
@@ -186,34 +193,222 @@ export default function DataView(_props: { onNavigateToProject?: () => void }) {
         </div>
       )}
 
-      {preview && (
-        <div className="overflow-auto rounded border border-sparc-gray-200">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-sparc-gray-200 bg-sparc-gray-100">
-                {preview.rows[0] &&
-                  Object.keys(preview.rows[0]).map((col) => (
-                    <th key={col} className="px-3 py-2 font-medium">
+      {/* Numeric Summary Stats */}
+      {summary && Object.keys(summary.numeric_summary).length > 0 && (
+        <div className="mb-6">
+          <h2 className="mb-2 text-sm font-semibold">Variable Summary Statistics</h2>
+          <div className="overflow-auto rounded border border-sparc-gray-200">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b border-sparc-gray-200 bg-sparc-gray-100">
+                  <th className="px-3 py-2 font-medium">Variable</th>
+                  <th className="px-3 py-2 font-medium text-right">Mean</th>
+                  <th className="px-3 py-2 font-medium text-right">Median</th>
+                  <th className="px-3 py-2 font-medium text-right">Std Dev</th>
+                  <th className="px-3 py-2 font-medium text-right">Min</th>
+                  <th className="px-3 py-2 font-medium text-right">Max</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(summary.numeric_summary).map(([col, stats]) => (
+                  <tr key={col} className="border-b border-sparc-gray-100 hover:bg-sparc-gray-100/50">
+                    <td className="px-3 py-1.5 font-mono text-xs">{col}</td>
+                    <td className="px-3 py-1.5 tabular-nums text-right">{stats.mean.toFixed(3)}</td>
+                    <td className="px-3 py-1.5 tabular-nums text-right">{(stats.median ?? stats.mean).toFixed(3)}</td>
+                    <td className="px-3 py-1.5 tabular-nums text-right">{stats.std.toFixed(3)}</td>
+                    <td className="px-3 py-1.5 tabular-nums text-right">{stats.min.toFixed(3)}</td>
+                    <td className="px-3 py-1.5 tabular-nums text-right">{stats.max.toFixed(3)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Map Viewport */}
+      {summary && (
+        <div className="mb-6">
+          <div className="mb-2 flex items-center gap-3">
+            <h2 className="text-sm font-semibold">Spatial Preview</h2>
+            <button
+              onClick={async () => {
+                if (!showMap) {
+                  try {
+                    const gj = await dataGeoJson(mapVar || undefined);
+                    setGeojson(gj);
+                  } catch { /* no geometry */ }
+                }
+                setShowMap(!showMap);
+              }}
+              className="rounded border border-sparc-gray-300 px-3 py-1 text-xs hover:bg-sparc-gray-100"
+            >
+              {showMap ? "Hide Map" : "Show Map"}
+            </button>
+            {showMap && (
+              <select
+                value={mapVar}
+                onChange={async (e) => {
+                  setMapVar(e.target.value);
+                  try {
+                    const gj = await dataGeoJson(e.target.value || undefined);
+                    setGeojson(gj);
+                  } catch { /* ignore */ }
+                }}
+                className="rounded border border-sparc-gray-300 px-2 py-1 text-xs"
+              >
+                <option value="">All numeric</option>
+                {Object.keys(summary.numeric_summary).map((col) => (
+                  <option key={col} value={col}>{col}</option>
+                ))}
+              </select>
+            )}
+          </div>
+          {showMap && (
+            <div className="rounded border border-sparc-gray-200 overflow-hidden" style={{ height: 360 }}>
+              <SpatialMap geojson={geojson} colorField={mapVar || undefined} height="360px" />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Collapsible Data Table */}
+      <CollapsibleDataTable
+        summary={summary}
+        preview={preview}
+        expandedGroup={expandedGroup}
+        setExpandedGroup={setExpandedGroup}
+        sortCol={sortCol}
+        setSortCol={setSortCol}
+        sortAsc={sortAsc}
+        setSortAsc={setSortAsc}
+      />
+    </div>
+    </DropZone>
+  );
+}
+
+/* ----------------------------------------------------------------
+   Collapsible Data Table sub-component
+   ---------------------------------------------------------------- */
+interface CollapsibleProps {
+  summary: DataSummary | null;
+  preview: DataPreview | null;
+  expandedGroup: string | null;
+  setExpandedGroup: (g: string | null) => void;
+  sortCol: string | null;
+  setSortCol: (c: string | null) => void;
+  sortAsc: boolean;
+  setSortAsc: (a: boolean) => void;
+}
+
+function CollapsibleDataTable({ summary, preview, expandedGroup, setExpandedGroup, sortCol, setSortCol, sortAsc, setSortAsc }: CollapsibleProps) {
+  // Group columns by type
+  const groups = useMemo(() => {
+    if (!summary) return {};
+    const g: Record<string, string[]> = { numeric: [], categorical: [], spatial: [], other: [] };
+    for (const [col, dtype] of Object.entries(summary.dtypes)) {
+      if (col === "geometry") { g.spatial.push(col); continue; }
+      if (dtype.startsWith("float") || dtype.startsWith("int") || dtype === "number") g.numeric.push(col);
+      else if (dtype === "object" || dtype === "category" || dtype === "string") g.categorical.push(col);
+      else g.other.push(col);
+    }
+    // Remove empty groups
+    return Object.fromEntries(Object.entries(g).filter(([, cols]) => cols.length > 0));
+  }, [summary]);
+
+  // Sort preview rows
+  const sortedRows = useMemo(() => {
+    if (!preview || !sortCol) return preview?.rows ?? [];
+    return [...preview.rows].sort((a, b) => {
+      const av = a[sortCol] ?? 0;
+      const bv = b[sortCol] ?? 0;
+      if (typeof av === "number" && typeof bv === "number") return sortAsc ? av - bv : bv - av;
+      return sortAsc ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+    });
+  }, [preview, sortCol, sortAsc]);
+
+  const handleSort = (col: string) => {
+    if (sortCol === col) setSortAsc(!sortAsc);
+    else { setSortCol(col); setSortAsc(true); }
+  };
+
+  if (!preview) return null;
+
+  return (
+    <div className="space-y-3">
+      <h2 className="text-sm font-semibold">Data Preview</h2>
+
+      {/* Column groups */}
+      <div className="flex flex-wrap gap-2 mb-2">
+        {Object.entries(groups).map(([group, cols]) => (
+          <button
+            key={group}
+            onClick={() => setExpandedGroup(expandedGroup === group ? null : group)}
+            className={`rounded px-3 py-1 text-xs font-medium transition-colors ${
+              expandedGroup === group
+                ? "bg-sparc-purple text-white"
+                : "border border-sparc-gray-300 hover:bg-sparc-gray-100"
+            }`}
+          >
+            {group} ({cols.length})
+          </button>
+        ))}
+        {expandedGroup && (
+          <button
+            onClick={() => setExpandedGroup(null)}
+            className="rounded px-2 py-1 text-xs text-sparc-gray-600 hover:underline"
+          >
+            Show all
+          </button>
+        )}
+      </div>
+
+      {/* Expanded group column list */}
+      {expandedGroup && groups[expandedGroup] && (
+        <div className="rounded border border-sparc-gray-200 bg-sparc-gray-100/50 p-3 text-xs">
+          <span className="font-medium capitalize">{expandedGroup} columns:</span>{" "}
+          {groups[expandedGroup].join(", ")}
+        </div>
+      )}
+
+      {/* Table */}
+      <div className="overflow-auto rounded border border-sparc-gray-200" style={{ maxHeight: 480 }}>
+        <table className="w-full text-left text-sm">
+          <thead className="sticky top-0 z-10">
+            <tr className="border-b border-sparc-gray-200 bg-sparc-gray-100">
+              {preview.rows[0] &&
+                Object.keys(preview.rows[0])
+                  .filter((col) => !expandedGroup || (groups[expandedGroup] ?? []).includes(col))
+                  .map((col) => (
+                    <th
+                      key={col}
+                      className="cursor-pointer px-3 py-2 font-medium select-none hover:bg-sparc-gray-200"
+                      onClick={() => handleSort(col)}
+                    >
                       {col}
+                      {sortCol === col && (
+                        <span className="ml-1 text-xs">{sortAsc ? "↑" : "↓"}</span>
+                      )}
                     </th>
                   ))}
-              </tr>
-            </thead>
-            <tbody>
-              {preview.rows.map((row, i) => (
-                <tr key={i} className="border-b border-sparc-gray-100">
-                  {Object.values(row).map((val, j) => (
+            </tr>
+          </thead>
+          <tbody>
+            {sortedRows.map((row, i) => (
+              <tr key={i} className="border-b border-sparc-gray-100 hover:bg-sparc-gray-100/50">
+                {Object.entries(row)
+                  .filter(([col]) => !expandedGroup || (groups[expandedGroup] ?? []).includes(col))
+                  .map(([, val], j) => (
                     <td key={j} className="px-3 py-1.5 tabular-nums">
                       {val == null ? "—" : String(val)}
                     </td>
                   ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
-    </DropZone>
   );
 }

@@ -1,19 +1,29 @@
-import { useEffect, useState } from "react";
-import { getConfig, saveConfig } from "@/lib/api";
+import { useEffect, useState, useMemo } from "react";
+import { getConfig, saveConfig, dataSummary } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
-import type { ProjectConfig } from "@/lib/types";
+import GlobePreview from "@/components/map/GlobePreview";
+import type { ProjectConfig, DataSummary } from "@/lib/types";
 
-const COMMON_CRS = [
-  { code: "EPSG:4326", label: "WGS 84 (lat/lon)" },
-  { code: "EPSG:3857", label: "Web Mercator" },
-  { code: "EPSG:26917", label: "NAD83 / UTM zone 17N" },
-  { code: "EPSG:26918", label: "NAD83 / UTM zone 18N" },
-  { code: "EPSG:26919", label: "NAD83 / UTM zone 19N" },
-  { code: "EPSG:32617", label: "WGS 84 / UTM zone 17N" },
-  { code: "EPSG:32618", label: "WGS 84 / UTM zone 18N" },
-  { code: "EPSG:32619", label: "WGS 84 / UTM zone 19N" },
-  { code: "EPSG:3438", label: "Rhode Island State Plane (NAD83, ft)" },
-  { code: "EPSG:2249", label: "Massachusetts State Plane (NAD83, ft)" },
+interface CRSMeta {
+  code: string;
+  label: string;
+  type: string;
+  units: string;
+  centerLng: number;
+  centerLat: number;
+}
+
+const COMMON_CRS: CRSMeta[] = [
+  { code: "EPSG:4326", label: "WGS 84 (lat/lon)", type: "Geographic", units: "degrees", centerLng: 0, centerLat: 0 },
+  { code: "EPSG:3857", label: "Web Mercator", type: "Projected (Mercator)", units: "meters", centerLng: 0, centerLat: 0 },
+  { code: "EPSG:26917", label: "NAD83 / UTM zone 17N", type: "UTM Zone 17N", units: "meters", centerLng: -81, centerLat: 28 },
+  { code: "EPSG:26918", label: "NAD83 / UTM zone 18N", type: "UTM Zone 18N", units: "meters", centerLng: -75, centerLat: 38 },
+  { code: "EPSG:26919", label: "NAD83 / UTM zone 19N", type: "UTM Zone 19N", units: "meters", centerLng: -69, centerLat: 42 },
+  { code: "EPSG:32617", label: "WGS 84 / UTM zone 17N", type: "UTM Zone 17N", units: "meters", centerLng: -81, centerLat: 28 },
+  { code: "EPSG:32618", label: "WGS 84 / UTM zone 18N", type: "UTM Zone 18N", units: "meters", centerLng: -75, centerLat: 38 },
+  { code: "EPSG:32619", label: "WGS 84 / UTM zone 19N", type: "UTM Zone 19N", units: "meters", centerLng: -69, centerLat: 42 },
+  { code: "EPSG:3438", label: "Rhode Island State Plane (NAD83, ft)", type: "State Plane", units: "feet", centerLng: -71.5, centerLat: 41.7 },
+  { code: "EPSG:2249", label: "Massachusetts State Plane (NAD83, ft)", type: "State Plane", units: "feet", centerLng: -71.8, centerLat: 42.3 },
 ];
 
 export default function CRSView() {
@@ -22,6 +32,7 @@ export default function CRSView() {
   const [projectedCRS, setProjectedCRS] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [summary, setSummary] = useState<DataSummary | null>(null);
   const { notify } = useNotification();
 
   useEffect(() => {
@@ -32,7 +43,26 @@ export default function CRSView() {
         setProjectedCRS(c.crs?.projected ?? "");
       })
       .catch((e) => setError(e.message));
+    dataSummary().then(setSummary).catch(() => {});
   }, []);
+
+  // CRS metadata for info panel
+  const projectedMeta = useMemo(
+    () => COMMON_CRS.find((c) => c.code === projectedCRS),
+    [projectedCRS]
+  );
+
+  // Globe center: use bbox center from data, or CRS meta center, or default
+  const globeCenter = useMemo(() => {
+    if (summary?.bbox) {
+      return {
+        lng: (summary.bbox.minx + summary.bbox.maxx) / 2,
+        lat: (summary.bbox.miny + summary.bbox.maxy) / 2,
+      };
+    }
+    if (projectedMeta) return { lng: projectedMeta.centerLng, lat: projectedMeta.centerLat };
+    return { lng: -71.5, lat: 41.7 };
+  }, [summary, projectedMeta]);
 
   const save = async () => {
     setSaving(true);
@@ -128,6 +158,38 @@ export default function CRSView() {
               </button>
             ))}
           </div>
+        </div>
+      </div>
+
+      {/* Globe + CRS Info */}
+      <div className="grid grid-cols-[200px_1fr] gap-6 items-start">
+        <GlobePreview longitude={globeCenter.lng} latitude={globeCenter.lat} size={200} />
+
+        <div className="rounded border border-sparc-gray-200 p-4 space-y-2 text-sm">
+          <h3 className="font-semibold text-sm">CRS Insights</h3>
+          {projectedMeta ? (
+            <>
+              <p><span className="font-medium">Name:</span> {projectedMeta.label}</p>
+              <p><span className="font-medium">Projection Type:</span> {projectedMeta.type}</p>
+              <p><span className="font-medium">Units:</span> {projectedMeta.units}</p>
+              <p><span className="font-medium">Zone Center:</span> {projectedMeta.centerLng.toFixed(1)}°, {projectedMeta.centerLat.toFixed(1)}°</p>
+            </>
+          ) : projectedCRS ? (
+            <p className="text-sparc-gray-600">
+              Custom CRS: <span className="font-mono">{projectedCRS}</span>. Select a common CRS above for detailed metadata.
+            </p>
+          ) : (
+            <p className="text-sparc-gray-600">Select a projected CRS to see details.</p>
+          )}
+          {summary?.bbox && (
+            <div className="border-t border-sparc-gray-200 pt-2 text-xs text-sparc-gray-600">
+              <p className="font-medium text-sparc-gray-800">Data Bounding Box</p>
+              <p>
+                ({summary.bbox.minx.toFixed(4)}, {summary.bbox.miny.toFixed(4)}) →
+                ({summary.bbox.maxx.toFixed(4)}, {summary.bbox.maxy.toFixed(4)})
+              </p>
+            </div>
+          )}
         </div>
       </div>
 

@@ -5,6 +5,18 @@ import { getRecents, removeRecent, type RecentProject } from "@/lib/recentProjec
 import { pickFolder, pickYaml } from "@/lib/fileDialogs";
 import type { TemplateInfo } from "@/lib/types";
 
+function formatTimeAgo(isoDate: string): string {
+  const ms = Date.now() - new Date(isoDate).getTime();
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(isoDate).toLocaleDateString();
+}
+
 interface Props {
   projectPath: string | null;
   onProjectLoaded: (path: string, meta?: { name?: string; template?: string }) => Promise<void>;
@@ -109,27 +121,38 @@ export default function ProjectSetup({ projectPath, onProjectLoaded }: Props) {
       {recents.length > 0 && (
         <div className="mb-6">
           <h2 className="mb-2 text-sm font-medium">Recent Projects</h2>
-          <ul className="space-y-1 rounded border border-sparc-gray-200 bg-sparc-gray-50 p-2">
-            {recents.map((r) => (
-              <li key={r.path} className="flex items-center gap-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {recents.map((r) => {
+              const ago = r.lastOpened ? formatTimeAgo(r.lastOpened) : "";
+              return (
                 <button
+                  key={r.path}
                   onClick={() => handleOpen(r.path)}
-                  className="flex-1 truncate rounded px-2 py-1.5 text-left text-sm hover:bg-sparc-gray-200"
+                  className="group relative flex flex-col rounded border border-sparc-gray-200 p-3 text-left hover:border-sparc-purple hover:bg-sparc-gray-100/50 transition-colors"
                 >
-                  <span className="font-medium">{r.name}</span>
-                  {r.template && <span className="ml-2 text-xs text-sparc-gray-500">{r.template}</span>}
-                  <div className="truncate font-mono text-xs text-sparc-gray-500">{r.path}</div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">{r.name}</span>
+                    {r.template && (
+                      <span className="rounded bg-sparc-purple/10 px-1.5 py-0.5 text-[10px] font-medium text-sparc-purple">
+                        {r.template}
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1 truncate font-mono text-[10px] text-sparc-gray-500">{r.path}</div>
+                  {ago && (
+                    <div className="mt-1 text-[10px] text-sparc-gray-400">Opened {ago}</div>
+                  )}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleRemoveRecent(r.path); }}
+                    className="absolute right-2 top-2 hidden rounded p-1 text-xs text-sparc-gray-400 hover:bg-sparc-gray-200 hover:text-sparc-gray-700 group-hover:block"
+                    title="Remove from recents"
+                  >
+                    ✕
+                  </button>
                 </button>
-                <button
-                  onClick={() => handleRemoveRecent(r.path)}
-                  className="shrink-0 rounded p-1 text-xs text-sparc-gray-400 hover:bg-sparc-gray-200 hover:text-sparc-gray-700"
-                  title="Remove from recents"
-                >
-                  ✕
-                </button>
-              </li>
-            ))}
-          </ul>
+              );
+            })}
+          </div>
         </div>
       )}
 

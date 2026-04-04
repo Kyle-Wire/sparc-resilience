@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   ReactFlow,
   Node,
@@ -133,6 +133,72 @@ function dagToFlow(
 }
 
 // ---------------------------------------------------------------------------
+// Undo / Redo history stack
+// ---------------------------------------------------------------------------
+interface Snapshot {
+  nodes: Node[];
+  edges: Edge[];
+}
+
+function useUndoRedo(
+  nodes: Node[],
+  edges: Edge[],
+  setNodes: (ns: Node[]) => void,
+  setEdges: (es: Edge[]) => void,
+) {
+  const historyRef = useRef<Snapshot[]>([]);
+  const futureRef = useRef<Snapshot[]>([]);
+  const skipRef = useRef(false); // prevent recording when restoring
+
+  const pushSnapshot = useCallback(() => {
+    if (skipRef.current) return;
+    historyRef.current.push({
+      nodes: JSON.parse(JSON.stringify(nodes)),
+      edges: JSON.parse(JSON.stringify(edges)),
+    });
+    futureRef.current = []; // clear redo stack on new action
+    // Limit history size
+    if (historyRef.current.length > 50) historyRef.current.shift();
+  }, [nodes, edges]);
+
+  const undo = useCallback(() => {
+    if (historyRef.current.length === 0) return;
+    const snapshot = historyRef.current.pop()!;
+    futureRef.current.push({
+      nodes: JSON.parse(JSON.stringify(nodes)),
+      edges: JSON.parse(JSON.stringify(edges)),
+    });
+    skipRef.current = true;
+    setNodes(snapshot.nodes);
+    setEdges(snapshot.edges);
+    requestAnimationFrame(() => { skipRef.current = false; });
+  }, [nodes, edges, setNodes, setEdges]);
+
+  const redo = useCallback(() => {
+    if (futureRef.current.length === 0) return;
+    const snapshot = futureRef.current.pop()!;
+    historyRef.current.push({
+      nodes: JSON.parse(JSON.stringify(nodes)),
+      edges: JSON.parse(JSON.stringify(edges)),
+    });
+    skipRef.current = true;
+    setNodes(snapshot.nodes);
+    setEdges(snapshot.edges);
+    requestAnimationFrame(() => { skipRef.current = false; });
+  }, [nodes, edges, setNodes, setEdges]);
+
+  const canUndo = historyRef.current.length > 0;
+  const canRedo = futureRef.current.length > 0;
+
+  return { pushSnapshot, undo, redo, canUndo, canRedo };
+}
+
+// ---------------------------------------------------------------------------
+// Node type options for context menu
+// ---------------------------------------------------------------------------
+const NODE_TYPE_OPTIONS = ["treatment", "mediator", "confounder", "outcome"] as const;
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 export default function DAGView() {
@@ -143,6 +209,22 @@ export default function DAGView() {
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+
+  // Undo/Redo
+  const { pushSnapshot, undo, redo, canUndo, canRedo } = useUndoRedo(nodes, edges, setNodes, setEdges);
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    nodeId: string;
+  } | null>(null);
+
+  // Quick edge form
+  const [quickEdge, setQuickEdge] = useState(false);
+  const [qeSource, setQeSource] = useState("");
+  const [qeTarget, setQeTarget] = useState("");
+  const [qeMechanism, setQeMechanism] = useState("");
 
   // Check for Claude-proposed edges
   const proposedEdges = useMemo<DagEdge[]>(() => {
@@ -171,8 +253,29 @@ export default function DAGView() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Keyboard shortcuts for undo/redo
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "z" && e.shiftKey) {
+        e.preventDefault();
+        redo();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "y") {
+        e.preventDefault();
+        redo();
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [undo, redo]);
+
   const onConnect = useCallback(
     (params: Connection) => {
+      pushSnapshot();
       const newEdge: Edge = {
         id: `e-${params.source}-${params.target}`,
         source: params.source,
@@ -182,8 +285,62 @@ export default function DAGView() {
       };
       setEdges((eds) => addEdge(newEdge, eds));
     },
-    [setEdges],
+    [setEdges, pushSnapshot],
   );
+
+  // Quick edge: add via form
+  const addQuickEdge = useCallback(() => {
+    if (!qeSource || !qeTarget || qeSource === qeTarget) return;
+    // Check for duplicate
+    if (edges.find((e) => e.source === qeSource && e.target === qeTarget)) return;
+    pushSnapshot();
+    const newEdge: Edge = {
+      id: `e-${qeSource}-${qeTarget}`,
+      source: qeSource,
+      target: qeTarget,
+      label: qeMechanism || undefined,
+      style: { stroke: "#602468" },
+      markerEnd: { type: MarkerType.ArrowClosed, color: "#602468" },
+      labelStyle: { fontSize: 9, fill: "#666" },
+    };
+    setEdges((eds) => addEdge(newEdge, eds));
+    setQeSource("");
+    setQeTarget("");
+    setQeMechanism("");
+  }, [qeSource, qeTarget, qeMechanism, edges, setEdges, pushSnapshot]);
+
+  // Context menu: right-click on node
+  const onNodeContextMenu = useCallback(
+    (event: React.MouseEvent, node: Node) => {
+      event.preventDefault();
+      setContextMenu({ x: event.clientX, y: event.clientY, nodeId: node.id });
+    },
+    [],
+  );
+
+  // Change node type from context menu
+  const changeNodeType = useCallback(
+    (nodeId: string, newType: string) => {
+      pushSnapshot();
+      setNodes((nds) =>
+        nds.map((n) =>
+          n.id === nodeId
+            ? { ...n, data: { ...n.data, nodeType: newType } }
+            : n,
+        ),
+      );
+      setContextMenu(null);
+    },
+    [setNodes, pushSnapshot],
+  );
+
+  // Close context menu on click
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [contextMenu]);
 
   const validate = async () => {
     if (!dag) return;
@@ -196,6 +353,7 @@ export default function DAGView() {
   };
 
   const acceptProposals = () => {
+    pushSnapshot();
     // Convert proposal edges to permanent
     setEdges((eds) =>
       eds.map((e) =>
@@ -215,6 +373,7 @@ export default function DAGView() {
   };
 
   const dismissProposals = () => {
+    pushSnapshot();
     setEdges((eds) => eds.filter((e) => !e.id.startsWith("proposal-")));
     localStorage.removeItem("sparc-proposed-edges");
   };
@@ -247,10 +406,39 @@ export default function DAGView() {
         <div>
           <h2 className="text-lg font-bold">Causal DAG</h2>
           <p className="text-xs text-sparc-gray-500">
-            Drag between nodes to create edges. Ask the AI Assistant to propose edges.
+            Drag between nodes to create edges. Right-click a node to change its type.
           </p>
         </div>
         <div className="flex gap-2">
+          {/* Undo/Redo */}
+          <button
+            onClick={undo}
+            disabled={!canUndo}
+            className="rounded border border-sparc-gray-300 px-2 py-1.5 text-xs hover:bg-sparc-gray-100 disabled:opacity-30"
+            title="Undo (Ctrl+Z)"
+          >
+            ↶ Undo
+          </button>
+          <button
+            onClick={redo}
+            disabled={!canRedo}
+            className="rounded border border-sparc-gray-300 px-2 py-1.5 text-xs hover:bg-sparc-gray-100 disabled:opacity-30"
+            title="Redo (Ctrl+Shift+Z)"
+          >
+            ↷ Redo
+          </button>
+          <div className="mx-1 w-px bg-sparc-gray-200" />
+          {/* Quick edge toggle */}
+          <button
+            onClick={() => setQuickEdge(!quickEdge)}
+            className={`rounded border px-3 py-1.5 text-xs font-medium ${
+              quickEdge
+                ? "border-sparc-purple bg-sparc-purple text-white"
+                : "border-sparc-gray-300 hover:bg-sparc-gray-100"
+            }`}
+          >
+            + Edge
+          </button>
           {hasProposals && (
             <>
               <button
@@ -281,6 +469,49 @@ export default function DAGView() {
           </button>
         </div>
       </div>
+
+      {/* Quick edge form */}
+      {quickEdge && (
+        <div className="flex items-center gap-2 border-b border-sparc-gray-100 bg-sparc-gray-50 px-4 py-2">
+          <span className="text-xs text-sparc-gray-600">From:</span>
+          <select
+            value={qeSource}
+            onChange={(e) => setQeSource(e.target.value)}
+            className="rounded border border-sparc-gray-200 px-2 py-1 text-xs"
+          >
+            <option value="">Select…</option>
+            {nodes.map((n) => (
+              <option key={n.id} value={n.id}>{n.id}</option>
+            ))}
+          </select>
+          <span className="text-xs text-sparc-gray-400">→</span>
+          <span className="text-xs text-sparc-gray-600">To:</span>
+          <select
+            value={qeTarget}
+            onChange={(e) => setQeTarget(e.target.value)}
+            className="rounded border border-sparc-gray-200 px-2 py-1 text-xs"
+          >
+            <option value="">Select…</option>
+            {nodes.filter((n) => n.id !== qeSource).map((n) => (
+              <option key={n.id} value={n.id}>{n.id}</option>
+            ))}
+          </select>
+          <input
+            type="text"
+            value={qeMechanism}
+            onChange={(e) => setQeMechanism(e.target.value)}
+            placeholder="Mechanism (optional)"
+            className="rounded border border-sparc-gray-200 px-2 py-1 text-xs w-40"
+          />
+          <button
+            onClick={addQuickEdge}
+            disabled={!qeSource || !qeTarget || qeSource === qeTarget}
+            className="rounded bg-sparc-purple px-3 py-1 text-xs font-medium text-white hover:bg-sparc-magenta disabled:opacity-40"
+          >
+            Add
+          </button>
+        </div>
+      )}
 
       {/* Validation banner */}
       {validation && (
@@ -324,6 +555,7 @@ export default function DAGView() {
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+          onNodeContextMenu={onNodeContextMenu}
           nodeTypes={nodeTypes}
           fitView
           fitViewOptions={{ padding: 0.3 }}
@@ -332,6 +564,34 @@ export default function DAGView() {
           <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="#e0e0e0" />
           <Controls showInteractive={false} />
         </ReactFlow>
+
+        {/* Node type context menu */}
+        {contextMenu && (
+          <div
+            className="fixed z-50 rounded border border-sparc-gray-200 bg-white py-1 shadow-lg"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+          >
+            <div className="px-3 py-1 text-[10px] font-bold text-sparc-gray-400 uppercase">
+              Change Type
+            </div>
+            {NODE_TYPE_OPTIONS.map((type) => {
+              const c = TYPE_COLORS[type];
+              return (
+                <button
+                  key={type}
+                  onClick={() => changeNodeType(contextMenu.nodeId, type)}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-sparc-gray-50"
+                >
+                  <span
+                    className="inline-block h-2.5 w-2.5 rounded-sm border-2"
+                    style={{ borderColor: c.border, backgroundColor: c.bg }}
+                  />
+                  <span className="capitalize">{type}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
