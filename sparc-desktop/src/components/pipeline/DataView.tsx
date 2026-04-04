@@ -266,7 +266,7 @@ export default function DataView(_props: { onNavigateToProject?: () => void }) {
           </div>
           {showMap && (
             <div className="rounded border border-sparc-gray-200 overflow-hidden" style={{ height: 360 }}>
-              <SpatialMap geojson={geojson} colorField={mapVar || undefined} height="360px" />
+              <SpatialMap geojson={geojson as any} colorField={mapVar || undefined} height="360px" />
             </div>
           )}
         </div>

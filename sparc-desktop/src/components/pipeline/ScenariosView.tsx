@@ -46,7 +46,7 @@ export default function ScenariosView() {
     getConfig()
       .then((c) => {
         setConfig(c);
-        setScenarios(c.scenarios ?? []);
+        setScenarios((c.scenarios ?? []) as Scenario[]);
       })
       .catch((e) => setError(e.message));
     dataSummary().then(setSummary).catch(() => {});
