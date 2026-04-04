@@ -259,7 +259,8 @@ Output directory structure.
 output:
   base_dir: "output"                    # Base output directory (default: "output")
   stage_dirs:
-    stage_1: "Stage_1_Correlogram_Analysis"
+    stage_0: "Stage_0_Correlogram"
+    stage_1: "Stage_1_GWEN"
     stage_2: "Stage_2_Spatial_CV"
     stage_3: "Stage_3_Causal_Validation"
     stage_4: "Stage_4_Scenarios"

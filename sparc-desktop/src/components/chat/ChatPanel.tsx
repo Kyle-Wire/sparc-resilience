@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useAnthropicChat } from "@/hooks/useAnthropicChat";
 import type { ClaudeAction } from "@/lib/types";
+import ProcessingEye from "./ProcessingEye";
 
 import { buildSystemPrompt } from "@/lib/prompts";
 
@@ -84,7 +85,10 @@ export default function ChatPanel({ onAction, systemPrompt, onClose }: ChatPanel
       {/* Messages */}
       <div className="flex-1 overflow-auto p-3 space-y-3">
         {messages.length === 0 && (
-          <p className="text-xs text-sparc-gray-600">Ask Claude to help configure your project, build a DAG, or set physics constraints.</p>
+          <div className="flex flex-col items-center gap-3 pt-2">
+            <ProcessingEye width={260} height={160} />
+            <p className="text-xs text-sparc-gray-600 text-center px-2">Ask Claude to help configure your project, build a DAG, or set physics constraints.</p>
+          </div>
         )}
         {messages.map((msg, i) => (
           <div

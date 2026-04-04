@@ -149,7 +149,8 @@ _BLANK_DEFAULTS: dict[str, Any] = {
     "working_dir": "",                   # root project folder (where YAMLs get written)
 
     # -- stage dirs (rarely changed) --
-    "stage_dir_1": "Stage_1_Correlogram_Analysis",
+    "stage_dir_0": "Stage_0_Correlogram",
+    "stage_dir_1": "Stage_1_GWEN",
     "stage_dir_2": "Stage_2_Spatial_CV",
     "stage_dir_3": "Stage_3_Causal_Validation",
     "stage_dir_4": "Stage_4_Scenarios",
@@ -387,7 +388,8 @@ def _apply_yaml_to_state(cfg: dict, base_dir: Path) -> None:
     out = cfg.get("output", {})
     st.session_state["output_base_dir"] = out.get("base_dir", "output")
     sdirs = out.get("stage_dirs", {})
-    st.session_state["stage_dir_1"]     = sdirs.get("stage_1", "Stage_1_Correlogram_Analysis")
+    st.session_state["stage_dir_0"]     = sdirs.get("stage_0", "Stage_0_Correlogram")
+    st.session_state["stage_dir_1"]     = sdirs.get("stage_1", "Stage_1_GWEN")
     st.session_state["stage_dir_2"]     = sdirs.get("stage_2", "Stage_2_Spatial_CV")
     st.session_state["stage_dir_3"]     = sdirs.get("stage_3", "Stage_3_Causal_Validation")
     st.session_state["stage_dir_4"]     = sdirs.get("stage_4", "Stage_4_Scenarios")

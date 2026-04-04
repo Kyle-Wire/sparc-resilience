@@ -240,14 +240,15 @@ fast = col2.checkbox("Fast mode", value=st.session_state.get("fast_mode", False)
 # Stage progress indicators
 st.markdown("### Stage Progress")
 output_dir = Path(wd) / st.session_state.get("output_base_dir", "output")
-stage1_dir = output_dir / st.session_state.get("stage_dir_1", "Stage_1_Correlogram_Analysis")
+stage0_dir = output_dir / st.session_state.get("stage_dir_0", "Stage_0_Correlogram")
+stage1_dir = output_dir / st.session_state.get("stage_dir_1", "Stage_1_GWEN")
 stage2_dir = output_dir / st.session_state.get("stage_dir_2", "Stage_2_Spatial_CV")
 stage3_dir = output_dir / st.session_state.get("stage_dir_3", "Stage_3_Causal_Validation")
 stage4_dir = output_dir / st.session_state.get("stage_dir_4", "Stage_4_Scenarios")
 
 progress_cols = st.columns(5)
 checks = [
-    (stage1_dir / ".correlogram_complete").exists(),
+    (stage0_dir / ".correlogram_complete").exists(),
     (stage1_dir / ".gwen_complete").exists(),
     stage2_dir.exists() and any(stage2_dir.iterdir()) if stage2_dir.exists() else False,
     stage3_dir.exists() and any(stage3_dir.iterdir()) if stage3_dir.exists() else False,

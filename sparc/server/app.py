@@ -492,8 +492,8 @@ async def get_correlogram_data():
         raise HTTPException(404, "Cannot resolve output paths")
 
     candidates = [
-        paths.stage1_dir / "correlogram_analysis_results.json",
-        paths.stage1_dir / "correlogram_results.json",
+        paths.stage0_dir / "correlogram_analysis_results.json",
+        paths.stage0_dir / "correlogram_results.json",
     ]
     found = next((p for p in candidates if p.exists()), None)
     if found is None:
@@ -518,27 +518,28 @@ async def get_gwen_data():
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
-    # Try CSV first, then JSON
-    csv_path = paths.stage1_dir / "gwen_variable_importance.csv"
-    json_path = paths.stage1_dir / "gwen_results.json"
+    # Try stage1_dir (GWEN dir) first, then fall back to output_dir for legacy
+    for search_dir in [paths.stage1_dir, paths.output_dir]:
+        csv_path = search_dir / "gwen_variable_importance.csv"
+        json_path = search_dir / "gwen_results.json"
 
-    print(f"[SPARC] GWEN lookup: csv={csv_path} exists={csv_path.exists()}, json={json_path} exists={json_path.exists()}")
+        print(f"[SPARC] GWEN lookup: csv={csv_path} exists={csv_path.exists()}, json={json_path} exists={json_path.exists()}")
 
-    if csv_path.exists():
-        df = pd.read_csv(csv_path)
-        return {"rows": df.to_dict(orient="records")}
-    elif json_path.exists():
-        with open(json_path, "r", encoding="utf-8") as fh:
-            return _json.load(fh)
-    else:
-        # List what IS in the stage directory to help diagnose
-        found = list(paths.stage1_dir.glob("*")) if paths.stage1_dir.exists() else []
-        found_str = ", ".join(f.name for f in found[:20]) if found else "(directory empty or missing)"
-        raise HTTPException(
-            404,
-            f"GWEN results not found. Looked in: {paths.stage1_dir}. "
-            f"Files present: {found_str}",
-        )
+        if csv_path.exists():
+            df = pd.read_csv(csv_path)
+            return {"rows": df.to_dict(orient="records")}
+        elif json_path.exists():
+            with open(json_path, "r", encoding="utf-8") as fh:
+                return _json.load(fh)
+
+    # List what IS in the stage directory to help diagnose
+    found = list(paths.stage1_dir.glob("*")) if paths.stage1_dir.exists() else []
+    found_str = ", ".join(f.name for f in found[:20]) if found else "(directory empty or missing)"
+    raise HTTPException(
+        404,
+        f"GWEN results not found. Looked in: {paths.stage1_dir}. "
+        f"Files present: {found_str}",
+    )
 
 
 @app.get("/results/spatial_cv/predictions")
@@ -817,11 +818,11 @@ async def get_report_data():
     except Exception:
         paths = None
 
-    # Correlogram summary
+    # Correlogram summary (Stage 0)
     if paths:
-        corr_path = paths.stage1_dir / "correlogram_analysis_results.json"
+        corr_path = paths.stage0_dir / "correlogram_analysis_results.json"
         if not corr_path.exists():
-            corr_path = paths.stage1_dir / "correlogram_results.json"
+            corr_path = paths.stage0_dir / "correlogram_results.json"
         if corr_path.exists():
             with open(corr_path, "r", encoding="utf-8") as fh:
                 corr_data = _json.load(fh)
@@ -836,9 +837,11 @@ async def get_report_data():
                 for var, info in individual.items()
             }
 
-    # GWEN summary
+    # GWEN summary (Stage 1)
     if paths:
         csv_path = paths.stage1_dir / "gwen_variable_importance.csv"
+        if not csv_path.exists():
+            csv_path = paths.output_dir / "gwen_variable_importance.csv"  # legacy fallback
         if csv_path.exists():
             df = pd.read_csv(csv_path)
             report["gwen"] = df.to_dict(orient="records")
@@ -866,7 +869,8 @@ async def get_report_data():
 
     # Plot URLs per stage
     plot_stages: dict[str, list] = {}
-    for stage_num, stage_dir in [(0, paths.stage1_dir if paths else None),
+    for stage_num, stage_dir in [(0, paths.stage0_dir if paths else None),
+                                  (1, paths.stage1_dir if paths else None),
                                   (2, paths.stage2_dir if paths else None),
                                   (3, paths.stage3_dir if paths else None),
                                   (4, paths.stage4_dir if paths else None)]:
@@ -939,7 +943,7 @@ async def list_stage_plots(stage: int):
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
-    stage_map = {0: paths.stage1_dir, 1: paths.stage1_dir, 2: paths.stage2_dir, 3: paths.stage3_dir, 4: paths.stage4_dir}
+    stage_map = {0: paths.stage0_dir, 1: paths.stage1_dir, 2: paths.stage2_dir, 3: paths.stage3_dir, 4: paths.stage4_dir}
     stage_dir = stage_map.get(stage)
     if stage_dir is None or not stage_dir.exists():
         return {"plots": []}
@@ -969,7 +973,7 @@ async def get_stage_plot(stage: int, file_path: str):
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
-    stage_map = {0: paths.stage1_dir, 1: paths.stage1_dir, 2: paths.stage2_dir, 3: paths.stage3_dir, 4: paths.stage4_dir}
+    stage_map = {0: paths.stage0_dir, 1: paths.stage1_dir, 2: paths.stage2_dir, 3: paths.stage3_dir, 4: paths.stage4_dir}
     stage_dir = stage_map.get(stage)
     if stage_dir is None:
         raise HTTPException(404, "Invalid stage")
@@ -1426,7 +1430,7 @@ def _try_load_from_disk(stage: int) -> Any:
         return None
 
     stage_map = {
-        0: paths.stage1_dir,
+        0: paths.stage0_dir,
         1: paths.stage1_dir,
         2: paths.stage2_dir,
         3: paths.stage3_dir,

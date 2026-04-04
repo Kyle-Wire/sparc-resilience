@@ -52,7 +52,8 @@ class PipelinePaths:
 
         # --- stage directories (configurable names) ---
         stage_dirs = config.get('output', {}).get('stage_dirs', {})
-        obj.stage1_dir = obj.output_dir / stage_dirs.get('stage_1', 'Stage_1_Correlogram_Analysis')
+        obj.stage0_dir = obj.output_dir / stage_dirs.get('stage_0', 'Stage_0_Correlogram')
+        obj.stage1_dir = obj.output_dir / stage_dirs.get('stage_1', 'Stage_1_GWEN')
         obj.stage2_dir = obj.output_dir / stage_dirs.get('stage_2', 'Stage_2_Spatial_CV')
         obj.stage3_dir = obj.output_dir / stage_dirs.get('stage_3', 'Stage_3_Causal_Validation')
         obj.stage4_dir = obj.output_dir / stage_dirs.get('stage_4', 'Stage_4_Scenarios')
@@ -107,7 +108,8 @@ class PipelinePaths:
                 print(f"Warning: Could not load config ({e}), using default output directory")
                 self.output_dir = self.phase1_dir / "Final_Results"
         
-        self.stage1_dir = self.output_dir / "Stage_1_Variogram_Analysis"
+        self.stage0_dir = self.output_dir / "Stage_0_Correlogram"
+        self.stage1_dir = self.output_dir / "Stage_1_GWEN"
         self.stage2_dir = self.output_dir / "Stage_2_Spatial_CV"
         self.stage3_dir = self.output_dir / "Stage_3_Causal_Validation"
         self.stage4_dir = self.output_dir / "Stage_4_Scenarios"
@@ -150,6 +152,7 @@ class PipelinePaths:
         """Ensure all necessary directories exist"""
         directories = [
             self.output_dir,
+            self.stage0_dir,
             self.stage1_dir, 
             self.stage2_dir,
             self.stage3_dir,
@@ -174,27 +177,31 @@ class PipelinePaths:
     def pipeline_report_file(self):
         return self.project_root / "pipeline_execution_report.txt"
     
-    # GWEN files
+    # GWEN files (Stage 1)
     @property
     def gwen_results(self):
-        return self.output_dir / "gwen_results.json"
+        return self.stage1_dir / "gwen_results.json"
     
     @property
     def gwen_approved(self):
-        return self.output_dir / "gwen_approved.txt"
+        return self.stage1_dir / "gwen_approved.txt"
     
     @property
     def selected_features(self):
-        return self.output_dir / "selected_features.txt"
+        return self.stage1_dir / "selected_features.txt"
     
-    # Stage 1 files
+    # Stage 0 files (Correlogram)
     @property
     def variogram_results(self):
-        return self.stage1_dir / "variogram_analysis_results.json"
+        return self.stage0_dir / "variogram_analysis_results.json"
     
     @property
     def variogram_summary(self):
-        return self.stage1_dir / "variogram_summary.csv"
+        return self.stage0_dir / "variogram_summary.csv"
+    
+    @property
+    def correlogram_results(self):
+        return self.stage0_dir / "correlogram_analysis_results.json"
     
     # Stage 2 files
     @property

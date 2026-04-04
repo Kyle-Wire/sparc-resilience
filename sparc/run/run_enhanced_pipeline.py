@@ -332,8 +332,8 @@ def main():
     if successful_stages == total_stages:
         print("[SUCCESS] PIPELINE COMPLETED SUCCESSFULLY!")
         print("\nGenerated Outputs:")
-        print("- ../output/gwen_approved.txt: GWEN approval for automation")
-        print("- Stage_1_Variogram_Analysis/: Variogram plots and optimal parameters")
+        print("- Stage_0_Correlogram/: Correlogram plots and optimal parameters")
+        print("- Stage_1_GWEN/: GWEN variable selection results")
         print("- pipeline_config.json: Optimized configuration for all models")
         print("- Stage_2_Spatial_CV/: Enhanced spatial CV results")
         print("- Final_Interpretation_Results/: Local coefficient maps and analysis")

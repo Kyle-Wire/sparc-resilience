@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Correlogram-Based Spatial Analysis Module for SPARC Pipeline
 Replaces variogram analysis with correlogram analysis to determine optimal model bandwidths and CV block sizes
@@ -227,22 +227,22 @@ class CorrelogramSpatialAnalyzer:
                 # Add recommended block sizes and bandwidths text box
                 textstr = '\n'.join([
                     f'Statistical Summary:',
-                    f'• Max Moran\'s I: {morans_i.max():.3f}',
-                    f'• Effective Range: {optimal_bandwidth:.1f}m',
-                    f'• Significant Lags: {sum(significant)}/{len(significant)}',
+                    f'â€¢ Max Moran\'s I: {morans_i.max():.3f}',
+                    f'â€¢ Effective Range: {optimal_bandwidth:.1f}m',
+                    f'â€¢ Significant Lags: {sum(significant)}/{len(significant)}',
                     f'',
                     f'CV Block Size Options:',
-                    f'• Small: {distance_quartiles[0]:.0f}m (Q1)',
-                    f'• Medium: {distance_quartiles[1]:.0f}m (Median)', 
-                    f'• Large: {distance_quartiles[2]:.0f}m (Q3)',
-                    f'• X-Large: {distances.max():.0f}m (Max)',
+                    f'â€¢ Small: {distance_quartiles[0]:.0f}m (Q1)',
+                    f'â€¢ Medium: {distance_quartiles[1]:.0f}m (Median)', 
+                    f'â€¢ Large: {distance_quartiles[2]:.0f}m (Q3)',
+                    f'â€¢ X-Large: {distances.max():.0f}m (Max)',
                     f'',
                     f'Model Bandwidths (red lines):',
-                    f'• GGPGAM: {optimal_bandwidth * 0.8:.1f}m',
-                    f'• GWR: {optimal_bandwidth:.1f}m',
-                    f'• GWRF: {optimal_bandwidth * 1.2:.1f}m',
+                    f'â€¢ GGPGAM: {optimal_bandwidth * 0.8:.1f}m',
+                    f'â€¢ GWR: {optimal_bandwidth:.1f}m',
+                    f'â€¢ GWRF: {optimal_bandwidth * 1.2:.1f}m',
                     f'',
-                    f'Recommended: Use block size ≥ 2x',
+                    f'Recommended: Use block size â‰¥ 2x',
                     f'largest bandwidth ({optimal_bandwidth * 1.2 * 2:.0f}m)'
                 ])
                 props = dict(boxstyle='round', facecolor='lightblue', alpha=0.8)
@@ -434,10 +434,10 @@ def main(fast_mode=False):
     # Load configuration
     config = load_config()
     
-    # Create Stage 1 output directory using centralized paths
+    # Create Stage 0 output directory using centralized paths
     paths = get_paths()
-    stage1_dir = paths.stage1_dir
-    os.makedirs(stage1_dir, exist_ok=True)
+    stage0_dir = paths.stage0_dir
+    os.makedirs(stage0_dir, exist_ok=True)
     
     # Stage 0 runs before GWEN, so always use base model predictors
     selected_features = config['predictors']['base_model']
@@ -474,7 +474,7 @@ def main(fast_mode=False):
     
     coords = data[config['variables']['coordinates']].values
     
-    # ── Use DatasetProfiler for data-driven correlogram parameters ───
+    # â”€â”€ Use DatasetProfiler for data-driven correlogram parameters â”€â”€â”€
     from sparc.run.dataset_profiler import DatasetProfiler
     profiler = DatasetProfiler(
         data,
@@ -487,7 +487,7 @@ def main(fast_mode=False):
     
     # Save profile for downstream stages
     import json as _json
-    profile_path = os.path.join(stage1_dir, 'dataset_profile.json')
+    profile_path = os.path.join(stage0_dir, 'dataset_profile.json')
     with open(profile_path, 'w') as _fp:
         _json.dump(profile, _fp, indent=2)
     print(f"Dataset profile saved to: {profile_path}")
@@ -502,7 +502,7 @@ def main(fast_mode=False):
         max_distance = corr_recs.get("max_distance", profile["spatial_extent"] * 0.40)
         n_lags = corr_recs.get("n_lags", 15)
     
-    cache_dir = Path(stage1_dir) / '.cache'
+    cache_dir = Path(stage0_dir) / '.cache'
     analyzer = CorrelogramSpatialAnalyzer(
         max_distance=max_distance,
         n_lags=n_lags,
@@ -527,7 +527,7 @@ def main(fast_mode=False):
         
         if variable in data.columns:
             values = data[variable].values
-            result = analyzer.analyze_variable_correlogram(coords, values, variable, stage1_dir)
+            result = analyzer.analyze_variable_correlogram(coords, values, variable, stage0_dir)
             all_results[variable] = result
             feature_progress.set_postfix(status="Complete")
         else:
@@ -538,7 +538,7 @@ def main(fast_mode=False):
     # Determine model bandwidths from correlogram results (predictors only)
     model_bandwidths = analyzer.determine_model_bandwidths(all_results, target_variable=target_variable)
     
-    # Determine CV block size — honour user override if present
+    # Determine CV block size â€” honour user override if present
     spatial_cv_cfg = config.get('models', {}).get('spatial_cv', {})
     block_size_source = spatial_cv_cfg.get('block_size_source', 'correlogram')
     user_block_size = spatial_cv_cfg.get('block_size')
@@ -584,7 +584,7 @@ def main(fast_mode=False):
     }
     
     # Save comprehensive results (this replaces variogram_analysis_results.json)
-    results_path = os.path.join(stage1_dir, 'correlogram_analysis_results.json')
+    results_path = os.path.join(stage0_dir, 'correlogram_analysis_results.json')
     
     def convert_numpy_types(obj):
         """Convert numpy types to Python types for JSON serialization"""
@@ -623,10 +623,10 @@ def main(fast_mode=False):
         })
     
     summary_df = pd.DataFrame(summary_data)
-    summary_df.to_csv(os.path.join(stage1_dir, 'correlogram_summary.csv'), index=False)
+    summary_df.to_csv(os.path.join(stage0_dir, 'correlogram_summary.csv'), index=False)
     
     # Create spatial CV configuration summary with UTF-8 encoding
-    cv_summary_path = os.path.join(stage1_dir, 'spatial_cv_configuration.txt')
+    cv_summary_path = os.path.join(stage0_dir, 'spatial_cv_configuration.txt')
     with open(cv_summary_path, 'w', encoding='utf-8') as f:
         f.write("SPATIAL CV CONFIGURATION FROM CORRELOGRAM ANALYSIS\n")
         f.write("=" * 55 + "\n\n")
@@ -655,7 +655,7 @@ def main(fast_mode=False):
             f.write("\n")
     
     print(f"\n=== Correlogram-Based Spatial Analysis Complete ===")
-    print(f"Results saved to: {stage1_dir}/")
+    print(f"Results saved to: {stage0_dir}/")
     print(f"Analyzed {len(all_results)} variables")
     print(f"Optimal CV block size: {optimal_cv_block_size:.0f}m")
     print(f"\nSummary:")

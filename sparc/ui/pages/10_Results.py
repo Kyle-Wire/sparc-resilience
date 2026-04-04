@@ -32,7 +32,8 @@ if not output_dir.exists():
 
 # ── Discover stages ───────────────────────────────────────────────────────────
 stage_dirs = {
-    "Stage 1 — Correlogram":  st.session_state.get("stage_dir_1", "Stage_1_Correlogram_Analysis"),
+    "Stage 0 — Correlogram":  st.session_state.get("stage_dir_0", "Stage_0_Correlogram"),
+    "Stage 1 — GWEN":         st.session_state.get("stage_dir_1", "Stage_1_GWEN"),
     "Stage 2 — Spatial CV":   st.session_state.get("stage_dir_2", "Stage_2_Spatial_CV"),
     "Stage 3 — Causal":       st.session_state.get("stage_dir_3", "Stage_3_Causal_Validation"),
     "Stage 4 — Scenarios":    st.session_state.get("stage_dir_4", "Stage_4_Scenarios"),

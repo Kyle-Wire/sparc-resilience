@@ -228,7 +228,8 @@
         "stage_dirs": {
           "type": "object",
           "properties": {
-            "stage_1": {"type": "string", "default": "Stage_1_Correlogram_Analysis"},
+            "stage_0": {"type": "string", "default": "Stage_0_Correlogram"},
+            "stage_1": {"type": "string", "default": "Stage_1_GWEN"},
             "stage_2": {"type": "string", "default": "Stage_2_Spatial_CV"},
             "stage_3": {"type": "string", "default": "Stage_3_Causal_Validation"},
             "stage_4": {"type": "string", "default": "Stage_4_Scenarios"},

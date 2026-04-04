@@ -55,6 +55,7 @@ def _write_project_yml(out: Path) -> None:
         "output": {
             "base_dir": s["output_base_dir"],
             "stage_dirs": {
+                "stage_0": s["stage_dir_0"],
                 "stage_1": s["stage_dir_1"],
                 "stage_2": s["stage_dir_2"],
                 "stage_3": s["stage_dir_3"],

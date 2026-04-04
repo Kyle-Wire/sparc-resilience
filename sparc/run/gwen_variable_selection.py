@@ -580,8 +580,10 @@ def main(config_path=None, fast_mode=False):
         config = load_config(config_path)
         print(f"   [OK] Configuration loaded")
         
-        # Setup output directory
-        output_dir = config['output']['base_dir']
+        # Setup output directory — GWEN writes to its own stage directory
+        from sparc.run.pipeline_paths import PipelinePaths
+        _gwen_paths = PipelinePaths.from_config(config)
+        output_dir = str(_gwen_paths.stage1_dir)
         setup_output_directory(output_dir)
         print(f"   [OK] Output directory: {output_dir}")
         
@@ -606,13 +608,11 @@ def main(config_path=None, fast_mode=False):
         # Auto-suggest params from correlogram if available
         gwen_cfg = config.get('gwen', {})
         if gwen_cfg.get('auto_tune', True):
-            from sparc.run.pipeline_paths import get_paths as _get_paths
             try:
-                _paths = _get_paths()
-                stage1_dir = str(_paths.stage1_dir)
+                correlogram_dir = str(_gwen_paths.stage0_dir)
             except Exception:
-                stage1_dir = os.path.join(output_dir, 'Stage_1_Correlogram_Analysis')
-            suggestions = auto_suggest_gwen_params(config, correlogram_dir=stage1_dir)
+                correlogram_dir = os.path.join(str(_gwen_paths.output_dir), 'Stage_0_Correlogram')
+            suggestions = auto_suggest_gwen_params(config, correlogram_dir=correlogram_dir)
             if suggestions:
                 # Merge suggestions (user config takes precedence)
                 for k, v in suggestions.items():

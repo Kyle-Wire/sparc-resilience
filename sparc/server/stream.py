@@ -271,28 +271,32 @@ def _execute_stage(
     if stage == 0:
         print(">>> Stage 0: Correlogram Analysis")
         from sparc.run.correlogram_analysis import main as run_correlogram
-        run_correlogram(fast_mode=fast)
+        result = run_correlogram(fast_mode=fast)
+        state.store_result(0, result)
 
         # Stage 0b — pipeline configuration
         print(">>> Stage 0b: Pipeline Configuration")
         from sparc.run.pipeline_configurator import PipelineConfigurator
-        configurator = PipelineConfigurator(stage1_dir=str(paths.stage1_dir))
+        configurator = PipelineConfigurator(stage1_dir=str(paths.stage0_dir))
         configurator.save_pipeline_config()
 
     elif stage == 1 and not skip_gwen:
         print(">>> Stage 1: GWEN Variable Selection")
         from sparc.run.gwen_variable_selection import main as run_gwen
-        run_gwen(config_path=project_path, fast_mode=fast)
+        result = run_gwen(config_path=project_path, fast_mode=fast)
+        state.store_result(1, result)
 
     elif stage == 2:
         print(">>> Stage 2: Enhanced Spatial CV")
         from sparc.run.enhanced_spatial_cv import main as run_spatial_cv
-        run_spatial_cv(fast_mode=fast)
+        result = run_spatial_cv(fast_mode=fast)
+        state.store_result(2, result)
 
     elif stage == 3:
         print(">>> Stage 3: Causal Validation")
         from sparc.run.causal_validation import main as run_causal_validation
-        run_causal_validation()
+        result = run_causal_validation()
+        state.store_result(3, result)
 
     elif stage == 4:
         scenarios = config.get("scenarios", [])

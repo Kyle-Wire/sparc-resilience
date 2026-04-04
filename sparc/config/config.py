@@ -150,7 +150,8 @@ def _yaml_to_config(raw: dict, yaml_path: str) -> dict:
         'output': {
             'base_dir': output_base,
             'stage_dirs': out_section.get('stage_dirs', {
-                'stage_1': 'Stage_1_Correlogram_Analysis',
+                'stage_0': 'Stage_0_Correlogram',
+                'stage_1': 'Stage_1_GWEN',
                 'stage_2': 'Stage_2_Spatial_CV',
                 'stage_3': 'Stage_3_Causal_Validation',
                 'stage_4': 'Stage_4_Scenarios',

@@ -103,10 +103,10 @@ models:
 
 | File | Location | Description |
 |------|----------|-------------|
-| `{variable}_correlogram.png` | `Stage_1_Correlogram_Analysis/` | 2-panel plot: correlogram curve + block-size quartiles |
-| `variogram_analysis_results.json` | `Stage_1_Correlogram_Analysis/` | All bandwidth and block-size recommendations |
-| `pipeline_config.json` | `Stage_1_Correlogram_Analysis/` | Auto-wired pipeline configuration |
-| `dataset_profile.json` | `Stage_1_Correlogram_Analysis/` | Dataset size tier and parameter recommendations |
+| `{variable}_correlogram.png` | `Stage_0_Correlogram/` | 2-panel plot: correlogram curve + block-size quartiles |
+| `variogram_analysis_results.json` | `Stage_0_Correlogram/` | All bandwidth and block-size recommendations |
+| `pipeline_config.json` | `Stage_0_Correlogram/` | Auto-wired pipeline configuration |
+| `dataset_profile.json` | `Stage_0_Correlogram/` | Dataset size tier and parameter recommendations |
 
 ### CLI
 
@@ -530,16 +530,17 @@ After a full pipeline run, the output directory looks like this:
 
 ```
 {output_base}/
-├── gwen_results.json                       # GWEN feature selection results
-├── selected_features.txt                   # Selected predictors
-├── gwen_variable_importance.csv            # Per-variable importance
-├── gwen_diagnostics.png                    # GWEN diagnostic plot
-│
-├── Stage_1_Correlogram_Analysis/
+├── Stage_0_Correlogram/
 │   ├── {variable}_correlogram.png          # Per-variable correlogram
 │   ├── variogram_analysis_results.json     # Bandwidth & block-size recommendations
 │   ├── pipeline_config.json                # Auto-wired configuration
 │   └── dataset_profile.json                # Dataset tier assessment
+│
+├── Stage_1_GWEN/
+│   ├── gwen_results.json                   # GWEN feature selection results
+│   ├── selected_features.txt               # Selected predictors
+│   ├── gwen_variable_importance.csv        # Per-variable importance
+│   └── gwen_diagnostics.png                # GWEN diagnostic plot
 │
 ├── Stage_2_Spatial_CV/
 │   ├── optimized_oof_predictions.csv       # Out-of-fold predictions

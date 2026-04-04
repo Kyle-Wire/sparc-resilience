@@ -21,12 +21,14 @@ class PipelineConfigurator:
     Generates pipeline configuration with manual parameter specification
     """
     
-    def __init__(self, stage1_dir=None):
-        if stage1_dir is None:
-            paths = get_paths()
-            self.stage1_dir = paths.stage1_dir
-        else:
+    def __init__(self, stage1_dir=None, correlogram_dir=None):
+        if correlogram_dir is not None:
+            self.stage1_dir = correlogram_dir
+        elif stage1_dir is not None:
             self.stage1_dir = stage1_dir
+        else:
+            paths = get_paths()
+            self.stage1_dir = paths.stage0_dir
         self.base_config = load_config()
         
         # Default parameters that can be manually overridden
