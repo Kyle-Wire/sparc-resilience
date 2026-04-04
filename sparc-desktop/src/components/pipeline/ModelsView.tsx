@@ -106,7 +106,7 @@ export default function ModelsView() {
         }
         setEnabledModels(enabled);
         setGwenConfig(c.gwen ?? {});
-        setCvMethod(c.models?.spatial_cv?.method ?? c.pipeline?.cv_method ?? "buffered_block");
+        setCvMethod(String(c.models?.spatial_cv?.method ?? c.pipeline?.cv_method ?? "buffered_block"));
       })
       .catch((e) => setError(e.message));
   }, []);

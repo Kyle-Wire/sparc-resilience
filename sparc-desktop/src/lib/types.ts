@@ -47,7 +47,7 @@ export interface DataSummary {
   column_count: number;
   columns: string[];
   dtypes: Record<string, string>;
-  numeric_summary: Record<string, { mean: number; median: number; std: number; min: number; max: number }>;
+  numeric_summary: Record<string, { mean: number; median: number; std: number; min: number; max: number; count?: number; q25?: number; q75?: number; "25%"?: number; "75%"?: number; [key: string]: number | undefined }>;
   crs?: string;
   bbox?: { minx: number; miny: number; maxx: number; maxy: number };
 }
@@ -126,6 +126,8 @@ export interface ProjectConfig {
     priors_file?: string;
     caps_file?: string;
     monotone_constraints?: Record<string, number>;
+    literature_weight?: number;
+    variable_bounds?: Record<string, { min: number | null; max: number | null }>;
   };
   causal?: {
     dag_file?: string;
@@ -148,6 +150,7 @@ export interface ProjectConfig {
   gwen?: Record<string, unknown>;
   flags?: Record<string, boolean>;
   scenarios?: unknown;
+  interaction_scenarios?: unknown;
   output?: Record<string, unknown>;
 }
 
