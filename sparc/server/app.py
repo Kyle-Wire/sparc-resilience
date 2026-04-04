@@ -99,6 +99,41 @@ async def health():
     }
 
 
+@app.get("/debug/paths")
+async def debug_paths():
+    """Diagnostic endpoint: show resolved output paths and whether expected files exist."""
+    if state.project_config is None:
+        return {"error": "No project loaded"}
+
+    from sparc.run.pipeline_paths import PipelinePaths
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception as exc:
+        return {"error": f"Cannot resolve paths: {exc}"}
+
+    expected_files = {
+        "stage1_gwen_csv": str(paths.stage1_dir / "gwen_variable_importance.csv"),
+        "stage1_gwen_json": str(paths.stage1_dir / "gwen_results.json"),
+        "stage2_predictions_gpkg": str(paths.stage2_dir / "spatial_cv_predictions.gpkg"),
+        "stage3_coefficients": str(paths.stage3_dir / "scenario_coefficients.json"),
+        "stage3_dose_response": str(paths.stage3_dir / "dose_response_curves.json"),
+        "stage4_scenario_gpkg": str(paths.stage4_dir / "scenario_results.gpkg"),
+    }
+
+    return {
+        "output_dir": str(paths.output_dir),
+        "stage1_dir": str(paths.stage1_dir),
+        "stage2_dir": str(paths.stage2_dir),
+        "stage3_dir": str(paths.stage3_dir),
+        "stage4_dir": str(paths.stage4_dir),
+        "final_dir": str(paths.final_dir),
+        "files": {k: {"path": v, "exists": Path(v).exists()} for k, v in expected_files.items()},
+        "config_output_base_dir": state.project_config.get("output", {}).get("base_dir"),
+        "config_paths_output_dir": state.project_config.get("paths", {}).get("output_dir"),
+    }
+
+
 # ------------------------------------------------------------------
 # Project endpoints
 # ------------------------------------------------------------------
@@ -294,6 +329,10 @@ async def data_geojson(variable: str | None = Query(None)):
         numeric_cols = list(df.select_dtypes(include="number").columns[:5])
         subset = df[["geometry"] + numeric_cols].copy()
 
+    # Reproject to WGS84 for web display (deck.gl / maplibre expect EPSG:4326)
+    if hasattr(subset, "crs") and subset.crs is not None and str(subset.crs) != "EPSG:4326":
+        subset = subset.to_crs(epsg=4326)
+
     return subset.__geo_interface__
 
 
@@ -483,6 +522,8 @@ async def get_gwen_data():
     csv_path = paths.stage1_dir / "gwen_variable_importance.csv"
     json_path = paths.stage1_dir / "gwen_results.json"
 
+    print(f"[SPARC] GWEN lookup: csv={csv_path} exists={csv_path.exists()}, json={json_path} exists={json_path.exists()}")
+
     if csv_path.exists():
         df = pd.read_csv(csv_path)
         return {"rows": df.to_dict(orient="records")}
@@ -490,7 +531,14 @@ async def get_gwen_data():
         with open(json_path, "r", encoding="utf-8") as fh:
             return _json.load(fh)
     else:
-        raise HTTPException(404, "GWEN results not found. Run Stage 1 first.")
+        # List what IS in the stage directory to help diagnose
+        found = list(paths.stage1_dir.glob("*")) if paths.stage1_dir.exists() else []
+        found_str = ", ".join(f.name for f in found[:20]) if found else "(directory empty or missing)"
+        raise HTTPException(
+            404,
+            f"GWEN results not found. Looked in: {paths.stage1_dir}. "
+            f"Files present: {found_str}",
+        )
 
 
 @app.get("/results/spatial_cv/predictions")
@@ -507,8 +555,15 @@ async def get_spatial_cv_predictions():
         raise HTTPException(404, "Cannot resolve output paths")
 
     gpkg_path = paths.stage2_dir / "spatial_cv_predictions.gpkg"
+    print(f"[SPARC] Spatial CV lookup: {gpkg_path} exists={gpkg_path.exists()}")
     if not gpkg_path.exists():
-        raise HTTPException(404, "Spatial CV predictions gpkg not found. Run Stage 2 first.")
+        found = list(paths.stage2_dir.glob("*")) if paths.stage2_dir.exists() else []
+        found_str = ", ".join(f.name for f in found[:20]) if found else "(directory empty or missing)"
+        raise HTTPException(
+            404,
+            f"Spatial CV predictions gpkg not found. Looked in: {paths.stage2_dir}. "
+            f"Files present: {found_str}",
+        )
 
     import geopandas as gpd
     gdf = gpd.read_file(gpkg_path)
@@ -533,8 +588,15 @@ async def get_causal_results():
         raise HTTPException(404, "Cannot resolve output paths")
 
     coeff_path = paths.stage3_dir / "scenario_coefficients.json"
+    print(f"[SPARC] Causal lookup: {coeff_path} exists={coeff_path.exists()}")
     if not coeff_path.exists():
-        raise HTTPException(404, "Causal results not found. Run Stage 3 first.")
+        found = list(paths.stage3_dir.glob("*")) if paths.stage3_dir.exists() else []
+        found_str = ", ".join(f.name for f in found[:20]) if found else "(directory empty or missing)"
+        raise HTTPException(
+            404,
+            f"Causal results not found. Looked in: {paths.stage3_dir}. "
+            f"Files present: {found_str}",
+        )
 
     with open(coeff_path, "r", encoding="utf-8") as fh:
         return _json.load(fh)
@@ -629,6 +691,7 @@ async def get_scenario_detail():
 
     # Load scenario spatial results
     gpkg_path = paths.stage4_dir / "scenario_results.gpkg"
+    print(f"[SPARC] Scenario lookup: {gpkg_path} exists={gpkg_path.exists()}")
     geojson_data = None
     if gpkg_path.exists():
         import geopandas as gpd

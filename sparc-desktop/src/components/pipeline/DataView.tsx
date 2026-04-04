@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, type ErrorInfo } from "react";
 import { dataPreview, dataSummary, dataGeoJson, uploadData, listDataFiles, selectDataFile } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import { pickCsv } from "@/lib/fileDialogs";
 import DropZone from "@/components/common/DropZone";
 import SpatialMap from "@/components/map/SpatialMap";
+import React from "react";
 import type { DataSummary, DataPreview, GeoJsonData } from "@/lib/types";
 
 interface ProjectFile {
@@ -32,6 +33,7 @@ export default function DataView(_props: { onNavigateToProject?: () => void }) {
   const [mapVar, setMapVar] = useState<string>("");
   const [geojson, setGeojson] = useState<GeoJsonData | null>(null);
   const [showMap, setShowMap] = useState(false);
+  const [mapError, setMapError] = useState<string | null>(null);
   const { notify } = useNotification();
 
   const reload = async () => {
@@ -40,6 +42,10 @@ export default function DataView(_props: { onNavigateToProject?: () => void }) {
       setSummary(s);
       setPreview(p);
       setError(null);
+      // Clear stale map data so it re-fetches on next "Show Map" click
+      setGeojson(null);
+      setShowMap(false);
+      setMapError(null);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // "No data loaded" is expected when a project has no data file yet — not an error
@@ -235,9 +241,14 @@ export default function DataView(_props: { onNavigateToProject?: () => void }) {
               onClick={async () => {
                 if (!showMap) {
                   try {
+                    setMapError(null);
                     const gj = await dataGeoJson(mapVar || undefined);
                     setGeojson(gj);
-                  } catch { /* no geometry */ }
+                  } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    setMapError(msg);
+                    notify("error", `Map load failed: ${msg}`);
+                  }
                 }
                 setShowMap(!showMap);
               }}
@@ -266,7 +277,15 @@ export default function DataView(_props: { onNavigateToProject?: () => void }) {
           </div>
           {showMap && (
             <div className="rounded border border-sparc-gray-200 overflow-hidden" style={{ height: 360 }}>
-              <SpatialMap geojson={geojson as any} colorField={mapVar || undefined} height="360px" />
+              {mapError ? (
+                <div className="flex items-center justify-center h-full bg-sparc-gray-50">
+                  <p className="text-sm text-sparc-crimson px-4 text-center">Map error: {mapError}</p>
+                </div>
+              ) : (
+                <MapErrorBoundary>
+                  <SpatialMap geojson={geojson as any} colorField={mapVar || undefined} height="360px" />
+                </MapErrorBoundary>
+              )}
             </div>
           )}
         </div>
@@ -286,6 +305,34 @@ export default function DataView(_props: { onNavigateToProject?: () => void }) {
     </div>
     </DropZone>
   );
+}
+
+/* ----------------------------------------------------------------
+   Map Error Boundary – catches deck.gl / WebGL render crashes
+   ---------------------------------------------------------------- */
+class MapErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; message: string }
+> {
+  state = { hasError: false, message: "" };
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, message: error.message };
+  }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("SpatialMap render crash:", error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex items-center justify-center h-full bg-sparc-gray-50">
+          <p className="text-sm text-sparc-crimson px-4 text-center">
+            Map rendering failed: {this.state.message}
+          </p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 /* ----------------------------------------------------------------

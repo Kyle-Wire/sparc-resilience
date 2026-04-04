@@ -1,8 +1,8 @@
 import { useEffect, useState, useMemo } from "react";
-import { getConfig, saveConfig, dataSummary } from "@/lib/api";
+import { getConfig, saveConfig, dataSummary, dataGeoJson } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
-import GlobePreview from "@/components/map/GlobePreview";
-import type { ProjectConfig, DataSummary } from "@/lib/types";
+import SpatialMap from "@/components/map/SpatialMap";
+import type { ProjectConfig, DataSummary, GeoJsonData } from "@/lib/types";
 
 interface CRSMeta {
   code: string;
@@ -33,6 +33,7 @@ export default function CRSView() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [summary, setSummary] = useState<DataSummary | null>(null);
+  const [geojson, setGeojson] = useState<GeoJsonData | null>(null);
   const { notify } = useNotification();
 
   useEffect(() => {
@@ -44,6 +45,7 @@ export default function CRSView() {
       })
       .catch((e) => setError(e.message));
     dataSummary().then(setSummary).catch(() => {});
+    dataGeoJson().then(setGeojson).catch(() => {});
   }, []);
 
   // CRS metadata for info panel
@@ -51,18 +53,6 @@ export default function CRSView() {
     () => COMMON_CRS.find((c) => c.code === projectedCRS),
     [projectedCRS]
   );
-
-  // Globe center: use bbox center from data, or CRS meta center, or default
-  const globeCenter = useMemo(() => {
-    if (summary?.bbox) {
-      return {
-        lng: (summary.bbox.minx + summary.bbox.maxx) / 2,
-        lat: (summary.bbox.miny + summary.bbox.maxy) / 2,
-      };
-    }
-    if (projectedMeta) return { lng: projectedMeta.centerLng, lat: projectedMeta.centerLat };
-    return { lng: -71.5, lat: 41.7 };
-  }, [summary, projectedMeta]);
 
   const save = async () => {
     setSaving(true);
@@ -161,9 +151,11 @@ export default function CRSView() {
         </div>
       </div>
 
-      {/* Globe + CRS Info */}
-      <div className="grid grid-cols-[200px_1fr] gap-6 items-start">
-        <GlobePreview longitude={globeCenter.lng} latitude={globeCenter.lat} size={200} />
+      {/* Map + CRS Info */}
+      <div className="grid grid-cols-1 gap-6">
+        <div className="rounded border border-sparc-gray-200 overflow-hidden" style={{ height: 360 }}>
+          <SpatialMap geojson={geojson as any} height="360px" />
+        </div>
 
         <div className="rounded border border-sparc-gray-200 p-4 space-y-2 text-sm">
           <h3 className="font-semibold text-sm">CRS Insights</h3>
