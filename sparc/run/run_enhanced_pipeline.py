@@ -19,10 +19,33 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 def check_stage_completion(stage_name):
     """
-    Check if a pipeline stage has already been completed by looking for its output files
+    Check if a pipeline stage has already been completed.
+
+    Prefers the ``ResultStore`` manifest when available (which tracks
+    partial vs complete artifacts), falling back to raw file-existence
+    checks for backward compatibility.
     """
     paths = get_paths()
-    
+
+    # Try manifest-based check first
+    try:
+        from sparc.run.pipeline_paths import get_result_store
+        store = get_result_store()
+        stage_map = {
+            "GWEN Auto-Approval": (1, ["gwen_approved.txt"]),
+            "Variogram Analysis": (0, ["variogram_analysis_results.json", "variogram_summary.csv"]),
+            "Pipeline Configuration": (None, None),  # not stage-managed
+            "Enhanced Spatial CV": (2, ["optimized_oof_predictions.csv"]),
+            "Final Interpretation": ("final", None),
+        }
+        if stage_name in stage_map:
+            stage_key, required = stage_map[stage_name]
+            if stage_key is not None:
+                return store.is_stage_complete(stage_key, required)
+    except Exception:
+        pass
+
+    # Fallback: file-existence checks
     if stage_name == "GWEN Auto-Approval":
         return os.path.exists(paths.gwen_approved)
     elif stage_name == "Variogram Analysis":

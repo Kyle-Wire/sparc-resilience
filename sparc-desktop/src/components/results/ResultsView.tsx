@@ -4,6 +4,7 @@ import GwenView from "@/components/results/GwenView";
 import SpatialCvView from "@/components/results/SpatialCvView";
 import CausalView from "@/components/results/CausalView";
 import ScenarioResultsView from "@/components/results/ScenarioResultsView";
+import VariableDashboardView from "@/components/results/VariableDashboardView";
 
 const STAGES = [
   { value: 0, label: "Stage 0 — Correlogram" },
@@ -11,6 +12,7 @@ const STAGES = [
   { value: 2, label: "Stage 2 — Spatial CV" },
   { value: 3, label: "Stage 3 — Causal" },
   { value: 4, label: "Stage 4 — Scenarios" },
+  { value: 5, label: "Variable Dashboard" },
 ];
 
 export default function ResultsView() {
@@ -23,6 +25,7 @@ export default function ResultsView() {
       case 2: return <SpatialCvView />;
       case 3: return <CausalView />;
       case 4: return <ScenarioResultsView />;
+      case 5: return <VariableDashboardView />;
       default: return <p className="p-4 text-sm text-sparc-gray-600">Select a stage above.</p>;
     }
   };

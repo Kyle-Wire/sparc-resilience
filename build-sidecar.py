@@ -30,13 +30,37 @@ HIDDEN_IMPORTS = [
     "sparc.config.config",
     "sparc.data",
     "sparc.data.data_utils",
+    "sparc.data.processing",
     "sparc.run",
     "sparc.run.pipeline_paths",
     "sparc.run.pipeline_utils",
+    "sparc.run.result_store",
     "sparc.causal",
     "sparc.causal.dag_definition",
+    "sparc.causal.causal_discovery",
+    "sparc.causal.counterfactual_engine",
+    "sparc.causal.spatial_cate",
     "sparc.interventions",
     "sparc.interventions.scenario_simulator",
+    "sparc.interventions.extrapolation_guard",
+    "sparc.interventions.physics_priors",
+    "sparc.report",
+    "sparc.features",
+    "sparc.features.laplacian",
+    "sparc.features.fold_aware_laplacian",
+    "sparc.models",
+    "sparc.models.meta_ensemble",
+    "sparc.models.deep_kriging_v2",
+    "sparc.models.ggpgam",
+    "sparc.models.gwen",
+    "sparc.models.gwr",
+    "sparc.models.gwrf",
+    "sparc.models.ols",
+    "sparc.models.fingerprint",
+    "sparc.evaluation",
+    "sparc.evaluation.evaluation",
+    "sparc.evaluation.causal_evaluation",
+    "sparc.evaluation.sensitivity",
     "uvicorn",
     "uvicorn.logging",
     "uvicorn.loops",
@@ -54,6 +78,9 @@ HIDDEN_IMPORTS = [
     "multipart",
     "torch",
     "geopandas",
+    "fiona",
+    "rasterio",
+    "rasterstats",
     "mgwr",
     "libpysal",
     "esda",
@@ -65,6 +92,7 @@ HIDDEN_IMPORTS = [
     "pyproj",
     "pyarrow",
     "yaml",
+    "jinja2",
     "jsonschema",
 ]
 
@@ -72,6 +100,7 @@ HIDDEN_IMPORTS = [
 DATA_DIRS = [
     ("templates", "templates"),
     ("sparc/config/project_schema.json", "sparc/config/project_schema.json"),
+    ("sparc/report/templates", "sparc/report/templates"),
 ]
 
 
@@ -100,7 +129,8 @@ def get_target_triple() -> str:
 
 def build(target_dir: str | None = None):
     target_triple = get_target_triple()
-    binary_name = f"sparc-sidecar-{target_triple}"
+    # Tauri looks for "sparc-sidecar" without target triple in resources/binaries/
+    binary_name = "sparc-sidecar"
     print(f"Building sidecar binary: {binary_name}")
     print(f"  Target: {target_triple}")
     print(f"  Entry:  {ENTRY_SCRIPT}")

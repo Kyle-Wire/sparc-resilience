@@ -338,30 +338,71 @@ async def data_geojson(variable: str | None = Query(None)):
 
 @app.post("/data/upload")
 async def upload_data(file: UploadFile = File(...)):
-    """Accept a CSV upload, store it, and load into state."""
+    """Accept a CSV, raster (.tif/.tiff), or spatial file (.shp/.gpkg/.geojson) upload."""
     if state.project_config is None:
         raise HTTPException(400, "Load a project first.")
 
-    # Save to a temp location inside the project directory
     project_dir = Path(state.project_config["paths"]["project_root"])
     data_dir = project_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    dest = data_dir / file.filename
+    safe_name = Path(file.filename).name  # strip any directory components
+    dest = data_dir / safe_name
+    content = await file.read()
     with open(dest, "wb") as f:
-        content = await file.read()
         f.write(content)
 
-    # Update config to point to new file and persist to disk
-    _set_data_path(str(dest))
-    _load_data_into_state(state.project_config)
+    suffix = dest.suffix.lower()
+    result: dict = {"status": "uploaded", "path": str(dest), "file_type": suffix}
 
-    return {
-        "status": "uploaded",
-        "path": str(dest),
-        "columns": list(state.data.columns) if state.data is not None else [],
-        "row_count": len(state.data) if state.data is not None else 0,
-    }
+    # CSV / Parquet — load as primary data
+    if suffix in (".csv", ".parquet"):
+        _set_data_path(str(dest))
+        _load_data_into_state(state.project_config)
+        result.update({
+            "columns": list(state.data.columns) if state.data is not None else [],
+            "row_count": len(state.data) if state.data is not None else 0,
+        })
+
+    # Raster — store metadata for zonal-stats pipeline
+    elif suffix in (".tif", ".tiff"):
+        try:
+            import rasterio
+            with rasterio.open(dest) as src:
+                result.update({
+                    "crs": str(src.crs) if src.crs else None,
+                    "bounds": list(src.bounds),
+                    "shape": list(src.shape),
+                    "band_count": src.count,
+                })
+        except ImportError:
+            result["crs"] = None
+            result["note"] = "rasterio not installed; metadata unavailable"
+        except Exception as exc:
+            result["note"] = f"Could not read raster metadata: {exc}"
+
+    # Shapefile / GeoPackage / GeoJSON — boundary or vector layer
+    elif suffix in (".shp", ".gpkg", ".geojson"):
+        try:
+            import geopandas as _gpd
+            gdf = _gpd.read_file(dest)
+            result.update({
+                "crs": str(gdf.crs) if gdf.crs else None,
+                "n_features": len(gdf),
+                "columns": [c for c in gdf.columns if c != "geometry"],
+                "bounds": list(gdf.total_bounds),
+            })
+        except Exception as exc:
+            result["note"] = f"Could not read spatial file: {exc}"
+
+    # Shapefile sidecar files (.shx, .dbf, .prj, .cpg) — just store
+    elif suffix in (".shx", ".dbf", ".prj", ".cpg"):
+        result["note"] = "Shapefile sidecar stored"
+
+    else:
+        result["note"] = f"Unknown file type {suffix}; stored as-is"
+
+    return result
 
 
 @app.get("/data/files")
@@ -372,7 +413,7 @@ async def list_data_files():
 
     project_dir = Path(state.project_config["paths"]["project_root"])
     files: list[dict] = []
-    for ext in ("*.csv", "*.parquet", "*.CSV"):
+    for ext in ("*.csv", "*.parquet", "*.CSV", "*.tif", "*.tiff", "*.shp", "*.gpkg", "*.geojson"):
         for p in project_dir.rglob(ext):
             try:
                 rel = p.relative_to(project_dir)
@@ -699,12 +740,12 @@ async def get_pdp_curves():
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
-    # Check all possible locations (output structure varies by run mode)
+    # Check all possible locations (canonical first, then legacy)
     candidates = [
+        paths.stage2_dir / "gwrf_pdp" / "gwrf_condition_curves.json",
         paths.output_dir / "spatial_intelligence" / "gwrf_pdp" / "gwrf_condition_curves.json",
         paths.spatial_analysis_dir / "gwrf_pdp" / "gwrf_condition_curves.json",
         paths.stage2_dir / "spatial_intelligence" / "gwrf_pdp" / "gwrf_condition_curves.json",
-        paths.stage2_dir / "gwrf_pdp" / "gwrf_condition_curves.json",
         paths.stage3_dir / "gwrf_condition_curves.json",
     ]
     found = next((p for p in candidates if p.exists()), None)
@@ -970,6 +1011,274 @@ async def get_report_data():
     report["plots"] = plot_stages
 
     return report
+
+
+# ------------------------------------------------------------------
+# CATE map, local coefficients, & increment endpoints (Phase 2)
+# ------------------------------------------------------------------
+
+@app.get("/results/causal/cate_map")
+async def get_cate_map(variable: str = Query(...)):
+    """Return spatial CATE multiplier for *variable* as GeoJSON."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+    import numpy as np
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+
+    # Find the .npy CATE multiplier file
+    npy_name = f"spatial_cate_multiplier_{variable}.npy"
+    npy_path = paths.stage3_dir / npy_name
+    if not npy_path.exists():
+        raise HTTPException(404, f"No CATE map for variable '{variable}'")
+
+    multiplier = np.load(npy_path, allow_pickle=False)
+
+    # Also try to load spatial_cate_maps.gpkg for geometry
+    gpkg_path = paths.stage3_dir / "spatial_cate_maps.gpkg"
+    if gpkg_path.exists():
+        import geopandas as gpd
+        gdf = gpd.read_file(gpkg_path)
+        cate_col = f"cate_{variable}"
+        if cate_col not in gdf.columns and len(multiplier) == len(gdf):
+            gdf[cate_col] = multiplier
+        if gdf.crs is not None and str(gdf.crs) != "EPSG:4326":
+            gdf = gdf.to_crs(epsg=4326)
+        return gdf.__geo_interface__
+
+    # Fallback: reconstruct from data coordinates + multiplier array
+    try:
+        cfg = state.project_config
+        coord_cols = cfg.get("data", {}).get("coord_columns",
+                     cfg.get("variables", {}).get("coordinates", []))
+        data_file = cfg.get("data", {}).get("file_path",
+                    cfg.get("paths", {}).get("raw_csv_path"))
+        crs = cfg.get("crs", {}).get("projected",
+              cfg.get("crs", {}).get("target_projected", "EPSG:4326"))
+
+        if data_file and len(coord_cols) == 2:
+            import pandas as pd
+            import geopandas as gpd
+            from shapely.geometry import Point
+
+            base_df = pd.read_csv(data_file)
+            x_col, y_col = coord_cols
+            n = min(len(base_df), len(multiplier))
+            geom = [Point(xy) for xy in zip(
+                base_df[x_col].iloc[:n], base_df[y_col].iloc[:n])]
+            gdf = gpd.GeoDataFrame(
+                {f"cate_{variable}": multiplier[:n]},
+                geometry=geom, crs=crs,
+            )
+            if str(gdf.crs) != "EPSG:4326":
+                gdf = gdf.to_crs(epsg=4326)
+            return gdf.__geo_interface__
+    except Exception as exc:
+        raise HTTPException(500, f"Could not build CATE GeoJSON: {exc}")
+
+    raise HTTPException(404, "Cannot reconstruct CATE map geometry")
+
+
+@app.get("/results/causal/cate_map/variables")
+async def get_cate_variables():
+    """Return list of variables that have spatial CATE multiplier maps."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+
+    variables = []
+    for f in paths.stage3_dir.glob("spatial_cate_multiplier_*.npy"):
+        var = f.stem.replace("spatial_cate_multiplier_", "")
+        variables.append(var)
+    return {"variables": variables}
+
+
+@app.get("/results/local_coefficients")
+async def get_local_coefficients(variable: str = Query(...)):
+    """Return MGWR/GWR spatially-varying coefficients for *variable* as GeoJSON."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+    import pandas as pd
+    import numpy as np
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+
+    cfg = state.project_config
+
+    # Check for pre-extracted local coefficient CSV
+    coef_csv = paths.stage2_dir / "base_models_full" / "mgwr_local_coefficients.csv"
+    if not coef_csv.exists():
+        coef_csv = paths.stage2_dir / "base_models_full" / "gwr_local_coefficients.csv"
+
+    if not coef_csv.exists():
+        raise HTTPException(404, "Local coefficient data not found. Run Stage 2b first.")
+
+    coef_df = pd.read_csv(coef_csv)
+    if variable not in coef_df.columns:
+        available = [c for c in coef_df.columns if not c.startswith("_") and c not in ("Intercept", "geometry")]
+        raise HTTPException(404, f"Variable '{variable}' not in coefficient data. Available: {available}")
+
+    # Build GeoJSON
+    coord_cols = cfg.get("data", {}).get("coord_columns",
+                 cfg.get("variables", {}).get("coordinates", []))
+    data_file = cfg.get("data", {}).get("file_path",
+                cfg.get("paths", {}).get("raw_csv_path"))
+    crs = cfg.get("crs", {}).get("projected",
+          cfg.get("crs", {}).get("target_projected", "EPSG:4326"))
+
+    if not data_file or len(coord_cols) != 2:
+        raise HTTPException(500, "Cannot resolve coordinate columns")
+
+    import geopandas as gpd
+    from shapely.geometry import Point
+
+    base_df = pd.read_csv(data_file)
+    x_col, y_col = coord_cols
+    n = min(len(base_df), len(coef_df))
+    geom = [Point(xy) for xy in zip(
+        base_df[x_col].iloc[:n], base_df[y_col].iloc[:n])]
+
+    # Include physics constraint metadata
+    physics = cfg.get("physics", cfg.get("interventions", {}).get("physics_priors", {}))
+    expected_sign = None
+    if isinstance(physics, dict):
+        for var_physics in physics.get("variables", physics.get("priors", [])):
+            if isinstance(var_physics, dict) and var_physics.get("name", var_physics.get("variable")) == variable:
+                expected_sign = var_physics.get("direction", var_physics.get("expected_sign"))
+                break
+
+    coef_values = coef_df[variable].iloc[:n].values.astype(float)
+    result = {
+        "coefficient": coef_values,
+        "sign_correct": (
+            (coef_values < 0) if expected_sign == "negative"
+            else (coef_values > 0) if expected_sign == "positive"
+            else np.ones(n, dtype=bool)
+        ),
+    }
+    gdf = gpd.GeoDataFrame(result, geometry=geom, crs=crs)
+    if str(gdf.crs) != "EPSG:4326":
+        gdf = gdf.to_crs(epsg=4326)
+    return gdf.__geo_interface__
+
+
+@app.get("/results/local_coefficients/variables")
+async def get_local_coef_variables():
+    """Return list of variables with local coefficient data."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+    import pandas as pd
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+
+    coef_csv = paths.stage2_dir / "base_models_full" / "mgwr_local_coefficients.csv"
+    if not coef_csv.exists():
+        coef_csv = paths.stage2_dir / "base_models_full" / "gwr_local_coefficients.csv"
+    if not coef_csv.exists():
+        return {"variables": []}
+
+    df = pd.read_csv(coef_csv, nrows=0)
+    skip = {"Intercept", "geometry", "_intercept"}
+    variables = [c for c in df.columns if c not in skip and not c.startswith("_")]
+    return {"variables": variables}
+
+
+@app.get("/results/scenarios/increment")
+async def get_scenario_increment(variable: str = Query(...), increment: float = Query(...)):
+    """Return GeoJSON filtered to a specific variable+increment scenario."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+    import pandas as pd
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+
+    # Load summary CSV to find matching scenario label
+    summary_path = None
+    for name in ("scenario_summary.csv", "scenario_summary_dag.csv",
+                 "scenario_summary_hybrid.csv", "scenario_summary_reprediction.csv"):
+        candidate = paths.stage4_dir / name
+        if candidate.exists():
+            summary_path = candidate
+            break
+    if summary_path is None:
+        raise HTTPException(404, "No scenario summary found")
+
+    summary_df = pd.read_csv(summary_path)
+    # Filter to matching variable + increment
+    mask = (
+        (summary_df["Variable"].str.lower() == variable.lower()) &
+        (summary_df["Increment"].astype(float).round(6) == round(float(increment), 6))
+    )
+    matched = summary_df[mask]
+    if matched.empty:
+        raise HTTPException(404, f"No scenario found for {variable} at increment {increment}")
+
+    # Load spatial results
+    gpkg_path = None
+    for gpkg_name in ("scenario_results.gpkg", "scenario_results_dag.gpkg",
+                      "scenario_results_hybrid.gpkg", "scenario_results_reprediction.gpkg"):
+        candidate = paths.stage4_dir / gpkg_name
+        if candidate.exists():
+            gpkg_path = candidate
+            break
+    if gpkg_path is None:
+        raise HTTPException(404, "No spatial results found")
+
+    import geopandas as gpd
+
+    gdf = gpd.read_file(gpkg_path)
+
+    # Find the scenario column — convention: pred_{Scenario_Label}
+    scenario_label = matched.iloc[0].get("Scenario", "")
+    pred_col = f"pred_{scenario_label}"
+    delta_col = f"delta_{scenario_label}"
+    baseline_col = next((c for c in gdf.columns if c == "pred_baseline"), None)
+
+    cols_to_keep = ["geometry"]
+    if baseline_col and baseline_col in gdf.columns:
+        cols_to_keep.append(baseline_col)
+    if pred_col in gdf.columns:
+        cols_to_keep.append(pred_col)
+    if delta_col in gdf.columns:
+        cols_to_keep.append(delta_col)
+    elif pred_col in gdf.columns and baseline_col:
+        gdf[delta_col] = gdf[pred_col].astype(float) - gdf[baseline_col].astype(float)
+        cols_to_keep.append(delta_col)
+
+    result_gdf = gdf[cols_to_keep].copy()
+    if result_gdf.crs is not None and str(result_gdf.crs) != "EPSG:4326":
+        result_gdf = result_gdf.to_crs(epsg=4326)
+
+    return {
+        "geojson": result_gdf.__geo_interface__,
+        "summary": matched.to_dict(orient="records"),
+    }
 
 
 # ------------------------------------------------------------------
@@ -1243,6 +1552,97 @@ async def zonal_stats_endpoint(body: dict = Body(...)):
     return {"n_cells": len(gdf), "columns": list(gdf.columns), "csv_path": str(csv_path)}
 
 
+@app.post("/data/prepare")
+async def prepare_data_pipeline(body: dict = Body(...)):
+    """Unified pipeline: boundary + rasters → fishnet → zonal stats → CSV.
+
+    Body fields:
+        boundary_path: str — path to boundary shapefile/GPKG/GeoJSON
+        raster_paths: list[str] — paths to GeoTIFF raster layers
+        resolution: float — fishnet cell size (in CRS units, default 100)
+        crs: str — target CRS (default EPSG:4326)
+        stats: str — zonal stat types, space-separated (default "mean")
+        set_as_data: bool — if true, set the result CSV as the project data file (default true)
+    """
+    if state.project_config is None:
+        raise HTTPException(400, "Load a project first.")
+
+    from sparc.data.processing import create_fishnet, clip_to_boundary, run_zonal_stats
+    import geopandas as _gpd
+
+    boundary_path = body.get("boundary_path")
+    raster_paths = body.get("raster_paths", [])
+    resolution = body.get("resolution", 100)
+    crs = body.get("crs", "EPSG:4326")
+    stats = body.get("stats", "mean")
+    set_as_data = body.get("set_as_data", True)
+
+    if not raster_paths:
+        raise HTTPException(400, "At least one raster_path is required")
+
+    # Step 1: Determine bounds — from boundary or from rasters
+    boundary_gdf = None
+    if boundary_path and Path(boundary_path).exists():
+        boundary_gdf = _gpd.read_file(boundary_path)
+        if boundary_gdf.crs and boundary_gdf.crs.to_string() != crs:
+            boundary_gdf = boundary_gdf.to_crs(crs)
+        bounds = tuple(boundary_gdf.total_bounds)
+    else:
+        # Derive bounds from first raster
+        try:
+            import rasterio
+            with rasterio.open(raster_paths[0]) as src:
+                bounds = tuple(src.bounds)
+                if not crs:
+                    crs = str(src.crs)
+        except Exception as exc:
+            raise HTTPException(400, f"Cannot determine bounds: {exc}")
+
+    # Step 2: Generate fishnet
+    gdf = create_fishnet(bounds, resolution, crs)
+
+    # Step 3: Clip to boundary
+    if boundary_gdf is not None:
+        gdf = clip_to_boundary(gdf, boundary_gdf)
+
+    if len(gdf) == 0:
+        raise HTTPException(400, "Fishnet has 0 cells after clipping — check CRS/resolution")
+
+    # Step 4: Run zonal statistics
+    valid_rasters = [r for r in raster_paths if Path(r).exists()]
+    if not valid_rasters:
+        raise HTTPException(400, "None of the raster paths exist")
+    gdf = run_zonal_stats(gdf, valid_rasters, stats=stats)
+
+    # Step 5: Save outputs
+    project_dir = Path(state.project_config["paths"]["project_root"])
+    data_dir = project_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    gpkg_path = data_dir / "fishnet_with_stats.gpkg"
+    gdf.to_file(gpkg_path, driver="GPKG")
+
+    csv_path = data_dir / "fishnet_with_stats.csv"
+    export_df = gdf.copy()
+    export_df["centroid_x"] = gdf.geometry.centroid.x
+    export_df["centroid_y"] = gdf.geometry.centroid.y
+    export_df.drop(columns=["geometry"]).to_csv(csv_path, index=False)
+
+    # Step 6: Optionally set as active data
+    if set_as_data:
+        _set_data_path(str(csv_path))
+        _load_data_into_state(state.project_config)
+
+    return {
+        "status": "prepared",
+        "n_cells": len(gdf),
+        "columns": list(gdf.columns),
+        "csv_path": str(csv_path),
+        "gpkg_path": str(gpkg_path),
+        "set_as_data": set_as_data,
+    }
+
+
 # ------------------------------------------------------------------
 # Report generation
 # ------------------------------------------------------------------
@@ -1358,6 +1758,82 @@ async def generate_report(format: str = Query("markdown", regex="^(markdown|json
         return {"report": report_data, "markdown": md_text}
 
     return JSONResponse(content={"markdown": md_text}, media_type="application/json")
+
+
+@app.post("/report/pdf")
+async def generate_pdf_report():
+    """Generate a PDF report with embedded plots and return it as a file download."""
+    from starlette.responses import Response as StarletteResponse
+
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    cfg = state.project_config
+    output_dir = cfg.get("paths", {}).get("output_dir")
+
+    # Collect causal results from state
+    causal_results = None
+    causal_state = state.get_result(3)
+    if isinstance(causal_state, dict):
+        causal_results = causal_state
+
+    # Collect scenario summary
+    scenario_summary = None
+    scenario_state = state.get_result(4)
+    if isinstance(scenario_state, dict) and "summary" in scenario_state:
+        import pandas as pd
+        s = scenario_state["summary"]
+        if isinstance(s, pd.DataFrame):
+            scenario_summary = s.to_dict(orient="records")
+        elif isinstance(s, list):
+            scenario_summary = s
+
+    try:
+        from sparc.report import generate_report_pdf
+
+        pdf_bytes = generate_report_pdf(
+            config=cfg,
+            data_summary=state.data_summary,
+            causal_results=causal_results,
+            scenario_summary=scenario_summary,
+            output_dir=output_dir,
+        )
+
+        # Also save a copy to the project directory
+        project_dir = Path(cfg["paths"]["project_root"])
+        dest = project_dir / "sparc_report.pdf"
+        if isinstance(pdf_bytes, Path):
+            pdf_data = pdf_bytes.read_bytes()
+        else:
+            pdf_data = pdf_bytes
+            dest.write_bytes(pdf_data)
+
+        return StarletteResponse(
+            content=pdf_data,
+            media_type="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=sparc_report.pdf"},
+        )
+    except RuntimeError as exc:
+        # weasyprint not installed — fall back to HTML
+        from sparc.report import generate_report_html
+
+        html_str = generate_report_html(
+            config=cfg,
+            data_summary=state.data_summary,
+            causal_results=causal_results,
+            scenario_summary=scenario_summary,
+            output_dir=output_dir,
+        )
+        # Save HTML to disk
+        project_dir = Path(cfg["paths"]["project_root"])
+        dest = project_dir / "sparc_report.html"
+        dest.write_text(html_str, encoding="utf-8")
+
+        return {
+            "status": "html_fallback",
+            "message": str(exc),
+            "html_path": str(dest),
+        }
 
 
 # ------------------------------------------------------------------

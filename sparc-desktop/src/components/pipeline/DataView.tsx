@@ -4,6 +4,7 @@ import { useNotification } from "@/hooks/useNotifications";
 import { pickCsv } from "@/lib/fileDialogs";
 import DropZone from "@/components/common/DropZone";
 import SpatialMap from "@/components/map/SpatialMap";
+import DataPrepWizard from "@/components/pipeline/DataPrepWizard";
 import React from "react";
 import type { DataSummary, DataPreview, GeoJsonData } from "@/lib/types";
 
@@ -35,6 +36,7 @@ export default function DataView(_props: { onNavigateToProject?: () => void }) {
   const [showMap, setShowMap] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
   const [statsVar, setStatsVar] = useState<string>("");
+  const [showPrepWizard, setShowPrepWizard] = useState(false);
   const { notify } = useNotification();
 
   const reload = async () => {
@@ -143,6 +145,12 @@ export default function DataView(_props: { onNavigateToProject?: () => void }) {
             Upload CSV
             <input type="file" accept=".csv" onChange={handleUpload} className="hidden" />
           </label>
+          <button
+            onClick={() => setShowPrepWizard(!showPrepWizard)}
+            className="rounded border border-sparc-purple bg-sparc-purple/10 px-4 py-2 text-sm font-medium text-sparc-purple hover:bg-sparc-purple/20"
+          >
+            {showPrepWizard ? "Hide Wizard" : "Raster Prep Wizard"}
+          </button>
         </div>
       </div>
 
@@ -173,7 +181,12 @@ export default function DataView(_props: { onNavigateToProject?: () => void }) {
       )}
 
       {/* Empty state: no data file loaded yet */}
-      {!summary && !error && (
+      {showPrepWizard && (
+        <div className="mb-6">
+          <DataPrepWizard onComplete={() => { setShowPrepWizard(false); reload(); }} />
+        </div>
+      )}
+      {!summary && !error && !showPrepWizard && (
         <div className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-sparc-gray-300 py-16">
           <div className="mb-3 text-4xl">📄</div>
           <h2 className="mb-1 text-base font-semibold">No data file loaded</h2>

@@ -215,10 +215,14 @@ class CausalValidator:
         if self.graph is not None and dsep_results:
             self.discovery_report['dseparation'] = dsep_results
         os.makedirs(output_dir, exist_ok=True)
-        report_path = os.path.join(output_dir, 'dag_discovery_report.json')
-        with open(report_path, 'w', encoding='utf-8') as f:
-            json.dump(self.discovery_report, f, indent=2, default=str)
-        print(f"    Discovery report saved: {report_path}")
+        try:
+            from sparc.run.pipeline_paths import get_result_store
+            get_result_store().save_json(3, 'dag_discovery_report.json', self.discovery_report)
+        except Exception:
+            report_path = os.path.join(output_dir, 'dag_discovery_report.json')
+            with open(report_path, 'w', encoding='utf-8') as f:
+                json.dump(self.discovery_report, f, indent=2, default=str)
+        print(f"    Discovery report saved")
 
     # ------------------------------------------------------------------
     # Step 1c: DAG assumption diagnostics (positivity, SUTVA)
@@ -1198,9 +1202,13 @@ class CausalValidator:
             gdf = estimator.to_geodataframe(data, coord_cols, crs=proj_crs)
             if gdf is not None and len(gdf) > 0:
                 os.makedirs(output_dir, exist_ok=True)
-                gpkg_path = os.path.join(output_dir, 'spatial_cate_maps.gpkg')
-                gdf.to_file(gpkg_path, driver='GPKG')
-                print(f"    Spatial CATE maps saved: {gpkg_path}")
+                try:
+                    from sparc.run.pipeline_paths import get_result_store
+                    get_result_store().save_geodataframe(3, 'spatial_cate_maps.gpkg', gdf)
+                except Exception:
+                    gpkg_path = os.path.join(output_dir, 'spatial_cate_maps.gpkg')
+                    gdf.to_file(gpkg_path, driver='GPKG')
+                print(f"    Spatial CATE maps saved")
         except Exception as e:
             print(f"    GeoPackage export failed: {e}")
 
@@ -1333,10 +1341,14 @@ class CausalValidator:
         # Save dose-response data
         if self.dose_response_results:
             os.makedirs(output_dir, exist_ok=True)
-            dr_path = os.path.join(output_dir, 'dose_response_curves.json')
-            with open(dr_path, 'w', encoding='utf-8') as f:
-                json.dump(self.dose_response_results, f, indent=2, default=str)
-            print(f"  Dose-response curves saved: {dr_path}")
+            try:
+                from sparc.run.pipeline_paths import get_result_store
+                get_result_store().save_json(3, 'dose_response_curves.json', self.dose_response_results)
+            except Exception:
+                dr_path = os.path.join(output_dir, 'dose_response_curves.json')
+                with open(dr_path, 'w', encoding='utf-8') as f:
+                    json.dump(self.dose_response_results, f, indent=2, default=str)
+            print(f"  Dose-response curves saved")
 
     # ------------------------------------------------------------------
     # Step 3e: Elasticity coefficients
@@ -2290,34 +2302,51 @@ class CausalValidator:
             }
 
         os.makedirs(output_dir, exist_ok=True)
-        out_path = os.path.join(output_dir, 'scenario_coefficients.json')
-        with open(out_path, 'w', encoding='utf-8') as f:
-            json.dump(output, f, indent=2, default=str)
+
+        # Use ResultStore if available, falling back to direct I/O
+        try:
+            from sparc.run.pipeline_paths import get_result_store
+            store = get_result_store()
+        except Exception:
+            store = None
+
+        if store is not None:
+            store.save_json(3, 'scenario_coefficients.json', output)
+        else:
+            out_path = os.path.join(output_dir, 'scenario_coefficients.json')
+            with open(out_path, 'w', encoding='utf-8') as f:
+                json.dump(output, f, indent=2, default=str)
 
         # Persist HGB edge models (if any) for non-linear propagation in Stage 4
         if self._edge_models:
-            import joblib
-            models_path = os.path.join(output_dir, 'edge_models.joblib')
-            joblib.dump(self._edge_models, models_path)
-            print(f"  HGB edge models saved: {models_path}  "
-                  f"({len(self._edge_models)} edges)")
+            if store is not None:
+                store.save_pickle(3, 'edge_models.joblib', self._edge_models)
+            else:
+                import joblib
+                models_path = os.path.join(output_dir, 'edge_models.joblib')
+                joblib.dump(self._edge_models, models_path)
+            print(f"  HGB edge models saved ({len(self._edge_models)} edges)")
 
         # Save propensity diagnostics separately
         if self.propensity_diagnostics:
-            ps_path = os.path.join(output_dir, 'propensity_diagnostics.json')
-            with open(ps_path, 'w', encoding='utf-8') as f:
-                json.dump(self.propensity_diagnostics, f, indent=2, default=str)
+            if store is not None:
+                store.save_json(3, 'propensity_diagnostics.json', self.propensity_diagnostics)
+            else:
+                ps_path = os.path.join(output_dir, 'propensity_diagnostics.json')
+                with open(ps_path, 'w', encoding='utf-8') as f:
+                    json.dump(self.propensity_diagnostics, f, indent=2, default=str)
 
         # Save spatial CATE multipliers for Stage 4
         if self.spatial_cate_results:
             for treatment, cate_info in self.spatial_cate_results.items():
                 mult = cate_info.get('multiplier')
                 if mult is not None:
-                    mult_path = os.path.join(
-                        output_dir,
-                        f'spatial_cate_multiplier_{treatment}.npy',
-                    )
-                    np.save(mult_path, mult)
+                    npy_name = f'spatial_cate_multiplier_{treatment}.npy'
+                    if store is not None:
+                        store.save_numpy(3, npy_name, mult)
+                    else:
+                        mult_path = os.path.join(output_dir, npy_name)
+                        np.save(mult_path, mult)
 
         print(f"\n  Scenario coefficients saved: {out_path}")
         print(f"    Direct effects on {target}: {len(coefficients)} variables")
@@ -2570,6 +2599,16 @@ def main() -> dict:
                 rv_str = f", RV={rv.get('robustness_value', 0):.3f}"
 
             f.write(f"  {var:>25s}  {', '.join(parts)}, {e_str}{rv_str}\n")
+
+    # Register summary in ResultStore manifest
+    try:
+        from sparc.run.pipeline_paths import get_result_store
+        store = get_result_store()
+        # Re-read the text we just wrote so it appears in the manifest
+        with open(summary_path, 'r', encoding='utf-8') as _sf:
+            store.save_text(3, 'causal_validation_summary.txt', _sf.read())
+    except Exception:
+        pass  # Direct file was already written above
 
     print(f"  Summary saved: {summary_path}")
     print("\n  Stage 3 complete.\n")

@@ -4,12 +4,15 @@ import {
   getPdpCurves,
   getDoseResponseCurves,
   getCausalDiagnostics,
+  getCateMapVariables,
+  getCateMap,
 } from "@/lib/api";
 import type {
   CausalResults,
   PdpCurves,
   DoseResponseData,
   CausalDiagnostics,
+  GeoJsonData,
 } from "@/lib/types";
 import {
   LineChart,
@@ -36,6 +39,7 @@ export default function CausalView() {
   const [pdp, setPdp] = useState<PdpCurves | null>(null);
   const [doseResponse, setDoseResponse] = useState<DoseResponseData | null>(null);
   const [diagnostics, setDiagnostics] = useState<CausalDiagnostics | null>(null);
+  const [cateVariables, setCateVariables] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<CausalTab>("effects");
 
@@ -46,12 +50,14 @@ export default function CausalView() {
       getPdpCurves(),
       getDoseResponseCurves(),
       getCausalDiagnostics(),
-    ]).then(([causalRes, pdpRes, drRes, diagRes]) => {
+      getCateMapVariables(),
+    ]).then(([causalRes, pdpRes, drRes, diagRes, cateVarRes]) => {
       if (causalRes.status === "fulfilled") setCausal(causalRes.value);
       else setError("Causal results not available. Run Stage 3 first.");
       if (pdpRes.status === "fulfilled") setPdp(pdpRes.value);
       if (drRes.status === "fulfilled") setDoseResponse(drRes.value);
       if (diagRes.status === "fulfilled") setDiagnostics(diagRes.value);
+      if (cateVarRes.status === "fulfilled") setCateVariables(cateVarRes.value.variables);
     });
   }, []);
 
@@ -68,6 +74,7 @@ export default function CausalView() {
 
   const TABS: { value: CausalTab; label: string; show: boolean }[] = [
     { value: "effects", label: "Effects Overview", show: true },
+    { value: "cate_map", label: "CATE Map", show: cateVariables.length > 0 },
     { value: "pdp", label: "PDP Curves", show: !!pdp },
     { value: "dose_response", label: "Dose-Response", show: !!hasDoseResponse },
     { value: "mediation", label: "Mediation", show: !!hasMediation },
@@ -112,6 +119,7 @@ export default function CausalView() {
       {/* Tab content */}
       <div className="flex-1 overflow-auto p-4">
         {tab === "effects" && <EffectsOverview causal={causal} treatments={treatments} />}
+        {tab === "cate_map" && <CateMapView variables={cateVariables} />}
         {tab === "pdp" && pdp && <PdpView pdp={pdp} />}
         {tab === "dose_response" && doseResponse && <DoseResponseView data={doseResponse} />}
         {tab === "mediation" && causal.mediation_decomposition && (
@@ -752,6 +760,249 @@ function DiagnosticsView({
               <Scatter data={calData} fill="#602468" />
             </ScatterChart>
           </ResponsiveContainer>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── CATE Map Tab ──────────────────────────────────────────────────
+
+function CateMapView({ variables }: { variables: string[] }) {
+  const [selectedVar, setSelectedVar] = useState(variables[0] ?? "");
+  const [geojson, setGeojson] = useState<GeoJsonData | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!selectedVar) return;
+    setLoading(true);
+    setError(null);
+    getCateMap(selectedVar)
+      .then((data) => setGeojson(data))
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  }, [selectedVar]);
+
+  // Detect the CATE property name in the GeoJSON
+  const cateField = useMemo(() => {
+    if (!geojson || geojson.features.length === 0) return undefined;
+    const props = geojson.features[0].properties;
+    return Object.keys(props).find((k) => k.startsWith("cate_"));
+  }, [geojson]);
+
+  // Compute summary stats
+  const stats = useMemo(() => {
+    if (!geojson || !cateField) return null;
+    const vals = geojson.features
+      .map((f) => f.properties[cateField])
+      .filter((v): v is number => typeof v === "number" && isFinite(v));
+    if (vals.length === 0) return null;
+    const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+    const sorted = [...vals].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    const std = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length);
+    return { n: vals.length, mean, median, std, min: sorted[0], max: sorted[sorted.length - 1] };
+  }, [geojson, cateField]);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <h3 className="text-sm font-semibold">Spatial CATE Map</h3>
+        <select
+          value={selectedVar}
+          onChange={(e) => setSelectedVar(e.target.value)}
+          className="rounded border border-sparc-gray-200 px-2 py-1 text-xs"
+        >
+          {variables.map((v) => (
+            <option key={v} value={v}>{v}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Summary stats */}
+      {stats && (
+        <div className="flex flex-wrap gap-3 text-[10px]">
+          <span className="rounded bg-sparc-gray-100 px-2 py-1 font-mono">
+            N = {stats.n}
+          </span>
+          <span className="rounded bg-sparc-gray-100 px-2 py-1 font-mono">
+            Mean: {stats.mean.toFixed(4)}
+          </span>
+          <span className="rounded bg-sparc-gray-100 px-2 py-1 font-mono">
+            Median: {stats.median.toFixed(4)}
+          </span>
+          <span className="rounded bg-sparc-gray-100 px-2 py-1 font-mono">
+            SD: {stats.std.toFixed(4)}
+          </span>
+          <span className="rounded bg-sparc-gray-100 px-2 py-1 font-mono">
+            Range: [{stats.min.toFixed(4)}, {stats.max.toFixed(4)}]
+          </span>
+        </div>
+      )}
+
+      {loading && (
+        <p className="text-xs text-sparc-gray-500">Loading CATE map…</p>
+      )}
+      {error && (
+        <p className="text-xs text-red-600">{error}</p>
+      )}
+
+      {geojson && !loading && (
+        <CateMapCanvas geojson={geojson} colorField={cateField} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Inline deck.gl map for the CATE tab — follows the same pattern as SpatialMap
+ * but is self-contained to avoid a circular import.
+ */
+function CateMapCanvas({
+  geojson,
+  colorField,
+}: {
+  geojson: GeoJsonData;
+  colorField?: string;
+}) {
+  // Lazy-import deck.gl + maplibre only when this tab is rendered
+  const [DeckGL, setDeckGL] = useState<any>(null);
+  const [MapGL, setMapGL] = useState<any>(null);
+  const [layers, setLayers] = useState<any>(null);
+
+  useEffect(() => {
+    // Dynamic imports keep the bundle chunk lazy
+    Promise.all([
+      import("@deck.gl/react"),
+      import("@deck.gl/layers"),
+      import("react-map-gl/maplibre"),
+    ]).then(([deckMod, layersMod, mapMod]) => {
+      setDeckGL(() => deckMod.DeckGL);
+      setMapGL(() => mapMod.default);
+      setLayers({ GeoJsonLayer: layersMod.GeoJsonLayer, ScatterplotLayer: layersMod.ScatterplotLayer });
+    });
+  }, []);
+
+  // Compute bounding box
+  const bbox = useMemo(() => {
+    let minLng = 180, maxLng = -180, minLat = 90, maxLat = -90;
+    for (const f of geojson.features) {
+      const c = f.geometry.type === "Point"
+        ? [f.geometry.coordinates as number[]]
+        : (f.geometry.coordinates as number[][]);
+      for (const pt of c) {
+        const [lng, lat] = pt as number[];
+        if (lng < minLng) minLng = lng;
+        if (lng > maxLng) maxLng = lng;
+        if (lat < minLat) minLat = lat;
+        if (lat > maxLat) maxLat = lat;
+      }
+    }
+    const longitude = (minLng + maxLng) / 2;
+    const latitude = (minLat + maxLat) / 2;
+    const span = Math.max(maxLng - minLng, maxLat - minLat);
+    const zoom = span > 0 ? Math.max(1, Math.min(16, Math.log2(360 / span) - 0.5)) : 10;
+    return { longitude, latitude, zoom };
+  }, [geojson]);
+
+  const [viewState, setViewState] = useState({ ...bbox, pitch: 0, bearing: 0 });
+
+  useEffect(() => {
+    setViewState((prev) => ({ ...prev, ...bbox }));
+  }, [bbox]);
+
+  // Color ramp (diverging: blue → white → red for + / − CATE)
+  const domain = useMemo<[number, number]>(() => {
+    if (!colorField) return [0, 1];
+    let min = Infinity, max = -Infinity;
+    for (const f of geojson.features) {
+      const v = f.properties[colorField];
+      if (typeof v === "number" && isFinite(v)) {
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+    }
+    return min < max ? [min, max] : [0, 1];
+  }, [geojson, colorField]);
+
+  const divergingColor = (t: number): [number, number, number, number] => {
+    // -1 → blue, 0 → white, +1 → red
+    const clamped = Math.max(-1, Math.min(1, t));
+    if (clamped < 0) {
+      const a = 1 + clamped; // 0→1
+      return [Math.round(80 * (1 - a)), Math.round(80 + 175 * a), Math.round(200 + 55 * (1 - a)), 200];
+    }
+    return [Math.round(200 + 55 * clamped), Math.round(80 + 175 * (1 - clamped)), Math.round(80 * (1 - clamped)), 200];
+  };
+
+  if (!DeckGL || !MapGL || !layers) {
+    return <p className="text-xs text-sparc-gray-500">Loading map renderer…</p>;
+  }
+
+  // Build a symmetric domain around zero for diverging palette
+  const absMax = Math.max(Math.abs(domain[0]), Math.abs(domain[1]));
+  const symDomain: [number, number] = absMax > 0 ? [-absMax, absMax] : [-1, 1];
+
+  const deckLayers = [
+    new layers.ScatterplotLayer({
+      id: "cate-scatter",
+      data: geojson.features,
+      getPosition: (d: any) => {
+        const c = d.geometry.coordinates;
+        return d.geometry.type === "Point" ? c : c[0];
+      },
+      getRadius: 100,
+      radiusMinPixels: 4,
+      radiusMaxPixels: 20,
+      getFillColor: (d: any) => {
+        if (!colorField) return [96, 36, 104, 200];
+        const v = d.properties[colorField];
+        if (typeof v !== "number") return [200, 200, 200, 100];
+        const t = v / (symDomain[1] || 1);
+        return divergingColor(t);
+      },
+      pickable: true,
+    }),
+  ];
+
+  return (
+    <div className="relative overflow-hidden rounded-lg border border-sparc-gray-200" style={{ height: "480px" }}>
+      <DeckGL
+        viewState={viewState}
+        onViewStateChange={({ viewState: vs }: any) => setViewState(vs)}
+        layers={deckLayers}
+        controller
+        getTooltip={({ object }: any) => {
+          if (!object) return null;
+          const props = object.properties ?? object;
+          const lines = Object.entries(props)
+            .filter(([k]) => !k.startsWith("_") && k !== "geometry")
+            .slice(0, 6)
+            .map(([k, v]) => `${k}: ${typeof v === "number" ? v.toFixed(4) : v}`);
+          return { text: lines.join("\n"), style: { fontSize: "11px", fontFamily: "monospace" } };
+        }}
+      >
+        <MapGL
+          mapStyle="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
+          attributionControl={false}
+        />
+      </DeckGL>
+
+      {/* Diverging legend */}
+      {colorField && (
+        <div className="absolute bottom-4 right-4 rounded-md bg-white/90 p-2 shadow-sm backdrop-blur-sm">
+          <p className="mb-1 text-[10px] font-medium text-sparc-gray-600">{colorField}</p>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[9px] text-sparc-gray-500">{symDomain[0].toFixed(3)}</span>
+            <div
+              className="h-2.5 w-24 rounded-sm"
+              style={{
+                background: "linear-gradient(to right, rgb(0,80,200), rgb(255,255,255), rgb(255,80,0))",
+              }}
+            />
+            <span className="text-[9px] text-sparc-gray-500">{symDomain[1].toFixed(3)}</span>
+          </div>
         </div>
       )}
     </div>

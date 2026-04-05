@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { getReportData, stagePlotUrl } from "@/lib/api";
+import { getReportData, generatePdfReport, stagePlotUrl } from "@/lib/api";
 import type { ReportPayload } from "@/lib/types";
 
 export default function ReportView() {
@@ -15,6 +15,33 @@ export default function ReportView() {
   }, []);
 
   const handlePrint = () => window.print();
+
+  const [pdfGenerating, setPdfGenerating] = useState(false);
+  const [pdfMessage, setPdfMessage] = useState<string | null>(null);
+
+  const handleGeneratePdf = async () => {
+    setPdfGenerating(true);
+    setPdfMessage(null);
+    try {
+      const result = await generatePdfReport();
+      if (result.blob) {
+        // Download the PDF
+        const url = URL.createObjectURL(result.blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "sparc_report.pdf";
+        a.click();
+        URL.revokeObjectURL(url);
+        setPdfMessage("PDF saved");
+      } else if (result.htmlFallback) {
+        setPdfMessage(`HTML fallback saved: ${result.htmlFallback}`);
+      }
+    } catch (err) {
+      setPdfMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPdfGenerating(false);
+    }
+  };
 
   const handleCopyMarkdown = () => {
     if (!report) return;
@@ -55,10 +82,20 @@ export default function ReportView() {
           </button>
           <button
             onClick={handlePrint}
-            className="rounded bg-sparc-purple px-3 py-1.5 text-xs font-medium text-white hover:bg-sparc-purple/90"
+            className="rounded border border-sparc-gray-300 px-3 py-1.5 text-xs font-medium hover:bg-sparc-gray-100"
           >
-            Export PDF
+            Print
           </button>
+          <button
+            onClick={handleGeneratePdf}
+            disabled={pdfGenerating}
+            className="rounded bg-sparc-purple px-3 py-1.5 text-xs font-medium text-white hover:bg-sparc-purple/90 disabled:opacity-50"
+          >
+            {pdfGenerating ? "Generating…" : "Download PDF"}
+          </button>
+          {pdfMessage && (
+            <span className="text-[10px] text-sparc-gray-500">{pdfMessage}</span>
+          )}
         </div>
       </div>
 

@@ -161,6 +161,20 @@ export const saveConfig = (config: Partial<ProjectConfig>) =>
 export const generateReport = (format: "markdown" | "json" = "markdown") =>
   post<{ markdown: string; report?: unknown }>(`/report/generate?format=${format}`);
 
+/** Request a PDF report — returns binary blob or HTML fallback JSON. */
+export async function generatePdfReport(): Promise<{ blob: Blob | null; htmlFallback?: string }> {
+  const res = await fetch(`${BASE}/report/pdf`, { method: "POST" });
+  if (!res.ok) throw new Error(await res.text());
+
+  const ct = res.headers.get("content-type") ?? "";
+  if (ct.includes("application/pdf")) {
+    return { blob: await res.blob() };
+  }
+  // HTML fallback (weasyprint not installed)
+  const json = await res.json();
+  return { blob: null, htmlFallback: json.html_path };
+}
+
 // ------------------------------------------------------------------
 // Structured results
 // ------------------------------------------------------------------
@@ -190,6 +204,67 @@ export const getScenarioDetail = () =>
 
 export const getReportData = () =>
   get<ReportPayload>("/results/report");
+
+// ------------------------------------------------------------------
+// CATE map, local coefficients, scenario increments
+// ------------------------------------------------------------------
+export const getCateMapVariables = () =>
+  get<{ variables: string[] }>("/results/causal/cate_map/variables");
+
+export const getCateMap = (variable: string) =>
+  get<GeoJsonData>(`/results/causal/cate_map?variable=${encodeURIComponent(variable)}`);
+
+export const getLocalCoefVariables = () =>
+  get<{ variables: string[] }>("/results/local_coefficients/variables");
+
+export const getLocalCoefficients = (variable: string) =>
+  get<GeoJsonData>(`/results/local_coefficients?variable=${encodeURIComponent(variable)}`);
+
+export const getScenarioIncrement = (variable: string, increment: number) =>
+  get<ScenarioDetail>(`/results/scenarios/increment?variable=${encodeURIComponent(variable)}&increment=${increment}`);
+
+// ------------------------------------------------------------------
+// Data preparation (raster + fishnet + zonal stats)
+// ------------------------------------------------------------------
+export interface PrepareDataPayload {
+  boundary_path?: string;
+  raster_paths: string[];
+  resolution?: number;
+  crs?: string;
+  stats?: string;
+  set_as_data?: boolean;
+}
+
+export interface PrepareDataResult {
+  status: string;
+  n_cells: number;
+  columns: string[];
+  csv_path: string;
+  gpkg_path: string;
+  set_as_data: boolean;
+}
+
+export const prepareData = (payload: PrepareDataPayload) =>
+  post<PrepareDataResult>("/data/prepare", payload);
+
+export interface FishnetPayload {
+  bounds: [number, number, number, number];
+  resolution: number;
+  crs?: string;
+  boundary_path?: string;
+}
+
+export const createFishnet = (payload: FishnetPayload) =>
+  post<{ n_cells: number; columns: string[] }>("/data/fishnet", payload);
+
+export interface ZonalStatsPayload {
+  fishnet_path: string;
+  raster_paths: string[];
+  stats?: string;
+}
+
+export const runZonalStats = (payload: ZonalStatsPayload) =>
+  post<{ n_cells: number; columns: string[]; csv_path: string }>("/data/zonal_stats", payload);
 
 // ------------------------------------------------------------------
 // WebSocket helper

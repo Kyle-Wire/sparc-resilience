@@ -251,8 +251,18 @@ class PipelinePaths:
         
         Used by Stage 4 ScenarioSimulator for saturation-aware scenario
         predictions via ``predict_scenario_with_saturation()``.
+
+        Canonical location is ``Stage_2_Spatial_CV/gwrf_pdp/``.  Falls back
+        to the legacy ``spatial_intelligence/gwrf_pdp/`` path for existing
+        project outputs.
         """
-        return Path(self.output_dir) / "spatial_intelligence" / "gwrf_pdp" / "gwrf_condition_curves.json"
+        canonical = self.stage2_dir / "gwrf_pdp" / "gwrf_condition_curves.json"
+        if canonical.exists():
+            return canonical
+        legacy = Path(self.output_dir) / "spatial_intelligence" / "gwrf_pdp" / "gwrf_condition_curves.json"
+        if legacy.exists():
+            return legacy
+        return canonical  # default to canonical for new writes
     
     @property
     def ggpgam_uncertainty_weights(self):
@@ -445,6 +455,28 @@ def set_paths_from_config(config: dict) -> PipelinePaths:
     global _global_paths
     _global_paths = PipelinePaths.from_config(config)
     return _global_paths
+
+
+# ---------------------------------------------------------------------------
+# ResultStore singleton
+# ---------------------------------------------------------------------------
+
+_global_store = None
+
+
+def get_result_store():
+    """Return the global ``ResultStore`` instance, creating it on first call."""
+    global _global_store
+    if _global_store is None:
+        from sparc.run.result_store import ResultStore
+        _global_store = ResultStore(get_paths())
+    return _global_store
+
+
+def set_result_store(store):
+    """Override the global ``ResultStore`` (e.g. in tests)."""
+    global _global_store
+    _global_store = store
 
 
 # Backwards-compatible shorthand: code that does ``from pipeline_paths import paths``

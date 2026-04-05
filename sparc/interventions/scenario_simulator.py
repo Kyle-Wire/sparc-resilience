@@ -740,9 +740,16 @@ class ScenarioSimulator:
         """
         import json
 
-        # Primary location: spatial_intelligence/gwrf_pdp/ under output dir
+        # Canonical location: Stage_2_Spatial_CV/gwrf_pdp/
         base_dir = Path(self.config['output']['base_dir'])
-        curves_path = base_dir / 'spatial_intelligence' / 'gwrf_pdp' / 'gwrf_condition_curves.json'
+        stage2_name = self.config.get('output', {}).get('stage_dirs', {}).get(
+            'stage_2', 'Stage_2_Spatial_CV'
+        )
+        curves_path = base_dir / stage2_name / 'gwrf_pdp' / 'gwrf_condition_curves.json'
+
+        # Fallback: legacy spatial_intelligence location
+        if not curves_path.exists():
+            curves_path = base_dir / 'spatial_intelligence' / 'gwrf_pdp' / 'gwrf_condition_curves.json'
 
         # Fallback: legacy Stage 3 location
         if not curves_path.exists():
@@ -1403,22 +1410,32 @@ class ScenarioSimulator:
 
         summary_df = pd.DataFrame(summary_rows)
 
-        # Save summary CSV
-        summary_path = self.output_dir / "scenario_summary.csv"
-        summary_df.to_csv(summary_path, index=False)
+        # Save summary CSV via ResultStore (with CSV fallback)
+        try:
+            from sparc.run.pipeline_paths import get_result_store
+            store = get_result_store()
+            store.save_dataframe(4, "scenario_summary.csv", summary_df, fmt="csv")
+        except Exception:
+            summary_path = self.output_dir / "scenario_summary.csv"
+            summary_df.to_csv(summary_path, index=False)
         if verbose:
-            print(f"\n   Summary saved: {summary_path}")
+            print(f"\n   Summary saved")
 
         # Build GeoDataFrame if possible
         results_gdf = self._to_geodataframe(results_df, baseline_df)
         if GEOPANDAS_AVAILABLE and isinstance(results_gdf, gpd.GeoDataFrame):
             try:
-                gpkg_path = self.output_dir / "scenario_results.gpkg"
-                results_gdf.to_file(gpkg_path, driver="GPKG")
-                if verbose:
-                    print(f"   GeoPackage saved: {gpkg_path}")
-            except Exception as e:
-                warnings.warn(f"Could not write GeoPackage: {e}")
+                from sparc.run.pipeline_paths import get_result_store
+                store = get_result_store()
+                store.save_geodataframe(4, "scenario_results.gpkg", results_gdf)
+            except Exception:
+                try:
+                    gpkg_path = self.output_dir / "scenario_results.gpkg"
+                    results_gdf.to_file(gpkg_path, driver="GPKG")
+                except Exception as e:
+                    warnings.warn(f"Could not write GeoPackage: {e}")
+            if verbose:
+                print(f"   GeoPackage saved")
 
         return summary_df, results_gdf
 
@@ -1941,23 +1958,34 @@ class ScenarioSimulator:
 
         # ── Save results ──────────────────────────────────────────────
         summary_df = pd.DataFrame(summary_rows)
-        summary_path = self.output_dir / "scenario_summary_dag.csv"
-        summary_df.to_csv(summary_path, index=False)
+        try:
+            from sparc.run.pipeline_paths import get_result_store
+            store = get_result_store()
+            store.save_dataframe(4, "scenario_summary_dag.csv", summary_df, fmt="csv")
+            store.save_dataframe(4, "scenario_summary.csv", summary_df, fmt="csv")
+        except Exception:
+            summary_path = self.output_dir / "scenario_summary_dag.csv"
+            summary_df.to_csv(summary_path, index=False)
         if verbose:
             print(f"\n{'='*70}")
-            print(f"DAG scenario summary saved: {summary_path}")
+            print(f"DAG scenario summary saved")
 
         results_gdf = self._to_geodataframe(results_df, data)
         if GEOPANDAS_AVAILABLE and isinstance(results_gdf, gpd.GeoDataFrame):
             try:
-                gpkg = self.output_dir / "scenario_results_dag.gpkg"
-                results_gdf.to_file(gpkg, driver="GPKG")
-                # Also write canonical name so the UI always finds a spatial file
-                results_gdf.to_file(self.output_dir / "scenario_results.gpkg", driver="GPKG")
-                if verbose:
-                    print(f"GeoPackage saved: {gpkg}")
-            except Exception as e:
-                warnings.warn(f"Could not write GeoPackage: {e}")
+                from sparc.run.pipeline_paths import get_result_store
+                store = get_result_store()
+                store.save_geodataframe(4, "scenario_results_dag.gpkg", results_gdf)
+                store.save_geodataframe(4, "scenario_results.gpkg", results_gdf)
+            except Exception:
+                try:
+                    gpkg = self.output_dir / "scenario_results_dag.gpkg"
+                    results_gdf.to_file(gpkg, driver="GPKG")
+                    results_gdf.to_file(self.output_dir / "scenario_results.gpkg", driver="GPKG")
+                except Exception as e:
+                    warnings.warn(f"Could not write GeoPackage: {e}")
+            if verbose:
+                print(f"GeoPackage saved")
 
         # ── Generate interpretation maps ──────────────────────────────
         try:
@@ -2369,22 +2397,34 @@ class ScenarioSimulator:
 
         # ── Save results ──────────────────────────────────────────────
         summary_df = pd.DataFrame(summary_rows)
-        summary_path = self.output_dir / "scenario_summary_reprediction.csv"
-        summary_df.to_csv(summary_path, index=False)
+        try:
+            from sparc.run.pipeline_paths import get_result_store
+            store = get_result_store()
+            store.save_dataframe(4, "scenario_summary_reprediction.csv", summary_df, fmt="csv")
+            store.save_dataframe(4, "scenario_summary.csv", summary_df, fmt="csv")
+        except Exception:
+            summary_path = self.output_dir / "scenario_summary_reprediction.csv"
+            summary_df.to_csv(summary_path, index=False)
         if verbose:
             print(f"\n{'='*70}")
-            print(f"Re-prediction scenario summary saved: {summary_path}")
+            print(f"Re-prediction scenario summary saved")
 
         results_gdf = self._to_geodataframe(results_df, data)
         if GEOPANDAS_AVAILABLE and isinstance(results_gdf, gpd.GeoDataFrame):
             try:
-                gpkg = self.output_dir / "scenario_results_reprediction.gpkg"
-                results_gdf.to_file(gpkg, driver="GPKG")
-                results_gdf.to_file(self.output_dir / "scenario_results.gpkg", driver="GPKG")
-                if verbose:
-                    print(f"GeoPackage saved: {gpkg}")
-            except Exception as e:
-                warnings.warn(f"Could not write GeoPackage: {e}")
+                from sparc.run.pipeline_paths import get_result_store
+                store = get_result_store()
+                store.save_geodataframe(4, "scenario_results_reprediction.gpkg", results_gdf)
+                store.save_geodataframe(4, "scenario_results.gpkg", results_gdf)
+            except Exception:
+                try:
+                    gpkg = self.output_dir / "scenario_results_reprediction.gpkg"
+                    results_gdf.to_file(gpkg, driver="GPKG")
+                    results_gdf.to_file(self.output_dir / "scenario_results.gpkg", driver="GPKG")
+                except Exception as e:
+                    warnings.warn(f"Could not write GeoPackage: {e}")
+            if verbose:
+                print(f"GeoPackage saved")
 
         return summary_df, results_gdf
 
@@ -2786,22 +2826,36 @@ class ScenarioSimulator:
 
         # ── Save results ──────────────────────────────────────────────
         summary_df = pd.DataFrame(summary_rows)
-        summary_path = self.output_dir / "scenario_summary_hybrid.csv"
-        summary_df.to_csv(summary_path, index=False)
+        # ── Save results ──────────────────────────────────────────────
+        summary_df = pd.DataFrame(summary_rows)
+        try:
+            from sparc.run.pipeline_paths import get_result_store
+            store = get_result_store()
+            store.save_dataframe(4, "scenario_summary_hybrid.csv", summary_df, fmt="csv")
+            store.save_dataframe(4, "scenario_summary.csv", summary_df, fmt="csv")
+        except Exception:
+            summary_path = self.output_dir / "scenario_summary_hybrid.csv"
+            summary_df.to_csv(summary_path, index=False)
         if verbose:
             print(f"\n{'='*70}")
-            print(f"Hybrid scenario summary saved: {summary_path}")
+            print(f"Hybrid scenario summary saved")
 
         results_gdf = self._to_geodataframe(results_df, data)
         if GEOPANDAS_AVAILABLE and isinstance(results_gdf, gpd.GeoDataFrame):
             try:
-                gpkg = self.output_dir / "scenario_results_hybrid.gpkg"
-                results_gdf.to_file(gpkg, driver="GPKG")
-                results_gdf.to_file(self.output_dir / "scenario_results.gpkg", driver="GPKG")
-                if verbose:
-                    print(f"GeoPackage saved: {gpkg}")
-            except Exception as e:
-                warnings.warn(f"Could not write GeoPackage: {e}")
+                from sparc.run.pipeline_paths import get_result_store
+                store = get_result_store()
+                store.save_geodataframe(4, "scenario_results_hybrid.gpkg", results_gdf)
+                store.save_geodataframe(4, "scenario_results.gpkg", results_gdf)
+            except Exception:
+                try:
+                    gpkg = self.output_dir / "scenario_results_hybrid.gpkg"
+                    results_gdf.to_file(gpkg, driver="GPKG")
+                    results_gdf.to_file(self.output_dir / "scenario_results.gpkg", driver="GPKG")
+                except Exception as e:
+                    warnings.warn(f"Could not write GeoPackage: {e}")
+            if verbose:
+                print(f"GeoPackage saved")
 
         return summary_df, results_gdf
 

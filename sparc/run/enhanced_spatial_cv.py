@@ -1791,7 +1791,11 @@ def main(fast_mode=False):
             spatial_intel_dir = os.path.join(paths.output_dir, "spatial_intelligence")
 
             gwrf_path = os.path.join(full_models_dir, "gwrf_model_full.pkl")
-            gwrf_curves_path = os.path.join(spatial_intel_dir, "gwrf_pdp", "gwrf_condition_curves.json")
+            # Canonical output: Stage_2_Spatial_CV/gwrf_pdp/ (fallback to legacy spatial_intelligence/)
+            gwrf_curves_dir = os.path.join(paths.stage2_dir, "gwrf_pdp")
+            gwrf_curves_path = os.path.join(gwrf_curves_dir, "gwrf_condition_curves.json")
+            # Also check legacy location
+            legacy_curves_path = os.path.join(spatial_intel_dir, "gwrf_pdp", "gwrf_condition_curves.json")
             if os.path.exists(gwrf_path):
                 print("\n--- GWRF: already trained (found gwrf_model_full.pkl) -- skipping ---")
                 gwrf_model = joblib.load(gwrf_path)
@@ -1809,11 +1813,11 @@ def main(fast_mode=False):
             skip_pdp = cv_system.base_config.get('pipeline', {}).get('skip_pdp', False)
             if skip_pdp:
                 print("\n--- GWRF condition curves: SKIPPED (skip_pdp=true) ---")
-            elif os.path.exists(gwrf_curves_path):
+            elif os.path.exists(gwrf_curves_path) or os.path.exists(legacy_curves_path):
                 print("\n--- GWRF condition curves: already exported -- skipping ---")
             else:
                 print("\n--- Extracting GWRF condition curves (PDP + saturation) ---")
-                gwrf_curves_dir = os.path.join(spatial_intel_dir, "gwrf_pdp")
+                os.makedirs(gwrf_curves_dir, exist_ok=True)
                 try:
                     condition_curves = gwrf_model.export_condition_curves(
                         X=X_full,

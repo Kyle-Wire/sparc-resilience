@@ -61,3 +61,39 @@ export async function pickCsv(): Promise<string | null> {
   // Dev fallback
   return prompt("Enter path to CSV file:");
 }
+
+/**
+ * Open a native file picker for raster files (GeoTIFF). Returns selected paths or null.
+ */
+export async function pickRasters(): Promise<string[] | null> {
+  const dialog = await getDialog();
+  if (dialog) {
+    const result = await dialog.open({
+      directory: false,
+      multiple: true,
+      filters: [{ name: "GeoTIFF", extensions: ["tif", "tiff"] }],
+    });
+    if (!result) return null;
+    return Array.isArray(result) ? (result as string[]) : [result as string];
+  }
+  const input = prompt("Enter raster paths (comma-separated):");
+  return input ? input.split(",").map((s) => s.trim()) : null;
+}
+
+/**
+ * Open a native file picker for boundary files (Shapefile, GPKG, GeoJSON).
+ */
+export async function pickBoundary(): Promise<string | null> {
+  const dialog = await getDialog();
+  if (dialog) {
+    const result = await dialog.open({
+      directory: false,
+      multiple: false,
+      filters: [
+        { name: "Spatial", extensions: ["shp", "gpkg", "geojson"] },
+      ],
+    });
+    return result as string | null;
+  }
+  return prompt("Enter path to boundary file (.shp, .gpkg, .geojson):");
+}

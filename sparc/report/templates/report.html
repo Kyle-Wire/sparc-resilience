@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SPARC Pipeline Report — {{ project_name }}</title>
+  <style>
+    @page { size: letter; margin: 2cm; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 11pt;
+      line-height: 1.5;
+      color: #1a1a1a;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    h1 { font-size: 22pt; color: #602468; margin-bottom: 4pt; }
+    h2 { font-size: 14pt; color: #602468; border-bottom: 2px solid #602468; padding-bottom: 4pt; margin-top: 28pt; }
+    h3 { font-size: 12pt; color: #333; margin-top: 18pt; }
+    .subtitle { font-size: 11pt; color: #666; margin-bottom: 18pt; }
+    table { border-collapse: collapse; width: 100%; margin: 10pt 0; font-size: 10pt; }
+    th, td { border: 1px solid #ddd; padding: 5pt 8pt; text-align: left; }
+    th { background: #f0e6f6; font-weight: 600; }
+    tr:nth-child(even) { background: #fafafa; }
+    .badge {
+      display: inline-block;
+      padding: 1pt 6pt;
+      border-radius: 3pt;
+      font-size: 9pt;
+      font-weight: 600;
+    }
+    .badge-pass { background: #dcfce7; color: #166534; }
+    .badge-fail { background: #fee2e2; color: #991b1b; }
+    .badge-info { background: #f0e6f6; color: #602468; }
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10pt;
+      margin: 10pt 0;
+    }
+    .stat-card {
+      border: 1px solid #ddd;
+      border-radius: 4pt;
+      padding: 10pt;
+    }
+    .stat-card .value { font-size: 18pt; font-weight: 700; }
+    .stat-card .label { font-size: 9pt; color: #666; }
+    .plot-img {
+      max-width: 100%;
+      border: 1px solid #eee;
+      border-radius: 4pt;
+      margin: 6pt 0;
+    }
+    .plot-gallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10pt; }
+    .plot-caption { font-size: 9pt; color: #888; text-align: center; margin-top: 2pt; }
+    .treatment-card {
+      border: 2px solid #ddd;
+      border-radius: 6pt;
+      padding: 10pt;
+      margin: 8pt 0;
+      page-break-inside: avoid;
+    }
+    .treatment-card.negative { border-color: #93c5fd; background: #eff6ff; }
+    .treatment-card.positive { border-color: #fca5a5; background: #fef2f2; }
+    .mono { font-family: "Cascadia Code", "Fira Code", monospace; font-size: 10pt; }
+    .footer {
+      margin-top: 30pt;
+      padding-top: 10pt;
+      border-top: 1px solid #ddd;
+      font-size: 9pt;
+      color: #999;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+<h1>SPARC Pipeline Report</h1>
+<p class="subtitle">
+  <strong>{{ project_name }}</strong>
+  {% if domain %} — {{ domain }}{% endif %}
+</p>
+{% if description %}
+<p>{{ description }}</p>
+{% endif %}
+
+<!-- ============================================================ -->
+<h2>Data Overview</h2>
+{% if data_summary %}
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="value">{{ data_summary.row_count | default("—") }}</div>
+    <div class="label">Observations</div>
+  </div>
+  <div class="stat-card">
+    <div class="value">{{ data_summary.column_count | default("—") }}</div>
+    <div class="label">Variables</div>
+  </div>
+  <div class="stat-card">
+    <div class="value mono">{{ data_summary.crs | default("—") }}</div>
+    <div class="label">Coordinate System</div>
+  </div>
+</div>
+{% else %}
+<p><em>No data summary available.</em></p>
+{% endif %}
+
+{% if predictors %}
+<h3>Predictors ({{ predictors | length }})</h3>
+<p class="mono">{{ predictors | join(", ") }}</p>
+{% endif %}
+
+<!-- ============================================================ -->
+<h2>Causal Analysis</h2>
+<p>Estimator: <span class="badge badge-info">{{ causal_estimator }}</span></p>
+
+{% if actionable_variables %}
+<p>Actionable variables: <span class="mono">{{ actionable_variables | join(", ") }}</span></p>
+{% endif %}
+
+{% if treatments %}
+<h3>Treatment Effects</h3>
+{% for t in treatments %}
+<div class="treatment-card {% if t.coeff and t.coeff < 0 %}negative{% elif t.coeff and t.coeff > 0 %}positive{% endif %}">
+  <h4 style="margin:0 0 6pt 0;">{{ t.name }}</h4>
+  <table>
+    <tr>
+      <th>Structural Coeff</th>
+      <th>95% CI</th>
+      <th>Elasticity</th>
+      <th>Rel. Importance</th>
+      <th>E-value</th>
+    </tr>
+    <tr>
+      <td class="mono">{{ "%.4f" | format(t.coeff) if t.coeff is not none else "—" }}</td>
+      <td class="mono">
+        {% if t.ci_lower is not none and t.ci_upper is not none %}
+          [{{ "%.4f" | format(t.ci_lower) }}, {{ "%.4f" | format(t.ci_upper) }}]
+        {% else %}—{% endif %}
+      </td>
+      <td class="mono">{{ "%.4f" | format(t.elasticity) if t.elasticity is not none else "—" }}</td>
+      <td class="mono">{{ "%.1f%%" | format(t.importance * 100) if t.importance is not none else "—" }}</td>
+      <td class="mono">{{ "%.2f" | format(t.e_value) if t.e_value is not none else "—" }}</td>
+    </tr>
+  </table>
+  <div style="margin-top:4pt;">
+    {% if t.placebo is not none %}
+      <span class="badge {% if t.placebo %}badge-pass{% else %}badge-fail{% endif %}">
+        {% if t.placebo %}✓{% else %}✗{% endif %} Placebo
+      </span>
+    {% endif %}
+    {% if t.rcc is not none %}
+      <span class="badge {% if t.rcc %}badge-pass{% else %}badge-fail{% endif %}">
+        {% if t.rcc %}✓{% else %}✗{% endif %} RCC
+      </span>
+    {% endif %}
+    {% if t.subset is not none %}
+      <span class="badge {% if t.subset %}badge-pass{% else %}badge-fail{% endif %}">
+        {% if t.subset %}✓{% else %}✗{% endif %} Subset
+      </span>
+    {% endif %}
+  </div>
+</div>
+{% endfor %}
+{% else %}
+<p><em>No treatment effects computed. Run Stage 3.</em></p>
+{% endif %}
+
+<!-- ============================================================ -->
+{% if constraints %}
+<h2>Physics Constraints</h2>
+<table>
+  <tr><th>Variable</th><th>Direction</th></tr>
+  {% for c in constraints %}
+  <tr>
+    <td class="mono">{{ c.variable }}</td>
+    <td>{{ c.direction }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+<!-- ============================================================ -->
+{% if scenario_summary %}
+<h2>Scenario Analysis</h2>
+<table>
+  <tr>
+    <th>Scenario</th>
+    <th>Variable</th>
+    <th>Increment</th>
+    <th>Mean Δ</th>
+    <th>Median Δ</th>
+  </tr>
+  {% for row in scenario_summary %}
+  <tr>
+    <td>{{ row.Scenario | default("—") }}</td>
+    <td class="mono">{{ row.Variable | default("—") }}</td>
+    <td class="mono">{{ row.Increment | default("—") }}</td>
+    <td class="mono">{{ "%.4f" | format(row.Mean_Delta) if row.Mean_Delta is defined and row.Mean_Delta is not none else "—" }}</td>
+    <td class="mono">{{ "%.4f" | format(row.Median_Delta) if row.Median_Delta is defined and row.Median_Delta is not none else "—" }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+<!-- ============================================================ -->
+{% if plots %}
+<h2>Visualizations</h2>
+{% for stage_name, stage_plots in plots.items() %}
+<h3>{{ stage_name }}</h3>
+<div class="plot-gallery">
+  {% for plot in stage_plots %}
+  {% if plot.data_uri %}
+  <div>
+    <img src="{{ plot.data_uri }}" alt="{{ plot.name }}" class="plot-img">
+    <div class="plot-caption">{{ plot.name }}</div>
+  </div>
+  {% endif %}
+  {% endfor %}
+</div>
+{% endfor %}
+{% endif %}
+
+<!-- ============================================================ -->
+{% if pipeline %}
+<h2>Pipeline Settings</h2>
+<table>
+  <tr><th>Setting</th><th>Value</th></tr>
+  {% if pipeline.random_seed is defined %}
+  <tr><td>Random Seed</td><td class="mono">{{ pipeline.random_seed }}</td></tr>
+  {% endif %}
+  {% if pipeline.n_spatial_folds is defined %}
+  <tr><td>Spatial Folds</td><td class="mono">{{ pipeline.n_spatial_folds }}</td></tr>
+  {% endif %}
+  {% if pipeline.fast_mode is defined %}
+  <tr><td>Fast Mode</td><td>{{ "Yes" if pipeline.fast_mode else "No" }}</td></tr>
+  {% endif %}
+</table>
+{% endif %}
+
+<div class="footer">
+  Generated by SPARC Resilience Pipeline
+</div>
+
+</body>
+</html>
