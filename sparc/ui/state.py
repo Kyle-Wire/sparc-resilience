@@ -84,7 +84,7 @@ _BLANK_DEFAULTS: dict[str, Any] = {
     "dag_nodes": [],                     # [{name, type, description}]
     "dag_edges": [],                     # [{parent, child, mechanism}]
     "causal_estimator": "hgb",
-    "causal_estimate_cate": False,
+    "causal_estimate_cate": True,
 
     # -- pipeline --
     "random_seed": 42,

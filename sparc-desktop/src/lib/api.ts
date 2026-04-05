@@ -223,6 +223,14 @@ export const getLocalCoefficients = (variable: string) =>
 export const getScenarioIncrement = (variable: string, increment: number) =>
   get<ScenarioDetail>(`/results/scenarios/increment?variable=${encodeURIComponent(variable)}&increment=${increment}`);
 
+export interface ScenarioVariableInfo {
+  increments: number[];
+  sign: "plus" | "minus";
+}
+
+export const getScenarioVariables = () =>
+  get<{ variables: Record<string, ScenarioVariableInfo> }>("/results/scenarios/variables");
+
 // ------------------------------------------------------------------
 // Data preparation (raster + fishnet + zonal stats)
 // ------------------------------------------------------------------

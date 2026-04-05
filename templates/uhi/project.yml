@@ -71,7 +71,7 @@ physics:
 causal:
   dag_file: "causal/dag.yml"
   estimator: "hgb"              # "hgb" (default, non-linear monotone-constrained) or "ols" (linear)
-  estimate_cate: false          # Set true to run EconML CATE (requires econml package)
+  estimate_cate: true           # Spatial CATE via EconML CausalForestDML
   actionable_variables:
     - Pct_Canopy
     - Pct_Impervious

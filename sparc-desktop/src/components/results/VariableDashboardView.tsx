@@ -170,11 +170,14 @@ export default function VariableDashboardView() {
           {/* Local coefficients map */}
           {(coefGeo || coefLoading) && (
             <div className="rounded-lg border border-sparc-gray-200 p-3">
-              <h4 className="mb-2 text-xs font-semibold">Local Coefficients Map</h4>
+              <h4 className="mb-2 text-xs font-semibold">
+                Local Coefficients Map
+                <PhysicsBadge geojson={coefGeo} />
+              </h4>
               {coefLoading ? (
                 <p className="text-xs text-sparc-gray-500">Loading…</p>
               ) : coefGeo ? (
-                <MiniMap geojson={coefGeo} colorField="coefficient" diverging />
+                <PhysicsMiniMap geojson={coefGeo} />
               ) : null}
             </div>
           )}
@@ -425,6 +428,196 @@ function ScenarioCard({
           <Bar dataKey="delta" fill="#602468" name="Mean Δ Outcome" radius={[3, 3, 0, 0]} />
         </BarChart>
       </ResponsiveContainer>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Physics constraint helpers
+// ---------------------------------------------------------------------------
+
+function PhysicsBadge({ geojson }: { geojson: GeoJsonData | null }) {
+  if (!geojson || geojson.features.length === 0) return null;
+  const first = geojson.features[0].properties;
+  const expectedSign = first?.expected_sign as string | undefined;
+  if (!expectedSign || expectedSign === "none") return null;
+
+  const total = geojson.features.length;
+  const violations = geojson.features.filter(
+    (f) => f.properties.sign_correct === false || f.properties.sign_correct === 0,
+  ).length;
+  const pct = ((violations / total) * 100).toFixed(1);
+
+  const signLabel = expectedSign === "negative" ? "cooling (−)" : "warming (+)";
+
+  return (
+    <span className="ml-2 inline-flex items-center gap-1">
+      <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[9px] font-normal text-indigo-700">
+        Expected: {signLabel}
+      </span>
+      {violations > 0 && (
+        <span className="rounded bg-red-100 px-1.5 py-0.5 text-[9px] font-normal text-red-700">
+          {pct}% violate physics
+        </span>
+      )}
+      {violations === 0 && (
+        <span className="rounded bg-green-100 px-1.5 py-0.5 text-[9px] font-normal text-green-700">
+          All signs correct
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * Mini map that highlights physics-breaking coefficients in red.
+ * Points where sign_correct=true use a diverging blue/red coefficient scale;
+ * points where sign_correct=false are rendered with a bright red outline.
+ */
+function PhysicsMiniMap({ geojson }: { geojson: GeoJsonData }) {
+  const [DeckGL, setDeckGL] = useState<any>(null);
+  const [MapGL, setMapGL] = useState<any>(null);
+  const [layerMods, setLayerMods] = useState<any>(null);
+
+  useEffect(() => {
+    Promise.all([
+      import("@deck.gl/react"),
+      import("@deck.gl/layers"),
+      import("react-map-gl/maplibre"),
+    ]).then(([d, l, m]) => {
+      setDeckGL(() => d.DeckGL);
+      setMapGL(() => m.default);
+      setLayerMods(l);
+    });
+  }, []);
+
+  const bbox = useMemo(() => {
+    let minLng = 180, maxLng = -180, minLat = 90, maxLat = -90;
+    for (const f of geojson.features) {
+      const c =
+        f.geometry.type === "Point"
+          ? [f.geometry.coordinates as number[]]
+          : (f.geometry.coordinates as number[][]);
+      for (const pt of c) {
+        const [lng, lat] = pt as number[];
+        if (lng < minLng) minLng = lng;
+        if (lng > maxLng) maxLng = lng;
+        if (lat < minLat) minLat = lat;
+        if (lat > maxLat) maxLat = lat;
+      }
+    }
+    const longitude = (minLng + maxLng) / 2;
+    const latitude = (minLat + maxLat) / 2;
+    const span = Math.max(maxLng - minLng, maxLat - minLat);
+    const zoom = span > 0 ? Math.max(1, Math.min(16, Math.log2(360 / span) - 0.5)) : 10;
+    return { longitude, latitude, zoom };
+  }, [geojson]);
+
+  const [viewState, setViewState] = useState({ ...bbox, pitch: 0, bearing: 0 });
+  useEffect(() => setViewState((p) => ({ ...p, ...bbox })), [bbox]);
+
+  const domain = useMemo<[number, number]>(() => {
+    let min = Infinity, max = -Infinity;
+    for (const f of geojson.features) {
+      const v = f.properties.coefficient;
+      if (typeof v === "number" && isFinite(v)) {
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+    }
+    return min < max ? [min, max] : [0, 1];
+  }, [geojson]);
+
+  if (!DeckGL || !MapGL || !layerMods)
+    return <p className="text-xs text-sparc-gray-500">Loading map…</p>;
+
+  const absMax = Math.max(Math.abs(domain[0]), Math.abs(domain[1]));
+  const symDomain: [number, number] = absMax > 0 ? [-absMax, absMax] : domain;
+
+  const colorFn = (v: number, ok: boolean): [number, number, number, number] => {
+    if (!ok) return [220, 40, 40, 220]; // Physics-breaking → bright red
+    const t = Math.max(-1, Math.min(1, v / (symDomain[1] || 1)));
+    if (t < 0) {
+      const a = 1 + t;
+      return [Math.round(80 * (1 - a)), Math.round(80 + 175 * a), Math.round(200 + 55 * (1 - a)), 200];
+    }
+    return [Math.round(200 + 55 * t), Math.round(80 + 175 * (1 - t)), Math.round(80 * (1 - t)), 200];
+  };
+
+  const deckLayers = [
+    new layerMods.ScatterplotLayer({
+      id: "physics-coef",
+      data: geojson.features,
+      getPosition: (d: any) => {
+        const c = d.geometry.coordinates;
+        return d.geometry.type === "Point" ? c : c[0];
+      },
+      getRadius: 80,
+      radiusMinPixels: 3,
+      radiusMaxPixels: 16,
+      getFillColor: (d: any) => {
+        const v = d.properties.coefficient;
+        const ok = d.properties.sign_correct !== false && d.properties.sign_correct !== 0;
+        if (typeof v !== "number") return [200, 200, 200, 100];
+        return colorFn(v, ok);
+      },
+      getLineColor: (d: any) => {
+        const ok = d.properties.sign_correct !== false && d.properties.sign_correct !== 0;
+        return ok ? [0, 0, 0, 0] : [180, 0, 0, 255];
+      },
+      getLineWidth: (d: any) => {
+        const ok = d.properties.sign_correct !== false && d.properties.sign_correct !== 0;
+        return ok ? 0 : 2;
+      },
+      lineWidthMinPixels: 0,
+      stroked: true,
+      pickable: true,
+    }),
+  ];
+
+  return (
+    <div className="relative overflow-hidden rounded-lg border border-sparc-gray-100" style={{ height: "280px" }}>
+      <DeckGL
+        viewState={viewState}
+        onViewStateChange={({ viewState: vs }: any) => setViewState(vs)}
+        layers={deckLayers}
+        controller
+        getTooltip={({ object }: any) => {
+          if (!object) return null;
+          const p = object.properties ?? object;
+          const coef = typeof p.coefficient === "number" ? p.coefficient.toFixed(4) : "—";
+          const ok = p.sign_correct !== false && p.sign_correct !== 0;
+          const sign = p.expected_sign || "none";
+          const lines = [`Coefficient: ${coef}`];
+          if (sign !== "none") lines.push(`Expected: ${sign}`);
+          lines.push(ok ? "✓ Consistent" : "✗ VIOLATES PHYSICS");
+          return { text: lines.join("\n"), style: { fontSize: "10px", fontFamily: "monospace" } };
+        }}
+      >
+        <MapGL
+          mapStyle="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
+          attributionControl={false}
+        />
+      </DeckGL>
+
+      {/* Legend */}
+      <div className="absolute bottom-2 right-2 rounded bg-white/90 p-1.5 shadow-sm backdrop-blur-sm">
+        <p className="mb-0.5 text-[9px] text-sparc-gray-600">coefficient</p>
+        <div className="flex items-center gap-1">
+          <span className="text-[8px]">{symDomain[0].toFixed(2)}</span>
+          <div
+            className="h-2 w-16 rounded-sm"
+            style={{
+              background: "linear-gradient(to right, rgb(0,80,200), rgb(255,255,255), rgb(255,80,0))",
+            }}
+          />
+          <span className="text-[8px]">{symDomain[1].toFixed(2)}</span>
+        </div>
+        <div className="mt-1 flex items-center gap-1">
+          <div className="h-2 w-2 rounded-full bg-red-600" />
+          <span className="text-[8px] text-red-700">Physics violation</span>
+        </div>
+      </div>
     </div>
   );
 }

@@ -1125,7 +1125,7 @@ class CausalValidator:
         Estimate spatially-varying CATE for each treatment via
         ``CausalForestDML`` and export a GeoPackage with per-cell effects.
         """
-        if not self.config.get('causal', {}).get('estimate_cate', False):
+        if not self.config.get('causal', {}).get('estimate_cate', True):
             return
 
         try:
@@ -2310,10 +2310,10 @@ class CausalValidator:
         except Exception:
             store = None
 
+        out_path = os.path.join(output_dir, 'scenario_coefficients.json')
         if store is not None:
             store.save_json(3, 'scenario_coefficients.json', output)
         else:
-            out_path = os.path.join(output_dir, 'scenario_coefficients.json')
             with open(out_path, 'w', encoding='utf-8') as f:
                 json.dump(output, f, indent=2, default=str)
 

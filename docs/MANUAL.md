@@ -214,7 +214,7 @@ causal:
   spatial_block_size: 300               # Spatial blocking for DML folds (meters)
 
   # CATE (heterogeneous treatment effects)
-  estimate_cate: false                  # Requires econml package
+  estimate_cate: true                   # Spatial CATE via CausalForestDML (default: true)
 
   # Multi-estimator cross-checks
   ipw_enabled: false                    # Inverse propensity weighting

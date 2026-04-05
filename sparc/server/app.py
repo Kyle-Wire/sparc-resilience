@@ -57,6 +57,81 @@ TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 
 
 # ------------------------------------------------------------------
+# Physics helpers
+# ------------------------------------------------------------------
+
+def _resolve_expected_sign(cfg: dict, variable: str) -> str | None:
+    """Return ``'negative'``, ``'positive'``, or ``None`` for *variable*.
+
+    Checks three sources in order:
+      1. ``config["physics"]["monotone_constraints"]``  (inline in project.yml)
+      2. ``config["physics"]["caps_file"]`` → ``monotonicity.{var}.expected_sign``
+      3. Built-in PhysicsPriors defaults (Canopy → negative, etc.)
+    """
+    physics = cfg.get("physics", {})
+    if not isinstance(physics, dict):
+        return None
+
+    # 1. monotone_constraints  e.g. {"Pct_Canopy": -1, "NDVI": -1}
+    mc = physics.get("monotone_constraints", {})
+    if isinstance(mc, dict) and variable in mc:
+        val = mc[variable]
+        if val == -1 or val == "-1":
+            return "negative"
+        if val == 1 or val == "1":
+            return "positive"
+        return None  # 0 = unconstrained
+
+    # 2. caps_file → monotonicity section
+    caps_path = physics.get("caps_file")
+    if caps_path and os.path.exists(caps_path):
+        try:
+            import yaml
+            with open(caps_path, "r", encoding="utf-8") as fh:
+                caps = yaml.safe_load(fh) or {}
+            mono = caps.get("monotonicity", {})
+            if isinstance(mono, dict) and variable in mono:
+                return mono[variable].get("expected_sign") if isinstance(mono[variable], dict) else None
+        except Exception:
+            pass
+
+    # 3. Built-in PhysicsPriors class (literature defaults)
+    try:
+        from sparc.interventions.physics_priors import PhysicsPriors
+        pp = PhysicsPriors()
+        coef = pp.coefficients.get(variable)
+        if coef is not None:
+            return "negative" if coef.coefficient < 0 else "positive" if coef.coefficient > 0 else None
+    except Exception:
+        pass
+
+    return None
+
+
+# ------------------------------------------------------------------
+# Scenario GPKG cache (avoids re-reading multi-MB file per slider tick)
+# ------------------------------------------------------------------
+
+_scenario_gpkg_cache: dict[str, Any] = {}  # {path_str: GeoDataFrame}
+
+
+def _load_scenario_gpkg(paths) -> Any:
+    """Return the scenario GeoDataFrame (WGS84), cached after first load."""
+    for gpkg_name in ("scenario_results.gpkg", "scenario_results_dag.gpkg",
+                      "scenario_results_hybrid.gpkg", "scenario_results_reprediction.gpkg"):
+        candidate = paths.stage4_dir / gpkg_name
+        if candidate.exists():
+            key = str(candidate)
+            if key in _scenario_gpkg_cache:
+                return _scenario_gpkg_cache[key]
+            import geopandas as gpd
+            gdf = gpd.read_file(candidate)
+            _scenario_gpkg_cache[key] = gdf
+            return gdf
+    return None
+
+
+# ------------------------------------------------------------------
 # Startup: auto-load project if SPARC_SERVER_PROJECT env var is set
 # ------------------------------------------------------------------
 
@@ -1098,10 +1173,23 @@ async def get_cate_variables():
         raise HTTPException(404, "Cannot resolve output paths")
 
     variables = []
+    # 1. Check for per-variable .npy files
     for f in paths.stage3_dir.glob("spatial_cate_multiplier_*.npy"):
         var = f.stem.replace("spatial_cate_multiplier_", "")
         variables.append(var)
-    return {"variables": variables}
+    # 2. Fallback: check spatial_cate_maps.gpkg column names
+    if not variables:
+        gpkg_path = paths.stage3_dir / "spatial_cate_maps.gpkg"
+        if gpkg_path.exists():
+            try:
+                import geopandas as gpd
+                gdf = gpd.read_file(gpkg_path, rows=0)  # schema only
+                for col in gdf.columns:
+                    if col.startswith("cate_"):
+                        variables.append(col.replace("cate_", "", 1))
+            except Exception:
+                pass
+    return {"variables": sorted(set(variables))}
 
 
 @app.get("/results/local_coefficients")
@@ -1155,22 +1243,18 @@ async def get_local_coefficients(variable: str = Query(...)):
         base_df[x_col].iloc[:n], base_df[y_col].iloc[:n])]
 
     # Include physics constraint metadata
-    physics = cfg.get("physics", cfg.get("interventions", {}).get("physics_priors", {}))
-    expected_sign = None
-    if isinstance(physics, dict):
-        for var_physics in physics.get("variables", physics.get("priors", [])):
-            if isinstance(var_physics, dict) and var_physics.get("name", var_physics.get("variable")) == variable:
-                expected_sign = var_physics.get("direction", var_physics.get("expected_sign"))
-                break
+    expected_sign = _resolve_expected_sign(cfg, variable)
 
     coef_values = coef_df[variable].iloc[:n].values.astype(float)
+    sign_ok = (
+        (coef_values < 0) if expected_sign == "negative"
+        else (coef_values > 0) if expected_sign == "positive"
+        else np.ones(n, dtype=bool)
+    )
     result = {
         "coefficient": coef_values,
-        "sign_correct": (
-            (coef_values < 0) if expected_sign == "negative"
-            else (coef_values > 0) if expected_sign == "positive"
-            else np.ones(n, dtype=bool)
-        ),
+        "sign_correct": sign_ok,
+        "expected_sign": np.full(n, expected_sign or "none", dtype=object),
     }
     gdf = gpd.GeoDataFrame(result, geometry=geom, crs=crs)
     if str(gdf.crs) != "EPSG:4326":
@@ -1204,6 +1288,61 @@ async def get_local_coef_variables():
     return {"variables": variables}
 
 
+@app.get("/results/scenarios/variables")
+async def get_scenario_variables():
+    """Return the list of scenario variables and their available increments.
+
+    Response shape::
+
+        {
+            "variables": {
+                "Pct_Canopy": { "increments": [5, 10, 15, ...], "sign": "plus" },
+                "Pct_Impervious": { "increments": [-5, -10, ...], "sign": "minus" }
+            }
+        }
+    """
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+    import pandas as pd
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+
+    # Load summary CSV
+    summary_path = None
+    for name in ("scenario_summary.csv", "scenario_summary_dag.csv",
+                 "scenario_summary_hybrid.csv", "scenario_summary_reprediction.csv",
+                 "scenario_mc_consensus_summary.csv"):
+        candidate = paths.stage4_dir / name
+        if candidate.exists():
+            summary_path = candidate
+            break
+    if summary_path is None:
+        raise HTTPException(404, "No scenario summary found")
+
+    summary_df = pd.read_csv(summary_path)
+    variables: dict[str, dict] = {}
+    for _, row in summary_df.iterrows():
+        var = str(row.get("Variable", ""))
+        inc = row.get("Increment")
+        if not var or inc is None:
+            continue
+        inc = float(inc)
+        if var not in variables:
+            variables[var] = {"increments": [], "sign": "plus" if inc >= 0 else "minus"}
+        if inc not in variables[var]["increments"]:
+            variables[var]["increments"].append(inc)
+
+    for info in variables.values():
+        info["increments"].sort(key=lambda x: abs(x))
+
+    return {"variables": variables}
+
+
 @app.get("/results/scenarios/increment")
 async def get_scenario_increment(variable: str = Query(...), increment: float = Query(...)):
     """Return GeoJSON filtered to a specific variable+increment scenario."""
@@ -1221,7 +1360,8 @@ async def get_scenario_increment(variable: str = Query(...), increment: float = 
     # Load summary CSV to find matching scenario label
     summary_path = None
     for name in ("scenario_summary.csv", "scenario_summary_dag.csv",
-                 "scenario_summary_hybrid.csv", "scenario_summary_reprediction.csv"):
+                 "scenario_summary_hybrid.csv", "scenario_summary_reprediction.csv",
+                 "scenario_mc_consensus_summary.csv"):
         candidate = paths.stage4_dir / name
         if candidate.exists():
             summary_path = candidate
@@ -1239,20 +1379,10 @@ async def get_scenario_increment(variable: str = Query(...), increment: float = 
     if matched.empty:
         raise HTTPException(404, f"No scenario found for {variable} at increment {increment}")
 
-    # Load spatial results
-    gpkg_path = None
-    for gpkg_name in ("scenario_results.gpkg", "scenario_results_dag.gpkg",
-                      "scenario_results_hybrid.gpkg", "scenario_results_reprediction.gpkg"):
-        candidate = paths.stage4_dir / gpkg_name
-        if candidate.exists():
-            gpkg_path = candidate
-            break
-    if gpkg_path is None:
+    # Load spatial results (cached in server state)
+    gdf = _load_scenario_gpkg(paths)
+    if gdf is None:
         raise HTTPException(404, "No spatial results found")
-
-    import geopandas as gpd
-
-    gdf = gpd.read_file(gpkg_path)
 
     # Find the scenario column — convention: pred_{Scenario_Label}
     scenario_label = matched.iloc[0].get("Scenario", "")
