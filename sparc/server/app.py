@@ -699,11 +699,13 @@ async def get_pdp_curves():
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
-    # Check both possible locations
+    # Check all possible locations (output structure varies by run mode)
     candidates = [
+        paths.output_dir / "spatial_intelligence" / "gwrf_pdp" / "gwrf_condition_curves.json",
         paths.spatial_analysis_dir / "gwrf_pdp" / "gwrf_condition_curves.json",
         paths.stage2_dir / "spatial_intelligence" / "gwrf_pdp" / "gwrf_condition_curves.json",
         paths.stage2_dir / "gwrf_pdp" / "gwrf_condition_curves.json",
+        paths.stage3_dir / "gwrf_condition_curves.json",
     ]
     found = next((p for p in candidates if p.exists()), None)
     if found is None:
@@ -779,13 +781,48 @@ async def get_scenario_detail():
                     spatial = spatial.to_crs(epsg=4326)
                 geojson_data = spatial.__geo_interface__
 
-    # Load summary CSV (check all mode variants)
+        # If still no GeoJSON, reconstruct from CSV data + coordinates
+        if geojson_data is None:
+            try:
+                import geopandas as gpd
+                from shapely.geometry import Point
+
+                cfg = state.project_config
+                coord_cols = cfg.get("data", {}).get("coord_columns",
+                             cfg.get("variables", {}).get("coordinates", []))
+                data_file = cfg.get("data", {}).get("file_path",
+                            cfg.get("paths", {}).get("raw_csv_path"))
+                crs = cfg.get("crs", {}).get("projected",
+                      cfg.get("crs", {}).get("input", "EPSG:4326"))
+
+                # Look for per-point MC consensus CSV (has spatial predictions)
+                mc_csv = paths.stage4_dir / "scenario_mc_consensus.csv"
+                if mc_csv.exists() and data_file and len(coord_cols) == 2:
+                    base_df = pd.read_csv(data_file)
+                    mc_df = pd.read_csv(mc_csv)
+                    x_col, y_col = coord_cols
+                    if x_col in base_df.columns and y_col in base_df.columns:
+                        # Align lengths (mc_df may match base_df row-for-row)
+                        n = min(len(base_df), len(mc_df))
+                        geom = [Point(xy) for xy in zip(
+                            base_df[x_col].iloc[:n], base_df[y_col].iloc[:n])]
+                        gdf = gpd.GeoDataFrame(mc_df.iloc[:n], geometry=geom, crs=crs)
+                        if str(gdf.crs) != "EPSG:4326":
+                            gdf = gdf.to_crs(epsg=4326)
+                        geojson_data = gdf.__geo_interface__
+                        print(f"[SPARC] Reconstructed GeoJSON from MC consensus CSV ({n} features)")
+            except Exception as exc:
+                print(f"[SPARC] CSV→GeoJSON fallback failed: {exc}")
+
+    # Load summary CSV (check all mode variants + MC consensus)
     summary_data = []
     for summary_name in (
         "scenario_summary.csv",
         "scenario_summary_dag.csv",
         "scenario_summary_hybrid.csv",
         "scenario_summary_reprediction.csv",
+        "scenario_mc_consensus_summary.csv",
+        "scenario_mc_consensus.csv",
     ):
         summary_path = paths.stage4_dir / summary_name
         if summary_path.exists():
@@ -895,13 +932,15 @@ async def get_report_data():
             with open(prop_path, "r", encoding="utf-8") as fh:
                 report["propensity_diagnostics"] = _json.load(fh)
 
-    # Scenario summary (check all mode variants)
+    # Scenario summary (check all mode variants + MC consensus)
     if paths:
         for scenario_name in (
             "scenario_summary.csv",
             "scenario_summary_dag.csv",
             "scenario_summary_hybrid.csv",
             "scenario_summary_reprediction.csv",
+            "scenario_mc_consensus_summary.csv",
+            "scenario_mc_consensus.csv",
         ):
             summary_path = paths.stage4_dir / scenario_name
             if summary_path.exists():

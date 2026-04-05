@@ -122,13 +122,50 @@ Enforce cross-variable physics (e.g., canopy + impervious ≤ 100%):
 When suggesting constraints, use the \`suggest_physics\` action. Always cite the physical mechanism.`;
 
 // ---------------------------------------------------------------------------
+// Results interpretation suffix
+// ---------------------------------------------------------------------------
+export const RESULTS_SUFFIX = `
+
+## Results Interpretation Guidelines
+You have access to the project's pipeline results. Help the user interpret:
+
+### Stage 3 — Causal Validation
+- **structural_coeff**: DAG-adjusted causal effect (units of outcome per unit treatment)
+- **elasticity**: % change in outcome per 1% change in treatment (dimensionless)
+- **e_value**: Sensitivity to unmeasured confounding (higher = more robust)
+- **bootstrap CI**: 95% confidence interval for the causal effect
+- **Refutation tests**: placebo_pass, rcc_pass, data_subset_pass, ucc_pass — all should pass for reliable estimates
+- **estimator_agreement**: Whether backdoor, IPW, and DML methods agree on direction/magnitude
+- **Dose-response curves**: Show marginal effects at different treatment levels; look for saturation/non-linearity
+
+### Stage 4 — Scenario Simulation
+- **Scenario deltas**: Predicted change in outcome from baseline under each intervention
+- **Spatial heterogeneity**: Effects vary across locations due to local conditions
+- **Confidence labels**: HIGH (within training range), LOW (near boundary), SPECULATIVE (extrapolation)
+- **Direct vs indirect effects**: DAG decomposes total effect into direct treatment→outcome and mediated paths
+
+When discussing results, reference specific coefficient values and explain their practical significance in the project's domain.`;
+
+// ---------------------------------------------------------------------------
 // Dynamic context builder
 // ---------------------------------------------------------------------------
 
+/** Extended data context with optional pipeline configuration and results. */
+export interface PromptDataContext {
+  columns: string[];
+  target?: string;
+  summary?: Record<string, unknown>;
+  dagEdges?: Array<{ parent: string; child: string; mechanism?: string }>;
+  physicsConstraints?: Record<string, number>;
+  scenarios?: Array<{ name: string; variable: string; direction: string; increments?: number[] }>;
+  causalResults?: Record<string, { structural_coeff?: number; elasticity?: number; e_value?: number; bootstrap_ci_lower?: number; bootstrap_ci_upper?: number }>;
+  scenarioSummary?: Array<Record<string, unknown>>;
+}
+
 /** Build the full system prompt with optional data context. */
 export function buildSystemPrompt(
-  mode: "general" | "domain" | "dag" | "physics",
-  dataContext?: { columns: string[]; target?: string; summary?: Record<string, unknown> },
+  mode: "general" | "domain" | "dag" | "physics" | "results",
+  dataContext?: PromptDataContext,
 ): string {
   let prompt = BASE_PROMPT;
 
@@ -142,6 +179,9 @@ export function buildSystemPrompt(
     case "physics":
       prompt += PHYSICS_SUFFIX;
       break;
+    case "results":
+      prompt += RESULTS_SUFFIX;
+      break;
   }
 
   if (dataContext) {
@@ -154,6 +194,52 @@ export function buildSystemPrompt(
     }
     if (dataContext.summary) {
       prompt += `\nSummary statistics:\n\`\`\`json\n${JSON.stringify(dataContext.summary, null, 2).slice(0, 2000)}\n\`\`\`\n`;
+    }
+
+    // Inject DAG edges if available
+    if (dataContext.dagEdges && dataContext.dagEdges.length > 0) {
+      prompt += `\n### Current DAG Edges\n`;
+      for (const e of dataContext.dagEdges) {
+        prompt += `- ${e.parent} → ${e.child}${e.mechanism ? ` (${e.mechanism})` : ""}\n`;
+      }
+    }
+
+    // Inject physics constraints if available
+    if (dataContext.physicsConstraints && Object.keys(dataContext.physicsConstraints).length > 0) {
+      prompt += `\n### Active Monotone Constraints\n`;
+      for (const [v, dir] of Object.entries(dataContext.physicsConstraints)) {
+        const label = dir === -1 ? "decreasing (↓)" : dir === 1 ? "increasing (↑)" : "unconstrained";
+        prompt += `- \`${v}\`: ${label}\n`;
+      }
+    }
+
+    // Inject scenario definitions if available
+    if (dataContext.scenarios && dataContext.scenarios.length > 0) {
+      prompt += `\n### Configured Scenarios\n`;
+      for (const s of dataContext.scenarios.slice(0, 10)) {
+        prompt += `- ${s.name}: ${s.variable} ${s.direction}`;
+        if (s.increments) prompt += ` [${s.increments.slice(0, 5).join(", ")}${s.increments.length > 5 ? ", …" : ""}]`;
+        prompt += "\n";
+      }
+    }
+
+    // Inject causal results summary if available
+    if (dataContext.causalResults && Object.keys(dataContext.causalResults).length > 0) {
+      prompt += `\n### Causal Effect Estimates (Stage 3)\n`;
+      for (const [treatment, eff] of Object.entries(dataContext.causalResults)) {
+        const parts: string[] = [];
+        if (eff.structural_coeff != null) parts.push(`coeff=${eff.structural_coeff.toFixed(4)}`);
+        if (eff.elasticity != null) parts.push(`elasticity=${eff.elasticity.toFixed(3)}`);
+        if (eff.e_value != null) parts.push(`e-value=${eff.e_value.toFixed(2)}`);
+        if (eff.bootstrap_ci_lower != null && eff.bootstrap_ci_upper != null)
+          parts.push(`CI=[${eff.bootstrap_ci_lower.toFixed(4)}, ${eff.bootstrap_ci_upper.toFixed(4)}]`);
+        prompt += `- \`${treatment}\`: ${parts.join(", ")}\n`;
+      }
+    }
+
+    // Inject scenario summary if available
+    if (dataContext.scenarioSummary && dataContext.scenarioSummary.length > 0) {
+      prompt += `\n### Scenario Simulation Results (Stage 4)\n\`\`\`json\n${JSON.stringify(dataContext.scenarioSummary.slice(0, 15), null, 2).slice(0, 1500)}\n\`\`\`\n`;
     }
   }
 

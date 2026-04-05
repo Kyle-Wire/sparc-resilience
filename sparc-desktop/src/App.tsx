@@ -24,8 +24,9 @@ import ReportView from "@/components/results/ReportView";
 import SettingsView from "@/components/pipeline/SettingsView";
 import ChatPanel from "@/components/chat/ChatPanel";
 import { buildSystemPrompt } from "@/lib/prompts";
-import { getConfig, saveConfig, dataSummary, initProject } from "@/lib/api";
-import type { ClaudeAction, DataSummary, ProjectConfig } from "@/lib/types";
+import { getConfig, saveConfig, dataSummary, initProject, getReportData, getDag } from "@/lib/api";
+import type { ClaudeAction, DataSummary, ProjectConfig, ReportPayload, DagDefinition } from "@/lib/types";
+import type { PromptDataContext } from "@/lib/prompts";
 
 type AppPage = PageName | "Settings";
 
@@ -35,7 +36,7 @@ export default function App() {
   const project = useProject(ready);
   const [page, setPage] = useState<AppPage>("Project");
   const [chatOpen, setChatOpen] = useState(false);
-  const [dataCtx, setDataCtx] = useState<{ columns: string[]; target?: string; summary?: Record<string, unknown> } | null>(null);
+  const [dataCtx, setDataCtx] = useState<PromptDataContext | null>(null);
   // Increment to force child re-render after action dispatch
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -54,14 +55,44 @@ export default function App() {
     Promise.all([
       getConfig().catch(() => null),
       dataSummary().catch(() => null),
-    ]).then(([cfg, summary]: [ProjectConfig | null, DataSummary | null]) => {
-      if (summary) {
-        setDataCtx({
-          columns: summary.columns ?? [],
-          target: cfg?.data?.target_column,
-          summary: summary.numeric_summary,
-        });
+      getDag().catch(() => null),
+      getReportData().catch(() => null),
+    ]).then(([cfg, summary, dag, report]: [ProjectConfig | null, DataSummary | null, DagDefinition | null, ReportPayload | null]) => {
+      const ctx: PromptDataContext = {
+        columns: summary?.columns ?? [],
+        target: cfg?.data?.target_column,
+        summary: summary?.numeric_summary,
+      };
+
+      // Inject DAG edges
+      if (dag?.edges && dag.edges.length > 0) {
+        ctx.dagEdges = dag.edges;
       }
+
+      // Inject physics constraints
+      const mono = cfg?.physics?.monotone_constraints;
+      if (mono && typeof mono === "object") {
+        ctx.physicsConstraints = mono as Record<string, number>;
+      }
+
+      // Inject scenario definitions
+      const scenarios = cfg?.scenarios;
+      if (Array.isArray(scenarios) && scenarios.length > 0) {
+        ctx.scenarios = scenarios;
+      }
+
+      // Inject causal results from report
+      const causal = report?.causal_results;
+      if (causal?.direct_effects && Object.keys(causal.direct_effects).length > 0) {
+        ctx.causalResults = causal.direct_effects;
+      }
+
+      // Inject scenario summary from report
+      if (report?.scenario_summary && report.scenario_summary.length > 0) {
+        ctx.scenarioSummary = report.scenario_summary;
+      }
+
+      setDataCtx(ctx);
     });
   }, [ready, refreshKey]);
 
@@ -71,6 +102,8 @@ export default function App() {
       case "Project": return "domain" as const;
       case "DAG": return "dag" as const;
       case "Physics": return "physics" as const;
+      case "Results":
+      case "Report": return "results" as const;
       default: return "general" as const;
     }
   })();

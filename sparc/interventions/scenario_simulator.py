@@ -1411,11 +1411,14 @@ class ScenarioSimulator:
 
         # Build GeoDataFrame if possible
         results_gdf = self._to_geodataframe(results_df, baseline_df)
-        if results_gdf is not None:
-            gpkg_path = self.output_dir / "scenario_results.gpkg"
-            results_gdf.to_file(gpkg_path, driver="GPKG")
-            if verbose:
-                print(f"   GeoPackage saved: {gpkg_path}")
+        if GEOPANDAS_AVAILABLE and isinstance(results_gdf, gpd.GeoDataFrame):
+            try:
+                gpkg_path = self.output_dir / "scenario_results.gpkg"
+                results_gdf.to_file(gpkg_path, driver="GPKG")
+                if verbose:
+                    print(f"   GeoPackage saved: {gpkg_path}")
+            except Exception as e:
+                warnings.warn(f"Could not write GeoPackage: {e}")
 
         return summary_df, results_gdf
 
@@ -1945,13 +1948,16 @@ class ScenarioSimulator:
             print(f"DAG scenario summary saved: {summary_path}")
 
         results_gdf = self._to_geodataframe(results_df, data)
-        if results_gdf is not None:
-            gpkg = self.output_dir / "scenario_results_dag.gpkg"
-            results_gdf.to_file(gpkg, driver="GPKG")
-            # Also write canonical name so the UI always finds a spatial file
-            results_gdf.to_file(self.output_dir / "scenario_results.gpkg", driver="GPKG")
-            if verbose:
-                print(f"GeoPackage saved: {gpkg}")
+        if GEOPANDAS_AVAILABLE and isinstance(results_gdf, gpd.GeoDataFrame):
+            try:
+                gpkg = self.output_dir / "scenario_results_dag.gpkg"
+                results_gdf.to_file(gpkg, driver="GPKG")
+                # Also write canonical name so the UI always finds a spatial file
+                results_gdf.to_file(self.output_dir / "scenario_results.gpkg", driver="GPKG")
+                if verbose:
+                    print(f"GeoPackage saved: {gpkg}")
+            except Exception as e:
+                warnings.warn(f"Could not write GeoPackage: {e}")
 
         # ── Generate interpretation maps ──────────────────────────────
         try:
@@ -2370,12 +2376,15 @@ class ScenarioSimulator:
             print(f"Re-prediction scenario summary saved: {summary_path}")
 
         results_gdf = self._to_geodataframe(results_df, data)
-        if results_gdf is not None:
-            gpkg = self.output_dir / "scenario_results_reprediction.gpkg"
-            results_gdf.to_file(gpkg, driver="GPKG")
-            results_gdf.to_file(self.output_dir / "scenario_results.gpkg", driver="GPKG")
-            if verbose:
-                print(f"GeoPackage saved: {gpkg}")
+        if GEOPANDAS_AVAILABLE and isinstance(results_gdf, gpd.GeoDataFrame):
+            try:
+                gpkg = self.output_dir / "scenario_results_reprediction.gpkg"
+                results_gdf.to_file(gpkg, driver="GPKG")
+                results_gdf.to_file(self.output_dir / "scenario_results.gpkg", driver="GPKG")
+                if verbose:
+                    print(f"GeoPackage saved: {gpkg}")
+            except Exception as e:
+                warnings.warn(f"Could not write GeoPackage: {e}")
 
         return summary_df, results_gdf
 
@@ -2784,12 +2793,15 @@ class ScenarioSimulator:
             print(f"Hybrid scenario summary saved: {summary_path}")
 
         results_gdf = self._to_geodataframe(results_df, data)
-        if results_gdf is not None:
-            gpkg = self.output_dir / "scenario_results_hybrid.gpkg"
-            results_gdf.to_file(gpkg, driver="GPKG")
-            results_gdf.to_file(self.output_dir / "scenario_results.gpkg", driver="GPKG")
-            if verbose:
-                print(f"GeoPackage saved: {gpkg}")
+        if GEOPANDAS_AVAILABLE and isinstance(results_gdf, gpd.GeoDataFrame):
+            try:
+                gpkg = self.output_dir / "scenario_results_hybrid.gpkg"
+                results_gdf.to_file(gpkg, driver="GPKG")
+                results_gdf.to_file(self.output_dir / "scenario_results.gpkg", driver="GPKG")
+                if verbose:
+                    print(f"GeoPackage saved: {gpkg}")
+            except Exception as e:
+                warnings.warn(f"Could not write GeoPackage: {e}")
 
         return summary_df, results_gdf
 
