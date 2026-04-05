@@ -53,13 +53,13 @@ jobs:
         shell: bash
         run: |
           mkdir -p sparc-desktop/src-tauri/binaries
-          # PyInstaller builds for the host arch; if cross-compiling (e.g. arm64→x86_64)
-          # the binary name won't match — skip gracefully (app falls back to Python).
+          # build-sidecar.py outputs "sparc-sidecar" (no target triple).
+          # Tauri bundles everything in binaries/ via resources config.
           if [ "${{ runner.os }}" = "Windows" ]; then
-            SRC="dist/sparc-sidecar-${{ matrix.target }}.exe"
+            SRC="dist/sparc-sidecar.exe"
             DST="sparc-desktop/src-tauri/binaries/sparc-sidecar.exe"
           else
-            SRC="dist/sparc-sidecar-${{ matrix.target }}"
+            SRC="dist/sparc-sidecar"
             DST="sparc-desktop/src-tauri/binaries/sparc-sidecar"
           fi
           if [ -f "$SRC" ]; then
@@ -67,7 +67,9 @@ jobs:
             chmod +x "$DST" 2>/dev/null || true
             echo "Sidecar copied: $DST"
           else
-            echo "Sidecar not found for target (cross-compile); app will resolve Python at runtime"
+            echo "::error::Sidecar binary not found at $SRC — build failed?"
+            ls -la dist/ || true
+            exit 1
           fi
 
       # ── Node + frontend ─────────────────────────────────────────
