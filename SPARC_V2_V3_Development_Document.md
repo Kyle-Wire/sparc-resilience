@@ -42,7 +42,6 @@ Every number backed by a probability. Every probability backed by a causal mecha
 ## What Does Not Change
 
 - CLI interface (`sparc init / validate / run / scenario / report`)
-- Streamlit UI — new config fields surface automatically
 - All 13 existing domain templates
 - Stage 0 correlogram analysis and auto-configuration
 - Stage 1 GWEN variable selection
@@ -65,14 +64,6 @@ Every number backed by a probability. Every probability backed by a causal mecha
 | JAMES Paper 1 submission | Q1 2027 |
 
 ---
-
-## Paper Targets
-
-| Paper | Content | Journal | Submission |
-|---|---|---|---|
-| 1 | MC³ + NUTS for spatial causal DAG inference. UHI application. Spatially-varying process rate validation. | JAMES | Q1 2027 |
-| 2 | End-to-end differentiable spatial causal inference. Multi-resolution transfer. MAML generalization. | Nature Computational Science | Q3 2027 |
-
 ---
 
 ---
@@ -1545,71 +1536,6 @@ resolution_levels = {
 
 ---
 
-## 2.9 — MAML Spatial Cross-Validation
-
-**File:** `sparc/training/maml.py`
-
-Model-Agnostic Meta-Learning adapted for spatial cross-validation. The model explicitly optimizes for performance on held-out spatial folds — spatial generalization is the objective, not just evaluation.
-
-```python
-def maml_spatial_cv_loss(model, process_rate_net, data, spatial_folds,
-                          inner_lr=1e-3, n_inner_steps=5, lambda_dict=None):
-    """
-    Outer loop: optimize base parameters for spatial generalization.
-    Inner loop: adapt to each training fold.
-    Test fold loss (not training fold) is what drives meta-gradient.
-
-    Effect: model learns initialization from which a few gradient steps
-            produce good predictions at any spatial location.
-            Spatial generalization built into the loss function.
-    """
-    from copy import deepcopy
-
-    meta_loss = 0.0
-
-    for train_idx, test_idx in spatial_folds:
-        # Clone parameters for inner loop adaptation
-        fast_model = deepcopy(model)
-        fast_prate = deepcopy(process_rate_net)
-        inner_opt = torch.optim.SGD(
-            list(fast_model.parameters()) + list(fast_prate.parameters()),
-            lr=inner_lr,
-            momentum=0.9,
-            nesterov=True
-        )
-
-        # Inner loop: adapt to this fold's training data
-        for _ in range(n_inner_steps):
-            train_batch = data[train_idx]
-            alpha = fast_prate(train_batch['land_cover'])
-            T_pred, exceedance, _ = fast_model(**train_batch, alpha=alpha)
-
-            train_loss, _ = sparc_joint_loss(
-                T_pred, exceedance, train_batch['y'],
-                alpha=alpha, **lambda_dict
-            )
-            inner_opt.zero_grad()
-            train_loss.backward()
-            torch.nn.utils.clip_grad_norm_(
-                list(fast_model.parameters()) + list(fast_prate.parameters()),
-                max_norm=1.0
-            )
-            inner_opt.step()
-
-        # Outer loop: evaluate on held-out spatial fold
-        # This is what drives the meta-gradient on the BASE model
-        test_batch = data[test_idx]
-        alpha_test = fast_prate(test_batch['land_cover'])
-        T_pred_test, exceedance_test, _ = fast_model(**test_batch, alpha=alpha_test)
-
-        test_loss, _ = sparc_joint_loss(
-            T_pred_test, exceedance_test, test_batch['y'],
-            alpha=alpha_test, **lambda_dict
-        )
-        meta_loss += test_loss
-
-    return meta_loss / len(spatial_folds)
-```
 
 ---
 

@@ -210,6 +210,8 @@ def _yaml_to_config(raw: dict, yaml_path: str) -> dict:
         'causal':  raw.get('causal', {}),
         'models':  models_cfg,
         'scenarios': raw.get('scenarios', []),
+        'joint_scenarios': raw.get('joint_scenarios', []),
+        'interaction_scenarios': raw.get('interaction_scenarios', []),
         'pipeline': pipeline,
         'temporal': raw.get('temporal', {'enabled': False}),
         'benchmark_metrics': raw.get('benchmark_metrics', {}),

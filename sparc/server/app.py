@@ -716,45 +716,105 @@ async def get_spatial_cv_predictions():
 @app.get("/results/causal")
 async def get_causal_results():
     """Return causal validation results (coefficients, effects, diagnostics)."""
+    from datetime import datetime as _dt
+    import json as _json
+    import traceback as _tb
+
+    log_lines: list[str] = [f"=== /results/causal diagnostic log  {_dt.now().isoformat()} ==="]
+    stage3_dir = None  # will be set once paths resolve
+
+    def _write_log():
+        """Best-effort: dump log_lines into stage3_dir/_causal_endpoint_log.txt"""
+        try:
+            target = stage3_dir or Path(".")
+            target.mkdir(parents=True, exist_ok=True)
+            log_path = target / "_causal_endpoint_log.txt"
+            with open(log_path, "w", encoding="utf-8") as lf:
+                lf.write("\n".join(log_lines) + "\n")
+            print(f"[SPARC] Diagnostic log written to {log_path}")
+        except Exception as exc:
+            print(f"[SPARC] Could not write diagnostic log: {exc}")
+
+    # ── 1. Check project config ─────────────────────────────────────
     if state.project_config is None:
+        log_lines.append("FAIL: state.project_config is None — no project loaded")
+        _write_log()
         raise HTTPException(400, "No project loaded")
 
+    log_lines.append(f"project_config keys: {list(state.project_config.keys())}")
+    output_cfg = state.project_config.get("output", {})
+    log_lines.append(f"output config: base_dir={output_cfg.get('base_dir')}")
+    log_lines.append(f"output config: stage_dirs={output_cfg.get('stage_dirs')}")
+
+    # ── 2. Resolve PipelinePaths ────────────────────────────────────
     from sparc.run.pipeline_paths import PipelinePaths
-    import json as _json
 
     try:
         paths = PipelinePaths.from_config(state.project_config)
-    except Exception:
+    except Exception as exc:
+        log_lines.append(f"FAIL: PipelinePaths.from_config raised {type(exc).__name__}: {exc}")
+        log_lines.append(_tb.format_exc())
+        _write_log()
         raise HTTPException(404, "Cannot resolve output paths")
 
-    coeff_path = paths.stage3_dir / "scenario_coefficients.json"
-    print(f"[SPARC] Causal lookup: {coeff_path} exists={coeff_path.exists()}")
+    stage3_dir = paths.stage3_dir
+    log_lines.append(f"output_dir  = {paths.output_dir}  exists={paths.output_dir.exists()}")
+    log_lines.append(f"stage3_dir  = {stage3_dir}  exists={stage3_dir.exists()}")
 
-    # Try primary file first, then fallback to causal_validation_summary
+    # ── 3. List everything in stage3_dir ────────────────────────────
+    if stage3_dir.exists():
+        children = sorted(stage3_dir.iterdir())
+        log_lines.append(f"stage3_dir contents ({len(children)} items):")
+        for ch in children:
+            log_lines.append(f"  {ch.name}  size={ch.stat().st_size if ch.is_file() else 'DIR'}")
+    else:
+        log_lines.append("stage3_dir DOES NOT EXIST on disk")
+
+    # ── 4. Try primary file ─────────────────────────────────────────
+    coeff_path = stage3_dir / "scenario_coefficients.json"
+    log_lines.append(f"primary file: {coeff_path}  exists={coeff_path.exists()}")
+
     if coeff_path.exists():
-        with open(coeff_path, "r", encoding="utf-8") as fh:
-            return _json.load(fh)
+        try:
+            with open(coeff_path, "r", encoding="utf-8") as fh:
+                data = _json.load(fh)
+            log_lines.append(f"OK: loaded scenario_coefficients.json  top-keys={list(data.keys())}")
+            _write_log()
+            return data
+        except Exception as exc:
+            log_lines.append(f"FAIL: could not parse scenario_coefficients.json: {exc}")
 
-    # Fallback: try other known causal output files
-    alt_path = paths.stage3_dir / "causal_validation_summary.txt"
-    diag_path = paths.stage3_dir / "causal_diagnostics.json"
+    # ── 5. Fallback: causal_diagnostics.json ────────────────────────
+    diag_path = stage3_dir / "causal_diagnostics.json"
+    log_lines.append(f"fallback file: {diag_path}  exists={diag_path.exists()}")
     if diag_path.exists():
-        with open(diag_path, "r", encoding="utf-8") as fh:
-            return _json.load(fh)
+        try:
+            with open(diag_path, "r", encoding="utf-8") as fh:
+                data = _json.load(fh)
+            log_lines.append(f"OK: loaded causal_diagnostics.json  top-keys={list(data.keys())}")
+            _write_log()
+            return data
+        except Exception as exc:
+            log_lines.append(f"FAIL: could not parse causal_diagnostics.json: {exc}")
 
-    # Check in-memory results
+    # ── 6. Fallback: in-memory result ───────────────────────────────
     mem_result = state.get_result(3)
+    log_lines.append(f"in-memory state.get_result(3): {type(mem_result).__name__}, truthy={bool(mem_result)}")
     if mem_result is not None:
+        log_lines.append("OK: returning in-memory result")
+        _write_log()
         return mem_result
 
-    if not coeff_path.exists():
-        found = list(paths.stage3_dir.glob("*")) if paths.stage3_dir.exists() else []
-        found_str = ", ".join(f.name for f in found[:20]) if found else "(directory empty or missing)"
-        raise HTTPException(
-            404,
-            f"Causal results not found. Looked in: {paths.stage3_dir}. "
-            f"Files present: {found_str}",
-        )
+    # ── 7. Nothing found ────────────────────────────────────────────
+    found = list(stage3_dir.glob("*")) if stage3_dir.exists() else []
+    found_str = ", ".join(f.name for f in found[:20]) if found else "(directory empty or missing)"
+    log_lines.append(f"ALL LOOKUPS FAILED — returning 404. Files present: {found_str}")
+    _write_log()
+    raise HTTPException(
+        404,
+        f"Causal results not found. Looked in: {stage3_dir}. "
+        f"Files present: {found_str}",
+    )
 
 
 @app.get("/results/causal/dose_response")

@@ -332,7 +332,7 @@
             "block_size":   {"type": ["number", "null"], "description": "Block size in meters. null = auto-detect from correlogram."},
             "buffer_size":  {"type": "number", "default": 300},
             "block_size_source": {"type": "string", "enum": ["user", "correlogram"], "default": "correlogram", "description": "Source of block_size: user-specified or auto-detected from correlogram"},
-            "method":       {"type": "string", "enum": ["block", "kmeans"], "default": "block"},
+            "method":       {"type": "string", "enum": ["block", "kmeans", "buffered_block"], "default": "block"},
             "stratify_y":   {"type": "boolean", "default": true}
           }
         }
@@ -412,6 +412,32 @@
             },
             "minItems": 1,
             "description": "List of simultaneous interventions"
+          }
+        }
+      }
+    },
+
+    "interaction_scenarios": {
+      "type": "array",
+      "description": "Pairwise interaction scenarios showing marginal effects of two variables simultaneously",
+      "items": {
+        "type": "object",
+        "required": ["name", "legs"],
+        "properties": {
+          "name": {"type": "string", "description": "Human-readable scenario name"},
+          "legs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["variable", "delta"],
+              "properties": {
+                "variable": {"type": "string", "description": "Predictor variable name"},
+                "delta":    {"type": "number", "description": "Per-unit increment for the interaction surface"}
+              }
+            },
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "Exactly two variable legs for the interaction surface"
           }
         }
       }
