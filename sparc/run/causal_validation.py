@@ -46,6 +46,26 @@ from sparc.data.data_utils import load_and_preprocess_data
 from sparc.run.pipeline_paths import get_paths
 
 
+def _ensure_gdal_home() -> None:
+    """
+    On Windows, GDAL/fiona may try to resolve HOME to the *system*
+    profile (``C:\\WINDOWS\\system32\\config\\systemprofile\\…``) which
+    is not writable by normal users.  Set CPL_TMPDIR and HOME to a
+    user-writable temp directory so driver config creation succeeds.
+    """
+    if sys.platform != 'win32':
+        return
+    import tempfile
+    tmp = tempfile.gettempdir()  # always user-writable
+    for var in ('CPL_TMPDIR', 'GDAL_PAM_PROXY_DIR'):
+        if var not in os.environ:
+            os.environ[var] = tmp
+    # Fiona/GDAL use HOME for config; redirect if it points to system profile
+    home = os.environ.get('HOME', '')
+    if not home or 'systemprofile' in home.lower() or not os.path.isdir(home):
+        os.environ['HOME'] = os.path.expanduser('~')
+
+
 # ---------------------------------------------------------------------------
 # CausalValidator — the Stage 3 workhorse
 # ---------------------------------------------------------------------------
@@ -587,13 +607,12 @@ class CausalValidator:
         Estimate heterogeneous treatment effects using EconML's LinearDML.
 
         Results are stored in ``self.ate_results[treatment]['cate_*']``.
-        Fails gracefully if EconML is not installed.
+        Falls back to sklearn-only cross-fit DML if econml is broken.
         """
         try:
-            from econml.dml import LinearDML
             from sklearn.ensemble import HistGradientBoostingRegressor as HGB
         except ImportError:
-            print(f"      CATE skipped for {treatment} (econml not installed)")
+            print(f"      CATE skipped for {treatment} (sklearn not available)")
             return
 
         predictor_list = self.config.get('predictors', {})
@@ -618,23 +637,41 @@ class CausalValidator:
             Y = data[outcome].values
             X = data[confounders].values
 
-            dml = LinearDML(
-                model_y=HGB(max_iter=100, max_depth=3, random_state=42),
-                model_t=HGB(max_iter=100, max_depth=3, random_state=42),
-                random_state=42,
-                cv=3,
-            )
-            dml.fit(Y, T, X=X)
+            # Try econml LinearDML first
+            try:
+                from econml.dml import LinearDML
 
-            cate_mean = float(dml.const_marginal_effect(X).mean())
-            cate_std = float(dml.const_marginal_effect(X).std())
+                dml = LinearDML(
+                    model_y=HGB(max_iter=100, max_depth=3, random_state=42),
+                    model_t=HGB(max_iter=100, max_depth=3, random_state=42),
+                    random_state=42,
+                    cv=3,
+                )
+                dml.fit(Y, T, X=X)
+
+                cate_mean = float(dml.const_marginal_effect(X).mean())
+                cate_std = float(dml.const_marginal_effect(X).std())
+                method = 'LinearDML'
+
+            except Exception:
+                # Fallback: manual cross-fit DML with sklearn only
+                from sparc.causal.counterfactual_engine import CounterfactualEngine
+                coeff, se, _ = CounterfactualEngine._fit_edge_dml_sklearn(
+                    T, Y, X,
+                    model_y=HGB(max_iter=100, max_depth=3, random_state=42),
+                    model_t=HGB(max_iter=100, max_depth=3, random_state=42),
+                    n_splits=3,
+                )
+                cate_mean = coeff
+                cate_std = se
+                method = 'CrossFitDML-sklearn'
 
             self.ate_results[treatment]['cate_mean'] = cate_mean
             self.ate_results[treatment]['cate_std'] = cate_std
-            self.ate_results[treatment]['cate_method'] = 'LinearDML'
+            self.ate_results[treatment]['cate_method'] = method
 
             print(f"      CATE({treatment}): mean={cate_mean:+.5f}  "
-                  f"std={cate_std:.5f}")
+                  f"std={cate_std:.5f}  [{method}]")
 
         except Exception as e:
             print(f"      CATE({treatment}) failed: {e}")
@@ -1029,10 +1066,9 @@ class CausalValidator:
             return
 
         try:
-            from econml.dml import LinearDML
             from sklearn.ensemble import HistGradientBoostingRegressor as HGB
         except ImportError:
-            print("  econml / sklearn not available -- skipping DR estimation.")
+            print("  sklearn not available -- skipping DR estimation.")
             return
 
         print(f"\n  Estimating ATEs via Doubly-Robust/DML (continuous, outcome={target})...")
@@ -1076,24 +1112,38 @@ class CausalValidator:
                 Y = data[target].values.astype(np.float64)
                 W = data[W_cols].values.astype(np.float64)
 
-                dml = LinearDML(
-                    model_y=HGB(max_iter=200, max_depth=4, random_state=42),
-                    model_t=HGB(max_iter=200, max_depth=4, random_state=42),
-                    discrete_treatment=False,
-                    cv=3,
-                    random_state=42,
-                )
-                dml.fit(Y, T, W=W)
+                # Try econml LinearDML; fall back to sklearn cross-fit DML
+                try:
+                    from econml.dml import LinearDML
 
-                ate_dr = float(dml.const_marginal_ate())
-                # Inference
-                inf = dml.const_marginal_ate_inference()
-                se_dr = float(np.mean(inf.stderr_mean))
+                    dml = LinearDML(
+                        model_y=HGB(max_iter=200, max_depth=4, random_state=42),
+                        model_t=HGB(max_iter=200, max_depth=4, random_state=42),
+                        discrete_treatment=False,
+                        cv=3,
+                        random_state=42,
+                    )
+                    dml.fit(Y, T, W=W)
+
+                    ate_dr = float(dml.const_marginal_ate())
+                    inf = dml.const_marginal_ate_inference()
+                    se_dr = float(np.mean(inf.stderr_mean))
+                    dr_method = 'LinearDML (continuous DR)'
+
+                except Exception:
+                    from sparc.causal.counterfactual_engine import CounterfactualEngine
+                    ate_dr, se_dr, _ = CounterfactualEngine._fit_edge_dml_sklearn(
+                        T, Y, W,
+                        model_y=HGB(max_iter=200, max_depth=4, random_state=42),
+                        model_t=HGB(max_iter=200, max_depth=4, random_state=42),
+                        n_splits=3,
+                    )
+                    dr_method = 'CrossFitDML-sklearn (DR fallback)'
 
                 self.ate_dr_results[treatment] = {
                     'ate_dr': ate_dr,
                     'se': se_dr,
-                    'method': 'LinearDML (continuous DR)',
+                    'method': dr_method,
                 }
 
                 # Compare with backdoor
@@ -1202,6 +1252,11 @@ class CausalValidator:
             gdf = estimator.to_geodataframe(data, coord_cols, crs=proj_crs)
             if gdf is not None and len(gdf) > 0:
                 os.makedirs(output_dir, exist_ok=True)
+
+                # Fix Windows GDAL/fiona permissions: ensure HOME points to
+                # a writable directory so driver configs can be created.
+                _ensure_gdal_home()
+
                 try:
                     from sparc.run.pipeline_paths import get_result_store
                     get_result_store().save_geodataframe(3, 'spatial_cate_maps.gpkg', gdf)

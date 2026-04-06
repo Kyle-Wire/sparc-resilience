@@ -148,6 +148,16 @@ def cmd_run(args):
     """
     project_path = _resolve_project_path(args)
 
+    # Fix GDAL/fiona HOME on Windows before any GeoPackage I/O
+    if sys.platform == 'win32':
+        import tempfile
+        for var in ('CPL_TMPDIR', 'GDAL_PAM_PROXY_DIR'):
+            if var not in os.environ:
+                os.environ[var] = tempfile.gettempdir()
+        home = os.environ.get('HOME', '')
+        if not home or 'systemprofile' in home.lower() or not os.path.isdir(home):
+            os.environ['HOME'] = os.path.expanduser('~')
+
     # Add parent to path for imports
     repo_root = str(Path(__file__).resolve().parent.parent)
     sys.path.insert(0, repo_root)
@@ -432,6 +442,16 @@ def cmd_scenario(args):
 
 def cmd_server(args):
     """Start the SPARC FastAPI server (used by the desktop app)."""
+    # Fix GDAL/fiona HOME on Windows before any GeoPackage I/O
+    if sys.platform == 'win32':
+        import tempfile
+        for var in ('CPL_TMPDIR', 'GDAL_PAM_PROXY_DIR'):
+            if var not in os.environ:
+                os.environ[var] = tempfile.gettempdir()
+        home = os.environ.get('HOME', '')
+        if not home or 'systemprofile' in home.lower() or not os.path.isdir(home):
+            os.environ['HOME'] = os.path.expanduser('~')
+
     try:
         import uvicorn
     except ImportError:

@@ -103,7 +103,6 @@ class SpatialCATEEstimator:
         np.ndarray
             Per-point CATE estimates (shape: n_observations,).
         """
-        from econml.dml import CausalForestDML
         from sklearn.ensemble import HistGradientBoostingRegressor as HGB
 
         T = data[[treatment]].values
@@ -137,43 +136,98 @@ class SpatialCATEEstimator:
         else:
             T_fit, Y_fit, X_fit, W_fit = T, Y, X, W
 
-        # Fit CausalForestDML
-        model = CausalForestDML(
-            model_y=HGB(
-                max_iter=200, max_depth=4, learning_rate=0.05,
-                min_samples_leaf=self.min_samples_leaf, random_state=self.random_state,
-            ),
-            model_t=HGB(
-                max_iter=200, max_depth=4, learning_rate=0.05,
-                min_samples_leaf=self.min_samples_leaf, random_state=self.random_state,
-            ),
-            n_estimators=self.n_estimators,
-            min_samples_leaf=max(5, len(T_fit) // 200),
-            random_state=self.random_state,
-            cv=3,
-        )
-
-        model.fit(Y_fit, T_fit, X=X_fit, W=W_fit)
-
-        # Get per-point CATE (predict on full dataset)
-        cate = model.effect(X, T0=0, T1=1).flatten()
-
-        # Confidence intervals
+        # Try econml CausalForestDML; fall back to sklearn-based local
+        # linear DML if econml's Cython extensions are broken.
         try:
-            inference = model.effect_inference(X)
-            ci_lower = inference.conf_int(alpha=0.05)[0].flatten()
-            ci_upper = inference.conf_int(alpha=0.05)[1].flatten()
-            self.cate_intervals[treatment] = (ci_lower, ci_upper)
-        except Exception:
-            # Fallback: use CATE ± 1.96 * std as rough CI
-            cate_std = np.std(cate)
-            self.cate_intervals[treatment] = (
-                cate - 1.96 * cate_std,
-                cate + 1.96 * cate_std,
+            from econml.dml import CausalForestDML
+
+            model = CausalForestDML(
+                model_y=HGB(
+                    max_iter=200, max_depth=4, learning_rate=0.05,
+                    min_samples_leaf=self.min_samples_leaf, random_state=self.random_state,
+                ),
+                model_t=HGB(
+                    max_iter=200, max_depth=4, learning_rate=0.05,
+                    min_samples_leaf=self.min_samples_leaf, random_state=self.random_state,
+                ),
+                n_estimators=self.n_estimators,
+                min_samples_leaf=max(5, len(T_fit) // 200),
+                random_state=self.random_state,
+                cv=3,
             )
 
-        self._models[treatment] = model
+            model.fit(Y_fit, T_fit, X=X_fit, W=W_fit)
+
+            # Get per-point CATE (predict on full dataset)
+            cate = model.effect(X, T0=0, T1=1).flatten()
+
+            # Confidence intervals
+            try:
+                inference = model.effect_inference(X)
+                ci_lower = inference.conf_int(alpha=0.05)[0].flatten()
+                ci_upper = inference.conf_int(alpha=0.05)[1].flatten()
+                self.cate_intervals[treatment] = (ci_lower, ci_upper)
+            except Exception:
+                cate_std = np.std(cate)
+                self.cate_intervals[treatment] = (
+                    cate - 1.96 * cate_std,
+                    cate + 1.96 * cate_std,
+                )
+
+            self._models[treatment] = model
+
+        except Exception as econml_err:
+            # Fallback: spatially-binned cross-fit DML using sklearn only
+            import warnings
+            warnings.warn(
+                f"CausalForestDML failed ({econml_err}); "
+                "using sklearn cross-fit DML with spatial binning."
+            )
+            cate = self._spatial_cate_sklearn_fallback(
+                T_fit, Y_fit, X_fit, W_fit, T, Y, X, W, treatment,
+            )
+
         self.cate_estimates[treatment] = cate
+        return cate
+
+    def _spatial_cate_sklearn_fallback(
+        self,
+        T_fit, Y_fit, X_fit, W_fit,
+        T, Y, X, W,
+        treatment: str,
+    ) -> np.ndarray:
+        """
+        Fallback CATE: partition W into spatial bins and run a separate
+        cross-fit DML in each bin to capture treatment-effect heterogeneity.
+        """
+        from sklearn.cluster import MiniBatchKMeans
+        from sparc.causal.counterfactual_engine import CounterfactualEngine
+        from sklearn.ensemble import HistGradientBoostingRegressor as HGB
+
+        n_bins = min(20, max(5, len(T) // 500))
+        km = MiniBatchKMeans(n_clusters=n_bins, random_state=self.random_state, n_init=3)
+        labels = km.fit_predict(W)
+
+        cate = np.zeros(len(T))
+        for b in range(n_bins):
+            mask = labels == b
+            if mask.sum() < 30:
+                continue
+            coeff, _, _ = CounterfactualEngine._fit_edge_dml_sklearn(
+                T[mask], Y[mask], W[mask],
+                model_y=HGB(max_iter=150, max_depth=3, random_state=42),
+                model_t=HGB(max_iter=150, max_depth=3, random_state=42),
+                n_splits=min(3, max(2, mask.sum() // 30)),
+            )
+            cate[mask] = coeff
+
+        # Rough CI from per-bin variation
+        cate_std = np.std(cate)
+        self.cate_intervals[treatment] = (
+            cate - 1.96 * cate_std,
+            cate + 1.96 * cate_std,
+        )
+
         return cate
 
     # ------------------------------------------------------------------

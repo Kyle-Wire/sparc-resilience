@@ -31,7 +31,9 @@ echo  [2/3] Activating virtual environment...
 call .venv\Scripts\activate.bat
 
 echo  [3/3] Installing SPARC and all dependencies...
-pip install -e ".[ui]" --quiet
+pip install --upgrade pip setuptools wheel --quiet
+pip install econml --only-binary :all: --quiet
+pip install -e ".[server,ui]" --quiet
 
 if %errorlevel% neq 0 (
     echo.

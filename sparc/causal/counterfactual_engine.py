@@ -355,7 +355,6 @@ class CounterfactualEngine:
         dml_model : object
             Fitted econml.dml.LinearDML model (or None on fallback).
         """
-        from econml.dml import LinearDML
         from sklearn.ensemble import HistGradientBoostingRegressor as HGB
 
         T = data[[parent]].values   # (N, 1)
@@ -387,29 +386,94 @@ class CounterfactualEngine:
             min_samples_leaf=20, random_state=42,
         )
 
-        dml = LinearDML(
-            model_y=model_y,
-            model_t=model_t,
-            cv=cv_splitter,
-            random_state=42,
-        )
+        # Try econml LinearDML first; fall back to manual cross-fit DML
+        # if econml's Cython extensions (econml.tree._utils) are broken.
+        try:
+            from econml.dml import LinearDML
+
+            dml = LinearDML(
+                model_y=model_y,
+                model_t=model_t,
+                cv=cv_splitter,
+                random_state=42,
+            )
+
+            if W is not None and W.shape[1] > 0:
+                dml.fit(Y, T, W=W)
+            else:
+                dml.fit(Y, T)
+
+            coeff = float(dml.const_marginal_effect().flatten()[0])
+
+            try:
+                inference = dml.const_marginal_effect_inference()
+                se = float(inference.stderr.flatten()[0])
+            except Exception:
+                se = 0.0
+
+            return coeff, se, dml
+
+        except Exception as econml_err:
+            # Fallback: manual Chernozhukov et al. (2018) cross-fit DML
+            # using only sklearn — no dependency on econml.tree._utils.
+            import warnings
+            warnings.warn(
+                f"econml LinearDML failed ({econml_err}); "
+                "using sklearn-only cross-fit DML fallback."
+            )
+            return self._fit_edge_dml_sklearn(
+                T, Y, W, model_y, model_t, n_splits,
+            )
+
+    @staticmethod
+    def _fit_edge_dml_sklearn(
+        T: np.ndarray,
+        Y: np.ndarray,
+        W: np.ndarray | None,
+        model_y,
+        model_t,
+        n_splits: int = 5,
+    ) -> Tuple[float, float, None]:
+        """
+        Manual Debiased ML (Chernozhukov et al. 2018) using only sklearn.
+
+        Cross-fits nuisance models for Y and T on confounders W, then
+        estimates the causal coefficient from the residual-on-residual
+        regression with heteroskedasticity-robust standard errors.
+        """
+        from sklearn.model_selection import KFold
+        from sklearn.base import clone
+
+        n = len(Y)
+        T_flat = T.ravel()
+        Y_res = np.zeros(n)
+        T_res = np.zeros(n)
+
+        kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
 
         if W is not None and W.shape[1] > 0:
-            dml.fit(Y, T, W=W)
+            for train_idx, test_idx in kf.split(W):
+                my = clone(model_y).fit(W[train_idx], Y[train_idx])
+                mt = clone(model_t).fit(W[train_idx], T_flat[train_idx])
+                Y_res[test_idx] = Y[test_idx] - my.predict(W[test_idx])
+                T_res[test_idx] = T_flat[test_idx] - mt.predict(W[test_idx])
         else:
-            # No confounders — still run DML with intercept-only nuisance
-            dml.fit(Y, T)
+            # No confounders: residualise against the mean
+            Y_res = Y - Y.mean()
+            T_res = T_flat - T_flat.mean()
 
-        coeff = float(dml.const_marginal_effect().flatten()[0])
+        # Residual-on-residual OLS: coeff = (T_res' T_res)^{-1} T_res' Y_res
+        denom = T_res @ T_res
+        if abs(denom) < 1e-12:
+            return 0.0, 0.0, None
+        coeff = float((T_res @ Y_res) / denom)
 
-        # Robust standard error
-        try:
-            inference = dml.const_marginal_effect_inference()
-            se = float(inference.stderr.flatten()[0])
-        except Exception:
-            se = 0.0
+        # HC1 heteroskedasticity-robust standard error
+        eps = Y_res - coeff * T_res
+        hc1_var = (n / (n - 1)) * np.sum((T_res ** 2) * (eps ** 2)) / (denom ** 2)
+        se = float(np.sqrt(max(hc1_var, 0.0)))
 
-        return coeff, se, dml
+        return coeff, se, None
 
     # ------------------------------------------------------------------
     # Intervention — do(X = x + delta)
