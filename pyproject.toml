@@ -36,6 +36,9 @@ dependencies = [
     "torch>=2.0",
     "tensorflow>=2.15",
 
+    # CMA-ES hyperparameter optimization (V2)
+    "cma>=3.0",
+
     # Causal inference
     "dowhy>=0.11",
     "networkx>=3.1",

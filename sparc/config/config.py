@@ -216,6 +216,35 @@ def _yaml_to_config(raw: dict, yaml_path: str) -> dict:
         'temporal': raw.get('temporal', {'enabled': False}),
         'benchmark_metrics': raw.get('benchmark_metrics', {}),
         'fingerprint': raw.get('fingerprint', {}),
+        # ---- V2: neural training, process rate, optimization ----
+        'process_rate': raw.get('process_rate', {
+            'enabled': True,
+            'name': 'thermal_diffusivity',
+            'units': 'm2_per_s',
+            'bounds': [1.0e-7, 9.0e-7],
+            'prior_mean': 5.0e-7,
+        }),
+        'optimization': raw.get('optimization', {
+            'run_cma_es': True,
+            'cma_es_popsize': 20,
+            'cma_es_maxiter': 50,
+            'clip_norm': 1.0,
+            'swa_epochs': 20,
+            'capacity_sweep': True,
+            'capacity_sweep_dims': [64, 128, 256, 512, 1024],
+        }),
+        'training': raw.get('training', {
+            'n_epochs': 100,
+            'batch_size': 2048,
+            'warmup_epochs': 10,
+            'ramp_epochs': 30,
+            'lambda_physics': 0.1,
+            'lambda_smooth': 0.01,
+            'lambda_alpha_smooth': 0.01,
+            'lambda_prior': 0.01,
+            'lambda_base': 0.2,
+            'lambda_neighbor': 0.05,
+        }),
     }
 
     # Resolve physics file paths relative to the YAML location
@@ -355,6 +384,10 @@ def load_config(config_path: str | None = None) -> dict:
         'scenarios': [],
         'pipeline': {'random_seed': 42},
         'temporal': {'enabled': False},
+        # V2 keys with V1-compatible defaults (disabled)
+        'process_rate': {'enabled': False},
+        'optimization': {'run_cma_es': False, 'capacity_sweep': False},
+        'training': {},
     }
 
 

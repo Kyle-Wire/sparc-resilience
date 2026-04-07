@@ -2521,6 +2521,77 @@ def main() -> dict:
 
     result = validator.produce_scenario_coefficients(stage3_dir)
 
+    # ------------------------------------------------------------------
+    # V2 Bayesian causal analysis (MC³ + NUTS) — if inference == "bayesian"
+    # ------------------------------------------------------------------
+    causal_cfg = config.get('causal', {})
+    if causal_cfg.get('inference', '').lower() == 'bayesian':
+        print("\n  --- V2 Bayesian Causal Analysis (MC³ + NUTS) ---")
+        try:
+            from sparc.run.v2_bayesian_causal import run_bayesian_causal
+
+            # Load neural model if available from Stage 2
+            neural_model = None
+            v2_neural_dir = paths.stage2_dir / "v2_neural"
+            meta_info_path = v2_neural_dir / "meta_info.json"
+            if meta_info_path.exists():
+                try:
+                    import torch
+                    from sparc.models.neural_meta import SPARCMetaLearner
+                    with open(meta_info_path) as _mf:
+                        mi = json.load(_mf)
+                    neural_model = SPARCMetaLearner(
+                        n_base_models=mi["n_base_models"],
+                        n_physics_features=mi["n_physics_features"],
+                        d_spatial=mi["d_spatial"],
+                        hidden_dim=mi["hidden_dim"],
+                        thresholds=mi.get("thresholds", [0.25, 0.50, 0.75]),
+                    )
+                    state = torch.load(
+                        v2_neural_dir / "neural_meta.pt",
+                        map_location="cpu",
+                        weights_only=True,
+                    )
+                    neural_model.load_state_dict(state)
+                    neural_model.eval()
+                    print(f"  Loaded V2 neural model from {v2_neural_dir}")
+                except Exception as e:
+                    print(f"  Could not load V2 neural model: {e}")
+                    neural_model = None
+
+            bayesian_dir = os.path.join(stage3_dir, "bayesian")
+            bayesian_result = run_bayesian_causal(
+                data=data,
+                dag_def=validator.dag_def,
+                neural_model=neural_model,
+                config=config,
+                output_dir=bayesian_dir,
+            )
+
+            mc3_summary = bayesian_result.get("mc3_summary", {})
+            print(f"  MC³: {mc3_summary.get('n_accepted', 0)} / "
+                  f"{mc3_summary.get('n_total', 0)} accepted "
+                  f"(rate={mc3_summary.get('acceptance_rate', 0):.2%})")
+
+            nuts_summary = bayesian_result.get("nuts_results")
+            if nuts_summary:
+                print(f"  NUTS: acceptance={nuts_summary.get('acceptance_rate', 0):.1%}, "
+                      f"divergences={nuts_summary.get('n_divergences', 0)}")
+                beta_mean = nuts_summary.get("beta_mean", [])
+                treatments = nuts_summary.get("treatments", [])
+                for t, b in zip(treatments, beta_mean):
+                    print(f"    {t}: beta = {b:+.5f}")
+
+            # Merge bayesian results into the scenario coefficients
+            result["bayesian_causal"] = bayesian_result
+
+        except Exception as e:
+            print(f"  V2 Bayesian causal analysis failed: {e}")
+            import traceback
+            traceback.print_exc()
+    else:
+        print("\n  V2 Bayesian causal analysis: SKIPPED (inference != 'bayesian')")
+
     # Save a human-readable summary
     summary_path = os.path.join(stage3_dir, 'causal_validation_summary.txt')
     with open(summary_path, 'w', encoding='utf-8') as f:

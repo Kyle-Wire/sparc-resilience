@@ -2263,6 +2263,69 @@ def main(fast_mode=False):
         
         print(f"Best approach: {best_approach}")
         
+        # ================================================================
+        # Stage 3c: V2 Neural Meta-Learner (if meta_learner == "neural")
+        # ================================================================
+        v2_neural_result = None
+        if cfg.get("models", {}).get("meta_learner", "neural") == "neural":
+            print("\n=== Stage 3c: V2 Neural Meta-Learner ===")
+            try:
+                from sparc.run.v2_neural_training import train_neural_meta, run_cma_es_search
+
+                # Optional CMA-ES hyperparameter search
+                if cfg.get("optimization", {}).get("run_cma_es", False):
+                    print("Running CMA-ES hyperparameter search (this may take a while)...")
+                    best_hparams = run_cma_es_search(
+                        y=y,
+                        coords=coords,
+                        feature_matrix=X_original_features,
+                        feature_names=selected_features_filtered,
+                        folds=folds,
+                        config=cfg,
+                        output_dir=stage2_dir,
+                    )
+                    # Merge best hyperparams into config
+                    for k, v in best_hparams.items():
+                        if k.startswith("lambda_"):
+                            cfg.setdefault("training", {})[k] = v
+                        elif k == "learning_rate":
+                            cfg.setdefault("training", {})["learning_rate"] = v
+                        elif k == "dropout":
+                            cfg.setdefault("models", {}).setdefault("neural", {})["dropout"] = v
+                    print(f"CMA-ES best params applied: {best_hparams}")
+
+                v2_neural_result = train_neural_meta(
+                    y=y,
+                    coords=coords,
+                    feature_matrix=X_original_features,
+                    feature_names=selected_features_filtered,
+                    folds=folds,
+                    config=cfg,
+                    output_dir=stage2_dir,
+                )
+
+                v2_r2 = v2_neural_result["metrics"]["r2"]
+                v2_rmse = v2_neural_result["metrics"]["rmse"]
+                print(f"\nV2 Neural Meta-Learner: R² = {v2_r2:.4f}, RMSE = {v2_rmse:.4f}")
+
+                # Compare with best LightGBM meta
+                if v2_r2 > best_meta_r2 + 0.001:
+                    print(f"[OK] V2 Neural Meta-Learner outperforms LightGBM ({v2_r2:.4f} > {best_meta_r2:.4f})")
+                    best_meta_predictions = v2_neural_result["oof_predictions"]
+                    best_meta_r2 = v2_r2
+                    best_meta_rmse = v2_rmse
+                    best_approach = "V2 Neural"
+                else:
+                    print(f"~ LightGBM meta-learner performs similarly or better")
+
+            except Exception as e:
+                print(f"[WARNING] V2 Neural Meta-Learner failed: {e}")
+                print("Falling back to LightGBM meta-learner results.")
+                import traceback
+                traceback.print_exc()
+        else:
+            print("\n=== V2 Neural Meta-Learner: SKIPPED (meta_learner != 'neural') ===")
+
         # Use true OOF residuals for Deep Kriging (no leakage) - BUT WE'LL SKIP IT
         print(f"True OOF Residuals - Mean: {np.mean(meta_oof_residuals):.4f}, Std: {np.std(meta_oof_residuals):.4f}")
         print("Deep Kriging will be skipped per user request")
@@ -2613,6 +2676,11 @@ def main(fast_mode=False):
             'meta_ensemble_standard': {'r2': meta_r2, 'rmse': meta_rmse},
             'meta_ensemble_enhanced': {'r2': meta_r2_v2, 'rmse': meta_rmse_v2},
             'meta_ensemble_best': {'r2': best_meta_r2, 'rmse': best_meta_rmse, 'approach': best_approach},
+            'v2_neural_meta': {
+                'r2': v2_neural_result['metrics']['r2'] if v2_neural_result else None,
+                'rmse': v2_neural_result['metrics']['rmse'] if v2_neural_result else None,
+                'executed': v2_neural_result is not None,
+            },
             'spatial_autocorrelation': {
                 'moran_i': moran.I,
                 'p_value': moran.p_sim,

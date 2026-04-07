@@ -72,6 +72,15 @@ causal:
   dag_file: "causal/dag.yml"
   estimator: "hgb"              # "hgb" (default, non-linear monotone-constrained) or "ols" (linear)
   estimate_cate: true           # Spatial CATE via EconML CausalForestDML
+  inference: "bayesian"         # "bayesian" (V2 default: MC³ + NUTS) or "frequentist" (V1)
+  mc3:
+    n_iterations: 10000
+    n_chains: 4
+    burnin_fraction: 0.25
+  nuts:
+    n_samples: 2000
+    n_warmup: 500
+    target_accept_rate: 0.80
   actionable_variables:
     - Pct_Canopy
     - Pct_Impervious
@@ -158,6 +167,57 @@ models:
     epochs: 100
     learning_rate: 0.001
     batch_size: 256
+
+  # V2 Neural Meta-Learner (default: enabled)
+  # Set meta_learner to "lightgbm" to revert to V1 LightGBM stacking.
+  meta_learner: "neural"        # "neural" (V2 default) or "lightgbm" (V1)
+
+  neural:
+    hidden_dim: 256
+    dropout: 0.1
+    n_heads: 4
+    max_neighbors: 128
+    siren_omega: 30.0
+    exceedance_thresholds: [0.25, 0.50, 0.75]
+
+# ---------------------------------------------------------------------------
+# V2 Process Rate Network (domain-specific physical rate parameter)
+# ---------------------------------------------------------------------------
+process_rate:
+  enabled: true
+  name: "thermal_admittance"
+  units: "W·m⁻²·K⁻¹"
+  bounds: [0.5, 12.0]           # Physical bounds for thermal admittance
+  prior_mean: 4.0               # Literature default
+  inputs:                        # Features that drive the process rate
+    - Pct_Impervious
+    - Albedo
+    - Elevation_m
+
+# ---------------------------------------------------------------------------
+# V2 Training Configuration
+# ---------------------------------------------------------------------------
+training:
+  n_epochs: 100
+  batch_size: 512
+  learning_rate: 0.001
+  lambda_mse: 1.0
+  lambda_exceedance: 0.1
+  lambda_physics: 0.01
+  lambda_smooth_pred: 0.01
+  lambda_smooth_alpha: 0.001
+  lambda_alpha_prior: 1.0
+  lambda_surrogate: 0.1
+  lambda_neighbor: 0.1
+
+# ---------------------------------------------------------------------------
+# V2 Optimization
+# ---------------------------------------------------------------------------
+optimization:
+  run_cma_es: false             # Set true for automatic hyperparameter tuning
+  clip_norm: 1.0
+  swa_epochs: 20
+  capacity_sweep: false
 
   spatial_cv:
     block_size: 300          # Block size in meters (300m for fine-grained urban analysis)

@@ -181,6 +181,38 @@
             }
           }
         },
+        "inference": {
+          "type": "string",
+          "enum": ["frequentist", "bayesian"],
+          "default": "bayesian",
+          "description": "Inference engine: 'bayesian' (V2 MC³ + NUTS) or 'frequentist' (V1 DML). Default changed to bayesian in V2."
+        },
+
+        "mc3": {
+          "type": "object",
+          "description": "MC³ parallel tempering for Bayesian DAG structure learning",
+          "properties": {
+            "enabled":                {"type": "boolean", "default": true},
+            "n_burnin":               {"type": "integer", "default": 3000},
+            "n_samples":              {"type": "integer", "default": 10000},
+            "thin":                   {"type": "integer", "default": 5},
+            "temperatures":           {"type": "array", "items": {"type": "number"}, "default": [1.0, 1.5, 2.0, 3.0]},
+            "prior_edge_probability": {"type": "number", "default": 0.25, "minimum": 0.0, "maximum": 1.0},
+            "physics_edge_bonuses":   {"type": "boolean", "default": true, "description": "Incorporate physics sign constraints as edge prior bonuses"}
+          }
+        },
+
+        "nuts": {
+          "type": "object",
+          "description": "NUTS sampler for Bayesian parameter inference",
+          "properties": {
+            "n_burnin":       {"type": "integer", "default": 1000},
+            "n_samples":      {"type": "integer", "default": 3000},
+            "target_accept":  {"type": "number", "default": 0.80, "minimum": 0.5, "maximum": 0.99},
+            "blocking":       {"type": "boolean", "default": true, "description": "Use blocked parameter sampling"}
+          }
+        },
+
         "discovery": {
           "type": "object",
           "description": "Causal discovery settings for data-driven DAG validation",
@@ -271,6 +303,31 @@
       "description": "Per-model hyperparameters (all optional — sensible defaults used if omitted)",
       "properties": {
 
+        "meta_learner": {
+          "type": "string",
+          "enum": ["lightgbm", "neural"],
+          "default": "neural",
+          "description": "Meta-learner type: 'neural' (V2 end-to-end differentiable) or 'lightgbm' (V1 gradient boosting). Default changed to neural in V2."
+        },
+
+        "neural": {
+          "type": "object",
+          "description": "V2 neural meta-learner architecture parameters (ignored when meta_learner=lightgbm)",
+          "properties": {
+            "hidden_dim":    {"type": "integer", "default": 256, "description": "Hidden dimension for fusion network (set after capacity sweep)"},
+            "dropout":       {"type": "number", "default": 0.1, "minimum": 0.0, "maximum": 0.5},
+            "n_heads":       {"type": "integer", "default": 4, "description": "Number of spatial attention heads"},
+            "max_neighbors": {"type": "integer", "default": 128, "description": "KNN neighborhood size for sparse spatial attention"},
+            "siren_omega":   {"type": "number", "default": 30.0, "description": "SIREN frequency parameter for physics encoder"},
+            "exceedance_thresholds": {
+              "type": "array",
+              "items": {"type": "number"},
+              "default": [0.25, 0.50, 0.75],
+              "description": "Thresholds (in outcome units) for exceedance probability heads"
+            }
+          }
+        },
+
         "gwr": {
           "type": "object",
           "properties": {
@@ -339,6 +396,55 @@
       }
     },
 
+    "process_rate": {
+      "type": "object",
+      "description": "Process rate auxiliary network — learns spatially-varying physical process rate from surface composition",
+      "properties": {
+        "enabled":    {"type": "boolean", "default": true, "description": "Enable process rate network (thermal/hydraulic/fire-spread diffusivity)"},
+        "name":       {"type": "string", "default": "thermal_diffusivity", "description": "Physical quantity name (domain-specific)"},
+        "units":      {"type": "string", "default": "m2_per_s"},
+        "bounds":     {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "[lower, upper] physical bounds"},
+        "prior_mean": {"type": "number", "description": "Domain prior mean for initialization"},
+        "inputs":     {"type": "array", "items": {"type": "string"}, "description": "Input feature columns for the process rate network"},
+        "material_priors": {
+          "type": "object",
+          "description": "Per-material literature values for process rate (e.g. impervious: 7.5e-7)",
+          "additionalProperties": {"type": "number"}
+        }
+      }
+    },
+
+    "optimization": {
+      "type": "object",
+      "description": "V2 optimization settings (neural meta-learner)",
+      "properties": {
+        "run_cma_es":          {"type": "boolean", "default": true, "description": "Run CMA-ES hyperparameter search before training"},
+        "cma_es_popsize":      {"type": "integer", "default": 20},
+        "cma_es_maxiter":      {"type": "integer", "default": 50},
+        "clip_norm":           {"type": "number", "default": 1.0, "description": "Global gradient norm clipping (overridden by CMA-ES if enabled)"},
+        "swa_epochs":          {"type": "integer", "default": 20, "description": "Stochastic Weight Averaging epochs in final training phase"},
+        "capacity_sweep":      {"type": "boolean", "default": true, "description": "Run hidden_dim sweep to find double descent regime"},
+        "capacity_sweep_dims": {"type": "array", "items": {"type": "integer"}, "default": [64, 128, 256, 512, 1024]}
+      }
+    },
+
+    "training": {
+      "type": "object",
+      "description": "V2 training curriculum parameters",
+      "properties": {
+        "n_epochs":             {"type": "integer", "default": 100},
+        "batch_size":           {"type": "integer", "default": 2048},
+        "warmup_epochs":        {"type": "integer", "default": 10},
+        "ramp_epochs":          {"type": "integer", "default": 30},
+        "lambda_physics":       {"type": "number", "default": 0.1, "description": "Physics residual loss weight (overridden by CMA-ES)"},
+        "lambda_smooth":        {"type": "number", "default": 0.01},
+        "lambda_alpha_smooth":  {"type": "number", "default": 0.01},
+        "lambda_prior":         {"type": "number", "default": 0.01},
+        "lambda_base":          {"type": "number", "default": 0.2},
+        "lambda_neighbor":      {"type": "number", "default": 0.05}
+      }
+    },
+
     "gwen": {
       "type": "object",
       "description": "GWEN variable selection parameters",
@@ -381,7 +487,9 @@
           "increments":  {"type": "array", "items": {"type": "number"}, "description": "Absolute delta values to simulate"},
           "min_val":     {"type": "number"},
           "max_val":     {"type": "number"},
-          "unit":        {"type": "string"}
+          "unit":        {"type": "string"},
+          "exceedance_threshold": {"type": "number", "description": "Threshold for P(effect > threshold) maps (V2 Bayesian mode)"},
+          "n_posterior_samples":  {"type": "integer", "default": 1000, "description": "Number of joint MC³ + NUTS draws per scenario (V2 Bayesian mode)"}
         }
       }
     },
