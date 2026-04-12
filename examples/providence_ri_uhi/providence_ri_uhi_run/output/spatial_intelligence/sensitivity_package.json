@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-03-13T12:20:48.293875",
+  "timestamp": "2026-04-08T16:45:42.775864",
   "variables": [
     "Distance_from_water_m",
     "Pct_Impervious",
@@ -17,29 +17,12 @@
   "models": {
     "mgwr": {
       "description": "Local coefficient surfaces from MGWR",
-      "raw_file": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\GW3C_v2.0\\GW3C_v2.1\\brown_uhi_run\\output\\Stage_2_Spatial_CV\\base_models_full/mgwr_local_coefficients.csv",
-      "corrected_file": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\GW3C_v2.0\\GW3C_v2.1\\brown_uhi_run\\output\\Stage_2_Spatial_CV\\base_models_full/mgwr_local_coefficients_corrected.csv"
-    },
-    "gwrf": {
-      "condition_curves": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\GW3C_v2.0\\GW3C_v2.1\\brown_uhi_run\\output\\spatial_intelligence\\gwrf_pdp\\gwrf_condition_curves.json",
-      "condition_curves_description": "Aggregate PDP with logistic saturation curve fits \u2014 used by Stage 4 for saturation-aware scenario predictions"
-    },
-    "ggpgam": {
-      "description": "Partial derivatives from GAM splines",
-      "n_derivatives": 6
+      "raw_file": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\sparc-resilience\\examples\\providence_ri_uhi\\providence_ri_uhi_run\\output\\Stage_2_Spatial_CV\\base_models_full/mgwr_local_coefficients.csv",
+      "corrected_file": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\sparc-resilience\\examples\\providence_ri_uhi\\providence_ri_uhi_run\\output\\Stage_2_Spatial_CV\\base_models_full/mgwr_local_coefficients_corrected.csv"
     }
   },
   "files": {
-    "mgwr_raw": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\GW3C_v2.0\\GW3C_v2.1\\brown_uhi_run\\output\\Stage_2_Spatial_CV\\base_models_full/mgwr_local_coefficients.csv",
-    "mgwr_corrected": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\GW3C_v2.0\\GW3C_v2.1\\brown_uhi_run\\output\\Stage_2_Spatial_CV\\base_models_full/mgwr_local_coefficients_corrected.csv",
-    "gwrf_condition_curves": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\GW3C_v2.0\\GW3C_v2.1\\brown_uhi_run\\output\\spatial_intelligence\\gwrf_pdp\\gwrf_condition_curves.json",
-    "ggpgam_derivatives": {
-      "ggpgam_derivative_X0.csv": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\GW3C_v2.0\\GW3C_v2.1\\brown_uhi_run\\output\\spatial_intelligence\\ggpgam_derivatives\\ggpgam_derivative_X0.csv",
-      "ggpgam_derivative_X1.csv": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\GW3C_v2.0\\GW3C_v2.1\\brown_uhi_run\\output\\spatial_intelligence\\ggpgam_derivatives\\ggpgam_derivative_X1.csv",
-      "ggpgam_derivative_X2.csv": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\GW3C_v2.0\\GW3C_v2.1\\brown_uhi_run\\output\\spatial_intelligence\\ggpgam_derivatives\\ggpgam_derivative_X2.csv",
-      "ggpgam_derivative_X3.csv": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\GW3C_v2.0\\GW3C_v2.1\\brown_uhi_run\\output\\spatial_intelligence\\ggpgam_derivatives\\ggpgam_derivative_X3.csv",
-      "ggpgam_derivative_X4.csv": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\GW3C_v2.0\\GW3C_v2.1\\brown_uhi_run\\output\\spatial_intelligence\\ggpgam_derivatives\\ggpgam_derivative_X4.csv",
-      "ggpgam_derivative_X5.csv": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\GW3C_v2.0\\GW3C_v2.1\\brown_uhi_run\\output\\spatial_intelligence\\ggpgam_derivatives\\ggpgam_derivative_X5.csv"
-    }
+    "mgwr_raw": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\sparc-resilience\\examples\\providence_ri_uhi\\providence_ri_uhi_run\\output\\Stage_2_Spatial_CV\\base_models_full/mgwr_local_coefficients.csv",
+    "mgwr_corrected": "C:\\Users\\KWire\\OneDrive - Kleinfelder\\Documents\\GitHub\\sparc-resilience\\examples\\providence_ri_uhi\\providence_ri_uhi_run\\output\\Stage_2_Spatial_CV\\base_models_full/mgwr_local_coefficients_corrected.csv"
   }
 }

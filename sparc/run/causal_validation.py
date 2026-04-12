@@ -2459,74 +2459,31 @@ def main() -> dict:
 
     validator.load_dag()
 
-    # Phase 1: Causal discovery (validate expert DAG against data)
+    # Check inference mode: "bayesian" skips V1 frequentist analyses
+    causal_cfg = config.get('causal', {})
+    use_bayesian = causal_cfg.get('inference', '').lower() == 'bayesian'
+
+    # Phase 1: Causal discovery — always run (validates expert DAG)
     validator.run_causal_discovery(data, stage3_dir)
 
-    # Phase 3: Assumption diagnostics (positivity, SUTVA)
+    # Phase 3: Assumption diagnostics (positivity, SUTVA) — always run
     validator.run_dag_diagnostics(data)
 
-    # Phase 2: Structural coefficient estimation
-    coord_cols = config.get('variables', {}).get('coordinates', [])
-    coords = data[coord_cols].values if len(coord_cols) >= 2 and all(c in data.columns for c in coord_cols) else None
-    validator.fit(data, coords=coords)
-
-    # Phase 2b: DAG sensitivity analysis (Canopy <-> Impervious direction)
-    validator.run_dag_sensitivity(data, coords=coords)
-
-    # ATE estimation — backdoor (existing)
-    validator.estimate_ate_all(data)
-
-    # ATE estimation — IPW (new)
-    validator.estimate_ate_ipw(data)
-
-    # ATE estimation — GPS for continuous treatments
-    validator.estimate_ate_gps(data)
-
-    # ATE estimation — covariate matching
-    validator.estimate_ate_matching(data)
-
-    # ATE estimation — doubly-robust (new)
-    validator.estimate_ate_dr(data)
-
-    # Phase 4: Spatial CATE via CausalForestDML
-    validator.run_spatial_cate(data, stage3_dir)
-
-    # Phase 4b: Dose-response curves (non-linear treatment effects)
-    validator.compute_dose_response(data, stage3_dir)
-
-    # Phase 5: Elasticity, relative importance, bootstrap
-    validator.compute_elasticity(data)
-    validator.compute_relative_importance(data)
-    validator.run_enhanced_bootstrap(data)
-
-    # Phase 5b: Mediation decomposition with CI propagation
-    validator.compute_mediation_effects(data)
-
-    # Phase 5c: Location-stratified effects
-    validator.compute_location_stratified_effects(data)
-
-    # Refutation tests (existing + Cinelli-Hazlett)
-    validator.run_refutations(data)
-
-    # Phase 6: Causal evaluation diagnostics (cumulative curves, calibration)
-    try:
-        from sparc.evaluation.causal_evaluation import run_causal_diagnostics
-        print("\n  Running causal evaluation diagnostics...")
-        run_causal_diagnostics(validator, data, stage3_dir)
-    except Exception as e:
-        print(f"  Causal diagnostics skipped: {e}")
-
-    # Phase 7: Physics prior diagnostic comparison table
-    validator.build_coefficient_comparison_table()
-
-    result = validator.produce_scenario_coefficients(stage3_dir)
-
-    # ------------------------------------------------------------------
-    # V2 Bayesian causal analysis (MC³ + NUTS) — if inference == "bayesian"
-    # ------------------------------------------------------------------
-    causal_cfg = config.get('causal', {})
-    if causal_cfg.get('inference', '').lower() == 'bayesian':
+    if use_bayesian:
+        # =============================================================
+        # V2 Bayesian path: MC³ + NUTS — skip V1 DML/IPW/GPS/etc.
+        # =============================================================
         print("\n  --- V2 Bayesian Causal Analysis (MC³ + NUTS) ---")
+        print("  Skipping V1 frequentist estimators (DML, IPW, GPS, matching, DR)")
+
+        # Minimal structural coefficient estimation (needed for scenario_coefficients.json skeleton)
+        coord_cols = config.get('variables', {}).get('coordinates', [])
+        coords = data[coord_cols].values if len(coord_cols) >= 2 and all(c in data.columns for c in coord_cols) else None
+        validator.fit(data, coords=coords)
+
+        # Produce scenario_coefficients.json (V1 skeleton — will be augmented by Bayesian results)
+        result = validator.produce_scenario_coefficients(stage3_dir)
+
         try:
             from sparc.run.v2_bayesian_causal import run_bayesian_causal
 
@@ -2585,12 +2542,77 @@ def main() -> dict:
             # Merge bayesian results into the scenario coefficients
             result["bayesian_causal"] = bayesian_result
 
+            # Re-save scenario_coefficients.json with Bayesian data
+            sc_path = os.path.join(stage3_dir, "scenario_coefficients.json")
+            with open(sc_path, 'w') as f:
+                json.dump(result, f, indent=2, default=str)
+            print(f"  Updated scenario_coefficients.json with Bayesian results")
+
         except Exception as e:
             print(f"  V2 Bayesian causal analysis failed: {e}")
             import traceback
             traceback.print_exc()
+
     else:
-        print("\n  V2 Bayesian causal analysis: SKIPPED (inference != 'bayesian')")
+        # =============================================================
+        # V1 Frequentist path: DML/OLS/HGB + multi-estimator ATE
+        # =============================================================
+
+        # Phase 2: Structural coefficient estimation
+        coord_cols = config.get('variables', {}).get('coordinates', [])
+        coords = data[coord_cols].values if len(coord_cols) >= 2 and all(c in data.columns for c in coord_cols) else None
+        validator.fit(data, coords=coords)
+
+        # Phase 2b: DAG sensitivity analysis (Canopy <-> Impervious direction)
+        validator.run_dag_sensitivity(data, coords=coords)
+
+        # ATE estimation — backdoor (existing)
+        validator.estimate_ate_all(data)
+
+        # ATE estimation — IPW (new)
+        validator.estimate_ate_ipw(data)
+
+        # ATE estimation — GPS for continuous treatments
+        validator.estimate_ate_gps(data)
+
+        # ATE estimation — covariate matching
+        validator.estimate_ate_matching(data)
+
+        # ATE estimation — doubly-robust (new)
+        validator.estimate_ate_dr(data)
+
+        # Phase 4: Spatial CATE via CausalForestDML
+        validator.run_spatial_cate(data, stage3_dir)
+
+        # Phase 4b: Dose-response curves (non-linear treatment effects)
+        validator.compute_dose_response(data, stage3_dir)
+
+        # Phase 5: Elasticity, relative importance, bootstrap
+        validator.compute_elasticity(data)
+        validator.compute_relative_importance(data)
+        validator.run_enhanced_bootstrap(data)
+
+        # Phase 5b: Mediation decomposition with CI propagation
+        validator.compute_mediation_effects(data)
+
+        # Phase 5c: Location-stratified effects
+        validator.compute_location_stratified_effects(data)
+
+        # Refutation tests (existing + Cinelli-Hazlett)
+        validator.run_refutations(data)
+
+        # Phase 6: Causal evaluation diagnostics (cumulative curves, calibration)
+        try:
+            from sparc.evaluation.causal_evaluation import run_causal_diagnostics
+            print("\n  Running causal evaluation diagnostics...")
+            run_causal_diagnostics(validator, data, stage3_dir)
+        except Exception as e:
+            print(f"  Causal diagnostics skipped: {e}")
+
+        # Phase 7: Physics prior diagnostic comparison table
+        validator.build_coefficient_comparison_table()
+
+        result = validator.produce_scenario_coefficients(stage3_dir)
 
     # Save a human-readable summary
     summary_path = os.path.join(stage3_dir, 'causal_validation_summary.txt')

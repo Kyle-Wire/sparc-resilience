@@ -46,18 +46,18 @@
     },
     "gwrf": {
       "n_estimators": 100,
-      "k_neighbors": 200,
+      "k_neighbors": 100,
       "min_samples_leaf": 5,
       "n_jobs": 1,
       "subsample_fraction": null,
-      "subsample_n": 5000
+      "subsample_n": null
     },
     "ggpgam": {
-      "n_splines": 9,
-      "n_spatial_bases": 30,
-      "lam": 0.5,
+      "n_splines": 5,
+      "n_spatial_bases": 10,
+      "lam": 0.6,
       "fit_intercept": true,
-      "max_iter": 150,
+      "max_iter": 100,
       "tol": 0.0001,
       "verbose": false,
       "callbacks": null,
@@ -87,7 +87,16 @@
       "regularization": "l2",
       "meta_learner_params": {
         "lightgbm": {
-          "num_leaves": 63
+          "objective": "regression",
+          "metric": "rmse",
+          "boosting_type": "gbdt",
+          "num_leaves": 31,
+          "learning_rate": 0.05,
+          "feature_fraction": 0.9,
+          "bagging_fraction": 0.8,
+          "bagging_freq": 5,
+          "verbose": -1,
+          "random_state": 42
         },
         "xgboost": {
           "objective": "reg:squarederror",
@@ -114,7 +123,7 @@
       "buffer_size": 300,
       "stratify_y": true,
       "buffer_size_auto": true,
-      "min_test_size": 1641,
+      "min_test_size": 50,
       "spatial_autocorr_threshold": 0.1,
       "overlap_tolerance": 0.05,
       "clustering_method": "kmeans",
@@ -128,8 +137,8 @@
       32
     ],
     "activation": "relu",
-    "dropout_rate": 0.15,
-    "batch_size": 512,
+    "dropout_rate": 0.2,
+    "batch_size": 256,
     "epochs": 120,
     "learning_rate": 0.001,
     "optimizer": "adam",
@@ -170,5 +179,11 @@
     "stage_1": "Comprehensive_Hyperparameter_Configuration",
     "stage_2": "Stage_2_Spatial_CV",
     "final_output": "Final_Interpretation_Results"
+  },
+  "pipeline_execution": {
+    "skip_stage_2_base_models": false,
+    "skip_stage_2b_full_retrain": false,
+    "skip_stage_3_standard_meta": true,
+    "skip_stage_3b_enhanced_meta": true
   }
 }

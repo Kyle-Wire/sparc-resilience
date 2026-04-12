@@ -242,14 +242,15 @@ class ScenarioSimulator:
         self._mgwr_coefficients_raw = raw_coeffs
         self._mgwr_scaler_scale = scaler.scale_  # keep σ for scale-invariant reliability check
 
-        # Build name→index map.  feature_names_ may be generic (feature_0 etc.)
-        # so we rely on the feature order from feature_info.json / self.features.
-        for j, feat in enumerate(self.features):
+        # Build name→index map.  Use the GWR model's actual feature_names_
+        # (which may be a subset of self.features) to avoid index-out-of-bounds.
+        gwr_features = feature_names if feature_names else self.features
+        for j, feat in enumerate(gwr_features):
             self._mgwr_feature_map[feat] = j
 
         n_pts = raw_coeffs.shape[0]
         print(f"   MGWR local coefficients extracted: {n_pts} points × {raw_coeffs.shape[1]} features")
-        for feat in self.features:
+        for feat in gwr_features:
             j = self._mgwr_feature_map[feat]
             rc = raw_coeffs[:, j]
             nz = rc != 0
@@ -707,6 +708,17 @@ class ScenarioSimulator:
 
         # Extract MGWR local coefficients from the GWR model
         self._extract_mgwr_coefficients()
+
+        # Load feature info (actual features used during training)
+        feature_info_path = self.model_dir / "feature_info.json"
+        if feature_info_path.exists():
+            import json as _json_fi
+            with open(feature_info_path) as _fi_f:
+                _fi = _json_fi.load(_fi_f)
+            trained_features = _fi.get("feature_names", self.features)
+            if trained_features != self.features:
+                print(f"   Overriding config features ({len(self.features)}) with trained features ({len(trained_features)}): {trained_features}")
+                self.features = trained_features
 
         # Load feature scaler (saved by enhanced_spatial_cv)
         scaler_path = self.model_dir / "feature_scaler.pkl"
@@ -4106,8 +4118,29 @@ class ScenarioSimulator:
         if verbose:
             print(f"   V2 models loaded on {device}")
 
-        # Prepare scenario results using existing coefficient-based deltas
-        # with uncertainty from the neural meta-learner
+        # Load NUTS posterior chains if available from Stage 3
+        nuts_beta = None
+        nuts_treatments = None
+        stage_dirs = self.config.get('output', {}).get('stage_dirs', {})
+        stage3_name = stage_dirs.get('stage_3', 'Stage_3_Causal_Validation')
+        bayesian_dir = Path(self.config['output']['base_dir']) / stage3_name / "bayesian"
+        nuts_beta_path = bayesian_dir / "nuts_beta.npy"
+        nuts_summary_path = bayesian_dir / "nuts_summary.json"
+        if nuts_beta_path.exists() and nuts_summary_path.exists():
+            import json as _json_nuts
+            try:
+                nuts_beta = np.load(nuts_beta_path)  # (n_samples, n_treatments)
+                with open(nuts_summary_path) as _f:
+                    _ns = _json_nuts.load(_f)
+                nuts_treatments = _ns.get("treatments", [])
+                if verbose:
+                    print(f"   Loaded NUTS posterior chains: {nuts_beta.shape} for {nuts_treatments}")
+            except Exception as e:
+                if verbose:
+                    print(f"   Could not load NUTS posteriors: {e}")
+                nuts_beta = None
+
+        # Prepare scenario results using NUTS posterior or coefficient-based deltas
         baseline_pred = self._predict_baseline(data)[0]
         results_df = data.copy()
         results_df["pred_baseline"] = baseline_pred
@@ -4123,16 +4156,41 @@ class ScenarioSimulator:
             increments = scenario.get("increments", [])
 
             for inc in increments:
-                coeff = self.get_causal_coefficient(var_name)
-                if coeff is None:
-                    coeff = self._get_physics_coefficient(var_name) if hasattr(self, '_get_physics_coefficient') else 0.0
-                if coeff is None:
-                    coeff = 0.0
+                # Use NUTS posterior chains for this treatment if available
+                if nuts_beta is not None and nuts_treatments and var_name in nuts_treatments:
+                    tidx = nuts_treatments.index(var_name)
+                    beta_samples = nuts_beta[:, tidx]  # (n_posterior,)
+                    # Sample a subset for efficiency
+                    n_use = min(n_posterior_samples, len(beta_samples))
+                    rng = np.random.default_rng(42)
+                    sample_idx = rng.choice(len(beta_samples), size=n_use, replace=False)
+                    betas = beta_samples[sample_idx]
 
-                delta = coeff * inc
-                pred_scenario = baseline_pred + delta
+                    # Compute posterior predictive for each sample
+                    deltas = betas * inc  # (n_use,)
+                    delta_mean = float(np.mean(deltas))
+                    delta_std = float(np.std(deltas))
+                    delta_ci5 = float(np.percentile(deltas, 5))
+                    delta_ci95 = float(np.percentile(deltas, 95))
 
-                frac_exceed = float(np.mean(pred_scenario > exceedance_threshold))
+                    pred_scenario = baseline_pred + delta_mean
+                    frac_exceed = float(np.mean(pred_scenario > exceedance_threshold))
+                    inference_label = "nuts_posterior"
+                else:
+                    # Fallback to point coefficient
+                    coeff = self.get_causal_coefficient(var_name)
+                    if coeff is None:
+                        coeff = self._get_physics_coefficient(var_name) if hasattr(self, '_get_physics_coefficient') else 0.0
+                    if coeff is None:
+                        coeff = 0.0
+
+                    delta_mean = coeff * inc
+                    delta_std = 0.0
+                    delta_ci5 = delta_mean
+                    delta_ci95 = delta_mean
+                    pred_scenario = baseline_pred + delta_mean
+                    frac_exceed = float(np.mean(pred_scenario > exceedance_threshold))
+                    inference_label = "coefficient"
 
                 for area_id, area_name in self.area_names.items():
                     if self.area_column not in data.columns:
@@ -4145,12 +4203,35 @@ class ScenarioSimulator:
                         "Variable": var_name,
                         "Increment": inc,
                         "Area": area_name,
-                        "Mean_Delta": float(np.mean(delta) if np.isscalar(delta) else np.mean(delta)),
+                        "Mean_Delta": float(delta_mean),
+                        "Std_Delta": float(delta_std),
+                        "CI_5": float(delta_ci5),
+                        "CI_95": float(delta_ci95),
                         "Exceedance_Prob": frac_exceed,
-                        "Inference": "bayesian",
+                        "Inference": inference_label,
+                    })
+
+                if not self.area_names:
+                    summary_rows.append({
+                        "Variable": var_name,
+                        "Increment": inc,
+                        "Area": "all",
+                        "Mean_Delta": float(delta_mean),
+                        "Std_Delta": float(delta_std),
+                        "CI_5": float(delta_ci5),
+                        "CI_95": float(delta_ci95),
+                        "Exceedance_Prob": frac_exceed,
+                        "Inference": inference_label,
                     })
 
         summary_df = pd.DataFrame(summary_rows) if summary_rows else pd.DataFrame()
+
+        # Save bma_scenario_summary.csv (V2 dev doc output)
+        if not summary_df.empty:
+            bma_out = self.output_dir / "bma_scenario_summary.csv"
+            summary_df.to_csv(bma_out, index=False)
+            if verbose:
+                print(f"   Saved bma_scenario_summary.csv -> {bma_out}")
 
         meta: Dict[str, Any] = {
             "model_info": self._v2_meta_info,
@@ -4162,4 +4243,333 @@ class ScenarioSimulator:
             print(f"   {len(summary_rows)} scenario-area combinations evaluated")
             print(f"   Exceedance threshold: {exceedance_threshold}")
 
+        # Generate scenario visualizations
+        if not summary_df.empty:
+            self._plot_bayesian_scenario_visuals(summary_df, verbose=verbose)
+
+        # Generate spatial maps (cooling surface, exceedance, portfolio)
+        self._plot_spatial_scenario_maps(
+            data, nuts_beta, nuts_treatments, results_df, verbose=verbose,
+        )
+
         return summary_df, meta
+
+    # ------------------------------------------------------------------
+    # Bayesian scenario visualisation
+    # ------------------------------------------------------------------
+
+    def _plot_bayesian_scenario_visuals(
+        self,
+        summary_df: "pd.DataFrame",
+        verbose: bool = True,
+    ) -> None:
+        """Generate bar chart and diminishing returns plots for bayesian scenarios."""
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+        except ImportError:
+            if verbose:
+                print("  [PLOTS] matplotlib not available — skipping scenario plots")
+            return
+
+        figs_dir = self.output_dir / "scenario_figures"
+        figs_dir.mkdir(parents=True, exist_ok=True)
+
+        variables = summary_df["Variable"].unique()
+        colors = {"Pct_Canopy": "#2ECC71", "Pct_Impervious": "#E74C3C",
+                  "Albedo": "#F39C12", "NDVI": "#27AE60",
+                  "Elevation_m": "#8E44AD", "Distance_from_water_m": "#3498DB"}
+
+        # 1. Scenario summary bar chart (Mean Delta with CI bands)
+        fig, ax = plt.subplots(figsize=(12, 6))
+        bar_data = []
+        for _, row in summary_df.iterrows():
+            label = f"{row['Variable']}\n({row['Increment']:+g})"
+            bar_data.append({
+                "label": label,
+                "mean": row["Mean_Delta"],
+                "ci5": row["CI_5"],
+                "ci95": row["CI_95"],
+                "var": row["Variable"],
+                "inference": row["Inference"],
+            })
+
+        x_pos = range(len(bar_data))
+        bar_colors = [colors.get(d["var"], "#95A5A6") for d in bar_data]
+        means = [d["mean"] for d in bar_data]
+        yerr_lo = [d["mean"] - d["ci5"] for d in bar_data]
+        yerr_hi = [d["ci95"] - d["mean"] for d in bar_data]
+
+        ax.bar(x_pos, means, color=bar_colors, edgecolor="white", alpha=0.85)
+        ax.errorbar(x_pos, means, yerr=[yerr_lo, yerr_hi], fmt="none",
+                    ecolor="black", capsize=4, capthick=1.5, elinewidth=1.5)
+        ax.axhline(0, color="gray", lw=1, ls="--", alpha=0.5)
+        ax.set_xticks(list(x_pos))
+        ax.set_xticklabels([d["label"] for d in bar_data], fontsize=8)
+        ax.set_ylabel("Mean \u0394 Outcome (z-score)", fontsize=11)
+        ax.set_title("Bayesian Posterior Scenario Predictions",
+                     fontsize=14, fontweight="bold")
+
+        # Inference type annotation
+        for i, d in enumerate(bar_data):
+            marker = "\u2605" if d["inference"] == "nuts_posterior" else "\u25CB"
+            ax.text(i, means[i] + max(yerr_hi) * 0.05, marker,
+                    ha="center", va="bottom", fontsize=10)
+
+        ax.text(0.98, 0.02,
+                "\u2605 = NUTS posterior   \u25CB = coefficient fallback",
+                transform=ax.transAxes, ha="right", va="bottom", fontsize=8,
+                style="italic", color="gray")
+        fig.tight_layout()
+        fig.savefig(figs_dir / "bayesian_scenario_summary.png", dpi=200,
+                    bbox_inches="tight")
+        plt.close(fig)
+
+        # 2. Per-variable diminishing returns curves
+        for var in variables:
+            var_df = summary_df[summary_df["Variable"] == var].sort_values("Increment")
+            if len(var_df) < 2:
+                continue
+
+            fig, ax = plt.subplots(figsize=(8, 5))
+            incs = var_df["Increment"].values
+            means_v = var_df["Mean_Delta"].values
+            ci5 = var_df["CI_5"].values
+            ci95 = var_df["CI_95"].values
+
+            c = colors.get(var, "#95A5A6")
+            ax.plot(incs, means_v, "o-", color=c, lw=2, markersize=6,
+                    label="Posterior mean")
+            ax.fill_between(incs, ci5, ci95, alpha=0.2, color=c,
+                            label="90% credible interval")
+            ax.axhline(0, color="gray", lw=1, ls="--", alpha=0.5)
+            ax.set_xlabel(f"{var} increment", fontsize=11)
+            ax.set_ylabel("\u0394 Outcome (z-score)", fontsize=11)
+            ax.set_title(f"Dose-Response: {var}", fontsize=13, fontweight="bold")
+            ax.legend(fontsize=9)
+            fig.tight_layout()
+            fig.savefig(figs_dir / f"diminishing_returns_{var}.png", dpi=200,
+                        bbox_inches="tight")
+            plt.close(fig)
+
+        if verbose:
+            print(f"   Scenario visualizations saved to {figs_dir}")
+
+    # ------------------------------------------------------------------
+    # Spatial scenario maps (cooling surface, exceedance, portfolio)
+    # ------------------------------------------------------------------
+
+    def _plot_spatial_scenario_maps(
+        self,
+        data: pd.DataFrame,
+        nuts_beta: Optional[np.ndarray],
+        nuts_treatments: Optional[list],
+        results_df: pd.DataFrame,
+        verbose: bool = True,
+    ) -> None:
+        """Generate spatial maps: cooling potential, exceedance probability, portfolio."""
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            from matplotlib.colors import TwoSlopeNorm
+        except ImportError:
+            if verbose:
+                print("  [PLOTS] matplotlib not available — skipping spatial maps")
+            return
+
+        if nuts_beta is None or nuts_treatments is None:
+            if verbose:
+                print("  [PLOTS] No NUTS posteriors — skipping spatial maps")
+            return
+
+        # Get coordinates
+        x_col, y_col = self.coord_cols[0], self.coord_cols[1]
+        if x_col not in data.columns or y_col not in data.columns:
+            if verbose:
+                print(f"  [PLOTS] Coordinate columns {x_col}, {y_col} not found")
+            return
+
+        x = data[x_col].values
+        y = data[y_col].values
+        baseline = results_df["pred_baseline"].values if "pred_baseline" in results_df.columns else data[self.target_col].values
+
+        figs_dir = self.output_dir / "scenario_figures"
+        figs_dir.mkdir(parents=True, exist_ok=True)
+
+        # Response units for axis labels
+        units = self.config.get("project", {}).get("response_units", "z-score")
+
+        # ---- 1. Cooling potential surface for each treatment at a reference increment ----
+        ref_increments = {}
+        for scenario in self.scenarios:
+            var = scenario["variable"]
+            incs = scenario.get("increments", [])
+            if incs:
+                # Pick the middle increment as a representative scenario
+                ref_increments[var] = incs[len(incs) // 2]
+
+        treatment_vars = [v for v in nuts_treatments if v in ref_increments]
+        if treatment_vars:
+            n_vars = len(treatment_vars)
+            fig, axes = plt.subplots(1, n_vars, figsize=(7 * n_vars, 6), squeeze=False)
+
+            for vi, var in enumerate(treatment_vars):
+                ax = axes[0, vi]
+                tidx = nuts_treatments.index(var)
+                inc = ref_increments[var]
+                beta_mean = float(np.mean(nuts_beta[:, tidx]))
+
+                # Per-point delta accounting for physical caps
+                current = data[var].values if var in data.columns else np.zeros(len(data))
+                # Find scenario to get bounds
+                scenario_cfg = next(
+                    (s for s in self.scenarios if s["variable"] == var), {}
+                )
+                max_val = scenario_cfg.get("max_val", current.max() + abs(inc))
+                min_val = scenario_cfg.get("min_val", current.min() - abs(inc))
+                direction = scenario_cfg.get("direction", "increase")
+
+                if direction == "increase":
+                    effective_inc = np.clip(current + inc, min_val, max_val) - current
+                else:
+                    effective_inc = current - np.clip(current - inc, min_val, max_val)
+                    effective_inc = -effective_inc  # make it a decrease
+
+                delta_t = beta_mean * effective_inc
+                post_intervention = baseline + delta_t
+
+                vmax = max(abs(np.percentile(delta_t, 2)),
+                           abs(np.percentile(delta_t, 98)), 0.01)
+                norm = TwoSlopeNorm(vmin=-vmax, vcenter=0, vmax=vmax)
+                sc = ax.scatter(x, y, c=delta_t, cmap="RdBu_r", norm=norm,
+                                s=0.3, alpha=0.6, rasterized=True)
+                plt.colorbar(sc, ax=ax, shrink=0.8,
+                             label=f"ΔT ({units})")
+                sign = "+" if direction == "increase" else "-"
+                ax.set_title(f"{var} {sign}{inc}\nMean ΔT = {np.mean(delta_t):.3f}",
+                             fontsize=11, fontweight="bold")
+                ax.set_xlabel(x_col)
+                ax.set_ylabel(y_col if vi == 0 else "")
+                ax.set_aspect("equal")
+
+            fig.suptitle("Cooling Potential Surface — Per-Point Temperature Change",
+                         fontsize=14, fontweight="bold", y=1.02)
+            fig.tight_layout()
+            fig.savefig(figs_dir / "cooling_potential_surface.png", dpi=300,
+                        bbox_inches="tight")
+            plt.close(fig)
+
+        # ---- 2. Exceedance probability map ----
+        # P(cooling > 1 °F) at each point using full posterior
+        cooling_threshold = 1.0  # 1 unit in response scale
+        if treatment_vars:
+            n_vars = len(treatment_vars)
+            fig, axes = plt.subplots(1, n_vars, figsize=(7 * n_vars, 6), squeeze=False)
+
+            for vi, var in enumerate(treatment_vars):
+                ax = axes[0, vi]
+                tidx = nuts_treatments.index(var)
+                inc = ref_increments[var]
+                beta_samples = nuts_beta[:, tidx]  # (n_posterior,)
+
+                current = data[var].values if var in data.columns else np.zeros(len(data))
+                scenario_cfg = next(
+                    (s for s in self.scenarios if s["variable"] == var), {}
+                )
+                max_val = scenario_cfg.get("max_val", current.max() + abs(inc))
+                min_val = scenario_cfg.get("min_val", current.min() - abs(inc))
+                direction = scenario_cfg.get("direction", "increase")
+
+                if direction == "increase":
+                    effective_inc = np.clip(current + inc, min_val, max_val) - current
+                else:
+                    effective_inc = current - np.clip(current - inc, min_val, max_val)
+                    effective_inc = -effective_inc
+
+                # For each point, compute fraction of posterior samples
+                # that produce cooling > threshold
+                # delta_t[i, s] = beta_samples[s] * effective_inc[i]
+                # For cooling: delta_t < -threshold (temperature decrease)
+                delta_matrix = np.outer(effective_inc, beta_samples)  # (n_points, n_posterior)
+                exceed_prob = np.mean(delta_matrix < -cooling_threshold, axis=1)
+
+                sc = ax.scatter(x, y, c=exceed_prob, cmap="YlOrRd",
+                                vmin=0, vmax=1,
+                                s=0.3, alpha=0.6, rasterized=True)
+                plt.colorbar(sc, ax=ax, shrink=0.8,
+                             label=f"P(cooling > {cooling_threshold} {units})")
+                sign = "+" if direction == "increase" else "-"
+                ax.set_title(f"{var} {sign}{inc}\nMean P = {np.mean(exceed_prob):.2%}",
+                             fontsize=11, fontweight="bold")
+                ax.set_xlabel(x_col)
+                ax.set_ylabel(y_col if vi == 0 else "")
+                ax.set_aspect("equal")
+
+            fig.suptitle(
+                f"Exceedance Probability — P(cooling > {cooling_threshold} {units})",
+                fontsize=14, fontweight="bold", y=1.02,
+            )
+            fig.tight_layout()
+            fig.savefig(figs_dir / "exceedance_probability_map.png", dpi=300,
+                        bbox_inches="tight")
+            plt.close(fig)
+
+        # ---- 3. Intervention portfolio map ----
+        # Combined effect of all treatment variables at their reference increments
+        total_delta = np.zeros(len(data))
+        portfolio_desc_parts = []
+        for var in treatment_vars:
+            tidx = nuts_treatments.index(var)
+            inc = ref_increments[var]
+            beta_mean = float(np.mean(nuts_beta[:, tidx]))
+
+            current = data[var].values if var in data.columns else np.zeros(len(data))
+            scenario_cfg = next(
+                (s for s in self.scenarios if s["variable"] == var), {}
+            )
+            max_val = scenario_cfg.get("max_val", current.max() + abs(inc))
+            min_val = scenario_cfg.get("min_val", current.min() - abs(inc))
+            direction = scenario_cfg.get("direction", "increase")
+
+            if direction == "increase":
+                effective_inc = np.clip(current + inc, min_val, max_val) - current
+            else:
+                effective_inc = current - np.clip(current - inc, min_val, max_val)
+                effective_inc = -effective_inc
+
+            total_delta += beta_mean * effective_inc
+            sign = "+" if direction == "increase" else "-"
+            portfolio_desc_parts.append(f"{var} {sign}{inc}")
+
+        if len(treatment_vars) > 0:
+            fig, ax = plt.subplots(figsize=(9, 7))
+            vmax = max(abs(np.percentile(total_delta, 2)),
+                       abs(np.percentile(total_delta, 98)), 0.01)
+            norm = TwoSlopeNorm(vmin=-vmax, vcenter=0, vmax=vmax)
+            sc = ax.scatter(x, y, c=total_delta, cmap="RdBu_r", norm=norm,
+                            s=0.3, alpha=0.6, rasterized=True)
+            plt.colorbar(sc, ax=ax, shrink=0.8,
+                         label=f"Combined ΔT ({units})")
+            ax.set_title(
+                f"Intervention Portfolio — Combined Effect\n"
+                f"Mean ΔT = {np.mean(total_delta):.3f} {units}",
+                fontsize=13, fontweight="bold",
+            )
+            ax.set_xlabel(x_col)
+            ax.set_ylabel(y_col)
+            ax.set_aspect("equal")
+
+            desc = " + ".join(portfolio_desc_parts)
+            ax.text(0.02, 0.02, desc, transform=ax.transAxes,
+                    fontsize=8, style="italic", va="bottom",
+                    bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8))
+
+            fig.tight_layout()
+            fig.savefig(figs_dir / "intervention_portfolio_map.png", dpi=300,
+                        bbox_inches="tight")
+            plt.close(fig)
+
+        if verbose:
+            print(f"   Spatial scenario maps saved to {figs_dir}")

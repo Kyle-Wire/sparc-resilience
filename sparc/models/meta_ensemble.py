@@ -771,12 +771,25 @@ class MetaEnsemble:
         
         print(f"Computing PDP curves for {len(self.feature_names)} meta-features...")
         
+        # Wrap raw LightGBM Booster in sklearn-compatible estimator for partial_dependence
+        class _BoosterWrapper:
+            """Minimal sklearn-compatible wrapper around lgb.Booster."""
+            def __init__(self, booster):
+                self._booster = booster
+                self.classes_ = None  # Not a classifier
+            def fit(self, X, y=None):
+                return self
+            def predict(self, X):
+                return self._booster.predict(X)
+
+        estimator = _BoosterWrapper(self.model)
+        
         # Compute PDP for each meta-feature
         for feat_idx, feat_name in enumerate(tqdm(self.feature_names, desc="PDP Extraction")):
             try:
                 # Compute partial dependence
                 pdp_result = partial_dependence(
-                    self.model, 
+                    estimator, 
                     X_meta_scaled, 
                     features=[feat_idx],
                     grid_resolution=50,

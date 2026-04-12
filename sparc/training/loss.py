@@ -149,10 +149,11 @@ def sparc_joint_loss(
     ce = torch.tensor(0.0, device=T_pred.device)
     if exceedance_preds and thresholds:
         for exc_pred, thresh in zip(exceedance_preds, thresholds):
+            exc_clamped = exc_pred.squeeze().clamp(1e-6, 1 - 1e-6)
+            if not torch.isfinite(exc_clamped).all():
+                continue  # skip if NaN/inf leaked through
             target = (y_true > thresh).float()
-            ce = ce + F.binary_cross_entropy(
-                exc_pred.squeeze().clamp(1e-6, 1 - 1e-6), target
-            )
+            ce = ce + F.binary_cross_entropy(exc_clamped, target)
         ce = ce * 0.5
     loss_components["cross_entropy"] = ce.item()
 

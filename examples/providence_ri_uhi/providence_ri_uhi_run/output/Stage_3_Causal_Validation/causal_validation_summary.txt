@@ -42,36 +42,8 @@ STRUCTURAL COEFFICIENTS (parent -> child)
 ATE ESTIMATES
                    Variable    Backdoor         IPW         GPS       Match          DR   Agreement
   -------------------------  ----------  ----------  ----------  ----------  ----------  ----------
-                 Pct_Canopy    -0.01525    -0.68532    -0.01949    -1.11352    -0.01885          NO
-             Pct_Impervious    +0.01830    +0.91132    +0.01436    +1.23517    +0.01741          NO
-                     Albedo    -2.78044    -0.35910    -2.79550    +0.06338    -2.94464          NO
-
-CATE (LinearDML)
-                 Pct_Canopy  mean=-0.01935  std=0.00494
-             Pct_Impervious  mean=+0.01785  std=0.00168
-                     Albedo  mean=-2.67613  std=0.76093
-
-SPATIAL CATE (CausalForestDML)
-                 Pct_Canopy  mean=-0.00217  std=0.00166
-             Pct_Impervious  mean=+0.00438  std=0.00165
-                     Albedo  mean=-2.20913  std=1.51005
-
-ELASTICITY COEFFICIENTS
-                 Pct_Canopy  eps = -0.0048
-             Pct_Impervious  eps = +0.0132
-                     Albedo  eps = -0.0127
-
-RELATIVE IMPORTANCE
-             Pct_Impervious  RI = 0.511
-                 Pct_Canopy  RI = 0.379
-                     Albedo  RI = 0.110
-
-BOOTSTRAP 95% CONFIDENCE INTERVALS
-                 Pct_Canopy  [-0.01932, -0.01831]  SE=0.00025
-             Pct_Impervious  [+0.02016, +0.02117]  SE=0.00028
-                     Albedo  [-3.22270, -2.68897]  SE=0.14446
+                 Pct_Canopy         N/A         N/A         N/A         N/A         N/A         N/A
+             Pct_Impervious         N/A         N/A         N/A         N/A         N/A         N/A
+                     Albedo         N/A         N/A         N/A         N/A         N/A         N/A
 
 REFUTATION TESTS
-                 Pct_Canopy  placebo=PASS, rcc=PASS, subset=PASS, unobs_cc=PASS, e-value=2.08, RV=0.317
-             Pct_Impervious  placebo=PASS, rcc=PASS, subset=PASS, unobs_cc=PASS, e-value=2.47, RV=0.375
-                     Albedo  placebo=PASS, rcc=PASS, subset=PASS, unobs_cc=PASS, e-value=1.43, RV=0.092

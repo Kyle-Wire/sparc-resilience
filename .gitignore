@@ -60,3 +60,5 @@ sparc-desktop/src-tauri/target/
 dist/
 *.spec
 /examples/providence_ri_uhi/v2_run
+/examples
+/examples

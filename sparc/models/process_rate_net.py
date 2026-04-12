@@ -46,7 +46,7 @@ class ProcessRateNet(nn.Module):
     def __init__(self, n_inputs: int, domain_config: dict) -> None:
         super().__init__()
 
-        self.bounds_lo = float(domain_config["bounds"][0])
+        self.bounds_lo = max(float(domain_config["bounds"][0]), 1e-8)
         self.bounds_hi = float(domain_config["bounds"][1])
         self.prior_mean = float(domain_config["prior_mean"])
         self.material_priors = domain_config.get("material_priors", {})
@@ -196,3 +196,58 @@ class ProcessRateNet(nn.Module):
             })
 
         return report
+
+
+class SourceTermNet(nn.Module):
+    """
+    Learn the mapping: physics features → local source/sink term S(x).
+
+    The source term captures spatially-varying forcing in the PDE
+    ``α∇²T = S``.  Unlike ProcessRateNet, S can be positive (heat
+    source, e.g. impervious surfaces) or negative (heat sink, e.g.
+    tree canopy evapotranspiration).
+
+    Initialized near zero so the physics loss starts as before (∇²T ≈ 0)
+    and the network learns deviations where data supports them.
+
+    Parameters
+    ----------
+    n_inputs : int
+        Number of physics input features.
+    scale : float
+        Soft output scale (tanh × scale). Controls the initial range
+        of learnable source terms.  Set to a value consistent with
+        α × ∇²T magnitudes in the domain (default 1.0).
+    """
+
+    def __init__(self, n_inputs: int, scale: float = 1.0) -> None:
+        super().__init__()
+        self.scale = scale
+        hidden = 64
+
+        self.network = nn.Sequential(
+            nn.Linear(n_inputs, hidden),
+            nn.LayerNorm(hidden),
+            nn.GELU(),
+            nn.Linear(hidden, hidden),
+            nn.LayerNorm(hidden),
+            nn.GELU(),
+            nn.Linear(hidden, 1),
+        )
+
+        # Near-zero init so initial source ≈ 0 (matches prior behavior)
+        nn.init.xavier_uniform_(self.network[-1].weight, gain=0.01)
+        nn.init.zeros_(self.network[-1].bias)
+
+    def forward(self, physics_features: torch.Tensor) -> torch.Tensor:
+        """
+        Parameters
+        ----------
+        physics_features : (N, n_inputs)
+
+        Returns
+        -------
+        source : (N, 1) — unbounded source/sink term
+        """
+        raw = self.network(physics_features)
+        return self.scale * torch.tanh(raw)

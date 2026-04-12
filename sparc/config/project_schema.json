@@ -155,8 +155,8 @@
         "bootstrap_n": {
           "type": "integer",
           "default": 100,
-          "minimum": 5,
-          "description": "Number of bootstrap iterations for ATE confidence intervals"
+          "minimum": 0,
+          "description": "Number of bootstrap iterations for ATE confidence intervals (0 = disabled)"
         },
         "actionable_variables": {
           "type": "array",
@@ -281,7 +281,7 @@
         "overwrite_outputs": {"type": "boolean", "default": false},
         "run_mc_uncertainty": {"type": "boolean", "default": true, "description": "Run Monte-Carlo uncertainty propagation on scenarios"},
         "n_mc_draws":        {"type": "integer", "default": 50, "minimum": 10, "description": "Number of MC draws for uncertainty propagation"},
-        "scenario_mode":     {"type": "string", "enum": ["auto", "dag_coefficient", "model_reprediction", "hybrid"], "default": "auto", "description": "Scenario prediction mode: auto (hybrid if DAG exists, else physics-only), dag_coefficient (MGWR+DAG), model_reprediction (base-model consensus), hybrid (model consensus direct + DAG indirect)"},
+        "scenario_mode":     {"type": "string", "enum": ["auto", "dag_coefficient", "model_reprediction", "hybrid", "bayesian"], "default": "auto", "description": "Scenario prediction mode: auto (hybrid if DAG exists, else physics-only), dag_coefficient (MGWR+DAG), model_reprediction (base-model consensus), hybrid (model consensus direct + DAG indirect), bayesian (V2 NUTS posterior)"},
         "temporal_holdout_fraction": {"type": "number", "default": 0.0, "minimum": 0.0, "maximum": 0.5, "description": "Fraction of most recent time steps to hold out for temporal validation (0 = disabled)"},
         "run_sensitivity_analysis": {"type": "boolean", "default": false, "description": "Run global sensitivity analysis on physics priors"},
         "sensitivity_method":       {"type": "string", "enum": ["morris", "sobol"], "default": "morris", "description": "Sensitivity analysis method (morris is faster, sobol is quantitative)"}

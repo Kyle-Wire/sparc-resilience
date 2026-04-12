@@ -75,18 +75,37 @@ physics:
 # ---------------------------------------------------------------------------
 causal:
   dag_file: "causal/dag.yml"
-  estimator: "dml"              # "dml" (recommended, doubly-robust), "hgb" (non-linear monotone), or "ols" (linear)
+  inference: "bayesian"          # "frequentist" = V1 DML, "bayesian" = V2 MC³ + NUTS
+  estimator: "dml"              # V1 fallback estimator (used when inference=frequentist)
   dml_shrinkage: 0.25           # Reduced shrinkage toward physics priors (DML is debiased)
   dml_cv_folds: 5               # Cross-fitting folds for DML
   spatial_block_size: null       # null = auto from Stage 1 correlogram; or integer meters
   dag_blend_weight: 0.8          # Weight for causal coefficients in Mode 1 physics delta (0.5 for OLS, 0.8 for DML)
   estimate_cate: true          # Set true to run EconML CATE (requires econml package)
-  ipw_enabled: true            # Run IPW ATE estimation alongside backdoor
-  gps_enabled: true            # Run Generalized Propensity Score (continuous treatment)
-  matching_enabled: true       # Run covariate matching cross-check
-  doubly_robust: true          # Run doubly-robust estimation (LinearDML for continuous)
-  dose_response: true          # Compute dose-response curves (non-linear effects)
-  bootstrap_n: 100             # Number of bootstrap iterations for ATE CIs (10 for fast_mode)
+  ipw_enabled: false           # Skip V1 IPW — using Bayesian inference
+  gps_enabled: false           # Skip V1 GPS — using Bayesian inference
+  matching_enabled: false      # Skip V1 matching — using Bayesian inference
+  doubly_robust: false         # Skip V1 DR — using Bayesian inference
+  dose_response: false         # Skip V1 dose-response — using Bayesian inference
+  bootstrap_n: 0               # Skip V1 bootstrap — NUTS gives posterior CIs
+  # V2 MC³ settings
+  mc3:
+    n_iterations: 10000          # MCMC iterations over DAG space
+    n_chains: 4                  # Parallel tempering chains
+    temperatures: [1.0, 0.5, 0.25, 0.1]  # Inverse temperatures (cold → hot)
+    burnin_fraction: 0.25        # Fraction of iterations to discard
+    edge_penalty: 1.0            # Penalty per edge to discourage dense graphs
+    seed: 42
+  # V2 NUTS settings
+  nuts:
+    n_samples: 15000              # Posterior draws (2K sufficient with good mixing)
+    n_warmup: 5000               # Adaptation iterations (200 adapt + 800 warmup transitions)
+    max_tree_depth: 10            # Maximum NUTS tree depth (capped for spatial model)
+    target_accept_rate: 0.65     # Target MH acceptance for spatial model
+    spatial_basis_k: 20          # RBF basis knots for spatial model (20 × 3 = 60 spatial params)
+    mc3_edge_threshold: 0.30     # Min MC³ edge prob to include treatment in NUTS
+    max_rows: 10000               # Subsample for tractable posterior
+    seed: 42
   actionable_variables:
     - Pct_Canopy
     - Pct_Impervious
@@ -126,8 +145,14 @@ pipeline:
   n_spatial_folds: 5
   fast_mode: false
   overwrite_outputs: false
-  run_mc_uncertainty: true       # Run Monte-Carlo uncertainty propagation in Stage 4
-  n_mc_draws: 10                 # Number of MC draws
+  scenario_mode: "bayesian"      # "auto" | "hybrid" | "bayesian" — V2 uses NUTS posterior
+  run_mc_uncertainty: false      # Not needed — V2 bayesian gives posterior uncertainty directly
+  n_mc_draws: 10                 # Number of MC draws (used when run_mc_uncertainty=true)
+  pipeline_execution:
+    skip_stage_2_base_models: false      # Run OLS/GWR/GWRF/GGPGAM OOF for surrogate pretraining
+    skip_stage_2b_full_retrain: false    # Retrain base models on full data for fitted values
+    skip_stage_3_standard_meta: false    # Run LightGBM meta for comparison
+    skip_stage_3b_enhanced_meta: false   # Run enhanced LightGBM meta for comparison
 
 flags:
   use_gwen_selection: true
@@ -164,6 +189,9 @@ models:
     n_optuna_trials: 25
     include_base_features: true
     include_laplacian_pca: true
+
+  # Set meta_learner to "lightgbm" to revert to V1 LightGBM stacking.
+  meta_learner: "neural"        # "neural" (V2 default) or "lightgbm" (V1)
 
   deep_kriging:
     enabled: true
@@ -283,6 +311,20 @@ benchmark_metrics:
   enabled: true
   area_weighted: false           # UHI data is projected (not lat-lon grid)
   lat_column: null
+
+# ---------------------------------------------------------------------------
+# V2 Process Rate Network (domain-specific physical rate parameter)
+# ---------------------------------------------------------------------------
+process_rate:
+  enabled: true
+  name: "thermal_admittance"
+  units: "W·m⁻²·K⁻¹"
+  bounds: [0.5, 12.0]           # Physical bounds for thermal admittance
+  prior_mean: 4.0               # Literature default
+  inputs:                        # Features that drive the process rate
+    - Pct_Impervious
+    - Albedo
+    - Elevation_m
 
 # ---------------------------------------------------------------------------
 # Fingerprinting (disabled for UHI — no forced pattern available)

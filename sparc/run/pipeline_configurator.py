@@ -31,14 +31,14 @@ class PipelineConfigurator:
             self.stage1_dir = paths.stage0_dir
         self.base_config = load_config()
         
-        # Default parameters that can be manually overridden
-        self.default_variables = ['Elevation_m', 'Distance_from_water_m', 'Pct_Canopy', 'Pct_Impervious', 'Pct_GreenSpace']
+        # Default parameters: prefer predictors from project.yml, fall back
+        # to a hard-coded list only when no project config is available.
+        yml_predictors = self.base_config.get('predictors', {}).get('base_model', [])
+        self.default_variables = list(yml_predictors) if yml_predictors else [
+            'Elevation_m', 'Distance_from_water_m', 'Pct_Canopy', 'Pct_Impervious',
+        ]
         self.default_bandwidths = {
-            'Elevation_m': 2000.0,
-            'Distance_from_water_m': 1500.0,
-            'Pct_Canopy': 1800.0,
-            'Pct_Impervious': 2200.0,
-            'Pct_GreenSpace': 1600.0
+            v: 2000.0 for v in self.default_variables
         }
 
         # Block size: prefer user override from project.yml, else default
@@ -500,7 +500,8 @@ class PipelineConfigurator:
                 'stage_1': 'Comprehensive_Hyperparameter_Configuration',
                 'stage_2': 'Stage_2_Spatial_CV',
                 'final_output': 'Final_Interpretation_Results'
-            }
+            },
+            'pipeline_execution': self.base_config.get('pipeline', {}).get('pipeline_execution', {}),
         }
         
         return complete_config

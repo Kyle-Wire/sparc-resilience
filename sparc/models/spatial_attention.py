@@ -157,8 +157,13 @@ class SparseSpatialAttention(nn.Module):
         K_all = self.W_k(X)                     # (N, d_model)
         V_all = self.W_v(X)                     # (N, d_model)
 
+        # FIX: Mask invalid (-1) neighbor indices from batch-local remapping.
+        # PyTorch treats -1 as "last element", silently corrupting attention.
+        valid_mask = (knn_index >= 0) & (knn_index < N)  # (N, k) bool
+        safe_idx = knn_index.clamp(min=0)                # replace -1 with 0 (masked out later)
+
         # Gather neighbor keys and values — O(N*k) memory, not O(N²)
-        flat_idx = knn_index.reshape(-1)        # (N*k,)
+        flat_idx = safe_idx.reshape(-1)          # (N*k,)
         K = K_all[flat_idx].reshape(N, k, self.d_model)  # (N, k, d_model)
         V = V_all[flat_idx].reshape(N, k, self.d_model)  # (N, k, d_model)
 
@@ -170,6 +175,11 @@ class SparseSpatialAttention(nn.Module):
         # Scaled dot-product attention
         scale = math.sqrt(self.d_k)
         scores = (Q @ K.transpose(-2, -1)) / scale  # (N, heads, 1, k)
+
+        # Mask invalid neighbor positions to -inf before softmax
+        inv_mask = (~valid_mask).unsqueeze(1).unsqueeze(1)   # (N, 1, 1, k)
+        scores = scores.masked_fill(inv_mask, -1e9)
+
         weights = F.softmax(scores, dim=-1)          # (N, heads, 1, k)
         weights = self.attn_dropout(weights)
 

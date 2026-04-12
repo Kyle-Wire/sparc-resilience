@@ -2,38 +2,95 @@
   "base_models": {
     "ols": {
       "r2": 0.2942235860990381,
-      "rmse": 1.437494724070379
+      "rmse": 1.437494724070379,
+      "status": "success",
+      "nrmse": 0.8401050017116681,
+      "pattern_correlation": 0.5424311352775897,
+      "amplitude_ratio": 0.5452384566050726,
+      "tail_low_rmse": 2.5746653640836086,
+      "tail_low_r2": -11.692166519045282,
+      "tail_low_bias": 2.364829683558913,
+      "tail_high_rmse": 2.049743395875881,
+      "tail_high_r2": -8.840148693451047,
+      "tail_high_bias": -1.8703241994743736,
+      "extreme_rmse_ratio": 1.7910781312596693,
+      "skill_vs_global_mean": 0.2942235860990381,
+      "skill_vs_spatial_knn": NaN
     },
     "gwr": {
       "r2": 0.8281913705955757,
-      "rmse": 0.7092431919543077
+      "rmse": 0.7092431919543077,
+      "status": "success",
+      "nrmse": 0.41449804511532296,
+      "pattern_correlation": 0.9100602974605863,
+      "amplitude_ratio": 0.9124960028641754,
+      "tail_low_rmse": 0.9204489365679489,
+      "tail_low_r2": -0.622159598269038,
+      "tail_low_bias": 0.4145955413005618,
+      "tail_high_rmse": 0.9478756858924521,
+      "tail_high_r2": -1.104289246981193,
+      "tail_high_bias": -0.5968092740955682,
+      "extreme_rmse_ratio": 1.3364607466736431,
+      "skill_vs_global_mean": 0.8281913705955757,
+      "skill_vs_spatial_knn": NaN
     },
     "gwrf": {
-      "r2": 0.8976491921496008,
-      "rmse": 0.5474170582468717
+      "r2": 0.9143286216740893,
+      "rmse": 0.5008302659658037,
+      "status": "success",
+      "nrmse": 0.2926967343957062,
+      "pattern_correlation": 0.9562217617910562,
+      "amplitude_ratio": 0.9513014967015005,
+      "tail_low_rmse": 0.6305575281609652,
+      "tail_low_r2": 0.23872142029785592,
+      "tail_low_bias": 0.22783771422351548,
+      "tail_high_rmse": 0.6530375606898136,
+      "tail_high_r2": 0.0011989460825123643,
+      "tail_high_bias": -0.3000876403345432,
+      "extreme_rmse_ratio": 1.3039099372928122,
+      "skill_vs_global_mean": 0.9143286216740893,
+      "skill_vs_spatial_knn": NaN
     },
     "ggpgam": {
-      "r2": 0.8394641434384935,
-      "rmse": 0.6855809063680134
+      "r2": 0.7458772093009458,
+      "rmse": 0.8625702932094828,
+      "status": "success",
+      "nrmse": 0.5041059320212907,
+      "pattern_correlation": 0.8636710417314682,
+      "amplitude_ratio": 0.8565676434883434,
+      "tail_low_rmse": 1.0792741683553913,
+      "tail_low_r2": -1.230271554566897,
+      "tail_low_bias": 0.5540664000994905,
+      "tail_high_rmse": 1.2387692133246873,
+      "tail_high_r2": -2.5940447173837056,
+      "tail_high_bias": -0.9240109572591871,
+      "extreme_rmse_ratio": 1.4361371161014946,
+      "skill_vs_global_mean": 0.7458772093009458,
+      "skill_vs_spatial_knn": NaN
     }
   },
   "meta_ensemble_standard": {
-    "r2": 0.9023419043775673,
-    "rmse": 0.5347204757175457
+    "r2": 0.9125805838386376,
+    "rmse": 0.5059139326857843
   },
   "meta_ensemble_enhanced": {
-    "r2": 0.9145425268531054,
-    "rmse": 0.5002046361210173
+    "r2": 0.9175431461667939,
+    "rmse": 0.49134446616297983
   },
   "meta_ensemble_best": {
-    "r2": 0.9145425268531054,
-    "rmse": 0.5002046361210173,
+    "r2": 0.9175431461667939,
+    "rmse": 0.49134446616297983,
     "approach": "Enhanced (with Laplacian)"
   },
+  "v2_neural_meta": {
+    "r2": 0.9060256993408493,
+    "rmse": 0.5245383433313197,
+    "executed": true
+  },
   "spatial_autocorrelation": {
-    "moran_i": 0.10612154748990699,
+    "moran_i": 0.2973841146446715,
     "p_value": 0.001,
-    "autocorr_range": 250.0,
+    "autocorr_range": 97.49555251234253,
     "threshold_met": false
   },
   "deep_kriging": {
@@ -42,13 +99,13 @@
     "executed": false
   },
   "final_ensemble": {
-    "r2": 0.9145425268531054,
-    "rmse": 0.5002046361210173
+    "r2": 0.9125805838386376,
+    "rmse": 0.5059139326857843
   },
   "improvements": {
-    "standard_meta_vs_base": 0.004692712227966522,
-    "enhanced_meta_vs_base": 0.016893334703504626,
-    "best_meta_vs_base": 0.016893334703504626,
-    "laplacian_benefit": 0.012200622475538103
+    "standard_meta_vs_base": -0.0017480378354517434,
+    "enhanced_meta_vs_base": 0.00321452449270454,
+    "best_meta_vs_base": 0.00321452449270454,
+    "laplacian_benefit": 0.004962562328156284
   }
 }

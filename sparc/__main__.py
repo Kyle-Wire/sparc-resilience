@@ -208,10 +208,10 @@ def cmd_run(args):
     if stage in ('0', 'all'):
         print("\n>>> Stage 0b: Pipeline Configuration")
         from sparc.run.pipeline_configurator import PipelineConfigurator
-        configurator = PipelineConfigurator(stage1_dir=str(paths.stage1_dir))
+        configurator = PipelineConfigurator(stage1_dir=str(paths.stage0_dir))
 
         # If dataset_profile.json exists, apply profiler recommendations
-        profile_path = paths.stage1_dir / 'dataset_profile.json'
+        profile_path = paths.stage0_dir / 'dataset_profile.json'
         if profile_path.exists():
             with open(profile_path) as _f:
                 _profile = json.load(_f)
@@ -340,6 +340,9 @@ def _run_scenarios(config, paths, project_path):
         else:
             print("  [PRIMARY] dag_coefficient requested but no DAG — falling back to physics")
             summary_df, results_gdf = sim.run(verbose=True)
+    elif scenario_mode == 'bayesian':
+        print("  [PRIMARY] Bayesian posterior scenario simulation (MC³ + NUTS)")
+        summary_df, results_gdf = sim.run_bayesian_scenarios(data, verbose=True)
     else:
         print(f"  [PRIMARY] Physics-prior blending (mode={scenario_mode})")
         summary_df, results_gdf = sim.run(verbose=True)

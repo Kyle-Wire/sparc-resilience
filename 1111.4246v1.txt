@@ -1,0 +1,919 @@
+arXiv:1111.4246v1 [stat.CO] 18 Nov 2011 
+The No-U-Turn Sampler: Adaptively Setting Path Lengths in Hamiltonian Monte Carlo 
+Matthew D. Ho.man  mdhoffma@cs.princeton.edu  
+Department of Statistics  
+Columbia University  
+New York, NY 10027, USA  
+Andrew Gelman  gelman@stat.columbia.edu  
+Departments of Statistics and Political Science  
+Columbia University  
+New York, NY 10027, USA  
+
+Abstract 
+Hamiltonian Monte Carlo (HMC) is a Markov chain Monte Carlo (MCMC) algorithm that avoids the random walk behavior and sensitivity to correlated parameters that plague many MCMC methods by taking a series of steps informed by .rst-order gradient information. These features allow it to converge to high-dimensional target distributions much more quickly than simpler methods such as random walk Metropolis or Gibbs sampling. However, HMC’s performance is highly sensitive to two user-speci.ed parameters: a step size  and a desired number of steps L. In particular, if L is too small then the algorithm exhibits undesirable random walk behavior, while if L is too large the algorithm wastes computation. We introduce the No-U-Turn Sampler (NUTS), an extension to HMC that eliminates the need to set a number of steps L. NUTS uses a recursive algorithm to build a set of likely candidate points that spans a wide swath of the target distribution, stopping automatically when it starts to double back and retrace its steps. Empirically, NUTS perform at least as e.ciently as and sometimes more e.ciently than a well tuned standard HMC method, without requiring user intervention or costly tuning runs. We also derive a method for adapting the step size parameter  on the .y based on primal-dual averaging. NUTS can thus be used with no hand-tuning at all. NUTS is also suitable for applications such as BUGS-style automatic inference engines that require e.cient “turnkey” sampling algorithms. 
+Keywords: Markov chain Monte Carlo, Hamiltonian Monte Carlo, Bayesian inference, 
+adaptive Monte Carlo, dual averaging. 
+1. Introduction 
+Hierarchical Bayesian models are a mainstay of the machine learning and statistics com­munities. Exact posterior inference in such models is rarely tractable, however, and so researchers and practitioners must usually resort to approximate statistical inference meth­ods. Deterministic 
+approximate 
+inference 
+algorithms 
+(for 
+example, 
+those 
+reviewed 
+by 
+Wain­
+wright 
+and 
+Jordan 
+(2008)) 
+can be e.cient, but introduce bias and can be di.cult to apply to some models. Rather than computing a deterministic approximation to a target poste­rior (or other) distribution, Markov chain Monte Carlo (MCMC) methods o.er schemes for drawing a series of correlated samples that will converge in distribution to the target distri­bution (Neal, 
+1993). 
+MCMC methods are sometimes less e.cient than their deterministic counterparts, but are more generally applicable and are asymptotically unbiased. 
+Not all MCMC algorithms are created equal. For complicated models with many param­eters, simple methods such as random-walk Metropolis (Metropolis 
+et 
+al., 
+1953) 
+and Gibbs sampling 
+(Geman 
+and 
+Geman, 
+1984) 
+may require an unacceptably long time to converge to the target distribution. This is in large part due to the tendency of these methods to explore parameter space via ine.cient random walks 
+(Neal, 
+1993). 
+When model parameters are continuous rather than discrete, Hamiltonian Monte Carlo (HMC), also known as hybrid Monte Carlo, is able to suppress such random walk behavior by means of a clever auxiliary variable scheme that transforms the problem of sampling from a target distribution into the problem of simulating Hamiltonian dynamics 
+(Neal, 
+2011). 
+The cost of HMC per indepen­dent sample from a target distribution of dimension D is roughly O(D5/4), which stands in sharp contrast with the O(D2) cost of random-walk Metropolis (Creutz, 
+1988). 
+
+HMC’s increased e.ciency comes at a price. First, HMC requires the gradient of the log-posterior. Computing the gradient for a complex model is at best tedious and at worst impossible, but this requirement can be made less onerous by using automatic di.erentiation (Griewank 
+and 
+Walther, 
+2008). 
+Second, HMC requires that the user specify at least two parameters: a step size  and a number of steps L for which to run a simulated Hamiltonian system. A poor choice of either of these parameters will result in a dramatic drop in HMC’s e.ciency. Methods from the adaptive MCMC 
+literature 
+(see 
+Andrieu 
+and 
+Thoms 
+(2008) 
+for 
+a review) can be used to tune  on the .y, but setting L typically requires one or more costly tuning runs, as well as the expertise to interpret the results of those tuning runs. This hurdle limits the more widespread use of HMC, and makes it challenging to incorporate HMC into a general-purpose inference engine such as BUGS (Gilks 
+and 
+Spiegelhalter, 
+1992), 
+JAGS (http://mcmc-jags.sourceforge.net), 
+Infer.NET (Minka 
+et 
+al.), 
+HBC (Daume 
+III, 
+2007), 
+or PyMC 
+(Patil 
+et 
+al., 
+2010). 
+
+The main contribution of this paper is the No-U-Turn Sampler (NUTS), an MCMC algorithm that closely resembles HMC, but eliminates the need to choose the problematic number-of-steps parameter L. We also provide a new dual averaging (Nesterov, 
+2009) 
+scheme for automatically tuning the step size parameter  in both HMC and NUTS, making it possible to run NUTS with no hand-tuning at all. We will show that the tuning-free version of NUTS samples as e.ciently as (and sometimes more e.ciently than) HMC, even ignoring the cost of .nding optimal tuning parameters for HMC. Thus, NUTS brings the e.ciency of HMC to users (and generic inference systems) that are unable or disinclined to spend time tweaking an MCMC algorithm. 
+2. Hamiltonian Monte Carlo 
+In Hamiltonian Monte Carlo 
+(HMC) 
+(Neal, 
+2011, 
+1993; 
+Duane 
+et 
+al., 
+1987), 
+we introduce an auxiliary momentum variable rd for each model variable .d. In the usual implementation, these momentum variables are drawn independently from the standard normal distribution, yielding the (unnormalized) joint density 
+p(., r) . exp{L(.) - 1 r · r}, (1)
+2 
+Algorithm 1 Hamiltonian Monte Carlo 
+Given .0 , , L, L,M: for m =1 to M do Sample r0 ~N (0,I). .˜ . .m-10
+Set .m . .m-1 , ,r˜ . r . for i =1 to L do Set .,˜˜ ., ˜
+r . Leapfrog(˜ r, ). 
+end for  
+exp{L(.˜)- 1 r˜·r˜}
+2
+With probability a = min 1,, set .m . .˜, rm .-r˜. 
+exp{L(.m-1)- 1 r0·r0}
+2 
+end for 
+function Leapfrog(., r, ) Set r˜ . r +(/2)r.L(.). Set .˜ . . + r˜. Set r˜ . r˜+(/2)r.L(.˜). 
+˜
+return ., r˜. 
+where L is the logarithm of the joint density of the variables of interest . (up to a normalizing constant) and x · y denotes the inner product of the vectors x and y. We can interpret this augmented model in physical terms as a .ctitious Hamiltonian system where . denotes a particle’s position in D-dimensional space, rd denotes the momentum of that particle in 
+1
+the dth dimension, L is a position-dependent negative potential energy function, r · r is
+2 
+the kinetic energy of the particle, and log p(., r) is the negative energy of the particle. We can simulate the evolution over time of the Hamiltonian dynamics of this system via the “leapfrog” integrator, which proceeds according to the updates 
+t+/2 .t+t+ 
+r = r t +(/2)r.L(.t); = .t + rt+/2; r = r t+/2 +(/2)r.L(.t+), (2) 
+where rt and .t denote the values of the momentum and position variables r and . at time t and r. denotes the gradient with respect to .. Since the update for each coordinate depends only on the other coordinates, the leapfrog updates are volume-preserving—that is, the volume of a region remains unchanged after mapping each point in that region to a new point via the leapfrog integrator. 
+A standard procedure for drawing M samples via Hamiltonian Monte Carlo is described in Algorithm 1. 
+I denotes the identity matrix and N (µ, S) denotes a multivariate normal distribution with mean µ and covariance matrix S. For each sample m, we .rst resample the momentum variables from a standard multivariate normal, which can be inetpreted as a Gibbs sampling update. We then apply L leapfrog updates to the position and momen­tum variables . and r, generating a proposal position-momentum pair .,˜ r˜. We propose 
+m
+setting .m = .˜ and r = -r˜, and accept or reject this proposal according to the Metropo­lis algorithm (Metropolis 
+et 
+al., 
+1953). 
+This is a valid Metropolis proposal because it is time-reversible and the leapfrog integrator is volume-preserving; using an algorithm for simulating Hamiltonian dynamics that did not preserve volume would seriously complicate the computation of the Metropolis acceptance probability. The negation of r˜ in the pro­posal is theoretically necessary to produce time-reversibility, but can be omitted in practice if one is only interested in sampling from p(.). The algorithm’s original name, “Hybrid Monte Carlo,” refers to the hybrid approach of alternating between updating . and r via Hamiltonian simulation and updating r via Gibbs sampling. 
+.,r˜)
+The term log p(˜ , on which the acceptance probability a depends, is the negative 
+p(.,r) 
+change in energy of the simulated Hamiltonian system from time 0 to time L. If we could simulate the Hamiltonian dynamics exactly, then a would always be 1, since energy is con­served in Hamiltonian systems. The error introduced by using a discrete-time simulation 
+.,r˜)
+depends on the step size parameter —speci.cally, the change in energy | log p(˜ | is pro-
+p(.,r) portional to 2 for large L, or 3 if L = 1 (Leimkuhler 
+and 
+Reich, 
+2004). 
+In theory the error can grow without bound as a function of L, but in practice it typically does not when using the leapfrog discretization. This allows us to run HMC with many leapfrog steps, generating proposals for . that have high probability of acceptance even though they are distant from the previous sample. The performance of HMC depends strongly on choosing suitable values for  and L. If  is too large, then the simulation will be inaccurate and yield low acceptance rates. If  is too small, then computation will be wasted taking many small steps. If L is too small, then successive samples will be close to one another, resulting in undesirable random walk 
+behavior and slow mixing. If L is too large, then HMC will generate trajectories that loop back and retrace their steps. This is doubly wasteful, since work is being done to bring the proposal .˜ closer to the initial position .m-1 . Worse, if L is chosen so that the parameters 
+jump from one side of the space to the other each iteration, then the Markov chain may not even be ergodic (Neal, 
+2011). 
+More realistically, an unfortunate choice of L may result in a chain that is ergodic but slow to move between regions of low and high density. 
+3. Eliminating the Need to Hand-Tune HMC 
+HMC is a powerful algorithm, but its usefulness is limited by the need to tune the step size parameter  and number of steps L. Tuning these parameters for any particular problem re­quires some expertise, and usually one or more preliminary runs. Selecting L is particularly problematic; it is di.cult to .nd a simple metric for when a trajectory is too short, too long, or “just right,” and so practitioners commonly rely on heuristics based on autocorrelation statistics from preliminary runs (Neal, 
+2011). 
+
+Below, we present the No-U-Turn Sampler (NUTS), an extension of HMC that eliminates the need to specify a .xed value of L. In section 3.2 
+we present schemes for setting  based on the dual averaging algorithm of Nesterov 
+(2009). 
+
+3.1 No-U-Turn Hamiltonian Monte Carlo 
+Our .rst goal is to devise an MCMC sampler that retains HMC’s ability to suppress random walk behavior without the need to set the number L of leapfrog steps that the algorithm takes to generate a proposal. We need some criterion to tell us when we have simulated the dynamics for “long enough,” i.e., when running the simulation for more steps would no longer increase the distance between the proposal .˜ and the initial value of .. We use a convenient criterion based on the dot product between r˜ (the current momentum) and 
+˜
+. - . (the vector from our initial position to our current position), which is the derivative 
+
+Figure 1: Example of building a binary tree via repeated doubling. Each doubling proceeds by choosing a direction (forwards or backwards in time) uniformly at random, then simulating Hamiltonian dynamics for 2j leapfrog steps in that direction, where j is the number of previous doublings (and the height of the binary tree). The .gures at top show a trajectory in two dimensions (with corresponding binary tree in dashed lines) as it evolves over four doublings, and the .gures below show the evolution of the binary tree. In this example, the directions chosen were forward (light orange node), backward (yellow nodes), backward (blue nodes), and forward (green nodes). 
+with respect to time (in the Hamiltonian system) of half the squared distance between the initial position . and the current position .˜: 
+d (.˜ - .) · (.˜ - .) d 
+=(.˜ - .) · (.˜ - .)=(.˜ - .) · r.˜ (3)
+dt 2 dt 
+In other words, if we were to run the simulation for an in.nitesimal amount of additional time, then this quantity is proportional to the progress we would make away from our starting point .. 
+This suggests an algorithm in which one runs leapfrog steps until the quantity in equation 3 
+becomes less than 0; such an approach would simulate the system’s dynamics until the proposal location .˜ started to move back towards .. Unfortunately this algorithm does not guarantee time reversibility, and is therefore not guaranteed to converge to the correct distribution. NUTS overcomes this issue by means of a recursive algorithm reminiscent of the doubling procedure devised by Neal 
+(2003) 
+for slice sampling. 
+NUTS begins by introducing a slice variable u with conditional distribution p(u|., r)= Uniform(u; [0, exp{L(.) - r · r}]), which renders the conditional distribution p(., r|u) Uniform(., r; {.0,r 
+1 
+2 
+1 
+2 
+0| exp{L(.) - 
+= 
+r · r}= u}). This slice sampling step is not strictly neces­sary, but it simpli.es both the derivation and the implementation of NUTS. In addition to is a contour of the target distribution, the black open circles are the positions . traced out by the leapfrog integrator and associated with elements of the set of visited states B, the black solid circle is the starting position, the red solid circles are positions associated with states that must be excluded from the set C of possible next samples because their joint probability is below the slice variable u, and the positions with a red “x” through them correspond to states that must be excluded from C to satisfy detailed balance. The blue arrow is the vector from the positions associated with the leftmost to the rightmost leaf nodes in the rightmost height-3 subtree, and the magenta arrow is the (normalized) momentum vector at the .nal state in the trajectory. The doubling process stops here, since the blue and magenta arrows make an angle of more than 90 degrees. The crossed-out nodes with a red “x” are in the right half-tree, and must be ignored when choosing the next sample. 
+
+being more complicated, the analogous algorithm that eliminates the slice variable seems empirically to be slightly less e.cient than the algorithm presented in this paper. 
+At a high level, after resampling u|., r, NUTS uses the leapfrog integrator to trace out a path forwards and backwards in .ctitious time, .rst running forwards or backwards 1 step, then forwards or backwards 2 steps, then forwards or backwards 4 steps, etc. This doubling process implicitly builds a balanced binary tree whose leaf nodes correspond to position-momentum states, as illustrated 
+in 
+Figure 
+1. 
+The doubling is halted when the subtrajectory from the leftmost to the rightmost nodes of any balanced subtree of the overall binary tree starts to double back on itself (i.e., the .ctional particle starts to make a “U-turn”). At this point NUTS stops the simulation and samples from among the set of points computed during the simulation, taking care to preserve detailed balance. Figure 2 
+illustrates an example of a trajectory computed during an iteration of NUTS. 
+Pseudocode implementing a e.cient version of NUTS is provided in Algorithm 3. 
+A detailed derivation follows below, along with a simpli.ed version of the algorithm that motivates and builds intuition about Algorithm 3 
+(but uses much more memory and makes smaller jumps). 
+3.1.1 Derivation of simplified NUTS algorithm 
+NUTS further augments the model p(., r) . exp{L(.)- 2003). 
+The joint probability of ., r, and u is 
+1 
+2
+r ·r} with a slice variable u (Neal, 
+
+p(., r, u) . I[u . [0, exp{L(.) -
+1 
+2
+r · r}]], (4) 
+where I[·] is 1 if the expression in brackets is true and 0 if it is false. The (unnormalized) marginal probability of . and r (integrating over u) is 
+p(., r) . exp{L(.) -
+1 
+2
+r · r}, (5) 
+1 
+as in standard HMC. The conditional probabilities p(u|., r) and p(., r|u) are each uniform, so long as the condition u = exp{L(.) - 
+We also add a .nite set C of candidate position-momentum states and another .nite set 
+2
+r · r} is satis.ed. 
+B.C to the model. B will be the set of all position-momentum states that the leapfrog integrator traces out during a given NUTS iteration, and C will be the subset of those states to which we can transition without violating detailed balance. B will be built up by randomly taking forward and backward leapfrog steps, and C will selected deterministically from B. The random procedure for building B and C given ., r, u, and  will de.ne a conditional distribution p(B, C|., r, u, ), upon which we place the following conditions: 
+C.1: All elements of C must be chosen in a way that preserves volume. That is, any 
+0
+deterministic transformations of ., r used to add a state .0,r to C must have a Jacobian with unit determinant. 
+C.2: p((., r) . C|., r, u, ) = 1. 
+C.3: p(u = exp{L(.0) -
+1 
+2 
+0
+r · r0}|(.0,r0) .C) = 1. 
+C.4: If (., r) .C and (.0,r0) .C then for any B, p(B, C|., r, u, )= p(B, C|.0,r0, u, ). 
+C.1 ensures that p(., r|(., r) .C) . p(., r), i.e. if we restrict our attention to the elements of C then we can treat the unnormalized probability density of a particular element of C as 
+7 
+an unnormalized probability mass. C.2 says that the current state ., r must be included in 
+C. C.3 requires that any state in C be in the slice de.ned by u, i.e., that any state (.0,r0) .C must have equal (and positive) conditional probability density p(.0,r0|u). C.4 states that B and C must have equal probability of being selected regardless of the current state ., r as long as (., r) .C (which it must be by C.2). 
+Deferring for the moment the question of how to construct and sample from a distribu­tion p(B, C|., r, u, ) that satis.es these conditions, we will now show that the the following procedure leaves the joint distribution p(., r, u, B, C|) invariant: 
+1. 
+sample r ~N (0,I), 
+
+2. 
+sample u ~ Uniform([0, exp{L(.t) - 1 r · r}]),
+
+3. 
+sample B, C from their conditional distribution p(B, C|.t, r, u, ), 
+
+4. 
+sample .t+1,r ~ T (.t, r, C), 
+
+
+2 
+where T (.0,r0|., r, C) is a transition kernel that leaves the uniform distribution over C in­variant, i.e., T must satisfy 
+X
+1 I[(.0,r0) .C]
+T (.0 ,r 0|., r, C) = (6)
+|C| |C| 
+(.,r).C 
+0
+for any .0,r . The notation .t+1,r ~ T (.t, r, C) denotes that we are resampling r in a way that depends on its current value. 
+Steps 1, 2, and 3 resample r, u, B, and C from their conditional joint distribution given .t , and therefore together constitute a valid Gibbs sampling update. Step 4 is valid because the joint distribution of . and r given u, B, C, and  is uniform on the elements of C: 
+p(., r|u, B, C,) . p(B, C|., r, u, )p(., r|u) . p(B, C|., r, u, )I[u = exp{L(.) - 1 r · r}] (7)
+2 
+. I[(., r) .C]. 
+Condition C.1 allows us to treat the unnormalized conditional density p(., r|u) . I[u = exp{L(.) - 1 r · r}] as an unnormalized conditional probability mass function. Conditions
+2 
+C.2 and C.4 ensure that p(B, C|., r, u, ) . I[(., r) .C] because by C.2 (., r) must be in C, and by C.4 for any B, C pair p(B, C|., r, u, ) is constant as a function of . and r as long as (., r) .C. Condition C.3 ensures that (., r) .C . u = exp{L(.)- 1 r ·r} (so the p(., r|u, )
+2 
+term is redundant). Thus, equation 7 
+implies that the joint distribution of . and r given u and C is uniform on the elements of C, and we are free to choose a new .t+1,rt+1 from any transition kernel that leaves this uniform distribution on C invariant. 
+We now turn our attention to the speci.c form for p(B, C|., r, u, ) used by NUTS. Conceptually, the generative process for building B proceeds by repeatedly doubling the size of a binary tree whose leaves correspond to position-momentum states. These states will constitute the elements of B. The initial tree has a single node corresponding to the initial state. Doubling proceeds by choosing a random direction vj ~ Uniform({-1, 1}) and taking 2j leapfrog steps of size vj (i.e., forwards in .ctional time if vj = 1 and backwards in .ctional time if vj = -1), where j is the current height of the tree. (The initial single-node tree is de.ned to have height 0.) For example, if vj = 1, the left half of the new tree is the old tree and the right half of the new tree is a balanced binary tree of height j whose leaf nodes correspond to the 2j position-momentum states visited by the new leapfrog trajectory. This doubling process is illustrated in Figure 1. 
+Given the initial state ., r and the step size , there are 2j possible trees of height j that can be built according to this procedure, each of which is equally likely. Conversely, the probability of reconstructing a particular tree of height j starting from any leaf node of that tree is 2-j regardless of which leaf node we start from. 
+We cannot keep expanding the tree forever, of course. We want to continue expanding B until one end of the trajectory we are simulating makes a “U-turn” and begins to loop back towards another position on the trajectory. At that point continuing the simulation is likely to be wasteful, since the trajectory will retrace its steps and visit locations in parameter space close to those we have already visited. We also want to stop expanding B if the error in the simulation becomes extremely large, indicating that any states discovered by continuing the simulation longer are likely to have astronomically low probability. (This may happen if we use a step size  that is too large, or if the target distribution includes hard constraints that make the log-density L go to -8 in some regions.) 
+The second rule is easy to formalize—we simply stop doubling if the tree includes a leaf node whose state ., r satis.es 
+1 
+L(.) - r · r - log u< -.max (8)
+2 
+for some nonnegative .max. We recommend setting .max to a large value like 1000 so that it does not interfere with the algorithm so long as the simulation is even moderately accurate. 
+We must be careful when de.ning the .rst rule so that we can build a sampler that neither violates detailed balance nor introduces excessive computational overhead. To de­termine whether to stop doubling the tree at height j, NUTS considers the 2j - 1 balanced binary subtrees of the height-j tree that have height greater than 0. NUTS stops the dou­
++
+bling process when for one of these subtrees the states .-,r- and .+,r associated with the leftmost and rightmost leaves of that subtree satis.es 
+- +
+(.+ - .-) · r< 0 or (.+ - .-) · r< 0. (9) 
+That is, we stop if continuing the simulation an in.nitesimal amount either forward or back­ward in time would reduce the distance between the position vectors .- and .+ . Evaluating the condition in equation 9 
+for each balanced subtree of a tree of height j requires 2j+1 - 2 inner products, which is comparable to the number of inner products required by the 2j - 1 leapfrog steps needed to compute the trajectory. Except for very simple models with very little data, the cost of these inner products is usually negligible compared to the cost of computing gradients. 
+This doubling process de.nes a distribution p(B|., r, u, ). We now de.ne a deterministic process for deciding which elements of B go in the candidate set C, taking care to satisfy conditions C.1–C.4 on p(B, C|., r, u, ) laid out above. C.1 is automatically satis.ed, since leapfrog steps are volume preserving and any element of C must be within some number 
+of leapfrog steps of every other element of C. C.2 is satis.ed as long as we include the 
+0
+initial state ., r in C, and C.3 is satis.ed if we exclude any element .0,r of B for which 
+0
+exp{L(.0) - 1 r · r0} <u. To satisfy condition C.4, we must ensure that p(B, C|., r, u, )= 
+2 
+p(B, C|.0,r0, u, ) for any (.0,r0) .C. For any start state (.0,r0) .B, there is at most one series of directions {v0,...,vj} for which the doubling process will reproduce B, so as long as we choose C deterministically given B either p(B, C|.0,r0, u, )=2-j = p(B, C|., r, u, ) or p(B, C|.0,r0, u, ) = 0. Thus, condition C.4 will be satis.ed as long as we exclude from C any state .0,r0 that could not have generated B. The only way such a state can arise is if starting from .0,r0 results in the stopping conditions in equations 8 
+or 9 
+being satis.ed before the entire tree has been built, causing the doubling process to stop too early. There are two cases to consider: 
+1. 
+The doubling procedure was stopped because either equation 8 
+or equation 9 
+was satis.ed by a state or subtree added during the .nal doubling iteration. In this case we must exclude from C any element of B that was added during this .nal doubling iteration, since starting the doubling process from one of these would lead to a stopping condition being satis.ed before the full tree corresponding to B has been built. 
+
+2. 
+The doubling procedure was stopped because equation 
+9 
+was satis.ed for the leftmost and rightmost leaves of the full tree corresponding to B. In this case no stopping condition was met by any state or subtree until B had been completed, and condition 
+
+
+C.4 is automatically satis.ed. 
+Algorithm 2 
+shows how to construct C incrementally while building B. After resam­pling the initial momentum and slice variables, it uses a recursive procedure resembling a depth-.rst search that eliminates the need to explicitly store the tree used by the doubling procedure. The BuildTree() function takes as input an initial position . and momentum r, a slice variable u, a direction v . {-1, 1}, a depth j, and a step size . It takes 2j leapfrog steps of size v (i.e. forwards in time if v = 1 and backwards in time if v = -1), and returns 
+.-- +
+1. 
+the backwardmost and forwardmost position-momentum states ,r and .+,r among the 2j new states visited; 
+
+2. 
+a set C0 of position-momentum states containing each newly visited state .0,r for 
+
+
+0
+0
+which exp{L(.0) - 1 r · r0} >u; and
+2 
+3. an indicator variable s; s = 0 indicates that a stopping criterion was met by some state or subtree of the subtree corresponding to the 2j new states visited by BuildTree(). 
+At the top level, NUTS repeatedly calls BuildTree() to double the number of points that have been considered until either BuildTree() returns s = 0 (in which case doubling stops and the new set C0 that was just returned must be ignored) or equation 9 
+is satis.ed for 
++
+the new backwardmost and forwardmost position-momentum states .-,r- and .+,r yet considered (in which case doubling stops but we can use the new set C0). Finally, we select the next position and momentum .m,r uniformly at random from C, the union of all of the valid sets C0 that have been returned, which clearly leaves the uniform distribution over C invariant. 
+Algorithm 2 Naive No-U-Turn Sampler 
+Given .0 , , L, M: for m =1 to M do Resample r0 ~N (0,I). 
+0
+Resample u ~ Uniform([0, exp{L(.m-1 - 1 r · r0}])
+2 
+= .m-1 - 0+ 0
+Initialize .- , .+ = .m-1 , r = r , r = r , j = 0, C = {(.m-1,r0)},s = 1. 
+while s =1 do Choose a direction vj ~ Uniform({-1, 1}). if vj = -1 then 
+.-- -
+,r , -, -, C0,s0 . BuildTree(.-,r ,u,vj , j, ). 
+else 
+++
+-, -,.+,r , C0,s0 . BuildTree(.+,r ,u,vj, j, ). 
+end if 
+0
+if s =1 then C.C.C0 . 
+end if 
+s . s0I[(.+ - .-) · r- = 0]I[(.+ - .-) · r+ = 0]. j . j + 1. 
+end while 
+Sample .m,r uniformly at random from C. 
+end for 
+function BuildTree(., r, u, v, j, ) 
+if j =0 then Base case—take one leapfrog step in the direction v. .00 . Leapfrog(., r, v).
+, rC0 .    {(.0, r0)}Ø  0if u = exp{L(.0) - 1 r2 else  · r0}  
+0 
+
+s0 . I[u< exp{.max + L(.0) - 1 r · r0}].
+2 
+00
+return .0,r0,.0,r , C0,s . else 
+Recursion—build the left and right subtrees. 
+.- + , C0
+,r-,.+,r ,s0 . BuildTree(., r, u, v, j - 1,). if v = -1 then 
+.-- , -, -, C00
+,r ,s00 . BuildTree(.-,r-, u, v, j - 1,). 
+else 
++ , C00
+-, -,.+,r ,s00 . BuildTree(.+,r+, u, v, j - 1,). 
+end if 
+0 . s0 00I[(.+ - .-) · r
+ss - = 0]I[(.+ - .-) · r+ = 0]. 
+C0 .C0 .C00 . + 0
+return .-,r-,.+,r , C0,s . end if 
+To summarize, 
+Algorithm 
+2 
+de.nes 
+a transition kernel that leaves p(., r, u, B, C|) invari­ant, and therefore leaves the target distribution p(.) . exp{L(.)} invariant. It does so by resampling the momentum and slice variables r and u, simulating a Hamiltonian trajectory forwards and backwards in time until that trajectory either begins retracing its steps or encounters a state with very low probability, carefully selecting a subset C of the states encountered on that trajectory that lie within the slice de.ned by the slice variable u, and .nally choosing the next position and momentum variables .m and r uniformly at random from C. Figure 
+2 
+shows 
+an example of a trajectory generated by an iteration of NUTS where equation 9 
+is satis.ed by the height-3 subtree at the end of the trajectory. Below, we will introduce some improvements to algorithm 2 
+that boost the algorithm’s memory e.ciency and allow it to make larger jumps on average. 
+3.1.2 Efficient NUTS 
+Algorithm 2 
+requires 2j - 1 evaluations of L(.) and its gradient (where j is the number of times BuildTree() is called), and O(2j) additional operations to determine when to stop doubling. In practice, for all but the smallest problems the cost of computing L and its gradient still dominates the overhead costs, so the computational cost of algorithm 2 
+per leapfrog step is comparable to that of a standard HMC algorithm. However, Algorithm 2 
+also requires that we store 2j position and momentum vectors, which may require an unacceptably large amount of memory. Furthermore, there are alternative transition kernels that satisfy detailed balance with respect to the uniform distribution on C that produce larger jumps on average than simple uniform sampling. Finally, if a stopping criterion is satis.ed in the middle of the .nal doubling iteration then there is no point in wasting computation to build up a set C0 that will never be used. 
+The third issue is easily addressed—if we break out of the recursion as soon as we encounter a zero value for the stop indicator s then the correctness of the algorithm is una.ected and we save some computation. We can address the second issue by using a more sophisticated transition kernel to move from one state (., r) .C to another state (.0,r0) .C while leaving the uniform distribution over C invariant. This kernel admits a memory-e.cient implementation that only requires that we store O(j) position and momentum vectors, rather than O(2j). 
+Consider the transition kernel 
+. 
+0.Cnew]
+. I[w if |Cnew| > |Cold|,
+|Cnew| 
+
+T (w 0|w, C)= |Cnew| 0.Cnew] 1 - |Cnew| , (10)
+I[w 0
+. |Cold| |Cnew| + |Cold| I[w = w] if |Cnew| = |Cold| 
+0
+where w and w are shorthands for position-momentum states (., r), Cnew and Cold are disjoint subsets of C such that Cnew .Cold = C, and w .Cold . In English, T proposes a move from Cold 
+|Cnew|to a random state in Cnew and accepts the move with probability |Cold| . This is equivalent 
+0 , Cold0 , Cnew0|w, Cold , Cnew) .
+to a Metropolis-Hastings kernel with proposal distribution q(w 0 .Cnew]I[Cold0 Cnew]I[Cnew0
+I[w == Cold], and it is straightforward to show that it satis.es detailed balance with respect to the uniform distribution on C, i.e. 
+0 
+p(w|C)T (w 0|w, C)= p(w 0|C)T (w|w, C), (11) 
+If we let Cnew
+and that T therefore leaves the uniform distribution over C invariant. be 
+the (possibly empty) set of elements added to C during the .nal iteration of the doubling 
+(i.e. those returned by the .nal call to BuildTree() and Cold be the older elements of C, then we can replace the uniform sampling of C at the end of Algorithm 2 
+with a draw 
+t
+from T (.t,r , C) and leave the uniform distribution on C invariant. In fact, we can apply T after every doubling, proposing a move to each new half-tree in turn. Doing so leaves the uniform distribution on each partially built C invariant, and therefore does no harm to the invariance of the uniform distribution on the fully built set C. Repeatedly applying T in this way increases the probability that we will jump to a state .t+1 far from the initial state .t; considering the process in reverse, it is as though we .rst tried to jump to the other side of C, then if that failed tried to make a more modest jump, and so on. This transition kernel is thus akin to delayed-rejection MCMC methods (Tierney 
+and 
+Mira, 
+1999), 
+but in this setting we can avoid the usual costs associated with evaluating new proposals. 
+The transition kernel above still requires that we be able to sample uniformly from the set C0 returned by BuildTree(), which may contain as many as 2j-1 elements. In fact, we can sample from C0 without maintaining the full set C0 in memory by exploiting the binary tree structure in Figure 1. 
+Consider a subtree of the tree explored in a call to BuildTree(), and let Csubtree denote the set of its leaf states that are in C0: we can factorize the probability that a state (., r) .Csubtree will be chosen uniformly at random from C0 as 
+1 |Csubtree| 1 
+p(., r|C0) = = (12)
+|C0| |C0| |Csubtree| = p((., r) .Csubtree|C)p(., r|(., r) .Csubtree, C). 
+That is, p(., r|C0) is the product of the probability of choosing some node from the subtree multiplied by the probability of choosing ., r uniformly at random from Csubtree. We use this observation to sample from C0 incrementally as we build up the tree. Each subtree above the bottom layer is built of two smaller subtrees. For each of these smaller subtrees, we sample a ., r pair from p(., r|(., r) .Csubtree) to represent that subtree. We then choose between these two pairs, giving the pair representing each subtree weight proportional to how many elements of C0 are in that subtree. This continues until we have completed the subtree associated with C0 and we have returned a sample .0 from C0 and an integer weight n0 encoding the size of C0 , which is all we need to apply T . This procedure only requires that we store O(j) position and momentum vectors in memory, rather than O(2j), and requires that we generate O(2j) extra random numbers (a cost that again is usually very small compared with the 2j - 1 gradient computations needed to run the leapfrog algorithm). 
+Algorithm 
+3 
+implements 
+all of the above improvements in pseudocode. Matlab code im­plementing the algorithm is also available at http://www.cs.princeton.edu/~mdhoffma, and a C++ implementation will also be available as part of the soon-to-be-released Stan inference package. 
+3.2 Adaptively Tuning  
+Having addressed the issue of how to choose the number of steps L, we now turn our attention to the step size parameter . To set  for both NUTS and HMC, we propose using stochastic optimization with vanishing 
+adaptation 
+(Andrieu 
+and 
+Thoms, 
+2008), speci.cally an adaptation of the primal-dual algorithm of Nesterov 
+(2009). 
+
+Perhaps the most commonly used vanishing adaptation algorithm in MCMC is the stochastic 
+approximation 
+method 
+of 
+Robbins 
+and 
+Monro 
+(1951). 
+Suppose we have a statistic Ht that describes some aspect of the behavior of an MCMC algorithm at iteration t = 1, 
+Algorithm 3 E.cient No-U-Turn Sampler 
+Given .0 , , L, M: for m =1 to M do Resample r0 ~N (0,I). 
+0
+Resample u ~ Uniform([0, exp{L(.m-1 - 1 r · r0}])
+2 
+= .m-1+
+Initialize .- = .m-1 , .+ , r- = r0,r = r0,j =0,.m = .m-1,n =1,s = 1. 
+while s =1 do Choose a direction vj ~ Uniform({-1, 1}). if vj = -1 then 
+-0 -
+.-,r , -, -,.0,n ,s0 . BuildTree(.-,r ,u,vj , j, ). 
+else 
+0 +
+-, -,.+,r+,.0,n ,s0 . BuildTree(.+,r ,u,vj, j, ). 
+end if 
+0
+if s =1 then 
+n
+With probability min{1, 0 }, set .m . .0 . 
+n 
+end if 
+0
+n . n + n . s . s0I[(.+ - .-) · r- = 0]I[(.+ - .-) · r+ = 0]. j . j + 1. 
+end while end for 
+function BuildTree(., r, u, v, j, ) 
+if j =0 then Base case—take one leapfrog step in the direction v. .0,r0 . Leapfrog(., r, v). 
+0
+n0 . I[u = exp{L(.0) - 1 r · r0}].
+2 
+0
+s0 . I[u< exp{.max + L(.0) - 1 r · r0}].
+2 
+00
+return .0,r0,.0,r0,.0,n ,s . else 
+Recursion—implicitly build the left and right subtrees. 
+0
+.-,r-,.+,r+,.0,n ,s0 . BuildTree(., r, u, v, j - 1,). 0
+if s =1 then if v = -1 then 
+- 00
+.-,r , -, -,.00,n ,s00 . BuildTree(.-,r-, u, v, j - 1,). 
+else 
+00
+-, -,.+,r+,.00,n ,s00 . BuildTree(.+,r+, u, v, j - 1,). 
+end if 
+n
+With probability n0+ 00 n00 , set .0 . .00 . 
+s0 . s00I[(.+ - .-) · r- = 0]I[(.+ - .-) · r+ = 0] 0 . n0 00
+n + n 
+end if 
+00
+return .-,r-,.+,r+,.0,n ,s . end if 
+and de.ne its expectation h(x) as 
+T
+X
+1 
+h(x) = Et[Ht|x] = lim E[Ht|x], (13)
+T .8 T 
+t=1 
+where x . R is a tunable parameter to the MCMC algorithm. For example, if at is the Metropolis acceptance probability for iteration t, we might de.ne Ht = d - at, where d is the desired average acceptance probability. If h is a nondecreasing function of x and a few other conditions such as boundedness of the iterates xt are met (see Andrieu 
+and 
+Thoms 
+(2008) 
+for details), the update 
+xt+1 . xt - .tHt (14) 
+is guaranteed to cause h(xt) to converge to 0 as long as the step size schedule de.ned by .t satis.es the conditions 
+XX 
+.t = 8; .2 < 8. (15)
+t tt 
+These conditions are satis.ed by schedules of the form .t = t-. for . . (0.5, 1]. As long as the per-iteration impact of the adaptation goes to 0 (as it will if .t = t-. and .> 0) the asymptotic behavior of the sampler is unchanged. That said, in practice x often gets “close enough” to an optimal value well before the step size . has gotten close enough to 0 to avoid disturbing the Markov chain’s stationary distribution. A common practice is therefore to adapt any tunable MCMC parameters during the burn-in phase, and freeze the tunable parameters afterwards (e.g., 
+(Gelman 
+et 
+al., 
+2004)). 
+
+Dual averaging: The optimal values of the parameters to an MCMC algorithm dur­ing the burn-in phase and the stationary phase are often quite di.erent. Ideally those parameters would therefore adapt quickly as we shift from the sampler’s initial, transient regime to its stationary regime. However, the diminishing step sizes of Robbins-Monro give disproportionate weight to the early iterations, which is the opposite of what we want. 
+Similar issues motivate the dual averaging scheme of Nesterov 
+(2009), 
+an algorithm for nonsmooth and stochastic convex optimization. Since solving an unconstrained convex optimization problem is equivalent to .nding a zero of a nondecreasing function (i.e., the (sub)gradient of the cost function), it is straightforward to adapt dual averaging to the problem of MCMC adaptation by replacing stochastic gradients with the statistics Ht. Again assuming that we want to .nd a setting of a parameter x . R such that h(x) = Et[Ht|x] = 0, we can apply the updates 
+v t
+X
+t 1 
+xt+1 . µ - Hi; x¯ t+1 . .txt+1 + (1 - .t)¯xt, (16)
+.t + t0 
+i=1 
+where µ is a freely chosen point that the iterates xt are shrunk towards, .> 0 is a free parameter that controls the amount of shrinkage towards µ, t0 = 0 is a free parameter that stabilizes the initial iterations of the algorithm, .t = t-. is a step size schedule obeying the conditions in equation 
+15, 
+and we de.ne x¯1 = x1. As in Robbins-Monro, the per-iteration impact of these updates on x goes to 0 as t goes to in.nity. Speci.cally, for large t we have 
+-0.5),
+xt+1 - xt = O(-Htt (17) 
+which clearly goes to 0 as long as the statistic Ht is bounded. The sequence of averaged iterates x¯ t is guaranteed to converge to a value such that h(¯xt) converges to 0. 
+The update scheme in equation 16 
+is slightly more elaborate than the update scheme of Nesterov 
+(2009), 
+which implicitly has t0 = 0 and . = 1. Introducing these parameters addresses issues that are more important in MCMC adaptation than in more conventional stochastic convex optimization settings. Setting t0 > 0 improves the stability of the algo­rithm in early iterations, which prevents us from wasting computation by trying out extreme values. This is particularly important for NUTS, and for HMC when simulation lengths are speci.ed in terms of the overall simulation length L instead of a .xed number of steps L. In both of these cases, lower values of  result in more work being done per sample, so we want to avoid casually trying out extremely low values of . Setting the parameter .< 1 allows us to give higher weight to more recent iterates and more quickly forget the iterates produced during the early burn-in stages. The bene.ts of introducing these parameters are less apparent in the settings originally considered by Nesterov, where the cost of a stochastic gradient computation is assumed to be constant and the stochastic gradients are assumed to be drawn i.i.d. given the parameter x. 
+Allowing t0 > 0 and . . (0.5, 1] does not a.ect the asymptotic convergence of the dual averaging algorithm. For any . . (0.5, 1], x¯ t will eventually converge to the same value 
+P v vv v 
+1 tt 1 tt 1 tt
+We can rewrite the term as ; is still O( t), which is the 
+ti=1 xt. .t+t0 .(t+t0) t.(t+t0) 
+only feature needed to guarantee convergence. 
+We used the values . =0.05,t0 = 10, and . =0.75 for all our experiments. We arrived at these values by trying a few settings for each parameter by hand with NUTS and HMC (with simulation lengths speci.ed in terms of L) on the stochastic volatility model described below and choosing a value for each parameter that seemed to produce reasonable behavior. Better results might be obtained with further tweaking, but these default parameters seem to work consistently well for both NUTS and HMC for all of the models that we tested. It is entirely possible that these parameter settings may not work as well for other sampling algorithms or for H statistics other than the ones described below. 
+Setting  in HMC: In HMC we want to .nd a value for the step size  that is neither too small (which would waste computation by taking needlessly tiny steps) nor too large (which would waste computation by causing high rejection rates). A standard approach is to tune  so that HMC’s average Metropolis acceptance probability is equal to some value d. Indeed, it has been shown that (under fairly strong assumptions) the optimal value of  for a given simulation length L is the one that produces an average Metropolis acceptance probability of approximately 0.65 (Beskos 
+et 
+al., 
+2010; 
+Neal, 
+2011). 
+For HMC, we de.ne a criterion hHMC() so that 
+() 
+HHMC = min 1,p(.˜t ,r˜t); hHMC() = Et[HHMC|], (18)
+tt 
+p(.t-1,rt,0) 
+t
+where .˜t and r˜ are the proposed position and momentum at the tth iteration of the Markov chain, .t-1 and rt,0 are the initial position and (resampled) momentum for the tth iteration of the Markov chain, HHMC is the acceptance probability of this tth HMC proposal and
+t 
+hHMC is the expected average acceptance probability of the chain in equilibrium for a .xed . Assuming that hHMC is nonincreasing as a function of , we can apply the updates in equation 16 
+with Ht = d - HHMC and x = log  to coerce hHMC = d for any d . (0, 1).
+t 
+Setting  in NUTS: Since there is no single accept/reject step in NUTS we must de.ne an alternative statistic to Metropolis acceptance probability. For each iteration we de.ne 
+Algorithm 4 Heuristic for choosing an initial value of  
+function FindReasonableEpsilon(.) Initialize  = 1, r ~N (0,I). Set .0,r0 . Leapfrog(., r, ).
+hi 
+0 
+p(.0 ,r )
+a . 2I > 0.5 - 1. 
+p(.,r)
+
+a p(.0 ,r )
+while 0 > 2-a do 
+p(.,r) 
+ . 2a. 
+Set .0,r0 . Leapfrog(., r, ). end while return . 
+Algorithm 5 Hamiltonian Monte Carlo with Dual Averaging 
+Given .0 , d, ., L, M, Madapt: ¯
+Set 0 = FindReasonableEpsilon(.),µ = log(100),¯ 0 =1,H0 =0,. =0.05,t0 = 10,. =0.75. for m =1 to M do Reample r0 ~N (0,I). ˜
+Set .m . .m-1 ,. . .m-1 ,r˜ . r0,Lm = max{1, Round(./m-1)}. for i =1 to Lm do Set .,˜˜ ., ˜
+r . Leapfrog(˜ r, m-1). 
+end for 
+no 
+exp{L(.˜)- 1 r˜·r˜}
+With probability a = min 1, 2 ., rm .-˜
+, set .m . ˜ r. 
+exp{L(.m-1)- 1 r0·r0}
+2 
+if m = Madapt then
+ 
+11
+¯¯
+Set Hm =1 - Hm-1 +(d - a).
+m+t0 m+t0
+v 
+m 
+¯
+Set log m = µ - Hm, log ¯ m = m-. log m + (1 - m-.) log ¯ m-1.
+. 
+else 
+Set m = ¯ Madapt . 
+end if end for 
+the statistic HNUTS and its expectation when the chain has reached equilibrium as
+t 
+
+X 
+HNUTS 1 p(., r) hNUTS = Et[HNUTS
+= min 1, ;], (19)
+tt
+|B.nal| p(.t-1,rt,0)t .,r.B.nal 
+t 
+where B.nal is the set of all states explored during the .nal doubling of iteration t of the
+t Markov chain and .t-1 and rt,0 are the initial position and (resampled) momentum for the HNUTS
+tth iteration of the Markov chain. can be understood as the average acceptance probability that HMC would give to the position-momentum states explored during the .nal doubling iteration. As above, assuming that HNUTS is nonincreasing in , we can apply the 
+= d - HNUTS
+updates in equation 16 
+with Ht and x = log  to coerce hNUTS = d for any d . (0, 1). 
+Finding a good initial value of : The dual averaging scheme outlined above should work for any initial value 1 and any setting of the shrinkage target µ. However, convergence will be faster if we start from a reasonable setting of these parameters. We recommend choosing an initial value 1 according to the simple heuristic described in Algorithm 4. 
+In 
+Algorithm 6 No-U-Turn Sampler with Dual Averaging 
+Given .0 , d, L, M, Madapt: ¯
+Set 0 = FindReasonableEpsilon(.),µ = log(100),¯0 =1,H0 =0,. =0.05,t0 = 10,. =0.75. 
+for m =1 to M do Sample r 0 ~N (0,I). Resample u ~ Uniform([0, exp{L(.m-1 - 1 r 0 · r 0}])
+2 
+= .m-1 , .+ = .m-1 - 0+ 0 = .m-1
+Initialize .- , r = r ,r = r ,j =0,.m ,n =1,s = 1. 
+while s =1 do Choose a direction vj ~ Uniform({-1, 1}). if vj = -1 then 
+-0 -
+.- ,r , -, -,.0 ,n ,s 0, a, na . BuildTree(.- ,r ,u,vj , j, m-1.m-1 ,r 0). 
+else 
++ 00 +0
+-, -,.+ ,r ,.0 ,n ,s ,a,na . BuildTree(.+ ,r ,u,vj , j, m-1,.m-1 ,r ). 
+end if 
+0
+if s =1 then 
+n
+With probability min{1, 0 }, set .m . .0 . 
+n 
+end if 
+n . n + n 0 . s . s 0I[(.+ - .-) · r - = 0]I[(.+ - .-) · r + = 0]. j . j + 1. 
+end while if m = Madapt 
+then
+ 
+11 a
+¯¯
+Set Hm =1 - Hm-1 +(d - ).
+m+t0 m+t0 na
+v 
+m -. -.
+¯
+Set log m = µ - Hm, log¯ = m log m + (1 - m ) log ¯ 
+. m m-1. 
+else 
+Set m = ¯ Madapt . 
+end if end for 
+function BuildTree(., r, u, v, j, , .0 ,r 0) 
+if j =0 then Base case—take one leapfrog step in the direction v. .0 ,r 0 . Leapfrog(., r, v). n 0 . I[u = exp{L(.0) - 1 r 0 · r 0}].
+2 
+s 0 . I[u< exp{.max + L(.0) - 1 r 0 · r 0}].
+2 
+0000 0 0
+return .0 ,r ,.0 ,r ,.0 ,n ,s , min{1, exp{L(.0) - 1 r · r 0 -L(.0)+ 1 r · r 0}}, 1.
+22 
+else 
+Recursion—implicitly build the left and right subtrees. 
+- + 00 0 0
+.- ,r ,.+ ,r ,.0 ,n ,s ,a0 ,na . BuildTree(., r, u, v, j - 1, , .0 ,r ). 0
+if s =1 then if v = -1 then 
+- 0000 00 - 0
+.- ,r , -, -,.00 ,n ,s ,a00 ,na . BuildTree(.- ,r ,u,v,j - 1, , .0 ,r ). 
+else 
++ 0000 00 +0
+-, -,.+ ,r ,.00 ,n ,s ,a00 ,na . BuildTree(.+ ,r ,u,v,j - 1, , .0 ,r ). 
+end if 
+n
+With probability n0+ 00 n00 , set .0 . .00 . + a000 000
+Set a0 . a0 , na . na + na. s 0 . s 00I[(.+ - .-) · r - = 0]I[(.+ - .-) · r + = 0] n 0 . n 0 + n 00 
+end if 
+- + 00 0
+return .- ,r ,.+ ,r ,.0 ,n ,s ,a0 ,na. end if 
+English, this heuristic repeatedly doubles or halves the value of 1 until the acceptance probability of the Langevin proposal with step size 1 crosses 0.5. The resulting value of 1 will typically be small enough to produce reasonably accurate simulations but large enough to avoid wasting large amounts of computation. We recommend setting µ = log(101), since this gives the dual averaging algorithm a preference for testing values of  that are larger than the initial value 1. Large values of  cost less to evaluate than small values of , and so erring on the side of trying large values can save computation. 
+Algorithms 5 
+and 6 
+show how to implement HMC (with simulation length speci.ed in terms of L rather than L) and NUTS while incorporating the dual averaging algorithm derived in this section, with the above initialization scheme. Algorithm 5 
+requires as input a target simulation length . ˜ L, a target mean acceptance probability d, and a num­ber of iterations Madapt after which to stop the adaptation. Algorithm 6 
+requires only a target mean acceptance probability d and a number of iterations Madapt. Matlab code im­plementing both algorithms can be found at http://www.cs.princeton.edu/~mdhoffma, 
+and C++ implementations will be available as part of the Stan inference package. 
+4. Empirical Evaluation 
+In this section we examine the e.ectiveness of the dual averaging algorithm outlined in section 3.2, 
+examine what values of the target d in the dual averaging algorithm yield e.cient samplers, and compare the e.ciency of NUTS and HMC. 
+For each target distribution, we ran HMC 
+(as 
+implemented 
+in 
+algorithm 
+5) 
+and 
+NUTS 
+(as 
+implemented in algorithm 
+6) 
+with four target distributions for 2000 iterations, allowing the step size  to adapt via the dual averaging 
+updates 
+described 
+in 
+section 
+3.2 
+for 
+the 
+.rst 
+1000 
+iterations. In all experiments the dual averaging parameters were set to . =0.05,t0 = 10, and . =0.75. We evaluated HMC with 10 logarithmically spaced target simulation lengths . per target distribution. For each target distribution the largest value of . that we tested was 40 times the smallest value of . that we tested, meaning that each successive . is 401/9 ˜ 1.5 times larger than the previous .. We tried 15 evenly spaced values of the dual averaging target d between 0.25 and 0.95 for NUTS and 8 evenly spaced values of the dual averaging target d between 0.25 and 0.95 for HMC. For each sampler-simulation length-d­target distribution combination we ran 10 iterations with di.erent random seeds. In total, we ran 3,200 experiments with HMC and 600 experiments with NUTS. 
+We measure the e.ciency of each algorithm in terms of e.ective sample size (ESS) normalized by the number of gradient evaluations used by each algorithm. The ESS of a set of M correlated samples .1:M with respect to some function f(.) is the number of independent draws from the target distribution p(.) that would give a Monte Carlo estimate of the mean under p of f(.) with the same level of precision as the estimate given by the mean of f for the correlated samples .1:M . That is, the ESS of a sample is a measure of how many independent samples a set of correlated samples is worth for the purposes of estimating the mean of some function; a more e.cient sampler will give a larger ESS for less computation. We use the number of gradient evaluations performed by an algorithm as a proxy for the total amount of computation performed; in all of the models and distributions we tested the computational overhead of both HMC and NUTS is dominated by the cost of computing gradients. Details of the method we use to estimate ESS are provided in appendix A. 
+In each experiment, we discarded the .rst 1000 samples as burn-in when estimating ESS. 
+ESS is inherently a univariate statistic, but all of the distributions we test HMC and NUTS on are multivariate. Following Girolami 
+and 
+Calderhead 
+(2011) 
+we compute ESS separately for each dimension and report the minimum ESS across all dimensions, since we want our samplers to e.ectively explore all dimensions of the target distribution. For each dimension we compute ESS in terms of the variance of the estimator of that dimension’s mean and second central moment (where the estimate of the mean used to compute the second central moment is taken from a separate long run of 50,000 iterations of NUTS with d =0.5), reporting whichever statistic has a lower e.ective sample size. We include the second central moment as well as the mean because for simulation lengths L that hit a resonance of the target distribution HMC can produce samples that are anti-correlated. These samples yield low-variance estimators of parameter means, but very high-variance estimators of parameter variances, so computing ESS only in terms of the mean of . can be misleading. 
+4.1 Models and Datasets 
+To evaluate NUTS and HMC, we used the two algorithms to sample from four target distri­butions, one of which was synthetic and the other three of which are posterior distributions arising from real datasets. 
+250-dimensional multivariate normal (MVN): In these experiments the target dis­tribution was a zero-mean 250-dimensional multivariate normal with known precision matrix A, i.e., 
+p(.) . exp{-1 .T A.}. (20)
+2 
+The matrix A was generated from a Wishart distribution with identity scale matrix and 250 degrees of freedom. This yields a target distribution with many strong correlations. The same matrix A was used in all experiments. 
+Bayesian logistic regression (LR): In these experiments the target distribution is the posterior of a Bayesian logistic regression model .t to the German credit dataset (available from the UCI repository 
+(Frank 
+and 
+Asuncion, 
+2010)). 
+The target distribution is 
+p(a, ß|x, y) . p(y|x, a, ß)p(a)p(ß)
+P (21)
+11
+. exp{- log(1 + exp{-yi(a + xi · ß}) - 2s2 a2 - 2s2 ß · ß},
+i 
+where xi is a 24-dimensional vector of numerical predictors associated with a customer i, yi is -1 if customer i should be denied credit and 1 if that customer should receive credit, a is an intercept term, and ß is a vector of 24 regression coe.cients. All predictors are normalized to have zero mean and unit variance. a and each element of ß are given weak zero-mean normal priors with variance s2 = 100. The dataset contains predictor and response data for 1000 customers. 
+Hierarchical Bayesian logistic regression (HLR): In these experiments the target distribution is again the posterior of a Bayesian logistic regression model .t to the German credit dataset, but this time the variance parameter in the prior on a and ß is given an 
+
+Figure 3: Discrepancies between the realized average acceptance probability statistic h and its target d for the multivariate normal, logistic regression, hierarchical logistic regression, and stochastic volatility models. Each point’s distance from the x-axis shows how e.ectively the dual averaging algorithm tuned the step size  for a single experiment. Leftmost plots show experiments run with NUTS, other plots show experiments run with HMC with a di.erent setting of L. 
+exponential prior and estimated as well. Also, we expand the predictor vectors by including 
+.24 
+two-way interactions, resulting in 2 + 24 = 300-dimensional vectors of predictors x and a 300-dimensional vector of coe.cients ß. These elaborations on the model make for a more challenging problem; the posterior is in higher dimensions, and the variance term s2 interacts strongly with the remaining 301 variables. The target distribution for this problem is 
+p(a, ß, s2|x, y) . p(y|x, a, ß)p(ß|s2)p(a|s2)p(s2) . exp{- P log(1 + exp{-yixi · ß}) - 2s 1 2 a2 - 2s 1 2 ß · ß - N log s2 - .s2},
+i 2 
+(22) 
+where N = 1000 is the number of customers and . is the rate parameter to the prior on s2 . We set . =0.01, yielding a weak exponential prior distribution on s2 whose mean and standard deviation are 100. 
+Stochastic volatility (SV): In the .nal set of experiments the target distribution is the posterior of a relatively simple stochastic volatility model .t to 3000 days of returns from the S&P 500 index. The model assumes that the observed values of the index are generated 
+
+Figure 4: Plots of the convergence of ¯ as a function of the number of iterations of NUTS with dual averaging with d =0.65 applied to the multivariate normal (MVN), logistic regression (LR), hierarchical logistic regression (HLR), and stochastic volatility (SV) models. Each trace is from an independent run. The y-axis shows the value of ¯, divided by one of the .nal values of ¯ so that the scale of the traces for each problem can be readily compared. 
+by the following generative process: 
+t ~ Exponential(100); . ~ Exponential(100); s1 ~ Exponential(100); 
+log yi-log yi-1
+log si>1 ~ Normal(log si-1,t-1); ~ t., (23)
+si 
+where si>1 refers to a scale parameter si where i> 1. We integrate out the precision parameter t to speed mixing, leading to the 3001-dimensional target distribution 
+p(s, .|y) . e-0.01.e-0.01s1 (Q3000 t. (s -1(log yi - log yi-1)))×
+i=1 i P3000(log si - log si-1)2)- 3001 
+(0.01 + 0.5 i=2 2 . (24) 
+4.2 Convergence of Dual Averaging 
+and hNUTS
+Figure 3 
+plots the realized versus target values of the statistics hHMC . The h statistics were computed from the 1000 post-burn-in samples. The dual averaging algorithm of section 3.2 
+usually does a good job of coercing the statistic h to its desired value d. It performs somewhat worse for the stochastic volatility model, which we attribute to the longer burn-in period needed for this model; since it takes more samples to reach the stationary regime for the stochastic volatility model, the adaptation algorithm has less time to tune  to be appropriate for the stationary distribution. This is particularly true for HMC with small values of d, since the overly high rejection rates caused by setting d too small lead to slower convergence. 
+Figure 
+4 
+plots 
+the 
+convergence of the averaged iterates ¯ m as a function of the number of dual averaging updates for NUTS with d =0.65. Except for the stochastic volatility model, which requires longer to burn in, ¯ roughly converges within a few hundred iterations. 
+
+Figure 5: Histograms of the trajectory lengths generated by NUTS with various accep­tance rate targets d for the multivariate normal (MVN), logistic regression (LR), hierarchical logistic regression (HLR), and stochastic volatility (SV) models. 
+4.3 NUTS Trajectory Lengths 
+Figure 5 
+shows histograms of the trajectory lengths generated by NUTS. Most of the tra­jectory lengths are integer powers of two, indicating that the U-turn criterion in equation 9 
+is usually satis.ed only after a doubling is complete and not by one of the intermedi­ate subtrees generated during the doubling process. This behavior is desirable insofar as it means that we only occasionally have to throw out entire half-trajectories to satisfy detailed balance. 
+
+Figure 6: E.ective sample size (ESS) as a function of d and (for HMC) simulation length L for the multivariate normal, logistic regression, hierarchical logistic regression, and stochastic volatility models. Each point shows the ESS divided by the number of gradient evaluations for a separate experiment; lines denote the average of the points’ y-values for a particular d. Leftmost plots are NUTS’s performance, each other plot shows HMC’s performance for a di.erent setting of L. 
+The trajectory length (measured in number of states visited) grows as the acceptance rate target d grows, which is to be expected since a higher d will lead to a smaller step size , which in turn will mean that more leapfrog steps are necessary before the trajectory doubles back on itself and satis.es equation 9. 
+
+
+Figure 7: Samples generated by random-walk Metropolis, Gibbs sampling, and NUTS. The plots compare 1,000 independent draws from a highly correlated 250-dimensional distribu­tion (right) with 1,000,000 samples (thinned to 1,000 samples for display) generated by random-walk Metropolis (left), 1,000,000 samples (thinned to 1,000 samples for display) generated by Gibbs sampling (second from left), and 1,000 samples generated by NUTS (second from right). Only the .rst two dimensions are shown here. 
+4.4 Comparing the E.ciency of HMC and NUTS 
+Figure 6 
+compares the e.ciency of HMC (with various simulation lengths . ˜ L) and NUTS (which chooses simulation lengths automatically). The x-axis in each plot is the target d used by the dual averaging 
+algorithm 
+from 
+section 
+3.2 
+to 
+automatically 
+tune 
+the 
+step 
+size . The y-axis is the e.ective sample size (ESS) generated by each sampler, normalized by the number of gradient evaluations used in generating the samples. HMC’s best performance seems to occur around d =0.65, suggesting that this is indeed a reasonable default value for a variety of problems. NUTS’s best performance seems to occur around d =0.6, but does not seem to depend strongly on d within the range d . [0.45, 0.65]. d =0.6 therefore seems like a reasonable default value for NUTS. 
+On the two logistic regression problems NUTS is able to produce e.ectively indepen­dent samples about as e.ciently as HMC can. On the multivariate normal and stochastic volatility problems, NUTS with d =0.6 outperforms HMC’s best ESS by about a factor of three. 
+As expected, HMC’s performance degrades if an inappropriate simulation length is cho­sen. Across the four target distributions we tested, the best simulation lengths . for HMC varied by about a factor of 100, with the longest optimal . being 17.62 (for the multivari­ate normal) and the shortest optimal . being 0.17 (for the simple logistic regression). In practice, .nding a good simulation length for HMC will usually require some number of preliminary runs. The results in Figure 6 
+suggest that NUTS can generate samples at least as e.ciently as HMC, even discounting the cost of any preliminary runs needed to tune HMC’s simulation length. 
+4.5 Qualitative Comparison of NUTS, Random-Walk Metropolis, and Gibbs 
+In 
+section 
+4.4, 
+we compared the e.ciency of NUTS and HMC. In this section, we informally demonstrate the advantages of NUTS over the popular random-walk Metropolis (RWM) and Gibbs sampling algorithms. We ran NUTS, RWM, and Gibbs sampling on the 250­dimensional multivariate normal distribution described in section 4.1. 
+NUTS was run with d =0.5 for 2,000 iterations, with the .rst 1,000 iterations being used as burn-in and to adapt . This required about 1,000,000 gradient and likelihood evaluations in total. We ran RWM for 1,000,000 iterations with an isotropic normal proposal distribution whose variance was selected beforehand to produce the theoretically optimal acceptance rate of 0.234 (Gelman 
+et 
+al., 
+1996). 
+The cost per iteration of RWM is e.ectively identical to the cost per gradient evaluation of NUTS, and the two algorithms ran for about the same amount of time. We ran Gibbs sampling for 1,000,000 sweeps over the 250 parameters. This took longer to run than NUTS and RWM, since for the multivariate normal each Gibbs sweep costs more than a single gradient evaluation; we chose to nonetheless run the same number of Gibbs sweeps as RWM iterations, since for some other models Gibbs sweeps can be done more e.ciently. 
+Figure 7 
+visually compares independent samples (projected onto the .rst two dimen­sions) from the target distribution with samples generated by the three MCMC algorithms. RWM has barely begun to explore the space. Gibbs does better, but still has left parts of the space unexplored. NUTS, on the other hand, is able to generate many e.ectively independent samples. 
+We use this simple example to visualize the relative performance of NUTS, Gibbs, and RWM on a moderately high-dimensional distribution exhibiting strong correlations. For the multivariate normal, Gibbs or RWM would of course work much better after an appropriate rotation of the parameter space. But .nding and applying an appropriate rotation can be expensive when the number of parameters D gets large, and RWM and Gibbs both require O(D2) operations per e.ectively independent sample even under the highly optimistic assumption that a transformation can be found that renders all parameters 
+i.i.d. and can be applied cheaply (e.g. in O(D) rather than the usual O(D2) cost of matrix-vector multiplication and the O(D3) cost of matrix inversion). This is shown for RWM by Creutz 
+(1988), 
+and for Gibbs is the result of needing to apply a transformation requiring O(D) operations D times per Gibbs sweep. For complicated models, even more expensive transformations often cannot render the parameters su.ciently independent to make RWM and Gibbs run e.ciently. NUTS, on the other hand, is able to e.ciently sample from high-dimensional target distributions without needing to be tuned to the shape of those distributions. 
+5. Discussion 
+We have presented the No-U-Turn Sampler (NUTS), a variant of the powerful Hamilto­nian Monte Carlo (HMC) Markov chain Monte Carlo (MCMC) algorithm that eliminates HMC’s dependence on a number-of-steps parameter L but retains (and in some cases im­proves upon) HMC’s ability to generate e.ectively independent samples e.ciently. We also developed a method for automatically adapting the step size parameter  shared by NUTS and HMC via an adaptation of the dual averaging algorithm of Nesterov 
+(2009), 
+making it possible to run NUTS with no hand tuning at all. The dual averaging approach we developed in this paper could also be applied to other MCMC algorithms in place of more traditional adaptive MCMC approaches based on the Robbins-Monro stochastic approxi­mation algorithm 
+(Andrieu 
+and 
+Thoms, 
+2008; 
+Robbins 
+and 
+Monro, 
+1951). 
+
+In this paper we have only compared NUTS with the basic HMC algorithm, and not its extensions, several of which are reviewed 
+by 
+Neal 
+(2011). 
+We only considered simple kinetic energy functions of the form 1 r · r, but both NUTS and HMC can bene.t from introducing 
+2 
+T M-1
+a “mass” matrix M and using the kinetic energy function 1 rr. If M-1 approximates 
+2 
+the covariance matrix of p(.), then this kinetic energy function will reduce the negative impacts strong correlations and bad scaling have on the e.ciency of both NUTS and HMC. Another 
+extension 
+of 
+HMC 
+introduced 
+by 
+Neal 
+(1994) 
+considers 
+windows 
+of proposed states rather than simply the state at the end of the trajectory to allow for larger step sizes without sacri.cing acceptance rates (at the expense of introducing a window size parameter that must be tuned). The e.ectiveness of the windowed HMC algorithm suggests that NUTS’s lack of a single accept/reject step may be responsible for some of its performance gains over vanilla HMC. 
+Girolami 
+and 
+Calderhead 
+(2011) 
+recently introduced Riemannian Manifold Hamilto­nian Monte Carlo (RMHMC), a variant on HMC that simulates Hamiltonian dynamics in Riemannian rather than Euclidean spaces, e.ectively allowing for position-dependent mass matrices. Although the worst-case O(D3) matrix inversion costs associated with this al­gorithm often make it expensive to apply in high dimensions, when these costs are not too onerous RMHMC’s ability to adapt its kinetic energy function makes it very e.cient. There are no technical obstacles that stand in the way of combining NUTS’s ability to adapt its trajectory lengths with RMHMC’s ability to adapt its mass matrices; exploring such a hybrid algorithm seems like a natural direction for future research. 
+Like HMC, NUTS can only be used to resample unconstrained continuous-valued vari­ables with respect to which the target distribution is di.erentiable almost everywhere. HMC and NUTS can deal with simple constraints such as nonnegativity or restriction to the sim­plex by an appropriate change of variable, but discrete variables must either be summed out or handled by other algorithms such as Gibbs sampling. In models with discrete variables, NUTS’s ability to automatically choose a trajectory length may make it more e.ective than HMC when discrete variables are present, since it is not tied to a single simulation length that may be appropriate for one setting of the discrete variables but not for others. 
+Some models include hard constraints that are too complex to eliminate by a simple change of variables. Such models will have regions of the parameter space with 0 posterior probability. When HMC encounters such a region, the best it can do is stop short and restart with a new momentum vector, wasting any work 
+done 
+before 
+violating 
+the 
+constraints 
+(Neal, 
+2011). 
+By contrast, when NUTS encounters a 0-probability region it stops short and samples from the set of points visited up to that point, making at least some progress. 
+NUTS with dual averaging makes it possible for Bayesian data analysts to obtain the e.ciency of HMC without spending time and e.ort hand-tuning HMC’s parameters. This is desirable even for those practitioners who have experience using and tuning HMC, but it is especially valuable for those who lack this experience. In particular, NUTS’s ability to operate e.ciently without user intervention makes it well suited for use in generic inference engines in the mold of BUGS (Gilks 
+and 
+Spiegelhalter, 
+1992), 
+which until now have largely relied on much less e.cient algorithms such as Gibbs sampling. We are currently devel­oping an automatic Bayesian inference system called Stan, which uses NUTS as its core inference algorithm for continuous-valued parameters. Stan promises to be able to generate e.ectively independent samples from complex models’ posteriors orders of magnitude faster than previous systems such as BUGS and JAGS. 
+In summary, NUTS makes it possible to e.ciently perform Bayesian posterior inference on a large class of complex, high-dimensional models with minimal human intervention. It is our hope that NUTS will allow researchers and data analysts to spend more time developing and testing models and less time worrying about how to .t those models to data. 
+Acknowledgments 
+This work was partially supported by Institute of Education Sciences grant ED-GRANTS­032309-005, Department of Energy grant DE-SC0002099, National Science Foundation grant ATM-0934516, and National Science Foundation grant SES-1023189. 
+Appendix A. Estimating E.ective Sample Size 
+For a function f(.), a target distribution p(.), and a Markov chain Monte Carlo (MCMC) sampler that produces a set of M correlated samples drawn from some distribution q(.1:M ) such that q(.m)= p(.m) for any m .{1,...,M}, the e.ective sample size (ESS) of .1:M is the number of independent samples that would be needed to obtain a Monte Carlo estimate of the mean of f with equal variance to the MCMC estimate of the mean of f: 
+PM
+Vq[ 1 f(.s)] M
+s=1 
+=
+ESSq,f (.1:M )= M M Vp[f(.)] PM-1 sf ; 
+1+2 (1 - ).
+Ms=1 Ms 
+Eq[(f(.t) - Ep[f(.)])(f(.t-s) - Ep[f(.)])]
+.f = , (25)
+s 
+Vp[f(.)] 
+f
+where .s denotes the autocorrelation under q of f at lag s and Vp[x] denotes the variance of a random variable x under the distribution p(x). 
+To estimate ESS, we .rst compute the following estimate of the autocorrelation spectrum for the function f(.): 
+M
+X 
+.ˆf =1 (f(.m) - µˆf )(f(.m-s) - µˆf ), (26)
+s 
+sˆ2(M - s)
+f 
+m=s+1 
+where the estimates µˆf and sˆf 2 of the mean and variance of the function f are computed with high precision from a separated 50,000-sample run of NUTS with d =0.5. We do not take these estimates from the chain whose autocorrelations we are trying to estimate—doing so can lead to serious underestimates of the level of autocorrelation (and thus a serious overestimate of the number of e.ective samples) if the chain has not yet converged or has not yet generated a fair number of e.ectively independent samples. 
+Any estimator of .sf is necessarily noisy for large lags s, so using the naive estimator ˆ M
+ESSq,f (.1:M )= PM-1 will yield bad results. Instead, we truncate the sum over 
+f
+1+2 (1- s . 
+s=1 M )ˆs 
+the autocorrelations when the autocorrelations .rst dip below 0.05, yielding the estimator 
+M
+ˆ Mcuto. .f
+ESSq,f (.1:M )= PMcuto. ; f = min s s.t. ˆ < 0.05. (27)
+s 
+f sf s 
+1+2 (1 - )ˆ. 
+s=1 Ms 
+We found that this method for estimating ESS gave more reliable con.dence intervals for MCMC estimators than the autoregressive approach used by CODA (Plummer 
+et 
+al., 
+2006). 
+(The more accurate estimator comes at the expense of needing to compute a costly high-quality estimate of the true mean and variance of the target distribution.) The 0.05 cuto. is somewhat arbitrary; in our experiments we did not .nd the results to be very sensitive to the precise value of this cuto.. 
+References 
+C. Andrieu and J. Thoms. A tutorial on adaptive MCMC. Statistics and Computing, 18 (4):343–373, 2008. 
+A. Beskos, N. Pillai, G. Roberts, J. Sanz-Serna, and A. Stuart. Optimal tuning of the hybrid monte-carlo algorithm. Arxiv preprint arXiv:1001.4460, 2010. 
+M. Creutz. Global Monte Carlo algorithms for many-fermion systems. Physical Review D, 38(4):1228–1238, 1988. 
+H. Daume III. HBC: Hierarchical Bayes compiler, 2007. URL http://hal3.name/HMC. 
+
+A. Duane, A. Kennedy, B. Pendleton, and D. Roweth. Hybrid Monte Carlo. Physics letters B, 195(2):216–222, 1987. 
+A. Frank and A. Asuncion. UCI machine learning repository, 2010. URL http://archive. 
+ics.uci.edu/ml. 
+
+A. Gelman, G. Roberts, and W. Gilks. E.cient Metropolis jumping rules. Bayesian statis­tics, 5:599–608, 1996. 
+A. Gelman, J. Carlin, H. Stern, and D. Rubin. Bayesian Data Analysis. Chapman & Hall, 2004. 
+S. Geman and D. Geman. Stochastic relaxation, Gibbs distributions and the Bayesian restoration of images. IEEE Transactions on Pattern Analysis and Machine Intelligence, 6:721–741, 1984. 
+W. Gilks and D. Spiegelhalter. A language and program for complex Bayesian modelling. The Statistician, 3:169–177, 1992. 
+M. Girolami and B. Calderhead. Riemann manifold langevin and hamiltonian monte carlo methods. Journal of the Royal Statistical Society: Series B (Statistical Methodology), 73 (2):123–214, 2011. 
+A. Griewank and A. Walther. Evaluating derivatives: principles and techniques of algorith­mic di.erentiation. Society for Industrial and Applied Mathematics (SIAM), 2008. 
+B. Leimkuhler and S. Reich. Simulating Hamiltonian dynamics, volume 14. Cambridge University Press, 2004. 
+N. Metropolis, A. Rosenbluth, M. Rosenbluth, M. Teller, and E. Teller. Equations of state calculations by fast computing machines. Journal of Chemical Physics, 21:1087–1092, 1953. 
+T. Minka, J. Winn, J. Guiver, and D. Knowles. Infer.NET 2.4, Microsoft Research Cam­bridge, 2010. http://research.microsoft.com/infernet. 
+R. Neal. Probabilistic inference using Markov chain Monte Carlo methods. Technical Report CRG-TR-93-1, Department of Computer Science, University of Toronto, 1993. 
+R. Neal. An improved acceptance procedure for the hybrid Monte Carlo algorithm. Journal of Computational Physics, 111:194–203, 1994. 
+R. Neal. Slice sampling. Annals of Statistics, 31(3):705–741, 2003. 
+R. Neal. Handbook of Markov Chain Monte Carlo, chapter 5: MCMC Using Hamiltonian Dynamics. CRC Press, 2011. 
+Y. Nesterov. Primal-dual subgradient methods for convex problems. Mathematical pro­gramming, 120(1):221–259, 2009. 
+A. Patil, D. Huard, and C. Fonnesbeck. PyMC: Bayesian stochastic modelling in python. Journal of Statistical Software, 35(4):1–81, 2010. 
+M. Plummer, N. Best, K. Cowles, and K. Vines. CODA: Convergence diagnosis and output analysis for MCMC. R News, 6(1):7–11, March 2006. 
+H. Robbins and S. Monro. A stochastic approximation method. The Annals of Mathematical Statistics, pages 400–407, 1951. 
+L. Tierney and A. Mira. Some adaptive Monte Carlo methods for Bayesian inference. Statistics in Medicine, 18:2507–2515, 1999. 
+M. Wainwright and M. Jordan. Graphical models, exponential families, and variational inference. Foundations and Trends in Machine Learning, 1(1-2):1–305, 2008. 
+

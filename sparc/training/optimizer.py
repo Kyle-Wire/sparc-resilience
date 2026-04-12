@@ -32,6 +32,7 @@ def build_optimizer(
     surrogates: dict[str, nn.Module],
     base_lr: float = 1e-3,
     weight_decay: float = 1e-4,
+    source_term_net: nn.Module | None = None,
 ) -> torch.optim.AdamW:
     """
     AdamW with per-component learning rate groups.
@@ -47,6 +48,7 @@ def build_optimizer(
     surrogates : dict of DifferentiableGWR / GWRF / GGPGAM
     base_lr : default learning rate for generic components
     weight_decay : AdamW weight decay
+    source_term_net : optional SourceTermNet
     """
     param_groups = []
 
@@ -103,6 +105,16 @@ def build_optimizer(
                 "params": sparams,
                 "lr": base_lr * 0.5,
                 "name": f"diff_{sname}",
+            })
+
+    # Source term network — learns forcing term, tight LR like process rate
+    if source_term_net is not None:
+        src_params = list(source_term_net.parameters())
+        if src_params:
+            param_groups.append({
+                "params": src_params,
+                "lr": base_lr * 0.01,
+                "name": "source_term",
             })
 
     return torch.optim.AdamW(
