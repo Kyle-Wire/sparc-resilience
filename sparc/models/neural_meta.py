@@ -1,23 +1,30 @@
 """
 Neural meta-learner for SPARC V2.
 
-Four-stream fusion network:
-  Stream 1 (Base)    — encodes differentiable surrogate predictions
-  Stream 2 (Physics) — SIREN encoder for physics features
-  Stream 3 (Spatial) — sparse spatial attention over coordinates
-  Stream 4 (Alpha)   — process rate embedding
+SharedTrunk + CityHead architecture for transfer learning:
 
-Dual output head:
-  - Regression: continuous outcome prediction
-  - Exceedance: P(outcome > threshold) per threshold
+  SharedTrunk (transfers across cities):
+    - physics_enc (SIREN) — PDE-informed physics encoder
+    - alpha_emb            — process rate embedding
+    - trunk_fusion         — fuses physics + alpha into shared representation
+
+  CityHead (city-specific, retrained per deployment):
+    - base_enc     — encodes differentiable surrogate predictions
+    - spatial_enc  — sparse spatial attention over coordinates
+    - fusion       — combines trunk output with city-specific streams
+    - regression_head   — continuous outcome prediction
+    - exceedance_heads  — P(outcome > threshold) per threshold
 
 Interfaces:
   - ``predict_with_uncertainty`` — MC Dropout inference
   - ``predict_for_nuts``         — no-gradient prediction for NUTS likelihood
+  - ``save_trunk`` / ``load_trunk`` — persist / restore shared trunk weights
+  - ``freeze_trunk`` / ``unfreeze_trunk`` — toggle gradient flow for transfer
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -26,6 +33,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from sparc.models.spatial_attention import SIRENLayer, SparseSpatialAttention
+from sparc.models.pde_encoder import PDEInformedPhysicsEncoder
 
 
 class SPARCMetaLearner(nn.Module):
@@ -62,9 +70,38 @@ class SPARCMetaLearner(nn.Module):
         self.hidden_dim = hidden_dim
         self.thresholds = thresholds or [0.25, 0.50, 0.75]
 
-        # -----------------------------------
+        # =============================================================
+        # SharedTrunk — physics encoder + process rate (transfers)
+        # =============================================================
+
+        # Stream 2: PDE-Informed physics encoder
+        self.physics_enc = PDEInformedPhysicsEncoder(
+            n_physics_features=n_physics_features,
+            out_dim=hidden_dim,
+            omega=siren_omega,
+        )
+        # Last w_source from forward pass (for diagnostics)
+        self._last_w_source: torch.Tensor | None = None
+
+        # Stream 4: Process rate embedding
+        self.alpha_emb = nn.Sequential(
+            nn.Linear(1, hidden_dim // 2),
+            nn.GELU(),
+            nn.Linear(hidden_dim // 2, hidden_dim),
+        )
+
+        # Trunk fusion: physics + alpha → shared representation
+        self.trunk_fusion = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+        )
+
+        # =============================================================
+        # CityHead — city-specific streams + output heads
+        # =============================================================
+
         # Stream 1: Base model encoder
-        # -----------------------------------
         self.base_enc = nn.Sequential(
             nn.Linear(n_base_models, hidden_dim),
             nn.LayerNorm(hidden_dim),
@@ -73,18 +110,7 @@ class SPARCMetaLearner(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
         )
 
-        # -----------------------------------
-        # Stream 2: SIREN physics encoder
-        # -----------------------------------
-        self.physics_enc = nn.Sequential(
-            SIRENLayer(n_physics_features, hidden_dim, omega=siren_omega, is_first=True),
-            SIRENLayer(hidden_dim, hidden_dim, omega=siren_omega),
-            SIRENLayer(hidden_dim, hidden_dim, omega=siren_omega),
-        )
-
-        # -----------------------------------
         # Stream 3: Sparse spatial attention
-        # -----------------------------------
         self.spatial_enc = SparseSpatialAttention(
             d_model=d_spatial,
             n_heads=n_heads,
@@ -94,20 +120,9 @@ class SPARCMetaLearner(nn.Module):
         # Project spatial stream to hidden_dim
         self.spatial_proj = nn.Linear(d_spatial, hidden_dim)
 
-        # -----------------------------------
-        # Stream 4: Process rate embedding
-        # -----------------------------------
-        self.alpha_emb = nn.Sequential(
-            nn.Linear(1, hidden_dim // 2),
-            nn.GELU(),
-            nn.Linear(hidden_dim // 2, hidden_dim),
-        )
-
-        # -----------------------------------
-        # Fusion
-        # -----------------------------------
+        # City fusion: trunk + base + spatial
         self.fusion = nn.Sequential(
-            nn.Linear(hidden_dim * 4, hidden_dim * 2),
+            nn.Linear(hidden_dim * 3, hidden_dim * 2),
             nn.LayerNorm(hidden_dim * 2),
             nn.GELU(),
             nn.Dropout(dropout),
@@ -116,9 +131,7 @@ class SPARCMetaLearner(nn.Module):
             nn.GELU(),
         )
 
-        # -----------------------------------
         # Regression head
-        # -----------------------------------
         self.regression_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim // 2),
             nn.GELU(),
@@ -126,9 +139,7 @@ class SPARCMetaLearner(nn.Module):
             nn.Linear(hidden_dim // 2, 1),
         )
 
-        # -----------------------------------
         # Exceedance heads (one per threshold)
-        # -----------------------------------
         self.exceedance_heads = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim // 4),
@@ -167,15 +178,19 @@ class SPARCMetaLearner(nn.Module):
         """
         # Stream encoding
         h_base = self.base_enc(base_preds)           # (N, H)
-        h_phys = self.physics_enc(physics_feats)      # (N, H)
+        h_phys, w_source = self.physics_enc(physics_feats)  # (N, H), (N, 1)
+        self._last_w_source = w_source  # keep gradients for variance penalty
 
         h_spatial, attn_weights = self.spatial_enc(X_spatial, coords, knn_index)
         h_spatial = self.spatial_proj(h_spatial)       # (N, H)
 
         h_alpha = self.alpha_emb(alpha)               # (N, H)
 
-        # Fusion
-        fused = torch.cat([h_base, h_phys, h_spatial, h_alpha], dim=-1)  # (N, 4H)
+        # Trunk fusion: physics + alpha → shared representation
+        h_trunk = self.trunk_fusion(torch.cat([h_phys, h_alpha], dim=-1))  # (N, H)
+
+        # City fusion: trunk + base + spatial
+        fused = torch.cat([h_trunk, h_base, h_spatial], dim=-1)  # (N, 3H)
         fused = self.fusion(fused)                    # (N, H)
 
         # Dual output
@@ -230,3 +245,34 @@ class SPARCMetaLearner(nn.Module):
         self.eval()
         T_pred, _, _ = self.forward(**X_dict)
         return T_pred.cpu().numpy()
+
+    # ==================================================================
+    # Trunk management (transfer learning)
+    # ==================================================================
+
+    _TRUNK_KEYS = {"physics_enc", "alpha_emb", "trunk_fusion"}
+
+    def save_trunk(self, path: str | Path) -> None:
+        """Save SharedTrunk weights (physics_enc + alpha_emb + trunk_fusion)."""
+        trunk_state = {
+            k: v for k, v in self.state_dict().items()
+            if any(k.startswith(prefix) for prefix in self._TRUNK_KEYS)
+        }
+        torch.save(trunk_state, path)
+
+    def load_trunk(self, path: str | Path, strict: bool = True) -> None:
+        """Load SharedTrunk weights; CityHead keeps current (or random) weights."""
+        trunk_state = torch.load(path, map_location="cpu", weights_only=True)
+        self.load_state_dict(trunk_state, strict=False)
+
+    def freeze_trunk(self) -> None:
+        """Freeze SharedTrunk parameters — only CityHead trains."""
+        for name, param in self.named_parameters():
+            if any(name.startswith(prefix) for prefix in self._TRUNK_KEYS):
+                param.requires_grad = False
+
+    def unfreeze_trunk(self) -> None:
+        """Unfreeze SharedTrunk parameters for joint fine-tuning."""
+        for name, param in self.named_parameters():
+            if any(name.startswith(prefix) for prefix in self._TRUNK_KEYS):
+                param.requires_grad = True

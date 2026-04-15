@@ -2499,7 +2499,7 @@ def main() -> dict:
                         mi = json.load(_mf)
                     neural_model = SPARCMetaLearner(
                         n_base_models=mi["n_base_models"],
-                        n_physics_features=mi["n_physics_features"],
+                        n_physics_features=mi.get("n_physics_extended", mi["n_physics_features"]),
                         d_spatial=mi["d_spatial"],
                         hidden_dim=mi["hidden_dim"],
                         thresholds=mi.get("thresholds", [0.25, 0.50, 0.75]),

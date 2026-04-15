@@ -35,20 +35,20 @@
       "skill_vs_spatial_knn": NaN
     },
     "gwrf": {
-      "r2": 0.9143286216740893,
-      "rmse": 0.5008302659658037,
+      "r2": 0.9130521874185509,
+      "rmse": 0.5045474543560552,
       "status": "success",
-      "nrmse": 0.2926967343957062,
-      "pattern_correlation": 0.9562217617910562,
-      "amplitude_ratio": 0.9513014967015005,
-      "tail_low_rmse": 0.6305575281609652,
-      "tail_low_r2": 0.23872142029785592,
-      "tail_low_bias": 0.22783771422351548,
-      "tail_high_rmse": 0.6530375606898136,
-      "tail_high_r2": 0.0011989460825123643,
-      "tail_high_bias": -0.3000876403345432,
-      "extreme_rmse_ratio": 1.3039099372928122,
-      "skill_vs_global_mean": 0.9143286216740893,
+      "nrmse": 0.29486914484470755,
+      "pattern_correlation": 0.9555574707683185,
+      "amplitude_ratio": 0.9508938007524421,
+      "tail_low_rmse": 0.6695658800372516,
+      "tail_low_r2": 0.14161759044201316,
+      "tail_low_bias": 0.2309487985550412,
+      "tail_high_rmse": 0.6582855809993213,
+      "tail_high_r2": -0.014918933321623307,
+      "tail_high_bias": -0.3132253364840517,
+      "extreme_rmse_ratio": 1.3270622500549654,
+      "skill_vs_global_mean": 0.9130521874185509,
       "skill_vs_spatial_knn": NaN
     },
     "ggpgam": {
@@ -70,27 +70,27 @@
     }
   },
   "meta_ensemble_standard": {
-    "r2": 0.9125805838386376,
-    "rmse": 0.5059139326857843
+    "r2": 0.8172476477834099,
+    "rmse": 0.7314828979548037
   },
   "meta_ensemble_enhanced": {
-    "r2": 0.9175431461667939,
-    "rmse": 0.49134446616297983
+    "r2": 0.8172476477834099,
+    "rmse": 0.7314828979548037
   },
   "meta_ensemble_best": {
-    "r2": 0.9175431461667939,
-    "rmse": 0.49134446616297983,
-    "approach": "Enhanced (with Laplacian)"
+    "r2": 0.9263830874924477,
+    "rmse": 0.4642602368574801,
+    "approach": "V2 Neural"
   },
   "v2_neural_meta": {
-    "r2": 0.9060256993408493,
-    "rmse": 0.5245383433313197,
+    "r2": 0.9263830874924477,
+    "rmse": 0.4642602368574801,
     "executed": true
   },
   "spatial_autocorrelation": {
-    "moran_i": 0.2973841146446715,
+    "moran_i": 0.1366704368601556,
     "p_value": 0.001,
-    "autocorr_range": 97.49555251234253,
+    "autocorr_range": 292.48665753702755,
     "threshold_met": false
   },
   "deep_kriging": {
@@ -99,13 +99,13 @@
     "executed": false
   },
   "final_ensemble": {
-    "r2": 0.9125805838386376,
-    "rmse": 0.5059139326857843
+    "r2": 0.8172476477834099,
+    "rmse": 0.7314828979548037
   },
   "improvements": {
-    "standard_meta_vs_base": -0.0017480378354517434,
-    "enhanced_meta_vs_base": 0.00321452449270454,
-    "best_meta_vs_base": 0.00321452449270454,
-    "laplacian_benefit": 0.004962562328156284
+    "standard_meta_vs_base": -0.09580453963514102,
+    "enhanced_meta_vs_base": -0.09580453963514102,
+    "best_meta_vs_base": 0.013330900073896812,
+    "laplacian_benefit": 0.0
   }
 }

@@ -4,10 +4,18 @@ Process rate auxiliary network for SPARC V2.
 Domain-agnostic network that learns the spatially-varying physical process
 rate from land-cover composition.  The same architecture serves all domains:
 
-  UHI          → thermal diffusivity α (m²/s)
+  UHI          → spatial responsiveness α (sensitivity to thermal gradients)
   Coastal      → hydraulic diffusivity κ (m²/s)
   Wildfire     → fire spread rate λ (m/s)
   Air quality  → turbulent diffusivity K (m²/s)
+
+For UHI, α(s) represents the local sensitivity of temperature to spatial
+thermal gradients — higher where the temperature field is actively adjusting
+to boundary influences (transition zones, waterfront), lower where it has
+reached local equilibrium (dense urban core).  In scenario simulation,
+alpha_norm(s) modulates treatment effect magnitude: locations with higher
+spatial responsiveness experience stronger intervention effects because
+they are in active thermal adjustment zones.
 
 Physical bounds are hard-enforced via sigmoid + log-space scaling — no
 clamping, no gradient killing, always physically valid output.
@@ -108,7 +116,7 @@ class ProcessRateNet(nn.Module):
         Parameters
         ----------
         land_cover : (N, n_materials) — fractional coverage per material
-        material_table : dict mapping material name → diffusivity value.
+        material_table : dict mapping material name → process rate value.
             Defaults to ``self.material_priors``.
 
         Returns

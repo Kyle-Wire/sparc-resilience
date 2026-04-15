@@ -53,9 +53,11 @@ def build_optimizer(
     param_groups = []
 
     # Model sub-components (if present)
+    # NOTE: physics_enc is split so that blend_net gets full LR while
+    # SIREN (harmonic_enc) stays at 0.5×.  This prevents the blend
+    # weight from collapsing to a near-constant scalar.
     component_lrs = {
         "base_enc":         base_lr,
-        "physics_enc":      base_lr * 0.5,      # SIREN needs caution
         "spatial_enc":      base_lr,
         "alpha_emb":        base_lr,
         "fusion":           base_lr,
@@ -72,6 +74,28 @@ def build_optimizer(
                     "params": params,
                     "lr": lr,
                     "name": name,
+                })
+
+    # Split physics_enc into SIREN components (0.5× LR) and blend_net (1× LR)
+    physics_enc = getattr(model, "physics_enc", None)
+    if physics_enc is not None:
+        blend_net = getattr(physics_enc, "blend_net", None)
+        blend_ids = set(id(p) for p in blend_net.parameters()) if blend_net else set()
+
+        siren_params = [p for p in physics_enc.parameters() if id(p) not in blend_ids]
+        if siren_params:
+            param_groups.append({
+                "params": siren_params,
+                "lr": base_lr * 0.5,
+                "name": "physics_enc_siren",
+            })
+        if blend_net is not None:
+            blend_params = list(blend_net.parameters())
+            if blend_params:
+                param_groups.append({
+                    "params": blend_params,
+                    "lr": base_lr,
+                    "name": "physics_enc_blend_net",
                 })
 
     # Catch any remaining model parameters not covered above
@@ -135,12 +159,11 @@ def build_scheduler(
     warmup_epochs: int = 10,
 ) -> torch.optim.lr_scheduler.SequentialLR:
     """
-    Cosine annealing with warm restarts, preceded by linear warmup.
+    Monotonic cosine decay preceded by linear warmup.
 
     Schedule:
       epoch 0–warmup:  linear ramp from 0 → base_lr
-      epoch warmup+:   cosine anneal with warm restarts
-        T₀ = 10 epochs, T_mult = 2  →  cycles: 10, 20, 40, 80 …
+      epoch warmup+:   cosine decay to eta_min (no restarts)
     """
     # Linear warmup
     def lr_lambda(epoch: int) -> float:
@@ -150,9 +173,9 @@ def build_scheduler(
 
     warmup = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
-    # Cosine annealing with warm restarts
-    cosine = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer, T_0=10, T_mult=2, eta_min=1e-6,
+    # Monotonic cosine decay (no restarts)
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=n_epochs - warmup_epochs, eta_min=1e-6,
     )
 
     return torch.optim.lr_scheduler.SequentialLR(

@@ -317,14 +317,22 @@ benchmark_metrics:
 # ---------------------------------------------------------------------------
 process_rate:
   enabled: true
-  name: "thermal_admittance"
-  units: "W·m⁻²·K⁻¹"
-  bounds: [0.5, 12.0]           # Physical bounds for thermal admittance
-  prior_mean: 4.0               # Literature default
+  name: "thermal_diffusivity"
+  units: "normalized"
+  bounds: [0.05, 0.80]           # Normalized diffusivity bounds
+  prior_mean: 0.35               # Prior mean (vegetated/open green space)
   inputs:                        # Features that drive the process rate
     - Pct_Impervious
+    - Pct_Canopy
     - Albedo
-    - Elevation_m
+  pretrain_epochs: 60
+  material_priors:
+    water_adjacent: 0.20         # High thermal mass, slow response
+    vegetated: 0.35              # Moderate — soil + canopy shading
+    open_green: 0.38             # Open grass, moderate diffusivity
+    low_density: 0.52            # Light residential, mixed surfaces
+    moderate_density: 0.65       # Medium impervious, faster thermal response
+    high_density_urban: 0.78     # Asphalt/concrete, fast thermal response
 
 # ---------------------------------------------------------------------------
 # Fingerprinting (disabled for UHI — no forced pattern available)

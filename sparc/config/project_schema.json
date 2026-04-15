@@ -400,8 +400,8 @@
       "type": "object",
       "description": "Process rate auxiliary network — learns spatially-varying physical process rate from surface composition",
       "properties": {
-        "enabled":    {"type": "boolean", "default": true, "description": "Enable process rate network (thermal/hydraulic/fire-spread diffusivity)"},
-        "name":       {"type": "string", "default": "thermal_diffusivity", "description": "Physical quantity name (domain-specific)"},
+        "enabled":    {"type": "boolean", "default": true, "description": "Enable process rate network (spatial responsiveness / domain-specific diffusivity)"},
+        "name":       {"type": "string", "default": "spatial_responsiveness", "description": "Physical quantity name (domain-specific)"},
         "units":      {"type": "string", "default": "m2_per_s"},
         "bounds":     {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "[lower, upper] physical bounds"},
         "prior_mean": {"type": "number", "description": "Domain prior mean for initialization"},
@@ -418,7 +418,7 @@
       "type": "object",
       "description": "V2 optimization settings (neural meta-learner)",
       "properties": {
-        "run_cma_es":          {"type": "boolean", "default": true, "description": "Run CMA-ES hyperparameter search before training"},
+        "run_cma_es":          {"type": "boolean", "default": false, "description": "Run CMA-ES hyperparameter search before training (opt-in)"},
         "cma_es_popsize":      {"type": "integer", "default": 20},
         "cma_es_maxiter":      {"type": "integer", "default": 50},
         "clip_norm":           {"type": "number", "default": 1.0, "description": "Global gradient norm clipping (overridden by CMA-ES if enabled)"},

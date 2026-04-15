@@ -1987,6 +1987,13 @@ def main(fast_mode=False):
         config_path = str(cv_system.paths.pipeline_config)
         with open(config_path, "r") as f:
             cfg = json.load(f)
+
+        # Merge YAML project config keys that the JSON pipeline config lacks.
+        # The JSON config is a subset used for hyperparameter tuning; it does
+        # not carry physics, process_rate, training, or optimization sections.
+        for _merge_key in ("process_rate", "training", "optimization", "physics"):
+            if _merge_key not in cfg and _merge_key in cv_system.base_config:
+                cfg[_merge_key] = cv_system.base_config[_merge_key]
         
         # Extract and filter meta_ensemble parameters
         meta_config = cfg.get("models", {}).get("meta_ensemble", {})

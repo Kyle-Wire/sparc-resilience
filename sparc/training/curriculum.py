@@ -65,6 +65,15 @@ def get_lambda_schedule(
             else:
                 schedule[term] = target
 
+        elif term in ("pde", "bc"):
+            # V3 PDE/BC loss: activate after ramp_end (Stage C)
+            # Internal sub-curriculum in pde_loss.py handles staged
+            # activation of individual PDE terms.
+            if epoch < ramp_end:
+                schedule[term] = 0.0
+            else:
+                schedule[term] = target
+
         elif term == "base":
             if epoch < warmup_end:
                 schedule[term] = 0.5

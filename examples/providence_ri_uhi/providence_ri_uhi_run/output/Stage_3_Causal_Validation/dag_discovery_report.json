@@ -295,27 +295,19 @@
       "n_learned_edges": 15,
       "confirmed_edges": [
         [
-          "NDVI",
-          "AAT_z"
-        ],
-        [
-          "Distance_from_water_m",
-          "NDVI"
-        ],
-        [
           "Pct_Canopy",
-          "Pct_Impervious"
+          "NDVI"
         ],
         [
           "Albedo",
           "AAT_z"
         ],
         [
-          "Elevation_m",
-          "Pct_Impervious"
+          "NDVI",
+          "AAT_z"
         ],
         [
-          "Pct_Canopy",
+          "Distance_from_water_m",
           "NDVI"
         ],
         [
@@ -329,13 +321,17 @@
         [
           "Pct_Impervious",
           "AAT_z"
+        ],
+        [
+          "Elevation_m",
+          "Pct_Impervious"
+        ],
+        [
+          "Pct_Canopy",
+          "Pct_Impervious"
         ]
       ],
       "missing_edges": [
-        [
-          "Elevation_m",
-          "Pct_Canopy"
-        ],
         [
           "Elevation_m",
           "AAT_z"
@@ -343,16 +339,16 @@
         [
           "Pct_Canopy",
           "AAT_z"
+        ],
+        [
+          "Elevation_m",
+          "Pct_Canopy"
         ]
       ],
       "extra_edges": [
         [
-          "Albedo",
-          "NDVI"
-        ],
-        [
           "Elevation_m",
-          "NDVI"
+          "Distance_from_water_m"
         ],
         [
           "Pct_Impervious",
@@ -360,7 +356,7 @@
         ],
         [
           "Elevation_m",
-          "Distance_from_water_m"
+          "NDVI"
         ],
         [
           "Pct_Impervious",
@@ -369,6 +365,10 @@
         [
           "Albedo",
           "Distance_from_water_m"
+        ],
+        [
+          "Albedo",
+          "NDVI"
         ]
       ],
       "n_reversals": 4
@@ -382,12 +382,16 @@
       "n_learned_edges": 19,
       "confirmed_edges": [
         [
-          "NDVI",
+          "Pct_Canopy",
+          "NDVI"
+        ],
+        [
+          "Albedo",
           "AAT_z"
         ],
         [
-          "Elevation_m",
-          "Pct_Canopy"
+          "NDVI",
+          "AAT_z"
         ],
         [
           "Elevation_m",
@@ -395,22 +399,6 @@
         ],
         [
           "Distance_from_water_m",
-          "NDVI"
-        ],
-        [
-          "Pct_Canopy",
-          "Pct_Impervious"
-        ],
-        [
-          "Albedo",
-          "AAT_z"
-        ],
-        [
-          "Elevation_m",
-          "Pct_Impervious"
-        ],
-        [
-          "Pct_Canopy",
           "NDVI"
         ],
         [
@@ -424,6 +412,18 @@
         [
           "Pct_Impervious",
           "AAT_z"
+        ],
+        [
+          "Elevation_m",
+          "Pct_Canopy"
+        ],
+        [
+          "Elevation_m",
+          "Pct_Impervious"
+        ],
+        [
+          "Pct_Canopy",
+          "Pct_Impervious"
         ]
       ],
       "missing_edges": [
@@ -434,7 +434,19 @@
       ],
       "extra_edges": [
         [
+          "Albedo",
+          "Distance_from_water_m"
+        ],
+        [
           "Pct_Impervious",
+          "Distance_from_water_m"
+        ],
+        [
+          "NDVI",
+          "Albedo"
+        ],
+        [
+          "Elevation_m",
           "Distance_from_water_m"
         ],
         [
@@ -443,26 +455,14 @@
         ],
         [
           "Elevation_m",
-          "Distance_from_water_m"
-        ],
-        [
-          "NDVI",
-          "Albedo"
-        ],
-        [
-          "Pct_Canopy",
-          "Albedo"
-        ],
-        [
-          "Pct_Canopy",
-          "Distance_from_water_m"
-        ],
-        [
-          "Elevation_m",
           "NDVI"
         ],
         [
-          "Albedo",
+          "Pct_Canopy",
+          "Albedo"
+        ],
+        [
+          "Pct_Canopy",
           "Distance_from_water_m"
         ]
       ],
@@ -477,6 +477,14 @@
       "n_learned_edges": 17,
       "confirmed_edges": [
         [
+          "Pct_Canopy",
+          "NDVI"
+        ],
+        [
+          "Albedo",
+          "AAT_z"
+        ],
+        [
           "NDVI",
           "AAT_z"
         ],
@@ -486,22 +494,6 @@
         ],
         [
           "Distance_from_water_m",
-          "NDVI"
-        ],
-        [
-          "Pct_Canopy",
-          "Pct_Impervious"
-        ],
-        [
-          "Albedo",
-          "AAT_z"
-        ],
-        [
-          "Elevation_m",
-          "Pct_Impervious"
-        ],
-        [
-          "Pct_Canopy",
           "NDVI"
         ],
         [
@@ -515,30 +507,34 @@
         [
           "Pct_Impervious",
           "AAT_z"
+        ],
+        [
+          "Elevation_m",
+          "Pct_Impervious"
+        ],
+        [
+          "Pct_Canopy",
+          "Pct_Impervious"
         ]
       ],
       "missing_edges": [
         [
-          "Elevation_m",
-          "Pct_Canopy"
-        ],
-        [
           "Pct_Canopy",
           "AAT_z"
+        ],
+        [
+          "Elevation_m",
+          "Pct_Canopy"
         ]
       ],
       "extra_edges": [
-        [
-          "Albedo",
-          "NDVI"
-        ],
         [
           "Pct_Impervious",
           "Distance_from_water_m"
         ],
         [
-          "Pct_Canopy",
-          "Distance_from_water_m"
+          "Distance_from_water_m",
+          "Elevation_m"
         ],
         [
           "NDVI",
@@ -553,8 +549,12 @@
           "Distance_from_water_m"
         ],
         [
-          "Distance_from_water_m",
-          "Elevation_m"
+          "Pct_Canopy",
+          "Distance_from_water_m"
+        ],
+        [
+          "Albedo",
+          "NDVI"
         ]
       ],
       "n_reversals": 4
@@ -568,12 +568,8 @@
       "n_learned_edges": 11,
       "confirmed_edges": [
         [
-          "Elevation_m",
-          "AAT_z"
-        ],
-        [
           "Pct_Canopy",
-          "Pct_Impervious"
+          "NDVI"
         ],
         [
           "Albedo",
@@ -581,15 +577,19 @@
         ],
         [
           "Elevation_m",
-          "Pct_Impervious"
-        ],
-        [
-          "Pct_Canopy",
-          "NDVI"
+          "AAT_z"
         ],
         [
           "Pct_Impervious",
           "Albedo"
+        ],
+        [
+          "Elevation_m",
+          "Pct_Impervious"
+        ],
+        [
+          "Pct_Canopy",
+          "Pct_Impervious"
         ]
       ],
       "missing_edges": [
@@ -598,12 +598,12 @@
           "AAT_z"
         ],
         [
-          "Elevation_m",
-          "Pct_Canopy"
-        ],
-        [
           "Distance_from_water_m",
           "NDVI"
+        ],
+        [
+          "Pct_Canopy",
+          "AAT_z"
         ],
         [
           "Distance_from_water_m",
@@ -614,30 +614,30 @@
           "AAT_z"
         ],
         [
-          "Pct_Canopy",
-          "AAT_z"
+          "Elevation_m",
+          "Pct_Canopy"
         ]
       ],
       "extra_edges": [
         [
-          "Albedo",
-          "NDVI"
+          "Elevation_m",
+          "Distance_from_water_m"
         ],
         [
           "Elevation_m",
           "NDVI"
+        ],
+        [
+          "Albedo",
+          "Distance_from_water_m"
         ],
         [
           "Pct_Canopy",
           "Distance_from_water_m"
         ],
         [
-          "Elevation_m",
-          "Distance_from_water_m"
-        ],
-        [
           "Albedo",
-          "Distance_from_water_m"
+          "NDVI"
         ]
       ],
       "n_reversals": 2

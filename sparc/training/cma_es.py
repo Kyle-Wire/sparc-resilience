@@ -133,7 +133,11 @@ def run_cma_es(
             try:
                 loss = objective_fn(params)
             except Exception:
-                logger.warning("Objective function failed for %s; assigning inf", params)
+                import traceback
+                logger.warning(
+                    "Objective function failed for %s; assigning inf\n%s",
+                    params, traceback.format_exc(),
+                )
                 loss = float("inf")
             fitnesses.append(loss)
 
@@ -154,8 +158,13 @@ def run_cma_es(
         )
 
     best_x = es.result.xbest
-    best_params = decode_vector(np.asarray(best_x), space)
-    best_loss = float(es.result.fbest)
+    if best_x is None:
+        logger.warning("CMA-ES found no valid solution — returning defaults")
+        best_params = decode_vector(encode_defaults(space), space)
+        best_loss = float("inf")
+    else:
+        best_params = decode_vector(np.asarray(best_x), space)
+        best_loss = float(es.result.fbest)
 
     logger.info("CMA-ES finished after %d generations.  Best loss=%.6f", gen, best_loss)
     return CMAESResult(

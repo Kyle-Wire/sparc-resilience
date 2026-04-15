@@ -51,6 +51,149 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Land cover classification for process-rate pretraining
+# ---------------------------------------------------------------------------
+
+def _classify_land_cover(
+    feature_matrix: torch.Tensor | np.ndarray,
+    feature_names: list[str],
+    material_priors: dict[str, float],
+) -> torch.Tensor:
+    """
+    Classify each point into a land cover class and return target α values.
+
+    Classification uses Pct_Impervious, Pct_Canopy, and Distance_from_water_m
+    with simple thresholds.  Returns (N, 1) tensor of target α values drawn
+    from the material_priors table.
+
+    Classes (in priority order):
+      water_adjacent        — Distance_from_water_m < 50 AND Impervious < 30%
+      vegetated             — Canopy > 40% AND Impervious < 20%
+      open_green            — Canopy 15-40% AND Impervious < 30%
+      low_density           — Impervious 30-50%
+      moderate_density      — Impervious 50-70%
+      high_density_urban    — Impervious > 70%
+    """
+    if isinstance(feature_matrix, torch.Tensor):
+        fm = feature_matrix.detach().cpu().numpy()
+    else:
+        fm = np.asarray(feature_matrix)
+
+    N = fm.shape[0]
+    prior_values = list(material_priors.values())
+    prior_names = list(material_priors.keys())
+    default_val = np.median(prior_values)
+
+    # Find feature indices — use what's available
+    idx_imp = feature_names.index("Pct_Impervious") if "Pct_Impervious" in feature_names else None
+    idx_can = feature_names.index("Pct_Canopy") if "Pct_Canopy" in feature_names else None
+    idx_water = feature_names.index("Distance_from_water_m") if "Distance_from_water_m" in feature_names else None
+
+    imp = fm[:, idx_imp] if idx_imp is not None else np.full(N, 50.0)
+    can = fm[:, idx_can] if idx_can is not None else np.full(N, 20.0)
+    dist_w = fm[:, idx_water] if idx_water is not None else np.full(N, 500.0)
+
+    targets = np.full(N, default_val, dtype=np.float32)
+
+    def _get(name: str) -> float:
+        return material_priors.get(name, default_val)
+
+    # Apply in reverse priority (later rules overwrite earlier)
+    targets[:] = _get("moderate_density")
+    targets[imp > 70] = _get("high_density_urban")
+    targets[(imp >= 30) & (imp <= 50)] = _get("low_density")
+    targets[(can > 15) & (can <= 40) & (imp < 30)] = _get("open_green")
+    targets[(can > 40) & (imp < 20)] = _get("vegetated")
+    targets[(dist_w < 50) & (imp < 30)] = _get("water_adjacent")
+
+    return torch.tensor(targets, dtype=torch.float32).unsqueeze(-1)
+
+
+def _pretrain_process_rate_net(
+    process_net: torch.nn.Module,
+    physics_feats: torch.Tensor,
+    feature_names: list[str],
+    pr_col_idxs: list[int],
+    material_priors: dict[str, float],
+    n_epochs: int = 60,
+    lr: float = 1e-3,
+    lambda_mono: float = 0.1,
+    device: torch.device | None = None,
+    feat_mean: np.ndarray | None = None,
+    feat_std: np.ndarray | None = None,
+) -> float:
+    """
+    Pre-train ProcessRateNet toward land-cover-classified mixture prior
+    with monotonicity regularization.
+
+    Monotonicity penalty: for random pairs of points, if point A has
+    higher Pct_Impervious than point B, penalize if predicted α(A) < α(B)
+    (since higher impervious should yield higher thermal response rate).
+
+    Returns final loss value.
+    """
+    if device is None:
+        device = next(process_net.parameters()).device
+
+    # Build classification targets from RAW (un-standardized) features.
+    # physics_feats is z-scored; _classify_land_cover uses raw thresholds
+    # (e.g. Pct_Impervious > 70, Distance_from_water_m < 50).
+    if feat_mean is not None and feat_std is not None:
+        fm_raw = physics_feats.cpu() * torch.tensor(feat_std) + torch.tensor(feat_mean)
+    else:
+        fm_raw = physics_feats.cpu()
+    targets = _classify_land_cover(
+        fm_raw, feature_names, material_priors,
+    ).to(device)  # (N, 1)
+
+    pr_input = physics_feats[:, pr_col_idxs]
+    N = pr_input.shape[0]
+
+    # Find impervious column index within the PR input subset
+    imp_idx_in_pr = None
+    for i, col_idx in enumerate(pr_col_idxs):
+        if feature_names[col_idx] == "Pct_Impervious":
+            imp_idx_in_pr = i
+            break
+
+    optimizer = torch.optim.Adam(process_net.parameters(), lr=lr)
+    process_net.train()
+
+    final_loss = 0.0
+    for ep in range(n_epochs):
+        pred = process_net(pr_input)  # (N, 1)
+
+        # Gaussian NLL (MSE as proxy, equivalent when variance is constant)
+        mse_loss = torch.nn.functional.mse_loss(pred, targets)
+
+        # Monotonicity regularization via random pairs
+        mono_loss = torch.tensor(0.0, device=device)
+        if imp_idx_in_pr is not None and lambda_mono > 0:
+            n_pairs = min(1024, N)
+            idx_a = torch.randint(0, N, (n_pairs,), device=device)
+            idx_b = torch.randint(0, N, (n_pairs,), device=device)
+            imp_a = pr_input[idx_a, imp_idx_in_pr]
+            imp_b = pr_input[idx_b, imp_idx_in_pr]
+            alpha_a = pred[idx_a, 0]
+            alpha_b = pred[idx_b, 0]
+
+            # If imp_a > imp_b, we want alpha_a >= alpha_b
+            # Penalize: max(0, alpha_b - alpha_a) when imp_a > imp_b
+            mask = imp_a > imp_b + 1e-3  # meaningful difference
+            if mask.any():
+                violations = torch.relu(alpha_b[mask] - alpha_a[mask])
+                mono_loss = violations.pow(2).mean()
+
+        total_loss = mse_loss + lambda_mono * mono_loss
+        optimizer.zero_grad()
+        total_loss.backward()
+        optimizer.step()
+        final_loss = total_loss.item()
+
+    return final_loss
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -140,9 +283,37 @@ def _build_cardinal_neighbors(
         valid = dists < tol
         neighbor_idx[valid, k] = idxs[valid]
 
+    # ------------------------------------------------------------------
+    # Reject self-loops: edge points with no true neighbor in a direction
+    # get assigned themselves (distance = resolution < tol).
+    # ------------------------------------------------------------------
+    arange_N = np.arange(N)
+    for k in range(4):
+        self_loop = neighbor_idx[:, k] == arange_N
+        neighbor_idx[self_loop, k] = -1
+
+    # ------------------------------------------------------------------
+    # Reject wrong-direction assignments: ensure the found neighbor
+    # actually lies in the expected cardinal direction.
+    #   North: dy > 0,  South: dy < 0,  East: dx > 0,  West: dx < 0
+    # ------------------------------------------------------------------
+    _dir_axis = [1, 1, 0, 0]          # y, y, x, x
+    _dir_sign = [1, -1, 1, -1]        # +, -, +, -
+    for k in range(4):
+        valid_mask = neighbor_idx[:, k] >= 0
+        if not valid_mask.any():
+            continue
+        valid_idx = np.where(valid_mask)[0]
+        delta = (coords[neighbor_idx[valid_idx, k], _dir_axis[k]]
+                 - coords[valid_idx, _dir_axis[k]])
+        wrong = (delta * _dir_sign[k]) <= 0
+        neighbor_idx[valid_idx[wrong], k] = -1
+
     n_complete = int((neighbor_idx != -1).all(axis=1).sum())
+    n_boundary = int((neighbor_idx == -1).any(axis=1).sum())
     logger.info(
-        "Cardinal neighbors: %d/%d complete (res=%.2f)", n_complete, N, resolution,
+        "Cardinal neighbors: %d/%d complete, %d boundary (res=%.2f)",
+        n_complete, N, n_boundary, resolution,
     )
     return neighbor_idx, resolution
 
@@ -269,14 +440,69 @@ def _prepare_tensors(
     feature_matrix_scaled = (feature_matrix - feat_mean) / feat_std
     physics_t = torch.tensor(feature_matrix_scaled, dtype=torch.float32, device=device)
 
+    # ---- V3: Compute per-predictor spatial derivatives ----
+    feature_names = config.get("_feature_names", [])
+    physics_cfg = config.get("physics", {})
+    use_derivatives = physics_cfg.get("use_input_derivatives", True)
+
+    deriv_feats = None
+    deriv_names: list[str] = []
+    h_field = None
+
+    if use_derivatives and cardinal_idx is not None:
+        from sparc.physics.pde_operators import estimate_local_spacing
+        from sparc.physics.input_derivatives import (
+            compute_predictor_derivatives,
+            normalize_derivatives,
+        )
+
+        spacing_mode = physics_cfg.get("spacing_mode", "local")
+        h_field = estimate_local_spacing(coords_t, cardinal_idx, spacing=spacing_mode)
+
+        raw_derivs, deriv_names = compute_predictor_derivatives(
+            physics_t, cardinal_idx, h_field, feature_names,
+        )
+        deriv_feats, deriv_means, deriv_stds = normalize_derivatives(raw_derivs)
+
+        # Concatenate: physics_feats_extended = [original | derivatives]
+        physics_extended = torch.cat([physics_t, deriv_feats], dim=1)
+        logger.info(
+            "Physics features extended: %d original + %d derivatives = %d total",
+            physics_t.shape[1], deriv_feats.shape[1], physics_extended.shape[1],
+        )
+    else:
+        physics_extended = physics_t
+        logger.info("Input derivatives disabled — using %d original physics features", physics_t.shape[1])
+
     # Target — z-score normalise so surrogates' near-zero init is correct
     y_mean = float(np.mean(y))
     y_std = float(np.std(y)) or 1.0  # guard against constant target
     y_norm = (y - y_mean) / y_std
     y_t = torch.tensor(y_norm, dtype=torch.float32, device=device)
 
+    # ---- Water mask: Distance_from_water_m < 50 m (Dirichlet BC) ----
+    water_mask = None
+    T_water = None
+    if "Distance_from_water_m" in feature_names:
+        idx_water = feature_names.index("Distance_from_water_m")
+        water_mask = torch.tensor(
+            feature_matrix[:, idx_water] < 50.0,
+            dtype=torch.bool, device=device,
+        )
+        n_water = int(water_mask.sum().item())
+        if n_water > 0:
+            T_water = float(y_norm[water_mask.cpu().numpy()].mean())
+            logger.info(
+                "Water-adjacent BC mask: %d points (%.1f%%), T_water=%.4f (normalised)",
+                n_water, 100 * n_water / len(y), T_water,
+            )
+        else:
+            water_mask = None
+            logger.info("No water-adjacent points found (Distance_from_water_m < 50)")
+
     return {
         "physics_feats": physics_t,
+        "physics_feats_extended": physics_extended,
         "X_spatial": X_spatial,
         "coords": coords_t,
         "knn_index": knn_index,
@@ -290,6 +516,12 @@ def _prepare_tensors(
         "y_std": y_std,
         "feat_mean": feat_mean,
         "feat_std": feat_std,
+        "h_field": h_field,
+        "n_physics_original": physics_t.shape[1],
+        "n_physics_extended": physics_extended.shape[1],
+        "deriv_names": deriv_names,
+        "water_mask": water_mask,
+        "T_water": T_water,
     }
 
 
@@ -308,12 +540,22 @@ def _load_correlogram_bandwidths(
     """
     import json
 
-    # Stage_0 is a sibling of Stage_2 under the shared output root
-    stage0_dir = output_dir.parent / "Stage_0_Correlogram"
-    results_path = stage0_dir / "correlogram_analysis_results.json"
+    # Stage_0 is a sibling of Stage_2 under the shared output root.
+    # Walk up from output_dir until we find Stage_0_Correlogram as a sibling.
+    results_path = None
+    search_dir = output_dir
+    for _ in range(4):  # max 4 levels up
+        candidate = search_dir.parent / "Stage_0_Correlogram" / "correlogram_analysis_results.json"
+        if candidate.exists():
+            results_path = candidate
+            break
+        search_dir = search_dir.parent
 
-    if not results_path.exists():
-        logger.info("Correlogram results not found at %s — using uniform bandwidths", results_path)
+    if results_path is None:
+        logger.info(
+            "Correlogram results not found (searched up from %s) — using uniform bandwidths",
+            output_dir,
+        )
         return None
 
     try:
@@ -367,6 +609,7 @@ def train_neural_meta(
     config: dict,
     output_dir: str | Path,
     base_oof_predictions: dict[str, np.ndarray] | None = None,
+    quick_eval: bool = False,
 ) -> dict[str, Any]:
     """
     Train the V2 neural meta-learner with differentiable surrogates,
@@ -427,12 +670,16 @@ def train_neural_meta(
     logger.info("V2 neural training on device: %s", device)
 
     # ---- Prepare data ----
+    # Stash feature_names into config for _prepare_tensors
+    config["_feature_names"] = feature_names
+
     tensors = _prepare_tensors(
         y, coords, feature_matrix, config, device,
     )
 
     n_base = 3  # always 3 surrogates: GWR, GWRF, GGPGAM
     n_physics = feature_matrix.shape[1]
+    n_physics_extended = tensors["n_physics_extended"]
     d_spatial = tensors["d_spatial"]
     resolution = tensors["resolution"]
     y_mean = tensors["y_mean"]
@@ -456,6 +703,17 @@ def train_neural_meta(
 
     prior_mean = pr_cfg.get("prior_mean", 0.5)
 
+    # ---- Alpha supervision targets (land-cover classification) ----
+    # Compute once from raw features; used as persistent prior during
+    # joint training to prevent α from collapsing when w(s) is free.
+    material_priors = pr_cfg.get("material_priors", {})
+    if material_priors:
+        alpha_targets = _classify_land_cover(
+            feature_matrix, feature_names, material_priors,
+        ).to(device)  # (N, 1)
+    else:
+        alpha_targets = None
+
     # Target lambda dict for curriculum schedule.
     # "base" = surrogate fidelity: soft alignment with pretrained targets.
     target_lambdas = {
@@ -463,8 +721,10 @@ def train_neural_meta(
         "smooth": training_cfg.get("lambda_smooth_pred", 0.01),
         "alpha_smooth": training_cfg.get("lambda_smooth_alpha", 0.001),
         "neighbor": training_cfg.get("lambda_neighbor", 0.1),
-        "prior": training_cfg.get("lambda_alpha_prior", 1.0),
+        "prior": training_cfg.get("lambda_alpha_prior", 0.01),
         "base": training_cfg.get("lambda_base", 0.2),
+        "pde": training_cfg.get("lambda_pde", 0.05),
+        "bc": training_cfg.get("lambda_bc", 0.02),
     }
 
     # OOF containers
@@ -480,6 +740,7 @@ def train_neural_meta(
         logger.info("Running capacity sweep to find optimal hidden_dim ...")
         sweep_train_idx, sweep_test_idx = folds[0]
         sweep_phys = tensors["physics_feats"]
+        sweep_phys_ext = tensors["physics_feats_extended"]
         sweep_spat = tensors["X_spatial"]
         sweep_coords = tensors["coords"]
         sweep_y = tensors["y"]
@@ -488,7 +749,7 @@ def train_neural_meta(
         def _sweep_factory(hidden_dim: int, **_kw):
             """Create model bundle for capacity sweep."""
             _m = SPARCMetaLearner(
-                n_base_models=n_base, n_physics_features=n_physics,
+                n_base_models=n_base, n_physics_features=n_physics_extended,
                 d_spatial=d_spatial, hidden_dim=hidden_dim, dropout=dropout,
                 thresholds=thresholds, n_heads=n_heads,
                 max_neighbors=max_neighbors, siren_omega=siren_omega,
@@ -540,11 +801,13 @@ def train_neural_meta(
                 alpha = _p(pr_in)
                 T_pred, exc, _ = _m(
                     base_preds=bi,
-                    physics_feats=sweep_phys[sweep_train_idx],
+                    physics_feats=sweep_phys_ext[sweep_train_idx],
                     X_spatial=sweep_spat[sweep_train_idx],
                     coords=sweep_coords[sweep_train_idx],
                     knn_index=_knn, alpha=alpha,
                 )
+                # Cache surrogate outputs as their own targets (no V1 data in sweep)
+                _surr_tgts = [s.detach() for s in sp]
                 loss, _ = sparc_joint_loss(
                     T_pred=T_pred, exceedance_preds=exc,
                     y_true=sweep_y[sweep_train_idx],
@@ -552,6 +815,8 @@ def train_neural_meta(
                     alpha_prior=torch.full_like(alpha, prior_mean),
                     neighbor_idx=_card, source_term=_src,
                     resolution=resolution,
+                    surrogate_preds=sp,
+                    surrogate_targets=_surr_tgts,
                     lambda_physics=0.0, lambda_smooth=0.0,
                     lambda_alpha_smooth=0.0, lambda_prior=1.0,
                     lambda_base=0.0, lambda_neighbor=0.0, epoch=0,
@@ -578,6 +843,7 @@ def train_neural_meta(
                 _n_train = len(sweep_train_idx)
                 _n_test = len(sweep_test_idx)
                 _all_phys = torch.cat([sweep_phys[sweep_train_idx], sweep_phys[sweep_test_idx]])
+                _all_phys_ext = torch.cat([sweep_phys_ext[sweep_train_idx], sweep_phys_ext[sweep_test_idx]])
                 _all_spat = torch.cat([sweep_spat[sweep_train_idx], sweep_spat[sweep_test_idx]])
                 _all_coords = torch.cat([sweep_coords[sweep_train_idx], sweep_coords[sweep_test_idx]])
                 sp = _forward_surrogates(_s, _all_phys, _all_spat)
@@ -586,7 +852,7 @@ def train_neural_meta(
                 alpha = _p(pr_in)
                 T_pred, _, _ = _m(
                     base_preds=bi,
-                    physics_feats=_all_phys,
+                    physics_feats=_all_phys_ext,
                     X_spatial=_all_spat,
                     coords=_all_coords,
                     knn_index=_knn_full, alpha=alpha,
@@ -618,9 +884,13 @@ def train_neural_meta(
 
         # ---- Slice training data ----
         train_physics = tensors["physics_feats"][train_idx]
+        train_physics_ext = tensors["physics_feats_extended"][train_idx]
         train_spatial = tensors["X_spatial"][train_idx]
         train_coords = tensors["coords"][train_idx]
         train_y = tensors["y"][train_idx]
+        train_h = tensors["h_field"][train_idx] if tensors["h_field"] is not None else None
+        train_water_mask = tensors["water_mask"][train_idx] if tensors.get("water_mask") is not None else None
+        train_alpha_targets = alpha_targets[train_idx] if alpha_targets is not None else None
 
         # ---- Build fold-local KNN for spatial attention + GWRF kernel ----
         logger.info("  Building KNN index (k=%d) ...", max_neighbors)
@@ -653,7 +923,7 @@ def train_neural_meta(
 
         model = SPARCMetaLearner(
             n_base_models=n_base,
-            n_physics_features=n_physics,
+            n_physics_features=n_physics_extended,
             d_spatial=d_spatial,
             hidden_dim=hidden_dim,
             dropout=dropout,
@@ -762,6 +1032,31 @@ def train_neural_meta(
                 )
             logger.info("  All surrogates passed validation (R² >= 0.85)")
 
+        # ---- ProcessRateNet pre-training toward mixture prior ----
+        pr_pretrain_epochs = training_cfg.get("pr_pretrain_epochs", 30)
+        material_priors = pr_cfg.get("material_priors", {})
+        if pr_pretrain_epochs > 0 and material_priors:
+            logger.info(
+                "  Pre-training ProcessRateNet with land-cover classification "
+                "(%d epochs, %d materials, monotonicity reg)...",
+                pr_pretrain_epochs, len(material_priors),
+            )
+            pr_final_loss = _pretrain_process_rate_net(
+                process_net=process_net,
+                physics_feats=train_physics,
+                feature_names=feature_names,
+                pr_col_idxs=pr_col_idxs,
+                material_priors=material_priors,
+                n_epochs=pr_pretrain_epochs,
+                device=device,
+                feat_mean=tensors["feat_mean"],
+                feat_std=tensors["feat_std"],
+            )
+            logger.info(
+                "  ProcessRateNet pre-training done — final loss=%.6f",
+                pr_final_loss,
+            )
+
         # ---- Training loop ----
         model.train()
         process_net.train()
@@ -805,9 +1100,12 @@ def train_neural_meta(
 
             for b_idx in batches:
                 b_physics = train_physics[b_idx]
+                b_physics_ext = train_physics_ext[b_idx]
                 b_spatial = train_spatial[b_idx]
                 b_coords = train_coords[b_idx]
                 b_y = train_y[b_idx]
+                b_h = train_h[b_idx] if train_h is not None else resolution
+                b_water_mask = train_water_mask[b_idx] if train_water_mask is not None else None
                 b_surr_targets = {
                     k: v[b_idx] for k, v in _surr_targets.items()
                 }
@@ -843,7 +1141,7 @@ def train_neural_meta(
 
                 T_pred, exceedance, _ = model(
                     base_preds=base_input,
-                    physics_feats=b_physics,
+                    physics_feats=b_physics_ext,
                     X_spatial=b_spatial,
                     coords=b_coords,
                     knn_index=b_knn,
@@ -873,7 +1171,20 @@ def train_neural_meta(
                     lambda_base=lambdas.get("base", 0.0),
                     lambda_neighbor=lambdas.get("neighbor", 0.0),
                     epoch=epoch,
+                    h_field=b_h,
+                    lambda_pde=lambdas.get("pde", 0.0),
+                    lambda_bc=lambdas.get("bc", 0.0),
+                    water_mask=b_water_mask,
+                    T_water=tensors.get("T_water"),
                 )
+
+                # Variance penalty on w(s): encourage spatial diversity
+                if hasattr(model, "_last_w_source") and model._last_w_source is not None:
+                    total_loss = total_loss - 0.01 * model._last_w_source.var()
+
+                # Alpha supervision loss: maintain land-cover signal
+                if train_alpha_targets is not None:
+                    total_loss = total_loss + 0.1 * torch.nn.functional.mse_loss(alpha, train_alpha_targets[b_idx])
 
                 optimizer.zero_grad()
                 total_loss.backward()
@@ -904,12 +1215,17 @@ def train_neural_meta(
             if (epoch + 1) % 10 == 0 or epoch == 0:
                 logger.info(
                     "  Epoch %d/%d  loss=%.4f  "
-                    "[mse=%.3f phys=%.3f nbr=%.3f ce=%.3f]  (%.1fs)",
+                    "[mse=%.3f phys=%.3f nbr=%.3f ce=%.3f "
+                    "pde=%.3f bc=%.3f prior=%.3f base=%.3f]  (%.1fs)",
                     epoch + 1, n_epochs, epoch_loss,
                     epoch_components.get("mse", 0),
                     epoch_components.get("physics", 0),
                     epoch_components.get("neighborhood", 0),
                     epoch_components.get("cross_entropy", 0),
+                    epoch_components.get("pde_total", 0),
+                    epoch_components.get("bc_total", 0),
+                    epoch_components.get("alpha_prior", 0),
+                    epoch_components.get("surrogate", 0),
                     _time.perf_counter() - _fold_t0,
                 )
 
@@ -944,7 +1260,7 @@ def train_neural_meta(
 
         mean_pred, std_pred = model.predict_with_uncertainty(
             base_preds=full_base_input,
-            physics_feats=tensors["physics_feats"],
+            physics_feats=tensors["physics_feats_extended"],
             X_spatial=tensors["X_spatial"],
             coords=tensors["coords"],
             knn_index=full_knn,
@@ -972,6 +1288,20 @@ def train_neural_meta(
     rmse = float(np.sqrt(mean_squared_error(y, oof_preds)))
     logger.info("V2 Neural Meta OOF  R²=%.4f  RMSE=%.4f", r2, rmse)
 
+    # Quick-eval mode: return metrics only (used by CMA-ES trials)
+    if quick_eval:
+        return {
+            "model": None,
+            "process_rate": None,
+            "source_term": None,
+            "surrogates": None,
+            "oof_predictions": oof_preds,
+            "oof_uncertainty": oof_std,
+            "metrics": {"r2": r2, "rmse": rmse},
+            "encoder": tensors["encoder"],
+            "meta_info": None,
+        }
+
     # ==================================================================
     # Full retrain for deployment (main training + SWA)
     # ==================================================================
@@ -992,7 +1322,7 @@ def train_neural_meta(
 
     final_model = SPARCMetaLearner(
         n_base_models=n_base,
-        n_physics_features=n_physics,
+        n_physics_features=n_physics_extended,
         d_spatial=d_spatial,
         hidden_dim=hidden_dim,
         dropout=dropout,
@@ -1091,6 +1421,28 @@ def train_neural_meta(
             )
         logger.info("  All full-retrain surrogates passed validation (R² >= 0.85)")
 
+    # ---- ProcessRateNet pre-training (full retrain) ----
+    if pr_pretrain_epochs > 0 and material_priors:
+        logger.info(
+            "  Pre-training final ProcessRateNet with land-cover classification "
+            "(%d epochs, monotonicity reg)...", pr_pretrain_epochs,
+        )
+        pr_final_loss_rt = _pretrain_process_rate_net(
+            process_net=final_process,
+            physics_feats=tensors["physics_feats"],
+            feature_names=feature_names,
+            pr_col_idxs=pr_col_idxs,
+            material_priors=material_priors,
+            n_epochs=pr_pretrain_epochs,
+            device=device,
+            feat_mean=tensors["feat_mean"],
+            feat_std=tensors["feat_std"],
+        )
+        logger.info(
+            "  Final ProcessRateNet pre-training done — loss=%.6f",
+            pr_final_loss_rt,
+        )
+
     # Cache surrogate fidelity targets — use base-model targets when
     # available (same logic as CV fold path), else cache pretrained output.
     with torch.no_grad():
@@ -1111,6 +1463,7 @@ def train_neural_meta(
 
     # ---- Stages A/B/C: Main training ----
     N_full = len(y)
+    retrain_loss_history: list[dict[str, float]] = []
     use_minibatch_retrain = N_full > batch_size * 2
     if use_minibatch_retrain:
         from sparc.training.optimizer import spatial_minibatch_sampler
@@ -1134,12 +1487,16 @@ def train_neural_meta(
 
         rt_epoch_loss = 0.0
         rt_epoch_n = 0
+        rt_epoch_components: dict[str, float] = {}
 
         for b_idx in rt_batches:
             b_phys = tensors["physics_feats"][b_idx]
+            b_phys_ext = tensors["physics_feats_extended"][b_idx]
             b_spat = tensors["X_spatial"][b_idx]
             b_coord = tensors["coords"][b_idx]
             b_y = tensors["y"][b_idx]
+            b_h_rt = tensors["h_field"][b_idx] if tensors["h_field"] is not None else resolution
+            b_water_mask_rt = tensors["water_mask"][b_idx] if tensors.get("water_mask") is not None else None
             b_surr_tgt = {k: v[b_idx] for k, v in _final_surr_targets.items()}
             b_knn = _remap_indices_to_local(
                 np.arange(N_full), b_idx, full_knn[b_idx],
@@ -1170,7 +1527,7 @@ def train_neural_meta(
 
             T_pred, exceedance, _ = final_model(
                 base_preds=base_input,
-                physics_feats=b_phys,
+                physics_feats=b_phys_ext,
                 X_spatial=b_spat,
                 coords=b_coord,
                 knn_index=b_knn,
@@ -1200,7 +1557,20 @@ def train_neural_meta(
                 lambda_base=lambdas.get("base", 0.0),
                 lambda_neighbor=lambdas.get("neighbor", 0.0),
                 epoch=epoch,
+                h_field=b_h_rt,
+                lambda_pde=lambdas.get("pde", 0.0),
+                lambda_bc=lambdas.get("bc", 0.0),
+                water_mask=b_water_mask_rt,
+                T_water=tensors.get("T_water"),
             )
+
+            # Variance penalty on w(s): encourage spatial diversity
+            if hasattr(final_model, "_last_w_source") and final_model._last_w_source is not None:
+                total_loss = total_loss - 0.01 * final_model._last_w_source.var()
+
+            # Alpha supervision loss: maintain land-cover signal
+            if alpha_targets is not None:
+                total_loss = total_loss + 0.1 * torch.nn.functional.mse_loss(alpha, alpha_targets[b_idx])
 
             final_optimizer.zero_grad()
             total_loss.backward()
@@ -1213,14 +1583,29 @@ def train_neural_meta(
             bsz = len(b_idx)
             rt_epoch_loss += total_loss.item() * bsz
             rt_epoch_n += bsz
+            for k, v in components.items():
+                rt_epoch_components[k] = rt_epoch_components.get(k, 0) + v * bsz
 
         final_scheduler.step()
         rt_epoch_loss /= max(rt_epoch_n, 1)
+        for k in rt_epoch_components:
+            rt_epoch_components[k] /= max(rt_epoch_n, 1)
+        retrain_loss_history.append(dict(rt_epoch_components))
 
         if (epoch + 1) % 10 == 0 or epoch == 0:
             logger.info(
-                "  Retrain %d/%d  loss=%.4f  (%.1fs)",
+                "  Retrain %d/%d  loss=%.4f  "
+                "[mse=%.3f phys=%.3f nbr=%.3f ce=%.3f "
+                "pde=%.3f bc=%.3f prior=%.3f base=%.3f]  (%.1fs)",
                 epoch + 1, main_epochs, rt_epoch_loss,
+                rt_epoch_components.get("mse", 0),
+                rt_epoch_components.get("physics", 0),
+                rt_epoch_components.get("neighborhood", 0),
+                rt_epoch_components.get("cross_entropy", 0),
+                rt_epoch_components.get("pde_total", 0),
+                rt_epoch_components.get("bc_total", 0),
+                rt_epoch_components.get("alpha_prior", 0),
+                rt_epoch_components.get("surrogate", 0),
                 _time.perf_counter() - _retrain_t0,
             )
 
@@ -1229,6 +1614,10 @@ def train_neural_meta(
         from torch.optim.swa_utils import AveragedModel, SWALR
 
         logger.info("Starting SWA phase (%d epochs)...", swa_epochs)
+
+        # Detach non-leaf tensors before deepcopy (AveragedModel uses deepcopy)
+        if hasattr(final_model, "_last_w_source") and final_model._last_w_source is not None:
+            final_model._last_w_source = final_model._last_w_source.detach()
 
         swa_model = AveragedModel(final_model, device=device)
         swa_process = AveragedModel(final_process, device=device)
@@ -1267,9 +1656,12 @@ def train_neural_meta(
 
             for b_idx in swa_batches:
                 b_phys = tensors["physics_feats"][b_idx]
+                b_phys_ext = tensors["physics_feats_extended"][b_idx]
                 b_spat = tensors["X_spatial"][b_idx]
                 b_coord = tensors["coords"][b_idx]
                 b_y = tensors["y"][b_idx]
+                b_h_swa = tensors["h_field"][b_idx] if tensors["h_field"] is not None else resolution
+                b_water_mask_swa = tensors["water_mask"][b_idx] if tensors.get("water_mask") is not None else None
                 b_surr_tgt = {k: v[b_idx] for k, v in _final_surr_targets.items()}
                 b_knn = _remap_indices_to_local(
                     np.arange(N_full), b_idx, full_knn[b_idx],
@@ -1300,7 +1692,7 @@ def train_neural_meta(
 
                 T_pred, exceedance, _ = final_model(
                     base_preds=base_input,
-                    physics_feats=b_phys,
+                    physics_feats=b_phys_ext,
                     X_spatial=b_spat,
                     coords=b_coord,
                     knn_index=b_knn,
@@ -1330,7 +1722,20 @@ def train_neural_meta(
                     lambda_base=lambdas.get("base", 0.0),
                     lambda_neighbor=lambdas.get("neighbor", 0.0),
                     epoch=epoch_global,
+                    h_field=b_h_swa,
+                    lambda_pde=lambdas.get("pde", 0.0),
+                    lambda_bc=lambdas.get("bc", 0.0),
+                    water_mask=b_water_mask_swa,
+                    T_water=tensors.get("T_water"),
                 )
+
+                # Variance penalty on w(s): encourage spatial diversity
+                if hasattr(final_model, "_last_w_source") and final_model._last_w_source is not None:
+                    total_loss = total_loss - 0.01 * final_model._last_w_source.var()
+
+                # Alpha supervision loss: maintain land-cover signal
+                if alpha_targets is not None:
+                    total_loss = total_loss + 0.1 * torch.nn.functional.mse_loss(alpha, alpha_targets[b_idx])
 
                 final_optimizer.zero_grad()
                 total_loss.backward()
@@ -1359,6 +1764,7 @@ def train_neural_meta(
                     swa_ep + 1, swa_epochs, swa_epoch_loss,
                     _time.perf_counter() - _retrain_t0,
                 )
+                # (SWA components are not tracked per-batch for speed)
 
         # Extract averaged weights
         final_model = swa_model.module
@@ -1375,10 +1781,29 @@ def train_neural_meta(
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
     torch.save(final_model.state_dict(), artifact_dir / "neural_meta.pt")
+    final_model.save_trunk(artifact_dir / "shared_trunk.pt")
     torch.save(final_process.state_dict(), artifact_dir / "process_rate_net.pt")
+    torch.save(final_source_net.state_dict(), artifact_dir / "source_term_net.pt")
     for name, surr in final_surrogates.items():
         torch.save(surr.state_dict(), artifact_dir / f"surrogate_{name}.pt")
     joblib.dump(tensors["encoder"], artifact_dir / "sinusoidal_encoder.pkl")
+
+    # Save alpha field for scenario simulation
+    final_process.eval()
+    with torch.no_grad():
+        alpha_all = final_process(tensors["physics_feats"][:, pr_col_idxs])
+    np.save(artifact_dir / "alpha_field.npy", alpha_all.cpu().numpy().squeeze(-1))
+    np.save(artifact_dir / "alpha_field_coords.npy", coords)
+    logger.info("  Saved alpha_field.npy (%d points)", len(coords))
+
+    # Save cardinal neighbors and grid spacing for PDE forward solver
+    np.save(
+        artifact_dir / "cardinal_neighbors.npy",
+        tensors["cardinal_idx"].cpu().numpy(),
+    )
+    if tensors["h_field"] is not None:
+        np.save(artifact_dir / "grid_spacing.npy", tensors["h_field"].cpu().numpy())
+    logger.info("  Saved cardinal_neighbors.npy + grid_spacing.npy")
 
     # Feature scaling stats (needed to standardize inputs at inference time)
     np.savez(
@@ -1393,11 +1818,27 @@ def train_neural_meta(
         uncertainty=oof_std,
     )
 
+    # Save per-epoch loss history for diagnostics
+    if retrain_loss_history:
+        _loss_keys = sorted(retrain_loss_history[0].keys())
+        _loss_arrays = {
+            k: np.array([ep.get(k, 0.0) for ep in retrain_loss_history])
+            for k in _loss_keys
+        }
+        np.savez(artifact_dir / "loss_history.npz", **_loss_arrays)
+        logger.info(
+            "  Saved loss_history.npz (%d epochs, %d components)",
+            len(retrain_loss_history), len(_loss_keys),
+        )
+
     meta_info = {
         "surrogate_names": ["gwr", "gwrf", "ggpgam"],
         "n_surrogates": n_base,
         "n_base_models": n_base,
         "n_physics_features": n_physics,
+        "n_physics_original": tensors["n_physics_original"],
+        "n_physics_extended": n_physics_extended,
+        "has_alpha_field": True,
         "d_spatial": d_spatial,
         "hidden_dim": hidden_dim,
         "thresholds": thresholds,
@@ -1442,6 +1883,49 @@ def train_neural_meta(
         artifact_dir=artifact_dir,
         device=device,
     )
+
+    # ==================================================================
+    # PDE diagnostic visualizations
+    # ==================================================================
+    try:
+        from sparc.physics.pde_visualizations import generate_stage2_pde_plots
+
+        # Get T_pred for the full dataset (normalized)
+        final_model.eval()
+        with torch.no_grad():
+            _viz_surr_preds = _forward_surrogates(
+                final_surrogates, tensors["physics_feats"], tensors["X_spatial"],
+                knn_index=tensors["knn_index"][:, :gwrf_k],
+                knn_dists=tensors["knn_dists"][:, :gwrf_k],
+            )
+            _viz_base = torch.stack(_viz_surr_preds, dim=1)
+            _viz_alpha = final_process(tensors["physics_feats"][:, pr_col_idxs])
+            _viz_T, _, _ = final_model(
+                base_preds=_viz_base,
+                physics_feats=tensors["physics_feats_extended"],
+                X_spatial=tensors["X_spatial"],
+                coords=tensors["coords"],
+                knn_index=tensors["knn_index"],
+                alpha=_viz_alpha,
+            )
+
+        w_source_np = None
+        if hasattr(final_model, "_last_w_source") and final_model._last_w_source is not None:
+            w_source_np = final_model._last_w_source.detach().cpu().numpy().squeeze()
+
+        generate_stage2_pde_plots(
+            coords=coords,
+            alpha=alpha_all.cpu().numpy().squeeze(),
+            T_pred=_viz_T.cpu().numpy().squeeze(),
+            y_true=tensors["y"].cpu().numpy(),
+            neighbor_idx=full_cardinal.cpu().numpy(),
+            h=resolution,
+            w_source=w_source_np,
+            loss_history=retrain_loss_history if retrain_loss_history else None,
+            output_dir=artifact_dir,
+        )
+    except Exception as exc:
+        logger.warning("PDE visualization generation failed: %s", exc)
 
     return {
         "model": final_model,
@@ -1494,6 +1978,7 @@ def _export_v2_outputs(
 
     N = len(y)
     phys = tensors["physics_feats"]
+    phys_ext = tensors["physics_feats_extended"]
     spat = tensors["X_spatial"]
     coords_t = tensors["coords"]
     knn_idx = tensors["knn_index"]
@@ -1519,7 +2004,7 @@ def _export_v2_outputs(
     # --- 3. Full meta-learner inference ---
     T_pred_norm, exceedance_list, attn_weights = final_model(
         base_preds=base_input,
-        physics_feats=phys,
+        physics_feats=phys_ext,
         X_spatial=spat,
         coords=coords_t,
         knn_index=knn_idx,
@@ -1633,6 +2118,10 @@ def _export_v2_outputs(
             phys_mod = phys[pdp_idx].clone()
             phys_mod[:, j] = g_scaled
 
+            # Extended features: replace col j in original portion, keep derivatives
+            phys_ext_mod = phys_ext[pdp_idx].clone()
+            phys_ext_mod[:, j] = g_scaled
+
             spat_sub = spat[pdp_idx]
             coords_sub = coords_t[pdp_idx]
             knn_sub = _remap_indices_to_local(
@@ -1654,7 +2143,7 @@ def _export_v2_outputs(
 
             t_pred, _, _ = final_model(
                 base_preds=base_in,
-                physics_feats=phys_mod,
+                physics_feats=phys_ext_mod,
                 X_spatial=spat_sub,
                 coords=coords_sub,
                 knn_index=knn_sub,
@@ -1689,11 +2178,16 @@ def _export_v2_outputs(
         pr_in = phys_grad[:, pr_col_idxs]
         a = final_process(pr_in)
 
+        # Build extended features with grad-tracked original portion
+        n_orig = phys_grad.shape[1]
+        phys_ext_grad = phys_ext.clone().detach()
+        phys_ext_grad[:, :n_orig] = phys_grad  # grad flows through original cols
+
         # Need to enable grad for this pass
         final_model.train()  # enable dropout for grad flow
         t_pred, _, _ = final_model(
             base_preds=base_in,
-            physics_feats=phys_grad,
+            physics_feats=phys_ext_grad,
             X_spatial=spat,
             coords=coords_t,
             knn_index=knn_idx,
@@ -1739,7 +2233,8 @@ def run_cma_es_search(
 
     def objective(params: dict[str, float]) -> float:
         """Evaluate one hyperparameter configuration via 1-fold quick check."""
-        trial_cfg = dict(config)
+        import copy
+        trial_cfg = copy.deepcopy(config)
         trial_cfg.setdefault("training", {})
         for k, v in params.items():
             if k.startswith("lambda_"):
@@ -1753,7 +2248,11 @@ def run_cma_es_search(
             elif k == "siren_omega":
                 trial_cfg.setdefault("models", {}).setdefault("neural", {})["siren_omega"] = v
 
-        # Quick eval: first fold only
+        # Disable capacity sweep inside CMA-ES trials — it's redundant
+        # and adds ~30s per trial.  CMA-ES tunes lambdas, not architecture.
+        trial_cfg.setdefault("optimization", {})["capacity_sweep"] = False
+
+        # Quick eval: first fold only, skip retrain/export
         quick_folds = folds[:1]
         result = train_neural_meta(
             y=y,
@@ -1763,6 +2262,7 @@ def run_cma_es_search(
             folds=quick_folds,
             config=trial_cfg,
             output_dir=output_dir / "cma_trial",
+            quick_eval=True,
         )
         return -result["metrics"]["r2"]  # minimise negative R²
 

@@ -384,6 +384,55 @@ def _run_nuts_sampling(
     except Exception as exc:
         logger.warning("Could not compute neural baseline for NUTS: %s", exc)
 
+    # ------------------------------------------------------------------
+    # Load ProcessRateNet alpha field for spatially-varying weights
+    # ------------------------------------------------------------------
+    # High-responsiveness areas (large α) are in active thermal adjustment
+    # zones — their observations are more informative for estimating β.
+    # Implemented as per-point weights on the log-likelihood.
+    alpha_weights = None
+    model_dir = Path(config.get("paths", {}).get("model_dir", "."))
+    alpha_path = model_dir / "v2_neural" / "alpha_field.npy"
+    alpha_coords_path = model_dir / "v2_neural" / "alpha_field_coords.npy"
+    if alpha_path.exists():
+        try:
+            alpha_raw = np.load(alpha_path)
+            alpha_coords = np.load(alpha_coords_path) if alpha_coords_path.exists() else None
+
+            # Match alpha to NUTS subsample via nearest-neighbor coords
+            coord_cols = config.get("variables", {}).get("coordinates",
+                         config.get("variables", {}).get("coords", ["POINT_X", "POINT_Y"]))
+            available_coords = [c for c in coord_cols if c in data_nuts.columns]
+            if alpha_coords is not None and len(available_coords) >= 2:
+                nuts_coords = data_nuts[available_coords].values.astype(np.float64)
+                # Nearest-neighbor matching
+                from scipy.spatial import cKDTree
+                tree = cKDTree(alpha_coords)
+                _, nn_idx = tree.query(nuts_coords, k=1)
+                alpha_matched = alpha_raw[nn_idx]
+            elif len(alpha_raw) == len(data_nuts):
+                alpha_matched = alpha_raw
+            else:
+                alpha_matched = None
+
+            if alpha_matched is not None:
+                alpha_mean = float(np.mean(alpha_matched))
+                if alpha_mean > 1e-12:
+                    alpha_norm_np = alpha_matched / alpha_mean
+                    # Clamp to [0.5, 2.0] — prevents extreme weighting
+                    alpha_norm_np = np.clip(alpha_norm_np, 0.5, 2.0)
+                    alpha_weights = torch.tensor(
+                        alpha_norm_np, dtype=dtype, device=device,
+                    )
+                    logger.info(
+                        "NUTS alpha weights: mean=%.4f std=%.4f min=%.4f max=%.4f",
+                        float(alpha_weights.mean()), float(alpha_weights.std()),
+                        float(alpha_weights.min()), float(alpha_weights.max()),
+                    )
+        except Exception as exc:
+            logger.warning("Could not load alpha field for NUTS: %s", exc)
+            alpha_weights = None
+
     # Initialize sigma2 at residual MLE so gradients are O(1) at start.
     # Without this, sigma2=1 while true MLE≈5+ causes gradient ~4500,
     # making leapfrog integration immediately unstable.
@@ -466,7 +515,14 @@ def _run_nuts_sampling(
         if neural_baseline is not None:
             mu = mu + neural_baseline
 
-        ll = -0.5 * torch.sum(torch.log(sigma2) + (y_obs - mu) ** 2 / sigma2)
+        # Per-point log-likelihood with optional α-derived weights.
+        # Higher α → higher weight → that point constrains β more.
+        per_point_ll = -0.5 * (torch.log(sigma2) + (y_obs - mu) ** 2 / sigma2)
+        if alpha_weights is not None:
+            ll = torch.sum(alpha_weights * per_point_ll)
+        else:
+            ll = torch.sum(per_point_ll)
+
         lp_beta = -0.5 * torch.sum(
             (beta - prior_means_std) ** 2 / prior_vars_std
         )
@@ -503,6 +559,7 @@ def _run_nuts_sampling(
         "beta_std": beta_chain_orig.std(axis=0).tolist(),
         "r_hat": {k: v.tolist() for k, v in results.r_hat.items()},
         "ess": {k: v.tolist() for k, v in results.ess.items()},
+        "alpha_weighted": alpha_weights is not None,
     }
     with open(output_dir / "nuts_summary.json", "w") as f:
         json.dump(nuts_summary, f, indent=2)

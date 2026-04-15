@@ -43,12 +43,21 @@ def compute_physics_residual(
     """
     Finite-difference Laplacian with normalized residual.
 
+    Implements the steady-state heat equation in the standard form:
+
+        α∇²T − S ≈ 0
+
+    where α is the process rate (spatial responsiveness — sensitivity
+    of the temperature field to spatial thermal gradients) and S is the
+    source/sink term.  Alpha is normalized by its detached mean so the
+    residual stays O(1) in z-score space.
+
     Parameters
     ----------
-    T_pred : (N,) — predicted outcome field
-    alpha : (N,) — process rate per point
+    T_pred : (N,) — predicted outcome field (z-scored)
+    alpha : (N,) — process rate per point (physical units)
     neighbor_idx : (N, 4) long — indices [N, S, E, W]; -1 = missing
-    source_term : (N,) — forcing / source term
+    source_term : (N,) — forcing / source term (z-scored)
     resolution : float — grid spacing in meters
 
     Returns
@@ -66,7 +75,13 @@ def compute_physics_residual(
     T_w = T[neighbor_idx[valid, 3]]
 
     laplacian = (T_n + T_s + T_e + T_w - 4 * T[valid]) / (resolution ** 2)
-    physics_residual = laplacian - (source_term[valid] / alpha[valid])
+
+    # Normalize alpha by its detached mean so the PDE residual is O(1).
+    # This avoids mixing physical units (m²/s) with z-score units and
+    # prevents gradient explosions when alpha → bounds_lo.
+    alpha_mean = alpha.detach().mean().clamp(min=1e-8)
+    alpha_norm = alpha[valid] / alpha_mean
+    physics_residual = alpha_norm * laplacian - source_term[valid]
 
     # Normalize by residual magnitude — keeps physics loss on same scale as MSE
     residual_scale = physics_residual.detach().std().clamp(min=1e-6)
@@ -126,6 +141,19 @@ def sparc_joint_loss(
     lambda_neighbor: float,
     # Training phase (for curriculum)
     epoch: int,
+    # V3 PDE loss (optional — backward compatible)
+    h_field: torch.Tensor | float | None = None,
+    pde_loss_weights=None,
+    alpha_prior_field: torch.Tensor | None = None,
+    energy_residual: torch.Tensor | None = None,
+    bc_specs: dict | None = None,
+    water_mask: torch.Tensor | None = None,
+    T_water: float | None = None,
+    lambda_pde: float = 0.0,
+    lambda_bc: float = 0.0,
+    # V3 Initial condition (optional)
+    T0: torch.Tensor | None = None,
+    lambda_ic: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """
     Compute the 8-term joint loss.
@@ -220,11 +248,69 @@ def sparc_joint_loss(
     loss_components["neighborhood"] = neighborhood.item()
 
     # ------------------------------------------------------------------
+    # 9. V3 PDE loss (multi-term, staged curriculum)
+    # ------------------------------------------------------------------
+    pde_total = torch.tensor(0.0, device=T_pred.device)
+    if lambda_pde > 0 and h_field is not None and has_neighbors:
+        from sparc.physics.pde_loss import compute_pde_loss
+        pde_total, pde_dict = compute_pde_loss(
+            T_pred=T_pred.squeeze(),
+            alpha=alpha,
+            source_term=source_term,
+            neighbor_idx=neighbor_idx,
+            h=h_field,
+            weights=pde_loss_weights,
+            epoch=epoch,
+            alpha_prior_field=alpha_prior_field,
+            energy_residual=energy_residual,
+        )
+        pde_total = lambda_pde * pde_total
+        for k, v in pde_dict.items():
+            loss_components[k] = v
+
+    loss_components["pde_total"] = pde_total.item()
+
+    # ------------------------------------------------------------------
+    # 10. V3 Boundary condition loss
+    # ------------------------------------------------------------------
+    bc_total = torch.tensor(0.0, device=T_pred.device)
+    if lambda_bc > 0 and h_field is not None and has_neighbors:
+        from sparc.physics.boundary_conditions import compute_bc_loss
+        bc_total, bc_dict = compute_bc_loss(
+            T=T_pred.squeeze(),
+            neighbor_idx=neighbor_idx,
+            h=h_field,
+            bc_specs=bc_specs,
+            water_mask=water_mask,
+            T_water=T_water,
+        )
+        bc_total = lambda_bc * bc_total
+        for k, v in bc_dict.items():
+            loss_components[k] = v
+
+    loss_components["bc_total"] = bc_total.item()
+
+    # ------------------------------------------------------------------
+    # 11. V3 Initial condition consistency
+    # ------------------------------------------------------------------
+    ic_total = torch.tensor(0.0, device=T_pred.device)
+    if lambda_ic > 0 and T0 is not None:
+        from sparc.physics.initial_conditions import (
+            ic_consistency_loss, warmup_ic_schedule,
+        )
+        ic_raw = ic_consistency_loss(T_pred.squeeze(), T0)
+        ic_total = warmup_ic_schedule(epoch, ic_raw)
+        ic_total = lambda_ic * ic_total
+
+    loss_components["ic_total"] = ic_total.item()
+
+    # ------------------------------------------------------------------
     # Total
     # ------------------------------------------------------------------
     total = (
         mse + ce + physics + smooth + alpha_smooth
         + prior_reg + surrogate_loss + neighborhood
+        + pde_total + bc_total + ic_total
     )
     loss_components["total"] = total.item()
 

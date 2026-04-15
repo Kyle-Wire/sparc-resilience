@@ -207,7 +207,7 @@ def _yaml_to_config(raw: dict, yaml_path: str) -> dict:
         # ---- NEW: project-level metadata available to all stages ----
         'project': raw.get('project', {}),
         'physics': raw.get('physics', {}),
-        'causal':  raw.get('causal', {}),
+        'causal':  {'inference': 'bayesian', **raw.get('causal', {})},
         'models':  {**models_cfg,
             'meta_learner': models_cfg.get('meta_learner', 'neural'),
             'neural': models_cfg.get('neural', {
@@ -231,13 +231,13 @@ def _yaml_to_config(raw: dict, yaml_path: str) -> dict:
         # ---- V2: neural training, process rate, optimization ----
         'process_rate': raw.get('process_rate', {
             'enabled': True,
-            'name': 'thermal_diffusivity',
-            'units': 'm2_per_s',
+            'name': 'spatial_responsiveness',
+            'units': 'dimensionless',
             'bounds': [1.0e-7, 9.0e-7],
             'prior_mean': 5.0e-7,
         }),
         'optimization': raw.get('optimization', {
-            'run_cma_es': True,
+            'run_cma_es': False,
             'cma_es_popsize': 20,
             'cma_es_maxiter': 50,
             'clip_norm': 1.0,
@@ -391,7 +391,7 @@ def load_config(config_path: str | None = None) -> dict:
         # Empty new-style keys so downstream code can safely `.get()` them
         'project': {},
         'physics': {},
-        'causal': {},
+        'causal': {'inference': 'bayesian'},
         'models': {
             'meta_learner': 'neural',
             'neural': {
