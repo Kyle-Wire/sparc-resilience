@@ -42,13 +42,17 @@ class PipelineConfigurator:
         }
 
         # Block size: prefer user override from project.yml, else default
-        spatial_cv_cfg = self.base_config.get('models', {}).get('spatial_cv', {})
+        # spatial_cv lives under optimization.spatial_cv in project.yml
+        spatial_cv_cfg = self.base_config.get('optimization', {}).get('spatial_cv', {})
+        if not spatial_cv_cfg:
+            spatial_cv_cfg = self.base_config.get('models', {}).get('spatial_cv', {})
         user_block = spatial_cv_cfg.get('block_size')
         block_src = spatial_cv_cfg.get('block_size_source', 'correlogram')
         if block_src == 'user' and user_block is not None and user_block > 0:
             self.default_block_size = float(user_block)
         else:
             self.default_block_size = 3000.0  # meters
+        self._user_spatial_cv_cfg = spatial_cv_cfg
 
         self.default_kernel = 'gaussian'
         
@@ -200,7 +204,7 @@ class PipelineConfigurator:
             'block_size': None,  # Will be set from default_block_size
             'buffer_size': 300,  # Buffer distance in meters
             'stratify_y': True,  # Stratify by target distribution
-            'buffer_size_auto': True,  # Auto-calculate buffer based on block size
+            'buffer_size_auto': False,  # Auto-calculate buffer based on block size (overridden below if user specifies)
             'min_test_size': 50,  # Minimum test set size per fold
             'spatial_autocorr_threshold': 0.1,  # Threshold for spatial independence
             'overlap_tolerance': 0.05,  # Allowable overlap between train/test
@@ -374,6 +378,17 @@ class PipelineConfigurator:
         
         # Set block size from defaults
         model_configs['spatial_cv']['block_size'] = self.default_block_size
+
+        # Honour user buffer_size and buffer_size_auto settings
+        scv = self._user_spatial_cv_cfg
+        block_src = scv.get('block_size_source', 'correlogram')
+        if block_src == 'user':
+            user_buf = scv.get('buffer_size')
+            if user_buf is not None:
+                model_configs['spatial_cv']['buffer_size'] = int(user_buf)
+                model_configs['spatial_cv']['buffer_size_auto'] = False
+        else:
+            model_configs['spatial_cv']['buffer_size_auto'] = True
         
         # Use average bandwidth for GWR
         avg_bandwidth = int(sum(self.default_bandwidths.values()) / len(self.default_bandwidths))
@@ -456,7 +471,7 @@ class PipelineConfigurator:
                 print(f"Using REAL correlogram bandwidths for {len(real_bw)} variables.")
 
                 # Respect user override for block size if specified in project.yml
-                spatial_cv_cfg = self.base_config.get('models', {}).get('spatial_cv', {})
+                spatial_cv_cfg = self._user_spatial_cv_cfg
                 block_size_source = spatial_cv_cfg.get('block_size_source', 'correlogram')
                 user_block_size = spatial_cv_cfg.get('block_size')
                 if block_size_source == 'user' and user_block_size is not None and user_block_size > 0:

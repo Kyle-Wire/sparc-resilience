@@ -180,6 +180,13 @@ models:
     siren_omega: 30.0
     exceedance_thresholds: [0.25, 0.50, 0.75]
 
+  spatial_cv:
+    block_size: 300          # Block size in meters (300m for fine-grained urban analysis)
+    buffer_size: 300         # Buffer zone in meters between train/test folds
+    block_size_source: "user" # "user" = honour block_size above; "correlogram" = auto from Stage 1
+    method: "block"
+    stratify_y: true
+
 # ---------------------------------------------------------------------------
 # V2 Process Rate Network (domain-specific physical rate parameter)
 # ---------------------------------------------------------------------------
@@ -218,13 +225,6 @@ optimization:
   clip_norm: 1.0
   swa_epochs: 20
   capacity_sweep: false
-
-  spatial_cv:
-    block_size: 300          # Block size in meters (300m for fine-grained urban analysis)
-    buffer_size: 300         # Buffer zone in meters between train/test folds
-    block_size_source: "user" # "user" = honour block_size above; "correlogram" = auto from Stage 1
-    method: "block"
-    stratify_y: true
 
 # ---------------------------------------------------------------------------
 # GWEN Variable Selection

@@ -538,8 +538,10 @@ def main(fast_mode=False):
     # Determine model bandwidths from correlogram results (predictors only)
     model_bandwidths = analyzer.determine_model_bandwidths(all_results, target_variable=target_variable)
     
-    # Determine CV block size â€” honour user override if present
-    spatial_cv_cfg = config.get('models', {}).get('spatial_cv', {})
+    # Determine CV block size — honour user override if present
+    spatial_cv_cfg = config.get('optimization', {}).get('spatial_cv', {})
+    if not spatial_cv_cfg:
+        spatial_cv_cfg = config.get('models', {}).get('spatial_cv', {})
     block_size_source = spatial_cv_cfg.get('block_size_source', 'correlogram')
     user_block_size = spatial_cv_cfg.get('block_size')
 
@@ -701,7 +703,9 @@ def _auto_wire_bandwidths(all_results, model_bandwidths, optimal_cv_block_size, 
 
     # Preserve block_size_source so downstream stages know origin
     config = load_config()
-    spatial_cv_cfg = config.get('models', {}).get('spatial_cv', {})
+    spatial_cv_cfg = config.get('optimization', {}).get('spatial_cv', {})
+    if not spatial_cv_cfg:
+        spatial_cv_cfg = config.get('models', {}).get('spatial_cv', {})
     pipeline_cfg['manual_parameters']['block_size_source'] = spatial_cv_cfg.get('block_size_source', 'correlogram')
 
     # Also store the model-level bandwidths the correlogram determined

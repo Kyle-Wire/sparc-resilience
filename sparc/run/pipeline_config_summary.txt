@@ -37,18 +37,18 @@ GWR Parameters:
 
 GWRF Parameters:
   n_estimators: 100
-  k_neighbors: 100
+  k_neighbors: 200
   min_samples_leaf: 5
   n_jobs: 1
   subsample_fraction: None
-  subsample_n: None
+  subsample_n: 5000
 
 GGPGAM Parameters:
-  n_splines: 5
-  n_spatial_bases: 10
-  lam: 0.6
+  n_splines: 9
+  n_spatial_bases: 30
+  lam: 0.5
   fit_intercept: True
-  max_iter: 100
+  max_iter: 150
   tol: 0.0001
   verbose: False
   callbacks: None
@@ -67,7 +67,7 @@ SPATIAL CROSS-VALIDATION:
 
 DEEP KRIGING:
   Hidden Layers: [128, 64, 32]
-  Dropout Rate: 0.2
+  Dropout Rate: 0.15
   Epochs: 120
   Early Stopping: True (patience: 15)
   L2 Regularization: 0.0001
