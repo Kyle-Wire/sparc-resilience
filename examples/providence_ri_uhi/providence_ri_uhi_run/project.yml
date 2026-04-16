@@ -204,7 +204,7 @@ models:
 
   spatial_cv:
     block_size: 300          # Block size in meters (300m for fine-grained urban analysis)
-    buffer_size: 100         # Buffer zone in meters between train/test folds
+    buffer_size: 300         # Buffer zone in meters between train/test folds
     block_size_source: "user" # "user" = honour block_size above; "correlogram" = auto from Stage 1
     method: "block"
     stratify_y: true
