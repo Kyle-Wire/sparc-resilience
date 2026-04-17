@@ -75,14 +75,14 @@ class _EventCapture(io.TextIOBase):
 
     # Phase-based progress markers (pattern → label displayed in the UI)
     _PHASE_RE: list[tuple[re.Pattern, str]] = [
-        # Stage 0 — Correlogram
+        # Correlogram
         (re.compile(r"Correlogram Analysis", re.IGNORECASE), "Correlogram analysis"),
         (re.compile(r"Analyzing\s+(\S+)"), "Analyzing variable"),
         (re.compile(r"Pipeline Configuration", re.IGNORECASE), "Pipeline configuration"),
-        # Stage 1 — GWEN
+        # GWEN
         (re.compile(r"GWEN Variable Selection", re.IGNORECASE), "GWEN variable selection"),
         (re.compile(r"GWEN SELECTION RATIONALE", re.IGNORECASE), "GWEN results"),
-        # Stage 2 — Spatial CV
+        # Spatial CV
         (re.compile(r"Loading and Preprocessing", re.IGNORECASE), "Loading data"),
         (re.compile(r"Loading Spatial Folds", re.IGNORECASE), "Loading spatial folds"),
         (re.compile(r"Generating Spatial Folds", re.IGNORECASE), "Generating spatial folds"),
@@ -90,12 +90,15 @@ class _EventCapture(io.TextIOBase):
         (re.compile(r"Training\s+(\S+)\s+on\s+\d+\s+samples", re.IGNORECASE), "Training model"),
         (re.compile(r"completed.*folds successful", re.IGNORECASE), "Model complete"),
         (re.compile(r"Generating OOF predictions", re.IGNORECASE), "OOF predictions"),
-        (re.compile(r"Meta.?[Ee]nsemble", re.IGNORECASE), "Meta-ensemble"),
+        (re.compile(r"Retraining Base Models", re.IGNORECASE), "Retraining base models"),
         (re.compile(r"Spatial autocorrelation analysis", re.IGNORECASE), "Spatial autocorrelation"),
-        (re.compile(r"Stage 2 Complete", re.IGNORECASE), "Stage 2 complete"),
-        # Stage 3 — Causal
+        (re.compile(r"Spatial CV Complete", re.IGNORECASE), "Spatial CV complete"),
+        # Neural meta-learner
+        (re.compile(r"Neural Meta.?Learner", re.IGNORECASE), "Neural meta-learner"),
+        (re.compile(r"Capacity sweep", re.IGNORECASE), "Capacity sweep"),
+        # Causal
         (re.compile(r"Causal Validation", re.IGNORECASE), "Causal validation"),
-        # Stage 4 — Scenarios
+        # Scenarios
         (re.compile(r"Scenario Simulation", re.IGNORECASE), "Scenario simulation"),
     ]
 
@@ -364,31 +367,31 @@ def _execute_stage(
     paths = PipelinePaths.from_config(config)
 
     if stage == 0:
-        print(">>> Stage 0: Correlogram Analysis")
+        print(">>> Correlogram Analysis")
         from sparc.run.correlogram_analysis import main as run_correlogram
         result = run_correlogram(fast_mode=fast)
         state.store_result(0, result)
 
-        # Stage 0b — pipeline configuration
-        print(">>> Stage 0b: Pipeline Configuration")
+        # Pipeline configuration
+        print(">>> Pipeline Configuration")
         from sparc.run.pipeline_configurator import PipelineConfigurator
         configurator = PipelineConfigurator(stage1_dir=str(paths.stage0_dir))
         configurator.save_pipeline_config()
 
     elif stage == 1 and not skip_gwen:
-        print(">>> Stage 1: GWEN Variable Selection")
+        print(">>> GWEN Variable Selection")
         from sparc.run.gwen_variable_selection import main as run_gwen
         result = run_gwen(config_path=project_path, fast_mode=fast)
         state.store_result(1, result)
 
     elif stage == 2:
-        print(">>> Stage 2: Enhanced Spatial CV")
+        print(">>> Enhanced Spatial CV")
         from sparc.run.enhanced_spatial_cv import main as run_spatial_cv
         result = run_spatial_cv(fast_mode=fast)
         state.store_result(2, result)
 
     elif stage == 3:
-        print(">>> Stage 3: Causal Validation")
+        print(">>> Causal Validation")
         from sparc.run.causal_validation import main as run_causal_validation
 
         def _dag_approval_gate(mc3_payload: dict) -> None:
@@ -422,7 +425,7 @@ def _execute_stage(
         if not scenarios:
             print(">>> Stage 4: No scenarios defined — skipping.")
             return
-        print(">>> Stage 4: Scenario Simulation")
+        print(">>> Scenario Simulation")
         from sparc.interventions.scenario_simulator import ScenarioSimulator
         import pandas as pd
 

@@ -51,7 +51,7 @@ class ProcessRateNet(nn.Module):
     ``(N, 1)`` tensor — always positive, always within ``[bounds[0], bounds[1]]``.
     """
 
-    def __init__(self, n_inputs: int, domain_config: dict) -> None:
+    def __init__(self, n_inputs: int, domain_config: dict, n_temporal_inputs: int = 0) -> None:
         super().__init__()
 
         self.bounds_lo = max(float(domain_config["bounds"][0]), 1e-8)
@@ -60,11 +60,13 @@ class ProcessRateNet(nn.Module):
         self.material_priors = domain_config.get("material_priors", {})
         self.domain_name = domain_config.get("name", "process_rate")
         self.units = domain_config.get("units", "unknown")
+        self.n_temporal_inputs = n_temporal_inputs
 
+        total_inputs = n_inputs + n_temporal_inputs
         hidden = 64
 
         self.network = nn.Sequential(
-            nn.Linear(n_inputs, hidden),
+            nn.Linear(total_inputs, hidden),
             nn.LayerNorm(hidden),
             nn.GELU(),
             nn.Linear(hidden, hidden),

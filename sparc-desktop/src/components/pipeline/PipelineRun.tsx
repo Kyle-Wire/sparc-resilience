@@ -117,6 +117,21 @@ export default function PipelineRun() {
   const latestModelEvent = [...events].reverse().find((e) => e.model);
   const currentModel = latestModelEvent?.model?.toUpperCase() ?? null;
 
+  // Latest epoch info for progress display
+  const latestEpoch = training.epochHistory.length > 0
+    ? training.epochHistory[training.epochHistory.length - 1]
+    : null;
+
+  // Build a descriptive phase label
+  let progressLabel = complete ? "Complete" : (currentPhase ?? "Running…");
+  if (!complete && isRunning) {
+    if (latestEpoch && training.epochHistory.length > 0) {
+      progressLabel = `${currentPhase ?? "Neural meta-learner"} — Epoch ${latestEpoch.epoch}/${latestEpoch.n_epochs} · loss ${latestEpoch.total_loss.toFixed(4)}`;
+    } else if (currentModel) {
+      progressLabel += ` — ${currentModel}`;
+    }
+  }
+
   return (
     <div>
       <h1 className="mb-6 text-2xl font-bold">Run Pipeline</h1>
@@ -155,8 +170,7 @@ export default function PipelineRun() {
         <div className="mb-4">
           <div className="mb-1 flex items-center justify-between text-xs">
             <span className="font-medium text-sparc-gray-700">
-              {complete ? "Complete" : currentPhase ?? "Running…"}
-              {currentModel && isRunning && !complete ? ` — ${currentModel}` : ""}
+              {progressLabel}
             </span>
             <span className="tabular-nums text-sparc-gray-500">
               {complete ? "100" : progressPct}%
@@ -268,7 +282,7 @@ export default function PipelineRun() {
       {/* Status banners */}
       {complete && (
         <div className="mb-4 rounded border border-green-300 bg-green-50 p-3 text-sm text-green-800">
-          Stage {complete.stage} complete.
+          Pipeline complete.
         </div>
       )}
       {error && (

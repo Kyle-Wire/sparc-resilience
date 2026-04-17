@@ -640,6 +640,89 @@
               "description": "Aggregation period (e.g. 'monthly', 'annual'). null = aggregate across all time steps."
             }
           }
+        },
+        "snapshots": {
+          "type": "object",
+          "description": "Multi-snapshot temperature column mapping for diurnal analysis",
+          "properties": {
+            "morning": {"type": "string", "description": "Column name for morning temperature snapshot"},
+            "midday":  {"type": "string", "description": "Column name for midday temperature snapshot"},
+            "night":   {"type": "string", "description": "Column name for nighttime temperature snapshot"}
+          }
+        },
+        "snapshot_column": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Column indicating snapshot type per row (values: morning, midday, night)"
+        },
+        "single_snapshot": {
+          "type": ["string", "null"],
+          "default": null,
+          "enum": [null, "morning", "midday", "night"],
+          "description": "If all rows are from one snapshot, specify which"
+        },
+        "dt_morning_to_midday_hours": {
+          "type": "number",
+          "default": 6.0,
+          "description": "Hours between morning and midday snapshots"
+        },
+        "dt_midday_to_night_hours": {
+          "type": "number",
+          "default": 8.0,
+          "description": "Hours between midday and nighttime snapshots"
+        },
+        "dt_night_to_morning_hours": {
+          "type": "number",
+          "default": 10.0,
+          "description": "Hours between nighttime and next morning snapshots"
+        },
+        "use_transient_pde_loss": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable transient PDE consistency loss when multi-snapshot data is available"
+        },
+        "time_embedding_dim": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0,
+          "description": "Dimension of learned time embedding (0 = disabled, 8 recommended for multi-snapshot)"
+        }
+      }
+    },
+
+    "registry": {
+      "type": "object",
+      "description": "City registry for continual / transfer learning across multiple cities",
+      "properties": {
+        "path": {
+          "type": "string",
+          "default": "sparc_registry",
+          "description": "Path to the registry directory (relative to project.yml or absolute)"
+        },
+        "city_name": {
+          "type": "string",
+          "description": "Name identifier for this city in the registry"
+        },
+        "use_global_trunk": {
+          "type": "boolean",
+          "default": false,
+          "description": "Initialize training from the global trunk checkpoint in the registry"
+        },
+        "ewc_lambda": {
+          "type": "number",
+          "default": 0.0,
+          "description": "Elastic Weight Consolidation penalty weight (0 = disabled)"
+        },
+        "replay_lambda": {
+          "type": "number",
+          "default": 0.0,
+          "description": "Experience replay loss weight (0 = disabled)"
+        },
+        "coreset_size": {
+          "type": "integer",
+          "default": 400,
+          "minimum": 50,
+          "description": "Number of representative points per city for experience replay"
         }
       }
     },

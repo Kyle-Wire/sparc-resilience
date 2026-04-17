@@ -229,6 +229,118 @@ def aggregate_temporal(
     return agg
 
 
+def compute_diurnal_features(
+    df: pd.DataFrame,
+    config: dict,
+) -> tuple[pd.DataFrame, list[str]]:
+    """
+    Compute diurnal range and temporal derivative features from
+    multi-snapshot temperature observations.
+
+    Requires at least two of {T_morning, T_midday, T_night} columns.
+    Returns the original DataFrame with new columns appended.
+    Gracefully returns (df, []) if snapshot columns are absent.
+
+    New columns (when all three snapshots present):
+      - diurnal_range: T_midday - T_morning (thermal inertia proxy)
+      - dT_dt_heat:    heating rate (morning → midday)
+      - dT_dt_cool:    cooling rate (midday → night)
+      - dT_dt_nocturnal: nocturnal decay (night → morning)
+
+    Parameters
+    ----------
+    df : DataFrame with temperature snapshot columns
+    config : project config dict (reads temporal.snapshots and dt_* fields)
+
+    Returns
+    -------
+    (df_with_diurnal, new_column_names)
+    """
+    tcfg = config.get('temporal', {})
+    snapshots = tcfg.get('snapshots', {})
+
+    # Map snapshot names to column names
+    col_morning = snapshots.get('morning')
+    col_midday = snapshots.get('midday')
+    col_night = snapshots.get('night')
+
+    # Check which columns actually exist in the data
+    has_morning = col_morning is not None and col_morning in df.columns
+    has_midday = col_midday is not None and col_midday in df.columns
+    has_night = col_night is not None and col_night in df.columns
+
+    if not (has_morning or has_midday or has_night):
+        return df, []
+
+    df = df.copy()
+    new_cols: list[str] = []
+
+    # Temporal deltas (hours between snapshots)
+    dt_morning_to_midday = float(tcfg.get('dt_morning_to_midday_hours', 6.0))
+    dt_midday_to_night = float(tcfg.get('dt_midday_to_night_hours', 8.0))
+    dt_night_to_morning = float(tcfg.get('dt_night_to_morning_hours', 10.0))
+
+    # Diurnal range — primary thermal inertia proxy for ProcessRateNet
+    if has_morning and has_midday:
+        df['diurnal_range'] = df[col_midday] - df[col_morning]
+        new_cols.append('diurnal_range')
+
+        if dt_morning_to_midday > 0:
+            df['dT_dt_heat'] = df['diurnal_range'] / dt_morning_to_midday
+            new_cols.append('dT_dt_heat')
+
+    # Cooling rate (midday → night)
+    if has_midday and has_night and dt_midday_to_night > 0:
+        df['dT_dt_cool'] = (df[col_night] - df[col_midday]) / dt_midday_to_night
+        new_cols.append('dT_dt_cool')
+
+    # Nocturnal decay (night → morning)
+    if has_night and has_morning and dt_night_to_morning > 0:
+        df['dT_dt_nocturnal'] = (df[col_morning] - df[col_night]) / dt_night_to_morning
+        new_cols.append('dT_dt_nocturnal')
+
+    return df, new_cols
+
+
+def get_snapshot_time_indices(
+    df: pd.DataFrame,
+    config: dict,
+) -> np.ndarray | None:
+    """
+    Build per-row time index tensor for the time embedding layer.
+
+    Returns integer array: morning=0, midday=1, night=2.
+    For single-snapshot (non-temporal) data, returns None.
+
+    Parameters
+    ----------
+    df : DataFrame — must contain a column indicating snapshot type,
+         or the config must specify which snapshot the data represents.
+    config : project config dict
+
+    Returns
+    -------
+    time_indices : (N,) int array with values in {0, 1, 2}, or None
+    """
+    tcfg = config.get('temporal', {})
+    if not tcfg.get('enabled', False):
+        return None
+
+    snapshot_col = tcfg.get('snapshot_column')
+    if snapshot_col and snapshot_col in df.columns:
+        # Map string labels to indices
+        mapping = {'morning': 0, 'midday': 1, 'night': 2}
+        return df[snapshot_col].map(mapping).fillna(1).astype(int).values
+
+    # If data has a single snapshot identity specified
+    single_snapshot = tcfg.get('single_snapshot')
+    if single_snapshot:
+        idx = {'morning': 0, 'midday': 1, 'night': 2}.get(single_snapshot, 1)
+        return np.full(len(df), idx, dtype=int)
+
+    return None
+
+
 def prepare_temporal_data(df: pd.DataFrame, config: dict) -> tuple[pd.DataFrame, list[str]]:
     """
     High-level entry point: prepare a raw DataFrame for spatiotemporal modeling.
@@ -252,8 +364,12 @@ def prepare_temporal_data(df: pd.DataFrame, config: dict) -> tuple[pd.DataFrame,
     df[time_col] = parse_time_column(df, time_col)
     df = sort_panel(df, id_col, time_col)
 
+    # Diurnal features (multi-snapshot)
+    df, diurnal_features = compute_diurnal_features(df, config)
+
     # Lag features
     df, new_features = apply_lag_config(df, config, id_col, time_col, predictor_cols)
+    new_features = diurnal_features + new_features
 
     # Aggregation
     agg_cfg = tcfg.get('aggregation', {})

@@ -54,6 +54,9 @@ class PDELossWeights:
     gaussian_curv: float = 0.05
     alpha_smooth: float = 0.10
     alpha_prior: float = 0.10
+    # Temporal terms (activated only when multi-snapshot data is available)
+    transient: float = 0.05
+    nocturnal: float = 0.08
 
 
 # Staged activation schedule: (term_name, activation_offset)
@@ -117,6 +120,12 @@ def compute_pde_loss(
     alpha_prior_field: torch.Tensor | None = None,
     energy_residual: torch.Tensor | None = None,
     pde_start_epoch: int = 30,
+    # Temporal / transient PDE terms (V3)
+    T_prev: torch.Tensor | None = None,
+    dt_hours: float | None = None,
+    dT_dt_observed: torch.Tensor | None = None,
+    nocturnal_dT_dt: torch.Tensor | None = None,
+    T_night: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """
     Multi-term PDE physics loss with staged activation.
@@ -135,6 +144,11 @@ def compute_pde_loss(
     pde_start_epoch : epoch at which outer curriculum enables PDE lambda
                       (default 30 = ramp_end).  Internal sub-term schedule
                       offsets are relative to this value.
+    T_prev : (N,) optional previous-snapshot temperature for transient loss
+    dt_hours : float, hours between T_prev and T_pred snapshots
+    dT_dt_observed : (N,) optional observed temporal derivative (heating/cooling rate)
+    nocturnal_dT_dt : (N,) optional observed nocturnal cooling rate (S≈0)
+    T_night : (N,) optional nighttime temperature field for nocturnal loss
 
     Returns
     -------
@@ -303,5 +317,55 @@ def compute_pde_loss(
         loss_dict["pde_alpha_prior"] = term.item()
     else:
         loss_dict["pde_alpha_prior"] = 0.0
+
+    # ------------------------------------------------------------------
+    # Term 9: Transient consistency  ∂T/∂t ≈ α·∇²T + S/ρc
+    # Activated at epoch 0 when temporal data is available — clean signal.
+    # ------------------------------------------------------------------
+    sw_transient = _stage_weight(pde_epoch, 0) if (T_prev is not None and dt_hours) else 0.0
+    if sw_transient > 0 and T_prev is not None and dt_hours:
+        if lap_T_full is None:
+            lap_T_raw, valid_lap = laplacian(T_pred, neighbor_idx, h)
+            lap_T_full = _expand(lap_T_raw, valid_lap, N)
+        dt_seconds = dt_hours * 3600.0
+        # Observed temporal derivative from snapshots
+        if dT_dt_observed is not None:
+            obs_dTdt = dT_dt_observed
+        else:
+            obs_dTdt = (T_pred - T_prev) / dt_seconds
+        # PDE-predicted temporal derivative
+        pde_dTdt = alpha_norm * lap_T_full + source_term
+        transient_residual = pde_dTdt - obs_dTdt
+        transient_residual = _normalize_residual(transient_residual, valid_lap)
+        if valid_lap is not None and valid_lap.any():
+            transient_loss = (transient_residual[valid_lap] ** 2).mean()
+        else:
+            transient_loss = (transient_residual ** 2).mean()
+        term = weights.transient * sw_transient * transient_loss
+        total = total + term
+        loss_dict["pde_transient"] = term.item()
+    else:
+        loss_dict["pde_transient"] = 0.0
+
+    # ------------------------------------------------------------------
+    # Term 10: Nocturnal calibration  α·∇²T_night ≈ dT/dt_cool
+    # At night S≈0 → pure diffusion → clean α supervision.
+    # Activated at epoch 0 (highest-quality physics signal).
+    # ------------------------------------------------------------------
+    sw_nocturnal = _stage_weight(pde_epoch, 0) if (nocturnal_dT_dt is not None and T_night is not None) else 0.0
+    if sw_nocturnal > 0 and nocturnal_dT_dt is not None and T_night is not None:
+        lap_T_night_raw, valid_night = laplacian(T_night, neighbor_idx, h)
+        lap_T_night_full = _expand(lap_T_night_raw, valid_night, N)
+        nocturnal_residual = alpha_norm * lap_T_night_full - nocturnal_dT_dt
+        nocturnal_residual = _normalize_residual(nocturnal_residual, valid_night)
+        if valid_night.any():
+            nocturnal_loss = (nocturnal_residual[valid_night] ** 2).mean()
+        else:
+            nocturnal_loss = torch.tensor(0.0, device=T_pred.device)
+        term = weights.nocturnal * sw_nocturnal * nocturnal_loss
+        total = total + term
+        loss_dict["pde_nocturnal"] = term.item()
+    else:
+        loss_dict["pde_nocturnal"] = 0.0
 
     return total, loss_dict
