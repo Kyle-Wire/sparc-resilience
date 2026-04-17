@@ -14,8 +14,6 @@ SUBPACKAGES = [
     "sparc.models.gwr",
     "sparc.models.gwrf",
     "sparc.models.ggpgam",
-    "sparc.models.meta_ensemble",
-    "sparc.models.deep_kriging_v2",
     "sparc.causal",
     "sparc.causal.dag_definition",
     "sparc.evaluation",

@@ -36,6 +36,7 @@ def check_stage_completion(stage_name):
             "Variogram Analysis": (0, ["variogram_analysis_results.json", "variogram_summary.csv"]),
             "Pipeline Configuration": (None, None),  # not stage-managed
             "Enhanced Spatial CV": (2, ["optimized_oof_predictions.csv"]),
+            "Causal Validation": (3, ["scenario_coefficients.json"]),
             "Final Interpretation": ("final", None),
         }
         if stage_name in stage_map:
@@ -54,6 +55,8 @@ def check_stage_completion(stage_name):
         return os.path.exists(paths.pipeline_config)
     elif stage_name == "Enhanced Spatial CV":
         return os.path.exists(paths.oof_predictions) and os.path.exists(paths.folds_file)
+    elif stage_name == "Causal Validation":
+        return os.path.exists(os.path.join(str(paths.stage3_dir), 'scenario_coefficients.json'))
     elif stage_name == "Final Interpretation":
         return os.path.exists(paths.performance_metrics)
     else:
@@ -257,8 +260,9 @@ def main():
     print("1. GWEN Auto-Approval → Pipeline Automation")
     print("2. Variogram Analysis → Stage 1")
     print("3. Pipeline Configuration → Optimized Parameters") 
-    print("4. Enhanced Spatial CV → Stage 2")
-    print("5. Final Interpretation → Local Coefficient Maps")
+    print("4. Enhanced Spatial CV -> Stage 2 (+ V2 Neural Meta-Learner)")
+    print("5. Causal Validation -> Stage 3 (+ V2 Bayesian MC3/NUTS)")
+    print("6. Final Interpretation -> Local Coefficient Maps")
     print("="*80)
     
     # Check prerequisites
@@ -287,7 +291,12 @@ def main():
         {
             'name': 'Enhanced Spatial CV',
             'script': os.path.join(run_dir, 'enhanced_spatial_cv.py'),
-            'description': 'Run spatial cross-validation with variable-specific optimizations'
+            'description': 'Run spatial cross-validation with V2 neural meta-learner'
+        },
+        {
+            'name': 'Causal Validation',
+            'script': os.path.join(run_dir, 'causal_validation.py'),
+            'description': 'Causal DAG validation + V2 Bayesian MC³ / NUTS (if enabled)'
         },
         {
             'name': 'Final Interpretation',
@@ -357,7 +366,6 @@ def main():
         print("\nGenerated Outputs:")
         print("- Stage_0_Correlogram/: Correlogram plots and optimal parameters")
         print("- Stage_1_GWEN/: GWEN variable selection results")
-        print("- pipeline_config.json: Optimized configuration for all models")
         print("- Stage_2_Spatial_CV/: Enhanced spatial CV results")
         print("- Final_Interpretation_Results/: Local coefficient maps and analysis")
     else:

@@ -32,9 +32,8 @@
 7.  [Causal DAG Configuration](#7-causal-dag-configuration)
 8.  [Pipeline Stages](#8-pipeline-stages)
 9.  [CLI Reference](#9-cli-reference)
-10. [Streamlit UI](#10-streamlit-ui)
-11. [Models Reference](#11-models-reference)
-12. [Advanced Topics](#12-advanced-topics)
+10. [Models Reference](#10-models-reference)
+11. [Advanced Topics](#11-advanced-topics)
 13. [FAQ](#13-faq)
 
 ---
@@ -81,8 +80,6 @@ sparc --help
 | Package | Required For |
 |---------|-------------|
 | `econml` | CATE estimation in Stage 3 |
-| `tensorflow` / `keras` | Deep Kriging V2 residual correction |
-| `streamlit` | Interactive UI |
 
 ---
 
@@ -319,19 +316,9 @@ models:
     max_iter: 100
 
   meta_ensemble:
-    algorithm: "lightgbm"               # lightgbm | xgboost | catboost | linear
-    n_optuna_trials: 25                 # Hyperparameter tuning trials
+    algorithm: "neural"                 # Neural meta-learner
     include_base_features: true         # Include original features in stacking
     include_laplacian_pca: true         # Include Laplacian PCA in stacking
-
-  deep_kriging:
-    enabled: true                       # Enable neural residual correction
-    version: 2                          # V2 architecture (multi-scale)
-    hidden_layers: [64, 32, 16]
-    dropout_rate: 0.2
-    epochs: 100
-    learning_rate: 0.001
-    batch_size: 256
 
   spatial_cv:
     block_size: 300                     # Block size in meters
@@ -747,42 +734,9 @@ sparc report --project <path>
 
 ---
 
-## 10. Streamlit UI
+## 10. Models Reference
 
-SPARC includes an interactive Streamlit UI for guided project configuration and execution.
-
-### Launch
-
-```powershell
-# Windows
-Start_SPARC.bat
-
-# Any platform
-streamlit run sparc/ui/app.py
-```
-
-### Pages
-
-| Page | Purpose |
-|------|---------|
-| 1 — Project Setup | Project metadata, template selection, working directory |
-| 2 — Data | Data file path, target column, identifier, coordinates |
-| 3 — Variables | Predictor selection, AOI file |
-| 4 — CRS | Input and projected coordinate reference systems |
-| 5 — DAG Builder | Visual causal DAG construction |
-| 6 — Physics | Physics priors, caps, monotone constraints |
-| 7 — Scenarios | Single-variable and joint scenario definitions |
-| 8 — Models | Model hyperparameters and flags |
-| 9 — Run Pipeline | Generate config files, validate, execute pipeline |
-| 10 — Results | View outputs and diagnostics |
-
-The sidebar shows completion status for key configuration steps. All settings are stored in session state and exported to `project.yml` via the YAML generator.
-
----
-
-## 11. Models Reference
-
-### 11.1 OLS (`sparc.models.ols`)
+### 10.1 OLS (`sparc.models.ols`)
 
 Global linear regression baseline. Optionally includes Laplacian eigenmaps as spatial features. Uses scikit-learn + statsmodels. Fits on standardised features.
 
@@ -798,20 +752,11 @@ Geographically Weighted Random Forest. Fits a local random forest at each predic
 
 Geographically Guided Penalised GAM with Spatially Varying Coefficients. Uses `pygam.LinearGAM` with penalised splines for feature effects and spatial tensor product terms for local variation.
 
-### 11.5 Meta-Ensemble (`sparc.models.meta_ensemble`)
+### 10.5 Neural Meta-Learner (`sparc.models.neural_meta`)
 
-LightGBM-based stacking ensemble. Inputs: out-of-fold predictions from all base models + original features + Laplacian PCA. Hyperparameters tuned via Optuna. Monotone constraints from physics config are enforced. SHAP explainability available.
+End-to-end differentiable neural meta-learner (SPARCMetaLearner). Inputs: out-of-fold predictions from all base models + original features + Laplacian PCA. Hyperparameters tuned via Optuna.
 
-### 11.6 Deep Kriging V2 (`sparc.models.deep_kriging_v2`)
-
-Multi-scale spatial residual correction network (TensorFlow/Keras). Three branches:
-1. **Wendland RBF coordinate encoder** — learnable radial basis functions for spatial position
-2. **Laplacian spectral encoder** — eigenmap embeddings for smooth spatial structure
-3. **Local neighbourhood context** — aggregated features from spatial neighbours
-
-Applied when residual spatial autocorrelation is detected in the meta-ensemble predictions. The output is the meta-ensemble prediction + neural residual correction.
-
-### 11.7 GWEN (`sparc.models.gwen`)
+### 10.6 GWEN (`sparc.models.gwen`)
 
 Geographically Weighted Elastic Net for variable selection. Fits ElasticNetCV at sampled locations with adaptive spatial weighting. Reports selection frequency, coefficient stability, and spatial variability per feature.
 

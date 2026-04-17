@@ -118,12 +118,8 @@ validation:
   max_single_cell_delta: 10.0     # response units — unrealistic if exceeded
   typical_max_delta: 5.0          # response units — flag for review
   max_zone_avg_delta: 4.0         # response units — zone average cap
-
-# Maximum allowed absolute delta magnitude (z-score units)
-# Applied as a hard clip to all scenario deltas (direct + indirect).
-max_delta_magnitude: 3.0
-sign_violation_action: "error"
-magnitude_violation_action: "warning"
+  sign_violation_action: "error"
+  magnitude_violation_action: "warning"
 
 # ---------------------------------------------------------------------------
 # Diminishing-Return Thresholds
@@ -150,7 +146,7 @@ diminishing_return_thresholds:
 #   "dampen"  — reduce violation magnitude by ``dampen_factor`` (default)
 #   "zero"    — zero-out the offending cells entirely
 #   "keep"    — do nothing; trust the model
-sign_violation_strategy: "zero"
+sign_violation_strategy: "dampen"
 sign_violation_dampen_factor: 0.50
 
 # ---------------------------------------------------------------------------
@@ -160,10 +156,3 @@ sign_violation_dampen_factor: 0.50
 # spatial heterogeneity is considered reliable.  Below this, the engine
 # blends toward the physics literature coefficient.
 mgwr_reliability_threshold: 0.01
-
-# ---------------------------------------------------------------------------
-# Maximum Delta Magnitude Cap
-# ---------------------------------------------------------------------------
-# Hard ceiling (in response units / z-score) on any single-cell scenario
-# delta.  Values beyond this are clipped to ±max_delta_magnitude.
-max_delta_magnitude: 3.0

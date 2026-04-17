@@ -246,16 +246,9 @@ models:
     n_splines: 25
     lam: 0.6
   meta_ensemble:
-    algorithm: lightgbm               # lightgbm | xgboost | catboost | linear
-    n_optuna_trials: 100
+    algorithm: neural
     include_base_features: true
     include_laplacian_pca: true
-  deep_kriging:
-    enabled: true
-    version: 2
-    hidden_layers: [256, 128, 64]
-    dropout_rate: 0.2
-    epochs: 100
 
 pipeline:
   n_spatial_folds: 5
@@ -597,17 +590,13 @@ sparc run -p project.yml -s 4      # Scenario simulation
 | `--skip-gwen` | Skip GWEN variable selection (Stage 1) |
 | `--resume` | Resume from last completed stage |
 
-### Streamlit UI
+### Desktop App
+
+Launch the SPARC desktop application:
 
 ```powershell
-# Windows
-Start_SPARC.bat
-
-# Any platform
-streamlit run sparc/ui/app.py
+python -m sparc desktop
 ```
-
-The interactive UI guides you through project setup, data configuration, variable selection, DAG building, and pipeline execution.
 
 ---
 

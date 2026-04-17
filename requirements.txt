@@ -13,13 +13,11 @@ pyproj>=3.6
 rasterstats>=0.19
 
 # Modeling
-lightgbm>=4.0
 optuna>=3.3
 pygam>=0.9
 
 # Deep learning
 torch>=2.0
-tensorflow>=2.15
 
 # Causal inference
 dowhy>=0.11
@@ -42,6 +40,3 @@ pyarrow>=14.0
 
 # Sensitivity analysis (optional — Morris/Sobol)
 SALib>=1.4
-
-# UI
-streamlit>=1.30

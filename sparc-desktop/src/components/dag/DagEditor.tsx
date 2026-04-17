@@ -17,8 +17,9 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import dagre from "@dagrejs/dagre";
-import { getDag, validateDag } from "@/lib/api";
-import type { DagEdge, DagDefinition, DagValidation } from "@/lib/types";
+import { getDag, validateDag, getMc3Result } from "@/lib/api";
+import type { DagEdge, DagDefinition, DagValidation, MC3Result } from "@/lib/types";
+import { usePipeline } from "@/hooks/PipelineProvider";
 
 // ---------------------------------------------------------------------------
 // Color palette for node types
@@ -199,13 +200,49 @@ function useUndoRedo(
 const NODE_TYPE_OPTIONS = ["treatment", "mediator", "confounder", "outcome"] as const;
 
 // ---------------------------------------------------------------------------
+// MC³ edge styling helpers
+// ---------------------------------------------------------------------------
+function mc3EdgeStyle(prob: number): { stroke: string; strokeDasharray?: string; strokeWidth: number } {
+  if (prob >= 0.8) return { stroke: "#16a34a", strokeWidth: Math.max(1.5, prob * 3) };
+  if (prob >= 0.3) return { stroke: "#d97706", strokeDasharray: "6,4", strokeWidth: Math.max(1, prob * 2.5) };
+  return { stroke: "#9ca3af", strokeDasharray: "3,3", strokeWidth: 1 };
+}
+
+function mc3EdgesToFlow(mc3: MC3Result): Edge[] {
+  const { node_names, edge_probs } = mc3;
+  const edges: Edge[] = [];
+  for (let i = 0; i < node_names.length; i++) {
+    for (let j = 0; j < node_names.length; j++) {
+      if (i === j) continue;
+      const prob = edge_probs[i][j];
+      if (prob < 0.10) continue; // skip negligible edges
+      const style = mc3EdgeStyle(prob);
+      edges.push({
+        id: `mc3-${node_names[i]}-${node_names[j]}`,
+        source: node_names[i],
+        target: node_names[j],
+        label: `${(prob * 100).toFixed(0)}%`,
+        animated: prob >= 0.5,
+        style,
+        markerEnd: { type: MarkerType.ArrowClosed, color: style.stroke },
+        labelStyle: { fontSize: 9, fill: style.stroke, fontWeight: prob >= 0.5 ? 600 : 400 },
+      });
+    }
+  }
+  return edges;
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 export default function DAGView() {
+  const { dagApprovalPending, handleApproveDag, handleRejectDag } = usePipeline();
   const [dag, setDag] = useState<DagDefinition | null>(null);
   const [validation, setValidation] = useState<DagValidation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [mc3, setMc3] = useState<MC3Result | null>(null);
+  const [showMc3, setShowMc3] = useState(false);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -252,6 +289,49 @@ export default function DAGView() {
   }, [proposedEdges, setNodes, setEdges]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Fetch MC³ results when DAG approval is requested
+  useEffect(() => {
+    if (!dagApprovalPending) {
+      setMc3(null);
+      setShowMc3(false);
+      return;
+    }
+    getMc3Result()
+      .then((data) => {
+        setMc3(data);
+        setShowMc3(true);
+        // Overlay MC³ edges onto the flow canvas
+        if (data) {
+          const mc3Edges = mc3EdgesToFlow(data);
+          setEdges((eds) => {
+            // Remove any previous mc3 overlay edges
+            const cleaned = eds.filter((e) => !e.id.startsWith("mc3-"));
+            return [...cleaned, ...mc3Edges];
+          });
+          // Ensure all MC³ nodes exist in the canvas
+          const existingIds = new Set(nodes.map((n) => n.id));
+          const newNodes: Node[] = [];
+          for (const name of data.node_names) {
+            if (!existingIds.has(name)) {
+              newNodes.push({
+                id: name,
+                type: "dag",
+                position: { x: 0, y: 0 },
+                data: { label: name, nodeType: "confounder" },
+              });
+            }
+          }
+          if (newNodes.length > 0) {
+            setNodes((nds) => layoutNodes([...nds, ...newNodes], edges));
+          }
+        }
+      })
+      .catch(() => {
+        // MC³ result not ready yet — will retry on next render
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dagApprovalPending]);
 
   // Keyboard shortcuts for undo/redo
   useEffect(() => {
@@ -513,6 +593,42 @@ export default function DAGView() {
         </div>
       )}
 
+      {/* DAG Approval gate banner */}
+      {dagApprovalPending && (
+        <div className="flex items-center justify-between border-b border-amber-300 bg-amber-50 px-4 py-3">
+          <div>
+            <p className="text-sm font-semibold text-amber-800">
+              DAG Review Required — Pipeline Paused
+            </p>
+            <p className="text-xs text-amber-700">
+              MC³ structure learning is complete. Review the discovered edges (colored by probability)
+              then approve to continue to NUTS posterior sampling.
+              {mc3 && ` ${mc3.median_dag.edges.length} edges above 50% threshold.`}
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowMc3(!showMc3)}
+              className="rounded border border-amber-400 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100"
+            >
+              {showMc3 ? "Hide MC³ Edges" : "Show MC³ Edges"}
+            </button>
+            <button
+              onClick={handleRejectDag}
+              className="rounded border border-red-300 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
+            >
+              Reject & Cancel
+            </button>
+            <button
+              onClick={handleApproveDag}
+              className="rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700"
+            >
+              Approve DAG
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Validation banner */}
       {validation && (
         <div
@@ -544,6 +660,23 @@ export default function DAGView() {
             <span className="inline-block h-2.5 w-2.5 rounded-sm border-2 border-dashed" style={{ borderColor: "#e79024" }} />
             <span>AI Proposal</span>
           </div>
+        )}
+        {showMc3 && (
+          <>
+            <div className="mx-1 w-px bg-sparc-gray-200" />
+            <div className="flex items-center gap-1.5 text-[10px]">
+              <span className="inline-block h-0.5 w-4" style={{ backgroundColor: "#16a34a" }} />
+              <span>MC³ &gt;80%</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-[10px]">
+              <span className="inline-block h-0.5 w-4 border-t-2 border-dashed" style={{ borderColor: "#d97706" }} />
+              <span>MC³ 30-80%</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-[10px]">
+              <span className="inline-block h-0.5 w-4 border-t border-dotted" style={{ borderColor: "#9ca3af" }} />
+              <span>MC³ &lt;30%</span>
+            </div>
+          </>
         )}
       </div>
 

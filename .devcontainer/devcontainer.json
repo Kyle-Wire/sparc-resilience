@@ -5,8 +5,7 @@
   "customizations": {
     "codespaces": {
       "openFiles": [
-        "README.md",
-        "run_ui.py"
+        "README.md"
       ]
     },
     "vscode": {
@@ -17,17 +16,17 @@
       ]
     }
   },
-  "updateContentCommand": "[ -f packages.txt ] && sudo apt update && sudo apt upgrade -y && sudo xargs apt install -y <packages.txt; [ -f requirements.txt ] && pip3 install --user -r requirements.txt; pip3 install --user streamlit; echo '✅ Packages installed and Requirements met'",
+  "updateContentCommand": "[ -f packages.txt ] && sudo apt update && sudo apt upgrade -y && sudo xargs apt install -y <packages.txt; [ -f requirements.txt ] && pip3 install --user -r requirements.txt; echo '✅ Packages installed and Requirements met'",
   "postAttachCommand": {
-    "server": "streamlit run run_ui.py --server.enableCORS false --server.enableXsrfProtection false"
+    "server": "python -m sparc server"
   },
   "portsAttributes": {
-    "8501": {
+    "8008": {
       "label": "Application",
       "onAutoForward": "openPreview"
     }
   },
   "forwardPorts": [
-    8501
+    8008
   ]
 }

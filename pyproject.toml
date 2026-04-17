@@ -28,13 +28,14 @@ dependencies = [
     "pyproj>=3.6",
 
     # Modeling
-    "lightgbm>=4.0",
     "optuna>=3.3",
     "pygam>=0.9",
 
-    # Deep learning (Deep Kriging)
+    # Deep learning
     "torch>=2.0",
-    "tensorflow>=2.15",
+
+    # CMA-ES hyperparameter optimization (V2)
+    "cma>=3.0",
 
     # Causal inference
     "dowhy>=0.11",
@@ -62,9 +63,6 @@ server = [
     "uvicorn[standard]>=0.29",
     "websockets>=12.0",
     "python-multipart>=0.0.9",
-]
-ui = [
-    "streamlit>=1.30",
 ]
 dask = [
     "dask[dataframe]>=2024.1",

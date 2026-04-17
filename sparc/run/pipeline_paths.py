@@ -72,41 +72,22 @@ class PipelinePaths:
         self.phase1_dir = self.run_dir.parent
         self.project_root = self.phase1_dir.parent
         
-        # Try to load pipeline_config.json first, then fall back to Python config
-        import json
+        # Load output directory from project.yml via load_config()
         import sys
         
         config_loaded = False
-        
-        # Try pipeline_config.json first
-        pipeline_config_path = self.run_dir / "pipeline_config.json"
-        if pipeline_config_path.exists():
-            try:
-                with open(pipeline_config_path, 'r') as f:
-                    config = json.load(f)
-                    # Get output directory from JSON config
-                    stage_outputs = config.get('stage_outputs', {})
-                    final_output = stage_outputs.get('final_output', 'Final_Interpretation_Results')
-                    self.output_dir = self.phase1_dir / final_output
-                    config_loaded = True
-                    print(f"Loaded configuration from: {pipeline_config_path}")
-            except (json.JSONDecodeError, KeyError) as e:
-                print(f"Warning: Could not parse pipeline_config.json ({e})")
-        
-        # Fall back to Python config.config module
-        if not config_loaded:
-            if str(self.phase1_dir) not in sys.path:
-                sys.path.insert(0, str(self.phase1_dir))
-            try:
-                from sparc.config.config import load_config
-                config = load_config()
-                # Output directories - Use config-defined output directory
-                self.output_dir = Path(config['output']['base_dir'])
-                config_loaded = True
-            except (ImportError, ModuleNotFoundError, KeyError) as e:
-                # Final fallback to default output directory
-                print(f"Warning: Could not load config ({e}), using default output directory")
-                self.output_dir = self.phase1_dir / "Final_Results"
+        if str(self.phase1_dir) not in sys.path:
+            sys.path.insert(0, str(self.phase1_dir))
+        try:
+            from sparc.config.config import load_config
+            config = load_config()
+            # Output directories - Use config-defined output directory
+            self.output_dir = Path(config['output']['base_dir'])
+            config_loaded = True
+        except (ImportError, ModuleNotFoundError, KeyError) as e:
+            # Final fallback to default output directory
+            print(f"Warning: Could not load config ({e}), using default output directory")
+            self.output_dir = self.phase1_dir / "Final_Results"
         
         self.stage0_dir = self.output_dir / "Stage_0_Correlogram"
         self.stage1_dir = self.output_dir / "Stage_1_GWEN"
@@ -167,11 +148,11 @@ class PipelinePaths:
     # Configuration files
     @property
     def pipeline_config(self):
-        return self.run_dir / "pipeline_config.json"
+        return self.stage2_dir / "pipeline_config.json"
     
     @property
     def folds_file(self):
-        return self.run_dir / "folds.pkl"
+        return self.stage2_dir / "folds.pkl"
     
     @property
     def pipeline_report_file(self):

@@ -38,4 +38,7 @@ __all__ = [
     "counterfactual_engine",
     "causal_discovery",
     "spatial_cate",
+    # V2 Bayesian
+    "mc3",
+    "nuts",
 ]

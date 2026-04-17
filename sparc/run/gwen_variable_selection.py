@@ -631,7 +631,10 @@ def main(config_path=None, fast_mode=False):
                 # Inherit block_size from models.spatial_cv if not set in gwen config
                 gwen_block = gwen_cfg.get('block_size')
                 if gwen_block is None:
-                    gwen_block = config.get('models', {}).get('spatial_cv', {}).get('block_size')
+                    _scv = config.get('optimization', {}).get('spatial_cv', {})
+                    if not _scv:
+                        _scv = config.get('models', {}).get('spatial_cv', {})
+                    gwen_block = _scv.get('block_size')
                     if gwen_block is not None:
                         print(f"   Using shared block size from spatial_cv config: {gwen_block}m")
                 spatial_folds = _make_spatial_folds(

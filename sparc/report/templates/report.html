@@ -205,10 +205,23 @@
 <!-- ============================================================ -->
 {% if plots %}
 <h2>Visualizations</h2>
+
+{% set pde_plots = [] %}
+{% set other_plots = {} %}
 {% for stage_name, stage_plots in plots.items() %}
-<h3>{{ stage_name }}</h3>
-<div class="plot-gallery">
   {% for plot in stage_plots %}
+    {% if plot.name and plot.name.startswith('pde_') %}
+      {% if pde_plots.append(plot) %}{% endif %}
+    {% else %}
+      {% if other_plots.update({stage_name: other_plots.get(stage_name, []) + [plot]}) %}{% endif %}
+    {% endif %}
+  {% endfor %}
+{% endfor %}
+
+{% if pde_plots %}
+<h3>Physics Diagnostics (PDE)</h3>
+<div class="plot-gallery">
+  {% for plot in pde_plots %}
   {% if plot.data_uri %}
   <div>
     <img src="{{ plot.data_uri }}" alt="{{ plot.name }}" class="plot-img">
@@ -217,6 +230,28 @@
   {% endif %}
   {% endfor %}
 </div>
+{% endif %}
+
+{% for stage_name, stage_plots in plots.items() %}
+{% set non_pde = [] %}
+{% for plot in stage_plots %}
+  {% if not (plot.name and plot.name.startswith('pde_')) %}
+    {% if non_pde.append(plot) %}{% endif %}
+  {% endif %}
+{% endfor %}
+{% if non_pde %}
+<h3>{{ stage_name }}</h3>
+<div class="plot-gallery">
+  {% for plot in non_pde %}
+  {% if plot.data_uri %}
+  <div>
+    <img src="{{ plot.data_uri }}" alt="{{ plot.name }}" class="plot-img">
+    <div class="plot-caption">{{ plot.name }}</div>
+  </div>
+  {% endif %}
+  {% endfor %}
+</div>
+{% endif %}
 {% endfor %}
 {% endif %}
 

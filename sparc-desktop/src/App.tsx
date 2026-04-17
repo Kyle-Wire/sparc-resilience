@@ -235,8 +235,8 @@ export default function App() {
         {/* Chat panel — anchored to sidebar, slide-up */}
         {chatOpen && (
           <div
-            className="retro-box retro-pop-in fixed left-52 bottom-0 z-40 w-96 bg-white overflow-hidden border-t border-r border-sparc-gray-200 shadow-lg"
-            style={{ height: "min(480px, calc(100vh - 120px))" }}
+            className="chat-slide-in fixed left-52 bottom-0 z-40 w-96 overflow-hidden rounded-tr-xl border border-sparc-gray-200 bg-white shadow-xl"
+            style={{ height: "min(520px, calc(100vh - 120px))" }}
           >
             <ChatPanel onAction={handleAction} systemPrompt={systemPrompt} onClose={() => setChatOpen(false)} />
           </div>

@@ -31,24 +31,28 @@ class PipelineConfigurator:
             self.stage1_dir = paths.stage0_dir
         self.base_config = load_config()
         
-        # Default parameters that can be manually overridden
-        self.default_variables = ['Elevation_m', 'Distance_from_water_m', 'Pct_Canopy', 'Pct_Impervious', 'Pct_GreenSpace']
+        # Default parameters: prefer predictors from project.yml, fall back
+        # to a hard-coded list only when no project config is available.
+        yml_predictors = self.base_config.get('predictors', {}).get('base_model', [])
+        self.default_variables = list(yml_predictors) if yml_predictors else [
+            'Elevation_m', 'Distance_from_water_m', 'Pct_Canopy', 'Pct_Impervious',
+        ]
         self.default_bandwidths = {
-            'Elevation_m': 2000.0,
-            'Distance_from_water_m': 1500.0,
-            'Pct_Canopy': 1800.0,
-            'Pct_Impervious': 2200.0,
-            'Pct_GreenSpace': 1600.0
+            v: 2000.0 for v in self.default_variables
         }
 
         # Block size: prefer user override from project.yml, else default
-        spatial_cv_cfg = self.base_config.get('models', {}).get('spatial_cv', {})
+        # spatial_cv lives under optimization.spatial_cv in project.yml
+        spatial_cv_cfg = self.base_config.get('optimization', {}).get('spatial_cv', {})
+        if not spatial_cv_cfg:
+            spatial_cv_cfg = self.base_config.get('models', {}).get('spatial_cv', {})
         user_block = spatial_cv_cfg.get('block_size')
         block_src = spatial_cv_cfg.get('block_size_source', 'correlogram')
         if block_src == 'user' and user_block is not None and user_block > 0:
             self.default_block_size = float(user_block)
         else:
             self.default_block_size = 3000.0  # meters
+        self._user_spatial_cv_cfg = spatial_cv_cfg
 
         self.default_kernel = 'gaussian'
         
@@ -107,11 +111,9 @@ class PipelineConfigurator:
             'weights': None  # Sample weights
         }
         
-        # Meta Ensemble hyperparameters
+        # Meta Ensemble hyperparameters (neural-only)
         self.meta_ensemble_defaults = {
-            'algorithm': 'lightgbm',  # Primary algorithm
-            'alternative_algorithms': ['xgboost', 'catboost', 'linear'],
-            'n_optuna_trials': 100,  # Number of Optuna trials for hyperparameter optimization
+            'algorithm': 'neural',  # Neural meta-learner (SPARCMetaLearner)
             'include_base_features': True,  # Include original features
             'include_laplacian_pca': True,  # Include Laplacian PCA features
             'use_spatial_cv': True,  # Use spatial CV for meta-model training
@@ -119,78 +121,7 @@ class PipelineConfigurator:
             'early_stopping': True,  # Enable early stopping
             'patience': 20,  # Early stopping patience
             'validation_split': 0.2,  # Validation split for final training
-            'regularization': 'l2',  # Regularization type for linear meta-learner
-            'meta_learner_params': {
-                'lightgbm': {
-                    'objective': 'regression',
-                    'metric': 'rmse',
-                    'boosting_type': 'gbdt',
-                    'num_leaves': 31,
-                    'learning_rate': 0.05,
-                    'feature_fraction': 0.9,
-                    'bagging_fraction': 0.8,
-                    'bagging_freq': 5,
-                    'verbose': -1,
-                    'random_state': 42
-                },
-                'xgboost': {
-                    'objective': 'reg:squarederror',
-                    'eval_metric': 'rmse',
-                    'learning_rate': 0.05,
-                    'max_depth': 6,
-                    'subsample': 0.8,
-                    'colsample_bytree': 0.8,
-                    'random_state': 42
-                },
-                'catboost': {
-                    'objective': 'RMSE',
-                    'learning_rate': 0.05,
-                    'depth': 6,
-                    'random_state': 42,
-                    'verbose': False
-                }
-            }
-        }
-        
-        # Deep Kriging hyperparameters  
-        self.deep_kriging_defaults = {
-            'hidden_layers': [64, 32, 16],  # Architecture of hidden layers
-            'activation': 'relu',  # Activation function
-            'dropout_rate': 0.2,  # Dropout rate
-            'batch_size': 256,  # Batch size for training
-            'epochs': 100,  # Number of training epochs
-            'learning_rate': 0.001,  # Initial learning rate
-            'optimizer': 'adam',  # Optimizer type
-            'loss': 'mse',  # Loss function
-            'metrics': ['mae'],  # Additional metrics to track
-            'use_residuals': True,  # Use residuals from base models
-            'use_laplacian_features': True,  # Include Laplacian eigenmap features
-            'validation_split': 0.2,  # Validation split
-            'shuffle': True,  # Shuffle training data
-            'random_state': 42,  # Random state
-            'early_stopping': {
-                'enabled': True,
-                'patience': 15,  # Stop if no improvement for N epochs
-                'min_delta': 1e-4,  # Minimum change to qualify as improvement
-                'restore_best_weights': True,
-                'monitor': 'val_loss'  # Metric to monitor
-            },
-            'regularization': {
-                'l1_factor': 0.0,  # L1 regularization
-                'l2_factor': 1e-4,  # L2 regularization
-                'dropout_schedule': 'constant'  # 'constant', 'decay', 'adaptive'
-            },
-            'adaptive_config': {
-                'reduce_lr_on_plateau': True,
-                'lr_reduction_factor': 0.5,
-                'lr_patience': 10,
-                'min_lr': 1e-7
-            },
-            'callbacks': {
-                'tensorboard': False,  # Enable TensorBoard logging
-                'model_checkpoint': True,  # Save best model
-                'csv_logger': True  # Log metrics to CSV
-            }
+            'regularization': 'l2',  # Regularization type
         }
         
         # Spatial CV hyperparameters
@@ -200,7 +131,7 @@ class PipelineConfigurator:
             'block_size': None,  # Will be set from default_block_size
             'buffer_size': 300,  # Buffer distance in meters
             'stratify_y': True,  # Stratify by target distribution
-            'buffer_size_auto': True,  # Auto-calculate buffer based on block size
+            'buffer_size_auto': False,  # Auto-calculate buffer based on block size (overridden below if user specifies)
             'min_test_size': 50,  # Minimum test set size per fold
             'spatial_autocorr_threshold': 0.1,  # Threshold for spatial independence
             'overlap_tolerance': 0.05,  # Allowable overlap between train/test
@@ -246,7 +177,7 @@ class PipelineConfigurator:
         Parameters:
         -----------
         model_name : str
-            Name of the model ('ols', 'gwr', 'gwrf', 'ggpgam', 'meta_ensemble', 'deep_kriging', 'spatial_cv')
+            Name of the model ('ols', 'gwr', 'gwrf', 'ggpgam', 'meta_ensemble', 'spatial_cv')
         **hyperparameters : dict
             Hyperparameters to update for the specified model
         """
@@ -256,7 +187,6 @@ class PipelineConfigurator:
             'gwrf': 'gwrf_defaults',
             'ggpgam': 'ggpgam_defaults',
             'meta_ensemble': 'meta_ensemble_defaults',
-            'deep_kriging': 'deep_kriging_defaults',
             'spatial_cv': 'spatial_cv_defaults'
         }
         
@@ -296,7 +226,6 @@ class PipelineConfigurator:
             'gwrf': self.gwrf_defaults,
             'ggpgam': self.ggpgam_defaults,
             'meta_ensemble': self.meta_ensemble_defaults,
-            'deep_kriging': self.deep_kriging_defaults,
             'spatial_cv': self.spatial_cv_defaults
         }
         
@@ -374,6 +303,17 @@ class PipelineConfigurator:
         
         # Set block size from defaults
         model_configs['spatial_cv']['block_size'] = self.default_block_size
+
+        # Honour user buffer_size and buffer_size_auto settings
+        scv = self._user_spatial_cv_cfg
+        block_src = scv.get('block_size_source', 'correlogram')
+        if block_src == 'user':
+            user_buf = scv.get('buffer_size')
+            if user_buf is not None:
+                model_configs['spatial_cv']['buffer_size'] = int(user_buf)
+                model_configs['spatial_cv']['buffer_size_auto'] = False
+        else:
+            model_configs['spatial_cv']['buffer_size_auto'] = True
         
         # Use average bandwidth for GWR
         avg_bandwidth = int(sum(self.default_bandwidths.values()) / len(self.default_bandwidths))
@@ -382,41 +322,6 @@ class PipelineConfigurator:
         return model_configs
     
 
-    def generate_deep_kriging_config(self, mock_results=None):
-        """
-        Generate Deep Kriging configuration using defaults with adaptive adjustments
-        """
-        if mock_results is None:
-            mock_results = self.create_mock_variogram_results()
-            
-        # Start with defaults
-        deep_kriging_config = dict(self.deep_kriging_defaults)
-        
-        # Adaptive adjustments based on spatial complexity
-        if mock_results:
-            ranges = [result['optimal_parameters']['range'] 
-                     for result in mock_results.values() 
-                     if 'optimal_parameters' in result]
-            
-            n_kernels = len(set(result['optimal_parameters']['kernel'] 
-                               for result in mock_results.values() 
-                               if 'optimal_parameters' in result))
-            
-            avg_range = np.mean(ranges) if ranges else 1000.0
-            
-            # Adapt network complexity based on spatial complexity
-            if n_kernels > 2:
-                deep_kriging_config['hidden_layers'] = [128, 64, 32, 16]
-                deep_kriging_config['epochs'] = 150
-            elif avg_range > 2000:
-                deep_kriging_config['hidden_layers'] = [128, 64, 32]
-                deep_kriging_config['epochs'] = 120
-            else:
-                deep_kriging_config['hidden_layers'] = [64, 32]
-                deep_kriging_config['epochs'] = 100
-        
-        return deep_kriging_config
-    
     def apply_profiler_recommendations(self, recommendations):
         """
         Merge DatasetProfiler recommendations into model defaults.
@@ -456,7 +361,7 @@ class PipelineConfigurator:
                 print(f"Using REAL correlogram bandwidths for {len(real_bw)} variables.")
 
                 # Respect user override for block size if specified in project.yml
-                spatial_cv_cfg = self.base_config.get('models', {}).get('spatial_cv', {})
+                spatial_cv_cfg = self._user_spatial_cv_cfg
                 block_size_source = spatial_cv_cfg.get('block_size_source', 'correlogram')
                 user_block_size = spatial_cv_cfg.get('block_size')
                 if block_size_source == 'user' and user_block_size is not None and user_block_size > 0:
@@ -473,16 +378,13 @@ class PipelineConfigurator:
         print("Generating model configurations...")
         model_configs = self.generate_model_configs(mock_results)
         
-        print("Generating Deep Kriging configuration...")
-        deep_kriging_config = self.generate_deep_kriging_config(mock_results)
-        
         # Combine all configurations
         complete_config = {
             'metadata': {
                 'created_from': 'Global_Hyperparameter_Configuration',
                 'base_config': 'config.py',
                 'description': 'Pipeline configuration with global hyperparameters for all models (not per-variable)',
-                'configurable_models': ['gwr', 'gwrf', 'ggpgam', 'meta_ensemble', 'deep_kriging', 'spatial_cv'],
+                'configurable_models': ['gwr', 'gwrf', 'ggpgam', 'meta_ensemble', 'spatial_cv'],
                 'approach': 'global_parameters'  # Single set of params per model type
             },
             'features': {
@@ -495,12 +397,12 @@ class PipelineConfigurator:
                 'kernel': self.default_kernel
             },
             'models': model_configs,
-            'deep_kriging': deep_kriging_config,
             'stage_outputs': {
                 'stage_1': 'Comprehensive_Hyperparameter_Configuration',
                 'stage_2': 'Stage_2_Spatial_CV',
                 'final_output': 'Final_Interpretation_Results'
-            }
+            },
+            'pipeline_execution': self.base_config.get('pipeline', {}).get('pipeline_execution', {}),
         }
         
         return complete_config
@@ -595,19 +497,9 @@ class PipelineConfigurator:
             f.write(f"  Method: {cv['method']}\n")
             f.write("\n")
             
-            f.write("DEEP KRIGING:\n")
-            dk = config['deep_kriging']
-            f.write(f"  Hidden Layers: {dk['hidden_layers']}\n")
-            f.write(f"  Dropout Rate: {dk['dropout_rate']}\n")
-            f.write(f"  Epochs: {dk['epochs']}\n")
-            f.write(f"  Early Stopping: {dk['early_stopping']['enabled']} (patience: {dk['early_stopping']['patience']})\n")
-            f.write(f"  L2 Regularization: {dk['regularization']['l2_factor']}\n")
-            f.write("\n")
-            
-            f.write("META-ENSEMBLE OPTIONS:\n")
+            f.write("META-LEARNER OPTIONS:\n")
             meta = config['models']['meta_ensemble']
-            f.write(f"  Primary Algorithm: {meta.get('algorithm', 'lightgbm')}\n")
-            f.write(f"  Alternative Algorithms: {', '.join(meta.get('alternative_algorithms', ['xgboost', 'catboost']))}\n")
+            f.write(f"  Algorithm: {meta.get('algorithm', 'neural')}\n")
             f.write(f"  Include Base Features: {meta.get('include_base_features', True)}\n")
             f.write(f"  Include Laplacian PCA: {meta.get('include_laplacian_pca', True)}\n")
             f.write(f"  Use Spatial CV: {meta.get('use_spatial_cv', True)}\n")
@@ -631,7 +523,7 @@ class PipelineConfigurator:
         print("\n=== Interactive Hyperparameter Configuration ===")
         print("Configure hyperparameters for each model. Press Enter to keep current values.\n")
         
-        models = ['gwr', 'gwrf', 'ggpgam', 'deep_kriging', 'spatial_cv']
+        models = ['gwr', 'gwrf', 'ggpgam', 'spatial_cv']
         
         for model_name in models:
             print(f"\n--- {model_name.upper()} Configuration ---")
@@ -669,16 +561,6 @@ class PipelineConfigurator:
                     ('lam', 'float', 'Smoothing parameter (regularization)'),
                     ('max_iter', 'int', 'Maximum fitting iterations'),
                     ('tol', 'float', 'Convergence tolerance')
-                ]
-                
-            elif model_name == 'deep_kriging':
-                # Deep Kriging specific parameters
-                params_to_configure = [
-                    ('epochs', 'int', 'Number of training epochs'),
-                    ('batch_size', 'int', 'Batch size for training'),
-                    ('learning_rate', 'float', 'Initial learning rate'),
-                    ('dropout_rate', 'float', 'Dropout rate'),
-                    ('validation_split', 'float', 'Validation data fraction')
                 ]
                 
             elif model_name == 'spatial_cv':
@@ -734,7 +616,6 @@ class PipelineConfigurator:
                 'meta_ensemble': dict(self.meta_ensemble_defaults),
                 'spatial_cv': dict(self.spatial_cv_defaults)
             },
-            'deep_kriging': dict(self.deep_kriging_defaults)
         }
         
         with open(output_path, 'w') as f:
@@ -798,15 +679,6 @@ def main():
             min_samples_leaf=10,
             max_depth=None,
             bootstrap=True
-        )
-        
-        # Example: Configure Deep Kriging for more training
-        configurator.set_model_hyperparameters('deep_kriging',
-            epochs=200,
-            batch_size=512,
-            learning_rate=0.001,
-            dropout_rate=0.3,
-            **{'early_stopping': {'patience': 25, 'min_delta': 1e-5}}
         )
         
         print("Example hyperparameters set. You can use configurator.set_model_hyperparameters() in your code.")

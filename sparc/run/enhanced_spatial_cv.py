@@ -76,8 +76,6 @@ from sparc.models.ols import OLSModel
 from sparc.models.gwr import GWRModel
 from sparc.models.gwrf import GWRFModel
 from sparc.models.ggpgam import GGPGAM_SVC
-from sparc.models.meta_ensemble import MetaEnsemble
-from sparc.models.deep_kriging_v2 import DeepKrigingV2
 from sparc.evaluation.evaluation import SpatialEvaluator
 from copy import deepcopy
 
@@ -457,54 +455,34 @@ class EnhancedSpatialCV:
     Enhanced Spatial Cross-Validation using variable-specific optimized parameters
     """
     
-    def __init__(self, pipeline_config_path=None):
+    def __init__(self):
         # Use centralized path management
         self.paths = get_paths()
         
-        # Use provided path or default from paths utility
-        if pipeline_config_path is None:
-            self.pipeline_config_path = str(self.paths.pipeline_config)
-        elif not os.path.isabs(pipeline_config_path):
-            self.pipeline_config_path = str(self.paths.run_dir / pipeline_config_path)
-        else:
-            self.pipeline_config_path = pipeline_config_path
-            
-        self.pipeline_config = self.load_pipeline_config()
         self.base_config = load_config()
         # Centralised physics constraints from project.yml (or legacy defaults)
         self._monotone_constraints = load_monotone_constraints(self.base_config)
-        
-    def load_pipeline_config(self):
-        """Load the optimized pipeline configuration"""
-        if not os.path.exists(self.pipeline_config_path):
-            raise FileNotFoundError(f"Pipeline config not found: {self.pipeline_config_path}")
-        
-        with open(self.pipeline_config_path, 'r') as f:
-            return json.load(f)
     
     def get_block_size_from_config(self):
         """
-        Get the block size from pipeline configuration
+        Get the block size from project configuration
         """
-        # Try to get from sparc.models.spatial_cv first
-        block_size = self.pipeline_config.get('models', {}).get('spatial_cv', {}).get('block_size', None)
+        block_size = self.base_config.get('models', {}).get('spatial_cv', {}).get('block_size', None)
         if block_size is None:
-            # Fallback to manual_parameters
-            block_size = self.pipeline_config.get('manual_parameters', {}).get('block_size', None)
+            block_size = self.base_config.get('manual_parameters', {}).get('block_size', None)
         
         return block_size
     
     def get_buffer_size_from_config(self):
         """
-        Get the buffer size from pipeline configuration
+        Get the buffer size from project configuration
         """
-        buffer_size = self.pipeline_config.get('models', {}).get('spatial_cv', {}).get('buffer_size', 0)
+        buffer_size = self.base_config.get('models', {}).get('spatial_cv', {}).get('buffer_size', 0)
         
         # Auto-calculate buffer based on block size if enabled
-        if self.pipeline_config.get('models', {}).get('spatial_cv', {}).get('buffer_size_auto', False):
+        if self.base_config.get('models', {}).get('spatial_cv', {}).get('buffer_size_auto', False):
             block_size = self.get_block_size_from_config()
             if block_size is not None:
-                # Use 1/3 of block size as buffer (common spatial CV rule of thumb)
                 auto_buffer = max(100, int(block_size / 3))
                 print(f"Auto-calculated buffer size: {auto_buffer}m (1/3 of block size {block_size}m)")
                 return auto_buffer
@@ -513,13 +491,13 @@ class EnhancedSpatialCV:
     
     def get_variable_bandwidths(self):
         """
-        Get variable-specific bandwidths from pipeline configuration
+        Get variable-specific bandwidths from project configuration
         
         Returns:
         --------
         dict or None: Dictionary mapping variable names to bandwidths, or None if not configured
         """
-        variable_bandwidths = self.pipeline_config.get('manual_parameters', {}).get('bandwidths', None)
+        variable_bandwidths = self.base_config.get('manual_parameters', {}).get('bandwidths', None)
         
         if variable_bandwidths:
             # Ensure all values are numeric
@@ -538,35 +516,29 @@ class EnhancedSpatialCV:
     def apply_profiler_overrides(self, profiler_recommendations):
         """
         Overlay DatasetProfiler-recommended hyperparameters onto the
-        pipeline_config in-memory so that ``create_optimized_models()``
+        base_config in-memory so that ``create_optimized_models()``
         picks them up automatically.
 
         Parameters
         ----------
         profiler_recommendations : dict
             Output of ``DatasetProfiler.recommend_parameters()``.  Keys are
-            model names (``gwrf``, ``ggpgam``, ``meta_ensemble``, etc.).
+            model names (``gwrf``, ``ggpgam``, etc.).
         """
-        models_section = self.pipeline_config.setdefault('models', {})
+        models_section = self.base_config.setdefault('models', {})
         for model_key, recs in profiler_recommendations.items():
             if model_key in ('correlogram', 'spatial_cv'):
-                # spatial_cv is a top-level key in models
                 if model_key == 'spatial_cv' and 'spatial_cv' in models_section:
                     models_section['spatial_cv'].update(recs)
                 continue
             if model_key in models_section:
-                # deep-merge one level for dict values (e.g. meta_learner_params)
                 for k, v in recs.items():
                     if isinstance(v, dict) and isinstance(models_section[model_key].get(k), dict):
                         models_section[model_key][k].update(v)
                     else:
                         models_section[model_key][k] = v
-        # Deep kriging lives at its own top-level key
-        if 'deep_kriging' in profiler_recommendations:
-            dk_section = self.pipeline_config.setdefault('deep_kriging', {})
-            dk_section.update(profiler_recommendations['deep_kriging'])
 
-        print("Applied DatasetProfiler adaptive overrides to pipeline config.")
+        print("Applied DatasetProfiler adaptive overrides to project config.")
 
     def create_optimized_models(self, n_samples=None):
         """
@@ -577,7 +549,7 @@ class EnhancedSpatialCV:
         n_samples : int, optional
             Number of samples in the dataset (for safety checks)
         """
-        model_configs = self.pipeline_config['models']
+        model_configs = self.base_config.get('models', {})
         
         models = []
         
@@ -1292,7 +1264,7 @@ class EnhancedSpatialCV:
             
             # Load data for performance calculation
             print("=== Loading Data for Performance Calculation ===")
-            selected_features = self.pipeline_config['features']['selected_features']
+            selected_features = self.base_config.get('predictors', {}).get('base_model', [])
             
             data = load_and_preprocess_data(
                 raw_data_path=self.base_config["paths"]["raw_csv_path"],
@@ -1391,7 +1363,7 @@ class EnhancedSpatialCV:
         
         # Load and preprocess data
         print("=== Loading and Preprocessing Data ===")
-        selected_features = self.pipeline_config['features']['selected_features']
+        selected_features = self.base_config.get('predictors', {}).get('base_model', [])
         
         # GUARD: never allow the target variable into the feature matrix
         target_col = self.base_config['variables']['target']
@@ -1441,7 +1413,7 @@ class EnhancedSpatialCV:
             with open(profile_path, 'w') as _fp:
                 _json.dump(profiler.profile(), _fp, indent=2)
         except Exception as _e:
-            print(f"Warning: DatasetProfiler unavailable ({_e}). Using pipeline_config defaults.")
+            print(f"Warning: DatasetProfiler unavailable ({_e}). Using project config defaults.")
         
         X_gwen = data[selected_features].values
         y = data[self.base_config['variables']['target']].values
@@ -1542,143 +1514,233 @@ class EnhancedSpatialCV:
 def main(fast_mode=False):
     """
     Main function to run the complete enhanced spatial cross-validation pipeline
-    with integrated Meta Ensemble and Deep Kriging
+    with integrated V2 Neural Meta-Learner
     """
+    # Ensure stdout can handle Unicode (Windows cp1252 cannot encode emoji)
+    import sys
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
     try:
         # Initialize the enhanced spatial CV system
         cv_system = EnhancedSpatialCV()
         
-        # Run Stage 2: Base models with OOF predictions
-        print("\n=== Stage 2: Base Models ===")
-        stage2_results = cv_system.run_enhanced_spatial_cv()
+        # Check if Stage 2 (base model OOF) should be skipped entirely
+        skip_stage_2 = cv_system.base_config.get('pipeline_execution', {}).get('skip_stage_2_base_models', False)
         
-        # Load and merge data by ID
-        print("\n=== Loading and Merging Data by ID ===")
-        
-        # Load raw data and process it the same way as in Stage 2
-        raw_data = pd.read_csv(cv_system.base_config["paths"]["raw_csv_path"])
-        
-        # Process the data the same way as Stage 2 to get correct coordinates
-        selected_features = cv_system.pipeline_config['features']['selected_features']
-        
-        data = load_and_preprocess_data(
-            raw_data_path=cv_system.base_config["paths"]["raw_csv_path"],
-            identifier_col=cv_system.base_config['variables']['identifier'],
-            target_col=cv_system.base_config['variables']['target'],
-            coords_cols=cv_system.base_config['variables']['coordinates'],
-            predictor_cols=selected_features,
-            initial_crs=cv_system.base_config['crs']['initial'],
-            target_crs=cv_system.base_config['crs']['target_projected'],
-            output_dir=cv_system.base_config.get('output', {}).get('base_dir'),
-        )
-        
-        # CRITICAL: Save UNSCALED features NOW before meta-ensemble scaling modifies them!
-        # Base models need the original unscaled data (they scale internally)
-        paths = get_paths()
-        available_features = data.columns.tolist()
-        selected_features_filtered = [f for f in selected_features if f in available_features]
-        
-        # Save unscaled features for base model retraining (Stage 2b)
-        data_unscaled = data.copy()  # Deep copy with original unscaled features
-        print(f"Saved unscaled feature copy for base model retraining")
-        
-        # Extract original (unscaled) features for monotonic constraint enforcement
-        # in the MetaEnsemble — these are physical variables whose direction matters
-        X_original_features = data_unscaled[selected_features_filtered].values
-        print(f"Prepared original features for monotonic constraints: {selected_features_filtered}")
-        
-        # NOW create/apply scaling for meta-ensemble training (this modifies 'data' in-place)
-        scaler_path = os.path.join(paths.stage2_dir, 'feature_scaler.pkl')
-        
-        # Create a NEW feature scaler fitted on these features
-        from sklearn.preprocessing import StandardScaler
-        feature_scaler = StandardScaler()
-        X_features = data[selected_features_filtered].values
-        X_features_scaled = feature_scaler.fit_transform(X_features)
-        
-        # Save the scaler for later use
-        joblib.dump(feature_scaler, scaler_path)
-        print(f"Created and saved feature scaler to: {scaler_path}")
-        print(f"  Scaler fitted on {len(selected_features_filtered)} features")
-        
-        # Replace features in 'data' with scaled ones (for meta-ensemble only!)
-        for i, feature_name in enumerate(selected_features_filtered):
-            data[feature_name] = X_features_scaled[:, i]
-        
-        print(f"Applied feature scaling to 'data' for meta-ensemble training")
-        print(f"  Note: 'data_unscaled' still contains original values for base models")
-        
-        # Load OOF predictions
-        oof_predictions = pd.read_csv(str(cv_system.paths.oof_predictions))
-        
-        # Get the identifier column name from config
-        id_col = cv_system.base_config['variables']['identifier']
-        
-        # Add ID column to OOF predictions (assuming they're in same order as processed data)
-        if id_col not in oof_predictions.columns:
-            # Check if ID is a column or the index
-            if id_col in data.columns:
-                oof_predictions[id_col] = data[id_col].values
-            elif data.index.name == id_col:
-                oof_predictions[id_col] = data.index.values
-            else:
-                # Fallback: use row indices
-                print(f"  Warning: {id_col} not found in data, using row indices")
-                oof_predictions[id_col] = np.arange(len(oof_predictions))
-                data[id_col] = np.arange(len(data))
-        
-        # Ensure data has ID as a column for join
-        if id_col not in data.columns:
-            if data.index.name == id_col:
-                data = data.reset_index()
-            else:
-                data[id_col] = np.arange(len(data))
-        
-        # Set index and join
-        data = data.set_index(id_col)
-        oof_predictions = oof_predictions.set_index(id_col)
-        
-        # Join dataframes
-        joined_data = data.join(oof_predictions, how='inner')
-        
-        print(f"Joined data shape: {joined_data.shape}")
-        
-        # Extract components
-        target_col = cv_system.base_config['variables']['target']
-        coords = joined_data[['projected_X', 'projected_Y']].values
-        y = joined_data[target_col].values
-        base_model_names = ['ols', 'gwr', 'gwrf', 'ggpgam']
-        
-        # Extract base model predictions by name
-        base_predictions = {}
-        for model_name in base_model_names:
-            base_predictions[model_name] = joined_data[model_name].values
-        
-        # Load saved folds
-        print("\n=== Loading Spatial Folds ===")
-        try:
+        if skip_stage_2:
+            # =================================================================
+            # Stage 2: SKIPPED — load data & folds only, no base model training
+            # =================================================================
+            print("\n=== Stage 2: SKIPPED (skip_stage_2_base_models=true) ===")
+            print("   Surrogates will train against y directly (no V1 OOF pretraining)")
+
+            base_fitted_values = {}
+            print("WARNING: Stage 2 skipped — no base model fitted values available.")
+            print("         Surrogates will train against raw y. This degrades surrogate quality.")
+            print("         Set skip_stage_2_base_models=false to enable proper surrogate pretraining.")
+            
+            selected_features = cv_system.base_config.get('predictors', {}).get('base_model', [])
+            data = load_and_preprocess_data(
+                raw_data_path=cv_system.base_config["paths"]["raw_csv_path"],
+                identifier_col=cv_system.base_config['variables']['identifier'],
+                target_col=cv_system.base_config['variables']['target'],
+                coords_cols=cv_system.base_config['variables']['coordinates'],
+                predictor_cols=selected_features,
+                initial_crs=cv_system.base_config['crs']['initial'],
+                target_crs=cv_system.base_config['crs']['target_projected'],
+                output_dir=cv_system.base_config.get('output', {}).get('base_dir'),
+            )
+            
+            paths = get_paths()
+            available_features = data.columns.tolist()
+            selected_features_filtered = [f for f in selected_features if f in available_features]
+            data_unscaled = data.copy()
+            X_original_features = data_unscaled[selected_features_filtered].values
+            
+            target_col = cv_system.base_config['variables']['target']
+            coords = data[['projected_X', 'projected_Y']].values
+            y = data[target_col].values
+            
+            base_model_names = []
+            base_predictions = {}
+            
+            # Save a feature scaler for downstream compatibility
+            stage2_dir = str(cv_system.paths.stage2_dir)
+            os.makedirs(stage2_dir, exist_ok=True)
+            scaler_path = os.path.join(paths.stage2_dir, 'feature_scaler.pkl')
+            from sklearn.preprocessing import StandardScaler
+            feature_scaler = StandardScaler()
+            feature_scaler.fit(data[selected_features_filtered].values)
+            joblib.dump(feature_scaler, scaler_path)
+            
+            # Generate or load spatial folds
             folds_path = str(cv_system.paths.folds_file)
-            folds = joblib.load(folds_path)
-            print(f"Loaded {len(folds)} spatial folds from {cv_system.paths.get_relative_path(folds_path)}")
-        except FileNotFoundError:
-            print(f"{cv_system.paths.get_relative_path(folds_path)} not found, this should have been created in Stage 2")
-            return None
-        
-        # Define spatial_intel_dir early so it's available for all stages
-        paths = get_paths()
-        spatial_intel_dir = os.path.join(paths.output_dir, "spatial_intelligence")
-        os.makedirs(spatial_intel_dir, exist_ok=True)
+            if os.path.exists(folds_path):
+                folds = joblib.load(folds_path)
+                print(f"Loaded {len(folds)} spatial folds from cache")
+            else:
+                print("Generating spatial folds...")
+                folds = spatial_kfold_enhanced(
+                    X=X_original_features,
+                    y=y,
+                    coords=coords,
+                    n_splits=5,
+                    block_size=cv_system.get_block_size_from_config(),
+                    buffer_size=cv_system.get_buffer_size_from_config(),
+                    method='block',
+                    stratify_y=True,
+                )
+                joblib.dump(folds, folds_path)
+                print(f"Saved {len(folds)} spatial folds")
+            
+            spatial_intel_dir = os.path.join(paths.output_dir, "spatial_intelligence")
+            os.makedirs(spatial_intel_dir, exist_ok=True)
+            
+            print(f"Data: {len(y)} samples, {len(selected_features_filtered)} features")
+            print(f"Features: {selected_features_filtered}")
+        else:
+            # =================================================================
+            # Stage 2: Run base models with OOF predictions (normal path)
+            # =================================================================
+            print("\n=== Stage 2: Base Models ===")
+            stage2_results = cv_system.run_enhanced_spatial_cv()
+            
+            # Load and merge data by ID
+            print("\n=== Loading and Merging Data by ID ===")
+            
+            # Load raw data and process it the same way as in Stage 2
+            raw_data = pd.read_csv(cv_system.base_config["paths"]["raw_csv_path"])
+            
+            # Process the data the same way as Stage 2 to get correct coordinates
+            selected_features = cv_system.base_config.get('predictors', {}).get('base_model', [])
+            
+            data = load_and_preprocess_data(
+                raw_data_path=cv_system.base_config["paths"]["raw_csv_path"],
+                identifier_col=cv_system.base_config['variables']['identifier'],
+                target_col=cv_system.base_config['variables']['target'],
+                coords_cols=cv_system.base_config['variables']['coordinates'],
+                predictor_cols=selected_features,
+                initial_crs=cv_system.base_config['crs']['initial'],
+                target_crs=cv_system.base_config['crs']['target_projected'],
+                output_dir=cv_system.base_config.get('output', {}).get('base_dir'),
+            )
+            
+            # CRITICAL: Save UNSCALED features NOW before meta-ensemble scaling modifies them!
+            # Base models need the original unscaled data (they scale internally)
+            paths = get_paths()
+            available_features = data.columns.tolist()
+            selected_features_filtered = [f for f in selected_features if f in available_features]
+            
+            # Save unscaled features for base model retraining (Stage 2b)
+            data_unscaled = data.copy()  # Deep copy with original unscaled features
+            print(f"Saved unscaled feature copy for base model retraining")
+            
+            # Extract original (unscaled) features for monotonic constraint enforcement
+            # in the neural meta-learner — these are physical variables whose direction matters
+            X_original_features = data_unscaled[selected_features_filtered].values
+            print(f"Prepared original features for monotonic constraints: {selected_features_filtered}")
+            
+            # NOW create/apply scaling for meta-ensemble training (this modifies 'data' in-place)
+            scaler_path = os.path.join(paths.stage2_dir, 'feature_scaler.pkl')
+            
+            # Create a NEW feature scaler fitted on these features
+            from sklearn.preprocessing import StandardScaler
+            feature_scaler = StandardScaler()
+            X_features = data[selected_features_filtered].values
+            X_features_scaled = feature_scaler.fit_transform(X_features)
+            
+            # Save the scaler for later use
+            joblib.dump(feature_scaler, scaler_path)
+            print(f"Created and saved feature scaler to: {scaler_path}")
+            print(f"  Scaler fitted on {len(selected_features_filtered)} features")
+            
+            # Replace features in 'data' with scaled ones (for meta-ensemble only!)
+            for i, feature_name in enumerate(selected_features_filtered):
+                data[feature_name] = X_features_scaled[:, i]
+            
+            print(f"Applied feature scaling to 'data' for meta-ensemble training")
+            print(f"  Note: 'data_unscaled' still contains original values for base models")
+            
+            # Load OOF predictions
+            oof_predictions = pd.read_csv(str(cv_system.paths.oof_predictions))
+            
+            # Get the identifier column name from config
+            id_col = cv_system.base_config['variables']['identifier']
+            
+            # Add ID column to OOF predictions (assuming they're in same order as processed data)
+            if id_col not in oof_predictions.columns:
+                # Check if ID is a column or the index
+                if id_col in data.columns:
+                    oof_predictions[id_col] = data[id_col].values
+                elif data.index.name == id_col:
+                    oof_predictions[id_col] = data.index.values
+                else:
+                    # Fallback: use row indices
+                    print(f"  Warning: {id_col} not found in data, using row indices")
+                    oof_predictions[id_col] = np.arange(len(oof_predictions))
+                    data[id_col] = np.arange(len(data))
+            
+            # Ensure data has ID as a column for join
+            if id_col not in data.columns:
+                if data.index.name == id_col:
+                    data = data.reset_index()
+                else:
+                    data[id_col] = np.arange(len(data))
+            
+            # Set index and join
+            data = data.set_index(id_col)
+            oof_predictions = oof_predictions.set_index(id_col)
+            
+            # Join dataframes
+            joined_data = data.join(oof_predictions, how='inner')
+            
+            print(f"Joined data shape: {joined_data.shape}")
+            
+            # Extract components
+            target_col = cv_system.base_config['variables']['target']
+            coords = joined_data[['projected_X', 'projected_Y']].values
+            y = joined_data[target_col].values
+            base_model_names = ['ols', 'gwr', 'gwrf', 'ggpgam']
+            
+            # Extract base model predictions by name
+            base_predictions = {}
+            for model_name in base_model_names:
+                base_predictions[model_name] = joined_data[model_name].values
+            
+            # Load saved folds
+            print("\n=== Loading Spatial Folds ===")
+            try:
+                folds_path = str(cv_system.paths.folds_file)
+                folds = joblib.load(folds_path)
+                print(f"Loaded {len(folds)} spatial folds from {cv_system.paths.get_relative_path(folds_path)}")
+            except FileNotFoundError:
+                print(f"{cv_system.paths.get_relative_path(folds_path)} not found, this should have been created in Stage 2")
+                return None
+            
+            # Define spatial_intel_dir early so it's available for all stages
+            paths = get_paths()
+            spatial_intel_dir = os.path.join(paths.output_dir, "spatial_intelligence")
+            os.makedirs(spatial_intel_dir, exist_ok=True)
         
         # ============================================================================
         # Stage 2b: Retrain Base Models on Full Dataset for Deployment
         # ============================================================================
         # Check if Stage 2b should be skipped based on pipeline config
-        skip_stage_2b = cv_system.pipeline_config.get('pipeline_execution', {}).get('skip_stage_2b_full_retrain', False)
+        # (force-skip when Stage 2 was skipped — no base models to retrain)
+        skip_stage_2b = skip_stage_2 or cv_system.base_config.get('pipeline_execution', {}).get('skip_stage_2b_full_retrain', False)
         
         if skip_stage_2b:
-            print("\n=== Stage 2b: SKIPPED (skip_stage_2b_full_retrain=true in pipeline_config.json) ===")
+            print("\n=== Stage 2b: SKIPPED (skip_stage_2b_full_retrain=true in project.yml) ===")
             print("   To enable full model retraining, set skip_stage_2b_full_retrain to false")
             full_models_dir = None  # Set to None to indicate skipped
+            if not skip_stage_2:
+                # Stage 2 ran but 2b was skipped — no fitted values available
+                base_fitted_values = {}
+                print("WARNING: Stage 2b skipped — no base model fitted values available.")
+                print("         Surrogates will train against raw y. This degrades surrogate quality.")
         else:
             print("\n=== Stage 2b: Retraining Base Models on Full Dataset for Deployment ===")
             
@@ -1693,7 +1755,7 @@ def main(fast_mode=False):
             
             # CRITICAL: Use data_unscaled (saved before meta-ensemble scaling!)
             # Get selected features
-            selected_features_2b = cv_system.pipeline_config['features']['selected_features']
+            selected_features_2b = cv_system.base_config.get('predictors', {}).get('base_model', [])
             available_features_2b = data_unscaled.columns.tolist()
             selected_features_2b = [f for f in selected_features_2b if f in available_features_2b]
             
@@ -1870,402 +1932,156 @@ def main(fast_mode=False):
             
             print(f"\n✅ Stage 2b Complete: All base models retrained and saved to {full_models_dir}/")
             print(f"These models can now be used for scenario predictions and deployment.")
+
+            # Collect full-model fitted values for surrogate pretraining
+            # These are in-sample predictions (not OOF) — surrogates should
+            # learn to reproduce the base model's full fitted surface.
+            base_fitted_values = {}
+            for model, model_name in zip(models, model_names_2b):
+                try:
+                    if model_name in ('gwr', 'gwrf', 'ggpgam'):
+                        preds = model.predict(X_full, coords_full)
+                    else:
+                        preds = model.predict(X_full)
+                    if isinstance(preds, tuple):
+                        preds = preds[0]
+                    base_fitted_values[model_name] = preds
+                    print(f"Collected fitted values for {model_name}: shape {preds.shape}")
+                except Exception as e:
+                    print(f"WARNING: Could not collect fitted values for {model_name}: {e}")
         
         # ============================================================================
         # End of Stage 2b
         # ============================================================================
         
-        # Load hyperparameters from pipeline config
+        # Load hyperparameters from project config
         print("\n=== Loading Hyperparameters ===")
-        config_path = str(cv_system.paths.pipeline_config)
-        with open(config_path, "r") as f:
-            cfg = json.load(f)
+        cfg = cv_system.base_config
         
-        # Extract and filter meta_ensemble parameters
-        meta_config = cfg.get("models", {}).get("meta_ensemble", {})
-        _default_trials = 5 if fast_mode else 25
-        meta_params = {
-            "n_trials": meta_config.get("n_optuna_trials", _default_trials) if not fast_mode else min(5, meta_config.get("n_optuna_trials", 5)),
-            "val_size": meta_config.get("meta_learner_options", {}).get("validation_split", 0.2),
-            "random_state": 42,
-            "monotone_constraints": cv_system._monotone_constraints,
-        }
-        
-        # Extract and filter deep_kriging parameters
-        dk_config = cfg.get("deep_kriging", {})
-        dk_enabled = dk_config.get("enabled", True)
-        dk_version = dk_config.get("version", 2)
-        
-        # Enhanced Deep Kriging parameters for better residual modeling
-        dk_params = {
-            "hidden_layers": dk_config.get("hidden_layers", [128, 64, 32, 16]),  # Deeper network
-            "dropout_rate": dk_config.get("dropout_rate", 0.3),  # Higher dropout for regularization
-            "learning_rate": dk_config.get("learning_rate", 0.0005),  # Lower learning rate
-            "val_size": dk_config.get("validation_split", 0.15),  # Smaller validation set
-            "random_state": 42,
-            "batch_size": dk_config.get("batch_size", min(512, len(coords) // 10)),  # Adaptive batch size
-            "epochs": dk_config.get("epochs", 200),  # More epochs for better learning
-        }
-        
-        # Handle nested early_stopping patience parameter
-        if 'early_stopping' in dk_config and 'patience' in dk_config['early_stopping']:
-            dk_params['patience'] = dk_config['early_stopping']['patience']
-        else:
-            dk_params['patience'] = 30  # More patience for convergence
-        
-        print(f"Enhanced Deep Kriging parameters: {dk_params}")
-        
-        # Stage 3: Meta Ensemble
-        print("\n=== Stage 3: Meta Ensemble ===")
-        meta_model = MetaEnsemble(**meta_params)
-        
-        # Compute OOF residuals from base model predictions
-        print("Computing OOF residuals from base model predictions...")
+        # Compute base OOF residuals (needed by both cached and fresh paths)
         base_oof_residuals = {}
-        for model_name in base_model_names:
-            if model_name in base_predictions:
-                residuals = y - base_predictions[model_name]
-                base_oof_residuals[model_name] = residuals
-                print(f"  {model_name}: residual mean={np.mean(residuals):.4f}, std={np.std(residuals):.4f}")
-        
-        # Generate Meta Ensemble OOF predictions and true OOF residuals
-        meta_oof_predictions = np.zeros(len(y))
-        meta_oof_residuals = np.zeros(len(y))  # True OOF residuals for Deep Kriging
-        
-        print(f"Running Meta Ensemble CV with {len(folds)} folds...")
-        with tqdm(total=len(folds), desc="Meta Ensemble CV", unit="fold") as pbar:
-            for fold_idx, (train_idx, test_idx) in enumerate(folds):
-                # Get training and test data
-                base_train = {name: base_predictions[name][train_idx] for name in base_model_names}
-                base_test = {name: base_predictions[name][test_idx] for name in base_model_names}
-                
-                # Get OOF residuals for training (only for the training indices)
-                oof_residuals_train = {name: base_oof_residuals[name][train_idx] for name in base_model_names if name in base_oof_residuals}
-                
-                y_train = y[train_idx]
-                y_test = y[test_idx]  # True test values
-                coords_train = coords[train_idx]
-                coords_test = coords[test_idx]
-                
-                # Train meta ensemble with OOF residuals + monotonic constraints
-                meta_fold = MetaEnsemble(**meta_params)
-                meta_fold.fit(base_train, y_train, coords_train, oof_residuals=oof_residuals_train,
-                             original_X=X_original_features[train_idx],
-                             original_feature_names=selected_features_filtered)
-                
-                # Predict on test set (no residuals available for prediction)
-                fold_predictions = meta_fold.predict(base_test, coords_test,
-                                                    original_X=X_original_features[test_idx])
-                meta_oof_predictions[test_idx] = fold_predictions
-                
-                # Calculate true OOF residuals (actual - predicted for held-out data)
-                meta_oof_residuals[test_idx] = y_test - fold_predictions
-                
-                # Calculate spatial autocorrelation for this fold
-                fold_residuals = y_test - fold_predictions
-                fold_spatial_autocorr = calculate_fold_spatial_autocorr(fold_residuals, coords_test)
-                
-                # Print spatial performance for monitoring
-                if fold_spatial_autocorr > 0.3:  # High spatial autocorrelation
-                    print(f"  Fold {fold_idx+1}: High spatial autocorr (Moran's I = {fold_spatial_autocorr:.3f})")
-                elif fold_spatial_autocorr > 0.1:  # Moderate spatial autocorrelation  
-                    print(f"  Fold {fold_idx+1}: Moderate spatial autocorr (Moran's I = {fold_spatial_autocorr:.3f})")
-                else:
-                    print(f"  Fold {fold_idx+1}: Low spatial autocorr (Moran's I = {fold_spatial_autocorr:.3f})")
-                
-                pbar.update(1)
-        
-        # Calculate Meta Ensemble performance
-        meta_r2 = r2_score(y, meta_oof_predictions)
-        meta_rmse = np.sqrt(mean_squared_error(y, meta_oof_predictions))
-        
-        print(f"\nMeta Ensemble Performance: R² = {meta_r2:.4f}, RMSE = {meta_rmse:.4f}")
-        
-        # Train final meta-model on full dataset for deployment
-        print("Training final meta-ensemble model on full dataset with OOF residuals...")
-        final_meta_model = MetaEnsemble(**meta_params)
-        final_meta_model.fit(base_predictions, y, coords, oof_residuals=base_oof_residuals,
-                            original_X=X_original_features,
-                            original_feature_names=selected_features_filtered)
-        
-        # Save final meta-model
-        paths = get_paths()
-        stage2_dir = paths.stage2_dir
-        os.makedirs(stage2_dir, exist_ok=True)
-        
-        # Save the LightGBM model (LightGBM native format)
-        if hasattr(final_meta_model, 'model') and hasattr(final_meta_model.model, 'save_model'):
-            model_path = os.path.join(stage2_dir, 'optimized_meta_model_run1.txt')
-            final_meta_model.model.save_model(model_path)
-            print(f"Saved final meta-model (LightGBM format) to {model_path}")
+        if base_predictions:
+            print("Computing OOF residuals from base model predictions...")
+            for model_name in base_model_names:
+                if model_name in base_predictions:
+                    residuals = y - base_predictions[model_name]
+                    base_oof_residuals[model_name] = residuals
+                    print(f"  {model_name}: residual mean={np.mean(residuals):.4f}, std={np.std(residuals):.4f}")
         else:
-            print("Warning: Could not save meta-model - model not available or doesn't support saving")
-        
-        # ALSO save the complete MetaEnsemble object as .pkl for easy loading
-        meta_ensemble_pkl_path = os.path.join(stage2_dir, 'standard_meta_ensemble.pkl')
-        joblib.dump(final_meta_model, meta_ensemble_pkl_path)
-        print(f"✅ Saved complete MetaEnsemble object to {meta_ensemble_pkl_path}")
-        
-        # Stage 3b: Second Meta Ensemble Run with Laplacian Eigenmaps
-        print("\n=== Stage 3b: Meta Ensemble with Laplacian Eigenmaps ===")
-        
-        # Generate Laplacian eigenmaps for enhanced spatial features
-        print("Generating Laplacian eigenmaps (150 components) for meta-learner...")
-        
-        def generate_laplacian_features(coords, n_components=150):
-            """Generate Laplacian eigenmap features"""
-            try:
-                from sparc.features.laplacian import LaplacianEigenmap
-                from sklearn.preprocessing import StandardScaler
-                
-                print(f"Computing Laplacian eigenmaps for {len(coords)} samples...")
-                print(f"Target components: {n_components}")
-                
-                # Scale coordinates first
-                coord_scaler = StandardScaler()
-                coords_scaled = coord_scaler.fit_transform(coords)
-                
-                # Adaptive k_neighbors based on data size and target components
-                k_neighbors = min(max(20, n_components // 5), len(coords) // 10)
-                print(f"Using k_neighbors: {k_neighbors}")
-                
-                laplacian = LaplacianEigenmap(
-                    n_components=n_components,
-                    k_neighbors=k_neighbors,
-                    target_crs=None
-                )
-                
-                start_time = time.time()
-                X_laplacian = laplacian.fit_transform(coords_scaled)
-                computation_time = time.time() - start_time
-                
-                print(f"Laplacian computation completed in {computation_time:.2f}s")
-                print(f"Generated {X_laplacian.shape[1]} Laplacian eigenmap features")
-                
-                # Scale Laplacian features
-                laplacian_scaler = StandardScaler()
-                X_laplacian_scaled = laplacian_scaler.fit_transform(X_laplacian)
-                
-                return X_laplacian_scaled, {'laplacian': laplacian, 'coord_scaler': coord_scaler, 'laplacian_scaler': laplacian_scaler}
-                
-            except Exception as e:
-                print(f"Error generating Laplacian features: {e}")
-                print("Using PCA fallback...")
-                
-                from sklearn.decomposition import PCA
-                from sklearn.preprocessing import StandardScaler
-                
-                coord_scaler = StandardScaler()
-                coords_scaled = coord_scaler.fit_transform(coords)
-                
-                max_components = min(n_components, coords.shape[0] - 1)
-                pca_coord = PCA(n_components=max_components)
-                X_pca = pca_coord.fit_transform(coords_scaled)
-                
-                laplacian_scaler = StandardScaler()
-                X_pca_scaled = laplacian_scaler.fit_transform(X_pca)
-                
-                print(f"Generated {X_pca_scaled.shape[1]} PCA features as fallback")
-                
-                return X_pca_scaled, {'laplacian': pca_coord, 'coord_scaler': coord_scaler, 'laplacian_scaler': laplacian_scaler}
-        
-        # Generate Laplacian features (global — used for final model training,
-        # but per-fold fold-aware Laplacian is used during CV below)
-        X_laplacian, laplacian_transformers = generate_laplacian_features(coords, n_components=150)
-        
-        # Skip Laplacian derivative extraction - not needed for predictions, only for interpretability
-        print("\nSkipping Laplacian manifold derivative extraction (not needed for predictions)")
-        
-        # Keep base predictions as-is (don't modify them)
-        print("Enhanced Meta Ensemble will use:")
-        print(f"  - Base model predictions: {list(base_predictions.keys())}")
-        print(f"  - Fold-aware Laplacian features: 150 components (recomputed per fold)")
-        
-        # Generate second Meta Ensemble OOF predictions
-        meta_oof_predictions_v2 = np.zeros(len(y))
-        meta_oof_residuals_v2 = np.zeros(len(y))
-        
-        print(f"Running Enhanced Meta Ensemble CV with {len(folds)} folds (fold-aware Laplacian)...")
-        with tqdm(total=len(folds), desc="Enhanced Meta Ensemble CV", unit="fold") as pbar:
-            for fold_idx, (train_idx, test_idx) in enumerate(folds):
-                # Get training and test data - keep base predictions as 1D arrays
-                base_train = {name: base_predictions[name][train_idx] for name in base_model_names}
-                base_test = {name: base_predictions[name][test_idx] for name in base_model_names}
-                
-                # === Fold-aware Laplacian Eigenmaps (prevents spatial leakage) ===
-                # Recompute eigenmaps per fold: fit on train coords, Nyström-extend to test
-                try:
-                    from sparc.features.fold_aware_laplacian import FoldAwareLaplacianEigenmap
-                    coords_train_fold = coords[train_idx]
-                    coords_test_fold = coords[test_idx]
-                    
-                    fold_laplacian = FoldAwareLaplacianEigenmap(
-                        n_components=150,
-                        k_neighbors=min(max(20, 150 // 5), len(train_idx) // 10)
-                    )
-                    laplacian_train = fold_laplacian.fit_transform(coords_train_fold)
-                    laplacian_test = fold_laplacian.transform(coords_test_fold)
-                    
-                    # Scale Laplacian features
-                    from sklearn.preprocessing import StandardScaler as _SS
-                    lap_scaler = _SS()
-                    laplacian_train = lap_scaler.fit_transform(laplacian_train)
-                    laplacian_test = lap_scaler.transform(laplacian_test)
+            print("No base model predictions available (Stage 2 skipped)")
 
-                except Exception as lap_e:
-                    print(f"  Fold {fold_idx+1}: Fold-aware Laplacian failed ({lap_e}), using global fallback")
-                    laplacian_train = X_laplacian[train_idx]
-                    laplacian_test = X_laplacian[test_idx]
-                
-                # Get OOF residuals for training (from first meta-learner)
-                oof_residuals_train = {name: base_oof_residuals[name][train_idx] for name in base_model_names if name in base_oof_residuals}
-                
-                y_train = y[train_idx]
-                y_test = y[test_idx]
-                coords_train = coords[train_idx]
-                coords_test = coords[test_idx]
-                
-                # Train enhanced meta ensemble with Laplacian features + monotonic constraints
-                meta_fold_v2 = MetaEnsemble(**meta_params)
-                meta_fold_v2.fit(base_train, y_train, coords_train, 
-                               laplacian_features=laplacian_train, 
-                               oof_residuals=oof_residuals_train,
-                               original_X=X_original_features[train_idx],
-                               original_feature_names=selected_features_filtered)
-                
-                # Predict on test set with Laplacian features
-                fold_predictions_v2 = meta_fold_v2.predict(base_test, coords_test, 
-                                                         laplacian_features=laplacian_test,
-                                                         original_X=X_original_features[test_idx])
-                meta_oof_predictions_v2[test_idx] = fold_predictions_v2
-                
-                # Calculate residuals
-                meta_oof_residuals_v2[test_idx] = y_test - fold_predictions_v2
-                
-                pbar.update(1)
-        
-        # Calculate Enhanced Meta Ensemble performance
-        meta_r2_v2 = r2_score(y, meta_oof_predictions_v2)
-        meta_rmse_v2 = np.sqrt(mean_squared_error(y, meta_oof_predictions_v2))
-        
-        print(f"\nEnhanced Meta Ensemble Performance: R² = {meta_r2_v2:.4f}, RMSE = {meta_rmse_v2:.4f}")
-        
-        # Train final enhanced meta-model on full dataset
-        print("Training final enhanced meta-ensemble model on full dataset...")
+        stage2_dir = str(cv_system.paths.stage2_dir)
 
-        final_meta_model_v2 = MetaEnsemble(**meta_params)
-        final_meta_model_v2.fit(base_predictions, y, coords, 
-                               laplacian_features=X_laplacian, 
-                               oof_residuals=base_oof_residuals,
-                               original_X=X_original_features,
-                               original_feature_names=selected_features_filtered)
-        
-        # Extract meta-ensemble derivatives (PDP curves)
-        print("\nExtracting meta-ensemble sensitivity surfaces...")
-        final_meta_model_v2.export_meta_derivatives(
-            X=data[selected_features].values,
-            feature_names=selected_features,
-            coords=coords,
-            output_dir=spatial_intel_dir
-        )
-        
-        # Save enhanced meta-model
-        if hasattr(final_meta_model_v2, 'model') and hasattr(final_meta_model_v2.model, 'save_model'):
-            model_path_v2 = os.path.join(stage2_dir, 'optimized_meta_model_run2_laplacian.txt')
-            final_meta_model_v2.model.save_model(model_path_v2)
-            print(f"Saved enhanced meta-model (LightGBM format) to {model_path_v2}")
-        
-        # ALSO save the complete enhanced MetaEnsemble object as .pkl for easy loading
-        enhanced_meta_ensemble_pkl_path = os.path.join(stage2_dir, 'enhanced_meta_ensemble.pkl')
-        joblib.dump(final_meta_model_v2, enhanced_meta_ensemble_pkl_path)
-        print(f"✅ Saved complete enhanced MetaEnsemble object to {enhanced_meta_ensemble_pkl_path}")
-        
-        # Save Laplacian feature artifacts
-        laplacian_path = os.path.join(stage2_dir, 'laplacian_features.pkl')
-        joblib.dump(laplacian_transformers, laplacian_path)
-        print(f"Saved Laplacian artifacts to {laplacian_path}")
-        
-        # =======================================================================
-        # EXPORT DEPLOYMENT ARTIFACTS
-        # =======================================================================
-        print("\n=== Exporting Deployment Artifacts ===")
+        # ================================================================
+        # Stage 3: V2 Neural Meta-Learner (sole meta-learner)
+        # ================================================================
+        v2_neural_result = None
+        best_approach = "V2 Neural"
+        print("\n=== Stage 3: V2 Neural Meta-Learner ===")
         try:
-            from sparc.data.artifacts.export_hook import export_training_artifacts
-            
-            # Get the original data with OBJECTID (from joined_data which has OBJECTID as index)
-            export_data = joined_data.reset_index()  # Restore OBJECTID as column
-            
-            # Check if we have GWR local coefficients from Stage 2b
-            local_coefficients = None
-            coefficient_feature_names = None
-            if full_models_dir is not None:
-                gwr_coef_path = os.path.join(full_models_dir, "mgwr_local_coefficients.csv")
-                if os.path.exists(gwr_coef_path):
-                    print(f"  Found GWR coefficients from Stage 2b: {gwr_coef_path}")
-                    gwr_coef_df = pd.read_csv(gwr_coef_path)
-                    # Extract coefficient columns (Coeff_* pattern)
-                    coef_cols = [c for c in gwr_coef_df.columns if c.startswith('Coeff_') or c.startswith('coef_')]
-                    if coef_cols:
-                        local_coefficients = gwr_coef_df[coef_cols].values
-                        coefficient_feature_names = [c.replace('Coeff_', '').replace('coef_', '') for c in coef_cols]
-                        print(f"  Loaded {len(coef_cols)} coefficient columns: {coefficient_feature_names}")
-            
-            # Export all artifacts needed for deployment inference
-            artifacts_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'artifacts')
-            artifact_paths = export_training_artifacts(
-                data=export_data,
+            import logging as _logging
+            _logging.basicConfig(
+                level=_logging.INFO,
+                format="%(asctime)s [%(name)s] %(message)s",
+                datefmt="%H:%M:%S",
+            )
+            from sparc.run.v2_neural_training import train_neural_meta, run_cma_es_search
+
+            # Optional CMA-ES hyperparameter search
+            if cfg.get("optimization", {}).get("run_cma_es", False):
+                print("Running CMA-ES hyperparameter search (this may take a while)...")
+                best_hparams = run_cma_es_search(
+                    y=y,
+                    coords=coords,
+                    feature_matrix=X_original_features,
+                    feature_names=selected_features_filtered,
+                    folds=folds,
+                    config=cfg,
+                    output_dir=stage2_dir,
+                )
+                # Merge best hyperparams into config
+                for k, v in best_hparams.items():
+                    if k.startswith("lambda_"):
+                        cfg.setdefault("training", {})[k] = v
+                    elif k == "learning_rate":
+                        cfg.setdefault("training", {})["learning_rate"] = v
+                    elif k == "dropout":
+                        cfg.setdefault("models", {}).setdefault("neural", {})["dropout"] = v
+                print(f"CMA-ES best params applied: {best_hparams}")
+
+            # Build base-model fitted values dict for surrogate pretraining
+            # Use full-model fitted values (Stage 2b) instead of OOF predictions
+            _base_oof = {}
+            for _mn in ('gwr', 'gwrf', 'ggpgam'):
+                if _mn in base_fitted_values:
+                    fv = base_fitted_values[_mn]
+                    if len(fv) == len(y):
+                        _base_oof[_mn] = fv
+                    else:
+                        print(f"WARNING: base_fitted_values[{_mn}] length {len(fv)} "
+                              f"!= y length {len(y)} — skipping (row mismatch)")
+            v2_neural_result = train_neural_meta(
                 y=y,
                 coords=coords,
-                feature_names=selected_features,
-                laplacian_features=X_laplacian,
-                laplacian_transformers=laplacian_transformers,
-                meta_ensemble=final_meta_model_v2,
-                base_model_predictions=base_predictions,
-                oof_predictions=meta_oof_predictions_v2,
-                model_performance={'r2': meta_r2_v2, 'rmse': meta_rmse_v2},
-                n_cv_folds=len(folds),
-                feature_scaler=feature_scaler,
-                artifacts_dir=artifacts_dir,
-                base_models_dir=full_models_dir,  # Copy base models from Stage 2b
-                areas_of_interest_path=os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'Areas_of_Interest.csv'),
-                local_coefficients=local_coefficients,
-                coefficient_feature_names=coefficient_feature_names,
-                generate_spatial_intelligence=True
+                feature_matrix=X_original_features,
+                feature_names=selected_features_filtered,
+                folds=folds,
+                config=cfg,
+                output_dir=stage2_dir,
+                base_oof_predictions=_base_oof or None,
             )
-            print(f"✅ Deployment artifacts exported to: {artifacts_dir}")
+
+            v2_r2 = v2_neural_result["metrics"]["r2"]
+            v2_rmse = v2_neural_result["metrics"]["rmse"]
+            print(f"\nV2 Neural Meta-Learner: R² = {v2_r2:.4f}, RMSE = {v2_rmse:.4f}")
+
+            best_meta_predictions = v2_neural_result["oof_predictions"]
+            best_meta_r2 = v2_r2
+            best_meta_rmse = v2_rmse
+
+            # --- Residual analysis + Moran's I ---
+            v2_oof_preds = v2_neural_result["oof_predictions"]
+            v2_residuals = y - v2_oof_preds
+            print(f"\nV2 Neural Residuals - Mean: {np.mean(v2_residuals):.4f}, "
+                  f"Std: {np.std(v2_residuals):.4f}, "
+                  f"Range: [{np.min(v2_residuals):.4f}, {np.max(v2_residuals):.4f}]")
+
+            # --- Uncertainty validation ---
+            v2_oof_unc = v2_neural_result.get("oof_uncertainty")
+            if v2_oof_unc is not None:
+                v2_unc = np.asarray(v2_oof_unc)
+                n_neg = int(np.sum(v2_unc < 0))
+                n_nan = int(np.sum(np.isnan(v2_unc)))
+                n_inf = int(np.sum(np.isinf(v2_unc)))
+                print(f"V2 Uncertainty - Mean: {np.mean(v2_unc):.4f}, "
+                      f"Std: {np.std(v2_unc):.4f}, "
+                      f"Range: [{np.min(v2_unc):.4f}, {np.max(v2_unc):.4f}]")
+                if n_neg or n_nan or n_inf:
+                    print(f"[WARNING] V2 uncertainty has {n_neg} negative, "
+                          f"{n_nan} NaN, {n_inf} Inf values")
+                else:
+                    print("[OK] V2 uncertainty values are all valid (non-negative, finite)")
+            else:
+                print("[WARNING] V2 Neural Meta-Learner did not return uncertainty estimates")
+
         except Exception as e:
-            print(f"⚠️ Warning: Could not export deployment artifacts: {e}")
+            print(f"[WARNING] V2 Neural Meta-Learner failed: {e}")
             import traceback
             traceback.print_exc()
-        
-        # Compare the two meta-learner approaches
-        print(f"\n=== Meta-Learner Comparison ===")
-        print(f"Standard Meta-Learner:  R² = {meta_r2:.4f}, RMSE = {meta_rmse:.4f}")
-        print(f"Enhanced Meta-Learner:  R² = {meta_r2_v2:.4f}, RMSE = {meta_rmse_v2:.4f}")
-        
-        r2_improvement = meta_r2_v2 - meta_r2
-        rmse_improvement = meta_rmse - meta_rmse_v2  # Lower RMSE is better
-        
-        print(f"Improvement: R² = {r2_improvement:+.4f}, RMSE = {rmse_improvement:+.4f}")
-        
-        if r2_improvement > 0.001:
-            print("[OK] Laplacian eigenmaps provide improvement!")
-            best_meta_predictions = meta_oof_predictions_v2
-            best_meta_r2 = meta_r2_v2
-            best_meta_rmse = meta_rmse_v2
-            best_approach = "Enhanced (with Laplacian)"
-        else:
-            print("~ Standard approach performs similarly or better")
-            best_meta_predictions = meta_oof_predictions
-            best_meta_r2 = meta_r2
-            best_meta_rmse = meta_rmse
-            best_approach = "Standard"
-        
-        print(f"Best approach: {best_approach}")
-        
-        # Use true OOF residuals for Deep Kriging (no leakage) - BUT WE'LL SKIP IT
-        print(f"True OOF Residuals - Mean: {np.mean(meta_oof_residuals):.4f}, Std: {np.std(meta_oof_residuals):.4f}")
-        print("Deep Kriging will be skipped per user request")
+            # Fallback: use average of base model predictions
+            if base_predictions:
+                best_meta_predictions = np.mean(
+                    [base_predictions[m] for m in base_model_names], axis=0
+                )
+            else:
+                best_meta_predictions = np.full(len(y), np.mean(y))
+            best_meta_r2 = r2_score(y, best_meta_predictions)
+            best_meta_rmse = np.sqrt(mean_squared_error(y, best_meta_predictions))
+            best_approach = "Base Average (fallback)"
+
+        # Compute residuals for the neural meta-learner
+        best_meta_residuals = y - best_meta_predictions
+        print(f"Best Meta Residuals ({best_approach}) - Mean: {np.mean(best_meta_residuals):.4f}, Std: {np.std(best_meta_residuals):.4f}")
         
         # Generate Laplacian eigenmaps early to ensure they get saved
         print("\n=== Stage 4: Generating Enhanced Laplacian Eigenmaps (150 components) ===")
@@ -2383,7 +2199,7 @@ def main(fast_mode=False):
         print("\n=== Spatial Autocorrelation Analysis of Meta-Ensemble Residuals ===")
         
         # Estimate sensible distance for spatial weights
-        autocorr_range = estimate_spatial_autocorrelation_range(coords, meta_oof_residuals)
+        autocorr_range = estimate_spatial_autocorrelation_range(coords, best_meta_residuals)
         print(f"Estimated autocorrelation range: {autocorr_range:.0f}m")
         
         # Create spatial weights matrix (this can be slow for large datasets)
@@ -2401,203 +2217,35 @@ def main(fast_mode=False):
         
         # Compute Moran's I
         print("Computing Moran's I statistic...")
-        moran = Moran(meta_oof_residuals, w, two_tailed=False)
-        print(f"Meta residuals Moran I = {moran.I:.3f}, p-value = {moran.p_sim:.3f}")
+        moran = Moran(best_meta_residuals, w, two_tailed=False)
+        print(f"Best meta ({best_approach}) residuals Moran I = {moran.I:.3f}, p-value = {moran.p_sim:.3f}")
         print(f"Spatial weight threshold used: {max_reasonable_threshold:.0f}m")
         
-        # Set threshold for running Deep Kriging
-        moran_threshold = 0.1
-        p_value_threshold = 0.05
+        # Deep Kriging has been retired — final predictions are from the neural meta-learner
+        final_predictions = best_meta_predictions
         
-        # Enable Deep Kriging based on config flag + spatial autocorrelation in residuals
-        if not dk_enabled:
-            run_deep_kriging = False
-            print(f"Deep Kriging disabled in config (models.deep_kriging.enabled: false)")
-        elif moran.I > moran_threshold and moran.p_sim < p_value_threshold:
-            run_deep_kriging = True
-            print(f"[OK] Significant spatial autocorrelation detected (I > {moran_threshold}, p < {p_value_threshold})")
-            print(f"  -> Running Deep Kriging V{dk_version} to model spatial residuals")
-        else:
-            run_deep_kriging = False
-            print(f"X Spatial signal too weak (I = {moran.I:.3f} <= {moran_threshold} or p = {moran.p_sim:.3f} >= {p_value_threshold})")
-            print("  -> Skipping Deep Kriging, using Meta-Ensemble only")
-        
-        # Stage 5: Conditional Deep Kriging on meta-ensemble residuals
-        if run_deep_kriging:
-            print("\n=== Stage 5: Enhanced Deep Kriging on Meta-Ensemble OOF Residuals ===")
-            
-            # Debug analysis function
-            def debug_deep_kriging_performance(meta_oof_residuals, coords, X_laplacian_full, folds):
-                """Debug function to understand Deep Kriging inputs"""
-                print("\n=== Deep Kriging Debug Analysis ===")
-                
-                # Analyze residual characteristics
-                print(f"Residual statistics:")
-                print(f"  Mean: {np.mean(meta_oof_residuals):.6f}")
-                print(f"  Std: {np.std(meta_oof_residuals):.6f}")
-                print(f"  Min: {np.min(meta_oof_residuals):.6f}")
-                print(f"  Max: {np.max(meta_oof_residuals):.6f}")
-                print(f"  Range: {np.max(meta_oof_residuals) - np.min(meta_oof_residuals):.6f}")
-                
-                residual_range = np.max(meta_oof_residuals) - np.min(meta_oof_residuals)
-                if residual_range < 1.0:
-                    print(f"  WARNING: Small residual range ({residual_range:.6f}) - may be challenging to learn")
-                
-                # Check enhanced features
-                print(f"\nEnhanced spatial feature statistics:")
-                print(f"  Shape: {X_laplacian_full.shape}")
-                print(f"  Mean: {np.mean(X_laplacian_full):.6f}")
-                print(f"  Std: {np.std(X_laplacian_full):.6f}")
-                print(f"  Has NaN: {np.any(np.isnan(X_laplacian_full))}")
-                print(f"  Has Inf: {np.any(np.isinf(X_laplacian_full))}")
-                
-                # Check if we have enough variation to learn from
-                if np.std(meta_oof_residuals) < 0.1:
-                    print("  WARNING: Very low variance in residuals - network might struggle to learn")
-                elif np.std(meta_oof_residuals) > 1.0:
-                    print("  INFO: Good variance in residuals - network should be able to learn patterns")
-                
-                return {
-                    'residual_range': residual_range,
-                    'residual_std': np.std(meta_oof_residuals),
-                    'feature_shape': X_laplacian_full.shape,
-                    'has_issues': np.any(np.isnan(X_laplacian_full)) or np.any(np.isinf(X_laplacian_full))
-                }
-            
-            # Run debug analysis
-            debug_info = debug_deep_kriging_performance(meta_oof_residuals, coords, X_laplacian_full, folds)
-            
-            print(f"Input data shapes:")
-            print(f"  Coordinates: {coords.shape}")
-            print(f"  Enhanced spatial features: {X_laplacian_full.shape}")
-            print(f"  Meta-ensemble OOF residuals: {meta_oof_residuals.shape}")
-            print(f"OOF Residuals stats - Mean: {np.mean(meta_oof_residuals):.4f}, Std: {np.std(meta_oof_residuals):.4f}")
-            
-            # Clean features if needed
-            if debug_info['has_issues']:
-                print("Cleaning features (removing NaN/Inf values)...")
-                X_laplacian_full = np.nan_to_num(X_laplacian_full, nan=0.0, posinf=1.0, neginf=-1.0)
-            
-            # Generate Deep Kriging OOF predictions on meta-ensemble OOF residuals
-            dk_oof_predictions = np.zeros(len(meta_oof_residuals))
-            
-            print(f"Running Enhanced Deep Kriging CV with {len(folds)} folds...")
-            print(f"Enhanced DK parameters: {dk_params}")
-            
-            with tqdm(total=len(folds), desc="Enhanced Deep Kriging CV", unit="fold") as pbar:
-                for fold_idx, (train_idx, test_idx) in enumerate(folds):
-                    try:
-                        # Get training and test data
-                        coords_train = coords[train_idx]
-                        coords_test = coords[test_idx]
-                        features_train = X_laplacian_full[train_idx]
-                        features_test = X_laplacian_full[test_idx]
-                        residuals_train = meta_oof_residuals[train_idx]  # Use true OOF residuals
-                        
-                        # Train Deep Kriging on meta-ensemble OOF residuals
-                        if dk_version == 2:
-                            # DeepKrigingV2 uses multi-scale Wendland basis + spatial smoothness
-                            dk_fold = DeepKrigingV2(
-                                n_wendland_centers=min(200, len(train_idx) // 50),
-                                hidden_dims=[128, 64, 32],
-                                dropout_rate=dk_params.get('dropout_rate', 0.3),
-                                learning_rate=dk_params.get('learning_rate', 0.0005),
-                                epochs=dk_params.get('epochs', 200),
-                                batch_size=dk_params.get('batch_size', 512),
-                                patience=dk_params.get('patience', 20),
-                                smoothness_weight=0.01
-                            )
-                        else:
-                            dk_fold = DeepKrigingV2(**dk_params)
-                        
-                        print(f"  Fold {fold_idx+1}: Training on {len(train_idx)} samples, testing on {len(test_idx)} samples")
-                        print(f"  Train residuals - Mean: {np.mean(residuals_train):.4f}, Std: {np.std(residuals_train):.4f}")
-                        
-                        # Fit with enhanced features
-                        dk_fold.fit(coords_train, residuals_train, features_train, verbose=0)
-                        
-                        # Predict residuals on test set
-                        fold_predictions = dk_fold.predict(coords_test, features_test)
-                        dk_oof_predictions[test_idx] = fold_predictions
-                        
-                        # Calculate fold performance
-                        fold_residuals_true = meta_oof_residuals[test_idx]
-                        fold_r2 = r2_score(fold_residuals_true, fold_predictions)
-                        fold_rmse = np.sqrt(mean_squared_error(fold_residuals_true, fold_predictions))
-                        print(f"  Fold {fold_idx+1} performance: R² = {fold_r2:.4f}, RMSE = {fold_rmse:.4f}")
-                        
-                    except Exception as e:
-                        print(f"  Fold {fold_idx+1} failed: {e}")
-                        print("  Using zero predictions for this fold")
-                        dk_oof_predictions[test_idx] = 0.0
-                    
-                    pbar.update(1)
-            
-            # Calculate Enhanced Deep Kriging performance on OOF residuals
-            dk_r2 = r2_score(meta_oof_residuals, dk_oof_predictions)
-            dk_rmse = np.sqrt(mean_squared_error(meta_oof_residuals, dk_oof_predictions))
-            
-            print(f"\nEnhanced Deep Kriging Performance on OOF Residuals:")
-            print(f"  R² = {dk_r2:.4f}, RMSE = {dk_rmse:.4f}")
-            
-            # Analyze residual reduction
-            original_residual_std = np.std(meta_oof_residuals)
-            remaining_residual_std = np.std(meta_oof_residuals - dk_oof_predictions)
-            residual_reduction = (original_residual_std - remaining_residual_std) / original_residual_std * 100
-            
-            print(f"  Original residual std: {original_residual_std:.4f}")
-            print(f"  Remaining residual std: {remaining_residual_std:.4f}")
-            print(f"  Residual reduction: {residual_reduction:.1f}%")
-            
-            # Final ensemble predictions: meta-ensemble + deep kriging residual predictions
-            final_predictions = meta_oof_predictions + dk_oof_predictions
-            
-            print(f"  Deep Kriging correction range: [{np.min(dk_oof_predictions):.4f}, {np.max(dk_oof_predictions):.4f}]")
-            print(f"  Mean absolute correction: {np.mean(np.abs(dk_oof_predictions)):.4f}")
-            
-        else:
-            print("\n=== Stage 5: Skipping Deep Kriging (disabled per user request) ===")
-            # Use the best meta-learner predictions as final predictions
-            final_predictions = best_meta_predictions
-            dk_oof_predictions = np.zeros(len(meta_oof_residuals))  # Zero correction
-            dk_r2 = 0.0  # No improvement from DK
-            dk_rmse = 0.0  # Not applicable
-        
-        # Calculate final performance using best meta-learner
+        # Calculate final performance
         final_r2 = r2_score(y, final_predictions)
         final_rmse = np.sqrt(mean_squared_error(y, final_predictions))
         
-        print(f"\n=== Enhanced Final Results ===")
+        print(f"\n=== Final Results ===")
         print(f"Base Models Best (GWRF):       R² = {stage2_results['performance']['individual_models']['gwrf']['r2']:.4f}")
-        print(f"Standard Meta Ensemble:        R² = {meta_r2:.4f}, RMSE = {meta_rmse:.4f}")
-        print(f"Enhanced Meta Ensemble:        R² = {meta_r2_v2:.4f}, RMSE = {meta_rmse_v2:.4f}")
-        print(f"Best Meta Ensemble ({best_approach}): R² = {best_meta_r2:.4f}, RMSE = {best_meta_rmse:.4f}")
-        print(f"Deep Kriging:                  DISABLED")
-        print(f"Final Ensemble (Best Meta):    R² = {final_r2:.4f}, RMSE = {final_rmse:.4f}")
+        if v2_neural_result is not None:
+            print(f"V2 Neural Meta-Learner:        R² = {v2_neural_result['metrics']['r2']:.4f}, RMSE = {v2_neural_result['metrics']['rmse']:.4f}")
+        else:
+            print(f"V2 Neural Meta-Learner:        FAILED (using base average fallback)")
+        print(f"Final Ensemble ({best_approach}): R² = {final_r2:.4f}, RMSE = {final_rmse:.4f}")
         
         # Detailed improvement analysis
         base_gwrf_r2 = stage2_results['performance']['individual_models']['gwrf']['r2']
-        standard_meta_improvement = meta_r2 - base_gwrf_r2
-        enhanced_meta_improvement = meta_r2_v2 - base_gwrf_r2
         best_meta_improvement = best_meta_r2 - base_gwrf_r2
-        laplacian_benefit = meta_r2_v2 - meta_r2
         
         print(f"\nDetailed Performance Analysis:")
-        print(f"Standard Meta vs Base GWRF:    {standard_meta_improvement:+.4f} R² points")
-        print(f"Enhanced Meta vs Base GWRF:    {enhanced_meta_improvement:+.4f} R² points")
-        print(f"Best Meta vs Base GWRF:        {best_meta_improvement:+.4f} R² points")
-        print(f"Laplacian Enhancement Benefit: {laplacian_benefit:+.4f} R² points")
-        
-        if laplacian_benefit > 0.001:
-            print(f"[OK] Laplacian eigenmaps provide meaningful improvement!")
-        elif laplacian_benefit > 0:
-            print(f"~ Laplacian eigenmaps provide small improvement")
-        else:
-            print(f"✗ Laplacian eigenmaps did not improve performance")
+        print(f"Neural Meta vs Base GWRF:      {best_meta_improvement:+.4f} R² points")
         
         # Simple spatial performance summary
         print(f"\n=== Spatial Performance Summary ===")
-        print(f"Meta-Ensemble Residuals Moran's I: {moran.I:.3f} (p = {moran.p_sim:.3f})")
+        print(f"Neural Meta Residuals Moran's I: {moran.I:.3f} (p = {moran.p_sim:.3f})")
         if moran.I > 0.3:
             print("[WARNING] High spatial autocorrelation detected - consider spatial regularization")
         elif moran.I > 0.1:
@@ -2605,31 +2253,23 @@ def main(fast_mode=False):
         else:
             print("[OK] Low spatial autocorrelation - good spatial performance")
         
-        print(f"Deep Kriging: DISABLED per user request")
-        
         # Save final results
         final_results = {
             'base_models': stage2_results['performance']['individual_models'],
-            'meta_ensemble_standard': {'r2': meta_r2, 'rmse': meta_rmse},
-            'meta_ensemble_enhanced': {'r2': meta_r2_v2, 'rmse': meta_rmse_v2},
+            'v2_neural_meta': {
+                'r2': v2_neural_result['metrics']['r2'] if v2_neural_result else None,
+                'rmse': v2_neural_result['metrics']['rmse'] if v2_neural_result else None,
+                'executed': v2_neural_result is not None,
+            },
             'meta_ensemble_best': {'r2': best_meta_r2, 'rmse': best_meta_rmse, 'approach': best_approach},
             'spatial_autocorrelation': {
                 'moran_i': moran.I,
                 'p_value': moran.p_sim,
                 'autocorr_range': autocorr_range,
-                'threshold_met': False  # Deep Kriging disabled
-            },
-            'deep_kriging': {
-                'r2': 0.0, 
-                'rmse': 0.0,
-                'executed': False  # Disabled per user request
             },
             'final_ensemble': {'r2': final_r2, 'rmse': final_rmse},
             'improvements': {
-                'standard_meta_vs_base': standard_meta_improvement,
-                'enhanced_meta_vs_base': enhanced_meta_improvement,
                 'best_meta_vs_base': best_meta_improvement,
-                'laplacian_benefit': laplacian_benefit
             }
         }
         
@@ -2644,14 +2284,17 @@ def main(fast_mode=False):
         final_results_df = pd.DataFrame({
             'OBJECTID': joined_data.index,
             'actual': y,
-            'meta_ensemble_standard': meta_oof_predictions,
-            'meta_ensemble_enhanced': meta_oof_predictions_v2,
-            'meta_standard_residuals': meta_oof_residuals,
-            'meta_enhanced_residuals': meta_oof_residuals_v2,
             'best_meta_approach': best_approach,
             'final_ensemble': final_predictions,
-            'deep_kriging_executed': False  # Disabled
         })
+
+        # Add V2 Neural columns if it ran
+        if v2_neural_result is not None:
+            final_results_df['v2_neural_predictions'] = v2_neural_result['oof_predictions']
+            final_results_df['v2_neural_residuals'] = y - v2_neural_result['oof_predictions']
+            v2_unc_out = v2_neural_result.get('oof_uncertainty')
+            if v2_unc_out is not None:
+                final_results_df['v2_neural_uncertainty'] = np.asarray(v2_unc_out)
         
         final_results_df.to_csv(predictions_file, index=False)
         
@@ -2659,17 +2302,14 @@ def main(fast_mode=False):
         print(f"  - final_ensemble_results.json")
         print(f"  - final_ensemble_predictions.csv")
         
-        # Save final composite scaler for the winning meta-ensemble model
-        print(f"\n=== Saving Final Composite Scaler ===")
-        print("Creating scaler for the winning meta-ensemble with Laplacian eigenmaps...")
+        # Save final composite scaler for the neural meta-learner
+        print(f"\n=== Saving Final Model Artifacts ===")
         
         # Extract the scalers that were created during training
         final_scaler_components = {
             'approach': best_approach,
             'feature_names': selected_features,
             'coordinate_columns': cv_system.base_config['variables']['coordinates'],
-            'laplacian_transformers': laplacian_transformers,  # Contains coord_scaler, laplacian_scaler, etc.
-            'best_meta_model': final_meta_model_v2 if best_approach == "Enhanced (with Laplacian)" else final_meta_model,
             'model_performance': {
                 'r2': best_meta_r2,
                 'rmse': best_meta_rmse,
@@ -2678,7 +2318,6 @@ def main(fast_mode=False):
             'training_info': {
                 'n_samples': len(y),
                 'n_features': len(selected_features),
-                'laplacian_components': 150,
                 'cv_folds': len(folds)
             }
         }
@@ -2687,21 +2326,15 @@ def main(fast_mode=False):
         scaler_path = paths.stage2_dir / 'final_meta_ensemble_scaler.pkl'
         joblib.dump(final_scaler_components, scaler_path)
         
-        print(f"✅ Final composite scaler saved to: {scaler_path}")
+        print(f"  Final scaler saved to: {scaler_path}")
         print(f"   - Model approach: {best_approach}")
         print(f"   - Performance: R² = {best_meta_r2:.4f}, RMSE = {best_meta_rmse:.4f}")
-        print(f"   - Features: {len(selected_features)} base + 150 Laplacian components")
-        print(f"   - Use this scaler for all future predictions!")
         
-        # Save the winning meta-ensemble model as final_meta_ensemble.pkl
-        best_model = final_meta_model_v2 if best_approach == "Enhanced (with Laplacian)" else final_meta_model
-        final_model_path = paths.stage2_dir / 'final_meta_ensemble.pkl'
-        joblib.dump(best_model, final_model_path)
-        
-        print(f"\n✅ FINAL META-ENSEMBLE MODEL saved to: {final_model_path}")
-        print(f"   - This is the WINNING model ({best_approach})")
-        print(f"   - R² = {best_meta_r2:.4f}, RMSE = {best_meta_rmse:.4f}")
-        print(f"   - Use this model + final_meta_ensemble_scaler.pkl for all predictions!")
+        # Save the V2 neural model checkpoint if available
+        if v2_neural_result is not None:
+            final_model_path = paths.stage2_dir / 'final_meta_ensemble.pkl'
+            joblib.dump(v2_neural_result, final_model_path)
+            print(f"  V2 Neural model saved to: {final_model_path}")
         
         # Print comprehensive summary of all saved artifacts
         print("\n" + "="*80)
@@ -2714,15 +2347,13 @@ def main(fast_mode=False):
         print(f"   └─ {os.path.join(full_models_dir, 'gwrf_model_full.pkl')}")
         print(f"   └─ {os.path.join(full_models_dir, 'ggpgam_model_full.pkl')}")
         
-        print("\n🔷 META-ENSEMBLE MODELS (Stage 3):")
-        print(f"   ├─ Standard: {os.path.join(stage2_dir, 'standard_meta_ensemble.pkl')}")
-        print(f"   ├─ Enhanced: {os.path.join(stage2_dir, 'enhanced_meta_ensemble.pkl')}")
-        print(f"   └─ FINAL (Winner): {final_model_path}")
+        print("\n🔷 META-LEARNER (Stage 3):")
+        if v2_neural_result is not None:
+            print(f"   └─ V2 Neural: {final_model_path}")
         
         print("\n🔷 SCALERS & PREPROCESSING:")
         print(f"   ├─ Feature Scaler: {os.path.join(stage2_dir, 'feature_scaler.pkl')}")
-        print(f"   ├─ Laplacian Features: {os.path.join(stage2_dir, 'laplacian_features.pkl')}")
-        print(f"   └─ FINAL Meta Scaler: {scaler_path}")
+        print(f"   └─ Meta Scaler: {scaler_path}")
         
         print("\n🔷 PREDICTIONS & RESULTS:")
         print(f"   ├─ OOF Predictions: {os.path.join(stage2_dir, 'optimized_oof_predictions.csv')}")
@@ -2819,7 +2450,7 @@ def main(fast_mode=False):
                     os.path.basename(f): f for f in meta_pdp_files
                 }
                 sensitivity_package['models']['meta_ensemble'] = {
-                    'description': 'PDP curves from LightGBM meta-ensemble',
+                    'description': 'PDP curves from neural meta-learner',
                     'n_pdp_curves': len(meta_pdp_files)
                 }
             if meta_shap_files:

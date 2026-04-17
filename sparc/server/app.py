@@ -2064,6 +2064,35 @@ async def validate_dag(dag: dict):
         return {"valid": False, "error": str(exc)}
 
 
+@app.get("/dag/mc3_result")
+async def get_mc3_result():
+    """Return pending MC³ edge-inclusion probabilities for DAG approval."""
+    if state.pending_mc3 is None:
+        raise HTTPException(404, "No MC³ result pending")
+    return state.pending_mc3
+
+
+@app.post("/dag/approve")
+async def approve_dag():
+    """Approve the discovered DAG and unblock the pipeline."""
+    if state.pending_mc3 is None:
+        raise HTTPException(400, "No MC³ result pending approval")
+    state.dag_approved.set()
+    return {"status": "approved"}
+
+
+@app.post("/dag/reject")
+async def reject_dag():
+    """Reject the discovered DAG and cancel the pipeline."""
+    if state.pending_mc3 is None:
+        raise HTTPException(400, "No MC³ result pending approval")
+    # Unblock the gate — the pipeline will continue (we clear pending_mc3
+    # but the pipeline thread checks is_running which cancel sets to false)
+    state.pending_mc3 = None
+    state.dag_approved.set()
+    return {"status": "rejected"}
+
+
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------

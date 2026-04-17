@@ -22,21 +22,25 @@ from sparc.data.temporal import is_temporal, prepare_temporal_data
 _CACHE_FILENAME = "_sparc_prepared_data.parquet"
 
 
-def _cache_key(raw_data_path: str) -> str:
-    """Deterministic hash of the source CSV (path + mtime + size)."""
+def _cache_key(raw_data_path: str, predictor_cols: list | None = None) -> str:
+    """Deterministic hash of the source CSV (path + mtime + size + predictors)."""
     p = Path(raw_data_path)
     stat = p.stat()
     token = f"{p.resolve()}|{stat.st_mtime_ns}|{stat.st_size}"
+    if predictor_cols:
+        token += "|" + ",".join(sorted(predictor_cols))
     return hashlib.sha256(token.encode()).hexdigest()[:16]
 
 
-def _cache_path(output_dir: str, raw_data_path: str) -> Path:
+def _cache_path(output_dir: str, raw_data_path: str,
+                predictor_cols: list | None = None) -> Path:
     """Return the full path to the cached parquet file."""
-    return Path(output_dir) / f"{_cache_key(raw_data_path)}_{_CACHE_FILENAME}"
+    return Path(output_dir) / f"{_cache_key(raw_data_path, predictor_cols)}_{_CACHE_FILENAME}"
 
 
 def save_prepared_geodataframe(gdf: gpd.GeoDataFrame, output_dir: str,
-                               raw_data_path: str) -> Path:
+                               raw_data_path: str,
+                               predictor_cols: list | None = None) -> Path:
     """
     Cache a prepared GeoDataFrame as GeoParquet for fast reloading.
 
@@ -48,19 +52,22 @@ def save_prepared_geodataframe(gdf: gpd.GeoDataFrame, output_dir: str,
         Directory to write the cache file into.
     raw_data_path : str
         Path to the original CSV (used to build the cache key).
+    predictor_cols : list, optional
+        Predictor column names (included in cache key for invalidation).
 
     Returns
     -------
     Path to the written parquet file.
     """
-    out = _cache_path(output_dir, raw_data_path)
+    out = _cache_path(output_dir, raw_data_path, predictor_cols)
     out.parent.mkdir(parents=True, exist_ok=True)
     gdf.to_parquet(out, index=False)
     print(f"    Cached prepared data → {out.name} ({out.stat().st_size / 1e6:.1f} MB)")
     return out
 
 
-def load_cached_geodataframe(output_dir: str, raw_data_path: str):
+def load_cached_geodataframe(output_dir: str, raw_data_path: str,
+                             predictor_cols: list | None = None):
     """
     Load a previously cached GeoDataFrame if it exists and is still valid.
 
@@ -69,7 +76,7 @@ def load_cached_geodataframe(output_dir: str, raw_data_path: str):
     GeoDataFrame or None
         The cached data, or None if no valid cache exists.
     """
-    cache = _cache_path(output_dir, raw_data_path)
+    cache = _cache_path(output_dir, raw_data_path, predictor_cols)
     if cache.exists():
         try:
             gdf = gpd.read_parquet(cache)
@@ -150,7 +157,7 @@ def load_and_preprocess_data(
 
     # Check for cached GeoParquet first (3-5x faster than CSV re-parse)
     if output_dir is not None:
-        cached = load_cached_geodataframe(output_dir, raw_data_path)
+        cached = load_cached_geodataframe(output_dir, raw_data_path, predictor_cols)
         if cached is not None:
             print(f"--- Finished Data Loading (from cache) ---")
             return cached
@@ -203,7 +210,8 @@ def load_and_preprocess_data(
     # Write cache for downstream stages
     if output_dir is not None:
         try:
-            save_prepared_geodataframe(gdf, output_dir, raw_data_path)
+            save_prepared_geodataframe(gdf, output_dir, raw_data_path,
+                                       predictor_cols)
         except Exception as exc:
             print(f"    Warning: could not write cache ({exc})")
 

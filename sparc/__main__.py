@@ -140,9 +140,9 @@ def cmd_run(args):
 
     Stage flow (when ``--stage all``):
       0  GWEN variable selection  (skippable with ``--skip-gwen``)
-      1  Correlogram analysis     (auto-wires bandwidths into pipeline_config)
+      1  Correlogram analysis     (auto-wires bandwidths into project config)
       1b Pipeline config generation
-      2  Enhanced Spatial CV       (base models + meta-ensemble + deep kriging)
+      2  Enhanced Spatial CV       (base models + neural meta-learner)
       3  Causal Validation         (DAG + DoWhy + structural coefficients)
       4  Scenario simulation       (DAG + physics blending)
     """
@@ -208,10 +208,10 @@ def cmd_run(args):
     if stage in ('0', 'all'):
         print("\n>>> Stage 0b: Pipeline Configuration")
         from sparc.run.pipeline_configurator import PipelineConfigurator
-        configurator = PipelineConfigurator(stage1_dir=str(paths.stage1_dir))
+        configurator = PipelineConfigurator(stage1_dir=str(paths.stage0_dir))
 
         # If dataset_profile.json exists, apply profiler recommendations
-        profile_path = paths.stage1_dir / 'dataset_profile.json'
+        profile_path = paths.stage0_dir / 'dataset_profile.json'
         if profile_path.exists():
             with open(profile_path) as _f:
                 _profile = json.load(_f)
@@ -340,6 +340,9 @@ def _run_scenarios(config, paths, project_path):
         else:
             print("  [PRIMARY] dag_coefficient requested but no DAG — falling back to physics")
             summary_df, results_gdf = sim.run(verbose=True)
+    elif scenario_mode == 'bayesian':
+        print("  [PRIMARY] Bayesian posterior scenario simulation (MC³ + NUTS)")
+        summary_df, results_gdf = sim.run_bayesian_scenarios(data, verbose=True)
     else:
         print(f"  [PRIMARY] Physics-prior blending (mode={scenario_mode})")
         summary_df, results_gdf = sim.run(verbose=True)
@@ -550,21 +553,6 @@ def cmd_desktop(args):
             sys.exit(1)
 
 
-def cmd_ui(args):
-    """Launch the deprecated Streamlit UI."""
-    import warnings
-    warnings.warn(
-        "The Streamlit UI is deprecated. Use 'sparc desktop' or 'sparc server' instead.",
-        DeprecationWarning,
-        stacklevel=1,
-    )
-    print("WARNING: The Streamlit UI is deprecated. Use 'sparc desktop' instead.")
-    print("Starting Streamlit UI anyway...")
-    import subprocess
-    ui_path = Path(__file__).resolve().parent / "ui" / "app.py"
-    subprocess.run([sys.executable, "-m", "streamlit", "run", str(ui_path)], check=False)
-
-
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -628,10 +616,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_desk.add_argument('--port', type=int, default=8008,
                         help='FastAPI server port (default: 8008)')
     p_desk.set_defaults(func=cmd_desktop)
-
-    # --- ui (deprecated) ---
-    p_ui = subparsers.add_parser('ui', help='[DEPRECATED] Launch Streamlit UI')
-    p_ui.set_defaults(func=cmd_ui)
 
     return parser
 

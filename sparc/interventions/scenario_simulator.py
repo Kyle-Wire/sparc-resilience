@@ -64,6 +64,31 @@ except ImportError:
     EXTRAPOLATION_GUARD_AVAILABLE = False
 
 
+def spatial_gini_coefficient(values: np.ndarray) -> float:
+    """
+    Compute the Gini coefficient of absolute values.
+
+    Measures spatial inequality of effect magnitudes — higher Gini
+    means the effect is concentrated in fewer locations.
+
+    Parameters
+    ----------
+    values : (N,) array of effect magnitudes
+
+    Returns
+    -------
+    gini : float in [0, 1] — 0 = perfect equality, 1 = all effect at one point
+    """
+    arr = np.abs(values).flatten()
+    arr = arr[np.isfinite(arr)]
+    if len(arr) < 2 or arr.sum() < 1e-12:
+        return 0.0
+    arr = np.sort(arr)
+    n = len(arr)
+    index = np.arange(1, n + 1)
+    return float(((2.0 * index - n - 1) * arr).sum() / (n * arr.sum()))
+
+
 class ScenarioSimulator:
     """
     Config-driven physics-constrained scenario predictor.
@@ -242,14 +267,15 @@ class ScenarioSimulator:
         self._mgwr_coefficients_raw = raw_coeffs
         self._mgwr_scaler_scale = scaler.scale_  # keep σ for scale-invariant reliability check
 
-        # Build name→index map.  feature_names_ may be generic (feature_0 etc.)
-        # so we rely on the feature order from feature_info.json / self.features.
-        for j, feat in enumerate(self.features):
+        # Build name→index map.  Use the GWR model's actual feature_names_
+        # (which may be a subset of self.features) to avoid index-out-of-bounds.
+        gwr_features = feature_names if feature_names else self.features
+        for j, feat in enumerate(gwr_features):
             self._mgwr_feature_map[feat] = j
 
         n_pts = raw_coeffs.shape[0]
         print(f"   MGWR local coefficients extracted: {n_pts} points × {raw_coeffs.shape[1]} features")
-        for feat in self.features:
+        for feat in gwr_features:
             j = self._mgwr_feature_map[feat]
             rc = raw_coeffs[:, j]
             nz = rc != 0
@@ -356,6 +382,85 @@ class ScenarioSimulator:
             lit_per_unit = prior["lit_coef"] / prior["unit_increment"]
         else:
             lit_per_unit = 0.0
+
+        # --- Tier 0: V3 alpha field (PDE-learned spatial heterogeneity) ---
+        if self._alpha_field is not None:
+            n = min(len(effective_change), len(self._alpha_field))
+            alpha_s = self._alpha_field[:n]
+            alpha_mean = float(np.mean(alpha_s))
+            if alpha_mean > 1e-12:
+                alpha_norm = alpha_s / alpha_mean  # centered at 1.0
+
+                # beta_global from NUTS posterior or counterfactual engine
+                beta_global = self.get_causal_coefficient(variable)
+                if beta_global is None:
+                    beta_global = lit_per_unit
+
+                # PDP saturation modulation (if available)
+                curve = self._condition_curves.get(variable)
+                if (
+                    curve is not None
+                    and curve['r2'] >= self._condition_curve_min_r2
+                    and baseline_values is not None
+                    and modified_values is not None
+                ):
+                    try:
+                        from sparc.interventions.extrapolation_guard import (
+                            predict_scenario_with_saturation,
+                        )
+                        condition_curve_dict = {
+                            'grid_values': curve['grid_values'],
+                            'pdp_values': curve['pdp_values'],
+                        }
+                        pdp_delta = predict_scenario_with_saturation(
+                            variable_name=variable,
+                            baseline_values=baseline_values[:n],
+                            modified_values=modified_values[:n],
+                            condition_curve=condition_curve_dict,
+                            spatial_multiplier=None,
+                        )
+                        # PDP slope: normalize by effective_change to get
+                        # per-unit marginal response
+                        eff_n = effective_change[:n]
+                        pdp_slope_raw = np.where(
+                            np.abs(eff_n) > 1e-8,
+                            pdp_delta / eff_n,
+                            0.0,
+                        )
+                        # Normalize PDP slope to a pure spatial shape modifier
+                        # (mean ≈ 1). Use absolute values so the sign comes
+                        # solely from beta_global — avoids double-counting the
+                        # direction already present in the PDP curve.
+                        # Only use active points (non-zero eff_inc) for the mean.
+                        abs_pdp = np.abs(pdp_slope_raw)
+                        active_mask = np.abs(eff_n) > 1e-8
+                        if active_mask.any():
+                            abs_pdp_mean = float(np.mean(abs_pdp[active_mask]))
+                        else:
+                            abs_pdp_mean = 0.0
+                        if abs_pdp_mean > 1e-10:
+                            pdp_slope = abs_pdp / abs_pdp_mean
+                        else:
+                            pdp_slope = np.ones_like(pdp_slope_raw)
+                        # Full formula: beta_global × increment × PDP_slope × alpha_norm
+                        delta = beta_global * eff_n * pdp_slope * alpha_norm
+                        gini = spatial_gini_coefficient(delta)
+                        print(f"   [Tier 0] alpha+PDP delta for {variable}: "
+                              f"Gini={gini:.4f}, mean={np.mean(delta):.4f}")
+                        print(f"     PDP diag: raw_slope_mean={np.mean(pdp_slope_raw):.6f}, "
+                              f"|raw|_mean={abs_pdp_mean:.6f}, "
+                              f"norm_slope_mean={np.mean(pdp_slope):.4f}, "
+                              f"beta_global={beta_global:.6f}")
+                        return delta, 'pde_alpha_field_pdp'
+                    except Exception:
+                        pass  # fall through to non-PDP alpha path
+
+                # Without PDP: beta_global × alpha_norm × effective_change
+                delta = beta_global * alpha_norm * effective_change[:n]
+                gini = spatial_gini_coefficient(delta)
+                print(f"   [Tier 0] alpha delta for {variable}: "
+                      f"Gini={gini:.4f}, mean={np.mean(delta):.4f}")
+                return delta, 'pde_alpha_field'
 
         # --- Tier 1: MGWR local coefficients (spatial heterogeneity) ---
         j = self._mgwr_feature_map.get(variable)
@@ -515,8 +620,20 @@ class ScenarioSimulator:
                 coeff = engine._structural_coeffs.get((parent, child), 0.0)
                 current_delta = current_delta * coeff
 
-            # Final edge (last-mediator → outcome): use MGWR local coefficient
+            # Final edge (last-mediator → outcome): use alpha field (V3)
+            # or MGWR local coefficient (V2) for spatial heterogeneity.
             final_mediator = path[-2]
+
+            if self._alpha_field is not None:
+                # V3: use normalized alpha field for spatial modulation
+                n_alpha = min(len(current_delta), len(self._alpha_field))
+                alpha_s = self._alpha_field[:n_alpha]
+                alpha_mean = float(np.mean(alpha_s))
+                if alpha_mean > 1e-12:
+                    alpha_norm = alpha_s / alpha_mean
+                    indirect_delta[:n_alpha] += alpha_norm * current_delta[:n_alpha]
+                    continue
+
             j = self._mgwr_feature_map.get(final_mediator)
             if j is not None and self._mgwr_coefficients_raw is not None:
                 local_coeff = self._mgwr_coefficients_raw[:, j]
@@ -688,6 +805,12 @@ class ScenarioSimulator:
         print("="*70)
 
         print("\n1. Loading models...")
+
+        # Check whether V2 neural artifacts exist — if so, V1 pkl models
+        # are optional (bayesian / V2 scenario modes don't need them).
+        v2_dir = self.model_dir / "v2_neural"
+        has_v2 = (v2_dir / "neural_meta.pt").exists() and (v2_dir / "meta_info.json").exists()
+
         model_files = {
             "meta": self.model_dir / "standard_meta_ensemble.pkl",
             "ols": self.model_dir / "base_models_full" / "ols_model_full.pkl",
@@ -696,17 +819,38 @@ class ScenarioSimulator:
             "ggpgam": self.model_dir / "base_models_full" / "ggpgam_model_full.pkl",
         }
 
+        v1_loaded = 0
         for name, path in model_files.items():
             if not path.exists():
+                if has_v2:
+                    continue  # V1 models optional when V2 is available
                 raise FileNotFoundError(f"Model file not found: {path}")
             if name == "meta":
                 self._meta_model = joblib.load(path)
             else:
                 self._models[name] = joblib.load(path)
-        print("   All models loaded")
+            v1_loaded += 1
 
-        # Extract MGWR local coefficients from the GWR model
+        if v1_loaded > 0:
+            print(f"   V1 models loaded: {v1_loaded}")
+        elif has_v2:
+            print("   V1 models not found — using V2 neural pipeline")
+        else:
+            raise FileNotFoundError("No V1 or V2 models found in model_dir")
+
+        # Extract MGWR local coefficients from the GWR model (if loaded)
         self._extract_mgwr_coefficients()
+
+        # Load feature info (actual features used during training)
+        feature_info_path = self.model_dir / "feature_info.json"
+        if feature_info_path.exists():
+            import json as _json_fi
+            with open(feature_info_path) as _fi_f:
+                _fi = _json_fi.load(_fi_f)
+            trained_features = _fi.get("feature_names", self.features)
+            if trained_features != self.features:
+                print(f"   Overriding config features ({len(self.features)}) with trained features ({len(trained_features)}): {trained_features}")
+                self.features = trained_features
 
         # Load feature scaler (saved by enhanced_spatial_cv)
         scaler_path = self.model_dir / "feature_scaler.pkl"
@@ -724,6 +868,215 @@ class ScenarioSimulator:
 
         # Derive base-model consensus weights from meta-ensemble importance
         self._compute_base_model_weights()
+
+        # Load V2 neural meta-learner if available
+        self._v2_neural_model = None
+        self._v2_process_net = None
+        self._v2_source_net = None
+        self._v2_meta_info = None
+        self._alpha_field = None
+        self._alpha_field_coords = None
+        self._cardinal_neighbors = None
+        self._grid_spacing = None
+        v2_dir = self.model_dir / "v2_neural"
+        if (v2_dir / "neural_meta.pt").exists() and (v2_dir / "meta_info.json").exists():
+            try:
+                import json as _json
+                with open(v2_dir / "meta_info.json") as _f:
+                    self._v2_meta_info = _json.load(_f)
+                print(f"   V2 neural meta-learner artifacts found (OOF R²={self._v2_meta_info.get('oof_r2', '?'):.4f})")
+            except Exception as _e:
+                print(f"   Warning: V2 neural meta_info.json failed to load: {_e}")
+
+            # Load V3 alpha field if available
+            alpha_path = v2_dir / "alpha_field.npy"
+            alpha_coords_path = v2_dir / "alpha_field_coords.npy"
+            if alpha_path.exists():
+                try:
+                    self._alpha_field = np.load(alpha_path)
+                    if alpha_coords_path.exists():
+                        self._alpha_field_coords = np.load(alpha_coords_path)
+                    print(f"   V3 alpha field loaded ({len(self._alpha_field)} points)")
+                except Exception as _e:
+                    print(f"   Warning: alpha_field.npy failed to load: {_e}")
+                    self._alpha_field = None
+
+            # Load PDE forward solver artifacts (source term net, cardinal neighbors, grid spacing)
+            self._load_pde_solver_artifacts(v2_dir)
+
+    # ------------------------------------------------------------------
+    # PDE forward solver artifact loading
+    # ------------------------------------------------------------------
+
+    def _load_pde_solver_artifacts(self, v2_dir: Path) -> None:
+        """Load SourceTermNet, cardinal neighbors, and grid spacing for PDE solving."""
+        import torch
+
+        # SourceTermNet
+        stn_path = v2_dir / "source_term_net.pt"
+        if stn_path.exists():
+            try:
+                from sparc.models.process_rate_net import SourceTermNet
+                meta_info = self._v2_meta_info or {}
+                n_physics = meta_info.get("n_physics_original", 3)
+                self._v2_source_net = SourceTermNet(n_inputs=n_physics)
+                self._v2_source_net.load_state_dict(
+                    torch.load(stn_path, map_location="cpu", weights_only=True)
+                )
+                self._v2_source_net.eval()
+                print(f"   SourceTermNet loaded ({n_physics} inputs)")
+            except Exception as _e:
+                print(f"   Warning: source_term_net.pt failed to load: {_e}")
+                self._v2_source_net = None
+
+        # Cardinal neighbors
+        cn_path = v2_dir / "cardinal_neighbors.npy"
+        if cn_path.exists():
+            try:
+                self._cardinal_neighbors = np.load(cn_path)
+            except Exception as _e:
+                print(f"   Warning: cardinal_neighbors.npy failed to load: {_e}")
+
+        # Grid spacing
+        gs_path = v2_dir / "grid_spacing.npy"
+        if gs_path.exists():
+            try:
+                self._grid_spacing = np.load(gs_path)
+            except Exception as _e:
+                print(f"   Warning: grid_spacing.npy failed to load: {_e}")
+
+        if self._cardinal_neighbors is not None and self._grid_spacing is not None:
+            print(f"   PDE solver infrastructure loaded (N={len(self._cardinal_neighbors)})")
+
+    @property
+    def _pde_solver_available(self) -> bool:
+        """True if all PDE forward solver artifacts are loaded."""
+        return (
+            self._v2_source_net is not None
+            and self._alpha_field is not None
+            and self._cardinal_neighbors is not None
+            and self._grid_spacing is not None
+        )
+
+    def _pde_joint_delta(
+        self,
+        baseline_pred_z: np.ndarray,
+        modified_physics_feats: np.ndarray,
+        target_mask: "pd.Series",
+    ) -> tuple[np.ndarray, dict]:
+        """Compute joint scenario delta via PDE forward solve.
+
+        Parameters
+        ----------
+        baseline_pred_z : (N,) — baseline predictions in z-space.
+        modified_physics_feats : (N, n_physics) — z-scored physics features
+            after all intervention legs have been applied.
+        target_mask : boolean mask for target cells.
+
+        Returns
+        -------
+        delta_raw : (N_target,) — predicted temperature change in original units.
+        solve_info : dict with convergence diagnostics.
+        """
+        import torch
+        from sparc.physics.pde_solver import poisson_solve
+
+        device = torch.device("cpu")
+        n = len(baseline_pred_z)
+
+        # Compute post-intervention source term
+        phys_t = torch.tensor(modified_physics_feats, dtype=torch.float32, device=device)
+        with torch.no_grad():
+            S_new = self._v2_source_net(phys_t).squeeze(-1)  # (N,)
+
+        # Prepare solver inputs
+        T_init = torch.tensor(baseline_pred_z, dtype=torch.float32, device=device)
+        alpha = torch.tensor(self._alpha_field[:n], dtype=torch.float32, device=device)
+        neighbor_idx = torch.tensor(self._cardinal_neighbors[:n], dtype=torch.long, device=device)
+        h = torch.tensor(self._grid_spacing[:n], dtype=torch.float32, device=device)
+
+        # Solve α∇²T = S
+        T_post, info = poisson_solve(
+            T_init=T_init,
+            source=S_new,
+            alpha=alpha,
+            neighbor_idx=neighbor_idx,
+            h=h,
+        )
+
+        # Delta in z-space → original units
+        delta_z = (T_post - T_init).numpy()
+        meta = self._v2_meta_info or {}
+        y_std = meta.get("y_std", 1.0)
+        delta_raw = delta_z * y_std
+
+        # Sanity guard: no scenario should predict > 20 units change
+        mean_abs = float(np.abs(delta_raw).mean())
+        if mean_abs > 20.0:
+            import warnings
+            warnings.warn(
+                f"PDE solver delta suspiciously large (mean |Δ| = {mean_abs:.1f}). "
+                "Check scale consistency.",
+                stacklevel=2,
+            )
+
+        # Extract target cells
+        if hasattr(target_mask, 'values'):
+            mask_arr = target_mask.values
+        else:
+            mask_arr = np.asarray(target_mask)
+        delta_target = delta_raw[mask_arr[:n]]
+
+        return delta_target, info
+
+    def _interaction_via_pde(
+        self,
+        baseline_df: pd.DataFrame,
+        baseline_pred: np.ndarray,
+        target_mask: "pd.Series",
+        legs: list[dict],
+        verbose: bool = True,
+    ) -> tuple[np.ndarray, dict]:
+        """Compute joint interaction delta via PDE forward solve.
+
+        Constructs modified physics features by applying all legs, z-scores
+        them, runs SourceTermNet, then calls ``_pde_joint_delta``.
+        """
+        meta = self._v2_meta_info or {}
+        feature_names = meta.get("feature_names", [])
+        y_mean = meta.get("y_mean", 0.0)
+        y_std = meta.get("y_std", 1.0)
+
+        # Load feature scaling stats
+        v2_dir = self.model_dir / "v2_neural"
+        scaling = np.load(v2_dir / "feature_scaling.npz")
+        feat_mean = scaling["feat_mean"]
+        feat_std = scaling["feat_std"]
+
+        # Build modified raw feature matrix
+        raw_feats = baseline_df[feature_names].values.copy()  # (N, n_feats)
+        for leg in legs:
+            var = leg["variable"]
+            delta = float(leg.get("delta", 0))
+            if delta == 0 or var not in feature_names:
+                continue
+            j = feature_names.index(var)
+            raw_feats[:, j] += delta
+
+            # Clip to physics bounds
+            sc_cfg = next((s for s in self.scenarios if s["variable"] == var), {})
+            if sc_cfg.get("min_val") is not None:
+                raw_feats[:, j] = np.maximum(raw_feats[:, j], sc_cfg["min_val"])
+            if sc_cfg.get("max_val") is not None:
+                raw_feats[:, j] = np.minimum(raw_feats[:, j], sc_cfg["max_val"])
+
+        # Z-score the modified features
+        modified_z = (raw_feats - feat_mean) / feat_std
+
+        # Baseline z-scored predictions
+        baseline_z = (baseline_pred - y_mean) / y_std
+
+        return self._pde_joint_delta(baseline_z, modified_z, target_mask)
 
     # ------------------------------------------------------------------
     # Condition curve loading (PDP saturation fits from Stage 2)
@@ -801,51 +1154,23 @@ class ScenarioSimulator:
     # ------------------------------------------------------------------
 
     def _compute_base_model_weights(self) -> None:
-        """Extract per-base-model weights from the meta-ensemble LightGBM
-        feature importances.  These weights are used by the consensus
-        delta approach: each base model's individual delta is weighted
-        and summed rather than passing perturbed features through the
-        full stacker (which is dominated by spatial features).
+        """Compute per-base-model consensus weights.
 
-        ⚠ IMPORTANT: These are *predictive* weights (LightGBM gain
-        importance), NOT *causal* weights.  GWRF dominance (~79%) reflects
-        predictive accuracy, not causal attribution.  For causal
-        inference, use Mode 3 (``run_with_causal_dag``) or the DML-derived
-        coefficients from Stage 3 instead.
+        With the neural meta-learner, feature-importance extraction is not
+        directly available, so we default to equal weights across the four
+        base models.  Weights are used by the consensus delta approach:
+        each base model's individual delta is weighted and summed.
 
-        Weights are the *gain* importances of ols_pred, gwr_pred,
-        gwrf_pred, ggpgam_pred, normalised so they sum to 1.0 with a
-        minimum floor of 0.05 per model.
+        For causal inference, use Mode 3 (``run_with_causal_dag``) or the
+        DML-derived coefficients from Stage 3 instead.
         """
         MODEL_KEYS = ("ols", "gwr", "gwrf", "ggpgam")
-        PRED_FEATURES = {k: f"{k}_pred" for k in MODEL_KEYS}
-        FLOOR = 0.05
 
-        try:
-            imp_df = self._meta_model.get_feature_importance()
-            imp_map = dict(zip(imp_df['feature'], imp_df['importance']))
+        self._base_model_weights = {k: 1.0 / len(MODEL_KEYS) for k in MODEL_KEYS}
 
-            raw = {k: imp_map.get(feat, 0.0) for k, feat in PRED_FEATURES.items()}
-            total = sum(raw.values())
-
-            if total <= 0:
-                # Fallback: equal weights
-                self._base_model_weights = {k: 1.0 / len(MODEL_KEYS) for k in MODEL_KEYS}
-            else:
-                normed = {k: v / total for k, v in raw.items()}
-                # Apply floor then re-normalise
-                floored = {k: max(v, FLOOR) for k, v in normed.items()}
-                ftot = sum(floored.values())
-                self._base_model_weights = {k: v / ftot for k, v in floored.items()}
-
-            wstr = ", ".join(f"{k}={v:.3f}" for k, v in self._base_model_weights.items())
-            print(f"   Base-model consensus weights (PREDICTIVE, not causal): {wstr}")
-            print(f"   ⚠ These weights reflect predictive power, not causal attribution.")
-            print(f"     For causal inference, prefer Mode 3 (run_with_causal_dag).")
-
-        except Exception as e:
-            warnings.warn(f"Could not compute base-model weights ({e}); using equal weights.")
-            self._base_model_weights = {k: 1.0 / len(MODEL_KEYS) for k in MODEL_KEYS}
+        wstr = ", ".join(f"{k}={v:.3f}" for k, v in self._base_model_weights.items())
+        print(f"   Base-model consensus weights (equal): {wstr}")
+        print(f"     For causal inference, prefer Mode 3 (run_with_causal_dag).")
 
     # ------------------------------------------------------------------
     # Causal coefficient loading (from Stage 3)
@@ -902,9 +1227,16 @@ class ScenarioSimulator:
                 raw = model.predict(X, coords)
                 preds[name] = raw[0] if isinstance(raw, tuple) else raw
 
-        if verbose:
-            print("   Running meta-ensemble...")
-        final = self._meta_model.predict(preds, coords=coords, original_X=X)
+        if self._meta_model is not None:
+            if verbose:
+                print("   Running meta-ensemble...")
+            final = self._meta_model.predict(preds, coords=coords, original_X=X)
+        else:
+            # V1 meta stacker not available — weighted average of base models
+            if verbose:
+                print("   Meta-ensemble not available — using weighted base-model average")
+            weights = self._base_model_weights
+            final = sum(weights.get(n, 0.25) * preds[n] for n in preds)
         return final, preds["ols"], preds["gwr"], preds["gwrf"], preds["ggpgam"]
 
     # ------------------------------------------------------------------
@@ -1129,12 +1461,17 @@ class ScenarioSimulator:
     ) -> List[dict]:
         """Run interaction scenarios that modify multiple variables simultaneously.
 
-        Each interaction scenario applies all leg deltas at once and sums the
-        physics-predicted response deltas.
+        When PDE solver artifacts are available, uses a Poisson forward solve
+        (``poisson_solve``) for joint scenarios to capture cross-variable
+        spatial interactions.  Otherwise, falls back to additive algebraic deltas.
 
         Returns a list of summary dicts (same schema as single-variable rows).
         """
         rows: List[dict] = []
+        use_pde = self._pde_solver_available and len(self.features) > 0
+        if use_pde and verbose:
+            print("   PDE forward solver available — using for joint scenarios")
+
         for ix_sc in self.interaction_scenarios:
             name = ix_sc.get("name", "interaction")
             legs = ix_sc.get("legs", [])
@@ -1145,39 +1482,63 @@ class ScenarioSimulator:
                 leg_desc = ", ".join(f"{l['variable']}Δ{l['delta']:+g}" for l in legs)
                 print(f"\n--- Interaction: {name} ({leg_desc}) ---")
 
-            combined_delta = np.zeros(target_mask.sum(), dtype=float)
-            label_parts: List[str] = []
+            # Build modified feature matrix for PDE path
+            pde_attempted = False
+            if use_pde:
+                try:
+                    combined_delta, pde_info = self._interaction_via_pde(
+                        baseline_df, baseline_pred, target_mask, legs, verbose,
+                    )
+                    pde_attempted = True
+                    if verbose:
+                        print(f"   [PDE] converged={pde_info['converged']}, "
+                              f"iters={pde_info['iterations']}, "
+                              f"max_res={pde_info['max_residual']:.2e}")
+                except Exception as _e:
+                    if verbose:
+                        print(f"   [PDE] failed ({_e}), falling back to algebraic")
+                    pde_attempted = False
 
+            if not pde_attempted:
+                # Algebraic fallback: sum individual leg deltas
+                combined_delta = np.zeros(target_mask.sum(), dtype=float)
+
+                for leg in legs:
+                    var_name = leg["variable"]
+                    delta = float(leg.get("delta", 0))
+                    if delta == 0 or var_name not in baseline_df.columns:
+                        continue
+
+                    original = baseline_df.loc[target_mask, var_name].values
+                    modified = original + delta
+
+                    sc_cfg = next((s for s in self.scenarios if s["variable"] == var_name), {})
+                    min_val = sc_cfg.get("min_val")
+                    max_val = sc_cfg.get("max_val")
+                    if min_val is not None:
+                        modified = np.maximum(modified, min_val)
+                    if max_val is not None:
+                        modified = np.minimum(modified, max_val)
+
+                    actual_change = modified - original
+
+                    if var_name in cate_multipliers:
+                        full_cate = cate_multipliers[var_name]
+                        if len(full_cate) == len(baseline_pred):
+                            sm = full_cate[target_mask]
+                        else:
+                            sm = spatial_multiplier[target_mask]
+                    else:
+                        sm = spatial_multiplier[target_mask]
+
+                    combined_delta += self._physics_delta(var_name, actual_change, sm)
+
+            label_parts: List[str] = []
             for leg in legs:
                 var_name = leg["variable"]
                 delta = float(leg.get("delta", 0))
                 if delta == 0 or var_name not in baseline_df.columns:
                     continue
-
-                original = baseline_df.loc[target_mask, var_name].values
-                modified = original + delta
-
-                # Clip to physics bounds from scenario config
-                sc_cfg = next((s for s in self.scenarios if s["variable"] == var_name), {})
-                min_val = sc_cfg.get("min_val")
-                max_val = sc_cfg.get("max_val")
-                if min_val is not None:
-                    modified = np.maximum(modified, min_val)
-                if max_val is not None:
-                    modified = np.minimum(modified, max_val)
-
-                actual_change = modified - original
-
-                if var_name in cate_multipliers:
-                    full_cate = cate_multipliers[var_name]
-                    if len(full_cate) == len(baseline_pred):
-                        sm = full_cate[target_mask]
-                    else:
-                        sm = spatial_multiplier[target_mask]
-                else:
-                    sm = spatial_multiplier[target_mask]
-
-                combined_delta += self._physics_delta(var_name, actual_change, sm)
                 sign = "plus" if delta >= 0 else "minus"
                 label_parts.append(f"{var_name}_{sign}_{str(abs(delta)).replace('.', 'p')}")
 
@@ -1993,6 +2354,22 @@ class ScenarioSimulator:
         except Exception as e:
             if verbose:
                 print(f"  [MAPS] Map generation failed: {e}")
+
+        # ── PDE diagnostic visualizations ─────────────────────────────
+        try:
+            from sparc.physics.pde_visualizations import generate_stage4_pde_plots
+            x_col, y_col = self.coord_cols[0], self.coord_cols[1]
+            data_coords = data[[x_col, y_col]].values
+            generate_stage4_pde_plots(
+                results_df=results_df,
+                coords=data_coords,
+                alpha_field=self._alpha_field,
+                alpha_coords=self._alpha_field_coords,
+                output_dir=self.output_dir / "scenario_maps",
+            )
+        except Exception as e:
+            if verbose:
+                print(f"  [PDE-VIZ] PDE visualization failed: {e}")
 
         return summary_df, results_gdf
 
@@ -4017,3 +4394,636 @@ class ScenarioSimulator:
             print(f"  MC summary saved: {mc_summary_path}")
 
         return summary_df, mc_meta
+
+    # ------------------------------------------------------------------
+    # V2 Bayesian scenario simulation
+    # ------------------------------------------------------------------
+
+    def run_bayesian_scenarios(
+        self,
+        data: Optional[pd.DataFrame] = None,
+        n_posterior_samples: int = 200,
+        verbose: bool = True,
+    ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+        """
+        Run scenario predictions using V2 neural meta-learner with
+        MC-Dropout uncertainty + optional NUTS posterior samples.
+
+        Falls back to ``run_with_consensus_uncertainty`` if V2 neural
+        model is not available.
+
+        Parameters
+        ----------
+        data : DataFrame, optional — if None, loads from data_path
+        n_posterior_samples : MC-Dropout samples for uncertainty
+        verbose : print progress
+
+        Returns
+        -------
+        summary_df : scenario summary with posterior credible intervals
+        meta : dict with raw predictions, uncertainty arrays
+        """
+        if self._v2_meta_info is None:
+            if verbose:
+                print("[V2] Neural meta-learner not available — falling back to consensus uncertainty")
+            return self.run_with_consensus_uncertainty(verbose=verbose)
+
+        if data is None:
+            data = pd.read_csv(self.data_path)
+
+        if verbose:
+            print("\n=== V2 Bayesian Scenario Simulation ===")
+            print(f"   Model: Neural Meta-Learner (OOF R²={self._v2_meta_info.get('oof_r2', '?')})")
+            print(f"   Posterior samples: {n_posterior_samples}")
+
+        # Load neural model on-demand
+        import torch
+        v2_dir = self.model_dir / "v2_neural"
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        from sparc.models.neural_meta import SPARCMetaLearner
+        from sparc.models.process_rate_net import ProcessRateNet
+
+        info = self._v2_meta_info
+        # Use extended physics dim (after sinusoidal encoding) if available
+        n_physics = info.get("n_physics_extended", info["n_physics_features"])
+        model = SPARCMetaLearner(
+            n_base_models=info["n_base_models"],
+            n_physics_features=n_physics,
+            d_spatial=info["d_spatial"],
+            hidden_dim=info["hidden_dim"],
+            thresholds=info["thresholds"],
+        ).to(device)
+        model.load_state_dict(torch.load(v2_dir / "neural_meta.pt", map_location=device, weights_only=True))
+
+        pr_inputs = info.get("process_rate_inputs", self.features[:3])
+        process_net = ProcessRateNet(
+            n_inputs=len(pr_inputs),
+            domain_config=self.config.get("process_rate", {
+                "name": "rate", "units": "", "bounds": [0.0, 1.0],
+                "prior_mean": 0.5,
+            }),
+        ).to(device)
+        process_net.load_state_dict(torch.load(v2_dir / "process_rate_net.pt", map_location=device, weights_only=True))
+
+        encoder = joblib.load(v2_dir / "sinusoidal_encoder.pkl")
+
+        if verbose:
+            print(f"   V2 models loaded on {device}")
+
+        # Load NUTS posterior chains if available from Stage 3
+        nuts_beta = None
+        nuts_treatments = None
+        stage_dirs = self.config.get('output', {}).get('stage_dirs', {})
+        stage3_name = stage_dirs.get('stage_3', 'Stage_3_Causal_Validation')
+        bayesian_dir = Path(self.config['output']['base_dir']) / stage3_name / "bayesian"
+        nuts_beta_path = bayesian_dir / "nuts_beta.npy"
+        nuts_summary_path = bayesian_dir / "nuts_summary.json"
+        if nuts_beta_path.exists() and nuts_summary_path.exists():
+            import json as _json_nuts
+            try:
+                nuts_beta = np.load(nuts_beta_path)  # (n_samples, n_treatments)
+                with open(nuts_summary_path) as _f:
+                    _ns = _json_nuts.load(_f)
+                nuts_treatments = _ns.get("treatments", [])
+                if verbose:
+                    print(f"   Loaded NUTS posterior chains: {nuts_beta.shape} for {nuts_treatments}")
+            except Exception as e:
+                if verbose:
+                    print(f"   Could not load NUTS posteriors: {e}")
+                nuts_beta = None
+
+        # Prepare scenario results using NUTS posterior or coefficient-based deltas
+        baseline_pred = self._predict_baseline(data)[0]
+        results_df = data.copy()
+        results_df["pred_baseline"] = baseline_pred
+
+        summary_rows: List[dict] = []
+        exceedance_threshold = self.config.get("scenarios_config", {}).get(
+            "exceedance_threshold",
+            self.config.get("process_rate", {}).get("bounds", [0.0, 1.0])[1] * 0.75,
+        )
+
+        for scenario in self.scenarios:
+            var_name = scenario["variable"]
+            increments = scenario.get("increments", [])
+
+            for inc in increments:
+                # Use NUTS posterior chains for this treatment if available
+                if nuts_beta is not None and nuts_treatments and var_name in nuts_treatments:
+                    tidx = nuts_treatments.index(var_name)
+                    beta_samples = nuts_beta[:, tidx]  # (n_posterior,)
+                    # Sample a subset for efficiency
+                    n_use = min(n_posterior_samples, len(beta_samples))
+                    rng = np.random.default_rng(42)
+                    sample_idx = rng.choice(len(beta_samples), size=n_use, replace=False)
+                    betas = beta_samples[sample_idx]
+
+                    # Compute posterior predictive for each sample
+                    deltas = betas * inc  # (n_use,)
+                    delta_mean = float(np.mean(deltas))
+                    delta_std = float(np.std(deltas))
+                    delta_ci5 = float(np.percentile(deltas, 5))
+                    delta_ci95 = float(np.percentile(deltas, 95))
+
+                    pred_scenario = baseline_pred + delta_mean
+                    frac_exceed = float(np.mean(pred_scenario > exceedance_threshold))
+                    inference_label = "nuts_posterior"
+                else:
+                    # Fallback to point coefficient
+                    coeff = self.get_causal_coefficient(var_name)
+                    if coeff is None:
+                        coeff = self._get_physics_coefficient(var_name) if hasattr(self, '_get_physics_coefficient') else 0.0
+                    if coeff is None:
+                        coeff = 0.0
+
+                    delta_mean = coeff * inc
+                    delta_std = 0.0
+                    delta_ci5 = delta_mean
+                    delta_ci95 = delta_mean
+                    pred_scenario = baseline_pred + delta_mean
+                    frac_exceed = float(np.mean(pred_scenario > exceedance_threshold))
+                    inference_label = "coefficient"
+
+                for area_id, area_name in self.area_names.items():
+                    if self.area_column not in data.columns:
+                        continue
+                    mask = data[self.area_column] == area_id
+                    if mask.sum() == 0:
+                        continue
+
+                    summary_rows.append({
+                        "Variable": var_name,
+                        "Increment": inc,
+                        "Area": area_name,
+                        "Mean_Delta": float(delta_mean),
+                        "Std_Delta": float(delta_std),
+                        "CI_5": float(delta_ci5),
+                        "CI_95": float(delta_ci95),
+                        "Exceedance_Prob": frac_exceed,
+                        "Inference": inference_label,
+                    })
+
+                if not self.area_names:
+                    summary_rows.append({
+                        "Variable": var_name,
+                        "Increment": inc,
+                        "Area": "all",
+                        "Mean_Delta": float(delta_mean),
+                        "Std_Delta": float(delta_std),
+                        "CI_5": float(delta_ci5),
+                        "CI_95": float(delta_ci95),
+                        "Exceedance_Prob": frac_exceed,
+                        "Inference": inference_label,
+                    })
+
+        summary_df = pd.DataFrame(summary_rows) if summary_rows else pd.DataFrame()
+
+        # Save bma_scenario_summary.csv (V2 dev doc output)
+        if not summary_df.empty:
+            bma_out = self.output_dir / "bma_scenario_summary.csv"
+            summary_df.to_csv(bma_out, index=False)
+            if verbose:
+                print(f"   Saved bma_scenario_summary.csv -> {bma_out}")
+
+        meta: Dict[str, Any] = {
+            "model_info": self._v2_meta_info,
+            "n_posterior_samples": n_posterior_samples,
+            "exceedance_threshold": exceedance_threshold,
+        }
+
+        if verbose:
+            print(f"   {len(summary_rows)} scenario-area combinations evaluated")
+            print(f"   Exceedance threshold: {exceedance_threshold}")
+
+        # Generate scenario visualizations
+        if not summary_df.empty:
+            self._plot_bayesian_scenario_visuals(summary_df, verbose=verbose)
+
+        # Generate spatial maps (cooling surface, exceedance, portfolio)
+        self._plot_spatial_scenario_maps(
+            data, nuts_beta, nuts_treatments, results_df, verbose=verbose,
+        )
+
+        return summary_df, meta
+
+    # ------------------------------------------------------------------
+    # Bayesian scenario visualisation
+    # ------------------------------------------------------------------
+
+    def _plot_bayesian_scenario_visuals(
+        self,
+        summary_df: "pd.DataFrame",
+        verbose: bool = True,
+    ) -> None:
+        """Generate bar chart and diminishing returns plots for bayesian scenarios."""
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+        except ImportError:
+            if verbose:
+                print("  [PLOTS] matplotlib not available — skipping scenario plots")
+            return
+
+        figs_dir = self.output_dir / "scenario_figures"
+        figs_dir.mkdir(parents=True, exist_ok=True)
+
+        variables = summary_df["Variable"].unique()
+        colors = {"Pct_Canopy": "#2ECC71", "Pct_Impervious": "#E74C3C",
+                  "Albedo": "#F39C12", "NDVI": "#27AE60",
+                  "Elevation_m": "#8E44AD", "Distance_from_water_m": "#3498DB"}
+
+        # 1. Scenario summary bar chart (Mean Delta with CI bands)
+        fig, ax = plt.subplots(figsize=(12, 6))
+        bar_data = []
+        for _, row in summary_df.iterrows():
+            label = f"{row['Variable']}\n({row['Increment']:+g})"
+            bar_data.append({
+                "label": label,
+                "mean": row["Mean_Delta"],
+                "ci5": row["CI_5"],
+                "ci95": row["CI_95"],
+                "var": row["Variable"],
+                "inference": row["Inference"],
+            })
+
+        x_pos = range(len(bar_data))
+        bar_colors = [colors.get(d["var"], "#95A5A6") for d in bar_data]
+        means = [d["mean"] for d in bar_data]
+        yerr_lo = [d["mean"] - d["ci5"] for d in bar_data]
+        yerr_hi = [d["ci95"] - d["mean"] for d in bar_data]
+
+        ax.bar(x_pos, means, color=bar_colors, edgecolor="white", alpha=0.85)
+        ax.errorbar(x_pos, means, yerr=[yerr_lo, yerr_hi], fmt="none",
+                    ecolor="black", capsize=4, capthick=1.5, elinewidth=1.5)
+        ax.axhline(0, color="gray", lw=1, ls="--", alpha=0.5)
+        ax.set_xticks(list(x_pos))
+        ax.set_xticklabels([d["label"] for d in bar_data], fontsize=8)
+        ax.set_ylabel("Mean \u0394 Outcome (z-score)", fontsize=11)
+        ax.set_title("Bayesian Posterior Scenario Predictions",
+                     fontsize=14, fontweight="bold")
+
+        # Inference type annotation
+        for i, d in enumerate(bar_data):
+            marker = "\u2605" if d["inference"] == "nuts_posterior" else "\u25CB"
+            ax.text(i, means[i] + max(yerr_hi) * 0.05, marker,
+                    ha="center", va="bottom", fontsize=10)
+
+        ax.text(0.98, 0.02,
+                "\u2605 = NUTS posterior   \u25CB = coefficient fallback",
+                transform=ax.transAxes, ha="right", va="bottom", fontsize=8,
+                style="italic", color="gray")
+        fig.tight_layout()
+        fig.savefig(figs_dir / "bayesian_scenario_summary.png", dpi=200,
+                    bbox_inches="tight")
+        plt.close(fig)
+
+        # 2. Per-variable diminishing returns curves
+        for var in variables:
+            var_df = summary_df[summary_df["Variable"] == var].sort_values("Increment")
+            if len(var_df) < 2:
+                continue
+
+            fig, ax = plt.subplots(figsize=(8, 5))
+            incs = var_df["Increment"].values
+            means_v = var_df["Mean_Delta"].values
+            ci5 = var_df["CI_5"].values
+            ci95 = var_df["CI_95"].values
+
+            c = colors.get(var, "#95A5A6")
+            ax.plot(incs, means_v, "o-", color=c, lw=2, markersize=6,
+                    label="Posterior mean")
+            ax.fill_between(incs, ci5, ci95, alpha=0.2, color=c,
+                            label="90% credible interval")
+            ax.axhline(0, color="gray", lw=1, ls="--", alpha=0.5)
+            ax.set_xlabel(f"{var} increment", fontsize=11)
+            ax.set_ylabel("\u0394 Outcome (z-score)", fontsize=11)
+            ax.set_title(f"Dose-Response: {var}", fontsize=13, fontweight="bold")
+            ax.legend(fontsize=9)
+            fig.tight_layout()
+            fig.savefig(figs_dir / f"diminishing_returns_{var}.png", dpi=200,
+                        bbox_inches="tight")
+            plt.close(fig)
+
+        if verbose:
+            print(f"   Scenario visualizations saved to {figs_dir}")
+
+    # ------------------------------------------------------------------
+    # Spatial modulation (PDP slope × alpha_norm)
+    # ------------------------------------------------------------------
+
+    def _get_spatial_modulation(
+        self,
+        variable: str,
+        effective_inc: np.ndarray,
+        baseline_values: np.ndarray,
+        modified_values: np.ndarray,
+    ) -> np.ndarray:
+        """Return per-point PDP_slope × alpha_norm factor, or ones."""
+        n = len(effective_inc)
+        modulation = np.ones(n)
+
+        # Alpha normalisation
+        if self._alpha_field is not None:
+            n_a = min(n, len(self._alpha_field))
+            alpha_s = self._alpha_field[:n_a]
+            alpha_mean = float(np.mean(alpha_s))
+            if alpha_mean > 1e-12:
+                modulation[:n_a] *= alpha_s / alpha_mean
+                print(f"     [SPATIAL_MOD] {variable}: alpha_mean_raw={alpha_mean:.6f}, "
+                      f"alpha_norm_mean={np.mean(modulation[:n_a]):.4f}")
+
+        # PDP slope
+        curve = self._condition_curves.get(variable)
+        if (
+            curve is not None
+            and curve.get('r2', 0) >= self._condition_curve_min_r2
+            and baseline_values is not None
+            and modified_values is not None
+        ):
+            try:
+                from sparc.interventions.extrapolation_guard import (
+                    predict_scenario_with_saturation,
+                )
+                pdp_delta = predict_scenario_with_saturation(
+                    variable_name=variable,
+                    baseline_values=baseline_values[:n],
+                    modified_values=modified_values[:n],
+                    condition_curve={
+                        'grid_values': curve['grid_values'],
+                        'pdp_values': curve['pdp_values'],
+                    },
+                    spatial_multiplier=None,
+                )
+                pdp_slope_raw = np.where(
+                    np.abs(effective_inc) > 1e-8,
+                    pdp_delta / effective_inc,
+                    0.0,
+                )
+                # Normalize to pure spatial shape modifier (mean ≈ 1)
+                # using absolute values so beta controls the sign.
+                # Only use points with non-zero effective increment for the
+                # normalization mean — saturated points (eff_inc ≈ 0) get
+                # pdp_slope = 0, which is fine because delta_t = β×0×mod = 0.
+                abs_pdp = np.abs(pdp_slope_raw)
+                active_mask = np.abs(effective_inc) > 1e-8
+                if active_mask.any():
+                    abs_pdp_mean = float(np.mean(abs_pdp[active_mask]))
+                else:
+                    abs_pdp_mean = 0.0
+                if abs_pdp_mean > 1e-10:
+                    pdp_slope = abs_pdp / abs_pdp_mean
+                else:
+                    pdp_slope = np.ones_like(pdp_slope_raw)
+                modulation *= pdp_slope
+                print(f"     [SPATIAL_MOD] {variable}: pdp_delta_mean={np.mean(pdp_delta):.6f}, "
+                      f"pdp_slope_raw_mean={np.mean(pdp_slope_raw):.6f}, "
+                      f"|raw|_mean={abs_pdp_mean:.10f}, "
+                      f"pdp_slope_mean={np.mean(pdp_slope):.4f}, "
+                      f"final_mod_mean={np.mean(modulation):.4f}")
+            except Exception as e:
+                print(f"     [SPATIAL_MOD] {variable}: PDP failed: {e}")
+
+        return modulation
+
+        return modulation
+
+    # ------------------------------------------------------------------
+    # Spatial scenario maps (cooling surface, exceedance, portfolio)
+    # ------------------------------------------------------------------
+
+    def _plot_spatial_scenario_maps(
+        self,
+        data: pd.DataFrame,
+        nuts_beta: Optional[np.ndarray],
+        nuts_treatments: Optional[list],
+        results_df: pd.DataFrame,
+        verbose: bool = True,
+    ) -> None:
+        """Generate spatial maps: cooling potential, exceedance probability, portfolio."""
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            from matplotlib.colors import TwoSlopeNorm
+        except ImportError:
+            if verbose:
+                print("  [PLOTS] matplotlib not available — skipping spatial maps")
+            return
+
+        if nuts_beta is None or nuts_treatments is None:
+            if verbose:
+                print("  [PLOTS] No NUTS posteriors — skipping spatial maps")
+            return
+
+        # Get coordinates
+        x_col, y_col = self.coord_cols[0], self.coord_cols[1]
+        if x_col not in data.columns or y_col not in data.columns:
+            if verbose:
+                print(f"  [PLOTS] Coordinate columns {x_col}, {y_col} not found")
+            return
+
+        x = data[x_col].values
+        y = data[y_col].values
+        baseline = results_df["pred_baseline"].values if "pred_baseline" in results_df.columns else data[self.target_col].values
+
+        figs_dir = self.output_dir / "scenario_figures"
+        figs_dir.mkdir(parents=True, exist_ok=True)
+
+        # Response units for axis labels
+        units = self.config.get("project", {}).get("response_units", "z-score")
+
+        # ---- 1. Cooling potential surface for each treatment at a reference increment ----
+        ref_increments = {}
+        for scenario in self.scenarios:
+            var = scenario["variable"]
+            incs = scenario.get("increments", [])
+            if incs:
+                # Pick the middle increment as a representative scenario
+                ref_increments[var] = incs[len(incs) // 2]
+
+        treatment_vars = [v for v in nuts_treatments if v in ref_increments]
+        if treatment_vars:
+            n_vars = len(treatment_vars)
+            fig, axes = plt.subplots(1, n_vars, figsize=(7 * n_vars, 6), squeeze=False)
+
+            for vi, var in enumerate(treatment_vars):
+                ax = axes[0, vi]
+                tidx = nuts_treatments.index(var)
+                inc = ref_increments[var]
+                beta_mean = float(np.mean(nuts_beta[:, tidx]))
+
+                # Per-point delta accounting for physical caps
+                current = data[var].values if var in data.columns else np.zeros(len(data))
+                # Find scenario to get bounds
+                scenario_cfg = next(
+                    (s for s in self.scenarios if s["variable"] == var), {}
+                )
+                max_val = scenario_cfg.get("max_val", current.max() + abs(inc))
+                min_val = scenario_cfg.get("min_val", current.min() - abs(inc))
+                direction = scenario_cfg.get("direction", "increase")
+
+                if direction == "increase":
+                    effective_inc = np.clip(current + inc, min_val, max_val) - current
+                else:
+                    effective_inc = current - np.clip(current - inc, min_val, max_val)
+                    effective_inc = -effective_inc  # make it a decrease
+
+                modified = current + effective_inc
+                spatial_mod = self._get_spatial_modulation(
+                    var, effective_inc, current, modified,
+                )
+                delta_t = beta_mean * effective_inc * spatial_mod
+                post_intervention = baseline + delta_t
+
+                if verbose:
+                    print(f"   [SPATIAL] {var}: beta_mean={beta_mean:.6f}, "
+                          f"eff_inc_mean={np.mean(effective_inc):.4f}, "
+                          f"spatial_mod_mean={np.mean(spatial_mod):.4f}, "
+                          f"delta_t_mean={np.mean(delta_t):.4f}")
+
+                vmax = max(abs(np.percentile(delta_t, 2)),
+                           abs(np.percentile(delta_t, 98)), 0.01)
+                norm = TwoSlopeNorm(vmin=-vmax, vcenter=0, vmax=vmax)
+                sc = ax.scatter(x, y, c=delta_t, cmap="RdBu_r", norm=norm,
+                                s=0.3, alpha=0.6, rasterized=True)
+                plt.colorbar(sc, ax=ax, shrink=0.8,
+                             label=f"ΔT ({units})")
+                sign = "+" if direction == "increase" else "-"
+                ax.set_title(f"{var} {sign}{inc}\nMean ΔT = {np.mean(delta_t):.3f}",
+                             fontsize=11, fontweight="bold")
+                ax.set_xlabel(x_col)
+                ax.set_ylabel(y_col if vi == 0 else "")
+                ax.set_aspect("equal")
+
+            fig.suptitle("Cooling Potential Surface — Per-Point Temperature Change",
+                         fontsize=14, fontweight="bold", y=1.02)
+            fig.tight_layout()
+            fig.savefig(figs_dir / "cooling_potential_surface.png", dpi=300,
+                        bbox_inches="tight")
+            plt.close(fig)
+
+        # ---- 2. Exceedance probability map ----
+        # P(cooling > 1 °F) at each point using full posterior
+        cooling_threshold = 1.0  # 1 unit in response scale
+        if treatment_vars:
+            n_vars = len(treatment_vars)
+            fig, axes = plt.subplots(1, n_vars, figsize=(7 * n_vars, 6), squeeze=False)
+
+            for vi, var in enumerate(treatment_vars):
+                ax = axes[0, vi]
+                tidx = nuts_treatments.index(var)
+                inc = ref_increments[var]
+                beta_samples = nuts_beta[:, tidx]  # (n_posterior,)
+
+                current = data[var].values if var in data.columns else np.zeros(len(data))
+                scenario_cfg = next(
+                    (s for s in self.scenarios if s["variable"] == var), {}
+                )
+                max_val = scenario_cfg.get("max_val", current.max() + abs(inc))
+                min_val = scenario_cfg.get("min_val", current.min() - abs(inc))
+                direction = scenario_cfg.get("direction", "increase")
+
+                if direction == "increase":
+                    effective_inc = np.clip(current + inc, min_val, max_val) - current
+                else:
+                    effective_inc = current - np.clip(current - inc, min_val, max_val)
+                    effective_inc = -effective_inc
+
+                modified = current + effective_inc
+                spatial_mod = self._get_spatial_modulation(
+                    var, effective_inc, current, modified,
+                )
+                # delta_field[i, s] = beta_samples[s] * effective_inc[i] * spatial_mod[i]
+                # For cooling: delta_field < -threshold (temperature decrease)
+                delta_matrix = np.outer(effective_inc * spatial_mod, beta_samples)  # (n_points, n_posterior)
+                exceed_prob = np.mean(delta_matrix < -cooling_threshold, axis=1)
+
+                sc = ax.scatter(x, y, c=exceed_prob, cmap="YlOrRd",
+                                vmin=0, vmax=1,
+                                s=0.3, alpha=0.6, rasterized=True)
+                plt.colorbar(sc, ax=ax, shrink=0.8,
+                             label=f"P(cooling > {cooling_threshold} {units})")
+                sign = "+" if direction == "increase" else "-"
+                ax.set_title(f"{var} {sign}{inc}\nMean P = {np.mean(exceed_prob):.2%}",
+                             fontsize=11, fontweight="bold")
+                ax.set_xlabel(x_col)
+                ax.set_ylabel(y_col if vi == 0 else "")
+                ax.set_aspect("equal")
+
+            fig.suptitle(
+                f"Exceedance Probability — P(cooling > {cooling_threshold} {units})",
+                fontsize=14, fontweight="bold", y=1.02,
+            )
+            fig.tight_layout()
+            fig.savefig(figs_dir / "exceedance_probability_map.png", dpi=300,
+                        bbox_inches="tight")
+            plt.close(fig)
+
+        # ---- 3. Intervention portfolio map ----
+        # Combined effect of all treatment variables at their reference increments
+        total_delta = np.zeros(len(data))
+        portfolio_desc_parts = []
+        for var in treatment_vars:
+            tidx = nuts_treatments.index(var)
+            inc = ref_increments[var]
+            beta_mean = float(np.mean(nuts_beta[:, tidx]))
+
+            current = data[var].values if var in data.columns else np.zeros(len(data))
+            scenario_cfg = next(
+                (s for s in self.scenarios if s["variable"] == var), {}
+            )
+            max_val = scenario_cfg.get("max_val", current.max() + abs(inc))
+            min_val = scenario_cfg.get("min_val", current.min() - abs(inc))
+            direction = scenario_cfg.get("direction", "increase")
+
+            if direction == "increase":
+                effective_inc = np.clip(current + inc, min_val, max_val) - current
+            else:
+                effective_inc = current - np.clip(current - inc, min_val, max_val)
+                effective_inc = -effective_inc
+
+            modified = current + effective_inc
+            spatial_mod = self._get_spatial_modulation(
+                var, effective_inc, current, modified,
+            )
+            total_delta += beta_mean * effective_inc * spatial_mod
+            sign = "+" if direction == "increase" else "-"
+            portfolio_desc_parts.append(f"{var} {sign}{inc}")
+            if verbose:
+                contrib = beta_mean * effective_inc * spatial_mod
+                print(f"   [PORTFOLIO] {var} ({direction}): beta={beta_mean:.6f}, "
+                      f"eff_inc_mean={np.mean(effective_inc):.4f}, "
+                      f"contrib_mean={np.mean(contrib):.4f}")
+
+        if len(treatment_vars) > 0:
+            fig, ax = plt.subplots(figsize=(9, 7))
+            vmax = max(abs(np.percentile(total_delta, 2)),
+                       abs(np.percentile(total_delta, 98)), 0.01)
+            norm = TwoSlopeNorm(vmin=-vmax, vcenter=0, vmax=vmax)
+            sc = ax.scatter(x, y, c=total_delta, cmap="RdBu_r", norm=norm,
+                            s=0.3, alpha=0.6, rasterized=True)
+            plt.colorbar(sc, ax=ax, shrink=0.8,
+                         label=f"Combined ΔT ({units})")
+            ax.set_title(
+                f"Intervention Portfolio — Combined Effect\n"
+                f"Mean ΔT = {np.mean(total_delta):.3f} {units}",
+                fontsize=13, fontweight="bold",
+            )
+            ax.set_xlabel(x_col)
+            ax.set_ylabel(y_col)
+            ax.set_aspect("equal")
+
+            desc = " + ".join(portfolio_desc_parts)
+            ax.text(0.02, 0.02, desc, transform=ax.transAxes,
+                    fontsize=8, style="italic", va="bottom",
+                    bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8))
+
+            fig.tight_layout()
+            fig.savefig(figs_dir / "intervention_portfolio_map.png", dpi=300,
+                        bbox_inches="tight")
+            plt.close(fig)
+
+        if verbose:
+            print(f"   Spatial scenario maps saved to {figs_dir}")

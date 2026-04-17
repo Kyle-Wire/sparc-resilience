@@ -63,7 +63,6 @@ GWEN_CV_FOLDS = 5
 GWEN_SELECTION_THRESHOLD = 0.1
 GWEN_L1_RATIOS = [0.1, 0.5, 0.7, 0.9, 0.95, 0.99]
 GWEN_N_ALPHAS = 100
-N_OPTUNA_TRIALS_LGBM = 25
 
 # ---------------------------------------------------------------------------
 # YAML project-file loader
@@ -201,14 +200,23 @@ def _yaml_to_config(raw: dict, yaml_path: str) -> dict:
             'l1_ratios': gwen_cfg.get('l1_ratios', [0.1, 0.5, 0.7, 0.9, 0.95, 0.99]),
             'n_alphas': gwen_cfg.get('n_alphas', 100),
         },
-        'lightgbm_params': {
-            'n_optuna_trials': models_cfg.get('meta_ensemble', {}).get('n_optuna_trials', 25),
-        },
         # ---- NEW: project-level metadata available to all stages ----
         'project': raw.get('project', {}),
         'physics': raw.get('physics', {}),
-        'causal':  raw.get('causal', {}),
-        'models':  models_cfg,
+        'causal':  {'inference': 'bayesian', **raw.get('causal', {})},
+        'models':  {**models_cfg,
+            'meta_learner': models_cfg.get('meta_learner', 'neural'),
+            'neural': models_cfg.get('neural', {
+                'hidden_dim': 256,
+                'dropout': 0.1,
+                'n_heads': 4,
+                'max_neighbors': 128,
+                'siren_omega': 30.0,
+                'sinusoidal_frequencies': 64,
+                'exceedance_thresholds': [0.25, 0.50, 0.75],
+                'mc_dropout_samples': 100,
+            }),
+        },
         'scenarios': raw.get('scenarios', []),
         'joint_scenarios': raw.get('joint_scenarios', []),
         'interaction_scenarios': raw.get('interaction_scenarios', []),
@@ -216,6 +224,35 @@ def _yaml_to_config(raw: dict, yaml_path: str) -> dict:
         'temporal': raw.get('temporal', {'enabled': False}),
         'benchmark_metrics': raw.get('benchmark_metrics', {}),
         'fingerprint': raw.get('fingerprint', {}),
+        # ---- V2: neural training, process rate, optimization ----
+        'process_rate': raw.get('process_rate', {
+            'enabled': True,
+            'name': 'spatial_responsiveness',
+            'units': 'dimensionless',
+            'bounds': [1.0e-7, 9.0e-7],
+            'prior_mean': 5.0e-7,
+        }),
+        'optimization': raw.get('optimization', {
+            'run_cma_es': False,
+            'cma_es_popsize': 20,
+            'cma_es_maxiter': 50,
+            'clip_norm': 1.0,
+            'swa_epochs': 20,
+            'capacity_sweep': True,
+            'capacity_sweep_dims': [64, 128, 256, 512, 1024],
+        }),
+        'training': raw.get('training', {
+            'n_epochs': 100,
+            'batch_size': 2048,
+            'warmup_epochs': 10,
+            'ramp_epochs': 30,
+            'lambda_physics': 0.1,
+            'lambda_smooth': 0.01,
+            'lambda_alpha_smooth': 0.01,
+            'lambda_prior': 0.01,
+            'lambda_base': 0.2,
+            'lambda_neighbor': 0.05,
+        }),
     }
 
     # Resolve physics file paths relative to the YAML location
@@ -344,17 +381,30 @@ def load_config(config_path: str | None = None) -> dict:
             'l1_ratios': GWEN_L1_RATIOS,
             'n_alphas': GWEN_N_ALPHAS
         },
-        'lightgbm_params': {
-            'n_optuna_trials': N_OPTUNA_TRIALS_LGBM
-        },
         # Empty new-style keys so downstream code can safely `.get()` them
         'project': {},
         'physics': {},
-        'causal': {},
-        'models': {},
+        'causal': {'inference': 'bayesian'},
+        'models': {
+            'meta_learner': 'neural',
+            'neural': {
+                'hidden_dim': 256,
+                'dropout': 0.1,
+                'n_heads': 4,
+                'max_neighbors': 128,
+                'siren_omega': 30.0,
+                'sinusoidal_frequencies': 64,
+                'exceedance_thresholds': [0.25, 0.50, 0.75],
+                'mc_dropout_samples': 100,
+            },
+        },
         'scenarios': [],
         'pipeline': {'random_seed': 42},
         'temporal': {'enabled': False},
+        # V2 keys with V1-compatible defaults (disabled)
+        'process_rate': {'enabled': False},
+        'optimization': {'run_cma_es': False, 'capacity_sweep': False},
+        'training': {},
     }
 
 

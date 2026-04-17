@@ -59,7 +59,9 @@ export interface DataPreview {
 
 /** Structured event from the /run/stream WebSocket. */
 export interface PipelineEvent {
-  type: "log" | "metric" | "complete" | "error";
+  type: "log" | "metric" | "complete" | "error"
+    | "capacity_result" | "epoch_update" | "curriculum_stage" | "convergence"
+    | "dag_approval_requested";
   message?: string;
   stage?: number;
   fold?: number;
@@ -74,6 +76,32 @@ export interface PipelineEvent {
   model_index?: number;
   /** Total number of models being trained. */
   model_total?: number;
+
+  // ---- Training telemetry fields ----
+  /** Capacity sweep: hidden dimension tested. */
+  hidden_dim?: number;
+  /** Capacity sweep: cross-validated R² for that dimension. */
+  r2?: number;
+  /** Epoch update: current epoch (1-based). */
+  epoch?: number;
+  /** Epoch update: total epochs in this training phase. */
+  n_epochs?: number;
+  /** Epoch update: total loss value for the epoch. */
+  total_loss?: number;
+  /** Epoch update: cv | retrain | swa. */
+  train_phase?: "cv" | "retrain" | "swa";
+  /** Epoch update: per-component loss breakdown. */
+  components?: Record<string, number>;
+  /** Curriculum stage: stage label (e.g. "Stage A"). */
+  curriculum?: string;
+  /** Curriculum stage: human-readable description. */
+  label?: string;
+  /** Convergence status: training | converging | converged. */
+  status?: string;
+  /** DAG gate: number of MC³ edges above threshold. */
+  n_edges?: number;
+  /** DAG gate: number of nodes in MC³ analysis. */
+  n_nodes?: number;
 }
 
 export interface DagNode {
@@ -98,6 +126,23 @@ export interface DagValidation {
   n_nodes: number;
   n_edges: number;
   error: string | null;
+}
+
+/** MC³ edge inclusion probabilities returned by /dag/mc3_result */
+export interface MC3Result {
+  node_names: string[];
+  edge_probs: number[][];
+  mc3_summary: {
+    n_accepted: number;
+    n_total: number;
+    acceptance_rate: number;
+    best_score: number;
+    node_names: string[];
+  };
+  median_dag: {
+    nodes: string[];
+    edges: { source: string; target: string; probability: number }[];
+  };
 }
 
 /** Full project configuration (mirrors project.yml structure) */

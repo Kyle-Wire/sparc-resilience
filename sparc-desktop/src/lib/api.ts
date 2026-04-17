@@ -11,6 +11,7 @@ import type {
   DataPreview,
   DagDefinition,
   DagValidation,
+  MC3Result,
   ProjectConfig,
   CorrelogramData,
   CausalResults,
@@ -132,6 +133,14 @@ export const getDag = () => get<DagDefinition>("/dag");
 
 export const validateDag = (dag: DagDefinition) =>
   post<DagValidation>("/dag/validate", dag);
+
+export const getMc3Result = () => get<MC3Result>("/dag/mc3_result");
+
+export const approveDag = () =>
+  post<{ status: string }>("/dag/approve", {});
+
+export const rejectDag = () =>
+  post<{ status: string }>("/dag/reject", {});
 
 // ------------------------------------------------------------------
 // Config

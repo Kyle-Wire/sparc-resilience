@@ -148,7 +148,7 @@ class DatasetProfiler:
         """
         Return per-model hyperparameter recommendations.
 
-        Keys: ``gwrf``, ``ggpgam``, ``meta_ensemble``, ``deep_kriging``,
+        Keys: ``gwrf``, ``ggpgam``, ``meta_ensemble``,
         ``spatial_cv``, ``correlogram``.
 
         Recommendations adapt to:
@@ -175,13 +175,9 @@ class DatasetProfiler:
         ggpgam = self._recommend_ggpgam(tier, n, n_feat, ram)
         recs["ggpgam"] = ggpgam
 
-        # ── Meta-Ensemble (LightGBM / Optuna) ───────────────────────
+        # ── Meta-Ensemble (Neural / Optuna) ──────────────────────
         meta = self._recommend_meta(tier, n, ram)
         recs["meta_ensemble"] = meta
-
-        # ── Deep Kriging ─────────────────────────────────────────────
-        dk = self._recommend_deep_kriging(tier, n, n_feat)
-        recs["deep_kriging"] = dk
 
         # ── Spatial CV ───────────────────────────────────────────────
         recs["spatial_cv"] = {
@@ -267,50 +263,17 @@ class DatasetProfiler:
     def _recommend_meta(
         self, tier: str, n: int, ram: float
     ) -> Dict[str, Any]:
-        """Meta-Ensemble Optuna trial count and LightGBM leaves."""
+        """Meta-Ensemble Optuna trial count."""
         base: Dict[str, Any] = {}
 
         if tier == "small":
             base["n_optuna_trials"] = 30
-            base["meta_learner_params"] = {"lightgbm": {"num_leaves": 15}}
         elif tier == "medium":
             base["n_optuna_trials"] = 60
-            base["meta_learner_params"] = {"lightgbm": {"num_leaves": 31}}
         elif tier == "large":
             base["n_optuna_trials"] = 100
-            base["meta_learner_params"] = {"lightgbm": {"num_leaves": 63}}
         else:  # xlarge
             base["n_optuna_trials"] = 80 if ram < 16 else 120
-            base["meta_learner_params"] = {"lightgbm": {"num_leaves": 63}}
-
-        return base
-
-    def _recommend_deep_kriging(
-        self, tier: str, n: int, n_feat: int
-    ) -> Dict[str, Any]:
-        """Deep Kriging architecture scaled by tier."""
-        base: Dict[str, Any] = {}
-
-        if tier == "small":
-            base["hidden_layers"] = [32, 16]
-            base["epochs"] = 80
-            base["batch_size"] = 128
-            base["dropout_rate"] = 0.3
-        elif tier == "medium":
-            base["hidden_layers"] = [64, 32, 16]
-            base["epochs"] = 100
-            base["batch_size"] = 256
-            base["dropout_rate"] = 0.2
-        elif tier == "large":
-            base["hidden_layers"] = [128, 64, 32]
-            base["epochs"] = 120
-            base["batch_size"] = 512
-            base["dropout_rate"] = 0.15
-        else:  # xlarge
-            base["hidden_layers"] = [128, 64, 32, 16]
-            base["epochs"] = 150
-            base["batch_size"] = 1024
-            base["dropout_rate"] = 0.15
 
         return base
 
