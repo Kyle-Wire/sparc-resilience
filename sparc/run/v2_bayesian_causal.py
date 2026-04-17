@@ -24,7 +24,7 @@ import logging
 import math
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 import pandas as pd
@@ -51,6 +51,7 @@ def run_bayesian_causal(
     neural_model: Optional[Any] = None,
     config: dict | None = None,
     output_dir: str | Path = ".",
+    approval_gate: Optional[Callable[[dict], None]] = None,
 ) -> dict[str, Any]:
     """
     Run Bayesian causal analysis with MC³ + NUTS.
@@ -62,6 +63,10 @@ def run_bayesian_causal(
     neural_model : optional SPARCMetaLearner for NUTS likelihood
     config : pipeline config dict
     output_dir : where to save artifacts
+    approval_gate : optional callback invoked after MC³ with the MC³
+        result summary dict.  The callback should block until the user
+        approves (or raise ``RuntimeError`` to abort).  When *None* the
+        pipeline proceeds without pausing.
 
     Returns
     -------
@@ -198,6 +203,18 @@ def run_bayesian_causal(
 
     # ---- MC³ visualizations ----
     _plot_mc3_visuals(edge_probs, available_cols, output_dir)
+
+    # ---- Approval gate: pause for user review of MC³ results ----
+    if approval_gate is not None:
+        gate_payload = {
+            "node_names": available_cols,
+            "edge_probs": edge_probs.tolist(),
+            "mc3_summary": mc3_summary,
+            "median_dag": median_dag,
+        }
+        logger.info("Awaiting DAG approval from user...")
+        approval_gate(gate_payload)  # blocks until user approves or raises
+        logger.info("DAG approved — continuing to NUTS.")
 
     # ---- NUTS posterior sampling (if neural model provided) ----
     nuts_results = None

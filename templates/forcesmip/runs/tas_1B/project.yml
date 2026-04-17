@@ -95,7 +95,7 @@ models:
     n_spatial_bases: 10
     lam: 0.6
   meta_ensemble:
-    algorithm: lightgbm
+    algorithm: neural
     n_optuna_trials: 25
   spatial_cv:
     block_size: null

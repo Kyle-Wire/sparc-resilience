@@ -305,14 +305,14 @@
 
         "meta_learner": {
           "type": "string",
-          "enum": ["lightgbm", "neural"],
+          "enum": ["neural"],
           "default": "neural",
-          "description": "Meta-learner type: 'neural' (V2 end-to-end differentiable) or 'lightgbm' (V1 gradient boosting). Default changed to neural in V2."
+          "description": "Meta-learner type: neural (V2 end-to-end differentiable)."
         },
 
         "neural": {
           "type": "object",
-          "description": "V2 neural meta-learner architecture parameters (ignored when meta_learner=lightgbm)",
+          "description": "V2 neural meta-learner architecture parameters",
           "properties": {
             "hidden_dim":    {"type": "integer", "default": 256, "description": "Hidden dimension for fusion network (set after capacity sweep)"},
             "dropout":       {"type": "number", "default": 0.1, "minimum": 0.0, "maximum": 0.5},
@@ -367,19 +367,6 @@
             "n_optuna_trials":  {"type": "integer", "default": 25},
             "include_base_features": {"type": "boolean", "default": true},
             "include_laplacian_pca": {"type": "boolean", "default": true}
-          }
-        },
-
-        "deep_kriging": {
-          "type": "object",
-          "properties": {
-            "enabled":       {"type": "boolean", "default": true, "description": "Enable Deep Kriging V2 residual correction when spatial autocorrelation is detected in meta-ensemble residuals."},
-            "version":       {"type": "integer", "enum": [1, 2], "default": 2, "description": "Deep Kriging version. 2 = multi-scale Wendland basis + spatial smoothness (recommended)."},
-            "hidden_layers": {"type": "array", "items": {"type": "integer"}, "default": [64, 32, 16]},
-            "dropout_rate":  {"type": "number", "default": 0.2},
-            "epochs":        {"type": "integer", "default": 100},
-            "learning_rate": {"type": "number", "default": 0.001},
-            "batch_size":    {"type": "integer", "default": 256}
           }
         },
 

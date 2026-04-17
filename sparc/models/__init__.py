@@ -8,9 +8,8 @@ This module includes:
   - Geographically Weighted Regression (GWR)
   - Geographically Weighted Random Forest (GWRF)
   - Geographically Weighted Generalized Additive Model (GGPGAM)
-- Meta Models:
-  - LightGBM Meta-Ensemble (with monotonic constraints)
-  - Deep Kriging V2 Residual Correction (Wendland basis + spatial smoothness)
+- Neural Meta-Learner:
+  - SPARCMetaLearner (PyTorch, physics-informed, multi-stream)
 """
 
 from .gwen import GWENModel
@@ -18,8 +17,6 @@ from .ols import OLSModel
 from .gwr import GWRModel
 from .gwrf import GWRFModel
 from .ggpgam import GGPGAM_SVC
-from .meta_ensemble import MetaEnsemble
-from .deep_kriging_v2 import DeepKrigingV2
 
 # V2 neural modules (lazy imports — require torch)
 try:
@@ -37,9 +34,7 @@ __all__ = [
     'GWRModel',
     'GWRFModel',
     'GGPGAM_SVC',
-    'MetaEnsemble',
-    'DeepKrigingV2',
-    # V2
+    # V2 Neural
     'SPARCMetaLearner',
     'DifferentiableGWR',
     'DifferentiableGWRF',

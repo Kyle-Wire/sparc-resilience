@@ -1154,51 +1154,23 @@ class ScenarioSimulator:
     # ------------------------------------------------------------------
 
     def _compute_base_model_weights(self) -> None:
-        """Extract per-base-model weights from the meta-ensemble LightGBM
-        feature importances.  These weights are used by the consensus
-        delta approach: each base model's individual delta is weighted
-        and summed rather than passing perturbed features through the
-        full stacker (which is dominated by spatial features).
+        """Compute per-base-model consensus weights.
 
-        ⚠ IMPORTANT: These are *predictive* weights (LightGBM gain
-        importance), NOT *causal* weights.  GWRF dominance (~79%) reflects
-        predictive accuracy, not causal attribution.  For causal
-        inference, use Mode 3 (``run_with_causal_dag``) or the DML-derived
-        coefficients from Stage 3 instead.
+        With the neural meta-learner, feature-importance extraction is not
+        directly available, so we default to equal weights across the four
+        base models.  Weights are used by the consensus delta approach:
+        each base model's individual delta is weighted and summed.
 
-        Weights are the *gain* importances of ols_pred, gwr_pred,
-        gwrf_pred, ggpgam_pred, normalised so they sum to 1.0 with a
-        minimum floor of 0.05 per model.
+        For causal inference, use Mode 3 (``run_with_causal_dag``) or the
+        DML-derived coefficients from Stage 3 instead.
         """
         MODEL_KEYS = ("ols", "gwr", "gwrf", "ggpgam")
-        PRED_FEATURES = {k: f"{k}_pred" for k in MODEL_KEYS}
-        FLOOR = 0.05
 
-        try:
-            imp_df = self._meta_model.get_feature_importance()
-            imp_map = dict(zip(imp_df['feature'], imp_df['importance']))
+        self._base_model_weights = {k: 1.0 / len(MODEL_KEYS) for k in MODEL_KEYS}
 
-            raw = {k: imp_map.get(feat, 0.0) for k, feat in PRED_FEATURES.items()}
-            total = sum(raw.values())
-
-            if total <= 0:
-                # Fallback: equal weights
-                self._base_model_weights = {k: 1.0 / len(MODEL_KEYS) for k in MODEL_KEYS}
-            else:
-                normed = {k: v / total for k, v in raw.items()}
-                # Apply floor then re-normalise
-                floored = {k: max(v, FLOOR) for k, v in normed.items()}
-                ftot = sum(floored.values())
-                self._base_model_weights = {k: v / ftot for k, v in floored.items()}
-
-            wstr = ", ".join(f"{k}={v:.3f}" for k, v in self._base_model_weights.items())
-            print(f"   Base-model consensus weights (PREDICTIVE, not causal): {wstr}")
-            print(f"   ⚠ These weights reflect predictive power, not causal attribution.")
-            print(f"     For causal inference, prefer Mode 3 (run_with_causal_dag).")
-
-        except Exception as e:
-            warnings.warn(f"Could not compute base-model weights ({e}); using equal weights.")
-            self._base_model_weights = {k: 1.0 / len(MODEL_KEYS) for k in MODEL_KEYS}
+        wstr = ", ".join(f"{k}={v:.3f}" for k, v in self._base_model_weights.items())
+        print(f"   Base-model consensus weights (equal): {wstr}")
+        print(f"     For causal inference, prefer Mode 3 (run_with_causal_dag).")
 
     # ------------------------------------------------------------------
     # Causal coefficient loading (from Stage 3)

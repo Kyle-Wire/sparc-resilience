@@ -108,13 +108,7 @@ flags:
 #     n_splines: 5
 #     lam: 0.6
 #   meta_ensemble:
-#     algorithm: "lightgbm"
-#     n_optuna_trials: 25
-#   deep_kriging:
-#     enabled: true
-#     version: 2
-#     hidden_layers: [64, 32, 16]
-#     epochs: 100
+#     algorithm: "neural"
 #   spatial_cv:
 #     block_size: null
 #     buffer_size: 300

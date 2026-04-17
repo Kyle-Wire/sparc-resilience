@@ -2414,9 +2414,15 @@ class CausalValidator:
 # Main entry point (called by sparc __main__.py, Stage 3)
 # ---------------------------------------------------------------------------
 
-def main() -> dict:
+def main(approval_gate=None) -> dict:
     """
     Run the full Stage 3 Causal Validation pipeline.
+
+    Parameters
+    ----------
+    approval_gate : callable, optional
+        If provided, called after MC³ with the result dict.  Should
+        block until the user approves (or raise to abort).
 
     Returns
     -------
@@ -2523,6 +2529,7 @@ def main() -> dict:
                 neural_model=neural_model,
                 config=config,
                 output_dir=bayesian_dir,
+                approval_gate=approval_gate,
             )
 
             mc3_summary = bayesian_result.get("mc3_summary", {})

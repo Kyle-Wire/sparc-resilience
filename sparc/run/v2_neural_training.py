@@ -1083,6 +1083,14 @@ def train_neural_meta(
                 ramp_end=ramp_epochs,
             )
 
+            # ---- Curriculum transition markers ----
+            if epoch == 0:
+                logger.info("[CURRICULUM] Stage A: Representation Warmup")
+            elif epoch == warmup_epochs:
+                logger.info("[CURRICULUM] Stage B: Physics Activation")
+            elif epoch == ramp_epochs:
+                logger.info("[CURRICULUM] Stage C: Joint Optimization")
+
             if use_minibatch:
                 # Spatial minibatch: iterate over contiguous batches
                 batches = list(spatial_minibatch_sampler(
@@ -1212,22 +1220,34 @@ def train_neural_meta(
             for k in epoch_components:
                 epoch_components[k] /= max(n_batch_points, 1)
 
-            if (epoch + 1) % 10 == 0 or epoch == 0:
-                logger.info(
-                    "  Epoch %d/%d  loss=%.4f  "
-                    "[mse=%.3f phys=%.3f nbr=%.3f ce=%.3f "
-                    "pde=%.3f bc=%.3f prior=%.3f base=%.3f]  (%.1fs)",
-                    epoch + 1, n_epochs, epoch_loss,
-                    epoch_components.get("mse", 0),
-                    epoch_components.get("physics", 0),
-                    epoch_components.get("neighborhood", 0),
-                    epoch_components.get("cross_entropy", 0),
-                    epoch_components.get("pde_total", 0),
-                    epoch_components.get("bc_total", 0),
-                    epoch_components.get("alpha_prior", 0),
-                    epoch_components.get("surrogate", 0),
-                    _time.perf_counter() - _fold_t0,
-                )
+            # Log every epoch for live training telemetry
+            logger.info(
+                "  Epoch %d/%d  loss=%.4f  "
+                "[mse=%.3f phys=%.3f nbr=%.3f ce=%.3f "
+                "pde=%.3f bc=%.3f prior=%.3f base=%.3f]  (%.1fs)",
+                epoch + 1, n_epochs, epoch_loss,
+                epoch_components.get("mse", 0),
+                epoch_components.get("physics", 0),
+                epoch_components.get("neighborhood", 0),
+                epoch_components.get("cross_entropy", 0),
+                epoch_components.get("pde_total", 0),
+                epoch_components.get("bc_total", 0),
+                epoch_components.get("alpha_prior", 0),
+                epoch_components.get("surrogate", 0),
+                _time.perf_counter() - _fold_t0,
+            )
+
+            # Convergence tracking: compare to 10 epochs ago
+            if not hasattr(model, '_loss_history'):
+                model._loss_history = []
+            model._loss_history.append(epoch_loss)
+            if len(model._loss_history) > 10:
+                old_loss = model._loss_history[-11]
+                rel_improvement = (old_loss - epoch_loss) / max(abs(old_loss), 1e-8)
+                if rel_improvement < 0.001:
+                    logger.info("[CONVERGENCE] converged")
+                elif rel_improvement < 0.01:
+                    logger.info("[CONVERGENCE] converging")
 
         logger.info(
             "  Fold %d training done in %.1fs",
@@ -1476,6 +1496,14 @@ def train_neural_meta(
             ramp_end=ramp_epochs,
         )
 
+        # ---- Curriculum transition markers ----
+        if epoch == 0:
+            logger.info("[CURRICULUM] Stage A: Representation Warmup")
+        elif epoch == warmup_epochs:
+            logger.info("[CURRICULUM] Stage B: Physics Activation")
+        elif epoch == ramp_epochs:
+            logger.info("[CURRICULUM] Stage C: Joint Optimization")
+
         if use_minibatch_retrain:
             rt_batches = list(spatial_minibatch_sampler(
                 coords, full_cardinal_np,
@@ -1592,28 +1620,29 @@ def train_neural_meta(
             rt_epoch_components[k] /= max(rt_epoch_n, 1)
         retrain_loss_history.append(dict(rt_epoch_components))
 
-        if (epoch + 1) % 10 == 0 or epoch == 0:
-            logger.info(
-                "  Retrain %d/%d  loss=%.4f  "
-                "[mse=%.3f phys=%.3f nbr=%.3f ce=%.3f "
-                "pde=%.3f bc=%.3f prior=%.3f base=%.3f]  (%.1fs)",
-                epoch + 1, main_epochs, rt_epoch_loss,
-                rt_epoch_components.get("mse", 0),
-                rt_epoch_components.get("physics", 0),
-                rt_epoch_components.get("neighborhood", 0),
-                rt_epoch_components.get("cross_entropy", 0),
-                rt_epoch_components.get("pde_total", 0),
-                rt_epoch_components.get("bc_total", 0),
-                rt_epoch_components.get("alpha_prior", 0),
-                rt_epoch_components.get("surrogate", 0),
-                _time.perf_counter() - _retrain_t0,
-            )
+        # Log every epoch for live training telemetry
+        logger.info(
+            "  Retrain %d/%d  loss=%.4f  "
+            "[mse=%.3f phys=%.3f nbr=%.3f ce=%.3f "
+            "pde=%.3f bc=%.3f prior=%.3f base=%.3f]  (%.1fs)",
+            epoch + 1, main_epochs, rt_epoch_loss,
+            rt_epoch_components.get("mse", 0),
+            rt_epoch_components.get("physics", 0),
+            rt_epoch_components.get("neighborhood", 0),
+            rt_epoch_components.get("cross_entropy", 0),
+            rt_epoch_components.get("pde_total", 0),
+            rt_epoch_components.get("bc_total", 0),
+            rt_epoch_components.get("alpha_prior", 0),
+            rt_epoch_components.get("surrogate", 0),
+            _time.perf_counter() - _retrain_t0,
+        )
 
     # ---- Stage D: Stochastic Weight Averaging ----
     if swa_epochs > 0:
         from torch.optim.swa_utils import AveragedModel, SWALR
 
         logger.info("Starting SWA phase (%d epochs)...", swa_epochs)
+        logger.info("[CURRICULUM] Stage D: Stochastic Weight Averaging")
 
         # Detach non-leaf tensors before deepcopy (AveragedModel uses deepcopy)
         if hasattr(final_model, "_last_w_source") and final_model._last_w_source is not None:

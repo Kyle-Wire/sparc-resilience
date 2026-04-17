@@ -10,15 +10,16 @@ echo.
 cd /d "%~dp0.."
 
 :: Check that sparc package exists
-if not exist "sparc\ui\app.py" (
-    echo  [ERROR] Cannot find sparc\ui\app.py
+if not exist "sparc\__init__.py" (
+    echo  [ERROR] Cannot find sparc package.
     echo  Make sure you are running this from the SPARC repo.
     pause
     exit /b 1
 )
 
-start "" http://localhost:8501
-python -m streamlit run run_ui.py --server.headless true --server.port 8501
+:: Launch the desktop app (or fall back to server mode)
+echo  Launching SPARC Desktop...
+python -m sparc desktop
 
 if %errorlevel% neq 0 (
     echo.

@@ -36,7 +36,7 @@ All source code lives under `sparc/`:
 | `sparc/features/` | Laplacian eigenmaps and fold-aware variants |
 | `sparc/interventions/` | Scenario simulation, extrapolation guard, physics priors |
 | `sparc/run/` | Pipeline orchestration: stages, paths, configuration |
-| `sparc/ui/` | Streamlit interface |
+| `sparc/server/` | FastAPI backend and WebSocket streaming |
 
 ## Adding a New Model
 

@@ -10,9 +10,7 @@ neural meta-learner, including:
 - 4-stage training curriculum (warmup → physics → joint → SWA)
 - CMA-ES hyperparameter optimization
 
-All components are opt-in via ``project.yml`` configuration.  Setting
-``models.meta_learner: lightgbm`` bypasses this module entirely and
-uses the V1 LightGBM meta-ensemble path.
+All components are opt-in via ``project.yml`` configuration.
 """
 
 __all__ = [

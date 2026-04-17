@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import io
 import json
+import logging
 import re
 import sys
 import threading
@@ -33,6 +34,31 @@ class _EventCapture(io.TextIOBase):
     _FOLD_RE = re.compile(r"[Ff]old\s+(\d+)")
     _METRIC_RE = re.compile(r"(r2|rmse|mae|mape)\s*[=:]\s*([\d.]+)", re.IGNORECASE)
     _PCT_RE = re.compile(r"(\d{1,3})%")
+
+    # ---- Training telemetry patterns ----
+    # Capacity sweep result:  "hidden_dim=256: CV R²=0.8912"
+    _CAPACITY_RE = re.compile(
+        r"hidden_dim=(\d+):\s*CV\s+R[²2]=\s*([\d.]+)"
+    )
+    # Epoch log:  "Epoch 10/100  loss=0.1234  [mse=0.050 phys=0.020 ...]"
+    _EPOCH_RE = re.compile(
+        r"(?:Epoch|Retrain|SWA epoch)\s+(\d+)/(\d+)\s+loss=([\d.]+)"
+    )
+    # Loss components inside brackets: [mse=0.050 phys=0.020 ...]
+    _COMPONENTS_RE = re.compile(
+        r"\[([\w=.\s]+)\]"
+    )
+    # Curriculum stage marker: "[CURRICULUM] Stage B: Physics Activation"
+    _CURRICULUM_RE = re.compile(
+        r"\[CURRICULUM\]\s+(Stage\s+\w+):\s*(.+)"
+    )
+    # Convergence marker: "[CONVERGENCE] converging" or "[CONVERGENCE] converged"
+    _CONVERGENCE_RE = re.compile(
+        r"\[CONVERGENCE\]\s+(\w+)"
+    )
+
+    # DAG approval gate marker
+    _DAG_GATE_RE = re.compile(r"\[DAG_APPROVAL_REQUESTED\]\s*(\{.*\})")
 
     # Structured model-level markers emitted by enhanced_spatial_cv.py
     _MODEL_START_RE = re.compile(r"\[MODEL_START\]\s+(\w+)\s+\((\d+)/(\d+)\)")
@@ -64,7 +90,6 @@ class _EventCapture(io.TextIOBase):
         (re.compile(r"Training\s+(\S+)\s+on\s+\d+\s+samples", re.IGNORECASE), "Training model"),
         (re.compile(r"completed.*folds successful", re.IGNORECASE), "Model complete"),
         (re.compile(r"Generating OOF predictions", re.IGNORECASE), "OOF predictions"),
-        (re.compile(r"Deep Kriging CV", re.IGNORECASE), "Deep Kriging CV"),
         (re.compile(r"Meta.?[Ee]nsemble", re.IGNORECASE), "Meta-ensemble"),
         (re.compile(r"Spatial autocorrelation analysis", re.IGNORECASE), "Spatial autocorrelation"),
         (re.compile(r"Stage 2 Complete", re.IGNORECASE), "Stage 2 complete"),
@@ -148,6 +173,67 @@ class _EventCapture(io.TextIOBase):
                     event["phase"] = label
                     break
 
+        # ---- Training telemetry events ----
+
+        # Capacity sweep result
+        m_cap = self._CAPACITY_RE.search(line)
+        if m_cap:
+            event["type"] = "capacity_result"
+            event["hidden_dim"] = int(m_cap.group(1))
+            event["r2"] = float(m_cap.group(2))
+
+        # Epoch / Retrain / SWA epoch update
+        m_ep = self._EPOCH_RE.search(line)
+        if m_ep:
+            event["type"] = "epoch_update"
+            event["epoch"] = int(m_ep.group(1))
+            event["n_epochs"] = int(m_ep.group(2))
+            event["total_loss"] = float(m_ep.group(3))
+            # Determine training phase label
+            if line.lstrip().startswith("Retrain"):
+                event["train_phase"] = "retrain"
+            elif line.lstrip().startswith("SWA"):
+                event["train_phase"] = "swa"
+            else:
+                event["train_phase"] = "cv"
+            # Parse per-component losses from brackets
+            m_comp = self._COMPONENTS_RE.search(line)
+            if m_comp:
+                components: dict[str, float] = {}
+                for pair in m_comp.group(1).split():
+                    if "=" in pair:
+                        k, v = pair.split("=", 1)
+                        try:
+                            components[k] = float(v)
+                        except ValueError:
+                            pass
+                event["components"] = components
+
+        # Curriculum stage transition
+        m_cur = self._CURRICULUM_RE.search(line)
+        if m_cur:
+            event["type"] = "curriculum_stage"
+            event["curriculum"] = m_cur.group(1)
+            event["label"] = m_cur.group(2)
+
+        # Convergence status
+        m_conv = self._CONVERGENCE_RE.search(line)
+        if m_conv:
+            event["type"] = "convergence"
+            event["status"] = m_conv.group(1).lower()
+
+        # DAG approval gate
+        m_gate = self._DAG_GATE_RE.search(line)
+        if m_gate:
+            import json as _json
+            try:
+                payload = _json.loads(m_gate.group(1))
+            except _json.JSONDecodeError:
+                payload = {}
+            event["type"] = "dag_approval_requested"
+            event["n_edges"] = payload.get("n_edges", 0)
+            event["n_nodes"] = payload.get("n_nodes", 0)
+
         asyncio.run_coroutine_threadsafe(self._queue.put(event), self._loop)
 
 
@@ -196,6 +282,14 @@ async def stream_stage(
         old_stdout, old_stderr = sys.stdout, sys.stderr
         sys.stdout = capture  # type: ignore[assignment]
         sys.stderr = capture  # type: ignore[assignment]
+
+        # Bridge Python logging → capture so logger.info() calls in
+        # the training pipeline appear in the event stream.
+        log_handler = logging.StreamHandler(capture)
+        log_handler.setFormatter(logging.Formatter("%(message)s"))
+        root_logger = logging.getLogger()
+        root_logger.addHandler(log_handler)
+
         try:
             _execute_stage(state, stage, fast=fast, skip_gwen=skip_gwen)
             asyncio.run_coroutine_threadsafe(
@@ -206,6 +300,7 @@ async def stream_stage(
                 queue.put({"type": "error", "stage": stage, "message": str(exc)}), loop,
             )
         finally:
+            root_logger.removeHandler(log_handler)
             sys.stdout = old_stdout
             sys.stderr = old_stderr
             state.set_idle()
@@ -295,7 +390,31 @@ def _execute_stage(
     elif stage == 3:
         print(">>> Stage 3: Causal Validation")
         from sparc.run.causal_validation import main as run_causal_validation
-        result = run_causal_validation()
+
+        def _dag_approval_gate(mc3_payload: dict) -> None:
+            """Block the pipeline thread until the user approves the DAG."""
+            import json as _json
+
+            state.pending_mc3 = mc3_payload
+
+            # Build a compact edge list for the WebSocket event
+            node_names = mc3_payload.get("node_names", [])
+            median_dag = mc3_payload.get("median_dag", {})
+            edges = median_dag.get("edges", [])
+
+            print(
+                f"[DAG_GATE] MC³ complete — {len(edges)} edges above 0.50.  "
+                "Awaiting user approval..."
+            )
+            # Emit structured event (captured by _EventCapture's write())
+            print(
+                "[DAG_APPROVAL_REQUESTED] "
+                + _json.dumps({"n_edges": len(edges), "n_nodes": len(node_names)})
+            )
+            # Block until POST /dag/approve sets the event
+            state.dag_approved.wait()
+
+        result = run_causal_validation(approval_gate=_dag_approval_gate)
         state.store_result(3, result)
 
     elif stage == 4:

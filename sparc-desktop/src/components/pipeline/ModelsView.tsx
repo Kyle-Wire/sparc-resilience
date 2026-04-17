@@ -8,8 +8,7 @@ const MODEL_SECTIONS: { key: string; label: string; description: string }[] = [
   { key: "gwr", label: "GWR", description: "Geographically Weighted Regression" },
   { key: "gwrf", label: "GWRF", description: "Geographically Weighted Random Forest" },
   { key: "ggpgam", label: "GGPGAM", description: "Geographically-Guided Penalised GAM" },
-  { key: "meta_ensemble", label: "Meta-Ensemble", description: "Stacked model ensemble (LightGBM default)" },
-  { key: "deep_kriging", label: "Deep Kriging", description: "Neural residual correction with spatial basis" },
+  { key: "meta_ensemble", label: "Meta-Ensemble", description: "Neural meta-learner ensemble" },
 ];
 
 const SPATIAL_CV_METHODS = [

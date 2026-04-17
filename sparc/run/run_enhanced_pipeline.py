@@ -366,7 +366,6 @@ def main():
         print("\nGenerated Outputs:")
         print("- Stage_0_Correlogram/: Correlogram plots and optimal parameters")
         print("- Stage_1_GWEN/: GWEN variable selection results")
-        print("- pipeline_config.json: Optimized configuration for all models")
         print("- Stage_2_Spatial_CV/: Enhanced spatial CV results")
         print("- Final_Interpretation_Results/: Local coefficient maps and analysis")
     else:

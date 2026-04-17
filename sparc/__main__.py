@@ -140,9 +140,9 @@ def cmd_run(args):
 
     Stage flow (when ``--stage all``):
       0  GWEN variable selection  (skippable with ``--skip-gwen``)
-      1  Correlogram analysis     (auto-wires bandwidths into pipeline_config)
+      1  Correlogram analysis     (auto-wires bandwidths into project config)
       1b Pipeline config generation
-      2  Enhanced Spatial CV       (base models + meta-ensemble + deep kriging)
+      2  Enhanced Spatial CV       (base models + neural meta-learner)
       3  Causal Validation         (DAG + DoWhy + structural coefficients)
       4  Scenario simulation       (DAG + physics blending)
     """
@@ -553,21 +553,6 @@ def cmd_desktop(args):
             sys.exit(1)
 
 
-def cmd_ui(args):
-    """Launch the deprecated Streamlit UI."""
-    import warnings
-    warnings.warn(
-        "The Streamlit UI is deprecated. Use 'sparc desktop' or 'sparc server' instead.",
-        DeprecationWarning,
-        stacklevel=1,
-    )
-    print("WARNING: The Streamlit UI is deprecated. Use 'sparc desktop' instead.")
-    print("Starting Streamlit UI anyway...")
-    import subprocess
-    ui_path = Path(__file__).resolve().parent / "ui" / "app.py"
-    subprocess.run([sys.executable, "-m", "streamlit", "run", str(ui_path)], check=False)
-
-
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -631,10 +616,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_desk.add_argument('--port', type=int, default=8008,
                         help='FastAPI server port (default: 8008)')
     p_desk.set_defaults(func=cmd_desktop)
-
-    # --- ui (deprecated) ---
-    p_ui = subparsers.add_parser('ui', help='[DEPRECATED] Launch Streamlit UI')
-    p_ui.set_defaults(func=cmd_ui)
 
     return parser
 

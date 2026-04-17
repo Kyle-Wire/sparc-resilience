@@ -25,6 +25,11 @@ class ServerState:
     is_running: bool = False
     current_stage: int | None = None
     event_buffer: list[dict] = field(default_factory=list)
+    # DAG approval gate — set by the streaming layer, waited on by the
+    # pipeline thread.  ``pending_mc3`` holds MC³ results for the frontend;
+    # ``dag_approved`` is set by POST /dag/approve to unblock the gate.
+    pending_mc3: dict | None = None
+    dag_approved: threading.Event = field(default_factory=threading.Event, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def set_running(self, stage: int) -> None:
@@ -32,6 +37,8 @@ class ServerState:
             self.is_running = True
             self.current_stage = stage
             self.event_buffer.clear()
+            self.pending_mc3 = None
+            self.dag_approved.clear()
 
     def set_idle(self) -> None:
         with self._lock:
@@ -66,3 +73,5 @@ class ServerState:
             self.models.clear()
             self.is_running = False
             self.current_stage = None
+            self.pending_mc3 = None
+            self.dag_approved.clear()

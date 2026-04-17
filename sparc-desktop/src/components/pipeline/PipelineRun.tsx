@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import { usePipeline } from "@/hooks/PipelineProvider";
 import type { PipelineEvent } from "@/lib/types";
+import { CapacitySweepView } from "@/components/training/CapacitySweepView";
+import { EpochLossChart } from "@/components/training/EpochLossChart";
+import { ConvergenceBadge } from "@/components/training/ConvergenceBadge";
 
 const STAGES = [
   { value: 0, label: "0 — Correlogram" },
@@ -73,7 +76,10 @@ function getModelMilestones(events: PipelineEvent[]): { name: string; done: bool
 }
 
 export default function PipelineRun() {
-  const { events, isRunning, error, currentStage, startStage, cancel } = usePipeline();
+  const {
+    events, isRunning, error, currentStage, training,
+    dagApprovalPending, startStage, cancel, handleApproveDag, handleRejectDag,
+  } = usePipeline();
   const [logOpen, setLogOpen] = useState(true);
   const logRef = useRef<HTMLDivElement>(null);
 
@@ -207,6 +213,53 @@ export default function PipelineRun() {
             <div>
               <div className="text-xs text-sparc-gray-600">Progress</div>
               <div className="text-xl font-bold">{explicitPct ?? progressPct}%</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Training telemetry — visible during Stage 2 */}
+      {(latestStage === 2 || training.epochHistory.length > 0 || training.capacityResults.length > 0) && (
+        <div className="mb-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-sparc-gray-700">Neural Training</h2>
+            <ConvergenceBadge status={training.convergenceStatus ?? (isRunning && training.epochHistory.length > 0 ? "training" : null)} />
+          </div>
+          <CapacitySweepView results={training.capacityResults} />
+          <EpochLossChart
+            epochHistory={training.epochHistory}
+            curriculumStage={training.curriculumStage}
+            curriculumLabel={training.curriculumLabel}
+          />
+        </div>
+      )}
+
+      {/* DAG approval gate banner */}
+      {dagApprovalPending && (
+        <div className="mb-4 rounded border border-amber-300 bg-amber-50 p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-amber-800">
+                DAG Review Required — Pipeline Paused
+              </p>
+              <p className="text-xs text-amber-700 mt-1">
+                MC³ structure learning is complete. Review the discovered DAG in the DAG Editor tab,
+                then approve to continue to NUTS posterior sampling.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={handleRejectDag}
+                className="rounded border border-red-300 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
+              >
+                Reject
+              </button>
+              <button
+                onClick={handleApproveDag}
+                className="rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700"
+              >
+                Approve DAG
+              </button>
             </div>
           </div>
         </div>

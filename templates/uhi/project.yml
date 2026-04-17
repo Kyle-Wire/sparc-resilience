@@ -154,23 +154,12 @@ models:
     max_iter: 100
 
   meta_ensemble:
-    algorithm: "lightgbm"
-    n_optuna_trials: 25
+    algorithm: "neural"
     include_base_features: true
     include_laplacian_pca: true
 
-  deep_kriging:
-    enabled: true
-    version: 2
-    hidden_layers: [64, 32, 16]
-    dropout_rate: 0.2
-    epochs: 100
-    learning_rate: 0.001
-    batch_size: 256
-
-  # V2 Neural Meta-Learner (default: enabled)
-  # Set meta_learner to "lightgbm" to revert to V1 LightGBM stacking.
-  meta_learner: "neural"        # "neural" (V2 default) or "lightgbm" (V1)
+  # V2 Neural Meta-Learner
+  meta_learner: "neural"
 
   neural:
     hidden_dim: 256

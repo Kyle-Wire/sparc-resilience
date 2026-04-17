@@ -63,7 +63,6 @@ GWEN_CV_FOLDS = 5
 GWEN_SELECTION_THRESHOLD = 0.1
 GWEN_L1_RATIOS = [0.1, 0.5, 0.7, 0.9, 0.95, 0.99]
 GWEN_N_ALPHAS = 100
-N_OPTUNA_TRIALS_LGBM = 25
 
 # ---------------------------------------------------------------------------
 # YAML project-file loader
@@ -200,9 +199,6 @@ def _yaml_to_config(raw: dict, yaml_path: str) -> dict:
             'selection_threshold': gwen_cfg.get('selection_threshold', 0.1),
             'l1_ratios': gwen_cfg.get('l1_ratios', [0.1, 0.5, 0.7, 0.9, 0.95, 0.99]),
             'n_alphas': gwen_cfg.get('n_alphas', 100),
-        },
-        'lightgbm_params': {
-            'n_optuna_trials': models_cfg.get('meta_ensemble', {}).get('n_optuna_trials', 25),
         },
         # ---- NEW: project-level metadata available to all stages ----
         'project': raw.get('project', {}),
@@ -384,9 +380,6 @@ def load_config(config_path: str | None = None) -> dict:
             'selection_threshold': GWEN_SELECTION_THRESHOLD,
             'l1_ratios': GWEN_L1_RATIOS,
             'n_alphas': GWEN_N_ALPHAS
-        },
-        'lightgbm_params': {
-            'n_optuna_trials': N_OPTUNA_TRIALS_LGBM
         },
         # Empty new-style keys so downstream code can safely `.get()` them
         'project': {},
