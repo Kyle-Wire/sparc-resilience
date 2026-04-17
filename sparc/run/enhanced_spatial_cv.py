@@ -577,7 +577,8 @@ class EnhancedSpatialCV:
                 # Fallback to global bandwidth with safety checks
                 if n_samples is not None:
                     min_fold_size = int(n_samples * 0.8 * 0.85)  # 80% training * 85% buffer
-                    config_bandwidth = int(gwr_params.get('bandwidth', 500))
+                    raw_bandwidth = gwr_params.get('bandwidth')
+                    config_bandwidth = int(raw_bandwidth) if raw_bandwidth is not None else 500
                     adaptive_bandwidth = min(config_bandwidth, min_fold_size)
                     gwr_params['bandwidth'] = max(adaptive_bandwidth, 50)
                     
