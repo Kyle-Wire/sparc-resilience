@@ -85,8 +85,8 @@ export function EpochLossChart({ epochHistory, curriculumStage, curriculumLabel 
             <Tooltip
               contentStyle={{ backgroundColor: "#18181b", border: "1px solid #3f3f46", borderRadius: 6, fontSize: 11 }}
               labelStyle={{ color: "#a1a1aa" }}
-              formatter={(v: number, name: string) => [v.toFixed(4), name]}
-              labelFormatter={(idx: number) => `Epoch ${data[idx]?.epoch ?? idx}`}
+              formatter={(v: unknown, name: unknown) => [Number(v).toFixed(4), String(name)]}
+              labelFormatter={(idx: unknown) => `Epoch ${data[Number(idx)]?.epoch ?? idx}`}
             />
             <Legend wrapperStyle={{ fontSize: 10 }} />
 
