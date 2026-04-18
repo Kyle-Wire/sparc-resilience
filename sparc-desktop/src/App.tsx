@@ -227,6 +227,7 @@ export default function App() {
         chatOpen={chatOpen}
         status={status}
         projectLoaded={project.projectLoaded}
+        projectName={project.projectPath?.split(/[\\/]/).pop()?.replace('.yml', '') ?? undefined}
       >
         <div className="flex h-full gap-0">
           {/* Main content */}
@@ -238,8 +239,12 @@ export default function App() {
         {/* Chat panel — anchored to sidebar, slide-up */}
         {chatOpen && (
           <div
-            className="chat-slide-in fixed left-52 bottom-0 z-40 w-96 overflow-hidden rounded-tr-xl border border-sparc-gray-200 bg-white shadow-xl"
-            style={{ height: "min(520px, calc(100vh - 120px))" }}
+            className="chat-slide-in fixed bottom-0 z-40 w-96 overflow-hidden rounded-tr-xl border bg-white shadow-xl"
+            style={{
+              left: 244,
+              height: "min(520px, calc(100vh - 120px))",
+              borderColor: 'var(--color-sparc-line)',
+            }}
           >
             <ChatPanel onAction={handleAction} systemPrompt={systemPrompt} onClose={() => setChatOpen(false)} />
           </div>

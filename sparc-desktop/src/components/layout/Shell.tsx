@@ -11,16 +11,37 @@ interface ShellProps {
   chatOpen?: boolean;
   status: HealthResponse | null;
   projectLoaded?: boolean;
+  projectName?: string;
   children: ReactNode;
 }
 
-export default function Shell({ currentPage, onNavigate, onSettings, onToggleChat, chatOpen, status, projectLoaded, children }: ShellProps) {
+export default function Shell({
+  currentPage,
+  onNavigate,
+  onSettings,
+  onToggleChat,
+  chatOpen,
+  status,
+  projectLoaded,
+  projectName,
+  children,
+}: ShellProps) {
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-sparc-gray-100">
-      <Sidebar currentPage={currentPage} onNavigate={onNavigate} onSettings={onSettings} onToggleChat={onToggleChat} chatOpen={chatOpen} projectLoaded={projectLoaded} />
-      <div className="flex flex-1 flex-col">
-        <Topbar status={status} />
-        <main className="relative flex-1 overflow-auto bg-white p-6 grid-paper">{children}</main>
+    <div className="flex h-screen w-screen overflow-hidden" style={{ background: 'var(--color-sparc-paper)' }}>
+      <Sidebar
+        currentPage={currentPage}
+        onNavigate={onNavigate}
+        onSettings={onSettings}
+        onToggleChat={onToggleChat}
+        chatOpen={chatOpen}
+        projectLoaded={projectLoaded}
+        projectName={projectName}
+      />
+      <div className="flex flex-1 flex-col min-w-0">
+        <Topbar status={status} currentPage={currentPage} />
+        <main className="scroll relative flex-1 overflow-auto grid-paper" style={{ padding: '20px 22px' }}>
+          {children}
+        </main>
       </div>
     </div>
   );

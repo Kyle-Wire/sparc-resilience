@@ -1,11 +1,12 @@
-@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap");
 @import "tailwindcss";
 
 /* ----------------------------------------------------------------
-   SPARC Labs Design Tokens
+   SPARC Labs Design Tokens — Warm Paper Theme
    ---------------------------------------------------------------- */
 @theme {
-  --font-sans: "Geist", "Inter", system-ui, sans-serif;
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
 
   /* Brand palette */
   --color-sparc-purple: #602468;
@@ -18,35 +19,52 @@
   --color-sparc-gold: #f0b632;
   --color-sparc-yellow: #fbdd46;
 
-  /* Neutrals */
-  --color-sparc-gray-100: #f5f5f5;
-  --color-sparc-gray-200: #e5e5e5;
-  --color-sparc-gray-300: #d4d4d4;
-  --color-sparc-gray-600: #737373;
-  --color-sparc-gray-800: #262626;
+  /* Warm neutrals */
+  --color-sparc-ink: #1a1416;
+  --color-sparc-ink-2: #2b2327;
+  --color-sparc-paper: #f7f4ee;
+  --color-sparc-paper-2: #ede8dd;
+  --color-sparc-line: #c9c2b3;
+  --color-sparc-muted: #6e6358;
+
+  /* Legacy neutrals (kept for compatibility) */
+  --color-sparc-gray-100: #f7f4ee;
+  --color-sparc-gray-200: #ede8dd;
+  --color-sparc-gray-300: #c9c2b3;
+  --color-sparc-gray-600: #6e6358;
+  --color-sparc-gray-800: #1a1416;
 }
 
 body {
   font-family: var(--font-sans);
+  background: var(--color-sparc-paper);
+  color: var(--color-sparc-ink);
+}
+
+/* Monospace utility */
+.mono {
+  font-family: var(--font-mono);
+}
+
+/* Custom scrollbar — warm theme */
+.scroll::-webkit-scrollbar { width: 6px; }
+.scroll::-webkit-scrollbar-track { background: transparent; }
+.scroll::-webkit-scrollbar-thumb {
+  background: var(--color-sparc-line);
+  border-radius: 3px;
+}
+.scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--color-sparc-muted);
 }
 
 /* Grid-paper motif for workspace panels (brand guide) */
 .grid-paper {
   position: relative;
-}
-
-.grid-paper::before {
-  content: "";
-  position: absolute;
-  inset: 0;
+  background-color: var(--color-sparc-paper);
   background-image:
-    linear-gradient(var(--color-sparc-gray-300) 1px, transparent 1px),
-    linear-gradient(90deg, var(--color-sparc-gray-300) 1px, transparent 1px);
+    linear-gradient(rgba(0,0,0,0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,0,0,0.035) 1px, transparent 1px);
   background-size: 24px 24px;
-  background-position: -1px -1px;
-  opacity: 0.06;
-  pointer-events: none;
-  z-index: 0;
 }
 
 .grid-paper > * {
@@ -76,8 +94,25 @@ body {
 
 /* Pixel-style toggle button */
 .retro-toggle {
-  font-family: "Courier New", Courier, monospace;
+  font-family: var(--font-mono);
   letter-spacing: 1px;
   text-transform: uppercase;
   image-rendering: pixelated;
+}
+
+/* Splash loading bar animation */
+@keyframes loadBar {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+/* Cursor blink animation */
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+/* Slide up animation for panels */
+@keyframes slideUp {
+  from { transform: translateY(16px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
 }
