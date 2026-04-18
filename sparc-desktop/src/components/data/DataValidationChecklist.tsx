@@ -8,12 +8,6 @@ const SEVERITY_ICONS: Record<string, string> = {
   info: "✓",
 };
 
-const SEVERITY_COLORS: Record<string, string> = {
-  critical: "text-red-600 bg-red-50 border-red-200",
-  warning: "text-amber-600 bg-amber-50 border-amber-200",
-  info: "text-green-600 bg-green-50 border-green-200",
-};
-
 const SEVERITY_BADGE: Record<string, string> = {
   critical: "bg-red-100 text-red-700",
   warning: "bg-amber-100 text-amber-700",

@@ -28,7 +28,7 @@ interface Props {
   isRunning: boolean;
 }
 
-export default function StageStatusTracker({ stageStatuses, currentStage, isRunning }: Props) {
+export default function StageStatusTracker({ stageStatuses, currentStage: _currentStage, isRunning: _isRunning }: Props) {
   const stages = [0, 1, 2, 3, 4];
 
   const getStatus = (stage: number): StageStatus => {
