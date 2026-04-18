@@ -61,7 +61,7 @@ export interface DataPreview {
 export interface PipelineEvent {
   type: "log" | "metric" | "complete" | "error"
     | "capacity_result" | "epoch_update" | "curriculum_stage" | "convergence"
-    | "dag_approval_requested";
+    | "dag_approval_requested" | "stage_status" | "training_health";
   message?: string;
   stage?: number;
   fold?: number;
@@ -102,12 +102,71 @@ export interface PipelineEvent {
   n_edges?: number;
   /** DAG gate: number of nodes in MC³ analysis. */
   n_nodes?: number;
+
+  // ---- Phase 2: Status & ETA fields ----
+  /** Stage status: running | complete | failed. */
+  started_at?: number;
+  completed_at?: number;
+  error?: string;
+  traceback?: string;
+  /** ETA: estimated seconds remaining (from server throughput tracking). */
+  eta_seconds?: number;
+  /** ETA: elapsed seconds since this process started. */
+  elapsed_seconds?: number;
+
+  // ---- Phase 3: Training health fields ----
+  /** Training health warning type: loss_explosion | physics_stagnation | gradient_spike. */
+  warning?: string;
+  /** Training health: which loss component triggered the warning. */
+  component?: string;
+  /** Training health: detail message. */
+  detail?: string;
 }
 
 export interface DagNode {
   name: string;
   type: "treatment" | "mediator" | "confounder" | "outcome";
   description?: string;
+}
+
+// ------------------------------------------------------------------
+// Data validation
+// ------------------------------------------------------------------
+export interface ValidationItem {
+  id: string;
+  category: "missing" | "crs" | "duplicate" | "distribution" | "type" | "column";
+  severity: "critical" | "warning" | "info";
+  column?: string;
+  message: string;
+  detail?: string;
+  value?: unknown;
+}
+
+export interface ValidationReport {
+  passed: boolean;
+  n_critical: number;
+  n_warning: number;
+  n_info: number;
+  items: ValidationItem[];
+  summary: string;
+}
+
+// ------------------------------------------------------------------
+// Data versioning
+// ------------------------------------------------------------------
+export interface DataVersion {
+  version: number;
+  filename: string;
+  csv_filename?: string;
+  path: string;
+  csv_path?: string;
+  timestamp: string;
+  n_rows: number;
+  n_cols: number;
+  columns: string[];
+  description: string;
+  settings: Record<string, unknown>;
+  file_exists: boolean;
 }
 
 export interface DagEdge {

@@ -18,6 +18,7 @@ import PhysicsView from "@/components/pipeline/PhysicsView";
 import ScenariosView from "@/components/pipeline/ScenariosView";
 import ModelsView from "@/components/pipeline/ModelsView";
 import DataProcessingView from "@/components/pipeline/DataProcessingView";
+import ProjectConfigPage from "@/components/project/ProjectConfigPage";
 import PipelineRun from "@/components/pipeline/PipelineRun";
 import ResultsView from "@/components/results/ResultsView";
 import ReportView from "@/components/results/ReportView";
@@ -189,6 +190,8 @@ export default function App() {
         return <DataView key={refreshKey} onNavigateToProject={() => navigate("Project")} />;
       case "Processing":
         return <DataProcessingView key={refreshKey} />;
+      case "Config":
+        return <ProjectConfigPage />;
       case "Variables":
         return <VariablesView key={refreshKey} />;
       case "CRS":

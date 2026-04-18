@@ -17,12 +17,31 @@ export interface EpochEntry {
   components?: Record<string, number>;
 }
 
+export interface StageStatus {
+  stage: number;
+  status: "pending" | "running" | "complete" | "failed";
+  started_at?: number;
+  completed_at?: number;
+  error?: string;
+  traceback?: string;
+  eta_seconds?: number;
+  elapsed_seconds?: number;
+}
+
+export interface TrainingHealthWarning {
+  warning: string;
+  component?: string;
+  detail?: string;
+  timestamp: number;
+}
+
 export interface TrainingTelemetry {
   capacityResults: CapacityResult[];
   epochHistory: EpochEntry[];
   curriculumStage: string | null;
   curriculumLabel: string | null;
   convergenceStatus: string | null;
+  healthWarnings: TrainingHealthWarning[];
 }
 
 export interface PipelineState {
@@ -31,6 +50,8 @@ export interface PipelineState {
   error: string | null;
   currentStage: number | null;
   training: TrainingTelemetry;
+  /** Per-stage status map for the StageStatusTracker. */
+  stageStatuses: Record<number, StageStatus>;
   /** True when MC³ is done and the pipeline is paused awaiting DAG approval. */
   dagApprovalPending: boolean;
   startStage: (stage: number, opts?: { fast?: boolean; skip_gwen?: boolean }) => void;
@@ -60,9 +81,11 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
     curriculumStage: null,
     curriculumLabel: null,
     convergenceStatus: null,
+    healthWarnings: [],
   });
   const wsRef = useRef<WebSocket | null>(null);
   const [dagApprovalPending, setDagApprovalPending] = useState(false);
+  const [stageStatuses, setStageStatuses] = useState<Record<number, StageStatus>>({});
 
   /** Process a single pipeline event and update training telemetry state. */
   const processEvent = useCallback((event: PipelineEvent) => {
@@ -97,6 +120,19 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
               },
             ],
           }));
+          // Update ETA on current stage if present
+          if (event.stage != null && (event.eta_seconds != null || event.elapsed_seconds != null)) {
+            setStageStatuses((prev) => ({
+              ...prev,
+              [event.stage!]: {
+                ...prev[event.stage!],
+                stage: event.stage!,
+                status: prev[event.stage!]?.status ?? "running",
+                eta_seconds: event.eta_seconds,
+                elapsed_seconds: event.elapsed_seconds,
+              },
+            }));
+          }
         }
         break;
       case "curriculum_stage":
@@ -114,6 +150,39 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
         break;
       case "dag_approval_requested":
         setDagApprovalPending(true);
+        break;
+      case "stage_status":
+        if (event.stage != null && event.status) {
+          setStageStatuses((prev) => ({
+            ...prev,
+            [event.stage!]: {
+              stage: event.stage!,
+              status: event.status as StageStatus["status"],
+              started_at: event.started_at ?? prev[event.stage!]?.started_at,
+              completed_at: event.completed_at,
+              error: event.error,
+              traceback: event.traceback,
+              eta_seconds: event.eta_seconds,
+              elapsed_seconds: event.elapsed_seconds,
+            },
+          }));
+        }
+        break;
+      case "training_health":
+        if (event.warning) {
+          setTraining((t) => ({
+            ...t,
+            healthWarnings: [
+              ...t.healthWarnings,
+              {
+                warning: event.warning!,
+                component: event.component,
+                detail: event.detail,
+                timestamp: Date.now(),
+              },
+            ],
+          }));
+        }
         break;
     }
 
@@ -186,12 +255,14 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
       setError(null);
       setIsRunning(true);
       setCurrentStage(stage);
+      setStageStatuses({});
       setTraining({
         capacityResults: [],
         epochHistory: [],
         curriculumStage: null,
         curriculumLabel: null,
         convergenceStatus: null,
+        healthWarnings: [],
       });
 
       const ws = new WebSocket("ws://127.0.0.1:8008/run/stream");
@@ -244,7 +315,7 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
 
   return (
     <PipelineContext.Provider value={{
-      events, isRunning, error, currentStage, training,
+      events, isRunning, error, currentStage, training, stageStatuses,
       dagApprovalPending, startStage, cancel, handleApproveDag, handleRejectDag,
     }}>
       {children}

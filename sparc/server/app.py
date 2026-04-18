@@ -529,6 +529,114 @@ async def select_data_file(path: str = Query(..., description="Absolute path to 
 
 
 # ------------------------------------------------------------------
+# Data validation endpoint
+# ------------------------------------------------------------------
+
+@app.post("/data/validate")
+async def validate_data():
+    """Run pre-flight validation checks on the currently loaded dataset.
+
+    Returns a structured checklist of issues (missing values, CRS,
+    duplicates, distribution anomalies, type errors) with severity
+    levels: critical / warning / info.
+    """
+    if state.data is None:
+        raise HTTPException(400, "No data loaded. Load a project first.")
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded.")
+
+    from sparc.data.validation import validate_dataset
+
+    config = state.project_config
+    report = validate_dataset(
+        state.data,
+        target_col=config.get("variables", {}).get("target"),
+        predictor_cols=config.get("predictors", {}).get("base_model", []),
+        coord_cols=config.get("variables", {}).get("coordinates", []),
+        expected_crs=config.get("crs", {}).get("initial"),
+    )
+    return report.to_dict()
+
+
+# ------------------------------------------------------------------
+# Data versioning endpoints
+# ------------------------------------------------------------------
+
+@app.get("/data/versions")
+async def list_data_versions():
+    """Return all versioned data snapshots for the current project."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded.")
+
+    from sparc.data.versioning import list_versions
+
+    project_dir = Path(state.project_config["paths"]["project_root"])
+    data_dir = project_dir / "data"
+    versions = list_versions(data_dir)
+    return {"versions": versions}
+
+
+@app.post("/data/select_version")
+async def select_data_version(version: int = Query(..., description="Version number to activate")):
+    """Switch the active dataset to a specific versioned snapshot."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded.")
+
+    from sparc.data.versioning import get_version_path
+
+    project_dir = Path(state.project_config["paths"]["project_root"])
+    data_dir = project_dir / "data"
+    path = get_version_path(data_dir, version)
+
+    if path is None:
+        raise HTTPException(404, f"Version {version} not found or file missing.")
+
+    _set_data_path(str(path))
+    _load_data_into_state(state.project_config)
+
+    return {
+        "status": "selected",
+        "version": version,
+        "path": str(path),
+        "columns": list(state.data.columns) if state.data is not None else [],
+        "row_count": len(state.data) if state.data is not None else 0,
+    }
+
+
+# ------------------------------------------------------------------
+# Session log endpoint
+# ------------------------------------------------------------------
+
+@app.get("/run/log")
+async def get_run_log():
+    """Return the persistent session log for the current project.
+
+    Each entry is a JSON object with timestamp, stage, type, message, and data.
+    """
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded.")
+
+    project_dir = Path(state.project_config["paths"]["project_root"])
+    log_path = project_dir / "session_log.jsonl"
+
+    if not log_path.exists():
+        return {"entries": [], "path": str(log_path)}
+
+    import json
+    entries = []
+    with open(log_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+
+    return {"entries": entries, "path": str(log_path)}
+
+
+# ------------------------------------------------------------------
 # Pipeline streaming (WebSocket)
 # ------------------------------------------------------------------
 
@@ -1804,7 +1912,7 @@ async def prepare_data_pipeline(body: dict = Body(...)):
         raise HTTPException(400, "None of the raster paths exist")
     gdf = run_zonal_stats(gdf, valid_rasters, stats=stats)
 
-    # Step 5: Save outputs
+    # Step 5: Save outputs (versioned)
     project_dir = Path(state.project_config["paths"]["project_root"])
     data_dir = project_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -1812,11 +1920,32 @@ async def prepare_data_pipeline(body: dict = Body(...)):
     gpkg_path = data_dir / "fishnet_with_stats.gpkg"
     gdf.to_file(gpkg_path, driver="GPKG")
 
-    csv_path = data_dir / "fishnet_with_stats.csv"
+    # Add coordinate columns before saving
     export_df = gdf.copy()
     export_df["centroid_x"] = gdf.geometry.centroid.x
     export_df["centroid_y"] = gdf.geometry.centroid.y
-    export_df.drop(columns=["geometry"]).to_csv(csv_path, index=False)
+    export_flat = export_df.drop(columns=["geometry"])
+
+    # Save versioned snapshot
+    from sparc.data.versioning import save_versioned
+    version_info = save_versioned(
+        export_flat,
+        data_dir,
+        settings={
+            "resolution": resolution,
+            "crs": crs,
+            "stats": stats,
+            "n_rasters": len(valid_rasters),
+            "boundary": boundary_path,
+        },
+        description=f"Fishnet processing: {len(valid_rasters)} rasters, "
+                    f"resolution={resolution}, CRS={crs}",
+    )
+    csv_path = version_info["csv_path"]
+
+    # Also save as canonical name for backwards compatibility
+    canonical_csv = data_dir / "fishnet_with_stats.csv"
+    export_flat.to_csv(canonical_csv, index=False)
 
     # Step 6: Optionally set as active data
     if set_as_data:
@@ -1830,6 +1959,7 @@ async def prepare_data_pipeline(body: dict = Body(...)):
         "csv_path": str(csv_path),
         "gpkg_path": str(gpkg_path),
         "set_as_data": set_as_data,
+        "version": version_info.get("version"),
     }
 
 
@@ -2091,6 +2221,172 @@ async def reject_dag():
     state.pending_mc3 = None
     state.dag_approved.set()
     return {"status": "rejected"}
+
+
+# ------------------------------------------------------------------
+# Artifact download
+# ------------------------------------------------------------------
+
+@app.get("/results/artifacts")
+async def list_artifacts():
+    """List all downloadable output files across all stages."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception as exc:
+        raise HTTPException(400, f"Cannot resolve output paths: {exc}")
+
+    artifacts = []
+    stage_dirs = {
+        0: ("Stage 0 — Correlogram", paths.stage0_dir),
+        1: ("Stage 1 — GWEN", paths.stage1_dir),
+        2: ("Stage 2 — Spatial CV", paths.stage2_dir),
+        3: ("Stage 3 — Causal", paths.stage3_dir),
+        4: ("Stage 4 — Scenarios", paths.stage4_dir),
+    }
+
+    for stage_num, (stage_label, stage_dir) in stage_dirs.items():
+        if stage_dir is None or not stage_dir.exists():
+            continue
+        for f in sorted(stage_dir.rglob("*")):
+            if f.is_file() and f.suffix in (
+                ".csv", ".parquet", ".geojson", ".gpkg", ".png", ".html",
+                ".json", ".pdf", ".svg", ".yml", ".yaml",
+            ):
+                rel = f.relative_to(stage_dir)
+                artifacts.append({
+                    "stage": stage_num,
+                    "stage_label": stage_label,
+                    "filename": f.name,
+                    "relative_path": str(rel),
+                    "absolute_path": str(f),
+                    "size_bytes": f.stat().st_size,
+                    "extension": f.suffix,
+                })
+
+    return {"artifacts": artifacts, "total": len(artifacts)}
+
+
+@app.get("/results/download/{stage}/{file_path:path}")
+async def download_artifact(stage: int, file_path: str):
+    """Download a single output file by stage and relative path."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception as exc:
+        raise HTTPException(400, f"Cannot resolve output paths: {exc}")
+
+    stage_map = {
+        0: paths.stage0_dir,
+        1: paths.stage1_dir,
+        2: paths.stage2_dir,
+        3: paths.stage3_dir,
+        4: paths.stage4_dir,
+    }
+    stage_dir = stage_map.get(stage)
+    if stage_dir is None or not stage_dir.exists():
+        raise HTTPException(404, f"Stage {stage} output directory not found")
+
+    target = (stage_dir / file_path).resolve()
+    # Security: ensure target is within stage directory
+    if not str(target).startswith(str(stage_dir.resolve())):
+        raise HTTPException(403, "Path traversal not allowed")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(404, f"File not found: {file_path}")
+
+    return FileResponse(
+        target,
+        filename=target.name,
+        media_type="application/octet-stream",
+    )
+
+
+@app.get("/results/geopackage")
+async def download_geopackage():
+    """Merge all spatial stage outputs into a single GeoPackage download."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    import geopandas as gpd
+    from sparc.run.pipeline_paths import PipelinePaths
+    import tempfile
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception as exc:
+        raise HTTPException(400, f"Cannot resolve output paths: {exc}")
+
+    # Collect spatial layers from stage directories
+    layers: dict[str, gpd.GeoDataFrame] = {}
+
+    layer_sources = [
+        (paths.stage2_dir, "predictions", ["predictions*.parquet", "predictions*.geojson", "predictions*.csv"]),
+        (paths.stage3_dir, "causal_effects", ["*cate*.parquet", "*cate*.geojson", "*causal*.parquet"]),
+        (paths.stage4_dir, "scenario_deltas", ["*scenario*.parquet", "*scenario*.geojson", "*delta*.parquet"]),
+    ]
+
+    for stage_dir, layer_name, patterns in layer_sources:
+        if stage_dir is None or not stage_dir.exists():
+            continue
+        for pat in patterns:
+            files = list(stage_dir.glob(pat))
+            if files:
+                f = files[0]
+                try:
+                    if f.suffix == ".parquet":
+                        gdf = gpd.read_parquet(f)
+                    elif f.suffix == ".geojson":
+                        gdf = gpd.read_file(f)
+                    else:
+                        import pandas as pd
+                        gdf = pd.read_csv(f)
+                        # If it has coordinate columns, try to make spatial
+                        coord_cols = state.project_config.get("variables", {}).get("coordinates", [])
+                        if len(coord_cols) >= 2 and all(c in gdf.columns for c in coord_cols):
+                            from shapely.geometry import Point
+                            gdf = gpd.GeoDataFrame(
+                                gdf,
+                                geometry=[Point(x, y) for x, y in zip(gdf[coord_cols[0]], gdf[coord_cols[1]])],
+                                crs=state.project_config.get("crs", {}).get("target_projected", "EPSG:4326"),
+                            )
+                        else:
+                            continue
+                    if isinstance(gdf, gpd.GeoDataFrame) and len(gdf) > 0:
+                        layers[layer_name] = gdf
+                        break
+                except Exception:
+                    continue
+
+    if not layers:
+        raise HTTPException(404, "No spatial outputs found to package")
+
+    # Write to a temp GeoPackage
+    project_name = state.project_config.get("project", {}).get("name", "sparc_results")
+    tmp = tempfile.NamedTemporaryFile(
+        suffix=".gpkg", prefix=f"{project_name}_", delete=False
+    )
+    tmp_path = tmp.name
+    tmp.close()
+
+    try:
+        for layer_name, gdf in layers.items():
+            gdf.to_file(tmp_path, layer=layer_name, driver="GPKG")
+    except Exception as exc:
+        raise HTTPException(500, f"GeoPackage creation failed: {exc}")
+
+    return FileResponse(
+        tmp_path,
+        filename=f"{project_name}_results.gpkg",
+        media_type="application/geopackage+sqlite3",
+    )
 
 
 # ------------------------------------------------------------------

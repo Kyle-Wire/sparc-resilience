@@ -241,6 +241,82 @@ class _EventCapture(io.TextIOBase):
 
 
 # ------------------------------------------------------------------
+# Session logger — persistent JSONL log file
+# ------------------------------------------------------------------
+
+class SessionLogger:
+    """Writes every pipeline event to a persistent JSONL file.
+
+    Each line is a timestamped JSON object for post-hoc debugging
+    and audit trails.
+    """
+
+    def __init__(self, log_path: str | None):
+        self._path = log_path
+        self._fh = None
+        if log_path:
+            from pathlib import Path
+            Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+            self._fh = open(log_path, "a", encoding="utf-8")
+
+    def log(self, event: dict) -> None:
+        """Append an event to the log file."""
+        if self._fh is None:
+            return
+        from datetime import datetime, timezone
+        entry = {"timestamp": datetime.now(timezone.utc).isoformat(), **event}
+        self._fh.write(json.dumps(entry, default=str) + "\n")
+        self._fh.flush()
+
+    def close(self) -> None:
+        if self._fh:
+            self._fh.close()
+            self._fh = None
+
+
+# ------------------------------------------------------------------
+# ETA estimator
+# ------------------------------------------------------------------
+
+class _ETAEstimator:
+    """Tracks throughput and estimates remaining time for iterative processes."""
+
+    def __init__(self):
+        self._start_times: dict[str, float] = {}
+        self._counts: dict[str, int] = {}
+        self._totals: dict[str, int] = {}
+
+    def start(self, key: str, total: int) -> None:
+        """Begin tracking a process with a known total."""
+        self._start_times[key] = time.time()
+        self._counts[key] = 0
+        self._totals[key] = total
+
+    def update(self, key: str, current: int) -> dict | None:
+        """Update progress and return ETA info if trackable."""
+        if key not in self._start_times:
+            return None
+        self._counts[key] = current
+        total = self._totals.get(key, 0)
+        if current <= 0 or total <= 0:
+            return None
+        elapsed = time.time() - self._start_times[key]
+        rate = current / elapsed if elapsed > 0 else 0
+        remaining = (total - current) / rate if rate > 0 else 0
+        return {
+            "eta_seconds": round(remaining, 1),
+            "elapsed_seconds": round(elapsed, 1),
+            "rate": round(rate, 2),
+            "progress_fraction": round(current / total, 4),
+        }
+
+    def clear(self, key: str) -> None:
+        self._start_times.pop(key, None)
+        self._counts.pop(key, None)
+        self._totals.pop(key, None)
+
+
+# ------------------------------------------------------------------
 # Public streaming API
 # ------------------------------------------------------------------
 
@@ -280,6 +356,16 @@ async def stream_stage(
 
     state.set_running(stage)
 
+    # Set up persistent session log
+    log_path = None
+    project_root = state.project_config.get("paths", {}).get("project_root")
+    if project_root:
+        from pathlib import Path
+        log_path = str(Path(project_root) / "session_log.jsonl")
+
+    # ETA estimator instance (shared across the run)
+    eta = _ETAEstimator()
+
     def _run() -> None:
         capture = _EventCapture(queue, loop)
         old_stdout, old_stderr = sys.stdout, sys.stderr
@@ -293,12 +379,44 @@ async def stream_stage(
         root_logger = logging.getLogger()
         root_logger.addHandler(log_handler)
 
+        # Emit stage status: running
+        asyncio.run_coroutine_threadsafe(
+            queue.put({
+                "type": "stage_status",
+                "stage": stage,
+                "status": "running",
+                "started_at": time.time(),
+            }),
+            loop,
+        )
+
         try:
             _execute_stage(state, stage, fast=fast, skip_gwen=skip_gwen)
+            asyncio.run_coroutine_threadsafe(
+                queue.put({
+                    "type": "stage_status",
+                    "stage": stage,
+                    "status": "complete",
+                    "completed_at": time.time(),
+                }),
+                loop,
+            )
             asyncio.run_coroutine_threadsafe(
                 queue.put({"type": "complete", "stage": stage}), loop,
             )
         except Exception as exc:
+            import traceback
+            tb = traceback.format_exc()
+            asyncio.run_coroutine_threadsafe(
+                queue.put({
+                    "type": "stage_status",
+                    "stage": stage,
+                    "status": "failed",
+                    "error": str(exc),
+                    "traceback": tb[-500:],  # last 500 chars of traceback
+                }),
+                loop,
+            )
             asyncio.run_coroutine_threadsafe(
                 queue.put({"type": "error", "stage": stage, "message": str(exc)}), loop,
             )
@@ -312,12 +430,31 @@ async def stream_stage(
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
 
-    while True:
-        event = await queue.get()
-        if event is None:
-            break
-        state.buffer_event(event)
-        yield event
+    session_log = SessionLogger(log_path)
+
+    try:
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+
+            # Enrich epoch events with ETA
+            if event.get("type") == "epoch_update":
+                epoch = event.get("epoch", 0)
+                n_epochs = event.get("n_epochs", 0)
+                if epoch == 1 and n_epochs > 0:
+                    eta.start("epoch", n_epochs)
+                eta_info = eta.update("epoch", epoch)
+                if eta_info:
+                    event["eta_seconds"] = eta_info["eta_seconds"]
+                    event["elapsed_seconds"] = eta_info["elapsed_seconds"]
+
+            # Log every event to persistent file
+            session_log.log(event)
+            state.buffer_event(event)
+            yield event
+    finally:
+        session_log.close()
 
 
 # ------------------------------------------------------------------

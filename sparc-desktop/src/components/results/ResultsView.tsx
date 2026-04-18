@@ -5,6 +5,7 @@ import SpatialCvView from "@/components/results/SpatialCvView";
 import CausalView from "@/components/results/CausalView";
 import ScenarioResultsView from "@/components/results/ScenarioResultsView";
 import VariableDashboardView from "@/components/results/VariableDashboardView";
+import ArtifactPanel from "@/components/results/ArtifactPanel";
 
 const STAGES = [
   { value: 0, label: "Stage 0 — Correlogram" },
@@ -13,6 +14,7 @@ const STAGES = [
   { value: 3, label: "Stage 3 — Causal" },
   { value: 4, label: "Stage 4 — Scenarios" },
   { value: 5, label: "Variable Dashboard" },
+  { value: 6, label: "Artifacts" },
 ];
 
 export default function ResultsView() {
@@ -26,6 +28,7 @@ export default function ResultsView() {
       case 3: return <CausalView />;
       case 4: return <ScenarioResultsView />;
       case 5: return <VariableDashboardView />;
+      case 6: return <ArtifactPanel />;
       default: return <p className="p-4 text-sm text-sparc-gray-600">Select a stage above.</p>;
     }
   };
