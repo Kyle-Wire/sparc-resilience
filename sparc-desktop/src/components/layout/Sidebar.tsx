@@ -4,8 +4,8 @@ import { useState } from "react";
 // Grouped navigation sections
 // ---------------------------------------------------------------------------
 const SECTIONS = [
-  { label: "Setup",    pages: ["Project", "Data", "Processing", "Variables", "CRS"] },
-  { label: "Analysis", pages: ["DAG", "Physics", "Scenarios", "Models"] },
+  { label: "Setup",    pages: ["Project", "Data", "Processing", "Config"] },
+  { label: "Analysis", pages: ["DAG", "Variables", "Physics", "CRS", "Scenarios", "Models"] },
   { label: "Pipeline", pages: ["Run", "Results", "Report"] },
 ] as const;
 
@@ -13,7 +13,7 @@ const SECTIONS = [
 const PAGES = SECTIONS.flatMap((s) => s.pages) as unknown as readonly PageName[];
 
 export type PageName =
-  | "Project" | "Data" | "Processing" | "Variables" | "CRS"
+  | "Project" | "Data" | "Processing" | "Config" | "Variables" | "CRS"
   | "DAG" | "Physics" | "Scenarios" | "Models"
   | "Run" | "Results" | "Report";
 

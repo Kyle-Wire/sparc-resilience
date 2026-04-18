@@ -316,3 +316,38 @@ joint_scenarios:
       - variable: Pct_Impervious
         direction: decrease
         increment: 25
+
+# ---------------------------------------------------------------------------
+# V3 Temporal / Multi-Snapshot (optional — uncomment to enable)
+# ---------------------------------------------------------------------------
+# Enable this section when you have morning/midday/night temperature data.
+# The diurnal range (T_midday - T_morning) provides a direct empirical
+# constraint on thermal diffusivity α without relying on land cover alone.
+#
+# temporal:
+#   enabled: true
+#   time_column: "time_period"
+#   frequency: "custom"
+#   snapshots:
+#     morning: "AAT_morning"        # Column with morning temperature
+#     midday:  "AAT_midday"         # Column with midday temperature
+#     night:   "AAT_night"          # Column with nighttime temperature
+#   dt_morning_to_midday_hours: 6.0
+#   dt_midday_to_night_hours: 8.0
+#   dt_night_to_morning_hours: 10.0
+#   use_transient_pde_loss: true
+#   time_embedding_dim: 8           # Learned embedding per snapshot (0 = disabled)
+
+# ---------------------------------------------------------------------------
+# V3 Transfer / Continual Learning Registry (optional)
+# ---------------------------------------------------------------------------
+# Enable when training across multiple cities.  The registry stores shared
+# trunk checkpoints, Fisher matrices (EWC), and experience replay coresets.
+#
+# registry:
+#   path: "sparc_registry"          # Directory for cross-city artifacts
+#   city_name: "providence"         # Unique identifier for this city
+#   use_global_trunk: false         # true = warm-start from global trunk
+#   ewc_lambda: 0.0                 # EWC penalty weight (> 0 enables)
+#   replay_lambda: 0.0              # Experience replay weight (> 0 enables)
+#   coreset_size: 400               # Representative points per city

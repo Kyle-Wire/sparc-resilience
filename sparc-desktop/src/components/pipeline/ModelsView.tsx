@@ -90,6 +90,8 @@ export default function ModelsView() {
   const [enabledModels, setEnabledModels] = useState<Record<string, boolean>>({});
   const [gwenConfig, setGwenConfig] = useState<Record<string, unknown>>({});
   const [cvMethod, setCvMethod] = useState("buffered_block");
+  const [blockSize, setBlockSize] = useState<number | null>(null);
+  const [bufferSize, setBufferSize] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -106,6 +108,9 @@ export default function ModelsView() {
         setEnabledModels(enabled);
         setGwenConfig(c.gwen ?? {});
         setCvMethod(String(c.models?.spatial_cv?.method ?? c.pipeline?.cv_method ?? "buffered_block"));
+        const scv = c.models?.spatial_cv ?? {};
+        setBlockSize(scv.block_size != null ? Number(scv.block_size) : null);
+        setBufferSize(scv.buffer_size != null ? Number(scv.buffer_size) : null);
       })
       .catch((e) => setError(e.message));
   }, []);
@@ -125,7 +130,12 @@ export default function ModelsView() {
       for (const { key } of MODEL_SECTIONS) {
         mergedModels[key] = { ...(mergedModels[key] ?? {}), enabled: enabledModels[key] !== false };
       }
-      mergedModels.spatial_cv = { ...(mergedModels.spatial_cv ?? {}), method: cvMethod };
+      mergedModels.spatial_cv = {
+        ...(mergedModels.spatial_cv ?? {}),
+        method: cvMethod,
+        ...(blockSize != null ? { block_size: blockSize } : {}),
+        ...(bufferSize != null ? { buffer_size: bufferSize } : {}),
+      };
       await saveConfig({ models: mergedModels, gwen: gwenConfig });
       setError(null);
     } catch (e: any) {
@@ -260,6 +270,45 @@ export default function ModelsView() {
               <span className="text-xs text-sparc-gray-500">{m.description}</span>
             </label>
           ))}
+        </div>
+
+        <div className="mt-4 border-t border-sparc-gray-100 pt-4 space-y-3">
+          <div className="flex items-center gap-3">
+            <label className="w-40 shrink-0 text-xs font-mono text-sparc-gray-600">
+              Block Size (m)
+            </label>
+            <input
+              type="number"
+              value={blockSize ?? ""}
+              placeholder="auto (from correlogram)"
+              onChange={(e) => {
+                const v = e.target.value;
+                setBlockSize(v === "" ? null : parseInt(v, 10));
+              }}
+              className="w-48 rounded border border-sparc-gray-300 px-2 py-1 text-xs font-mono focus:border-sparc-purple focus:outline-none"
+            />
+            <span className="text-xs text-sparc-gray-400">
+              {blockSize == null ? "Auto-determined from correlogram" : "User override"}
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <label className="w-40 shrink-0 text-xs font-mono text-sparc-gray-600">
+              Buffer Size (m)
+            </label>
+            <input
+              type="number"
+              value={bufferSize ?? ""}
+              placeholder="0"
+              onChange={(e) => {
+                const v = e.target.value;
+                setBufferSize(v === "" ? null : parseInt(v, 10));
+              }}
+              className="w-48 rounded border border-sparc-gray-300 px-2 py-1 text-xs font-mono focus:border-sparc-purple focus:outline-none"
+            />
+            <span className="text-xs text-sparc-gray-400">
+              Exclusion buffer between train/test folds
+            </span>
+          </div>
         </div>
       </div>
 

@@ -463,19 +463,41 @@ class EnhancedSpatialCV:
         # Centralised physics constraints from project.yml (or legacy defaults)
         self._monotone_constraints = load_monotone_constraints(self.base_config)
     
+    def _load_correlogram_results(self):
+        """Load correlogram_analysis_results.json if available."""
+        if hasattr(self, '_correlogram_cache'):
+            return self._correlogram_cache
+        corr_path = self.paths.correlogram_results
+        if corr_path.exists():
+            with open(corr_path, 'r') as f:
+                self._correlogram_cache = json.load(f)
+            return self._correlogram_cache
+        self._correlogram_cache = None
+        return None
+
     def get_block_size_from_config(self):
         """
-        Get the block size from project configuration
+        Get the block size: user config > correlogram results > None.
         """
+        # 1. User-specified in models.spatial_cv.block_size (via UI or project.yml)
         block_size = self.base_config.get('models', {}).get('spatial_cv', {}).get('block_size', None)
-        if block_size is None:
-            block_size = self.base_config.get('manual_parameters', {}).get('block_size', None)
-        
-        return block_size
+        if block_size is not None:
+            print(f"Block size from user config: {block_size}m")
+            return float(block_size)
+
+        # 2. Correlogram analysis results
+        corr = self._load_correlogram_results()
+        if corr:
+            opt = corr.get('spatial_cv_configuration', {}).get('optimal_block_size')
+            if opt is not None:
+                print(f"Block size from correlogram analysis: {opt}m")
+                return float(opt)
+
+        return None
     
     def get_buffer_size_from_config(self):
         """
-        Get the buffer size from project configuration
+        Get the buffer size from project configuration.
         """
         buffer_size = self.base_config.get('models', {}).get('spatial_cv', {}).get('buffer_size', 0)
         
@@ -487,20 +509,39 @@ class EnhancedSpatialCV:
                 print(f"Auto-calculated buffer size: {auto_buffer}m (1/3 of block size {block_size}m)")
                 return auto_buffer
         
-        return buffer_size if buffer_size is not None else 0
+        return float(buffer_size) if buffer_size is not None else 0
     
     def get_variable_bandwidths(self):
         """
-        Get variable-specific bandwidths from project configuration
+        Get per-variable bandwidths from correlogram analysis results.
+
+        Falls back to project config manual_parameters.bandwidths if
+        correlogram results are not available.
         
         Returns:
         --------
-        dict or None: Dictionary mapping variable names to bandwidths, or None if not configured
+        dict or None: Dictionary mapping variable names to bandwidths
         """
+        target_var = self.base_config.get('variables', {}).get('target', '')
+
+        # 1. Read directly from correlogram_analysis_results.json
+        corr = self._load_correlogram_results()
+        if corr:
+            individual = corr.get('individual_results', {})
+            bandwidths = {}
+            for var, result in individual.items():
+                if var == target_var:
+                    continue  # target is not a predictor
+                bw = result.get('optimal_bandwidth')
+                if bw is not None and float(bw) > 0:
+                    bandwidths[var] = float(bw)
+            if bandwidths:
+                print(f"Loaded {len(bandwidths)} per-variable bandwidths from correlogram results")
+                return bandwidths
+
+        # 2. Legacy fallback: manual_parameters in project config
         variable_bandwidths = self.base_config.get('manual_parameters', {}).get('bandwidths', None)
-        
         if variable_bandwidths:
-            # Ensure all values are numeric
             processed_bandwidths = {}
             for var, bandwidth in variable_bandwidths.items():
                 try:
@@ -508,9 +549,9 @@ class EnhancedSpatialCV:
                 except (ValueError, TypeError):
                     print(f"Warning: Invalid bandwidth value for {var}: {bandwidth}. Skipping.")
                     continue
-            
-            return processed_bandwidths if processed_bandwidths else None
-        
+            if processed_bandwidths:
+                return processed_bandwidths
+
         return None
     
     def apply_profiler_overrides(self, profiler_recommendations):
@@ -1251,7 +1292,7 @@ class EnhancedSpatialCV:
         folds_path = str(self.paths.folds_file)
         
         if os.path.exists(oof_predictions_path) and os.path.exists(folds_path):
-            print("=== Stage 2: Loading existing OOF predictions ===")
+            print("=== Loading existing OOF predictions ===")
             print(f"Found existing OOF predictions at: {self.paths.get_relative_path(oof_predictions_path)}")
             print(f"Found existing folds at: {self.paths.get_relative_path(folds_path)}")
             
@@ -1350,7 +1391,7 @@ class EnhancedSpatialCV:
                         'r2': np.nan, 'rmse': np.nan, 'status': f'error_{type(e).__name__}'
                     }
             
-            print(f"\n=== Stage 2 Complete (loaded existing results) ===")
+            print(f"\n=== Spatial CV Complete (loaded existing results) ===")
             print(f"Results loaded from: {stage2_dir}/")
             
             return {
@@ -1360,7 +1401,7 @@ class EnhancedSpatialCV:
             }
         
         # If results don't exist, run the full pipeline
-        print("=== Stage 2: Running full pipeline ===")
+        print("=== Running Spatial CV pipeline ===")
         
         # Load and preprocess data
         print("=== Loading and Preprocessing Data ===")
@@ -1503,7 +1544,7 @@ class EnhancedSpatialCV:
             performance_summary['individual_models'][model_name] = perf
             print(msg)
         
-        print(f"\n=== Stage 2 Complete ===")
+        print(f"\n=== Spatial CV Complete ===")
         print(f"Results saved to: {stage2_dir}/")
         
         return {
@@ -1535,7 +1576,7 @@ def main(fast_mode=False):
             # =================================================================
             # Stage 2: SKIPPED — load data & folds only, no base model training
             # =================================================================
-            print("\n=== Stage 2: SKIPPED (skip_stage_2_base_models=true) ===")
+            print("\n=== Base Models: SKIPPED (skip_stage_2_base_models=true) ===")
             print("   Surrogates will train against y directly (no V1 OOF pretraining)")
 
             base_fitted_values = {}
@@ -1606,7 +1647,7 @@ def main(fast_mode=False):
             # =================================================================
             # Stage 2: Run base models with OOF predictions (normal path)
             # =================================================================
-            print("\n=== Stage 2: Base Models ===")
+            print("\n=== Base Models ===")
             stage2_results = cv_system.run_enhanced_spatial_cv()
             
             # Load and merge data by ID
@@ -1727,14 +1768,14 @@ def main(fast_mode=False):
             os.makedirs(spatial_intel_dir, exist_ok=True)
         
         # ============================================================================
-        # Stage 2b: Retrain Base Models on Full Dataset for Deployment
+        # Retrain Base Models on Full Dataset for Deployment
         # ============================================================================
-        # Check if Stage 2b should be skipped based on pipeline config
-        # (force-skip when Stage 2 was skipped — no base models to retrain)
+        # Check if full retrain should be skipped
+        # (force-skip when base CV was skipped — no base models to retrain)
         skip_stage_2b = skip_stage_2 or cv_system.base_config.get('pipeline_execution', {}).get('skip_stage_2b_full_retrain', False)
         
         if skip_stage_2b:
-            print("\n=== Stage 2b: SKIPPED (skip_stage_2b_full_retrain=true in project.yml) ===")
+            print("\n=== Full Retrain: SKIPPED (skip_stage_2b_full_retrain=true) ===")
             print("   To enable full model retraining, set skip_stage_2b_full_retrain to false")
             full_models_dir = None  # Set to None to indicate skipped
             if not skip_stage_2:
@@ -1743,7 +1784,7 @@ def main(fast_mode=False):
                 print("WARNING: Stage 2b skipped — no base model fitted values available.")
                 print("         Surrogates will train against raw y. This degrades surrogate quality.")
         else:
-            print("\n=== Stage 2b: Retraining Base Models on Full Dataset for Deployment ===")
+            print("\n=== Retraining Base Models on Full Dataset ===")
             
             # Create output directory for full models
             paths = get_paths()
@@ -1952,7 +1993,7 @@ def main(fast_mode=False):
                     print(f"WARNING: Could not collect fitted values for {model_name}: {e}")
         
         # ============================================================================
-        # End of Stage 2b
+        # End of full retrain
         # ============================================================================
         
         # Load hyperparameters from project config
@@ -1974,18 +2015,18 @@ def main(fast_mode=False):
         stage2_dir = str(cv_system.paths.stage2_dir)
 
         # ================================================================
-        # Stage 3: V2 Neural Meta-Learner (sole meta-learner)
+        # Neural Meta-Learner
         # ================================================================
         v2_neural_result = None
         best_approach = "V2 Neural"
-        print("\n=== Stage 3: V2 Neural Meta-Learner ===")
+        print("\n=== Neural Meta-Learner ===")
         try:
+            # Ensure the neural training logger is at INFO level so epoch
+            # updates are emitted.  Do NOT call basicConfig here — it would
+            # add a duplicate handler when running under the server's
+            # _EventCapture (stream.py already bridges logging → capture).
             import logging as _logging
-            _logging.basicConfig(
-                level=_logging.INFO,
-                format="%(asctime)s [%(name)s] %(message)s",
-                datefmt="%H:%M:%S",
-            )
+            _logging.getLogger("sparc.run.v2_neural_training").setLevel(_logging.INFO)
             from sparc.run.v2_neural_training import train_neural_meta, run_cma_es_search
 
             # Optional CMA-ES hyperparameter search
@@ -2085,7 +2126,7 @@ def main(fast_mode=False):
         print(f"Best Meta Residuals ({best_approach}) - Mean: {np.mean(best_meta_residuals):.4f}, Std: {np.std(best_meta_residuals):.4f}")
         
         # Generate Laplacian eigenmaps early to ensure they get saved
-        print("\n=== Stage 4: Generating Enhanced Laplacian Eigenmaps (150 components) ===")
+        print("\n=== Generating Enhanced Laplacian Eigenmaps (150 components) ===")
         
         def generate_enhanced_laplacian_features(coords, n_components=150):
             """Generate enhanced Laplacian eigenmap features with proper scaling"""

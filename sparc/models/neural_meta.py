@@ -64,11 +64,13 @@ class SPARCMetaLearner(nn.Module):
         n_heads: int = 4,
         max_neighbors: int = 128,
         siren_omega: float = 30.0,
+        time_embed_dim: int = 0,
     ) -> None:
         super().__init__()
 
         self.hidden_dim = hidden_dim
         self.thresholds = thresholds or [0.25, 0.50, 0.75]
+        self.time_embed_dim = time_embed_dim
 
         # =============================================================
         # SharedTrunk — physics encoder + process rate (transfers)
@@ -90,9 +92,17 @@ class SPARCMetaLearner(nn.Module):
             nn.Linear(hidden_dim // 2, hidden_dim),
         )
 
-        # Trunk fusion: physics + alpha → shared representation
+        # Optional: Time embedding for multi-snapshot temporal data
+        # morning=0, midday=1, night=2
+        self.time_embed: nn.Embedding | None = None
+        trunk_fusion_input = hidden_dim * 2
+        if time_embed_dim > 0:
+            self.time_embed = nn.Embedding(3, time_embed_dim)
+            trunk_fusion_input += time_embed_dim
+
+        # Trunk fusion: physics + alpha [+ time] → shared representation
         self.trunk_fusion = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.Linear(trunk_fusion_input, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.GELU(),
         )
@@ -159,6 +169,7 @@ class SPARCMetaLearner(nn.Module):
         coords: torch.Tensor,
         knn_index: torch.Tensor,
         alpha: torch.Tensor,
+        time_idx: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, list[torch.Tensor], torch.Tensor]:
         """
         Parameters
@@ -169,6 +180,7 @@ class SPARCMetaLearner(nn.Module):
         coords       : (N, 2) — projected coordinates
         knn_index    : (N, max_neighbors) — KNN indices
         alpha        : (N, 1) — process rate from ProcessRateNet
+        time_idx     : (N,) int or None — snapshot index (0=morning, 1=midday, 2=night)
 
         Returns
         -------
@@ -186,8 +198,12 @@ class SPARCMetaLearner(nn.Module):
 
         h_alpha = self.alpha_emb(alpha)               # (N, H)
 
-        # Trunk fusion: physics + alpha → shared representation
-        h_trunk = self.trunk_fusion(torch.cat([h_phys, h_alpha], dim=-1))  # (N, H)
+        # Trunk fusion: physics + alpha [+ time] → shared representation
+        trunk_parts = [h_phys, h_alpha]
+        if self.time_embed is not None and time_idx is not None:
+            h_time = self.time_embed(time_idx)         # (N, time_embed_dim)
+            trunk_parts.append(h_time)
+        h_trunk = self.trunk_fusion(torch.cat(trunk_parts, dim=-1))  # (N, H)
 
         # City fusion: trunk + base + spatial
         fused = torch.cat([h_trunk, h_base, h_spatial], dim=-1)  # (N, 3H)
@@ -250,7 +266,7 @@ class SPARCMetaLearner(nn.Module):
     # Trunk management (transfer learning)
     # ==================================================================
 
-    _TRUNK_KEYS = {"physics_enc", "alpha_emb", "trunk_fusion"}
+    _TRUNK_KEYS = {"physics_enc", "alpha_emb", "trunk_fusion", "time_embed"}
 
     def save_trunk(self, path: str | Path) -> None:
         """Save SharedTrunk weights (physics_enc + alpha_emb + trunk_fusion)."""

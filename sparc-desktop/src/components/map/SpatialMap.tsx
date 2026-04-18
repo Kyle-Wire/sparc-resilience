@@ -19,36 +19,66 @@ interface GeoJsonData {
 }
 
 export type MapMode = "scatter" | "heatmap" | "choropleth";
+export type ColorPalette = "sparc" | "viridis" | "puor";
 
 interface SpatialMapProps {
   geojson: GeoJsonData | null;
   colorField?: string;
   mode?: MapMode;
   height?: string;
+  palette?: ColorPalette;
+  /** Callback when a feature is clicked. Receives properties. */
+  onFeatureClick?: (properties: Record<string, unknown>) => void;
+  /** Sync viewState from a parent (for side-by-side comparison) */
+  syncViewState?: { longitude: number; latitude: number; zoom: number; pitch: number; bearing: number };
+  onViewStateChange?: (vs: { longitude: number; latitude: number; zoom: number; pitch: number; bearing: number }) => void;
 }
 
 // ---------------------------------------------------------------------------
-// SPARC brand color ramp: purple → magenta → amber → yellow
+// Color ramps — default SPARC brand + colorblind-safe alternatives
 // ---------------------------------------------------------------------------
-const COLOR_RAMP = [
-  [96, 36, 104],   // sparc-purple
-  [140, 56, 148],
-  [164, 78, 180],  // sparc-magenta
-  [200, 110, 160],
-  [240, 160, 176], // sparc-blush
-  [251, 221, 70],  // sparc-yellow
-] as const;
+const RAMPS: Record<ColorPalette, readonly (readonly [number, number, number])[]> = {
+  sparc: [
+    [96, 36, 104],   // sparc-purple
+    [140, 56, 148],
+    [164, 78, 180],  // sparc-magenta
+    [200, 110, 160],
+    [240, 160, 176], // sparc-blush
+    [251, 221, 70],  // sparc-yellow
+  ],
+  viridis: [
+    [68, 1, 84],
+    [59, 82, 139],
+    [33, 145, 140],
+    [94, 201, 98],
+    [253, 231, 37],
+  ],
+  puor: [
+    [127, 59, 8],    // orange
+    [224, 153, 82],
+    [247, 247, 247], // neutral white
+    [153, 142, 195],
+    [84, 39, 136],   // purple
+  ],
+};
 
-function interpolateColor(t: number): [number, number, number, number] {
+const RAMP_CSS: Record<ColorPalette, string> = {
+  sparc: "linear-gradient(to right, rgb(96,36,104), rgb(164,78,180), rgb(240,160,176), rgb(251,221,70))",
+  viridis: "linear-gradient(to right, rgb(68,1,84), rgb(59,82,139), rgb(33,145,140), rgb(94,201,98), rgb(253,231,37))",
+  puor: "linear-gradient(to right, rgb(127,59,8), rgb(224,153,82), rgb(247,247,247), rgb(153,142,195), rgb(84,39,136))",
+};
+
+function interpolateColor(t: number, palette: ColorPalette = "sparc"): [number, number, number, number] {
+  const ramp = RAMPS[palette];
   const clamped = Math.max(0, Math.min(1, t));
-  const idx = clamped * (COLOR_RAMP.length - 1);
+  const idx = clamped * (ramp.length - 1);
   const lo = Math.floor(idx);
-  const hi = Math.min(lo + 1, COLOR_RAMP.length - 1);
+  const hi = Math.min(lo + 1, ramp.length - 1);
   const frac = idx - lo;
   return [
-    Math.round(COLOR_RAMP[lo][0] + frac * (COLOR_RAMP[hi][0] - COLOR_RAMP[lo][0])),
-    Math.round(COLOR_RAMP[lo][1] + frac * (COLOR_RAMP[hi][1] - COLOR_RAMP[lo][1])),
-    Math.round(COLOR_RAMP[lo][2] + frac * (COLOR_RAMP[hi][2] - COLOR_RAMP[lo][2])),
+    Math.round(ramp[lo][0] + frac * (ramp[hi][0] - ramp[lo][0])),
+    Math.round(ramp[lo][1] + frac * (ramp[hi][1] - ramp[lo][1])),
+    Math.round(ramp[lo][2] + frac * (ramp[hi][2] - ramp[lo][2])),
     200,
   ];
 }
@@ -91,8 +121,12 @@ export default function SpatialMap({
   colorField,
   mode = "scatter",
   height = "100%",
+  palette = "sparc",
+  onFeatureClick,
+  syncViewState,
+  onViewStateChange: onViewStateChangeProp,
 }: SpatialMapProps) {
-  const [viewState, setViewState] = useState({
+  const [localViewState, setLocalViewState] = useState({
     longitude: -98.5,
     latitude: 39.8,
     zoom: 4,
@@ -100,12 +134,20 @@ export default function SpatialMap({
     bearing: 0,
   });
 
-  // Auto-fit to data
+  const viewState = syncViewState ?? localViewState;
+
+  const handleViewStateChange = ({ viewState: vs }: any) => {
+    if (onViewStateChangeProp) onViewStateChangeProp(vs);
+    else setLocalViewState(vs);
+  };
+
+  // Auto-fit to data (only when not synced)
   useEffect(() => {
+    if (syncViewState) return;
     if (!geojson || geojson.features.length === 0) return;
     const bbox = computeBBox(geojson);
-    setViewState((prev) => ({ ...prev, ...bbox }));
-  }, [geojson]);
+    setLocalViewState((prev) => ({ ...prev, ...bbox }));
+  }, [geojson, syncViewState]);
 
   // Compute value domain for color mapping
   const domain = useMemo<[number, number]>(() => {
@@ -142,7 +184,7 @@ export default function SpatialMap({
             const v = d.properties[colorField];
             if (typeof v !== "number") return [200, 200, 200, 60] as [number, number, number, number];
             const t = (v - domain[0]) / (domain[1] - domain[0] || 1);
-            return interpolateColor(t);
+            return interpolateColor(t, palette);
           },
           pickable: true,
         }),
@@ -161,7 +203,7 @@ export default function SpatialMap({
             const v = d.properties[colorField];
             if (typeof v !== "number") return [200, 200, 200, 100];
             const t = (v - domain[0]) / (domain[1] - domain[0] || 1);
-            return interpolateColor(t);
+            return interpolateColor(t, palette);
           }) as any,
           getLineColor: [60, 60, 60, 80] as [number, number, number, number],
           getLineWidth: 1,
@@ -188,12 +230,12 @@ export default function SpatialMap({
           const v = d.properties[colorField];
           if (typeof v !== "number") return [200, 200, 200, 100] as [number, number, number, number];
           const t = (v - domain[0]) / (domain[1] - domain[0] || 1);
-          return interpolateColor(t);
+          return interpolateColor(t, palette);
         },
         pickable: true,
       }),
     ];
-  }, [geojson, colorField, mode, domain]);
+  }, [geojson, colorField, mode, domain, palette]);
 
   if (!geojson) {
     return (
@@ -207,9 +249,14 @@ export default function SpatialMap({
     <div className="relative overflow-hidden rounded-lg border border-sparc-gray-200" style={{ height }}>
       <DeckGL
         viewState={viewState}
-        onViewStateChange={({ viewState: vs }: any) => setViewState(vs)}
+        onViewStateChange={handleViewStateChange}
         layers={layers}
         controller
+        onClick={({ object }: any) => {
+          if (object && onFeatureClick) {
+            onFeatureClick(object.properties ?? object);
+          }
+        }}
         getTooltip={({ object }: any) => {
           if (!object) return null;
           const props = object.properties ?? object;
@@ -237,14 +284,21 @@ export default function SpatialMap({
             <span className="text-[9px] text-sparc-gray-500">{domain[0].toFixed(2)}</span>
             <div
               className="h-2.5 w-24 rounded-sm"
-              style={{
-                background: `linear-gradient(to right, rgb(96,36,104), rgb(164,78,180), rgb(240,160,176), rgb(251,221,70))`,
-              }}
+              style={{ background: RAMP_CSS[palette] }}
             />
             <span className="text-[9px] text-sparc-gray-500">{domain[1].toFixed(2)}</span>
           </div>
         </div>
       )}
+
+      {/* North arrow */}
+      <div className="absolute top-2 left-2 flex flex-col items-center">
+        <svg width="20" height="28" viewBox="0 0 20 28" className="drop-shadow-sm">
+          <polygon points="10,0 14,12 10,9 6,12" fill="#333" />
+          <polygon points="10,9 14,12 10,28 6,12" fill="#999" />
+        </svg>
+        <span className="text-[8px] font-bold text-sparc-gray-600">N</span>
+      </div>
     </div>
   );
 }

@@ -3,7 +3,10 @@ import { usePipeline } from "@/hooks/PipelineProvider";
 import type { PipelineEvent } from "@/lib/types";
 import { CapacitySweepView } from "@/components/training/CapacitySweepView";
 import { EpochLossChart } from "@/components/training/EpochLossChart";
+import { GroupedLossChart } from "@/components/training/GroupedLossChart";
 import { ConvergenceBadge } from "@/components/training/ConvergenceBadge";
+import { TrainingHealthBadge } from "@/components/training/TrainingHealthBadge";
+import StageStatusTracker from "@/components/pipeline/StageStatusTracker";
 
 const STAGES = [
   { value: 0, label: "0 — Correlogram" },
@@ -77,7 +80,7 @@ function getModelMilestones(events: PipelineEvent[]): { name: string; done: bool
 
 export default function PipelineRun() {
   const {
-    events, isRunning, error, currentStage, training,
+    events, isRunning, error, currentStage, training, stageStatuses,
     dagApprovalPending, startStage, cancel, handleApproveDag, handleRejectDag,
   } = usePipeline();
   const [logOpen, setLogOpen] = useState(true);
@@ -117,6 +120,21 @@ export default function PipelineRun() {
   const latestModelEvent = [...events].reverse().find((e) => e.model);
   const currentModel = latestModelEvent?.model?.toUpperCase() ?? null;
 
+  // Latest epoch info for progress display
+  const latestEpoch = training.epochHistory.length > 0
+    ? training.epochHistory[training.epochHistory.length - 1]
+    : null;
+
+  // Build a descriptive phase label
+  let progressLabel = complete ? "Complete" : (currentPhase ?? "Running…");
+  if (!complete && isRunning) {
+    if (latestEpoch && training.epochHistory.length > 0) {
+      progressLabel = `${currentPhase ?? "Neural meta-learner"} — Epoch ${latestEpoch.epoch}/${latestEpoch.n_epochs} · loss ${latestEpoch.total_loss.toFixed(4)}`;
+    } else if (currentModel) {
+      progressLabel += ` — ${currentModel}`;
+    }
+  }
+
   return (
     <div>
       <h1 className="mb-6 text-2xl font-bold">Run Pipeline</h1>
@@ -155,8 +173,7 @@ export default function PipelineRun() {
         <div className="mb-4">
           <div className="mb-1 flex items-center justify-between text-xs">
             <span className="font-medium text-sparc-gray-700">
-              {complete ? "Complete" : currentPhase ?? "Running…"}
-              {currentModel && isRunning && !complete ? ` — ${currentModel}` : ""}
+              {progressLabel}
             </span>
             <span className="tabular-nums text-sparc-gray-500">
               {complete ? "100" : progressPct}%
@@ -194,6 +211,17 @@ export default function PipelineRun() {
         </div>
       )}
 
+      {/* Stage status timeline (visible during "Run All" or after any stage completes) */}
+      {(Object.keys(stageStatuses).length > 0 || (isRunning && currentStage === -1)) && (
+        <div className="mb-4">
+          <StageStatusTracker
+            stageStatuses={stageStatuses}
+            currentStage={currentStage}
+            isRunning={isRunning}
+          />
+        </div>
+      )}
+
       {/* Live metric dashboard */}
       {lastMetric && (
         <div className="mb-4 rounded border border-sparc-gray-200 bg-sparc-gray-100 p-4">
@@ -226,11 +254,19 @@ export default function PipelineRun() {
             <ConvergenceBadge status={training.convergenceStatus ?? (isRunning && training.epochHistory.length > 0 ? "training" : null)} />
           </div>
           <CapacitySweepView results={training.capacityResults} />
+          <GroupedLossChart
+            epochHistory={training.epochHistory}
+            curriculumStage={training.curriculumStage}
+            curriculumLabel={training.curriculumLabel}
+          />
           <EpochLossChart
             epochHistory={training.epochHistory}
             curriculumStage={training.curriculumStage}
             curriculumLabel={training.curriculumLabel}
           />
+
+          {/* Training health warnings */}
+          <TrainingHealthBadge warnings={training.healthWarnings} />
         </div>
       )}
 
@@ -268,7 +304,7 @@ export default function PipelineRun() {
       {/* Status banners */}
       {complete && (
         <div className="mb-4 rounded border border-green-300 bg-green-50 p-3 text-sm text-green-800">
-          Stage {complete.stage} complete.
+          Pipeline complete.
         </div>
       )}
       {error && (

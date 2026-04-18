@@ -554,6 +554,80 @@ def cmd_desktop(args):
 
 
 # ---------------------------------------------------------------------------
+# V3: Transfer learning
+# ---------------------------------------------------------------------------
+
+def cmd_transfer(args):
+    """Run transfer learning validation: source city → target city."""
+    from sparc.run.transfer_validation import run_transfer_validation
+
+    source = Path(args.source_project).resolve()
+    target = Path(args.target_project).resolve()
+    if not source.exists():
+        print(f"ERROR: Source project file not found: {source}", file=sys.stderr)
+        sys.exit(1)
+    if not target.exists():
+        print(f"ERROR: Target project file not found: {target}", file=sys.stderr)
+        sys.exit(1)
+    output = Path(args.output).resolve()
+
+    print(f"Transfer learning validation")
+    print(f"  Source: {source}")
+    print(f"  Target: {target}")
+    print(f"  Output: {output}")
+    print()
+
+    comparison = run_transfer_validation(
+        source_project=source,
+        target_project=target,
+        output_dir=output,
+        run_finetune=not args.no_finetune,
+        unfreeze_after=args.unfreeze_after,
+    )
+
+    print("\n=== Transfer Learning Results ===")
+    for mode, data in comparison.items():
+        if isinstance(data, dict) and "r2" in data:
+            print(f"  {mode}: R²={data['r2']:.4f}" if data['r2'] else f"  {mode}: R²=N/A")
+
+
+# ---------------------------------------------------------------------------
+# V3: Continual learning
+# ---------------------------------------------------------------------------
+
+def cmd_continual(args):
+    """Run continual learning across multiple cities."""
+    from sparc.run.continual_training import train_continual
+
+    city_paths = []
+    for p in args.cities.split(","):
+        cp = Path(p.strip()).resolve()
+        if not cp.exists():
+            print(f"ERROR: City project file not found: {cp}", file=sys.stderr)
+            sys.exit(1)
+        city_paths.append(str(cp))
+    registry_path = Path(args.registry).resolve()
+    output = Path(args.output).resolve()
+
+    print(f"Continual learning across {len(city_paths)} cities")
+    print(f"  Registry: {registry_path}")
+    print(f"  Output:   {output}")
+    for i, p in enumerate(city_paths, 1):
+        print(f"  City {i}: {p}")
+    print()
+
+    result = train_continual(
+        city_configs=city_paths,
+        registry_path=registry_path,
+        output_dir=output,
+    )
+
+    print("\n=== Continual Learning Results ===")
+    for city_name, metrics in result.get("per_city_metrics", {}).items():
+        print(f"  {city_name}: R²={metrics.get('r2', 'N/A')}")
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
@@ -616,6 +690,30 @@ def build_parser() -> argparse.ArgumentParser:
     p_desk.add_argument('--port', type=int, default=8008,
                         help='FastAPI server port (default: 8008)')
     p_desk.set_defaults(func=cmd_desktop)
+
+    # --- transfer ---
+    p_xfer = subparsers.add_parser('transfer', help='V3: Transfer learning validation (source → target city)')
+    p_xfer.add_argument('--source-project', required=True,
+                        help='Path to source city project.yml (trunk donor)')
+    p_xfer.add_argument('--target-project', required=True,
+                        help='Path to target city project.yml (trunk recipient)')
+    p_xfer.add_argument('--output', '-o', default='transfer_results',
+                        help='Output directory for transfer validation artifacts')
+    p_xfer.add_argument('--no-finetune', action='store_true',
+                        help='Skip warm-start-with-finetune mode')
+    p_xfer.add_argument('--unfreeze-after', type=int, default=20,
+                        help='Epoch to unfreeze trunk in finetune mode (default: 20)')
+    p_xfer.set_defaults(func=cmd_transfer)
+
+    # --- continual ---
+    p_cont = subparsers.add_parser('continual', help='V3: Continual learning across multiple cities')
+    p_cont.add_argument('--cities', required=True,
+                        help='Comma-separated paths to city project.yml files')
+    p_cont.add_argument('--registry', default='sparc_registry',
+                        help='Path to city registry directory (default: sparc_registry)')
+    p_cont.add_argument('--output', '-o', default='continual_results',
+                        help='Output directory for continual training artifacts')
+    p_cont.set_defaults(func=cmd_continual)
 
     return parser
 

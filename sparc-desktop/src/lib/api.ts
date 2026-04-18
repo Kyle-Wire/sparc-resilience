@@ -22,6 +22,8 @@ import type {
   ReportPayload,
   GeoJsonData,
   PipelineEvent,
+  ValidationReport,
+  DataVersion,
 } from "./types";
 
 const BASE = "http://127.0.0.1:8008";
@@ -282,6 +284,71 @@ export interface ZonalStatsPayload {
 
 export const runZonalStats = (payload: ZonalStatsPayload) =>
   post<{ n_cells: number; columns: string[]; csv_path: string }>("/data/zonal_stats", payload);
+
+// ------------------------------------------------------------------
+// Data validation
+// ------------------------------------------------------------------
+export const validateData = () =>
+  post<ValidationReport>("/data/validate");
+
+// ------------------------------------------------------------------
+// Data versioning
+// ------------------------------------------------------------------
+export const getDataVersions = () =>
+  get<{ versions: DataVersion[] }>("/data/versions");
+
+export const selectDataVersion = (version: number) =>
+  post<ProjectLoadResponse>(`/data/select_version?version=${version}`);
+
+// ------------------------------------------------------------------
+// Session log
+// ------------------------------------------------------------------
+export interface SessionLogEntry {
+  timestamp: string;
+  type: string;
+  stage?: number;
+  message?: string;
+  [key: string]: unknown;
+}
+
+export const getRunLog = () =>
+  get<{ entries: SessionLogEntry[]; path: string }>("/run/log");
+
+// ------------------------------------------------------------------
+// Artifact downloads
+// ------------------------------------------------------------------
+export interface ArtifactInfo {
+  stage: number;
+  stage_label: string;
+  filename: string;
+  relative_path: string;
+  absolute_path: string;
+  size_bytes: number;
+  extension: string;
+}
+
+export const listArtifacts = () =>
+  get<{ artifacts: ArtifactInfo[]; total: number }>("/results/artifacts");
+
+export function downloadArtifact(stage: number, relativePath: string, filename: string): void {
+  const url = `${BASE}/results/download/${stage}/${encodeURIComponent(relativePath)}`;
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+export function downloadGeoPackage(): void {
+  const url = `${BASE}/results/geopackage`;
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "results.gpkg";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
 
 // ------------------------------------------------------------------
 // WebSocket helper

@@ -5,6 +5,8 @@ import { pickCsv } from "@/lib/fileDialogs";
 import DropZone from "@/components/common/DropZone";
 import SpatialMap from "@/components/map/SpatialMap";
 import DataPrepWizard from "@/components/pipeline/DataPrepWizard";
+import DataValidationChecklist from "@/components/data/DataValidationChecklist";
+import DataVersionSelector from "@/components/data/DataVersionSelector";
 import React from "react";
 import type { DataSummary, DataPreview, GeoJsonData } from "@/lib/types";
 
@@ -209,6 +211,18 @@ export default function DataView(_props: { onNavigateToProject?: () => void }) {
           <div className="rounded border border-sparc-gray-200 p-4">
             <div className="text-2xl font-bold truncate">{summary.crs ?? "—"}</div>
             <div className="text-xs text-sparc-gray-600">CRS</div>
+          </div>
+        </div>
+      )}
+
+      {/* Data validation + versioning (visible when data is loaded) */}
+      {summary && (
+        <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <div className="lg:col-span-2">
+            <DataValidationChecklist />
+          </div>
+          <div>
+            <DataVersionSelector onVersionSelected={reload} />
           </div>
         </div>
       )}

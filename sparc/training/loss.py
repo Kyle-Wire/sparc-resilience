@@ -154,6 +154,12 @@ def sparc_joint_loss(
     # V3 Initial condition (optional)
     T0: torch.Tensor | None = None,
     lambda_ic: float = 0.0,
+    # V3 Temporal / transient PDE (optional)
+    T_prev: torch.Tensor | None = None,
+    dt_hours: float | None = None,
+    dT_dt_observed: torch.Tensor | None = None,
+    nocturnal_dT_dt: torch.Tensor | None = None,
+    T_night: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """
     Compute the 8-term joint loss.
@@ -263,6 +269,11 @@ def sparc_joint_loss(
             epoch=epoch,
             alpha_prior_field=alpha_prior_field,
             energy_residual=energy_residual,
+            T_prev=T_prev,
+            dt_hours=dt_hours,
+            dT_dt_observed=dT_dt_observed,
+            nocturnal_dT_dt=nocturnal_dT_dt,
+            T_night=T_night,
         )
         pde_total = lambda_pde * pde_total
         for k, v in pde_dict.items():

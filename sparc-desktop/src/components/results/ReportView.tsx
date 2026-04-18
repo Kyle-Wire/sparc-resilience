@@ -6,6 +6,7 @@ export default function ReportView() {
   const [report, setReport] = useState<ReportPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [format, setFormat] = useState<"executive" | "technical">("executive");
 
   useEffect(() => {
     getReportData()
@@ -73,7 +74,30 @@ export default function ReportView() {
       {/* Toolbar */}
       <div className="flex items-center justify-between border-b border-sparc-gray-200 px-4 py-3 print:hidden">
         <h1 className="text-lg font-bold">Report</h1>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          {/* Format toggle */}
+          <div className="flex rounded border border-sparc-gray-300 overflow-hidden mr-2">
+            <button
+              onClick={() => setFormat("executive")}
+              className={`px-3 py-1.5 text-xs font-medium ${
+                format === "executive"
+                  ? "bg-sparc-purple text-white"
+                  : "bg-white text-sparc-gray-600 hover:bg-sparc-gray-50"
+              }`}
+            >
+              Executive
+            </button>
+            <button
+              onClick={() => setFormat("technical")}
+              className={`px-3 py-1.5 text-xs font-medium border-l border-sparc-gray-300 ${
+                format === "technical"
+                  ? "bg-sparc-purple text-white"
+                  : "bg-white text-sparc-gray-600 hover:bg-sparc-gray-50"
+              }`}
+            >
+              Technical
+            </button>
+          </div>
           <button
             onClick={handleCopyMarkdown}
             className="rounded border border-sparc-gray-300 px-3 py-1.5 text-xs font-medium hover:bg-sparc-gray-100"
@@ -147,8 +171,8 @@ export default function ReportView() {
             )}
           </section>
 
-          {/* Correlogram summary */}
-          {report.correlogram && Object.keys(report.correlogram).length > 0 && (
+          {/* Correlogram summary — technical only */}
+          {format === "technical" && report.correlogram && Object.keys(report.correlogram).length > 0 && (
             <section>
               <h3 className="mb-3 text-lg font-semibold border-b border-sparc-gray-200 pb-1">
                 Stage 0 — Correlogram
@@ -180,8 +204,8 @@ export default function ReportView() {
             </section>
           )}
 
-          {/* GWEN summary */}
-          {report.gwen && report.gwen.length > 0 && (
+          {/* GWEN summary — technical only */}
+          {format === "technical" && report.gwen && report.gwen.length > 0 && (
             <section>
               <h3 className="mb-3 text-lg font-semibold border-b border-sparc-gray-200 pb-1">
                 Stage 1 — GWEN Variable Selection
@@ -291,8 +315,8 @@ export default function ReportView() {
             </section>
           )}
 
-          {/* Stage plots (inline images) */}
-          {report.plots && Object.keys(report.plots).length > 0 && (
+          {/* Stage plots (inline images) — technical only */}
+          {format === "technical" && report.plots && Object.keys(report.plots).length > 0 && (
             <section className="print:break-before-page">
               <h3 className="mb-3 text-lg font-semibold border-b border-sparc-gray-200 pb-1">
                 Diagnostic Plots
@@ -319,8 +343,8 @@ export default function ReportView() {
             </section>
           )}
 
-          {/* Config details */}
-          {(report.causal || report.physics) && (
+          {/* Config details — technical only */}
+          {format === "technical" && (report.causal || report.physics) && (
             <section>
               <h3 className="mb-3 text-lg font-semibold border-b border-sparc-gray-200 pb-1">
                 Configuration
@@ -345,6 +369,52 @@ export default function ReportView() {
               </div>
             </section>
           )}
+
+          {/* Limitations — always shown, non-removable */}
+          <section className="print:break-before-page">
+            <h3 className="mb-3 text-lg font-semibold border-b border-sparc-gray-200 pb-1">
+              Limitations and Caveats
+            </h3>
+            <div className="space-y-3 text-xs text-sparc-gray-700">
+              <div className="rounded border border-amber-200 bg-amber-50 p-3">
+                <p className="font-semibold text-amber-800 mb-1">Observational Data</p>
+                <p className="text-amber-700">
+                  All findings are derived from observational data. While causal inference methods
+                  (DAG-based structural estimation, backdoor adjustment, and sensitivity analysis)
+                  are employed, unmeasured confounding cannot be entirely ruled out. E-values are
+                  provided to quantify the strength of unmeasured confounding required to explain
+                  away observed effects.
+                </p>
+              </div>
+              <div className="rounded border border-amber-200 bg-amber-50 p-3">
+                <p className="font-semibold text-amber-800 mb-1">Spatial Scale</p>
+                <p className="text-amber-700">
+                  Results reflect relationships at the spatial resolution of the analysis grid.
+                  Ecological fallacy may apply when interpreting aggregate spatial patterns at
+                  individual or sub-grid scales. Coefficients represent average effects within
+                  grid cells and may not transfer to different resolutions.
+                </p>
+              </div>
+              <div className="rounded border border-amber-200 bg-amber-50 p-3">
+                <p className="font-semibold text-amber-800 mb-1">Temporal Scope</p>
+                <p className="text-amber-700">
+                  This analysis represents a cross-sectional snapshot. Seasonal variation,
+                  long-term trends, and climate change projections are not captured unless
+                  explicitly modeled. Results should not be extrapolated to substantially
+                  different time periods without additional validation.
+                </p>
+              </div>
+              <div className="rounded border border-amber-200 bg-amber-50 p-3">
+                <p className="font-semibold text-amber-800 mb-1">Transferability</p>
+                <p className="text-amber-700">
+                  Models and effect estimates are calibrated to the specific study area.
+                  Transferring results to other geographic contexts requires domain expert review
+                  and ideally local recalibration. The extrapolation guard marks scenario
+                  predictions that exceed the observed data envelope.
+                </p>
+              </div>
+            </div>
+          </section>
         </div>
       </div>
     </div>

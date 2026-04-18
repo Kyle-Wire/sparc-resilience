@@ -257,6 +257,15 @@ export default function DAGView() {
     nodeId: string;
   } | null>(null);
 
+  // Edge tooltip state (causal assumption)
+  const [edgeTooltip, setEdgeTooltip] = useState<{
+    x: number;
+    y: number;
+    source: string;
+    target: string;
+    mechanism?: string;
+  } | null>(null);
+
   // Quick edge form
   const [quickEdge, setQuickEdge] = useState(false);
   const [qeSource, setQeSource] = useState("");
@@ -416,11 +425,27 @@ export default function DAGView() {
 
   // Close context menu on click
   useEffect(() => {
-    if (!contextMenu) return;
-    const close = () => setContextMenu(null);
+    if (!contextMenu && !edgeTooltip) return;
+    const close = () => { setContextMenu(null); setEdgeTooltip(null); };
     document.addEventListener("click", close);
     return () => document.removeEventListener("click", close);
-  }, [contextMenu]);
+  }, [contextMenu, edgeTooltip]);
+
+  // Edge click → causal assumption tooltip
+  const onEdgeClick = useCallback(
+    (event: React.MouseEvent, edge: Edge) => {
+      if (edge.id.startsWith("mc3-")) return; // skip MC³ overlay edges
+      event.stopPropagation();
+      setEdgeTooltip({
+        x: event.clientX,
+        y: event.clientY,
+        source: edge.source,
+        target: edge.target,
+        mechanism: typeof edge.label === "string" ? edge.label.replace("💡 ", "") : undefined,
+      });
+    },
+    [],
+  );
 
   const validate = async () => {
     if (!dag) return;
@@ -431,6 +456,58 @@ export default function DAGView() {
       setError(e.message);
     }
   };
+
+  // Client-side structural warnings
+  const structuralWarnings = useMemo<string[]>(() => {
+    if (nodes.length === 0) return [];
+    const warns: string[] = [];
+    // Find user-defined edges (not mc3/proposal)
+    const userEdges = edges.filter(
+      (e) => !e.id.startsWith("mc3-") && !e.id.startsWith("proposal-"),
+    );
+    // Disconnected nodes
+    const connected = new Set<string>();
+    for (const e of userEdges) { connected.add(e.source); connected.add(e.target); }
+    const disconnected = nodes.filter((n) => !connected.has(n.id));
+    if (disconnected.length > 0) {
+      warns.push(`Disconnected node${disconnected.length > 1 ? "s" : ""}: ${disconnected.map((n) => n.id).join(", ")}`);
+    }
+    // Outcome nodes with outgoing edges
+    const outcomes = nodes.filter((n) => (n.data as any).nodeType === "outcome");
+    for (const o of outcomes) {
+      if (userEdges.some((e) => e.source === o.id)) {
+        warns.push(`Outcome "${o.id}" has outgoing edges — outcomes should be terminal`);
+      }
+    }
+    // Treatment → Outcome path exists
+    const treatments = nodes.filter((n) => (n.data as any).nodeType === "treatment");
+    if (treatments.length > 0 && outcomes.length > 0) {
+      // BFS from any treatment to any outcome
+      const adj = new Map<string, string[]>();
+      for (const e of userEdges) {
+        if (!adj.has(e.source)) adj.set(e.source, []);
+        adj.get(e.source)!.push(e.target);
+      }
+      const outcomeIds = new Set(outcomes.map((o) => o.id));
+      let pathExists = false;
+      for (const t of treatments) {
+        const visited = new Set<string>();
+        const queue = [t.id];
+        while (queue.length > 0) {
+          const cur = queue.shift()!;
+          if (outcomeIds.has(cur) && cur !== t.id) { pathExists = true; break; }
+          if (visited.has(cur)) continue;
+          visited.add(cur);
+          for (const next of adj.get(cur) ?? []) queue.push(next);
+        }
+        if (pathExists) break;
+      }
+      if (!pathExists) {
+        warns.push("No directed path from any treatment to any outcome");
+      }
+    }
+    return warns;
+  }, [nodes, edges]);
 
   const acceptProposals = () => {
     pushSnapshot();
@@ -644,6 +721,15 @@ export default function DAGView() {
         </div>
       )}
 
+      {/* Structural warnings */}
+      {structuralWarnings.length > 0 && (
+        <div className="border-b border-amber-200 bg-amber-50 px-4 py-2">
+          {structuralWarnings.map((w, i) => (
+            <p key={i} className="text-xs text-amber-700">⚠ {w}</p>
+          ))}
+        </div>
+      )}
+
       {/* Legend */}
       <div className="flex gap-4 border-b border-sparc-gray-100 px-4 py-2">
         {Object.entries(TYPE_COLORS).map(([type, c]) => (
@@ -689,6 +775,7 @@ export default function DAGView() {
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
           onNodeContextMenu={onNodeContextMenu}
+          onEdgeClick={onEdgeClick}
           nodeTypes={nodeTypes}
           fitView
           fitViewOptions={{ padding: 0.3 }}
@@ -723,6 +810,32 @@ export default function DAGView() {
                 </button>
               );
             })}
+          </div>
+        )}
+
+        {/* Causal assumption tooltip on edge click */}
+        {edgeTooltip && (
+          <div
+            className="fixed z-50 max-w-xs rounded-lg border border-sparc-gray-200 bg-white p-3 shadow-lg"
+            style={{ left: edgeTooltip.x + 8, top: edgeTooltip.y - 8 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-xs font-semibold text-sparc-gray-800 mb-1">
+              Causal Assumption
+            </p>
+            <p className="text-xs text-sparc-gray-600">
+              <span className="font-mono font-bold text-sparc-purple">{edgeTooltip.source}</span>
+              {" → "}
+              <span className="font-mono font-bold text-sparc-purple">{edgeTooltip.target}</span>
+            </p>
+            <p className="text-[11px] text-sparc-gray-500 mt-1.5 leading-relaxed">
+              You are asserting that <strong>{edgeTooltip.source}</strong> causally influences{" "}
+              <strong>{edgeTooltip.target}</strong>.
+              {edgeTooltip.mechanism && (
+                <> Mechanism: <em>{edgeTooltip.mechanism}</em>.</>
+              )}
+              {" "}This edge will be used for backdoor adjustment and counterfactual estimation.
+            </p>
           </div>
         )}
       </div>
