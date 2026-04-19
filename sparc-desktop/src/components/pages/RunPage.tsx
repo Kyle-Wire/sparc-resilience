@@ -5,11 +5,19 @@ import { useNotification } from "@/hooks/useNotifications";
 import type { PipelineEvent } from "@/lib/types";
 
 const STAGE_NAMES: Record<number, string> = {
-  0: "Data prep",
-  1: "DAG / causal",
-  2: "Training",
-  3: "Evaluation",
-  4: "Scenarios",
+  0: "Correlogram",
+  1: "GWEN",
+  2: "Validation",
+  3: "Inference",
+  4: "Simulation",
+};
+
+const STAGE_DESCRIPTIONS: Record<number, string> = {
+  0: "Spatial autocorrelation analysis + pipeline config",
+  1: "Variable selection via GWEN weighting",
+  2: "Enhanced spatial cross-validation",
+  3: "Causal validation (MC3 / NUTS)",
+  4: "Scenario simulation + counterfactuals",
 };
 
 const STAGE_IDS = [0, 1, 2, 3, 4];
@@ -29,17 +37,54 @@ function eventToLogLine(evt: PipelineEvent) {
   if (type === "stage_status") {
     const ss = evt as any;
     const name = STAGE_NAMES[ss.stage] ?? `Stage ${ss.stage}`;
-    if (ss.status === "running") return { text: `▸ ${name}...`, level: "info" as const, ts };
-    if (ss.status === "complete") return { text: `✓ ${name} complete`, level: "success" as const, ts };
-    if (ss.status === "failed") return { text: `✕ ${name} failed: ${ss.error ?? ""}`, level: "error" as const, ts };
+    const desc = STAGE_DESCRIPTIONS[ss.stage] ?? "";
+    if (ss.status === "running") return { text: `▸ Starting ${name} — ${desc}`, level: "info" as const, ts };
+    if (ss.status === "complete") {
+      const dur = ss.elapsed_seconds ? ` (${ss.elapsed_seconds.toFixed(1)}s)` : "";
+      return { text: `✓ ${name} complete${dur}`, level: "success" as const, ts };
+    }
+    if (ss.status === "failed") return { text: `✕ ${name} failed: ${ss.error ?? "unknown error"}`, level: "error" as const, ts };
     return null;
   }
   if (type === "epoch_update") {
     const e = evt as any;
-    return { text: `  epoch ${e.epoch}/${e.n_epochs}  loss=${e.total_loss?.toFixed(4) ?? "?"}`, level: "debug" as const, ts };
+    const eta = e.eta_seconds ? `  eta=${Math.round(e.eta_seconds)}s` : "";
+    const phase = e.train_phase ? `[${e.train_phase}] ` : "";
+    return { text: `  ${phase}epoch ${e.epoch}/${e.n_epochs}  loss=${e.total_loss?.toFixed(4) ?? "?"}${eta}`, level: "debug" as const, ts };
+  }
+  if (type === "metric") {
+    const e = evt as any;
+    const fold = e.fold != null ? ` fold ${e.fold}` : "";
+    return { text: `  📊${fold} ${e.metric ?? "metric"} = ${typeof e.value === "number" ? e.value.toFixed(4) : e.value}`, level: "info" as const, ts };
+  }
+  if (type === "fold_start") {
+    const e = evt as any;
+    return { text: `  ── Fold ${e.fold}/${e.n_folds} ──`, level: "info" as const, ts };
+  }
+  if (type === "fold_complete") {
+    const e = evt as any;
+    const r2 = e.r2 != null ? `  R²=${e.r2.toFixed(4)}` : "";
+    return { text: `  ✓ Fold ${e.fold} complete${r2}`, level: "success" as const, ts };
+  }
+  if (type === "model_start") {
+    const e = evt as any;
+    return { text: `  ▸ Training ${e.model_name ?? "model"}...`, level: "info" as const, ts };
+  }
+  if (type === "model_complete") {
+    const e = evt as any;
+    const r2 = e.r2 != null ? ` R²=${e.r2.toFixed(4)}` : "";
+    return { text: `  ✓ ${e.model_name ?? "Model"} done${r2}`, level: "success" as const, ts };
   }
   if (type === "convergence") {
     return { text: `  convergence: ${(evt as any).status ?? ""}`, level: "info" as const, ts };
+  }
+  if (type === "curriculum_stage") {
+    const e = evt as any;
+    return { text: `  curriculum → ${e.label ?? e.curriculum ?? "next phase"}`, level: "info" as const, ts };
+  }
+  if (type === "capacity_result") {
+    const e = evt as any;
+    return { text: `  capacity check: dim=${e.hidden_dim} R²=${e.r2?.toFixed(4) ?? "?"}`, level: "debug" as const, ts };
   }
   if (type === "error") {
     return { text: (evt as any).message ?? "Error", level: "error" as const, ts };
@@ -48,10 +93,18 @@ function eventToLogLine(evt: PipelineEvent) {
     return { text: "Pipeline complete!", level: "success" as const, ts };
   }
   if (type === "dag_approval_requested") {
-    return { text: "DAG approval requested — review on the DAG page", level: "warn" as const, ts };
+    return { text: "⏸ DAG approval requested — review on the DAG page", level: "warn" as const, ts };
   }
   if (type === "training_health") {
     return { text: `⚠ ${(evt as any).warning ?? "health warning"}`, level: "warn" as const, ts };
+  }
+  if (type === "progress") {
+    const e = evt as any;
+    return { text: `  ${e.message ?? `progress: ${e.pct ?? ""}%`}`, level: "debug" as const, ts };
+  }
+  // Catch-all for unknown event types with a message field
+  if ((evt as any).message) {
+    return { text: `  ${(evt as any).message}`, level: "info" as const, ts };
   }
   return null;
 }
@@ -95,17 +148,26 @@ export default function RunPage() {
   }, []);
 
   const handleStartAll = useCallback(() => {
-    const firstEnabled = STAGE_IDS.find((id) => enabledStages.has(id)) ?? 0;
-    pipeline.startStage(firstEnabled, { fast: false });
+    const stages = STAGE_IDS.filter((id) => enabledStages.has(id));
+    if (stages.length === 0) {
+      notify("warning", "No stages selected");
+      return;
+    }
+    pipeline.startPipeline(stages, { fast: false });
     setElapsed(0);
-    notify("info", "Pipeline started");
+    notify("info", `Pipeline started (${stages.length} stage${stages.length > 1 ? "s" : ""})`);
   }, [pipeline, enabledStages, notify]);
 
   const handleRunFromHere = useCallback((stage: number) => {
-    pipeline.startStage(stage, { fast: false });
+    const stages = STAGE_IDS.filter((id) => id >= stage && enabledStages.has(id));
+    if (stages.length === 0) {
+      pipeline.startStage(stage, { fast: false });
+    } else {
+      pipeline.startPipeline(stages, { fast: false });
+    }
     setElapsed(0);
-    notify("info", `Running from stage ${STAGE_NAMES[stage] ?? stage}`);
-  }, [pipeline, notify]);
+    notify("info", `Running from ${STAGE_NAMES[stage] ?? `stage ${stage}`}`);
+  }, [pipeline, enabledStages, notify]);
 
   const handleStop = useCallback(() => {
     pipeline.cancel();
@@ -262,6 +324,9 @@ export default function RunPage() {
                   </span>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 12.5, fontWeight: 600 }}>{STAGE_NAMES[id]}</div>
+                    <div className="mono" style={{ fontSize: 9, color: "var(--muted)", marginTop: 1 }}>
+                      {STAGE_DESCRIPTIONS[id]}
+                    </div>
                     {status === "running" && (
                       <div
                         style={{

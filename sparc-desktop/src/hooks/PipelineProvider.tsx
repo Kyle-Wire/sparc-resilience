@@ -55,6 +55,8 @@ export interface PipelineState {
   /** True when MC³ is done and the pipeline is paused awaiting DAG approval. */
   dagApprovalPending: boolean;
   startStage: (stage: number, opts?: { fast?: boolean; skip_gwen?: boolean }) => void;
+  /** Run a sequence of stages in order, chaining each on completion. */
+  startPipeline: (stages: number[], opts?: { fast?: boolean; skip_gwen?: boolean }) => void;
   cancel: () => void;
   /** Approve the discovered DAG and resume the pipeline. */
   handleApproveDag: () => Promise<void>;
@@ -86,6 +88,10 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
   const wsRef = useRef<WebSocket | null>(null);
   const [dagApprovalPending, setDagApprovalPending] = useState(false);
   const [stageStatuses, setStageStatuses] = useState<Record<number, StageStatus>>({});
+  /** Remaining stages to run after the current one completes. */
+  const stageQueueRef = useRef<number[]>([]);
+  /** Options to reuse when chaining to the next stage. */
+  const optsRef = useRef<{ fast: boolean; skip_gwen: boolean }>({ fast: false, skip_gwen: false });
 
   /** Process a single pipeline event and update training telemetry state. */
   const processEvent = useCallback((event: PipelineEvent) => {
@@ -186,10 +192,18 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
         break;
     }
 
-    if (event.type === "complete" || event.type === "error") {
+    if (event.type === "complete") {
+      // If there are more stages queued, don't stop the pipeline
+      if (stageQueueRef.current.length === 0) {
+        setIsRunning(false);
+      }
+      return true; // signal to close current socket
+    }
+    if (event.type === "error") {
       setIsRunning(false);
-      if (event.type === "error") setError(event.message ?? "Unknown error");
-      return true; // signal to close socket
+      setError(event.message ?? "Unknown error");
+      stageQueueRef.current = []; // clear remaining stages on error
+      return true;
     }
     return false;
   }, []);
@@ -242,28 +256,32 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
     };
   }, [processEvent]);
 
-  const startStage = useCallback(
-    (stage: number, opts: { fast?: boolean; skip_gwen?: boolean } = {}) => {
-      // Close any existing socket
+  /** Open a WebSocket and run a single stage. If `resetState` is true,
+   *  clears all previous events/statuses (used for the first stage in a run). */
+  const _runSingleStage = useCallback(
+    (stage: number, opts: { fast?: boolean; skip_gwen?: boolean }, resetState: boolean) => {
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
       }
 
-      setDagApprovalPending(false);
-      setEvents([]);
-      setError(null);
+      if (resetState) {
+        setDagApprovalPending(false);
+        setEvents([]);
+        setError(null);
+        setStageStatuses({});
+        setTraining({
+          capacityResults: [],
+          epochHistory: [],
+          curriculumStage: null,
+          curriculumLabel: null,
+          convergenceStatus: null,
+          healthWarnings: [],
+        });
+      }
+
       setIsRunning(true);
       setCurrentStage(stage);
-      setStageStatuses({});
-      setTraining({
-        capacityResults: [],
-        epochHistory: [],
-        curriculumStage: null,
-        curriculumLabel: null,
-        convergenceStatus: null,
-        healthWarnings: [],
-      });
 
       const ws = new WebSocket("ws://127.0.0.1:8008/run/stream");
       wsRef.current = ws;
@@ -280,12 +298,22 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
 
       ws.onmessage = (msg) => {
         const event: PipelineEvent = JSON.parse(msg.data);
-        if (processEvent(event)) ws.close();
+        const shouldClose = processEvent(event);
+        if (shouldClose) {
+          ws.close();
+          // Chain to next queued stage on success
+          if (event.type === "complete" && stageQueueRef.current.length > 0) {
+            const nextStage = stageQueueRef.current.shift()!;
+            // Small delay to let the backend finish cleanup
+            setTimeout(() => _runSingleStage(nextStage, optsRef.current, false), 200);
+          }
+        }
       };
 
       ws.onerror = () => {
         setError("WebSocket connection failed");
         setIsRunning(false);
+        stageQueueRef.current = [];
       };
 
       ws.onclose = () => {
@@ -295,7 +323,28 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
     [processEvent],
   );
 
+  const startStage = useCallback(
+    (stage: number, opts: { fast?: boolean; skip_gwen?: boolean } = {}) => {
+      stageQueueRef.current = [];
+      optsRef.current = { fast: opts.fast ?? false, skip_gwen: opts.skip_gwen ?? false };
+      _runSingleStage(stage, optsRef.current, true);
+    },
+    [_runSingleStage],
+  );
+
+  const startPipeline = useCallback(
+    (stages: number[], opts: { fast?: boolean; skip_gwen?: boolean } = {}) => {
+      if (stages.length === 0) return;
+      const sorted = [...stages].sort((a, b) => a - b);
+      stageQueueRef.current = sorted.slice(1);
+      optsRef.current = { fast: opts.fast ?? false, skip_gwen: opts.skip_gwen ?? false };
+      _runSingleStage(sorted[0], optsRef.current, true);
+    },
+    [_runSingleStage],
+  );
+
   const cancel = useCallback(() => {
+    stageQueueRef.current = [];
     wsRef.current?.close();
     wsRef.current = null;
     setIsRunning(false);
@@ -316,7 +365,7 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
   return (
     <PipelineContext.Provider value={{
       events, isRunning, error, currentStage, training, stageStatuses,
-      dagApprovalPending, startStage, cancel, handleApproveDag, handleRejectDag,
+      dagApprovalPending, startStage, startPipeline, cancel, handleApproveDag, handleRejectDag,
     }}>
       {children}
     </PipelineContext.Provider>
