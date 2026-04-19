@@ -165,10 +165,11 @@ export default function ScenariosPage() {
       const result = await runScenarios();
       notify("success", `Computed ${result.n_scenarios} scenarios`);
       // Refresh from API
-      const detail = await getScenarioDetail().catch(() => null);
-      if (detail?.scenarios) {
+      const detail: any = await getScenarioDetail().catch(() => null);
+      const rows = detail?.scenarios ?? detail?.summary;
+      if (Array.isArray(rows) && rows.length) {
         setScenarios(
-          (detail.scenarios as any[]).map((sc: any, i: number) => ({
+          rows.map((sc: any, i: number) => ({
             id: `s${i}`,
             name: sc.name ?? `Scenario ${i + 1}`,
             interventions: sc.interventions ?? {},

@@ -164,7 +164,7 @@ export default function CRSPage() {
       <StatGrid>
         <Stat label="Input EPSG" value={inputEpsg} tint="var(--ink)" />
         <Stat label="Projected EPSG" value={projectedEpsg} tint="var(--crimson)" />
-        <Stat label="Distortion" value={`${distortion.toFixed(2)}%`} tint={distortion > 0.5 ? "var(--crimson)" : "var(--purple)"} />
+        <Stat label="Distortion" value={distortion != null ? `${distortion.toFixed(2)}%` : "—"} tint={distortion != null && distortion > 0.5 ? "var(--crimson)" : "var(--purple)"} />
         <Stat label="Unit" value="US ft" tint="var(--amber)" />
       </StatGrid>
 
