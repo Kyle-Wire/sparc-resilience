@@ -1,20 +1,19 @@
 import type { ReactNode } from "react";
+import type { HealthResponse } from "@/lib/types";
+import type { LogoHue } from "@/components/pipeline/SettingsView";
 import Sidebar, { type PageName } from "./Sidebar";
 import Topbar from "./Topbar";
-import type { HealthResponse } from "@/lib/types";
 
 interface ShellProps {
   currentPage: PageName;
-  onNavigate: (page: PageName) => void;
-  onSettings?: () => void;
+  onNavigate: (page: PageName | "Settings") => void;
   onToggleChat?: () => void;
   chatOpen?: boolean;
-  status: HealthResponse | null;
+  children: ReactNode;
   projectLoaded?: boolean;
   projectName?: string;
-  projectEpsg?: string;
-  projectDomain?: string;
-  children: ReactNode;
+  logoHue?: LogoHue;
+  status?: HealthResponse | null;
 }
 
 export default function Shell({
@@ -22,15 +21,20 @@ export default function Shell({
   onNavigate,
   onToggleChat,
   chatOpen,
-  status,
+  children,
   projectLoaded,
   projectName,
-  projectEpsg,
-  projectDomain,
-  children,
+  status,
 }: ShellProps) {
   return (
-    <div className="flex h-screen w-screen overflow-hidden" style={{ background: 'var(--color-sparc-paper)' }}>
+    <div
+      style={{
+        width: "100%",
+        height: "100%",
+        display: "flex",
+        background: "var(--paper)",
+      }}
+    >
       <Sidebar
         currentPage={currentPage}
         onNavigate={onNavigate}
@@ -38,12 +42,22 @@ export default function Shell({
         chatOpen={chatOpen}
         projectLoaded={projectLoaded}
         projectName={projectName}
-        projectEpsg={projectEpsg}
-        projectDomain={projectDomain}
       />
-      <div className="flex flex-1 flex-col min-w-0" style={{ position: 'relative' }}>
-        <Topbar status={status} currentPage={currentPage} />
-        <main className="scroll relative flex-1 overflow-auto grid-paper" style={{ padding: '20px 22px' }}>
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <Topbar page={currentPage} status={status} />
+        <main
+          className="scroll"
+          style={{
+            flex: 1,
+            overflow: "auto",
+            padding: "20px 22px",
+            background: "var(--paper)",
+            backgroundImage:
+              "linear-gradient(rgba(0,0,0,0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.035) 1px, transparent 1px)",
+            backgroundSize: "24px 24px",
+            position: "relative",
+          }}
+        >
           {children}
         </main>
       </div>

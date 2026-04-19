@@ -1,55 +1,45 @@
-/**
- * Splash screen shown while waiting for the FastAPI server to start.
- * Uses the animated CubeLogo with a loading bar.
- */
+import { useEffect } from "react";
 import CubeLogo from "../brand/CubeLogo";
 
-export default function Splash() {
+interface SplashProps {
+  onReady?: () => void;
+  logoHue?: string;
+}
+
+export default function Splash({ onReady, logoHue: _logoHue }: SplashProps) {
+  useEffect(() => {
+    if (!onReady) return;
+    const t = setTimeout(onReady, 1400);
+    return () => clearTimeout(t);
+  }, [onReady]);
+
   return (
     <div
-      className="flex h-screen w-screen flex-col items-center justify-center gap-6"
-      style={{ background: 'var(--color-sparc-paper, #f7f4ee)' }}
+      style={{
+        width: "100%",
+        height: "100%",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexDirection: "column",
+        gap: 22,
+      }}
     >
-      <CubeLogo size={180} animate hue="ink" density={1.4} intensity={1} />
-      <div className="text-center">
+      <div style={{ width: 180, height: 180 }}>
+        <CubeLogo size={180} density={1.4} hue="ink" />
+      </div>
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em" }}>SPARC LABS</div>
         <div
-          className="text-[22px] font-extrabold"
-          style={{ letterSpacing: '-0.02em', color: 'var(--color-sparc-ink)' }}
+          className="mono"
+          style={{ fontSize: 10, letterSpacing: "0.2em", color: "var(--muted)", marginTop: 4 }}
         >
-          SPARC LABS
-        </div>
-        <div
-          className="mono mt-1 text-[10px] font-medium uppercase"
-          style={{ letterSpacing: '0.2em', color: 'var(--color-sparc-muted)' }}
-        >
-          Spatial Analysis &amp; Research Core · v0.4.2
+          SPATIAL ANALYSIS &amp; RESEARCH CORE · v0.4.2
         </div>
       </div>
-      {/* Loading bar */}
-      <div
-        style={{
-          width: 220,
-          height: 3,
-          background: 'rgba(0,0,0,0.08)',
-          borderRadius: 2,
-          overflow: 'hidden',
-        }}
-      >
-        <div
-          style={{
-            width: '100%',
-            height: '100%',
-            background: 'var(--color-sparc-crimson)',
-            animation: 'loadBar 1.3s ease-out',
-          }}
-        />
+      <div style={{ width: 220, height: 3, background: "rgba(0,0,0,0.08)", borderRadius: 2, overflow: "hidden" }}>
+        <div style={{ width: "100%", height: "100%", background: "var(--crimson)", animation: "loadBar 1.3s ease-out" }} />
       </div>
-      <p
-        className="mono text-[10px]"
-        style={{ color: 'var(--color-sparc-muted)', letterSpacing: '0.06em' }}
-      >
-        Starting sidecar…
-      </p>
     </div>
   );
 }

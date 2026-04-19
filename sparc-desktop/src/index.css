@@ -35,10 +35,49 @@
   --color-sparc-gray-800: #1a1416;
 }
 
+/* Prototype short-name CSS variable aliases — lets prototype JSX work verbatim */
+:root {
+  --purple: #602468;
+  --magenta: #9e337d;
+  --pink: #e94d9b;
+  --red: #e94461;
+  --crimson: #e73c25;
+  --orange: #e76c25;
+  --amber: #e79024;
+  --gold: #f0b632;
+  --yellow: #fbdd46;
+  --ink: #1a1416;
+  --ink-2: #2b2327;
+  --paper: #f7f4ee;
+  --paper-2: #ede8dd;
+  --line: #c9c2b3;
+  --muted: #6e6358;
+}
+
 body {
   font-family: var(--font-sans);
-  background: var(--color-sparc-paper);
+  background: #d8d3c6;
   color: var(--color-sparc-ink);
+  position: relative;
+}
+
+/* Textured background with radial gradient blobs + grid overlay */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 20% 30%, rgba(231,60,37,0.06) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 70%, rgba(96,36,104,0.08) 0%, transparent 60%),
+    repeating-linear-gradient(rgba(0,0,0,0.03) 0px, rgba(0,0,0,0.03) 1px, transparent 1px, transparent 24px),
+    repeating-linear-gradient(90deg, rgba(0,0,0,0.03) 0px, rgba(0,0,0,0.03) 1px, transparent 1px, transparent 24px);
+}
+
+body > #root {
+  position: relative;
+  z-index: 1;
 }
 
 /* Monospace utility */
@@ -87,7 +126,7 @@ body {
 }
 
 .chat-slide-in {
-  animation: chat-slide-up 0.2s ease-out forwards;
+  animation: chat-slide-up 0.22s ease-out forwards;
 }
 
 /* Pixel-style toggle button */

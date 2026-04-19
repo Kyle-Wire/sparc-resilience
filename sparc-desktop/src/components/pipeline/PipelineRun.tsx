@@ -6,7 +6,8 @@ import { EpochLossChart } from "@/components/training/EpochLossChart";
 import { GroupedLossChart } from "@/components/training/GroupedLossChart";
 import { ConvergenceBadge } from "@/components/training/ConvergenceBadge";
 import { TrainingHealthBadge } from "@/components/training/TrainingHealthBadge";
-import StageStatusTracker from "@/components/pipeline/StageStatusTracker";
+import PipelineFlow from "@/components/pipeline/PipelineFlow";
+import { SectionHeader, Card, Btn, Stat } from "@/components/ui/DesignSystem";
 
 const STAGES = [
   { value: 0, label: "0 — Correlogram" },
@@ -78,6 +79,35 @@ function getModelMilestones(events: PipelineEvent[]): { name: string; done: bool
   return models;
 }
 
+const STAGE_LABELS = ["Correlogram", "GWEN", "Spatial CV", "Causal", "Scenarios"];
+
+/** Return a CSS color for a terminal log line based on its content. */
+function termColor(msg: string): string {
+  if (/✓|complete|done|success|saved/i.test(msg)) return "var(--color-sparc-gold)";
+  if (/⚠|warn/i.test(msg)) return "var(--color-sparc-amber)";
+  if (/✗|error|fail|exception/i.test(msg)) return "var(--color-sparc-crimson)";
+  if (/^stage|^─|^═|pipeline/i.test(msg)) return "var(--color-sparc-crimson)";
+  if (/r²|rmse|metric|fold/i.test(msg)) return "var(--color-sparc-amber)";
+  return "#8a8278";
+}
+
+/** Blinking block cursor for the terminal. */
+function Blink() {
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        width: 7,
+        height: 12,
+        background: "#e6ddcb",
+        animation: "blink 1s steps(1) infinite",
+        verticalAlign: "text-bottom",
+        marginLeft: 2,
+      }}
+    />
+  );
+}
+
 export default function PipelineRun() {
   const {
     events, isRunning, error, currentStage, training, stageStatuses,
@@ -137,71 +167,71 @@ export default function PipelineRun() {
 
   return (
     <div>
-      <h1 className="mb-6 text-2xl font-bold">Run Pipeline</h1>
+      <SectionHeader
+        kicker="11 · pipeline"
+        label="Run"
+        right={
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn small onClick={() => handleRun(-1)} disabled={isRunning} primary>
+              Run All
+            </Btn>
+            {isRunning ? (
+              <Btn small onClick={cancel}>Cancel</Btn>
+            ) : (
+              <Btn small disabled>Cancel</Btn>
+            )}
+          </div>
+        }
+      />
 
       {/* Stage buttons */}
-      <div className="mb-6 flex flex-wrap gap-2">
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
         {STAGES.map((s) => (
-          <button
-            key={s.value}
-            onClick={() => handleRun(s.value)}
-            disabled={isRunning}
-            className="rounded border border-sparc-gray-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-black hover:text-white disabled:opacity-40"
-          >
+          <Btn key={s.value} small onClick={() => handleRun(s.value)} disabled={isRunning}>
             {s.label}
-          </button>
+          </Btn>
         ))}
-        <button
-          onClick={() => handleRun(-1)}
-          disabled={isRunning}
-          className="rounded bg-black px-4 py-2 text-sm font-medium text-white hover:bg-sparc-gray-800 disabled:opacity-40"
-        >
-          Run All
-        </button>
-        {isRunning && (
-          <button
-            onClick={cancel}
-            className="rounded border border-sparc-crimson px-4 py-2 text-sm font-medium text-sparc-crimson hover:bg-red-50"
-          >
-            Cancel
-          </button>
-        )}
       </div>
 
       {/* Progress bar */}
       {(isRunning || complete) && (
-        <div className="mb-4">
-          <div className="mb-1 flex items-center justify-between text-xs">
-            <span className="font-medium text-sparc-gray-700">
-              {progressLabel}
-            </span>
-            <span className="tabular-nums text-sparc-gray-500">
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 11, marginBottom: 4 }}>
+            <span style={{ fontWeight: 600, color: "var(--color-sparc-ink-2)" }}>{progressLabel}</span>
+            <span className="mono" style={{ color: "var(--color-sparc-muted)" }}>
               {complete ? "100" : progressPct}%
             </span>
           </div>
-          <div className="relative h-2 w-full overflow-hidden rounded-full bg-sparc-gray-200">
+          <div style={{ position: "relative", height: 6, width: "100%", overflow: "hidden", borderRadius: 4, background: "rgba(0,0,0,0.06)" }}>
             <div
-              className={`h-full rounded-full transition-all duration-500 ${complete ? "bg-green-500" : "bg-sparc-purple"}`}
-              style={{ width: `${complete ? 100 : progressPct}%` }}
+              style={{
+                height: "100%",
+                borderRadius: 4,
+                transition: "width 500ms ease",
+                width: `${complete ? 100 : progressPct}%`,
+                background: complete ? "var(--color-sparc-crimson)" : "var(--color-sparc-purple)",
+              }}
             />
-            {/* Model milestone markers for Stage 2 */}
             {modelMilestones.map((m) => (
               <div
                 key={m.name}
-                className="absolute top-0 h-full w-px bg-sparc-gray-400"
-                style={{ left: `${m.pct}%` }}
+                style={{ position: "absolute", top: 0, height: "100%", width: 1, background: "rgba(0,0,0,0.25)", left: `${m.pct}%` }}
                 title={m.name}
               />
             ))}
           </div>
-          {/* Model milestone labels for Stage 2 */}
           {modelMilestones.length > 0 && (
-            <div className="relative mt-1 h-4 text-[9px] text-sparc-gray-500">
+            <div className="mono" style={{ position: "relative", marginTop: 4, height: 14, fontSize: 9, color: "var(--color-sparc-muted)" }}>
               {modelMilestones.map((m) => (
                 <span
                   key={m.name}
-                  className={`absolute -translate-x-1/2 ${m.done ? "font-bold text-green-600" : ""}`}
-                  style={{ left: `${m.pct}%` }}
+                  style={{
+                    position: "absolute",
+                    transform: "translateX(-50%)",
+                    fontWeight: m.done ? 700 : 500,
+                    color: m.done ? "var(--color-sparc-crimson)" : "var(--color-sparc-muted)",
+                    left: `${m.pct}%`,
+                  }}
                 >
                   {m.done ? "✓ " : ""}{m.name}
                 </span>
@@ -211,131 +241,204 @@ export default function PipelineRun() {
         </div>
       )}
 
-      {/* Stage status timeline (visible during "Run All" or after any stage completes) */}
-      {(Object.keys(stageStatuses).length > 0 || (isRunning && currentStage === -1)) && (
-        <div className="mb-4">
-          <StageStatusTracker
-            stageStatuses={stageStatuses}
-            currentStage={currentStage}
-            isRunning={isRunning}
-          />
+      {/* PipelineFlow — horizontal node-edge diagram */}
+      {(Object.keys(stageStatuses).length > 0 || isRunning || complete) && (
+        <div style={{ marginBottom: 14 }}>
+          <Card title="Stage flow" subtitle="pipeline execution graph" padding={14}>
+            <PipelineFlow
+              stages={STAGE_LABELS.map((label, i) => {
+                const ss = stageStatuses[i]?.status;
+                let status: "done" | "running" | "queued" = "queued";
+                if (ss === "complete") status = "done";
+                else if (ss === "running" || currentStage === i) status = "running";
+                else if (ss === "failed") status = "done";
+                if (currentStage !== null && currentStage !== undefined && currentStage > i && !ss) status = "done";
+                return {
+                  label,
+                  status,
+                  progress: status === "running" ? (progressPct ?? 0) / 100 : status === "done" ? 1 : 0,
+                  duration: ss === "complete" ? "done" : undefined,
+                };
+              })}
+              currentStageIndex={currentStage ?? 0}
+            />
+          </Card>
         </div>
       )}
 
       {/* Live metric dashboard */}
       {lastMetric && (
-        <div className="mb-4 rounded border border-sparc-gray-200 bg-sparc-gray-100 p-4">
-          <div className="grid grid-cols-4 gap-4 text-center">
-            <div>
-              <div className="text-xs text-sparc-gray-600">Stage</div>
-              <div className="text-xl font-bold">{lastMetric.stage ?? "—"}</div>
-            </div>
-            <div>
-              <div className="text-xs text-sparc-gray-600">Fold</div>
-              <div className="text-xl font-bold">{lastMetric.fold ?? "—"}</div>
-            </div>
-            <div>
-              <div className="text-xs text-sparc-gray-600">{lastMetric.metric?.toUpperCase()}</div>
-              <div className="text-xl font-bold">{lastMetric.value?.toFixed(4)}</div>
-            </div>
-            <div>
-              <div className="text-xs text-sparc-gray-600">Progress</div>
-              <div className="text-xl font-bold">{explicitPct ?? progressPct}%</div>
-            </div>
-          </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
+          <Stat label="Stage" value={String(lastMetric.stage ?? "—")} tint="var(--color-sparc-ink)" />
+          <Stat label="Fold" value={String(lastMetric.fold ?? "—")} tint="var(--color-sparc-purple)" />
+          <Stat
+            label={lastMetric.metric?.toUpperCase() ?? "Metric"}
+            value={lastMetric.value?.toFixed(4) ?? "—"}
+            tint="var(--color-sparc-crimson)"
+          />
+          <Stat label="Progress" value={`${explicitPct ?? progressPct}%`} tint="var(--color-sparc-amber)" />
         </div>
       )}
 
       {/* Training telemetry — visible during Stage 2 */}
       {(latestStage === 2 || training.epochHistory.length > 0 || training.capacityResults.length > 0) && (
-        <div className="mb-4 space-y-4">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-sparc-gray-700">Neural Training</h2>
-            <ConvergenceBadge status={training.convergenceStatus ?? (isRunning && training.epochHistory.length > 0 ? "training" : null)} />
-          </div>
-          <CapacitySweepView results={training.capacityResults} />
-          <GroupedLossChart
-            epochHistory={training.epochHistory}
-            curriculumStage={training.curriculumStage}
-            curriculumLabel={training.curriculumLabel}
-          />
-          <EpochLossChart
-            epochHistory={training.epochHistory}
-            curriculumStage={training.curriculumStage}
-            curriculumLabel={training.curriculumLabel}
-          />
-
-          {/* Training health warnings */}
-          <TrainingHealthBadge warnings={training.healthWarnings} />
+        <div style={{ marginBottom: 14 }}>
+          <Card
+            title="Neural training"
+            subtitle="capacity sweep · loss curves · health"
+            padding={14}
+            actions={
+              <ConvergenceBadge
+                status={training.convergenceStatus ?? (isRunning && training.epochHistory.length > 0 ? "training" : null)}
+              />
+            }
+          >
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <CapacitySweepView results={training.capacityResults} />
+              <GroupedLossChart
+                epochHistory={training.epochHistory}
+                curriculumStage={training.curriculumStage}
+                curriculumLabel={training.curriculumLabel}
+              />
+              <EpochLossChart
+                epochHistory={training.epochHistory}
+                curriculumStage={training.curriculumStage}
+                curriculumLabel={training.curriculumLabel}
+              />
+              <TrainingHealthBadge warnings={training.healthWarnings} />
+            </div>
+          </Card>
         </div>
       )}
 
       {/* DAG approval gate banner */}
       {dagApprovalPending && (
-        <div className="mb-4 rounded border border-amber-300 bg-amber-50 p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-amber-800">
-                DAG Review Required — Pipeline Paused
-              </p>
-              <p className="text-xs text-amber-700 mt-1">
-                MC³ structure learning is complete. Review the discovered DAG in the DAG Editor tab,
-                then approve to continue to NUTS posterior sampling.
-              </p>
+        <div
+          style={{
+            marginBottom: 14,
+            border: "1px solid var(--color-sparc-amber)",
+            background: "rgba(231,144,36,0.08)",
+            borderRadius: 8,
+            padding: 14,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--color-sparc-ink)" }}>
+              DAG review required — pipeline paused
             </div>
-            <div className="flex gap-2">
-              <button
-                onClick={handleRejectDag}
-                className="rounded border border-red-300 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
-              >
-                Reject
-              </button>
-              <button
-                onClick={handleApproveDag}
-                className="rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700"
-              >
-                Approve DAG
-              </button>
+            <div className="mono" style={{ fontSize: 10.5, color: "var(--color-sparc-muted)", marginTop: 3 }}>
+              MC³ structure learning complete. Review in DAG tab, then approve to continue to NUTS sampling.
             </div>
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <Btn small onClick={handleRejectDag}>Reject</Btn>
+            <Btn small primary onClick={handleApproveDag}>Approve DAG</Btn>
           </div>
         </div>
       )}
 
       {/* Status banners */}
       {complete && (
-        <div className="mb-4 rounded border border-green-300 bg-green-50 p-3 text-sm text-green-800">
-          Pipeline complete.
+        <div
+          className="mono"
+          style={{
+            marginBottom: 14,
+            border: "1px solid var(--color-sparc-crimson)",
+            background: "rgba(231,60,37,0.05)",
+            borderRadius: 8,
+            padding: "8px 12px",
+            fontSize: 11,
+            color: "var(--color-sparc-crimson)",
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+          }}
+        >
+          Pipeline complete
         </div>
       )}
       {error && (
-        <div className="mb-4 rounded border border-sparc-crimson bg-red-50 p-3 text-sm text-sparc-crimson">
+        <div
+          className="mono"
+          style={{
+            marginBottom: 14,
+            border: "1px solid var(--color-sparc-crimson)",
+            background: "rgba(231,60,37,0.08)",
+            borderRadius: 8,
+            padding: "8px 12px",
+            fontSize: 11,
+            color: "var(--color-sparc-crimson)",
+          }}
+        >
           {error}
         </div>
       )}
 
-      {/* Collapsible log output */}
-      <div className="rounded border border-sparc-gray-200">
+      {/* Completion summary strip */}
+      {complete && lastMetric && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 16 }}>
+          <Stat label="R²" value={lastMetric.value?.toFixed(3) ?? "—"} tint="var(--color-sparc-crimson)" />
+          <Stat label="RMSE" value={lastMetric.metric === "rmse" ? (lastMetric.value?.toFixed(3) ?? "—") : "—"} tint="var(--color-sparc-ink)" />
+          <Stat label="Stage" value={String(lastMetric.stage ?? "—")} tint="var(--color-sparc-purple)" />
+          <Stat label="Logs" value={String(logs.length)} tint="var(--color-sparc-amber)" />
+        </div>
+      )}
+
+      {/* Dark terminal output */}
+      <div style={{ borderRadius: 8, overflow: "hidden", border: "1px solid rgba(255,255,255,0.06)" }}>
         <button
           onClick={() => setLogOpen(!logOpen)}
-          className="flex w-full items-center justify-between bg-sparc-gray-100 px-3 py-2 text-left text-xs font-medium text-sparc-gray-700 hover:bg-sparc-gray-200"
+          style={{
+            display: "flex",
+            width: "100%",
+            alignItems: "center",
+            justifyContent: "space-between",
+            background: "#1a1416",
+            border: "none",
+            padding: "8px 14px",
+            fontSize: 10.5,
+            fontWeight: 600,
+            color: "#8a8278",
+            cursor: "pointer",
+            fontFamily: "var(--font-mono)",
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+          }}
         >
           <span>Terminal Output ({logs.length} lines)</span>
-          <span className="text-sparc-gray-500">{logOpen ? "▲ Hide" : "▼ Show"}</span>
+          <span style={{ color: "#6e6358" }}>{logOpen ? "▲ Hide" : "▼ Show"}</span>
         </button>
         {logOpen && (
           <div
             ref={logRef}
-            className="h-80 overflow-auto bg-sparc-gray-100 p-3 font-mono text-xs"
+            className="scroll"
+            style={{
+              height: 360,
+              overflowY: "auto",
+              background: "#1a1416",
+              padding: "12px 14px",
+              fontFamily: "var(--font-mono)",
+              fontSize: 10.5,
+              lineHeight: 1.55,
+              color: "#e6ddcb",
+            }}
           >
             {logs.length === 0 && !isRunning && (
-              <span className="text-sparc-gray-600">No output yet. Start a stage to begin.</span>
+              <span style={{ color: "#6e6358" }}>No output yet. Start a stage to begin.</span>
             )}
             {logs.map((e, i) => (
-              <div key={i} className="py-0.5">
+              <div key={i} style={{ padding: "1px 0", color: termColor(e.message ?? "") }}>
                 {e.message}
               </div>
             ))}
-            {isRunning && <div className="animate-pulse text-sparc-pink">Running...</div>}
+            {isRunning && (
+              <div style={{ padding: "1px 0", color: "#e6ddcb" }}>
+                <Blink />
+              </div>
+            )}
           </div>
         )}
       </div>

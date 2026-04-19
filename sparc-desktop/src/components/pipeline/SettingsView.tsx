@@ -11,12 +11,51 @@ const DOCS = [
   { name: "Contributing", file: "CONTRIBUTING.md" },
 ];
 
+const LOGO_HUES = [
+  { key: "ink", label: "Ink", color: "#1a1416" },
+  { key: "red", label: "Red", color: "#e73c25" },
+  { key: "purple", label: "Purple", color: "#602468" },
+  { key: "amber", label: "Amber", color: "#e79024" },
+] as const;
+
+const PAPER_TONES = [
+  { key: "warm", label: "Warm", paper: "#f7f4ee", line: "#c9c2b3" },
+  { key: "cool", label: "Cool", paper: "#f3f4f2", line: "#c5cac4" },
+  { key: "white", label: "White", paper: "#ffffff", line: "#d8d4cb" },
+] as const;
+
+export type LogoHue = typeof LOGO_HUES[number]["key"];
+export type PaperTone = typeof PAPER_TONES[number]["key"];
+
+export interface ThemeSettings {
+  logoHue: LogoHue;
+  paperTone: PaperTone;
+}
+
+export function loadTheme(): ThemeSettings {
+  try {
+    const raw = localStorage.getItem("sparc-theme");
+    if (raw) return JSON.parse(raw);
+  } catch { /* ignore */ }
+  return { logoHue: "ink", paperTone: "warm" };
+}
+
+export function applyTheme(theme: ThemeSettings) {
+  const tone = PAPER_TONES.find((t) => t.key === theme.paperTone) ?? PAPER_TONES[0];
+  document.documentElement.style.setProperty("--color-sparc-paper", tone.paper);
+  document.documentElement.style.setProperty("--color-sparc-line", tone.line);
+  document.documentElement.style.setProperty("--color-sparc-gray-100", tone.paper);
+  document.documentElement.style.setProperty("--color-sparc-gray-300", tone.line);
+  localStorage.setItem("sparc-theme", JSON.stringify(theme));
+}
+
 export default function SettingsView() {
   const [apiKey, setApiKey] = useState("");
   const { notify } = useNotification();
   const [serverPort, setServerPort] = useState("8008");
   const [showEgg, setShowEgg] = useState(false);
   const konamiIdx = useRef(0);
+  const [theme, setTheme] = useState<ThemeSettings>(loadTheme);
 
   useEffect(() => {
     setApiKey(localStorage.getItem("anthropic-api-key") ?? "");
@@ -118,6 +157,76 @@ export default function SettingsView() {
           >
             Save
           </button>
+        </div>
+      </section>
+
+      {/* Theme */}
+      <section className="space-y-3">
+        <h3 className="text-sm font-semibold">Theme</h3>
+        <p className="text-xs text-sparc-gray-500">
+          Customize the application appearance.
+        </p>
+
+        {/* Logo Hue */}
+        <div>
+          <label className="text-xs font-medium block mb-2">Logo Colour</label>
+          <div className="flex gap-2">
+            {LOGO_HUES.map((h) => (
+              <button
+                key={h.key}
+                onClick={() => {
+                  const next = { ...theme, logoHue: h.key };
+                  setTheme(next);
+                  applyTheme(next);
+                  // Dispatch custom event for CubeLogo instances to pick up
+                  window.dispatchEvent(new CustomEvent("sparc-theme-change", { detail: next }));
+                  notify("success", `Logo colour: ${h.label}`);
+                }}
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 6,
+                  border: theme.logoHue === h.key ? "2px solid var(--color-sparc-ink)" : "1px solid var(--color-sparc-line)",
+                  background: h.color,
+                  cursor: "pointer",
+                  boxShadow: theme.logoHue === h.key ? "0 0 0 2px rgba(0,0,0,0.1)" : "none",
+                }}
+                title={h.label}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* Paper Tone */}
+        <div>
+          <label className="text-xs font-medium block mb-2">Paper Tone</label>
+          <div className="flex gap-2">
+            {PAPER_TONES.map((t) => (
+              <button
+                key={t.key}
+                onClick={() => {
+                  const next = { ...theme, paperTone: t.key };
+                  setTheme(next);
+                  applyTheme(next);
+                  window.dispatchEvent(new CustomEvent("sparc-theme-change", { detail: next }));
+                  notify("success", `Paper tone: ${t.label}`);
+                }}
+                style={{
+                  padding: "6px 14px",
+                  borderRadius: 5,
+                  border: theme.paperTone === t.key ? "2px solid var(--color-sparc-ink)" : "1px solid var(--color-sparc-line)",
+                  background: t.paper,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  color: "var(--color-sparc-ink)",
+                }}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
         </div>
       </section>
 

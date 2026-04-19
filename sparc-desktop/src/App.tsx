@@ -9,25 +9,27 @@ import Splash from "@/components/layout/Splash";
 import Shell from "@/components/layout/Shell";
 import type { PageName } from "@/components/layout/Sidebar";
 import { PAGES } from "@/components/layout/Sidebar";
-import ProjectSetup from "@/components/pipeline/ProjectSetup";
-import DataView from "@/components/pipeline/DataView";
-import VariablesView from "@/components/pipeline/VariablesView";
-import CRSView from "@/components/pipeline/CRSView";
-import DAGView from "@/components/pipeline/DAGView";
-import PhysicsView from "@/components/pipeline/PhysicsView";
-import ScenariosView from "@/components/pipeline/ScenariosView";
-import ModelsView from "@/components/pipeline/ModelsView";
-import DataProcessingView from "@/components/pipeline/DataProcessingView";
-import ProjectConfigPage from "@/components/project/ProjectConfigPage";
-import PipelineRun from "@/components/pipeline/PipelineRun";
-import ResultsView from "@/components/results/ResultsView";
-import ReportView from "@/components/results/ReportView";
-import SettingsView from "@/components/pipeline/SettingsView";
 import ChatPanel from "@/components/chat/ChatPanel";
+import SettingsView from "@/components/pipeline/SettingsView";
+import { loadTheme, applyTheme } from "@/components/pipeline/SettingsView";
+import type { LogoHue } from "@/components/pipeline/SettingsView";
 import { buildSystemPrompt } from "@/lib/prompts";
 import { getConfig, saveConfig, dataSummary, initProject, getReportData, getDag } from "@/lib/api";
 import type { ClaudeAction, DataSummary, ProjectConfig, ReportPayload, DagDefinition } from "@/lib/types";
 import type { PromptDataContext } from "@/lib/prompts";
+
+import ProjectPage from "@/components/pages/ProjectPage";
+import DataPage from "@/components/pages/DataPage";
+import DAGPage from "@/components/pages/DAGPage";
+import RunPage from "@/components/pages/RunPage";
+import ResultsPage, { type Scenario } from "@/components/pages/ResultsPage";
+import DataProcessingView from "@/components/pipeline/DataProcessingView";
+import VariableDashboardView from "@/components/results/VariableDashboardView";
+import PhysicsView from "@/components/pipeline/PhysicsView";
+import CRSView from "@/components/pipeline/CRSView";
+import ScenariosView from "@/components/pipeline/ScenariosView";
+import ModelsView from "@/components/pipeline/ModelsView";
+import ReportView from "@/components/results/ReportView";
 
 type AppPage = PageName | "Settings";
 
@@ -37,9 +39,21 @@ export default function App() {
   const project = useProject(ready);
   const [page, setPage] = useState<AppPage>("Project");
   const [chatOpen, setChatOpen] = useState(false);
+  const [scenario, setScenario] = useState<Scenario>("canopy+10");
   const [dataCtx, setDataCtx] = useState<PromptDataContext | null>(null);
-  // Increment to force child re-render after action dispatch
   const [refreshKey, setRefreshKey] = useState(0);
+  const [logoHue, setLogoHue] = useState<LogoHue>(() => loadTheme().logoHue);
+
+  // Apply persisted theme on mount and listen for changes from Settings
+  useEffect(() => {
+    applyTheme(loadTheme());
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.logoHue) setLogoHue(detail.logoHue);
+    };
+    window.addEventListener("sparc-theme-change", handler);
+    return () => window.removeEventListener("sparc-theme-change", handler);
+  }, []);
 
   // Gate navigation: only Project and Settings are allowed without a loaded project
   const navigate = useCallback(
@@ -50,9 +64,9 @@ export default function App() {
     [project.projectLoaded],
   );
 
-  // Load data context when available for system prompt enrichment
+  // Load data context for system prompt enrichment
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || !project.projectLoaded) return;
     Promise.all([
       getConfig().catch(() => null),
       dataSummary().catch(() => null),
@@ -64,40 +78,23 @@ export default function App() {
         target: cfg?.data?.target_column,
         summary: summary?.numeric_summary,
       };
-
-      // Inject DAG edges
-      if (dag?.edges && dag.edges.length > 0) {
-        ctx.dagEdges = dag.edges;
-      }
-
-      // Inject physics constraints
+      if (dag?.edges && dag.edges.length > 0) ctx.dagEdges = dag.edges;
       const mono = cfg?.physics?.monotone_constraints;
-      if (mono && typeof mono === "object") {
-        ctx.physicsConstraints = mono as Record<string, number>;
-      }
-
-      // Inject scenario definitions
+      if (mono && typeof mono === "object") ctx.physicsConstraints = mono as Record<string, number>;
       const scenarios = cfg?.scenarios;
-      if (Array.isArray(scenarios) && scenarios.length > 0) {
-        ctx.scenarios = scenarios;
-      }
-
-      // Inject causal results from report
+      if (Array.isArray(scenarios) && scenarios.length > 0) ctx.scenarios = scenarios;
       const causal = report?.causal_results;
       if (causal?.direct_effects && Object.keys(causal.direct_effects).length > 0) {
         ctx.causalResults = causal.direct_effects;
       }
-
-      // Inject scenario summary from report
       if (report?.scenario_summary && report.scenario_summary.length > 0) {
         ctx.scenarioSummary = report.scenario_summary;
       }
-
       setDataCtx(ctx);
     });
-  }, [ready, refreshKey]);
+  }, [ready, project.projectLoaded, refreshKey]);
 
-  // Derive the prompt mode from current page
+  // Derive prompt mode from current page
   const promptMode = (() => {
     switch (page) {
       case "Project": return "domain" as const;
@@ -111,7 +108,7 @@ export default function App() {
 
   const systemPrompt = buildSystemPrompt(promptMode, dataCtx ?? undefined);
 
-  // ----- Keyboard shortcuts -----
+  // Keyboard shortcuts
   const kbHandlers = useMemo(
     () => ({
       toggleChat: () => setChatOpen((o) => !o),
@@ -125,12 +122,11 @@ export default function App() {
   );
   useKeyboardShortcuts(kbHandlers);
 
-  // ----- Chat → config action dispatch -----
+  // Chat → config action dispatch
   const handleAction = useCallback(async (action: ClaudeAction) => {
     try {
       switch (action.action) {
         case "suggest_template": {
-          // Init project from suggested template
           const home = prompt("Choose output directory:", `${action.template}_project`);
           if (!home) break;
           const res = await initProject(action.template, home);
@@ -140,19 +136,14 @@ export default function App() {
           break;
         }
         case "propose_dag_edges": {
-          // Navigate to DAG page — edges will be shown as proposals
-          // Store proposed edges for DAGView to pick up
           localStorage.setItem("sparc-proposed-edges", JSON.stringify(action.edges));
           navigate("DAG");
           setRefreshKey((k) => k + 1);
           break;
         }
         case "suggest_physics": {
-          // Write monotone constraints + bounds to config
           await saveConfig({
-            physics: {
-              monotone_constraints: action.monotonic_constraints,
-            },
+            physics: { monotone_constraints: action.monotonic_constraints },
           });
           navigate("Physics");
           setRefreshKey((k) => k + 1);
@@ -170,13 +161,13 @@ export default function App() {
     }
   }, [notif, project, navigate]);
 
-  if (!ready || project.rehydrating) return <Splash />;
+  if (!ready || project.rehydrating) return <Splash logoHue={logoHue} />;
 
   const renderPage = () => {
     switch (page) {
       case "Project":
         return (
-          <ProjectSetup
+          <ProjectPage
             projectPath={project.projectPath}
             onProjectLoaded={async (path, meta) => {
               await project.openProject(path, meta);
@@ -187,27 +178,25 @@ export default function App() {
           />
         );
       case "Data":
-        return <DataView key={refreshKey} onNavigateToProject={() => navigate("Project")} />;
+        return <DataPage key={refreshKey} />;
       case "Processing":
-        return <DataProcessingView key={refreshKey} />;
-      case "Config":
-        return <ProjectConfigPage />;
+        return <DataProcessingView />;
+      case "DAG":
+        return <DAGPage key={refreshKey} />;
       case "Variables":
-        return <VariablesView key={refreshKey} />;
+        return <VariableDashboardView />;
+      case "Physics":
+        return <PhysicsView />;
       case "CRS":
         return <CRSView />;
-      case "DAG":
-        return <DAGView key={refreshKey} />;
-      case "Physics":
-        return <PhysicsView key={refreshKey} />;
       case "Scenarios":
         return <ScenariosView />;
       case "Models":
         return <ModelsView />;
       case "Run":
-        return <PipelineRun />;
+        return <RunPage />;
       case "Results":
-        return <ResultsView />;
+        return <ResultsPage scenario={scenario} setScenario={setScenario} />;
       case "Report":
         return <ReportView />;
       case "Settings":
@@ -217,48 +206,32 @@ export default function App() {
 
   return (
     <NotificationContext.Provider value={notif}>
-    <PipelineProvider serverReady={ready}>
-    <div style={{ position: 'relative', height: '100vh', width: '100vw', overflow: 'hidden' }}>
-      <Shell
-        currentPage={page as PageName}
-        onNavigate={(p) => navigate(p)}
-        onToggleChat={() => setChatOpen((o) => !o)}
-        chatOpen={chatOpen}
-        status={status}
-        projectLoaded={project.projectLoaded}
-        projectName={project.projectPath?.split(/[\\/]/).pop()?.replace('.yml', '') ?? undefined}
-      >
-        {renderPage()}
-      </Shell>
+      <PipelineProvider serverReady={ready}>
+        <div style={{ position: "relative", height: "100vh", width: "100vw", overflow: "hidden" }}>
+          <Shell
+            currentPage={page === "Settings" ? "Project" : page}
+            onNavigate={navigate}
+            onToggleChat={() => setChatOpen((o) => !o)}
+            chatOpen={chatOpen}
+            projectLoaded={project.projectLoaded}
+            projectName={project.projectPath?.split(/[\\/]/).pop()?.replace(".yml", "") ?? undefined}
+            logoHue={logoHue}
+            status={status}
+          >
+            {renderPage()}
+          </Shell>
 
-      {/* Chat panel — anchored to sidebar, slide-up */}
-      {chatOpen && (
-        <div
-          className="chat-slide-in"
-          style={{
-            position: 'absolute',
-            left: 244,
-            bottom: 0,
-            width: 360,
-            height: 'min(420px, calc(100% - 48px))',
-            maxHeight: 'calc(100% - 48px)',
-            background: '#fff',
-            border: '1px solid var(--color-sparc-line)',
-            borderRadius: '8px 8px 0 0',
-            display: 'flex',
-            flexDirection: 'column',
-            zIndex: 40,
-            boxShadow: '0 -8px 24px rgba(0,0,0,0.08)',
-            overflow: 'hidden',
-          }}
-        >
-          <ChatPanel onAction={handleAction} systemPrompt={systemPrompt} onClose={() => setChatOpen(false)} />
+          {chatOpen && (
+            <ChatPanel
+              onAction={handleAction}
+              systemPrompt={systemPrompt}
+              onClose={() => setChatOpen(false)}
+            />
+          )}
+
+          <NotificationBanner />
         </div>
-      )}
-
-      <NotificationBanner />
-    </div>
-    </PipelineProvider>
+      </PipelineProvider>
     </NotificationContext.Provider>
   );
 }
