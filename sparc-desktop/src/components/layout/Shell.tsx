@@ -12,18 +12,21 @@ interface ShellProps {
   status: HealthResponse | null;
   projectLoaded?: boolean;
   projectName?: string;
+  projectEpsg?: string;
+  projectDomain?: string;
   children: ReactNode;
 }
 
 export default function Shell({
   currentPage,
   onNavigate,
-  onSettings,
   onToggleChat,
   chatOpen,
   status,
   projectLoaded,
   projectName,
+  projectEpsg,
+  projectDomain,
   children,
 }: ShellProps) {
   return (
@@ -31,13 +34,14 @@ export default function Shell({
       <Sidebar
         currentPage={currentPage}
         onNavigate={onNavigate}
-        onSettings={onSettings}
         onToggleChat={onToggleChat}
         chatOpen={chatOpen}
         projectLoaded={projectLoaded}
         projectName={projectName}
+        projectEpsg={projectEpsg}
+        projectDomain={projectDomain}
       />
-      <div className="flex flex-1 flex-col min-w-0">
+      <div className="flex flex-1 flex-col min-w-0" style={{ position: 'relative' }}>
         <Topbar status={status} currentPage={currentPage} />
         <main className="scroll relative flex-1 overflow-auto grid-paper" style={{ padding: '20px 22px' }}>
           {children}

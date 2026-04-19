@@ -7,18 +7,16 @@ interface TopbarProps {
   currentPage?: string;
 }
 
-function StatusPill({ label, ok, detail }: { label: string; ok: boolean; detail?: string }) {
+function StatusPill({ color, label, value }: { color: string; label: string; value: string }) {
   return (
-    <span
-      className="mono inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5"
+    <div
+      className="mono"
       style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
         fontSize: 10,
-        fontWeight: 600,
-        letterSpacing: '0.06em',
-        textTransform: 'uppercase' as const,
-        borderColor: ok ? 'var(--color-sparc-line)' : 'rgba(231,60,37,0.3)',
-        background: ok ? '#fff' : 'rgba(231,60,37,0.06)',
-        color: ok ? 'var(--color-sparc-ink-2)' : 'var(--color-sparc-crimson)',
+        color: 'var(--color-sparc-muted)',
       }}
     >
       <span
@@ -26,47 +24,60 @@ function StatusPill({ label, ok, detail }: { label: string; ok: boolean; detail?
           width: 6,
           height: 6,
           borderRadius: '50%',
-          background: ok ? '#22c55e' : 'var(--color-sparc-crimson)',
-          display: 'inline-block',
+          background: color,
         }}
       />
-      {label}
-      {detail && (
-        <span style={{ color: 'var(--color-sparc-muted)', fontWeight: 400 }}>
-          {detail}
-        </span>
-      )}
-    </span>
+      <span style={{ letterSpacing: '0.1em', textTransform: 'uppercase' }}>{label}</span>
+      <span style={{ color: 'var(--color-sparc-ink-2)' }}>{value}</span>
+    </div>
   );
 }
 
 export default function Topbar({ status, children, currentPage }: TopbarProps) {
   return (
     <header
-      className="flex items-center justify-between border-b px-4"
       style={{
-        height: 40,
-        background: '#fff',
-        borderColor: 'var(--color-sparc-line)',
+        height: 42,
+        flexShrink: 0,
+        display: 'flex',
+        alignItems: 'center',
+        borderBottom: '1px solid var(--color-sparc-line)',
+        background: '#fdfbf7',
+        paddingRight: 10,
       }}
     >
       {/* Breadcrumb */}
-      <div className="flex items-center gap-1.5" style={{ fontSize: 12 }}>
-        <span className="font-semibold" style={{ color: 'var(--color-sparc-ink)' }}>
-          SPARC
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', flex: 1 }}>
+        <span
+          className="mono"
+          style={{
+            fontSize: 10,
+            color: 'var(--color-sparc-muted)',
+            letterSpacing: '0.12em',
+            textTransform: 'uppercase',
+          }}
+        >
+          sparc · pipeline
         </span>
         {currentPage && (
           <>
-            <span style={{ color: 'var(--color-sparc-line)' }}>/</span>
-            <span style={{ color: 'var(--color-sparc-muted)' }}>{currentPage}</span>
+            <span style={{ fontSize: 11, color: 'var(--color-sparc-line)' }}>/</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-sparc-ink)' }}>{currentPage}</span>
           </>
         )}
         {status?.is_running && (
           <>
-            <span style={{ color: 'var(--color-sparc-line)', margin: '0 4px' }}>·</span>
+            <span style={{ fontSize: 11, color: 'var(--color-sparc-line)', margin: '0 2px' }}>·</span>
             <span
-              className="mono inline-flex items-center gap-1.5 font-semibold"
-              style={{ color: 'var(--color-sparc-crimson)', fontSize: 11 }}
+              className="mono"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                color: 'var(--color-sparc-crimson)',
+                fontSize: 11,
+                fontWeight: 600,
+              }}
             >
               <span
                 className="animate-pulse"
@@ -84,14 +95,23 @@ export default function Topbar({ status, children, currentPage }: TopbarProps) {
         )}
       </div>
 
-      {/* Status pills + children */}
-      <div className="flex items-center gap-2">
+      {/* Status pills */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
         <StatusPill
+          color="var(--color-sparc-crimson)"
           label="Sidecar"
-          ok={status?.project_loaded ?? false}
-          detail={status?.project_loaded ? '8008' : 'off'}
+          value={status?.project_loaded ? 'ready · :8008' : 'off'}
         />
-        <StatusPill label="GPU" ok={false} detail="cpu" />
+        <StatusPill
+          color="var(--color-sparc-amber)"
+          label="GPU"
+          value="cpu"
+        />
+        <StatusPill
+          color="var(--color-sparc-purple)"
+          label="Claude"
+          value="haiku-4.5"
+        />
         {children}
       </div>
     </header>

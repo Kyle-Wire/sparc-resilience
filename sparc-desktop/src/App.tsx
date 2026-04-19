@@ -218,38 +218,44 @@ export default function App() {
   return (
     <NotificationContext.Provider value={notif}>
     <PipelineProvider serverReady={ready}>
-    <div className="flex h-screen">
+    <div style={{ position: 'relative', height: '100vh', width: '100vw', overflow: 'hidden' }}>
       <Shell
         currentPage={page as PageName}
         onNavigate={(p) => navigate(p)}
-        onSettings={() => navigate("Settings")}
         onToggleChat={() => setChatOpen((o) => !o)}
         chatOpen={chatOpen}
         status={status}
         projectLoaded={project.projectLoaded}
         projectName={project.projectPath?.split(/[\\/]/).pop()?.replace('.yml', '') ?? undefined}
       >
-        <div className="flex h-full gap-0">
-          {/* Main content */}
-          <div className="flex-1">
-            {renderPage()}
-          </div>
-        </div>
-
-        {/* Chat panel — anchored to sidebar, slide-up */}
-        {chatOpen && (
-          <div
-            className="chat-slide-in fixed bottom-0 z-40 w-96 overflow-hidden rounded-tr-xl border bg-white shadow-xl"
-            style={{
-              left: 244,
-              height: "min(520px, calc(100vh - 120px))",
-              borderColor: 'var(--color-sparc-line)',
-            }}
-          >
-            <ChatPanel onAction={handleAction} systemPrompt={systemPrompt} onClose={() => setChatOpen(false)} />
-          </div>
-        )}
+        {renderPage()}
       </Shell>
+
+      {/* Chat panel — anchored to sidebar, slide-up */}
+      {chatOpen && (
+        <div
+          className="chat-slide-in"
+          style={{
+            position: 'absolute',
+            left: 244,
+            bottom: 0,
+            width: 360,
+            height: 'min(420px, calc(100% - 48px))',
+            maxHeight: 'calc(100% - 48px)',
+            background: '#fff',
+            border: '1px solid var(--color-sparc-line)',
+            borderRadius: '8px 8px 0 0',
+            display: 'flex',
+            flexDirection: 'column',
+            zIndex: 40,
+            boxShadow: '0 -8px 24px rgba(0,0,0,0.08)',
+            overflow: 'hidden',
+          }}
+        >
+          <ChatPanel onAction={handleAction} systemPrompt={systemPrompt} onClose={() => setChatOpen(false)} />
+        </div>
+      )}
+
       <NotificationBanner />
     </div>
     </PipelineProvider>

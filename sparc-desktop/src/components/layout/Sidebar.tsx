@@ -1,13 +1,12 @@
-import { useState } from "react";
 import CubeLogo from "../brand/CubeLogo";
 
 // ---------------------------------------------------------------------------
-// Grouped navigation sections with kicker numbering
+// Grouped navigation sections — matches design prototype exactly
 // ---------------------------------------------------------------------------
 const SECTIONS = [
-  { label: "Setup",    kicker: "01–04", pages: ["Project", "Data", "Processing", "Config"] },
-  { label: "Analysis", kicker: "05–10", pages: ["DAG", "Variables", "Physics", "CRS", "Scenarios", "Models"] },
-  { label: "Pipeline", kicker: "11–13", pages: ["Run", "Results", "Report"] },
+  { label: "Setup",    pages: ["Project", "Data", "Processing"] },
+  { label: "Analysis", pages: ["DAG", "Variables", "Physics", "CRS", "Scenarios", "Models"] },
+  { label: "Pipeline", pages: ["Run", "Results", "Report"] },
 ] as const;
 
 /** Flat list derived from sections — keeps downstream consumers working. */
@@ -26,198 +25,216 @@ interface SidebarProps {
   chatOpen?: boolean;
   projectLoaded?: boolean;
   projectName?: string;
+  projectEpsg?: string;
+  projectDomain?: string;
 }
 
 export default function Sidebar({
   currentPage,
   onNavigate,
-  onSettings,
   onToggleChat,
   chatOpen,
   projectLoaded,
   projectName,
+  projectEpsg,
+  projectDomain,
 }: SidebarProps) {
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-
-  const toggleSection = (label: string) =>
-    setCollapsed((prev) => ({ ...prev, [label]: !prev[label] }));
-
-  let pageIndex = 0;
+  let idx = 0;
 
   return (
     <aside
-      className="flex h-full flex-col border-r"
       style={{
         width: 240,
+        flexShrink: 0,
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
         background: '#fdfbf7',
-        borderColor: 'var(--color-sparc-line)',
+        borderRight: '1px solid var(--color-sparc-line)',
       }}
     >
-      {/* Logo lockup: animated CubeLogo + wordmark */}
+      {/* Brand lockup */}
       <div
-        className="flex items-center gap-3 border-b px-4 py-4"
-        style={{ borderColor: 'var(--color-sparc-line)' }}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          padding: '14px 16px',
+          borderBottom: '1px solid var(--color-sparc-line)',
+        }}
       >
-        <CubeLogo size={36} animate hue="ink" intensity={0.6} />
-        <div className="flex flex-col leading-none">
-          <span className="text-sm font-extrabold tracking-tight" style={{ color: 'var(--color-sparc-ink)' }}>SPARC</span>
-          <span
-            className="mono text-[9.5px] font-medium uppercase"
-            style={{ letterSpacing: '0.2em', color: 'var(--color-sparc-muted)' }}
-          >
-            Labs · v0.4.2
-          </span>
+        <div style={{ width: 64, height: 64, marginTop: -2, marginLeft: -6 }}>
+          <CubeLogo size={64} animate hue="ink" intensity={0.7} />
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1, gap: 4 }}>
+          <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: '-0.01em' }}>SPARC</span>
+          <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.2em', color: 'var(--color-sparc-muted)' }}>LABS</span>
         </div>
       </div>
 
       {/* Project pill */}
-      <div
-        className="mx-3 mt-3 rounded-lg border px-3 py-2"
-        style={{
-          borderColor: projectLoaded ? 'var(--color-sparc-line)' : 'var(--color-sparc-amber)',
-          background: projectLoaded ? '#fff' : 'rgba(231,144,36,0.08)',
-        }}
-      >
+      <div style={{ padding: '10px 12px 4px' }}>
         <div
-          className="mono text-[9px] font-semibold uppercase"
-          style={{ letterSpacing: '0.12em', color: 'var(--color-sparc-muted)' }}
+          style={{
+            border: '1px dashed var(--color-sparc-line)',
+            background: '#fff',
+            borderRadius: 8,
+            padding: '8px 10px',
+          }}
         >
-          Active project
-        </div>
-        <div
-          className="mt-0.5 text-[12px] font-semibold truncate"
-          style={{ color: projectLoaded ? 'var(--color-sparc-ink)' : 'var(--color-sparc-amber)' }}
-        >
-          {projectLoaded ? (projectName ?? 'Unnamed Project') : 'No project loaded'}
+          <div
+            className="mono"
+            style={{ fontSize: 9, color: 'var(--color-sparc-muted)', textTransform: 'uppercase', letterSpacing: '0.12em' }}
+          >
+            active project
+          </div>
+          <div style={{ fontSize: 12, fontWeight: 700, marginTop: 3, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: projectLoaded ? 'var(--color-sparc-crimson)' : 'var(--color-sparc-amber)' }} />
+            {projectLoaded ? (projectName ?? 'Unnamed Project') : 'No project loaded'}
+          </div>
+          {projectLoaded && (
+            <div className="mono" style={{ fontSize: 10, color: 'var(--color-sparc-muted)', marginTop: 2 }}>
+              {projectDomain ?? 'project'} · {projectEpsg ?? 'EPSG:4326'}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Sectioned navigation */}
-      <nav className="scroll flex-1 overflow-y-auto py-2">
-        {SECTIONS.map((section, sectionIdx) => {
-          const isCollapsed = collapsed[section.label] ?? false;
-          const sectionActive = (section.pages as readonly string[]).includes(currentPage);
+      {/* Navigation */}
+      <nav className="scroll" style={{ flex: 1, overflowY: 'auto', padding: '6px 0 12px' }}>
+        {SECTIONS.map((section, si) => (
+          <div key={section.label} style={{ marginTop: si === 0 ? 4 : 10 }}>
+            {/* Section header */}
+            <div
+              style={{
+                padding: '4px 18px',
+                fontSize: 9.5,
+                fontWeight: 700,
+                letterSpacing: '0.16em',
+                color: 'var(--color-sparc-muted)',
+                textTransform: 'uppercase',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <span>{section.label}</span>
+              <span className="mono" style={{ fontSize: 9, opacity: 0.6 }}>
+                {String(si + 1).padStart(2, '0')}
+              </span>
+            </div>
 
-          return (
-            <div key={section.label} className={sectionIdx > 0 ? 'mt-1' : ''}>
-              {/* Section header */}
-              <button
-                onClick={() => toggleSection(section.label)}
-                className="flex w-full items-center justify-between px-4 py-1.5 group"
-              >
-                <span className="flex items-center gap-2">
-                  <span
-                    className="mono text-[9px] font-medium"
-                    style={{ letterSpacing: '0.1em', color: 'var(--color-sparc-muted)' }}
-                  >
-                    {section.kicker}
-                  </span>
-                  <span
-                    className="text-[10px] font-bold uppercase"
-                    style={{
-                      letterSpacing: '0.12em',
-                      color: sectionActive ? 'var(--color-sparc-crimson)' : 'var(--color-sparc-muted)',
-                    }}
-                  >
-                    {section.label}
-                  </span>
-                </span>
-                <span
-                  className="text-[10px] transition-transform"
+            {/* Section pages */}
+            {section.pages.map((page) => {
+              const n = ++idx;
+              const active = page === currentPage;
+              const disabled = page !== 'Project' && !projectLoaded;
+              return (
+                <button
+                  key={page}
+                  onClick={() => !disabled && onNavigate(page as PageName)}
+                  disabled={disabled}
                   style={{
-                    color: 'var(--color-sparc-line)',
-                    transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    width: '100%',
+                    textAlign: 'left',
+                    border: 'none',
+                    padding: '7px 12px 7px 16px',
+                    fontFamily: 'inherit',
+                    fontSize: 13,
+                    cursor: disabled ? 'not-allowed' : 'pointer',
+                    background: active ? 'var(--color-sparc-ink)' : 'transparent',
+                    color: disabled
+                      ? 'var(--color-sparc-line)'
+                      : active
+                        ? '#fff'
+                        : 'var(--color-sparc-ink-2)',
+                    fontWeight: active ? 600 : 500,
+                    transition: 'background 0.15s',
+                    opacity: disabled ? 0.5 : 1,
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!active && !disabled) e.currentTarget.style.background = 'rgba(0,0,0,0.05)';
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!active && !disabled) e.currentTarget.style.background = 'transparent';
                   }}
                 >
-                  ▾
-                </span>
-              </button>
-
-              {/* Section pages */}
-              {!isCollapsed &&
-                section.pages.map((page) => {
-                  const idx = pageIndex++;
-                  const active = page === currentPage;
-                  const disabled = page !== 'Project' && !projectLoaded;
-                  const num = String(idx + 1).padStart(2, '0');
-                  return (
-                    <button
-                      key={page}
-                      onClick={() => !disabled && onNavigate(page as PageName)}
-                      disabled={disabled}
-                      title={disabled ? 'Load a project first' : `Go to ${page}`}
-                      className="group flex w-full items-center gap-2.5 px-4 py-[5px] text-left transition-colors"
-                      style={{
-                        color: disabled
-                          ? 'var(--color-sparc-line)'
-                          : active
-                            ? '#fff'
-                            : 'var(--color-sparc-ink-2)',
-                        background: active ? 'var(--color-sparc-ink)' : 'transparent',
-                        borderRadius: active ? 4 : 0,
-                        marginLeft: active ? 8 : 0,
-                        marginRight: active ? 8 : 0,
-                        cursor: disabled ? 'not-allowed' : 'pointer',
-                        fontSize: 12.5,
-                        fontWeight: active ? 600 : 400,
-                      }}
-                    >
-                      <span
-                        className="mono flex items-center justify-center rounded text-[10px] font-bold"
-                        style={{
-                          width: 22,
-                          height: 22,
-                          borderRadius: 4,
-                          background: disabled
-                            ? 'rgba(0,0,0,0.03)'
-                            : active
-                              ? 'var(--color-sparc-crimson)'
-                              : 'rgba(0,0,0,0.05)',
-                          color: disabled
-                            ? 'var(--color-sparc-line)'
-                            : active
-                              ? '#fff'
-                              : 'var(--color-sparc-muted)',
-                        }}
-                      >
-                        {num}
-                      </span>
-                      {page}
-                    </button>
-                  );
-                })}
-
-              {isCollapsed && (() => { pageIndex += section.pages.length; return null; })()}
-            </div>
-          );
-        })}
+                  <span
+                    className="mono"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      width: 20,
+                      height: 18,
+                      borderRadius: 3,
+                      fontSize: 10,
+                      fontWeight: 600,
+                      background: disabled
+                        ? 'rgba(0,0,0,0.03)'
+                        : active
+                          ? 'var(--color-sparc-crimson)'
+                          : 'rgba(0,0,0,0.06)',
+                      color: disabled
+                        ? 'var(--color-sparc-line)'
+                        : active
+                          ? '#fff'
+                          : 'var(--color-sparc-muted)',
+                    }}
+                  >
+                    {String(n).padStart(2, '0')}
+                  </span>
+                  {page}
+                </button>
+              );
+            })}
+          </div>
+        ))}
       </nav>
 
       {/* AI Assistant toggle */}
-      <div className="border-t px-2 pt-2" style={{ borderColor: 'var(--color-sparc-line)' }}>
+      <div style={{ borderTop: '1px solid var(--color-sparc-line)', padding: 8 }}>
         <button
           onClick={onToggleChat}
-          className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-[12px] font-semibold transition-colors"
           style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            width: '100%',
+            textAlign: 'left',
+            padding: '8px 10px',
+            borderRadius: 6,
+            border: `1px solid ${chatOpen ? 'var(--color-sparc-ink)' : 'transparent'}`,
             background: chatOpen ? 'var(--color-sparc-ink)' : 'transparent',
             color: chatOpen ? '#fff' : 'var(--color-sparc-ink-2)',
-            border: chatOpen ? 'none' : '1px solid var(--color-sparc-line)',
+            fontSize: 12.5,
+            fontWeight: 600,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
           }}
         >
-          <CubeLogo size={20} animate={false} hue={chatOpen ? 'amber' : 'ink'} />
-          SPARC Assistant
-        </button>
-      </div>
-
-      {/* Settings */}
-      <div className="border-t p-2" style={{ borderColor: 'var(--color-sparc-line)' }}>
-        <button
-          onClick={onSettings}
-          className="flex w-full items-center gap-2.5 rounded px-3 py-2 text-left text-[12px] transition-colors"
-          style={{ color: 'var(--color-sparc-muted)' }}
-        >
-          <span className="text-xs">⚙</span>
-          Settings
+          <span style={{ width: 18, height: 18, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M2 4h12v7H9l-3 3v-3H2V4z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+            </svg>
+          </span>
+          Assistant
+          <span
+            className="mono"
+            style={{
+              marginLeft: 'auto',
+              fontSize: 9,
+              letterSpacing: '0.08em',
+              padding: '2px 6px',
+              borderRadius: 3,
+              background: chatOpen ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.06)',
+            }}
+          >
+            ⌘K
+          </span>
         </button>
       </div>
     </aside>

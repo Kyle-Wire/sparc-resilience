@@ -14,42 +14,46 @@ interface CardProps {
 }
 
 export function Card({ title, subtitle, actions, children, padding, style, className }: CardProps) {
-  const pad = padding !== undefined ? padding : 14;
+  const pad = padding !== undefined ? padding : 16;
   return (
     <div
       className={className}
       style={{
+        background: '#fff',
         border: '1px solid var(--color-sparc-line)',
         borderRadius: 8,
-        background: '#fff',
-        overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
         ...style,
       }}
     >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '10px 14px',
-          borderBottom: '1px dashed var(--color-sparc-line)',
-          background: '#fdfbf7',
-        }}
-      >
-        <div>
-          <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--color-sparc-ink)' }}>{title}</div>
-          {subtitle && (
-            <div
-              className="mono"
-              style={{ fontSize: 10, color: 'var(--color-sparc-muted)', marginTop: 1, letterSpacing: '0.04em' }}
-            >
-              {subtitle}
-            </div>
-          )}
+      {(title || actions) && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '10px 14px',
+            borderBottom: '1px solid var(--color-sparc-line)',
+            background: '#fdfbf7',
+            borderRadius: '8px 8px 0 0',
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {title && <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--color-sparc-ink)' }}>{title}</div>}
+            {subtitle && (
+              <div
+                className="mono"
+                style={{ fontSize: 10, color: 'var(--color-sparc-muted)', marginTop: 2 }}
+              >
+                {subtitle}
+              </div>
+            )}
+          </div>
+          {actions}
         </div>
-        {actions}
-      </div>
-      <div style={{ padding: pad }}>{children}</div>
+      )}
+      <div style={{ padding: pad, flex: 1, minHeight: 0 }}>{children}</div>
     </div>
   );
 }
@@ -71,8 +75,6 @@ export function SectionHeader({ kicker, label, right }: SectionHeaderProps) {
         alignItems: 'flex-end',
         justifyContent: 'space-between',
         marginBottom: 14,
-        borderBottom: '1px solid var(--color-sparc-line)',
-        paddingBottom: 10,
       }}
     >
       <div>
@@ -80,21 +82,20 @@ export function SectionHeader({ kicker, label, right }: SectionHeaderProps) {
           className="mono"
           style={{
             fontSize: 10,
-            fontWeight: 600,
-            letterSpacing: '0.14em',
-            textTransform: 'uppercase',
             color: 'var(--color-sparc-muted)',
+            letterSpacing: '0.16em',
+            textTransform: 'uppercase',
           }}
         >
           {kicker}
         </div>
         <div
           style={{
-            fontSize: 20,
+            fontSize: 22,
             fontWeight: 800,
             letterSpacing: '-0.02em',
             color: 'var(--color-sparc-ink)',
-            marginTop: 2,
+            marginTop: 3,
           }}
         >
           {label}
@@ -118,16 +119,14 @@ export function Tag({ color = 'var(--color-sparc-ink)', children }: TagProps) {
     <span
       className="mono"
       style={{
-        display: 'inline-block',
-        border: `1px solid ${color}`,
+        fontSize: 9.5,
+        padding: '2px 6px',
+        borderRadius: 3,
+        background: `${color}22`,
         color,
-        padding: '1px 6px',
-        borderRadius: 4,
-        fontSize: 10,
-        fontWeight: 600,
         letterSpacing: '0.06em',
         textTransform: 'uppercase',
-        lineHeight: '16px',
+        fontWeight: 600,
       }}
     >
       {children}
@@ -229,15 +228,24 @@ export function Btn({ children, primary, small, onClick, disabled }: BtnProps) {
    ---------------------------------------------------------------- */
 interface KeyValProps {
   label: string;
-  value: string | number;
-  mono?: boolean;
+  value: ReactNode;
 }
 
-export function KeyVal({ label, value, mono: useMono }: KeyValProps) {
+export function KeyVal({ label, value }: KeyValProps) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderTop: '1px dashed var(--color-sparc-line)' }}>
-      <span style={{ fontSize: 12, color: 'var(--color-sparc-muted)' }}>{label}</span>
-      <span className={useMono ? 'mono' : ''} style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-sparc-ink)' }}>{value}</span>
+    <div>
+      <div
+        className="mono"
+        style={{
+          fontSize: 9.5,
+          color: 'var(--color-sparc-muted)',
+          letterSpacing: '0.1em',
+          textTransform: 'uppercase',
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ fontSize: 13, fontWeight: 600, marginTop: 3 }}>{value}</div>
     </div>
   );
 }

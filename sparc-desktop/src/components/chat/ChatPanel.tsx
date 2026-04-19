@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useAnthropicChat } from "@/hooks/useAnthropicChat";
 import type { ClaudeAction } from "@/lib/types";
+import CubeLogo from "@/components/brand/CubeLogo";
 
 import { buildSystemPrompt } from "@/lib/prompts";
 
@@ -44,22 +45,42 @@ export default function ChatPanel({ onAction, systemPrompt, onClose }: ChatPanel
 
   if (showKeyInput || !apiKey) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-center">
-        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sparc-purple/10">
-          <span className="text-lg">💬</span>
-        </div>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24, textAlign: 'center' }}>
+        <CubeLogo size={48} animate={false} hue="ink" />
         <div>
-          <p className="text-sm font-medium text-sparc-gray-800">Connect AI Assistant</p>
-          <p className="mt-1 text-xs text-sparc-gray-500">Enter your Anthropic API key to enable AI-assisted project setup.</p>
+          <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-sparc-ink)' }}>Connect AI Assistant</p>
+          <p style={{ fontSize: 11, color: 'var(--color-sparc-muted)', marginTop: 4 }}>Enter your Anthropic API key to enable AI-assisted project setup.</p>
         </div>
         <input
           type="password"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
           placeholder="sk-ant-..."
-          className="w-full rounded-lg border border-sparc-gray-200 px-3 py-2 text-sm focus:border-sparc-purple focus:outline-none focus:ring-1 focus:ring-sparc-purple/30"
+          style={{
+            width: '100%',
+            padding: '7px 10px',
+            border: '1px solid var(--color-sparc-line)',
+            borderRadius: 5,
+            fontSize: 12,
+            fontFamily: 'inherit',
+          }}
         />
-        <button onClick={saveKey} disabled={!apiKey} className="rounded-lg bg-sparc-purple px-4 py-2 text-sm font-medium text-white hover:bg-sparc-magenta disabled:opacity-40">
+        <button
+          onClick={saveKey}
+          disabled={!apiKey}
+          style={{
+            background: 'var(--color-sparc-ink)',
+            color: '#fff',
+            border: 'none',
+            padding: '7px 14px',
+            borderRadius: 5,
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: apiKey ? 'pointer' : 'not-allowed',
+            fontFamily: 'inherit',
+            opacity: apiKey ? 1 : 0.4,
+          }}
+        >
           Save Key
         </button>
       </div>
@@ -67,33 +88,57 @@ export default function ChatPanel({ onAction, systemPrompt, onClose }: ChatPanel
   }
 
   return (
-    <div className="flex h-full flex-col bg-white">
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#fff' }}>
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-sparc-gray-200 px-4 py-3">
-        <div className="flex items-center gap-2">
-          <div className="flex h-6 w-6 items-center justify-center rounded-full bg-sparc-purple/10">
-            <span className="text-xs">💬</span>
-          </div>
-          <span className="text-sm font-semibold text-sparc-gray-800">AI Assistant</span>
+      <div
+        style={{
+          padding: '10px 14px',
+          borderBottom: '1px solid var(--color-sparc-line)',
+          display: 'flex',
+          alignItems: 'center',
+        }}
+      >
+        <div style={{ width: 28, height: 28, marginRight: 10 }}>
+          <CubeLogo size={28} animate={false} hue="ink" />
+        </div>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-sparc-ink)' }}>SPARC Assistant</div>
+          <div className="mono" style={{ fontSize: 9.5, color: 'var(--color-sparc-muted)' }}>claude-haiku-4.5 · dag mode</div>
         </div>
         {onClose && (
           <button
             onClick={onClose}
-            className="flex h-6 w-6 items-center justify-center rounded text-sparc-gray-400 hover:bg-sparc-gray-100 hover:text-sparc-gray-600"
+            style={{
+              marginLeft: 'auto',
+              border: 'none',
+              background: 'transparent',
+              fontSize: 16,
+              cursor: 'pointer',
+              color: 'var(--color-sparc-muted)',
+              padding: '0 4px',
+            }}
           >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M11 3L3 11M3 3l8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+            ×
           </button>
         )}
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-auto px-4 py-3 space-y-3">
+      <div
+        className="scroll"
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: 12,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+        }}
+      >
         {messages.length === 0 && (
-          <div className="flex flex-col items-center gap-3 pt-8 pb-4">
-            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-sparc-purple/10">
-              <span className="text-xl">✦</span>
-            </div>
-            <p className="text-xs text-sparc-gray-500 text-center leading-relaxed px-4">
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, paddingTop: 32, paddingBottom: 16 }}>
+            <CubeLogo size={48} animate hue="ink" intensity={0.4} />
+            <p style={{ fontSize: 12, color: 'var(--color-sparc-muted)', textAlign: 'center', lineHeight: 1.5, padding: '0 16px' }}>
               Ask Claude to help configure your project, build a DAG, or set physics constraints.
             </p>
           </div>
@@ -101,55 +146,108 @@ export default function ChatPanel({ onAction, systemPrompt, onClose }: ChatPanel
         {messages.map((msg, i) => (
           <div
             key={i}
-            className={`rounded-lg px-3 py-2.5 text-sm leading-relaxed ${
-              msg.role === "user"
-                ? "ml-8 bg-sparc-purple text-white"
-                : "mr-8 bg-sparc-gray-50 text-sparc-gray-800 border border-sparc-gray-100"
-            }`}
+            style={{
+              alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+              maxWidth: '85%',
+              background: msg.role === 'user' ? 'var(--color-sparc-ink)' : '#f7f4ee',
+              color: msg.role === 'user' ? '#fff' : 'var(--color-sparc-ink-2)',
+              padding: '7px 10px',
+              borderRadius: 7,
+              fontSize: 12,
+              lineHeight: 1.45,
+            }}
           >
-            <div className="whitespace-pre-wrap">{msg.content}</div>
+            <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
             {msg.actions && msg.actions.length > 0 && (
-              <div className={`mt-2 border-t pt-2 text-xs ${
-                msg.role === "user" ? "border-white/20 text-white/70" : "border-sparc-gray-200 text-sparc-gray-400"
-              }`}>
+              <div
+                style={{
+                  marginTop: 6,
+                  borderTop: `1px solid ${msg.role === 'user' ? 'rgba(255,255,255,0.2)' : 'var(--color-sparc-line)'}`,
+                  paddingTop: 6,
+                  fontSize: 10,
+                  color: msg.role === 'user' ? 'rgba(255,255,255,0.7)' : 'var(--color-sparc-muted)',
+                }}
+              >
                 {msg.actions.length} action(s) applied
               </div>
             )}
           </div>
         ))}
         {isLoading && (
-          <div className="mr-8 rounded-lg bg-sparc-gray-50 border border-sparc-gray-100 px-3 py-2.5 text-sm text-sparc-gray-400">
-            <span className="inline-flex gap-1">
-              <span className="animate-bounce" style={{ animationDelay: "0ms" }}>·</span>
-              <span className="animate-bounce" style={{ animationDelay: "150ms" }}>·</span>
-              <span className="animate-bounce" style={{ animationDelay: "300ms" }}>·</span>
+          <div
+            style={{
+              alignSelf: 'flex-start',
+              maxWidth: '85%',
+              background: '#f7f4ee',
+              padding: '7px 10px',
+              borderRadius: 7,
+              fontSize: 12,
+              color: 'var(--color-sparc-muted)',
+            }}
+          >
+            <span style={{ display: 'inline-flex', gap: 2 }}>
+              <span className="animate-bounce" style={{ animationDelay: '0ms' }}>·</span>
+              <span className="animate-bounce" style={{ animationDelay: '150ms' }}>·</span>
+              <span className="animate-bounce" style={{ animationDelay: '300ms' }}>·</span>
             </span>
           </div>
         )}
-        {error && <div className="rounded-lg border border-red-200 bg-red-50 p-2.5 text-xs text-red-600">{error}</div>}
+        {error && (
+          <div style={{ border: '1px solid rgba(231,60,37,0.3)', background: 'rgba(231,60,37,0.06)', padding: '7px 10px', borderRadius: 5, fontSize: 11, color: 'var(--color-sparc-crimson)' }}>
+            {error}
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
 
       {/* Input */}
-      <div className="border-t border-sparc-gray-200 p-3">
-        <div className="flex gap-2">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Ask Claude..."
-            rows={2}
-            className="flex-1 resize-none rounded-lg border border-sparc-gray-200 px-3 py-2 text-sm focus:border-sparc-purple focus:outline-none focus:ring-1 focus:ring-sparc-purple/30"
-          />
-          <button
-            onClick={handleSend}
-            disabled={isLoading || !input.trim()}
-            className="self-end rounded-lg bg-sparc-purple px-3 py-2 text-sm font-medium text-white hover:bg-sparc-magenta disabled:opacity-40"
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M14 2L7 9M14 2l-4.5 12-2-5.5L2 6.5 14 2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-          </button>
-        </div>
-        <button onClick={() => setShowKeyInput(true)} className="mt-1.5 text-[11px] text-sparc-gray-400 hover:text-sparc-gray-600 hover:underline">
+      <div style={{ padding: 10, borderTop: '1px solid var(--color-sparc-line)', display: 'flex', gap: 6 }}>
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Ask about your DAG, physics, or scenarios…"
+          style={{
+            flex: 1,
+            padding: '7px 10px',
+            border: '1px solid var(--color-sparc-line)',
+            borderRadius: 5,
+            fontSize: 12,
+            fontFamily: 'inherit',
+          }}
+        />
+        <button
+          onClick={handleSend}
+          disabled={isLoading || !input.trim()}
+          style={{
+            background: 'var(--color-sparc-ink)',
+            color: '#fff',
+            border: 'none',
+            padding: '0 12px',
+            borderRadius: 5,
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: isLoading || !input.trim() ? 'not-allowed' : 'pointer',
+            fontFamily: 'inherit',
+            opacity: isLoading || !input.trim() ? 0.4 : 1,
+          }}
+        >
+          Send
+        </button>
+      </div>
+      <div style={{ padding: '0 10px 6px' }}>
+        <button
+          onClick={() => setShowKeyInput(true)}
+          style={{
+            background: 'none',
+            border: 'none',
+            fontSize: 10,
+            color: 'var(--color-sparc-muted)',
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            padding: 0,
+          }}
+        >
           Change API key
         </button>
       </div>

@@ -47,14 +47,12 @@ body {
 }
 
 /* Custom scrollbar — warm theme */
-.scroll::-webkit-scrollbar { width: 6px; }
+.scroll::-webkit-scrollbar { width: 10px; height: 10px; }
 .scroll::-webkit-scrollbar-track { background: transparent; }
 .scroll::-webkit-scrollbar-thumb {
   background: var(--color-sparc-line);
-  border-radius: 3px;
-}
-.scroll::-webkit-scrollbar-thumb:hover {
-  background: var(--color-sparc-muted);
+  border-radius: 10px;
+  border: 2px solid var(--color-sparc-paper);
 }
 
 /* Grid-paper motif for workspace panels (brand guide) */
