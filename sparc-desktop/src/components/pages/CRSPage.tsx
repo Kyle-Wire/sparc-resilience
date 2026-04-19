@@ -1,14 +1,17 @@
 import { useState, useEffect, useRef } from "react";
 import { SectionHeader, Card, Btn, Stat, StatGrid, KeyVal } from "@/components/ui/DesignSystem";
-import { getConfig, saveConfig } from "@/lib/api";
+import { getConfig, saveConfig, dataSummary, dataGeoJson } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
+import type { DataSummary } from "@/lib/types";
 
 export default function CRSPage() {
   const [inputEpsg, setInputEpsg] = useState("4326");
   const [projectedEpsg, setProjectedEpsg] = useState("3438");
   const [inputName, setInputName] = useState("WGS 84");
   const [projectedName, setProjectedName] = useState("NAD83 / Rhode Island");
-  const [distortion, _setDistortion] = useState<number>(0.12);
+  const [distortion, _setDistortion] = useState<number | null>(null);
+  const [summary, setSummary] = useState<DataSummary | null>(null);
+  const [samplePts, setSamplePts] = useState<[number, number][]>([]);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const { notify } = useNotification();
 
@@ -20,9 +23,28 @@ export default function CRSPage() {
         if (crs.projected) setProjectedEpsg(String(crs.projected ?? "3438"));
       })
       .catch(() => {});
+
+    dataSummary()
+      .then((s) => setSummary(s))
+      .catch(() => {});
+
+    dataGeoJson()
+      .then((geo) => {
+        if (geo?.features) {
+          const pts: [number, number][] = [];
+          for (const f of geo.features.slice(0, 200)) {
+            const coords = f.geometry?.coordinates;
+            if (Array.isArray(coords) && coords.length >= 2) {
+              pts.push([coords[0] as number, coords[1] as number]);
+            }
+          }
+          setSamplePts(pts);
+        }
+      })
+      .catch(() => {});
   }, []);
 
-  // Draw reprojection preview
+  // Draw reprojection preview using real data
   useEffect(() => {
     const canvas = previewCanvasRef.current;
     if (!canvas) return;
@@ -48,33 +70,63 @@ export default function CRSPage() {
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
     }
 
-    // Draw point cloud
-    const cx = w / 2, cy = h / 2;
-    const nPts = 120;
-    ctx.fillStyle = "var(--crimson)";
-    for (let i = 0; i < nPts; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const r = Math.random() * Math.min(w, h) * 0.35;
-      const x = cx + Math.cos(angle) * r * (1 + Math.random() * 0.3);
-      const y = cy + Math.sin(angle) * r * (0.7 + Math.random() * 0.2);
-      ctx.globalAlpha = 0.4;
-      ctx.beginPath(); ctx.arc(x, y, 2.5, 0, Math.PI * 2); ctx.fill();
+    // Use real bbox from summary or sample points
+    const bbox = summary?.bbox;
+    const hasPts = samplePts.length > 0;
+    const hasData = bbox || hasPts;
+
+    if (!hasData) {
+      ctx.fillStyle = "var(--muted)";
+      ctx.font = "12px Inter";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("Load data to see spatial preview", w / 2, h / 2);
+      return;
     }
-    ctx.globalAlpha = 1;
+
+    // Compute bounds from bbox or sample points
+    let xMin: number, xMax: number, yMin: number, yMax: number;
+    if (bbox && Array.isArray(bbox) && bbox.length === 4) {
+      [xMin, yMin, xMax, yMax] = bbox;
+    } else {
+      xMin = Math.min(...samplePts.map(p => p[0]));
+      xMax = Math.max(...samplePts.map(p => p[0]));
+      yMin = Math.min(...samplePts.map(p => p[1]));
+      yMax = Math.max(...samplePts.map(p => p[1]));
+    }
+
+    const pad = 20;
+    const xRange = xMax - xMin || 1;
+    const yRange = yMax - yMin || 1;
+    const toCanvasX = (v: number) => pad + ((v - xMin) / xRange) * (w - 2 * pad);
+    const toCanvasY = (v: number) => h - pad - ((v - yMin) / yRange) * (h - 2 * pad);
+
+    // Draw points
+    if (hasPts) {
+      ctx.fillStyle = "var(--crimson)";
+      for (const [px, py] of samplePts) {
+        ctx.globalAlpha = 0.5;
+        ctx.beginPath();
+        ctx.arc(toCanvasX(px), toCanvasY(py), 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
 
     // Bounding box
+    const bx1 = toCanvasX(xMin), by1 = toCanvasY(yMax), bx2 = toCanvasX(xMax), by2 = toCanvasY(yMin);
     ctx.strokeStyle = "var(--purple)";
     ctx.lineWidth = 1.5;
     ctx.setLineDash([4, 4]);
-    ctx.strokeRect(cx - w * 0.32, cy - h * 0.28, w * 0.64, h * 0.56);
+    ctx.strokeRect(bx1, by1, bx2 - bx1, by2 - by1);
     ctx.setLineDash([]);
 
     // Label
     ctx.fillStyle = "var(--muted)";
     ctx.font = "10px 'JetBrains Mono'";
     ctx.textAlign = "center";
-    ctx.fillText(`EPSG:${inputEpsg} → EPSG:${projectedEpsg}`, w / 2, h - 8);
-  }, [inputEpsg, projectedEpsg]);
+    ctx.fillText(`EPSG:${inputEpsg} → EPSG:${projectedEpsg}`, w / 2, h - 4);
+  }, [inputEpsg, projectedEpsg, summary, samplePts]);
 
   const handleSaveCRS = async () => {
     try {
@@ -236,36 +288,43 @@ export default function CRSPage() {
           />
         </Card>
 
-        <Card title="Distortion check" subtitle={`area distortion at study site: ${distortion.toFixed(2)}%`}>
+        <Card title="Distortion check" subtitle={distortion != null ? `area distortion at study site: ${distortion.toFixed(2)}%` : "configure CRS to check distortion"}>
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <div>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                <span style={{ fontSize: 12, fontWeight: 600 }}>Area distortion</span>
-                <span className="mono" style={{ fontSize: 12, color: distortion < 0.5 ? "var(--purple)" : "var(--crimson)", fontWeight: 700 }}>
-                  {distortion.toFixed(2)}%
-                </span>
-              </div>
-              <div style={{ height: 8, background: "rgba(0,0,0,0.05)", borderRadius: 4, overflow: "hidden" }}>
-                <div
-                  style={{
-                    width: `${Math.min(distortion * 10, 100)}%`,
-                    height: "100%",
-                    background: distortion < 0.5 ? "var(--purple)" : "var(--crimson)",
-                    transition: "width 0.3s",
-                  }}
-                />
-              </div>
-            </div>
+            {distortion != null ? (
+              <>
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                    <span style={{ fontSize: 12, fontWeight: 600 }}>Area distortion</span>
+                    <span className="mono" style={{ fontSize: 12, color: distortion < 0.5 ? "var(--purple)" : "var(--crimson)", fontWeight: 700 }}>
+                      {distortion.toFixed(2)}%
+                    </span>
+                  </div>
+                  <div style={{ height: 8, background: "rgba(0,0,0,0.05)", borderRadius: 4, overflow: "hidden" }}>
+                    <div
+                      style={{
+                        width: `${Math.min(distortion * 10, 100)}%`,
+                        height: "100%",
+                        background: distortion < 0.5 ? "var(--purple)" : "var(--crimson)",
+                        transition: "width 0.3s",
+                      }}
+                    />
+                  </div>
+                </div>
 
-            <KeyVal label="Scale factor" value="0.999966" />
-            <KeyVal label="Central meridian" value="-71.5°" />
-            <KeyVal label="False easting" value="100,000 m" />
+                <KeyVal label="Input CRS" value={`EPSG:${inputEpsg}`} />
+                <KeyVal label="Projected CRS" value={`EPSG:${projectedEpsg}`} />
 
-            <div style={{ padding: "8px 10px", background: distortion < 0.5 ? "#f0faf0" : "#fff5f0", borderRadius: 6, fontSize: 12 }}>
-              {distortion < 0.5
-                ? "✓ Distortion within acceptable range for spatial analysis"
-                : "⚠ Consider a local CRS for better accuracy"}
-            </div>
+                <div style={{ padding: "8px 10px", background: distortion < 0.5 ? "#f0faf0" : "#fff5f0", borderRadius: 6, fontSize: 12 }}>
+                  {distortion < 0.5
+                    ? "✓ Distortion within acceptable range for spatial analysis"
+                    : "⚠ Consider a local CRS for better accuracy"}
+                </div>
+              </>
+            ) : (
+              <div style={{ color: "var(--muted)", fontSize: 12, fontStyle: "italic", textAlign: "center", padding: 20 }}>
+                Save CRS settings and run pipeline to compute distortion
+              </div>
+            )}
           </div>
         </Card>
       </div>

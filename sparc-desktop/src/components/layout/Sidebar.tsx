@@ -180,6 +180,57 @@ export default function Sidebar({
         ))}
       </nav>
 
+      {/* Settings gear */}
+      <div style={{ padding: "4px 8px 0" }}>
+        <button
+          onClick={() => onNavigate("Settings" as any)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            width: "100%",
+            textAlign: "left",
+            padding: "8px 10px",
+            borderRadius: 6,
+            border: "none",
+            background: currentPage === ("Settings" as any) ? "var(--ink)" : "transparent",
+            color: currentPage === ("Settings" as any) ? "#fff" : "var(--ink-2)",
+            fontSize: 12.5,
+            fontWeight: 600,
+            cursor: "pointer",
+            fontFamily: "inherit",
+            transition: "background 0.15s",
+          }}
+          onMouseEnter={(e) => {
+            if (currentPage !== ("Settings" as any)) e.currentTarget.style.background = "rgba(0,0,0,0.05)";
+          }}
+          onMouseLeave={(e) => {
+            if (currentPage !== ("Settings" as any)) e.currentTarget.style.background = "transparent";
+          }}
+        >
+          <span style={{ width: 18, height: 18, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M8 10a2 2 0 100-4 2 2 0 000 4z" stroke="currentColor" strokeWidth="1.3" />
+              <path d="M13.5 8c0-.3-.2-.6-.4-.8l1-1.6-1.2-1.2-1.6 1c-.2-.2-.5-.4-.8-.4V3.5h-1V5c-.3 0-.6.2-.8.4l-1.6-1L5.9 5.6l1 1.6c-.2.2-.4.5-.4.8H5v1h1.5c0 .3.2.6.4.8l-1 1.6 1.2 1.2 1.6-1c.2.2.5.4.8.4v1.5h1V12c.3 0 .6-.2.8-.4l1.6 1 1.2-1.2-1-1.6c.2-.2.4-.5.4-.8H14v-1h-1.5z" stroke="currentColor" strokeWidth="1.2" />
+            </svg>
+          </span>
+          Settings
+          <span
+            className="mono"
+            style={{
+              marginLeft: "auto",
+              fontSize: 9,
+              letterSpacing: "0.08em",
+              padding: "2px 6px",
+              borderRadius: 3,
+              background: currentPage === ("Settings" as any) ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.06)",
+            }}
+          >
+            ⌘,
+          </span>
+        </button>
+      </div>
+
       {/* AI assistant */}
       <div style={{ borderTop: "1px solid var(--line)", padding: 8 }}>
         <button

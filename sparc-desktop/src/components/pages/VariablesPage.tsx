@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SectionHeader, Card, Stat, Tag, Btn, StatGrid, thStyle, tdStyle } from "@/components/ui/DesignSystem";
-import { getConfig, dataSummary, saveConfig } from "@/lib/api";
+import { getConfig, dataSummary, dataPreview, saveConfig } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 
 interface VariableInfo {
@@ -24,12 +24,41 @@ export default function VariablesPage() {
   const { notify } = useNotification();
 
   useEffect(() => {
-    Promise.all([dataSummary(), getConfig()])
-      .then(([summary, config]) => {
+    Promise.all([dataSummary(), getConfig(), dataPreview(200)])
+      .then(([summary, config, preview]) => {
         const target = config.data?.target_column ?? "";
         const cols = summary.columns ?? [];
         const ns = summary.numeric_summary ?? {};
         const predictors = config.predictors ?? cols;
+        const rows = preview?.rows ?? [];
+
+        // Build column value arrays from preview rows
+        const colVals: Record<string, number[]> = {};
+        for (const col of cols) {
+          colVals[col] = rows
+            .map((r) => Number(r[col]))
+            .filter((v) => Number.isFinite(v));
+        }
+
+        // Compute Pearson correlation with target column
+        const targetVals = colVals[target] ?? [];
+        const tMean = targetVals.length ? targetVals.reduce((a, b) => a + b, 0) / targetVals.length : 0;
+        const tStd = targetVals.length
+          ? Math.sqrt(targetVals.reduce((a, b) => a + (b - tMean) ** 2, 0) / targetVals.length)
+          : 0;
+
+        function pearson(col: string): number {
+          const vals = colVals[col] ?? [];
+          if (!vals.length || !targetVals.length || tStd === 0) return 0;
+          // Align by index (same rows)
+          const n = Math.min(vals.length, targetVals.length);
+          const vMean = vals.slice(0, n).reduce((a, b) => a + b, 0) / n;
+          const vStd = Math.sqrt(vals.slice(0, n).reduce((a, b) => a + (b - vMean) ** 2, 0) / n);
+          if (vStd === 0) return 0;
+          let cov = 0;
+          for (let i = 0; i < n; i++) cov += (vals[i] - vMean) * (targetVals[i] - tMean);
+          return cov / (n * vStd * tStd);
+        }
 
         const vars: VariableInfo[] = cols.map((col) => {
           const s = ns[col];
@@ -46,8 +75,8 @@ export default function VariablesPage() {
             std: s?.std ?? 0,
             min: s?.min ?? 0,
             max: s?.max ?? 0,
-            corr: isTarget ? 1 : Math.random() * 0.8 - 0.1, // Will be replaced by real correlation
-            sparkline: Array.from({ length: 20 }, () => Math.random()),
+            corr: isTarget ? 1 : pearson(col),
+            sparkline: colVals[col] ?? [],
           };
         });
         setVariables(vars);
@@ -96,6 +125,7 @@ export default function VariablesPage() {
       <Card
         title="Variable ledger"
         subtitle={
+          variables.length > 0 ? (
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <input
               type="text"
@@ -129,8 +159,14 @@ export default function VariablesPage() {
               sort: {sortBy} {sortBy === "corr" ? "↓" : "↑"}
             </button>
           </div>
+          ) : undefined
         }
       >
+        {variables.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "40px 20px", color: "var(--muted)", fontSize: 13 }}>
+            Load a dataset to see variable details
+          </div>
+        ) : (
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr style={{ textAlign: "left", color: "var(--muted)" }}>
@@ -141,8 +177,8 @@ export default function VariablesPage() {
               <th style={thStyle}>Mean</th>
               <th style={thStyle}>Std</th>
               <th style={thStyle}>Range</th>
-              <th style={{ ...thStyle, textAlign: "right" }}>|ρ|</th>
-              <th style={{ ...thStyle, width: 80 }}>Sparkline</th>
+              <th style={{ ...thStyle, textAlign: "right" }} title="Absolute Pearson correlation with the target variable">|ρ|</th>
+              <th style={{ ...thStyle, width: 80 }}>Distribution</th>
             </tr>
           </thead>
           <tbody>
@@ -185,18 +221,19 @@ export default function VariablesPage() {
                   {Math.abs(v.corr).toFixed(3)}
                 </td>
                 <td style={tdStyle}>
-                  <Sparkline data={v.sparkline} />
+                  <MiniHistogram data={v.sparkline} />
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+        )}
       </Card>
     </div>
   );
 }
 
-function Sparkline({ data }: { data: number[] }) {
+function MiniHistogram({ data }: { data: number[] }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const canvas = ref.current;
@@ -209,18 +246,25 @@ function Sparkline({ data }: { data: number[] }) {
     ctx.scale(DPR, DPR);
     ctx.clearRect(0, 0, w, h);
 
+    // Bin data into 7 buckets
+    const nBins = 7;
     const min = Math.min(...data), max = Math.max(...data);
     const range = max - min || 1;
-    ctx.strokeStyle = "var(--crimson)";
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    data.forEach((v, i) => {
-      const x = (i / (data.length - 1)) * w;
-      const y = h - ((v - min) / range) * (h - 4) - 2;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.stroke();
+    const bins = new Array(nBins).fill(0);
+    for (const v of data) {
+      const idx = Math.min(nBins - 1, Math.floor(((v - min) / range) * nBins));
+      bins[idx]++;
+    }
+    const maxBin = Math.max(1, ...bins);
+    const barW = w / nBins;
+
+    for (let i = 0; i < nBins; i++) {
+      const barH = (bins[i] / maxBin) * (h - 2);
+      ctx.fillStyle = "var(--crimson)";
+      ctx.globalAlpha = 0.5 + 0.5 * (bins[i] / maxBin);
+      ctx.fillRect(i * barW + 1, h - barH, barW - 2, barH);
+    }
+    ctx.globalAlpha = 1;
   }, [data]);
 
   return <canvas ref={ref} style={{ width: 70, height: 20, display: "block" }} />;

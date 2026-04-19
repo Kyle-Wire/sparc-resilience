@@ -77,8 +77,12 @@ export default function ReportPage() {
           URL.revokeObjectURL(url);
         }
         notify("success", `${format} report generated`);
-      } catch {
-        notify("info", `${format} export simulated (backend not connected)`);
+      } catch (e) {
+        if (e instanceof TypeError && e.message.includes("fetch")) {
+          notify("error", "Cannot reach backend — is the SPARC server running?");
+        } else {
+          notify("error", e instanceof Error ? e.message : `${format} export failed`);
+        }
       } finally {
         setGenerating(false);
       }

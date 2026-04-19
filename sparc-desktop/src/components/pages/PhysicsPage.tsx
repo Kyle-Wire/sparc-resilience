@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { SectionHeader, Card, Tag, Btn, Stat, StatGrid } from "@/components/ui/DesignSystem";
-import { getConfig } from "@/lib/api";
+import { getConfig, saveConfig, getPdpCurves } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
+import type { PdpCurves } from "@/lib/types";
 
 interface MonotoneConstraint {
   variable: string;
@@ -19,6 +20,7 @@ export default function PhysicsPage() {
   const [constraints, setConstraints] = useState<MonotoneConstraint[]>([]);
   const [guardrails, setGuardrails] = useState<Guardrail[]>([]);
   const [selectedVar, setSelectedVar] = useState<string>("");
+  const [pdpData, setPdpData] = useState<PdpCurves | null>(null);
   const curveCanvasRef = useRef<HTMLCanvasElement>(null);
   const { notify } = useNotification();
 
@@ -32,43 +34,33 @@ export default function PhysicsPage() {
           direction: (v as number) > 0 ? "increasing" : (v as number) < 0 ? "decreasing" : "none",
           reason: (v as number) > 0 ? "Physical expectation: positive relationship" : (v as number) < 0 ? "Physical expectation: negative relationship" : "No constraint",
         }));
-        if (newConstraints.length === 0) {
-          // Default demo constraints for UHI
-          newConstraints.push(
-            { variable: "tree_canopy_pct", direction: "decreasing", reason: "More canopy → lower temperature" },
-            { variable: "impervious_pct", direction: "increasing", reason: "More impervious → higher temperature" },
-            { variable: "albedo", direction: "decreasing", reason: "Higher albedo → lower temperature" },
-            { variable: "building_height", direction: "increasing", reason: "Taller buildings → more heat trapping" },
-            { variable: "ndvi", direction: "decreasing", reason: "More vegetation → lower temperature" },
-          );
-        }
         setConstraints(newConstraints);
         if (newConstraints.length > 0) setSelectedVar(newConstraints[0].variable);
 
-        setGuardrails([
-          { label: "Max temperature anomaly", value: "±6.0 °C", description: "Physical bound on UHI intensity relative to baseline" },
-          { label: "Laplacian penalty weight", value: "λ = 0.01", description: "Spatial smoothness constraint for physics-informed regularization" },
-          { label: "GWEN normalization", value: "enabled", description: "Geographically weighted evidence normalization" },
-        ]);
+        // Derive guardrails from config
+        const bounds = physics.variable_bounds;
+        const litWeight = physics.literature_weight;
+        const gails: Guardrail[] = [];
+        if (bounds && typeof bounds === "object") {
+          for (const [k, v] of Object.entries(bounds)) {
+            const b = v as { min?: number; max?: number };
+            gails.push({ label: `Bound: ${k}`, value: `${b.min ?? "−∞"} … ${b.max ?? "∞"}`, description: `Physical bounds on ${k}` });
+          }
+        }
+        if (typeof litWeight === "number") {
+          gails.push({ label: "Literature weight", value: String(litWeight), description: "Weight given to literature-derived constraints" });
+        }
+        setGuardrails(gails);
       })
-      .catch(() => {
-        setConstraints([
-          { variable: "tree_canopy_pct", direction: "decreasing", reason: "More canopy → lower temperature" },
-          { variable: "impervious_pct", direction: "increasing", reason: "More impervious → higher temperature" },
-          { variable: "albedo", direction: "decreasing", reason: "Higher albedo → lower temperature" },
-          { variable: "building_height", direction: "increasing", reason: "Taller buildings → more heat trapping" },
-          { variable: "ndvi", direction: "decreasing", reason: "More vegetation → lower temperature" },
-        ]);
-        setSelectedVar("tree_canopy_pct");
-        setGuardrails([
-          { label: "Max temperature anomaly", value: "±6.0 °C", description: "Physical bound on UHI intensity" },
-          { label: "Laplacian penalty weight", value: "λ = 0.01", description: "Spatial smoothness constraint" },
-          { label: "GWEN normalization", value: "enabled", description: "Geographically weighted evidence normalization" },
-        ]);
-      });
+      .catch(() => {});
+
+    // Load real PDP curves
+    getPdpCurves()
+      .then((pdp) => setPdpData(pdp))
+      .catch(() => {});
   }, []);
 
-  // Draw response curve
+  // Draw response curve from real PDP data
   useEffect(() => {
     const canvas = curveCanvasRef.current;
     if (!canvas || !selectedVar) return;
@@ -78,10 +70,6 @@ export default function PhysicsPage() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.scale(DPR, DPR);
-
-    const constraint = constraints.find((c) => c.variable === selectedVar);
-    const isDecreasing = constraint?.direction === "decreasing";
-    const isNone = constraint?.direction === "none";
 
     // Axes
     ctx.strokeStyle = "var(--line)";
@@ -110,58 +98,66 @@ export default function PhysicsPage() {
     ctx.fillText("∂y / ∂x", 0, 0);
     ctx.restore();
 
-    // Curve
+    const pdpVar = pdpData?.[selectedVar];
+    const gridVals = pdpVar?.pdp?.grid_values ?? pdpVar?.grid_values;
+    const pdpVals = pdpVar?.pdp?.pdp_values ?? pdpVar?.pdp_values;
+    const pdpStd = pdpVar?.pdp?.pdp_std;
+
+    if (!gridVals || !pdpVals || gridVals.length === 0) {
+      ctx.fillStyle = "var(--muted)";
+      ctx.font = "12px Inter";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("Run pipeline to see response curves", w / 2, h / 2);
+      return;
+    }
+
+    const xMin = Math.min(...gridVals), xMax = Math.max(...gridVals);
+    const yMin = Math.min(...pdpVals), yMax = Math.max(...pdpVals);
+    const xRange = xMax - xMin || 1, yRange = yMax - yMin || 1;
+    const plotL = 42, plotR = w - 12, plotT = 14, plotB = h - 28;
+
+    const toX = (v: number) => plotL + ((v - xMin) / xRange) * (plotR - plotL);
+    const toY = (v: number) => plotB - ((v - yMin) / yRange) * (plotB - plotT);
+
+    // CI band from pdp_std
+    if (pdpStd && pdpStd.length === pdpVals.length) {
+      ctx.fillStyle = "rgba(231, 60, 37, 0.12)";
+      ctx.beginPath();
+      for (let i = 0; i < gridVals.length; i++) {
+        const x = toX(gridVals[i]), y = toY(pdpVals[i] + pdpStd[i]);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      for (let i = gridVals.length - 1; i >= 0; i--) {
+        ctx.lineTo(toX(gridVals[i]), toY(pdpVals[i] - pdpStd[i]));
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Main curve
     ctx.strokeStyle = "var(--crimson)";
     ctx.lineWidth = 2.5;
     ctx.beginPath();
-    const nPts = 60;
-    for (let i = 0; i <= nPts; i++) {
-      const t = i / nPts;
-      const x = 42 + t * (w - 54);
-      let y: number;
-      if (isNone) {
-        y = (h - 35) / 2 + Math.sin(t * 4 * Math.PI) * 30 + 10;
-      } else if (isDecreasing) {
-        y = 20 + (h - 55) * (1 - Math.exp(-3 * t)) * 0.85 + Math.sin(t * 6) * 5;
-      } else {
-        y = h - 35 - (h - 55) * (1 - Math.exp(-3 * t)) * 0.85 + Math.sin(t * 6) * 5;
-      }
+    for (let i = 0; i < gridVals.length; i++) {
+      const x = toX(gridVals[i]), y = toY(pdpVals[i]);
       if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
     ctx.stroke();
+  }, [selectedVar, constraints, pdpData]);
 
-    // CI band
-    ctx.fillStyle = "rgba(231, 60, 37, 0.12)";
-    ctx.beginPath();
-    for (let i = 0; i <= nPts; i++) {
-      const t = i / nPts;
-      const x = 42 + t * (w - 54);
-      let y: number;
-      if (isNone) {
-        y = (h - 35) / 2 + Math.sin(t * 4 * Math.PI) * 30 + 10 - 15;
-      } else if (isDecreasing) {
-        y = 20 + (h - 55) * (1 - Math.exp(-3 * t)) * 0.85 + Math.sin(t * 6) * 5 - 15;
-      } else {
-        y = h - 35 - (h - 55) * (1 - Math.exp(-3 * t)) * 0.85 + Math.sin(t * 6) * 5 - 15;
-      }
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  const handleSave = useCallback(async () => {
+    const mc: Record<string, number> = {};
+    for (const c of constraints) {
+      mc[c.variable] = c.direction === "increasing" ? 1 : c.direction === "decreasing" ? -1 : 0;
     }
-    for (let i = nPts; i >= 0; i--) {
-      const t = i / nPts;
-      const x = 42 + t * (w - 54);
-      let y: number;
-      if (isNone) {
-        y = (h - 35) / 2 + Math.sin(t * 4 * Math.PI) * 30 + 10 + 15;
-      } else if (isDecreasing) {
-        y = 20 + (h - 55) * (1 - Math.exp(-3 * t)) * 0.85 + Math.sin(t * 6) * 5 + 15;
-      } else {
-        y = h - 35 - (h - 55) * (1 - Math.exp(-3 * t)) * 0.85 + Math.sin(t * 6) * 5 + 15;
-      }
-      ctx.lineTo(x, y);
+    try {
+      await saveConfig({ physics: { monotone_constraints: mc } });
+      notify("success", "Physics constraints saved");
+    } catch {
+      notify("error", "Failed to save constraints");
     }
-    ctx.closePath();
-    ctx.fill();
-  }, [selectedVar, constraints]);
+  }, [constraints, notify]);
 
   const handleToggleDirection = (varName: string) => {
     setConstraints((prev) =>
@@ -181,7 +177,7 @@ export default function PhysicsPage() {
       <SectionHeader
         kicker="06 · analysis"
         label="Physics"
-        right={<Btn primary small onClick={() => notify("info", "Physics constraints saved")}>Save constraints</Btn>}
+        right={<Btn primary small onClick={handleSave}>Save constraints</Btn>}
       />
 
       <StatGrid>

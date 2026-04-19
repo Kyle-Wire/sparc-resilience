@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { SectionHeader, Card, Stat, StatGrid, thStyle, tdStyle } from "@/components/ui/DesignSystem";
-import { getConfig } from "@/lib/api";
+import { getResults, getGwenData } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
 
@@ -22,26 +22,56 @@ export default function ModelsPage() {
   const { notify: _notify } = useNotification();
 
   useEffect(() => {
-    // Try to fetch from API, fall back to demo data
-    getConfig()
-      .then(() => {
-        setModels([
-          { name: "OLS", fullName: "Ordinary Least Squares", r2: 0.72, rmse: 0.89, mae: 0.67, weight: 0.10, color: SPARC_RAMP_HEX[0] },
-          { name: "GWR", fullName: "Geographically Weighted Regression", r2: 0.86, rmse: 0.62, mae: 0.48, weight: 0.20, color: SPARC_RAMP_HEX[2] },
-          { name: "GWRF", fullName: "Geographically Weighted Random Forest", r2: 0.91, rmse: 0.51, mae: 0.39, weight: 0.30, color: SPARC_RAMP_HEX[4] },
-          { name: "GGPGAM", fullName: "Geographically Grouped GAM", r2: 0.89, rmse: 0.55, mae: 0.42, weight: 0.25, color: SPARC_RAMP_HEX[6] },
-          { name: "Ensemble", fullName: "Stacked Ensemble (GWEN)", r2: 0.93, rmse: 0.44, mae: 0.34, weight: 0.15, color: SPARC_RAMP_HEX[8] },
-        ]);
-      })
-      .catch(() => {
-        setModels([
-          { name: "OLS", fullName: "Ordinary Least Squares", r2: 0.72, rmse: 0.89, mae: 0.67, weight: 0.10, color: SPARC_RAMP_HEX[0] },
-          { name: "GWR", fullName: "Geographically Weighted Regression", r2: 0.86, rmse: 0.62, mae: 0.48, weight: 0.20, color: SPARC_RAMP_HEX[2] },
-          { name: "GWRF", fullName: "Geographically Weighted Random Forest", r2: 0.91, rmse: 0.51, mae: 0.39, weight: 0.30, color: SPARC_RAMP_HEX[4] },
-          { name: "GGPGAM", fullName: "Geographically Grouped GAM", r2: 0.89, rmse: 0.55, mae: 0.42, weight: 0.25, color: SPARC_RAMP_HEX[6] },
-          { name: "Ensemble", fullName: "Stacked Ensemble (GWEN)", r2: 0.93, rmse: 0.44, mae: 0.34, weight: 0.15, color: SPARC_RAMP_HEX[8] },
-        ]);
+    // Load results from each pipeline stage
+    const modelNames = ["OLS", "GWR", "GWRF", "GGPGAM", "Ensemble"];
+    const colorMap: Record<string, string> = {
+      OLS: SPARC_RAMP_HEX[0],
+      GWR: SPARC_RAMP_HEX[2],
+      GWRF: SPARC_RAMP_HEX[4],
+      GGPGAM: SPARC_RAMP_HEX[6],
+      Ensemble: SPARC_RAMP_HEX[8],
+    };
+
+    // Try stages 1-5
+    Promise.all(
+      [1, 2, 3, 4, 5].map((stage) =>
+        getResults(stage).catch(() => null),
+      ),
+    ).then((results) => {
+      const loaded: ModelInfo[] = [];
+      results.forEach((r: any, i: number) => {
+        if (!r) return;
+        const name = r.model_name ?? modelNames[i] ?? `Stage ${i + 1}`;
+        loaded.push({
+          name: r.model_name ?? modelNames[i] ?? name,
+          fullName: r.full_name ?? name,
+          r2: r.r2 ?? r.metrics?.r2 ?? 0,
+          rmse: r.rmse ?? r.metrics?.rmse ?? 0,
+          mae: r.mae ?? r.metrics?.mae ?? 0,
+          weight: r.weight ?? r.gwen_weight ?? 0,
+          color: colorMap[name] ?? SPARC_RAMP_HEX[i % SPARC_RAMP_HEX.length],
+        });
       });
+      if (loaded.length > 0) setModels(loaded);
+    });
+
+    // Load GWEN weights
+    getGwenData()
+      .then((data) => {
+        if (data?.rows) {
+          setModels((prev) => {
+            if (prev.length === 0) return prev;
+            return prev.map((m) => {
+              const row = data.rows.find((r: any) => r.model === m.name || r.name === m.name);
+              if (row && typeof (row as any).weight === "number") {
+                return { ...m, weight: (row as any).weight };
+              }
+              return m;
+            });
+          });
+        }
+      })
+      .catch(() => {});
   }, []);
 
   // Draw residuals scatter
@@ -56,7 +86,13 @@ export default function ModelsPage() {
     ctx.scale(DPR, DPR);
 
     const model = models.find((m) => m.name === selectedModel);
-    if (!model) return;
+    if (!model) {
+      ctx.fillStyle = "#6e6358";
+      ctx.font = "12px Inter, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("Run pipeline to see residuals", w / 2, h / 2);
+      return;
+    }
 
     // Axes
     ctx.strokeStyle = "var(--line)";
@@ -72,18 +108,26 @@ export default function ModelsPage() {
     ctx.beginPath(); ctx.moveTo(40, yMid); ctx.lineTo(w - 10, yMid); ctx.stroke();
     ctx.setLineDash([]);
 
-    // Scatter points
-    const nPts = 80;
+    // Show RMSE band (real residual scatter requires prediction-level data)
     const rmseScale = model.rmse;
-    for (let i = 0; i < nPts; i++) {
-      const x = 45 + Math.random() * (w - 60);
-      const residual = (Math.random() - 0.5) * 2 * rmseScale * 1.5;
-      const y = yMid - (residual / (rmseScale * 2)) * (h - 45);
-      ctx.globalAlpha = 0.5;
+    if (rmseScale > 0) {
+      const bandH = ((rmseScale) / (rmseScale * 2)) * (h - 45);
       ctx.fillStyle = model.color;
-      ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 0.1;
+      ctx.fillRect(40, yMid - bandH, w - 50, bandH * 2);
+      ctx.globalAlpha = 1;
+
+      // RMSE label
+      ctx.fillStyle = model.color;
+      ctx.font = "bold 10px 'JetBrains Mono'";
+      ctx.textAlign = "left";
+      ctx.fillText(`±RMSE = ${rmseScale.toFixed(3)}`, 45, yMid - bandH - 4);
+    } else {
+      ctx.fillStyle = "#6e6358";
+      ctx.font = "11px Inter, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("No residual data available", w / 2, h / 2);
     }
-    ctx.globalAlpha = 1;
 
     // Labels
     ctx.fillStyle = "var(--muted)";
@@ -125,7 +169,22 @@ export default function ModelsPage() {
     });
   }, [models]);
 
-  const best = models.reduce((a, b) => (a.r2 > b.r2 ? a : b), models[0] ?? { name: "—", r2: 0 });
+  const best = models.length > 0
+    ? models.reduce((a, b) => (a.r2 > b.r2 ? a : b), models[0])
+    : null;
+
+  if (models.length === 0) {
+    return (
+      <div>
+        <SectionHeader kicker="09 · analysis" label="Models" />
+        <Card title="Model results" subtitle="no models available">
+          <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>
+            Run the pipeline to see model results.
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -133,7 +192,7 @@ export default function ModelsPage() {
 
       <StatGrid>
         <Stat label="Models" value={String(models.length)} tint="var(--ink)" />
-        <Stat label="Best R²" value={best?.r2?.toFixed(3) ?? "—"} tint="var(--crimson)" sub={best?.name} />
+        <Stat label="Best R²" value={best?.r2?.toFixed(3) ?? "—"} tint="var(--crimson)" sub={best?.name ?? ""} />
         <Stat label="RMSE (best)" value={best?.rmse?.toFixed(3) ?? "—"} tint="var(--purple)" />
         <Stat label="Ensemble" value={models.find((m) => m.name === "Ensemble")?.r2?.toFixed(3) ?? "—"} tint="var(--amber)" />
       </StatGrid>

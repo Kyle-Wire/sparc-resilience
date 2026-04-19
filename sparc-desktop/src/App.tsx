@@ -200,7 +200,7 @@ export default function App() {
       <PipelineProvider serverReady={ready}>
         <div style={{ position: "relative", height: "100vh", width: "100vw", overflow: "hidden" }}>
           <Shell
-            currentPage={page === "Settings" ? "Project" : page}
+            currentPage={page as any}
             onNavigate={navigate}
             onToggleChat={() => setChatOpen((o) => !o)}
             chatOpen={chatOpen}

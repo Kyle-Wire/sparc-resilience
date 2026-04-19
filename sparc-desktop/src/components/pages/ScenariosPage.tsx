@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SectionHeader, Card, Tag, Btn, Stat, StatGrid } from "@/components/ui/DesignSystem";
-import { getConfig } from "@/lib/api";
+import { getConfig, getScenarioDetail, runScenarios } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
 
@@ -30,49 +30,56 @@ export default function ScenariosPage() {
   const { notify } = useNotification();
 
   useEffect(() => {
+    // Load scenarios from API results
+    getScenarioDetail()
+      .then((detail: any) => {
+        if (detail?.scenarios && Array.isArray(detail.scenarios) && detail.scenarios.length > 0) {
+          setScenarios(
+            detail.scenarios.map((sc: any, i: number) => ({
+              id: `s${i}`,
+              name: sc.name ?? `Scenario ${i + 1}`,
+              interventions: sc.interventions ?? {},
+              delta: sc.delta ?? sc.mean_delta ?? 0,
+              status: "computed" as const,
+            })),
+          );
+        }
+      })
+      .catch(() => {});
+
+    // Load config for intervention builder sliders
     getConfig()
       .then((config) => {
         const s = (config.scenarios ?? []) as any[];
-        if (s.length > 0) {
+        if (s.length > 0 && scenarios.length === 0) {
           setScenarios(
             s.map((sc: any, i: number) => ({
               id: `s${i}`,
               name: sc.name ?? `Scenario ${i + 1}`,
               interventions: sc.interventions ?? {},
               delta: sc.delta ?? 0,
-              status: i === 0 ? "baseline" : "draft",
+              status: "draft" as const,
             })),
           );
-        } else {
-          setScenarios([
-            { id: "baseline", name: "Baseline", interventions: {}, delta: 0, status: "baseline" },
-            { id: "s1", name: "Green canopy +20%", interventions: { tree_canopy_pct: 0.2 }, delta: -1.2, status: "computed" },
-            { id: "s2", name: "Cool roofs", interventions: { albedo: 0.15 }, delta: -0.8, status: "computed" },
-            { id: "s3", name: "Combined strategy", interventions: { tree_canopy_pct: 0.15, albedo: 0.1, impervious_pct: -0.1 }, delta: -2.1, status: "computed" },
-          ]);
         }
 
-        setSliders([
-          { variable: "tree_canopy_pct", min: -0.3, max: 0.5, step: 0.05, unit: "%", value: 0, baseline: 0.32 },
-          { variable: "impervious_pct", min: -0.3, max: 0.3, step: 0.05, unit: "%", value: 0, baseline: 0.45 },
-          { variable: "albedo", min: -0.1, max: 0.3, step: 0.02, unit: "", value: 0, baseline: 0.25 },
-          { variable: "building_height", min: -5, max: 10, step: 1, unit: "m", value: 0, baseline: 12 },
-        ]);
+        // Build sliders from predictors in config
+        const cols = config.predictors ?? [];
+        if (cols.length > 0) {
+          setSliders(
+            cols.slice(0, 6).map((col: string) => ({
+              variable: col,
+              min: -0.5,
+              max: 0.5,
+              step: 0.05,
+              unit: "",
+              value: 0,
+              baseline: 0,
+            })),
+          );
+        }
       })
-      .catch(() => {
-        setScenarios([
-          { id: "baseline", name: "Baseline", interventions: {}, delta: 0, status: "baseline" },
-          { id: "s1", name: "Green canopy +20%", interventions: { tree_canopy_pct: 0.2 }, delta: -1.2, status: "computed" },
-          { id: "s2", name: "Cool roofs", interventions: { albedo: 0.15 }, delta: -0.8, status: "computed" },
-          { id: "s3", name: "Combined strategy", interventions: { tree_canopy_pct: 0.15, albedo: 0.1, impervious_pct: -0.1 }, delta: -2.1, status: "computed" },
-        ]);
-        setSliders([
-          { variable: "tree_canopy_pct", min: -0.3, max: 0.5, step: 0.05, unit: "%", value: 0, baseline: 0.32 },
-          { variable: "impervious_pct", min: -0.3, max: 0.3, step: 0.05, unit: "%", value: 0, baseline: 0.45 },
-          { variable: "albedo", min: -0.1, max: 0.3, step: 0.02, unit: "", value: 0, baseline: 0.25 },
-          { variable: "building_height", min: -5, max: 10, step: 1, unit: "m", value: 0, baseline: 12 },
-        ]);
-      });
+      .catch(() => {});
   }, []);
 
   // Posterior histogram
@@ -87,49 +94,51 @@ export default function ScenariosPage() {
     ctx.scale(DPR, DPR);
 
     const active = scenarios[activeIdx];
-    if (!active) return;
-
-    // Draw histogram of simulated posterior
-    const nBins = 30;
-    const bins: number[] = [];
-    const mean = active.delta;
-    const std = 0.5;
-    for (let i = 0; i < nBins; i++) {
-      const x = mean - 3 * std + (i / nBins) * 6 * std;
-      bins.push(Math.exp(-0.5 * ((x - mean) / std) ** 2));
+    if (!active) {
+      ctx.fillStyle = "#6e6358";
+      ctx.font = "12px Inter, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("Add and compute scenarios to see results", w / 2, h / 2);
+      return;
     }
-    const maxBin = Math.max(...bins);
 
-    // Axes
-    ctx.strokeStyle = "var(--line)";
+    if (active.status !== "computed" || active.delta === 0) {
+      ctx.fillStyle = "#6e6358";
+      ctx.font = "12px Inter, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("Compute scenarios to see Δ distribution", w / 2, h / 2);
+      return;
+    }
+
+    // Show computed delta as a simple bar/label since we don't have posterior samples
+    ctx.strokeStyle = "#c9c2b3";
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(35, 10); ctx.lineTo(35, h - 25); ctx.lineTo(w - 10, h - 25);
     ctx.stroke();
 
-    // Bars
-    const barW = (w - 50) / nBins;
-    bins.forEach((v, i) => {
-      const barH = (v / maxBin) * (h - 45);
-      const x = 36 + i * barW;
-      const colorIdx = Math.floor((i / nBins) * (SPARC_RAMP_HEX.length - 1));
-      ctx.fillStyle = SPARC_RAMP_HEX[colorIdx] + "cc";
-      ctx.fillRect(x, h - 25 - barH, barW - 1, barH);
-    });
+    // Delta bar
+    const barW = Math.min(Math.abs(active.delta) * 40, (w - 50) * 0.8);
+    const barH = 24;
+    const barY = h / 2 - barH / 2;
+    const midX = (w - 50) / 2 + 36;
+    const barX = active.delta < 0 ? midX - barW : midX;
+    const ci = active.delta < 0 ? 0 : SPARC_RAMP_HEX.length - 1;
+    ctx.fillStyle = SPARC_RAMP_HEX[ci] + "cc";
+    ctx.fillRect(barX, barY, barW, barH);
 
-    // Mean line
-    const meanX = 36 + ((0 - (mean - 3 * std)) / (6 * std)) * (w - 50);
-    ctx.strokeStyle = "var(--crimson)";
-    ctx.lineWidth = 2;
+    // Zero line
+    ctx.strokeStyle = "var(--muted)";
+    ctx.lineWidth = 1;
     ctx.setLineDash([4, 3]);
-    ctx.beginPath(); ctx.moveTo(meanX, 10); ctx.lineTo(meanX, h - 25); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(midX, 10); ctx.lineTo(midX, h - 25); ctx.stroke();
     ctx.setLineDash([]);
 
-    // Labels
-    ctx.fillStyle = "var(--muted)";
-    ctx.font = "9px 'JetBrains Mono'";
+    // Label
+    ctx.fillStyle = "#1a1416";
+    ctx.font = "bold 11px 'JetBrains Mono'";
     ctx.textAlign = "center";
-    ctx.fillText(`Δ target = ${mean.toFixed(1)}`, w / 2, h - 6);
+    ctx.fillText(`Δ = ${active.delta.toFixed(2)}`, w / 2, h - 6);
   }, [scenarios, activeIdx]);
 
   const handleSliderChange = useCallback((variable: string, value: number) => {
@@ -150,6 +159,29 @@ export default function ScenariosPage() {
     notify("success", `Scenario "${name}" added`);
   }, [sliders, scenarios, notify]);
 
+  const handleComputeAll = useCallback(async () => {
+    try {
+      notify("info", "Computing scenario deltas...");
+      const result = await runScenarios();
+      notify("success", `Computed ${result.n_scenarios} scenarios`);
+      // Refresh from API
+      const detail = await getScenarioDetail().catch(() => null);
+      if (detail?.scenarios) {
+        setScenarios(
+          (detail.scenarios as any[]).map((sc: any, i: number) => ({
+            id: `s${i}`,
+            name: sc.name ?? `Scenario ${i + 1}`,
+            interventions: sc.interventions ?? {},
+            delta: sc.delta ?? sc.mean_delta ?? 0,
+            status: "computed" as const,
+          })),
+        );
+      }
+    } catch (e) {
+      notify("error", e instanceof Error ? e.message : "Scenario computation failed");
+    }
+  }, [notify]);
+
   return (
     <div>
       <SectionHeader
@@ -158,7 +190,7 @@ export default function ScenariosPage() {
         right={
           <div style={{ display: "flex", gap: 8 }}>
             <Btn small onClick={handleAddScenario}>Add scenario</Btn>
-            <Btn primary small onClick={() => notify("info", "Computing scenario deltas...")}>Compute all</Btn>
+            <Btn primary small onClick={handleComputeAll}>Compute all</Btn>
           </div>
         }
       />
@@ -166,7 +198,7 @@ export default function ScenariosPage() {
       <StatGrid>
         <Stat label="Scenarios" value={String(scenarios.length)} tint="var(--ink)" />
         <Stat label="Computed" value={String(scenarios.filter((s) => s.status === "computed").length)} tint="var(--crimson)" />
-        <Stat label="Best Δ" value={`${Math.min(...scenarios.map((s) => s.delta)).toFixed(1)} °C`} tint="var(--purple)" />
+        <Stat label="Best Δ" value={scenarios.length ? `${Math.min(...scenarios.map((s) => s.delta)).toFixed(1)}` : "—"} tint="var(--purple)" />
         <Stat label="Variables" value={String(sliders.length)} tint="var(--amber)" />
       </StatGrid>
 

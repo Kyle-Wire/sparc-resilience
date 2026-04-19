@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SectionHeader, Card, Stat, Tag, Btn, StatGrid } from "@/components/ui/DesignSystem";
-import { dataSummary } from "@/lib/api";
+import { dataSummary, prepareData, getDataVersions, selectDataVersion, getConfig } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import type { DataSummary } from "@/lib/types";
+import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
 
 type Pathway = "preprocessed" | "spatial";
 
@@ -35,6 +36,16 @@ export default function ProcessingPage() {
 
   // Spatial builder state
   const [fishnetRes, setFishnetRes] = useState(30);
+  const [nFolds, setNFolds] = useState(5);
+
+  useEffect(() => {
+    getConfig()
+      .then((cfg) => {
+        const k = cfg?.pipeline?.n_spatial_folds;
+        if (typeof k === "number" && k > 0) setNFolds(k);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     dataSummary()
@@ -70,11 +81,18 @@ export default function ProcessingPage() {
     const cellW = w / nCols;
     const cellH = h / nBins;
 
-    // Draw grid with simulated missing patterns
+    // Draw grid — mark missing based on column-level missing count from summary
     for (let c = 0; c < nCols; c++) {
+      const colName = cols[c];
+      const colSummary = summary.numeric_summary?.[colName];
+      const totalCount = colSummary?.count ?? summary.row_count ?? nBins;
+      const missingFrac = totalCount < (summary.row_count ?? 0)
+        ? 1 - totalCount / (summary.row_count ?? 1)
+        : 0;
       for (let b = 0; b < nBins; b++) {
-        const missing = Math.random() < 0.03; // simulate sparse missing
-        ctx.fillStyle = missing ? "var(--crimson)" : `hsl(40, ${20 + b * 3}%, ${85 + Math.random() * 10}%)`;
+        // Show missing rows in crimson, present rows in warm neutral
+        const isMissingBin = missingFrac > 0 && b < Math.ceil(missingFrac * nBins);
+        ctx.fillStyle = isMissingBin ? "var(--crimson)" : `hsl(40, ${20 + b * 3}%, 88%)`;
         ctx.fillRect(c * cellW, b * cellH, cellW - 1, cellH - 1);
       }
     }
@@ -103,44 +121,74 @@ export default function ProcessingPage() {
     if (!ctx) return;
     ctx.scale(DPR, DPR);
 
-    const nFolds = 5;
     const nX = 10, nY = 6;
     const cellW = w / nX, cellH = h / nY;
-    const foldColors = ["#e94d9b", "#e79024", "#f0b632", "#602468", "#9e337d"];
 
     for (let y = 0; y < nY; y++) {
       for (let x = 0; x < nX; x++) {
         const fold = Math.floor(((x + y * 3) % nFolds));
-        ctx.fillStyle = foldColors[fold] + "66";
+        ctx.fillStyle = (SPARC_RAMP_HEX[fold % SPARC_RAMP_HEX.length]) + "66";
         ctx.fillRect(x * cellW + 1, y * cellH + 1, cellW - 2, cellH - 2);
+
+        // Label fold index
+        ctx.fillStyle = "var(--muted)";
+        ctx.font = "bold 9px JetBrains Mono";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(fold + 1), x * cellW + cellW / 2, y * cellH + cellH / 2);
       }
     }
-  }, []);
+  }, [nFolds]);
 
   const handleApplyAll = useCallback(async () => {
     notify("info", "Running processing pipeline...");
-    // Simulate progression
-    for (let i = 0; i < DEFAULT_STEPS.length; i++) {
+    // Mark first step as running
+    setSteps((prev) =>
+      prev.map((s, j) => ({ ...s, status: j === 0 ? "running" : "queued" as const })),
+    );
+    try {
+      const result = await prepareData({ raster_paths: [] });
+      // Mark all steps done on success
       setSteps((prev) =>
-        prev.map((s, j) => ({
-          ...s,
-          status: j < i ? "done" : j === i ? "running" : "queued",
-        })),
+        prev.map((s) => ({ ...s, status: "done" as const, rows: result.n_cells || s.rows })),
       );
-      await new Promise((r) => setTimeout(r, 400));
+      notify("success", `Processing complete — ${result.n_cells} cells, ${result.columns.length} columns`);
+      // Refresh summary
+      dataSummary().then(setSummary).catch(() => {});
+    } catch (e) {
+      notify("error", e instanceof Error ? e.message : "Processing failed");
+      setSteps((prev) => prev.map((s) => ({ ...s, status: "queued" as const })));
     }
-    setSteps((prev) => prev.map((s) => ({ ...s, status: "done" as const })));
-    notify("success", "Processing complete");
   }, [notify]);
 
-  const handleRevert = useCallback(() => {
-    setSteps(DEFAULT_STEPS);
-    notify("info", "Processing reverted");
+  const handleRevert = useCallback(async () => {
+    try {
+      const { versions } = await getDataVersions();
+      if (versions.length < 2) {
+        notify("info", "No previous version to revert to");
+        return;
+      }
+      // Select the earliest (original) version
+      await selectDataVersion(versions[0].version ?? 0);
+      setSteps(DEFAULT_STEPS);
+      dataSummary().then(setSummary).catch(() => {});
+      notify("success", "Reverted to original data");
+    } catch {
+      // If versioning not available, just reset UI
+      setSteps(DEFAULT_STEPS);
+      notify("info", "Processing reverted (local only)");
+    }
   }, [notify]);
 
   const nRows = summary?.row_count ?? 0;
   const nCols = summary?.columns?.length ?? 0;
-  const missingCount = 0;
+  // Compute total missing cells from numeric_summary: columns where count < row_count
+  const missingCount = summary
+    ? Object.values(summary.numeric_summary ?? {}).reduce(
+        (sum, s) => sum + Math.max(0, nRows - (s?.count ?? nRows)),
+        0,
+      )
+    : null;
 
   return (
     <div>
@@ -185,10 +233,10 @@ export default function ProcessingPage() {
       {pathway === "preprocessed" ? (
         <>
           <StatGrid>
-            <Stat label="Input Rows" value={nRows.toLocaleString()} tint="var(--ink)" />
-            <Stat label="After Clean" value={(nRows - 8).toLocaleString()} tint="var(--purple)" sub={`-8 duplicates`} />
-            <Stat label="Missing Filled" value={String(missingCount || 142)} tint="var(--amber)" sub={`k-NN · ${((missingCount || 142) / Math.max(1, nRows * nCols) * 100).toFixed(2)}% of cells`} />
-            <Stat label="Derived Features" value="+4" tint="var(--crimson)" sub={`${nCols + 4} total`} />
+            <Stat label="Input Rows" value={nRows ? nRows.toLocaleString() : "—"} tint="var(--ink)" />
+            <Stat label="Columns" value={nCols ? String(nCols) : "—"} tint="var(--purple)" />
+            <Stat label="Missing Cells" value={missingCount != null ? String(missingCount) : "—"} tint="var(--amber)" sub={missingCount != null && nRows && nCols ? `${(missingCount / Math.max(1, nRows * nCols) * 100).toFixed(2)}% of cells` : undefined} />
+            <Stat label="Spatial Folds" value={String(nFolds)} tint="var(--crimson)" />
           </StatGrid>
 
           <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 14 }}>
@@ -281,7 +329,7 @@ export default function ProcessingPage() {
                 />
               </Card>
 
-              <Card title="Fold preview" subtitle="5 spatial blocks">
+              <Card title="Fold preview" subtitle={`${nFolds} spatial blocks`}>
                 <canvas
                   ref={foldCanvasRef}
                   style={{ width: "100%", height: 140, display: "block" }}
