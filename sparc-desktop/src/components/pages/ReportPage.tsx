@@ -34,7 +34,6 @@ const EXPORT_CARDS: ExportCard[] = [
 
 export default function ReportPage() {
   const [sections, setSections] = useState(TOC_SECTIONS);
-  const [previewMode, setPreviewMode] = useState<"preview" | "toc">("toc");
   const [generating, setGenerating] = useState(false);
   const { notify } = useNotification();
 
@@ -54,7 +53,7 @@ export default function ReportPage() {
     async (format: string) => {
       const selected = sections.filter((s) => s.checked).map((s) => s.id);
       if (selected.length === 0) {
-        notify("warn", "Select at least one section");
+        notify("warning", "Select at least one section");
         return;
       }
       setGenerating(true);

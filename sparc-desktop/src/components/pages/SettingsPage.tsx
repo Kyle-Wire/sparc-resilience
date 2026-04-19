@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import { SectionHeader, Card, Btn, KeyVal, Tag } from "@/components/ui/DesignSystem";
+import { SectionHeader, Card, Btn, KeyVal } from "@/components/ui/DesignSystem";
 import { LOGO_HUES, PAPER_TONES, type LogoHue, type PaperTone, type ThemeSettings, loadTheme, applyTheme } from "@/lib/theme";
 import EasterEgg from "@/components/common/EasterEgg";
 import { useNotification } from "@/hooks/useNotifications";
@@ -53,28 +53,17 @@ export default function SettingsPage() {
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               {LOGO_HUES.map((hue) => (
                 <button
-                  key={hue}
-                  onClick={() => handleHueChange(hue)}
+                  key={hue.key}
+                  onClick={() => handleHueChange(hue.key)}
                   style={{
                     width: 32,
                     height: 32,
                     borderRadius: 6,
-                    border: `2px solid ${theme.logoHue === hue ? "var(--ink)" : "var(--line)"}`,
-                    background:
-                      hue === "ink"
-                        ? "var(--ink)"
-                        : hue === "crimson"
-                        ? "var(--crimson)"
-                        : hue === "purple"
-                        ? "var(--purple)"
-                        : hue === "magenta"
-                        ? "var(--magenta)"
-                        : hue === "amber"
-                        ? "var(--amber)"
-                        : "var(--gold)",
+                    border: `2px solid ${theme.logoHue === hue.key ? "var(--ink)" : "var(--line)"}`,
+                    background: hue.color,
                     cursor: "pointer",
                   }}
-                  title={hue}
+                  title={hue.label}
                 />
               ))}
             </div>
@@ -96,24 +85,17 @@ export default function SettingsPage() {
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               {PAPER_TONES.map((tone) => (
                 <button
-                  key={tone}
-                  onClick={() => handleToneChange(tone)}
+                  key={tone.key}
+                  onClick={() => handleToneChange(tone.key)}
                   style={{
                     width: 32,
                     height: 32,
                     borderRadius: 6,
-                    border: `2px solid ${theme.paperTone === tone ? "var(--ink)" : "var(--line)"}`,
-                    background:
-                      tone === "warm"
-                        ? "#f7f4ee"
-                        : tone === "cool"
-                        ? "#f0f2f6"
-                        : tone === "neutral"
-                        ? "#f5f5f5"
-                        : "#1a1416",
+                    border: `2px solid ${theme.paperTone === tone.key ? "var(--ink)" : "var(--line)"}`,
+                    background: tone.paper,
                     cursor: "pointer",
                   }}
-                  title={tone}
+                  title={tone.label}
                 />
               ))}
             </div>
@@ -232,7 +214,7 @@ export default function SettingsPage() {
                   background: "#1a1416",
                 }}
               >
-                <EasterEgg />
+                <EasterEgg onClose={() => setShowSnake(false)} />
               </div>
             )}
 

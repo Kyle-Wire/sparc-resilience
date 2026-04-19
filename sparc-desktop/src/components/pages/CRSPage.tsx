@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { SectionHeader, Card, Tag, Btn, Stat, StatGrid, KeyVal } from "@/components/ui/DesignSystem";
+import { SectionHeader, Card, Btn, Stat, StatGrid, KeyVal } from "@/components/ui/DesignSystem";
 import { getConfig, saveConfig } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 
@@ -8,7 +8,7 @@ export default function CRSPage() {
   const [projectedEpsg, setProjectedEpsg] = useState("3438");
   const [inputName, setInputName] = useState("WGS 84");
   const [projectedName, setProjectedName] = useState("NAD83 / Rhode Island");
-  const [distortion, setDistortion] = useState<number>(0.12);
+  const [distortion, _setDistortion] = useState<number>(0.12);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const { notify } = useNotification();
 
@@ -16,8 +16,8 @@ export default function CRSPage() {
     getConfig()
       .then((config) => {
         const crs = config.crs ?? {};
-        if (crs.input_epsg ?? crs.input) setInputEpsg(String(crs.input_epsg ?? crs.input ?? "4326"));
-        if (crs.projected_epsg ?? crs.projected) setProjectedEpsg(String(crs.projected_epsg ?? crs.projected ?? "3438"));
+        if (crs.input) setInputEpsg(String(crs.input ?? "4326"));
+        if (crs.projected) setProjectedEpsg(String(crs.projected ?? "3438"));
       })
       .catch(() => {});
   }, []);
@@ -79,7 +79,7 @@ export default function CRSPage() {
   const handleSaveCRS = async () => {
     try {
       await saveConfig({
-        crs: { input_epsg: Number(inputEpsg), projected_epsg: Number(projectedEpsg) },
+        crs: { input: String(inputEpsg), projected: String(projectedEpsg) },
       });
       notify("success", "CRS settings saved");
     } catch {

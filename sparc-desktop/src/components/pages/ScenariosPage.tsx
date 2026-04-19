@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { SectionHeader, Card, Tag, Btn, Stat, StatGrid, thStyle, tdStyle } from "@/components/ui/DesignSystem";
-import { getConfig, saveConfig } from "@/lib/api";
+import { SectionHeader, Card, Tag, Btn, Stat, StatGrid } from "@/components/ui/DesignSystem";
+import { getConfig } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
 
@@ -32,7 +32,7 @@ export default function ScenariosPage() {
   useEffect(() => {
     getConfig()
       .then((config) => {
-        const s = config.scenarios ?? [];
+        const s = (config.scenarios ?? []) as any[];
         if (s.length > 0) {
           setScenarios(
             s.map((sc: any, i: number) => ({

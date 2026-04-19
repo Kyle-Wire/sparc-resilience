@@ -1,10 +1,13 @@
 import { useState } from "react";
-import VariablesView from "@/components/pipeline/VariablesView";
-import CRSView from "@/components/pipeline/CRSView";
-import PhysicsView from "@/components/pipeline/PhysicsView";
-import ScenariosView from "@/components/pipeline/ScenariosView";
-import ModelsView from "@/components/pipeline/ModelsView";
-import ProjectMetadataForm from "@/components/project/ProjectMetadataForm";
+
+// These views are now standalone pages under /components/pages/.
+// This legacy config page is kept for backward compatibility but
+// uses inline placeholders instead of the removed pipeline views.
+const Placeholder = ({ label }: { label: string }) => (
+  <div style={{ padding: 24, color: "#6e6358", fontStyle: "italic" }}>
+    {label} — see the dedicated page instead.
+  </div>
+);
 
 const TABS = [
   { id: "metadata", label: "Metadata" },
@@ -27,12 +30,12 @@ export default function ProjectConfigPage({ initialTab }: Props) {
 
   const renderTab = () => {
     switch (tab) {
-      case "metadata": return <ProjectMetadataForm />;
-      case "variables": return <VariablesView />;
-      case "crs": return <CRSView />;
-      case "physics": return <PhysicsView />;
-      case "scenarios": return <ScenariosView />;
-      case "models": return <ModelsView />;
+      case "metadata": return <Placeholder label="Metadata" />;
+      case "variables": return <Placeholder label="Variables" />;
+      case "crs": return <Placeholder label="CRS" />;
+      case "physics": return <Placeholder label="Physics" />;
+      case "scenarios": return <Placeholder label="Scenarios" />;
+      case "models": return <Placeholder label="Models" />;
     }
   };
 

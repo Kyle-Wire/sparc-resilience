@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { SectionHeader, Card, Tag, Btn, Stat, StatGrid, thStyle, tdStyle } from "@/components/ui/DesignSystem";
+import { SectionHeader, Card, Stat, StatGrid, thStyle, tdStyle } from "@/components/ui/DesignSystem";
 import { getConfig } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
@@ -19,7 +19,7 @@ export default function ModelsPage() {
   const [selectedModel, setSelectedModel] = useState<string>("Ensemble");
   const residualsRef = useRef<HTMLCanvasElement>(null);
   const weightsRef = useRef<HTMLCanvasElement>(null);
-  const { notify } = useNotification();
+  const { notify: _notify } = useNotification();
 
   useEffect(() => {
     // Try to fetch from API, fall back to demo data

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { SectionHeader, Card, Stat, Tag, Btn, StatGrid, Placeholder } from "@/components/ui/DesignSystem";
-import { dataSummary, getConfig } from "@/lib/api";
+import { SectionHeader, Card, Stat, Tag, Btn, StatGrid } from "@/components/ui/DesignSystem";
+import { dataSummary } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import type { DataSummary } from "@/lib/types";
 
@@ -41,11 +41,11 @@ export default function ProcessingPage() {
       .then((s) => {
         setSummary(s);
         // Auto-populate steps from data
-        const nRows = s.n_rows ?? 0;
+        const nRows = s.row_count ?? 0;
         const nCols = s.columns?.length ?? 0;
         setSteps((prev) =>
           prev.map((step, i) => {
-            if (i === 0) return { ...step, detail: `${s.file_path ?? "data"} · ${nCols} columns`, rows: nRows, status: "done" };
+            if (i === 0) return { ...step, detail: `data · ${nCols} columns`, rows: nRows, status: "done" };
             return step;
           }),
         );
@@ -138,9 +138,9 @@ export default function ProcessingPage() {
     notify("info", "Processing reverted");
   }, [notify]);
 
-  const nRows = summary?.n_rows ?? 0;
+  const nRows = summary?.row_count ?? 0;
   const nCols = summary?.columns?.length ?? 0;
-  const missingCount = summary?.missing_count ?? 0;
+  const missingCount = 0;
 
   return (
     <div>

@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { SectionHeader, Card, Stat, Tag, Btn, StatGrid, thStyle, tdStyle } from "@/components/ui/DesignSystem";
 import { getConfig, dataSummary, saveConfig } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
-import type { DataSummary } from "@/lib/types";
 
 interface VariableInfo {
   name: string;
