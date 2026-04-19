@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import type { HealthResponse } from "@/lib/types";
-import type { LogoHue } from "@/components/pipeline/SettingsView";
 import Sidebar, { type PageName } from "./Sidebar";
 import Topbar from "./Topbar";
 
@@ -12,7 +11,8 @@ interface ShellProps {
   children: ReactNode;
   projectLoaded?: boolean;
   projectName?: string;
-  logoHue?: LogoHue;
+  projectDomain?: string;
+  projectEpsg?: string;
   status?: HealthResponse | null;
 }
 
@@ -24,6 +24,8 @@ export default function Shell({
   children,
   projectLoaded,
   projectName,
+  projectDomain,
+  projectEpsg,
   status,
 }: ShellProps) {
   return (
@@ -42,6 +44,8 @@ export default function Shell({
         chatOpen={chatOpen}
         projectLoaded={projectLoaded}
         projectName={projectName}
+        projectDomain={projectDomain}
+        projectEpsg={projectEpsg}
       />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <Topbar page={currentPage} status={status} />

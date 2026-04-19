@@ -3,7 +3,7 @@ import type { ReactNode, CSSProperties } from "react";
 /* ----- Card ----- */
 interface CardProps {
   title?: string;
-  subtitle?: string;
+  subtitle?: string | ReactNode;
   actions?: ReactNode;
   children: ReactNode;
   padding?: number | string;
@@ -216,3 +216,57 @@ export function LegendDot({ color, label }: LegendDotProps) {
     </span>
   );
 }
+
+/* ----- StatGrid ----- */
+interface StatGridProps {
+  children: ReactNode;
+}
+
+export function StatGrid({ children }: StatGridProps) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
+      {children}
+    </div>
+  );
+}
+
+/* ----- Placeholder ----- */
+interface PlaceholderProps {
+  message?: string;
+}
+
+export function Placeholder({ message = "Available after pipeline run" }: PlaceholderProps) {
+  return (
+    <div
+      style={{
+        border: "1px dashed var(--line)",
+        background: "repeating-linear-gradient(135deg, rgba(0,0,0,0.015) 0 8px, transparent 8px 16px)",
+        borderRadius: 8,
+        padding: 40,
+        textAlign: "center",
+      }}
+    >
+      <div
+        className="mono"
+        style={{ fontSize: 10, color: "var(--muted)", letterSpacing: "0.14em", textTransform: "uppercase" }}
+      >
+        {message}
+      </div>
+    </div>
+  );
+}
+
+/* ----- Table helpers ----- */
+export const thStyle: CSSProperties = {
+  padding: "6px 8px",
+  fontWeight: 600,
+  fontSize: 10,
+  letterSpacing: "0.1em",
+  textTransform: "uppercase",
+  textAlign: "left",
+};
+
+export const tdStyle: CSSProperties = {
+  padding: "7px 8px",
+  fontSize: 12,
+};
