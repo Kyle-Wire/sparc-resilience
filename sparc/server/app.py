@@ -385,6 +385,87 @@ async def data_preview(n: int = Query(50, ge=1, le=500)):
     return {"rows": df.to_dict(orient="records"), "total": len(state.data)}
 
 
+@app.get("/crs/distortion")
+async def crs_distortion(
+    input_epsg: str = Query("4326"),
+    projected_epsg: str = Query(""),
+):
+    """Compute approximate area distortion at the study-area center using pyproj.
+
+    Returns linear scale factor k at the centroid plus estimated area distortion (%).
+    This endpoint does NOT require running the pipeline.
+    """
+    if not projected_epsg:
+        raise HTTPException(400, "projected_epsg is required")
+
+    try:
+        from pyproj import Transformer, CRS
+        import numpy as np
+
+        # Determine study-area center from loaded data or fall back to equator/PM
+        cx, cy = 0.0, 45.0  # defaults (lon, lat WGS84)
+        if state.data is not None and hasattr(state.data, "geometry"):
+            try:
+                import geopandas as gpd
+                gdf = state.data
+                if gdf.crs is not None and str(gdf.crs) != "EPSG:4326":
+                    gdf = gdf.to_crs(epsg=4326)
+                bounds = gdf.total_bounds  # minx, miny, maxx, maxy
+                cx = float((bounds[0] + bounds[2]) / 2)
+                cy = float((bounds[1] + bounds[3]) / 2)
+            except Exception:
+                pass
+        elif state.data_summary and "bbox" in (state.data_summary or {}):
+            bb = state.data_summary["bbox"]
+            if isinstance(bb, dict):
+                cx = (bb["minx"] + bb["maxx"]) / 2
+                cy = (bb["miny"] + bb["maxy"]) / 2
+
+        # Compute k (linear scale factor) numerically: transform two points 1 m apart
+        # in WGS84, see how far they are in projected CRS vs expected
+        delta_deg = 0.001  # ~100m along latitude
+        try:
+            t = Transformer.from_crs(
+                f"EPSG:{input_epsg.replace('EPSG:', '')}",
+                f"EPSG:{projected_epsg.replace('EPSG:', '')}",
+                always_xy=True,
+            )
+            x0, y0 = t.transform(cx, cy)
+            x1, y1 = t.transform(cx + delta_deg, cy)
+            x2, y2 = t.transform(cx, cy + delta_deg)
+
+            # Approximate ellipsoidal distance (metres) for the same delta_deg
+            from pyproj import Geod
+            geod = Geod(ellps="WGS84")
+            _, _, dist_x = geod.inv(cx, cy, cx + delta_deg, cy)
+            _, _, dist_y = geod.inv(cx, cy, cx, cy + delta_deg)
+
+            k_x = float(np.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2) / dist_x) if dist_x else 1.0
+            k_y = float(np.sqrt((x2 - x0) ** 2 + (y2 - y0) ** 2) / dist_y) if dist_y else 1.0
+            k_mean = (k_x + k_y) / 2
+            area_distortion_pct = float(abs(k_mean ** 2 - 1) * 100)
+
+            src_crs = CRS.from_epsg(int(input_epsg.replace("EPSG:", "")))
+            tgt_crs = CRS.from_epsg(int(projected_epsg.replace("EPSG:", "")))
+
+            return {
+                "center_lon": cx,
+                "center_lat": cy,
+                "k_x": k_x,
+                "k_y": k_y,
+                "k_mean": k_mean,
+                "area_distortion_pct": area_distortion_pct,
+                "input_crs_name": src_crs.name,
+                "projected_crs_name": tgt_crs.name,
+                "assessment": "acceptable" if area_distortion_pct < 0.5 else "high",
+            }
+        except Exception as e:
+            raise HTTPException(400, f"Projection error: {e}")
+
+    except ImportError:
+        raise HTTPException(500, "pyproj not available")
+
+
 @app.get("/data/geojson")
 async def data_geojson(variable: str | None = Query(None)):
     """Return raw data as GeoJSON, optionally filtered to a single variable for map coloring."""
@@ -1071,6 +1152,59 @@ async def get_pdp_curves():
         return _json.load(fh)
 
 
+@app.get("/results/scenarios/nuts_summary")
+async def get_nuts_summary():
+    """Return NUTS posterior summaries, convergence diagnostics, and BMA coefficients."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+    import pandas as pd
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+
+    bayesian_dir = paths.stage3_dir / "bayesian"
+    if not bayesian_dir.exists():
+        raise HTTPException(404, "No NUTS results found — run Stage 3 first")
+
+    result: dict = {}
+
+    # Acceptance rate & diagnostics from nuts_summary.json
+    nuts_json = bayesian_dir / "nuts_summary.json"
+    if nuts_json.exists():
+        import json as _json
+        with open(nuts_json) as fh:
+            ns = _json.load(fh)
+        result["acceptance_rate"] = ns.get("acceptance_rate")
+        result["n_divergences"] = ns.get("n_divergences")
+
+    # Per-treatment posteriors (already in original scale)
+    posteriors_csv = bayesian_dir / "parameter_posteriors.csv"
+    if posteriors_csv.exists():
+        df = pd.read_csv(posteriors_csv)
+        result["posteriors"] = df.to_dict(orient="records")
+
+    # Convergence diagnostics
+    conv_csv = bayesian_dir / "convergence_diagnostics.csv"
+    if conv_csv.exists():
+        df = pd.read_csv(conv_csv)
+        result["convergence"] = df.to_dict(orient="records")
+
+    # BMA coefficients
+    bma_csv = bayesian_dir / "bma_coefficients.csv"
+    if bma_csv.exists():
+        df = pd.read_csv(bma_csv)
+        result["bma"] = df.to_dict(orient="records")
+
+    if not result:
+        raise HTTPException(404, "No NUTS data found")
+
+    return result
+
+
 @app.get("/results/scenarios/detail")
 async def get_scenario_detail():
     """Return scenario results as GeoJSON with delta columns + summary table."""
@@ -1675,6 +1809,12 @@ async def get_results(stage: int, format: str = Query("json", regex="^(json|geoj
 async def get_predictions(stage: int, format: str = Query("geojson", regex="^(json|geojson)$")):
     """Return spatial predictions for a stage (optimized for deck.gl)."""
     result = state.get_result(stage)
+
+    # In-memory result for stage 2 is a performance dict without spatial data —
+    # fall through to disk load which finds the V2 neural predictions CSV.
+    if isinstance(result, dict) and "spatial" not in result and stage == 2:
+        result = None
+
     if result is None:
         result = _try_load_from_disk(stage)
         if result is None:
@@ -2584,19 +2724,41 @@ def _try_load_from_disk(stage: int) -> Any:
     if stage_dir is None or not stage_dir.exists():
         return None
 
-    # Look for common output files
-    for pattern in ["*.csv", "*.parquet", "*.geojson"]:
-        files = list(stage_dir.glob(pattern))
+    # For stage 2, look for V2 neural predictions CSV first (already in original scale)
+    if stage == 2:
+        neural_predictions = stage_dir / "v2_neural" / "predictions.csv"
+        if neural_predictions.exists():
+            import geopandas as gpd
+            from shapely.geometry import Point
+            df = pd.read_csv(neural_predictions)
+            if "lon" in df.columns and "lat" in df.columns:
+                geometry = [Point(xy) for xy in zip(df["lon"], df["lat"])]
+                gdf = gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
+                return gdf
+
+    # Look for common output files (recursive to catch subdirectories)
+    for pattern in ["*.gpkg", "*.geojson", "*.parquet", "*.csv"]:
+        files = sorted(stage_dir.rglob(pattern))
         if files:
             f = files[0]
-            if f.suffix == ".parquet":
+            if f.suffix == ".gpkg":
+                import geopandas as gpd
+                return gpd.read_file(f)
+            elif f.suffix == ".parquet":
                 import geopandas as gpd
                 return gpd.read_parquet(f)
             elif f.suffix == ".geojson":
                 import geopandas as gpd
                 return gpd.read_file(f)
             else:
-                return pd.read_csv(f)
+                df = pd.read_csv(f)
+                # If CSV has lon/lat, convert to GeoDataFrame
+                if "lon" in df.columns and "lat" in df.columns:
+                    import geopandas as gpd
+                    from shapely.geometry import Point
+                    geometry = [Point(xy) for xy in zip(df["lon"], df["lat"])]
+                    return gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
+                return df
     return None
 
 

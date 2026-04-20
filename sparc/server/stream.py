@@ -520,6 +520,8 @@ async def stream_stage(
     thread.start()
 
     session_log = SessionLogger(log_path)
+    # Track epoch emission cadence per training phase for throttling
+    _epoch_emit_every: dict[str, int] = {}
 
     try:
         while True:
@@ -531,12 +533,24 @@ async def stream_stage(
             if event.get("type") == "epoch_update":
                 epoch = event.get("epoch", 0)
                 n_epochs = event.get("n_epochs", 0)
+                phase = event.get("train_phase", "cv")
                 if epoch == 1 and n_epochs > 0:
                     eta.start("epoch", n_epochs)
+                    # Compute emit cadence: ~20 updates per training run
+                    _epoch_emit_every[phase] = max(1, n_epochs // 20)
                 eta_info = eta.update("epoch", epoch)
                 if eta_info:
                     event["eta_seconds"] = eta_info["eta_seconds"]
                     event["elapsed_seconds"] = eta_info["elapsed_seconds"]
+
+                # Throttle: only yield every Nth epoch (or first/last)
+                cadence = _epoch_emit_every.get(phase, 1)
+                is_last = (epoch == n_epochs)
+                if epoch % cadence != 0 and not is_last:
+                    # Still log to file and buffer, but don't stream to frontend
+                    session_log.log(event)
+                    state.buffer_event(event)
+                    continue
 
             # Log every event to persistent file
             session_log.log(event)

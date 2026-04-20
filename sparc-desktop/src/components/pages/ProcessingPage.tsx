@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { SectionHeader, Card, Stat, Tag, Btn, StatGrid } from "@/components/ui/DesignSystem";
+import { SectionHeader, Card, Stat, Tag, Btn, StatGrid, KeyVal } from "@/components/ui/DesignSystem";
 import { dataSummary, prepareData, getDataVersions, selectDataVersion, getConfig } from "@/lib/api";
+import { pickRasters, pickBoundary } from "@/lib/fileDialogs";
 import { useNotification } from "@/hooks/useNotifications";
 import type { DataSummary } from "@/lib/types";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
@@ -37,6 +38,81 @@ export default function ProcessingPage() {
   // Spatial builder state
   const [fishnetRes, setFishnetRes] = useState(30);
   const [nFolds, setNFolds] = useState(5);
+  const [sbBoundaryPath, setSbBoundaryPath] = useState<string | null>(null);
+  const [sbRasterPaths, setSbRasterPaths] = useState<string[]>([]);
+  const [sbStats, setSbStats] = useState("mean,std,min,max");
+  const [sbRunning, setSbRunning] = useState(false);
+  const [sbResult, setSbResult] = useState<{ n_cells: number; columns: string[]; csv_path: string } | null>(null);
+  const [sbStepStatus, setSbStepStatus] = useState<("pending" | "done" | "running" | "error")[]>(
+    new Array(5).fill("pending"),
+  );
+
+  const handlePickBoundary = useCallback(async () => {
+    const path = await pickBoundary();
+    if (path) setSbBoundaryPath(path);
+  }, []);
+
+  const handlePickRasters = useCallback(async () => {
+    const paths = await pickRasters();
+    if (paths) setSbRasterPaths((prev) => [...prev, ...paths]);
+  }, []);
+
+  const handleRemoveRaster = (i: number) => {
+    setSbRasterPaths((prev) => prev.filter((_, idx) => idx !== i));
+  };
+
+  const setSbStep = (idx: number, status: "pending" | "done" | "running" | "error") => {
+    setSbStepStatus((prev) => prev.map((s, i) => (i === idx ? status : s)));
+  };
+
+  const handleRunSpatialBuilder = useCallback(async () => {
+    if (!sbBoundaryPath) {
+      notify("Select a boundary file first", "error");
+      return;
+    }
+    if (sbRasterPaths.length === 0) {
+      notify("Add at least one raster", "error");
+      return;
+    }
+    setSbRunning(true);
+    setSbResult(null);
+    setSbStepStatus(new Array(5).fill("pending"));
+
+    const steps: Array<() => Promise<void>> = [
+      async () => { /* Validate inputs — just set done */ },
+      async () => { /* Create fishnet — done by prepareData */ },
+      async () => { /* Run zonal stats — done by prepareData */ },
+      async () => { /* Reproject — done by prepareData */ },
+      async () => { /* Export CSV */ },
+    ];
+
+    try {
+      for (let i = 0; i < steps.length - 1; i++) {
+        setSbStep(i, "running");
+        await steps[i]();
+        setSbStep(i, "done");
+      }
+
+      // Step 4 (final): actually run the data prep
+      setSbStep(4, "running");
+      const result = await prepareData({
+        boundary_path: sbBoundaryPath,
+        raster_paths: sbRasterPaths,
+        resolution: fishnetRes,
+        stats: sbStats,
+        set_as_data: true,
+      });
+      setSbStep(4, "done");
+      setSbResult(result);
+      notify(`Spatial data built — ${result.n_cells.toLocaleString()} cells, ${result.columns.length} columns`, "success");
+    } catch (e) {
+      const failedIdx = sbStepStatus.findIndex((s) => s === "running");
+      if (failedIdx >= 0) setSbStep(failedIdx, "error");
+      notify(e instanceof Error ? e.message : "Spatial builder failed", "error");
+    } finally {
+      setSbRunning(false);
+    }
+  }, [sbBoundaryPath, sbRasterPaths, fishnetRes, sbStats, sbStepStatus, notify]);
 
   useEffect(() => {
     getConfig()
@@ -141,7 +217,7 @@ export default function ProcessingPage() {
   }, [nFolds]);
 
   const handleApplyAll = useCallback(async () => {
-    notify("info", "Running processing pipeline...");
+    notify("Running processing pipeline…", "info");
     // Mark first step as running
     setSteps((prev) =>
       prev.map((s, j) => ({ ...s, status: j === 0 ? "running" : "queued" as const })),
@@ -152,11 +228,11 @@ export default function ProcessingPage() {
       setSteps((prev) =>
         prev.map((s) => ({ ...s, status: "done" as const, rows: result.n_cells || s.rows })),
       );
-      notify("success", `Processing complete — ${result.n_cells} cells, ${result.columns.length} columns`);
+      notify(`Processing complete — ${result.n_cells} cells, ${result.columns.length} columns`, "success");
       // Refresh summary
       dataSummary().then(setSummary).catch(() => {});
     } catch (e) {
-      notify("error", e instanceof Error ? e.message : "Processing failed");
+      notify(e instanceof Error ? e.message : "Processing failed", "error");
       setSteps((prev) => prev.map((s) => ({ ...s, status: "queued" as const })));
     }
   }, [notify]);
@@ -165,18 +241,18 @@ export default function ProcessingPage() {
     try {
       const { versions } = await getDataVersions();
       if (versions.length < 2) {
-        notify("info", "No previous version to revert to");
+        notify("No previous version to revert to", "info");
         return;
       }
       // Select the earliest (original) version
       await selectDataVersion(versions[0].version ?? 0);
       setSteps(DEFAULT_STEPS);
       dataSummary().then(setSummary).catch(() => {});
-      notify("success", "Reverted to original data");
+      notify("Reverted to original data", "success");
     } catch {
       // If versioning not available, just reset UI
       setSteps(DEFAULT_STEPS);
-      notify("info", "Processing reverted (local only)");
+      notify("Processing reverted (local only)", "info");
     }
   }, [notify]);
 
@@ -340,93 +416,157 @@ export default function ProcessingPage() {
         </>
       ) : (
         /* Spatial Data Builder pathway */
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-          <Card title="Upload spatial data" subtitle="rasters, shapefiles, and boundary layers">
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <UploadRow label="Rasters (.tif)" accept=".tif,.tiff" />
-              <UploadRow label="Shapefiles (.shp)" accept=".shp,.dbf,.prj,.shx" />
-              <UploadRow label="Boundary layer" accept=".shp,.geojson,.gpkg" />
+        <>
+          <StatGrid>
+            <Stat label="Boundary" value={sbBoundaryPath ? sbBoundaryPath.split(/[\\/]/).pop()! : "—"} tint="var(--ink)" />
+            <Stat label="Rasters" value={String(sbRasterPaths.length)} tint="var(--purple)" />
+            <Stat label="Resolution" value={`${fishnetRes} m`} tint="var(--amber)" />
+            <Stat label="Cells" value={sbResult ? sbResult.n_cells.toLocaleString() : "—"} tint="var(--crimson)" />
+          </StatGrid>
 
-              <div style={{ borderTop: "1px dashed var(--line)", paddingTop: 12 }}>
-                <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 6 }}>
-                  Fishnet resolution (m)
+          <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 14 }}>
+            <Card title="Inputs" subtitle="boundary layer + raster files">
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {/* Boundary picker */}
+                <div>
+                  <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>
+                    Boundary layer
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <div style={{ flex: 1, fontSize: 11.5, color: sbBoundaryPath ? "var(--ink)" : "var(--muted)", fontStyle: sbBoundaryPath ? "normal" : "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {sbBoundaryPath ? sbBoundaryPath.split(/[\\/]/).pop() : "No boundary selected"}
+                    </div>
+                    <button
+                      onClick={handlePickBoundary}
+                      style={{ padding: "5px 12px", border: "1px solid var(--line)", borderRadius: 4, fontSize: 11, cursor: "pointer", fontFamily: "inherit", background: "#fff", whiteSpace: "nowrap" }}
+                    >
+                      Browse…
+                    </button>
+                  </div>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <input
-                    type="range"
-                    min={10}
-                    max={500}
-                    step={10}
-                    value={fishnetRes}
-                    onChange={(e) => setFishnetRes(Number(e.target.value))}
-                    style={{ flex: 1 }}
-                  />
-                  <span className="mono" style={{ fontSize: 12, fontWeight: 600, width: 50, textAlign: "right" }}>
-                    {fishnetRes} m
-                  </span>
+
+                {/* Raster list */}
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                    <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                      Raster files (.tif)
+                    </div>
+                    <button
+                      onClick={handlePickRasters}
+                      style={{ padding: "3px 10px", background: "var(--ink)", color: "#fff", border: "none", borderRadius: 4, fontSize: 11, cursor: "pointer", fontWeight: 600 }}
+                    >
+                      + Add
+                    </button>
+                  </div>
+                  {sbRasterPaths.length === 0 ? (
+                    <div style={{ fontSize: 11.5, color: "var(--muted)", fontStyle: "italic", padding: "8px 0" }}>
+                      No rasters selected — click <strong>+ Add</strong>
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                      {sbRasterPaths.map((p, i) => (
+                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 0" }}>
+                          <span className="mono" style={{ flex: 1, fontSize: 10.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {p.split(/[\\/]/).pop()}
+                          </span>
+                          <button
+                            onClick={() => handleRemoveRaster(i)}
+                            style={{ width: 18, height: 18, border: "none", background: "none", cursor: "pointer", color: "var(--muted)", fontSize: 14, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
+
+                {/* Resolution + stats */}
+                <div style={{ borderTop: "1px dashed var(--line)", paddingTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div>
+                    <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>
+                      Fishnet resolution (m)
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <input
+                        type="range"
+                        min={10}
+                        max={500}
+                        step={10}
+                        value={fishnetRes}
+                        onChange={(e) => setFishnetRes(Number(e.target.value))}
+                        style={{ flex: 1 }}
+                      />
+                      <span className="mono" style={{ fontSize: 12, fontWeight: 700, width: 50, textAlign: "right" }}>
+                        {fishnetRes} m
+                      </span>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>
+                      Zonal statistics
+                    </div>
+                    <input
+                      type="text"
+                      value={sbStats}
+                      onChange={(e) => setSbStats(e.target.value)}
+                      placeholder="mean,std,min,max"
+                      style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "5px 8px", fontSize: 12, width: "100%", fontFamily: "inherit" }}
+                    />
+                  </div>
+                </div>
+
+                <Btn primary small onClick={handleRunSpatialBuilder} disabled={sbRunning}>
+                  {sbRunning ? "Building…" : "Build spatial data"}
+                </Btn>
               </div>
+            </Card>
 
-              <div style={{ display: "flex", gap: 8 }}>
-                <Btn small>Preview on map</Btn>
-                <Btn small>Run zonal stats</Btn>
-                <Btn small primary>Save as CSV</Btn>
-              </div>
-            </div>
-          </Card>
-
-          <Card title="Processing steps" subtitle="spatial data builder pipeline">
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {["Upload files", "Create fishnet grid", "Run summary statistics", "Reproject to target CRS", "Clip to boundary", "Preview & validate", "Export"].map((step, i) => (
-                <div key={step} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0", borderTop: i > 0 ? "1px dashed var(--line)" : "none" }}>
-                  <span className="mono" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 22, height: 22, borderRadius: 4, background: "rgba(0,0,0,0.05)", color: "var(--muted)", fontSize: 10, fontWeight: 700 }}>
-                    {i + 1}
-                  </span>
-                  <span style={{ fontSize: 12.5, fontWeight: 500 }}>{step}</span>
-                  <Tag color="var(--muted)">pending</Tag>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <Card title="Pipeline steps" subtitle="spatial data builder">
+                <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                  {["Validate inputs", "Create fishnet grid", "Run zonal statistics", "Reproject to target CRS", "Export CSV / GeoPackage"].map((step, i) => {
+                    const status = sbStepStatus[i];
+                    return (
+                      <div key={step} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderTop: i > 0 ? "1px dashed var(--line)" : "none" }}>
+                        <span
+                          className="mono"
+                          style={{
+                            display: "inline-flex", alignItems: "center", justifyContent: "center",
+                            width: 24, height: 24, borderRadius: 4,
+                            background: status === "done" ? "var(--ink)" : status === "running" ? "var(--crimson)" : status === "error" ? "#c0392b" : "rgba(0,0,0,0.05)",
+                            color: status === "pending" ? "var(--muted)" : "#fff",
+                            fontSize: 10, fontWeight: 700,
+                          }}
+                        >
+                          {i + 1}
+                        </span>
+                        <span style={{ flex: 1, fontSize: 12, fontWeight: 500 }}>{step}</span>
+                        <Tag color={status === "done" ? "var(--ink)" : status === "running" ? "var(--crimson)" : status === "error" ? "var(--crimson)" : "var(--muted)"}>
+                          {status}
+                        </Tag>
+                      </div>
+                    );
+                  })}
                 </div>
-              ))}
+              </Card>
+
+              {sbResult && (
+                <Card title="Result" subtitle={`${sbResult.n_cells.toLocaleString()} grid cells`}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    <KeyVal label="CSV path" value={sbResult.csv_path.split(/[\\/]/).pop() ?? sbResult.csv_path} />
+                    <KeyVal label="Cells" value={sbResult.n_cells.toLocaleString()} />
+                    <KeyVal label="Columns" value={String(sbResult.columns.length)} />
+                    <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 4, lineHeight: 1.6 }}>
+                      Data has been set as the project dataset. Navigate to <strong>Data</strong> page to verify.
+                    </div>
+                  </div>
+                </Card>
+              )}
             </div>
-          </Card>
-        </div>
+          </div>
+        </>
       )}
-    </div>
-  );
-}
-
-function UploadRow({ label, accept }: { label: string; accept: string }) {
-  const [file, setFile] = useState<string | null>(null);
-  return (
-    <div>
-      <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>
-        {label}
-      </div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <label
-          style={{
-            border: "1px dashed var(--line)",
-            borderRadius: 5,
-            padding: "6px 12px",
-            fontSize: 11,
-            cursor: "pointer",
-            flex: 1,
-            textAlign: "center",
-            color: file ? "var(--ink-2)" : "var(--muted)",
-            background: file ? "#fff8ef" : "#fff",
-          }}
-        >
-          {file ?? "Drop or click to select"}
-          <input
-            type="file"
-            accept={accept}
-            style={{ display: "none" }}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) setFile(f.name);
-            }}
-          />
-        </label>
-      </div>
     </div>
   );
 }

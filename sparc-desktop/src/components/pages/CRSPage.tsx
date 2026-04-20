@@ -1,15 +1,22 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { SectionHeader, Card, Btn, Stat, StatGrid, KeyVal } from "@/components/ui/DesignSystem";
-import { getConfig, saveConfig, dataSummary, dataGeoJson } from "@/lib/api";
+import { getConfig, saveConfig, dataSummary, dataGeoJson, checkCrsDistortion } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import type { DataSummary } from "@/lib/types";
+
+interface DistortionResult {
+  k_mean: number;
+  area_distortion_pct: number;
+  input_crs_name: string;
+  projected_crs_name: string;
+  assessment: string;
+}
 
 export default function CRSPage() {
   const [inputEpsg, setInputEpsg] = useState("4326");
   const [projectedEpsg, setProjectedEpsg] = useState("3438");
-  const [inputName, setInputName] = useState("WGS 84");
-  const [projectedName, setProjectedName] = useState("NAD83 / Rhode Island");
-  const [distortion, _setDistortion] = useState<number | null>(null);
+  const [distortionResult, setDistortionResult] = useState<DistortionResult | null>(null);
+  const [distortionLoading, setDistortionLoading] = useState(false);
   const [summary, setSummary] = useState<DataSummary | null>(null);
   const [samplePts, setSamplePts] = useState<[number, number][]>([]);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -19,8 +26,8 @@ export default function CRSPage() {
     getConfig()
       .then((config) => {
         const crs = config.crs ?? {};
-        if (crs.input) setInputEpsg(String(crs.input ?? "4326"));
-        if (crs.projected) setProjectedEpsg(String(crs.projected ?? "3438"));
+        if (crs.input) setInputEpsg(String(crs.input ?? "4326").replace("EPSG:", ""));
+        if (crs.projected) setProjectedEpsg(String(crs.projected ?? "3438").replace("EPSG:", ""));
       })
       .catch(() => {});
 
@@ -43,6 +50,19 @@ export default function CRSPage() {
       })
       .catch(() => {});
   }, []);
+
+  const handleCheckDistortion = useCallback(async () => {
+    if (!projectedEpsg) { notify("Projected EPSG is required", "error"); return; }
+    setDistortionLoading(true);
+    try {
+      const result = await checkCrsDistortion(inputEpsg, projectedEpsg);
+      setDistortionResult(result);
+    } catch {
+      notify("Could not compute distortion — check EPSG codes", "error");
+    } finally {
+      setDistortionLoading(false);
+    }
+  }, [inputEpsg, projectedEpsg, notify]);
 
   // Draw reprojection preview using real data
   useEffect(() => {
@@ -84,15 +104,17 @@ export default function CRSPage() {
       return;
     }
 
-    // Compute bounds from bbox or sample points
+    // Compute bounds from bbox object or sample points
     let xMin: number, xMax: number, yMin: number, yMax: number;
-    if (bbox && Array.isArray(bbox) && bbox.length === 4) {
-      [xMin, yMin, xMax, yMax] = bbox;
-    } else {
+    if (bbox && typeof bbox === "object" && "minx" in bbox) {
+      xMin = bbox.minx; yMin = bbox.miny; xMax = bbox.maxx; yMax = bbox.maxy;
+    } else if (hasPts) {
       xMin = Math.min(...samplePts.map(p => p[0]));
       xMax = Math.max(...samplePts.map(p => p[0]));
       yMin = Math.min(...samplePts.map(p => p[1]));
       yMax = Math.max(...samplePts.map(p => p[1]));
+    } else {
+      return;
     }
 
     const pad = 20;
@@ -131,27 +153,13 @@ export default function CRSPage() {
   const handleSaveCRS = async () => {
     try {
       await saveConfig({
-        crs: { input: String(inputEpsg), projected: String(projectedEpsg) },
+        crs: { input: `EPSG:${inputEpsg}`, projected: `EPSG:${projectedEpsg}` },
       });
-      notify("success", "CRS settings saved");
+      notify("CRS settings saved", "success");
     } catch {
-      notify("error", "Failed to save CRS");
+      notify("Failed to save CRS", "error");
     }
   };
-
-  const inputWkt = `GEOGCS["${inputName}",
-  DATUM["World Geodetic System 1984",
-    SPHEROID["WGS 84", 6378137.0, 298.257223563]],
-  PRIMEM["Greenwich", 0.0],
-  UNIT["degree", 0.017453292519943295]]`;
-
-  const projectedWkt = `PROJCS["${projectedName}",
-  GEOGCS["NAD83",
-    DATUM["North_American_Datum_1983",
-      SPHEROID["GRS 1980", 6378137.0, 298.257222101]]],
-  PROJECTION["Transverse_Mercator"],
-  PARAMETER["central_meridian", -71.5],
-  UNIT["US survey foot", 0.30480060960122]]`;
 
   return (
     <div>
@@ -164,165 +172,138 @@ export default function CRSPage() {
       <StatGrid>
         <Stat label="Input EPSG" value={inputEpsg} tint="var(--ink)" />
         <Stat label="Projected EPSG" value={projectedEpsg} tint="var(--crimson)" />
-        <Stat label="Distortion" value={distortion != null ? `${distortion.toFixed(2)}%` : "—"} tint={distortion != null && distortion > 0.5 ? "var(--crimson)" : "var(--purple)"} />
-        <Stat label="Unit" value="US ft" tint="var(--amber)" />
+        <Stat
+          label="Area Distortion"
+          value={distortionResult ? `${distortionResult.area_distortion_pct.toFixed(3)}%` : "—"}
+          tint={distortionResult && distortionResult.area_distortion_pct > 0.5 ? "var(--crimson)" : "var(--purple)"}
+        />
+        <Stat label="Scale Factor" value={distortionResult ? distortionResult.k_mean.toFixed(6) : "—"} tint="var(--amber)" />
       </StatGrid>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-        <Card title="Input CRS" subtitle={`EPSG:${inputEpsg} · ${inputName}`}>
+        <Card title="Input CRS" subtitle={`EPSG:${inputEpsg}${distortionResult ? ` · ${distortionResult.input_crs_name}` : ""}`}>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <div>
-                <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>
-                  EPSG Code
-                </div>
-                <input
-                  type="text"
-                  value={inputEpsg}
-                  onChange={(e) => setInputEpsg(e.target.value)}
-                  className="mono"
-                  style={{
-                    border: "1px solid var(--line)",
-                    borderRadius: 4,
-                    padding: "6px 8px",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    width: "100%",
-                    fontFamily: "inherit",
-                    background: "#fff",
-                  }}
-                />
-              </div>
-              <div>
-                <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>
-                  Name
-                </div>
-                <input
-                  type="text"
-                  value={inputName}
-                  onChange={(e) => setInputName(e.target.value)}
-                  style={{
-                    border: "1px solid var(--line)",
-                    borderRadius: 4,
-                    padding: "6px 8px",
-                    fontSize: 12,
-                    width: "100%",
-                    fontFamily: "inherit",
-                    background: "#fff",
-                  }}
-                />
-              </div>
-            </div>
             <div>
               <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>
-                WKT
+                EPSG Code (geographic CRS)
               </div>
-              <pre className="mono" style={{ fontSize: 9.5, margin: 0, lineHeight: 1.5, color: "var(--ink-2)", background: "rgba(0,0,0,0.02)", padding: 8, borderRadius: 4, overflow: "auto", maxHeight: 140 }}>
-                {inputWkt}
-              </pre>
+              <input
+                type="text"
+                value={inputEpsg}
+                onChange={(e) => setInputEpsg(e.target.value)}
+                className="mono"
+                style={{
+                  border: "1px solid var(--line)",
+                  borderRadius: 4,
+                  padding: "6px 8px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  width: "100%",
+                  fontFamily: "inherit",
+                  background: "#fff",
+                }}
+              />
+            </div>
+            <div style={{ fontSize: 11.5, color: "var(--muted)", lineHeight: 1.6 }}>
+              This is the native coordinate system of your input data (usually WGS 84 / EPSG:4326 for GPS-sourced data).
             </div>
           </div>
         </Card>
 
-        <Card title="Projected CRS" subtitle={`EPSG:${projectedEpsg} · ${projectedName}`}>
+        <Card title="Projected CRS" subtitle={`EPSG:${projectedEpsg}${distortionResult ? ` · ${distortionResult.projected_crs_name}` : ""}`}>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <div>
-                <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>
-                  EPSG Code
-                </div>
-                <input
-                  type="text"
-                  value={projectedEpsg}
-                  onChange={(e) => setProjectedEpsg(e.target.value)}
-                  className="mono"
-                  style={{
-                    border: "1px solid var(--line)",
-                    borderRadius: 4,
-                    padding: "6px 8px",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    width: "100%",
-                    fontFamily: "inherit",
-                    background: "#fff",
-                  }}
-                />
-              </div>
-              <div>
-                <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>
-                  Name
-                </div>
-                <input
-                  type="text"
-                  value={projectedName}
-                  onChange={(e) => setProjectedName(e.target.value)}
-                  style={{
-                    border: "1px solid var(--line)",
-                    borderRadius: 4,
-                    padding: "6px 8px",
-                    fontSize: 12,
-                    width: "100%",
-                    fontFamily: "inherit",
-                    background: "#fff",
-                  }}
-                />
-              </div>
-            </div>
             <div>
               <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>
-                WKT
+                EPSG Code (projected CRS)
               </div>
-              <pre className="mono" style={{ fontSize: 9.5, margin: 0, lineHeight: 1.5, color: "var(--ink-2)", background: "rgba(0,0,0,0.02)", padding: 8, borderRadius: 4, overflow: "auto", maxHeight: 140 }}>
-                {projectedWkt}
-              </pre>
+              <input
+                type="text"
+                value={projectedEpsg}
+                onChange={(e) => setProjectedEpsg(e.target.value)}
+                className="mono"
+                style={{
+                  border: "1px solid var(--line)",
+                  borderRadius: 4,
+                  padding: "6px 8px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  width: "100%",
+                  fontFamily: "inherit",
+                  background: "#fff",
+                }}
+              />
+            </div>
+            <div style={{ fontSize: 11.5, color: "var(--muted)", lineHeight: 1.6 }}>
+              Choose a local projected CRS (State Plane, UTM, etc.) matching your study area for accurate distance/area calculations.
             </div>
           </div>
         </Card>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 14 }}>
-        <Card title="Reprojection preview" subtitle="spatial extent with transformed coordinates">
+        <Card title="Data projection preview" subtitle="spatial extent of loaded data">
           <canvas
             ref={previewCanvasRef}
             style={{ width: "100%", height: 220, display: "block" }}
           />
         </Card>
 
-        <Card title="Distortion check" subtitle={distortion != null ? `area distortion at study site: ${distortion.toFixed(2)}%` : "configure CRS to check distortion"}>
+        <Card
+          title="Distortion check"
+          subtitle={distortionResult ? `area distortion at study center: ${distortionResult.area_distortion_pct.toFixed(3)}%` : "no pipeline required"}
+          actions={
+            <button
+              onClick={handleCheckDistortion}
+              disabled={distortionLoading}
+              style={{
+                padding: "4px 12px",
+                background: distortionLoading ? "var(--muted)" : "var(--crimson, #e73c25)",
+                color: "#fff",
+                border: "none",
+                borderRadius: 5,
+                fontSize: 11,
+                cursor: distortionLoading ? "not-allowed" : "pointer",
+                fontWeight: 600,
+              }}
+            >
+              {distortionLoading ? "Checking…" : "Check"}
+            </button>
+          }
+        >
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {distortion != null ? (
+            {distortionResult ? (
               <>
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
                     <span style={{ fontSize: 12, fontWeight: 600 }}>Area distortion</span>
-                    <span className="mono" style={{ fontSize: 12, color: distortion < 0.5 ? "var(--purple)" : "var(--crimson)", fontWeight: 700 }}>
-                      {distortion.toFixed(2)}%
+                    <span className="mono" style={{ fontSize: 12, color: distortionResult.area_distortion_pct < 0.5 ? "var(--purple)" : "var(--crimson)", fontWeight: 700 }}>
+                      {distortionResult.area_distortion_pct.toFixed(3)}%
                     </span>
                   </div>
                   <div style={{ height: 8, background: "rgba(0,0,0,0.05)", borderRadius: 4, overflow: "hidden" }}>
                     <div
                       style={{
-                        width: `${Math.min(distortion * 10, 100)}%`,
+                        width: `${Math.min(distortionResult.area_distortion_pct * 10, 100)}%`,
                         height: "100%",
-                        background: distortion < 0.5 ? "var(--purple)" : "var(--crimson)",
+                        background: distortionResult.area_distortion_pct < 0.5 ? "var(--purple)" : "var(--crimson)",
                         transition: "width 0.3s",
                       }}
                     />
                   </div>
                 </div>
-
-                <KeyVal label="Input CRS" value={`EPSG:${inputEpsg}`} />
-                <KeyVal label="Projected CRS" value={`EPSG:${projectedEpsg}`} />
-
-                <div style={{ padding: "8px 10px", background: distortion < 0.5 ? "#f0faf0" : "#fff5f0", borderRadius: 6, fontSize: 12 }}>
-                  {distortion < 0.5
+                <KeyVal label="Linear scale k" value={distortionResult.k_mean.toFixed(6)} />
+                <KeyVal label="Input CRS" value={distortionResult.input_crs_name} />
+                <KeyVal label="Projected CRS" value={distortionResult.projected_crs_name} />
+                <div style={{ padding: "8px 10px", background: distortionResult.assessment === "acceptable" ? "#f0faf0" : "#fff5f0", borderRadius: 6, fontSize: 12 }}>
+                  {distortionResult.assessment === "acceptable"
                     ? "✓ Distortion within acceptable range for spatial analysis"
-                    : "⚠ Consider a local CRS for better accuracy"}
+                    : "⚠ Consider a local CRS — high distortion may affect spatial results"}
                 </div>
               </>
             ) : (
-              <div style={{ color: "var(--muted)", fontSize: 12, fontStyle: "italic", textAlign: "center", padding: 20 }}>
-                Save CRS settings and run pipeline to compute distortion
+              <div style={{ color: "var(--muted)", fontSize: 12, textAlign: "center", padding: 20 }}>
+                Enter EPSG codes above and click <strong>Check</strong> to compute area distortion at the study center.
+                <br /><em style={{ fontSize: 11 }}>No pipeline run required.</em>
               </div>
             )}
           </div>

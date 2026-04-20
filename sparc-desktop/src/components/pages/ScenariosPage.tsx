@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { SectionHeader, Card, Tag, Btn, Stat, StatGrid } from "@/components/ui/DesignSystem";
-import { getConfig, getScenarioDetail, runScenarios } from "@/lib/api";
+import { SectionHeader, Card, Tag, Btn, Stat, StatGrid, thStyle, tdStyle } from "@/components/ui/DesignSystem";
+import { getConfig, getScenarioDetail, runScenarios, getNutsSummary } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
 
@@ -22,14 +22,44 @@ interface InterventionSlider {
   baseline: number;
 }
 
+interface NutsPosterior {
+  treatment: string;
+  mean: number;
+  std: number;
+  ci_5: number;
+  ci_25: number;
+  median: number;
+  ci_75: number;
+  ci_95: number;
+}
+
+interface NutsConvergence {
+  parameter: string;
+  r_hat: number;
+  ess: number;
+  converged: boolean;
+}
+
 export default function ScenariosPage() {
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [activeIdx, setActiveIdx] = useState(0);
   const [sliders, setSliders] = useState<InterventionSlider[]>([]);
+  const [nutsData, setNutsData] = useState<{
+    acceptance_rate?: number;
+    n_divergences?: number;
+    posteriors?: NutsPosterior[];
+    convergence?: NutsConvergence[];
+  } | null>(null);
+  const [nutsTab, setNutsTab] = useState<"posteriors" | "convergence">("posteriors");
   const histRef = useRef<HTMLCanvasElement>(null);
   const { notify } = useNotification();
 
   useEffect(() => {
+    // Load NUTS posterior summaries
+    getNutsSummary()
+      .then((data) => setNutsData(data as any))
+      .catch(() => {});
+
     // Load scenarios from API results
     getScenarioDetail()
       .then((detail: any) => {
@@ -304,11 +334,124 @@ export default function ScenariosPage() {
           />
           <div className="mono" style={{ fontSize: 10, color: "var(--muted)", marginTop: 8, textAlign: "center" }}>
             {scenarios[activeIdx]?.status === "computed"
-              ? `Median Δ = ${scenarios[activeIdx]?.delta.toFixed(2)} °C · 95% CI: [${(scenarios[activeIdx]?.delta - 0.98).toFixed(2)}, ${(scenarios[activeIdx]?.delta + 0.98).toFixed(2)}]`
+              ? `Median Δ = ${scenarios[activeIdx]?.delta.toFixed(2)} · 95% CI: [${(scenarios[activeIdx]?.delta - 0.98).toFixed(2)}, ${(scenarios[activeIdx]?.delta + 0.98).toFixed(2)}]`
               : "Not yet computed"}
           </div>
         </Card>
       </div>
+
+      {/* NUTS / MC³ posterior results */}
+      {nutsData && (
+        <div style={{ marginTop: 14 }}>
+          <Card
+            title="NUTS posterior results (MC³)"
+            subtitle={
+              nutsData.acceptance_rate !== undefined
+                ? `acceptance ${(nutsData.acceptance_rate * 100).toFixed(1)}% · divergences ${nutsData.n_divergences ?? 0}`
+                : "original-scale causal estimates"
+            }
+            actions={
+              <div style={{ display: "flex", gap: 6 }}>
+                {(["posteriors", "convergence"] as const).map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setNutsTab(t)}
+                    style={{
+                      padding: "3px 10px",
+                      fontSize: 11,
+                      borderRadius: 4,
+                      border: "1px solid var(--line)",
+                      background: nutsTab === t ? "var(--crimson, #e73c25)" : "transparent",
+                      color: nutsTab === t ? "#fff" : "var(--muted)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {t === "posteriors" ? "Posterior coefficients" : "Convergence (R̂, ESS)"}
+                  </button>
+                ))}
+              </div>
+            }
+          >
+            {nutsTab === "posteriors" && nutsData.posteriors && nutsData.posteriors.length > 0 && (
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+                <thead>
+                  <tr style={{ textAlign: "left", color: "var(--muted)" }}>
+                    <th style={thStyle}>Treatment</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>Mean</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>Std</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>CI 5%</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>Median</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>CI 95%</th>
+                    <th style={{ ...thStyle, width: 120 }}>Interval</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {nutsData.posteriors.map((row) => {
+                    const range = row.ci_95 - row.ci_5 || 1;
+                    const barLeft = ((row.ci_25 - row.ci_5) / range) * 100;
+                    const barWidth = ((row.ci_75 - row.ci_25) / range) * 100;
+                    const medLeft = ((row.median - row.ci_5) / range) * 100;
+                    const positive = row.mean >= 0;
+                    return (
+                      <tr key={row.treatment} style={{ borderTop: "1px solid var(--line)" }}>
+                        <td style={{ ...tdStyle, fontWeight: 600 }}>{row.treatment.replace(/_/g, " ")}</td>
+                        <td className="mono" style={{ ...tdStyle, textAlign: "right", fontWeight: 700, color: positive ? "var(--crimson)" : "var(--purple)" }}>
+                          {row.mean >= 0 ? "+" : ""}{row.mean.toFixed(4)}
+                        </td>
+                        <td className="mono" style={{ ...tdStyle, textAlign: "right", color: "var(--muted)" }}>±{row.std.toFixed(4)}</td>
+                        <td className="mono" style={{ ...tdStyle, textAlign: "right", color: "var(--muted)" }}>{row.ci_5.toFixed(4)}</td>
+                        <td className="mono" style={{ ...tdStyle, textAlign: "right" }}>{row.median.toFixed(4)}</td>
+                        <td className="mono" style={{ ...tdStyle, textAlign: "right", color: "var(--muted)" }}>{row.ci_95.toFixed(4)}</td>
+                        <td style={tdStyle}>
+                          <div style={{ position: "relative", height: 10, background: "rgba(0,0,0,0.04)", borderRadius: 3, overflow: "hidden" }}>
+                            <div style={{ position: "absolute", left: `${barLeft}%`, width: `${barWidth}%`, height: "100%", background: (positive ? "var(--crimson, #e73c25)" : "var(--purple, #7b5ea7)") + "99" }} />
+                            <div style={{ position: "absolute", left: `${medLeft}%`, width: 2, height: "100%", background: positive ? "var(--crimson, #e73c25)" : "var(--purple, #7b5ea7)" }} />
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+            {nutsTab === "convergence" && nutsData.convergence && nutsData.convergence.length > 0 && (
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+                <thead>
+                  <tr style={{ textAlign: "left", color: "var(--muted)" }}>
+                    <th style={thStyle}>Parameter</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>R̂</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>ESS</th>
+                    <th style={{ ...thStyle, textAlign: "center" }}>Converged</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {nutsData.convergence.map((row, i) => (
+                    <tr key={i} style={{ borderTop: "1px solid var(--line)" }}>
+                      <td style={{ ...tdStyle, fontFamily: "var(--font-mono)" }}>{row.parameter}</td>
+                      <td className="mono" style={{ ...tdStyle, textAlign: "right", color: (row.r_hat ?? 0) > 1.1 ? "var(--crimson)" : "var(--ink)" }}>
+                        {typeof row.r_hat === "number" ? row.r_hat.toFixed(3) : "—"}
+                      </td>
+                      <td className="mono" style={{ ...tdStyle, textAlign: "right" }}>
+                        {typeof row.ess === "number" ? row.ess.toFixed(0) : "—"}
+                      </td>
+                      <td style={{ ...tdStyle, textAlign: "center" }}>
+                        <span style={{ color: row.converged ? "var(--teal, #2a9d8f)" : "var(--crimson)" }}>
+                          {row.converged ? "✓" : "✗"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {!nutsData.posteriors?.length && !nutsData.convergence?.length && (
+              <div style={{ padding: 24, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
+                No NUTS data available.
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

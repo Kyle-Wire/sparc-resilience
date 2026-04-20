@@ -32,7 +32,11 @@ const LEVEL_COLORS: Record<string, string> = {
 };
 
 function eventToLogLine(evt: PipelineEvent) {
-  const ts = new Date().toTimeString().slice(0, 8);
+  // Use the timestamp frozen at event receipt — not current time — so lines don't update
+  const receivedAt = (evt as any).receivedAt as number | undefined;
+  const ts = receivedAt
+    ? new Date(receivedAt).toTimeString().slice(0, 8)
+    : new Date().toTimeString().slice(0, 8);
   const type = (evt as any).type ?? "";
 
   if (type === "stage_status") {
@@ -119,8 +123,13 @@ export default function RunPage() {
   const { notify } = useNotification();
   const logEndRef = useRef<HTMLDivElement>(null);
   const [enabledStages, setEnabledStages] = useState<Set<number>>(new Set(STAGE_IDS));
-  const [elapsed, setElapsed] = useState(0);
+  // elapsed is derived from context so it survives page navigation
+  const [, forceUpdate] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval>>(undefined);
+
+  const elapsed = pipeline.runStartedAt
+    ? Math.floor((Date.now() - pipeline.runStartedAt) / 1000)
+    : 0;
 
   // Curated log lines derived from pipeline events
   const logLines = pipeline.events
@@ -132,16 +141,15 @@ export default function RunPage() {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logLines.length]);
 
-  // Timer
+  // Timer — tick every second to recompute derived elapsed from context
   useEffect(() => {
-    if (pipeline.isRunning) {
-      const start = Date.now();
-      timerRef.current = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 1000);
+    if (pipeline.runStartedAt) {
+      timerRef.current = setInterval(() => forceUpdate((n) => n + 1), 1000);
     } else {
       if (timerRef.current) clearInterval(timerRef.current);
     }
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [pipeline.isRunning]);
+  }, [pipeline.runStartedAt]);
 
   const toggleStage = useCallback((id: number) => {
     setEnabledStages((prev) => {
@@ -159,7 +167,6 @@ export default function RunPage() {
       return;
     }
     pipeline.startPipeline(stages, { fast: false });
-    setElapsed(0);
     notify("info", `Pipeline started (${stages.length} stage${stages.length > 1 ? "s" : ""})`);
   }, [pipeline, enabledStages, notify]);
 
@@ -170,7 +177,6 @@ export default function RunPage() {
     } else {
       pipeline.startPipeline(stages, { fast: false });
     }
-    setElapsed(0);
     notify("info", `Running from ${STAGE_NAMES[stage] ?? `stage ${stage}`}`);
   }, [pipeline, enabledStages, notify]);
 
@@ -329,30 +335,6 @@ export default function RunPage() {
                   </span>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 12.5, fontWeight: 600 }}>{STAGE_NAMES[id]}</div>
-                    <div className="mono" style={{ fontSize: 9, color: "var(--muted)", marginTop: 1 }}>
-                      {STAGE_DESCRIPTIONS[id]}
-                    </div>
-                    {status === "running" && (
-                      <div
-                        style={{
-                          height: 3,
-                          background: "rgba(0,0,0,0.06)",
-                          borderRadius: 2,
-                          marginTop: 4,
-                          overflow: "hidden",
-                        }}
-                      >
-                        <div
-                          style={{
-                            width: "70%",
-                            height: "100%",
-                            background: "var(--crimson)",
-                            borderRadius: 2,
-                            animation: "loadBar 1.5s ease-in-out infinite",
-                          }}
-                        />
-                      </div>
-                    )}
                   </div>
                   {!pipeline.isRunning && status !== "complete" && (
                     <button
