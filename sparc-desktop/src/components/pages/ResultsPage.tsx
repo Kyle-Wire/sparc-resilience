@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SectionHeader, Card, Btn, Stat, StatGrid } from "@/components/ui/DesignSystem";
-import { getResults, getScenarioDetail, getPdpCurves, getGwenData, getCorrelogramData } from "@/lib/api";
+import { getModelPerformance, getScenarioDetail, getPdpCurves, getGwenData, getCorrelogramData } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
 import type { ScenarioDetail, PdpCurves, CorrelogramData } from "@/lib/types";
@@ -30,21 +30,15 @@ export default function ResultsPage() {
 
   // Load data from API
   useEffect(() => {
-    // Models from stages 1-5
-    Promise.all(
-      [1, 2, 3, 4, 5].map((s) => getResults(s).catch(() => null))
-    ).then((results) => {
-      const mods: ModelInfo[] = [];
-      results.forEach((r: any, i) => {
-        if (!r) return;
-        const name = r.model_name ?? r.name ?? `Stage ${i + 1}`;
-        const r2 = r.r2 ?? r.test_r2 ?? r.cv_r2 ?? null;
-        if (r2 != null) {
-          mods.push({ name, r2, color: SPARC_RAMP_HEX[i * 2] ?? SPARC_RAMP_HEX[0] });
-        }
-      });
+    // Model R² from dedicated endpoint
+    getModelPerformance().then((data) => {
+      const mods: ModelInfo[] = data.models.map((m, i) => ({
+        name: m.name,
+        r2: m.r2,
+        color: SPARC_RAMP_HEX[i * 2] ?? SPARC_RAMP_HEX[0],
+      }));
       setModels(mods);
-    });
+    }).catch(() => {});
 
     // Scenario detail
     getScenarioDetail().then(setScenarioDetail).catch(() => {});

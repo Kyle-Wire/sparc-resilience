@@ -102,6 +102,66 @@ class _EventCapture(io.TextIOBase):
         (re.compile(r"Scenario Simulation", re.IGNORECASE), "Scenario simulation"),
     ]
 
+    # Checkpoint patterns: (regex, checkpoint_id, curated_message, level)
+    # {0}, {1}, ... are replaced with regex capture groups.
+    _CHECKPOINTS: list[tuple[re.Pattern, str, str, str]] = [
+        # Stage 0 — Correlogram
+        (re.compile(r"Computing spatial correlogram for (\w+)"),
+         "correlogram_var", "Computing correlogram for {0}", "info"),
+        (re.compile(r"Optimal CV block size:\s*(\S+)"),
+         "block_size", "Optimal CV block size: {0}", "info"),
+        (re.compile(r"Correlogram-Based Spatial Analysis Complete"),
+         "correlogram_done", "Correlogram analysis complete", "success"),
+        (re.compile(r"Pipeline configuration saved"),
+         "config_saved", "Pipeline configuration saved", "info"),
+        # Stage 1 — GWEN
+        (re.compile(r"Fitting GWEN model"),
+         "gwen_fitting", "Fitting GWEN model \u2014 evaluating variable stability", "info"),
+        (re.compile(r"\[OK\] GWEN model fitted"),
+         "gwen_fitted", "GWEN model fitted successfully", "success"),
+        (re.compile(r"Selected (\d+) predictors"),
+         "gwen_selected", "{0} predictor variables selected", "success"),
+        (re.compile(r"GWEN VARIABLE SELECTION COMPLETE"),
+         "gwen_done", "GWEN variable selection complete", "success"),
+        # Stage 2 — Spatial CV
+        (re.compile(r"Generating Spatial Folds"),
+         "folds_gen", "Generating spatial validation folds", "info"),
+        (re.compile(r"Fold (\d+):\s*Train=(\d+),\s*Test=(\d+)"),
+         "fold_size", "Fold {0} prepared \u2014 {1} train / {2} test samples", "info"),
+        (re.compile(r"Optimized OOF Performance"),
+         "oof_perf", "Computing out-of-fold performance metrics", "info"),
+        (re.compile(r"Spatial CV Complete"),
+         "cv_done", "Spatial cross-validation complete", "success"),
+        (re.compile(r"Retraining Base Models on Full Dataset"),
+         "retrain_start", "Retraining models on full dataset", "info"),
+        (re.compile(r"\[OK\] Saved (\S+\.pkl)"),
+         "model_saved", "Model saved: {0}", "success"),
+        (re.compile(r"Final Results"),
+         "final_results", "Compiling final ensemble results", "info"),
+        (re.compile(r"V2 Neural Meta-Learner"),
+         "meta_learner", "Training neural meta-learner ensemble", "info"),
+        # Stage 3 — Causal
+        (re.compile(r"Running DAG assumption diagnostics"),
+         "dag_diag", "Running DAG assumption diagnostics", "info"),
+        (re.compile(r"NUTS:\s*warmup phase \((\d+)"),
+         "nuts_warmup", "NUTS warmup \u2014 {0} transitions", "info"),
+        (re.compile(r"NUTS:\s*sampling phase \((\d+)"),
+         "nuts_sampling", "NUTS sampling \u2014 drawing {0} posterior samples", "info"),
+        (re.compile(r"NUTS convergence FAILED"),
+         "nuts_conv_fail", "NUTS convergence check needs attention", "warn"),
+        (re.compile(r"MC.{1,3}:\s*(\d+)\s*/\s*(\d+)\s*accepted"),
+         "mc3_result", "MC\u00b3 complete \u2014 {0}/{1} proposals accepted", "success"),
+        # Stage 4 — Scenarios
+        (re.compile(r"PHYSICS-CONSTRAINED SCENARIO PREDICTOR"),
+         "scenario_engine", "Initializing physics-constrained predictor", "info"),
+        (re.compile(r"Variable:\s+(\S+)\s+\(direction=(\w+)\)"),
+         "scenario_var", "Simulating {0} ({1})", "info"),
+        (re.compile(r"RUNNING JOINT SCENARIOS"),
+         "joint_scenarios", "Running joint intervention scenarios", "info"),
+        (re.compile(r"GENERATING INTERPRETATION MAPS"),
+         "gen_maps", "Generating spatial interpretation maps", "info"),
+    ]
+
     def __init__(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
         self._queue = queue
         self._loop = loop
@@ -121,6 +181,12 @@ class _EventCapture(io.TextIOBase):
         pass
 
     def _emit(self, line: str) -> None:
+        # Take last \r-segment (tqdm overwrites previous content with \r)
+        if '\r' in line:
+            line = line.rsplit('\r', 1)[-1].strip()
+            if not line:
+                return
+
         event: dict[str, Any] = {"type": "log", "message": line}
 
         m = self._STAGE_RE.search(line)
@@ -154,6 +220,10 @@ class _EventCapture(io.TextIOBase):
             w = self._MODEL_WEIGHTS.get(model_name)
             if w:
                 event["progress_pct"] = w[0]
+            event["type"] = "checkpoint"
+            event["checkpoint_id"] = "model_start"
+            event["level"] = "info"
+            event["message"] = f"Training {model_name.upper()} ({model_idx}/{model_total})"
 
         m_done = self._MODEL_DONE_RE.search(line)
         if m_done:
@@ -167,6 +237,10 @@ class _EventCapture(io.TextIOBase):
             w = self._MODEL_WEIGHTS.get(model_name)
             if w:
                 event["progress_pct"] = w[1]
+            event["type"] = "checkpoint"
+            event["checkpoint_id"] = "model_done"
+            event["level"] = "success"
+            event["message"] = f"{model_name.upper()} training complete ({model_idx}/{model_total})"
 
         # Check for phase markers (used by the frontend progress bar)
         if "phase" not in event:
@@ -236,6 +310,21 @@ class _EventCapture(io.TextIOBase):
             event["type"] = "dag_approval_requested"
             event["n_edges"] = payload.get("n_edges", 0)
             event["n_nodes"] = payload.get("n_nodes", 0)
+
+        # ---- Checkpoint promotion ----
+        # If still a raw "log" event, check if it matches a known checkpoint.
+        if event["type"] == "log":
+            for _cp_pat, _cp_id, _cp_msg, _cp_lvl in self._CHECKPOINTS:
+                _cm = _cp_pat.search(line)
+                if _cm:
+                    event["type"] = "checkpoint"
+                    event["checkpoint_id"] = _cp_id
+                    event["level"] = _cp_lvl
+                    try:
+                        event["message"] = _cp_msg.format(*_cm.groups())
+                    except (IndexError, KeyError):
+                        event["message"] = _cp_msg
+                    break
 
         asyncio.run_coroutine_threadsafe(self._queue.put(event), self._loop)
 

@@ -28,6 +28,7 @@ const LEVEL_COLORS: Record<string, string> = {
   warn: "#ffa726",
   error: "#ef5350",
   debug: "#78909c",
+  milestone: "#e79024",
 };
 
 function eventToLogLine(evt: PipelineEvent) {
@@ -102,10 +103,14 @@ function eventToLogLine(evt: PipelineEvent) {
     const e = evt as any;
     return { text: `  ${e.message ?? `progress: ${e.pct ?? ""}%`}`, level: "debug" as const, ts };
   }
-  // Catch-all for unknown event types with a message field
-  if ((evt as any).message) {
-    return { text: `  ${(evt as any).message}`, level: "info" as const, ts };
+  if (type === "checkpoint") {
+    const e = evt as any;
+    const lvl = e.level === "success" ? "success" as const
+      : e.level === "warn" ? "warn" as const
+      : "milestone" as const;
+    return { text: e.message ?? "checkpoint", level: lvl, ts };
   }
+  // Raw log events are suppressed — only structured types shown
   return null;
 }
 
@@ -259,7 +264,7 @@ export default function RunPage() {
                 >
                   {line.level}
                 </span>
-                <span style={{ color: line.level === "error" ? "#ef5350" : line.level === "success" ? "#66bb6a" : "#d0ccc5" }}>
+                <span style={{ color: line.level === "error" ? "#ef5350" : line.level === "success" ? "#66bb6a" : line.level === "milestone" ? "#e79024" : "#d0ccc5" }}>
                   {line.text}
                 </span>
               </div>

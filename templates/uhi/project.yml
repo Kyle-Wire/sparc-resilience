@@ -78,8 +78,8 @@ causal:
     n_chains: 4
     burnin_fraction: 0.25
   nuts:
-    n_samples: 2000
-    n_warmup: 500
+    n_samples: 15000
+    n_warmup: 1000
     target_accept_rate: 0.80
   actionable_variables:
     - Pct_Canopy

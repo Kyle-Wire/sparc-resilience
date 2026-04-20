@@ -192,6 +192,9 @@ export async function generatePdfReport(): Promise<{ blob: Blob | null; htmlFall
 export const getCorrelogramData = () =>
   get<CorrelogramData>("/results/correlogram");
 
+export const getModelPerformance = () =>
+  get<{ models: { name: string; r2: number; rmse?: number }[] }>("/results/model_performance");
+
 export const getGwenData = () =>
   get<{ rows: Record<string, unknown>[] }>("/results/gwen");
 

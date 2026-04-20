@@ -766,6 +766,78 @@ async def get_gwen_data():
     )
 
 
+@app.get("/results/model_performance")
+async def get_model_performance():
+    """Return per-model R²/RMSE for the R² bar chart on the Results page.
+
+    Sources (checked in order):
+    1. In-memory stage 2 result (``performance.individual_models``)
+    2. ``final_ensemble_results.json`` on disk (written by enhanced_spatial_cv)
+    3. In-memory stage 2 ``base_models`` key (main() wrapper format)
+    """
+    import json as _json
+    models: list[dict] = []
+
+    # --- Try in-memory result from stage 2 ---
+    r2_result = state.get_result(2)
+    if isinstance(r2_result, dict):
+        # run() returns {performance: {individual_models: {name: {r2, rmse}}}}
+        indiv = (r2_result.get("performance") or {}).get("individual_models")
+        # main() returns {base_models: {name: {r2, rmse}}, final_ensemble: {r2}}
+        if indiv is None:
+            indiv = r2_result.get("base_models")
+        if isinstance(indiv, dict):
+            for name, metrics in indiv.items():
+                if isinstance(metrics, dict) and metrics.get("r2") is not None:
+                    models.append({
+                        "name": name.upper(),
+                        "r2": metrics["r2"],
+                        "rmse": metrics.get("rmse"),
+                    })
+        # Ensemble entry
+        ens = r2_result.get("final_ensemble") or r2_result.get("meta_ensemble_best")
+        if isinstance(ens, dict) and ens.get("r2") is not None:
+            models.append({
+                "name": "Ensemble",
+                "r2": ens["r2"],
+                "rmse": ens.get("rmse"),
+            })
+
+    # --- Disk fallback ---
+    if not models and state.project_config is not None:
+        from sparc.run.pipeline_paths import PipelinePaths
+        try:
+            paths = PipelinePaths.from_config(state.project_config)
+            ens_file = paths.stage2_dir / "final_ensemble_results.json"
+            if ens_file.exists():
+                with open(ens_file, "r", encoding="utf-8") as fh:
+                    data = _json.load(fh)
+                base = data.get("base_models", {})
+                for name, metrics in base.items():
+                    if isinstance(metrics, dict) and metrics.get("r2") is not None:
+                        models.append({
+                            "name": name.upper(),
+                            "r2": metrics["r2"],
+                            "rmse": metrics.get("rmse"),
+                        })
+                ens = data.get("final_ensemble") or data.get("meta_ensemble_best")
+                if isinstance(ens, dict) and ens.get("r2") is not None:
+                    models.append({
+                        "name": "Ensemble",
+                        "r2": ens["r2"],
+                        "rmse": ens.get("rmse"),
+                    })
+        except Exception:
+            pass
+
+    if not models:
+        raise HTTPException(404, "No model performance data available")
+
+    # Sort by R² descending
+    models.sort(key=lambda m: m.get("r2") or 0, reverse=True)
+    return {"models": models}
+
+
 @app.get("/results/spatial_cv/predictions")
 async def get_spatial_cv_predictions():
     """Return spatial CV predictions as GeoJSON (from gpkg with geometry)."""
