@@ -364,6 +364,9 @@ export default function DAGView() {
 
   const onConnect = useCallback(
     (params: Connection) => {
+      pushSnapshot();
+      setEdges((eds) => addEdge({ ...params, animated: false }, eds));
+
       const applyMc3 = (data: import("@/lib/types").MC3Result) => {
         setMc3(data);
         setShowMc3(true);
@@ -402,6 +405,9 @@ export default function DAGView() {
               .catch(() => {});
           }, 1500);
         });
+    },
+    [addEdge, pushSnapshot],
+  );
 
   // Context menu: right-click on node
   const onNodeContextMenu = useCallback(

@@ -1,10 +1,21 @@
 ﻿import { useState, useEffect, useCallback, useRef } from "react";
 import { SectionHeader, Card, Btn, Stat, StatGrid } from "@/components/ui/DesignSystem";
-import { getModelPerformance, getScenarioDetail, getPdpCurves, getGwenData, getCorrelogramData, getPredictions } from "@/lib/api";
+import { getModelPerformance, getScenarioDetail, getPdpCurves, getGwenData, getCorrelogramData, getPredictions, getScenarioIncrement } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import { usePipeline } from "@/hooks/PipelineProvider";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
 import type { ScenarioDetail, PdpCurves, CorrelogramData, GeoJsonData } from "@/lib/types";
+
+// Human-readable labels for PDE-derived field columns
+const PDE_LABELS: Record<string, string> = {
+  alpha_field: "α thermal diffusivity",
+  lap_t: "∇²T Laplacian",
+  grad_mag: "|∇T| gradient magnitude",
+  heat_source: "Q heat source",
+  diffusion_coef: "κ diffusion coeff",
+  residual_field: "PDE residual",
+  div_flux: "∇·F flux divergence",
+};
 
 type ViewMode = "map" | "scenarios" | "histogram" | "correlogram";
 
@@ -33,6 +44,9 @@ export default function ResultsPage() {
   const [pdpData, setPdpData] = useState<PdpCurves | null>(null);
   const [correlogram, setCorrelogram] = useState<CorrelogramData | null>(null);
   const [activePdpVar, setActivePdpVar] = useState<string>("");
+  const [incrVar, setIncrVar] = useState("");
+  const [incrPct, setIncrPct] = useState(10);
+  const [incrResult, setIncrResult] = useState<ScenarioDetail | null>(null);
 
   // Load and refresh data from API. We re-run this after pipeline completion
   // so the Results page updates automatically when artifacts are finished.
@@ -107,17 +121,33 @@ export default function ResultsPage() {
   const scenarioRows = scenarioDetail?.summary ?? [];
 
   // Derive scenario column names for variable selector
-  const scenarioFeatures = scenarioDetail?.geojson?.features ?? [];
+  const scenarioFeatures = (incrResult ?? scenarioDetail)?.geojson?.features ?? scenarioDetail?.geojson?.features ?? [];
   const scenarioCols = scenarioFeatures.length > 0
     ? Object.keys(scenarioFeatures[0].properties ?? {}).filter((k) =>
         k.startsWith("delta_") || k.startsWith("pred_") || k === "predicted" || k === "target"
       )
     : [];
 
+  // Variables available for increment slider (feature columns that have a delta_ counterpart)
+  const incrVarOptions = scenarioCols
+    .filter((c) => c.startsWith("delta_"))
+    .map((c) => c.replace(/^delta_/, ""));
+
   // Derive scenario names from summary rows
   const scenarioNames: string[] = scenarioRows.map((r: any, i: number) =>
     (r.scenario_name ?? r.scenario ?? r.name ?? `Scenario ${i + 1}`) as string
   );
+
+  // Diverging blue→white→red color scale centered at zero (for delta_* columns)
+  function divergeColor(val: number, absMax: number): string {
+    const t = Math.max(-1, Math.min(1, val / (absMax || 1)));
+    const lp = (a: number, b: number, s: number) => Math.round(a + (b - a) * s);
+    if (t <= 0) {
+      const s = 1 + t;
+      return `rgb(${lp(33, 247, s)},${lp(102, 247, s)},${lp(172, 247, s)})`;
+    }
+    return `rgb(${lp(247, 178, t)},${lp(247, 24, t)},${lp(247, 43, t)})`;
+  }
 
   // Helpers for canvas drawing
   function drawEmptyState(canvas: HTMLCanvasElement, message: string) {
@@ -180,6 +210,8 @@ export default function ResultsPage() {
     const minV = Math.min(...pts.map((p) => p.val));
     const maxV = Math.max(...pts.map((p) => p.val));
     const rangeV = maxV - minV || 1;
+    const isDelta = propKey.startsWith("delta_");
+    const absMax = isDelta ? Math.max(Math.abs(minV), Math.abs(maxV)) : 0;
     const rangeX = maxX - minX || 1;
     const rangeY = maxY - minY || 1;
     // Uniform scaling preserves aspect ratio
@@ -193,9 +225,13 @@ export default function ResultsPage() {
     for (const p of pts) {
       const px = offsetX + (p.x - minX) * scale;
       const py = h - offsetY - (p.y - minY) * scale;
-      const t = (p.val - minV) / rangeV;
-      const ci = Math.floor(t * (SPARC_RAMP_HEX.length - 1));
-      ctx.fillStyle = SPARC_RAMP_HEX[ci];
+      if (isDelta) {
+        ctx.fillStyle = divergeColor(p.val, absMax);
+      } else {
+        const t = (p.val - minV) / rangeV;
+        const ci = Math.floor(t * (SPARC_RAMP_HEX.length - 1));
+        ctx.fillStyle = SPARC_RAMP_HEX[ci];
+      }
       ctx.beginPath();
       ctx.arc(px, py, 4, 0, Math.PI * 2);
       ctx.fill();
@@ -235,7 +271,7 @@ export default function ResultsPage() {
   useEffect(() => {
     const canvas = mapCanvasRef.current;
     if (!canvas || viewMode !== "scenarios") return;
-    const features = scenarioFeatures;
+    const features = (incrResult ?? scenarioDetail)?.geojson?.features ?? scenarioFeatures;
     if (!features.length) {
       drawEmptyState(canvas, "Run pipeline with scenarios to see scenario map");
       return;
@@ -243,7 +279,7 @@ export default function ResultsPage() {
     // Filter to selected scenario if possible via pred_ScenarioN columns
     const col = activeScenarioVar || scenarioCols[0] || "predicted";
     drawPointMap(canvas, features, col);
-  }, [viewMode, scenarioDetail, activeScenarioIdx, activeScenarioVar]);
+  }, [viewMode, scenarioDetail, incrResult, activeScenarioIdx, activeScenarioVar]);
 
   // Draw histogram from real prediction values
   useEffect(() => {
@@ -453,6 +489,26 @@ export default function ResultsPage() {
     ctx.textAlign = "right";
     ctx.fillText(maxP.toFixed(2), 38, 18);
     ctx.fillText(minP.toFixed(2), 38, h - 28);
+
+    // Saturation point marker
+    const satPoint: number | null | undefined = (pdpData as any)?.[selectedVar]?.curve_fit?.saturation_point;
+    if (satPoint != null && Number.isFinite(satPoint) && satPoint >= minG && satPoint <= maxG) {
+      const sx = 42 + ((satPoint - minG) / rG) * (w - 54);
+      ctx.save();
+      ctx.strokeStyle = "#dc2626";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(sx, 12);
+      ctx.lineTo(sx, h - 28);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#dc2626";
+      ctx.font = "bold 8px 'JetBrains Mono'";
+      ctx.textAlign = "center";
+      ctx.fillText("sat.", sx, 10);
+      ctx.restore();
+    }
   }, [pdpData, activePdpVar]);
 
   // Correlogram canvas
@@ -627,7 +683,9 @@ export default function ResultsPage() {
                   style={{ fontSize: 10, padding: "2px 4px", borderRadius: 3, border: "1px solid var(--line)", fontFamily: "inherit" }}
                 >
                   {mapLayerOptions.map((col) => (
-                    <option key={col} value={col}>{col.replace(/_/g, " ")}</option>
+                    <option key={col} value={col}>
+                      {PDE_LABELS[col] ? `${col.replace(/_/g, " ")}  (${PDE_LABELS[col]})` : col.replace(/_/g, " ")}
+                    </option>
                   ))}
                 </select>
               )}
@@ -654,6 +712,44 @@ export default function ResultsPage() {
                   ))}
                 </select>
               )}
+              {/* Scenario increment slider */}
+              {viewMode === "scenarios" && incrVarOptions.length > 0 && (
+                <>
+                  <select
+                    value={incrVar}
+                    onChange={(e) => { setIncrVar(e.target.value); setIncrResult(null); }}
+                    style={{ fontSize: 10, padding: "2px 4px", borderRadius: 3, border: "1px solid var(--line)", fontFamily: "inherit" }}
+                    title="Variable to increment"
+                  >
+                    <option value="">Δ variable…</option>
+                    {incrVarOptions.map((v) => (
+                      <option key={v} value={v}>{v.replace(/_/g, " ")}</option>
+                    ))}
+                  </select>
+                  {incrVar && (
+                    <>
+                      <input
+                        type="range"
+                        min={-50}
+                        max={50}
+                        step={5}
+                        value={incrPct}
+                        onChange={(e) => {
+                          const pct = Number(e.target.value);
+                          setIncrPct(pct);
+                          getScenarioIncrement(incrVar, pct)
+                            .then((data) => setIncrResult(data as ScenarioDetail))
+                            .catch(() => {});
+                        }}
+                        style={{ width: 72, cursor: "pointer" }}
+                      />
+                      <span style={{ fontSize: 10, color: "var(--muted)", minWidth: 34, textAlign: "right", fontFamily: "'JetBrains Mono', monospace" }}>
+                        {incrPct > 0 ? "+" : ""}{incrPct}%
+                      </span>
+                    </>
+                  )}
+                </>
+              )}
             </div>
           }
         >
@@ -663,32 +759,57 @@ export default function ResultsPage() {
                 ref={mapCanvasRef}
                 style={{ width: "100%", height: 380, display: "block", borderRadius: 4 }}
               />
-              {(predictionsGeoJson?.features?.length || scenarioFeatures.length) ? (
-                <div
-                  style={{
-                    position: "absolute",
-                    bottom: 12,
-                    right: 12,
-                    background: "rgba(255,255,255,0.92)",
-                    borderRadius: 6,
-                    padding: "8px 10px",
-                    backdropFilter: "blur(6px)",
-                  }}
-                >
-                  <div className="mono" style={{ fontSize: 8, color: "var(--muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.1em" }}>
-                    {viewMode === "scenarios" ? (activeScenarioVar || "value") : "predicted value"}
+              {(predictionsGeoJson?.features?.length || scenarioFeatures.length) ? (() => {
+                const activeCol = viewMode === "scenarios" ? (activeScenarioVar || scenarioCols[0] || "") : resolvedMapLayer;
+                const isDiverg = activeCol.startsWith("delta_");
+                const pdeLabel = PDE_LABELS[activeCol];
+                return (
+                  <div
+                    style={{
+                      position: "absolute",
+                      bottom: 12,
+                      right: 12,
+                      background: "rgba(255,255,255,0.92)",
+                      borderRadius: 6,
+                      padding: "8px 10px",
+                      backdropFilter: "blur(6px)",
+                      minWidth: 120,
+                    }}
+                  >
+                    {pdeLabel && (
+                      <div className="mono" style={{ fontSize: 7, color: "var(--crimson)", marginBottom: 2, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                        {pdeLabel}
+                      </div>
+                    )}
+                    <div className="mono" style={{ fontSize: 8, color: "var(--muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                      {viewMode === "scenarios" ? (activeScenarioVar || "value") : "predicted value"}
+                    </div>
+                    {isDiverg ? (
+                      <div style={{ height: 10, borderRadius: 2, width: 120, background: "linear-gradient(to right, rgb(33,102,172), rgb(247,247,247), rgb(178,24,43))" }} />
+                    ) : (
+                      <div style={{ display: "flex", height: 10, borderRadius: 2, overflow: "hidden", width: 120 }}>
+                        {SPARC_RAMP_HEX.map((c, i) => (
+                          <div key={i} style={{ flex: 1, background: c }} />
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
+                      {isDiverg ? (
+                        <>
+                          <span className="mono" style={{ fontSize: 8, color: "rgb(33,102,172)" }}>cooling</span>
+                          <span className="mono" style={{ fontSize: 8, color: "var(--muted)" }}>0</span>
+                          <span className="mono" style={{ fontSize: 8, color: "rgb(178,24,43)" }}>warming</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="mono" style={{ fontSize: 8, color: "var(--muted)" }}>low</span>
+                          <span className="mono" style={{ fontSize: 8, color: "var(--muted)" }}>high</span>
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <div style={{ display: "flex", height: 10, borderRadius: 2, overflow: "hidden", width: 120 }}>
-                    {SPARC_RAMP_HEX.map((c, i) => (
-                      <div key={i} style={{ flex: 1, background: c }} />
-                    ))}
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
-                    <span className="mono" style={{ fontSize: 8, color: "var(--muted)" }}>low</span>
-                    <span className="mono" style={{ fontSize: 8, color: "var(--muted)" }}>high</span>
-                  </div>
-                </div>
-              ) : null}
+                );
+              })() : null}
             </div>
           ) : viewMode === "histogram" ? (
             <canvas
