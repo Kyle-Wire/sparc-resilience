@@ -644,15 +644,13 @@ export default function ResultsPage() {
         </Card>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {/* Model RÂ² bars */}
-          <Card title="Model RÂ²" subtitle={models.length ? "cross-validated performance" : undefined}>
+          <Card title="Model R²" subtitle={models.length ? "cross-validated performance" : undefined}>
             <canvas
               ref={r2CanvasRef}
               style={{ width: "100%", height: 120, display: "block" }}
             />
           </Card>
 
-          {/* Intervention response curves */}
           <Card
             title="Intervention response"
             subtitle={
@@ -681,3 +679,4 @@ export default function ResultsPage() {
       </div>
     </div>
   );
+}
