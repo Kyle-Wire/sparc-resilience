@@ -409,6 +409,26 @@ export default function DAGView() {
     [addEdge, pushSnapshot],
   );
 
+  // Quick edge: add edge from form inputs
+  const addQuickEdge = useCallback(() => {
+    if (!qeSource || !qeTarget || qeSource === qeTarget) return;
+    pushSnapshot();
+    const id = `qe-${qeSource}-${qeTarget}-${Date.now()}`;
+    setEdges((eds) => [
+      ...eds,
+      {
+        id,
+        source: qeSource,
+        target: qeTarget,
+        animated: false,
+        ...(qeMechanism ? { label: qeMechanism } : {}),
+      },
+    ]);
+    setQeSource("");
+    setQeTarget("");
+    setQeMechanism("");
+  }, [qeSource, qeTarget, qeMechanism, pushSnapshot, setEdges]);
+
   // Context menu: right-click on node
   const onNodeContextMenu = useCallback(
     (event: React.MouseEvent, node: Node) => {
