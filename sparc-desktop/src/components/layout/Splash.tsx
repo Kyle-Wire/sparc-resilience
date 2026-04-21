@@ -3,10 +3,9 @@ import CubeLogo from "../brand/CubeLogo";
 
 interface SplashProps {
   onReady?: () => void;
-  logoHue?: string;
 }
 
-export default function Splash({ onReady, logoHue: _logoHue }: SplashProps) {
+export default function Splash({ onReady }: SplashProps) {
   useEffect(() => {
     if (!onReady) return;
     const t = setTimeout(onReady, 1400);
@@ -16,18 +15,17 @@ export default function Splash({ onReady, logoHue: _logoHue }: SplashProps) {
   return (
     <div
       style={{
-        width: "100%",
-        height: "100%",
+        width: "100vw",
+        height: "100vh",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         flexDirection: "column",
         gap: 22,
+        background: "var(--paper)",
       }}
     >
-      <div style={{ width: 180, height: 180 }}>
-        <CubeLogo size={180} density={1.4} hue="ink" />
-      </div>
+      <CubeLogo size={180} />
       <div style={{ textAlign: "center" }}>
         <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em" }}>SPARC LABS</div>
         <div

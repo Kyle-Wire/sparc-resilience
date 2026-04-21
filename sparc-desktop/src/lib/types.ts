@@ -121,6 +121,12 @@ export interface PipelineEvent {
   component?: string;
   /** Training health: detail message. */
   detail?: string;
+
+  // ---- Frontend-only fields (added on receipt, not from server) ----
+  /** Wall-clock timestamp (ms since epoch) when the event was received by the frontend. */
+  receivedAt?: number;
+  // Allow additional event types from the server not yet defined here
+  [key: string]: unknown;
 }
 
 export interface DagNode {

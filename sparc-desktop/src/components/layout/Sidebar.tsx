@@ -20,6 +20,8 @@ interface SidebarProps {
   chatOpen?: boolean;
   projectLoaded?: boolean;
   projectName?: string;
+  projectDomain?: string;
+  projectEpsg?: string;
 }
 
 export default function Sidebar({
@@ -29,6 +31,8 @@ export default function Sidebar({
   chatOpen,
   projectLoaded,
   projectName,
+  projectDomain,
+  projectEpsg,
 }: SidebarProps) {
   let idx = 0;
   return (
@@ -54,7 +58,7 @@ export default function Sidebar({
         }}
       >
         <div style={{ width: 40, height: 40, marginTop: -2 }}>
-          <CubeLogo size={40} density={0.6} />
+          <CubeLogo size={40} />
         </div>
         <div style={{ display: "flex", flexDirection: "column", lineHeight: 1, gap: 3 }}>
           <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "-0.01em" }}>SPARC</span>
@@ -89,9 +93,9 @@ export default function Sidebar({
             />
             {projectLoaded && projectName ? projectName : "No project"}
           </div>
-          {projectLoaded && (
+          {projectLoaded && (projectDomain || projectEpsg) && (
             <div className="mono" style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
-              loaded
+              {projectDomain}{projectDomain && projectEpsg ? " · " : ""}{projectEpsg ? `EPSG:${projectEpsg}` : ""}
             </div>
           )}
         </div>
@@ -176,37 +180,59 @@ export default function Sidebar({
         ))}
       </nav>
 
-      {/* Settings + AI assistant */}
-      <div style={{ borderTop: "1px solid var(--line)", padding: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+      {/* Settings gear */}
+      <div style={{ padding: "4px 8px 0" }}>
         <button
-          onClick={() => onNavigate("Settings")}
+          onClick={() => onNavigate("Settings" as any)}
           style={{
             display: "flex",
             alignItems: "center",
             gap: 10,
             width: "100%",
             textAlign: "left",
-            padding: "6px 10px",
+            padding: "8px 10px",
             borderRadius: 6,
             border: "none",
-            background: "transparent",
-            color: "var(--ink-2)",
-            fontSize: 12,
-            fontWeight: 500,
+            background: currentPage === ("Settings" as any) ? "var(--ink)" : "transparent",
+            color: currentPage === ("Settings" as any) ? "#fff" : "var(--ink-2)",
+            fontSize: 12.5,
+            fontWeight: 600,
             cursor: "pointer",
             fontFamily: "inherit",
+            transition: "background 0.15s",
           }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(0,0,0,0.05)"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+          onMouseEnter={(e) => {
+            if (currentPage !== ("Settings" as any)) e.currentTarget.style.background = "rgba(0,0,0,0.05)";
+          }}
+          onMouseLeave={(e) => {
+            if (currentPage !== ("Settings" as any)) e.currentTarget.style.background = "transparent";
+          }}
         >
           <span style={{ width: 18, height: 18, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <circle cx="7" cy="7" r="2.5" stroke="currentColor" strokeWidth="1.3" />
-              <path d="M7 1v1.5M7 11.5V13M1 7h1.5M11.5 7H13M2.76 2.76l1.06 1.06M10.18 10.18l1.06 1.06M11.24 2.76l-1.06 1.06M3.82 10.18l-1.06 1.06" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M8 10a2 2 0 100-4 2 2 0 000 4z" stroke="currentColor" strokeWidth="1.3" />
+              <path d="M13.5 8c0-.3-.2-.6-.4-.8l1-1.6-1.2-1.2-1.6 1c-.2-.2-.5-.4-.8-.4V3.5h-1V5c-.3 0-.6.2-.8.4l-1.6-1L5.9 5.6l1 1.6c-.2.2-.4.5-.4.8H5v1h1.5c0 .3.2.6.4.8l-1 1.6 1.2 1.2 1.6-1c.2.2.5.4.8.4v1.5h1V12c.3 0 .6-.2.8-.4l1.6 1 1.2-1.2-1-1.6c.2-.2.4-.5.4-.8H14v-1h-1.5z" stroke="currentColor" strokeWidth="1.2" />
             </svg>
           </span>
           Settings
+          <span
+            className="mono"
+            style={{
+              marginLeft: "auto",
+              fontSize: 9,
+              letterSpacing: "0.08em",
+              padding: "2px 6px",
+              borderRadius: 3,
+              background: currentPage === ("Settings" as any) ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.06)",
+            }}
+          >
+            ⌘,
+          </span>
         </button>
+      </div>
+
+      {/* AI assistant */}
+      <div style={{ borderTop: "1px solid var(--line)", padding: 8 }}>
         <button
           onClick={onToggleChat}
           style={{

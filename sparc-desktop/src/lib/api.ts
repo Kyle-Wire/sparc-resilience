@@ -85,6 +85,19 @@ export const listTemplates = () =>
 // ------------------------------------------------------------------
 export const dataSummary = () => get<DataSummary>("/data/summary");
 
+export const checkCrsDistortion = (inputEpsg: string, projectedEpsg: string) =>
+  get<{
+    center_lon: number;
+    center_lat: number;
+    k_x: number;
+    k_y: number;
+    k_mean: number;
+    area_distortion_pct: number;
+    input_crs_name: string;
+    projected_crs_name: string;
+    assessment: string;
+  }>(`/crs/distortion?input_epsg=${encodeURIComponent(inputEpsg)}&projected_epsg=${encodeURIComponent(projectedEpsg)}`);
+
 export const dataPreview = (n = 50) => get<DataPreview>(`/data/preview?n=${n}`);
 
 export const dataGeoJson = (variable?: string) =>
@@ -127,6 +140,15 @@ export const runScenarios = () => post<{ status: string; n_scenarios: number; su
 
 export const scenarioResults = (format: "json" | "geojson" = "geojson") =>
   get<unknown>(`/scenarios/results?format=${format}`);
+
+export const getNutsSummary = () =>
+  get<{
+    acceptance_rate?: number;
+    n_divergences?: number;
+    posteriors?: Record<string, unknown>[];
+    convergence?: Record<string, unknown>[];
+    bma?: Record<string, unknown>[];
+  }>("/results/scenarios/nuts_summary");
 
 // ------------------------------------------------------------------
 // DAG
@@ -191,6 +213,9 @@ export async function generatePdfReport(): Promise<{ blob: Blob | null; htmlFall
 // ------------------------------------------------------------------
 export const getCorrelogramData = () =>
   get<CorrelogramData>("/results/correlogram");
+
+export const getModelPerformance = () =>
+  get<{ models: { name: string; r2: number; rmse?: number }[] }>("/results/model_performance");
 
 export const getGwenData = () =>
   get<{ rows: Record<string, unknown>[] }>("/results/gwen");

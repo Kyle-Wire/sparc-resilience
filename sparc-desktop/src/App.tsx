@@ -10,9 +10,7 @@ import Shell from "@/components/layout/Shell";
 import type { PageName } from "@/components/layout/Sidebar";
 import { PAGES } from "@/components/layout/Sidebar";
 import ChatPanel from "@/components/chat/ChatPanel";
-import SettingsView from "@/components/pipeline/SettingsView";
-import { loadTheme, applyTheme } from "@/components/pipeline/SettingsView";
-import type { LogoHue } from "@/components/pipeline/SettingsView";
+import { loadTheme, applyTheme } from "@/lib/theme";
 import { buildSystemPrompt } from "@/lib/prompts";
 import { getConfig, saveConfig, dataSummary, initProject, getReportData, getDag } from "@/lib/api";
 import type { ClaudeAction, DataSummary, ProjectConfig, ReportPayload, DagDefinition } from "@/lib/types";
@@ -20,16 +18,17 @@ import type { PromptDataContext } from "@/lib/prompts";
 
 import ProjectPage from "@/components/pages/ProjectPage";
 import DataPage from "@/components/pages/DataPage";
+import ProcessingPage from "@/components/pages/ProcessingPage";
 import DAGPage from "@/components/pages/DAGPage";
+import VariablesPage from "@/components/pages/VariablesPage";
+import PhysicsPage from "@/components/pages/PhysicsPage";
+import CRSPage from "@/components/pages/CRSPage";
+import ScenariosPage from "@/components/pages/ScenariosPage";
+import ModelsPage from "@/components/pages/ModelsPage";
 import RunPage from "@/components/pages/RunPage";
-import ResultsPage, { type Scenario } from "@/components/pages/ResultsPage";
-import DataProcessingView from "@/components/pipeline/DataProcessingView";
-import VariableDashboardView from "@/components/results/VariableDashboardView";
-import PhysicsView from "@/components/pipeline/PhysicsView";
-import CRSView from "@/components/pipeline/CRSView";
-import ScenariosView from "@/components/pipeline/ScenariosView";
-import ModelsView from "@/components/pipeline/ModelsView";
-import ReportView from "@/components/results/ReportView";
+import ResultsPage from "@/components/pages/ResultsPage";
+import ReportPage from "@/components/pages/ReportPage";
+import SettingsPage from "@/components/pages/SettingsPage";
 
 type AppPage = PageName | "Settings";
 
@@ -39,20 +38,12 @@ export default function App() {
   const project = useProject(ready);
   const [page, setPage] = useState<AppPage>("Project");
   const [chatOpen, setChatOpen] = useState(false);
-  const [scenario, setScenario] = useState<Scenario>("canopy+10");
   const [dataCtx, setDataCtx] = useState<PromptDataContext | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [logoHue, setLogoHue] = useState<LogoHue>(() => loadTheme().logoHue);
 
-  // Apply persisted theme on mount and listen for changes from Settings
+  // Apply persisted theme on mount
   useEffect(() => {
     applyTheme(loadTheme());
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail?.logoHue) setLogoHue(detail.logoHue);
-    };
-    window.addEventListener("sparc-theme-change", handler);
-    return () => window.removeEventListener("sparc-theme-change", handler);
   }, []);
 
   // Gate navigation: only Project and Settings are allowed without a loaded project
@@ -161,7 +152,7 @@ export default function App() {
     }
   }, [notif, project, navigate]);
 
-  if (!ready || project.rehydrating) return <Splash logoHue={logoHue} />;
+  if (!ready || project.rehydrating) return <Splash />;
 
   const renderPage = () => {
     switch (page) {
@@ -180,27 +171,27 @@ export default function App() {
       case "Data":
         return <DataPage key={refreshKey} />;
       case "Processing":
-        return <DataProcessingView />;
+        return <ProcessingPage />;
       case "DAG":
-        return <DAGPage key={refreshKey} />;
+        return <DAGPage key={refreshKey} onNavigate={(p) => navigate(p as AppPage)} />;
       case "Variables":
-        return <VariableDashboardView />;
+        return <VariablesPage />;
       case "Physics":
-        return <PhysicsView />;
+        return <PhysicsPage />;
       case "CRS":
-        return <CRSView />;
+        return <CRSPage />;
       case "Scenarios":
-        return <ScenariosView />;
+        return <ScenariosPage />;
       case "Models":
-        return <ModelsView />;
+        return <ModelsPage />;
       case "Run":
         return <RunPage />;
       case "Results":
-        return <ResultsPage scenario={scenario} setScenario={setScenario} />;
+        return <ResultsPage />;
       case "Report":
-        return <ReportView />;
+        return <ReportPage />;
       case "Settings":
-        return <SettingsView />;
+        return <SettingsPage />;
     }
   };
 
@@ -209,13 +200,14 @@ export default function App() {
       <PipelineProvider serverReady={ready}>
         <div style={{ position: "relative", height: "100vh", width: "100vw", overflow: "hidden" }}>
           <Shell
-            currentPage={page === "Settings" ? "Project" : page}
+            currentPage={page as any}
             onNavigate={navigate}
             onToggleChat={() => setChatOpen((o) => !o)}
             chatOpen={chatOpen}
             projectLoaded={project.projectLoaded}
             projectName={project.projectPath?.split(/[\\/]/).pop()?.replace(".yml", "") ?? undefined}
-            logoHue={logoHue}
+            projectDomain={undefined}
+            projectEpsg={undefined}
             status={status}
           >
             {renderPage()}

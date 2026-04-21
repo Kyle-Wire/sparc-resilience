@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SPARC Labs — Desktop Preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<script src="https://unpkg.com/react@19/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@19/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+/* ── SPARC Labs Design Tokens ── */
+:root {
+  --purple:#602468; --magenta:#9e337d; --pink:#e94d9b; --red:#e94461;
+  --crimson:#e73c25; --orange:#e76c25; --amber:#e79024; --gold:#f0b632; --yellow:#fbdd46;
+  --ink:#1a1416; --ink-2:#2b2327; --paper:#f7f4ee; --paper-2:#ede8dd;
+  --line:#c9c2b3; --muted:#6e6358;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{width:100%;height:100%;overflow:hidden}
+body{font-family:'Inter',system-ui,sans-serif;background:#d8d3c6;color:var(--ink);position:relative}
+body::before{content:'';position:fixed;inset:0;z-index:0;pointer-events:none;
+  background:radial-gradient(ellipse at 20% 30%,rgba(231,60,37,.06) 0%,transparent 60%),
+  radial-gradient(ellipse at 80% 70%,rgba(96,36,104,.08) 0%,transparent 60%),
+  repeating-linear-gradient(rgba(0,0,0,.03) 0 1px,transparent 1px 24px),
+  repeating-linear-gradient(90deg,rgba(0,0,0,.03) 0 1px,transparent 1px 24px)}
+#root{position:relative;z-index:1}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+button{font-family:inherit}
+.scroll::-webkit-scrollbar{width:10px;height:10px}
+.scroll::-webkit-scrollbar-track{background:transparent}
+.scroll::-webkit-scrollbar-thumb{background:var(--line);border-radius:10px;border:2px solid var(--paper)}
+input[type=text],input[type=password]{outline:none}
+@keyframes loadBar{from{transform:translateX(-100%)}to{transform:translateX(0)}}
+@keyframes blink{50%{opacity:0}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-type="module">
+const {useState,useEffect,useCallback,useRef,useMemo,createElement:h}=React;
+
+/* ═══════════════════ DESIGN TOKENS ═══════════════════ */
+const SPARC_RAMP_HEX=["#602468","#9e337d","#e94d9b","#e94461","#e73c25","#e76c25","#e79024","#f0b632","#fbdd46"];
+
+const TEMPLATE_COLORS={
+  uhi:"var(--crimson)",forcesmip:"var(--purple)",groundwater:"#9e337d",
+  air_quality:"var(--amber)",stormwater:"#e94d9b",coastal:"#e94461",
+  geotechnical:"#e76c25",seismic:"var(--gold)",noise:"var(--muted)",
+  wildfire:"var(--crimson)",drought:"var(--amber)",water_quality:"var(--purple)",
+};
+
+/* ═══════════════════ DESIGN SYSTEM ═══════════════════ */
+function Card({title,subtitle,actions,children,padding=16,style={}}){
+  return h('div',{style:{background:'#fff',border:'1px solid var(--line)',borderRadius:8,display:'flex',flexDirection:'column',...style}},
+    (title||actions)&&h('div',{style:{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',borderBottom:'1px solid var(--line)',background:'#fdfbf7',borderRadius:'8px 8px 0 0'}},
+      h('div',{style:{flex:1,minWidth:0}},
+        title&&h('div',{style:{fontSize:12,fontWeight:700,letterSpacing:'-0.01em'}},title),
+        subtitle&&h('div',{className:'mono',style:{fontSize:10,color:'var(--muted)',marginTop:2}},subtitle)
+      ),actions),
+    h('div',{style:{padding,flex:1,minHeight:0}},children)
+  );
+}
+
+function SectionHeader({kicker,label,right}){
+  return h('div',{style:{display:'flex',alignItems:'flex-end',justifyContent:'space-between',marginBottom:14}},
+    h('div',null,
+      h('div',{className:'mono',style:{fontSize:10,color:'var(--muted)',letterSpacing:'0.16em',textTransform:'uppercase'}},kicker),
+      h('div',{style:{fontSize:22,fontWeight:800,letterSpacing:'-0.02em',marginTop:3}},label)),right);
+}
+
+function Tag({color='var(--ink)',children}){
+  return h('span',{className:'mono',style:{fontSize:9.5,padding:'2px 6px',borderRadius:3,background:`${color}22`,color,letterSpacing:'0.06em',textTransform:'uppercase',fontWeight:600}},children);
+}
+
+function Stat({label,value,tint='var(--ink)',sub}){
+  return h('div',{style:{border:'1px solid var(--line)',borderRadius:8,padding:'10px 14px',background:'#fff',position:'relative',overflow:'hidden'}},
+    h('div',{className:'mono',style:{fontSize:9.5,color:'var(--muted)',letterSpacing:'0.12em',textTransform:'uppercase'}},label),
+    h('div',{style:{fontSize:22,fontWeight:700,letterSpacing:'-0.02em',color:tint,marginTop:2}},value),
+    sub&&h('div',{className:'mono',style:{fontSize:10,color:'var(--muted)',marginTop:2}},sub));
+}
+
+function StatGrid({children}){return h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:10,marginBottom:14}},children)}
+
+function Btn({children,primary,small,onClick,disabled}){
+  return h('button',{onClick,disabled,style:{border:'1px solid '+(primary?'var(--ink)':'var(--line)'),background:primary?'var(--ink)':'#fff',color:primary?'#fff':'var(--ink-2)',padding:small?'4px 10px':'7px 14px',fontSize:small?11:12,fontWeight:600,borderRadius:5,cursor:disabled?'not-allowed':'pointer',fontFamily:'inherit',opacity:disabled?.5:1}},children);
+}
+
+function KeyVal({label,value}){
+  return h('div',null,
+    h('div',{className:'mono',style:{fontSize:9.5,color:'var(--muted)',letterSpacing:'0.1em',textTransform:'uppercase'}},label),
+    h('div',{style:{fontSize:13,fontWeight:600,marginTop:3}},value));
+}
+
+const thStyle={padding:'6px 8px',fontWeight:600,fontSize:10,letterSpacing:'0.1em',textTransform:'uppercase',textAlign:'left'};
+const tdStyle={padding:'7px 8px',fontSize:12};
+
+/* ═══════════════════ TOPBAR ═══════════════════ */
+function StatusPill({color,label,value}){
+  return h('div',{className:'mono',style:{display:'flex',alignItems:'center',gap:6,fontSize:10,color:'var(--muted)'}},
+    h('span',{style:{width:6,height:6,borderRadius:'50%',background:color}}),
+    h('span',{style:{letterSpacing:'0.1em',textTransform:'uppercase'}},label),
+    h('span',{style:{color:'var(--ink-2)'}},value));
+}
+
+function Topbar({page}){
+  return h('div',{style:{height:42,flexShrink:0,display:'flex',alignItems:'center',borderBottom:'1px solid var(--line)',background:'#fdfbf7',paddingRight:10}},
+    h('div',{style:{display:'flex',alignItems:'center',gap:10,padding:'0 16px',flex:1}},
+      h('span',{className:'mono',style:{fontSize:10,color:'var(--muted)',letterSpacing:'0.12em',textTransform:'uppercase'}},'sparc · pipeline'),
+      h('span',{style:{fontSize:11,color:'var(--line)'}},'/'),
+      h('span',{style:{fontSize:12,fontWeight:600}},page)),
+    h('div',{style:{display:'flex',alignItems:'center',gap:16}},
+      h(StatusPill,{color:'var(--crimson)',label:'Sidecar',value:'preview'}),
+      h(StatusPill,{color:'var(--amber)',label:'GPU',value:'CUDA · 11.8'}),
+      h(StatusPill,{color:'var(--purple)',label:'Claude',value:'sonnet-4.6'})));
+}
+
+/* ═══════════════════ SIDEBAR ═══════════════════ */
+const SECTIONS=[
+  {label:'Setup',pages:['Project','Data','Processing']},
+  {label:'Analysis',pages:['DAG','Variables','Physics','CRS','Scenarios','Models']},
+  {label:'Pipeline',pages:['Run','Results','Report']},
+];
+
+function Sidebar({currentPage,onNavigate,projectLoaded,projectName,projectDomain,projectEpsg,chatOpen,onToggleChat}){
+  let idx=0;
+  return h('aside',{style:{width:224,flexShrink:0,height:'100%',display:'flex',flexDirection:'column',background:'#fdfbf7',borderRight:'1px solid var(--line)'}},
+    // Brand
+    h('div',{style:{display:'flex',alignItems:'center',gap:12,padding:'14px 16px',borderBottom:'1px solid var(--line)'}},
+      h('div',{style:{width:40,height:40,display:'flex',alignItems:'center',justifyContent:'center'}},
+        h('img',{src:'data:image/svg+xml;utf8,'+encodeURIComponent('<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="4" width="14" height="14" rx="2" fill="#e73c25"/><rect x="22" y="4" width="14" height="14" rx="2" fill="#602468"/><rect x="4" y="22" width="14" height="14" rx="2" fill="#e79024"/><rect x="22" y="22" width="14" height="14" rx="2" fill="#9e337d"/></svg>'),style:{width:40,height:40}})),
+      h('div',{style:{display:'flex',flexDirection:'column',lineHeight:1,gap:3}},
+        h('span',{style:{fontSize:13,fontWeight:800,letterSpacing:'-0.01em'}},'SPARC'),
+        h('span',{style:{fontSize:9.5,fontWeight:600,letterSpacing:'0.18em',color:'var(--muted)'}},'LABS'))),
+    // Project pill
+    h('div',{style:{padding:'10px 12px 4px'}},
+      h('div',{style:{border:'1px dashed var(--line)',background:'#fff',borderRadius:8,padding:'8px 10px'}},
+        h('div',{className:'mono',style:{fontSize:9,color:'var(--muted)',textTransform:'uppercase',letterSpacing:'0.12em'}},'active project'),
+        h('div',{style:{fontSize:12,fontWeight:700,marginTop:3,display:'flex',alignItems:'center',gap:6}},
+          h('span',{style:{width:6,height:6,borderRadius:'50%',background:projectLoaded?'var(--crimson)':'var(--muted)'}}),
+          projectLoaded&&projectName?projectName:'No project'),
+        projectLoaded&&(projectDomain||projectEpsg)&&h('div',{className:'mono',style:{fontSize:10,color:'var(--muted)',marginTop:2}},
+          projectDomain,projectDomain&&projectEpsg?' · ':'',projectEpsg?'EPSG:'+projectEpsg:''))),
+    // Nav
+    h('nav',{className:'scroll',style:{flex:1,overflowY:'auto',padding:'6px 0 12px'}},
+      SECTIONS.map((section,si)=>h('div',{key:section.label,style:{marginTop:si===0?4:10}},
+        h('div',{style:{padding:'4px 18px',fontSize:9.5,fontWeight:700,letterSpacing:'0.16em',color:'var(--muted)',textTransform:'uppercase',display:'flex',justifyContent:'space-between',alignItems:'center'}},
+          h('span',null,section.label),
+          h('span',{className:'mono',style:{fontSize:9,opacity:.6}},String(si+1).padStart(2,'0'))),
+        section.pages.map(p=>{
+          const n=++idx;const active=p===currentPage;
+          const disabled=p!=='Project'&&!projectLoaded;
+          return h('button',{key:p,onClick:()=>!disabled&&onNavigate(p),
+            onMouseEnter:e=>{if(!active&&!disabled)e.currentTarget.style.background='rgba(0,0,0,0.05)'},
+            onMouseLeave:e=>{if(!active&&!disabled)e.currentTarget.style.background='transparent'},
+            style:{display:'flex',alignItems:'center',gap:10,width:'100%',textAlign:'left',border:'none',padding:'7px 12px 7px 16px',fontFamily:'inherit',fontSize:13,cursor:disabled?'default':'pointer',background:active?'var(--ink)':'transparent',color:active?'#fff':disabled?'var(--muted)':'var(--ink-2)',fontWeight:active?600:500,opacity:disabled?.5:1,transition:'background 0.15s'}},
+            h('span',{className:'mono',style:{display:'inline-flex',alignItems:'center',justifyContent:'center',width:20,height:18,borderRadius:3,fontSize:10,fontWeight:600,background:active?'var(--crimson)':'rgba(0,0,0,0.06)',color:active?'#fff':'var(--muted)'}},String(n).padStart(2,'0')),
+            p);})))),
+    // Assistant
+    h('div',{style:{borderTop:'1px solid var(--line)',padding:8}},
+      h('button',{onClick:onToggleChat,style:{display:'flex',alignItems:'center',gap:10,width:'100%',textAlign:'left',padding:'8px 10px',borderRadius:6,border:'1px solid '+(chatOpen?'var(--ink)':'transparent'),background:chatOpen?'var(--ink)':'transparent',color:chatOpen?'#fff':'var(--ink-2)',fontSize:12.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}},
+        h('span',{style:{width:18,height:18,display:'inline-flex',alignItems:'center',justifyContent:'center'},dangerouslySetInnerHTML:{__html:'<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4h12v7H9l-3 3v-3H2V4z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>'}}),
+        'Assistant',
+        h('span',{className:'mono',style:{marginLeft:'auto',fontSize:9,letterSpacing:'0.08em',padding:'2px 6px',borderRadius:3,background:chatOpen?'rgba(255,255,255,0.15)':'rgba(0,0,0,0.06)'}},'⌘K'))));
+}
+
+/* ═══════════════════ SHELL ═══════════════════ */
+function Shell({currentPage,onNavigate,children,projectLoaded,projectName,projectDomain,projectEpsg,chatOpen,onToggleChat}){
+  return h('div',{style:{width:'100%',height:'100%',display:'flex',background:'var(--paper)'}},
+    h(Sidebar,{currentPage,onNavigate,projectLoaded,projectName,projectDomain,projectEpsg,chatOpen,onToggleChat}),
+    h('div',{style:{flex:1,display:'flex',flexDirection:'column',minWidth:0}},
+      h(Topbar,{page:currentPage}),
+      h('main',{className:'scroll',style:{flex:1,overflow:'auto',padding:'20px 22px',background:'var(--paper)',backgroundImage:'linear-gradient(rgba(0,0,0,0.035) 1px,transparent 1px),linear-gradient(90deg,rgba(0,0,0,0.035) 1px,transparent 1px)',backgroundSize:'24px 24px',position:'relative'}},children)));
+}
+
+/* ═══════════════════ PAGE: PROJECT ═══════════════════ */
+function ProjectPage({onProjectLoaded}){
+  const cfg={project:{name:'providence_ri_uhi',domain:'uhi',version:'2.1'},data:{file_path:'brown4.csv',target_column:'AAT_z'},crs:{input:'4326',projected:'3438'},predictors:['tree_canopy_pct','impervious_pct','albedo','building_height','ndvi','elevation','dist_coast'],pipeline:{random_seed:42,fast_mode:false},flags:{use_gwen:true,use_laplacian:true}};
+  const [yamlOpen,setYamlOpen]=useState(false);
+  const yamlPreview=`project:\n  name: ${cfg.project.name}\n  domain: ${cfg.project.domain}\n  version: ${cfg.project.version}\ndata:\n  path: ${cfg.data.file_path}\n  target_column: ${cfg.data.target_column}\ncrs:\n  input_epsg: ${cfg.crs.input}\n  projected_epsg: ${cfg.crs.projected}\npredictors:\n${cfg.predictors.map(p=>'  - '+p).join('\n')}\nflags:\n  use_gwen: true\n  use_laplacian: true`;
+
+  return h('div',null,
+    h(SectionHeader,{kicker:'01 · setup',label:'Project',right:h('div',{style:{display:'flex',gap:8}},
+      h(Btn,{onClick:()=>onProjectLoaded()},'Open project.yml'),
+      h(Btn,{primary:true,onClick:()=>onProjectLoaded()},'New from template'))}),
+    h('div',{style:{display:'grid',gridTemplateColumns:'2fr 1fr',gap:14}},
+      h(Card,{title:'Active project',subtitle:'uhi · providence_ri_uhi'},
+        h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}},
+          h(KeyVal,{label:'Name',value:'providence_ri_uhi'}),
+          h(KeyVal,{label:'Domain',value:h(Tag,{color:'var(--crimson)'},'uhi')}),
+          h(KeyVal,{label:'Target',value:'AAT_z'}),
+          h(KeyVal,{label:'Data file',value:'brown4.csv'}),
+          h(KeyVal,{label:'CRS (in / proj)',value:'EPSG:4326 → 3438'}),
+          h(KeyVal,{label:'Target',value:'AAT_z'}),
+          h(KeyVal,{label:'Random seed',value:'42'}),
+          h(KeyVal,{label:'Pipeline',value:h(Tag,{color:'var(--purple)'},'fast_mode:false')})),
+        h('div',{style:{marginTop:14,borderTop:'1px dashed var(--line)',paddingTop:12}},
+          h('button',{onClick:()=>setYamlOpen(!yamlOpen),className:'mono',style:{fontSize:10,color:'var(--muted)',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:6,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:0}},'project.yml · preview '+(yamlOpen?'▲':'▼')),
+          yamlOpen&&h('pre',{className:'mono',style:{fontSize:10.5,margin:0,lineHeight:1.6,color:'var(--ink-2)'}},yamlPreview))),
+      h(Card,{title:'Templates',subtitle:'12 domains available'},
+        h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}},
+          Object.entries(TEMPLATE_COLORS).map(([k,c])=>h('button',{key:k,style:{textAlign:'left',border:'1px solid '+(k==='uhi'?'var(--amber)':'var(--line)'),background:k==='uhi'?'#fff8ef':'#fff',borderRadius:5,padding:'7px 9px',cursor:'pointer',fontFamily:'inherit'}},
+            h('div',{className:'mono',style:{fontSize:9,color:c,letterSpacing:'0.08em',textTransform:'uppercase'}},k),
+            h('div',{style:{fontSize:11,fontWeight:600,color:'var(--ink-2)',marginTop:1}},k.replace(/_/g,' '))))))));
+}
+
+/* ═══════════════════ PAGE: DATA ═══════════════════ */
+function DataPage(){
+  const cols=['FID','POINT_X','POINT_Y','AAT_z','tree_canopy_pct','impervious_pct','albedo','building_height','ndvi','elevation','dist_coast','pop_density'];
+  const roles={AAT_z:{tag:'Target',color:'var(--crimson)'},POINT_X:{tag:'Coord',color:'var(--purple)'},POINT_Y:{tag:'Coord',color:'var(--purple)'},FID:{tag:'ID',color:'var(--muted)'}};
+  return h('div',null,
+    h(SectionHeader,{kicker:'02 · setup',label:'Data',right:h(Btn,{small:true},'Upload CSV')}),
+    h(StatGrid,null,h(Stat,{label:'Rows',value:'2,847'}),h(Stat,{label:'Columns',value:'12'}),h(Stat,{label:'Missing',value:'0.18%',tint:'var(--purple)'}),h(Stat,{label:'Spatial density',value:'≈0.1 / 30m²',tint:'var(--crimson)'})),
+    h(Card,{title:'Schema',subtitle:'2847 rows · 12 columns'},
+      h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:12}},
+        h('thead',null,h('tr',{style:{textAlign:'left',color:'var(--muted)'}},
+          h('th',{style:thStyle},'#'),h('th',{style:thStyle},'Column'),h('th',{style:thStyle},'Type'),h('th',{style:thStyle},'Summary'),h('th',{style:thStyle},'Role'))),
+        h('tbody',null,cols.map((c,i)=>{
+          const r=roles[c]||{tag:'Predictor',color:'var(--ink-2)'};
+          return h('tr',{key:c,style:{borderTop:'1px solid var(--line)'}},
+            h('td',{style:{...tdStyle,color:'var(--muted)'},className:'mono'},String(i).padStart(2,'0')),
+            h('td',{style:{...tdStyle,fontWeight:600}},c),
+            h('td',{style:tdStyle},h('span',{className:'mono',style:{fontSize:10,color:'var(--purple)'}},'float')),
+            h('td',{style:{...tdStyle,color:'var(--muted)'},className:'mono'},'0.00 … 1.00'),
+            h('td',{style:tdStyle},h(Tag,{color:r.color},r.tag)));
+        })))));
+}
+
+/* ═══════════════════ PAGE: PROCESSING ═══════════════════ */
+function ProcessingPage(){
+  const [pathway,setPathway]=useState('preprocessed');
+  const steps=[{id:1,name:'Ingest CSV',status:'done'},{id:2,name:'Reproject CRS',status:'done'},{id:3,name:'Deduplicate coords',status:'done'},{id:4,name:'Impute missing',status:'done'},{id:5,name:'Derive features',status:'done'},{id:6,name:'Standardise (z-score)',status:'done'},{id:7,name:'Spatial block split',status:'running'},{id:8,name:'Write cached arrow',status:'queued'}];
+  return h('div',null,
+    h(SectionHeader,{kicker:'03 · setup',label:'Processing',right:h('div',{style:{display:'flex',gap:8}},h(Btn,{small:true},'Revert'),h(Btn,{primary:true,small:true},'Apply all'))}),
+    h('div',{style:{display:'flex',gap:4,marginBottom:14}},
+      ['preprocessed','spatial'].map(p=>h('button',{key:p,onClick:()=>setPathway(p),style:{border:'1px solid '+(pathway===p?'var(--ink)':'var(--line)'),background:pathway===p?'var(--ink)':'#fff',color:pathway===p?'#fff':'var(--ink-2)',fontSize:11,padding:'5px 12px',borderRadius:4,fontFamily:'inherit',fontWeight:600,cursor:'pointer'}},p==='preprocessed'?'Preprocessed Data':'Spatial Data Builder'))),
+    h(StatGrid,null,h(Stat,{label:'Input Rows',value:'2,847'}),h(Stat,{label:'After Clean',value:'2,839',tint:'var(--purple)',sub:'-8 duplicates'}),h(Stat,{label:'Missing Filled',value:'142',tint:'var(--amber)',sub:'k-NN · 0.42% of cells'}),h(Stat,{label:'Derived Features',value:'+4',tint:'var(--crimson)',sub:'16 total'})),
+    h(Card,{title:'Transformation pipeline',subtitle:'applied left-to-right · fold-aware where marked'},
+      steps.map(s=>h('div',{key:s.id,style:{display:'grid',gridTemplateColumns:'30px 1fr 70px',alignItems:'center',gap:10,padding:'8px 0',borderTop:s.id>1?'1px dashed var(--line)':'none'}},
+        h('span',{className:'mono',style:{display:'inline-flex',alignItems:'center',justifyContent:'center',width:26,height:26,borderRadius:4,background:s.status==='done'?'var(--ink)':s.status==='running'?'var(--crimson)':'rgba(0,0,0,0.05)',color:s.status==='queued'?'var(--muted)':'#fff',fontSize:11,fontWeight:700}},s.id),
+        h('div',null,h('div',{style:{fontSize:12.5,fontWeight:600}},s.name),s.status==='running'&&h('div',{style:{height:4,background:'rgba(0,0,0,0.05)',borderRadius:2,marginTop:4,overflow:'hidden'}},h('div',{style:{width:'60%',height:'100%',background:'var(--crimson)',animation:'loadBar 1.3s ease-out infinite'}}))),
+        h(Tag,{color:s.status==='done'?'var(--ink)':s.status==='running'?'var(--crimson)':'var(--muted)'},s.status)))));
+}
+
+/* ═══════════════════ PAGE: DAG ═══════════════════ */
+function DAGPage(){
+  const nodes=[{id:'tree_canopy',type:'treatment',label:'Tree Canopy',x:80,y:60},{id:'impervious',type:'treatment',label:'Impervious',x:80,y:180},{id:'albedo',type:'treatment',label:'Albedo',x:80,y:300},{id:'building_density',type:'mediator',label:'Building Density',x:340,y:120},{id:'elevation',type:'confounder',label:'Elevation',x:340,y:240},{id:'dist_coast',type:'confounder',label:'Dist to Coast',x:340,y:350},{id:'aat_z',type:'outcome',label:'AAT_z',x:580,y:200}];
+  const edges=[['tree_canopy','aat_z'],['impervious','aat_z'],['impervious','building_density'],['albedo','aat_z'],['building_density','aat_z'],['elevation','aat_z'],['elevation','tree_canopy'],['dist_coast','aat_z']];
+  const coefficients={'tree_canopy → aat_z':-0.42,'impervious → aat_z':0.38,'albedo → aat_z':-0.27,'building_density → aat_z':0.21,'elevation → aat_z':-0.18,'dist_coast → aat_z':-0.12,'elevation → tree_canopy':0.31,'impervious → building_density':0.55};
+  const typeColors={treatment:'var(--crimson)',mediator:'var(--amber)',confounder:'var(--purple)',outcome:'var(--ink)'};
+
+  const svgRef=useRef(null);
+  useEffect(()=>{
+    // Draw edges on SVG
+  },[]);
+
+  return h('div',null,
+    h(SectionHeader,{kicker:'04 · analysis',label:'DAG',right:h('div',{style:{display:'flex',gap:8,alignItems:'center'}},h(Tag,{color:'var(--amber)'},'MC3 Pending'),h(Btn,{small:true,primary:true},'Run MC3'))}),
+    h(StatGrid,null,h(Stat,{label:'Treatments',value:'3',tint:'var(--crimson)'}),h(Stat,{label:'Mediators',value:'1',tint:'var(--purple)'}),h(Stat,{label:'Confounders',value:'2',tint:'var(--amber)'}),h(Stat,{label:'Outcome',value:'1',tint:'var(--ink)'})),
+    h('div',{style:{display:'grid',gridTemplateColumns:'2fr 1fr',gap:14}},
+      h(Card,{title:'Causal graph',subtitle:'drag to reposition · right-click to change type'},
+        h('div',{style:{height:420,borderRadius:6,overflow:'hidden',border:'1px solid var(--line)',background:'#faf8f4',position:'relative'}},
+          h('svg',{width:'100%',height:'100%',style:{position:'absolute',inset:0}},
+            edges.map(([s,t],i)=>{const sn=nodes.find(n=>n.id===s),tn=nodes.find(n=>n.id===t);if(!sn||!tn)return null;return h('line',{key:i,x1:sn.x+50,y1:sn.y+16,x2:tn.x,y2:tn.y+16,stroke:'var(--purple)',strokeWidth:1.5,markerEnd:'url(#arrow)'})}),
+            h('defs',null,h('marker',{id:'arrow',viewBox:'0 0 10 10',refX:10,refY:5,markerWidth:6,markerHeight:6,orient:'auto-start-reverse'},h('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:'var(--purple)'})))),
+          nodes.map(n=>h('div',{key:n.id,style:{position:'absolute',left:n.x,top:n.y,background:'#fff',border:'2px solid '+(typeColors[n.type]||'var(--ink)'),borderRadius:6,padding:'6px 12px',fontSize:11,fontWeight:600,minWidth:80,textAlign:'center',boxShadow:'0 1px 4px rgba(0,0,0,0.08)'}},
+            h('div',{className:'mono',style:{fontSize:8,color:typeColors[n.type],textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:2}},n.type),
+            n.label)))),
+      h(Card,{title:'Structural coefficients',subtitle:'posterior median from MC3'},
+        h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:12}},
+          h('thead',null,h('tr',{style:{textAlign:'left',color:'var(--muted)'}},h('th',{style:thStyle},'Edge'),h('th',{style:{...thStyle,textAlign:'right'}},'β'))),
+          h('tbody',null,Object.entries(coefficients).map(([edge,beta])=>h('tr',{key:edge,style:{borderTop:'1px solid var(--line)'}},
+            h('td',{style:{...tdStyle,fontWeight:500}},edge),
+            h('td',{className:'mono',style:{...tdStyle,textAlign:'right',fontWeight:700,color:beta<0?'var(--purple)':'var(--crimson)'}},(beta>0?'+':'')+beta.toFixed(3)))))))));
+}
+
+/* ═══════════════════ PAGE: VARIABLES ═══════════════════ */
+function VariablesPage(){
+  const vars=[
+    {name:'tree_canopy_pct',type:'float',role:'predictor',selected:true,corr:0.42,mean:0.32,std:0.15},
+    {name:'impervious_pct',type:'float',role:'predictor',selected:true,corr:0.38,mean:0.45,std:0.22},
+    {name:'albedo',type:'float',role:'predictor',selected:true,corr:0.27,mean:0.25,std:0.08},
+    {name:'building_height',type:'float',role:'predictor',selected:true,corr:0.21,mean:12,std:8},
+    {name:'ndvi',type:'float',role:'predictor',selected:true,corr:0.35,mean:0.41,std:0.18},
+    {name:'elevation',type:'float',role:'confounder',selected:true,corr:0.18,mean:24,std:12},
+    {name:'dist_coast',type:'float',role:'confounder',selected:true,corr:0.12,mean:3200,std:1800},
+    {name:'AAT_z',type:'float',role:'target',selected:true,corr:1.0,mean:0,std:1},
+  ];
+  return h('div',null,
+    h(SectionHeader,{kicker:'05 · analysis',label:'Variables',right:h(Btn,{primary:true,small:true},'Save selection')}),
+    h(StatGrid,null,h(Stat,{label:'Total',value:String(vars.length)}),h(Stat,{label:'Selected',value:String(vars.filter(v=>v.selected).length),tint:'var(--crimson)'}),h(Stat,{label:'Actionable',value:'5',tint:'var(--purple)'}),h(Stat,{label:'Max |ρ|',value:'0.420',tint:'var(--amber)'})),
+    h(Card,{title:'Variable ledger',subtitle:'sorted by |ρ| descending'},
+      h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:12}},
+        h('thead',null,h('tr',{style:{textAlign:'left',color:'var(--muted)'}},
+          h('th',{style:{...thStyle,width:30}},'☑'),h('th',{style:thStyle},'Variable'),h('th',{style:thStyle},'Type'),h('th',{style:thStyle},'Role'),h('th',{style:thStyle},'Mean'),h('th',{style:thStyle},'Std'),h('th',{style:{...thStyle,textAlign:'right'}},'|ρ|'))),
+        h('tbody',null,[...vars].sort((a,b)=>Math.abs(b.corr)-Math.abs(a.corr)).map(v=>h('tr',{key:v.name,style:{borderTop:'1px solid var(--line)'}},
+          h('td',{style:tdStyle},h('input',{type:'checkbox',checked:v.selected,readOnly:true,style:{accentColor:'var(--crimson)'}})),
+          h('td',{style:{...tdStyle,fontWeight:600}},v.name),
+          h('td',{style:tdStyle},h('span',{className:'mono',style:{fontSize:10,color:'var(--purple)'}},v.type)),
+          h('td',{style:tdStyle},h(Tag,{color:v.role==='target'?'var(--crimson)':v.role==='confounder'?'var(--purple)':'var(--ink-2)'},v.role)),
+          h('td',{style:tdStyle,className:'mono'},v.mean.toFixed(2)),
+          h('td',{style:tdStyle,className:'mono'},v.std.toFixed(2)),
+          h('td',{className:'mono',style:{...tdStyle,textAlign:'right',fontWeight:700,color:Math.abs(v.corr)>0.3?'var(--crimson)':'var(--muted)'}},Math.abs(v.corr).toFixed(3))))))));
+}
+
+/* ═══════════════════ PAGE: PHYSICS ═══════════════════ */
+function PhysicsPage(){
+  const [constraints,setConstraints]=useState([
+    {variable:'tree_canopy_pct',direction:'decreasing',reason:'More canopy → lower temperature'},
+    {variable:'impervious_pct',direction:'increasing',reason:'More impervious → higher temperature'},
+    {variable:'albedo',direction:'decreasing',reason:'Higher albedo → lower temperature'},
+    {variable:'building_height',direction:'increasing',reason:'Taller buildings → more heat trapping'},
+    {variable:'ndvi',direction:'decreasing',reason:'More vegetation → lower temperature'},
+  ]);
+  const [selected,setSelected]=useState('tree_canopy_pct');
+  const guardrails=[{label:'Max temperature anomaly',value:'±6.0 °C',desc:'Physical bound on UHI intensity'},{label:'Laplacian penalty weight',value:'λ = 0.01',desc:'Spatial smoothness constraint'},{label:'GWEN normalization',value:'enabled',desc:'Geographically weighted evidence normalization'}];
+
+  const canvasRef=useRef(null);
+  useEffect(()=>{
+    const canvas=canvasRef.current;if(!canvas)return;
+    const w=canvas.clientWidth,h=canvas.clientHeight;
+    canvas.width=w*2;canvas.height=h*2;
+    const ctx=canvas.getContext('2d');if(!ctx)return;
+    ctx.scale(2,2);
+    const c=constraints.find(c=>c.variable===selected);
+    const dec=c?.direction==='decreasing';
+    ctx.strokeStyle='var(--line)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(40,10);ctx.lineTo(40,h-25);ctx.lineTo(w-10,h-25);ctx.stroke();
+    ctx.strokeStyle='var(--crimson)';ctx.lineWidth=2.5;ctx.beginPath();
+    for(let i=0;i<=60;i++){const t=i/60;const x=42+t*(w-54);const y=dec?20+(h-55)*(1-Math.exp(-3*t))*.85+Math.sin(t*6)*5:h-35-(h-55)*(1-Math.exp(-3*t))*.85+Math.sin(t*6)*5;if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);}ctx.stroke();
+    ctx.fillStyle='rgba(231,60,37,0.12)';ctx.beginPath();
+    for(let i=0;i<=60;i++){const t=i/60;const x=42+t*(w-54);const y=(dec?20+(h-55)*(1-Math.exp(-3*t))*.85:h-35-(h-55)*(1-Math.exp(-3*t))*.85)+Math.sin(t*6)*5-15;if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);}
+    for(let i=60;i>=0;i--){const t=i/60;const x=42+t*(w-54);const y=(dec?20+(h-55)*(1-Math.exp(-3*t))*.85:h-35-(h-55)*(1-Math.exp(-3*t))*.85)+Math.sin(t*6)*5+15;ctx.lineTo(x,y);}ctx.closePath();ctx.fill();
+    ctx.fillStyle='var(--muted)';ctx.font="9px 'JetBrains Mono'";ctx.textAlign='center';ctx.fillText(selected.replace(/_/g,' '),w/2,h-6);
+  },[selected,constraints]);
+
+  return h('div',null,
+    h(SectionHeader,{kicker:'06 · analysis',label:'Physics',right:h(Btn,{primary:true,small:true},'Save constraints')}),
+    h(StatGrid,null,h(Stat,{label:'Constrained',value:String(constraints.filter(c=>c.direction!=='none').length),tint:'var(--crimson)'}),h(Stat,{label:'Increasing',value:String(constraints.filter(c=>c.direction==='increasing').length),tint:'var(--amber)'}),h(Stat,{label:'Decreasing',value:String(constraints.filter(c=>c.direction==='decreasing').length),tint:'var(--purple)'}),h(Stat,{label:'Guardrails',value:'3'})),
+    h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}},
+      h(Card,{title:'Monotone constraints',subtitle:'click direction to cycle: ↑ ↓ ●'},
+        constraints.map((c,i)=>h('div',{key:c.variable,onClick:()=>setSelected(c.variable),style:{display:'grid',gridTemplateColumns:'1fr auto auto',alignItems:'center',gap:10,padding:'10px 8px',borderTop:i>0?'1px dashed var(--line)':'none',cursor:'pointer',background:selected===c.variable?'rgba(231,60,37,0.04)':'transparent',borderRadius:4}},
+          h('div',null,h('div',{style:{fontSize:12.5,fontWeight:600}},c.variable.replace(/_/g,' ')),h('div',{className:'mono',style:{fontSize:10,color:'var(--muted)',marginTop:2}},c.reason)),
+          h('button',{onClick:e=>{e.stopPropagation();setConstraints(p=>p.map(x=>x.variable===c.variable?{...x,direction:x.direction==='increasing'?'decreasing':x.direction==='decreasing'?'none':'increasing'}:x))},style:{width:30,height:30,borderRadius:5,border:'1px solid var(--line)',background:c.direction==='none'?'#fff':c.direction==='increasing'?'#fff3ea':'#f5eaf8',cursor:'pointer',fontSize:16,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'inherit'}},c.direction==='increasing'?'↑':c.direction==='decreasing'?'↓':'●'),
+          h(Tag,{color:c.direction==='increasing'?'var(--amber)':c.direction==='decreasing'?'var(--purple)':'var(--muted)'},c.direction)))),
+      h('div',{style:{display:'flex',flexDirection:'column',gap:14}},
+        h(Card,{title:'Response curve',subtitle:selected.replace(/_/g,' ')+' → target'},h('canvas',{ref:canvasRef,style:{width:'100%',height:200,display:'block'}})),
+        h(Card,{title:'Guardrails',subtitle:'physical bounds and regularization'},guardrails.map((g,i)=>h('div',{key:g.label,style:{padding:'10px 0',borderTop:i>0?'1px dashed var(--line)':'none'}},h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center'}},h('span',{style:{fontSize:12.5,fontWeight:600}},g.label),h(Tag,{color:'var(--ink)'},g.value)),h('div',{className:'mono',style:{fontSize:10,color:'var(--muted)',marginTop:3}},g.desc)))))));
+}
+
+/* ═══════════════════ PAGE: CRS ═══════════════════ */
+function CRSPage(){
+  const canvasRef=useRef(null);
+  useEffect(()=>{
+    const canvas=canvasRef.current;if(!canvas)return;
+    const w=canvas.clientWidth,ht=canvas.clientHeight;canvas.width=w*2;canvas.height=ht*2;
+    const ctx=canvas.getContext('2d');if(!ctx)return;ctx.scale(2,2);
+    ctx.fillStyle='#faf8f4';ctx.fillRect(0,0,w,ht);
+    ctx.strokeStyle='rgba(0,0,0,0.06)';ctx.lineWidth=.5;
+    for(let x=0;x<w;x+=20){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,ht);ctx.stroke()}
+    for(let y=0;y<ht;y+=20){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}
+    ctx.fillStyle='var(--crimson)';
+    for(let i=0;i<120;i++){const a=Math.random()*Math.PI*2;const r=Math.random()*Math.min(w,ht)*.35;ctx.globalAlpha=.4;ctx.beginPath();ctx.arc(w/2+Math.cos(a)*r*(1+Math.random()*.3),ht/2+Math.sin(a)*r*(.7+Math.random()*.2),2.5,0,Math.PI*2);ctx.fill()}
+    ctx.globalAlpha=1;ctx.strokeStyle='var(--purple)';ctx.lineWidth=1.5;ctx.setLineDash([4,4]);ctx.strokeRect(w/2-w*.32,ht/2-ht*.28,w*.64,ht*.56);
+    ctx.fillStyle='var(--muted)';ctx.font="10px 'JetBrains Mono'";ctx.textAlign='center';ctx.fillText('EPSG:4326 → EPSG:3438',w/2,ht-8);
+  },[]);
+  return h('div',null,
+    h(SectionHeader,{kicker:'07 · analysis',label:'CRS',right:h(Btn,{primary:true,small:true},'Save CRS')}),
+    h(StatGrid,null,h(Stat,{label:'Input EPSG',value:'4326'}),h(Stat,{label:'Projected EPSG',value:'3438',tint:'var(--crimson)'}),h(Stat,{label:'Distortion',value:'0.12%',tint:'var(--purple)'}),h(Stat,{label:'Unit',value:'US ft',tint:'var(--amber)'})),
+    h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}},
+      h(Card,{title:'Input CRS',subtitle:'EPSG:4326 · WGS 84'},h('div',{style:{display:'flex',flexDirection:'column',gap:10}},h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}},h(KeyVal,{label:'EPSG Code',value:'4326'}),h(KeyVal,{label:'Name',value:'WGS 84'})),h('pre',{className:'mono',style:{fontSize:9.5,margin:0,lineHeight:1.5,color:'var(--ink-2)',background:'rgba(0,0,0,0.02)',padding:8,borderRadius:4}},'GEOGCS["WGS 84",\n  DATUM["World Geodetic System 1984",\n    SPHEROID["WGS 84", 6378137.0, 298.257223563]]]'))),
+      h(Card,{title:'Projected CRS',subtitle:'EPSG:3438 · NAD83 / Rhode Island'},h('div',{style:{display:'flex',flexDirection:'column',gap:10}},h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}},h(KeyVal,{label:'EPSG Code',value:'3438'}),h(KeyVal,{label:'Name',value:'NAD83 / Rhode Island'})),h('pre',{className:'mono',style:{fontSize:9.5,margin:0,lineHeight:1.5,color:'var(--ink-2)',background:'rgba(0,0,0,0.02)',padding:8,borderRadius:4}},'PROJCS["NAD83 / Rhode Island",\n  PROJECTION["Transverse_Mercator"],\n  PARAMETER["central_meridian", -71.5],\n  UNIT["US survey foot"]]')))),
+    h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginTop:14}},
+      h(Card,{title:'Reprojection preview',subtitle:'spatial extent with transformed coordinates'},h('canvas',{ref:canvasRef,style:{width:'100%',height:220,display:'block'}})),
+      h(Card,{title:'Distortion check',subtitle:'area distortion at study site: 0.12%'},h('div',{style:{display:'flex',flexDirection:'column',gap:12}},h('div',null,h('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:4}},h('span',{style:{fontSize:12,fontWeight:600}},'Area distortion'),h('span',{className:'mono',style:{fontSize:12,color:'var(--purple)',fontWeight:700}},'0.12%')),h('div',{style:{height:8,background:'rgba(0,0,0,0.05)',borderRadius:4,overflow:'hidden'}},h('div',{style:{width:'1.2%',height:'100%',background:'var(--purple)'}}))),h(KeyVal,{label:'Scale factor',value:'0.999966'}),h(KeyVal,{label:'Central meridian',value:'-71.5°'}),h('div',{style:{padding:'8px 10px',background:'#f0faf0',borderRadius:6,fontSize:12}},'✓ Distortion within acceptable range')))));
+}
+
+/* ═══════════════════ PAGE: SCENARIOS ═══════════════════ */
+function ScenariosPage(){
+  const scenarios=[{id:'baseline',name:'Baseline',delta:0,status:'baseline'},{id:'s1',name:'Green canopy +20%',delta:-1.2,status:'computed'},{id:'s2',name:'Cool roofs',delta:-0.8,status:'computed'},{id:'s3',name:'Combined strategy',delta:-2.1,status:'computed'}];
+  const [activeIdx,setActiveIdx]=useState(0);
+  const sliders=[{variable:'tree_canopy_pct',min:-0.3,max:0.5,step:0.05,value:0,baseline:0.32},{variable:'impervious_pct',min:-0.3,max:0.3,step:0.05,value:0,baseline:0.45},{variable:'albedo',min:-0.1,max:0.3,step:0.02,value:0,baseline:0.25},{variable:'building_height',min:-5,max:10,step:1,value:0,baseline:12}];
+
+  const histRef=useRef(null);
+  useEffect(()=>{
+    const canvas=histRef.current;if(!canvas)return;
+    const w=canvas.clientWidth,ht=canvas.clientHeight;canvas.width=w*2;canvas.height=ht*2;
+    const ctx=canvas.getContext('2d');if(!ctx)return;ctx.scale(2,2);
+    const mean=scenarios[activeIdx].delta,std=0.5,nBins=30;
+    const bins=[];for(let i=0;i<nBins;i++){const x=mean-3*std+(i/nBins)*6*std;bins.push(Math.exp(-.5*((x-mean)/std)**2))}
+    const maxBin=Math.max(...bins);
+    ctx.strokeStyle='var(--line)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(35,10);ctx.lineTo(35,ht-25);ctx.lineTo(w-10,ht-25);ctx.stroke();
+    const barW=(w-50)/nBins;bins.forEach((v,i)=>{const barH=(v/maxBin)*(ht-45);ctx.fillStyle=SPARC_RAMP_HEX[Math.floor(i/nBins*(SPARC_RAMP_HEX.length-1))]+'cc';ctx.fillRect(36+i*barW,ht-25-barH,barW-1,barH)});
+    ctx.fillStyle='var(--muted)';ctx.font="9px 'JetBrains Mono'";ctx.textAlign='center';ctx.fillText('Δ target = '+mean.toFixed(1),w/2,ht-6);
+  },[activeIdx]);
+
+  return h('div',null,
+    h(SectionHeader,{kicker:'08 · analysis',label:'Scenarios',right:h('div',{style:{display:'flex',gap:8}},h(Btn,{small:true},'Add scenario'),h(Btn,{primary:true,small:true},'Compute all'))}),
+    h(StatGrid,null,h(Stat,{label:'Scenarios',value:'4'}),h(Stat,{label:'Computed',value:'3',tint:'var(--crimson)'}),h(Stat,{label:'Best Δ',value:'-2.1 °C',tint:'var(--purple)'}),h(Stat,{label:'Variables',value:'4',tint:'var(--amber)'})),
+    h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}},
+      h('div',{style:{display:'flex',flexDirection:'column',gap:14}},
+        h(Card,{title:'Scenario library',subtitle:'click to select · compare to baseline'},scenarios.map((sc,i)=>h('div',{key:sc.id,onClick:()=>setActiveIdx(i),style:{display:'grid',gridTemplateColumns:'1fr auto auto',alignItems:'center',gap:10,padding:'10px 8px',borderTop:i>0?'1px dashed var(--line)':'none',cursor:'pointer',background:activeIdx===i?'rgba(231,60,37,0.04)':'transparent',borderRadius:4}},h('div',null,h('div',{style:{fontSize:12.5,fontWeight:600}},sc.name)),h('span',{className:'mono',style:{fontSize:13,fontWeight:700,color:sc.delta<0?'var(--purple)':sc.delta>0?'var(--crimson)':'var(--muted)'}},sc.delta===0?'—':(sc.delta>0?'+':'')+sc.delta.toFixed(1)+' °C'),h(Tag,{color:sc.status==='computed'?'var(--ink)':sc.status==='baseline'?'var(--purple)':'var(--muted)'},sc.status)))),
+        h(Card,{title:'Intervention builder',subtitle:'adjust sliders to create new scenario'},sliders.map(s=>h('div',{key:s.variable,style:{padding:'10px 0',borderTop:'1px dashed var(--line)'}},h('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:4}},h('span',{style:{fontSize:12,fontWeight:600}},s.variable.replace(/_/g,' ')),h('span',{className:'mono',style:{fontSize:12,fontWeight:700,color:'var(--muted)'}},s.value.toFixed(2))),h('input',{type:'range',min:s.min,max:s.max,step:s.step,defaultValue:s.value,style:{width:'100%',accentColor:'var(--crimson)'}}),h('div',{className:'mono',style:{fontSize:9.5,color:'var(--muted)',marginTop:2}},'baseline: '+s.baseline))))),
+      h(Card,{title:'Posterior distribution',subtitle:scenarios[activeIdx]?.name??''},
+        h('canvas',{ref:histRef,style:{width:'100%',height:300,display:'block'}}),
+        h('div',{className:'mono',style:{fontSize:10,color:'var(--muted)',marginTop:8,textAlign:'center'}},scenarios[activeIdx]?.status==='computed'?'Median Δ = '+scenarios[activeIdx].delta.toFixed(2)+' °C · 95% CI: ['+(scenarios[activeIdx].delta-0.98).toFixed(2)+', '+(scenarios[activeIdx].delta+0.98).toFixed(2)+']':'Not yet computed'))));
+}
+
+/* ═══════════════════ PAGE: MODELS ═══════════════════ */
+function ModelsPage(){
+  const models=[
+    {name:'OLS',fullName:'Ordinary Least Squares',r2:.72,rmse:.89,mae:.67,weight:.10,color:SPARC_RAMP_HEX[0]},
+    {name:'GWR',fullName:'Geographically Weighted Regression',r2:.86,rmse:.62,mae:.48,weight:.20,color:SPARC_RAMP_HEX[2]},
+    {name:'GWRF',fullName:'Geographically Weighted Random Forest',r2:.91,rmse:.51,mae:.39,weight:.30,color:SPARC_RAMP_HEX[4]},
+    {name:'GGPGAM',fullName:'Geographically Grouped GAM',r2:.89,rmse:.55,mae:.42,weight:.25,color:SPARC_RAMP_HEX[6]},
+    {name:'Ensemble',fullName:'Stacked Ensemble (GWEN)',r2:.93,rmse:.44,mae:.34,weight:.15,color:SPARC_RAMP_HEX[8]},
+  ];
+  const [sel,setSel]=useState('Ensemble');
+  return h('div',null,
+    h(SectionHeader,{kicker:'09 · analysis',label:'Models'}),
+    h(StatGrid,null,h(Stat,{label:'Models',value:'5'}),h(Stat,{label:'Best R²',value:'0.930',tint:'var(--crimson)',sub:'Ensemble'}),h(Stat,{label:'RMSE (best)',value:'0.440',tint:'var(--purple)'}),h(Stat,{label:'Ensemble',value:'0.930',tint:'var(--amber)'})),
+    h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}},
+      h(Card,{title:'Model zoo',subtitle:'click to view residuals'},
+        h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:12}},
+          h('thead',null,h('tr',{style:{textAlign:'left',color:'var(--muted)'}},h('th',{style:thStyle},'Model'),h('th',{style:{...thStyle,textAlign:'right'}},'R²'),h('th',{style:{...thStyle,textAlign:'right'}},'RMSE'),h('th',{style:{...thStyle,textAlign:'right'}},'MAE'),h('th',{style:{...thStyle,width:90}},'R² bar'))),
+          h('tbody',null,models.map(m=>h('tr',{key:m.name,onClick:()=>setSel(m.name),style:{borderTop:'1px solid var(--line)',cursor:'pointer',background:sel===m.name?'rgba(231,60,37,0.04)':'transparent'}},
+            h('td',{style:{...tdStyle,fontWeight:600}},h('div',{style:{display:'flex',alignItems:'center',gap:6}},h('span',{style:{width:8,height:8,borderRadius:'50%',background:m.color}}),h('div',null,h('div',null,m.name),h('div',{className:'mono',style:{fontSize:9,color:'var(--muted)'}},m.fullName)))),
+            h('td',{className:'mono',style:{...tdStyle,textAlign:'right',fontWeight:700}},m.r2.toFixed(3)),
+            h('td',{className:'mono',style:{...tdStyle,textAlign:'right'}},m.rmse.toFixed(3)),
+            h('td',{className:'mono',style:{...tdStyle,textAlign:'right'}},m.mae.toFixed(3)),
+            h('td',{style:tdStyle},h('div',{style:{height:10,background:'rgba(0,0,0,0.04)',borderRadius:3,overflow:'hidden'}},h('div',{style:{width:m.r2*100+'%',height:'100%',background:m.color}})))))))),
+      h('div',{style:{display:'flex',flexDirection:'column',gap:14}},
+        h(Card,{title:'Residuals scatter',subtitle:sel+' · predicted vs residual'},h('div',{style:{height:200,display:'flex',alignItems:'center',justifyContent:'center',color:'var(--muted)',fontSize:12}},'Residuals scatter for '+sel)),
+        h(Card,{title:'Ensemble weights',subtitle:'GWEN-based stacking'},
+          h('div',{style:{display:'flex',height:20,borderRadius:4,overflow:'hidden',marginBottom:8}},models.map(m=>h('div',{key:m.name,style:{flex:m.weight,background:m.color+'cc'},title:m.name+' '+Math.round(m.weight*100)+'%'}))),
+          h('div',{style:{display:'flex',justifyContent:'center',gap:14,flexWrap:'wrap'}},models.map(m=>h('div',{key:m.name,style:{display:'flex',alignItems:'center',gap:4}},h('span',{style:{width:8,height:8,borderRadius:'50%',background:m.color}}),h('span',{className:'mono',style:{fontSize:9.5,color:'var(--muted)'}},m.name+' '+Math.round(m.weight*100)+'%'))))))));
+}
+
+/* ═══════════════════ PAGE: RUN ═══════════════════ */
+function RunPage(){
+  const [stages,setStages]=useState([{id:'data',name:'Data prep',status:'pending'},{id:'dag',name:'DAG / causal',status:'pending'},{id:'train',name:'Training',status:'pending'},{id:'eval',name:'Evaluation',status:'pending'},{id:'scenario',name:'Scenarios',status:'pending'}]);
+  const [logs,setLogs]=useState([]);
+  const [isRunning,setIsRunning]=useState(false);
+  const [elapsed,setElapsed]=useState(0);
+  const timerRef=useRef(null);
+
+  useEffect(()=>{if(isRunning){timerRef.current=setInterval(()=>setElapsed(e=>e+1),1000)}else{clearInterval(timerRef.current)}return()=>clearInterval(timerRef.current)},[isRunning]);
+
+  const addLog=(text,level='info')=>{const ts=new Date().toTimeString().slice(0,8);setLogs(p=>[...p,{text,level,timestamp:ts}])};
+  const LEVEL_COLORS={info:'#a0a0a0',success:'#66bb6a',warn:'#ffa726',error:'#ef5350',debug:'#78909c'};
+  const STAGE_DEFS=[{id:'data',name:'Data prep'},{id:'dag',name:'DAG / causal'},{id:'train',name:'Training'},{id:'eval',name:'Evaluation'},{id:'scenario',name:'Scenarios'}];
+
+  const handleStart=useCallback(async()=>{
+    setIsRunning(true);setElapsed(0);setLogs([]);setStages(STAGE_DEFS.map(s=>({...s,status:'pending'})));
+    addLog('Pipeline started','info');addLog('Simulating pipeline (preview mode)','warn');
+    for(let i=0;i<STAGE_DEFS.length;i++){
+      setStages(p=>p.map((s,j)=>({...s,status:j<i?'done':j===i?'running':'pending'})));
+      addLog('▸ '+STAGE_DEFS[i].name+'...','info');
+      await new Promise(r=>setTimeout(r,800));
+      addLog('  ✓ '+STAGE_DEFS[i].name+' complete','success');
+    }
+    setStages(p=>p.map(s=>({...s,status:'done'})));addLog('Pipeline complete!','success');setIsRunning(false);
+  },[]);
+
+  const fmt=s=>`${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+  const doneCount=stages.filter(s=>s.status==='done').length;
+  const currentStage=stages.find(s=>s.status==='running')?.name??'Idle';
+
+  return h('div',null,
+    h(SectionHeader,{kicker:'10 · pipeline',label:'Run',right:h('div',{style:{display:'flex',gap:8}},!isRunning?h(Btn,{primary:true,onClick:handleStart},'▶ Start pipeline'):h(Btn,{onClick:()=>setIsRunning(false)},'◼ Stop'))}),
+    h(StatGrid,null,h(Stat,{label:'Status',value:isRunning?'Running':doneCount===5?'Complete':'Idle',tint:isRunning?'var(--crimson)':doneCount===5?'var(--purple)':'var(--muted)'}),h(Stat,{label:'Stage',value:currentStage}),h(Stat,{label:'Progress',value:doneCount+'/5',tint:'var(--amber)'}),h(Stat,{label:'Elapsed',value:fmt(elapsed)})),
+    h('div',{style:{display:'grid',gridTemplateColumns:'1fr 260px',gap:14}},
+      h(Card,{title:'Terminal',subtitle:logs.length+' lines · '+(isRunning?'streaming...':'idle')},
+        h('div',{className:'scroll',style:{background:'#1a1416',borderRadius:6,padding:'12px 14px',fontFamily:"'JetBrains Mono',monospace",fontSize:11,lineHeight:1.65,height:400,overflowY:'auto',color:'#ccc'}},
+          logs.map((l,i)=>h('div',{key:i,style:{display:'flex',gap:10}},h('span',{style:{color:'#555',flexShrink:0}},l.timestamp),h('span',{style:{color:LEVEL_COLORS[l.level],flexShrink:0,width:50,textTransform:'uppercase',fontSize:9,lineHeight:'18px'}},l.level),h('span',{style:{color:l.level==='error'?'#ef5350':l.level==='success'?'#66bb6a':'#d0ccc5'}},l.text))),
+          isRunning&&h('div',{style:{color:'var(--crimson)'}},h('span',{style:{animation:'blink 1s infinite'}},'▍')))),
+      h(Card,{title:'Stages',subtitle:doneCount+'/5 complete'},
+        stages.map((stage,i)=>h('div',{key:stage.id,style:{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderTop:i>0?'1px dashed var(--line)':'none'}},
+          h('span',{className:'mono',style:{width:28,height:28,borderRadius:6,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,background:stage.status==='done'?'var(--ink)':stage.status==='running'?'var(--crimson)':'rgba(0,0,0,0.05)',color:stage.status==='pending'?'var(--muted)':'#fff'}},stage.status==='done'?'✓':String(i+1)),
+          h('div',{style:{flex:1}},h('div',{style:{fontSize:12.5,fontWeight:600}},stage.name),stage.status==='running'&&h('div',{style:{height:3,background:'rgba(0,0,0,0.06)',borderRadius:2,marginTop:4,overflow:'hidden'}},h('div',{style:{width:'70%',height:'100%',background:'var(--crimson)',animation:'loadBar 1.5s ease-in-out infinite'}}))),
+          h(Tag,{color:stage.status==='done'?'var(--ink)':stage.status==='running'?'var(--crimson)':'var(--muted)'},stage.status))),
+        h('div',{style:{marginTop:14,borderTop:'1px dashed var(--line)',paddingTop:12}},
+          h('div',{className:'mono',style:{fontSize:9,color:'var(--muted)',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:8}},'flow'),
+          h('div',{style:{display:'flex',alignItems:'center',gap:4}},stages.map((s,i)=>h('div',{key:s.id,style:{display:'flex',alignItems:'center',gap:4}},h('div',{style:{width:32,height:8,borderRadius:4,background:s.status==='done'?'var(--ink)':s.status==='running'?'var(--crimson)':'rgba(0,0,0,0.06)',transition:'background 0.3s'}}),i<stages.length-1&&h('span',{style:{color:'var(--line)',fontSize:10}},'→'))))))));
+}
+
+/* ═══════════════════ PAGE: RESULTS ═══════════════════ */
+function ResultsPage(){
+  const [viewMode,setViewMode]=useState('map');
+  const [activeScenario,setActiveScenario]=useState('baseline');
+  const scenarios=[{id:'baseline',name:'Baseline',delta:0},{id:'s1',name:'Green canopy +20%',delta:-1.2},{id:'s2',name:'Cool roofs',delta:-0.8},{id:'s3',name:'Combined',delta:-2.1}];
+  const models=[{name:'OLS',r2:.72,color:SPARC_RAMP_HEX[0]},{name:'GWR',r2:.86,color:SPARC_RAMP_HEX[2]},{name:'GWRF',r2:.91,color:SPARC_RAMP_HEX[4]},{name:'GGPGAM',r2:.89,color:SPARC_RAMP_HEX[6]},{name:'Ensemble',r2:.93,color:SPARC_RAMP_HEX[8]}];
+
+  const mapRef=useRef(null),histRef=useRef(null),r2Ref=useRef(null);
+
+  useEffect(()=>{
+    const canvas=viewMode==='map'?mapRef.current:histRef.current;if(!canvas)return;
+    const w=canvas.clientWidth,ht=canvas.clientHeight;canvas.width=w*2;canvas.height=ht*2;
+    const ctx=canvas.getContext('2d');if(!ctx)return;ctx.scale(2,2);
+    if(viewMode==='map'){
+      ctx.fillStyle='#f5f1eb';ctx.fillRect(0,0,w,ht);
+      const gX=40,gY=30,cW=w/gX,cH=ht/gY;const sc=scenarios.find(s=>s.id===activeScenario);
+      for(let y=0;y<gY;y++)for(let x=0;x<gX;x++){
+        const dx=(x-gX/2)/gX,dy=(y-gY/2)/gY;let heat=.5+.3*Math.sin(x*.5)*Math.cos(y*.4)-Math.sqrt(dx*dx+dy*dy)*.3+Math.sin(x*.8+y*.6)*.15;
+        if(sc&&sc.delta!==0)heat=Math.max(0,Math.min(1,heat+sc.delta*.1));
+        heat=Math.max(0,Math.min(1,heat));ctx.fillStyle=SPARC_RAMP_HEX[Math.floor(heat*(SPARC_RAMP_HEX.length-1))];ctx.fillRect(x*cW,y*cH,cW+.5,cH+.5)}
+    } else {
+      const nBins=40,bins=[],mean=scenarios.find(s=>s.id===activeScenario)?.delta??0;
+      for(let i=0;i<nBins;i++){const x=mean-4+(i/nBins)*8;bins.push(Math.exp(-.5*((x-mean)/1.2)**2)*100+Math.random()*10)}
+      const maxB=Math.max(...bins);ctx.strokeStyle='var(--line)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(40,10);ctx.lineTo(40,ht-30);ctx.lineTo(w-10,ht-30);ctx.stroke();
+      const barW=(w-55)/nBins;bins.forEach((v,i)=>{const bH=(v/maxB)*(ht-50);ctx.fillStyle=SPARC_RAMP_HEX[Math.floor(i/nBins*(SPARC_RAMP_HEX.length-1))]+'cc';ctx.fillRect(42+i*barW,ht-30-bH,barW-1,bH)});
+      ctx.fillStyle='var(--muted)';ctx.font="10px 'JetBrains Mono'";ctx.textAlign='center';ctx.fillText('Temperature anomaly (°C)',w/2,ht-8);
+    }
+  },[viewMode,activeScenario]);
+
+  useEffect(()=>{
+    const canvas=r2Ref.current;if(!canvas)return;
+    const w=canvas.clientWidth,ht=canvas.clientHeight;canvas.width=w*2;canvas.height=ht*2;
+    const ctx=canvas.getContext('2d');if(!ctx)return;ctx.scale(2,2);
+    const barH=16,gap=6,labelW=60;
+    models.forEach((m,i)=>{const y=i*(barH+gap)+4;ctx.fillStyle='var(--muted)';ctx.font="10px 'JetBrains Mono'";ctx.textAlign='right';ctx.fillText(m.name,labelW-6,y+barH/2+4);ctx.fillStyle='rgba(0,0,0,0.04)';ctx.fillRect(labelW,y,w-labelW-40,barH);ctx.fillStyle=m.color;ctx.fillRect(labelW,y,(w-labelW-40)*m.r2,barH);ctx.fillStyle='var(--ink)';ctx.font="bold 10px 'JetBrains Mono'";ctx.textAlign='left';ctx.fillText(m.r2.toFixed(3),w-36,y+barH/2+4)});
+  },[]);
+
+  return h('div',null,
+    h(SectionHeader,{kicker:'11 · pipeline',label:'Results',right:h('div',{style:{display:'flex',gap:8}},h(Btn,{small:true},'Export CSV'),h(Btn,{small:true},'Export GPKG'))}),
+    h(StatGrid,null,h(Stat,{label:'Best R²',value:'0.93',tint:'var(--crimson)',sub:'Ensemble'}),h(Stat,{label:'RMSE',value:'0.44',tint:'var(--purple)'}),h(Stat,{label:'Scenarios',value:'4',tint:'var(--amber)'}),h(Stat,{label:'Best Δ',value:'-2.1 °C',sub:'Combined'})),
+    h('div',{style:{display:'grid',gridTemplateColumns:'2fr 1fr',gap:14}},
+      h(Card,{title:'Scenario map',subtitle:h('div',{style:{display:'flex',gap:8,alignItems:'center'}},
+        scenarios.map(sc=>h('button',{key:sc.id,onClick:()=>setActiveScenario(sc.id),style:{padding:'3px 8px',fontSize:10,borderRadius:3,border:'1px solid '+(activeScenario===sc.id?'var(--ink)':'var(--line)'),background:activeScenario===sc.id?'var(--ink)':'#fff',color:activeScenario===sc.id?'#fff':'var(--ink-2)',cursor:'pointer',fontFamily:'inherit',fontWeight:600}},sc.name)),
+        h('span',{style:{width:1,height:16,background:'var(--line)'}}),
+        ['map','histogram'].map(mode=>h('button',{key:mode,onClick:()=>setViewMode(mode),style:{padding:'3px 8px',fontSize:10,borderRadius:3,border:'1px solid '+(viewMode===mode?'var(--crimson)':'var(--line)'),background:viewMode===mode?'var(--crimson)':'#fff',color:viewMode===mode?'#fff':'var(--ink-2)',cursor:'pointer',fontFamily:'inherit',fontWeight:600,textTransform:'capitalize'}},mode)))},
+        viewMode==='map'?h('div',{style:{position:'relative'}},
+          h('canvas',{ref:mapRef,style:{width:'100%',height:380,display:'block',borderRadius:4}}),
+          h('div',{style:{position:'absolute',bottom:12,right:12,background:'rgba(255,255,255,0.92)',borderRadius:6,padding:'8px 10px',backdropFilter:'blur(6px)'}},
+            h('div',{className:'mono',style:{fontSize:8,color:'var(--muted)',marginBottom:4,textTransform:'uppercase',letterSpacing:'0.1em'}},'temperature anomaly'),
+            h('div',{style:{display:'flex',height:10,borderRadius:2,overflow:'hidden',width:120}},SPARC_RAMP_HEX.map((c,i)=>h('div',{key:i,style:{flex:1,background:c}}))),
+            h('div',{style:{display:'flex',justifyContent:'space-between',marginTop:2}},h('span',{className:'mono',style:{fontSize:8,color:'var(--muted)'}},'cool'),h('span',{className:'mono',style:{fontSize:8,color:'var(--muted)'}},'hot')))):
+          h('canvas',{ref:histRef,style:{width:'100%',height:380,display:'block'}})),
+      h('div',{style:{display:'flex',flexDirection:'column',gap:14}},
+        h(Card,{title:'Model R²',subtitle:'cross-validated performance'},h('canvas',{ref:r2Ref,style:{width:'100%',height:120,display:'block'}})),
+        h(Card,{title:'Intervention response',subtitle:'marginal effect on target'},h('div',{style:{height:160,display:'flex',alignItems:'center',justifyContent:'center',color:'var(--muted)',fontSize:12,fontStyle:'italic'}},'Response curves rendered here')))));
+}
+
+/* ═══════════════════ PAGE: REPORT ═══════════════════ */
+function ReportPage(){
+  const [sections,setSections]=useState([
+    {id:'exec',label:'Executive Summary',checked:true},{id:'data',label:'Data Description',checked:true},{id:'dag',label:'Causal Structure (DAG)',checked:true},{id:'physics',label:'Physics Constraints',checked:true},{id:'models',label:'Model Comparison',checked:true},{id:'spatial',label:'Spatial Cross-Validation',checked:true},{id:'gwen',label:'GWEN Weights',checked:true},{id:'scenarios',label:'Scenario Analysis',checked:true},{id:'interventions',label:'Intervention Estimates',checked:true},{id:'uncertainty',label:'Uncertainty Quantification',checked:false},{id:'appendix_a',label:'Appendix A: Variable List',checked:false},{id:'appendix_b',label:'Appendix B: Diagnostics',checked:false}]);
+  const EXPORT_CARDS=[{format:'PDF',icon:'📄',desc:'Publication-ready report with charts',color:'var(--crimson)'},{format:'HTML',icon:'🌐',desc:'Interactive web report',color:'var(--purple)'},{format:'DOCX',icon:'📝',desc:'Editable Word document',color:'var(--amber)'},{format:'CSV',icon:'📊',desc:'Data bundle with all tables',color:'var(--ink)'}];
+  const checkedCount=sections.filter(s=>s.checked).length;
+  return h('div',null,
+    h(SectionHeader,{kicker:'12 · pipeline',label:'Report',right:h('div',{style:{display:'flex',gap:8}},h(Btn,{small:true,onClick:()=>setSections(p=>p.map(s=>({...s,checked:true})))},'Select all'),h(Btn,{small:true,onClick:()=>setSections(p=>p.map(s=>({...s,checked:false})))},'Deselect all'))}),
+    h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}},
+      h(Card,{title:'Table of Contents',subtitle:checkedCount+'/'+sections.length+' sections selected'},sections.map((s,i)=>h('label',{key:s.id,style:{display:'flex',alignItems:'center',gap:10,padding:'9px 0',borderTop:i>0?'1px dashed var(--line)':'none',cursor:'pointer'}},
+        h('input',{type:'checkbox',checked:s.checked,onChange:()=>setSections(p=>p.map(x=>x.id===s.id?{...x,checked:!x.checked}:x)),style:{accentColor:'var(--crimson)'}}),
+        h('span',{className:'mono',style:{display:'inline-flex',alignItems:'center',justifyContent:'center',width:22,height:22,borderRadius:4,background:s.checked?'var(--ink)':'rgba(0,0,0,0.04)',color:s.checked?'#fff':'var(--muted)',fontSize:10,fontWeight:700,flexShrink:0}},String(i+1).padStart(2,'0')),
+        h('span',{style:{fontSize:12.5,fontWeight:500,color:s.checked?'var(--ink-2)':'var(--muted)'}},s.label),
+        h(Tag,{color:s.checked?'var(--ink)':'var(--muted)'},s.checked?'included':'excluded')))),
+      h('div',{style:{display:'flex',flexDirection:'column',gap:14}},
+        h(Card,{title:'Report preview',subtitle:'last generated report'},h('div',{style:{background:'#faf8f4',border:'1px dashed var(--line)',borderRadius:6,padding:20,minHeight:200,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:12}},h('div',{style:{fontSize:32}},'📋'),h('div',{style:{fontSize:13,fontWeight:600,color:'var(--ink-2)'}},'SPARC Analysis Report'),h('div',{className:'mono',style:{fontSize:10,color:'var(--muted)'}},checkedCount+' sections · ready to generate'))),
+        h(Card,{title:'Export',subtitle:'choose output format'},h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}},EXPORT_CARDS.map(c=>h('button',{key:c.format,style:{textAlign:'left',border:'1px solid var(--line)',background:'#fff',borderRadius:6,padding:'12px 10px',cursor:'pointer',fontFamily:'inherit',transition:'border-color 0.15s'},onMouseEnter:e=>e.currentTarget.style.borderColor=c.color,onMouseLeave:e=>e.currentTarget.style.borderColor='var(--line)'},h('div',{style:{fontSize:20,marginBottom:6}},c.icon),h('div',{style:{fontSize:12.5,fontWeight:700,color:c.color}},c.format),h('div',{className:'mono',style:{fontSize:9.5,color:'var(--muted)',marginTop:3}},c.desc))))))));
+}
+
+/* ═══════════════════ PAGE: SETTINGS ═══════════════════ */
+function SettingsPage(){
+  const hues=['ink','crimson','purple','magenta','amber','gold'];
+  const hueColors={ink:'var(--ink)',crimson:'var(--crimson)',purple:'var(--purple)',magenta:'var(--magenta)',amber:'var(--amber)',gold:'var(--gold)'};
+  const [selHue,setSelHue]=useState('ink');
+  const tones=['warm','cool','neutral','dark'];
+  const toneColors={warm:'#f7f4ee',cool:'#f0f2f6',neutral:'#f5f5f5',dark:'#1a1416'};
+  const [selTone,setSelTone]=useState('warm');
+  return h('div',null,
+    h(SectionHeader,{kicker:'settings',label:'Settings'}),
+    h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}},
+      h(Card,{title:'Appearance',subtitle:'logo hue and paper tone'},
+        h('div',{style:{marginBottom:16}},h('div',{className:'mono',style:{fontSize:9.5,color:'var(--muted)',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:8}},'Logo Hue'),h('div',{style:{display:'flex',gap:6}},hues.map(hue=>h('button',{key:hue,onClick:()=>setSelHue(hue),style:{width:32,height:32,borderRadius:6,border:'2px solid '+(selHue===hue?'var(--ink)':'var(--line)'),background:hueColors[hue],cursor:'pointer'}})))),
+        h('div',null,h('div',{className:'mono',style:{fontSize:9.5,color:'var(--muted)',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:8}},'Paper Tone'),h('div',{style:{display:'flex',gap:6}},tones.map(t=>h('button',{key:t,onClick:()=>setSelTone(t),style:{width:32,height:32,borderRadius:6,border:'2px solid '+(selTone===t?'var(--ink)':'var(--line)'),background:toneColors[t],cursor:'pointer'}}))))),
+      h(Card,{title:'Connection',subtitle:'API and server configuration'},h('div',{style:{display:'flex',flexDirection:'column',gap:14}},h('div',null,h('div',{className:'mono',style:{fontSize:9.5,color:'var(--muted)',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:4}},'API Key'),h('div',{style:{display:'flex',gap:8}},h('input',{type:'password',placeholder:'sk-...',defaultValue:'',style:{border:'1px solid var(--line)',borderRadius:4,padding:'6px 8px',fontSize:12,fontFamily:"'JetBrains Mono',monospace",flex:1,background:'#fff'}}),h(Btn,{small:true},'Save'))),h('div',null,h('div',{className:'mono',style:{fontSize:9.5,color:'var(--muted)',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:4}},'Server Port'),h('input',{type:'text',defaultValue:'8008',style:{border:'1px solid var(--line)',borderRadius:4,padding:'6px 8px',fontSize:12,fontFamily:"'JetBrains Mono',monospace",width:100,background:'#fff'}})),h(KeyVal,{label:'Backend URL',value:'http://127.0.0.1:8008'}),h(KeyVal,{label:'WebSocket',value:'ws://127.0.0.1:8008/run/stream'})))),
+    h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginTop:14}},
+      h(Card,{title:'About',subtitle:'SPARC Labs Desktop'},h('div',{style:{display:'flex',flexDirection:'column',gap:8}},h(KeyVal,{label:'Version',value:'2.1.0-beta'}),h(KeyVal,{label:'Framework',value:'Tauri v2 + React 19'}),h(KeyVal,{label:'Backend',value:'FastAPI + Python 3.11'}),h(KeyVal,{label:'License',value:'MIT'}),h('div',{style:{borderTop:'1px dashed var(--line)',paddingTop:8,marginTop:4}},h('p',{style:{fontSize:12,color:'var(--muted)',lineHeight:1.6,margin:0}},h('strong',{style:{color:'var(--ink-2)'}},'SPARC'),' — Spatial Predictive Analytics for Resilience and Causality.')))),
+      h(Card,{title:'Extras',subtitle:'hidden features'},h('div',{style:{display:'flex',flexDirection:'column',gap:12}},h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center'}},h('div',null,h('div',{style:{fontSize:12.5,fontWeight:600}},'Snake Game'),h('div',{className:'mono',style:{fontSize:10,color:'var(--muted)',marginTop:2}},'or press ↑↑↓↓←→←→BA')),h(Btn,{small:true},'Play')),h('div',{style:{borderTop:'1px dashed var(--line)',paddingTop:10}},h('div',{style:{fontSize:12.5,fontWeight:600,marginBottom:8}},'Keyboard Shortcuts'),h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4}},['⌘1 Project','⌘2 Data','⌘3 Processing','⌘4 DAG','⌘5 Variables','⌘6 Physics','⌘7 CRS','⌘8 Scenarios','⌘9 Models','⌘0 Run','⌘- Results','⌘= Report'].map(s=>h('div',{key:s,className:'mono',style:{fontSize:10,color:'var(--muted)',padding:'2px 0'}},s))))))));
+}
+
+/* ═══════════════════ APP ═══════════════════ */
+function App(){
+  const [page,setPage]=useState('Project');
+  const [projectLoaded,setProjectLoaded]=useState(false);
+  const [chatOpen,setChatOpen]=useState(false);
+
+  const handleProjectLoaded=()=>{setProjectLoaded(true);setPage('Data')};
+
+  const renderPage=()=>{
+    switch(page){
+      case 'Project':return h(ProjectPage,{onProjectLoaded:handleProjectLoaded});
+      case 'Data':return h(DataPage);
+      case 'Processing':return h(ProcessingPage);
+      case 'DAG':return h(DAGPage);
+      case 'Variables':return h(VariablesPage);
+      case 'Physics':return h(PhysicsPage);
+      case 'CRS':return h(CRSPage);
+      case 'Scenarios':return h(ScenariosPage);
+      case 'Models':return h(ModelsPage);
+      case 'Run':return h(RunPage);
+      case 'Results':return h(ResultsPage);
+      case 'Report':return h(ReportPage);
+      case 'Settings':return h(SettingsPage);
+      default:return h('div',null,'Unknown page');
+    }
+  };
+
+  return h(Shell,{currentPage:page==='Settings'?'Project':page,onNavigate:setPage,projectLoaded,projectName:'providence_ri_uhi',projectDomain:'uhi',projectEpsg:'3438',chatOpen,onToggleChat:()=>setChatOpen(!chatOpen)},renderPage());
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(h(App));
+</script>
+</body>
+</html>

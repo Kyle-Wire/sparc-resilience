@@ -89,7 +89,7 @@ export default function ChatPanel({ onClose, onAction, systemPrompt }: ChatPanel
         }}
       >
         <div style={{ width: 22, height: 22, marginRight: 8 }}>
-          <CubeLogo size={22} density={0.5} />
+          <CubeLogo size={22} />
         </div>
         <div>
           <div style={{ fontSize: 12, fontWeight: 700 }}>SPARC Assistant</div>
