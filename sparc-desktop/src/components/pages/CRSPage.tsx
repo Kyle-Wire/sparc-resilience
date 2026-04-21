@@ -52,13 +52,13 @@ export default function CRSPage() {
   }, []);
 
   const handleCheckDistortion = useCallback(async () => {
-    if (!projectedEpsg) { notify("Projected EPSG is required", "error"); return; }
+    if (!projectedEpsg) { notify("error", "Projected EPSG is required"); return; }
     setDistortionLoading(true);
     try {
       const result = await checkCrsDistortion(inputEpsg, projectedEpsg);
       setDistortionResult(result);
     } catch {
-      notify("Could not compute distortion — check EPSG codes", "error");
+      notify("error", "Could not compute distortion — check EPSG codes");
     } finally {
       setDistortionLoading(false);
     }
@@ -155,9 +155,9 @@ export default function CRSPage() {
       await saveConfig({
         crs: { input: `EPSG:${inputEpsg}`, projected: `EPSG:${projectedEpsg}` },
       });
-      notify("CRS settings saved", "success");
+      notify("success", "CRS settings saved");
     } catch {
-      notify("Failed to save CRS", "error");
+      notify("error", "Failed to save CRS");
     }
   };
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { SectionHeader, Card, Tag, Btn, Stat, StatGrid, KeyVal } from "@/components/ui/DesignSystem";
+import { SectionHeader, Card, Tag, Btn, Stat, StatGrid } from "@/components/ui/DesignSystem";
 import { getConfig, saveConfig, getPdpCurves } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import type { PdpCurves } from "@/lib/types";
@@ -72,7 +72,7 @@ export default function PhysicsPage() {
         if (newConstraints.length > 0) setSelectedVar(newConstraints[0].variable);
 
         // Load PDE weights
-        const pw = physics.pde_weights ?? {};
+        const pw = (physics as any).pde_weights ?? {};
         setPdeWeights({
           heat_diffusion: pw.heat_diffusion ?? PDE_DEFAULTS.heat_diffusion,
           energy_balance: pw.energy_balance ?? PDE_DEFAULTS.energy_balance,
@@ -190,12 +190,12 @@ export default function PhysicsPage() {
     for (const c of constraints) {
       mc[c.variable] = c.direction === "increasing" ? 1 : c.direction === "decreasing" ? -1 : 0;
     }
-    const bounds: Record<string, { min?: number; max?: number }> = {};
+    const bounds: Record<string, { min: number | null; max: number | null }> = {};
     for (const b of variableBounds) {
-      const entry: { min?: number; max?: number } = {};
-      if (b.min !== "") entry.min = parseFloat(b.min);
-      if (b.max !== "") entry.max = parseFloat(b.max);
-      bounds[b.variable] = entry;
+      bounds[b.variable] = {
+        min: b.min !== "" ? parseFloat(b.min) : null,
+        max: b.max !== "" ? parseFloat(b.max) : null,
+      };
     }
     try {
       await saveConfig({
@@ -203,11 +203,11 @@ export default function PhysicsPage() {
           monotone_constraints: mc,
           pde_weights: pdeWeights,
           variable_bounds: bounds,
-        },
+        } as any,
       });
-      notify("Physics settings saved", "success");
+      notify("success", "Physics settings saved");
     } catch {
-      notify("Failed to save physics settings", "error");
+      notify("error", "Failed to save physics settings");
     }
   }, [constraints, pdeWeights, variableBounds, notify]);
 
@@ -325,7 +325,7 @@ export default function PhysicsPage() {
                       <span className="mono" style={{ fontSize: 10, color: "var(--muted)", marginLeft: 8 }}>{info.eq}</span>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <Tag color="var(--ink-2)" style={{ fontSize: 9 }}>{info.activates}</Tag>
+                      <Tag color="var(--ink-2)">{info.activates}</Tag>
                       <input
                         type="number"
                         step="0.01"

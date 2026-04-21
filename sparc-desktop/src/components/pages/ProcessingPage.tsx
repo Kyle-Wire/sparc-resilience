@@ -67,11 +67,11 @@ export default function ProcessingPage() {
 
   const handleRunSpatialBuilder = useCallback(async () => {
     if (!sbBoundaryPath) {
-      notify("Select a boundary file first", "error");
+      notify("error", "Select a boundary file first");
       return;
     }
     if (sbRasterPaths.length === 0) {
-      notify("Add at least one raster", "error");
+      notify("error", "Add at least one raster");
       return;
     }
     setSbRunning(true);
@@ -104,11 +104,11 @@ export default function ProcessingPage() {
       });
       setSbStep(4, "done");
       setSbResult(result);
-      notify(`Spatial data built — ${result.n_cells.toLocaleString()} cells, ${result.columns.length} columns`, "success");
+      notify("success", `Spatial data built — ${result.n_cells.toLocaleString()} cells, ${result.columns.length} columns`);
     } catch (e) {
       const failedIdx = sbStepStatus.findIndex((s) => s === "running");
       if (failedIdx >= 0) setSbStep(failedIdx, "error");
-      notify(e instanceof Error ? e.message : "Spatial builder failed", "error");
+      notify("error", e instanceof Error ? e.message : "Spatial builder failed");
     } finally {
       setSbRunning(false);
     }
@@ -217,7 +217,7 @@ export default function ProcessingPage() {
   }, [nFolds]);
 
   const handleApplyAll = useCallback(async () => {
-    notify("Running processing pipeline…", "info");
+    notify("info", "Running processing pipeline…");
     // Mark first step as running
     setSteps((prev) =>
       prev.map((s, j) => ({ ...s, status: j === 0 ? "running" : "queued" as const })),
@@ -228,11 +228,11 @@ export default function ProcessingPage() {
       setSteps((prev) =>
         prev.map((s) => ({ ...s, status: "done" as const, rows: result.n_cells || s.rows })),
       );
-      notify(`Processing complete — ${result.n_cells} cells, ${result.columns.length} columns`, "success");
+      notify("success", `Processing complete — ${result.n_cells} cells, ${result.columns.length} columns`);
       // Refresh summary
       dataSummary().then(setSummary).catch(() => {});
     } catch (e) {
-      notify(e instanceof Error ? e.message : "Processing failed", "error");
+      notify("error", e instanceof Error ? e.message : "Processing failed");
       setSteps((prev) => prev.map((s) => ({ ...s, status: "queued" as const })));
     }
   }, [notify]);
@@ -241,18 +241,18 @@ export default function ProcessingPage() {
     try {
       const { versions } = await getDataVersions();
       if (versions.length < 2) {
-        notify("No previous version to revert to", "info");
+        notify("info", "No previous version to revert to");
         return;
       }
       // Select the earliest (original) version
       await selectDataVersion(versions[0].version ?? 0);
       setSteps(DEFAULT_STEPS);
       dataSummary().then(setSummary).catch(() => {});
-      notify("Reverted to original data", "success");
+      notify("success", "Reverted to original data");
     } catch {
       // If versioning not available, just reset UI
       setSteps(DEFAULT_STEPS);
-      notify("Processing reverted (local only)", "info");
+      notify("info", "Processing reverted (local only)");
     }
   }, [notify]);
 
