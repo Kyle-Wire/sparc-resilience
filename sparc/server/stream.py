@@ -64,6 +64,20 @@ class _EventCapture(io.TextIOBase):
     _MODEL_START_RE = re.compile(r"\[MODEL_START\]\s+(\w+)\s+\((\d+)/(\d+)\)")
     _MODEL_DONE_RE = re.compile(r"\[MODEL_DONE\]\s+(\w+)\s+\((\d+)/(\d+)\)")
 
+    # OOF model result line: "OLS: R² = 0.2942, RMSE = 1.4375"
+    _MODEL_RESULT_RE = re.compile(
+        r"^(\w+):\s*R[\u00b22]\s*=\s*([\d.]+),\s*RMSE\s*=\s*([\d.]+)",
+        re.IGNORECASE,
+    )
+    # Neural fold boundary: "Fold 1 / 5  (32914 train, 11011 test)"
+    _NEURAL_FOLD_RE = re.compile(
+        r"[Ff]old\s+(\d+)\s*/\s*(\d+)\s*\((\d+)\s+train,\s*(\d+)\s+test\)"
+    )
+    # Fold training complete: "Fold 1 training done in 964.0s"
+    _FOLD_DONE_RE = re.compile(
+        r"[Ff]old\s+(\d+)\s+training\s+done\s+in\s+([\d.]+)s"
+    )
+
     # Stage 2 model weight map (% of total stage 2 progress)
     _MODEL_WEIGHTS: dict[str, tuple[int, int]] = {
         # model_name → (start_pct, end_pct) within stage 2
@@ -140,6 +154,8 @@ class _EventCapture(io.TextIOBase):
          "final_results", "Compiling final ensemble results", "info"),
         (re.compile(r"V2 Neural Meta-Learner"),
          "meta_learner", "Training neural meta-learner ensemble", "info"),
+        (re.compile(r"All surrogates passed validation"),
+         "surrogates_ok", "All surrogates passed validation", "success"),
         # Stage 3 — Causal
         (re.compile(r"Running DAG assumption diagnostics"),
          "dag_diag", "Running DAG assumption diagnostics", "info"),
@@ -310,6 +326,31 @@ class _EventCapture(io.TextIOBase):
             event["type"] = "dag_approval_requested"
             event["n_edges"] = payload.get("n_edges", 0)
             event["n_nodes"] = payload.get("n_nodes", 0)
+
+        # ---- Fold boundary and model result detection ----
+        if event["type"] == "log":
+            m_nf = self._NEURAL_FOLD_RE.search(line)
+            if m_nf:
+                event.update({
+                    "type": "fold_start",
+                    "fold": int(m_nf.group(1)),
+                    "n_folds": int(m_nf.group(2)),
+                    "n_train": int(m_nf.group(3)),
+                    "n_test": int(m_nf.group(4)),
+                })
+            elif (m_fd := self._FOLD_DONE_RE.search(line)):
+                event.update({
+                    "type": "fold_complete",
+                    "fold": int(m_fd.group(1)),
+                    "elapsed_seconds": float(m_fd.group(2)),
+                })
+            elif (m_mr := self._MODEL_RESULT_RE.search(line)):
+                event.update({
+                    "type": "model_result",
+                    "model": m_mr.group(1).upper(),
+                    "r2": float(m_mr.group(2)),
+                    "rmse": float(m_mr.group(3)),
+                })
 
         # ---- Checkpoint promotion ----
         # If still a raw "log" event, check if it matches a known checkpoint.
@@ -536,8 +577,8 @@ async def stream_stage(
                 phase = event.get("train_phase", "cv")
                 if epoch == 1 and n_epochs > 0:
                     eta.start("epoch", n_epochs)
-                    # Compute emit cadence: ~20 updates per training run
-                    _epoch_emit_every[phase] = max(1, n_epochs // 20)
+                    # Compute emit cadence: every 25 epochs (4 updates per 100-epoch run)
+                    _epoch_emit_every[phase] = max(1, n_epochs // 4)
                 eta_info = eta.update("epoch", epoch)
                 if eta_info:
                     event["eta_seconds"] = eta_info["eta_seconds"]

@@ -364,39 +364,44 @@ export default function DAGView() {
 
   const onConnect = useCallback(
     (params: Connection) => {
-      pushSnapshot();
-      const newEdge: Edge = {
-        id: `e-${params.source}-${params.target}`,
-        source: params.source,
-        target: params.target,
-        style: { stroke: "#602468" },
-        markerEnd: { type: MarkerType.ArrowClosed, color: "#602468" },
+      const applyMc3 = (data: import("@/lib/types").MC3Result) => {
+        setMc3(data);
+        setShowMc3(true);
+        const mc3Edges = mc3EdgesToFlow(data);
+        setEdges((eds) => {
+          const cleaned = eds.filter((e) => !e.id.startsWith("mc3-"));
+          return [...cleaned, ...mc3Edges];
+        });
+        // Use functional setNodes to read latest state and avoid stale closure
+        setNodes((currentNodes) => {
+          const existingIds = new Set(currentNodes.map((n) => n.id));
+          const newNodes: Node[] = [];
+          for (const name of data.node_names) {
+            if (!existingIds.has(name)) {
+              newNodes.push({
+                id: name,
+                type: "dag",
+                position: { x: 0, y: 0 },
+                data: { label: name, nodeType: "confounder" },
+              });
+            }
+          }
+          return newNodes.length > 0
+            ? layoutNodes([...currentNodes, ...newNodes], mc3Edges)
+            : currentNodes;
+        });
       };
-      setEdges((eds) => addEdge(newEdge, eds));
-    },
-    [setEdges, pushSnapshot],
-  );
 
-  // Quick edge: add via form
-  const addQuickEdge = useCallback(() => {
-    if (!qeSource || !qeTarget || qeSource === qeTarget) return;
-    // Check for duplicate
-    if (edges.find((e) => e.source === qeSource && e.target === qeTarget)) return;
-    pushSnapshot();
-    const newEdge: Edge = {
-      id: `e-${qeSource}-${qeTarget}`,
-      source: qeSource,
-      target: qeTarget,
-      label: qeMechanism || undefined,
-      style: { stroke: "#602468" },
-      markerEnd: { type: MarkerType.ArrowClosed, color: "#602468" },
-      labelStyle: { fontSize: 9, fill: "#666" },
-    };
-    setEdges((eds) => addEdge(newEdge, eds));
-    setQeSource("");
-    setQeTarget("");
-    setQeMechanism("");
-  }, [qeSource, qeTarget, qeMechanism, edges, setEdges, pushSnapshot]);
+      getMc3Result()
+        .then((data) => { if (data) applyMc3(data); })
+        .catch(() => {
+          // MC³ result not ready yet — retry once after a short delay
+          setTimeout(() => {
+            getMc3Result()
+              .then((data) => { if (data) applyMc3(data); })
+              .catch(() => {});
+          }, 1500);
+        });
 
   // Context menu: right-click on node
   const onNodeContextMenu = useCallback(

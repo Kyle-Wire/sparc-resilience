@@ -2,6 +2,7 @@
 import { SectionHeader, Card, Btn, Stat, StatGrid } from "@/components/ui/DesignSystem";
 import { getModelPerformance, getScenarioDetail, getPdpCurves, getGwenData, getCorrelogramData, getPredictions } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
+import { usePipeline } from "@/hooks/PipelineProvider";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
 import type { ScenarioDetail, PdpCurves, CorrelogramData, GeoJsonData } from "@/lib/types";
 
@@ -17,12 +18,14 @@ export default function ResultsPage() {
   const [viewMode, setViewMode] = useState<ViewMode>("map");
   const [activeScenarioIdx, setActiveScenarioIdx] = useState(0);
   const [activeScenarioVar, setActiveScenarioVar] = useState<string>("predicted");
+  const [mapLayer, setMapLayer] = useState<string>("");
   const mapCanvasRef = useRef<HTMLCanvasElement>(null);
   const histCanvasRef = useRef<HTMLCanvasElement>(null);
   const r2CanvasRef = useRef<HTMLCanvasElement>(null);
   const curveCanvasRef = useRef<HTMLCanvasElement>(null);
   const corrCanvasRef = useRef<HTMLCanvasElement>(null);
   const { notify } = useNotification();
+  const pipeline = usePipeline();
 
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [scenarioDetail, setScenarioDetail] = useState<ScenarioDetail | null>(null);
@@ -31,8 +34,9 @@ export default function ResultsPage() {
   const [correlogram, setCorrelogram] = useState<CorrelogramData | null>(null);
   const [activePdpVar, setActivePdpVar] = useState<string>("");
 
-  // Load data from API
-  useEffect(() => {
+  // Load and refresh data from API. We re-run this after pipeline completion
+  // so the Results page updates automatically when artifacts are finished.
+  const loadResults = useCallback(() => {
     // Model RÂ² from dedicated endpoint
     getModelPerformance().then((data) => {
       const mods: ModelInfo[] = data.models.map((m, i) => ({
@@ -47,9 +51,18 @@ export default function ResultsPage() {
     getScenarioDetail().then(setScenarioDetail).catch(() => {});
 
     // Model predictions GeoJSON (stage 3 = inference; fallback to stage 2)
-    (getPredictions(3) as Promise<GeoJsonData>).catch(() => getPredictions(2) as Promise<GeoJsonData>)
-      .then(setPredictionsGeoJson)
-      .catch(() => {});
+    // Retry briefly because files may appear moments after completion event.
+    const loadPredictions = (attempt = 0) => {
+      (getPredictions(3) as Promise<GeoJsonData>)
+        .catch(() => getPredictions(2) as Promise<GeoJsonData>)
+        .then(setPredictionsGeoJson)
+        .catch(() => {
+          if (attempt < 3) {
+            setTimeout(() => loadPredictions(attempt + 1), 1200);
+          }
+        });
+    };
+    loadPredictions();
 
     // PDP curves for intervention response
     getPdpCurves().then((pdp) => {
@@ -76,6 +89,18 @@ export default function ResultsPage() {
       });
     }).catch(() => {});
   }, []);
+
+  // Initial load
+  useEffect(() => {
+    loadResults();
+  }, [loadResults]);
+
+  // Refresh automatically once a run transitions to idle/completed
+  useEffect(() => {
+    if (!pipeline.isRunning) {
+      loadResults();
+    }
+  }, [pipeline.isRunning, loadResults]);
 
   const hasData = models.length > 0;
   const bestModel = hasData ? models.reduce((a, b) => (b.r2 > a.r2 ? b : a)) : null;
@@ -157,11 +182,17 @@ export default function ResultsPage() {
     const rangeV = maxV - minV || 1;
     const rangeX = maxX - minX || 1;
     const rangeY = maxY - minY || 1;
-    const pad = 12;
+    // Uniform scaling preserves aspect ratio
+    const pad = 16;
+    const scaleX = (w - 2 * pad) / rangeX;
+    const scaleY = (h - 2 * pad) / rangeY;
+    const scale = Math.min(scaleX, scaleY);
+    const offsetX = (w - scale * rangeX) / 2;
+    const offsetY = (h - scale * rangeY) / 2;
 
     for (const p of pts) {
-      const px = pad + ((p.x - minX) / rangeX) * (w - 2 * pad);
-      const py = pad + ((maxY - p.y) / rangeY) * (h - 2 * pad);
+      const px = offsetX + (p.x - minX) * scale;
+      const py = h - offsetY - (p.y - minY) * scale;
       const t = (p.val - minV) / rangeV;
       const ci = Math.floor(t * (SPARC_RAMP_HEX.length - 1));
       ctx.fillStyle = SPARC_RAMP_HEX[ci];
@@ -170,6 +201,23 @@ export default function ResultsPage() {
       ctx.fill();
     }
   }
+
+  // Derive available numeric layers from predictions GeoJSON for the layer selector
+  const mapLayerOptions = (() => {
+    const features = predictionsGeoJson?.features ?? [];
+    if (!features.length) return [];
+    const props = features[0]?.properties ?? {};
+    const skip = new Set(["lon", "lat", "geometry", "id"]);
+    return Object.entries(props)
+      .filter(([k, v]) => !skip.has(k) && typeof v === "number" && Number.isFinite(v as number))
+      .map(([k]) => k);
+  })();
+
+  // Default map layer selection: prefer predicted_full, then first available
+  const resolvedMapLayer = mapLayer ||
+    (mapLayerOptions.includes("predicted_full") ? "predicted_full" :
+      mapLayerOptions.includes("predicted") ? "predicted" :
+      mapLayerOptions[0] ?? "predicted_full");
 
   // Draw predictions map
   useEffect(() => {
@@ -180,8 +228,8 @@ export default function ResultsPage() {
       drawEmptyState(canvas, "Run pipeline to see predictions map");
       return;
     }
-    drawPointMap(canvas, features, "predicted");
-  }, [viewMode, predictionsGeoJson]);
+    drawPointMap(canvas, features, resolvedMapLayer);
+  }, [viewMode, predictionsGeoJson, resolvedMapLayer]);
 
   // Draw scenario map
   useEffect(() => {
@@ -571,6 +619,18 @@ export default function ResultsPage() {
                   {mode === "map" ? "Map" : mode === "scenarios" ? "Scenarios" : mode === "histogram" ? "Histogram" : "Correlogram"}
                 </button>
               ))}
+              {/* Map layer selector (only shown in map mode with predictions data) */}
+              {viewMode === "map" && mapLayerOptions.length > 0 && (
+                <select
+                  value={resolvedMapLayer}
+                  onChange={(e) => setMapLayer(e.target.value)}
+                  style={{ fontSize: 10, padding: "2px 4px", borderRadius: 3, border: "1px solid var(--line)", fontFamily: "inherit" }}
+                >
+                  {mapLayerOptions.map((col) => (
+                    <option key={col} value={col}>{col.replace(/_/g, " ")}</option>
+                  ))}
+                </select>
+              )}
               {/* Scenario selectors (only shown in scenarios mode) */}
               {viewMode === "scenarios" && scenarioNames.length > 0 && (
                 <select

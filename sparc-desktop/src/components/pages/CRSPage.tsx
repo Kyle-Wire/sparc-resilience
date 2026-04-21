@@ -69,7 +69,8 @@ export default function CRSPage() {
     const canvas = previewCanvasRef.current;
     if (!canvas) return;
     const DPR = Math.min(window.devicePixelRatio || 1, 2);
-    const w = canvas.clientWidth, h = canvas.clientHeight;
+    const w = canvas.clientWidth || 400;   // guard against 0 before layout
+    const h = canvas.clientHeight || 220;
     canvas.width = w * DPR; canvas.height = h * DPR;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -120,8 +121,14 @@ export default function CRSPage() {
     const pad = 20;
     const xRange = xMax - xMin || 1;
     const yRange = yMax - yMin || 1;
-    const toCanvasX = (v: number) => pad + ((v - xMin) / xRange) * (w - 2 * pad);
-    const toCanvasY = (v: number) => h - pad - ((v - yMin) / yRange) * (h - 2 * pad);
+    // Uniform scaling to preserve aspect ratio
+    const scaleX = (w - 2 * pad) / xRange;
+    const scaleY = (h - 2 * pad) / yRange;
+    const scale = Math.min(scaleX, scaleY);
+    const offX = (w - scale * xRange) / 2;
+    const offY = (h - scale * yRange) / 2;
+    const toCanvasX = (v: number) => offX + (v - xMin) * scale;
+    const toCanvasY = (v: number) => h - offY - (v - yMin) * scale;
 
     // Draw points
     if (hasPts) {

@@ -421,6 +421,23 @@ async def crs_distortion(
                 cx = (bb["minx"] + bb["maxx"]) / 2
                 cy = (bb["miny"] + bb["maxy"]) / 2
 
+        # Short-circuit: same CRS → no distortion
+        norm_in = input_epsg.replace("EPSG:", "").strip()
+        norm_proj = projected_epsg.replace("EPSG:", "").strip()
+        if norm_in == norm_proj:
+            src_crs = CRS.from_epsg(int(norm_in))
+            return {
+                "center_lon": cx,
+                "center_lat": cy,
+                "k_x": 1.0,
+                "k_y": 1.0,
+                "k_mean": 1.0,
+                "area_distortion_pct": 0.0,
+                "input_crs_name": src_crs.name,
+                "projected_crs_name": src_crs.name,
+                "assessment": "acceptable",
+            }
+
         # Compute k (linear scale factor) numerically: transform two points 1 m apart
         # in WGS84, see how far they are in projected CRS vs expected
         delta_deg = 0.001  # ~100m along latitude
@@ -440,8 +457,17 @@ async def crs_distortion(
             _, _, dist_x = geod.inv(cx, cy, cx + delta_deg, cy)
             _, _, dist_y = geod.inv(cx, cy, cx, cy + delta_deg)
 
-            k_x = float(np.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2) / dist_x) if dist_x else 1.0
-            k_y = float(np.sqrt((x2 - x0) ** 2 + (y2 - y0) ** 2) / dist_y) if dist_y else 1.0
+            # If projected CRS has angular units (i.e. it is also geographic),
+            # convert projected delta from degrees to metres using geod distances.
+            tgt_crs_obj = CRS.from_epsg(int(norm_proj))
+            tgt_is_angular = tgt_crs_obj.axis_info[0].unit_name in ("degree", "grad")
+            if tgt_is_angular:
+                # Both input and output are in degrees — distances are the same
+                k_x = 1.0
+                k_y = 1.0
+            else:
+                k_x = float(np.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2) / dist_x) if dist_x else 1.0
+                k_y = float(np.sqrt((x2 - x0) ** 2 + (y2 - y0) ** 2) / dist_y) if dist_y else 1.0
             k_mean = (k_x + k_y) / 2
             area_distortion_pct = float(abs(k_mean ** 2 - 1) * 100)
 
@@ -828,7 +854,7 @@ async def get_gwen_data():
         csv_path = search_dir / "gwen_variable_importance.csv"
         json_path = search_dir / "gwen_results.json"
 
-        print(f"[SPARC] GWEN lookup: csv={csv_path} exists={csv_path.exists()}, json={json_path} exists={json_path.exists()}")
+        logger.debug("[SPARC] GWEN lookup: csv=%s exists=%s, json=%s exists=%s", csv_path, csv_path.exists(), json_path, json_path.exists())
 
         if csv_path.exists():
             df = pd.read_csv(csv_path)
@@ -1232,7 +1258,7 @@ async def get_scenario_detail():
         if candidate.exists():
             gpkg_path = candidate
             break
-    print(f"[SPARC] Scenario gpkg lookup: {gpkg_path} found={gpkg_path is not None}")
+    logger.debug("[SPARC] Scenario gpkg lookup: %s found=%s", gpkg_path, gpkg_path is not None)
     geojson_data = None
     if gpkg_path is not None:
         import geopandas as gpd

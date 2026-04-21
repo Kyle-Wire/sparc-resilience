@@ -60,16 +60,23 @@ function eventToLogLine(evt: PipelineEvent) {
   if (type === "metric") {
     const e = evt as any;
     const fold = e.fold != null ? ` fold ${e.fold}` : "";
-    return { text: `  📊${fold} ${e.metric ?? "metric"} = ${typeof e.value === "number" ? e.value.toFixed(4) : e.value}`, level: "info" as const, ts };
+    const model = e.model ? ` [${e.model}]` : "";
+    return { text: `  📊${model}${fold} ${e.metric ?? "metric"} = ${typeof e.value === "number" ? e.value.toFixed(4) : e.value}`, level: "info" as const, ts };
   }
   if (type === "fold_start") {
     const e = evt as any;
-    return { text: `  ── Fold ${e.fold}/${e.n_folds} ──`, level: "info" as const, ts };
+    const counts = (e.n_train != null && e.n_test != null)
+      ? `  (${e.n_train.toLocaleString()} train / ${e.n_test.toLocaleString()} test)` : "";
+    return { text: `  ── Fold ${e.fold}/${e.n_folds}${counts} ──`, level: "info" as const, ts };
   }
   if (type === "fold_complete") {
     const e = evt as any;
-    const r2 = e.r2 != null ? `  R²=${e.r2.toFixed(4)}` : "";
-    return { text: `  ✓ Fold ${e.fold} complete${r2}`, level: "success" as const, ts };
+    const dur = e.elapsed_seconds != null ? `  (${Math.round(e.elapsed_seconds)}s)` : "";
+    return { text: `  ✓ Fold ${e.fold} complete${dur}`, level: "success" as const, ts };
+  }
+  if (type === "model_result") {
+    const e = evt as any;
+    return { text: `  📊 ${e.model ?? "model"}  R²=${e.r2?.toFixed(4) ?? "?"}  RMSE=${e.rmse?.toFixed(4) ?? "?"}`, level: "success" as const, ts };
   }
   if (type === "model_start") {
     const e = evt as any;
