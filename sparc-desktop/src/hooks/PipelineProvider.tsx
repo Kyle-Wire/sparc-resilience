@@ -56,6 +56,8 @@ export interface PipelineState {
   dagApprovalPending: boolean;
   /** Wall-clock ms when the current pipeline run started (persists through page navigation). */
   runStartedAt: number | null;
+  /** Wall-clock ms when the current pipeline run ended (success or error). Null while running. */
+  runEndedAt: number | null;
   startStage: (stage: number, opts?: { fast?: boolean; skip_gwen?: boolean }) => void;
   /** Run a sequence of stages in order, chaining each on completion. */
   startPipeline: (stages: number[], opts?: { fast?: boolean; skip_gwen?: boolean }) => void;
@@ -91,6 +93,7 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
   const [dagApprovalPending, setDagApprovalPending] = useState(false);
   const [stageStatuses, setStageStatuses] = useState<Record<number, StageStatus>>({});
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
+  const [runEndedAt, setRunEndedAt] = useState<number | null>(null);
   /** Remaining stages to run after the current one completes. */
   const stageQueueRef = useRef<number[]>([]);
   /** Options to reuse when chaining to the next stage. */
@@ -201,11 +204,14 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
       // If there are more stages queued, don't stop the pipeline
       if (stageQueueRef.current.length === 0) {
         setIsRunning(false);
+        // Freeze the elapsed timer at the moment of completion
+        setRunEndedAt(Date.now());
       }
       return true; // signal to close current socket
     }
     if (event.type === "error") {
       setIsRunning(false);
+      setRunEndedAt(Date.now());
       setError(event.message ?? "Unknown error");
       stageQueueRef.current = []; // clear remaining stages on error
       return true;
@@ -276,6 +282,7 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
         setError(null);
         setStageStatuses({});
         setRunStartedAt(Date.now());
+        setRunEndedAt(null);
         setTraining({
           capacityResults: [],
           epochHistory: [],
@@ -355,7 +362,8 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
     wsRef.current = null;
     setIsRunning(false);
     setDagApprovalPending(false);
-    // keep runStartedAt so elapsed time remains visible after stop
+    // Freeze elapsed time at cancellation point (keep runStartedAt for display)
+    setRunEndedAt((prev) => prev ?? Date.now());
   }, []);
 
   const handleApproveDag = useCallback(async () => {
@@ -372,7 +380,7 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
   return (
     <PipelineContext.Provider value={{
       events, isRunning, error, currentStage, training, stageStatuses,
-      dagApprovalPending, runStartedAt, startStage, startPipeline, cancel, handleApproveDag, handleRejectDag,
+      dagApprovalPending, runStartedAt, runEndedAt, startStage, startPipeline, cancel, handleApproveDag, handleRejectDag,
     }}>
       {children}
     </PipelineContext.Provider>

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { SectionHeader, Card, Tag, Btn, Stat, StatGrid } from "@/components/ui/DesignSystem";
 import { getConfig, saveConfig, getPdpCurves } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
+import { usePipeline } from "@/hooks/PipelineProvider";
 import type { PdpCurves } from "@/lib/types";
 
 interface MonotoneConstraint {
@@ -57,6 +58,7 @@ export default function PhysicsPage() {
   const [pdpData, setPdpData] = useState<PdpCurves | null>(null);
   const curveCanvasRef = useRef<HTMLCanvasElement>(null);
   const { notify } = useNotification();
+  const pipeline = usePipeline();
 
   useEffect(() => {
     getConfig()
@@ -97,7 +99,8 @@ export default function PhysicsPage() {
     getPdpCurves()
       .then((pdp) => setPdpData(pdp))
       .catch(() => {});
-  }, []);
+    // Refresh whenever a new pipeline run finishes so neural PDP CSVs are picked up.
+  }, [pipeline.runEndedAt]);
 
   // Draw response curve from real PDP data
   useEffect(() => {
@@ -298,7 +301,21 @@ export default function PhysicsPage() {
           </div>
         </Card>
 
-        <Card title="Response curve" subtitle={selectedVar ? selectedVar.replace(/_/g, " ") + " → target" : "select a variable"}>
+        <Card
+          title="Response curve"
+          subtitle={selectedVar ? selectedVar.replace(/_/g, " ") + " → target" : "select a variable"}
+          actions={(() => {
+            const v = selectedVar ? pdpData?.[selectedVar] : undefined;
+            const src = (v as { source?: string } | undefined)?.source;
+            if (!src) return null;
+            const isNeural = src === "neural_pde";
+            return (
+              <Tag color={isNeural ? "var(--purple)" : "var(--muted)"}>
+                {isNeural ? "PINN · PDE" : "GWRF"}
+              </Tag>
+            );
+          })()}
+        >
           <canvas ref={curveCanvasRef} style={{ width: "100%", height: 200, display: "block" }} />
         </Card>
       </div>

@@ -1,10 +1,23 @@
 ﻿import { useState, useEffect, useCallback, useRef } from "react";
 import { SectionHeader, Card, Btn, Stat, StatGrid } from "@/components/ui/DesignSystem";
-import { getModelPerformance, getScenarioDetail, getPdpCurves, getGwenData, getCorrelogramData, getPredictions, getScenarioIncrement } from "@/lib/api";
+import ExplainButton from "@/components/common/ExplainButton";
+import {
+  getModelPerformance, getScenarioDetail, getPdpCurves, getGwenData,
+  getCorrelogramData, getPredictions, getScenarioIncrement,
+  getCateMapVariables, getCateMap, getDoseResponseCurves,
+  getCausalSensitivity,
+  getCausalNegativeControl,
+  freezeCurrentRun,
+  downloadStandaloneSnapshot,
+  type CausalSensitivity,
+  type NegativeControlResponse,
+} from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import { usePipeline } from "@/hooks/PipelineProvider";
+import SpatialMap from "@/components/map/SpatialMap";
+import LayerManager, { useContextLayers } from "@/components/map/LayerManager";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
-import type { ScenarioDetail, PdpCurves, CorrelogramData, GeoJsonData } from "@/lib/types";
+import type { ScenarioDetail, PdpCurves, CorrelogramData, GeoJsonData, DoseResponseData } from "@/lib/types";
 
 // Human-readable labels for PDE-derived field columns
 const PDE_LABELS: Record<string, string> = {
@@ -17,7 +30,7 @@ const PDE_LABELS: Record<string, string> = {
   div_flux: "∇·F flux divergence",
 };
 
-type ViewMode = "map" | "scenarios" | "histogram" | "correlogram";
+type ViewMode = "map" | "scenarios" | "histogram" | "correlogram" | "causal";
 
 interface ModelInfo {
   name: string;
@@ -37,6 +50,7 @@ export default function ResultsPage() {
   const corrCanvasRef = useRef<HTMLCanvasElement>(null);
   const { notify } = useNotification();
   const pipeline = usePipeline();
+  const layerCtx = useContextLayers();
 
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [scenarioDetail, setScenarioDetail] = useState<ScenarioDetail | null>(null);
@@ -47,6 +61,16 @@ export default function ResultsPage() {
   const [incrVar, setIncrVar] = useState("");
   const [incrPct, setIncrPct] = useState(10);
   const [incrResult, setIncrResult] = useState<ScenarioDetail | null>(null);
+
+  // Causal-tab state: CATE variable list + selected variable + spatial geojson
+  // and dose-response curves keyed by treatment variable.
+  const [cateVars, setCateVars] = useState<string[]>([]);
+  const [activeCateVar, setActiveCateVar] = useState<string>("");
+  const [cateGeo, setCateGeo] = useState<GeoJsonData | null>(null);
+  const [doseResponse, setDoseResponse] = useState<DoseResponseData | null>(null);
+  const [sensitivity, setSensitivity] = useState<CausalSensitivity | null>(null);
+  const [negControl, setNegControl] = useState<NegativeControlResponse | null>(null);
+  const doseCanvasRef = useRef<HTMLCanvasElement>(null);
 
   // Load and refresh data from API. We re-run this after pipeline completion
   // so the Results page updates automatically when artifacts are finished.
@@ -109,12 +133,50 @@ export default function ResultsPage() {
     loadResults();
   }, [loadResults]);
 
-  // Refresh automatically once a run transitions to idle/completed
+  // Refresh automatically once a run finishes (uses runEndedAt for an exact
+  // edge transition rather than the noisier isRunning flag).
   useEffect(() => {
-    if (!pipeline.isRunning) {
+    if (pipeline.runEndedAt) {
       loadResults();
     }
-  }, [pipeline.isRunning, loadResults]);
+  }, [pipeline.runEndedAt, loadResults]);
+
+  // Causal results: load CATE variable list + dose-response curves once results
+  // are available; the discovery / mediation results live behind getCateMap and
+  // getDoseResponseCurves and are populated by the causal stage.
+  const loadCausal = useCallback(() => {
+    getCateMapVariables()
+      .then((res) => {
+        const vars = (res?.variables ?? []) as string[];
+        setCateVars(vars);
+        if (vars.length > 0 && !activeCateVar) setActiveCateVar(vars[0]);
+      })
+      .catch(() => setCateVars([]));
+    getDoseResponseCurves()
+      .then((d) => setDoseResponse(d as DoseResponseData))
+      .catch(() => setDoseResponse(null));
+    getCausalSensitivity()
+      .then((s) => setSensitivity(s))
+      .catch(() => setSensitivity(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => { loadCausal(); }, [loadCausal, pipeline.runEndedAt]);
+
+  // Refetch CATE surface when the user picks a different treatment variable.
+  useEffect(() => {
+    if (!activeCateVar) { setCateGeo(null); return; }
+    getCateMap(activeCateVar)
+      .then((g) => setCateGeo(g as GeoJsonData))
+      .catch(() => setCateGeo(null));
+  }, [activeCateVar]);
+
+  // Permutation negative-control test for the active CATE variable.
+  useEffect(() => {
+    if (!activeCateVar) { setNegControl(null); return; }
+    getCausalNegativeControl(activeCateVar, 1000)
+      .then((nc) => setNegControl(nc))
+      .catch(() => setNegControl(null));
+  }, [activeCateVar]);
 
   const hasData = models.length > 0;
   const bestModel = hasData ? models.reduce((a, b) => (b.r2 > a.r2 ? b : a)) : null;
@@ -338,12 +400,31 @@ export default function ResultsPage() {
     ctx.moveTo(40, 10); ctx.lineTo(40, h - 30); ctx.lineTo(w - 10, h - 30);
     ctx.stroke();
 
-    // Axis labels (min / max values in original scale)
+    // Y-axis ticks (4 evenly spaced) and label
+    ctx.fillStyle = "#6e6358";
+    ctx.font = "9px 'JetBrains Mono'";
+    ctx.textAlign = "right";
+    for (let i = 0; i <= 4; i++) {
+      const tickVal = Math.round((maxBin * (4 - i)) / 4);
+      const yPx = 10 + ((h - 40) * i) / 4;
+      ctx.fillText(String(tickVal), 36, yPx + 3);
+      ctx.strokeStyle = "rgba(0,0,0,0.04)";
+      ctx.beginPath(); ctx.moveTo(40, yPx); ctx.lineTo(w - 10, yPx); ctx.stroke();
+    }
+    ctx.save();
+    ctx.translate(10, h / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = "center";
+    ctx.fillText("count", 0, 0);
+    ctx.restore();
+
+    // X-axis labels (min / max values in original scale)
     ctx.fillStyle = "#6e6358";
     ctx.font = "9px 'JetBrains Mono'";
     ctx.textAlign = "center";
     ctx.fillText(minV.toFixed(2), 40, h - 14);
     ctx.fillText(maxV.toFixed(2), w - 10, h - 14);
+    ctx.fillText(((minV + maxV) / 2).toFixed(2), w / 2, h - 14);
 
     // Bars
     const barW = (w - 55) / nBins;
@@ -577,6 +658,24 @@ export default function ResultsPage() {
     }
     const rangeI = allMaxI - allMinI || 1;
 
+    // Tick labels (x: 5 ticks across lag, y: 5 ticks across Moran's I range)
+    ctx.fillStyle = "#6e6358";
+    ctx.font = "8px 'JetBrains Mono'";
+    ctx.textAlign = "center";
+    for (let i = 0; i <= 4; i++) {
+      const lagVal = (allMaxLag * i) / 4;
+      const x = pad.left + (plotW * i) / 4;
+      ctx.fillText(lagVal.toFixed(0), x, h - pad.bottom + 12);
+    }
+    ctx.textAlign = "right";
+    for (let i = 0; i <= 4; i++) {
+      const iVal = allMinI + (rangeI * (4 - i)) / 4;
+      const y = pad.top + (plotH * i) / 4;
+      ctx.fillText(iVal.toFixed(2), pad.left - 4, y + 3);
+      ctx.strokeStyle = "rgba(0,0,0,0.04)";
+      ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(w - pad.right, y); ctx.stroke();
+    }
+
     const top = Math.min(varNames.length, 6);
     for (let vi = 0; vi < top; vi++) {
       const name = varNames[vi];
@@ -622,6 +721,81 @@ export default function ResultsPage() {
     }
   }, [viewMode, correlogram]);
 
+  // Dose-response curves: marginal causal effect vs treatment level for the
+  // currently selected CATE variable. Falls back to the first available curve.
+  useEffect(() => {
+    const canvas = doseCanvasRef.current;
+    if (!canvas || viewMode !== "causal" || !doseResponse) return;
+    const treatments = Object.keys(doseResponse);
+    if (treatments.length === 0) return;
+    const treatmentName = treatments.find((t) => t === activeCateVar) ?? treatments[0];
+    const curve = doseResponse[treatmentName];
+    if (!curve || !curve.dose_levels?.length || !curve.marginal_effects?.length) return;
+
+    const DPR = Math.min(window.devicePixelRatio || 1, 2);
+    const w = canvas.clientWidth || 400, h = canvas.clientHeight || 320;
+    canvas.width = w * DPR; canvas.height = h * DPR;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.scale(DPR, DPR);
+    ctx.clearRect(0, 0, w, h);
+
+    const pad = { top: 16, right: 14, bottom: 30, left: 44 };
+    const xs = curve.dose_levels;
+    const ys = curve.marginal_effects;
+    const xMin = Math.min(...xs), xMax = Math.max(...xs);
+    const yMin = Math.min(...ys, 0), yMax = Math.max(...ys, 0);
+    const xRange = xMax - xMin || 1, yRange = yMax - yMin || 1;
+    const toX = (v: number) => pad.left + ((v - xMin) / xRange) * (w - pad.left - pad.right);
+    const toY = (v: number) => h - pad.bottom - ((v - yMin) / yRange) * (h - pad.top - pad.bottom);
+
+    // Grid
+    ctx.strokeStyle = "rgba(0,0,0,0.06)"; ctx.lineWidth = 0.5;
+    for (let i = 0; i <= 4; i++) {
+      const y = pad.top + (i / 4) * (h - pad.top - pad.bottom);
+      ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(w - pad.right, y); ctx.stroke();
+    }
+    // Zero line
+    if (yMin < 0 && yMax > 0) {
+      ctx.strokeStyle = "rgba(0,0,0,0.25)"; ctx.lineWidth = 0.8;
+      ctx.beginPath(); ctx.moveTo(pad.left, toY(0)); ctx.lineTo(w - pad.right, toY(0)); ctx.stroke();
+    }
+    // Curve
+    ctx.strokeStyle = "var(--purple)"; ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    xs.forEach((x, i) => { if (i === 0) ctx.moveTo(toX(x), toY(ys[i])); else ctx.lineTo(toX(x), toY(ys[i])); });
+    ctx.stroke();
+    // Points
+    ctx.fillStyle = "var(--purple)";
+    xs.forEach((x, i) => { ctx.beginPath(); ctx.arc(toX(x), toY(ys[i]), 2.5, 0, Math.PI * 2); ctx.fill(); });
+
+    // Axes labels
+    ctx.fillStyle = "#6e6358"; ctx.font = "9px 'JetBrains Mono'"; ctx.textAlign = "center";
+    ctx.fillText(treatmentName.replace(/_/g, " "), (pad.left + w - pad.right) / 2, h - 8);
+    ctx.save();
+    ctx.translate(10, (pad.top + h - pad.bottom) / 2); ctx.rotate(-Math.PI / 2);
+    ctx.fillText("dY/dT", 0, 0);
+    ctx.restore();
+    // Tick numbers
+    ctx.textAlign = "right";
+    for (let i = 0; i <= 4; i++) {
+      const v = yMin + (i / 4) * yRange;
+      const y = h - pad.bottom - (i / 4) * (h - pad.top - pad.bottom);
+      ctx.fillText(v.toFixed(2), pad.left - 4, y + 3);
+    }
+    ctx.textAlign = "center";
+    [0, 0.5, 1].forEach((t) => {
+      const v = xMin + t * xRange;
+      ctx.fillText(v.toFixed(2), pad.left + t * (w - pad.left - pad.right), h - pad.bottom + 12);
+    });
+
+    // Nonlinearity tag
+    if (curve.is_nonlinear) {
+      ctx.fillStyle = "var(--crimson)"; ctx.textAlign = "right";
+      ctx.fillText("nonlinear", w - pad.right - 2, pad.top + 8);
+    }
+  }, [viewMode, doseResponse, activeCateVar]);
+
   const handleExport = useCallback(async (format: string) => {
     notify("success", `${format} export started`);
   }, [notify]);
@@ -635,6 +809,19 @@ export default function ResultsPage() {
         label="Results"
         right={
           <div style={{ display: "flex", gap: 8 }}>
+            <Btn small onClick={async () => {
+              try {
+                const r = await freezeCurrentRun();
+                notify("success", `Froze run → ${r.path.split(/[\\/]/).pop()}`);
+              } catch (err) {
+                notify("error", err instanceof Error ? err.message : String(err));
+              }
+            }}>Freeze run</Btn>
+            <Btn small onClick={async () => {
+              const r = await downloadStandaloneSnapshot({});
+              if (r.ok) notify("success", `Saved ${r.filename}`);
+              else notify("error", r.error || "snapshot failed");
+            }}>Share snapshot</Btn>
             <Btn small onClick={() => handleExport("CSV")}>Export CSV</Btn>
             <Btn small onClick={() => handleExport("GeoPackage")}>Export GPKG</Btn>
           </div>
@@ -655,7 +842,7 @@ export default function ResultsPage() {
           subtitle={
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               {/* View mode toggle */}
-              {(["map", "scenarios", "histogram", "correlogram"] as const).map((mode) => (
+              {(["map", "scenarios", "histogram", "correlogram", "causal"] as const).map((mode) => (
                 <button
                   key={mode}
                   onClick={() => setViewMode(mode)}
@@ -672,7 +859,7 @@ export default function ResultsPage() {
                     textTransform: "capitalize",
                   }}
                 >
-                  {mode === "map" ? "Map" : mode === "scenarios" ? "Scenarios" : mode === "histogram" ? "Histogram" : "Correlogram"}
+                  {mode === "map" ? "Map" : mode === "scenarios" ? "Scenarios" : mode === "histogram" ? "Histogram" : mode === "correlogram" ? "Correlogram" : "Causal"}
                 </button>
               ))}
               {/* Map layer selector (only shown in map mode with predictions data) */}
@@ -754,11 +941,40 @@ export default function ResultsPage() {
           }
         >
           {(viewMode === "map" || viewMode === "scenarios") ? (
-            <div style={{ position: "relative" }}>
-              <canvas
-                ref={mapCanvasRef}
-                style={{ width: "100%", height: 380, display: "block", borderRadius: 4 }}
-              />
+            <div style={{ position: "relative", height: 380, borderRadius: 4, overflow: "hidden", border: "1px solid var(--line)" }}>
+              <div style={{ position: "absolute", top: 8, left: 8, zIndex: 5, maxHeight: "calc(100% - 16px)", overflowY: "auto" }}>
+                <LayerManager ctx={layerCtx} compact />
+              </div>
+              {(() => {
+                // Pick the geojson + field for the active mode.
+                const geo = viewMode === "scenarios"
+                  ? ((incrResult ?? scenarioDetail)?.geojson ?? null)
+                  : predictionsGeoJson;
+                const field = viewMode === "scenarios"
+                  ? (activeScenarioVar || scenarioCols[0] || "")
+                  : resolvedMapLayer;
+                const isDiverg = field.startsWith("delta_");
+                const featureCount = (geo as GeoJsonData | null)?.features?.length ?? 0;
+                if (featureCount === 0 || !field) {
+                  return (
+                    <div style={{ display: "flex", height: "100%", alignItems: "center", justifyContent: "center", background: "#faf8f4", color: "var(--muted)", fontSize: 12 }}>
+                      {viewMode === "scenarios" ? "Run a scenario to see the spatial response" : "No predictions yet \u2014 run the pipeline"}
+                    </div>
+                  );
+                }
+                return (
+                  <SpatialMap
+                    geojson={geo as GeoJsonData}
+                    colorField={field}
+                    mode="scatter"
+                    height="100%"
+                    palette={isDiverg ? "puor" : "sparc"}
+                    contextLayers={layerCtx.active}
+                  />
+                );
+              })()}
+              {/* Hidden canvas kept so legacy refs/effects do not crash */}
+              <canvas ref={mapCanvasRef} style={{ display: "none" }} />
               {(predictionsGeoJson?.features?.length || scenarioFeatures.length) ? (() => {
                 const activeCol = viewMode === "scenarios" ? (activeScenarioVar || scenarioCols[0] || "") : resolvedMapLayer;
                 const isDiverg = activeCol.startsWith("delta_");
@@ -816,11 +1032,136 @@ export default function ResultsPage() {
               ref={histCanvasRef}
               style={{ width: "100%", height: 380, display: "block" }}
             />
-          ) : (
+          ) : viewMode === "correlogram" ? (
             <canvas
               ref={corrCanvasRef}
               style={{ width: "100%", height: 380, display: "block" }}
             />
+          ) : (
+            // Causal view: CATE map (left) + dose-response curve (right)
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, height: 380 }}>
+              <div style={{ borderRadius: 4, overflow: "hidden", border: "1px solid var(--line)", position: "relative" }}>
+                {cateVars.length > 0 && (
+                  <select
+                    value={activeCateVar}
+                    onChange={(e) => setActiveCateVar(e.target.value)}
+                    style={{
+                      position: "absolute", top: 6, left: 6, zIndex: 10,
+                      fontSize: 10, padding: "2px 6px", borderRadius: 3,
+                      border: "1px solid var(--line)", background: "rgba(255,255,255,0.92)",
+                      fontFamily: "inherit",
+                    }}
+                  >
+                    {cateVars.map((v) => (
+                      <option key={v} value={v}>{v.replace(/_/g, " ")}</option>
+                    ))}
+                  </select>
+                )}
+                {cateGeo ? (
+                  <SpatialMap
+                    geojson={cateGeo}
+                    colorField={`cate_${activeCateVar}`}
+                    mode="scatter"
+                    height="100%"
+                    palette="puor"
+                    contextLayers={layerCtx.active}
+                  />
+                ) : (
+                  <div style={{ display: "flex", height: "100%", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: 11, background: "#faf8f4" }}>
+                    {cateVars.length === 0 ? "Run causal stage to see local treatment effects (CATE)" : "Loading CATE surface…"}
+                  </div>
+                )}
+                <div className="mono" style={{ position: "absolute", bottom: 8, left: 8, fontSize: 8, padding: "3px 6px", background: "rgba(255,255,255,0.92)", border: "1px solid var(--line)", borderRadius: 3, color: "var(--ink-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                  CATE · local causal effect
+                </div>
+              </div>
+              <div style={{ borderRadius: 4, overflow: "hidden", border: "1px solid var(--line)", padding: 10, position: "relative" }}>
+                <div className="mono" style={{ fontSize: 8, color: "var(--muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                  Dose–response · marginal causal curve
+                </div>
+                <canvas
+                  ref={doseCanvasRef}
+                  style={{ width: "100%", height: 340, display: "block" }}
+                />
+              </div>
+            </div>
+          )}
+          {viewMode === "causal" && sensitivity && sensitivity.results.length > 0 && (
+            <div style={{ marginTop: 14, padding: 12, border: "1px solid var(--line)", borderRadius: 4, background: "#faf8f4" }}>
+              <div className="mono" style={{ fontSize: 9, color: "var(--muted)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                Robustness · {sensitivity.method}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10 }}>
+                {sensitivity.results.map((s) => {
+                  const e = s.e_value_point;
+                  const color = e >= 2.5 ? "var(--purple)" : e >= 1.5 ? "var(--amber)" : "var(--crimson)";
+                  return (
+                    <div key={s.effect_label} style={{ padding: 10, border: `1px solid ${color}`, borderRadius: 4, background: "#fff" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+                        <span className="mono" style={{ fontSize: 10, fontWeight: 600 }}>{s.effect_label}</span>
+                        <span className="mono" style={{ fontSize: 14, fontWeight: 700, color }}>
+                          E={e.toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="mono" style={{ fontSize: 9, color: "var(--muted)", marginBottom: 4 }}>
+                        β={s.point_estimate.toFixed(3)}
+                        {s.ci_lower !== null && s.ci_upper !== null && ` · CI [${s.ci_lower.toFixed(3)}, ${s.ci_upper.toFixed(3)}]`}
+                        {s.e_value_ci !== null && ` · tip ${s.e_value_ci.toFixed(2)}`}
+                      </div>
+                      <div style={{ fontSize: 10, color: "var(--ink)", lineHeight: 1.4, marginBottom: 6 }}>
+                        {s.interpretation}
+                      </div>
+                      <ExplainButton
+                        compact
+                        prompt={
+                          `Explain the causal effect labelled "${s.effect_label}". ` +
+                          `Point estimate β=${s.point_estimate.toFixed(3)}` +
+                          (s.ci_lower !== null && s.ci_upper !== null
+                            ? `, 95% CI [${s.ci_lower.toFixed(3)}, ${s.ci_upper.toFixed(3)}]`
+                            : "") +
+                          `. E-value at point=${e.toFixed(2)}` +
+                          (s.e_value_ci !== null ? `, tipping E=${s.e_value_ci.toFixed(2)}` : "") +
+                          `. What does this mean for the project, and how confident should the user be?`
+                        }
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ marginTop: 8, fontSize: 9.5, color: "var(--muted)", lineHeight: 1.4 }}>
+                <strong>E-value</strong>: minimum strength (on the risk-ratio scale) an unmeasured confounder
+                would need with both treatment and outcome to fully explain away the effect. Higher = more robust.
+              </div>
+            </div>
+          )}
+          {viewMode === "causal" && negControl && (
+            <div style={{
+              marginTop: 14, padding: 12,
+              border: `1px solid ${negControl.passed ? "var(--amber)" : "var(--purple)"}`,
+              borderRadius: 4, background: "#fff",
+            }}>
+              <div className="mono" style={{ fontSize: 9, color: "var(--muted)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                Validation · permutation test on CATE({negControl.variable}) · n={negControl.n}, {negControl.n_permutations} perms
+              </div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}>
+                <div className="mono" style={{ fontSize: 18, fontWeight: 700, color: negControl.passed ? "var(--amber)" : "var(--purple)" }}>
+                  p = {negControl.p_value < 0.0001 ? "< 0.0001" : negControl.p_value.toFixed(4)}
+                </div>
+                <div className="mono" style={{ fontSize: 11, color: "var(--ink-2)" }}>
+                  z = {Number.isFinite(negControl.z_score) ? negControl.z_score.toFixed(2) : "—"}
+                </div>
+                <div className="mono" style={{ fontSize: 11, color: "var(--ink-2)" }}>
+                  μ̂ = {negControl.mean_observed.toFixed(4)} · null μ = {negControl.mean_null.toFixed(4)} ± {negControl.std_null.toFixed(4)}
+                </div>
+              </div>
+              <div style={{ marginTop: 6, fontSize: 11, color: "var(--ink)", lineHeight: 1.5 }}>
+                {negControl.interpretation}
+              </div>
+              <div style={{ marginTop: 6, fontSize: 9.5, color: "var(--muted)", lineHeight: 1.4 }}>
+                Run this on a known <em>negative-control</em> variable (something a priori unrelated to the outcome).
+                A passing test on a real treatment is a red flag — the model isn't picking up signal.
+              </div>
+            </div>
           )}
         </Card>
 

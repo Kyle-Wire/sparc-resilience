@@ -135,7 +135,7 @@ export default function RunPage() {
   const timerRef = useRef<ReturnType<typeof setInterval>>(undefined);
 
   const elapsed = pipeline.runStartedAt
-    ? Math.floor((Date.now() - pipeline.runStartedAt) / 1000)
+    ? Math.floor(((pipeline.runEndedAt ?? Date.now()) - pipeline.runStartedAt) / 1000)
     : 0;
 
   // Curated log lines derived from pipeline events
@@ -148,15 +148,16 @@ export default function RunPage() {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logLines.length]);
 
-  // Timer — tick every second to recompute derived elapsed from context
+  // Timer — tick every second to recompute derived elapsed from context.
+  // Stops once runEndedAt is set so total time freezes at completion.
   useEffect(() => {
-    if (pipeline.runStartedAt) {
+    if (pipeline.runStartedAt && !pipeline.runEndedAt) {
       timerRef.current = setInterval(() => forceUpdate((n) => n + 1), 1000);
     } else {
       if (timerRef.current) clearInterval(timerRef.current);
     }
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [pipeline.runStartedAt]);
+  }, [pipeline.runStartedAt, pipeline.runEndedAt]);
 
   const toggleStage = useCallback((id: number) => {
     setEnabledStages((prev) => {
@@ -231,7 +232,11 @@ export default function RunPage() {
         />
         <Stat label="Stage" value={currentStageName} tint="var(--ink)" />
         <Stat label="Progress" value={`${doneCount}/5`} tint="var(--amber)" />
-        <Stat label="Elapsed" value={formatTime(elapsed)} tint="var(--ink)" />
+        <Stat
+          label={pipeline.runEndedAt ? "Total time" : "Elapsed"}
+          value={formatTime(elapsed)}
+          tint={pipeline.runEndedAt ? "var(--purple)" : "var(--ink)"}
+        />
       </StatGrid>
 
       {pipeline.error && (

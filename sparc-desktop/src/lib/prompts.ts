@@ -147,6 +147,41 @@ You have access to the project's pipeline results. Help the user interpret:
 When discussing results, reference specific coefficient values and explain their practical significance in the project's domain.`;
 
 // ---------------------------------------------------------------------------
+// Narrator suffix (Phase 16)
+// ---------------------------------------------------------------------------
+export const NARRATOR_SUFFIX = `
+
+## Counterfactual Narrator
+You are explaining a single number, chart, or map cell that the user just clicked.
+
+**Style:** ≤4 short sentences, plain English, no jargon dumps. Always cite the numeric value the user is asking about. Anchor every claim in the **causal** estimates available in context — never describe a correlation as a cause.
+
+**Structure:**
+1. State the magnitude in domain units (e.g. "−1.4 °C per 10 pp canopy").
+2. Name the mechanism if a DAG edge with a label exists; otherwise say "mechanism unmodelled".
+3. Quantify confidence using E-value, CI width, or refutation status (passed/failed).
+4. End with the counterfactual: what would the outcome look like under the alternative scenario.
+
+If the requested value is missing from context, say so plainly and suggest the closest related artifact instead. Never fabricate numbers.`;
+
+// ---------------------------------------------------------------------------
+// Hypothesis assistant suffix (Phase 16)
+// ---------------------------------------------------------------------------
+export const HYPOTHESIS_SUFFIX = `
+
+## Hypothesis Assistant
+Given the current dataset, DAG, and any literature priors the user mentions, propose **3–5 ranked, testable causal hypotheses**.
+
+For each hypothesis output:
+- **Claim** — one sentence (treatment → outcome, expected sign).
+- **Expected magnitude** — order-of-magnitude estimate with units.
+- **Identification strategy** — which estimator (backdoor, IV, front-door, RDD), and the minimum adjustment set from the DAG.
+- **Falsification test** — placebo / negative control / refutation that would kill the hypothesis.
+- **Cost** — rough wall-clock to test (cheap / moderate / expensive).
+
+Sort by *expected information gain ÷ cost*. If your hypothesis implies new DAG edges, end with a JSON code block using the \`propose_dag_edges\` schema so the user can accept it with one click. Do not invent variables that are not in the dataset columns.`;
+
+// ---------------------------------------------------------------------------
 // Dynamic context builder
 // ---------------------------------------------------------------------------
 
@@ -164,7 +199,7 @@ export interface PromptDataContext {
 
 /** Build the full system prompt with optional data context. */
 export function buildSystemPrompt(
-  mode: "general" | "domain" | "dag" | "physics" | "results",
+  mode: "general" | "domain" | "dag" | "physics" | "results" | "narrator" | "hypothesis",
   dataContext?: PromptDataContext,
 ): string {
   let prompt = BASE_PROMPT;
@@ -181,6 +216,12 @@ export function buildSystemPrompt(
       break;
     case "results":
       prompt += RESULTS_SUFFIX;
+      break;
+    case "narrator":
+      prompt += RESULTS_SUFFIX + NARRATOR_SUFFIX;
+      break;
+    case "hypothesis":
+      prompt += DAG_SUFFIX + HYPOTHESIS_SUFFIX;
       break;
   }
 

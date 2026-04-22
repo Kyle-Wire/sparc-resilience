@@ -232,8 +232,136 @@ export const getDoseResponseCurves = () =>
 export const getCausalDiagnostics = () =>
   get<CausalDiagnostics>("/results/causal/diagnostics");
 
+export interface SensitivityRecord {
+  effect_label: string;
+  point_estimate: number;
+  ci_lower: number | null;
+  ci_upper: number | null;
+  rr_equivalent: number;
+  e_value_point: number;
+  e_value_ci: number | null;
+  interpretation: string;
+}
+
+export interface CausalSensitivity {
+  method: string;
+  results: SensitivityRecord[];
+}
+
+export const getCausalSensitivity = () =>
+  get<CausalSensitivity>("/results/causal/sensitivity");
+
+export interface NegativeControlResponse {
+  variable: string;
+  n: number;
+  mean_observed: number;
+  mean_null: number;
+  std_null: number;
+  p_value: number;
+  z_score: number;
+  n_permutations: number;
+  passed: boolean;
+  interpretation: string;
+}
+
+export const getCausalNegativeControl = (variable: string, nPermutations = 1000) =>
+  get<NegativeControlResponse>(
+    `/results/causal/negative_control?variable=${encodeURIComponent(variable)}&n_permutations=${nPermutations}`,
+  );
+
+// ------------------------------------------------------------------
+// Run comparison (Phase 15)
+// ------------------------------------------------------------------
+export interface RunCandidate {
+  path: string;
+  name: string;
+  mtime: number;
+}
+
+export interface RunDiscoveryResponse {
+  search_root: string;
+  runs: RunCandidate[];
+}
+
+export interface ConfigDiffRow {
+  path: string;
+  a: unknown;
+  b: unknown;
+  kind: "added" | "removed" | "changed";
+}
+
+export interface ModelDiffRow {
+  model: string;
+  r2_a: number | null;
+  r2_b: number | null;
+  rmse_a: number | null;
+  rmse_b: number | null;
+  mae_a: number | null;
+  mae_b: number | null;
+  r2_delta: number | null;
+  rmse_delta: number | null;
+  mae_delta: number | null;
+}
+
+export interface CausalDiffRow {
+  effect: string;
+  estimate_a: number | null;
+  estimate_b: number | null;
+  ci_a: [number | null, number | null];
+  ci_b: [number | null, number | null];
+  delta: number | null;
+}
+
+export interface DagEdgeDiff {
+  from: string;
+  to: string;
+  prob_a?: number | null;
+  prob_b?: number | null;
+  delta?: number | null;
+  probability?: number | null;
+}
+
+export interface DagDiff {
+  added: DagEdgeDiff[];
+  removed: DagEdgeDiff[];
+  changed: DagEdgeDiff[];
+  n_a: number;
+  n_b: number;
+  found_a: boolean;
+  found_b: boolean;
+}
+
+export interface RunDiffResponse {
+  run_a: string;
+  run_b: string;
+  config: { found_a: boolean; found_b: boolean; changes: ConfigDiffRow[] };
+  causal: { found_a: boolean; found_b: boolean; effects: CausalDiffRow[] };
+  models: { found_a: boolean; found_b: boolean; rows: ModelDiffRow[] };
+  dag: DagDiff;
+}
+
+export const discoverRuns = (searchRoot?: string) =>
+  get<RunDiscoveryResponse>(
+    `/runs/discover${searchRoot ? `?search_root=${encodeURIComponent(searchRoot)}` : ""}`,
+  );
+
+export const diffRuns = (runA: string, runB: string) =>
+  get<RunDiffResponse>(
+    `/runs/diff?run_a=${encodeURIComponent(runA)}&run_b=${encodeURIComponent(runB)}`,
+  );
+
 export const getPdpCurves = () =>
   get<PdpCurves>("/results/pdp_curves");
+
+/** PINN / PDE-constrained neural-network PDP curves (preferred over GWRF). */
+export const getNeuralPdp = () =>
+  get<PdpCurves>("/results/neural_pdp");
+
+/** Per-endpoint availability map: tells the UI which result tabs have data. */
+export const getResultsAvailability = () =>
+  get<Record<string, { available: boolean; source: string; output_dir?: string }>>(
+    "/results/availability",
+  );
 
 export const getScenarioDetail = () =>
   get<ScenarioDetail>("/results/scenarios/detail");
@@ -266,6 +394,146 @@ export interface ScenarioVariableInfo {
 
 export const getScenarioVariables = () =>
   get<{ variables: Record<string, ScenarioVariableInfo> }>("/results/scenarios/variables");
+
+// ------------------------------------------------------------------
+// Decision-support (Phase 9): intervention candidates + optimizer
+// ------------------------------------------------------------------
+export interface InterventionCandidate {
+  name: string;
+  treatment: string;
+  magnitude: number;
+  mean_effect: number;
+  effect_std: number;
+  cost: number;
+  equity_weight: number;
+  notes?: string;
+}
+
+export interface RankedIntervention extends InterventionCandidate {
+  risk_adjusted_effect: number;
+  score: number;
+  selected?: boolean;
+}
+
+export interface OptimizerResponse {
+  ranked: RankedIntervention[];
+  settings: {
+    budget: number | null;
+    robustness_lambda: number;
+    minimise: boolean;
+    n_candidates: number;
+    n_selected: number;
+  };
+  equity_summary: {
+    n: number;
+    mean: number | null;
+    min: number | null;
+    max: number | null;
+    gini: number | null;
+  };
+}
+
+export const getDecisionCandidates = () =>
+  get<{ candidates: InterventionCandidate[] }>("/decision/candidates");
+
+export const optimizeDecisions = (body: {
+  candidates?: InterventionCandidate[];
+  budget?: number | null;
+  robustness_lambda?: number;
+  minimise?: boolean;
+}) => post<OptimizerResponse>("/decision/optimize", body);
+
+export interface EquityScore {
+  candidate: string;
+  weight: number;
+  layer_breakdown: Record<string, number>;
+}
+
+export interface EquityResponse {
+  scores: EquityScore[];
+  disparity_index: number;
+}
+
+export const computeEquity = (body: {
+  candidate_names: string[];
+  layers: Record<string, number[]>;
+  weights?: Record<string, number>;
+  invert?: Record<string, boolean>;
+}) => post<EquityResponse>("/decision/equity", body);
+
+// Census ACS auto-fetch (TIGER/Geocoder + ACS 5-year)
+export interface CensusContext {
+  counties: { state_fips: string; county_fips: string; name: string }[];
+  n_counties: number;
+  population: number | null;
+  median_income: number | null;
+  poverty_rate: number | null;
+  mobile_home_share: number | null;
+  vintage: number;
+  source: string;
+  notes: string;
+}
+
+export interface CensusEquityResponse {
+  bbox: { minlon: number; minlat: number; maxlon: number; maxlat: number };
+  layers: Record<string, number>;
+  invert: Record<string, boolean>;
+  context: CensusContext;
+}
+
+export const getCensusEquity = (bbox?: {
+  minlon: number; minlat: number; maxlon: number; maxlat: number;
+}) => {
+  const qs = bbox
+    ? `?minlon=${bbox.minlon}&minlat=${bbox.minlat}&maxlon=${bbox.maxlon}&maxlat=${bbox.maxlat}`
+    : "";
+  return get<CensusEquityResponse>(`/equity/census${qs}`);
+};
+
+export interface TargetingResponse extends GeoJsonData {
+  summary: {
+    variable: string;
+    n_features: number;
+    top_k: number;
+    max_priority: number;
+    min_priority: number;
+  };
+}
+
+export const getTargeting = (variable: string, topK = 50) =>
+  get<TargetingResponse>(
+    `/decision/targeting?variable=${encodeURIComponent(variable)}&top_k=${topK}`,
+  );
+
+export interface UncertaintyRecord {
+  candidate: string;
+  selection_probability: number;
+  rank_mean: number;
+  rank_p10: number;
+  rank_p90: number;
+  effect_p10: number;
+  effect_p50: number;
+  effect_p90: number;
+}
+
+export interface UncertaintyResponse {
+  uncertainty: UncertaintyRecord[];
+  settings: {
+    n_draws: number;
+    robustness_lambda: number;
+    budget: number | null;
+    minimise: boolean;
+  };
+}
+
+export const decisionUncertainty = (body: {
+  candidates?: InterventionCandidate[];
+  budget?: number | null;
+  robustness_lambda?: number;
+  minimise?: boolean;
+  n_draws?: number;
+  seed?: number | null;
+}) => post<UncertaintyResponse>("/decision/uncertainty", body);
 
 // ------------------------------------------------------------------
 // Data preparation (raster + fishnet + zonal stats)
@@ -380,4 +648,209 @@ export function downloadGeoPackage(): void {
 // ------------------------------------------------------------------
 export function createPipelineSocket(): WebSocket {
   return new WebSocket("ws://127.0.0.1:8008/run/stream");
+}
+
+// ------------------------------------------------------------------
+// Reproducibility (Phase 17)
+// ------------------------------------------------------------------
+export interface ProvenanceData {
+  schema_version: number;
+  timestamp_utc: string;
+  config_hash: string;
+  data: { path: string | null; sha256: string | null; size_bytes: number | null };
+  git: { commit: string | null; dirty: boolean | null };
+  env: Record<string, string>;
+  extras?: Record<string, unknown>;
+}
+
+export interface ProvenanceResponse {
+  provenance: ProvenanceData;
+  frozen_config_present: boolean;
+}
+
+export const getProvenance = (runDir: string) =>
+  get<ProvenanceResponse>(`/reproduce/provenance?run_dir=${encodeURIComponent(runDir)}`);
+
+export const freezeCurrentRun = () =>
+  post<{ path: string; output_dir: string }>("/reproduce/freeze");
+
+export const loadFrozenRun = (runDir: string) =>
+  post<{ loaded: boolean; config_hash: string | null; data: ProvenanceData["data"]; warnings: string[] }>(
+    "/reproduce/load",
+    { run_dir: runDir },
+  );
+
+export interface ReproduceVerifyResponse {
+  config_hash_match: boolean;
+  data_hash_match: boolean;
+  git_commit_match: boolean;
+  env_diffs: Record<string, { a: string | null; b: string | null }>;
+  a: ProvenanceData;
+  b: ProvenanceData;
+  sidecars_b: {
+    checked: { path: string; expected: string | null; actual: string | null; match: boolean }[];
+    missing: string[];
+    n_match: number;
+    n_mismatch: number;
+  };
+}
+
+export const verifyReproduction = (runA: string, runB: string) =>
+  get<ReproduceVerifyResponse>(
+    `/reproduce/verify?run_a=${encodeURIComponent(runA)}&run_b=${encodeURIComponent(runB)}`,
+  );
+
+// ------------------------------------------------------------------
+// Scenario library (Phase 17)
+// ------------------------------------------------------------------
+export interface ScenarioLibraryEntry {
+  id: string;
+  parent_id: string | null;
+  author: string;
+  comment: string;
+  created_utc: string;
+  config_hash: string | null;
+  scenario: Record<string, unknown>;
+}
+
+export interface ScenarioTimeline {
+  entries: ScenarioLibraryEntry[];
+  children: Record<string, string[]>;
+  roots: string[];
+  count: number;
+}
+
+export const getScenarioLibrary = () => get<ScenarioTimeline>("/scenarios/library");
+
+export const appendScenarioToLibrary = (
+  scenario: Record<string, unknown>,
+  opts: { author?: string; comment?: string; parent_id?: string | null } = {},
+) => post<ScenarioLibraryEntry>("/scenarios/library", { scenario, ...opts });
+
+// ------------------------------------------------------------------
+// Standalone HTML snapshot (Phase 17)
+// ------------------------------------------------------------------
+export async function downloadStandaloneSnapshot(opts: {
+  runDir?: string;
+  projectName?: string;
+  chatHistory?: { role: string; content: string }[];
+}): Promise<{ ok: boolean; filename?: string; error?: string }> {
+  const body: Record<string, unknown> = {};
+  if (opts.runDir) body.run_dir = opts.runDir;
+  if (opts.projectName) body.project_name = opts.projectName;
+  if (opts.chatHistory) body.chat_history = opts.chatHistory;
+  const res = await fetch(`${BASE}/report/standalone`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    return { ok: false, error: txt || `HTTP ${res.status}` };
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get("Content-Disposition") || "";
+  const m = /filename="([^"]+)"/.exec(cd);
+  const filename = m ? m[1] : "sparc_snapshot.html";
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  return { ok: true, filename };
+}
+
+// ------------------------------------------------------------------
+// Context layers (Phase 18)
+// ------------------------------------------------------------------
+export interface ContextLayer {
+  id: string;
+  name: string;
+  kind: "basemap" | "overlay";
+  url_template: string | null;
+  attribution: string;
+  description: string;
+  domains: string[];
+  default_for: string[];
+  opacity_default?: number;
+  tile_size?: number;
+  max_zoom?: number;
+  available: boolean;
+  recommended?: boolean;
+}
+
+export interface ContextLayerCatalog {
+  domain: string | null;
+  layers: ContextLayer[];
+  roadmap: ContextLayer[];
+  defaults: string[];
+  count: number;
+}
+
+export const getContextLayers = (domain?: string) =>
+  get<ContextLayerCatalog>(`/context/layers${domain ? `?domain=${encodeURIComponent(domain)}` : ""}`);
+
+// ------------------------------------------------------------------
+// Audience-specific reports (Phase 19)
+// ------------------------------------------------------------------
+export type ReportAudience = "technical" | "planner" | "public";
+export type ReportFormat = "md" | "html" | "pdf";
+
+/** Download an audience-specific report. Returns the markdown/html text
+ *  (so the caller can render an in-app preview) and triggers the file
+ *  download for non-text formats. For "html" we also trigger the
+ *  download but return the body text for inline preview. */
+export async function downloadAudienceReport(opts: {
+  audience: ReportAudience;
+  fmt: ReportFormat;
+  runDir?: string;
+  preview?: boolean;  // when true, do not auto-download (used for inline preview)
+}): Promise<{ ok: boolean; filename?: string; text?: string; error?: string }> {
+  const body: Record<string, unknown> = {};
+  if (opts.runDir) body.run_dir = opts.runDir;
+  const url = new URL(`${BASE}/report/audience`);
+  url.searchParams.set("audience", opts.audience);
+  url.searchParams.set("fmt", opts.fmt);
+  const res = await fetch(url.toString(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    return { ok: false, error: txt || `HTTP ${res.status}` };
+  }
+  const cd = res.headers.get("Content-Disposition") || "";
+  const m = /filename=([^;]+)/.exec(cd);
+  const filename = m ? m[1].replace(/"/g, "").trim() : `sparc_${opts.audience}.${opts.fmt}`;
+  if (opts.fmt === "pdf") {
+    const blob = await res.blob();
+    if (!opts.preview) {
+      const u = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = u;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(u);
+    }
+    return { ok: true, filename };
+  }
+  const text = await res.text();
+  if (!opts.preview) {
+    const blob = new Blob([text], { type: opts.fmt === "html" ? "text/html" : "text/markdown" });
+    const u = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = u;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(u);
+  }
+  return { ok: true, filename, text };
 }

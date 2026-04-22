@@ -1,6 +1,13 @@
 import { useState, useCallback } from "react";
 import { SectionHeader, Card, Btn, Tag } from "@/components/ui/DesignSystem";
 import { useNotification } from "@/hooks/useNotifications";
+import { downloadAudienceReport, type ReportAudience, type ReportFormat } from "@/lib/api";
+
+const AUDIENCE_OPTIONS: { id: ReportAudience; label: string; blurb: string; color: string }[] = [
+  { id: "technical", label: "Technical", blurb: "Full statistics, diagnostics, robustness — for analysts and reviewers", color: "var(--purple)" },
+  { id: "planner",   label: "Planner",   blurb: "Ranked interventions + cost-effectiveness + equity — for city staff",   color: "var(--crimson)" },
+  { id: "public",    label: "Public",    blurb: "One-page plain-language summary — for residents and elected officials", color: "var(--amber)" },
+];
 
 const TOC_SECTIONS = [
   { id: "exec", label: "Executive Summary", checked: true },
@@ -35,7 +42,37 @@ const EXPORT_CARDS: ExportCard[] = [
 export default function ReportPage() {
   const [sections, setSections] = useState(TOC_SECTIONS);
   const [generating, setGenerating] = useState(false);
+  const [audience, setAudience] = useState<ReportAudience>("planner");
+  const [previewText, setPreviewText] = useState<string>("");
+  const [previewBusy, setPreviewBusy] = useState(false);
   const { notify } = useNotification();
+
+  const handleAudienceExport = useCallback(async (fmt: ReportFormat) => {
+    setGenerating(true);
+    notify("info", `Generating ${audience} report (${fmt.toUpperCase()})\u2026`);
+    try {
+      const r = await downloadAudienceReport({ audience, fmt });
+      if (!r.ok) throw new Error(r.error || "Failed");
+      notify("success", `Saved ${r.filename}`);
+    } catch (e) {
+      notify("error", e instanceof Error ? e.message : "Audience report failed");
+    } finally {
+      setGenerating(false);
+    }
+  }, [audience, notify]);
+
+  const handlePreview = useCallback(async () => {
+    setPreviewBusy(true);
+    try {
+      const r = await downloadAudienceReport({ audience, fmt: "md", preview: true });
+      if (!r.ok) throw new Error(r.error || "Failed");
+      setPreviewText(r.text || "");
+    } catch (e) {
+      notify("error", e instanceof Error ? e.message : "Preview failed");
+    } finally {
+      setPreviewBusy(false);
+    }
+  }, [audience, notify]);
 
   const handleToggle = useCallback((id: string) => {
     setSections((prev) => prev.map((s) => (s.id === id ? { ...s, checked: !s.checked } : s)));
@@ -105,7 +142,49 @@ export default function ReportPage() {
         }
       />
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+      <Card title="Audience" subtitle="generate a tailored summary of the active run"
+        actions={
+          <div style={{ display: "flex", gap: 6 }}>
+            <Btn small onClick={handlePreview} disabled={previewBusy}>{previewBusy ? "…" : "Preview"}</Btn>
+            <Btn small onClick={() => handleAudienceExport("md")} disabled={generating}>MD</Btn>
+            <Btn small onClick={() => handleAudienceExport("html")} disabled={generating}>HTML</Btn>
+            <Btn small primary onClick={() => handleAudienceExport("pdf")} disabled={generating}>PDF</Btn>
+          </div>
+        }
+      >
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: previewText ? 12 : 0 }}>
+          {AUDIENCE_OPTIONS.map((opt) => {
+            const active = audience === opt.id;
+            return (
+              <button
+                key={opt.id}
+                onClick={() => setAudience(opt.id)}
+                style={{
+                  textAlign: "left", border: `1px solid ${active ? opt.color : "var(--line)"}`,
+                  background: active ? "rgba(255,255,255,1)" : "#fff",
+                  borderRadius: 6, padding: 12, cursor: "pointer", fontFamily: "inherit",
+                  boxShadow: active ? `inset 0 0 0 1px ${opt.color}` : "none",
+                }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 700, color: opt.color }}>{opt.label}</div>
+                <div className="mono" style={{ fontSize: 10, color: "var(--muted)", marginTop: 4, lineHeight: 1.4 }}>
+                  {opt.blurb}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        {previewText && (
+          <pre style={{
+            margin: 0, padding: 12, background: "#faf8f4", border: "1px solid var(--line)",
+            borderRadius: 4, maxHeight: 360, overflow: "auto",
+            fontSize: 11.5, lineHeight: 1.5, fontFamily: "'JetBrains Mono', monospace",
+            whiteSpace: "pre-wrap", color: "var(--ink-2)",
+          }}>{previewText}</pre>
+        )}
+      </Card>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 14 }}>
         <Card title="Table of Contents" subtitle={`${checkedCount}/${sections.length} sections selected`}>
           <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
             {sections.map((s, i) => (

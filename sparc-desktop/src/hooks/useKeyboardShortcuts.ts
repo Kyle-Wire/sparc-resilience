@@ -4,7 +4,8 @@ import { useEffect } from "react";
  * Global keyboard shortcut handler for SPARC desktop app.
  *
  * Shortcuts (all use Cmd/Ctrl modifier):
- *  - Cmd+K          Toggle chat panel
+ *  - Cmd+K          Open command palette (Phase 16)
+ *  - Cmd+J          Toggle chat panel
  *  - Cmd+1..9,0     Navigate to page by index (1=Project … 0=Results)
  *  - Cmd+,          Open settings
  *  - Cmd+Shift+R    Reload current page (refresh key)
@@ -14,14 +15,22 @@ export function useKeyboardShortcuts(handlers: {
   navigateByIndex: (index: number) => void;
   openSettings: () => void;
   refresh: () => void;
+  openPalette?: () => void;
 }) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const meta = e.metaKey || e.ctrlKey;
       if (!meta) return;
 
-      // Cmd+K — toggle chat
+      // Cmd+K — command palette
       if (e.key === "k" && !e.shiftKey) {
+        e.preventDefault();
+        handlers.openPalette?.();
+        return;
+      }
+
+      // Cmd+J — toggle chat
+      if (e.key === "j" && !e.shiftKey) {
         e.preventDefault();
         handlers.toggleChat();
         return;

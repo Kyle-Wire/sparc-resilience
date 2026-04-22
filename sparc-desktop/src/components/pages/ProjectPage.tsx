@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { SectionHeader, Card, KeyVal, Tag, Btn } from "@/components/ui/DesignSystem";
-import { getConfig, saveConfig, listTemplates, initProject } from "@/lib/api";
+import { getConfig, saveConfig, listTemplates, initProject, dataSummary, getRunEvents } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
-import type { ProjectConfig, TemplateInfo } from "@/lib/types";
+import type { ProjectConfig, TemplateInfo, DataSummary, PipelineEvent } from "@/lib/types";
 
 const TEMPLATE_COLORS: Record<string, string> = {
   uhi: "var(--crimson)",
@@ -24,15 +24,72 @@ interface ProjectPageProps {
   onProjectLoaded: (path: string, meta?: { name?: string; template?: string }) => Promise<void>;
 }
 
+/** Lightweight YAML emitter for the read-only preview block. */
+function toYamlPreview(config: ProjectConfig | null): string {
+  if (!config) return "# No project loaded";
+  const project = config.project ?? {};
+  const data = config.data ?? {};
+  const crs = config.crs ?? {};
+  const flags = config.flags ?? {};
+  const predictors = config.predictors ?? [];
+  return [
+    "project:",
+    `  name: ${project.name ?? ""}`,
+    `  description: ${project.description ?? ""}`,
+    `  domain: ${project.domain ?? ""}`,
+    `  author: ${project.author ?? ""}`,
+    `  version: ${project.version ?? ""}`,
+    `  response_units: ${project.response_units ?? ""}`,
+    "data:",
+    `  file_path: ${data.file_path ?? ""}`,
+    `  target_column: ${data.target_column ?? ""}`,
+    "crs:",
+    `  input: ${crs.input ?? ""}`,
+    `  projected: ${crs.projected ?? ""}`,
+    "predictors:",
+    ...predictors.map((p) => `  - ${p}`),
+    "flags:",
+    ...Object.entries(flags).map(([k, v]) => `  ${k}: ${v}`),
+  ].join("\n");
+}
+
+/** Pull a list of recent pipeline runs out of the buffered event log. */
+function summarizeRuns(events: PipelineEvent[]): { time: string; stage: string; status: string; tint: string }[] {
+  if (!events.length) return [];
+  const stageNames: Record<number, string> = {
+    0: "Correlogram", 1: "GWEN", 2: "Spatial CV", 3: "Causal", 4: "Scenarios",
+  };
+  const out: { time: string; stage: string; status: string; tint: string }[] = [];
+  for (const e of events) {
+    if (e.type === "stage_status" && (e.status === "complete" || e.status === "failed")) {
+      const ts = e.completed_at ?? e.started_at ?? Date.now();
+      out.push({
+        time: new Date(ts * (ts < 1e12 ? 1000 : 1)).toLocaleString(),
+        stage: stageNames[e.stage ?? -1] ?? `Stage ${e.stage}`,
+        status: e.status === "complete" ? "✓ complete" : "✕ failed",
+        tint: e.status === "complete" ? "var(--purple)" : "var(--crimson)",
+      });
+    }
+  }
+  return out.slice(-6).reverse();
+}
+
 export default function ProjectPage({ projectPath, onProjectLoaded }: ProjectPageProps) {
   const [config, setConfig] = useState<ProjectConfig | null>(null);
+  const [summary, setSummary] = useState<DataSummary | null>(null);
+  const [runs, setRuns] = useState<{ time: string; stage: string; status: string; tint: string }[]>([]);
   const [templates, setTemplates] = useState<TemplateInfo[]>([]);
   const [yamlOpen, setYamlOpen] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
   const { notify } = useNotification();
 
   useEffect(() => {
     if (projectPath) {
       getConfig().then(setConfig).catch(() => {});
+      dataSummary().then(setSummary).catch(() => setSummary(null));
+      getRunEvents()
+        .then((r) => setRuns(summarizeRuns(r.events)))
+        .catch(() => setRuns([]));
     }
     listTemplates()
       .then((r) => setTemplates(r.templates))
@@ -68,48 +125,27 @@ export default function ProjectPage({ projectPath, onProjectLoaded }: ProjectPag
     }
   }, [onProjectLoaded]);
 
-  const domain = config?.project?.domain ?? "";
-  const name = config?.project?.name ?? "No project loaded";
-  const target = config?.data?.target_column ?? "—";
-  const inputEpsg = config?.crs?.input ?? "";
-  const projEpsg = config?.crs?.projected ?? "";
-  const predictors = config?.predictors ?? [];
+  const project = config?.project ?? {};
+  const data = config?.data ?? {};
+  const crs = config?.crs ?? {};
+  const domain = project.domain ?? "";
+  const name = project.name ?? "Untitled project";
 
-  const handleFieldChange = useCallback(
-    async (key: string, value: string) => {
+  /** Persist a single project-section field and refresh local state. */
+  const saveProjectField = useCallback(
+    async (field: keyof NonNullable<ProjectConfig["project"]>, value: string) => {
       try {
-        let patch: Partial<ProjectConfig> = {};
-        if (key === "name") patch = { project: { ...config?.project, name: value } };
-        else if (key === "domain") patch = { project: { ...config?.project, domain: value } };
-        await saveConfig(patch);
+        await saveConfig({ project: { ...project, [field]: value } });
         const updated = await getConfig();
         setConfig(updated);
-        notify("success", "Project updated");
       } catch (e) {
         notify("error", e instanceof Error ? e.message : "Failed to save");
       }
     },
-    [config, notify],
+    [project, notify],
   );
 
-  // Build YAML preview string
-  const yamlPreview = config
-    ? `project:
-  name: ${config.project?.name ?? ""}
-  domain: ${config.project?.domain ?? ""}
-  version: ${config.project?.version ?? "2.1"}
-data:
-  path: ${config.data?.file_path ?? ""}
-  target_column: ${target}
-crs:
-  input_epsg: ${inputEpsg}
-  projected_epsg: ${projEpsg}
-predictors:
-${predictors.map((p: string) => `  - ${p}`).join("\n")}
-flags:
-  use_gwen: ${config.flags?.use_gwen ?? true}
-  use_laplacian: ${config.flags?.use_laplacian ?? true}`
-    : "# No project loaded";
+  const yamlPreview = toYamlPreview(config);
 
   return (
     <div>
@@ -119,126 +155,231 @@ flags:
         right={
           <div style={{ display: "flex", gap: 8 }}>
             <Btn onClick={handleOpenYml}>Open project.yml</Btn>
-            <Btn primary onClick={() => templates.length > 0 && handleTemplateClick(templates[0])}>
-              New from template
+            <Btn primary onClick={() => setTemplatesOpen((o) => !o)}>
+              {templatesOpen ? "Hide templates" : "New from template"}
             </Btn>
           </div>
         }
       />
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14 }}>
-        <Card title="Active project" subtitle={`${domain} · ${name}`}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-            <KeyVal
-              label="Name"
-              value={
-                <span
-                  contentEditable
-                  suppressContentEditableWarning
-                  onBlur={(e) => handleFieldChange("name", e.currentTarget.textContent ?? "")}
-                  style={{ outline: "none", borderBottom: "1px dashed var(--line)", cursor: "text" }}
-                >
-                  {name}
-                </span>
-              }
-            />
-            <KeyVal
-              label="Domain"
-              value={<Tag color="var(--crimson)">{domain || "—"}</Tag>}
-            />
-            <KeyVal label="Target" value={`${target}`} />
-            <KeyVal label="Data file" value={config?.data?.file_path ?? "—"} />
-            <KeyVal label="CRS (in / proj)" value={`EPSG:${inputEpsg} → ${projEpsg}`} />
-            <KeyVal label="Target" value={config?.data?.target_column ?? "—"} />
-            <KeyVal label="Random seed" value={String(config?.pipeline?.random_seed ?? 42)} />
-            <KeyVal
-              label="Pipeline"
-              value={
-                <Tag color="var(--purple)">
-                  fast_mode:{String(config?.pipeline?.fast_mode ?? false)}
-                </Tag>
-              }
-            />
-          </div>
 
-          <div style={{ marginTop: 14, borderTop: "1px dashed var(--line)", paddingTop: 12 }}>
-            <button
-              onClick={() => setYamlOpen(!yamlOpen)}
-              className="mono"
-              style={{
-                fontSize: 10,
-                color: "var(--muted)",
-                textTransform: "uppercase",
-                letterSpacing: "0.1em",
-                marginBottom: 6,
-                background: "none",
-                border: "none",
-                cursor: "pointer",
-                fontFamily: "inherit",
-                padding: 0,
-              }}
-            >
-              project.yml · preview {yamlOpen ? "▲" : "▼"}
-            </button>
-            {yamlOpen && (
-              <pre
-                className="mono"
-                style={{ fontSize: 10.5, margin: 0, lineHeight: 1.6, color: "var(--ink-2)" }}
-              >
-                {yamlPreview}
-              </pre>
-            )}
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14 }}>
+        {/* ---- Project Identity ---- */}
+        <Card title="Project identity" subtitle={projectPath ?? "no project loaded"}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span className="mono" style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                Name
+              </span>
+              <input
+                value={project.name ?? ""}
+                placeholder="Project name"
+                onChange={(e) => setConfig((c) => c ? { ...c, project: { ...c.project, name: e.target.value } } : c)}
+                onBlur={(e) => saveProjectField("name", e.target.value)}
+                style={{
+                  border: "none", borderBottom: "1px dashed var(--line)",
+                  background: "transparent", padding: "2px 0",
+                  fontSize: 13, fontFamily: "inherit", color: "var(--ink)", outline: "none",
+                }}
+              />
+            </label>
+
+            <KeyVal label="Domain" value={<Tag color="var(--crimson)">{domain || "—"}</Tag>} />
+
+            <label style={{ display: "flex", flexDirection: "column", gap: 4, gridColumn: "1 / -1" }}>
+              <span className="mono" style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                Description
+              </span>
+              <textarea
+                value={project.description ?? ""}
+                placeholder="One-paragraph description of this project's purpose, scope, and target audience."
+                onChange={(e) => setConfig((c) => c ? { ...c, project: { ...c.project, description: e.target.value } } : c)}
+                onBlur={(e) => saveProjectField("description", e.target.value)}
+                rows={3}
+                style={{
+                  border: "1px dashed var(--line)", borderRadius: 4, background: "transparent",
+                  padding: "6px 8px", fontSize: 12, fontFamily: "inherit", color: "var(--ink-2)",
+                  outline: "none", resize: "vertical",
+                }}
+              />
+            </label>
+
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span className="mono" style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                Author
+              </span>
+              <input
+                value={project.author ?? ""}
+                placeholder="Author name or organization"
+                onChange={(e) => setConfig((c) => c ? { ...c, project: { ...c.project, author: e.target.value } } : c)}
+                onBlur={(e) => saveProjectField("author", e.target.value)}
+                style={{
+                  border: "none", borderBottom: "1px dashed var(--line)",
+                  background: "transparent", padding: "2px 0",
+                  fontSize: 13, fontFamily: "inherit", color: "var(--ink)", outline: "none",
+                }}
+              />
+            </label>
+
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span className="mono" style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                Version
+              </span>
+              <input
+                value={project.version ?? ""}
+                placeholder="e.g. 1.0.0"
+                onChange={(e) => setConfig((c) => c ? { ...c, project: { ...c.project, version: e.target.value } } : c)}
+                onBlur={(e) => saveProjectField("version", e.target.value)}
+                style={{
+                  border: "none", borderBottom: "1px dashed var(--line)",
+                  background: "transparent", padding: "2px 0",
+                  fontSize: 13, fontFamily: "inherit", color: "var(--ink)", outline: "none",
+                }}
+              />
+            </label>
+
+            <KeyVal label="Target column" value={data.target_column ?? "—"} />
+            <KeyVal label="Response units" value={
+              <input
+                value={project.response_units ?? ""}
+                placeholder="e.g. °C, mg/L, dB"
+                onChange={(e) => setConfig((c) => c ? { ...c, project: { ...c.project, response_units: e.target.value } } : c)}
+                onBlur={(e) => saveProjectField("response_units", e.target.value)}
+                style={{
+                  border: "none", borderBottom: "1px dashed var(--line)",
+                  background: "transparent", padding: "2px 0", width: "100%",
+                  fontSize: 12, fontFamily: "inherit", color: "var(--ink)", outline: "none",
+                }}
+              />
+            } />
           </div>
         </Card>
 
-        <Card title="Templates" subtitle={`${templates.length || 12} domains available`}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-            {(templates.length > 0
-              ? templates.map((t) => ({
-                  key: t.name,
-                  label: t.name,
-                  color: TEMPLATE_COLORS[t.name] ?? "var(--muted)",
-                }))
-              : Object.entries(TEMPLATE_COLORS).map(([k, c]) => ({
-                  key: k,
-                  label: k.replace(/_/g, " "),
-                  color: c,
-                }))
-            ).map((t) => (
-              <button
-                key={t.key}
-                onClick={() => {
-                  const info = templates.find((tt) => tt.name === t.key);
-                  if (info) handleTemplateClick(info);
-                }}
-                style={{
-                  textAlign: "left",
-                  border: "1px solid var(--line)",
-                  background: t.key === domain ? "#fff8ef" : "#fff",
-                  borderColor: t.key === domain ? "var(--amber)" : "var(--line)",
-                  borderRadius: 5,
-                  padding: "7px 9px",
-                  cursor: "pointer",
-                  fontFamily: "inherit",
-                }}
-              >
+        {/* ---- Coordinate System (read-only summary) ---- */}
+        <Card title="Coordinate system" subtitle="edit on CRS page">
+          <KeyVal label="Input EPSG" value={crs.input ? `EPSG:${crs.input}` : "—"} />
+          <KeyVal label="Projected EPSG" value={crs.projected ? `EPSG:${crs.projected}` : "—"} />
+          <KeyVal label="Source CRS" value={summary?.crs ?? "—"} />
+        </Card>
+
+        {/* ---- Dataset snapshot ---- */}
+        <Card title="Dataset snapshot" subtitle={data.file_path ? data.file_path.split(/[\\/]/).pop() : "no data linked"}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <KeyVal label="Rows" value={summary?.row_count?.toLocaleString() ?? "—"} />
+            <KeyVal label="Columns" value={summary?.column_count?.toString() ?? "—"} />
+            <KeyVal
+              label="Bounding box"
+              value={summary?.bbox
+                ? `${summary.bbox.minx.toFixed(2)}, ${summary.bbox.miny.toFixed(2)}  →  ${summary.bbox.maxx.toFixed(2)}, ${summary.bbox.maxy.toFixed(2)}`
+                : "—"}
+            />
+            <KeyVal label="Predictors" value={(config?.predictors?.length ?? 0).toString()} />
+          </div>
+        </Card>
+
+        {/* ---- Pipeline history ---- */}
+        <Card title="Pipeline history" subtitle={runs.length ? `${runs.length} recent stage events` : "no runs yet"}>
+          {runs.length === 0 ? (
+            <div style={{ fontSize: 12, color: "var(--muted)", padding: "10px 0" }}>
+              Run the pipeline to see stage completion history here.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {runs.map((r, i) => (
                 <div
-                  className="mono"
+                  key={i}
                   style={{
-                    fontSize: 9,
-                    color: t.color,
-                    letterSpacing: "0.08em",
-                    textTransform: "uppercase",
+                    display: "grid", gridTemplateColumns: "auto 1fr auto", gap: 8,
+                    fontSize: 11, padding: "5px 0",
+                    borderBottom: i < runs.length - 1 ? "1px dotted var(--line)" : "none",
                   }}
                 >
-                  {t.key}
+                  <span className="mono" style={{ color: "var(--muted)", fontSize: 10 }}>{r.time}</span>
+                  <span style={{ color: "var(--ink-2)" }}>{r.stage}</span>
+                  <span className="mono" style={{ color: r.tint, fontSize: 10 }}>{r.status}</span>
                 </div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-2)", marginTop: 1 }}>
-                  {t.label}
-                </div>
-              </button>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </Card>
+      </div>
+
+      {/* ---- Templates (collapsible) ---- */}
+      {templatesOpen && (
+        <div style={{ marginTop: 14 }}>
+          <Card title="Switch / re-init template" subtitle={`${templates.length || 12} domains available`}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 6 }}>
+              {(templates.length > 0
+                ? templates.map((t) => ({
+                    key: t.name,
+                    label: t.name,
+                    color: TEMPLATE_COLORS[t.name] ?? "var(--muted)",
+                  }))
+                : Object.entries(TEMPLATE_COLORS).map(([k, c]) => ({
+                    key: k,
+                    label: k.replace(/_/g, " "),
+                    color: c,
+                  }))
+              ).map((t) => (
+                <button
+                  key={t.key}
+                  onClick={() => {
+                    const info = templates.find((tt) => tt.name === t.key);
+                    if (info) handleTemplateClick(info);
+                  }}
+                  style={{
+                    textAlign: "left",
+                    border: "1px solid var(--line)",
+                    background: t.key === domain ? "#fff8ef" : "#fff",
+                    borderColor: t.key === domain ? "var(--amber)" : "var(--line)",
+                    borderRadius: 5,
+                    padding: "7px 9px",
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                  }}
+                >
+                  <div
+                    className="mono"
+                    style={{
+                      fontSize: 9, color: t.color,
+                      letterSpacing: "0.08em", textTransform: "uppercase",
+                    }}
+                  >
+                    {t.key}
+                  </div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-2)", marginTop: 1 }}>
+                    {t.label}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ---- Raw config preview ---- */}
+      <div style={{ marginTop: 14 }}>
+        <button
+          onClick={() => setYamlOpen(!yamlOpen)}
+          className="mono"
+          style={{
+            fontSize: 10, color: "var(--muted)",
+            textTransform: "uppercase", letterSpacing: "0.1em",
+            background: "none", border: "none", cursor: "pointer",
+            fontFamily: "inherit", padding: "4px 0",
+          }}
+        >
+          project.yml · raw preview {yamlOpen ? "▲" : "▼"}
+        </button>
+        {yamlOpen && (
+          <Card>
+            <pre
+              className="mono"
+              style={{ fontSize: 10.5, margin: 0, lineHeight: 1.6, color: "var(--ink-2)", whiteSpace: "pre-wrap" }}
+            >
+              {yamlPreview}
+            </pre>
+          </Card>
+        )}
       </div>
     </div>
   );

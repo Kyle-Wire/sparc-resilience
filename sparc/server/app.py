@@ -804,6 +804,274 @@ async def get_run_events():
 
 
 # ------------------------------------------------------------------
+# Run comparison (Phase 15) — diff two output directories
+# ------------------------------------------------------------------
+
+@app.get("/runs/discover")
+async def get_runs_discover(search_root: str | None = Query(default=None)):
+    """List candidate output directories the user could compare.
+
+    If *search_root* is omitted we default to the project's ``output_dir``
+    parent (so siblings of the current run show up). Falls back to the
+    user's home directory.
+    """
+    from sparc.evaluation.diff import discover_runs
+
+    if search_root:
+        root = Path(search_root)
+    else:
+        root = Path.home()
+        if state.project_config is not None:
+            try:
+                from sparc.run.pipeline_paths import PipelinePaths
+                paths = PipelinePaths.from_config(state.project_config)
+                if paths.output_dir.parent.exists():
+                    root = paths.output_dir.parent
+            except Exception:
+                pass
+    return {"search_root": str(root), "runs": discover_runs(root)}
+
+
+@app.get("/runs/diff")
+async def get_runs_diff(
+    run_a: str = Query(...),
+    run_b: str = Query(...),
+):
+    """Diff two pipeline output directories on disk."""
+    from sparc.evaluation.diff import diff_runs
+
+    try:
+        return diff_runs(Path(run_a), Path(run_b))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    except Exception as exc:
+        raise HTTPException(500, f"Diff failed: {exc}")
+
+
+# ------------------------------------------------------------------
+# Reproducibility (Phase 17)
+# ------------------------------------------------------------------
+
+@app.get("/reproduce/provenance")
+async def get_provenance(run_dir: str = Query(...)):
+    """Return ``run_provenance.json`` for the given run directory (or 404)."""
+    from sparc.registry.provenance import load_provenance, load_frozen_config
+    p = load_provenance(run_dir)
+    if p is None:
+        raise HTTPException(404, f"No run_provenance.json under {run_dir}")
+    cfg = load_frozen_config(run_dir)
+    return {"provenance": p, "frozen_config_present": cfg is not None}
+
+
+@app.post("/reproduce/freeze")
+async def post_reproduce_freeze():
+    """Freeze the *current* project: write run_provenance.json + frozen_config.json
+    to the active output_dir.
+    """
+    from sparc.registry.provenance import freeze_run
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+    try:
+        from sparc.run.pipeline_paths import PipelinePaths
+        paths = PipelinePaths.from_config(state.project_config)
+        out = paths.output_dir
+    except Exception as exc:
+        raise HTTPException(500, f"Cannot resolve output_dir: {exc}")
+    repo_root = Path(__file__).resolve().parents[2]
+    p = freeze_run(out, state.project_config, repo_root=repo_root)
+    return {"path": str(p), "output_dir": str(out)}
+
+
+@app.post("/reproduce/load")
+async def post_reproduce_load(payload: dict = Body(...)):
+    """Replace the active project_config with the frozen config from a run dir.
+
+    The client should then trigger ``/run/stream`` as usual to actually
+    execute the pipeline. After it completes, call ``/reproduce/verify``
+    to compare provenance against the original run.
+    """
+    from sparc.registry.provenance import load_frozen_config, load_provenance
+    run_dir = payload.get("run_dir")
+    if not run_dir:
+        raise HTTPException(400, "run_dir required")
+    cfg = load_frozen_config(run_dir)
+    if cfg is None:
+        raise HTTPException(404, f"frozen_config.json not found in {run_dir}")
+    state.project_config = cfg
+    prov = load_provenance(run_dir)
+    return {
+        "loaded": True,
+        "config_hash": (prov or {}).get("config_hash"),
+        "data": (prov or {}).get("data"),
+        "warnings": ["Re-run via /run/stream to reproduce. Then call /reproduce/verify."],
+    }
+
+
+@app.get("/reproduce/verify")
+async def get_reproduce_verify(
+    run_a: str = Query(...),
+    run_b: str = Query(...),
+):
+    """Compare provenance between two runs (config/data/git/env)."""
+    from sparc.registry.provenance import compare_runs, verify_sidecars
+    cmp = compare_runs(run_a, run_b)
+    cmp["sidecars_b"] = verify_sidecars(run_b)
+    return cmp
+
+
+# ------------------------------------------------------------------
+# Scenario library (Phase 17)
+# ------------------------------------------------------------------
+
+def _scenario_library_dir() -> Path:
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+    from sparc.run.pipeline_paths import PipelinePaths
+    paths = PipelinePaths.from_config(state.project_config)
+    return paths.output_dir
+
+
+@app.get("/scenarios/library")
+async def get_scenario_library():
+    from sparc.scenario.library import build_timeline
+    return build_timeline(_scenario_library_dir())
+
+
+@app.post("/scenarios/library")
+async def post_scenario_library(payload: dict = Body(...)):
+    from sparc.scenario.library import append_entry
+    from sparc.registry.provenance import compute_config_hash
+    scenario = payload.get("scenario")
+    if not isinstance(scenario, dict):
+        raise HTTPException(400, "scenario (dict) required")
+    cfg_hash = compute_config_hash(state.project_config or {}) if state.project_config else None
+    entry = append_entry(
+        _scenario_library_dir(),
+        scenario,
+        author=str(payload.get("author") or "anonymous"),
+        comment=str(payload.get("comment") or ""),
+        parent_id=payload.get("parent_id"),
+        config_hash=cfg_hash,
+    )
+    return entry
+
+
+# ------------------------------------------------------------------
+# Standalone snapshot HTML (Phase 17)
+# ------------------------------------------------------------------
+
+@app.post("/report/standalone")
+async def post_report_standalone(payload: dict | None = Body(default=None)):
+    """Bundle the active run into a single self-contained HTML.
+
+    Body (all optional):
+        {
+          "run_dir": "<path>",       # defaults to active project's output_dir
+          "chat_history": [{role, content}, ...],
+          "project_name": "..."
+        }
+    """
+    from sparc.report.standalone_html import build_standalone_html
+    from starlette.responses import Response as StarletteResponse
+
+    payload = payload or {}
+    run_dir = payload.get("run_dir")
+    if not run_dir:
+        if state.project_config is None:
+            raise HTTPException(400, "No run_dir and no project loaded")
+        from sparc.run.pipeline_paths import PipelinePaths
+        run_dir = str(PipelinePaths.from_config(state.project_config).output_dir)
+    project_name = payload.get("project_name")
+    if not project_name and state.project_config is not None:
+        project_name = (state.project_config.get("project") or {}).get("name")
+    chat_history = payload.get("chat_history") if isinstance(payload.get("chat_history"), list) else None
+    html_text = build_standalone_html(run_dir, chat_history=chat_history, project_name=project_name)
+    fname = f"sparc_snapshot_{Path(run_dir).name or 'run'}.html"
+    return StarletteResponse(
+        content=html_text,
+        media_type="text/html",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+# ------------------------------------------------------------------
+# Context layers (Phase 18)
+# ------------------------------------------------------------------
+
+@app.get("/context/layers")
+async def get_context_layers(domain: str | None = Query(default=None)):
+    """Return the basemap+overlay tile catalog, optionally filtered by *domain*.
+
+    If *domain* is omitted we infer it from the active project's
+    ``project.domain`` so the UI can recommend defaults without an extra
+    round-trip.
+    """
+    from sparc.server.context_layers import get_catalog
+    if domain is None and state.project_config is not None:
+        proj = state.project_config.get("project") or {}
+        domain = proj.get("domain")
+    return get_catalog(domain)
+
+
+# ------------------------------------------------------------------
+# Audience-specific reports (Phase 19)
+# ------------------------------------------------------------------
+
+@app.post("/report/audience")
+async def post_report_audience(
+    audience: str = Query(..., regex="^(technical|planner|public)$"),
+    fmt: str = Query("html", regex="^(md|html|pdf)$"),
+    payload: dict | None = Body(default=None),
+):
+    """Render a SPARC run for a specific audience.
+
+    Query params:
+      audience: technical | planner | public
+      fmt:      md | html | pdf
+
+    Body (optional):
+      { "run_dir": "<path>" }   # defaults to active project's output_dir
+
+    Returns a file download (Content-Disposition attachment).
+    """
+    from sparc.report.audience import generate_audience_report
+    from starlette.responses import Response as StarletteResponse
+
+    payload = payload or {}
+    run_dir = payload.get("run_dir")
+    if not run_dir:
+        if state.project_config is None:
+            raise HTTPException(400, "No project loaded and no run_dir provided")
+        run_dir = state.project_config.get("paths", {}).get("output_dir")
+    if not run_dir:
+        raise HTTPException(400, "Cannot resolve run_dir")
+    run_path = Path(run_dir)
+    if not run_path.exists():
+        raise HTTPException(404, f"Run directory not found: {run_dir}")
+
+    try:
+        result = generate_audience_report(
+            run_dir=run_path,
+            config=state.project_config,
+            audience=audience,
+            fmt=fmt,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(501, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    media = {"md": "text/markdown", "html": "text/html", "pdf": "application/pdf"}[fmt]
+    fname = f"sparc_{audience}.{fmt}"
+    content = result if isinstance(result, (bytes, bytearray)) else result.encode("utf-8")
+    return StarletteResponse(
+        content=content,
+        media_type=media,
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
+
+
+# ------------------------------------------------------------------
 # Structured results endpoints (MUST be defined before /results/{stage}
 # so FastAPI matches exact paths before the parameterized catch-all)
 # ------------------------------------------------------------------
@@ -1126,6 +1394,73 @@ async def get_dose_response():
         return _json.load(fh)
 
 
+@app.get("/results/causal/sensitivity")
+async def get_causal_sensitivity():
+    """Return E-values + tipping-point analysis for the current causal payload.
+
+    Reuses ``/results/causal`` and annotates each effect with VanderWeele
+    E-values so users can see how strong an unmeasured confounder would
+    have to be to explain away the observed effect.
+    """
+    from sparc.causal.sensitivity import annotate_causal_payload
+
+    payload = await get_causal_results()  # type: ignore[misc]
+    if not isinstance(payload, dict):
+        raise HTTPException(500, "Causal payload is not a dict")
+    annotated = annotate_causal_payload(payload)
+    sens = annotated.get("sensitivity") or {}
+    return sens
+
+
+@app.get("/results/causal/negative_control")
+async def get_causal_negative_control(
+    variable: str = Query(...),
+    n_permutations: int = Query(1000, ge=50, le=10000),
+):
+    """Permutation negative-control test on the spatial CATE values.
+
+    Sign-flips the per-cell CATE values *n_permutations* times to build
+    a null distribution and reports a two-sided empirical p-value of
+    the observed mean. ``passed=True`` when the null cannot be rejected
+    (i.e. p > 0.05) — appropriate when ``variable`` is a *negative*
+    control. For an actual treatment, you want ``passed=False``.
+    """
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+    from sparc.evaluation.negative_controls import permutation_test_cate
+    import numpy as np
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+
+    npy_path = paths.stage3_dir / f"spatial_cate_multiplier_{variable}.npy"
+    if not npy_path.exists():
+        raise HTTPException(404, f"No CATE map for variable '{variable}'")
+
+    arr = np.load(npy_path, allow_pickle=False).astype(float).tolist()
+    res = permutation_test_cate(arr, n_permutations=n_permutations)
+    return {
+        "variable": variable,
+        "n": res.n,
+        "mean_observed": res.mean_observed,
+        "mean_null": res.mean_null,
+        "std_null": res.std_null,
+        "p_value": res.p_value,
+        "z_score": res.z_score,
+        "n_permutations": res.n_permutations,
+        "passed": res.passed,
+        "interpretation": (
+            "p > 0.05 — observed CATE indistinguishable from null (negative-control PASS)."
+            if res.passed
+            else f"p = {res.p_value:.4f} — CATE is significantly non-zero (real treatment effect)."
+        ),
+    }
+
+
 @app.get("/results/causal/diagnostics")
 async def get_causal_diagnostics():
     """Return CATE diagnostics (calibration, cumulative effects, RATE)."""
@@ -1148,21 +1483,56 @@ async def get_causal_diagnostics():
         return _json.load(fh)
 
 
-@app.get("/results/pdp_curves")
-async def get_pdp_curves():
-    """Return GWRF partial dependence / condition curves."""
-    if state.project_config is None:
-        raise HTTPException(400, "No project loaded")
+def _load_neural_pdp(paths) -> dict:
+    """Read PINN neural-network PDP CSVs into the canonical curves dict.
 
-    from sparc.run.pipeline_paths import PipelinePaths
+    Returns ``{variable: {grid_values, pdp_values, pdp_std, source: 'neural_pde'}}``
+    for every CSV in ``Stage_2/v2_neural/pdp/pdp_*.csv``.  These are the
+    physics-informed (PDE-constrained) response curves that the redesigned
+    Physics page surfaces.  Empty dict if directory absent.
+    """
+    import csv
+    out: dict = {}
+    pdp_dir = paths.stage2_dir / "v2_neural" / "pdp"
+    if not pdp_dir.exists():
+        return out
+    for csv_path in sorted(pdp_dir.glob("pdp_*.csv")):
+        try:
+            with open(csv_path, "r", encoding="utf-8", newline="") as fh:
+                reader = csv.DictReader(fh)
+                fields = reader.fieldnames or []
+                if not fields or "mean_prediction" not in fields:
+                    continue
+                feat_col = fields[0]  # convention: first column is the feature
+                rows = list(reader)
+            if not rows:
+                continue
+            grid = [float(r[feat_col]) for r in rows]
+            pdp_vals = [float(r["mean_prediction"]) for r in rows]
+            if "q10" in fields and "q90" in fields:
+                pdp_std = [(float(r["q90"]) - float(r["q10"])) / 2.56 for r in rows]
+            else:
+                pdp_std = None
+            out[feat_col] = {
+                "grid_values": grid,
+                "pdp_values": pdp_vals,
+                "pdp_std": pdp_std,
+                "source": "neural_pde",
+            }
+        except Exception:
+            continue
+    return out
+
+
+def _load_gwrf_pdp(paths) -> dict | None:
+    """Load GWRF condition curves JSON from any known location.
+
+    Returns the parsed JSON dict (variable -> curve metadata) or ``None``
+    if no file is present.  Each variable is annotated with
+    ``source='gwrf'`` so the UI can label it as the correlation-based
+    fallback.
+    """
     import json as _json
-
-    try:
-        paths = PipelinePaths.from_config(state.project_config)
-    except Exception:
-        raise HTTPException(404, "Cannot resolve output paths")
-
-    # Check all possible locations (canonical first, then legacy)
     candidates = [
         paths.stage2_dir / "gwrf_pdp" / "gwrf_condition_curves.json",
         paths.output_dir / "spatial_intelligence" / "gwrf_pdp" / "gwrf_condition_curves.json",
@@ -1172,10 +1542,80 @@ async def get_pdp_curves():
     ]
     found = next((p for p in candidates if p.exists()), None)
     if found is None:
-        raise HTTPException(404, "PDP curve data not found. Run Stage 2 first.")
+        return None
+    try:
+        with open(found, "r", encoding="utf-8") as fh:
+            data = _json.load(fh)
+    except Exception:
+        return None
+    if isinstance(data, dict):
+        for var, curve in data.items():
+            if isinstance(curve, dict):
+                curve.setdefault("source", "gwrf")
+    return data
 
-    with open(found, "r", encoding="utf-8") as fh:
-        return _json.load(fh)
+
+@app.get("/results/neural_pdp")
+async def get_neural_pdp():
+    """Return PINN-derived PDP curves (physics-informed response surface).
+
+    Source: ``Stage_2/v2_neural/pdp/pdp_*.csv`` written by
+    ``v2_neural_training.py`` after meta-learner training.  This is the
+    preferred response-curve view because it carries the PDE-constrained
+    nonlinear shape, not a tree-based correlation surface.
+    """
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+    from sparc.run.pipeline_paths import PipelinePaths
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+    curves = _load_neural_pdp(paths)
+    if not curves:
+        raise HTTPException(
+            404,
+            "Neural PDP curves not available — run Stage 2 (v2_neural training) first.",
+        )
+    return curves
+
+
+@app.get("/results/pdp_curves")
+async def get_pdp_curves():
+    """Return partial dependence / condition curves from any available source.
+
+    Merges (in order of preference):
+      1. PINN neural-network PDP  (Stage_2/v2_neural/pdp/pdp_*.csv)
+      2. GWRF condition curves    (Stage_2/gwrf_pdp/gwrf_condition_curves.json)
+
+    Each variable gets a ``source`` tag so the frontend can label it.
+    Neural PDP takes precedence whenever both exist for the same variable.
+    """
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+
+    merged: dict = {}
+    gwrf = _load_gwrf_pdp(paths)
+    if gwrf:
+        merged.update(gwrf)
+    neural = _load_neural_pdp(paths)
+    # Neural overrides GWRF for variables present in both
+    merged.update(neural)
+
+    if not merged:
+        raise HTTPException(
+            404,
+            "PDP curve data not found. Run Stage 2 first (neural PDP "
+            "or GWRF condition curves).",
+        )
+    return merged
 
 
 @app.get("/results/scenarios/nuts_summary")
@@ -1486,6 +1926,367 @@ async def get_report_data():
     report["plots"] = plot_stages
 
     return report
+
+
+# ------------------------------------------------------------------
+# Decision-support endpoints (Phase 9): rank candidate interventions by
+# causal effect-per-cost with optional equity weights and uncertainty
+# penalty.  Inputs come from existing scenario / NUTS results so the
+# optimiser is fully causal (not correlation-based).
+# ------------------------------------------------------------------
+
+@app.get("/decision/candidates")
+async def get_decision_candidates():
+    """Build candidate interventions from scenario + NUTS results."""
+    from sparc.decision import propose_candidates_from_scenarios
+
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    scenarios: list[dict] = []
+    nuts: dict | None = None
+    try:
+        detail = await get_scenario_detail()  # type: ignore[misc]
+        if isinstance(detail, dict):
+            scenarios = detail.get("summary") or []
+    except HTTPException:
+        scenarios = []
+    try:
+        nuts = await get_nuts_summary()  # type: ignore[misc]
+    except HTTPException:
+        nuts = None
+    except NameError:
+        nuts = None
+
+    cands = propose_candidates_from_scenarios(scenarios, nuts)
+    return {"candidates": [
+        {
+            "name": c.name, "treatment": c.treatment, "magnitude": c.magnitude,
+            "mean_effect": c.mean_effect, "effect_std": c.effect_std,
+            "cost": c.cost, "equity_weight": c.equity_weight, "notes": c.notes,
+        }
+        for c in cands
+    ]}
+
+
+@app.post("/decision/optimize")
+async def post_decision_optimize(body: dict = Body(default_factory=dict)):
+    """Rank intervention candidates and (optionally) pick a portfolio under a budget.
+
+    Body fields (all optional)::
+
+        {
+          "candidates":          [InterventionCandidate, ...],   # explicit override
+          "budget":              float | null,
+          "robustness_lambda":   float (default 0),
+          "minimise":            bool  (default false)
+        }
+
+    If ``candidates`` is omitted the endpoint derives them from the latest
+    scenario + NUTS posterior outputs.
+    """
+    from sparc.decision import (
+        InterventionCandidate, rank_interventions, propose_candidates_from_scenarios,
+    )
+
+    raw_candidates = body.get("candidates")
+    if raw_candidates:
+        candidates = [
+            InterventionCandidate(
+                name=str(r.get("name", "candidate")),
+                treatment=str(r.get("treatment", r.get("name", "candidate"))),
+                magnitude=float(r.get("magnitude", 0.0) or 0.0),
+                mean_effect=float(r.get("mean_effect", r.get("delta", 0.0)) or 0.0),
+                effect_std=float(r.get("effect_std", 0.0) or 0.0),
+                cost=float(r.get("cost", 1.0) or 1.0),
+                equity_weight=float(r.get("equity_weight", 1.0) or 1.0),
+                notes=str(r.get("notes", "") or ""),
+            )
+            for r in raw_candidates
+            if isinstance(r, dict)
+        ]
+    else:
+        if state.project_config is None:
+            raise HTTPException(400, "No project loaded and no candidates provided")
+        scenarios: list[dict] = []
+        nuts: dict | None = None
+        try:
+            detail = await get_scenario_detail()  # type: ignore[misc]
+            if isinstance(detail, dict):
+                scenarios = detail.get("summary") or []
+        except HTTPException:
+            scenarios = []
+        try:
+            nuts = await get_nuts_summary()  # type: ignore[misc]
+        except (HTTPException, NameError):
+            nuts = None
+        candidates = propose_candidates_from_scenarios(scenarios, nuts)
+
+    if not candidates:
+        raise HTTPException(404, "No intervention candidates available")
+
+    result = rank_interventions(
+        candidates,
+        budget=body.get("budget"),
+        robustness_lambda=float(body.get("robustness_lambda", 0.0) or 0.0),
+        minimise=bool(body.get("minimise", False)),
+    )
+    return {
+        "ranked": result.ranked,
+        "settings": result.settings,
+        "equity_summary": result.equity_summary,
+    }
+
+
+@app.post("/decision/uncertainty")
+async def post_decision_uncertainty(body: dict = Body(default_factory=dict)):
+    """Monte-Carlo uncertainty for the decision optimizer.
+
+    Body fields (same as ``/decision/optimize`` plus ``n_draws`` and ``seed``)::
+
+        {
+          "candidates":         [...],   # optional, falls back to scenarios+NUTS
+          "budget":             float | null,
+          "robustness_lambda":  float,
+          "minimise":           bool,
+          "n_draws":            int (default 500),
+          "seed":               int | null (default 42)
+        }
+
+    Returns selection probabilities, rank quantiles, and effect quantiles
+    per candidate.
+    """
+    from sparc.decision import (
+        InterventionCandidate,
+        propose_candidates_from_scenarios,
+        monte_carlo_decision,
+    )
+
+    raw_candidates = body.get("candidates")
+    if raw_candidates:
+        candidates = [
+            InterventionCandidate(
+                name=str(r.get("name", "candidate")),
+                treatment=str(r.get("treatment", r.get("name", "candidate"))),
+                magnitude=float(r.get("magnitude", 0.0) or 0.0),
+                mean_effect=float(r.get("mean_effect", r.get("delta", 0.0)) or 0.0),
+                effect_std=float(r.get("effect_std", 0.0) or 0.0),
+                cost=float(r.get("cost", 1.0) or 1.0),
+                equity_weight=float(r.get("equity_weight", 1.0) or 1.0),
+                notes=str(r.get("notes", "") or ""),
+            )
+            for r in raw_candidates
+            if isinstance(r, dict)
+        ]
+    else:
+        if state.project_config is None:
+            raise HTTPException(400, "No project loaded and no candidates provided")
+        scenarios: list[dict] = []
+        nuts: dict | None = None
+        try:
+            detail = await get_scenario_detail()  # type: ignore[misc]
+            if isinstance(detail, dict):
+                scenarios = detail.get("summary") or []
+        except HTTPException:
+            scenarios = []
+        try:
+            nuts = await get_nuts_summary()  # type: ignore[misc]
+        except (HTTPException, NameError):
+            nuts = None
+        candidates = propose_candidates_from_scenarios(scenarios, nuts)
+
+    if not candidates:
+        raise HTTPException(404, "No intervention candidates available")
+
+    results = monte_carlo_decision(
+        candidates,
+        budget=body.get("budget"),
+        robustness_lambda=float(body.get("robustness_lambda", 0.0) or 0.0),
+        minimise=bool(body.get("minimise", False)),
+        n_draws=int(body.get("n_draws", 500) or 500),
+        seed=body.get("seed", 42),
+    )
+    return {
+        "uncertainty": [
+            {
+                "candidate": r.candidate,
+                "selection_probability": r.selection_probability,
+                "rank_mean": r.rank_mean,
+                "rank_p10": r.rank_p10,
+                "rank_p90": r.rank_p90,
+                "effect_p10": r.effect_p10,
+                "effect_p50": r.effect_p50,
+                "effect_p90": r.effect_p90,
+            }
+            for r in results
+        ],
+        "settings": {
+            "n_draws": int(body.get("n_draws", 500) or 500),
+            "robustness_lambda": float(body.get("robustness_lambda", 0.0) or 0.0),
+            "budget": body.get("budget"),
+            "minimise": bool(body.get("minimise", False)),
+        },
+    }
+
+
+@app.get("/equity/census")
+async def get_equity_census(
+    minlon: float | None = Query(default=None),
+    minlat: float | None = Query(default=None),
+    maxlon: float | None = Query(default=None),
+    maxlat: float | None = Query(default=None),
+):
+    """Auto-fetch area-wide ACS demographics for the project bbox.
+
+    If bbox params are omitted, falls back to the loaded project's
+    coordinate columns (``data.lon_column``/``lat_column``) by reading
+    the source CSV. Only works for US locations (Census Geocoder).
+    """
+    from sparc.data.census_equity import (
+        fetch_area_demographics,
+        context_to_equity_layers,
+    )
+
+    # Fallback: derive bbox from the project's data file.
+    if None in (minlon, minlat, maxlon, maxlat):
+        if state.project_config is None:
+            raise HTTPException(400, "No project loaded; provide bbox params or load a project.")
+        try:
+            data_cfg = state.project_config.get("data", {}) or {}
+            csv_path = data_cfg.get("path") or data_cfg.get("source")
+            lon_col = data_cfg.get("lon_column") or "lon"
+            lat_col = data_cfg.get("lat_column") or "lat"
+            if not csv_path or not Path(csv_path).exists():
+                raise HTTPException(400, "Project data file not found; provide explicit bbox.")
+            import pandas as pd
+            df = pd.read_csv(csv_path, usecols=[lon_col, lat_col])
+            minlon = float(df[lon_col].min())
+            maxlon = float(df[lon_col].max())
+            minlat = float(df[lat_col].min())
+            maxlat = float(df[lat_col].max())
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(400, f"Could not derive bbox from project data: {exc}")
+
+    ctx = fetch_area_demographics(
+        minlon=float(minlon), minlat=float(minlat),
+        maxlon=float(maxlon), maxlat=float(maxlat),
+    )
+    return {
+        "bbox": {"minlon": minlon, "minlat": minlat, "maxlon": maxlon, "maxlat": maxlat},
+        **context_to_equity_layers(ctx),
+    }
+
+
+@app.post("/decision/equity")
+async def post_decision_equity(body: dict = Body(default_factory=dict)):
+    """Combine equity layers into per-candidate weights.
+
+    Body fields::
+
+        {
+          "candidate_names": [str, ...],
+          "layers":          {layer_name: [float, ...]},   # aligned to names
+          "weights":         {layer_name: float},          # optional convex weights
+          "invert":          {layer_name: bool}            # flip 1−x for "advantage" layers
+        }
+
+    Returns ``{ "scores": [...], "disparity_index": float }``.
+    """
+    from sparc.decision import combine_equity_layers, disparity_index
+
+    names = body.get("candidate_names") or []
+    layers = body.get("layers") or {}
+    if not names or not layers:
+        raise HTTPException(400, "candidate_names and layers are required")
+
+    try:
+        scores = combine_equity_layers(
+            layers,
+            names,
+            weights=body.get("weights"),
+            invert=body.get("invert"),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    return {
+        "scores": [
+            {
+                "candidate": s.candidate,
+                "weight": s.weight,
+                "layer_breakdown": s.layer_breakdown,
+            }
+            for s in scores
+        ],
+        "disparity_index": disparity_index([s.weight for s in scores]),
+    }
+
+
+@app.get("/decision/targeting")
+async def get_decision_targeting(
+    variable: str = Query(...),
+    top_k: int = Query(50, ge=1, le=2000),
+):
+    """Return per-location deployment priority as GeoJSON.
+
+    Priority = |CATE| / cost  (cost defaults to 1).  The endpoint reuses
+    the spatial CATE map for the requested treatment ``variable``,
+    annotates each feature with a ``priority`` property, sorts the result
+    descending, and flags the top ``top_k`` features with ``selected=True``.
+    """
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    # Reuse the existing CATE map endpoint to load the GeoJSON.
+    cate_geo = await get_cate_map(variable=variable)  # type: ignore[misc]
+    if not isinstance(cate_geo, dict):
+        raise HTTPException(500, "CATE map response was not a dict")
+    features = cate_geo.get("features") or []
+    if not features:
+        raise HTTPException(404, f"No CATE features for '{variable}'")
+
+    cate_field = f"cate_{variable}"
+    enriched: list[tuple[float, dict]] = []
+    for feat in features:
+        props = dict(feat.get("properties") or {})
+        try:
+            cate_val = float(props.get(cate_field, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            cate_val = 0.0
+        # Optional cost field; defaults to 1 for uniform cost.
+        try:
+            cost = float(props.get("cost", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            cost = 1.0
+        priority = abs(cate_val) / max(cost, 1e-9)
+        props["priority"] = priority
+        props["abs_cate"] = abs(cate_val)
+        new_feat = {**feat, "properties": props}
+        enriched.append((priority, new_feat))
+
+    enriched.sort(key=lambda pair: pair[0], reverse=True)
+    cutoff = min(top_k, len(enriched))
+    out_features: list[dict] = []
+    priorities: list[float] = []
+    for rank, (priority, feat) in enumerate(enriched, start=1):
+        feat["properties"]["rank"] = rank
+        feat["properties"]["selected"] = rank <= cutoff
+        out_features.append(feat)
+        priorities.append(priority)
+
+    return {
+        "type": "FeatureCollection",
+        "features": out_features,
+        "summary": {
+            "variable": variable,
+            "n_features": len(out_features),
+            "top_k": cutoff,
+            "max_priority": max(priorities) if priorities else 0.0,
+            "min_priority": min(priorities) if priorities else 0.0,
+        },
+    }
 
 
 # ------------------------------------------------------------------
@@ -2464,6 +3265,81 @@ async def reject_dag():
 # ------------------------------------------------------------------
 # Artifact download
 # ------------------------------------------------------------------
+
+@app.get("/results/availability")
+async def get_results_availability():
+    """Report which result artifacts exist on disk for the loaded project.
+
+    Returns a flat ``{endpoint_path: bool}`` map so the desktop can grey
+    out tabs that have no underlying data, instead of letting endpoints
+    404 and showing empty UIs.  Each entry is also annotated with the
+    underlying ``source_path`` it checks for.
+    """
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+    from sparc.run.pipeline_paths import PipelinePaths
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths")
+
+    # Each entry: endpoint -> list of candidate paths (any-exists = True)
+    checks: dict[str, list[Path]] = {
+        "/results/correlogram": [paths.stage0_dir / "correlogram_analysis_results.json"],
+        "/results/gwen": [paths.stage1_dir / "gwen_results.json",
+                          paths.stage1_dir / "gwen_diagnostics.json"],
+        "/results/model_performance": [paths.stage2_dir / "model_performance.json",
+                                       paths.stage2_dir / "spatial_cv_predictions.gpkg"],
+        "/results/spatial_cv/predictions": [paths.stage2_dir / "spatial_cv_predictions.gpkg"],
+        "/results/neural_pdp": [paths.stage2_dir / "v2_neural" / "pdp"],
+        "/results/pdp_curves": [
+            paths.stage2_dir / "v2_neural" / "pdp",
+            paths.stage2_dir / "gwrf_pdp" / "gwrf_condition_curves.json",
+        ],
+        "/results/causal": [paths.stage3_dir / "causal_results.json",
+                            paths.stage3_dir / "scenario_coefficients.json"],
+        "/results/causal/diagnostics": [paths.stage3_dir / "causal_diagnostics.json"],
+        "/results/causal/dose_response": [paths.stage3_dir / "dose_response_curves.json"],
+        "/results/causal/cate_map": [paths.stage3_dir],  # checks for any spatial_cate_*.npy
+        "/results/local_coefficients": [paths.stage2_dir / "base_models_full" /
+                                        "mgwr_local_coefficients.csv"],
+        "/results/scenarios/detail": [paths.stage4_dir / "scenario_results.gpkg",
+                                      paths.stage4_dir / "scenario_results_dag.gpkg",
+                                      paths.stage4_dir / "scenario_results_hybrid.gpkg",
+                                      paths.stage4_dir / "scenario_results_reprediction.gpkg"],
+        "/results/scenarios/nuts_summary": [paths.stage3_dir / "bayesian" / "nuts_summary.json",
+                                            paths.stage3_dir / "bayesian" / "parameter_posteriors.csv"],
+        "/dag/mc3_result": [paths.stage3_dir / "mc3_results.json"],
+    }
+
+    out: dict = {}
+    for endpoint, candidates in checks.items():
+        # CATE map special-case: any .npy under stage3_dir starting with spatial_cate_
+        if endpoint == "/results/causal/cate_map":
+            available = any(paths.stage3_dir.glob("spatial_cate_multiplier_*.npy")) \
+                if paths.stage3_dir.exists() else False
+            source = str(next(iter(paths.stage3_dir.glob("spatial_cate_multiplier_*.npy")), "") or
+                         (paths.stage3_dir / "spatial_cate_multiplier_*.npy"))
+        # Neural PDP special-case: directory must contain at least one CSV
+        elif endpoint == "/results/neural_pdp":
+            d = candidates[0]
+            available = d.exists() and any(d.glob("pdp_*.csv"))
+            source = str(d)
+        # Generic: any candidate file/dir exists
+        else:
+            existing = next((c for c in candidates if c.exists()), None)
+            available = existing is not None
+            source = str(existing) if existing else str(candidates[0])
+        out[endpoint] = {"available": available, "source": source}
+
+    # Project-wide flags
+    out["_project"] = {
+        "available": True,
+        "source": state.project_path,
+        "output_dir": str(paths.output_dir),
+    }
+    return out
+
 
 @app.get("/results/artifacts")
 async def list_artifacts():

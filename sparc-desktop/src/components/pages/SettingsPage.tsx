@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import { SectionHeader, Card, Btn, KeyVal } from "@/components/ui/DesignSystem";
 import { LOGO_HUES, PAPER_TONES, type LogoHue, type PaperTone, type ThemeSettings, loadTheme, applyTheme } from "@/lib/theme";
 import EasterEgg from "@/components/common/EasterEgg";
+import OnboardingTour, { resetOnboarding } from "@/components/common/OnboardingTour";
 import { useNotification } from "@/hooks/useNotifications";
 
 export default function SettingsPage() {
@@ -9,6 +10,7 @@ export default function SettingsPage() {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("sparc_api_key") ?? "");
   const [serverPort, setServerPort] = useState("8008");
   const [showSnake, setShowSnake] = useState(false);
+  const [tourOpen, setTourOpen] = useState(false);
   const { notify } = useNotification();
 
   // Apply theme on change
@@ -221,6 +223,20 @@ export default function SettingsPage() {
             <div style={{ borderTop: "1px dashed var(--line)", paddingTop: 10 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
+                  <div style={{ fontSize: 12.5, fontWeight: 600 }}>Onboarding tour</div>
+                  <div className="mono" style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
+                    replay the first-run walkthrough
+                  </div>
+                </div>
+                <Btn small onClick={() => { resetOnboarding(); setTourOpen(true); notify("info", "Tour restarted"); }}>
+                  Restart
+                </Btn>
+              </div>
+            </div>
+
+            <div style={{ borderTop: "1px dashed var(--line)", paddingTop: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
                   <div style={{ fontSize: 12.5, fontWeight: 600 }}>Keyboard Shortcuts</div>
                   <div className="mono" style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
                     quick navigation
@@ -240,6 +256,8 @@ export default function SettingsPage() {
           </div>
         </Card>
       </div>
+
+      <OnboardingTour open={tourOpen} onClose={() => setTourOpen(false)} />
     </div>
   );
 }
