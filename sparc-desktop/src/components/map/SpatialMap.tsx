@@ -4,20 +4,11 @@ import { GeoJsonLayer, ScatterplotLayer } from "@deck.gl/layers";
 import { DeckGL } from "@deck.gl/react";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { ContextLayer } from "@/lib/api";
+import type { GeoJsonData } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-interface GeoJsonFeature {
-  type: "Feature";
-  geometry: { type: string; coordinates: number[] | number[][] };
-  properties: Record<string, unknown>;
-}
-
-interface GeoJsonData {
-  type: "FeatureCollection";
-  features: GeoJsonFeature[];
-}
 
 export type MapMode = "scatter" | "heatmap" | "choropleth";
 export type ColorPalette = "sparc" | "viridis" | "puor";

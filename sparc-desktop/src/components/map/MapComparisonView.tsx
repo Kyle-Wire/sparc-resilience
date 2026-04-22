@@ -1,16 +1,6 @@
 import { useState, useEffect } from "react";
 import SpatialMap, { type ColorPalette } from "./SpatialMap";
-
-interface GeoJsonFeature {
-  type: "Feature";
-  geometry: { type: string; coordinates: number[] | number[][] };
-  properties: Record<string, unknown>;
-}
-
-interface GeoJsonData {
-  type: "FeatureCollection";
-  features: GeoJsonFeature[];
-}
+import type { GeoJsonData } from "@/lib/types";
 
 interface MapComparisonViewProps {
   leftGeojson: GeoJsonData | null;

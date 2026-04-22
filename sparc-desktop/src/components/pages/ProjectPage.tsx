@@ -129,7 +129,6 @@ export default function ProjectPage({ projectPath, onProjectLoaded }: ProjectPag
   const data = config?.data ?? {};
   const crs = config?.crs ?? {};
   const domain = project.domain ?? "";
-  const name = project.name ?? "Untitled project";
 
   /** Persist a single project-section field and refresh local state. */
   const saveProjectField = useCallback(
