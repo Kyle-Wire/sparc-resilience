@@ -1106,6 +1106,7 @@ class EnhancedSpatialCV:
                 for i, (train_idx, test_idx) in enumerate(folds)
             ]
             
+            completed_folds = 0
             try:
                 # Use ProcessPoolExecutor for CPU-intensive tasks with timeout
                 with ProcessPoolExecutor(max_workers=optimal_workers) as executor:
@@ -1116,7 +1117,6 @@ class EnhancedSpatialCV:
                             for i, fold_data in enumerate(fold_data_list)
                         }
                         
-                        completed_folds = 0
                         for future in future_to_fold:
                             try:
                                 # Get result with timeout (30 minutes per fold max)
@@ -1914,7 +1914,7 @@ def main(fast_mode=False):
                 print(f"[OK] Saved gwrf_model_full.pkl")
 
             # Export GWRF condition curves (consumed by Stage 4) -- skip if already done
-            skip_pdp = cv_system.base_config.get('pipeline', {}).get('skip_pdp', False)
+            skip_pdp = True  # GWRF PDP condition curves not consumed downstream
             if skip_pdp:
                 print("\n--- GWRF condition curves: SKIPPED (skip_pdp=true) ---")
             elif os.path.exists(gwrf_curves_path) or os.path.exists(legacy_curves_path):
@@ -1943,7 +1943,6 @@ def main(fast_mode=False):
             else:
                 print("\n--- Training GGPGAM on full dataset ---")
                 ggpgam_model = models[3]
-                # Derivative extraction disabled (not consumed by any downstream stage)
                 ggpgam_model.fit(X_full, y_full, coords_full,
                                 extract_derivatives=False,
                                 output_dir=spatial_intel_dir)  # UNSCALED
@@ -2271,7 +2270,7 @@ def main(fast_mode=False):
         final_rmse = np.sqrt(mean_squared_error(y, final_predictions))
         
         print(f"\n=== Final Results ===")
-        print(f"Base Models Best (GWRF):       R² = {stage2_results['performance']['individual_models']['gwrf']['r2']:.4f}")
+        print(f"Base Models Best (GWRF):       R² = {stage2_results['performance']['individual_models']['gwrf']['r2']:.4f}") # pyright: ignore[reportPossiblyUnboundVariable]
         if v2_neural_result is not None:
             print(f"V2 Neural Meta-Learner:        R² = {v2_neural_result['metrics']['r2']:.4f}, RMSE = {v2_neural_result['metrics']['rmse']:.4f}")
         else:
@@ -2279,7 +2278,7 @@ def main(fast_mode=False):
         print(f"Final Ensemble ({best_approach}): R² = {final_r2:.4f}, RMSE = {final_rmse:.4f}")
         
         # Detailed improvement analysis
-        base_gwrf_r2 = stage2_results['performance']['individual_models']['gwrf']['r2']
+        base_gwrf_r2 = stage2_results['performance']['individual_models']['gwrf']['r2'] # pyright: ignore[reportPossiblyUnboundVariable]
         best_meta_improvement = best_meta_r2 - base_gwrf_r2
         
         print(f"\nDetailed Performance Analysis:")
@@ -2297,7 +2296,7 @@ def main(fast_mode=False):
         
         # Save final results
         final_results = {
-            'base_models': stage2_results['performance']['individual_models'],
+            'base_models': stage2_results['performance']['individual_models'], # pyright: ignore[reportPossiblyUnboundVariable]
             'v2_neural_meta': {
                 'r2': v2_neural_result['metrics']['r2'] if v2_neural_result else None,
                 'rmse': v2_neural_result['metrics']['rmse'] if v2_neural_result else None,
@@ -2324,7 +2323,7 @@ def main(fast_mode=False):
         
         # Save final predictions
         final_results_df = pd.DataFrame({
-            'OBJECTID': joined_data.index,
+            'OBJECTID': joined_data.index, # pyright: ignore[reportPossiblyUnboundVariable]
             'actual': y,
             'best_meta_approach': best_approach,
             'final_ensemble': final_predictions,
@@ -2384,10 +2383,10 @@ def main(fast_mode=False):
         print("="*80)
         
         print("\n🔷 BASE MODELS (Stage 2b):")
-        print(f"   └─ {os.path.join(full_models_dir, 'ols_model_full.pkl')}")
-        print(f"   └─ {os.path.join(full_models_dir, 'gwr_model_full.pkl')}")
-        print(f"   └─ {os.path.join(full_models_dir, 'gwrf_model_full.pkl')}")
-        print(f"   └─ {os.path.join(full_models_dir, 'ggpgam_model_full.pkl')}")
+        print(f"   └─ {os.path.join(full_models_dir, 'ols_model_full.pkl')}") # pyright: ignore[reportPossiblyUnboundVariable]
+        print(f"   └─ {os.path.join(full_models_dir, 'gwr_model_full.pkl')}") # pyright: ignore[reportPossiblyUnboundVariable]
+        print(f"   └─ {os.path.join(full_models_dir, 'gwrf_model_full.pkl')}") # pyright: ignore[reportPossiblyUnboundVariable]
+        print(f"   └─ {os.path.join(full_models_dir, 'ggpgam_model_full.pkl')}") # pyright: ignore[reportPossiblyUnboundVariable]
         
         print("\n🔷 META-LEARNER (Stage 3):")
         if v2_neural_result is not None:

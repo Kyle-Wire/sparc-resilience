@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { SectionHeader, Card, Btn, Stat, StatGrid, KeyVal } from "@/components/ui/DesignSystem";
 import { getConfig, saveConfig, dataSummary, dataGeoJson, checkCrsDistortion } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
-import type { DataSummary } from "@/lib/types";
+import SpatialMap from "@/components/map/SpatialMap";
+import type { DataSummary, GeoJsonData } from "@/lib/types";
 
 interface DistortionResult {
   k_mean: number;
@@ -12,14 +13,22 @@ interface DistortionResult {
   assessment: string;
 }
 
+/**
+ * Compute the UTM EPSG code for a centroid in WGS84 lon/lat.
+ * Northern hemisphere zones → 326xx, southern → 327xx.
+ */
+function utmEpsgFromLonLat(lon: number, lat: number): number {
+  const zone = Math.max(1, Math.min(60, Math.floor((lon + 180) / 6) + 1));
+  return (lat >= 0 ? 32600 : 32700) + zone;
+}
+
 export default function CRSPage() {
   const [inputEpsg, setInputEpsg] = useState("4326");
   const [projectedEpsg, setProjectedEpsg] = useState("3438");
   const [distortionResult, setDistortionResult] = useState<DistortionResult | null>(null);
   const [distortionLoading, setDistortionLoading] = useState(false);
   const [summary, setSummary] = useState<DataSummary | null>(null);
-  const [samplePts, setSamplePts] = useState<[number, number][]>([]);
-  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [geojson, setGeojson] = useState<GeoJsonData | null>(null);
   const { notify } = useNotification();
 
   useEffect(() => {
@@ -37,19 +46,31 @@ export default function CRSPage() {
 
     dataGeoJson()
       .then((geo) => {
-        if (geo?.features) {
-          const pts: [number, number][] = [];
-          for (const f of geo.features.slice(0, 200)) {
-            const coords = f.geometry?.coordinates;
-            if (Array.isArray(coords) && coords.length >= 2) {
-              pts.push([coords[0] as number, coords[1] as number]);
-            }
-          }
-          setSamplePts(pts);
-        }
+        if (geo?.features?.length) setGeojson(geo);
       })
       .catch(() => {});
   }, []);
+
+  /**
+   * Suggest a UTM zone matching the data centroid (or bbox center).
+   * Only valid when input data is in geographic coordinates.
+   */
+  const handleSuggestUtm = useCallback(() => {
+    if (!summary?.bbox) {
+      notify("info", "Load data first to suggest a UTM zone");
+      return;
+    }
+    const { minx, miny, maxx, maxy } = summary.bbox;
+    const centerLon = (minx + maxx) / 2;
+    const centerLat = (miny + maxy) / 2;
+    if (Math.abs(centerLon) > 180 || Math.abs(centerLat) > 90) {
+      notify("error", "Bounding box not in lon/lat — cannot infer UTM zone");
+      return;
+    }
+    const epsg = utmEpsgFromLonLat(centerLon, centerLat);
+    setProjectedEpsg(String(epsg));
+    notify("success", `Suggested EPSG:${epsg} for UTM zone at ${centerLon.toFixed(2)}°, ${centerLat.toFixed(2)}°`);
+  }, [summary, notify]);
 
   const handleCheckDistortion = useCallback(async () => {
     if (!projectedEpsg) { notify("error", "Projected EPSG is required"); return; }
@@ -65,90 +86,10 @@ export default function CRSPage() {
   }, [inputEpsg, projectedEpsg, notify]);
 
   // Draw reprojection preview using real data
+  // (Replaced by SpatialMap below; kept the load wiring above.)
   useEffect(() => {
-    const canvas = previewCanvasRef.current;
-    if (!canvas) return;
-    const DPR = Math.min(window.devicePixelRatio || 1, 2);
-    const w = canvas.clientWidth, h = canvas.clientHeight;
-    canvas.width = w * DPR; canvas.height = h * DPR;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.scale(DPR, DPR);
-
-    // Background
-    ctx.fillStyle = "#faf8f4";
-    ctx.fillRect(0, 0, w, h);
-
-    // Grid
-    ctx.strokeStyle = "rgba(0,0,0,0.06)";
-    ctx.lineWidth = 0.5;
-    const gridSize = 20;
-    for (let x = 0; x < w; x += gridSize) {
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
-    }
-    for (let y = 0; y < h; y += gridSize) {
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-    }
-
-    // Use real bbox from summary or sample points
-    const bbox = summary?.bbox;
-    const hasPts = samplePts.length > 0;
-    const hasData = bbox || hasPts;
-
-    if (!hasData) {
-      ctx.fillStyle = "var(--muted)";
-      ctx.font = "12px Inter";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("Load data to see spatial preview", w / 2, h / 2);
-      return;
-    }
-
-    // Compute bounds from bbox object or sample points
-    let xMin: number, xMax: number, yMin: number, yMax: number;
-    if (bbox && typeof bbox === "object" && "minx" in bbox) {
-      xMin = bbox.minx; yMin = bbox.miny; xMax = bbox.maxx; yMax = bbox.maxy;
-    } else if (hasPts) {
-      xMin = Math.min(...samplePts.map(p => p[0]));
-      xMax = Math.max(...samplePts.map(p => p[0]));
-      yMin = Math.min(...samplePts.map(p => p[1]));
-      yMax = Math.max(...samplePts.map(p => p[1]));
-    } else {
-      return;
-    }
-
-    const pad = 20;
-    const xRange = xMax - xMin || 1;
-    const yRange = yMax - yMin || 1;
-    const toCanvasX = (v: number) => pad + ((v - xMin) / xRange) * (w - 2 * pad);
-    const toCanvasY = (v: number) => h - pad - ((v - yMin) / yRange) * (h - 2 * pad);
-
-    // Draw points
-    if (hasPts) {
-      ctx.fillStyle = "var(--crimson)";
-      for (const [px, py] of samplePts) {
-        ctx.globalAlpha = 0.5;
-        ctx.beginPath();
-        ctx.arc(toCanvasX(px), toCanvasY(py), 2.5, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.globalAlpha = 1;
-    }
-
-    // Bounding box
-    const bx1 = toCanvasX(xMin), by1 = toCanvasY(yMax), bx2 = toCanvasX(xMax), by2 = toCanvasY(yMin);
-    ctx.strokeStyle = "var(--purple)";
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([4, 4]);
-    ctx.strokeRect(bx1, by1, bx2 - bx1, by2 - by1);
-    ctx.setLineDash([]);
-
-    // Label
-    ctx.fillStyle = "var(--muted)";
-    ctx.font = "10px 'JetBrains Mono'";
-    ctx.textAlign = "center";
-    ctx.fillText(`EPSG:${inputEpsg} → EPSG:${projectedEpsg}`, w / 2, h - 4);
-  }, [inputEpsg, projectedEpsg, summary, samplePts]);
+    // no-op: preview now lives in <SpatialMap />
+  }, [inputEpsg, projectedEpsg, summary]);
 
   const handleSaveCRS = async () => {
     try {
@@ -216,22 +157,36 @@ export default function CRSPage() {
               <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>
                 EPSG Code (projected CRS)
               </div>
-              <input
-                type="text"
-                value={projectedEpsg}
-                onChange={(e) => setProjectedEpsg(e.target.value)}
-                className="mono"
-                style={{
-                  border: "1px solid var(--line)",
-                  borderRadius: 4,
-                  padding: "6px 8px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  width: "100%",
-                  fontFamily: "inherit",
-                  background: "#fff",
-                }}
-              />
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  type="text"
+                  value={projectedEpsg}
+                  onChange={(e) => setProjectedEpsg(e.target.value)}
+                  className="mono"
+                  style={{
+                    border: "1px solid var(--line)",
+                    borderRadius: 4,
+                    padding: "6px 8px",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    flex: 1,
+                    fontFamily: "inherit",
+                    background: "#fff",
+                  }}
+                />
+                <button
+                  onClick={handleSuggestUtm}
+                  title="Suggest a UTM zone matching the data centroid"
+                  style={{
+                    border: "1px solid var(--line)", background: "#fff",
+                    color: "var(--ink-2)", borderRadius: 4, padding: "4px 10px",
+                    fontSize: 11, fontWeight: 600, cursor: "pointer",
+                    fontFamily: "inherit",
+                  }}
+                >
+                  Suggest UTM
+                </button>
+              </div>
             </div>
             <div style={{ fontSize: 11.5, color: "var(--muted)", lineHeight: 1.6 }}>
               Choose a local projected CRS (State Plane, UTM, etc.) matching your study area for accurate distance/area calculations.
@@ -241,11 +196,16 @@ export default function CRSPage() {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 14 }}>
-        <Card title="Data projection preview" subtitle="spatial extent of loaded data">
-          <canvas
-            ref={previewCanvasRef}
-            style={{ width: "100%", height: 220, display: "block" }}
-          />
+        <Card title="Data projection preview" subtitle="actual study points on a basemap">
+          <div style={{ height: 240, borderRadius: 4, overflow: "hidden", border: "1px solid var(--line)" }}>
+            {geojson ? (
+              <SpatialMap geojson={geojson} mode="scatter" height="100%" />
+            ) : (
+              <div style={{ display: "flex", height: "100%", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: 12, background: "#faf8f4" }}>
+                Load data to see spatial preview
+              </div>
+            )}
+          </div>
         </Card>
 
         <Card

@@ -236,7 +236,7 @@ function mc3EdgesToFlow(mc3: MC3Result): Edge[] {
 // Main component
 // ---------------------------------------------------------------------------
 export default function DAGView() {
-  const { dagApprovalPending, handleApproveDag, handleRejectDag } = usePipeline();
+  const { dagApprovalPending, handleApproveDag, handleRejectDag, runEndedAt, stageStatuses } = usePipeline();
   const [dag, setDag] = useState<DagDefinition | null>(null);
   const [validation, setValidation] = useState<DagValidation | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -299,6 +299,63 @@ export default function DAGView() {
 
   useEffect(() => { load(); }, [load]);
 
+  // -------- Phase 20: vim-style keyboard navigation --------
+  // j/k step through nodes (sorted by y, then x). gg → first, G → last.
+  // e on a selected node opens the quick-edge form pre-filled with it as
+  // the source. d deletes the selected node and any incident edges.
+  // We bail out when focus is in an editable element so typing in inputs
+  // is not hijacked.
+  const [vimSelectedId, setVimSelectedId] = useState<string | null>(null);
+  const lastGRef = useRef<number>(0);
+  useEffect(() => {
+    function isEditable(el: EventTarget | null): boolean {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isEditable(e.target)) return;
+      if (nodes.length === 0) return;
+      const sorted = [...nodes].sort((a, b) => (a.position.y - b.position.y) || (a.position.x - b.position.x));
+      const idx = vimSelectedId ? sorted.findIndex((n) => n.id === vimSelectedId) : -1;
+
+      const select = (i: number) => {
+        const id = sorted[Math.max(0, Math.min(sorted.length - 1, i))].id;
+        setVimSelectedId(id);
+        setNodes((ns) => ns.map((n) => ({ ...n, selected: n.id === id })));
+      };
+
+      if (e.key === "j") { e.preventDefault(); select(idx < 0 ? 0 : Math.min(sorted.length - 1, idx + 1)); }
+      else if (e.key === "k") { e.preventDefault(); select(idx < 0 ? sorted.length - 1 : Math.max(0, idx - 1)); }
+      else if (e.key === "G") { e.preventDefault(); select(sorted.length - 1); }
+      else if (e.key === "g") {
+        e.preventDefault();
+        const now = Date.now();
+        if (now - lastGRef.current < 400) { select(0); lastGRef.current = 0; }
+        else { lastGRef.current = now; }
+      } else if (e.key === "e" && vimSelectedId) {
+        e.preventDefault();
+        setQeSource(vimSelectedId);
+        setQeTarget("");
+        setQeMechanism("");
+        setQuickEdge(true);
+      } else if ((e.key === "d" || e.key === "Delete" || e.key === "Backspace") && vimSelectedId) {
+        e.preventDefault();
+        pushSnapshot();
+        const id = vimSelectedId;
+        setNodes((ns) => ns.filter((n) => n.id !== id));
+        setEdges((es) => es.filter((ed) => ed.source !== id && ed.target !== id));
+        setVimSelectedId(null);
+      } else if (e.key === "Escape") {
+        setVimSelectedId(null);
+        setNodes((ns) => ns.map((n) => ({ ...n, selected: false })));
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [nodes, vimSelectedId, setNodes, setEdges, pushSnapshot]);
+
   // Fetch MC³ results when DAG approval is requested
   useEffect(() => {
     if (!dagApprovalPending) {
@@ -342,6 +399,36 @@ export default function DAGView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dagApprovalPending]);
 
+  // Load MC³ after the causal stage finishes (re-fetches even if approval gate
+  // was previously cleared). Also poll every 3 s while the causal stage is
+  // running so users see edges accumulate live.
+  useEffect(() => {
+    const causalStatus = stageStatuses[3]?.status;
+    const fetchMc3 = () => {
+      getMc3Result()
+        .then((data) => {
+          if (!data) return;
+          setMc3(data);
+          if (showMc3) {
+            const mc3Edges = mc3EdgesToFlow(data);
+            setEdges((eds) => {
+              const cleaned = eds.filter((e) => !e.id.startsWith("mc3-"));
+              return [...cleaned, ...mc3Edges];
+            });
+          }
+        })
+        .catch(() => {});
+    };
+    if (causalStatus === "running") {
+      fetchMc3();
+      const id = setInterval(fetchMc3, 3000);
+      return () => clearInterval(id);
+    }
+    if (causalStatus === "complete" || runEndedAt) fetchMc3();
+    return undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stageStatuses[3]?.status, runEndedAt]);
+
   // Keyboard shortcuts for undo/redo
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -365,38 +452,69 @@ export default function DAGView() {
   const onConnect = useCallback(
     (params: Connection) => {
       pushSnapshot();
-      const newEdge: Edge = {
-        id: `e-${params.source}-${params.target}`,
-        source: params.source,
-        target: params.target,
-        style: { stroke: "#602468" },
-        markerEnd: { type: MarkerType.ArrowClosed, color: "#602468" },
+      setEdges((eds) => addEdge({ ...params, animated: false }, eds));
+
+      const applyMc3 = (data: import("@/lib/types").MC3Result) => {
+        setMc3(data);
+        setShowMc3(true);
+        const mc3Edges = mc3EdgesToFlow(data);
+        setEdges((eds) => {
+          const cleaned = eds.filter((e) => !e.id.startsWith("mc3-"));
+          return [...cleaned, ...mc3Edges];
+        });
+        // Use functional setNodes to read latest state and avoid stale closure
+        setNodes((currentNodes) => {
+          const existingIds = new Set(currentNodes.map((n) => n.id));
+          const newNodes: Node[] = [];
+          for (const name of data.node_names) {
+            if (!existingIds.has(name)) {
+              newNodes.push({
+                id: name,
+                type: "dag",
+                position: { x: 0, y: 0 },
+                data: { label: name, nodeType: "confounder" },
+              });
+            }
+          }
+          return newNodes.length > 0
+            ? layoutNodes([...currentNodes, ...newNodes], mc3Edges)
+            : currentNodes;
+        });
       };
-      setEdges((eds) => addEdge(newEdge, eds));
+
+      getMc3Result()
+        .then((data) => { if (data) applyMc3(data); })
+        .catch(() => {
+          // MC³ result not ready yet — retry once after a short delay
+          setTimeout(() => {
+            getMc3Result()
+              .then((data) => { if (data) applyMc3(data); })
+              .catch(() => {});
+          }, 1500);
+        });
     },
-    [setEdges, pushSnapshot],
+    [addEdge, pushSnapshot],
   );
 
-  // Quick edge: add via form
+  // Quick edge: add edge from form inputs
   const addQuickEdge = useCallback(() => {
     if (!qeSource || !qeTarget || qeSource === qeTarget) return;
-    // Check for duplicate
-    if (edges.find((e) => e.source === qeSource && e.target === qeTarget)) return;
     pushSnapshot();
-    const newEdge: Edge = {
-      id: `e-${qeSource}-${qeTarget}`,
-      source: qeSource,
-      target: qeTarget,
-      label: qeMechanism || undefined,
-      style: { stroke: "#602468" },
-      markerEnd: { type: MarkerType.ArrowClosed, color: "#602468" },
-      labelStyle: { fontSize: 9, fill: "#666" },
-    };
-    setEdges((eds) => addEdge(newEdge, eds));
+    const id = `qe-${qeSource}-${qeTarget}-${Date.now()}`;
+    setEdges((eds) => [
+      ...eds,
+      {
+        id,
+        source: qeSource,
+        target: qeTarget,
+        animated: false,
+        ...(qeMechanism ? { label: qeMechanism } : {}),
+      },
+    ]);
     setQeSource("");
     setQeTarget("");
     setQeMechanism("");
-  }, [qeSource, qeTarget, qeMechanism, edges, setEdges, pushSnapshot]);
+  }, [qeSource, qeTarget, qeMechanism, pushSnapshot, setEdges]);
 
   // Context menu: right-click on node
   const onNodeContextMenu = useCallback(
@@ -596,6 +714,12 @@ export default function DAGView() {
           >
             + Edge
           </button>
+          <span
+            className="ml-2 hidden font-mono text-[10px] text-sparc-gray-500 lg:inline"
+            title="Vim-style navigation: j/k step nodes, gg/G first/last, e draw edge, d delete"
+          >
+            j/k · gg/G · e · d
+          </span>
           {hasProposals && (
             <>
               <button

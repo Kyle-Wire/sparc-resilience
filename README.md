@@ -16,9 +16,9 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#installation)
 [![Academic Partnerships](https://img.shields.io/badge/open%20for-Academic%20Partnerships-8A2BE2.svg)](mailto:sparcurbanlabs@gmail.com)
 
-**SPARC turns environmental and infrastructure data into causal, uncertainty-quantified intervention scenarios — powered by physics-constrained spatial machine learning.**
+**SPARC turns environmental and infrastructure data into causal, uncertainty-quantified intervention scenarios — powered by physics-constrained spatial machine learning and Bayesian causal inference.**
 
-Published in [*Urban Climate* (2025)](https://doi.org/10.1016/j.uclim.2025.102671), SPARC has demonstrated **91.5% R²** on urban heat island prediction in Providence, RI, and has been applied to **ForceSMIP climate forcing attribution** at global scale. The pipeline trains geographically-weighted model ensembles, validates causal relationships via directed acyclic graphs (DAGs), and simulates "what-if" scenarios with built-in uncertainty quantification — all from a single `project.yml` configuration file across **13 domain templates**.
+Published in [*Urban Climate* (2025)](https://doi.org/10.1016/j.uclim.2025.102671), SPARC has demonstrated **94.2% R²** on urban heat island prediction in Providence, RI, and has been applied to **ForceSMIP climate forcing attribution** at global scale. The pipeline trains geographically-weighted base models, fuses them through a **differentiable neural meta-learner with PDE-aware physics constraints**, validates causal structure with **NUTS posterior sampling** and **MC³ DAG search**, and simulates "what-if" scenarios with built-in uncertainty quantification — all from a single `project.yml` configuration file across **13 domain templates**.
 
 > **Get started:** [Watch the demo](#see-sparc-in-action) · [Try it locally](#quick-start) · [Download the desktop app](#desktop-app) · Interested in piloting? [Contact us](mailto:sparcurbanlabs@gmail.com)
 
@@ -32,7 +32,7 @@ Published in [*Urban Climate* (2025)](https://doi.org/10.1016/j.uclim.2025.10267
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Desktop App](#desktop-app)
-- [Results: Urban Heat Island (Brown UHI)](#results-urban-heat-island-brown-uhi)
+- [Results: Urban Heat Island](#results-urban-heat-island-brown-uhi)
 - [Results: ForceSMIP Climate Forcing Attribution](#results-forcesmip-climate-forcing-attribution)
 - [Interpreting Results](#interpreting-results)
 - [Limitations & Assumptions](#limitations--assumptions)
@@ -56,14 +56,14 @@ Published in [*Urban Climate* (2025)](https://doi.org/10.1016/j.uclim.2025.10267
 
 | | |
 |:---:|:---:|
-| ![Project Setup](docs/screenshots/01-project-setup.png) | ![Data Upload](docs/screenshots/02-data-upload.png) |
-| *Project setup and template selection* | *Data upload and preview — 54,701 rows at a glance* |
-| ![DAG Builder](docs/screenshots/03-dag-builder.png) | ![Physics Config](docs/screenshots/04-physics-config.png) |
-| *Visual causal DAG editor with drag-and-drop edges* | *Physics constraints: monotone signs, priors, and caps* |
-| ![Models & Pipeline](docs/screenshots/05-models.png) | ![Pipeline Running](docs/screenshots/06-pipeline_running.png) |
-| *Model configuration and feature flags* | *Pipeline execution with live terminal output* |
-| ![Correlogram Results](docs/screenshots/07-correlogram_results.png) | ![Spatial CV Results](docs/screenshots/08-spatial_cv_table.png) |
-| *Stage 0 correlogram — auto-detected bandwidths and block sizes* | *Stage 2 results — meta-ensemble predictions vs. actuals* |
+| ![Data Processing](docs/screenshots/01-Processing.png) | ![DAG Builder](docs/screenshots/02-dag-builder.png) |
+| *Upload Rasters & Shapefiles for Processing* | *Visual Causal DAG Editor with Drag-and-Drop Edges* |
+| ![Variable Review](docs/screenshots/03-variables.png) | ![Physics Config](docs/screenshots/04-physics-config.png) |
+| *Review Variable Correlation and Stats* | *Physics Constraints: PDEs, Priors, and More* |
+| ![Scenario Builder](docs/screenshots/05-scenarios.png) | ![Pipeline Running](docs/screenshots/06-run.png) |
+| *Build Scenarios to Trial* | *Pipeline Execution with Live Terminal Output* |
+| ![Results Page](docs/screenshots/07-results.png) | ![Report Export](docs/screenshots/08-report.png) |
+| *Review Model Predictions, Statistics, Dose-Response Curves, and More* | *Export Reports for Specific Audiences* |
 
 ---
 
@@ -76,11 +76,11 @@ Stage 0   Correlogram Analysis            Moran's I at multiple lags → auto-de
      │
 Stage 1   GWEN Variable Selection         Geographically-weighted elastic net ranks predictors (optional)
      │
-Stage 2   Spatial Cross-Validation        Train & evaluate four base models + meta-ensemble
+Stage 2   Spatial CV + Neural Meta        Four base models → differentiable surrogates → neural meta-learner
      │
-Stage 3   Causal Validation               Estimate causal effects via a DAG with refutation tests
+Stage 3   Bayesian Causal Validation      DML + NUTS posteriors + MC³ DAG search + DoWhy refutations
      │
-Stage 4   Scenario Simulation             Physics-constrained "what-if" predictions with uncertainty
+Stage 4   Scenario Simulation             Physics/PDE-constrained "what-if" predictions with uncertainty
 ```
 
 ### Stage 0 — Correlogram Analysis
@@ -91,9 +91,9 @@ Computes Moran's I at multiple distance lags to quantify spatial autocorrelation
 
 A geographically-weighted elastic net (GWEN) ranks predictor importance across space. Uses correlogram-derived bandwidths for spatially-aware feature selection. A human checkpoint allows review before proceeding.
 
-### Stage 2 — Spatial Cross-Validation & Model Training
+### Stage 2 — Spatial Cross-Validation & Neural Meta-Learner
 
-Trains four base models on spatially-buffered folds to prevent spatial leakage:
+Trains four classical base models on spatially-buffered folds to prevent spatial leakage:
 
 | Model | Type | Description |
 |-------|------|-------------|
@@ -102,11 +102,24 @@ Trains four base models on spatially-buffered folds to prevent spatial leakage:
 | **GWRF** | Local non-linear | Geographically weighted random forest |
 | **GGPGAM** | Semi-parametric | Geographically guided generalized additive model |
 
-A **LightGBM meta-ensemble** stacks base model predictions with monotonic constraints from the physics configuration and is tuned via Optuna. Laplacian eigenmaps can be included as spatial features.
+These base models are then mirrored by **differentiable PyTorch surrogates** (`DifferentiableGWR`, `DifferentiableGWRF`, `DifferentiableGGPGAM`) that are pre-trained against the classical out-of-fold predictions and fine-tuned end-to-end. Two meta-learner backends are available:
 
-### Stage 3 — Causal Validation
+| Backend | Selected By | Description |
+|---------|-------------|-------------|
+| **`neural`** *(default)* | `models.meta_learner: neural` | `SPARCMetaLearner` — fuses surrogate outputs with sinusoidal spatial encodings, FiLM-conditioned physics features, a `ProcessRateNet` α-gate, and exceedance heads. MC-Dropout produces per-point predictive uncertainty. Optional **PDE-loss** terms (energy balance, advection–diffusion) act as soft physics constraints during training. |
+| **`ensemble`** | `models.meta_learner: ensemble` | Legacy LightGBM stack with monotonic constraints, tuned via Optuna. Retained for fast/baseline runs. |
 
-Uses a user-defined DAG to estimate structural causal coefficients (via DML, HGB, or OLS), blends them with literature priors through shrinkage, and runs DoWhy refutation tests (placebo, random common cause, subset, unobserved confounding). Optionally estimates heterogeneous treatment effects (CATE) via EconML's CausalForestDML.
+Laplacian eigenmaps and `ClimateEncoder` / `PDEEncoder` features can be injected as spatial side-information to either backend.
+
+### Stage 3 — Bayesian Causal Validation
+
+Uses a user-defined DAG to estimate structural causal coefficients via DML (with HGB or OLS fallbacks), blends them with literature priors through shrinkage, and runs DoWhy refutation tests (placebo, random common cause, subset, unobserved confounding). When the neural meta-learner from Stage 2 is available, SPARC additionally runs:
+
+- **NUTS posterior sampling** (No-U-Turn Sampler) over structural coefficients, using the neural model as the likelihood — producing full posterior distributions rather than point estimates.
+- **MC³ (Metropolis-Coupled MCMC) DAG search** over edge inclusion, yielding posterior edge-inclusion probabilities, a median-probability DAG, and acceptance diagnostics.
+- **CATE estimation** via EconML's `CausalForestDML` for heterogeneous treatment effects.
+
+Outputs include `edge_inclusion_probs.csv`, `median_probability_dag.json`, `mc3_summary.json`, and `nuts_results.json`.
 
 ### Stage 4 — Scenario Simulation
 
@@ -116,9 +129,9 @@ Predicts outcomes under user-defined interventions in three complementary modes:
 |------|--------|------------------|
 | **Mode 1** | Ensemble re-prediction | Full non-linear interactions, model agreement |
 | **Mode 2** | DAG coefficients × local MGWR weights | Spatial heterogeneity, causal mediation |
-| **Mode 3** | Monte Carlo uncertainty propagation | Credible intervals (5th / 50th / 95th) |
+| **Mode 3** | Monte Carlo uncertainty propagation | Credible intervals (5th / 50th / 95th), seeded from NUTS posteriors when available |
 
-Physics guardrails are applied automatically: variable bounds, diminishing returns (√ taper), sign enforcement, delta caps, extrapolation guards (Mahalanobis distance), and combined constraints (e.g., Canopy + Impervious ≤ 100%).
+Physics guardrails are applied automatically: variable bounds, diminishing returns (√ taper), sign enforcement, delta caps, extrapolation guards (Mahalanobis distance), combined constraints (e.g., Canopy + Impervious ≤ 100%), and optional **PDE-residual penalties** (energy-balance, advection–diffusion) carried over from the neural meta-learner.
 
 ---
 
@@ -436,18 +449,26 @@ Have ideas or want to collaborate? Reach out at [sparcurbanlabs@gmail.com](mailt
 ## Project Structure
 
 ```
-GW3C_v2.1/
+sparc-resilience/
 ├── sparc/                   # Main package
 │   ├── __main__.py          # CLI entry point (sparc init / validate / run / scenario / report)
 │   ├── config/              # Configuration loader, JSON schema validation
 │   ├── data/                # Data utilities, temporal helpers
-│   ├── models/              # OLS, GWR, GWRF, GGPGAM, Deep Kriging, Meta-ensemble, GWEN
+│   ├── models/              # OLS, GWR, GWRF, GGPGAM, GWEN, differentiable surrogates,
+│   │                        # SPARCMetaLearner (neural), ProcessRateNet, ClimateEncoder, PDEEncoder
 │   ├── features/            # Laplacian eigenmaps, fold-aware spatial features
+│   ├── physics/             # PDE operators, PDE loss, energy balance, boundary/initial conditions
+│   ├── training/            # Curriculum, replay, EWC, CMA-ES, optimizer & loss helpers
+│   ├── inference/           # Zero-shot and few-shot inference utilities
 │   ├── causal/              # DAG definition, DoWhy integration, CATE, counterfactuals
 │   ├── evaluation/          # Model evaluation metrics and diagnostics
 │   ├── interventions/       # Scenario simulator, physics priors, extrapolation guards
-│   ├── run/                 # Pipeline orchestration (per-stage executors)
-│   └── ui/                  # Interactive UI
+│   ├── run/                 # Pipeline orchestration — incl. v2_neural_training & v2_bayesian_causal
+│   │                        # (NUTS + MC³), correlogram, GWEN, spatial CV, scenario runners
+│   ├── scenario/            # Scenario builder/validator helpers
+│   ├── report/              # Report generation
+│   ├── registry/            # Domain template registry
+│   └── server/              # Local pipeline/IPC server for the desktop app
 ├── templates/               # Domain templates (13 domains)
 ├── examples/                # Example projects (Brown UHI)
 ├── tests/                   # Smoke tests
@@ -476,8 +497,8 @@ Every project is driven by a single `project.yml` file with these sections:
 | `causal` | No | DAG file, estimator (ols/hgb/dml), actionable/fixed vars |
 | `output` | No | Output directory structure |
 | `pipeline` | No | Random seed, n_folds, fast_mode, MC settings |
-| `flags` | No | Feature flags (GWEN, GWRF, Laplacian) |
-| `models` | No | Per-model hyperparameters |
+| `flags` | No | Feature flags (GWEN, GWRF, Laplacian, PDE loss, NUTS, MC³) |
+| `models` | No | `meta_learner` (`neural` / `ensemble`) and per-model hyperparameters (neural hidden dim, dropout, MC-Dropout samples, exceedance thresholds, etc.) |
 | `scenarios` | No | Single-variable intervention definitions |
 | `joint_scenarios` | No | Multi-variable intervention definitions |
 
@@ -491,8 +512,9 @@ See [`docs/MANUAL.md`](docs/MANUAL.md) for the full configuration reference and 
 |----------|----------|
 | Scientific | numpy, pandas, scipy, scikit-learn |
 | Spatial | geopandas, libpysal, esda, mgwr, pyproj |
-| Modeling | lightgbm, optuna, pygam, torch |
-| Causal | dowhy, networkx, econml |
+| Classical models | lightgbm, optuna, pygam |
+| Neural meta-learner | torch (PyTorch) — surrogates, `SPARCMetaLearner`, `ProcessRateNet`, PDE loss, MC-Dropout |
+| Bayesian causal | dowhy, networkx, econml, pymc / NumPyro (NUTS), custom MC³ sampler |
 | Utilities | matplotlib, seaborn, joblib, pyyaml, jsonschema |
 
 ---

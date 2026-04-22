@@ -10,6 +10,9 @@ import Shell from "@/components/layout/Shell";
 import type { PageName } from "@/components/layout/Sidebar";
 import { PAGES } from "@/components/layout/Sidebar";
 import ChatPanel from "@/components/chat/ChatPanel";
+import CommandPalette, { type PaletteItem } from "@/components/common/CommandPalette";
+import OnboardingTour from "@/components/common/OnboardingTour";
+import { ExplainContext, useExplainHost } from "@/hooks/ExplainContext";
 import { loadTheme, applyTheme } from "@/lib/theme";
 import { buildSystemPrompt } from "@/lib/prompts";
 import { getConfig, saveConfig, dataSummary, initProject, getReportData, getDag } from "@/lib/api";
@@ -27,6 +30,8 @@ import ScenariosPage from "@/components/pages/ScenariosPage";
 import ModelsPage from "@/components/pages/ModelsPage";
 import RunPage from "@/components/pages/RunPage";
 import ResultsPage from "@/components/pages/ResultsPage";
+import DecisionsPage from "@/components/pages/DecisionsPage";
+import ComparePage from "@/components/pages/ComparePage";
 import ReportPage from "@/components/pages/ReportPage";
 import SettingsPage from "@/components/pages/SettingsPage";
 
@@ -38,6 +43,9 @@ export default function App() {
   const project = useProject(ready);
   const [page, setPage] = useState<AppPage>("Project");
   const [chatOpen, setChatOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const explainHost = useExplainHost();
+  const explainSeed = explainHost.seed;
   const [dataCtx, setDataCtx] = useState<PromptDataContext | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -85,8 +93,10 @@ export default function App() {
     });
   }, [ready, project.projectLoaded, refreshKey]);
 
-  // Derive prompt mode from current page
+  // Derive prompt mode from current page (or seed override).
   const promptMode = (() => {
+    if (explainSeed?.mode === "narrator") return "narrator" as const;
+    if (explainSeed?.mode === "hypothesis") return "hypothesis" as const;
     switch (page) {
       case "Project": return "domain" as const;
       case "DAG": return "dag" as const;
@@ -108,9 +118,58 @@ export default function App() {
       },
       openSettings: () => navigate("Settings"),
       refresh: () => setRefreshKey((k) => k + 1),
+      openPalette: () => setPaletteOpen(true),
     }),
     [navigate],
   );
+
+  // Open the chat automatically whenever something requests an explanation.
+  useEffect(() => {
+    if (explainSeed) setChatOpen(true);
+  }, [explainSeed]);
+
+  // Build the command palette items from currently-known data context.
+  const paletteItems = useMemo<PaletteItem[]>(() => {
+    const out: PaletteItem[] = PAGES.map((p) => ({
+      id: `page:${p}`, kind: "page", label: p, page: p, hint: "→ navigate",
+    }));
+    out.push({ id: "page:Settings", kind: "page", label: "Settings", page: "Settings", hint: "→ navigate" });
+    out.push({
+      id: "action:toggle-chat", kind: "action", label: "Toggle chat panel",
+      hint: "Cmd+J", run: () => setChatOpen((o) => !o),
+    });
+    out.push({
+      id: "action:hypothesis", kind: "action", label: "Generate hypotheses",
+      hint: "narrator",
+      run: () => explainHost.value.requestExplain(
+        "Propose 3-5 ranked, testable causal hypotheses for the loaded dataset.",
+        "hypothesis",
+      ),
+    });
+    if (dataCtx?.columns) {
+      for (const col of dataCtx.columns.slice(0, 80)) {
+        out.push({ id: `pred:${col}`, kind: "predictor", label: col, page: "Variables" });
+      }
+    }
+    if (dataCtx?.scenarios) {
+      for (const s of dataCtx.scenarios) {
+        out.push({ id: `scn:${s.name}`, kind: "scenario", label: s.name, hint: s.variable, page: "Scenarios" });
+      }
+    }
+    if (dataCtx?.causalResults) {
+      for (const treatment of Object.keys(dataCtx.causalResults)) {
+        out.push({
+          id: `tr:${treatment}`, kind: "treatment", label: treatment,
+          hint: "explain effect",
+          run: () => explainHost.value.requestExplain(
+            `Explain the causal effect of ${treatment} on the outcome, citing magnitudes, mechanism, and confidence.`,
+            "narrator",
+          ),
+        });
+      }
+    }
+    return out;
+  }, [dataCtx, explainHost.value]);
   useKeyboardShortcuts(kbHandlers);
 
   // Chat → config action dispatch
@@ -188,6 +247,10 @@ export default function App() {
         return <RunPage />;
       case "Results":
         return <ResultsPage />;
+      case "Decisions":
+        return <DecisionsPage />;
+      case "Compare":
+        return <ComparePage />;
       case "Report":
         return <ReportPage />;
       case "Settings":
@@ -197,6 +260,7 @@ export default function App() {
 
   return (
     <NotificationContext.Provider value={notif}>
+      <ExplainContext.Provider value={explainHost.value}>
       <PipelineProvider serverReady={ready}>
         <div style={{ position: "relative", height: "100vh", width: "100vw", overflow: "hidden" }}>
           <Shell
@@ -218,12 +282,25 @@ export default function App() {
               onAction={handleAction}
               systemPrompt={systemPrompt}
               onClose={() => setChatOpen(false)}
+              seedMessage={explainSeed?.message}
+              seedNonce={explainSeed?.nonce}
+              onSeedConsumed={explainHost.value.consumeSeed}
             />
           )}
+
+          <CommandPalette
+            open={paletteOpen}
+            onClose={() => setPaletteOpen(false)}
+            items={paletteItems}
+            onNavigate={(p) => navigate(p)}
+          />
+
+          <OnboardingTour onNavigate={(p) => navigate(p as PageName)} />
 
           <NotificationBanner />
         </div>
       </PipelineProvider>
+      </ExplainContext.Provider>
     </NotificationContext.Provider>
   );
 }

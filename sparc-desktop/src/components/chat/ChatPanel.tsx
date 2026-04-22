@@ -7,6 +7,12 @@ interface ChatPanelProps {
   onClose?: () => void;
   onAction?: (action: ClaudeAction) => void;
   systemPrompt?: string;
+  /** Pre-seeded user message that gets auto-sent on mount/seed change. */
+  seedMessage?: string;
+  /** Monotonic counter so the same message can be re-seeded and re-sent. */
+  seedNonce?: number;
+  /** Called once a seed has been consumed so the parent can clear it. */
+  onSeedConsumed?: () => void;
 }
 
 const DEMO_REPLIES = [
@@ -15,7 +21,10 @@ const DEMO_REPLIES = [
   "Scenario written: canopy +10 pp · predicted mean ΔAAT_z = −0.258 (σ = 0.154).",
 ];
 
-export default function ChatPanel({ onClose, onAction, systemPrompt }: ChatPanelProps) {
+export default function ChatPanel({
+  onClose, onAction, systemPrompt,
+  seedMessage, seedNonce, onSeedConsumed,
+}: ChatPanelProps) {
   const apiKey = localStorage.getItem("anthropic-api-key") ?? "";
   const hasKey = apiKey.length > 0;
 
@@ -41,6 +50,23 @@ export default function ChatPanel({ onClose, onAction, systemPrompt }: ChatPanel
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages.length, demoMsgs.length]);
+
+  // Auto-send a seeded message when the parent supplies one (Phase 16:
+  // "Explain this" / hypothesis assistant). Re-fires when seedNonce changes.
+  useEffect(() => {
+    if (!seedMessage || seedNonce == null) return;
+    if (hasKey) {
+      sendMessage(seedMessage, apiKey);
+    } else {
+      setDemoMsgs((m) => [
+        ...m,
+        { role: "user", text: seedMessage },
+        { role: "assistant", text: "(demo mode — add an Anthropic API key in Settings to get a real explanation.)" },
+      ]);
+    }
+    onSeedConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedNonce]);
 
   const send = () => {
     if (!input.trim()) return;

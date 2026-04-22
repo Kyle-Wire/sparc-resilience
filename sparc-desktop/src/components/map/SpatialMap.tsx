@@ -1,22 +1,14 @@
 import { useState, useEffect, useMemo } from "react";
-import Map, { NavigationControl, ScaleControl } from "react-map-gl/maplibre";
+import Map, { NavigationControl, ScaleControl, Source, Layer } from "react-map-gl/maplibre";
 import { GeoJsonLayer, ScatterplotLayer } from "@deck.gl/layers";
 import { DeckGL } from "@deck.gl/react";
 import "maplibre-gl/dist/maplibre-gl.css";
+import type { ContextLayer } from "@/lib/api";
+import type { GeoJsonData } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-interface GeoJsonFeature {
-  type: "Feature";
-  geometry: { type: string; coordinates: number[] | number[][] };
-  properties: Record<string, unknown>;
-}
-
-interface GeoJsonData {
-  type: "FeatureCollection";
-  features: GeoJsonFeature[];
-}
 
 export type MapMode = "scatter" | "heatmap" | "choropleth";
 export type ColorPalette = "sparc" | "viridis" | "puor";
@@ -32,6 +24,9 @@ interface SpatialMapProps {
   /** Sync viewState from a parent (for side-by-side comparison) */
   syncViewState?: { longitude: number; latitude: number; zoom: number; pitch: number; bearing: number };
   onViewStateChange?: (vs: { longitude: number; latitude: number; zoom: number; pitch: number; bearing: number }) => void;
+  /** Context tile layers (Phase 18) — basemap is replaced if any has kind="basemap";
+   * overlays are stacked above the basemap and below the deck.gl canvas. */
+  contextLayers?: { layer: ContextLayer; opacity?: number }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +120,7 @@ export default function SpatialMap({
   onFeatureClick,
   syncViewState,
   onViewStateChange: onViewStateChangeProp,
+  contextLayers,
 }: SpatialMapProps) {
   const [localViewState, setLocalViewState] = useState({
     longitude: -98.5,
@@ -273,6 +269,23 @@ export default function SpatialMap({
         >
           <NavigationControl position="top-right" />
           <ScaleControl position="bottom-left" />
+          {(contextLayers ?? []).filter((c) => c.layer.url_template).map(({ layer, opacity }) => (
+            <Source
+              key={layer.id}
+              id={`ctx-${layer.id}`}
+              type="raster"
+              tiles={[layer.url_template as string]}
+              tileSize={layer.tile_size ?? 256}
+              maxzoom={layer.max_zoom ?? 19}
+              attribution={layer.attribution}
+            >
+              <Layer
+                id={`ctx-${layer.id}-layer`}
+                type="raster"
+                paint={{ "raster-opacity": opacity ?? layer.opacity_default ?? 1.0 }}
+              />
+            </Source>
+          ))}
         </Map>
       </DeckGL>
 

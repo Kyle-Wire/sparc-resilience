@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SectionHeader, Card, Tag, Btn, Stat, StatGrid, thStyle, tdStyle } from "@/components/ui/DesignSystem";
-import { getConfig, getScenarioDetail, runScenarios, getNutsSummary } from "@/lib/api";
+import { getConfig, getScenarioDetail, runScenarios, getNutsSummary, getScenarioLibrary, appendScenarioToLibrary, type ScenarioTimeline } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
+import { presetsForDomain, applyPresetToPredictors } from "@/lib/scenarioPresets";
 
 interface Scenario {
   id: string;
@@ -51,6 +52,10 @@ export default function ScenariosPage() {
     convergence?: NutsConvergence[];
   } | null>(null);
   const [nutsTab, setNutsTab] = useState<"posteriors" | "convergence">("posteriors");
+  const [library, setLibrary] = useState<ScenarioTimeline | null>(null);
+  const [libParent, setLibParent] = useState<string | null>(null);
+  const [libComment, setLibComment] = useState("");
+  const [libAuthor, setLibAuthor] = useState("me");
   const histRef = useRef<HTMLCanvasElement>(null);
   const { notify } = useNotification();
 
@@ -77,24 +82,44 @@ export default function ScenariosPage() {
       })
       .catch(() => {});
 
-    // Load config for intervention builder sliders
+    // Load config for intervention builder sliders + preset library
     getConfig()
       .then((config) => {
-        const s = (config.scenarios ?? []) as any[];
-        if (s.length > 0 && scenarios.length === 0) {
-          setScenarios(
-            s.map((sc: any, i: number) => ({
-              id: `s${i}`,
+        const cfgScenarios = (config.scenarios ?? []) as any[];
+        const cols = config.predictors ?? [];
+        const domain = config.project?.domain ?? "";
+        const presets = presetsForDomain(domain);
+
+        setScenarios((existing) => {
+          // Don't clobber API-loaded computed scenarios; merge config + presets only if empty.
+          if (existing.length > 0) return existing;
+          const merged: Scenario[] = [];
+          for (let i = 0; i < cfgScenarios.length; i++) {
+            const sc = cfgScenarios[i] ?? {};
+            merged.push({
+              id: `cfg-${i}`,
               name: sc.name ?? `Scenario ${i + 1}`,
               interventions: sc.interventions ?? {},
               delta: sc.delta ?? 0,
-              status: "draft" as const,
-            })),
-          );
-        }
+              status: "draft",
+            });
+          }
+          for (const p of presets) {
+            const interventions = applyPresetToPredictors(p, cols);
+            // Only include presets that match at least one project predictor.
+            if (p.id !== "preset-baseline" && Object.keys(interventions).length === 0) continue;
+            merged.push({
+              id: p.id,
+              name: p.name,
+              interventions,
+              delta: 0,
+              status: p.id === "preset-baseline" ? "baseline" : "draft",
+            });
+          }
+          return merged;
+        });
 
         // Build sliders from predictors in config
-        const cols = config.predictors ?? [];
         if (cols.length > 0) {
           setSliders(
             cols.slice(0, 6).map((col: string) => ({
@@ -140,36 +165,109 @@ export default function ScenariosPage() {
       return;
     }
 
-    // Show computed delta as a simple bar/label since we don't have posterior samples
+    // -- Posterior Gaussian density ---------------------------------------
+    // Pick the dominant intervention variable; lookup its NUTS posterior std
+    // (per-unit). Std of Δ = |intervention| × std_per_unit.  If no posterior
+    // available, fall back to an assumed CV of 25% so the density is still
+    // informative.
+    const interventionEntries = Object.entries(active.interventions);
+    const dominant = interventionEntries.sort(
+      (a, b) => Math.abs(b[1]) - Math.abs(a[1]),
+    )[0];
+    let sigma = Math.max(Math.abs(active.delta) * 0.25, 1e-6);
+    let posteriorMatched = false;
+    if (dominant && nutsData?.posteriors) {
+      const post = nutsData.posteriors.find(
+        (p) => p.treatment.toLowerCase() === dominant[0].toLowerCase(),
+      );
+      if (post) {
+        sigma = Math.max(Math.abs(post.std * dominant[1]), Math.abs(active.delta) * 0.05);
+        posteriorMatched = true;
+      }
+    }
+
+    const mu = active.delta;
+    const xMin = mu - 4 * sigma;
+    const xMax = mu + 4 * sigma;
+    const xRange = Math.max(xMax - xMin, 1e-9);
+
+    // Compute densities
+    const N = 120;
+    const xs = Array.from({ length: N }, (_, i) => xMin + (i / (N - 1)) * xRange);
+    const ys = xs.map((x) => Math.exp(-0.5 * ((x - mu) / sigma) ** 2) / (sigma * Math.sqrt(2 * Math.PI)));
+    const yMax = Math.max(...ys);
+
+    const plotL = 36, plotR = w - 12, plotT = 14, plotB = h - 28;
+    const toX = (x: number) => plotL + ((x - xMin) / xRange) * (plotR - plotL);
+    const toY = (y: number) => plotB - (y / yMax) * (plotB - plotT);
+
+    // Axes
     ctx.strokeStyle = "#c9c2b3";
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(35, 10); ctx.lineTo(35, h - 25); ctx.lineTo(w - 10, h - 25);
+    ctx.moveTo(plotL, plotT); ctx.lineTo(plotL, plotB); ctx.lineTo(plotR, plotB);
     ctx.stroke();
 
-    // Delta bar
-    const barW = Math.min(Math.abs(active.delta) * 40, (w - 50) * 0.8);
-    const barH = 24;
-    const barY = h / 2 - barH / 2;
-    const midX = (w - 50) / 2 + 36;
-    const barX = active.delta < 0 ? midX - barW : midX;
-    const ci = active.delta < 0 ? 0 : SPARC_RAMP_HEX.length - 1;
-    ctx.fillStyle = SPARC_RAMP_HEX[ci] + "cc";
-    ctx.fillRect(barX, barY, barW, barH);
+    // Zero reference line
+    if (xMin <= 0 && xMax >= 0) {
+      ctx.strokeStyle = "#a59f93";
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(toX(0), plotT); ctx.lineTo(toX(0), plotB); ctx.stroke();
+      ctx.setLineDash([]);
+    }
 
-    // Zero line
-    ctx.strokeStyle = "var(--muted)";
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4, 3]);
-    ctx.beginPath(); ctx.moveTo(midX, 10); ctx.lineTo(midX, h - 25); ctx.stroke();
-    ctx.setLineDash([]);
+    // 90% CI shading (mu ± 1.645 σ)
+    const ciLo = mu - 1.645 * sigma;
+    const ciHi = mu + 1.645 * sigma;
+    ctx.fillStyle = SPARC_RAMP_HEX[mu < 0 ? 0 : SPARC_RAMP_HEX.length - 1] + "33";
+    ctx.beginPath();
+    ctx.moveTo(toX(ciLo), plotB);
+    for (let i = 0; i < xs.length; i++) {
+      if (xs[i] < ciLo || xs[i] > ciHi) continue;
+      ctx.lineTo(toX(xs[i]), toY(ys[i]));
+    }
+    ctx.lineTo(toX(ciHi), plotB);
+    ctx.closePath();
+    ctx.fill();
 
-    // Label
-    ctx.fillStyle = "#1a1416";
-    ctx.font = "bold 11px 'JetBrains Mono'";
+    // Density curve
+    ctx.strokeStyle = SPARC_RAMP_HEX[mu < 0 ? 0 : SPARC_RAMP_HEX.length - 1];
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < xs.length; i++) {
+      const px = toX(xs[i]), py = toY(ys[i]);
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+
+    // Mean marker
+    ctx.strokeStyle = "#1a1416";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(toX(mu), plotT); ctx.lineTo(toX(mu), plotB); ctx.stroke();
+
+    // Axis labels (x-axis)
+    ctx.fillStyle = "#6e6358";
+    ctx.font = "9px 'JetBrains Mono'";
     ctx.textAlign = "center";
-    ctx.fillText(`Δ = ${active.delta.toFixed(2)}`, w / 2, h - 6);
-  }, [scenarios, activeIdx]);
+    ctx.fillText(xMin.toFixed(2), plotL, h - 12);
+    ctx.fillText(xMax.toFixed(2), plotR, h - 12);
+    ctx.fillText("Δ response", w / 2, h - 2);
+
+    // Mean + CI label
+    ctx.fillStyle = "#1a1416";
+    ctx.font = "bold 10px 'JetBrains Mono'";
+    ctx.textAlign = "center";
+    ctx.fillText(
+      `μ=${mu.toFixed(2)}  90% CI [${ciLo.toFixed(2)}, ${ciHi.toFixed(2)}]`,
+      w / 2,
+      plotT - 2,
+    );
+    if (!posteriorMatched) {
+      ctx.fillStyle = "#9a8e75";
+      ctx.font = "8px 'JetBrains Mono'";
+      ctx.fillText("σ estimated (no NUTS posterior matched)", w / 2, plotT + 10);
+    }
+  }, [scenarios, activeIdx, nutsData]);
 
   const handleSliderChange = useCallback((variable: string, value: number) => {
     setSliders((prev) => prev.map((s) => s.variable === variable ? { ...s, value } : s));
@@ -212,6 +310,28 @@ export default function ScenariosPage() {
       notify("error", e instanceof Error ? e.message : "Scenario computation failed");
     }
   }, [notify]);
+
+  const refreshLibrary = useCallback(() => {
+    getScenarioLibrary().then(setLibrary).catch(() => setLibrary(null));
+  }, []);
+
+  useEffect(() => { refreshLibrary(); }, [refreshLibrary]);
+
+  const handleSaveActiveToLibrary = useCallback(async () => {
+    const sc = scenarios[activeIdx];
+    if (!sc) { notify("warning", "No scenario selected"); return; }
+    try {
+      const entry = await appendScenarioToLibrary(
+        { name: sc.name, interventions: sc.interventions, delta: sc.delta, status: sc.status },
+        { author: libAuthor, comment: libComment || sc.name, parent_id: libParent },
+      );
+      notify("success", `Saved → ${entry.id}`);
+      setLibComment("");
+      refreshLibrary();
+    } catch (err) {
+      notify("error", err instanceof Error ? err.message : String(err));
+    }
+  }, [scenarios, activeIdx, libAuthor, libComment, libParent, notify, refreshLibrary]);
 
   return (
     <div>
@@ -452,6 +572,77 @@ export default function ScenariosPage() {
           </Card>
         </div>
       )}
+
+      <Card
+        title="Versioned scenario library"
+        subtitle={library ? `${library.count} entr${library.count === 1 ? "y" : "ies"} · append-only journal` : "loading…"}
+        actions={
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input
+              value={libAuthor}
+              onChange={(e) => setLibAuthor(e.target.value)}
+              placeholder="author"
+              style={{ fontSize: 11, padding: "3px 6px", borderRadius: 3, border: "1px solid var(--line)", width: 80, fontFamily: "'JetBrains Mono', monospace" }}
+            />
+            <input
+              value={libComment}
+              onChange={(e) => setLibComment(e.target.value)}
+              placeholder="comment (optional)"
+              style={{ fontSize: 11, padding: "3px 6px", borderRadius: 3, border: "1px solid var(--line)", width: 220 }}
+            />
+            <Btn small primary onClick={handleSaveActiveToLibrary}>Save active</Btn>
+          </div>
+        }
+      >
+        {!library || library.count === 0 ? (
+          <div style={{ fontSize: 11, color: "var(--muted)" }}>
+            No saved entries. Pick a scenario above and click "Save active" to seed the library.
+          </div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <thead>
+                <tr style={{ background: "#fdf6e9" }}>
+                  {["", "id", "parent", "author", "comment", "name", "created"].map((h) => (
+                    <th key={h} style={{ ...thStyle, textAlign: "left" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {library.entries.slice().reverse().map((e) => {
+                  const sc = (e.scenario as { name?: string }) || {};
+                  const selected = libParent === e.id;
+                  return (
+                    <tr key={e.id} style={{ borderBottom: "1px dotted var(--line)", background: selected ? "rgba(91,58,140,.06)" : undefined }}>
+                      <td style={tdStyle}>
+                        <input
+                          type="radio"
+                          name="lib-parent"
+                          checked={selected}
+                          onChange={() => setLibParent(e.id)}
+                          title="branch from this entry"
+                        />
+                      </td>
+                      <td style={tdStyle} className="mono">{e.id}</td>
+                      <td style={tdStyle} className="mono">{e.parent_id || "—"}</td>
+                      <td style={tdStyle}>{e.author}</td>
+                      <td style={tdStyle}>{e.comment || <span style={{ color: "var(--muted)" }}>—</span>}</td>
+                      <td style={tdStyle}>{sc.name || "—"}</td>
+                      <td style={tdStyle} className="mono">{e.created_utc.slice(0, 19).replace("T", " ")}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {libParent && (
+              <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 6 }}>
+                Branching from <span className="mono">{libParent}</span> ·{" "}
+                <button onClick={() => setLibParent(null)} style={{ background: "none", border: 0, color: "var(--purple)", textDecoration: "underline", cursor: "pointer", fontSize: 10.5 }}>clear</button>
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
     </div>
   );
 }

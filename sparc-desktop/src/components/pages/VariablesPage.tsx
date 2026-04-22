@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SectionHeader, Card, Stat, Tag, Btn, StatGrid, thStyle, tdStyle } from "@/components/ui/DesignSystem";
-import { getConfig, dataSummary, dataPreview, saveConfig } from "@/lib/api";
+import { getConfig, dataSummary, dataPreview, dataGeoJson, saveConfig } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
+import SpatialMap from "@/components/map/SpatialMap";
+import type { GeoJsonData } from "@/lib/types";
 
 interface VariableInfo {
   name: string;
@@ -21,6 +23,9 @@ export default function VariablesPage() {
   const [variables, setVariables] = useState<VariableInfo[]>([]);
   const [filter, setFilter] = useState<string>("");
   const [sortBy, setSortBy] = useState<"name" | "corr">("corr");
+  const [selectedVar, setSelectedVar] = useState<string>("");
+  const [selectedGeo, setSelectedGeo] = useState<GeoJsonData | null>(null);
+  const [geoLoading, setGeoLoading] = useState(false);
   const { notify } = useNotification();
 
   useEffect(() => {
@@ -88,6 +93,23 @@ export default function VariablesPage() {
     setVariables((prev) => prev.map((v) => v.name === name ? { ...v, selected: !v.selected } : v));
   }, []);
 
+  // Auto-select first numeric predictor for the spatial preview.
+  useEffect(() => {
+    if (selectedVar || variables.length === 0) return;
+    const firstNumeric = variables.find((v) => v.type !== "str" && v.role !== "id");
+    if (firstNumeric) setSelectedVar(firstNumeric.name);
+  }, [variables, selectedVar]);
+
+  // Refetch GeoJSON whenever the highlighted variable changes.
+  useEffect(() => {
+    if (!selectedVar) { setSelectedGeo(null); return; }
+    setGeoLoading(true);
+    dataGeoJson(selectedVar)
+      .then((g) => setSelectedGeo(g))
+      .catch(() => setSelectedGeo(null))
+      .finally(() => setGeoLoading(false));
+  }, [selectedVar]);
+
   const handleSave = useCallback(async () => {
     const selected = variables.filter((v) => v.selected && v.role === "predictor").map((v) => v.name);
     try {
@@ -122,6 +144,7 @@ export default function VariablesPage() {
         <Stat label="Max |ρ|" value={maxCorr.toFixed(3)} tint="var(--amber)" />
       </StatGrid>
 
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.6fr) minmax(280px, 1fr)", gap: 14 }}>
       <Card
         title="Variable ledger"
         subtitle={
@@ -183,12 +206,22 @@ export default function VariablesPage() {
           </thead>
           <tbody>
             {sorted.map((v) => (
-              <tr key={v.name} style={{ borderTop: "1px solid var(--line)", opacity: v.selected ? 1 : 0.5 }}>
+              <tr
+                key={v.name}
+                onClick={() => setSelectedVar(v.name)}
+                style={{
+                  borderTop: "1px solid var(--line)",
+                  opacity: v.selected ? 1 : 0.5,
+                  background: v.name === selectedVar ? "#fff8ef" : undefined,
+                  cursor: "pointer",
+                }}
+              >
                 <td style={tdStyle}>
                   <input
                     type="checkbox"
                     checked={v.selected}
                     onChange={() => handleToggle(v.name)}
+                    onClick={(e) => e.stopPropagation()}
                     disabled={v.role === "target"}
                     style={{ accentColor: "var(--crimson)" }}
                   />
@@ -229,6 +262,31 @@ export default function VariablesPage() {
         </table>
         )}
       </Card>
+
+      <Card
+        title="Spatial preview"
+        subtitle={selectedVar ? `${selectedVar}${geoLoading ? " · loading…" : ""}` : "click a row to colour the map"}
+      >
+        <div style={{ height: 360, borderRadius: 4, overflow: "hidden", border: "1px solid var(--line)" }}>
+          {selectedGeo && selectedVar ? (
+            <SpatialMap
+              geojson={selectedGeo}
+              colorField={selectedVar}
+              mode="scatter"
+              height="100%"
+              palette="sparc"
+            />
+          ) : (
+            <div style={{
+              display: "flex", height: "100%", alignItems: "center", justifyContent: "center",
+              color: "var(--muted)", fontSize: 12, background: "#faf8f4",
+            }}>
+              {selectedVar ? "No spatial data for this variable" : "Select a variable from the ledger"}
+            </div>
+          )}
+        </div>
+      </Card>
+      </div>
     </div>
   );
 }
