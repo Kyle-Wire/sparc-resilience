@@ -77,6 +77,31 @@ export const validateProject = (path: string) =>
 export const initProject = (template: string, output: string) =>
   post<InitResponse>(`/project/init?template=${encodeURIComponent(template)}&output=${encodeURIComponent(output)}`);
 
+/**
+ * Create a project from the wizard payload — combines `init` (scaffold from
+ * template) + structured edits to `project.yml` (identity + CRS) in one call.
+ * The server handles template hygiene: only fields the wizard captures are
+ * written, plus the template's seeded physics/DAG defaults (which are visible
+ * and editable on their pages).
+ */
+export interface CreateProjectPayload {
+  template: string;
+  output: string;
+  identity: {
+    name: string;
+    description?: string;
+    author?: string;
+    response_units?: string;
+  };
+  crs: {
+    input: string;
+    projected: string;
+  };
+}
+
+export const createProject = (payload: CreateProjectPayload) =>
+  post<InitResponse>("/project/create", payload);
+
 export const listTemplates = () =>
   get<{ templates: TemplateInfo[] }>("/project/templates");
 
@@ -99,6 +124,25 @@ export const checkCrsDistortion = (inputEpsg: string, projectedEpsg: string) =>
   }>(`/crs/distortion?input_epsg=${encodeURIComponent(inputEpsg)}&projected_epsg=${encodeURIComponent(projectedEpsg)}`);
 
 export const dataPreview = (n = 50) => get<DataPreview>(`/data/preview?n=${n}`);
+
+export interface DataHistogram {
+  variable: string;
+  bins: number[];
+  edges: number[];
+  n_total: number;
+  n_finite: number;
+  n_missing: number;
+  min: number | null;
+  max: number | null;
+  mean: number | null;
+  std: number | null;
+}
+
+/** Server-side histogram — single pass on backend, returns ~bins ints. */
+export const dataHistogram = (variable: string, bins = 40) =>
+  get<DataHistogram>(
+    `/data/histogram?variable=${encodeURIComponent(variable)}&bins=${bins}`,
+  );
 
 export const dataGeoJson = (variable?: string) =>
   get<GeoJsonData>(variable ? `/data/geojson?variable=${encodeURIComponent(variable)}` : "/data/geojson");
@@ -534,6 +578,50 @@ export const decisionUncertainty = (body: {
   n_draws?: number;
   seed?: number | null;
 }) => post<UncertaintyResponse>("/decision/uncertainty", body);
+
+// ------------------------------------------------------------------
+// Budget-constrained intervention allocation (greedy / 2-opt / MILP)
+// ------------------------------------------------------------------
+export interface BudgetOptimizeRequest {
+  budget: number;
+  benefit_source: "cate" | "local_coef" | "uniform";
+  variable?: string;
+  cost_column?: string;
+  x_max_column?: string;
+  solver?: "greedy" | "greedy_2opt" | "milp" | "auto";
+  pareto_sweep?: boolean;
+}
+
+export interface BudgetResult {
+  allocation: number[];
+  total_benefit: number;
+  total_cost: number;
+  budget: number;
+  n_treated: number;
+  n_fully_treated: number;
+  gini: number;
+  solver: string;
+  solve_time_s: number;
+  notes?: string;
+}
+
+export interface BudgetParetoPoint {
+  budget: number;
+  total_benefit: number;
+  n_treated: number;
+  gini: number;
+}
+
+export interface BudgetOptimizeResponse {
+  result: BudgetResult;
+  n_cells: number;
+  benefit_source: string;
+  benefit_description: string;
+  pareto?: { points: BudgetParetoPoint[] };
+}
+
+export const optimizeBudget = (req: BudgetOptimizeRequest) =>
+  post<BudgetOptimizeResponse>("/scenarios/budget/optimize", req);
 
 // ------------------------------------------------------------------
 // Data preparation (raster + fishnet + zonal stats)

@@ -18,7 +18,10 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, Optional
+
+import numpy as np
+from pydantic import BaseModel, Field
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Query, Body, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -317,6 +320,79 @@ async def init_project(
     }
 
 
+@app.post("/project/create")
+async def create_project(payload: dict[str, Any] = Body(...)):
+    """
+    Create a project from the wizard payload.
+
+    Combines template scaffolding with structured edits to ``project.yml``
+    so the YAML reflects exactly what the user entered in the wizard
+    (no leaked template defaults). Required keys:
+
+      - template: str
+      - output:   str (absolute path or relative dir name)
+      - identity: {name, description?, author?, response_units?}
+      - crs:      {input, projected}
+    """
+    import yaml
+
+    template = payload.get("template", "blank")
+    output = payload.get("output")
+    identity = payload.get("identity") or {}
+    crs = payload.get("crs") or {}
+
+    if not output:
+        raise HTTPException(400, "output directory is required")
+    if not identity.get("name"):
+        raise HTTPException(400, "identity.name is required")
+    if not crs.get("input") or not crs.get("projected"):
+        raise HTTPException(400, "crs.input and crs.projected are required")
+
+    source = TEMPLATES_DIR / template
+    if not source.exists():
+        available = [d.name for d in TEMPLATES_DIR.iterdir() if d.is_dir()]
+        raise HTTPException(404, f"Template '{template}' not found. Available: {available}")
+
+    dest = Path(output).resolve()
+    dest.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, dest, dirs_exist_ok=True)
+
+    yml_path = dest / "project.yml"
+    if yml_path.exists():
+        with open(yml_path, "r", encoding="utf-8") as fh:
+            cfg = yaml.safe_load(fh) or {}
+    else:
+        cfg = {}
+
+    # Merge wizard identity into project block (preserve any template-seeded keys)
+    proj = cfg.get("project") or {}
+    proj["name"] = identity["name"]
+    if "description" in identity:
+        proj["description"] = identity.get("description") or ""
+    proj["domain"] = template
+    if "author" in identity:
+        proj["author"] = identity.get("author") or ""
+    if "response_units" in identity:
+        proj["response_units"] = identity.get("response_units") or ""
+    cfg["project"] = proj
+
+    # Merge CRS
+    cfg_crs = cfg.get("crs") or {}
+    cfg_crs["input"] = crs["input"]
+    cfg_crs["projected"] = crs["projected"]
+    cfg["crs"] = cfg_crs
+
+    with open(yml_path, "w", encoding="utf-8") as fh:
+        yaml.dump(cfg, fh, default_flow_style=False, sort_keys=False)
+
+    return {
+        "status": "created",
+        "template": template,
+        "path": str(dest),
+        "project_yml": str(yml_path),
+    }
+
+
 @app.get("/project/templates")
 async def list_templates():
     """List available domain templates."""
@@ -383,6 +459,63 @@ async def data_preview(n: int = Query(50, ge=1, le=500)):
     if hasattr(df, "geometry"):
         df = pd.DataFrame(df.drop(columns="geometry"))
     return {"rows": df.to_dict(orient="records"), "total": len(state.data)}
+
+
+@app.get("/data/histogram")
+async def data_histogram(
+    variable: str = Query(..., description="Column name"),
+    bins: int = Query(40, ge=4, le=200),
+):
+    """
+    Server-side histogram for any numeric column. Single pass via numpy;
+    returns ~`bins` ints + edges regardless of dataset size. No client-side
+    downsampling needed.
+    """
+    if state.data is None:
+        raise HTTPException(400, "No data loaded.")
+    if variable not in state.data.columns:
+        raise HTTPException(404, f"Column '{variable}' not found")
+
+    import numpy as np
+    import pandas as pd
+
+    col = state.data[variable]
+    if not pd.api.types.is_numeric_dtype(col):
+        raise HTTPException(400, f"Column '{variable}' is not numeric")
+
+    arr = col.to_numpy(dtype="float64", copy=False)
+    finite = arr[np.isfinite(arr)]
+    n_total = int(arr.size)
+    n_finite = int(finite.size)
+    n_missing = n_total - n_finite
+
+    if n_finite == 0:
+        return {
+            "variable": variable,
+            "bins": [],
+            "edges": [],
+            "n_total": n_total,
+            "n_finite": 0,
+            "n_missing": n_missing,
+            "min": None,
+            "max": None,
+            "mean": None,
+            "std": None,
+        }
+
+    counts, edges = np.histogram(finite, bins=bins)
+    return {
+        "variable": variable,
+        "bins": counts.tolist(),
+        "edges": edges.tolist(),
+        "n_total": n_total,
+        "n_finite": n_finite,
+        "n_missing": n_missing,
+        "min": float(finite.min()),
+        "max": float(finite.max()),
+        "mean": float(finite.mean()),
+        "std": float(finite.std(ddof=1)) if n_finite > 1 else 0.0,
+    }
 
 
 @app.get("/crs/distortion")
@@ -2807,6 +2940,187 @@ async def scenario_results(format: str = Query("geojson", regex="^(json|geojson)
         return _to_json(result["summary"])
 
     return _to_json(result)
+
+
+# ------------------------------------------------------------------
+# Budget-constrained intervention allocation
+# ------------------------------------------------------------------
+
+class BudgetOptimizeRequest(BaseModel):
+    """User-facing request for the budget optimizer.
+
+    Source semantics
+    ----------------
+    `benefit_source` decides where per-cell unit benefits come from:
+
+    - "cate"           — NUTS posterior CATE multiplier for `variable`
+                         (most defensible — it's the dose-response slope
+                         tied to the causal model).
+    - "local_coef"     — PDE/MGWR local coefficient for `variable`. Use
+                         when the causal posterior isn't available but a
+                         physics-checked local sensitivity is.
+    - "uniform"        — every cell has unit benefit 1.0. Useful only as
+                         a sanity check / equity reference.
+    """
+
+    budget: float = Field(..., gt=0, description="Total budget cap in cost units.")
+    benefit_source: Literal["cate", "local_coef", "uniform"] = "cate"
+    variable: Optional[str] = Field(
+        None,
+        description="Treatment variable (required for cate / local_coef sources).",
+    )
+    cost_column: Optional[str] = Field(
+        None,
+        description="Column in the active dataset holding per-cell unit cost.",
+    )
+    x_max_column: Optional[str] = Field(
+        None,
+        description="Column with per-cell maximum allocation (defaults to 1.0).",
+    )
+    solver: Literal["greedy", "greedy_2opt", "milp", "auto"] = "auto"
+    pareto_sweep: bool = Field(
+        True,
+        description="Whether to additionally sweep the budget for the Pareto frontier.",
+    )
+
+
+def _resolve_benefits(
+    source: str,
+    variable: Optional[str],
+) -> tuple[np.ndarray, str]:
+    """Pull a per-cell benefit vector from the configured source."""
+    import pandas as pd
+
+    if source == "uniform":
+        # Uniform requires a known cell count — derive from the active dataset.
+        if state.project_config is None:
+            raise HTTPException(400, "No project loaded.")
+        cfg = state.project_config
+        data_file = cfg.get("data", {}).get("file_path", cfg.get("paths", {}).get("raw_csv_path"))
+        if not data_file:
+            raise HTTPException(400, "Cannot determine cell count without a loaded dataset.")
+        n = len(pd.read_csv(data_file))
+        return np.ones(n, dtype=float), "uniform unit benefits (1.0 per cell)"
+
+    if not variable:
+        raise HTTPException(400, f"benefit_source='{source}' requires `variable`.")
+
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded.")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception:
+        raise HTTPException(404, "Cannot resolve output paths.")
+
+    if source == "cate":
+        # NUTS-derived CATE multiplier for `variable`. Keys: f"cate_multipliers_{var}.csv"
+        cate_csv = paths.stage3_dir / f"cate_multipliers_{variable}.csv"
+        if not cate_csv.exists():
+            cate_csv = paths.stage3_dir / "spatial_cate_maps.gpkg"
+            if not cate_csv.exists():
+                raise HTTPException(
+                    404,
+                    f"CATE for '{variable}' not available — run NUTS posterior first.",
+                )
+            import geopandas as gpd
+            gdf = gpd.read_file(cate_csv)
+            col = f"cate_{variable}"
+            if col not in gdf.columns:
+                raise HTTPException(404, f"CATE column '{col}' not in spatial_cate_maps.gpkg")
+            vals = gdf[col].to_numpy(dtype=float)
+        else:
+            df = pd.read_csv(cate_csv)
+            col = next((c for c in df.columns if c not in ("geometry",)), None)
+            if col is None:
+                raise HTTPException(404, "CATE CSV has no usable column.")
+            vals = df[col].to_numpy(dtype=float)
+        return vals, f"CATE multiplier for '{variable}'"
+
+    if source == "local_coef":
+        coef_csv = paths.stage2_dir / "base_models_full" / "mgwr_local_coefficients.csv"
+        if not coef_csv.exists():
+            coef_csv = paths.stage2_dir / "base_models_full" / "gwr_local_coefficients.csv"
+        if not coef_csv.exists():
+            raise HTTPException(404, "MGWR/GWR local coefficients not available — run Stage 2b first.")
+        df = pd.read_csv(coef_csv)
+        if variable not in df.columns:
+            raise HTTPException(404, f"Variable '{variable}' not in local coefficient table.")
+        return df[variable].to_numpy(dtype=float), f"MGWR/GWR local coefficient for '{variable}'"
+
+    raise HTTPException(400, f"Unknown benefit_source: {source}")
+
+
+def _resolve_per_cell_column(column: Optional[str], n_cells: int, default: float) -> np.ndarray:
+    """Read a per-cell vector from the active dataset's CSV, or fall back to default."""
+    if column is None:
+        return np.full(n_cells, default, dtype=float)
+    if state.project_config is None:
+        return np.full(n_cells, default, dtype=float)
+    cfg = state.project_config
+    data_file = cfg.get("data", {}).get("file_path", cfg.get("paths", {}).get("raw_csv_path"))
+    if not data_file:
+        return np.full(n_cells, default, dtype=float)
+    import pandas as pd
+    df = pd.read_csv(data_file)
+    if column not in df.columns:
+        raise HTTPException(404, f"Column '{column}' not in dataset.")
+    vals = df[column].to_numpy(dtype=float)[:n_cells]
+    if len(vals) < n_cells:
+        # Pad with default for any missing rows
+        vals = np.concatenate([vals, np.full(n_cells - len(vals), default)])
+    return vals
+
+
+@app.post("/scenarios/budget/optimize")
+async def budget_optimize(req: BudgetOptimizeRequest):
+    """Allocate `req.budget` across cells to maximise expected benefit.
+
+    Returns the allocation, summary statistics (total benefit/cost, Gini,
+    counts of treated/fully-treated cells), the solver used, and — if
+    requested — a Pareto sweep at multiple budget multipliers.
+
+    The benefit signal is taken from the user-selected source (defensibility
+    order: CATE > local_coef > uniform). Cost defaults to 1.0 per cell;
+    pass `cost_column` to use a real cost surface.
+    """
+    from sparc.scenario.budget import optimize as _opt, pareto_sweep as _sweep
+
+    benefits, benefit_desc = _resolve_benefits(req.benefit_source, req.variable)
+    n_cells = int(benefits.size)
+    if n_cells == 0:
+        raise HTTPException(404, "No cells in benefit source.")
+
+    costs = _resolve_per_cell_column(req.cost_column, n_cells, default=1.0)
+    x_max = _resolve_per_cell_column(req.x_max_column, n_cells, default=1.0)
+
+    result = _opt(
+        benefits=benefits,
+        budget=req.budget,
+        costs=costs,
+        x_max=x_max,
+        solver=req.solver,
+    )
+
+    out: dict = {
+        "result": result.to_dict(),
+        "n_cells": n_cells,
+        "benefit_source": req.benefit_source,
+        "benefit_description": benefit_desc,
+    }
+
+    if req.pareto_sweep:
+        sweep = _sweep(
+            benefits=benefits,
+            budget=req.budget,
+            costs=costs,
+            x_max=x_max,
+            solver=req.solver,
+        )
+        out["pareto"] = sweep.to_dict()
+
+    return out
 
 
 # ------------------------------------------------------------------

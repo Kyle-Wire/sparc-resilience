@@ -28,6 +28,29 @@ interface VariableBound {
   max: string;
 }
 
+type BcType = "none" | "dirichlet" | "neumann" | "robin";
+interface BoundaryConditions {
+  type: BcType;
+  // Dirichlet: fixed value at boundary (e.g. ambient temperature)
+  value: string;
+  // Neumann: flux (e.g. heat flux W/m²)
+  flux: string;
+  // Robin: h (convective coefficient) and T_inf (ambient)
+  h: string;
+  t_inf: string;
+  // loss weight for the BC term
+  weight: string;
+}
+
+const BC_DEFAULTS: BoundaryConditions = {
+  type: "none",
+  value: "",
+  flux: "0",
+  h: "10",
+  t_inf: "",
+  weight: "0.10",
+};
+
 const PDE_DEFAULTS: PdeWeights = {
   heat_diffusion: 1.0,
   energy_balance: 0.50,
@@ -54,6 +77,7 @@ export default function PhysicsPage() {
   const [constraints, setConstraints] = useState<MonotoneConstraint[]>([]);
   const [pdeWeights, setPdeWeights] = useState<PdeWeights>({ ...PDE_DEFAULTS });
   const [variableBounds, setVariableBounds] = useState<VariableBound[]>([]);
+  const [bc, setBc] = useState<BoundaryConditions>({ ...BC_DEFAULTS });
   const [selectedVar, setSelectedVar] = useState<string>("");
   const [pdpData, setPdpData] = useState<PdpCurves | null>(null);
   const curveCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -93,6 +117,18 @@ export default function PhysicsPage() {
           return { variable: k, min: b.min != null ? String(b.min) : "", max: b.max != null ? String(b.max) : "" };
         });
         setVariableBounds(newBounds);
+
+        // Load boundary conditions
+        const bcCfg = (physics as any).boundary_conditions ?? {};
+        const bcType = (bcCfg.type ?? "none") as BcType;
+        setBc({
+          type: ["none", "dirichlet", "neumann", "robin"].includes(bcType) ? bcType : "none",
+          value: bcCfg.value != null ? String(bcCfg.value) : "",
+          flux: bcCfg.flux != null ? String(bcCfg.flux) : "0",
+          h: bcCfg.h != null ? String(bcCfg.h) : "10",
+          t_inf: bcCfg.t_inf != null ? String(bcCfg.t_inf) : "",
+          weight: bcCfg.weight != null ? String(bcCfg.weight) : "0.10",
+        });
       })
       .catch(() => {});
 
@@ -200,19 +236,32 @@ export default function PhysicsPage() {
         max: b.max !== "" ? parseFloat(b.max) : null,
       };
     }
+    const parseNum = (s: string): number | null => {
+      if (s === "" || s == null) return null;
+      const n = parseFloat(s);
+      return Number.isFinite(n) ? n : null;
+    };
+    const bcPayload: Record<string, unknown> = { type: bc.type, weight: parseNum(bc.weight) ?? 0.1 };
+    if (bc.type === "dirichlet") bcPayload.value = parseNum(bc.value);
+    if (bc.type === "neumann") bcPayload.flux = parseNum(bc.flux);
+    if (bc.type === "robin") {
+      bcPayload.h = parseNum(bc.h);
+      bcPayload.t_inf = parseNum(bc.t_inf);
+    }
     try {
       await saveConfig({
         physics: {
           monotone_constraints: mc,
           pde_weights: pdeWeights,
           variable_bounds: bounds,
+          boundary_conditions: bcPayload,
         } as any,
       });
       notify("success", "Physics settings saved");
     } catch {
       notify("error", "Failed to save physics settings");
     }
-  }, [constraints, pdeWeights, variableBounds, notify]);
+  }, [constraints, pdeWeights, variableBounds, bc, notify]);
 
   const handleAddBound = () => {
     setVariableBounds((prev) => [...prev, { variable: "", min: "", max: "" }]);
@@ -446,6 +495,152 @@ export default function PhysicsPage() {
           </div>
         </Card>
       </div>
+
+      {/* Row 3: Boundary conditions */}
+      <div style={{ marginTop: 14 }}>
+        <Card
+          title="Boundary conditions"
+          subtitle="physics-informed constraint applied at domain edges · detected automatically from fishnet"
+        >
+          <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 14 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {([
+                { id: "none", label: "None", hint: "no BC loss" },
+                { id: "dirichlet", label: "Dirichlet", hint: "fixed value  T = Tᵇ" },
+                { id: "neumann", label: "Neumann", hint: "flux  ∂T/∂n = q" },
+                { id: "robin", label: "Robin", hint: "convective  −k∇T·n = h(T − T∞)" },
+              ] as const).map((opt) => (
+                <button
+                  key={opt.id}
+                  onClick={() => setBc((prev) => ({ ...prev, type: opt.id }))}
+                  style={{
+                    textAlign: "left",
+                    padding: "8px 10px",
+                    border: "1px solid " + (bc.type === opt.id ? "var(--crimson)" : "var(--line)"),
+                    background: bc.type === opt.id ? "rgba(231,60,37,0.05)" : "#fff",
+                    borderRadius: 5,
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                  }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>{opt.label}</div>
+                  <div className="mono" style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
+                    {opt.hint}
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <div>
+              {bc.type === "none" && (
+                <div style={{ color: "var(--muted)", fontSize: 12, fontStyle: "italic", padding: "20px 10px" }}>
+                  No boundary constraint applied. PDE loss will not penalize behaviour at the
+                  fishnet edge. Suitable when the study area is large relative to edge effects
+                  or when the outcome has no meaningful boundary value.
+                </div>
+              )}
+
+              {bc.type === "dirichlet" && (
+                <div style={{ display: "grid", gap: 10 }}>
+                  <BcField
+                    label="Boundary value  Tᵇ"
+                    hint="fixed value at edge (e.g. ambient temperature °C)"
+                    value={bc.value}
+                    onChange={(v) => setBc((prev) => ({ ...prev, value: v }))}
+                    placeholder="e.g. 24.0"
+                  />
+                  <BcField
+                    label="BC loss weight  λᴾᶜ"
+                    hint="multiplier for BC loss term (relative to diffusion)"
+                    value={bc.weight}
+                    onChange={(v) => setBc((prev) => ({ ...prev, weight: v }))}
+                    placeholder="0.10"
+                  />
+                </div>
+              )}
+
+              {bc.type === "neumann" && (
+                <div style={{ display: "grid", gap: 10 }}>
+                  <BcField
+                    label="Boundary flux  q"
+                    hint="normal-derivative value (0 → insulated / no-flux)"
+                    value={bc.flux}
+                    onChange={(v) => setBc((prev) => ({ ...prev, flux: v }))}
+                    placeholder="0.0"
+                  />
+                  <BcField
+                    label="BC loss weight  λᴾᶜ"
+                    hint="multiplier for BC loss term"
+                    value={bc.weight}
+                    onChange={(v) => setBc((prev) => ({ ...prev, weight: v }))}
+                    placeholder="0.10"
+                  />
+                </div>
+              )}
+
+              {bc.type === "robin" && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <BcField
+                    label="Convective coef.  h"
+                    hint="surface heat-transfer (W m⁻² K⁻¹)"
+                    value={bc.h}
+                    onChange={(v) => setBc((prev) => ({ ...prev, h: v }))}
+                    placeholder="10"
+                  />
+                  <BcField
+                    label="Ambient  T∞"
+                    hint="far-field reference value"
+                    value={bc.t_inf}
+                    onChange={(v) => setBc((prev) => ({ ...prev, t_inf: v }))}
+                    placeholder="e.g. 24.0"
+                  />
+                  <BcField
+                    label="BC loss weight  λᴾᶜ"
+                    hint="multiplier for BC loss term"
+                    value={bc.weight}
+                    onChange={(v) => setBc((prev) => ({ ...prev, weight: v }))}
+                    placeholder="0.10"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function BcField({
+  label, hint, value, onChange, placeholder,
+}: {
+  label: string;
+  hint: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
+        <span style={{ fontSize: 11.5, fontWeight: 600 }}>{label}</span>
+        <span className="mono" style={{ fontSize: 10, color: "var(--muted)" }}>{hint}</span>
+      </div>
+      <input
+        type="number"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="mono"
+        style={{
+          width: "100%",
+          padding: "6px 8px",
+          border: "1px solid var(--line)",
+          borderRadius: 4,
+          fontSize: 12,
+          fontFamily: "inherit",
+        }}
+      />
     </div>
   );
 }

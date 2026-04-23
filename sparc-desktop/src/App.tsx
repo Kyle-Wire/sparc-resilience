@@ -33,6 +33,7 @@ import ResultsPage from "@/components/pages/ResultsPage";
 import DecisionsPage from "@/components/pages/DecisionsPage";
 import ComparePage from "@/components/pages/ComparePage";
 import ReportPage from "@/components/pages/ReportPage";
+import BudgetOptimizerPage from "@/components/pages/BudgetOptimizerPage";
 import SettingsPage from "@/components/pages/SettingsPage";
 
 type AppPage = PageName | "Settings";
@@ -247,6 +248,8 @@ export default function App() {
         return <RunPage />;
       case "Results":
         return <ResultsPage />;
+      case "Budget":
+        return <BudgetOptimizerPage />;
       case "Decisions":
         return <DecisionsPage />;
       case "Compare":

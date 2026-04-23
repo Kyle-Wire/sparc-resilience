@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { SectionHeader, Card, Stat, Tag, Btn, StatGrid, thStyle, tdStyle } from "@/components/ui/DesignSystem";
 import { dataSummary, uploadData, getConfig } from "@/lib/api";
+import { Histogram } from "@/components/data/Histogram";
+import { EmptyState } from "@/components/common/EmptyState";
 import { useNotification } from "@/hooks/useNotifications";
 import type { DataSummary } from "@/lib/types";
 
@@ -85,6 +87,27 @@ export default function DataPage() {
     <div>
       <SectionHeader kicker="02 · setup" label="Data" right={<Btn small onClick={handleUpload}>Upload CSV</Btn>} />
 
+      {!summary ? (
+        <Card>
+          <EmptyState
+            tone="blank"
+            title="No data loaded yet."
+            body={
+              <>
+                Upload a <code>.csv</code>, <code>.parquet</code>, or <code>.gpkg</code> file to
+                see schema, distributions, and spatial stats. You can also build a dataset from
+                rasters and a boundary on the <strong>Processing</strong> page.
+              </>
+            }
+            action={
+              <Btn primary onClick={handleUpload}>
+                Upload data
+              </Btn>
+            }
+          />
+        </Card>
+      ) : (
+        <>
       <StatGrid>
         <Stat label="Rows" value={nRows.toLocaleString()} tint="var(--ink)" />
         <Stat label="Columns" value={String(nCols)} tint="var(--ink)" />
@@ -100,6 +123,7 @@ export default function DataPage() {
               <th style={thStyle}>Column</th>
               <th style={thStyle}>Type</th>
               <th style={thStyle}>Summary</th>
+              <th style={thStyle}>Distribution</th>
               <th style={thStyle}>Role</th>
             </tr>
           </thead>
@@ -120,6 +144,15 @@ export default function DataPage() {
                   <td style={{ ...tdStyle, color: "var(--muted)" }} className="mono">
                     {getSummaryText(col)}
                   </td>
+                  <td style={{ ...tdStyle, width: 140 }}>
+                    {getType(col).startsWith("int") || getType(col).startsWith("float") || getType(col) === "number" ? (
+                      <div style={{ width: 130 }}>
+                        <Histogram variable={col} bins={28} height={22} compact />
+                      </div>
+                    ) : (
+                      <span className="mono" style={{ fontSize: 10, color: "var(--muted)" }}>—</span>
+                    )}
+                  </td>
                   <td style={tdStyle}>
                     <Tag color={role.color}>{role.tag}</Tag>
                   </td>
@@ -129,6 +162,8 @@ export default function DataPage() {
           </tbody>
         </table>
       </Card>
+        </>
+      )}
     </div>
   );
 }

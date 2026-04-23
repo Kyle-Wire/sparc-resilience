@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { SectionHeader, Card, KeyVal, Tag, Btn } from "@/components/ui/DesignSystem";
 import { getConfig, saveConfig, listTemplates, initProject, dataSummary, getRunEvents } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
+import ProjectCreationWizard from "@/components/project/ProjectCreationWizard";
 import type { ProjectConfig, TemplateInfo, DataSummary, PipelineEvent } from "@/lib/types";
 
 const TEMPLATE_COLORS: Record<string, string> = {
@@ -81,6 +82,7 @@ export default function ProjectPage({ projectPath, onProjectLoaded }: ProjectPag
   const [templates, setTemplates] = useState<TemplateInfo[]>([]);
   const [yamlOpen, setYamlOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
   const { notify } = useNotification();
 
   useEffect(() => {
@@ -154,12 +156,23 @@ export default function ProjectPage({ projectPath, onProjectLoaded }: ProjectPag
         right={
           <div style={{ display: "flex", gap: 8 }}>
             <Btn onClick={handleOpenYml}>Open project.yml</Btn>
-            <Btn primary onClick={() => setTemplatesOpen((o) => !o)}>
-              {templatesOpen ? "Hide templates" : "New from template"}
+            <Btn onClick={() => setTemplatesOpen((o) => !o)}>
+              {templatesOpen ? "Hide templates" : "From template"}
             </Btn>
+            <Btn primary onClick={() => setWizardOpen(true)}>New project…</Btn>
           </div>
         }
       />
+
+      {wizardOpen && (
+        <ProjectCreationWizard
+          onClose={() => setWizardOpen(false)}
+          onCreated={async (path, meta) => {
+            setWizardOpen(false);
+            await onProjectLoaded(path, meta);
+          }}
+        />
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14 }}>
         {/* ---- Project Identity ---- */}

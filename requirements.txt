@@ -15,6 +15,7 @@ rasterstats>=0.19
 # Modeling
 optuna>=3.3
 pygam>=0.9
+pulp>=2.7  # exact MILP for budget optimizer (greedy fallback if missing)
 
 # Deep learning
 torch>=2.0

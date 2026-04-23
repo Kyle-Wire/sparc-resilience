@@ -130,6 +130,7 @@ export default function RunPage() {
   const { notify } = useNotification();
   const logEndRef = useRef<HTMLDivElement>(null);
   const [enabledStages, setEnabledStages] = useState<Set<number>>(new Set(STAGE_IDS));
+  const [verbosity, setVerbosity] = useState<"summary" | "normal" | "debug">("normal");
   // elapsed is derived from context so it survives page navigation
   const [, forceUpdate] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval>>(undefined);
@@ -139,9 +140,41 @@ export default function RunPage() {
     : 0;
 
   // Curated log lines derived from pipeline events
-  const logLines = pipeline.events
+  const allLogLines = pipeline.events
     .map(eventToLogLine)
     .filter(Boolean) as { text: string; level: string; ts: string }[];
+
+  // Filter by verbosity tier:
+  //   summary  — only milestones, errors, warnings, success
+  //   normal   — above + info
+  //   debug    — everything (info + debug)
+  const logLines = allLogLines.filter((line) => {
+    if (verbosity === "debug") return true;
+    if (verbosity === "normal") return line.level !== "debug";
+    return ["milestone", "error", "warn", "success"].includes(line.level);
+  });
+
+  const copyLogs = useCallback(async () => {
+    const text = allLogLines
+      .map((l) => `[${l.ts}] ${l.level.toUpperCase().padEnd(8)} ${l.text}`)
+      .join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      notify("success", `Copied ${allLogLines.length} log lines`);
+    } catch (e) {
+      notify("error", "Could not copy to clipboard");
+    }
+  }, [allLogLines, notify]);
+
+  const copyError = useCallback(async () => {
+    if (!pipeline.error) return;
+    try {
+      await navigator.clipboard.writeText(pipeline.error);
+      notify("success", "Error copied to clipboard");
+    } catch (e) {
+      notify("error", "Could not copy to clipboard");
+    }
+  }, [pipeline.error, notify]);
 
   // Auto-scroll
   useEffect(() => {
@@ -240,14 +273,98 @@ export default function RunPage() {
       </StatGrid>
 
       {pipeline.error && (
-        <div style={{ padding: "10px 14px", background: "#fff0f0", border: "1px solid #ef5350", borderRadius: 6, marginBottom: 14, fontSize: 12, color: "#c62828" }}>
-          {pipeline.error}
+        <div
+          style={{
+            padding: "10px 14px",
+            background: "#fff0f0",
+            border: "1px solid #ef5350",
+            borderRadius: 6,
+            marginBottom: 14,
+            fontSize: 12,
+            color: "#c62828",
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 12,
+            justifyContent: "space-between",
+          }}
+        >
+          <div style={{ whiteSpace: "pre-wrap", fontFamily: "'JetBrains Mono', monospace", flex: 1 }}>
+            {pipeline.error}
+          </div>
+          <button
+            onClick={copyError}
+            style={{
+              flexShrink: 0,
+              padding: "4px 10px",
+              fontSize: 10,
+              borderRadius: 4,
+              border: "1px solid #ef5350",
+              background: "#fff",
+              color: "#c62828",
+              fontFamily: "inherit",
+              cursor: "pointer",
+              fontWeight: 600,
+            }}
+            title="Copy traceback to clipboard"
+          >
+            Copy
+          </button>
         </div>
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 260px", gap: 14 }}>
         {/* Terminal output */}
-        <Card title="Terminal" subtitle={`${logLines.length} lines · ${pipeline.isRunning ? "streaming..." : "idle"}`}>
+        <Card
+          title="Terminal"
+          subtitle={
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <span>{logLines.length} lines (of {allLogLines.length}) · {pipeline.isRunning ? "streaming…" : "idle"}</span>
+              <div style={{ display: "flex", gap: 4 }}>
+                {(["summary", "normal", "debug"] as const).map((tier) => (
+                  <button
+                    key={tier}
+                    onClick={() => setVerbosity(tier)}
+                    style={{
+                      padding: "2px 8px",
+                      fontSize: 9,
+                      borderRadius: 3,
+                      border: "1px solid " + (verbosity === tier ? "var(--crimson)" : "var(--line)"),
+                      background: verbosity === tier ? "var(--crimson)" : "#fff",
+                      color: verbosity === tier ? "#fff" : "var(--ink-2)",
+                      cursor: "pointer",
+                      fontFamily: "inherit",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.05em",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {tier}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={copyLogs}
+                disabled={allLogLines.length === 0}
+                style={{
+                  padding: "2px 8px",
+                  fontSize: 9,
+                  borderRadius: 3,
+                  border: "1px solid var(--line)",
+                  background: "#fff",
+                  cursor: allLogLines.length === 0 ? "not-allowed" : "pointer",
+                  opacity: allLogLines.length === 0 ? 0.4 : 1,
+                  fontFamily: "inherit",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                  fontWeight: 600,
+                }}
+                title="Copy all log lines (regardless of verbosity filter)"
+              >
+                Copy
+              </button>
+            </div>
+          }
+        >
           <div
             style={{
               background: "#1a1416",

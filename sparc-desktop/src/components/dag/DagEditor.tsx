@@ -208,14 +208,14 @@ function mc3EdgeStyle(prob: number): { stroke: string; strokeDasharray?: string;
   return { stroke: "#9ca3af", strokeDasharray: "3,3", strokeWidth: 1 };
 }
 
-function mc3EdgesToFlow(mc3: MC3Result): Edge[] {
+function mc3EdgesToFlow(mc3: MC3Result, threshold: number = 0.10): Edge[] {
   const { node_names, edge_probs } = mc3;
   const edges: Edge[] = [];
   for (let i = 0; i < node_names.length; i++) {
     for (let j = 0; j < node_names.length; j++) {
       if (i === j) continue;
       const prob = edge_probs[i][j];
-      if (prob < 0.10) continue; // skip negligible edges
+      if (prob < threshold) continue; // skip edges below threshold
       const style = mc3EdgeStyle(prob);
       edges.push({
         id: `mc3-${node_names[i]}-${node_names[j]}`,
@@ -243,6 +243,8 @@ export default function DAGView() {
   const [loading, setLoading] = useState(true);
   const [mc3, setMc3] = useState<MC3Result | null>(null);
   const [showMc3, setShowMc3] = useState(false);
+  const [mc3Threshold, setMc3Threshold] = useState(0.30);
+  const [mc3FetchError, setMc3FetchError] = useState<string | null>(null);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -356,22 +358,22 @@ export default function DAGView() {
     return () => window.removeEventListener("keydown", onKey);
   }, [nodes, vimSelectedId, setNodes, setEdges, pushSnapshot]);
 
-  // Fetch MC³ results when DAG approval is requested
+  // Fetch MC³ results when DAG approval is requested OR user toggles overlay on
   useEffect(() => {
-    if (!dagApprovalPending) {
-      setMc3(null);
-      setShowMc3(false);
+    if (!dagApprovalPending && !showMc3) {
+      setMc3FetchError(null);
+      // Strip any stale mc3 overlay edges when toggle is off
+      setEdges((eds) => eds.filter((e) => !e.id.startsWith("mc3-")));
       return;
     }
     getMc3Result()
       .then((data) => {
         setMc3(data);
-        setShowMc3(true);
-        // Overlay MC³ edges onto the flow canvas
+        setMc3FetchError(null);
+        if (dagApprovalPending) setShowMc3(true);
         if (data) {
-          const mc3Edges = mc3EdgesToFlow(data);
+          const mc3Edges = mc3EdgesToFlow(data, mc3Threshold);
           setEdges((eds) => {
-            // Remove any previous mc3 overlay edges
             const cleaned = eds.filter((e) => !e.id.startsWith("mc3-"));
             return [...cleaned, ...mc3Edges];
           });
@@ -391,13 +393,20 @@ export default function DAGView() {
           if (newNodes.length > 0) {
             setNodes((nds) => layoutNodes([...nds, ...newNodes], edges));
           }
+        } else {
+          setMc3FetchError("No MC³ result available yet \u2014 run the pipeline through the DAG step first.");
         }
       })
-      .catch(() => {
-        // MC³ result not ready yet — will retry on next render
+      .catch((err) => {
+        setMc3(null);
+        setMc3FetchError(
+          err instanceof Error
+            ? err.message
+            : "Could not fetch MC³ result \u2014 has the pipeline reached the DAG-learning step?",
+        );
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dagApprovalPending]);
+  }, [dagApprovalPending, showMc3, mc3Threshold]);
 
   // Load MC³ after the causal stage finishes (re-fetches even if approval gate
   // was previously cleared). Also poll every 3 s while the causal stage is
@@ -742,6 +751,19 @@ export default function DAGView() {
           >
             Validate
           </button>
+          <div className="mx-1 w-px bg-sparc-gray-200" />
+          {/* MC³ overlay toggle (always available) */}
+          <button
+            onClick={() => setShowMc3((v) => !v)}
+            className={`rounded border px-3 py-1.5 text-xs font-medium ${
+              showMc3
+                ? "border-emerald-500 bg-emerald-50 text-emerald-700"
+                : "border-sparc-gray-300 hover:bg-sparc-gray-100"
+            }`}
+            title="Show MC³ posterior edge probabilities"
+          >
+            {showMc3 ? "◉ MC³ on" : "○ MC³ off"}
+          </button>
           <button
             onClick={load}
             className="rounded border border-sparc-gray-300 px-3 py-1.5 text-xs hover:bg-sparc-gray-100"
@@ -750,6 +772,38 @@ export default function DAGView() {
           </button>
         </div>
       </div>
+
+      {/* MC³ status / threshold slider */}
+      {showMc3 && (
+        <div className="flex items-center gap-3 border-b border-emerald-100 bg-emerald-50 px-4 py-2">
+          {mc3 ? (
+            <>
+              <span className="text-xs font-semibold text-emerald-800">
+                MC³ posterior · {mc3.node_names.length} nodes
+              </span>
+              <span className="text-xs text-emerald-700">
+                threshold {(mc3Threshold * 100).toFixed(0)}%
+              </span>
+              <input
+                type="range"
+                min={0.05}
+                max={0.95}
+                step={0.05}
+                value={mc3Threshold}
+                onChange={(e) => setMc3Threshold(parseFloat(e.target.value))}
+                className="flex-1 max-w-xs"
+              />
+              <span className="text-[10px] text-emerald-700">
+                showing {edges.filter((e) => e.id.startsWith("mc3-")).length} edges
+              </span>
+            </>
+          ) : mc3FetchError ? (
+            <span className="text-xs text-amber-700">⚠ {mc3FetchError}</span>
+          ) : (
+            <span className="text-xs text-emerald-700">Loading MC³ result…</span>
+          )}
+        </div>
+      )}
 
       {/* Quick edge form */}
       {quickEdge && (

@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { SectionHeader, Card, Stat, Tag, Btn, StatGrid, thStyle, tdStyle } from "@/components/ui/DesignSystem";
 import { getConfig, dataSummary, dataPreview, dataGeoJson, saveConfig } from "@/lib/api";
+import { Histogram } from "@/components/data/Histogram";
 import { useNotification } from "@/hooks/useNotifications";
 import SpatialMap from "@/components/map/SpatialMap";
 import type { GeoJsonData } from "@/lib/types";
@@ -254,7 +255,9 @@ export default function VariablesPage() {
                   {Math.abs(v.corr).toFixed(3)}
                 </td>
                 <td style={tdStyle}>
-                  <MiniHistogram data={v.sparkline} />
+                  <div style={{ width: 90 }}>
+                    <Histogram variable={v.name} bins={20} height={20} compact />
+                  </div>
                 </td>
               </tr>
             ))}
@@ -291,39 +294,3 @@ export default function VariablesPage() {
   );
 }
 
-function MiniHistogram({ data }: { data: number[] }) {
-  const ref = useRef<HTMLCanvasElement>(null);
-  useEffect(() => {
-    const canvas = ref.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const DPR = Math.min(window.devicePixelRatio || 1, 2);
-    const w = canvas.clientWidth, h = canvas.clientHeight;
-    canvas.width = w * DPR; canvas.height = h * DPR;
-    ctx.scale(DPR, DPR);
-    ctx.clearRect(0, 0, w, h);
-
-    // Bin data into 7 buckets
-    const nBins = 7;
-    const min = Math.min(...data), max = Math.max(...data);
-    const range = max - min || 1;
-    const bins = new Array(nBins).fill(0);
-    for (const v of data) {
-      const idx = Math.min(nBins - 1, Math.floor(((v - min) / range) * nBins));
-      bins[idx]++;
-    }
-    const maxBin = Math.max(1, ...bins);
-    const barW = w / nBins;
-
-    for (let i = 0; i < nBins; i++) {
-      const barH = (bins[i] / maxBin) * (h - 2);
-      ctx.fillStyle = "var(--crimson)";
-      ctx.globalAlpha = 0.5 + 0.5 * (bins[i] / maxBin);
-      ctx.fillRect(i * barW + 1, h - barH, barW - 2, barH);
-    }
-    ctx.globalAlpha = 1;
-  }, [data]);
-
-  return <canvas ref={ref} style={{ width: 70, height: 20, display: "block" }} />;
-}
