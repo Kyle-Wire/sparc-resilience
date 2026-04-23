@@ -450,10 +450,10 @@ export default function BudgetOptimizerPage() {
 
           <Card title="Run details">
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
-              <KeyVal k="Solver">{response.result.solver}</KeyVal>
-              <KeyVal k="Solve time">{(response.result.solve_time_s * 1000).toFixed(1)} ms</KeyVal>
-              <KeyVal k="Benefit source">{response.benefit_source}</KeyVal>
-              <KeyVal k="Cells">{String(response.n_cells)}</KeyVal>
+              <KeyVal label="Solver" value={response.result.solver} />
+              <KeyVal label="Solve time" value={`${(response.result.solve_time_s * 1000).toFixed(1)} ms`} />
+              <KeyVal label="Benefit source" value={response.benefit_source} />
+              <KeyVal label="Cells" value={String(response.n_cells)} />
             </div>
             {response.result.notes && (
               <p style={{ marginTop: 8, fontSize: 11, color: "var(--amber)" }}>{response.result.notes}</p>

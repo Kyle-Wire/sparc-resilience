@@ -166,7 +166,8 @@ export default function ProjectPage({ projectPath, onProjectLoaded }: ProjectPag
 
       {wizardOpen && (
         <ProjectCreationWizard
-          onClose={() => setWizardOpen(false)}
+          templates={templates}
+          onCancel={() => setWizardOpen(false)}
           onCreated={async (path, meta) => {
             setWizardOpen(false);
             await onProjectLoaded(path, meta);

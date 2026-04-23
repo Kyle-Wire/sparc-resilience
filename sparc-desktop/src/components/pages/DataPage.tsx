@@ -145,7 +145,7 @@ export default function DataPage() {
                     {getSummaryText(col)}
                   </td>
                   <td style={{ ...tdStyle, width: 140 }}>
-                    {getType(col).startsWith("int") || getType(col).startsWith("float") || getType(col) === "number" ? (
+                    {getType(col).startsWith("int") || getType(col).startsWith("float") ? (
                       <div style={{ width: 130 }}>
                         <Histogram variable={col} bins={28} height={22} compact />
                       </div>
