@@ -8,6 +8,69 @@ export interface HealthResponse {
   project_path: string | null;
   is_running: boolean;
   current_stage: number | null;
+  /** True if the run registry was successfully attached to the loaded project. */
+  manifest_loaded?: boolean;
+}
+
+// ------------------------------------------------------------------
+// Run registry (mirrors `sparc/registry/manifest.py`)
+// ------------------------------------------------------------------
+
+export type ArtifactFormat =
+  | "json" | "csv" | "parquet" | "gpkg" | "npy" | "pkl"
+  | "pt" | "png" | "txt" | "html" | "joblib" | "yaml"
+  | "geojson" | "other";
+
+export type StageStatus =
+  | "pending" | "running" | "complete" | "failed" | "partial";
+
+export interface ArtifactEntry {
+  id: string;
+  stage: string;
+  name: string;
+  /** Path relative to the project's `output_dir`. */
+  path: string;
+  format: ArtifactFormat;
+  producer?: string | null;
+  consumers: string[];
+  size_bytes?: number | null;
+  sha256?: string | null;
+  row_count?: number | null;
+  written_at?: string | null;
+  write_seconds?: number | null;
+  partial: boolean;
+  metadata: Record<string, unknown>;
+}
+
+export interface StageManifest {
+  stage: string;
+  status: StageStatus;
+  started_at?: string | null;
+  finished_at?: string | null;
+  duration_seconds?: number | null;
+  error?: string | null;
+  artifacts: Record<string, ArtifactEntry>;
+}
+
+export interface RunManifest {
+  schema_version: number;
+  run_id?: string | null;
+  project_name?: string | null;
+  config_hash?: string | null;
+  pipeline_version?: string | null;
+  started_at?: string | null;
+  updated_at?: string | null;
+  stages: Record<string, StageManifest>;
+}
+
+/** Structured 404 body returned by registry-aware result endpoints. */
+export interface MissingArtifactDetail {
+  error: "missing_artifact";
+  missing_artifact: string;
+  produced_by_stage: string;
+  expected_path?: string | null;
+  candidate_paths: string[];
+  hint: string;
 }
 
 export interface ProjectMeta {

@@ -9,15 +9,17 @@ import {
   getCausalNegativeControl,
   freezeCurrentRun,
   downloadStandaloneSnapshot,
+  parseMissingArtifact,
   type CausalSensitivity,
   type NegativeControlResponse,
 } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import { usePipeline } from "@/hooks/PipelineProvider";
+import { useManifest } from "@/hooks/useManifest";
 import SpatialMap from "@/components/map/SpatialMap";
 import LayerManager, { useContextLayers } from "@/components/map/LayerManager";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
-import type { ScenarioDetail, PdpCurves, CorrelogramData, GeoJsonData, DoseResponseData } from "@/lib/types";
+import type { ScenarioDetail, PdpCurves, CorrelogramData, GeoJsonData, DoseResponseData, MissingArtifactDetail } from "@/lib/types";
 
 // Human-readable labels for PDE-derived field columns
 const PDE_LABELS: Record<string, string> = {
@@ -51,6 +53,30 @@ export default function ResultsPage() {
   const { notify } = useNotification();
   const pipeline = usePipeline();
   const layerCtx = useContextLayers();
+  // Manifest is the single source of truth for which Results panels have
+  // data. Each panel's empty-state shows the structured hint returned by
+  // the server's `_missing_artifact_response()`.
+  const manifest = useManifest();
+
+  // Keyed by a logical panel id. When a fetch returns a structured 404,
+  // we store the detail here so the empty-state can render an actionable
+  // message rather than "no data".
+  const [panelErrors, setPanelErrors] = useState<Record<string, MissingArtifactDetail | string | null>>({});
+  const noteError = useCallback((panel: string, err: unknown) => {
+    const structured = parseMissingArtifact(err);
+    setPanelErrors((prev) => ({
+      ...prev,
+      [panel]: structured ?? (err instanceof Error ? err.message : null),
+    }));
+  }, []);
+  const clearError = useCallback((panel: string) => {
+    setPanelErrors((prev) => {
+      if (!(panel in prev)) return prev;
+      const next = { ...prev };
+      delete next[panel];
+      return next;
+    });
+  }, []);
 
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [scenarioDetail, setScenarioDetail] = useState<ScenarioDetail | null>(null);
@@ -58,6 +84,11 @@ export default function ResultsPage() {
   const [pdpData, setPdpData] = useState<PdpCurves | null>(null);
   const [correlogram, setCorrelogram] = useState<CorrelogramData | null>(null);
   const [activePdpVar, setActivePdpVar] = useState<string>("");
+  // Phase 6: which response-curve source to display.
+  // The /results/pdp_curves endpoint returns `_meta.by_source` with
+  // payloads keyed by `neural_pde`, `gwrf`, `causal_dose_response`.
+  type PdpSource = "neural_pde" | "gwrf" | "causal_dose_response";
+  const [pdpSource, setPdpSource] = useState<PdpSource | null>(null);
   const [incrVar, setIncrVar] = useState("");
   const [incrPct, setIncrPct] = useState(10);
   const [incrResult, setIncrResult] = useState<ScenarioDetail | null>(null);
@@ -150,16 +181,33 @@ export default function ResultsPage() {
         const vars = (res?.variables ?? []) as string[];
         setCateVars(vars);
         if (vars.length > 0 && !activeCateVar) setActiveCateVar(vars[0]);
+        // Server may return an actionable empty-state when no CATE
+        // multipliers exist (e.g. Bayesian-mode runs prior to the fix).
+        if (vars.length === 0 && (res as any)?.empty_reason) {
+          setPanelErrors((prev) => ({
+            ...prev,
+            cate: {
+              error: "missing_artifact",
+              missing_artifact: "cate_multiplier::*",
+              produced_by_stage: "3",
+              candidate_paths: [],
+              hint: ((res as any).empty_reason as string)
+                + ((res as any).next_action ? " " + (res as any).next_action : ""),
+            },
+          }));
+        } else {
+          clearError("cate");
+        }
       })
-      .catch(() => setCateVars([]));
+      .catch((err) => { setCateVars([]); noteError("cate", err); });
     getDoseResponseCurves()
-      .then((d) => setDoseResponse(d as DoseResponseData))
-      .catch(() => setDoseResponse(null));
+      .then((d) => { setDoseResponse(d as DoseResponseData); clearError("dose_response"); })
+      .catch((err) => { setDoseResponse(null); noteError("dose_response", err); });
     getCausalSensitivity()
       .then((s) => setSensitivity(s))
       .catch(() => setSensitivity(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [clearError, noteError]);
   useEffect(() => { loadCausal(); }, [loadCausal, pipeline.runEndedAt]);
 
   // Refetch CATE surface when the user picks a different treatment variable.
@@ -497,7 +545,21 @@ export default function ResultsPage() {
     if (!ctx) return;
     ctx.scale(DPR, DPR);
 
-    const variables = pdpData ? Object.keys(pdpData) : [];
+    const meta = (pdpData as any)?._meta as
+      | { available_sources?: string[]; by_source?: Record<string, Record<string, any>> }
+      | undefined;
+    const sources = (meta?.available_sources ?? []).filter((s) => {
+      const payload = meta?.by_source?.[s];
+      return payload && Object.keys(payload).length > 0;
+    });
+    const effective: string | null =
+      pdpSource && sources.includes(pdpSource) ? pdpSource : sources[0] ?? null;
+    const curves: Record<string, any> | null = effective
+      ? meta?.by_source?.[effective] ?? null
+      : pdpData
+      ? Object.fromEntries(Object.entries(pdpData).filter(([k]) => !k.startsWith("_")))
+      : null;
+    const variables = curves ? Object.keys(curves) : [];
     if (!variables.length) {
       ctx.fillStyle = "#6e6358";
       ctx.font = "12px Inter, sans-serif";
@@ -507,7 +569,7 @@ export default function ResultsPage() {
     }
 
     const selectedVar = activePdpVar || variables[0];
-    const curve = (pdpData as any)?.[selectedVar];
+    const curve = curves?.[selectedVar];
     const gridVals: number[] = curve?.grid_values ?? [];
     const pdpVals: number[] = curve?.pdp_values ?? [];
     const pdpStd: number[] = curve?.pdp_std ?? [];
@@ -572,7 +634,7 @@ export default function ResultsPage() {
     ctx.fillText(minP.toFixed(2), 38, h - 28);
 
     // Saturation point marker
-    const satPoint: number | null | undefined = (pdpData as any)?.[selectedVar]?.curve_fit?.saturation_point;
+    const satPoint: number | null | undefined = curves?.[selectedVar]?.curve_fit?.saturation_point;
     if (satPoint != null && Number.isFinite(satPoint) && satPoint >= minG && satPoint <= maxG) {
       const sx = 42 + ((satPoint - minG) / rG) * (w - 54);
       ctx.save();
@@ -590,7 +652,7 @@ export default function ResultsPage() {
       ctx.fillText("sat.", sx, 10);
       ctx.restore();
     }
-  }, [pdpData, activePdpVar]);
+  }, [pdpData, activePdpVar, pdpSource]);
 
   // Correlogram canvas
   useEffect(() => {
@@ -800,7 +862,24 @@ export default function ResultsPage() {
     notify("success", `${format} export started`);
   }, [notify]);
 
-  const pdpVariables = pdpData ? Object.keys(pdpData) : [];
+  // Phase 6: derive available sources + active source curves.
+  const pdpMeta = (pdpData as any)?._meta as
+    | { available_sources?: PdpSource[]; by_source?: Record<PdpSource, Record<string, any>> }
+    | undefined;
+  const availableSources: PdpSource[] = (pdpMeta?.available_sources ?? []).filter((s) => {
+    const payload = pdpMeta?.by_source?.[s];
+    return payload && Object.keys(payload).length > 0;
+  });
+  const effectiveSource: PdpSource | null =
+    pdpSource && availableSources.includes(pdpSource)
+      ? pdpSource
+      : availableSources[0] ?? null;
+  const activeCurves: Record<string, any> | null = effectiveSource
+    ? pdpMeta?.by_source?.[effectiveSource] ?? null
+    : pdpData
+    ? Object.fromEntries(Object.entries(pdpData).filter(([k]) => !k.startsWith("_")))
+    : null;
+  const pdpVariables = activeCurves ? Object.keys(activeCurves) : [];
 
   return (
     <div>
@@ -809,6 +888,12 @@ export default function ResultsPage() {
         label="Results"
         right={
           <div style={{ display: "flex", gap: 8 }}>
+            <Btn small onClick={async () => {
+              await manifest.rescan();
+              loadResults();
+              loadCausal();
+              notify("success", "Refreshed results");
+            }}>Refresh</Btn>
             <Btn small onClick={async () => {
               try {
                 const r = await freezeCurrentRun();
@@ -1067,8 +1152,28 @@ export default function ResultsPage() {
                     contextLayers={layerCtx.active}
                   />
                 ) : (
-                  <div style={{ display: "flex", height: "100%", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: 11, background: "#faf8f4" }}>
-                    {cateVars.length === 0 ? "Run causal stage to see local treatment effects (CATE)" : "Loading CATE surface…"}
+                  <div style={{ display: "flex", flexDirection: "column", height: "100%", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: 11, background: "#faf8f4", padding: 16, gap: 6, textAlign: "center" }}>
+                    {(() => {
+                      const err = panelErrors["cate"];
+                      if (err && typeof err === "object") {
+                        return (
+                          <>
+                            <div style={{ fontWeight: 600, color: "var(--ink-2)" }}>
+                              No CATE surfaces available
+                            </div>
+                            <div style={{ maxWidth: 320, lineHeight: 1.5 }}>
+                              {err.hint}
+                            </div>
+                            <div className="mono" style={{ fontSize: 9, color: "var(--muted)", marginTop: 4 }}>
+                              produced by stage {err.produced_by_stage}
+                            </div>
+                          </>
+                        );
+                      }
+                      return cateVars.length === 0
+                        ? "Run causal stage to see local treatment effects (CATE)"
+                        : "Loading CATE surface…";
+                    })()}
                   </div>
                 )}
                 <div className="mono" style={{ position: "absolute", bottom: 8, left: 8, fontSize: 8, padding: "3px 6px", background: "rgba(255,255,255,0.92)", border: "1px solid var(--line)", borderRadius: 3, color: "var(--ink-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
@@ -1177,8 +1282,43 @@ export default function ResultsPage() {
             title="Intervention response"
             subtitle={
               pdpVariables.length > 0 ? (
-                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  <span style={{ fontSize: 10, color: "var(--muted)" }}>marginal effect on target</span>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  {availableSources.length > 1 && (
+                    <div style={{ display: "flex", gap: 0, border: "1px solid var(--line)", borderRadius: 4, overflow: "hidden" }}>
+                      {availableSources.map((src) => {
+                        const label =
+                          src === "neural_pde" ? "Neural" :
+                          src === "gwrf" ? "GWRF" :
+                          src === "causal_dose_response" ? "Causal" : src;
+                        const active = effectiveSource === src;
+                        return (
+                          <button
+                            key={src}
+                            type="button"
+                            onClick={() => setPdpSource(src)}
+                            style={{
+                              fontSize: 9.5,
+                              padding: "2px 7px",
+                              border: "none",
+                              background: active ? "var(--ink)" : "transparent",
+                              color: active ? "#fff" : "var(--muted)",
+                              cursor: "pointer",
+                              fontFamily: "inherit",
+                            }}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <span style={{ fontSize: 10, color: "var(--muted)" }}>
+                    {effectiveSource === "causal_dose_response"
+                      ? "causal dose-response (Stage 3)"
+                      : effectiveSource === "gwrf"
+                      ? "GWRF condition curve (Stage 2)"
+                      : "neural PDP (Stage 2)"}
+                  </span>
                   <select
                     value={activePdpVar}
                     onChange={(e) => setActivePdpVar(e.target.value)}

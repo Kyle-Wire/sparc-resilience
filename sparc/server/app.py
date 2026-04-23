@@ -135,6 +135,63 @@ def _load_scenario_gpkg(paths) -> Any:
 
 
 # ------------------------------------------------------------------
+# Run registry helpers
+# ------------------------------------------------------------------
+
+def _attach_registry(config: dict) -> None:
+    """Attach a RunRegistry to ``state``; runs migrate_from_disk for legacy runs.
+
+    Failures here are non-fatal — endpoints fall back to disk paths.
+    """
+    try:
+        from sparc.registry import RunRegistry
+        from sparc.run.pipeline_paths import PipelinePaths
+        paths = PipelinePaths.from_config(config)
+        reg = RunRegistry(paths.output_dir, autoload=True)
+        # If the manifest is empty (legacy / freshly-loaded run), import what's
+        # already on disk so the frontend sees correct availability.
+        try:
+            reg.migrate_from_disk(paths)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: registry migration failed: {exc}")
+        state.registry = reg
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: could not attach RunRegistry: {exc}")
+        state.registry = None
+
+
+def _registry_path(stage: str | int, artifact_id: str) -> Path | None:
+    """Look up an artifact's absolute path via the registry. None if missing."""
+    reg = state.registry
+    if reg is None:
+        return None
+    entry = reg.lookup(stage, artifact_id)
+    if entry is None or entry.partial:
+        return None
+    p = reg.resolve(entry)
+    return p if p.exists() else None
+
+
+def _missing_artifact_response(
+    *,
+    artifact_id: str,
+    stage: str | int,
+    expected_paths: list[Path] | None = None,
+    hint: str = "",
+) -> HTTPException:
+    """Return a structured 404 the frontend can render as an actionable empty-state."""
+    detail = {
+        "error": "missing_artifact",
+        "missing_artifact": artifact_id,
+        "produced_by_stage": str(stage),
+        "expected_path": (str(expected_paths[0]) if expected_paths else None),
+        "candidate_paths": [str(p) for p in (expected_paths or [])],
+        "hint": hint,
+    }
+    return HTTPException(status_code=404, detail=detail)
+
+
+# ------------------------------------------------------------------
 # Startup: auto-load project if SPARC_SERVER_PROJECT env var is set
 # ------------------------------------------------------------------
 
@@ -156,6 +213,7 @@ async def _auto_load_project():
         state.project_path = str(resolved)
         state.project_config = config
         state.raw_project_yaml = raw_yaml
+        _attach_registry(config)
         _load_data_into_state(config)
         print(f"Auto-loaded project: {resolved}")
     except Exception as exc:
@@ -174,6 +232,7 @@ async def health():
         "project_path": state.project_path,
         "is_running": state.is_running,
         "current_stage": state.current_stage,
+        "manifest_loaded": state.registry is not None,
     }
 
 
@@ -238,6 +297,7 @@ async def load_project(path: str = Query(..., description="Absolute path to proj
     state.project_path = str(resolved)
     state.project_config = config
     state.raw_project_yaml = raw_yaml
+    _attach_registry(config)
 
     # Pre-load data summary if the CSV exists
     data_path = config["data"]["file_path"]
@@ -1458,9 +1518,13 @@ async def get_causal_results():
     else:
         log_lines.append("stage3_dir DOES NOT EXIST on disk")
 
-    # ── 4. Try primary file ─────────────────────────────────────────
-    coeff_path = stage3_dir / "scenario_coefficients.json"
-    log_lines.append(f"primary file: {coeff_path}  exists={coeff_path.exists()}")
+    # ── 4. Try primary file (registry first, then disk) ─────────────
+    coeff_via_registry = _registry_path("3", "scenario_coefficients")
+    coeff_path = coeff_via_registry or (stage3_dir / "scenario_coefficients.json")
+    log_lines.append(
+        f"primary file: {coeff_path}  exists={coeff_path.exists()}  "
+        f"(via_registry={coeff_via_registry is not None})"
+    )
 
     if coeff_path.exists():
         try:
@@ -1498,10 +1562,16 @@ async def get_causal_results():
     found_str = ", ".join(f.name for f in found[:20]) if found else "(directory empty or missing)"
     log_lines.append(f"ALL LOOKUPS FAILED — returning 404. Files present: {found_str}")
     _write_log()
-    raise HTTPException(
-        404,
-        f"Causal results not found. Looked in: {stage3_dir}. "
-        f"Files present: {found_str}",
+    raise _missing_artifact_response(
+        artifact_id="scenario_coefficients",
+        stage="3",
+        expected_paths=[coeff_path, diag_path],
+        hint=(
+            "Stage 3 (Causal Validation) has not produced "
+            "`scenario_coefficients.json`. Run `sparc run --stage 3` or, "
+            "if Stage 3 completed but the artifact is missing, check the "
+            "server log at `_causal_endpoint_log.txt` in the stage directory."
+        ),
     )
 
 
@@ -1519,9 +1589,22 @@ async def get_dose_response():
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
-    dr_path = paths.stage3_dir / "dose_response_curves.json"
+    dr_path = (
+        _registry_path("3", "dose_response_curves")
+        or (paths.stage3_dir / "dose_response_curves.json")
+    )
     if not dr_path.exists():
-        raise HTTPException(404, "Dose-response data not available")
+        raise _missing_artifact_response(
+            artifact_id="dose_response_curves",
+            stage="3",
+            expected_paths=[paths.stage3_dir / "dose_response_curves.json"],
+            hint=(
+                "Dose-response curves are produced by Stage 3 (Causal "
+                "Validation). They are skipped when `causal.inference: "
+                "bayesian`. Re-run Stage 3 in frequentist mode or check "
+                "the Causal Diagnostics panel for the Bayesian posterior."
+            ),
+        )
 
     with open(dr_path, "r", encoding="utf-8") as fh:
         return _json.load(fh)
@@ -1734,20 +1817,68 @@ async def get_pdp_curves():
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
-    merged: dict = {}
-    gwrf = _load_gwrf_pdp(paths)
+    gwrf = _load_gwrf_pdp(paths) or {}
+    neural = _load_neural_pdp(paths) or {}
+
+    available_sources: list[str] = []
+    if neural:
+        available_sources.append("neural_pde")
     if gwrf:
-        merged.update(gwrf)
-    neural = _load_neural_pdp(paths)
-    # Neural overrides GWRF for variables present in both
+        available_sources.append("gwrf")
+
+    # Causal dose-response (Stage 3) is also a valid source for the toggle.
+    causal_dose_path = (
+        _registry_path("3", "dose_response_curves")
+        or (paths.stage3_dir / "dose_response_curves.json")
+    )
+    causal_curves: dict = {}
+    if causal_dose_path and causal_dose_path.exists():
+        try:
+            import json as _json
+            with open(causal_dose_path, "r", encoding="utf-8") as fh:
+                cd = _json.load(fh)
+            if isinstance(cd, dict):
+                for var, curve in cd.items():
+                    if isinstance(curve, dict):
+                        curve.setdefault("source", "causal_dose_response")
+                        causal_curves[var] = curve
+            if causal_curves:
+                available_sources.append("causal_dose_response")
+        except Exception:
+            pass
+
+    # Merge for backwards compat: neural > gwrf in the flat top-level dict.
+    merged: dict = {}
+    merged.update(gwrf)
     merged.update(neural)
 
-    if not merged:
-        raise HTTPException(
-            404,
-            "PDP curve data not found. Run Stage 2 first (neural PDP "
-            "or GWRF condition curves).",
+    if not merged and not causal_curves:
+        raise _missing_artifact_response(
+            artifact_id="pdp_curves",
+            stage="2",
+            expected_paths=[
+                paths.stage2_dir / "v2_neural" / "pdp",
+                paths.stage2_dir / "gwrf_pdp" / "gwrf_condition_curves.json",
+                paths.stage3_dir / "dose_response_curves.json",
+            ],
+            hint=(
+                "No response-curve data found. Stage 2 produces neural PDP "
+                "(`v2_neural/pdp/pdp_*.csv`) and GWRF condition curves; "
+                "Stage 3 (frequentist mode) produces causal dose-response "
+                "curves. Re-run the relevant stage to populate this panel."
+            ),
         )
+
+    # Frontend can use `available_sources` to drive the source-toggle control.
+    # Source-keyed payloads let the UI show each curve family separately.
+    merged["_meta"] = {
+        "available_sources": available_sources,
+        "by_source": {
+            "neural_pde": neural,
+            "gwrf": gwrf,
+            "causal_dose_response": causal_curves,
+        },
+    }
     return merged
 
 
@@ -1819,18 +1950,22 @@ async def get_scenario_detail():
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
-    # Load scenario spatial results (check canonical name + mode-specific variants)
-    gpkg_path = None
-    for gpkg_name in (
-        "scenario_results.gpkg",
-        "scenario_results_dag.gpkg",
-        "scenario_results_hybrid.gpkg",
-        "scenario_results_reprediction.gpkg",
-    ):
-        candidate = paths.stage4_dir / gpkg_name
-        if candidate.exists():
-            gpkg_path = candidate
-            break
+    # Load scenario spatial results: registry first, then canonical/variant scan.
+    gpkg_path = (
+        _registry_path("4", "scenario_results")
+        or _registry_path("4", "scenario_results_gpkg")
+    )
+    if gpkg_path is None:
+        for gpkg_name in (
+            "scenario_results.gpkg",
+            "scenario_results_dag.gpkg",
+            "scenario_results_hybrid.gpkg",
+            "scenario_results_reprediction.gpkg",
+        ):
+            candidate = paths.stage4_dir / gpkg_name
+            if candidate.exists():
+                gpkg_path = candidate
+                break
     logger.debug("[SPARC] Scenario gpkg lookup: %s found=%s", gpkg_path, gpkg_path is not None)
     geojson_data = None
     if gpkg_path is not None:
@@ -1918,6 +2053,29 @@ async def get_scenario_detail():
             summary_df = pd.read_csv(summary_path)
             summary_data = summary_df.to_dict(orient="records")
             break
+
+    if not geojson_data and not summary_data:
+        scenarios_cfg = (state.project_config.get("scenarios") or [])
+        scenario_count = len(scenarios_cfg) if isinstance(scenarios_cfg, list) else 0
+        raise _missing_artifact_response(
+            artifact_id="scenario_results",
+            stage="4",
+            expected_paths=[
+                paths.stage4_dir / "scenario_results.gpkg",
+                paths.stage4_dir / "scenario_summary.csv",
+                paths.stage4_dir / "scenario_mc_consensus.csv",
+            ],
+            hint=(
+                f"Stage 4 should auto-run the {scenario_count} scenario(s) "
+                "defined in project.yml. If Stage 4 finished without "
+                "writing scenario results, check `scenarios.auto_run_at_stage_4` "
+                "in project.yml or run scenarios manually via the Scenario Runner."
+                if scenario_count
+                else "No `scenarios:` block found in project.yml. Define at "
+                "least one scenario, then re-run Stage 4 (or use the "
+                "Scenario Runner page)."
+            ),
+        )
 
     return {"geojson": geojson_data, "summary": summary_data}
 
@@ -2506,24 +2664,64 @@ async def get_cate_variables():
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
-    variables = []
-    # 1. Check for per-variable .npy files
-    for f in paths.stage3_dir.glob("spatial_cate_multiplier_*.npy"):
-        var = f.stem.replace("spatial_cate_multiplier_", "")
-        variables.append(var)
-    # 2. Fallback: check spatial_cate_maps.gpkg column names
+    variables: list[str] = []
+    diagnostics: dict[str, Any] = {}
+
+    # 1. Registry-first: any cate_multiplier::* artifact wins.
+    if state.registry is not None:
+        for art in state.registry.list_for_stage("3"):
+            if art.id.startswith("cate_multiplier::") and not art.partial:
+                var = art.metadata.get("variable") or art.id.split("::", 1)[1]
+                variables.append(var)
+        diagnostics["registry_hits"] = len(variables)
+
+    # 2. Fallback: per-variable .npy files on disk.
+    if not variables:
+        for f in paths.stage3_dir.glob("spatial_cate_multiplier_*.npy"):
+            variables.append(f.stem.replace("spatial_cate_multiplier_", ""))
+
+    # 3. Fallback: column names in spatial_cate_maps.gpkg.
     if not variables:
         gpkg_path = paths.stage3_dir / "spatial_cate_maps.gpkg"
         if gpkg_path.exists():
             try:
                 import geopandas as gpd
-                gdf = gpd.read_file(gpkg_path, rows=0)  # schema only
+                gdf = gpd.read_file(gpkg_path, rows=0)
                 for col in gdf.columns:
                     if col.startswith("cate_"):
                         variables.append(col.replace("cate_", "", 1))
-            except Exception:
-                pass
-    return {"variables": sorted(set(variables))}
+            except Exception as exc:
+                diagnostics["gpkg_error"] = str(exc)
+
+    # 4. Empty-state hint to help the user act on the Budget Optimizer screen.
+    sorted_vars = sorted(set(variables))
+    payload: dict[str, Any] = {"variables": sorted_vars}
+    if not sorted_vars:
+        causal_cfg = state.project_config.get("causal", {}) or {}
+        inference = (causal_cfg.get("inference") or "").lower()
+        estimate_cate = causal_cfg.get("estimate_cate", True)
+        reasons: list[str] = []
+        if not estimate_cate:
+            reasons.append("`causal.estimate_cate` is false in project.yml.")
+        if inference == "bayesian":
+            reasons.append(
+                "Bayesian inference path historically skipped CATE; this is "
+                "fixed in newer Stage 3 runs but the existing run was "
+                "produced before the fix."
+            )
+        if not reasons:
+            reasons.append(
+                "Stage 3 finished but did not write spatial CATE multipliers. "
+                "Check the DAG for at least one treatment node."
+            )
+        payload["empty_reason"] = " ".join(reasons)
+        payload["next_action"] = (
+            "Re-run Stage 3 with `causal.estimate_cate: true` and at least "
+            "one treatment in your DAG."
+        )
+    if diagnostics:
+        payload["diagnostics"] = diagnostics
+    return payload
 
 
 @app.get("/results/local_coefficients")
@@ -2746,6 +2944,73 @@ async def get_scenario_increment(variable: str = Query(...), increment: float = 
 
 
 # ------------------------------------------------------------------
+# Run registry (artifacts manifest) endpoints
+# These MUST be declared before the parameterized /results/{stage}
+# route below — FastAPI matches routes in declaration order, and the
+# parameterized handler types `stage: int`, which would otherwise
+# swallow /results/manifest with a 422.
+# ------------------------------------------------------------------
+
+@app.get("/results/manifest")
+async def get_results_manifest(
+    refresh: bool = Query(False, description="Reload from disk before returning."),
+    rescan: bool = Query(False, description="Re-run the migrate_from_disk scan."),
+):
+    """Return the full run manifest (Pydantic ``RunManifest``).
+
+    Frontend uses this to decide which Results panels to render and to
+    surface 'unavailable, produced by stage X' empty-states.
+    """
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+    if state.registry is None:
+        _attach_registry(state.project_config)
+    if state.registry is None:
+        raise HTTPException(503, "Run registry unavailable")
+
+    if refresh or rescan:
+        state.registry.load()
+        if rescan:
+            from sparc.run.pipeline_paths import PipelinePaths
+            paths = PipelinePaths.from_config(state.project_config)
+            state.registry.migrate_from_disk(paths)
+
+    return state.registry.manifest.model_dump(mode="json", exclude_none=False)
+
+
+@app.get("/results/manifest/{stage}")
+async def get_stage_manifest(stage: str):
+    """Return the per-stage manifest fragment (artifacts + status)."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+    if state.registry is None:
+        _attach_registry(state.project_config)
+    if state.registry is None:
+        raise HTTPException(503, "Run registry unavailable")
+
+    sm = state.registry.manifest.stages.get(str(stage))
+    if sm is None:
+        return {"stage": str(stage), "status": "pending", "artifacts": {}}
+    return sm.model_dump(mode="json", exclude_none=False)
+
+
+@app.post("/results/manifest/rescan")
+async def rescan_manifest():
+    """Re-walk the run directory and import any unregistered artifacts."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+    if state.registry is None:
+        _attach_registry(state.project_config)
+    if state.registry is None:
+        raise HTTPException(503, "Run registry unavailable")
+    from sparc.run.pipeline_paths import PipelinePaths
+    paths = PipelinePaths.from_config(state.project_config)
+    n = state.registry.migrate_from_disk(paths)
+    return {"newly_registered": n,
+            "total_artifacts": len(state.registry.manifest.all_artifacts())}
+
+
+# ------------------------------------------------------------------
 # Results endpoints (parameterized — MUST come after named routes above)
 # ------------------------------------------------------------------
 
@@ -2778,7 +3043,35 @@ async def get_predictions(stage: int, format: str = Query("geojson", regex="^(js
     if result is None:
         result = _try_load_from_disk(stage)
         if result is None:
-            raise HTTPException(404, f"No predictions for stage {stage}")
+            stage_artifact_hints = {
+                0: "Stage 0 (EDA) does not write per-point predictions.",
+                1: "Stage 1 (GWEN) writes feature-selection results, not predictions.",
+                2: "Stage 2 produces predictions in `optimized_oof_predictions.csv` "
+                   "and (when v2_neural runs) `v2_neural/predictions.csv`. "
+                   "Re-run Stage 2 if these are missing.",
+                3: "Stage 3 produces causal effects, not direct predictions. "
+                   "View predictions on the Stage 2 tab.",
+                4: "Stage 4 produces scenario predictions; check "
+                   "`scenario_results.gpkg` or run Stage 4.",
+            }
+            from sparc.run.pipeline_paths import PipelinePaths
+            try:
+                paths = PipelinePaths.from_config(state.project_config or {})
+                stage_dir = {
+                    0: paths.stage0_dir, 1: paths.stage1_dir, 2: paths.stage2_dir,
+                    3: paths.stage3_dir, 4: paths.stage4_dir,
+                }.get(stage)
+            except Exception:
+                stage_dir = None
+            raise _missing_artifact_response(
+                artifact_id=f"stage_{stage}_predictions",
+                stage=str(stage),
+                expected_paths=[stage_dir] if stage_dir else [],
+                hint=stage_artifact_hints.get(
+                    stage,
+                    f"No predictions registered for stage {stage}.",
+                ),
+            )
 
     if isinstance(result, dict) and "spatial" in result:
         gdf = result["spatial"]
@@ -3578,6 +3871,12 @@ async def reject_dag():
 
 # ------------------------------------------------------------------
 # Artifact download
+# ------------------------------------------------------------------
+
+# ------------------------------------------------------------------
+# Run registry endpoints — see definitions earlier in the file
+# (placed before /results/{stage} parameterized route to avoid the
+# integer-only path converter swallowing /results/manifest paths).
 # ------------------------------------------------------------------
 
 @app.get("/results/availability")

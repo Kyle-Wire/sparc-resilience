@@ -1170,13 +1170,35 @@ class CausalValidator:
         self,
         data: pd.DataFrame,
         output_dir: str,
+        *,
+        artifact_source: str = "frequentist_dml",
+        global_anchor: Optional[Dict[str, float]] = None,
     ) -> None:
         """
         Estimate spatially-varying CATE for each treatment via
         ``CausalForestDML`` and export a GeoPackage with per-cell effects.
+
+        Parameters
+        ----------
+        artifact_source
+            Tag written into the registry metadata for each CATE
+            multiplier (`frequentist_dml`, `bayesian_posterior_mean`,
+            or `uniform_fallback`). Used by the desktop UI to label
+            the source of the spatial heterogeneity.
+        global_anchor
+            Optional `{treatment: ATE}` dict (e.g. NUTS posterior mean).
+            When provided and CausalForestDML fails or has no backdoor
+            set, a uniform multiplier matching the global ATE is
+            persisted so the scenario simulator and Budget Optimizer
+            still see a usable artifact.
         """
         if not self.config.get('causal', {}).get('estimate_cate', True):
             return
+
+        # Track per-treatment provenance so produce_scenario_coefficients
+        # can stamp each `.npy` with the right `metadata.source` tag.
+        if not hasattr(self, "_spatial_cate_sources"):
+            self._spatial_cate_sources: Dict[str, str] = {}
 
         try:
             from sparc.causal.spatial_cate import SpatialCATEEstimator
@@ -1218,6 +1240,24 @@ class CausalValidator:
                     if c != treatment and c != target and c in data.columns
                 ]
             if not confounders:
+                # Empty backdoor set is common in Bayesian-mode runs
+                # where the DAG isn't fully populated. Emit a uniform
+                # multiplier anchored at the global ATE so the
+                # scenario simulator sees a registered artifact.
+                anchor = (global_anchor or {}).get(treatment, 1.0)
+                try:
+                    n = len(data)
+                    fallback = np.full(n, float(anchor) if np.isfinite(anchor) else 1.0)
+                    self.spatial_cate_results[treatment] = {
+                        'cate': fallback,
+                        'cate_mean': float(np.mean(fallback)),
+                        'cate_std': 0.0,
+                        'multiplier': fallback,
+                    }
+                    self._spatial_cate_sources[treatment] = "uniform_fallback"
+                    print(f"    {treatment}: empty backdoor → uniform fallback (anchor={anchor:+.4f})")
+                except Exception as exc:
+                    print(f"    {treatment}: fallback construction failed: {exc}")
                 continue
 
             try:
@@ -1237,6 +1277,7 @@ class CausalValidator:
                 # Spatial multiplier for scenario simulator
                 mult = estimator.cate_to_spatial_multiplier(treatment)
                 self.spatial_cate_results[treatment]['multiplier'] = mult
+                self._spatial_cate_sources[treatment] = artifact_source
 
                 summary = estimator.summary().get(treatment, {})
                 sig_frac = summary.get('pct_significant', 0) / 100.0
@@ -1245,6 +1286,21 @@ class CausalValidator:
 
             except Exception as e:
                 print(f"    Spatial CATE({treatment}) FAILED: {e}")
+                # Fall back to a uniform multiplier so downstream stages
+                # still find a registered artifact for this treatment.
+                anchor = (global_anchor or {}).get(treatment, 1.0)
+                try:
+                    n = len(data)
+                    fallback = np.full(n, float(anchor) if np.isfinite(anchor) else 1.0)
+                    self.spatial_cate_results[treatment] = {
+                        'cate': fallback,
+                        'cate_mean': float(np.mean(fallback)),
+                        'cate_std': 0.0,
+                        'multiplier': fallback,
+                    }
+                    self._spatial_cate_sources[treatment] = "uniform_fallback"
+                except Exception:
+                    pass
 
         # Export GeoPackage
         try:
@@ -2393,12 +2449,25 @@ class CausalValidator:
 
         # Save spatial CATE multipliers for Stage 4
         if self.spatial_cate_results:
+            sources = getattr(self, "_spatial_cate_sources", {})
             for treatment, cate_info in self.spatial_cate_results.items():
                 mult = cate_info.get('multiplier')
                 if mult is not None:
                     npy_name = f'spatial_cate_multiplier_{treatment}.npy'
+                    art_meta = {
+                        "artifact_id": f"cate_multiplier::{treatment}",
+                        "variable": treatment,
+                        "source": sources.get(treatment, "frequentist_dml"),
+                        "consumers": [
+                            "sparc.interventions.scenario_simulator",
+                            "sparc.causal.counterfactual_engine",
+                            "sparc.decision.optimizer",
+                        ],
+                    }
+                    if art_meta["source"] == "uniform_fallback":
+                        art_meta["fallback"] = True
                     if store is not None:
-                        store.save_numpy(3, npy_name, mult)
+                        store.save_numpy(3, npy_name, mult, metadata=art_meta)
                     else:
                         mult_path = os.path.join(output_dir, npy_name)
                         np.save(mult_path, mult)
@@ -2554,6 +2623,36 @@ def main(approval_gate=None) -> dict:
             with open(sc_path, 'w') as f:
                 json.dump(result, f, indent=2, default=str)
             print(f"  Updated scenario_coefficients.json with Bayesian results")
+
+            # ---------------------------------------------------------
+            # Phase 5: spatial CATE is now ALWAYS estimated, including
+            # in Bayesian-mode runs. Previously this was skipped, which
+            # left the Budget Optimizer with no CATE variables and made
+            # the scenario simulator fall back to a uniform multiplier.
+            # The CausalForestDML estimator runs alongside the Bayesian
+            # global ATE; per-cell heterogeneity comes from the forest
+            # while the posterior mean serves as the global anchor.
+            # ---------------------------------------------------------
+            if causal_cfg.get('estimate_cate', True):
+                try:
+                    nuts_res = bayesian_result.get("nuts_results") or {}
+                    posterior_means = dict(zip(
+                        nuts_res.get("treatments", []) or [],
+                        nuts_res.get("beta_mean", []) or [],
+                    ))
+                    validator.run_spatial_cate(
+                        data,
+                        stage3_dir,
+                        artifact_source="bayesian_posterior_mean",
+                        global_anchor=posterior_means,
+                    )
+                    # Re-emit scenario_coefficients.json + multipliers so
+                    # the freshly-computed CATE arrays are persisted.
+                    validator.produce_scenario_coefficients(stage3_dir)
+                except Exception as e:
+                    print(f"  Bayesian-mode spatial CATE failed: {e}")
+                    import traceback
+                    traceback.print_exc()
 
         except Exception as e:
             print(f"  V2 Bayesian causal analysis failed: {e}")

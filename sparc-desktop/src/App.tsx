@@ -27,13 +27,13 @@ import VariablesPage from "@/components/pages/VariablesPage";
 import PhysicsPage from "@/components/pages/PhysicsPage";
 import CRSPage from "@/components/pages/CRSPage";
 import ScenariosPage from "@/components/pages/ScenariosPage";
+import ScenarioRunnerPage from "@/components/pages/ScenarioRunnerPage";
 import ModelsPage from "@/components/pages/ModelsPage";
 import RunPage from "@/components/pages/RunPage";
 import ResultsPage from "@/components/pages/ResultsPage";
-import DecisionsPage from "@/components/pages/DecisionsPage";
+import DecisionSupportPage from "@/components/pages/DecisionSupportPage";
 import ComparePage from "@/components/pages/ComparePage";
 import ReportPage from "@/components/pages/ReportPage";
-import BudgetOptimizerPage from "@/components/pages/BudgetOptimizerPage";
 import SettingsPage from "@/components/pages/SettingsPage";
 
 type AppPage = PageName | "Settings";
@@ -246,12 +246,12 @@ export default function App() {
         return <ModelsPage />;
       case "Run":
         return <RunPage />;
+      case "Scenario Runner":
+        return <ScenarioRunnerPage onNavigate={(p) => navigate(p as AppPage)} />;
       case "Results":
         return <ResultsPage />;
-      case "Budget":
-        return <BudgetOptimizerPage />;
-      case "Decisions":
-        return <DecisionsPage />;
+      case "Decision Support":
+        return <DecisionSupportPage />;
       case "Compare":
         return <ComparePage />;
       case "Report":

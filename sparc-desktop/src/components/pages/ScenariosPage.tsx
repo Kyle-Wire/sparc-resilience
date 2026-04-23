@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SectionHeader, Card, Tag, Btn, Stat, StatGrid, thStyle, tdStyle } from "@/components/ui/DesignSystem";
-import { getConfig, getScenarioDetail, runScenarios, getNutsSummary, getScenarioLibrary, appendScenarioToLibrary, type ScenarioTimeline } from "@/lib/api";
+import { getConfig, getScenarioDetail, runScenarios, getNutsSummary, getScenarioLibrary, appendScenarioToLibrary, dataSummary, type ScenarioTimeline } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
 import { presetsForDomain, applyPresetToPredictors } from "@/lib/scenarioPresets";
@@ -119,19 +119,64 @@ export default function ScenariosPage() {
           return merged;
         });
 
-        // Build sliders from predictors in config
+        // Build sliders from predictors in config, bounded by /data/summary stats
         if (cols.length > 0) {
-          setSliders(
-            cols.slice(0, 6).map((col: string) => ({
-              variable: col,
-              min: -0.5,
-              max: 0.5,
-              step: 0.05,
-              unit: "",
-              value: 0,
-              baseline: 0,
-            })),
-          );
+          const top = cols.slice(0, 6);
+          dataSummary()
+            .then((ds) => {
+              const ns = ds?.numeric_summary ?? {};
+              setSliders(
+                top.map((col: string) => {
+                  const stats = ns[col];
+                  // Prefer ±2σ around the baseline (mean); fall back to data
+                  // min/max, then to legacy ±0.5 if neither is available.
+                  let baseline = 0;
+                  let lo = -0.5;
+                  let hi = 0.5;
+                  let step = 0.05;
+                  if (stats) {
+                    const mean = Number(stats.mean ?? 0);
+                    const std = Number(stats.std ?? 0);
+                    const dataMin = Number(stats.min ?? mean);
+                    const dataMax = Number(stats.max ?? mean);
+                    baseline = Number.isFinite(mean) ? mean : 0;
+                    if (Number.isFinite(std) && std > 0) {
+                      lo = baseline - 2 * std;
+                      hi = baseline + 2 * std;
+                    } else if (Number.isFinite(dataMin) && Number.isFinite(dataMax) && dataMax > dataMin) {
+                      lo = dataMin;
+                      hi = dataMax;
+                    }
+                    const span = hi - lo;
+                    if (span > 0 && Number.isFinite(span)) {
+                      step = span / 40;
+                    }
+                  }
+                  return {
+                    variable: col,
+                    min: Number.isFinite(lo) ? lo : -0.5,
+                    max: Number.isFinite(hi) ? hi : 0.5,
+                    step: Number.isFinite(step) && step > 0 ? step : 0.05,
+                    unit: "",
+                    value: baseline,
+                    baseline,
+                  };
+                }),
+              );
+            })
+            .catch(() => {
+              setSliders(
+                top.map((col: string) => ({
+                  variable: col,
+                  min: -0.5,
+                  max: 0.5,
+                  step: 0.05,
+                  unit: "",
+                  value: 0,
+                  baseline: 0,
+                })),
+              );
+            });
         }
       })
       .catch(() => {});

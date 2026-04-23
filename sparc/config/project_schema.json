@@ -461,6 +461,12 @@
       }
     },
 
+    "auto_run_scenarios_at_stage_4": {
+      "type": "boolean",
+      "default": true,
+      "description": "When true, Stage 4 automatically simulates every entry in `scenarios` / `joint_scenarios`. Set to false to require explicit invocation from the Scenario Runner page."
+    },
+
     "scenarios": {
       "type": "array",
       "description": "Single-variable intervention scenarios for counterfactual simulation",

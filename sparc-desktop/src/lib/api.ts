@@ -24,6 +24,9 @@ import type {
   PipelineEvent,
   ValidationReport,
   DataVersion,
+  RunManifest,
+  StageManifest,
+  MissingArtifactDetail,
 } from "./types";
 
 const BASE = "http://127.0.0.1:8008";
@@ -176,6 +179,53 @@ export const getStagePlots = (stage: number) =>
 /** Build a full URL for a stage plot image. */
 export const stagePlotUrl = (stage: number, path: string) =>
   `${BASE}/results/${stage}/plots/${encodeURIComponent(path)}`;
+
+// ------------------------------------------------------------------
+// Run registry (artifacts manifest)
+// ------------------------------------------------------------------
+
+/** Fetch the full run manifest. Use `refresh` to reload from disk, `rescan`
+ *  to additionally walk known artifact patterns. */
+export const getManifest = (opts: { refresh?: boolean; rescan?: boolean } = {}) => {
+  const params = new URLSearchParams();
+  if (opts.refresh) params.set("refresh", "true");
+  if (opts.rescan) params.set("rescan", "true");
+  const q = params.toString();
+  return get<RunManifest>(`/results/manifest${q ? `?${q}` : ""}`);
+};
+
+/** Fetch a single stage manifest. Returns a `pending` skeleton if the stage
+ *  has not been registered yet — callers can render an empty-state without
+ *  distinguishing missing-vs-empty. */
+export const getStageManifest = (stage: string | number) =>
+  get<StageManifest>(`/results/manifest/${stage}`);
+
+/** Force a disk walk to import any newly-written artifacts. */
+export const rescanManifest = () =>
+  post<{ newly_registered: number; total_artifacts: number }>(
+    "/results/manifest/rescan",
+  );
+
+/**
+ * Type guard: extract a `MissingArtifactDetail` body from a thrown error
+ * message of the form `"404: { ...json... }"` produced by `get`/`post`.
+ * Returns `null` when the error isn't a structured 404.
+ */
+export function parseMissingArtifact(err: unknown): MissingArtifactDetail | null {
+  if (!(err instanceof Error)) return null;
+  const m = err.message.match(/^404:\s*(\{.*\})$/s);
+  if (!m) return null;
+  try {
+    const parsed = JSON.parse(m[1]);
+    const detail = parsed?.detail;
+    if (detail && typeof detail === "object" && detail.error === "missing_artifact") {
+      return detail as MissingArtifactDetail;
+    }
+  } catch {
+    /* fall through */
+  }
+  return null;
+}
 
 // ------------------------------------------------------------------
 // Scenarios

@@ -115,7 +115,7 @@ class ResultStore:
         instead of CSV.
     """
 
-    def __init__(self, paths, *, prefer_parquet: bool = True):
+    def __init__(self, paths, *, prefer_parquet: bool = True, registry=None):
         from sparc.run.pipeline_paths import PipelinePaths
         if not isinstance(paths, PipelinePaths):
             raise TypeError(f"Expected PipelinePaths, got {type(paths)}")
@@ -130,6 +130,26 @@ class ResultStore:
             "final": paths.final_dir,
             "spatial": paths.spatial_analysis_dir,
         }
+        # Run-wide artifact registry (canonical JSON + SQLite cache).
+        # Created lazily so legacy code that constructs ResultStore without
+        # one continues to work.
+        if registry is None:
+            try:
+                from sparc.registry.run_registry import RunRegistry
+                registry = RunRegistry(paths.output_dir, autoload=True)
+            except Exception as exc:  # noqa: BLE001
+                warnings.warn(
+                    f"RunRegistry could not be initialised ({exc}); "
+                    "per-stage manifest still recorded.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                registry = None
+        self.registry = registry
+
+    @staticmethod
+    def _stage_to_registry_key(stage: Union[int, str]) -> str:
+        return str(stage)
 
     # ------------------------------------------------------------------
     # Directory resolution
@@ -195,7 +215,7 @@ class ResultStore:
         self._write(dest, data, fmt)
         elapsed = time.monotonic() - t0
 
-        # Record in manifest
+        # Record in per-stage manifest (legacy / backward-compatible).
         manifest = _load_manifest(self.stage_dir(stage))
         rel_key = str(Path(subdir) / name) if subdir else name
         manifest["artifacts"][rel_key] = {
@@ -207,6 +227,38 @@ class ResultStore:
             **(metadata or {}),
         }
         _save_manifest(self.stage_dir(stage), manifest)
+
+        # Record in run-wide registry (single source of truth).
+        if self.registry is not None:
+            try:
+                row_count = None
+                if isinstance(data, pd.DataFrame):
+                    row_count = int(len(data))
+                meta = dict(metadata or {})
+                artifact_id = meta.pop(
+                    "artifact_id",
+                    rel_key.rsplit(".", 1)[0],  # filename without extension
+                )
+                consumers = meta.pop("consumers", None)
+                producer = meta.pop("producer", None)
+                self.registry.register_artifact(
+                    stage=self._stage_to_registry_key(stage),
+                    artifact_id=artifact_id,
+                    path=dest,
+                    format=fmt,
+                    producer=producer,
+                    consumers=consumers,
+                    row_count=row_count,
+                    partial=partial,
+                    metadata=meta,
+                    write_seconds=round(elapsed, 3),
+                )
+            except Exception as exc:  # noqa: BLE001
+                warnings.warn(
+                    f"RunRegistry registration failed for {dest}: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
         return dest
 
     def load(
@@ -361,6 +413,28 @@ class ResultStore:
             **(metadata or {}),
         }
         _save_manifest(self.stage_dir(stage), manifest)
+        if self.registry is not None:
+            try:
+                meta = dict(metadata or {})
+                artifact_id = meta.pop("artifact_id", rel_key.rsplit(".", 1)[0])
+                consumers = meta.pop("consumers", None)
+                producer = meta.pop("producer", None)
+                self.registry.register_artifact(
+                    stage=self._stage_to_registry_key(stage),
+                    artifact_id=artifact_id,
+                    path=dest,
+                    format="png",
+                    producer=producer,
+                    consumers=consumers,
+                    partial=partial,
+                    metadata=meta,
+                )
+            except Exception as exc:  # noqa: BLE001
+                warnings.warn(
+                    f"RunRegistry registration failed for {dest}: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
         return dest
 
     # ------------------------------------------------------------------

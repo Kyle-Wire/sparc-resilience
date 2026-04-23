@@ -185,6 +185,31 @@ def cmd_run(args):
         print(f"  GWEN variable selection: SKIPPED")
     print(f"{'='*60}\n")
 
+    # ── Run-wide artifact registry ──────────────────────────────
+    # A single registry instance is carried through the run; after every
+    # stage we walk the output directories and register anything new
+    # that legacy writers dropped straight to disk (the registry's
+    # built-in bookkeeping only covers paths written via ResultStore).
+    try:
+        from sparc.registry import RunRegistry
+        _registry: "RunRegistry | None" = RunRegistry(paths.output_dir, autoload=True)
+        _registry.manifest.project_name = config.get("project", {}).get("name")
+    except Exception as _reg_err:
+        print(f"  (registry unavailable: {_reg_err})")
+        _registry = None
+
+    def _rescan_registry(stage_label: str) -> None:
+        if _registry is None:
+            return
+        try:
+            _registry.start_stage(stage_label)
+            n = _registry.migrate_from_disk(paths)
+            _registry.complete_stage(stage_label, status="complete")
+            if n:
+                print(f"  [registry] stage {stage_label}: +{n} artifact(s)")
+        except Exception as exc:
+            print(f"  [registry] rescan failed for stage {stage_label}: {exc}")
+
     # ── Helper: stage-complete checks for --resume ───────────────
     def _stage_done(marker_name):
         return resume and (paths.stage1_dir / marker_name).exists()
@@ -201,6 +226,7 @@ def cmd_run(args):
             (paths.stage1_dir / '.correlogram_complete').write_text('done')
         else:
             print(">>> Stage 0: Correlogram — skipped (already complete)")
+        _rescan_registry("0")
 
     # ────────────────────────────────────────────────────────────────
     # Stage 0b: Pipeline Configuration (auto-wire correlogram → config)
@@ -257,6 +283,7 @@ def cmd_run(args):
             (paths.stage1_dir / '.gwen_complete').write_text('done')
         else:
             print("\n>>> Stage 1: GWEN — skipped (already complete or disabled)")
+        _rescan_registry("1")
 
     # ────────────────────────────────────────────────────────────────
     # Stage 2: Enhanced Spatial CV
@@ -265,6 +292,7 @@ def cmd_run(args):
         print("\n>>> Stage 2: Enhanced Spatial CV")
         from sparc.run.enhanced_spatial_cv import main as run_spatial_cv
         run_spatial_cv(fast_mode=fast)
+        _rescan_registry("2")
 
     # ────────────────────────────────────────────────────────────────
     # Stage 3: Causal Validation
@@ -279,17 +307,32 @@ def cmd_run(args):
         except Exception as e:
             print(f"  Stage 3 warning: {e}")
             print("  Continuing — Stage 4 will use physics priors only.")
+        _rescan_registry("3")
 
     # ────────────────────────────────────────────────────────────────
     # Stage 4: Scenario Simulation (DAG + Physics)
     # ────────────────────────────────────────────────────────────────
     if stage in ('4', 'all'):
         scenarios = config.get('scenarios', [])
-        if scenarios:
+        auto_run = config.get('auto_run_scenarios_at_stage_4', True)
+        if scenarios and auto_run:
             print("\n>>> Stage 4: Scenario Simulation")
             _run_scenarios(config, paths, project_path)
+        elif scenarios and not auto_run:
+            print("\n>>> Stage 4: Scenarios defined but `auto_run_scenarios_at_stage_4` is false — "
+                  "use the Scenario Runner page to launch.")
         else:
             print("\n>>> Stage 4: No scenarios defined in project.yml — skipping.")
+        _rescan_registry("4")
+
+    # Final bookkeeping: build master GPKG merging every spatial output.
+    try:
+        from sparc.run.master_gpkg import build_master_gpkg
+        gpkg_path = build_master_gpkg(paths, registry=_registry, config=config)
+        if gpkg_path:
+            print(f"  [master gpkg] {gpkg_path}")
+    except Exception as exc:
+        print(f"  [master gpkg] skipped ({exc})")
 
     print(f"\nPipeline complete. Results in: {paths.output_dir}")
 

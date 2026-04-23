@@ -22,6 +22,7 @@ class ServerState:
     data_summary: dict | None = None
     results: dict[int, Any] = field(default_factory=dict)
     models: dict[str, Any] = field(default_factory=dict)
+    registry: Any = None  # sparc.registry.RunRegistry, attached on project load
     is_running: bool = False
     current_stage: int | None = None
     event_buffer: list[dict] = field(default_factory=list)
@@ -71,6 +72,7 @@ class ServerState:
             self.data_summary = None
             self.results.clear()
             self.models.clear()
+            self.registry = None
             self.is_running = False
             self.current_stage = None
             self.pending_mc3 = None
