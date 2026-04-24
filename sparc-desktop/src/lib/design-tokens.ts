@@ -37,3 +37,10 @@ export const SPARC_RAMP_HEX = [
   "#602468", "#9e337d", "#e94d9b", "#e94461",
   "#e73c25", "#e76c25", "#e79024", "#f0b632", "#fbdd46",
 ];
+
+/**
+ * Default height for spatial map containers across the app.
+ * Earlier versions used 380px which felt cramped (especially in 2-col
+ * grids). This value gives every map a tall, full-width canvas.
+ */
+export const MAP_HEIGHT_DEFAULT = 560;

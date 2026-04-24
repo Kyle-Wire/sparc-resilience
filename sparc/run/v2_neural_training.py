@@ -2190,6 +2190,15 @@ def _export_v2_outputs(
             "q90": pdp_q90,
         })
         pdp_df.to_csv(pdp_dir / f"pdp_{fname}.csv", index=False)
+        try:
+            from sparc.registry.run_registry import register_path
+            register_path(pdp_dir / f"pdp_{fname}.csv", stage="2",
+                          artifact_id=f"pdp::{fname}", format="csv",
+                          producer="v2_neural_training",
+                          consumers=["server:/results/pdp_curves"],
+                          metadata={"variable": fname, "source": "neural_pde"})
+        except Exception:
+            pass
 
     logger.info("  Saved PDP curves for %d features → %s", len(feature_names), pdp_dir)
 

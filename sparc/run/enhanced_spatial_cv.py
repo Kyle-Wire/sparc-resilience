@@ -943,7 +943,14 @@ class EnhancedSpatialCV:
             oof_predictions = self._sequential_cv_training(X, y, coords, models, model_names, folds, feature_names)
         # Save OOF predictions
         oof_df = pd.DataFrame(oof_predictions, columns=model_names)
-        oof_df.to_csv(os.path.join(output_dir, 'optimized_oof_predictions.csv'), index=False)
+        _oof_path = os.path.join(output_dir, 'optimized_oof_predictions.csv')
+        oof_df.to_csv(_oof_path, index=False)
+        try:
+            from sparc.registry.run_registry import register_path
+            register_path(_oof_path, stage="2", artifact_id="oof_predictions",
+                          format="csv", producer="enhanced_spatial_cv")
+        except Exception:
+            pass
 
         # Save spatial predictions as GeoPackage (with geometry from input data)
         try:
@@ -968,6 +975,16 @@ class EnhancedSpatialCV:
                 gpkg_path = os.path.join(output_dir, 'spatial_cv_predictions.gpkg')
                 gpkg_gdf.to_file(gpkg_path, driver='GPKG')
                 print(f"Spatial CV predictions saved to: {gpkg_path}")
+                try:
+                    from sparc.registry.run_registry import register_path
+                    register_path(
+                        gpkg_path, stage="2", artifact_id="spatial_cv_predictions",
+                        format="gpkg", producer="enhanced_spatial_cv",
+                        consumers=["server:/results/2/predictions",
+                                   "server:/results/spatial_cv/predictions"],
+                    )
+                except Exception:
+                    pass
             else:
                 print("  [INFO] Source GeoDataFrame not available for gpkg export")
         except Exception as e:
@@ -2338,7 +2355,17 @@ def main(fast_mode=False):
                 final_results_df['v2_neural_uncertainty'] = np.asarray(v2_unc_out)
         
         final_results_df.to_csv(predictions_file, index=False)
-        
+
+        try:
+            from sparc.registry.run_registry import register_path
+            register_path(results_file, stage="2", artifact_id="ensemble_results",
+                          format="json", producer="enhanced_spatial_cv",
+                          consumers=["server:/results/model_performance"])
+            register_path(predictions_file, stage="2", artifact_id="ensemble_predictions",
+                          format="csv", producer="enhanced_spatial_cv")
+        except Exception:
+            pass
+
         print(f"\nResults saved to:")
         print(f"  - final_ensemble_results.json")
         print(f"  - final_ensemble_predictions.csv")

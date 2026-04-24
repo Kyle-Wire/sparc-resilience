@@ -860,6 +860,28 @@ export interface ScenarioTimeline {
 
 export const getScenarioLibrary = () => get<ScenarioTimeline>("/scenarios/library");
 
+// ---------------------------------------------------------------------------
+// Block export (Phase C) — capture a UI block as PNG and persist it via the
+// run registry so it shows up in the Report.
+// ---------------------------------------------------------------------------
+
+export interface BlockExportResponse {
+  saved_to: string;
+  size_bytes: number;
+  registered: boolean;
+  artifact?: Record<string, unknown>;
+  registry_error?: string;
+}
+
+export function exportBlock(opts: {
+  artifact_id: string;
+  stage?: string;
+  label?: string;
+  png_b64: string;
+}): Promise<BlockExportResponse> {
+  return post<BlockExportResponse>("/results/export", opts);
+}
+
 export const appendScenarioToLibrary = (
   scenario: Record<string, unknown>,
   opts: { author?: string; comment?: string; parent_id?: string | null } = {},

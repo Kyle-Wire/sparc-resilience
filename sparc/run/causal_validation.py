@@ -1452,13 +1452,20 @@ class CausalValidator:
         # Save dose-response data
         if self.dose_response_results:
             os.makedirs(output_dir, exist_ok=True)
+            dr_path = os.path.join(output_dir, 'dose_response_curves.json')
             try:
                 from sparc.run.pipeline_paths import get_result_store
                 get_result_store().save_json(3, 'dose_response_curves.json', self.dose_response_results)
             except Exception:
-                dr_path = os.path.join(output_dir, 'dose_response_curves.json')
                 with open(dr_path, 'w', encoding='utf-8') as f:
                     json.dump(self.dose_response_results, f, indent=2, default=str)
+            try:
+                from sparc.registry.run_registry import register_path
+                register_path(dr_path, stage="3", artifact_id="dose_response_curves",
+                              format="json", producer="causal_validation",
+                              consumers=["server:/results/dose_response"])
+            except Exception:
+                pass
             print(f"  Dose-response curves saved")
 
     # ------------------------------------------------------------------
@@ -2427,6 +2434,15 @@ class CausalValidator:
         else:
             with open(out_path, 'w', encoding='utf-8') as f:
                 json.dump(output, f, indent=2, default=str)
+
+        try:
+            from sparc.registry.run_registry import register_path
+            register_path(out_path, stage="3", artifact_id="scenario_coefficients",
+                          format="json", producer="causal_validation",
+                          consumers=["server:/results/scenarios",
+                                     "stage4:scenario_simulator"])
+        except Exception:
+            pass
 
         # Persist HGB edge models (if any) for non-linear propagation in Stage 4
         if self._edge_models:

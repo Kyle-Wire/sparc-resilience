@@ -272,6 +272,94 @@ async def debug_paths():
 
 
 # ------------------------------------------------------------------
+# Block export — capture the current view of any chart/map/plot as a
+# PNG and register it in the run registry so it shows up in Report.
+# ------------------------------------------------------------------
+
+class BlockExportRequest(BaseModel):
+    artifact_id: str
+    stage: str = "export"
+    label: Optional[str] = None
+    png_b64: str  # data URL or raw base64
+
+    class Config:
+        extra = "ignore"
+
+
+@app.post("/results/export")
+async def export_block(req: BlockExportRequest):
+    """Persist a screenshot of a UI block (map / chart / plot) to disk and the registry.
+
+    Body fields:
+      - artifact_id: stable id for this export (e.g. "cate_map", "dose_response").
+      - stage: registry stage to file under (defaults to "export").
+      - label: optional human-readable suffix used in the filename.
+      - png_b64: data URL ("data:image/png;base64,...") or raw base64 PNG bytes.
+    """
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    import base64
+    import time
+    from sparc.run.pipeline_paths import PipelinePaths
+
+    payload = req.png_b64
+    if payload.startswith("data:"):
+        try:
+            payload = payload.split(",", 1)[1]
+        except IndexError:
+            raise HTTPException(400, "Malformed data URL in png_b64")
+    try:
+        raw = base64.b64decode(payload, validate=True)
+    except Exception as exc:
+        raise HTTPException(400, f"Invalid base64 PNG: {exc}")
+    if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise HTTPException(400, "png_b64 does not contain a PNG signature")
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+    except Exception as exc:
+        raise HTTPException(500, f"Cannot resolve paths: {exc}")
+
+    exports_dir = paths.output_dir / "exports"
+    exports_dir.mkdir(parents=True, exist_ok=True)
+    ts = time.strftime("%Y%m%dT%H%M%S")
+    safe_label = "".join(c for c in (req.label or "") if c.isalnum() or c in "-_") or "snapshot"
+    fname = f"{req.stage}__{req.artifact_id}__{safe_label}__{ts}.png"
+    out_path = exports_dir / fname
+    out_path.write_bytes(raw)
+
+    entry_dict: dict[str, Any] = {
+        "saved_to": str(out_path),
+        "size_bytes": len(raw),
+        "registered": False,
+    }
+
+    reg = state.registry
+    if reg is not None:
+        try:
+            entry = reg.register_artifact(
+                stage=req.stage,
+                artifact_id=f"export::{req.artifact_id}::{ts}",
+                path=out_path,
+                format="png",
+                producer="desktop:export",
+                consumers=["user:export", "report:figures"],
+                metadata={
+                    "exported_from": req.artifact_id,
+                    "label": req.label or "",
+                    "exported_at": ts,
+                },
+            )
+            entry_dict["registered"] = True
+            entry_dict["artifact"] = entry.model_dump()
+        except Exception as exc:
+            entry_dict["registry_error"] = str(exc)
+
+    return entry_dict
+
+
+# ------------------------------------------------------------------
 # Project endpoints
 # ------------------------------------------------------------------
 

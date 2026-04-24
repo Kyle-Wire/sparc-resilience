@@ -1,6 +1,7 @@
 ﻿import { useState, useEffect, useCallback, useRef } from "react";
 import { SectionHeader, Card, Btn, Stat, StatGrid } from "@/components/ui/DesignSystem";
 import ExplainButton from "@/components/common/ExplainButton";
+import { ExportBlockButton } from "@/components/common/ExportBlockButton";
 import {
   getModelPerformance, getScenarioDetail, getPdpCurves, getGwenData,
   getCorrelogramData, getPredictions, getScenarioIncrement,
@@ -18,7 +19,7 @@ import { usePipeline } from "@/hooks/PipelineProvider";
 import { useManifest } from "@/hooks/useManifest";
 import SpatialMap from "@/components/map/SpatialMap";
 import LayerManager, { useContextLayers } from "@/components/map/LayerManager";
-import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
+import { SPARC_RAMP_HEX, MAP_HEIGHT_DEFAULT } from "@/lib/design-tokens";
 import type { ScenarioDetail, PdpCurves, CorrelogramData, GeoJsonData, DoseResponseData, MissingArtifactDetail } from "@/lib/types";
 
 // Human-readable labels for PDE-derived field columns
@@ -102,6 +103,12 @@ export default function ResultsPage() {
   const [sensitivity, setSensitivity] = useState<CausalSensitivity | null>(null);
   const [negControl, setNegControl] = useState<NegativeControlResponse | null>(null);
   const doseCanvasRef = useRef<HTMLCanvasElement>(null);
+  // Phase C: refs that the Export PNG buttons snapshot.
+  const predictionsBlockRef = useRef<HTMLDivElement>(null);
+  const cateBlockRef = useRef<HTMLDivElement>(null);
+  const doseBlockRef = useRef<HTMLDivElement>(null);
+  const r2BlockRef = useRef<HTMLDivElement>(null);
+  const interventionBlockRef = useRef<HTMLDivElement>(null);
 
   // Load and refresh data from API. We re-run this after pipeline completion
   // so the Results page updates automatically when artifacts are finished.
@@ -1026,7 +1033,7 @@ export default function ResultsPage() {
           }
         >
           {(viewMode === "map" || viewMode === "scenarios") ? (
-            <div style={{ position: "relative", height: 380, borderRadius: 4, overflow: "hidden", border: "1px solid var(--line)" }}>
+            <div ref={predictionsBlockRef} style={{ position: "relative", height: MAP_HEIGHT_DEFAULT, borderRadius: 4, overflow: "hidden", border: "1px solid var(--line)" }}>
               <div style={{ position: "absolute", top: 8, left: 8, zIndex: 5, maxHeight: "calc(100% - 16px)", overflowY: "auto" }}>
                 <LayerManager ctx={layerCtx} compact />
               </div>
@@ -1055,6 +1062,7 @@ export default function ResultsPage() {
                     height="100%"
                     palette={isDiverg ? "puor" : "sparc"}
                     contextLayers={layerCtx.active}
+                    expandable
                   />
                 );
               })()}
@@ -1111,21 +1119,30 @@ export default function ResultsPage() {
                   </div>
                 );
               })() : null}
+              <div style={{ position: "absolute", top: 8, right: 50, zIndex: 6 }}>
+                <ExportBlockButton
+                  targetRef={predictionsBlockRef}
+                  artifactId={viewMode === "scenarios" ? "scenarios_map" : "predictions_map"}
+                  label={viewMode === "scenarios" ? (activeScenarioVar || "scenario") : (resolvedMapLayer || "predictions")}
+                  compact
+                />
+              </div>
             </div>
           ) : viewMode === "histogram" ? (
             <canvas
               ref={histCanvasRef}
-              style={{ width: "100%", height: 380, display: "block" }}
+              style={{ width: "100%", height: MAP_HEIGHT_DEFAULT, display: "block" }}
             />
           ) : viewMode === "correlogram" ? (
             <canvas
               ref={corrCanvasRef}
-              style={{ width: "100%", height: 380, display: "block" }}
+              style={{ width: "100%", height: MAP_HEIGHT_DEFAULT, display: "block" }}
             />
           ) : (
-            // Causal view: CATE map (left) + dose-response curve (right)
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, height: 380 }}>
-              <div style={{ borderRadius: 4, overflow: "hidden", border: "1px solid var(--line)", position: "relative" }}>
+            // Causal view: CATE map (full width) over dose-response curve.
+            // Was a 2-col grid; the cramped CATE map was the user's main complaint.
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div ref={cateBlockRef} style={{ borderRadius: 4, overflow: "hidden", border: "1px solid var(--line)", position: "relative", height: MAP_HEIGHT_DEFAULT }}>
                 {cateVars.length > 0 && (
                   <select
                     value={activeCateVar}
@@ -1150,6 +1167,7 @@ export default function ResultsPage() {
                     height="100%"
                     palette="puor"
                     contextLayers={layerCtx.active}
+                    expandable
                   />
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", height: "100%", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: 11, background: "#faf8f4", padding: 16, gap: 6, textAlign: "center" }}>
@@ -1179,14 +1197,20 @@ export default function ResultsPage() {
                 <div className="mono" style={{ position: "absolute", bottom: 8, left: 8, fontSize: 8, padding: "3px 6px", background: "rgba(255,255,255,0.92)", border: "1px solid var(--line)", borderRadius: 3, color: "var(--ink-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
                   CATE · local causal effect
                 </div>
+                <div style={{ position: "absolute", top: 8, right: 50, zIndex: 6 }}>
+                  <ExportBlockButton targetRef={cateBlockRef} artifactId="cate_map" label={`cate_${activeCateVar}`} compact />
+                </div>
               </div>
-              <div style={{ borderRadius: 4, overflow: "hidden", border: "1px solid var(--line)", padding: 10, position: "relative" }}>
+              <div ref={doseBlockRef} style={{ borderRadius: 4, overflow: "hidden", border: "1px solid var(--line)", padding: 10, position: "relative", minHeight: 320 }}>
+                <div style={{ position: "absolute", top: 8, right: 8, zIndex: 4 }}>
+                  <ExportBlockButton targetRef={doseBlockRef} artifactId="dose_response" label="dose-response" canvasOnly compact />
+                </div>
                 <div className="mono" style={{ fontSize: 8, color: "var(--muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.1em" }}>
                   Dose–response · marginal causal curve
                 </div>
                 <canvas
                   ref={doseCanvasRef}
-                  style={{ width: "100%", height: 340, display: "block" }}
+                  style={{ width: "100%", height: 280, display: "block" }}
                 />
               </div>
             </div>
@@ -1272,10 +1296,15 @@ export default function ResultsPage() {
 
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <Card title="Model R²" subtitle={models.length ? "cross-validated performance" : undefined}>
-            <canvas
-              ref={r2CanvasRef}
-              style={{ width: "100%", height: 120, display: "block" }}
-            />
+            <div ref={r2BlockRef} style={{ position: "relative" }}>
+              <div style={{ position: "absolute", top: -2, right: 2, zIndex: 4 }}>
+                <ExportBlockButton targetRef={r2BlockRef} artifactId="model_r2" label="model_r2" canvasOnly compact />
+              </div>
+              <canvas
+                ref={r2CanvasRef}
+                style={{ width: "100%", height: 120, display: "block" }}
+              />
+            </div>
           </Card>
 
           <Card
@@ -1332,10 +1361,15 @@ export default function ResultsPage() {
               ) : "marginal effect on target"
             }
           >
-            <canvas
-              ref={curveCanvasRef}
-              style={{ width: "100%", height: 160, display: "block" }}
-            />
+            <div ref={interventionBlockRef} style={{ position: "relative" }}>
+              <div style={{ position: "absolute", top: -2, right: 2, zIndex: 4 }}>
+                <ExportBlockButton targetRef={interventionBlockRef} artifactId="intervention_response" label="intervention_response" canvasOnly compact />
+              </div>
+              <canvas
+                ref={curveCanvasRef}
+                style={{ width: "100%", height: 160, display: "block" }}
+              />
+            </div>
           </Card>
         </div>
       </div>

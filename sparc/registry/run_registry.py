@@ -777,4 +777,92 @@ def _sha256_file(path: Path, chunk: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
-__all__ = ["RunRegistry"]
+# ---------------------------------------------------------------------------
+# Active-registry singleton (Phase D)
+#
+# Writers across the pipeline (scenario_simulator, gwr, ggpgam, …) drop
+# files on disk inside their own modules. Threading a registry parameter
+# through every call site is invasive, so we expose a process-wide
+# "active" registry. ``__main__.py`` calls :func:`set_active_registry`
+# right after constructing the run registry; writers call
+# :func:`register_path` which is a no-op when no registry is set
+# (e.g. ad-hoc unit tests / library usage).
+# ---------------------------------------------------------------------------
+
+_ACTIVE_REGISTRY: Optional["RunRegistry"] = None
+
+_FORMAT_FROM_SUFFIX: dict[str, ArtifactFormat] = {
+    ".json": "json",
+    ".csv": "csv",
+    ".gpkg": "gpkg",
+    ".png": "png",
+    ".pkl": "pkl",
+    ".pt": "pt",
+    ".npy": "npy",
+    ".txt": "txt",
+    ".parquet": "parquet",
+    ".html": "html",
+    ".pdf": "pdf",
+    ".tif": "tif",
+    ".tiff": "tif",
+}
+
+
+def set_active_registry(registry: Optional["RunRegistry"]) -> None:
+    """Install (or clear) the process-wide active registry."""
+    global _ACTIVE_REGISTRY
+    _ACTIVE_REGISTRY = registry
+
+
+def get_active_registry() -> Optional["RunRegistry"]:
+    """Return the currently-installed registry, if any."""
+    return _ACTIVE_REGISTRY
+
+
+def register_path(
+    path: str | Path,
+    *,
+    stage: str | int,
+    artifact_id: str,
+    format: Optional[ArtifactFormat] = None,
+    producer: Optional[str] = None,
+    consumers: Optional[Iterable[str]] = None,
+    metadata: Optional[dict[str, Any]] = None,
+    partial: bool = False,
+) -> Optional[ArtifactEntry]:
+    """Register ``path`` with the active registry (best-effort).
+
+    Returns ``None`` when no active registry is installed; never raises so
+    individual writers stay decoupled from registry availability.
+    """
+    reg = _ACTIVE_REGISTRY
+    if reg is None:
+        return None
+    p = Path(path)
+    fmt = format
+    if fmt is None:
+        fmt = _FORMAT_FROM_SUFFIX.get(p.suffix.lower(), "binary")  # type: ignore[assignment]
+    try:
+        return reg.register_artifact(
+            stage=stage,
+            artifact_id=artifact_id,
+            path=p,
+            format=fmt,  # type: ignore[arg-type]
+            producer=producer,
+            consumers=consumers,
+            metadata=metadata,
+            partial=partial,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Writers must keep working even if the registry barfs.
+        print(f"  [registry] register_path({artifact_id}) failed: {exc}")
+        return None
+
+
+__all__ = [
+    "RunRegistry",
+    "set_active_registry",
+    "get_active_registry",
+    "register_path",
+]
+

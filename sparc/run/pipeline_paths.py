@@ -446,11 +446,26 @@ _global_store = None
 
 
 def get_result_store():
-    """Return the global ``ResultStore`` instance, creating it on first call."""
+    """Return the global ``ResultStore`` instance, creating it on first call.
+
+    Phase D: when an active registry is installed (see
+    :func:`sparc.registry.run_registry.set_active_registry`), the
+    ResultStore is created bound to it so every save_* call auto-registers.
+    Subsequent calls re-use the same instance; if the registry was attached
+    later, we attach it on the fly.
+    """
     global _global_store
+    from sparc.run.result_store import ResultStore
+    try:
+        from sparc.registry.run_registry import get_active_registry
+        active_reg = get_active_registry()
+    except Exception:
+        active_reg = None
     if _global_store is None:
-        from sparc.run.result_store import ResultStore
-        _global_store = ResultStore(get_paths())
+        _global_store = ResultStore(get_paths(), registry=active_reg)
+    elif active_reg is not None and getattr(_global_store, "registry", None) is None:
+        # Late-bound: registry came online after first use.
+        _global_store.registry = active_reg
     return _global_store
 
 

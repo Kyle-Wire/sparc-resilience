@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SectionHeader, Card, Btn, Stat, StatGrid, Tag } from "@/components/ui/DesignSystem";
 import { EmptyState } from "@/components/common/EmptyState";
-import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
+import { SPARC_RAMP_HEX, MAP_HEIGHT_DEFAULT } from "@/lib/design-tokens";
 import SpatialMap from "@/components/map/SpatialMap";
+import { ExportBlockButton } from "@/components/common/ExportBlockButton";
 import { usePipeline } from "@/hooks/PipelineProvider";
 import { useNotification } from "@/hooks/useNotifications";
 import {
@@ -763,6 +764,7 @@ function Step3Recommendation({
   onBack: () => void;
   onRerun: () => void;
 }) {
+  const targetingBlockRef = useRef<HTMLDivElement>(null);
   const rankedRows: RankedIntervention[] = ranked?.ranked ?? [];
   const topPick = rankedRows[0];
   const uncByName = useMemo(() => {
@@ -967,8 +969,11 @@ function Step3Recommendation({
         {targetingLoading ? (
           <div style={{ padding: 24, textAlign: "center", color: "var(--muted)" }}>Loading targeting…</div>
         ) : targeting ? (
-          <div style={{ height: 360 }}>
-            <SpatialMap geojson={targeting} />
+          <div ref={targetingBlockRef} style={{ height: MAP_HEIGHT_DEFAULT, position: "relative" }}>
+            <div style={{ position: "absolute", top: 8, right: 50, zIndex: 6 }}>
+              <ExportBlockButton targetRef={targetingBlockRef} artifactId="decision_targeting" label={`targeting_${wiz.activeTargetVar || "map"}`} compact />
+            </div>
+            <SpatialMap geojson={targeting} expandable />
           </div>
         ) : (
           <EmptyState title="No targeting map" body="Pick a treatment variable with a CATE map." />

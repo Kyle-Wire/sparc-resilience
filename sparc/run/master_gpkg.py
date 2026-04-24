@@ -138,7 +138,9 @@ def build_master_gpkg(
             try:
                 gdf = gpd.read_file(src, layer=inner) if inner else gpd.read_file(src)
             except Exception as exc:
+                import traceback
                 print(f"  [master gpkg] skip {src.name}:{inner} ({exc})")
+                traceback.print_exc()
                 continue
             if gdf is None or len(gdf) == 0:
                 continue
@@ -153,7 +155,9 @@ def build_master_gpkg(
                 gdf.to_file(master_path, driver="GPKG", layer=target_name)
                 written.append(target_name)
             except Exception as exc:
+                import traceback
                 print(f"  [master gpkg] failed to write {target_name}: {exc}")
+                traceback.print_exc()
 
     if not written:
         print("  [master gpkg] no layers written")

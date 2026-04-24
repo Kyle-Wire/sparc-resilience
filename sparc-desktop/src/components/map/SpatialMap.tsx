@@ -27,6 +27,8 @@ interface SpatialMapProps {
   /** Context tile layers (Phase 18) — basemap is replaced if any has kind="basemap";
    * overlays are stacked above the basemap and below the deck.gl canvas. */
   contextLayers?: { layer: ContextLayer; opacity?: number }[];
+  /** When true, shows a fullscreen toggle (⛶) in the top-right corner. */
+  expandable?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,7 +123,20 @@ export default function SpatialMap({
   syncViewState,
   onViewStateChange: onViewStateChangeProp,
   contextLayers,
+  expandable,
 }: SpatialMapProps) {
+  const [fullscreen, setFullscreen] = useState(false);
+
+  // Esc closes fullscreen.
+  useEffect(() => {
+    if (!fullscreen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFullscreen(false);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [fullscreen]);
+
   const [localViewState, setLocalViewState] = useState({
     longitude: -98.5,
     latitude: 39.8,
@@ -242,7 +257,14 @@ export default function SpatialMap({
   }
 
   return (
-    <div className="relative overflow-hidden rounded-lg border border-sparc-gray-200" style={{ height }}>
+    <div
+      className="relative overflow-hidden rounded-lg border border-sparc-gray-200"
+      style={
+        fullscreen
+          ? { position: "fixed", inset: 16, zIndex: 200, background: "#fff" }
+          : { height }
+      }
+    >
       <DeckGL
         viewState={viewState}
         onViewStateChange={handleViewStateChange}
@@ -312,6 +334,34 @@ export default function SpatialMap({
         </svg>
         <span className="text-[8px] font-bold text-sparc-gray-600">N</span>
       </div>
+
+      {/* Fullscreen toggle */}
+      {expandable && (
+        <button
+          onClick={() => setFullscreen((f) => !f)}
+          title={fullscreen ? "Exit fullscreen (Esc)" : "Expand to fullscreen"}
+          style={{
+            position: "absolute",
+            top: 8,
+            right: 48,
+            width: 32,
+            height: 32,
+            borderRadius: 6,
+            border: "1px solid #ddd",
+            background: "rgba(255,255,255,0.95)",
+            cursor: "pointer",
+            fontSize: 16,
+            fontWeight: 600,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "#333",
+            zIndex: 5,
+          }}
+        >
+          {fullscreen ? "✕" : "⛶"}
+        </button>
+      )}
     </div>
   );
 }

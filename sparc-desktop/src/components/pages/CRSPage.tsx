@@ -199,7 +199,7 @@ export default function CRSPage() {
         <Card title="Data projection preview" subtitle="actual study points on a basemap">
           <div style={{ height: 240, borderRadius: 4, overflow: "hidden", border: "1px solid var(--line)" }}>
             {geojson ? (
-              <SpatialMap geojson={geojson} mode="scatter" height="100%" />
+              <SpatialMap geojson={geojson} mode="scatter" height="100%" expandable />
             ) : (
               <div style={{ display: "flex", height: "100%", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: 12, background: "#faf8f4" }}>
                 Load data to see spatial preview

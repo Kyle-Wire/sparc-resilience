@@ -192,8 +192,12 @@ def cmd_run(args):
     # built-in bookkeeping only covers paths written via ResultStore).
     try:
         from sparc.registry import RunRegistry
+        from sparc.registry.run_registry import set_active_registry
         _registry: "RunRegistry | None" = RunRegistry(paths.output_dir, autoload=True)
         _registry.manifest.project_name = config.get("project", {}).get("name")
+        # Make this run's registry visible to writers across the codebase
+        # so they can call ``register_path(...)`` without plumbing a param.
+        set_active_registry(_registry)
     except Exception as _reg_err:
         print(f"  (registry unavailable: {_reg_err})")
         _registry = None
@@ -208,7 +212,9 @@ def cmd_run(args):
             if n:
                 print(f"  [registry] stage {stage_label}: +{n} artifact(s)")
         except Exception as exc:
+            import traceback
             print(f"  [registry] rescan failed for stage {stage_label}: {exc}")
+            traceback.print_exc()
 
     # ── Helper: stage-complete checks for --resume ───────────────
     def _stage_done(marker_name):
@@ -332,7 +338,9 @@ def cmd_run(args):
         if gpkg_path:
             print(f"  [master gpkg] {gpkg_path}")
     except Exception as exc:
+        import traceback
         print(f"  [master gpkg] skipped ({exc})")
+        traceback.print_exc()
 
     print(f"\nPipeline complete. Results in: {paths.output_dir}")
 

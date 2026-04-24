@@ -23,6 +23,14 @@
 
 SPARC runs five stages in sequence. Each stage reads from the previous stage's output, producing a fully traceable chain from raw data to policy-relevant scenario maps.
 
+> **Run registry (since v3):** every artifact written by every stage is recorded in
+> `<output_dir>/artifacts_manifest.json` (mirrored to `artifacts.db`). Server endpoints,
+> the desktop **Results** view, the **Decision Support** wizard, and the report generator
+> all resolve files through this registry — no path is hard-coded outside `PipelinePaths`.
+> A run-final pass merges every spatial layer into `<output_dir>/master.gpkg`.
+> The desktop **Export PNG** buttons (top-right of every chart/map) snapshot the current
+> view, persist it under `<output_dir>/exports/`, and register it as an `export::*` artifact.
+
 ```
 Stage 0   Correlogram Analysis     →  bandwidths, block sizes, kernel selection
      │

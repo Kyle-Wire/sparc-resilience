@@ -1850,6 +1850,13 @@ class ScenarioSimulator:
                 try:
                     gpkg_path = self.output_dir / "scenario_results.gpkg"
                     results_gdf.to_file(gpkg_path, driver="GPKG")
+                    try:
+                        from sparc.registry.run_registry import register_path
+                        register_path(gpkg_path, stage="4", artifact_id="scenario_results",
+                                      format="gpkg", producer="scenario_simulator",
+                                      consumers=["server:/results/scenarios"])
+                    except Exception:
+                        pass
                 except Exception as e:
                     warnings.warn(f"Could not write GeoPackage: {e}")
             if verbose:
