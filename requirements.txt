@@ -38,6 +38,7 @@ psutil>=5.9
 pyyaml>=6.0
 jsonschema>=4.19
 pyarrow>=14.0
+duckdb>=1.0
 
 # Sensitivity analysis (optional — Morris/Sobol)
 SALib>=1.4

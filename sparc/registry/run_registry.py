@@ -609,6 +609,117 @@ class RunRegistry:
         return out
 
     # ------------------------------------------------------------------
+    # DuckDB query layer (Parquet-backed views over registered datasets)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _duckdb_view_name(stage: str, artifact_id: str) -> str:
+        """Build a SQL-safe view name for ``(stage, artifact_id)``.
+
+        Stage ``"2"`` and id ``"cv_predictions"`` → ``stage2_cv_predictions``.
+        Variable-scoped ids like ``"neural_pdp::lst"`` are sanitized to
+        ``stage2_neural_pdp_lst`` (only ``[A-Za-z0-9_]``).
+        """
+        prefix = f"stage{stage}" if stage.isdigit() else stage
+        raw = f"{prefix}_{artifact_id}"
+        return "".join(c if c.isalnum() or c == "_" else "_" for c in raw).lower()
+
+    def duckdb(self, *, in_memory: bool = True):
+        """Open a DuckDB connection with views for every Parquet artifact.
+
+        Each registered Parquet artifact is exposed as a view so the run
+        is queryable as a small lakehouse:
+
+        >>> con = registry.duckdb()
+        >>> con.execute("SELECT count(*) FROM stage2_cv_predictions").fetchone()
+
+        GeoParquet datasets are exposed as plain tables (geometry as WKB);
+        for full geometry semantics use ``ResultStore.load_dataset()``.
+
+        Parameters
+        ----------
+        in_memory : bool
+            If True (default) use ``:memory:``. If False, persist views in
+            ``output_dir/duckdb_views.db`` so they survive across processes.
+
+        Returns
+        -------
+        ``duckdb.DuckDBPyConnection``
+        """
+        try:
+            import duckdb  # noqa: WPS433 — optional dep, lazy import
+        except ImportError as exc:
+            raise ImportError(
+                "DuckDB is required for the registry query layer. "
+                "Install with: pip install duckdb"
+            ) from exc
+
+        target = ":memory:" if in_memory else str(self.output_dir / "duckdb_views.db")
+        conn = duckdb.connect(target)
+
+        seen: set[str] = set()
+        for art in self._manifest.all_artifacts():
+            if art.format != "parquet":
+                continue
+            abs_path = self.resolve(art)
+            if not abs_path.exists():
+                continue
+            view = self._duckdb_view_name(art.stage, art.id)
+            if view in seen:
+                continue
+            seen.add(view)
+            # DuckDB doesn't allow prepared parameters inside table-function
+            # calls in CREATE VIEW, so we inline the path with single-quote
+            # escaping (paths come from the registry, not user input).
+            escaped = str(abs_path).replace("'", "''")
+            try:
+                conn.execute(
+                    f"CREATE OR REPLACE VIEW {view} AS "
+                    f"SELECT * FROM read_parquet('{escaped}')"
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Skip unreadable parquet (e.g. partial writes); don't poison
+                # the whole connection.
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS _duckdb_view_errors "
+                    "(view TEXT, path TEXT, error TEXT)"
+                )
+                conn.execute(
+                    "INSERT INTO _duckdb_view_errors VALUES (?, ?, ?)",
+                    [view, str(abs_path), str(exc)],
+                )
+        return conn
+
+    def list_datasets(self) -> list[dict[str, Any]]:
+        """List registered datasets with their qualified name and view name.
+
+        A "dataset" is any artifact whose registry metadata carries a
+        ``dataset_kind`` key (set by ``ResultStore.save_dataset``). For
+        artifacts registered via the legacy ``register_artifact`` path
+        without dataset metadata, ``kind`` is reported as ``None``.
+        """
+        out: list[dict[str, Any]] = []
+        for art in self._manifest.all_artifacts():
+            md = art.metadata or {}
+            kind = md.get("dataset_kind")
+            qname = md.get("qualified_name")
+            if not qname:
+                prefix = f"stage{art.stage}" if art.stage.isdigit() else art.stage
+                qname = f"{prefix}.{art.id}"
+            out.append({
+                "stage": art.stage,
+                "name": md.get("dataset_name", art.id),
+                "qualified_name": qname,
+                "kind": kind,
+                "format": art.format,
+                "view": self._duckdb_view_name(art.stage, art.id) if art.format == "parquet" else None,
+                "path": art.path,
+                "row_count": art.row_count,
+                "partial": art.partial,
+            })
+        return out
+
+    # ------------------------------------------------------------------
     # Disk-scan migration (legacy runs)
     # ------------------------------------------------------------------
 

@@ -25,6 +25,8 @@ from typing import Any, Dict, List, Literal, Optional, Union
 import numpy as np
 import pandas as pd
 
+from sparc.registry.manifest import Dataset, DatasetKind, DatasetSchema
+
 # Optional heavy imports — loaded lazily so lightweight callers don't pay the cost
 _geopandas = None
 _joblib = None
@@ -156,12 +158,21 @@ class ResultStore:
     # ------------------------------------------------------------------
 
     def stage_dir(self, stage: Union[int, str]) -> Path:
-        """Return the directory for *stage* (0-4, 'final', or 'spatial')."""
-        try:
+        """Return the directory for *stage* (0-4, 'final', or 'spatial').
+
+        Accepts either int (``2``) or string (``"2"``) form so callers
+        building from ``Dataset.stage`` (always a string) and legacy callers
+        passing ints both work.
+        """
+        if stage in self._stage_dirs:
             return self._stage_dirs[stage]
-        except KeyError:
-            raise ValueError(f"Unknown stage: {stage!r}. "
-                             f"Valid: {list(self._stage_dirs)}")
+        # Coerce numeric strings to int and vice versa for compatibility.
+        if isinstance(stage, str) and stage.isdigit():
+            as_int = int(stage)
+            if as_int in self._stage_dirs:
+                return self._stage_dirs[as_int]
+        raise ValueError(f"Unknown stage: {stage!r}. "
+                         f"Valid: {list(self._stage_dirs)}")
 
     # ------------------------------------------------------------------
     # Generic save / load
@@ -436,6 +447,210 @@ class ResultStore:
                     stacklevel=2,
                 )
         return dest
+
+    # ------------------------------------------------------------------
+    # Dataset API (typed, schema-aware, registry-first)
+    # ------------------------------------------------------------------
+
+    _EXT_FOR_FORMAT: Dict[str, str] = {
+        "parquet": ".parquet",
+        "npy": ".npy",
+        "json": ".json",
+        "pkl": ".pkl",
+        "pt": ".pt",
+        "gpkg": ".gpkg",
+        "csv": ".csv",
+        "txt": ".txt",
+        "png": ".png",
+    }
+
+    def save_dataset(
+        self,
+        dataset: Dataset,
+        data: Any,
+        *,
+        config: Optional[Dict[str, Any]] = None,
+        subdir: Optional[str] = None,
+        partial: bool = False,
+        extra_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Path:
+        """Save a typed Dataset to its canonical on-disk format.
+
+        Stages call this instead of touching files directly. The dataset
+        carries the schema, format choice, and stage ownership; the
+        ResultStore writes the file, registers it with the run registry,
+        and (when ``config`` is given) drops a provenance sidecar.
+
+        Parameters
+        ----------
+        dataset : Dataset
+            The typed contract: stage, name, schema, storage_format.
+        data : Any
+            The actual payload — DataFrame, GeoDataFrame, ndarray, dict,
+            list, torch state_dict, etc. Type must be compatible with
+            ``dataset.kind``.
+        config : dict | None
+            Pipeline config dict. When provided, a ``.provenance.json``
+            sidecar is written next to the artifact (config + git + env
+            + data hash).
+        subdir : str | None
+            Optional subdirectory under the stage dir.
+        partial : bool
+            Mark as partial in the registry (recovery flag).
+        extra_metadata : dict | None
+            Extra fields merged into the artifact's registry metadata.
+
+        Returns
+        -------
+        Path — absolute path of the canonical file.
+        """
+        fmt = dataset.storage_format
+        ext = self._EXT_FOR_FORMAT.get(fmt)
+        if ext is None:
+            raise ValueError(
+                f"No extension mapping for storage_format={fmt!r}; "
+                f"add it to ResultStore._EXT_FOR_FORMAT."
+            )
+        file_name = f"{dataset.name}{ext}"
+
+        directory = self.stage_dir(dataset.stage)
+        if subdir:
+            directory = directory / subdir
+        directory.mkdir(parents=True, exist_ok=True)
+        dest = directory / file_name
+
+        t0 = time.monotonic()
+        self._write_dataset(dest, data, dataset)
+        elapsed = time.monotonic() - t0
+
+        # Build the registry metadata payload — includes schema for round-trip.
+        reg_metadata: Dict[str, Any] = {
+            "dataset_kind": dataset.kind,
+            "dataset_name": dataset.name,
+            "dataset_schema": dataset.data_schema.model_dump(mode="json"),
+            "qualified_name": dataset.qualified_name,
+        }
+        if dataset.description:
+            reg_metadata["description"] = dataset.description
+        reg_metadata.update(dataset.metadata)
+        if extra_metadata:
+            reg_metadata.update(extra_metadata)
+
+        # Per-stage manifest mirror (kept until PR3 deletes it).
+        manifest = _load_manifest(self.stage_dir(dataset.stage))
+        rel_key = str(Path(subdir) / file_name) if subdir else file_name
+        manifest["artifacts"][rel_key] = {
+            "format": fmt,
+            "size_bytes": dest.stat().st_size if dest.exists() else 0,
+            "written_at": datetime.now(timezone.utc).isoformat(),
+            "write_seconds": round(elapsed, 3),
+            "partial": partial,
+            "dataset_kind": dataset.kind,
+            "qualified_name": dataset.qualified_name,
+        }
+        _save_manifest(self.stage_dir(dataset.stage), manifest)
+
+        # Run-wide registry (single source of truth).
+        if self.registry is not None:
+            row_count = int(len(data)) if isinstance(data, pd.DataFrame) else None
+            try:
+                self.registry.register_artifact(
+                    stage=self._stage_to_registry_key(dataset.stage),
+                    artifact_id=dataset.resolved_artifact_id(),
+                    path=dest,
+                    format=fmt,
+                    row_count=row_count,
+                    partial=partial,
+                    metadata=reg_metadata,
+                    write_seconds=round(elapsed, 3),
+                )
+            except Exception as exc:  # noqa: BLE001
+                warnings.warn(
+                    f"RunRegistry registration failed for {dest}: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+
+        # Provenance sidecar (reproducibility).
+        if config is not None:
+            try:
+                from sparc.registry.provenance import write_sidecar
+                write_sidecar(dest, config)
+            except Exception as exc:  # noqa: BLE001
+                warnings.warn(
+                    f"Provenance sidecar failed for {dest}: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+
+        return dest
+
+    def load_dataset(
+        self,
+        stage: Union[int, str],
+        name: str,
+        *,
+        subdir: Optional[str] = None,
+    ) -> Any:
+        """Load a dataset by ``(stage, name)``.
+
+        Resolves the canonical file via the run registry when available,
+        falling back to a directory scan in legacy runs. Dispatches the
+        reader based on the registry-recorded format and ``dataset_kind``
+        so geotables come back as ``GeoDataFrame``.
+        """
+        stage_key = self._stage_to_registry_key(stage)
+
+        if self.registry is not None:
+            entry = self.registry.lookup(stage=stage_key, artifact_id=name)
+            if entry is not None:
+                abs_path = self.registry.resolve(entry)
+                if abs_path.exists():
+                    kind = (entry.metadata or {}).get("dataset_kind")
+                    return self._read_dataset(abs_path, entry.format, kind)
+
+        # Legacy fallback: probe canonical extensions in the stage dir.
+        directory = self.stage_dir(stage)
+        if subdir:
+            directory = directory / subdir
+        for fmt, ext in self._EXT_FOR_FORMAT.items():
+            cand = directory / f"{name}{ext}"
+            if cand.exists():
+                return self._read_dataset(cand, fmt, kind=None)
+        raise FileNotFoundError(
+            f"Dataset not found: stage={stage!r}, name={name!r} "
+            f"(searched registry and {directory})"
+        )
+
+    def _write_dataset(self, dest: Path, data: Any, dataset: Dataset) -> None:
+        """Format-aware writer that knows about GeoParquet."""
+        fmt = dataset.storage_format
+        if fmt == "parquet" and dataset.kind == "geotable":
+            gpd = _get_geopandas()
+            if not isinstance(data, gpd.GeoDataFrame):
+                raise TypeError(
+                    f"Dataset {dataset.qualified_name} is kind='geotable' "
+                    f"but data is {type(data).__name__}, not GeoDataFrame."
+                )
+            # geopandas writes GeoParquet natively
+            data.to_parquet(dest, index=False)
+            return
+        if fmt == "pt":
+            import torch
+            torch.save(data, dest)
+            return
+        # Delegate to the existing format dispatcher for all other cases.
+        self._write(dest, data, fmt)
+
+    def _read_dataset(self, src: Path, fmt: str, kind: Optional[str]) -> Any:
+        """Format-aware reader that knows about GeoParquet."""
+        if fmt == "parquet" and kind == "geotable":
+            gpd = _get_geopandas()
+            return gpd.read_parquet(src)
+        if fmt == "pt":
+            import torch
+            return torch.load(src, map_location="cpu", weights_only=False)
+        return self._read(src, fmt)
 
     # ------------------------------------------------------------------
     # Manifest queries

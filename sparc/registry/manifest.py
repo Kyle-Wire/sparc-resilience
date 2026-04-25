@@ -9,6 +9,15 @@ decide what to render.
 The on-disk canonical form is ``output_dir/artifacts_manifest.json``. A
 SQLite mirror (``output_dir/artifacts.db``) is maintained for fast queries
 but is fully rebuildable from the JSON.
+
+Two data abstractions live here:
+
+* ``ArtifactEntry`` — one materialized file on disk (path + format + bytes).
+  Multiple artifacts may belong to one dataset (e.g. a Parquet canonical
+  store + a CSV export + a PNG plot).
+* ``Dataset`` — the typed contract between stages: a named bundle of data
+  with a schema, a stage owner, and a canonical storage format. Stages save
+  *datasets*; users request *artifacts* on demand from those datasets.
 """
 
 from __future__ import annotations
@@ -28,6 +37,16 @@ StageStatus = Literal["pending", "running", "complete", "failed", "partial"]
 
 # Stage identifier — int 0..4 or string for non-numeric stages
 StageId = str  # we serialize all stage keys as strings ("0", "1", ..., "final", "spatial")
+
+# Kind of a Dataset — drives storage format selection and load dispatch.
+DatasetKind = Literal[
+    "table",      # tabular pandas DataFrame → Parquet
+    "geotable",   # GeoDataFrame → GeoParquet (or GPKG fallback)
+    "array",      # numpy ndarray → npy/npz
+    "checkpoint", # torch state_dict / model weights → pt/joblib
+    "metadata",   # dict / list / scalar config → json
+    "blob",       # opaque bytes → other
+]
 
 
 def _utcnow() -> str:
@@ -123,9 +142,119 @@ class RunManifest(BaseModel):
         return out
 
 
+# ---------------------------------------------------------------------------
+# Dataset abstraction (typed contract between stages)
+# ---------------------------------------------------------------------------
+
+
+class ColumnSpec(BaseModel):
+    """One column of a tabular DatasetSchema."""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str
+    dtype: str = Field(..., description="Pandas/Arrow dtype string (e.g. 'int64', 'float64', 'string', 'datetime64[ns]', 'geometry').")
+    nullable: bool = True
+    description: Optional[str] = None
+
+
+class DatasetSchema(BaseModel):
+    """Typed schema for a Dataset.
+
+    For ``kind='table'`` and ``kind='geotable'``, ``columns`` enumerates the
+    expected columns. For non-tabular kinds, ``columns`` may be empty and
+    ``array_shape`` / ``array_dtype`` (or free-form metadata) describe the
+    structure instead.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    kind: DatasetKind = "table"
+    columns: list[ColumnSpec] = Field(default_factory=list)
+    primary_key: list[str] = Field(default_factory=list)
+    partition_keys: list[str] = Field(default_factory=list)
+    geometry_column: Optional[str] = Field(
+        None, description="Geometry column name for kind='geotable'."
+    )
+    crs: Optional[str] = Field(
+        None, description="CRS string for kind='geotable' (e.g. 'EPSG:4326')."
+    )
+    array_shape: Optional[list[Optional[int]]] = Field(
+        None, description="Expected ndarray shape (None = any) for kind='array'."
+    )
+    array_dtype: Optional[str] = Field(
+        None, description="Expected ndarray dtype for kind='array'."
+    )
+    description: Optional[str] = None
+
+    def column_names(self) -> list[str]:
+        return [c.name for c in self.columns]
+
+
+class Dataset(BaseModel):
+    """A typed, named bundle of data produced by a stage.
+
+    The dataset is the *contract* between stages. Its on-disk representation
+    (Parquet, GeoParquet, npz, pt, json) is a storage detail; consumers
+    address it via ``(stage, name)`` and the registry resolves the rest.
+
+    Storage format defaults are chosen by ``kind``:
+
+    * ``table``      → ``parquet``
+    * ``geotable``   → ``parquet`` (GeoParquet)
+    * ``array``      → ``npy``
+    * ``checkpoint`` → ``pt``
+    * ``metadata``   → ``json``
+    * ``blob``       → ``other``
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    stage: StageId = Field(..., description="Producing stage id ('0'..'4', 'final', 'spatial').")
+    name: str = Field(..., description="Stage-local dataset name (e.g. 'cv_predictions').")
+    kind: DatasetKind = "table"
+    data_schema: DatasetSchema = Field(
+        ..., description="Schema describing the dataset's structure."
+    )
+    storage_format: ArtifactFormat = Field(
+        "parquet", description="Canonical on-disk format."
+    )
+    artifact_id: Optional[str] = Field(
+        None,
+        description="Registered artifact id; defaults to ``name`` when None.",
+    )
+    description: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def qualified_name(self) -> str:
+        """Stable cross-stage identifier: ``'stage1.cv_predictions'``."""
+        s = self.stage
+        prefix = f"stage{s}" if s.isdigit() else s
+        return f"{prefix}.{self.name}"
+
+    def resolved_artifact_id(self) -> str:
+        return self.artifact_id or self.name
+
+    @staticmethod
+    def default_format_for(kind: DatasetKind) -> ArtifactFormat:
+        return {
+            "table": "parquet",
+            "geotable": "parquet",
+            "array": "npy",
+            "checkpoint": "pt",
+            "metadata": "json",
+            "blob": "other",
+        }[kind]
+
+
 __all__ = [
     "ArtifactEntry",
     "ArtifactFormat",
+    "ColumnSpec",
+    "Dataset",
+    "DatasetKind",
+    "DatasetSchema",
     "StageManifest",
     "StageStatus",
     "StageId",
