@@ -250,8 +250,8 @@ async def debug_paths():
         return {"error": f"Cannot resolve paths: {exc}"}
 
     expected_files = {
-        "stage1_gwen_csv": str(paths.stage1_dir / "gwen_variable_importance.csv"),
-        "stage1_gwen_json": str(paths.stage1_dir / "gwen_results.json"),
+        "stage1_gwen_importance": str(paths.stage1_dir / "importance.parquet"),
+        "stage1_gwen_results": str(paths.stage1_dir / "results.json"),
         "stage2_predictions_gpkg": str(paths.stage2_dir / "spatial_cv_predictions.gpkg"),
         "stage3_coefficients": str(paths.stage3_dir / "scenario_coefficients.json"),
         "stage3_dose_response": str(paths.stage3_dir / "dose_response_curves.json"),
@@ -1372,6 +1372,9 @@ async def get_correlogram_data():
         raise HTTPException(404, "Cannot resolve output paths")
 
     candidates = [
+        # New short-name layout (PR2)
+        paths.stage0_dir / "results.json",
+        # Legacy filenames (transient backward compat)
         paths.stage0_dir / "correlogram_analysis_results.json",
         paths.stage0_dir / "correlogram_results.json",
     ]
@@ -1398,19 +1401,31 @@ async def get_gwen_data():
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
-    # Try stage1_dir (GWEN dir) first, then fall back to output_dir for legacy
+    # Try stage1_dir (GWEN dir) first, then fall back to output_dir for legacy.
+    # New short-name layout: importance.parquet / results.json.
+    # Legacy fallbacks: gwen_variable_importance.csv / gwen_results.json.
     for search_dir in [paths.stage1_dir, paths.output_dir]:
+        parquet_path = search_dir / "importance.parquet"
         csv_path = search_dir / "gwen_variable_importance.csv"
-        json_path = search_dir / "gwen_results.json"
+        json_path_new = search_dir / "results.json"
+        json_path_legacy = search_dir / "gwen_results.json"
 
-        logger.debug("[SPARC] GWEN lookup: csv=%s exists=%s, json=%s exists=%s", csv_path, csv_path.exists(), json_path, json_path.exists())
+        logger.debug(
+            "[SPARC] GWEN lookup in %s: parquet=%s csv=%s results=%s legacy=%s",
+            search_dir, parquet_path.exists(), csv_path.exists(),
+            json_path_new.exists(), json_path_legacy.exists(),
+        )
 
+        if parquet_path.exists():
+            df = pd.read_parquet(parquet_path)
+            return {"rows": df.to_dict(orient="records")}
         if csv_path.exists():
             df = pd.read_csv(csv_path)
             return {"rows": df.to_dict(orient="records")}
-        elif json_path.exists():
-            with open(json_path, "r", encoding="utf-8") as fh:
-                return _json.load(fh)
+        for json_path in (json_path_new, json_path_legacy):
+            if json_path.exists():
+                with open(json_path, "r", encoding="utf-8") as fh:
+                    return _json.load(fh)
 
     # List what IS in the stage directory to help diagnose
     found = list(paths.stage1_dir.glob("*")) if paths.stage1_dir.exists() else []
@@ -2215,33 +2230,45 @@ async def get_report_data():
             s4_files = list(paths.stage4_dir.glob("*"))
             print(f"[SPARC] Report: stage4 files={[f.name for f in s4_files]}")
 
-    # Correlogram summary (Stage 0)
+    # Correlogram summary (Stage 0) — try new short-name first, fall back to legacy
     if paths:
-        corr_path = paths.stage0_dir / "correlogram_analysis_results.json"
-        if not corr_path.exists():
-            corr_path = paths.stage0_dir / "correlogram_results.json"
-        if corr_path.exists():
-            with open(corr_path, "r", encoding="utf-8") as fh:
-                corr_data = _json.load(fh)
-            # Extract just the summary metrics per variable
-            individual = corr_data.get("individual_results", {})
-            report["correlogram"] = {
-                var: {
-                    "optimal_bandwidth": info.get("optimal_bandwidth"),
-                    "effective_range": info.get("effective_range"),
-                    "max_moran_i": info.get("max_moran_i"),
+        for candidate in (
+            paths.stage0_dir / "results.json",
+            paths.stage0_dir / "correlogram_analysis_results.json",
+            paths.stage0_dir / "correlogram_results.json",
+        ):
+            if candidate.exists():
+                with open(candidate, "r", encoding="utf-8") as fh:
+                    corr_data = _json.load(fh)
+                individual = corr_data.get("individual_results", {})
+                report["correlogram"] = {
+                    var: {
+                        "optimal_bandwidth": info.get("optimal_bandwidth"),
+                        "effective_range": info.get("effective_range"),
+                        "max_moran_i": info.get("max_moran_i"),
+                    }
+                    for var, info in individual.items()
                 }
-                for var, info in individual.items()
-            }
+                break
 
-    # GWEN summary (Stage 1)
+    # GWEN summary (Stage 1) — Parquet first, then legacy CSV in stage or output dir
     if paths:
-        csv_path = paths.stage1_dir / "gwen_variable_importance.csv"
-        if not csv_path.exists():
-            csv_path = paths.output_dir / "gwen_variable_importance.csv"  # legacy fallback
-        if csv_path.exists():
-            df = pd.read_csv(csv_path)
-            report["gwen"] = df.to_dict(orient="records")
+        for parquet_candidate in (
+            paths.stage1_dir / "importance.parquet",
+        ):
+            if parquet_candidate.exists():
+                df = pd.read_parquet(parquet_candidate)
+                report["gwen"] = df.to_dict(orient="records")
+                break
+        else:
+            for csv_candidate in (
+                paths.stage1_dir / "gwen_variable_importance.csv",
+                paths.output_dir / "gwen_variable_importance.csv",  # legacy fallback
+            ):
+                if csv_candidate.exists():
+                    df = pd.read_csv(csv_candidate)
+                    report["gwen"] = df.to_dict(orient="records")
+                    break
 
     # Spatial CV performance
     if paths:
@@ -3984,11 +4011,19 @@ async def get_results_availability():
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
-    # Each entry: endpoint -> list of candidate paths (any-exists = True)
+    # Each entry: endpoint -> list of candidate paths (any-exists = True).
+    # Stage 0/1 entries list the new short-name paths first, legacy second.
     checks: dict[str, list[Path]] = {
-        "/results/correlogram": [paths.stage0_dir / "correlogram_analysis_results.json"],
-        "/results/gwen": [paths.stage1_dir / "gwen_results.json",
-                          paths.stage1_dir / "gwen_diagnostics.json"],
+        "/results/correlogram": [
+            paths.stage0_dir / "results.json",
+            paths.stage0_dir / "correlogram_analysis_results.json",
+        ],
+        "/results/gwen": [
+            paths.stage1_dir / "results.json",
+            paths.stage1_dir / "diagnostics.json",
+            paths.stage1_dir / "gwen_results.json",
+            paths.stage1_dir / "gwen_diagnostics.json",
+        ],
         "/results/model_performance": [paths.stage2_dir / "model_performance.json",
                                        paths.stage2_dir / "spatial_cv_predictions.gpkg"],
         "/results/spatial_cv/predictions": [paths.stage2_dir / "spatial_cv_predictions.gpkg"],

@@ -134,7 +134,7 @@ def check_prerequisites():
     ]
     
     optional_files = [
-        "../output/gwen_results.json"
+        "../output/stage1_gwen/results.json",
     ]
     
     missing_files = []
@@ -364,10 +364,10 @@ def main():
     if successful_stages == total_stages:
         print("[SUCCESS] PIPELINE COMPLETED SUCCESSFULLY!")
         print("\nGenerated Outputs:")
-        print("- Stage_0_Correlogram/: Correlogram plots and optimal parameters")
-        print("- Stage_1_GWEN/: GWEN variable selection results")
-        print("- Stage_2_Spatial_CV/: Enhanced spatial CV results")
-        print("- Final_Interpretation_Results/: Local coefficient maps and analysis")
+        print("- stage0_correlogram/: Correlogram plots and optimal parameters")
+        print("- stage1_gwen/: GWEN variable selection results")
+        print("- stage2_spatial_cv/: Enhanced spatial CV results")
+        print("- final/: Local coefficient maps and analysis")
     else:
         print("[FAILED] PIPELINE COMPLETED WITH ERRORS")
         print("Check individual stage outputs for details")

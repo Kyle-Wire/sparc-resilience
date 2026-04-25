@@ -35,12 +35,24 @@ if _project_root not in sys.path:
 from sparc.config.config import load_config
 from sparc.data.data_utils import load_data, prepare_data
 from sparc.models.gwen import GWENModel
+from sparc.registry.datasets import (
+    STAGE1_GWEN_DIAGNOSTICS,
+    STAGE1_GWEN_RESULTS,
+    STAGE1_SELECTED_FEATURES,
+    STAGE1_VARIABLE_IMPORTANCE,
+)
+from sparc.registry.run_registry import register_path
+from sparc.run.pipeline_paths import get_result_store
 
 
 def setup_output_directory(output_dir):
-    """Create output directory and subdirectories."""
+    """Create output directory and ``plots/`` subdirectory.
+
+    The legacy ``gwen/`` duplicate-write subdir is no longer created — those
+    writes are removed by PR2 of the database-architecture refactor.
+    """
     os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(os.path.join(output_dir, 'gwen'), exist_ok=True)
+    os.makedirs(os.path.join(output_dir, 'plots'), exist_ok=True)
     return output_dir
 
 
@@ -93,11 +105,10 @@ def save_gwen_diagnostics(gwen_model, selected_features, feature_names, config, 
                 'coefficient_range': "Not selected"
             }
     
-    # Save diagnostics
-    diagnostics_file = os.path.join(output_dir, 'gwen_diagnostics.json')
-    with open(diagnostics_file, 'w') as f:
-        json.dump(diagnostics, f, indent=2)
-    
+    # Save diagnostics through the dataset API → stage1_gwen/diagnostics.json
+    store = get_result_store()
+    store.save_dataset(STAGE1_GWEN_DIAGNOSTICS, diagnostics, config=config)
+
     return diagnostics
 
 
@@ -178,12 +189,21 @@ def create_gwen_diagnostic_plots(gwen_model, feature_names, output_dir):
     ax4.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    
-    # Save plot
-    plot_file = os.path.join(output_dir, 'gwen_diagnostics.png')
+
+    # Save plot under stage1_gwen/plots/ and register it.
+    plots_dir = os.path.join(output_dir, 'plots')
+    os.makedirs(plots_dir, exist_ok=True)
+    plot_file = os.path.join(plots_dir, 'diagnostics.png')
     plt.savefig(plot_file, dpi=300, bbox_inches='tight')
     plt.close()
-    
+    register_path(
+        plot_file,
+        stage="1",
+        artifact_id="diagnostics_plot",
+        format="png",
+        producer="sparc.run.gwen_variable_selection:create_gwen_diagnostic_plots",
+    )
+
     print(f"   [OK] Diagnostic plots saved: {plot_file}")
     return plot_file
 
@@ -273,27 +293,31 @@ def save_gwen_results(gwen_model, selected_features, feature_names, config, outp
         'feature_importance': importance_df.to_dict('records')
     }
     
-    # Save comprehensive JSON results
-    results_file = os.path.join(output_dir, 'gwen_results.json')
-    with open(results_file, 'w') as f:
-        json.dump(gwen_results, f, indent=2)
-    
-    # Save importance table as CSV
-    importance_file = os.path.join(output_dir, 'gwen_variable_importance.csv')
-    importance_df.to_csv(importance_file, index=False)
-    
-    # Save selected features as simple text list
-    features_file = os.path.join(output_dir, 'selected_features.txt')
-    with open(features_file, 'w') as f:
+    # Save through the dataset API → stage1_gwen/{results.json,importance.parquet,selected_features.json}
+    store = get_result_store()
+    results_file = store.save_dataset(STAGE1_GWEN_RESULTS, gwen_results, config=config)
+    importance_file = store.save_dataset(
+        STAGE1_VARIABLE_IMPORTANCE, importance_df, config=config,
+    )
+    features_file = store.save_dataset(
+        STAGE1_SELECTED_FEATURES, list(selected_features), config=config,
+    )
+
+    # Legacy plain-text companion for selected features (PR3 will retire this
+    # once consumers read the JSON dataset). Registered so the registry knows
+    # about it.
+    legacy_features_path = os.path.join(output_dir, 'selected_features.txt')
+    with open(legacy_features_path, 'w') as f:
         f.write('\n'.join(selected_features))
-    
-    # Save to gwen subdirectory for organization
-    gwen_dir = os.path.join(output_dir, 'gwen')
-    with open(os.path.join(gwen_dir, 'results.json'), 'w') as f:
-        json.dump(gwen_results, f, indent=2)
-    
-    importance_df.to_csv(os.path.join(gwen_dir, 'importance.csv'), index=False)
-    
+    register_path(
+        legacy_features_path,
+        stage="1",
+        artifact_id="selected_features_text",
+        format="txt",
+        producer="sparc.run.gwen_variable_selection:save_gwen_results",
+        consumers=["legacy"],
+    )
+
     return results_file, importance_file, features_file
 
 
@@ -562,9 +586,17 @@ h2 {{ color: #37474f; margin-top: 30px; }}
 <pre>{json.dumps(diagnostics.get('tuning_parameters', {}), indent=2)}</pre>
 </body></html>"""
 
-    report_path = os.path.join(output_dir, 'gwen_selection_report.html')
+    # New canonical name → stage1_gwen/report.html
+    report_path = os.path.join(output_dir, 'report.html')
     with open(report_path, 'w', encoding='utf-8') as f:
         f.write(report)
+    register_path(
+        report_path,
+        stage="1",
+        artifact_id="selection_report",
+        format="html",
+        producer="sparc.run.gwen_variable_selection:generate_gwen_html_report",
+    )
     print(f"   [OK] HTML report saved: {report_path}")
     return report_path
 

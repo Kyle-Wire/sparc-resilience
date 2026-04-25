@@ -109,16 +109,20 @@ def check_stage_completion(output_dir: str, stage: str) -> Tuple[bool, Optional[
         (is_completed, timestamp_or_none)
     """
     if stage == 'gwen':
-        # Check for GWEN results and approval
-        gwen_file = os.path.join(output_dir, 'gwen_results.json')
+        # Check for GWEN results (new short-name layout, fallback to legacy) and approval
         approved_file = os.path.join(output_dir, 'gwen_approved.txt')
-        
-        if os.path.exists(gwen_file) and os.path.exists(approved_file):
+        gwen_candidates = [
+            os.path.join(output_dir, 'results.json'),
+            os.path.join(output_dir, 'gwen_results.json'),
+        ]
+        gwen_file = next((p for p in gwen_candidates if os.path.exists(p)), None)
+
+        if gwen_file is not None and os.path.exists(approved_file):
             try:
                 with open(gwen_file, 'r') as f:
                     gwen_data = json.load(f)
                 return True, gwen_data.get('timestamp')
-            except:
+            except Exception:
                 return False, None
         return False, None
     
@@ -165,11 +169,16 @@ def get_gwen_summary(output_dir: str) -> Optional[Dict[str, Any]]:
     Dict[str, Any] or None
         GWEN summary or None if not available
     """
-    gwen_file = os.path.join(output_dir, 'gwen_results.json')
-    
-    if not os.path.exists(gwen_file):
+    # New short-name layout first, fall back to legacy filename.
+    candidates = [
+        os.path.join(output_dir, 'results.json'),
+        os.path.join(output_dir, 'gwen_results.json'),
+    ]
+    gwen_file = next((p for p in candidates if os.path.exists(p)), None)
+
+    if gwen_file is None:
         return None
-    
+
     try:
         with open(gwen_file, 'r') as f:
             gwen_data = json.load(f)
@@ -345,9 +354,14 @@ def cleanup_pipeline_outputs(output_dir: str, keep_final_results: bool = True) -
         files_to_remove.extend([
             'oof_predictions.csv',
             'performance_summary.csv',
+            # New short-name layout (PR2)
+            'results.json',
+            'importance.parquet',
+            'selected_features.json',
+            # Legacy filenames (transient backward compat)
             'gwen_results.json',
             'gwen_variable_importance.csv',
-            'selected_features.txt'
+            'selected_features.txt',
         ])
     
     removed_files = []

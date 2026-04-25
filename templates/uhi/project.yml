@@ -96,12 +96,12 @@ causal:
 output:
   base_dir: "output"
   stage_dirs:
-    stage_0: "Stage_0_Correlogram"
-    stage_1: "Stage_1_GWEN"
-    stage_2: "Stage_2_Spatial_CV"
-    stage_3: "Stage_3_Causal_Validation"
-    stage_4: "Stage_4_Scenarios"
-    final:   "Final_Interpretation_Results"
+    stage_0: "stage0_correlogram"
+    stage_1: "stage1_gwen"
+    stage_2: "stage2_spatial_cv"
+    stage_3: "stage3_causal"
+    stage_4: "stage4_scenarios"
+    final:   "final"
 
 # ---------------------------------------------------------------------------
 # Pipeline Globals

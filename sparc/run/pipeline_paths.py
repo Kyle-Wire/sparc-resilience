@@ -51,14 +51,18 @@ class PipelinePaths:
         obj.output_dir = Path(output_base)
 
         # --- stage directories (configurable names) ---
+        # Layout convention: lowercase snake_case, ``stageN_topic`` so the
+        # number preserves execution order and the topic stays descriptive.
+        # Per-project overrides flow through ``output.stage_dirs`` in
+        # project.yml.
         stage_dirs = config.get('output', {}).get('stage_dirs', {})
-        obj.stage0_dir = obj.output_dir / stage_dirs.get('stage_0', 'Stage_0_Correlogram')
-        obj.stage1_dir = obj.output_dir / stage_dirs.get('stage_1', 'Stage_1_GWEN')
-        obj.stage2_dir = obj.output_dir / stage_dirs.get('stage_2', 'Stage_2_Spatial_CV')
-        obj.stage3_dir = obj.output_dir / stage_dirs.get('stage_3', 'Stage_3_Causal_Validation')
-        obj.stage4_dir = obj.output_dir / stage_dirs.get('stage_4', 'Stage_4_Scenarios')
-        obj.final_dir  = obj.output_dir / stage_dirs.get('final',   'Final_Interpretation_Results')
-        obj.spatial_analysis_dir = obj.output_dir / 'Spatial_Analysis_Results'
+        obj.stage0_dir = obj.output_dir / stage_dirs.get('stage_0', 'stage0_correlogram')
+        obj.stage1_dir = obj.output_dir / stage_dirs.get('stage_1', 'stage1_gwen')
+        obj.stage2_dir = obj.output_dir / stage_dirs.get('stage_2', 'stage2_spatial_cv')
+        obj.stage3_dir = obj.output_dir / stage_dirs.get('stage_3', 'stage3_causal')
+        obj.stage4_dir = obj.output_dir / stage_dirs.get('stage_4', 'stage4_scenarios')
+        obj.final_dir  = obj.output_dir / stage_dirs.get('final',   'final')
+        obj.spatial_analysis_dir = obj.output_dir / stage_dirs.get('spatial', 'spatial')
 
         obj._ensure_directories()
         return obj
@@ -89,13 +93,14 @@ class PipelinePaths:
             print(f"Warning: Could not load config ({e}), using default output directory")
             self.output_dir = self.phase1_dir / "Final_Results"
         
-        self.stage0_dir = self.output_dir / "Stage_0_Correlogram"
-        self.stage1_dir = self.output_dir / "Stage_1_GWEN"
-        self.stage2_dir = self.output_dir / "Stage_2_Spatial_CV"
-        self.stage3_dir = self.output_dir / "Stage_3_Causal_Validation"
-        self.stage4_dir = self.output_dir / "Stage_4_Scenarios"
-        self.final_dir = self.output_dir / "Final_Interpretation_Results"
-        self.spatial_analysis_dir = self.output_dir / "Spatial_Analysis_Results"
+        # Layout convention: lowercase snake_case, ``stageN_topic``.
+        self.stage0_dir = self.output_dir / "stage0_correlogram"
+        self.stage1_dir = self.output_dir / "stage1_gwen"
+        self.stage2_dir = self.output_dir / "stage2_spatial_cv"
+        self.stage3_dir = self.output_dir / "stage3_causal"
+        self.stage4_dir = self.output_dir / "stage4_scenarios"
+        self.final_dir = self.output_dir / "final"
+        self.spatial_analysis_dir = self.output_dir / "spatial"
         
         # Ensure all directories exist
         self._ensure_directories()
@@ -158,31 +163,50 @@ class PipelinePaths:
     def pipeline_report_file(self):
         return self.project_root / "pipeline_execution_report.txt"
     
-    # GWEN files (Stage 1)
+    # GWEN files (Stage 1) — new short-name layout (PR2)
     @property
     def gwen_results(self):
-        return self.stage1_dir / "gwen_results.json"
-    
+        return self.stage1_dir / "results.json"
+
     @property
     def gwen_approved(self):
+        # Approval marker: stays in stage1_dir but keeps its descriptive name.
         return self.stage1_dir / "gwen_approved.txt"
-    
+
     @property
     def selected_features(self):
+        # Canonical JSON list. The legacy .txt companion is still written
+        # by Stage 1 for backward compat (consumers migrate in PR3).
+        return self.stage1_dir / "selected_features.json"
+
+    @property
+    def selected_features_legacy_txt(self):
         return self.stage1_dir / "selected_features.txt"
-    
-    # Stage 0 files (Correlogram)
+
+    # Stage 0 files (Correlogram) — new short-name layout (PR2)
     @property
     def variogram_results(self):
         return self.stage0_dir / "variogram_analysis_results.json"
-    
+
     @property
     def variogram_summary(self):
         return self.stage0_dir / "variogram_summary.csv"
-    
+
     @property
     def correlogram_results(self):
-        return self.stage0_dir / "correlogram_analysis_results.json"
+        return self.stage0_dir / "results.json"
+
+    @property
+    def correlogram_summary(self):
+        return self.stage0_dir / "summary.parquet"
+
+    @property
+    def dataset_profile(self):
+        return self.stage0_dir / "profile.json"
+
+    @property
+    def spatial_cv_config(self):
+        return self.stage0_dir / "spatial_cv_config.json"
     
     # Stage 2 files
     @property
@@ -299,15 +323,6 @@ class PipelinePaths:
     @property
     def laplacian_tsne_coords(self):
         return self.spatial_analysis_dir / "laplacian_tsne_coordinates.csv"
-
-    # Stage 1 additional files
-    @property
-    def correlogram_csv(self):
-        return self.stage1_dir / "correlogram_analysis_results.csv"
-
-    @property
-    def correlogram_json(self):
-        return self.stage1_dir / "correlogram_analysis_results.json"
 
     # Stage 2 additional files
     @property

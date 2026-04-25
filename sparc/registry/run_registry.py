@@ -57,25 +57,31 @@ LOCK_FILENAME = "artifacts_manifest.json.lock"
 # ignored.  ``{stage}`` placeholders are resolved against PipelinePaths.
 
 _KNOWN_CATALOG: list[dict[str, Any]] = [
-    # Stage 0
-    {"id": "correlogram_results", "stage": "0",
-     "patterns": ["correlogram_analysis_results.json", "correlogram_results.json"],
+    # Stage 0  (output/stage0_correlogram/) — new short-name layout (PR2)
+    {"id": "results", "stage": "0",
+     "patterns": ["results.json", "correlogram_analysis_results.json"],
      "format": "json", "consumers": ["server:/results/correlogram"]},
-    {"id": "correlogram_summary", "stage": "0",
-     "patterns": ["correlogram_summary.csv"], "format": "csv"},
-    {"id": "dataset_profile", "stage": "0",
-     "patterns": ["dataset_profile.json"], "format": "json"},
+    {"id": "summary", "stage": "0",
+     "patterns": ["summary.parquet", "correlogram_summary.csv"],
+     "format": "parquet"},
+    {"id": "profile", "stage": "0",
+     "patterns": ["profile.json", "dataset_profile.json"], "format": "json"},
+    {"id": "spatial_cv_config", "stage": "0",
+     "patterns": ["spatial_cv_config.json"], "format": "json"},
 
-    # Stage 1
-    {"id": "gwen_results", "stage": "1",
-     "patterns": ["gwen_results.json"], "format": "json",
+    # Stage 1  (output/stage1_gwen/) — new short-name layout (PR2)
+    {"id": "results", "stage": "1",
+     "patterns": ["results.json", "gwen_results.json"], "format": "json",
      "consumers": ["server:/results/gwen"]},
-    {"id": "gwen_variable_importance", "stage": "1",
-     "patterns": ["gwen_variable_importance.csv"], "format": "csv"},
-    {"id": "gwen_diagnostics", "stage": "1",
-     "patterns": ["gwen_diagnostics.json"], "format": "json"},
+    {"id": "importance", "stage": "1",
+     "patterns": ["importance.parquet", "gwen_variable_importance.csv"],
+     "format": "parquet"},
+    {"id": "diagnostics", "stage": "1",
+     "patterns": ["diagnostics.json", "gwen_diagnostics.json"],
+     "format": "json"},
     {"id": "selected_features", "stage": "1",
-     "patterns": ["selected_features.txt"], "format": "txt"},
+     "patterns": ["selected_features.json", "selected_features.txt"],
+     "format": "json"},
 
     # Stage 2
     {"id": "ensemble_results", "stage": "2",

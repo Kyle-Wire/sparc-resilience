@@ -90,24 +90,31 @@ def modify_project_config(
 
 
 def ensure_gwen_bypass(output_dir: Path, predictors: list):
-    """Create GWEN bypass files so --skip-gwen works for every run."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "gwen").mkdir(exist_ok=True)
+    """Create GWEN bypass files so --skip-gwen works for every run.
 
-    # gwen_approved.txt
+    Writes the new short-name layout (``results.json``,
+    ``selected_features.json``) used by the centralized data layer (PR2).
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # gwen_approved.txt — approval marker, name preserved
     approval = output_dir / "gwen_approved.txt"
     if not approval.exists():
         approval.write_text(
             "GWEN auto-approved — all physically-motivated predictors retained.\n"
         )
 
-    # selected_features.txt
-    sf = output_dir / "selected_features.txt"
+    # selected_features.json — new canonical
+    sf = output_dir / "selected_features.json"
     if not sf.exists():
-        sf.write_text("\n".join(predictors) + "\n")
+        sf.write_text(json.dumps(list(predictors), indent=2))
+    # Legacy plain-text companion (consumers migrate in PR3)
+    sf_txt = output_dir / "selected_features.txt"
+    if not sf_txt.exists():
+        sf_txt.write_text("\n".join(predictors) + "\n")
 
-    # gwen_results.json
-    gr = output_dir / "gwen_results.json"
+    # results.json — new canonical for GWEN summary
+    gr = output_dir / "results.json"
     if not gr.exists():
         results = {
             "total_features": len(predictors),
@@ -124,7 +131,6 @@ def ensure_gwen_bypass(output_dir: Path, predictors: list):
             ],
         }
         gr.write_text(json.dumps(results, indent=2))
-        (output_dir / "gwen" / "results.json").write_text(json.dumps(results, indent=2))
 
 
 def run_single(

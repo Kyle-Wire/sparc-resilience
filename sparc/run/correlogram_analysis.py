@@ -21,9 +21,16 @@ _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from sparc.run.pipeline_paths import get_paths
+from sparc.run.pipeline_paths import get_paths, get_result_store
 from sparc.config.config import load_config
 from sparc.data.data_utils import load_and_preprocess_data
+from sparc.registry.datasets import (
+    STAGE0_CORRELOGRAM_RESULTS,
+    STAGE0_CORRELOGRAM_SUMMARY,
+    STAGE0_DATASET_PROFILE,
+    STAGE0_SPATIAL_CV_CONFIG,
+)
+from sparc.registry.run_registry import register_path
 
 warnings.filterwarnings('ignore')
 
@@ -251,10 +258,19 @@ class CorrelogramSpatialAnalyzer:
                 
                 plt.tight_layout()
                 
-                # Save plot
-                plot_path = os.path.join(output_dir, f'{variable_name}_correlogram.png')
+                # Save plot under stage0_correlogram/plots/ and register it.
+                plots_dir = Path(output_dir) / 'plots'
+                plots_dir.mkdir(parents=True, exist_ok=True)
+                plot_path = plots_dir / f'{variable_name}_correlogram.png'
                 plt.savefig(plot_path, dpi=300, bbox_inches='tight')
                 plt.close()  # Close the figure to free memory
+                register_path(
+                    plot_path,
+                    stage="0",
+                    artifact_id=f"correlogram_plot::{variable_name}",
+                    format="png",
+                    producer="sparc.run.correlogram_analysis:CorrelogramSpatialAnalyzer.analyze_variable_correlogram",
+                )
                 
                 print(f"  Enhanced correlogram plot saved: {plot_path}")
             
@@ -484,12 +500,10 @@ def main(fast_mode=False):
     profile = profiler.profile()
     corr_recs = profiler.recommend_parameters().get("correlogram", {})
     print(profiler.summary())
-    
-    # Save profile for downstream stages
-    import json as _json
-    profile_path = os.path.join(stage0_dir, 'dataset_profile.json')
-    with open(profile_path, 'w') as _fp:
-        _json.dump(profile, _fp, indent=2)
+
+    # Save profile via the registry-backed dataset API.
+    store = get_result_store()
+    profile_path = store.save_dataset(STAGE0_DATASET_PROFILE, profile, config=config)
     print(f"Dataset profile saved to: {profile_path}")
     
     # Initialize analyzer with data-driven parameters (no hardcoded 3000 m cap)
@@ -585,9 +599,6 @@ def main(fast_mode=False):
         }
     }
     
-    # Save comprehensive results (this replaces variogram_analysis_results.json)
-    results_path = os.path.join(stage0_dir, 'correlogram_analysis_results.json')
-    
     def convert_numpy_types(obj):
         """Convert numpy types to Python types for JSON serialization"""
         if isinstance(obj, np.ndarray):
@@ -604,14 +615,16 @@ def main(fast_mode=False):
             return [convert_numpy_types(item) for item in obj]
         else:
             return obj
-    
-    # Convert the entire results structure
+
+    # Convert the entire results structure once, reuse below.
     json_safe_results = convert_numpy_types(comprehensive_results)
-    
-    with open(results_path, 'w') as f:
-        json.dump(json_safe_results, f, indent=2)
-    
-    # Create summary CSV for easy review
+
+    # Save comprehensive results via the dataset API → stage0_correlogram/results.json
+    results_path = store.save_dataset(
+        STAGE0_CORRELOGRAM_RESULTS, json_safe_results, config=config,
+    )
+
+    # Build summary table
     summary_data = []
     for variable, result in all_results.items():
         summary_data.append({
@@ -623,12 +636,24 @@ def main(fast_mode=False):
             'Max_Moran_I': result['max_moran_i'],
             'Significant_Lags': result['significant_lags']
         })
-    
+
     summary_df = pd.DataFrame(summary_data)
-    summary_df.to_csv(os.path.join(stage0_dir, 'correlogram_summary.csv'), index=False)
-    
-    # Create spatial CV configuration summary with UTF-8 encoding
-    cv_summary_path = os.path.join(stage0_dir, 'spatial_cv_configuration.txt')
+    # Canonical Parquet → stage0_correlogram/summary.parquet
+    store.save_dataset(STAGE0_CORRELOGRAM_SUMMARY, summary_df, config=config)
+
+    # Structured spatial CV config dataset → stage0_correlogram/spatial_cv_config.json
+    spatial_cv_config_payload = {
+        "optimal_block_size": float(optimal_cv_block_size),
+        "model_bandwidths": {
+            k: float(v) if v is not None else None
+            for k, v in model_bandwidths.items()
+        },
+        "validation_results": convert_numpy_types(cv_validation_results),
+    }
+    store.save_dataset(STAGE0_SPATIAL_CV_CONFIG, spatial_cv_config_payload, config=config)
+
+    # Legacy human-readable companion (kept for terminal-friendly review)
+    cv_summary_path = os.path.join(stage0_dir, 'spatial_cv_config.txt')
     with open(cv_summary_path, 'w', encoding='utf-8') as f:
         f.write("SPATIAL CV CONFIGURATION FROM CORRELOGRAM ANALYSIS\n")
         f.write("=" * 55 + "\n\n")
@@ -655,7 +680,15 @@ def main(fast_mode=False):
                 bw_str = f" (bandwidth: {bw:.0f}m)" if bw is not None else " (global)"
                 f.write(f"  {model_name}{bw_str}: {status}\n")
             f.write("\n")
-    
+    register_path(
+        cv_summary_path,
+        stage="0",
+        artifact_id="spatial_cv_config_text",
+        format="txt",
+        producer="sparc.run.correlogram_analysis:main",
+        consumers=["human"],
+    )
+
     print(f"\n=== Correlogram-Based Spatial Analysis Complete ===")
     print(f"Results saved to: {stage0_dir}/")
     print(f"Analyzed {len(all_results)} variables")

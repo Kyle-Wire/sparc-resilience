@@ -47,11 +47,25 @@ def _find_first(run_dir: Path, candidates: list[str]) -> Path | None:
 
 
 def _collect_artifacts(run_dir: Path) -> dict[str, Any]:
-    """Pull the canonical JSON artifacts we know about into a dict."""
+    """Pull the canonical JSON artifacts we know about into a dict.
+
+    Tries the new ``stageN_topic/`` short-name layout first, then falls back
+    to the legacy mixed-case directories for older runs that haven't been
+    re-run on the new pipeline.
+    """
     bundle: dict[str, Any] = {}
-    bundle["correlogram"] = _safe_load_json(run_dir / "Stage_0_Correlogram" / "correlogram_analysis_results.json") \
+    # Stage 0 — correlogram results
+    bundle["correlogram"] = (
+        _safe_load_json(run_dir / "stage0_correlogram" / "results.json")
+        or _safe_load_json(run_dir / "Stage_0_Correlogram" / "correlogram_analysis_results.json")
         or _safe_load_json(run_dir / "Stage_0_Correlogram" / "correlogram_results.json")
-    bundle["gwen"] = _safe_load_json(run_dir / "Stage_1_GWEN" / "gwen_results.json")
+    )
+    # Stage 1 — GWEN
+    bundle["gwen"] = (
+        _safe_load_json(run_dir / "stage1_gwen" / "results.json")
+        or _safe_load_json(run_dir / "Stage_1_GWEN" / "gwen_results.json")
+    )
+    # Stages 2-4 — directory names update in PR3; keep legacy paths for now.
     bundle["model_performance"] = _safe_load_json(run_dir / "Stage_2_Spatial_CV" / "model_performance.json")
     bundle["scenario_coefficients"] = _safe_load_json(run_dir / "Stage_3_Causal_Validation" / "scenario_coefficients.json")
     bundle["mc3"] = _safe_load_json(run_dir / "Stage_3_Causal_Validation" / "mc3_results.json")

@@ -242,8 +242,11 @@ def cmd_run(args):
         from sparc.run.pipeline_configurator import PipelineConfigurator
         configurator = PipelineConfigurator(stage1_dir=str(paths.stage0_dir))
 
-        # If dataset_profile.json exists, apply profiler recommendations
-        profile_path = paths.stage0_dir / 'dataset_profile.json'
+        # If a dataset profile exists, apply profiler recommendations.
+        # Try new short-name layout first, fall back to legacy filename.
+        profile_path = paths.stage0_dir / 'profile.json'
+        if not profile_path.exists():
+            profile_path = paths.stage0_dir / 'dataset_profile.json'
         if profile_path.exists():
             with open(profile_path) as _f:
                 _profile = json.load(_f)
