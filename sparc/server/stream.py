@@ -639,7 +639,9 @@ def _rebuild_registry(state: ServerState) -> int:
     except Exception as exc:  # noqa: BLE001
         # Non-fatal: log and continue; the registry will be rebuilt next time
         # the project is loaded or the /results/manifest/rescan endpoint is hit.
-        print(f"[SPARC] Registry rebuild warning: {exc}")
+        logging.getLogger(__name__).warning(
+            "[SPARC] Registry rebuild warning: %s", exc, exc_info=True
+        )
         return 0
 
 

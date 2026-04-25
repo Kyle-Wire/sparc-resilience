@@ -46,6 +46,7 @@ def test_migrate_from_disk_picks_up_gwen(tmp_path):
 
     # Write a fake GWEN CSV to the expected location.
     gwen_csv = paths.stage1_dir / "gwen_variable_importance.csv"
+    gwen_csv.parent.mkdir(parents=True, exist_ok=True)
     gwen_csv.write_text("variable,importance\nNDVI,0.42\nCanopy,0.31\n")
 
     reg = RunRegistry(paths.output_dir, autoload=False)
@@ -65,6 +66,7 @@ def test_migrate_from_disk_does_not_duplicate(tmp_path):
     RunRegistry = _get_run_registry()
 
     paths = _make_pipeline_paths(tmp_path)
+    paths.stage1_dir.mkdir(parents=True, exist_ok=True)
     (paths.stage1_dir / "gwen_variable_importance.csv").write_text("variable,importance\nNDVI,0.1\n")
 
     reg = RunRegistry(paths.output_dir, autoload=False)
@@ -82,6 +84,7 @@ def test_manifest_persists_to_json(tmp_path):
 
     paths = _make_pipeline_paths(tmp_path)
     corr_json = paths.stage0_dir / "correlogram_analysis_results.json"
+    corr_json.parent.mkdir(parents=True, exist_ok=True)
     corr_json.write_text(json.dumps({"individual_results": {}}))
 
     reg = RunRegistry(paths.output_dir, autoload=False)
@@ -104,6 +107,7 @@ def test_rebuild_registry_stream_helper(tmp_path):
     from sparc.server.state import ServerState
 
     paths = _make_pipeline_paths(tmp_path)
+    paths.stage1_dir.mkdir(parents=True, exist_ok=True)
     (paths.stage1_dir / "gwen_variable_importance.csv").write_text("variable,importance\nNDVI,0.1\n")
 
     reg = RunRegistry(paths.output_dir, autoload=False)

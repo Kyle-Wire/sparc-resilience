@@ -227,7 +227,7 @@ export function PipelineProvider({
       // The server guarantees a registry_updated event arrives before complete.
       // Trigger one more rescan here as a safety net for the case where
       // the server is an older version that does not emit registry_updated.
-      rescanManifest().catch(() => undefined);
+      rescanManifest().catch((err) => console.warn("[SPARC] Manifest rescan failed:", err));
       onRegistryUpdateRef.current?.();
       // If there are more stages queued, don't stop the pipeline
       if (stageQueueRef.current.length === 0) {
