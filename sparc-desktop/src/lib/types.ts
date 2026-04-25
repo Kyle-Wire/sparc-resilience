@@ -124,7 +124,8 @@ export interface DataPreview {
 export interface PipelineEvent {
   type: "log" | "metric" | "complete" | "error"
     | "capacity_result" | "epoch_update" | "curriculum_stage" | "convergence"
-    | "dag_approval_requested" | "stage_status" | "training_health";
+    | "dag_approval_requested" | "stage_status" | "training_health"
+    | "registry_updated";
   message?: string;
   stage?: number;
   fold?: number;
@@ -184,6 +185,10 @@ export interface PipelineEvent {
   component?: string;
   /** Training health: detail message. */
   detail?: string;
+
+  // ---- Registry update fields ----
+  /** Number of newly registered artifacts after a stage rebuild. */
+  newly_registered?: number;
 
   // ---- Frontend-only fields (added on receipt, not from server) ----
   /** Wall-clock timestamp (ms since epoch) when the event was received by the frontend. */

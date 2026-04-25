@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect } from "react";
 import type { ReactNode } from "react";
 import type { PipelineEvent } from "@/lib/types";
-import { getRunEvents, approveDag, rejectDag } from "@/lib/api";
+import { getRunEvents, approveDag, rejectDag, rescanManifest } from "@/lib/api";
 
 // ---- Training telemetry derived state ----
 export interface CapacityResult {
@@ -76,7 +76,18 @@ export function usePipeline(): PipelineState {
   return ctx;
 }
 
-export function PipelineProvider({ children, serverReady }: { children: ReactNode; serverReady: boolean }) {
+export function PipelineProvider({
+  children,
+  serverReady,
+  onRegistryUpdate,
+}: {
+  children: ReactNode;
+  serverReady: boolean;
+  /** Called whenever the server confirms the run registry has been updated
+   *  (i.e. after a stage completes). Consumers can use this to refetch the
+   *  manifest and refresh results panels. */
+  onRegistryUpdate?: () => void;
+}) {
   const [events, setEvents] = useState<PipelineEvent[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -98,6 +109,10 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
   const stageQueueRef = useRef<number[]>([]);
   /** Options to reuse when chaining to the next stage. */
   const optsRef = useRef<{ fast: boolean; skip_gwen: boolean }>({ fast: false, skip_gwen: false });
+  /** Stable ref to the latest onRegistryUpdate callback so processEvent
+   *  can call it without being recreated on every render. */
+  const onRegistryUpdateRef = useRef(onRegistryUpdate);
+  useEffect(() => { onRegistryUpdateRef.current = onRegistryUpdate; }, [onRegistryUpdate]);
 
   /** Process a single pipeline event and update training telemetry state. */
   const processEvent = useCallback((event: PipelineEvent) => {
@@ -200,7 +215,20 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
         break;
     }
 
+    if (event.type === "registry_updated") {
+      // The server rebuilt the artifact database after a stage completed.
+      // Notify any listener (e.g. useManifest) to refetch the manifest so
+      // Results panels immediately reflect the newly available artifacts.
+      onRegistryUpdateRef.current?.();
+      return false;
+    }
+
     if (event.type === "complete") {
+      // The server guarantees a registry_updated event arrives before complete.
+      // Trigger one more rescan here as a safety net for the case where
+      // the server is an older version that does not emit registry_updated.
+      rescanManifest().catch(() => undefined);
+      onRegistryUpdateRef.current?.();
       // If there are more stages queued, don't stop the pipeline
       if (stageQueueRef.current.length === 0) {
         setIsRunning(false);

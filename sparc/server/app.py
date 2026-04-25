@@ -1371,13 +1371,24 @@ async def get_correlogram_data():
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
+    # Registry-first lookup — falls back to filesystem scan.
+    reg_path = _registry_path("0", "correlogram_results") or _registry_path("0", "correlogram_results_json")
+    if reg_path is not None:
+        with open(reg_path, "r", encoding="utf-8") as fh:
+            return _json.load(fh)
+
     candidates = [
         paths.stage0_dir / "correlogram_analysis_results.json",
         paths.stage0_dir / "correlogram_results.json",
     ]
     found = next((p for p in candidates if p.exists()), None)
     if found is None:
-        raise HTTPException(404, "Correlogram results not found. Run Stage 0 first.")
+        raise _missing_artifact_response(
+            artifact_id="correlogram_results",
+            stage="0",
+            expected_paths=candidates,
+            hint="Run Stage 0 (Correlogram Analysis) to generate this result.",
+        )
 
     with open(found, "r", encoding="utf-8") as fh:
         return _json.load(fh)
@@ -1397,6 +1408,17 @@ async def get_gwen_data():
         paths = PipelinePaths.from_config(state.project_config)
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
+
+    # Registry-first: gwen_variable_importance CSV is the canonical source.
+    reg_csv = _registry_path("1", "gwen_variable_importance")
+    if reg_csv is not None:
+        df = pd.read_csv(reg_csv)
+        return {"rows": df.to_dict(orient="records")}
+
+    reg_json = _registry_path("1", "gwen_results")
+    if reg_json is not None:
+        with open(reg_json, "r", encoding="utf-8") as fh:
+            return _json.load(fh)
 
     # Try stage1_dir (GWEN dir) first, then fall back to output_dir for legacy
     for search_dir in [paths.stage1_dir, paths.output_dir]:
@@ -1428,8 +1450,9 @@ async def get_model_performance():
 
     Sources (checked in order):
     1. In-memory stage 2 result (``performance.individual_models``)
-    2. ``final_ensemble_results.json`` on disk (written by enhanced_spatial_cv)
-    3. In-memory stage 2 ``base_models`` key (main() wrapper format)
+    2. Registry lookup for ``final_ensemble_results``
+    3. ``final_ensemble_results.json`` on disk (written by enhanced_spatial_cv)
+    4. In-memory stage 2 ``base_models`` key (main() wrapper format)
     """
     import json as _json
     models: list[dict] = []
@@ -1459,12 +1482,16 @@ async def get_model_performance():
                 "rmse": ens.get("rmse"),
             })
 
-    # --- Disk fallback ---
+    # --- Registry + disk fallback ---
     if not models and state.project_config is not None:
         from sparc.run.pipeline_paths import PipelinePaths
         try:
             paths = PipelinePaths.from_config(state.project_config)
-            ens_file = paths.stage2_dir / "final_ensemble_results.json"
+            # Registry-first: check for the canonical artifact id.
+            ens_file = (
+                _registry_path("2", "final_ensemble_results")
+                or (paths.stage2_dir / "final_ensemble_results.json")
+            )
             if ens_file.exists():
                 with open(ens_file, "r", encoding="utf-8") as fh:
                     data = _json.load(fh)
@@ -1779,12 +1806,25 @@ async def get_causal_diagnostics():
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
-    diag_path = paths.stage3_dir / "causal_diagnostics.json"
+    # Registry-first lookup.
+    diag_path = (
+        _registry_path("3", "causal_diagnostics")
+        or (paths.stage3_dir / "causal_diagnostics.json")
+    )
     if not diag_path.exists():
-        raise HTTPException(404, "Causal diagnostics not available")
+        raise _missing_artifact_response(
+            artifact_id="causal_diagnostics",
+            stage="3",
+            expected_paths=[paths.stage3_dir / "causal_diagnostics.json"],
+            hint=(
+                "Causal diagnostics are produced by Stage 3 (Causal Validation). "
+                "Run Stage 3 to generate CATE calibration and cumulative-effect data."
+            ),
+        )
 
     with open(diag_path, "r", encoding="utf-8") as fh:
         return _json.load(fh)
+
 
 
 def _load_neural_pdp(paths) -> dict:
@@ -3098,8 +3138,103 @@ async def rescan_manifest():
             "total_artifacts": len(state.registry.manifest.all_artifacts())}
 
 
-# ------------------------------------------------------------------
-# Results endpoints (parameterized — MUST come after named routes above)
+@app.post("/results/database/rebuild")
+async def rebuild_database():
+    """Fully rebuild the artifact database (registry) from the current run directory.
+
+    Reloads the JSON manifest from disk, then walks every known artifact
+    pattern under the run output directory and re-registers anything
+    that is not already tracked.  Use this after a pipeline run to ensure
+    the database reflects the actual state of the filesystem.
+
+    Returns a summary of what was found so the UI can surface actionable
+    empty-states.
+    """
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    if state.registry is None:
+        _attach_registry(state.project_config)
+    if state.registry is None:
+        raise HTTPException(503, "Run registry unavailable")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+
+    paths = PipelinePaths.from_config(state.project_config)
+
+    # Reload JSON manifest from disk first (picks up any concurrent writes).
+    state.registry.load()
+
+    # Walk the filesystem and register untracked artifacts.
+    newly_registered = state.registry.migrate_from_disk(paths, force=False)
+
+    all_artifacts = state.registry.manifest.all_artifacts()
+    by_stage: dict[str, int] = {}
+    for art in all_artifacts:
+        by_stage[art.stage] = by_stage.get(art.stage, 0) + 1
+
+    return {
+        "status": "rebuilt",
+        "newly_registered": newly_registered,
+        "total_artifacts": len(all_artifacts),
+        "by_stage": by_stage,
+        "manifest_path": str(state.registry.manifest_path),
+        "sqlite_path": str(state.registry.sqlite_path),
+    }
+
+
+@app.get("/results/database/status")
+async def database_status():
+    """Return the current status of the artifact database (registry).
+
+    Useful for diagnostics and for the desktop UI to display a "database
+    health" indicator without triggering a full rebuild.
+    """
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    if state.registry is None:
+        return {
+            "attached": False,
+            "total_artifacts": 0,
+            "by_stage": {},
+            "manifest_exists": False,
+            "sqlite_exists": False,
+        }
+
+    from sparc.run.pipeline_paths import PipelinePaths
+
+    try:
+        paths = PipelinePaths.from_config(state.project_config)
+        output_dir = paths.output_dir
+    except Exception:
+        output_dir = state.registry.output_dir
+
+    all_artifacts = state.registry.manifest.all_artifacts()
+    by_stage: dict[str, int] = {}
+    for art in all_artifacts:
+        by_stage[art.stage] = by_stage.get(art.stage, 0) + 1
+
+    stage_statuses: dict[str, str] = {
+        sid: sm.status
+        for sid, sm in state.registry.manifest.stages.items()
+    }
+
+    return {
+        "attached": True,
+        "total_artifacts": len(all_artifacts),
+        "by_stage": by_stage,
+        "stage_statuses": stage_statuses,
+        "manifest_exists": state.registry.manifest_path.exists(),
+        "sqlite_exists": state.registry.sqlite_path.exists(),
+        "output_dir": str(output_dir),
+        "manifest_updated_at": state.registry.manifest.updated_at,
+        "run_id": state.registry.manifest.run_id,
+        "schema_version": state.registry.manifest.schema_version,
+    }
+
+
+
 # ------------------------------------------------------------------
 
 @app.get("/results/{stage}")

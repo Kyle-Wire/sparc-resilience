@@ -522,6 +522,17 @@ async def stream_stage(
 
         try:
             _execute_stage(state, stage, fast=fast, skip_gwen=skip_gwen)
+            # Rebuild the run registry so the frontend immediately sees the
+            # newly written artifacts without waiting for the next project load.
+            newly_registered = _rebuild_registry(state)
+            asyncio.run_coroutine_threadsafe(
+                queue.put({
+                    "type": "registry_updated",
+                    "stage": stage,
+                    "newly_registered": newly_registered,
+                }),
+                loop,
+            )
             asyncio.run_coroutine_threadsafe(
                 queue.put({
                     "type": "stage_status",
@@ -537,6 +548,9 @@ async def stream_stage(
         except Exception as exc:
             import traceback
             tb = traceback.format_exc()
+            # Still attempt a registry rebuild on failure — partial artifacts
+            # may have been written and are worth registering.
+            _rebuild_registry(state)
             asyncio.run_coroutine_threadsafe(
                 queue.put({
                     "type": "stage_status",
@@ -599,6 +613,34 @@ async def stream_stage(
             yield event
     finally:
         session_log.close()
+
+
+# ------------------------------------------------------------------
+# Registry rebuild helper
+# ------------------------------------------------------------------
+
+def _rebuild_registry(state: ServerState) -> int:
+    """Walk the run output directory and register any untracked artifacts.
+
+    Called after every stage completes (success or failure) so the database
+    reflects the current state of the filesystem immediately — the frontend
+    can then fetch an up-to-date manifest without waiting for the next
+    project load.
+
+    Returns the number of newly registered artifacts (0 on any error so
+    callers can always treat the return value as an int).
+    """
+    if state.registry is None or state.project_config is None:
+        return 0
+    try:
+        from sparc.run.pipeline_paths import PipelinePaths
+        paths = PipelinePaths.from_config(state.project_config)
+        return state.registry.migrate_from_disk(paths)
+    except Exception as exc:  # noqa: BLE001
+        # Non-fatal: log and continue; the registry will be rebuilt next time
+        # the project is loaded or the /results/manifest/rescan endpoint is hit.
+        print(f"[SPARC] Registry rebuild warning: {exc}")
+        return 0
 
 
 # ------------------------------------------------------------------
