@@ -120,8 +120,15 @@ def build_master_gpkg(
                 ("2", "ensemble_predictions_geo"): "stage2_ensemble_predictions",
             }
             manifest_stages = getattr(registry.manifest, "stages", {}) or {}
-            for stage_key, artifact_dict in manifest_stages.items():
-                if not isinstance(artifact_dict, dict):
+            for stage_key, stage_manifest in manifest_stages.items():
+                # stage_manifest is a StageManifest pydantic model; pull its
+                # artifacts dict (id -> ArtifactEntry). Fall back to a raw
+                # dict in case a caller passes a plain mapping.
+                if isinstance(stage_manifest, dict):
+                    artifact_dict = stage_manifest
+                else:
+                    artifact_dict = getattr(stage_manifest, "artifacts", None) or {}
+                if not artifact_dict:
                     continue
                 for art_id, entry in artifact_dict.items():
                     sk = getattr(entry, "storage_kind", None)

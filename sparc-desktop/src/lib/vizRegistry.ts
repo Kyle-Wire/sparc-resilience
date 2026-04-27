@@ -38,21 +38,34 @@ export interface VizEntry {
 }
 
 export const VIZ_REGISTRY: VizEntry[] = [
-  { stage: "0", artifactId: "data_histogram", kind: "data_histogram", endpoint: "/data/histogram", label: "Data histogram" },
-  { stage: "1", artifactId: "dag_structure", kind: "dag", endpoint: "/dag", label: "DAG" },
+  // Stage 0 — data summaries
+  { stage: "0", artifactId: "data", kind: "data_histogram", endpoint: "/data/histogram", label: "Data histogram" },
+  { stage: "0", artifactId: "data_summary", kind: "data_histogram", endpoint: "/data/histogram", label: "Data summary" },
+  { stage: "0", artifactId: "data_histogram_bins", kind: "data_histogram", endpoint: "/data/histogram", label: "Data histogram bins" },
+  // Stage 1 — causal discovery
+  { stage: "1", artifactId: "dag", kind: "dag", endpoint: "/dag", label: "DAG" },
+  { stage: "1", artifactId: "edge_inclusion_probs", kind: "dag", endpoint: "/dag", label: "Edge inclusion probabilities" },
   { stage: "1", artifactId: "correlogram", kind: "correlogram", endpoint: "/results/correlogram", label: "Correlogram" },
-  { stage: "2", artifactId: "predictions_map", kind: "predictions_map", endpoint: "/results/spatial_cv/predictions", label: "Predictions map" },
-  { stage: "3", artifactId: "cate_map", kind: "cate", endpoint: "/results/causal/cate_map", label: "CATE map" },
-  { stage: "3", artifactId: "pdp", kind: "pdp", endpoint: "/results/causal", label: "Partial-dependence plot" },
+  // Stage 2 — spatial CV / CATE / PDP
+  { stage: "2", artifactId: "predictions", kind: "predictions_map", endpoint: "/results/spatial_cv/predictions", label: "Predictions map" },
+  { stage: "2", artifactId: "cate", kind: "cate", endpoint: "/results/causal/cate_map", label: "CATE map" },
+  { stage: "2", artifactId: "spatial_cate", kind: "predictions_map", endpoint: "/results/causal/cate_map", label: "Spatial CATE" },
+  { stage: "2", artifactId: "pdp", kind: "pdp", endpoint: "/results/causal", label: "Partial-dependence plot" },
+  // Stage 3 — sensitivity / posteriors
   { stage: "3", artifactId: "sensitivity_tornado", kind: "sensitivity_tornado", endpoint: "/results/causal/sensitivity", label: "Sensitivity tornado" },
   { stage: "3", artifactId: "dose_response", kind: "dose_response", endpoint: "/results/causal/dose_response", label: "Dose-response curve" },
   { stage: "3", artifactId: "posteriors", kind: "posteriors", endpoint: "/results/scenarios/nuts_summary", label: "Posterior densities" },
   { stage: "3", artifactId: "posterior_trace", kind: "posterior_trace", endpoint: "/results/scenarios/nuts_summary", label: "Posterior trace" },
+  // Stage 4 — scenario contract
   { stage: "4", artifactId: "scenario_results", kind: "scenario_map", endpoint: "/results/scenarios", label: "Scenario map" },
-  { stage: "4", artifactId: "scenario_uncertainty", kind: "uncertainty_band_map", endpoint: "/results/scenarios/uncertainty", label: "Uncertainty bands" },
+  { stage: "4", artifactId: "scenario_results_dag", kind: "scenario_map", endpoint: "/results/scenarios", label: "Scenario map (DAG path)" },
+  { stage: "4", artifactId: "scenario_results_reprediction", kind: "scenario_map", endpoint: "/results/scenarios", label: "Scenario map (re-prediction)" },
+  { stage: "4", artifactId: "scenario_results_hybrid", kind: "scenario_map", endpoint: "/results/scenarios", label: "Scenario map (hybrid)" },
+  { stage: "4", artifactId: "scenario_mc_uncertainty", kind: "uncertainty_band_map", endpoint: "/results/scenarios/uncertainty", label: "Uncertainty bands" },
   { stage: "4", artifactId: "scenario_attribution", kind: "attribution_waterfall", endpoint: "/results/scenarios/attribution", label: "Attribution waterfall" },
   { stage: "4", artifactId: "scenario_trajectory", kind: "scenario_trajectory", endpoint: "/results/scenarios/trajectory", label: "Scenario trajectory" },
   { stage: "4", artifactId: "scenario_library", kind: "scenario_library_timeline", endpoint: "/scenarios/library", label: "Scenario library" },
+  // Stage 5 — decision
   { stage: "5", artifactId: "decision_allocation", kind: "decision_allocation", endpoint: "/decision/optimize", label: "Decision allocation" },
 ];
 
