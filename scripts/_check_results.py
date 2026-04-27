@@ -89,7 +89,7 @@ try:
     if not db_path.exists():
         print(f"  No artifacts.db at {db_path}")
     else:
-        reg = RunRegistry(db_path)
+        reg = RunRegistry(db_path.parent)
         set_active_registry(reg)
         try:
             store = ArtifactStore(reg)
