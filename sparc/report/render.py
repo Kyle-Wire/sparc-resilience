@@ -230,7 +230,11 @@ def render_native(
                 raise RenderError(f"Inline blob payload missing for {stage}/{artifact_id}")
             data = bytes(row[0])
         else:
-            sha = entry.blob_sha256 or ""
+            sha = entry.blob_sha256
+            if not sha:
+                raise RenderError(
+                    f"blob_external artifact {stage}/{artifact_id} has no blob_sha256"
+                )
             data = (store.blobs_dir / sha[:2] / sha).read_bytes()
         ext = (entry.metadata or {}).get("serializer", "bin")
         ext_map = {"pickle": "pkl", "joblib": "joblib", "torch": "pt",

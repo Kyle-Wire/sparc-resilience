@@ -140,7 +140,7 @@ def check_stage_completion(output_dir: str, stage: str) -> Tuple[bool, Optional[
                 # Best-effort timestamp from the manifest entry.
                 try:
                     entry = _store.registry.lookup("2", "oof_predictions")
-                    ts = getattr(entry, "created_at", None)
+                    ts = getattr(entry, "written_at", None)
                 except Exception:
                     ts = None
                 return True, ts
