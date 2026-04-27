@@ -1809,6 +1809,16 @@ def train_neural_meta(
     artifact_dir = output_dir / "v2_neural"
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
+    # Active store (single source of truth for db-resident artifacts).
+    try:
+        from sparc.registry.store import get_active_store
+        _store = get_active_store()
+    except Exception:
+        _store = None
+
+    # --- Model checkpoints + scalers (dual-write: db blobs + disk).
+    # Consumer (scenario_simulator) still loads from disk paths; that
+    # consumer migration is deferred to a future blob-cleanup pass.
     torch.save(final_model.state_dict(), artifact_dir / "neural_meta.pt")
     final_model.save_trunk(artifact_dir / "shared_trunk.pt")
     torch.save(final_process.state_dict(), artifact_dir / "process_rate_net.pt")
@@ -1817,35 +1827,78 @@ def train_neural_meta(
         torch.save(surr.state_dict(), artifact_dir / f"surrogate_{name}.pt")
     joblib.dump(tensors["encoder"], artifact_dir / "sinusoidal_encoder.pkl")
 
+    if _store is not None:
+        try:
+            _store.write_blob("2", "v2_neural_meta_state",
+                              final_model.state_dict(),
+                              serializer="torch", producer="v2_neural_training")
+            _store.write_blob("2", "v2_process_rate_state",
+                              final_process.state_dict(),
+                              serializer="torch", producer="v2_neural_training")
+            _store.write_blob("2", "v2_source_term_state",
+                              final_source_net.state_dict(),
+                              serializer="torch", producer="v2_neural_training")
+            for name, surr in final_surrogates.items():
+                _store.write_blob("2", f"v2_surrogate_{name}_state",
+                                  surr.state_dict(),
+                                  serializer="torch", producer="v2_neural_training")
+            _store.write_blob("2", "v2_sinusoidal_encoder",
+                              tensors["encoder"],
+                              serializer="joblib", producer="v2_neural_training")
+        except Exception as _e:
+            logger.warning("Could not mirror neural checkpoints to artifacts.db: %s", _e)
+
     # Save alpha field for scenario simulation
     final_process.eval()
     with torch.no_grad():
         alpha_all = final_process(tensors["physics_feats"][:, pr_col_idxs])
-    np.save(artifact_dir / "alpha_field.npy", alpha_all.cpu().numpy().squeeze(-1))
+    alpha_field_np = alpha_all.cpu().numpy().squeeze(-1)
+    np.save(artifact_dir / "alpha_field.npy", alpha_field_np)
     np.save(artifact_dir / "alpha_field_coords.npy", coords)
     logger.info("  Saved alpha_field.npy (%d points)", len(coords))
 
     # Save cardinal neighbors and grid spacing for PDE forward solver
-    np.save(
-        artifact_dir / "cardinal_neighbors.npy",
-        tensors["cardinal_idx"].cpu().numpy(),
-    )
+    cardinal_np = tensors["cardinal_idx"].cpu().numpy()
+    np.save(artifact_dir / "cardinal_neighbors.npy", cardinal_np)
+    grid_spacing_np = None
     if tensors["h_field"] is not None:
-        np.save(artifact_dir / "grid_spacing.npy", tensors["h_field"].cpu().numpy())
+        grid_spacing_np = tensors["h_field"].cpu().numpy()
+        np.save(artifact_dir / "grid_spacing.npy", grid_spacing_np)
     logger.info("  Saved cardinal_neighbors.npy + grid_spacing.npy")
 
     # Feature scaling stats (needed to standardize inputs at inference time)
+    feat_scaling = {"feat_mean": tensors["feat_mean"], "feat_std": tensors["feat_std"]}
     np.savez(
         artifact_dir / "feature_scaling.npz",
         feat_mean=tensors["feat_mean"],
         feat_std=tensors["feat_std"],
     )
 
+    oof_payload = {"predictions": oof_preds, "uncertainty": oof_std}
     np.savez(
         artifact_dir / "oof_results.npz",
         predictions=oof_preds,
         uncertainty=oof_std,
     )
+
+    # Mirror numpy artifacts to artifacts.db (pickled dicts/arrays).
+    if _store is not None:
+        try:
+            _store.write_blob("2", "v2_alpha_field", alpha_field_np,
+                              serializer="pickle", producer="v2_neural_training")
+            _store.write_blob("2", "v2_alpha_field_coords", coords,
+                              serializer="pickle", producer="v2_neural_training")
+            _store.write_blob("2", "v2_cardinal_neighbors", cardinal_np,
+                              serializer="pickle", producer="v2_neural_training")
+            if grid_spacing_np is not None:
+                _store.write_blob("2", "v2_grid_spacing", grid_spacing_np,
+                                  serializer="pickle", producer="v2_neural_training")
+            _store.write_blob("2", "v2_feature_scaling", feat_scaling,
+                              serializer="pickle", producer="v2_neural_training")
+            _store.write_blob("2", "v2_oof_results", oof_payload,
+                              serializer="pickle", producer="v2_neural_training")
+        except Exception as _e:
+            logger.warning("Could not mirror neural numpy artifacts to artifacts.db: %s", _e)
 
     # Save per-epoch loss history for diagnostics
     if retrain_loss_history:
@@ -1855,6 +1908,12 @@ def train_neural_meta(
             for k in _loss_keys
         }
         np.savez(artifact_dir / "loss_history.npz", **_loss_arrays)
+        if _store is not None:
+            try:
+                _store.write_blob("2", "v2_loss_history", _loss_arrays,
+                                  serializer="pickle", producer="v2_neural_training")
+            except Exception as _e:
+                logger.warning("Could not mirror loss_history to artifacts.db: %s", _e)
         logger.info(
             "  Saved loss_history.npz (%d epochs, %d components)",
             len(retrain_loss_history), len(_loss_keys),
@@ -1885,6 +1944,12 @@ def train_neural_meta(
         "swa_epochs": swa_epochs,
         "resolution": resolution,
     }
+    if _store is not None:
+        try:
+            _store.write_struct("2", "v2_neural_meta_info", meta_info,
+                                producer="v2_neural_training")
+        except Exception as _e:
+            logger.warning("Could not write v2_neural_meta_info struct: %s", _e)
     with open(artifact_dir / "meta_info.json", "w") as f:
         json.dump(meta_info, f, indent=2)
 
@@ -1998,6 +2063,12 @@ def _export_v2_outputs(
     import pandas as pd
 
     logger.info("Exporting V2 neural readable outputs...")
+
+    try:
+        from sparc.registry.store import get_active_store
+        _store = get_active_store()
+    except Exception:
+        _store = None
     _t0 = _time.perf_counter()
 
     final_model.eval()
@@ -2065,8 +2136,16 @@ def _export_v2_outputs(
         exc_prob = torch.sigmoid(exceedance_list[i]).cpu().numpy()
         pred_df[f"exceedance_p_{thresh:.2f}"] = exc_prob
 
-    pred_df.to_csv(artifact_dir / "predictions.csv", index=False)
-    logger.info("  Saved predictions.csv (%d rows, %d cols)", len(pred_df), len(pred_df.columns))
+    if _store is not None:
+        try:
+            _store.write_table("2", "v2_neural_predictions", pred_df,
+                               producer="v2_neural_training")
+        except Exception as _e:
+            logger.warning("v2_neural_predictions store write failed: %s", _e)
+            pred_df.to_csv(artifact_dir / "predictions.csv", index=False)
+    else:
+        pred_df.to_csv(artifact_dir / "predictions.csv", index=False)
+    logger.info("  Saved predictions (%d rows, %d cols)", len(pred_df), len(pred_df.columns))
 
     # --- Export 2: GWR local coefficients ---
     coeff_df = pd.DataFrame({
@@ -2084,8 +2163,16 @@ def _export_v2_outputs(
     all_coeff = final_surrogates["gwr"].coeff_head(h)
     coeff_df["beta_intercept"] = all_coeff[:, -1].cpu().numpy()
 
-    coeff_df.to_csv(artifact_dir / "local_coefficients_gwr.csv", index=False)
-    logger.info("  Saved local_coefficients_gwr.csv (%d rows)", len(coeff_df))
+    if _store is not None:
+        try:
+            _store.write_table("2", "v2_neural_local_coefficients_gwr",
+                               coeff_df, producer="v2_neural_training")
+        except Exception as _e:
+            logger.warning("local_coefficients_gwr store write failed: %s", _e)
+            coeff_df.to_csv(artifact_dir / "local_coefficients_gwr.csv", index=False)
+    else:
+        coeff_df.to_csv(artifact_dir / "local_coefficients_gwr.csv", index=False)
+    logger.info("  Saved local_coefficients_gwr (%d rows)", len(coeff_df))
 
     # --- Export 3: Process rate map ---
     alpha_df = pd.DataFrame({
@@ -2093,8 +2180,16 @@ def _export_v2_outputs(
         "lat": coords[:, 1],
         "alpha": alpha.squeeze(-1).cpu().numpy(),
     })
-    alpha_df.to_csv(artifact_dir / "process_rate_map.csv", index=False)
-    logger.info("  Saved process_rate_map.csv")
+    if _store is not None:
+        try:
+            _store.write_table("2", "v2_neural_process_rate_map", alpha_df,
+                               producer="v2_neural_training")
+        except Exception as _e:
+            logger.warning("process_rate_map store write failed: %s", _e)
+            alpha_df.to_csv(artifact_dir / "process_rate_map.csv", index=False)
+    else:
+        alpha_df.to_csv(artifact_dir / "process_rate_map.csv", index=False)
+    logger.info("  Saved process_rate_map")
 
     # --- Export 4: Meta-learner attention weights (summary stats) ---
     attn_np = attn_weights.cpu().numpy()  # (N, max_neighbors)
@@ -2107,8 +2202,16 @@ def _export_v2_outputs(
         "attn_max": attn_np.max(axis=1),
         "attn_effective_neighbors": 1.0 / np.sum(attn_np ** 2, axis=1),
     })
-    attn_summary.to_csv(artifact_dir / "spatial_attention_summary.csv", index=False)
-    logger.info("  Saved spatial_attention_summary.csv")
+    if _store is not None:
+        try:
+            _store.write_table("2", "v2_neural_spatial_attention_summary",
+                               attn_summary, producer="v2_neural_training")
+        except Exception as _e:
+            logger.warning("spatial_attention_summary store write failed: %s", _e)
+            attn_summary.to_csv(artifact_dir / "spatial_attention_summary.csv", index=False)
+    else:
+        attn_summary.to_csv(artifact_dir / "spatial_attention_summary.csv", index=False)
+    logger.info("  Saved spatial_attention_summary")
 
     # --- Export 5: PDP curves (sweep each feature) ---
     pdp_dir = artifact_dir / "pdp"
@@ -2189,16 +2292,30 @@ def _export_v2_outputs(
             "q10": pdp_q10,
             "q90": pdp_q90,
         })
-        pdp_df.to_csv(pdp_dir / f"pdp_{fname}.csv", index=False)
-        try:
-            from sparc.registry.run_registry import register_path
-            register_path(pdp_dir / f"pdp_{fname}.csv", stage="2",
-                          artifact_id=f"pdp::{fname}", format="csv",
-                          producer="v2_neural_training",
-                          consumers=["server:/results/pdp_curves"],
-                          metadata={"variable": fname, "source": "neural_pde"})
-        except Exception:
-            pass
+        artifact_id = f"v2_neural_pdp::{fname}"
+        wrote_to_store = False
+        if _store is not None:
+            try:
+                _store.write_table("2", artifact_id, pdp_df,
+                                   producer="v2_neural_training",
+                                   consumers=["server:/results/pdp_curves",
+                                              "scenario_simulator"],
+                                   metadata={"variable": fname,
+                                             "source": "neural_pde"})
+                wrote_to_store = True
+            except Exception as _e:
+                logger.warning("pdp store write failed for %s: %s", fname, _e)
+        if not wrote_to_store:
+            pdp_df.to_csv(pdp_dir / f"pdp_{fname}.csv", index=False)
+            try:
+                from sparc.registry.run_registry import register_path
+                register_path(pdp_dir / f"pdp_{fname}.csv", stage="2",
+                              artifact_id=f"pdp::{fname}", format="csv",
+                              producer="v2_neural_training",
+                              consumers=["server:/results/pdp_curves"],
+                              metadata={"variable": fname, "source": "neural_pde"})
+            except Exception:
+                pass
 
     logger.info("  Saved PDP curves for %d features → %s", len(feature_names), pdp_dir)
 
@@ -2240,8 +2357,16 @@ def _export_v2_outputs(
         "gradient_importance": grad_importance,
         "normalised": grad_importance / (grad_importance.sum() + 1e-10),
     }).sort_values("gradient_importance", ascending=False)
-    importance_df.to_csv(artifact_dir / "feature_importance.csv", index=False)
-    logger.info("  Saved feature_importance.csv")
+    if _store is not None:
+        try:
+            _store.write_table("2", "v2_neural_feature_importance",
+                               importance_df, producer="v2_neural_training")
+        except Exception as _e:
+            logger.warning("feature_importance store write failed: %s", _e)
+            importance_df.to_csv(artifact_dir / "feature_importance.csv", index=False)
+    else:
+        importance_df.to_csv(artifact_dir / "feature_importance.csv", index=False)
+    logger.info("  Saved feature_importance")
 
     elapsed = _time.perf_counter() - _t0
     logger.info("V2 output export complete (%.1fs)", elapsed)
@@ -2313,8 +2438,22 @@ def run_cma_es_search(
     )
 
     # Save
-    with open(output_dir / "cma_es_best_params.json", "w") as f:
-        json.dump(result.best_params, f, indent=2)
+    try:
+        from sparc.registry.store import get_active_store
+        _store = get_active_store()
+    except Exception:
+        _store = None
+    if _store is not None:
+        try:
+            _store.write_struct("2", "cma_es_best_params", result.best_params,
+                                producer="v2_neural_training")
+        except Exception as _e:
+            logger.warning("cma_es_best_params struct write failed: %s", _e)
+            with open(output_dir / "cma_es_best_params.json", "w") as f:
+                json.dump(result.best_params, f, indent=2)
+    else:
+        with open(output_dir / "cma_es_best_params.json", "w") as f:
+            json.dump(result.best_params, f, indent=2)
 
     logger.info("CMA-ES best R² = %.4f", -result.best_loss)
     return result.best_params

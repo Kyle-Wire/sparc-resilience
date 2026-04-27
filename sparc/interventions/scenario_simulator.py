@@ -810,6 +810,16 @@ class ScenarioSimulator:
         # are optional (bayesian / V2 scenario modes don't need them).
         v2_dir = self.model_dir / "v2_neural"
         has_v2 = (v2_dir / "neural_meta.pt").exists() and (v2_dir / "meta_info.json").exists()
+        if not has_v2:
+            try:
+                from sparc.registry.store import get_active_store
+                _store = get_active_store()
+                if _store is not None and _store.has("2", "v2_neural_meta_info"):
+                    # Even if disk pt is gone, db-resident meta is sufficient
+                    # for V2-aware modes (disk pt restored separately if needed).
+                    has_v2 = (v2_dir / "neural_meta.pt").exists() or _store.has("2", "v2_neural_meta_state")
+            except Exception:
+                pass
 
         model_files = {
             "meta": self.model_dir / "standard_meta_ensemble.pkl",
@@ -889,14 +899,30 @@ class ScenarioSimulator:
         self._cardinal_neighbors = None
         self._grid_spacing = None
         v2_dir = self.model_dir / "v2_neural"
-        if (v2_dir / "neural_meta.pt").exists() and (v2_dir / "meta_info.json").exists():
+
+        # Resolve meta_info: prefer artifacts.db.
+        meta_info_loaded = None
+        try:
+            from sparc.registry.store import get_active_store
+            _store = get_active_store()
+            if _store is not None and _store.has("2", "v2_neural_meta_info"):
+                meta_info_loaded = _store.read_any("2", "v2_neural_meta_info")
+        except Exception:
+            meta_info_loaded = None
+
+        meta_disk_exists = (v2_dir / "meta_info.json").exists()
+        ckpt_disk_exists = (v2_dir / "neural_meta.pt").exists()
+
+        if meta_info_loaded is not None or (ckpt_disk_exists and meta_disk_exists):
             try:
-                import json as _json
-                with open(v2_dir / "meta_info.json") as _f:
-                    self._v2_meta_info = _json.load(_f)
+                if meta_info_loaded is None:
+                    import json as _json
+                    with open(v2_dir / "meta_info.json") as _f:
+                        meta_info_loaded = _json.load(_f)
+                self._v2_meta_info = meta_info_loaded
                 print(f"   V2 neural meta-learner artifacts found (OOF R²={self._v2_meta_info.get('oof_r2', '?'):.4f})")
             except Exception as _e:
-                print(f"   Warning: V2 neural meta_info.json failed to load: {_e}")
+                print(f"   Warning: V2 neural meta_info failed to load: {_e}")
 
             # Load V3 alpha field if available
             alpha_path = v2_dir / "alpha_field.npy"
@@ -1154,14 +1180,59 @@ class ScenarioSimulator:
                 }
                 gwrf_loaded += 1
 
-        # ---- Source 2: Neural meta-learner PDP CSVs (PDE-informed) ----
+        # ---- Source 2: Neural meta-learner PDP (PDE-informed) ----
         # These are generated every run and capture the trained model's
         # nonlinear, PDE-constrained response surface.  Only loaded for
         # variables not already covered by the GWRF JSON above.
-        neural_pdp_dir = base_dir / stage2_name / 'v2_neural' / 'pdp'
+        # Prefer artifacts.db: pdp tables are registered as
+        # ``v2_neural_pdp::<feature>`` under stage 2.
         neural_loaded = 0
         neural_skipped = 0
-        if neural_pdp_dir.exists():
+        loaded_from_store = False
+        try:
+            from sparc.registry.store import get_active_store
+            _store = get_active_store()
+            if _store is not None:
+                manifest_stages = getattr(_store.registry.manifest, "stages", {}) or {}
+                stage2 = manifest_stages.get("2", {}) or {}
+                for art_id in stage2.keys():
+                    if not art_id.startswith("v2_neural_pdp::"):
+                        continue
+                    feat_col = art_id.split("::", 1)[1]
+                    if feat_col in self._condition_curves:
+                        continue
+                    try:
+                        df = _store.read_any("2", art_id)
+                    except Exception:
+                        neural_skipped += 1
+                        continue
+                    if df is None or len(df) == 0 or feat_col not in df.columns:
+                        neural_skipped += 1
+                        continue
+                    grid_vals = [float(v) for v in df[feat_col].tolist()]
+                    pdp_vals = [float(v) for v in df["mean_prediction"].tolist()]
+                    if {"q10", "q90"}.issubset(df.columns):
+                        pdp_std = [
+                            (float(q90) - float(q10)) / 2.56
+                            for q10, q90 in zip(df["q10"].tolist(), df["q90"].tolist())
+                        ]
+                    else:
+                        pdp_std = None
+                    self._condition_curves[feat_col] = {
+                        'grid_values': grid_vals,
+                        'pdp_values': pdp_vals,
+                        'pdp_std': pdp_std,
+                        'curve_fit': {},
+                        'r2': 1.0,
+                        'source': 'neural_pde',
+                    }
+                    neural_loaded += 1
+                    loaded_from_store = True
+        except Exception:
+            pass
+
+        neural_pdp_dir = base_dir / stage2_name / 'v2_neural' / 'pdp'
+        if not loaded_from_store and neural_pdp_dir.exists():
             for csv_path in sorted(neural_pdp_dir.glob('pdp_*.csv')):
                 try:
                     with open(csv_path, 'r', encoding='utf-8', newline='') as f:

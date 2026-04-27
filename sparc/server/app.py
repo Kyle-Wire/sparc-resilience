@@ -1867,15 +1867,57 @@ async def get_causal_diagnostics():
 
 
 def _load_neural_pdp(paths) -> dict:
-    """Read PINN neural-network PDP CSVs into the canonical curves dict.
+    """Read PINN neural-network PDP curves into the canonical curves dict.
 
-    Returns ``{variable: {grid_values, pdp_values, pdp_std, source: 'neural_pde'}}``
-    for every CSV in ``Stage_2/v2_neural/pdp/pdp_*.csv``.  These are the
-    physics-informed (PDE-constrained) response curves that the redesigned
-    Physics page surfaces.  Empty dict if directory absent.
+    Prefers artifacts.db: each PDP table is registered as
+    ``v2_neural_pdp::<feature>`` under stage 2.  Falls back to the
+    on-disk ``Stage_2/v2_neural/pdp/pdp_*.csv`` layout for legacy runs.
     """
     import csv
     out: dict = {}
+
+    # --- artifacts.db (preferred) ---
+    if state.registry is not None:
+        try:
+            from sparc.registry.run_registry import set_active_registry
+            from sparc.registry.store import ArtifactStore
+            set_active_registry(state.registry)
+            try:
+                _store = ArtifactStore(state.registry)
+                manifest_stages = getattr(state.registry.manifest, "stages", {}) or {}
+                stage2 = manifest_stages.get("2", {}) or {}
+                for art_id in stage2.keys():
+                    if not art_id.startswith("v2_neural_pdp::"):
+                        continue
+                    feat_col = art_id.split("::", 1)[1]
+                    try:
+                        df = _store.read_any("2", art_id)
+                    except Exception:
+                        continue
+                    if df is None or len(df) == 0 or feat_col not in df.columns:
+                        continue
+                    grid = [float(v) for v in df[feat_col].tolist()]
+                    pdp_vals = [float(v) for v in df["mean_prediction"].tolist()]
+                    if {"q10", "q90"}.issubset(df.columns):
+                        pdp_std = [
+                            (float(q90) - float(q10)) / 2.56
+                            for q10, q90 in zip(df["q10"].tolist(), df["q90"].tolist())
+                        ]
+                    else:
+                        pdp_std = None
+                    out[feat_col] = {
+                        "grid_values": grid,
+                        "pdp_values": pdp_vals,
+                        "pdp_std": pdp_std,
+                        "source": "neural_pde",
+                    }
+            finally:
+                set_active_registry(None)
+        except Exception:
+            pass
+    if out:
+        return out
+
     pdp_dir = paths.stage2_dir / "v2_neural" / "pdp"
     if not pdp_dir.exists():
         return out
@@ -4264,7 +4306,6 @@ async def get_results_availability():
         "/results/model_performance": ("2", "ensemble_results"),
         "/results/spatial_cv/predictions": ("2", "spatial_cv_predictions"),
     }
-
     for endpoint, candidates in checks.items():
         # Db-backed endpoints: prefer registry presence.
         if endpoint in _db_endpoints and _db_endpoints[endpoint] in _db_artifacts:
@@ -4280,11 +4321,15 @@ async def get_results_availability():
                 if paths.stage3_dir.exists() else False
             source = str(next(iter(paths.stage3_dir.glob("spatial_cate_multiplier_*.npy")), "") or
                          (paths.stage3_dir / "spatial_cate_multiplier_*.npy"))
-        # Neural PDP special-case: directory must contain at least one CSV
+        # Neural PDP special-case: directory must contain at least one
+        # CSV OR the artifacts.db must register at least one
+        # ``v2_neural_pdp::*`` table.
         elif endpoint == "/results/neural_pdp":
             d = candidates[0]
-            available = d.exists() and any(d.glob("pdp_*.csv"))
-            source = str(d)
+            db_has_pdp = any(stg == "2" and aid.startswith("v2_neural_pdp::")
+                             for stg, aid in _db_artifacts)
+            available = (d.exists() and any(d.glob("pdp_*.csv"))) or db_has_pdp
+            source = "artifacts.db:2:v2_neural_pdp::*" if db_has_pdp else str(d)
         # Generic: any candidate file/dir exists
         else:
             existing = next((c for c in candidates if c.exists()), None)
