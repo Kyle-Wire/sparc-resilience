@@ -64,6 +64,95 @@ except ImportError:
     EXTRAPOLATION_GUARD_AVAILABLE = False
 
 
+def _stage4_store():
+    """Return the active ArtifactStore (None when running outside pipeline)."""
+    try:
+        from sparc.registry.store import get_active_store
+        return get_active_store()
+    except Exception:
+        return None
+
+
+def _persist_scenario_summary(
+    summary_df: pd.DataFrame,
+    *,
+    artifact_id: str,
+    output_dir: Path,
+    disk_filename: str,
+    also_register_as: Optional[str] = None,
+) -> None:
+    """Write a scenario summary table to artifacts.db when active, disk otherwise.
+
+    ``also_register_as`` lets each mode (dag / hybrid / reprediction)
+    additionally register itself under the canonical ``scenario_summary``
+    id so consumers don't need to know the mode.
+    """
+    store = _stage4_store()
+    if store is not None:
+        try:
+            store.write_table("4", artifact_id, summary_df,
+                              producer="scenario_simulator")
+            if also_register_as and also_register_as != artifact_id:
+                store.write_table("4", also_register_as, summary_df,
+                                  producer="scenario_simulator")
+            return
+        except Exception:
+            pass
+    try:
+        from sparc.run.pipeline_paths import get_result_store
+        rstore = get_result_store()
+        rstore.save_dataframe(4, disk_filename, summary_df, fmt="csv")
+        if also_register_as:
+            rstore.save_dataframe(4, "scenario_summary.csv", summary_df, fmt="csv")
+    except Exception:
+        summary_df.to_csv(output_dir / disk_filename, index=False)
+
+
+def _persist_scenario_geo(
+    results_gdf,
+    *,
+    artifact_id: str,
+    output_dir: Path,
+    disk_filename: str,
+    also_register_as: Optional[str] = None,
+) -> None:
+    """Write a scenario GeoDataFrame to artifacts.db (WKB table) or disk gpkg."""
+    if not GEOPANDAS_AVAILABLE or not isinstance(results_gdf, gpd.GeoDataFrame):
+        return
+    store = _stage4_store()
+    if store is not None:
+        try:
+            crs = str(results_gdf.crs) if results_gdf.crs is not None else None
+            store.write_table(
+                "4", artifact_id, results_gdf,
+                geometry_col="geometry", crs=crs,
+                producer="scenario_simulator",
+            )
+            if also_register_as and also_register_as != artifact_id:
+                store.write_table(
+                    "4", also_register_as, results_gdf,
+                    geometry_col="geometry", crs=crs,
+                    producer="scenario_simulator",
+                )
+            return
+        except Exception:
+            pass
+    try:
+        from sparc.run.pipeline_paths import get_result_store
+        rstore = get_result_store()
+        rstore.save_geodataframe(4, disk_filename, results_gdf)
+        if also_register_as:
+            rstore.save_geodataframe(4, "scenario_results.gpkg", results_gdf)
+    except Exception:
+        try:
+            results_gdf.to_file(output_dir / disk_filename, driver="GPKG")
+            if also_register_as:
+                results_gdf.to_file(output_dir / "scenario_results.gpkg",
+                                    driver="GPKG")
+        except Exception as e:
+            warnings.warn(f"Could not write GeoPackage: {e}")
+
+
 def spatial_gini_coefficient(values: np.ndarray) -> float:
     """
     Compute the Gini coefficient of absolute values.
@@ -1909,39 +1998,25 @@ class ScenarioSimulator:
 
         summary_df = pd.DataFrame(summary_rows)
 
-        # Save summary CSV via ResultStore (with CSV fallback)
-        try:
-            from sparc.run.pipeline_paths import get_result_store
-            store = get_result_store()
-            store.save_dataframe(4, "scenario_summary.csv", summary_df, fmt="csv")
-        except Exception:
-            summary_path = self.output_dir / "scenario_summary.csv"
-            summary_df.to_csv(summary_path, index=False)
+        _persist_scenario_summary(
+            summary_df,
+            artifact_id="scenario_summary",
+            output_dir=self.output_dir,
+            disk_filename="scenario_summary.csv",
+        )
         if verbose:
             print(f"\n   Summary saved")
 
         # Build GeoDataFrame if possible
         results_gdf = self._to_geodataframe(results_df, baseline_df)
-        if GEOPANDAS_AVAILABLE and isinstance(results_gdf, gpd.GeoDataFrame):
-            try:
-                from sparc.run.pipeline_paths import get_result_store
-                store = get_result_store()
-                store.save_geodataframe(4, "scenario_results.gpkg", results_gdf)
-            except Exception:
-                try:
-                    gpkg_path = self.output_dir / "scenario_results.gpkg"
-                    results_gdf.to_file(gpkg_path, driver="GPKG")
-                    try:
-                        from sparc.registry.run_registry import register_path
-                        register_path(gpkg_path, stage="4", artifact_id="scenario_results",
-                                      format="gpkg", producer="scenario_simulator",
-                                      consumers=["server:/results/scenarios"])
-                    except Exception:
-                        pass
-                except Exception as e:
-                    warnings.warn(f"Could not write GeoPackage: {e}")
-            if verbose:
-                print(f"   GeoPackage saved")
+        _persist_scenario_geo(
+            results_gdf,
+            artifact_id="scenario_results",
+            output_dir=self.output_dir,
+            disk_filename="scenario_results.gpkg",
+        )
+        if verbose and GEOPANDAS_AVAILABLE and isinstance(results_gdf, gpd.GeoDataFrame):
+            print(f"   GeoPackage saved")
 
         return summary_df, results_gdf
 
@@ -2464,57 +2539,27 @@ class ScenarioSimulator:
 
         # ── Save results ──────────────────────────────────────────────
         summary_df = pd.DataFrame(summary_rows)
-        try:
-            from sparc.run.pipeline_paths import get_result_store
-            store = get_result_store()
-            store.save_dataframe(4, "scenario_summary_dag.csv", summary_df, fmt="csv")
-            store.save_dataframe(4, "scenario_summary.csv", summary_df, fmt="csv")
-        except Exception:
-            summary_path = self.output_dir / "scenario_summary_dag.csv"
-            summary_df.to_csv(summary_path, index=False)
+        _persist_scenario_summary(
+            summary_df,
+            artifact_id="scenario_summary_dag",
+            output_dir=self.output_dir,
+            disk_filename="scenario_summary_dag.csv",
+            also_register_as="scenario_summary",
+        )
         if verbose:
             print(f"\n{'='*70}")
             print(f"DAG scenario summary saved")
 
         results_gdf = self._to_geodataframe(results_df, data)
-        if GEOPANDAS_AVAILABLE and isinstance(results_gdf, gpd.GeoDataFrame):
-            try:
-                from sparc.run.pipeline_paths import get_result_store
-                store = get_result_store()
-                store.save_geodataframe(4, "scenario_results_dag.gpkg", results_gdf)
-                store.save_geodataframe(4, "scenario_results.gpkg", results_gdf)
-            except Exception:
-                try:
-                    gpkg = self.output_dir / "scenario_results_dag.gpkg"
-                    results_gdf.to_file(gpkg, driver="GPKG")
-                    results_gdf.to_file(self.output_dir / "scenario_results.gpkg", driver="GPKG")
-                except Exception as e:
-                    warnings.warn(f"Could not write GeoPackage: {e}")
-            if verbose:
-                print(f"GeoPackage saved")
-
-        # ── Generate interpretation maps ──────────────────────────────
-        try:
-            self._generate_interpretation_maps(results_df, data, verbose=verbose)
-        except Exception as e:
-            if verbose:
-                print(f"  [MAPS] Map generation failed: {e}")
-
-        # ── PDE diagnostic visualizations ─────────────────────────────
-        try:
-            from sparc.physics.pde_visualizations import generate_stage4_pde_plots
-            x_col, y_col = self.coord_cols[0], self.coord_cols[1]
-            data_coords = data[[x_col, y_col]].values
-            generate_stage4_pde_plots(
-                results_df=results_df,
-                coords=data_coords,
-                alpha_field=self._alpha_field,
-                alpha_coords=self._alpha_field_coords,
-                output_dir=self.output_dir / "scenario_maps",
-            )
-        except Exception as e:
-            if verbose:
-                print(f"  [PDE-VIZ] PDE visualization failed: {e}")
+        _persist_scenario_geo(
+            results_gdf,
+            artifact_id="scenario_results_dag",
+            output_dir=self.output_dir,
+            disk_filename="scenario_results_dag.gpkg",
+            also_register_as="scenario_results",
+        )
+        if verbose and GEOPANDAS_AVAILABLE and isinstance(results_gdf, gpd.GeoDataFrame):
+            print(f"GeoPackage saved")
 
         return summary_df, results_gdf
 
@@ -2692,15 +2737,6 @@ class ScenarioSimulator:
                 results_df[f"repred_delta_{label}"] = repred_delta
                 results_df[f"pred_{label}"] = baseline_pred + repred_delta
 
-                # Static PNG map
-                map_path = self._save_scenario_map(
-                    data, repred_delta, label,
-                    title=f"{var_name} {direction} {increment}{unit}  |  "
-                          f"mean Δ = {np.mean(repred_delta):+.4f}",
-                )
-                if map_path and verbose:
-                    print(f"    Map saved: {map_path.name}")
-
                 # Summary
                 repred_mean = float(np.mean(repred_delta))
                 repred_std = float(np.std(repred_delta))
@@ -2864,14 +2900,6 @@ class ScenarioSimulator:
             results_df[f"repred_delta_{label}"] = joint_delta
             results_df[f"pred_{label}"] = baseline_pred + joint_delta
 
-            # Static PNG map for joint scenario
-            joint_map = self._save_scenario_map(
-                data, joint_delta, f"JOINT_{label}",
-                title=f"Joint: {joint_name}  |  mean Δ = {np.mean(joint_delta):+.4f}",
-            )
-            if joint_map and verbose:
-                print(f"    Map saved: {joint_map.name}")
-
             joint_mean = float(np.mean(joint_delta))
             joint_std = float(np.std(joint_delta))
 
@@ -2919,34 +2947,27 @@ class ScenarioSimulator:
 
         # ── Save results ──────────────────────────────────────────────
         summary_df = pd.DataFrame(summary_rows)
-        try:
-            from sparc.run.pipeline_paths import get_result_store
-            store = get_result_store()
-            store.save_dataframe(4, "scenario_summary_reprediction.csv", summary_df, fmt="csv")
-            store.save_dataframe(4, "scenario_summary.csv", summary_df, fmt="csv")
-        except Exception:
-            summary_path = self.output_dir / "scenario_summary_reprediction.csv"
-            summary_df.to_csv(summary_path, index=False)
+        _persist_scenario_summary(
+            summary_df,
+            artifact_id="scenario_summary_reprediction",
+            output_dir=self.output_dir,
+            disk_filename="scenario_summary_reprediction.csv",
+            also_register_as="scenario_summary",
+        )
         if verbose:
             print(f"\n{'='*70}")
             print(f"Re-prediction scenario summary saved")
 
         results_gdf = self._to_geodataframe(results_df, data)
-        if GEOPANDAS_AVAILABLE and isinstance(results_gdf, gpd.GeoDataFrame):
-            try:
-                from sparc.run.pipeline_paths import get_result_store
-                store = get_result_store()
-                store.save_geodataframe(4, "scenario_results_reprediction.gpkg", results_gdf)
-                store.save_geodataframe(4, "scenario_results.gpkg", results_gdf)
-            except Exception:
-                try:
-                    gpkg = self.output_dir / "scenario_results_reprediction.gpkg"
-                    results_gdf.to_file(gpkg, driver="GPKG")
-                    results_gdf.to_file(self.output_dir / "scenario_results.gpkg", driver="GPKG")
-                except Exception as e:
-                    warnings.warn(f"Could not write GeoPackage: {e}")
-            if verbose:
-                print(f"GeoPackage saved")
+        _persist_scenario_geo(
+            results_gdf,
+            artifact_id="scenario_results_reprediction",
+            output_dir=self.output_dir,
+            disk_filename="scenario_results_reprediction.gpkg",
+            also_register_as="scenario_results",
+        )
+        if verbose and GEOPANDAS_AVAILABLE and isinstance(results_gdf, gpd.GeoDataFrame):
+            print(f"GeoPackage saved")
 
         return summary_df, results_gdf
 
@@ -3116,15 +3137,6 @@ class ScenarioSimulator:
                 results_df[f"total_{label}"] = total_delta
                 results_df[f"pred_{label}"] = baseline_pred + total_delta
 
-                # Map
-                map_path = self._save_scenario_map(
-                    data, total_delta, f"HYBRID_{label}",
-                    title=f"{var_name} {direction} {increment}{unit}  |  "
-                          f"mean Δ = {np.mean(total_delta):+.4f} (hybrid)",
-                )
-                if map_path and verbose:
-                    print(f"    Map saved: {map_path.name}")
-
                 # Summary stats
                 direct_mean = float(np.mean(direct_delta))
                 indirect_mean = float(np.mean(indirect_delta))
@@ -3287,13 +3299,6 @@ class ScenarioSimulator:
             results_df[f"total_{label}"] = joint_total
             results_df[f"pred_{label}"] = baseline_pred + joint_total
 
-            joint_map = self._save_scenario_map(
-                data, joint_total, f"HYBRID_JOINT_{label}",
-                title=f"Joint: {joint_name}  |  mean Δ = {np.mean(joint_total):+.4f} (hybrid)",
-            )
-            if joint_map and verbose:
-                print(f"    Map saved: {joint_map.name}")
-
             if verbose:
                 print(f"\n  {joint_name}:")
                 for vn, ac in actual_changes.items():
@@ -3348,798 +3353,29 @@ class ScenarioSimulator:
 
         # ── Save results ──────────────────────────────────────────────
         summary_df = pd.DataFrame(summary_rows)
-        # ── Save results ──────────────────────────────────────────────
-        summary_df = pd.DataFrame(summary_rows)
-        try:
-            from sparc.run.pipeline_paths import get_result_store
-            store = get_result_store()
-            store.save_dataframe(4, "scenario_summary_hybrid.csv", summary_df, fmt="csv")
-            store.save_dataframe(4, "scenario_summary.csv", summary_df, fmt="csv")
-        except Exception:
-            summary_path = self.output_dir / "scenario_summary_hybrid.csv"
-            summary_df.to_csv(summary_path, index=False)
+        _persist_scenario_summary(
+            summary_df,
+            artifact_id="scenario_summary_hybrid",
+            output_dir=self.output_dir,
+            disk_filename="scenario_summary_hybrid.csv",
+            also_register_as="scenario_summary",
+        )
         if verbose:
             print(f"\n{'='*70}")
             print(f"Hybrid scenario summary saved")
 
         results_gdf = self._to_geodataframe(results_df, data)
-        if GEOPANDAS_AVAILABLE and isinstance(results_gdf, gpd.GeoDataFrame):
-            try:
-                from sparc.run.pipeline_paths import get_result_store
-                store = get_result_store()
-                store.save_geodataframe(4, "scenario_results_hybrid.gpkg", results_gdf)
-                store.save_geodataframe(4, "scenario_results.gpkg", results_gdf)
-            except Exception:
-                try:
-                    gpkg = self.output_dir / "scenario_results_hybrid.gpkg"
-                    results_gdf.to_file(gpkg, driver="GPKG")
-                    results_gdf.to_file(self.output_dir / "scenario_results.gpkg", driver="GPKG")
-                except Exception as e:
-                    warnings.warn(f"Could not write GeoPackage: {e}")
-            if verbose:
-                print(f"GeoPackage saved")
+        _persist_scenario_geo(
+            results_gdf,
+            artifact_id="scenario_results_hybrid",
+            output_dir=self.output_dir,
+            disk_filename="scenario_results_hybrid.gpkg",
+            also_register_as="scenario_results",
+        )
+        if verbose and GEOPANDAS_AVAILABLE and isinstance(results_gdf, gpd.GeoDataFrame):
+            print(f"GeoPackage saved")
 
         return summary_df, results_gdf
-
-    # ------------------------------------------------------------------
-    # Scenario Interpretation Maps
-    # ------------------------------------------------------------------
-
-    def _generate_interpretation_maps(
-        self,
-        results_df: pd.DataFrame,
-        data: pd.DataFrame,
-        verbose: bool = True,
-    ) -> None:
-        """Generate policy-oriented interpretation maps from DAG scenario results.
-
-        Creates three types of maps:
-        1. **Per-scenario maps** — one per (variable, increment) showing
-           the spatially-varying total cooling effect.
-        2. **Headline maps** — one per variable at a moderate dose,
-           styled for presentation (where to plant trees / remove pavement /
-           brighten surfaces).
-        3. **Dashboard** — a single multi-panel figure comparing all three
-           intervention types side-by-side at their moderate dose.
-
-        Maps use a "cooling benefit" framing: negative z-score deltas
-        (= cooling) are shown as positive benefit in warm colours so that
-        darker/warmer colours = "intervene here first".
-        """
-        try:
-            import matplotlib
-            matplotlib.use("Agg")
-            import matplotlib.pyplot as plt
-            from matplotlib.colors import Normalize
-            from matplotlib import cm
-        except ImportError:
-            if verbose:
-                print("  [MAPS] matplotlib not available — skipping map generation")
-            return
-
-        maps_dir = self.output_dir / "scenario_maps"
-        maps_dir.mkdir(parents=True, exist_ok=True)
-
-        x_col, y_col = self.coord_cols[0], self.coord_cols[1]
-        x = data[x_col].values
-        y = data[y_col].values
-
-        response_units = self.config.get("project", {}).get("response_units", "z-score")
-
-        # ── Friendly labels for policy communication ──────────────
-        friendly = {
-            "Pct_Canopy": {
-                "action": "Plant Trees",
-                "short": "Canopy",
-                "icon": "🌳",
-                "description": "Increase tree canopy cover",
-            },
-            "Pct_Impervious": {
-                "action": "Remove Pavement",
-                "short": "Impervious",
-                "icon": "🏗️",
-                "description": "Reduce impervious surface",
-            },
-            "Albedo": {
-                "action": "Brighten Surfaces",
-                "short": "Albedo",
-                "icon": "☀️",
-                "description": "Increase surface reflectivity",
-            },
-        }
-
-        # ── Pick a moderate increment per variable for headline maps ──
-        moderate_labels = {}
-        for scenario in self.scenarios:
-            var = scenario["variable"]
-            increments = scenario.get("increments", [])
-            direction = scenario.get("direction", "increase")
-            if not increments:
-                continue
-            # Pick the increment closest to 1/3 of the range
-            mid_target = increments[0] + (increments[-1] - increments[0]) / 3
-            moderate_inc = min(increments, key=lambda i: abs(i - mid_target))
-            delta_signed = -moderate_inc if direction == "decrease" else moderate_inc
-            label = f"{var}_{'minus' if delta_signed < 0 else 'plus'}_{str(moderate_inc).replace('.', 'p')}"
-            moderate_labels[var] = {
-                "label": label,
-                "increment": moderate_inc,
-                "direction": direction,
-                "unit": scenario.get("unit", ""),
-            }
-
-        if verbose:
-            print(f"\n{'='*70}")
-            print("GENERATING INTERPRETATION MAPS")
-            print(f"{'='*70}")
-
-        # ── 1. Per-scenario total-effect maps (all increments) ────────
-        total_cols = [c for c in results_df.columns if c.startswith("total_")]
-        for col in total_cols:
-            scenario_label = col.replace("total_", "")
-            values = results_df[col].values
-
-            # Cooling benefit = -delta (negative delta = temperature drop = benefit)
-            benefit = -values
-
-            # Determine variable name for title
-            var_name = scenario_label.split("_plus_")[0].split("_minus_")[0]
-            info = friendly.get(var_name, {"action": var_name, "short": var_name})
-
-            # Parse increment from label
-            if "_plus_" in scenario_label:
-                inc_str = scenario_label.split("_plus_")[1].replace("p", ".")
-                sign_word = "+"
-            elif "_minus_" in scenario_label:
-                inc_str = scenario_label.split("_minus_")[1].replace("p", ".")
-                sign_word = "−"
-            else:
-                inc_str = ""
-                sign_word = ""
-
-            title = f"{info['action']}: {sign_word}{inc_str} — Cooling Benefit"
-
-            # Colour scale: 0 to max benefit (sequential, not diverging)
-            vmin_b = float(np.percentile(benefit, 2))
-            vmax_b = float(np.percentile(benefit, 98))
-            # If overall benefit is positive (cooling), anchor at 0
-            if vmax_b > 0:
-                vmin_b = max(vmin_b, 0.0)
-
-            fig, ax = plt.subplots(1, 1, figsize=(10, 8))
-            sc = ax.scatter(
-                x, y, c=benefit, cmap="YlOrRd", s=0.5,
-                vmin=vmin_b, vmax=vmax_b, edgecolors="none",
-            )
-            cbar = plt.colorbar(sc, ax=ax, shrink=0.75, pad=0.02)
-            cbar.set_label(f"Cooling Benefit ({response_units})", fontsize=10)
-            ax.set_title(title, fontsize=13, fontweight="bold")
-            ax.set_xlabel(x_col)
-            ax.set_ylabel(y_col)
-            ax.set_aspect("equal")
-            ax.tick_params(labelsize=8)
-            fig.tight_layout()
-
-            out_path = maps_dir / f"{scenario_label}_cooling.png"
-            fig.savefig(out_path, dpi=200, bbox_inches="tight")
-            plt.close(fig)
-
-        if verbose:
-            print(f"  {len(total_cols)} per-scenario cooling maps saved")
-
-        # ── 2. Headline maps (moderate dose, presentation quality) ────
-        headline_data = {}  # var → benefit array (for dashboard)
-        for var, meta in moderate_labels.items():
-            col_name = f"total_{meta['label']}"
-            if col_name not in results_df.columns:
-                continue
-
-            values = results_df[col_name].values
-            benefit = -values  # cooling benefit
-
-            info = friendly.get(var, {"action": var, "short": var, "description": var})
-            inc = meta["increment"]
-            unit = meta["unit"]
-            dir_word = "+" if meta["direction"] == "increase" else "−"
-
-            headline_data[var] = benefit
-
-            # Percentile stats for annotation
-            p50 = float(np.median(benefit))
-            p90 = float(np.percentile(benefit, 90))
-            mean_b = float(np.mean(benefit))
-
-            # Colour scale: anchor at 0, go up to 98th percentile
-            vmax_b = float(np.percentile(benefit, 98))
-            if vmax_b <= 0:
-                vmax_b = float(np.percentile(np.abs(benefit), 98))
-
-            fig, ax = plt.subplots(1, 1, figsize=(11, 9))
-            sc = ax.scatter(
-                x, y, c=benefit, cmap="YlOrRd", s=0.6,
-                vmin=0, vmax=vmax_b, edgecolors="none",
-            )
-            cbar = plt.colorbar(sc, ax=ax, shrink=0.7, pad=0.02)
-            cbar.set_label(f"Cooling Benefit ({response_units})", fontsize=11)
-
-            ax.set_title(
-                f"Where to {info['action']}\n"
-                f"Scenario: {dir_word}{inc} {unit}",
-                fontsize=14, fontweight="bold",
-            )
-
-            # Annotation box with summary stats
-            stats_text = (
-                f"Mean benefit: {mean_b:.3f} {response_units}\n"
-                f"Median: {p50:.3f}\n"
-                f"90th pctl: {p90:.3f}\n"
-                f"(darker = more cooling)"
-            )
-            ax.text(
-                0.02, 0.02, stats_text,
-                transform=ax.transAxes, fontsize=9,
-                verticalalignment="bottom",
-                bbox=dict(boxstyle="round,pad=0.4", facecolor="white", alpha=0.85),
-            )
-
-            ax.set_xlabel(x_col, fontsize=9)
-            ax.set_ylabel(y_col, fontsize=9)
-            ax.set_aspect("equal")
-            ax.tick_params(labelsize=8)
-            fig.tight_layout()
-
-            out_path = maps_dir / f"headline_{var}_cooling.png"
-            fig.savefig(out_path, dpi=250, bbox_inches="tight")
-            plt.close(fig)
-
-            if verbose:
-                print(f"  Headline map: {out_path.name}  "
-                      f"(mean={mean_b:.4f}, 90th={p90:.4f})")
-
-        # ── 3. Dashboard — all interventions side by side ─────────────
-        if len(headline_data) >= 2:
-            n_panels = len(headline_data)
-            fig, axes = plt.subplots(
-                1, n_panels, figsize=(6 * n_panels + 1, 7),
-                constrained_layout=True,
-            )
-            if n_panels == 1:
-                axes = [axes]
-
-            # Shared colour scale across all panels
-            all_benefits = np.concatenate(list(headline_data.values()))
-            shared_vmax = float(np.percentile(all_benefits[all_benefits > 0], 98)) if np.any(all_benefits > 0) else 0.1
-
-            for ax, (var, benefit) in zip(axes, headline_data.items()):
-                info = friendly.get(var, {"action": var, "short": var})
-                meta = moderate_labels[var]
-                dir_word = "+" if meta["direction"] == "increase" else "−"
-
-                sc = ax.scatter(
-                    x, y, c=benefit, cmap="YlOrRd", s=0.3,
-                    vmin=0, vmax=shared_vmax, edgecolors="none",
-                )
-                ax.set_title(
-                    f"{info['action']}\n({dir_word}{meta['increment']} {meta['unit']})",
-                    fontsize=12, fontweight="bold",
-                )
-                ax.set_aspect("equal")
-                ax.tick_params(labelsize=7)
-                mean_b = float(np.mean(benefit))
-                ax.text(
-                    0.02, 0.02, f"mean = {mean_b:.3f}",
-                    transform=ax.transAxes, fontsize=8,
-                    bbox=dict(facecolor="white", alpha=0.8, boxstyle="round,pad=0.3"),
-                )
-
-            # Shared colorbar
-            cbar = fig.colorbar(
-                sc, ax=axes, shrink=0.85, pad=0.02,
-                label=f"Cooling Benefit ({response_units})",
-            )
-
-            fig.suptitle(
-                "Where Interventions Help Most — Spatial Cooling Benefit",
-                fontsize=15, fontweight="bold", y=1.02,
-            )
-
-            dashboard_path = maps_dir / "dashboard_cooling_benefit.png"
-            fig.savefig(dashboard_path, dpi=250, bbox_inches="tight")
-            plt.close(fig)
-
-            if verbose:
-                print(f"  Dashboard: {dashboard_path.name}")
-
-        # ── 4. Joint scenario maps ────────────────────────────────────
-        joint_cols = [c for c in results_df.columns
-                      if c.startswith("total_") and c.replace("total_", "") not in
-                      [tc.replace("total_", "") for tc in total_cols
-                       if any(tc.replace("total_", "").startswith(s["variable"])
-                              for s in self.scenarios)]]
-        # Simpler: find joint labels
-        single_var_prefixes = tuple(s["variable"] for s in self.scenarios)
-        for col in results_df.columns:
-            if not col.startswith("total_"):
-                continue
-            scenario_label = col.replace("total_", "")
-            # Skip single-variable scenarios (already mapped above)
-            if any(scenario_label.startswith(p) for p in single_var_prefixes):
-                continue
-
-            benefit = -results_df[col].values
-            title_name = scenario_label.replace("_", " ")
-
-            vmax_b = float(np.percentile(benefit, 98)) if np.any(benefit > 0) else 0.1
-            fig, ax = plt.subplots(1, 1, figsize=(11, 9))
-            sc = ax.scatter(
-                x, y, c=benefit, cmap="YlOrRd", s=0.6,
-                vmin=0, vmax=max(vmax_b, 0.01), edgecolors="none",
-            )
-            cbar = plt.colorbar(sc, ax=ax, shrink=0.7, pad=0.02)
-            cbar.set_label(f"Cooling Benefit ({response_units})", fontsize=11)
-            ax.set_title(
-                f"Joint Scenario: {title_name}\nCombined Cooling Benefit",
-                fontsize=14, fontweight="bold",
-            )
-            mean_b = float(np.mean(benefit))
-            p90 = float(np.percentile(benefit, 90))
-            stats_text = (
-                f"Mean benefit: {mean_b:.3f} {response_units}\n"
-                f"90th pctl: {p90:.3f}\n"
-                f"(darker = more cooling)"
-            )
-            ax.text(
-                0.02, 0.02, stats_text,
-                transform=ax.transAxes, fontsize=9,
-                verticalalignment="bottom",
-                bbox=dict(boxstyle="round,pad=0.4", facecolor="white", alpha=0.85),
-            )
-            ax.set_xlabel(x_col, fontsize=9)
-            ax.set_ylabel(y_col, fontsize=9)
-            ax.set_aspect("equal")
-            ax.tick_params(labelsize=8)
-            fig.tight_layout()
-
-            out_path = maps_dir / f"joint_{scenario_label}_cooling.png"
-            fig.savefig(out_path, dpi=250, bbox_inches="tight")
-            plt.close(fig)
-
-            if verbose:
-                print(f"  Joint map: {out_path.name}  (mean={mean_b:.4f})")
-
-        # ── 5. Existing conditions vs. cooling benefit + priority maps ─
-        #
-        # For each intervention variable, compare:
-        #   - Current value (where canopy/impervious/albedo already is)
-        #   - Cooling benefit (from the causal model)
-        #   - Headroom (how much room for the intervention)
-        #   - Priority = benefit × headroom (actionable priority score)
-        #
-        # This answers: "Are we recommending planting trees where they
-        # already exist, or where there's actually room to plant more?"
-
-        # Define headroom logic per variable
-        headroom_config = {
-            "Pct_Canopy": {
-                # Headroom = how much canopy CAN be added (up to max_val)
-                "current_label": "Current Canopy Cover (%)",
-                "headroom_label": "Room to Add Canopy (%)",
-                "priority_label": "Priority: Where to Plant Trees",
-                "cmap_current": "Greens",
-                "max_val": 100.0,
-                "direction": "increase",  # benefit comes from increasing
-            },
-            "Pct_Impervious": {
-                # Headroom = how much impervious CAN be removed (down to min_val)
-                "current_label": "Current Impervious Surface (%)",
-                "headroom_label": "Removable Pavement (%)",
-                "priority_label": "Priority: Where to Remove Pavement",
-                "cmap_current": "Greys",
-                "min_val": 0.0,
-                "direction": "decrease",  # benefit comes from decreasing
-            },
-            "Albedo": {
-                # Headroom = how much albedo CAN be increased
-                "current_label": "Current Albedo (reflectance)",
-                "headroom_label": "Room to Increase Albedo",
-                "priority_label": "Priority: Where to Brighten Surfaces",
-                "cmap_current": "YlGn",
-                "max_val": 0.70,
-                "direction": "increase",
-            },
-        }
-
-        priority_data = {}  # var -> priority array (for combined dashboard)
-
-        for var, meta in moderate_labels.items():
-            if var not in data.columns or var not in headroom_config:
-                continue
-
-            hcfg = headroom_config[var]
-            col_name = f"total_{meta['label']}"
-            if col_name not in results_df.columns:
-                continue
-
-            current_vals = data[var].values.astype(float)
-            benefit = -results_df[col_name].values  # cooling benefit (positive = good)
-            info = friendly.get(var, {"action": var, "short": var})
-
-            # Compute headroom
-            if hcfg["direction"] == "increase":
-                max_v = hcfg.get("max_val", float(current_vals.max()))
-                headroom = max_v - current_vals
-            else:
-                min_v = hcfg.get("min_val", float(current_vals.min()))
-                headroom = current_vals - min_v
-
-            # Normalise headroom to [0, 1]
-            headroom = np.clip(headroom, 0, None)
-            headroom_max = headroom.max() if headroom.max() > 0 else 1.0
-            headroom_norm = headroom / headroom_max
-
-            # Normalise benefit to [0, 1]
-            benefit_clipped = np.clip(benefit, 0, None)
-            benefit_max = np.percentile(benefit_clipped, 98) if benefit_clipped.max() > 0 else 1.0
-            benefit_norm = np.clip(benefit_clipped / benefit_max, 0, 1)
-
-            # Priority = benefit × headroom (both matter)
-            priority = benefit_norm * headroom_norm
-            priority_data[var] = priority
-
-            dir_word = "+" if meta["direction"] == "increase" else "-"
-
-            # --- 4-panel figure: Current | Headroom | Benefit | Priority ---
-            fig, axes = plt.subplots(2, 2, figsize=(16, 14), constrained_layout=True)
-
-            # Panel 1: Current conditions
-            ax = axes[0, 0]
-            sc1 = ax.scatter(
-                x, y, c=current_vals, cmap=hcfg["cmap_current"], s=0.4,
-                edgecolors="none",
-            )
-            plt.colorbar(sc1, ax=ax, shrink=0.7, pad=0.02, label=hcfg["current_label"])
-            ax.set_title(f"A) {hcfg['current_label']}", fontsize=12, fontweight="bold")
-            ax.set_aspect("equal")
-            ax.tick_params(labelsize=7)
-            mean_cur = float(current_vals.mean())
-            ax.text(0.02, 0.02, f"mean = {mean_cur:.1f}", transform=ax.transAxes,
-                    fontsize=8, bbox=dict(facecolor="white", alpha=0.8, boxstyle="round,pad=0.3"))
-
-            # Panel 2: Headroom (room for intervention)
-            ax = axes[0, 1]
-            sc2 = ax.scatter(
-                x, y, c=headroom, cmap="Blues", s=0.4, edgecolors="none",
-            )
-            plt.colorbar(sc2, ax=ax, shrink=0.7, pad=0.02, label=hcfg["headroom_label"])
-            ax.set_title(f"B) {hcfg['headroom_label']}", fontsize=12, fontweight="bold")
-            ax.set_aspect("equal")
-            ax.tick_params(labelsize=7)
-            mean_hr = float(headroom.mean())
-            ax.text(0.02, 0.02, f"mean = {mean_hr:.2f}", transform=ax.transAxes,
-                    fontsize=8, bbox=dict(facecolor="white", alpha=0.8, boxstyle="round,pad=0.3"))
-
-            # Panel 3: Cooling benefit (from causal model)
-            ax = axes[1, 0]
-            vmax_b = float(np.percentile(benefit_clipped, 98)) if benefit_clipped.max() > 0 else 0.1
-            sc3 = ax.scatter(
-                x, y, c=benefit_clipped, cmap="YlOrRd", s=0.4,
-                vmin=0, vmax=vmax_b, edgecolors="none",
-            )
-            plt.colorbar(sc3, ax=ax, shrink=0.7, pad=0.02,
-                         label=f"Cooling Benefit ({response_units})")
-            ax.set_title(
-                f"C) Causal Cooling Benefit ({dir_word}{meta['increment']} {meta['unit']})",
-                fontsize=12, fontweight="bold",
-            )
-            ax.set_aspect("equal")
-            ax.tick_params(labelsize=7)
-            mean_b = float(benefit_clipped.mean())
-            ax.text(0.02, 0.02, f"mean = {mean_b:.3f}", transform=ax.transAxes,
-                    fontsize=8, bbox=dict(facecolor="white", alpha=0.8, boxstyle="round,pad=0.3"))
-
-            # Panel 4: PRIORITY (benefit × headroom)
-            ax = axes[1, 1]
-            p98 = float(np.percentile(priority, 98)) if priority.max() > 0 else 0.1
-            sc4 = ax.scatter(
-                x, y, c=priority, cmap="hot_r", s=0.4,
-                vmin=0, vmax=p98, edgecolors="none",
-            )
-            plt.colorbar(sc4, ax=ax, shrink=0.7, pad=0.02, label="Priority Score")
-            ax.set_title(f"D) {hcfg['priority_label']}", fontsize=12, fontweight="bold")
-            ax.set_aspect("equal")
-            ax.tick_params(labelsize=7)
-            # Annotate: high priority = high benefit AND room to act
-            ax.text(0.02, 0.02,
-                    "Priority = Benefit x Headroom\n(dark = act here first)",
-                    transform=ax.transAxes, fontsize=8,
-                    bbox=dict(facecolor="white", alpha=0.85, boxstyle="round,pad=0.3"))
-
-            fig.suptitle(
-                f"{info['action']}: Existing Conditions vs. Intervention Priority",
-                fontsize=15, fontweight="bold", y=1.01,
-            )
-
-            out_path = maps_dir / f"priority_{var}.png"
-            fig.savefig(out_path, dpi=250, bbox_inches="tight")
-            plt.close(fig)
-
-            if verbose:
-                # Correlation between current conditions and benefit
-                corr = float(np.corrcoef(current_vals, benefit_clipped)[0, 1])
-                high_priority_pct = float((priority > np.percentile(priority, 75)).mean() * 100)
-                print(f"  Priority map: {out_path.name}")
-                print(f"    Corr(current, benefit) = {corr:+.3f}  "
-                      f"({'benefit where already high' if corr > 0.3 else 'benefit where currently low' if corr < -0.3 else 'spatially independent'})")
-                print(f"    Top-25% priority cells: {high_priority_pct:.0f}% of area")
-
-        # --- Combined priority dashboard (all variables) ---
-        if len(priority_data) >= 2:
-            n_p = len(priority_data)
-            fig, axes = plt.subplots(1, n_p, figsize=(6 * n_p + 1, 7), constrained_layout=True)
-            if n_p == 1:
-                axes = [axes]
-
-            for ax, (var, priority) in zip(axes, priority_data.items()):
-                info = friendly.get(var, {"action": var, "short": var})
-                p98 = float(np.percentile(priority, 98)) if priority.max() > 0 else 0.1
-                sc = ax.scatter(
-                    x, y, c=priority, cmap="hot_r", s=0.3,
-                    vmin=0, vmax=p98, edgecolors="none",
-                )
-                ax.set_title(f"{info['action']}", fontsize=12, fontweight="bold")
-                ax.set_aspect("equal")
-                ax.tick_params(labelsize=7)
-
-            cbar = fig.colorbar(sc, ax=axes, shrink=0.85, pad=0.02, label="Priority Score")
-            fig.suptitle(
-                "Intervention Priority: Cooling Benefit x Headroom",
-                fontsize=15, fontweight="bold", y=1.02,
-            )
-
-            fig.savefig(maps_dir / "dashboard_priority.png", dpi=250, bbox_inches="tight")
-            plt.close(fig)
-
-            if verbose:
-                print(f"  Priority dashboard: dashboard_priority.png")
-
-        # ── 6. Baseline + post-intervention absolute temperature maps ──
-        baseline = results_df.get("pred_baseline")
-        if baseline is not None:
-            baseline_vals = baseline.values
-
-            # Shared colour range across baseline and all post-intervention maps
-            temp_vmin = float(np.percentile(baseline_vals, 1))
-            temp_vmax = float(np.percentile(baseline_vals, 99))
-
-            # 5a. Baseline temperature surface
-            fig, ax = plt.subplots(1, 1, figsize=(11, 9))
-            sc = ax.scatter(
-                x, y, c=baseline_vals, cmap="RdYlBu_r", s=0.6,
-                vmin=temp_vmin, vmax=temp_vmax, edgecolors="none",
-            )
-            cbar = plt.colorbar(sc, ax=ax, shrink=0.7, pad=0.02)
-            cbar.set_label(f"Predicted Temperature ({response_units})", fontsize=11)
-            ax.set_title(
-                "Baseline Predicted Temperature\n(Current Conditions)",
-                fontsize=14, fontweight="bold",
-            )
-            stats_text = (
-                f"Mean: {baseline_vals.mean():.3f}\n"
-                f"Range: [{baseline_vals.min():.3f}, {baseline_vals.max():.3f}]\n"
-                f"(warmer = red, cooler = blue)"
-            )
-            ax.text(
-                0.02, 0.02, stats_text,
-                transform=ax.transAxes, fontsize=9,
-                verticalalignment="bottom",
-                bbox=dict(boxstyle="round,pad=0.4", facecolor="white", alpha=0.85),
-            )
-            ax.set_xlabel(x_col, fontsize=9)
-            ax.set_ylabel(y_col, fontsize=9)
-            ax.set_aspect("equal")
-            ax.tick_params(labelsize=8)
-            fig.tight_layout()
-            fig.savefig(maps_dir / "baseline_temperature.png", dpi=250, bbox_inches="tight")
-            plt.close(fig)
-
-            if verbose:
-                print(f"  Baseline temperature map saved")
-
-            # 5b. Post-intervention temperature maps (headline scenarios)
-            for var, meta in moderate_labels.items():
-                pred_col = f"pred_{meta['label']}"
-                if pred_col not in results_df.columns:
-                    continue
-
-                post_vals = results_df[pred_col].values
-                info = friendly.get(var, {"action": var, "short": var})
-                dir_word = "+" if meta["direction"] == "increase" else "−"
-
-                fig, ax = plt.subplots(1, 1, figsize=(11, 9))
-                sc = ax.scatter(
-                    x, y, c=post_vals, cmap="RdYlBu_r", s=0.6,
-                    vmin=temp_vmin, vmax=temp_vmax, edgecolors="none",
-                )
-                cbar = plt.colorbar(sc, ax=ax, shrink=0.7, pad=0.02)
-                cbar.set_label(f"Predicted Temperature ({response_units})", fontsize=11)
-                ax.set_title(
-                    f"Post-Intervention Temperature: {info['action']}\n"
-                    f"Scenario: {dir_word}{meta['increment']} {meta['unit']}",
-                    fontsize=14, fontweight="bold",
-                )
-                delta_vals = post_vals - baseline_vals
-                stats_text = (
-                    f"Mean temp: {post_vals.mean():.3f}\n"
-                    f"Mean change: {delta_vals.mean():+.3f}\n"
-                    f"Max cooling: {delta_vals.min():+.3f}\n"
-                    f"(same scale as baseline)"
-                )
-                ax.text(
-                    0.02, 0.02, stats_text,
-                    transform=ax.transAxes, fontsize=9,
-                    verticalalignment="bottom",
-                    bbox=dict(boxstyle="round,pad=0.4", facecolor="white", alpha=0.85),
-                )
-                ax.set_xlabel(x_col, fontsize=9)
-                ax.set_ylabel(y_col, fontsize=9)
-                ax.set_aspect("equal")
-                ax.tick_params(labelsize=8)
-                fig.tight_layout()
-
-                out_path = maps_dir / f"post_intervention_{var}_temperature.png"
-                fig.savefig(out_path, dpi=250, bbox_inches="tight")
-                plt.close(fig)
-
-                if verbose:
-                    print(f"  Post-intervention map: {out_path.name}  "
-                          f"(mean Δ={delta_vals.mean():+.4f})")
-
-            # 5c. Before/After dashboard — baseline vs post-intervention
-            n_vars = len(moderate_labels)
-            if n_vars >= 1:
-                fig, axes = plt.subplots(
-                    2, n_vars, figsize=(6 * n_vars + 1, 12),
-                    constrained_layout=True,
-                )
-                if n_vars == 1:
-                    axes = axes.reshape(2, 1)
-
-                for col_idx, (var, meta) in enumerate(moderate_labels.items()):
-                    pred_col = f"pred_{meta['label']}"
-                    if pred_col not in results_df.columns:
-                        continue
-
-                    post_vals = results_df[pred_col].values
-                    info = friendly.get(var, {"action": var, "short": var})
-                    dir_word = "+" if meta["direction"] == "increase" else "−"
-
-                    # Top row: baseline
-                    ax_top = axes[0, col_idx]
-                    sc = ax_top.scatter(
-                        x, y, c=baseline_vals, cmap="RdYlBu_r", s=0.3,
-                        vmin=temp_vmin, vmax=temp_vmax, edgecolors="none",
-                    )
-                    ax_top.set_title("Current", fontsize=11, fontweight="bold")
-                    ax_top.set_aspect("equal")
-                    ax_top.tick_params(labelsize=6)
-                    if col_idx == 0:
-                        ax_top.set_ylabel("BEFORE", fontsize=12, fontweight="bold")
-
-                    # Bottom row: post-intervention
-                    ax_bot = axes[1, col_idx]
-                    sc = ax_bot.scatter(
-                        x, y, c=post_vals, cmap="RdYlBu_r", s=0.3,
-                        vmin=temp_vmin, vmax=temp_vmax, edgecolors="none",
-                    )
-                    delta_mean = float(np.mean(post_vals - baseline_vals))
-                    ax_bot.set_title(
-                        f"{info['action']} ({dir_word}{meta['increment']})\n"
-                        f"mean Δ = {delta_mean:+.3f}",
-                        fontsize=11, fontweight="bold",
-                    )
-                    ax_bot.set_aspect("equal")
-                    ax_bot.tick_params(labelsize=6)
-                    if col_idx == 0:
-                        ax_bot.set_ylabel("AFTER", fontsize=12, fontweight="bold")
-
-                # Shared colorbar
-                cbar = fig.colorbar(
-                    sc, ax=axes, shrink=0.6, pad=0.02,
-                    label=f"Predicted Temperature ({response_units})",
-                )
-
-                fig.suptitle(
-                    "Before & After — Predicted Temperature Surface",
-                    fontsize=15, fontweight="bold", y=1.02,
-                )
-
-                dashboard_path = maps_dir / "dashboard_before_after.png"
-                fig.savefig(dashboard_path, dpi=250, bbox_inches="tight")
-                plt.close(fig)
-
-                if verbose:
-                    print(f"  Before/After dashboard: {dashboard_path.name}")
-
-        if verbose:
-            print(f"\n  All maps saved to: {maps_dir}")
-
-    # ------------------------------------------------------------------
-    # Static PNG map generation (legacy helper)
-    # ------------------------------------------------------------------
-
-    def _save_scenario_map(
-        self,
-        data: pd.DataFrame,
-        values: np.ndarray,
-        label: str,
-        title: str,
-        cmap: str = "RdBu_r",
-        vmin: Optional[float] = None,
-        vmax: Optional[float] = None,
-    ) -> Optional[Path]:
-        """Save a static PNG map of a scenario delta (or prediction).
-
-        Parameters
-        ----------
-        data : pd.DataFrame
-            Must contain coordinate columns for plotting.
-        values : ndarray
-            Per-point values to colour-code.
-        label : str
-            Filename-safe label for the scenario (used in filename).
-        title : str
-            Human-readable title placed above the map.
-        cmap : str
-            Matplotlib colourmap name.
-        vmin, vmax : float, optional
-            Explicit colour limits.  If omitted, symmetric limits are
-            derived from the 2nd/98th percentile of *values*.
-
-        Returns
-        -------
-        Path or None
-            Path to the saved PNG, or None if matplotlib is unavailable.
-        """
-        try:
-            import matplotlib
-            matplotlib.use("Agg")
-            import matplotlib.pyplot as plt
-        except ImportError:
-            return None
-
-        maps_dir = self.output_dir / "scenario_maps"
-        maps_dir.mkdir(parents=True, exist_ok=True)
-
-        # Coordinates: prefer projected coords
-        x_col, y_col = self.coord_cols[0], self.coord_cols[1]
-        x = data[x_col].values
-        y = data[y_col].values
-
-        # Symmetric colour limits for deltas
-        if vmin is None or vmax is None:
-            abs_max = max(abs(np.percentile(values, 2)),
-                         abs(np.percentile(values, 98)),
-                         1e-6)
-            vmin = -abs_max
-            vmax = abs_max
-
-        fig, ax = plt.subplots(1, 1, figsize=(10, 8))
-        sc = ax.scatter(x, y, c=values, cmap=cmap, s=0.5,
-                        vmin=vmin, vmax=vmax, edgecolors="none")
-        cbar = plt.colorbar(sc, ax=ax, shrink=0.75, pad=0.02)
-
-        response_units = self.config.get("response_units", "")
-        cbar.set_label(f"Delta ({response_units})" if response_units else "Delta")
-        ax.set_title(title, fontsize=12, fontweight="bold")
-        ax.set_xlabel(x_col)
-        ax.set_ylabel(y_col)
-        ax.set_aspect("equal")
-        fig.tight_layout()
-
-        out_path = maps_dir / f"{label}.png"
-        fig.savefig(out_path, dpi=200, bbox_inches="tight")
-        plt.close(fig)
-        return out_path
 
     def _print_priors_table(self) -> None:
         """Print a formatted table of physics priors (literature values)."""
@@ -4287,15 +3523,26 @@ class ScenarioSimulator:
                   f"successful draws across {len(delta_cols)} delta columns.")
 
         # Save MC results
-        mc_path = self.output_dir / "scenario_mc_uncertainty.csv"
         mc_cols = [c for c in results_df.columns
                    if c.endswith(('_q05', '_q50', '_q95'))]
         if mc_cols:
             id_cols = [c for c in results_df.columns
                        if c in ('OBJECTID', 'Area_Name')]
-            results_df[id_cols + mc_cols].to_csv(mc_path, index=False)
-            if verbose:
-                print(f"  MC quantiles saved: {mc_path}")
+            mc_df = results_df[id_cols + mc_cols].copy()
+            store = _stage4_store()
+            if store is not None:
+                try:
+                    store.write_table("4", "scenario_mc_uncertainty", mc_df,
+                                      producer="scenario_simulator")
+                except Exception:
+                    store = None
+            if store is None:
+                mc_path = self.output_dir / "scenario_mc_uncertainty.csv"
+                mc_df.to_csv(mc_path, index=False)
+                if verbose:
+                    print(f"  MC quantiles saved: {mc_path}")
+            elif verbose:
+                print(f"  MC quantiles saved to artifacts.db (scenario_mc_uncertainty)")
 
         return summary_df, mc_meta
 
@@ -4523,20 +3770,44 @@ class ScenarioSimulator:
                       f"[{row['MC_q05']:+.4f}, {row['MC_q95']:+.4f}]")
 
         # Save MC results
-        mc_path = self.output_dir / "scenario_mc_consensus.csv"
         mc_cols = [c for c in results_df.columns
                    if c.endswith(('_q05', '_q50', '_q95'))]
+        store = _stage4_store()
         if mc_cols:
             id_cols = [c for c in results_df.columns if c in ('OBJECTID', 'Area_Name')]
             valid_id_cols = [c for c in id_cols if c in results_df.columns]
-            results_df[valid_id_cols + mc_cols].to_csv(mc_path, index=False)
-            if verbose:
-                print(f"  MC quantiles saved: {mc_path}")
+            mc_df = results_df[valid_id_cols + mc_cols].copy()
+            wrote = False
+            if store is not None:
+                try:
+                    store.write_table("4", "scenario_mc_consensus", mc_df,
+                                      producer="scenario_simulator")
+                    wrote = True
+                except Exception:
+                    wrote = False
+            if not wrote:
+                mc_path = self.output_dir / "scenario_mc_consensus.csv"
+                mc_df.to_csv(mc_path, index=False)
+                if verbose:
+                    print(f"  MC quantiles saved: {mc_path}")
+            elif verbose:
+                print(f"  MC quantiles saved to artifacts.db (scenario_mc_consensus)")
 
-        mc_summary_path = self.output_dir / "scenario_mc_consensus_summary.csv"
-        mc_summary.to_csv(mc_summary_path, index=False)
-        if verbose:
-            print(f"  MC summary saved: {mc_summary_path}")
+        wrote_summary = False
+        if store is not None:
+            try:
+                store.write_table("4", "scenario_mc_consensus_summary", mc_summary,
+                                  producer="scenario_simulator")
+                wrote_summary = True
+            except Exception:
+                wrote_summary = False
+        if not wrote_summary:
+            mc_summary_path = self.output_dir / "scenario_mc_consensus_summary.csv"
+            mc_summary.to_csv(mc_summary_path, index=False)
+            if verbose:
+                print(f"  MC summary saved: {mc_summary_path}")
+        elif verbose:
+            print(f"  MC summary saved to artifacts.db (scenario_mc_consensus_summary)")
 
         return summary_df, mc_meta
 
@@ -4747,12 +4018,24 @@ class ScenarioSimulator:
 
         summary_df = pd.DataFrame(summary_rows) if summary_rows else pd.DataFrame()
 
-        # Save bma_scenario_summary.csv (V2 dev doc output)
+        # Persist bma_scenario_summary
         if not summary_df.empty:
-            bma_out = self.output_dir / "bma_scenario_summary.csv"
-            summary_df.to_csv(bma_out, index=False)
-            if verbose:
-                print(f"   Saved bma_scenario_summary.csv -> {bma_out}")
+            store = _stage4_store()
+            wrote = False
+            if store is not None:
+                try:
+                    store.write_table("4", "bma_scenario_summary", summary_df,
+                                      producer="scenario_simulator")
+                    wrote = True
+                except Exception:
+                    wrote = False
+            if not wrote:
+                bma_out = self.output_dir / "bma_scenario_summary.csv"
+                summary_df.to_csv(bma_out, index=False)
+                if verbose:
+                    print(f"   Saved bma_scenario_summary.csv -> {bma_out}")
+            elif verbose:
+                print(f"   Saved bma_scenario_summary -> artifacts.db")
 
         meta: Dict[str, Any] = {
             "model_info": self._v2_meta_info,
@@ -4763,119 +4046,6 @@ class ScenarioSimulator:
         if verbose:
             print(f"   {len(summary_rows)} scenario-area combinations evaluated")
             print(f"   Exceedance threshold: {exceedance_threshold}")
-
-        # Generate scenario visualizations
-        if not summary_df.empty:
-            self._plot_bayesian_scenario_visuals(summary_df, verbose=verbose)
-
-        # Generate spatial maps (cooling surface, exceedance, portfolio)
-        self._plot_spatial_scenario_maps(
-            data, nuts_beta, nuts_treatments, results_df, verbose=verbose,
-        )
-
-        return summary_df, meta
-
-    # ------------------------------------------------------------------
-    # Bayesian scenario visualisation
-    # ------------------------------------------------------------------
-
-    def _plot_bayesian_scenario_visuals(
-        self,
-        summary_df: "pd.DataFrame",
-        verbose: bool = True,
-    ) -> None:
-        """Generate bar chart and diminishing returns plots for bayesian scenarios."""
-        try:
-            import matplotlib
-            matplotlib.use("Agg")
-            import matplotlib.pyplot as plt
-        except ImportError:
-            if verbose:
-                print("  [PLOTS] matplotlib not available — skipping scenario plots")
-            return
-
-        figs_dir = self.output_dir / "scenario_figures"
-        figs_dir.mkdir(parents=True, exist_ok=True)
-
-        variables = summary_df["Variable"].unique()
-        colors = {"Pct_Canopy": "#2ECC71", "Pct_Impervious": "#E74C3C",
-                  "Albedo": "#F39C12", "NDVI": "#27AE60",
-                  "Elevation_m": "#8E44AD", "Distance_from_water_m": "#3498DB"}
-
-        # 1. Scenario summary bar chart (Mean Delta with CI bands)
-        fig, ax = plt.subplots(figsize=(12, 6))
-        bar_data = []
-        for _, row in summary_df.iterrows():
-            label = f"{row['Variable']}\n({row['Increment']:+g})"
-            bar_data.append({
-                "label": label,
-                "mean": row["Mean_Delta"],
-                "ci5": row["CI_5"],
-                "ci95": row["CI_95"],
-                "var": row["Variable"],
-                "inference": row["Inference"],
-            })
-
-        x_pos = range(len(bar_data))
-        bar_colors = [colors.get(d["var"], "#95A5A6") for d in bar_data]
-        means = [d["mean"] for d in bar_data]
-        yerr_lo = [d["mean"] - d["ci5"] for d in bar_data]
-        yerr_hi = [d["ci95"] - d["mean"] for d in bar_data]
-
-        ax.bar(x_pos, means, color=bar_colors, edgecolor="white", alpha=0.85)
-        ax.errorbar(x_pos, means, yerr=[yerr_lo, yerr_hi], fmt="none",
-                    ecolor="black", capsize=4, capthick=1.5, elinewidth=1.5)
-        ax.axhline(0, color="gray", lw=1, ls="--", alpha=0.5)
-        ax.set_xticks(list(x_pos))
-        ax.set_xticklabels([d["label"] for d in bar_data], fontsize=8)
-        ax.set_ylabel("Mean \u0394 Outcome (z-score)", fontsize=11)
-        ax.set_title("Bayesian Posterior Scenario Predictions",
-                     fontsize=14, fontweight="bold")
-
-        # Inference type annotation
-        for i, d in enumerate(bar_data):
-            marker = "\u2605" if d["inference"] == "nuts_posterior" else "\u25CB"
-            ax.text(i, means[i] + max(yerr_hi) * 0.05, marker,
-                    ha="center", va="bottom", fontsize=10)
-
-        ax.text(0.98, 0.02,
-                "\u2605 = NUTS posterior   \u25CB = coefficient fallback",
-                transform=ax.transAxes, ha="right", va="bottom", fontsize=8,
-                style="italic", color="gray")
-        fig.tight_layout()
-        fig.savefig(figs_dir / "bayesian_scenario_summary.png", dpi=200,
-                    bbox_inches="tight")
-        plt.close(fig)
-
-        # 2. Per-variable diminishing returns curves
-        for var in variables:
-            var_df = summary_df[summary_df["Variable"] == var].sort_values("Increment")
-            if len(var_df) < 2:
-                continue
-
-            fig, ax = plt.subplots(figsize=(8, 5))
-            incs = var_df["Increment"].values
-            means_v = var_df["Mean_Delta"].values
-            ci5 = var_df["CI_5"].values
-            ci95 = var_df["CI_95"].values
-
-            c = colors.get(var, "#95A5A6")
-            ax.plot(incs, means_v, "o-", color=c, lw=2, markersize=6,
-                    label="Posterior mean")
-            ax.fill_between(incs, ci5, ci95, alpha=0.2, color=c,
-                            label="90% credible interval")
-            ax.axhline(0, color="gray", lw=1, ls="--", alpha=0.5)
-            ax.set_xlabel(f"{var} increment", fontsize=11)
-            ax.set_ylabel("\u0394 Outcome (z-score)", fontsize=11)
-            ax.set_title(f"Dose-Response: {var}", fontsize=13, fontweight="bold")
-            ax.legend(fontsize=9)
-            fig.tight_layout()
-            fig.savefig(figs_dir / f"diminishing_returns_{var}.png", dpi=200,
-                        bbox_inches="tight")
-            plt.close(fig)
-
-        if verbose:
-            print(f"   Scenario visualizations saved to {figs_dir}")
 
     # ------------------------------------------------------------------
     # Spatial modulation (PDP slope × alpha_norm)
@@ -4957,241 +4127,3 @@ class ScenarioSimulator:
 
         return modulation
 
-    # ------------------------------------------------------------------
-    # Spatial scenario maps (cooling surface, exceedance, portfolio)
-    # ------------------------------------------------------------------
-
-    def _plot_spatial_scenario_maps(
-        self,
-        data: pd.DataFrame,
-        nuts_beta: Optional[np.ndarray],
-        nuts_treatments: Optional[list],
-        results_df: pd.DataFrame,
-        verbose: bool = True,
-    ) -> None:
-        """Generate spatial maps: cooling potential, exceedance probability, portfolio."""
-        try:
-            import matplotlib
-            matplotlib.use("Agg")
-            import matplotlib.pyplot as plt
-            from matplotlib.colors import TwoSlopeNorm
-        except ImportError:
-            if verbose:
-                print("  [PLOTS] matplotlib not available — skipping spatial maps")
-            return
-
-        if nuts_beta is None or nuts_treatments is None:
-            if verbose:
-                print("  [PLOTS] No NUTS posteriors — skipping spatial maps")
-            return
-
-        # Get coordinates
-        x_col, y_col = self.coord_cols[0], self.coord_cols[1]
-        if x_col not in data.columns or y_col not in data.columns:
-            if verbose:
-                print(f"  [PLOTS] Coordinate columns {x_col}, {y_col} not found")
-            return
-
-        x = data[x_col].values
-        y = data[y_col].values
-        baseline = results_df["pred_baseline"].values if "pred_baseline" in results_df.columns else data[self.target_col].values
-
-        figs_dir = self.output_dir / "scenario_figures"
-        figs_dir.mkdir(parents=True, exist_ok=True)
-
-        # Response units for axis labels
-        units = self.config.get("project", {}).get("response_units", "z-score")
-
-        # ---- 1. Cooling potential surface for each treatment at a reference increment ----
-        ref_increments = {}
-        for scenario in self.scenarios:
-            var = scenario["variable"]
-            incs = scenario.get("increments", [])
-            if incs:
-                # Pick the middle increment as a representative scenario
-                ref_increments[var] = incs[len(incs) // 2]
-
-        treatment_vars = [v for v in nuts_treatments if v in ref_increments]
-        if treatment_vars:
-            n_vars = len(treatment_vars)
-            fig, axes = plt.subplots(1, n_vars, figsize=(7 * n_vars, 6), squeeze=False)
-
-            for vi, var in enumerate(treatment_vars):
-                ax = axes[0, vi]
-                tidx = nuts_treatments.index(var)
-                inc = ref_increments[var]
-                beta_mean = float(np.mean(nuts_beta[:, tidx]))
-
-                # Per-point delta accounting for physical caps
-                current = data[var].values if var in data.columns else np.zeros(len(data))
-                # Find scenario to get bounds
-                scenario_cfg = next(
-                    (s for s in self.scenarios if s["variable"] == var), {}
-                )
-                max_val = scenario_cfg.get("max_val", current.max() + abs(inc))
-                min_val = scenario_cfg.get("min_val", current.min() - abs(inc))
-                direction = scenario_cfg.get("direction", "increase")
-
-                if direction == "increase":
-                    effective_inc = np.clip(current + inc, min_val, max_val) - current
-                else:
-                    effective_inc = current - np.clip(current - inc, min_val, max_val)
-                    effective_inc = -effective_inc  # make it a decrease
-
-                modified = current + effective_inc
-                spatial_mod = self._get_spatial_modulation(
-                    var, effective_inc, current, modified,
-                )
-                delta_t = beta_mean * effective_inc * spatial_mod
-                post_intervention = baseline + delta_t
-
-                if verbose:
-                    print(f"   [SPATIAL] {var}: beta_mean={beta_mean:.6f}, "
-                          f"eff_inc_mean={np.mean(effective_inc):.4f}, "
-                          f"spatial_mod_mean={np.mean(spatial_mod):.4f}, "
-                          f"delta_t_mean={np.mean(delta_t):.4f}")
-
-                vmax = max(abs(np.percentile(delta_t, 2)),
-                           abs(np.percentile(delta_t, 98)), 0.01)
-                norm = TwoSlopeNorm(vmin=-vmax, vcenter=0, vmax=vmax)
-                sc = ax.scatter(x, y, c=delta_t, cmap="RdBu_r", norm=norm,
-                                s=0.3, alpha=0.6, rasterized=True)
-                plt.colorbar(sc, ax=ax, shrink=0.8,
-                             label=f"ΔT ({units})")
-                sign = "+" if direction == "increase" else "-"
-                ax.set_title(f"{var} {sign}{inc}\nMean ΔT = {np.mean(delta_t):.3f}",
-                             fontsize=11, fontweight="bold")
-                ax.set_xlabel(x_col)
-                ax.set_ylabel(y_col if vi == 0 else "")
-                ax.set_aspect("equal")
-
-            fig.suptitle("Cooling Potential Surface — Per-Point Temperature Change",
-                         fontsize=14, fontweight="bold", y=1.02)
-            fig.tight_layout()
-            fig.savefig(figs_dir / "cooling_potential_surface.png", dpi=300,
-                        bbox_inches="tight")
-            plt.close(fig)
-
-        # ---- 2. Exceedance probability map ----
-        # P(cooling > 1 °F) at each point using full posterior
-        cooling_threshold = 1.0  # 1 unit in response scale
-        if treatment_vars:
-            n_vars = len(treatment_vars)
-            fig, axes = plt.subplots(1, n_vars, figsize=(7 * n_vars, 6), squeeze=False)
-
-            for vi, var in enumerate(treatment_vars):
-                ax = axes[0, vi]
-                tidx = nuts_treatments.index(var)
-                inc = ref_increments[var]
-                beta_samples = nuts_beta[:, tidx]  # (n_posterior,)
-
-                current = data[var].values if var in data.columns else np.zeros(len(data))
-                scenario_cfg = next(
-                    (s for s in self.scenarios if s["variable"] == var), {}
-                )
-                max_val = scenario_cfg.get("max_val", current.max() + abs(inc))
-                min_val = scenario_cfg.get("min_val", current.min() - abs(inc))
-                direction = scenario_cfg.get("direction", "increase")
-
-                if direction == "increase":
-                    effective_inc = np.clip(current + inc, min_val, max_val) - current
-                else:
-                    effective_inc = current - np.clip(current - inc, min_val, max_val)
-                    effective_inc = -effective_inc
-
-                modified = current + effective_inc
-                spatial_mod = self._get_spatial_modulation(
-                    var, effective_inc, current, modified,
-                )
-                # delta_field[i, s] = beta_samples[s] * effective_inc[i] * spatial_mod[i]
-                # For cooling: delta_field < -threshold (temperature decrease)
-                delta_matrix = np.outer(effective_inc * spatial_mod, beta_samples)  # (n_points, n_posterior)
-                exceed_prob = np.mean(delta_matrix < -cooling_threshold, axis=1)
-
-                sc = ax.scatter(x, y, c=exceed_prob, cmap="YlOrRd",
-                                vmin=0, vmax=1,
-                                s=0.3, alpha=0.6, rasterized=True)
-                plt.colorbar(sc, ax=ax, shrink=0.8,
-                             label=f"P(cooling > {cooling_threshold} {units})")
-                sign = "+" if direction == "increase" else "-"
-                ax.set_title(f"{var} {sign}{inc}\nMean P = {np.mean(exceed_prob):.2%}",
-                             fontsize=11, fontweight="bold")
-                ax.set_xlabel(x_col)
-                ax.set_ylabel(y_col if vi == 0 else "")
-                ax.set_aspect("equal")
-
-            fig.suptitle(
-                f"Exceedance Probability — P(cooling > {cooling_threshold} {units})",
-                fontsize=14, fontweight="bold", y=1.02,
-            )
-            fig.tight_layout()
-            fig.savefig(figs_dir / "exceedance_probability_map.png", dpi=300,
-                        bbox_inches="tight")
-            plt.close(fig)
-
-        # ---- 3. Intervention portfolio map ----
-        # Combined effect of all treatment variables at their reference increments
-        total_delta = np.zeros(len(data))
-        portfolio_desc_parts = []
-        for var in treatment_vars:
-            tidx = nuts_treatments.index(var)
-            inc = ref_increments[var]
-            beta_mean = float(np.mean(nuts_beta[:, tidx]))
-
-            current = data[var].values if var in data.columns else np.zeros(len(data))
-            scenario_cfg = next(
-                (s for s in self.scenarios if s["variable"] == var), {}
-            )
-            max_val = scenario_cfg.get("max_val", current.max() + abs(inc))
-            min_val = scenario_cfg.get("min_val", current.min() - abs(inc))
-            direction = scenario_cfg.get("direction", "increase")
-
-            if direction == "increase":
-                effective_inc = np.clip(current + inc, min_val, max_val) - current
-            else:
-                effective_inc = current - np.clip(current - inc, min_val, max_val)
-                effective_inc = -effective_inc
-
-            modified = current + effective_inc
-            spatial_mod = self._get_spatial_modulation(
-                var, effective_inc, current, modified,
-            )
-            total_delta += beta_mean * effective_inc * spatial_mod
-            sign = "+" if direction == "increase" else "-"
-            portfolio_desc_parts.append(f"{var} {sign}{inc}")
-            if verbose:
-                contrib = beta_mean * effective_inc * spatial_mod
-                print(f"   [PORTFOLIO] {var} ({direction}): beta={beta_mean:.6f}, "
-                      f"eff_inc_mean={np.mean(effective_inc):.4f}, "
-                      f"contrib_mean={np.mean(contrib):.4f}")
-
-        if len(treatment_vars) > 0:
-            fig, ax = plt.subplots(figsize=(9, 7))
-            vmax = max(abs(np.percentile(total_delta, 2)),
-                       abs(np.percentile(total_delta, 98)), 0.01)
-            norm = TwoSlopeNorm(vmin=-vmax, vcenter=0, vmax=vmax)
-            sc = ax.scatter(x, y, c=total_delta, cmap="RdBu_r", norm=norm,
-                            s=0.3, alpha=0.6, rasterized=True)
-            plt.colorbar(sc, ax=ax, shrink=0.8,
-                         label=f"Combined ΔT ({units})")
-            ax.set_title(
-                f"Intervention Portfolio — Combined Effect\n"
-                f"Mean ΔT = {np.mean(total_delta):.3f} {units}",
-                fontsize=13, fontweight="bold",
-            )
-            ax.set_xlabel(x_col)
-            ax.set_ylabel(y_col)
-            ax.set_aspect("equal")
-
-            desc = " + ".join(portfolio_desc_parts)
-            ax.text(0.02, 0.02, desc, transform=ax.transAxes,
-                    fontsize=8, style="italic", va="bottom",
-                    bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8))
-
-            fig.tight_layout()
-            fig.savefig(figs_dir / "intervention_portfolio_map.png", dpi=300,
-                        bbox_inches="tight")
-            plt.close(fig)
-
-        if verbose:
-            print(f"   Spatial scenario maps saved to {figs_dir}")

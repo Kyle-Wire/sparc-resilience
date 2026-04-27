@@ -2193,6 +2193,54 @@ async def get_scenario_detail():
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
+    # ── artifacts.db: prefer store-backed scenario_results table ──────
+    geojson_data = None
+    summary_records = None
+    try:
+        from sparc.registry.store import get_active_store
+        _store = get_active_store()
+    except Exception:
+        _store = None
+    if _store is not None:
+        for art_id in ("scenario_results", "scenario_results_dag",
+                       "scenario_results_hybrid", "scenario_results_reprediction"):
+            try:
+                if _store.has("4", art_id):
+                    gdf = _store.read_table("4", art_id)
+                    if gdf is not None and len(gdf) > 0:
+                        import geopandas as gpd
+                        if isinstance(gdf, gpd.GeoDataFrame):
+                            # Add delta_* columns
+                            baseline_col = "pred_baseline" if "pred_baseline" in gdf.columns else None
+                            if baseline_col:
+                                for pc in [c for c in gdf.columns
+                                           if c.startswith("pred_") and c != baseline_col]:
+                                    try:
+                                        gdf[pc.replace("pred_", "delta_")] = (
+                                            gdf[pc].astype(float) - gdf[baseline_col].astype(float)
+                                        )
+                                    except Exception:
+                                        pass
+                            if gdf.crs is not None and str(gdf.crs) != "EPSG:4326":
+                                gdf = gdf.to_crs(epsg=4326)
+                            geojson_data = gdf.__geo_interface__
+                            break
+            except Exception:
+                continue
+        # Summary from store
+        for sum_id in ("scenario_summary", "scenario_summary_dag",
+                       "scenario_summary_hybrid", "scenario_summary_reprediction"):
+            try:
+                if _store.has("4", sum_id):
+                    sdf = _store.read_table("4", sum_id)
+                    if sdf is not None and len(sdf) > 0:
+                        summary_records = sdf.to_dict("records")
+                        break
+            except Exception:
+                continue
+    if geojson_data is not None:
+        return {"geojson": geojson_data, "summary": summary_records or []}
+
     # Load scenario spatial results: registry first, then canonical/variant scan.
     gpkg_path = (
         _registry_path("4", "scenario_results")
@@ -4341,6 +4389,11 @@ async def get_results_availability():
         "/results/spatial_cv/predictions": ("2", "spatial_cv_predictions"),
         "/results/scenarios/nuts_summary": ("3", "nuts_summary"),
         "/dag/mc3_result": ("3", "mc3_summary"),
+        "/results/scenarios/detail": ("4", "scenario_results"),
+        "/results/scenarios/summary": ("4", "scenario_summary"),
+        "/results/scenarios/mc_consensus": ("4", "scenario_mc_consensus"),
+        "/results/scenarios/mc_consensus_summary": ("4", "scenario_mc_consensus_summary"),
+        "/results/scenarios/bma_summary": ("4", "bma_scenario_summary"),
     }
     for endpoint, candidates in checks.items():
         # Db-backed endpoints: prefer registry presence.
