@@ -130,19 +130,36 @@ class PipelinePaths:
         return Path.cwd()
     
     def _ensure_directories(self):
-        """Ensure all necessary directories exist"""
-        directories = [
-            self.output_dir,
+        """Ensure necessary directories exist.
+
+        When disk writes are disabled (the default), only the run-wide
+        ``output_dir`` is created — that is where ``artifacts.db`` and the
+        manifest sidecar live.  Per-stage subdirectories are skipped so the
+        run directory stays clean (no empty ``Stage_*`` folders).  Path
+        attributes are still populated so downstream code can compute
+        ``stage2_dir / 'foo.csv'``-style identifiers without changes.
+        """
+        try:
+            from sparc.run.disk_policy import disk_writes_enabled
+            disk_on = disk_writes_enabled()
+        except Exception:  # noqa: BLE001 — never fail path init
+            disk_on = True
+
+        # Always ensure the output root so RunRegistry can place artifacts.db.
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        if not disk_on:
+            return
+
+        for directory in (
             self.stage0_dir,
-            self.stage1_dir, 
+            self.stage1_dir,
             self.stage2_dir,
             self.stage3_dir,
             self.stage4_dir,
             self.final_dir,
-            self.spatial_analysis_dir
-        ]
-        
-        for directory in directories:
+            self.spatial_analysis_dir,
+        ):
             directory.mkdir(parents=True, exist_ok=True)
     
     # Configuration files
