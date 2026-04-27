@@ -109,21 +109,45 @@ def check_stage_completion(output_dir: str, stage: str) -> Tuple[bool, Optional[
         (is_completed, timestamp_or_none)
     """
     if stage == 'gwen':
-        # Check for GWEN results and approval
-        gwen_file = os.path.join(output_dir, 'gwen_results.json')
+        # Prefer artifacts.db; fall back to legacy on-disk JSON.
         approved_file = os.path.join(output_dir, 'gwen_approved.txt')
-        
-        if os.path.exists(gwen_file) and os.path.exists(approved_file):
-            try:
-                with open(gwen_file, 'r') as f:
-                    gwen_data = json.load(f)
-                return True, gwen_data.get('timestamp')
-            except:
-                return False, None
+        gwen_data = None
+        try:
+            from sparc.registry.store import get_active_store
+            _store = get_active_store()
+            if _store is not None and _store.has("1", "gwen_results"):
+                gwen_data = _store.read_any("1", "gwen_results")
+        except Exception:  # noqa: BLE001
+            gwen_data = None
+        if gwen_data is None:
+            gwen_file = os.path.join(output_dir, 'gwen_results.json')
+            if os.path.exists(gwen_file):
+                try:
+                    with open(gwen_file, 'r') as f:
+                        gwen_data = json.load(f)
+                except Exception:  # noqa: BLE001
+                    gwen_data = None
+        if gwen_data is not None and os.path.exists(approved_file):
+            return True, gwen_data.get('timestamp')
         return False, None
     
     elif stage == 'spatial_cv':
-        # Check for spatial CV output files
+        # Prefer artifacts.db: presence of OOF predictions table indicates completion.
+        try:
+            from sparc.registry.store import get_active_store
+            _store = get_active_store()
+            if _store is not None and _store.has("2", "oof_predictions"):
+                # Best-effort timestamp from the manifest entry.
+                try:
+                    entry = _store.registry.lookup("2", "oof_predictions")
+                    ts = getattr(entry, "written_at", None)
+                except Exception:
+                    ts = None
+                return True, ts
+        except Exception:
+            pass
+
+        # Check for spatial CV output files (legacy disk fallback)
         required_files = [
             'oof_predictions.csv',
             'performance_summary.csv',
@@ -165,25 +189,32 @@ def get_gwen_summary(output_dir: str) -> Optional[Dict[str, Any]]:
     Dict[str, Any] or None
         GWEN summary or None if not available
     """
-    gwen_file = os.path.join(output_dir, 'gwen_results.json')
-    
-    if not os.path.exists(gwen_file):
-        return None
-    
+    gwen_data = None
     try:
-        with open(gwen_file, 'r') as f:
-            gwen_data = json.load(f)
-        
-        return {
-            'total_features': gwen_data.get('total_features', 0),
-            'selected_features': gwen_data.get('selected_features', []),
-            'selection_threshold': gwen_data.get('selection_threshold', 0),
-            'timestamp': gwen_data.get('timestamp'),
-            'num_selected': len(gwen_data.get('selected_features', []))
-        }
-    except Exception as e:
-        print(f"Warning: Could not read GWEN results: {str(e)}")
-        return None
+        from sparc.registry.store import get_active_store
+        _store = get_active_store()
+        if _store is not None and _store.has("1", "gwen_results"):
+            gwen_data = _store.read_any("1", "gwen_results")
+    except Exception:  # noqa: BLE001
+        gwen_data = None
+    if gwen_data is None:
+        gwen_file = os.path.join(output_dir, 'gwen_results.json')
+        if not os.path.exists(gwen_file):
+            return None
+        try:
+            with open(gwen_file, 'r') as f:
+                gwen_data = json.load(f)
+        except Exception as e:  # noqa: BLE001
+            print(f"Warning: Could not read GWEN results: {str(e)}")
+            return None
+
+    return {
+        'total_features': gwen_data.get('total_features', 0),
+        'selected_features': gwen_data.get('selected_features', []),
+        'selection_threshold': gwen_data.get('selection_threshold', 0),
+        'timestamp': gwen_data.get('timestamp'),
+        'num_selected': len(gwen_data.get('selected_features', []))
+    }
 
 
 def get_spatial_cv_summary(output_dir: str) -> Optional[Dict[str, Any]]:

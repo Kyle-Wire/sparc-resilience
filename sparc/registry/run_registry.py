@@ -179,8 +179,8 @@ _KNOWN_CATALOG: list[dict[str, Any]] = [
      "patterns": ["bayesian/edge_confidence.csv"], "format": "csv"},
     {"id": "median_dag", "stage": "3",
      "patterns": ["bayesian/median_dag.json"], "format": "json"},
-    {"id": "nuts_beta_chain", "stage": "3",
-     "patterns": ["bayesian/nuts_beta.npy"], "format": "npy"},
+    # nuts_beta_chain (single-edge legacy back-compat) removed in SPARC v4
+    # — superseded by ("3","nuts_edge_summary")+("3","nuts_edge_samples").
     {"id": "causal_validation_summary", "stage": "3",
      "patterns": ["causal_validation_summary.txt"], "format": "txt"},
 
@@ -275,9 +275,37 @@ class RunRegistry:
         self.sqlite_path = self.output_dir / SQLITE_FILENAME
         self.lock_path = self.output_dir / LOCK_FILENAME
         self._manifest: RunManifest = RunManifest()
+        # Listeners notified after every successful register_artifact.
+        # Signature: ``listener(entry: ArtifactEntry) -> None``.
+        # Listener exceptions are caught and logged so a single bad
+        # subscriber cannot break the write path.
+        self._on_register_listeners: list[Any] = []
         if autoload:
             self.load()
         self._ensure_sqlite_schema()
+
+    # ------------------------------------------------------------------
+    # Event listeners
+    # ------------------------------------------------------------------
+
+    def add_register_listener(self, listener) -> None:  # type: ignore[no-untyped-def]
+        """Subscribe ``listener(entry)`` to artifact registration events."""
+        if listener not in self._on_register_listeners:
+            self._on_register_listeners.append(listener)
+
+    def remove_register_listener(self, listener) -> None:  # type: ignore[no-untyped-def]
+        try:
+            self._on_register_listeners.remove(listener)
+        except ValueError:
+            pass
+
+    def _emit_registered(self, entry: ArtifactEntry) -> None:
+        for listener in list(self._on_register_listeners):
+            try:
+                listener(entry)
+            except Exception as exc:  # noqa: BLE001
+                # Listeners must never break a write.
+                print(f"[RunRegistry] register listener {listener!r} failed: {exc}")
 
     # ------------------------------------------------------------------
     # Properties
@@ -350,6 +378,12 @@ class RunRegistry:
         finally:
             conn.close()
 
+    @contextlib.contextmanager
+    def sqlite_connection(self) -> Iterator[sqlite3.Connection]:
+        """Public access to the registry's SQLite connection for ArtifactStore."""
+        with self._sqlite() as conn:
+            yield conn
+
     def _ensure_sqlite_schema(self) -> None:
         with self._sqlite() as conn:
             conn.executescript(
@@ -368,6 +402,10 @@ class RunRegistry:
                     name TEXT NOT NULL,
                     path TEXT NOT NULL,
                     format TEXT NOT NULL,
+                    storage_kind TEXT NOT NULL DEFAULT 'legacy_path',
+                    data_table TEXT,
+                    blob_id INTEGER,
+                    blob_sha256 TEXT,
                     producer TEXT,
                     consumers TEXT,
                     size_bytes INTEGER DEFAULT 0,
@@ -383,11 +421,57 @@ class RunRegistry:
                     ON artifacts(format);
                 CREATE INDEX IF NOT EXISTS idx_artifacts_consumers
                     ON artifacts(consumers);
+                CREATE INDEX IF NOT EXISTS idx_artifacts_storage_kind
+                    ON artifacts(storage_kind);
+
+                -- Inline binary payloads (<10 MB by default). Larger blobs
+                -- live in the content-addressed external store referenced by
+                -- artifacts.blob_sha256.
+                CREATE TABLE IF NOT EXISTS internal_blobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    stage TEXT NOT NULL,
+                    artifact_id TEXT NOT NULL,
+                    mime TEXT,
+                    serializer TEXT,
+                    sha256 TEXT,
+                    size_bytes INTEGER,
+                    bytes BLOB NOT NULL,
+                    created_at TEXT,
+                    UNIQUE (stage, artifact_id)
+                );
+
+                -- Non-tabular structured results (dicts / JSON).
+                CREATE TABLE IF NOT EXISTS result_structs (
+                    stage TEXT NOT NULL,
+                    artifact_id TEXT NOT NULL,
+                    json TEXT NOT NULL,
+                    created_at TEXT,
+                    PRIMARY KEY (stage, artifact_id)
+                );
                 """
             )
+            # Idempotent column additions for upgrades from v1 schema.
+            self._migrate_artifact_columns(conn)
+
+    def _migrate_artifact_columns(self, conn: sqlite3.Connection) -> None:
+        """Add new columns to artifacts table if upgrading from older schema."""
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(artifacts)").fetchall()}
+        for col, ddl in (
+            ("storage_kind", "ALTER TABLE artifacts ADD COLUMN storage_kind TEXT NOT NULL DEFAULT 'legacy_path'"),
+            ("data_table",   "ALTER TABLE artifacts ADD COLUMN data_table TEXT"),
+            ("blob_id",      "ALTER TABLE artifacts ADD COLUMN blob_id INTEGER"),
+            ("blob_sha256",  "ALTER TABLE artifacts ADD COLUMN blob_sha256 TEXT"),
+        ):
+            if col not in cols:
+                conn.execute(ddl)
 
     def _sync_sqlite(self) -> None:
-        """Wipe and rewrite SQLite from in-memory manifest."""
+        """Wipe and rewrite SQLite from in-memory manifest.
+
+        Note: ``internal_blobs`` and ``result_structs`` are NOT wiped here
+        — they are the canonical store for db-resident artifacts and are
+        managed directly by ``ArtifactStore`` writes.
+        """
         with self._sqlite() as conn:
             conn.execute("DELETE FROM stages")
             conn.execute("DELETE FROM artifacts")
@@ -402,12 +486,17 @@ class RunRegistry:
                 for art in sm.artifacts.values():
                     conn.execute(
                         "INSERT INTO artifacts "
-                        "(id, stage, name, path, format, producer, "
+                        "(id, stage, name, path, format, storage_kind, "
+                        " data_table, blob_id, blob_sha256, producer, "
                         " consumers, size_bytes, sha256, row_count, "
                         " written_at, write_seconds, partial, metadata) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             art.id, stage_id, art.name, art.path, art.format,
+                            getattr(art, "storage_kind", "legacy_path"),
+                            getattr(art, "data_table", None),
+                            getattr(art, "blob_id", None),
+                            getattr(art, "blob_sha256", None),
                             art.producer,
                             json.dumps(list(art.consumers)),
                             int(art.size_bytes or 0),
@@ -470,37 +559,58 @@ class RunRegistry:
         *,
         stage: str | int,
         artifact_id: str,
-        path: str | Path,
+        path: str | Path | None = None,
         format: ArtifactFormat,
+        storage_kind: str = "legacy_path",
+        data_table: Optional[str] = None,
+        blob_id: Optional[int] = None,
+        blob_sha256: Optional[str] = None,
         producer: Optional[str] = None,
         consumers: Optional[Iterable[str]] = None,
         row_count: Optional[int] = None,
+        size_bytes: Optional[int] = None,
         partial: bool = False,
         metadata: Optional[dict[str, Any]] = None,
         compute_hash: bool = False,
         write_seconds: Optional[float] = None,
+        name: Optional[str] = None,
     ) -> ArtifactEntry:
         """Register (or update) an artifact in the manifest.
 
-        ``path`` may be absolute or relative; stored relative to ``output_dir``.
+        For ``storage_kind='legacy_path'`` (default) ``path`` must be set and
+        will be stored relative to ``output_dir``. For db-resident artifacts
+        (``table``/``struct``/``blob_inline``/``blob_external``) ``path`` may
+        be omitted; size/row-count come from the caller.
         """
-        abs_path = Path(path)
-        if not abs_path.is_absolute():
-            abs_path = (self.output_dir / abs_path).resolve()
-        try:
-            rel_path = abs_path.relative_to(self.output_dir).as_posix()
-        except ValueError:
-            rel_path = abs_path.as_posix()  # outside output_dir; store absolute
+        rel_path = ""
+        art_name = name or artifact_id
+        size = size_bytes or 0
+        sha = None
 
-        size = abs_path.stat().st_size if abs_path.exists() else 0
-        sha = _sha256_file(abs_path) if (compute_hash and abs_path.exists()) else None
+        if path is not None:
+            abs_path = Path(path)
+            if not abs_path.is_absolute():
+                abs_path = (self.output_dir / abs_path).resolve()
+            try:
+                rel_path = abs_path.relative_to(self.output_dir).as_posix()
+            except ValueError:
+                rel_path = abs_path.as_posix()  # outside output_dir; absolute
+            if size_bytes is None:
+                size = abs_path.stat().st_size if abs_path.exists() else 0
+            sha = _sha256_file(abs_path) if (compute_hash and abs_path.exists()) else None
+            if name is None:
+                art_name = abs_path.name
 
         entry = ArtifactEntry(
             id=artifact_id,
             stage=str(stage),
-            name=abs_path.name,
+            name=art_name,
             path=rel_path,
             format=format,
+            storage_kind=storage_kind,  # type: ignore[arg-type]
+            data_table=data_table,
+            blob_id=blob_id,
+            blob_sha256=blob_sha256,
             producer=producer,
             consumers=list(consumers or []),
             size_bytes=size,
@@ -514,6 +624,7 @@ class RunRegistry:
         sm = self._manifest.get_stage(str(stage))
         sm.artifacts[artifact_id] = entry
         self.save()
+        self._emit_registered(entry)
         return entry
 
     def mark_complete(self, stage: str | int, artifact_id: str) -> None:
@@ -524,9 +635,10 @@ class RunRegistry:
             return
         art.partial = False
         # Refresh size in case file grew between open and close.
-        abs_path = self.resolve(art)
-        if abs_path.exists():
-            art.size_bytes = abs_path.stat().st_size
+        if getattr(art, "storage_kind", "legacy_path") == "legacy_path" and art.path:
+            abs_path = self.resolve(art)
+            if abs_path.exists():
+                art.size_bytes = abs_path.stat().st_size
         self.save()
 
     def remove_artifact(self, stage: str | int, artifact_id: str) -> None:
@@ -553,7 +665,15 @@ class RunRegistry:
         entry = self.lookup(stage, artifact_id)
         if entry is None or entry.partial:
             return False
-        return self.resolve(entry).exists()
+        kind = getattr(entry, "storage_kind", "legacy_path")
+        if kind == "legacy_path":
+            return self.resolve(entry).exists()
+        if kind == "blob_external":
+            if not entry.blob_sha256:
+                return False
+            return (self.output_dir / "blobs" / entry.blob_sha256[:2] / entry.blob_sha256).exists()
+        # table / struct / blob_inline live inside artifacts.db
+        return self.sqlite_path.exists()
 
     def list_for_stage(self, stage: str | int) -> list[ArtifactEntry]:
         sm = self._manifest.stages.get(str(stage))
@@ -586,7 +706,8 @@ class RunRegistry:
 
         with self._sqlite() as conn:
             rows = conn.execute(
-                f"SELECT id, stage, name, path, format, producer, consumers, "
+                f"SELECT id, stage, name, path, format, storage_kind, "
+                f"data_table, blob_id, blob_sha256, producer, consumers, "
                 f"size_bytes, sha256, row_count, written_at, write_seconds, "
                 f"partial, metadata FROM artifacts{where}",
                 params,
@@ -594,11 +715,16 @@ class RunRegistry:
 
         out: list[ArtifactEntry] = []
         for row in rows:
-            (a_id, a_stage, name, path, fmt, producer, consumers,
+            (a_id, a_stage, name, path, fmt, storage_kind, data_table,
+             blob_id, blob_sha256, producer, consumers,
              size_bytes, sha256, row_count, written_at, write_seconds,
              partial_flag, metadata) = row
             out.append(ArtifactEntry(
-                id=a_id, stage=a_stage, name=name, path=path, format=fmt,
+                id=a_id, stage=a_stage, name=name, path=path or "", format=fmt,
+                storage_kind=storage_kind or "legacy_path",
+                data_table=data_table,
+                blob_id=blob_id,
+                blob_sha256=blob_sha256,
                 producer=producer,
                 consumers=json.loads(consumers) if consumers else [],
                 size_bytes=size_bytes or 0, sha256=sha256, row_count=row_count,

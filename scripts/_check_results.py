@@ -77,3 +77,36 @@ if bc_vals is not None:
     print(f"  BC activates at epoch: {first_nonzero}")
     print(f"  BC final: {bc_vals[-1]:.6f}")
     print(f"  BC max: {bc_vals.max():.6f}")
+
+# v4 scenario_results — long-format table from artifact store
+print(f"\n=== v4 SCENARIO_RESULTS (DB) ===")
+try:
+    from pathlib import Path
+    from sparc.registry.run_registry import RunRegistry, set_active_registry
+    from sparc.registry.store import ArtifactStore
+
+    db_path = Path("examples/providence_ri_uhi/providence_ri_uhi_run/output/artifacts.db")
+    if not db_path.exists():
+        print(f"  No artifacts.db at {db_path}")
+    else:
+        reg = RunRegistry(db_path.parent)
+        set_active_registry(reg)
+        try:
+            store = ArtifactStore(reg)
+            if not store.has("4", "scenario_results"):
+                print("  No (\"4\",\"scenario_results\") in store")
+            else:
+                df = store.read_table("4", "scenario_results")
+                print(f"  Rows: {len(df)}, Columns: {list(df.columns)}")
+                if "mode" in df.columns:
+                    for mode, sub in df.groupby("mode"):
+                        dm = sub["delta_mean"].astype(float)
+                        print(
+                            f"  mode={mode}: n={len(sub)}, "
+                            f"delta_mean=[{dm.min():.4f}, {dm.max():.4f}], "
+                            f"|mean|={dm.abs().mean():.4f}"
+                        )
+        finally:
+            set_active_registry(None)
+except Exception as exc:  # noqa: BLE001
+    print(f"  Error: {exc}")

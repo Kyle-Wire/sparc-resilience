@@ -259,6 +259,66 @@ class ResultStore:
                     RuntimeWarning,
                     stacklevel=2,
                 )
+
+        # Phase C7: dual-write into the active ArtifactStore so legacy
+        # ResultStore call sites automatically populate artifacts.db.
+        # The disk file remains the backing storage; the store entry is
+        # an additional copy keyed by (stage, artifact_id).
+        try:
+            from sparc.registry.store import get_active_store
+            _astore = get_active_store()
+        except Exception:
+            _astore = None
+        if _astore is not None:
+            try:
+                meta_in = dict(metadata or {})
+                artifact_id = meta_in.pop(
+                    "artifact_id", rel_key.rsplit(".", 1)[0]
+                )
+                producer = meta_in.pop("producer", None)
+                consumers = meta_in.pop("consumers", None)
+                if fmt in ("csv", "parquet"):
+                    if isinstance(data, pd.DataFrame):
+                        _astore.write_table(
+                            self._stage_to_registry_key(stage),
+                            artifact_id, data,
+                            producer=producer, consumers=consumers,
+                            metadata=meta_in or None,
+                        )
+                elif fmt == "gpkg":
+                    gpd_mod = _get_geopandas()
+                    if isinstance(data, gpd_mod.GeoDataFrame):
+                        _astore.write_table(
+                            self._stage_to_registry_key(stage),
+                            artifact_id, data,
+                            geometry_col="geometry",
+                            crs=str(data.crs) if data.crs is not None else None,
+                            producer=producer, consumers=consumers,
+                            metadata=meta_in or None,
+                        )
+                elif fmt == "json":
+                    _astore.write_struct(
+                        self._stage_to_registry_key(stage),
+                        artifact_id, data,
+                        producer=producer, consumers=consumers,
+                        metadata=meta_in or None,
+                    )
+                elif fmt in ("npy", "pkl"):
+                    _astore.write_blob(
+                        self._stage_to_registry_key(stage),
+                        artifact_id, data,
+                        serializer="pickle",
+                        producer=producer, consumers=consumers,
+                        metadata=meta_in or None,
+                    )
+                # txt / png intentionally omitted (txt is rare; pipeline
+                # never writes png).
+            except Exception as exc:  # noqa: BLE001
+                warnings.warn(
+                    f"ArtifactStore dual-write failed for {dest}: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
         return dest
 
     def load(
@@ -391,52 +451,6 @@ class ResultStore:
                   *, subdir: Optional[str] = None) -> str:
         return self.load(stage, name, "txt", subdir=subdir)
 
-    def save_figure(self, stage: Union[int, str], name: str, fig,
-                    *, subdir: Optional[str] = None, dpi: int = 250,
-                    partial: bool = False,
-                    metadata: Optional[Dict[str, Any]] = None) -> Path:
-        """Save a matplotlib Figure as PNG."""
-        directory = self.stage_dir(stage)
-        if subdir:
-            directory = directory / subdir
-        directory.mkdir(parents=True, exist_ok=True)
-        dest = directory / name
-        fig.savefig(dest, dpi=dpi, bbox_inches="tight")
-        # Record in manifest
-        manifest = _load_manifest(self.stage_dir(stage))
-        rel_key = str(Path(subdir) / name) if subdir else name
-        manifest["artifacts"][rel_key] = {
-            "format": "png",
-            "size_bytes": dest.stat().st_size if dest.exists() else 0,
-            "written_at": datetime.now(timezone.utc).isoformat(),
-            "partial": partial,
-            **(metadata or {}),
-        }
-        _save_manifest(self.stage_dir(stage), manifest)
-        if self.registry is not None:
-            try:
-                meta = dict(metadata or {})
-                artifact_id = meta.pop("artifact_id", rel_key.rsplit(".", 1)[0])
-                consumers = meta.pop("consumers", None)
-                producer = meta.pop("producer", None)
-                self.registry.register_artifact(
-                    stage=self._stage_to_registry_key(stage),
-                    artifact_id=artifact_id,
-                    path=dest,
-                    format="png",
-                    producer=producer,
-                    consumers=consumers,
-                    partial=partial,
-                    metadata=meta,
-                )
-            except Exception as exc:  # noqa: BLE001
-                warnings.warn(
-                    f"RunRegistry registration failed for {dest}: {exc}",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-        return dest
-
     # ------------------------------------------------------------------
     # Manifest queries
     # ------------------------------------------------------------------
@@ -516,11 +530,11 @@ class ResultStore:
             jl.dump(data, dest)
 
         elif fmt == "png":
-            # Expects raw bytes or a file-like; figures use save_figure
-            if isinstance(data, bytes):
-                dest.write_bytes(data)
-            else:
-                raise TypeError("PNG format expects bytes or use save_figure()")
+            raise TypeError(
+                "PNG output is no longer produced by the pipeline. "
+                "Visualisations are rendered live in the desktop app from "
+                "artifacts.db data."
+            )
 
         elif fmt == "txt":
             with open(dest, "w", encoding="utf-8") as f:

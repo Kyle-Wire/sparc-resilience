@@ -23,9 +23,6 @@ import argparse
 import numpy as np
 import pandas as pd
 from datetime import datetime
-import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
 
 # When installed via `pip install -e .`, the package root is already on sys.path.
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -93,99 +90,67 @@ def save_gwen_diagnostics(gwen_model, selected_features, feature_names, config, 
                 'coefficient_range': "Not selected"
             }
     
-    # Save diagnostics
-    diagnostics_file = os.path.join(output_dir, 'gwen_diagnostics.json')
-    with open(diagnostics_file, 'w') as f:
-        json.dump(diagnostics, f, indent=2)
+    # Save diagnostics to artifacts.db (preferred) and disk as fallback.
+    try:
+        from sparc.registry.store import get_active_store
+        _store = get_active_store()
+    except Exception:  # noqa: BLE001
+        _store = None
+    if _store is not None:
+        _store.write_struct(
+            stage="1",
+            artifact_id="gwen_diagnostics",
+            payload=diagnostics,
+            producer="gwen_variable_selection.save_gwen_diagnostics",
+            consumers=["server:/results/gwen", "report:gwen", "desktop:gwen_view"],
+        )
+    else:
+        diagnostics_file = os.path.join(output_dir, 'gwen_diagnostics.json')
+        with open(diagnostics_file, 'w') as f:
+            json.dump(diagnostics, f, indent=2)
     
     return diagnostics
 
 
 def create_gwen_diagnostic_plots(gwen_model, feature_names, output_dir):
-    """Create diagnostic plots for GWEN variable selection."""
-    
-    # Get local coefficients
+    """Persist the data needed for GWEN diagnostic visualizations.
+
+    The pipeline no longer renders PNGs. The desktop app reads the
+    structured payload below and renders the (1) selection-frequency
+    bars, (2) per-feature coefficient distributions, (3) parameter
+    selection scatter, and (4) frequency vs magnitude scatter live;
+    users export from the live viz.
+    """
     local_coefs = np.array([model.coef_ for model in gwen_model.local_models])
-    
-    # Create figure with subplots
-    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-    fig.suptitle('GWEN Variable Selection Diagnostics', fontsize=16, fontweight='bold')
-    
-    # 1. Selection frequency by variable
     importance_df = gwen_model.get_variable_importance()
-    ax1 = axes[0, 0]
-    bars = ax1.bar(range(len(feature_names)), importance_df['selection_frequency'], 
-                   alpha=0.7, color='steelblue')
-    ax1.axhline(y=0.1, color='red', linestyle='--', alpha=0.8, linewidth=2, label='Selection threshold (10%)')
-    ax1.set_xlabel('Variables', fontweight='bold')
-    ax1.set_ylabel('Selection Frequency', fontweight='bold')
-    ax1.set_title('Variable Selection Frequency Across Local Models', fontweight='bold')
-    ax1.set_xticks(range(len(feature_names)))
-    ax1.set_xticklabels(feature_names, rotation=45, ha='right')
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-    
-    # 2. Coefficient stability (box plot)
-    ax2 = axes[0, 1]
-    coef_data = []
-    labels = []
-    for i, name in enumerate(feature_names):
-        nonzero_coefs = local_coefs[:, i][local_coefs[:, i] != 0]
-        if len(nonzero_coefs) > 0:
-            coef_data.append(nonzero_coefs)
-            labels.append(name)
-    
-    if coef_data:
-        bp = ax2.boxplot(coef_data, labels=labels, patch_artist=True)
-        for patch in bp['boxes']:
-            patch.set_facecolor('lightblue')
-            patch.set_alpha(0.7)
-    ax2.set_xlabel('Variables', fontweight='bold')
-    ax2.set_ylabel('Local Coefficient Values', fontweight='bold')
-    ax2.set_title('Coefficient Distribution Across Space', fontweight='bold')
-    ax2.tick_params(axis='x', rotation=45)
-    ax2.grid(True, alpha=0.3)
-    ax2.axhline(y=0, color='black', linestyle='-', alpha=0.5)
-    
-    # 3. Alpha vs L1 ratio parameter space
-    ax3 = axes[1, 0]
+
     alphas = [getattr(m, 'alpha_', m.alpha) for m in gwen_model.local_models]
     l1_ratios = [getattr(m, 'l1_ratio_', m.l1_ratio) for m in gwen_model.local_models]
-    scatter = ax3.scatter(alphas, l1_ratios, alpha=0.6, c=range(len(alphas)), 
-                         cmap='viridis', s=30)
-    ax3.set_xlabel('Selected Alpha (log scale)', fontweight='bold')
-    ax3.set_ylabel('Selected L1 Ratio', fontweight='bold')
-    ax3.set_title('Parameter Selection Across Local Models', fontweight='bold')
-    ax3.set_xscale('log')
-    ax3.grid(True, alpha=0.3)
-    cbar = plt.colorbar(scatter, ax=ax3)
-    cbar.set_label('Model Index', fontweight='bold')
-    
-    # 4. Selection frequency vs coefficient magnitude
-    ax4 = axes[1, 1]
-    colors = plt.cm.Set3(np.linspace(0, 1, len(feature_names)))
-    for i, name in enumerate(feature_names):
-        sel_freq = importance_df.iloc[i]['selection_frequency']
-        mean_coef = importance_df.iloc[i]['mean_local_coef']
-        ax4.scatter(sel_freq, mean_coef, s=120, label=name, color=colors[i], 
-                   alpha=0.8, edgecolors='black', linewidth=1)
-    ax4.axvline(x=0.1, color='red', linestyle='--', alpha=0.8, linewidth=2, 
-               label='Selection threshold')
-    ax4.set_xlabel('Selection Frequency', fontweight='bold')
-    ax4.set_ylabel('Mean |Coefficient|', fontweight='bold')
-    ax4.set_title('Selection Frequency vs Coefficient Magnitude', fontweight='bold')
-    ax4.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    ax4.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    
-    # Save plot
-    plot_file = os.path.join(output_dir, 'gwen_diagnostics.png')
-    plt.savefig(plot_file, dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    print(f"   [OK] Diagnostic plots saved: {plot_file}")
-    return plot_file
+
+    payload = {
+        'feature_names': list(feature_names),
+        # n_local_models x n_features matrix (lists for JSON safety).
+        'local_coefficients': local_coefs.tolist(),
+        'local_alphas': [float(a) for a in alphas],
+        'local_l1_ratios': [float(r) for r in l1_ratios],
+        'importance': importance_df.to_dict('records'),
+    }
+
+    try:
+        from sparc.registry.store import get_active_store
+        _store = get_active_store()
+    except Exception:  # noqa: BLE001
+        _store = None
+    if _store is not None:
+        _store.write_struct(
+            stage="1",
+            artifact_id="gwen_local_coefficients",
+            payload=payload,
+            producer="gwen_variable_selection.create_gwen_diagnostic_plots",
+            consumers=["desktop:gwen_view", "report:gwen"],
+        )
+        print("   [OK] GWEN diagnostic data written to artifacts.db (1/gwen_local_coefficients)")
+    return None
 
 
 def print_selection_rationale(diagnostics, selected_features, feature_names):
@@ -247,12 +212,14 @@ def print_selection_rationale(diagnostics, selected_features, feature_names):
 
 
 def save_gwen_results(gwen_model, selected_features, feature_names, config, output_dir):
-    """Save GWEN results in multiple formats for different use cases."""
-    
-    # Get variable importance
+    """Persist GWEN results to artifacts.db.
+
+    Returns ``(results_ref, importance_ref, features_ref)`` where each
+    ref is a string suitable for printing/logging. With an active store
+    this is the artifacts.db path; otherwise the on-disk filename.
+    """
     importance_df = gwen_model.get_variable_importance()
-    
-    # Prepare comprehensive results
+
     gwen_results = {
         'timestamp': datetime.now().isoformat(),
         'total_features': len(feature_names),
@@ -272,28 +239,46 @@ def save_gwen_results(gwen_model, selected_features, feature_names, config, outp
         },
         'feature_importance': importance_df.to_dict('records')
     }
-    
-    # Save comprehensive JSON results
+
+    try:
+        from sparc.registry.store import get_active_store
+        _store = get_active_store()
+    except Exception:  # noqa: BLE001
+        _store = None
+
+    if _store is not None:
+        _store.write_struct(
+            stage="1",
+            artifact_id="gwen_results",
+            payload=gwen_results,
+            producer="gwen_variable_selection.save_gwen_results",
+            consumers=[
+                "server:/results/gwen", "pipeline:stage2+",
+                "report:gwen", "desktop:gwen_view",
+            ],
+        )
+        _store.write_table(
+            stage="1",
+            artifact_id="gwen_variable_importance",
+            df=importance_df,
+            producer="gwen_variable_selection.save_gwen_results",
+            consumers=["server:/results/gwen", "desktop:gwen_view"],
+        )
+        return (
+            "artifacts.db:1/gwen_results",
+            "artifacts.db:1/gwen_variable_importance",
+            "artifacts.db:1/gwen_results.selected_features",
+        )
+
+    # Back-compat path when no active registry is installed.
     results_file = os.path.join(output_dir, 'gwen_results.json')
     with open(results_file, 'w') as f:
         json.dump(gwen_results, f, indent=2)
-    
-    # Save importance table as CSV
     importance_file = os.path.join(output_dir, 'gwen_variable_importance.csv')
     importance_df.to_csv(importance_file, index=False)
-    
-    # Save selected features as simple text list
     features_file = os.path.join(output_dir, 'selected_features.txt')
     with open(features_file, 'w') as f:
         f.write('\n'.join(selected_features))
-    
-    # Save to gwen subdirectory for organization
-    gwen_dir = os.path.join(output_dir, 'gwen')
-    with open(os.path.join(gwen_dir, 'results.json'), 'w') as f:
-        json.dump(gwen_results, f, indent=2)
-    
-    importance_df.to_csv(os.path.join(gwen_dir, 'importance.csv'), index=False)
-    
     return results_file, importance_file, features_file
 
 
@@ -445,12 +430,23 @@ def auto_suggest_gwen_params(config, correlogram_dir=None):
     Returns a dict that can be merged into ``gwen_params``.
     """
     suggestions = {}
-    corr_path = None
-    if correlogram_dir:
-        corr_path = os.path.join(correlogram_dir, 'correlogram_analysis_results.json')
-    if corr_path and os.path.exists(corr_path):
-        with open(corr_path) as f:
-            corr = json.load(f)
+    corr = None
+    # Prefer artifacts.db.
+    try:
+        from sparc.registry.store import get_active_store
+        _store = get_active_store()
+        if _store is not None and _store.has("0", "correlogram_results"):
+            corr = _store.read_any("0", "correlogram_results")
+    except Exception:  # noqa: BLE001
+        corr = None
+    if corr is None:
+        corr_path = None
+        if correlogram_dir:
+            corr_path = os.path.join(correlogram_dir, 'correlogram_analysis_results.json')
+        if corr_path and os.path.exists(corr_path):
+            with open(corr_path) as f:
+                corr = json.load(f)
+    if corr:
         # Extract median autocorrelation range across variables
         ranges = []
         for var_result in corr.get('variable_results', {}).values():
@@ -482,91 +478,6 @@ def auto_suggest_gwen_params(config, correlogram_dir=None):
         pass
 
     return suggestions
-
-
-def generate_gwen_html_report(gwen_model, feature_names, selected_features,
-                               stability_df, diagnostics, output_dir):
-    """Generate a standalone HTML report summarising GWEN variable selection."""
-    import html as _html
-
-    local_coefs = np.array([m.coef_ for m in gwen_model.local_models])
-    importance_df = gwen_model.get_variable_importance()
-
-    # Build table rows
-    table_rows = ""
-    for j, fname in enumerate(feature_names):
-        sel_freq = float(importance_df.iloc[j]['selection_frequency']) if j < len(importance_df) else 0
-        mean_coef = float(importance_df.iloc[j]['mean_local_coef']) if j < len(importance_df) else 0
-        stab_row = stability_df[stability_df['feature'] == fname]
-        sel_stab = f"{float(stab_row['selection_stability'].iloc[0]):.2f}" if len(stab_row) else "—"
-        sign_con = f"{float(stab_row['sign_consistency'].iloc[0]):.2f}" if len(stab_row) else "—"
-        status = "SELECTED" if fname in selected_features else "DROPPED"
-        bg = "#e8f5e9" if status == "SELECTED" else "#ffebee"
-        table_rows += (
-            f'<tr style="background:{bg}">'
-            f'<td>{_html.escape(fname)}</td>'
-            f'<td>{sel_freq:.3f}</td><td>{mean_coef:.4f}</td>'
-            f'<td>{sel_stab}</td><td>{sign_con}</td>'
-            f'<td><b>{status}</b></td></tr>\n'
-        )
-
-    # Correlation matrix of selected features (as HTML table)
-    corr_html = ""
-    if len(selected_features) >= 2 and local_coefs.shape[1] == len(feature_names):
-        sel_idx = [feature_names.index(f) for f in selected_features if f in feature_names]
-        coef_sub = local_coefs[:, sel_idx]
-        corr = np.corrcoef(coef_sub.T)
-        corr_html = '<h2>Coefficient Correlation Matrix (Selected Features)</h2><table border="1" cellpadding="4"><tr><th></th>'
-        for f in selected_features:
-            corr_html += f'<th>{_html.escape(f)}</th>'
-        corr_html += '</tr>'
-        for i, f in enumerate(selected_features):
-            corr_html += f'<tr><th>{_html.escape(f)}</th>'
-            for jj in range(len(selected_features)):
-                v = corr[i, jj]
-                color = "#c8e6c9" if abs(v) < 0.5 else "#ffcdd2"
-                corr_html += f'<td style="background:{color}">{v:.2f}</td>'
-            corr_html += '</tr>'
-        corr_html += '</table>'
-
-    report = f"""<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8">
-<title>GWEN Variable Selection Report</title>
-<style>
-body {{ font-family: 'Segoe UI', sans-serif; max-width: 960px; margin: 40px auto; padding: 0 20px; }}
-table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
-th, td {{ border: 1px solid #ddd; padding: 8px; text-align: center; }}
-th {{ background: #37474f; color: white; }}
-h1 {{ color: #1565c0; }}
-h2 {{ color: #37474f; margin-top: 30px; }}
-.summary {{ background: #e3f2fd; padding: 16px; border-radius: 8px; margin: 20px 0; }}
-</style></head><body>
-<h1>GWEN Variable Selection Report</h1>
-<div class="summary">
-<b>Selected:</b> {len(selected_features)} / {len(feature_names)} features &nbsp;|&nbsp;
-<b>Threshold:</b> {diagnostics.get('selection_rule', {}).get('threshold', '—')} &nbsp;|&nbsp;
-<b>K-neighbors:</b> {gwen_model.k_neighbors} &nbsp;|&nbsp;
-<b>Alpha:</b> {gwen_model.global_model.alpha_:.4f}
-</div>
-
-<h2>Feature Selection Summary</h2>
-<table>
-<tr><th>Feature</th><th>Selection Freq</th><th>Mean |Coef|</th>
-<th>Stability</th><th>Sign Consistency</th><th>Status</th></tr>
-{table_rows}
-</table>
-
-{corr_html}
-
-<h2>Tuning Parameters</h2>
-<pre>{json.dumps(diagnostics.get('tuning_parameters', {}), indent=2)}</pre>
-</body></html>"""
-
-    report_path = os.path.join(output_dir, 'gwen_selection_report.html')
-    with open(report_path, 'w', encoding='utf-8') as f:
-        f.write(report)
-    print(f"   [OK] HTML report saved: {report_path}")
-    return report_path
 
 
 def main(config_path=None, fast_mode=False):
@@ -698,21 +609,30 @@ def main(config_path=None, fast_mode=False):
                     n_folds=stability_folds,
                     threshold=gwen_params['selection_threshold'],
                 )
-                stab_path = os.path.join(output_dir, 'gwen_stability.csv')
-                stability_df.to_csv(stab_path, index=False)
-                print(f"   [OK] Stability scores saved: {stab_path}")
+                try:
+                    from sparc.registry.store import get_active_store
+                    _stab_store = get_active_store()
+                except Exception:  # noqa: BLE001
+                    _stab_store = None
+                if _stab_store is not None:
+                    _stab_store.write_table(
+                        stage="1",
+                        artifact_id="gwen_stability",
+                        df=stability_df,
+                        producer="gwen_variable_selection.main",
+                        consumers=["report:gwen", "desktop:gwen_view"],
+                    )
+                    print("   [OK] Stability scores written to artifacts.db (1/gwen_stability)")
+                else:
+                    stab_path = os.path.join(output_dir, 'gwen_stability.csv')
+                    stability_df.to_csv(stab_path, index=False)
+                    print(f"   [OK] Stability scores saved: {stab_path}")
             except Exception as stab_e:
                 print(f"   Warning: Stability scoring failed ({stab_e}), continuing without")
 
-        # HTML report
-        print("\n7c. Generating HTML selection report...")
-        try:
-            generate_gwen_html_report(
-                gwen, feature_names, selected_features,
-                stability_df, diagnostics, output_dir,
-            )
-        except Exception as rpt_e:
-            print(f"   Warning: HTML report generation failed ({rpt_e})")
+        # The standalone HTML report is no longer generated by the
+        # pipeline; ``sparc.report.standalone_html`` builds the canonical
+        # report from artifacts.db on demand.
 
         # Save results with enhanced documentation
         print("\n8. Saving GWEN results...")

@@ -133,3 +133,48 @@ validation:
 # Maximum allowed absolute delta magnitude (z-score units)
 # Applied as a hard clip to all scenario deltas (direct + indirect).
 max_delta_magnitude: 3.0
+
+# ---------------------------------------------------------------------------
+# SPARC v4 — Causal-stack tuning (consumed by ScenarioEngineV4 + resolver)
+# ---------------------------------------------------------------------------
+# Blend weight λ for mode_3_full_ensemble / mode_4_hybrid:
+#   Δ = λ · resolver_Δ + (1−λ) · ensemble_Δ
+ensemble_posterior_blend: 0.5
+
+# Minimum MC³ inclusion probability for an edge to participate in DAG
+# indirect-effect path products (mode_2_dag_local / mode_4_hybrid).
+# Paths whose weakest edge falls below this threshold are pruned.
+mc3_path_threshold: 0.30
+
+# Minimum R² for a fitted PDP / saturation curve to be usable on the
+# non-linear path (renamed from condition_curve_min_r2).
+pdp_min_r2: 0.5
+
+# CATE estimator policy for Bayesian Spatial CATE:
+#   auto        → bayesian when posterior support exists, else frequentist
+#   bayesian    → force PyTorch NUTS (low-rank GP)
+#   frequentist → degenerate single-draw posterior
+cate_estimator: auto
+
+# Hard cap on per-cell posterior draws used in Δ composition. Larger
+# values give tighter credible intervals but cost wall-clock time.
+n_draws_cap: 1000
+
+# ---------------------------------------------------------------------------
+# SPARC v4.1 — Robustness gating
+# ---------------------------------------------------------------------------
+# Minimum E-value (VanderWeele) for a scenario row to be flagged
+# ``e_value_pass=True``. Rows below this are still persisted but the
+# report layer should down-weight or annotate them as
+# confounding-fragile. 1.5 = a modest unmeasured confounder could
+# explain the effect; bump to 2.0–2.5 for policy-grade claims.
+e_value_min_threshold: 1.5
+
+# Set ``ensemble_posterior_blend: auto`` (string) above to enable
+# leave-one-cell-out grid fitting of the resolver/ensemble blend
+# weight λ per scenario. Default 0.5 keeps deterministic behaviour.
+
+# DEPRECATED in SPARC v4 — kept for back-compat only. The MGWR-blend
+# path is fallback-only after the v4 engine + per-edge NUTS posterior
+# land. Will be removed in a future release.
+# mgwr_reliability_threshold: 0.01

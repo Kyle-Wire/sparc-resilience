@@ -46,12 +46,57 @@ def _collect_plots(output_dir: Path) -> dict[str, list[dict]]:
     return plots
 
 
+def _collect_plots_from_registry(registry: Any) -> dict[str, list[dict]]:
+    """Render PNGs for every registered artifact that has a figure renderer.
+
+    This is the database-backed equivalent of :func:`_collect_plots`. The
+    output directory is no longer scanned for stray ``.png`` files — the
+    report becomes a function of the artifacts.db state.
+    """
+    try:
+        from sparc.report.figures import (
+            FIGURES_REGISTRY,
+            FigureRenderError,
+            render_for_artifact,
+        )
+    except ImportError:
+        return {}
+
+    plots: dict[str, list[dict]] = {}
+    manifest = getattr(registry, "manifest", None)
+    if manifest is None:
+        return plots
+
+    for stage_id, sm in sorted(manifest.stages.items()):
+        artifacts = getattr(sm, "artifacts", {}) or {}
+        stage_plots: list[dict] = []
+        for artifact_id in sorted(artifacts.keys()):
+            if (str(stage_id), artifact_id) not in FIGURES_REGISTRY:
+                continue
+            try:
+                png = render_for_artifact(stage_id, artifact_id, registry=registry)
+            except FigureRenderError:
+                continue
+            except Exception:
+                continue
+            b64 = base64.b64encode(png).decode()
+            stage_plots.append({
+                "name": artifact_id.replace("_", " ").title(),
+                "data_uri": f"data:image/png;base64,{b64}",
+                "path": f"db://{stage_id}/{artifact_id}.png",
+            })
+        if stage_plots:
+            plots[str(stage_id)] = stage_plots
+    return plots
+
+
 def generate_report_html(
     config: dict[str, Any],
     data_summary: dict[str, Any] | None = None,
     causal_results: dict[str, Any] | None = None,
     scenario_summary: list[dict] | None = None,
     output_dir: str | Path | None = None,
+    registry: Any = None,
 ) -> str:
     """Generate the report as an HTML string.
 
@@ -81,9 +126,18 @@ def generate_report_html(
     )
     template = env.get_template("report.html")
 
-    # Collect plots
+    # Collect plots — prefer registry-backed PNGs (rendered from artifacts.db)
+    # and fall back to scanning the output dir for legacy disk-based runs.
     plots: dict[str, list[dict]] = {}
-    if output_dir:
+    if registry is None:
+        try:
+            from sparc.registry.run_registry import get_active_registry
+            registry = get_active_registry()
+        except ImportError:
+            registry = None
+    if registry is not None:
+        plots = _collect_plots_from_registry(registry)
+    if not plots and output_dir:
         output_path = Path(output_dir)
         if output_path.exists():
             plots = _collect_plots(output_path)
@@ -152,6 +206,7 @@ def generate_report_pdf(
     scenario_summary: list[dict] | None = None,
     output_dir: str | Path | None = None,
     dest_path: str | Path | None = None,
+    registry: Any = None,
 ) -> bytes | Path:
     """Generate the report as PDF.
 
@@ -164,6 +219,7 @@ def generate_report_pdf(
         causal_results=causal_results,
         scenario_summary=scenario_summary,
         output_dir=output_dir,
+        registry=registry,
     )
 
     try:

@@ -46,17 +46,67 @@ def _find_first(run_dir: Path, candidates: list[str]) -> Path | None:
     return None
 
 
+def _safe_read_struct(stage: str, artifact_id: str) -> Any:
+    """Best-effort read of a db-resident struct via the active store."""
+    try:
+        from sparc.registry.store import get_active_store
+        store = get_active_store()
+        if store is None:
+            return None
+        if not store.has(stage, artifact_id):
+            return None
+        return store.read_any(stage, artifact_id)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _safe_read_scenarios_long() -> Any:
+    """Read the unified ``(\"4\",\"scenario_results\")`` long-format table.
+
+    Returns a list of records with the ``mode`` column preserved so the
+    template can group by scenario mode. Returns ``None`` when the
+    artifact is absent or unreadable.
+    """
+    try:
+        from sparc.registry.store import get_active_store
+        store = get_active_store()
+        if store is None or not store.has("4", "scenario_results"):
+            return None
+        df = store.read_table("4", "scenario_results")
+        if df is None:
+            return None
+        # Drop geometry column if present (GeoDataFrame); not JSON-serializable.
+        if "geometry" in df.columns:
+            df = df.drop(columns=["geometry"])
+        return df.to_dict(orient="records")
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _collect_artifacts(run_dir: Path) -> dict[str, Any]:
     """Pull the canonical JSON artifacts we know about into a dict."""
     bundle: dict[str, Any] = {}
-    bundle["correlogram"] = _safe_load_json(run_dir / "Stage_0_Correlogram" / "correlogram_analysis_results.json") \
+    bundle["correlogram"] = (
+        _safe_read_struct("0", "correlogram_results")
+        or _safe_load_json(run_dir / "Stage_0_Correlogram" / "correlogram_analysis_results.json")
         or _safe_load_json(run_dir / "Stage_0_Correlogram" / "correlogram_results.json")
-    bundle["gwen"] = _safe_load_json(run_dir / "Stage_1_GWEN" / "gwen_results.json")
-    bundle["model_performance"] = _safe_load_json(run_dir / "Stage_2_Spatial_CV" / "model_performance.json")
+    )
+    bundle["gwen"] = (
+        _safe_read_struct("1", "gwen_results")
+        or _safe_load_json(run_dir / "Stage_1_GWEN" / "gwen_results.json")
+    )
+    bundle["model_performance"] = (
+        _safe_read_struct("2", "ensemble_results")
+        or _safe_load_json(run_dir / "Stage_2_Spatial_CV" / "model_performance.json")
+        or _safe_load_json(run_dir / "Stage_2_Spatial_CV" / "final_ensemble_results.json")
+    )
     bundle["scenario_coefficients"] = _safe_load_json(run_dir / "Stage_3_Causal_Validation" / "scenario_coefficients.json")
     bundle["mc3"] = _safe_load_json(run_dir / "Stage_3_Causal_Validation" / "mc3_results.json")
     bundle["dose_response"] = _safe_load_json(run_dir / "Stage_3_Causal_Validation" / "dose_response_curves.json")
-    bundle["scenarios"] = _safe_load_json(run_dir / "Stage_4_Scenarios" / "scenario_results.json")
+    bundle["scenarios"] = (
+        _safe_read_scenarios_long()
+        or _safe_load_json(run_dir / "Stage_4_Scenarios" / "scenario_results.json")
+    )
     bundle["dag"] = _safe_load_json(run_dir / "Stage_3_Causal_Validation" / "dag_discovery_report.json")
     return bundle
 

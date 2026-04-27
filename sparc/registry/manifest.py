@@ -22,6 +22,16 @@ from pydantic import BaseModel, ConfigDict, Field
 ArtifactFormat = Literal[
     "json", "csv", "parquet", "gpkg", "npy", "pkl", "pt",
     "png", "txt", "html", "joblib", "yaml", "geojson", "other",
+    # New: artifacts that live inside the registry db rather than on disk.
+    "table", "struct", "blob",
+]
+
+StorageKind = Literal[
+    "table",          # rows in a SQLite data table
+    "struct",         # JSON dict in result_structs
+    "blob_inline",    # bytes in internal_blobs
+    "blob_external",  # bytes in <output_dir>/blobs/<sha[:2]>/<sha>
+    "legacy_path",    # file on disk (pre-migration)
 ]
 
 StageStatus = Literal["pending", "running", "complete", "failed", "partial"]
@@ -41,9 +51,32 @@ class ArtifactEntry(BaseModel):
 
     id: str = Field(..., description="Stable lookup id (e.g. 'scenario_coefficients').")
     stage: StageId = Field(..., description="Producing stage id ('0'..'4', 'final', 'spatial', 'cross').")
-    name: str = Field(..., description="On-disk file name including extension.")
-    path: str = Field(..., description="Path relative to the run output_dir.")
+    name: str = Field(..., description="On-disk file name including extension (or logical name for db-resident artifacts).")
+    path: str = Field(
+        "",
+        description=(
+            "Path relative to the run output_dir. Empty for db-resident "
+            "artifacts (storage_kind='table'/'struct'/'blob_inline'); "
+            "set to 'blobs/<sha[:2]>/<sha>' for blob_external."
+        ),
+    )
     format: ArtifactFormat = Field(..., description="Serialization format.")
+    storage_kind: "StorageKind" = Field(
+        "legacy_path",
+        description="Where the bytes live: db table, struct, inline/external blob, or on-disk file.",
+    )
+    data_table: Optional[str] = Field(
+        None,
+        description="Target SQLite table when storage_kind='table'.",
+    )
+    blob_id: Optional[int] = Field(
+        None,
+        description="FK into internal_blobs when storage_kind='blob_inline'.",
+    )
+    blob_sha256: Optional[str] = Field(
+        None,
+        description="Content hash for storage_kind='blob_external'; doubles as filename.",
+    )
     producer: Optional[str] = Field(None, description="Module:function that wrote this artifact.")
     consumers: list[str] = Field(
         default_factory=list,
@@ -129,5 +162,6 @@ __all__ = [
     "StageManifest",
     "StageStatus",
     "StageId",
+    "StorageKind",
     "RunManifest",
 ]

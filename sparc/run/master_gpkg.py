@@ -108,7 +108,48 @@ def build_master_gpkg(
         return None
 
     sources = iter_run_gpkgs(paths)
-    if not sources:
+
+    # Also pull geometry-bearing tables from artifacts.db.
+    store_layers: List[Tuple[str, Any]] = []  # (layer_name, GeoDataFrame)
+    if registry is not None:
+        try:
+            from sparc.registry.store import ArtifactStore
+            _store = ArtifactStore(registry)
+            _STORE_LAYER_MAP = {
+                ("2", "spatial_cv_predictions"): "stage2_cv_predictions",
+                ("2", "ensemble_predictions_geo"): "stage2_ensemble_predictions",
+            }
+            manifest_stages = getattr(registry.manifest, "stages", {}) or {}
+            for stage_key, stage_manifest in manifest_stages.items():
+                # stage_manifest is a StageManifest pydantic model; pull its
+                # artifacts dict (id -> ArtifactEntry). Fall back to a raw
+                # dict in case a caller passes a plain mapping.
+                if isinstance(stage_manifest, dict):
+                    artifact_dict = stage_manifest
+                else:
+                    artifact_dict = getattr(stage_manifest, "artifacts", None) or {}
+                if not artifact_dict:
+                    continue
+                for art_id, entry in artifact_dict.items():
+                    sk = getattr(entry, "storage_kind", None)
+                    if sk != "table":
+                        continue
+                    md = getattr(entry, "metadata", {}) or {}
+                    if "geometry_col" not in md:
+                        continue
+                    layer_name = _STORE_LAYER_MAP.get((str(stage_key), art_id),
+                                                       _sanitize_layer_name(f"stage{stage_key}_{art_id}"))
+                    try:
+                        gdf = _store.read_any(stage_key, art_id)
+                        if gdf is None or len(gdf) == 0:
+                            continue
+                        store_layers.append((layer_name, gdf))
+                    except Exception as _e:
+                        print(f"  [master gpkg] skip store layer {stage_key}/{art_id}: {_e}")
+        except Exception as _e:
+            print(f"  [master gpkg] could not enumerate store layers: {_e}")
+
+    if not sources and not store_layers:
         print("  [master gpkg] no source GPKGs found")
         return None
 
@@ -125,6 +166,22 @@ def build_master_gpkg(
     import geopandas as gpd
 
     written: List[str] = []
+    # First, write store-resident geometry layers.
+    for layer_name, gdf in store_layers:
+        target_name = layer_name
+        base = target_name
+        i = 2
+        while target_name in written:
+            target_name = f"{base}_{i}"
+            i += 1
+        try:
+            gdf.to_file(master_path, driver="GPKG", layer=target_name)
+            written.append(target_name)
+        except Exception as exc:
+            import traceback
+            print(f"  [master gpkg] failed to write store layer {target_name}: {exc}")
+            traceback.print_exc()
+
     for layer_name, src in sources:
         try:
             # A single source file may itself contain multiple layers

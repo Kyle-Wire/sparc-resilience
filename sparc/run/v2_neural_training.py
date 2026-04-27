@@ -596,6 +596,51 @@ def _load_correlogram_bandwidths(
         return None
 
 
+def _resolve_treatment_list(config: dict) -> list[str]:
+    """Resolve ordered treatment names for per-head alpha output.
+
+    Resolution order (Phase 3 of v4):
+
+    1. ``config['causal']['treatments']`` — explicit override list.
+    2. ``causal.dag_file`` — load DAG and pull nodes with ``type='treatment'``
+       in topological order.
+    3. Empty list — caller defaults to ``n_treatments=1`` (legacy mode).
+    """
+    causal_cfg = (config or {}).get("causal", {}) or {}
+    explicit = causal_cfg.get("treatments")
+    if explicit:
+        return [str(t) for t in explicit]
+
+    dag_path = causal_cfg.get("dag_file")
+    if not dag_path:
+        return []
+    try:
+        from sparc.causal.dag_definition import (
+            dag_to_networkx, get_node_roles, load_dag,
+        )
+        import networkx as _nx
+        dag_def = load_dag(dag_path)
+        G = dag_to_networkx(dag_def)
+        roles = get_node_roles(G)
+        treatments = roles.get("treatments", []) or []
+        if not treatments:
+            return []
+        # Stable ordering: topological where possible, lexicographic fallback.
+        try:
+            topo = list(_nx.topological_sort(G))
+            order = {n: i for i, n in enumerate(topo)}
+            treatments = sorted(treatments, key=lambda n: order.get(n, len(order)))
+        except Exception:
+            treatments = sorted(treatments)
+        return [str(t) for t in treatments]
+    except Exception as exc:
+        logger.warning(
+            "Could not resolve treatment list from DAG (%s); "
+            "falling back to single-head alpha.", exc,
+        )
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -703,6 +748,18 @@ def train_neural_meta(
 
     prior_mean = pr_cfg.get("prior_mean", 0.5)
 
+    # ---- Phase 3 (v4): per-treatment alpha heads ----
+    # Resolve the ordered list of treatments from the causal DAG (or
+    # explicit config override).  When unavailable, fall back to a
+    # single-treatment ProcessRateNet — this preserves legacy behavior.
+    treatments = _resolve_treatment_list(config)
+    n_treatments = max(1, len(treatments))
+    if n_treatments > 1:
+        logger.info(
+            "  Phase 3 multi-head alpha enabled: %d treatments → %s",
+            n_treatments, treatments,
+        )
+
     # ---- Alpha supervision targets (land-cover classification) ----
     # Compute once from raw features; used as persistent prior during
     # joint training to prevent α from collapsing when w(s) is free.
@@ -772,6 +829,7 @@ def train_neural_meta(
                     "bounds": pr_cfg.get("bounds", [0.0, 1.0]),
                     "prior_mean": prior_mean,
                 },
+                n_treatments=n_treatments,
             ).to(device)
             return {"model": _m, "surrogates": _s, "process": _p}
 
@@ -916,6 +974,7 @@ def train_neural_meta(
                 "bounds": pr_cfg.get("bounds", [0.0, 1.0]),
                 "prior_mean": pr_cfg.get("prior_mean", 0.5),
             },
+            n_treatments=n_treatments,
         ).to(device)
 
         # FIX A1: Learned source term instead of zeros
@@ -1141,7 +1200,14 @@ def train_neural_meta(
                 base_input = torch.stack(surrogate_preds, dim=1)
 
                 pr_input = b_physics[:, pr_col_idxs]
-                alpha = process_net(pr_input)
+                alpha_full = process_net(pr_input)  # (N, n_treatments)
+                # Collapse to (N, 1) for the meta-learner / loss surface;
+                # mean across heads keeps every head in the gradient path.
+                alpha = (
+                    alpha_full
+                    if alpha_full.shape[-1] == 1
+                    else alpha_full.mean(dim=-1, keepdim=True)
+                )
                 alpha_prior = torch.full_like(alpha, prior_mean)
 
                 # FIX A1: learned source term from physics features
@@ -1276,7 +1342,12 @@ def train_neural_meta(
             )
             full_base_input = torch.stack(full_surr_preds, dim=1)
             full_pr = tensors["physics_feats"][:, pr_col_idxs]
-            full_alpha = process_net(full_pr)
+            full_alpha_full = process_net(full_pr)
+            full_alpha = (
+                full_alpha_full
+                if full_alpha_full.shape[-1] == 1
+                else full_alpha_full.mean(dim=-1, keepdim=True)
+            )
 
         mean_pred, std_pred = model.predict_with_uncertainty(
             base_preds=full_base_input,
@@ -1338,6 +1409,7 @@ def train_neural_meta(
             "bounds": pr_cfg.get("bounds", [0.0, 1.0]),
             "prior_mean": pr_cfg.get("prior_mean", 0.5),
         },
+        n_treatments=n_treatments,
     ).to(device)
 
     final_model = SPARCMetaLearner(
@@ -1547,7 +1619,12 @@ def train_neural_meta(
             base_input = torch.stack(surrogate_preds, dim=1)
 
             pr_input = b_phys[:, pr_col_idxs]
-            alpha = final_process(pr_input)
+            alpha_full = final_process(pr_input)
+            alpha = (
+                alpha_full
+                if alpha_full.shape[-1] == 1
+                else alpha_full.mean(dim=-1, keepdim=True)
+            )
             alpha_prior = torch.full_like(alpha, prior_mean)
 
             # FIX A1: learned source term
@@ -1713,7 +1790,12 @@ def train_neural_meta(
                 base_input = torch.stack(surrogate_preds, dim=1)
 
                 pr_input = b_phys[:, pr_col_idxs]
-                alpha = final_process(pr_input)
+                alpha_full = final_process(pr_input)
+                alpha = (
+                    alpha_full
+                    if alpha_full.shape[-1] == 1
+                    else alpha_full.mean(dim=-1, keepdim=True)
+                )
                 alpha_prior = torch.full_like(alpha, prior_mean)
 
                 # FIX A1: learned source term
@@ -1809,6 +1891,16 @@ def train_neural_meta(
     artifact_dir = output_dir / "v2_neural"
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
+    # Active store (single source of truth for db-resident artifacts).
+    try:
+        from sparc.registry.store import get_active_store
+        _store = get_active_store()
+    except Exception:
+        _store = None
+
+    # --- Model checkpoints + scalers (dual-write: db blobs + disk).
+    # Consumer (scenario_simulator) still loads from disk paths; that
+    # consumer migration is deferred to a future blob-cleanup pass.
     torch.save(final_model.state_dict(), artifact_dir / "neural_meta.pt")
     final_model.save_trunk(artifact_dir / "shared_trunk.pt")
     torch.save(final_process.state_dict(), artifact_dir / "process_rate_net.pt")
@@ -1817,35 +1909,105 @@ def train_neural_meta(
         torch.save(surr.state_dict(), artifact_dir / f"surrogate_{name}.pt")
     joblib.dump(tensors["encoder"], artifact_dir / "sinusoidal_encoder.pkl")
 
+    if _store is not None:
+        try:
+            _store.write_blob("2", "v2_neural_meta_state",
+                              final_model.state_dict(),
+                              serializer="torch", producer="v2_neural_training")
+            _store.write_blob("2", "v2_process_rate_state",
+                              final_process.state_dict(),
+                              serializer="torch", producer="v2_neural_training")
+            _store.write_blob("2", "v2_source_term_state",
+                              final_source_net.state_dict(),
+                              serializer="torch", producer="v2_neural_training")
+            for name, surr in final_surrogates.items():
+                _store.write_blob("2", f"v2_surrogate_{name}_state",
+                                  surr.state_dict(),
+                                  serializer="torch", producer="v2_neural_training")
+            _store.write_blob("2", "v2_sinusoidal_encoder",
+                              tensors["encoder"],
+                              serializer="joblib", producer="v2_neural_training")
+        except Exception as _e:
+            logger.warning("Could not mirror neural checkpoints to artifacts.db: %s", _e)
+
     # Save alpha field for scenario simulation
     final_process.eval()
     with torch.no_grad():
         alpha_all = final_process(tensors["physics_feats"][:, pr_col_idxs])
-    np.save(artifact_dir / "alpha_field.npy", alpha_all.cpu().numpy().squeeze(-1))
+    # Phase 3 (v4): alpha_all has shape (N, n_treatments).  The legacy
+    # ``alpha_field.npy`` artifact remains 1-D (collapsed across heads)
+    # so existing scenario-simulator readers are unaffected; the full
+    # multi-head tensor is mirrored into artifacts.db with schema_version=2.
+    alpha_full_np = alpha_all.cpu().numpy()  # (N, n_treatments)
+    if alpha_full_np.shape[-1] == 1:
+        alpha_field_np = alpha_full_np.squeeze(-1)
+    else:
+        alpha_field_np = alpha_full_np.mean(axis=-1)
+    np.save(artifact_dir / "alpha_field.npy", alpha_field_np)
     np.save(artifact_dir / "alpha_field_coords.npy", coords)
-    logger.info("  Saved alpha_field.npy (%d points)", len(coords))
+    logger.info(
+        "  Saved alpha_field.npy (%d points, %d treatment heads)",
+        len(coords), alpha_full_np.shape[-1],
+    )
 
     # Save cardinal neighbors and grid spacing for PDE forward solver
-    np.save(
-        artifact_dir / "cardinal_neighbors.npy",
-        tensors["cardinal_idx"].cpu().numpy(),
-    )
+    cardinal_np = tensors["cardinal_idx"].cpu().numpy()
+    np.save(artifact_dir / "cardinal_neighbors.npy", cardinal_np)
+    grid_spacing_np = None
     if tensors["h_field"] is not None:
-        np.save(artifact_dir / "grid_spacing.npy", tensors["h_field"].cpu().numpy())
+        grid_spacing_np = tensors["h_field"].cpu().numpy()
+        np.save(artifact_dir / "grid_spacing.npy", grid_spacing_np)
     logger.info("  Saved cardinal_neighbors.npy + grid_spacing.npy")
 
     # Feature scaling stats (needed to standardize inputs at inference time)
+    feat_scaling = {"feat_mean": tensors["feat_mean"], "feat_std": tensors["feat_std"]}
     np.savez(
         artifact_dir / "feature_scaling.npz",
         feat_mean=tensors["feat_mean"],
         feat_std=tensors["feat_std"],
     )
 
+    oof_payload = {"predictions": oof_preds, "uncertainty": oof_std}
     np.savez(
         artifact_dir / "oof_results.npz",
         predictions=oof_preds,
         uncertainty=oof_std,
     )
+
+    # Mirror numpy artifacts to artifacts.db (pickled dicts/arrays).
+    if _store is not None:
+        try:
+            # Phase 3 (v4): persist full multi-head alpha (N, n_treatments)
+            # alongside the collapsed (N,) field.  ``schema_version=2`` and
+            # ``treatments`` metadata let the resolver index by treatment.
+            _store.write_blob(
+                "2", "v2_alpha_field", alpha_full_np,
+                serializer="pickle", producer="v2_neural_training",
+                consumers=[
+                    "scenario_simulator",
+                    "causal_effect_resolver",
+                ],
+                metadata={
+                    "schema_version": 2,
+                    "shape": list(alpha_full_np.shape),
+                    "treatments": treatments if n_treatments > 1 else [],
+                    "n_treatments": n_treatments,
+                    "collapse": "mean" if n_treatments > 1 else "identity",
+                },
+            )
+            _store.write_blob("2", "v2_alpha_field_coords", coords,
+                              serializer="pickle", producer="v2_neural_training")
+            _store.write_blob("2", "v2_cardinal_neighbors", cardinal_np,
+                              serializer="pickle", producer="v2_neural_training")
+            if grid_spacing_np is not None:
+                _store.write_blob("2", "v2_grid_spacing", grid_spacing_np,
+                                  serializer="pickle", producer="v2_neural_training")
+            _store.write_blob("2", "v2_feature_scaling", feat_scaling,
+                              serializer="pickle", producer="v2_neural_training")
+            _store.write_blob("2", "v2_oof_results", oof_payload,
+                              serializer="pickle", producer="v2_neural_training")
+        except Exception as _e:
+            logger.warning("Could not mirror neural numpy artifacts to artifacts.db: %s", _e)
 
     # Save per-epoch loss history for diagnostics
     if retrain_loss_history:
@@ -1855,6 +2017,12 @@ def train_neural_meta(
             for k in _loss_keys
         }
         np.savez(artifact_dir / "loss_history.npz", **_loss_arrays)
+        if _store is not None:
+            try:
+                _store.write_blob("2", "v2_loss_history", _loss_arrays,
+                                  serializer="pickle", producer="v2_neural_training")
+            except Exception as _e:
+                logger.warning("Could not mirror loss_history to artifacts.db: %s", _e)
         logger.info(
             "  Saved loss_history.npz (%d epochs, %d components)",
             len(retrain_loss_history), len(_loss_keys),
@@ -1885,6 +2053,12 @@ def train_neural_meta(
         "swa_epochs": swa_epochs,
         "resolution": resolution,
     }
+    if _store is not None:
+        try:
+            _store.write_struct("2", "v2_neural_meta_info", meta_info,
+                                producer="v2_neural_training")
+        except Exception as _e:
+            logger.warning("Could not write v2_neural_meta_info struct: %s", _e)
     with open(artifact_dir / "meta_info.json", "w") as f:
         json.dump(meta_info, f, indent=2)
 
@@ -1914,47 +2088,10 @@ def train_neural_meta(
     )
 
     # ==================================================================
-    # PDE diagnostic visualizations
+    # PDE diagnostic visualizations removed (Phase E):
+    # the pipeline no longer produces PNG plots. Visualisations are
+    # rendered live in the desktop app from artifacts.db data.
     # ==================================================================
-    try:
-        from sparc.physics.pde_visualizations import generate_stage2_pde_plots
-
-        # Get T_pred for the full dataset (normalized)
-        final_model.eval()
-        with torch.no_grad():
-            _viz_surr_preds = _forward_surrogates(
-                final_surrogates, tensors["physics_feats"], tensors["X_spatial"],
-                knn_index=tensors["knn_index"][:, :gwrf_k],
-                knn_dists=tensors["knn_dists"][:, :gwrf_k],
-            )
-            _viz_base = torch.stack(_viz_surr_preds, dim=1)
-            _viz_alpha = final_process(tensors["physics_feats"][:, pr_col_idxs])
-            _viz_T, _, _ = final_model(
-                base_preds=_viz_base,
-                physics_feats=tensors["physics_feats_extended"],
-                X_spatial=tensors["X_spatial"],
-                coords=tensors["coords"],
-                knn_index=tensors["knn_index"],
-                alpha=_viz_alpha,
-            )
-
-        w_source_np = None
-        if hasattr(final_model, "_last_w_source") and final_model._last_w_source is not None:
-            w_source_np = final_model._last_w_source.detach().cpu().numpy().squeeze()
-
-        generate_stage2_pde_plots(
-            coords=coords,
-            alpha=alpha_all.cpu().numpy().squeeze(),
-            T_pred=_viz_T.cpu().numpy().squeeze(),
-            y_true=tensors["y"].cpu().numpy(),
-            neighbor_idx=full_cardinal.cpu().numpy(),
-            h=resolution,
-            w_source=w_source_np,
-            loss_history=retrain_loss_history if retrain_loss_history else None,
-            output_dir=artifact_dir,
-        )
-    except Exception as exc:
-        logger.warning("PDE visualization generation failed: %s", exc)
 
     return {
         "model": final_model,
@@ -1998,6 +2135,12 @@ def _export_v2_outputs(
     import pandas as pd
 
     logger.info("Exporting V2 neural readable outputs...")
+
+    try:
+        from sparc.registry.store import get_active_store
+        _store = get_active_store()
+    except Exception:
+        _store = None
     _t0 = _time.perf_counter()
 
     final_model.eval()
@@ -2028,7 +2171,12 @@ def _export_v2_outputs(
 
     # --- 2. Process rate (alpha) ---
     pr_input = phys[:, pr_col_idxs]
-    alpha = final_process(pr_input)  # (N, 1)
+    alpha_full = final_process(pr_input)  # (N, n_treatments)
+    alpha = (
+        alpha_full
+        if alpha_full.shape[-1] == 1
+        else alpha_full.mean(dim=-1, keepdim=True)
+    )
 
     # --- 3. Full meta-learner inference ---
     T_pred_norm, exceedance_list, attn_weights = final_model(
@@ -2065,8 +2213,16 @@ def _export_v2_outputs(
         exc_prob = torch.sigmoid(exceedance_list[i]).cpu().numpy()
         pred_df[f"exceedance_p_{thresh:.2f}"] = exc_prob
 
-    pred_df.to_csv(artifact_dir / "predictions.csv", index=False)
-    logger.info("  Saved predictions.csv (%d rows, %d cols)", len(pred_df), len(pred_df.columns))
+    if _store is not None:
+        try:
+            _store.write_table("2", "v2_neural_predictions", pred_df,
+                               producer="v2_neural_training")
+        except Exception as _e:
+            logger.warning("v2_neural_predictions store write failed: %s", _e)
+            pred_df.to_csv(artifact_dir / "predictions.csv", index=False)
+    else:
+        pred_df.to_csv(artifact_dir / "predictions.csv", index=False)
+    logger.info("  Saved predictions (%d rows, %d cols)", len(pred_df), len(pred_df.columns))
 
     # --- Export 2: GWR local coefficients ---
     coeff_df = pd.DataFrame({
@@ -2084,8 +2240,16 @@ def _export_v2_outputs(
     all_coeff = final_surrogates["gwr"].coeff_head(h)
     coeff_df["beta_intercept"] = all_coeff[:, -1].cpu().numpy()
 
-    coeff_df.to_csv(artifact_dir / "local_coefficients_gwr.csv", index=False)
-    logger.info("  Saved local_coefficients_gwr.csv (%d rows)", len(coeff_df))
+    if _store is not None:
+        try:
+            _store.write_table("2", "v2_neural_local_coefficients_gwr",
+                               coeff_df, producer="v2_neural_training")
+        except Exception as _e:
+            logger.warning("local_coefficients_gwr store write failed: %s", _e)
+            coeff_df.to_csv(artifact_dir / "local_coefficients_gwr.csv", index=False)
+    else:
+        coeff_df.to_csv(artifact_dir / "local_coefficients_gwr.csv", index=False)
+    logger.info("  Saved local_coefficients_gwr (%d rows)", len(coeff_df))
 
     # --- Export 3: Process rate map ---
     alpha_df = pd.DataFrame({
@@ -2093,8 +2257,16 @@ def _export_v2_outputs(
         "lat": coords[:, 1],
         "alpha": alpha.squeeze(-1).cpu().numpy(),
     })
-    alpha_df.to_csv(artifact_dir / "process_rate_map.csv", index=False)
-    logger.info("  Saved process_rate_map.csv")
+    if _store is not None:
+        try:
+            _store.write_table("2", "v2_neural_process_rate_map", alpha_df,
+                               producer="v2_neural_training")
+        except Exception as _e:
+            logger.warning("process_rate_map store write failed: %s", _e)
+            alpha_df.to_csv(artifact_dir / "process_rate_map.csv", index=False)
+    else:
+        alpha_df.to_csv(artifact_dir / "process_rate_map.csv", index=False)
+    logger.info("  Saved process_rate_map")
 
     # --- Export 4: Meta-learner attention weights (summary stats) ---
     attn_np = attn_weights.cpu().numpy()  # (N, max_neighbors)
@@ -2107,8 +2279,16 @@ def _export_v2_outputs(
         "attn_max": attn_np.max(axis=1),
         "attn_effective_neighbors": 1.0 / np.sum(attn_np ** 2, axis=1),
     })
-    attn_summary.to_csv(artifact_dir / "spatial_attention_summary.csv", index=False)
-    logger.info("  Saved spatial_attention_summary.csv")
+    if _store is not None:
+        try:
+            _store.write_table("2", "v2_neural_spatial_attention_summary",
+                               attn_summary, producer="v2_neural_training")
+        except Exception as _e:
+            logger.warning("spatial_attention_summary store write failed: %s", _e)
+            attn_summary.to_csv(artifact_dir / "spatial_attention_summary.csv", index=False)
+    else:
+        attn_summary.to_csv(artifact_dir / "spatial_attention_summary.csv", index=False)
+    logger.info("  Saved spatial_attention_summary")
 
     # --- Export 5: PDP curves (sweep each feature) ---
     pdp_dir = artifact_dir / "pdp"
@@ -2168,7 +2348,12 @@ def _export_v2_outputs(
 
             base_in = torch.stack([gwr_p, gwrf_p, ggp_p], dim=1)
             pr_in = phys_mod[:, pr_col_idxs]
-            a = final_process(pr_in)
+            a_full = final_process(pr_in)
+            a = (
+                a_full
+                if a_full.shape[-1] == 1
+                else a_full.mean(dim=-1, keepdim=True)
+            )
 
             t_pred, _, _ = final_model(
                 base_preds=base_in,
@@ -2189,16 +2374,30 @@ def _export_v2_outputs(
             "q10": pdp_q10,
             "q90": pdp_q90,
         })
-        pdp_df.to_csv(pdp_dir / f"pdp_{fname}.csv", index=False)
-        try:
-            from sparc.registry.run_registry import register_path
-            register_path(pdp_dir / f"pdp_{fname}.csv", stage="2",
-                          artifact_id=f"pdp::{fname}", format="csv",
-                          producer="v2_neural_training",
-                          consumers=["server:/results/pdp_curves"],
-                          metadata={"variable": fname, "source": "neural_pde"})
-        except Exception:
-            pass
+        artifact_id = f"v2_neural_pdp::{fname}"
+        wrote_to_store = False
+        if _store is not None:
+            try:
+                _store.write_table("2", artifact_id, pdp_df,
+                                   producer="v2_neural_training",
+                                   consumers=["server:/results/pdp_curves",
+                                              "scenario_simulator"],
+                                   metadata={"variable": fname,
+                                             "source": "neural_pde"})
+                wrote_to_store = True
+            except Exception as _e:
+                logger.warning("pdp store write failed for %s: %s", fname, _e)
+        if not wrote_to_store:
+            pdp_df.to_csv(pdp_dir / f"pdp_{fname}.csv", index=False)
+            try:
+                from sparc.registry.run_registry import register_path
+                register_path(pdp_dir / f"pdp_{fname}.csv", stage="2",
+                              artifact_id=f"pdp::{fname}", format="csv",
+                              producer="v2_neural_training",
+                              consumers=["server:/results/pdp_curves"],
+                              metadata={"variable": fname, "source": "neural_pde"})
+            except Exception:
+                pass
 
     logger.info("  Saved PDP curves for %d features → %s", len(feature_names), pdp_dir)
 
@@ -2214,7 +2413,12 @@ def _export_v2_outputs(
 
         base_in = torch.stack([gwr_p, gwrf_p, ggp_p], dim=1)
         pr_in = phys_grad[:, pr_col_idxs]
-        a = final_process(pr_in)
+        a_full = final_process(pr_in)
+        a = (
+            a_full
+            if a_full.shape[-1] == 1
+            else a_full.mean(dim=-1, keepdim=True)
+        )
 
         # Build extended features with grad-tracked original portion
         n_orig = phys_grad.shape[1]
@@ -2240,8 +2444,16 @@ def _export_v2_outputs(
         "gradient_importance": grad_importance,
         "normalised": grad_importance / (grad_importance.sum() + 1e-10),
     }).sort_values("gradient_importance", ascending=False)
-    importance_df.to_csv(artifact_dir / "feature_importance.csv", index=False)
-    logger.info("  Saved feature_importance.csv")
+    if _store is not None:
+        try:
+            _store.write_table("2", "v2_neural_feature_importance",
+                               importance_df, producer="v2_neural_training")
+        except Exception as _e:
+            logger.warning("feature_importance store write failed: %s", _e)
+            importance_df.to_csv(artifact_dir / "feature_importance.csv", index=False)
+    else:
+        importance_df.to_csv(artifact_dir / "feature_importance.csv", index=False)
+    logger.info("  Saved feature_importance")
 
     elapsed = _time.perf_counter() - _t0
     logger.info("V2 output export complete (%.1fs)", elapsed)
@@ -2313,8 +2525,22 @@ def run_cma_es_search(
     )
 
     # Save
-    with open(output_dir / "cma_es_best_params.json", "w") as f:
-        json.dump(result.best_params, f, indent=2)
+    try:
+        from sparc.registry.store import get_active_store
+        _store = get_active_store()
+    except Exception:
+        _store = None
+    if _store is not None:
+        try:
+            _store.write_struct("2", "cma_es_best_params", result.best_params,
+                                producer="v2_neural_training")
+        except Exception as _e:
+            logger.warning("cma_es_best_params struct write failed: %s", _e)
+            with open(output_dir / "cma_es_best_params.json", "w") as f:
+                json.dump(result.best_params, f, indent=2)
+    else:
+        with open(output_dir / "cma_es_best_params.json", "w") as f:
+            json.dump(result.best_params, f, indent=2)
 
     logger.info("CMA-ES best R² = %.4f", -result.best_loss)
     return result.best_params

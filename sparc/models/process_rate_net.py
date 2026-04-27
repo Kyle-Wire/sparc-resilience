@@ -45,13 +45,29 @@ class ProcessRateNet(nn.Module):
     domain_config : dict
         Must include ``bounds`` (2-list), ``prior_mean`` (float), and
         optionally ``material_priors`` (dict str→float).
+    n_temporal_inputs : int
+        Number of additional temporal feature columns appended to inputs.
+    n_treatments : int
+        Number of treatment-specific output channels (Phase 3 of v4).
+        ``n_treatments=1`` (default) reproduces the legacy single-channel
+        behavior, returning shape ``(N, 1)``.  When ``n_treatments > 1``,
+        a separate linear head is placed on top of the shared trunk for
+        each treatment, returning shape ``(N, n_treatments)``.
 
     Output
     ------
-    ``(N, 1)`` tensor — always positive, always within ``[bounds[0], bounds[1]]``.
+    ``(N, n_treatments)`` tensor — always positive, always within
+    ``[bounds[0], bounds[1]]``.  For backward compatibility, callers that
+    use ``.squeeze(-1)`` continue to work when ``n_treatments == 1``.
     """
 
-    def __init__(self, n_inputs: int, domain_config: dict, n_temporal_inputs: int = 0) -> None:
+    def __init__(
+        self,
+        n_inputs: int,
+        domain_config: dict,
+        n_temporal_inputs: int = 0,
+        n_treatments: int = 1,
+    ) -> None:
         super().__init__()
 
         self.bounds_lo = max(float(domain_config["bounds"][0]), 1e-8)
@@ -61,25 +77,50 @@ class ProcessRateNet(nn.Module):
         self.domain_name = domain_config.get("name", "process_rate")
         self.units = domain_config.get("units", "unknown")
         self.n_temporal_inputs = n_temporal_inputs
+        self.n_treatments = max(1, int(n_treatments))
 
         total_inputs = n_inputs + n_temporal_inputs
         hidden = 64
 
-        self.network = nn.Sequential(
+        # Shared trunk (no final projection — heads handle that).
+        self.trunk = nn.Sequential(
             nn.Linear(total_inputs, hidden),
             nn.LayerNorm(hidden),
             nn.GELU(),
             nn.Linear(hidden, hidden),
             nn.LayerNorm(hidden),
             nn.GELU(),
-            nn.Linear(hidden, 1),
+        )
+
+        # One linear head per treatment.  When ``n_treatments == 1``
+        # this is a single-element ModuleList that behaves exactly like
+        # the legacy final layer.
+        self.heads = nn.ModuleList(
+            [nn.Linear(hidden, 1) for _ in range(self.n_treatments)]
         )
 
         # Small init so initial output ≈ 0 → sigmoid ≈ 0.5
         # → rate ≈ geometric mean of bounds (close to prior_mean for
         # symmetric-in-log-space bounds).
-        nn.init.xavier_uniform_(self.network[-1].weight, gain=0.1)
-        nn.init.zeros_(self.network[-1].bias)
+        for head in self.heads:
+            nn.init.xavier_uniform_(head.weight, gain=0.1)
+            nn.init.zeros_(head.bias)
+
+    # ------------------------------------------------------------------
+    # Backwards-compatibility shim: legacy code referenced
+    # ``self.network[-1]`` to inspect / re-init the final layer.  Expose
+    # a property so that pre-Phase-3 callers (and any reload of older
+    # checkpoints via ``state_dict`` rewriters) continue to function for
+    # the single-treatment case.
+    @property
+    def network(self) -> nn.Sequential:
+        if self.n_treatments != 1:
+            raise AttributeError(
+                "`network` shim is only valid for n_treatments=1; "
+                "use `self.trunk` and `self.heads` directly."
+            )
+        # Compose trunk + single head for callers that index into it.
+        return nn.Sequential(*self.trunk, self.heads[0])
 
     # ------------------------------------------------------------------
     def forward(self, land_cover_features: torch.Tensor) -> torch.Tensor:
@@ -90,17 +131,21 @@ class ProcessRateNet(nn.Module):
 
         Returns
         -------
-        rate : (N, 1)  always in ``[bounds_lo, bounds_hi]``
+        rate : (N, n_treatments)  always in ``[bounds_lo, bounds_hi]``.
+            Per-channel sigmoid + log-linear bound application keeps every
+            treatment column independently within physical bounds.
         """
-        raw = self.network(land_cover_features)  # (N, 1) unbounded
+        h = self.trunk(land_cover_features)  # (N, hidden)
+        # Stack per-treatment heads on the trunk → (N, n_treatments).
+        raw = torch.cat([head(h) for head in self.heads], dim=-1)
 
         # Map through sigmoid → [0, 1] → log-linear interpolation in
-        # physical-rate space so that the output is always valid.
-        t = torch.sigmoid(raw)  # (N, 1) in [0, 1]
+        # physical-rate space so that every output is always valid.
+        t = torch.sigmoid(raw)  # (N, n_treatments) in [0, 1]
         log_lo = np.log(self.bounds_lo)
         log_hi = np.log(self.bounds_hi)
         log_rate = log_lo + t * (log_hi - log_lo)
-        return torch.exp(log_rate)  # (N, 1) always positive, in bounds
+        return torch.exp(log_rate)  # (N, n_treatments) always in bounds
 
     # ------------------------------------------------------------------
     @torch.no_grad()
@@ -123,14 +168,18 @@ class ProcessRateNet(nn.Module):
 
         Returns
         -------
-        prior : (N, 1)
+        prior : (N, n_treatments) — per-treatment mixture prior, broadcast
+            from the (N, 1) base mixture so that callers can use it as a
+            target for the multi-head ``ProcessRateNet`` output without
+            extra reshaping.  For the legacy single-treatment case this
+            is identical to the previous (N, 1) result.
         """
         if material_table is None:
             material_table = self.material_priors
 
         if not material_table:
             return torch.full(
-                (land_cover.shape[0], 1),
+                (land_cover.shape[0], self.n_treatments),
                 self.prior_mean,
                 device=land_cover.device,
             )
@@ -149,8 +198,10 @@ class ProcessRateNet(nn.Module):
         weight_sum = weights.sum(dim=1, keepdim=True).clamp(min=1e-8)
         prior = (weights * vals.unsqueeze(0)).sum(dim=1, keepdim=True) / weight_sum
 
-        # Clamp to physical bounds
+        # Clamp to physical bounds, then broadcast to per-treatment shape.
         prior = prior.clamp(min=self.bounds_lo, max=self.bounds_hi)
+        if self.n_treatments > 1:
+            prior = prior.expand(-1, self.n_treatments).contiguous()
         return prior
 
     # ------------------------------------------------------------------
@@ -176,8 +227,11 @@ class ProcessRateNet(nn.Module):
         ``ratio``, ``status``.
         """
         self.eval()
-        # Get current predictions
-        rates = self.forward(land_cover).squeeze(-1)  # (N,)
+        # Get current predictions; for multi-head outputs, average across
+        # treatments so the validation report continues to express a single
+        # "learned mean" per land-cover class.
+        rates_full = self.forward(land_cover)  # (N, n_treatments)
+        rates = rates_full.mean(dim=-1)  # (N,)
 
         report = []
         for idx, cls_name in enumerate(land_cover_classes):

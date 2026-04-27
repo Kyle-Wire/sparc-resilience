@@ -14,6 +14,7 @@ of dumping to stdout.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import tempfile
@@ -25,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Query, Body, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, Response
 
 from sparc.server.state import ServerState
 from sparc.server.stream import stream_stage
@@ -154,10 +155,64 @@ def _attach_registry(config: dict) -> None:
             reg.migrate_from_disk(paths)
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: registry migration failed: {exc}")
+        # Detach previous listener (if any) before swapping registries.
+        prev = state.registry
+        if prev is not None:
+            try:
+                prev.remove_register_listener(_on_artifact_registered)
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            reg.add_register_listener(_on_artifact_registered)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: could not attach artifact listener: {exc}")
         state.registry = reg
     except Exception as exc:  # noqa: BLE001
         print(f"Warning: could not attach RunRegistry: {exc}")
         state.registry = None
+
+
+# ------------------------------------------------------------------
+# Live artifact-event broadcasting
+# ------------------------------------------------------------------
+
+# Active /run/stream subscribers — populated when a websocket connects.
+# Each entry is an ``asyncio.Queue`` of pending events for that subscriber.
+_artifact_subscribers: list[Any] = []
+
+
+def _on_artifact_registered(entry: Any) -> None:
+    """Listener attached to ``RunRegistry.register_artifact``.
+
+    Buffers an ``artifact_written`` event for ``/run/events`` polling and
+    fans it out to any live ``/run/stream`` subscribers.
+    """
+    event = {
+        "type": "artifact_written",
+        "stage": str(getattr(entry, "stage", "")),
+        "artifact_id": getattr(entry, "id", None),
+        "kind": getattr(entry, "storage_kind", None),
+        "format": getattr(entry, "format", None),
+        "size_bytes": getattr(entry, "size_bytes", 0),
+        "row_count": getattr(entry, "row_count", None),
+        "content_hash": getattr(entry, "sha256", None) or getattr(entry, "blob_sha256", None),
+        "written_at": getattr(entry, "written_at", None),
+    }
+    try:
+        state.buffer_event(event)
+    except Exception:  # noqa: BLE001
+        pass
+    # Fan out to live ws subscribers via their queues. Listener may run on a
+    # background thread; use ``call_soon_threadsafe`` if a loop is running.
+    for q in list(_artifact_subscribers):
+        try:
+            loop = getattr(q, "_sparc_loop", None)
+            if loop is not None and loop.is_running():
+                loop.call_soon_threadsafe(q.put_nowait, event)
+            else:
+                q.put_nowait(event)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _registry_path(stage: str | int, artifact_id: str) -> Path | None:
@@ -1034,16 +1089,44 @@ async def run_stream(ws: WebSocket):
 
     The client sends a JSON message to start:
         ``{"stage": 2, "fast": false, "skip_gwen": false}``
+        ``{"subscribe": "artifacts"}``  — no stage executed; receive artifact events only
 
     The server pushes events until the stage completes or errors:
         ``{"type": "metric", "stage": 2, "fold": 3, "metric": "r2", "value": 0.891}``
         ``{"type": "complete", "stage": 2}``
+        ``{"type": "artifact_written", "stage": "4", "artifact_id": "scenario_results", ...}``
+
+    ``artifact_written`` events are emitted whenever ``RunRegistry.register_artifact``
+    is called, so the desktop reacts the moment new data lands in the database.
     """
     await ws.accept()
 
     try:
         init_msg = await ws.receive_json()
     except WebSocketDisconnect:
+        return
+
+    # Subscribe-only mode: client wants artifact events but is not starting a run.
+    if init_msg.get("subscribe") == "artifacts" or init_msg.get("stage") is None:
+        queue: asyncio.Queue = asyncio.Queue()
+        queue._sparc_loop = asyncio.get_running_loop()  # type: ignore[attr-defined]
+        _artifact_subscribers.append(queue)
+        # Ack so clients (and tests) know the subscription is live before
+        # they trigger downstream writes.
+        await ws.send_json({"type": "subscribed", "channel": "artifacts"})
+        try:
+            while True:
+                event = await queue.get()
+                await ws.send_json(event)
+        except WebSocketDisconnect:
+            pass
+        finally:
+            try:
+                _artifact_subscribers.remove(queue)
+            except ValueError:
+                pass
+            if ws.client_state.name != "DISCONNECTED":
+                await ws.close()
         return
 
     stage = int(init_msg.get("stage", 0))
@@ -1060,12 +1143,32 @@ async def run_stream(ws: WebSocket):
         await ws.close()
         return
 
+    # Subscribe to artifact events while running so the same socket carries
+    # both metric/complete and artifact_written events.
+    queue = asyncio.Queue()
+    queue._sparc_loop = asyncio.get_running_loop()  # type: ignore[attr-defined]
+    _artifact_subscribers.append(queue)
+
+    async def _drain_artifacts() -> None:
+        try:
+            while True:
+                event = await queue.get()
+                await ws.send_json(event)
+        except (asyncio.CancelledError, WebSocketDisconnect):
+            pass
+
+    drain_task = asyncio.create_task(_drain_artifacts())
     try:
         async for event in stream_stage(state, stage, fast=fast, skip_gwen=skip_gwen):
             await ws.send_json(event)
     except WebSocketDisconnect:
         pass
     finally:
+        drain_task.cancel()
+        try:
+            _artifact_subscribers.remove(queue)
+        except ValueError:
+            pass
         if ws.client_state.name != "DISCONNECTED":
             await ws.close()
 
@@ -1371,6 +1474,21 @@ async def get_correlogram_data():
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
+    # Prefer artifacts.db; fall back to legacy on-disk JSON.
+    if state.registry is not None:
+        try:
+            from sparc.registry.run_registry import set_active_registry
+            from sparc.registry.store import ArtifactStore
+            set_active_registry(state.registry)
+            try:
+                store = ArtifactStore(state.registry)
+                if store.has("0", "correlogram_results"):
+                    return store.read_any("0", "correlogram_results")
+            finally:
+                set_active_registry(None)
+        except Exception:
+            pass
+
     candidates = [
         paths.stage0_dir / "correlogram_analysis_results.json",
         paths.stage0_dir / "correlogram_results.json",
@@ -1397,6 +1515,24 @@ async def get_gwen_data():
         paths = PipelinePaths.from_config(state.project_config)
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
+
+    # Prefer artifacts.db.
+    if state.registry is not None:
+        try:
+            from sparc.registry.run_registry import set_active_registry
+            from sparc.registry.store import ArtifactStore
+            set_active_registry(state.registry)
+            try:
+                _store = ArtifactStore(state.registry)
+                if _store.has("1", "gwen_variable_importance"):
+                    df = _store.read_any("1", "gwen_variable_importance")
+                    return {"rows": df.to_dict(orient="records")}
+                if _store.has("1", "gwen_results"):
+                    return _store.read_any("1", "gwen_results")
+            finally:
+                set_active_registry(None)
+        except Exception:
+            pass
 
     # Try stage1_dir (GWEN dir) first, then fall back to output_dir for legacy
     for search_dir in [paths.stage1_dir, paths.output_dir]:
@@ -1459,6 +1595,36 @@ async def get_model_performance():
                 "rmse": ens.get("rmse"),
             })
 
+    # --- artifacts.db (preferred) ---
+    if not models and state.registry is not None:
+        try:
+            from sparc.registry.run_registry import set_active_registry
+            from sparc.registry.store import ArtifactStore
+            set_active_registry(state.registry)
+            try:
+                _store = ArtifactStore(state.registry)
+                if _store.has("2", "ensemble_results"):
+                    data = _store.read_any("2", "ensemble_results")
+                    base = data.get("base_models", {})
+                    for name, metrics in base.items():
+                        if isinstance(metrics, dict) and metrics.get("r2") is not None:
+                            models.append({
+                                "name": name.upper(),
+                                "r2": metrics["r2"],
+                                "rmse": metrics.get("rmse"),
+                            })
+                    ens = data.get("final_ensemble") or data.get("meta_ensemble_best")
+                    if isinstance(ens, dict) and ens.get("r2") is not None:
+                        models.append({
+                            "name": "Ensemble",
+                            "r2": ens["r2"],
+                            "rmse": ens.get("rmse"),
+                        })
+            finally:
+                set_active_registry(None)
+        except Exception:
+            pass
+
     # --- Disk fallback ---
     if not models and state.project_config is not None:
         from sparc.run.pipeline_paths import PipelinePaths
@@ -1512,10 +1678,26 @@ async def get_spatial_cv_predictions():
 
     gdf = None
 
-    if gpkg_path.exists():
+    # Prefer artifacts.db.
+    if state.registry is not None:
+        try:
+            from sparc.registry.run_registry import set_active_registry
+            from sparc.registry.store import ArtifactStore
+            set_active_registry(state.registry)
+            try:
+                _store = ArtifactStore(state.registry)
+                if _store.has("2", "spatial_cv_predictions"):
+                    gdf = _store.read_any("2", "spatial_cv_predictions")
+                    print("[SPARC] Spatial CV predictions loaded from artifacts.db")
+            finally:
+                set_active_registry(None)
+        except Exception as _e:
+            print(f"[SPARC] Spatial CV store read failed: {_e}")
+
+    if gdf is None and gpkg_path.exists():
         import geopandas as gpd
         gdf = gpd.read_file(gpkg_path)
-    else:
+    elif gdf is None:
         # ---- Fallback: reconstruct from CSV + source geometry ----
         csv_path = paths.stage2_dir / "final_ensemble_predictions.csv"
         oof_path = paths.stage2_dir / "optimized_oof_predictions.csv"
@@ -1741,11 +1923,14 @@ async def get_causal_negative_control(
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
-    npy_path = paths.stage3_dir / f"spatial_cate_multiplier_{variable}.npy"
-    if not npy_path.exists():
-        raise HTTPException(404, f"No CATE map for variable '{variable}'")
-
-    arr = np.load(npy_path, allow_pickle=False).astype(float).tolist()
+    # Prefer ("3","cate_summary") table; fall back to legacy .npy.
+    arr_np = _read_cate_multiplier_from_store(variable)
+    if arr_np is None:
+        npy_path = paths.stage3_dir / f"spatial_cate_multiplier_{variable}.npy"
+        if not npy_path.exists():
+            raise HTTPException(404, f"No CATE map for variable '{variable}'")
+        arr_np = np.load(npy_path, allow_pickle=False)
+    arr = arr_np.astype(float).tolist()
     res = permutation_test_cate(arr, n_permutations=n_permutations)
     return {
         "variable": variable,
@@ -1788,15 +1973,57 @@ async def get_causal_diagnostics():
 
 
 def _load_neural_pdp(paths) -> dict:
-    """Read PINN neural-network PDP CSVs into the canonical curves dict.
+    """Read PINN neural-network PDP curves into the canonical curves dict.
 
-    Returns ``{variable: {grid_values, pdp_values, pdp_std, source: 'neural_pde'}}``
-    for every CSV in ``Stage_2/v2_neural/pdp/pdp_*.csv``.  These are the
-    physics-informed (PDE-constrained) response curves that the redesigned
-    Physics page surfaces.  Empty dict if directory absent.
+    Prefers artifacts.db: each PDP table is registered as
+    ``v2_neural_pdp::<feature>`` under stage 2.  Falls back to the
+    on-disk ``Stage_2/v2_neural/pdp/pdp_*.csv`` layout for legacy runs.
     """
     import csv
     out: dict = {}
+
+    # --- artifacts.db (preferred) ---
+    if state.registry is not None:
+        try:
+            from sparc.registry.run_registry import set_active_registry
+            from sparc.registry.store import ArtifactStore
+            set_active_registry(state.registry)
+            try:
+                _store = ArtifactStore(state.registry)
+                manifest_stages = getattr(state.registry.manifest, "stages", {}) or {}
+                stage2 = manifest_stages.get("2", {}) or {}
+                for art_id in stage2.keys():
+                    if not art_id.startswith("v2_neural_pdp::"):
+                        continue
+                    feat_col = art_id.split("::", 1)[1]
+                    try:
+                        df = _store.read_any("2", art_id)
+                    except Exception:
+                        continue
+                    if df is None or len(df) == 0 or feat_col not in df.columns:
+                        continue
+                    grid = [float(v) for v in df[feat_col].tolist()]
+                    pdp_vals = [float(v) for v in df["mean_prediction"].tolist()]
+                    if {"q10", "q90"}.issubset(df.columns):
+                        pdp_std = [
+                            (float(q90) - float(q10)) / 2.56
+                            for q10, q90 in zip(df["q10"].tolist(), df["q90"].tolist())
+                        ]
+                    else:
+                        pdp_std = None
+                    out[feat_col] = {
+                        "grid_values": grid,
+                        "pdp_values": pdp_vals,
+                        "pdp_std": pdp_std,
+                        "source": "neural_pde",
+                    }
+            finally:
+                set_active_registry(None)
+        except Exception:
+            pass
+    if out:
+        return out
+
     pdp_dir = paths.stage2_dir / "v2_neural" / "pdp"
     if not pdp_dir.exists():
         return out
@@ -1984,6 +2211,40 @@ async def get_nuts_summary():
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
+    result: dict = {}
+
+    # --- artifacts.db (preferred) ---
+    if state.registry is not None:
+        try:
+            from sparc.registry.run_registry import set_active_registry
+            from sparc.registry.store import ArtifactStore
+            set_active_registry(state.registry)
+            try:
+                _store = ArtifactStore(state.registry)
+                if _store.has("3", "nuts_summary"):
+                    ns = _store.read_any("3", "nuts_summary") or {}
+                    result["acceptance_rate"] = ns.get("acceptance_rate")
+                    result["n_divergences"] = ns.get("n_divergences")
+                if _store.has("3", "parameter_posteriors"):
+                    df = _store.read_any("3", "parameter_posteriors")
+                    if df is not None:
+                        result["posteriors"] = df.to_dict(orient="records")
+                if _store.has("3", "convergence_diagnostics"):
+                    df = _store.read_any("3", "convergence_diagnostics")
+                    if df is not None:
+                        result["convergence"] = df.to_dict(orient="records")
+                if _store.has("3", "bma_coefficients"):
+                    df = _store.read_any("3", "bma_coefficients")
+                    if df is not None:
+                        result["bma"] = df.to_dict(orient="records")
+            finally:
+                set_active_registry(None)
+        except Exception:
+            pass
+
+    if result:
+        return result
+
     bayesian_dir = paths.stage3_dir / "bayesian"
     if not bayesian_dir.exists():
         raise HTTPException(404, "No NUTS results found — run Stage 3 first")
@@ -2023,149 +2284,255 @@ async def get_nuts_summary():
     return result
 
 
+@app.get("/results/scenarios")
+async def list_scenarios():
+    """Enumerate available scenarios from the active scenario_results table.
+
+    Reads exclusively through the ArtifactStore (no disk fallback). Returns
+    `{ "scenarios": [{"index": int, "pred_column": str, "delta_column": str|None}],
+       "results_artifact_id": str | None,
+       "available": [str] }`
+    """
+    from sparc.registry.store import ArtifactStore
+    from sparc.scenario import ScenarioBundle
+
+    if state.registry is None:
+        raise _missing_artifact_response(
+            artifact_id="scenario_results", stage="4",
+            hint="No active run registry. Load a project first.",
+        )
+    store = ArtifactStore(state.registry)
+    bundle = ScenarioBundle.from_store(store)
+    return {
+        "results_artifact_id": bundle.results_artifact_id,
+        "summary_artifact_id": bundle.summary_artifact_id,
+        "available": sorted(bundle.available),
+        "has_uncertainty": bundle.has_uncertainty(),
+        "scenarios": [
+            {
+                "index": sid,
+                "pred_column": (rec := bundle.get_scenario(sid)).pred_column,
+                "delta_column": rec.delta_column,
+            }
+            for sid in bundle.list_scenarios()
+        ],
+    }
+
+
 @app.get("/results/scenarios/detail")
 async def get_scenario_detail():
-    """Return scenario results as GeoJSON with delta columns + summary table."""
-    if state.project_config is None:
-        raise HTTPException(400, "No project loaded")
+    """Return scenario results as GeoJSON with delta columns + summary table.
 
-    from sparc.run.pipeline_paths import PipelinePaths
-    import pandas as pd
-    import numpy as np
+    Reads exclusively through the ArtifactStore via :class:`ScenarioBundle`.
+    Mode-variant precedence (hybrid > reprediction > dag > base) is handled
+    automatically. The legacy on-disk ``scenario_results*.gpkg`` files are
+    deliberately ignored.
+    """
+    if state.registry is None:
+        raise _missing_artifact_response(
+            artifact_id="scenario_results", stage="4",
+            hint="No active run registry. Load a project first.",
+        )
 
-    try:
-        paths = PipelinePaths.from_config(state.project_config)
-    except Exception:
-        raise HTTPException(404, "Cannot resolve output paths")
-
-    # Load scenario spatial results: registry first, then canonical/variant scan.
-    gpkg_path = (
-        _registry_path("4", "scenario_results")
-        or _registry_path("4", "scenario_results_gpkg")
+    from sparc.registry.store import ArtifactStore
+    from sparc.scenario import (
+        DELTA_SCENARIO_PREFIX,
+        PRED_BASELINE_COL,
+        PRED_SCENARIO_PREFIX,
+        ScenarioBundle,
     )
-    if gpkg_path is None:
-        for gpkg_name in (
-            "scenario_results.gpkg",
-            "scenario_results_dag.gpkg",
-            "scenario_results_hybrid.gpkg",
-            "scenario_results_reprediction.gpkg",
-        ):
-            candidate = paths.stage4_dir / gpkg_name
-            if candidate.exists():
-                gpkg_path = candidate
-                break
-    logger.debug("[SPARC] Scenario gpkg lookup: %s found=%s", gpkg_path, gpkg_path is not None)
-    geojson_data = None
-    if gpkg_path is not None:
-        import geopandas as gpd
-        gdf = gpd.read_file(gpkg_path)
 
-        # Compute delta columns (scenario prediction - baseline)
-        baseline_col = None
-        for col in gdf.columns:
-            if "baseline" in col.lower() and "pred" in col.lower():
-                baseline_col = col
-                break
-        if baseline_col is None:
-            baseline_col = next((c for c in gdf.columns if c == "pred_baseline"), None)
+    store = ArtifactStore(state.registry)
+    bundle = ScenarioBundle.from_store(store)
 
-        if baseline_col is not None:
-            pred_cols = [c for c in gdf.columns if c.startswith("pred_") and c != baseline_col]
-            for pc in pred_cols:
-                delta_col = pc.replace("pred_", "delta_")
-                try:
-                    gdf[delta_col] = gdf[pc].astype(float) - gdf[baseline_col].astype(float)
-                except Exception:
-                    pass
-
-        # Reproject to WGS84 for web display
-        if gdf.crs is not None and str(gdf.crs) != "EPSG:4326":
-            gdf = gdf.to_crs(epsg=4326)
-        geojson_data = gdf.__geo_interface__
-    else:
-        # Fall back to in-memory result
-        result = state.get_result(4)
-        if result is not None:
-            spatial = result.get("spatial", result) if isinstance(result, dict) else result
-            import geopandas as gpd
-            if isinstance(spatial, gpd.GeoDataFrame):
-                if spatial.crs is not None and str(spatial.crs) != "EPSG:4326":
-                    spatial = spatial.to_crs(epsg=4326)
-                geojson_data = spatial.__geo_interface__
-
-        # If still no GeoJSON, reconstruct from CSV data + coordinates
-        if geojson_data is None:
-            try:
-                import geopandas as gpd
-                from shapely.geometry import Point
-
-                cfg = state.project_config
-                coord_cols = cfg.get("data", {}).get("coord_columns",
-                             cfg.get("variables", {}).get("coordinates", []))
-                data_file = cfg.get("data", {}).get("file_path",
-                            cfg.get("paths", {}).get("raw_csv_path"))
-                crs = cfg.get("crs", {}).get("projected",
-                      cfg.get("crs", {}).get("input", "EPSG:4326"))
-
-                # Look for per-point MC consensus CSV (has spatial predictions)
-                mc_csv = paths.stage4_dir / "scenario_mc_consensus.csv"
-                if mc_csv.exists() and data_file and len(coord_cols) == 2:
-                    base_df = pd.read_csv(data_file)
-                    mc_df = pd.read_csv(mc_csv)
-                    x_col, y_col = coord_cols
-                    if x_col in base_df.columns and y_col in base_df.columns:
-                        # Align lengths (mc_df may match base_df row-for-row)
-                        n = min(len(base_df), len(mc_df))
-                        geom = [Point(xy) for xy in zip(
-                            base_df[x_col].iloc[:n], base_df[y_col].iloc[:n])]
-                        gdf = gpd.GeoDataFrame(mc_df.iloc[:n], geometry=geom, crs=crs)
-                        if str(gdf.crs) != "EPSG:4326":
-                            gdf = gdf.to_crs(epsg=4326)
-                        geojson_data = gdf.__geo_interface__
-                        print(f"[SPARC] Reconstructed GeoJSON from MC consensus CSV ({n} features)")
-            except Exception as exc:
-                print(f"[SPARC] CSV→GeoJSON fallback failed: {exc}")
-
-    # Load summary CSV (check all mode variants + MC consensus)
-    summary_data = []
-    for summary_name in (
-        "scenario_summary.csv",
-        "scenario_summary_dag.csv",
-        "scenario_summary_hybrid.csv",
-        "scenario_summary_reprediction.csv",
-        "scenario_mc_consensus_summary.csv",
-        "scenario_mc_consensus.csv",
-    ):
-        summary_path = paths.stage4_dir / summary_name
-        if summary_path.exists():
-            summary_df = pd.read_csv(summary_path)
-            summary_data = summary_df.to_dict(orient="records")
-            break
-
-    if not geojson_data and not summary_data:
-        scenarios_cfg = (state.project_config.get("scenarios") or [])
+    if "results" not in bundle.available or bundle.results is None:
+        scenarios_cfg = (state.project_config or {}).get("scenarios") or []
         scenario_count = len(scenarios_cfg) if isinstance(scenarios_cfg, list) else 0
         raise _missing_artifact_response(
-            artifact_id="scenario_results",
-            stage="4",
-            expected_paths=[
-                paths.stage4_dir / "scenario_results.gpkg",
-                paths.stage4_dir / "scenario_summary.csv",
-                paths.stage4_dir / "scenario_mc_consensus.csv",
-            ],
+            artifact_id="scenario_results", stage="4",
             hint=(
                 f"Stage 4 should auto-run the {scenario_count} scenario(s) "
                 "defined in project.yml. If Stage 4 finished without "
-                "writing scenario results, check `scenarios.auto_run_at_stage_4` "
-                "in project.yml or run scenarios manually via the Scenario Runner."
+                "writing scenario results to the database, re-run Stage 4 "
+                "or use the Scenario Runner page."
                 if scenario_count
-                else "No `scenarios:` block found in project.yml. Define at "
-                "least one scenario, then re-run Stage 4 (or use the "
-                "Scenario Runner page)."
+                else "No `scenarios:` block found in project.yml."
             ),
         )
 
-    return {"geojson": geojson_data, "summary": summary_data}
+    import geopandas as gpd
+
+    gdf = bundle.results
+    if not isinstance(gdf, gpd.GeoDataFrame):
+        raise HTTPException(
+            500,
+            f"Artifact {bundle.results_artifact_id} is not a GeoDataFrame; "
+            "scenario producer must include a geometry column.",
+        )
+
+    # Compute delta_Scenario{N} columns when missing.
+    if PRED_BASELINE_COL in gdf.columns:
+        for col in list(gdf.columns):
+            if not col.startswith(PRED_SCENARIO_PREFIX):
+                continue
+            delta_col = col.replace(PRED_SCENARIO_PREFIX, DELTA_SCENARIO_PREFIX)
+            if delta_col in gdf.columns:
+                continue
+            try:
+                gdf[delta_col] = (
+                    gdf[col].astype(float) - gdf[PRED_BASELINE_COL].astype(float)
+                )
+            except Exception:
+                pass
+
+    if gdf.crs is not None and str(gdf.crs) != "EPSG:4326":
+        gdf = gdf.to_crs(epsg=4326)
+    geojson_data = gdf.__geo_interface__
+
+    summary_records: list[dict[str, Any]] = []
+    if bundle.summary is not None:
+        try:
+            summary_records = bundle.summary.to_dict(orient="records")
+        except Exception:
+            summary_records = []
+
+    return {
+        "geojson": geojson_data,
+        "summary": summary_records,
+        "results_artifact_id": bundle.results_artifact_id,
+        "summary_artifact_id": bundle.summary_artifact_id,
+    }
+
+
+@app.get("/results/scenarios/attribution")
+async def get_scenario_attribution():
+    """Return the per-scenario × per-variable attribution table."""
+    from sparc.registry.store import ArtifactStore
+    from sparc.scenario import SCENARIO_ATTRIBUTION, SCENARIO_STAGE
+
+    if state.registry is None:
+        raise _missing_artifact_response(
+            artifact_id=SCENARIO_ATTRIBUTION, stage=SCENARIO_STAGE,
+            hint="No active run registry.",
+        )
+    store = ArtifactStore(state.registry)
+    if not store.has(SCENARIO_STAGE, SCENARIO_ATTRIBUTION):
+        raise _missing_artifact_response(
+            artifact_id=SCENARIO_ATTRIBUTION, stage=SCENARIO_STAGE,
+            hint="Scenario simulator did not produce an attribution table.",
+        )
+    df = store.read_table(SCENARIO_STAGE, SCENARIO_ATTRIBUTION)
+    return {"records": df.to_dict(orient="records"), "columns": list(df.columns)}
+
+
+@app.get("/results/scenarios/trajectory")
+async def get_scenario_trajectory(scenario_id: int | None = None):
+    """Return the long-format scenario trajectory table, optionally filtered.
+
+    Expected columns: ``scenario_id, t, geometry_id, value, std?``.
+    """
+    from sparc.registry.store import ArtifactStore
+    from sparc.scenario import SCENARIO_STAGE, SCENARIO_TRAJECTORY
+
+    if state.registry is None:
+        raise _missing_artifact_response(
+            artifact_id=SCENARIO_TRAJECTORY, stage=SCENARIO_STAGE,
+            hint="No active run registry.",
+        )
+    store = ArtifactStore(state.registry)
+    if not store.has(SCENARIO_STAGE, SCENARIO_TRAJECTORY):
+        raise _missing_artifact_response(
+            artifact_id=SCENARIO_TRAJECTORY, stage=SCENARIO_STAGE,
+            hint="Scenario simulator did not produce a trajectory table.",
+        )
+    df = store.read_table(SCENARIO_STAGE, SCENARIO_TRAJECTORY)
+    if scenario_id is not None and "scenario_id" in df.columns:
+        df = df[df["scenario_id"] == scenario_id]
+    return {"records": df.to_dict(orient="records"), "columns": list(df.columns)}
+
+
+@app.get("/results/scenarios/uncertainty")
+async def get_scenario_uncertainty(scenario_id: int | None = None):
+    """Return per-feature uncertainty (mean/std/p05/p95) as GeoJSON.
+
+    When ``scenario_id`` is provided, the per-scenario prediction column is
+    included; otherwise only the uncertainty columns are exposed.
+    """
+    from sparc.registry.store import ArtifactStore
+    from sparc.scenario import (
+        UNCERTAINTY_COLS,
+        ScenarioBundle,
+        pred_column,
+    )
+
+    if state.registry is None:
+        raise _missing_artifact_response(
+            artifact_id="scenario_results", stage="4",
+            hint="No active run registry.",
+        )
+    store = ArtifactStore(state.registry)
+    bundle = ScenarioBundle.from_store(store)
+    if bundle.results is None:
+        raise _missing_artifact_response(
+            artifact_id="scenario_results", stage="4",
+            hint="Scenario results not in database.",
+        )
+    if not bundle.has_uncertainty():
+        raise _missing_artifact_response(
+            artifact_id="scenario_results", stage="4",
+            hint=(
+                "Active scenario_results table has no uncertainty columns "
+                f"({', '.join(UNCERTAINTY_COLS)}). Re-run with the MC-Dropout "
+                "ensemble enabled."
+            ),
+        )
+    import geopandas as gpd
+
+    gdf = bundle.results
+    keep = [c for c in UNCERTAINTY_COLS if c in gdf.columns]
+    if scenario_id is not None:
+        sc = bundle.get_scenario(scenario_id)
+        if sc is not None:
+            keep.append(sc.pred_column)
+            if sc.delta_column:
+                keep.append(sc.delta_column)
+    if isinstance(gdf, gpd.GeoDataFrame):
+        out = gdf[[*keep, gdf.geometry.name]].copy()
+        if out.crs is not None and str(out.crs) != "EPSG:4326":
+            out = out.to_crs(epsg=4326)
+        return {
+            "geojson": out.__geo_interface__,
+            "results_artifact_id": bundle.results_artifact_id,
+        }
+    raise HTTPException(500, "scenario results table is not a GeoDataFrame")
+
+
+@app.get("/results/scenario_library/timeline")
+async def get_scenario_library_timeline():
+    """Return the scenario library as a flat parent/child timeline for the UI."""
+    from sparc.registry.store import ArtifactStore
+    from sparc.scenario import SCENARIO_LIBRARY, SCENARIO_STAGE
+
+    if state.registry is None:
+        raise _missing_artifact_response(
+            artifact_id=SCENARIO_LIBRARY, stage=SCENARIO_STAGE,
+            hint="No active run registry.",
+        )
+    store = ArtifactStore(state.registry)
+    if not store.has(SCENARIO_STAGE, SCENARIO_LIBRARY):
+        # Fall back to the on-disk library.jsonl (still the producer today)
+        # but only as a read — no consumer writes there.
+        try:
+            from sparc.scenario.library import ScenarioTimeline
+            tl = ScenarioTimeline.load(state.registry.output_dir)
+            return {"entries": [e.model_dump() for e in tl.entries]}
+        except Exception:
+            raise _missing_artifact_response(
+                artifact_id=SCENARIO_LIBRARY, stage=SCENARIO_STAGE,
+                hint="No scenario library produced yet.",
+            )
+    payload = store.read_struct(SCENARIO_STAGE, SCENARIO_LIBRARY)
+    return payload
 
 
 @app.get("/results/report")
@@ -2217,12 +2584,24 @@ async def get_report_data():
 
     # Correlogram summary (Stage 0)
     if paths:
-        corr_path = paths.stage0_dir / "correlogram_analysis_results.json"
-        if not corr_path.exists():
-            corr_path = paths.stage0_dir / "correlogram_results.json"
-        if corr_path.exists():
-            with open(corr_path, "r", encoding="utf-8") as fh:
-                corr_data = _json.load(fh)
+        corr_data = None
+        # Prefer artifacts.db.
+        if state.registry is not None:
+            try:
+                from sparc.registry.store import ArtifactStore
+                _store = ArtifactStore(state.registry)
+                if _store.has("0", "correlogram_results"):
+                    corr_data = _store.read_any("0", "correlogram_results")
+            except Exception:
+                corr_data = None
+        if corr_data is None:
+            corr_path = paths.stage0_dir / "correlogram_analysis_results.json"
+            if not corr_path.exists():
+                corr_path = paths.stage0_dir / "correlogram_results.json"
+            if corr_path.exists():
+                with open(corr_path, "r", encoding="utf-8") as fh:
+                    corr_data = _json.load(fh)
+        if corr_data is not None:
             # Extract just the summary metrics per variable
             individual = corr_data.get("individual_results", {})
             report["correlogram"] = {
@@ -2236,18 +2615,40 @@ async def get_report_data():
 
     # GWEN summary (Stage 1)
     if paths:
-        csv_path = paths.stage1_dir / "gwen_variable_importance.csv"
-        if not csv_path.exists():
-            csv_path = paths.output_dir / "gwen_variable_importance.csv"  # legacy fallback
-        if csv_path.exists():
-            df = pd.read_csv(csv_path)
-            report["gwen"] = df.to_dict(orient="records")
+        gwen_df = None
+        if state.registry is not None:
+            try:
+                from sparc.registry.store import ArtifactStore
+                _store = ArtifactStore(state.registry)
+                if _store.has("1", "gwen_variable_importance"):
+                    gwen_df = _store.read_any("1", "gwen_variable_importance")
+            except Exception:
+                gwen_df = None
+        if gwen_df is None:
+            csv_path = paths.stage1_dir / "gwen_variable_importance.csv"
+            if not csv_path.exists():
+                csv_path = paths.output_dir / "gwen_variable_importance.csv"  # legacy fallback
+            if csv_path.exists():
+                gwen_df = pd.read_csv(csv_path)
+        if gwen_df is not None:
+            report["gwen"] = gwen_df.to_dict(orient="records")
 
     # Spatial CV performance
     if paths:
-        oof_path = paths.stage2_dir / "optimized_oof_predictions.csv"
-        if oof_path.exists():
-            oof_df = pd.read_csv(oof_path)
+        oof_df = None
+        if state.registry is not None:
+            try:
+                from sparc.registry.store import ArtifactStore
+                _store = ArtifactStore(state.registry)
+                if _store.has("2", "oof_predictions"):
+                    oof_df = _store.read_any("2", "oof_predictions")
+            except Exception:
+                oof_df = None
+        if oof_df is None:
+            oof_path = paths.stage2_dir / "optimized_oof_predictions.csv"
+            if oof_path.exists():
+                oof_df = pd.read_csv(oof_path)
+        if oof_df is not None:
             report["spatial_cv_models"] = list(oof_df.columns)
 
     # Causal coefficients (Stage 3)
@@ -2672,6 +3073,40 @@ async def get_decision_targeting(
 # CATE map, local coefficients, & increment endpoints (Phase 2)
 # ------------------------------------------------------------------
 
+def _read_cate_multiplier_from_store(variable: str):
+    """Return per-cell multiplier_mean for *variable* from the
+    ``("3","cate_summary")`` long-format table, or ``None`` if absent.
+
+    The v4 causal stack persists CATE results as a long-format table
+    keyed by ``(cell_id, treatment)``. Filter by treatment, sort by
+    ``cell_id``, and return ``multiplier_mean`` as a NumPy array.
+    """
+    if state.registry is None:
+        return None
+    try:
+        from sparc.registry.run_registry import set_active_registry
+        from sparc.registry.store import ArtifactStore
+        import numpy as np
+
+        set_active_registry(state.registry)
+        try:
+            store = ArtifactStore(state.registry)
+            if not store.has("3", "cate_summary"):
+                return None
+            df = store.read_table("3", "cate_summary")
+            if df is None or "treatment" not in df.columns:
+                return None
+            sub = df[df["treatment"] == variable]
+            if sub.empty or "multiplier_mean" not in sub.columns:
+                return None
+            sub = sub.sort_values("cell_id")
+            return np.asarray(sub["multiplier_mean"].to_numpy(), dtype=float)
+        finally:
+            set_active_registry(None)
+    except Exception:
+        return None
+
+
 @app.get("/results/causal/cate_map")
 async def get_cate_map(variable: str = Query(...)):
     """Return spatial CATE multiplier for *variable* as GeoJSON."""
@@ -2686,13 +3121,15 @@ async def get_cate_map(variable: str = Query(...)):
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
-    # Find the .npy CATE multiplier file
-    npy_name = f"spatial_cate_multiplier_{variable}.npy"
-    npy_path = paths.stage3_dir / npy_name
-    if not npy_path.exists():
-        raise HTTPException(404, f"No CATE map for variable '{variable}'")
-
-    multiplier = np.load(npy_path, allow_pickle=False)
+    # Prefer ("3","cate_summary") long-format table from artifact store.
+    multiplier = _read_cate_multiplier_from_store(variable)
+    if multiplier is None:
+        # Fallback: legacy per-variable .npy file on disk.
+        npy_name = f"spatial_cate_multiplier_{variable}.npy"
+        npy_path = paths.stage3_dir / npy_name
+        if not npy_path.exists():
+            raise HTTPException(404, f"No CATE map for variable '{variable}'")
+        multiplier = np.load(npy_path, allow_pickle=False)
 
     # Also try to load spatial_cate_maps.gpkg for geometry
     gpkg_path = paths.stage3_dir / "spatial_cate_maps.gpkg"
@@ -2755,15 +3192,35 @@ async def get_cate_variables():
     variables: list[str] = []
     diagnostics: dict[str, Any] = {}
 
-    # 1. Registry-first: any cate_multiplier::* artifact wins.
+    # 1. Prefer ("3","cate_summary") long-format table.
     if state.registry is not None:
+        try:
+            from sparc.registry.run_registry import set_active_registry
+            from sparc.registry.store import ArtifactStore
+            set_active_registry(state.registry)
+            try:
+                store = ArtifactStore(state.registry)
+                if store.has("3", "cate_summary"):
+                    df = store.read_table("3", "cate_summary")
+                    if df is not None and "treatment" in df.columns:
+                        variables.extend(
+                            sorted(str(t) for t in df["treatment"].unique())
+                        )
+                        diagnostics["cate_summary_hits"] = len(variables)
+            finally:
+                set_active_registry(None)
+        except Exception as exc:
+            diagnostics["cate_summary_error"] = str(exc)
+
+    # 2. Legacy registry: any cate_multiplier::* artifact wins.
+    if not variables and state.registry is not None:
         for art in state.registry.list_for_stage("3"):
             if art.id.startswith("cate_multiplier::") and not art.partial:
                 var = art.metadata.get("variable") or art.id.split("::", 1)[1]
                 variables.append(var)
         diagnostics["registry_hits"] = len(variables)
 
-    # 2. Fallback: per-variable .npy files on disk.
+    # 3. Fallback: per-variable .npy files on disk.
     if not variables:
         for f in paths.stage3_dir.glob("spatial_cate_multiplier_*.npy"):
             variables.append(f.stem.replace("spatial_cate_multiplier_", ""))
@@ -3099,6 +3556,251 @@ async def rescan_manifest():
 
 
 # ------------------------------------------------------------------
+# Artifact fetch endpoints (db-resident artifacts via ArtifactStore)
+#
+# These render artifacts on demand from artifacts.db. The pipeline stops
+# producing CSV / PNG / JSON files; users download them through here.
+# ------------------------------------------------------------------
+
+_RENDER_MIME = {
+    "csv":     "text/csv",
+    "json":    "application/json",
+    "geojson": "application/geo+json",
+    "html":    "text/html",
+    "pkl":     "application/octet-stream",
+    "joblib":  "application/octet-stream",
+    "pt":      "application/octet-stream",
+    "bin":     "application/octet-stream",
+}
+# NOTE: PNG / image MIME types are intentionally absent. The server
+# never renders or serves rasterised images. The desktop app renders
+# visualisations live from artifacts.db and exports them client-side.
+
+
+def _ensure_registry_attached() -> None:
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+    if state.registry is None:
+        _attach_registry(state.project_config)
+    if state.registry is None:
+        raise HTTPException(503, "Run registry unavailable")
+
+
+@app.get("/artifacts/{stage}/{artifact_id}")
+async def get_artifact_native(stage: str, artifact_id: str):
+    """Return an artifact in its native format (CSV for tables, JSON for structs, raw bytes for blobs)."""
+    _ensure_registry_attached()
+    # Bind the active registry so render_* helpers can find it.
+    from sparc.registry.run_registry import set_active_registry, get_active_registry
+    from sparc.report.render import render_native, RenderError
+
+    prev = get_active_registry()
+    set_active_registry(state.registry)
+    try:
+        try:
+            data, ext = render_native(stage, artifact_id)
+        except RenderError as exc:
+            raise HTTPException(404, str(exc))
+    finally:
+        set_active_registry(prev)
+
+    return Response(
+        content=data,
+        media_type=_RENDER_MIME.get(ext, "application/octet-stream"),
+        headers={
+            "Content-Disposition": f'attachment; filename="{artifact_id}.{ext}"',
+        },
+    )
+
+
+@app.get("/artifacts/{stage}/{artifact_id}.csv")
+async def get_artifact_csv(stage: str, artifact_id: str, index: bool = False):
+    """Render a registered artifact as CSV bytes."""
+    _ensure_registry_attached()
+    from sparc.registry.run_registry import set_active_registry, get_active_registry
+    from sparc.report.render import render_csv, RenderError
+
+    prev = get_active_registry()
+    set_active_registry(state.registry)
+    try:
+        try:
+            data = render_csv(stage, artifact_id, index=index)
+        except RenderError as exc:
+            raise HTTPException(404, str(exc))
+    finally:
+        set_active_registry(prev)
+
+    return Response(
+        content=data,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{artifact_id}.csv"'},
+    )
+
+
+@app.get("/artifacts/{stage}/{artifact_id}.json")
+async def get_artifact_json(stage: str, artifact_id: str):
+    """Render a registered artifact (struct or table) as JSON."""
+    _ensure_registry_attached()
+    from sparc.registry.run_registry import set_active_registry, get_active_registry
+    from sparc.report.render import render_json, RenderError
+
+    prev = get_active_registry()
+    set_active_registry(state.registry)
+    try:
+        try:
+            data = render_json(stage, artifact_id)
+        except RenderError as exc:
+            raise HTTPException(404, str(exc))
+    finally:
+        set_active_registry(prev)
+    return Response(content=data, media_type="application/json")
+
+
+@app.get("/artifacts/{stage}/{artifact_id}.geojson")
+async def get_artifact_geojson(stage: str, artifact_id: str):
+    """Render a geometry-bearing table as GeoJSON."""
+    _ensure_registry_attached()
+    from sparc.registry.run_registry import set_active_registry, get_active_registry
+    from sparc.report.render import render_geojson, RenderError
+
+    prev = get_active_registry()
+    set_active_registry(state.registry)
+    try:
+        try:
+            data = render_geojson(stage, artifact_id)
+        except RenderError as exc:
+            raise HTTPException(404, str(exc))
+    finally:
+        set_active_registry(prev)
+    return Response(content=data, media_type="application/geo+json")
+
+
+@app.get("/artifacts/{stage}/{artifact_id}.png")
+async def get_artifact_png(stage: str, artifact_id: str, dpi: int = 150):
+    """Render a registered artifact as a PNG via the figures module.
+
+    Dispatches through ``sparc.report.figures.render_for_artifact``; returns
+    404 when no renderer is registered for ``(stage, artifact_id)``.
+    """
+    _ensure_registry_attached()
+    from sparc.registry.run_registry import set_active_registry, get_active_registry
+    try:
+        from sparc.report.figures import FigureRenderError, render_for_artifact
+    except ImportError as exc:
+        raise HTTPException(503, f"figures module unavailable: {exc}")
+
+    if state.registry is None:
+        raise _missing_artifact_response(
+            artifact_id=artifact_id, stage=stage,
+            hint="No active run registry.",
+        )
+    prev = get_active_registry()
+    set_active_registry(state.registry)
+    try:
+        try:
+            data = render_for_artifact(stage, artifact_id, registry=state.registry, dpi=dpi)
+        except FigureRenderError as exc:
+            raise HTTPException(404, str(exc))
+    finally:
+        set_active_registry(prev)
+    return Response(content=data, media_type="image/png")
+
+
+@app.get("/results/bundle")
+async def get_results_bundle():
+    """Stream a ZIP of every registered artifact (data formats + manifest).
+
+    Each artifact is rendered in its native format (CSV/JSON/GeoJSON) plus a
+    PNG when a renderer is registered. The full ``RunManifest`` is included
+    as ``manifest.json`` for reproducibility.
+    """
+    _ensure_registry_attached()
+    if state.registry is None:
+        raise HTTPException(404, "No active run registry.")
+
+    import io
+    import zipfile
+    from sparc.registry.run_registry import set_active_registry, get_active_registry
+    from sparc.registry.store import ArtifactStore
+    from sparc.report.render import (
+        RenderError,
+        render_csv,
+        render_geojson,
+        render_json,
+    )
+
+    try:
+        from sparc.report.figures import FigureRenderError, render_for_artifact
+        figures_available = True
+    except ImportError:
+        figures_available = False
+
+    store = ArtifactStore(state.registry)
+    manifest = state.registry.manifest
+
+    buf = io.BytesIO()
+    prev = get_active_registry()
+    set_active_registry(state.registry)
+    try:
+        with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(
+                "manifest.json",
+                manifest.model_dump_json(indent=2),
+            )
+            for stage_id, stage_manifest in manifest.stages.items():
+                for artifact_id, entry in stage_manifest.artifacts.items():
+                    base = f"stage_{stage_id}/{artifact_id}"
+                    # Native data export.
+                    try:
+                        if entry.storage_kind == "table":
+                            geom = (entry.metadata or {}).get("geometry_col")
+                            if geom:
+                                zf.writestr(
+                                    f"{base}.geojson",
+                                    render_geojson(stage_id, artifact_id),
+                                )
+                            else:
+                                zf.writestr(
+                                    f"{base}.csv",
+                                    render_csv(stage_id, artifact_id),
+                                )
+                        elif entry.storage_kind == "struct":
+                            zf.writestr(
+                                f"{base}.json",
+                                render_json(stage_id, artifact_id),
+                            )
+                        # Blobs are skipped — they may be huge and opaque.
+                    except RenderError as exc:
+                        zf.writestr(
+                            f"{base}.SKIPPED.txt",
+                            f"render failed: {exc}".encode("utf-8"),
+                        )
+                    # Optional PNG.
+                    if figures_available:
+                        try:
+                            png = render_for_artifact(stage_id, artifact_id, registry=state.registry)
+                            zf.writestr(f"{base}.png", png)
+                        except FigureRenderError:
+                            pass
+                        except Exception as exc:  # noqa: BLE001
+                            zf.writestr(
+                                f"{base}.png.SKIPPED.txt",
+                                f"png render failed: {exc}".encode("utf-8"),
+                            )
+    finally:
+        set_active_registry(prev)
+
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": 'attachment; filename="sparc_results_bundle.zip"',
+        },
+    )
+
+
+# ------------------------------------------------------------------
 # Results endpoints (parameterized — MUST come after named routes above)
 # ------------------------------------------------------------------
 
@@ -3171,63 +3873,9 @@ async def get_predictions(stage: int, format: str = Query("geojson", regex="^(js
     return _to_json(gdf)
 
 
-@app.get("/results/{stage}/plots")
-async def list_stage_plots(stage: int):
-    """List available plot images for a completed pipeline stage."""
-    if state.project_config is None:
-        raise HTTPException(400, "No project loaded")
-
-    from sparc.run.pipeline_paths import PipelinePaths
-
-    try:
-        paths = PipelinePaths.from_config(state.project_config)
-    except Exception:
-        raise HTTPException(404, "Cannot resolve output paths")
-
-    stage_map = {0: paths.stage0_dir, 1: paths.stage1_dir, 2: paths.stage2_dir, 3: paths.stage3_dir, 4: paths.stage4_dir}
-    stage_dir = stage_map.get(stage)
-    if stage_dir is None or not stage_dir.exists():
-        return {"plots": []}
-
-    # Collect PNG/SVG files recursively
-    plots = []
-    for ext in ("*.png", "*.svg"):
-        for f in sorted(stage_dir.rglob(ext)):
-            plots.append({
-                "name": f.stem,
-                "filename": f.name,
-                "path": str(f.relative_to(stage_dir)),
-            })
-    return {"plots": plots}
-
-
-@app.get("/results/{stage}/plots/{file_path:path}")
-async def get_stage_plot(stage: int, file_path: str):
-    """Serve a specific plot image file from a stage output directory."""
-    if state.project_config is None:
-        raise HTTPException(400, "No project loaded")
-
-    from sparc.run.pipeline_paths import PipelinePaths
-
-    try:
-        paths = PipelinePaths.from_config(state.project_config)
-    except Exception:
-        raise HTTPException(404, "Cannot resolve output paths")
-
-    stage_map = {0: paths.stage0_dir, 1: paths.stage1_dir, 2: paths.stage2_dir, 3: paths.stage3_dir, 4: paths.stage4_dir}
-    stage_dir = stage_map.get(stage)
-    if stage_dir is None:
-        raise HTTPException(404, "Invalid stage")
-
-    full_path = (stage_dir / file_path).resolve()
-    # Security: ensure the resolved path is within the stage directory
-    if not str(full_path).startswith(str(stage_dir.resolve())):
-        raise HTTPException(403, "Access denied")
-    if not full_path.exists() or not full_path.is_file():
-        raise HTTPException(404, f"Plot not found: {file_path}")
-
-    media = "image/png" if full_path.suffix == ".png" else "image/svg+xml"
-    return FileResponse(full_path, media_type=media)
+# Plot-image endpoints removed (Phase E): the server no longer serves
+# rasterised images. Visualisations are rendered live in the desktop
+# app from artifacts.db data and exported client-side.
 
 
 # ------------------------------------------------------------------
@@ -3259,22 +3907,52 @@ async def run_scenarios():
 
     dag_file = config.get("causal", {}).get("dag_file")
     has_dag = dag_file and Path(dag_file).exists()
-    scenario_mode = config.get("pipeline", {}).get("scenario_mode", "auto")
+    requested_mode = config.get("pipeline", {}).get("scenario_mode", "auto")
+
+    # Translate legacy mode aliases (one-shot deprecation warning).
+    _LEGACY_MODE_ALIASES = {
+        "physics":            "mode_1_physics",
+        "dag_coefficient":    "mode_2_dag_local",
+        "model_reprediction": "mode_3_full_ensemble",
+        "hybrid":             "mode_4_hybrid",
+    }
+    scenario_mode = requested_mode
+    if requested_mode == "bayesian":
+        raise RuntimeError(
+            "scenario_mode='bayesian' was removed in SPARC v4. "
+            "Use 'mode_3_full_ensemble' or 'auto'."
+        )
+    if requested_mode in _LEGACY_MODE_ALIASES:
+        new_key = _LEGACY_MODE_ALIASES[requested_mode]
+        import warnings as _warnings
+        _warnings.warn(
+            f"scenario_mode='{requested_mode}' is deprecated; use '{new_key}'.",
+            DeprecationWarning, stacklevel=2,
+        )
+        scenario_mode = new_key
 
     if scenario_mode == "auto":
-        scenario_mode = "hybrid" if has_dag else "physics"
+        from sparc.__main__ import _resolve_auto_scenario_mode
+        scenario_mode = _resolve_auto_scenario_mode(has_dag=has_dag)
 
-    if scenario_mode == "hybrid":
+    if scenario_mode == "mode_4_hybrid":
         summary_df, results_gdf = sim.run_with_hybrid_reprediction(data, verbose=True)
-    elif scenario_mode == "model_reprediction":
+    elif scenario_mode == "mode_3_full_ensemble":
         summary_df, results_gdf = sim.run_with_model_reprediction(data, verbose=True)
-    elif scenario_mode == "dag_coefficient":
+    elif scenario_mode == "mode_2_dag_local":
         if has_dag:
             summary_df, results_gdf = sim.run_with_causal_dag(data, verbose=True)
         else:
+            scenario_mode = "mode_1_physics"
             summary_df, results_gdf = sim.run(verbose=True)
-    else:
+    elif scenario_mode == "mode_1_physics":
         summary_df, results_gdf = sim.run(verbose=True)
+    else:
+        raise ValueError(
+            f"Unknown scenario_mode '{scenario_mode}'. "
+            f"Valid: auto, mode_1_physics, mode_2_dag_local, "
+            f"mode_3_full_ensemble, mode_4_hybrid."
+        )
 
     # --- Conservation checks on scenario results ---------------------
     conservation_violations = []
@@ -3851,6 +4529,7 @@ async def generate_pdf_report():
             causal_results=causal_results,
             scenario_summary=scenario_summary,
             output_dir=output_dir,
+            registry=state.registry,
         )
 
         # Also save a copy to the project directory
@@ -3877,6 +4556,7 @@ async def generate_pdf_report():
             causal_results=causal_results,
             scenario_summary=scenario_summary,
             output_dir=output_dir,
+            registry=state.registry,
         )
         # Save HTML to disk
         project_dir = Path(cfg["paths"]["project_root"])
@@ -4014,18 +4694,62 @@ async def get_results_availability():
     }
 
     out: dict = {}
+    # Cheap check: does the artifacts.db know about a given (stage, id)?
+    _db_artifacts: set[tuple[str, str]] = set()
+    if state.registry is not None:
+        try:
+            _man = state.registry.manifest
+            for stage_obj in _man.stages.values():
+                for art in stage_obj.artifacts.values():
+                    if not art.partial:
+                        _db_artifacts.add((str(stage_obj.stage), art.id))
+        except Exception:
+            _db_artifacts = set()
+
+    # Endpoints whose primary source is now artifacts.db.
+    _db_endpoints = {
+        "/results/correlogram": ("0", "correlogram_results"),
+        "/results/gwen": ("1", "gwen_variable_importance"),
+        "/results/model_performance": ("2", "ensemble_results"),
+        "/results/spatial_cv/predictions": ("2", "spatial_cv_predictions"),
+        "/results/scenarios/nuts_summary": ("3", "nuts_summary"),
+        "/dag/mc3_result": ("3", "mc3_summary"),
+        "/results/scenarios/detail": ("4", "scenario_results"),
+        "/results/scenarios/summary": ("4", "scenario_summary"),
+        "/results/scenarios/mc_consensus": ("4", "scenario_mc_consensus"),
+        "/results/scenarios/mc_consensus_summary": ("4", "scenario_mc_consensus_summary"),
+        "/results/scenarios/bma_summary": ("4", "bma_scenario_summary"),
+    }
     for endpoint, candidates in checks.items():
-        # CATE map special-case: any .npy under stage3_dir starting with spatial_cate_
+        # Db-backed endpoints: prefer registry presence.
+        if endpoint in _db_endpoints and _db_endpoints[endpoint] in _db_artifacts:
+            stage_id, art_id = _db_endpoints[endpoint]
+            out[endpoint] = {
+                "available": True,
+                "source": f"artifacts.db:{stage_id}:{art_id}",
+            }
+            continue
+        # CATE map special-case: prefer ("3","cate_summary") table; fall back
+        # to any .npy under stage3_dir starting with spatial_cate_.
         if endpoint == "/results/causal/cate_map":
-            available = any(paths.stage3_dir.glob("spatial_cate_multiplier_*.npy")) \
-                if paths.stage3_dir.exists() else False
-            source = str(next(iter(paths.stage3_dir.glob("spatial_cate_multiplier_*.npy")), "") or
-                         (paths.stage3_dir / "spatial_cate_multiplier_*.npy"))
-        # Neural PDP special-case: directory must contain at least one CSV
+            db_has_cate = (("3", "cate_summary") in _db_artifacts)
+            if db_has_cate:
+                available = True
+                source = "artifacts.db:3:cate_summary"
+            else:
+                available = any(paths.stage3_dir.glob("spatial_cate_multiplier_*.npy")) \
+                    if paths.stage3_dir.exists() else False
+                source = str(next(iter(paths.stage3_dir.glob("spatial_cate_multiplier_*.npy")), "") or
+                             (paths.stage3_dir / "spatial_cate_multiplier_*.npy"))
+        # Neural PDP special-case: directory must contain at least one
+        # CSV OR the artifacts.db must register at least one
+        # ``v2_neural_pdp::*`` table.
         elif endpoint == "/results/neural_pdp":
             d = candidates[0]
-            available = d.exists() and any(d.glob("pdp_*.csv"))
-            source = str(d)
+            db_has_pdp = any(stg == "2" and aid.startswith("v2_neural_pdp::")
+                             for stg, aid in _db_artifacts)
+            available = (d.exists() and any(d.glob("pdp_*.csv"))) or db_has_pdp
+            source = "artifacts.db:2:v2_neural_pdp::*" if db_has_pdp else str(d)
         # Generic: any candidate file/dir exists
         else:
             existing = next((c for c in candidates if c.exists()), None)
