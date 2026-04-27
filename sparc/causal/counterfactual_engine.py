@@ -71,6 +71,121 @@ class CounterfactualEngine:
         # Spatial CATE multipliers keyed by treatment name → 1-D array
         self._cate_multipliers: Dict[str, np.ndarray] = {}
 
+        # Per-edge NUTS posteriors {(parent, child): ndarray(n_samples,)}
+        # Loaded on-demand via load_edge_posteriors().
+        self._edge_posteriors: Dict[Tuple[str, str], np.ndarray] = {}
+        self._edge_posterior_summary: Optional[pd.DataFrame] = None
+        self._edge_posterior_warning_emitted: set[Tuple[str, str]] = set()
+
+    # ------------------------------------------------------------------
+    # Per-edge NUTS posteriors (Phase 1 of v4 causal-stack rewrite)
+    # ------------------------------------------------------------------
+
+    def load_edge_posteriors(self, store: Any | None = None) -> int:
+        """Load per-edge NUTS β posteriors written by Stage 3.
+
+        Reads ``("3","nuts_edge_samples")`` (blob) and ``("3","nuts_edge_summary")``
+        (table) from the active :class:`ArtifactStore`. If *store* is None,
+        looks up the active store via ``get_active_store()``.
+
+        Returns the number of edges loaded. Returns 0 (and logs a warning)
+        when the artifacts are missing — callers should then fall back to
+        deterministic OLS coefficients via :attr:`_structural_coeffs`.
+        """
+        if store is None:
+            try:
+                from sparc.registry.store import get_active_store
+                store = get_active_store()
+            except Exception as exc:
+                warnings.warn(
+                    f"CounterfactualEngine.load_edge_posteriors: store "
+                    f"unavailable ({exc}); falling back to OLS coefficients.",
+                    stacklevel=2,
+                )
+                return 0
+        if store is None:
+            warnings.warn(
+                "CounterfactualEngine.load_edge_posteriors: no active "
+                "ArtifactStore; falling back to OLS coefficients.",
+                stacklevel=2,
+            )
+            return 0
+
+        try:
+            samples = store.read_any("3", "nuts_edge_samples")
+        except Exception as exc:
+            warnings.warn(
+                f"CounterfactualEngine.load_edge_posteriors: "
+                f"nuts_edge_samples missing ({exc}); falling back to OLS.",
+                stacklevel=2,
+            )
+            return 0
+
+        try:
+            summary = store.read_any("3", "nuts_edge_summary")
+        except Exception:
+            summary = None
+
+        if not isinstance(samples, dict):
+            warnings.warn(
+                "CounterfactualEngine.load_edge_posteriors: unexpected "
+                "samples payload type — expected dict; falling back to OLS.",
+                stacklevel=2,
+            )
+            return 0
+
+        # Normalize keys to (parent, child) tuples — pickle round-trip
+        # may yield list/tuple keys depending on protocol.
+        normalized: Dict[Tuple[str, str], np.ndarray] = {}
+        for k, v in samples.items():
+            if isinstance(k, tuple) and len(k) == 2:
+                normalized[(str(k[0]), str(k[1]))] = np.asarray(v).reshape(-1)
+            elif isinstance(k, (list,)) and len(k) == 2:
+                normalized[(str(k[0]), str(k[1]))] = np.asarray(v).reshape(-1)
+        self._edge_posteriors = normalized
+        self._edge_posterior_summary = summary if isinstance(summary, pd.DataFrame) else None
+        return len(normalized)
+
+    def has_edge_posterior(self, parent: str, child: str) -> bool:
+        """Return True iff a NUTS posterior is available for ``(parent, child)``."""
+        return (parent, child) in self._edge_posteriors
+
+    def sample_edge_posterior(
+        self,
+        parent: str,
+        child: str,
+        n_draws: int | None = None,
+        rng: np.random.Generator | None = None,
+    ) -> np.ndarray:
+        """Return posterior samples for the structural coefficient β(parent→child).
+
+        If a NUTS posterior is available, returns the stored samples (or a
+        random subsample of size ``n_draws`` when given). Otherwise emits a
+        one-shot warning per edge and broadcasts the deterministic OLS
+        coefficient from :attr:`_structural_coeffs` to ``n_draws`` (or 1).
+        """
+        key = (parent, child)
+        if key in self._edge_posteriors:
+            chain = self._edge_posteriors[key]
+            if n_draws is None or n_draws >= len(chain):
+                return chain
+            rng = rng or np.random.default_rng()
+            idx = rng.choice(len(chain), size=int(n_draws), replace=False)
+            return chain[idx]
+
+        # OLS-broadcast fallback with one-shot warning.
+        if key not in self._edge_posterior_warning_emitted:
+            warnings.warn(
+                f"CounterfactualEngine.sample_edge_posterior: no NUTS "
+                f"posterior for {parent}→{child}; broadcasting OLS coeff.",
+                stacklevel=2,
+            )
+            self._edge_posterior_warning_emitted.add(key)
+
+        coeff = float(self._structural_coeffs.get(key, 0.0))
+        n = int(n_draws) if n_draws is not None else 1
+        return np.full(n, coeff, dtype=np.float64)
+
     # ------------------------------------------------------------------
     # Loading
     # ------------------------------------------------------------------

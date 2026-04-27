@@ -1201,7 +1201,7 @@ class CausalValidator:
             self._spatial_cate_sources: Dict[str, str] = {}
 
         try:
-            from sparc.causal.spatial_cate import SpatialCATEEstimator
+            from sparc.causal.spatial_cate import make_cate_estimator
         except ImportError:
             print("  spatial_cate module not available -- skipping.")
             return
@@ -1221,7 +1221,9 @@ class CausalValidator:
 
         print(f"\n  Estimating spatial CATE (CausalForestDML)...")
 
-        estimator = SpatialCATEEstimator(self.config)
+        estimator = make_cate_estimator(self.config)
+        estimator_name = type(estimator).__name__
+        print(f"    Using estimator: {estimator_name}")
 
         for treatment in self.roles['treatments']:
             if treatment not in data.columns:
@@ -1274,10 +1276,30 @@ class CausalValidator:
                     'cate_std': float(np.std(cate_array)),
                 }
 
+                # Capture full posterior samples for the Bayesian estimator
+                # so they can be persisted to ("3","cate_samples").
+                if hasattr(estimator, "posterior_samples"):
+                    try:
+                        self.spatial_cate_results[treatment]['posterior_samples'] = (
+                            estimator.posterior_samples(treatment)
+                        )
+                    except Exception:
+                        pass
+                if hasattr(estimator, "_diagnostics"):
+                    self.spatial_cate_results[treatment]['diagnostics'] = (
+                        estimator._diagnostics.get(treatment, {})
+                    )
+
                 # Spatial multiplier for scenario simulator
                 mult = estimator.cate_to_spatial_multiplier(treatment)
                 self.spatial_cate_results[treatment]['multiplier'] = mult
-                self._spatial_cate_sources[treatment] = artifact_source
+
+                # Source tag reflects the estimator class actually used.
+                if hasattr(estimator, "posterior_samples"):
+                    src = "bayesian_posterior_mean"
+                else:
+                    src = artifact_source  # default "frequentist_dml"
+                self._spatial_cate_sources[treatment] = src
 
                 summary = estimator.summary().get(treatment, {})
                 sig_frac = summary.get('pct_significant', 0) / 100.0
@@ -2294,6 +2316,135 @@ class CausalValidator:
         return table
 
     # ------------------------------------------------------------------
+    # Phase 2 (v4 rewrite) — DB-native CATE persistence
+    # ------------------------------------------------------------------
+
+    def _persist_cate_artifacts_v2(
+        self,
+        sources: Dict[str, str],
+        output_dir: str,
+    ) -> None:
+        """Persist per-cell CATE summary + posterior samples to ArtifactStore.
+
+        Writes two artifacts under stage="3":
+
+        * ``cate_summary`` (table) — long-format with one row per
+          ``(cell_id, treatment)``: mean, std, ci5/50/95, multiplier
+          mean / ci5 / ci95, source.
+        * ``cate_samples`` (blob) — pickled
+          ``Dict[treatment, ndarray(n_draws, n_cells)]`` posterior samples.
+          Frequentist estimators receive a single-row "draw" with the
+          point estimate so consumers (resolver) can treat both sources
+          uniformly.
+
+        No-op when no active ``ArtifactStore`` is bound (e.g. ad-hoc
+        offline runs); the legacy ``.npy`` writes still fire as a fallback.
+        """
+        try:
+            from sparc.registry.store import get_active_store
+        except Exception:
+            return
+        store = get_active_store()
+        if store is None:
+            return
+
+        rows: list[dict] = []
+        samples_by_treatment: Dict[str, np.ndarray] = {}
+        for treatment, info in self.spatial_cate_results.items():
+            cate_arr = info.get("cate")
+            mult_arr = info.get("multiplier")
+            if cate_arr is None or mult_arr is None:
+                continue
+            cate_arr = np.asarray(cate_arr).reshape(-1)
+            mult_arr = np.asarray(mult_arr).reshape(-1)
+            n_cells = cate_arr.shape[0]
+            source = sources.get(treatment, "frequentist_dml")
+
+            posterior = info.get("posterior_samples")
+            if posterior is not None and np.asarray(posterior).ndim == 2:
+                tau = np.asarray(posterior, dtype=np.float64)  # (D, N)
+                if tau.shape[1] == n_cells:
+                    cate_mean = tau.mean(axis=0)
+                    cate_std = tau.std(axis=0)
+                    cate_ci5 = np.percentile(tau, 5, axis=0)
+                    cate_ci50 = np.percentile(tau, 50, axis=0)
+                    cate_ci95 = np.percentile(tau, 95, axis=0)
+                    # Per-draw multiplier τ/mean(τ) clamped to [0.5, 1.5].
+                    means_per_draw = tau.mean(axis=1, keepdims=True)
+                    means_per_draw = np.where(
+                        np.abs(means_per_draw) < 1e-10, 1.0, means_per_draw,
+                    )
+                    mult_post = np.clip(tau / means_per_draw, 0.5, 1.5)
+                    mult_mean = mult_post.mean(axis=0)
+                    mult_ci5 = np.percentile(mult_post, 5, axis=0)
+                    mult_ci95 = np.percentile(mult_post, 95, axis=0)
+                    samples_by_treatment[treatment] = tau
+                else:
+                    posterior = None  # shape mismatch — fall through
+
+            if posterior is None or np.asarray(posterior).ndim != 2:
+                # Degenerate "single-draw" surface for frequentist /
+                # uniform fallback estimators.
+                cate_mean = cate_arr
+                cate_std = np.zeros(n_cells)
+                cate_ci5 = cate_arr
+                cate_ci50 = cate_arr
+                cate_ci95 = cate_arr
+                mult_mean = mult_arr
+                mult_ci5 = mult_arr
+                mult_ci95 = mult_arr
+                samples_by_treatment[treatment] = cate_arr.reshape(1, -1)
+
+            for i in range(n_cells):
+                rows.append({
+                    "cell_id": int(i),
+                    "treatment": treatment,
+                    "cate_mean": float(cate_mean[i]),
+                    "cate_std": float(cate_std[i]),
+                    "cate_ci5": float(cate_ci5[i]),
+                    "cate_ci50": float(cate_ci50[i]),
+                    "cate_ci95": float(cate_ci95[i]),
+                    "multiplier_mean": float(mult_mean[i]),
+                    "multiplier_ci5": float(mult_ci5[i]),
+                    "multiplier_ci95": float(mult_ci95[i]),
+                    "source": source,
+                })
+
+        if not rows:
+            return
+
+        summary_df = pd.DataFrame(rows)
+        store.write_table(
+            "3", "cate_summary", summary_df,
+            producer="causal_validation",
+            consumers=[
+                "scenario_simulator",
+                "causal_effect_resolver",
+                "decision_optimizer",
+            ],
+            metadata={
+                "schema_version": 1,
+                "treatments": sorted(samples_by_treatment.keys()),
+                "n_cells": int(summary_df["cell_id"].nunique()),
+            },
+        )
+        store.write_blob(
+            "3", "cate_samples", samples_by_treatment,
+            serializer="pickle",
+            producer="causal_validation",
+            consumers=[
+                "scenario_simulator",
+                "causal_effect_resolver",
+            ],
+            metadata={
+                "schema_version": 1,
+                "key_format": "treatment_name",
+                "value_format": "ndarray(n_draws, n_cells) — single-draw "
+                                "for frequentist estimators",
+            },
+        )
+
+    # ------------------------------------------------------------------
     # Step 5: Produce scenario_coefficients.json
     # ------------------------------------------------------------------
 
@@ -2463,9 +2614,19 @@ class CausalValidator:
                 with open(ps_path, 'w', encoding='utf-8') as f:
                     json.dump(self.propensity_diagnostics, f, indent=2, default=str)
 
-        # Save spatial CATE multipliers for Stage 4
+        # Save spatial CATE artifacts for Stage 4 — Phase 2 of v4 rewrite
+        # consolidates per-treatment .npy multipliers into two DB artifacts:
+        #   ("3","cate_summary") — table, long-format per (cell, treatment)
+        #   ("3","cate_samples") — blob, Dict[treatment, ndarray(D, N)]
+        # The legacy per-treatment .npy writes are retained as a deprecated
+        # back-compat path (Phase 6 will delete them).
         if self.spatial_cate_results:
             sources = getattr(self, "_spatial_cate_sources", {})
+            self._persist_cate_artifacts_v2(
+                sources=sources, output_dir=output_dir,
+            )
+
+            # Legacy per-treatment .npy fallback (deprecated; remove in Phase 6)
             for treatment, cate_info in self.spatial_cate_results.items():
                 mult = cate_info.get('multiplier')
                 if mult is not None:
@@ -2479,6 +2640,8 @@ class CausalValidator:
                             "sparc.causal.counterfactual_engine",
                             "sparc.decision.optimizer",
                         ],
+                        "deprecated": True,
+                        "deprecation_replacement": ("3", "cate_summary"),
                     }
                     if art_meta["source"] == "uniform_fallback":
                         art_meta["fallback"] = True

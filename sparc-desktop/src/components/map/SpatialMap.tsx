@@ -5,6 +5,7 @@ import { DeckGL } from "@deck.gl/react";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { ContextLayer } from "@/lib/api";
 import type { GeoJsonData } from "@/lib/types";
+import MapLegend from "./MapLegend";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -29,6 +30,10 @@ interface SpatialMapProps {
   contextLayers?: { layer: ContextLayer; opacity?: number }[];
   /** When true, shows a fullscreen toggle (⛶) in the top-right corner. */
   expandable?: boolean;
+  /** Property name to drive 3D extrusion height (choropleth only). */
+  extrudeField?: string;
+  /** Pixels per unit of `extrudeField` value (default 50). */
+  extrudeScale?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +129,8 @@ export default function SpatialMap({
   onViewStateChange: onViewStateChangeProp,
   contextLayers,
   expandable,
+  extrudeField,
+  extrudeScale = 50,
 }: SpatialMapProps) {
   const [fullscreen, setFullscreen] = useState(false);
 
@@ -203,12 +210,32 @@ export default function SpatialMap({
     }
 
     if (mode === "choropleth") {
+      const extrudeDomain: [number, number] = (() => {
+        if (!extrudeField) return [0, 1];
+        let lo = Infinity, hi = -Infinity;
+        for (const f of geojson.features) {
+          const v = f.properties[extrudeField];
+          if (typeof v === "number" && isFinite(v)) {
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
+          }
+        }
+        return lo < hi ? [lo, hi] : [0, 1];
+      })();
       return [
         new GeoJsonLayer({
           id: "choropleth",
           data: geojson as any,
           filled: true,
           stroked: true,
+          extruded: !!extrudeField,
+          getElevation: ((d: any) => {
+            if (!extrudeField) return 0;
+            const v = d.properties[extrudeField];
+            if (typeof v !== "number") return 0;
+            const t = (v - extrudeDomain[0]) / (extrudeDomain[1] - extrudeDomain[0] || 1);
+            return Math.max(0, t) * extrudeScale * 1000;
+          }) as any,
           getFillColor: ((d: any) => {
             if (!colorField) return [96, 36, 104, 160];
             const v = d.properties[colorField];
@@ -220,6 +247,10 @@ export default function SpatialMap({
           getLineWidth: 1,
           lineWidthMinPixels: 0.5,
           pickable: true,
+          updateTriggers: {
+            getElevation: [extrudeField, extrudeScale],
+            getFillColor: [colorField, palette, domain[0], domain[1]],
+          },
         }),
       ];
     }
@@ -246,7 +277,7 @@ export default function SpatialMap({
         pickable: true,
       }),
     ];
-  }, [geojson, colorField, mode, domain, palette]);
+  }, [geojson, colorField, mode, domain, palette, extrudeField, extrudeScale]);
 
   if (!geojson) {
     return (
@@ -313,16 +344,12 @@ export default function SpatialMap({
 
       {/* Color legend */}
       {colorField && (
-        <div className="absolute bottom-4 right-4 rounded-md bg-white/90 p-2 shadow-sm backdrop-blur-sm">
-          <p className="mb-1 text-[10px] font-medium text-sparc-gray-600">{colorField}</p>
-          <div className="flex items-center gap-1.5">
-            <span className="text-[9px] text-sparc-gray-500">{domain[0].toFixed(2)}</span>
-            <div
-              className="h-2.5 w-24 rounded-sm"
-              style={{ background: RAMP_CSS[palette] }}
-            />
-            <span className="text-[9px] text-sparc-gray-500">{domain[1].toFixed(2)}</span>
-          </div>
+        <div style={{ position: "absolute", bottom: 14, right: 14, zIndex: 6 }}>
+          <MapLegend
+            label={colorField}
+            domain={domain}
+            rampCss={RAMP_CSS[palette]}
+          />
         </div>
       )}
 

@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ArtifactEntry, RunManifest, StageManifest } from "../lib/types";
 import { getManifest, rescanManifest } from "../lib/api";
+import { useArtifactEvent } from "./useArtifactStream";
 
 const ACTIVE_INTERVAL_MS = 2_000;
 const IDLE_INTERVAL_MS = 30_000;
@@ -116,6 +117,22 @@ export function useManifest(enabled: boolean = true): UseManifestResult {
     },
     [manifest],
   );
+
+  // Coalesce burst-y artifact_written events into a single refetch so we
+  // never spam /results/manifest. The 2s/30s polling above remains as a
+  // backstop in case the WebSocket is down.
+  const burstTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useArtifactEvent(() => {
+    if (!enabled) return;
+    if (burstTimerRef.current) return;
+    burstTimerRef.current = setTimeout(() => {
+      burstTimerRef.current = null;
+      fetchOnce();
+    }, 250);
+  });
+  useEffect(() => () => {
+    if (burstTimerRef.current) clearTimeout(burstTimerRef.current);
+  }, []);
 
   const stage = useCallback(
     (s: string | number): StageManifest | null =>

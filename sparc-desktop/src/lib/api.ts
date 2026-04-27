@@ -490,6 +490,52 @@ export const getScenarioVariables = () =>
   get<{ variables: Record<string, ScenarioVariableInfo> }>("/results/scenarios/variables");
 
 // ------------------------------------------------------------------
+// Phase 5 — scenario bundle endpoints (attribution, trajectory, uncertainty)
+// ------------------------------------------------------------------
+export interface AttributionRecord {
+  scenario_id: number | string;
+  variable: string;
+  contribution: number;
+  [key: string]: unknown;
+}
+
+export const getScenarioAttribution = () =>
+  get<{ records: AttributionRecord[]; columns: string[] }>("/results/scenarios/attribution");
+
+export interface TrajectoryRecord {
+  scenario_id: number | string;
+  t: number | string;
+  geometry_id?: string | number;
+  value: number;
+  std?: number;
+  [key: string]: unknown;
+}
+
+export const getScenarioTrajectory = (scenarioId?: number | string) =>
+  get<{ records: TrajectoryRecord[]; columns: string[] }>(
+    scenarioId !== undefined && scenarioId !== ""
+      ? `/results/scenarios/trajectory?scenario_id=${encodeURIComponent(String(scenarioId))}`
+      : "/results/scenarios/trajectory",
+  );
+
+export const getScenarioUncertainty = (scenarioId?: number | string) =>
+  get<GeoJsonData>(
+    scenarioId !== undefined && scenarioId !== ""
+      ? `/results/scenarios/uncertainty?scenario_id=${encodeURIComponent(String(scenarioId))}`
+      : "/results/scenarios/uncertainty",
+  );
+
+/**
+ * Download the full results bundle (ZIP of all artifacts + manifest).
+ * Returns the streaming Response so the caller can surface it to the user.
+ */
+export const downloadResultsBundle = async (): Promise<Blob> => {
+  const res = await fetch(`${BASE}/results/bundle`);
+  if (!res.ok) throw new Error(`bundle download failed: ${res.status}`);
+  return await res.blob();
+};
+
+// ------------------------------------------------------------------
 // Decision-support (Phase 9): intervention candidates + optimizer
 // ------------------------------------------------------------------
 export interface InterventionCandidate {

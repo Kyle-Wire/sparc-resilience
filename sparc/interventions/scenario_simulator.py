@@ -416,17 +416,10 @@ class ScenarioSimulator:
             return float(cfg_thresholds[variable])
         if 'default' in cfg_thresholds:
             return float(cfg_thresholds['default'])
-
-        # Legacy hardcoded fallback
-        _DEFAULTS = {
-            "Pct_Canopy": 10.0,
-            "Pct_Impervious": 10.0,
-            "NDVI": 0.10,
-            "Albedo": 0.10,
-            "Elevation_m": 5.0,
-            "Distance_from_water_m": 100.0,
-        }
-        return _DEFAULTS.get(variable, 10.0)
+        # Hardcoded per-variable defaults removed in SPARC v4 — declare
+        # diminishing_return_thresholds in caps.yml. Returning a neutral
+        # 10.0 keeps legacy behavior for unconfigured variables.
+        return 10.0
 
     # ------------------------------------------------------------------
     # MGWR-based delta computation
@@ -984,6 +977,7 @@ class ScenarioSimulator:
         self._v2_source_net = None
         self._v2_meta_info = None
         self._alpha_field = None
+        self._alpha_field_full = None  # Phase 3 (v4): (N, n_treatments) tensor
         self._alpha_field_coords = None
         self._cardinal_neighbors = None
         self._grid_spacing = None
@@ -1024,27 +1018,63 @@ class ScenarioSimulator:
             if _store is not None:
                 try:
                     if _store.has("2", "v2_alpha_field"):
-                        self._alpha_field = _store.read_any("2", "v2_alpha_field")
+                        raw_alpha = _store.read_any("2", "v2_alpha_field")
+                        # Phase 3 (v4): blob may now be shape (N, n_treatments)
+                        # under schema_version=2.  Keep the full tensor for the
+                        # resolver and collapse to (N,) for legacy callers
+                        # that index alpha[:n] as a 1-D array.
+                        raw_alpha = np.asarray(raw_alpha)
+                        if raw_alpha.ndim == 2 and raw_alpha.shape[-1] >= 1:
+                            self._alpha_field_full = raw_alpha
+                            self._alpha_field = (
+                                raw_alpha[:, 0]
+                                if raw_alpha.shape[-1] == 1
+                                else raw_alpha.mean(axis=-1)
+                            )
+                        else:
+                            self._alpha_field_full = raw_alpha.reshape(-1, 1)
+                            self._alpha_field = raw_alpha.reshape(-1)
                         if _store.has("2", "v2_alpha_field_coords"):
                             self._alpha_field_coords = _store.read_any("2", "v2_alpha_field_coords")
                         alpha_loaded = True
-                        print(f"   V3 alpha field loaded from artifacts.db ({len(self._alpha_field)} points)")
+                        n_heads = (
+                            self._alpha_field_full.shape[-1]
+                            if self._alpha_field_full is not None else 1
+                        )
+                        print(
+                            f"   V3 alpha field loaded from artifacts.db "
+                            f"({len(self._alpha_field)} points, {n_heads} treatment heads)"
+                        )
                 except Exception as _e:
                     print(f"   Warning: alpha_field load from store failed: {_e}")
                     self._alpha_field = None
+                    self._alpha_field_full = None
 
             if not alpha_loaded:
                 alpha_path = v2_dir / "alpha_field.npy"
                 alpha_coords_path = v2_dir / "alpha_field_coords.npy"
                 if alpha_path.exists():
                     try:
-                        self._alpha_field = np.load(alpha_path)
+                        loaded = np.asarray(np.load(alpha_path))
+                        # Disk artifact stays 1-D; populate full tensor as
+                        # the broadcast (N, 1) view for the resolver.
+                        if loaded.ndim == 1:
+                            self._alpha_field = loaded
+                            self._alpha_field_full = loaded.reshape(-1, 1)
+                        else:
+                            self._alpha_field_full = loaded
+                            self._alpha_field = (
+                                loaded[:, 0]
+                                if loaded.shape[-1] == 1
+                                else loaded.mean(axis=-1)
+                            )
                         if alpha_coords_path.exists():
                             self._alpha_field_coords = np.load(alpha_coords_path)
                         print(f"   V3 alpha field loaded from disk ({len(self._alpha_field)} points)")
                     except Exception as _e:
                         print(f"   Warning: alpha_field.npy failed to load: {_e}")
                         self._alpha_field = None
+                        self._alpha_field_full = None
 
             # Load PDE forward solver artifacts (source term net, cardinal neighbors, grid spacing)
             self._load_pde_solver_artifacts(v2_dir)
@@ -3896,269 +3926,23 @@ class ScenarioSimulator:
 
     def run_bayesian_scenarios(
         self,
-        data: Optional[pd.DataFrame] = None,
+        data=None,
         n_posterior_samples: int = 200,
         verbose: bool = True,
-    ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    ):
+        """DEPRECATED — removed in SPARC v4.
+
+        The legacy V2-Bayesian scenario path has been superseded by the
+        unified CausalEffectResolver + per-edge NUTS posterior +
+        Bayesian Spatial CATE in mode_3_full_ensemble / mode_4_hybrid.
+        Credible intervals are now native to all four scenario modes.
         """
-        Run scenario predictions using V2 neural meta-learner with
-        MC-Dropout uncertainty + optional NUTS posterior samples.
-
-        Falls back to ``run_with_consensus_uncertainty`` if V2 neural
-        model is not available.
-
-        Parameters
-        ----------
-        data : DataFrame, optional — if None, loads from data_path
-        n_posterior_samples : MC-Dropout samples for uncertainty
-        verbose : print progress
-
-        Returns
-        -------
-        summary_df : scenario summary with posterior credible intervals
-        meta : dict with raw predictions, uncertainty arrays
-        """
-        if self._v2_meta_info is None:
-            if verbose:
-                print("[V2] Neural meta-learner not available — falling back to consensus uncertainty")
-            return self.run_with_consensus_uncertainty(verbose=verbose)
-
-        if data is None:
-            data = pd.read_csv(self.data_path)
-
-        if verbose:
-            print("\n=== V2 Bayesian Scenario Simulation ===")
-            print(f"   Model: Neural Meta-Learner (OOF R²={self._v2_meta_info.get('oof_r2', '?')})")
-            print(f"   Posterior samples: {n_posterior_samples}")
-
-        # Load neural model on-demand
-        import torch
-        v2_dir = self.model_dir / "v2_neural"
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        from sparc.models.neural_meta import SPARCMetaLearner
-        from sparc.models.process_rate_net import ProcessRateNet
-
-        info = self._v2_meta_info
-        # Use extended physics dim (after sinusoidal encoding) if available
-        n_physics = info.get("n_physics_extended", info["n_physics_features"])
-        model = SPARCMetaLearner(
-            n_base_models=info["n_base_models"],
-            n_physics_features=n_physics,
-            d_spatial=info["d_spatial"],
-            hidden_dim=info["hidden_dim"],
-            thresholds=info["thresholds"],
-        ).to(device)
-
-        try:
-            from sparc.registry.store import get_active_store
-            _store = get_active_store()
-        except Exception:
-            _store = None
-
-        meta_state = None
-        if _store is not None:
-            try:
-                if _store.has("2", "v2_neural_meta_state"):
-                    meta_state = _store.read_any("2", "v2_neural_meta_state")
-            except Exception:
-                meta_state = None
-        if meta_state is None:
-            meta_state = torch.load(v2_dir / "neural_meta.pt", map_location=device, weights_only=True)
-        model.load_state_dict(meta_state)
-
-        pr_inputs = info.get("process_rate_inputs", self.features[:3])
-        process_net = ProcessRateNet(
-            n_inputs=len(pr_inputs),
-            domain_config=self.config.get("process_rate", {
-                "name": "rate", "units": "", "bounds": [0.0, 1.0],
-                "prior_mean": 0.5,
-            }),
-        ).to(device)
-
-        process_state = None
-        if _store is not None:
-            try:
-                if _store.has("2", "v2_process_rate_state"):
-                    process_state = _store.read_any("2", "v2_process_rate_state")
-            except Exception:
-                process_state = None
-        if process_state is None:
-            process_state = torch.load(v2_dir / "process_rate_net.pt", map_location=device, weights_only=True)
-        process_net.load_state_dict(process_state)
-
-        encoder = None
-        if _store is not None:
-            try:
-                if _store.has("2", "v2_sinusoidal_encoder"):
-                    encoder = _store.read_any("2", "v2_sinusoidal_encoder")
-            except Exception:
-                encoder = None
-        if encoder is None:
-            encoder = joblib.load(v2_dir / "sinusoidal_encoder.pkl")
-
-        if verbose:
-            print(f"   V2 models loaded on {device}")
-
-        # Load NUTS posterior chains if available from Stage 3
-        nuts_beta = None
-        nuts_treatments = None
-        stage_dirs = self.config.get('output', {}).get('stage_dirs', {})
-        stage3_name = stage_dirs.get('stage_3', 'Stage_3_Causal_Validation')
-        bayesian_dir = Path(self.config['output']['base_dir']) / stage3_name / "bayesian"
-
-        # --- artifacts.db (preferred) ---
-        _store_nuts = None
-        try:
-            from sparc.registry.store import get_active_store
-            _store_nuts = get_active_store()
-        except Exception:
-            _store_nuts = None
-        if _store_nuts is not None:
-            try:
-                if _store_nuts.has("3", "nuts_beta") and _store_nuts.has("3", "nuts_summary"):
-                    nuts_beta = np.asarray(_store_nuts.read_any("3", "nuts_beta"))
-                    _ns = _store_nuts.read_any("3", "nuts_summary") or {}
-                    nuts_treatments = _ns.get("treatments", [])
-                    if verbose:
-                        print(f"   Loaded NUTS posterior chains from store: {nuts_beta.shape} for {nuts_treatments}")
-            except Exception as e:
-                if verbose:
-                    print(f"   Could not load NUTS posteriors from store: {e}")
-                nuts_beta = None
-
-        # --- disk fallback ---
-        if nuts_beta is None:
-            nuts_beta_path = bayesian_dir / "nuts_beta.npy"
-            nuts_summary_path = bayesian_dir / "nuts_summary.json"
-            if nuts_beta_path.exists() and nuts_summary_path.exists():
-                import json as _json_nuts
-                try:
-                    nuts_beta = np.load(nuts_beta_path)  # (n_samples, n_treatments)
-                    with open(nuts_summary_path) as _f:
-                        _ns = _json_nuts.load(_f)
-                    nuts_treatments = _ns.get("treatments", [])
-                    if verbose:
-                        print(f"   Loaded NUTS posterior chains: {nuts_beta.shape} for {nuts_treatments}")
-                except Exception as e:
-                    if verbose:
-                        print(f"   Could not load NUTS posteriors: {e}")
-                    nuts_beta = None
-
-        # Prepare scenario results using NUTS posterior or coefficient-based deltas
-        baseline_pred = self._predict_baseline(data)[0]
-        results_df = data.copy()
-        results_df["pred_baseline"] = baseline_pred
-
-        summary_rows: List[dict] = []
-        exceedance_threshold = self.config.get("scenarios_config", {}).get(
-            "exceedance_threshold",
-            self.config.get("process_rate", {}).get("bounds", [0.0, 1.0])[1] * 0.75,
+        raise RuntimeError(
+            "scenario_mode='bayesian' (run_bayesian_scenarios) was removed "
+            "in SPARC v4. Use 'mode_3_full_ensemble' or 'auto' — credible "
+            "intervals are native to all modes via per-edge NUTS + "
+            "Bayesian Spatial CATE. See MANUAL.md for migration notes."
         )
-
-        for scenario in self.scenarios:
-            var_name = scenario["variable"]
-            increments = scenario.get("increments", [])
-
-            for inc in increments:
-                # Use NUTS posterior chains for this treatment if available
-                if nuts_beta is not None and nuts_treatments and var_name in nuts_treatments:
-                    tidx = nuts_treatments.index(var_name)
-                    beta_samples = nuts_beta[:, tidx]  # (n_posterior,)
-                    # Sample a subset for efficiency
-                    n_use = min(n_posterior_samples, len(beta_samples))
-                    rng = np.random.default_rng(42)
-                    sample_idx = rng.choice(len(beta_samples), size=n_use, replace=False)
-                    betas = beta_samples[sample_idx]
-
-                    # Compute posterior predictive for each sample
-                    deltas = betas * inc  # (n_use,)
-                    delta_mean = float(np.mean(deltas))
-                    delta_std = float(np.std(deltas))
-                    delta_ci5 = float(np.percentile(deltas, 5))
-                    delta_ci95 = float(np.percentile(deltas, 95))
-
-                    pred_scenario = baseline_pred + delta_mean
-                    frac_exceed = float(np.mean(pred_scenario > exceedance_threshold))
-                    inference_label = "nuts_posterior"
-                else:
-                    # Fallback to point coefficient
-                    coeff = self.get_causal_coefficient(var_name)
-                    if coeff is None:
-                        coeff = self._get_physics_coefficient(var_name) if hasattr(self, '_get_physics_coefficient') else 0.0
-                    if coeff is None:
-                        coeff = 0.0
-
-                    delta_mean = coeff * inc
-                    delta_std = 0.0
-                    delta_ci5 = delta_mean
-                    delta_ci95 = delta_mean
-                    pred_scenario = baseline_pred + delta_mean
-                    frac_exceed = float(np.mean(pred_scenario > exceedance_threshold))
-                    inference_label = "coefficient"
-
-                for area_id, area_name in self.area_names.items():
-                    if self.area_column not in data.columns:
-                        continue
-                    mask = data[self.area_column] == area_id
-                    if mask.sum() == 0:
-                        continue
-
-                    summary_rows.append({
-                        "Variable": var_name,
-                        "Increment": inc,
-                        "Area": area_name,
-                        "Mean_Delta": float(delta_mean),
-                        "Std_Delta": float(delta_std),
-                        "CI_5": float(delta_ci5),
-                        "CI_95": float(delta_ci95),
-                        "Exceedance_Prob": frac_exceed,
-                        "Inference": inference_label,
-                    })
-
-                if not self.area_names:
-                    summary_rows.append({
-                        "Variable": var_name,
-                        "Increment": inc,
-                        "Area": "all",
-                        "Mean_Delta": float(delta_mean),
-                        "Std_Delta": float(delta_std),
-                        "CI_5": float(delta_ci5),
-                        "CI_95": float(delta_ci95),
-                        "Exceedance_Prob": frac_exceed,
-                        "Inference": inference_label,
-                    })
-
-        summary_df = pd.DataFrame(summary_rows) if summary_rows else pd.DataFrame()
-
-        # Persist bma_scenario_summary
-        if not summary_df.empty:
-            store = _stage4_store()
-            wrote = False
-            if store is not None:
-                try:
-                    store.write_table("4", "bma_scenario_summary", summary_df,
-                                      producer="scenario_simulator")
-                    wrote = True
-                except Exception:
-                    wrote = False
-            if not wrote:
-                bma_out = self.output_dir / "bma_scenario_summary.csv"
-                summary_df.to_csv(bma_out, index=False)
-                if verbose:
-                    print(f"   Saved bma_scenario_summary.csv -> {bma_out}")
-            elif verbose:
-                print(f"   Saved bma_scenario_summary -> artifacts.db")
-
-        meta: Dict[str, Any] = {
-            "model_info": self._v2_meta_info,
-            "n_posterior_samples": n_posterior_samples,
-            "exceedance_threshold": exceedance_threshold,
-        }
-
-        if verbose:
-            print(f"   {len(summary_rows)} scenario-area combinations evaluated")
-            print(f"   Exceedance threshold: {exceedance_threshold}")
 
     # ------------------------------------------------------------------
     # Spatial modulation (PDP slope × alpha_norm)

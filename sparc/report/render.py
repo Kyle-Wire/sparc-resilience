@@ -1,5 +1,5 @@
 """
-On-demand artifact rendering (data formats only).
+On-demand artifact rendering.
 
 The SPARC pipeline writes artifacts into ``artifacts.db`` as tables /
 structs / blobs (see :mod:`sparc.registry.store`).  User-facing files
@@ -7,12 +7,16 @@ structs / blobs (see :mod:`sparc.registry.store`).  User-facing files
 produced lazily here, when the desktop app, the report generator,
 or a CLI export asks for them.
 
-Visual outputs (charts, maps, plots) are rendered live in the desktop
-app directly from this structured data; "download" of a chart or map
-is handled client-side by exporting the live visualization. The server
-intentionally does NOT render PNGs.
+PNG rendering for charts and maps is delegated to
+:mod:`sparc.report.figures` (which uses headless matplotlib). The
+desktop continues to render visualizations live for the on-screen
+experience; :func:`render_png` exists so the report generator and the
+``Download as PNG`` button on every page have a single server-side
+entry point.
 
-This module has no side effects on the registry — it is read-only.
+This module has no side effects on the registry — it is read-only
+apart from the figure-cache writes performed inside
+:mod:`sparc.report.figures`.
 """
 
 from __future__ import annotations
@@ -242,10 +246,42 @@ def render_native(
     raise RenderError(f"Unsupported storage_kind: {entry.storage_kind}")
 
 
+# ---------------------------------------------------------------------------
+# PNG rendering — delegates to sparc.report.figures
+# ---------------------------------------------------------------------------
+
+
+def render_png(
+    stage: str | int,
+    artifact_id: str,
+    *,
+    registry: Optional[RunRegistry] = None,
+    **opts: Any,
+) -> bytes:
+    """Render the artifact as a PNG via :mod:`sparc.report.figures`.
+
+    This is a thin delegate so callers do not have to import the figures
+    module directly. Raises :class:`RenderError` if no figure renderer is
+    registered or rendering fails. ``opts`` are forwarded to the renderer
+    (e.g. ``dpi``, ``column``, ``cmap``, ``scenario_id``).
+    """
+    try:
+        from sparc.report.figures import FigureRenderError, render_for_artifact
+    except ImportError as exc:  # pragma: no cover - matplotlib missing
+        raise RenderError(
+            "PNG rendering requires matplotlib (sparc.report.figures unavailable)"
+        ) from exc
+    try:
+        return render_for_artifact(stage, artifact_id, registry=registry, **opts)
+    except FigureRenderError as exc:
+        raise RenderError(str(exc)) from exc
+
+
 __all__ = [
     "RenderError",
     "render_csv",
     "render_json",
     "render_geojson",
     "render_native",
+    "render_png",
 ]

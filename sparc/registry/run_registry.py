@@ -179,8 +179,8 @@ _KNOWN_CATALOG: list[dict[str, Any]] = [
      "patterns": ["bayesian/edge_confidence.csv"], "format": "csv"},
     {"id": "median_dag", "stage": "3",
      "patterns": ["bayesian/median_dag.json"], "format": "json"},
-    {"id": "nuts_beta_chain", "stage": "3",
-     "patterns": ["bayesian/nuts_beta.npy"], "format": "npy"},
+    # nuts_beta_chain (single-edge legacy back-compat) removed in SPARC v4
+    # — superseded by ("3","nuts_edge_summary")+("3","nuts_edge_samples").
     {"id": "causal_validation_summary", "stage": "3",
      "patterns": ["causal_validation_summary.txt"], "format": "txt"},
 
@@ -275,9 +275,37 @@ class RunRegistry:
         self.sqlite_path = self.output_dir / SQLITE_FILENAME
         self.lock_path = self.output_dir / LOCK_FILENAME
         self._manifest: RunManifest = RunManifest()
+        # Listeners notified after every successful register_artifact.
+        # Signature: ``listener(entry: ArtifactEntry) -> None``.
+        # Listener exceptions are caught and logged so a single bad
+        # subscriber cannot break the write path.
+        self._on_register_listeners: list[Any] = []
         if autoload:
             self.load()
         self._ensure_sqlite_schema()
+
+    # ------------------------------------------------------------------
+    # Event listeners
+    # ------------------------------------------------------------------
+
+    def add_register_listener(self, listener) -> None:  # type: ignore[no-untyped-def]
+        """Subscribe ``listener(entry)`` to artifact registration events."""
+        if listener not in self._on_register_listeners:
+            self._on_register_listeners.append(listener)
+
+    def remove_register_listener(self, listener) -> None:  # type: ignore[no-untyped-def]
+        try:
+            self._on_register_listeners.remove(listener)
+        except ValueError:
+            pass
+
+    def _emit_registered(self, entry: ArtifactEntry) -> None:
+        for listener in list(self._on_register_listeners):
+            try:
+                listener(entry)
+            except Exception as exc:  # noqa: BLE001
+                # Listeners must never break a write.
+                print(f"[RunRegistry] register listener {listener!r} failed: {exc}")
 
     # ------------------------------------------------------------------
     # Properties
@@ -596,6 +624,7 @@ class RunRegistry:
         sm = self._manifest.get_stage(str(stage))
         sm.artifacts[artifact_id] = entry
         self.save()
+        self._emit_registered(entry)
         return entry
 
     def mark_complete(self, stage: str | int, artifact_id: str) -> None:

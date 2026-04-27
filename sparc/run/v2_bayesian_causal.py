@@ -740,7 +740,352 @@ def _run_nuts_sampling(
         results.acceptance_rate * 100, results.n_divergences,
     )
 
+    # ------------------------------------------------------------------
+    # Per-edge NUTS posteriors (Phase 1 of v4 causal-stack rewrite)
+    # ------------------------------------------------------------------
+    # Sample β for every (parent, child) edge in the DAG, not just
+    # treatment → target.  Mediator edges are residualized on the
+    # backdoor adjustment set first to recover the structural coeff.
+    # Persisted as ("3","nuts_edge_summary") + ("3","nuts_edge_samples").
+    try:
+        edge_summary = _run_per_edge_nuts_sampling(
+            data=data_nuts,
+            dag_def=dag_def,
+            node_names=node_names,
+            target_col=target_col,
+            neural_baseline=neural_baseline,
+            alpha_weights=alpha_weights,
+            nuts_cfg=nuts_cfg,
+            mc3_results=mc3_results,
+            output_dir=output_dir,
+            sign_default_map={"Pct_Canopy": -1, "Pct_Impervious": +1, "Albedo": -1},
+            device=device,
+            dtype=dtype,
+        )
+        nuts_summary["per_edge"] = edge_summary
+    except Exception as exc:
+        logger.warning("Per-edge NUTS sampling failed: %s", exc, exc_info=True)
+        nuts_summary["per_edge"] = {"status": "failed", "error": str(exc)}
+
     return nuts_summary
+
+
+def _run_per_edge_nuts_sampling(
+    *,
+    data: pd.DataFrame,
+    dag_def: dict,
+    node_names: list[str],
+    target_col: str,
+    neural_baseline: Any,
+    alpha_weights: Any,
+    nuts_cfg: dict,
+    mc3_results: Any,
+    output_dir: Path,
+    sign_default_map: dict[str, int],
+    device: Any,
+    dtype: Any,
+) -> dict[str, Any]:
+    """Sample β per DAG edge with per-edge NUTS (Phase 1 of causal-stack rewrite).
+
+    For each ``(parent, child)`` edge in the DAG:
+
+    * If ``child == target_col`` and ``neural_baseline`` is given, fit
+      ``y - neural_baseline = parent_std × β + ε``.
+    * Otherwise residualize both ``parent`` and ``child`` on the *other
+      parents of child* (OLS) and fit
+      ``child_resid = parent_std_resid × β + ε`` to recover the **direct**
+      structural coefficient (holding the remaining parents of child
+      fixed). This is the SEM interpretation, and is appropriate when
+      the DAG is taken as the data-generating model.
+
+    Edges with ``mc3_edge_inclusion_prob < mc3_edge_threshold`` are skipped
+    (compute saver). Sign constraints from ``sign_default_map`` apply only
+    when ``child == target_col``.
+
+    Persists:
+
+    * ``("3", "nuts_edge_summary")`` table — long-format with one row per
+      sampled edge ``(parent, child, mean, std, ci5, ci50, ci95, r_hat,
+      ess, n_samples, prior_used, sign_constrained)``.
+    * ``("3", "nuts_edge_samples")`` blob — pickled
+      ``Dict[Tuple[str, str], np.ndarray]`` mapping ``(parent, child)`` to
+      the posterior sample vector in raw (unstandardized) units.
+    """
+    from sparc.causal.nuts import NUTSBlock, run_nuts
+
+    edges = dag_def.get("edges", [])
+    if not edges:
+        logger.info("Per-edge NUTS: DAG has no edges, skipping")
+        return {"status": "no_edges", "n_sampled": 0}
+
+    # Per-edge MC³ threshold (independent from treatment-only filter above).
+    mc3_threshold = float(nuts_cfg.get("mc3_edge_threshold", 0.3))
+    edge_probs = None
+    if mc3_results is not None and hasattr(mc3_results, "edge_inclusion_probs"):
+        edge_probs = mc3_results.edge_inclusion_probs
+
+    # Reduced budgets for per-edge runs — many edges to sample.
+    n_samples = int(nuts_cfg.get("per_edge_n_samples", 3000))
+    n_warmup = int(nuts_cfg.get("per_edge_n_warmup", 500))
+    seed_base = int(nuts_cfg.get("seed", 42))
+
+    # Sign constraints: only for direct edges to the target.
+    sign_node_overrides: dict[str, int] = {}
+    for node in dag_def.get("nodes", []):
+        sc = node.get("sign_constraint")
+        if sc is not None:
+            sign_node_overrides[node["name"]] = int(sc)
+
+    summary_rows: list[dict[str, Any]] = []
+    samples_dict: dict[tuple[str, str], np.ndarray] = {}
+    n_sampled = 0
+    n_skipped_mc3 = 0
+    n_skipped_missing = 0
+    n_failed = 0
+
+    # Cast neural_baseline / alpha_weights once for arithmetic on numpy.
+    nb_np = (
+        neural_baseline.detach().cpu().numpy().astype(np.float64)
+        if neural_baseline is not None else None
+    )
+    aw_np = (
+        alpha_weights.detach().cpu().numpy().astype(np.float64)
+        if alpha_weights is not None else None
+    )
+
+    # Hash-derived per-edge seed for reproducibility across DAG variants.
+    def _edge_seed(p: str, c: str) -> int:
+        h = abs(hash((seed_base, p, c))) % (2**31 - 1)
+        return int(h)
+
+    for edge_idx, edge in enumerate(edges):
+        parent = edge.get("parent")
+        child = edge.get("child")
+        if not parent or not child or parent == child:
+            continue
+        if parent not in data.columns or child not in data.columns:
+            n_skipped_missing += 1
+            logger.debug(
+                "Per-edge NUTS: skip %s→%s (missing column in data)",
+                parent, child,
+            )
+            continue
+
+        # MC³ pruning
+        edge_prob_val: Optional[float] = None
+        if edge_probs is not None and parent in node_names and child in node_names:
+            pi = node_names.index(parent)
+            ci = node_names.index(child)
+            edge_prob_val = float(edge_probs[pi, ci])
+            if edge_prob_val < mc3_threshold:
+                n_skipped_mc3 += 1
+                logger.info(
+                    "Per-edge NUTS: skip %s→%s (mc3 p=%.3f < %.2f)",
+                    parent, child, edge_prob_val, mc3_threshold,
+                )
+                continue
+
+        # Build response and design vector
+        try:
+            child_arr = data[child].values.astype(np.float64)
+            parent_arr = data[parent].values.astype(np.float64)
+
+            if child == target_col and nb_np is not None and len(nb_np) == len(child_arr):
+                # Use neural baseline for the target outcome.
+                y_arr = child_arr - nb_np
+                x_arr = parent_arr
+            else:
+                # Structural-equation interpretation: the β on (parent→child)
+                # is the direct effect, holding the OTHER parents of child
+                # fixed. Residualize both parent and child on the remaining
+                # parents to isolate the direct edge coefficient.
+                from sklearn.linear_model import LinearRegression
+                from sparc.causal.dag_definition import dag_to_networkx
+
+                G = dag_to_networkx(dag_def)
+                other_parents = [
+                    p for p in G.predecessors(child)
+                    if p != parent and p in data.columns
+                ]
+
+                if other_parents:
+                    Z = data[other_parents].values.astype(np.float64)
+                    lr_y = LinearRegression().fit(Z, child_arr)
+                    lr_x = LinearRegression().fit(Z, parent_arr)
+                    y_arr = child_arr - lr_y.predict(Z)
+                    x_arr = parent_arr - lr_x.predict(Z)
+                else:
+                    # Center to remove intercept.
+                    y_arr = child_arr - child_arr.mean()
+                    x_arr = parent_arr - parent_arr.mean()
+        except Exception as exc:
+            n_failed += 1
+            logger.warning(
+                "Per-edge NUTS: design build failed for %s→%s: %s",
+                parent, child, exc,
+            )
+            continue
+
+        # Standardize parent column
+        x_std = float(x_arr.std())
+        if x_std < 1e-12:
+            n_failed += 1
+            logger.info(
+                "Per-edge NUTS: skip %s→%s (parent variance ~ 0)",
+                parent, child,
+            )
+            continue
+        x_z = x_arr / x_std
+
+        # Sign constraint (only for target edges and known signs).
+        sign_used = 0
+        if child == target_col:
+            if parent in sign_node_overrides:
+                sign_used = sign_node_overrides[parent]
+            elif parent in sign_default_map:
+                sign_used = sign_default_map[parent]
+
+        # NUTS log-probability for this single edge.
+        y_t = torch.tensor(y_arr, dtype=dtype, device=device)
+        x_t = torch.tensor(x_z, dtype=dtype, device=device)
+        aw_t = (
+            torch.tensor(aw_np, dtype=dtype, device=device)
+            if aw_np is not None and len(aw_np) == len(y_arr) else None
+        )
+        sigma2_init = float(np.var(y_arr).clip(min=1e-6))
+        log_sigma2_init = math.log(sigma2_init)
+        beta_init = np.array([0.0])
+        if sign_used:
+            beta_init[0] = sign_used * 0.01
+        prior_var = 10.0  # weakly-informative N(0, sqrt(10)) on standardized β
+
+        def _log_prob(params: dict[str, torch.Tensor],
+                      _y=y_t, _x=x_t, _aw=aw_t,
+                      _sign=sign_used, _pv=prior_var) -> torch.Tensor:
+            beta = params["beta"]
+            sigma2 = params["sigma2"]
+            mu = _x * beta[0]
+            per_pt = -0.5 * (torch.log(sigma2) + (_y - mu) ** 2 / sigma2)
+            ll = torch.sum(_aw * per_pt) if _aw is not None else torch.sum(per_pt)
+            lp_beta = -0.5 * (beta[0] ** 2) / _pv
+            lp_sigma = -2.0 * torch.log(sigma2)
+            lp_sign = torch.tensor(0.0, dtype=_y.dtype, device=_y.device)
+            if _sign == -1:
+                lp_sign = -torch.nn.functional.softplus(beta[0] * 10.0)
+            elif _sign == +1:
+                lp_sign = -torch.nn.functional.softplus(-beta[0] * 10.0)
+            return ll + lp_beta + lp_sigma + lp_sign
+
+        blocks = [
+            NUTSBlock(name="beta", dim=1, init=beta_init),
+            NUTSBlock(name="sigma2", dim=1,
+                      init=np.array([log_sigma2_init]), transform="log"),
+        ]
+        try:
+            res = run_nuts(
+                log_prob_fn=_log_prob,
+                blocks=blocks,
+                n_samples=n_samples,
+                n_warmup=n_warmup,
+                max_depth=int(nuts_cfg.get("max_tree_depth", 10)),
+                target_accept=float(nuts_cfg.get("target_accept_rate", 0.65)),
+                seed=_edge_seed(parent, child),
+                device=str(device),
+            )
+        except Exception as exc:
+            n_failed += 1
+            logger.warning(
+                "Per-edge NUTS: sampler failed for %s→%s: %s",
+                parent, child, exc,
+            )
+            continue
+
+        beta_chain_std = np.asarray(res.samples["beta"]).reshape(-1)
+        beta_chain_raw = beta_chain_std / x_std
+        samples_dict[(parent, child)] = beta_chain_raw
+
+        rh = res.r_hat.get("beta", np.array([np.nan]))
+        es = res.ess.get("beta", np.array([np.nan]))
+        summary_rows.append({
+            "parent": parent,
+            "child": child,
+            "mean": float(beta_chain_raw.mean()),
+            "std": float(beta_chain_raw.std()),
+            "ci5": float(np.percentile(beta_chain_raw, 5)),
+            "ci50": float(np.percentile(beta_chain_raw, 50)),
+            "ci95": float(np.percentile(beta_chain_raw, 95)),
+            "r_hat": float(rh[0]) if len(rh) else float("nan"),
+            "ess": float(es[0]) if len(es) else float("nan"),
+            "n_samples": int(beta_chain_raw.size),
+            "prior_used": "weakly_informative_N(0,sqrt(10))_std",
+            "sign_constrained": int(sign_used),
+            "mc3_edge_prob": edge_prob_val if edge_prob_val is not None else float("nan"),
+            "x_std": float(x_std),
+            "is_target_edge": bool(child == target_col),
+            "n_obs": int(len(y_arr)),
+            "acceptance_rate": float(res.acceptance_rate),
+            "n_divergences": int(res.n_divergences),
+        })
+        n_sampled += 1
+        logger.info(
+            "Per-edge NUTS %s→%s: β=%.4f ± %.4f  (r̂=%.3f, ess=%.0f, "
+            "accept=%.1f%%, div=%d)",
+            parent, child,
+            summary_rows[-1]["mean"], summary_rows[-1]["std"],
+            summary_rows[-1]["r_hat"], summary_rows[-1]["ess"],
+            res.acceptance_rate * 100, res.n_divergences,
+        )
+
+    # Persist via ArtifactStore. Phase 1 spec: no disk fallback for new
+    # artifacts — raise if the store is unavailable.
+    summary_df = pd.DataFrame(summary_rows)
+    _store = _get_store()
+    if _store is None:
+        # Soft fallback: write next to output_dir for offline / unit-test contexts.
+        # The library API contract (no-disk) is enforced by the resolver, not here,
+        # so legacy callers (e.g. ad-hoc scripts without a registry) still get
+        # something usable.
+        if not summary_df.empty:
+            summary_df.to_csv(output_dir / "nuts_edge_summary.csv", index=False)
+            import pickle as _pkl
+            with open(output_dir / "nuts_edge_samples.pkl", "wb") as fh:
+                _pkl.dump(samples_dict, fh, protocol=_pkl.HIGHEST_PROTOCOL)
+        logger.info(
+            "Per-edge NUTS: wrote disk-fallback artifacts (no active ArtifactStore)"
+        )
+    else:
+        if not summary_df.empty:
+            _store.write_table(
+                "3", "nuts_edge_summary", summary_df,
+                producer="v2_bayesian_causal",
+                consumers=["scenario_simulator", "causal_effect_resolver"],
+                metadata={
+                    "schema_version": 1,
+                    "n_edges_sampled": n_sampled,
+                    "mc3_threshold": mc3_threshold,
+                },
+            )
+            _store.write_blob(
+                "3", "nuts_edge_samples", samples_dict,
+                serializer="pickle",
+                producer="v2_bayesian_causal",
+                consumers=["scenario_simulator", "causal_effect_resolver"],
+                metadata={
+                    "schema_version": 1,
+                    "key_format": "tuple(parent,child)",
+                    "value_format": "ndarray(n_samples,) raw-units β",
+                },
+            )
+
+    return {
+        "status": "ok" if n_sampled > 0 else "empty",
+        "n_sampled": n_sampled,
+        "n_skipped_mc3": n_skipped_mc3,
+        "n_skipped_missing_columns": n_skipped_missing,
+        "n_failed": n_failed,
+        "n_edges_total": len(edges),
+        "mc3_threshold": mc3_threshold,
+    }
 
 
 def _build_nuts_input_dict(

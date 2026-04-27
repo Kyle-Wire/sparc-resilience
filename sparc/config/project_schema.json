@@ -127,6 +127,12 @@
           "default": true,
           "description": "Whether to estimate Conditional Average Treatment Effects via EconML"
         },
+        "cate_estimator": {
+          "type": "string",
+          "enum": ["auto", "bayesian", "frequentist"],
+          "default": "auto",
+          "description": "CATE estimator backend: bayesian (PyTorch NUTS + RBF spatial GP, returns full posteriors), frequentist (CausalForestDML point estimates), or auto (Bayesian when sparc.causal.nuts is importable)"
+        },
         "ipw_enabled": {
           "type": "boolean",
           "default": true,
@@ -281,7 +287,7 @@
         "overwrite_outputs": {"type": "boolean", "default": false},
         "run_mc_uncertainty": {"type": "boolean", "default": true, "description": "Run Monte-Carlo uncertainty propagation on scenarios"},
         "n_mc_draws":        {"type": "integer", "default": 50, "minimum": 10, "description": "Number of MC draws for uncertainty propagation"},
-        "scenario_mode":     {"type": "string", "enum": ["auto", "dag_coefficient", "model_reprediction", "hybrid", "bayesian"], "default": "auto", "description": "Scenario prediction mode: auto (hybrid if DAG exists, else physics-only), dag_coefficient (MGWR+DAG), model_reprediction (base-model consensus), hybrid (model consensus direct + DAG indirect), bayesian (V2 NUTS posterior)"},
+        "scenario_mode":     {"type": "string", "enum": ["auto", "mode_1_physics", "mode_2_dag_local", "mode_3_full_ensemble", "mode_4_hybrid"], "default": "auto", "description": "Scenario prediction mode: auto (resolver-driven; chooses best available given artifacts), mode_1_physics (resolver + literature priors only), mode_2_dag_local (resolver + DAG + per-edge NUTS posteriors with MC³ pruning), mode_3_full_ensemble (resolver + base-model reprediction blend), mode_4_hybrid (mode_3 direct + mode_2 indirect). Legacy keys (physics/dag_coefficient/model_reprediction/hybrid/bayesian) accepted with one-shot deprecation warning."},
         "temporal_holdout_fraction": {"type": "number", "default": 0.0, "minimum": 0.0, "maximum": 0.5, "description": "Fraction of most recent time steps to hold out for temporal validation (0 = disabled)"},
         "run_sensitivity_analysis": {"type": "boolean", "default": false, "description": "Run global sensitivity analysis on physics priors"},
         "sensitivity_method":       {"type": "string", "enum": ["morris", "sobol"], "default": "morris", "description": "Sensitivity analysis method (morris is faster, sobol is quantitative)"}

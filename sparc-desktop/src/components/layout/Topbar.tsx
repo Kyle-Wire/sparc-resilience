@@ -1,4 +1,5 @@
 import type { HealthResponse } from "@/lib/types";
+import { useArtifactStream } from "@/hooks/useArtifactStream";
 
 interface TopbarProps {
   page: string;
@@ -9,6 +10,20 @@ export default function Topbar({ page, status }: TopbarProps) {
   const sidecarReady = !!status;
   const port = "8008";
   const hasApiKey = !!localStorage.getItem("anthropic-api-key");
+  const { status: liveStatus, lastEvent } = useArtifactStream();
+
+  const liveColor =
+    liveStatus === "open"
+      ? "var(--crimson)"
+      : liveStatus === "connecting"
+      ? "var(--amber)"
+      : "var(--muted)";
+  const liveValue =
+    liveStatus === "open"
+      ? lastEvent
+        ? `live · ${lastEvent.artifact_id}`
+        : "live · idle"
+      : liveStatus;
 
   return (
     <div
@@ -39,6 +54,7 @@ export default function Topbar({ page, status }: TopbarProps) {
           label="Sidecar"
           value={sidecarReady ? `ready · :${port}` : "offline"}
         />
+        <StatusPill color={liveColor} label="Stream" value={liveValue} />
         <StatusPill color="var(--amber)" label="GPU" value="CUDA · 11.8" />
         <StatusPill
           color={hasApiKey ? "var(--purple)" : "var(--muted)"}

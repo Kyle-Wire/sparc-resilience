@@ -596,6 +596,51 @@ def _load_correlogram_bandwidths(
         return None
 
 
+def _resolve_treatment_list(config: dict) -> list[str]:
+    """Resolve ordered treatment names for per-head alpha output.
+
+    Resolution order (Phase 3 of v4):
+
+    1. ``config['causal']['treatments']`` — explicit override list.
+    2. ``causal.dag_file`` — load DAG and pull nodes with ``type='treatment'``
+       in topological order.
+    3. Empty list — caller defaults to ``n_treatments=1`` (legacy mode).
+    """
+    causal_cfg = (config or {}).get("causal", {}) or {}
+    explicit = causal_cfg.get("treatments")
+    if explicit:
+        return [str(t) for t in explicit]
+
+    dag_path = causal_cfg.get("dag_file")
+    if not dag_path:
+        return []
+    try:
+        from sparc.causal.dag_definition import (
+            dag_to_networkx, get_node_roles, load_dag,
+        )
+        import networkx as _nx
+        dag_def = load_dag(dag_path)
+        G = dag_to_networkx(dag_def)
+        roles = get_node_roles(G)
+        treatments = roles.get("treatments", []) or []
+        if not treatments:
+            return []
+        # Stable ordering: topological where possible, lexicographic fallback.
+        try:
+            topo = list(_nx.topological_sort(G))
+            order = {n: i for i, n in enumerate(topo)}
+            treatments = sorted(treatments, key=lambda n: order.get(n, len(order)))
+        except Exception:
+            treatments = sorted(treatments)
+        return [str(t) for t in treatments]
+    except Exception as exc:
+        logger.warning(
+            "Could not resolve treatment list from DAG (%s); "
+            "falling back to single-head alpha.", exc,
+        )
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -703,6 +748,18 @@ def train_neural_meta(
 
     prior_mean = pr_cfg.get("prior_mean", 0.5)
 
+    # ---- Phase 3 (v4): per-treatment alpha heads ----
+    # Resolve the ordered list of treatments from the causal DAG (or
+    # explicit config override).  When unavailable, fall back to a
+    # single-treatment ProcessRateNet — this preserves legacy behavior.
+    treatments = _resolve_treatment_list(config)
+    n_treatments = max(1, len(treatments))
+    if n_treatments > 1:
+        logger.info(
+            "  Phase 3 multi-head alpha enabled: %d treatments → %s",
+            n_treatments, treatments,
+        )
+
     # ---- Alpha supervision targets (land-cover classification) ----
     # Compute once from raw features; used as persistent prior during
     # joint training to prevent α from collapsing when w(s) is free.
@@ -772,6 +829,7 @@ def train_neural_meta(
                     "bounds": pr_cfg.get("bounds", [0.0, 1.0]),
                     "prior_mean": prior_mean,
                 },
+                n_treatments=n_treatments,
             ).to(device)
             return {"model": _m, "surrogates": _s, "process": _p}
 
@@ -916,6 +974,7 @@ def train_neural_meta(
                 "bounds": pr_cfg.get("bounds", [0.0, 1.0]),
                 "prior_mean": pr_cfg.get("prior_mean", 0.5),
             },
+            n_treatments=n_treatments,
         ).to(device)
 
         # FIX A1: Learned source term instead of zeros
@@ -1141,7 +1200,14 @@ def train_neural_meta(
                 base_input = torch.stack(surrogate_preds, dim=1)
 
                 pr_input = b_physics[:, pr_col_idxs]
-                alpha = process_net(pr_input)
+                alpha_full = process_net(pr_input)  # (N, n_treatments)
+                # Collapse to (N, 1) for the meta-learner / loss surface;
+                # mean across heads keeps every head in the gradient path.
+                alpha = (
+                    alpha_full
+                    if alpha_full.shape[-1] == 1
+                    else alpha_full.mean(dim=-1, keepdim=True)
+                )
                 alpha_prior = torch.full_like(alpha, prior_mean)
 
                 # FIX A1: learned source term from physics features
@@ -1276,7 +1342,12 @@ def train_neural_meta(
             )
             full_base_input = torch.stack(full_surr_preds, dim=1)
             full_pr = tensors["physics_feats"][:, pr_col_idxs]
-            full_alpha = process_net(full_pr)
+            full_alpha_full = process_net(full_pr)
+            full_alpha = (
+                full_alpha_full
+                if full_alpha_full.shape[-1] == 1
+                else full_alpha_full.mean(dim=-1, keepdim=True)
+            )
 
         mean_pred, std_pred = model.predict_with_uncertainty(
             base_preds=full_base_input,
@@ -1338,6 +1409,7 @@ def train_neural_meta(
             "bounds": pr_cfg.get("bounds", [0.0, 1.0]),
             "prior_mean": pr_cfg.get("prior_mean", 0.5),
         },
+        n_treatments=n_treatments,
     ).to(device)
 
     final_model = SPARCMetaLearner(
@@ -1547,7 +1619,12 @@ def train_neural_meta(
             base_input = torch.stack(surrogate_preds, dim=1)
 
             pr_input = b_phys[:, pr_col_idxs]
-            alpha = final_process(pr_input)
+            alpha_full = final_process(pr_input)
+            alpha = (
+                alpha_full
+                if alpha_full.shape[-1] == 1
+                else alpha_full.mean(dim=-1, keepdim=True)
+            )
             alpha_prior = torch.full_like(alpha, prior_mean)
 
             # FIX A1: learned source term
@@ -1713,7 +1790,12 @@ def train_neural_meta(
                 base_input = torch.stack(surrogate_preds, dim=1)
 
                 pr_input = b_phys[:, pr_col_idxs]
-                alpha = final_process(pr_input)
+                alpha_full = final_process(pr_input)
+                alpha = (
+                    alpha_full
+                    if alpha_full.shape[-1] == 1
+                    else alpha_full.mean(dim=-1, keepdim=True)
+                )
                 alpha_prior = torch.full_like(alpha, prior_mean)
 
                 # FIX A1: learned source term
@@ -1852,10 +1934,21 @@ def train_neural_meta(
     final_process.eval()
     with torch.no_grad():
         alpha_all = final_process(tensors["physics_feats"][:, pr_col_idxs])
-    alpha_field_np = alpha_all.cpu().numpy().squeeze(-1)
+    # Phase 3 (v4): alpha_all has shape (N, n_treatments).  The legacy
+    # ``alpha_field.npy`` artifact remains 1-D (collapsed across heads)
+    # so existing scenario-simulator readers are unaffected; the full
+    # multi-head tensor is mirrored into artifacts.db with schema_version=2.
+    alpha_full_np = alpha_all.cpu().numpy()  # (N, n_treatments)
+    if alpha_full_np.shape[-1] == 1:
+        alpha_field_np = alpha_full_np.squeeze(-1)
+    else:
+        alpha_field_np = alpha_full_np.mean(axis=-1)
     np.save(artifact_dir / "alpha_field.npy", alpha_field_np)
     np.save(artifact_dir / "alpha_field_coords.npy", coords)
-    logger.info("  Saved alpha_field.npy (%d points)", len(coords))
+    logger.info(
+        "  Saved alpha_field.npy (%d points, %d treatment heads)",
+        len(coords), alpha_full_np.shape[-1],
+    )
 
     # Save cardinal neighbors and grid spacing for PDE forward solver
     cardinal_np = tensors["cardinal_idx"].cpu().numpy()
@@ -1884,8 +1977,24 @@ def train_neural_meta(
     # Mirror numpy artifacts to artifacts.db (pickled dicts/arrays).
     if _store is not None:
         try:
-            _store.write_blob("2", "v2_alpha_field", alpha_field_np,
-                              serializer="pickle", producer="v2_neural_training")
+            # Phase 3 (v4): persist full multi-head alpha (N, n_treatments)
+            # alongside the collapsed (N,) field.  ``schema_version=2`` and
+            # ``treatments`` metadata let the resolver index by treatment.
+            _store.write_blob(
+                "2", "v2_alpha_field", alpha_full_np,
+                serializer="pickle", producer="v2_neural_training",
+                consumers=[
+                    "scenario_simulator",
+                    "causal_effect_resolver",
+                ],
+                metadata={
+                    "schema_version": 2,
+                    "shape": list(alpha_full_np.shape),
+                    "treatments": treatments if n_treatments > 1 else [],
+                    "n_treatments": n_treatments,
+                    "collapse": "mean" if n_treatments > 1 else "identity",
+                },
+            )
             _store.write_blob("2", "v2_alpha_field_coords", coords,
                               serializer="pickle", producer="v2_neural_training")
             _store.write_blob("2", "v2_cardinal_neighbors", cardinal_np,
@@ -2062,7 +2171,12 @@ def _export_v2_outputs(
 
     # --- 2. Process rate (alpha) ---
     pr_input = phys[:, pr_col_idxs]
-    alpha = final_process(pr_input)  # (N, 1)
+    alpha_full = final_process(pr_input)  # (N, n_treatments)
+    alpha = (
+        alpha_full
+        if alpha_full.shape[-1] == 1
+        else alpha_full.mean(dim=-1, keepdim=True)
+    )
 
     # --- 3. Full meta-learner inference ---
     T_pred_norm, exceedance_list, attn_weights = final_model(
@@ -2234,7 +2348,12 @@ def _export_v2_outputs(
 
             base_in = torch.stack([gwr_p, gwrf_p, ggp_p], dim=1)
             pr_in = phys_mod[:, pr_col_idxs]
-            a = final_process(pr_in)
+            a_full = final_process(pr_in)
+            a = (
+                a_full
+                if a_full.shape[-1] == 1
+                else a_full.mean(dim=-1, keepdim=True)
+            )
 
             t_pred, _, _ = final_model(
                 base_preds=base_in,
@@ -2294,7 +2413,12 @@ def _export_v2_outputs(
 
         base_in = torch.stack([gwr_p, gwrf_p, ggp_p], dim=1)
         pr_in = phys_grad[:, pr_col_idxs]
-        a = final_process(pr_in)
+        a_full = final_process(pr_in)
+        a = (
+            a_full
+            if a_full.shape[-1] == 1
+            else a_full.mean(dim=-1, keepdim=True)
+        )
 
         # Build extended features with grad-tracked original portion
         n_orig = phys_grad.shape[1]
