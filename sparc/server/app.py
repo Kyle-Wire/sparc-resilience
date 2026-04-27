@@ -1371,6 +1371,21 @@ async def get_correlogram_data():
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
+    # Prefer artifacts.db; fall back to legacy on-disk JSON.
+    if state.registry is not None:
+        try:
+            from sparc.registry.run_registry import set_active_registry
+            from sparc.registry.store import ArtifactStore
+            set_active_registry(state.registry)
+            try:
+                store = ArtifactStore(state.registry)
+                if store.has("0", "correlogram_results"):
+                    return store.read_any("0", "correlogram_results")
+            finally:
+                set_active_registry(None)
+        except Exception:
+            pass
+
     candidates = [
         paths.stage0_dir / "correlogram_analysis_results.json",
         paths.stage0_dir / "correlogram_results.json",
@@ -2217,12 +2232,24 @@ async def get_report_data():
 
     # Correlogram summary (Stage 0)
     if paths:
-        corr_path = paths.stage0_dir / "correlogram_analysis_results.json"
-        if not corr_path.exists():
-            corr_path = paths.stage0_dir / "correlogram_results.json"
-        if corr_path.exists():
-            with open(corr_path, "r", encoding="utf-8") as fh:
-                corr_data = _json.load(fh)
+        corr_data = None
+        # Prefer artifacts.db.
+        if state.registry is not None:
+            try:
+                from sparc.registry.store import ArtifactStore
+                _store = ArtifactStore(state.registry)
+                if _store.has("0", "correlogram_results"):
+                    corr_data = _store.read_any("0", "correlogram_results")
+            except Exception:
+                corr_data = None
+        if corr_data is None:
+            corr_path = paths.stage0_dir / "correlogram_analysis_results.json"
+            if not corr_path.exists():
+                corr_path = paths.stage0_dir / "correlogram_results.json"
+            if corr_path.exists():
+                with open(corr_path, "r", encoding="utf-8") as fh:
+                    corr_data = _json.load(fh)
+        if corr_data is not None:
             # Extract just the summary metrics per variable
             individual = corr_data.get("individual_results", {})
             report["correlogram"] = {
@@ -4163,7 +4190,32 @@ async def get_results_availability():
     }
 
     out: dict = {}
+    # Cheap check: does the artifacts.db know about a given (stage, id)?
+    _db_artifacts: set[tuple[str, str]] = set()
+    if state.registry is not None:
+        try:
+            _man = state.registry.manifest
+            for stage_obj in _man.stages.values():
+                for art in stage_obj.artifacts.values():
+                    if not art.partial:
+                        _db_artifacts.add((str(stage_obj.stage), art.id))
+        except Exception:
+            _db_artifacts = set()
+
+    # Endpoints whose primary source is now artifacts.db.
+    _db_endpoints = {
+        "/results/correlogram": ("0", "correlogram_results"),
+    }
+
     for endpoint, candidates in checks.items():
+        # Db-backed endpoints: prefer registry presence.
+        if endpoint in _db_endpoints and _db_endpoints[endpoint] in _db_artifacts:
+            stage_id, art_id = _db_endpoints[endpoint]
+            out[endpoint] = {
+                "available": True,
+                "source": f"artifacts.db:{stage_id}:{art_id}",
+            }
+            continue
         # CATE map special-case: any .npy under stage3_dir starting with spatial_cate_
         if endpoint == "/results/causal/cate_map":
             available = any(paths.stage3_dir.glob("spatial_cate_multiplier_*.npy")) \

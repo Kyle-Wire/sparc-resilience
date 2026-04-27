@@ -132,135 +132,13 @@ class CorrelogramSpatialAnalyzer:
             optimal_bandwidth = optimal_block_size * 0.5
         effective_range = optimal_bandwidth
         
-        # Save enhanced correlogram plot manually
-        try:
-            import matplotlib.pyplot as plt
-            import numpy as np
-            plt.ioff()  # Turn off interactive mode
-            
-            # Create an enhanced correlogram plot
-            correlogram_data = correlogram_results['correlogram_results']
-            if correlogram_data:
-                # Handle both dictionary format and list format
-                if isinstance(correlogram_data, dict):
-                    # New format: dictionary with arrays
-                    distances = np.array(correlogram_data['lag_distances'])
-                    morans_i = np.array(correlogram_data['morans_i_values'])
-                    z_scores = np.array(correlogram_data['z_scores'])
-                    p_values = np.array(correlogram_data['p_values'])
-                elif isinstance(correlogram_data, list):
-                    # Legacy format: list of dictionaries
-                    distances = np.array([r['lag_distance'] for r in correlogram_data])
-                    morans_i = np.array([r['morans_i'] for r in correlogram_data])
-                    z_scores = np.array([r['z_score'] for r in correlogram_data])
-                    p_values = np.array([r['p_value'] for r in correlogram_data])
-                else:
-                    raise ValueError(f"Unexpected correlogram_data format: {type(correlogram_data)}")
-                
-                significant = [p < 0.05 for p in p_values]  # Calculate significance
-                
-                # Calculate quartiles and statistics
-                moran_quartiles = np.percentile(morans_i, [25, 50, 75])
-                distance_quartiles = np.percentile(distances, [25, 50, 75])
-                max_moran_idx = np.argmax(morans_i)
-                
-                # Create enhanced plot
-                fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
-                
-                # Main correlogram plot
-                colors = ['#d62728' if sig else '#1f77b4' for sig in significant]
-                sizes = [60 if sig else 30 for sig in significant]
-                scatter = ax1.scatter(distances, morans_i, c=colors, s=sizes, alpha=0.7, edgecolors='black', linewidth=0.5)
-                
-                # Add horizontal reference lines
-                ax1.axhline(y=0, color='black', linestyle='--', alpha=0.5, label='No Autocorrelation')
-                ax1.axhline(y=moran_quartiles[1], color='orange', linestyle=':', alpha=0.7, label=f"Median Moran's I ({moran_quartiles[1]:.3f})")
-                
-                # Add vertical BLOCK SIZE lines (main CV options)
-                ax1.axvline(x=distance_quartiles[0], color='blue', linestyle='-', linewidth=2, alpha=0.8, label=f'Q1 Block Size ({distance_quartiles[0]:.1f}m)')
-                ax1.axvline(x=distance_quartiles[1], color='purple', linestyle='-', linewidth=2, alpha=0.8, label=f'Median Block Size ({distance_quartiles[1]:.1f}m)')
-                ax1.axvline(x=distance_quartiles[2], color='navy', linestyle='-', linewidth=2, alpha=0.8, label=f'Q3 Block Size ({distance_quartiles[2]:.1f}m)')
-                
-                # Add smaller red BANDWIDTH reference lines
-                ax1.axvline(x=optimal_bandwidth * 0.8, color='red', linestyle=':', linewidth=1, alpha=0.7, label=f'GGPGAM BW ({optimal_bandwidth * 0.8:.1f}m)')
-                ax1.axvline(x=optimal_bandwidth, color='red', linestyle='-', linewidth=1, alpha=0.7, label=f'GWR BW ({optimal_bandwidth:.1f}m)')
-                ax1.axvline(x=optimal_bandwidth * 1.2, color='red', linestyle='--', linewidth=1, alpha=0.7, label=f'GWRF BW ({optimal_bandwidth * 1.2:.1f}m)')
-                
-                # Highlight maximum spatial autocorrelation
-                ax1.scatter(distances[max_moran_idx], morans_i[max_moran_idx], 
-                           s=150, c='yellow', marker='*', edgecolors='black', linewidth=2,
-                           label=f'Max Spatial AC ({morans_i[max_moran_idx]:.3f} at {distances[max_moran_idx]:.1f}m)')
-                
-                ax1.set_xlabel('Distance (m)', fontsize=12)
-                ax1.set_ylabel("Moran's I (Spatial Autocorrelation)", fontsize=12)
-                ax1.set_title(f'Enhanced Spatial Correlogram - {variable_name}', fontsize=14, fontweight='bold')
-                ax1.grid(True, alpha=0.3)
-                ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-                
-                # Add quartile analysis subplot - now showing BLOCK SIZE options
-                quartile_distances = [0, distance_quartiles[0], distance_quartiles[1], distance_quartiles[2], distances.max()]
-                quartile_labels = ['Small\n(0-Q1)', 'Medium\n(Q1-Median)', 'Large\n(Median-Q3)', 'XLarge\n(Q3-Max)']
-                quartile_colors = ['#e74c3c', '#f39c12', '#f1c40f', '#27ae60']
-                
-                # Calculate mean Moran's I in each block size quartile
-                quartile_morans = []
-                block_sizes = [distance_quartiles[0], distance_quartiles[1], distance_quartiles[2], distances.max()]
-                for i in range(len(quartile_distances)-1):
-                    mask = (distances >= quartile_distances[i]) & (distances < quartile_distances[i+1])
-                    if np.any(mask):
-                        quartile_morans.append(np.mean(morans_i[mask]))
-                    else:
-                        quartile_morans.append(0)
-                
-                bars = ax2.bar(quartile_labels, quartile_morans, color=quartile_colors, alpha=0.7, edgecolor='black')
-                ax2.set_ylabel("Mean Moran's I", fontsize=12)
-                ax2.set_xlabel('CV Block Size Categories', fontsize=12)
-                ax2.set_title('Spatial Autocorrelation by CV Block Size Options', fontsize=12, fontweight='bold')
-                ax2.grid(True, alpha=0.3)
-                
-                # Add value labels on bars with block sizes
-                for bar, value, block_size in zip(bars, quartile_morans, block_sizes):
-                    height = bar.get_height()
-                    ax2.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                            f'{value:.3f}\n({block_size:.0f}m)', ha='center', va='bottom', fontweight='bold', fontsize=9)
-                
-                # Add recommended block sizes and bandwidths text box
-                textstr = '\n'.join([
-                    f'Statistical Summary:',
-                    f'â€¢ Max Moran\'s I: {morans_i.max():.3f}',
-                    f'â€¢ Effective Range: {optimal_bandwidth:.1f}m',
-                    f'â€¢ Significant Lags: {sum(significant)}/{len(significant)}',
-                    f'',
-                    f'CV Block Size Options:',
-                    f'â€¢ Small: {distance_quartiles[0]:.0f}m (Q1)',
-                    f'â€¢ Medium: {distance_quartiles[1]:.0f}m (Median)', 
-                    f'â€¢ Large: {distance_quartiles[2]:.0f}m (Q3)',
-                    f'â€¢ X-Large: {distances.max():.0f}m (Max)',
-                    f'',
-                    f'Model Bandwidths (red lines):',
-                    f'â€¢ GGPGAM: {optimal_bandwidth * 0.8:.1f}m',
-                    f'â€¢ GWR: {optimal_bandwidth:.1f}m',
-                    f'â€¢ GWRF: {optimal_bandwidth * 1.2:.1f}m',
-                    f'',
-                    f'Recommended: Use block size â‰¥ 2x',
-                    f'largest bandwidth ({optimal_bandwidth * 1.2 * 2:.0f}m)'
-                ])
-                props = dict(boxstyle='round', facecolor='lightblue', alpha=0.8)
-                ax2.text(0.02, 0.98, textstr, transform=ax2.transAxes, fontsize=9,
-                        verticalalignment='top', bbox=props)
-                
-                plt.tight_layout()
-                
-                # Save plot
-                plot_path = os.path.join(output_dir, f'{variable_name}_correlogram.png')
-                plt.savefig(plot_path, dpi=300, bbox_inches='tight')
-                plt.close()  # Close the figure to free memory
-                
-                print(f"  Enhanced correlogram plot saved: {plot_path}")
-            
-        except Exception as e:
-            print(f"  Warning: Could not save correlogram plot: {e}")
-        
+        # NOTE: Per-variable correlogram plots used to be saved to disk here
+        # via plt.savefig(). They are now generated on demand from the
+        # comprehensive_results struct via the figure renderer registered
+        # in `sparc.report.figures.correlogram` (figure_kind="correlogram").
+        # The data needed for plotting is preserved in the
+        # ``correlogram_results`` dict written to ``artifacts.db``.
+
         # Determine best kernel based on correlogram pattern
         correlogram_data = correlogram_results['correlogram_results']
         
@@ -485,12 +363,28 @@ def main(fast_mode=False):
     corr_recs = profiler.recommend_parameters().get("correlogram", {})
     print(profiler.summary())
     
-    # Save profile for downstream stages
-    import json as _json
-    profile_path = os.path.join(stage0_dir, 'dataset_profile.json')
-    with open(profile_path, 'w') as _fp:
-        _json.dump(profile, _fp, indent=2)
-    print(f"Dataset profile saved to: {profile_path}")
+    # Save profile for downstream stages (db-resident).
+    import json as _json  # noqa: F401  (kept for legacy callers below)
+    try:
+        from sparc.registry.store import get_active_store
+        _store = get_active_store()
+    except Exception:  # noqa: BLE001
+        _store = None
+    if _store is not None:
+        _store.write_struct(
+            stage="0",
+            artifact_id="dataset_profile",
+            payload=profile,
+            producer="correlogram_analysis.main",
+            consumers=["server:/results/correlogram", "pipeline:stage0b"],
+        )
+        print("Dataset profile written to artifacts.db (stage=0, id=dataset_profile)")
+    else:
+        # Back-compat: no active registry (e.g. ad-hoc invocation).
+        profile_path = os.path.join(stage0_dir, 'dataset_profile.json')
+        with open(profile_path, 'w') as _fp:
+            _json.dump(profile, _fp, indent=2)
+        print(f"Dataset profile saved to: {profile_path}")
     
     # Initialize analyzer with data-driven parameters (no hardcoded 3000 m cap)
     if fast_mode:
@@ -585,9 +479,10 @@ def main(fast_mode=False):
         }
     }
     
-    # Save comprehensive results (this replaces variogram_analysis_results.json)
-    results_path = os.path.join(stage0_dir, 'correlogram_analysis_results.json')
-    
+    # Save comprehensive results (replaces variogram_analysis_results.json).
+    # Now persisted via ArtifactStore below; legacy disk path retained only
+    # as a fallback when no active registry is installed.
+
     def convert_numpy_types(obj):
         """Convert numpy types to Python types for JSON serialization"""
         if isinstance(obj, np.ndarray):
@@ -607,11 +502,14 @@ def main(fast_mode=False):
     
     # Convert the entire results structure
     json_safe_results = convert_numpy_types(comprehensive_results)
-    
-    with open(results_path, 'w') as f:
-        json.dump(json_safe_results, f, indent=2)
-    
-    # Create summary CSV for easy review
+
+    # Persist comprehensive results + summary table to artifacts.db.
+    try:
+        from sparc.registry.store import get_active_store
+        _store = get_active_store()
+    except Exception:  # noqa: BLE001
+        _store = None
+
     summary_data = []
     for variable, result in all_results.items():
         summary_data.append({
@@ -623,38 +521,56 @@ def main(fast_mode=False):
             'Max_Moran_I': result['max_moran_i'],
             'Significant_Lags': result['significant_lags']
         })
-    
     summary_df = pd.DataFrame(summary_data)
-    summary_df.to_csv(os.path.join(stage0_dir, 'correlogram_summary.csv'), index=False)
-    
-    # Create spatial CV configuration summary with UTF-8 encoding
-    cv_summary_path = os.path.join(stage0_dir, 'spatial_cv_configuration.txt')
-    with open(cv_summary_path, 'w', encoding='utf-8') as f:
-        f.write("SPATIAL CV CONFIGURATION FROM CORRELOGRAM ANALYSIS\n")
-        f.write("=" * 55 + "\n\n")
-        
-        f.write("MODEL BANDWIDTHS:\n")
-        for model, bw in model_bandwidths.items():
-            if bw is None:
-                f.write(f"  {model}: Global model (no bandwidth)\n")
-            else:
-                f.write(f"  {model}: {bw:.1f}m\n")
-        f.write("\n")
-        
-        f.write(f"OPTIMAL CV BLOCK SIZE: {optimal_cv_block_size:.0f}m\n\n")
-        
-        f.write("BLOCK SIZE VALIDATION SUMMARY:\n")
-        f.write("(This ensures CV blocks are large enough to prevent spatial leakage)\n\n")
-        
-        # Save validation summary
-        # cv_validation_results is {block_size: {model_name: status_str}}
-        for block_size, model_statuses in cv_validation_results.items():
-            f.write(f"Block size {float(block_size):.0f}m:\n")
-            for model_name, status in model_statuses.items():
-                bw = model_bandwidths.get(model_name)
-                bw_str = f" (bandwidth: {bw:.0f}m)" if bw is not None else " (global)"
-                f.write(f"  {model_name}{bw_str}: {status}\n")
-            f.write("\n")
+
+    if _store is not None:
+        _store.write_struct(
+            stage="0",
+            artifact_id="correlogram_results",
+            payload=json_safe_results,
+            producer="correlogram_analysis.main",
+            consumers=[
+                "server:/results/correlogram",
+                "report:correlogram",
+                "figure:correlogram",
+            ],
+        )
+        _store.write_table(
+            stage="0",
+            artifact_id="correlogram_summary",
+            df=summary_df,
+            producer="correlogram_analysis.main",
+            consumers=["server:/results/correlogram"],
+        )
+        print("Correlogram results + summary written to artifacts.db (stage=0)")
+    else:
+        # Back-compat path for ad-hoc invocation without an active registry.
+        results_path = os.path.join(stage0_dir, 'correlogram_analysis_results.json')
+        with open(results_path, 'w') as f:
+            json.dump(json_safe_results, f, indent=2)
+        summary_df.to_csv(os.path.join(stage0_dir, 'correlogram_summary.csv'), index=False)
+
+    # Persist CV-validation summary as a struct (rendered to text on demand
+    # via the report layer). The legacy ``spatial_cv_configuration.txt`` is
+    # no longer written from the pipeline.
+    cv_config_payload = {
+        "model_bandwidths": {
+            k: (None if v is None else float(v)) for k, v in model_bandwidths.items()
+        },
+        "optimal_cv_block_size_m": float(optimal_cv_block_size),
+        "block_size_validation": {
+            str(bs): dict(model_statuses)
+            for bs, model_statuses in cv_validation_results.items()
+        },
+    }
+    if _store is not None:
+        _store.write_struct(
+            stage="0",
+            artifact_id="spatial_cv_configuration",
+            payload=cv_config_payload,
+            producer="correlogram_analysis.main",
+            consumers=["server:/results/correlogram", "report:correlogram"],
+        )
     
     print(f"\n=== Correlogram-Based Spatial Analysis Complete ===")
     print(f"Results saved to: {stage0_dir}/")
@@ -716,6 +632,21 @@ def _auto_wire_bandwidths(all_results, model_bandwidths, optimal_cv_block_size, 
 
     with open(config_path, 'w') as f:
         json.dump(pipeline_cfg, f, indent=2)
+
+    # Mirror to artifacts.db for queryability / inspection.
+    try:
+        from sparc.registry.store import get_active_store
+        _store = get_active_store()
+    except Exception:  # noqa: BLE001
+        _store = None
+    if _store is not None:
+        _store.write_struct(
+            stage="0",
+            artifact_id="pipeline_config",
+            payload=pipeline_cfg,
+            producer="correlogram_analysis._auto_wire_bandwidths",
+            consumers=["pipeline:stage1+"],
+        )
 
     print(f"    Saved to: {config_path}")
 

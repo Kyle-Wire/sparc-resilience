@@ -345,6 +345,85 @@ class ArtifactStore:
         return self._deserialize(data, serializer=serializer)
 
     # ------------------------------------------------------------------
+    # Unified read (handles all storage_kinds, incl. legacy_path)
+    # ------------------------------------------------------------------
+
+    def read_any(self, stage: str | int, artifact_id: str) -> Any:
+        """Read an artifact regardless of where it lives.
+
+        Resolves by ``storage_kind``:
+        - ``table``        -> :meth:`read_table`
+        - ``struct``       -> :meth:`read_struct`
+        - ``blob_inline`` / ``blob_external`` -> :meth:`read_blob`
+        - ``legacy_path``  -> deserialized from disk based on ``format``
+          (json, csv, parquet, gpkg, npy, pkl, joblib, pt, txt, html).
+
+        This is the single read API consumer code should use during the
+        migration: it works whether the artifact is db-resident or still
+        on disk from a legacy run.
+        """
+        entry = self.registry.lookup(stage, artifact_id)
+        if entry is None:
+            raise ArtifactStoreError(
+                f"Unknown artifact: stage={stage} id={artifact_id}"
+            )
+
+        kind = entry.storage_kind
+        if kind == "table":
+            return self.read_table(stage, artifact_id)
+        if kind == "struct":
+            return self.read_struct(stage, artifact_id)
+        if kind in ("blob_inline", "blob_external"):
+            return self.read_blob(stage, artifact_id)
+        if kind == "legacy_path":
+            return self._read_legacy_path(entry)
+        raise ArtifactStoreError(
+            f"Unsupported storage_kind: {kind}"
+        )
+
+    def _read_legacy_path(self, entry: Any) -> Any:
+        """Best-effort deserialize for on-disk legacy artifacts."""
+        path = self.registry.resolve(entry)
+        if not path.exists():
+            raise ArtifactStoreError(f"Legacy file missing: {path}")
+        fmt = entry.format
+        if fmt in ("json", "geojson"):
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        if fmt == "csv":
+            import pandas as pd
+            return pd.read_csv(path)
+        if fmt == "parquet":
+            import pandas as pd
+            return pd.read_parquet(path)
+        if fmt == "gpkg":
+            import geopandas as gpd
+            return gpd.read_file(path)
+        if fmt == "npy":
+            import numpy as np
+            return np.load(path, allow_pickle=True)
+        if fmt == "pkl":
+            with open(path, "rb") as f:
+                return pickle.load(f)
+        if fmt == "joblib":
+            import joblib  # type: ignore[import-not-found]
+            return joblib.load(path)
+        if fmt == "pt":
+            import torch  # type: ignore[import-not-found]
+            return torch.load(path, weights_only=False)
+        if fmt in ("txt", "html"):
+            return path.read_text(encoding="utf-8")
+        # Unknown format: return raw bytes.
+        return path.read_bytes()
+
+    def has(self, stage: str | int, artifact_id: str) -> bool:
+        """Return True if the artifact exists and is readable."""
+        entry = self.registry.lookup(stage, artifact_id)
+        if entry is None or entry.partial:
+            return False
+        return self.registry.is_available(stage, artifact_id)
+
+    # ------------------------------------------------------------------
     # Maintenance
     # ------------------------------------------------------------------
 

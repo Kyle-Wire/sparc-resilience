@@ -72,6 +72,10 @@ def register_figure_renderer(figure_kind: str) -> Callable[[FigureRenderer], Fig
 
 
 def list_figure_kinds() -> list[str]:
+    try:
+        import sparc.report.figures  # noqa: F401
+    except Exception:
+        pass
     return sorted(_FIGURE_RENDERERS.keys())
 
 
@@ -235,6 +239,13 @@ def render_png(
     ``"trace_plot"``).  Renderers are registered in module-level scope by
     stage migration code via :func:`register_figure_renderer`.
     """
+    # Lazy import so the built-in figure pack self-registers on first use
+    # without creating an import cycle at module load time.
+    try:
+        import sparc.report.figures  # noqa: F401
+    except Exception:
+        pass
+
     fn = _FIGURE_RENDERERS.get(figure_kind)
     if fn is None:
         raise RenderError(

@@ -242,11 +242,23 @@ def cmd_run(args):
         from sparc.run.pipeline_configurator import PipelineConfigurator
         configurator = PipelineConfigurator(stage1_dir=str(paths.stage0_dir))
 
-        # If dataset_profile.json exists, apply profiler recommendations
-        profile_path = paths.stage0_dir / 'dataset_profile.json'
-        if profile_path.exists():
-            with open(profile_path) as _f:
-                _profile = json.load(_f)
+        # Prefer artifacts.db; fall back to legacy on-disk JSON.
+        _profile = None
+        try:
+            from sparc.registry.store import get_active_store
+            _store = get_active_store()
+            if _store is not None and _store.has("0", "dataset_profile"):
+                _profile = _store.read_any("0", "dataset_profile")
+        except Exception as _exc:  # noqa: BLE001
+            print(f"  Warning: could not read dataset_profile from artifacts.db: {_exc}")
+
+        if _profile is None:
+            profile_path = paths.stage0_dir / 'dataset_profile.json'
+            if profile_path.exists():
+                with open(profile_path) as _f:
+                    _profile = json.load(_f)
+
+        if _profile is not None:
             print(f"  Dataset tier: {_profile.get('size_tier', 'unknown').upper()}")
 
             try:
