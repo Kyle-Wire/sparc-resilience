@@ -132,7 +132,22 @@ def check_stage_completion(output_dir: str, stage: str) -> Tuple[bool, Optional[
         return False, None
     
     elif stage == 'spatial_cv':
-        # Check for spatial CV output files
+        # Prefer artifacts.db: presence of OOF predictions table indicates completion.
+        try:
+            from sparc.registry.store import get_active_store
+            _store = get_active_store()
+            if _store is not None and _store.has("2", "oof_predictions"):
+                # Best-effort timestamp from the manifest entry.
+                try:
+                    entry = _store.registry.lookup("2", "oof_predictions")
+                    ts = getattr(entry, "created_at", None)
+                except Exception:
+                    ts = None
+                return True, ts
+        except Exception:
+            pass
+
+        # Check for spatial CV output files (legacy disk fallback)
         required_files = [
             'oof_predictions.csv',
             'performance_summary.csv',

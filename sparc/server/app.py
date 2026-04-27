@@ -1492,6 +1492,36 @@ async def get_model_performance():
                 "rmse": ens.get("rmse"),
             })
 
+    # --- artifacts.db (preferred) ---
+    if not models and state.registry is not None:
+        try:
+            from sparc.registry.run_registry import set_active_registry
+            from sparc.registry.store import ArtifactStore
+            set_active_registry(state.registry)
+            try:
+                _store = ArtifactStore(state.registry)
+                if _store.has("2", "ensemble_results"):
+                    data = _store.read_any("2", "ensemble_results")
+                    base = data.get("base_models", {})
+                    for name, metrics in base.items():
+                        if isinstance(metrics, dict) and metrics.get("r2") is not None:
+                            models.append({
+                                "name": name.upper(),
+                                "r2": metrics["r2"],
+                                "rmse": metrics.get("rmse"),
+                            })
+                    ens = data.get("final_ensemble") or data.get("meta_ensemble_best")
+                    if isinstance(ens, dict) and ens.get("r2") is not None:
+                        models.append({
+                            "name": "Ensemble",
+                            "r2": ens["r2"],
+                            "rmse": ens.get("rmse"),
+                        })
+            finally:
+                set_active_registry(None)
+        except Exception:
+            pass
+
     # --- Disk fallback ---
     if not models and state.project_config is not None:
         from sparc.run.pipeline_paths import PipelinePaths
@@ -1545,10 +1575,26 @@ async def get_spatial_cv_predictions():
 
     gdf = None
 
-    if gpkg_path.exists():
+    # Prefer artifacts.db.
+    if state.registry is not None:
+        try:
+            from sparc.registry.run_registry import set_active_registry
+            from sparc.registry.store import ArtifactStore
+            set_active_registry(state.registry)
+            try:
+                _store = ArtifactStore(state.registry)
+                if _store.has("2", "spatial_cv_predictions"):
+                    gdf = _store.read_any("2", "spatial_cv_predictions")
+                    print("[SPARC] Spatial CV predictions loaded from artifacts.db")
+            finally:
+                set_active_registry(None)
+        except Exception as _e:
+            print(f"[SPARC] Spatial CV store read failed: {_e}")
+
+    if gdf is None and gpkg_path.exists():
         import geopandas as gpd
         gdf = gpd.read_file(gpkg_path)
-    else:
+    elif gdf is None:
         # ---- Fallback: reconstruct from CSV + source geometry ----
         csv_path = paths.stage2_dir / "final_ensemble_predictions.csv"
         oof_path = paths.stage2_dir / "optimized_oof_predictions.csv"
@@ -2301,9 +2347,20 @@ async def get_report_data():
 
     # Spatial CV performance
     if paths:
-        oof_path = paths.stage2_dir / "optimized_oof_predictions.csv"
-        if oof_path.exists():
-            oof_df = pd.read_csv(oof_path)
+        oof_df = None
+        if state.registry is not None:
+            try:
+                from sparc.registry.store import ArtifactStore
+                _store = ArtifactStore(state.registry)
+                if _store.has("2", "oof_predictions"):
+                    oof_df = _store.read_any("2", "oof_predictions")
+            except Exception:
+                oof_df = None
+        if oof_df is None:
+            oof_path = paths.stage2_dir / "optimized_oof_predictions.csv"
+            if oof_path.exists():
+                oof_df = pd.read_csv(oof_path)
+        if oof_df is not None:
             report["spatial_cv_models"] = list(oof_df.columns)
 
     # Causal coefficients (Stage 3)
@@ -4204,6 +4261,8 @@ async def get_results_availability():
     _db_endpoints = {
         "/results/correlogram": ("0", "correlogram_results"),
         "/results/gwen": ("1", "gwen_variable_importance"),
+        "/results/model_performance": ("2", "ensemble_results"),
+        "/results/spatial_cv/predictions": ("2", "spatial_cv_predictions"),
     }
 
     for endpoint, candidates in checks.items():

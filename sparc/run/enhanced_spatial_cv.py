@@ -941,18 +941,28 @@ class EnhancedSpatialCV:
             print(f"SEQUENTIAL MODE: Processing folds one at a time")
             print(f"{'='*80}\n")
             oof_predictions = self._sequential_cv_training(X, y, coords, models, model_names, folds, feature_names)
-        # Save OOF predictions
+        # Save OOF predictions to artifacts.db (single source of truth).
         oof_df = pd.DataFrame(oof_predictions, columns=model_names)
         _oof_path = os.path.join(output_dir, 'optimized_oof_predictions.csv')
-        oof_df.to_csv(_oof_path, index=False)
         try:
-            from sparc.registry.run_registry import register_path
-            register_path(_oof_path, stage="2", artifact_id="oof_predictions",
-                          format="csv", producer="enhanced_spatial_cv")
+            from sparc.registry.store import get_active_store
+            _store = get_active_store()
+            if _store is not None:
+                _store.write_table(
+                    "2", "oof_predictions", oof_df,
+                    producer="enhanced_spatial_cv",
+                    consumers=["server:/results/spatial_cv/predictions"],
+                )
+            else:
+                # No active store: fall back to disk write.
+                oof_df.to_csv(_oof_path, index=False)
+                from sparc.registry.run_registry import register_path
+                register_path(_oof_path, stage="2", artifact_id="oof_predictions",
+                              format="csv", producer="enhanced_spatial_cv")
         except Exception:
-            pass
+            oof_df.to_csv(_oof_path, index=False)
 
-        # Save spatial predictions as GeoPackage (with geometry from input data)
+        # Save spatial predictions as a geometry-bearing table in artifacts.db.
         try:
             import geopandas as gpd
             # Access the source GeoDataFrame from the parent pipeline
@@ -973,18 +983,34 @@ class EnhancedSpatialCV:
                     if target_col in src_data.columns:
                         gpkg_gdf[f'residual_{mname}'] = oof_predictions[:, i] - src_data[target_col].values
                 gpkg_path = os.path.join(output_dir, 'spatial_cv_predictions.gpkg')
-                gpkg_gdf.to_file(gpkg_path, driver='GPKG')
-                print(f"Spatial CV predictions saved to: {gpkg_path}")
+                wrote_to_store = False
                 try:
-                    from sparc.registry.run_registry import register_path
-                    register_path(
-                        gpkg_path, stage="2", artifact_id="spatial_cv_predictions",
-                        format="gpkg", producer="enhanced_spatial_cv",
-                        consumers=["server:/results/2/predictions",
-                                   "server:/results/spatial_cv/predictions"],
-                    )
-                except Exception:
-                    pass
+                    from sparc.registry.store import get_active_store
+                    _store = get_active_store()
+                    if _store is not None:
+                        _store.write_table(
+                            "2", "spatial_cv_predictions", gpkg_gdf,
+                            producer="enhanced_spatial_cv",
+                            consumers=["server:/results/2/predictions",
+                                       "server:/results/spatial_cv/predictions"],
+                        )
+                        print("Spatial CV predictions written to artifacts.db (table 'spatial_cv_predictions')")
+                        wrote_to_store = True
+                except Exception as _e:
+                    print(f"  [WARNING] Could not write spatial_cv_predictions to store: {_e}")
+                if not wrote_to_store:
+                    gpkg_gdf.to_file(gpkg_path, driver='GPKG')
+                    print(f"Spatial CV predictions saved to: {gpkg_path}")
+                    try:
+                        from sparc.registry.run_registry import register_path
+                        register_path(
+                            gpkg_path, stage="2", artifact_id="spatial_cv_predictions",
+                            format="gpkg", producer="enhanced_spatial_cv",
+                            consumers=["server:/results/2/predictions",
+                                       "server:/results/spatial_cv/predictions"],
+                        )
+                    except Exception:
+                        pass
             else:
                 print("  [INFO] Source GeoDataFrame not available for gpkg export")
         except Exception as e:
@@ -1468,9 +1494,21 @@ class EnhancedSpatialCV:
                       "Set pipeline.use_dataset_profiler: true to enable.")
             # Persist profile for downstream stages (scenarios, report)
             import json as _json
-            profile_path = os.path.join(stage2_dir, 'dataset_profile.json')
-            with open(profile_path, 'w') as _fp:
-                _json.dump(profiler.profile(), _fp, indent=2)
+            profile_payload = profiler.profile()
+            try:
+                from sparc.registry.store import get_active_store
+                _store = get_active_store()
+                if _store is not None:
+                    _store.write_struct("2", "dataset_profile", profile_payload,
+                                        producer="enhanced_spatial_cv")
+                else:
+                    profile_path = os.path.join(stage2_dir, 'dataset_profile.json')
+                    with open(profile_path, 'w') as _fp:
+                        _json.dump(profile_payload, _fp, indent=2)
+            except Exception:
+                profile_path = os.path.join(stage2_dir, 'dataset_profile.json')
+                with open(profile_path, 'w') as _fp:
+                    _json.dump(profile_payload, _fp, indent=2)
         except Exception as _e:
             print(f"Warning: DatasetProfiler unavailable ({_e}). Using project config defaults.")
         
@@ -1499,9 +1537,21 @@ class EnhancedSpatialCV:
             'scaling_applied': False  # Base models scale internally!
         }
         feature_info_path = os.path.join(stage2_dir, 'feature_info.json')
-        with open(feature_info_path, 'w') as f:
-            json.dump(feature_info, f, indent=2)
-        print(f"Feature info saved to: {feature_info_path}")
+        try:
+            from sparc.registry.store import get_active_store
+            _store = get_active_store()
+            if _store is not None:
+                _store.write_struct("2", "feature_info", feature_info,
+                                    producer="enhanced_spatial_cv")
+                print("Feature info written to artifacts.db (struct 'feature_info')")
+            else:
+                with open(feature_info_path, 'w') as f:
+                    json.dump(feature_info, f, indent=2)
+                print(f"Feature info saved to: {feature_info_path}")
+        except Exception:
+            with open(feature_info_path, 'w') as f:
+                json.dump(feature_info, f, indent=2)
+            print(f"Feature info saved to: {feature_info_path}")
         
         # Use UNSCALED features for modeling (models scale internally)
         X_augmented = X_gwen  # NOT X_gwen_scaled!
@@ -2334,10 +2384,7 @@ def main(fast_mode=False):
         paths = get_paths()
         results_file = paths.stage2_dir / 'final_ensemble_results.json'
         predictions_file = paths.stage2_dir / 'final_ensemble_predictions.csv'
-        
-        with open(results_file, 'w') as f:
-            json.dump(final_results, f, indent=2)
-        
+
         # Save final predictions
         final_results_df = pd.DataFrame({
             'OBJECTID': joined_data.index, # pyright: ignore[reportPossiblyUnboundVariable]
@@ -2353,18 +2400,42 @@ def main(fast_mode=False):
             v2_unc_out = v2_neural_result.get('oof_uncertainty')
             if v2_unc_out is not None:
                 final_results_df['v2_neural_uncertainty'] = np.asarray(v2_unc_out)
-        
-        final_results_df.to_csv(predictions_file, index=False)
 
+        # Persist to artifacts.db (single source of truth).
+        wrote_results_to_store = False
+        wrote_preds_to_store = False
         try:
-            from sparc.registry.run_registry import register_path
-            register_path(results_file, stage="2", artifact_id="ensemble_results",
-                          format="json", producer="enhanced_spatial_cv",
-                          consumers=["server:/results/model_performance"])
-            register_path(predictions_file, stage="2", artifact_id="ensemble_predictions",
-                          format="csv", producer="enhanced_spatial_cv")
-        except Exception:
-            pass
+            from sparc.registry.store import get_active_store
+            _store = get_active_store()
+            if _store is not None:
+                _store.write_struct("2", "ensemble_results", final_results,
+                                    producer="enhanced_spatial_cv",
+                                    consumers=["server:/results/model_performance"])
+                wrote_results_to_store = True
+                _store.write_table("2", "ensemble_predictions", final_results_df,
+                                   producer="enhanced_spatial_cv")
+                wrote_preds_to_store = True
+        except Exception as _e:
+            print(f"  [WARNING] Could not write ensemble outputs to store: {_e}")
+
+        if not wrote_results_to_store:
+            with open(results_file, 'w') as f:
+                json.dump(final_results, f, indent=2)
+        if not wrote_preds_to_store:
+            final_results_df.to_csv(predictions_file, index=False)
+
+        if not wrote_results_to_store or not wrote_preds_to_store:
+            try:
+                from sparc.registry.run_registry import register_path
+                if not wrote_results_to_store:
+                    register_path(results_file, stage="2", artifact_id="ensemble_results",
+                                  format="json", producer="enhanced_spatial_cv",
+                                  consumers=["server:/results/model_performance"])
+                if not wrote_preds_to_store:
+                    register_path(predictions_file, stage="2", artifact_id="ensemble_predictions",
+                                  format="csv", producer="enhanced_spatial_cv")
+            except Exception:
+                pass
 
         print(f"\nResults saved to:")
         print(f"  - final_ensemble_results.json")

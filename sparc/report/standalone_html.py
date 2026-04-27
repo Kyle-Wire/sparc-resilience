@@ -72,7 +72,11 @@ def _collect_artifacts(run_dir: Path) -> dict[str, Any]:
         _safe_read_struct("1", "gwen_results")
         or _safe_load_json(run_dir / "Stage_1_GWEN" / "gwen_results.json")
     )
-    bundle["model_performance"] = _safe_load_json(run_dir / "Stage_2_Spatial_CV" / "model_performance.json")
+    bundle["model_performance"] = (
+        _safe_read_struct("2", "ensemble_results")
+        or _safe_load_json(run_dir / "Stage_2_Spatial_CV" / "model_performance.json")
+        or _safe_load_json(run_dir / "Stage_2_Spatial_CV" / "final_ensemble_results.json")
+    )
     bundle["scenario_coefficients"] = _safe_load_json(run_dir / "Stage_3_Causal_Validation" / "scenario_coefficients.json")
     bundle["mc3"] = _safe_load_json(run_dir / "Stage_3_Causal_Validation" / "mc3_results.json")
     bundle["dose_response"] = _safe_load_json(run_dir / "Stage_3_Causal_Validation" / "dose_response_curves.json")

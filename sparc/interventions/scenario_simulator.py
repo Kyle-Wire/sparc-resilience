@@ -842,11 +842,21 @@ class ScenarioSimulator:
         self._extract_mgwr_coefficients()
 
         # Load feature info (actual features used during training)
-        feature_info_path = self.model_dir / "feature_info.json"
-        if feature_info_path.exists():
-            import json as _json_fi
-            with open(feature_info_path) as _fi_f:
-                _fi = _json_fi.load(_fi_f)
+        _fi = None
+        try:
+            from sparc.registry.store import get_active_store
+            _store = get_active_store()
+            if _store is not None and _store.has("2", "feature_info"):
+                _fi = _store.read_any("2", "feature_info")
+        except Exception:
+            _fi = None
+        if _fi is None:
+            feature_info_path = self.model_dir / "feature_info.json"
+            if feature_info_path.exists():
+                import json as _json_fi
+                with open(feature_info_path) as _fi_f:
+                    _fi = _json_fi.load(_fi_f)
+        if _fi is not None:
             trained_features = _fi.get("feature_names", self.features)
             if trained_features != self.features:
                 print(f"   Overriding config features ({len(self.features)}) with trained features ({len(trained_features)}): {trained_features}")
