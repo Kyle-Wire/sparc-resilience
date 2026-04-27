@@ -104,6 +104,22 @@ def save_versioned(
     changelog.append(entry)
     _save_changelog(data_dir, changelog)
 
+    # Mirror the changelog to artifacts.db when an active store exists
+    # so consumers can query versions without scanning the data dir.
+    try:
+        from sparc.registry.store import get_active_store
+        _store = get_active_store()
+    except Exception:
+        _store = None
+    if _store is not None:
+        try:
+            _store.write_struct(
+                "data", "data_changelog", changelog,
+                producer="data.versioning",
+            )
+        except Exception:
+            pass
+
     return entry
 
 
@@ -115,7 +131,21 @@ def list_versions(data_dir: Path) -> list[dict]:
     List of version entries, sorted by version number.
     """
     data_dir = Path(data_dir)
-    changelog = _load_changelog(data_dir)
+    # Prefer the active ArtifactStore (artifacts.db) when present.
+    changelog: list[dict] | None = None
+    try:
+        from sparc.registry.store import get_active_store
+        _store = get_active_store()
+    except Exception:
+        _store = None
+    if _store is not None:
+        try:
+            if _store.has("data", "data_changelog"):
+                changelog = _store.read_any("data", "data_changelog") or []
+        except Exception:
+            changelog = None
+    if changelog is None:
+        changelog = _load_changelog(data_dir)
     # Filter to versions whose files still exist
     result = []
     for entry in changelog:
