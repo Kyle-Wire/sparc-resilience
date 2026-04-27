@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Query, Body, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, Response
 
 from sparc.server.state import ServerState
 from sparc.server.stream import stream_stage
@@ -3096,6 +3096,155 @@ async def rescan_manifest():
     n = state.registry.migrate_from_disk(paths)
     return {"newly_registered": n,
             "total_artifacts": len(state.registry.manifest.all_artifacts())}
+
+
+# ------------------------------------------------------------------
+# Artifact fetch endpoints (db-resident artifacts via ArtifactStore)
+#
+# These render artifacts on demand from artifacts.db. The pipeline stops
+# producing CSV / PNG / JSON files; users download them through here.
+# ------------------------------------------------------------------
+
+_RENDER_MIME = {
+    "csv":     "text/csv",
+    "json":    "application/json",
+    "geojson": "application/geo+json",
+    "png":     "image/png",
+    "html":    "text/html",
+    "pkl":     "application/octet-stream",
+    "joblib":  "application/octet-stream",
+    "pt":      "application/octet-stream",
+    "bin":     "application/octet-stream",
+}
+
+
+def _ensure_registry_attached() -> None:
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+    if state.registry is None:
+        _attach_registry(state.project_config)
+    if state.registry is None:
+        raise HTTPException(503, "Run registry unavailable")
+
+
+@app.get("/artifacts/{stage}/{artifact_id}")
+async def get_artifact_native(stage: str, artifact_id: str):
+    """Return an artifact in its native format (CSV for tables, JSON for structs, raw bytes for blobs)."""
+    _ensure_registry_attached()
+    # Bind the active registry so render_* helpers can find it.
+    from sparc.registry.run_registry import set_active_registry, get_active_registry
+    from sparc.report.render import render_native, RenderError
+
+    prev = get_active_registry()
+    set_active_registry(state.registry)
+    try:
+        try:
+            data, ext = render_native(stage, artifact_id)
+        except RenderError as exc:
+            raise HTTPException(404, str(exc))
+    finally:
+        set_active_registry(prev)
+
+    return Response(
+        content=data,
+        media_type=_RENDER_MIME.get(ext, "application/octet-stream"),
+        headers={
+            "Content-Disposition": f'attachment; filename="{artifact_id}.{ext}"',
+        },
+    )
+
+
+@app.get("/artifacts/{stage}/{artifact_id}.csv")
+async def get_artifact_csv(stage: str, artifact_id: str, index: bool = False):
+    """Render a registered artifact as CSV bytes."""
+    _ensure_registry_attached()
+    from sparc.registry.run_registry import set_active_registry, get_active_registry
+    from sparc.report.render import render_csv, RenderError
+
+    prev = get_active_registry()
+    set_active_registry(state.registry)
+    try:
+        try:
+            data = render_csv(stage, artifact_id, index=index)
+        except RenderError as exc:
+            raise HTTPException(404, str(exc))
+    finally:
+        set_active_registry(prev)
+
+    return Response(
+        content=data,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{artifact_id}.csv"'},
+    )
+
+
+@app.get("/artifacts/{stage}/{artifact_id}.json")
+async def get_artifact_json(stage: str, artifact_id: str):
+    """Render a registered artifact (struct or table) as JSON."""
+    _ensure_registry_attached()
+    from sparc.registry.run_registry import set_active_registry, get_active_registry
+    from sparc.report.render import render_json, RenderError
+
+    prev = get_active_registry()
+    set_active_registry(state.registry)
+    try:
+        try:
+            data = render_json(stage, artifact_id)
+        except RenderError as exc:
+            raise HTTPException(404, str(exc))
+    finally:
+        set_active_registry(prev)
+    return Response(content=data, media_type="application/json")
+
+
+@app.get("/artifacts/{stage}/{artifact_id}.geojson")
+async def get_artifact_geojson(stage: str, artifact_id: str):
+    """Render a geometry-bearing table as GeoJSON."""
+    _ensure_registry_attached()
+    from sparc.registry.run_registry import set_active_registry, get_active_registry
+    from sparc.report.render import render_geojson, RenderError
+
+    prev = get_active_registry()
+    set_active_registry(state.registry)
+    try:
+        try:
+            data = render_geojson(stage, artifact_id)
+        except RenderError as exc:
+            raise HTTPException(404, str(exc))
+    finally:
+        set_active_registry(prev)
+    return Response(content=data, media_type="application/geo+json")
+
+
+@app.get("/artifacts/{stage}/{artifact_id}.png")
+async def get_artifact_png(
+    stage: str,
+    artifact_id: str,
+    kind: str = Query(..., description="figure_kind registered via register_figure_renderer"),
+):
+    """Render a registered artifact as PNG using a named figure renderer."""
+    _ensure_registry_attached()
+    from sparc.registry.run_registry import set_active_registry, get_active_registry
+    from sparc.report.render import render_png, RenderError
+
+    prev = get_active_registry()
+    set_active_registry(state.registry)
+    try:
+        try:
+            data = render_png(kind, stage, artifact_id)
+        except RenderError as exc:
+            raise HTTPException(404, str(exc))
+    finally:
+        set_active_registry(prev)
+    return Response(content=data, media_type="image/png")
+
+
+@app.get("/artifacts/_figure_kinds")
+async def list_figure_kinds_endpoint():
+    """List all figure kinds currently registered in the render layer."""
+    from sparc.report.render import list_figure_kinds
+
+    return {"figure_kinds": list_figure_kinds()}
 
 
 # ------------------------------------------------------------------
