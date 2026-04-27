@@ -7,8 +7,10 @@ from sparc.registry.manifest import (
     RunManifest,
     StageManifest,
     StageStatus,
+    StorageKind,
 )
 from sparc.registry.run_registry import RunRegistry
+from sparc.registry.store import ArtifactStore, ArtifactStoreError, get_active_store
 
 __all__ = [
     "CityRegistry",
@@ -18,4 +20,8 @@ __all__ = [
     "ArtifactEntry",
     "ArtifactFormat",
     "StageStatus",
+    "StorageKind",
+    "ArtifactStore",
+    "ArtifactStoreError",
+    "get_active_store",
 ]
