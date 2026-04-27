@@ -828,6 +828,79 @@ export function downloadGeoPackage(): void {
 }
 
 // ------------------------------------------------------------------
+// Artifact export-on-demand (db-only architecture)
+// ------------------------------------------------------------------
+// Mirrors the FastAPI endpoints introduced in Phase 5:
+//   GET  /artifacts/{stage}                       -- list
+//   GET  /artifacts/{stage}/{artifact_id}/download?fmt=  -- download single
+//   POST /artifacts/{stage}/export                -- bundle stage as .zip
+
+export interface DbArtifactInfo {
+  artifact_id: string;
+  format: string;
+  storage_kind: string;
+  partial: boolean;
+  producer: string | null;
+}
+
+export async function listStageArtifacts(stage: string | number): Promise<{
+  stage: string;
+  count: number;
+  artifacts: DbArtifactInfo[];
+}> {
+  return get(`/artifacts/${encodeURIComponent(String(stage))}`);
+}
+
+/**
+ * Trigger a browser download of a single artifact from artifacts.db.
+ * The server materialises the file on demand (CSV / parquet / JSON /
+ * GPKG / GeoJSON / joblib / pkl / npy).
+ */
+export function downloadDbArtifact(
+  stage: string | number,
+  artifactId: string,
+  fmt?: "csv" | "parquet" | "json" | "gpkg" | "geojson" | "joblib" | "pkl" | "npy",
+): void {
+  const qs = fmt ? `?fmt=${encodeURIComponent(fmt)}` : "";
+  const url =
+    `${BASE}/artifacts/${encodeURIComponent(String(stage))}` +
+    `/${encodeURIComponent(artifactId)}/download${qs}`;
+  const a = document.createElement("a");
+  a.href = url;
+  // Server sets Content-Disposition with filename; leaving `download`
+  // as a hint lets the browser respect the suggested name.
+  a.download = `${artifactId}${fmt ? "." + fmt : ""}`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+/**
+ * Bundle every artifact for a stage into a downloadable .zip and trigger
+ * a browser download.  Uses POST so the server can lazily materialise.
+ */
+export async function downloadStageZip(stage: string | number): Promise<void> {
+  const url = `${BASE}/artifacts/${encodeURIComponent(String(stage))}/export`;
+  const res = await fetch(url, { method: "POST" });
+  if (!res.ok) {
+    throw new Error(`Stage export failed (${res.status}): ${await res.text()}`);
+  }
+  const blob = await res.blob();
+  const objUrl = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement("a");
+    a.href = objUrl;
+    a.download = `stage_${stage}_artifacts.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } finally {
+    // Defer revocation so the browser has time to start the download.
+    setTimeout(() => URL.revokeObjectURL(objUrl), 5000);
+  }
+}
+
+// ------------------------------------------------------------------
 // WebSocket helper
 // ------------------------------------------------------------------
 export function createPipelineSocket(): WebSocket {

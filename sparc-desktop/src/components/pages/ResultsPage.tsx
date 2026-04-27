@@ -2,6 +2,7 @@
 import { SectionHeader, Card, Btn, Stat, StatGrid } from "@/components/ui/DesignSystem";
 import ExplainButton from "@/components/common/ExplainButton";
 import { ExportBlockButton } from "@/components/common/ExportBlockButton";
+import DownloadMenu from "@/components/common/DownloadMenu";
 import {
   getModelPerformance, getScenarioDetail, getPdpCurves, getGwenData,
   getCorrelogramData, getPredictions, getScenarioIncrement,
@@ -931,6 +932,7 @@ export default function ResultsPage() {
         {/* Main visualization */}
         <Card
           title="Predictions"
+          actions={<DownloadMenu artifactId="predictions" stage="2" label="predictions" dataEndpoint="/results/spatial_cv/predictions" dataFilename="predictions" includeBundle compact />}
           subtitle={
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               {/* View mode toggle */}
@@ -1295,7 +1297,9 @@ export default function ResultsPage() {
         </Card>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <Card title="Model R²" subtitle={models.length ? "cross-validated performance" : undefined}>
+          <Card title="Model R²" subtitle={models.length ? "cross-validated performance" : undefined}
+            actions={<DownloadMenu artifactId="model_performance" stage="2" label="model performance" dataEndpoint="/results/model_performance" dataFilename="model_performance" includeBundle compact />}
+          >
             <div ref={r2BlockRef} style={{ position: "relative" }}>
               <div style={{ position: "absolute", top: -2, right: 2, zIndex: 4 }}>
                 <ExportBlockButton targetRef={r2BlockRef} artifactId="model_r2" label="model_r2" canvasOnly compact />
