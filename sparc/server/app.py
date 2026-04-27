@@ -3346,13 +3346,15 @@ _RENDER_MIME = {
     "csv":     "text/csv",
     "json":    "application/json",
     "geojson": "application/geo+json",
-    "png":     "image/png",
     "html":    "text/html",
     "pkl":     "application/octet-stream",
     "joblib":  "application/octet-stream",
     "pt":      "application/octet-stream",
     "bin":     "application/octet-stream",
 }
+# NOTE: PNG / image MIME types are intentionally absent. The server
+# never renders or serves rasterised images. The desktop app renders
+# visualisations live from artifacts.db and exports them client-side.
 
 
 def _ensure_registry_attached() -> None:
@@ -3526,63 +3528,9 @@ async def get_predictions(stage: int, format: str = Query("geojson", regex="^(js
     return _to_json(gdf)
 
 
-@app.get("/results/{stage}/plots")
-async def list_stage_plots(stage: int):
-    """List available plot images for a completed pipeline stage."""
-    if state.project_config is None:
-        raise HTTPException(400, "No project loaded")
-
-    from sparc.run.pipeline_paths import PipelinePaths
-
-    try:
-        paths = PipelinePaths.from_config(state.project_config)
-    except Exception:
-        raise HTTPException(404, "Cannot resolve output paths")
-
-    stage_map = {0: paths.stage0_dir, 1: paths.stage1_dir, 2: paths.stage2_dir, 3: paths.stage3_dir, 4: paths.stage4_dir}
-    stage_dir = stage_map.get(stage)
-    if stage_dir is None or not stage_dir.exists():
-        return {"plots": []}
-
-    # Collect PNG/SVG files recursively
-    plots = []
-    for ext in ("*.png", "*.svg"):
-        for f in sorted(stage_dir.rglob(ext)):
-            plots.append({
-                "name": f.stem,
-                "filename": f.name,
-                "path": str(f.relative_to(stage_dir)),
-            })
-    return {"plots": plots}
-
-
-@app.get("/results/{stage}/plots/{file_path:path}")
-async def get_stage_plot(stage: int, file_path: str):
-    """Serve a specific plot image file from a stage output directory."""
-    if state.project_config is None:
-        raise HTTPException(400, "No project loaded")
-
-    from sparc.run.pipeline_paths import PipelinePaths
-
-    try:
-        paths = PipelinePaths.from_config(state.project_config)
-    except Exception:
-        raise HTTPException(404, "Cannot resolve output paths")
-
-    stage_map = {0: paths.stage0_dir, 1: paths.stage1_dir, 2: paths.stage2_dir, 3: paths.stage3_dir, 4: paths.stage4_dir}
-    stage_dir = stage_map.get(stage)
-    if stage_dir is None:
-        raise HTTPException(404, "Invalid stage")
-
-    full_path = (stage_dir / file_path).resolve()
-    # Security: ensure the resolved path is within the stage directory
-    if not str(full_path).startswith(str(stage_dir.resolve())):
-        raise HTTPException(403, "Access denied")
-    if not full_path.exists() or not full_path.is_file():
-        raise HTTPException(404, f"Plot not found: {file_path}")
-
-    media = "image/png" if full_path.suffix == ".png" else "image/svg+xml"
-    return FileResponse(full_path, media_type=media)
+# Plot-image endpoints removed (Phase E): the server no longer serves
+# rasterised images. Visualisations are rendered live in the desktop
+# app from artifacts.db data and exported client-side.
 
 
 # ------------------------------------------------------------------

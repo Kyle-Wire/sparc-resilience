@@ -1979,47 +1979,10 @@ def train_neural_meta(
     )
 
     # ==================================================================
-    # PDE diagnostic visualizations
+    # PDE diagnostic visualizations removed (Phase E):
+    # the pipeline no longer produces PNG plots. Visualisations are
+    # rendered live in the desktop app from artifacts.db data.
     # ==================================================================
-    try:
-        from sparc.physics.pde_visualizations import generate_stage2_pde_plots
-
-        # Get T_pred for the full dataset (normalized)
-        final_model.eval()
-        with torch.no_grad():
-            _viz_surr_preds = _forward_surrogates(
-                final_surrogates, tensors["physics_feats"], tensors["X_spatial"],
-                knn_index=tensors["knn_index"][:, :gwrf_k],
-                knn_dists=tensors["knn_dists"][:, :gwrf_k],
-            )
-            _viz_base = torch.stack(_viz_surr_preds, dim=1)
-            _viz_alpha = final_process(tensors["physics_feats"][:, pr_col_idxs])
-            _viz_T, _, _ = final_model(
-                base_preds=_viz_base,
-                physics_feats=tensors["physics_feats_extended"],
-                X_spatial=tensors["X_spatial"],
-                coords=tensors["coords"],
-                knn_index=tensors["knn_index"],
-                alpha=_viz_alpha,
-            )
-
-        w_source_np = None
-        if hasattr(final_model, "_last_w_source") and final_model._last_w_source is not None:
-            w_source_np = final_model._last_w_source.detach().cpu().numpy().squeeze()
-
-        generate_stage2_pde_plots(
-            coords=coords,
-            alpha=alpha_all.cpu().numpy().squeeze(),
-            T_pred=_viz_T.cpu().numpy().squeeze(),
-            y_true=tensors["y"].cpu().numpy(),
-            neighbor_idx=full_cardinal.cpu().numpy(),
-            h=resolution,
-            w_source=w_source_np,
-            loss_history=retrain_loss_history if retrain_loss_history else None,
-            output_dir=artifact_dir,
-        )
-    except Exception as exc:
-        logger.warning("PDE visualization generation failed: %s", exc)
 
     return {
         "model": final_model,

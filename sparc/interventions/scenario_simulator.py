@@ -1013,18 +1013,38 @@ class ScenarioSimulator:
             except Exception as _e:
                 print(f"   Warning: V2 neural meta_info failed to load: {_e}")
 
-            # Load V3 alpha field if available
-            alpha_path = v2_dir / "alpha_field.npy"
-            alpha_coords_path = v2_dir / "alpha_field_coords.npy"
-            if alpha_path.exists():
+            # Load V3 alpha field if available (store-first, disk-fallback)
+            try:
+                from sparc.registry.store import get_active_store
+                _store = get_active_store()
+            except Exception:
+                _store = None
+
+            alpha_loaded = False
+            if _store is not None:
                 try:
-                    self._alpha_field = np.load(alpha_path)
-                    if alpha_coords_path.exists():
-                        self._alpha_field_coords = np.load(alpha_coords_path)
-                    print(f"   V3 alpha field loaded ({len(self._alpha_field)} points)")
+                    if _store.has("2", "v2_alpha_field"):
+                        self._alpha_field = _store.read_any("2", "v2_alpha_field")
+                        if _store.has("2", "v2_alpha_field_coords"):
+                            self._alpha_field_coords = _store.read_any("2", "v2_alpha_field_coords")
+                        alpha_loaded = True
+                        print(f"   V3 alpha field loaded from artifacts.db ({len(self._alpha_field)} points)")
                 except Exception as _e:
-                    print(f"   Warning: alpha_field.npy failed to load: {_e}")
+                    print(f"   Warning: alpha_field load from store failed: {_e}")
                     self._alpha_field = None
+
+            if not alpha_loaded:
+                alpha_path = v2_dir / "alpha_field.npy"
+                alpha_coords_path = v2_dir / "alpha_field_coords.npy"
+                if alpha_path.exists():
+                    try:
+                        self._alpha_field = np.load(alpha_path)
+                        if alpha_coords_path.exists():
+                            self._alpha_field_coords = np.load(alpha_coords_path)
+                        print(f"   V3 alpha field loaded from disk ({len(self._alpha_field)} points)")
+                    except Exception as _e:
+                        print(f"   Warning: alpha_field.npy failed to load: {_e}")
+                        self._alpha_field = None
 
             # Load PDE forward solver artifacts (source term net, cardinal neighbors, grid spacing)
             self._load_pde_solver_artifacts(v2_dir)
@@ -1034,41 +1054,83 @@ class ScenarioSimulator:
     # ------------------------------------------------------------------
 
     def _load_pde_solver_artifacts(self, v2_dir: Path) -> None:
-        """Load SourceTermNet, cardinal neighbors, and grid spacing for PDE solving."""
+        """Load SourceTermNet, cardinal neighbors, and grid spacing for PDE solving.
+
+        Prefers artifacts.db (active ArtifactStore) and falls back to disk
+        artifacts written by v2_neural_training.
+        """
         import torch
 
-        # SourceTermNet
-        stn_path = v2_dir / "source_term_net.pt"
-        if stn_path.exists():
+        try:
+            from sparc.registry.store import get_active_store
+            _store = get_active_store()
+        except Exception:
+            _store = None
+
+        # SourceTermNet (state dict in store, full file on disk)
+        source_loaded = False
+        if _store is not None:
             try:
-                from sparc.models.process_rate_net import SourceTermNet
-                meta_info = self._v2_meta_info or {}
-                n_physics = meta_info.get("n_physics_original", 3)
-                self._v2_source_net = SourceTermNet(n_inputs=n_physics)
-                self._v2_source_net.load_state_dict(
-                    torch.load(stn_path, map_location="cpu", weights_only=True)
-                )
-                self._v2_source_net.eval()
-                print(f"   SourceTermNet loaded ({n_physics} inputs)")
+                if _store.has("2", "v2_source_term_state"):
+                    from sparc.models.process_rate_net import SourceTermNet
+                    meta_info = self._v2_meta_info or {}
+                    n_physics = meta_info.get("n_physics_original", 3)
+                    self._v2_source_net = SourceTermNet(n_inputs=n_physics)
+                    state = _store.read_any("2", "v2_source_term_state")
+                    self._v2_source_net.load_state_dict(state)
+                    self._v2_source_net.eval()
+                    source_loaded = True
+                    print(f"   SourceTermNet loaded from artifacts.db ({n_physics} inputs)")
             except Exception as _e:
-                print(f"   Warning: source_term_net.pt failed to load: {_e}")
+                print(f"   Warning: SourceTermNet load from store failed: {_e}")
                 self._v2_source_net = None
 
-        # Cardinal neighbors
-        cn_path = v2_dir / "cardinal_neighbors.npy"
-        if cn_path.exists():
-            try:
-                self._cardinal_neighbors = np.load(cn_path)
-            except Exception as _e:
-                print(f"   Warning: cardinal_neighbors.npy failed to load: {_e}")
+        if not source_loaded:
+            stn_path = v2_dir / "source_term_net.pt"
+            if stn_path.exists():
+                try:
+                    from sparc.models.process_rate_net import SourceTermNet
+                    meta_info = self._v2_meta_info or {}
+                    n_physics = meta_info.get("n_physics_original", 3)
+                    self._v2_source_net = SourceTermNet(n_inputs=n_physics)
+                    self._v2_source_net.load_state_dict(
+                        torch.load(stn_path, map_location="cpu", weights_only=True)
+                    )
+                    self._v2_source_net.eval()
+                    print(f"   SourceTermNet loaded from disk ({n_physics} inputs)")
+                except Exception as _e:
+                    print(f"   Warning: source_term_net.pt failed to load: {_e}")
+                    self._v2_source_net = None
 
-        # Grid spacing
-        gs_path = v2_dir / "grid_spacing.npy"
-        if gs_path.exists():
+        # Cardinal neighbors (store-first)
+        if _store is not None:
             try:
-                self._grid_spacing = np.load(gs_path)
+                if _store.has("2", "v2_cardinal_neighbors"):
+                    self._cardinal_neighbors = _store.read_any("2", "v2_cardinal_neighbors")
             except Exception as _e:
-                print(f"   Warning: grid_spacing.npy failed to load: {_e}")
+                print(f"   Warning: cardinal_neighbors load from store failed: {_e}")
+        if self._cardinal_neighbors is None:
+            cn_path = v2_dir / "cardinal_neighbors.npy"
+            if cn_path.exists():
+                try:
+                    self._cardinal_neighbors = np.load(cn_path)
+                except Exception as _e:
+                    print(f"   Warning: cardinal_neighbors.npy failed to load: {_e}")
+
+        # Grid spacing (store-first)
+        if _store is not None:
+            try:
+                if _store.has("2", "v2_grid_spacing"):
+                    self._grid_spacing = _store.read_any("2", "v2_grid_spacing")
+            except Exception as _e:
+                print(f"   Warning: grid_spacing load from store failed: {_e}")
+        if self._grid_spacing is None:
+            gs_path = v2_dir / "grid_spacing.npy"
+            if gs_path.exists():
+                try:
+                    self._grid_spacing = np.load(gs_path)
+                except Exception as _e:
+                    print(f"   Warning: grid_spacing.npy failed to load: {_e}")
 
         if self._cardinal_neighbors is not None and self._grid_spacing is not None:
             print(f"   PDE solver infrastructure loaded (N={len(self._cardinal_neighbors)})")
@@ -1172,11 +1234,28 @@ class ScenarioSimulator:
         y_mean = meta.get("y_mean", 0.0)
         y_std = meta.get("y_std", 1.0)
 
-        # Load feature scaling stats
+        # Load feature scaling stats (store-first, disk-fallback)
         v2_dir = self.model_dir / "v2_neural"
-        scaling = np.load(v2_dir / "feature_scaling.npz")
-        feat_mean = scaling["feat_mean"]
-        feat_std = scaling["feat_std"]
+        feat_mean = None
+        feat_std = None
+        try:
+            from sparc.registry.store import get_active_store
+            _store = get_active_store()
+        except Exception:
+            _store = None
+        if _store is not None:
+            try:
+                if _store.has("2", "v2_feature_scaling"):
+                    fs = _store.read_any("2", "v2_feature_scaling")
+                    feat_mean = fs.get("feat_mean")
+                    feat_std = fs.get("feat_std")
+            except Exception:
+                feat_mean = None
+                feat_std = None
+        if feat_mean is None or feat_std is None:
+            scaling = np.load(v2_dir / "feature_scaling.npz")
+            feat_mean = scaling["feat_mean"]
+            feat_std = scaling["feat_std"]
 
         # Build modified raw feature matrix
         raw_feats = baseline_df[feature_names].values.copy()  # (N, n_feats)
@@ -3870,7 +3949,23 @@ class ScenarioSimulator:
             hidden_dim=info["hidden_dim"],
             thresholds=info["thresholds"],
         ).to(device)
-        model.load_state_dict(torch.load(v2_dir / "neural_meta.pt", map_location=device, weights_only=True))
+
+        try:
+            from sparc.registry.store import get_active_store
+            _store = get_active_store()
+        except Exception:
+            _store = None
+
+        meta_state = None
+        if _store is not None:
+            try:
+                if _store.has("2", "v2_neural_meta_state"):
+                    meta_state = _store.read_any("2", "v2_neural_meta_state")
+            except Exception:
+                meta_state = None
+        if meta_state is None:
+            meta_state = torch.load(v2_dir / "neural_meta.pt", map_location=device, weights_only=True)
+        model.load_state_dict(meta_state)
 
         pr_inputs = info.get("process_rate_inputs", self.features[:3])
         process_net = ProcessRateNet(
@@ -3880,9 +3975,27 @@ class ScenarioSimulator:
                 "prior_mean": 0.5,
             }),
         ).to(device)
-        process_net.load_state_dict(torch.load(v2_dir / "process_rate_net.pt", map_location=device, weights_only=True))
 
-        encoder = joblib.load(v2_dir / "sinusoidal_encoder.pkl")
+        process_state = None
+        if _store is not None:
+            try:
+                if _store.has("2", "v2_process_rate_state"):
+                    process_state = _store.read_any("2", "v2_process_rate_state")
+            except Exception:
+                process_state = None
+        if process_state is None:
+            process_state = torch.load(v2_dir / "process_rate_net.pt", map_location=device, weights_only=True)
+        process_net.load_state_dict(process_state)
+
+        encoder = None
+        if _store is not None:
+            try:
+                if _store.has("2", "v2_sinusoidal_encoder"):
+                    encoder = _store.read_any("2", "v2_sinusoidal_encoder")
+            except Exception:
+                encoder = None
+        if encoder is None:
+            encoder = joblib.load(v2_dir / "sinusoidal_encoder.pkl")
 
         if verbose:
             print(f"   V2 models loaded on {device}")

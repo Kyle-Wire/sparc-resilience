@@ -689,48 +689,10 @@ class GWRFModel:
             print(f"  Curve type: {curve_fit['curve_type']}, R² = {curve_fit['r2']:.3f}")
             if curve_fit['saturation_point'] is not None:
                 print(f"  Saturation point: {curve_fit['saturation_point']:.2f}")
-            
-            # Save plot if requested
-            if save_plots:
-                try:
-                    import matplotlib.pyplot as plt
-                    
-                    fig, ax = plt.subplots(figsize=(8, 6))
-                    
-                    # Plot PDP with uncertainty
-                    ax.plot(pdp_results['grid_values'], pdp_results['pdp_values'], 
-                           'b-', linewidth=2, label='Partial Dependence')
-                    ax.fill_between(
-                        pdp_results['grid_values'],
-                        pdp_results['pdp_values'] - pdp_results['pdp_std'],
-                        pdp_results['pdp_values'] + pdp_results['pdp_std'],
-                        alpha=0.3, label='±1 SD'
-                    )
-                    
-                    # Plot fitted curve
-                    ax.plot(pdp_results['grid_values'], curve_fit['fitted_values'],
-                           'r--', linewidth=2, label=f'{curve_type.title()} Fit (R²={curve_fit["r2"]:.3f})')
-                    
-                    # Mark saturation point if exists
-                    if curve_fit['saturation_point'] is not None:
-                        ax.axvline(curve_fit['saturation_point'], color='g', 
-                                  linestyle=':', label=f'Saturation ~{curve_fit["saturation_point"]:.1f}')
-                    
-                    ax.set_xlabel(var_name, fontsize=12)
-                    ax.set_ylabel('Predicted Temperature Effect (°F)', fontsize=12)
-                    ax.set_title(f'GWRF Condition Curve: {var_name}', fontsize=14, fontweight='bold')
-                    ax.legend()
-                    ax.grid(True, alpha=0.3)
-                    
-                    plot_path = output_dir / f'gwrf_condition_curve_{var_name}.png'
-                    plt.tight_layout()
-                    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
-                    plt.close()
-                    
-                    print(f"  Saved plot: {plot_path}")
-                    
-                except Exception as e:
-                    print(f"  Warning: Could not save plot: {e}")
+
+            # Plot generation removed (Phase E): visualizations are rendered
+            # live in the desktop app from artifacts.db.
+            _ = save_plots  # kept for backward-compatible signature
         
         # Save all curves to JSON
         curves_json_path = output_dir / 'gwrf_condition_curves.json'
