@@ -3243,37 +3243,6 @@ async def get_artifact_geojson(stage: str, artifact_id: str):
     return Response(content=data, media_type="application/geo+json")
 
 
-@app.get("/artifacts/{stage}/{artifact_id}.png")
-async def get_artifact_png(
-    stage: str,
-    artifact_id: str,
-    kind: str = Query(..., description="figure_kind registered via register_figure_renderer"),
-):
-    """Render a registered artifact as PNG using a named figure renderer."""
-    _ensure_registry_attached()
-    from sparc.registry.run_registry import set_active_registry, get_active_registry
-    from sparc.report.render import render_png, RenderError
-
-    prev = get_active_registry()
-    set_active_registry(state.registry)
-    try:
-        try:
-            data = render_png(kind, stage, artifact_id)
-        except RenderError as exc:
-            raise HTTPException(404, str(exc))
-    finally:
-        set_active_registry(prev)
-    return Response(content=data, media_type="image/png")
-
-
-@app.get("/artifacts/_figure_kinds")
-async def list_figure_kinds_endpoint():
-    """List all figure kinds currently registered in the render layer."""
-    from sparc.report.render import list_figure_kinds
-
-    return {"figure_kinds": list_figure_kinds()}
-
-
 # ------------------------------------------------------------------
 # Results endpoints (parameterized — MUST come after named routes above)
 # ------------------------------------------------------------------

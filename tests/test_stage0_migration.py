@@ -3,7 +3,7 @@
 Verifies:
 - The struct + table writer paths produce db-resident artifacts.
 - ``read_any`` reads them back regardless of storage_kind.
-- The on-demand correlogram figure renderer produces a non-empty PNG.
+- Legacy on-disk artifacts can still be read via ``read_any``.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ import pytest
 
 from sparc.registry.run_registry import RunRegistry, set_active_registry
 from sparc.registry.store import ArtifactStore
-from sparc.report.render import render_png, list_figure_kinds
 
 
 @pytest.fixture()
@@ -96,23 +95,3 @@ def test_read_any_legacy_path_fallback(tmp_path):
         assert out == {"size_tier": "small"}
     finally:
         set_active_registry(None)
-
-
-def test_correlogram_figure_renderer_registered():
-    kinds = list_figure_kinds()
-    assert "correlogram" in kinds
-
-
-def test_render_correlogram_png(store):
-    store.write_struct("0", "correlogram_results", _fake_correlogram_payload())
-    png = render_png("correlogram", "0", "correlogram_results", variable="tair_c")
-    assert isinstance(png, (bytes, bytearray))
-    # PNG magic header
-    assert png[:8] == b"\x89PNG\r\n\x1a\n"
-    assert len(png) > 200
-
-
-def test_render_correlogram_default_variable(store):
-    store.write_struct("0", "correlogram_results", _fake_correlogram_payload())
-    png = render_png("correlogram", "0", "correlogram_results")
-    assert png[:8] == b"\x89PNG\r\n\x1a\n"

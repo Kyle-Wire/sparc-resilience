@@ -133,11 +133,10 @@ class CorrelogramSpatialAnalyzer:
         effective_range = optimal_bandwidth
         
         # NOTE: Per-variable correlogram plots used to be saved to disk here
-        # via plt.savefig(). They are now generated on demand from the
-        # comprehensive_results struct via the figure renderer registered
-        # in `sparc.report.figures.correlogram` (figure_kind="correlogram").
-        # The data needed for plotting is preserved in the
-        # ``correlogram_results`` dict written to ``artifacts.db``.
+        # via plt.savefig(). The pipeline no longer renders PNGs at all:
+        # the desktop app reads the structured ``correlogram_results``
+        # struct from artifacts.db and renders the live visualization,
+        # which the user can export directly from the UI.
 
         # Determine best kernel based on correlogram pattern
         correlogram_data = correlogram_results['correlogram_results']
@@ -532,7 +531,7 @@ def main(fast_mode=False):
             consumers=[
                 "server:/results/correlogram",
                 "report:correlogram",
-                "figure:correlogram",
+                "desktop:correlogram_view",
             ],
         )
         _store.write_table(

@@ -11,13 +11,10 @@ from sparc.registry.run_registry import RunRegistry, set_active_registry
 from sparc.registry.store import ArtifactStore
 from sparc.report.render import (
     RenderError,
-    list_figure_kinds,
-    register_figure_renderer,
     render_csv,
     render_geojson,
     render_json,
     render_native,
-    render_png,
 )
 
 
@@ -117,29 +114,6 @@ def test_render_native_geometry_table_returns_geojson(store):
 def test_render_unknown_artifact_raises(store):
     with pytest.raises(RenderError):
         render_csv("0", "missing")
-
-
-def test_render_png_unknown_kind_raises(store):
-    df = pd.DataFrame({"a": [1]})
-    store.write_table("0", "t", df)
-    with pytest.raises(RenderError):
-        render_png("nonexistent_kind", "0", "t")
-
-
-def test_register_and_render_figure(store):
-    @register_figure_renderer("test_simple_bar")
-    def _r(s, stage, artifact_id, **opts):
-        # Trivial PNG byte sequence (PNG signature only — enough to verify dispatch).
-        df = s.read_table(stage, artifact_id)
-        return b"\x89PNG\r\n\x1a\n" + str(len(df)).encode()
-
-    df = pd.DataFrame({"a": [1, 2, 3]})
-    store.write_table("0", "t", df)
-
-    out = render_png("test_simple_bar", "0", "t")
-    assert out.startswith(b"\x89PNG\r\n\x1a\n")
-    assert out.endswith(b"3")
-    assert "test_simple_bar" in list_figure_kinds()
 
 
 def test_render_without_active_registry(tmp_path):

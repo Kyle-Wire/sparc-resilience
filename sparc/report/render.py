@@ -1,25 +1,16 @@
 """
-On-demand artifact rendering.
+On-demand artifact rendering (data formats only).
 
 The SPARC pipeline writes artifacts into ``artifacts.db`` as tables /
 structs / blobs (see :mod:`sparc.registry.store`).  User-facing files
-(CSV, PNG, HTML, GeoJSON, ...) are NOT produced by the pipeline; they
-are produced lazily here, when the desktop app, the report generator,
+(CSV, JSON, GeoJSON) are NOT produced by the pipeline; they are
+produced lazily here, when the desktop app, the report generator,
 or a CLI export asks for them.
 
-Two layers:
-
-* **Format renderers** (`render_csv`, `render_png`, `render_geojson`,
-  `render_json`) — pure functions ``(stage, artifact_id, **opts) -> bytes``.
-  Each looks up the artifact via the active registry and serializes it
-  to the requested format.
-
-* **Figure renderers** — registered via :func:`register_figure_renderer`.
-  Stage C migrations move existing matplotlib code from pipeline modules
-  into renderer functions keyed by ``figure_kind`` (e.g. ``"dag_heatmap"``,
-  ``"trace_plot"``).  Renderers receive the underlying tables/structs and
-  return PNG bytes so the same pipeline run can yield arbitrarily many
-  styled figures without re-executing analysis.
+Visual outputs (charts, maps, plots) are rendered live in the desktop
+app directly from this structured data; "download" of a chart or map
+is handled client-side by exporting the live visualization. The server
+intentionally does NOT render PNGs.
 
 This module has no side effects on the registry — it is read-only.
 """
@@ -28,7 +19,7 @@ from __future__ import annotations
 
 import io
 import json
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from sparc.registry.run_registry import RunRegistry, get_active_registry
 from sparc.registry.store import ArtifactStore, ArtifactStoreError
@@ -41,42 +32,6 @@ from sparc.registry.store import ArtifactStore, ArtifactStoreError
 
 class RenderError(RuntimeError):
     """Raised when an artifact cannot be rendered to the requested format."""
-
-
-# ---------------------------------------------------------------------------
-# Registry of figure-kind renderers
-# ---------------------------------------------------------------------------
-
-# Signature: (store, stage, artifact_id, **opts) -> bytes (PNG)
-FigureRenderer = Callable[..., bytes]
-_FIGURE_RENDERERS: dict[str, FigureRenderer] = {}
-
-
-def register_figure_renderer(figure_kind: str) -> Callable[[FigureRenderer], FigureRenderer]:
-    """Decorator: register a figure renderer keyed by ``figure_kind``.
-
-    Example::
-
-        @register_figure_renderer("dag_heatmap")
-        def _render_dag_heatmap(store, stage, artifact_id, **opts) -> bytes:
-            df = store.read_table(stage, artifact_id)
-            ...
-            return png_bytes
-    """
-
-    def _decorate(fn: FigureRenderer) -> FigureRenderer:
-        _FIGURE_RENDERERS[figure_kind] = fn
-        return fn
-
-    return _decorate
-
-
-def list_figure_kinds() -> list[str]:
-    try:
-        import sparc.report.figures  # noqa: F401
-    except Exception:
-        pass
-    return sorted(_FIGURE_RENDERERS.keys())
 
 
 # ---------------------------------------------------------------------------
@@ -225,37 +180,6 @@ def render_geojson(
     return df.to_json().encode("utf-8")
 
 
-def render_png(
-    figure_kind: str,
-    stage: str | int,
-    artifact_id: str,
-    *,
-    registry: Optional[RunRegistry] = None,
-    **opts: Any,
-) -> bytes:
-    """Render a PNG via a registered figure renderer.
-
-    ``figure_kind`` selects the renderer (e.g. ``"dag_heatmap"``,
-    ``"trace_plot"``).  Renderers are registered in module-level scope by
-    stage migration code via :func:`register_figure_renderer`.
-    """
-    # Lazy import so the built-in figure pack self-registers on first use
-    # without creating an import cycle at module load time.
-    try:
-        import sparc.report.figures  # noqa: F401
-    except Exception:
-        pass
-
-    fn = _FIGURE_RENDERERS.get(figure_kind)
-    if fn is None:
-        raise RenderError(
-            f"No figure renderer for kind={figure_kind!r}. "
-            f"Known kinds: {list_figure_kinds()}"
-        )
-    store = _resolve_store(registry)
-    return fn(store, str(stage), artifact_id, **opts)
-
-
 # ---------------------------------------------------------------------------
 # Convenience: render a registered artifact in its native format.
 # ---------------------------------------------------------------------------
@@ -320,11 +244,8 @@ def render_native(
 
 __all__ = [
     "RenderError",
-    "register_figure_renderer",
-    "list_figure_kinds",
     "render_csv",
     "render_json",
     "render_geojson",
-    "render_png",
     "render_native",
 ]
