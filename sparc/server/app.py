@@ -2105,6 +2105,40 @@ async def get_nuts_summary():
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
+    result: dict = {}
+
+    # --- artifacts.db (preferred) ---
+    if state.registry is not None:
+        try:
+            from sparc.registry.run_registry import set_active_registry
+            from sparc.registry.store import ArtifactStore
+            set_active_registry(state.registry)
+            try:
+                _store = ArtifactStore(state.registry)
+                if _store.has("3", "nuts_summary"):
+                    ns = _store.read_any("3", "nuts_summary") or {}
+                    result["acceptance_rate"] = ns.get("acceptance_rate")
+                    result["n_divergences"] = ns.get("n_divergences")
+                if _store.has("3", "parameter_posteriors"):
+                    df = _store.read_any("3", "parameter_posteriors")
+                    if df is not None:
+                        result["posteriors"] = df.to_dict(orient="records")
+                if _store.has("3", "convergence_diagnostics"):
+                    df = _store.read_any("3", "convergence_diagnostics")
+                    if df is not None:
+                        result["convergence"] = df.to_dict(orient="records")
+                if _store.has("3", "bma_coefficients"):
+                    df = _store.read_any("3", "bma_coefficients")
+                    if df is not None:
+                        result["bma"] = df.to_dict(orient="records")
+            finally:
+                set_active_registry(None)
+        except Exception:
+            pass
+
+    if result:
+        return result
+
     bayesian_dir = paths.stage3_dir / "bayesian"
     if not bayesian_dir.exists():
         raise HTTPException(404, "No NUTS results found — run Stage 3 first")
@@ -4305,6 +4339,8 @@ async def get_results_availability():
         "/results/gwen": ("1", "gwen_variable_importance"),
         "/results/model_performance": ("2", "ensemble_results"),
         "/results/spatial_cv/predictions": ("2", "spatial_cv_predictions"),
+        "/results/scenarios/nuts_summary": ("3", "nuts_summary"),
+        "/dag/mc3_result": ("3", "mc3_summary"),
     }
     for endpoint, candidates in checks.items():
         # Db-backed endpoints: prefer registry presence.

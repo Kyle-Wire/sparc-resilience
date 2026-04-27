@@ -4622,21 +4622,44 @@ class ScenarioSimulator:
         stage_dirs = self.config.get('output', {}).get('stage_dirs', {})
         stage3_name = stage_dirs.get('stage_3', 'Stage_3_Causal_Validation')
         bayesian_dir = Path(self.config['output']['base_dir']) / stage3_name / "bayesian"
-        nuts_beta_path = bayesian_dir / "nuts_beta.npy"
-        nuts_summary_path = bayesian_dir / "nuts_summary.json"
-        if nuts_beta_path.exists() and nuts_summary_path.exists():
-            import json as _json_nuts
+
+        # --- artifacts.db (preferred) ---
+        _store_nuts = None
+        try:
+            from sparc.registry.store import get_active_store
+            _store_nuts = get_active_store()
+        except Exception:
+            _store_nuts = None
+        if _store_nuts is not None:
             try:
-                nuts_beta = np.load(nuts_beta_path)  # (n_samples, n_treatments)
-                with open(nuts_summary_path) as _f:
-                    _ns = _json_nuts.load(_f)
-                nuts_treatments = _ns.get("treatments", [])
-                if verbose:
-                    print(f"   Loaded NUTS posterior chains: {nuts_beta.shape} for {nuts_treatments}")
+                if _store_nuts.has("3", "nuts_beta") and _store_nuts.has("3", "nuts_summary"):
+                    nuts_beta = np.asarray(_store_nuts.read_any("3", "nuts_beta"))
+                    _ns = _store_nuts.read_any("3", "nuts_summary") or {}
+                    nuts_treatments = _ns.get("treatments", [])
+                    if verbose:
+                        print(f"   Loaded NUTS posterior chains from store: {nuts_beta.shape} for {nuts_treatments}")
             except Exception as e:
                 if verbose:
-                    print(f"   Could not load NUTS posteriors: {e}")
+                    print(f"   Could not load NUTS posteriors from store: {e}")
                 nuts_beta = None
+
+        # --- disk fallback ---
+        if nuts_beta is None:
+            nuts_beta_path = bayesian_dir / "nuts_beta.npy"
+            nuts_summary_path = bayesian_dir / "nuts_summary.json"
+            if nuts_beta_path.exists() and nuts_summary_path.exists():
+                import json as _json_nuts
+                try:
+                    nuts_beta = np.load(nuts_beta_path)  # (n_samples, n_treatments)
+                    with open(nuts_summary_path) as _f:
+                        _ns = _json_nuts.load(_f)
+                    nuts_treatments = _ns.get("treatments", [])
+                    if verbose:
+                        print(f"   Loaded NUTS posterior chains: {nuts_beta.shape} for {nuts_treatments}")
+                except Exception as e:
+                    if verbose:
+                        print(f"   Could not load NUTS posteriors: {e}")
+                    nuts_beta = None
 
         # Prepare scenario results using NUTS posterior or coefficient-based deltas
         baseline_pred = self._predict_baseline(data)[0]

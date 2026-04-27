@@ -31,7 +31,21 @@ import pandas as pd
 import psutil
 import torch
 
+from sparc.registry.run_registry import get_active_registry
+from sparc.registry.store import ArtifactStore
+
 logger = logging.getLogger(__name__)
+
+
+def _get_store() -> ArtifactStore | None:
+    """Return active ArtifactStore or None when running outside the pipeline."""
+    reg = get_active_registry()
+    if reg is None:
+        return None
+    try:
+        return ArtifactStore(reg)
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +155,6 @@ def run_bayesian_causal(
 
     # Save MC³ results
     edge_probs = mc3_results.edge_inclusion_probs
-    np.save(output_dir / "edge_inclusion_probs.npy", edge_probs)
 
     mc3_summary = {
         "n_accepted": mc3_results.n_accepted,
@@ -150,18 +163,10 @@ def run_bayesian_causal(
         "best_score": mc3_results.best_score,
         "node_names": available_cols,
     }
-    with open(output_dir / "mc3_summary.json", "w") as f:
-        json.dump(mc3_summary, f, indent=2)
 
-    # Save edge probability matrix as CSV for interpretability
-    edge_df = pd.DataFrame(edge_probs, index=available_cols, columns=available_cols)
-    edge_df.to_csv(output_dir / "edge_inclusion_probs.csv")
-
-    # V2 dev doc output: posterior_edge_probs.csv (alias for edge_inclusion_probs)
-    edge_df.to_csv(output_dir / "posterior_edge_probs.csv")
-
-    # V2 dev doc output: edge_confidence.csv — classify edges by strength
+    # Edge probability matrix in long form (Stage-3 source of truth)
     edge_rows = []
+    median_dag = {"nodes": available_cols, "edges": []}
     for i, src in enumerate(available_cols):
         for j, tgt in enumerate(available_cols):
             if i == j:
@@ -181,28 +186,52 @@ def run_bayesian_causal(
                 "inclusion_prob": prob,
                 "confidence": confidence,
             })
-    pd.DataFrame(edge_rows).to_csv(output_dir / "edge_confidence.csv", index=False)
-
-    # V2 dev doc output: median_probability_dag.json — edges above 0.50 threshold
-    median_dag = {"nodes": available_cols, "edges": []}
-    for i, src in enumerate(available_cols):
-        for j, tgt in enumerate(available_cols):
-            if i != j and edge_probs[i, j] >= 0.50:
+            if prob >= 0.50:
                 median_dag["edges"].append({
                     "source": src,
                     "target": tgt,
-                    "probability": float(edge_probs[i, j]),
+                    "probability": prob,
                 })
-    with open(output_dir / "median_probability_dag.json", "w") as f:
-        json.dump(median_dag, f, indent=2)
+
+    edge_df = pd.DataFrame(edge_probs, index=available_cols, columns=available_cols)
+    edge_confidence_df = pd.DataFrame(edge_rows)
+
+    _store = _get_store()
+    if _store is not None:
+        _store.write_struct("3", "mc3_summary", mc3_summary, producer="v2_bayesian_causal")
+        # Wide matrix written with index column preserved
+        _store.write_table(
+            "3", "edge_inclusion_probs",
+            edge_df.reset_index(names="source"),
+            producer="v2_bayesian_causal",
+        )
+        _store.write_table(
+            "3", "edge_confidence", edge_confidence_df,
+            producer="v2_bayesian_causal",
+        )
+        _store.write_struct(
+            "3", "median_probability_dag", median_dag,
+            producer="v2_bayesian_causal",
+        )
+        _store.write_blob(
+            "3", "edge_inclusion_probs_npy", edge_probs,
+            serializer="pickle", producer="v2_bayesian_causal",
+        )
+    else:
+        # Disk fallback when invoked outside the active pipeline
+        np.save(output_dir / "edge_inclusion_probs.npy", edge_probs)
+        with open(output_dir / "mc3_summary.json", "w") as f:
+            json.dump(mc3_summary, f, indent=2)
+        edge_df.to_csv(output_dir / "edge_inclusion_probs.csv")
+        edge_df.to_csv(output_dir / "posterior_edge_probs.csv")
+        edge_confidence_df.to_csv(output_dir / "edge_confidence.csv", index=False)
+        with open(output_dir / "median_probability_dag.json", "w") as f:
+            json.dump(median_dag, f, indent=2)
 
     logger.info(
         "MC³ done: %d accepted / %d total, best score=%.2f",
         mc3_results.n_accepted, mc3_results.n_total, mc3_results.best_score,
     )
-
-    # ---- MC³ visualizations ----
-    _plot_mc3_visuals(edge_probs, available_cols, output_dir)
 
     # ---- Approval gate: pause for user review of MC³ results ----
     if approval_gate is not None:
@@ -232,15 +261,6 @@ def run_bayesian_causal(
             output_dir=output_dir,
             mc3_results=mc3_results,
         )
-
-    # ---- NUTS visualizations ----
-    if nuts_results is not None:
-        _plot_nuts_visuals(nuts_results, output_dir)
-
-    # ---- Publication-quality DAG + mediation maps ----
-    _plot_dag_publication(edge_probs, available_cols, dag_def, output_dir)
-    if nuts_results is not None:
-        _plot_mediation_map(data, dag_def, nuts_results, config, output_dir)
 
     return {
         "mc3_results": mc3_results,
@@ -563,10 +583,24 @@ def _run_nuts_sampling(
     beta_chain_std = results.samples["beta"]  # (n_samples, n_treatments)
     beta_chain_orig = beta_chain_std / X_stds[np.newaxis, :]
 
-    np.save(output_dir / "nuts_beta.npy", beta_chain_orig)
-    for name, chain in results.samples.items():
-        if name != "beta":
-            np.save(output_dir / f"nuts_{name}.npy", chain)
+    _store = _get_store()
+    if _store is not None:
+        _store.write_blob(
+            "3", "nuts_beta", beta_chain_orig,
+            serializer="pickle", producer="v2_bayesian_causal",
+        )
+        for name, chain in results.samples.items():
+            if name == "beta":
+                continue
+            _store.write_blob(
+                "3", f"nuts_{name}", np.asarray(chain),
+                serializer="pickle", producer="v2_bayesian_causal",
+            )
+    else:
+        np.save(output_dir / "nuts_beta.npy", beta_chain_orig)
+        for name, chain in results.samples.items():
+            if name != "beta":
+                np.save(output_dir / f"nuts_{name}.npy", chain)
 
     nuts_summary = {
         "acceptance_rate": results.acceptance_rate,
@@ -578,8 +612,14 @@ def _run_nuts_sampling(
         "ess": {k: v.tolist() for k, v in results.ess.items()},
         "alpha_weighted": alpha_weights is not None,
     }
-    with open(output_dir / "nuts_summary.json", "w") as f:
-        json.dump(nuts_summary, f, indent=2)
+    if _store is not None:
+        _store.write_struct(
+            "3", "nuts_summary", nuts_summary,
+            producer="v2_bayesian_causal",
+        )
+    else:
+        with open(output_dir / "nuts_summary.json", "w") as f:
+            json.dump(nuts_summary, f, indent=2)
 
     # ------------------------------------------------------------------
     # V2 dev doc output files (Stage 3 registry)
@@ -616,7 +656,13 @@ def _run_nuts_sampling(
         "ci_5_per_std": beta_q05_std,
         "ci_95_per_std": beta_q95_std,
     })
-    posteriors_df.to_csv(output_dir / "parameter_posteriors.csv", index=False)
+    if _store is not None:
+        _store.write_table(
+            "3", "parameter_posteriors", posteriors_df,
+            producer="v2_bayesian_causal",
+        )
+    else:
+        posteriors_df.to_csv(output_dir / "parameter_posteriors.csv", index=False)
 
     # 2. convergence_diagnostics.csv — R-hat and ESS per parameter
     diag_rows = []
@@ -640,9 +686,16 @@ def _run_nuts_sampling(
                     "ess": float(es[i]) if i < len(es) else np.nan,
                     "converged": bool(conv[i]) if i < len(conv) else False,
                 })
-    pd.DataFrame(diag_rows).to_csv(
-        output_dir / "convergence_diagnostics.csv", index=False
-    )
+    diag_df = pd.DataFrame(diag_rows)
+    if _store is not None:
+        _store.write_table(
+            "3", "convergence_diagnostics", diag_df,
+            producer="v2_bayesian_causal",
+        )
+    else:
+        diag_df.to_csv(
+            output_dir / "convergence_diagnostics.csv", index=False
+        )
 
     # 3. bma_coefficients.csv — Bayesian model-averaged treatment effects
     #    Weighted by MC3 edge inclusion probabilities
@@ -671,9 +724,16 @@ def _run_nuts_sampling(
                 "bma_ci_5_per_std": float(beta_q05_std[i] * edge_prob),
                 "bma_ci_95_per_std": float(beta_q95_std[i] * edge_prob),
             })
-        pd.DataFrame(bma_rows).to_csv(
-            output_dir / "bma_coefficients.csv", index=False
-        )
+        bma_df = pd.DataFrame(bma_rows)
+        if _store is not None:
+            _store.write_table(
+                "3", "bma_coefficients", bma_df,
+                producer="v2_bayesian_causal",
+            )
+        else:
+            bma_df.to_csv(
+                output_dir / "bma_coefficients.csv", index=False
+            )
 
     logger.info(
         "NUTS done: %.1f%% accept, %d divergences",
@@ -794,446 +854,3 @@ def _build_nuts_input_dict(
     }
 
 
-# ---------------------------------------------------------------------------
-# Visualisation helpers
-# ---------------------------------------------------------------------------
-
-def _plot_mc3_visuals(
-    edge_probs: np.ndarray,
-    node_names: list[str],
-    output_dir: Path,
-) -> None:
-    """Generate MC³ edge-probability heatmap and median-probability DAG plot."""
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError:
-        logger.warning("matplotlib not available — skipping MC³ plots")
-        return
-
-    figs_dir = output_dir / "figures"
-    figs_dir.mkdir(parents=True, exist_ok=True)
-    n = len(node_names)
-
-    # 1. Edge Probability Heatmap
-    fig, ax = plt.subplots(figsize=(8, 7))
-    im = ax.imshow(edge_probs, cmap="YlOrRd", vmin=0, vmax=1, aspect="equal")
-    cbar = plt.colorbar(im, ax=ax, shrink=0.8)
-    cbar.set_label("Inclusion Probability", fontsize=11)
-    ax.set_xticks(range(n))
-    ax.set_yticks(range(n))
-    ax.set_xticklabels(node_names, rotation=45, ha="right", fontsize=9)
-    ax.set_yticklabels(node_names, fontsize=9)
-    ax.set_xlabel("Target", fontsize=11)
-    ax.set_ylabel("Source", fontsize=11)
-    ax.set_title("MC³ Edge Inclusion Probabilities", fontsize=13, fontweight="bold")
-    for i in range(n):
-        for j in range(n):
-            if i == j:
-                continue
-            val = edge_probs[i, j]
-            color = "white" if val > 0.6 else "black"
-            ax.text(j, i, f"{val:.2f}", ha="center", va="center",
-                    fontsize=7, color=color)
-    fig.tight_layout()
-    fig.savefig(figs_dir / "dag_posterior_heatmap.png", dpi=200, bbox_inches="tight")
-    plt.close(fig)
-
-    # 2. Median Probability DAG (network diagram for edges >= 0.30)
-    fig, ax = plt.subplots(figsize=(10, 8))
-    angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
-    radius = 3.0
-    pos_x = radius * np.cos(angles)
-    pos_y = radius * np.sin(angles)
-
-    for i, name in enumerate(node_names):
-        ax.plot(pos_x[i], pos_y[i], "o", markersize=28, color="#4A90D9",
-                markeredgecolor="white", markeredgewidth=2, zorder=5)
-        ax.text(pos_x[i], pos_y[i], name, ha="center", va="center",
-                fontsize=7, fontweight="bold", color="white", zorder=6)
-
-    for i in range(n):
-        for j in range(n):
-            if i == j:
-                continue
-            prob = edge_probs[i, j]
-            if prob < 0.30:
-                continue
-            dx = pos_x[j] - pos_x[i]
-            dy = pos_y[j] - pos_y[i]
-            dist = np.sqrt(dx**2 + dy**2)
-            shrink = 0.7 / dist if dist > 0 else 0
-            sx = pos_x[i] + dx * shrink
-            sy = pos_y[i] + dy * shrink
-            ex = pos_x[j] - dx * shrink
-            ey = pos_y[j] - dy * shrink
-
-            alpha_val = max(0.2, min(1.0, prob))
-            width = 1.0 + 3.0 * prob
-            color = "#E74C3C" if prob >= 0.50 else "#F39C12"
-            ax.annotate("", xy=(ex, ey), xytext=(sx, sy),
-                        arrowprops=dict(arrowstyle="->", color=color,
-                                        lw=width, alpha=alpha_val,
-                                        connectionstyle="arc3,rad=0.1"))
-            mx = (sx + ex) / 2 + 0.15
-            my = (sy + ey) / 2 + 0.15
-            ax.text(mx, my, f"{prob:.2f}", fontsize=7, color=color,
-                    alpha=alpha_val, fontweight="bold")
-
-    ax.set_xlim(-radius - 1.5, radius + 1.5)
-    ax.set_ylim(-radius - 1.5, radius + 1.5)
-    ax.set_aspect("equal")
-    ax.axis("off")
-    ax.set_title("Median Probability DAG (edges \u2265 0.30)", fontsize=13,
-                 fontweight="bold")
-    from matplotlib.lines import Line2D
-    legend_elements = [
-        Line2D([0], [0], color="#E74C3C", lw=2, label="Strong (p \u2265 0.50)"),
-        Line2D([0], [0], color="#F39C12", lw=2, linestyle="--",
-               label="Weak (0.30 \u2264 p < 0.50)"),
-    ]
-    ax.legend(handles=legend_elements, loc="lower right", fontsize=9)
-    fig.tight_layout()
-    fig.savefig(figs_dir / "median_probability_dag.png", dpi=200,
-                bbox_inches="tight")
-    plt.close(fig)
-
-    logger.info("MC³ visualizations saved to %s", figs_dir)
-
-
-def _plot_nuts_visuals(
-    nuts_summary: dict,
-    output_dir: Path,
-) -> None:
-    """Generate NUTS posterior density and convergence diagnostic plots."""
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError:
-        logger.warning("matplotlib not available — skipping NUTS plots")
-        return
-
-    figs_dir = output_dir / "figures"
-    figs_dir.mkdir(parents=True, exist_ok=True)
-
-    treatments = nuts_summary.get("treatments", [])
-    r_hat = nuts_summary.get("r_hat", {})
-    ess = nuts_summary.get("ess", {})
-
-    beta_chain_path = output_dir / "nuts_beta.npy"
-    if not beta_chain_path.exists() or not treatments:
-        return
-    beta_chain = np.load(beta_chain_path)
-    n_samples, n_treat = beta_chain.shape
-
-    colors = ["#3498DB", "#E74C3C", "#2ECC71", "#9B59B6", "#F39C12", "#1ABC9C"]
-
-    # 1. Posterior Density Plot
-    fig, axes = plt.subplots(1, n_treat, figsize=(4 * n_treat, 4), squeeze=False)
-    for i, tname in enumerate(treatments):
-        ax = axes[0, i]
-        chain = beta_chain[:, i]
-        ax.hist(chain, bins=50, density=True, alpha=0.7,
-                color=colors[i % len(colors)], edgecolor="white", linewidth=0.5)
-        ax.axvline(np.mean(chain), color="black", lw=2,
-                   label=f"mean={np.mean(chain):.4f}")
-        ax.axvline(0, color="gray", lw=1, ls="--", alpha=0.5)
-        ci5, ci95 = np.percentile(chain, [5, 95])
-        ax.axvspan(ci5, ci95, alpha=0.15, color=colors[i % len(colors)],
-                   label=f"90% CI [{ci5:.4f}, {ci95:.4f}]")
-        ax.set_title(tname, fontsize=12, fontweight="bold")
-        ax.set_xlabel("\u03b2 coefficient", fontsize=10)
-        ax.set_ylabel("Density" if i == 0 else "", fontsize=10)
-        ax.legend(fontsize=7, loc="upper right")
-    fig.suptitle("NUTS Posterior Densities", fontsize=14, fontweight="bold", y=1.02)
-    fig.tight_layout()
-    fig.savefig(figs_dir / "posterior_densities.png", dpi=200, bbox_inches="tight")
-    plt.close(fig)
-
-    # 2. Trace Plot
-    fig, axes = plt.subplots(n_treat, 1, figsize=(12, 3 * n_treat), squeeze=False)
-    for i, tname in enumerate(treatments):
-        ax = axes[i, 0]
-        chain = beta_chain[:, i]
-        ax.plot(chain, lw=0.3, alpha=0.7, color=colors[i % len(colors)])
-        ax.axhline(np.mean(chain), color="black", lw=1, ls="--", alpha=0.7)
-        ax.set_ylabel(tname, fontsize=10, fontweight="bold")
-        ax.set_xlabel("Sample" if i == n_treat - 1 else "", fontsize=10)
-        ax.tick_params(labelsize=8)
-        rh = r_hat.get("beta", [])
-        es = ess.get("beta", [])
-        rh_val = rh[i] if i < len(rh) else float("nan")
-        es_val = es[i] if i < len(es) else float("nan")
-        ax.text(0.98, 0.95, f"R\u0302={rh_val:.3f}  ESS={es_val:.0f}",
-                transform=ax.transAxes, ha="right", va="top", fontsize=9,
-                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
-    fig.suptitle("NUTS Trace Plots", fontsize=14, fontweight="bold")
-    fig.tight_layout()
-    fig.savefig(figs_dir / "trace_plots.png", dpi=200, bbox_inches="tight")
-    plt.close(fig)
-
-    # 3. R-hat & ESS Summary
-    beta_rhat = r_hat.get("beta", [])
-    beta_ess = ess.get("beta", [])
-    if beta_rhat and beta_ess:
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
-        x_pos = range(len(treatments))
-
-        rh_colors = ["#2ECC71" if r < 1.1 else "#E74C3C" for r in beta_rhat]
-        ax1.bar(x_pos, beta_rhat, color=rh_colors, edgecolor="white")
-        ax1.axhline(1.1, color="red", ls="--", lw=1, label="threshold (1.1)")
-        ax1.axhline(1.0, color="green", ls=":", lw=1, alpha=0.5)
-        ax1.set_xticks(list(x_pos))
-        ax1.set_xticklabels(treatments, rotation=30, ha="right", fontsize=9)
-        ax1.set_ylabel("R\u0302", fontsize=11)
-        ax1.set_title("Convergence (R\u0302)", fontsize=12, fontweight="bold")
-        ax1.legend(fontsize=8)
-
-        ax2.bar(x_pos, beta_ess, color="#3498DB", edgecolor="white")
-        ax2.axhline(400, color="orange", ls="--", lw=1,
-                    label="min recommended (400)")
-        ax2.set_xticks(list(x_pos))
-        ax2.set_xticklabels(treatments, rotation=30, ha="right", fontsize=9)
-        ax2.set_ylabel("ESS", fontsize=11)
-        ax2.set_title("Effective Sample Size", fontsize=12, fontweight="bold")
-        ax2.legend(fontsize=8)
-
-        fig.suptitle("NUTS Convergence Diagnostics", fontsize=14, fontweight="bold")
-        fig.tight_layout()
-        fig.savefig(figs_dir / "rhat_ess_summary.png", dpi=200, bbox_inches="tight")
-        plt.close(fig)
-
-    logger.info("NUTS visualizations saved to %s", figs_dir)
-
-
-def _plot_dag_publication(
-    edge_probs: np.ndarray,
-    node_names: list[str],
-    dag_def: dict[str, Any],
-    output_dir: Path,
-) -> None:
-    """Publication-quality DAG with hierarchical layout and edge widths ∝ inclusion probability."""
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError:
-        return
-
-    figs_dir = output_dir / "figures"
-    figs_dir.mkdir(parents=True, exist_ok=True)
-
-    # Classify nodes by role from DAG definition
-    roles: dict[str, str] = {}
-    for node in dag_def.get("nodes", []):
-        roles[node["name"]] = node.get("type", "other")
-
-    # Assign hierarchical y positions by role
-    role_y = {"confounder": 3.0, "treatment": 2.0, "mediator": 1.0, "outcome": 0.0}
-    role_colors = {
-        "confounder": "#8E44AD", "treatment": "#E74C3C",
-        "mediator": "#F39C12", "outcome": "#2ECC71", "other": "#95A5A6",
-    }
-
-    # Group nodes by role for x-spacing
-    grouped: dict[str, list[str]] = {}
-    for name in node_names:
-        r = roles.get(name, "other")
-        grouped.setdefault(r, []).append(name)
-
-    pos: dict[str, tuple[float, float]] = {}
-    for role, names in grouped.items():
-        y = role_y.get(role, 1.5)
-        n = len(names)
-        x_start = -(n - 1) / 2.0
-        for i, name in enumerate(names):
-            pos[name] = (x_start + i, y)
-
-    n = len(node_names)
-    fig, ax = plt.subplots(figsize=(14, 10))
-
-    # Draw edges with width ∝ inclusion probability
-    for i, src in enumerate(node_names):
-        for j, tgt in enumerate(node_names):
-            if i == j:
-                continue
-            prob = edge_probs[i, j]
-            if prob < 0.30:
-                continue
-            if src not in pos or tgt not in pos:
-                continue
-
-            sx, sy = pos[src]
-            tx, ty = pos[tgt]
-            dx, dy = tx - sx, ty - sy
-            dist = math.sqrt(dx**2 + dy**2)
-            if dist < 0.01:
-                continue
-            shrink = 0.35 / dist
-            x0 = sx + dx * shrink
-            y0 = sy + dy * shrink
-            x1 = tx - dx * shrink
-            y1 = ty - dy * shrink
-
-            width = 1.0 + 4.0 * prob
-            alpha = max(0.3, min(1.0, prob))
-            color = "#2C3E50" if prob >= 0.90 else "#E74C3C" if prob >= 0.50 else "#BDC3C7"
-            ax.annotate(
-                "", xy=(x1, y1), xytext=(x0, y0),
-                arrowprops=dict(
-                    arrowstyle="-|>", color=color, lw=width,
-                    alpha=alpha, connectionstyle="arc3,rad=0.08",
-                    mutation_scale=15,
-                ),
-            )
-            mx = (x0 + x1) / 2 + 0.08
-            my = (y0 + y1) / 2 + 0.08
-            ax.text(mx, my, f"{prob:.2f}", fontsize=7, color=color,
-                    alpha=alpha, fontweight="bold",
-                    bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.7))
-
-    # Draw nodes
-    for name in node_names:
-        if name not in pos:
-            continue
-        x, y = pos[name]
-        role = roles.get(name, "other")
-        color = role_colors.get(role, "#95A5A6")
-        circle = plt.Circle((x, y), 0.30, facecolor=color, edgecolor="white",
-                             linewidth=2.5, zorder=5, alpha=0.92)
-        ax.add_patch(circle)
-        ax.text(x, y, name.replace("_", "\n"), ha="center", va="center",
-                fontsize=7, fontweight="bold", color="white", zorder=6)
-
-    # Legend
-    from matplotlib.patches import Patch
-    from matplotlib.lines import Line2D
-    legend_elements = [
-        Patch(facecolor=role_colors["confounder"], label="Confounder"),
-        Patch(facecolor=role_colors["treatment"], label="Treatment"),
-        Patch(facecolor=role_colors["mediator"], label="Mediator"),
-        Patch(facecolor=role_colors["outcome"], label="Outcome"),
-        Line2D([0], [0], color="#2C3E50", lw=3, label="Strong (p ≥ 0.90)"),
-        Line2D([0], [0], color="#E74C3C", lw=2, label="Moderate (0.50–0.90)"),
-        Line2D([0], [0], color="#BDC3C7", lw=1.5, label="Weak (0.30–0.50)"),
-    ]
-    ax.legend(handles=legend_elements, loc="lower left", fontsize=9,
-              framealpha=0.9, edgecolor="gray")
-
-    pad = 0.8
-    xs = [p[0] for p in pos.values()]
-    ys = [p[1] for p in pos.values()]
-    ax.set_xlim(min(xs) - pad, max(xs) + pad)
-    ax.set_ylim(min(ys) - pad, max(ys) + pad)
-    ax.set_aspect("equal")
-    ax.axis("off")
-    ax.set_title("Bayesian Causal DAG — Edge Inclusion Probabilities (MC³)",
-                 fontsize=14, fontweight="bold", pad=20)
-    fig.tight_layout()
-    fig.savefig(figs_dir / "dag_publication.png", dpi=300, bbox_inches="tight")
-    plt.close(fig)
-    logger.info("Publication DAG saved to %s", figs_dir / "dag_publication.png")
-
-
-def _plot_mediation_map(
-    data: pd.DataFrame,
-    dag_def: dict[str, Any],
-    nuts_results: dict,
-    config: dict | None,
-    output_dir: Path,
-) -> None:
-    """Spatial map of the indirect Canopy → NDVI → AAT_z mediation pathway magnitude."""
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        from matplotlib.colors import TwoSlopeNorm
-    except ImportError:
-        return
-
-    figs_dir = output_dir / "figures"
-    figs_dir.mkdir(parents=True, exist_ok=True)
-
-    config = config or {}
-    coord_cols = config.get("variables", {}).get("coordinates", [])
-    if len(coord_cols) < 2:
-        logger.warning("No coordinate columns — skipping mediation map")
-        return
-    if not all(c in data.columns for c in coord_cols):
-        logger.warning("Coordinate columns not in data — skipping mediation map")
-        return
-
-    # Load structural coefficients for the mediation pathway
-    coeff_path = output_dir.parent / "scenario_coefficients.json"
-    if not coeff_path.exists():
-        coeff_path = output_dir / ".." / "scenario_coefficients.json"
-    if not coeff_path.exists():
-        logger.warning("scenario_coefficients.json not found — skipping mediation map")
-        return
-
-    with open(coeff_path) as f:
-        coeffs = json.load(f)
-
-    # Get Canopy→NDVI and NDVI→AAT_z structural coefficients
-    edges = coeffs.get("edges", {})
-    canopy_ndvi = edges.get("Pct_Canopy->NDVI", {}).get("structural_coeff")
-    ndvi_aat = coeffs.get("direct_effects", {}).get("NDVI", {}).get("structural_coeff")
-
-    if canopy_ndvi is None or ndvi_aat is None:
-        # Try to estimate from data correlation
-        if "Pct_Canopy" in data.columns and "NDVI" in data.columns:
-            from numpy.linalg import lstsq
-            X_can = data["Pct_Canopy"].values.reshape(-1, 1)
-            X_can = np.column_stack([X_can, np.ones(len(X_can))])
-            canopy_ndvi = float(lstsq(X_can, data["NDVI"].values, rcond=None)[0][0])
-        if ndvi_aat is None:
-            ndvi_aat = -4.131  # fallback from structural coefficient
-        if canopy_ndvi is None:
-            logger.warning("Cannot compute mediation coefficients — skipping")
-            return
-
-    x = data[coord_cols[0]].values
-    y = data[coord_cols[1]].values
-
-    # Indirect effect at each point = canopy_value * β(canopy→NDVI) * β(NDVI→AAT_z)
-    # This represents the local mediation magnitude
-    canopy_vals = data["Pct_Canopy"].values if "Pct_Canopy" in data.columns else np.zeros(len(data))
-    ndvi_vals = data["NDVI"].values if "NDVI" in data.columns else np.zeros(len(data))
-
-    # Mediation strength: how much of the temperature at each point
-    # is explained by the Canopy→NDVI→AAT_z pathway
-    indirect_effect = ndvi_vals * ndvi_aat  # NDVI contribution to temperature
-
-    fig, axes = plt.subplots(1, 2, figsize=(16, 7))
-
-    # Panel 1: NDVI-mediated cooling contribution
-    vmax = max(abs(np.percentile(indirect_effect, 2)),
-               abs(np.percentile(indirect_effect, 98)))
-    norm = TwoSlopeNorm(vmin=-vmax, vcenter=0, vmax=vmax)
-    sc1 = axes[0].scatter(x, y, c=indirect_effect, cmap="RdBu_r",
-                          norm=norm, s=0.3, alpha=0.6, rasterized=True)
-    plt.colorbar(sc1, ax=axes[0], shrink=0.8, label="NDVI→AAT_z effect (z-score)")
-    axes[0].set_title("NDVI-Mediated Temperature Effect", fontsize=12, fontweight="bold")
-    axes[0].set_xlabel(coord_cols[0])
-    axes[0].set_ylabel(coord_cols[1])
-    axes[0].set_aspect("equal")
-
-    # Panel 2: Canopy-driven NDVI (mediator source)
-    sc2 = axes[1].scatter(x, y, c=canopy_vals, cmap="Greens",
-                          s=0.3, alpha=0.6, rasterized=True)
-    plt.colorbar(sc2, ax=axes[1], shrink=0.8, label="Pct_Canopy (%)")
-    axes[1].set_title("Canopy Cover (Mediation Source)", fontsize=12, fontweight="bold")
-    axes[1].set_xlabel(coord_cols[0])
-    axes[1].set_ylabel(coord_cols[1])
-    axes[1].set_aspect("equal")
-
-    coeff_text = f"β(Canopy→NDVI) = {canopy_ndvi:.4f}\nβ(NDVI→AAT_z) = {ndvi_aat:.3f}"
-    fig.text(0.5, 0.01, coeff_text, ha="center", fontsize=10, style="italic")
-    fig.suptitle("NDVI Mediation Pathway: Pct_Canopy → NDVI → AAT_z",
-                 fontsize=14, fontweight="bold", y=1.02)
-    fig.tight_layout()
-    fig.savefig(figs_dir / "mediation_map_ndvi.png", dpi=300, bbox_inches="tight")
-    plt.close(fig)
-    logger.info("Mediation map saved to %s", figs_dir / "mediation_map_ndvi.png")
