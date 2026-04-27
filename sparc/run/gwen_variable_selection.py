@@ -35,9 +35,14 @@ from sparc.models.gwen import GWENModel
 
 
 def setup_output_directory(output_dir):
-    """Create output directory and subdirectories."""
-    os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(os.path.join(output_dir, 'gwen'), exist_ok=True)
+    """Create output directory and subdirectories — only when disk writes
+    are enabled.  Otherwise the canonical store is artifacts.db and the
+    Stage_1 directory must remain absent.
+    """
+    from sparc.run.disk_policy import disk_writes_enabled
+    if disk_writes_enabled():
+        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(os.path.join(output_dir, 'gwen'), exist_ok=True)
     return output_dir
 
 
@@ -105,10 +110,13 @@ def save_gwen_diagnostics(gwen_model, selected_features, feature_names, config, 
             consumers=["server:/results/gwen", "report:gwen", "desktop:gwen_view"],
         )
     else:
-        diagnostics_file = os.path.join(output_dir, 'gwen_diagnostics.json')
-        with open(diagnostics_file, 'w') as f:
-            json.dump(diagnostics, f, indent=2)
-    
+        from sparc.run.disk_policy import disk_writes_enabled
+        if disk_writes_enabled():
+            os.makedirs(output_dir, exist_ok=True)
+            diagnostics_file = os.path.join(output_dir, 'gwen_diagnostics.json')
+            with open(diagnostics_file, 'w') as f:
+                json.dump(diagnostics, f, indent=2)
+
     return diagnostics
 
 
@@ -271,6 +279,14 @@ def save_gwen_results(gwen_model, selected_features, feature_names, config, outp
         )
 
     # Back-compat path when no active registry is installed.
+    from sparc.run.disk_policy import disk_writes_enabled
+    if not disk_writes_enabled():
+        return (
+            "<no-store, no-disk> gwen_results",
+            "<no-store, no-disk> gwen_variable_importance",
+            "<no-store, no-disk> selected_features",
+        )
+    os.makedirs(output_dir, exist_ok=True)
     results_file = os.path.join(output_dir, 'gwen_results.json')
     with open(results_file, 'w') as f:
         json.dump(gwen_results, f, indent=2)
@@ -283,18 +299,28 @@ def save_gwen_results(gwen_model, selected_features, feature_names, config, outp
 
 
 def update_pipeline_status(output_dir, status, details=None):
-    """Update pipeline status tracking."""
-    status_file = os.path.join(output_dir, 'pipeline_status.json')
-    
-    # Load existing status or create new
+    """Update pipeline status tracking (artifacts.db is canonical)."""
+    # Load existing status from the store first, then disk fallback.
     pipeline_status = {}
-    if os.path.exists(status_file):
+    try:
+        from sparc.registry.store import get_active_store
+        _store = get_active_store()
+    except Exception:  # noqa: BLE001
+        _store = None
+    if _store is not None and _store.has("1", "pipeline_status"):
         try:
-            with open(status_file, 'r') as f:
-                pipeline_status = json.load(f)
-        except:
+            pipeline_status = _store.read_struct("1", "pipeline_status") or {}
+        except Exception:  # noqa: BLE001
             pipeline_status = {}
-    
+    if not pipeline_status:
+        status_file = os.path.join(output_dir, 'pipeline_status.json')
+        if os.path.exists(status_file):
+            try:
+                with open(status_file, 'r') as f:
+                    pipeline_status = json.load(f)
+            except Exception:  # noqa: BLE001
+                pipeline_status = {}
+
     # Update GWEN stage status
     pipeline_status['gwen'] = {
         'status': status,
@@ -302,10 +328,22 @@ def update_pipeline_status(output_dir, status, details=None):
         'needs_approval': status == 'completed_pending_review',
         'details': details or {}
     }
-    
-    # Save updated status
-    with open(status_file, 'w') as f:
-        json.dump(pipeline_status, f, indent=2)
+
+    # Persist: store first, disk only if explicitly enabled.
+    if _store is not None:
+        _store.write_struct(
+            stage="1",
+            artifact_id="pipeline_status",
+            payload=pipeline_status,
+            producer="gwen_variable_selection.update_pipeline_status",
+            consumers=["server:/pipeline/status"],
+        )
+    from sparc.run.disk_policy import disk_writes_enabled
+    if disk_writes_enabled():
+        os.makedirs(output_dir, exist_ok=True)
+        status_file = os.path.join(output_dir, 'pipeline_status.json')
+        with open(status_file, 'w') as f:
+            json.dump(pipeline_status, f, indent=2)
 
 
 def check_prerequisites(config):
@@ -624,9 +662,12 @@ def main(config_path=None, fast_mode=False):
                     )
                     print("   [OK] Stability scores written to artifacts.db (1/gwen_stability)")
                 else:
-                    stab_path = os.path.join(output_dir, 'gwen_stability.csv')
-                    stability_df.to_csv(stab_path, index=False)
-                    print(f"   [OK] Stability scores saved: {stab_path}")
+                    from sparc.run.disk_policy import disk_writes_enabled as _dw
+                    if _dw():
+                        os.makedirs(output_dir, exist_ok=True)
+                        stab_path = os.path.join(output_dir, 'gwen_stability.csv')
+                        stability_df.to_csv(stab_path, index=False)
+                        print(f"   [OK] Stability scores saved: {stab_path}")
             except Exception as stab_e:
                 print(f"   Warning: Stability scoring failed ({stab_e}), continuing without")
 
@@ -670,9 +711,11 @@ def main(config_path=None, fast_mode=False):
             
     except Exception as e:
         print(f"\n❌ ERROR in GWEN stage: {str(e)}")
-        # Create fallback output directory for error logging
+        # Error logging — only create fallback dir if disk writes are on.
+        from sparc.run.disk_policy import disk_writes_enabled as _dw
         fallback_dir = './output'
-        os.makedirs(fallback_dir, exist_ok=True)
+        if _dw():
+            os.makedirs(fallback_dir, exist_ok=True)
         update_pipeline_status(output_dir if 'output_dir' in locals() else fallback_dir, 'failed', {
             'error': str(e)
         })

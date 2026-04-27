@@ -314,7 +314,11 @@ def main(fast_mode=False):
     # Create Stage 0 output directory using centralized paths
     paths = get_paths()
     stage0_dir = paths.stage0_dir
-    os.makedirs(stage0_dir, exist_ok=True)
+    # Only mkdir when disk writes are enabled; otherwise the canonical
+    # store is artifacts.db and Stage_0 directory must remain absent.
+    from sparc.run.disk_policy import disk_writes_enabled
+    if disk_writes_enabled():
+        os.makedirs(stage0_dir, exist_ok=True)
     
     # Stage 0 runs before GWEN, so always use base model predictors
     selected_features = config['predictors']['base_model']
@@ -378,8 +382,10 @@ def main(fast_mode=False):
             consumers=["server:/results/correlogram", "pipeline:stage0b"],
         )
         print("Dataset profile written to artifacts.db (stage=0, id=dataset_profile)")
-    else:
-        # Back-compat: no active registry (e.g. ad-hoc invocation).
+    elif disk_writes_enabled():
+        # Back-compat: no active registry (e.g. ad-hoc invocation) AND
+        # disk writes explicitly enabled.
+        os.makedirs(stage0_dir, exist_ok=True)
         profile_path = os.path.join(stage0_dir, 'dataset_profile.json')
         with open(profile_path, 'w') as _fp:
             _json.dump(profile, _fp, indent=2)
@@ -542,8 +548,9 @@ def main(fast_mode=False):
             consumers=["server:/results/correlogram"],
         )
         print("Correlogram results + summary written to artifacts.db (stage=0)")
-    else:
+    elif disk_writes_enabled():
         # Back-compat path for ad-hoc invocation without an active registry.
+        os.makedirs(stage0_dir, exist_ok=True)
         results_path = os.path.join(stage0_dir, 'correlogram_analysis_results.json')
         with open(results_path, 'w') as f:
             json.dump(json_safe_results, f, indent=2)
@@ -602,13 +609,26 @@ def _auto_wire_bandwidths(all_results, model_bandwidths, optimal_cv_block_size, 
     for var, bw in per_variable_bandwidths.items():
         print(f"    {var}: {bw:.0f} m")
 
-    # Load existing pipeline_config.json (if it exists), patch in bandwidths
+    # Load existing pipeline_config.json (if it exists), patch in bandwidths.
+    # Prefer the artifact store; fall back to disk for legacy runs.
     config_path = paths.pipeline_config
-    if os.path.exists(config_path):
-        with open(config_path, 'r') as f:
-            pipeline_cfg = json.load(f)
-    else:
-        pipeline_cfg = {}
+    pipeline_cfg = None
+    try:
+        from sparc.registry.store import get_active_store
+        _existing_store = get_active_store()
+    except Exception:  # noqa: BLE001
+        _existing_store = None
+    if _existing_store is not None and _existing_store.has("0", "pipeline_config"):
+        try:
+            pipeline_cfg = _existing_store.read_struct("0", "pipeline_config")
+        except Exception:  # noqa: BLE001
+            pipeline_cfg = None
+    if pipeline_cfg is None:
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                pipeline_cfg = json.load(f)
+        else:
+            pipeline_cfg = {}
 
     # Patch
     pipeline_cfg.setdefault('manual_parameters', {})
@@ -629,10 +649,8 @@ def _auto_wire_bandwidths(all_results, model_bandwidths, optimal_cv_block_size, 
         for k, v in model_bandwidths.items()
     }
 
-    with open(config_path, 'w') as f:
-        json.dump(pipeline_cfg, f, indent=2)
-
-    # Mirror to artifacts.db for queryability / inspection.
+    # Persist: artifact store is canonical; disk is opt-in.
+    from sparc.run.disk_policy import disk_writes_enabled as _disk_on
     try:
         from sparc.registry.store import get_active_store
         _store = get_active_store()
@@ -647,7 +665,13 @@ def _auto_wire_bandwidths(all_results, model_bandwidths, optimal_cv_block_size, 
             consumers=["pipeline:stage1+"],
         )
 
-    print(f"    Saved to: {config_path}")
+    if _disk_on():
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        with open(config_path, 'w') as f:
+            json.dump(pipeline_cfg, f, indent=2)
+        print(f"    Saved to: {config_path}")
+    else:
+        print("    pipeline_config persisted to artifacts.db (stage=0, id=pipeline_config)")
 
 if __name__ == "__main__":
     import sys
