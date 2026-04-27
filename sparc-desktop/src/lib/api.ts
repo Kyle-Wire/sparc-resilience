@@ -1,6 +1,17 @@
 /**
  * Typed fetch wrappers for the SPARC FastAPI server at localhost:8008.
+ *
+ * When running inside the Tauri shell, every request carries the
+ * per-launch sidecar Bearer token (see `auth.rs` /
+ * `sparc/server/app.py::SidecarAuthMiddleware`). The token is fetched
+ * lazily from the Rust side via the `get_sidecar_token` command and
+ * cached for the lifetime of the renderer.
+ *
+ * Outside Tauri (browser dev, tests) the helper falls back to no
+ * token; the Python server is expected to be launched without
+ * `SPARC_SIDECAR_TOKEN` in that case so the middleware is a no-op.
  */
+import { invoke } from "@tauri-apps/api/core";
 import type {
   HealthResponse,
   ProjectLoadResponse,
@@ -31,8 +42,67 @@ import type {
 
 const BASE = "http://127.0.0.1:8008";
 
+// ------------------------------------------------------------------
+// Sidecar auth — per-launch Bearer token from Rust
+// ------------------------------------------------------------------
+function isTauri(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+let _tokenPromise: Promise<string | null> | null = null;
+async function getSidecarToken(): Promise<string | null> {
+  if (!isTauri()) return null;
+  if (_tokenPromise) return _tokenPromise;
+  _tokenPromise = (async () => {
+    // The Rust side may not have set the token yet (sidecar still
+    // booting). Retry a few times — the splash screen polls /health
+    // anyway so a brief delay is invisible.
+    for (let i = 0; i < 20; i++) {
+      try {
+        const tok = await invoke<string | null>("get_sidecar_token");
+        if (tok) return tok;
+      } catch {
+        // not ready yet
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    return null;
+  })();
+  return _tokenPromise;
+}
+
+/** Synchronously read the cached token. Used by WS construction where
+ *  we can't await — callers should ensure the token is primed. */
+let _cachedToken: string | null = null;
+getSidecarToken().then((t) => {
+  _cachedToken = t;
+});
+export function sidecarTokenSync(): string | null {
+  return _cachedToken;
+}
+
+async function authHeaders(extra?: HeadersInit): Promise<HeadersInit> {
+  const tok = await getSidecarToken();
+  const h: Record<string, string> = {};
+  if (extra) {
+    if (extra instanceof Headers) extra.forEach((v, k) => (h[k] = v));
+    else if (Array.isArray(extra)) for (const [k, v] of extra) h[k] = v;
+    else Object.assign(h, extra as Record<string, string>);
+  }
+  if (tok) h["Authorization"] = `Bearer ${tok}`;
+  return h;
+}
+
+/** Append `?token=` to a WebSocket URL when a sidecar token is set. */
+export function withWsAuth(url: string): string {
+  const tok = sidecarTokenSync();
+  if (!tok) return url;
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}token=${encodeURIComponent(tok)}`;
+}
+
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`);
+  const res = await fetch(`${BASE}${path}`, { headers: await authHeaders() });
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`${res.status}: ${body}`);
@@ -41,9 +111,12 @@ async function get<T>(path: string): Promise<T> {
 }
 
 async function post<T>(path: string, body?: unknown): Promise<T> {
+  const headers = await authHeaders(
+    body ? { "Content-Type": "application/json" } : undefined,
+  );
   const res = await fetch(`${BASE}${path}`, {
     method: "POST",
-    headers: body ? { "Content-Type": "application/json" } : undefined,
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
@@ -153,7 +226,11 @@ export const dataGeoJson = (variable?: string) =>
 export async function uploadData(file: File): Promise<ProjectLoadResponse> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${BASE}/data/upload`, { method: "POST", body: form });
+  const res = await fetch(`${BASE}/data/upload`, {
+    method: "POST",
+    body: form,
+    headers: await authHeaders(),
+  });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -270,9 +347,10 @@ export const updateConfig = (config: Partial<ProjectConfig>) =>
 
 // For PUT we need a separate helper
 async function put<T>(path: string, body: unknown): Promise<T> {
+  const headers = await authHeaders({ "Content-Type": "application/json" });
   const res = await fetch(`${BASE}${path}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(await res.text());
@@ -290,7 +368,10 @@ export const generateReport = (format: "markdown" | "json" = "markdown") =>
 
 /** Request a PDF report — returns binary blob or HTML fallback JSON. */
 export async function generatePdfReport(): Promise<{ blob: Blob | null; htmlFallback?: string }> {
-  const res = await fetch(`${BASE}/report/pdf`, { method: "POST" });
+  const res = await fetch(`${BASE}/report/pdf`, {
+    method: "POST",
+    headers: await authHeaders(),
+  });
   if (!res.ok) throw new Error(await res.text());
 
   const ct = res.headers.get("content-type") ?? "";
@@ -530,7 +611,7 @@ export const getScenarioUncertainty = (scenarioId?: number | string) =>
  * Returns the streaming Response so the caller can surface it to the user.
  */
 export const downloadResultsBundle = async (): Promise<Blob> => {
-  const res = await fetch(`${BASE}/results/bundle`);
+  const res = await fetch(`${BASE}/results/bundle`, { headers: await authHeaders() });
   if (!res.ok) throw new Error(`bundle download failed: ${res.status}`);
   return await res.blob();
 };
@@ -831,7 +912,7 @@ export function downloadGeoPackage(): void {
 // WebSocket helper
 // ------------------------------------------------------------------
 export function createPipelineSocket(): WebSocket {
-  return new WebSocket("ws://127.0.0.1:8008/run/stream");
+  return new WebSocket(withWsAuth("ws://127.0.0.1:8008/run/stream"));
 }
 
 // ------------------------------------------------------------------
@@ -947,7 +1028,7 @@ export async function downloadStandaloneSnapshot(opts: {
   if (opts.chatHistory) body.chat_history = opts.chatHistory;
   const res = await fetch(`${BASE}/report/standalone`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
   if (!res.ok) {

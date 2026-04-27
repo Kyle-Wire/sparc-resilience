@@ -24,9 +24,10 @@ from typing import Any, Literal, Optional
 import numpy as np
 from pydantic import BaseModel, Field
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Query, Body, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Query, Body, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, Response
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from sparc.server.state import ServerState
 from sparc.server.stream import stream_stage
@@ -40,6 +41,58 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
 )
+
+# ------------------------------------------------------------------
+# Sidecar Bearer-token middleware
+# ------------------------------------------------------------------
+# When the Tauri shell launches the server it injects a per-launch
+# UUID via the ``SPARC_SIDECAR_TOKEN`` env var. Every non-public
+# request must echo that token back as ``Authorization: Bearer <tok>``
+# (WebSockets accept it via a ``?token=`` query string instead, since
+# browsers can't set headers on the WS handshake).
+#
+# When the env var is **unset** (manual ``python -m sparc server`` for
+# tests, dev shells, CI) the middleware is a no-op so existing
+# workflows and the test suite keep working unchanged.
+
+_SIDECAR_TOKEN = os.environ.get("SPARC_SIDECAR_TOKEN")
+
+# Routes that never require the Bearer token. ``/health`` is hit by the
+# desktop splash before the renderer can fetch the token; ``/docs`` and
+# the OpenAPI helpers stay open in dev for browser inspection.
+_PUBLIC_PATHS = {"/health", "/docs", "/openapi.json", "/redoc"}
+
+
+class SidecarAuthMiddleware(BaseHTTPMiddleware):
+    """Reject requests without a matching Bearer token.
+
+    Inactive when ``SPARC_SIDECAR_TOKEN`` is unset.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        if _SIDECAR_TOKEN is None:
+            return await call_next(request)
+
+        path = request.url.path
+        if path in _PUBLIC_PATHS or path.startswith("/docs"):
+            return await call_next(request)
+
+        # WebSocket upgrade requests carry the token via query param.
+        if request.headers.get("upgrade", "").lower() == "websocket":
+            token = request.query_params.get("token")
+        else:
+            auth = request.headers.get("authorization", "")
+            token = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else None
+
+        if token != _SIDECAR_TOKEN:
+            return JSONResponse(
+                {"detail": "missing or invalid sidecar token"},
+                status_code=401,
+            )
+        return await call_next(request)
+
+
+app.add_middleware(SidecarAuthMiddleware)
 
 # Allow the Tauri webview (and dev server) to reach us
 app.add_middleware(

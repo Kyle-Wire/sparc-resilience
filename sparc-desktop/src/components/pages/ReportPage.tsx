@@ -2,6 +2,7 @@ import { useState, useCallback } from "react";
 import { SectionHeader, Card, Btn, Tag } from "@/components/ui/DesignSystem";
 import { useNotification } from "@/hooks/useNotifications";
 import { downloadAudienceReport, type ReportAudience, type ReportFormat } from "@/lib/api";
+import { useEntitlements } from "@/hooks/useEntitlements";
 
 const AUDIENCE_OPTIONS: { id: ReportAudience; label: string; blurb: string; color: string }[] = [
   { id: "technical", label: "Technical", blurb: "Full statistics, diagnostics, robustness — for analysts and reviewers", color: "var(--purple)" },
@@ -46,8 +47,13 @@ export default function ReportPage() {
   const [previewText, setPreviewText] = useState<string>("");
   const [previewBusy, setPreviewBusy] = useState(false);
   const { notify } = useNotification();
+  const ent = useEntitlements();
 
   const handleAudienceExport = useCallback(async (fmt: ReportFormat) => {
+    if (!ent.reportExport && fmt === "pdf") {
+      notify("warning", "PDF export requires Pro. Use Markdown preview, or upgrade in Settings.");
+      return;
+    }
     setGenerating(true);
     notify("info", `Generating ${audience} report (${fmt.toUpperCase()})\u2026`);
     try {
@@ -88,6 +94,10 @@ export default function ReportPage() {
 
   const handleExport = useCallback(
     async (format: string) => {
+      if (!ent.reportExport && (format === "PDF" || format === "DOCX")) {
+        notify("warning", "PDF/DOCX export requires Pro. Use HTML/CSV, or upgrade in Settings.");
+        return;
+      }
       const selected = sections.filter((s) => s.checked).map((s) => s.id);
       if (selected.length === 0) {
         notify("warning", "Select at least one section");

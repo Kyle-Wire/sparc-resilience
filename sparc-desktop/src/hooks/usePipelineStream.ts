@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from "react";
+import { withWsAuth } from "@/lib/api";
 import type { PipelineEvent } from "@/lib/types";
 
 /**
@@ -16,7 +17,7 @@ export function usePipelineStream() {
       setError(null);
       setIsRunning(true);
 
-      const ws = new WebSocket("ws://127.0.0.1:8008/run/stream");
+      const ws = new WebSocket(withWsAuth("ws://127.0.0.1:8008/run/stream"));
       wsRef.current = ws;
 
       ws.onopen = () => {

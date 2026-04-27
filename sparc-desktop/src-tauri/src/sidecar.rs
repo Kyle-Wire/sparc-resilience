@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use tauri::{AppHandle, Manager};
 
+use crate::auth::SIDECAR_TOKEN;
+
 // ─── Platform-specific helpers ───────────────────────────────────────────────
 
 /// Return the user's home directory.
@@ -178,6 +180,14 @@ fn resolve_python() -> String {
 pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let port = "8008";
 
+    // Per-launch Bearer token. The Python middleware (sparc.server.app)
+    // requires `Authorization: Bearer <token>` on every non-public route
+    // when this env var is set. Stored in OnceCell so the renderer can
+    // read it via the `get_sidecar_token` Tauri command.
+    let sidecar_token = uuid::Uuid::new_v4().to_string();
+    let _ = SIDECAR_TOKEN.set(sidecar_token.clone());
+    println!("Sidecar Bearer token initialized");
+
     // Prepare log file (truncated each launch).
     let ld = log_dir();
     std::fs::create_dir_all(&ld).ok();
@@ -208,6 +218,7 @@ pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
         if path.exists() {
             match Command::new(path)
                 .args(["server", "--port", port])
+                .env("SPARC_SIDECAR_TOKEN", &sidecar_token)
                 .stdout(stdio(&log_file))
                 .stderr(stdio(&log_file))
                 .spawn()
@@ -236,6 +247,7 @@ pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         let mut c = Command::new(&python);
         c.args(["-m", "sparc", "server", "--port", port])
+            .env("SPARC_SIDECAR_TOKEN", &sidecar_token)
             .creation_flags(CREATE_NO_WINDOW)
             .stdout(stdio(&log_file))
             .stderr(stdio(&log_file));
@@ -245,6 +257,7 @@ pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
     let mut cmd = {
         let mut c = Command::new(&python);
         c.args(["-m", "sparc", "server", "--port", port])
+            .env("SPARC_SIDECAR_TOKEN", &sidecar_token)
             .stdout(stdio(&log_file))
             .stderr(stdio(&log_file));
         c

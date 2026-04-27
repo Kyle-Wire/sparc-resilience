@@ -3,6 +3,8 @@ import { SectionHeader, Card, Tag, Btn, Stat, StatGrid } from "@/components/ui/D
 import { usePipeline, type StageStatus } from "@/hooks/PipelineProvider";
 import { useNotification } from "@/hooks/useNotifications";
 import type { PipelineEvent } from "@/lib/types";
+import { useEntitlements } from "@/hooks/useEntitlements";
+import { useDailyRunCounter } from "@/hooks/useDailyRunCounter";
 
 const STAGE_NAMES: Record<number, string> = {
   0: "Correlogram",
@@ -127,6 +129,8 @@ function eventToLogLine(evt: PipelineEvent) {
 
 export default function RunPage() {
   const pipeline = usePipeline();
+  const ent = useEntitlements();
+  const runCap = useDailyRunCounter();
   const { notify } = useNotification();
   const logEndRef = useRef<HTMLDivElement>(null);
   const [enabledStages, setEnabledStages] = useState<Set<number>>(new Set(STAGE_IDS));
@@ -207,11 +211,21 @@ export default function RunPage() {
       notify("warning", "No stages selected");
       return;
     }
+    if (runCap.capped) {
+      notify("warning", `Monthly run cap reached (${ent.maxRunsPerMonth} runs). Upgrade for unlimited runs.`);
+      return;
+    }
+    void runCap.recordRun();
     pipeline.startPipeline(stages, { fast: false });
     notify("info", `Pipeline started (${stages.length} stage${stages.length > 1 ? "s" : ""})`);
-  }, [pipeline, enabledStages, notify]);
+  }, [pipeline, enabledStages, notify, runCap]);
 
   const handleRunFromHere = useCallback((stage: number) => {
+    if (runCap.capped) {
+      notify("warning", `Monthly run cap reached (${ent.maxRunsPerMonth} runs). Upgrade for unlimited runs.`);
+      return;
+    }
+    void runCap.recordRun();
     const stages = STAGE_IDS.filter((id) => id >= stage && enabledStages.has(id));
     if (stages.length === 0) {
       pipeline.startStage(stage, { fast: false });
@@ -219,7 +233,7 @@ export default function RunPage() {
       pipeline.startPipeline(stages, { fast: false });
     }
     notify("info", `Running from ${STAGE_NAMES[stage] ?? `stage ${stage}`}`);
-  }, [pipeline, enabledStages, notify]);
+  }, [pipeline, enabledStages, notify, runCap]);
 
   const handleStop = useCallback(() => {
     pipeline.cancel();

@@ -2,6 +2,8 @@ import { useState, useRef, useEffect } from "react";
 import CubeLogo from "@/components/brand/CubeLogo";
 import { useAnthropicChat } from "@/hooks/useAnthropicChat";
 import type { ClaudeAction } from "@/lib/types";
+import { useEntitlements } from "@/hooks/useEntitlements";
+import UpgradePrompt from "@/components/auth/UpgradePrompt";
 
 interface ChatPanelProps {
   onClose?: () => void;
@@ -25,6 +27,7 @@ export default function ChatPanel({
   onClose, onAction, systemPrompt,
   seedMessage, seedNonce, onSeedConsumed,
 }: ChatPanelProps) {
+  const ent = useEntitlements();
   const apiKey = localStorage.getItem("anthropic-api-key") ?? "";
   const hasKey = apiKey.length > 0;
 
@@ -87,6 +90,40 @@ export default function ChatPanel({
   const displayMsgs = hasKey
     ? messages.map((m) => ({ role: m.role, text: m.content }))
     : demoMsgs;
+
+  // Free-tier users do not have access to the AI assistant — surface
+  // a non-blocking upgrade card instead of the chat UI.
+  if (!ent.aiChat) {
+    return (
+      <div
+        style={{
+          position: "absolute",
+          left: 228,
+          bottom: 0,
+          width: 360,
+          background: "#fff",
+          border: "1px solid var(--line)",
+          borderRadius: "8px 8px 0 0",
+          zIndex: 40,
+          boxShadow: "0 -8px 24px rgba(0,0,0,0.08)",
+          padding: 14,
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <strong style={{ fontSize: 13 }}>SPARC Assistant</strong>
+          {onClose && (
+            <button onClick={onClose} style={{ border: "none", background: "transparent", cursor: "pointer" }}>
+              ✕
+            </button>
+          )}
+        </div>
+        <UpgradePrompt
+          feature="AI assistant"
+          description="Natural-language DAG editing, scenario authoring, and explanations are available on Pro."
+        />
+      </div>
+    );
+  }
 
   return (
     <div

@@ -31,6 +31,8 @@ export type ConnectionStatus = "idle" | "connecting" | "open" | "closed" | "erro
 
 type Listener = (event: ArtifactWrittenEvent) => void;
 
+import { withWsAuth } from "@/lib/api";
+
 const WS_URL = "ws://127.0.0.1:8008/run/stream";
 const MAX_BACKOFF_MS = 30_000;
 const INITIAL_BACKOFF_MS = 1_000;
@@ -68,7 +70,7 @@ class ArtifactStreamClient {
     this.setStatus("connecting");
     let ws: WebSocket;
     try {
-      ws = new WebSocket(WS_URL);
+      ws = new WebSocket(withWsAuth(WS_URL));
     } catch {
       this.scheduleReconnect();
       return;

@@ -18,6 +18,11 @@ import { buildSystemPrompt } from "@/lib/prompts";
 import { getConfig, saveConfig, dataSummary, initProject, getReportData, getDag } from "@/lib/api";
 import type { ClaudeAction, DataSummary, ProjectConfig, ReportPayload, DagDefinition } from "@/lib/types";
 import type { PromptDataContext } from "@/lib/prompts";
+import { AuthProvider, useAuth } from "@/lib/auth/AuthProvider";
+import LoginPage from "@/components/pages/LoginPage";
+import GraceBanner from "@/components/auth/GraceBanner";
+import BlockingLicenseModal from "@/components/auth/BlockingLicenseModal";
+import EmailVerificationPending from "@/components/auth/EmailVerificationPending";
 
 import ProjectPage from "@/components/pages/ProjectPage";
 import DataPage from "@/components/pages/DataPage";
@@ -38,7 +43,19 @@ import SettingsPage from "@/components/pages/SettingsPage";
 
 type AppPage = PageName | "Settings";
 
+/** Outer App wrapper — establishes the auth context that the inner
+ *  shell consumes. Splitting lets `useAuth()` work in `AppShell`
+ *  without leaking provider boilerplate. */
 export default function App() {
+  return (
+    <AuthProvider>
+      <AppShell />
+    </AuthProvider>
+  );
+}
+
+function AppShell() {
+  const auth = useAuth();
   const { ready, status } = useServer();
   const notif = useNotificationState();
   const project = useProject(ready);
@@ -55,13 +72,17 @@ export default function App() {
     applyTheme(loadTheme());
   }, []);
 
-  // Gate navigation: only Project and Settings are allowed without a loaded project
+  // Gate navigation:
+  //   - only Project + Settings are reachable until a project is loaded
+  //   - when license is grace-expired, only Settings is reachable so
+  //     the user can fix their licensing situation
   const navigate = useCallback(
     (p: AppPage) => {
+      if (auth.state === "grace_expired" && p !== "Settings") return;
       if (p !== "Project" && p !== "Settings" && !project.projectLoaded) return;
       setPage(p);
     },
-    [project.projectLoaded],
+    [project.projectLoaded, auth.state],
   );
 
   // Load data context for system prompt enrichment
@@ -214,6 +235,11 @@ export default function App() {
 
   if (!ready || project.rehydrating) return <Splash />;
 
+  // ─── Auth / license gates (run after server is up) ───────────────
+  if (auth.state === "verifying") return <Splash />;
+  if (auth.state === "no_license") return <LoginPage />;
+  if (auth.state === "email_unverified") return <EmailVerificationPending />;
+
   const renderPage = () => {
     switch (page) {
       case "Project":
@@ -265,7 +291,8 @@ export default function App() {
     <NotificationContext.Provider value={notif}>
       <ExplainContext.Provider value={explainHost.value}>
       <PipelineProvider serverReady={ready}>
-        <div style={{ position: "relative", height: "100vh", width: "100vw", overflow: "hidden" }}>
+        <div style={{ position: "relative", height: "100vh", width: "100vw", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <GraceBanner />
           <Shell
             currentPage={page as any}
             onNavigate={navigate}
@@ -301,6 +328,10 @@ export default function App() {
           <OnboardingTour onNavigate={(p) => navigate(p as PageName)} />
 
           <NotificationBanner />
+
+          {auth.state === "grace_expired" && (
+            <BlockingLicenseModal onGoToSettings={() => navigate("Settings")} />
+          )}
         </div>
       </PipelineProvider>
       </ExplainContext.Provider>

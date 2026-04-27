@@ -3,6 +3,8 @@ import { SectionHeader, Card, Tag, Btn, Stat, StatGrid } from "@/components/ui/D
 import { useNotification } from "@/hooks/useNotifications";
 import { useManifest } from "@/hooks/useManifest";
 import { getConfig, runScenarios, getScenarioDetail, parseMissingArtifact } from "@/lib/api";
+import { useEntitlements } from "@/hooks/useEntitlements";
+import UpgradePrompt from "@/components/auth/UpgradePrompt";
 
 type ScenarioRow = {
   name: string;
@@ -33,6 +35,7 @@ interface Props {
  * so the "Open results" button just navigates there.
  */
 export default function ScenarioRunnerPage({ onNavigate }: Props) {
+  const ent = useEntitlements();
   const { notify } = useNotification();
   const manifest = useManifest(true);
   const [config, setConfig] = useState<ConfigShape | null>(null);
@@ -147,12 +150,19 @@ export default function ScenarioRunnerPage({ onNavigate }: Props) {
         right={
           <div style={{ display: "flex", gap: 8 }}>
             <Btn small onClick={() => onNavigate?.("Scenarios")}>Edit scenarios</Btn>
-            <Btn primary small onClick={handleRun} disabled={running || configured.length === 0}>
+            <Btn primary small onClick={handleRun} disabled={!ent.scenarioRunner || running || configured.length === 0}>
               {running ? "Running…" : "Run all scenarios"}
             </Btn>
           </div>
         }
       />
+
+      {!ent.scenarioRunner && (
+        <UpgradePrompt
+          feature="Scenario Runner"
+          description="What-if scenario sweeps, joint scenarios, and counterfactual rollups are available on Pro."
+        />
+      )}
 
       <StatGrid>
         <Stat label="Configured" value={String(configured.length)} tint="var(--ink)" />

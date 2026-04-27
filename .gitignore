@@ -64,3 +64,7 @@ dist/
 /examples
 /.claude
 /examples
+
+# Vite local env files (creator mode keys, secrets)
+.env.local
+.env.*.local

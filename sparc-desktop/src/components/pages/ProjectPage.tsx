@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { SectionHeader, Card, KeyVal, Tag, Btn } from "@/components/ui/DesignSystem";
 import { getConfig, saveConfig, listTemplates, initProject, dataSummary, getRunEvents } from "@/lib/api";
+import { useEntitlements } from "@/hooks/useEntitlements";
+import { getRecents } from "@/lib/recentProjects";
 import { useNotification } from "@/hooks/useNotifications";
 import ProjectCreationWizard from "@/components/project/ProjectCreationWizard";
 import type { ProjectConfig, TemplateInfo, DataSummary, PipelineEvent } from "@/lib/types";
@@ -76,6 +78,7 @@ function summarizeRuns(events: PipelineEvent[]): { time: string; stage: string; 
 }
 
 export default function ProjectPage({ projectPath, onProjectLoaded }: ProjectPageProps) {
+  const ent = useEntitlements();
   const [config, setConfig] = useState<ProjectConfig | null>(null);
   const [summary, setSummary] = useState<DataSummary | null>(null);
   const [runs, setRuns] = useState<{ time: string; stage: string; status: string; tint: string }[]>([]);
@@ -94,12 +97,31 @@ export default function ProjectPage({ projectPath, onProjectLoaded }: ProjectPag
         .catch(() => setRuns([]));
     }
     listTemplates()
-      .then((r) => setTemplates(r.templates))
+      .then((r) => {
+        // Free tier: only the `blank` template is allowed.
+        const filtered = ent.templates === "blank_only"
+          ? r.templates.filter((t) => t.name === "blank")
+          : r.templates;
+        setTemplates(filtered);
+      })
       .catch(() => {});
-  }, [projectPath]);
+  }, [projectPath, ent.templates]);
 
   const handleTemplateClick = useCallback(
     async (t: TemplateInfo) => {
+      // Project cap (free tier = 1 active project). Stored locally
+      // via recents — not perfect, but good enough as an honor-system gate.
+      if (ent.maxProjects > 0 && getRecents().length >= ent.maxProjects) {
+        notify(
+          "warning",
+          `Free plan is limited to ${ent.maxProjects} project. Remove an existing project from Recents, or upgrade.`,
+        );
+        return;
+      }
+      if (ent.templates === "blank_only" && t.name !== "blank") {
+        notify("warning", "Domain templates require Pro. Upgrade in Settings.");
+        return;
+      }
       const home = prompt("Choose output directory:", `${t.name}_project`);
       if (!home) return;
       try {
@@ -110,7 +132,7 @@ export default function ProjectPage({ projectPath, onProjectLoaded }: ProjectPag
         notify("error", e instanceof Error ? e.message : "Failed to create project");
       }
     },
-    [onProjectLoaded, notify],
+    [onProjectLoaded, notify, ent.maxProjects, ent.templates],
   );
 
   const handleOpenYml = useCallback(async () => {

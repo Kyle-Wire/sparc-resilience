@@ -1,23 +1,53 @@
 import { useState, useCallback, useEffect } from "react";
-import { SectionHeader, Card, Btn, KeyVal } from "@/components/ui/DesignSystem";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
+import { SectionHeader, Card, Btn, KeyVal, Tag } from "@/components/ui/DesignSystem";
 import { LOGO_HUES, PAPER_TONES, type LogoHue, type PaperTone, type ThemeSettings, loadTheme, applyTheme } from "@/lib/theme";
 import EasterEgg from "@/components/common/EasterEgg";
 import OnboardingTour, { resetOnboarding } from "@/components/common/OnboardingTour";
 import { useNotification } from "@/hooks/useNotifications";
+import { useAuth } from "@/lib/auth/AuthProvider";
+import { secretGet, secretSet, SECRET_KEYS } from "@/lib/auth/secrets";
+
+import { LEMON_CUSTOMER_PORTAL_URL as LEMON_PORTAL_URL, LEMON_UPGRADE_URL } from "@/lib/auth/commerce";
 
 export default function SettingsPage() {
   const [theme, setTheme] = useState<ThemeSettings>(loadTheme);
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem("sparc_api_key") ?? "");
+  const [apiKey, setApiKey] = useState("");
   const [serverPort, setServerPort] = useState("8008");
   const [showSnake, setShowSnake] = useState(false);
   const [tourOpen, setTourOpen] = useState(false);
   const { notify } = useNotification();
+  const auth = useAuth();
 
   // Apply theme on change
   useEffect(() => {
     applyTheme(theme);
     localStorage.setItem("sparc_theme", JSON.stringify(theme));
   }, [theme]);
+
+  // Load Anthropic API key from keyring; one-time migration from
+  // legacy `localStorage` storage. Plaintext-in-localStorage keys
+  // are wiped after a successful migration.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const fromKeyring = await secretGet(SECRET_KEYS.anthropicApiKey);
+      if (cancelled) return;
+      if (fromKeyring) {
+        setApiKey(fromKeyring);
+        return;
+      }
+      const legacy = localStorage.getItem("sparc_api_key");
+      if (legacy) {
+        await secretSet(SECRET_KEYS.anthropicApiKey, legacy);
+        localStorage.removeItem("sparc_api_key");
+        if (!cancelled) setApiKey(legacy);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleHueChange = useCallback((hue: LogoHue) => {
     setTheme((prev) => ({ ...prev, logoHue: hue }));
@@ -27,9 +57,13 @@ export default function SettingsPage() {
     setTheme((prev) => ({ ...prev, paperTone: tone }));
   }, []);
 
-  const handleSaveApiKey = useCallback(() => {
-    localStorage.setItem("sparc_api_key", apiKey);
-    notify("success", "API key saved");
+  const handleSaveApiKey = useCallback(async () => {
+    try {
+      await secretSet(SECRET_KEYS.anthropicApiKey, apiKey);
+      notify("success", "API key saved to system keychain");
+    } catch (e) {
+      notify("error", e instanceof Error ? e.message : "Failed to save API key");
+    }
   }, [apiKey, notify]);
 
   return (
@@ -175,6 +209,56 @@ export default function SettingsPage() {
         </Card>
       </div>
 
+      {/* License & Account */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 14 }}>
+        <Card title="Account" subtitle="signed-in user">
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <KeyVal label="Email" value={auth.email ?? "—"} />
+            <KeyVal label="Provider" value={auth.provider ?? "—"} />
+            <KeyVal label="Status" value={auth.state} />
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 6 }}>
+              <Btn small onClick={() => void auth.signOut()}>
+                Sign out
+              </Btn>
+            </div>
+          </div>
+        </Card>
+
+        <Card title="License" subtitle="plan, status, refresh">
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Tag color={planColor(auth.license?.plan)}>{(auth.license?.plan ?? "free").toUpperCase()}</Tag>
+              <Tag color={statusColor(auth.license?.status)}>
+                {auth.license?.status ?? "—"}
+              </Tag>
+            </div>
+            <KeyVal
+              label="License key"
+              value={auth.license?.license_key_last4 ? `••••${auth.license.license_key_last4}` : "—"}
+            />
+            <KeyVal label="Expires" value={fmtDate(auth.license?.expiry)} />
+            <KeyVal
+              label="Grace remaining"
+              value={`${Math.max(0, auth.daysRemaining)} day${auth.daysRemaining === 1 ? "" : "s"}`}
+            />
+            <KeyVal label="Last verified" value={fmtDate(auth.license?.last_verified)} />
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 6, flexWrap: "wrap" }}>
+              <Btn small onClick={() => void openExternal(LEMON_PORTAL_URL)}>
+                Manage subscription
+              </Btn>
+              {auth.license?.plan === "free" && (
+                <Btn small onClick={() => void openExternal(LEMON_UPGRADE_URL)}>
+                  Upgrade
+                </Btn>
+              )}
+              <Btn small primary onClick={() => void auth.refresh({ force: true })} disabled={auth.busy}>
+                {auth.busy ? "Refreshing…" : "Refresh license"}
+              </Btn>
+            </div>
+          </div>
+        </Card>
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 14 }}>
         {/* About */}
         <Card title="About" subtitle="SPARC Labs Desktop">
@@ -182,7 +266,7 @@ export default function SettingsPage() {
             <KeyVal label="Version" value="2.1.0-beta" />
             <KeyVal label="Framework" value="Tauri v2 + React 19" />
             <KeyVal label="Backend" value="FastAPI + Python 3.11" />
-            <KeyVal label="License" value="MIT" />
+            <KeyVal label="License" value="Proprietary" />
             <div style={{ borderTop: "1px dashed var(--line)", paddingTop: 8, marginTop: 4 }}>
               <p style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.6, margin: 0 }}>
                 <strong style={{ color: "var(--ink-2)" }}>SPARC</strong> — Spatial Predictive Analytics for
@@ -260,4 +344,38 @@ export default function SettingsPage() {
       <OnboardingTour open={tourOpen} onClose={() => setTourOpen(false)} />
     </div>
   );
+}
+
+// ─── Display helpers ────────────────────────────────────────────────
+
+function fmtDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "—";
+  return d.toLocaleString();
+}
+
+function planColor(plan: string | undefined): string {
+  switch (plan) {
+    case "team":
+      return "#5b3aa1";
+    case "pro":
+      return "#1e7a5a";
+    case "free":
+    default:
+      return "var(--muted)";
+  }
+}
+
+function statusColor(status: string | undefined): string {
+  switch (status) {
+    case "active":
+    case "trialing":
+      return "#1e7a5a";
+    case "cancelled":
+    case "past_due":
+      return "#c0392b";
+    default:
+      return "var(--muted)";
+  }
 }

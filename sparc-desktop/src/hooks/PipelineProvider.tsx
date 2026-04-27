@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect } from "react";
 import type { ReactNode } from "react";
 import type { PipelineEvent } from "@/lib/types";
-import { getRunEvents, approveDag, rejectDag } from "@/lib/api";
+import { getRunEvents, approveDag, rejectDag, withWsAuth } from "@/lib/api";
 
 // ---- Training telemetry derived state ----
 export interface CapacityResult {
@@ -241,7 +241,7 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
   }, [serverReady]);
 
   const _connectWebSocket = useCallback((stage: number, skipCount = 0) => {
-    const ws = new WebSocket("ws://127.0.0.1:8008/run/stream");
+    const ws = new WebSocket(withWsAuth("ws://127.0.0.1:8008/run/stream"));
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -296,7 +296,7 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
       setIsRunning(true);
       setCurrentStage(stage);
 
-      const ws = new WebSocket("ws://127.0.0.1:8008/run/stream");
+      const ws = new WebSocket(withWsAuth("ws://127.0.0.1:8008/run/stream"));
       wsRef.current = ws;
 
       ws.onopen = () => {
