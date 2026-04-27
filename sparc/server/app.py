@@ -1413,6 +1413,24 @@ async def get_gwen_data():
     except Exception:
         raise HTTPException(404, "Cannot resolve output paths")
 
+    # Prefer artifacts.db.
+    if state.registry is not None:
+        try:
+            from sparc.registry.run_registry import set_active_registry
+            from sparc.registry.store import ArtifactStore
+            set_active_registry(state.registry)
+            try:
+                _store = ArtifactStore(state.registry)
+                if _store.has("1", "gwen_variable_importance"):
+                    df = _store.read_any("1", "gwen_variable_importance")
+                    return {"rows": df.to_dict(orient="records")}
+                if _store.has("1", "gwen_results"):
+                    return _store.read_any("1", "gwen_results")
+            finally:
+                set_active_registry(None)
+        except Exception:
+            pass
+
     # Try stage1_dir (GWEN dir) first, then fall back to output_dir for legacy
     for search_dir in [paths.stage1_dir, paths.output_dir]:
         csv_path = search_dir / "gwen_variable_importance.csv"
@@ -2263,12 +2281,23 @@ async def get_report_data():
 
     # GWEN summary (Stage 1)
     if paths:
-        csv_path = paths.stage1_dir / "gwen_variable_importance.csv"
-        if not csv_path.exists():
-            csv_path = paths.output_dir / "gwen_variable_importance.csv"  # legacy fallback
-        if csv_path.exists():
-            df = pd.read_csv(csv_path)
-            report["gwen"] = df.to_dict(orient="records")
+        gwen_df = None
+        if state.registry is not None:
+            try:
+                from sparc.registry.store import ArtifactStore
+                _store = ArtifactStore(state.registry)
+                if _store.has("1", "gwen_variable_importance"):
+                    gwen_df = _store.read_any("1", "gwen_variable_importance")
+            except Exception:
+                gwen_df = None
+        if gwen_df is None:
+            csv_path = paths.stage1_dir / "gwen_variable_importance.csv"
+            if not csv_path.exists():
+                csv_path = paths.output_dir / "gwen_variable_importance.csv"  # legacy fallback
+            if csv_path.exists():
+                gwen_df = pd.read_csv(csv_path)
+        if gwen_df is not None:
+            report["gwen"] = gwen_df.to_dict(orient="records")
 
     # Spatial CV performance
     if paths:
@@ -4174,6 +4203,7 @@ async def get_results_availability():
     # Endpoints whose primary source is now artifacts.db.
     _db_endpoints = {
         "/results/correlogram": ("0", "correlogram_results"),
+        "/results/gwen": ("1", "gwen_variable_importance"),
     }
 
     for endpoint, candidates in checks.items():
