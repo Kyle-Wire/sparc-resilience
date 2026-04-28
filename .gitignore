@@ -64,3 +64,5 @@ dist/
 /examples
 /.claude
 /examples
+sparc-desktop/.env.local
+sparc-desktop/.env.local
