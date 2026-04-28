@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import { SectionHeader, Card, Btn, Tag } from "@/components/ui/DesignSystem";
 import { useNotification } from "@/hooks/useNotifications";
-import { downloadAudienceReport, type ReportAudience, type ReportFormat } from "@/lib/api";
+import { downloadAudienceReport, downloadResultsBundle, type ReportAudience, type ReportFormat } from "@/lib/api";
 
 const AUDIENCE_OPTIONS: { id: ReportAudience; label: string; blurb: string; color: string }[] = [
   { id: "technical", label: "Technical", blurb: "Full statistics, diagnostics, robustness — for analysts and reviewers", color: "var(--purple)" },
@@ -96,7 +96,23 @@ export default function ReportPage() {
       setGenerating(true);
       notify("info", `Generating ${format} report...`);
       try {
-        const endpoint = format === "PDF" ? "/report/pdf" : format === "DOCX" ? "/report/docx" : format === "CSV" ? "/report/data_bundle" : "/report/generate";
+        // CSV → the canonical results bundle (ZIP of every artifact in artifacts.db).
+        if (format === "CSV") {
+          const blob = await downloadResultsBundle();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "sparc_results_bundle.zip";
+          a.click();
+          URL.revokeObjectURL(url);
+          notify("success", "Results bundle downloaded");
+          return;
+        }
+
+        const endpoint =
+          format === "PDF" ? "/report/pdf"
+          : format === "DOCX" ? "/report/docx"
+          : "/report/generate";
         const resp = await fetch(`http://127.0.0.1:8008${endpoint}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },

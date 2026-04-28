@@ -17,6 +17,8 @@ export interface UseManifestResult {
   manifest: RunManifest | null;
   loading: boolean;
   error: string | null;
+  /** Timestamp of the most recent successful manifest fetch, or null. */
+  lastUpdated: Date | null;
   /** True if the project is loaded but the manifest has zero artifacts so
    *  far. Lets the UI distinguish "no project" from "project loaded but
    *  no stages run yet". */
@@ -35,6 +37,7 @@ export function useManifest(enabled: boolean = true): UseManifestResult {
   const [manifest, setManifest] = useState<RunManifest | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   // Track most recent in-flight request so we can ignore stale responses.
   const reqIdRef = useRef(0);
 
@@ -48,6 +51,7 @@ export function useManifest(enabled: boolean = true): UseManifestResult {
       if (myId !== reqIdRef.current) return;
       setManifest(m);
       setError(null);
+      setLastUpdated(new Date());
     } catch (err) {
       if (myId !== reqIdRef.current) return;
       // 400 "No project loaded" is expected during boot; surface as null
@@ -146,5 +150,5 @@ export function useManifest(enabled: boolean = true): UseManifestResult {
       (sm) => Object.keys(sm.artifacts ?? {}).length === 0,
     );
 
-  return { manifest, loading, error, empty, refetch, rescan, lookup, stage };
+  return { manifest, loading, error, lastUpdated, empty, refetch, rescan, lookup, stage };
 }

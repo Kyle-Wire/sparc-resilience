@@ -31,6 +31,7 @@ tigramite>=5.2
 matplotlib>=3.7
 seaborn>=0.12
 tqdm>=4.65
+python-docx>=1.0  # /report/docx endpoint
 
 # Utilities
 joblib>=1.3

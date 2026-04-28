@@ -464,19 +464,21 @@ export const getReportData = () =>
   get<ReportPayload>("/results/report");
 
 // ------------------------------------------------------------------
-// CATE map, local coefficients, scenario increments
+// CATE map & scenario increments
 // ------------------------------------------------------------------
 export const getCateMapVariables = () =>
   get<{ variables: string[] }>("/results/causal/cate_map/variables");
 
-export const getCateMap = (variable: string) =>
-  get<GeoJsonData>(`/results/causal/cate_map?variable=${encodeURIComponent(variable)}`);
+export const getCateMap = (variable: string, withUncertainty = false) =>
+  get<GeoJsonData>(
+    `/results/causal/cate_map?variable=${encodeURIComponent(variable)}` +
+      (withUncertainty ? "&with_uncertainty=1" : ""),
+  );
 
-export const getLocalCoefVariables = () =>
-  get<{ variables: string[] }>("/results/local_coefficients/variables");
-
-export const getLocalCoefficients = (variable: string) =>
-  get<GeoJsonData>(`/results/local_coefficients?variable=${encodeURIComponent(variable)}`);
+// NOTE: getLocalCoefficients / getLocalCoefVariables were removed in v4.
+// MGWR/GWR remain Stage-2 diagnostics, but their (correlation-based)
+// coefficients are no longer surfaced anywhere in the UI — use
+// `getCateMap(variable)` for the Bayesian per-cell coefficient β(s).
 
 export const getScenarioIncrement = (variable: string, increment: number) =>
   get<ScenarioDetail>(`/results/scenarios/increment?variable=${encodeURIComponent(variable)}&increment=${increment}`);
@@ -680,7 +682,7 @@ export const decisionUncertainty = (body: {
 // ------------------------------------------------------------------
 export interface BudgetOptimizeRequest {
   budget: number;
-  benefit_source: "cate" | "local_coef" | "uniform";
+  benefit_source: "cate" | "uniform";
   variable?: string;
   cost_column?: string;
   x_max_column?: string;

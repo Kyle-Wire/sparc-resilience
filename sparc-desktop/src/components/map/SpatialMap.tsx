@@ -12,7 +12,7 @@ import MapLegend from "./MapLegend";
 // ---------------------------------------------------------------------------
 
 export type MapMode = "scatter" | "heatmap" | "choropleth";
-export type ColorPalette = "sparc" | "viridis" | "puor";
+export type ColorPalette = "sparc" | "viridis" | "puor" | "rdbu";
 
 interface SpatialMapProps {
   geojson: GeoJsonData | null;
@@ -20,6 +20,19 @@ interface SpatialMapProps {
   mode?: MapMode;
   height?: string;
   palette?: ColorPalette;
+  /**
+   * Override the auto-computed value domain (min/max from features). Useful for
+   * diverging palettes that should be centered on a known value (e.g. ±max(|β(s)|)
+   * to keep zero pinned to the neutral midpoint of "rdbu"/"puor").
+   */
+  domainOverride?: [number, number];
+  /**
+   * Property name carrying a boolean / truthy flag that marks a feature as
+   * "dimmed" — e.g. cells whose 90% CI brackets zero on a CATE map. Dimmed
+   * features are rendered with reduced alpha to convey "not significant"
+   * without removing them from the map.
+   */
+  dimField?: string;
   /** Callback when a feature is clicked. Receives properties. */
   onFeatureClick?: (properties: Record<string, unknown>) => void;
   /** Sync viewState from a parent (for side-by-side comparison) */
@@ -62,12 +75,20 @@ const RAMPS: Record<ColorPalette, readonly (readonly [number, number, number])[]
     [153, 142, 195],
     [84, 39, 136],   // purple
   ],
+  rdbu: [
+    [178, 24, 43],   // red (negative effect)
+    [239, 138, 98],
+    [247, 247, 247], // neutral white (zero, when domain is symmetric)
+    [103, 169, 207],
+    [33, 102, 172],  // blue (positive effect)
+  ],
 };
 
 const RAMP_CSS: Record<ColorPalette, string> = {
   sparc: "linear-gradient(to right, rgb(96,36,104), rgb(164,78,180), rgb(240,160,176), rgb(251,221,70))",
   viridis: "linear-gradient(to right, rgb(68,1,84), rgb(59,82,139), rgb(33,145,140), rgb(94,201,98), rgb(253,231,37))",
   puor: "linear-gradient(to right, rgb(127,59,8), rgb(224,153,82), rgb(247,247,247), rgb(153,142,195), rgb(84,39,136))",
+  rdbu: "linear-gradient(to right, rgb(178,24,43), rgb(239,138,98), rgb(247,247,247), rgb(103,169,207), rgb(33,102,172))",
 };
 
 function interpolateColor(t: number, palette: ColorPalette = "sparc"): [number, number, number, number] {
@@ -124,6 +145,8 @@ export default function SpatialMap({
   mode = "scatter",
   height = "100%",
   palette = "sparc",
+  domainOverride,
+  dimField,
   onFeatureClick,
   syncViewState,
   onViewStateChange: onViewStateChangeProp,
@@ -167,8 +190,9 @@ export default function SpatialMap({
     setLocalViewState((prev) => ({ ...prev, ...bbox }));
   }, [geojson, syncViewState]);
 
-  // Compute value domain for color mapping
+  // Compute value domain for color mapping (callers may pin it via domainOverride)
   const domain = useMemo<[number, number]>(() => {
+    if (domainOverride) return domainOverride;
     if (!geojson || !colorField) return [0, 1];
     let min = Infinity, max = -Infinity;
     for (const f of geojson.features) {
@@ -179,7 +203,7 @@ export default function SpatialMap({
       }
     }
     return min < max ? [min, max] : [0, 1];
-  }, [geojson, colorField]);
+  }, [geojson, colorField, domainOverride]);
 
   const layers = useMemo(() => {
     if (!geojson) return [];
@@ -202,7 +226,9 @@ export default function SpatialMap({
             const v = d.properties[colorField];
             if (typeof v !== "number") return [200, 200, 200, 60] as [number, number, number, number];
             const t = (v - domain[0]) / (domain[1] - domain[0] || 1);
-            return interpolateColor(t, palette);
+            const c = interpolateColor(t, palette);
+            if (dimField && d.properties[dimField]) c[3] = Math.round(c[3] * 0.25);
+            return c;
           },
           pickable: true,
         }),
@@ -241,7 +267,9 @@ export default function SpatialMap({
             const v = d.properties[colorField];
             if (typeof v !== "number") return [200, 200, 200, 100];
             const t = (v - domain[0]) / (domain[1] - domain[0] || 1);
-            return interpolateColor(t, palette);
+            const c = interpolateColor(t, palette);
+            if (dimField && d.properties[dimField]) c[3] = Math.round(c[3] * 0.25);
+            return c;
           }) as any,
           getLineColor: [60, 60, 60, 80] as [number, number, number, number],
           getLineWidth: 1,
@@ -249,7 +277,7 @@ export default function SpatialMap({
           pickable: true,
           updateTriggers: {
             getElevation: [extrudeField, extrudeScale],
-            getFillColor: [colorField, palette, domain[0], domain[1]],
+            getFillColor: [colorField, palette, domain[0], domain[1], dimField],
           },
         }),
       ];
@@ -272,12 +300,14 @@ export default function SpatialMap({
           const v = d.properties[colorField];
           if (typeof v !== "number") return [200, 200, 200, 100] as [number, number, number, number];
           const t = (v - domain[0]) / (domain[1] - domain[0] || 1);
-          return interpolateColor(t, palette);
+          const c = interpolateColor(t, palette);
+          if (dimField && d.properties[dimField]) c[3] = Math.round(c[3] * 0.25);
+          return c;
         },
         pickable: true,
       }),
     ];
-  }, [geojson, colorField, mode, domain, palette, extrudeField, extrudeScale]);
+  }, [geojson, colorField, mode, domain, palette, extrudeField, extrudeScale, dimField]);
 
   if (!geojson) {
     return (
@@ -317,7 +347,7 @@ export default function SpatialMap({
         }}
       >
         <Map
-          mapStyle="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
+          mapStyle="https://basemaps.cartocdn.com/gl/positron-nolabels-gl-style/style.json"
           attributionControl={false}
         >
           <NavigationControl position="top-right" />

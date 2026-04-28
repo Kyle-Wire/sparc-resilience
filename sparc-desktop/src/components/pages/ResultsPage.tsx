@@ -5,7 +5,7 @@ import { ExportBlockButton } from "@/components/common/ExportBlockButton";
 import DownloadMenu from "@/components/common/DownloadMenu";
 import {
   getModelPerformance, getScenarioDetail, getPdpCurves, getGwenData,
-  getCorrelogramData, getPredictions, getScenarioIncrement,
+  getCorrelogramData, getSpatialCvPredictions, getScenarioIncrement,
   getCateMapVariables, getCateMap, getDoseResponseCurves,
   getCausalSensitivity,
   getCausalNegativeControl,
@@ -100,6 +100,9 @@ export default function ResultsPage() {
   const [cateVars, setCateVars] = useState<string[]>([]);
   const [activeCateVar, setActiveCateVar] = useState<string>("");
   const [cateGeo, setCateGeo] = useState<GeoJsonData | null>(null);
+  // When true, fetch CATE map with `?with_uncertainty=1` and dim cells whose
+  // 90% posterior CI brackets zero ("not significant at 90%").
+  const [cateShowUncertainty, setCateShowUncertainty] = useState<boolean>(true);
   const [doseResponse, setDoseResponse] = useState<DoseResponseData | null>(null);
   const [sensitivity, setSensitivity] = useState<CausalSensitivity | null>(null);
   const [negControl, setNegControl] = useState<NegativeControlResponse | null>(null);
@@ -113,59 +116,70 @@ export default function ResultsPage() {
 
   // Load and refresh data from API. We re-run this after pipeline completion
   // so the Results page updates automatically when artifacts are finished.
+  // Load and refresh data from API. We re-run this after pipeline completion
+  // so the Results page updates automatically when artifacts are finished.
+  // Each fetch is gated on the manifest to avoid firing dead requests for
+  // panels with no underlying artifact.
   const loadResults = useCallback(() => {
-    // Model RÂ² from dedicated endpoint
-    getModelPerformance().then((data) => {
-      const mods: ModelInfo[] = data.models.map((m, i) => ({
-        name: m.name,
-        r2: m.r2,
-        color: SPARC_RAMP_HEX[i * 2] ?? SPARC_RAMP_HEX[0],
-      }));
-      setModels(mods);
-    }).catch(() => {});
+    if (manifest.lookup("2", "ensemble_results")) {
+      getModelPerformance().then((data) => {
+        const mods: ModelInfo[] = data.models.map((m, i) => ({
+          name: m.name,
+          r2: m.r2,
+          color: SPARC_RAMP_HEX[i * 2] ?? SPARC_RAMP_HEX[0],
+        }));
+        setModels(mods);
+        clearError("models");
+      }).catch((err) => noteError("models", err));
+    }
 
-    // Scenario detail
-    getScenarioDetail().then(setScenarioDetail).catch(() => {});
+    if (manifest.stage("4")) {
+      getScenarioDetail().then(setScenarioDetail).catch(() => {});
+    }
 
-    // Model predictions GeoJSON (stage 3 = inference; fallback to stage 2)
-    // Retry briefly because files may appear moments after completion event.
-    const loadPredictions = (attempt = 0) => {
-      (getPredictions(3) as Promise<GeoJsonData>)
-        .catch(() => getPredictions(2) as Promise<GeoJsonData>)
-        .then(setPredictionsGeoJson)
-        .catch(() => {
-          if (attempt < 3) {
-            setTimeout(() => loadPredictions(attempt + 1), 1200);
-          }
+    // Spatial CV predictions GeoJSON (stage 2 — the canonical predictions map).
+    if (manifest.lookup("2", "spatial_cv_predictions")) {
+      getSpatialCvPredictions()
+        .then((g) => { setPredictionsGeoJson(g as GeoJsonData); clearError("predictions"); })
+        .catch((err) => noteError("predictions", err));
+    } else {
+      setPredictionsGeoJson(null);
+    }
+
+    // PDP curves
+    const stage2Arts = manifest.stage("2")?.artifacts ?? {};
+    if (
+      manifest.lookup("3", "dose_response_curves") ||
+      manifest.lookup("2", "gwrf_condition_curves") ||
+      Object.keys(stage2Arts).some((a) => a.startsWith("v2_neural_pdp::"))
+    ) {
+      getPdpCurves().then((pdp) => {
+        setPdpData(pdp);
+        if (pdp) {
+          const vars = Object.keys(pdp).filter((k) => k !== "_meta");
+          if (vars.length > 0) setActivePdpVar(vars[0]);
+        }
+      }).catch(() => {});
+    }
+
+    if (manifest.lookup("0", "correlogram_results")) {
+      getCorrelogramData().then(setCorrelogram).catch(() => {});
+    }
+
+    if (manifest.lookup("1", "gwen_variable_importance")) {
+      getGwenData().then((gwen) => {
+        if (!gwen?.rows?.length) return;
+        setModels((prev) => {
+          if (!prev.length) return prev;
+          return prev.map((m) => {
+            const row = gwen.rows.find((r: any) => r.model === m.name || r.name === m.name);
+            if (row && typeof (row as any).r2 === "number") return { ...m, r2: (row as any).r2 };
+            return m;
+          });
         });
-    };
-    loadPredictions();
-
-    // PDP curves for intervention response
-    getPdpCurves().then((pdp) => {
-      setPdpData(pdp);
-      if (pdp) {
-        const vars = Object.keys(pdp);
-        if (vars.length > 0) setActivePdpVar(vars[0]);
-      }
-    }).catch(() => {});
-
-    // Correlogram
-    getCorrelogramData().then(setCorrelogram).catch(() => {});
-
-    // GWEN weights (update model RÂ²)
-    getGwenData().then((gwen) => {
-      if (!gwen?.rows?.length) return;
-      setModels((prev) => {
-        if (!prev.length) return prev;
-        return prev.map((m) => {
-          const row = gwen.rows.find((r: any) => r.model === m.name || r.name === m.name);
-          if (row && typeof (row as any).r2 === "number") return { ...m, r2: (row as any).r2 };
-          return m;
-        });
-      });
-    }).catch(() => {});
-  }, []);
+      }).catch(() => {});
+    }
+  }, [manifest, clearError, noteError]);
 
   // Initial load
   useEffect(() => {
@@ -218,13 +232,14 @@ export default function ResultsPage() {
   }, [clearError, noteError]);
   useEffect(() => { loadCausal(); }, [loadCausal, pipeline.runEndedAt]);
 
-  // Refetch CATE surface when the user picks a different treatment variable.
+  // Refetch CATE surface when the user picks a different treatment variable
+  // or toggles the uncertainty overlay.
   useEffect(() => {
     if (!activeCateVar) { setCateGeo(null); return; }
-    getCateMap(activeCateVar)
+    getCateMap(activeCateVar, cateShowUncertainty)
       .then((g) => setCateGeo(g as GeoJsonData))
       .catch(() => setCateGeo(null));
-  }, [activeCateVar]);
+  }, [activeCateVar, cateShowUncertainty]);
 
   // Permutation negative-control test for the active CATE variable.
   useEffect(() => {
@@ -1161,17 +1176,77 @@ export default function ResultsPage() {
                     ))}
                   </select>
                 )}
-                {cateGeo ? (
-                  <SpatialMap
-                    geojson={cateGeo}
-                    colorField={`cate_${activeCateVar}`}
-                    mode="scatter"
-                    height="100%"
-                    palette="puor"
-                    contextLayers={layerCtx.active}
-                    expandable
-                  />
-                ) : (
+                {cateGeo ? (() => {
+                  // Build a symmetric ±max(|β(s)|) domain so zero is pinned to
+                  // the neutral midpoint of the diverging palette. Falls back
+                  // to [-1, 1] if the field is empty / non-numeric.
+                  const field = `coef_${activeCateVar}`;
+                  let absMax = 0;
+                  for (const f of cateGeo.features) {
+                    const v = (f.properties as Record<string, unknown>)[field];
+                    if (typeof v === "number" && isFinite(v)) {
+                      const a = Math.abs(v);
+                      if (a > absMax) absMax = a;
+                    }
+                  }
+                  const dom: [number, number] = absMax > 0 ? [-absMax, absMax] : [-1, 1];
+                  const meta = cateGeo as unknown as { units?: string; source?: string; with_uncertainty?: boolean };
+                  return (
+                    <>
+                      <SpatialMap
+                        geojson={cateGeo}
+                        colorField={field}
+                        domainOverride={dom}
+                        dimField={cateShowUncertainty ? `coef_ns_${activeCateVar}` : undefined}
+                        mode="scatter"
+                        height="100%"
+                        palette="rdbu"
+                        contextLayers={layerCtx.active}
+                        expandable
+                      />
+                      {/* Uncertainty toggle */}
+                      <label
+                        title="Dim cells whose 90% posterior CI brackets zero (“not significant at 90%”)."
+                        style={{
+                          position: "absolute", top: 6, right: 90, zIndex: 10,
+                          fontSize: 10, padding: "2px 6px", borderRadius: 3,
+                          border: "1px solid var(--line)", background: "rgba(255,255,255,0.92)",
+                          display: "inline-flex", alignItems: "center", gap: 4,
+                          cursor: "pointer", fontFamily: "inherit",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={cateShowUncertainty}
+                          onChange={(e) => setCateShowUncertainty(e.target.checked)}
+                          style={{ margin: 0 }}
+                        />
+                        Dim non-significant
+                      </label>
+                      {/* Equation panel */}
+                      <div
+                        style={{
+                          position: "absolute", top: 36, left: 6, zIndex: 6, maxWidth: 320,
+                          padding: "6px 8px", borderRadius: 4, background: "rgba(255,255,255,0.92)",
+                          border: "1px solid var(--line)", fontSize: 10, lineHeight: 1.45,
+                          color: "var(--ink-2)", fontFamily: "inherit",
+                        }}
+                      >
+                        <div className="mono" style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--muted)", marginBottom: 4 }}>
+                          Bayesian local effect
+                        </div>
+                        <div style={{ fontFamily: "‘Latin Modern Math’, ‘Cambria Math’, serif", fontSize: 13 }}>
+                          τ(s) = β₀ + Φ<sub>K</sub>(s)·w
+                        </div>
+                        <div style={{ marginTop: 4, color: "var(--muted)" }}>
+                          Posterior mean of the per-cell treatment-effect coefficient
+                          {meta?.units ? ` — ${meta.units}` : " — ΔY per unit T"}.
+                          {meta?.source ? ` Source: ${meta.source}.` : ""}
+                        </div>
+                      </div>
+                    </>
+                  );
+                })() : (
                   <div style={{ display: "flex", flexDirection: "column", height: "100%", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: 11, background: "#faf8f4", padding: 16, gap: 6, textAlign: "center" }}>
                     {(() => {
                       const err = panelErrors["cate"];
@@ -1197,10 +1272,10 @@ export default function ResultsPage() {
                   </div>
                 )}
                 <div className="mono" style={{ position: "absolute", bottom: 8, left: 8, fontSize: 8, padding: "3px 6px", background: "rgba(255,255,255,0.92)", border: "1px solid var(--line)", borderRadius: 3, color: "var(--ink-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                  CATE · local causal effect
+                  Bayesian local treatment effect β(s) · ΔY per unit T
                 </div>
                 <div style={{ position: "absolute", top: 8, right: 50, zIndex: 6 }}>
-                  <ExportBlockButton targetRef={cateBlockRef} artifactId="cate_map" label={`cate_${activeCateVar}`} compact />
+                  <ExportBlockButton targetRef={cateBlockRef} artifactId="cate_map" label={`coef_${activeCateVar}`} compact />
                 </div>
               </div>
               <div ref={doseBlockRef} style={{ borderRadius: 4, overflow: "hidden", border: "1px solid var(--line)", padding: 10, position: "relative", minHeight: 320 }}>

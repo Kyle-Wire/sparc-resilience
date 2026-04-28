@@ -427,7 +427,50 @@ class ScenarioSimulator:
         return 10.0
 
     # ------------------------------------------------------------------
-    # MGWR-based delta computation
+    # Bayesian per-cell coefficient β(s) loader
+    # ------------------------------------------------------------------
+
+    def _get_bayesian_beta(self, treatment: str) -> Optional[np.ndarray]:
+        """Return per-cell Bayesian local treatment effect β(s) for *treatment*.
+
+        Reads the ``cate_mean`` column from the ``("3","cate_summary")``
+        long-format table (sorted by ``cell_id``). This is the Stage-3 NUTS
+        posterior mean of the spatial CATE — in v4 it replaces every place
+        the simulator previously used MGWR local coefficients to compute an
+        effect, because MGWR coefficients are correlation-based and β(s) is
+        the causal quantity.
+
+        Returns ``None`` if the artifact is not registered (e.g. Stage 3 was
+        not run or did not estimate CATE for *treatment*). Results are
+        cached on ``self._bayesian_beta_cache``.
+        """
+        cache = getattr(self, "_bayesian_beta_cache", None)
+        if cache is None:
+            cache = {}
+            self._bayesian_beta_cache = cache
+        if treatment in cache:
+            return cache[treatment]
+
+        beta: Optional[np.ndarray] = None
+        try:
+            from sparc.registry.store import get_active_store
+            store = get_active_store()
+            if store is not None and store.has("3", "cate_summary"):
+                df = store.read_table("3", "cate_summary")
+                if df is not None and "treatment" in df.columns and "cate_mean" in df.columns:
+                    sub = df[df["treatment"] == treatment]
+                    if not sub.empty:
+                        if "cell_id" in sub.columns:
+                            sub = sub.sort_values("cell_id")
+                        beta = np.asarray(sub["cate_mean"].to_numpy(), dtype=float)
+        except Exception:
+            beta = None
+
+        cache[treatment] = beta
+        return beta
+
+    # ------------------------------------------------------------------
+    # Direct-effect delta computation
     # ------------------------------------------------------------------
 
     def _compute_mgwr_direct_delta(
@@ -436,33 +479,25 @@ class ScenarioSimulator:
         modified_values: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, str]:
         """
-        Per-point direct temperature delta using a four-tier strategy:
+        Per-point direct delta using a four-tier strategy:
 
-        1. **MGWR local coefficients** — if the GWR model produced
-           reliable spatially-varying coefficients (mean |β| ≥
-           ``mgwr_reliability_threshold``), use them directly for full
-           spatial heterogeneity.
-        2. **Saturation curve** — if MGWR is unreliable or unavailable
-           but a GWRF condition curve with R² ≥
-           ``_condition_curve_min_r2`` exists, use the non-linear PDP
-           response.
-        3. **MGWR blend** — if MGWR has weak signal and no saturation
-           curve is available, blend MGWR with physics literature.
-        4. **Physics literature** — pure fallback.
+        1. **PDE alpha field** (V3) — if a learned spatial alpha field is
+           available, modulate the global structural coefficient by it.
+        2. **Bayesian β(s)** (v4) — per-cell posterior-mean coefficient
+           from Stage 3 ``cate_summary.cate_mean`` (NUTS spatial CATE).
+           This is the canonical causal local effect; MGWR/GWR local
+           coefficients are no longer used here because they are
+           correlation-based.
+        3. **Saturation curve** — GWRF condition curve PDP (when reliable).
+        4. **Physics literature** — pure prior fallback.
 
         Returns
         -------
         (delta, method) : (ndarray, str)
-            ``delta`` — per-point temperature change.
-            ``method`` — ``'mgwr'``, ``'saturation_curve'``,
-            ``'mgwr_blend'``, or ``'physics_lit'``.
+            ``delta`` — per-point change in outcome.
+            ``method`` — ``'pde_alpha_field*'``, ``'bayesian_beta'``,
+            ``'saturation_curve'``, or ``'physics_lit'``.
         """
-        # Read reliability threshold from caps.yml (with hardcoded fallback)
-        caps = self.config.get('caps', {})
-        RELIABILITY_THRESHOLD = float(
-            caps.get('mgwr_reliability_threshold', 0.01)
-        )
-
         # --- Physics literature coefficient per raw unit ---------------
         prior = self.physics_priors.get(variable)
         if prior and prior.get("unit_increment", 1.0) != 0:
@@ -549,62 +584,13 @@ class ScenarioSimulator:
                       f"Gini={gini:.4f}, mean={np.mean(delta):.4f}")
                 return delta, 'pde_alpha_field'
 
-        # --- Tier 1: MGWR local coefficients (spatial heterogeneity) ---
-        j = self._mgwr_feature_map.get(variable)
-        has_mgwr = (
-            j is not None
-            and self._mgwr_coefficients_raw is not None
-        )
-
-        if has_mgwr:
-            local_coeff = self._mgwr_coefficients_raw[:, j]  # (n_points,)
-            n = min(len(effective_change), len(local_coeff))
-            local_coeff = local_coeff[:n]
-
-            # Scale-invariant reliability: convert raw mean|β| back to
-            # per-standard-deviation space so the threshold is comparable
-            # across variables with very different raw units (e.g.
-            # Pct_Canopy in 0–100 vs Albedo in 0–1).
-            scaler_std = (
-                self._mgwr_scaler_scale[j]
-                if hasattr(self, '_mgwr_scaler_scale')
-                   and self._mgwr_scaler_scale is not None
-                else 1.0
-            )
-            # Exclude exact-zero coefficients from the mean — zeros from
-            # sign-constraint projection are not evidence of no effect.
-            nonzero = local_coeff != 0
-            if nonzero.any():
-                mean_abs_raw = float(np.mean(np.abs(local_coeff[nonzero])))
-            else:
-                mean_abs_raw = 0.0
-            mean_abs_scaled = mean_abs_raw * scaler_std  # ≈ per-σ effect
-
-            if mean_abs_scaled >= RELIABILITY_THRESHOLD:
-                # MGWR has signal — use local coefficients, but anchor
-                # magnitude to the DML structural coefficient when available.
-                # MGWR bandwidth smoothing can attenuate the coefficient
-                # magnitude (e.g. Canopy MGWR=-0.0007 vs DML=-0.022) while
-                # the *spatial pattern* (where effects are stronger/weaker)
-                # remains informative.  Strategy: rescale so the mean |β|
-                # matches the DML estimate, preserving relative variation.
-                causal_coef = self.get_causal_coefficient(variable)
-                if causal_coef is not None and mean_abs_raw > 1e-12:
-                    causal_abs = abs(causal_coef)
-                    attenuation = causal_abs / mean_abs_raw
-                    # Only rescale when MGWR is substantially attenuated
-                    # (< 50% of DML magnitude); otherwise trust MGWR.
-                    if attenuation > 2.0:
-                        zero_mask = local_coeff == 0
-                        local_coeff = local_coeff * attenuation
-                        # Infill zero-coefficient cells with the mean of
-                        # the rescaled non-zero coefficients.  This keeps
-                        # the infill in the same MGWR-spatial / DML-anchored
-                        # frame rather than substituting a separate estimate.
-                        if zero_mask.any() and (~zero_mask).any():
-                            local_coeff[zero_mask] = float(np.mean(local_coeff[~zero_mask]))
-                        return local_coeff * effective_change[:n], 'mgwr_causal_anchored'
-                return local_coeff * effective_change[:n], 'mgwr'
+        # --- Tier 1: Bayesian per-cell coefficient β(s) ---------------
+        # Stage-3 NUTS posterior mean from cate_summary.cate_mean. This is
+        # the canonical causal local effect; v4 dropped MGWR direct/blend.
+        beta_s = self._get_bayesian_beta(variable)
+        if beta_s is not None and beta_s.size > 0:
+            n = min(len(effective_change), len(beta_s))
+            return beta_s[:n] * effective_change[:n], 'bayesian_beta'
 
         # --- Tier 2: Saturation curve (GWRF condition curve) -----------
         curve = self._condition_curves.get(variable)
@@ -636,13 +622,7 @@ class ScenarioSimulator:
                     f"falling back to coefficient extrapolation."
                 )
 
-        # --- Tier 3: MGWR unreliable — blend with physics literature ---
-        if has_mgwr:
-            alpha = mean_abs_scaled / RELIABILITY_THRESHOLD       # 0 → 1
-            blended = alpha * local_coeff + (1.0 - alpha) * lit_per_unit
-            return blended * effective_change[:n], 'mgwr_blend'
-
-        # --- Tier 4: No MGWR — pure physics literature fallback --------
+        # --- Tier 3: Pure physics literature fallback -----------------
         return lit_per_unit * effective_change, 'physics_lit'
 
     def _compute_indirect_effects(
@@ -707,8 +687,10 @@ class ScenarioSimulator:
                 coeff = engine._structural_coeffs.get((parent, child), 0.0)
                 current_delta = current_delta * coeff
 
-            # Final edge (last-mediator → outcome): use alpha field (V3)
-            # or MGWR local coefficient (V2) for spatial heterogeneity.
+            # Final edge (last-mediator → outcome): use alpha field (V3),
+            # Bayesian β(s) (v4), or DAG structural coefficient.
+            # MGWR/GWR coefficients are no longer used here — they are
+            # correlation-based and have been superseded by Stage-3 β(s).
             final_mediator = path[-2]
 
             if self._alpha_field is not None:
@@ -721,13 +703,10 @@ class ScenarioSimulator:
                     indirect_delta[:n_alpha] += alpha_norm * current_delta[:n_alpha]
                     continue
 
-            j = self._mgwr_feature_map.get(final_mediator)
-            if j is not None and self._mgwr_coefficients_raw is not None:
-                local_coeff = self._mgwr_coefficients_raw[:, j]
-                if len(current_delta) < len(local_coeff):
-                    indirect_delta += local_coeff[:len(current_delta)] * current_delta
-                else:
-                    indirect_delta += local_coeff * current_delta
+            beta_final = self._get_bayesian_beta(final_mediator)
+            if beta_final is not None and beta_final.size > 0:
+                m = min(len(current_delta), len(beta_final))
+                indirect_delta[:m] += beta_final[:m] * current_delta[:m]
             else:
                 # Fallback: use DAG structural coefficient for final edge
                 fallback_coeff = engine._structural_coeffs.get(
@@ -802,18 +781,14 @@ class ScenarioSimulator:
                     # Check for edge-specific lag coefficient
                     edge_data = graph.edges.get((parent, child), {})
 
-                    # Use MGWR local coefficient for the final edge if available
+                    # Use Bayesian β(s) for the final edge if available;
+                    # otherwise fall back to the DAG structural coefficient.
                     if step == len(path) - 2:
-                        j = self._mgwr_feature_map.get(child)
-                        if child == target and j is None:
-                            # Final edge targets outcome: use the mediator's
-                            # column in MGWR coefficients
-                            j = self._mgwr_feature_map.get(parent)
-
-                        # Try MGWR spatial coefficients
-                        if j is not None and self._mgwr_coefficients_raw is not None:
-                            local_coeff = self._mgwr_coefficients_raw[:, j]
-                            current_delta = local_coeff[:n] * current_delta[:n]
+                        final_node = child if child == target else parent
+                        beta_final = self._get_bayesian_beta(final_node)
+                        if beta_final is not None and beta_final.size > 0:
+                            m = min(n, len(beta_final))
+                            current_delta = beta_final[:m] * current_delta[:m]
                         else:
                             coeff = engine._structural_coeffs.get(
                                 (parent, child), 0.0
@@ -2376,6 +2351,13 @@ class ScenarioSimulator:
                     if mgwr_j is not None and self._mgwr_coefficients_raw is not None
                     else float('nan')
                 )
+                # Bayesian β(s) mean (Stage-3 NUTS posterior) — the actual
+                # coefficient driving direct-effect computation in v4.
+                _beta_s = self._get_bayesian_beta(var_name)
+                bayesian_coeff_mean = (
+                    float(np.mean(_beta_s)) if _beta_s is not None and _beta_s.size > 0
+                    else float('nan')
+                )
                 # Physics literature per raw unit
                 _prior = self.physics_priors.get(var_name, {})
                 _unit_inc = _prior.get("unit_increment", 1.0)
@@ -2392,7 +2374,8 @@ class ScenarioSimulator:
                     print(f"    Raw Δ:  mean={np.mean(actual_change):+.2f}{unit}  "
                           f"Eff Δ: mean={np.mean(effective_change):+.2f}")
                     print(f"    Direct:   {direct_mean:+.4f}  (source: {coeff_source}, "
-                          f"MGWR={mgwr_coeff_mean:+.6f}, lit/unit={lit_per_unit:+.4f})")
+                          f"β(s)={bayesian_coeff_mean:+.6f}, "
+                          f"MGWR(diag)={mgwr_coeff_mean:+.6f}, lit/unit={lit_per_unit:+.4f})")
                     print(f"    Indirect: {indirect_mean:+.4f}")
                     print(f"    Total:    {total_mean:+.4f} ± {total_std:.4f}  (z-score units)")
                     print(f"    DAG-only: {dag_global_delta:+.4f}  (global, for comparison)")
@@ -2429,6 +2412,7 @@ class ScenarioSimulator:
                         "Total_Delta_Mean": float(a_total.mean()),
                         "Total_Delta_Std": float(a_total.std()),
                         "DAG_Global_Delta": dag_global_delta,
+                        "Bayesian_Coeff_Mean": bayesian_coeff_mean,
                         "MGWR_Coeff_Mean": mgwr_coeff_mean,
                         "Lit_Per_Unit": lit_per_unit,
                         "Coeff_Source": coeff_source,
@@ -2451,6 +2435,7 @@ class ScenarioSimulator:
                         "Total_Delta_Mean": total_mean,
                         "Total_Delta_Std": total_std,
                         "DAG_Global_Delta": dag_global_delta,
+                        "Bayesian_Coeff_Mean": bayesian_coeff_mean,
                         "MGWR_Coeff_Mean": mgwr_coeff_mean,
                         "Lit_Per_Unit": lit_per_unit,
                         "Coeff_Source": coeff_source,
@@ -2623,6 +2608,7 @@ class ScenarioSimulator:
                     "Total_Delta_Mean": float(a_delta.mean()),
                     "Total_Delta_Std": float(a_delta.std()),
                     "DAG_Global_Delta": float('nan'),
+                    "Bayesian_Coeff_Mean": float('nan'),
                     "MGWR_Coeff_Mean": float('nan'),
                     "Lit_Per_Unit": float('nan'),
                     "Coeff_Source": "joint",
@@ -2644,6 +2630,7 @@ class ScenarioSimulator:
                     "Total_Delta_Mean": joint_mean,
                     "Total_Delta_Std": joint_std,
                     "DAG_Global_Delta": float('nan'),
+                    "Bayesian_Coeff_Mean": float('nan'),
                     "MGWR_Coeff_Mean": float('nan'),
                     "Lit_Per_Unit": float('nan'),
                     "Coeff_Source": "joint",

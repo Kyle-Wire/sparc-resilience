@@ -13,7 +13,6 @@ import {
   computeEquity,
   getCensusEquity,
   getCateMapVariables,
-  getLocalCoefVariables,
   getTargeting,
   optimizeBudget,
   dataSummary,
@@ -44,7 +43,7 @@ import {
  */
 
 type Step = 1 | 2 | 3;
-type BenefitSource = "cate" | "local_coef" | "uniform";
+type BenefitSource = "cate" | "uniform";
 type Solver = "auto" | "greedy" | "greedy_2opt" | "milp";
 
 interface PersistedState {
@@ -89,7 +88,13 @@ function loadPersisted(): PersistedState {
   try {
     const raw = localStorage.getItem(WIZ_KEY);
     if (!raw) return { ...DEFAULT_STATE };
-    return { ...DEFAULT_STATE, ...JSON.parse(raw) } as PersistedState;
+    const parsed = { ...DEFAULT_STATE, ...JSON.parse(raw) } as PersistedState;
+    // v4 migration: the legacy "local_coef" benefit source (MGWR/GWR
+    // correlation-based coefficients) is gone — collapse onto "cate".
+    if ((parsed.benefitSource as string) === "local_coef") {
+      parsed.benefitSource = "cate";
+    }
+    return parsed;
   } catch {
     return { ...DEFAULT_STATE };
   }
@@ -167,29 +172,24 @@ export default function DecisionSupportPage() {
   // Step 2 metadata loaders (benefit source variables + columns)
   // ──────────────────────────────────────────────────────────────
   const [cateVars, setCateVars] = useState<string[]>([]);
-  const [coefVars, setCoefVars] = useState<string[]>([]);
   const [columns, setColumns] = useState<string[]>([]);
 
   useEffect(() => {
     getCateMapVariables()
       .then((res) => setCateVars(res?.variables ?? []))
       .catch(() => setCateVars([]));
-    getLocalCoefVariables()
-      .then((res) => setCoefVars(res?.variables ?? []))
-      .catch(() => setCoefVars([]));
     dataSummary()
       .then((s) => setColumns(s?.columns ?? []))
       .catch(() => setColumns([]));
   }, [runEndedAt]);
 
-  // Keep benefitVar pointing at something valid as sources change.
+  // Keep benefitVar pointing at something valid as cateVars changes.
   useEffect(() => {
     if (wiz.benefitSource === "uniform") return;
-    const list = wiz.benefitSource === "cate" ? cateVars : coefVars;
-    if (list.length > 0 && !list.includes(wiz.benefitVar)) {
-      updateWiz({ benefitVar: list[0] });
+    if (cateVars.length > 0 && !cateVars.includes(wiz.benefitVar)) {
+      updateWiz({ benefitVar: cateVars[0] });
     }
-  }, [wiz.benefitSource, wiz.benefitVar, cateVars, coefVars, updateWiz]);
+  }, [wiz.benefitSource, wiz.benefitVar, cateVars, updateWiz]);
 
   // Keep activeTargetVar valid vs. cateVars.
   useEffect(() => {
@@ -355,7 +355,6 @@ export default function DecisionSupportPage() {
           wiz={wiz}
           updateWiz={updateWiz}
           cateVars={cateVars}
-          coefVars={coefVars}
           columns={columns}
           onBack={() => goToStep(1)}
           onNext={() => {
@@ -550,7 +549,6 @@ function Step2Constraints({
   wiz,
   updateWiz,
   cateVars,
-  coefVars,
   columns,
   onBack,
   onNext,
@@ -558,13 +556,11 @@ function Step2Constraints({
   wiz: PersistedState;
   updateWiz: (p: Partial<PersistedState>) => void;
   cateVars: string[];
-  coefVars: string[];
   columns: string[];
   onBack: () => void;
   onNext: () => void;
 }) {
-  const sourceList =
-    wiz.benefitSource === "cate" ? cateVars : wiz.benefitSource === "local_coef" ? coefVars : [];
+  const sourceList = wiz.benefitSource === "cate" ? cateVars : [];
   const sourceUnavailable = wiz.benefitSource !== "uniform" && sourceList.length === 0;
 
   return (
@@ -616,7 +612,7 @@ function Step2Constraints({
       <Card title="Step 2b — Budget Allocator" subtitle="Allocates capital across grid cells.">
         <FieldRow label="Benefit source">
           <div style={{ display: "flex", gap: 6 }}>
-            {(["cate", "local_coef", "uniform"] as BenefitSource[]).map((src) => (
+            {(["cate", "uniform"] as BenefitSource[]).map((src) => (
               <button
                 key={src}
                 onClick={() => updateWiz({ benefitSource: src })}
@@ -628,8 +624,13 @@ function Step2Constraints({
                   background: wiz.benefitSource === src ? "#fff4ec" : "#fff",
                   cursor: "pointer",
                 }}
+                title={
+                  src === "cate"
+                    ? "Bayesian local treatment effect β(s) from Stage 3 NUTS posterior"
+                    : "Uniform unit benefit — sanity check / equity reference only"
+                }
               >
-                {src === "cate" ? "CATE" : src === "local_coef" ? "Local coef" : "Uniform"}
+                {src === "cate" ? "Bayesian β(s)" : "Uniform"}
               </button>
             ))}
           </div>

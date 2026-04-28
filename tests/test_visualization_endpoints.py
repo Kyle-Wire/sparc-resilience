@@ -120,3 +120,125 @@ def test_results_bundle_404_without_registry(monkeypatch):
     with TestClient(app_module.app) as client:
         resp = client.get("/results/bundle")
     assert resp.status_code in (400, 404, 503)
+
+
+# ---------------------------------------------------------------------------
+# /results/causal/cate_map  — Bayesian β(s) (v4)
+# ---------------------------------------------------------------------------
+
+
+def _seed_cate_summary(registry, treatment: str = "Pct_Canopy"):
+    """Write a minimal long-format cate_summary table for tests."""
+    df = pd.DataFrame(
+        [
+            {
+                "cell_id": i,
+                "treatment": treatment,
+                "cate_mean": -0.05 * (i + 1),
+                "cate_std": 0.01,
+                "cate_ci5": -0.05 * (i + 1) - 0.02,
+                "cate_ci50": -0.05 * (i + 1),
+                "cate_ci95": -0.05 * (i + 1) + 0.02,
+                "multiplier_mean": 1.0 + 0.1 * i,
+                "multiplier_ci5": 0.9,
+                "multiplier_ci95": 1.1,
+                "source": "bayesian_nuts",
+            }
+            for i in range(3)
+        ]
+    )
+    ArtifactStore(registry).write_table("3", "cate_summary", df)
+    return df
+
+
+def _attach_geometry(monkeypatch, n: int = 3):
+    """Attach a tiny GeoDataFrame to ``state.data`` so the CATE endpoint can join."""
+    import geopandas as gpd
+    from shapely.geometry import Point
+
+    gdf = gpd.GeoDataFrame(
+        {"_": list(range(n))},
+        geometry=[Point(i, i) for i in range(n)],
+        crs="EPSG:4326",
+    )
+    monkeypatch.setattr(app_module.state, "data", gdf, raising=False)
+    monkeypatch.setattr(app_module.state, "project_config", {"loaded": True}, raising=False)
+
+
+def test_cate_map_returns_coef_property(attached_registry, monkeypatch):
+    _seed_cate_summary(attached_registry)
+    _attach_geometry(monkeypatch)
+    with TestClient(app_module.app) as client:
+        resp = client.get("/results/causal/cate_map?variable=Pct_Canopy")
+    assert resp.status_code == 200, resp.text
+    fc = resp.json()
+    assert fc["type"] == "FeatureCollection"
+    assert fc["variable"] == "Pct_Canopy"
+    assert "units" in fc and "ΔY per unit T" in fc["units"]
+    assert fc["source"] == "bayesian_nuts"
+    assert fc["with_uncertainty"] is False
+    feats = fc["features"]
+    assert len(feats) == 3
+    p0 = feats[0]["properties"]
+    # Canonical and back-compat property names — both should equal cate_mean.
+    assert p0["coef_Pct_Canopy"] == pytest.approx(-0.05)
+    assert p0["cate_Pct_Canopy"] == pytest.approx(-0.05)
+
+
+def test_cate_map_with_uncertainty_includes_ci_and_ns(attached_registry, monkeypatch):
+    _seed_cate_summary(attached_registry)
+    _attach_geometry(monkeypatch)
+    with TestClient(app_module.app) as client:
+        resp = client.get(
+            "/results/causal/cate_map?variable=Pct_Canopy&with_uncertainty=1"
+        )
+    assert resp.status_code == 200, resp.text
+    fc = resp.json()
+    assert fc["with_uncertainty"] is True
+    p = fc["features"][0]["properties"]
+    assert "coef_ci5_Pct_Canopy" in p
+    assert "coef_ci95_Pct_Canopy" in p
+    assert "coef_ns_Pct_Canopy" in p
+    # All seeded CIs are negative (mean - 0.02 .. mean + 0.02 with mean ≤ -0.05),
+    # so the CI does not bracket zero — coef_ns must be False.
+    assert p["coef_ns_Pct_Canopy"] is False
+
+
+def test_local_coefficients_endpoint_removed():
+    """The legacy MGWR-coefficient endpoints are gone in v4."""
+    with TestClient(app_module.app) as client:
+        r1 = client.get("/results/local_coefficients?variable=Pct_Canopy")
+        r2 = client.get("/results/local_coefficients/variables")
+    # 404 = no route; 422 = matched a typed route (e.g. ``/results/{stage:int}``)
+    # whose validation rejects the path. Either confirms the legacy endpoint
+    # is gone.
+    assert r1.status_code in (404, 422)
+    assert r2.status_code in (404, 422)
+
+
+# ---------------------------------------------------------------------------
+# /scenarios/budget/optimize — benefit_source="cate" reads β(s) from DB
+# ---------------------------------------------------------------------------
+
+
+def test_budget_resolve_benefits_cate_reads_cate_mean(attached_registry, monkeypatch):
+    _seed_cate_summary(attached_registry)
+    _attach_geometry(monkeypatch)
+    benefits, desc = app_module._resolve_benefits("cate", "Pct_Canopy")
+    assert benefits.shape == (3,)
+    assert benefits.tolist() == pytest.approx([-0.05, -0.10, -0.15])
+    assert "Bayesian local coefficient" in desc
+
+
+def test_budget_resolve_benefits_uniform_returns_ones(attached_registry, monkeypatch):
+    _attach_geometry(monkeypatch, n=4)
+    benefits, desc = app_module._resolve_benefits("uniform", None)
+    assert benefits.shape == (4,)
+    assert benefits.tolist() == [1.0, 1.0, 1.0, 1.0]
+    assert "uniform" in desc.lower()
+
+
+def test_budget_resolve_benefits_rejects_unknown_source(monkeypatch):
+    monkeypatch.setattr(app_module.state, "project_config", {"loaded": True}, raising=False)
+    with pytest.raises(Exception):
+        app_module._resolve_benefits("local_coef", "Pct_Canopy")
