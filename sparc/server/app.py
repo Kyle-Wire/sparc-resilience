@@ -5113,3 +5113,93 @@ def _to_json(data: Any) -> Any:
     if isinstance(data, dict):
         return data
     return {"data": str(data)}
+
+# ---------------------------------------------------------------------------
+# Phase 5: Artifact export-on-demand endpoints (db-only architecture)
+# ---------------------------------------------------------------------------
+# These let the desktop UI download any DB-resident artifact as a file
+# (CSV / parquet / JSON / GPKG / joblib / etc.) without keeping
+# stage folders on disk.
+
+from fastapi.responses import FileResponse as _FileResponse
+
+
+def _get_artifact_store():
+    if state.registry is None:
+        raise HTTPException(503, "No active run/registry")
+    from sparc.registry.store import ArtifactStore
+    return ArtifactStore(state.registry)
+
+
+@app.get("/artifacts/{stage}/{artifact_id}/download")
+def download_artifact(stage: str, artifact_id: str, fmt: Optional[str] = None):
+    """Download an artifact from artifacts.db as a file.
+
+    Query parameters:
+      fmt � one of csv, parquet, json, gpkg, geojson, joblib, pkl, npy.
+            If omitted, defaults to the artifact's natural format.
+    """
+    store = _get_artifact_store()
+    if not store.has(stage, artifact_id):
+        raise HTTPException(404, f"Artifact not found: {stage}/{artifact_id}")
+    try:
+        path = store.export(stage, artifact_id, fmt=fmt)
+    except Exception as exc:
+        raise HTTPException(500, f"Export failed: {exc}") from exc
+    suffix = path.suffix.lstrip(".") or "bin"
+    media = {
+        "csv": "text/csv",
+        "json": "application/json",
+        "parquet": "application/octet-stream",
+        "gpkg": "application/geopackage+sqlite3",
+        "geojson": "application/geo+json",
+        "joblib": "application/octet-stream",
+        "pkl": "application/octet-stream",
+        "npy": "application/octet-stream",
+    }.get(suffix, "application/octet-stream")
+    return _FileResponse(
+        path,
+        media_type=media,
+        filename=f"{artifact_id}.{suffix}",
+    )
+
+
+@app.post("/artifacts/{stage}/export")
+def export_stage_zip(stage: str):
+    """Bundle every artifact for a stage into a downloadable .zip."""
+    store = _get_artifact_store()
+    import tempfile
+    tmpdir = Path(tempfile.mkdtemp(prefix=f"sparc_export_{stage}_"))
+    try:
+        zip_path = store.export_stage(stage, tmpdir, as_zip=True)
+        if not isinstance(zip_path, Path):
+            raise RuntimeError("export_stage did not return a zip path")
+    except Exception as exc:
+        raise HTTPException(500, f"Stage export failed: {exc}") from exc
+    return _FileResponse(
+        zip_path,
+        media_type="application/zip",
+        filename=f"stage_{stage}_artifacts.zip",
+    )
+
+
+@app.get("/artifacts/{stage}")
+def list_stage_artifacts(stage: str):
+    """List all artifacts registered for a stage (id, format, storage_kind)."""
+    if state.registry is None:
+        raise HTTPException(503, "No active run/registry")
+    entries = state.registry.list_for_stage(stage)
+    return {
+        "stage": str(stage),
+        "count": len(entries),
+        "artifacts": [
+            {
+                "artifact_id": e.id,
+                "format": e.format,
+                "storage_kind": getattr(e, "storage_kind", "legacy_path"),
+                "partial": bool(e.partial),
+                "producer": getattr(e, "producer", None),
+            }
+            for e in entries
+        ],
+    }

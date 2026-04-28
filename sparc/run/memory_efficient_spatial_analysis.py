@@ -309,18 +309,34 @@ def analyze_model_residuals_morans_i(oof_predictions, y_true, coords, model_name
     
     # Create results DataFrame
     results_df = pd.DataFrame(results)
-    
-    # Save results
-    os.makedirs(output_dir, exist_ok=True)
-    results_path = os.path.join(output_dir, "model_residuals_morans_i.csv")
-    results_df.to_csv(results_path, index=False)
-    
-    # Create summary report
-    create_residuals_summary_report(results_df, output_dir)
-    
-    print(f"\nModel residuals Moran's I analysis completed!")
-    print(f"Results saved to: {results_path}")
-    
+
+    # Persist: artifact store is canonical, disk is opt-in.
+    try:
+        from sparc.registry.store import get_active_store
+        _store = get_active_store()
+    except Exception:  # noqa: BLE001
+        _store = None
+    if _store is not None:
+        _store.write_table(
+            stage="spatial",
+            artifact_id="model_residuals_morans_i",
+            df=results_df,
+            producer="memory_efficient_spatial_analysis.analyze_model_residuals_morans_i",
+            consumers=["server:/results/spatial_autocorr", "report:spatial"],
+        )
+
+    from sparc.run.disk_policy import disk_writes_enabled
+    if disk_writes_enabled():
+        os.makedirs(output_dir, exist_ok=True)
+        results_path = os.path.join(output_dir, "model_residuals_morans_i.csv")
+        results_df.to_csv(results_path, index=False)
+        # Create summary report (disk-only convenience)
+        create_residuals_summary_report(results_df, output_dir)
+        print(f"\nModel residuals Moran's I analysis completed!")
+        print(f"Results saved to: {results_path}")
+    else:
+        print("\nModel residuals Moran's I analysis completed (artifacts.db: spatial/model_residuals_morans_i)")
+
     return results_df
 
 def analyze_temperature_morans_i(data_file, output_dir):
@@ -375,21 +391,35 @@ def analyze_temperature_morans_i(data_file, output_dir):
         
         # Analyze temperature
         result = analyzer.calculate_morans_i_efficient(temperature, "temperature")
-        
-        # Save results
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Save as CSV
-        temp_df = pd.DataFrame([result])
-        temp_path = os.path.join(output_dir, "temperature_morans_i.csv")
-        temp_df.to_csv(temp_path, index=False)
-        
-        # Create detailed report
-        create_temperature_summary_report(result, output_dir)
-        
-        print(f"\nTemperature Moran's I analysis completed!")
-        print(f"Results saved to: {temp_path}")
-        
+
+        # Persist: artifact store is canonical, disk is opt-in.
+        try:
+            from sparc.registry.store import get_active_store
+            _store = get_active_store()
+        except Exception:  # noqa: BLE001
+            _store = None
+        if _store is not None:
+            _store.write_struct(
+                stage="spatial",
+                artifact_id="temperature_morans_i",
+                payload=result if isinstance(result, dict) else {"value": result},
+                producer="memory_efficient_spatial_analysis.analyze_temperature_morans_i",
+                consumers=["server:/results/spatial_autocorr", "report:spatial"],
+            )
+
+        from sparc.run.disk_policy import disk_writes_enabled
+        if disk_writes_enabled():
+            os.makedirs(output_dir, exist_ok=True)
+            temp_df = pd.DataFrame([result])
+            temp_path = os.path.join(output_dir, "temperature_morans_i.csv")
+            temp_df.to_csv(temp_path, index=False)
+            # Create detailed report
+            create_temperature_summary_report(result, output_dir)
+            print(f"\nTemperature Moran's I analysis completed!")
+            print(f"Results saved to: {temp_path}")
+        else:
+            print("\nTemperature Moran's I analysis completed (artifacts.db: spatial/temperature_morans_i)")
+
         return result
         
     except Exception as e:

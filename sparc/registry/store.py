@@ -36,9 +36,10 @@ import json
 import pickle
 import sqlite3
 import time
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Optional, TYPE_CHECKING
+from typing import Any, Iterable, Optional, TYPE_CHECKING, Union
 
 if TYPE_CHECKING:  # pragma: no cover
     import pandas as pd
@@ -450,6 +451,184 @@ class ArtifactStore:
                 except OSError:
                     pass
         return removed
+
+    # ------------------------------------------------------------------
+    # Export-on-demand (download from artifacts.db)
+    # ------------------------------------------------------------------
+
+    # Map storage_kind -> default export format when caller passes fmt=None.
+    _DEFAULT_EXPORT_FMT: dict[str, str] = {
+        "table": "csv",
+        "struct": "json",
+        "blob_inline": "joblib",
+        "blob_external": "joblib",
+        "legacy_path": "native",
+    }
+
+    def export(
+        self,
+        stage: str | int,
+        artifact_id: str,
+        *,
+        fmt: Optional[str] = None,
+        dest: Optional[Union[str, Path]] = None,
+    ) -> Path:
+        """Materialize a single artifact to disk and return the path.
+
+        Parameters
+        ----------
+        stage, artifact_id : artifact key.
+        fmt : output format. ``None`` chooses a sensible default based
+            on storage kind (``table -> csv``, ``struct -> json``,
+            ``blob -> joblib``, ``legacy_path -> native``). Supported:
+            tables: ``csv``, ``parquet``, ``gpkg`` (when geometry present),
+                    ``geojson``;
+            structs: ``json``;
+            blobs: ``joblib``, ``pkl``, ``npy`` (when payload is ndarray).
+        dest : destination file path. If ``None``, a tempfile is created.
+
+        Returns
+        -------
+        pathlib.Path
+            Path to the written file.
+        """
+        entry = self.registry.lookup(stage, artifact_id)
+        if entry is None:
+            raise ArtifactStoreError(
+                f"Unknown artifact: stage={stage} id={artifact_id}"
+            )
+        kind = entry.storage_kind or "legacy_path"
+        chosen_fmt = (fmt or self._DEFAULT_EXPORT_FMT.get(kind, "json")).lower()
+
+        # Resolve destination — create tempfile if not given.
+        if dest is None:
+            import tempfile
+            suffix = "." + chosen_fmt if chosen_fmt != "native" else ""
+            tmp = tempfile.NamedTemporaryFile(
+                prefix=f"{stage}_{artifact_id}_", suffix=suffix, delete=False,
+            )
+            tmp.close()
+            dest_path = Path(tmp.name)
+        else:
+            dest_path = Path(dest)
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Legacy path: if user asked for native fmt, just copy.
+        if kind == "legacy_path":
+            src = self.registry.resolve(entry)
+            if not src.exists():
+                raise ArtifactStoreError(f"Legacy file missing: {src}")
+            if chosen_fmt in ("native", entry.format):
+                import shutil
+                shutil.copyfile(src, dest_path)
+                return dest_path
+            # Otherwise, fall through and re-serialize via read_any.
+
+        payload = self.read_any(stage, artifact_id)
+
+        if kind == "table" or chosen_fmt in ("csv", "parquet", "gpkg", "geojson"):
+            import pandas as pd
+            df = payload
+            if not hasattr(df, "to_csv"):
+                raise ArtifactStoreError(
+                    f"Cannot export non-table payload as {chosen_fmt}"
+                )
+            if chosen_fmt == "csv":
+                df.to_csv(dest_path, index=False)
+            elif chosen_fmt == "parquet":
+                df.to_parquet(dest_path, index=False)
+            elif chosen_fmt in ("gpkg", "geojson"):
+                try:
+                    import geopandas as gpd
+                except ImportError as e:
+                    raise ArtifactStoreError(
+                        f"geopandas required for {chosen_fmt} export"
+                    ) from e
+                if not isinstance(df, gpd.GeoDataFrame):
+                    raise ArtifactStoreError(
+                        f"Artifact has no geometry column; cannot export as {chosen_fmt}"
+                    )
+                driver = "GPKG" if chosen_fmt == "gpkg" else "GeoJSON"
+                df.to_file(dest_path, driver=driver)
+            return dest_path
+
+        if kind == "struct" or chosen_fmt == "json":
+            with open(dest_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, default=str)
+            return dest_path
+
+        # Blob: choose serializer.
+        if chosen_fmt == "joblib":
+            import joblib  # type: ignore[import-not-found]
+            joblib.dump(payload, dest_path)
+            return dest_path
+        if chosen_fmt == "pkl":
+            with open(dest_path, "wb") as f:
+                pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+            return dest_path
+        if chosen_fmt == "npy":
+            try:
+                import numpy as np
+            except ImportError as e:
+                raise ArtifactStoreError("numpy required for .npy export") from e
+            np.save(dest_path, payload)
+            return dest_path
+
+        raise ArtifactStoreError(
+            f"Unsupported export fmt={chosen_fmt!r} for storage_kind={kind!r}"
+        )
+
+    def export_stage(
+        self,
+        stage: str | int,
+        dest_dir: Union[str, Path],
+        *,
+        as_zip: bool = False,
+    ) -> list[Path] | Path:
+        """Dump every artifact for ``stage`` into ``dest_dir``.
+
+        Parameters
+        ----------
+        stage : stage label.
+        dest_dir : directory to write files into (will be created).
+        as_zip : if True, instead returns a single .zip at
+            ``dest_dir.with_suffix('.zip')`` containing all files.
+
+        Returns
+        -------
+        list[pathlib.Path] | pathlib.Path
+            List of written files, or path to the zip when ``as_zip`` is True.
+        """
+        dest_dir = Path(dest_dir)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        written: list[Path] = []
+        for entry in self.registry.list_for_stage(stage):
+            if entry.partial:
+                continue
+            try:
+                # Pick a name + sensible extension.
+                kind = entry.storage_kind or "legacy_path"
+                ext = self._DEFAULT_EXPORT_FMT.get(kind, "bin")
+                if ext == "native" and entry.format:
+                    ext = entry.format
+                name = f"{entry.id}.{ext}"
+                target = dest_dir / name
+                self.export(stage, entry.id, dest=target)
+                written.append(target)
+            except Exception as exc:  # noqa: BLE001
+                # Don't let one bad artifact abort the whole stage export.
+                warnings.warn(
+                    f"export_stage: failed to export {entry.id}: {exc}",
+                    RuntimeWarning,
+                )
+        if as_zip:
+            import zipfile
+            zip_path = dest_dir.with_suffix(".zip")
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for p in written:
+                    zf.write(p, arcname=p.name)
+            return zip_path
+        return written
 
     # ------------------------------------------------------------------
     # Internals

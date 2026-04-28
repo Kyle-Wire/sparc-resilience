@@ -33,6 +33,9 @@ import os
 import sys
 from typing import Any, Dict, List, Optional
 
+from sparc.run.disk_policy import disk_writes_enabled
+from sparc.run.artifact_io import ensure_dir, save_struct_path
+
 import numpy as np
 import pandas as pd
 
@@ -234,14 +237,15 @@ class CausalValidator:
         # Inject d-separation results into the report dict
         if self.graph is not None and dsep_results:
             self.discovery_report['dseparation'] = dsep_results
-        os.makedirs(output_dir, exist_ok=True)
+        ensure_dir(output_dir)
         try:
             from sparc.run.pipeline_paths import get_result_store
             get_result_store().save_json(3, 'dag_discovery_report.json', self.discovery_report)
         except Exception:
-            report_path = os.path.join(output_dir, 'dag_discovery_report.json')
-            with open(report_path, 'w', encoding='utf-8') as f:
-                json.dump(self.discovery_report, f, indent=2, default=str)
+            if disk_writes_enabled():
+                report_path = os.path.join(output_dir, 'dag_discovery_report.json')
+                with open(report_path, 'w', encoding='utf-8') as f:
+                    json.dump(self.discovery_report, f, indent=2, default=str)
         print(f"    Discovery report saved")
 
     # ------------------------------------------------------------------
@@ -1329,7 +1333,7 @@ class CausalValidator:
             proj_crs = self.config.get('crs', {}).get('target_projected', 'EPSG:26919')
             gdf = estimator.to_geodataframe(data, coord_cols, crs=proj_crs)
             if gdf is not None and len(gdf) > 0:
-                os.makedirs(output_dir, exist_ok=True)
+                ensure_dir(output_dir)
 
                 # Fix Windows GDAL/fiona permissions: ensure HOME points to
                 # a writable directory so driver configs can be created.
@@ -1339,8 +1343,9 @@ class CausalValidator:
                     from sparc.run.pipeline_paths import get_result_store
                     get_result_store().save_geodataframe(3, 'spatial_cate_maps.gpkg', gdf)
                 except Exception:
-                    gpkg_path = os.path.join(output_dir, 'spatial_cate_maps.gpkg')
-                    gdf.to_file(gpkg_path, driver='GPKG')
+                    if disk_writes_enabled():
+                        gpkg_path = os.path.join(output_dir, 'spatial_cate_maps.gpkg')
+                        gdf.to_file(gpkg_path, driver='GPKG')
                 print(f"    Spatial CATE maps saved")
         except Exception as e:
             print(f"    GeoPackage export failed: {e}")
@@ -1473,19 +1478,21 @@ class CausalValidator:
 
         # Save dose-response data
         if self.dose_response_results:
-            os.makedirs(output_dir, exist_ok=True)
+            ensure_dir(output_dir)
             dr_path = os.path.join(output_dir, 'dose_response_curves.json')
             try:
                 from sparc.run.pipeline_paths import get_result_store
                 get_result_store().save_json(3, 'dose_response_curves.json', self.dose_response_results)
             except Exception:
-                with open(dr_path, 'w', encoding='utf-8') as f:
-                    json.dump(self.dose_response_results, f, indent=2, default=str)
+                if disk_writes_enabled():
+                    with open(dr_path, 'w', encoding='utf-8') as f:
+                        json.dump(self.dose_response_results, f, indent=2, default=str)
             try:
                 from sparc.registry.run_registry import register_path
-                register_path(dr_path, stage="3", artifact_id="dose_response_curves",
-                              format="json", producer="causal_validation",
-                              consumers=["server:/results/dose_response"])
+                if disk_writes_enabled():
+                    register_path(dr_path, stage="3", artifact_id="dose_response_curves",
+                                  format="json", producer="causal_validation",
+                                  consumers=["server:/results/dose_response"])
             except Exception:
                 pass
             print(f"  Dose-response curves saved")
@@ -2570,7 +2577,7 @@ class CausalValidator:
                 for var, info in self.dose_response_results.items()
             }
 
-        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True) if disk_writes_enabled() else None
 
         # Use ResultStore if available, falling back to direct I/O
         try:
@@ -2582,16 +2589,17 @@ class CausalValidator:
         out_path = os.path.join(output_dir, 'scenario_coefficients.json')
         if store is not None:
             store.save_json(3, 'scenario_coefficients.json', output)
-        else:
+        elif disk_writes_enabled():
             with open(out_path, 'w', encoding='utf-8') as f:
                 json.dump(output, f, indent=2, default=str)
 
         try:
             from sparc.registry.run_registry import register_path
-            register_path(out_path, stage="3", artifact_id="scenario_coefficients",
-                          format="json", producer="causal_validation",
-                          consumers=["server:/results/scenarios",
-                                     "stage4:scenario_simulator"])
+            if disk_writes_enabled():
+                register_path(out_path, stage="3", artifact_id="scenario_coefficients",
+                              format="json", producer="causal_validation",
+                              consumers=["server:/results/scenarios",
+                                         "stage4:scenario_simulator"])
         except Exception:
             pass
 
@@ -2686,7 +2694,8 @@ def main(approval_gate=None) -> dict:
 
     # Determine output directory
     stage3_dir = str(paths.stage3_dir)
-    os.makedirs(stage3_dir, exist_ok=True)
+    if disk_writes_enabled():
+        os.makedirs(stage3_dir, exist_ok=True)
 
     # Check DAG file exists
     dag_file = config.get('causal', {}).get('dag_file')
@@ -2799,8 +2808,10 @@ def main(approval_gate=None) -> dict:
 
             # Re-save scenario_coefficients.json with Bayesian data
             sc_path = os.path.join(stage3_dir, "scenario_coefficients.json")
-            with open(sc_path, 'w') as f:
-                json.dump(result, f, indent=2, default=str)
+            save_struct_path(result, sc_path, stage="3",
+                             artifact_id="scenario_coefficients",
+                             producer="causal_validation.bayesian",
+                             consumers=["stage4:scenario_simulator"])
             print(f"  Updated scenario_coefficients.json with Bayesian results")
 
             # ---------------------------------------------------------

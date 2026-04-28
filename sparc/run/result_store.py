@@ -205,31 +205,49 @@ class ResultStore:
         if fmt is None:
             fmt = _infer_format(name)
 
+        # Resolve target path (always — even if we won't actually write to it
+        # so callers that log the location still get a sensible string).
         directory = self.stage_dir(stage)
         if subdir:
             directory = directory / subdir
-        directory.mkdir(parents=True, exist_ok=True)
         dest = directory / name
 
-        t0 = time.monotonic()
-        self._write(dest, data, fmt)
-        elapsed = time.monotonic() - t0
+        # Honor the global disk-write policy.  When disabled, we skip mkdir,
+        # the on-disk write, and the legacy per-stage manifest update — all
+        # state lives in the run-wide registry / ArtifactStore.
+        try:
+            from sparc.run.disk_policy import disk_writes_enabled
+            disk_on = disk_writes_enabled()
+        except Exception:  # noqa: BLE001
+            disk_on = True
 
-        # Record in per-stage manifest (legacy / backward-compatible).
-        manifest = _load_manifest(self.stage_dir(stage))
+        elapsed = 0.0
+        size_bytes = 0
+        if disk_on:
+            directory.mkdir(parents=True, exist_ok=True)
+            t0 = time.monotonic()
+            self._write(dest, data, fmt)
+            elapsed = time.monotonic() - t0
+            size_bytes = dest.stat().st_size if dest.exists() else 0
+
+            # Record in per-stage manifest (legacy / backward-compatible).
+            manifest = _load_manifest(self.stage_dir(stage))
+            rel_key = str(Path(subdir) / name) if subdir else name
+            manifest["artifacts"][rel_key] = {
+                "format": fmt,
+                "size_bytes": size_bytes,
+                "written_at": datetime.now(timezone.utc).isoformat(),
+                "write_seconds": round(elapsed, 3),
+                "partial": partial,
+                **(metadata or {}),
+            }
+            _save_manifest(self.stage_dir(stage), manifest)
         rel_key = str(Path(subdir) / name) if subdir else name
-        manifest["artifacts"][rel_key] = {
-            "format": fmt,
-            "size_bytes": dest.stat().st_size if dest.exists() else 0,
-            "written_at": datetime.now(timezone.utc).isoformat(),
-            "write_seconds": round(elapsed, 3),
-            "partial": partial,
-            **(metadata or {}),
-        }
-        _save_manifest(self.stage_dir(stage), manifest)
 
-        # Record in run-wide registry (single source of truth).
-        if self.registry is not None:
+        # Record in run-wide registry (single source of truth) — only when a
+        # real on-disk file exists.  When disk writes are off the dual-write
+        # block below registers the artifact via ArtifactStore instead.
+        if disk_on and self.registry is not None:
             try:
                 row_count = None
                 if isinstance(data, pd.DataFrame):
@@ -331,7 +349,9 @@ class ResultStore:
     ) -> Any:
         """Load a previously saved artifact.
 
-        Raises ``FileNotFoundError`` if the file doesn't exist.
+        When the on-disk file is missing, falls back to the active
+        :class:`ArtifactStore` (DB-resident).  Raises ``FileNotFoundError``
+        only if neither location has the artifact.
         """
         if fmt is None:
             fmt = _infer_format(name)
@@ -341,17 +361,63 @@ class ResultStore:
             directory = directory / subdir
         src = directory / name
 
-        if not src.exists():
-            raise FileNotFoundError(f"Artifact not found: {src}")
+        if src.exists():
+            return self._read(src, fmt)
 
-        return self._read(src, fmt)
+        # Disk miss — try the artifact store.
+        astore_obj = self._load_from_store(stage, name, subdir=subdir)
+        if astore_obj is not None:
+            return astore_obj
+        raise FileNotFoundError(f"Artifact not found: {src}")
 
     def exists(self, stage: Union[int, str], name: str, *, subdir: Optional[str] = None) -> bool:
-        """Check whether an artifact file exists on disk."""
+        """Check whether an artifact is reachable (on disk or in the store)."""
         directory = self.stage_dir(stage)
         if subdir:
             directory = directory / subdir
-        return (directory / name).exists()
+        if (directory / name).exists():
+            return True
+        # Fall back to the artifact DB.
+        try:
+            from sparc.registry.store import get_active_store
+            astore = get_active_store()
+            if astore is None:
+                return False
+            artifact_id = (
+                str(Path(subdir) / name).rsplit(".", 1)[0] if subdir
+                else name.rsplit(".", 1)[0]
+            )
+            return astore.has(self._stage_to_registry_key(stage), artifact_id)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _load_from_store(
+        self,
+        stage: Union[int, str],
+        name: str,
+        *,
+        subdir: Optional[str] = None,
+    ) -> Any:
+        """Best-effort read from the active ArtifactStore.  Returns ``None``
+        when nothing is found or the store is unavailable.
+        """
+        try:
+            from sparc.registry.store import get_active_store
+            astore = get_active_store()
+        except Exception:  # noqa: BLE001
+            return None
+        if astore is None:
+            return None
+        artifact_id = (
+            str(Path(subdir) / name).rsplit(".", 1)[0] if subdir
+            else name.rsplit(".", 1)[0]
+        )
+        try:
+            if not astore.has(self._stage_to_registry_key(stage), artifact_id):
+                return None
+            return astore.read_any(self._stage_to_registry_key(stage), artifact_id)
+        except Exception:  # noqa: BLE001
+            return None
 
     def artifact_path(self, stage: Union[int, str], name: str, *, subdir: Optional[str] = None) -> Path:
         """Return the expected absolute path without checking existence."""
@@ -392,11 +458,18 @@ class ResultStore:
             fmt = _infer_format(name)
         dest = self.save(stage, name, df, fmt, subdir=subdir,
                          partial=partial, metadata=metadata)
-        # Write a CSV companion when saving as Parquet
+        # Write a CSV companion when saving as Parquet (only if disk writes
+        # are enabled; otherwise the parquet itself is already DB-resident).
         if fmt == "parquet":
-            csv_name = Path(name).with_suffix(".csv").name
-            csv_path = dest.parent / csv_name
-            df.to_csv(csv_path, index=False)
+            try:
+                from sparc.run.disk_policy import disk_writes_enabled
+                disk_on = disk_writes_enabled()
+            except Exception:  # noqa: BLE001
+                disk_on = True
+            if disk_on:
+                csv_name = Path(name).with_suffix(".csv").name
+                csv_path = dest.parent / csv_name
+                df.to_csv(csv_path, index=False)
         return dest
 
     def load_dataframe(self, stage: Union[int, str], name: str,

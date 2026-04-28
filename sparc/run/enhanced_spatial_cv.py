@@ -28,6 +28,11 @@ from concurrent.futures import ProcessPoolExecutor
 from sparc.run.pipeline_paths import get_paths
 from sparc.run.spatial_autocorr_comprehensive import SpatialAutocorrelationAnalyzer
 from sparc.run.memory_efficient_spatial_analysis import analyze_model_residuals_morans_i
+from sparc.run.disk_policy import disk_writes_enabled
+from sparc.run.artifact_io import (
+    save_blob_path, load_blob_path, save_struct_path,
+    save_table_path, save_geo_path, ensure_dir,
+)
 
 # Enhanced hardware optimization settings for high-performance workstations (CPU-only)
 HARDWARE_CONFIG = {
@@ -1345,7 +1350,9 @@ class EnhancedSpatialCV:
             oof_predictions = oof_df.values
             
             # Load existing folds
-            folds = joblib.load(folds_path)
+            folds = load_blob_path(folds_path, stage="2", artifact_id="folds")
+            if folds is None:
+                folds = joblib.load(folds_path)
             
             # Load data for performance calculation
             print("=== Loading Data for Performance Calculation ===")
@@ -1577,7 +1584,9 @@ class EnhancedSpatialCV:
         )
         
         # Save folds for later use in Stage 3
-        joblib.dump(folds, self.paths.folds_file)
+        save_blob_path(folds, self.paths.folds_file, stage="2", artifact_id="folds",
+                       producer="enhanced_spatial_cv",
+                       consumers=["stage2:retrain", "stage3:causal"])
         print(f"Saved spatial folds to {self.paths.get_relative_path(self.paths.folds_file)}")
         
         # Simple performance summary
@@ -1678,17 +1687,20 @@ def main(fast_mode=False):
             
             # Save a feature scaler for downstream compatibility
             stage2_dir = str(cv_system.paths.stage2_dir)
-            os.makedirs(stage2_dir, exist_ok=True)
+            ensure_dir(stage2_dir)
             scaler_path = os.path.join(paths.stage2_dir, 'feature_scaler.pkl')
             from sklearn.preprocessing import StandardScaler
             feature_scaler = StandardScaler()
             feature_scaler.fit(data[selected_features_filtered].values)
-            joblib.dump(feature_scaler, scaler_path)
-            
+            save_blob_path(feature_scaler, scaler_path, stage="2", artifact_id="feature_scaler",
+                           producer="enhanced_spatial_cv",
+                           consumers=["stage4:scenario"])
+
             # Generate or load spatial folds
             folds_path = str(cv_system.paths.folds_file)
-            if os.path.exists(folds_path):
-                folds = joblib.load(folds_path)
+            cached_folds = load_blob_path(folds_path, stage="2", artifact_id="folds")
+            if cached_folds is not None:
+                folds = cached_folds
                 print(f"Loaded {len(folds)} spatial folds from cache")
             else:
                 print("Generating spatial folds...")
@@ -1702,11 +1714,12 @@ def main(fast_mode=False):
                     method='block',
                     stratify_y=True,
                 )
-                joblib.dump(folds, folds_path)
+                save_blob_path(folds, folds_path, stage="2", artifact_id="folds",
+                               producer="enhanced_spatial_cv")
                 print(f"Saved {len(folds)} spatial folds")
-            
+
             spatial_intel_dir = os.path.join(paths.output_dir, "spatial_intelligence")
-            os.makedirs(spatial_intel_dir, exist_ok=True)
+            ensure_dir(spatial_intel_dir)
             
             print(f"Data: {len(y)} samples, {len(selected_features_filtered)} features")
             print(f"Features: {selected_features_filtered}")
@@ -1762,7 +1775,9 @@ def main(fast_mode=False):
             X_features_scaled = feature_scaler.fit_transform(X_features)
             
             # Save the scaler for later use
-            joblib.dump(feature_scaler, scaler_path)
+            save_blob_path(feature_scaler, scaler_path, stage="2", artifact_id="feature_scaler",
+                           producer="enhanced_spatial_cv",
+                           consumers=["stage4:scenario"])
             print(f"Created and saved feature scaler to: {scaler_path}")
             print(f"  Scaler fitted on {len(selected_features_filtered)} features")
             
@@ -1821,18 +1836,17 @@ def main(fast_mode=False):
             
             # Load saved folds
             print("\n=== Loading Spatial Folds ===")
-            try:
-                folds_path = str(cv_system.paths.folds_file)
-                folds = joblib.load(folds_path)
-                print(f"Loaded {len(folds)} spatial folds from {cv_system.paths.get_relative_path(folds_path)}")
-            except FileNotFoundError:
+            folds_path = str(cv_system.paths.folds_file)
+            folds = load_blob_path(folds_path, stage="2", artifact_id="folds")
+            if folds is None:
                 print(f"{cv_system.paths.get_relative_path(folds_path)} not found, this should have been created in Stage 2")
                 return None
-            
+            print(f"Loaded {len(folds)} spatial folds")
+
             # Define spatial_intel_dir early so it's available for all stages
             paths = get_paths()
             spatial_intel_dir = os.path.join(paths.output_dir, "spatial_intelligence")
-            os.makedirs(spatial_intel_dir, exist_ok=True)
+            ensure_dir(spatial_intel_dir)
         
         # ============================================================================
         # Retrain Base Models on Full Dataset for Deployment
@@ -1856,7 +1870,7 @@ def main(fast_mode=False):
             # Create output directory for full models
             paths = get_paths()
             full_models_dir = os.path.join(paths.stage2_dir, "base_models_full")
-            os.makedirs(full_models_dir, exist_ok=True)
+            ensure_dir(full_models_dir)
             print(f"Full models will be saved to: {full_models_dir}")
         
             # Prepare full dataset using same preprocessing as Stage 2
@@ -1903,22 +1917,25 @@ def main(fast_mode=False):
             # Each model checks for an existing .pkl and skips if found (resume).
 
             ols_path = os.path.join(full_models_dir, "ols_model_full.pkl")
-            if os.path.exists(ols_path):
-                print("\n--- OLS: already trained (found ols_model_full.pkl) -- skipping ---")
-                ols_model = joblib.load(ols_path)
+            cached = load_blob_path(ols_path, stage="2", artifact_id="ols_model_full")
+            if cached is not None:
+                print("\n--- OLS: already trained -- skipping ---")
+                ols_model = cached
                 models[0] = ols_model
             else:
                 print("\n--- Training OLS on full dataset ---")
                 ols_model = models[0]
                 ols_model.fit(X_full, y_full)  # UNSCALED!
-                joblib.dump(ols_model, ols_path)
+                save_blob_path(ols_model, ols_path, stage="2", artifact_id="ols_model_full",
+                               producer="enhanced_spatial_cv")
                 print(f"[OK] Saved ols_model_full.pkl")
             
             gwr_path = os.path.join(full_models_dir, "gwr_model_full.pkl")
             gwr_coef_output_path = os.path.join(full_models_dir, "mgwr_local_coefficients.csv")
-            if os.path.exists(gwr_path) and os.path.exists(gwr_coef_output_path):
-                print("\n--- GWR: already trained (found gwr_model_full.pkl) -- skipping ---")
-                gwr_model = joblib.load(gwr_path)
+            cached_gwr = load_blob_path(gwr_path, stage="2", artifact_id="gwr_model_full")
+            if cached_gwr is not None and (not disk_writes_enabled() or os.path.exists(gwr_coef_output_path)):
+                print("\n--- GWR: already trained -- skipping ---")
+                gwr_model = cached_gwr
                 models[1] = gwr_model
             else:
                 print("\n--- Training GWR on full dataset ---")
@@ -1955,7 +1972,8 @@ def main(fast_mode=False):
                 gwr_model.fit(X_full_df, y_full, coords_full,
                              extract_coefficients=True,
                              output_path=gwr_coef_output_path)
-                joblib.dump(gwr_model, gwr_path)
+                save_blob_path(gwr_model, gwr_path, stage="2", artifact_id="gwr_model_full",
+                               producer="enhanced_spatial_cv")
                 print(f"[OK] Saved gwr_model_full.pkl")
                 print(f"[OK] Saved MGWR local coefficients to {gwr_coef_output_path}")
 
@@ -1977,7 +1995,8 @@ def main(fast_mode=False):
                 gwrf_model.fit(X_full, y_full, coords_full,
                               extract_derivatives=False,
                               feature_names=selected_features_2b)  # UNSCALED
-                joblib.dump(gwrf_model, gwrf_path)
+                save_blob_path(gwrf_model, gwrf_path, stage="2", artifact_id="gwrf_model_full",
+                               producer="enhanced_spatial_cv")
                 print(f"[OK] Saved gwrf_model_full.pkl")
 
             # Export GWRF condition curves (consumed by Stage 4) -- skip if already done
@@ -1988,7 +2007,7 @@ def main(fast_mode=False):
                 print("\n--- GWRF condition curves: already exported -- skipping ---")
             else:
                 print("\n--- Extracting GWRF condition curves (PDP + saturation) ---")
-                os.makedirs(gwrf_curves_dir, exist_ok=True)
+                ensure_dir(gwrf_curves_dir)
                 try:
                     condition_curves = gwrf_model.export_condition_curves(
                         X=X_full,
@@ -2003,9 +2022,10 @@ def main(fast_mode=False):
                     print("   Stage 4 will fall back to coefficient-based extrapolation.")
 
             ggpgam_path = os.path.join(full_models_dir, "ggpgam_model_full.pkl")
-            if os.path.exists(ggpgam_path):
-                print("\n--- GGPGAM: already trained (found ggpgam_model_full.pkl) -- skipping ---")
-                ggpgam_model = joblib.load(ggpgam_path)
+            cached_ggp = load_blob_path(ggpgam_path, stage="2", artifact_id="ggpgam_model_full")
+            if cached_ggp is not None:
+                print("\n--- GGPGAM: already trained -- skipping ---")
+                ggpgam_model = cached_ggp
                 models[3] = ggpgam_model
             else:
                 print("\n--- Training GGPGAM on full dataset ---")
@@ -2013,7 +2033,8 @@ def main(fast_mode=False):
                 ggpgam_model.fit(X_full, y_full, coords_full,
                                 extract_derivatives=False,
                                 output_dir=spatial_intel_dir)  # UNSCALED
-                joblib.dump(ggpgam_model, ggpgam_path)
+                save_blob_path(ggpgam_model, ggpgam_path, stage="2", artifact_id="ggpgam_model_full",
+                               producer="enhanced_spatial_cv")
                 print(f"[OK] Saved ggpgam_model_full.pkl")
             
             # Verification: Quick R² check on training data
@@ -2300,7 +2321,10 @@ def main(fast_mode=False):
         # Save enhanced feature artifacts for final interpretation
         paths = get_paths()
         stage2_dir = paths.stage2_dir
-        joblib.dump(feature_transformers, os.path.join(stage2_dir, 'enhanced_spatial_features.pkl'))
+        save_blob_path(feature_transformers,
+                       os.path.join(stage2_dir, 'enhanced_spatial_features.pkl'),
+                       stage="2", artifact_id="enhanced_spatial_features",
+                       producer="enhanced_spatial_cv")
         print(f"Saved Laplacian artifacts to {stage2_dir}/")
         
         # Check spatial autocorrelation in meta-ensemble residuals
@@ -2463,7 +2487,10 @@ def main(fast_mode=False):
         
         # Save the composite scaler
         scaler_path = paths.stage2_dir / 'final_meta_ensemble_scaler.pkl'
-        joblib.dump(final_scaler_components, scaler_path)
+        save_blob_path(final_scaler_components, scaler_path, stage="2",
+                       artifact_id="final_meta_ensemble_scaler",
+                       producer="enhanced_spatial_cv",
+                       consumers=["stage4:scenario"])
         
         print(f"  Final scaler saved to: {scaler_path}")
         print(f"   - Model approach: {best_approach}")
@@ -2472,7 +2499,10 @@ def main(fast_mode=False):
         # Save the V2 neural model checkpoint if available
         if v2_neural_result is not None:
             final_model_path = paths.stage2_dir / 'final_meta_ensemble.pkl'
-            joblib.dump(v2_neural_result, final_model_path)
+            save_blob_path(v2_neural_result, final_model_path, stage="2",
+                           artifact_id="final_meta_ensemble",
+                           producer="enhanced_spatial_cv",
+                           consumers=["stage4:scenario"])
             print(f"  V2 Neural model saved to: {final_model_path}")
         
         # Print comprehensive summary of all saved artifacts
@@ -2615,8 +2645,10 @@ def main(fast_mode=False):
             
             # Save package manifest
             package_path = os.path.join(spatial_intel_dir, 'sensitivity_package.json')
-            with open(package_path, 'w') as f:
-                json.dump(sensitivity_package, f, indent=2)
+            save_struct_path(sensitivity_package, package_path, stage="2",
+                             artifact_id="sensitivity_package",
+                             producer="enhanced_spatial_cv",
+                             consumers=["stage4:scenario", "report"])
             
             # Print summary
             total_derivatives = len(gwrf_deriv_files) + len(ggpgam_files) + len(meta_pdp_files) + len(laplacian_files)

@@ -236,7 +236,12 @@ class ScenarioEngineV4:
         self.output_dir = Path(config["output"]["base_dir"]) / config["output"][
             "stage_dirs"
         ].get("stage_4", "Stage_4_Scenarios")
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            from sparc.run.disk_policy import disk_writes_enabled as _dwe
+            if _dwe():
+                self.output_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Coord columns + area metadata.
         self.coord_cols = list(config.get("variables", {}).get("coordinates", ["x", "y"]))
@@ -551,11 +556,20 @@ class ScenarioEngineV4:
     ) -> None:
         """Write ``("4","scenario_results")`` long table + companion summary."""
         from sparc.registry.store import get_active_store
+        from sparc.run.disk_policy import disk_writes_enabled
         store = get_active_store()
         if store is None:
-            # No store ⇒ write CSVs to the stage-4 dir.
-            results_long_df.to_csv(self.output_dir / "scenario_results.csv", index=False)
-            summary_df.to_csv(self.output_dir / "scenario_summary.csv", index=False)
+            # No store ⇒ write CSVs to the stage-4 dir if disk writes allowed.
+            if disk_writes_enabled():
+                self.output_dir.mkdir(parents=True, exist_ok=True)
+                results_long_df.to_csv(self.output_dir / "scenario_results.csv", index=False)
+                summary_df.to_csv(self.output_dir / "scenario_summary.csv", index=False)
+            else:
+                warnings.warn(
+                    "ScenarioEngineV4: no active store and disk writes disabled — "
+                    "scenario results not persisted.",
+                    RuntimeWarning,
+                )
             return
 
         # Build geometry if coords present.
@@ -613,8 +627,10 @@ class ScenarioEngineV4:
                 f"falling back to CSV.",
                 RuntimeWarning,
             )
-            results_long_df.to_csv(self.output_dir / "scenario_results.csv", index=False)
-            summary_df.to_csv(self.output_dir / "scenario_summary.csv", index=False)
+            if disk_writes_enabled():
+                self.output_dir.mkdir(parents=True, exist_ok=True)
+                results_long_df.to_csv(self.output_dir / "scenario_results.csv", index=False)
+                summary_df.to_csv(self.output_dir / "scenario_summary.csv", index=False)
 
 
 __all__ = ["ScenarioEngineV4", "MissingArtifactsError"]

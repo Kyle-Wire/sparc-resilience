@@ -156,6 +156,11 @@ def _yaml_to_config(raw: dict, yaml_path: str) -> dict:
                 'stage_4': 'Stage_4_Scenarios',
                 'final':   'Final_Interpretation_Results',
             }),
+            # When False (the default) the pipeline writes only the
+            # canonical artifact DB.  Per-stage CSV/JSON/GPKG/joblib
+            # files are not produced; users export them on demand via
+            # the ArtifactStore.export() API.
+            'disk_writes': bool(out_section.get('disk_writes', False)),
         },
         'variables': {
             'target': raw['data']['target_column'],
@@ -309,7 +314,17 @@ def load_config(config_path: str | None = None) -> dict:
         if p.suffix in ('.yml', '.yaml') and p.exists():
             raw = _load_yaml(str(p))
             _validate_project_yaml(raw, str(p))
-            return _yaml_to_config(raw, str(p))
+            cfg = _yaml_to_config(raw, str(p))
+            # Apply the disk-write policy chosen by the project YAML so
+            # that subsequent PipelinePaths / ResultStore / ArtifactStore
+            # construction observes it without each caller having to
+            # plumb the flag through manually.
+            try:
+                from sparc.run.disk_policy import set_disk_writes
+                set_disk_writes(bool(cfg.get('output', {}).get('disk_writes', False)))
+            except Exception:  # noqa: BLE001
+                pass
+            return cfg
         elif not p.exists():
             raise FileNotFoundError(f"Project config not found: {config_path}")
 

@@ -1,19 +1,31 @@
 /**
  * DownloadMenu — uniform per-block download dropdown.
  *
- * Three actions:
- *  - **Data**: fetch the source endpoint (CSV/JSON/GeoJSON) and trigger a
- *    browser download.
- *  - **Figure (PNG)**: GET /artifacts/{stage}/{id}.png — the registry-backed
- *    rendered figure (uses server matplotlib + content-hash cache).
+ * Actions:
+ *  - **Source artifact (DB)**: GET /artifacts/{stage}/{id}/download?fmt=…
+ *    pulls the canonical bytes straight out of artifacts.db, with a
+ *    format selector when multiple are sensible (csv/parquet for tables,
+ *    joblib/pkl for blobs).  This is the preferred path now that the
+ *    pipeline writes db-only by default.
+ *  - **Data (legacy endpoint)**: optional; fetch a /results/* endpoint and
+ *    save its CSV/JSON/GeoJSON.  Kept for views that compose multiple
+ *    artifacts server-side.
+ *  - **Figure (PNG)**: GET /artifacts/{stage}/{id}.png — registry-backed
+ *    rendered figure (server matplotlib + content-hash cache).
  *  - **Capture (PNG)**: client-side DOM screenshot via ExportBlockButton.
- *
- * Also exposes a top-level "Download all" action that hits /results/bundle
- * and saves the ZIP.
+ *  - **Stage as ZIP**: POST /artifacts/{stage}/export — bundle every
+ *    artifact for the stage.
+ *  - **Download all (run bundle)**: /results/bundle ZIP.
  */
-import { useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { ExportBlockButton } from "./ExportBlockButton";
-import { downloadResultsBundle } from "@/lib/api";
+import {
+  downloadResultsBundle,
+  downloadDbArtifact,
+  downloadStageZip,
+  listStageArtifacts,
+  type DbArtifactInfo,
+} from "@/lib/api";
 
 const BASE = "http://127.0.0.1:8008";
 
@@ -78,10 +90,74 @@ export default function DownloadMenu({
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
+  // DB-resident artifact metadata (populated when the menu opens).
+  const [dbInfo, setDbInfo] = useState<DbArtifactInfo | null>(null);
+  const [dbFmt, setDbFmt] = useState<string>("");
+  const probedRef = useRef(false);
+
+  // Resolve which formats are sensible for the artifact's storage_kind.
+  const dbFormats = (() => {
+    if (!dbInfo) return [] as string[];
+    switch (dbInfo.storage_kind) {
+      case "table":
+        return ["csv", "parquet"];
+      case "struct":
+        return ["json"];
+      case "blob_inline":
+      case "blob_external":
+        return ["joblib", "pkl"];
+      default:
+        return []; // legacy_path — server picks native format
+    }
+  })();
+
+  // Probe artifacts.db for this artifact the first time the menu opens.
+  useEffect(() => {
+    if (!open || probedRef.current) return;
+    probedRef.current = true;
+    listStageArtifacts(stage)
+      .then((info) => {
+        const entry = info.artifacts.find((a) => a.artifact_id === artifactId);
+        if (entry) {
+          setDbInfo(entry);
+          // Default to first sensible fmt.
+          const opts =
+            entry.storage_kind === "table"
+              ? ["csv", "parquet"]
+              : entry.storage_kind === "struct"
+              ? ["json"]
+              : entry.storage_kind === "blob_inline" || entry.storage_kind === "blob_external"
+              ? ["joblib", "pkl"]
+              : [];
+          setDbFmt(opts[0] ?? "");
+        }
+      })
+      .catch(() => {
+        /* artifact may not be db-resident; "Source artifact (DB)" stays disabled */
+      });
+  }, [open, stage, artifactId]);
+
   const close = () => setOpen(false);
   const onError = (e: unknown) => {
     setErr(e instanceof Error ? e.message : String(e));
     setTimeout(() => setErr(null), 4000);
+  };
+
+  const handleDb = () => {
+    if (!dbInfo) return;
+    setBusy("db");
+    try {
+      downloadDbArtifact(stage, artifactId, (dbFmt || undefined) as never);
+      close();
+    } catch (e) { onError(e); } finally { setBusy(null); }
+  };
+
+  const handleStageZip = async () => {
+    setBusy("stagezip");
+    try {
+      await downloadStageZip(stage);
+      close();
+    } catch (e) { onError(e); } finally { setBusy(null); }
   };
 
   const handleData = async () => {
@@ -152,8 +228,52 @@ export default function DownloadMenu({
           <div style={{ fontSize: 10, color: "#888", padding: "4px 8px", fontWeight: 600 }}>
             {label ?? artifactId}
           </div>
+
+          {/* DB-resident source bytes (preferred). */}
+          <div style={{ padding: "4px 8px", display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 11, color: dbInfo ? "#222" : "#aaa", flex: 1 }}>
+              Source artifact (DB)
+            </span>
+            {dbFormats.length > 1 && (
+              <select
+                value={dbFmt}
+                onChange={(e) => setDbFmt(e.target.value)}
+                disabled={busy !== null}
+                style={{
+                  fontSize: 10,
+                  padding: "1px 4px",
+                  border: "1px solid var(--line, #ddd)",
+                  borderRadius: 3,
+                  background: "#fff",
+                  fontFamily: "inherit",
+                }}
+              >
+                {dbFormats.map((f) => (
+                  <option key={f} value={f}>{f}</option>
+                ))}
+              </select>
+            )}
+            <button
+              type="button"
+              onClick={handleDb}
+              disabled={!dbInfo || busy !== null}
+              style={{
+                fontSize: 10,
+                padding: "2px 6px",
+                border: "1px solid var(--line, #ddd)",
+                borderRadius: 3,
+                background: dbInfo ? "rgba(255,255,255,0.95)" : "#f4f4f4",
+                color: dbInfo ? "var(--ink, #333)" : "#aaa",
+                cursor: dbInfo ? "pointer" : "not-allowed",
+                fontFamily: "inherit",
+              }}
+            >
+              {busy === "db" ? "…" : "Get"}
+            </button>
+          </div>
+
           <MenuItem
-            label="Data (CSV/JSON)"
+            label="Data (legacy endpoint)"
             disabled={!dataEndpoint || busy !== null}
             busy={busy === "data"}
             onClick={handleData}
@@ -177,6 +297,12 @@ export default function DownloadMenu({
           {includeBundle && (
             <>
               <div style={{ height: 1, background: "var(--line, #eee)", margin: "4px 0" }} />
+              <MenuItem
+                label={`Stage ${stage} as ZIP`}
+                disabled={busy !== null}
+                busy={busy === "stagezip"}
+                onClick={handleStageZip}
+              />
               <MenuItem
                 label="Download all artifacts (ZIP)"
                 disabled={busy !== null}

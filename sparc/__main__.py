@@ -221,19 +221,63 @@ def cmd_run(args):
             traceback.print_exc()
 
     # ── Helper: stage-complete checks for --resume ───────────────
-    def _stage_done(marker_name):
-        return resume and (paths.stage1_dir / marker_name).exists()
+    def _stage_done(stage_key: str) -> bool:
+        """Check whether a stage is marked complete.
+
+        Prefers an ArtifactStore status struct (db-only runs); falls
+        back to legacy on-disk sentinel files for older runs.
+        """
+        if not resume:
+            return False
+        try:
+            from sparc.registry.store import get_active_store
+            _store = get_active_store()
+            if _store is not None:
+                status = None
+                try:
+                    status = _store.read_struct(stage_key, "status")
+                except Exception:
+                    status = None
+                if isinstance(status, dict) and status.get("complete"):
+                    return True
+        except Exception:
+            pass
+        # Legacy fallback: file sentinel.
+        legacy_marker = {
+            "0": paths.stage1_dir / ".correlogram_complete",
+        }.get(stage_key)
+        return bool(legacy_marker and legacy_marker.exists())
+
+    def _mark_stage_done(stage_key: str) -> None:
+        """Persist stage-complete status to ArtifactStore (and disk if on)."""
+        try:
+            from sparc.registry.store import get_active_store
+            _store = get_active_store()
+            if _store is not None:
+                _store.write_struct(
+                    stage_key, "status",
+                    {"complete": True},
+                    producer="sparc.__main__",
+                )
+        except Exception:
+            pass
+        try:
+            from sparc.run.disk_policy import disk_writes_enabled
+            if disk_writes_enabled() and stage_key == "0":
+                paths.stage1_dir.mkdir(parents=True, exist_ok=True)
+                (paths.stage1_dir / ".correlogram_complete").write_text("done")
+        except Exception:
+            pass
 
     # ────────────────────────────────────────────────────────────────
     # Stage 0: Correlogram Analysis  (runs first so GWEN can auto-tune)
     # ────────────────────────────────────────────────────────────────
     if stage in ('0', 'all'):
-        if not _stage_done('.correlogram_complete'):
+        if not _stage_done("0"):
             print(">>> Stage 0: Correlogram Analysis")
             from sparc.run.correlogram_analysis import main as run_correlogram
             run_correlogram(fast_mode=fast)
-            (paths.stage1_dir).mkdir(parents=True, exist_ok=True)
-            (paths.stage1_dir / '.correlogram_complete').write_text('done')
+            _mark_stage_done("0")
         else:
             print(">>> Stage 0: Correlogram — skipped (already complete)")
         _rescan_registry("0")

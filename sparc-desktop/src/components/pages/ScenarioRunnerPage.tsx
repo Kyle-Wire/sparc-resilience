@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { SectionHeader, Card, Tag, Btn, Stat, StatGrid } from "@/components/ui/DesignSystem";
+import DownloadMenu from "@/components/common/DownloadMenu";
 import { useNotification } from "@/hooks/useNotifications";
 import { useManifest } from "@/hooks/useManifest";
 import { getConfig, runScenarios, getScenarioDetail, parseMissingArtifact } from "@/lib/api";
@@ -213,7 +214,9 @@ export default function ScenarioRunnerPage({ onNavigate }: Props) {
           )}
         </Card>
 
-        <Card title="Computed deltas" subtitle="from /results/scenarios/detail">
+        <Card title="Computed deltas" subtitle="from /results/scenarios/detail"
+          actions={<DownloadMenu artifactId="scenario_results" stage="4" label="scenario results" dataEndpoint="/results/scenarios" dataFilename="scenario_results" includeBundle compact />}
+        >
           {scenarios.length === 0 ? (
             <div style={{ fontSize: 12.5, color: "var(--muted)", padding: "10px 4px" }}>
               No computed scenarios yet. Click <strong>Run all scenarios</strong> to launch.

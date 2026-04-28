@@ -409,23 +409,43 @@ class PipelineConfigurator:
     
     def save_pipeline_config(self, output_path=None):
         """
-        Save the complete pipeline configuration
+        Save the complete pipeline configuration to artifacts.db (canonical)
+        and, when disk writes are enabled, also as a JSON file on disk for
+        legacy tooling.
         """
         if output_path is None:
             paths = get_paths()
             output_path = paths.pipeline_config
-        
+
         config = self.create_complete_config()
-        
-        with open(output_path, 'w') as f:
-            json.dump(config, f, indent=2)
-        
-        print(f"Pipeline configuration saved to: {output_path}")
-        
-        # Also save a human-readable summary
-        summary_path = str(output_path).replace('.json', '_summary.txt')
-        self.create_config_summary(config, summary_path)
-        
+
+        # Canonical: persist to the artifact store.
+        try:
+            from sparc.registry.store import get_active_store
+            _store = get_active_store()
+        except Exception:  # noqa: BLE001
+            _store = None
+        if _store is not None:
+            _store.write_struct(
+                stage="0",
+                artifact_id="pipeline_config",
+                payload=config,
+                producer="pipeline_configurator.save_pipeline_config",
+                consumers=["pipeline:stage1+"],
+            )
+
+        from sparc.run.disk_policy import disk_writes_enabled
+        if disk_writes_enabled():
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            with open(output_path, 'w') as f:
+                json.dump(config, f, indent=2)
+            print(f"Pipeline configuration saved to: {output_path}")
+            # Also save a human-readable summary on disk.
+            summary_path = str(output_path).replace('.json', '_summary.txt')
+            self.create_config_summary(config, summary_path)
+        else:
+            print("Pipeline configuration persisted to artifacts.db (stage=0, id=pipeline_config)")
+
         return config
     
     def create_config_summary(self, config, summary_path):
@@ -600,12 +620,13 @@ class PipelineConfigurator:
     
     def save_hyperparameter_template(self, output_path=None):
         """
-        Save a template configuration file with all available hyperparameters
+        Save a template configuration file with all available hyperparameters.
+        Persists to artifacts.db; on-disk JSON only when disk writes are on.
         """
         if output_path is None:
             paths = get_paths()
             output_path = os.path.join(os.path.dirname(paths.pipeline_config), 'hyperparameter_template.json')
-        
+
         template = {
             'description': 'Template showing all configurable hyperparameters',
             'instructions': 'Edit the "models" section to adjust hyperparameters for each model type',
@@ -617,11 +638,26 @@ class PipelineConfigurator:
                 'spatial_cv': dict(self.spatial_cv_defaults)
             },
         }
-        
-        with open(output_path, 'w') as f:
-            json.dump(template, f, indent=2)
-        
-        print(f"Hyperparameter template saved to: {output_path}")
+
+        try:
+            from sparc.registry.store import get_active_store
+            _store = get_active_store()
+        except Exception:  # noqa: BLE001
+            _store = None
+        if _store is not None:
+            _store.write_struct(
+                stage="0",
+                artifact_id="hyperparameter_template",
+                payload=template,
+                producer="pipeline_configurator.save_hyperparameter_template",
+            )
+
+        from sparc.run.disk_policy import disk_writes_enabled
+        if disk_writes_enabled():
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            with open(output_path, 'w') as f:
+                json.dump(template, f, indent=2)
+            print(f"Hyperparameter template saved to: {output_path}")
         return output_path
 
 def main():

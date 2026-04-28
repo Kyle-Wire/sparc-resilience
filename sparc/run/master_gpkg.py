@@ -107,6 +107,17 @@ def build_master_gpkg(
         print("  [master gpkg] geopandas not installed — skipping")
         return None
 
+    # When disk writes are disabled the canonical store is artifacts.db; the
+    # consolidated master.gpkg is a disk-only convenience artefact, so we
+    # skip it here.  Users can rebuild it on demand via the export API.
+    try:
+        from sparc.run.disk_policy import disk_writes_enabled
+        if not disk_writes_enabled():
+            print("  [master gpkg] disk writes disabled — skipping master GPKG build")
+            return None
+    except Exception:  # noqa: BLE001
+        pass
+
     sources = iter_run_gpkgs(paths)
 
     # Also pull geometry-bearing tables from artifacts.db.

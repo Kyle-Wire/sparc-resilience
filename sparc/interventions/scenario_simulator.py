@@ -199,7 +199,12 @@ class ScenarioSimulator:
         self.data_path = Path(config["paths"]["raw_csv_path"])
         self.model_dir = Path(config["output"]["base_dir"]) / config["output"]["stage_dirs"].get("stage_2", "Stage_2_Spatial_CV")
         self.output_dir = Path(config["output"]["base_dir"]) / config["output"]["stage_dirs"].get("stage_4", "Stage_4_Scenarios")
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            from sparc.run.disk_policy import disk_writes_enabled
+            if disk_writes_enabled():
+                self.output_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Features / coords
         self.features: List[str] = config["predictors"]["base_model"]
