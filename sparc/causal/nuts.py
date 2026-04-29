@@ -533,6 +533,7 @@ def run_nuts(
     seed: int = 42,
     device: str = "cpu",
     param_scales: dict[str, np.ndarray] | None = None,
+    thin: int = 1,
 ) -> NUTSResults:
     """
     Run blocked NUTS sampling.
@@ -553,9 +554,15 @@ def run_nuts(
     param_scales : optional dict mapping block name → array of per-dim scales.
         NUTS samples in *scaled* space where θ_scaled = θ / scale, making all
         dimensions O(1).  Samples are back-transformed before storage.
+    thin : int, default=1
+        Keep every ``thin``-th post-warmup sample to reduce peak memory of the
+        accumulated trace.  ``thin=2`` halves memory at the cost of slightly
+        coarser posterior summaries (still unbiased).  Must be ≥1.
     """
     rng = np.random.default_rng(seed)
     dtype = torch.float64
+
+    thin = max(1, int(thin))
 
     # Build per-dimension scale vector for param_scales rescaling
     total_dim = sum(b.dim for b in blocks)
@@ -672,6 +679,14 @@ def run_nuts(
         if div:
             n_divergences += 1
         sum_accept_prob += accept_prob
+
+        if thin > 1 and (i % thin) != 0:
+            # Skip storing this draw to reduce peak memory of the trace.
+            if (i + 1) % 100 == 0 or (i + 1) == n_samples:
+                msg = f"  NUTS sample {i + 1} / {n_samples}  (divergences: {n_divergences}, accept: {sum_accept_prob / (i + 1):.1%})"
+                print(msg, flush=True)
+                logger.info("NUTS sample %d / %d  (divergences so far: %d)", i + 1, n_samples, n_divergences)
+            continue
 
         theta_req = theta.detach().requires_grad_(True)
         lp = flat_log_prob(theta_req)

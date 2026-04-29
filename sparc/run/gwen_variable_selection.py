@@ -594,6 +594,14 @@ def main(config_path=None, fast_mode=False):
                 print(f"   Warning: Could not create spatial folds ({e}), falling back to standard CV")
 
         local_cv = gwen_cfg.get('local_cv', False)  # default: False — use global alpha for local models
+        # Honor low-memory hardware tier: avoid joblib's all-cores fan-out which
+        # multiplies peak RAM by the worker count.
+        try:
+            from sparc.config.hardware_profile import detect_profile
+            _low_mem = detect_profile().tier == "low"
+        except Exception:  # pragma: no cover
+            _low_mem = False
+        _gwen_n_jobs = 1 if _low_mem else (-1 if fast_mode else 1)
         gwen = GWENModel(
             k_neighbors=gwen_params['k_neighbors'],
             sample_size=gwen_params.get('sample_size'),
@@ -601,7 +609,7 @@ def main(config_path=None, fast_mode=False):
             l1_ratios=gwen_params['l1_ratios'],
             n_alphas=gwen_params['n_alphas'],
             quick_mode=fast_mode,
-            n_jobs=-1 if fast_mode else 1,
+            n_jobs=_gwen_n_jobs,
             spatial_cv_folds=spatial_folds,
             local_cv=local_cv,
         )

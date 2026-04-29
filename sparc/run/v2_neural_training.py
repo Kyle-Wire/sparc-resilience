@@ -712,6 +712,13 @@ def train_neural_meta(
     ramp_epochs = training_cfg.get("ramp_epochs", 30)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    try:
+        from sparc.config.hardware_profile import detect_profile
+        if detect_profile().force_cpu:
+            device = torch.device("cpu")
+            logger.info("Low-memory tier detected — forcing CPU device for neural training")
+    except Exception:  # pragma: no cover - best-effort safety override
+        pass
     logger.info("V2 neural training on device: %s", device)
 
     # ---- Prepare data ----

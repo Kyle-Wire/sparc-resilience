@@ -25,6 +25,7 @@ from tqdm import tqdm
 import psutil
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor
+from sparc.config.hardware_profile import detect_profile
 from sparc.run.pipeline_paths import get_paths
 from sparc.run.spatial_autocorr_comprehensive import SpatialAutocorrelationAnalyzer
 from sparc.run.memory_efficient_spatial_analysis import analyze_model_residuals_morans_i
@@ -34,35 +35,39 @@ from sparc.run.artifact_io import (
     save_table_path, save_geo_path, ensure_dir,
 )
 
-# Enhanced hardware optimization settings for high-performance workstations (CPU-only)
+# Hardware-tier driven configuration (low / standard / high RAM machines).
+# On low-tier (e.g. 8GB MacBook Pro) parallel workers collapse to 1 and batch
+# sizes shrink so the pipeline does not get OOM-killed by the OS.
+_PROFILE = detect_profile()
+
+_LOW = _PROFILE.tier == "low"
 HARDWARE_CONFIG = {
-    'cpu_cores': mp.cpu_count(),  # Use all available cores
-    'max_workers': min(mp.cpu_count(), 24),  # Allow more workers for I/O tasks
-    'memory_limit_gb': min(psutil.virtual_memory().total // (1024**3) * 0.75, 48),  # Use 75% of available RAM, cap at 48GB
-    'batch_size_large': 4096,  # Larger batch sizes for abundant RAM
-    'batch_size_medium': 2048,
-    'batch_size_small': 1024,
-    'parallel_cv': True,  # Enable parallel cross-validation
-    'high_memory_mode': psutil.virtual_memory().total >= 32 * (1024**3),  # Auto-detect high memory systems (32GB+)
-    'enable_aggressive_optimization': True,  # Enable all speed optimizations
-    'laplacian_batch_size': 2000,  # Batch size for Laplacian computations
-    'max_eigen_iterations': 1000,  # Maximum iterations for eigendecomposition
-    'spatial_cluster_threshold': 1000,  # Use spatial clustering for datasets larger than this
-    # Per-model parallelism control (NEW APPROACH)
-    'per_model_parallel': True,  # Enable per-model parallelization
-    'outer_jobs': min(mp.cpu_count(), 6),  # Number of parallel folds per model
-    'inner_jobs': max(1, mp.cpu_count() // 6),  # Jobs per individual model instance
-    'gwrf_local_jobs': 1,  # Single thread per local RF to allow outer parallelization
+    'cpu_cores': _PROFILE.cpu_count,
+    'max_workers': _PROFILE.max_workers,
+    'memory_limit_gb': _PROFILE.memory_limit_gb,
+    'batch_size_large': _PROFILE.batch_size if _LOW else 4096,
+    'batch_size_medium': _PROFILE.batch_size if _LOW else 2048,
+    'batch_size_small': _PROFILE.batch_size if _LOW else 1024,
+    'parallel_cv': not _LOW,
+    'high_memory_mode': _PROFILE.high_memory_mode,
+    'enable_aggressive_optimization': not _LOW,
+    'laplacian_batch_size': 500 if _LOW else 2000,
+    'max_eigen_iterations': 1000,
+    'spatial_cluster_threshold': 1000,
+    'per_model_parallel': not _LOW,
+    'outer_jobs': _PROFILE.outer_jobs,
+    'inner_jobs': _PROFILE.inner_jobs,
+    'gwrf_local_jobs': 1,
 }
 
 print(f"Hardware-optimized configuration detected (CPU-only):")
+print(f"  - {_PROFILE.banner()}")
 print(f"  - CPU cores: {HARDWARE_CONFIG['cpu_cores']}")
-print(f"  - Available RAM: {psutil.virtual_memory().total / (1024**3):.1f} GB")
-print(f"  - Memory limit: {HARDWARE_CONFIG['memory_limit_gb']} GB")
-print(f"  - Parallel processing: Enabled (per-model parallelization)")
+print(f"  - Available RAM: {_PROFILE.total_ram_gb:.1f} GB")
+print(f"  - Memory limit: {HARDWARE_CONFIG['memory_limit_gb']:.1f} GB")
+print(f"  - Parallel processing: {'Enabled' if HARDWARE_CONFIG['parallel_cv'] else 'Disabled (low-memory safety)'}")
 print(f"  - Per-model parallelism: {HARDWARE_CONFIG['outer_jobs']} folds x {HARDWARE_CONFIG['inner_jobs']} inner jobs")
 print(f"  - High-memory mode: {'Enabled' if HARDWARE_CONFIG['high_memory_mode'] else 'Disabled'}")
-print(f"  - Strategy: Each model runs in parallel across all folds for optimal resource utilization")
 
 # Spatial analysis imports
 from libpysal.weights import DistanceBand

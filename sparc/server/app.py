@@ -330,6 +330,20 @@ async def health():
     }
 
 
+@app.get("/api/hardware")
+async def hardware_profile():
+    """Return the auto-detected hardware tier and resulting pipeline knobs.
+
+    Used by the desktop app to show a low-memory badge and to confirm that
+    safety mode is active before launching a long-running stage.
+    """
+    try:
+        from sparc.config.hardware_profile import detect_profile
+        return detect_profile().as_dict()
+    except Exception as exc:  # pragma: no cover - defensive
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
 @app.get("/debug/paths")
 async def debug_paths():
     """Diagnostic endpoint: show resolved output paths and whether expected files exist."""

@@ -31,6 +31,7 @@ import pandas as pd
 import psutil
 import torch
 
+from sparc.config.hardware_profile import detect_profile
 from sparc.registry.run_registry import get_active_registry
 from sparc.registry.store import ArtifactStore
 
@@ -51,12 +52,15 @@ def _get_store() -> ArtifactStore | None:
 # ---------------------------------------------------------------------------
 # Hardware detection (matches enhanced_spatial_cv approach)
 # Each sub-stage (MC³ → DML → NUTS) runs sequentially and gets
-# exclusive access to all CPU cores and available RAM.
+# exclusive access to all CPU cores and available RAM, scaled by the
+# detected hardware tier so low-RAM machines don't get OOM-killed.
 # ---------------------------------------------------------------------------
-_TOTAL_RAM_GB = psutil.virtual_memory().total / (1024**3)
-_N_CORES = os.cpu_count() or 1
-_MEMORY_LIMIT_GB = min(_TOTAL_RAM_GB * 0.75, 48)
-_HIGH_MEMORY = _TOTAL_RAM_GB >= 32
+_PROFILE = detect_profile()
+_TOTAL_RAM_GB = _PROFILE.total_ram_gb
+_N_CORES = _PROFILE.cpu_count
+_MEMORY_LIMIT_GB = _PROFILE.memory_limit_gb
+_HIGH_MEMORY = _PROFILE.high_memory_mode
+_NUTS_THIN = _PROFILE.nuts_thin
 
 
 def run_bayesian_causal(
@@ -575,6 +579,7 @@ def _run_nuts_sampling(
         target_accept=nuts_cfg.get("target_accept_rate", 0.65),
         seed=nuts_cfg.get("seed", 42),
         device=str(device),
+        thin=_NUTS_THIN,
     )
 
     # ------------------------------------------------------------------
@@ -991,6 +996,7 @@ def _run_per_edge_nuts_sampling(
                 target_accept=float(nuts_cfg.get("target_accept_rate", 0.65)),
                 seed=_edge_seed(parent, child),
                 device=str(device),
+                thin=_NUTS_THIN,
             )
         except Exception as exc:
             n_failed += 1

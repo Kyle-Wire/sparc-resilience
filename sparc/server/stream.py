@@ -496,6 +496,57 @@ async def stream_stage(
     # ETA estimator instance (shared across the run)
     eta = _ETAEstimator()
 
+    # Memory watchdog: surface warnings/aborts as structured log events so the
+    # desktop log panel renders them. The pipeline body cooperates via
+    # `_memory_checkpoint` calls between stages.
+    try:
+        from sparc.config.hardware_profile import detect_profile
+        from sparc.run.memory_watchdog import (
+            MemoryWatchdog,
+            MemoryPressureAbort,
+            WatchdogEvent,
+        )
+    except Exception:
+        detect_profile = None  # type: ignore[assignment]
+        MemoryWatchdog = None  # type: ignore[assignment]
+        MemoryPressureAbort = RuntimeError  # type: ignore[assignment,misc]
+        WatchdogEvent = None  # type: ignore[assignment]
+
+    if detect_profile is not None:
+        try:
+            _profile = detect_profile()
+            await queue.put({
+                "type": "hardware",
+                "stage": stage,
+                "profile": _profile.as_dict(),
+                "message": _profile.banner(),
+            })
+        except Exception:
+            pass
+
+    def _watchdog_callback(event) -> None:
+        try:
+            asyncio.run_coroutine_threadsafe(
+                queue.put({
+                    "type": "memory_pressure",
+                    "stage": stage,
+                    "level": event.kind,
+                    "percent": event.percent,
+                    "message": event.message,
+                }),
+                loop,
+            )
+        except Exception:  # pragma: no cover - best effort
+            pass
+
+    watchdog = None
+    if MemoryWatchdog is not None:
+        watchdog = MemoryWatchdog(
+            stage_name=f"stage{stage}",
+            on_event=_watchdog_callback,
+        )
+        watchdog.start()
+
     def _run() -> None:
         capture = _EventCapture(queue, loop)
         old_stdout, old_stderr = sys.stdout, sys.stderr
@@ -599,6 +650,8 @@ async def stream_stage(
             yield event
     finally:
         session_log.close()
+        if watchdog is not None:
+            watchdog.stop()
 
 
 # ------------------------------------------------------------------

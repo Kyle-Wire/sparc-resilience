@@ -189,6 +189,20 @@ def cmd_run(args):
         print(f"  GWEN variable selection: SKIPPED")
     print(f"{'='*60}\n")
 
+    # ── Hardware profile + memory watchdog ──────────────────────
+    try:
+        from sparc.config.hardware_profile import detect_profile
+        from sparc.run.memory_watchdog import MemoryWatchdog, MemoryPressureAbort
+    except Exception:
+        detect_profile = None  # type: ignore[assignment]
+        MemoryWatchdog = None  # type: ignore[assignment]
+        MemoryPressureAbort = RuntimeError  # type: ignore[assignment,misc]
+    else:
+        try:
+            print(f"  {detect_profile().banner()}")
+        except Exception:
+            pass
+
     # ── Run-wide artifact registry ──────────────────────────────
     # A single registry instance is carried through the run; after every
     # stage we walk the output directories and register anything new
@@ -219,6 +233,18 @@ def cmd_run(args):
             import traceback
             print(f"  [registry] rescan failed for stage {stage_label}: {exc}")
             traceback.print_exc()
+
+    # Memory watchdog: emits warnings on rising RAM, releases caches, and
+    # signals a clean abort before the OS OOM-kills the process.
+    _watchdog = None
+    if MemoryWatchdog is not None:
+        _watchdog = MemoryWatchdog(stage_name=f"run/{stage}")
+        _watchdog.start()
+
+    def _memory_checkpoint() -> None:
+        if _watchdog is not None:
+            _watchdog.checkpoint()
+
 
     # ── Helper: stage-complete checks for --resume ───────────────
     def _stage_done(stage_key: str) -> bool:
@@ -272,6 +298,7 @@ def cmd_run(args):
     # ────────────────────────────────────────────────────────────────
     # Stage 0: Correlogram Analysis  (runs first so GWEN can auto-tune)
     # ────────────────────────────────────────────────────────────────
+    _memory_checkpoint()
     if stage in ('0', 'all'):
         if not _stage_done("0"):
             print(">>> Stage 0: Correlogram Analysis")
@@ -329,6 +356,7 @@ def cmd_run(args):
     # Stage 1: GWEN variable selection (optional, now uses correlogram)
     # ────────────────────────────────────────────────────────────────
     if stage in ('1', 'all') and not skip_gwen:
+        _memory_checkpoint()
         use_gwen = config.get('flags', {}).get('use_gwen_selection', True)
         approval_file = Path(config.get('output', {}).get('base_dir', 'output')) / 'gwen_approved.txt'
 
@@ -355,6 +383,7 @@ def cmd_run(args):
     # Stage 2: Enhanced Spatial CV
     # ────────────────────────────────────────────────────────────────
     if stage in ('2', 'all'):
+        _memory_checkpoint()
         print("\n>>> Stage 2: Enhanced Spatial CV")
         from sparc.run.enhanced_spatial_cv import main as run_spatial_cv
         run_spatial_cv(fast_mode=fast)
@@ -364,6 +393,7 @@ def cmd_run(args):
     # Stage 3: Causal Validation
     # ────────────────────────────────────────────────────────────────
     if stage in ('3', 'all'):
+        _memory_checkpoint()
         print("\n>>> Stage 3: Causal Validation")
         try:
             from sparc.run.causal_validation import main as run_causal_validation
@@ -379,6 +409,7 @@ def cmd_run(args):
     # Stage 4: Scenario Simulation (DAG + Physics)
     # ────────────────────────────────────────────────────────────────
     if stage in ('4', 'all'):
+        _memory_checkpoint()
         scenarios = config.get('scenarios', [])
         auto_run = config.get('auto_run_scenarios_at_stage_4', True)
         if scenarios and auto_run:
@@ -990,7 +1021,22 @@ def build_parser() -> argparse.ArgumentParser:
 def main():
     parser = build_parser()
     args = parser.parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except Exception as exc:
+        # Surface low-memory aborts cleanly so the desktop log shows a
+        # friendly message instead of a stack trace.
+        try:
+            from sparc.run.memory_watchdog import MemoryPressureAbort
+        except Exception:
+            raise
+        if isinstance(exc, MemoryPressureAbort):
+            print(f"\n{'='*60}", file=sys.stderr)
+            print(f"  PIPELINE ABORTED — {exc}", file=sys.stderr)
+            print("  Free up memory and re-run with `sparc run --resume ...`", file=sys.stderr)
+            print(f"{'='*60}", file=sys.stderr)
+            sys.exit(2)
+        raise
 
 
 if __name__ == '__main__':

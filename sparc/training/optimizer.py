@@ -273,6 +273,16 @@ def spatial_minibatch_sampler(
     batch_size : target batch size
     n_batches : if given, stop after this many batches
     """
+    # Low-memory safety: clamp batch size on RAM-constrained machines so a
+    # single batch fits comfortably in memory alongside the model and grads.
+    try:
+        from sparc.config.hardware_profile import detect_profile
+        _profile = detect_profile()
+        if _profile.tier == "low" and batch_size > _profile.batch_size:
+            batch_size = _profile.batch_size
+    except Exception:  # pragma: no cover - best-effort safety override
+        pass
+
     N = len(coords)
     if N <= batch_size:
         # Full batch — no need to sub-sample
