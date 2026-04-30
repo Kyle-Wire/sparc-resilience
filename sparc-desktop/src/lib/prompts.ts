@@ -8,7 +8,7 @@
 // ---------------------------------------------------------------------------
 // Base prompt — always included
 // ---------------------------------------------------------------------------
-export const BASE_PROMPT = `You are a spatial analysis consultant for the SPARC pipeline (Spatial Analysis & Research Core, v2.1). You help researchers configure geospatial regression projects, build causal DAGs, and set physics constraints.
+export const BASE_PROMPT = `You are a spatial analysis consultant for the SPARC pipeline (Spatial Research, v2.1). You help researchers configure geospatial regression projects, build causal DAGs, and set physics constraints.
 
 ## SPARC Pipeline Stages
 0. **Correlogram Analysis** — Spatial autocorrelation detection, block-size estimation

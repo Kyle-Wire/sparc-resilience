@@ -520,6 +520,20 @@ async def stream_stage(
             loop,
         )
 
+        # Activate the run registry on this worker thread so every
+        # writer in the stage modules (which call get_active_store())
+        # routes into ``state.registry``'s SQLite-backed ArtifactStore.
+        # Use the thread-local push so concurrent ``/results/*``
+        # endpoint handlers cannot wipe our view of the registry.
+        from sparc.registry.run_registry import (
+            pop_active_registry,
+            push_active_registry,
+        )
+        registry_activated = False
+        if state.registry is not None:
+            push_active_registry(state.registry)
+            registry_activated = True
+
         try:
             _execute_stage(state, stage, fast=fast, skip_gwen=skip_gwen)
             asyncio.run_coroutine_threadsafe(
@@ -551,6 +565,8 @@ async def stream_stage(
                 queue.put({"type": "error", "stage": stage, "message": str(exc)}), loop,
             )
         finally:
+            if registry_activated:
+                pop_active_registry()
             root_logger.removeHandler(log_handler)
             sys.stdout = old_stdout
             sys.stderr = old_stderr

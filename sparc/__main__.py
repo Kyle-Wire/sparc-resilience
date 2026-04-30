@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SPARC CLI — Spatial Analysis and Research Core
+SPARC CLI — Spatial Research
 ===============================================
 
 Usage
@@ -899,7 +899,7 @@ def cmd_continual(args):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog='sparc',
-        description='SPARC — Spatial Analysis and Research Core pipeline CLI',
+        description='SPARC — Spatial Research pipeline CLI',
     )
     subparsers = parser.add_subparsers(dest='command', required=True)
 

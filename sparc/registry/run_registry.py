@@ -917,6 +917,14 @@ def _sha256_file(path: Path, chunk: int = 1 << 20) -> str:
 
 _ACTIVE_REGISTRY: Optional["RunRegistry"] = None
 
+# Per-thread override of the active registry. Pipeline worker threads
+# (e.g. ``sparc.server.stream._run``) push their own registry via
+# :func:`push_active_registry` so concurrent ``/results/*`` request
+# handlers — which call ``set_active_registry(None)`` in their
+# ``finally`` blocks — cannot wipe the writer's view of the registry.
+import threading as _threading
+_THREAD_LOCAL = _threading.local()
+
 _FORMAT_FROM_SUFFIX: dict[str, ArtifactFormat] = {
     ".json": "json",
     ".csv": "csv",
@@ -940,8 +948,31 @@ def set_active_registry(registry: Optional["RunRegistry"]) -> None:
     _ACTIVE_REGISTRY = registry
 
 
+def push_active_registry(registry: "RunRegistry") -> None:
+    """Set a thread-local active-registry override.
+
+    Used by pipeline worker threads so they always see ``registry``
+    regardless of what endpoint handlers running in other threads do
+    to the process-wide global.
+    """
+    _THREAD_LOCAL.registry = registry
+
+
+def pop_active_registry() -> None:
+    """Clear the thread-local active-registry override (if any)."""
+    if hasattr(_THREAD_LOCAL, "registry"):
+        del _THREAD_LOCAL.registry
+
+
 def get_active_registry() -> Optional["RunRegistry"]:
-    """Return the currently-installed registry, if any."""
+    """Return the currently-installed registry, if any.
+
+    Thread-local override (set via :func:`push_active_registry`)
+    takes precedence over the process-wide :data:`_ACTIVE_REGISTRY`.
+    """
+    local = getattr(_THREAD_LOCAL, "registry", None)
+    if local is not None:
+        return local
     return _ACTIVE_REGISTRY
 
 

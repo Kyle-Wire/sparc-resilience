@@ -38,35 +38,34 @@ export interface VizEntry {
 }
 
 export const VIZ_REGISTRY: VizEntry[] = [
-  // Stage 0 — data summaries
-  { stage: "0", artifactId: "data", kind: "data_histogram", endpoint: "/data/histogram", label: "Data histogram" },
-  { stage: "0", artifactId: "data_summary", kind: "data_histogram", endpoint: "/data/histogram", label: "Data summary" },
-  { stage: "0", artifactId: "data_histogram_bins", kind: "data_histogram", endpoint: "/data/histogram", label: "Data histogram bins" },
-  // Stage 1 — causal discovery
-  { stage: "1", artifactId: "dag", kind: "dag", endpoint: "/dag", label: "DAG" },
-  { stage: "1", artifactId: "edge_inclusion_probs", kind: "dag", endpoint: "/dag", label: "Edge inclusion probabilities" },
-  { stage: "1", artifactId: "correlogram", kind: "correlogram", endpoint: "/results/correlogram", label: "Correlogram" },
-  // Stage 2 — spatial CV / CATE / PDP
-  { stage: "2", artifactId: "predictions", kind: "predictions_map", endpoint: "/results/spatial_cv/predictions", label: "Predictions map" },
-  { stage: "2", artifactId: "cate", kind: "cate", endpoint: "/results/causal/cate_map", label: "CATE map" },
-  { stage: "2", artifactId: "spatial_cate", kind: "predictions_map", endpoint: "/results/causal/cate_map", label: "Spatial CATE" },
-  { stage: "2", artifactId: "pdp", kind: "pdp", endpoint: "/results/causal", label: "Partial-dependence plot" },
-  // Stage 3 — sensitivity / posteriors
-  { stage: "3", artifactId: "sensitivity_tornado", kind: "sensitivity_tornado", endpoint: "/results/causal/sensitivity", label: "Sensitivity tornado" },
-  { stage: "3", artifactId: "dose_response", kind: "dose_response", endpoint: "/results/causal/dose_response", label: "Dose-response curve" },
-  { stage: "3", artifactId: "posteriors", kind: "posteriors", endpoint: "/results/scenarios/nuts_summary", label: "Posterior densities" },
-  { stage: "3", artifactId: "posterior_trace", kind: "posterior_trace", endpoint: "/results/scenarios/nuts_summary", label: "Posterior trace" },
-  // Stage 4 — scenario contract
+  // Stage 0 — EDA
+  { stage: "0", artifactId: "correlogram_results", kind: "correlogram", endpoint: "/results/correlogram", label: "Correlogram" },
+  // Stage 2 — Spatial CV / ensemble
+  { stage: "2", artifactId: "spatial_cv_predictions", kind: "predictions_map", endpoint: "/results/spatial_cv/predictions", label: "Predictions map" },
+  { stage: "2", artifactId: "ensemble_predictions", kind: "predictions_map", endpoint: "/results/spatial_cv/predictions", label: "Ensemble predictions map" },
+  // Stage 3 — Causal validation
+  { stage: "3", artifactId: "median_probability_dag", kind: "dag", endpoint: "/dag", label: "DAG (median probability)" },
+  { stage: "3", artifactId: "edge_inclusion_probs", kind: "dag", endpoint: "/dag", label: "Edge inclusion probabilities" },
+  { stage: "3", artifactId: "cate_summary", kind: "cate", endpoint: "/results/causal/cate_map", label: "CATE summary" },
+  { stage: "3", artifactId: "spatial_cate_maps", kind: "predictions_map", endpoint: "/results/causal/cate_map", label: "Spatial CATE map" },
+  { stage: "3", artifactId: "dose_response_curves", kind: "dose_response", endpoint: "/results/causal/dose_response", label: "Dose-response curves" },
+  { stage: "3", artifactId: "parameter_posteriors", kind: "posteriors", endpoint: "/results/scenarios/nuts_summary", label: "Parameter posteriors" },
+  // Stage 4 — Scenario contract
   { stage: "4", artifactId: "scenario_results", kind: "scenario_map", endpoint: "/results/scenarios", label: "Scenario map" },
   { stage: "4", artifactId: "scenario_results_dag", kind: "scenario_map", endpoint: "/results/scenarios", label: "Scenario map (DAG path)" },
   { stage: "4", artifactId: "scenario_results_reprediction", kind: "scenario_map", endpoint: "/results/scenarios", label: "Scenario map (re-prediction)" },
   { stage: "4", artifactId: "scenario_results_hybrid", kind: "scenario_map", endpoint: "/results/scenarios", label: "Scenario map (hybrid)" },
   { stage: "4", artifactId: "scenario_mc_uncertainty", kind: "uncertainty_band_map", endpoint: "/results/scenarios/uncertainty", label: "Uncertainty bands" },
-  { stage: "4", artifactId: "scenario_attribution", kind: "attribution_waterfall", endpoint: "/results/scenarios/attribution", label: "Attribution waterfall" },
-  { stage: "4", artifactId: "scenario_trajectory", kind: "scenario_trajectory", endpoint: "/results/scenarios/trajectory", label: "Scenario trajectory" },
-  { stage: "4", artifactId: "scenario_library", kind: "scenario_library_timeline", endpoint: "/scenarios/library", label: "Scenario library" },
-  // Stage 5 — decision
-  { stage: "5", artifactId: "decision_allocation", kind: "decision_allocation", endpoint: "/decision/optimize", label: "Decision allocation" },
+];
+
+/**
+ * Prefix-keyed entries for per-feature artifact families. Used when the
+ * artifact id is suffixed with a variable name (e.g. "v2_neural_pdp::ndvi").
+ * Matched on longest-prefix in :func:`getVizEntry` if no exact key hits.
+ */
+export const VIZ_REGISTRY_PREFIX: VizEntry[] = [
+  { stage: "2", artifactId: "v2_neural_pdp::", kind: "pdp", endpoint: "/results/pdp_curves", label: "Partial-dependence plot" },
+  { stage: "2", artifactId: "pdp::", kind: "pdp", endpoint: "/results/pdp_curves", label: "Partial-dependence plot" },
 ];
 
 const BY_KEY = new Map<string, VizEntry>(
@@ -74,7 +73,18 @@ const BY_KEY = new Map<string, VizEntry>(
 );
 
 export function getVizEntry(stage: string, artifactId: string): VizEntry | undefined {
-  return BY_KEY.get(`${stage}__${artifactId}`);
+  const exact = BY_KEY.get(`${stage}__${artifactId}`);
+  if (exact) return exact;
+  // Longest-prefix fallback for per-feature families.
+  let best: VizEntry | undefined;
+  for (const entry of VIZ_REGISTRY_PREFIX) {
+    if (entry.stage !== stage) continue;
+    if (!artifactId.startsWith(entry.artifactId)) continue;
+    if (!best || entry.artifactId.length > best.artifactId.length) {
+      best = entry;
+    }
+  }
+  return best;
 }
 
 export function getVizByStage(stage: string): VizEntry[] {

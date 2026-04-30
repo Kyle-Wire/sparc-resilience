@@ -1,0 +1,67 @@
+/* SPARC Labs · design tokens. Source of truth for color/type/spacing.
+   Mirrors sparc-desktop tokens; do not modify hex values without a brand review. */
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap");
+
+:root {
+  /* Brand ramp */
+  --sparc-purple:  #602468;
+  --sparc-magenta: #9e337d;
+  --sparc-pink:    #e94d9b;
+  --sparc-red:     #e94461;
+  --sparc-crimson: #e73c25;
+  --sparc-orange:  #e76c25;
+  --sparc-amber:   #e79024;
+  --sparc-gold:    #f0b632;
+  --sparc-yellow:  #fbdd46;
+
+  --purple:  var(--sparc-purple);
+  --magenta: var(--sparc-magenta);
+  --pink:    var(--sparc-pink);
+  --red:     var(--sparc-red);
+  --crimson: var(--sparc-crimson);
+  --orange:  var(--sparc-orange);
+  --amber:   var(--sparc-amber);
+  --gold:    var(--sparc-gold);
+  --yellow:  var(--sparc-yellow);
+
+  /* Warm neutrals */
+  --ink:    #1a1416;
+  --ink-2:  #2b2327;
+  --paper:  #f7f4ee;
+  --paper-2:#ede8dd;
+  --paper-3:#d8d3c6;
+  --line:   #c9c2b3;
+  --muted:  #6e6358;
+  --white:  #ffffff;
+
+  --bg: var(--paper);
+  --bg-elevated: var(--white);
+  --bg-sunken: var(--paper-2);
+  --bg-shell: var(--paper-3);
+
+  --fg: var(--ink);
+  --fg-2: var(--ink-2);
+  --fg-muted: var(--muted);
+
+  --border: var(--line);
+  --accent: var(--crimson);
+  --accent-2: var(--purple);
+  --accent-warning: var(--amber);
+
+  --status-live: var(--crimson);
+  --status-warn: var(--amber);
+  --status-ai: var(--purple);
+
+  --font-sans: "Inter", "Neue Haas Grotesk", "Helvetica Neue", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --grad-ramp: linear-gradient(90deg,
+    var(--purple) 0%, var(--magenta) 14%, var(--pink) 28%, var(--red) 42%,
+    var(--crimson) 56%, var(--orange) 70%, var(--amber) 82%, var(--gold) 92%, var(--yellow) 100%);
+
+  --tex-grid:
+    linear-gradient(rgba(0,0,0,0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,0,0,0.035) 1px, transparent 1px);
+  --tex-grid-size: 24px 24px;
+}

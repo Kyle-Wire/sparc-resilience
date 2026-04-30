@@ -134,7 +134,9 @@ export default function ResultsPage() {
     }
 
     if (manifest.stage("4")) {
-      getScenarioDetail().then(setScenarioDetail).catch(() => {});
+      getScenarioDetail()
+        .then((s) => { setScenarioDetail(s); clearError("scenario"); })
+        .catch((err) => noteError("scenario", err));
     }
 
     // Spatial CV predictions GeoJSON (stage 2 — the canonical predictions map).
@@ -159,11 +161,14 @@ export default function ResultsPage() {
           const vars = Object.keys(pdp).filter((k) => k !== "_meta");
           if (vars.length > 0) setActivePdpVar(vars[0]);
         }
-      }).catch(() => {});
+        clearError("pdp");
+      }).catch((err) => noteError("pdp", err));
     }
 
     if (manifest.lookup("0", "correlogram_results")) {
-      getCorrelogramData().then(setCorrelogram).catch(() => {});
+      getCorrelogramData()
+        .then((c) => { setCorrelogram(c); clearError("correlogram"); })
+        .catch((err) => noteError("correlogram", err));
     }
 
     if (manifest.lookup("1", "gwen_variable_importance")) {
@@ -177,7 +182,8 @@ export default function ResultsPage() {
             return m;
           });
         });
-      }).catch(() => {});
+        clearError("gwen");
+      }).catch((err) => noteError("gwen", err));
     }
   }, [manifest, clearError, noteError]);
 
@@ -226,8 +232,8 @@ export default function ResultsPage() {
       .then((d) => { setDoseResponse(d as DoseResponseData); clearError("dose_response"); })
       .catch((err) => { setDoseResponse(null); noteError("dose_response", err); });
     getCausalSensitivity()
-      .then((s) => setSensitivity(s))
-      .catch(() => setSensitivity(null));
+      .then((s) => { setSensitivity(s); clearError("sensitivity"); })
+      .catch((err) => { setSensitivity(null); noteError("sensitivity", err); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clearError, noteError]);
   useEffect(() => { loadCausal(); }, [loadCausal, pipeline.runEndedAt]);
@@ -237,17 +243,17 @@ export default function ResultsPage() {
   useEffect(() => {
     if (!activeCateVar) { setCateGeo(null); return; }
     getCateMap(activeCateVar, cateShowUncertainty)
-      .then((g) => setCateGeo(g as GeoJsonData))
-      .catch(() => setCateGeo(null));
-  }, [activeCateVar, cateShowUncertainty]);
+      .then((g) => { setCateGeo(g as GeoJsonData); clearError("cate_geo"); })
+      .catch((err) => { setCateGeo(null); noteError("cate_geo", err); });
+  }, [activeCateVar, cateShowUncertainty, clearError, noteError]);
 
   // Permutation negative-control test for the active CATE variable.
   useEffect(() => {
     if (!activeCateVar) { setNegControl(null); return; }
     getCausalNegativeControl(activeCateVar, 1000)
-      .then((nc) => setNegControl(nc))
-      .catch(() => setNegControl(null));
-  }, [activeCateVar]);
+      .then((nc) => { setNegControl(nc); clearError("neg_control"); })
+      .catch((err) => { setNegControl(null); noteError("neg_control", err); });
+  }, [activeCateVar, clearError, noteError]);
 
   const hasData = models.length > 0;
   const bestModel = hasData ? models.reduce((a, b) => (b.r2 > a.r2 ? b : a)) : null;
@@ -1151,10 +1157,35 @@ export default function ResultsPage() {
               style={{ width: "100%", height: MAP_HEIGHT_DEFAULT, display: "block" }}
             />
           ) : viewMode === "correlogram" ? (
-            <canvas
-              ref={corrCanvasRef}
-              style={{ width: "100%", height: MAP_HEIGHT_DEFAULT, display: "block" }}
-            />
+            <div style={{ position: "relative", width: "100%", height: MAP_HEIGHT_DEFAULT }}>
+              <canvas
+                ref={corrCanvasRef}
+                style={{ width: "100%", height: "100%", display: "block" }}
+              />
+              {(() => {
+                const err = panelErrors["correlogram"];
+                if (!err) return null;
+                const hint = typeof err === "object" && err
+                  ? err.hint || `Missing artifact: ${err.missing_artifact}`
+                  : String(err);
+                return (
+                  <div style={{
+                    position: "absolute", inset: 0, display: "flex",
+                    alignItems: "center", justifyContent: "center",
+                    background: "rgba(250, 248, 244, 0.92)",
+                    color: "var(--muted)", fontSize: 11, textAlign: "center",
+                    padding: 16,
+                  }}>
+                    <div style={{ maxWidth: 360 }}>
+                      <div style={{ fontWeight: 600, color: "var(--ink-2)", marginBottom: 4 }}>
+                        Correlogram unavailable
+                      </div>
+                      <div style={{ lineHeight: 1.5 }}>{hint}</div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
           ) : (
             // Causal view: CATE map (full width) over dose-response curve.
             // Was a 2-col grid; the cramped CATE map was the user's main complaint.

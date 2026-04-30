@@ -1889,7 +1889,15 @@ def train_neural_meta(
     # Save artifacts
     # ==================================================================
     artifact_dir = output_dir / "v2_neural"
-    artifact_dir.mkdir(parents=True, exist_ok=True)
+    # Disk writes are db-only by default in v4. Only materialize the
+    # ``v2_neural/`` checkpoint dir when the project explicitly opts
+    # in via :func:`disk_writes_enabled`. The ArtifactStore mirror
+    # below is always taken (when the registry is active) and is the
+    # canonical source of truth.
+    from sparc.run.disk_policy import disk_writes_enabled
+    _disk_on = disk_writes_enabled()
+    if _disk_on:
+        artifact_dir.mkdir(parents=True, exist_ok=True)
 
     # Active store (single source of truth for db-resident artifacts).
     try:
@@ -1901,13 +1909,14 @@ def train_neural_meta(
     # --- Model checkpoints + scalers (dual-write: db blobs + disk).
     # Consumer (scenario_simulator) still loads from disk paths; that
     # consumer migration is deferred to a future blob-cleanup pass.
-    torch.save(final_model.state_dict(), artifact_dir / "neural_meta.pt")
-    final_model.save_trunk(artifact_dir / "shared_trunk.pt")
-    torch.save(final_process.state_dict(), artifact_dir / "process_rate_net.pt")
-    torch.save(final_source_net.state_dict(), artifact_dir / "source_term_net.pt")
-    for name, surr in final_surrogates.items():
-        torch.save(surr.state_dict(), artifact_dir / f"surrogate_{name}.pt")
-    joblib.dump(tensors["encoder"], artifact_dir / "sinusoidal_encoder.pkl")
+    if _disk_on:
+        torch.save(final_model.state_dict(), artifact_dir / "neural_meta.pt")
+        final_model.save_trunk(artifact_dir / "shared_trunk.pt")
+        torch.save(final_process.state_dict(), artifact_dir / "process_rate_net.pt")
+        torch.save(final_source_net.state_dict(), artifact_dir / "source_term_net.pt")
+        for name, surr in final_surrogates.items():
+            torch.save(surr.state_dict(), artifact_dir / f"surrogate_{name}.pt")
+        joblib.dump(tensors["encoder"], artifact_dir / "sinusoidal_encoder.pkl")
 
     if _store is not None:
         try:
@@ -1943,8 +1952,9 @@ def train_neural_meta(
         alpha_field_np = alpha_full_np.squeeze(-1)
     else:
         alpha_field_np = alpha_full_np.mean(axis=-1)
-    np.save(artifact_dir / "alpha_field.npy", alpha_field_np)
-    np.save(artifact_dir / "alpha_field_coords.npy", coords)
+    if _disk_on:
+        np.save(artifact_dir / "alpha_field.npy", alpha_field_np)
+        np.save(artifact_dir / "alpha_field_coords.npy", coords)
     logger.info(
         "  Saved alpha_field.npy (%d points, %d treatment heads)",
         len(coords), alpha_full_np.shape[-1],
@@ -1952,27 +1962,31 @@ def train_neural_meta(
 
     # Save cardinal neighbors and grid spacing for PDE forward solver
     cardinal_np = tensors["cardinal_idx"].cpu().numpy()
-    np.save(artifact_dir / "cardinal_neighbors.npy", cardinal_np)
+    if _disk_on:
+        np.save(artifact_dir / "cardinal_neighbors.npy", cardinal_np)
     grid_spacing_np = None
     if tensors["h_field"] is not None:
         grid_spacing_np = tensors["h_field"].cpu().numpy()
-        np.save(artifact_dir / "grid_spacing.npy", grid_spacing_np)
+        if _disk_on:
+            np.save(artifact_dir / "grid_spacing.npy", grid_spacing_np)
     logger.info("  Saved cardinal_neighbors.npy + grid_spacing.npy")
 
     # Feature scaling stats (needed to standardize inputs at inference time)
     feat_scaling = {"feat_mean": tensors["feat_mean"], "feat_std": tensors["feat_std"]}
-    np.savez(
-        artifact_dir / "feature_scaling.npz",
-        feat_mean=tensors["feat_mean"],
-        feat_std=tensors["feat_std"],
-    )
+    if _disk_on:
+        np.savez(
+            artifact_dir / "feature_scaling.npz",
+            feat_mean=tensors["feat_mean"],
+            feat_std=tensors["feat_std"],
+        )
 
     oof_payload = {"predictions": oof_preds, "uncertainty": oof_std}
-    np.savez(
-        artifact_dir / "oof_results.npz",
-        predictions=oof_preds,
-        uncertainty=oof_std,
-    )
+    if _disk_on:
+        np.savez(
+            artifact_dir / "oof_results.npz",
+            predictions=oof_preds,
+            uncertainty=oof_std,
+        )
 
     # Mirror numpy artifacts to artifacts.db (pickled dicts/arrays).
     if _store is not None:
@@ -2016,7 +2030,8 @@ def train_neural_meta(
             k: np.array([ep.get(k, 0.0) for ep in retrain_loss_history])
             for k in _loss_keys
         }
-        np.savez(artifact_dir / "loss_history.npz", **_loss_arrays)
+        if _disk_on:
+            np.savez(artifact_dir / "loss_history.npz", **_loss_arrays)
         if _store is not None:
             try:
                 _store.write_blob("2", "v2_loss_history", _loss_arrays,
@@ -2059,8 +2074,9 @@ def train_neural_meta(
                                 producer="v2_neural_training")
         except Exception as _e:
             logger.warning("Could not write v2_neural_meta_info struct: %s", _e)
-    with open(artifact_dir / "meta_info.json", "w") as f:
-        json.dump(meta_info, f, indent=2)
+    if _disk_on:
+        with open(artifact_dir / "meta_info.json", "w") as f:
+            json.dump(meta_info, f, indent=2)
 
     logger.info("V2 neural artifacts saved to %s", artifact_dir)
 

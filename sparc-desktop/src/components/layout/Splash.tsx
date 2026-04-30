@@ -32,7 +32,7 @@ export default function Splash({ onReady }: SplashProps) {
           className="mono"
           style={{ fontSize: 10, letterSpacing: "0.2em", color: "var(--muted)", marginTop: 4 }}
         >
-          SPATIAL ANALYSIS &amp; RESEARCH CORE · v0.4.2
+          SPATIAL RESEARCH · v0.4.2
         </div>
       </div>
       <div style={{ width: 220, height: 3, background: "rgba(0,0,0,0.08)", borderRadius: 2, overflow: "hidden" }}>

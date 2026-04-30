@@ -1,6 +1,6 @@
 # SPARC v2.1 User Manual
 
-**Spatial Analysis and Research Core — SPARC Labs LLC**
+**Spatial Research — SPARC Labs LLC**
 
 ---
 

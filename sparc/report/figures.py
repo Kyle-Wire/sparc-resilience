@@ -444,10 +444,34 @@ def render_pdp(store, stage, artifact_id, opts):
 
 def render_correlogram(store, stage, artifact_id, opts):
     payload = _require_struct(store, stage, artifact_id)
+
+    # Modern schema (Stage 0 ``correlogram_results``):
+    #   {individual_results: {var_name: {lag_distances, morans_i_values,
+    #                                    p_values, ...}, ...}}
+    individual = payload.get("individual_results")
+    if isinstance(individual, dict) and individual:
+        fig, ax = plt.subplots(figsize=(7, 4.5))
+        for name, res in individual.items():
+            if not isinstance(res, dict):
+                continue
+            lags = res.get("lag_distances")
+            mi = res.get("morans_i_values") or res.get("moran_i_values")
+            if lags is None or mi is None:
+                continue
+            ax.plot(lags, mi, marker="o", markersize=3, linewidth=1.2, label=str(name))
+        ax.axhline(0.0, color="#888", linewidth=0.8)
+        ax.set_xlabel("Lag distance")
+        ax.set_ylabel("Moran's I")
+        ax.set_title("Spatial correlogram")
+        if len(individual) <= 12:
+            ax.legend(fontsize=7, loc="best")
+        return _fig_to_png(fig, dpi=opts.get("dpi", 144))
+
+    # Legacy schema: dense correlation matrix.
     matrix = payload.get("matrix") or payload.get("correlation")
     labels = payload.get("labels") or payload.get("variables") or []
     if matrix is None:
-        raise FigureRenderError("correlogram has no matrix")
+        raise FigureRenderError("correlogram has no matrix or individual_results")
     arr = np.asarray(matrix, dtype=float)
     fig, ax = plt.subplots(figsize=(6, 5))
     im = ax.imshow(arr, cmap="RdBu_r", vmin=-1, vmax=1)
@@ -467,36 +491,54 @@ def render_correlogram(store, stage, artifact_id, opts):
 
 # (stage, artifact_id) -> renderer.  Callers may register additional renderers
 # by importing FIGURES_REGISTRY and assigning new keys.
+#
+# Keys must match what the pipeline ACTUALLY writes via
+# ``ArtifactStore.write_*``. Stale keys silently shadow real artifacts —
+# ``render_for_artifact`` raises FigureRenderError on a miss, but
+# ``DownloadMenu`` / report exporters just skip the missing renderer.
+# When you add a producer, register the renderer here with the *same*
+# (stage, artifact_id) you wrote.
 FIGURES_REGISTRY: dict[tuple[str, str], Renderer] = {
-    # Stage 0
-    ("0", "data"): render_data_histogram,
-    ("0", "data_summary"): render_data_histogram,
-    ("0", "data_histogram_bins"): render_data_histogram,
-    # Stage 1
-    ("1", "dag"): render_dag,
-    ("1", "edge_inclusion_probs"): render_dag,
-    ("1", "correlogram"): render_correlogram,
-    # Stage 2
-    ("2", "predictions"): render_predictions_map,
-    ("2", "cate"): render_cate,
-    ("2", "spatial_cate"): render_predictions_map,
-    ("2", "pdp"): render_pdp,
-    # Stage 3
-    ("3", "sensitivity_tornado"): render_sensitivity_tornado,
-    ("3", "dose_response"): render_dose_response,
-    ("3", "posteriors"): render_posteriors,
-    ("3", "posterior_trace"): render_posterior_trace,
-    # Stage 4 — scenario contract
+    # Stage 0 — EDA
+    ("0", "correlogram_results"): render_correlogram,
+    # Stage 2 — Spatial CV / ensemble
+    ("2", "spatial_cv_predictions"): render_predictions_map,
+    ("2", "ensemble_predictions"): render_predictions_map,
+    # Stage 3 — Causal validation
+    ("3", "median_probability_dag"): render_dag,
+    ("3", "edge_inclusion_probs"): render_dag,
+    ("3", "cate_summary"): render_cate,
+    ("3", "spatial_cate_maps"): render_predictions_map,
+    ("3", "dose_response_curves"): render_dose_response,
+    ("3", "parameter_posteriors"): render_posteriors,
+    # Stage 4 — Scenario contract
     ("4", "scenario_results"): render_scenario_map,
     ("4", "scenario_results_dag"): render_scenario_map,
     ("4", "scenario_results_reprediction"): render_scenario_map,
     ("4", "scenario_results_hybrid"): render_scenario_map,
-    ("4", SCENARIO_ATTRIBUTION): render_attribution_waterfall,
-    ("4", SCENARIO_TRAJECTORY): render_scenario_trajectory,
     ("4", SCENARIO_MC_UNCERTAINTY): render_uncertainty_band_map,
-    ("4", SCENARIO_LIBRARY): render_scenario_library_timeline,
-    # Stage 5
-    ("5", "decision_allocation"): render_decision_allocation,
+    # NOTE: the following keys have renderers but no current producer;
+    # registering them would shadow real artifacts and confuse callers.
+    # Re-add when a writer lands:
+    #   ("0","data") family → no producer (Stage 0 dataset is dataset_profile)
+    #   ("3","sensitivity_tornado") → no producer
+    #   ("3","posterior_trace")     → no producer
+    #   ("4",SCENARIO_ATTRIBUTION)  → no producer
+    #   ("4",SCENARIO_TRAJECTORY)   → no producer
+    #   ("4",SCENARIO_LIBRARY)      → producer is sparc/scenario/library.py
+    #                                 which bypasses the artifact store.
+    #   ("5","decision_allocation") → Stage 5 not in pipeline dispatch.
+}
+
+
+# Prefix-keyed renderers for per-feature artifact families. Keys are
+# ``(stage, artifact_id_prefix)``; ``render_for_artifact`` matches the
+# longest prefix when no exact key is registered.
+FIGURES_REGISTRY_PREFIX: dict[tuple[str, str], Renderer] = {
+    # Per-feature PDP curves: ("2","v2_neural_pdp::<feature>")
+    ("2", "v2_neural_pdp::"): render_pdp,
+    # Legacy per-feature PDP id from older Stage 2 runs.
+    ("2", "pdp::"): render_pdp,
 }
 
 
@@ -528,6 +570,17 @@ def render_for_artifact(
     stage_str = str(stage)
     key = (stage_str, artifact_id)
     renderer = FIGURES_REGISTRY.get(key)
+    if renderer is None:
+        # Fall back to longest matching prefix in
+        # FIGURES_REGISTRY_PREFIX (e.g. ("2","v2_neural_pdp::") matches
+        # any artifact id beginning with that prefix).
+        best_prefix = ""
+        for (p_stage, p_prefix), r in FIGURES_REGISTRY_PREFIX.items():
+            if p_stage != stage_str:
+                continue
+            if artifact_id.startswith(p_prefix) and len(p_prefix) > len(best_prefix):
+                best_prefix = p_prefix
+                renderer = r
     if renderer is None:
         raise FigureRenderError(f"No renderer registered for {stage_str}/{artifact_id}")
 

@@ -6,7 +6,7 @@
   </picture>
 </p>
 
-# SPARC — Spatial Analysis and Research Core
+# SPARC — Spatial Research
 
 **SPARC Labs LLC**
 

@@ -167,6 +167,15 @@ def _attach_registry(config: dict) -> None:
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: could not attach artifact listener: {exc}")
         state.registry = reg
+        # Install ``reg`` as the process-wide active registry so any
+        # code path that runs outside a request handler (startup hooks,
+        # background tasks, etc.) can read/write artifacts without an
+        # explicit ``_open_store()`` call.
+        try:
+            from sparc.registry.run_registry import set_active_registry
+            set_active_registry(reg)
+        except Exception:  # noqa: BLE001
+            pass
     except Exception as exc:  # noqa: BLE001
         print(f"Warning: could not attach RunRegistry: {exc}")
         state.registry = None

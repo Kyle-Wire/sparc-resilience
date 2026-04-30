@@ -811,6 +811,15 @@ def get_active_store() -> Optional[ArtifactStore]:
 
     reg = get_active_registry()
     if reg is None:
+        # Help diagnose silent-write regressions: writers that fall
+        # through this path will no-op, so anyone reading logs will
+        # see why their artifacts never landed in artifacts.db.
+        import logging
+        logging.getLogger(__name__).warning(
+            "get_active_store(): no active RunRegistry — artifact "
+            "writes will be silently dropped. Did the caller forget "
+            "set_active_registry()/push_active_registry()?"
+        )
         return None
     return ArtifactStore(reg)
 
