@@ -3,6 +3,7 @@ Extrapolation Guard — Applicability Domain + Confidence Flags
 =============================================================
 Provides multi-layered protection against unreliable scenario predictions:
 
+  Layer 0 — Generalized-propensity overlap (Wager 2025 Gap 1)
   Layer 1 — Mahalanobis-based extrapolation scoring
   Layer 2 — Saturation-aware response curves (uses GWRF condition curves)
   Layer 3 — Per-cell confidence classification (HIGH / MODERATE / LOW / SPECULATIVE)
@@ -13,6 +14,34 @@ Date: February 2026
 
 import numpy as np
 from scipy.spatial.distance import mahalanobis
+
+
+# -------------------------------------------------------------------------
+# Layer 0: Generalized-propensity overlap (continuous-treatment positivity)
+# -------------------------------------------------------------------------
+
+def compute_overlap_flags(X_train, W_train, X_modified, delta_w):
+    """Per-cell overlap flag using :class:`GeneralizedPropensityOverlap`.
+
+    Returns
+    -------
+    dict with arrays ``percentile`` (0-100) and ``flag``
+    (HIGH/LOW/EXTRAPOLATED) shape (n_cells,).
+    """
+    from sparc.causal.overlap import GeneralizedPropensityOverlap
+
+    ov = GeneralizedPropensityOverlap(method="kernel").fit(X_train, W_train)
+    X_modified = np.atleast_2d(np.asarray(X_modified, dtype=float))
+    delta_w = np.atleast_1d(np.asarray(delta_w, dtype=float))
+    if len(delta_w) == 1 and len(X_modified) > 1:
+        delta_w = np.repeat(delta_w, len(X_modified))
+    pcts = np.empty(len(X_modified))
+    flags: list[str] = []
+    for i in range(len(X_modified)):
+        a = ov.assess_scenario(X_modified[i], float(delta_w[i]))
+        pcts[i] = a["percentile"]
+        flags.append(a["flag"])
+    return {"percentile": pcts, "flag": np.array(flags, dtype=object)}
 
 
 # -------------------------------------------------------------------------

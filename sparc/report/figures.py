@@ -461,6 +461,83 @@ def render_correlogram(store, stage, artifact_id, opts):
 
 
 # ---------------------------------------------------------------------------
+# Wager (2025) audit renderers
+# ---------------------------------------------------------------------------
+
+
+def render_cate_rate(store, stage, artifact_id, opts):
+    payload = _require_struct(store, stage, artifact_id)
+    grid = np.asarray(payload.get("toc_grid") or [])
+    toc = np.asarray(payload.get("toc") or [])
+    auc = float(payload.get("rate_auc", 0.0))
+    ci = payload.get("rate_ci") or (0.0, 0.0)
+    if len(grid) == 0:
+        raise FigureRenderError("cate_validation: missing toc_grid/toc")
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.plot(grid, toc, color="#3a7", linewidth=1.6, label="TOC")
+    ax.axhline(0, color="grey", linewidth=0.6)
+    ax.fill_between(grid, toc, 0, where=toc > 0, alpha=0.15, color="#3a7")
+    ax.set_xlabel("Quantile of priority score")
+    ax.set_ylabel("E[Y* | top q] − E[Y*]")
+    ax.set_title(f"RATE = {auc:.3f}  (95% CI [{ci[0]:.3f}, {ci[1]:.3f}])")
+    ax.legend(loc="best", fontsize=8)
+    return _fig_to_png(fig, dpi=opts.get("dpi", 144))
+
+
+def render_mte_curve(store, stage, artifact_id, opts):
+    payload = _require_struct(store, stage, artifact_id)
+    grid = np.asarray(payload.get("u_grid") or [])
+    curve = np.asarray(payload.get("mte") or [])
+    label = payload.get("treatment", artifact_id.replace("mte_", ""))
+    if len(grid) == 0:
+        raise FigureRenderError("mte: missing u_grid/mte")
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.plot(grid, curve, color="#a35", linewidth=1.6)
+    ax.set_xlabel("u (latent treatment quantile)")
+    ax.set_ylabel("τ(u)")
+    ax.set_title(f"Marginal Treatment Effect — {label}")
+    return _fig_to_png(fig, dpi=opts.get("dpi", 144))
+
+
+def render_spillover_decomposition(store, stage, artifact_id, opts):
+    df = _require_table(store, stage, artifact_id)
+    treatments = df["treatment"].astype(str).tolist() if "treatment" in df else \
+                 [str(i) for i in range(len(df))]
+    direct = df["direct_effect"].to_numpy(dtype=float)
+    spill = df["spillover_effect"].to_numpy(dtype=float)
+    fig, ax = plt.subplots(figsize=(7, 4))
+    x = np.arange(len(treatments))
+    ax.bar(x - 0.18, direct, width=0.36, label="Direct", color="#3a7")
+    ax.bar(x + 0.18, spill, width=0.36, label="Spillover", color="#fb8")
+    ax.set_xticks(x)
+    ax.set_xticklabels(treatments, rotation=20, ha="right", fontsize=8)
+    ax.axhline(0, color="grey", linewidth=0.6)
+    ax.set_ylabel("Effect on Y")
+    ax.set_title("Network-interference decomposition")
+    ax.legend(loc="best", fontsize=8)
+    return _fig_to_png(fig, dpi=opts.get("dpi", 144))
+
+
+def render_policy_recommendations(store, stage, artifact_id, opts):
+    df = _require_table(store, stage, artifact_id)
+    treatments = df["treatment"].astype(str).tolist() if "treatment" in df else \
+                 [str(i) for i in range(len(df))]
+    welfare = df["welfare"].to_numpy(dtype=float)
+    n_rec = df["n_recommended"].to_numpy(dtype=float) if "n_recommended" in df \
+            else np.zeros(len(df))
+    fig, ax1 = plt.subplots(figsize=(7, 4))
+    ax1.bar(treatments, welfare, color="#357", label="Estimated welfare")
+    ax1.set_ylabel("Welfare (Σ AIPW score)")
+    ax1.set_xticklabels(treatments, rotation=20, ha="right", fontsize=8)
+    ax2 = ax1.twinx()
+    ax2.plot(treatments, n_rec, color="#fb6", marker="o", linewidth=1.4,
+             label="N recommended")
+    ax2.set_ylabel("Units recommended")
+    ax1.set_title("Empirical-welfare policy recommendations")
+    return _fig_to_png(fig, dpi=opts.get("dpi", 144))
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -486,6 +563,10 @@ FIGURES_REGISTRY: dict[tuple[str, str], Renderer] = {
     ("3", "dose_response"): render_dose_response,
     ("3", "posteriors"): render_posteriors,
     ("3", "posterior_trace"): render_posterior_trace,
+    # Stage 3 — Wager (2025) audit add-ons
+    ("3", "cate_validation"): render_cate_rate,
+    ("3", "spillover_decomposition"): render_spillover_decomposition,
+    ("3", "policy_recommendations"): render_policy_recommendations,
     # Stage 4 — scenario contract
     ("4", "scenario_results"): render_scenario_map,
     ("4", "scenario_results_dag"): render_scenario_map,

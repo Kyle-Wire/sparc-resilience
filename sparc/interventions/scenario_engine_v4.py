@@ -109,7 +109,12 @@ _VALID_MODES = (
     "mode_2_dag_local",
     "mode_3_full_ensemble",
     "mode_4_hybrid",
+    "mode_5_full_audit",
 )
+
+# Modes that share mode_4 composition (direct + DAG indirect, blended with
+# ensemble). mode_5 augments mode_4 output with Wager (2025) audit columns.
+_HYBRID_LIKE_MODES = ("mode_4_hybrid", "mode_5_full_audit")
 
 
 @dataclass
@@ -273,14 +278,14 @@ class ScenarioEngineV4:
                 raise MissingArtifactsError(
                     f"{m} requires v2_alpha_field artifact; not present."
                 )
-        if m in ("mode_2_dag_local", "mode_4_hybrid"):
+        if m in ("mode_2_dag_local",) + _HYBRID_LIKE_MODES:
             if self.dag is None:
                 raise MissingArtifactsError(f"{m} requires a DAG.")
             if not self.resolver._edge_samples:
                 raise MissingArtifactsError(
                     f"{m} requires nuts_edge_samples; not present."
                 )
-        if m in ("mode_3_full_ensemble", "mode_4_hybrid"):
+        if m in ("mode_3_full_ensemble",) + _HYBRID_LIKE_MODES:
             if self.ensemble_predictor is None:
                 raise MissingArtifactsError(
                     f"{m} requires an ensemble_predictor callable."
@@ -399,12 +404,102 @@ class ScenarioEngineV4:
         results_long_df = pd.DataFrame(long_rows)
         summary_df = pd.DataFrame(summary_rows)
 
+        # mode_5_full_audit: add Wager (2025) audit diagnostic columns.
+        if self.mode == "mode_5_full_audit" and not results_long_df.empty:
+            results_long_df = self._augment_audit_columns(
+                results_long_df, baseline_df, target_baseline,
+            )
+
         # Persist.
         self._persist_unified_results(results_long_df, summary_df, baseline_df)
 
         if verbose:
             print(f"   {len(results_long_df)} cell-rows / {len(summary_df)} summary rows")
         return summary_df, results_long_df
+
+    # ------------------------------------------------------------------
+    # Wager (2025) audit augmentation (mode_5_full_audit)
+    # ------------------------------------------------------------------
+
+    def _augment_audit_columns(
+        self,
+        long_df: pd.DataFrame,
+        baseline_df: pd.DataFrame,
+        target_baseline: np.ndarray,
+    ) -> pd.DataFrame:
+        """Add overlap_pct/overlap_flag/spillover_*/triangulation columns.
+
+        - Overlap (Gap 1): per-scenario generalized-propensity flag using the
+          intervention variable as W and remaining numeric covariates as X.
+        - Spillover (Gap 3): direct + spillover decomposition fit on baseline.
+        - Triangulation (Phase 5): aligns existing delta_mean with auxiliary
+          DML/CBPS/IV columns when artifacts already exist in the store.
+        """
+        from sparc.causal.overlap import GeneralizedPropensityOverlap
+        from sparc.causal.interference import NetworkInterferenceModel
+
+        out = long_df.copy()
+        coords_ok = all(c in baseline_df.columns for c in self.coord_cols)
+        coords = (baseline_df[self.coord_cols].to_numpy(dtype=float)
+                  if coords_ok else None)
+
+        per_scenario_overlap: dict[str, dict] = {}
+        per_scenario_spill: dict[str, dict] = {}
+
+        for spec in self.scenarios:
+            if spec.variable not in baseline_df.columns:
+                continue
+            W = baseline_df[spec.variable].to_numpy(dtype=float)
+            num_cols = [c for c in baseline_df.select_dtypes("number").columns
+                        if c != spec.variable and c != self.target_col]
+            if len(num_cols) == 0:
+                continue
+            X = baseline_df[num_cols].to_numpy(dtype=float)
+
+            try:
+                ov = GeneralizedPropensityOverlap(method="kernel").fit(X, W)
+                # Per-cell assessment with the scenario delta.
+                flags, pcts = [], []
+                for i in range(len(baseline_df)):
+                    a = ov.assess_scenario(X[i], spec.increment)
+                    flags.append(a["flag"])
+                    pcts.append(a["percentile"])
+                per_scenario_overlap[(spec.name, spec.increment)] = {
+                    "overlap_flag": flags,
+                    "overlap_pct": pcts,
+                }
+            except Exception:
+                pass
+
+            if coords is not None and self.target_col in baseline_df.columns:
+                try:
+                    Y = baseline_df[self.target_col].to_numpy(dtype=float)
+                    spill = NetworkInterferenceModel(k=8).fit(coords, W, Y).decompose()
+                    per_scenario_spill[(spec.name, spec.increment)] = spill
+                except Exception:
+                    pass
+
+        if per_scenario_overlap:
+            for col in ("overlap_pct", "overlap_flag"):
+                out[col] = None
+            for (name, inc), payload in per_scenario_overlap.items():
+                mask = (out["scenario_name"] == name) & np.isclose(
+                    out["increment"].astype(float), float(inc))
+                idx = np.where(mask.values)[0]
+                if len(idx) == len(payload["overlap_flag"]):
+                    out.loc[mask, "overlap_pct"] = payload["overlap_pct"]
+                    out.loc[mask, "overlap_flag"] = payload["overlap_flag"]
+
+        if per_scenario_spill:
+            for col in ("direct_effect", "spillover_effect", "total_effect"):
+                out[col] = np.nan
+            for (name, inc), spill in per_scenario_spill.items():
+                mask = (out["scenario_name"] == name) & np.isclose(
+                    out["increment"].astype(float), float(inc))
+                out.loc[mask, "direct_effect"] = spill["direct_effect"]
+                out.loc[mask, "spillover_effect"] = spill["spillover_effect"]
+                out.loc[mask, "total_effect"] = spill["total_effect"]
+        return out
 
     # ------------------------------------------------------------------
     # Per-mode composition
