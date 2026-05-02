@@ -229,6 +229,7 @@ def _yaml_to_config(raw: dict, yaml_path: str) -> dict:
         'temporal': raw.get('temporal', {'enabled': False}),
         'benchmark_metrics': raw.get('benchmark_metrics', {}),
         'fingerprint': raw.get('fingerprint', {}),
+        'performance': raw.get('performance', {}),
         # ---- V2: neural training, process rate, optimization ----
         'process_rate': raw.get('process_rate', {
             'enabled': True,
@@ -322,6 +323,13 @@ def load_config(config_path: str | None = None) -> dict:
             try:
                 from sparc.run.disk_policy import set_disk_writes
                 set_disk_writes(bool(cfg.get('output', {}).get('disk_writes', False)))
+            except Exception:  # noqa: BLE001
+                pass
+            # Push the project's `performance` overrides into the hardware
+            # profile resolver so the next detect_profile() call sees them.
+            try:
+                from sparc.config.hardware_profile import set_runtime_overrides
+                set_runtime_overrides(cfg.get('performance', {}))
             except Exception:  # noqa: BLE001
                 pass
             return cfg

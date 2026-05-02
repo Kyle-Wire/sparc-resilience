@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
 import pickle
 import sqlite3
 import time
@@ -50,6 +51,17 @@ BLOB_INLINE_THRESHOLD_BYTES: int = 10 * 1024 * 1024  # 10 MB
 
 # Reserved column name for vector geometry (WKB BLOB).
 GEOMETRY_COLUMN: str = "_geometry_wkb"
+
+_log = logging.getLogger(__name__)
+
+# Error message helper for torch unpickle failures under the safe path.
+_TORCH_UNTRUSTED_HINT = (
+    "torch.load(weights_only=True) refused to deserialize the artifact. "
+    "This usually means the checkpoint contains pickled Python objects "
+    "(e.g. a full nn.Module instance) rather than a plain state_dict. "
+    "If the artifact source is trusted, retry the read with trusted=True. "
+    "Otherwise treat the file as untrusted and do not load it."
+)
 
 
 def _utcnow() -> str:
@@ -311,7 +323,21 @@ class ArtifactStore:
                 name=artifact_id,
             )
 
-    def read_blob(self, stage: str | int, artifact_id: str) -> Any:
+    def read_blob(
+        self,
+        stage: str | int,
+        artifact_id: str,
+        *,
+        trusted: bool = False,
+    ) -> Any:
+        """Read a blob artifact.
+
+        ``trusted=False`` (default) loads torch checkpoints with
+        ``weights_only=True`` (restricted unpickler — safe against arbitrary
+        code execution). Set ``trusted=True`` only when the artifact was
+        produced by code you control; doing so falls back to full pickle
+        deserialization and emits a WARNING for audit.
+        """
         entry = self.registry.lookup(stage, artifact_id)
         if entry is None:
             raise ArtifactStoreError(f"Unknown artifact: stage={stage} id={artifact_id}")
@@ -343,14 +369,28 @@ class ArtifactStore:
                 raise ArtifactStoreError(f"External blob file missing: {blob_path}")
             data = blob_path.read_bytes()
 
-        return self._deserialize(data, serializer=serializer)
+        return self._deserialize(
+            data,
+            serializer=serializer,
+            trusted=trusted,
+            artifact_key=f"{stage}/{artifact_id}",
+        )
 
     # ------------------------------------------------------------------
     # Unified read (handles all storage_kinds, incl. legacy_path)
     # ------------------------------------------------------------------
 
-    def read_any(self, stage: str | int, artifact_id: str) -> Any:
+    def read_any(
+        self,
+        stage: str | int,
+        artifact_id: str,
+        *,
+        trusted: bool = False,
+    ) -> Any:
         """Read an artifact regardless of where it lives.
+
+        See :meth:`read_blob` for the meaning of ``trusted``.
+
 
         Resolves by ``storage_kind``:
         - ``table``        -> :meth:`read_table`
@@ -375,15 +415,18 @@ class ArtifactStore:
         if kind == "struct":
             return self.read_struct(stage, artifact_id)
         if kind in ("blob_inline", "blob_external"):
-            return self.read_blob(stage, artifact_id)
+            return self.read_blob(stage, artifact_id, trusted=trusted)
         if kind == "legacy_path":
-            return self._read_legacy_path(entry)
+            return self._read_legacy_path(entry, trusted=trusted)
         raise ArtifactStoreError(
             f"Unsupported storage_kind: {kind}"
         )
 
-    def _read_legacy_path(self, entry: Any) -> Any:
-        """Best-effort deserialize for on-disk legacy artifacts."""
+    def _read_legacy_path(self, entry: Any, *, trusted: bool = False) -> Any:
+        """Best-effort deserialize for on-disk legacy artifacts.
+
+        See :meth:`read_blob` for the meaning of ``trusted``.
+        """
         path = self.registry.resolve(entry)
         if not path.exists():
             raise ArtifactStoreError(f"Legacy file missing: {path}")
@@ -411,7 +454,20 @@ class ArtifactStore:
             return joblib.load(path)
         if fmt == "pt":
             import torch  # type: ignore[import-not-found]
-            return torch.load(path, weights_only=False)
+
+            if trusted:
+                _log.warning(
+                    "Loading torch artifact %s with trusted=True "
+                    "(weights_only=False — full pickle deserialization).",
+                    path,
+                )
+                return torch.load(path, weights_only=False)
+            try:
+                return torch.load(path, weights_only=True)
+            except pickle.UnpicklingError as exc:
+                raise ArtifactStoreError(
+                    f"{_TORCH_UNTRUSTED_HINT} (path={path})"
+                ) from exc
         if fmt in ("txt", "html"):
             return path.read_text(encoding="utf-8")
         # Unknown format: return raw bytes.
@@ -783,7 +839,13 @@ class ArtifactStore:
         raise ArtifactStoreError(f"Unknown serializer: {serializer!r}")
 
     @staticmethod
-    def _deserialize(data: bytes, *, serializer: str) -> Any:
+    def _deserialize(
+        data: bytes,
+        *,
+        serializer: str,
+        trusted: bool = False,
+        artifact_key: str | None = None,
+    ) -> Any:
         if serializer == "pickle":
             return pickle.loads(data)
         if serializer == "joblib":
@@ -793,7 +855,20 @@ class ArtifactStore:
         if serializer == "torch":
             import torch  # type: ignore[import-not-found]
 
-            return torch.load(io.BytesIO(data), weights_only=False)
+            if trusted:
+                _log.warning(
+                    "Loading torch artifact %s with trusted=True "
+                    "(weights_only=False \u2014 full pickle deserialization).",
+                    artifact_key or "<unknown>",
+                )
+                return torch.load(io.BytesIO(data), weights_only=False)
+            try:
+                return torch.load(io.BytesIO(data), weights_only=True)
+            except pickle.UnpicklingError as exc:
+                key = artifact_key or "<unknown>"
+                raise ArtifactStoreError(
+                    f"{_TORCH_UNTRUSTED_HINT} (artifact={key})"
+                ) from exc
         if serializer == "json":
             return json.loads(data.decode("utf-8"))
         if serializer == "raw":

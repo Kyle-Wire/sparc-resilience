@@ -205,6 +205,20 @@ class ResultStore:
         if fmt is None:
             fmt = _infer_format(name)
 
+        # PNG (and other binary figures) must not be routed through the
+        # dual-write ResultStore.save() path. Figures are written by the
+        # report layer directly to the RunRegistry; allowing a generic
+        # save(fmt="png") here would either bypass the artifact store
+        # entirely (DB-only mode silently drops the data) or create an
+        # un-mirrored disk-only file. Force callers to use the explicit
+        # figure pipeline.
+        if fmt == "png":
+            raise ValueError(
+                f"ResultStore.save() does not accept fmt='png' (name={name!r}). "
+                "Use sparc.report.figures (which registers figures via the "
+                "RunRegistry directly) for PNG output."
+            )
+
         # Resolve target path (always — even if we won't actually write to it
         # so callers that log the location still get a sensible string).
         directory = self.stage_dir(stage)

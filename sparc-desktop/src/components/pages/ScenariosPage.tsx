@@ -1,9 +1,45 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { SectionHeader, Card, Tag, Btn, Stat, StatGrid, thStyle, tdStyle } from "@/components/ui/DesignSystem";
-import { getConfig, getScenarioDetail, runScenarios, getNutsSummary, getScenarioLibrary, appendScenarioToLibrary, dataSummary, type ScenarioTimeline } from "@/lib/api";
+import DownloadMenu from "@/components/common/DownloadMenu";
+import {
+  getConfig,
+  getScenarioDetail,
+  runScenarios,
+  getNutsSummary,
+  getScenarioLibrary,
+  appendScenarioToLibrary,
+  dataSummary,
+  parseMissingArtifact,
+  parseScenarioVariant,
+  type ScenarioTimeline,
+} from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
+import { useManifest } from "@/hooks/useManifest";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
 import { presetsForDomain, applyPresetToPredictors } from "@/lib/scenarioPresets";
+
+type ScenariosTab = "configure" | "run" | "results" | "library";
+
+type ConfiguredScenarioRow = {
+  name: string;
+  variable?: string;
+  increments?: number[];
+  interventions?: Record<string, number>;
+  status: string;
+};
+
+type LastRunInfo = {
+  nScenarios: number;
+  summaryRows: number;
+  mode?: string;
+  conservation?: number;
+  timestamp: string;
+};
+
+interface Props {
+  /** Optional cross-page navigation, e.g. "Open Results →". */
+  onNavigate?: (page: string) => void;
+}
 
 interface Scenario {
   id: string;
@@ -41,10 +77,18 @@ interface NutsConvergence {
   converged: boolean;
 }
 
-export default function ScenariosPage() {
+export default function ScenariosPage({ onNavigate }: Props = {}) {
+  const { notify } = useNotification();
+  const manifest = useManifest(true);
+  const [tab, setTab] = useState<ScenariosTab>("configure");
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [activeIdx, setActiveIdx] = useState(0);
   const [sliders, setSliders] = useState<InterventionSlider[]>([]);
+  const [resultsArtifactId, setResultsArtifactId] = useState<string | null>(null);
+  const [configRaw, setConfigRaw] = useState<Record<string, unknown> | null>(null);
+  const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [lastRun, setLastRun] = useState<LastRunInfo | null>(null);
   const [nutsData, setNutsData] = useState<{
     acceptance_rate?: number;
     n_divergences?: number;
@@ -57,7 +101,6 @@ export default function ScenariosPage() {
   const [libComment, setLibComment] = useState("");
   const [libAuthor, setLibAuthor] = useState("me");
   const histRef = useRef<HTMLCanvasElement>(null);
-  const { notify } = useNotification();
 
   useEffect(() => {
     // Load NUTS posterior summaries
@@ -68,6 +111,7 @@ export default function ScenariosPage() {
     // Load scenarios from API results
     getScenarioDetail()
       .then((detail: any) => {
+        if (detail?.results_artifact_id) setResultsArtifactId(detail.results_artifact_id);
         if (detail?.scenarios && Array.isArray(detail.scenarios) && detail.scenarios.length > 0) {
           setScenarios(
             detail.scenarios.map((sc: any, i: number) => ({
@@ -85,6 +129,7 @@ export default function ScenariosPage() {
     // Load config for intervention builder sliders + preset library
     getConfig()
       .then((config) => {
+        setConfigRaw(config as unknown as Record<string, unknown>);
         const cfgScenarios = (config.scenarios ?? []) as any[];
         const cols = config.predictors ?? [];
         const domain = config.project?.domain ?? "";
@@ -333,12 +378,23 @@ export default function ScenariosPage() {
   }, [sliders, scenarios, notify]);
 
   const handleComputeAll = useCallback(async () => {
+    setRunning(true);
+    setRunError(null);
     try {
       notify("info", "Computing scenario deltas...");
       const result = await runScenarios();
+      setLastRun({
+        nScenarios: result.n_scenarios,
+        summaryRows: result.summary_rows,
+        mode: (result as any).scenario_mode,
+        conservation: (result as any).conservation_violations,
+        timestamp: new Date().toLocaleTimeString(),
+      });
       notify("success", `Computed ${result.n_scenarios} scenarios`);
+      await manifest.rescan().catch(() => {});
       // Refresh from API
       const detail: any = await getScenarioDetail().catch(() => null);
+      if (detail?.results_artifact_id) setResultsArtifactId(detail.results_artifact_id);
       const rows = detail?.scenarios ?? detail?.summary;
       if (Array.isArray(rows) && rows.length) {
         setScenarios(
@@ -352,9 +408,48 @@ export default function ScenariosPage() {
         );
       }
     } catch (e) {
-      notify("error", e instanceof Error ? e.message : "Scenario computation failed");
+      const missing = parseMissingArtifact(e);
+      const msg = missing?.hint ?? (e instanceof Error ? e.message : "Scenario computation failed");
+      setRunError(msg);
+      notify("error", msg);
+    } finally {
+      setRunning(false);
     }
-  }, [notify]);
+  }, [notify, manifest]);
+
+  // Configured scenarios derived from project.yml (Run tab).
+  const configured: ConfiguredScenarioRow[] = useMemo(() => {
+    if (!configRaw) return [];
+    const out: ConfiguredScenarioRow[] = [];
+    const baseList = (configRaw.scenarios ?? []) as any[];
+    for (const s of baseList) {
+      out.push({
+        name: s.name,
+        variable: s.variable,
+        increments: s.increments,
+        status: "configured",
+      });
+    }
+    for (const s of (configRaw.joint_scenarios ?? []) as any[]) {
+      out.push({
+        name: s.name,
+        interventions: Object.fromEntries(
+          (s.interventions ?? []).map((iv: any) => [iv.variable, iv.increment]),
+        ),
+        status: "configured (joint)",
+      });
+    }
+    for (const s of (configRaw.interaction_scenarios ?? []) as any[]) {
+      out.push({ name: s.name, status: "configured (interaction)" });
+    }
+    return out;
+  }, [configRaw]);
+
+  const stage4 = manifest.stage(4);
+  const hasStageResults =
+    (stage4?.artifacts && Object.keys(stage4.artifacts).length > 0) || lastRun !== null;
+  const autoRun = (configRaw?.auto_run_scenarios_at_stage_4 as boolean | undefined) !== false;
+  const variant = parseScenarioVariant(resultsArtifactId);
 
   const refreshLibrary = useCallback(() => {
     getScenarioLibrary().then(setLibrary).catch(() => setLibrary(null));
@@ -384,12 +479,75 @@ export default function ScenariosPage() {
         kicker="08 · analysis"
         label="Scenarios"
         right={
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {variant && (
+              <Tag
+                color={
+                  variant === "hybrid"
+                    ? "var(--purple)"
+                    : variant === "reprediction"
+                    ? "var(--amber)"
+                    : variant === "dag"
+                    ? "var(--crimson)"
+                    : "var(--muted)"
+                }
+              >
+                variant: {variant}
+              </Tag>
+            )}
             <Btn small onClick={handleAddScenario}>Add scenario</Btn>
-            <Btn primary small onClick={handleComputeAll}>Compute all</Btn>
+            <Btn
+              primary
+              small
+              onClick={handleComputeAll}
+              disabled={running}
+            >
+              {running ? "Running…" : "Compute all"}
+            </Btn>
           </div>
         }
       />
+
+      {/* Tab bar — Configure / Run / Results / Library */}
+      <div
+        role="tablist"
+        style={{
+          display: "flex",
+          gap: 4,
+          borderBottom: "1px solid var(--line)",
+          marginBottom: 12,
+        }}
+      >
+        {(
+          [
+            ["configure", "Configure"],
+            ["run", "Run"],
+            ["results", "Results"],
+            ["library", "Library"],
+          ] as const
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            role="tab"
+            aria-selected={tab === key}
+            onClick={() => setTab(key)}
+            style={{
+              padding: "6px 14px",
+              fontSize: 12,
+              border: 0,
+              borderBottom:
+                tab === key ? "2px solid var(--crimson, #e73c25)" : "2px solid transparent",
+              background: "transparent",
+              cursor: "pointer",
+              color: tab === key ? "var(--ink)" : "var(--muted)",
+              fontWeight: tab === key ? 700 : 500,
+              marginBottom: -1,
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
       <StatGrid>
         <Stat label="Scenarios" value={String(scenarios.length)} tint="var(--ink)" />
@@ -398,6 +556,10 @@ export default function ScenariosPage() {
         <Stat label="Variables" value={String(sliders.length)} tint="var(--amber)" />
       </StatGrid>
 
+      {/* ------------------------------------------------------------ */}
+      {/* Configure tab — scenario library card + intervention builder  */}
+      {/* ------------------------------------------------------------ */}
+      {tab === "configure" && (
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <Card title="Scenario library" subtitle="click to select · compare to baseline">
@@ -504,9 +666,166 @@ export default function ScenariosPage() {
           </div>
         </Card>
       </div>
+      )}
 
-      {/* NUTS / MC³ posterior results */}
-      {nutsData && (
+      {/* ------------------------------------------------------------ */}
+      {/* Run tab — fold-in of the legacy ScenarioRunnerPage             */}
+      {/* ------------------------------------------------------------ */}
+      {tab === "run" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <StatGrid>
+            <Stat label="Configured" value={String(configured.length)} tint="var(--ink)" />
+            <Stat label="Computed" value={String(scenarios.filter((s) => s.status === "computed").length)} tint="var(--purple)" />
+            <Stat
+              label="Auto-run @ Stage 4"
+              value={autoRun ? "on" : "off"}
+              tint={autoRun ? "var(--ink)" : "var(--amber)"}
+            />
+            <Stat
+              label="Last run"
+              value={lastRun?.timestamp ?? (hasStageResults ? "previous session" : "—")}
+              tint="var(--crimson)"
+            />
+          </StatGrid>
+
+          {runError && (
+            <Card title="Error" subtitle="from /scenarios/run">
+              <div style={{ fontSize: 12.5, color: "var(--crimson)", lineHeight: 1.55 }}>
+                {runError}
+              </div>
+            </Card>
+          )}
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            <Card title="Configured scenarios" subtitle="from project.yml">
+              {configured.length === 0 ? (
+                <div style={{ fontSize: 12.5, color: "var(--muted)", padding: "10px 4px" }}>
+                  No scenarios defined. Open the <strong>Configure</strong> tab above to add some,
+                  or edit project.yml directly under the <code>scenarios:</code> key.
+                </div>
+              ) : (
+                configured.map((s, i) => (
+                  <div
+                    key={`${s.name}-${i}`}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr auto",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "10px 4px",
+                      borderTop: i > 0 ? "1px dashed var(--line)" : "none",
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: 12.5, fontWeight: 600 }}>{s.name}</div>
+                      <div className="mono" style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
+                        {s.variable
+                          ? `${s.variable} ${s.increments ? `× [${s.increments.join(", ")}]` : ""}`
+                          : s.interventions
+                          ? Object.entries(s.interventions)
+                              .map(([k, v]) => `${k}: ${v > 0 ? "+" : ""}${v}`)
+                              .join(", ")
+                          : "—"}
+                      </div>
+                    </div>
+                    <Tag color="var(--muted)">{s.status}</Tag>
+                  </div>
+                ))
+              )}
+            </Card>
+
+            <Card
+              title="Computed deltas"
+              subtitle="from /results/scenarios/detail"
+              actions={
+                <DownloadMenu
+                  artifactId="scenario_results"
+                  stage="4"
+                  label="scenario results"
+                  dataEndpoint="/results/scenarios"
+                  dataFilename="scenario_results"
+                  includeBundle
+                  compact
+                />
+              }
+            >
+              {scenarios.filter((s) => s.status === "computed").length === 0 ? (
+                <div style={{ fontSize: 12.5, color: "var(--muted)", padding: "10px 4px" }}>
+                  No computed scenarios yet. Click <strong>Compute all</strong> in the header
+                  to launch.
+                </div>
+              ) : (
+                scenarios
+                  .filter((s) => s.status === "computed")
+                  .map((sc, i) => (
+                    <div
+                      key={`${sc.id}-${i}`}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "1fr auto",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "10px 4px",
+                        borderTop: i > 0 ? "1px dashed var(--line)" : "none",
+                      }}
+                    >
+                      <div style={{ fontSize: 12.5, fontWeight: 600 }}>{sc.name}</div>
+                      <span
+                        className="mono"
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 700,
+                          color:
+                            sc.delta < 0
+                              ? "var(--purple)"
+                              : sc.delta > 0
+                              ? "var(--crimson)"
+                              : "var(--muted)",
+                        }}
+                      >
+                        {sc.delta === 0
+                          ? "—"
+                          : `${sc.delta > 0 ? "+" : ""}${sc.delta.toFixed(2)}`}
+                      </span>
+                    </div>
+                  ))
+              )}
+              {hasStageResults && onNavigate && (
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line)" }}>
+                  <Btn small onClick={() => onNavigate("Results")}>Open Results →</Btn>
+                </div>
+              )}
+            </Card>
+          </div>
+
+          {lastRun && (
+            <Card title="Last run summary" subtitle={lastRun.timestamp}>
+              <div className="mono" style={{ fontSize: 11.5, color: "var(--muted)", lineHeight: 1.7 }}>
+                scenarios: {lastRun.nScenarios}
+                <br />
+                summary rows: {lastRun.summaryRows}
+                {lastRun.mode && (
+                  <>
+                    <br />
+                    mode: {lastRun.mode}
+                  </>
+                )}
+                {lastRun.conservation !== undefined && (
+                  <>
+                    <br />
+                    conservation violations: {lastRun.conservation}
+                  </>
+                )}
+              </div>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------ */}
+      {/* Results tab — NUTS / MC³ posterior results                    */}
+      {/* ------------------------------------------------------------ */}
+      {tab === "results" && nutsData && (
         <div style={{ marginTop: 14 }}>
           <Card
             title="NUTS posterior results (MC³)"
@@ -617,7 +936,20 @@ export default function ScenariosPage() {
           </Card>
         </div>
       )}
+      {tab === "results" && !nutsData && (
+        <Card title="Results" subtitle="awaiting Stage 3 NUTS posteriors">
+          <div style={{ padding: 24, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
+            No NUTS posteriors yet. Run Stage 3 (causal inference) to populate
+            this view, or open the <strong>Results</strong> page for stage-level
+            summaries.
+          </div>
+        </Card>
+      )}
 
+      {/* ------------------------------------------------------------ */}
+      {/* Library tab — versioned, append-only scenario journal         */}
+      {/* ------------------------------------------------------------ */}
+      {tab === "library" && (
       <Card
         title="Versioned scenario library"
         subtitle={library ? `${library.count} entr${library.count === 1 ? "y" : "ies"} · append-only journal` : "loading…"}
@@ -688,6 +1020,7 @@ export default function ScenariosPage() {
           </div>
         )}
       </Card>
+      )}
     </div>
   );
 }

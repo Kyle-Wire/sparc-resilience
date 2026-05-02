@@ -27,7 +27,6 @@ import VariablesPage from "@/components/pages/VariablesPage";
 import PhysicsPage from "@/components/pages/PhysicsPage";
 import CRSPage from "@/components/pages/CRSPage";
 import ScenariosPage from "@/components/pages/ScenariosPage";
-import ScenarioRunnerPage from "@/components/pages/ScenarioRunnerPage";
 import ModelsPage from "@/components/pages/ModelsPage";
 import RunPage from "@/components/pages/RunPage";
 import ResultsPage from "@/components/pages/ResultsPage";
@@ -35,8 +34,9 @@ import DecisionSupportPage from "@/components/pages/DecisionSupportPage";
 import ComparePage from "@/components/pages/ComparePage";
 import ReportPage from "@/components/pages/ReportPage";
 import SettingsPage from "@/components/pages/SettingsPage";
+import PerformancePage from "@/components/pages/PerformancePage";
 
-type AppPage = PageName | "Settings";
+type AppPage = PageName | "Settings" | "Performance";
 
 export default function App() {
   const { ready, status } = useServer();
@@ -58,7 +58,7 @@ export default function App() {
   // Gate navigation: only Project and Settings are allowed without a loaded project
   const navigate = useCallback(
     (p: AppPage) => {
-      if (p !== "Project" && p !== "Settings" && !project.projectLoaded) return;
+      if (p !== "Project" && p !== "Settings" && p !== "Performance" && !project.projectLoaded) return;
       setPage(p);
     },
     [project.projectLoaded],
@@ -241,13 +241,11 @@ export default function App() {
       case "CRS":
         return <CRSPage />;
       case "Scenarios":
-        return <ScenariosPage />;
+        return <ScenariosPage onNavigate={(p) => navigate(p as AppPage)} />;
       case "Models":
         return <ModelsPage />;
       case "Run":
         return <RunPage />;
-      case "Scenario Runner":
-        return <ScenarioRunnerPage onNavigate={(p) => navigate(p as AppPage)} />;
       case "Results":
         return <ResultsPage />;
       case "Decision Support":
@@ -257,7 +255,9 @@ export default function App() {
       case "Report":
         return <ReportPage />;
       case "Settings":
-        return <SettingsPage />;
+        return <SettingsPage onNavigate={(p) => navigate(p as AppPage)} />;
+      case "Performance":
+        return <PerformancePage />;
     }
   };
 

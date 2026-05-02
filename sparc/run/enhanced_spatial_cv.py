@@ -38,36 +38,56 @@ from sparc.run.artifact_io import (
 # Hardware-tier driven configuration (low / standard / high RAM machines).
 # On low-tier (e.g. 8GB MacBook Pro) parallel workers collapse to 1 and batch
 # sizes shrink so the pipeline does not get OOM-killed by the OS.
-_PROFILE = detect_profile()
+#
+# HARDWARE_CONFIG is rebuilt by `refresh_hardware_config()` whenever the user
+# changes their performance settings. The pipeline `main()` calls it at the
+# top of each run so per-project overrides take effect without restarting
+# the server process.
+HARDWARE_CONFIG: dict = {}
+_PROFILE = None  # populated by refresh_hardware_config() below
 
-_LOW = _PROFILE.tier == "low"
-HARDWARE_CONFIG = {
-    'cpu_cores': _PROFILE.cpu_count,
-    'max_workers': _PROFILE.max_workers,
-    'memory_limit_gb': _PROFILE.memory_limit_gb,
-    'batch_size_large': _PROFILE.batch_size if _LOW else 4096,
-    'batch_size_medium': _PROFILE.batch_size if _LOW else 2048,
-    'batch_size_small': _PROFILE.batch_size if _LOW else 1024,
-    'parallel_cv': not _LOW,
-    'high_memory_mode': _PROFILE.high_memory_mode,
-    'enable_aggressive_optimization': not _LOW,
-    'laplacian_batch_size': 500 if _LOW else 2000,
-    'max_eigen_iterations': 1000,
-    'spatial_cluster_threshold': 1000,
-    'per_model_parallel': not _LOW,
-    'outer_jobs': _PROFILE.outer_jobs,
-    'inner_jobs': _PROFILE.inner_jobs,
-    'gwrf_local_jobs': 1,
-}
 
-print(f"Hardware-optimized configuration detected (CPU-only):")
-print(f"  - {_PROFILE.banner()}")
-print(f"  - CPU cores: {HARDWARE_CONFIG['cpu_cores']}")
-print(f"  - Available RAM: {_PROFILE.total_ram_gb:.1f} GB")
-print(f"  - Memory limit: {HARDWARE_CONFIG['memory_limit_gb']:.1f} GB")
-print(f"  - Parallel processing: {'Enabled' if HARDWARE_CONFIG['parallel_cv'] else 'Disabled (low-memory safety)'}")
-print(f"  - Per-model parallelism: {HARDWARE_CONFIG['outer_jobs']} folds x {HARDWARE_CONFIG['inner_jobs']} inner jobs")
-print(f"  - High-memory mode: {'Enabled' if HARDWARE_CONFIG['high_memory_mode'] else 'Disabled'}")
+def refresh_hardware_config(verbose: bool = True) -> dict:
+    """Rebuild the module-level HARDWARE_CONFIG from the current hardware profile.
+
+    Call from any entry point (e.g. pipeline ``main()``) after the user may
+    have changed performance settings. Returns the updated config dict.
+    """
+    global _PROFILE, HARDWARE_CONFIG
+    _PROFILE = detect_profile()
+    low = _PROFILE.tier == "low"
+    HARDWARE_CONFIG = {
+        'cpu_cores': _PROFILE.cpu_count,
+        'max_workers': _PROFILE.max_workers,
+        'memory_limit_gb': _PROFILE.memory_limit_gb,
+        'batch_size_large': _PROFILE.batch_size if low else 4096,
+        'batch_size_medium': _PROFILE.batch_size if low else 2048,
+        'batch_size_small': _PROFILE.batch_size if low else 1024,
+        'parallel_cv': _PROFILE.max_workers > 1,
+        'high_memory_mode': _PROFILE.high_memory_mode,
+        'enable_aggressive_optimization': not low,
+        'laplacian_batch_size': 500 if low else 2000,
+        'max_eigen_iterations': 1000,
+        'spatial_cluster_threshold': 1000,
+        'per_model_parallel': _PROFILE.outer_jobs > 1,
+        'outer_jobs': _PROFILE.outer_jobs,
+        'inner_jobs': _PROFILE.inner_jobs,
+        'gwrf_local_jobs': 1,
+    }
+    if verbose:
+        print(f"Hardware-optimized configuration detected (CPU-only):")
+        print(f"  - {_PROFILE.banner()}")
+        print(f"  - CPU cores: {HARDWARE_CONFIG['cpu_cores']}")
+        print(f"  - Available RAM: {_PROFILE.total_ram_gb:.1f} GB")
+        print(f"  - Memory limit: {HARDWARE_CONFIG['memory_limit_gb']:.1f} GB")
+        print(f"  - Parallel processing: {'Enabled' if HARDWARE_CONFIG['parallel_cv'] else 'Disabled (low-memory safety)'}")
+        print(f"  - Per-model parallelism: {HARDWARE_CONFIG['outer_jobs']} folds x {HARDWARE_CONFIG['inner_jobs']} inner jobs")
+        print(f"  - High-memory mode: {'Enabled' if HARDWARE_CONFIG['high_memory_mode'] else 'Disabled'}")
+    return HARDWARE_CONFIG
+
+
+# Initial population at import (uses any overrides already set on the resolver).
+refresh_hardware_config(verbose=True)
 
 # Spatial analysis imports
 from libpysal.weights import DistanceBand
@@ -1639,6 +1659,12 @@ def main(fast_mode=False):
     Main function to run the complete enhanced spatial cross-validation pipeline
     with integrated V2 Neural Meta-Learner
     """
+    # Re-resolve hardware profile so that any performance settings the user
+    # changed since this module was first imported take effect for this run.
+    from sparc.config.hardware_profile import reset_profile_cache
+    reset_profile_cache()
+    refresh_hardware_config(verbose=True)
+
     # Ensure stdout can handle Unicode (Windows cp1252 cannot encode emoji)
     import sys
     if hasattr(sys.stdout, 'reconfigure'):

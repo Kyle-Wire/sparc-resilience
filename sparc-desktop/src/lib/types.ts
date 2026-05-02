@@ -498,7 +498,13 @@ export interface ScenarioSummaryRow {
 export interface ScenarioDetail {
   geojson: GeoJsonData;
   summary: ScenarioSummaryRow[];
+  /** Active mode-variant artifact id (base, dag, hybrid, or reprediction). */
+  results_artifact_id?: string | null;
+  summary_artifact_id?: string | null;
 }
+
+/** Mode-variant of the active scenario_results table. */
+export type ScenarioVariant = "base" | "dag" | "hybrid" | "reprediction";
 
 export interface GeoJsonFeature {
   type: "Feature";
@@ -526,5 +532,9 @@ export interface ReportPayload {
   spatial_cv_models?: string[];
   causal_results?: CausalResults;
   scenario_summary?: ScenarioSummaryRow[];
+  /** Active scenario_results artifact id chosen by ScenarioBundle precedence. */
+  scenario_results_artifact_id?: string | null;
+  /** Active scenario_summary artifact id chosen by ScenarioBundle precedence. */
+  scenario_summary_artifact_id?: string | null;
   plots?: Record<string, { name: string; filename: string; path: string; stage: number }[]>;
 }

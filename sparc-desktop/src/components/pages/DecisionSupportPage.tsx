@@ -854,9 +854,23 @@ function Step3Recommendation({
         </Card>
       )}
 
+      {ranked && !budget && !running && (
+        <Card
+          title="Budget Optimization"
+          subtitle="not yet computed for this run"
+        >
+          <div style={{ fontSize: 12.5, color: "var(--muted)", lineHeight: 1.6 }}>
+            To produce a spatial budget allocation, return to{" "}
+            <strong>Step 2b — Budget Allocator</strong> and provide a positive
+            budget value plus a benefit source (Bayesian β or uniform). Then
+            re-run the recommendation.
+          </div>
+        </Card>
+      )}
+
       {budget && (
         <Card
-          title="Budget Allocation"
+          title="Budget Optimization · Allocation"
           subtitle={`${budget.benefit_description} — solver: ${budget.result.solver}`}
         >
           <StatGrid>

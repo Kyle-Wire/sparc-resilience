@@ -246,9 +246,16 @@ class ScenarioEngineV4:
         # Coord columns + area metadata.
         self.coord_cols = list(config.get("variables", {}).get("coordinates", ["x", "y"]))
         self.area_column = config.get("data", {}).get("area_column")
-        self.area_names = {
-            int(k): v for k, v in (config.get("data", {}).get("area_names", {}) or {}).items()
-        }
+        raw_area_names = config.get("data", {}).get("area_names", {}) or {}
+        self.area_names: dict[int, str] = {}
+        for k, v in raw_area_names.items():
+            try:
+                self.area_names[int(k)] = v
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"data.area_names key {k!r} is not coercible to int "
+                    f"(area_names keys must be integer area codes): {exc}"
+                ) from exc
 
         # Scenarios.
         self.scenarios = _expand_scenarios(config.get("scenarios") or [])
@@ -458,6 +465,35 @@ class ScenarioEngineV4:
         minimising MSE against ``λ·resolver_mean + (1-λ)·ensemble``.
         Falls back to 0.5 when the optimisation is degenerate.
         """
+        # Shape contract: direct_samples is (n_eff, n_cells); ensemble_delta
+        # is (n_cells,). Validate before broadcasting so a bad ensemble
+        # predictor surfaces as a clear error rather than silent NumPy
+        # broadcasting that produces nonsense.
+        if direct_samples.ndim != 2:
+            raise ValueError(
+                f"direct_samples must be 2-D (n_eff, n_cells), "
+                f"got shape {direct_samples.shape}"
+            )
+        n_cells = direct_samples.shape[1]
+        ensemble_delta = np.asarray(ensemble_delta, dtype=np.float64)
+        if ensemble_delta.shape != (n_cells,):
+            raise ValueError(
+                f"ensemble_delta has shape {ensemble_delta.shape}; "
+                f"expected ({n_cells},) to match direct_samples"
+            )
+
+        # If the ensemble path failed and produced NaNs, skip blending and
+        # return the resolver posterior unchanged. The NaN signal has already
+        # been surfaced as a RuntimeWarning by _ensemble_delta.
+        if not np.all(np.isfinite(ensemble_delta)):
+            warnings.warn(
+                "ensemble_delta contains non-finite values; skipping blend "
+                "and returning resolver posterior unchanged",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return direct_samples
+
         if self.ensemble_blend_auto:
             lam = _fit_blend_weight_grid(direct_samples, ensemble_delta)
             self.ensemble_blend = lam  # surface for diagnostics
@@ -471,16 +507,71 @@ class ScenarioEngineV4:
         baseline_df: pd.DataFrame,
         modified_x: np.ndarray,
     ) -> np.ndarray:
-        """Call ``ensemble_predictor`` for baseline & modified frames."""
+        """Call ``ensemble_predictor`` for baseline & modified frames.
+
+        Returns an array of shape ``(n_cells,)`` with the predicted
+        treatment effect per cell. On any predictor or shape failure the
+        method returns a NaN-filled array (not zeros) so that downstream
+        blending propagates the failure visibly rather than silently
+        reporting Δ≈0. A RuntimeWarning is always emitted on failure.
+        """
+        n_cells = len(baseline_df)
+        nan_out = np.full(n_cells, np.nan, dtype=np.float64)
+
         modified_df = baseline_df.copy()
         modified_df[treatment] = modified_x
+
+        # Narrow exception scope: only catch errors from invoking the
+        # predictor or coercing its outputs. Programming errors (e.g.
+        # AttributeError on self) are intentionally allowed to surface.
         try:
-            base_pred = np.asarray(self.ensemble_predictor(baseline_df), dtype=np.float64).reshape(-1)
-            mod_pred = np.asarray(self.ensemble_predictor(modified_df), dtype=np.float64).reshape(-1)
-        except Exception as exc:
-            warnings.warn(f"ensemble_predictor failed: {exc}; returning zeros", RuntimeWarning)
-            return np.zeros(len(baseline_df), dtype=np.float64)
-        return mod_pred - base_pred
+            base_raw = self.ensemble_predictor(baseline_df)
+            mod_raw = self.ensemble_predictor(modified_df)
+        except (TypeError, ValueError, KeyError, RuntimeError) as exc:
+            warnings.warn(
+                f"ensemble_predictor failed for treatment={treatment!r}: "
+                f"{type(exc).__name__}: {exc}; returning NaN delta",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return nan_out
+
+        try:
+            base_pred = np.asarray(base_raw, dtype=np.float64).reshape(-1)
+            mod_pred = np.asarray(mod_raw, dtype=np.float64).reshape(-1)
+        except (TypeError, ValueError) as exc:
+            warnings.warn(
+                f"ensemble_predictor returned non-numeric output for "
+                f"treatment={treatment!r}: {type(exc).__name__}: {exc}; "
+                "returning NaN delta",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return nan_out
+
+        if base_pred.shape != (n_cells,) or mod_pred.shape != (n_cells,):
+            warnings.warn(
+                f"ensemble_predictor returned wrong shape for "
+                f"treatment={treatment!r}: expected ({n_cells},), got "
+                f"baseline={base_pred.shape} modified={mod_pred.shape}; "
+                "returning NaN delta",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return nan_out
+
+        delta = mod_pred - base_pred
+        if not np.all(np.isfinite(delta)):
+            n_bad = int(np.sum(~np.isfinite(delta)))
+            warnings.warn(
+                f"ensemble_predictor produced {n_bad}/{n_cells} non-finite "
+                f"delta values for treatment={treatment!r}; propagating NaN",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            # Keep finite entries; mark non-finite as NaN explicitly.
+            delta = np.where(np.isfinite(delta), delta, np.nan)
+        return delta
 
     # ------------------------------------------------------------------
     # Mode-2 indirect effects (DAG paths with MC³ pruning)

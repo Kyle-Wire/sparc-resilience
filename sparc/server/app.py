@@ -335,11 +335,165 @@ async def hardware_profile():
     """Return the auto-detected hardware tier and resulting pipeline knobs.
 
     Used by the desktop app to show a low-memory badge and to confirm that
-    safety mode is active before launching a long-running stage.
+    safety mode is active before launching a long-running stage. Includes
+    the safe caps + any active global/project overrides so the Performance
+    page can render the full picture in one round trip.
     """
     try:
-        from sparc.config.hardware_profile import detect_profile
-        return detect_profile().as_dict()
+        from sparc.config.hardware_profile import (
+            compute_safe_caps,
+            detect_profile,
+            detect_raw_profile,
+            reset_profile_cache,
+        )
+        from sparc.config.user_preferences import load_preferences
+
+        # Force a re-resolve so freshly-saved prefs are reflected.
+        reset_profile_cache()
+
+        raw = detect_raw_profile()
+        effective = detect_profile()
+        prefs = load_preferences()
+        global_perf = prefs.get("performance", {}) if isinstance(prefs.get("performance"), dict) else {}
+        project_perf = {}
+        if state.project_config is not None:
+            cfg_perf = state.project_config.get("performance", {})
+            if isinstance(cfg_perf, dict):
+                project_perf = cfg_perf
+
+        return {
+            "detected": raw.as_dict(),
+            "safe_caps": compute_safe_caps(raw),
+            "global_prefs": global_perf,
+            "project_overrides": project_perf,
+            "effective": effective.as_dict(),
+        }
+    except Exception as exc:  # pragma: no cover - defensive
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.get("/api/preferences")
+async def get_user_preferences():
+    """Return the global user preferences (machine-wide defaults)."""
+    try:
+        from sparc.config.user_preferences import get_prefs_path, load_preferences
+        return {"path": str(get_prefs_path()), "preferences": load_preferences()}
+    except Exception as exc:  # pragma: no cover - defensive
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.put("/api/preferences")
+async def update_user_preferences(body: dict[str, Any]):
+    """Replace or merge the global user preferences.
+
+    Body may contain top-level keys; ``performance`` is the supported one
+    today. The returned object includes the freshly-resolved hardware
+    profile so the UI can update its display in a single round trip.
+    """
+    try:
+        from sparc.config.hardware_profile import detect_profile, reset_profile_cache
+        from sparc.config.user_preferences import (
+            load_preferences,
+            save_preferences,
+            update_performance_preferences,
+        )
+
+        if "performance" in body and isinstance(body["performance"], dict):
+            update_performance_preferences(body["performance"])
+        else:
+            # Generic merge — caller knows what they are doing.
+            current = load_preferences()
+            current.update(body)
+            save_preferences(current)
+            reset_profile_cache()
+
+        return {
+            "preferences": load_preferences(),
+            "effective": detect_profile().as_dict(),
+        }
+    except Exception as exc:  # pragma: no cover - defensive
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.post("/api/hardware/validate")
+async def validate_performance_settings(body: dict[str, Any]):
+    """Validate proposed performance settings against the safe caps.
+
+    Returns ``{ ok, warnings: [...], errors: [...] }`` where warnings are
+    non-blocking (user may proceed via confirmation modal) and errors are
+    structurally invalid (negative values, unknown enum, etc.).
+    """
+    try:
+        from sparc.config.hardware_profile import (
+            VALID_PRESETS,
+            VALID_TIERS,
+            compute_safe_caps,
+            detect_raw_profile,
+        )
+
+        raw = detect_raw_profile()
+        caps = compute_safe_caps(raw)
+        warnings_out: list[dict[str, Any]] = []
+        errors_out: list[dict[str, Any]] = []
+
+        preset = body.get("preset")
+        if preset is not None and preset not in VALID_PRESETS:
+            errors_out.append({"field": "preset", "message": f"unknown preset '{preset}'"})
+
+        tier = body.get("hardware_tier_override")
+        if tier is not None and tier not in VALID_TIERS:
+            errors_out.append({"field": "hardware_tier_override", "message": f"unknown tier '{tier}'"})
+
+        for field, cap in (
+            ("max_workers", caps["max_workers"]),
+            ("outer_jobs", caps["outer_jobs"]),
+            ("inner_jobs", caps["inner_jobs"]),
+            ("batch_size", caps["batch_size"]),
+            ("nuts_thin", caps["nuts_thin"]),
+        ):
+            val = body.get(field)
+            if val is None:
+                continue
+            try:
+                n = int(val)
+            except (TypeError, ValueError):
+                errors_out.append({"field": field, "message": f"must be an integer"})
+                continue
+            if n < 1:
+                errors_out.append({"field": field, "message": "must be >= 1"})
+            elif n > cap:
+                warnings_out.append({
+                    "field": field,
+                    "value": n,
+                    "cap": cap,
+                    "message": f"{field}={n} exceeds the safe cap of {cap} for this hardware",
+                })
+
+        mem = body.get("memory_limit_gb")
+        if mem is not None:
+            try:
+                m = float(mem)
+                if m < 1.0:
+                    errors_out.append({"field": "memory_limit_gb", "message": "must be >= 1.0 GB"})
+                elif m > caps["memory_limit_gb"]:
+                    warnings_out.append({
+                        "field": "memory_limit_gb",
+                        "value": m,
+                        "cap": caps["memory_limit_gb"],
+                        "message": (
+                            f"memory_limit_gb={m:.1f} exceeds the safe cap of "
+                            f"{caps['memory_limit_gb']:.1f} GB; the OS may kill the pipeline"
+                        ),
+                    })
+            except (TypeError, ValueError):
+                errors_out.append({"field": "memory_limit_gb", "message": "must be numeric"})
+
+        return {
+            "ok": not errors_out,
+            "warnings": warnings_out,
+            "errors": errors_out,
+            "safe_caps": caps,
+        }
     except Exception as exc:  # pragma: no cover - defensive
         return JSONResponse({"error": str(exc)}, status_code=500)
 
@@ -1370,7 +1524,22 @@ def _scenario_library_dir() -> Path:
 
 @app.get("/scenarios/library")
 async def get_scenario_library():
+    """Return the scenario library (DB-first, with disk fallback).
+
+    Phase C7 makes the artifact store the canonical home for the scenario
+    library. We still fall back to ``library.jsonl`` on disk for legacy runs
+    that pre-date the dual-write migration.
+    """
     from sparc.scenario.library import build_timeline
+
+    if state.registry is not None:
+        from sparc.registry.store import ArtifactStore
+        from sparc.scenario import SCENARIO_LIBRARY, SCENARIO_STAGE
+
+        store = ArtifactStore(state.registry)
+        if store.has(SCENARIO_STAGE, SCENARIO_LIBRARY):
+            return store.read_struct(SCENARIO_STAGE, SCENARIO_LIBRARY)
+
     return build_timeline(_scenario_library_dir())
 
 
@@ -2151,39 +2320,42 @@ async def get_scenario_uncertainty(scenario_id: int | None = None):
         out = gdf[[*keep, gdf.geometry.name]].copy()
         if out.crs is not None and str(out.crs) != "EPSG:4326":
             out = out.to_crs(epsg=4326)
+        # Surface dedicated MC tables when present so the UI can render
+        # quantile fans / consensus diagnostics without a second round-trip.
+        mc_uncertainty_records: list[dict[str, Any]] | None = None
+        mc_consensus_records: list[dict[str, Any]] | None = None
+        mc_consensus_summary_records: list[dict[str, Any]] | None = None
+        if bundle.mc_uncertainty is not None and hasattr(bundle.mc_uncertainty, "to_dict"):
+            try:
+                mc_uncertainty_records = bundle.mc_uncertainty.to_dict(orient="records")
+            except Exception:
+                mc_uncertainty_records = None
+        if bundle.mc_consensus is not None and hasattr(bundle.mc_consensus, "to_dict"):
+            try:
+                mc_consensus_records = bundle.mc_consensus.to_dict(orient="records")
+            except Exception:
+                mc_consensus_records = None
+        if bundle.mc_consensus_summary is not None and hasattr(
+            bundle.mc_consensus_summary, "to_dict"
+        ):
+            try:
+                mc_consensus_summary_records = bundle.mc_consensus_summary.to_dict(
+                    orient="records"
+                )
+            except Exception:
+                mc_consensus_summary_records = None
         return {
             "geojson": out.__geo_interface__,
             "results_artifact_id": bundle.results_artifact_id,
+            "mc_uncertainty": mc_uncertainty_records,
+            "mc_consensus": mc_consensus_records,
+            "mc_consensus_summary": mc_consensus_summary_records,
         }
     raise HTTPException(500, "scenario results table is not a GeoDataFrame")
 
 
-@app.get("/results/scenario_library/timeline")
-async def get_scenario_library_timeline():
-    """Return the scenario library as a flat parent/child timeline for the UI."""
-    from sparc.registry.store import ArtifactStore
-    from sparc.scenario import SCENARIO_LIBRARY, SCENARIO_STAGE
-
-    if state.registry is None:
-        raise _missing_artifact_response(
-            artifact_id=SCENARIO_LIBRARY, stage=SCENARIO_STAGE,
-            hint="No active run registry.",
-        )
-    store = ArtifactStore(state.registry)
-    if not store.has(SCENARIO_STAGE, SCENARIO_LIBRARY):
-        # Fall back to the on-disk library.jsonl (still the producer today)
-        # but only as a read — no consumer writes there.
-        try:
-            from sparc.scenario.library import ScenarioTimeline
-            tl = ScenarioTimeline.load(state.registry.output_dir)
-            return {"entries": [e.model_dump() for e in tl.entries]}
-        except Exception:
-            raise _missing_artifact_response(
-                artifact_id=SCENARIO_LIBRARY, stage=SCENARIO_STAGE,
-                hint="No scenario library produced yet.",
-            )
-    payload = store.read_struct(SCENARIO_STAGE, SCENARIO_LIBRARY)
-    return payload
+# `/results/scenario_library/timeline` was removed in the Phase C7 audit —
+# it duplicated `/scenarios/library`, which is now DB-first with disk fallback.
 
 
 @app.get("/results/report")
@@ -2257,20 +2429,30 @@ async def get_report_data():
             if store.has("3", art_id):
                 report[key] = store.read_any("3", art_id)
 
-        # Stage 4 — scenario summary (mode-variant precedence)
-        for variant in (
-            "scenario_summary",
-            "scenario_summary_dag",
-            "scenario_summary_hybrid",
-            "scenario_summary_reprediction",
-            "scenario_mc_consensus_summary",
-            "scenario_mc_consensus",
+        # Stage 4 — scenario summary via ScenarioBundle so that the report
+        # reflects the same mode-variant precedence (hybrid > reprediction >
+        # dag > base) used everywhere else in the API surface. We also
+        # surface the chosen artifact ids so report consumers can show the
+        # user *which* variant fed the document.
+        from sparc.scenario import ScenarioBundle
+
+        bundle = ScenarioBundle.from_store(store)
+        if bundle.summary is not None and hasattr(bundle.summary, "to_dict"):
+            try:
+                report["scenario_summary"] = bundle.summary.to_dict(orient="records")
+            except Exception:
+                pass
+        elif bundle.mc_consensus_summary is not None and hasattr(
+            bundle.mc_consensus_summary, "to_dict"
         ):
-            if store.has("4", variant):
-                summary_df = store.read_any("4", variant)
-                if summary_df is not None and hasattr(summary_df, "to_dict"):
-                    report["scenario_summary"] = summary_df.to_dict(orient="records")
-                    break
+            try:
+                report["scenario_summary"] = bundle.mc_consensus_summary.to_dict(
+                    orient="records"
+                )
+            except Exception:
+                pass
+        report["scenario_results_artifact_id"] = bundle.results_artifact_id
+        report["scenario_summary_artifact_id"] = bundle.summary_artifact_id
     finally:
         set_active_registry(None)
 

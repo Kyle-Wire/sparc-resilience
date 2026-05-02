@@ -54,6 +54,9 @@ def _get_store() -> ArtifactStore | None:
 # Each sub-stage (MC³ → DML → NUTS) runs sequentially and gets
 # exclusive access to all CPU cores and available RAM, scaled by the
 # detected hardware tier so low-RAM machines don't get OOM-killed.
+#
+# These are populated at import and refreshed at the top of `run_bayesian_causal`
+# so user-changed performance settings take effect on the next pipeline run.
 # ---------------------------------------------------------------------------
 _PROFILE = detect_profile()
 _TOTAL_RAM_GB = _PROFILE.total_ram_gb
@@ -61,6 +64,19 @@ _N_CORES = _PROFILE.cpu_count
 _MEMORY_LIMIT_GB = _PROFILE.memory_limit_gb
 _HIGH_MEMORY = _PROFILE.high_memory_mode
 _NUTS_THIN = _PROFILE.nuts_thin
+
+
+def _refresh_hardware_globals() -> None:
+    """Re-read the hardware profile and refresh the module-level globals."""
+    global _PROFILE, _TOTAL_RAM_GB, _N_CORES, _MEMORY_LIMIT_GB, _HIGH_MEMORY, _NUTS_THIN
+    from sparc.config.hardware_profile import reset_profile_cache
+    reset_profile_cache()
+    _PROFILE = detect_profile()
+    _TOTAL_RAM_GB = _PROFILE.total_ram_gb
+    _N_CORES = _PROFILE.cpu_count
+    _MEMORY_LIMIT_GB = _PROFILE.memory_limit_gb
+    _HIGH_MEMORY = _PROFILE.high_memory_mode
+    _NUTS_THIN = _PROFILE.nuts_thin
 
 
 def run_bayesian_causal(
@@ -91,6 +107,9 @@ def run_bayesian_causal(
     dict with ``mc3_results``, ``nuts_results`` (if neural_model given),
     ``edge_probs``, ``posterior_summaries``.
     """
+    # Pick up any user-changed performance settings before this run.
+    _refresh_hardware_globals()
+
     from sparc.causal.mc3 import (
         DAGStructure,
         MC3Results,

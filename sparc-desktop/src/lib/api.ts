@@ -283,6 +283,90 @@ export const saveConfig = (config: Partial<ProjectConfig>) =>
   put<{ status: string }>("/project/config", config);
 
 // ------------------------------------------------------------------
+// Hardware profile + performance preferences
+// ------------------------------------------------------------------
+export type HardwareTier = "low" | "standard" | "high";
+export type PerformancePreset = "eco" | "balanced" | "performance" | "max" | "custom";
+
+export interface HardwareProfileSnapshot {
+  tier: HardwareTier;
+  total_ram_gb: number;
+  available_ram_gb: number;
+  cpu_count: number;
+  max_workers: number;
+  outer_jobs: number;
+  inner_jobs: number;
+  batch_size: number;
+  nuts_thin: number;
+  force_cpu: boolean;
+  high_memory_mode: boolean;
+  memory_limit_gb: number;
+  preset: PerformancePreset;
+  source: string;
+}
+
+export interface SafeCaps {
+  max_workers: number;
+  outer_jobs: number;
+  inner_jobs: number;
+  batch_size: number;
+  nuts_thin: number;
+  memory_limit_gb: number;
+  tiers: HardwareTier[];
+  presets: PerformancePreset[];
+}
+
+export interface PerformanceOverrides {
+  preset?: PerformancePreset;
+  hardware_tier_override?: HardwareTier;
+  max_workers?: number;
+  outer_jobs?: number;
+  inner_jobs?: number;
+  batch_size?: number;
+  nuts_thin?: number;
+  force_cpu?: boolean;
+  high_memory_mode?: boolean;
+  memory_limit_gb?: number;
+}
+
+export interface HardwareProfileResponse {
+  detected: HardwareProfileSnapshot;
+  safe_caps: SafeCaps;
+  global_prefs: PerformanceOverrides;
+  project_overrides: PerformanceOverrides;
+  effective: HardwareProfileSnapshot;
+}
+
+export interface ValidationIssue {
+  field: string;
+  value?: number;
+  cap?: number;
+  message: string;
+}
+
+export interface PerformanceValidation {
+  ok: boolean;
+  warnings: ValidationIssue[];
+  errors: ValidationIssue[];
+  safe_caps: SafeCaps;
+}
+
+export const getHardwareProfile = () =>
+  get<HardwareProfileResponse>("/api/hardware");
+
+export const getPreferences = () =>
+  get<{ path: string; preferences: { performance?: PerformanceOverrides } }>("/api/preferences");
+
+export const updatePreferences = (body: { performance?: PerformanceOverrides }) =>
+  put<{ preferences: { performance?: PerformanceOverrides }; effective: HardwareProfileSnapshot }>(
+    "/api/preferences",
+    body,
+  );
+
+export const validatePerformance = (overrides: PerformanceOverrides) =>
+  post<PerformanceValidation>("/api/hardware/validate", overrides);
+
+// ------------------------------------------------------------------
 // Report
 // ------------------------------------------------------------------
 export const generateReport = (format: "markdown" | "json" = "markdown") =>
@@ -460,6 +544,25 @@ export const getResultsAvailability = () =>
 export const getScenarioDetail = () =>
   get<ScenarioDetail>("/results/scenarios/detail");
 
+/**
+ * Parse a `scenario_results*` artifact id into its mode-variant tag.
+ * Mirrors the precedence handled server-side by `ScenarioBundle.from_store`.
+ */
+export const parseScenarioVariant = (
+  artifactId: string | null | undefined,
+): import("./types").ScenarioVariant | null => {
+  if (!artifactId) return null;
+  if (artifactId.endsWith("_hybrid")) return "hybrid";
+  if (artifactId.endsWith("_reprediction")) return "reprediction";
+  if (artifactId.endsWith("_dag")) return "dag";
+  if (
+    artifactId === "scenario_results" ||
+    artifactId === "scenario_summary"
+  )
+    return "base";
+  return "base";
+};
+
 export const getReportData = () =>
   get<ReportPayload>("/results/report");
 
@@ -520,8 +623,19 @@ export const getScenarioTrajectory = (scenarioId?: number | string) =>
       : "/results/scenarios/trajectory",
   );
 
+export interface ScenarioUncertaintyResponse {
+  geojson: GeoJsonData;
+  results_artifact_id?: string | null;
+  /** Per-cell MC quantile rows (mean/std/q05/q50/q95...) when MC sims ran. */
+  mc_uncertainty?: Record<string, unknown>[] | null;
+  /** Per-cell consensus across MC chains, when present. */
+  mc_consensus?: Record<string, unknown>[] | null;
+  /** Aggregate consensus diagnostics (one row per scenario), when present. */
+  mc_consensus_summary?: Record<string, unknown>[] | null;
+}
+
 export const getScenarioUncertainty = (scenarioId?: number | string) =>
-  get<GeoJsonData>(
+  get<ScenarioUncertaintyResponse>(
     scenarioId !== undefined && scenarioId !== ""
       ? `/results/scenarios/uncertainty?scenario_id=${encodeURIComponent(String(scenarioId))}`
       : "/results/scenarios/uncertainty",

@@ -3,7 +3,7 @@ import CubeLogo from "../brand/CubeLogo";
 const SECTIONS = [
   { label: "Setup", pages: ["Project", "Data", "Processing"] },
   { label: "Analysis", pages: ["DAG", "Variables", "Physics", "CRS", "Scenarios", "Models"] },
-  { label: "Pipeline", pages: ["Run", "Scenario Runner", "Results", "Decision Support", "Compare", "Report"] },
+  { label: "Pipeline", pages: ["Run", "Results", "Decision Support", "Compare", "Report"] },
 ] as const;
 
 const PAGES = SECTIONS.flatMap((s) => s.pages) as unknown as readonly PageName[];
@@ -11,7 +11,7 @@ const PAGES = SECTIONS.flatMap((s) => s.pages) as unknown as readonly PageName[]
 export type PageName =
   | "Project" | "Data" | "Processing"
   | "DAG" | "Variables" | "Physics" | "CRS" | "Scenarios" | "Models"
-  | "Run" | "Scenario Runner" | "Results" | "Decision Support" | "Compare" | "Report";
+  | "Run" | "Results" | "Decision Support" | "Compare" | "Report";
 
 interface SidebarProps {
   currentPage: PageName;

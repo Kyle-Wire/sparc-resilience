@@ -421,7 +421,6 @@ def _spy_read_table():
         ("/results/scenarios/attribution", "records"),
         ("/results/scenarios/trajectory", "records"),
         ("/results/model_performance", "models"),
-        ("/results/scenario_library/timeline", "entries"),
     ],
 )
 def test_viz_endpoint_reads_from_db_only(

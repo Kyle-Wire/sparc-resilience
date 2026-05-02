@@ -795,6 +795,62 @@
           "description": "Column containing the forced-response truth field (e.g. 'tos_trend_forced'). null = auto '{target}_forced'."
         }
       }
+    },
+
+    "performance": {
+      "type": "object",
+      "description": "Optional per-project hardware/parallelism overrides. Layered on top of any global user preferences and auto-detection. All fields are optional; omitting a field falls through to the global preference, then to the auto-detected default.",
+      "additionalProperties": false,
+      "properties": {
+        "preset": {
+          "type": "string",
+          "enum": ["eco", "balanced", "performance", "max", "custom"],
+          "description": "Named aggressiveness preset. 'custom' means individual fields below are authoritative."
+        },
+        "hardware_tier_override": {
+          "type": "string",
+          "enum": ["low", "standard", "high"],
+          "description": "Force a specific hardware tier classification (overrides RAM-based auto-detection)."
+        },
+        "max_workers": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum number of parallel worker processes for spatial CV."
+        },
+        "outer_jobs": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Outer-loop parallelism (folds executed concurrently)."
+        },
+        "inner_jobs": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Inner-loop parallelism (per-fold model parallelism)."
+        },
+        "batch_size": {
+          "type": "integer",
+          "minimum": 64,
+          "description": "Mini-batch size for neural training and large array operations."
+        },
+        "nuts_thin": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "MCMC trace thinning factor (higher = lower memory at the cost of effective sample size)."
+        },
+        "force_cpu": {
+          "type": "boolean",
+          "description": "Disable GPU even when one is available."
+        },
+        "high_memory_mode": {
+          "type": "boolean",
+          "description": "Enable aggressive in-memory caching and full-batch operations."
+        },
+        "memory_limit_gb": {
+          "type": "number",
+          "minimum": 1.0,
+          "description": "Per-stage memory ceiling enforced by the watchdog (GB)."
+        }
+      }
     }
 
   }

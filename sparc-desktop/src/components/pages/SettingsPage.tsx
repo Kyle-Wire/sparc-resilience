@@ -1,17 +1,37 @@
 import { useState, useCallback, useEffect } from "react";
-import { SectionHeader, Card, Btn, KeyVal } from "@/components/ui/DesignSystem";
+import { SectionHeader, Card, Btn, KeyVal, Tag } from "@/components/ui/DesignSystem";
 import { LOGO_HUES, PAPER_TONES, type LogoHue, type PaperTone, type ThemeSettings, loadTheme, applyTheme } from "@/lib/theme";
 import EasterEgg from "@/components/common/EasterEgg";
 import OnboardingTour, { resetOnboarding } from "@/components/common/OnboardingTour";
 import { useNotification } from "@/hooks/useNotifications";
+import { useHardwareProfile } from "@/hooks/useHardwareProfile";
+import { updatePreferences, type PerformancePreset } from "@/lib/api";
 
-export default function SettingsPage() {
+interface SettingsPageProps {
+  onNavigate?: (page: "Performance") => void;
+}
+
+export default function SettingsPage({ onNavigate }: SettingsPageProps = {}) {
   const [theme, setTheme] = useState<ThemeSettings>(loadTheme);
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("sparc_api_key") ?? "");
   const [serverPort, setServerPort] = useState("8008");
   const [showSnake, setShowSnake] = useState(false);
   const [tourOpen, setTourOpen] = useState(false);
   const { notify } = useNotification();
+  const { data: hwData, refresh: refreshHw } = useHardwareProfile(true);
+
+  const handlePresetQuick = useCallback(
+    async (preset: PerformancePreset) => {
+      try {
+        await updatePreferences({ performance: { preset } });
+        await refreshHw();
+        notify("success", `Performance preset set to ${preset}.`);
+      } catch (err) {
+        notify("error", `Failed to update preset: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [notify, refreshHw],
+  );
 
   // Apply theme on change
   useEffect(() => {
@@ -172,6 +192,82 @@ export default function SettingsPage() {
             <KeyVal label="Backend URL" value={`http://127.0.0.1:${serverPort}`} />
             <KeyVal label="WebSocket" value={`ws://127.0.0.1:${serverPort}/run/stream`} />
           </div>
+        </Card>
+      </div>
+
+      {/* Performance — quick controls; full panel on the Performance page */}
+      <div style={{ marginTop: 14 }}>
+        <Card
+          title="Performance"
+          subtitle="hardware tier, parallelism, memory"
+          actions={
+            <Btn small onClick={() => onNavigate?.("Performance")}>
+              Open advanced…
+            </Btn>
+          }
+        >
+          {hwData ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 14, alignItems: "center" }}>
+                <Tag>{hwData.detected.tier}</Tag>
+                <KeyVal
+                  label="Auto-detected"
+                  value={`${hwData.detected.total_ram_gb.toFixed(1)} GB RAM · ${hwData.detected.cpu_count} cores`}
+                />
+                <KeyVal
+                  label="Effective"
+                  value={`${hwData.effective.max_workers} workers · batch ${hwData.effective.batch_size}`}
+                />
+                <KeyVal label="Source" value={hwData.effective.source} />
+              </div>
+
+              <div>
+                <div
+                  className="mono"
+                  style={{
+                    fontSize: 9.5,
+                    color: "var(--muted)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.1em",
+                    marginBottom: 6,
+                  }}
+                >
+                  Quick preset
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {(["eco", "balanced", "performance", "max"] as PerformancePreset[]).map((p) => {
+                    const active = hwData.effective.preset === p;
+                    return (
+                      <button
+                        key={p}
+                        onClick={() => handlePresetQuick(p)}
+                        style={{
+                          padding: "5px 10px",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          borderRadius: 4,
+                          border: `1px solid ${active ? "var(--ink)" : "var(--line)"}`,
+                          background: active ? "var(--ink)" : "#fff",
+                          color: active ? "#fff" : "var(--ink-2)",
+                          cursor: "pointer",
+                          textTransform: "capitalize",
+                        }}
+                      >
+                        {p}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="mono" style={{ fontSize: 10, color: "var(--muted)", marginTop: 6 }}>
+                  Settings apply on the next pipeline run. Use Advanced for fine-grained overrides.
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="mono" style={{ fontSize: 11, color: "var(--muted)" }}>
+              Loading hardware profile…
+            </div>
+          )}
         </Card>
       </div>
 

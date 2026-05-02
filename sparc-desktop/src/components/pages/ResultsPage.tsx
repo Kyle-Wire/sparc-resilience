@@ -12,6 +12,7 @@ import {
   freezeCurrentRun,
   downloadStandaloneSnapshot,
   parseMissingArtifact,
+  parseScenarioVariant,
   type CausalSensitivity,
   type NegativeControlResponse,
 } from "@/lib/api";
@@ -971,6 +972,32 @@ export default function ResultsPage() {
                   {mode === "map" ? "Map" : mode === "scenarios" ? "Scenarios" : mode === "histogram" ? "Histogram" : mode === "correlogram" ? "Correlogram" : "Causal"}
                 </button>
               ))}
+              {/* Variant pill — surfaces which scenario_results variant is active (G1) */}
+              {viewMode === "scenarios" && scenarioDetail?.results_artifact_id && (() => {
+                const v = parseScenarioVariant(scenarioDetail.results_artifact_id);
+                const color =
+                  v === "hybrid" ? "var(--purple)" :
+                  v === "reprediction" ? "var(--amber)" :
+                  v === "dag" ? "var(--crimson)" : "var(--muted)";
+                return (
+                  <span
+                    className="mono"
+                    title={`active artifact: ${scenarioDetail.results_artifact_id}`}
+                    style={{
+                      padding: "2px 7px",
+                      fontSize: 9.5,
+                      borderRadius: 3,
+                      border: `1px solid ${color}`,
+                      color,
+                      fontWeight: 700,
+                      letterSpacing: 0.4,
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    variant · {v}
+                  </span>
+                );
+              })()}
               {/* Map layer selector (only shown in map mode with predictions data) */}
               {viewMode === "map" && mapLayerOptions.length > 0 && (
                 <select

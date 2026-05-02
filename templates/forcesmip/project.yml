@@ -66,7 +66,7 @@ physics:
     ocean_basin: 0
 
 causal:
-  dag_file: "causal/forcesmip_dag.yml"
+  dag_file: "causal/dag.yml"
   estimator: "dml"
   dml_shrinkage: 0.3
   dml_cv_folds: 5
