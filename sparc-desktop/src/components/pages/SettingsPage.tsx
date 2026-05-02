@@ -5,8 +5,8 @@ import EasterEgg from "@/components/common/EasterEgg";
 import OnboardingTour, { resetOnboarding } from "@/components/common/OnboardingTour";
 import { useNotification } from "@/hooks/useNotifications";
 import { useHardwareProfile } from "@/hooks/useHardwareProfile";
-import { updatePreferences, type PerformancePreset } from "@/lib/api";
-
+import { updatePreferences, type PerformancePreset } from "@/lib/api";import { pickFolder } from "@/lib/fileDialogs";
+import { getWorkspaceDir, setWorkspaceDir } from "@/lib/workspacePrefs";
 interface SettingsPageProps {
   onNavigate?: (page: "Performance") => void;
 }
@@ -17,8 +17,23 @@ export default function SettingsPage({ onNavigate }: SettingsPageProps = {}) {
   const [serverPort, setServerPort] = useState("8008");
   const [showSnake, setShowSnake] = useState(false);
   const [tourOpen, setTourOpen] = useState(false);
+  const [workspaceDir, setWorkspaceDirState] = useState<string | null>(() => getWorkspaceDir());
   const { notify } = useNotification();
   const { data: hwData, refresh: refreshHw } = useHardwareProfile(true);
+
+  const handlePickWorkspace = useCallback(async () => {
+    const picked = await pickFolder();
+    if (!picked) return;
+    setWorkspaceDir(picked);
+    setWorkspaceDirState(picked);
+    notify("success", "Default workspace folder saved");
+  }, [notify]);
+
+  const handleClearWorkspace = useCallback(() => {
+    setWorkspaceDir(null);
+    setWorkspaceDirState(null);
+    notify("info", "Workspace folder cleared");
+  }, [notify]);
 
   const handlePresetQuick = useCallback(
     async (preset: PerformancePreset) => {
@@ -191,6 +206,42 @@ export default function SettingsPage({ onNavigate }: SettingsPageProps = {}) {
 
             <KeyVal label="Backend URL" value={`http://127.0.0.1:${serverPort}`} />
             <KeyVal label="WebSocket" value={`ws://127.0.0.1:${serverPort}/run/stream`} />
+          </div>
+        </Card>
+      </div>
+
+      {/* Workspace folder — default location for new projects */}
+      <div style={{ marginTop: 14 }}>
+        <Card title="Workspace folder" subtitle="default location for new projects">
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div
+              className="mono"
+              style={{
+                fontSize: 11,
+                color: workspaceDir ? "var(--ink-2)" : "var(--muted)",
+                padding: "6px 8px",
+                border: "1px dashed var(--line)",
+                borderRadius: 4,
+                background: "#fff",
+                wordBreak: "break-all",
+              }}
+            >
+              {workspaceDir ?? "Not set — you'll be asked per project"}
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <Btn small onClick={handlePickWorkspace}>
+                Choose folder…
+              </Btn>
+              {workspaceDir && (
+                <Btn small onClick={handleClearWorkspace}>
+                  Clear
+                </Btn>
+              )}
+            </div>
+            <div className="mono" style={{ fontSize: 10, color: "var(--muted)" }}>
+              When set, clicking a template scaffolds <code>&lt;workspace&gt;/&lt;template&gt;_project</code> with no prompt.
+              The wizard's output path also defaults here.
+            </div>
           </div>
         </Card>
       </div>

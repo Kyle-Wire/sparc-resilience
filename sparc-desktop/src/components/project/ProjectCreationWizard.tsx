@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { Card, Btn, Tag } from "@/components/ui/DesignSystem";
 import { listTemplates, createProject } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
+import { getWorkspaceDir, setWorkspaceDir, joinPath } from "@/lib/workspacePrefs";
 import type { TemplateInfo } from "@/lib/types";
 
 /**
@@ -101,16 +102,17 @@ export default function ProjectCreationWizard({
   const set = <K extends keyof WizardState>(k: K, v: WizardState[K]) =>
     setS((prev) => ({ ...prev, [k]: v }));
 
-  // Default the output dir name from the project name
+  // Default the output dir from the workspace pref + slugged project name.
   useEffect(() => {
-    if (!s.outputDir && s.name) {
-      const safe = s.name
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "_")
-        .replace(/^_|_$/g, "");
-      if (safe) set("outputDir", safe);
-    }
+    if (s.outputDir || !s.name) return;
+    const safe = s.name
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_|_$/g, "");
+    if (!safe) return;
+    const ws = getWorkspaceDir();
+    set("outputDir", ws ? joinPath(ws, safe) : safe);
   }, [s.name]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const stepValid = useMemo(() => {

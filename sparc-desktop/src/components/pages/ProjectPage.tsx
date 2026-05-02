@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import { SectionHeader, Card, KeyVal, Tag, Btn } from "@/components/ui/DesignSystem";
 import { getConfig, saveConfig, listTemplates, initProject, dataSummary, getRunEvents } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
+import { pickFolder, pickYaml } from "@/lib/fileDialogs";
+import { getWorkspaceDir, setWorkspaceDir, joinPath } from "@/lib/workspacePrefs";
 import ProjectCreationWizard from "@/components/project/ProjectCreationWizard";
 import type { ProjectConfig, TemplateInfo, DataSummary, PipelineEvent } from "@/lib/types";
 
@@ -100,12 +102,25 @@ export default function ProjectPage({ projectPath, onProjectLoaded }: ProjectPag
 
   const handleTemplateClick = useCallback(
     async (t: TemplateInfo) => {
-      const home = prompt("Choose output directory:", `${t.name}_project`);
-      if (!home) return;
+      // Determine the parent directory: workspace pref if set, else native picker.
+      let parent = getWorkspaceDir();
+      let savedNew = false;
+      if (!parent) {
+        const picked = await pickFolder();
+        if (!picked) return; // user cancelled
+        parent = picked;
+        savedNew = true;
+      }
+      const output = joinPath(parent, `${t.name}_project`);
       try {
-        const res = await initProject(t.name, home);
+        const res = await initProject(t.name, output);
         await onProjectLoaded(res.project_yml, { template: t.name });
-        notify("success", `Project created from ${t.name} template`);
+        if (savedNew) {
+          setWorkspaceDir(parent);
+          notify("success", `Project created · saved "${parent}" as default workspace`);
+        } else {
+          notify("success", `Project created from ${t.name} template`);
+        }
       } catch (e) {
         notify("error", e instanceof Error ? e.message : "Failed to create project");
       }
@@ -114,17 +129,8 @@ export default function ProjectPage({ projectPath, onProjectLoaded }: ProjectPag
   );
 
   const handleOpenYml = useCallback(async () => {
-    try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const path = await open({
-        filters: [{ name: "YAML", extensions: ["yml", "yaml"] }],
-        multiple: false,
-      });
-      if (path) await onProjectLoaded(path as string);
-    } catch {
-      const path = prompt("Enter path to project.yml:");
-      if (path) await onProjectLoaded(path);
-    }
+    const path = await pickYaml();
+    if (path) await onProjectLoaded(path);
   }, [onProjectLoaded]);
 
   const project = config?.project ?? {};

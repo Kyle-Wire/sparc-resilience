@@ -68,11 +68,29 @@ HIDDEN_IMPORTS = [
     "uvicorn.protocols.http.auto",
     "uvicorn.protocols.websockets",
     "uvicorn.protocols.websockets.auto",
+    # Concrete WebSocket implementations — uvicorn.auto resolves these
+    # lazily at connect time. Without explicit hidden imports the
+    # PyInstaller bundle accepts a WS handshake then closes immediately
+    # because the impl module fails to import (causes the desktop
+    # "Stream: open -> closed" flicker).
+    "uvicorn.protocols.websockets.websockets_impl",
+    "uvicorn.protocols.websockets.wsproto_impl",
     "uvicorn.lifespan",
     "uvicorn.lifespan.on",
     "fastapi",
     "starlette",
     "websockets",
+    "websockets.legacy",
+    "websockets.legacy.server",
+    "websockets.legacy.protocol",
+    "websockets.exceptions",
+    "wsproto",
+    "wsproto.connection",
+    "wsproto.events",
+    "wsproto.extensions",
+    "wsproto.frame_protocol",
+    "wsproto.handshake",
+    "wsproto.utilities",
     "multipart",
     "torch",
     "geopandas",
@@ -145,6 +163,14 @@ def build(target_dir: str | None = None):
         "--clean",
         "--noconfirm",
     ]
+
+    # On Windows, build a windows-subsystem binary so no console window
+    # pops up when Tauri spawns the sidecar. stdout/stderr still flow to
+    # the parent-attached log file via Stdio::from(file). Do NOT pass
+    # this on macOS — it produces a .app bundle instead of a plain
+    # binary, breaking the Tauri sidecar resource convention.
+    if sys.platform == "win32":
+        cmd.append("--noconsole")
 
     for imp in HIDDEN_IMPORTS:
         cmd.extend(["--hidden-import", imp])

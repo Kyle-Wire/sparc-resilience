@@ -99,12 +99,18 @@ class ArtifactStreamClient {
     };
 
     ws.onerror = () => {
-      this.setStatus("error");
+      // Don't surface "error" as a visible state — the reconnect path will
+      // handle it. Surfacing it causes a brief red/grey flicker in the UI
+      // every time the socket churns.
     };
 
     ws.onclose = () => {
       this.ws = null;
-      this.setStatus("closed");
+      // If we were previously open, jump straight to "connecting" instead
+      // of "closed" so the UI pill doesn't flicker between states during
+      // an immediate reconnect. We only show "closed" if no reconnect is
+      // pending (e.g. tab is unloading).
+      this.setStatus("connecting");
       this.scheduleReconnect();
     };
   }

@@ -206,12 +206,28 @@ pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
 
     if let Some(ref path) = sidecar_path {
         if path.exists() {
-            match Command::new(path)
+            // On Windows, suppress the console window for the bundled sidecar
+            // exe just like we do for the Python fallback below. Without this,
+            // a `cmd.exe`-style console pops up alongside the desktop app.
+            #[cfg(target_os = "windows")]
+            let spawn_result = {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x08000000;
+                Command::new(path)
+                    .args(["server", "--port", port])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .stdout(stdio(&log_file))
+                    .stderr(stdio(&log_file))
+                    .spawn()
+            };
+            #[cfg(not(target_os = "windows"))]
+            let spawn_result = Command::new(path)
                 .args(["server", "--port", port])
                 .stdout(stdio(&log_file))
                 .stderr(stdio(&log_file))
-                .spawn()
-            {
+                .spawn();
+
+            match spawn_result {
                 Ok(_child) => {
                     println!("Sidecar server started on port {port}");
                     return Ok(());

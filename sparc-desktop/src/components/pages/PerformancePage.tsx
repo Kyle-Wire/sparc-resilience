@@ -150,8 +150,15 @@ export default function PerformancePage() {
       <SectionHeader kicker="settings" label="Performance" />
 
       {error && (
-        <Card title="Error" subtitle="failed to load hardware profile">
-          <div style={{ fontSize: 12, color: "#c84545" }}>{error}</div>
+        <Card title="Hardware profile unavailable" subtitle="see hint below">
+          <div style={{ fontSize: 12, color: "#c84545", marginBottom: 8 }}>{error}</div>
+          {error.includes("404") && (
+            <div className="mono" style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.6 }}>
+              The <code>/api/hardware</code> endpoint is missing. Your bundled sidecar may be out
+              of date — rebuild it from the repo root with <code>python build-sidecar.py
+              --target-dir sparc-desktop/src-tauri/binaries</code>, then relaunch the app.
+            </div>
+          )}
         </Card>
       )}
 
