@@ -1,7 +1,18 @@
 """Wager (2025) causal-inference audit registry.
 
-Tracks which of the 10 audit gaps have landed. Each gap module flips its
-flag on import success; ``sparc audit causal`` reads this registry.
+Tracks which of the 10 audit gaps have landed. Two complementary
+mechanisms populate :data:`WAGER2025_GAPS_ADDRESSED`:
+
+* :func:`_autodetect` — invoked by ``sparc audit causal`` and the
+  Stage-3 add-on runner; imports each gap module and (for Gap 10) checks
+  a module-level capability flag. Used to surface implementation status
+  even when the gap code path has not actually executed in this run.
+* :func:`mark_addressed` — called at runtime from inside individual gap
+  implementations (e.g. ``EmpiricalWelfareMaximizer.fit`` calls
+  ``mark_addressed(8)``) to record that the gap actually ran during the
+  current process.
+
+``report()`` formats the resulting flags into a checklist.
 """
 
 from __future__ import annotations

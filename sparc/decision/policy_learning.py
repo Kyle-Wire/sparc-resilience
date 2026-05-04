@@ -76,7 +76,7 @@ class EmpiricalWelfareMaximizer:
         elif self.policy_class == "sparse":
             self._result = self._fit_sparse(X, gamma, cost)
         else:
-            self._result = self._fit_tree(X, gamma)
+            self._result = self._fit_tree(X, gamma, cost)
 
         mark_addressed(8)
         return self
@@ -160,18 +160,24 @@ class EmpiricalWelfareMaximizer:
 
     # ----------------------------------------------------------------- tree
 
-    def _fit_tree(self, X: np.ndarray, gamma: np.ndarray) -> PolicyResult:
+    def _fit_tree(self, X: np.ndarray, gamma: np.ndarray,
+                  cost: np.ndarray) -> PolicyResult:
         tree = DecisionTreeRegressor(max_depth=self.tree_depth)
         tree.fit(X, gamma)
         leaf_pred = tree.predict(X)
         # Treat units whose leaf has positive predicted score.
         treated = leaf_pred > 0
         if self.budget is not None:
-            # If budget binds, restrict to top-budget units within the
-            # positive-score set, ranked by predicted gain.
+            # Cost-aware budget enforcement: rank positive-score units by
+            # predicted gain (descending) and take the longest prefix
+            # whose cumulative ``cost`` does not exceed ``budget``.  This
+            # matches the contract documented in the module docstring and
+            # in :meth:`_fit_linear`.
             order = np.argsort(-leaf_pred)
-            cum = np.cumsum(np.ones_like(order))
-            keep = order[(cum <= self.budget) & (leaf_pred[order] > 0)]
+            cumcost = np.cumsum(cost[order])
+            positive = leaf_pred[order] > 0
+            feasible = (cumcost <= self.budget) & positive
+            keep = order[feasible]
             treated = np.zeros_like(treated, dtype=bool)
             treated[keep] = True
         return PolicyResult(

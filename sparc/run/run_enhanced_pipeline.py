@@ -53,8 +53,13 @@ def check_stage_completion(stage_name):
         # approval gate); not stored in artifacts.db.
         return os.path.exists(paths.gwen_approved)
     elif stage_name == "Variogram Analysis":
-        return (exists_path(paths.variogram_results, stage="0", artifact_id="correlogram_results")
-                and exists_path(paths.variogram_summary, stage="0", artifact_id="correlogram_summary"))
+        # Stage 0 writes ``correlogram_analysis_results.json`` (see
+        # ``PipelinePaths.correlogram_results``); pair the matching
+        # summary path so artifact id, filename and stage naming all
+        # agree, otherwise legacy disk-mode flags this stage as
+        # incomplete even when the artifacts are present.
+        return (exists_path(paths.correlogram_results, stage="0", artifact_id="correlogram_results")
+                and exists_path(paths.correlogram_summary, stage="0", artifact_id="correlogram_summary"))
     elif stage_name == "Pipeline Configuration":
         return exists_path(paths.pipeline_config, stage="2", artifact_id="pipeline_config")
     elif stage_name == "Enhanced Spatial CV":

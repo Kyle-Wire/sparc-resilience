@@ -94,10 +94,15 @@ def merged_causal_block(user: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def warn_missing_subblocks(user: Dict[str, Any]) -> list[str]:
-    """Return human-readable warnings for missing sub-blocks."""
-    user = user or {}
+    """Return human-readable warnings for missing sub-blocks.
+
+    Short-circuits when the entire ``causal:`` block was omitted from
+    project.yml — in that case the user has clearly opted in to the
+    full Wager-2025 defaults, so warning for every individual sub-block
+    would be noise on every run.
+    """
     msgs: list[str] = []
-    if "causal" not in {"causal"} and not user:
+    if not user:
         return msgs
     for sub in _REQUIRED_SUBKEYS:
         if sub not in user:
