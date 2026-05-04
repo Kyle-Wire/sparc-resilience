@@ -1,0 +1,426 @@
+# =============================================================================
+# SPARC Project Configuration — Urban Heat Island Template
+# =============================================================================
+# This is the complete project template for UHI analysis with SPARC v2.1.
+# Scaffold with:  sparc init --template uhi --output ./my_project
+# Then edit paths, CRS, predictors, and scenarios for your study area.
+#
+# Usage:
+#   sparc validate --project project.yml
+#   sparc run      --project project.yml --stage all
+# =============================================================================
+
+project:
+  name: "Brown University Urban Heat Island Analysis"
+  description: "Spatial regression analysis of ambient air temperature z-scores across the Brown University campus and surrounding Providence neighborhoods"
+  domain: uhi
+  version: "2.1.0"
+  author: "SPARC Labs LLC"
+  response_units: "°F"      # Units for the target variable (used in reports & physics priors)
+
+# ---------------------------------------------------------------------------
+# Input Data
+# ---------------------------------------------------------------------------
+data:
+  file_path: "/Users/kylewire/Desktop/sparc-resilience/my_project/brown4.csv"              # Relative to this file, or absolute
+  target_column: "AAT_z"                       # Ambient Air Temperature z-score
+  identifier_column: "OBJECTID"                # Unique row ID
+  coord_columns: ["POINT_X", "POINT_Y"]        # [Easting, Northing]
+  areas_of_interest_file: "../data/Areas_of_Interest.csv"  # Optional zone/district mapping
+
+# ---------------------------------------------------------------------------
+# Coordinate Reference Systems
+# ---------------------------------------------------------------------------
+crs:
+  input: "EPSG:3438"          # Rhode Island State Plane (NAD83, feet)
+  projected: "EPSG:26919"     # NAD83 / UTM zone 19N (meters) — used for all spatial ops
+
+# ---------------------------------------------------------------------------
+# Predictor Variables
+# ---------------------------------------------------------------------------
+predictors:
+  - Distance_from_water_m
+  - Pct_Impervious
+  - Pct_Canopy
+  - NDVI
+  - Albedo
+  - Elevation_m
+
+# ---------------------------------------------------------------------------
+# Physics / Domain Constraints
+# ---------------------------------------------------------------------------
+physics:
+  priors_file: "physics/priors.yml"    # Literature-based coefficients
+  caps_file:   "physics/caps.yml"      # Hard bounds, delta limits, monotonicity rules
+
+  # Monotone constraints applied to the meta-ensemble and spatial models.
+  # -1 = more of this variable → lower response (cooling)
+  # +1 = more of this variable → higher response (warming)
+  #  0 = unconstrained
+  monotone_constraints:
+    Pct_Canopy: -1
+    Pct_Impervious: 1
+    NDVI: -1
+    Albedo: -1
+    Elevation_m: 0
+    Distance_from_water_m: 0
+
+# ---------------------------------------------------------------------------
+# Causal DAG (for counterfactual scenario simulation)
+# ---------------------------------------------------------------------------
+causal:
+  dag_file: "causal/dag.yml"
+  estimator: "dml"              # "dml" (Wager 2025 default, cross-fit DML), "hgb", or "ols"
+  estimate_cate: true           # Spatial CATE via Bayesian low-rank GP
+  inference: "bayesian"         # "bayesian" (V2 default: MC³ + NUTS) or "frequentist" (V1, deprecated)
+  cate_estimator: "bayesian"
+  discovery:
+    enabled: true
+    methods: [pc_stable, lingam, ges]
+    alpha: 0.05
+    consensus_threshold: 2      # min methods that must agree to keep an edge
+    compare_expert: true
+  mc3:
+    n_iterations: 10000
+    n_chains: 4
+    burnin_fraction: 0.25
+    edge_penalty: 1.0
+    seed: 42
+  nuts:
+    n_samples: 2000
+    n_warmup: 500
+    n_chains: 2
+    target_accept_rate: 0.85
+    max_tree_depth: 8
+  bayesian_cate:
+    n_features: 16              # low-RAM laptops: 16; servers: 32+
+    n_samples: 2000
+    n_warmup: 500
+    n_chains: 2
+    target_accept_rate: 0.85
+    max_tree_depth: 8
+    kernel_lengthscale: 0.20
+  wager2025:
+    overlap: true               # Gap 1: positivity diagnostic
+    rate_qini: true             # Gap 2: rank-average treatment effect
+    spillover: true             # Gap 3: SUTVA / network interference
+    iv: true                    # Gaps 4-5: IV / MTE (only fires if DAG has instrument)
+    sequential_aipw: true       # Gap 6: time-varying treatments
+    panel: true                 # Gap 7: DID / SDID (only fires with panel cols)
+    policy_learning: true       # Gap 8: empirical welfare maximisation
+    cbps: true                  # Gap 9: covariate-balanced propensity score
+  actionable_variables:
+    - Pct_Canopy
+    - Pct_Impervious
+    - NDVI
+    - Albedo
+  fixed_variables:
+    - Elevation_m
+    - Distance_from_water_m
+
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
+output:
+  base_dir: "output"
+  stage_dirs:
+    stage_0: "Stage_0_Correlogram"
+    stage_1: "Stage_1_GWEN"
+    stage_2: "Stage_2_Spatial_CV"
+    stage_3: "Stage_3_Causal_Validation"
+    stage_4: "Stage_4_Scenarios"
+    final:   "Final_Interpretation_Results"
+
+# ---------------------------------------------------------------------------
+# Pipeline Globals
+# ---------------------------------------------------------------------------
+pipeline:
+  random_seed: 42
+  n_spatial_folds: 5
+  fast_mode: false
+  overwrite_outputs: false
+  run_mc_uncertainty: true       # Run Monte-Carlo uncertainty propagation in Stage 4
+  n_mc_draws: 50                 # Number of MC draws
+  # Scenario simulation mode —
+  #   auto (default): hybrid if DAG exists, else physics-only
+  #   hybrid: model-consensus direct + DAG indirect
+  #   dag_coefficient: MGWR+DAG coefficient based
+  #   model_reprediction: full base-model re-prediction
+  scenario_mode: "auto"
+  # Global sensitivity analysis (Morris or Sobol)
+  # run_sensitivity_analysis: true
+  # sensitivity_method: "morris"   # "morris" or "sobol"
+
+flags:
+  use_gwen_selection: true
+  include_gwrf_in_ensemble: true
+  use_laplacian_eigenmaps_in_ols: false
+
+# ---------------------------------------------------------------------------
+# Model Hyperparameters
+# ---------------------------------------------------------------------------
+models:
+
+  gwr:
+    bandwidth: null          # null = auto-select via correlogram
+    kernel: "gaussian"
+    alpha: 0.1
+    min_points: 50
+
+  gwrf:
+    n_estimators: 100
+    k_neighbors: 100
+    min_samples_leaf: 5
+    n_jobs: 1
+    subsample_fraction: null
+    subsample_n: null
+
+  ggpgam:
+    n_splines: 5
+    n_spatial_bases: 10
+    lam: 0.6
+    max_iter: 100
+
+  meta_ensemble:
+    algorithm: "neural"
+    include_base_features: true
+    include_laplacian_pca: true
+
+  # V2 Neural Meta-Learner
+  meta_learner: "neural"
+
+  neural:
+    hidden_dim: 256
+    dropout: 0.1
+    n_heads: 4
+    max_neighbors: 128
+    siren_omega: 30.0
+    exceedance_thresholds: [0.25, 0.50, 0.75]
+
+  spatial_cv:
+    block_size: 300          # Block size in meters (300m for fine-grained urban analysis)
+    buffer_size: 100         # Buffer zone in meters between train/test folds
+    block_size_source: "user" # "user" = honour block_size above; "correlogram" = auto from Stage 1
+    method: "block"
+    stratify_y: true
+
+# ---------------------------------------------------------------------------
+# V2 Process Rate Network (domain-specific physical rate parameter)
+# ---------------------------------------------------------------------------
+process_rate:
+  enabled: true
+  name: "thermal_admittance"
+  units: "W·m⁻²·K⁻¹"
+  bounds: [0.5, 12.0]           # Physical bounds for thermal admittance
+  prior_mean: 4.0               # Literature default
+  inputs:                        # Features that drive the process rate
+    - Pct_Impervious
+    - Albedo
+    - Elevation_m
+
+# ---------------------------------------------------------------------------
+# V2 Training Configuration
+# ---------------------------------------------------------------------------
+training:
+  n_epochs: 100
+  batch_size: 512
+  learning_rate: 0.001
+  lambda_mse: 1.0
+  lambda_exceedance: 0.1
+  lambda_physics: 0.01
+  lambda_smooth_pred: 0.01
+  lambda_smooth_alpha: 0.001
+  lambda_alpha_prior: 1.0
+  lambda_surrogate: 0.1
+  lambda_neighbor: 0.1
+
+# ---------------------------------------------------------------------------
+# V2 Optimization
+# ---------------------------------------------------------------------------
+optimization:
+  run_cma_es: false             # Set true for automatic hyperparameter tuning
+  clip_norm: 1.0
+  swa_epochs: 20
+  capacity_sweep: false
+
+# ---------------------------------------------------------------------------
+# JEPA — Self-supervised auxiliary objective on the SharedTrunk
+# ---------------------------------------------------------------------------
+# V-JEPA 2-style: EMA target trunk + masked-channel context + latent
+# predictor with VICReg anti-collapse. Pure additive — when `enable: false`
+# the training loop is byte-identical to pre-JEPA behavior.
+#
+# Phase 1 (representation learning):
+#   Improves trunk representations from unlabeled spatial structure.
+# Phase 2 (action-conditioned predictor + latent PDE + scenario distillation):
+#   Sharpens out-of-support counterfactual scenarios (Stage 4) and feeds the
+#   causal_stack via the γ_latent blend.
+#
+# Recommended starting point: enable Phase 1 first (defaults below).
+# Turn on Phase 2 weights (lambda_scenario, lambda_latent_pde, predictor_film)
+# once Phase 1 trains stably.
+# ---------------------------------------------------------------------------
+jepa:
+  enable: true                  # Master switch
+  mask_ratio: 0.4               # P(zero each physics input channel for context branch)
+  lambda: 1.0                   # Base weight on JEPA loss (× curriculum_weight(epoch))
+
+  # EMA target trunk schedule
+  ema_tau_start: 0.99
+  ema_tau_end:   0.9999
+  ema_warmup_steps: 1000
+
+  # Curriculum (ramps in after supervised loss has shape)
+  curriculum_start: 5
+  curriculum_end:   15
+
+  # VICReg anti-collapse terms (inside JEPA loss)
+  lambda_align:      1.0        # Cosine alignment
+  lambda_variance:   1.0        # Variance hinge (prevents constant features)
+  lambda_covariance: 0.04       # Off-diagonal covariance penalty
+  variance_gamma:    1.0        # Hinge target σ
+
+  # Phase 2 — action-conditioned predictor & scenario distillation
+  action_dim:        64         # Action embedding dim fed to predictor
+  predictor_blocks:  2          # 1 = Phase 1 MLP; >1 = residual blocks
+  predictor_film:    true       # FiLM-modulate predictor blocks by action embedding
+  lambda_scenario:   0.5        # Action-conditioned scenario distillation (0 = disabled)
+  lambda_latent_pde: 0.1        # Latent-space Laplacian smoothness (0 = disabled)
+  scenario_perturb_std: 0.5     # σ of Gaussian perturbations (normalised feature units)
+
+# ---------------------------------------------------------------------------
+# GWEN Variable Selection
+# ---------------------------------------------------------------------------
+gwen:
+  sample_size: 5000
+  k_neighbors: 500
+  cv_folds: 5
+  selection_threshold: 0.1
+  l1_ratios: [0.1, 0.5, 0.7, 0.9, 0.95, 0.99]
+  n_alphas: 100
+  spatial_cv: false             # Standard k-fold is sufficient for screening
+  local_cv: false               # Reuse global alpha for local models (much faster)
+  stability_folds: 0            # 0 = disabled; set to 5 for full stability scoring
+  # block_size: null            # Inherits from models.spatial_cv.block_size when spatial_cv is true
+
+# ---------------------------------------------------------------------------
+# Laplacian Eigenmaps
+# ---------------------------------------------------------------------------
+laplacian:
+  n_eigenmaps: 150
+  k_for_swm: 10
+
+# ---------------------------------------------------------------------------
+# Intervention Scenarios (for physics-constrained simulation)
+# ---------------------------------------------------------------------------
+scenarios:
+  - name: "Canopy Increase"
+    variable: Pct_Canopy
+    direction: increase
+    increments: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+    min_val: 0
+    max_val: 100
+    unit: "percentage points"
+
+  - name: "Impervious Decrease"
+    variable: Pct_Impervious
+    direction: decrease
+    increments: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+    min_val: 0
+    max_val: 100
+    unit: "percentage points"
+
+  - name: "Albedo Increase"
+    variable: Albedo
+    direction: increase
+    increments: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
+    min_val: 0.05
+    max_val: 0.70
+    unit: "reflectance"
+
+  - name: "NDVI Increase"
+    variable: NDVI
+    direction: increase
+    increments: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
+    min_val: -0.1
+    max_val: 0.9
+    unit: "index"
+
+# ---------------------------------------------------------------------------
+# Joint (Multi-Variable) Scenarios
+# ---------------------------------------------------------------------------
+# Each joint scenario simultaneously changes multiple predictors in a single
+# simulation pass.  The DAG cross-predictor edges can optionally auto-propagate
+# induced changes to variables not listed (e.g. Canopy ↑ auto-raises NDVI).
+#
+# Combined physical constraints (e.g. Canopy + Impervious ≤ 100%) are enforced
+# automatically inside the simulator.
+# ---------------------------------------------------------------------------
+joint_scenarios:
+  - name: "Green Infrastructure Package"
+    auto_propagate_dag: true
+    interventions:
+      - variable: Pct_Canopy
+        direction: increase
+        increment: 15
+      - variable: Pct_Impervious
+        direction: decrease
+        increment: 15
+      - variable: Albedo
+        direction: increase
+        increment: 0.10
+
+  - name: "Cool-Roof Only"
+    auto_propagate_dag: false
+    interventions:
+      - variable: Albedo
+        direction: increase
+        increment: 0.20
+
+  - name: "Aggressive Greening"
+    auto_propagate_dag: true
+    interventions:
+      - variable: Pct_Canopy
+        direction: increase
+        increment: 30
+      - variable: NDVI
+        direction: increase
+        increment: 0.15
+      - variable: Pct_Impervious
+        direction: decrease
+        increment: 25
+
+# ---------------------------------------------------------------------------
+# V3 Temporal / Multi-Snapshot (optional — uncomment to enable)
+# ---------------------------------------------------------------------------
+# Enable this section when you have morning/midday/night temperature data.
+# The diurnal range (T_midday - T_morning) provides a direct empirical
+# constraint on thermal diffusivity α without relying on land cover alone.
+#
+# temporal:
+#   enabled: true
+#   time_column: "time_period"
+#   frequency: "custom"
+#   snapshots:
+#     morning: "AAT_morning"        # Column with morning temperature
+#     midday:  "AAT_midday"         # Column with midday temperature
+#     night:   "AAT_night"          # Column with nighttime temperature
+#   dt_morning_to_midday_hours: 6.0
+#   dt_midday_to_night_hours: 8.0
+#   dt_night_to_morning_hours: 10.0
+#   use_transient_pde_loss: true
+#   time_embedding_dim: 8           # Learned embedding per snapshot (0 = disabled)
+
+# ---------------------------------------------------------------------------
+# V3 Transfer / Continual Learning Registry (optional)
+# ---------------------------------------------------------------------------
+# Enable when training across multiple cities.  The registry stores shared
+# trunk checkpoints, Fisher matrices (EWC), and experience replay coresets.
+#
+# registry:
+#   path: "sparc_registry"          # Directory for cross-city artifacts
+#   city_name: "providence"         # Unique identifier for this city
+#   use_global_trunk: false         # true = warm-start from global trunk
+#   ewc_lambda: 0.0                 # EWC penalty weight (> 0 enables)
+#   replay_lambda: 0.0              # Experience replay weight (> 0 enables)
+#   coreset_size: 400               # Representative points per city

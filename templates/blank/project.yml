@@ -60,9 +60,46 @@ physics:
 
 # ---------------------------------------------------------------------------
 # Causal DAG  (optional — needed for counterfactual simulation)
+#
+# When enabled, Stage 3 runs the gold-standard Wager (2025) Bayesian
+# pipeline (MC³ structure search + NUTS posterior + 10-gap audit).
+# All sub-blocks (discovery / mc3 / nuts / bayesian_cate / wager2025)
+# fall back to safe defaults if omitted.
 # ---------------------------------------------------------------------------
 # causal:
 #   dag_file: "causal/dag.yml"
+#   estimator: "dml"
+#   estimate_cate: true
+#   inference: "bayesian"
+#   discovery:
+#     enabled: true
+#     methods: [pc_stable, lingam, ges]
+#     alpha: 0.05
+#     consensus_threshold: 2
+#   mc3:
+#     n_iterations: 10000
+#     n_chains: 4
+#     burnin_fraction: 0.25
+#   nuts:
+#     n_samples: 2000
+#     n_warmup: 500
+#     n_chains: 2
+#     target_accept_rate: 0.85
+#   bayesian_cate:
+#     n_features: 16
+#     n_samples: 2000
+#     n_warmup: 500
+#     n_chains: 2
+#     target_accept_rate: 0.85
+#   wager2025:
+#     overlap: true
+#     rate_qini: true
+#     spillover: true
+#     iv: true
+#     sequential_aipw: true
+#     panel: true
+#     policy_learning: true
+#     cbps: true
 #   actionable_variables: []
 #   fixed_variables: []
 

@@ -102,9 +102,10 @@ class GGPGAM_SVC:
         """
         import pandas as pd
         import os
+        from sparc.run.artifact_io import save_table_path, ensure_dir
         
-        os.makedirs(output_dir, exist_ok=True)
-        os.makedirs(os.path.join(output_dir, 'ggpgam_derivatives'), exist_ok=True)
+        ensure_dir(output_dir)
+        ensure_dir(os.path.join(output_dir, 'ggpgam_derivatives'))
         
         # Use instance-level physics signs if set, else load from config
         if hasattr(self, 'physics_signs') and self.physics_signs:
@@ -176,7 +177,11 @@ class GGPGAM_SVC:
                 'baseline_value': X[:, feat_idx]
             })
             deriv_path = os.path.join(output_dir, 'ggpgam_derivatives', f'ggpgam_derivative_{feat_name}.csv')
-            deriv_df.to_csv(deriv_path, index=False)
+            save_table_path(
+                deriv_df, deriv_path,
+                stage="2", artifact_id=f"ggpgam_derivative_{feat_name}", fmt="csv",
+                producer="ggpgam._extract_partial_derivatives",
+            )
             print(f"      ✓ Saved derivatives for {feat_name}")
 
     def predict(self, X, coords):
@@ -353,7 +358,10 @@ class GGPGAM_SVC:
         from pathlib import Path
         
         output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        from sparc.run.artifact_io import (
+            save_table_path, save_geo_path, save_struct_path, ensure_dir,
+        )
+        ensure_dir(output_dir)
         
         # Compute uncertainty weights
         unc_results = self.compute_uncertainty_weights(X, coords, weight_range)
@@ -378,7 +386,11 @@ class GGPGAM_SVC:
         # Save as CSV
         if 'csv' in save_formats:
             csv_path = output_dir / 'ggpgam_uncertainty_maps.csv'
-            unc_df.to_csv(csv_path, index=False)
+            save_table_path(
+                unc_df, csv_path,
+                stage="2", artifact_id="ggpgam_uncertainty_maps", fmt="csv",
+                producer="ggpgam.export_uncertainty_maps",
+            )
             saved_files['csv'] = str(csv_path)
             print(f"Saved uncertainty CSV: {csv_path}")
         
@@ -390,7 +402,11 @@ class GGPGAM_SVC:
                 crs=getattr(self, '_output_crs', 'EPSG:26919')
             )
             gpkg_path = output_dir / 'ggpgam_uncertainty_maps.gpkg'
-            gdf.to_file(gpkg_path, driver='GPKG')
+            save_geo_path(
+                gdf, gpkg_path,
+                stage="2", artifact_id="ggpgam_uncertainty_maps_gpkg",
+                driver='GPKG', producer="ggpgam.export_uncertainty_maps",
+            )
             saved_files['gpkg'] = str(gpkg_path)
             print(f"Saved uncertainty GeoPackage: {gpkg_path}")
         
@@ -416,8 +432,11 @@ class GGPGAM_SVC:
         }
         
         summary_path = output_dir / 'ggpgam_uncertainty_summary.json'
-        with open(summary_path, 'w') as f:
-            json.dump(summary, f, indent=2)
+        save_struct_path(
+            summary, summary_path,
+            stage="2", artifact_id="ggpgam_uncertainty_summary",
+            producer="ggpgam.export_uncertainty_maps",
+        )
         saved_files['summary'] = str(summary_path)
         print(f"Saved uncertainty summary: {summary_path}")
         

@@ -157,8 +157,14 @@ class CausalValidator:
         Requires ``causal.discovery.enabled: true`` in project.yml.
         Writes ``dag_discovery_report.json`` to *output_dir*.
         """
-        disc_cfg = self.config.get('causal', {}).get('discovery', {})
-        if not disc_cfg.get('enabled', False):
+        causal_cfg = self.config.get('causal', {}) or {}
+        disc_cfg = causal_cfg.get('discovery')
+        if disc_cfg is None:
+            # Wager (2025) gold standard: causal discovery is part of the
+            # default validation loop. Users opt OUT explicitly via
+            # ``causal.discovery.enabled: false``.
+            disc_cfg = {}
+        if not disc_cfg.get('enabled', True):
             print("\n  Causal discovery disabled -- skipping.")
             return
 
@@ -2722,9 +2728,19 @@ def main(approval_gate=None) -> dict:
 
     validator.load_dag()
 
-    # Check inference mode: "bayesian" skips V1 frequentist analyses
+    # Inference mode. Bayesian (MC³ + NUTS) is the gold-standard default
+    # per Wager (2025); the V1 frequentist path is retained for legacy
+    # projects but emits a deprecation banner so users migrate.
     causal_cfg = config.get('causal', {})
-    use_bayesian = causal_cfg.get('inference', '').lower() == 'bayesian'
+    inference_mode = (causal_cfg.get('inference') or 'bayesian').lower()
+    use_bayesian = inference_mode != 'frequentist'
+    if inference_mode == 'frequentist':
+        print(
+            "  ⚠ DEPRECATION: causal.inference='frequentist' is legacy. "
+            "Bayesian (MC³ + NUTS + Wager-2025 audit) is the gold standard "
+            "and will become mandatory in v3.0. Set inference: bayesian "
+            "(or omit) in project.yml."
+        )
 
     # Phase 1: Causal discovery — always run (validates expert DAG)
     validator.run_causal_discovery(data, stage3_dir)
@@ -2848,6 +2864,70 @@ def main(approval_gate=None) -> dict:
             print(f"  V2 Bayesian causal analysis failed: {e}")
             import traceback
             traceback.print_exc()
+
+        # =================================================================
+        # Bayesian-path coverage parity (former V1-only diagnostics).
+        # These are graph/sensitivity checks, not competing inference
+        # engines, so they augment the Bayesian posterior rather than
+        # replace it. Each is wrapped so a single failure does not abort
+        # downstream Wager-2025 audit estimators.
+        # =================================================================
+        for label, fn in [
+            ("DAG sensitivity", lambda: validator.run_dag_sensitivity(data, coords=coords)),
+            ("dose response",   lambda: validator.compute_dose_response(data, stage3_dir)),
+            ("elasticity",      lambda: validator.compute_elasticity(data)),
+            ("relative importance", lambda: validator.compute_relative_importance(data)),
+            ("mediation effects",   lambda: validator.compute_mediation_effects(data)),
+            ("location-stratified effects",
+                lambda: validator.compute_location_stratified_effects(data)),
+            ("refutations",     lambda: validator.run_refutations(data)),
+            ("coefficient comparison",
+                lambda: validator.build_coefficient_comparison_table()),
+        ]:
+            try:
+                fn()
+            except Exception as exc:
+                print(f"  Bayesian-mode {label} failed: {exc}")
+
+        # Causal evaluation diagnostics (cumulative gain, calibration).
+        try:
+            from sparc.evaluation.causal_evaluation import run_causal_diagnostics
+            print("\n  Running causal evaluation diagnostics...")
+            run_causal_diagnostics(validator, data, stage3_dir)
+        except Exception as exc:
+            print(f"  Causal evaluation diagnostics skipped: {exc}")
+
+        # =================================================================
+        # Wager (2025) audit add-ons — run automatically as part of Stage 3.
+        # Per-gap toggles live under causal.wager2025.<flag> in project.yml.
+        # =================================================================
+        try:
+            from sparc.run.wager2025_addons import run_wager2025_gaps
+            _bayes = locals().get('bayesian_result')
+            wager_summary = run_wager2025_gaps(
+                data=data,
+                config=config,
+                dag_def=validator.dag_def,
+                graph=validator.graph,
+                roles=validator.roles,
+                output_dir=stage3_dir,
+                nuts_results=(_bayes or {}).get("nuts_results") if _bayes else None,
+            )
+            if disk_writes_enabled():
+                with open(os.path.join(stage3_dir, "wager2025_summary.json"),
+                          "w", encoding="utf-8") as fh:
+                    json.dump(wager_summary, fh, indent=2, default=str)
+        except Exception as exc:
+            print(f"  Wager (2025) add-ons failed: {exc}")
+            import traceback
+            traceback.print_exc()
+
+        # Re-emit scenario_coefficients.json so any augmentations from the
+        # diagnostics above (e.g. mediation rules) land in the final file.
+        try:
+            result = validator.produce_scenario_coefficients(stage3_dir)
+        except Exception:
+            pass
 
     else:
         # =============================================================

@@ -42,6 +42,12 @@ class ResolverConfig:
     # Threshold below which an MC³ edge is treated as "absent" by callers
     # querying :meth:`mc3_edge_prob`.  Resolver itself never prunes edges.
     mc3_threshold: float = 0.30
+    # JEPA Phase 2.f: blend weight on a latent-rollout-sourced effect
+    # estimate.  When > 0 *and* a ``latent_delta`` is supplied to
+    # ``resolve_direct_effect``, the composed delta becomes
+    # ``(1 - γ) * delta_classic + γ * latent_delta``.  Off by default;
+    # behaviour is byte-identical to pre-JEPA when γ == 0.
+    gamma_latent: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +477,7 @@ class CausalEffectResolver:
         *,
         pdp_local_slope: Optional[np.ndarray] = None,
         n_draws: int = 1000,
+        latent_delta: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Sample posterior of the direct treatment → target effect per cell.
 
@@ -525,6 +532,23 @@ class CausalEffectResolver:
         # Compose: (n_eff, 1) · (1, n_cells) · (n_eff, n_cells) · (n_cells,) · (n_cells,)
         per_cell_factor = alpha_norm_factor * slope * delta_x  # (n_cells,)
         delta = beta_eff[:, None] * multiplier * per_cell_factor[None, :]
+
+        # JEPA Phase 2.f — optional blend with a latent-rollout estimate.
+        # ``latent_delta`` is expected to be (n_cells,) or (n_eff, n_cells);
+        # when γ == 0 (default) this branch is byte-identical to the
+        # classic resolver.
+        gamma = float(self.config.gamma_latent)
+        if gamma > 0.0 and latent_delta is not None:
+            ld = np.asarray(latent_delta, dtype=np.float64)
+            if ld.ndim == 1:
+                ld = np.broadcast_to(ld, delta.shape)
+            elif ld.shape != delta.shape:
+                raise ValueError(
+                    f"latent_delta shape {ld.shape} incompatible with "
+                    f"delta shape {delta.shape}",
+                )
+            delta = (1.0 - gamma) * delta + gamma * ld
+
         return delta
 
 

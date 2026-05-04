@@ -43,102 +43,72 @@ physics:
     land_fraction: 0
     ocean_basin: 0
 causal:
-  dag_file: C:\Users\KWire\OneDrive - Kleinfelder\Documents\GitHub\GW3C_v2.0\GW3C_v2.1\templates\forcesmip\causal\forcesmip_dag.yml
-  estimator: dml
-  dml_shrinkage: 0.3
-  dml_cv_folds: 5
-  spatial_block_size: null
-  dag_blend_weight: 0.7
-  estimate_cate: true
-  ipw_enabled: true
-  doubly_robust: true
-  dose_response: true
-  bootstrap_n: 200
-  actionable_variables:
-  - GHG_forcing_index
-  - aerosol_forcing_index
-  fixed_variables:
-  - lat_abs
-  - land_fraction
-  - ocean_basin
-output:
-  base_dir: C:\Users\KWire\OneDrive - Kleinfelder\Documents\GitHub\GW3C_v2.0\GW3C_v2.1\templates\forcesmip\output\forcesmip_tos_1B
-  stage_dirs:
-    stage_1: 01_correlogram
-    stage_2: 02_spatial_cv
-    stage_3: 03_causal
-    stage_4: 04_scenarios
-    final: final
-pipeline:
-  random_seed: 42
-  n_spatial_folds: 5
-  fast_mode: false
-  overwrite_outputs: false
-  run_mc_uncertainty: false
-  n_mc_draws: 500
-  skip_pdp: true
-flags:
-  use_gwen_selection: true
-  include_gwrf_in_ensemble: true
-  use_laplacian_eigenmaps_in_ols: true
-models:
-  gwr:
-    bandwidth: null
-    kernel: gaussian
-    min_points: 50
-  gwrf:
-    n_estimators: 100
-    k_neighbors: 100
-    min_samples_leaf: 5
-  ggpgam:
-    n_splines: 5
-    n_spatial_bases: 10
-    lam: 0.6
-  meta_ensemble:
-    algorithm: neural
-    n_optuna_trials: 25
-  spatial_cv:
-    block_size: null
-    buffer_size: 500000
-    method: block
-gwen:
-  sample_size: null
-  k_neighbors: 200
-  cv_folds: 5
-  selection_threshold: 0.1
-  spatial_cv: false
-  local_cv: false
-  stability_folds: 0
-laplacian:
-  n_eigenmaps: 50
-  k_for_swm: 20
-scenarios:
-- name: 2xCO2_forcing
-  variable: GHG_forcing_index
-  direction: increase
-  increments:
-  - 0.5
-  - 1.0
-  - 2.0
-  min_val: 0.0
-  max_val: 10.0
-  unit: W/m2 equivalent
-- name: aerosol_reduction
-  variable: aerosol_forcing_index
-  direction: decrease
-  increments:
-  - 0.25
-  - 0.5
-  - 1.0
-  min_val: -5.0
-  max_val: 0.0
-  unit: W/m2 equivalent
-- name: ENSO_neutral
-  variable: ENSO_detrended
-  direction: decrease
-  increments:
-  - 0.5
-  - 1.0
-  min_val: -3.0
-  max_val: 3.0
-  unit: "\xC2\xB0C"
+  dag_file: "causal/dag.yml"
+  estimator: "dml"              # "dml" (Wager 2025 default), "hgb", or "ols"
+  estimate_cate: true           # Spatial CATE via Bayesian low-rank GP
+  inference: "bayesian"         # "bayesian" (V2 default: MC³ + NUTS) or "frequentist" (V1, deprecated)
+  cate_estimator: "bayesian"
+  discovery:
+    enabled: true
+    methods: [pc_stable, lingam, ges]
+    alpha: 0.05
+    consensus_threshold: 2
+    compare_expert: true
+  mc3:
+    n_iterations: 10000
+    n_chains: 4
+    burnin_fraction: 0.25
+    edge_penalty: 1.0
+    seed: 42
+  nuts:
+    n_samples: 2000
+    n_warmup: 500
+    n_chains: 2
+    target_accept_rate: 0.85
+    max_tree_depth: 8
+  bayesian_cate:
+    n_features: 16              # low-RAM laptops: 16; servers: 32+
+    n_samples: 2000
+    n_warmup: 500
+    n_chains: 2
+    target_accept_rate: 0.85
+    max_tree_depth: 8
+    kernel_lengthscale: 0.20
+  wager2025:
+    overlap: true               # Gap 1
+    rate_qini: true             # Gap 2
+    spillover: true             # Gap 3
+    iv: true                    # Gaps 4-5 (only fires if DAG has instrument)
+    sequential_aipw: true       # Gap 6
+    panel: true                 # Gap 7 (only fires with panel cols)
+    policy_learning: true       # Gap 8
+    cbps: true                  # Gap 9
+
+# ---------------------------------------------------------------------------
+# Stage-4 Budget Optimizer (cell-level allocation under a budget)
+# ---------------------------------------------------------------------------
+# Reads the per-cell cooling/benefit surface from Stage 4's
+# ``scenario_results`` and allocates a budget across cells using
+# greedy / 2-opt / MILP solvers.  Set ``total: null`` to skip the
+# constrained optimum and emit only the Pareto frontier (cost vs benefit).
+budget:
+  total: null                  # null → unconstrained Pareto only
+  solver: greedy_2opt          # greedy | greedy_2opt | milp
+  multipliers: [0.25, 0.5, 0.75, 1.0, 1.5]
+  cost_per_unit: {}            # e.g. {Pct_Canopy: 250}; empty = unit cost
+
+# ---------------------------------------------------------------------------
+# Stage-4 Wager-2025 caps (saturation + spillover folding)
+# ---------------------------------------------------------------------------
+# ``spillover_mode``:
+#   diagnostic       — direct/spillover/total are side-columns only.
+#   fold_into_delta  — headline ``delta_mean`` becomes the SUTVA-corrected
+#                      total; ``delta_direct_only`` preserves the unit-level
+#                      number for review.  Default in mode_5_full_audit.
+# ``saturation_clipping``: when true, per-cell delta is capped at the
+# Stage-3 dose-response knee (saturation_marginal_floor × peak |slope|).
+caps:
+  spillover_mode: fold_into_delta
+  saturation_clipping: true
+  saturation_marginal_floor: 0.5
+

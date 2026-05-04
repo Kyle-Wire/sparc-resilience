@@ -137,6 +137,22 @@ _KNOWN_CATALOG: list[dict[str, Any]] = [
      "consumers": ["server:/results/2/predictions"]},
     {"id": "sensitivity_package", "stage": "2",
      "patterns": ["sensitivity_package.json"], "format": "json"},
+    # Spatial folds + retrained full base models (consumed by scenario_simulator
+    # and the Stage 2 resume path).
+    {"id": "folds", "stage": "2",
+     "patterns": ["folds.pkl"], "format": "pkl"},
+    {"id": "ols_model_full", "stage": "2",
+     "patterns": ["base_models_full/ols_model_full.pkl"], "format": "pkl"},
+    {"id": "gwr_model_full", "stage": "2",
+     "patterns": ["base_models_full/gwr_model_full.pkl"], "format": "pkl"},
+    {"id": "gwrf_model_full", "stage": "2",
+     "patterns": ["base_models_full/gwrf_model_full.pkl"], "format": "pkl"},
+    {"id": "ggpgam_model_full", "stage": "2",
+     "patterns": ["base_models_full/ggpgam_model_full.pkl"], "format": "pkl"},
+    {"id": "standard_meta_ensemble", "stage": "2",
+     "patterns": ["standard_meta_ensemble.pkl"], "format": "pkl"},
+    {"id": "pipeline_config", "stage": "2",
+     "patterns": ["pipeline_config.json"], "format": "json"},
 
     # Stage 3
     {"id": "scenario_coefficients", "stage": "3",
@@ -386,6 +402,7 @@ class RunRegistry:
 
     def _ensure_sqlite_schema(self) -> None:
         with self._sqlite() as conn:
+            # Phase 1: base tables (no references to columns added by migration).
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS stages (
@@ -421,8 +438,6 @@ class RunRegistry:
                     ON artifacts(format);
                 CREATE INDEX IF NOT EXISTS idx_artifacts_consumers
                     ON artifacts(consumers);
-                CREATE INDEX IF NOT EXISTS idx_artifacts_storage_kind
-                    ON artifacts(storage_kind);
 
                 -- Inline binary payloads (<10 MB by default). Larger blobs
                 -- live in the content-addressed external store referenced by
@@ -450,8 +465,14 @@ class RunRegistry:
                 );
                 """
             )
-            # Idempotent column additions for upgrades from v1 schema.
+            # Phase 2: idempotent column additions for upgrades from v1 schema.
+            # Must run BEFORE any index that references the migrated columns.
             self._migrate_artifact_columns(conn)
+            # Phase 3: indexes that depend on migrated columns.
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_artifacts_storage_kind "
+                "ON artifacts(storage_kind)"
+            )
 
     def _migrate_artifact_columns(self, conn: sqlite3.Connection) -> None:
         """Add new columns to artifacts table if upgrading from older schema."""

@@ -164,10 +164,11 @@ class GWRFModel:
         """
         import pandas as pd
         from scipy.interpolate import UnivariateSpline
+        from sparc.run.artifact_io import save_table_path, ensure_dir
         
-        os.makedirs(output_dir, exist_ok=True)
-        os.makedirs(os.path.join(output_dir, 'gwrf_pdp'), exist_ok=True)
-        os.makedirs(os.path.join(output_dir, 'gwrf_derivatives'), exist_ok=True)
+        ensure_dir(output_dir)
+        ensure_dir(os.path.join(output_dir, 'gwrf_pdp'))
+        ensure_dir(os.path.join(output_dir, 'gwrf_derivatives'))
         
         # Use instance-level physics signs if set, else fall back to legacy defaults
         physics_signs = getattr(self, 'physics_signs', {
@@ -225,7 +226,11 @@ class GWRFModel:
             pdp_df['POINT_Y'] = coords[:, 1]
             pdp_df['baseline_value'] = feat_values
             pdp_path = os.path.join(output_dir, 'gwrf_pdp', f'gwrf_pdp_{feat_name}.csv')
-            pdp_df.to_csv(pdp_path, index=False)
+            save_table_path(
+                pdp_df, pdp_path,
+                stage="2", artifact_id=f"gwrf_pdp_{feat_name}", fmt="csv",
+                producer="gwrf._extract_pdp_and_derivatives",
+            )
             
             # Physics-constrained derivative correction (preserves diagnostics)
             derivatives_constrained = derivatives.copy()
@@ -254,7 +259,11 @@ class GWRFModel:
                 'baseline_value': feat_values
             })
             deriv_path = os.path.join(output_dir, 'gwrf_derivatives', f'gwrf_derivative_{feat_name}.csv')
-            deriv_df.to_csv(deriv_path, index=False)
+            save_table_path(
+                deriv_df, deriv_path,
+                stage="2", artifact_id=f"gwrf_derivative_{feat_name}", fmt="csv",
+                producer="gwrf._extract_pdp_and_derivatives",
+            )
             print(f"      ✓ Saved PDP and derivatives for {feat_name}")
 
     def predict(self, X, coords, k_blend=5, blend_kernel='gaussian'):
@@ -365,11 +374,16 @@ class GWRFModel:
         if self.local_models is None:
             raise ValueError("No models to save. Call fit() first.")
         
-        os.makedirs(output_dir, exist_ok=True)
+        from sparc.run.artifact_io import save_blob_path, ensure_dir
+        ensure_dir(output_dir)
         
-        # Save local models
+        # Save local models (DB-first; disk only when enabled)
         models_file = os.path.join(output_dir, f"{prefix}_local_models.pkl")
-        joblib.dump(self.local_models, models_file)
+        save_blob_path(
+            self.local_models, models_file,
+            stage="2", artifact_id=f"{prefix}_local_models",
+            producer="gwrf.save_models",
+        )
         
         # Save metadata
         metadata = {
@@ -384,7 +398,11 @@ class GWRFModel:
         }
         
         metadata_file = os.path.join(output_dir, f"{prefix}_metadata.pkl")
-        joblib.dump(metadata, metadata_file)
+        save_blob_path(
+            metadata, metadata_file,
+            stage="2", artifact_id=f"{prefix}_metadata",
+            producer="gwrf.save_models",
+        )
         
         print(f"GWRF models saved to {output_dir}/")
         print(f"  - Local models: {models_file}")
@@ -694,10 +712,14 @@ class GWRFModel:
             # live in the desktop app from artifacts.db.
             _ = save_plots  # kept for backward-compatible signature
         
-        # Save all curves to JSON
+        # Save all curves to JSON (DB-first; disk only when enabled)
+        from sparc.run.artifact_io import save_struct_path
         curves_json_path = output_dir / 'gwrf_condition_curves.json'
-        with open(curves_json_path, 'w') as f:
-            json.dump(condition_curves, f, indent=2)
+        save_struct_path(
+            condition_curves, curves_json_path,
+            stage="2", artifact_id="gwrf_pdp_curves",
+            producer="gwrf.extract_condition_curves",
+        )
         
         print(f"\nCondition curves saved to: {curves_json_path}")
         

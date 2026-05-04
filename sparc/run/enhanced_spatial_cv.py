@@ -33,6 +33,7 @@ from sparc.run.disk_policy import disk_writes_enabled
 from sparc.run.artifact_io import (
     save_blob_path, load_blob_path, save_struct_path,
     save_table_path, save_geo_path, ensure_dir,
+    load_table_path, exists_path,
 )
 
 # Hardware-tier driven configuration (low / standard / high RAM machines).
@@ -494,16 +495,18 @@ class EnhancedSpatialCV:
         self._monotone_constraints = load_monotone_constraints(self.base_config)
     
     def _load_correlogram_results(self):
-        """Load correlogram_analysis_results.json if available."""
+        """Load correlogram_analysis_results.json — store-first, disk fallback."""
         if hasattr(self, '_correlogram_cache'):
             return self._correlogram_cache
         corr_path = self.paths.correlogram_results
-        if corr_path.exists():
-            with open(corr_path, 'r') as f:
-                self._correlogram_cache = json.load(f)
-            return self._correlogram_cache
-        self._correlogram_cache = None
-        return None
+        try:
+            from sparc.run.artifact_io import load_struct_path
+            self._correlogram_cache = load_struct_path(
+                corr_path, stage="0", artifact_id="correlogram_results",
+            )
+        except FileNotFoundError:
+            self._correlogram_cache = None
+        return self._correlogram_cache
 
     def get_block_size_from_config(self):
         """
@@ -1360,17 +1363,18 @@ class EnhancedSpatialCV:
         stage2_dir = str(self.paths.stage2_dir)
         os.makedirs(stage2_dir, exist_ok=True)
         
-        # Check if OOF predictions already exist
+        # Check if OOF predictions already exist (store-first, disk fallback)
         oof_predictions_path = str(self.paths.oof_predictions)
         folds_path = str(self.paths.folds_file)
         
-        if os.path.exists(oof_predictions_path) and os.path.exists(folds_path):
+        if exists_path(oof_predictions_path, stage="2", artifact_id="oof_predictions") and \
+           exists_path(folds_path, stage="2", artifact_id="folds"):
             print("=== Loading existing OOF predictions ===")
             print(f"Found existing OOF predictions at: {self.paths.get_relative_path(oof_predictions_path)}")
             print(f"Found existing folds at: {self.paths.get_relative_path(folds_path)}")
             
-            # Load existing results
-            oof_df = pd.read_csv(oof_predictions_path)
+            # Load existing results (store-first, CSV fallback)
+            oof_df = load_table_path(oof_predictions_path, stage="2", artifact_id="oof_predictions")
             model_names = oof_df.columns.tolist()
             oof_predictions = oof_df.values
             
@@ -1819,8 +1823,11 @@ def main(fast_mode=False):
             print(f"Applied feature scaling to 'data' for meta-ensemble training")
             print(f"  Note: 'data_unscaled' still contains original values for base models")
             
-            # Load OOF predictions
-            oof_predictions = pd.read_csv(str(cv_system.paths.oof_predictions))
+            # Load OOF predictions (store-first, CSV fallback)
+            oof_predictions = load_table_path(
+                str(cv_system.paths.oof_predictions),
+                stage="2", artifact_id="oof_predictions",
+            )
             
             # Get the identifier column name from config
             id_col = cv_system.base_config['variables']['identifier']
@@ -2016,9 +2023,11 @@ def main(fast_mode=False):
             gwrf_curves_path = os.path.join(gwrf_curves_dir, "gwrf_condition_curves.json")
             # Also check legacy location
             legacy_curves_path = os.path.join(spatial_intel_dir, "gwrf_pdp", "gwrf_condition_curves.json")
-            if os.path.exists(gwrf_path):
-                print("\n--- GWRF: already trained (found gwrf_model_full.pkl) -- skipping ---")
-                gwrf_model = joblib.load(gwrf_path)
+            if exists_path(gwrf_path, stage="2", artifact_id="gwrf_model_full"):
+                print("\n--- GWRF: already trained (found gwrf_model_full) -- skipping ---")
+                gwrf_model = load_blob_path(gwrf_path, stage="2", artifact_id="gwrf_model_full")
+                if gwrf_model is None:
+                    gwrf_model = joblib.load(gwrf_path)
                 models[2] = gwrf_model
             else:
                 print("\n--- Training GWRF on full dataset ---")

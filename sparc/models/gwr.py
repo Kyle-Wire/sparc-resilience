@@ -649,9 +649,15 @@ class GWRModel(BaseEstimator, RegressorMixin):
             output_dir = os.path.dirname(output_path) if os.path.dirname(output_path) else "."
             base_name = os.path.splitext(os.path.basename(output_path))[0]
             
-            # Save constrained coefficients
+            from sparc.run.artifact_io import save_table_path
+
+            # Save constrained coefficients (DB-first; disk only when enabled)
             constrained_path = os.path.join(output_dir, f"{base_name}.csv")
-            coef_df.to_csv(constrained_path, index=False)
+            save_table_path(
+                coef_df, constrained_path,
+                stage="2", artifact_id=base_name, fmt="csv",
+                producer="gwr.fit",
+            )
             print(f"✓ MGWR local coefficients (CONSTRAINED) saved to {constrained_path}")
             
             # ---------------------------------------------------------------
@@ -668,7 +674,11 @@ class GWRModel(BaseEstimator, RegressorMixin):
                         coef_df_unc[f'{fname}_sign_violation'] = self.sign_violations_[:, fidx]
             
             unconstrained_path = os.path.join(output_dir, f"{base_name}_unconstrained.csv")
-            coef_df_unc.to_csv(unconstrained_path, index=False)
+            save_table_path(
+                coef_df_unc, unconstrained_path,
+                stage="2", artifact_id=f"{base_name}_unconstrained", fmt="csv",
+                producer="gwr.fit",
+            )
             print(f"✓ MGWR local coefficients (UNCONSTRAINED + diagnostics) saved to {unconstrained_path}")
 
             # ---------------------------------------------------------------
@@ -785,8 +795,13 @@ class GWRModel(BaseEstimator, RegressorMixin):
             crs=getattr(self, '_output_crs', 'EPSG:26919')
         )
         
-        # Save to GeoPackage
-        gdf.to_file(output_path, driver='GPKG')
+        # Save to GeoPackage (DB-first; disk only when enabled)
+        from sparc.run.artifact_io import save_geo_path
+        save_geo_path(
+            gdf, output_path,
+            stage="2", artifact_id=os.path.splitext(os.path.basename(str(output_path)))[0],
+            driver='GPKG', producer="gwr.save_local_coefficients_to_gpkg",
+        )
 
     def get_coefficient_summary(self):
         """
@@ -822,8 +837,12 @@ class GWRModel(BaseEstimator, RegressorMixin):
         if self.bandwidth is None:
             raise ValueError("Bandwidth not selected. Call fit() first.")
         
-        with open(output_path, 'w') as f:
-            json.dump({'adaptive_k': self.bandwidth}, f)
+        from sparc.run.artifact_io import save_struct_path
+        save_struct_path(
+            {'adaptive_k': self.bandwidth}, output_path,
+            stage="2", artifact_id=os.path.splitext(os.path.basename(str(output_path)))[0],
+            producer="gwr.save_bandwidth",
+        )
         print(f"\nBandwidth value saved to: {output_path}")
     
     def load_bandwidth(self, input_path):
@@ -930,9 +949,13 @@ class GWRModel(BaseEstimator, RegressorMixin):
             Paths to saved files
         """
         from pathlib import Path
+        from sparc.run.artifact_io import (
+            save_table_path, save_geo_path, save_struct_path, save_array_path,
+            ensure_dir,
+        )
         
         output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        ensure_dir(output_dir)
         
         if variable_names is None:
             variable_names = self.feature_names_
@@ -960,7 +983,11 @@ class GWRModel(BaseEstimator, RegressorMixin):
         # Save as CSV
         if 'csv' in save_formats:
             csv_path = output_dir / 'gwr_modifier_maps.csv'
-            modifier_df.to_csv(csv_path, index=False)
+            save_table_path(
+                modifier_df, csv_path,
+                stage="2", artifact_id="gwr_modifier_maps", fmt="csv",
+                producer="gwr.export_modifier_maps",
+            )
             saved_files['csv'] = str(csv_path)
             print(f"Saved modifier CSV: {csv_path}")
         
@@ -972,23 +999,29 @@ class GWRModel(BaseEstimator, RegressorMixin):
                 crs=getattr(self, '_output_crs', 'EPSG:26919')
             )
             gpkg_path = output_dir / 'gwr_modifier_maps.gpkg'
-            gdf.to_file(gpkg_path, driver='GPKG')
+            save_geo_path(
+                gdf, gpkg_path,
+                stage="2", artifact_id="gwr_modifier_maps_gpkg",
+                driver='GPKG', producer="gwr.export_modifier_maps",
+            )
             saved_files['gpkg'] = str(gpkg_path)
             print(f"Saved modifier GeoPackage: {gpkg_path}")
         
         # Save as NumPy arrays
         if 'npy' in save_formats:
             npy_path = output_dir / 'gwr_modifier_maps.npz'
-            np.savez(
-                npy_path,
-                modifier_ratios=modifier_ratios,
-                global_coefficients=global_coefs,
-                local_coefficients=self.coefficients_,
-                coords=self.coords_,
-                variable_names=variable_names
-            )
-            saved_files['npy'] = str(npy_path)
-            print(f"Saved modifier NumPy: {npy_path}")
+            from sparc.run.artifact_io import _disk_on
+            if _disk_on():
+                np.savez(
+                    npy_path,
+                    modifier_ratios=modifier_ratios,
+                    global_coefficients=global_coefs,
+                    local_coefficients=self.coefficients_,
+                    coords=self.coords_,
+                    variable_names=variable_names
+                )
+                saved_files['npy'] = str(npy_path)
+                print(f"Saved modifier NumPy: {npy_path}")
         
         # Save summary statistics
         summary_path = output_dir / 'gwr_modifier_summary.json'
@@ -1012,8 +1045,11 @@ class GWRModel(BaseEstimator, RegressorMixin):
                 'pct_clipped_high': float(np.mean(modifier_ratios[:, i] == max_ratio) * 100)
             }
         
-        with open(summary_path, 'w') as f:
-            json.dump(summary, f, indent=2)
+        save_struct_path(
+            summary, summary_path,
+            stage="2", artifact_id="gwr_modifier_summary",
+            producer="gwr.export_modifier_maps",
+        )
         saved_files['summary'] = str(summary_path)
         print(f"Saved modifier summary: {summary_path}")
         

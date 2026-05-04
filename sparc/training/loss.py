@@ -16,6 +16,8 @@ Terms
 5. Alpha field smoothness — process rate spatial continuity
 6. Alpha prior regularization — curriculum-decayed
 7. Spatial neighborhood consistency
+(8–11)  V3 multi-term PDE / BC / IC losses (optional)
+12. JEPA self-supervised loss (optional, Phase 1)
 
 (Surrogate fidelity is accepted but inactive — surrogates learn
 end-to-end via the main loss terms, not by matching V1 outputs.)
@@ -160,6 +162,20 @@ def sparc_joint_loss(
     dT_dt_observed: torch.Tensor | None = None,
     nocturnal_dT_dt: torch.Tensor | None = None,
     T_night: torch.Tensor | None = None,
+    # JEPA self-supervised term (optional — Phase 1)
+    jepa_h_pred: torch.Tensor | None = None,
+    jepa_h_target: torch.Tensor | None = None,
+    jepa_weights=None,
+    lambda_jepa: float = 0.0,
+    # JEPA Phase 2: scenario-distillation pair (predictor under action)
+    jepa_scenario_h_pred: torch.Tensor | None = None,
+    jepa_scenario_h_target: torch.Tensor | None = None,
+    lambda_jepa_scenario: float = 0.0,
+    # JEPA Phase 2: latent PDE consistency (Laplacian smoothness)
+    jepa_latent_h: torch.Tensor | None = None,
+    jepa_latent_neighbor_idx: torch.Tensor | None = None,
+    jepa_latent_alpha: torch.Tensor | None = None,
+    lambda_jepa_latent_pde: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """
     Compute the 8-term joint loss.
@@ -316,12 +332,76 @@ def sparc_joint_loss(
     loss_components["ic_total"] = ic_total.item()
 
     # ------------------------------------------------------------------
+    # 12. JEPA self-supervised loss (Phase 1, optional)
+    # ------------------------------------------------------------------
+    jepa_total = torch.tensor(0.0, device=T_pred.device)
+    if (
+        lambda_jepa > 0
+        and jepa_h_pred is not None
+        and jepa_h_target is not None
+    ):
+        from sparc.training.jepa_loss import jepa_loss as _jepa_loss
+        jepa_raw, jepa_dict = _jepa_loss(
+            h_pred=jepa_h_pred,
+            h_target=jepa_h_target,
+            weights=jepa_weights,
+        )
+        jepa_total = lambda_jepa * jepa_raw
+        for k, v in jepa_dict.items():
+            loss_components[k] = v
+
+    loss_components["jepa_weighted"] = jepa_total.item()
+
+    # ------------------------------------------------------------------
+    # 13. JEPA Phase 2 — scenario-distillation (action-conditioned)
+    # ------------------------------------------------------------------
+    jepa_scenario_total = torch.tensor(0.0, device=T_pred.device)
+    if (
+        lambda_jepa_scenario > 0
+        and jepa_scenario_h_pred is not None
+        and jepa_scenario_h_target is not None
+    ):
+        from sparc.training.jepa_loss import scenario_distillation_loss
+        sd_raw, sd_dict = scenario_distillation_loss(
+            h_pred_perturbed=jepa_scenario_h_pred,
+            h_target_perturbed=jepa_scenario_h_target,
+            weights=jepa_weights,
+        )
+        jepa_scenario_total = lambda_jepa_scenario * sd_raw
+        for k, v in sd_dict.items():
+            loss_components[k] = v
+
+    loss_components["jepa_scenario_weighted"] = jepa_scenario_total.item()
+
+    # ------------------------------------------------------------------
+    # 14. JEPA Phase 2 — latent PDE consistency (Laplacian smoothness)
+    # ------------------------------------------------------------------
+    jepa_latent_pde_total = torch.tensor(0.0, device=T_pred.device)
+    if (
+        lambda_jepa_latent_pde > 0
+        and jepa_latent_h is not None
+        and jepa_latent_neighbor_idx is not None
+    ):
+        from sparc.training.jepa_loss import latent_pde_consistency_loss
+        lp_raw, lp_dict = latent_pde_consistency_loss(
+            h=jepa_latent_h,
+            neighbor_idx=jepa_latent_neighbor_idx,
+            alpha=jepa_latent_alpha,
+        )
+        jepa_latent_pde_total = lambda_jepa_latent_pde * lp_raw
+        for k, v in lp_dict.items():
+            loss_components[k] = v
+
+    loss_components["jepa_latent_pde_weighted"] = jepa_latent_pde_total.item()
+
+    # ------------------------------------------------------------------
     # Total
     # ------------------------------------------------------------------
     total = (
         mse + ce + physics + smooth + alpha_smooth
         + prior_reg + surrogate_loss + neighborhood
         + pde_total + bc_total + ic_total
+        + jepa_total + jepa_scenario_total + jepa_latent_pde_total
     )
     loss_components["total"] = total.item()
 

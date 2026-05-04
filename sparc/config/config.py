@@ -21,6 +21,21 @@ import os
 import json
 from pathlib import Path
 
+from .causal_defaults import (
+    CAUSAL_DEFAULTS,
+    merged_causal_block,
+    warn_missing_subblocks,
+)
+
+
+def _resolve_causal_block(user: dict) -> dict:
+    """Merge the user's ``causal:`` block onto Wager-2025 defaults and
+    print non-fatal warnings for missing sub-blocks."""
+    user = user or {}
+    for msg in warn_missing_subblocks(user):
+        print(f"  ⚠ project.yml: {msg}")
+    return merged_causal_block(user)
+
 # ---------------------------------------------------------------------------
 # Legacy constants (preserved for backward compatibility)
 # ---------------------------------------------------------------------------
@@ -208,7 +223,7 @@ def _yaml_to_config(raw: dict, yaml_path: str) -> dict:
         # ---- NEW: project-level metadata available to all stages ----
         'project': raw.get('project', {}),
         'physics': raw.get('physics', {}),
-        'causal':  {'inference': 'bayesian', **raw.get('causal', {})},
+        'causal':  _resolve_causal_block(raw.get('causal', {})),
         'models':  {**models_cfg,
             'meta_learner': models_cfg.get('meta_learner', 'neural'),
             'neural': models_cfg.get('neural', {

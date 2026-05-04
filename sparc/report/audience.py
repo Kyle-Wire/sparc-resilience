@@ -27,7 +27,15 @@ from typing import Any
 from sparc.report.standalone_html import _collect_artifacts, _safe_load_json
 from sparc.registry.provenance import load_provenance
 
-AUDIENCES = ("technical", "planner", "public")
+AUDIENCES = (
+    "technical",  # analyst / peer reviewer — full diagnostics
+    "planner",    # city planner / program manager — ranked actions
+    "public",     # general public — one-page plain language
+    "council",    # elected officials — recommendations + cost + equity
+    "scientist",  # external scientist — methods + posteriors + DAG
+    "equity",     # equity advocate — heterogeneity + most-affected
+    "auditor",    # 3rd-party auditor — Wager-2025 gap roll-up + provenance
+)
 FORMATS = ("md", "html", "pdf")
 
 
@@ -179,6 +187,175 @@ TEMPLATES = {
     "planner": _PLANNER_TPL,
     "public": _PUBLIC_TPL,
 }
+
+
+# ------------------------------------------------------------------
+# Phase-B audiences (council / scientist / equity / auditor)
+# ------------------------------------------------------------------
+
+_COUNCIL_TPL = """# {{ project_name }} — Council Briefing
+*Audience: elected officials · {{ generated_utc[:10] }}*
+
+## Decision summary
+{% if hero_finding %}**{{ hero_finding }}**{% endif %}
+
+## Recommended actions (ranked, cost-aware)
+{% if scenario_rows %}
+| # | Action | Effect | Affected | Est. cost |  $/unit |
+|---|--------|--------|----------|-----------|---------|
+{% for s in scenario_rows %}| {{ loop.index }} | {{ s.name }} | {{ "%.2f"|format(s.delta) }} | {{ s.affected }} | ${{ "%.1f"|format(s.cost) }}M | ${{ "%.0f"|format(s.cost_per_unit) }} |
+{% endfor %}
+{% else %}*Scenarios not yet evaluated.*{% endif %}
+
+{% if budget_optimization %}
+## Budget allocation (optimised)
+{% for treatment, info in budget_optimization.per_treatment.items() %}
+- **{{ treatment }}**: spend up to ${{ "%.0f"|format(info.optimum.total_cost) }}
+  on {{ info.n_cells_treated }} cells → expected benefit
+  {{ "%.3f"|format(info.optimum.total_benefit) }} (Gini {{ "%.2f"|format(info.optimum.gini) }})
+{% endfor %}
+{% endif %}
+
+{% if policy_recommendations %}
+## Optimal targeted rollout (Wager-EWM)
+The empirical-welfare-maximising policy treats only the cells where
+the model predicts the largest benefit. This is a *recommendation*
+about *who* to treat — not a guarantee about effect size.
+{% for row in policy_recommendations.rows %}
+- **{{ row.treatment }}**: treat {{ row.n_recommended }} of {{ row.n_total }} cells
+  ({{ "%.0f"|format(100 * row.n_recommended / row.n_total) }}% coverage),
+  estimated welfare gain {{ "%.4f"|format(row.welfare) }}
+{% endfor %}
+{% endif %}
+
+## Equity
+{% if equity %}- Most-affected demographic: {{ equity.most_affected or "—" }}
+- Heterogeneity: {{ equity.heterogeneity or "—" }}{% endif %}
+
+## How confident are we?
+{% if confidence_blurb %}{{ confidence_blurb }}{% endif %}
+"""
+
+
+_SCIENTIST_TPL = """# {{ project_name }} — External-Scientist Companion
+*Audience: peer reviewer · {{ generated_utc }} UTC*
+
+## Method stack
+- Estimator: **{{ causal_cfg.estimator or "—" }}** (cross-fit DML default)
+- DAG: discovery enabled = {{ causal_cfg.discovery.enabled if causal_cfg.discovery else "—" }};
+  consensus_threshold = {{ (causal_cfg.discovery or {}).consensus_threshold or "—" }}
+- Posterior: MC³ {{ causal_cfg.mc3.n_chains or "?" }} chains × {{ causal_cfg.mc3.n_iterations or "?" }} draws;
+  NUTS {{ causal_cfg.nuts.n_chains or "?" }} chains × {{ causal_cfg.nuts.n_samples or "?" }} samples
+- Spatial CATE: Bayesian low-rank GP, {{ (causal_cfg.bayesian_cate or {}).n_features or "—" }} features
+
+## Posterior diagnostics
+{% if mc3 %}- R-hat (mean / max): {{ "%.3f"|format(mc3.r_hat_mean or 0) }} / {{ "%.3f"|format(mc3.r_hat_max or 0) }}
+- ESS (mean / min): {{ mc3.ess_mean or "?" }} / {{ mc3.ess_min or "?" }}
+{% if mc3.divergent_transitions %}- ⚠ Divergent transitions: {{ mc3.divergent_transitions }}{% endif %}{% endif %}
+
+## Wager-2025 audit roll-up
+{% for gap, ok in gap_completion.items() %}- {{ "✓" if ok else "·" }} **Gap {{ gap }}**
+{% endfor %}
+
+## Refutations
+{% if refutations %}{% for r in refutations.rows or [] %}
+- **{{ r.test }}** on `{{ r.treatment }}`: {{ "PASS" if r.passed else "FAIL" }}
+  (Δ = {{ "%.4f"|format(r.delta or 0) }})
+{% endfor %}{% else %}*No refutation artifact found.*{% endif %}
+
+## Provenance
+{% if provenance %}- Config hash: `{{ provenance.config_hash[:16] }}…`
+- Data sha256: `{{ (provenance.data.sha256 or "")[:16] }}…`
+- Git: `{{ provenance.git.commit[:8] }}` ({{ "dirty" if provenance.git.dirty else "clean" }}){% endif %}
+"""
+
+
+_EQUITY_TPL = """# {{ project_name }} — Equity Lens
+*Audience: equity advocate · {{ generated_utc[:10] }}*
+
+## Who benefits, and by how much?
+{% if location_stratified_effects %}
+{% for row in location_stratified_effects.rows or [] %}
+- **{{ row.subgroup or row.tract or "—" }}** ({{ row.n_cells }} cells):
+  Δ {{ "%.3f"|format(row.effect_mean or 0) }}
+  [{{ "%.3f"|format(row.ci_lower or 0) }}, {{ "%.3f"|format(row.ci_upper or 0) }}]
+{% endfor %}
+{% else %}*No location-stratified effects available — re-run Stage 3 with
+``causal.wager2025.location_stratification: on``.*{% endif %}
+
+## Spillover (does treating one block help neighbours?)
+{% if spillover_decomposition %}
+- Direct effect:    {{ "%.4f"|format(spillover_decomposition.direct_effect or 0) }}
+- Spillover effect: {{ "%.4f"|format(spillover_decomposition.spillover_effect or 0) }}
+- Total effect:     {{ "%.4f"|format(spillover_decomposition.total_effect or 0) }}
+{% else %}*No spillover decomposition available.*{% endif %}
+
+## Targeted-policy fairness
+{% if policy_recommendations %}
+The empirical-welfare-maximising policy concentrates investment where
+predicted benefit is highest. This **may or may not** align with
+greatest-need criteria — the table below shows coverage:
+{% for row in policy_recommendations.rows %}
+- `{{ row.treatment }}`: {{ row.n_recommended }} / {{ row.n_total }} cells targeted
+{% endfor %}
+{% endif %}
+
+## Disclaimer
+Equity outcomes depend on cost surfaces and political priorities not
+captured in the model. Treat the numbers above as one input — not a
+ranking of moral worth.
+"""
+
+
+_AUDITOR_TPL = """# {{ project_name }} — Audit Trail
+*Audience: 3rd-party auditor · {{ generated_utc }} UTC*
+
+## Provenance
+{% if provenance %}- Config hash: `{{ provenance.config_hash }}`
+- Data sha256: `{{ provenance.data.sha256 }}` ({{ provenance.data.size_bytes }} bytes)
+- Git commit: `{{ provenance.git.commit }}` ({{ "DIRTY" if provenance.git.dirty else "clean" }})
+- Run frozen: {{ provenance.timestamp_utc }}{% else %}**No provenance sidecar present.**{% endif %}
+
+## Wager (2025) gap-completion table
+| # | Gap | Status |
+|---|-----|--------|
+{% for gap, ok in gap_completion.items() %}| {{ loop.index }} | {{ gap }} | {{ "✓ persisted" if ok else "✗ missing" }} |
+{% endfor %}
+
+## Overlap diagnostics
+{% if overlap_diagnostics %}
+- Overlap %: {{ "%.1f"|format(overlap_diagnostics.overlap_pct or 0) }}
+- Flag: **{{ overlap_diagnostics.overlap_flag or "—" }}**
+{% else %}*No overlap diagnostics persisted.*{% endif %}
+
+## CBPS balance
+{% if cbps_estimates %}
+{% for row in cbps_estimates.rows or [] %}
+- `{{ row.treatment }}`: SMD before / after = {{ "%.3f"|format(row.smd_before or 0) }} / {{ "%.3f"|format(row.smd_after or 0) }}
+{% endfor %}
+{% else %}*No CBPS balance table.*{% endif %}
+
+## Refutation summary
+{% if refutations %}{{ (refutations.rows or [])|length }} refutation tests recorded.{% else %}*No refutation artifact.*{% endif %}
+
+## Triangulation
+| Method | Estimate | 95% CI |
+|--------|----------|--------|
+{% if treatments %}{% for t in treatments %}| {{ causal_cfg.estimator or "DML" }}: `{{ t.name }}` | {{ "%.4f"|format(t.coeff or 0) }} | [{{ "%.3f"|format(t.ci_lower or 0) }}, {{ "%.3f"|format(t.ci_upper or 0) }}] |
+{% endfor %}{% endif %}
+{% if did_estimates %}{% for r in did_estimates.rows or [] %}| DiD: `{{ r.treatment }}` | {{ "%.4f"|format(r.estimate or 0) }} | [{{ "%.3f"|format(r.ci_lower or 0) }}, {{ "%.3f"|format(r.ci_upper or 0) }}] |
+{% endfor %}{% endif %}
+{% if iv_estimates %}{% for r in iv_estimates.rows or [] %}| IV: `{{ r.treatment }}` | {{ "%.4f"|format(r.estimate or 0) }} | [{{ "%.3f"|format(r.ci_lower or 0) }}, {{ "%.3f"|format(r.ci_upper or 0) }}] |
+{% endfor %}{% endif %}
+"""
+
+
+TEMPLATES.update({
+    "council":   _COUNCIL_TPL,
+    "scientist": _SCIENTIST_TPL,
+    "equity":    _EQUITY_TPL,
+    "auditor":   _AUDITOR_TPL,
+})
 
 
 # ------------------------------------------------------------------
@@ -341,7 +518,26 @@ def build_context(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
         "public_numbers": public_numbers,
         "public_blurb": public_blurb,
         "confidence_blurb": confidence_blurb,
+        # ---- Phase B (Wager-2025 audit) ----
+        **_audit_context_or_empty(),
     }
+
+
+def _audit_context_or_empty() -> dict[str, Any]:
+    """Inject Stage-3/4 audit artifacts into the template context.
+
+    Wrapped so a missing :mod:`sparc.report.audit_context` (or any
+    artifact-store error) does not break the legacy 3-audience path.
+    """
+    out: dict[str, Any] = {"gap_completion": {}}
+    try:
+        from sparc.report.audit_context import build_audit_context, gap_completion
+        ctx = build_audit_context()
+        out.update(ctx)
+        out["gap_completion"] = gap_completion(ctx)
+    except Exception:
+        pass
+    return out
 
 
 # ------------------------------------------------------------------

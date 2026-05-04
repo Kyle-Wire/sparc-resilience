@@ -20,10 +20,12 @@ logging.basicConfig(
 
 def main():
     # ----------------------------------------------------------------
-    # Parse CLI:  --full  = all 54K rows,  default = 2000-row sample
+    # Parse CLI:  --quick = 2000-row sample (smoke test),
+    #             default  = all rows (full pipeline run)
     # ----------------------------------------------------------------
-    full_mode = "--full" in sys.argv
-    n_sample = None if full_mode else 2000
+    quick_mode = "--quick" in sys.argv
+    full_mode = not quick_mode  # default is now FULL DATA
+    n_sample = 2000 if quick_mode else None
 
     print("=" * 64)
     print("  V2 SPARC Pipeline — Brown University UHI Dataset")
@@ -37,7 +39,7 @@ def main():
         rng = np.random.default_rng(42)
         idx = rng.choice(total, size=n_sample, replace=False)
         df = df.iloc[idx].reset_index(drop=True)
-        print(f"\nData: {len(df):,} rows (sampled from {total:,})")
+        print(f"\nData: {len(df):,} rows (sampled from {total:,}, --quick mode)")
     else:
         print(f"\nData: {len(df):,} rows (full dataset)")
 
@@ -55,11 +57,71 @@ def main():
     print(f"Target: {TARGET}  mean={y.mean():.2f}  std={y.std():.2f}")
     print(f"Features: {FEATURES}")
 
-    # CV folds
+    # ==================================================================
+    # STEP 0 — Correlogram analysis on the target → spatial CV block size
+    # ==================================================================
+    print("\n" + "=" * 64)
+    print("  STEP 0: Correlogram Analysis (target = AAT_z)")
+    print("=" * 64)
+
+    from sparc.run.spatial_autocorr_comprehensive import SpatialAutocorrelationAnalyzer
+
+    # Sample for tractable Moran's I computation on large datasets
+    corr_sample_max = 2000 if full_mode else min(1500, len(coords))
+    if len(coords) > corr_sample_max:
+        rng_c = np.random.default_rng(7)
+        sub = rng_c.choice(len(coords), size=corr_sample_max, replace=False)
+        coords_corr = coords[sub]
+        y_corr = y[sub]
+        print(f"Correlogram sample: {corr_sample_max:,} of {len(coords):,} points")
+    else:
+        coords_corr = coords
+        y_corr = y
+        print(f"Correlogram on all {len(coords):,} points")
+
+    bounds = np.array([coords.min(axis=0), coords.max(axis=0)])
+    spatial_extent = float(np.linalg.norm(bounds[1] - bounds[0]))
+    max_dist = spatial_extent * 0.4
+
+    t_corr0 = time.perf_counter()
+    analyzer = SpatialAutocorrelationAnalyzer(
+        coords_corr, max_distance=max_dist, n_lags=15,
+    )
+    corr = analyzer.compute_correlogram(y_corr, plot=False, title="AAT_z correlogram")
+    t_corr1 = time.perf_counter()
+
+    fzc = float(corr.get("first_zero_crossing", corr["optimal_block_size"]))
+    print(f"  Spatial extent:        {spatial_extent:,.0f} m")
+    print(f"  Max correlogram dist:  {max_dist:,.0f} m")
+    print(f"  First zero-crossing:   {fzc:,.0f} m")
+    print(f"  Optimal block size:    {corr['optimal_block_size']:,.0f} m")
+    print(f"  Correlogram time:      {t_corr1 - t_corr0:.1f}s")
+
+    # CV folds — spatial blocks sized from correlogram
     n_folds = 5
-    kf = KFold(n_splits=n_folds, shuffle=True, random_state=42)
-    folds = [(tr, te) for tr, te in kf.split(X)]
-    print(f"\nCV: {n_folds}-fold  (test sizes: {[len(f[1]) for f in folds]})")
+    block_size = max(fzc, 500.0)
+    # Cap so blocks are small enough to yield viable folds
+    max_viable = spatial_extent / (2.0 * n_folds)
+    if block_size > max_viable:
+        print(f"  Capping block size: {block_size:,.0f}m > extent/(2*{n_folds}) = {max_viable:,.0f}m")
+        block_size = max_viable
+    print(f"  Final CV block size:   {block_size:,.0f} m")
+
+    print("\n" + "=" * 64)
+    print("  STEP 0b: Enhanced Spatial Cross-Validation")
+    print("=" * 64)
+    from sparc.run.enhanced_spatial_cv import spatial_kfold_enhanced
+
+    folds = spatial_kfold_enhanced(
+        X, y, coords,
+        n_splits=n_folds,
+        block_size=block_size,
+        buffer_size=0,
+        method="block",
+        stratify_y=True,
+    )
+    print(f"\nCV: {n_folds}-fold spatial-block  "
+          f"(test sizes: {[len(f[1]) for f in folds]})")
 
     # ------------------------------------------------------------------
     # Config — production-like settings
@@ -98,6 +160,19 @@ def main():
             "feature_names": FEATURES,
         },
         "optimization": {"clip_norm": 1.0, "run_cma_es": False},
+        "jepa": {
+            "enable": True,
+            "mask_ratio": 0.4,
+            "lambda": 0.5,
+            "lambda_scenario": 0.5,
+            "lambda_latent_pde": 0.01,
+            "predictor_blocks": 2,
+            "predictor_film": True,
+            "action_dim": 64,
+            "scenario_perturb_std": 0.5,
+            "curriculum_start": 2,
+            "curriculum_end": 5,
+        },
         "process_rate": {
             "enabled": True,
             "name": "thermal_admittance",
@@ -121,7 +196,8 @@ def main():
                 "n_samples": 1000 if full_mode else 100,
                 "n_warmup": 500 if full_mode else 50,
                 "target_accept_rate": 0.80,
-                "max_rows": 10000 if full_mode else 2000,
+                # Allow NUTS to use the full dataset (or close to it)
+                "max_rows": max(20000, len(df)) if full_mode else 2000,
             },
         },
     }

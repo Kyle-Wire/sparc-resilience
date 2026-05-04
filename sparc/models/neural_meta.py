@@ -216,6 +216,83 @@ class SPARCMetaLearner(nn.Module):
         return T_pred, exceedance, attn_weights
 
     # ------------------------------------------------------------------
+    def encode(
+        self,
+        physics_feats: torch.Tensor,
+        alpha: torch.Tensor,
+        time_idx: torch.Tensor | None = None,
+        channel_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """
+        Compute the SharedTrunk embedding ``h_trunk`` only.
+
+        Used by JEPA-style training (and downstream latent-space
+        scenario rollouts) to obtain the transferable embedding without
+        running the city-specific heads.  Mirrors the trunk fusion in
+        ``forward`` exactly so ``encode`` and ``forward`` share weights.
+
+        Parameters
+        ----------
+        physics_feats : (N, n_physics_features)
+        alpha : (N, 1) — process rate
+        time_idx : (N,) long or None — snapshot index for time embedding
+        channel_mask : (n_physics_features,) or None
+            Optional JEPA context mask (see ``PDEInformedPhysicsEncoder``).
+
+        Returns
+        -------
+        h_trunk : (N, hidden_dim)
+        """
+        h_phys, _ = self.physics_enc(physics_feats, channel_mask=channel_mask)
+        h_alpha = self.alpha_emb(alpha)
+
+        trunk_parts = [h_phys, h_alpha]
+        if self.time_embed is not None and time_idx is not None:
+            trunk_parts.append(self.time_embed(time_idx))
+        return self.trunk_fusion(torch.cat(trunk_parts, dim=-1))
+
+    # ------------------------------------------------------------------
+    def decode(
+        self,
+        h_trunk: torch.Tensor,
+        base_preds: torch.Tensor,
+        X_spatial: torch.Tensor,
+        coords: torch.Tensor,
+        knn_index: torch.Tensor,
+    ) -> tuple[torch.Tensor, list[torch.Tensor]]:
+        """
+        Decode a (potentially predictor-rolled-out) trunk embedding back
+        to the continuous outcome via the existing CityHead fusion +
+        regression / exceedance heads.
+
+        This is the JEPA Phase 2 ``latent_rollout`` decode step:
+
+            h_state  = model.encode(physics, alpha)
+            h_pred   = predictor(h_state, action_embed)
+            T_pred   = model.decode(h_pred, base_preds, X_spatial, coords, knn)
+
+        ``base_preds`` and the spatial inputs are taken from the
+        unperturbed observation — only the trunk embedding has been
+        rolled forward in latent space.
+
+        Returns
+        -------
+        T_pred       : (N,)
+        exceedance   : list[(N,)] — one tensor per threshold
+        """
+        h_base = self.base_enc(base_preds)
+        h_spatial, _ = self.spatial_enc(X_spatial, coords, knn_index)
+        h_spatial = self.spatial_proj(h_spatial)
+
+        fused = torch.cat([h_trunk, h_base, h_spatial], dim=-1)
+        fused = self.fusion(fused)
+
+        T_pred = self.regression_head(fused).squeeze(-1)
+        exceedance = [head(fused).squeeze(-1) for head in self.exceedance_heads]
+        return T_pred, exceedance
+
+
+    # ------------------------------------------------------------------
     def predict_with_uncertainty(
         self,
         *args,

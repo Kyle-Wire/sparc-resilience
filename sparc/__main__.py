@@ -405,10 +405,15 @@ def cmd_run(args):
             print("  Continuing — Stage 4 will use physics priors only.")
         _rescan_registry("3")
 
-        # Wager (2025) audit add-ons (opt-in via CLI flags).
+        # Wager (2025) audit add-ons.
+        # As of v3 these run automatically inside Stage 3
+        # (sparc.run.wager2025_addons). The legacy CLI flags are kept as
+        # overrides — they re-run individual gaps if a user wants the
+        # opt-in path or a specific subset persisted to the store.
         if any(getattr(args, attr, False) for attr in
                ("with_spillover", "with_iv", "with_policy_learning",
                 "full_triangulation", "full_audit")):
+            print("  (legacy CLI add-on flags — already auto-run in Stage 3)")
             _run_wager2025_audit_addons(args, config)
             _rescan_registry("3")
 
@@ -439,6 +444,21 @@ def cmd_run(args):
         import traceback
         print(f"  [master gpkg] skipped ({exc})")
         traceback.print_exc()
+
+    # ────────────────────────────────────────────────────────────────
+    # Stage 5: Final interpretation report (auto-invoked at end of run)
+    # ────────────────────────────────────────────────────────────────
+    if stage in ('5', 'all'):
+        try:
+            from argparse import Namespace
+            cmd_report(Namespace(
+                project=project_path,
+                audience='all',
+                format='html',
+                section=None,
+            ))
+        except Exception as exc:
+            print(f"\n>>> Stage 5 report generation failed ({exc})")
 
     print(f"\nPipeline complete. Results in: {paths.output_dir}")
 
@@ -705,6 +725,37 @@ def _run_scenarios(config, paths, project_path):
     else:
         print(f"\n  [SA] Sensitivity analysis skipped (set run_sensitivity_analysis: true to enable)")
 
+    # ------------------------------------------------------------------
+    # Stage-4 Wager-2025 add-ons:
+    #   * mirror Stage-3 audit artifacts under Stage 4 for Stage-5 report
+    #   * Optimal-Targeted (Wager-EWM) policy replay
+    #   * Budget Optimizer (allocation + Pareto frontier)
+    # All best-effort; any single failure is logged and skipped.
+    # ------------------------------------------------------------------
+    try:
+        from sparc.run.scenarios import (
+            mirror_audit_artifacts_to_stage4,
+            run_policy_replay,
+            run_budget_optimization,
+        )
+        stage3_dir = str(paths.stage_dir(3)) if hasattr(paths, "stage_dir") else None
+        if stage3_dir is None:
+            stage_dirs = (config.get("output") or {}).get("stage_dirs") or {}
+            base = (config.get("output") or {}).get("base_dir", "output")
+            s3 = stage_dirs.get("stage_3", "Stage_3_Causal_Validation")
+            stage3_dir = os.path.join(str(paths.output_dir), s3)
+        mirror_audit_artifacts_to_stage4(stage3_dir)
+        run_policy_replay(
+            config=config, data=data,
+            summary_df=summary_df,
+            results_long_df=results_gdf,
+        )
+        run_budget_optimization(
+            config=config, results_long_df=results_gdf,
+        )
+    except Exception as e:
+        print(f"  [stage4 add-ons] failed ({e}); continuing")
+
     return summary_df, results_gdf
 
 
@@ -798,7 +849,13 @@ def cmd_server(args):
 
 
 def cmd_report(args):
-    """Generate final interpretation report."""
+    """Generate final interpretation report.
+
+    Renders one report per audience requested via ``--audience``
+    (``all`` = every registered audience).  The default format is
+    ``html``; pass ``--format pdf`` to also write a WeasyPrint PDF.
+    Reports land under ``<output_dir>/Stage_5_Reports/``.
+    """
     project_path = _resolve_project_path(args)
 
     repo_root = str(Path(__file__).resolve().parent.parent)
@@ -806,13 +863,77 @@ def cmd_report(args):
 
     from sparc.config.config import load_config
     from sparc.run.pipeline_paths import set_paths_from_config
+    from sparc.report.audience import (
+        AUDIENCES, FORMATS, generate_audience_report,
+    )
+    from sparc.report.stakeholder_index import write_stakeholder_index
 
     config = load_config(project_path)
     paths = set_paths_from_config(config)
 
-    print(f"Generating report for: {config.get('project', {}).get('name', 'Unnamed')}")
-    print(f"  Output dir: {paths.output_dir}")
-    print(f"  (Report generation integration point — connect to final_interpretation.py)")
+    audience = getattr(args, "audience", "all")
+    fmt      = getattr(args, "format",   "html")
+    section  = getattr(args, "section",  None)
+    if fmt not in FORMATS:
+        print(f"ERROR: --format must be one of {FORMATS}", file=sys.stderr)
+        sys.exit(2)
+
+    if audience == "all":
+        targets = list(AUDIENCES)
+    else:
+        if audience not in AUDIENCES:
+            print(f"ERROR: --audience must be one of {AUDIENCES + ('all',)}",
+                  file=sys.stderr)
+            sys.exit(2)
+        targets = [audience]
+
+    out_dir = Path(paths.output_dir) / "Stage_5_Reports"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Generating report(s) for: {config.get('project', {}).get('name', 'Unnamed')}")
+    print(f"  Output: {out_dir}")
+    print(f"  Audiences: {', '.join(targets)}  ·  Format: {fmt}")
+
+    written: list[Path] = []
+    for aud in targets:
+        try:
+            payload = generate_audience_report(
+                run_dir=Path(paths.output_dir),
+                config=config,
+                audience=aud,
+                fmt=fmt,
+            )
+        except Exception as e:
+            print(f"  [{aud}] FAILED: {e}", file=sys.stderr)
+            continue
+        suffix = {"md": "md", "html": "html", "pdf": "pdf"}[fmt]
+        dest = out_dir / f"report_{aud}.{suffix}"
+        if isinstance(payload, bytes):
+            dest.write_bytes(payload)
+        else:
+            if section:
+                # Crude markdown-section slice: keep the named ## heading
+                # and everything until the next ## (or end of doc).
+                import re as _re
+                pat = _re.compile(rf"(^##\s+{_re.escape(section)}.*?)(?=^##\s+|\Z)",
+                                  _re.M | _re.S)
+                m = pat.search(payload)
+                if m:
+                    payload = m.group(1)
+                else:
+                    print(f"  [{aud}] section '{section}' not found; writing full report")
+            dest.write_text(payload, encoding="utf-8")
+        written.append(dest)
+        print(f"  [{aud}] → {dest.name}")
+
+    # Stakeholder question→section index (JSON)
+    try:
+        idx = write_stakeholder_index(out_dir / "stakeholder_index.json")
+        print(f"  [index] → {idx.name}")
+    except Exception as e:
+        print(f"  [index] failed ({e})")
+
+    print(f"Done. {len(written)} report(s) written.")
 
 
 def cmd_desktop(args):
@@ -1134,7 +1255,7 @@ def build_parser() -> argparse.ArgumentParser:
     # --- run ---
     p_run = subparsers.add_parser('run', help='Run the SPARC pipeline')
     p_run.add_argument('--project', '-p', required=True, help='Path to project.yml')
-    p_run.add_argument('--stage', '-s', choices=['0', '1', '2', '3', '4', 'all'], default='all',
+    p_run.add_argument('--stage', '-s', choices=['0', '1', '2', '3', '4', '5', 'all'], default='all',
                        help='Which pipeline stage to run (0=Correlogram, 1=GWEN, 2=SpatialCV, 3=Causal, 4=Scenarios, all)')
     p_run.add_argument('--fast', action='store_true', help='Use fast mode (reduced precision)')
     p_run.add_argument('--skip-gwen', action='store_true', dest='skip_gwen',
@@ -1183,6 +1304,15 @@ def build_parser() -> argparse.ArgumentParser:
     # --- report ---
     p_rep = subparsers.add_parser('report', help='Generate final interpretation report')
     p_rep.add_argument('--project', '-p', required=True, help='Path to project.yml')
+    p_rep.add_argument('--audience', '-a', default='all',
+                       help="Audience: technical | planner | public | council | "
+                            "scientist | equity | auditor | all  (default: all)")
+    p_rep.add_argument('--format', '-f', default='html',
+                       choices=['md', 'html', 'pdf'],
+                       help='Output format (default: html)')
+    p_rep.add_argument('--section', default=None,
+                       help='Render only the markdown section with this title '
+                            '(applies only to md/html outputs)')
     p_rep.set_defaults(func=cmd_report)
 
     # --- server ---

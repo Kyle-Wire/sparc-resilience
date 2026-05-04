@@ -168,17 +168,33 @@ class PDEInformedPhysicsEncoder(nn.Module):
     def forward(
         self,
         physics_feats: torch.Tensor,
+        channel_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Parameters
         ----------
         physics_feats : (N, n_physics_features) — all physics inputs
+        channel_mask  : (n_physics_features,) bool/float or None
+            Optional mask for JEPA-style context encoding.  Channels
+            where the mask is 0/False are zeroed out before the encoder
+            runs (information-removal masking, matching standard
+            masked-autoencoder / JEPA practice).  When ``None`` (the
+            default) the encoder behaves identically to the legacy path.
 
         Returns
         -------
         encoded : (N, out_dim) — blended physics representation
         w_source : (N, 1) — spatial blend weight field (for diagnostics)
         """
+        if channel_mask is not None:
+            if channel_mask.dim() != 1 or channel_mask.shape[0] != physics_feats.shape[-1]:
+                raise ValueError(
+                    f"channel_mask must be shape ({physics_feats.shape[-1]},); "
+                    f"got {tuple(channel_mask.shape)}",
+                )
+            mask = channel_mask.to(dtype=physics_feats.dtype, device=physics_feats.device)
+            physics_feats = physics_feats * mask  # broadcast over N
+
         T_p = self.source_enc(physics_feats)        # (N, out_dim)
         T_h = self.harmonic_enc(physics_feats)       # (N, out_dim)
         w = self.blend_net(physics_feats)             # (N, 1)

@@ -331,6 +331,12 @@ class MC3Results:
     n_accepted: int
     n_total: int
     trace: list[float] = field(default_factory=list)
+    n_accepted_per_chain: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.int64),
+    )
+    temperatures: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.float64),
+    )
 
 
 def run_mc3(
@@ -398,6 +404,7 @@ def run_mc3(
     edge_counts = np.zeros((p, p), dtype=np.float64)
     n_post_burnin = 0
     n_accepted = 0
+    n_accepted_per_chain = np.zeros(n_chains, dtype=np.int64)
     trace: list[float] = []
     burnin_cutoff = int(n_iter * burnin_frac)
 
@@ -430,6 +437,7 @@ def run_mc3(
                 chain_node_scores[k] = prop_node_scores
                 chain_priors[k] = prop_prior
                 scores[k] = prop_score
+                n_accepted_per_chain[k] += 1
                 if k == 0:
                     n_accepted += 1
 
@@ -462,8 +470,13 @@ def run_mc3(
         # Progress logging
         if (it + 1) % 1000 == 0 or it == 0:
             n_edges = int(chains[0].adj.sum())
+            per_chain_acc = "  ".join(
+                f"c{k}(T={temperatures[k]:.2f}):{int(n_accepted_per_chain[k])}"
+                for k in range(n_chains)
+            )
             print(f"   MC³ iter {it+1}/{n_iter}  score={scores[0]:.2f}  "
-                  f"edges={n_edges}  accepted={n_accepted}", flush=True)
+                  f"edges={n_edges}  cold_acc={n_accepted}  [{per_chain_acc}]",
+                  flush=True)
 
     edge_probs = edge_counts / max(n_post_burnin, 1)
 
@@ -478,4 +491,6 @@ def run_mc3(
         n_accepted=n_accepted,
         n_total=n_iter,
         trace=trace,
+        n_accepted_per_chain=n_accepted_per_chain.copy(),
+        temperatures=np.asarray(temperatures, dtype=np.float64),
     )

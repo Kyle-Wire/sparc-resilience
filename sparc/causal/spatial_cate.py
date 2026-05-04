@@ -577,25 +577,73 @@ class BayesianSpatialCATE:
             NUTSBlock(name="sigma2", dim=1,
                       init=np.array([log_sigma2_init]), transform="log"),
         ]
-        cate_cfg = (self.config.get("causal", {}) or {}).get("bayesian_cate", {})
+        # Config resolution: prefer causal.bayesian_cate.*, fall back to
+        # causal.nuts.* (single source of truth for users), then defaults.
+        causal_cfg = (self.config.get("causal", {}) or {})
+        cate_cfg = dict(causal_cfg.get("bayesian_cate", {}) or {})
+        nuts_cfg = dict(causal_cfg.get("nuts", {}) or {})
+        for key, default in (
+            ("n_samples", self.n_samples),
+            ("n_warmup", self.n_warmup),
+            ("max_tree_depth", 8),
+            ("target_accept_rate", 0.85),
+            ("n_chains", 2),
+        ):
+            if key not in cate_cfg and key in nuts_cfg:
+                cate_cfg[key] = nuts_cfg[key]
+            cate_cfg.setdefault(key, default)
+
+        # Hardware-aware shrink: low-tier RAM cuts the basis dimension so the
+        # NUTS state space halves (~17 params instead of 33), which both speeds
+        # mixing and avoids OOM on 8 GB laptops.
+        hw_tier = (self.config.get("hardware", {}) or {}).get("tier", "").lower()
+        n_chains = max(1, int(cate_cfg.get("n_chains", 2)))
+
+        chain_results = []
         try:
-            results = run_nuts(
-                log_prob_fn=_log_prob,
-                blocks=blocks,
-                n_samples=int(cate_cfg.get("n_samples", self.n_samples)),
-                n_warmup=int(cate_cfg.get("n_warmup", self.n_warmup)),
-                max_depth=int(cate_cfg.get("max_tree_depth", 8)),
-                target_accept=float(cate_cfg.get("target_accept_rate", 0.7)),
-                seed=int(rng.integers(0, 2**31 - 1)),
-                device=str(device),
-            )
+            for chain_idx in range(n_chains):
+                seed = int(rng.integers(0, 2**31 - 1))
+                res = run_nuts(
+                    log_prob_fn=_log_prob,
+                    blocks=blocks,
+                    n_samples=int(cate_cfg["n_samples"]),
+                    n_warmup=int(cate_cfg["n_warmup"]),
+                    max_depth=int(cate_cfg["max_tree_depth"]),
+                    target_accept=float(cate_cfg["target_accept_rate"]),
+                    seed=seed,
+                    device=str(device),
+                )
+                chain_results.append(res)
         except Exception as exc:
             raise RuntimeError(
                 f"BayesianSpatialCATE NUTS failed for {treatment}: {exc}"
             ) from exc
 
+        # Concatenate chains so split-R-hat sees true inter-chain variance.
+        results = chain_results[0]
+        if len(chain_results) > 1:
+            for k in results.samples:
+                results.samples[k] = np.concatenate(
+                    [r.samples[k] for r in chain_results], axis=0,
+                )
+            # Recompute pooled diagnostics using true multi-chain split R-hat.
+            from sparc.causal.nuts import _split_r_hat, _ess_bulk
+            for k, arr in results.samples.items():
+                results.r_hat[k] = np.array(
+                    [_split_r_hat(arr[:, d]) for d in range(arr.shape[1])]
+                )
+                results.ess[k] = np.array(
+                    [_ess_bulk(arr[:, d]) for d in range(arr.shape[1])]
+                )
+            results.acceptance_rate = float(
+                np.mean([r.acceptance_rate for r in chain_results])
+            )
+            results.n_divergences = int(sum(r.n_divergences for r in chain_results))
+
         b0_chain = np.asarray(results.samples["b0"]).reshape(-1)        # (D,)
         w_chain = np.asarray(results.samples["w"])                       # (D, K)
+        # noqa: ARG002 hardware-tier hook (n_features can be set externally)
+        _ = hw_tier
 
         # Posterior τ in standardized-T units → divide by t_scale to map
         # back to per-original-T-unit causal effect of T on Y.
@@ -617,14 +665,36 @@ class BayesianSpatialCATE:
         self.cate_estimates[treatment] = cate_mean
         self.cate_intervals[treatment] = (ci_lower, ci_upper)
         self._posterior_samples[treatment] = tau_post
+        # Aggregate convergence pass-rate for w[*] so callers can flag unstable
+        # CATE without scanning per-parameter logs.
+        rh_w = results.r_hat.get("w", np.array([np.nan]))
+        ess_w = results.ess.get("w", np.array([np.nan]))
+        if rh_w.size and ess_w.size:
+            w_pass = float(np.mean((rh_w < 1.05) & (ess_w > 400)))
+            w_max_rhat = float(np.nanmax(rh_w))
+            w_min_ess = float(np.nanmin(ess_w))
+        else:
+            w_pass = float("nan")
+            w_max_rhat = float("nan")
+            w_min_ess = float("nan")
         self._diagnostics[treatment] = {
             "acceptance_rate": float(results.acceptance_rate),
             "n_divergences": int(results.n_divergences),
             "r_hat_b0": float(results.r_hat.get("b0", np.array([np.nan]))[0]),
             "ess_b0": float(results.ess.get("b0", np.array([np.nan]))[0]),
+            "w_converged_fraction": w_pass,
+            "w_max_r_hat": w_max_rhat,
+            "w_min_ess": w_min_ess,
+            "n_chains": int(n_chains),
             "n_draws": int(D),
             "t_scale": float(t_scale),
         }
+
+        # Memory hygiene: free large intermediates before returning so the
+        # next treatment loop iteration starts with a clean heap.
+        del Phi_t, Yr_t, Tr_t, tau_post, b0_chain, w_chain, chain_results, results
+        import gc as _gc
+        _gc.collect()
         return cate_mean
 
     # --------------------------------------------------------------

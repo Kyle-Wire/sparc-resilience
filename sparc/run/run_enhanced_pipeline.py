@@ -46,18 +46,28 @@ def check_stage_completion(stage_name):
     except Exception:
         pass
 
-    # Fallback: file-existence checks
+    # Fallback: store-first via catalogued artifact ids, then file-existence
+    from sparc.run.artifact_io import exists_path
     if stage_name == "GWEN Auto-Approval":
+        # gwen_approved.txt is an on-disk sentinel by design (user-creatable
+        # approval gate); not stored in artifacts.db.
         return os.path.exists(paths.gwen_approved)
     elif stage_name == "Variogram Analysis":
-        return os.path.exists(paths.variogram_results) and os.path.exists(paths.variogram_summary)
+        return (exists_path(paths.variogram_results, stage="0", artifact_id="correlogram_results")
+                and exists_path(paths.variogram_summary, stage="0", artifact_id="correlogram_summary"))
     elif stage_name == "Pipeline Configuration":
-        return os.path.exists(paths.pipeline_config)
+        return exists_path(paths.pipeline_config, stage="2", artifact_id="pipeline_config")
     elif stage_name == "Enhanced Spatial CV":
-        return os.path.exists(paths.oof_predictions) and os.path.exists(paths.folds_file)
+        return (exists_path(paths.oof_predictions, stage="2", artifact_id="oof_predictions")
+                and exists_path(paths.folds_file, stage="2", artifact_id="folds"))
     elif stage_name == "Causal Validation":
-        return os.path.exists(os.path.join(str(paths.stage3_dir), 'scenario_coefficients.json'))
+        return exists_path(
+            os.path.join(str(paths.stage3_dir), 'scenario_coefficients.json'),
+            stage="3", artifact_id="scenario_coefficients",
+        )
     elif stage_name == "Final Interpretation":
+        # performance_metrics is not currently catalogued in artifacts.db;
+        # fall back to direct file check.
         return os.path.exists(paths.performance_metrics)
     else:
         return False

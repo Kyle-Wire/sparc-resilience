@@ -542,26 +542,46 @@ def _load_correlogram_bandwidths(
 
     # Stage_0 is a sibling of Stage_2 under the shared output root.
     # Walk up from output_dir until we find Stage_0_Correlogram as a sibling.
-    results_path = None
-    search_dir = output_dir
-    for _ in range(4):  # max 4 levels up
-        candidate = search_dir.parent / "Stage_0_Correlogram" / "correlogram_analysis_results.json"
-        if candidate.exists():
-            results_path = candidate
-            break
-        search_dir = search_dir.parent
+    # Prefer the artifact store (DB-only mode), fall back to disk walk.
+    data = None
+    try:
+        from sparc.run.artifact_io import load_struct_path
+        # Use a synthetic path; load_struct_path tries the store first via
+        # (stage="0", artifact_id="correlogram_results") regardless of path.
+        synthetic = output_dir.parent / "Stage_0_Correlogram" / "correlogram_analysis_results.json"
+        try:
+            data = load_struct_path(
+                synthetic, stage="0", artifact_id="correlogram_results",
+            )
+        except FileNotFoundError:
+            data = None
+    except Exception:  # noqa: BLE001
+        data = None
 
-    if results_path is None:
-        logger.info(
-            "Correlogram results not found (searched up from %s) — using uniform bandwidths",
-            output_dir,
-        )
-        return None
+    if data is None:
+        results_path = None
+        search_dir = output_dir
+        for _ in range(4):  # max 4 levels up
+            candidate = search_dir.parent / "Stage_0_Correlogram" / "correlogram_analysis_results.json"
+            if candidate.exists():
+                results_path = candidate
+                break
+            search_dir = search_dir.parent
+
+        if results_path is None:
+            logger.info(
+                "Correlogram results not found (searched up from %s) — using uniform bandwidths",
+                output_dir,
+            )
+            return None
+
+        try:
+            with open(results_path, "r") as f:
+                data = json.load(f)
+        except Exception:  # noqa: BLE001
+            return None
 
     try:
-        with open(results_path, "r") as f:
-            data = json.load(f)
-
         # Extract per-variable bandwidths from individual_results
         individual = data.get("individual_results", {})
         bandwidths = []
@@ -686,6 +706,14 @@ def train_neural_meta(
     from sparc.training.loss import sparc_joint_loss
     from sparc.training.optimizer import build_optimizer, build_scheduler
 
+    # JEPA Phase 1 (optional, gated by config.jepa.enable).  Imports are
+    # local so the dependency is only paid when the feature is on.
+    from sparc.models.ema_trunk import EMATrunk
+    from sparc.models.latent_predictor import LatentPredictor
+    from sparc.training.jepa_loss import JEPALossWeights, jepa_curriculum_weight
+    # JEPA Phase 2: action-conditioned predictor + scenario distillation.
+    from sparc.models.action_embedding import ActionEmbedding
+
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -694,6 +722,7 @@ def train_neural_meta(
     training_cfg = config.get("training", {})
     optim_cfg = config.get("optimization", {})
     pr_cfg = config.get("process_rate", {})
+    jepa_cfg = config.get("jepa", {}) or {}
 
     hidden_dim = neural_cfg.get("hidden_dim", 256)
     dropout = neural_cfg.get("dropout", 0.1)
@@ -754,6 +783,44 @@ def train_neural_meta(
         pr_col_idxs = list(range(min(pr_input_dim, n_physics)))
 
     prior_mean = pr_cfg.get("prior_mean", 0.5)
+
+    # ---- JEPA settings (Phase 1, off by default) ----
+    jepa_enable = bool(jepa_cfg.get("enable", False))
+    jepa_mask_ratio = float(jepa_cfg.get("mask_ratio", 0.4))
+    jepa_lambda = float(jepa_cfg.get("lambda", 1.0))
+    jepa_ema_tau_start = float(jepa_cfg.get("ema_tau_start", 0.99))
+    jepa_ema_tau_end = float(jepa_cfg.get("ema_tau_end", 0.9999))
+    jepa_warmup_steps = int(jepa_cfg.get("ema_warmup_steps", 1000))
+    jepa_curric_start = int(jepa_cfg.get("curriculum_start", 5))
+    jepa_curric_end = int(jepa_cfg.get("curriculum_end", 15))
+    jepa_weights = JEPALossWeights(
+        alignment=float(jepa_cfg.get("lambda_align", 1.0)),
+        variance=float(jepa_cfg.get("lambda_variance", 1.0)),
+        covariance=float(jepa_cfg.get("lambda_covariance", 0.04)),
+        variance_gamma=float(jepa_cfg.get("variance_gamma", 1.0)),
+    )
+    # Phase 2 settings (only used when jepa.enable=true)
+    jepa_action_dim = int(jepa_cfg.get("action_dim", 64))
+    jepa_predictor_blocks = int(jepa_cfg.get("predictor_blocks", 1))
+    jepa_predictor_film = bool(jepa_cfg.get("predictor_film", False))
+    jepa_lambda_scenario = float(jepa_cfg.get("lambda_scenario", 0.0))
+    jepa_lambda_latent_pde = float(jepa_cfg.get("lambda_latent_pde", 0.0))
+    jepa_scenario_perturb_std = float(jepa_cfg.get("scenario_perturb_std", 0.5))
+    if jepa_enable:
+        logger.info(
+            "  JEPA enabled: mask_ratio=%.2f lambda=%.3f ema_tau=%.4f→%.4f "
+            "(warmup=%d) curriculum=[%d,%d]",
+            jepa_mask_ratio, jepa_lambda,
+            jepa_ema_tau_start, jepa_ema_tau_end, jepa_warmup_steps,
+            jepa_curric_start, jepa_curric_end,
+        )
+        if jepa_lambda_scenario > 0 or jepa_lambda_latent_pde > 0 or jepa_predictor_blocks > 1:
+            logger.info(
+                "  JEPA Phase 2: action_dim=%d blocks=%d film=%s "
+                "λ_scenario=%.3f λ_latent_pde=%.4f σ_perturb=%.3f",
+                jepa_action_dim, jepa_predictor_blocks, jepa_predictor_film,
+                jepa_lambda_scenario, jepa_lambda_latent_pde, jepa_scenario_perturb_std,
+            )
 
     # ---- Phase 3 (v4): per-treatment alpha heads ----
     # Resolve the ordered list of treatments from the causal DAG (or
@@ -1023,6 +1090,42 @@ def train_neural_meta(
         )
         scheduler = build_scheduler(optimizer, n_epochs, warmup_epochs=warmup_epochs)
 
+        # ---- JEPA target trunk + latent predictor (Phase 1) ----
+        ema_trunk: EMATrunk | None = None
+        latent_predictor: LatentPredictor | None = None
+        action_embed: ActionEmbedding | None = None
+        jepa_optimizer: torch.optim.Optimizer | None = None
+        if jepa_enable:
+            ema_trunk = EMATrunk(
+                model,
+                tau_start=jepa_ema_tau_start,
+                tau_end=jepa_ema_tau_end,
+                warmup_steps=jepa_warmup_steps,
+            ).to(device)
+            # Phase 2: action conditioning is enabled when any P2 term
+            # is on (lambda_scenario > 0) OR predictor depth > 1.
+            use_action = (
+                jepa_lambda_scenario > 0.0 or jepa_predictor_blocks > 1
+            )
+            action_dim = jepa_action_dim if use_action else 0
+            latent_predictor = LatentPredictor(
+                hidden_dim=hidden_dim,
+                action_dim=action_dim,
+                dropout=dropout,
+                n_blocks=jepa_predictor_blocks,
+                film=jepa_predictor_film,
+            ).to(device)
+            jepa_params = list(latent_predictor.parameters())
+            if use_action:
+                action_embed = ActionEmbedding(
+                    treatment_vocab=feature_names,
+                    embed_dim=action_dim,
+                ).to(device)
+                jepa_params += list(action_embed.parameters())
+            # Predictor + action-embed parameters trained jointly via a
+            # sibling optimizer.
+            jepa_optimizer = torch.optim.AdamW(jepa_params, lr=lr)
+
         # ---- Build per-fold V1 base-model targets (normalised) ----
         _fold_base_targets: dict[str, torch.Tensor] | None = None
         if base_oof_predictions is not None:
@@ -1229,6 +1332,116 @@ def train_neural_meta(
                     alpha=alpha,
                 )
 
+                # ---- JEPA forward (Phase 1) ----
+                # Compute the masked context embedding from the online
+                # trunk and the unmasked target embedding from the EMA
+                # trunk; the predictor maps context -> target.  All
+                # gated by jepa_enable + per-epoch curriculum weight so
+                # zero-cost when the feature is off.
+                b_jepa_h_pred = None
+                b_jepa_h_target = None
+                b_jepa_scenario_h_pred = None
+                b_jepa_scenario_h_target = None
+                b_jepa_latent_h = None
+                b_jepa_latent_neighbor = None
+                b_jepa_latent_alpha = None
+                jepa_lambda_eff = 0.0
+                jepa_lambda_scenario_eff = 0.0
+                jepa_lambda_latent_pde_eff = 0.0
+                if jepa_enable:
+                    curric = jepa_curriculum_weight(
+                        epoch,
+                        warmup_start=jepa_curric_start,
+                        warmup_end=jepa_curric_end,
+                    )
+                    jepa_lambda_eff = jepa_lambda * curric
+                    jepa_lambda_scenario_eff = jepa_lambda_scenario * curric
+                    jepa_lambda_latent_pde_eff = jepa_lambda_latent_pde * curric
+
+                    # Reusable: online context (no mask) — used by
+                    # both scenario branch and latent-PDE branch.
+                    h_state_online: torch.Tensor | None = None
+
+                    if jepa_lambda_eff > 0.0:
+                        n_phys_feat = b_physics_ext.shape[-1]
+                        # Bernoulli mask: 1 = keep, 0 = mask out.
+                        keep_p = max(0.0, 1.0 - jepa_mask_ratio)
+                        channel_mask = (
+                            torch.rand(n_phys_feat, device=device) < keep_p
+                        ).to(b_physics_ext.dtype)
+                        h_context = model.encode(
+                            physics_feats=b_physics_ext,
+                            alpha=alpha,
+                            channel_mask=channel_mask,
+                        )
+                        b_jepa_h_pred = latent_predictor(h_context)
+                        b_jepa_h_target = ema_trunk.encode_target(
+                            physics_feats=b_physics_ext, alpha=alpha,
+                        )
+
+                    # ---- JEPA Phase 2: scenario distillation ----
+                    # Sample one treatment per batch and one signed
+                    # magnitude (in normalised feature units).  Build
+                    # a perturbed view, run online predictor with the
+                    # action embedding, target = EMA(perturbed).
+                    if (
+                        jepa_lambda_scenario_eff > 0.0
+                        and action_embed is not None
+                        and len(feature_names) > 0
+                    ):
+                        treat_pos = int(torch.randint(
+                            0, len(feature_names), (1,), device=device,
+                        ).item())
+                        delta_x_val = float(
+                            torch.randn((), device=device).item()
+                            * jepa_scenario_perturb_std
+                        )
+
+                        b_phys_perturbed = b_physics_ext.clone()
+                        b_phys_perturbed[:, treat_pos] = (
+                            b_phys_perturbed[:, treat_pos] + delta_x_val
+                        )
+
+                        if h_state_online is None:
+                            h_state_online = model.encode(
+                                physics_feats=b_physics_ext, alpha=alpha,
+                            )
+
+                        n_pts = b_physics_ext.shape[0]
+                        treat_idx = torch.full(
+                            (n_pts,), treat_pos, dtype=torch.long, device=device,
+                        )
+                        dx = torch.full(
+                            (n_pts,), delta_x_val,
+                            dtype=b_physics_ext.dtype, device=device,
+                        )
+                        dt = torch.zeros_like(dx)
+                        a_emb = action_embed(treat_idx, dx, dt)
+
+                        b_jepa_scenario_h_pred = latent_predictor(
+                            h_state_online, a_emb,
+                        )
+                        b_jepa_scenario_h_target = ema_trunk.encode_target(
+                            physics_feats=b_phys_perturbed, alpha=alpha,
+                        )
+
+                    # ---- JEPA Phase 2: latent PDE consistency ----
+                    # Cheap Laplacian smoothness penalty on the online
+                    # trunk embedding across the existing 4-cardinal
+                    # neighbour stencil — gated by alpha.
+                    if (
+                        jepa_lambda_latent_pde_eff > 0.0
+                        and b_cardinal is not None
+                        and b_cardinal.numel() > 0
+                    ):
+                        if h_state_online is None:
+                            h_state_online = model.encode(
+                                physics_feats=b_physics_ext, alpha=alpha,
+                            )
+                        b_jepa_latent_h = h_state_online
+                        b_jepa_latent_neighbor = b_cardinal
+                        b_jepa_latent_alpha = alpha
+
                 total_loss, components = sparc_joint_loss(
                     T_pred=T_pred,
                     exceedance_preds=exceedance,
@@ -1257,6 +1470,17 @@ def train_neural_meta(
                     lambda_bc=lambdas.get("bc", 0.0),
                     water_mask=b_water_mask,
                     T_water=tensors.get("T_water"),
+                    jepa_h_pred=b_jepa_h_pred,
+                    jepa_h_target=b_jepa_h_target,
+                    jepa_weights=jepa_weights,
+                    lambda_jepa=jepa_lambda_eff,
+                    jepa_scenario_h_pred=b_jepa_scenario_h_pred,
+                    jepa_scenario_h_target=b_jepa_scenario_h_target,
+                    lambda_jepa_scenario=jepa_lambda_scenario_eff,
+                    jepa_latent_h=b_jepa_latent_h,
+                    jepa_latent_neighbor_idx=b_jepa_latent_neighbor,
+                    jepa_latent_alpha=b_jepa_latent_alpha,
+                    lambda_jepa_latent_pde=jepa_lambda_latent_pde_eff,
                 )
 
                 # Variance penalty on w(s): encourage spatial diversity
@@ -1268,6 +1492,8 @@ def train_neural_meta(
                     total_loss = total_loss + 0.1 * torch.nn.functional.mse_loss(alpha, train_alpha_targets[b_idx])
 
                 optimizer.zero_grad()
+                if jepa_optimizer is not None:
+                    jepa_optimizer.zero_grad()
                 total_loss.backward()
 
                 # Global gradient norm clipping across all components
@@ -1276,9 +1502,27 @@ def train_neural_meta(
                 )
                 for s in surrogates.values():
                     all_params.extend(s.parameters())
+                if latent_predictor is not None:
+                    all_params.extend(latent_predictor.parameters())
+                if action_embed is not None:
+                    all_params.extend(action_embed.parameters())
                 torch.nn.utils.clip_grad_norm_(all_params, clip_norm)
 
                 optimizer.step()
+                if jepa_optimizer is not None:
+                    jepa_optimizer.step()
+                # EMA target trunk update — must follow the optimizer
+                # step so the target tracks the *post-update* online
+                # weights.  Skipped when JEPA contribution was zero
+                # this batch to avoid drifting the target during the
+                # off / pre-warmup phase.
+                _any_jepa = (
+                    jepa_lambda_eff > 0.0
+                    or jepa_lambda_scenario_eff > 0.0
+                    or jepa_lambda_latent_pde_eff > 0.0
+                )
+                if ema_trunk is not None and _any_jepa:
+                    ema_trunk.update(model)
 
                 bsize = len(b_idx)
                 epoch_loss += total_loss.item() * bsize
@@ -1457,6 +1701,38 @@ def train_neural_meta(
     final_scheduler = build_scheduler(
         final_optimizer, main_epochs, warmup_epochs=warmup_epochs,
     )
+
+    # ---- JEPA target trunk + latent predictor (final retrain) ----
+    final_ema_trunk: EMATrunk | None = None
+    final_latent_predictor: LatentPredictor | None = None
+    final_action_embed: ActionEmbedding | None = None
+    final_jepa_optimizer: torch.optim.Optimizer | None = None
+    if jepa_enable:
+        final_ema_trunk = EMATrunk(
+            final_model,
+            tau_start=jepa_ema_tau_start,
+            tau_end=jepa_ema_tau_end,
+            warmup_steps=jepa_warmup_steps,
+        ).to(device)
+        use_action_final = (
+            jepa_lambda_scenario > 0.0 or jepa_predictor_blocks > 1
+        )
+        action_dim_final = jepa_action_dim if use_action_final else 0
+        final_latent_predictor = LatentPredictor(
+            hidden_dim=hidden_dim,
+            action_dim=action_dim_final,
+            dropout=dropout,
+            n_blocks=jepa_predictor_blocks,
+            film=jepa_predictor_film,
+        ).to(device)
+        final_jepa_params = list(final_latent_predictor.parameters())
+        if use_action_final:
+            final_action_embed = ActionEmbedding(
+                treatment_vocab=feature_names,
+                embed_dim=action_dim_final,
+            ).to(device)
+            final_jepa_params += list(final_action_embed.parameters())
+        final_jepa_optimizer = torch.optim.AdamW(final_jepa_params, lr=lr)
 
     full_knn = tensors["knn_index"]
     full_knn_dists_rt = tensors["knn_dists"]
@@ -1646,6 +1922,100 @@ def train_neural_meta(
                 alpha=alpha,
             )
 
+            # ---- JEPA forward (final retrain) ----
+            b_jepa_h_pred = None
+            b_jepa_h_target = None
+            b_jepa_scenario_h_pred = None
+            b_jepa_scenario_h_target = None
+            b_jepa_latent_h = None
+            b_jepa_latent_neighbor = None
+            b_jepa_latent_alpha = None
+            jepa_lambda_eff = 0.0
+            jepa_lambda_scenario_eff = 0.0
+            jepa_lambda_latent_pde_eff = 0.0
+            if jepa_enable:
+                curric = jepa_curriculum_weight(
+                    epoch,
+                    warmup_start=jepa_curric_start,
+                    warmup_end=jepa_curric_end,
+                )
+                jepa_lambda_eff = jepa_lambda * curric
+                jepa_lambda_scenario_eff = jepa_lambda_scenario * curric
+                jepa_lambda_latent_pde_eff = jepa_lambda_latent_pde * curric
+
+                h_state_online: torch.Tensor | None = None
+
+                if jepa_lambda_eff > 0.0:
+                    n_phys_feat = b_phys_ext.shape[-1]
+                    keep_p = max(0.0, 1.0 - jepa_mask_ratio)
+                    channel_mask = (
+                        torch.rand(n_phys_feat, device=device) < keep_p
+                    ).to(b_phys_ext.dtype)
+                    b_jepa_h_pred = final_latent_predictor(
+                        final_model.encode(
+                            physics_feats=b_phys_ext,
+                            alpha=alpha,
+                            channel_mask=channel_mask,
+                        )
+                    )
+                    b_jepa_h_target = final_ema_trunk.encode_target(
+                        physics_feats=b_phys_ext, alpha=alpha,
+                    )
+
+                if (
+                    jepa_lambda_scenario_eff > 0.0
+                    and final_action_embed is not None
+                    and len(feature_names) > 0
+                ):
+                    treat_pos = int(torch.randint(
+                        0, len(feature_names), (1,), device=device,
+                    ).item())
+                    delta_x_val = float(
+                        torch.randn((), device=device).item()
+                        * jepa_scenario_perturb_std
+                    )
+
+                    b_phys_perturbed = b_phys_ext.clone()
+                    b_phys_perturbed[:, treat_pos] = (
+                        b_phys_perturbed[:, treat_pos] + delta_x_val
+                    )
+
+                    if h_state_online is None:
+                        h_state_online = final_model.encode(
+                            physics_feats=b_phys_ext, alpha=alpha,
+                        )
+
+                    n_pts = b_phys_ext.shape[0]
+                    treat_idx = torch.full(
+                        (n_pts,), treat_pos, dtype=torch.long, device=device,
+                    )
+                    dx = torch.full(
+                        (n_pts,), delta_x_val,
+                        dtype=b_phys_ext.dtype, device=device,
+                    )
+                    dt = torch.zeros_like(dx)
+                    a_emb = final_action_embed(treat_idx, dx, dt)
+
+                    b_jepa_scenario_h_pred = final_latent_predictor(
+                        h_state_online, a_emb,
+                    )
+                    b_jepa_scenario_h_target = final_ema_trunk.encode_target(
+                        physics_feats=b_phys_perturbed, alpha=alpha,
+                    )
+
+                if (
+                    jepa_lambda_latent_pde_eff > 0.0
+                    and b_card is not None
+                    and b_card.numel() > 0
+                ):
+                    if h_state_online is None:
+                        h_state_online = final_model.encode(
+                            physics_feats=b_phys_ext, alpha=alpha,
+                        )
+                    b_jepa_latent_h = h_state_online
+                    b_jepa_latent_neighbor = b_card
+                    b_jepa_latent_alpha = alpha
+
             total_loss, components = sparc_joint_loss(
                 T_pred=T_pred,
                 exceedance_preds=exceedance,
@@ -1674,6 +2044,17 @@ def train_neural_meta(
                 lambda_bc=lambdas.get("bc", 0.0),
                 water_mask=b_water_mask_rt,
                 T_water=tensors.get("T_water"),
+                jepa_h_pred=b_jepa_h_pred,
+                jepa_h_target=b_jepa_h_target,
+                jepa_weights=jepa_weights,
+                lambda_jepa=jepa_lambda_eff,
+                jepa_scenario_h_pred=b_jepa_scenario_h_pred,
+                jepa_scenario_h_target=b_jepa_scenario_h_target,
+                lambda_jepa_scenario=jepa_lambda_scenario_eff,
+                jepa_latent_h=b_jepa_latent_h,
+                jepa_latent_neighbor_idx=b_jepa_latent_neighbor,
+                jepa_latent_alpha=b_jepa_latent_alpha,
+                lambda_jepa_latent_pde=jepa_lambda_latent_pde_eff,
             )
 
             # Variance penalty on w(s): encourage spatial diversity
@@ -1685,12 +2066,27 @@ def train_neural_meta(
                 total_loss = total_loss + 0.1 * torch.nn.functional.mse_loss(alpha, alpha_targets[b_idx])
 
             final_optimizer.zero_grad()
+            if final_jepa_optimizer is not None:
+                final_jepa_optimizer.zero_grad()
             total_loss.backward()
             all_p = list(final_model.parameters()) + list(final_process.parameters())
             for s in final_surrogates.values():
                 all_p.extend(s.parameters())
+            if final_latent_predictor is not None:
+                all_p.extend(final_latent_predictor.parameters())
+            if final_action_embed is not None:
+                all_p.extend(final_action_embed.parameters())
             torch.nn.utils.clip_grad_norm_(all_p, clip_norm)
             final_optimizer.step()
+            if final_jepa_optimizer is not None:
+                final_jepa_optimizer.step()
+            _any_jepa_rt = (
+                jepa_lambda_eff > 0.0
+                or jepa_lambda_scenario_eff > 0.0
+                or jepa_lambda_latent_pde_eff > 0.0
+            )
+            if final_ema_trunk is not None and _any_jepa_rt:
+                final_ema_trunk.update(final_model)
 
             bsz = len(b_idx)
             rt_epoch_loss += total_loss.item() * bsz
