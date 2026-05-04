@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from sparc.registry.provenance import load_provenance
+from sparc.report._style import BRAND_CSS, BRAND_CSS_PRINT
 
 
 # ------------------------------------------------------------------
@@ -115,41 +116,7 @@ def _collect_artifacts(run_dir: Path) -> dict[str, Any]:
 # HTML scaffolding
 # ------------------------------------------------------------------
 
-_CSS = """
-:root {
-    --paper:#FAF7F0; --ink:#2A1F1A; --crimson:#C0392B; --purple:#5B3A8C;
-    --amber:#D4A017; --muted:#8B7B6E; --line:#E5DCD0; --good:#3F7D3A;
-}
-*{box-sizing:border-box}
-body{margin:0;background:var(--paper);color:var(--ink);font:14px/1.5 'Iowan Old Style',Georgia,serif}
-header{padding:24px 32px;border-bottom:1px solid var(--line);background:#fff}
-h1{margin:0 0 4px;font-size:24px}
-h2{margin:24px 0 8px;font-size:18px;color:var(--purple)}
-h3{margin:16px 0 4px;font-size:14px;color:var(--ink);text-transform:uppercase;letter-spacing:.05em}
-.kicker{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
-nav{display:flex;gap:4px;padding:0 32px;border-bottom:1px solid var(--line);background:#fff;position:sticky;top:0;z-index:10}
-nav button{background:none;border:0;padding:12px 16px;font:inherit;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent}
-nav button.active{color:var(--ink);border-bottom-color:var(--crimson)}
-main{padding:24px 32px;max-width:1200px}
-.card{background:#fff;border:1px solid var(--line);border-radius:6px;padding:16px;margin-bottom:16px}
-.muted{color:var(--muted)}
-table{border-collapse:collapse;width:100%;font-size:13px}
-th,td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--line)}
-th{font-weight:600;color:var(--muted);text-transform:uppercase;font-size:11px;letter-spacing:.05em}
-.tag{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:rgba(91,58,140,.1);color:var(--purple)}
-.tag.crimson{background:rgba(192,57,43,.1);color:var(--crimson)}
-.tag.amber{background:rgba(212,160,23,.15);color:#7d5e0e}
-pre{background:#fff;border:1px solid var(--line);border-radius:4px;padding:12px;font-size:12px;overflow:auto}
-.section{display:none}
-.section.active{display:block}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px}
-.stat{background:#fff;border:1px solid var(--line);border-radius:6px;padding:12px}
-.stat .v{font-size:20px;font-weight:600;color:var(--ink)}
-.stat .l{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
-.chat-msg{padding:8px 12px;border-radius:6px;margin-bottom:8px}
-.chat-msg.user{background:rgba(91,58,140,.06);border-left:3px solid var(--purple)}
-.chat-msg.assistant{background:rgba(192,57,43,.04);border-left:3px solid var(--crimson)}
-"""
+_CSS = BRAND_CSS + BRAND_CSS_PRINT
 
 _JS = """
 function showSection(id){
@@ -268,12 +235,15 @@ def build_standalone_html(
 <style>{_CSS}</style>
 </head>
 <body>
-<header>
-    <div class="kicker">SPARC Resilience snapshot</div>
-    <h1>{html.escape(title)}</h1>
-    <div class="muted">Generated {html.escape(generated)} · <span class="tag">self-contained</span></div>
+<header class="page-hero">
+    <div class="wrap">
+        <span class="kicker">SPARC Resilience snapshot</span>
+        <h1>{html.escape(title)}</h1>
+        <div class="meta">Generated {html.escape(generated)} · <span class="tag">self-contained</span></div>
+    </div>
 </header>
-<nav>
+<div class="ramp-strip"></div>
+<nav class="nav">
     <button data-target="overview" onclick="showSection('overview')">Overview</button>
     <button data-target="models" onclick="showSection('models')">Models</button>
     <button data-target="causal" onclick="showSection('causal')">Causal</button>
@@ -281,7 +251,7 @@ def build_standalone_html(
     <button data-target="provenance" onclick="showSection('provenance')">Provenance</button>
     <button data-target="chat" onclick="showSection('chat')">Chat</button>
 </nav>
-<main>
+<main class="wrap">
     <section id="overview" class="section card">
         <h2>Overview</h2>
         <p class="muted">This file embeds every key artifact from the run so it can be

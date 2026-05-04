@@ -32,9 +32,45 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
+from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
 
 from sparc.registry.run_registry import RunRegistry, get_active_registry  # noqa: E402
 from sparc.registry.store import ArtifactStore  # noqa: E402
+from sparc.report._style import RAMP_HEX  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# SPARC brand palette for matplotlib (matches sparc/report/_style.py).
+# ---------------------------------------------------------------------------
+
+SPARC_PRIMARY = "#602468"   # purple  -- replaces former dark-brown swatch
+SPARC_INK = "#1a1416"       # ink     -- axes, reference lines
+SPARC_PAPER = "#f7f4ee"     # paper   -- node fills, light backgrounds
+SPARC_LINE = "#c9c2b3"      # line    -- borders
+SPARC_ACCENT = "#e73c25"    # crimson -- positive sign / accent
+SPARC_COOL = "#5b3a8c"      # cool    -- negative sign
+
+
+def _register_sparc_cmap() -> None:
+    """Register the SPARC ramp as a named matplotlib colormap (idempotent)."""
+    name = "sparc"
+    try:
+        plt.get_cmap(name)
+        return
+    except (ValueError, KeyError):
+        pass
+    cmap = LinearSegmentedColormap.from_list(name, RAMP_HEX)
+    try:
+        matplotlib.colormaps.register(cmap, name=name)
+    except (AttributeError, ValueError):
+        # Older matplotlib: fall back to plt.register_cmap.
+        try:
+            plt.register_cmap(name=name, cmap=cmap)
+        except (AttributeError, ValueError):
+            pass
+
+
+_register_sparc_cmap()
 from sparc.scenario.bundle import ScenarioBundle  # noqa: E402
 from sparc.scenario.contract import (  # noqa: E402
     SCENARIO_ATTRIBUTION,
@@ -126,7 +162,7 @@ def render_data_histogram(store, stage, artifact_id, opts):
         col = numeric[0]
     fig, ax = plt.subplots(figsize=(7, 4))
     series = df[col].dropna()
-    ax.hist(series, bins=int(opts.get("bins", 30)), color="#7a3a3a", alpha=0.85, edgecolor="white")
+    ax.hist(series, bins=int(opts.get("bins", 30)), color=SPARC_PRIMARY, alpha=0.85, edgecolor="white")
     ax.set_title(f"{col} (n={len(series)})")
     ax.set_xlabel(col)
     ax.set_ylabel("count")
@@ -161,10 +197,10 @@ def render_dag(store, stage, artifact_id, opts):
     fig, ax = plt.subplots(figsize=(8, 6))
     pos = nx.spring_layout(g, seed=42)
     weights = [g[u][v]["weight"] for u, v in g.edges()]
-    nx.draw_networkx_nodes(g, pos, ax=ax, node_color="#fdfbf7", edgecolors="#7a3a3a", node_size=900)
+    nx.draw_networkx_nodes(g, pos, ax=ax, node_color=SPARC_PAPER, edgecolors=SPARC_PRIMARY, node_size=900)
     nx.draw_networkx_labels(g, pos, ax=ax, font_size=8)
     nx.draw_networkx_edges(
-        g, pos, ax=ax, width=[1 + 3 * w for w in weights], edge_color="#7a3a3a", arrows=True, arrowsize=12
+        g, pos, ax=ax, width=[1 + 3 * w for w in weights], edge_color=SPARC_PRIMARY, arrows=True, arrowsize=12
     )
     ax.set_axis_off()
     return _fig_to_png(fig, dpi=opts.get("dpi", 144))
@@ -187,7 +223,7 @@ def render_predictions_map(store, stage, artifact_id, opts):
         else:
             raise FigureRenderError(f"no prediction column on {artifact_id}")
     fig, ax = plt.subplots(figsize=(7, 7))
-    _plot_geo(ax, gdf, col, cmap=opts.get("cmap", "magma"))
+    _plot_geo(ax, gdf, col, cmap=opts.get("cmap", "sparc"))
     ax.set_title(opts.get("title", "Predictions"))
     return _fig_to_png(fig, dpi=opts.get("dpi", 144))
 
@@ -203,8 +239,8 @@ def render_cate(store, stage, artifact_id, opts):
         else:
             raise FigureRenderError(f"no CATE column on {artifact_id}")
     fig, ax = plt.subplots(figsize=(7, 4))
-    ax.hist(df[col].dropna(), bins=int(opts.get("bins", 40)), color="#7a3a3a", alpha=0.85, edgecolor="white")
-    ax.axvline(0, color="#444", linestyle="--", linewidth=1)
+    ax.hist(df[col].dropna(), bins=int(opts.get("bins", 40)), color=SPARC_PRIMARY, alpha=0.85, edgecolor="white")
+    ax.axvline(0, color=SPARC_INK, linestyle="--", linewidth=1)
     ax.set_title("Conditional average treatment effect")
     ax.set_xlabel(col)
     ax.set_ylabel("count")
@@ -229,9 +265,9 @@ def render_sensitivity_tornado(store, stage, artifact_id, opts):
     y = np.arange(len(names))
     fig, ax = plt.subplots(figsize=(8, max(3, 0.35 * len(names))))
     for yi, lo, hi, eff in zip(y, lows, highs, effects):
-        ax.plot([lo, hi], [yi, yi], color="#7a3a3a", linewidth=4, solid_capstyle="butt")
+        ax.plot([lo, hi], [yi, yi], color=SPARC_PRIMARY, linewidth=4, solid_capstyle="butt")
         ax.plot([eff], [yi], "o", color="#222")
-    ax.axvline(0, color="#444", linestyle="--", linewidth=1)
+    ax.axvline(0, color=SPARC_INK, linestyle="--", linewidth=1)
     ax.set_yticks(y)
     ax.set_yticklabels(names)
     ax.invert_yaxis()
@@ -245,9 +281,9 @@ def render_dose_response(store, stage, artifact_id, opts):
     x_col = opts.get("x") or ("dose" if "dose" in df.columns else df.columns[0])
     y_col = opts.get("y") or ("response" if "response" in df.columns else df.columns[1])
     fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(df[x_col], df[y_col], color="#7a3a3a", linewidth=1.5)
+    ax.plot(df[x_col], df[y_col], color=SPARC_PRIMARY, linewidth=1.5)
     if {"low", "high"}.issubset(df.columns):
-        ax.fill_between(df[x_col], df["low"], df["high"], color="#7a3a3a", alpha=0.18)
+        ax.fill_between(df[x_col], df["low"], df["high"], color=SPARC_PRIMARY, alpha=0.18)
     ax.set_xlabel(x_col)
     ax.set_ylabel(y_col)
     ax.set_title("Dose–response")
@@ -263,7 +299,7 @@ def render_posteriors(store, stage, artifact_id, opts):
     fig, axes = plt.subplots(n, 1, figsize=(7, 1.6 * n + 0.5), squeeze=False)
     for ax, (name, samples) in zip(axes[:, 0], series.items()):
         arr = np.asarray(samples, dtype=float).ravel()
-        ax.hist(arr, bins=40, color="#7a3a3a", alpha=0.85, edgecolor="white")
+        ax.hist(arr, bins=40, color=SPARC_PRIMARY, alpha=0.85, edgecolor="white")
         ax.set_title(str(name), fontsize=10)
     fig.tight_layout()
     return _fig_to_png(fig, dpi=opts.get("dpi", 144))
@@ -337,7 +373,7 @@ def render_uncertainty_band_map(store, stage, artifact_id, opts):
     if band_col is None:
         raise FigureRenderError("no uncertainty column")
     fig, ax = plt.subplots(figsize=(7, 7))
-    _plot_geo(ax, gdf, band_col, cmap=opts.get("cmap", "viridis"))
+    _plot_geo(ax, gdf, band_col, cmap=opts.get("cmap", "sparc"))
     ax.set_title(f"Scenario {idx} · uncertainty ({band_col})")
     return _fig_to_png(fig, dpi=opts.get("dpi", 144))
 
@@ -356,9 +392,9 @@ def render_attribution_waterfall(store, stage, artifact_id, opts):
     vals = df[val_col].astype(float).to_numpy()
     cum = np.concatenate([[0.0], np.cumsum(vals)[:-1]])
     fig, ax = plt.subplots(figsize=(8, max(3, 0.4 * len(names) + 1)))
-    colors = ["#7a3a3a" if v >= 0 else "#3a5a7a" for v in vals]
+    colors = [SPARC_ACCENT if v >= 0 else SPARC_COOL for v in vals]
     ax.barh(names, vals, left=cum, color=colors, edgecolor="white")
-    ax.axvline(0, color="#444", linestyle="--", linewidth=1)
+    ax.axvline(0, color=SPARC_INK, linestyle="--", linewidth=1)
     ax.invert_yaxis()
     ax.set_xlabel(val_col)
     ax.set_title("Attribution waterfall")
@@ -393,7 +429,7 @@ def render_scenario_library_timeline(store, stage, artifact_id, opts):
     times = [r[1] for r in rows]
     fig, ax = plt.subplots(figsize=(8, max(3, 0.35 * len(names))))
     y = np.arange(len(names))
-    ax.scatter(times, y, color="#7a3a3a", s=60, edgecolor="white")
+    ax.scatter(times, y, color=SPARC_PRIMARY, s=60, edgecolor="white")
     for yi, t, n in zip(y, times, names):
         ax.text(t, yi, f"  {n}", va="center", fontsize=8)
     ax.set_yticks(y)
@@ -417,7 +453,7 @@ def render_decision_allocation(store, stage, artifact_id, opts):
     names = [str(r.get("name") or r.get("id") or i) for i, r in enumerate(items)]
     values = [float(r.get("value", r.get("amount", 0.0))) for r in items]
     fig, ax = plt.subplots(figsize=(8, max(3, 0.35 * len(names))))
-    ax.barh(names, values, color="#7a3a3a", edgecolor="white")
+    ax.barh(names, values, color=SPARC_PRIMARY, edgecolor="white")
     ax.invert_yaxis()
     ax.set_xlabel("allocation")
     ax.set_title("Decision allocation")
