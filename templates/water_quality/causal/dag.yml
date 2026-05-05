@@ -118,3 +118,18 @@ edges:
   - parent: distance_to_wwtp_km
     child: BOD_mgL
     mechanism: "BOD decay with travel time downstream of discharge"
+
+# -----------------------------------------------------------------------------
+# SPARC v4 — User-asserted identification assumptions.
+# Surfaced in the validation report alongside empirical checks
+# (positivity, SUTVA / Moran's I, d-separation).
+# Per-edge `sign_prior` / `confidence` / `kind` / `lag` may also be added.
+# -----------------------------------------------------------------------------
+assumptions:
+  conditional_exchangeability: true
+  positivity: true
+  consistency: true
+  no_interference: false
+  notes: |
+    Pollutant transport along stream networks violates SUTVA.
+    Use upstream/downstream graph adjacency in CV.

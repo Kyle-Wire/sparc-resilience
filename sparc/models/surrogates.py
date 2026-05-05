@@ -64,6 +64,8 @@ class DifferentiableGWR(nn.Module):
         n_spatial_features: int,
         hidden_dim: int = 64,
         bandwidths: np.ndarray | None = None,
+        kernel_field=None,
+        feature_names: Optional[list[str]] = None,
     ) -> None:
         super().__init__()
         self.n_vars = n_vars
@@ -85,6 +87,17 @@ class DifferentiableGWR(nn.Module):
                 "bw_scale", torch.ones(n_vars)
             )
 
+        # Phase 5b: matrix-aware kernel-field conditioning.
+        # Build a per-predictor feature tensor of shape (n_vars, F_kf):
+        #   [log κ_x, log κ_y, sin θ, cos θ, log ν, log σ², log bw_to_outcome]
+        # When fields are missing they fall back to neutral defaults so
+        # callers without Phases 1-4 outputs are unchanged.
+        self.has_kernel_field = kernel_field is not None
+        kf_feat = self._build_kernel_field_features(
+            kernel_field, feature_names, n_vars
+        )  # (n_vars, 7) float32
+        self.register_buffer("kf_features", torch.from_numpy(kf_feat))
+
         # Shared spatial embedding
         self.spatial_embed = nn.Sequential(
             nn.Linear(n_spatial_features, hidden_dim),
@@ -102,10 +115,78 @@ class DifferentiableGWR(nn.Module):
         self.bw_condition = nn.Linear(n_vars, hidden_dim, bias=False)
         nn.init.xavier_uniform_(self.bw_condition.weight, gain=0.05)
 
+        # Per-predictor kernel-feature MLP (Phase 5b).  Outputs a hidden
+        # context vector for each predictor; we sum over predictors to
+        # broadcast into the spatial embedding (shape parity with
+        # `bw_condition` so legacy-mode runs are byte-identical when
+        # `kernel_field=None`).
+        self.kf_condition = nn.Sequential(
+            nn.Linear(self.kf_features.shape[1], hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+        for m in self.kf_condition.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight, gain=0.05)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
+        # Phase 7 (Bucket A item 2): per-predictor anisotropic spatial
+        # warp.  For each predictor k we derive a multiplicative gate
+        # over the spatial-feature axes from kf_features[k]; this lets
+        # the surrogate represent each predictor's own (κ_x, κ_y, θ)
+        # frame as a per-predictor warp of the shared spatial encoding.
+        # The per-predictor refinement β is added to the legacy global
+        # β; weights are zero-initialised so the contribution at init is
+        # exactly zero (legacy mode is forward-byte-identical at t=0).
+        self.predictor_warp = nn.Linear(
+            self.kf_features.shape[1], n_spatial_features
+        )
+        nn.init.zeros_(self.predictor_warp.weight)
+        nn.init.zeros_(self.predictor_warp.bias)
+        self.beta_per_predictor = nn.Linear(hidden_dim, 1)
+        nn.init.zeros_(self.beta_per_predictor.weight)
+        nn.init.zeros_(self.beta_per_predictor.bias)
+
         # Direct coefficient output: n_vars coefficients + 1 intercept
         self.coeff_head = nn.Linear(hidden_dim, n_vars + 1)
         nn.init.xavier_uniform_(self.coeff_head.weight, gain=0.1)
         nn.init.zeros_(self.coeff_head.bias)
+
+    @staticmethod
+    def _build_kernel_field_features(
+        kernel_field, feature_names: Optional[list[str]], n_vars: int,
+    ) -> np.ndarray:
+        """Build a (n_vars, 7) per-predictor feature matrix from a KernelField.
+
+        Returns an all-zeros matrix when no field is supplied (legacy
+        path → ``kf_condition`` contributes a learned constant).
+        """
+        F = 7  # log κ_x, log κ_y, sin θ, cos θ, log ν, log σ², log bw_to_outcome
+        feats = np.zeros((n_vars, F), dtype=np.float32)
+        if kernel_field is None or not feature_names:
+            return feats
+        eps = 1e-6
+        for i, name in enumerate(feature_names):
+            p = kernel_field.predictor(name)
+            if p is None:
+                continue
+            kx = p.kappa_x if p.kappa_x is not None else (p.kappa or 0.0)
+            ky = p.kappa_y if p.kappa_y is not None else (p.kappa or 0.0)
+            theta = p.theta_rad if p.theta_rad is not None else 0.0
+            nu = p.nu if p.nu is not None else 1.5
+            sigma2 = p.sigma2 if p.sigma2 is not None else 1.0
+            bw = p.bandwidth_to_outcome
+            if bw is None:
+                bw = kernel_field.cross_range(kernel_field.outcome_name, name) or 0.0
+            feats[i, 0] = float(np.log(max(kx, eps)))
+            feats[i, 1] = float(np.log(max(ky, eps)))
+            feats[i, 2] = float(np.sin(theta))
+            feats[i, 3] = float(np.cos(theta))
+            feats[i, 4] = float(np.log(max(nu, eps)))
+            feats[i, 5] = float(np.log(max(sigma2, eps)))
+            feats[i, 6] = float(np.log(max(bw, eps))) if bw > 0 else 0.0
+        return feats
 
     def forward(
         self, X: torch.Tensor, spatial_features: torch.Tensor
@@ -127,11 +208,31 @@ class DifferentiableGWR(nn.Module):
 
         # Bandwidth conditioning (same for all locations, learned)
         bw_ctx = self.bw_condition(self.bw_scale)              # (H,)
-        h = h_base + bw_ctx                                    # broadcast
+        # Phase 5b: matrix-aware kernel-field conditioning.  Sum the
+        # per-predictor MLP outputs into a single context vector
+        # (broadcast across N).  When `kf_features` is all-zeros (legacy
+        # mode) this contributes a learned constant offset only.
+        kf_ctx = self.kf_condition(self.kf_features).sum(dim=0)  # (H,)
+        h = h_base + bw_ctx + kf_ctx                           # broadcast
 
         coeff = self.coeff_head(h)                             # (N, n_vars+1)
         beta = coeff[:, :self.n_vars]                          # (N, n_vars)
         intercept = coeff[:, -1]                               # (N,)
+
+        # Phase 7 item 2: per-predictor anisotropic warp refinement.
+        # gates: (n_vars, F_spatial) ∈ ~[0.9, 1.1] when warp is small;
+        # exactly 1 when predictor_warp output is 0 (zero-init contract).
+        gates = 1.0 + 0.1 * torch.tanh(
+            self.predictor_warp(self.kf_features)
+        )                                                      # (n_vars, F_sp)
+        sf_warped = (spatial_features.unsqueeze(1)
+                     * gates.unsqueeze(0))                     # (N, n_vars, F_sp)
+        h_per = self.spatial_embed(
+            sf_warped.reshape(-1, sf_warped.shape[-1])
+        ).reshape(N, self.n_vars, -1)                          # (N, n_vars, H)
+        h_per = h_per + self.res_block(h_per)
+        beta_refine = self.beta_per_predictor(h_per).squeeze(-1)  # (N, n_vars)
+        beta = beta + beta_refine                              # additive
 
         y_pred = (X * beta).sum(dim=-1) + intercept            # (N,)
         return y_pred, beta
@@ -145,9 +246,19 @@ class DifferentiableGWR(nn.Module):
         h = self.spatial_embed(spatial_features)
         h = h + self.res_block(h)
         bw_ctx = self.bw_condition(self.bw_scale)
-        h = h + bw_ctx
+        kf_ctx = self.kf_condition(self.kf_features).sum(dim=0)
+        h = h + bw_ctx + kf_ctx
         coeff = self.coeff_head(h)
-        return coeff[:, predictor_idx].cpu().numpy()
+        beta_global = coeff[:, predictor_idx]                  # (N,)
+        # Per-predictor warp refinement (Phase 7 item 2)
+        gate_k = 1.0 + 0.1 * torch.tanh(
+            self.predictor_warp(self.kf_features[predictor_idx])
+        )                                                      # (F_sp,)
+        sf_warped_k = spatial_features * gate_k                # (N, F_sp)
+        h_k = self.spatial_embed(sf_warped_k)
+        h_k = h_k + self.res_block(h_k)
+        beta_refine_k = self.beta_per_predictor(h_k).squeeze(-1)  # (N,)
+        return (beta_global + beta_refine_k).cpu().numpy()
 
 
 # ---------------------------------------------------------------------------
@@ -179,12 +290,25 @@ class DifferentiableGWRF(nn.Module):
         n_vars: int,
         n_spatial_features: int,
         hidden_dim: int = 64,
+        kernel_field=None,
+        feature_names: Optional[list[str]] = None,
     ) -> None:
         super().__init__()
 
+        # Phase 5b: matrix-aware kernel-field conditioning (mirrors
+        # DifferentiableGWR).  The per-predictor feature tensor is
+        # summed and concatenated to the spatial features before FiLM
+        # generation, so the modulation is kernel-aware.
+        self.has_kernel_field = kernel_field is not None
+        kf_feat = DifferentiableGWR._build_kernel_field_features(
+            kernel_field, feature_names, n_vars
+        )  # (n_vars, 7)
+        self.register_buffer("kf_features", torch.from_numpy(kf_feat))
+        kf_dim = self.kf_features.shape[1]
+
         # Spatial conditioning — generates FiLM parameters
         self.film_generator = nn.Sequential(
-            nn.Linear(n_spatial_features, hidden_dim),
+            nn.Linear(n_spatial_features + kf_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.GELU(),
             nn.Linear(hidden_dim, hidden_dim),
@@ -231,7 +355,14 @@ class DifferentiableGWRF(nn.Module):
         y_pred : (N,)
         """
         # Generate FiLM parameters from spatial context
-        spatial_ctx = self.film_generator(spatial_features)   # (N, H)
+        # Phase 5b: prepend a per-batch kernel-field summary (mean over
+        # predictors of the kf feature vector).  Shape (kf_dim,) → broadcast.
+        kf_summary = self.kf_features.mean(dim=0)              # (kf_dim,)
+        kf_summary_b = kf_summary.unsqueeze(0).expand(
+            spatial_features.shape[0], -1
+        )                                                       # (N, kf_dim)
+        spatial_in = torch.cat([spatial_features, kf_summary_b], dim=-1)
+        spatial_ctx = self.film_generator(spatial_in)         # (N, H)
         film = self.film_params(spatial_ctx)                  # (N, 4H)
         H = film.shape[1] // 4
         gamma1, beta1, gamma2, beta2 = film.split(H, dim=1)

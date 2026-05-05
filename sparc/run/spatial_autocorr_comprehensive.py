@@ -280,8 +280,100 @@ class SpatialAutocorrelationAnalyzer:
             'first_zero_crossing': first_zero_crossing,
             'correlogram_results': correlogram_results
         }
-    
-    def _create_knn_weights(self, k_neighbors):
+
+    def compute_directional_correlogram(
+        self,
+        values,
+        n_angle_bins: int = 4,
+    ):
+        """Phase 2: Moran's I as a function of (lag, angle).
+
+        Bins point pairs by both inter-point distance (existing ``n_lags``
+        scheme) AND by the angle of their displacement vector mod π
+        (directors are unsigned: pair (i,j) and (j,i) share an angle).
+
+        Parameters
+        ----------
+        values : (n,) array — variable values.
+        n_angle_bins : int, default=4
+            Angular bins on [0, π).  ``n_angle_bins=4`` → centres
+            22.5°, 67.5°, 112.5°, 157.5°.
+
+        Returns
+        -------
+        dict with keys:
+
+        - ``lag_distances`` : (L,) lag-bin centres (m)
+        - ``angle_centers_rad`` : (K,) angle-bin centres (radians, [0, π))
+        - ``angle_centers_deg`` : (K,) same in degrees
+        - ``morans_i`` : (L, K) Moran's I per (lag, angle) bin
+        - ``z_scores``  : (L, K)
+        - ``p_values``  : (L, K)
+        - ``n_pairs``   : (L, K) integer counts
+        """
+        values = np.asarray(values, dtype=np.float64)
+        if values.shape[0] != self.n_samples:
+            raise ValueError(
+                f"values length {values.shape[0]} != n_samples {self.n_samples}"
+            )
+
+        # Pre-compute pair angles mod π (directors).  Use upper-triangular
+        # vectors to halve memory; we'll symmetrise into the weight matrix
+        # per bin below.
+        x = self.coords[:, 0]
+        y = self.coords[:, 1]
+        dx = x[None, :] - x[:, None]
+        dy = y[None, :] - y[:, None]
+        angles = np.arctan2(dy, dx)               # in (-π, π]
+        angles = np.mod(angles, np.pi)            # director: [0, π)
+
+        # Angle bin edges
+        angle_edges = np.linspace(0.0, np.pi, n_angle_bins + 1)
+        angle_centers = 0.5 * (angle_edges[:-1] + angle_edges[1:])
+
+        L = self.n_lags
+        K = n_angle_bins
+        morans = np.zeros((L, K))
+        zsc = np.zeros((L, K))
+        pv = np.ones((L, K))
+        npairs = np.zeros((L, K), dtype=np.int64)
+
+        for li in range(L):
+            lag_min = self.lag_distances[li]
+            lag_max = self.lag_distances[li + 1]
+            in_lag = (self.distances >= lag_min) & (self.distances < lag_max)
+            for ki in range(K):
+                a_min = angle_edges[ki]
+                a_max = angle_edges[ki + 1]
+                in_angle = (angles >= a_min) & (angles < a_max)
+                W = (in_lag & in_angle).astype(np.float64)
+                np.fill_diagonal(W, 0.0)
+                # Symmetrise: directors are unsigned, but the upper-tri
+                # mask above already gives both (i,j) and (j,i) the same
+                # angle, so W is already symmetric.
+                count = int(W.sum() / 2)
+                npairs[li, ki] = count
+                if count == 0:
+                    continue
+                res = self.calculate_global_morans_i(values, weights_matrix=W)
+                morans[li, ki] = res["morans_i"]
+                zsc[li, ki] = res["z_score"]
+                pv[li, ki] = res["p_value"]
+
+        return {
+            "lag_distances": np.array(
+                [0.5 * (self.lag_distances[i] + self.lag_distances[i + 1])
+                 for i in range(L)]
+            ),
+            "angle_centers_rad": angle_centers,
+            "angle_centers_deg": np.degrees(angle_centers),
+            "morans_i": morans,
+            "z_scores": zsc,
+            "p_values": pv,
+            "n_pairs": npairs,
+        }
+
+
         """Create k-nearest neighbors weights matrix"""
         k_neighbors = min(k_neighbors, self.n_samples - 1)
         

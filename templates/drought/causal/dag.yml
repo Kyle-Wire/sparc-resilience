@@ -110,3 +110,18 @@ edges:
   - parent: clay_content_pct
     child: soil_moisture_pct
     mechanism: "Clay soils have higher water-holding capacity (field capacity)"
+
+# -----------------------------------------------------------------------------
+# SPARC v4 — User-asserted identification assumptions.
+# Surfaced in the validation report alongside empirical checks
+# (positivity, SUTVA / Moran's I, d-separation).
+# Per-edge `sign_prior` / `confidence` / `kind` / `lag` may also be added.
+# -----------------------------------------------------------------------------
+assumptions:
+  conditional_exchangeability: true
+  positivity: true
+  consistency: true
+  no_interference: false
+  notes: |
+    Drought indices (SPI/SPEI) are smoothed across catchments.
+    Watershed-level interventions interfere via shared groundwater + atmosphere.

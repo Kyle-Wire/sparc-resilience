@@ -102,3 +102,17 @@ edges:
   - parent: cliff_height_m
     child: shoreline_change_myr
     mechanism: "Higher cliffs supply more sediment per retreat event but fail catastrophically"
+
+# -----------------------------------------------------------------------------
+# SPARC v4 — User-asserted identification assumptions.
+# Surfaced in the validation report alongside empirical checks
+# (positivity, SUTVA / Moran's I, d-separation).
+# Per-edge `sign_prior` / `confidence` / `kind` / `lag` may also be added.
+# -----------------------------------------------------------------------------
+assumptions:
+  conditional_exchangeability: true
+  positivity: true
+  consistency: true
+  no_interference: false
+  notes: |
+    Longshore sediment transport links adjacent transects — SUTVA holds only at the sub-littoral-cell scale.

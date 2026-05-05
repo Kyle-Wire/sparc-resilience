@@ -103,3 +103,18 @@ structural_equations:
   # NDVI:
   #   form: "linear"
   #   parents: [Pct_Canopy, Distance_from_water_m]
+
+# -----------------------------------------------------------------------------
+# SPARC v4 — User-asserted identification assumptions.
+# Surfaced in the validation report alongside empirical checks
+# (positivity, SUTVA / Moran's I, d-separation).
+# Per-edge `sign_prior` / `confidence` / `kind` / `lag` may also be added.
+# -----------------------------------------------------------------------------
+assumptions:
+  conditional_exchangeability: true
+  positivity: true
+  consistency: true
+  no_interference: false
+  notes: |
+    Heat-island advection couples adjacent blocks.
+    Greening/cool-roof interventions diffuse 50–200 m.

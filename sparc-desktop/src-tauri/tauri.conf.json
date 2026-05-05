@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm build:bundle",
     "frontendDist": "../dist"
   },
   "app": {
@@ -48,6 +48,12 @@
   "plugins": {
     "shell": {
       "open": true
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI1RTZBNzQwNkZFOEU5RDUKUldUVjZlaHZRS2ZtdFhqTVpQa0lKUGdURmh1MTF3c3IxUnk0STdGMDhDcTM5UmJNV3VVRWN3WFAK",
+      "endpoints": [
+        "https://github.com/Kyle-Wire/sparc-resilience/releases/latest/download/latest.json"
+      ]
     }
   }
 }

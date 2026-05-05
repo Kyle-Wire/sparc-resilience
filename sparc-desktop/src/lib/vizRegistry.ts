@@ -25,7 +25,11 @@ export type VizKind =
   | "attribution_waterfall"
   | "scenario_trajectory"
   | "scenario_library_timeline"
-  | "decision_allocation";
+  | "decision_allocation"
+  | "kernel_field"
+  | "causal_pdp"
+  | "cate_gwr_divergence"
+  | "scenario_routing_audit";
 
 export interface VizEntry {
   stage: string;
@@ -67,6 +71,12 @@ export const VIZ_REGISTRY: VizEntry[] = [
   { stage: "4", artifactId: "scenario_library", kind: "scenario_library_timeline", endpoint: "/scenarios/library", label: "Scenario library" },
   // Stage 5 — decision
   { stage: "5", artifactId: "decision_allocation", kind: "decision_allocation", endpoint: "/decision/optimize", label: "Decision allocation" },
+  // Phase C — KernelField, causal PDP, divergence, scenario routing
+  { stage: "0", artifactId: "kernel_field", kind: "kernel_field", endpoint: "/results/kernel_field", label: "Kernel field" },
+  { stage: "1", artifactId: "kernel_field", kind: "kernel_field", endpoint: "/results/kernel_field", label: "Kernel field" },
+  { stage: "3", artifactId: "causal_pdp_curves", kind: "causal_pdp", endpoint: "/results/causal/pdp_curves", label: "Causal PDP curves" },
+  { stage: "3", artifactId: "cate_vs_gwr_divergence", kind: "cate_gwr_divergence", endpoint: "/results/causal/divergence", label: "CATE vs GWR divergence" },
+  { stage: "4", artifactId: "scenario_routing_audit", kind: "scenario_routing_audit", endpoint: "/results/scenarios/routing_audit", label: "Scenario routing audit" },
 ];
 
 const BY_KEY = new Map<string, VizEntry>(

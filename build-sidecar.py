@@ -193,6 +193,18 @@ def build(target_dir: str | None = None):
     if target_dir:
         dest = Path(target_dir)
         dest.mkdir(parents=True, exist_ok=True)
+        # Clean any stale sidecar binaries from other platforms so the
+        # Tauri bundler only ships the binary it just built. Without
+        # this, e.g. building on macOS and then on Windows would ship
+        # both the .exe AND the leftover Mach-O binary in the Windows
+        # installer (and vice versa), bloating the installer and
+        # occasionally tripping AV scanners.
+        for stale in dest.glob("sparc-sidecar*"):
+            try:
+                stale.unlink()
+                print(f"  cleaned stale binary: {stale.name}")
+            except OSError as exc:
+                print(f"  WARNING: could not remove {stale}: {exc}")
         output = dest / dist_binary.name
         shutil.copy2(dist_binary, output)
         print(f"\nBinary copied to: {output}")

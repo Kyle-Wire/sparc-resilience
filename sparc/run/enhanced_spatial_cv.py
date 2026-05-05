@@ -587,6 +587,55 @@ class EnhancedSpatialCV:
 
         return None
     
+    def get_kernel_field(self, predictor_names):
+        """Phase 5a: assemble the matrix-aware ``KernelField`` for the
+        target variable from Stage-0 artifacts (``correlogram_matern_fit``,
+        ``correlogram_anisotropy``, ``effective_range_matrix``).
+
+        Returns ``None`` when the artifacts are not available so legacy
+        callers continue to work unchanged.
+        """
+        target_var = self.base_config.get('variables', {}).get('target', '')
+        if not target_var or not predictor_names:
+            return None
+        try:
+            from sparc.registry.store import get_active_store
+            store = get_active_store()
+            if store is None:
+                return None
+        except Exception:
+            return None
+
+        def _safe_read(stage, aid):
+            try:
+                return store.read_struct(stage, aid)
+            except Exception:
+                return None
+
+        matern = _safe_read("0", "correlogram_matern_fit")
+        aniso = _safe_read("0", "correlogram_anisotropy")
+        erm = _safe_read("0", "effective_range_matrix")
+        if matern is None and aniso is None and erm is None:
+            return None
+        try:
+            from sparc.models.kernel_field import KernelField
+            kf = KernelField.from_artifacts(
+                outcome_name=target_var,
+                predictor_names=list(predictor_names),
+                matern_artifact=matern,
+                anisotropy_artifact=aniso,
+                effective_range_matrix=erm,
+            )
+            print(f"KernelField assembled for outcome '{target_var}' "
+                  f"with {len(kf.predictors)} predictors "
+                  f"(matern={'yes' if matern else 'no'}, "
+                  f"aniso={'yes' if aniso else 'no'}, "
+                  f"erm={'yes' if erm else 'no'})")
+            return kf
+        except Exception as e:
+            print(f"KernelField assembly failed (falling back to legacy): {e}")
+            return None
+    
     def apply_profiler_overrides(self, profiler_recommendations):
         """
         Overlay DatasetProfiler-recommended hyperparameters onto the
@@ -636,6 +685,17 @@ class EnhancedSpatialCV:
             
             # Get variable-specific bandwidths from manual_parameters
             variable_bandwidths = self.get_variable_bandwidths()
+            # Phase 5a: matrix-aware kernel field (Matérn + anisotropy +
+            # per-pair bandwidths).  Returns None if Stage-0 artifacts
+            # haven't been written, in which case the legacy bandwidth
+            # path is used.
+            predictor_names_for_kf = list((variable_bandwidths or {}).keys())
+            if not predictor_names_for_kf:
+                # Fall back to manual_parameters bandwidths just to know names
+                predictor_names_for_kf = list(
+                    (self.base_config.get('manual_parameters', {}) or {}).get('bandwidths', {}).keys()
+                )
+            kernel_field = self.get_kernel_field(predictor_names_for_kf)
             
             if variable_bandwidths:
                 print(f"GWR Variable-Specific Bandwidths:")
@@ -671,6 +731,10 @@ class EnhancedSpatialCV:
             # bias; sign constraints are applied post-hoc for interpretation only.
             gwr_constructor_params['use_constrained_regression'] = False
             gwr_constructor_params['sign_constraints'] = self._monotone_constraints
+            # Phase 5a: pass the matrix-aware kernel field (additive; None
+            # leaves legacy behaviour intact).
+            if kernel_field is not None:
+                gwr_constructor_params['kernel_field'] = kernel_field
             
             try:
                 models.append(GWRModel(**gwr_constructor_params))
@@ -719,6 +783,15 @@ class EnhancedSpatialCV:
             for param in valid_params:
                 if param in gwrf_params:
                     gwrf_constructor_params[param] = gwrf_params[param]
+            # Phase 5a: attach the same matrix-aware kernel field used
+            # by GWRModel, so per-pair bandwidths flow into local-RF
+            # neighbourhoods as metadata for downstream artifacts.
+            try:
+                _kf_for_gwrf = kernel_field  # noqa: F821 (defined in gwr branch above)
+            except NameError:
+                _kf_for_gwrf = None
+            if _kf_for_gwrf is not None:
+                gwrf_constructor_params['kernel_field'] = _kf_for_gwrf
             
             try:
                 gwrf = GWRFModel(**gwrf_constructor_params)

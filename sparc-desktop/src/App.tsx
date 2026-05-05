@@ -12,6 +12,7 @@ import { PAGES } from "@/components/layout/Sidebar";
 import ChatPanel from "@/components/chat/ChatPanel";
 import CommandPalette, { type PaletteItem } from "@/components/common/CommandPalette";
 import OnboardingTour from "@/components/common/OnboardingTour";
+import UpdateBanner from "@/components/updater/UpdateBanner";
 import { ExplainContext, useExplainHost } from "@/hooks/ExplainContext";
 import { loadTheme, applyTheme } from "@/lib/theme";
 import { buildSystemPrompt } from "@/lib/prompts";
@@ -28,8 +29,9 @@ import PhysicsPage from "@/components/pages/PhysicsPage";
 import CRSPage from "@/components/pages/CRSPage";
 import ScenariosPage from "@/components/pages/ScenariosPage";
 import ModelsPage from "@/components/pages/ModelsPage";
+import CausalPage from "@/components/pages/CausalPage";
 import RunPage from "@/components/pages/RunPage";
-import ResultsPage from "@/components/pages/ResultsPage";
+import InsightsPage from "@/components/pages/InsightsPage";
 import DecisionSupportPage from "@/components/pages/DecisionSupportPage";
 import ComparePage from "@/components/pages/ComparePage";
 import ReportPage from "@/components/pages/ReportPage";
@@ -102,7 +104,7 @@ export default function App() {
       case "Project": return "domain" as const;
       case "DAG": return "dag" as const;
       case "Physics": return "physics" as const;
-      case "Results":
+      case "Insights":
       case "Report": return "results" as const;
       default: return "general" as const;
     }
@@ -244,10 +246,12 @@ export default function App() {
         return <ScenariosPage onNavigate={(p) => navigate(p as AppPage)} />;
       case "Models":
         return <ModelsPage />;
+      case "Causal":
+        return <CausalPage />;
       case "Run":
         return <RunPage />;
-      case "Results":
-        return <ResultsPage />;
+      case "Insights":
+        return <InsightsPage />;
       case "Decision Support":
         return <DecisionSupportPage />;
       case "Compare":
@@ -301,6 +305,7 @@ export default function App() {
           <OnboardingTour onNavigate={(p) => navigate(p as PageName)} />
 
           <NotificationBanner />
+          <UpdateBanner />
         </div>
       </PipelineProvider>
       </ExplainContext.Provider>

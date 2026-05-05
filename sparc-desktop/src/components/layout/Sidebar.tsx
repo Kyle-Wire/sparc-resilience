@@ -2,16 +2,16 @@ import CubeLogo from "../brand/CubeLogo";
 
 const SECTIONS = [
   { label: "Setup", pages: ["Project", "Data", "Processing"] },
-  { label: "Analysis", pages: ["DAG", "Variables", "Physics", "CRS", "Scenarios", "Models"] },
-  { label: "Pipeline", pages: ["Run", "Results", "Decision Support", "Compare", "Report"] },
+  { label: "Analysis", pages: ["DAG", "Variables", "Physics", "CRS", "Scenarios", "Models", "Causal"] },
+  { label: "Pipeline", pages: ["Run", "Insights", "Decision Support", "Compare", "Report"] },
 ] as const;
 
 const PAGES = SECTIONS.flatMap((s) => s.pages) as unknown as readonly PageName[];
 
 export type PageName =
   | "Project" | "Data" | "Processing"
-  | "DAG" | "Variables" | "Physics" | "CRS" | "Scenarios" | "Models"
-  | "Run" | "Results" | "Decision Support" | "Compare" | "Report";
+  | "DAG" | "Variables" | "Physics" | "CRS" | "Scenarios" | "Models" | "Causal"
+  | "Run" | "Insights" | "Decision Support" | "Compare" | "Report";
 
 interface SidebarProps {
   currentPage: PageName;

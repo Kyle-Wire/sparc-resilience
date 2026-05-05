@@ -270,3 +270,101 @@ export const tdStyle: CSSProperties = {
   padding: "7px 8px",
   fontSize: 12,
 };
+
+/* ----------------------------------------------------------------
+   Insights primitives — Panel, PanelEmpty, Kicker, Pill, RampStrip,
+   AudienceGate. Used by the Insights workspace; thin wrappers over
+   the .panel / .kicker / .pill helpers in index.css.
+   ---------------------------------------------------------------- */
+
+interface PanelProps {
+  title?: string;
+  subtitle?: ReactNode;
+  actions?: ReactNode;
+  children: ReactNode;
+  bodyPadding?: number | string;
+  style?: CSSProperties;
+  /** Forward ref-target for snapshot/export buttons. */
+  innerRef?: React.Ref<HTMLDivElement>;
+}
+
+export function Panel({ title, subtitle, actions, children, bodyPadding, style, innerRef }: PanelProps) {
+  const bodyStyle: CSSProperties = bodyPadding != null ? { padding: bodyPadding } : {};
+  return (
+    <div ref={innerRef} className="panel" style={style}>
+      {(title || actions) && (
+        <div className="panel-head">
+          <div className="titles">
+            {title && <div className="title">{title}</div>}
+            {subtitle && <div className="subtitle">{subtitle}</div>}
+          </div>
+          {actions}
+        </div>
+      )}
+      <div className="panel-body" style={bodyStyle}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+interface PanelEmptyProps {
+  reason?: string;
+  hint?: ReactNode;
+  action?: ReactNode;
+}
+
+export function PanelEmpty({ reason = "No data yet", hint, action }: PanelEmptyProps) {
+  return (
+    <div className="panel-empty">
+      <div className="reason">{reason}</div>
+      {hint && <div className="hint">{hint}</div>}
+      {action}
+    </div>
+  );
+}
+
+export function Kicker({ children }: { children: ReactNode }) {
+  return <div className="kicker">{children}</div>;
+}
+
+export function Pill({ children, color }: { children: ReactNode; color?: string }) {
+  if (color) {
+    return (
+      <span
+        className="pill"
+        style={{ background: `${color}1f`, color }}
+      >
+        {children}
+      </span>
+    );
+  }
+  return <span className="pill">{children}</span>;
+}
+
+export function RampStrip({ height = 4 }: { height?: number }) {
+  return <div className="ramp-strip" style={{ height }} />;
+}
+
+export function LiveDot() {
+  return <span className="live-dot" aria-hidden="true" />;
+}
+
+/* AudienceGate — render children only when the current Insights audience
+   matches. Imported here (not via the InsightsProvider) to keep this file
+   dependency-free; consumers pass `current` in. For ergonomic call-sites,
+   panels typically use `useAudience()` from InsightsProvider and conditionally
+   render <AudienceGate audience="researcher" current={a}>…</AudienceGate>. */
+type Audience = "practitioner" | "researcher";
+
+interface AudienceGateProps {
+  audience: Audience | Audience[];
+  current: Audience;
+  children: ReactNode;
+}
+
+export function AudienceGate({ audience, current, children }: AudienceGateProps) {
+  const list = Array.isArray(audience) ? audience : [audience];
+  if (!list.includes(current)) return null;
+  return <>{children}</>;
+}

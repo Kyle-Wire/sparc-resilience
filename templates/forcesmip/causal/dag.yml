@@ -88,3 +88,17 @@ edges:
     mechanism: "Pacific decadal modulation — main source of inter-method variance per ForceSMIP Fig A1"
 
 structural_equations: {}
+
+# -----------------------------------------------------------------------------
+# SPARC v4 — User-asserted identification assumptions.
+# Surfaced in the validation report alongside empirical checks
+# (positivity, SUTVA / Moran's I, d-separation).
+# Per-edge `sign_prior` / `confidence` / `kind` / `lag` may also be added.
+# -----------------------------------------------------------------------------
+assumptions:
+  conditional_exchangeability: true
+  positivity: true
+  consistency: true
+  no_interference: true
+  notes: |
+    Counterfactual forcing scenarios are independent by construction — each ensemble member is a self-contained Earth-system trajectory.

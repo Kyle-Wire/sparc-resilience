@@ -33,13 +33,20 @@ class GWRFModel:
         Number of locations to fit local models at. If set, overrides subsample_fraction.
     """
 
-    def __init__(self, n_estimators=100, k_neighbors=100, min_samples_leaf=5, n_jobs=-1, subsample_fraction=None, subsample_n=None):
+    def __init__(self, n_estimators=100, k_neighbors=100, min_samples_leaf=5, n_jobs=-1, subsample_fraction=None, subsample_n=None, kernel_field=None):
         self.n_estimators = int(n_estimators)
         self.k_neighbors = int(k_neighbors)
         self.min_samples_leaf = int(min_samples_leaf)
         self.n_jobs = int(n_jobs)
         self.subsample_fraction = subsample_fraction
         self.subsample_n = int(subsample_n) if subsample_n is not None else None
+        # Phase 5a: matrix-aware kernel-field bundle (optional, additive).
+        # When supplied, k_neighbors is reinterpreted as a *minimum* and
+        # the per-pair effective range from `kernel_field` is used to
+        # widen the neighbour-search at fit time.  Carried as metadata
+        # so downstream artifacts can record which kernel field drove
+        # the local RFs.
+        self.kernel_field = kernel_field
         self.local_models = None
         self.coords = None
         self.subsample_coords = None

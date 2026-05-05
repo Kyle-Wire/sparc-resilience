@@ -79,7 +79,8 @@ class GWRModel(BaseEstimator, RegressorMixin):
                  alpha: float = 0.1, min_points: int = 50,
                  use_constrained_regression: bool = True,
                  physics_priors: dict = None,
-                 sign_constraints: dict = None):
+                 sign_constraints: dict = None,
+                 kernel_field=None):
         self.bandwidth = bandwidth
         self.variable_bandwidths = variable_bandwidths
         self.kernel = kernel
@@ -90,6 +91,14 @@ class GWRModel(BaseEstimator, RegressorMixin):
         self.physics_priors = physics_priors  # {var_name: prior_coeff_per_scaled_unit}
         # sign_constraints: {var_name: -1|0|1}  — overrides module-level defaults
         self._sign_constraints = sign_constraints if sign_constraints is not None else PHYSICS_SIGN_CONSTRAINTS
+        # Phase 5a: matrix-aware kernel-field bundle (optional, additive).
+        # When supplied, `variable_bandwidths` is derived from
+        # `kernel_field.bandwidth_for(predictor)` and `kernel` is
+        # promoted to 'matern' with average κ from the per-predictor
+        # records.  Legacy callers (kernel_field=None) are unchanged.
+        self.kernel_field = kernel_field
+        if kernel_field is not None:
+            self._apply_kernel_field(kernel_field)
         self.coefficients_ = None
         self.coefficients_unconstrained_ = None  # Save raw for diagnostics
         self.sign_violations_ = None  # Flag where unconstrained wanted wrong sign
@@ -100,6 +109,47 @@ class GWRModel(BaseEstimator, RegressorMixin):
         self.scaler = StandardScaler()
         self.M_ik = None  # Spatial modifier matrix for interventions
         
+    def _apply_kernel_field(self, kf) -> None:
+        """Override legacy bandwidth/kernel from a KernelField (Phase 5a)."""
+        # Per-pair (predictor → outcome) bandwidth replaces the legacy
+        # per-feature bandwidth dict.
+        derived: dict[str, float] = {}
+        for p in kf.predictors:
+            bw = p.bandwidth_to_outcome
+            if bw is not None and bw > 0:
+                derived[p.name] = float(bw)
+        if derived:
+            # Don't clobber an explicit legacy override silently — only
+            # fill in missing entries.
+            existing = dict(self.variable_bandwidths or {})
+            for k, v in derived.items():
+                existing.setdefault(k, v)
+            self.variable_bandwidths = existing
+        # Promote to Matérn kernel (closed-form ν ∈ {0.5, 1.5, 2.5}).
+        if self.kernel in (None, 'gaussian', 'exponential', 'bisquare'):
+            self.kernel = 'matern'
+
+    def _matern_kernel(self, dists: np.ndarray, bandwidth: float) -> np.ndarray:
+        """Matérn weights using the KernelField's per-predictor (κ, ν).
+
+        Falls back to ``kappa = 1 / bandwidth`` and ``ν = matern_default_nu``
+        when no KernelField is attached.  ``bandwidth`` is interpreted as
+        the predictor's effective range (Phase-4 cross-range), matching
+        the semantics of the other kernel branches.
+        """
+        from sparc.models.kernel_field import matern_kernel_weights
+        nu = 1.5
+        kappa = 1.0 / max(bandwidth, 1e-12)
+        if self.kernel_field is not None:
+            nu = float(self.kernel_field.matern_default_nu)
+            # Average κ across predictors in this kernel field is a
+            # reasonable scalar choice for the per-point local kernel.
+            ks = [p.kappa for p in self.kernel_field.predictors
+                  if p.kappa is not None and p.kappa > 0]
+            if ks:
+                kappa = float(np.mean(ks))
+        return matern_kernel_weights(dists, kappa=kappa, nu=nu)
+
     def _gaussian_kernel(self, dists: np.ndarray, bandwidth: float) -> np.ndarray:
         """Compute Gaussian kernel weights"""
         return np.exp(-0.5 * (dists / bandwidth) ** 2)
@@ -117,9 +167,76 @@ class GWRModel(BaseEstimator, RegressorMixin):
         kernel_functions = {
             'gaussian': self._gaussian_kernel,
             'exponential': self._exponential_kernel,
-            'bisquare': self._bisquare_kernel
+            'bisquare': self._bisquare_kernel,
+            'matern': self._matern_kernel,
         }
         return kernel_functions.get(self.kernel.lower(), self._gaussian_kernel)
+
+    # ------------------------------------------------------------------
+    # Phase 7: per-predictor anisotropic local-distance metric
+    # ------------------------------------------------------------------
+    def _has_anisotropic_field(self) -> bool:
+        """True iff at least one predictor in the attached kernel field is
+        anisotropic AND we know which X column maps to which predictor."""
+        if self.kernel_field is None or self.feature_names_ is None:
+            return False
+        for p in self.kernel_field.predictors:
+            if p.is_anisotropic:
+                return True
+        return False
+
+    def _per_predictor_anisotropic_weights(
+        self,
+        point_coord: np.ndarray,
+        neighbor_coords: np.ndarray,
+    ) -> np.ndarray:
+        """Geometric-mean of per-predictor Matérn weights computed from
+        each predictor's *own* anisotropic frame (Phase 7).
+
+        For each predictor with `is_anisotropic`, the metric is
+        ``KernelField.anisotropic_distance(dx, dy, κ_x, κ_y, θ)`` (already
+        dimensionless because κ has units of 1/length), so the kernel
+        evaluates ``matern_kernel_weights(d, κ=1, ν)``.  Isotropic
+        predictors fall back to ``matern_kernel_weights(‖r‖, κ=1/bw, ν)``
+        with the per-predictor cross-range bandwidth from the field.
+
+        Combining via geometric mean preserves the WLS structure (a
+        single weight per row) and degenerates to the legacy isotropic
+        case when no predictor carries anisotropy data.
+        """
+        from sparc.models.kernel_field import (
+            matern_kernel_weights, KernelField as _KF,
+        )
+        nu = float(self.kernel_field.matern_default_nu)
+        dxdy = neighbor_coords - point_coord  # (n_local, 2)
+        dx, dy = dxdy[:, 0], dxdy[:, 1]
+        euclid = np.sqrt(dx ** 2 + dy ** 2)
+
+        log_w_sum = np.zeros(neighbor_coords.shape[0], dtype=np.float64)
+        n_terms = 0
+        for fname in self.feature_names_:
+            p = self.kernel_field.predictor(fname)
+            if p is None:
+                continue
+            if p.is_anisotropic:
+                d_p = _KF.anisotropic_distance(
+                    dx, dy, p.kappa_x, p.kappa_y, p.theta_rad,
+                )
+                # `anisotropic_distance` is already κ-scaled
+                w_p = matern_kernel_weights(d_p, kappa=1.0, nu=nu)
+            else:
+                bw = self.kernel_field.bandwidth_for(fname, fallback=None)
+                if bw is None or bw <= 0:
+                    # No length-scale info for this predictor — skip it
+                    continue
+                w_p = matern_kernel_weights(
+                    euclid, kappa=1.0 / bw, nu=nu,
+                )
+            log_w_sum = log_w_sum + np.log(np.clip(w_p, 1e-12, None))
+            n_terms += 1
+        if n_terms == 0:
+            return np.ones(neighbor_coords.shape[0], dtype=np.float64)
+        return np.exp(log_w_sum / float(n_terms))
     
     def _local_regression(self, X: np.ndarray, y: np.ndarray, coords: np.ndarray, 
                          point_idx: int) -> Tuple[np.ndarray, float]:
@@ -174,6 +291,7 @@ class GWRModel(BaseEstimator, RegressorMixin):
                 
                 X_local = X[valid_indices]
                 y_local = y[valid_indices]
+                selected_indices = valid_indices
                 
                 # Use the mean bandwidth for kernel weighting
                 bandwidth = np.mean(list(self.variable_bandwidths.values())) + 1e-10
@@ -196,12 +314,14 @@ class GWRModel(BaseEstimator, RegressorMixin):
                     X_local = X[indices]
                     y_local = y[indices]
                     local_distances = neighbor_distances
+                    selected_indices = indices
                     bandwidth = neighbor_distances[-1] + 1e-10  # Prevent zero bandwidth
                 else:
                     closest_indices = np.argsort(distances)[:self.min_points]
                     local_distances = distances[closest_indices]
                     X_local = X[closest_indices]
                     y_local = y[closest_indices]
+                    selected_indices = closest_indices
                     bandwidth = local_distances[-1] + 1e-10  # Prevent zero bandwidth
             
             # Validate we have enough data for regression
@@ -209,8 +329,16 @@ class GWRModel(BaseEstimator, RegressorMixin):
                 return np.zeros(n_features), np.mean(y_local) if len(y_local) > 0 else 0.0
             
             # Calculate weights using kernel function
-            kernel_func = self._get_kernel_function()
-            weights = kernel_func(local_distances, bandwidth)
+            if self._has_anisotropic_field():
+                # Phase 7: per-predictor anisotropic weighting (geometric
+                # mean of per-predictor Matérn weights computed in each
+                # predictor's own (κ_x, κ_y, θ) frame).
+                weights = self._per_predictor_anisotropic_weights(
+                    coords[point_idx], coords[selected_indices],
+                )
+            else:
+                kernel_func = self._get_kernel_function()
+                weights = kernel_func(local_distances, bandwidth)
             
             # Ensure weights are valid (no zeros or NaNs)
             weights = np.clip(weights, 1e-10, None)

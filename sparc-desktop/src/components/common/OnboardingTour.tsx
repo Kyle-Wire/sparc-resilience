@@ -56,14 +56,14 @@ const DEFAULT_STEPS: TourStep[] = [
     body: "Execute Stage 0 (correlogram) → 1 (GWEN weighting) → 2 (spatial CV) → 3 (causal validation, MC³) → 4 (scenarios). Live progress streams from the FastAPI backend.",
   },
   {
-    page: "Results",
-    title: "6 · Results & maps",
-    body: "Every result is wired up: predictions map, scenarios, correlogram, dose-response, CATE surface. Toggle context layers (FEMA, NLCD, ACS) from the panel in the top-left of the map.",
+    page: "Insights",
+    title: "6 · Insights & maps",
+    body: "Every result is wired up here: predictions map, scenarios, correlogram, dose-response, CATE surface, sensitivity, equity & cost. Switch between Practitioner and Researcher audiences from the toolbar; selections (variable, scenario, brush) are linked across panels.",
   },
   {
     page: "Compare",
     title: "7 · Reproducibility & sharing",
-    body: "Compare two runs, freeze the active config + data hash, or share a self-contained HTML snapshot from the Results page. Generate audience-tuned reports (technical / planner / public) on the Report page.",
+    body: "Compare two runs, freeze the active config + data hash, or share a self-contained HTML snapshot from the Insights page. Generate audience-tuned reports (technical / planner / public) on the Report page.",
   },
   {
     title: "You're ready",
