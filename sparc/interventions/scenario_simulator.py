@@ -1976,6 +1976,48 @@ class ScenarioSimulator:
             if cate_multipliers and verbose:
                 print(f"   CATE multipliers loaded for: {list(cate_multipliers.keys())}")
 
+        # Phase C-4: persist scenario routing audit (CATE vs heuristic
+        # disagreement, length-mismatch detection, anisotropy summary).
+        try:
+            from sparc.interventions.scenario_routing_audit import (
+                build_scenario_routing_audit,
+                persist_scenario_routing_audit,
+            )
+            _scen_vars = [
+                s.get("variable") for s in self.scenarios
+                if isinstance(s, dict) and s.get("variable")
+            ]
+            _kf = None
+            try:
+                from sparc.registry.store import get_active_store
+                from sparc.models.kernel_field import KernelField
+                _store = get_active_store()
+                if _store is not None and _store.has("0", "kernel_field"):
+                    _kf_payload = _store.read_any("0", "kernel_field")
+                    if isinstance(_kf_payload, dict):
+                        _kf = KernelField.from_artifact_payload(_kf_payload)
+            except Exception:
+                _kf = None
+            if _scen_vars:
+                _audit = build_scenario_routing_audit(
+                    scenario_variables=_scen_vars,
+                    cate_multipliers=cate_multipliers,
+                    n_cells=len(baseline_df),
+                    kernel_field=_kf,
+                )
+                persist_scenario_routing_audit(_audit)
+                if verbose:
+                    _summary = _audit.to_payload().get("summary", {})
+                    print(
+                        "   Scenario routing audit written "
+                        f"(causal={_summary.get('causal_routed', 0)}, "
+                        f"heuristic={_summary.get('correlational_routed', 0)}, "
+                        f"missing={_summary.get('missing', 0)})"
+                    )
+        except Exception as _exc:
+            if verbose:
+                print(f"   Scenario routing audit skipped: {_exc}")
+
         # Load elasticity from scenario_coefficients (store-first, JSON fallback)
         elasticity_map: Dict[str, float] = {}
         if stage3_dir:

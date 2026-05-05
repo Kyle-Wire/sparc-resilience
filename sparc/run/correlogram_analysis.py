@@ -942,6 +942,48 @@ def main(fast_mode=False):
                 f"(stage=0, id=effective_range_matrix, "
                 f"warnings={len(effective_range_matrix_payload['mismatch_warnings'])})"
             )
+
+        # ─── Phase C-1: Unified KernelField artifact ────────────────────
+        # Assemble the matrix-aware ``KernelField`` from the per-variable
+        # Matérn fits + anisotropy ellipses + cross-range matrix and
+        # persist it under a single canonical id so Stage 2 (GWR), Stage 3
+        # (CATE), the report, and the desktop can consume one struct.
+        try:
+            from sparc.models.kernel_field import KernelField
+            _predictor_names = [
+                v for v in all_results.keys() if v != target_variable
+            ]
+            if _predictor_names:
+                _kf = KernelField.from_artifacts(
+                    outcome_name=target_variable,
+                    predictor_names=_predictor_names,
+                    matern_artifact=matern_artifact_payload,
+                    anisotropy_artifact=anisotropy_artifact_payload,
+                    effective_range_matrix=effective_range_matrix_payload,
+                )
+                _store.write_struct(
+                    stage="0",
+                    artifact_id="kernel_field",
+                    payload=convert_numpy_types(_kf.to_artifact_payload()),
+                    producer="correlogram_analysis.main",
+                    consumers=[
+                        "server:/results/kernel_field",
+                        "report:/stage0/kernel_field",
+                        "desktop:kernel_field_view",
+                        "pipeline:stage2_gwr",
+                        "pipeline:stage3_cate",
+                        "pipeline:stage4_scenarios",
+                    ],
+                )
+                print(
+                    "Unified KernelField written to artifacts.db "
+                    f"(stage=0, id=kernel_field, "
+                    f"outcome={target_variable}, "
+                    f"predictors={len(_predictor_names)})"
+                )
+        except Exception as _exc:  # noqa: BLE001
+            print(f"Unified KernelField persistence skipped: {_exc}")
+
         print("Correlogram results + summary written to artifacts.db (stage=0)")
     elif disk_writes_enabled():
         # Back-compat path for ad-hoc invocation without an active registry.

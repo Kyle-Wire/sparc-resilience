@@ -2481,6 +2481,178 @@ class CausalValidator:
         )
 
     # ------------------------------------------------------------------
+    # Phase C-2 / C-3: Causal PDP curves + CATE↔GWR divergence audit
+    # ------------------------------------------------------------------
+
+    def persist_phase_c_artifacts(self, data: pd.DataFrame) -> None:
+        """Compute and persist Phase-C causal PDP curves and CATE↔GWR
+        divergence reports under stage="3".
+
+        Best-effort: each block is wrapped so a failure on PDP does not
+        prevent divergence from running, and vice-versa. Requires
+        ``run_spatial_cate`` to have populated ``self.spatial_cate_results``
+        and ``self._spatial_cate_estimator``.
+        """
+        try:
+            from sparc.registry.store import get_active_store
+            store = get_active_store()
+        except Exception:  # noqa: BLE001
+            store = None
+        if store is None:
+            print("  Phase-C persistence skipped: no active artifact store.")
+            return
+
+        treatments = [
+            t for t in (self.roles.get('treatments') or [])
+            if t in self.spatial_cate_results
+        ]
+        if not treatments:
+            print("  Phase-C persistence skipped: no spatial CATE results.")
+            return
+
+        # ---- C-2: Causal PDP curves ----------------------------------
+        try:
+            from sparc.causal.causal_pdp import causal_pdps_for_all
+            estimator = getattr(self, '_spatial_cate_estimator', None)
+            if estimator is None:
+                print("  Phase-C PDP skipped: no fitted CATE estimator.")
+            else:
+                pdp_curves = causal_pdps_for_all(
+                    estimator, treatments, data,
+                )
+                payload = {
+                    "treatments": list(pdp_curves.keys()),
+                    "curves": {
+                        tr: c.to_payload() for tr, c in pdp_curves.items()
+                    },
+                }
+                store.write_struct(
+                    stage="3",
+                    artifact_id="causal_pdp_curves",
+                    payload=payload,
+                    producer="causal_validation.persist_phase_c_artifacts",
+                    consumers=[
+                        "server:/results/causal/pdp_curves",
+                        "report:/stage3/causal_pdp",
+                        "desktop:causal_view",
+                    ],
+                )
+                print(
+                    f"  Causal PDP curves written "
+                    f"(stage=3, treatments={len(pdp_curves)})"
+                )
+        except Exception as exc:  # noqa: BLE001
+            print(f"  Causal PDP persistence failed: {exc}")
+
+        # ---- C-3: CATE ↔ GWR divergence -----------------------------
+        try:
+            from sparc.causal.divergence_audit import divergence_audit_for_all
+            gwr_betas = self._load_gwr_betas_for_treatments(treatments)
+            cates: Dict[str, np.ndarray] = {}
+            for tr in treatments:
+                arr = self.spatial_cate_results.get(tr, {}).get('cate')
+                if arr is not None:
+                    cates[tr] = np.asarray(arr).ravel()
+            common = sorted(set(gwr_betas) & set(cates))
+            if not common:
+                print(
+                    "  CATE↔GWR divergence skipped: no overlap between "
+                    f"GWR β ({sorted(gwr_betas)}) and CATE ({sorted(cates)})."
+                )
+            else:
+                # Length harmonisation: GWR β and CATE may be on different
+                # cell grids; if so, skip rather than emit nonsense.
+                aligned_gwr: Dict[str, np.ndarray] = {}
+                aligned_cate: Dict[str, np.ndarray] = {}
+                for tr in common:
+                    g, c = gwr_betas[tr], cates[tr]
+                    if g.shape == c.shape:
+                        aligned_gwr[tr] = g
+                        aligned_cate[tr] = c
+                if not aligned_gwr:
+                    print(
+                        "  CATE↔GWR divergence skipped: shape mismatch on "
+                        "every treatment."
+                    )
+                else:
+                    reports = divergence_audit_for_all(aligned_gwr, aligned_cate)
+                    payload = {
+                        "treatments": list(reports.keys()),
+                        "reports": {
+                            tr: r.to_payload(include_per_cell=False)
+                            for tr, r in reports.items()
+                        },
+                    }
+                    store.write_struct(
+                        stage="3",
+                        artifact_id="cate_vs_gwr_divergence",
+                        payload=payload,
+                        producer="causal_validation.persist_phase_c_artifacts",
+                        consumers=[
+                            "server:/results/causal/divergence",
+                            "report:/stage3/cate_vs_gwr",
+                            "desktop:causal_view",
+                        ],
+                    )
+                    print(
+                        f"  CATE↔GWR divergence written "
+                        f"(stage=3, treatments={len(reports)})"
+                    )
+        except Exception as exc:  # noqa: BLE001
+            print(f"  CATE↔GWR divergence persistence failed: {exc}")
+
+    def _load_gwr_betas_for_treatments(
+        self, treatments: List[str],
+    ) -> Dict[str, np.ndarray]:
+        """Fetch per-cell GWR β columns for ``treatments`` from the store.
+
+        Looks up the Stage-2 ``local_coefficients_gwr`` table; columns are
+        expected to be named like ``beta_<treatment>`` or
+        ``<treatment>_beta`` or just ``<treatment>``. Missing treatments
+        are silently skipped.
+        """
+        out: Dict[str, np.ndarray] = {}
+        try:
+            from sparc.registry.store import get_active_store
+            store = get_active_store()
+        except Exception:  # noqa: BLE001
+            return out
+        if store is None:
+            return out
+
+        candidate_ids = [
+            ("2", "v2_neural_local_coefficients_gwr"),
+            ("2", "local_coefficients_gwr"),
+            ("2", "mgwr_local_coefficients"),
+        ]
+        df = None
+        for stage, aid in candidate_ids:
+            try:
+                if hasattr(store, "has") and not store.has(stage, aid):
+                    continue
+                df = store.read_table(stage, aid)
+                if df is not None and len(df) > 0:
+                    break
+            except Exception:
+                continue
+        if df is None or len(df) == 0:
+            return out
+
+        cols = {c.lower(): c for c in df.columns}
+        for tr in treatments:
+            for cand in (f"beta_{tr}", f"{tr}_beta", tr):
+                key = cand.lower()
+                if key in cols:
+                    try:
+                        out[tr] = np.asarray(
+                            df[cols[key]].values, dtype=np.float64,
+                        ).ravel()
+                        break
+                    except Exception:
+                        continue
+        return out
+
+    # ------------------------------------------------------------------
     # Step 5: Produce scenario_coefficients.json
     # ------------------------------------------------------------------
 
@@ -2878,6 +3050,11 @@ def main(approval_gate=None) -> dict:
                     # Re-emit scenario_coefficients.json + multipliers so
                     # the freshly-computed CATE arrays are persisted.
                     validator.produce_scenario_coefficients(stage3_dir)
+                    # Phase C-2/C-3: PDP curves + CATE↔GWR divergence
+                    try:
+                        validator.persist_phase_c_artifacts(data)
+                    except Exception as _exc:
+                        print(f"  Phase-C artifacts (Bayesian path) failed: {_exc}")
                 except Exception as e:
                     print(f"  Bayesian-mode spatial CATE failed: {e}")
                     import traceback
@@ -2982,6 +3159,12 @@ def main(approval_gate=None) -> dict:
 
         # Phase 4: Spatial CATE via CausalForestDML
         validator.run_spatial_cate(data, stage3_dir)
+
+        # Phase C-2/C-3: PDP curves + CATE↔GWR divergence
+        try:
+            validator.persist_phase_c_artifacts(data)
+        except Exception as _exc:
+            print(f"  Phase-C artifacts (frequentist path) failed: {_exc}")
 
         # Phase 4b: Dose-response curves (non-linear treatment effects)
         validator.compute_dose_response(data, stage3_dir)

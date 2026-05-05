@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:sidecar": "python ../build-sidecar.py --target-dir src-tauri/binaries",
+    "build:bundle": "pnpm build:sidecar && pnpm build",
     "preview": "vite preview",
     "tauri": "tauri"
   },
