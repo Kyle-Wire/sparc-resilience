@@ -49,6 +49,29 @@ from sparc.data.data_utils import load_and_preprocess_data
 from sparc.run.pipeline_paths import get_paths
 
 
+def _to_scalar(x) -> float:
+    """Coerce a numpy/EconML/DoWhy return value to a Python float.
+
+    EconML's ``const_marginal_ate`` and DoWhy's ``estimate.value`` may
+    return either a Python scalar, a 0-d ndarray, or a 1-element ndarray
+    depending on the version and on whether the model has multiple
+    outputs/treatments. Calling ``float()`` directly on a >0-d ndarray
+    raises ``TypeError: only 0 dimensional arrays can be converted to
+    Python scalars`` (NumPy ≥1.25). This helper handles all three cases
+    and returns ``float('nan')`` for empty arrays.
+    """
+    if x is None:
+        return float("nan")
+    arr = np.asarray(x).ravel()
+    if arr.size == 0:
+        return float("nan")
+    if arr.size == 1:
+        return float(arr[0])
+    # Multi-element — fall back to the mean (matches what callers were
+    # doing manually for ``const_marginal_effect``).
+    return float(arr.mean())
+
+
 def _ensure_gdal_home() -> None:
     """
     On Windows, GDAL/fiona may try to resolve HOME to the *system*
@@ -588,7 +611,7 @@ class CausalValidator:
                     identified,
                     method_name="backdoor.linear_regression",
                 )
-                ate_value = float(estimate.value)
+                ate_value = _to_scalar(estimate.value)
                 self.ate_results[treatment] = {
                     'ate': ate_value,
                     'method': 'backdoor.linear_regression',
@@ -659,8 +682,8 @@ class CausalValidator:
                 )
                 dml.fit(Y, T, X=X)
 
-                cate_mean = float(dml.const_marginal_effect(X).mean())
-                cate_std = float(dml.const_marginal_effect(X).std())
+                cate_mean = _to_scalar(dml.const_marginal_effect(X).mean())
+                cate_std = _to_scalar(dml.const_marginal_effect(X).std())
                 method = 'LinearDML'
 
             except Exception:
@@ -1135,9 +1158,9 @@ class CausalValidator:
                     )
                     dml.fit(Y, T, W=W)
 
-                    ate_dr = float(dml.const_marginal_ate())
+                    ate_dr = _to_scalar(dml.const_marginal_ate())
                     inf = dml.const_marginal_ate_inference()
-                    se_dr = float(np.mean(inf.stderr_mean))
+                    se_dr = _to_scalar(np.mean(inf.stderr_mean))
                     dr_method = 'LinearDML (continuous DR)'
 
                 except Exception:
@@ -1699,7 +1722,7 @@ class CausalValidator:
                 )
 
                 ref_results: Dict[str, Any] = {}
-                ate_val = float(estimate.value)
+                ate_val = _to_scalar(estimate.value)
 
                 # 1. Placebo treatment
                 try:
@@ -1708,7 +1731,7 @@ class CausalValidator:
                         method_name="placebo_treatment_refuter",
                         placebo_type="permute",
                     )
-                    placebo_pass = abs(float(placebo.new_effect)) < abs(ate_val) * 0.5
+                    placebo_pass = abs(_to_scalar(placebo.new_effect)) < abs(ate_val) * 0.5
                     ref_results['placebo_pass'] = placebo_pass
                 except Exception:
                     ref_results['placebo_pass'] = None
@@ -1719,7 +1742,7 @@ class CausalValidator:
                         identified, estimate,
                         method_name="random_common_cause",
                     )
-                    rcc_pass = abs(float(rcc.new_effect) - ate_val) < abs(ate_val) * 0.2
+                    rcc_pass = abs(_to_scalar(rcc.new_effect) - ate_val) < abs(ate_val) * 0.2
                     ref_results['random_common_cause_pass'] = rcc_pass
                 except Exception:
                     ref_results['random_common_cause_pass'] = None
@@ -1733,7 +1756,7 @@ class CausalValidator:
                         num_simulations=5,
                     )
                     subset_pass = (
-                        abs(float(subset_ref.new_effect) - ate_val)
+                        abs(_to_scalar(subset_ref.new_effect) - ate_val)
                         < abs(ate_val) * 0.3
                     )
                     ref_results['data_subset_pass'] = subset_pass
@@ -1751,7 +1774,7 @@ class CausalValidator:
                         effect_strength_on_outcome=0.02,
                     )
                     ucc_pass = (
-                        abs(float(ucc.new_effect) - ate_val)
+                        abs(_to_scalar(ucc.new_effect) - ate_val)
                         < abs(ate_val) * 0.25
                     )
                     ref_results['unobserved_common_cause_pass'] = ucc_pass
