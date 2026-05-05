@@ -713,7 +713,18 @@ def main(fast_mode=False):
         else:
             _coords_cc = coords
             _values_cc = _values_matrix
-        _n_perm_cc = 0 if fast_mode else 50
+        # 20 permutations gives p-value resolution of 1/21 ≈ 0.048,
+        # which matches the downstream significance_alpha=0.05 threshold
+        # while running ~2.5× faster than the previous default of 50.
+        _n_perm_cc = 0 if fast_mode else 20
+        # Use the host hardware profile's outer_jobs to parallelise the
+        # per-pair permutation loop (was the silent ~50-minute bottleneck).
+        try:
+            from sparc.config.hardware_profile import detect_profile as _detect_hw
+            _hw = _detect_hw()
+            _n_jobs_cc = max(1, int(getattr(_hw, "outer_jobs", 1)))
+        except Exception:
+            _n_jobs_cc = 1
         cross_correlogram_payload = compute_cross_summary(
             _coords_cc, _values_cc, all_variables,
             max_distance=float(max_distance),
@@ -721,6 +732,7 @@ def main(fast_mode=False):
             n_angle_bins=4,
             n_perm=_n_perm_cc,
             seed=42,
+            n_jobs=_n_jobs_cc,
         )
     except Exception as _exc:  # noqa: BLE001
         print(f"Cross-correlogram assembly failed: {_exc}")

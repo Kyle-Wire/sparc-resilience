@@ -12,6 +12,7 @@ import { PAGES } from "@/components/layout/Sidebar";
 import ChatPanel from "@/components/chat/ChatPanel";
 import CommandPalette, { type PaletteItem } from "@/components/common/CommandPalette";
 import OnboardingTour from "@/components/common/OnboardingTour";
+import UpdateBanner from "@/components/updater/UpdateBanner";
 import { ExplainContext, useExplainHost } from "@/hooks/ExplainContext";
 import { loadTheme, applyTheme } from "@/lib/theme";
 import { buildSystemPrompt } from "@/lib/prompts";
@@ -304,6 +305,7 @@ export default function App() {
           <OnboardingTour onNavigate={(p) => navigate(p as PageName)} />
 
           <NotificationBanner />
+          <UpdateBanner />
         </div>
       </PipelineProvider>
       </ExplainContext.Provider>

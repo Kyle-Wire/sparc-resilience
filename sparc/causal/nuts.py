@@ -718,16 +718,24 @@ def run_nuts(
         es = np.array([_ess_bulk(chain[:, d]) for d in range(b.dim)])
         r_hat[b.name] = rh
         ess[b.name] = es
-        # Fix 3: convergence requires BOTH R̂ < 1.05 AND ESS > 400
-        conv = (rh < 1.05) & (es > 400)
+        # Convergence requires both R̂ < 1.05 and a reasonable ESS.  The ESS
+        # bar is scaled to the actual chain length: a fixed ESS > 400 floor
+        # is mathematically unreachable for chains shorter than ~400 draws
+        # (the case for short Stage-0 Matérn/anisotropy fits) and triggered
+        # spurious "convergence FAILED" warnings on otherwise healthy fits.
+        # Use the larger of (a) 100 — the standard rule-of-thumb minimum
+        # for stable posterior summaries, matching correlogram_matern_fit —
+        # and (b) one quarter of the chain length, capped at 400.
+        ess_floor = max(100.0, min(400.0, 0.25 * n_samples))
+        conv = (rh < 1.05) & (es > ess_floor)
         converged[b.name] = conv
         for d in range(b.dim):
             if not conv[d]:
                 reasons = []
                 if rh[d] >= 1.05:
                     reasons.append(f"R̂={rh[d]:.3f}≥1.05")
-                if es[d] <= 400:
-                    reasons.append(f"ESS={es[d]:.0f}≤400")
+                if es[d] <= ess_floor:
+                    reasons.append(f"ESS={es[d]:.0f}≤{ess_floor:.0f}")
                 logger.warning(
                     "NUTS convergence FAILED for %s[%d]: %s",
                     b.name, d, ", ".join(reasons),

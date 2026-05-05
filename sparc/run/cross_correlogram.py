@@ -232,6 +232,52 @@ def _peak_stat(C_block: np.ndarray) -> float:
     return float(np.max(np.abs(C_block))) if C_block.size else 0.0
 
 
+def _permute_pair(
+    i: int,
+    j: int,
+    coords: np.ndarray,
+    values_matrix: np.ndarray,
+    *,
+    max_distance: float,
+    n_lags: int,
+    n_angle_bins: int,
+    n_perm: int,
+    seed: int,
+    peak_sym_obs: float,
+    peak_anti_obs: float,
+) -> tuple[tuple[int, int], dict]:
+    """Worker for :func:`permutation_pvalues`: run ``n_perm`` shuffles of
+    variable ``j`` against variable ``i`` and count peaks ≥ observed.
+    Pulled out to a top-level function so it pickles cleanly under
+    ``joblib`` / ``multiprocessing`` backends.
+    """
+    rng = np.random.default_rng(seed)
+    vij = values_matrix[:, [i, j]].copy()
+    n_ge_sym = 0
+    n_ge_anti = 0
+    for _ in range(n_perm):
+        vij_perm = vij.copy()
+        rng.shuffle(vij_perm[:, 1])
+        tperm = compute_cross_correlogram(
+            coords, vij_perm,
+            max_distance=max_distance, n_lags=n_lags,
+            n_angle_bins=n_angle_bins,
+        )
+        csp, cap = decompose_sym_antisym(tperm)
+        # In the 2-var subset the (i, j) slice is at index (0, 1)
+        if _peak_stat(csp[:, :, 0, 1]) >= peak_sym_obs:
+            n_ge_sym += 1
+        if _peak_stat(cap[:, :, 0, 1]) >= peak_anti_obs:
+            n_ge_anti += 1
+    return (i, j), {
+        "peak_sym_obs": peak_sym_obs,
+        "peak_anti_obs": peak_anti_obs,
+        "p_sym": (n_ge_sym + 1) / (n_perm + 1),
+        "p_anti": (n_ge_anti + 1) / (n_perm + 1),
+        "n_perm": int(n_perm),
+    }
+
+
 def permutation_pvalues(
     coords: np.ndarray,
     values_matrix: np.ndarray,
@@ -244,6 +290,7 @@ def permutation_pvalues(
     seed: int = 0,
     observed_sym: Optional[np.ndarray] = None,
     observed_anti: Optional[np.ndarray] = None,
+    n_jobs: int = 1,
 ) -> dict[tuple[int, int], dict]:
     """Empirical permutation p-values for per-pair peak magnitudes.
 
@@ -254,10 +301,14 @@ def permutation_pvalues(
     ``C_anti[…,i,j]`` slices.  The p-value is the fraction of permuted
     peaks ≥ the observed peak.
 
+    When ``n_jobs > 1``, pairs are processed in parallel via joblib's
+    loky backend (falls back to a serial loop if joblib is unavailable
+    or only one pair is supplied).  Each worker gets a deterministic
+    sub-seed derived from ``seed`` so results stay reproducible.
+
     Returns ``{(i, j): {"p_sym": …, "p_anti": …, "peak_sym_obs": …,
     "peak_anti_obs": …}}``.
     """
-    rng = np.random.default_rng(seed)
     coords = np.asarray(coords, dtype=np.float64)
     values_matrix = np.asarray(values_matrix, dtype=np.float64)
 
@@ -270,35 +321,72 @@ def permutation_pvalues(
         )
         observed_sym, observed_anti = decompose_sym_antisym(obs_tensor)
 
-    out: dict[tuple[int, int], dict] = {}
+    # Pre-compute observed peaks per pair so workers don't see the
+    # (potentially large) full tensor.
+    pair_jobs = []
     for (i, j) in pair_indices:
         peak_sym_obs = _peak_stat(observed_sym[:, :, i, j])
         peak_anti_obs = _peak_stat(observed_anti[:, :, i, j])
-        n_ge_sym = 0
-        n_ge_anti = 0
-        # Restrict to a 2-column (i, j) values matrix; permute j's labels.
-        vij = values_matrix[:, [i, j]].copy()
-        for _ in range(n_perm):
-            vij_perm = vij.copy()
-            rng.shuffle(vij_perm[:, 1])
-            tperm = compute_cross_correlogram(
-                coords, vij_perm,
+        pair_jobs.append((i, j, peak_sym_obs, peak_anti_obs))
+
+    n_pairs = len(pair_jobs)
+    use_parallel = n_jobs is not None and n_jobs > 1 and n_pairs > 1
+    parallel = None
+    if use_parallel:
+        try:
+            from joblib import Parallel, delayed  # type: ignore
+            parallel = (Parallel, delayed)
+        except Exception:
+            parallel = None
+
+    if parallel is not None:
+        Parallel, delayed = parallel
+        print(
+            f"  Cross-correlogram permutation: {n_pairs} pairs × {n_perm} "
+            f"shuffles each, n_jobs={n_jobs}",
+            flush=True,
+        )
+        results = Parallel(n_jobs=n_jobs, backend="loky")(
+            delayed(_permute_pair)(
+                i, j, coords, values_matrix,
                 max_distance=max_distance, n_lags=n_lags,
-                n_angle_bins=n_angle_bins,
+                n_angle_bins=n_angle_bins, n_perm=n_perm,
+                seed=int(seed) + 1000 * (k + 1),
+                peak_sym_obs=ps, peak_anti_obs=pa,
             )
-            csp, cap = decompose_sym_antisym(tperm)
-            # In the 2-var subset, the (i, j) slice is at index (0, 1)
-            if _peak_stat(csp[:, :, 0, 1]) >= peak_sym_obs:
-                n_ge_sym += 1
-            if _peak_stat(cap[:, :, 0, 1]) >= peak_anti_obs:
-                n_ge_anti += 1
-        out[(i, j)] = {
-            "peak_sym_obs": peak_sym_obs,
-            "peak_anti_obs": peak_anti_obs,
-            "p_sym": (n_ge_sym + 1) / (n_perm + 1),
-            "p_anti": (n_ge_anti + 1) / (n_perm + 1),
-            "n_perm": int(n_perm),
-        }
+            for k, (i, j, ps, pa) in enumerate(pair_jobs)
+        )
+        out: dict[tuple[int, int], dict] = {key: val for key, val in results}
+        print(
+            f"  Cross-correlogram permutation: {n_pairs}/{n_pairs} pairs complete",
+            flush=True,
+        )
+        return out
+
+    # Serial fallback with progress logging every 5 pairs (or every pair
+    # for small batches) so the user sees movement during the long
+    # single-threaded grind.
+    print(
+        f"  Cross-correlogram permutation: {n_pairs} pairs × {n_perm} "
+        f"shuffles each (serial)",
+        flush=True,
+    )
+    progress_every = 1 if n_pairs <= 10 else 5
+    out = {}
+    for k, (i, j, ps, pa) in enumerate(pair_jobs):
+        key, payload = _permute_pair(
+            i, j, coords, values_matrix,
+            max_distance=max_distance, n_lags=n_lags,
+            n_angle_bins=n_angle_bins, n_perm=n_perm,
+            seed=int(seed) + 1000 * (k + 1),
+            peak_sym_obs=ps, peak_anti_obs=pa,
+        )
+        out[key] = payload
+        if (k + 1) % progress_every == 0 or (k + 1) == n_pairs:
+            print(
+                f"  Cross-correlogram permutation: {k + 1}/{n_pairs} pairs complete",
+                flush=True,
+            )
     return out
 
 
@@ -568,11 +656,13 @@ def compute_and_summarise(
     significance_alpha: float = 0.05,
     noise_floor: float = 0.05,
     seed: int = 0,
+    n_jobs: int = 1,
 ) -> dict:
     """Compute tensor → decompose → (optional permutation null) → summary.
 
     When ``n_perm == 0`` the permutation step is skipped and per-pair
-    p-values are reported as ``None``.
+    p-values are reported as ``None``.  ``n_jobs`` is forwarded to the
+    permutation helper for parallel per-pair workers.
     """
     tensor = compute_cross_correlogram(
         coords, values_matrix,
@@ -592,6 +682,7 @@ def compute_and_summarise(
             n_angle_bins=n_angle_bins,
             n_perm=n_perm, seed=seed,
             observed_sym=C_sym_obs, observed_anti=C_anti_obs,
+            n_jobs=n_jobs,
         )
     return per_pair_summary(
         tensor,
