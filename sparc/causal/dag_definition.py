@@ -76,10 +76,15 @@ def dag_to_networkx(dag_def: Dict[str, Any]) -> nx.DiGraph:
     Convert a parsed DAG definition dict into a ``networkx.DiGraph``.
 
     Node attributes include ``type`` (treatment / mediator / confounder /
-    outcome) and ``description``.  Edge attributes include ``mechanism``.
+    outcome / instrument / proxy_confounder / selection) and
+    ``description``.  Edge attributes include ``mechanism``, ``kind``
+    (``direct`` / ``instrumental`` / ``mediated`` / ``time_lagged``),
+    ``lag``, ``sign_prior`` (``+`` / ``-`` / ``0``) and ``confidence``.
 
     If the definition contains ``temporal_edges``, they are appended
-    automatically via :func:`add_temporal_edges`.
+    automatically via :func:`add_temporal_edges`.  Edges with an inline
+    ``lag`` field are treated equivalently — the validator may use
+    either form.
     """
     G = nx.DiGraph()
 
@@ -91,19 +96,30 @@ def dag_to_networkx(dag_def: Dict[str, Any]) -> nx.DiGraph:
         )
 
     for edge in dag_def['edges']:
-        G.add_edge(
-            edge['parent'],
-            edge['child'],
-            mechanism=edge.get('mechanism', ''),
-        )
+        attrs: Dict[str, Any] = {
+            'mechanism': edge.get('mechanism', ''),
+            'kind': edge.get('kind', 'direct'),
+        }
+        for key in ('lag', 'sign_prior', 'confidence'):
+            if key in edge and edge[key] is not None:
+                attrs[key] = edge[key]
+        # An inline `lag` implies a time-lagged edge unless overridden.
+        if 'lag' in attrs and attrs['kind'] == 'direct':
+            attrs['kind'] = 'time_lagged'
+        G.add_edge(edge['parent'], edge['child'], **attrs)
 
-    # Append temporal (time-lagged) edges if present
+    # Append temporal (time-lagged) edges if present (legacy block)
     temporal_edges = dag_def.get('temporal_edges', [])
     if temporal_edges:
         add_temporal_edges(G, temporal_edges)
 
     if not nx.is_directed_acyclic_graph(G):
         raise ValueError("The graph contains cycles — it is not a valid DAG.")
+
+    # Top-level user-asserted identification assumptions are attached
+    # to the graph so downstream validators / reports can cite them.
+    if 'assumptions' in dag_def and isinstance(dag_def['assumptions'], dict):
+        G.graph['assumptions'] = dict(dag_def['assumptions'])
 
     return G
 
@@ -114,27 +130,32 @@ def get_node_roles(G: nx.DiGraph) -> Dict[str, List[str]]:
 
     Returns
     -------
-    dict with keys ``treatments``, ``outcomes``, ``mediators``, ``confounders``, ``unknown``.
+    dict with keys ``treatments``, ``outcomes``, ``mediators``,
+    ``confounders``, ``instruments``, ``proxy_confounders``,
+    ``selection``, ``unknown``.
     """
     roles: Dict[str, List[str]] = {
         'treatments': [],
         'outcomes': [],
         'mediators': [],
         'confounders': [],
+        'instruments': [],
+        'proxy_confounders': [],
+        'selection': [],
         'unknown': [],
+    }
+    bucket = {
+        'treatment': 'treatments',
+        'outcome': 'outcomes',
+        'mediator': 'mediators',
+        'confounder': 'confounders',
+        'instrument': 'instruments',
+        'proxy_confounder': 'proxy_confounders',
+        'selection': 'selection',
     }
     for node, attrs in G.nodes(data=True):
         ntype = attrs.get('node_type', 'unknown')
-        if ntype == 'treatment':
-            roles['treatments'].append(node)
-        elif ntype == 'outcome':
-            roles['outcomes'].append(node)
-        elif ntype == 'mediator':
-            roles['mediators'].append(node)
-        elif ntype == 'confounder':
-            roles['confounders'].append(node)
-        else:
-            roles['unknown'].append(node)
+        roles[bucket.get(ntype, 'unknown')].append(node)
     return roles
 
 

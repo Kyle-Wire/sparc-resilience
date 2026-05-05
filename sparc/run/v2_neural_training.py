@@ -616,6 +616,140 @@ def _load_correlogram_bandwidths(
         return None
 
 
+def _load_kernel_field(config: dict, feature_names: list[str]):
+    """Phase 5b: load the matrix-aware ``KernelField`` from Stage-0
+    artifacts so the surrogate's bandwidth conditioning becomes
+    kernel-aware (κ_x, κ_y, θ, ν, σ², per-pair bandwidth-to-outcome).
+
+    Returns ``None`` when the artifacts are not yet present so legacy
+    runs proceed unchanged.
+    """
+    target_var = (config or {}).get("variables", {}).get("target", "")
+    if not target_var or not feature_names:
+        return None
+    try:
+        from sparc.registry.store import get_active_store
+        store = get_active_store()
+        if store is None:
+            return None
+    except Exception:
+        return None
+
+    def _safe(stage, aid):
+        try:
+            return store.read_struct(stage, aid)
+        except Exception:
+            return None
+
+    matern = _safe("0", "correlogram_matern_fit")
+    aniso = _safe("0", "correlogram_anisotropy")
+    erm = _safe("0", "effective_range_matrix")
+    if matern is None and aniso is None and erm is None:
+        return None
+    try:
+        from sparc.models.kernel_field import KernelField
+        kf = KernelField.from_artifacts(
+            outcome_name=target_var,
+            predictor_names=list(feature_names),
+            matern_artifact=matern,
+            anisotropy_artifact=aniso,
+            effective_range_matrix=erm,
+        )
+        logger.info(
+            "Surrogate KernelField assembled for outcome '%s' (%d predictors; "
+            "matern=%s aniso=%s erm=%s)",
+            target_var, len(kf.predictors),
+            "yes" if matern else "no",
+            "yes" if aniso else "no",
+            "yes" if erm else "no",
+        )
+        return kf
+    except Exception as e:
+        logger.warning("KernelField assembly failed (legacy fallback): %s", e)
+        return None
+
+
+def _run_base_vs_surrogate_alignment(
+    surrogate_gwr,
+    X_spatial,
+    feature_names: list[str],
+) -> None:
+    """Phase 5c audit: compute per-predictor cosine similarity between
+    the classical ``GWRModel.coefficients_`` and the
+    ``DifferentiableGWR`` surrogate's β surface.
+
+    Persists ``stage=2, gwr_base_vs_surrogate_alignment`` to the active
+    artifact store.  Skips silently when either model is unavailable.
+    """
+    if surrogate_gwr is None or X_spatial is None or not feature_names:
+        return
+    try:
+        from sparc.registry.store import get_active_store
+        store = get_active_store()
+        if store is None:
+            return
+    except Exception:
+        return
+
+    # Load the classical GWR base model (persisted by Stage-2 spatial CV).
+    gwr_model = None
+    try:
+        from sparc.run.artifact_io import load_blob_path
+        from pathlib import Path as _P
+        # Synthetic path; loader prefers store via (stage, artifact_id).
+        gwr_model = load_blob_path(
+            _P("gwr_model_full.pkl"),
+            stage="2", artifact_id="gwr_model_full",
+        )
+    except Exception:
+        gwr_model = None
+
+    if gwr_model is None or not hasattr(gwr_model, "coefficients_"):
+        logger.info(
+            "Base/surrogate alignment skipped: classical GWR coefficients "
+            "not available in artifact store"
+        )
+        return
+
+    base_beta = np.asarray(gwr_model.coefficients_, dtype=np.float64)
+    if base_beta.ndim != 2 or base_beta.shape[1] != len(feature_names):
+        logger.warning(
+            "Base/surrogate alignment skipped: shape mismatch "
+            "(base_beta=%s, n_features=%d)",
+            base_beta.shape, len(feature_names),
+        )
+        return
+
+    from sparc.run.consistency_check import (
+        collect_surrogate_beta, compute_base_vs_surrogate_alignment,
+    )
+    surrogate_beta = collect_surrogate_beta(
+        surrogate_gwr, X_spatial, n_vars=len(feature_names),
+    )
+    # Surrogate may have been fit on a different N — only audit when N matches.
+    if surrogate_beta.shape[0] != base_beta.shape[0]:
+        logger.info(
+            "Base/surrogate alignment skipped: sample-size mismatch "
+            "(base N=%d, surrogate N=%d)",
+            base_beta.shape[0], surrogate_beta.shape[0],
+        )
+        return
+
+    payload = compute_base_vs_surrogate_alignment(
+        base_beta, surrogate_beta, list(feature_names),
+        warn_threshold=0.7, persist=True,
+    )
+    summary = payload.get("summary", {})
+    logger.info(
+        "Base/surrogate alignment: mean cos=%.3f, min cos=%.3f, "
+        "%d/%d predictors below threshold",
+        summary.get("mean_cosine_similarity", float("nan")),
+        summary.get("min_cosine_similarity", float("nan")),
+        summary.get("n_warnings", 0),
+        summary.get("n_predictors", 0),
+    )
+
+
 def _resolve_treatment_list(config: dict) -> list[str]:
     """Resolve ordered treatment names for per-head alpha output.
 
@@ -768,6 +902,11 @@ def train_neural_meta(
 
     # ---- Load per-predictor bandwidths from Stage 0 correlogram ----
     predictor_bandwidths = _load_correlogram_bandwidths(output_dir, feature_names)
+    # Phase 5b: matrix-aware kernel-field bundle (Matérn + anisotropy +
+    # per-pair bandwidth-to-outcome).  None when Stage-0 artifacts
+    # haven't been written; surrogates fall back to legacy bandwidth-only
+    # conditioning in that case.
+    predictor_kernel_field = _load_kernel_field(config, feature_names)
 
     # GWRF neighbor count (smaller than max_neighbors for spatial attention)
     gwrf_k = min(neural_cfg.get("gwrf_neighbors", 16), max_neighbors)
@@ -889,8 +1028,14 @@ def train_neural_meta(
                 "gwr": DifferentiableGWR(
                     n_physics, d_spatial, hidden_dim,
                     bandwidths=predictor_bandwidths,
+                    kernel_field=predictor_kernel_field,
+                    feature_names=feature_names,
                 ).to(device),
-                "gwrf": DifferentiableGWRF(n_physics, d_spatial, hidden_dim).to(device),
+                "gwrf": DifferentiableGWRF(
+                    n_physics, d_spatial, hidden_dim,
+                    kernel_field=predictor_kernel_field,
+                    feature_names=feature_names,
+                ).to(device),
                 "ggpgam": DifferentiableGGPGAM(
                     n_physics, d_spatial, min(hidden_dim, 32),
                 ).to(device),
@@ -1072,10 +1217,14 @@ def train_neural_meta(
                 n_vars=n_physics, n_spatial_features=d_spatial,
                 hidden_dim=hidden_dim,
                 bandwidths=predictor_bandwidths,
+                kernel_field=predictor_kernel_field,
+                feature_names=feature_names,
             ).to(device),
             "gwrf": DifferentiableGWRF(
                 n_vars=n_physics, n_spatial_features=d_spatial,
                 hidden_dim=hidden_dim,
+                kernel_field=predictor_kernel_field,
+                feature_names=feature_names,
             ).to(device),
             "ggpgam": DifferentiableGGPGAM(
                 n_vars=n_physics, n_spatial_features=d_spatial,
@@ -1680,10 +1829,14 @@ def train_neural_meta(
             n_vars=n_physics, n_spatial_features=d_spatial,
             hidden_dim=hidden_dim,
             bandwidths=predictor_bandwidths,
+            kernel_field=predictor_kernel_field,
+            feature_names=feature_names,
         ).to(device),
         "gwrf": DifferentiableGWRF(
             n_vars=n_physics, n_spatial_features=d_spatial,
             hidden_dim=hidden_dim,
+            kernel_field=predictor_kernel_field,
+            feature_names=feature_names,
         ).to(device),
         "ggpgam": DifferentiableGGPGAM(
             n_vars=n_physics, n_spatial_features=d_spatial,
@@ -2466,6 +2619,21 @@ def train_neural_meta(
         json.dump(meta_info, f, indent=2)
 
     logger.info("V2 neural artifacts saved to %s", artifact_dir)
+
+    # ==================================================================
+    # Phase 5c: base / surrogate consistency check
+    # Compares the surrogate's local-β surface against the classical
+    # GWRModel's coefficients_ (when ``gwr_model_full`` is in the store).
+    # Persisted as ``stage=2, gwr_base_vs_surrogate_alignment``.
+    # ==================================================================
+    try:
+        _run_base_vs_surrogate_alignment(
+            final_surrogates.get("gwr"),
+            tensors["X_spatial"],
+            feature_names,
+        )
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("Base/surrogate alignment audit failed: %s", _e)
 
     # ==================================================================
     # Export human-readable outputs (predictions, coefficients, maps)

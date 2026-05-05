@@ -192,9 +192,28 @@ export interface PipelineEvent {
   [key: string]: unknown;
 }
 
+/**
+ * SPARC v4 DAG node types. The new types extend the original four:
+ *   - `instrument`: exogenous variable affecting the outcome only via
+ *     a treatment (IV identification).
+ *   - `proxy_confounder`: an imperfect measurement of an unobserved
+ *     confounder; flagged so the editor can warn about residual
+ *     confounding.
+ *   - `selection`: a variable that drives sample inclusion / dropout;
+ *     conditioning on it can introduce collider bias.
+ */
+export type DagNodeType =
+  | "treatment"
+  | "mediator"
+  | "confounder"
+  | "outcome"
+  | "instrument"
+  | "proxy_confounder"
+  | "selection";
+
 export interface DagNode {
   name: string;
-  type: "treatment" | "mediator" | "confounder" | "outcome";
+  type: DagNodeType;
   description?: string;
 }
 
@@ -238,15 +257,45 @@ export interface DataVersion {
   file_exists: boolean;
 }
 
+/**
+ * SPARC v4 DAG edge attributes.
+ *   - `kind`: typing for the edge — `direct` (default), `instrumental`
+ *     (an IV → treatment edge), `mediated` (channeled through a
+ *     mediator), `time_lagged` (set automatically when `lag` is set).
+ *   - `lag`: integer time-lag in pipeline time-steps. Replaces the
+ *     legacy `temporal_edges:` block.
+ *   - `sign_prior`: hypothesised direction (+ / − / 0). Drives edge
+ *     colour in the editor and is checked against estimated effects.
+ *   - `confidence`: 0..1 — how strongly the assumption is held. Drives
+ *     edge opacity / stroke width in the editor.
+ */
 export interface DagEdge {
   parent: string;
   child: string;
   mechanism?: string;
+  kind?: "direct" | "instrumental" | "mediated" | "time_lagged";
+  lag?: number;
+  sign_prior?: "+" | "-" | "0";
+  confidence?: number;
+}
+
+/**
+ * Top-level identification assumptions the user explicitly endorses.
+ * The validator surfaces these alongside the d-separation / positivity
+ * checks so reviewers can see what was claimed vs. what was tested.
+ */
+export interface DagAssumptions {
+  conditional_exchangeability?: boolean;
+  positivity?: boolean;
+  consistency?: boolean;
+  no_interference?: boolean;
+  notes?: string;
 }
 
 export interface DagDefinition {
   nodes: DagNode[];
   edges: DagEdge[];
+  assumptions?: DagAssumptions;
 }
 
 export interface DagValidation {
@@ -365,6 +414,106 @@ export interface CorrelogramData {
   individual_results: Record<string, CorrelogramVariableResult>;
   model_bandwidths?: Record<string, number | null>;
   spatial_cv_configuration?: Record<string, unknown>;
+}
+
+// ------------------------------------------------------------------
+// Phase C — KernelField, causal PDP, divergence, scenario routing
+// ------------------------------------------------------------------
+
+export interface KernelFieldPredictor {
+  name: string;
+  kappa?: number | null;
+  kappa_x?: number | null;
+  kappa_y?: number | null;
+  theta_rad?: number | null;
+  is_anisotropic?: boolean;
+  nu?: number | null;
+  sigma2?: number | null;
+  bandwidth_to_outcome?: number | null;
+  kappa_posterior_samples?: number[] | null;
+}
+
+export interface KernelFieldData {
+  outcome_name: string;
+  predictors: KernelFieldPredictor[];
+  variable_names?: string[];
+  range_matrix?: (number | null)[][];
+  bandwidth_mismatch_warnings?: string[];
+  matern_default_nu?: number;
+  source?: string;
+}
+
+export interface CausalPDPCurve {
+  treatment: string;
+  dose_grid: number[];
+  response_mean: number[];
+  response_hdi_lo: number[];
+  response_hdi_hi: number[];
+  saturation_dose?: number | null;
+  saturation_index?: number | null;
+  peak_marginal_slope?: number;
+  knee_marginal_slope?: number;
+  source: "bayesian" | "frequentist" | "error" | "unknown";
+  diagnostics?: Record<string, unknown>;
+}
+
+export interface CausalPDPData {
+  curves: CausalPDPCurve[];
+}
+
+export interface DivergenceReport {
+  treatment: string;
+  cell_count: number;
+  flagged_count: number;
+  flagged_fraction: number;
+  mean_abs_divergence: number;
+  median_abs_divergence: number;
+  max_abs_divergence: number;
+  pearson_correlation: number;
+  sign_agreement_rate: number;
+  threshold_used: number;
+  per_cell_divergence?: number[];
+  flagged_mask?: boolean[];
+  diagnostics?: Record<string, unknown>;
+}
+
+export interface AnisotropyEntry {
+  name: string;
+  is_anisotropic: boolean;
+  kappa_x?: number | null;
+  kappa_y?: number | null;
+  theta_rad?: number | null;
+  theta_deg?: number | null;
+  range_x?: number | null;
+  range_y?: number | null;
+  aspect_ratio?: number;
+  eccentricity?: number;
+  bandwidth_to_outcome?: number | null;
+  nu?: number | null;
+  sigma2?: number | null;
+}
+
+export interface ScenarioRoutingAuditData {
+  variables: string[];
+  routing: Record<string, {
+    source: "causal_cate" | "heuristic_disagreement" | "length_mismatch" | "missing";
+    n_cells?: number;
+    mean_multiplier?: number;
+    std_multiplier?: number;
+    min_multiplier?: number;
+    max_multiplier?: number;
+    n_cells_expected?: number;
+    n_cells_actual?: number;
+  }>;
+  anisotropy: AnisotropyEntry[];
+  kernel_field_outcome?: string | null;
+  summary: {
+    total_variables: number;
+    causal_routed: number;
+    correlational_routed: number;
+    missing: number;
+    anisotropic_predictor_count: number;
+  };
 }
 
 // ------------------------------------------------------------------

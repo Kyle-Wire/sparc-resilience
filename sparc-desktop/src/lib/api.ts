@@ -27,6 +27,10 @@ import type {
   RunManifest,
   StageManifest,
   MissingArtifactDetail,
+  KernelFieldData,
+  CausalPDPData,
+  DivergenceReport,
+  ScenarioRoutingAuditData,
 } from "./types";
 
 const BASE = "http://127.0.0.1:8008";
@@ -391,6 +395,21 @@ export async function generatePdfReport(): Promise<{ blob: Blob | null; htmlFall
 // ------------------------------------------------------------------
 export const getCorrelogramData = () =>
   get<CorrelogramData>("/results/correlogram");
+
+// Phase C — KernelField, causal PDP, divergence, scenario routing
+export const getKernelFieldData = () =>
+  get<KernelFieldData>("/results/kernel_field");
+
+export const getCausalPDPCurves = () =>
+  get<CausalPDPData>("/results/causal/pdp_curves");
+
+export const getCateVsGwrDivergence = () =>
+  get<{ reports: Record<string, DivergenceReport> } | DivergenceReport>(
+    "/results/causal/divergence",
+  );
+
+export const getScenarioRoutingAudit = () =>
+  get<ScenarioRoutingAuditData>("/results/scenarios/routing_audit");
 
 export const getModelPerformance = () =>
   get<{ models: { name: string; r2: number; rmse?: number }[] }>("/results/model_performance");
@@ -1249,3 +1268,51 @@ export async function downloadAudienceReport(opts: {
   }
   return { ok: true, filename, text };
 }
+
+// ------------------------------------------------------------------
+// Insights aggregator (Phase 4)
+// ------------------------------------------------------------------
+export interface InsightsHeadline {
+  best: InterventionCandidate | null;
+  alternatives: number;
+  score: number | null;
+  sensitivity: {
+    treatment: string | null;
+    e_value: number | null;
+    robust: boolean;
+  } | null;
+  n_treatments: number;
+  n_outcomes: number;
+  warnings: string[];
+}
+
+export const getInsightsHeadline = () =>
+  get<InsightsHeadline>("/insights/headline");
+
+// ------------------------------------------------------------------
+// Dataset profile (Phase 4) — richer than /data/summary
+// ------------------------------------------------------------------
+export interface DatasetColumnProfile {
+  name: string;
+  dtype: string;
+  missing_pct: number;
+  n_unique: number | null;
+  min: number | null;
+  max: number | null;
+  mean: number | null;
+  std: number | null;
+  skew: number | null;
+  kurtosis: number | null;
+  corr_target: number | null;
+}
+
+export interface DatasetProfile {
+  n_rows: number;
+  n_cols: number;
+  target: string | null;
+  columns: DatasetColumnProfile[];
+  crs: string | null;
+}
+
+export const getDatasetProfile = () =>
+  get<DatasetProfile>("/results/dataset/profile");

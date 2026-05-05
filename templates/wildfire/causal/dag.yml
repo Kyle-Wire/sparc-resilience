@@ -118,3 +118,18 @@ edges:
   - parent: distance_to_road_km
     child: dnbr
     mechanism: "Proximity to roads: ignition probability + suppression access"
+
+# -----------------------------------------------------------------------------
+# SPARC v4 — User-asserted identification assumptions.
+# Surfaced in the validation report alongside empirical checks
+# (positivity, SUTVA / Moran's I, d-separation).
+# Per-edge `sign_prior` / `confidence` / `kind` / `lag` may also be added.
+# -----------------------------------------------------------------------------
+assumptions:
+  conditional_exchangeability: true
+  positivity: true
+  consistency: true
+  no_interference: false
+  notes: |
+    Fire spreads — fuel-treatment effectiveness depends on neighbouring patches.
+    SUTVA holds only at landscape scale.

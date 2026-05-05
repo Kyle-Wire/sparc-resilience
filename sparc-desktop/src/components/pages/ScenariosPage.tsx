@@ -792,7 +792,7 @@ export default function ScenariosPage({ onNavigate }: Props = {}) {
               )}
               {hasStageResults && onNavigate && (
                 <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line)" }}>
-                  <Btn small onClick={() => onNavigate("Results")}>Open Results →</Btn>
+                  <Btn small onClick={() => onNavigate("Insights")}>Open Insights →</Btn>
                 </div>
               )}
             </Card>

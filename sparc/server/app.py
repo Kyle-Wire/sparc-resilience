@@ -1691,6 +1691,54 @@ async def get_correlogram_data():
     )
 
 
+# ------------------------------------------------------------------
+# Phase-C — KernelField, causal PDP, divergence, scenario routing
+# ------------------------------------------------------------------
+
+@app.get("/results/kernel_field")
+async def get_kernel_field_artifact():
+    """Return the canonical KernelField artifact (Stage 0 → Stage 1)."""
+    store = _open_store()
+    try:
+        for stage in ("1", "0"):
+            if store.has(stage, "kernel_field"):
+                return store.read_any(stage, "kernel_field")
+    finally:
+        from sparc.registry.run_registry import set_active_registry
+        set_active_registry(None)
+    raise _missing_artifact_response(
+        artifact_id="kernel_field", stage="0/1",
+        hint="No KernelField artifact has been written by Stages 0/1.",
+    )
+
+
+@app.get("/results/causal/pdp_curves")
+async def get_causal_pdp_curves():
+    """Return the Bayesian causal PDP curves (Stage 3, Phase C-2)."""
+    return _read_or_404(
+        "3", "causal_pdp_curves",
+        hint="Stage 3 has not produced causal_pdp_curves. Run Stage 3 with Bayesian-CATE enabled.",
+    )
+
+
+@app.get("/results/causal/divergence")
+async def get_cate_vs_gwr_divergence():
+    """Return the CATE-vs-GWR divergence audit (Stage 3, Phase C-3)."""
+    return _read_or_404(
+        "3", "cate_vs_gwr_divergence",
+        hint="Stage 3 has not produced cate_vs_gwr_divergence.",
+    )
+
+
+@app.get("/results/scenarios/routing_audit")
+async def get_scenario_routing_audit():
+    """Return the scenario routing + anisotropic-frame audit (Stage 4, Phase C-4)."""
+    return _read_or_404(
+        "4", "scenario_routing_audit",
+        hint="Stage 4 has not produced scenario_routing_audit.",
+    )
+
+
 @app.get("/results/gwen")
 async def get_gwen_data():
     """Return GWEN variable importance as a row-oriented table."""
@@ -2820,6 +2868,225 @@ async def get_decision_targeting(
             "max_priority": max(priorities) if priorities else 0.0,
             "min_priority": min(priorities) if priorities else 0.0,
         },
+    }
+
+
+# ------------------------------------------------------------------
+# Insights aggregator (Phase 4): single round-trip "headline" summary
+# the practitioner Insights view shows at the top of the page.  Combines
+# the best-ranked decision candidate, sensitivity strength, and a few
+# top-line counts so the desktop doesn't need to fan out to four
+# separate endpoints just to render one card.
+# ------------------------------------------------------------------
+
+@app.get("/insights/headline")
+async def get_insights_headline():
+    """Return a single 'headline' payload for the Insights page.
+
+    Shape::
+
+        {
+          "best": InterventionCandidate | null,
+          "alternatives": int,
+          "score": float | null,             # mean_effect / |cost|
+          "sensitivity": {                   # strongest E-value across effects
+            "treatment": str | null,
+            "e_value": float | null,
+            "robust": bool,                  # e_value >= 2
+          } | null,
+          "n_treatments": int,
+          "n_outcomes": int,
+          "warnings": [str, ...],
+        }
+    """
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    # 1) Decision candidates → "best".  Reuse the existing endpoint so
+    #    the heuristic stays single-sourced.
+    best: dict | None = None
+    score: float | None = None
+    n_alt = 0
+    warnings: list[str] = []
+    try:
+        cand_payload = await get_decision_candidates()  # type: ignore[misc]
+        candidates = (cand_payload or {}).get("candidates", []) if isinstance(cand_payload, dict) else []
+    except HTTPException as exc:
+        candidates = []
+        warnings.append(f"decision: {exc.detail}")
+
+    if candidates:
+        scored: list[tuple[float, dict]] = []
+        for c in candidates:
+            try:
+                eff = float(c.get("mean_effect"))
+            except (TypeError, ValueError):
+                continue
+            cost = abs(float(c.get("cost", 1.0) or 1.0)) or 1.0
+            scored.append((eff / cost, c))
+        if scored:
+            scored.sort(key=lambda p: p[0], reverse=True)
+            score, best = scored[0]
+            n_alt = max(0, len(candidates) - 1)
+
+    # 2) Strongest sensitivity (E-value) across reported effects.
+    sensitivity_top: dict | None = None
+    try:
+        sens = await get_causal_sensitivity()  # type: ignore[misc]
+        effects = []
+        if isinstance(sens, dict):
+            effects = sens.get("effects") or sens.get("rows") or []
+        if not isinstance(effects, list):
+            effects = []
+        best_e = None
+        for row in effects:
+            if not isinstance(row, dict):
+                continue
+            try:
+                ev = float(row.get("e_value"))
+            except (TypeError, ValueError):
+                continue
+            if best_e is None or ev > best_e["e_value"]:
+                best_e = {"treatment": row.get("treatment") or row.get("variable"), "e_value": ev}
+        if best_e is not None:
+            best_e["robust"] = best_e["e_value"] >= 2.0
+            sensitivity_top = best_e
+    except HTTPException as exc:
+        warnings.append(f"sensitivity: {exc.detail}")
+
+    # 3) Cheap structure counts from the DAG so the headline can show
+    #    "ranked across N treatments → 1 outcome".
+    n_treatments = 0
+    n_outcomes = 0
+    try:
+        dag_file = state.project_config.get("causal", {}).get("dag_file")
+        if dag_file and Path(dag_file).exists():
+            from sparc.causal.dag_definition import load_dag, dag_to_networkx, get_node_roles
+            dag = load_dag(dag_file)
+            G = dag_to_networkx(dag)
+            roles = get_node_roles(G)
+            n_treatments = len(roles.get("treatments", []))
+            n_outcomes = len(roles.get("outcomes", []))
+    except Exception as exc:
+        warnings.append(f"dag: {exc}")
+
+    return {
+        "best": best,
+        "alternatives": n_alt,
+        "score": score,
+        "sensitivity": sensitivity_top,
+        "n_treatments": n_treatments,
+        "n_outcomes": n_outcomes,
+        "warnings": warnings,
+    }
+
+
+# ------------------------------------------------------------------
+# Dataset profile (Phase 4): richer column-level diagnostics than
+# ``/data/summary``.  Adds missing-rate, skewness, kurtosis, and
+# Pearson correlation against the project target so the Insights view
+# can flag degenerate or weakly-related predictors.
+# ------------------------------------------------------------------
+
+@app.get("/results/dataset/profile")
+async def get_dataset_profile():
+    """Return per-column diagnostics for the loaded project dataset.
+
+    Shape::
+
+        {
+          "n_rows": int,
+          "n_cols": int,
+          "target": str | null,
+          "columns": [
+            {
+              "name": str,
+              "dtype": str,
+              "missing_pct": float,
+              "n_unique": int | null,
+              "min": float | null, "max": float | null,
+              "mean": float | null, "std": float | null,
+              "skew": float | null, "kurtosis": float | null,
+              "corr_target": float | null
+            }, ...
+          ],
+          "crs": str | null,
+        }
+    """
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+    if state.data is None:
+        raise HTTPException(404, "No dataset loaded — upload a CSV first")
+
+    import numpy as np
+    import pandas as pd
+
+    df = state.data
+    target = (state.project_config.get("variables") or {}).get("target")
+    target_series = None
+    if target and target in df.columns and pd.api.types.is_numeric_dtype(df[target]):
+        target_series = df[target]
+
+    cols_out: list[dict] = []
+    for col in df.columns:
+        s = df[col]
+        n = len(s)
+        miss = float(s.isna().sum()) / max(n, 1)
+        entry: dict = {
+            "name": col,
+            "dtype": str(s.dtype),
+            "missing_pct": round(miss * 100.0, 3),
+        }
+        if pd.api.types.is_numeric_dtype(s):
+            arr = s.dropna().to_numpy()
+            if arr.size > 0:
+                entry["n_unique"] = int(pd.Series(arr).nunique())
+                entry["min"] = float(np.min(arr))
+                entry["max"] = float(np.max(arr))
+                entry["mean"] = float(np.mean(arr))
+                entry["std"] = float(np.std(arr, ddof=1)) if arr.size > 1 else 0.0
+                if arr.size >= 3 and entry["std"] > 0:
+                    try:
+                        entry["skew"] = float(pd.Series(arr).skew())
+                        entry["kurtosis"] = float(pd.Series(arr).kurtosis())
+                    except Exception:
+                        entry["skew"] = None
+                        entry["kurtosis"] = None
+                else:
+                    entry["skew"] = None
+                    entry["kurtosis"] = None
+                if target_series is not None and col != target:
+                    try:
+                        corr = float(s.corr(target_series))
+                        entry["corr_target"] = corr if np.isfinite(corr) else None
+                    except Exception:
+                        entry["corr_target"] = None
+                else:
+                    entry["corr_target"] = None
+            else:
+                entry.update({
+                    "n_unique": 0, "min": None, "max": None, "mean": None,
+                    "std": None, "skew": None, "kurtosis": None, "corr_target": None,
+                })
+        else:
+            try:
+                entry["n_unique"] = int(s.nunique(dropna=True))
+            except Exception:
+                entry["n_unique"] = None
+            entry.update({"min": None, "max": None, "mean": None, "std": None,
+                          "skew": None, "kurtosis": None, "corr_target": None})
+        cols_out.append(entry)
+
+    crs = None
+    if hasattr(df, "crs") and df.crs is not None:
+        crs = str(df.crs)
+
+    return {
+        "n_rows": int(len(df)),
+        "n_cols": int(len(df.columns)),
+        "target": target,
+        "columns": cols_out,
+        "crs": crs,
     }
 
 
@@ -4506,6 +4773,10 @@ async def get_results_availability():
         "/results/causal/cate_map": ("3", "cate_summary"),
         "/results/scenarios/nuts_summary": ("3", "nuts_summary"),
         "/results/scenarios/detail": ("4", "scenario_results"),
+        "/results/kernel_field": ("0", "kernel_field"),
+        "/results/causal/pdp_curves": ("3", "causal_pdp_curves"),
+        "/results/causal/divergence": ("3", "cate_vs_gwr_divergence"),
+        "/results/scenarios/routing_audit": ("4", "scenario_routing_audit"),
         "/dag/mc3_result": ("3", "mc3_summary"),
     }
 

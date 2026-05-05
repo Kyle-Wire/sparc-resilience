@@ -90,3 +90,17 @@ edges:
   - parent: magnitude
     child: distance_to_rupture_km
     mechanism: "Larger magnitude ruptures extend closer to distant sites"
+
+# -----------------------------------------------------------------------------
+# SPARC v4 — User-asserted identification assumptions.
+# Surfaced in the validation report alongside empirical checks
+# (positivity, SUTVA / Moran's I, d-separation).
+# Per-edge `sign_prior` / `confidence` / `kind` / `lag` may also be added.
+# -----------------------------------------------------------------------------
+assumptions:
+  conditional_exchangeability: true
+  positivity: true
+  consistency: true
+  no_interference: true
+  notes: |
+    Site amplification is treated as a local property; regional source effects are absorbed by ground-motion prediction equations.

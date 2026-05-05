@@ -29,6 +29,13 @@ warnings.filterwarnings('ignore')
 
 # Import spatial autocorrelation components
 from sparc.run.spatial_autocorr_comprehensive import SpatialAutocorrelationAnalyzer
+from sparc.run.correlogram_matern_fit import fit_matern, MaternFitResult
+from sparc.run.anisotropy import fit_anisotropy, AnisotropyResult
+from sparc.run.cross_correlogram import (
+    compute_and_summarise as compute_cross_summary,
+    build_effective_range_matrix,
+    aggregate_outcome_cross_ranges,
+)
 
 class CorrelogramSpatialAnalyzer:
     """
@@ -156,7 +163,9 @@ class CorrelogramSpatialAnalyzer:
                     moran_values.append(r['morans_i'])
                     significant_lags += 1
         
-        # Choose kernel based on autocorrelation decay pattern
+        # Choose kernel based on autocorrelation decay pattern (legacy
+        # heuristic, retained as fallback when the Bayesian Matérn fit
+        # below cannot run, e.g. < 4 lags).
         if len(moran_values) >= 3:
             # Check decay pattern
             decay_rate = (moran_values[0] - moran_values[-1]) / len(moran_values)
@@ -168,6 +177,78 @@ class CorrelogramSpatialAnalyzer:
                 best_kernel = 'spherical'
         else:
             best_kernel = 'gaussian'  # Default
+
+        # ─── Bayesian Matérn fit (Phase 1: kernel-field foundation) ───
+        # Fits ρ(h) = σ²·Matérn(κ,ν) + τ²·𝟙[h=0] to the empirical Moran's
+        # I curve via NUTS over (κ, σ², τ²) with ν chosen from the
+        # closed-form half-integer grid {0.5, 1.5, 2.5}.  When the fit
+        # succeeds we promote ``best_kernel`` to "matern" and attach the
+        # full posterior summary; the legacy heuristic above is kept as
+        # a guaranteed-non-empty fallback for back-compat.
+        matern_fit_payload: dict | None = None
+        try:
+            lag_dist_arr = np.asarray(
+                correlogram_results.get('lag_distances', []), dtype=np.float64
+            )
+            morans_arr = np.array(
+                [r.get('morans_i', 0.0) for r in correlogram_data], dtype=np.float64
+            )
+            if len(lag_dist_arr) >= 4 and len(lag_dist_arr) == len(morans_arr):
+                fit_res = fit_matern(
+                    lag_dist_arr, morans_arr,
+                    method="bayes", n_samples=400, n_warmup=300, n_chains=2, seed=42,
+                )
+                matern_fit_payload = fit_res.to_payload()
+                matern_fit_payload['variable'] = variable_name
+                if fit_res.converged:
+                    best_kernel = 'matern'
+                print(
+                    f"  Matérn fit ({fit_res.method}): κ={fit_res.kappa_mean:.4g} "
+                    f"[ν={fit_res.nu}], rmse={fit_res.fit_rmse:.4f}, "
+                    f"converged={fit_res.converged}"
+                )
+        except Exception as _exc:  # noqa: BLE001
+            print(f"  Matérn fit unavailable for {variable_name}: {_exc}")
+            matern_fit_payload = None
+
+        # ─── Phase 2: Anisotropic Matérn fit (directional correlogram) ───
+        # Bins point pairs by both lag and angle (4 directors by default)
+        # then fits ρ(h, φ) = σ²·Matérn(h, κ_eff(φ), ν) with
+        # κ_eff(φ)² = (κ_x cos(φ-θ))² + (κ_y sin(φ-θ))² via NUTS over
+        # (κ_x, κ_y, θ, σ², τ², obs_σ²).  Reuses the κ posterior mean
+        # from Phase 1 as a heuristic init when available.
+        anisotropy_payload: dict | None = None
+        try:
+            kappa_init_aniso = None
+            if matern_fit_payload is not None:
+                kappa_init_aniso = matern_fit_payload.get('kappa', {}).get('mean')
+            dir_corr = analyzer.compute_directional_correlogram(
+                values_sample, n_angle_bins=4,
+            )
+            aniso_res = fit_anisotropy(
+                dir_corr['lag_distances'],
+                dir_corr['angle_centers_rad'],
+                dir_corr['morans_i'],
+                n_pairs=dir_corr['n_pairs'],
+                method="bayes",
+                n_samples=300, n_warmup=250, n_chains=2, seed=42,
+                kappa_init=kappa_init_aniso,
+            )
+            anisotropy_payload = aniso_res.to_payload()
+            anisotropy_payload['variable'] = variable_name
+            anisotropy_payload['angle_centers_deg'] = [
+                float(x) for x in dir_corr['angle_centers_deg'].tolist()
+            ]
+            anisotropy_payload['lag_distances'] = [
+                float(x) for x in dir_corr['lag_distances'].tolist()
+            ]
+            print(
+                f"  Anisotropy ({aniso_res.method}): {aniso_res.dominant_direction_hint}; "
+                f"converged={aniso_res.converged}, rmse={aniso_res.fit_rmse:.4f}"
+            )
+        except Exception as _exc:  # noqa: BLE001
+            print(f"  Anisotropy fit unavailable for {variable_name}: {_exc}")
+            anisotropy_payload = None
         
         # Calculate additional spatial statistics
         max_moran = max(moran_values) if moran_values else 0
@@ -186,7 +267,9 @@ class CorrelogramSpatialAnalyzer:
                 'bandwidth': optimal_bandwidth,
                 'range': effective_range,
                 'block_size': optimal_block_size
-            }
+            },
+            'matern_fit': matern_fit_payload,
+            'anisotropy': anisotropy_payload,
         }
         
         return analysis_result
@@ -449,6 +532,29 @@ def main(fast_mode=False):
         cv_validation_results = {}
         print(f"\n  Block size source: USER override")
         print(f"  User-specified CV block size: {optimal_cv_block_size:.0f}m")
+        # Phase 4: still report what the auto-uplift WOULD have suggested,
+        # purely informational — the user's choice is not modified.
+        cv_cross_range_uplift = None
+        try:
+            if 'effective_range_matrix_payload' in dir() or True:
+                erm = locals().get('effective_range_matrix_payload')
+                if erm is not None:
+                    _outcome_cross = aggregate_outcome_cross_ranges(erm, target_variable)
+                    _max_xr = _outcome_cross.get('max_cross_range_m')
+                    if _max_xr is not None and _max_xr > optimal_cv_block_size:
+                        print(
+                            f"  Note: Phase 4 would have suggested ≥ {_max_xr:.0f}m "
+                            f"(max target↔predictor cross-range) — keeping user value."
+                        )
+                        cv_cross_range_uplift = {
+                            'user_block_size_m': float(optimal_cv_block_size),
+                            'cross_ranges': _outcome_cross['cross_ranges'],
+                            'max_cross_range_m': float(_max_xr),
+                            'applied': False,
+                            'reason': 'user_override',
+                        }
+        except Exception:  # noqa: BLE001
+            pass
     else:
         # Auto-determine from TARGET variable + spatial extent cap
         spatial_extent = profile.get('spatial_extent', None)
@@ -458,6 +564,42 @@ def main(fast_mode=False):
             spatial_extent=spatial_extent,
             n_folds=5
         )
+        # ─── Phase 4: extend block size by max (target ↔ predictor) cross-range ─
+        # The naive block size is the target's *own* zero-crossing.  But if any
+        # predictor has a significant cross-range with the target that exceeds
+        # the target's marginal range, CV folds can leak through that channel.
+        # Take the max of the two (still capped by spatial_extent / 2·n_folds).
+        cv_cross_range_uplift = None
+        if effective_range_matrix_payload is not None:
+            try:
+                _outcome_cross = aggregate_outcome_cross_ranges(
+                    effective_range_matrix_payload, target_variable,
+                )
+                _max_xr = _outcome_cross.get('max_cross_range_m')
+                if _max_xr is not None and _max_xr > optimal_cv_block_size:
+                    _max_viable = (
+                        spatial_extent / 10.0 if spatial_extent and spatial_extent > 0
+                        else float('inf')
+                    )
+                    _new_block = min(_max_xr, _max_viable)
+                    if _new_block > optimal_cv_block_size:
+                        print(
+                            f"  Phase 4 uplift: max (target↔predictor) cross-range "
+                            f"{_max_xr:.0f}m exceeds target zero-crossing "
+                            f"{optimal_cv_block_size:.0f}m → block size raised to "
+                            f"{_new_block:.0f}m"
+                        )
+                        cv_cross_range_uplift = {
+                            'previous_block_size_m': float(optimal_cv_block_size),
+                            'cross_ranges': _outcome_cross['cross_ranges'],
+                            'max_cross_range_m': float(_max_xr),
+                            'new_block_size_m': float(_new_block),
+                            'applied': True,
+                            'reason': 'auto_target_zero_crossing_too_small',
+                        }
+                        optimal_cv_block_size = float(_new_block)
+            except Exception as _exc:  # noqa: BLE001
+                print(f"Phase 4 CV uplift skipped: {_exc}")
     
     # Create comprehensive results structure
     comprehensive_results = {
@@ -472,7 +614,8 @@ def main(fast_mode=False):
         'spatial_cv_configuration': {
             'optimal_block_size': optimal_cv_block_size,
             'validation_results': cv_validation_results,
-            'block_size_candidates': [result['optimal_block_size'] for result in all_results.values()]
+            'block_size_candidates': [result['optimal_block_size'] for result in all_results.values()],
+            'cross_range_uplift': locals().get('cv_cross_range_uplift', None),
         },
         'summary_statistics': {
             'bandwidth_range': {
@@ -483,7 +626,184 @@ def main(fast_mode=False):
             }
         }
     }
-    
+
+    # ─── Phase 1: κ_PDE divergence diagnostic ───────────────────────────
+    # For each variable with a successful Bayesian Matérn fit, compare the
+    # correlogram-derived κ posterior to the PDE-derived κ point estimate
+    # (Whittle relation).  The summary feeds the desktop "stationarity
+    # warning" badge and informs Phase 2's matrix-kernel design.
+    try:
+        from sparc.physics.kappa_estimator import (
+            estimate_kappa_pde,
+            kappa_ratio_summary,
+        )
+        kappa_pde_res = estimate_kappa_pde(config)
+        per_variable_diagnostics: dict[str, dict] = {}
+        for _var, _res in all_results.items():
+            _mf = _res.get('matern_fit')
+            if not _mf or _mf.get('method') != 'bayes':
+                continue
+            _samples = _mf.get('kappa', {}).get('samples', [])
+            per_variable_diagnostics[_var] = kappa_ratio_summary(
+                _samples, kappa_pde_res.kappa_pde,
+            )
+        matern_artifact_payload = {
+            'kappa_pde': {
+                'value': kappa_pde_res.kappa_pde,
+                'regime': kappa_pde_res.regime,
+                'source': kappa_pde_res.source,
+                'inputs': kappa_pde_res.inputs,
+            },
+            'per_variable_fits': {
+                _var: _res.get('matern_fit')
+                for _var, _res in all_results.items()
+                if _res.get('matern_fit') is not None
+            },
+            'kappa_ratio_diagnostics': per_variable_diagnostics,
+            'stationarity_warnings': [
+                _var for _var, _d in per_variable_diagnostics.items()
+                if _d.get('stationarity_warning')
+            ],
+        }
+    except Exception as _exc:  # noqa: BLE001
+        print(f"Matérn artifact assembly failed: {_exc}")
+        matern_artifact_payload = None
+
+    # ─── Phase 2: Anisotropy artifact ────────────────────────────────────
+    # Aggregates per-variable anisotropy posteriors (ellipse + dominant
+    # direction hint) into a single struct for the report and desktop.
+    try:
+        per_variable_aniso = {
+            _var: _res.get('anisotropy')
+            for _var, _res in all_results.items()
+            if _res.get('anisotropy') is not None
+        }
+        if per_variable_aniso:
+            anisotropy_artifact_payload = {
+                'per_variable_fits': per_variable_aniso,
+                'strong_anisotropy_variables': [
+                    _var for _var, _p in per_variable_aniso.items()
+                    if (_p.get('ellipse', {})
+                          .get('eccentricity', {})
+                          .get('mean', 0.0)) >= 0.5
+                ],
+            }
+        else:
+            anisotropy_artifact_payload = None
+    except Exception as _exc:  # noqa: BLE001
+        print(f"Anisotropy artifact assembly failed: {_exc}")
+        anisotropy_artifact_payload = None
+
+    # ─── Phase 3: Cross-correlogram kernel field ──────────────────────────
+    # V×V matrix-valued correlogram with sym/antisym decomposition.  The
+    # antisymmetric block exposes directed (causal-direction) coupling
+    # between variable pairs; the symmetric block carries co-variation.
+    try:
+        # Build (N, V) matrix in the same row order as `coords`; drop NaNs
+        # internally inside compute_and_summarise().
+        _values_matrix = data[all_variables].to_numpy(dtype=np.float64, copy=True)
+        # Sub-sample to the same cap used for per-variable analysis to keep
+        # the O(N²) tensor computation tractable.
+        _N_full = _values_matrix.shape[0]
+        if _N_full > max_sample_size:
+            _rng = np.random.default_rng(42)
+            _idx = _rng.choice(_N_full, size=max_sample_size, replace=False)
+            _coords_cc = coords[_idx]
+            _values_cc = _values_matrix[_idx]
+        else:
+            _coords_cc = coords
+            _values_cc = _values_matrix
+        _n_perm_cc = 0 if fast_mode else 50
+        cross_correlogram_payload = compute_cross_summary(
+            _coords_cc, _values_cc, all_variables,
+            max_distance=float(max_distance),
+            n_lags=min(int(n_lags), 12),
+            n_angle_bins=4,
+            n_perm=_n_perm_cc,
+            seed=42,
+        )
+    except Exception as _exc:  # noqa: BLE001
+        print(f"Cross-correlogram assembly failed: {_exc}")
+        cross_correlogram_payload = None
+
+    # ─── Phase 4: Per-pair effective-range matrix ────────────────────────
+    # Build the V×V effective-range matrix from the cross-correlogram per-pair
+    # summary, with the marginal effective ranges on the diagonal.  Flag any
+    # pairs whose cross-range differs by >10× from either endpoint's marginal
+    # range — the "wrong-lag false-zero" failure mode that motivates Phase 4.
+    effective_range_matrix_payload = None
+    if cross_correlogram_payload is not None:
+        try:
+            _auto_bw = {
+                _var: _res.get('effective_range')
+                for _var, _res in all_results.items()
+                if _res.get('effective_range') is not None
+            }
+            effective_range_matrix_payload = build_effective_range_matrix(
+                cross_correlogram_payload,
+                auto_bandwidths=_auto_bw,
+                mismatch_factor=10.0,
+                require_significance=True,
+            )
+            print(
+                "Effective-range matrix built "
+                f"(V={len(effective_range_matrix_payload['variable_names'])}, "
+                f"significant_pairs={effective_range_matrix_payload['significant_pair_count']}, "
+                f"mismatch_warnings={len(effective_range_matrix_payload['mismatch_warnings'])})"
+            )
+        except Exception as _exc:  # noqa: BLE001
+            print(f"Effective-range matrix assembly failed: {_exc}")
+            effective_range_matrix_payload = None
+
+    # ─── Phase 6: Scale-hierarchy / fractal-signature diagnostic ────────
+    # Per-variable spectral exponent β, lacunarity, κ scale-drift, and
+    # stationarity-class label. Persisted as `stage=0, scale_hierarchy`.
+    # Uses the same sub-sampled (coords, values) matrix already prepared
+    # for the cross-correlogram so timing stays bounded by Stage 0's
+    # existing N≤max_sample_size budget.
+    try:
+        from sparc.run.scale_hierarchy import compute_scale_hierarchy
+        if cross_correlogram_payload is not None:
+            _sh_coords = _coords_cc
+            _sh_values_matrix = _values_cc
+            _sh_variables = list(all_variables)
+        else:
+            # Fallback path when cross-correlogram was skipped/failed
+            _sh_values_matrix = data[all_variables].to_numpy(
+                dtype=np.float64, copy=True)
+            if _sh_values_matrix.shape[0] > max_sample_size:
+                _rng_sh = np.random.default_rng(43)
+                _idx_sh = _rng_sh.choice(
+                    _sh_values_matrix.shape[0],
+                    size=max_sample_size, replace=False,
+                )
+                _sh_coords = coords[_idx_sh]
+                _sh_values_matrix = _sh_values_matrix[_idx_sh]
+            else:
+                _sh_coords = coords
+            _sh_variables = list(all_variables)
+        _sh_var_dict = {
+            v: _sh_values_matrix[:, i]
+            for i, v in enumerate(_sh_variables)
+        }
+        # Lighter NUTS budget when fast_mode is on
+        _sh_warmup = 200 if fast_mode else 500
+        _sh_samples = 400 if fast_mode else 1000
+        scale_hierarchy_payload = compute_scale_hierarchy(
+            _sh_coords, _sh_var_dict,
+            n_grid=64, nuts_warmup=_sh_warmup, nuts_samples=_sh_samples,
+            seed=42, persist=True,
+        )
+        _sc = scale_hierarchy_payload.get("summary", {}).get(
+            "stationarity_counts", {})
+        print(
+            "Scale-hierarchy diagnostic complete "
+            f"(stationarity_counts={_sc})"
+        )
+    except Exception as _exc:  # noqa: BLE001
+        print(f"Scale-hierarchy diagnostic failed: {_exc}")
+        scale_hierarchy_payload = None
+
     # Save comprehensive results (replaces variogram_analysis_results.json).
     # Now persisted via ArtifactStore below; legacy disk path retained only
     # as a fallback when no active registry is installed.
@@ -547,6 +867,81 @@ def main(fast_mode=False):
             producer="correlogram_analysis.main",
             consumers=["server:/results/correlogram"],
         )
+        if matern_artifact_payload is not None:
+            _store.write_struct(
+                stage="0",
+                artifact_id="correlogram_matern_fit",
+                payload=convert_numpy_types(matern_artifact_payload),
+                producer="correlogram_analysis.main",
+                consumers=[
+                    "server:/results/correlogram",
+                    "report:correlogram",
+                    "desktop:correlogram_view",
+                    "pipeline:stage2_mgwr",
+                ],
+            )
+            print(
+                "Matérn fit + κ_PDE diagnostics written to artifacts.db "
+                f"(stage=0, id=correlogram_matern_fit, "
+                f"warnings={len(matern_artifact_payload['stationarity_warnings'])})"
+            )
+        if anisotropy_artifact_payload is not None:
+            _store.write_struct(
+                stage="0",
+                artifact_id="correlogram_anisotropy",
+                payload=convert_numpy_types(anisotropy_artifact_payload),
+                producer="correlogram_analysis.main",
+                consumers=[
+                    "server:/results/correlogram",
+                    "report:correlogram",
+                    "desktop:correlogram_view",
+                    "pipeline:stage2_mgwr",
+                ],
+            )
+            print(
+                "Anisotropy ellipses written to artifacts.db "
+                f"(stage=0, id=correlogram_anisotropy, "
+                f"strong={len(anisotropy_artifact_payload['strong_anisotropy_variables'])})"
+            )
+        if cross_correlogram_payload is not None:
+            _store.write_struct(
+                stage="0",
+                artifact_id="cross_correlogram_kernel_field",
+                payload=convert_numpy_types(cross_correlogram_payload),
+                producer="correlogram_analysis.main",
+                consumers=[
+                    "server:/results/correlogram",
+                    "report:correlogram",
+                    "desktop:correlogram_view",
+                    "pipeline:stage2_mgwr",
+                    "pipeline:stage3_causal",
+                ],
+            )
+            print(
+                "Cross-correlogram kernel field written to artifacts.db "
+                f"(stage=0, id=cross_correlogram_kernel_field, "
+                f"V={len(cross_correlogram_payload['variable_names'])}, "
+                f"antisym_flags={len(cross_correlogram_payload['antisymmetric_flags'])})"
+            )
+        if effective_range_matrix_payload is not None:
+            _store.write_struct(
+                stage="0",
+                artifact_id="effective_range_matrix",
+                payload=convert_numpy_types(effective_range_matrix_payload),
+                producer="correlogram_analysis.main",
+                consumers=[
+                    "server:/results/correlogram",
+                    "report:correlogram",
+                    "desktop:correlogram_view",
+                    "pipeline:stage1_gwen",
+                    "pipeline:stage2_mgwr",
+                ],
+            )
+            print(
+                "Effective-range matrix written to artifacts.db "
+                f"(stage=0, id=effective_range_matrix, "
+                f"warnings={len(effective_range_matrix_payload['mismatch_warnings'])})"
+            )
         print("Correlogram results + summary written to artifacts.db (stage=0)")
     elif disk_writes_enabled():
         # Back-compat path for ad-hoc invocation without an active registry.
