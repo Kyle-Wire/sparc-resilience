@@ -497,6 +497,35 @@ def auto_suggest_gwen_params(config, correlogram_dir=None):
             # (rough heuristic: 30% of dataset per range circle)
             suggestions['_autocorrelation_range_m'] = median_range
 
+    # ─── Phase 4: bandwidth-aware uplift from effective_range_matrix ──────
+    # When the per-pair effective-range matrix is present, the GWEN screener
+    # should look for variables coupled to the target at scales that exceed
+    # the target's marginal bandwidth — otherwise the screen sees them as
+    # decorrelated noise (the wrong-lag false-zero failure mode).
+    try:
+        from sparc.registry.store import get_active_store
+        from sparc.run.cross_correlogram import aggregate_outcome_cross_ranges
+        _store2 = get_active_store()
+        if _store2 is not None and _store2.has("0", "effective_range_matrix"):
+            erm = _store2.read_any("0", "effective_range_matrix")
+            target = config.get('data', {}).get('target_column') \
+                or config.get('variables', {}).get('target')
+            if target:
+                outcome_xr = aggregate_outcome_cross_ranges(erm, target)
+                max_xr = outcome_xr.get('max_cross_range_m')
+                if max_xr is not None:
+                    suggestions['_max_outcome_cross_range_m'] = float(max_xr)
+                    suggestions['_outcome_cross_ranges_m'] = outcome_xr['cross_ranges']
+                    # If a coupled predictor's range is larger than the target's
+                    # marginal range, widen the GWEN search bandwidth to match.
+                    marg = suggestions.get('_autocorrelation_range_m')
+                    if marg is None or max_xr > marg:
+                        suggestions['_autocorrelation_range_m'] = float(max_xr)
+                if erm.get('mismatch_warnings'):
+                    suggestions['_bandwidth_mismatch_warnings'] = erm['mismatch_warnings']
+    except Exception:  # noqa: BLE001
+        pass
+
     # VIF-based l1_ratio suggestion
     try:
         data_path = config.get('data', {}).get('file_path')

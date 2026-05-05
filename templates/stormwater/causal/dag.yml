@@ -82,3 +82,18 @@ edges:
   - parent: antecedent_moisture
     child: curve_number
     mechanism: "AMC adjustment: wet conditions increase effective CN"
+
+# -----------------------------------------------------------------------------
+# SPARC v4 — User-asserted identification assumptions.
+# Surfaced in the validation report alongside empirical checks
+# (positivity, SUTVA / Moran's I, d-separation).
+# Per-edge `sign_prior` / `confidence` / `kind` / `lag` may also be added.
+# -----------------------------------------------------------------------------
+assumptions:
+  conditional_exchangeability: true
+  positivity: true
+  consistency: true
+  no_interference: false
+  notes: |
+    Sub-catchments cascade — upstream LID/green infrastructure alters downstream loading.
+    Model with routing-aware spatial CV.

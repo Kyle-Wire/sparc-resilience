@@ -43,57 +43,103 @@ nodes:
 
 # Directed edges — parent → child
 # Each edge represents a hypothesised direct causal effect.
+#
+# SPARC v4 edge fields (all optional, backwards compatible):
+#   kind:        direct | instrumental | mediated | time_lagged
+#   lag:         integer time-step lag (sets kind=time_lagged)
+#   sign_prior:  "+" / "-" / "0"   — drives editor colour + sign-flip alerts
+#   confidence:  0..1                — drives editor opacity + flags weak priors
 edges:
   # ------ Direct effects on temperature ------
   - parent: Pct_Canopy
     child: AAT_z
     mechanism: "Evapotranspiration + shading"
+    sign_prior: "-"
+    confidence: 0.9
 
   - parent: Pct_Impervious
     child: AAT_z
     mechanism: "Heat absorption and re-radiation"
+    sign_prior: "+"
+    confidence: 0.9
 
   - parent: NDVI
     child: AAT_z
     mechanism: "Evapotranspiration cooling"
+    kind: mediated
+    sign_prior: "-"
+    confidence: 0.7
 
   - parent: Albedo
     child: AAT_z
     mechanism: "Solar reflectance reduces absorbed heat"
+    sign_prior: "-"
+    confidence: 0.8
 
   - parent: Elevation_m
     child: AAT_z
     mechanism: "Lapse rate and cold-air pooling"
+    sign_prior: "-"
+    confidence: 0.95
 
   - parent: Distance_from_water_m
     child: AAT_z
     mechanism: "Proximity to water moderates temperature"
+    sign_prior: "+"
+    confidence: 0.6
 
   # ------ Mediated / cross-predictor effects ------
   - parent: Pct_Canopy
     child: NDVI
     mechanism: "Trees increase vegetation index"
+    sign_prior: "+"
+    confidence: 0.85
 
   - parent: Pct_Impervious
     child: Albedo
     mechanism: "Paved surfaces have characteristic albedo"
+    sign_prior: "0"
+    confidence: 0.4
 
   - parent: Pct_Canopy
     child: Pct_Impervious
     mechanism: "Land cover trade-off (inverse)"
+    sign_prior: "-"
+    confidence: 0.7
 
   # ------ Confounder effects ------
   - parent: Elevation_m
     child: Pct_Canopy
     mechanism: "Topography influences land use"
+    sign_prior: "0"
+    confidence: 0.5
 
   - parent: Elevation_m
     child: Pct_Impervious
     mechanism: "Development patterns follow terrain"
+    sign_prior: "-"
+    confidence: 0.5
 
   - parent: Distance_from_water_m
     child: NDVI
     mechanism: "Riparian vegetation near water"
+    sign_prior: "-"
+    confidence: 0.6
+
+# -----------------------------------------------------------------------------
+# Identification assumptions — what the modeller is willing to assert.
+# Surfaced in the validation report alongside the empirical checks
+# (positivity, SUTVA, d-separation).
+# -----------------------------------------------------------------------------
+assumptions:
+  conditional_exchangeability: true
+  positivity: true
+  consistency: true
+  no_interference: false   # Heat island spillover is plausible across blocks
+  notes: |
+    Treats Pct_Canopy / Pct_Impervious / Albedo as jointly intervenable
+    via greening / cool-roof / pavement-replacement programs.  Spatial
+    interference is acknowledged — see Moran's I diagnostics.
 
 # Structural equations (optional)
 # If omitted, linear relationships are estimated from the data.

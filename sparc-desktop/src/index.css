@@ -35,7 +35,8 @@
   --color-sparc-gray-800: #1a1416;
 }
 
-/* Prototype short-name CSS variable aliases — lets prototype JSX work verbatim */
+/* Prototype short-name CSS variable aliases — lets prototype JSX work verbatim.
+   Mirrors /tokens.css at the workspace root. */
 :root {
   --purple: #602468;
   --magenta: #9e337d;
@@ -50,8 +51,32 @@
   --ink-2: #2b2327;
   --paper: #f7f4ee;
   --paper-2: #ede8dd;
+  --paper-3: #d8d3c6;
   --line: #c9c2b3;
   --muted: #6e6358;
+  --white: #ffffff;
+
+  --bg: var(--paper);
+  --bg-elevated: var(--white);
+  --bg-sunken: var(--paper-2);
+  --bg-shell: var(--paper-3);
+
+  --fg: var(--ink);
+  --fg-2: var(--ink-2);
+  --fg-muted: var(--muted);
+
+  --border: var(--line);
+  --accent: var(--crimson);
+  --accent-2: var(--purple);
+  --accent-warning: var(--amber);
+
+  --status-live: var(--crimson);
+  --status-warn: var(--amber);
+  --status-ai: var(--purple);
+
+  --grad-ramp: linear-gradient(90deg,
+    var(--purple) 0%, var(--magenta) 14%, var(--pink) 28%, var(--red) 42%,
+    var(--crimson) 56%, var(--orange) 70%, var(--amber) 82%, var(--gold) 92%, var(--yellow) 100%);
 }
 
 body {
@@ -152,4 +177,188 @@ body > #root {
 @keyframes slideUp {
   from { transform: translateY(16px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
+}
+
+/* ----------------------------------------------------------------
+   Insights primitives — kicker, pill, ramp strip, panel grid
+   Mirror /globals.css helpers; used by the new Insights workspace.
+   ---------------------------------------------------------------- */
+.kicker {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 3px 9px;
+  border-radius: 9999px;
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--ink-2);
+}
+
+.ramp-strip {
+  height: 4px;
+  width: 100%;
+  background: var(--grad-ramp);
+  background-size: 200% 100%;
+  animation: rampShift 18s ease-in-out infinite;
+}
+
+@keyframes rampShift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(231, 60, 37, 0.5); }
+  50% { box-shadow: 0 0 0 6px rgba(231, 60, 37, 0); }
+}
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse-dot 1.6s ease-out infinite;
+  display: inline-block;
+}
+
+/* Panel — uniform container for Insights panels */
+.panel {
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: #fdfbf7;
+  border-radius: 8px 8px 0 0;
+}
+.panel-head .titles {
+  flex: 1;
+  min-width: 0;
+}
+.panel-head .title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.panel-head .subtitle {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  padding: 14px;
+}
+.panel-empty {
+  border: 1px dashed var(--line);
+  background: repeating-linear-gradient(135deg, rgba(0, 0, 0, 0.015) 0 8px, transparent 8px 16px);
+  border-radius: 6px;
+  padding: 32px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  text-align: center;
+}
+.panel-empty .reason {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.panel-empty .hint {
+  font-size: 12px;
+  color: var(--ink-2);
+  max-width: 340px;
+  line-height: 1.5;
+}
+
+/* Insights shell layout (CSS grid, not utility classes, to avoid Tailwind churn) */
+.insights-shell {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 18px;
+  height: 100%;
+  min-height: 0;
+}
+.insights-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: sticky;
+  top: 0;
+  align-self: start;
+}
+.insights-rail .group-label {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 8px 10px 4px;
+}
+.insights-rail a {
+  display: block;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--ink-2);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+  border-radius: 0 4px 4px 0;
+  cursor: pointer;
+}
+.insights-rail a:hover {
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--ink);
+}
+.insights-rail a.active {
+  border-left-color: var(--accent);
+  color: var(--ink);
+  background: rgba(231, 60, 37, 0.06);
+  font-weight: 600;
+}
+
+/* Audience toggle */
+.audience-toggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fff;
+}
+.audience-toggle button {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.audience-toggle button.active {
+  background: var(--ink);
+  color: #fff;
 }

@@ -98,3 +98,18 @@ edges:
   - parent: elevation_m
     child: PM25_ugm3
     mechanism: "Valley floors trap pollutants under inversions"
+
+# -----------------------------------------------------------------------------
+# SPARC v4 — User-asserted identification assumptions.
+# Surfaced in the validation report alongside empirical checks
+# (positivity, SUTVA / Moran's I, d-separation).
+# Per-edge `sign_prior` / `confidence` / `kind` / `lag` may also be added.
+# -----------------------------------------------------------------------------
+assumptions:
+  conditional_exchangeability: true
+  positivity: true
+  consistency: true
+  no_interference: false
+  notes: |
+    Air-quality measurements are spatially auto-correlated (plume transport, regional inversion).
+    Treat near-source spillover with monitor-network–level adjustments.

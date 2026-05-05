@@ -94,3 +94,17 @@ edges:
   - parent: temperature_C
     child: Leq_dBA
     mechanism: "Temperature inversions refract sound downward"
+
+# -----------------------------------------------------------------------------
+# SPARC v4 — User-asserted identification assumptions.
+# Surfaced in the validation report alongside empirical checks
+# (positivity, SUTVA / Moran's I, d-separation).
+# Per-edge `sign_prior` / `confidence` / `kind` / `lag` may also be added.
+# -----------------------------------------------------------------------------
+assumptions:
+  conditional_exchangeability: true
+  positivity: true
+  consistency: true
+  no_interference: false
+  notes: |
+    Noise propagates omnidirectionally; barriers and source reductions affect a wide footprint, violating SUTVA at fine scales.

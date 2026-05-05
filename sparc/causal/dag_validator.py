@@ -320,6 +320,7 @@ def generate_validation_report(
     treatments: List[str] | None = None,
     confounders: List[str] | None = None,
     coord_cols: List[str] | None = None,
+    assumptions: Dict[str, Any] | None = None,
 ) -> str:
     """
     Generate a comprehensive validation report for the causal DAG.
@@ -401,5 +402,29 @@ def generate_validation_report(
     lines.append("  2. Positivity: Assessed via propensity score diagnostics (above)")
     lines.append("  3. Consistency (SUTVA): Assessed via Moran's I on treatment (above)")
     lines.append("")
+
+    # User-asserted assumptions block from `dag.yml -> assumptions:`
+    # (SPARC v4). Surface the explicit claims so reviewers can compare
+    # them against the empirical checks above.
+    if assumptions:
+        lines.append("USER-ASSERTED ASSUMPTIONS (dag.yml)")
+        lines.append("-" * 40)
+        flag_keys = (
+            'conditional_exchangeability',
+            'positivity',
+            'consistency',
+            'no_interference',
+        )
+        for k in flag_keys:
+            if k in assumptions:
+                mark = "[x]" if assumptions[k] else "[ ]"
+                lines.append(f"  {mark} {k}")
+        notes = assumptions.get('notes')
+        if notes:
+            lines.append("")
+            lines.append("  Notes:")
+            for ln in str(notes).strip().splitlines():
+                lines.append(f"    {ln}")
+        lines.append("")
 
     return "\n".join(lines)

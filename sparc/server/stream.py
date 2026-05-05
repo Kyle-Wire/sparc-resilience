@@ -33,7 +33,12 @@ class _EventCapture(io.TextIOBase):
     _STAGE_RE = re.compile(r"Stage\s+(\d+)", re.IGNORECASE)
     _FOLD_RE = re.compile(r"[Ff]old\s+(\d+)")
     _METRIC_RE = re.compile(r"(r2|rmse|mae|mape)\s*[=:]\s*([\d.]+)", re.IGNORECASE)
-    _PCT_RE = re.compile(r"(\d{1,3})%")
+    # Match a tqdm-style progress percentage at the start of a token, e.g.
+    # "  50%|██▌       |" or "100%|##########|".  Restricting to these
+    # tqdm-shaped contexts avoids matching the trailing "accept: 69.7%"
+    # NUTS line, which would otherwise capture the units digit (e.g. "7")
+    # and corrupt the desktop progress bar.
+    _PCT_RE = re.compile(r"(?:^|\s)(\d{1,3})%\s*\|")
 
     # ---- Training telemetry patterns ----
     # Capacity sweep result:  "hidden_dim=256: CV R²=0.8912"

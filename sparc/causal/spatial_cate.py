@@ -24,10 +24,51 @@ Typical usage::
 from __future__ import annotations
 
 import warnings
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — KernelField-aware coordinate warp
+# ---------------------------------------------------------------------------
+
+
+def _anisotropic_warp_coords(
+    coords: np.ndarray,
+    predictor: "Optional[Any]" = None,
+) -> np.ndarray:
+    """Rotate + scale 2-D coords into the predictor's anisotropic principal frame.
+
+    Equal Euclidean distance in the warped frame corresponds to equal
+    Mat\u00e9rn kernel distance in the original frame, so any downstream model
+    that uses an isotropic neighborhood (random forest, RBF features, k-NN)
+    automatically inherits the correct anisotropy.
+
+    Parameters
+    ----------
+    coords : (N, 2) world-frame coordinates.
+    predictor : a ``PredictorKernel`` (or any object with ``is_anisotropic``,
+        ``kappa_x``, ``kappa_y``, ``theta_rad``).  When ``None`` or isotropic,
+        ``coords`` is returned unchanged.
+
+    Returns
+    -------
+    np.ndarray of shape (N, 2).
+    """
+    if predictor is None or coords.shape[1] != 2:
+        return coords
+    if not getattr(predictor, "is_anisotropic", False):
+        return coords
+    kx = float(predictor.kappa_x)
+    ky = float(predictor.kappa_y)
+    th = float(predictor.theta_rad or 0.0)
+    c, s = np.cos(th), np.sin(th)
+    u = coords[:, 0] * c + coords[:, 1] * s
+    v = -coords[:, 0] * s + coords[:, 1] * c
+    warped = np.column_stack([kx * u, ky * v])
+    return warped
 
 
 class SpatialCATEEstimator:
@@ -49,6 +90,7 @@ class SpatialCATEEstimator:
         config: dict,
         n_estimators: int = 500,
         min_samples_leaf: int = 20,
+        kernel_field: Optional[Any] = None,
     ):
         self.config = config
         self.n_estimators = n_estimators
@@ -61,6 +103,14 @@ class SpatialCATEEstimator:
         self.cate_estimates: Dict[str, np.ndarray] = {}
         # Per-point CATE confidence intervals: {treatment: (lower, upper)}
         self.cate_intervals: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+
+        # Phase 7 — corrected anisotropic kernel for spatial heterogeneity.
+        # When supplied, coords appended to W are warped into each treatment's
+        # anisotropic principal frame so the forest sees an isotropic
+        # neighborhood that matches the corrected length scales.
+        self.kernel_field = kernel_field
+        # Audit trail: which treatments actually used the warped coords.
+        self._kernel_field_applied: Dict[str, bool] = {}
 
     # ------------------------------------------------------------------
     # Estimate CATE for a single treatment
@@ -114,7 +164,21 @@ class SpatialCATEEstimator:
         if coord_cols:
             available = [c for c in coord_cols if c in data.columns]
             if available:
-                coords = data[available].values
+                coords = data[available].values.astype(np.float64)
+                # Phase 7: warp into the treatment's anisotropic principal
+                # frame so the forest's neighborhood structure matches the
+                # corrected kernel.  Falls through to identity when the
+                # kernel field is absent or the predictor is isotropic.
+                predictor = None
+                if self.kernel_field is not None and len(available) >= 2:
+                    predictor = self.kernel_field.predictor(treatment)
+                if predictor is not None and getattr(
+                    predictor, "is_anisotropic", False,
+                ):
+                    coords = _anisotropic_warp_coords(coords, predictor)
+                    self._kernel_field_applied[treatment] = True
+                else:
+                    self._kernel_field_applied[treatment] = False
                 # Normalize coordinates to [0, 1] for numeric stability
                 coords_min = coords.min(axis=0)
                 coords_range = coords.max(axis=0) - coords_min
@@ -427,6 +491,7 @@ class BayesianSpatialCATE:
         n_samples: int = 2000,
         n_warmup: int = 500,
         kernel_lengthscale: float = 0.20,
+        kernel_field: Optional[Any] = None,
     ):
         self.config = config
         self.n_features = int(n_features)
@@ -446,6 +511,16 @@ class BayesianSpatialCATE:
         # Cached random-RBF projection per treatment (for posterior_predict)
         self._rbf_basis: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
 
+        # Phase 7 — corrected kernel-field context.  When supplied,
+        # the per-treatment RFF lengthscale is overridden by
+        # ``predictor.bandwidth_to_outcome / coord_extent`` and coords are
+        # warped into the predictor's anisotropic principal frame before
+        # RBF projection so the kernel matches the corrected geometry.
+        self.kernel_field = kernel_field
+        # Per-treatment audit: {treatment: {"applied_warp": bool,
+        #                                    "effective_lengthscale": float}}
+        self._kernel_field_applied: Dict[str, Dict[str, Any]] = {}
+
     # --------------------------------------------------------------
     # Random Fourier feature basis (Rahimi & Recht, 2008) — RBF kernel.
     # --------------------------------------------------------------
@@ -454,12 +529,22 @@ class BayesianSpatialCATE:
         self,
         coords_norm: np.ndarray,
         seed: int,
+        lengthscale: Optional[float] = None,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return (Phi, W, b) where ``Phi`` is the random-RBF feature matrix
-        of shape (N, n_features) with frequencies ``W`` and phases ``b``."""
+        of shape (N, n_features) with frequencies ``W`` and phases ``b``.
+
+        ``lengthscale`` overrides the instance default (used by the Phase 7
+        kernel-field path so per-treatment ``bandwidth_to_outcome`` controls
+        the RBF kernel lengthscale).
+        """
         rng = np.random.default_rng(seed)
         d = coords_norm.shape[1]
-        ell = max(self.kernel_lengthscale, 1e-3)
+        ell = max(
+            float(lengthscale) if lengthscale is not None
+            else self.kernel_lengthscale,
+            1e-3,
+        )
         # ω ~ N(0, 1/ell²) gives RBF kernel with lengthscale ell.
         W = rng.normal(0.0, 1.0 / ell, size=(d, self.n_features))
         b = rng.uniform(0.0, 2.0 * np.pi, size=self.n_features)
@@ -509,7 +594,46 @@ class BayesianSpatialCATE:
             if confounders else np.zeros((len(data), 1))
         )
         coords = data[avail_coords].values.astype(np.float64)
-        coords_norm = self._normalize_coords(coords)
+
+        # Phase 7: warp coords + derive RFF lengthscale from kernel field
+        predictor = None
+        if self.kernel_field is not None:
+            predictor = self.kernel_field.predictor(treatment)
+        if predictor is not None and getattr(predictor, "is_anisotropic", False):
+            coords_warped = _anisotropic_warp_coords(coords, predictor)
+            applied_warp = True
+        else:
+            coords_warped = coords
+            applied_warp = False
+
+        coord_extent = float(np.max(
+            coords_warped.max(axis=0) - coords_warped.min(axis=0),
+        ))
+        if coord_extent <= 0:
+            coord_extent = 1.0
+
+        # Per-treatment lengthscale override: bandwidth_to_outcome maps to
+        # the Matérn correlation length; expressed in normalized warped
+        # units that becomes bandwidth / coord_extent.
+        eff_lengthscale: Optional[float] = None
+        if predictor is not None:
+            bw = None
+            if hasattr(predictor, "bandwidth_to_outcome"):
+                bw = predictor.bandwidth_to_outcome
+            if bw is not None and float(bw) > 0:
+                eff_lengthscale = float(bw) / coord_extent
+                # Clamp to a sensible band so a tiny bw doesn't drive the
+                # frequency variance to infinity.
+                eff_lengthscale = float(np.clip(eff_lengthscale, 0.02, 1.0))
+
+        coords_norm = self._normalize_coords(coords_warped)
+        self._kernel_field_applied[treatment] = {
+            "applied_warp": bool(applied_warp),
+            "effective_lengthscale": (
+                float(eff_lengthscale) if eff_lengthscale is not None
+                else float(self.kernel_lengthscale)
+            ),
+        }
 
         # ---- Cross-fit residualization (DML stage 1) ----
         n = len(data)
@@ -534,7 +658,9 @@ class BayesianSpatialCATE:
 
         # ---- Build random RBF features over normalized coords ----
         edge_seed = int(rng.integers(0, 2**31 - 1))
-        Phi, W_freq, b_phase = self._build_rbf_features(coords_norm, edge_seed)
+        Phi, W_freq, b_phase = self._build_rbf_features(
+            coords_norm, edge_seed, lengthscale=eff_lengthscale,
+        )
         self._rbf_basis[treatment] = (W_freq, b_phase)
         K = self.n_features
 

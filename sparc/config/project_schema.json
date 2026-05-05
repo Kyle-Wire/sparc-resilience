@@ -877,6 +877,24 @@
           "description": "Per-stage memory ceiling enforced by the watchdog (GB)."
         }
       }
+    },
+
+    "budget": {
+      "type": "object",
+      "description": "Stage-4 cell-level budget allocator (greedy / 2-opt / MILP).",
+      "additionalProperties": true
+    },
+
+    "caps": {
+      "type": "object",
+      "description": "Stage-4 Wager-2025 spillover/saturation caps.",
+      "additionalProperties": true
+    },
+
+    "decision": {
+      "type": "object",
+      "description": "Stage-5 decision-support configuration (allocation, optimisation, reporting).",
+      "additionalProperties": true
     }
 
   }

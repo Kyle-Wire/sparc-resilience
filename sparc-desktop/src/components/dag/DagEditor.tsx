@@ -22,13 +22,21 @@ import type { DagEdge, DagDefinition, DagValidation, MC3Result } from "@/lib/typ
 import { usePipeline } from "@/hooks/PipelineProvider";
 
 // ---------------------------------------------------------------------------
-// Color palette for node types
+// Color palette for node types. SPARC v4 adds three more identification-
+// relevant types beyond the original four:
+//   - instrument: IV — affects outcome only via a treatment.
+//   - proxy_confounder: imperfect measurement of a latent confounder
+//     (residual confounding warning).
+//   - selection: drives sample inclusion; conditioning → collider bias.
 // ---------------------------------------------------------------------------
 const TYPE_COLORS: Record<string, { bg: string; border: string; text: string }> = {
-  treatment:  { bg: "#f3e8f5", border: "#602468", text: "#602468" },
-  mediator:   { bg: "#f5e0f8", border: "#a44eb4", text: "#7a2890" },
-  confounder: { bg: "#fde8ec", border: "#f0a0b0", text: "#a04050" },
-  outcome:    { bg: "#fdf8e0", border: "#fbdd46", text: "#8a7000" },
+  treatment:        { bg: "#f3e8f5", border: "#602468", text: "#602468" },
+  mediator:         { bg: "#f5e0f8", border: "#a44eb4", text: "#7a2890" },
+  confounder:       { bg: "#fde8ec", border: "#f0a0b0", text: "#a04050" },
+  outcome:          { bg: "#fdf8e0", border: "#fbdd46", text: "#8a7000" },
+  instrument:       { bg: "#e6f0ff", border: "#1e4fb8", text: "#1e4fb8" },
+  proxy_confounder: { bg: "#fbe7d4", border: "#b86a1e", text: "#8a4a10" },
+  selection:        { bg: "#e8e8e8", border: "#555",    text: "#222"    },
 };
 
 // ---------------------------------------------------------------------------
@@ -100,16 +108,44 @@ function dagToFlow(
     data: { label: n.name, nodeType: n.type, description: n.description },
   }));
 
-  const flowEdges: Edge[] = dag.edges.map((e) => ({
-    id: `e-${e.parent}-${e.child}`,
-    source: e.parent,
-    target: e.child,
-    label: e.mechanism,
-    animated: false,
-    style: { stroke: "#602468" },
-    markerEnd: { type: MarkerType.ArrowClosed, color: "#602468" },
-    labelStyle: { fontSize: 9, fill: "#666" },
-  }));
+  const flowEdges: Edge[] = dag.edges.map((e) => {
+    // Edge styling derives from sign_prior (hue) and confidence (opacity
+    // / width). `kind` and `lag` are surfaced in the label so the
+    // identification semantics are visible at a glance.
+    const sign = e.sign_prior;
+    const conf = typeof e.confidence === "number" ? Math.max(0, Math.min(1, e.confidence)) : null;
+    const baseColor =
+      sign === "+" ? "#1f7d1f"
+        : sign === "-" ? "#b91c1c"
+          : e.kind === "instrumental" ? "#1e4fb8"
+            : e.kind === "time_lagged" ? "#7a2890"
+              : "#602468";
+    const opacity = conf == null ? 1 : 0.4 + 0.6 * conf;
+    const strokeWidth = conf == null ? 1.4 : 1 + conf * 1.6;
+    const dash = e.kind === "time_lagged" ? "5,4" : e.kind === "mediated" ? "2,3" : undefined;
+    const labelBits: string[] = [];
+    if (e.mechanism) labelBits.push(e.mechanism);
+    if (e.lag) labelBits.push(`lag ${e.lag}`);
+    if (sign && sign !== "0") labelBits.push(sign);
+    if (conf != null) labelBits.push(`c=${conf.toFixed(2)}`);
+    return {
+      id: `e-${e.parent}-${e.child}`,
+      source: e.parent,
+      target: e.child,
+      label: labelBits.join(" · "),
+      animated: e.kind === "time_lagged",
+      style: { stroke: baseColor, opacity, strokeWidth, ...(dash ? { strokeDasharray: dash } : {}) },
+      markerEnd: { type: MarkerType.ArrowClosed, color: baseColor },
+      labelStyle: { fontSize: 9, fill: "#666" },
+      data: {
+        mechanism: e.mechanism,
+        kind: e.kind ?? "direct",
+        lag: e.lag,
+        sign_prior: e.sign_prior,
+        confidence: e.confidence,
+      },
+    };
+  });
 
   // Proposed edges from Claude (dashed, amber)
   if (proposedEdges) {
@@ -197,7 +233,15 @@ function useUndoRedo(
 // ---------------------------------------------------------------------------
 // Node type options for context menu
 // ---------------------------------------------------------------------------
-const NODE_TYPE_OPTIONS = ["treatment", "mediator", "confounder", "outcome"] as const;
+const NODE_TYPE_OPTIONS = [
+  "treatment",
+  "mediator",
+  "confounder",
+  "outcome",
+  "instrument",
+  "proxy_confounder",
+  "selection",
+] as const;
 
 // ---------------------------------------------------------------------------
 // MC³ edge styling helpers
@@ -259,13 +303,17 @@ export default function DAGView() {
     nodeId: string;
   } | null>(null);
 
-  // Edge tooltip state (causal assumption)
+  // Edge tooltip state (causal assumption + SPARC v4 attrs)
   const [edgeTooltip, setEdgeTooltip] = useState<{
     x: number;
     y: number;
     source: string;
     target: string;
     mechanism?: string;
+    kind?: string;
+    lag?: number;
+    sign_prior?: string;
+    confidence?: number;
   } | null>(null);
 
   // Quick edge form
@@ -558,17 +606,29 @@ export default function DAGView() {
     return () => document.removeEventListener("click", close);
   }, [contextMenu, edgeTooltip]);
 
-  // Edge click → causal assumption tooltip
+  // Edge click → causal assumption tooltip (now surfaces SPARC v4
+  // identification attributes carried on `edge.data`).
   const onEdgeClick = useCallback(
     (event: React.MouseEvent, edge: Edge) => {
       if (edge.id.startsWith("mc3-")) return; // skip MC³ overlay edges
       event.stopPropagation();
+      const d = (edge.data ?? {}) as {
+        mechanism?: string;
+        kind?: string;
+        lag?: number;
+        sign_prior?: string;
+        confidence?: number;
+      };
       setEdgeTooltip({
         x: event.clientX,
         y: event.clientY,
         source: edge.source,
         target: edge.target,
-        mechanism: typeof edge.label === "string" ? edge.label.replace("💡 ", "") : undefined,
+        mechanism: d.mechanism ?? (typeof edge.label === "string" ? edge.label.replace("💡 ", "") : undefined),
+        kind: d.kind,
+        lag: d.lag,
+        sign_prior: d.sign_prior,
+        confidence: d.confidence,
       });
     },
     [],
@@ -908,6 +968,38 @@ export default function DAGView() {
         </div>
       )}
 
+      {/* User-asserted identification assumptions (SPARC v4) */}
+      {dag?.assumptions && (
+        <div className="border-b border-sparc-gray-100 bg-sparc-gray-50 px-4 py-2">
+          <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-sparc-gray-500">
+            Identification Assumptions
+          </p>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+            {([
+              ["conditional_exchangeability", "Exchangeability"],
+              ["positivity", "Positivity"],
+              ["consistency", "Consistency"],
+              ["no_interference", "No interference"],
+            ] as const).map(([k, label]) => {
+              const v = (dag.assumptions as Record<string, unknown>)?.[k];
+              if (v === undefined) return null;
+              const ok = v === true;
+              return (
+                <span key={k} className="flex items-center gap-1">
+                  <span className={ok ? "text-emerald-700" : "text-amber-700"}>{ok ? "✓" : "✗"}</span>
+                  <span className="text-sparc-gray-700">{label}</span>
+                </span>
+              );
+            })}
+          </div>
+          {dag.assumptions.notes && (
+            <p className="mt-1 text-[10px] italic leading-snug text-sparc-gray-500">
+              {dag.assumptions.notes}
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Legend */}
       <div className="flex gap-4 border-b border-sparc-gray-100 px-4 py-2">
         {Object.entries(TYPE_COLORS).map(([type, c]) => (
@@ -1006,6 +1098,14 @@ export default function DAGView() {
               {" → "}
               <span className="font-mono font-bold text-sparc-purple">{edgeTooltip.target}</span>
             </p>
+            {(edgeTooltip.kind || edgeTooltip.sign_prior || edgeTooltip.confidence != null || edgeTooltip.lag != null) && (
+              <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[10px] text-sparc-gray-600">
+                {edgeTooltip.kind && (<><dt className="font-semibold">kind</dt><dd className="font-mono">{edgeTooltip.kind}</dd></>)}
+                {edgeTooltip.sign_prior && (<><dt className="font-semibold">sign</dt><dd className="font-mono">{edgeTooltip.sign_prior}</dd></>)}
+                {edgeTooltip.confidence != null && (<><dt className="font-semibold">confidence</dt><dd className="font-mono">{edgeTooltip.confidence.toFixed(2)}</dd></>)}
+                {edgeTooltip.lag != null && (<><dt className="font-semibold">lag</dt><dd className="font-mono">{edgeTooltip.lag}</dd></>)}
+              </dl>
+            )}
             <p className="text-[11px] text-sparc-gray-500 mt-1.5 leading-relaxed">
               You are asserting that <strong>{edgeTooltip.source}</strong> causally influences{" "}
               <strong>{edgeTooltip.target}</strong>.
