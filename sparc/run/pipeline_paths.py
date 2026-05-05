@@ -200,6 +200,14 @@ class PipelinePaths:
     @property
     def correlogram_results(self):
         return self.stage0_dir / "correlogram_analysis_results.json"
+
+    @property
+    def correlogram_summary(self):
+        # Stage 0 writes this alongside ``correlogram_analysis_results.json``;
+        # the legacy filename is kept for backward compatibility, the
+        # ``correlogram_*`` aliases keep artifact-id / filename naming
+        # consistent with the registry catalogue.
+        return self.stage0_dir / "variogram_summary.csv"
     
     # Stage 2 files
     @property

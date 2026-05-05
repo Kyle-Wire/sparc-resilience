@@ -488,6 +488,138 @@ def ensure_dir(path: Union[str, Path]) -> Optional[Path]:
     return p
 
 
+# ---------------------------------------------------------------------------
+# Disk-aware READ helpers (counterparts to save_*_path)
+# ---------------------------------------------------------------------------
+# These mirror ``load_blob_path``: try the active ArtifactStore first via
+# ``(stage, artifact_id)``; fall back to disk only when the store has no
+# entry AND the legacy file exists.  Each raises FileNotFoundError naming
+# both lookup strategies if neither succeeds, so DB-only regressions are
+# obvious.
+#
+# ``artifact_id`` defaults to ``Path(path).stem``, matching the
+# ``save_*_path`` convention.
+# ---------------------------------------------------------------------------
+
+
+def _try_store_read_any(stage: Union[int, str], artifact_id: str) -> Any:
+    """Return the artifact via ``store.read_any`` or ``None`` if absent."""
+    store = _store()
+    if store is None:
+        return None
+    try:
+        if not store.has(_stage_key(stage), artifact_id):
+            return None
+        return store.read_any(_stage_key(stage), artifact_id)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def load_table_path(
+    path: Union[str, Path],
+    *,
+    stage: Union[int, str],
+    artifact_id: Optional[str] = None,
+    fmt: str = "csv",
+):
+    """Drop-in replacement for ``pd.read_csv(path)`` / ``pd.read_parquet(path)``.
+
+    Tries the artifact store first; falls back to on-disk ``path`` when
+    the store has no entry but the file exists.  Raises
+    :class:`FileNotFoundError` when neither is available.
+    """
+    aid = artifact_id or Path(path).stem
+    val = _try_store_read_any(stage, aid)
+    if val is not None:
+        return val
+    p = Path(path)
+    if p.exists():
+        import pandas as _pd
+        if fmt == "csv":
+            return _pd.read_csv(p)
+        if fmt == "parquet":
+            return _pd.read_parquet(p)
+        raise ValueError(f"load_table_path: unsupported fmt={fmt!r}")
+    raise FileNotFoundError(
+        f"Artifact not found: stage={stage} id={aid} (and no file at {p})"
+    )
+
+
+def load_struct_path(
+    path: Union[str, Path],
+    *,
+    stage: Union[int, str],
+    artifact_id: Optional[str] = None,
+) -> Any:
+    """Drop-in replacement for ``json.load(open(path))``.
+
+    Tries the artifact store first; falls back to on-disk JSON at
+    ``path``.  Raises :class:`FileNotFoundError` when neither is
+    available.
+    """
+    aid = artifact_id or Path(path).stem
+    val = _try_store_read_any(stage, aid)
+    if val is not None:
+        return val
+    p = Path(path)
+    if p.exists():
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    raise FileNotFoundError(
+        f"Artifact not found: stage={stage} id={aid} (and no file at {p})"
+    )
+
+
+def load_geo_path(
+    path: Union[str, Path],
+    *,
+    stage: Union[int, str],
+    artifact_id: Optional[str] = None,
+    layer: Optional[str] = None,
+):
+    """Drop-in replacement for ``gpd.read_file(path)``.
+
+    Tries the artifact store first; falls back to on-disk GeoPackage at
+    ``path``.  Raises :class:`FileNotFoundError` when neither is
+    available.
+    """
+    aid = artifact_id or Path(path).stem
+    val = _try_store_read_any(stage, aid)
+    if val is not None:
+        return val
+    p = Path(path)
+    if p.exists():
+        import geopandas as _gpd  # type: ignore[import-not-found]
+        if layer is not None:
+            return _gpd.read_file(p, layer=layer)
+        return _gpd.read_file(p)
+    raise FileNotFoundError(
+        f"Artifact not found: stage={stage} id={aid} (and no file at {p})"
+    )
+
+
+def exists_path(
+    path: Union[str, Path],
+    *,
+    stage: Union[int, str],
+    artifact_id: Optional[str] = None,
+) -> bool:
+    """Replacement for ``os.path.exists(path)`` for catalogued artifacts.
+
+    Returns True if either the artifact store has the entry OR the file
+    exists on disk.
+    """
+    aid = artifact_id or Path(path).stem
+    store = _store()
+    if store is not None:
+        try:
+            if store.has(_stage_key(stage), aid):
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+    return Path(path).exists()
+
+
 __all__ = [
     "save_struct", "save_table", "save_blob", "save_array", "save_text",
     "load_struct", "load_table", "load_blob", "load_array", "load_text",
@@ -495,4 +627,5 @@ __all__ = [
     # Disk-aware helpers
     "save_blob_path", "load_blob_path", "save_struct_path", "save_table_path",
     "save_geo_path", "save_array_path", "ensure_dir",
+    "load_table_path", "load_struct_path", "load_geo_path", "exists_path",
 ]

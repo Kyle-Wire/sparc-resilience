@@ -12,6 +12,8 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+from sparc.report._style import BRAND_CSS, BRAND_CSS_PRINT
+
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 
@@ -194,6 +196,8 @@ def generate_report_html(
         "scenario_summary": scenario_summary or [],
         "pipeline": pipeline,
         "plots": plots,
+        "brand_css": BRAND_CSS,
+        "brand_css_print": BRAND_CSS_PRINT,
     }
 
     return template.render(**context)

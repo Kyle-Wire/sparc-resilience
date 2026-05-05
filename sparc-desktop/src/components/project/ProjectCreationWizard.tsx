@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { Card, Btn, Tag } from "@/components/ui/DesignSystem";
 import { listTemplates, createProject } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
-import { getWorkspaceDir, setWorkspaceDir, joinPath } from "@/lib/workspacePrefs";
+import { getWorkspaceDir, joinPath } from "@/lib/workspacePrefs";
 import type { TemplateInfo } from "@/lib/types";
 
 /**

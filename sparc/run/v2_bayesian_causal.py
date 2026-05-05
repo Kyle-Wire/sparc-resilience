@@ -1189,16 +1189,15 @@ def _build_nuts_input_dict(
     # Pad physics features to match the trained model's expected input dimension.
     # The neural model was trained with extended features (original + PDE derivatives),
     # so physics_t may need to be padded from 6 raw features to the full expected dim.
-    try:
-        expected_phys_dim = neural_model.physics_enc.source_enc.net[0].in_features
-        if physics_t.shape[1] < expected_phys_dim:
-            pad = torch.zeros(
-                N, expected_phys_dim - physics_t.shape[1],
-                dtype=torch.float32, device=device,
-            )
-            physics_t = torch.cat([physics_t, pad], dim=1)
-    except Exception:
-        pass  # fall back to original dim; model will surface the shape error naturally
+    expected_phys_dim = neural_model.physics_enc.source_enc.network[0].in_features
+    if physics_t.shape[1] < expected_phys_dim:
+        pad = torch.zeros(
+            N, expected_phys_dim - physics_t.shape[1],
+            dtype=torch.float32, device=device,
+        )
+        physics_t = torch.cat([physics_t, pad], dim=1)
+    elif physics_t.shape[1] > expected_phys_dim:
+        physics_t = physics_t[:, :expected_phys_dim]
 
     # FIX B1: zero-out treatment columns so neural baseline is confounder-only
     if exclude_treatments:

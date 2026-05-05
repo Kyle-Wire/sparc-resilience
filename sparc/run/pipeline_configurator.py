@@ -245,10 +245,13 @@ class PipelineConfigurator:
             file does not exist yet (Stage 1 has not been run).
         """
         results_path = os.path.join(self.stage1_dir, 'correlogram_analysis_results.json')
-        if not os.path.exists(results_path):
+        try:
+            from sparc.run.artifact_io import load_struct_path
+            return load_struct_path(
+                results_path, stage="0", artifact_id="correlogram_results",
+            )
+        except FileNotFoundError:
             return None
-        with open(results_path, 'r') as f:
-            return json.load(f)
 
     def _correlogram_to_bandwidths(self, corr_results):
         """

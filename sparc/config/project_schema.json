@@ -369,7 +369,7 @@
         "meta_ensemble": {
           "type": "object",
           "properties": {
-            "algorithm":        {"type": "string", "enum": ["lightgbm", "xgboost", "catboost", "linear"], "default": "lightgbm"},
+            "algorithm":        {"type": "string", "enum": ["lightgbm", "xgboost", "catboost", "linear", "neural"], "default": "lightgbm"},
             "n_optuna_trials":  {"type": "integer", "default": 25},
             "include_base_features": {"type": "boolean", "default": true},
             "include_laplacian_pca": {"type": "boolean", "default": true}
@@ -404,6 +404,32 @@
           "description": "Per-material literature values for process rate (e.g. impervious: 7.5e-7)",
           "additionalProperties": {"type": "number"}
         }
+      }
+    },
+
+    "jepa": {
+      "type": "object",
+      "description": "JEPA (V-JEPA 2-style) self-supervised auxiliary objective on the SharedTrunk. Adds an EMA target trunk + latent predictor + masked-channel context with VICReg anti-collapse. Off by default; pure additive when enabled.",
+      "properties": {
+        "enable":              {"type": "boolean", "default": false, "description": "Master switch — when false, no JEPA modules are constructed and the training loop is byte-identical to pre-JEPA behavior."},
+        "mask_ratio":          {"type": "number", "default": 0.4, "minimum": 0.0, "maximum": 1.0, "description": "Bernoulli probability of zeroing each physics input channel for the context branch."},
+        "lambda":              {"type": "number", "default": 1.0, "description": "Base weight on the JEPA loss term (multiplied by curriculum_weight(epoch))."},
+        "ema_tau_start":       {"type": "number", "default": 0.99, "description": "Initial EMA momentum for the target trunk."},
+        "ema_tau_end":         {"type": "number", "default": 0.9999, "description": "Asymptotic EMA momentum."},
+        "ema_warmup_steps":    {"type": "integer", "default": 1000, "description": "Linear schedule length (steps) from ema_tau_start to ema_tau_end."},
+        "curriculum_start":    {"type": "integer", "default": 5, "description": "Epoch at which JEPA weight begins ramping from 0."},
+        "curriculum_end":      {"type": "integer", "default": 15, "description": "Epoch at which JEPA weight reaches 1.0."},
+        "lambda_align":        {"type": "number", "default": 1.0, "description": "Cosine-alignment term weight inside the JEPA loss."},
+        "lambda_variance":     {"type": "number", "default": 1.0, "description": "VICReg variance hinge weight."},
+        "lambda_covariance":   {"type": "number", "default": 0.04, "description": "VICReg off-diagonal covariance weight."},
+        "variance_gamma":      {"type": "number", "default": 1.0, "description": "Hinge target σ for the variance term."},
+
+        "action_dim":          {"type": "integer", "default": 64, "description": "Phase 2: dimension of the action embedding fed to the predictor."},
+        "predictor_blocks":    {"type": "integer", "default": 1, "description": "Phase 2: number of residual blocks in the latent predictor (1 = Phase 1 MLP)."},
+        "predictor_film":      {"type": "boolean", "default": false, "description": "Phase 2: condition each predictor block via FiLM modulation of the action embedding."},
+        "lambda_scenario":     {"type": "number", "default": 0.0, "description": "Phase 2: weight on the action-conditioned scenario-distillation JEPA term (0 = disabled)."},
+        "lambda_latent_pde":   {"type": "number", "default": 0.0, "description": "Phase 2: weight on the latent-space Laplacian smoothness penalty (0 = disabled)."},
+        "scenario_perturb_std": {"type": "number", "default": 0.5, "description": "Phase 2: σ of Gaussian magnitudes sampled per batch for scenario distillation (in normalised feature units)."}
       }
     },
 

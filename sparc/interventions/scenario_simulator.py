@@ -34,6 +34,10 @@ import joblib
 import numpy as np
 import pandas as pd
 
+from sparc.run.artifact_io import (
+    load_blob_path, load_struct_path, exists_path,
+)
+
 warnings.filterwarnings("ignore")
 
 # Ensure stdout can handle Unicode on Windows (cp1252 console).
@@ -884,23 +888,27 @@ class ScenarioSimulator:
                 pass
 
         model_files = {
-            "meta": self.model_dir / "standard_meta_ensemble.pkl",
-            "ols": self.model_dir / "base_models_full" / "ols_model_full.pkl",
-            "gwr": self.model_dir / "base_models_full" / "gwr_model_full.pkl",
-            "gwrf": self.model_dir / "base_models_full" / "gwrf_model_full.pkl",
-            "ggpgam": self.model_dir / "base_models_full" / "ggpgam_model_full.pkl",
+            "meta": (self.model_dir / "standard_meta_ensemble.pkl", "standard_meta_ensemble"),
+            "ols": (self.model_dir / "base_models_full" / "ols_model_full.pkl", "ols_model_full"),
+            "gwr": (self.model_dir / "base_models_full" / "gwr_model_full.pkl", "gwr_model_full"),
+            "gwrf": (self.model_dir / "base_models_full" / "gwrf_model_full.pkl", "gwrf_model_full"),
+            "ggpgam": (self.model_dir / "base_models_full" / "ggpgam_model_full.pkl", "ggpgam_model_full"),
         }
 
         v1_loaded = 0
-        for name, path in model_files.items():
-            if not path.exists():
+        for name, (path, art_id) in model_files.items():
+            if not exists_path(path, stage="2", artifact_id=art_id):
                 if has_v2:
                     continue  # V1 models optional when V2 is available
-                raise FileNotFoundError(f"Model file not found: {path}")
+                raise FileNotFoundError(f"Model file not found: stage=2 id={art_id} (and no file at {path})")
+            obj = load_blob_path(path, stage="2", artifact_id=art_id)
+            if obj is None:
+                # exists_path was true but load returned None — fall back to direct read.
+                obj = joblib.load(path)
             if name == "meta":
-                self._meta_model = joblib.load(path)
+                self._meta_model = obj
             else:
-                self._models[name] = joblib.load(path)
+                self._models[name] = obj
             v1_loaded += 1
 
         if v1_loaded > 0:
@@ -934,13 +942,17 @@ class ScenarioSimulator:
                 print(f"   Overriding config features ({len(self.features)}) with trained features ({len(trained_features)}): {trained_features}")
                 self.features = trained_features
 
-        # Load feature scaler (saved by enhanced_spatial_cv)
+        # Load feature scaler (saved by enhanced_spatial_cv) — store-first, disk fallback
         scaler_path = self.model_dir / "feature_scaler.pkl"
-        if scaler_path.exists():
-            self._feature_scaler = joblib.load(scaler_path)
-            print(f"   Feature scaler loaded from {scaler_path}")
+        if exists_path(scaler_path, stage="2", artifact_id="feature_scaler"):
+            self._feature_scaler = load_blob_path(
+                scaler_path, stage="2", artifact_id="feature_scaler",
+            )
+            if self._feature_scaler is None:
+                self._feature_scaler = joblib.load(scaler_path)
+            print(f"   Feature scaler loaded (stage=2 id=feature_scaler)")
         else:
-            print("   Warning: feature_scaler.pkl not found — scenario features will NOT be scaled")
+            print("   Warning: feature_scaler not found — scenario features will NOT be scaled")
 
         # Load causal coefficients (from Stage 3, if available)
         self.load_causal_coefficients()
@@ -1336,9 +1348,15 @@ class ScenarioSimulator:
 
         gwrf_loaded = 0
         gwrf_skipped = 0
-        if curves_path.exists():
-            with open(curves_path, 'r', encoding='utf-8') as f:
-                raw = json.load(f)
+        raw = None
+        if exists_path(curves_path, stage="2", artifact_id="gwrf_pdp_curves"):
+            try:
+                raw = load_struct_path(
+                    curves_path, stage="2", artifact_id="gwrf_pdp_curves",
+                )
+            except FileNotFoundError:
+                raw = None
+        if raw is not None:
             for var_name, entry in raw.items():
                 pdp = entry.get('pdp', {})
                 curve_fit = entry.get('curve_fit', {})
@@ -1503,13 +1521,17 @@ class ScenarioSimulator:
         stage3_name = stage_dirs.get('stage_3', 'Stage_3_Causal_Validation')
         coeff_path = Path(self.config['output']['base_dir']) / stage3_name / 'scenario_coefficients.json'
 
-        if not coeff_path.exists():
-            print("   No scenario_coefficients.json found — will use physics priors only.")
+        if not exists_path(coeff_path, stage="3", artifact_id="scenario_coefficients"):
+            print("   No scenario_coefficients found — will use physics priors only.")
             return
 
-        import json
-        with open(coeff_path, 'r', encoding='utf-8') as f:
-            self._causal_coefficients = json.load(f)
+        try:
+            self._causal_coefficients = load_struct_path(
+                coeff_path, stage="3", artifact_id="scenario_coefficients",
+            )
+        except FileNotFoundError:
+            print("   No scenario_coefficients found — will use physics priors only.")
+            return
 
         n_direct = len(self._causal_coefficients.get('direct_effects', {}))
         n_med = sum(len(v) for v in self._causal_coefficients.get('mediator_propagation', {}).values())
@@ -1954,17 +1976,20 @@ class ScenarioSimulator:
             if cate_multipliers and verbose:
                 print(f"   CATE multipliers loaded for: {list(cate_multipliers.keys())}")
 
-        # Load elasticity from scenario_coefficients.json
+        # Load elasticity from scenario_coefficients (store-first, JSON fallback)
         elasticity_map: Dict[str, float] = {}
         if stage3_dir:
             coeff_path = os.path.join(stage3_dir, 'scenario_coefficients.json')
-            if os.path.isfile(coeff_path):
-                import json as _json
-                with open(coeff_path, 'r') as _f:
-                    sc = _json.load(_f)
-                for var, info in sc.get('direct_effects', {}).items():
-                    if info.get('elasticity') is not None:
-                        elasticity_map[var] = info['elasticity']
+            if exists_path(coeff_path, stage="3", artifact_id="scenario_coefficients"):
+                try:
+                    sc = load_struct_path(
+                        coeff_path, stage="3", artifact_id="scenario_coefficients",
+                    )
+                    for var, info in sc.get('direct_effects', {}).items():
+                        if info.get('elasticity') is not None:
+                            elasticity_map[var] = info['elasticity']
+                except FileNotFoundError:
+                    pass
 
         if verbose:
             print(f"   Spatial multiplier range: {spatial_multiplier.min():.2f} to {spatial_multiplier.max():.2f}")

@@ -15,14 +15,14 @@ project:
   description: "Spatial regression analysis of ambient air temperature z-scores across the Brown University campus and surrounding Providence neighborhoods"
   domain: uhi
   version: "2.1.0"
-  author: "Kyle Wire"
+  author: "SPARC Labs LLC"
   response_units: "°F"      # Units for the target variable (used in reports & physics priors)
 
 # ---------------------------------------------------------------------------
 # Input Data
 # ---------------------------------------------------------------------------
 data:
-  file_path: "../data/brown4.csv"              # Relative to this file, or absolute
+  file_path: "/Users/kylewire/Desktop/sparc-resilience/my_project/brown4.csv"              # Relative to this file, or absolute
   target_column: "AAT_z"                       # Ambient Air Temperature z-score
   identifier_column: "OBJECTID"                # Unique row ID
   coord_columns: ["POINT_X", "POINT_Y"]        # [Easting, Northing]
@@ -53,11 +53,6 @@ physics:
   priors_file: "physics/priors.yml"    # Literature-based coefficients
   caps_file:   "physics/caps.yml"      # Hard bounds, delta limits, monotonicity rules
 
-  # Weight for blending OLS-estimated coefficients with literature values
-  # in ScenarioSimulator._build_physics_priors().  When no OLS priors are
-  # configured the literature value is used directly (no halving).
-  literature_weight: 0.5
-
   # Monotone constraints applied to the meta-ensemble and spatial models.
   # -1 = more of this variable → lower response (cooling)
   # +1 = more of this variable → higher response (warming)
@@ -75,37 +70,45 @@ physics:
 # ---------------------------------------------------------------------------
 causal:
   dag_file: "causal/dag.yml"
-  inference: "bayesian"          # "frequentist" = V1 DML, "bayesian" = V2 MC³ + NUTS
-  estimator: "dml"              # V1 fallback estimator (used when inference=frequentist)
-  dml_shrinkage: 0.25           # Reduced shrinkage toward physics priors (DML is debiased)
-  dml_cv_folds: 5               # Cross-fitting folds for DML
-  spatial_block_size: null       # null = auto from Stage 1 correlogram; or integer meters
-  dag_blend_weight: 0.8          # Weight for causal coefficients in Mode 1 physics delta (0.5 for OLS, 0.8 for DML)
-  estimate_cate: true          # Set true to run EconML CATE (requires econml package)
-  ipw_enabled: false           # Skip V1 IPW — using Bayesian inference
-  gps_enabled: false           # Skip V1 GPS — using Bayesian inference
-  matching_enabled: false      # Skip V1 matching — using Bayesian inference
-  doubly_robust: false         # Skip V1 DR — using Bayesian inference
-  dose_response: false         # Skip V1 dose-response — using Bayesian inference
-  bootstrap_n: 0               # Skip V1 bootstrap — NUTS gives posterior CIs
-  # V2 MC³ settings
+  estimator: "dml"              # "dml" (Wager 2025 default, cross-fit DML), "hgb", or "ols"
+  estimate_cate: true           # Spatial CATE via Bayesian low-rank GP
+  inference: "bayesian"         # "bayesian" (V2 default: MC³ + NUTS) or "frequentist" (V1, deprecated)
+  cate_estimator: "bayesian"
+  discovery:
+    enabled: true
+    methods: [pc_stable, lingam, ges]
+    alpha: 0.05
+    consensus_threshold: 2      # min methods that must agree to keep an edge
+    compare_expert: true
   mc3:
-    n_iterations: 10000          # MCMC iterations over DAG space
-    n_chains: 4                  # Parallel tempering chains
-    temperatures: [1.0, 0.5, 0.25, 0.1]  # Inverse temperatures (cold → hot)
-    burnin_fraction: 0.25        # Fraction of iterations to discard
-    edge_penalty: 1.0            # Penalty per edge to discourage dense graphs
+    n_iterations: 10000
+    n_chains: 4
+    burnin_fraction: 0.25
+    edge_penalty: 1.0
     seed: 42
-  # V2 NUTS settings
   nuts:
-    n_samples: 15000              # Posterior draws (2K sufficient with good mixing)
-    n_warmup: 5000               # Adaptation iterations (200 adapt + 800 warmup transitions)
-    max_tree_depth: 10            # Maximum NUTS tree depth (capped for spatial model)
-    target_accept_rate: 0.65     # Target MH acceptance for spatial model
-    spatial_basis_k: 20          # RBF basis knots for spatial model (20 × 3 = 60 spatial params)
-    mc3_edge_threshold: 0.30     # Min MC³ edge prob to include treatment in NUTS
-    max_rows: 10000               # Subsample for tractable posterior
-    seed: 42
+    n_samples: 2000
+    n_warmup: 500
+    n_chains: 2
+    target_accept_rate: 0.85
+    max_tree_depth: 8
+  bayesian_cate:
+    n_features: 16              # low-RAM laptops: 16; servers: 32+
+    n_samples: 2000
+    n_warmup: 500
+    n_chains: 2
+    target_accept_rate: 0.85
+    max_tree_depth: 8
+    kernel_lengthscale: 0.20
+  wager2025:
+    overlap: true               # Gap 1: positivity diagnostic
+    rate_qini: true             # Gap 2: rank-average treatment effect
+    spillover: true             # Gap 3: SUTVA / network interference
+    iv: true                    # Gaps 4-5: IV / MTE (only fires if DAG has instrument)
+    sequential_aipw: true       # Gap 6: time-varying treatments
+    panel: true                 # Gap 7: DID / SDID (only fires with panel cols)
+    policy_learning: true       # Gap 8: empirical welfare maximisation
+    cbps: true                  # Gap 9: covariate-balanced propensity score
   actionable_variables:
     - Pct_Canopy
     - Pct_Impervious
@@ -114,15 +117,6 @@ causal:
   fixed_variables:
     - Elevation_m
     - Distance_from_water_m
-  discovery:
-    enabled: true              # Run causal discovery to validate expert DAG
-    methods:
-      - pc_stable
-      - lingam
-      - ges
-    alpha: 0.05                # Significance level for constraint-based algorithms
-    compare_expert: true       # Compare learned DAG vs expert DAG
-    consensus_threshold: 2     # Min methods agreeing per edge for consensus DAG
 
 # ---------------------------------------------------------------------------
 # Output
@@ -145,14 +139,17 @@ pipeline:
   n_spatial_folds: 5
   fast_mode: false
   overwrite_outputs: false
-  scenario_mode: "bayesian"      # "auto" | "hybrid" | "bayesian" — V2 uses NUTS posterior
-  run_mc_uncertainty: false      # Not needed — V2 bayesian gives posterior uncertainty directly
-  n_mc_draws: 10                 # Number of MC draws (used when run_mc_uncertainty=true)
-  pipeline_execution:
-    skip_stage_2_base_models: false      # Run OLS/GWR/GWRF/GGPGAM OOF for surrogate pretraining
-    skip_stage_2b_full_retrain: false    # Retrain base models on full data for fitted values
-    skip_stage_3_standard_meta: false    # Run LightGBM meta for comparison
-    skip_stage_3b_enhanced_meta: false   # Run enhanced LightGBM meta for comparison
+  run_mc_uncertainty: true       # Run Monte-Carlo uncertainty propagation in Stage 4
+  n_mc_draws: 50                 # Number of MC draws
+  # Scenario simulation mode —
+  #   auto (default): hybrid if DAG exists, else physics-only
+  #   hybrid: model-consensus direct + DAG indirect
+  #   dag_coefficient: MGWR+DAG coefficient based
+  #   model_reprediction: full base-model re-prediction
+  scenario_mode: "auto"
+  # Global sensitivity analysis (Morris or Sobol)
+  # run_sensitivity_analysis: true
+  # sensitivity_method: "morris"   # "morris" or "sobol"
 
 flags:
   use_gwen_selection: true
@@ -185,29 +182,111 @@ models:
     max_iter: 100
 
   meta_ensemble:
-    algorithm: "lightgbm"
-    n_optuna_trials: 25
+    algorithm: "neural"
     include_base_features: true
     include_laplacian_pca: true
 
-  # Set meta_learner to "lightgbm" to revert to V1 LightGBM stacking.
-  meta_learner: "neural"        # "neural" (V2 default) or "lightgbm" (V1)
+  # V2 Neural Meta-Learner
+  meta_learner: "neural"
 
-  deep_kriging:
-    enabled: true
-    version: 2
-    hidden_layers: [64, 32, 16]
-    dropout_rate: 0.2
-    epochs: 100
-    learning_rate: 0.001
-    batch_size: 256
+  neural:
+    hidden_dim: 256
+    dropout: 0.1
+    n_heads: 4
+    max_neighbors: 128
+    siren_omega: 30.0
+    exceedance_thresholds: [0.25, 0.50, 0.75]
 
   spatial_cv:
     block_size: 300          # Block size in meters (300m for fine-grained urban analysis)
-    buffer_size: 300         # Buffer zone in meters between train/test folds
+    buffer_size: 100         # Buffer zone in meters between train/test folds
     block_size_source: "user" # "user" = honour block_size above; "correlogram" = auto from Stage 1
     method: "block"
     stratify_y: true
+
+# ---------------------------------------------------------------------------
+# V2 Process Rate Network (domain-specific physical rate parameter)
+# ---------------------------------------------------------------------------
+process_rate:
+  enabled: true
+  name: "thermal_admittance"
+  units: "W·m⁻²·K⁻¹"
+  bounds: [0.5, 12.0]           # Physical bounds for thermal admittance
+  prior_mean: 4.0               # Literature default
+  inputs:                        # Features that drive the process rate
+    - Pct_Impervious
+    - Albedo
+    - Elevation_m
+
+# ---------------------------------------------------------------------------
+# V2 Training Configuration
+# ---------------------------------------------------------------------------
+training:
+  n_epochs: 100
+  batch_size: 512
+  learning_rate: 0.001
+  lambda_mse: 1.0
+  lambda_exceedance: 0.1
+  lambda_physics: 0.01
+  lambda_smooth_pred: 0.01
+  lambda_smooth_alpha: 0.001
+  lambda_alpha_prior: 1.0
+  lambda_surrogate: 0.1
+  lambda_neighbor: 0.1
+
+# ---------------------------------------------------------------------------
+# V2 Optimization
+# ---------------------------------------------------------------------------
+optimization:
+  run_cma_es: false             # Set true for automatic hyperparameter tuning
+  clip_norm: 1.0
+  swa_epochs: 20
+  capacity_sweep: false
+
+# ---------------------------------------------------------------------------
+# JEPA — Self-supervised auxiliary objective on the SharedTrunk
+# ---------------------------------------------------------------------------
+# V-JEPA 2-style: EMA target trunk + masked-channel context + latent
+# predictor with VICReg anti-collapse. Pure additive — when `enable: false`
+# the training loop is byte-identical to pre-JEPA behavior.
+#
+# Phase 1 (representation learning):
+#   Improves trunk representations from unlabeled spatial structure.
+# Phase 2 (action-conditioned predictor + latent PDE + scenario distillation):
+#   Sharpens out-of-support counterfactual scenarios (Stage 4) and feeds the
+#   causal_stack via the γ_latent blend.
+#
+# Recommended starting point: enable Phase 1 first (defaults below).
+# Turn on Phase 2 weights (lambda_scenario, lambda_latent_pde, predictor_film)
+# once Phase 1 trains stably.
+# ---------------------------------------------------------------------------
+jepa:
+  enable: true                  # Master switch
+  mask_ratio: 0.4               # P(zero each physics input channel for context branch)
+  lambda: 1.0                   # Base weight on JEPA loss (× curriculum_weight(epoch))
+
+  # EMA target trunk schedule
+  ema_tau_start: 0.99
+  ema_tau_end:   0.9999
+  ema_warmup_steps: 1000
+
+  # Curriculum (ramps in after supervised loss has shape)
+  curriculum_start: 5
+  curriculum_end:   15
+
+  # VICReg anti-collapse terms (inside JEPA loss)
+  lambda_align:      1.0        # Cosine alignment
+  lambda_variance:   1.0        # Variance hinge (prevents constant features)
+  lambda_covariance: 0.04       # Off-diagonal covariance penalty
+  variance_gamma:    1.0        # Hinge target σ
+
+  # Phase 2 — action-conditioned predictor & scenario distillation
+  action_dim:        64         # Action embedding dim fed to predictor
+  predictor_blocks:  2          # 1 = Phase 1 MLP; >1 = residual blocks
+  predictor_film:    true       # FiLM-modulate predictor blocks by action embedding
+  lambda_scenario:   0.5        # Action-conditioned scenario distillation (0 = disabled)
+  lambda_latent_pde: 0.1        # Latent-space Laplacian smoothness (0 = disabled)
+  scenario_perturb_std: 0.5     # σ of Gaussian perturbations (normalised feature units)
 
 # ---------------------------------------------------------------------------
 # GWEN Variable Selection
@@ -259,9 +338,13 @@ scenarios:
     max_val: 0.70
     unit: "reflectance"
 
-  # NDVI removed as a standalone scenario — it is a mediator (consequence
-  # of canopy/vegetation changes), not a direct policy lever.  Its cooling
-  # contribution is captured via the DAG indirect path Pct_Canopy → NDVI → AAT_z.
+  - name: "NDVI Increase"
+    variable: NDVI
+    direction: increase
+    increments: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
+    min_val: -0.1
+    max_val: 0.9
+    unit: "index"
 
 # ---------------------------------------------------------------------------
 # Joint (Multi-Variable) Scenarios
@@ -295,51 +378,49 @@ joint_scenarios:
         increment: 0.20
 
   - name: "Aggressive Greening"
-    auto_propagate_dag: true      # NDVI increase is auto-propagated via Canopy → NDVI DAG edge
+    auto_propagate_dag: true
     interventions:
       - variable: Pct_Canopy
         direction: increase
         increment: 30
+      - variable: NDVI
+        direction: increase
+        increment: 0.15
       - variable: Pct_Impervious
         direction: decrease
         increment: 25
 
 # ---------------------------------------------------------------------------
-# Benchmark Metrics (nRMSE, pattern correlation, amplitude ratio)
+# V3 Temporal / Multi-Snapshot (optional — uncomment to enable)
 # ---------------------------------------------------------------------------
-benchmark_metrics:
-  enabled: true
-  area_weighted: false           # UHI data is projected (not lat-lon grid)
-  lat_column: null
+# Enable this section when you have morning/midday/night temperature data.
+# The diurnal range (T_midday - T_morning) provides a direct empirical
+# constraint on thermal diffusivity α without relying on land cover alone.
+#
+# temporal:
+#   enabled: true
+#   time_column: "time_period"
+#   frequency: "custom"
+#   snapshots:
+#     morning: "AAT_morning"        # Column with morning temperature
+#     midday:  "AAT_midday"         # Column with midday temperature
+#     night:   "AAT_night"          # Column with nighttime temperature
+#   dt_morning_to_midday_hours: 6.0
+#   dt_midday_to_night_hours: 8.0
+#   dt_night_to_morning_hours: 10.0
+#   use_transient_pde_loss: true
+#   time_embedding_dim: 8           # Learned embedding per snapshot (0 = disabled)
 
 # ---------------------------------------------------------------------------
-# V2 Process Rate Network (domain-specific physical rate parameter)
+# V3 Transfer / Continual Learning Registry (optional)
 # ---------------------------------------------------------------------------
-process_rate:
-  enabled: true
-  name: "thermal_diffusivity"
-  units: "normalized"
-  bounds: [0.05, 0.80]           # Normalized diffusivity bounds
-  prior_mean: 0.35               # Prior mean (vegetated/open green space)
-  inputs:                        # Features that drive the process rate
-    - Pct_Impervious
-    - Pct_Canopy
-    - Albedo
-  pretrain_epochs: 60
-  material_priors:
-    water_adjacent: 0.20         # High thermal mass, slow response
-    vegetated: 0.35              # Moderate — soil + canopy shading
-    open_green: 0.38             # Open grass, moderate diffusivity
-    low_density: 0.52            # Light residential, mixed surfaces
-    moderate_density: 0.65       # Medium impervious, faster thermal response
-    high_density_urban: 0.78     # Asphalt/concrete, fast thermal response
-
-# ---------------------------------------------------------------------------
-# Fingerprinting (disabled for UHI — no forced pattern available)
-# ---------------------------------------------------------------------------
-fingerprint:
-  enabled: false
-  pattern_source: "ensemble_mean"
-  eof_n_modes: 3
-  blend_alpha: 0.3
-  truth_column: null
+# Enable when training across multiple cities.  The registry stores shared
+# trunk checkpoints, Fisher matrices (EWC), and experience replay coresets.
+#
+# registry:
+#   path: "sparc_registry"          # Directory for cross-city artifacts
+#   city_name: "providence"         # Unique identifier for this city
+#   use_global_trunk: false         # true = warm-start from global trunk
+#   ewc_lambda: 0.0                 # EWC penalty weight (> 0 enables)
+#   replay_lambda: 0.0              # Experience replay weight (> 0 enables)
+#   coreset_size: 400               # Representative points per city

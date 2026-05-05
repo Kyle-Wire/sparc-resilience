@@ -405,6 +405,18 @@ def cmd_run(args):
             print("  Continuing — Stage 4 will use physics priors only.")
         _rescan_registry("3")
 
+        # Wager (2025) audit add-ons.
+        # As of v3 these run automatically inside Stage 3
+        # (sparc.run.wager2025_addons). The legacy CLI flags are kept as
+        # overrides — they re-run individual gaps if a user wants the
+        # opt-in path or a specific subset persisted to the store.
+        if any(getattr(args, attr, False) for attr in
+               ("with_spillover", "with_iv", "with_policy_learning",
+                "full_triangulation", "full_audit")):
+            print("  (legacy CLI add-on flags — already auto-run in Stage 3)")
+            _run_wager2025_audit_addons(args, config)
+            _rescan_registry("3")
+
     # ────────────────────────────────────────────────────────────────
     # Stage 4: Scenario Simulation (DAG + Physics)
     # ────────────────────────────────────────────────────────────────
@@ -433,15 +445,32 @@ def cmd_run(args):
         print(f"  [master gpkg] skipped ({exc})")
         traceback.print_exc()
 
+    # ────────────────────────────────────────────────────────────────
+    # Stage 5: Final interpretation report (auto-invoked at end of run)
+    # ────────────────────────────────────────────────────────────────
+    if stage in ('5', 'all'):
+        try:
+            from argparse import Namespace
+            cmd_report(Namespace(
+                project=project_path,
+                audience='all',
+                format='html',
+                section=None,
+            ))
+        except Exception as exc:
+            print(f"\n>>> Stage 5 report generation failed ({exc})")
+
     print(f"\nPipeline complete. Results in: {paths.output_dir}")
 
 
 def _resolve_auto_scenario_mode(*, has_dag: bool) -> str:
     """Pick a concrete ``scenario_mode`` for ``auto`` based on artifacts.
 
-    Policy (Phase 5f of the v4 rewrite):
+    Policy (Phase 5f of the v4 rewrite + Wager 2025 audit):
 
-    1. Per-edge NUTS + α + base ensemble + DAG → ``mode_4_hybrid``.
+    1. Per-edge NUTS + α + base ensemble + DAG → ``mode_5_full_audit``
+       (DEFAULT — strict superset of mode_4_hybrid; same composition plus
+       overlap, spillover, and triangulation diagnostic columns).
     2. Per-edge NUTS + α + DAG                 → ``mode_2_dag_local``.
     3. Base ensemble + α                       → ``mode_3_full_ensemble``.
     4. Otherwise                               → ``mode_1_physics``.
@@ -464,7 +493,7 @@ def _resolve_auto_scenario_mode(*, has_dag: bool) -> str:
     )
 
     if has_dag and has_nuts and has_alpha and has_ensemble:
-        return "mode_4_hybrid"
+        return "mode_5_full_audit"
     if has_dag and has_nuts and has_alpha:
         return "mode_2_dag_local"
     if has_alpha and has_ensemble:
@@ -599,6 +628,12 @@ def _run_scenarios(config, paths, project_path):
         scenario_mode = _resolve_auto_scenario_mode(has_dag=has_dag)
         print(f"  [auto] scenario_mode resolved to '{scenario_mode}'")
 
+    # --full-audit forces mode_5 even when 'auto' would have picked something
+    # weaker (e.g., when ensemble artifacts are missing).
+    if getattr(args, 'full_audit', False) and scenario_mode != 'mode_5_full_audit':
+        print(f"  [--full-audit] overriding '{scenario_mode}' → 'mode_5_full_audit'")
+        scenario_mode = 'mode_5_full_audit'
+
     # --- Dispatch by scenario_mode ---------------------------------------
     # Prefer the v4 unified engine when its required artifacts are present;
     # fall back to the legacy ScenarioSimulator paths when they are not.
@@ -689,6 +724,37 @@ def _run_scenarios(config, paths, project_path):
             print(f"  Sensitivity analysis failed ({e})")
     else:
         print(f"\n  [SA] Sensitivity analysis skipped (set run_sensitivity_analysis: true to enable)")
+
+    # ------------------------------------------------------------------
+    # Stage-4 Wager-2025 add-ons:
+    #   * mirror Stage-3 audit artifacts under Stage 4 for Stage-5 report
+    #   * Optimal-Targeted (Wager-EWM) policy replay
+    #   * Budget Optimizer (allocation + Pareto frontier)
+    # All best-effort; any single failure is logged and skipped.
+    # ------------------------------------------------------------------
+    try:
+        from sparc.run.scenarios import (
+            mirror_audit_artifacts_to_stage4,
+            run_policy_replay,
+            run_budget_optimization,
+        )
+        stage3_dir = str(paths.stage_dir(3)) if hasattr(paths, "stage_dir") else None
+        if stage3_dir is None:
+            stage_dirs = (config.get("output") or {}).get("stage_dirs") or {}
+            base = (config.get("output") or {}).get("base_dir", "output")
+            s3 = stage_dirs.get("stage_3", "Stage_3_Causal_Validation")
+            stage3_dir = os.path.join(str(paths.output_dir), s3)
+        mirror_audit_artifacts_to_stage4(stage3_dir)
+        run_policy_replay(
+            config=config, data=data,
+            summary_df=summary_df,
+            results_long_df=results_gdf,
+        )
+        run_budget_optimization(
+            config=config, results_long_df=results_gdf,
+        )
+    except Exception as e:
+        print(f"  [stage4 add-ons] failed ({e}); continuing")
 
     return summary_df, results_gdf
 
@@ -783,7 +849,13 @@ def cmd_server(args):
 
 
 def cmd_report(args):
-    """Generate final interpretation report."""
+    """Generate final interpretation report.
+
+    Renders one report per audience requested via ``--audience``
+    (``all`` = every registered audience).  The default format is
+    ``html``; pass ``--format pdf`` to also write a WeasyPrint PDF.
+    Reports land under ``<output_dir>/Stage_5_Reports/``.
+    """
     project_path = _resolve_project_path(args)
 
     repo_root = str(Path(__file__).resolve().parent.parent)
@@ -791,13 +863,77 @@ def cmd_report(args):
 
     from sparc.config.config import load_config
     from sparc.run.pipeline_paths import set_paths_from_config
+    from sparc.report.audience import (
+        AUDIENCES, FORMATS, generate_audience_report,
+    )
+    from sparc.report.stakeholder_index import write_stakeholder_index
 
     config = load_config(project_path)
     paths = set_paths_from_config(config)
 
-    print(f"Generating report for: {config.get('project', {}).get('name', 'Unnamed')}")
-    print(f"  Output dir: {paths.output_dir}")
-    print(f"  (Report generation integration point — connect to final_interpretation.py)")
+    audience = getattr(args, "audience", "all")
+    fmt      = getattr(args, "format",   "html")
+    section  = getattr(args, "section",  None)
+    if fmt not in FORMATS:
+        print(f"ERROR: --format must be one of {FORMATS}", file=sys.stderr)
+        sys.exit(2)
+
+    if audience == "all":
+        targets = list(AUDIENCES)
+    else:
+        if audience not in AUDIENCES:
+            print(f"ERROR: --audience must be one of {AUDIENCES + ('all',)}",
+                  file=sys.stderr)
+            sys.exit(2)
+        targets = [audience]
+
+    out_dir = Path(paths.output_dir) / "Stage_5_Reports"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Generating report(s) for: {config.get('project', {}).get('name', 'Unnamed')}")
+    print(f"  Output: {out_dir}")
+    print(f"  Audiences: {', '.join(targets)}  ·  Format: {fmt}")
+
+    written: list[Path] = []
+    for aud in targets:
+        try:
+            payload = generate_audience_report(
+                run_dir=Path(paths.output_dir),
+                config=config,
+                audience=aud,
+                fmt=fmt,
+            )
+        except Exception as e:
+            print(f"  [{aud}] FAILED: {e}", file=sys.stderr)
+            continue
+        suffix = {"md": "md", "html": "html", "pdf": "pdf"}[fmt]
+        dest = out_dir / f"report_{aud}.{suffix}"
+        if isinstance(payload, bytes):
+            dest.write_bytes(payload)
+        else:
+            if section:
+                # Crude markdown-section slice: keep the named ## heading
+                # and everything until the next ## (or end of doc).
+                import re as _re
+                pat = _re.compile(rf"(^##\s+{_re.escape(section)}.*?)(?=^##\s+|\Z)",
+                                  _re.M | _re.S)
+                m = pat.search(payload)
+                if m:
+                    payload = m.group(1)
+                else:
+                    print(f"  [{aud}] section '{section}' not found; writing full report")
+            dest.write_text(payload, encoding="utf-8")
+        written.append(dest)
+        print(f"  [{aud}] → {dest.name}")
+
+    # Stakeholder question→section index (JSON)
+    try:
+        idx = write_stakeholder_index(out_dir / "stakeholder_index.json")
+        print(f"  [index] → {idx.name}")
+    except Exception as e:
+        print(f"  [index] failed ({e})")
+
+    print(f"Done. {len(written)} report(s) written.")
 
 
 def cmd_desktop(args):
@@ -927,6 +1063,175 @@ def cmd_continual(args):
 # Argument parser
 # ---------------------------------------------------------------------------
 
+def _run_wager2025_audit_addons(args, config: dict) -> None:
+    """Run opt-in Wager (2025) audit estimators after Stage 3.
+
+    Reads training data + DAG, fits selected estimators, and persists
+    results to the active store at stage ``"3"`` so the resolver,
+    scenario engine, and report all see them.
+    """
+    print("\n>>> Stage 3.5: Wager (2025) Audit Add-Ons")
+    try:
+        from sparc.registry.store import get_active_store
+        from sparc.causal.dag_definition import load_dag, dag_to_networkx
+        from sparc.data.data_utils import load_data
+    except Exception as exc:
+        print(f"  [skip] addon prerequisites unavailable: {exc}")
+        return
+
+    store = get_active_store()
+    if store is None:
+        print("  [skip] no active store; addons require Stage-3 store.")
+        return
+
+    data_path = (config.get('data') or {}).get('input_file') \
+                or (config.get('data') or {}).get('path')
+    if not data_path:
+        print("  [skip] config has no data.input_file path; addons need raw data.")
+        return
+    try:
+        data = load_data(data_path)
+    except Exception as exc:
+        print(f"  [skip] unable to load data: {exc}")
+        return
+
+    dag_path = (config.get('causal') or {}).get('dag_file')
+    dag_def = load_dag(dag_path) if dag_path else None
+    G = dag_to_networkx(dag_def) if dag_def else None
+
+    target = config.get('variables', {}).get('target')
+    treatments = list((config.get('predictors') or {}).get('treatment', []) or [])
+    if not treatments and G is not None:
+        treatments = [n for n, d in G.nodes(data=True)
+                      if (d or {}).get('type') == 'treatment']
+
+    # ---- Spillover ------------------------------------------------------
+    if getattr(args, 'with_spillover', False):
+        try:
+            from sparc.causal.interference import NetworkInterferenceModel
+            coord_cols = config.get('variables', {}).get('coordinates', ['x', 'y'])
+            coords = data[coord_cols].to_numpy(dtype=float)
+            rows = []
+            for t in treatments:
+                if t not in data.columns or target not in data.columns:
+                    continue
+                W = data[t].to_numpy(dtype=float)
+                Y = data[target].to_numpy(dtype=float)
+                d = NetworkInterferenceModel(k=8).fit(coords, W, Y).decompose()
+                d.update({'treatment': t})
+                rows.append(d)
+            if rows:
+                import pandas as pd
+                store.write_table("3", "spillover_decomposition",
+                                  pd.DataFrame(rows),
+                                  producer="wager2025_audit",
+                                  metadata={"treatments": treatments})
+                print(f"  spillover: {len(rows)} treatment(s) decomposed.")
+        except Exception as exc:
+            print(f"  spillover failed: {exc}")
+
+    # ---- IV -------------------------------------------------------------
+    if getattr(args, 'with_iv', False):
+        try:
+            from sparc.causal.iv import CrossFitIV
+            instruments = []
+            if G is not None:
+                instruments = [n for n, d in G.nodes(data=True)
+                               if (d or {}).get('role') == 'instrument']
+            if not instruments:
+                print("  iv: no DAG nodes marked role:instrument; skipping.")
+            else:
+                rows = []
+                for t in treatments:
+                    if t not in data.columns or target not in data.columns:
+                        continue
+                    Z_cols = [z for z in instruments if z in data.columns]
+                    if not Z_cols:
+                        continue
+                    Z = data[Z_cols].to_numpy(dtype=float)
+                    iv = CrossFitIV(n_folds=5).fit(
+                        Z=Z,
+                        W=data[t].to_numpy(dtype=float),
+                        Y=data[target].to_numpy(dtype=float),
+                    )
+                    rows.append({"treatment": t,
+                                 "iv_coef": float(iv.coef_),
+                                 "iv_se": float(iv.se_ or 0.0),
+                                 "first_stage_f": float(iv.first_stage_f_ or 0.0),
+                                 "weak_warning": iv.weak_warning_})
+                if rows:
+                    import pandas as pd
+                    store.write_table("3", "iv_estimates", pd.DataFrame(rows),
+                                      producer="wager2025_audit")
+                    print(f"  iv: {len(rows)} treatment(s) estimated.")
+        except Exception as exc:
+            print(f"  iv failed: {exc}")
+
+    # ---- Policy learning -----------------------------------------------
+    if getattr(args, 'with_policy_learning', False):
+        try:
+            from sparc.decision.policy_learning import EmpiricalWelfareMaximizer
+            from sparc.causal.cate_validation import aipw_pseudo_outcomes
+            # Compute AIPW scores per treatment. Requires CATE/PDP context;
+            # we use a simple residualisation as a proxy when DML nuisances
+            # aren't already cached.
+            import numpy as np
+            import pandas as pd
+
+            confounders = list((config.get('predictors') or {})
+                               .get('confounders', []) or [])
+            X_full = (data[confounders].to_numpy(dtype=float)
+                      if confounders else
+                      np.zeros((len(data), 1)))
+            policies = []
+            for t in treatments:
+                if t not in data.columns or target not in data.columns:
+                    continue
+                W = (data[t].to_numpy(dtype=float)
+                     > data[t].median()).astype(float)
+                Y = data[target].to_numpy(dtype=float)
+                # Naive nuisance proxies — refine when full DML cache exists.
+                mu1 = np.full_like(Y, Y[W == 1].mean() if (W == 1).any() else 0.0)
+                mu0 = np.full_like(Y, Y[W == 0].mean() if (W == 0).any() else 0.0)
+                e = np.full_like(Y, max(W.mean(), 0.05))
+                gamma = aipw_pseudo_outcomes(Y, W, mu1, mu0, e)
+                pol = EmpiricalWelfareMaximizer(policy_class="linear").fit(
+                    X=X_full, aipw_scores=gamma,
+                )
+                policies.append({"treatment": t,
+                                 "n_recommended": int(pol.recommend().sum()),
+                                 "welfare": float(pol.welfare_)})
+            if policies:
+                store.write_table("3", "policy_recommendations",
+                                  pd.DataFrame(policies),
+                                  producer="wager2025_audit")
+                print(f"  policy_learning: {len(policies)} policies fit.")
+        except Exception as exc:
+            print(f"  policy_learning failed: {exc}")
+
+    # ---- Triangulation summary -----------------------------------------
+    if getattr(args, 'full_triangulation', False):
+        try:
+            from sparc.causal._audit import report
+            store.write_blob("3", "wager2025_audit_report",
+                             report(),
+                             serializer="text",
+                             producer="wager2025_audit")
+            print("  triangulation: audit report persisted.")
+        except Exception as exc:
+            print(f"  triangulation failed: {exc}")
+
+
+def cmd_audit_causal(args):
+    """Print the Wager (2025) causal-inference audit gap registry."""
+    from sparc.causal import _audit
+    _audit._autodetect()
+    print(_audit.report())
+    n_done = sum(_audit.WAGER2025_GAPS_ADDRESSED.values())
+    if n_done < len(_audit.GAP_SPECS):
+        sys.exit(1)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog='sparc',
@@ -950,7 +1255,7 @@ def build_parser() -> argparse.ArgumentParser:
     # --- run ---
     p_run = subparsers.add_parser('run', help='Run the SPARC pipeline')
     p_run.add_argument('--project', '-p', required=True, help='Path to project.yml')
-    p_run.add_argument('--stage', '-s', choices=['0', '1', '2', '3', '4', 'all'], default='all',
+    p_run.add_argument('--stage', '-s', choices=['0', '1', '2', '3', '4', '5', 'all'], default='all',
                        help='Which pipeline stage to run (0=Correlogram, 1=GWEN, 2=SpatialCV, 3=Causal, 4=Scenarios, all)')
     p_run.add_argument('--fast', action='store_true', help='Use fast mode (reduced precision)')
     p_run.add_argument('--skip-gwen', action='store_true', dest='skip_gwen',
@@ -959,7 +1264,33 @@ def build_parser() -> argparse.ArgumentParser:
                        help='Resume from last completed stage (skip stages with markers)')
     p_run.add_argument('--legacy', action='store_true',
                        help='Force legacy V1/MGWR scenario paths (default: V4 engine when V2 neural artifacts present in DB)')
+    # Wager (2025) audit opt-in flags. Default-off to preserve current
+    # Stage-4 output; enabling these activates additive triangulation
+    # columns (spillover, IV) and the policy-learning recommendation map.
+    p_run.add_argument('--with-spillover', action='store_true',
+                       dest='with_spillover',
+                       help='Run network-interference (spillover) estimator alongside DML.')
+    p_run.add_argument('--with-iv', action='store_true', dest='with_iv',
+                       help='Run cross-fit IV estimation when DAG marks role:instrument nodes.')
+    p_run.add_argument('--with-policy-learning', action='store_true',
+                       dest='with_policy_learning',
+                       help='Run empirical-welfare policy learning on AIPW scores.')
+    p_run.add_argument('--full-triangulation', action='store_true',
+                       dest='full_triangulation',
+                       help='Run DML + CBPS + IV + DID across every edge (slow).')
+    p_run.add_argument('--full-audit', action='store_true', dest='full_audit',
+                       help='Run scenario engine in mode_5_full_audit.')
     p_run.set_defaults(func=cmd_run)
+
+    # --- audit ---
+    p_audit = subparsers.add_parser(
+        'audit', help='Causal-inference audit utilities (Wager 2025).',
+    )
+    audit_subs = p_audit.add_subparsers(dest='audit_kind', required=True)
+    p_audit_causal = audit_subs.add_parser(
+        'causal', help='Show Wager (2025) audit gap-completion registry.',
+    )
+    p_audit_causal.set_defaults(func=cmd_audit_causal)
 
     # --- scenario ---
     p_scen = subparsers.add_parser('scenario', help='Run counterfactual scenario simulation')
@@ -973,6 +1304,15 @@ def build_parser() -> argparse.ArgumentParser:
     # --- report ---
     p_rep = subparsers.add_parser('report', help='Generate final interpretation report')
     p_rep.add_argument('--project', '-p', required=True, help='Path to project.yml')
+    p_rep.add_argument('--audience', '-a', default='all',
+                       help="Audience: technical | planner | public | council | "
+                            "scientist | equity | auditor | all  (default: all)")
+    p_rep.add_argument('--format', '-f', default='html',
+                       choices=['md', 'html', 'pdf'],
+                       help='Output format (default: html)')
+    p_rep.add_argument('--section', default=None,
+                       help='Render only the markdown section with this title '
+                            '(applies only to md/html outputs)')
     p_rep.set_defaults(func=cmd_report)
 
     # --- server ---

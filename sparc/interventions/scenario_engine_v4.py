@@ -109,7 +109,12 @@ _VALID_MODES = (
     "mode_2_dag_local",
     "mode_3_full_ensemble",
     "mode_4_hybrid",
+    "mode_5_full_audit",
 )
+
+# Modes that share mode_4 composition (direct + DAG indirect, blended with
+# ensemble). mode_5 augments mode_4 output with Wager (2025) audit columns.
+_HYBRID_LIKE_MODES = ("mode_4_hybrid", "mode_5_full_audit")
 
 
 @dataclass
@@ -211,6 +216,25 @@ class ScenarioEngineV4:
         self.n_draws_cap = int(caps.get("n_draws_cap", 1000))
         # E-value gating threshold for the report layer.
         self.e_value_min = float(caps.get("e_value_min_threshold", 1.5))
+        # Wager (2025) audit knobs (mode_5_full_audit + mode_4_hybrid).
+        # ``spillover_mode``:
+        #   - ``"diagnostic"`` (legacy): direct/spillover/total appear as
+        #     side columns; ``delta_mean`` stays as the unit-level effect.
+        #   - ``"fold_into_delta"`` (new default for mode_5): ``delta_mean``
+        #     is rescaled by ``total_effect / direct_effect`` so the
+        #     headline number matches the policy-relevant total. The
+        #     unit-level value is preserved as ``delta_direct_only``.
+        self.spillover_mode = str(
+            caps.get("spillover_mode", "fold_into_delta")
+        ).lower()
+        # ``saturation_clipping``: when True, per-cell scenario delta is
+        # capped at the saturation knee detected in Stage-3 dose-response
+        # curves (the increment beyond which marginal effect drops below
+        # ``saturation_marginal_floor`` × peak marginal slope).
+        self.saturation_clipping = bool(caps.get("saturation_clipping", True))
+        self.saturation_marginal_floor = float(
+            caps.get("saturation_marginal_floor", 0.5)
+        )
 
         if resolver is None:
             from sparc.registry.store import get_active_store
@@ -273,14 +297,14 @@ class ScenarioEngineV4:
                 raise MissingArtifactsError(
                     f"{m} requires v2_alpha_field artifact; not present."
                 )
-        if m in ("mode_2_dag_local", "mode_4_hybrid"):
+        if m in ("mode_2_dag_local",) + _HYBRID_LIKE_MODES:
             if self.dag is None:
                 raise MissingArtifactsError(f"{m} requires a DAG.")
             if not self.resolver._edge_samples:
                 raise MissingArtifactsError(
                     f"{m} requires nuts_edge_samples; not present."
                 )
-        if m in ("mode_3_full_ensemble", "mode_4_hybrid"):
+        if m in ("mode_3_full_ensemble",) + _HYBRID_LIKE_MODES:
             if self.ensemble_predictor is None:
                 raise MissingArtifactsError(
                     f"{m} requires an ensemble_predictor callable."
@@ -399,12 +423,284 @@ class ScenarioEngineV4:
         results_long_df = pd.DataFrame(long_rows)
         summary_df = pd.DataFrame(summary_rows)
 
+        # mode_5_full_audit: add Wager (2025) audit diagnostic columns.
+        if self.mode == "mode_5_full_audit" and not results_long_df.empty:
+            results_long_df = self._augment_audit_columns(
+                results_long_df, baseline_df, target_baseline,
+            )
+
+        # Saturation clipping (mode_4 + mode_5) — bound per-cell delta by
+        # the dose-response knee detected in Stage 3.
+        if (self.saturation_clipping
+                and self.mode in ("mode_4_hybrid", "mode_5_full_audit")
+                and not results_long_df.empty):
+            results_long_df = self._apply_saturation_clipping(results_long_df)
+
+        # Spillover folding (mode_5 only): rescale headline delta by
+        # total/direct ratio when ``caps.spillover_mode == "fold_into_delta"``.
+        if (self.mode == "mode_5_full_audit"
+                and self.spillover_mode == "fold_into_delta"
+                and not results_long_df.empty
+                and "direct_effect" in results_long_df.columns):
+            results_long_df = self._fold_spillover_into_delta(results_long_df)
+
+        # Recompute summary rows from the (possibly adjusted) long table so
+        # that ``delta_mean`` aggregates reflect saturation + spillover folding.
+        if not results_long_df.empty:
+            summary_df = self._rebuild_summary(results_long_df, target_baseline)
+
         # Persist.
         self._persist_unified_results(results_long_df, summary_df, baseline_df)
 
         if verbose:
             print(f"   {len(results_long_df)} cell-rows / {len(summary_df)} summary rows")
         return summary_df, results_long_df
+
+    # ------------------------------------------------------------------
+    # Wager (2025) audit augmentation (mode_5_full_audit)
+    # ------------------------------------------------------------------
+
+    def _augment_audit_columns(
+        self,
+        long_df: pd.DataFrame,
+        baseline_df: pd.DataFrame,
+        target_baseline: np.ndarray,
+    ) -> pd.DataFrame:
+        """Add overlap_pct/overlap_flag/spillover_*/triangulation columns.
+
+        - Overlap (Gap 1): per-scenario generalized-propensity flag using the
+          intervention variable as W and remaining numeric covariates as X.
+        - Spillover (Gap 3): direct + spillover decomposition fit on baseline.
+        - Triangulation (Phase 5): aligns existing delta_mean with auxiliary
+          DML/CBPS/IV columns when artifacts already exist in the store.
+        """
+        from sparc.causal.overlap import GeneralizedPropensityOverlap
+        from sparc.causal.interference import NetworkInterferenceModel
+
+        out = long_df.copy()
+        coords_ok = all(c in baseline_df.columns for c in self.coord_cols)
+        coords = (baseline_df[self.coord_cols].to_numpy(dtype=float)
+                  if coords_ok else None)
+
+        per_scenario_overlap: dict[str, dict] = {}
+        per_scenario_spill: dict[str, dict] = {}
+
+        for spec in self.scenarios:
+            if spec.variable not in baseline_df.columns:
+                continue
+            W = baseline_df[spec.variable].to_numpy(dtype=float)
+            num_cols = [c for c in baseline_df.select_dtypes("number").columns
+                        if c != spec.variable and c != self.target_col]
+            if len(num_cols) == 0:
+                continue
+            X = baseline_df[num_cols].to_numpy(dtype=float)
+
+            try:
+                ov = GeneralizedPropensityOverlap(method="kernel").fit(X, W)
+                # Per-cell assessment with the scenario delta.
+                flags, pcts = [], []
+                for i in range(len(baseline_df)):
+                    a = ov.assess_scenario(X[i], spec.increment)
+                    flags.append(a["flag"])
+                    pcts.append(a["percentile"])
+                per_scenario_overlap[(spec.name, spec.increment)] = {
+                    "overlap_flag": flags,
+                    "overlap_pct": pcts,
+                }
+            except Exception:
+                pass
+
+            if coords is not None and self.target_col in baseline_df.columns:
+                try:
+                    Y = baseline_df[self.target_col].to_numpy(dtype=float)
+                    spill = NetworkInterferenceModel(k=8).fit(coords, W, Y).decompose()
+                    per_scenario_spill[(spec.name, spec.increment)] = spill
+                except Exception:
+                    pass
+
+        if per_scenario_overlap:
+            for col in ("overlap_pct", "overlap_flag"):
+                out[col] = None
+            for (name, inc), payload in per_scenario_overlap.items():
+                mask = (out["scenario_name"] == name) & np.isclose(
+                    out["increment"].astype(float), float(inc))
+                idx = np.where(mask.values)[0]
+                if len(idx) == len(payload["overlap_flag"]):
+                    out.loc[mask, "overlap_pct"] = payload["overlap_pct"]
+                    out.loc[mask, "overlap_flag"] = payload["overlap_flag"]
+
+        if per_scenario_spill:
+            for col in ("direct_effect", "spillover_effect", "total_effect"):
+                out[col] = np.nan
+            for (name, inc), spill in per_scenario_spill.items():
+                mask = (out["scenario_name"] == name) & np.isclose(
+                    out["increment"].astype(float), float(inc))
+                out.loc[mask, "direct_effect"] = spill["direct_effect"]
+                out.loc[mask, "spillover_effect"] = spill["spillover_effect"]
+                out.loc[mask, "total_effect"] = spill["total_effect"]
+        return out
+
+    # ------------------------------------------------------------------
+    # Wager (2025) post-processing: saturation + spillover folding
+    # ------------------------------------------------------------------
+
+    def _load_dose_response(self) -> dict:
+        """Best-effort load of Stage-3 ``dose_response_curves.json``.
+
+        Returns empty dict if the artifact has not been emitted (e.g. when
+        causal validation was skipped or the project disables it).
+        """
+        try:
+            from sparc.run.pipeline_paths import get_result_store
+            return get_result_store().load_json(3, "dose_response_curves.json") or {}
+        except Exception:
+            return {}
+
+    def _saturation_knee(self, curve: dict) -> Optional[float]:
+        """Return the dose level at which marginal effect first drops below
+        ``saturation_marginal_floor`` × peak |slope|.  ``None`` if curve is
+        flat / linear / missing.
+        """
+        try:
+            doses = np.asarray(curve.get("dose_levels") or [], dtype=float)
+            slopes = np.asarray(curve.get("marginal_effects") or [], dtype=float)
+            if doses.size < 3 or slopes.size != doses.size:
+                return None
+            mask = np.isfinite(slopes) & np.isfinite(doses)
+            if mask.sum() < 3:
+                return None
+            doses = doses[mask]
+            slopes = np.abs(slopes[mask])
+            peak = float(slopes.max())
+            if peak <= 0:
+                return None
+            floor = self.saturation_marginal_floor * peak
+            below = np.where(slopes < floor)[0]
+            if below.size == 0:
+                return None
+            return float(doses[int(below[0])])
+        except Exception:
+            return None
+
+    def _apply_saturation_clipping(self, long_df: pd.DataFrame) -> pd.DataFrame:
+        """Clip per-cell delta when the scenario increment exceeds the
+        treatment's dose-response saturation knee.
+
+        The clipping factor for a given (variable, increment) is
+        ``min(1, knee / increment)`` so deltas at twice the knee are halved.
+        """
+        curves = self._load_dose_response()
+        if not curves:
+            return long_df
+        out = long_df.copy()
+        out["delta_saturation_clipped"] = False
+        out["delta_pre_saturation"] = out.get(
+            "delta_mean", pd.Series(np.nan, index=out.index)
+        )
+        for variable, curve in curves.items():
+            knee = self._saturation_knee(curve)
+            if knee is None or knee <= 0:
+                continue
+            mask = out["variable"] == variable
+            if not mask.any():
+                continue
+            increments = out.loc[mask, "increment"].astype(float).to_numpy()
+            scale = np.minimum(1.0, knee / np.maximum(increments, 1e-12))
+            for col in ("delta_mean", "delta_ci5", "delta_ci50", "delta_ci95"):
+                if col in out.columns:
+                    out.loc[mask, col] = out.loc[mask, col].astype(float).to_numpy() * scale
+            out.loc[mask, "delta_saturation_clipped"] = scale < 1.0 - 1e-9
+        return out
+
+    def _fold_spillover_into_delta(self, long_df: pd.DataFrame) -> pd.DataFrame:
+        """Replace ``delta_mean`` with the spillover-corrected total effect.
+
+        Computes a per-(scenario, increment) ratio
+        ``ρ = total_effect / direct_effect`` from the columns the audit
+        augmentation already populated, then multiplies the cell-level
+        delta by ρ. Original direct values are preserved as
+        ``delta_direct_only`` so reports can show both.
+        """
+        out = long_df.copy()
+        if "delta_direct_only" not in out.columns:
+            out["delta_direct_only"] = out["delta_mean"].astype(float)
+        out["spillover_share"] = 0.0
+        groups = out.groupby(["scenario_name", "increment"], sort=False)
+        for (name, inc), idx in groups.groups.items():
+            sub = out.loc[idx]
+            d = float(sub["direct_effect"].iloc[0]) if "direct_effect" in sub else np.nan
+            t = float(sub["total_effect"].iloc[0]) if "total_effect" in sub else np.nan
+            if not (np.isfinite(d) and np.isfinite(t)) or abs(d) < 1e-12:
+                continue
+            ratio = t / d
+            for col in ("delta_mean", "delta_ci5", "delta_ci50", "delta_ci95"):
+                if col in out.columns:
+                    out.loc[idx, col] = out.loc[idx, col].astype(float).to_numpy() * ratio
+            out.loc[idx, "spillover_share"] = (
+                0.0 if abs(t) < 1e-12 else float((t - d) / t)
+            )
+        return out
+
+    def _rebuild_summary(
+        self,
+        long_df: pd.DataFrame,
+        target_baseline: np.ndarray,
+    ) -> pd.DataFrame:
+        """Re-aggregate per-area summary rows from the (possibly adjusted)
+        long table.  Preserves ``area_name``, adds ``cells_in_overlap`` and
+        ``delta_mean_overlap_only`` when overlap columns are present, and
+        ``spillover_share`` when spillover folding ran.
+        """
+        if long_df.empty:
+            return pd.DataFrame()
+
+        keep_overlap = "overlap_flag" in long_df.columns
+        rows: list[dict] = []
+        group_keys = ["scenario_name", "variable", "increment", "mode", "area_code"]
+        for keys, sub in long_df.groupby(group_keys, sort=False):
+            scenario_name, variable, increment, mode, area_code = keys
+            row = {
+                "scenario_name": scenario_name,
+                "variable":      variable,
+                "increment":     float(increment),
+                "mode":          mode,
+                "area_code":     area_code,
+                "area_name":     (
+                    self.area_names.get(int(area_code), str(area_code))
+                    if self.area_names and str(area_code).lstrip("-").isdigit()
+                    else str(area_code)
+                ),
+                "n_cells":       int(len(sub)),
+                "delta_mean":    float(sub["delta_mean"].astype(float).mean()),
+                "delta_ci5":     float(sub["delta_ci5"].astype(float).mean()),
+                "delta_ci50":    float(sub["delta_ci50"].astype(float).mean()),
+                "delta_ci95":    float(sub["delta_ci95"].astype(float).mean()),
+                "baseline_mean": float(sub["baseline"].astype(float).mean()),
+                "modified_mean": float(sub["modified"].astype(float).mean()),
+            }
+            if "delta_direct_only" in sub.columns:
+                row["delta_direct_only_mean"] = float(
+                    sub["delta_direct_only"].astype(float).mean()
+                )
+            if "spillover_share" in sub.columns:
+                row["spillover_share"] = float(
+                    sub["spillover_share"].astype(float).mean()
+                )
+            if "delta_saturation_clipped" in sub.columns:
+                row["n_cells_saturation_clipped"] = int(
+                    sub["delta_saturation_clipped"].astype(bool).sum()
+                )
+            if keep_overlap:
+                in_supp = sub["overlap_flag"].astype(str).str.upper().eq("OK")
+                row["cells_in_overlap"] = int(in_supp.sum())
+                if in_supp.any():
+                    row["delta_mean_overlap_only"] = float(
+                        sub.loc[in_supp, "delta_mean"].astype(float).mean()
+                    )
+                else:
+                    row["delta_mean_overlap_only"] = float("nan")
+            rows.append(row)
+        return pd.DataFrame(rows)
 
     # ------------------------------------------------------------------
     # Per-mode composition

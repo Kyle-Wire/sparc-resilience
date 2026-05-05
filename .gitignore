@@ -21,6 +21,9 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+output/
+my_project/
+tests/
 
 # Environments
 .env
