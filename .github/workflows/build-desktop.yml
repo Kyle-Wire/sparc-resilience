@@ -2,10 +2,7 @@ name: Build Desktop App
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
-  pull_request:
-    branches: [main]
   workflow_dispatch:       # manual trigger from GitHub UI
 
 env:
