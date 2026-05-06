@@ -1,5 +1,8 @@
 mod sidecar;
 
+use std::sync::Mutex;
+use tauri::RunEvent;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -7,6 +10,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .manage(sidecar::SidecarHandle(Mutex::new(None)))
         .setup(|app| {
             let handle = app.handle().clone();
             // Spawn the Python server in the background
@@ -17,6 +21,11 @@ pub fn run() {
             });
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running SPARC desktop app");
+        .build(tauri::generate_context!())
+        .expect("error while building SPARC desktop app")
+        .run(|app, event| {
+            if let RunEvent::ExitRequested { .. } | RunEvent::Exit = event {
+                sidecar::kill_server(app);
+            }
+        });
 }

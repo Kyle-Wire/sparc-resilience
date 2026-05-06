@@ -729,6 +729,7 @@ def run_nuts(
         ess_floor = max(100.0, min(400.0, 0.25 * n_samples))
         conv = (rh < 1.05) & (es > ess_floor)
         converged[b.name] = conv
+        _first_fail_logged = False
         for d in range(b.dim):
             if not conv[d]:
                 reasons = []
@@ -736,10 +737,17 @@ def run_nuts(
                     reasons.append(f"R̂={rh[d]:.3f}≥1.05")
                 if es[d] <= ess_floor:
                     reasons.append(f"ESS={es[d]:.0f}≤{ess_floor:.0f}")
-                logger.warning(
-                    "NUTS convergence FAILED for %s[%d]: %s",
-                    b.name, d, ", ".join(reasons),
-                )
+                if not _first_fail_logged:
+                    logger.warning(
+                        "NUTS convergence FAILED for %s[%d]: %s",
+                        b.name, d, ", ".join(reasons),
+                    )
+                    _first_fail_logged = True
+                else:
+                    logger.debug(
+                        "NUTS convergence FAILED for %s[%d]: %s",
+                        b.name, d, ", ".join(reasons),
+                    )
             else:
                 logger.info(
                     "NUTS converged for %s[%d]: R̂=%.3f, ESS=%.0f",

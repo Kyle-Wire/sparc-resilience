@@ -1,7 +1,12 @@
 use std::fs::OpenOptions;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
+
+/// Holds the child handle of the spawned Python sidecar so it can be
+/// killed when the desktop app exits.
+pub struct SidecarHandle(pub Mutex<Option<Child>>);
 
 // ─── Platform-specific helpers ───────────────────────────────────────────────
 
@@ -228,8 +233,11 @@ pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
                 .spawn();
 
             match spawn_result {
-                Ok(_child) => {
+                Ok(child) => {
                     println!("Sidecar server started on port {port}");
+                    if let Some(state) = app.try_state::<SidecarHandle>() {
+                        *state.0.lock().unwrap() = Some(child);
+                    }
                     return Ok(());
                 }
                 Err(e) => {
@@ -267,8 +275,11 @@ pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
     };
 
     match cmd.spawn() {
-        Ok(_child) => {
+        Ok(child) => {
             println!("Server started on port {port} via {python}");
+            if let Some(state) = app.try_state::<SidecarHandle>() {
+                *state.0.lock().unwrap() = Some(child);
+            }
             return Ok(());
         }
         Err(e) => {
@@ -281,5 +292,16 @@ pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
          Please run 'python -m sparc server --port {port}' manually."
     );
     Ok(())
+}
+
+/// Terminate the sidecar process if it is still running. Called on app exit.
+pub fn kill_server(app: &AppHandle) {
+    if let Some(state) = app.try_state::<SidecarHandle>() {
+        if let Some(mut child) = state.0.lock().unwrap().take() {
+            let _ = child.kill();
+            let _ = child.wait();
+            println!("Sidecar server terminated");
+        }
+    }
 }
 

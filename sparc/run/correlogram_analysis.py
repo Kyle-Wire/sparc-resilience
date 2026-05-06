@@ -196,7 +196,7 @@ class CorrelogramSpatialAnalyzer:
             if len(lag_dist_arr) >= 4 and len(lag_dist_arr) == len(morans_arr):
                 fit_res = fit_matern(
                     lag_dist_arr, morans_arr,
-                    method="bayes", n_samples=400, n_warmup=300, n_chains=2, seed=42,
+                    method="bayes", n_samples=2000, n_warmup=1000, n_chains=2, seed=42,
                 )
                 matern_fit_payload = fit_res.to_payload()
                 matern_fit_payload['variable'] = variable_name
@@ -231,7 +231,7 @@ class CorrelogramSpatialAnalyzer:
                 dir_corr['morans_i'],
                 n_pairs=dir_corr['n_pairs'],
                 method="bayes",
-                n_samples=300, n_warmup=250, n_chains=2, seed=42,
+                n_samples=2000, n_warmup=1000, n_chains=2, seed=42,
                 kappa_init=kappa_init_aniso,
             )
             anisotropy_payload = aniso_res.to_payload()
@@ -526,6 +526,7 @@ def main(fast_mode=False):
         spatial_cv_cfg = config.get('models', {}).get('spatial_cv', {})
     block_size_source = spatial_cv_cfg.get('block_size_source', 'correlogram')
     user_block_size = spatial_cv_cfg.get('block_size')
+    effective_range_matrix_payload = None  # initialised here; assigned in Phase 4 below
 
     if block_size_source == 'user' and user_block_size is not None and user_block_size > 0:
         optimal_cv_block_size = float(user_block_size)

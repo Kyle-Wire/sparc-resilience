@@ -70,6 +70,18 @@ jobs:
 
       # ── Build + publish GitHub Release ──────────────────────────
       # Tag push → public release. Manual dispatch → draft release.
+      - name: Verify signing key present
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY secret is empty or missing — updater .sig files will NOT be generated and latest.json will not be created."
+            exit 1
+          else
+            echo "Signing key present (length: ${#TAURI_SIGNING_PRIVATE_KEY})"
+          fi
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
       - name: Build and release
         uses: tauri-apps/tauri-action@v0
         env:
