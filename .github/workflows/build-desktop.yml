@@ -66,21 +66,9 @@ jobs:
         with:
           workspaces: sparc-desktop/src-tauri
 
-      # ── Build only (PR / push to main — no release) ─────────────
-      - name: Build Tauri app
-        if: "!startsWith(github.ref, 'refs/tags/')"
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          projectPath: sparc-desktop
-          args: --target ${{ matrix.target }}
-
-      # ── Build + publish GitHub Release (tag push only) ──────────
+      # ── Build + publish GitHub Release ──────────────────────────
+      # Tag push → public release. Manual dispatch → draft release.
       - name: Build and release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -88,10 +76,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: sparc-desktop
-          tagName: ${{ github.ref_name }}
-          releaseName: "SPARC Labs ${{ github.ref_name }}"
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v-dev-build' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('SPARC Labs {0}', github.ref_name) || 'SPARC Labs (dev build)' }}
           releaseBody: "Download the installer for your platform below."
-          releaseDraft: false
+          releaseDraft: ${{ !startsWith(github.ref, 'refs/tags/') }}
           prerelease: false
           includeUpdaterJson: true
           args: --target ${{ matrix.target }}
