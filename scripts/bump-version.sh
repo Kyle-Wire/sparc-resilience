@@ -29,14 +29,14 @@ rm "$ROOT/sparc-desktop/package.json.bak"
 
 echo "Bumped all versions to $VERSION"
 
-# Commit + tag
+# Commit + tag (skip commit if nothing changed — e.g. re-tagging same version)
 cd "$ROOT"
 git add \
   sparc-desktop/src-tauri/tauri.conf.json \
   sparc-desktop/src-tauri/Cargo.toml \
   sparc-desktop/package.json
 
-git commit -m "chore: bump version to $VERSION"
+git diff --cached --quiet || git commit -m "chore: bump version to $VERSION"
 git tag "v$VERSION"
 
 echo ""
