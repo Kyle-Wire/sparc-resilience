@@ -213,16 +213,36 @@ class CausalValidator:
             data[cols], node_names=cols,
         )
 
-        # Run requested algorithms
-        if 'pc_stable' in methods:
-            validator.run_pc_stable(alpha=alpha)
-        if 'lingam' in methods:
-            validator.run_lingam()
-        if 'ges' in methods:
-            validator.run_ges()
+        # Run requested algorithms. A failure in any single discovery
+        # method (e.g. an upstream causal-learn / numpy incompatibility for
+        # GES) must not abort Stage 3 -- log a warning, record the skip,
+        # and continue with the remaining methods.
+        methods_skipped: Dict[str, str] = {}
 
-        # Consensus DAG
-        validator.consensus_dag(min_votes=consensus_threshold)
+        def _safe_run(name: str, fn) -> None:
+            try:
+                fn()
+            except Exception as exc:  # noqa: BLE001 -- defensive boundary
+                msg = f"{type(exc).__name__}: {exc}"
+                methods_skipped[name] = msg
+                print(f"    [WARN] Causal discovery method '{name}' failed -- skipping. {msg}")
+
+        if 'pc_stable' in methods:
+            _safe_run('pc_stable', lambda: validator.run_pc_stable(alpha=alpha))
+        if 'lingam' in methods:
+            _safe_run('lingam', validator.run_lingam)
+        if 'ges' in methods:
+            _safe_run('ges', validator.run_ges)
+
+        if not validator.learned_graphs:
+            print("    [WARN] All causal discovery methods failed -- skipping consensus / comparison.")
+            return
+
+        # Consensus DAG (requires at least one successful method)
+        try:
+            validator.consensus_dag(min_votes=consensus_threshold)
+        except Exception as exc:  # noqa: BLE001
+            print(f"    [WARN] Consensus DAG construction failed: {exc}")
 
         # Compare with expert
         if disc_cfg.get('compare_expert', True) and self.graph is not None:
@@ -266,6 +286,8 @@ class CausalValidator:
         # Inject d-separation results into the report dict
         if self.graph is not None and dsep_results:
             self.discovery_report['dseparation'] = dsep_results
+        if methods_skipped:
+            self.discovery_report['methods_skipped'] = methods_skipped
         ensure_dir(output_dir)
         try:
             from sparc.run.pipeline_paths import get_result_store

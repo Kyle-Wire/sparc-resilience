@@ -705,6 +705,17 @@ def _execute_stage(
 
     paths = PipelinePaths.from_config(config)
 
+    # Defensive: ensure the process-global "active" registry points at this
+    # run's RunRegistry so pipeline writers (`get_active_store()`) can persist
+    # artifacts to artifacts.db. `_attach_registry()` in app.py also sets
+    # this at /project/load time; we re-set here in case anything cleared it.
+    if state.registry is not None:
+        try:
+            from sparc.registry.run_registry import set_active_registry
+            set_active_registry(state.registry)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: could not (re)set active registry: {exc}")
+
     if stage == 0:
         print(">>> Correlogram Analysis")
         from sparc.run.correlogram_analysis import main as run_correlogram
@@ -780,3 +791,23 @@ def _execute_stage(
             summary_df, results_gdf = sim.run(verbose=True)
 
         state.store_result(4, {"summary": summary_df, "spatial": results_gdf})
+
+    # Post-stage: scan output dirs for any artifacts produced by legacy
+    # disk-fallback writers and register them so the desktop's /results/*
+    # endpoints see them. Mirrors `__main__.py::_rescan_registry`.
+    if state.registry is not None:
+        try:
+            stage_label = str(stage)
+            try:
+                state.registry.start_stage(stage_label)
+            except Exception:  # noqa: BLE001
+                pass
+            n = state.registry.migrate_from_disk(paths)
+            try:
+                state.registry.complete_stage(stage_label, status="complete")
+            except Exception:  # noqa: BLE001
+                pass
+            if n:
+                print(f"[registry] stage {stage_label}: +{n} artifact(s) imported from disk")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[registry] post-stage rescan failed: {exc}")

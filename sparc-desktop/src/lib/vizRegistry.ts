@@ -42,14 +42,14 @@ export interface VizEntry {
 }
 
 export const VIZ_REGISTRY: VizEntry[] = [
-  // Stage 0 — data summaries
+  // Stage 0 — data summaries + correlogram
   { stage: "0", artifactId: "data", kind: "data_histogram", endpoint: "/data/histogram", label: "Data histogram" },
   { stage: "0", artifactId: "data_summary", kind: "data_histogram", endpoint: "/data/histogram", label: "Data summary" },
   { stage: "0", artifactId: "data_histogram_bins", kind: "data_histogram", endpoint: "/data/histogram", label: "Data histogram bins" },
+  { stage: "0", artifactId: "correlogram_results", kind: "correlogram", endpoint: "/results/correlogram", label: "Correlogram" },
   // Stage 1 — causal discovery
   { stage: "1", artifactId: "dag", kind: "dag", endpoint: "/dag", label: "DAG" },
   { stage: "1", artifactId: "edge_inclusion_probs", kind: "dag", endpoint: "/dag", label: "Edge inclusion probabilities" },
-  { stage: "1", artifactId: "correlogram", kind: "correlogram", endpoint: "/results/correlogram", label: "Correlogram" },
   // Stage 2 — spatial CV / CATE / PDP
   { stage: "2", artifactId: "predictions", kind: "predictions_map", endpoint: "/results/spatial_cv/predictions", label: "Predictions map" },
   { stage: "2", artifactId: "cate", kind: "cate", endpoint: "/results/causal/cate_map", label: "CATE map" },

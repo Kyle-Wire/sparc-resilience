@@ -159,11 +159,22 @@ class CausalDiscoveryValidator:
         """
         from causallearn.search.ScoreBased.GES import ges
 
-        X = self.data.values
+        # Ensure float64 contiguous array. causallearn's BIC scorer assumes
+        # float input and (under numpy >= 2.0) breaks if any intermediate
+        # ``float(arr)`` call sees a non-0-d array. Coercing here avoids the
+        # most common trigger.
+        X = np.ascontiguousarray(self.data.values, dtype=np.float64)
+
+        # Pass parameters dict explicitly. Some causallearn versions look up
+        # ``parameters['lambda_value']`` unconditionally and crash on KeyError
+        # when omitted.
+        parameters = {'lambda_value': 2.0}
+
         record = ges(
             X,
             score_func=score_func,
             maxP=None,
+            parameters=parameters,
         )
 
         G = self._clearn_to_networkx(record['G'], self.node_names)

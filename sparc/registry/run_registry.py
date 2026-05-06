@@ -955,9 +955,22 @@ _FORMAT_FROM_SUFFIX: dict[str, ArtifactFormat] = {
 }
 
 
-def set_active_registry(registry: Optional["RunRegistry"]) -> None:
-    """Install (or clear) the process-wide active registry."""
+def set_active_registry(
+    registry: Optional["RunRegistry"], *, force: bool = False
+) -> None:
+    """Install (or clear) the process-wide active registry.
+
+    The active registry is normally installed once per loaded project
+    and remains set for the lifetime of that project so concurrent
+    pipeline writers can persist artifacts. To prevent stray request
+    handlers from accidentally clearing it via ``set_active_registry(None)``
+    while a real registry is attached, ``None`` is treated as a no-op
+    unless ``force=True`` is passed (used by load-failure / shutdown
+    paths that genuinely need to detach).
+    """
     global _ACTIVE_REGISTRY
+    if registry is None and not force and _ACTIVE_REGISTRY is not None:
+        return
     _ACTIVE_REGISTRY = registry
 
 

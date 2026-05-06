@@ -232,6 +232,54 @@ def _peak_stat(C_block: np.ndarray) -> float:
     return float(np.max(np.abs(C_block))) if C_block.size else 0.0
 
 
+def _cross_C_from_indices(
+    Z2: np.ndarray,
+    L_idx: np.ndarray,
+    K_idx: np.ndarray,
+    n_lags: int,
+    n_angle_bins: int,
+) -> np.ndarray:
+    """Fast 2-variable cross-correlogram tensor given precomputed bin indices.
+
+    Computes the (L, K, 2, 2) tensor without ever rebuilding the O(N²)
+    distance matrix or the per-(L,K) boolean masks at full resolution.
+
+    Parameters
+    ----------
+    Z2 : (N, 2) standardised values for variables (i, j).
+    L_idx, K_idx : (N, N) integer index matrices from :func:`_bin_indices`.
+        ``L_idx == n_lags`` flags pairs to skip.
+    """
+    L = n_lags
+    K = n_angle_bins
+    C = np.zeros((L, K, 2, 2), dtype=np.float64)
+    n_pairs = np.zeros((L, K), dtype=np.int64)
+    # Build a single (L, K)-aware composite index, masking out skipped pairs.
+    for li in range(L):
+        # Pre-filter rows that contribute to this lag bin to shrink the mask.
+        lag_mask = (L_idx == li)
+        if not lag_mask.any():
+            continue
+        for ki in range(K):
+            mask = lag_mask & (K_idx == ki)
+            count = int(mask.sum())
+            n_pairs[li, ki] = count
+            if count == 0:
+                continue
+            C[li, ki] = (Z2.T @ mask.astype(np.float64) @ Z2) / count
+    return C
+
+
+def _decompose_sym_antisym_array(C: np.ndarray, n_angle_bins: int) -> tuple[np.ndarray, np.ndarray]:
+    """Sym/antisym split for a raw (L, K, V, V) array (no dataclass wrapper)."""
+    if n_angle_bins == 1:
+        return C.copy(), np.zeros_like(C)
+    half = n_angle_bins // 2
+    opp = (np.arange(n_angle_bins) + half) % n_angle_bins
+    C_opp = C[:, opp, :, :]
+    return 0.5 * (C + C_opp), 0.5 * (C - C_opp)
+
+
 def _permute_pair(
     i: int,
     j: int,
@@ -245,25 +293,46 @@ def _permute_pair(
     seed: int,
     peak_sym_obs: float,
     peak_anti_obs: float,
+    L_idx: np.ndarray | None = None,
+    K_idx: np.ndarray | None = None,
 ) -> tuple[tuple[int, int], dict]:
     """Worker for :func:`permutation_pvalues`: run ``n_perm`` shuffles of
     variable ``j`` against variable ``i`` and count peaks ≥ observed.
+
+    When ``L_idx`` / ``K_idx`` are supplied (preferred path), the worker
+    reuses precomputed spatial bin assignments and avoids the O(N²)
+    distance / mask reconstruction that otherwise dominates memory.
     Pulled out to a top-level function so it pickles cleanly under
     ``joblib`` / ``multiprocessing`` backends.
     """
     rng = np.random.default_rng(seed)
-    vij = values_matrix[:, [i, j]].copy()
+    vij = values_matrix[:, [i, j]].astype(np.float64, copy=True)
+    # Drop NaN rows once (must keep coords / indices aligned).
+    valid = ~np.isnan(vij).any(axis=1)
+    if L_idx is not None and K_idx is not None and not valid.all():
+        vij = vij[valid]
+        L_idx = L_idx[np.ix_(valid, valid)]
+        K_idx = K_idx[np.ix_(valid, valid)]
     n_ge_sym = 0
     n_ge_anti = 0
+    use_fast = L_idx is not None and K_idx is not None
     for _ in range(n_perm):
         vij_perm = vij.copy()
         rng.shuffle(vij_perm[:, 1])
-        tperm = compute_cross_correlogram(
-            coords, vij_perm,
-            max_distance=max_distance, n_lags=n_lags,
-            n_angle_bins=n_angle_bins,
-        )
-        csp, cap = decompose_sym_antisym(tperm)
+        if use_fast:
+            mu = vij_perm.mean(axis=0, keepdims=True)
+            sd = vij_perm.std(axis=0, keepdims=True)
+            sd = np.where(sd > 0, sd, 1.0)
+            Z2 = (vij_perm - mu) / sd
+            C = _cross_C_from_indices(Z2, L_idx, K_idx, n_lags, n_angle_bins)
+            csp, cap = _decompose_sym_antisym_array(C, n_angle_bins)
+        else:
+            tperm = compute_cross_correlogram(
+                coords, vij_perm,
+                max_distance=max_distance, n_lags=n_lags,
+                n_angle_bins=n_angle_bins,
+            )
+            csp, cap = decompose_sym_antisym(tperm)
         # In the 2-var subset the (i, j) slice is at index (0, 1)
         if _peak_stat(csp[:, :, 0, 1]) >= peak_sym_obs:
             n_ge_sym += 1
@@ -276,6 +345,28 @@ def _permute_pair(
         "p_anti": (n_ge_anti + 1) / (n_perm + 1),
         "n_perm": int(n_perm),
     }
+
+
+def _ram_capped_n_jobs(n_jobs: int, n_points: int, n_lags: int, n_angle_bins: int) -> int:
+    """Cap ``n_jobs`` so peak per-worker memory fits in available RAM.
+
+    Per-worker peak is dominated by the (N, N) bool / float bin masks
+    constructed inside :func:`_cross_C_from_indices`. Empirically each
+    worker holds ~3 such matrices live (L_idx + K_idx + transient mask).
+    """
+    if n_jobs <= 1:
+        return max(1, n_jobs)
+    try:
+        import psutil  # type: ignore
+        avail_bytes = int(psutil.virtual_memory().available)
+    except Exception:
+        return n_jobs
+    # 8 bytes/int64 mask + small overhead; use 4× safety factor.
+    per_worker_bytes = 4 * 8 * n_points * n_points
+    if per_worker_bytes <= 0:
+        return n_jobs
+    cap = max(1, avail_bytes // per_worker_bytes)
+    return int(min(n_jobs, cap))
 
 
 def permutation_pvalues(
@@ -329,8 +420,31 @@ def permutation_pvalues(
         peak_anti_obs = _peak_stat(observed_anti[:, :, i, j])
         pair_jobs.append((i, j, peak_sym_obs, peak_anti_obs))
 
+    # Precompute spatial bin indices once -- they depend only on coords
+    # and the lag/angle binning, not on the (shuffled) values. This is the
+    # single biggest memory + speed win versus rebuilding them inside every
+    # worker permutation (which previously triggered OOM-kills under loky).
+    try:
+        L_idx_full, K_idx_full, _, _, _ = _bin_indices(
+            coords, max_distance, n_lags, n_angle_bins,
+        )
+    except Exception as exc:
+        logger.warning("Failed to precompute bin indices (%s); falling back to per-call computation.", exc)
+        L_idx_full = None
+        K_idx_full = None
+
     n_pairs = len(pair_jobs)
-    use_parallel = n_jobs is not None and n_jobs > 1 and n_pairs > 1
+    requested_n_jobs = int(n_jobs) if n_jobs else 1
+    capped_n_jobs = _ram_capped_n_jobs(
+        requested_n_jobs, coords.shape[0], n_lags, n_angle_bins,
+    )
+    if capped_n_jobs < requested_n_jobs:
+        print(
+            f"  Cross-correlogram permutation: capping n_jobs {requested_n_jobs} -> {capped_n_jobs} "
+            f"based on available RAM",
+            flush=True,
+        )
+    use_parallel = capped_n_jobs > 1 and n_pairs > 1
     parallel = None
     if use_parallel:
         try:
@@ -339,23 +453,61 @@ def permutation_pvalues(
         except Exception:
             parallel = None
 
-    if parallel is not None:
-        Parallel, delayed = parallel
-        print(
-            f"  Cross-correlogram permutation: {n_pairs} pairs × {n_perm} "
-            f"shuffles each, n_jobs={n_jobs}",
-            flush=True,
-        )
-        results = Parallel(n_jobs=n_jobs, backend="loky")(
-            delayed(_permute_pair)(
+    def _run_serial() -> dict[tuple[int, int], dict]:
+        progress_every = 1 if n_pairs <= 10 else 5
+        out_serial: dict[tuple[int, int], dict] = {}
+        for k, (i, j, ps, pa) in enumerate(pair_jobs):
+            key, payload = _permute_pair(
                 i, j, coords, values_matrix,
                 max_distance=max_distance, n_lags=n_lags,
                 n_angle_bins=n_angle_bins, n_perm=n_perm,
                 seed=int(seed) + 1000 * (k + 1),
                 peak_sym_obs=ps, peak_anti_obs=pa,
+                L_idx=L_idx_full, K_idx=K_idx_full,
             )
-            for k, (i, j, ps, pa) in enumerate(pair_jobs)
+            out_serial[key] = payload
+            if (k + 1) % progress_every == 0 or (k + 1) == n_pairs:
+                print(
+                    f"  Cross-correlogram permutation: {k + 1}/{n_pairs} pairs complete",
+                    flush=True,
+                )
+        return out_serial
+
+    if parallel is not None:
+        Parallel, delayed = parallel
+        print(
+            f"  Cross-correlogram permutation: {n_pairs} pairs × {n_perm} "
+            f"shuffles each, n_jobs={capped_n_jobs}",
+            flush=True,
         )
+        try:
+            results = Parallel(
+                n_jobs=capped_n_jobs,
+                backend="loky",
+                max_nbytes="50M",
+                mmap_mode="r",
+            )(
+                delayed(_permute_pair)(
+                    i, j, coords, values_matrix,
+                    max_distance=max_distance, n_lags=n_lags,
+                    n_angle_bins=n_angle_bins, n_perm=n_perm,
+                    seed=int(seed) + 1000 * (k + 1),
+                    peak_sym_obs=ps, peak_anti_obs=pa,
+                    L_idx=L_idx_full, K_idx=K_idx_full,
+                )
+                for k, (i, j, ps, pa) in enumerate(pair_jobs)
+            )
+        except Exception as exc:  # noqa: BLE001 -- includes TerminatedWorkerError, BrokenProcessPool
+            logger.warning(
+                "Cross-correlogram parallel pool failed (%s); retrying serially.",
+                exc,
+            )
+            print(
+                f"  [WARN] Cross-correlogram parallel pool crashed ({type(exc).__name__}); "
+                f"falling back to serial.",
+                flush=True,
+            )
+            return _run_serial()
         out: dict[tuple[int, int], dict] = {key: val for key, val in results}
         print(
             f"  Cross-correlogram permutation: {n_pairs}/{n_pairs} pairs complete",
@@ -371,23 +523,7 @@ def permutation_pvalues(
         f"shuffles each (serial)",
         flush=True,
     )
-    progress_every = 1 if n_pairs <= 10 else 5
-    out = {}
-    for k, (i, j, ps, pa) in enumerate(pair_jobs):
-        key, payload = _permute_pair(
-            i, j, coords, values_matrix,
-            max_distance=max_distance, n_lags=n_lags,
-            n_angle_bins=n_angle_bins, n_perm=n_perm,
-            seed=int(seed) + 1000 * (k + 1),
-            peak_sym_obs=ps, peak_anti_obs=pa,
-        )
-        out[key] = payload
-        if (k + 1) % progress_every == 0 or (k + 1) == n_pairs:
-            print(
-                f"  Cross-correlogram permutation: {k + 1}/{n_pairs} pairs complete",
-                flush=True,
-            )
-    return out
+    return _run_serial()
 
 
 # ---------------------------------------------------------------------------

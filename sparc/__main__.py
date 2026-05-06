@@ -1237,6 +1237,17 @@ def build_parser() -> argparse.ArgumentParser:
         prog='sparc',
         description='SPARC — Spatial Analysis and Research Core pipeline CLI',
     )
+    parser.add_argument(
+        '--verbosity', '-V',
+        choices=['summary', 'normal', 'debug'],
+        default=None,
+        help='Terminal verbosity (default: normal). '
+             'summary=stage banners + summaries + warnings/errors only; '
+             'normal=adds checkpoints and key metrics; '
+             'debug=full session log echoed to terminal. '
+             'Can also be set via SPARC_VERBOSITY env var. '
+             'session_log.jsonl always captures the full event stream.',
+    )
     subparsers = parser.add_subparsers(dest='command', required=True)
 
     # --- init ---
@@ -1361,6 +1372,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main():
     parser = build_parser()
     args = parser.parse_args()
+    # Install verbosity filter before any subcommand prints. The CLI flag
+    # wins over the env var; if neither is set, default is "normal".
+    try:
+        from sparc.run.console import install as _install_verbosity
+        _install_verbosity(getattr(args, 'verbosity', None) or os.environ.get('SPARC_VERBOSITY'))
+    except Exception:
+        pass  # Verbosity is a UX nicety -- never block the pipeline on it.
     try:
         args.func(args)
     except Exception as exc:

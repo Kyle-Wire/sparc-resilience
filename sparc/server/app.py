@@ -167,9 +167,22 @@ def _attach_registry(config: dict) -> None:
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: could not attach artifact listener: {exc}")
         state.registry = reg
+        # Make this registry the process-global "active" one so pipeline
+        # writers (`get_active_store()`) and any in-process consumers see it
+        # for the lifetime of the loaded project. Mirrors `__main__.py`.
+        try:
+            from sparc.registry.run_registry import set_active_registry
+            set_active_registry(reg)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: could not set active registry: {exc}")
     except Exception as exc:  # noqa: BLE001
         print(f"Warning: could not attach RunRegistry: {exc}")
         state.registry = None
+        try:
+            from sparc.registry.run_registry import set_active_registry
+            set_active_registry(None, force=True)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ------------------------------------------------------------------
@@ -232,14 +245,16 @@ def _open_store():
 
     All ``/results/*`` endpoints are db-only: artifacts must live in
     ``artifacts.db``. Disk fallbacks were removed in the v4 refresh.
+
+    The process-global "active" registry is set once at /project/load
+    (see ``_attach_registry``) and remains set for the lifetime of the
+    loaded project, so endpoints don't toggle it per-request.
     """
     if state.project_config is None:
         raise HTTPException(400, "No project loaded")
     if state.registry is None:
         raise HTTPException(400, "No active run registry. Load a project first.")
-    from sparc.registry.run_registry import set_active_registry
     from sparc.registry.store import ArtifactStore
-    set_active_registry(state.registry)
     return ArtifactStore(state.registry)
 
 
@@ -255,15 +270,11 @@ def _read_or_404(
     detail to render an actionable empty-state.
     """
     store = _open_store()
-    try:
-        if not store.has(stage, artifact_id):
-            raise _missing_artifact_response(
-                artifact_id=artifact_id, stage=stage, hint=hint,
-            )
-        return store.read_any(stage, artifact_id)
-    finally:
-        from sparc.registry.run_registry import set_active_registry
-        set_active_registry(None)
+    if not store.has(stage, artifact_id):
+        raise _missing_artifact_response(
+            artifact_id=artifact_id, stage=stage, hint=hint,
+        )
+    return store.read_any(stage, artifact_id)
 
 
 def _missing_artifact_response(
