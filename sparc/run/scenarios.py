@@ -242,6 +242,23 @@ def run_budget_optimization(
             "pareto":  sweep.to_dict(),
             "n_cells_treated": res.n_treated,
         }
+        # Annotate `optimum` with a display-string for the headline
+        # benefit, expressed in *target* units.  Benefits are stored
+        # negated (cooling = positive), so we flip sign back for prose.
+        try:
+            from sparc.data.units import format_value, load_variable_meta
+            _var_reg = load_variable_meta(config)
+            target_col = config.get("variables", {}).get("target")
+            if target_col is not None:
+                tot = float(res.total_benefit)
+                # Per-cell "benefit" was -delta_mean, so the cumulative
+                # benefit corresponds to a -tot change in the target.
+                summary_value = -tot
+                summary["per_treatment"][treatment]["optimum"][
+                    "total_benefit_display"
+                ] = format_value(summary_value, _var_reg.get(target_col))
+        except Exception:
+            pass
         for i, x in enumerate(res.allocation):
             allocations_long.append({
                 "treatment": treatment,

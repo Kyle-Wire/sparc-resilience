@@ -32,6 +32,7 @@ import psutil
 import torch
 
 from sparc.config.hardware_profile import detect_profile
+from sparc.data.units import format_effect, load_variable_meta
 from sparc.registry.run_registry import get_active_registry
 from sparc.registry.store import ArtifactStore
 
@@ -680,6 +681,19 @@ def _run_nuts_sampling(
         "ci_5_per_std": beta_q05_std,
         "ci_95_per_std": beta_q95_std,
     })
+    # Human-readable effect strings (e.g.
+    # "-0.28 Fahrenheit (90% CI: -0.41 to -0.15) per 1% of canopy increase")
+    try:
+        _var_reg = load_variable_meta(config)
+        posteriors_df["display"] = [
+            format_effect(
+                tname, target_col, float(beta_mean[i]), _var_reg,
+                ci=(float(beta_q05[i]), float(beta_q95[i])), ci_level=90,
+            )
+            for i, tname in enumerate(treatments)
+        ]
+    except Exception as _exc:  # pragma: no cover - never block writers
+        logger.warning("parameter_posteriors display formatting failed: %s", _exc)
     if _store is not None:
         _store.write_table(
             "3", "parameter_posteriors", posteriors_df,
@@ -749,6 +763,19 @@ def _run_nuts_sampling(
                 "bma_ci_95_per_std": float(beta_q95_std[i] * edge_prob),
             })
         bma_df = pd.DataFrame(bma_rows)
+        try:
+            _var_reg = load_variable_meta(config)
+            bma_df["display"] = [
+                format_effect(
+                    row["treatment"], target_col, float(row["bma_effect"]),
+                    _var_reg,
+                    ci=(float(row["bma_ci_5"]), float(row["bma_ci_95"])),
+                    ci_level=90,
+                )
+                for row in bma_rows
+            ]
+        except Exception as _exc:  # pragma: no cover
+            logger.warning("bma_coefficients display formatting failed: %s", _exc)
         if _store is not None:
             _store.write_table(
                 "3", "bma_coefficients", bma_df,
@@ -785,6 +812,7 @@ def _run_nuts_sampling(
             sign_default_map={"Pct_Canopy": -1, "Pct_Impervious": +1, "Albedo": -1},
             device=device,
             dtype=dtype,
+            config=config,
         )
         nuts_summary["per_edge"] = edge_summary
     except Exception as exc:
@@ -808,6 +836,7 @@ def _run_per_edge_nuts_sampling(
     sign_default_map: dict[str, int],
     device: Any,
     dtype: Any,
+    config: dict | None = None,
 ) -> dict[str, Any]:
     """Sample β per DAG edge with per-edge NUTS (Phase 1 of causal-stack rewrite).
 
@@ -1064,6 +1093,22 @@ def _run_per_edge_nuts_sampling(
     # Persist via ArtifactStore. Phase 1 spec: no disk fallback for new
     # artifacts — raise if the store is unavailable.
     summary_df = pd.DataFrame(summary_rows)
+    if not summary_df.empty and config is not None:
+        try:
+            _var_reg = load_variable_meta(config)
+            summary_df["display"] = [
+                format_effect(
+                    row["parent"], row["child"], float(row["mean"]),
+                    _var_reg,
+                    ci=(float(row["ci5"]), float(row["ci95"])),
+                    ci_level=90,
+                )
+                for row in summary_rows
+            ]
+        except Exception as _exc:  # pragma: no cover
+            logger.warning(
+                "nuts_edge_summary display formatting failed: %s", _exc,
+            )
     _store = _get_store()
     if _store is None:
         # Soft fallback: write next to output_dir for offline / unit-test contexts.

@@ -77,9 +77,9 @@ _TECHNICAL_TPL = """# {{ project_name }} — Technical Report
 **Actionable variables:** {{ (causal_cfg.actionable_variables or [])|join(", ") or "—" }}
 
 {% if treatments %}
-| Variable | Coefficient | 95% CI | Elasticity | E-value | Placebo | RCC | Subset |
-|----------|-------------|--------|------------|---------|---------|-----|--------|
-{% for t in treatments %}| `{{ t.name }}` | {{ "%.4f"|format(t.coeff or 0) }} | [{{ "%.3f"|format(t.ci_lower or 0) }}, {{ "%.3f"|format(t.ci_upper or 0) }}] | {{ "%.3f"|format(t.elasticity or 0) }} | {{ "%.2f"|format(t.e_value or 0) }} | {{ "✓" if t.placebo else "✗" }} | {{ "✓" if t.rcc else "✗" }} | {{ "✓" if t.subset else "✗" }} |
+| Variable | Effect (in target units) | Coefficient | 95% CI | Elasticity | E-value | Placebo | RCC | Subset |
+|----------|--------------------------|-------------|--------|------------|---------|---------|-----|--------|
+{% for t in treatments %}| `{{ t.name }}` | {{ t.display or "—" }} | {{ "%.4f"|format(t.coeff or 0) }} | [{{ "%.3f"|format(t.ci_lower or 0) }}, {{ "%.3f"|format(t.ci_upper or 0) }}] | {{ "%.3f"|format(t.elasticity or 0) }} | {{ "%.2f"|format(t.e_value or 0) }} | {{ "✓" if t.placebo else "✗" }} | {{ "✓" if t.rcc else "✗" }} | {{ "✓" if t.subset else "✗" }} |
 {% endfor %}
 {% endif %}
 
@@ -422,6 +422,9 @@ def _treatments_from_causal(causal_results: Any) -> list[dict]:
                 "placebo": eff.get("placebo_pass"),
                 "rcc": eff.get("rcc_pass"),
                 "subset": eff.get("data_subset_pass"),
+                # New display string from Stage-3 producer (Phase A3).
+                # Falls back to ``None`` for older runs.
+                "display": eff.get("display"),
             })
     return out
 

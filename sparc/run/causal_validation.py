@@ -46,6 +46,7 @@ if _project_root not in sys.path:
 
 from sparc.config.config import load_config, load_monotone_constraints
 from sparc.data.data_utils import load_and_preprocess_data
+from sparc.data.units import format_effect, load_variable_meta
 from sparc.run.pipeline_paths import get_paths
 
 
@@ -2542,10 +2543,50 @@ class CausalValidator:
                 pdp_curves = causal_pdps_for_all(
                     estimator, treatments, data,
                 )
+                # Enrich each curve payload with display strings keyed
+                # off the project's variable metadata.
+                _target = self.roles['outcomes'][0] if self.roles['outcomes'] else None
+                try:
+                    _var_reg = load_variable_meta(self.config)
+                except Exception:
+                    _var_reg = None
+
+                def _curve_payload(tr_name, curve):
+                    p = curve.to_payload()
+                    if _var_reg is None or _target is None:
+                        return p
+                    y_meta = _var_reg.get(_target)
+                    t_meta = _var_reg.get(tr_name)
+                    p['target'] = _target
+                    p['target_unit'] = y_meta.unit
+                    p['target_unit_full'] = y_meta.unit_full
+                    p['treatment_unit'] = t_meta.unit
+                    p['treatment_unit_full'] = t_meta.unit_full
+                    # Per-dose display string for the saturation knee.
+                    if curve.saturation_dose is not None:
+                        try:
+                            sat_idx = curve.saturation_index or 0
+                            sat_val = float(curve.response_mean[sat_idx])
+                            sat_lo = float(curve.response_hdi_lo[sat_idx])
+                            sat_hi = float(curve.response_hdi_hi[sat_idx])
+                            from sparc.data.units import format_delta_summary
+                            p['saturation_display'] = (
+                                f"At {curve.saturation_dose:g} "
+                                f"{(t_meta.unit_full or 'units')}: "
+                                + format_delta_summary(
+                                    _target, sat_val, sat_lo, sat_hi,
+                                    _var_reg, ci_level=89,
+                                )
+                            )
+                        except Exception:
+                            pass
+                    return p
+
                 payload = {
                     "treatments": list(pdp_curves.keys()),
                     "curves": {
-                        tr: c.to_payload() for tr, c in pdp_curves.items()
+                        tr: _curve_payload(tr, c)
+                        for tr, c in pdp_curves.items()
                     },
                 }
                 store.write_struct(
@@ -2688,6 +2729,11 @@ class CausalValidator:
         target = self.roles['outcomes'][0] if self.roles['outcomes'] else None
         monotone = load_monotone_constraints(self.config)
 
+        try:
+            _var_reg = load_variable_meta(self.config)
+        except Exception:
+            _var_reg = None
+
         coefficients = {}
         for (parent, child), coeff in self.structural_coeffs.items():
             if child == target:
@@ -2744,6 +2790,30 @@ class CausalValidator:
                     ref_ate = abs(ates[0]) if ates[0] != 0 else 1e-6
                     entry['estimator_agreement'] = (max_disc / ref_ate) < 0.30
                     entry['max_discrepancy_pct'] = float(max_disc / ref_ate * 100)
+
+                # Human-readable rendering of the headline effect.
+                if _var_reg is not None and target is not None:
+                    headline = (
+                        ate_info.get('ate')
+                        if ate_info.get('ate') is not None
+                        else coeff
+                    )
+                    ci_lo = boot_info.get('ci_lower')
+                    ci_hi = boot_info.get('ci_upper')
+                    try:
+                        if headline is not None:
+                            ci_pair = (
+                                (float(ci_lo), float(ci_hi))
+                                if ci_lo is not None and ci_hi is not None
+                                else None
+                            )
+                            entry['display'] = format_effect(
+                                parent, target, float(headline), _var_reg,
+                                ci=ci_pair,
+                                ci_level=95 if ci_pair is not None else None,
+                            )
+                    except Exception:
+                        pass
 
                 coefficients[parent] = entry
 

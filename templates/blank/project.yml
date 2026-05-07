@@ -181,6 +181,36 @@ flags:
 #     unit: "units"
 
 # ---------------------------------------------------------------------------
+# Variable Display Metadata  (optional — controls human-readable labels)
+# ---------------------------------------------------------------------------
+# Used by the Stage 3/4/5 reporters and server API to render
+# human-readable effect strings such as
+#     "-0.28 Fahrenheit per 1% of canopy increase"
+# instead of bare standardized coefficients.
+#
+# All keys are optional.  When absent, units fall back to
+# ``output.response_units`` (target) and ``scenarios[].unit`` (treatments),
+# and ``display_name`` defaults to the column name with underscores
+# replaced by spaces.
+#
+# variables_meta:
+#   AAT_z:
+#     unit: "°F"                     # canonical short symbol
+#     unit_full: "Fahrenheit"        # spelled-out form for prose; auto-derived
+#                                    # from a small unit map when omitted
+#     display_name: "ambient air temperature"
+#     description: "Air temperature anomaly above the regional mean"
+#   Pct_Canopy:
+#     unit: "%"
+#     display_name: "canopy"
+#     actionable: true               # overrides causal.actionable_variables
+#     direction: "increase"          # overrides scenarios[].direction
+#   NDVI:
+#     unit: "index"                  # rendered as "0.1 index of NDVI increase"
+#     display_name: "NDVI"
+#
+
+# ---------------------------------------------------------------------------
 # Spatiotemporal Configuration  (optional — for panel / time-series data)
 # ---------------------------------------------------------------------------
 # Enable this section when your data has repeated observations over time.

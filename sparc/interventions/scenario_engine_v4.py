@@ -27,6 +27,7 @@ import numpy as np
 import pandas as pd
 
 from sparc.interventions.causal_stack import CausalEffectResolver, ResolverConfig
+from sparc.data.units import format_delta_summary, load_variable_meta
 
 try:  # optional — DAG paths
     import networkx as nx
@@ -189,9 +190,29 @@ class ScenarioEngineV4:
         resolver: Optional[CausalEffectResolver] = None,
         dag: Any = None,
         ensemble_predictor: Optional[Any] = None,
+        _from_auto_fallback: bool = False,
     ) -> None:
         if mode not in _VALID_MODES:
             raise ValueError(f"Unknown mode '{mode}'. Valid: {_VALID_MODES}")
+        # Modes 1-4 are kept for reproducibility / debugging but are no
+        # longer the recommended path: ``mode_5_full_audit`` is the
+        # default for production runs and the only mode covered by the
+        # full Wager-2025 audit columns.  Suppress the warning when the
+        # caller is the auto-fallback ladder (it has its own diagnostics).
+        if (
+            mode in ("mode_1_physics", "mode_2_dag_local",
+                     "mode_3_full_ensemble", "mode_4_hybrid")
+            and not _from_auto_fallback
+        ):
+            warnings.warn(
+                f"Scenario {mode!r} is legacy and will be retired in a "
+                "future release.  Use 'mode_5_full_audit' (the default "
+                "via the auto-fallback ladder) for new runs.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        self._from_auto_fallback = bool(_from_auto_fallback)
+        self.is_legacy_mode = mode != "mode_5_full_audit"
         self.config = config
         self.mode = mode
         self.dag = dag
@@ -284,6 +305,12 @@ class ScenarioEngineV4:
         # Scenarios.
         self.scenarios = _expand_scenarios(config.get("scenarios") or [])
         self.target_col = config["variables"]["target"]
+        # Variable display registry — used to render `delta_display`
+        # strings on each long row (e.g. "-1.42 Fahrenheit (90% CI: ...)" ).
+        try:
+            self.var_registry = load_variable_meta(config)
+        except Exception:
+            self.var_registry = None
 
     # ------------------------------------------------------------------
     # Validation
@@ -379,7 +406,7 @@ class ScenarioEngineV4:
                 d_ci5  = float(stats["ci5"][i])
                 d_ci95 = float(stats["ci95"][i])
                 e_pt, e_ci = _e_value_row(d_mean, d_ci5, d_ci95)
-                long_rows.append({
+                row = {
                     "cell_id": i,
                     "scenario_name": spec.name,
                     "variable": spec.variable,
@@ -397,7 +424,16 @@ class ScenarioEngineV4:
                     "e_value_pass":  bool(
                         np.isfinite(e_pt) and e_pt >= self.e_value_min
                     ),
-                })
+                }
+                if self.var_registry is not None:
+                    try:
+                        row["delta_display"] = format_delta_summary(
+                            self.target_col, d_mean, d_ci5, d_ci95,
+                            self.var_registry, ci_level=90,
+                        )
+                    except Exception:
+                        pass
+                long_rows.append(row)
 
             # Per-area summary.
             for code in np.unique(area_codes):
@@ -419,6 +455,16 @@ class ScenarioEngineV4:
                     "baseline_mean":  float(np.mean(target_baseline[mask])),
                     "modified_mean":  float(np.mean(modified_target[mask])),
                 })
+                if self.var_registry is not None:
+                    try:
+                        last = summary_rows[-1]
+                        last["delta_display"] = format_delta_summary(
+                            self.target_col,
+                            last["delta_mean"], last["delta_ci5"], last["delta_ci95"],
+                            self.var_registry, ci_level=90,
+                        )
+                    except Exception:
+                        pass
 
         results_long_df = pd.DataFrame(long_rows)
         summary_df = pd.DataFrame(summary_rows)
@@ -985,6 +1031,8 @@ class ScenarioEngineV4:
             "ensemble_blend_auto": bool(self.ensemble_blend_auto),
             "mc3_path_threshold": float(self.mc3_path_threshold),
             "e_value_min": float(self.e_value_min),
+            "legacy_mode": bool(self.is_legacy_mode),
+            "from_auto_fallback": bool(self._from_auto_fallback),
         }
         try:
             if geom_df is not None:

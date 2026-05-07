@@ -6,9 +6,9 @@
   </picture>
 </p>
 
-# SPARC — Spatial Analysis and Research Core
+# SPARC — Spatial Research
 
-**SPARC Labs LLC**
+**SPARC Labs LLC — Spatial Research Labs**
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![DOI](https://img.shields.io/badge/DOI-10.1016%2Fj.uclim.2025.102671-green.svg)](https://doi.org/10.1016/j.uclim.2025.102671)
@@ -18,7 +18,7 @@
 
 **SPARC turns environmental and infrastructure data into causal, uncertainty-quantified intervention scenarios — powered by physics-constrained spatial machine learning and Bayesian causal inference.**
 
-Published in [*Urban Climate* (2025)](https://doi.org/10.1016/j.uclim.2025.102671), SPARC has demonstrated **94.2% R²** on urban heat island prediction in Providence, RI, and has been applied to **ForceSMIP climate forcing attribution** at global scale. The pipeline trains geographically-weighted base models, fuses them through a **differentiable neural meta-learner with PDE-aware physics constraints**, validates causal structure with **NUTS posterior sampling** and **MC³ DAG search**, and simulates "what-if" scenarios with built-in uncertainty quantification — all from a single `project.yml` configuration file across **13 domain templates**.
+Published in [*Urban Climate* (2025)](https://doi.org/10.1016/j.uclim.2025.102671), SPARC has since reached **94.4% R²** on urban heat island prediction in Providence, RI, and has been applied to **ForceSMIP climate forcing attribution** at global scale. The pipeline auto-tunes itself from a Bayesian Matérn correlogram, trains four geographically-weighted base models alongside their differentiable neural surrogates, fuses them through a **SharedTrunk + CityHead meta-learner** with sparse spatial attention and a **10-term staged-curriculum PDE loss**, validates causal structure with **MC³ DAG search**, **NUTS edge posteriors** (informed by Bayesian MGWR priors), and **DoWhy refutations**, then simulates physics-constrained, **budget-optimized** "what-if" scenarios with built-in uncertainty quantification — all from a single `project.yml` configuration file across **13 domain templates**.
 
 > **Get started:** [Watch the demo](#see-sparc-in-action) · [Try it locally](#quick-start) · [Download the desktop app](#desktop-app) · Interested in piloting? [Contact us](mailto:sparcurbanlabs@gmail.com)
 
@@ -72,28 +72,31 @@ Published in [*Urban Climate* (2025)](https://doi.org/10.1016/j.uclim.2025.10267
 SPARC executes five stages in sequence. Each stage reads from the previous stage's output, producing a fully traceable chain from raw data to policy-relevant scenario maps.
 
 ```
-Stage 0   Correlogram Analysis            Moran's I at multiple lags → auto-detect bandwidth & block size
+Stage 0   Correlogram Analysis            Moran's I + Bayesian Matérn + anisotropy → auto-wired KernelField
      │
 Stage 1   GWEN Variable Selection         Geographically-weighted elastic net ranks predictors (optional)
      │
-Stage 2   Spatial CV + Neural Meta        Four base models → differentiable surrogates → neural meta-learner
+Stage 2   Spatial CV + Neural Meta        4 base models → differentiable surrogates → SharedTrunk + CityHead
+     │                                     10-term PDE curriculum, sparse spatial attention, MC-Dropout
      │
-Stage 3   Bayesian Causal Validation      DML + NUTS posteriors + MC³ DAG search + DoWhy refutations
+Stage 3   Bayesian Causal Validation      MC³ DAG search + DML/CATE + NUTS edge posteriors + DoWhy refutations
      │
-Stage 4   Scenario Simulation             Physics/PDE-constrained "what-if" predictions with uncertainty
+Stage 4   Scenario Simulation             4-tier physics-constrained predictions + budget-optimized allocation
 ```
 
 ### Stage 0 — Correlogram Analysis
 
-Computes Moran's I at multiple distance lags to quantify spatial autocorrelation. Automatically selects optimal bandwidth for GWR/GWRF and block size for spatial cross-validation. Pipeline configuration (bandwidths, block sizes, kernel selection) is auto-wired from the correlogram results.
+Quantifies spatial structure for every variable in the project. SPARC computes Moran's I at multiple distance lags, then fits a **Bayesian Matérn(κ, ν)** covariance model per variable via NUTS, retains the full posterior for κ (used downstream as a prior), and detects **directional anisotropy** by fitting separate correlograms along cardinal and 45° axes (yielding per-predictor ellipse parameters κ\_x, κ\_y, θ). A **cross-correlogram** between the outcome and each predictor produces a V×V **effective-range matrix** describing which predictors influence the outcome at which spatial scales.
+
+All of this is packaged into a single `KernelField` object that is auto-wired into Stage 2: optimal lag → GWR/GWRF bandwidths, correlation range → spatial-CV block size, anisotropy ellipses → kernel geometry for every base model and surrogate. No manual tuning required.
 
 ### Stage 1 — GWEN Variable Selection *(optional)*
 
-A geographically-weighted elastic net (GWEN) ranks predictor importance across space. Uses correlogram-derived bandwidths for spatially-aware feature selection. A human checkpoint allows review before proceeding.
+A geographically-weighted elastic net (GWEN) ranks predictor importance across space using the bandwidth selected in Stage 0. The output is a ranked feature list plus per-cell importance maps. A human approval sentinel (`gwen_approved.txt`) gates progression to Stage 2 so analysts can inspect and prune predictors before training.
 
 ### Stage 2 — Spatial Cross-Validation & Neural Meta-Learner
 
-Trains four classical base models on spatially-buffered folds to prevent spatial leakage:
+Trains four classical base models on spatially-buffered folds (block size from Stage 0) to prevent spatial leakage. All four consume the `KernelField` so that bandwidth and anisotropy are consistent across the stack:
 
 | Model | Type | Description |
 |-------|------|-------------|
@@ -102,36 +105,72 @@ Trains four classical base models on spatially-buffered folds to prevent spatial
 | **GWRF** | Local non-linear | Geographically weighted random forest |
 | **GGPGAM** | Semi-parametric | Geographically guided generalized additive model |
 
-These base models are then mirrored by **differentiable PyTorch surrogates** (`DifferentiableGWR`, `DifferentiableGWRF`, `DifferentiableGGPGAM`) that are pre-trained against the classical out-of-fold predictions and fine-tuned end-to-end. Two meta-learner backends are available:
+Each base model is mirrored by a **differentiable PyTorch surrogate** (`DifferentiableGWR`, `DifferentiableGWRF`, `DifferentiableGGPGAM`) that is pre-trained against the classical out-of-fold predictions and then fine-tuned end-to-end inside the meta-learner.
+
+#### SPARCMetaLearner — SharedTrunk + CityHead
+
+The `SPARCMetaLearner` is split into two halves so trained physics knowledge can transfer between projects while every deployment retains a city-specific output layer:
+
+- **SharedTrunk.** A PDE-informed physics encoder built on **SIREN** (sinusoidal) layers ingests physics features (elevation, land cover, solar/forcing variables), a learnable **α(x) process-rate field** (optionally produced by `ProcessRateNet`), and an optional 3-way diurnal time embedding. The trunk fuses these into a shared latent that is portable across cities and domains.
+- **CityHead.** Embeds the 4-dimensional surrogate prediction vector, applies **sparse KNN spatial attention** (`SparseSpatialAttention`, O(N · max\_neighbors) — interpretable as a learned spatial-influence surface), and emits both a continuous regression output and **multi-threshold exceedance heads** (sigmoid classifiers for P(T > τ) at user-defined thresholds). **MC-Dropout** is left active at inference; 500 stochastic forward passes produce per-point predictive mean, std, and credible intervals.
+
+#### 10-term PDE loss with staged curriculum
+
+The meta-learner is trained against a joint loss that combines data fit with physics residual penalties. Eight core PDE terms cover heat diffusion (α∇²T − S), surface energy balance (Q\* − Q\_H − Q\_E), directional consistency, anisotropy alignment with Stage 0, gradient-flux (Fourier's law), Gaussian curvature regularization, and α-field smoothness/prior terms. Two additional **V3 temporal terms** — transient consistency and nocturnal radiative-cooling calibration — activate when multi-snapshot data is supplied. A **staged curriculum** introduces terms gradually (heat diffusion at epoch 1, energy balance ~10, directional/anisotropy ~20, full stack ~30), each ramping linearly over five epochs to avoid optimizer shocks.
+
+#### Optional: JEPA self-supervised pretraining
+
+When `lambda_jepa > 0`, SPARC pretrains the trunk with a **V-JEPA-2-AC-style** objective: an `EMATrunk` (exponential-moving-average copy of the online trunk, stop-grad) provides target embeddings, a `LatentPredictor` maps `(context, ActionEmbedding)` to predicted target latents, and a cosine + VICReg loss aligns them while preventing representational collapse. `ActionEmbedding` encodes (treatment one-hot, |Δx|, sign, Δt), making the trunk action-conditioned for downstream causal inference.
+
+#### Optional: Bayesian MGWR ensemble
+
+When enabled, SPARC re-fits GWR many times by drawing κ values from the Stage 0 Matérn posterior — perturbing only the bandwidth — then stacks the per-cell coefficient matrices into a **per-cell β posterior** (mean, std, 89% HDI). These posteriors are persisted to the artifact store and consumed by Stage 3 NUTS as informed priors.
+
+#### Meta-learner backends
 
 | Backend | Selected By | Description |
 |---------|-------------|-------------|
-| **`neural`** *(default)* | `models.meta_learner: neural` | `SPARCMetaLearner` — fuses surrogate outputs with sinusoidal spatial encodings, FiLM-conditioned physics features, a `ProcessRateNet` α-gate, and exceedance heads. MC-Dropout produces per-point predictive uncertainty. Optional **PDE-loss** terms (energy balance, advection–diffusion) act as soft physics constraints during training. |
+| **`neural`** *(default)* | `models.meta_learner: neural` | Full `SPARCMetaLearner` — SharedTrunk + CityHead, sparse spatial attention, MC-Dropout, exceedance heads, 10-term PDE curriculum, optional JEPA pretraining and Bayesian MGWR ensemble. |
 | **`ensemble`** | `models.meta_learner: ensemble` | Legacy LightGBM stack with monotonic constraints, tuned via Optuna. Retained for fast/baseline runs. |
 
 Laplacian eigenmaps and `ClimateEncoder` / `PDEEncoder` features can be injected as spatial side-information to either backend.
 
 ### Stage 3 — Bayesian Causal Validation
 
-Uses a user-defined DAG to estimate structural causal coefficients via DML (with HGB or OLS fallbacks), blends them with literature priors through shrinkage, and runs DoWhy refutation tests (placebo, random common cause, subset, unobserved confounding). When the neural meta-learner from Stage 2 is available, SPARC additionally runs:
+Given a user-defined DAG, Stage 3 produces a fully Bayesian picture of cause and effect — structure, magnitudes, heterogeneity, and robustness:
 
-- **NUTS posterior sampling** (No-U-Turn Sampler) over structural coefficients, using the neural model as the likelihood — producing full posterior distributions rather than point estimates.
-- **MC³ (Metropolis-Coupled MCMC) DAG search** over edge inclusion, yielding posterior edge-inclusion probabilities, a median-probability DAG, and acceptance diagnostics.
-- **CATE estimation** via EconML's `CausalForestDML` for heterogeneous treatment effects.
+- **MC³ DAG search.** Metropolis-coupled MCMC over edge inclusion produces posterior edge-inclusion probabilities, a median-probability DAG, BIC/Bayes-factor model comparison, and acceptance diagnostics.
+- **Double Machine Learning + spatial CATE.** Cross-fitted DML residualizes outcome and treatment (with HGB / OLS nuisance models); EconML's `CausalForestDML`, wrapped as `SpatialCATEEstimator` / `BayesianSpatialCATE`, then estimates per-cell **Conditional Average Treatment Effects** with credible bands.
+- **NUTS edge posteriors with informed priors.** A per-edge Bayesian GLM is sampled with NUTS (numpyro), using the **Stage 2 GWR β posterior from the Bayesian MGWR ensemble** as its prior. The result is a full posterior over each causal edge — not a point estimate — that downstream scenarios can sample from directly.
+- **Bayesian causal PDP.** `causal_pdp_bayesian` traces dose-response curves with credible bands across the treatment range and automatically detects saturation points, producing `CausalDoseResponseCurve` objects used by Stage 4.
+- **CATE-vs-GWR divergence audit.** Per-cell comparison of Bayesian CATE to classical GWR coefficients reports correlation, sign-agreement rate, and flags cells where the two diverge by more than 2σ — a check on identification and a guide for human review.
+- **Robust causal discovery.** PC-stable, LiNGAM, and GES are run as a diagnostic, scored against the expert DAG (typical edge F1 ≈ 0.6–0.8), and supplemented by the **Wager 2025 causal-gaps** add-on for DAG-identified vs. unidentified effect estimation.
+- **DoWhy refutations + E-values.** Placebo treatment, random common cause, subset analysis, and unobserved-confounding bounds are reported per edge with E-values quantifying how strong a hidden confounder would need to be to nullify each finding.
 
-Outputs include `edge_inclusion_probs.csv`, `median_probability_dag.json`, `mc3_summary.json`, and `nuts_results.json`.
+Outputs include `mc3_results.json`, `edge_inclusion_probs.csv`, `nuts_edge_samples` / `nuts_edge_summary.csv`, `cate_estimates.csv`, `divergence_audit.json`, and `scenario_coefficients.json`.
 
 ### Stage 4 — Scenario Simulation
 
-Predicts outcomes under user-defined interventions in three complementary modes:
+Stage 4 turns the trained models and causal posteriors into physics-constrained counterfactual maps. The `ScenarioSimulator` chooses among **four computational tiers** of increasing sophistication, using the most informative method available given what Stages 0–3 produced:
 
-| Mode | Method | What It Captures |
-|------|--------|------------------|
-| **Mode 1** | Ensemble re-prediction | Full non-linear interactions, model agreement |
-| **Mode 2** | DAG coefficients × local MGWR weights | Spatial heterogeneity, causal mediation |
-| **Mode 3** | Monte Carlo uncertainty propagation | Credible intervals (5th / 50th / 95th), seeded from NUTS posteriors when available |
+| Tier | Method | What It Uses | What It Captures |
+|------|--------|--------------|------------------|
+| **Tier 0** | `pde_alpha_field` | Stage 2 learned α(x) process-rate field | Per-cell process scaling — fastest, leverages PDE-trained α |
+| **Tier 1** | `bayesian_beta` | Stage 2 GWR locals + Stage 3 NUTS edge posteriors | Per-cell β with full credible bands; samples directly from NUTS draws |
+| **Tier 2** | `pde_solve` | Forward Poisson / advection-diffusion solve under new forcing | Captures spatial spillovers and physical propagation of the intervention |
+| **Tier 3** | `hybrid` | Multi-source blend of PDE + Bayesian CATE (`ScenarioEngineV4`) | Joint multi-treatment scenarios with interaction terms and uncertainty composition |
 
-Physics guardrails are applied automatically: variable bounds, diminishing returns (√ taper), sign enforcement, delta caps, extrapolation guards (Mahalanobis distance), combined constraints (e.g., Canopy + Impervious ≤ 100%), and optional **PDE-residual penalties** (energy-balance, advection–diffusion) carried over from the neural meta-learner.
+#### Physics guardrails
+
+Applied automatically across all tiers: variable bounds, diminishing returns (√ taper), sign enforcement, delta caps, **Mahalanobis extrapolation guards** that flag scenarios pushed beyond the training data covariance, combined constraints (e.g., Canopy + Impervious ≤ 100%), and **PDE-residual penalties** (energy-balance, advection–diffusion) carried over from the neural meta-learner.
+
+#### Budget-constrained allocation
+
+For planning use cases, SPARC pairs the per-cell predicted benefit (from NUTS draws or the learned α field) with a user-supplied cost surface and solves a **budget-constrained allocation** problem via greedy, greedy-2opt, or MILP (PuLP) optimizers. A **Pareto frontier** is swept over budget multipliers (e.g., 0.5×, 0.75×, 1.0×, 1.25×, 1.5× of baseline), and each solution is scored for **equity** with a Gini coefficient over the allocation. The result is a spend-vs-benefit curve with explicit fairness reporting.
+
+#### Joint scenarios and the scenario library
+
+Multiple treatments can be applied simultaneously through a `JointScenarioBundle` (sequential composition, independent superposition, or PDE-mediated interaction). Every scenario run is appended to a versioned **scenario library** (`scenarios/library.jsonl`) — a Git-like, append-only log of intervention configurations and results — so any plan can be reproduced or compared against future runs.
 
 ---
 
@@ -235,9 +274,9 @@ SPARC ships as a **native desktop application** built with Tauri v2 and React �
 | GWRF | 0.898 | 0.547 |
 | GGPGAM | 0.839 | 0.686 |
 | Meta-ensemble (standard) | 0.902 | 0.535 |
-| **Meta-ensemble (enhanced, with Laplacian)** | **0.915** | **0.500** |
+| **Meta-ensemble (enhanced, with Laplacian)** | **0.944** | **0.423** |
 
-The enhanced meta-ensemble with 150 Laplacian eigenmaps achieved the best performance, explaining **91.5% of spatial temperature variance** with an RMSE of 0.50 z-score units. The Laplacian features provided a +1.2 pp R² uplift over the standard meta-ensemble.
+The enhanced meta-ensemble with 150 Laplacian eigenmaps achieved the best performance, explaining **94.4% of spatial temperature variance** with an RMSE of 0.42 z-score units. The Laplacian features and PDE-curriculum training provided a +4.2 pp R² uplift over the standard meta-ensemble — and roughly +9 pp over the original 2025 *Urban Climate* publication results, driven primarily by the SharedTrunk + CityHead architecture, sparse spatial attention, and the staged 10-term PDE loss.
 
 ### Stage 3 — Causal Validation
 
@@ -269,7 +308,7 @@ All three treatments passed all four refutation tests (placebo, random common ca
 
 ### Stage 4 — Scenario Simulation (Selected Results)
 
-Results from Mode 2 (DAG + MGWR coefficients), averaged across all 54,701 points:
+Results from Tier 1 (`bayesian_beta` — NUTS-sampled GWR locals), averaged across all 54,701 points:
 
 #### Canopy Increase Scenarios
 
@@ -375,7 +414,7 @@ Internal variability scenarios (AMV, IPO) were also simulated, with AMV showing 
 | Dimension | Urban Heat Island | ForceSMIP (tos) |
 |-----------|-------------------|-----------------|
 | **Scale** | City (~30 m) | Global (2.5° grid) |
-| **Best R²** | 0.915 (meta-ensemble) | 0.642 (GWRF) |
+| **Best R²** | 0.944 (meta-ensemble) | 0.642 (GWRF) |
 | **Primary drivers** | Impervious (51%), Canopy (38%) | GMST (65%), IPO (18%) |
 | **Physics integration** | Literature priors from UHI meta-analyses | CMIP6 forcing indices |
 | **Causal estimator** | DML (doubly-robust) | DML (doubly-robust) |
@@ -396,14 +435,15 @@ SPARC produces a rich set of outputs across its five stages. Here is a quick ref
 | **E-value** | How strong an unmeasured confounder would need to be to nullify a causal estimate | > 1.5 suggests moderate robustness; > 2.0 is strong |
 | **Refutation tests** | Placebo, random confounder, subset, and unobserved confounding checks | All four should pass (p > 0.05 or estimate ≈ 0 for placebo) |
 | **MC percentiles (5th / 50th / 95th)** | Credible interval from Monte Carlo uncertainty propagation | Narrow bands = high confidence; wide bands = interpret cautiously |
-| **Mode 1** | Ensemble re-prediction under modified inputs | Captures full non-linear model interactions |
-| **Mode 2** | DAG coefficients × local MGWR weights | Captures spatial heterogeneity and causal mediation |
-| **Mode 3** | Monte Carlo draws over coefficient uncertainty | Produces credible intervals, not point estimates |
+| **Tier 0 (`pde_alpha_field`)** | Per-cell scaling from the Stage 2 learned α(x) process-rate field | Fastest; leverages PDE-trained physics |
+| **Tier 1 (`bayesian_beta`)** | GWR locals + NUTS edge posteriors with credible bands | Spatial heterogeneity with full per-cell uncertainty |
+| **Tier 2 (`pde_solve`)** | Forward Poisson / advection-diffusion solve under new forcing | Captures spatial spillovers and physical propagation |
+| **Tier 3 (`hybrid`)** | Multi-source blend of PDE + Bayesian CATE | Joint multi-treatment scenarios with interaction terms |
 
 ### Quick checklist for reading scenario tables
 
 1. **Check the "Avg. Actual Change" column** — did the physics constraints cap the intervention? If actual < requested, bounds were hit.
-2. **Compare Mode 1 vs. Mode 2** — large disagreement may indicate non-linear effects the DAG doesn't capture.
+2. **Compare Tier 1 vs. Tier 2/3** — large disagreement may indicate spatial spillovers or non-linear interactions that simple per-cell β cannot capture.
 3. **Look at the Std column** — high standard deviation means the effect varies significantly across space (spatial heterogeneity).
 4. **Review MC percentiles** — if the 5th and 95th percentiles have the same sign, the direction of effect is robust.
 5. **Check diminishing returns** — for large interventions (e.g., +50 pp canopy), the √ taper compresses gains. This is by design.
@@ -423,7 +463,8 @@ Transparency builds trust. Here is what SPARC does well, where it has boundaries
 | **Physics constraints are user-specified** | Monotone signs, variable caps, priors, and diminishing-return tapers reflect domain knowledge encoded by the analyst. They improve plausibility but are not ground truth — review them critically for each application. |
 | **Extrapolation** | Scenarios that push variables beyond the training data range trigger extrapolation guards (Mahalanobis distance), but out-of-distribution predictions should always be interpreted cautiously. |
 | **Uncertainty quantification** | Monte Carlo draws are parametric (sampled over estimated coefficient distributions). True epistemic uncertainty — from model mis-specification or missing variables — may be wider than reported intervals. |
-| **Resolution sensitivity** | Performance varies with data density and resolution. The Providence UHI study (30 m, R² = 0.915) benefited from dense local data; coarser grids like ForceSMIP (2.5°, R² = 0.642) naturally yield lower explanatory power. |
+| **Resolution sensitivity** | Performance varies with data density and resolution. The Providence UHI study (30 m, R² = 0.944) benefited from dense local data; coarser grids like ForceSMIP (2.5°, R² = 0.642) naturally yield lower explanatory power. |
+| **Budget-constrained allocation** | Pareto-optimal spend-vs-benefit curves and Gini equity scores depend on a user-supplied per-cell cost surface. Garbage in, garbage out — review the cost model with the same scrutiny as the DAG. |
 | **Cross-sectional design** | The current pipeline models spatial variation at a single time slice. Longitudinal causal claims (e.g., "planting trees *will* cool a neighborhood over 10 years") require temporal extensions not yet implemented. |
 | **Causal discovery** | Automated structure learning (PC-stable, LiNGAM, GES) is provided as a diagnostic, not a replacement for expert DAG specification. Edge F1 against expert graphs is typically 0.6–0.8. |
 
@@ -452,22 +493,25 @@ Have ideas or want to collaborate? Reach out at [sparcurbanlabs@gmail.com](mailt
 sparc-resilience/
 ├── sparc/                   # Main package
 │   ├── __main__.py          # CLI entry point (sparc init / validate / run / scenario / report)
-│   ├── config/              # Configuration loader, JSON schema validation
+│   ├── config/              # Configuration loader, JSON schema validation, hardware profile
 │   ├── data/                # Data utilities, temporal helpers
 │   ├── models/              # OLS, GWR, GWRF, GGPGAM, GWEN, differentiable surrogates,
-│   │                        # SPARCMetaLearner (neural), ProcessRateNet, ClimateEncoder, PDEEncoder
-│   ├── features/            # Laplacian eigenmaps, fold-aware spatial features
-│   ├── physics/             # PDE operators, PDE loss, energy balance, boundary/initial conditions
-│   ├── training/            # Curriculum, replay, EWC, CMA-ES, optimizer & loss helpers
+│   │                        # SPARCMetaLearner (SharedTrunk + CityHead), ProcessRateNet,
+│   │                        # KernelField, SparseSpatialAttention/SIREN, EMATrunk, LatentPredictor,
+│   │                        # ActionEmbedding, ClimateEncoder, PDEEncoder
+│   ├── features/            # Laplacian eigenmaps, fold-aware + temporal spatial features
+│   ├── physics/             # PDE operators, 10-term PDE loss, energy balance, Poisson solver
+│   ├── training/            # Curriculum, replay, EWC, CMA-ES, optimizer/loss helpers, JEPA loss
 │   ├── inference/           # Zero-shot and few-shot inference utilities
-│   ├── causal/              # DAG definition, DoWhy integration, CATE, counterfactuals
+│   ├── causal/              # DAG definition, MC³, NUTS, DML/CATE, causal PDP, divergence audit
 │   ├── evaluation/          # Model evaluation metrics and diagnostics
-│   ├── interventions/       # Scenario simulator, physics priors, extrapolation guards
-│   ├── run/                 # Pipeline orchestration — incl. v2_neural_training & v2_bayesian_causal
-│   │                        # (NUTS + MC³), correlogram, GWEN, spatial CV, scenario runners
-│   ├── scenario/            # Scenario builder/validator helpers
+│   ├── interventions/       # Scenario simulator (4-tier), ScenarioEngineV4, physics priors
+│   ├── run/                 # Pipeline orchestration — correlogram + Matérn + anisotropy,
+│   │                        # GWEN, spatial CV, v2_neural_training, v2_bayesian_causal,
+│   │                        # Bayesian MGWR ensemble, scenario runners, artifact I/O
+│   ├── scenario/            # Scenario builder/validator, budget allocation, scenario library
 │   ├── report/              # Report generation
-│   ├── registry/            # Domain template registry
+│   ├── registry/            # Artifact store (SQLite), city registry, domain template registry
 │   └── server/              # Local pipeline/IPC server for the desktop app
 ├── templates/               # Domain templates (13 domains)
 ├── examples/                # Example projects (Brown UHI)
@@ -497,10 +541,12 @@ Every project is driven by a single `project.yml` file with these sections:
 | `causal` | No | DAG file, estimator (ols/hgb/dml), actionable/fixed vars |
 | `output` | No | Output directory structure |
 | `pipeline` | No | Random seed, n_folds, fast_mode, MC settings |
-| `flags` | No | Feature flags (GWEN, GWRF, Laplacian, PDE loss, NUTS, MC³) |
-| `models` | No | `meta_learner` (`neural` / `ensemble`) and per-model hyperparameters (neural hidden dim, dropout, MC-Dropout samples, exceedance thresholds, etc.) |
-| `scenarios` | No | Single-variable intervention definitions |
-| `joint_scenarios` | No | Multi-variable intervention definitions |
+| `flags` | No | Feature flags (GWEN, GWRF, Laplacian, PDE loss, NUTS, MC³, JEPA, EMA trunk, Bayesian MGWR ensemble) |
+| `models` | No | `meta_learner` (`neural` / `ensemble`) and per-model hyperparameters (neural hidden dim, dropout, MC-Dropout samples, exceedance thresholds, attention `max_neighbors`, etc.) |
+| `jepa` | No | JEPA pretraining settings — loss weights, EMA decay, action-embedding dimensions |
+| `scenarios` | No | Single-variable intervention definitions; selects among the four computational tiers (`pde_alpha_field`, `bayesian_beta`, `pde_solve`, `hybrid`) |
+| `joint_scenarios` | No | Multi-variable intervention bundles (sequential, superposed, or PDE-mediated) |
+| `budget` | No | Budget-constrained allocation: per-cell cost surface, total budget, optimizer (`greedy` / `greedy-2opt` / `milp`), Pareto sweep multipliers |
 
 See [`docs/MANUAL.md`](docs/MANUAL.md) for the full configuration reference and [`docs/PIPELINE_GUIDE.md`](docs/PIPELINE_GUIDE.md) for a step-by-step walkthrough.
 
@@ -513,8 +559,9 @@ See [`docs/MANUAL.md`](docs/MANUAL.md) for the full configuration reference and 
 | Scientific | numpy, pandas, scipy, scikit-learn |
 | Spatial | geopandas, libpysal, esda, mgwr, pyproj |
 | Classical models | lightgbm, optuna, pygam |
-| Neural meta-learner | torch (PyTorch) — surrogates, `SPARCMetaLearner`, `ProcessRateNet`, PDE loss, MC-Dropout |
-| Bayesian causal | dowhy, networkx, econml, pymc / NumPyro (NUTS), custom MC³ sampler |
+| Neural meta-learner | torch (PyTorch) — differentiable surrogates, `SPARCMetaLearner` (SharedTrunk + CityHead), SIREN layers, `SparseSpatialAttention`, `ProcessRateNet`, `EMATrunk` + `LatentPredictor` (JEPA), 10-term PDE loss, MC-Dropout |
+| Bayesian causal | dowhy, networkx, econml (`CausalForestDML`), NumPyro / JAX (NUTS for Matérn fits and edge posteriors), custom MC³ sampler |
+| Optimization | PuLP (MILP for budget allocation) |
 | Utilities | matplotlib, seaborn, joblib, pyyaml, jsonschema |
 
 ---

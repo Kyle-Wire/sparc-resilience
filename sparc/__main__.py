@@ -501,7 +501,8 @@ def _resolve_auto_scenario_mode(*, has_dag: bool) -> str:
     return "mode_1_physics"
 
 
-def _try_run_with_v4_engine(config, sim, data, scenario_mode, has_dag):
+def _try_run_with_v4_engine(config, sim, data, scenario_mode, has_dag,
+                             *, from_auto_fallback: bool = False):
     """Attempt to execute ``scenario_mode`` via the unified v4 engine.
 
     Returns ``(summary_df, results_gdf)`` on success, or ``None`` when
@@ -541,6 +542,7 @@ def _try_run_with_v4_engine(config, sim, data, scenario_mode, has_dag):
             mode=scenario_mode,
             dag=dag,
             ensemble_predictor=ensemble_pred,
+            _from_auto_fallback=from_auto_fallback,
         )
     except MissingArtifactsError as exc:
         print(f"  [v4 engine] {exc} — using legacy path")
@@ -624,8 +626,10 @@ def _run_scenarios(config, paths, project_path):
         scenario_mode = new_key
 
     # --- Resolve 'auto' to a concrete mode using artifact introspection --
+    auto_resolved = False
     if scenario_mode == 'auto':
         scenario_mode = _resolve_auto_scenario_mode(has_dag=has_dag)
+        auto_resolved = True
         print(f"  [auto] scenario_mode resolved to '{scenario_mode}'")
 
     # --full-audit forces mode_5 even when 'auto' would have picked something
@@ -646,6 +650,7 @@ def _run_scenarios(config, paths, project_path):
     else:
         used_v4 = _try_run_with_v4_engine(
             config, sim, data, scenario_mode, has_dag,
+            from_auto_fallback=auto_resolved,
         )
     if used_v4 is not None:
         summary_df, results_gdf = used_v4

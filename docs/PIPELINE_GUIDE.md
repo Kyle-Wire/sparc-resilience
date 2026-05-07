@@ -620,3 +620,35 @@ python -m sparc desktop
 | Correlogram shows flat line | Data may lack spatial structure. Check coordinate columns and CRS projection. |
 | Out of memory in Stage 2 | Use `fast_mode: true`, reduce `n_spatial_folds`, or reduce `gwen.sample_size` |
 | Scenario deltas are zero | Check `monotone_constraints` signs and `caps.yml` bounds. Review `scenario_coefficients.json`. |
+
+## Scenario Modes (Stage 4)
+
+`scenario_mode` controls how Stage 4 composes baseline predictions, causal
+coefficients, and ensemble residuals.  The auto-fallback ladder picks the
+strongest mode whose required artifacts are present.
+
+| Mode | Status | When chosen automatically |
+|------|--------|---------------------------|
+| `mode_5_full_audit` | **Recommended (default)** | Per-edge NUTS + α field + base ensemble + DAG all available |
+| `mode_4_hybrid` | Legacy — kept for reproducibility | Manual selection only |
+| `mode_3_full_ensemble` | Legacy — kept for reproducibility | α field + base ensemble (no DAG) |
+| `mode_2_dag_local` | Legacy — kept for reproducibility | Per-edge NUTS + α + DAG (no ensemble) |
+| `mode_1_physics` | Legacy — fallback | Nothing else available |
+
+Modes 1–4 still produce valid scenario outputs and are preserved so existing
+runs remain reproducible.  Explicit selection of a legacy mode in
+`project.yml` (or `--scenario-mode mode_X`) emits a `DeprecationWarning`;
+auto-fallback to the same mode does **not** warn (it is a normal operating
+state when artifacts are missing).  Persisted scenario tables include a
+`legacy_mode` flag in their metadata so downstream consumers can detect
+which path produced them.
+
+## Variable Display Metadata
+
+Stage 3/4/5 producers emit human-readable `display` columns/fields such as
+`"-0.28 Fahrenheit (90% CI: -0.41 to -0.15) per 1% of canopy increase"`
+alongside the raw numeric values.  The phrasing is sourced from the
+optional `variables_meta:` block in `project.yml` (see
+`templates/blank/project.yml` for the full schema), with fallbacks to
+`output.response_units` and `scenarios[].unit`.  Existing numeric columns
+are unchanged — `display` is purely additive.

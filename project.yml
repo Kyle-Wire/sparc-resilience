@@ -347,6 +347,36 @@ scenarios:
     unit: "index"
 
 # ---------------------------------------------------------------------------
+# Variable Display Metadata (controls human-readable effect strings)
+# ---------------------------------------------------------------------------
+# Optional. When present, Stage 3/4/5 outputs gain `display` columns/fields
+# such as `"-0.28 Fahrenheit per 1% of canopy increase"` rendered from this
+# block.  Falls back to `output.response_units` and `scenarios[].unit` when
+# omitted; column names are humanised by default.
+variables_meta:
+  AAT_z:
+    unit: "°F"
+    display_name: "ambient air temperature"
+  Pct_Canopy:
+    unit: "%"
+    display_name: "canopy"
+  Pct_Impervious:
+    unit: "%"
+    display_name: "impervious surface"
+  NDVI:
+    unit: "index"
+    display_name: "NDVI"
+  Albedo:
+    unit: "reflectance"
+    display_name: "albedo"
+  Elevation_m:
+    unit: "m"
+    display_name: "elevation"
+  Distance_from_water_m:
+    unit: "m"
+    display_name: "distance from water"
+
+# ---------------------------------------------------------------------------
 # Joint (Multi-Variable) Scenarios
 # ---------------------------------------------------------------------------
 # Each joint scenario simultaneously changes multiple predictors in a single
