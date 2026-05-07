@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { invoke } from "@tauri-apps/api/core";
 
 type State = "idle" | "checking" | "available" | "downloading" | "error";
 
@@ -53,6 +54,16 @@ export default function UpdateBanner() {
     setState("downloading");
     setProgress(0);
     try {
+      // Stop the Python sidecar BEFORE downloading/installing. On Windows
+      // the running `sparc-sidecar.exe` is locked by the OS and the NSIS
+      // installer would fail with "file in use" otherwise. Best-effort:
+      // if the command fails (e.g. sidecar already gone), proceed anyway.
+      try {
+        await invoke("stop_sidecar");
+      } catch (err) {
+        console.warn("stop_sidecar failed before update:", err);
+      }
+
       let downloaded = 0;
       let total = 0;
       await update.downloadAndInstall((event) => {

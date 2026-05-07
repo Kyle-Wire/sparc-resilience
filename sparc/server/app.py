@@ -24,7 +24,7 @@ from typing import Any, Literal, Optional
 import numpy as np
 from pydantic import BaseModel, Field
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Query, Body, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Query, Body, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, Response
 
@@ -339,6 +339,82 @@ async def health():
         "current_stage": state.current_stage,
         "manifest_loaded": state.registry is not None,
     }
+
+
+# ------------------------------------------------------------------
+# Graceful shutdown
+# ------------------------------------------------------------------
+#
+# Called by the Tauri host (Rust `kill_server`) before it hard-kills the
+# sidecar so uvicorn can finish flushing in-flight requests and the
+# `@app.on_event("shutdown")` handler can close DB connections / WebSocket
+# subscribers cleanly. Without this, abruptly killing the process during a
+# Stage write can corrupt artifacts.db.
+#
+# Localhost-only by design: the sidecar binds to 127.0.0.1 already, but we
+# double-check the client host as a safety net in case the bind address is
+# ever changed.
+
+@app.post("/shutdown")
+async def shutdown(request: Request):
+    client_host = request.client.host if request.client else None
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(status_code=403, detail="shutdown is localhost-only")
+
+    # Defer the actual signal so this response can flush back to the caller
+    # first. SIGINT triggers uvicorn's graceful-shutdown path, which in turn
+    # invokes our @app.on_event("shutdown") hook.
+    import signal
+
+    async def _terminate_soon() -> None:
+        await asyncio.sleep(0.1)
+        try:
+            os.kill(os.getpid(), signal.SIGINT)
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"Failed to deliver SIGINT during /shutdown: {exc}")
+
+    asyncio.create_task(_terminate_soon())
+    return {"status": "shutting down"}
+
+
+@app.on_event("shutdown")
+async def _on_shutdown() -> None:
+    """Clean up shared resources before the process exits.
+
+    Best-effort: anything that fails here is logged and swallowed so we
+    don't block uvicorn's exit path.
+    """
+    # Drain WebSocket subscriber queues so any consumers see the connection
+    # close instead of hanging on a never-arriving message.
+    try:
+        subs = globals().get("_artifact_subscribers")
+        if subs:
+            for q in list(subs):
+                try:
+                    q.put_nowait({"type": "server_shutdown"})
+                except Exception:
+                    pass
+            subs.clear()
+    except Exception as exc:
+        print(f"Shutdown: subscriber drain failed: {exc}")
+
+    # Release the cached scenario GeoDataFrame(s) so the file handle is
+    # closed before PyInstaller's `_MEI` cleanup runs.
+    try:
+        _scenario_gpkg_cache.clear()
+    except Exception:
+        pass
+
+    # Close any artifact-store / SQLite connection the registry may hold.
+    try:
+        registry = getattr(state, "registry", None)
+        close = getattr(registry, "close", None)
+        if callable(close):
+            close()
+    except Exception as exc:
+        print(f"Shutdown: registry close failed: {exc}")
+
+    print("SPARC server shutdown complete")
 
 
 @app.get("/api/hardware")

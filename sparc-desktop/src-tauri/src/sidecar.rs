@@ -2,11 +2,123 @@ use std::fs::OpenOptions;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 
+/// Port the FastAPI sidecar listens on. Kept as a constant so the shutdown
+/// path agrees with the spawn path.
+const SIDECAR_PORT: &str = "8008";
+
 /// Holds the child handle of the spawned Python sidecar so it can be
-/// killed when the desktop app exits.
-pub struct SidecarHandle(pub Mutex<Option<Child>>);
+/// killed when the desktop app exits. On Windows we additionally hold a
+/// Job Object handle that the OS uses to reap the entire process tree if
+/// the host dies abruptly (crash, force-kill, console-X) and our normal
+/// `RunEvent::Exit` cleanup never runs.
+pub struct SidecarHandle {
+    pub child: Mutex<Option<Child>>,
+    #[cfg(windows)]
+    pub job: Mutex<Option<job::JobHandle>>,
+}
+
+impl SidecarHandle {
+    pub fn new() -> Self {
+        Self {
+            child: Mutex::new(None),
+            #[cfg(windows)]
+            job: Mutex::new(None),
+        }
+    }
+}
+
+// ─── Windows Job Object ─────────────────────────────────────────────────────
+
+#[cfg(windows)]
+pub mod job {
+    //! Wraps a Windows Job Object configured with
+    //! `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. When the last handle to the job
+    //! is closed (which happens automatically when our process exits for ANY
+    //! reason), the kernel kills every process assigned to the job. This is
+    //! the only mechanism Windows offers that survives host crashes /
+    //! force-quits and reliably reaps PyInstaller's `_MEI` child Python.
+
+    use std::io;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
+        JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
+
+    /// RAII wrapper around a Job Object HANDLE.
+    pub struct JobHandle(HANDLE);
+
+    // SAFETY: A Win32 HANDLE is just an opaque pointer-sized integer; the
+    // kernel object it refers to is safe to use from any thread. We only
+    // close it on Drop.
+    unsafe impl Send for JobHandle {}
+    unsafe impl Sync for JobHandle {}
+
+    impl JobHandle {
+        /// Create a new Job Object with KILL_ON_JOB_CLOSE set.
+        pub fn create() -> io::Result<Self> {
+            unsafe {
+                let h = CreateJobObjectW(None, PCWSTR::null())
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                if h.is_invalid() {
+                    return Err(io::Error::last_os_error());
+                }
+
+                let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
+                let info_ptr = &info as *const _ as *const _;
+                let info_size = std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
+                SetInformationJobObject(
+                    h,
+                    JobObjectExtendedLimitInformation,
+                    info_ptr,
+                    info_size,
+                )
+                .map_err(|e| {
+                    let _ = CloseHandle(h);
+                    io::Error::new(io::ErrorKind::Other, e.to_string())
+                })?;
+
+                Ok(JobHandle(h))
+            }
+        }
+
+        /// Assign a process (by PID) to this job. Newly spawned children of
+        /// that process are automatically inherited into the job by Windows,
+        /// which is exactly what we need for the PyInstaller bootloader.
+        pub fn assign_pid(&self, pid: u32) -> io::Result<()> {
+            unsafe {
+                let proc_handle = OpenProcess(
+                    PROCESS_TERMINATE | PROCESS_SET_QUOTA,
+                    false,
+                    pid,
+                )
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                let result = AssignProcessToJobObject(self.0, proc_handle)
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()));
+                let _ = CloseHandle(proc_handle);
+                result
+            }
+        }
+    }
+
+    impl Drop for JobHandle {
+        fn drop(&mut self) {
+            // Closing the last handle to the job triggers KILL_ON_JOB_CLOSE
+            // and the kernel terminates every process in it.
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+}
 
 // ─── Platform-specific helpers ───────────────────────────────────────────────
 
@@ -179,9 +291,28 @@ fn resolve_python() -> String {
 ///   1. Bundled PyInstaller binary next to the app binary.
 ///   2. Resolve the user's Python and run `python -m sparc server`.
 ///
-/// Server stdout/stderr go to a platform-appropriate log file.
+/// Server stdout/stderr go to a platform-appropriate log file. On Windows
+/// the spawned process is assigned to a Job Object so it (and any child
+/// processes it spawns) is killed automatically if the host dies abruptly.
 pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let port = "8008";
+    let port = SIDECAR_PORT;
+
+    // On Windows, create the Job Object up front so we can assign whichever
+    // spawn path actually succeeds.
+    #[cfg(windows)]
+    {
+        match job::JobHandle::create() {
+            Ok(j) => {
+                if let Some(state) = app.try_state::<SidecarHandle>() {
+                    *state.job.lock().unwrap() = Some(j);
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to create sidecar Job Object: {e}. \
+                          Falling back to best-effort cleanup on exit.");
+            }
+        }
+    }
 
     // Prepare log file (truncated each launch).
     let ld = log_dir();
@@ -235,9 +366,7 @@ pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
             match spawn_result {
                 Ok(child) => {
                     println!("Sidecar server started on port {port}");
-                    if let Some(state) = app.try_state::<SidecarHandle>() {
-                        *state.0.lock().unwrap() = Some(child);
-                    }
+                    register_child(app, child);
                     return Ok(());
                 }
                 Err(e) => {
@@ -277,9 +406,7 @@ pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
     match cmd.spawn() {
         Ok(child) => {
             println!("Server started on port {port} via {python}");
-            if let Some(state) = app.try_state::<SidecarHandle>() {
-                *state.0.lock().unwrap() = Some(child);
-            }
+            register_child(app, child);
             return Ok(());
         }
         Err(e) => {
@@ -294,14 +421,96 @@ pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
-/// Terminate the sidecar process if it is still running. Called on app exit.
-pub fn kill_server(app: &AppHandle) {
-    if let Some(state) = app.try_state::<SidecarHandle>() {
-        if let Some(mut child) = state.0.lock().unwrap().take() {
-            let _ = child.kill();
-            let _ = child.wait();
-            println!("Sidecar server terminated");
+/// Store the child handle and (on Windows) assign it to the Job Object so
+/// the kernel will reap the whole tree if we die unexpectedly.
+fn register_child(app: &AppHandle, child: Child) {
+    #[cfg(windows)]
+    {
+        let pid = child.id();
+        if let Some(state) = app.try_state::<SidecarHandle>() {
+            if let Some(j) = state.job.lock().unwrap().as_ref() {
+                if let Err(e) = j.assign_pid(pid) {
+                    eprintln!("Failed to assign sidecar pid {pid} to Job Object: {e}");
+                }
+            }
         }
     }
+    if let Some(state) = app.try_state::<SidecarHandle>() {
+        *state.child.lock().unwrap() = Some(child);
+    }
+}
+
+/// Ask the Python server to shut itself down cleanly via its `/shutdown`
+/// endpoint. Returns quickly; callers should still wait on the child
+/// afterwards. Best-effort: any error (server already gone, port closed,
+/// timeout) is logged and ignored.
+fn request_graceful_shutdown() {
+    let url = format!("http://127.0.0.1:{SIDECAR_PORT}/shutdown");
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(3))
+        .build();
+    match agent.post(&url).call() {
+        Ok(_) => println!("Sent /shutdown to sidecar"),
+        Err(e) => println!("Sidecar /shutdown request failed (continuing to hard-kill): {e}"),
+    }
+}
+
+/// Two-phase termination of the sidecar:
+///   1. POST /shutdown so FastAPI/uvicorn can flush DB writes and close
+///      WebSocket subscribers cleanly.
+///   2. Poll up to ~5 s for the child to exit on its own.
+///   3. If still alive, hard-kill. On Windows the Job Object is the
+///      ultimate safety net for any descendants.
+pub fn kill_server(app: &AppHandle) {
+    let Some(state) = app.try_state::<SidecarHandle>() else { return };
+    let Some(mut child) = state.child.lock().unwrap().take() else { return };
+
+    request_graceful_shutdown();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                println!("Sidecar exited gracefully");
+                drop_job(&state);
+                return;
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => {
+                eprintln!("try_wait on sidecar failed: {e}");
+                break;
+            }
+        }
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    println!("Sidecar server terminated (forced)");
+    drop_job(&state);
+}
+
+/// Drop the Job Object handle, which on Windows triggers KILL_ON_JOB_CLOSE
+/// and reaps any straggler processes (e.g. PyInstaller's `_MEI` child).
+fn drop_job(_state: &SidecarHandle) {
+    #[cfg(windows)]
+    {
+        // Taking the Option drops the JobHandle, which closes the kernel
+        // handle, which triggers the kill.
+        let _ = _state.job.lock().unwrap().take();
+    }
+}
+
+/// Tauri command exposed to the frontend so the updater UI can stop the
+/// sidecar BEFORE invoking `downloadAndInstall`. Without this the running
+/// `sparc-sidecar.exe` is locked and the installer fails.
+#[tauri::command]
+pub fn stop_sidecar(app: AppHandle) -> Result<(), String> {
+    kill_server(&app);
+    Ok(())
 }
 

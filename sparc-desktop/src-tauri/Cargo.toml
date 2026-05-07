@@ -18,3 +18,21 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# HTTP client used to send a graceful /shutdown request to the Python
+# sidecar before we hard-kill it. We only ever talk to 127.0.0.1, so TLS
+# is disabled to avoid pulling in `ring` / a C toolchain dep.
+ureq = { version = "2", default-features = false }
+
+# Windows Job Object APIs — used to guarantee the sidecar process tree is
+# reaped when the host dies for ANY reason (graceful exit, crash, force
+# kill, console-X). Without this the PyInstaller bootloader can leak the
+# unpacked `_MEI` child Python process, which then locks `sparc-sidecar.exe`
+# and breaks the auto-updater.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }

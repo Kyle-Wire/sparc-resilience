@@ -1,6 +1,5 @@
 mod sidecar;
 
-use std::sync::Mutex;
 use tauri::RunEvent;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -10,7 +9,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .manage(sidecar::SidecarHandle(Mutex::new(None)))
+        .manage(sidecar::SidecarHandle::new())
+        .invoke_handler(tauri::generate_handler![sidecar::stop_sidecar])
         .setup(|app| {
             let handle = app.handle().clone();
             // Spawn the Python server in the background
