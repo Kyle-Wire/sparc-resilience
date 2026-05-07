@@ -4,6 +4,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
+import { PanelGate } from "@/components/ui/PanelGate";
 import { useManifest } from "@/hooks/useManifest";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
 import { getScenarioTrajectory, type TrajectoryRecord } from "@/lib/api";
@@ -115,12 +116,14 @@ export default function ScenarioTrajectoryPanel() {
 
   if (!present) {
     return (
-      <Panel title="Scenario trajectory" subtitle="stage 4">
-        <PanelEmpty
-          reason="No trajectory artifact"
-          hint="Run stage 4 with trajectory output enabled."
-        />
-      </Panel>
+      <PanelGate panelId="scenario_trajectory" title="Scenario trajectory" subtitle="stage 4">
+        <Panel title="Scenario trajectory" subtitle="stage 4">
+          <PanelEmpty
+            reason="No trajectory artifact"
+            hint="Run stage 4 with trajectory output enabled."
+          />
+        </Panel>
+      </PanelGate>
     );
   }
   if (!records.length) {

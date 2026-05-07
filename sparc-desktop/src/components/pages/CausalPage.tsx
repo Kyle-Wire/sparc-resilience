@@ -40,11 +40,13 @@ function KernelFieldViz({ data }: KernelFieldVizProps) {
   const H = 360;
   const cx = W / 2;
   const cy = H / 2;
+  const predictors = data.predictors ?? [];
+  if (predictors.length === 0) return null;
 
   // Compute a common scale so the longest axis fits within ~85% of the box.
   const maxRange = Math.max(
     1e-9,
-    ...data.predictors.flatMap((p) => {
+    ...predictors.flatMap((p) => {
       const rx = p.kappa_x && p.kappa_x > 0 ? 1 / p.kappa_x : 0;
       const ry = p.kappa_y && p.kappa_y > 0 ? 1 / p.kappa_y : 0;
       const ri = p.kappa && p.kappa > 0 ? 1 / p.kappa : 0;
@@ -58,7 +60,7 @@ function KernelFieldViz({ data }: KernelFieldVizProps) {
   ];
 
   return (
-    <Card title="Anisotropy ellipses" subtitle={`outcome: ${data.outcome_name}`}>
+    <Card title="Anisotropy ellipses" subtitle={`outcome: ${data.outcome_name ?? "—"}`}>
       <div style={{ display: "flex", gap: 24, alignItems: "flex-start" }}>
         <svg width={W} height={H} style={{ background: "#fafaf7", border: "1px solid var(--line)" }}>
           {/* gridlines */}
@@ -73,7 +75,7 @@ function KernelFieldViz({ data }: KernelFieldVizProps) {
           <line x1={cx} x2={cx} y1={0} y2={H} stroke="#bbb" />
           <line x1={0} x2={W} y1={cy} y2={cy} stroke="#bbb" />
           {/* one ellipse per predictor */}
-          {data.predictors.map((p, i) => {
+          {predictors.map((p, i) => {
             const rx = p.kappa_x && p.kappa_x > 0 ? (1 / p.kappa_x) * scale
                        : p.kappa && p.kappa > 0 ? (1 / p.kappa) * scale : 0;
             const ry = p.kappa_y && p.kappa_y > 0 ? (1 / p.kappa_y) * scale
@@ -111,7 +113,7 @@ function KernelFieldViz({ data }: KernelFieldVizProps) {
               </tr>
             </thead>
             <tbody>
-              {data.predictors.map((p, i) => {
+              {predictors.map((p, i) => {
                 const color = palette[i % palette.length];
                 const aniso = !!p.is_anisotropic
                   || (p.kappa_x != null && p.kappa_y != null && p.kappa_x !== p.kappa_y);
@@ -406,8 +408,8 @@ export default function CausalPage() {
       {kf.data ? (
         <Card title="KernelField metadata">
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
-            <KeyVal label="outcome" value={kf.data.outcome_name} />
-            <KeyVal label="predictors" value={String(kf.data.predictors.length)} />
+            <KeyVal label="outcome" value={kf.data.outcome_name ?? "—"} />
+            <KeyVal label="predictors" value={String(kf.data.predictors?.length ?? 0)} />
             <KeyVal label="default ν" value={String(kf.data.matern_default_nu ?? "—")} />
             <KeyVal label="source" value={kf.data.source ?? "—"} />
           </div>

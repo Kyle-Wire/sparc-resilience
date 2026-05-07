@@ -1708,18 +1708,38 @@ async def get_correlogram_data():
 
 @app.get("/results/kernel_field")
 async def get_kernel_field_artifact():
-    """Return the canonical KernelField artifact (Stage 0 → Stage 1)."""
+    """Return the canonical KernelField artifact (Stage 0 → Stage 1).
+
+    Falls back to the Stage-0 ``cross_correlogram_kernel_field`` payload
+    when no MGWR-derived KernelField has been written yet — that artifact
+    carries the same per-pair spatial-coupling information the panel
+    needs.  The fallback payload is annotated with
+    ``{"source": "cross_correlogram"}`` so the renderer can dispatch on
+    schema.
+    """
     store = _open_store()
     try:
         for stage in ("1", "0"):
             if store.has(stage, "kernel_field"):
-                return store.read_any(stage, "kernel_field")
+                payload = store.read_any(stage, "kernel_field")
+                if isinstance(payload, dict):
+                    payload.setdefault("source", "kernel_field")
+                return payload
+        if store.has("0", "cross_correlogram_kernel_field"):
+            payload = store.read_any("0", "cross_correlogram_kernel_field")
+            if isinstance(payload, dict):
+                payload = dict(payload)
+                payload["source"] = "cross_correlogram"
+            return payload
     finally:
         from sparc.registry.run_registry import set_active_registry
         set_active_registry(None)
     raise _missing_artifact_response(
         artifact_id="kernel_field", stage="0/1",
-        hint="No KernelField artifact has been written by Stages 0/1.",
+        hint=(
+            "No KernelField artifact written by Stages 0/1 and no "
+            "cross_correlogram_kernel_field fallback found in Stage 0."
+        ),
     )
 
 
@@ -4814,6 +4834,156 @@ async def get_results_availability():
         "source": state.project_path,
     }
     return out
+
+
+# ------------------------------------------------------------------
+# Panel availability — declarative status for desktop insights panels
+# ------------------------------------------------------------------
+
+# Each panel entry maps to one or more *artifact specs*. A spec is either a
+# tuple ``(stage, artifact_id)`` or a tuple ``(stage, "prefix::*")`` which
+# matches any registered artifact whose id starts with that prefix.
+# A panel is ``ready`` when at least one of its specs is satisfied,
+# ``partial`` when some but not all are, otherwise ``awaiting``.
+_PANEL_SPECS: dict[str, dict] = {
+    "overview":            {"stage": "0", "specs": [("0", "correlogram_results")]},
+    "headline":            {"stage": "2", "specs": [("2", "ensemble_results")]},
+    "model_performance":   {"stage": "2", "specs": [("2", "ensemble_results")]},
+    "dataset_profile":     {"stage": "0", "specs": [("2", "dataset_profile")]},
+    "correlogram":         {"stage": "0", "specs": [("0", "correlogram_results")]},
+    "kernel_field":        {"stage": "0", "specs": [
+        ("1", "kernel_field"),
+        ("0", "kernel_field"),
+        ("0", "cross_correlogram_kernel_field"),
+    ]},
+    "predictions_map":     {"stage": "2", "specs": [("2", "spatial_cv_predictions")]},
+    "pdp":                 {"stage": "2", "specs": [
+        ("3", "dose_response_curves"),
+        ("2", "gwrf_condition_curves"),
+        ("2", "v2_neural_pdp::*"),
+    ]},
+    "dose_response":       {"stage": "3", "specs": [("3", "dose_response_curves")]},
+    "cate":                {"stage": "3", "specs": [("3", "cate_summary")]},
+    "divergence":          {"stage": "3", "specs": [("3", "cate_vs_gwr_divergence")]},
+    "sensitivity":         {"stage": "3", "specs": [
+        ("3", "scenario_coefficients"),
+        ("3", "causal_diagnostics"),
+    ]},
+    "negative_control":    {"stage": "3", "specs": [("3", "cate_summary")]},
+    "scenario_strip":      {"stage": "4", "specs": [("4", "scenario_results")]},
+    "scenario_map":        {"stage": "4", "specs": [("4", "scenario_results")]},
+    "scenario_uncertainty":{"stage": "4", "specs": [("4", "scenario_results")]},
+    "scenario_trajectory": {"stage": "4", "specs": [("4", "scenario_results")]},
+    "equity_cost":         {"stage": "4", "specs": [("4", "scenario_results")]},
+    "artifact_browser":    {"stage": "0", "specs": [("0", "correlogram_results")]},
+}
+
+_STAGE_HINTS: dict[str, str] = {
+    "0": "Run Stage 0 (Correlogram) to populate this panel.",
+    "1": "Run Stage 1 (GWEN) to populate this panel.",
+    "2": "Run Stage 2 (Spatial CV) to populate this panel.",
+    "3": "Run Stage 3 (Causal Validation) to populate this panel.",
+    "4": "Run Stage 4 (Scenarios) to populate this panel.",
+}
+
+_STAGE_LABELS: dict[str, str] = {
+    "0": "STAGE 0 · CORRELOGRAM",
+    "1": "STAGE 1 · GWEN",
+    "2": "STAGE 2 · SPATIAL CV",
+    "3": "STAGE 3 · CAUSAL",
+    "4": "STAGE 4 · SCENARIOS",
+}
+
+
+def _spec_matches(spec: tuple[str, str], db_artifacts: set[tuple[str, str]],
+                  prefix_index: dict[tuple[str, str], bool]) -> bool:
+    stage_id, art_id = spec
+    if art_id.endswith("::*"):
+        prefix = art_id[: -1]  # keep '::' but drop the trailing '*'
+        return prefix_index.get((stage_id, prefix), False)
+    return (stage_id, art_id) in db_artifacts
+
+
+@app.get("/panels/availability")
+async def get_panels_availability():
+    """Per-panel availability snapshot for the desktop insights workspace.
+
+    Returns a status enum the frontend can use to render a uniform
+    ``<PanelGate>`` (status pill + empty-state message) without each
+    panel re-implementing manifest-walk logic.
+
+    Status values
+    -------------
+    ``ready``    — at least one required artifact is present.
+    ``partial``  — some required artifacts present; others missing.
+    ``awaiting`` — none of the required artifacts have been produced yet.
+    ``running``  — pipeline is currently executing the panel's stage.
+    ``failed``   — a previous run reported an error for the panel's stage.
+    """
+    db_artifacts: set[tuple[str, str]] = set()
+    # Pre-compute prefix presence (stage, "prefix::") -> bool to keep the
+    # per-panel scan O(1) for the wildcard specs.
+    prefix_index: dict[tuple[str, str], bool] = {}
+    if state.registry is not None:
+        try:
+            man = state.registry.manifest
+            for stage_obj in man.stages.values():
+                stage_str = str(stage_obj.stage)
+                for art in stage_obj.artifacts.values():
+                    if art.partial:
+                        continue
+                    db_artifacts.add((stage_str, art.id))
+                    sep = art.id.find("::")
+                    if sep > 0:
+                        prefix_index[(stage_str, art.id[: sep + 2])] = True
+        except Exception:
+            db_artifacts = set()
+            prefix_index = {}
+
+    is_running = bool(state.is_running)
+    current_stage = (
+        str(state.current_stage) if state.current_stage is not None else None
+    )
+    last_errors: dict[str, str] = getattr(state, "stage_errors", {}) or {}
+
+    panels_out: dict[str, dict] = {}
+    for panel_id, cfg in _PANEL_SPECS.items():
+        stage = cfg["stage"]
+        specs: list[tuple[str, str]] = list(cfg["specs"])
+        matched = [s for s in specs if _spec_matches(s, db_artifacts, prefix_index)]
+        missing = [f"{s[0]}:{s[1]}" for s in specs if s not in matched]
+
+        if matched and not missing:
+            status = "ready"
+        elif matched:
+            status = "partial"
+        else:
+            status = "awaiting"
+
+        # Stage-level overrides win (they describe pipeline state, not
+        # artifact presence).
+        if stage in last_errors and not matched:
+            status = "failed"
+        if is_running and current_stage == stage and not matched:
+            status = "running"
+
+        panels_out[panel_id] = {
+            "status": status,
+            "stage": stage,
+            "stage_label": _STAGE_LABELS.get(stage, f"STAGE {stage}"),
+            "missing": missing,
+            "matched": [f"{s[0]}:{s[1]}" for s in matched],
+            "hint": (
+                last_errors[stage] if status == "failed"
+                else _STAGE_HINTS.get(stage, "Run the relevant stage.")
+            ),
+        }
+
+    return {
+        "panels": panels_out,
+        "is_running": is_running,
+        "current_stage": current_stage,
+    }
 
 
 @app.get("/results/artifacts")

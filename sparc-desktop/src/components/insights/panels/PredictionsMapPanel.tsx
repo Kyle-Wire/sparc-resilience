@@ -43,13 +43,28 @@ export default function PredictionsMapPanel() {
       .map(([k]) => k);
   }, [geo]);
 
-  const resolvedLayer =
-    layer ||
-    (layerOptions.includes("predicted_full")
-      ? "predicted_full"
-      : layerOptions.includes("predicted")
-        ? "predicted"
-        : layerOptions[0] ?? "");
+  const resolvedLayer = useMemo(() => {
+    if (layer && layerOptions.includes(layer)) return layer;
+    // Prefer increasingly-fancy ensemble outputs, then any numeric column.
+    const preference = [
+      "predicted_full",
+      "predicted",
+      "pred_ensemble",
+      "pred_meta",
+      "pred_v2_neural",
+      "pred_neural",
+      "pred_gwrf",
+      "pred_mgwr",
+      "pred_ggpgam",
+      "pred_ols",
+    ];
+    for (const candidate of preference) {
+      if (layerOptions.includes(candidate)) return candidate;
+    }
+    // Fall back to the first column whose name suggests it's a prediction.
+    const predLike = layerOptions.find((c) => /^pred(_|icted)/i.test(c));
+    return predLike ?? layerOptions[0] ?? "";
+  }, [layer, layerOptions]);
 
   if (!present) {
     return (

@@ -312,15 +312,66 @@ interface PanelEmptyProps {
   reason?: string;
   hint?: ReactNode;
   action?: ReactNode;
+  /** Optional status pill rendered above the reason line, e.g. "STAGE 3 NOT STARTED". */
+  status?: ReactNode;
 }
 
-export function PanelEmpty({ reason = "No data yet", hint, action }: PanelEmptyProps) {
+export function PanelEmpty({ reason = "No data yet", hint, action, status }: PanelEmptyProps) {
   return (
     <div className="panel-empty">
+      {status && <div style={{ marginBottom: 8 }}>{status}</div>}
       <div className="reason">{reason}</div>
       {hint && <div className="hint">{hint}</div>}
       {action}
     </div>
+  );
+}
+
+// ------------------------------------------------------------------
+// StatusPill — uniform pipeline-status badge for empty panels.
+// Mirrors the `/panels/availability` status enum; colour-coded:
+//   ready    → green     (rarely shown — panel renders content instead)
+//   awaiting → ink-3
+//   partial  → amber
+//   running  → ink-2 with a pulsing live-dot
+//   failed   → crimson
+// ------------------------------------------------------------------
+export type PanelStatusValue = "ready" | "awaiting" | "partial" | "running" | "failed";
+
+interface StatusPillProps {
+  status: PanelStatusValue;
+  /** Optional label override; defaults to the status text in caps. */
+  label?: ReactNode;
+}
+
+const STATUS_COLORS: Record<PanelStatusValue, string> = {
+  ready:    "var(--green, #2f7d32)",
+  awaiting: "var(--ink-3, #8a8170)",
+  partial:  "var(--amber, #b86a1e)",
+  running:  "var(--ink-2, #6e6358)",
+  failed:   "var(--crimson, #b91c1c)",
+};
+
+export function StatusPill({ status, label }: StatusPillProps) {
+  const color = STATUS_COLORS[status];
+  const text = label ?? status.toUpperCase();
+  return (
+    <span
+      className="pill"
+      style={{
+        background: `${color}1f`,
+        color,
+        fontSize: 10,
+        letterSpacing: 0.6,
+        fontWeight: 600,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+      }}
+    >
+      {status === "running" && <LiveDot />}
+      {text}
+    </span>
   );
 }
 

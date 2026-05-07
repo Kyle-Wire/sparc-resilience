@@ -30,15 +30,52 @@ function missingTone(pct: number): string {
   return "var(--ink-3)";
 }
 
+/** Convert a verbose `${status}: ${body}` error string into a short
+ * human-readable headline plus an optional details blob. The server
+ * returns 4xx/5xx bodies that are usually JSON ({detail|hint|message});
+ * we surface the most useful one-liner and stash everything else for the
+ * collapsible <details> block so the empty state stays scannable. */
+function summariseError(raw: string): { short: string; details: string | null } {
+  const colon = raw.indexOf(":");
+  const status = colon > 0 ? raw.slice(0, colon).trim() : "";
+  const body = colon > 0 ? raw.slice(colon + 1).trim() : raw.trim();
+  let short = body.split("\n")[0]?.slice(0, 160) || raw.slice(0, 160);
+  let pretty = body;
+  try {
+    const parsed = JSON.parse(body) as Record<string, unknown>;
+    const candidate =
+      (parsed.detail as { hint?: string; message?: string } | string | undefined) ??
+      parsed.hint ?? parsed.message ?? parsed.error;
+    if (typeof candidate === "string") {
+      short = candidate;
+    } else if (candidate && typeof candidate === "object") {
+      const c = candidate as { hint?: string; message?: string };
+      short = c.hint || c.message || short;
+    }
+    pretty = JSON.stringify(parsed, null, 2);
+  } catch {
+    /* not JSON — keep first-line short and raw body as details */
+  }
+  if (status) short = `${status} · ${short}`;
+  return { short, details: pretty.length > short.length ? pretty : null };
+}
+
 export default function DatasetProfilePanel() {
   const [profile, setProfile] = useState<DatasetProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorDetails, setErrorDetails] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
     getDatasetProfile()
-      .then((p) => { if (alive) setProfile(p); })
-      .catch((e) => { if (alive) setError(e instanceof Error ? e.message : "no profile"); });
+      .then((p) => { if (alive) { setProfile(p); setError(null); setErrorDetails(null); } })
+      .catch((e) => {
+        if (!alive) return;
+        const raw = e instanceof Error ? e.message : String(e);
+        const { short, details } = summariseError(raw);
+        setError(short);
+        setErrorDetails(details);
+      });
     return () => { alive = false; };
   }, []);
 
@@ -66,6 +103,26 @@ export default function DatasetProfilePanel() {
           reason={error}
           hint="Load a project (Setup) so the dataset profile endpoint can read it."
         />
+        {errorDetails ? (
+          <details style={{ marginTop: 10, fontSize: 11, color: "var(--ink-3)" }}>
+            <summary style={{ cursor: "pointer" }}>Show server response</summary>
+            <pre style={{
+              marginTop: 6,
+              padding: 8,
+              maxHeight: 220,
+              overflow: "auto",
+              background: "var(--paper-2, #f6f3ec)",
+              border: "1px solid var(--line)",
+              borderRadius: 4,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              fontFamily: "var(--font-mono)",
+              fontSize: 10,
+            }}>
+              {errorDetails}
+            </pre>
+          </details>
+        ) : null}
       </Panel>
     );
   }

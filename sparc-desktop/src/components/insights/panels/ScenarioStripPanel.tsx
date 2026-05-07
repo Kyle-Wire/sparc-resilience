@@ -5,6 +5,7 @@
  */
 import { useEffect, useState } from "react";
 import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
+import { PanelGate } from "@/components/ui/PanelGate";
 import { useManifest } from "@/hooks/useManifest";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
 import { getScenarioDetail } from "@/lib/api";
@@ -38,12 +39,14 @@ export default function ScenarioStripPanel() {
 
   if (!present) {
     return (
-      <Panel title="Saved scenarios" subtitle="stage 4">
-        <PanelEmpty
-          reason="No scenarios run"
-          hint="Configure scenarios on the Scenarios page and run stage 4."
-        />
-      </Panel>
+      <PanelGate panelId="scenario_strip" title="Saved scenarios" subtitle="stage 4">
+        <Panel title="Saved scenarios" subtitle="stage 4">
+          <PanelEmpty
+            reason="No scenarios run"
+            hint="Configure scenarios on the Scenarios page and run stage 4."
+          />
+        </Panel>
+      </PanelGate>
     );
   }
 

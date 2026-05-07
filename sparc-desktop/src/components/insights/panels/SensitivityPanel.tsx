@@ -4,13 +4,17 @@
  */
 import { useEffect, useState } from "react";
 import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
+import { PanelGate } from "@/components/ui/PanelGate";
 import { useManifest } from "@/hooks/useManifest";
 import { getCausalSensitivity, type CausalSensitivity } from "@/lib/api";
 
 export default function SensitivityPanel() {
   const manifest = useManifest();
-  const stage3 = manifest.stage("3");
-  const present = !!stage3 && Object.keys(stage3.artifacts ?? {}).some((a) => a.includes("sensitivity"));
+  // Sensitivity is derived live from `/results/causal` (which needs
+  // stage-3 `scenario_coefficients`).
+  const present =
+    !!manifest.lookup("3", "scenario_coefficients") ||
+    !!manifest.lookup("3", "causal_diagnostics");
   const [data, setData] = useState<CausalSensitivity | null>(null);
 
   useEffect(() => {
@@ -21,24 +25,20 @@ export default function SensitivityPanel() {
     getCausalSensitivity().then(setData).catch(() => setData(null));
   }, [present, manifest.lastUpdated]);
 
-  if (!present) {
-    return (
-      <Panel title="Sensitivity analysis" subtitle="stage 3 · causal">
-        <PanelEmpty
-          reason="No sensitivity output"
-          hint="Run the Causal stage; sensitivity ships alongside dose-response."
-        />
-      </Panel>
-    );
-  }
-  if (!data?.results?.length) {
-    return (
-      <Panel title="Sensitivity analysis" subtitle="stage 3 · causal">
-        <PanelEmpty reason="Loading…" />
-      </Panel>
-    );
-  }
+  return (
+    <PanelGate panelId="sensitivity" title="Sensitivity analysis" subtitle="stage 3 · causal">
+      {!data?.results?.length ? (
+        <Panel title="Sensitivity analysis" subtitle="stage 3 · causal">
+          <PanelEmpty reason="Loading…" />
+        </Panel>
+      ) : (
+        <SensitivityTable data={data} />
+      )}
+    </PanelGate>
+  );
+}
 
+function SensitivityTable({ data }: { data: CausalSensitivity }) {
   return (
     <Panel title="Sensitivity analysis" subtitle={`method · ${data.method}`}>
       <div style={{ overflowX: "auto" }}>

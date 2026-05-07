@@ -433,14 +433,39 @@ export interface KernelFieldPredictor {
   kappa_posterior_samples?: number[] | null;
 }
 
+export interface KernelFieldPair {
+  i: number;
+  j: number;
+  i_name: string;
+  j_name: string;
+  peak_sym: number;
+  peak_lag_sym_m: number;
+  peak_anti: number;
+  peak_lag_anti_m: number;
+  peak_angle_anti_deg: number | null;
+  effective_range_sym_m: number | null;
+  p_sym: number | null;
+  p_anti: number | null;
+  significant_sym: boolean;
+  significant_anti: boolean;
+}
+
 export interface KernelFieldData {
-  outcome_name: string;
-  predictors: KernelFieldPredictor[];
+  outcome_name?: string;
+  predictors?: KernelFieldPredictor[];
   variable_names?: string[];
   range_matrix?: (number | null)[][];
   bandwidth_mismatch_warnings?: string[];
   matern_default_nu?: number;
+  /** Discriminator: "kernel_field" (legacy MGWR) | "cross_correlogram". */
   source?: string;
+  // ----- cross_correlogram fallback fields -----
+  n_angle_bins?: number;
+  lag_distances?: number[];
+  angle_centers_deg?: number[];
+  pairs?: Record<string, KernelFieldPair>;
+  antisymmetric_flags?: string[];
+  n_pairs_per_bin?: number[][];
 }
 
 export interface CausalPDPCurve {

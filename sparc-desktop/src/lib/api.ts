@@ -73,6 +73,30 @@ export interface RunEventsResponse {
 export const getRunEvents = () => get<RunEventsResponse>("/run/events");
 
 // ------------------------------------------------------------------
+// Panel availability — single declarative status snapshot for all
+// insights panels (avoids each panel re-implementing manifest walking).
+// ------------------------------------------------------------------
+export type PanelStatus = "ready" | "awaiting" | "partial" | "running" | "failed";
+
+export interface PanelAvailabilityEntry {
+  status: PanelStatus;
+  stage: string;
+  stage_label: string;
+  missing: string[];
+  matched: string[];
+  hint: string;
+}
+
+export interface PanelAvailabilityResponse {
+  panels: Record<string, PanelAvailabilityEntry>;
+  is_running: boolean;
+  current_stage: string | null;
+}
+
+export const getPanelsAvailability = () =>
+  get<PanelAvailabilityResponse>("/panels/availability");
+
+// ------------------------------------------------------------------
 // Project
 // ------------------------------------------------------------------
 export const loadProject = (path: string) =>
@@ -399,6 +423,16 @@ export const getCorrelogramData = () =>
 // Phase C — KernelField, causal PDP, divergence, scenario routing
 export const getKernelFieldData = () =>
   get<KernelFieldData>("/results/kernel_field");
+
+/** Fetch any registered struct/table artifact as JSON via the generic
+ * `/artifacts/{stage}/{id}.json` endpoint. */
+export const getArtifactJson = <T = unknown>(
+  stage: string | number,
+  artifactId: string,
+) =>
+  get<T>(
+    `/artifacts/${encodeURIComponent(String(stage))}/${encodeURIComponent(artifactId)}.json`,
+  );
 
 export const getCausalPDPCurves = () =>
   get<CausalPDPData>("/results/causal/pdp_curves");

@@ -4,6 +4,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { Panel, PanelEmpty, Pill, Stat, StatGrid } from "@/components/ui/DesignSystem";
+import { PanelGate } from "@/components/ui/PanelGate";
 import { useManifest } from "@/hooks/useManifest";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
 import { getScenarioUncertainty, type ScenarioUncertaintyResponse } from "@/lib/api";
@@ -58,12 +59,14 @@ export default function ScenarioUncertaintyPanel() {
 
   if (!present) {
     return (
-      <Panel title="Scenario uncertainty" subtitle="stage 4 · MC">
-        <PanelEmpty
-          reason="No uncertainty artifact"
-          hint="Run stage 4 with Monte-Carlo uncertainty enabled."
-        />
-      </Panel>
+      <PanelGate panelId="scenario_uncertainty" title="Scenario uncertainty" subtitle="stage 4 · MC">
+        <Panel title="Scenario uncertainty" subtitle="stage 4 · MC">
+          <PanelEmpty
+            reason="No uncertainty artifact"
+            hint="Run stage 4 with Monte-Carlo uncertainty enabled."
+          />
+        </Panel>
+      </PanelGate>
     );
   }
   if (!data) {

@@ -5,6 +5,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
+import { PanelGate } from "@/components/ui/PanelGate";
 import { useManifest } from "@/hooks/useManifest";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
 import { getPdpCurves } from "@/lib/api";
@@ -157,12 +158,14 @@ export default function PdpPanel() {
 
   if (!present) {
     return (
-      <Panel title="Response curves" subtitle="PDP">
-        <PanelEmpty
-          reason="No PDP curves yet"
-          hint="Run stage 2 (Models) or stage 3 (Causal) to generate response curves."
-        />
-      </Panel>
+      <PanelGate panelId="pdp" title="Response curves" subtitle="PDP">
+        <Panel title="Response curves" subtitle="PDP">
+          <PanelEmpty
+            reason="No PDP curves yet"
+            hint="Run stage 2 (Models) or stage 3 (Causal) to generate response curves."
+          />
+        </Panel>
+      </PanelGate>
     );
   }
   if (!variables.length) {

@@ -14,24 +14,38 @@ export default function UpdateBanner() {
   useEffect(() => {
     if (!import.meta.env.PROD) return;
 
-    const timer = setTimeout(async () => {
+    let cancelled = false;
+
+    const runCheck = async () => {
+      // Don't re-check if we already found an update or are mid-download
+      if (cancelled) return;
       try {
-        setState("checking");
         const u = await check();
+        if (cancelled) return;
         if (u?.available) {
           setUpdate(u);
           setNewVersion(u.version);
-          setState("available");
-        } else {
-          setState("idle");
+          setState((prev) =>
+            prev === "downloading" || prev === "available" ? prev : "available",
+          );
         }
       } catch {
         // Silently fail — don't disturb the user if update check fails
-        setState("idle");
       }
-    }, 3000);
+    };
 
-    return () => clearTimeout(timer);
+    // Initial check ~3s after launch.
+    const initialTimer = setTimeout(runCheck, 3000);
+
+    // Periodic background check every 4 hours.
+    const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+    const interval = setInterval(runCheck, FOUR_HOURS_MS);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(initialTimer);
+      clearInterval(interval);
+    };
   }, []);
 
   const handleInstall = async () => {

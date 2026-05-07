@@ -5,6 +5,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
+import { PanelGate } from "@/components/ui/PanelGate";
 import { useManifest } from "@/hooks/useManifest";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
 import { getScenarioDetail } from "@/lib/api";
@@ -48,12 +49,14 @@ export default function ScenarioMapPanel() {
 
   if (!present) {
     return (
-      <Panel title="Scenario map" subtitle="stage 4">
-        <PanelEmpty
-          reason="No scenarios run"
-          hint="Configure scenarios on the Scenarios page and run stage 4."
-        />
-      </Panel>
+      <PanelGate panelId="scenario_map" title="Scenario map" subtitle="stage 4">
+        <Panel title="Scenario map" subtitle="stage 4">
+          <PanelEmpty
+            reason="No scenarios run"
+            hint="Configure scenarios on the Scenarios page and run stage 4."
+          />
+        </Panel>
+      </PanelGate>
     );
   }
   if (!features.length) {
