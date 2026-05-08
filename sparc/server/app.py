@@ -167,6 +167,8 @@ def _attach_registry(config: dict) -> None:
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: could not attach artifact listener: {exc}")
         state.registry = reg
+        # Clear stale cached results from the previous project.
+        state.result_cache.clear()
         # Make this registry the process-global "active" one so pipeline
         # writers (`get_active_store()`) and any in-process consumers see it
         # for the lifetime of the loaded project. Mirrors `__main__.py`.
@@ -213,6 +215,13 @@ def _on_artifact_registered(entry: Any) -> None:
     }
     try:
         state.buffer_event(event)
+    except Exception:  # noqa: BLE001
+        pass
+    # Invalidate cached results for this stage so the next read re-fetches.
+    try:
+        stage_str = str(getattr(entry, "stage", ""))
+        if stage_str:
+            state.result_cache.invalidate_stage(stage_str)
     except Exception:  # noqa: BLE001
         pass
     # Fan out to live ws subscribers via their queues. Listener may run on a
@@ -269,12 +278,18 @@ def _read_or_404(
     The frontend's ``parseMissingArtifact`` consumes the structured
     detail to render an actionable empty-state.
     """
+    # Fast path: serve from in-process LRU cache if available.
+    cached = state.result_cache.get(stage, artifact_id)
+    if cached is not None:
+        return cached
     store = _open_store()
     if not store.has(stage, artifact_id):
         raise _missing_artifact_response(
             artifact_id=artifact_id, stage=stage, hint=hint,
         )
-    return store.read_any(stage, artifact_id)
+    result = store.read_any(stage, artifact_id)
+    state.result_cache.set(stage, artifact_id, result)
+    return result
 
 
 def _missing_artifact_response(
@@ -294,6 +309,72 @@ def _missing_artifact_response(
         "hint": hint,
     }
     return HTTPException(status_code=404, detail=detail)
+
+
+# ------------------------------------------------------------------
+# Background result pre-warm
+# ------------------------------------------------------------------
+
+import threading as _threading
+
+# Cancellation event for the currently-running pre-warm thread.
+# Replaced each time a new project is loaded.
+_prewarm_cancel: _threading.Event | None = None
+
+
+def _prewarm_results(cancel: _threading.Event) -> None:
+    """Populate the server-side ResultCache with frontend-facing artifacts.
+
+    Runs in a daemon thread so it doesn't block the /project/load response.
+    Only reads artifacts that have a ``server:/results/...`` consumer so we
+    don't waste memory loading model weights or other pipeline-internal blobs.
+    """
+    try:
+        from sparc.registry.run_registry import _KNOWN_CATALOG
+        reg = state.registry
+        if reg is None:
+            return
+
+        frontend_ids: list[tuple[str, str]] = [
+            (entry["stage"], entry["id"])
+            for entry in _KNOWN_CATALOG
+            if any(
+                isinstance(c, str) and c.startswith("server:/results/")
+                for c in entry.get("consumers", [])
+            )
+        ]
+
+        for stage, artifact_id in frontend_ids:
+            if cancel.is_set():
+                return
+            # Skip if already cached.
+            if state.result_cache.get(stage, artifact_id) is not None:
+                continue
+            try:
+                if reg.lookup(stage, artifact_id) is not None:
+                    _read_or_404(stage, artifact_id)
+            except Exception:
+                # Missing or unreadable artifact — not an error during pre-warm.
+                pass
+
+    except Exception as exc:
+        print(f"[prewarm] failed: {exc}")
+
+
+def _start_prewarm() -> None:
+    """Cancel any running pre-warm and start a fresh one for the loaded project."""
+    global _prewarm_cancel
+    if _prewarm_cancel is not None:
+        _prewarm_cancel.set()
+    cancel = _threading.Event()
+    _prewarm_cancel = cancel
+    t = _threading.Thread(
+        target=_prewarm_results,
+        args=(cancel,),
+        daemon=True,
+        name="sparc-prewarm",
+    )
+    t.start()
 
 
 # ------------------------------------------------------------------
@@ -320,6 +401,7 @@ async def _auto_load_project():
         state.raw_project_yaml = raw_yaml
         _attach_registry(config)
         _load_data_into_state(config)
+        _start_prewarm()
         print(f"Auto-loaded project: {resolved}")
     except Exception as exc:
         print(f"Warning: auto-load failed for {resolved}: {exc}")
@@ -740,6 +822,9 @@ async def load_project(path: str = Query(..., description="Absolute path to proj
     data_path = config["data"]["file_path"]
     if os.path.exists(data_path):
         _load_data_into_state(config)
+
+    # Kick off background pre-warm of frontend-facing artifacts.
+    _start_prewarm()
 
     return {
         "status": "loaded",
@@ -1868,6 +1953,10 @@ async def get_gwen_data():
 @app.get("/results/model_performance")
 async def get_model_performance():
     """Return per-model R²/RMSE for the R² bar chart on the Results page."""
+    cached = state.result_cache.get("2", "model_performance_response")
+    if cached is not None:
+        return cached
+
     models: list[dict] = []
 
     # In-memory result from the just-finished stage 2 (if available).
@@ -1923,12 +2012,17 @@ async def get_model_performance():
         )
 
     models.sort(key=lambda m: m.get("r2") or 0, reverse=True)
-    return {"models": models}
+    result = {"models": models}
+    state.result_cache.set("2", "model_performance_response", result)
+    return result
 
 
 @app.get("/results/spatial_cv/predictions")
 async def get_spatial_cv_predictions():
     """Return spatial CV predictions as GeoJSON (DB-only)."""
+    cached = state.result_cache.get("2", "spatial_cv_predictions_geojson")
+    if cached is not None:
+        return cached
     store = _open_store()
     try:
         if not store.has("2", "spatial_cv_predictions"):
@@ -1953,7 +2047,9 @@ async def get_spatial_cv_predictions():
         )
     if gdf.crs is not None and str(gdf.crs) != "EPSG:4326":
         gdf = gdf.to_crs(epsg=4326)
-    return gdf.__geo_interface__
+    geojson = gdf.__geo_interface__
+    state.result_cache.set("2", "spatial_cv_predictions_geojson", geojson)
+    return geojson
 
 
 @app.get("/results/causal")
@@ -2303,6 +2399,10 @@ async def get_scenario_detail():
     automatically. The legacy on-disk ``scenario_results*.gpkg`` files are
     deliberately ignored.
     """
+    cached = state.result_cache.get("4", "scenario_detail_response")
+    if cached is not None:
+        return cached
+
     if state.registry is None:
         raise _missing_artifact_response(
             artifact_id="scenario_results", stage="4",
@@ -2371,12 +2471,14 @@ async def get_scenario_detail():
         except Exception:
             summary_records = []
 
-    return {
+    response = {
         "geojson": geojson_data,
         "summary": summary_records,
         "results_artifact_id": bundle.results_artifact_id,
         "summary_artifact_id": bundle.summary_artifact_id,
     }
+    state.result_cache.set("4", "scenario_detail_response", response)
+    return response
 
 
 @app.get("/results/scenarios/attribution")

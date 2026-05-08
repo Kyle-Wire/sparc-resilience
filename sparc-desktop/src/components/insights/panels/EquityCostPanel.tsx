@@ -6,21 +6,19 @@
  * user can see the cost / equity / mean-effect spread before drilling
  * into Decision Support.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Panel, PanelEmpty } from "@/components/ui/DesignSystem";
+import { useResult } from "@/hooks/useResult";
 import { getDecisionCandidates, type InterventionCandidate } from "@/lib/api";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
 import { useCanvas } from "./_useCanvas";
 
 export default function EquityCostPanel() {
-  const [candidates, setCandidates] = useState<InterventionCandidate[]>([]);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    getDecisionCandidates()
-      .then((r) => setCandidates(r.candidates ?? []))
-      .catch((e) => setError(e instanceof Error ? e.message : "no candidates"));
-  }, []);
+  const { data: candidatesData, error } = useResult(
+    "meta:decision_candidates",
+    getDecisionCandidates,
+  );
+  const candidates: InterventionCandidate[] = candidatesData?.candidates ?? [];
 
   const stats = useMemo(() => {
     if (!candidates.length) return null;

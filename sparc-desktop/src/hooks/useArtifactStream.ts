@@ -14,6 +14,7 @@
  * polling in `useManifest` remains as a backstop.
  */
 import { useEffect, useRef, useState } from "react";
+import { useResultCacheStore } from "@/stores/resultCache";
 
 export interface ArtifactWrittenEvent {
   type: "artifact_written";
@@ -142,6 +143,25 @@ const client = new ArtifactStreamClient();
 // Begin connecting as soon as this module is imported.
 if (typeof window !== "undefined") {
   client.start();
+  // Invalidate the result cache for the affected stage the moment an
+  // artifact_written event arrives. This makes panels refetch stale data
+  // immediately instead of waiting for the next manifest poll cycle.
+  client.addListener((evt) => {
+    useResultCacheStore.getState().invalidateStage(evt.stage);
+  });
+}
+
+/**
+ * Register a callback that fires whenever any artifact_written event is
+ * received. Used by the useManifest singleton to debounce-refetch the
+ * manifest without needing a React component alive.
+ *
+ * Returns an unsubscribe function.
+ */
+export function addManifestArtifactListener(fn: () => void): () => void {
+  // Wrap so we only fire on artifact_written, not other event types.
+  const wrapped: Listener = () => fn();
+  return client.addListener(wrapped);
 }
 
 /** Subscribe a callback to ``artifact_written`` events. */

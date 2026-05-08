@@ -2,11 +2,12 @@
  * ScenarioUncertaintyPanel — MC quantile spread map for the active
  * scenario, plus a one-line aggregate consensus diagnostic.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Panel, PanelEmpty, Pill, Stat, StatGrid } from "@/components/ui/DesignSystem";
 import { PanelGate } from "@/components/ui/PanelGate";
 import { useManifest } from "@/hooks/useManifest";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
+import { useResult } from "@/hooks/useResult";
 import { getScenarioUncertainty, type ScenarioUncertaintyResponse } from "@/lib/api";
 import SpatialMap from "@/components/map/SpatialMap";
 import { MAP_HEIGHT_DEFAULT } from "@/lib/design-tokens";
@@ -15,23 +16,12 @@ export default function ScenarioUncertaintyPanel() {
   const manifest = useManifest();
   const linked = useLinkedSelection();
   const present = !!manifest.stage("4");
-  const [data, setData] = useState<ScenarioUncertaintyResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const scenarioId = linked.selection.scenario;
-
-  useEffect(() => {
-    if (!present) {
-      setData(null);
-      return;
-    }
-    setError(null);
-    getScenarioUncertainty(scenarioId ?? undefined)
-      .then(setData)
-      .catch((e) => {
-        setData(null);
-        setError(e instanceof Error ? e.message : "no uncertainty");
-      });
-  }, [present, scenarioId, manifest.lastUpdated]);
+  const cacheKey = present ? `s4:scenario_uncertainty:${scenarioId ?? ""}` : null;
+  const { data, error } = useResult<ScenarioUncertaintyResponse>(
+    cacheKey,
+    () => getScenarioUncertainty(scenarioId ?? undefined),
+  );
 
   const consensus = useMemo<Record<string, unknown> | null>(() => {
     const rows = data?.mc_consensus_summary;

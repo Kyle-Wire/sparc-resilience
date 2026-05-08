@@ -3,11 +3,12 @@
  * variable across the available sources (neural_pde / gwrf /
  * causal_dose_response). Source switcher + variable switcher.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
 import { PanelGate } from "@/components/ui/PanelGate";
 import { useManifest } from "@/hooks/useManifest";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
+import { useResult } from "@/hooks/useResult";
 import { getPdpCurves } from "@/lib/api";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
 import { useCanvas } from "./_useCanvas";
@@ -36,16 +37,11 @@ export default function PdpPanel() {
     !!manifest.lookup("2", "gwrf_condition_curves") ||
     Object.keys(stage2Arts).some((a) => a.startsWith("v2_neural_pdp::"));
 
-  const [data, setData] = useState<PdpCurves | null>(null);
+  const { data } = useResult<PdpCurves>(
+    present ? "s3:pdp_curves" : null,
+    getPdpCurves,
+  );
   const [source, setSource] = useState<PdpSource | null>(null);
-
-  useEffect(() => {
-    if (!present) {
-      setData(null);
-      return;
-    }
-    getPdpCurves().then(setData).catch(() => setData(null));
-  }, [present, manifest.lastUpdated]);
 
   const meta = (data as unknown as { _meta?: PdpMeta })?._meta;
   const availableSources = useMemo<PdpSource[]>(() => {

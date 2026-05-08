@@ -2,27 +2,18 @@
  * NegativeControlPanel — permutation negative-control test for the
  * active CATE/treatment variable. Tied to linked-selection.variable.
  */
-import { useEffect, useState } from "react";
 import { Panel, PanelEmpty, Pill, Stat, StatGrid } from "@/components/ui/DesignSystem";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
+import { useResult } from "@/hooks/useResult";
 import { getCausalNegativeControl, type NegativeControlResponse } from "@/lib/api";
 
 export default function NegativeControlPanel() {
   const linked = useLinkedSelection();
   const variable = linked.selection.variable;
-  const [data, setData] = useState<NegativeControlResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!variable) {
-      setData(null);
-      return;
-    }
-    setError(null);
-    getCausalNegativeControl(variable, 1000)
-      .then(setData)
-      .catch((e) => setError(e instanceof Error ? e.message : "request failed"));
-  }, [variable]);
+  const { data, error } = useResult<NegativeControlResponse>(
+    variable ? `causal:neg_control:${variable}` : null,
+    () => getCausalNegativeControl(variable!, 1000),
+  );
 
   if (!variable) {
     return (

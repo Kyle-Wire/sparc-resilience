@@ -296,6 +296,11 @@ class RunRegistry:
         # Listener exceptions are caught and logged so a single bad
         # subscriber cannot break the write path.
         self._on_register_listeners: list[Any] = []
+        # Thread-local SQLite connection pool — one persistent connection per
+        # thread so the 64 MB page cache survives across requests.
+        self._local = threading.local()
+        self._conn_registry: set[sqlite3.Connection] = set()
+        self._conn_registry_lock = threading.Lock()
         if autoload:
             self.load()
         self._ensure_sqlite_schema()
@@ -380,25 +385,86 @@ class RunRegistry:
             self._sync_sqlite()
 
     # ------------------------------------------------------------------
-    # SQLite cache
+    # SQLite connection pool (thread-local, persistent)
     # ------------------------------------------------------------------
+
+    def _init_connection(self, conn: sqlite3.Connection) -> None:
+        """Apply PRAGMA settings to a fresh connection."""
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA cache_size=-65536")  # 64 MB page cache
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.commit()
+
+    def _get_thread_connection(self) -> sqlite3.Connection:
+        """Return the persistent connection for the current thread.
+
+        Creates and initialises a new connection on first call per thread,
+        then reuses it on subsequent calls (with a ``SELECT 1`` health-check
+        to detect stale / closed connections and reconnect transparently).
+        """
+        if not hasattr(self._local, "conn") or self._local.conn is None:
+            conn = sqlite3.connect(str(self.sqlite_path), timeout=10.0,
+                                   check_same_thread=False)
+            self._init_connection(conn)
+            self._local.conn = conn
+            # Track all thread connections so close() can drain them.
+            with self._conn_registry_lock:
+                self._conn_registry.add(conn)
+
+        conn = self._local.conn
+        # Health-check: reconnect if the connection has been closed externally.
+        try:
+            conn.execute("SELECT 1")
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            with self._conn_registry_lock:
+                self._conn_registry.discard(conn)
+            conn = sqlite3.connect(str(self.sqlite_path), timeout=10.0,
+                                   check_same_thread=False)
+            self._init_connection(conn)
+            self._local.conn = conn
+            with self._conn_registry_lock:
+                self._conn_registry.add(conn)
+
+        return conn
 
     @contextlib.contextmanager
     def _sqlite(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.sqlite_path, timeout=10.0)
+        conn = self._get_thread_connection()
         try:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
             yield conn
             conn.commit()
-        finally:
-            conn.close()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
 
     @contextlib.contextmanager
     def sqlite_connection(self) -> Iterator[sqlite3.Connection]:
         """Public access to the registry's SQLite connection for ArtifactStore."""
         with self._sqlite() as conn:
             yield conn
+
+    def close(self) -> None:
+        """Close all thread-local connections held by this registry.
+
+        Called on server shutdown or project unload to release file handles
+        before the process exits or a new project is loaded.
+        """
+        with self._conn_registry_lock:
+            conns = list(self._conn_registry)
+            self._conn_registry.clear()
+        for conn in conns:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def _ensure_sqlite_schema(self) -> None:
         with self._sqlite() as conn:

@@ -2,10 +2,10 @@
  * SensitivityPanel — Causal sensitivity table (E-values + CIs).
  * Stage 3 diagnostics. Researcher-only.
  */
-import { useEffect, useState } from "react";
 import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
 import { PanelGate } from "@/components/ui/PanelGate";
 import { useManifest } from "@/hooks/useManifest";
+import { useResult } from "@/hooks/useResult";
 import { getCausalSensitivity, type CausalSensitivity } from "@/lib/api";
 
 export default function SensitivityPanel() {
@@ -15,15 +15,10 @@ export default function SensitivityPanel() {
   const present =
     !!manifest.lookup("3", "scenario_coefficients") ||
     !!manifest.lookup("3", "causal_diagnostics");
-  const [data, setData] = useState<CausalSensitivity | null>(null);
-
-  useEffect(() => {
-    if (!present) {
-      setData(null);
-      return;
-    }
-    getCausalSensitivity().then(setData).catch(() => setData(null));
-  }, [present, manifest.lastUpdated]);
+  const { data } = useResult<CausalSensitivity>(
+    present ? "s3:causal_sensitivity" : null,
+    getCausalSensitivity,
+  );
 
   return (
     <PanelGate panelId="sensitivity" title="Sensitivity analysis" subtitle="stage 3 · causal">

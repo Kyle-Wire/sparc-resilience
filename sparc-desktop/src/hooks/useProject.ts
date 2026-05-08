@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { loadProject as apiLoadProject, health } from "@/lib/api";
 import { addRecent } from "@/lib/recentProjects";
+import { useResultCacheStore } from "@/stores/resultCache";
+import { resetManifest } from "@/hooks/useManifest";
 
 const STORAGE_KEY = "sparc-current-project";
 
@@ -72,12 +74,15 @@ export function useProject(serverReady: boolean): UseProjectReturn {
 
   const openProject = useCallback(
     async (path: string, meta?: { name?: string; template?: string }) => {
+      // Flush stale results from previous project before loading new one.
+      useResultCacheStore.getState().clear();
+      resetManifest();
       await apiLoadProject(path);
       setProjectPath(path);
       setProjectLoaded(true);
       addRecent({
         path,
-        name: meta?.name ?? path.split(/[\\/]/).slice(-2, -1)[0] ?? "Project",
+        name: meta?.name ?? path.split(/[\/]/).slice(-2, -1)[0] ?? "Project",
         template: meta?.template ?? "",
       });
     },
@@ -85,6 +90,8 @@ export function useProject(serverReady: boolean): UseProjectReturn {
   );
 
   const clearProject = useCallback(() => {
+    useResultCacheStore.getState().clear();
+    resetManifest();
     setProjectPath(null);
     setProjectLoaded(false);
   }, []);

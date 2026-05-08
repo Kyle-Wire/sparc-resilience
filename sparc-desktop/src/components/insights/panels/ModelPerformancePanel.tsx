@@ -3,9 +3,10 @@
  * Researcher mode only; the Practitioner mode collapses this into the
  * single "Confidence" badge in the header band.
  */
-import { useEffect, useState } from "react";
+import { useMemo } from "react";
 import { Panel, PanelEmpty } from "@/components/ui/DesignSystem";
 import { useManifest } from "@/hooks/useManifest";
+import { useResult } from "@/hooks/useResult";
 import { getModelPerformance } from "@/lib/api";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
 
@@ -17,25 +18,21 @@ interface Row {
 
 export default function ModelPerformancePanel() {
   const manifest = useManifest();
-  const [rows, setRows] = useState<Row[]>([]);
   const present = !!manifest.lookup("2", "ensemble_results");
+  const { data: perfData } = useResult<{ models: { name: string; r2: number }[] }>(
+    present ? "s2:model_performance" : null,
+    getModelPerformance,
+  );
 
-  useEffect(() => {
-    if (!present) return;
-    getModelPerformance()
-      .then((d) => {
-        if (!d.models?.length) return;
-        const sorted = [...d.models].sort((a, b) => b.r2 - a.r2);
-        setRows(
-          sorted.map((m, i) => ({
-            name: m.name,
-            r2: m.r2,
-            color: SPARC_RAMP_HEX[i * 2] ?? SPARC_RAMP_HEX[0],
-          })),
-        );
-      })
-      .catch(() => {});
-  }, [present, manifest.lastUpdated]);
+  const rows = useMemo<Row[]>(() => {
+    if (!perfData?.models?.length) return [];
+    const sorted = [...perfData.models].sort((a, b) => b.r2 - a.r2);
+    return sorted.map((m, i) => ({
+      name: m.name,
+      r2: m.r2,
+      color: SPARC_RAMP_HEX[i * 2] ?? SPARC_RAMP_HEX[0],
+    }));
+  }, [perfData]);
 
   if (!present) {
     return (

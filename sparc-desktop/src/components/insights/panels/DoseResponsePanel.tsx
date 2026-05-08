@@ -5,10 +5,11 @@
  * Reads the linked-selection `variable`. Falls back to the first
  * available curve when nothing is selected.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
 import { useManifest } from "@/hooks/useManifest";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
+import { useResult } from "@/hooks/useResult";
 import { getDoseResponseCurves } from "@/lib/api";
 import { useCanvas } from "./_useCanvas";
 import type { DoseResponseData } from "@/lib/types";
@@ -17,17 +18,10 @@ export default function DoseResponsePanel() {
   const manifest = useManifest();
   const linked = useLinkedSelection();
   const present = !!manifest.lookup("3", "dose_response_curves");
-  const [data, setData] = useState<DoseResponseData | null>(null);
-
-  useEffect(() => {
-    if (!present) {
-      setData(null);
-      return;
-    }
-    getDoseResponseCurves()
-      .then((d) => setData(d as DoseResponseData))
-      .catch(() => setData(null));
-  }, [present, manifest.lastUpdated]);
+  const { data } = useResult<DoseResponseData>(
+    present ? "s3:dose_response" : null,
+    getDoseResponseCurves,
+  );
 
   const treatments = useMemo(() => (data ? Object.keys(data) : []), [data]);
   const activeVar = linked.selection.variable;

@@ -7,29 +7,27 @@
  * This is intentionally lightweight in Phase 1; the Practitioner headline
  * card is fully fleshed out in Phase 2 once `/insights/headline` ships.
  */
-import { useEffect, useState } from "react";
+import { useMemo } from "react";
 import { Panel, PanelEmpty, Stat, StatGrid } from "@/components/ui/DesignSystem";
 import { useAudience } from "@/hooks/InsightsProvider";
 import { useManifest } from "@/hooks/useManifest";
+import { useResult } from "@/hooks/useResult";
 import { getModelPerformance } from "@/lib/api";
 
 export default function OverviewPanel() {
   const [audience] = useAudience();
   const manifest = useManifest();
-  const [bestR2, setBestR2] = useState<number | null>(null);
-  const [modelCount, setModelCount] = useState<number>(0);
+  const perfPresent = !!manifest.lookup("2", "ensemble_results");
+  const { data: perfData } = useResult(
+    perfPresent ? "s2:model_performance" : null,
+    getModelPerformance,
+  );
 
-  useEffect(() => {
-    if (!manifest.lookup("2", "ensemble_results")) return;
-    getModelPerformance()
-      .then((d) => {
-        if (!d.models?.length) return;
-        const best = d.models.reduce((a, b) => (b.r2 > a.r2 ? b : a));
-        setBestR2(best.r2);
-        setModelCount(d.models.length);
-      })
-      .catch(() => {});
-  }, [manifest]);
+  const bestR2 = useMemo(() => {
+    if (!perfData?.models?.length) return null;
+    return perfData.models.reduce((a, b) => (b.r2 > a.r2 ? b : a)).r2;
+  }, [perfData]);
+  const modelCount = perfData?.models?.length ?? 0;
 
   const stages = manifest.manifest?.stages ?? {};
   const stageCount = Object.keys(stages).length;

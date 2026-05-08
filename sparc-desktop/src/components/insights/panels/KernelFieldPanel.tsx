@@ -11,10 +11,10 @@
  * Matérn fit, effective-range matrix) so the panel becomes a single
  * spatial-structure briefing instead of a one-table affair.
  */
-import { useEffect, useState } from "react";
 import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
 import { PanelGate } from "@/components/ui/PanelGate";
 import { useManifest } from "@/hooks/useManifest";
+import { useResult } from "@/hooks/useResult";
 import { getKernelFieldData, getArtifactJson } from "@/lib/api";
 import type { AnisotropyEntry, KernelFieldData, KernelFieldPair } from "@/lib/types";
 
@@ -49,39 +49,25 @@ export default function KernelFieldPanel() {
   const hasCross = !!manifest.lookup("0", "cross_correlogram_kernel_field");
   const present = hasLegacy || hasCross;
 
-  const [data, setData] = useState<KernelFieldData | null>(null);
-  const [aniso, setAniso] = useState<AnisotropyArtifact | null>(null);
-  const [matern, setMatern] = useState<MaternFit | null>(null);
-  const [erm, setErm] = useState<EffectiveRangeMatrix | null>(null);
-
-  useEffect(() => {
-    if (!present) {
-      setData(null);
-      setAniso(null);
-      setMatern(null);
-      setErm(null);
-      return;
-    }
-    getKernelFieldData().then(setData).catch(() => setData(null));
-    if (manifest.lookup("0", "correlogram_anisotropy")) {
-      getArtifactJson<AnisotropyArtifact>("0", "correlogram_anisotropy")
-        .then(setAniso).catch(() => setAniso(null));
-    } else {
-      setAniso(null);
-    }
-    if (manifest.lookup("0", "correlogram_matern_fit")) {
-      getArtifactJson<MaternFit>("0", "correlogram_matern_fit")
-        .then(setMatern).catch(() => setMatern(null));
-    } else {
-      setMatern(null);
-    }
-    if (manifest.lookup("0", "effective_range_matrix")) {
-      getArtifactJson<EffectiveRangeMatrix>("0", "effective_range_matrix")
-        .then(setErm).catch(() => setErm(null));
-    } else {
-      setErm(null);
-    }
-  }, [present, manifest.lastUpdated]);
+  const { data } = useResult<KernelFieldData>(
+    present ? "s0:kernel_field" : null,
+    getKernelFieldData,
+  );
+  const hasAniso = present && !!manifest.lookup("0", "correlogram_anisotropy");
+  const hasMatern = present && !!manifest.lookup("0", "correlogram_matern_fit");
+  const hasErm = present && !!manifest.lookup("0", "effective_range_matrix");
+  const { data: aniso } = useResult<AnisotropyArtifact>(
+    hasAniso ? "s0:anisotropy" : null,
+    () => getArtifactJson<AnisotropyArtifact>("0", "correlogram_anisotropy"),
+  );
+  const { data: matern } = useResult<MaternFit>(
+    hasMatern ? "s0:matern_fit" : null,
+    () => getArtifactJson<MaternFit>("0", "correlogram_matern_fit"),
+  );
+  const { data: erm } = useResult<EffectiveRangeMatrix>(
+    hasErm ? "s0:effective_range_matrix" : null,
+    () => getArtifactJson<EffectiveRangeMatrix>("0", "effective_range_matrix"),
+  );
 
   if (!present) {
     return (

@@ -2,11 +2,12 @@
  * ScenarioTrajectoryPanel — predicted-value trajectory over time `t`
  * for the active scenario, plotted as one line per geometry (sampled).
  */
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
 import { PanelGate } from "@/components/ui/PanelGate";
 import { useManifest } from "@/hooks/useManifest";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
+import { useResult } from "@/hooks/useResult";
 import { getScenarioTrajectory, type TrajectoryRecord } from "@/lib/api";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
 import { useCanvas } from "./_useCanvas";
@@ -15,24 +16,13 @@ export default function ScenarioTrajectoryPanel() {
   const manifest = useManifest();
   const linked = useLinkedSelection();
   const present = !!manifest.stage("4");
-  const [records, setRecords] = useState<TrajectoryRecord[]>([]);
-  const [error, setError] = useState<string | null>(null);
-
   const scenarioId = linked.selection.scenario;
-
-  useEffect(() => {
-    if (!present) {
-      setRecords([]);
-      return;
-    }
-    setError(null);
-    getScenarioTrajectory(scenarioId ?? undefined)
-      .then((r) => setRecords(r.records ?? []))
-      .catch((e) => {
-        setRecords([]);
-        setError(e instanceof Error ? e.message : "no trajectory");
-      });
-  }, [present, scenarioId, manifest.lastUpdated]);
+  const cacheKey = present ? `s4:scenario_trajectory:${scenarioId ?? ""}` : null;
+  const { data: trajectoryData, error } = useResult<{ records: TrajectoryRecord[]; columns: string[] }>(
+    cacheKey,
+    () => getScenarioTrajectory(scenarioId ?? undefined),
+  );
+  const records: TrajectoryRecord[] = trajectoryData?.records ?? [];
 
   // Group records by geometry_id, sort by t.
   const series = useMemo(() => {

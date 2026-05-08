@@ -4,14 +4,24 @@
  * focused (active), 30s when hidden (idle). The frontend uses this as the
  * single source of truth for which Results panels have data — every panel
  * gates its fetch on the manifest entry being present.
+ *
+ * Implementation note: this hook uses a **module-level singleton** so that
+ * all consumers (panels, pages, overlays) share one polling loop and one
+ * cached manifest value. When a panel unmounts and remounts (e.g. page
+ * navigation), it immediately receives the current cached manifest from the
+ * module-level state rather than waiting up to 2 seconds for a fresh poll.
+ * This eliminates the blank / loading flash that previously appeared every
+ * time the user navigated back to the Insights page.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ArtifactEntry, RunManifest, StageManifest } from "../lib/types";
 import { getManifest, rescanManifest } from "../lib/api";
-import { useArtifactEvent } from "./useArtifactStream";
+import { addManifestArtifactListener } from "./useArtifactStream";
 
 const ACTIVE_INTERVAL_MS = 2_000;
 const IDLE_INTERVAL_MS = 30_000;
+/** Debounce window for artifact_written burst events before re-fetching. */
+const ARTIFACT_BURST_MS = 250;
 
 export interface UseManifestResult {
   manifest: RunManifest | null;
@@ -33,86 +43,155 @@ export interface UseManifestResult {
   stage: (stage: string | number) => StageManifest | null;
 }
 
-export function useManifest(enabled: boolean = true): UseManifestResult {
-  const [manifest, setManifest] = useState<RunManifest | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  // Track most recent in-flight request so we can ignore stale responses.
-  const reqIdRef = useRef(0);
+// ---------------------------------------------------------------------------
+// Module-level singleton state — survives component unmount/remount cycles.
+// ---------------------------------------------------------------------------
 
-  const fetchOnce = useCallback(async (opts: { rescan?: boolean } = {}) => {
-    if (!enabled) return;
-    const myId = ++reqIdRef.current;
-    setLoading(true);
+interface SharedState {
+  manifest: RunManifest | null;
+  loading: boolean;
+  error: string | null;
+  lastUpdated: Date | null;
+}
+
+let _state: SharedState = {
+  manifest: null,
+  loading: false,
+  error: null,
+  lastUpdated: null,
+};
+
+type Listener = (s: SharedState) => void;
+const _listeners = new Set<Listener>();
+
+function _notify(patch: Partial<SharedState>) {
+  _state = { ..._state, ...patch };
+  _listeners.forEach((l) => { try { l(_state); } catch { /* ignore */ } });
+}
+
+let _inFlight: Promise<void> | null = null;
+let _timer: ReturnType<typeof setTimeout> | null = null;
+let _burstTimer: ReturnType<typeof setTimeout> | null = null;
+let _started = false;
+
+async function _fetchOnce(opts: { rescan?: boolean } = {}): Promise<void> {
+  if (_inFlight && !opts.rescan) return;
+  const run = async () => {
+    _notify({ loading: true });
     try {
       const m = await getManifest({ refresh: true, rescan: opts.rescan });
-      // Drop response if a newer request started after us.
-      if (myId !== reqIdRef.current) return;
-      setManifest(m);
-      setError(null);
-      setLastUpdated(new Date());
+      _notify({ manifest: m, error: null, lastUpdated: new Date(), loading: false });
     } catch (err) {
-      if (myId !== reqIdRef.current) return;
-      // 400 "No project loaded" is expected during boot; surface as null
-      // manifest with no error message rather than a red banner.
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.startsWith("400")) {
-        setManifest(null);
-        setError(null);
+        // "No project loaded" during boot — not an error.
+        _notify({ manifest: null, error: null, loading: false });
       } else {
-        setError(msg);
+        _notify({ error: msg, loading: false });
       }
     } finally {
-      if (myId === reqIdRef.current) setLoading(false);
+      _inFlight = null;
     }
-  }, [enabled]);
+  };
+  _inFlight = run();
+  return _inFlight;
+}
 
-  const refetch = useCallback(
-    (opts: { rescan?: boolean } = {}) => fetchOnce(opts),
-    [fetchOnce],
-  );
+function _scheduleNext() {
+  if (_timer) clearTimeout(_timer);
+  if (_listeners.size === 0) {
+    _timer = null;
+    return;
+  }
+  const delay = (typeof document !== "undefined" && document.hidden)
+    ? IDLE_INTERVAL_MS
+    : ACTIVE_INTERVAL_MS;
+  _timer = setTimeout(async () => {
+    await _fetchOnce();
+    _scheduleNext();
+  }, delay);
+}
+
+function _start() {
+  if (_started) return;
+  _started = true;
+
+  // Kick off the first fetch immediately.
+  _fetchOnce().then(_scheduleNext);
+
+  // Resume fast polling when the window regains focus.
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) return;
+      if (_timer) clearTimeout(_timer);
+      _fetchOnce().then(_scheduleNext);
+    });
+  }
+}
+
+/** Called by the ArtifactStream singleton whenever an artifact is written. */
+export function notifyManifestArtifactWritten() {
+  if (_burstTimer) return;
+  _burstTimer = setTimeout(() => {
+    _burstTimer = null;
+    _fetchOnce().then(() => {
+      _scheduleNext();
+    });
+  }, ARTIFACT_BURST_MS);
+}
+
+/**
+ * Reset the singleton manifest to null and notify all subscribers.
+ * Call this when a new project is loaded to clear stale manifest immediately.
+ */
+export function resetManifest() {
+  if (_timer) clearTimeout(_timer);
+  _timer = null;
+  _inFlight = null;
+  _notify({ manifest: null, loading: false, error: null, lastUpdated: null });
+  // Restart polling so the new project's manifest is fetched promptly.
+  _started = false;
+  _start();
+}
+
+// Wire to the artifact stream at module load time so artifact events trigger
+// a manifest refetch without needing a React component alive.
+if (typeof window !== "undefined") {
+  addManifestArtifactListener(notifyManifestArtifactWritten);
+}
+
+// ---------------------------------------------------------------------------
+// React hook — thin subscriber over the module singleton
+// ---------------------------------------------------------------------------
+
+export function useManifest(_enabled: boolean = true): UseManifestResult {
+  const [localState, setLocalState] = useState<SharedState>(() => _state);
+
+  useEffect(() => {
+    // Sync immediately in case state changed between render and effect.
+    setLocalState(_state);
+    _listeners.add(setLocalState);
+    // Ensure the shared polling loop is running.
+    _start();
+    return () => {
+      _listeners.delete(setLocalState);
+    };
+  }, []);
+
+  const { manifest, loading, error, lastUpdated } = localState;
+
+  const refetch = useCallback(async (opts: { rescan?: boolean } = {}) => {
+    if (_timer) clearTimeout(_timer);
+    await _fetchOnce(opts);
+    _scheduleNext();
+  }, []);
 
   const rescan = useCallback(async () => {
-    if (!enabled) return;
-    try {
-      await rescanManifest();
-    } catch {
-      /* server-side rescan failure is non-fatal; refetch will surface state */
-    }
-    await fetchOnce();
-  }, [enabled, fetchOnce]);
-
-  // Adaptive polling: 2s active, 30s when document hidden.
-  useEffect(() => {
-    if (!enabled) return;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let cancelled = false;
-
-    const tick = async () => {
-      if (cancelled) return;
-      await fetchOnce();
-      if (cancelled) return;
-      const interval = document.hidden ? IDLE_INTERVAL_MS : ACTIVE_INTERVAL_MS;
-      timer = setTimeout(tick, interval);
-    };
-
-    tick();
-
-    const onVisibility = () => {
-      if (document.hidden) return;
-      // When the user returns to the tab, refresh immediately.
-      if (timer) clearTimeout(timer);
-      tick();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [enabled, fetchOnce]);
+    try { await rescanManifest(); } catch { /* non-fatal */ }
+    if (_timer) clearTimeout(_timer);
+    await _fetchOnce();
+    _scheduleNext();
+  }, []);
 
   const lookup = useCallback(
     (stage: string | number, artifactId: string): ArtifactEntry | null => {
@@ -121,22 +200,6 @@ export function useManifest(enabled: boolean = true): UseManifestResult {
     },
     [manifest],
   );
-
-  // Coalesce burst-y artifact_written events into a single refetch so we
-  // never spam /results/manifest. The 2s/30s polling above remains as a
-  // backstop in case the WebSocket is down.
-  const burstTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useArtifactEvent(() => {
-    if (!enabled) return;
-    if (burstTimerRef.current) return;
-    burstTimerRef.current = setTimeout(() => {
-      burstTimerRef.current = null;
-      fetchOnce();
-    }, 250);
-  });
-  useEffect(() => () => {
-    if (burstTimerRef.current) clearTimeout(burstTimerRef.current);
-  }, []);
 
   const stage = useCallback(
     (s: string | number): StageManifest | null =>

@@ -2,9 +2,9 @@
  * CorrelogramPanel — Moran's I vs lag distance, multi-variable.
  * Stage 0 spatial autocorrelation overview.
  */
-import { useEffect, useState } from "react";
 import { Panel, PanelEmpty } from "@/components/ui/DesignSystem";
 import { useManifest } from "@/hooks/useManifest";
+import { useResult } from "@/hooks/useResult";
 import { getCorrelogramData } from "@/lib/api";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
 import { useCanvas } from "./_useCanvas";
@@ -13,15 +13,10 @@ import type { CorrelogramData } from "@/lib/types";
 export default function CorrelogramPanel() {
   const manifest = useManifest();
   const present = !!manifest.lookup("0", "correlogram_results");
-  const [data, setData] = useState<CorrelogramData | null>(null);
-
-  useEffect(() => {
-    if (!present) {
-      setData(null);
-      return;
-    }
-    getCorrelogramData().then(setData).catch(() => setData(null));
-  }, [present, manifest.lastUpdated]);
+  const { data } = useResult<CorrelogramData>(
+    present ? "s0:correlogram" : null,
+    getCorrelogramData,
+  );
 
   const results = data?.individual_results;
   const varNames = results ? Object.keys(results) : [];

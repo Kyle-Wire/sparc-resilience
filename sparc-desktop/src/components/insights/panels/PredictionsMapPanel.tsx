@@ -5,10 +5,11 @@
  * layer (model variant). Brushing on the map writes the bbox into the
  * linked-selection store so other panels can filter on it.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
 import { useManifest } from "@/hooks/useManifest";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
+import { useResult } from "@/hooks/useResult";
 import { getSpatialCvPredictions } from "@/lib/api";
 import SpatialMap from "@/components/map/SpatialMap";
 import { MAP_HEIGHT_DEFAULT } from "@/lib/design-tokens";
@@ -18,18 +19,11 @@ export default function PredictionsMapPanel() {
   const manifest = useManifest();
   const linked = useLinkedSelection();
   const present = !!manifest.lookup("2", "spatial_cv_predictions");
-  const [geo, setGeo] = useState<GeoJsonData | null>(null);
+  const { data: geo } = useResult<GeoJsonData>(
+    present ? "s2:spatial_cv_predictions" : null,
+    getSpatialCvPredictions,
+  );
   const [layer, setLayer] = useState<string>("");
-
-  useEffect(() => {
-    if (!present) {
-      setGeo(null);
-      return;
-    }
-    getSpatialCvPredictions()
-      .then((g) => setGeo(g as GeoJsonData))
-      .catch(() => setGeo(null));
-  }, [present, manifest.lastUpdated]);
 
   // Available numeric columns in the GeoJSON properties → layer options.
   const layerOptions = useMemo(() => {

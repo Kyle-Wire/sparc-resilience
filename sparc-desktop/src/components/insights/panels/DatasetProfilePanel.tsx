@@ -6,8 +6,9 @@
  * kurtosis), and Pearson correlation against the project target so the
  * user can spot degenerate or weakly-related predictors before training.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Panel, PanelEmpty, Pill, Stat, StatGrid } from "@/components/ui/DesignSystem";
+import { useResult } from "@/hooks/useResult";
 import { getDatasetProfile, type DatasetColumnProfile, type DatasetProfile } from "@/lib/api";
 
 function fmt(n: number | null | undefined, digits = 3): string {
@@ -61,23 +62,18 @@ function summariseError(raw: string): { short: string; details: string | null } 
 }
 
 export default function DatasetProfilePanel() {
-  const [profile, setProfile] = useState<DatasetProfile | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [errorDetails, setErrorDetails] = useState<string | null>(null);
+  const { data: profile, error: rawError } = useResult<DatasetProfile>(
+    "s0:dataset_profile",
+    getDatasetProfile,
+  );
 
-  useEffect(() => {
-    let alive = true;
-    getDatasetProfile()
-      .then((p) => { if (alive) { setProfile(p); setError(null); setErrorDetails(null); } })
-      .catch((e) => {
-        if (!alive) return;
-        const raw = e instanceof Error ? e.message : String(e);
-        const { short, details } = summariseError(raw);
-        setError(short);
-        setErrorDetails(details);
-      });
-    return () => { alive = false; };
-  }, []);
+  const { errorShort, errorDetails } = useMemo(() => {
+    if (!rawError) return { errorShort: null, errorDetails: null };
+    const { short, details } = summariseError(rawError);
+    return { errorShort: short, errorDetails: details };
+  }, [rawError]);
+
+  const error = errorShort;
 
   // Sort: target first, then by |corr_target| desc, then by missing_pct desc.
   const sorted = useMemo<DatasetColumnProfile[]>(() => {

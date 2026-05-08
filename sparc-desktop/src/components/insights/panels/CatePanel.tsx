@@ -9,10 +9,11 @@
  * Wired to the linked-selection store: picking a variable here also
  * filters DoseResponsePanel + PdpPanel.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
 import { useManifest } from "@/hooks/useManifest";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
+import { useResult } from "@/hooks/useResult";
 import { getCateMap, getCateMapVariables } from "@/lib/api";
 import SpatialMap from "@/components/map/SpatialMap";
 import { MAP_HEIGHT_DEFAULT } from "@/lib/design-tokens";
@@ -24,10 +25,17 @@ export default function CatePanel() {
   const stage3 = manifest.stage("3");
   const present = !!stage3 && Object.keys(stage3.artifacts ?? {}).some((a) => a.startsWith("cate_multiplier::"));
 
-  const [vars, setVars] = useState<string[]>([]);
-  const [emptyHint, setEmptyHint] = useState<string | null>(null);
-  const [geo, setGeo] = useState<GeoJsonData | null>(null);
   const [withUncertainty, setWithUncertainty] = useState<boolean>(true);
+
+  const { data: varsData } = useResult<{ variables: string[]; empty_reason?: string }>(
+    present ? "s3:cate_variables" : null,
+    getCateMapVariables,
+  );
+  const vars: string[] = varsData?.variables ?? [];
+  const emptyHint = useMemo(() => {
+    if (!varsData || vars.length > 0) return null;
+    return (varsData as { empty_reason?: string }).empty_reason ?? null;
+  }, [varsData, vars.length]);
 
   const activeVar = linked.selection.variable;
   const resolvedVar = useMemo(() => {
@@ -35,33 +43,11 @@ export default function CatePanel() {
     return vars.find((v) => v === activeVar) ?? vars[0];
   }, [vars, activeVar]);
 
-  useEffect(() => {
-    if (!present) {
-      setVars([]);
-      return;
-    }
-    getCateMapVariables()
-      .then((res) => {
-        const xs = (res?.variables ?? []) as string[];
-        setVars(xs);
-        if (xs.length === 0 && (res as { empty_reason?: string }).empty_reason) {
-          setEmptyHint((res as { empty_reason?: string }).empty_reason ?? null);
-        } else {
-          setEmptyHint(null);
-        }
-      })
-      .catch(() => setVars([]));
-  }, [present, manifest.lastUpdated]);
-
-  useEffect(() => {
-    if (!resolvedVar) {
-      setGeo(null);
-      return;
-    }
-    getCateMap(resolvedVar, withUncertainty)
-      .then((g) => setGeo(g as GeoJsonData))
-      .catch(() => setGeo(null));
-  }, [resolvedVar, withUncertainty]);
+  const mapKey = resolvedVar ? `s3:cate_map:${resolvedVar}:${withUncertainty}` : null;
+  const { data: geo } = useResult<GeoJsonData>(
+    mapKey,
+    () => getCateMap(resolvedVar!, withUncertainty) as Promise<GeoJsonData>,
+  );
 
   if (!present) {
     return (

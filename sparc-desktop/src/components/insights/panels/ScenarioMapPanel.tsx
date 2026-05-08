@@ -3,11 +3,12 @@
  * scenario (stage 4). Reads scenario from linked-selection.scenario;
  * defaults to first scenario.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
 import { PanelGate } from "@/components/ui/PanelGate";
 import { useManifest } from "@/hooks/useManifest";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
+import { useResult } from "@/hooks/useResult";
 import { getScenarioDetail } from "@/lib/api";
 import SpatialMap from "@/components/map/SpatialMap";
 import { MAP_HEIGHT_DEFAULT } from "@/lib/design-tokens";
@@ -17,18 +18,11 @@ export default function ScenarioMapPanel() {
   const manifest = useManifest();
   const linked = useLinkedSelection();
   const present = !!manifest.stage("4");
-  const [detail, setDetail] = useState<ScenarioDetail | null>(null);
+  const { data: detail } = useResult<ScenarioDetail>(
+    present ? "s4:scenario_detail" : null,
+    getScenarioDetail,
+  );
   const [layer, setLayer] = useState<string>("");
-
-  useEffect(() => {
-    if (!present) {
-      setDetail(null);
-      return;
-    }
-    getScenarioDetail()
-      .then(setDetail)
-      .catch(() => setDetail(null));
-  }, [present, manifest.lastUpdated]);
 
   const features = detail?.geojson?.features ?? [];
   const props0 = features[0]?.properties ?? {};

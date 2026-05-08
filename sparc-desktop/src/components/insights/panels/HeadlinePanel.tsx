@@ -7,8 +7,9 @@
  * scoring of `/decision/candidates` if the aggregator is unavailable
  * (e.g. older backends).
  */
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Panel, PanelEmpty, Pill, Stat, StatGrid } from "@/components/ui/DesignSystem";
+import { useResult } from "@/hooks/useResult";
 import {
   getDecisionCandidates,
   getInsightsHeadline,
@@ -17,22 +18,18 @@ import {
 } from "@/lib/api";
 
 export default function HeadlinePanel() {
-  const [headline, setHeadline] = useState<InsightsHeadline | null>(null);
-  const [fallbackCandidates, setFallbackCandidates] = useState<InterventionCandidate[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    getInsightsHeadline()
-      .then((r) => { if (alive) setHeadline(r); })
-      .catch(() => {
-        // Aggregator missing → fall back to legacy candidate ranking.
-        getDecisionCandidates()
-          .then((r) => { if (alive) setFallbackCandidates(r.candidates ?? []); })
-          .catch((e) => { if (alive) setError(e instanceof Error ? e.message : "no candidates"); });
-      });
-    return () => { alive = false; };
-  }, []);
+  const { data: headline, error: headlineError } = useResult<InsightsHeadline>(
+    "meta:insights_headline",
+    getInsightsHeadline,
+  );
+  // Fetch decision candidates as fallback; always cached under the same key
+  // as EquityCostPanel so the second consumer is free.
+  const { data: candidatesData } = useResult<{ candidates: InterventionCandidate[] }>(
+    headlineError ? "meta:decision_candidates" : null,
+    getDecisionCandidates,
+  );
+  const fallbackCandidates = candidatesData?.candidates ?? null;
+  const error = headlineError && !fallbackCandidates ? headlineError : null;
 
   // If the aggregator returned a `best`, prefer that. Otherwise fall
   // back to the historical client-side scoring path.

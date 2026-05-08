@@ -3,11 +3,11 @@
  * Click sets linked-selection.scenario, which the ScenarioMapPanel
  * picks up to switch its `pred_<scenario>` layer.
  */
-import { useEffect, useState } from "react";
 import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
 import { PanelGate } from "@/components/ui/PanelGate";
 import { useManifest } from "@/hooks/useManifest";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
+import { useResult } from "@/hooks/useResult";
 import { getScenarioDetail } from "@/lib/api";
 import type { ScenarioDetail } from "@/lib/types";
 
@@ -25,17 +25,10 @@ export default function ScenarioStripPanel() {
   const manifest = useManifest();
   const linked = useLinkedSelection();
   const present = !!manifest.stage("4");
-  const [detail, setDetail] = useState<ScenarioDetail | null>(null);
-
-  useEffect(() => {
-    if (!present) {
-      setDetail(null);
-      return;
-    }
-    getScenarioDetail()
-      .then(setDetail)
-      .catch(() => setDetail(null));
-  }, [present, manifest.lastUpdated]);
+  const { data: detail } = useResult<ScenarioDetail>(
+    present ? "s4:scenario_detail" : null,
+    getScenarioDetail,
+  );
 
   if (!present) {
     return (

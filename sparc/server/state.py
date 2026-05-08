@@ -6,6 +6,8 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any
 
+from sparc.server.result_cache import ResultCache
+
 
 @dataclass
 class ServerState:
@@ -31,6 +33,7 @@ class ServerState:
     # ``dag_approved`` is set by POST /dag/approve to unblock the gate.
     pending_mc3: dict | None = None
     dag_approved: threading.Event = field(default_factory=threading.Event, repr=False)
+    result_cache: ResultCache = field(default_factory=ResultCache, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def set_running(self, stage: int) -> None:
@@ -77,3 +80,5 @@ class ServerState:
             self.current_stage = None
             self.pending_mc3 = None
             self.dag_approved.clear()
+        # Flush result cache outside the main lock (ResultCache is self-locking).
+        self.result_cache.clear()

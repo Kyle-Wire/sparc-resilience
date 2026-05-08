@@ -5,9 +5,10 @@
  * Pearson correlation. Practitioner mode would collapse this to a
  * single confidence chip; researcher mode shows the full table.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
 import { useManifest } from "@/hooks/useManifest";
+import { useResult } from "@/hooks/useResult";
 import { getCateVsGwrDivergence } from "@/lib/api";
 import type { DivergenceReport } from "@/lib/types";
 
@@ -16,17 +17,10 @@ export default function DivergencePanel() {
   const stage3 = manifest.stage("3");
   const present =
     !!stage3 && Object.keys(stage3.artifacts ?? {}).some((a) => a.includes("divergence"));
-  const [data, setData] = useState<{ reports: Record<string, DivergenceReport> } | DivergenceReport | null>(
-    null,
+  const { data } = useResult<{ reports: Record<string, DivergenceReport> } | DivergenceReport>(
+    present ? "s3:cate_gwr_divergence" : null,
+    getCateVsGwrDivergence,
   );
-
-  useEffect(() => {
-    if (!present) {
-      setData(null);
-      return;
-    }
-    getCateVsGwrDivergence().then(setData).catch(() => setData(null));
-  }, [present, manifest.lastUpdated]);
 
   const reports = useMemo<Record<string, DivergenceReport>>(() => {
     if (!data) return {};
