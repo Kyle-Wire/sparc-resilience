@@ -85,7 +85,7 @@ export default function App() {
       setSplashStep("ready");
       // Hold splash for at least 10 seconds from app start
       const elapsed = Date.now() - splashStartRef.current;
-      const remaining = Math.max(400, 10_000 - elapsed);
+      const remaining = Math.max(400, 5_000 - elapsed);
       setTimeout(() => setSplashDone(true), remaining);
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -248,6 +248,9 @@ export default function App() {
     }
   }, [notif, project, navigate]);
 
+  // Must be defined before any early returns to satisfy rules-of-hooks
+  const navigateToSettings = useCallback(() => navigate("Settings"), [navigate]);
+
   // Show splash while loading
   if (!splashDone || project.rehydrating) {
     return <Splash step={splashStep} parallaxEnabled={parallaxEnabled} />;
@@ -257,8 +260,6 @@ export default function App() {
   if (!user) {
     return <LoginScreen parallaxEnabled={parallaxEnabled} />;
   }
-
-  const navigateToSettings = useCallback(() => navigate("Settings"), [navigate]);
 
   const renderPage = () => {
     const gate = (el: React.ReactNode) => (
