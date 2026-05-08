@@ -48,7 +48,11 @@ export default function Shell({
         projectEpsg={projectEpsg}
       />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-        <Topbar page={currentPage} status={status} />
+        <Topbar
+          page={currentPage}
+          status={status}
+          onNavigateSettings={() => onNavigate("Settings")}
+        />
         <main
           className="scroll"
           style={{

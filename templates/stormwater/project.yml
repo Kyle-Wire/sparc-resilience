@@ -108,31 +108,6 @@ pipeline:
   random_seed: 42
   n_spatial_folds: 5
 
-scenarios:
-  - name: "Green Infrastructure +10% Canopy"
-    variable: canopy_pct
-    direction: increase
-    increments: [5, 10, 15, 20]
-    min_val: 0
-    max_val: 100
-    unit: "percentage points"
-
-  - name: "Impervious Reduction"
-    variable: impervious_pct
-    direction: decrease
-    increments: [5, 10, 15, 20]
-    min_val: 0
-    max_val: 100
-    unit: "percentage points"
-
-  - name: "Design Storm Increase"
-    variable: rainfall_depth_mm
-    direction: increase
-    increments: [10, 25, 50]
-    min_val: 0
-    max_val: 500
-    unit: "mm"
-
 # temporal:
 #   enabled: true
 #   time_column: "event_date"

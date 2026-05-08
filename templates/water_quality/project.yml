@@ -111,39 +111,6 @@ pipeline:
   random_seed: 42
   n_spatial_folds: 5
 
-scenarios:
-  - name: "Riparian Buffer Restoration"
-    variable: forest_pct
-    direction: increase
-    increments: [5, 10, 15, 20]
-    min_val: 0
-    max_val: 100
-    unit: "percentage points"
-
-  - name: "Agricultural BMP Implementation"
-    variable: agriculture_pct
-    direction: decrease
-    increments: [5, 10, 15]
-    min_val: 0
-    max_val: 100
-    unit: "percentage points"
-
-  - name: "WWTP Effluent Improvement"
-    variable: BOD_mgL
-    direction: decrease
-    increments: [2, 5, 10]
-    min_val: 0
-    max_val: 50
-    unit: "mg/L"
-
-  - name: "Climate Warming + Water Temperature"
-    variable: temperature_C
-    direction: increase
-    increments: [1, 2, 3]
-    min_val: 0
-    max_val: 40
-    unit: "°C"
-
 # temporal:
 #   enabled: true
 #   time_column: "sample_date"

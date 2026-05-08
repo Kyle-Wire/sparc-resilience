@@ -107,31 +107,6 @@ pipeline:
   random_seed: 42
   n_spatial_folds: 5
 
-scenarios:
-  - name: "Noise Barrier Installation"
-    variable: barrier_height_m
-    direction: increase
-    increments: [1, 2, 3, 4, 5]
-    min_val: 0
-    max_val: 8
-    unit: "m"
-
-  - name: "Vegetation Buffer Planting"
-    variable: vegetation_buffer_m
-    direction: increase
-    increments: [10, 20, 30, 50]
-    min_val: 0
-    max_val: 100
-    unit: "m"
-
-  - name: "Speed Reduction"
-    variable: road_speed_kmh
-    direction: decrease
-    increments: [10, 20, 30]
-    min_val: 20
-    max_val: 120
-    unit: "km/h"
-
 # temporal:
 #   enabled: true
 #   time_column: "datetime"

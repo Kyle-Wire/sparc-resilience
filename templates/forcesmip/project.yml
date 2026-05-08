@@ -171,29 +171,6 @@ laplacian:
   n_eigenmaps: 50              # Fewer than UHI; global patterns are smoother
   k_for_swm: 20               # More neighbors for sparser global grid
 
-scenarios:
-  - name: "2xCO2_forcing"
-    variable: "GHG_forcing_index"
-    direction: "increase"
-    increments: [0.5, 1.0, 2.0]
-    min_val: 0.0
-    max_val: 10.0
-    unit: "W/m2 equivalent"
-  - name: "aerosol_reduction"
-    variable: "aerosol_forcing_index"
-    direction: "decrease"
-    increments: [0.25, 0.5, 1.0]
-    min_val: -5.0
-    max_val: 0.0
-    unit: "W/m2 equivalent"
-  - name: "ENSO_neutral"
-    variable: "ENSO_detrended"
-    direction: "decrease"
-    increments: [0.5, 1.0]
-    min_val: -3.0
-    max_val: 3.0
-    unit: "°C"
-
 # ---------------------------------------------------------------------------
 # Stage-4 Budget Optimizer (cell-level allocation under a budget)
 # ---------------------------------------------------------------------------

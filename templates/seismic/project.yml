@@ -107,31 +107,6 @@ pipeline:
   random_seed: 42
   n_spatial_folds: 5
 
-scenarios:
-  - name: "Magnitude 7.0 Event"
-    variable: magnitude
-    direction: increase
-    increments: [0.5, 1.0, 1.5]
-    min_val: 3.0
-    max_val: 9.5
-    unit: "Mw"
-
-  - name: "Site Improvement — Ground Densification"
-    variable: Vs30_ms
-    direction: increase
-    increments: [50, 100, 150, 200]
-    min_val: 100
-    max_val: 1500
-    unit: "m/s"
-
-  - name: "Dewatering — Water Table Lowering"
-    variable: water_table_depth_m
-    direction: increase
-    increments: [1, 2, 3, 5]
-    min_val: 0
-    max_val: 30
-    unit: "m"
-
 # temporal:
 #   enabled: true
 #   time_column: "event_datetime"

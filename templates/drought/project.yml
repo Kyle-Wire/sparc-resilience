@@ -105,31 +105,6 @@ pipeline:
   random_seed: 42
   n_spatial_folds: 5
 
-scenarios:
-  - name: "Warming +1°C"
-    variable: temperature_C
-    direction: increase
-    increments: [0.5, 1.0, 1.5, 2.0]
-    min_val: -20
-    max_val: 45
-    unit: "°C"
-
-  - name: "Precipitation Decline"
-    variable: precipitation_mm
-    direction: decrease
-    increments: [10, 25, 50]
-    min_val: 0
-    max_val: 500
-    unit: "mm"
-
-  - name: "ET Demand Increase"
-    variable: potential_ET_mm
-    direction: increase
-    increments: [10, 25, 50]
-    min_val: 0
-    max_val: 300
-    unit: "mm"
-
 # temporal:
 #   enabled: true
 #   time_column: "month_date"

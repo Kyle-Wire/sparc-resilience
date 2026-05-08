@@ -4079,23 +4079,122 @@ async def get_predictions(stage: int, format: str = Query("geojson", regex="^(js
 # Scenario endpoints
 # ------------------------------------------------------------------
 
+class RuntimeScenarioSpec(BaseModel):
+    """A single user-defined scenario submitted at runtime (no project.yml required)."""
+    name: str = "Unnamed Scenario"
+    interventions: dict[str, float] = Field(
+        ...,
+        description=(
+            "Mapping of variable→signed magnitude. Positive = increase, "
+            "negative = decrease. E.g. {'Pct_Canopy': 25, 'Pct_Impervious': -15}."
+        ),
+    )
+    unit_costs: dict[str, float] = Field(
+        default_factory=dict,
+        description="$/unit-of-change per variable. E.g. {'Pct_Canopy': 500}.",
+    )
+    budget: Optional[float] = Field(None, gt=0, description="Dollar budget (optional).")
+    equity_focus: float = Field(
+        0.0, ge=0.0, le=1.0,
+        description="0=pure ROI, 1=equity-weighted ROI.",
+    )
+
+    class Config:
+        extra = "ignore"
+
+
+class RunScenariosBody(BaseModel):
+    """Optional body for POST /scenarios/run."""
+    scenarios: Optional[list[RuntimeScenarioSpec]] = None
+
+    class Config:
+        extra = "ignore"
+
+
+def _runtime_spec_to_config_scenarios(specs: list[RuntimeScenarioSpec]) -> list[dict]:
+    """Convert RuntimeScenarioSpec objects to the internal ScenarioSimulator format."""
+    out = []
+    for spec in specs:
+        # Build one config-style scenario entry per treatment variable.
+        # For a joint scenario (multiple variables), we emit one entry per
+        # variable so the DAG can handle indirect paths; the caller joins them
+        # as interaction_scenarios when co-interventions are present.
+        for var, magnitude in spec.interventions.items():
+            direction = "decrease" if magnitude < 0 else "increase"
+            increment = abs(magnitude)
+            out.append({
+                "name": spec.name,
+                "variable": var,
+                "direction": direction,
+                "increments": [increment],
+                "min_val": None,
+                "max_val": None,
+                "unit": "",
+            })
+    return out
+
+
+def _runtime_specs_to_interaction_scenarios(
+    specs: list[RuntimeScenarioSpec],
+) -> list[dict]:
+    """Emit joint/interaction scenario entries for multi-variable specs."""
+    out = []
+    for spec in specs:
+        if len(spec.interventions) > 1:
+            out.append({
+                "name": spec.name,
+                "interventions": [
+                    {
+                        "variable": var,
+                        "increment": abs(mag),
+                        "direction": "decrease" if mag < 0 else "increase",
+                    }
+                    for var, mag in spec.interventions.items()
+                ],
+            })
+    return out
+
+
 @app.post("/scenarios/run")
-async def run_scenarios():
-    """Execute all scenarios defined in the loaded project."""
+async def run_scenarios(body: Optional[RunScenariosBody] = Body(default=None)):
+    """Execute scenarios.
+
+    Accepts an optional JSON body with a ``scenarios`` list. When provided,
+    those runtime specs are used and the ``project.yml`` scenarios block is
+    ignored. When no body is provided, the project config scenarios are used
+    as before (backward compatible). Returns 400 if neither source has
+    scenarios.
+    """
     if state.project_config is None:
         raise HTTPException(400, "No project loaded")
 
-    scenarios = state.project_config.get("scenarios", [])
-    interaction_scenarios = state.project_config.get("interaction_scenarios", [])
+    runtime_specs: list[RuntimeScenarioSpec] = (body.scenarios or []) if body else []
+
+    if runtime_specs:
+        # Build simulator config from runtime specs
+        scenarios = _runtime_spec_to_config_scenarios(runtime_specs)
+        interaction_scenarios = _runtime_specs_to_interaction_scenarios(runtime_specs)
+    else:
+        scenarios = state.project_config.get("scenarios", [])
+        interaction_scenarios = state.project_config.get("interaction_scenarios", [])
+
     if not scenarios and not interaction_scenarios:
-        raise HTTPException(400, "No scenarios defined in project.yml")
+        raise HTTPException(
+            400,
+            "No scenarios to run. Define scenarios in the Scenario Builder "
+            "or add a 'scenarios:' block to project.yml.",
+        )
 
     # Run synchronously for now; a production version would use
     # background tasks or the WebSocket streaming endpoint.
     from sparc.interventions.scenario_simulator import ScenarioSimulator
     import pandas as pd
 
-    config = state.project_config
+    # Build a config copy that injects runtime scenarios so the simulator sees them
+    config = dict(state.project_config)
+    config["scenarios"] = scenarios
+    config["interaction_scenarios"] = interaction_scenarios
+
     sim = ScenarioSimulator(config)
     sim.load_models()
 
@@ -4180,6 +4279,251 @@ async def run_scenarios():
         "scenario_mode": scenario_mode,
         "conservation_violations": len(conservation_violations),
     }
+
+
+class OptimizeScenarioBody(BaseModel):
+    """Request body for POST /scenarios/optimize (single scenario)."""
+    scenario: RuntimeScenarioSpec
+    solver: Literal["greedy", "greedy_2opt", "milp", "auto"] = "auto"
+    pareto_sweep: bool = True
+
+    class Config:
+        extra = "ignore"
+
+
+@app.post("/scenarios/optimize")
+async def optimize_scenario(body: OptimizeScenarioBody):
+    """Run a scenario through the causal final function and return a budget-optimal allocation.
+
+    Flow:
+      1. Build a per-variable scenario config from ``body.scenario``.
+      2. Run ``ScenarioSimulator.run_with_causal_dag()`` to get per-cell deltas
+         using the combined β(s)×f_PDP×physics_guard final function.
+      3. Fetch the equity layer (Stage-0 artifact or on-demand Census fetch).
+      4. Compute equity-modulated benefit: ``[(1−α) + α·equity_i] · |delta_i|``.
+      5. Compute per-cell cost from ``unit_costs`` and intervention magnitudes.
+      6. Run the greedy budget allocator.
+      7. Return allocation GeoJSON, Pareto frontier, and summary stats.
+    """
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    spec = body.scenario
+    if not spec.interventions:
+        raise HTTPException(400, "scenario.interventions must not be empty")
+    if spec.budget is None:
+        raise HTTPException(400, "scenario.budget is required for optimization")
+
+    import pandas as pd
+    from sparc.interventions.scenario_simulator import ScenarioSimulator
+    from sparc.scenario.budget import optimize as _budget_opt, pareto_sweep as _budget_sweep
+
+    # ── 1. Build config and run the simulator ──────────────────────────────
+    scenarios = _runtime_spec_to_config_scenarios([spec])
+    interaction_scenarios = _runtime_specs_to_interaction_scenarios([spec])
+    config = dict(state.project_config)
+    config["scenarios"] = scenarios
+    config["interaction_scenarios"] = interaction_scenarios
+
+    sim = ScenarioSimulator(config)
+    sim.load_models()
+
+    csv_path = config["paths"]["raw_csv_path"]
+    data = pd.read_csv(csv_path)
+    n_cells = len(data)
+
+    dag_file = config.get("causal", {}).get("dag_file")
+    has_dag = bool(dag_file and Path(dag_file).exists())
+
+    if has_dag:
+        summary_df, results_gdf, *_ = sim.run_with_causal_dag(data, verbose=False)
+    else:
+        summary_df, results_gdf, *_ = sim.run(verbose=False)
+
+    # ── 2. Extract per-cell delta for the dominant total_ column ───────────
+    import numpy as np
+    delta_col: Optional[str] = None
+    if results_gdf is not None and hasattr(results_gdf, "columns"):
+        total_cols = [c for c in results_gdf.columns if c.startswith("total_")]
+        if total_cols:
+            delta_col = total_cols[0]
+
+    if delta_col is None or results_gdf is None:
+        raise HTTPException(
+            500,
+            "Scenario simulation produced no per-cell delta columns. "
+            "Ensure Stage 3 has been run and CATE estimates are available.",
+        )
+
+    raw_deltas = np.asarray(results_gdf[delta_col].to_numpy(), dtype=float)
+    raw_deltas = np.nan_to_num(raw_deltas, nan=0.0)
+    benefits_base = np.abs(raw_deltas)
+
+    # ── 3. Equity layer ────────────────────────────────────────────────────
+    equity_scores = np.ones(n_cells, dtype=float)
+    if spec.equity_focus > 0:
+        try:
+            # Prefer artifact store (Stage-0 pre-computed)
+            eq_store = None
+            if state.registry is not None:
+                from sparc.registry.store import ArtifactStore
+                eq_store = ArtifactStore(state.registry)
+
+            if eq_store is not None and eq_store.has("0", "equity_layer"):
+                eq_df = eq_store.read_table("0", "equity_layer")
+                if eq_df is not None and "equity_score" in eq_df.columns:
+                    equity_scores = np.asarray(
+                        eq_df["equity_score"].to_numpy(), dtype=float
+                    )[:n_cells]
+                    if len(equity_scores) < n_cells:
+                        equity_scores = np.pad(
+                            equity_scores, (0, n_cells - len(equity_scores)),
+                            constant_values=np.nanmean(equity_scores),
+                        )
+            else:
+                # On-demand Census fetch
+                from sparc.data.census_equity import get_per_cell_equity
+                census_key = None
+                try:
+                    from sparc.config.user_preferences import load_preferences
+                    prefs = load_preferences()
+                    census_key = (prefs.get("api_keys") or {}).get("census")
+                except Exception:
+                    pass
+                equity_scores = get_per_cell_equity(data, census_api_key=census_key)
+        except Exception as _eq_err:
+            import warnings as _w
+            _w.warn(f"Equity layer unavailable: {_eq_err}. Using uniform equity.")
+
+    # ── 4. Equity-modulated benefit ────────────────────────────────────────
+    alpha = float(np.clip(spec.equity_focus, 0.0, 1.0))
+    modulated_benefits = benefits_base * ((1.0 - alpha) + alpha * equity_scores)
+
+    # ── 5. Per-cell costs from unit_costs ──────────────────────────────────
+    total_unit_cost = sum(
+        spec.unit_costs.get(var, 0.0) * abs(mag)
+        for var, mag in spec.interventions.items()
+    )
+    if total_unit_cost <= 0:
+        # Default: uniform cost=1 (abstract units — budget is cell-count)
+        total_unit_cost = 1.0
+        import warnings as _w
+        _w.warn(
+            "No unit_costs provided for scenario interventions. "
+            "Using abstract cost=1 per cell."
+        )
+    costs = np.full(n_cells, float(total_unit_cost), dtype=float)
+
+    # ── 6. Allocate ────────────────────────────────────────────────────────
+    alloc_result = _budget_opt(
+        benefits=modulated_benefits,
+        budget=spec.budget,
+        costs=costs,
+        solver=body.solver,
+    )
+    allocation = np.asarray(alloc_result.allocation, dtype=float)
+
+    # ── 7. Build output GeoJSON ────────────────────────────────────────────
+    import geopandas as gpd
+
+    if isinstance(results_gdf, gpd.GeoDataFrame):
+        out_gdf = results_gdf[["geometry"]].copy()
+    else:
+        raise HTTPException(500, "Scenario results are not a GeoDataFrame.")
+
+    out_gdf = out_gdf.iloc[:n_cells].copy()
+    out_gdf["allocation"] = allocation
+    out_gdf["projected_delta"] = raw_deltas
+    out_gdf["equity_score"] = equity_scores
+    out_gdf["estimated_cost"] = allocation * costs
+
+    if out_gdf.crs is not None and str(out_gdf.crs) != "EPSG:4326":
+        out_gdf = out_gdf.to_crs(epsg=4326)
+
+    allocation_geojson = out_gdf.__geo_interface__
+
+    # ── 8. Pareto sweep ────────────────────────────────────────────────────
+    pareto_out: Optional[dict] = None
+    if body.pareto_sweep:
+        try:
+            sweep = _budget_sweep(
+                benefits=modulated_benefits,
+                budget=spec.budget,
+                costs=costs,
+                solver=body.solver,
+            )
+            pareto_out = sweep.to_dict()
+        except Exception as _pe:
+            import warnings as _w
+            _w.warn(f"Pareto sweep failed: {_pe}")
+
+    from sparc.scenario.budget import _gini
+
+    return {
+        "status": "complete",
+        "scenario_name": spec.name,
+        "budget": spec.budget,
+        "equity_focus": alpha,
+        "allocation_geojson": allocation_geojson,
+        "pareto": pareto_out,
+        "summary": {
+            "total_projected_delta": float(np.sum(np.abs(raw_deltas) * allocation)),
+            "total_estimated_cost": float(alloc_result.total_cost),
+            "n_cells_treated": int(alloc_result.n_treated),
+            "n_cells_fully_treated": int(alloc_result.n_fully_treated),
+            "allocation_gini": float(_gini(allocation)),
+            "equity_gini": float(_gini(equity_scores * (allocation > 0).astype(float))),
+            "solver": alloc_result.solver,
+            "delta_column": delta_col,
+        },
+    }
+
+
+@app.get("/equity/layer")
+async def get_equity_layer():
+    """Return the equity layer as GeoJSON (Stage-0 artifact or on-demand Census fetch).
+
+    Properties per cell: ``equity_score`` (0–1), ``poverty_rate``,
+    ``minority_pct``, ``tract_geoid`` (when available).
+    """
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    import numpy as np
+    import geopandas as gpd
+
+    # Try Stage-0 artifact first
+    if state.registry is not None:
+        from sparc.registry.store import ArtifactStore
+        store = ArtifactStore(state.registry)
+        if store.has("0", "equity_layer"):
+            eq_df = store.read_table("0", "equity_layer")
+            if eq_df is not None and not eq_df.empty:
+                # Return as plain JSON records (no geometry on this table)
+                return {"source": "artifact_store", "records": eq_df.to_dict(orient="records")}
+
+    # On-demand fetch using Census TIGER
+    if state.data is None:
+        raise HTTPException(
+            404,
+            "Equity layer not yet computed and project data is not loaded. "
+            "Run Stage 0 or load a project with data to trigger the Census fetch.",
+        )
+
+    census_key = None
+    try:
+        from sparc.config.user_preferences import load_preferences
+        prefs = load_preferences()
+        census_key = (prefs.get("api_keys") or {}).get("census")
+    except Exception:
+        pass
+
+    try:
+        from sparc.data.census_equity import get_per_cell_equity_df
+        eq_df = get_per_cell_equity_df(state.data, census_api_key=census_key)
+        return {"source": "census_on_demand", "records": eq_df.to_dict(orient="records")}
+    except Exception as _e:
+        raise HTTPException(503, f"Census equity fetch failed: {_e}")
 
 
 @app.get("/scenarios/results")

@@ -29,6 +29,7 @@ const LEVEL_COLORS: Record<string, string> = {
   error: "#ef5350",
   debug: "#78909c",
   milestone: "#e79024",
+  log: "#607d8b",
 };
 
 function eventToLogLine(evt: PipelineEvent) {
@@ -43,10 +44,10 @@ function eventToLogLine(evt: PipelineEvent) {
     const ss = evt as any;
     const name = STAGE_NAMES[ss.stage] ?? `Stage ${ss.stage}`;
     const desc = STAGE_DESCRIPTIONS[ss.stage] ?? "";
-    if (ss.status === "running") return { text: `▸ Starting ${name} — ${desc}`, level: "info" as const, ts };
+    if (ss.status === "running") return { text: `[STAGE] Starting ${name} — ${desc}`, level: "info" as const, ts };
     if (ss.status === "complete") {
       const dur = ss.elapsed_seconds ? ` (${ss.elapsed_seconds.toFixed(1)}s)` : "";
-      return { text: `✓ ${name} complete${dur}`, level: "success" as const, ts };
+      return { text: `✓ ${name} completed${dur}`, level: "success" as const, ts };
     }
     if (ss.status === "failed") return { text: `✕ ${name} failed: ${ss.error ?? "unknown error"}`, level: "error" as const, ts };
     return null;
@@ -54,74 +55,79 @@ function eventToLogLine(evt: PipelineEvent) {
   if (type === "epoch_update") {
     const e = evt as any;
     const eta = e.eta_seconds ? `  eta=${Math.round(e.eta_seconds)}s` : "";
-    const phase = e.train_phase ? `[${e.train_phase}] ` : "";
-    return { text: `  ${phase}epoch ${e.epoch}/${e.n_epochs}  loss=${e.total_loss?.toFixed(4) ?? "?"}${eta}`, level: "debug" as const, ts };
+    const phase = e.train_phase ? ` [${e.train_phase}]` : "";
+    return { text: `[EPOCH]${phase} ${e.epoch} / ${e.n_epochs}  loss=${e.total_loss?.toFixed(4) ?? "?"}${eta}`, level: "debug" as const, ts };
   }
   if (type === "metric") {
     const e = evt as any;
-    const fold = e.fold != null ? ` fold ${e.fold}` : "";
-    const model = e.model ? ` [${e.model}]` : "";
-    return { text: `  📊${model}${fold} ${e.metric ?? "metric"} = ${typeof e.value === "number" ? e.value.toFixed(4) : e.value}`, level: "info" as const, ts };
+    const fold = e.fold != null ? `  fold ${e.fold}` : "";
+    const model = e.model ? `  ${e.model}` : "";
+    return { text: `[METRIC]${model}${fold}  —  ${e.metric ?? "metric"} = ${typeof e.value === "number" ? e.value.toFixed(4) : e.value}`, level: "info" as const, ts };
   }
   if (type === "fold_start") {
     const e = evt as any;
     const counts = (e.n_train != null && e.n_test != null)
-      ? `  (${e.n_train.toLocaleString()} train / ${e.n_test.toLocaleString()} test)` : "";
-    return { text: `  ── Fold ${e.fold}/${e.n_folds}${counts} ──`, level: "info" as const, ts };
+      ? `  —  ${e.n_train.toLocaleString()} train  /  ${e.n_test.toLocaleString()} test` : "";
+    return { text: `[FOLD] Fold ${e.fold} / ${e.n_folds}${counts}`, level: "info" as const, ts };
   }
   if (type === "fold_complete") {
     const e = evt as any;
     const dur = e.elapsed_seconds != null ? `  (${Math.round(e.elapsed_seconds)}s)` : "";
-    return { text: `  ✓ Fold ${e.fold} complete${dur}`, level: "success" as const, ts };
+    return { text: `✓ Fold ${e.fold} complete${dur}`, level: "success" as const, ts };
   }
   if (type === "model_result") {
     const e = evt as any;
-    return { text: `  📊 ${e.model ?? "model"}  R²=${e.r2?.toFixed(4) ?? "?"}  RMSE=${e.rmse?.toFixed(4) ?? "?"}`, level: "success" as const, ts };
+    return { text: `[MODEL] ${e.model ?? "Model"}  R²=${e.r2?.toFixed(4) ?? "?"}  RMSE=${e.rmse?.toFixed(4) ?? "?"}`, level: "success" as const, ts };
   }
   if (type === "model_start") {
     const e = evt as any;
-    return { text: `  ▸ Training ${e.model_name ?? "model"}...`, level: "info" as const, ts };
+    return { text: `[MODEL] Training ${e.model_name ?? "model"}`, level: "info" as const, ts };
   }
   if (type === "model_complete") {
     const e = evt as any;
-    const r2 = e.r2 != null ? ` R²=${e.r2.toFixed(4)}` : "";
-    return { text: `  ✓ ${e.model_name ?? "Model"} done${r2}`, level: "success" as const, ts };
+    const r2 = e.r2 != null ? `  R²=${e.r2.toFixed(4)}` : "";
+    return { text: `✓ ${e.model_name ?? "Model"} complete${r2}`, level: "success" as const, ts };
   }
   if (type === "convergence") {
-    return { text: `  convergence: ${(evt as any).status ?? ""}`, level: "info" as const, ts };
+    return { text: `[INFO] Convergence: ${(evt as any).status ?? "unknown"}`, level: "info" as const, ts };
   }
   if (type === "curriculum_stage") {
     const e = evt as any;
-    return { text: `  curriculum → ${e.label ?? e.curriculum ?? "next phase"}`, level: "info" as const, ts };
+    return { text: `[INFO] Curriculum phase — ${e.label ?? e.curriculum ?? "next phase"}`, level: "info" as const, ts };
   }
   if (type === "capacity_result") {
     const e = evt as any;
-    return { text: `  capacity check: dim=${e.hidden_dim} R²=${e.r2?.toFixed(4) ?? "?"}`, level: "debug" as const, ts };
+    return { text: `[INFO] Capacity check  dim=${e.hidden_dim}  R²=${e.r2?.toFixed(4) ?? "?"}`, level: "debug" as const, ts };
   }
   if (type === "error") {
-    return { text: (evt as any).message ?? "Error", level: "error" as const, ts };
+    return { text: `[ERROR] ${(evt as any).message ?? "An error occurred"}`, level: "error" as const, ts };
   }
   if (type === "complete") {
-    return { text: "Pipeline complete!", level: "success" as const, ts };
+    return { text: "✓ Pipeline complete", level: "success" as const, ts };
   }
   if (type === "dag_approval_requested") {
-    return { text: "⏸ DAG approval requested — review on the DAG page", level: "warn" as const, ts };
+    return { text: "[WARN] DAG approval required — review on the DAG page", level: "warn" as const, ts };
   }
   if (type === "training_health") {
-    return { text: `⚠ ${(evt as any).warning ?? "health warning"}`, level: "warn" as const, ts };
+    return { text: `[WARN] ${(evt as any).warning ?? "Training health warning"}`, level: "warn" as const, ts };
   }
   if (type === "progress") {
     const e = evt as any;
-    return { text: `  ${e.message ?? `progress: ${e.pct ?? ""}%`}`, level: "debug" as const, ts };
+    return { text: `[INFO] ${e.message ?? `Progress: ${e.pct ?? 0}%`}`, level: "debug" as const, ts };
   }
   if (type === "checkpoint") {
     const e = evt as any;
     const lvl = e.level === "success" ? "success" as const
       : e.level === "warn" ? "warn" as const
       : "milestone" as const;
-    return { text: e.message ?? "checkpoint", level: lvl, ts };
+    return { text: e.message ?? "Checkpoint", level: lvl, ts };
   }
-  // Raw log events are suppressed — only structured types shown
+  // Raw log events: surfaced in debug mode only
+  if (type === "log") {
+    const msg = (evt as any).message ?? "";
+    if (!msg.trim()) return null;
+    return { text: msg, level: "log" as const, ts };
+  }
   return null;
 }
 
@@ -145,12 +151,12 @@ export default function RunPage() {
     .filter(Boolean) as { text: string; level: string; ts: string }[];
 
   // Filter by verbosity tier:
-  //   summary  — only milestones, errors, warnings, success
-  //   normal   — above + info
-  //   debug    — everything (info + debug)
+  //   summary  — milestones, errors, warnings, success only
+  //   normal   — all structured events except debug-level and raw log lines
+  //   debug    — everything including raw stdout log lines
   const logLines = allLogLines.filter((line) => {
     if (verbosity === "debug") return true;
-    if (verbosity === "normal") return line.level !== "debug";
+    if (verbosity === "normal") return line.level !== "debug" && line.level !== "log";
     return ["milestone", "error", "warn", "success"].includes(line.level);
   });
 

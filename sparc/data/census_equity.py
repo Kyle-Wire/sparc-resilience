@@ -303,3 +303,418 @@ def context_to_equity_layers(ctx: CensusContext) -> dict:
         "invert": invert,
         "context": asdict(ctx),
     }
+
+
+# ----------------------------------------------------------------------
+# Tract-level equity: TIGER spatial join → per-cell equity score
+# ----------------------------------------------------------------------
+
+import hashlib
+import time
+import warnings as _warnings
+
+TIGER_TRACT_URL = (
+    "https://tigerweb.geo.census.gov/arcgis/rest/services/"
+    "TIGERweb/tigerWMS_Current/MapServer/8/query"
+)
+EQUITY_CACHE_TTL_DAYS = 7
+
+# ACS variable codes for tract-level query
+_TRACT_ACS_VARS = {
+    "population":     "B01003_001E",   # total population
+    "poverty_count":  "B17001_002E",   # below poverty
+    "poverty_total":  "B17001_001E",   # poverty universe
+    "nonhisp_white":  "B03002_003E",   # non-Hispanic white alone
+}
+
+
+def _tract_cache_key(bbox: tuple[float, float, float, float]) -> str:
+    raw = f"{bbox[0]:.4f},{bbox[1]:.4f},{bbox[2]:.4f},{bbox[3]:.4f}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:12]
+
+
+def _is_cache_valid(cache_key: str) -> bool:
+    fp = _cache_dir() / f"{cache_key}.json"
+    if not fp.exists():
+        return False
+    age_days = (time.time() - fp.stat().st_mtime) / 86400
+    return age_days < EQUITY_CACHE_TTL_DAYS
+
+
+def _http_json_with_retry(url: str, *, timeout: float = 15.0) -> Optional[object]:
+    """GET JSON with a single retry on 429 (rate limit) with 5-second back-off."""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "sparc-resilience/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 429:
+            _warnings.warn(
+                "Census API rate limit hit (HTTP 429). Retrying in 5 seconds. "
+                "Provide a Census API key in Settings to increase limits.",
+                stacklevel=3,
+            )
+            time.sleep(5)
+            try:
+                req2 = urllib.request.Request(url, headers={"User-Agent": "sparc-resilience/1.0"})
+                with urllib.request.urlopen(req2, timeout=timeout) as resp2:  # noqa: S310
+                    return json.loads(resp2.read().decode("utf-8"))
+            except Exception:
+                return None
+        return None
+    except Exception:
+        return None
+
+
+def _fetch_tiger_tracts(
+    bbox: tuple[float, float, float, float],
+) -> list[dict]:
+    """Fetch Census tract geometries (simplified polygon centroids) within bbox.
+
+    Returns a list of ``{tract_geoid, state_fips, county_fips, tract_code,
+    centroid_lon, centroid_lat}``. Uses the TIGER WMS MapServer query endpoint.
+    Because the full polygon join requires geopandas, we fetch tract centroids
+    and use point-in-bounding-box logic to assign project grid cells.
+    """
+    minlon, minlat, maxlon, maxlat = bbox
+    # ArcGIS REST: geometry is xmin,ymin,xmax,ymax in WGS84 (EPSG:4326 = 4326)
+    geom_str = f"{minlon},{minlat},{maxlon},{maxlat}"
+    qs = urllib.parse.urlencode({
+        "where": "1=1",
+        "geometry": geom_str,
+        "geometryType": "esriGeometryEnvelope",
+        "inSR": "4326",
+        "spatialRel": "esriSpatialRelIntersects",
+        "outFields": "GEOID,STATE,COUNTY,TRACT,CENTLAT,CENTLON",
+        "returnGeometry": "false",
+        "outSR": "4326",
+        "f": "json",
+        "resultRecordCount": "2000",
+    })
+    payload = _http_json_with_retry(f"{TIGER_TRACT_URL}?{qs}")
+    if not isinstance(payload, dict):
+        return []
+    features = payload.get("features") or []
+    tracts = []
+    for feat in features:
+        attrs = feat.get("attributes") or {}
+        geoid = str(attrs.get("GEOID") or "")
+        if not geoid:
+            continue
+        try:
+            clat = float(attrs.get("CENTLAT") or 0.0)
+            clon = float(attrs.get("CENTLON") or 0.0)
+        except (TypeError, ValueError):
+            clat, clon = 0.0, 0.0
+        tracts.append({
+            "tract_geoid": geoid,
+            "state_fips": str(attrs.get("STATE") or "").zfill(2),
+            "county_fips": str(attrs.get("COUNTY") or "").zfill(3),
+            "tract_code": str(attrs.get("TRACT") or ""),
+            "centroid_lat": clat,
+            "centroid_lon": clon,
+        })
+    return tracts
+
+
+def _fetch_acs_tracts(
+    state_fips: str,
+    county_fips: str,
+    census_api_key: Optional[str] = None,
+) -> list[dict]:
+    """Fetch ACS 5-year tract-level demographics for one county.
+
+    Returns rows of ``{tract_code, poverty_rate, minority_pct}``.
+    """
+    cache_key = f"acs_tract_{state_fips}_{county_fips}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached.get("rows", [])
+
+    vars_csv = ",".join(["NAME", *_TRACT_ACS_VARS.values()])
+    params: dict[str, str] = {
+        "get": vars_csv,
+        "for": "tract:*",
+        "in": f"state:{state_fips} county:{county_fips}",
+    }
+    if census_api_key:
+        params["key"] = census_api_key
+    qs = urllib.parse.urlencode(params)
+    payload = _http_json_with_retry(f"{ACS_BASE}?{qs}")
+    if not isinstance(payload, list) or len(payload) < 2:
+        return []
+
+    header, *rows = payload
+    try:
+        idx = {name: header.index(code) for name, code in _TRACT_ACS_VARS.items()}
+        tract_idx = header.index("tract")
+    except ValueError:
+        return []
+
+    out = []
+    for row in rows:
+        def _safe(name: str) -> Optional[float]:
+            try:
+                v = float(row[idx[name]])
+                return v if v >= 0 else None
+            except (TypeError, ValueError, IndexError):
+                return None
+
+        pop = _safe("population") or 0.0
+        pov_c = _safe("poverty_count")
+        pov_t = _safe("poverty_total") or pop or 1.0
+        nhw = _safe("nonhisp_white")
+
+        poverty_rate = (pov_c / pov_t) if pov_c is not None else None
+        minority_pct = (1.0 - nhw / pop) if (nhw is not None and pop > 0) else None
+
+        out.append({
+            "tract_code": str(row[tract_idx]),
+            "poverty_rate": poverty_rate,
+            "minority_pct": minority_pct,
+        })
+
+    _cache_put(cache_key, {"rows": out})
+    return out
+
+
+def fetch_tract_equity(
+    bbox: tuple[float, float, float, float],
+    census_api_key: Optional[str] = None,
+) -> list[dict]:
+    """Fetch tract-level equity scores for a bounding box.
+
+    Returns a list of dicts, one per tract, with keys:
+    ``tract_geoid``, ``centroid_lat``, ``centroid_lon``,
+    ``poverty_rate``, ``minority_pct``, ``equity_score``.
+
+    ``equity_score`` = 0.5 × poverty_rate + 0.5 × minority_pct,
+    min-max normalised across returned tracts to [0, 1].
+    """
+    cache_key = f"tract_equity_{_tract_cache_key(bbox)}"
+    if _is_cache_valid(cache_key):
+        cached = _cache_get(cache_key)
+        if cached and cached.get("tracts"):
+            return cached["tracts"]
+
+    tracts = _fetch_tiger_tracts(bbox)
+    if not tracts:
+        return []
+
+    # Group tracts by state+county, fetch ACS once per county
+    county_acs: dict[tuple[str, str], dict[str, dict]] = {}
+    for t in tracts:
+        key = (t["state_fips"], t["county_fips"])
+        if key not in county_acs:
+            rows = _fetch_acs_tracts(t["state_fips"], t["county_fips"], census_api_key)
+            county_acs[key] = {r["tract_code"]: r for r in rows}
+
+    # Merge ACS data into tract records
+    result = []
+    for t in tracts:
+        acs = county_acs.get((t["state_fips"], t["county_fips"]), {}).get(t["tract_code"], {})
+        pov = acs.get("poverty_rate")
+        min_pct = acs.get("minority_pct")
+        # Raw composite (before normalisation)
+        if pov is not None and min_pct is not None:
+            raw_score = 0.5 * pov + 0.5 * min_pct
+        elif pov is not None:
+            raw_score = pov
+        elif min_pct is not None:
+            raw_score = min_pct
+        else:
+            raw_score = None
+        result.append({
+            "tract_geoid": t["tract_geoid"],
+            "centroid_lat": t["centroid_lat"],
+            "centroid_lon": t["centroid_lon"],
+            "poverty_rate": pov,
+            "minority_pct": min_pct,
+            "_raw_score": raw_score,
+        })
+
+    # Min-max normalise equity_score across tracts that have data
+    raw_scores = [r["_raw_score"] for r in result if r["_raw_score"] is not None]
+    lo = min(raw_scores) if raw_scores else 0.0
+    hi = max(raw_scores) if raw_scores else 1.0
+    span = hi - lo if hi > lo else 1.0
+
+    for r in result:
+        rs = r.pop("_raw_score")
+        r["equity_score"] = float((rs - lo) / span) if rs is not None else 0.5
+
+    _cache_put(cache_key, {"tracts": result})
+    return result
+
+
+def _assign_tract_to_cells(
+    cell_lats: list[float],
+    cell_lons: list[float],
+    tract_records: list[dict],
+) -> list[str]:
+    """Nearest-centroid assignment of each grid cell to a tract geoid.
+
+    Pure stdlib — no geopandas required. Uses squared Euclidean distance
+    in lon/lat space (acceptable for the sub-county distances involved).
+    """
+    if not tract_records:
+        return [""] * len(cell_lats)
+
+    import math
+
+    t_lats = [t["centroid_lat"] for t in tract_records]
+    t_lons = [t["centroid_lon"] for t in tract_records]
+    t_ids = [t["tract_geoid"] for t in tract_records]
+
+    result = []
+    for clat, clon in zip(cell_lats, cell_lons):
+        best_idx = 0
+        best_dist = math.inf
+        for i, (tlat, tlon) in enumerate(zip(t_lats, t_lons)):
+            d = (clat - tlat) ** 2 + (clon - tlon) ** 2
+            if d < best_dist:
+                best_dist = d
+                best_idx = i
+        result.append(t_ids[best_idx])
+    return result
+
+
+def get_per_cell_equity(
+    data_df: "pd.DataFrame",  # type: ignore[name-defined]
+    census_api_key: Optional[str] = None,
+) -> "np.ndarray":  # type: ignore[name-defined]
+    """Return a per-cell equity score array (0–1) aligned to ``data_df`` rows.
+
+    Derives lat/lon from the DataFrame's coordinate columns (tries common
+    names: lat/lon, latitude/longitude, y/x, coord_y/coord_x). Falls back to
+    uniform 0.5 if coordinates cannot be resolved.
+
+    Parameters
+    ----------
+    data_df
+        The project DataFrame (one row per grid cell).
+    census_api_key
+        Optional Census API key for higher rate limits.
+
+    Returns
+    -------
+    np.ndarray of shape (n_cells,) with dtype float64, values in [0, 1].
+    """
+    import numpy as np
+
+    n = len(data_df)
+    fallback = np.full(n, 0.5, dtype=float)
+
+    # Detect lat/lon columns
+    _LAT_CANDIDATES = ["lat", "latitude", "LAT", "LATITUDE", "y", "Y", "coord_y", "COORD_Y"]
+    _LON_CANDIDATES = ["lon", "lng", "longitude", "LON", "LNG", "LONGITUDE", "x", "X", "coord_x", "COORD_X"]
+    lat_col = next((c for c in _LAT_CANDIDATES if c in data_df.columns), None)
+    lon_col = next((c for c in _LON_CANDIDATES if c in data_df.columns), None)
+    if lat_col is None or lon_col is None:
+        _warnings.warn(
+            "Cannot determine lat/lon columns for Census equity fetch. "
+            f"Tried: {_LAT_CANDIDATES}, {_LON_CANDIDATES}. "
+            "Using uniform equity_score=0.5.",
+        )
+        return fallback
+
+    try:
+        lats = data_df[lat_col].to_numpy(dtype=float)
+        lons = data_df[lon_col].to_numpy(dtype=float)
+    except Exception:
+        return fallback
+
+    finite = np.isfinite(lats) & np.isfinite(lons)
+    if not finite.any():
+        return fallback
+
+    bbox = (
+        float(lons[finite].min()),
+        float(lats[finite].min()),
+        float(lons[finite].max()),
+        float(lats[finite].max()),
+    )
+
+    tracts = fetch_tract_equity(bbox, census_api_key=census_api_key)
+    if not tracts:
+        _warnings.warn(
+            "Census TIGER returned no tract data for the project bounding box. "
+            "Using uniform equity_score=0.5.",
+        )
+        return fallback
+
+    # Build tract_geoid → equity_score lookup
+    tract_lookup: dict[str, float] = {t["tract_geoid"]: t["equity_score"] for t in tracts}
+
+    # Assign each cell to nearest tract centroid
+    assigned = _assign_tract_to_cells(
+        lats.tolist(), lons.tolist(), tracts
+    )
+
+    equity_arr = np.array(
+        [tract_lookup.get(gid, 0.5) for gid in assigned],
+        dtype=float,
+    )
+    return equity_arr
+
+
+def get_per_cell_equity_df(
+    data_df: "pd.DataFrame",  # type: ignore[name-defined]
+    census_api_key: Optional[str] = None,
+) -> "pd.DataFrame":  # type: ignore[name-defined]
+    """Same as ``get_per_cell_equity`` but returns a DataFrame with full columns.
+
+    Columns: ``cell_id``, ``equity_score``, ``poverty_rate``, ``minority_pct``,
+    ``tract_geoid``.
+    """
+    import numpy as np
+    import pandas as pd
+
+    n = len(data_df)
+    scores = get_per_cell_equity(data_df, census_api_key=census_api_key)
+
+    # Rebuild tract assignment for metadata columns
+    _LAT_CANDIDATES = ["lat", "latitude", "LAT", "LATITUDE", "y", "Y", "coord_y"]
+    _LON_CANDIDATES = ["lon", "lng", "longitude", "LON", "LNG", "LONGITUDE", "x", "X", "coord_x"]
+    lat_col = next((c for c in _LAT_CANDIDATES if c in data_df.columns), None)
+    lon_col = next((c for c in _LON_CANDIDATES if c in data_df.columns), None)
+
+    tract_geoids = [""] * n
+    poverty_rates: list[Optional[float]] = [None] * n
+    minority_pcts: list[Optional[float]] = [None] * n
+
+    if lat_col and lon_col:
+        try:
+            lats = data_df[lat_col].to_numpy(dtype=float)
+            lons = data_df[lon_col].to_numpy(dtype=float)
+            finite = np.isfinite(lats) & np.isfinite(lons)
+            if finite.any():
+                bbox = (
+                    float(lons[finite].min()), float(lats[finite].min()),
+                    float(lons[finite].max()), float(lats[finite].max()),
+                )
+                tracts = fetch_tract_equity(bbox, census_api_key=census_api_key)
+                if tracts:
+                    tract_lookup_meta = {
+                        t["tract_geoid"]: t for t in tracts
+                    }
+                    assigned = _assign_tract_to_cells(lats.tolist(), lons.tolist(), tracts)
+                    for i, gid in enumerate(assigned):
+                        tract_geoids[i] = gid
+                        meta = tract_lookup_meta.get(gid, {})
+                        poverty_rates[i] = meta.get("poverty_rate")
+                        minority_pcts[i] = meta.get("minority_pct")
+        except Exception:
+            pass
+
+    cell_ids = list(range(n))
+    if "cell_id" in data_df.columns:
+        cell_ids = data_df["cell_id"].tolist()
+
+    return pd.DataFrame({
+        "cell_id": cell_ids,
+        "equity_score": scores,
+        "poverty_rate": poverty_rates,
+        "minority_pct": minority_pcts,
+        "tract_geoid": tract_geoids,
+    })

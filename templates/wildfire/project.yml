@@ -112,31 +112,6 @@ pipeline:
   random_seed: 42
   n_spatial_folds: 5
 
-scenarios:
-  - name: "Fuel Treatment — Mechanical Thinning"
-    variable: fuel_load_tha
-    direction: decrease
-    increments: [5, 10, 20, 30]
-    min_val: 0
-    max_val: 200
-    unit: "tonnes/ha"
-
-  - name: "Prescribed Burn — Canopy Reduction"
-    variable: canopy_cover_pct
-    direction: decrease
-    increments: [10, 20, 30]
-    min_val: 0
-    max_val: 100
-    unit: "percentage points"
-
-  - name: "Climate Warming — VPD Increase"
-    variable: VPD_kPa
-    direction: increase
-    increments: [0.5, 1.0, 1.5, 2.0]
-    min_val: 0
-    max_val: 8
-    unit: "kPa"
-
 # temporal:
 #   enabled: true
 #   time_column: "fire_date"

@@ -1,11 +1,13 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 import { useServer } from "@/hooks/useServer";
 import { useProject } from "@/hooks/useProject";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { NotificationContext, useNotificationState } from "@/hooks/useNotifications";
 import { PipelineProvider } from "@/hooks/PipelineProvider";
 import NotificationBanner from "@/components/layout/NotificationBanner";
-import Splash from "@/components/layout/Splash";
+import Splash, { type SplashStep } from "@/components/layout/Splash";
+import LoginScreen from "@/components/layout/LoginScreen";
+import AuthGate from "@/components/layout/AuthGate";
 import Shell from "@/components/layout/Shell";
 import type { PageName } from "@/components/layout/Sidebar";
 import { PAGES } from "@/components/layout/Sidebar";
@@ -14,7 +16,8 @@ import CommandPalette, { type PaletteItem } from "@/components/common/CommandPal
 import OnboardingTour from "@/components/common/OnboardingTour";
 import UpdateBanner from "@/components/updater/UpdateBanner";
 import { ExplainContext, useExplainHost } from "@/hooks/ExplainContext";
-import { loadTheme, applyTheme } from "@/lib/theme";
+import { loadThemeKey, applyTheme } from "@/lib/theme";
+import { useAuthStore } from "@/stores/authStore";
 import { buildSystemPrompt } from "@/lib/prompts";
 import { getConfig, saveConfig, dataSummary, initProject, getReportData, getDag } from "@/lib/api";
 import type { ClaudeAction, DataSummary, ProjectConfig, ReportPayload, DagDefinition } from "@/lib/types";
@@ -52,10 +55,38 @@ export default function App() {
   const [dataCtx, setDataCtx] = useState<PromptDataContext | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
+  // Auth
+  const { user, init: initAuth, signOut } = useAuthStore();
+  const [splashStep, setSplashStep] = useState<SplashStep>("sidecar");
+  const [splashDone, setSplashDone] = useState(false);
+
+  // Parallax preference
+  const [parallaxEnabled, setParallaxEnabled] = useState(
+    () => localStorage.getItem("sparc-parallax") !== "false",
+  );
+
   // Apply persisted theme on mount
   useEffect(() => {
-    applyTheme(loadTheme());
+    applyTheme(loadThemeKey());
   }, []);
+
+  // Step 1 → 2: sidecar is ready
+  useEffect(() => {
+    if (ready && splashStep === "sidecar") {
+      setSplashStep("session");
+    }
+  }, [ready, splashStep]);
+
+  // Step 2 → 3: restore auth session
+  useEffect(() => {
+    if (splashStep !== "session") return;
+    initAuth().then(() => {
+      setSplashStep("ready");
+      // Short pause so user sees "Ready" before we switch screens
+      setTimeout(() => setSplashDone(true), 400);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [splashStep]);
 
   // Gate navigation: only Project and Settings are allowed without a loaded project
   const navigate = useCallback(
@@ -214,12 +245,25 @@ export default function App() {
     }
   }, [notif, project, navigate]);
 
-  if (!ready || project.rehydrating) return <Splash />;
+  // Show splash while loading
+  if (!splashDone || project.rehydrating) {
+    return <Splash step={splashStep} parallaxEnabled={parallaxEnabled} />;
+  }
+
+  // Show login if no authenticated user
+  if (!user) {
+    return <LoginScreen parallaxEnabled={parallaxEnabled} />;
+  }
+
+  const navigateToSettings = useCallback(() => navigate("Settings"), [navigate]);
 
   const renderPage = () => {
+    const gate = (el: React.ReactNode) => (
+      <AuthGate onSignIn={navigateToSettings}>{el}</AuthGate>
+    );
     switch (page) {
       case "Project":
-        return (
+        return gate(
           <ProjectPage
             projectPath={project.projectPath}
             onProjectLoaded={async (path, meta) => {
@@ -228,38 +272,48 @@ export default function App() {
               setRefreshKey((k) => k + 1);
               notif.notify("success", "Project loaded successfully");
             }}
-          />
+          />,
         );
       case "Data":
-        return <DataPage key={refreshKey} />;
+        return gate(<DataPage key={refreshKey} />);
       case "Processing":
-        return <ProcessingPage />;
+        return gate(<ProcessingPage />);
       case "DAG":
-        return <DAGPage key={refreshKey} onNavigate={(p) => navigate(p as AppPage)} />;
+        return gate(<DAGPage key={refreshKey} onNavigate={(p) => navigate(p as AppPage)} />);
       case "Variables":
-        return <VariablesPage />;
+        return gate(<VariablesPage />);
       case "Physics":
-        return <PhysicsPage />;
+        return gate(<PhysicsPage />);
       case "CRS":
-        return <CRSPage />;
+        return gate(<CRSPage />);
       case "Scenarios":
-        return <ScenariosPage onNavigate={(p) => navigate(p as AppPage)} />;
+        return gate(<ScenariosPage onNavigate={(p) => navigate(p as AppPage)} />);
       case "Models":
-        return <ModelsPage />;
+        return gate(<ModelsPage />);
       case "Causal":
-        return <CausalPage />;
+        return gate(<CausalPage />);
       case "Run":
-        return <RunPage />;
+        return gate(<RunPage />);
       case "Insights":
-        return <InsightsPage />;
+        return gate(<InsightsPage />);
       case "Decision Support":
-        return <DecisionSupportPage />;
+        return gate(<DecisionSupportPage />);
       case "Compare":
-        return <ComparePage />;
+        return gate(<ComparePage />);
       case "Report":
-        return <ReportPage />;
+        return gate(<ReportPage />);
       case "Settings":
-        return <SettingsPage onNavigate={(p) => navigate(p as AppPage)} />;
+        return (
+          <SettingsPage
+            onNavigate={(p) => navigate(p as AppPage)}
+            onSignOut={async () => { await signOut(); }}
+            parallaxEnabled={parallaxEnabled}
+            onParallaxToggle={(v) => {
+              setParallaxEnabled(v);
+              localStorage.setItem("sparc-parallax", v ? "true" : "false");
+            }}
+          />
+        );
       case "Performance":
         return <PerformancePage />;
     }

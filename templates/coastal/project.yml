@@ -108,31 +108,6 @@ pipeline:
   random_seed: 42
   n_spatial_folds: 5
 
-scenarios:
-  - name: "Sea Level Rise +3mm/yr"
-    variable: sea_level_rise_mmyr
-    direction: increase
-    increments: [1, 3, 5, 10]
-    min_val: 0
-    max_val: 30
-    unit: "mm/yr"
-
-  - name: "Living Shoreline Restoration"
-    variable: coastal_vegetation_pct
-    direction: increase
-    increments: [10, 20, 30, 50]
-    min_val: 0
-    max_val: 100
-    unit: "percentage points"
-
-  - name: "Increased Storm Frequency"
-    variable: storm_frequency_yr
-    direction: increase
-    increments: [1, 2, 3]
-    min_val: 0
-    max_val: 20
-    unit: "events/yr"
-
 # temporal:
 #   enabled: true
 #   time_column: "survey_date"

@@ -588,19 +588,70 @@ class ScenarioSimulator:
                       f"Gini={gini:.4f}, mean={np.mean(delta):.4f}")
                 return delta, 'pde_alpha_field'
 
-        # --- Tier 1: Bayesian per-cell coefficient β(s) ---------------
-        # Stage-3 NUTS posterior mean from cate_summary.cate_mean. This is
-        # the canonical causal local effect; v4 dropped MGWR direct/blend.
-        beta_s = self._get_bayesian_beta(variable)
-        if beta_s is not None and beta_s.size > 0:
-            n = min(len(effective_change), len(beta_s))
-            return beta_s[:n] * effective_change[:n], 'bayesian_beta'
+        # --- Tiers 1-3: Combined final function ---------------------------
+        # When NUTS β(s) is available, combine all three evidence sources:
+        #   effect_i = β(s_i) × f_PDP(Δ_i) × physics_guard
+        # β(s_i) drives the per-cell magnitude (causal estimator),
+        # f_PDP shapes non-linear saturation, physics_guard bounds the result.
+        # Falls back gracefully when individual tiers are unavailable.
+        return self.compute_combined_effect(
+            variable, effective_change,
+            baseline_values=baseline_values,
+            modified_values=modified_values,
+            lit_per_unit=lit_per_unit,
+        )
 
-        # --- Tier 2: Saturation curve (GWRF condition curve) -----------
+    def compute_combined_effect(
+        self,
+        variable: str,
+        effective_change: np.ndarray,
+        *,
+        baseline_values: Optional[np.ndarray] = None,
+        modified_values: Optional[np.ndarray] = None,
+        lit_per_unit: float = 0.0,
+    ) -> Tuple[np.ndarray, str]:
+        """Unified three-tier final function for per-cell direct effect.
+
+        Combines all available causal evidence multiplicatively:
+
+            effect_i = β(s_i) × f_PDP(Δ_i) × physics_guard
+
+        - **Tier 1 — β(s_i):** NUTS posterior-mean per-cell spatial CATE from
+          ``("3", "cate_summary")``. Primary causal estimator.
+        - **Tier 2 — f_PDP(Δ_i):** Dimensionless saturation shape modifier
+          derived from the GWRF/dose-response condition curve. Computed as
+          ``|PDP_slope(Δ_i)| / mean(|PDP_slope|)`` over active cells, clamped
+          to [0.1, 10.0]. Applied only when a condition curve with R² ≥
+          threshold exists. When unavailable, f_PDP = 1 (no shaping).
+        - **Tier 3 — physics_guard:** Sign check and ±3σ magnitude cap from
+          the physics literature prior. Acts as a hard bound, not a
+          coefficient contribution.
+
+        Graceful degradation:
+          - β(s_i) unavailable → use saturation curve alone (current Tier 2).
+          - Both β(s_i) and curve unavailable → physics literal fallback.
+
+        Returns
+        -------
+        (delta, source_label) : (ndarray, str)
+        """
+        n = len(effective_change)
+
+        # ------------------------------------------------------------------
+        # Tier 1: Bayesian per-cell β(s)
+        # ------------------------------------------------------------------
+        beta_s = self._get_bayesian_beta(variable)
+        has_beta = beta_s is not None and beta_s.size > 0
+
+        # ------------------------------------------------------------------
+        # Tier 2: PDP saturation shape modifier (f_PDP)
+        # ------------------------------------------------------------------
+        f_pdp: Optional[np.ndarray] = None
         curve = self._condition_curves.get(variable)
         if (
-            curve is not None
-            and curve['r2'] >= self._condition_curve_min_r2
+            has_beta
+            and curve is not None
+            and curve.get('r2', 0.0) >= self._condition_curve_min_r2
             and baseline_values is not None
             and modified_values is not None
         ):
@@ -608,25 +659,119 @@ class ScenarioSimulator:
                 from sparc.interventions.extrapolation_guard import (
                     predict_scenario_with_saturation,
                 )
-                condition_curve_dict = {
-                    'grid_values': curve['grid_values'],
-                    'pdp_values': curve['pdp_values'],
-                }
+                nb = min(n, len(beta_s))
+                pdp_delta = predict_scenario_with_saturation(
+                    variable_name=variable,
+                    baseline_values=baseline_values[:nb],
+                    modified_values=modified_values[:nb],
+                    condition_curve={
+                        'grid_values': curve['grid_values'],
+                        'pdp_values': curve['pdp_values'],
+                    },
+                    spatial_multiplier=None,
+                )
+                eff_nb = effective_change[:nb]
+                active = np.abs(eff_nb) > 1e-8
+                raw_slope = np.where(active, np.abs(pdp_delta) / np.abs(eff_nb), 0.0)
+                slope_mean = float(np.mean(raw_slope[active])) if active.any() else 0.0
+                if slope_mean > 1e-10:
+                    f_pdp = np.clip(raw_slope / slope_mean, 0.1, 10.0)
+                else:
+                    f_pdp = np.ones(nb, dtype=float)
+            except Exception as _e:
+                warnings.warn(
+                    f"PDP shape modifier failed for {variable}: {_e}; "
+                    "using f_PDP=1."
+                )
+                f_pdp = None
+
+        # ------------------------------------------------------------------
+        # Assemble: β(s_i) × f_PDP × Δ, then apply physics guard
+        # ------------------------------------------------------------------
+        if has_beta:
+            nb = min(n, len(beta_s))
+            if f_pdp is not None:
+                nf = min(nb, len(f_pdp))
+                delta = beta_s[:nf] * f_pdp[:nf] * effective_change[:nf]
+                source = 'combined_beta_pdp'
+            else:
+                delta = beta_s[:nb] * effective_change[:nb]
+                source = 'combined_beta'
+
+            # Physics guard — sign check + ±3σ magnitude cap
+            prior = self.physics_priors.get(variable, {})
+            expected_sign = prior.get("direction")
+            if expected_sign in ("negative", "decrease"):
+                wrong_sign = delta > 0
+            elif expected_sign in ("positive", "increase"):
+                wrong_sign = delta < 0
+            else:
+                wrong_sign = np.zeros(len(delta), dtype=bool)
+
+            if wrong_sign.any():
+                delta = np.where(wrong_sign, 0.0, delta)
+                warnings.warn(
+                    f"Physics guard: {wrong_sign.sum()} cells for '{variable}' "
+                    "zeroed (wrong sign vs. literature prior)."
+                )
+
+            # ±3σ cap relative to the distribution of |delta|
+            abs_d = np.abs(delta)
+            d_mean = float(np.mean(abs_d))
+            d_std = float(np.std(abs_d))
+            cap = d_mean + 3.0 * d_std
+            if cap > 1e-10:
+                clipped = np.clip(delta, -cap, cap)
+                if not np.array_equal(clipped, delta):
+                    n_clipped = int(np.sum(np.abs(delta) > cap))
+                    warnings.warn(
+                        f"Physics guard: {n_clipped} cells for '{variable}' "
+                        "clipped at ±3σ magnitude cap."
+                    )
+                delta = clipped
+
+            gini = spatial_gini_coefficient(delta)
+            print(
+                f"   [{source}] delta for {variable}: "
+                f"Gini={gini:.4f}, mean={float(np.mean(delta)):+.4f}, "
+                f"f_pdp={'yes' if f_pdp is not None else 'no'}, "
+                f"guard={'applied' if wrong_sign.any() else 'ok'}"
+            )
+            return delta, source
+
+        # ------------------------------------------------------------------
+        # β(s) unavailable — fall back to Tier 2 (saturation curve only)
+        # ------------------------------------------------------------------
+        if (
+            curve is not None
+            and curve.get('r2', 0.0) >= self._condition_curve_min_r2
+            and baseline_values is not None
+            and modified_values is not None
+        ):
+            try:
+                from sparc.interventions.extrapolation_guard import (
+                    predict_scenario_with_saturation,
+                )
                 delta = predict_scenario_with_saturation(
                     variable_name=variable,
                     baseline_values=baseline_values,
                     modified_values=modified_values,
-                    condition_curve=condition_curve_dict,
+                    condition_curve={
+                        'grid_values': curve['grid_values'],
+                        'pdp_values': curve['pdp_values'],
+                    },
                     spatial_multiplier=None,
                 )
                 return delta, 'saturation_curve'
-            except Exception as e:
+            except Exception as _e:
                 warnings.warn(
-                    f"Saturation curve failed for {variable}: {e}; "
-                    f"falling back to coefficient extrapolation."
+                    f"Saturation curve fallback failed for {variable}: {_e}; "
+                    "using physics literal."
                 )
 
-        # --- Tier 3: Pure physics literature fallback -----------------
+        # ------------------------------------------------------------------
+        # Tier 3: Pure physics literature fallback
+        # ------------------------------------------------------------------
         return lit_per_unit * effective_change, 'physics_lit'
 
     def _compute_indirect_effects(

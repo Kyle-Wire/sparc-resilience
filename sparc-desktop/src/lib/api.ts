@@ -888,6 +888,72 @@ export interface BudgetOptimizeResponse {
 export const optimizeBudget = (req: BudgetOptimizeRequest) =>
   post<BudgetOptimizeResponse>("/scenarios/budget/optimize", req);
 
+
+export interface RuntimeScenarioSpec {
+  name?: string;
+  interventions: Record<string, number>;
+  unit_costs?: Record<string, number>;
+  budget: number;
+  equity_focus?: number;
+}
+
+export interface AllocationSummary {
+  total_projected_delta: number;
+  total_estimated_cost: number;
+  n_cells_treated: number;
+  n_cells_fully_treated: number;
+  allocation_gini: number;
+  equity_gini: number;
+  solver: string;
+  delta_column: string;
+}
+
+export interface AllocationParetoPoint {
+  budget: number;
+  total_benefit: number;
+  n_treated: number;
+  gini: number;
+}
+
+export interface OptimizeScenarioResponse {
+  status: string;
+  scenario_name: string;
+  budget: number;
+  equity_focus: number;
+  allocation_geojson: GeoJsonData | null;
+  pareto: { points: AllocationParetoPoint[] } | null;
+  summary: AllocationSummary;
+}
+
+export const optimizeScenario = (
+  scenario: RuntimeScenarioSpec,
+  opts?: { solver?: string; pareto_sweep?: boolean },
+) =>
+  post<OptimizeScenarioResponse>("/scenarios/optimize", {
+    scenario,
+    solver: opts?.solver ?? "auto",
+    pareto_sweep: opts?.pareto_sweep ?? true,
+  });
+
+// ------------------------------------------------------------------
+// Equity layer — per-cell equity scores (Census tract)
+// ------------------------------------------------------------------
+
+export interface EquityLayerRecord {
+  cell_id: number | string;
+  equity_score: number;
+  poverty_rate: number | null;
+  minority_pct: number | null;
+  tract_geoid: string;
+}
+
+export interface EquityLayerResponse {
+  source: "artifact_store" | "census_on_demand";
+  records: EquityLayerRecord[];
+}
+
+export const getEquityLayer = () => get<EquityLayerResponse>("/equity/layer");
+
 // ------------------------------------------------------------------
 // Data preparation (raster + fishnet + zonal stats)
 // ------------------------------------------------------------------

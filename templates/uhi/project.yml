@@ -341,39 +341,6 @@ caps:
 # ---------------------------------------------------------------------------
 # Intervention Scenarios (for physics-constrained simulation)
 # ---------------------------------------------------------------------------
-scenarios:
-  - name: "Canopy Increase"
-    variable: Pct_Canopy
-    direction: increase
-    increments: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
-    min_val: 0
-    max_val: 100
-    unit: "percentage points"
-
-  - name: "Impervious Decrease"
-    variable: Pct_Impervious
-    direction: decrease
-    increments: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
-    min_val: 0
-    max_val: 100
-    unit: "percentage points"
-
-  - name: "Albedo Increase"
-    variable: Albedo
-    direction: increase
-    increments: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
-    min_val: 0.05
-    max_val: 0.70
-    unit: "reflectance"
-
-  - name: "NDVI Increase"
-    variable: NDVI
-    direction: increase
-    increments: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
-    min_val: -0.1
-    max_val: 0.9
-    unit: "index"
-
 # ---------------------------------------------------------------------------
 # Joint (Multi-Variable) Scenarios
 # ---------------------------------------------------------------------------
@@ -384,40 +351,6 @@ scenarios:
 # Combined physical constraints (e.g. Canopy + Impervious ≤ 100%) are enforced
 # automatically inside the simulator.
 # ---------------------------------------------------------------------------
-joint_scenarios:
-  - name: "Green Infrastructure Package"
-    auto_propagate_dag: true
-    interventions:
-      - variable: Pct_Canopy
-        direction: increase
-        increment: 15
-      - variable: Pct_Impervious
-        direction: decrease
-        increment: 15
-      - variable: Albedo
-        direction: increase
-        increment: 0.10
-
-  - name: "Cool-Roof Only"
-    auto_propagate_dag: false
-    interventions:
-      - variable: Albedo
-        direction: increase
-        increment: 0.20
-
-  - name: "Aggressive Greening"
-    auto_propagate_dag: true
-    interventions:
-      - variable: Pct_Canopy
-        direction: increase
-        increment: 30
-      - variable: NDVI
-        direction: increase
-        increment: 0.15
-      - variable: Pct_Impervious
-        direction: decrease
-        increment: 25
-
 # ---------------------------------------------------------------------------
 # V3 Temporal / Multi-Snapshot (optional — uncomment to enable)
 # ---------------------------------------------------------------------------

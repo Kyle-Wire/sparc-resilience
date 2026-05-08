@@ -245,6 +245,8 @@ def optimize(
     costs: Sequence[float] | None = None,
     x_max: Sequence[float] | None = None,
     solver: str = "auto",
+    equity_scores: "Sequence[float] | np.ndarray | None" = None,
+    equity_focus: float = 0.0,
 ) -> BudgetResult:
     """Allocate a budget across cells to maximise total benefit.
 
@@ -260,6 +262,12 @@ def optimize(
         Per-cell maximum allocation; defaults to all-ones (continuous in [0,1]).
     solver :
         "greedy" | "greedy_2opt" | "milp" | "auto". With "auto" we pick by size.
+    equity_scores :
+        Per-cell equity score in [0, 1] (e.g. poverty / minority index).
+        When provided and ``equity_focus > 0`` the effective benefit is
+        modulated: ``b_eff_i = b_i * [(1 - α) + α * equity_i]``.
+    equity_focus :
+        Blending weight α ∈ [0, 1]. 0 ⇒ pure efficiency; 1 ⇒ equity-first.
     """
     import time
 
@@ -267,6 +275,23 @@ def optimize(
     c = np.asarray(costs, dtype=float) if costs is not None else np.ones_like(b)
     xm = np.asarray(x_max, dtype=float) if x_max is not None else np.ones_like(b)
     _validate_inputs(b, c, xm, budget)
+
+    # Apply equity modulation before solver sees benefits
+    alpha = float(np.clip(equity_focus, 0.0, 1.0))
+    if alpha > 0 and equity_scores is not None:
+        eq = np.asarray(equity_scores, dtype=float)
+        if eq.shape != b.shape:
+            import warnings as _w
+            _w.warn(
+                f"equity_scores shape {eq.shape} != benefits shape {b.shape}; "
+                "truncating/padding to match.",
+            )
+            if eq.size >= b.size:
+                eq = eq[: b.size]
+            else:
+                eq = np.pad(eq, (0, b.size - eq.size), constant_values=np.nanmean(eq))
+        eq = np.clip(eq, 0.0, 1.0)
+        b = b * ((1.0 - alpha) + alpha * eq)
 
     if solver == "auto":
         n = b.size
@@ -286,7 +311,8 @@ def optimize(
         raise ValueError(f"Unknown solver: {chosen}")
     elapsed = time.perf_counter() - t0
 
-    total_b = float(np.sum(b * alloc))
+    b_orig = np.asarray(benefits, dtype=float)  # for reporting against raw benefits
+    total_b = float(np.sum(b_orig * alloc))
     total_c = float(np.sum(c * alloc))
     n_treat = int(np.sum(alloc > 1e-9))
     n_full = int(np.sum(alloc >= xm - 1e-9))
@@ -311,12 +337,18 @@ def pareto_sweep(
     x_max: Sequence[float] | None = None,
     multipliers: Sequence[float] = (0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0),
     solver: str = "auto",
+    equity_scores: "Sequence[float] | np.ndarray | None" = None,
+    equity_focus: float = 0.0,
 ) -> BudgetSweepResult:
     """Re-solve at several budget multipliers to expose diminishing returns."""
     out = BudgetSweepResult()
     for m in multipliers:
         b = budget * float(m)
-        r = optimize(benefits, b, costs=costs, x_max=x_max, solver=solver)
+        r = optimize(
+            benefits, b,
+            costs=costs, x_max=x_max, solver=solver,
+            equity_scores=equity_scores, equity_focus=equity_focus,
+        )
         out.points.append(
             ParetoPoint(
                 budget=b,
