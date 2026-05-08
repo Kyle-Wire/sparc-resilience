@@ -2,6 +2,7 @@ import { useState, useRef, useCallback } from "react";
 import CubeLogo from "@/components/brand/CubeLogo";
 import { useAuthStore } from "@/stores/authStore";
 import { useMouseParallax } from "@/hooks/useMouseParallax";
+import { open as shellOpen } from "@tauri-apps/plugin-shell";
 
 interface LoginScreenProps {
   parallaxEnabled?: boolean;
@@ -21,18 +22,18 @@ export default function LoginScreen({ parallaxEnabled = true }: LoginScreenProps
     useCallback(({ nx, ny }) => {
       if (cardRef.current) {
         cardRef.current.style.transform = parallaxEnabled
-          ? `perspective(900px) rotateY(${nx * 8}deg) rotateX(${-ny * 6}deg) translateZ(0)`
+          ? `perspective(900px) rotateY(${nx * 4}deg) rotateX(${-ny * 3}deg) translateZ(0)`
           : "none";
       }
       if (logoRef.current) {
         cardRef.current; // keep ref
         logoRef.current.style.transform = parallaxEnabled
-          ? `translateX(${nx * 14}px) translateY(${ny * 10}px)`
+          ? `translateX(${nx * 7}px) translateY(${ny * 5}px)`
           : "none";
       }
       if (glowRef.current) {
         glowRef.current.style.transform = parallaxEnabled
-          ? `translate(${nx * 40}px, ${ny * 30}px)`
+          ? `translate(${nx * 20}px, ${ny * 15}px)`
           : "none";
       }
     }, [parallaxEnabled]),
@@ -44,8 +45,7 @@ export default function LoginScreen({ parallaxEnabled = true }: LoginScreenProps
       e.preventDefault();
       clearError();
       if (mode === "signup") {
-        // For now redirect to website for account creation
-        window.open("https://sparclabs.co", "_blank");
+        shellOpen("https://sparclabs.co");
         return;
       }
       await signIn(email, password);
@@ -190,7 +190,7 @@ export default function LoginScreen({ parallaxEnabled = true }: LoginScreenProps
               Create your SPARC Labs account on our website to get started.
             </p>
             <button
-              onClick={() => window.open("https://sparclabs.co", "_blank")}
+              onClick={() => shellOpen("https://sparclabs.co")}
               style={{
                 width: "100%",
                 padding: "10px 0",

@@ -59,6 +59,7 @@ export default function App() {
   const { user, init: initAuth, signOut } = useAuthStore();
   const [splashStep, setSplashStep] = useState<SplashStep>("sidecar");
   const [splashDone, setSplashDone] = useState(false);
+  const splashStartRef = useRef<number>(Date.now());
 
   // Parallax preference
   const [parallaxEnabled, setParallaxEnabled] = useState(
@@ -82,8 +83,10 @@ export default function App() {
     if (splashStep !== "session") return;
     initAuth().then(() => {
       setSplashStep("ready");
-      // Short pause so user sees "Ready" before we switch screens
-      setTimeout(() => setSplashDone(true), 400);
+      // Hold splash for at least 10 seconds from app start
+      const elapsed = Date.now() - splashStartRef.current;
+      const remaining = Math.max(400, 10_000 - elapsed);
+      setTimeout(() => setSplashDone(true), remaining);
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [splashStep]);
