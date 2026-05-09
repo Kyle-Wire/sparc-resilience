@@ -1,59 +1,50 @@
 /**
  * SPARC First-Run Setup Wizard
  *
- * Step 1 — Welcome
- * Step 2 — Install Info (shows ~/.sparc/env, read-only)
- * Step 3 — Downloading (APNG logo loops with 6s pause, progress bar, status text)
- * Step 4 — Ready
+ * Step 1 - Welcome
+ * Step 2 - Install Info
+ * Step 3 - Downloading / Installing (APNG loops, progress bar)
+ * Step 4 - Ready
  *
- * This page renders in the dedicated "setup" Tauri window (decorations: false).
- * It handles its own window drag region and close logic.
+ * Decoration-less window; handles its own drag region.
  */
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-// ── Brand tokens (inline — no dependency on main app stores) ─────────────────
+// ── Brand tokens ─────────────────────────────────────────────────────────────
 const C = {
-  purple:  "#602468",
-  magenta: "#9e337d",
-  pink:    "#e94d9b",
-  red:     "#e94461",
   crimson: "#e73c25",
-  gold:    "#f0b632",
-  yellow:  "#fbdd46",
   white:   "#ffffff",
-  offWhite:"#f7f3ff",
+  text:    "#1a1a1a",
+  muted:   "#666666",
+  dim:     "rgba(0,0,0,0.07)",
 };
 
-const GRADIENT = `linear-gradient(135deg, ${C.purple} 0%, ${C.magenta} 40%, ${C.red} 75%, ${C.gold} 100%)`;
-const DARK_BG  = C.purple;
+const ACCENT = "linear-gradient(135deg, #e73c25 0%, #f0b632 100%)";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type Step = 1 | 2 | 3 | 4;
 
-interface DownloadState {
+interface DlState {
   status: "idle" | "running" | "error" | "done";
-  progress: number;   // 0–100
+  progress: number;
   message: string;
   error: string | null;
 }
 
-// ── APNG logo with 6-second pause between plays ───────────────────────────────
-// We don't know the APNG duration precisely, so we allow it to finish
-// naturally (key never changes mid-play) and restart via a timer.
-// APNG_CYCLE_MS = estimated play duration + 6 000 ms pause.
-// Adjust APNG_PLAY_MS if you know the exact animation length.
-const APNG_PLAY_MS  = 3_000;  // estimated single-play duration
-const APNG_PAUSE_MS = 6_000;  // pause between plays
-const APNG_CYCLE_MS = APNG_PLAY_MS + APNG_PAUSE_MS;
+// ── APNG Logo ─────────────────────────────────────────────────────────────────
+// APNGs with loop_count == 0 loop automatically in browsers.
+// We also force-restart the element every APNG_PLAY_MS so it keeps looping
+// even if the APNG was encoded with loop_count == 1.
+const APNG_PLAY_MS = 3_000;
 
-function AnimatedLogo({ running }: { running: boolean }) {
+function Logo({ running = false, size = "100%" }: { running?: boolean; size?: string | number }) {
   const [key, setKey] = useState(0);
 
   useEffect(() => {
     if (!running) return;
-    const t = setInterval(() => setKey((k) => k + 1), APNG_CYCLE_MS);
+    const t = setInterval(() => setKey((k) => k + 1), APNG_PLAY_MS);
     return () => clearInterval(t);
   }, [running]);
 
@@ -62,7 +53,12 @@ function AnimatedLogo({ running }: { running: boolean }) {
       key={key}
       src="/splash-logo.png"
       alt="SPARC"
-      style={{ width: 140, height: 140, objectFit: "contain" }}
+      style={{
+        width: size,
+        height: size,
+        objectFit: "contain",
+        display: "block",
+      }}
     />
   );
 }
@@ -71,16 +67,13 @@ function AnimatedLogo({ running }: { running: boolean }) {
 function ProgressBar({ value }: { value: number }) {
   return (
     <div style={{
-      width: "100%",
-      height: 6,
-      borderRadius: 3,
-      background: "rgba(255,255,255,0.15)",
-      overflow: "hidden",
+      width: "100%", height: 6, borderRadius: 3,
+      background: "rgba(0,0,0,0.1)", overflow: "hidden",
     }}>
       <div style={{
         height: "100%",
         width: `${Math.min(100, Math.max(0, value))}%`,
-        background: GRADIENT,
+        background: ACCENT,
         borderRadius: 3,
         transition: "width 300ms ease",
       }} />
@@ -104,15 +97,15 @@ function Btn({
       style={{
         padding: "10px 28px",
         borderRadius: 8,
-        border: "none",
+        border: variant === "ghost" ? "1.5px solid rgba(0,0,0,0.15)" : "none",
         cursor: disabled ? "not-allowed" : "pointer",
         fontFamily: "inherit",
         fontSize: 14,
         fontWeight: 600,
         transition: "opacity 150ms",
         opacity: disabled ? 0.5 : 1,
-        background: variant === "primary" ? C.crimson : "rgba(255,255,255,0.15)",
-        color: C.white,
+        background: variant === "primary" ? C.crimson : "transparent",
+        color: variant === "primary" ? C.white : C.text,
       }}
     >
       {children}
@@ -123,20 +116,17 @@ function Btn({
 // ── Main wizard ───────────────────────────────────────────────────────────────
 export default function Setup() {
   const [step, setStep] = useState<Step>(1);
-  const [dl, setDl] = useState<DownloadState>({
+  const [dl, setDl] = useState<DlState>({
     status: "idle", progress: 0, message: "", error: null,
   });
   const unlistenRef = useRef<(() => void) | null>(null);
 
-  // ── Step 3: drive the install ─────────────────────────────────────────────
   const runInstall = useCallback(async () => {
-    setDl({ status: "running", progress: 0, message: "Starting…", error: null });
+    setDl({ status: "running", progress: 0, message: "Starting\u2026", error: null });
 
-    // Listen for progress lines emitted from Rust
     const unlisten = await listen<string>("setup://progress", (event) => {
       const line = event.payload;
       setDl((prev) => {
-        // Parse uv percentage out of lines like "  [=====>  ] 47%"
         const pct = line.match(/(\d+)%/);
         const progress = pct ? parseInt(pct[1], 10) : prev.progress;
         return { ...prev, message: line.slice(0, 80), progress };
@@ -145,10 +135,10 @@ export default function Setup() {
     unlistenRef.current = unlisten;
 
     try {
-      setDl((p) => ({ ...p, message: "Creating Python environment…", progress: 5 }));
+      setDl((p) => ({ ...p, message: "Creating Python environment\u2026", progress: 5 }));
       await invoke("setup_create_venv");
 
-      setDl((p) => ({ ...p, message: "Downloading SPARC engine…", progress: 20 }));
+      setDl((p) => ({ ...p, message: "Downloading SPARC engine\u2026", progress: 20 }));
       await invoke("setup_install_engine");
 
       await invoke("setup_mark_complete");
@@ -177,129 +167,158 @@ export default function Setup() {
     invoke("setup_finish").catch(() => {});
   }, []);
 
-  // Drag region style for decoration-less window
+  // Drag region — sits at very top so the window can be moved
   const dragStyle: React.CSSProperties = {
     WebkitAppRegion: "drag",
     position: "absolute",
     top: 0, left: 0, right: 0,
     height: 36,
+    zIndex: 10,
   } as React.CSSProperties;
 
-  // ── Step renderers ────────────────────────────────────────────────────────
-
-  const renderStep1 = () => (
+  // ── Shared layout: white bg, logo fills top portion, content panel below ──
+  const shell = (
+    logoNode: React.ReactNode,
+    contentNode: React.ReactNode,
+    logoFlex = 0.65,
+  ): React.ReactElement => (
     <div style={{
-      display: "flex", flexDirection: "column", alignItems: "center",
-      justifyContent: "center", height: "100%", gap: 24,
-      background: GRADIENT, padding: 40,
+      position: "relative",
+      width: "100%", height: "100%",
+      display: "flex", flexDirection: "column",
+      background: C.white,
+      overflow: "hidden",
     }}>
       <div style={dragStyle} />
-      <img src="/splash-logo.png" alt="SPARC" style={{ width: 100, height: 100, objectFit: "contain" }} />
-      <div style={{ textAlign: "center" }}>
-        <h1 style={{ color: C.white, fontSize: 32, fontWeight: 700, margin: 0 }}>
-          Welcome to SPARC
-        </h1>
-        <p style={{ color: "rgba(255,255,255,0.8)", fontSize: 15, marginTop: 8 }}>
-          Spatial Analysis &amp; Research Core
-        </p>
+
+      {/* Logo area */}
+      <div style={{
+        flex: logoFlex,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        overflow: "hidden",
+        padding: "8px 8px 0",
+      }}>
+        {logoNode}
       </div>
-      <Btn onClick={() => setStep(2)}>Get Started →</Btn>
+
+      {/* Content panel */}
+      <div style={{
+        flex: 1 - logoFlex,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "0 40px 24px",
+        gap: 12,
+      }}>
+        {contentNode}
+      </div>
     </div>
   );
 
-  const renderStep2 = () => (
-    <div style={{
-      display: "flex", flexDirection: "column", height: "100%",
-      background: DARK_BG, padding: 40, gap: 20,
-    }}>
-      <div style={dragStyle} />
-      <h2 style={{ color: C.white, fontSize: 20, fontWeight: 700, margin: 0 }}>
-        SPARC Engine Installation
-      </h2>
+  // ── Step 1: Welcome ───────────────────────────────────────────────────────
+  const renderStep1 = () => shell(
+    <Logo size="100%" />,
+    <>
+      <div style={{ textAlign: "center" }}>
+        <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: C.text }}>
+          Welcome to SPARC
+        </h1>
+        <p style={{ fontSize: 14, color: C.muted, margin: "6px 0 0" }}>
+          Spatial Analysis &amp; Research Core
+        </p>
+      </div>
+      <Btn onClick={() => setStep(2)}>Get Started &rarr;</Btn>
+    </>,
+  );
+
+  // ── Step 2: Install Info ──────────────────────────────────────────────────
+  const renderStep2 = () => shell(
+    <Logo size="80%" />,
+    <>
       <div style={{
-        background: "rgba(255,255,255,0.08)", borderRadius: 10,
-        padding: "20px 24px", display: "flex", flexDirection: "column", gap: 12,
+        width: "100%",
+        background: C.dim,
+        borderRadius: 10,
+        padding: "14px 18px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
       }}>
-        <p style={{ color: "rgba(255,255,255,0.85)", fontSize: 14, margin: 0, lineHeight: 1.6 }}>
-          SPARC will install its analysis engine (~400 MB) on your computer.
-          This is a one-time setup that takes 1–3 minutes depending on your connection.
+        <p style={{ color: C.text, fontSize: 13, margin: 0, lineHeight: 1.55 }}>
+          SPARC will install its analysis engine (~400&nbsp;MB) into a local
+          Python environment. This one-time setup takes 1&ndash;3&nbsp;minutes.
         </p>
         <div>
-          <p style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, margin: "0 0 4px" }}>
-            Install location
-          </p>
+          <span style={{ color: C.muted, fontSize: 11 }}>Install location</span>
+          <br />
           <code style={{
-            background: "rgba(0,0,0,0.3)", color: C.gold,
-            padding: "4px 10px", borderRadius: 4, fontSize: 13,
-            display: "inline-block",
+            background: "rgba(0,0,0,0.06)", color: "#b45309",
+            padding: "2px 8px", borderRadius: 4, fontSize: 12,
           }}>
             ~/.sparc/env
           </code>
         </div>
       </div>
-      <div style={{ marginTop: "auto", display: "flex", gap: 12 }}>
-        <Btn variant="ghost" onClick={() => setStep(1)}>← Back</Btn>
+      <div style={{ display: "flex", gap: 12 }}>
+        <Btn variant="ghost" onClick={() => setStep(1)}>&larr; Back</Btn>
         <Btn onClick={() => { setStep(3); runInstall(); }}>Install Now</Btn>
       </div>
-    </div>
+    </>,
+    0.5,
   );
 
-  const renderStep3 = () => (
-    <div style={{
-      display: "flex", flexDirection: "column", alignItems: "center",
-      justifyContent: "center", height: "100%", gap: 24,
-      background: DARK_BG, padding: 40,
-    }}>
-      <div style={dragStyle} />
-
-      <AnimatedLogo running={dl.status === "running"} />
-
-      <div style={{ width: "100%", maxWidth: 380, display: "flex", flexDirection: "column", gap: 10 }}>
+  // ── Step 3: Downloading ───────────────────────────────────────────────────
+  const renderStep3 = () => shell(
+    <Logo running={dl.status === "running"} size="100%" />,
+    <>
+      <div style={{ width: "100%" }}>
         <ProgressBar value={dl.progress} />
-        <p style={{
-          color: dl.status === "error" ? C.crimson : "rgba(255,255,255,0.75)",
-          fontSize: 13, margin: 0, textAlign: "center", minHeight: 20,
-        }}>
-          {dl.status === "error" ? `Error: ${dl.error}` : dl.message}
-        </p>
       </div>
-
+      <p style={{
+        fontSize: 13,
+        color: dl.status === "error" ? C.crimson : C.muted,
+        margin: 0,
+        textAlign: "center",
+        minHeight: 18,
+      }}>
+        {dl.status === "error" ? `Error: ${dl.error}` : dl.message}
+      </p>
       {dl.status === "error" && (
-        <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
-          <Btn variant="ghost" onClick={() => invoke("setup_finish").catch(() => {})}>
-            Quit
-          </Btn>
+        <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+          <Btn variant="ghost" onClick={() => invoke("setup_finish").catch(() => {})}>Quit</Btn>
           <Btn onClick={handleRetry}>Try Again</Btn>
         </div>
       )}
-    </div>
+    </>,
   );
 
-  const renderStep4 = () => (
-    <div style={{
-      display: "flex", flexDirection: "column", alignItems: "center",
-      justifyContent: "center", height: "100%", gap: 24,
-      background: GRADIENT, padding: 40,
-    }}>
-      <div style={dragStyle} />
-      <div style={{
-        width: 64, height: 64, borderRadius: "50%",
-        background: "rgba(255,255,255,0.2)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        fontSize: 32,
-      }}>
-        ✓
-      </div>
+  // ── Step 4: Ready ─────────────────────────────────────────────────────────
+  const renderStep4 = () => shell(
+    <Logo size="80%" />,
+    <>
       <div style={{ textAlign: "center" }}>
-        <h1 style={{ color: C.white, fontSize: 28, fontWeight: 700, margin: 0 }}>
+        <div style={{
+          width: 52, height: 52, borderRadius: "50%",
+          background: ACCENT,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 26, color: C.white,
+          margin: "0 auto 10px",
+        }}>
+          &#10003;
+        </div>
+        <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0, color: C.text }}>
           SPARC is ready.
-        </h1>
-        <p style={{ color: "rgba(255,255,255,0.8)", fontSize: 14, marginTop: 8 }}>
-          Your analysis engine is installed and ready to use.
+        </h2>
+        <p style={{ fontSize: 13, color: C.muted, margin: "6px 0 0" }}>
+          Your analysis engine is installed.
         </p>
       </div>
-      <Btn onClick={handleFinish}>Launch SPARC →</Btn>
-    </div>
+      <Btn onClick={handleFinish}>Launch SPARC &rarr;</Btn>
+    </>,
+    0.55,
   );
 
   const steps: Record<Step, () => React.ReactElement> = {
@@ -313,22 +332,24 @@ export default function Setup() {
     <div style={{
       width: "100vw", height: "100vh",
       fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-      overflow: "hidden", userSelect: "none",
+      overflow: "hidden",
+      userSelect: "none",
       position: "relative",
     }}>
       {steps[step]()}
 
-      {/* Step indicator dots (steps 1-4, hidden on error) */}
+      {/* Step indicator dots */}
       {dl.status !== "error" && (
         <div style={{
-          position: "absolute", bottom: 18,
+          position: "absolute", bottom: 10,
           left: 0, right: 0,
-          display: "flex", justifyContent: "center", gap: 6,
+          display: "flex", justifyContent: "center", gap: 5,
+          pointerEvents: "none",
         }}>
           {([1, 2, 3, 4] as Step[]).map((s) => (
             <div key={s} style={{
-              width: 6, height: 6, borderRadius: "50%",
-              background: s === step ? C.gold : "rgba(255,255,255,0.3)",
+              width: 5, height: 5, borderRadius: "50%",
+              background: s === step ? C.crimson : "rgba(0,0,0,0.18)",
               transition: "background 300ms",
             }} />
           ))}
