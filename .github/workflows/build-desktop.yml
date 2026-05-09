@@ -61,9 +61,12 @@ jobs:
       - name: Store wheel URL as output
         id: wheel
         run: |
-          VER="${{ github.ref_name }}"
-          VER="${VER#v}"  # strip leading 'v'
-          echo "url=https://github.com/Kyle-Wire/sparc-status/releases/download/${{ github.ref_name }}/sparc-${VER}-py3-none-any.whl[server]" >> "$GITHUB_OUTPUT"
+          # Derive the URL from the actual wheel filename so it stays correct
+          # even when the Python package version differs from the desktop tag.
+          WHEEL=$(ls dist/*.whl | head -1)
+          WHEEL_NAME=$(basename "$WHEEL")
+          TAG="${{ github.ref_name }}"
+          echo "url=https://github.com/Kyle-Wire/sparc-status/releases/download/${TAG}/${WHEEL_NAME}[server]" >> "$GITHUB_OUTPUT"
 
   # ── Build Tauri desktop app (per platform) ────────────────────────────────
   build:

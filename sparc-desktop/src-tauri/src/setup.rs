@@ -5,14 +5,18 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
 /// Wheel URL baked in at build time.
+///
+/// CI sets `SPARC_WHEEL_URL` to the exact URL of the freshly-built wheel.
+/// Local dev builds fall back to a URL built from `SPARC_PY_VERSION`, which
+/// build.rs reads from `pyproject.toml` — independent of the desktop version.
 const WHEEL_URL: &str = {
     match option_env!("SPARC_WHEEL_URL") {
         Some(url) => url,
         None => concat!(
             "https://github.com/Kyle-Wire/sparc-status/releases/download/v",
-            env!("CARGO_PKG_VERSION"),
+            env!("SPARC_PY_VERSION"),
             "/sparc-",
-            env!("CARGO_PKG_VERSION"),
+            env!("SPARC_PY_VERSION"),
             "-py3-none-any.whl[server]"
         ),
     }
