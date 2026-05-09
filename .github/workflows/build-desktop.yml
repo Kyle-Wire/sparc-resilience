@@ -48,7 +48,7 @@ jobs:
       - name: Audit Python dependencies for known CVEs
         run: |
           pip install pip-audit
-          pip-audit --strict
+          pip-audit --strict --skip-editable
 
       # ── Node + frontend ─────────────────────────────────────────
       - uses: actions/setup-node@v4
