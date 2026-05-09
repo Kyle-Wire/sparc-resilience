@@ -5,6 +5,14 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 
+/// Generate a cryptographically-random 32-byte (256-bit) token using the OS
+/// CSPRNG via `getrandom`. The result is hex-encoded to a 64-character string.
+fn generate_token() -> String {
+    let mut bytes = [0u8; 32];
+    getrandom::getrandom(&mut bytes).expect("OS CSPRNG unavailable");
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Port the FastAPI sidecar listens on. Kept as a constant so the shutdown
 /// path agrees with the spawn path.
 const SIDECAR_PORT: &str = "8008";
@@ -14,8 +22,15 @@ const SIDECAR_PORT: &str = "8008";
 /// Job Object handle that the OS uses to reap the entire process tree if
 /// the host dies abruptly (crash, force-kill, console-X) and our normal
 /// `RunEvent::Exit` cleanup never runs.
+///
+/// `token` is a 64-char hex string generated once at startup and injected
+/// into the sidecar as `SPARC_SERVER_TOKEN`. The webview retrieves it via
+/// the `get_sidecar_token` Tauri command and sends it in every HTTP request
+/// as `X-SPARC-Token`, so the sidecar can reject calls from any other
+/// process on the machine.
 pub struct SidecarHandle {
     pub child: Mutex<Option<Child>>,
+    pub token: String,
     #[cfg(windows)]
     pub job: Mutex<Option<job::JobHandle>>,
 }
@@ -24,6 +39,7 @@ impl SidecarHandle {
     pub fn new() -> Self {
         Self {
             child: Mutex::new(None),
+            token: generate_token(),
             #[cfg(windows)]
             job: Mutex::new(None),
         }
@@ -297,6 +313,12 @@ fn resolve_python() -> String {
 pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let port = SIDECAR_PORT;
 
+    // Retrieve the token from managed state so both spawn paths inject it.
+    let token = app
+        .try_state::<SidecarHandle>()
+        .map(|s| s.token.clone())
+        .unwrap_or_default();
+
     // On Windows, create the Job Object up front so we can assign whichever
     // spawn path actually succeeds.
     #[cfg(windows)]
@@ -351,6 +373,8 @@ pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
                 const CREATE_NO_WINDOW: u32 = 0x08000000;
                 Command::new(path)
                     .args(["server", "--port", port])
+                    .env("SPARC_SERVER_TOKEN", &token)
+                    .env("SUPABASE_URL", env!("SPARC_SUPABASE_URL"))
                     .creation_flags(CREATE_NO_WINDOW)
                     .stdout(stdio(&log_file))
                     .stderr(stdio(&log_file))
@@ -359,6 +383,8 @@ pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
             #[cfg(not(target_os = "windows"))]
             let spawn_result = Command::new(path)
                 .args(["server", "--port", port])
+                .env("SPARC_SERVER_TOKEN", &token)
+                .env("SUPABASE_URL", env!("SPARC_SUPABASE_URL"))
                 .stdout(stdio(&log_file))
                 .stderr(stdio(&log_file))
                 .spawn();
@@ -389,6 +415,8 @@ pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         let mut c = Command::new(&python);
         c.args(["-m", "sparc", "server", "--port", port])
+            .env("SPARC_SERVER_TOKEN", &token)
+            .env("SUPABASE_URL", env!("SPARC_SUPABASE_URL"))
             .creation_flags(CREATE_NO_WINDOW)
             .stdout(stdio(&log_file))
             .stderr(stdio(&log_file));
@@ -398,6 +426,8 @@ pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
     let mut cmd = {
         let mut c = Command::new(&python);
         c.args(["-m", "sparc", "server", "--port", port])
+            .env("SPARC_SERVER_TOKEN", &token)
+            .env("SUPABASE_URL", env!("SPARC_SUPABASE_URL"))
             .stdout(stdio(&log_file))
             .stderr(stdio(&log_file));
         c
@@ -503,6 +533,15 @@ fn drop_job(_state: &SidecarHandle) {
         // handle, which triggers the kill.
         let _ = _state.job.lock().unwrap().take();
     }
+}
+
+/// Tauri command that gives the webview its copy of the sidecar token.
+/// Called once on app load; stored in React memory (never localStorage).
+#[tauri::command]
+pub fn get_sidecar_token(app: AppHandle) -> String {
+    app.try_state::<SidecarHandle>()
+        .map(|s| s.token.clone())
+        .unwrap_or_default()
 }
 
 /// Tauri command exposed to the frontend so the updater UI can stop the

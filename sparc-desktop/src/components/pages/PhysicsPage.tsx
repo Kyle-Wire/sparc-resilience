@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { SectionHeader, Card, Tag, Btn, Stat, StatGrid } from "@/components/ui/DesignSystem";
-import { getConfig, saveConfig, getPdpCurves } from "@/lib/api";
+import { getConfig, saveConfig, getPdpCurves, dataSummary } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import { usePipeline } from "@/hooks/PipelineProvider";
 import type { PdpCurves } from "@/lib/types";
@@ -73,20 +73,54 @@ const PDE_EQUATIONS: Record<keyof PdeWeights, { label: string; eq: string; activ
   alpha_prior: { label: "α Prior", eq: "‖α(s) − α̅‖² from mixture prior", activates: "Epoch 15" },
 };
 
+// ── small helper: section header with ? tooltip ────────────────────────
+function SectionHelp({ title, tip }: { title: string; tip: string }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      {title}
+      <span
+        title={tip}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 15,
+          height: 15,
+          borderRadius: "50%",
+          border: "1px solid var(--muted)",
+          color: "var(--muted)",
+          fontSize: 9,
+          fontWeight: 700,
+          cursor: "default",
+          lineHeight: 1,
+          fontFamily: "inherit",
+          flexShrink: 0,
+        }}
+      >
+        ?
+      </span>
+    </span>
+  );
+}
+
 export default function PhysicsPage() {
   const [constraints, setConstraints] = useState<MonotoneConstraint[]>([]);
   const [pdeWeights, setPdeWeights] = useState<PdeWeights>({ ...PDE_DEFAULTS });
   const [variableBounds, setVariableBounds] = useState<VariableBound[]>([]);
   const [bc, setBc] = useState<BoundaryConditions>({ ...BC_DEFAULTS });
+  const [literatureWeight, setLiteratureWeight] = useState<number>(0.25);
   const [selectedVar, setSelectedVar] = useState<string>("");
   const [pdpData, setPdpData] = useState<PdpCurves | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [addConstraintVar, setAddConstraintVar] = useState<string>("");
+  const [availablePredictors, setAvailablePredictors] = useState<string[]>([]);
   const curveCanvasRef = useRef<HTMLCanvasElement>(null);
   const { notify } = useNotification();
   const pipeline = usePipeline();
 
   useEffect(() => {
-    getConfig()
-      .then((config) => {
+    Promise.all([getConfig(), dataSummary().catch(() => null)])
+      .then(([config, summary]) => {
         const physics = config.physics ?? {};
         const mc = physics.monotone_constraints ?? {};
         const newConstraints: MonotoneConstraint[] = Object.entries(mc).map(([k, v]) => ({
@@ -97,8 +131,14 @@ export default function PhysicsPage() {
         setConstraints(newConstraints);
         if (newConstraints.length > 0) setSelectedVar(newConstraints[0].variable);
 
+        setLiteratureWeight(
+          typeof (physics as Record<string, unknown>).literature_weight === "number"
+            ? (physics as Record<string, unknown>).literature_weight as number
+            : 0.25,
+        );
+
         // Load PDE weights
-        const pw = (physics as any).pde_weights ?? {};
+        const pw = (physics as Record<string, unknown>).pde_weights as Record<string, number> ?? {};
         setPdeWeights({
           heat_diffusion: pw.heat_diffusion ?? PDE_DEFAULTS.heat_diffusion,
           energy_balance: pw.energy_balance ?? PDE_DEFAULTS.energy_balance,
@@ -110,7 +150,7 @@ export default function PhysicsPage() {
           alpha_prior: pw.alpha_prior ?? PDE_DEFAULTS.alpha_prior,
         });
 
-        // Load variable bounds as editable guardrails
+        // Load variable bounds
         const bounds = physics.variable_bounds ?? {};
         const newBounds: VariableBound[] = Object.entries(bounds).map(([k, v]) => {
           const b = v as { min?: number; max?: number };
@@ -119,7 +159,7 @@ export default function PhysicsPage() {
         setVariableBounds(newBounds);
 
         // Load boundary conditions
-        const bcCfg = (physics as any).boundary_conditions ?? {};
+        const bcCfg = (physics as Record<string, unknown>).boundary_conditions as Record<string, unknown> ?? {};
         const bcType = (bcCfg.type ?? "none") as BcType;
         setBc({
           type: ["none", "dirichlet", "neumann", "robin"].includes(bcType) ? bcType : "none",
@@ -129,6 +169,16 @@ export default function PhysicsPage() {
           t_inf: bcCfg.t_inf != null ? String(bcCfg.t_inf) : "",
           weight: bcCfg.weight != null ? String(bcCfg.weight) : "0.10",
         });
+
+        // Build available predictors for the add-constraint picker
+        const rawPreds = config.predictors as unknown;
+        const predList: string[] = Array.isArray(rawPreds)
+          ? rawPreds
+          : Array.isArray((rawPreds as Record<string, unknown>)?.base_model)
+          ? ((rawPreds as Record<string, unknown>).base_model as string[])
+          : summary?.columns ?? [];
+        setAvailablePredictors(predList);
+        if (!addConstraintVar && predList.length > 0) setAddConstraintVar(predList[0]);
       })
       .catch(() => {});
 
@@ -136,7 +186,7 @@ export default function PhysicsPage() {
       .then((pdp) => setPdpData(pdp))
       .catch(() => {});
     // Refresh whenever a new pipeline run finishes so neural PDP CSVs are picked up.
-  }, [pipeline.runEndedAt]);
+  }, [pipeline.runEndedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Draw response curve from real PDP data
   useEffect(() => {
@@ -252,16 +302,17 @@ export default function PhysicsPage() {
       await saveConfig({
         physics: {
           monotone_constraints: mc,
+          literature_weight: literatureWeight,
           pde_weights: pdeWeights,
           variable_bounds: bounds,
           boundary_conditions: bcPayload,
-        } as any,
+        } as never,
       });
       notify("success", "Physics settings saved");
     } catch {
       notify("error", "Failed to save physics settings");
     }
-  }, [constraints, pdeWeights, variableBounds, bc, notify]);
+  }, [constraints, literatureWeight, pdeWeights, variableBounds, bc, notify]);
 
   const handleAddBound = () => {
     setVariableBounds((prev) => [...prev, { variable: "", min: "", max: "" }]);
@@ -273,6 +324,26 @@ export default function PhysicsPage() {
 
   const handleBoundChange = (i: number, field: "variable" | "min" | "max", val: string) => {
     setVariableBounds((prev) => prev.map((b, idx) => idx === i ? { ...b, [field]: val } : b));
+  };
+
+  const handleAddConstraint = () => {
+    if (!addConstraintVar) return;
+    if (constraints.some((c) => c.variable === addConstraintVar)) {
+      notify("info", `${addConstraintVar} already has a constraint`);
+      return;
+    }
+    const newConstraint: MonotoneConstraint = {
+      variable: addConstraintVar,
+      direction: "none",
+      reason: "User-defined",
+    };
+    setConstraints((prev) => [...prev, newConstraint]);
+    setSelectedVar(addConstraintVar);
+  };
+
+  const handleRemoveConstraint = (varName: string) => {
+    setConstraints((prev) => prev.filter((c) => c.variable !== varName));
+    setSelectedVar((prev) => (prev === varName ? "" : prev));
   };
 
   const handleToggleDirection = (varName: string) => {
@@ -303,13 +374,88 @@ export default function PhysicsPage() {
         <Stat label="Guardrails" value={String(variableBounds.length)} tint="var(--ink)" />
       </StatGrid>
 
+      {/* Physics strength */}
+      <div style={{ marginBottom: 14 }}>
+        <Card
+          title={
+            <SectionHelp
+              title="Physics strength"
+              tip="Controls the balance between data-driven learning and physics prior knowledge. 0 = fully data-driven, 1 = fully physics-constrained. Start at 0.25 and increase if the model violates known physical relationships."
+            /> as unknown as string
+          }
+          subtitle={`literature_weight = ${literatureWeight.toFixed(2)}`}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "4px 0" }}>
+            <span className="mono" style={{ fontSize: 10, color: "var(--muted)", whiteSpace: "nowrap" }}>
+              Data-driven
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={literatureWeight}
+              onChange={(e) => setLiteratureWeight(parseFloat(e.target.value))}
+              style={{ flex: 1, accentColor: "var(--crimson)" }}
+            />
+            <span className="mono" style={{ fontSize: 10, color: "var(--muted)", whiteSpace: "nowrap" }}>
+              Physics-informed
+            </span>
+            <span
+              className="mono"
+              style={{
+                fontSize: 13,
+                fontWeight: 700,
+                color: "var(--crimson)",
+                minWidth: 36,
+                textAlign: "right",
+              }}
+            >
+              {literatureWeight.toFixed(2)}
+            </span>
+          </div>
+        </Card>
+      </div>
+
       {/* Row 1: constraints + response curve */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-        <Card title="Monotone constraints" subtitle="click direction to cycle: ↑ ↓ ●">
+        <Card
+          title={
+            <SectionHelp
+              title="Monotone constraints"
+              tip="Enforce a direction on how each predictor affects the outcome. ↑ = must increase the target, ↓ = must decrease it. These constraints are injected into gradient-boosted and neural models to prevent physically implausible predictions."
+            /> as unknown as string
+          }
+          subtitle="click direction to cycle: ↑ ↓ ●"
+          actions={
+            availablePredictors.length > 0 ? (
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <select
+                  value={addConstraintVar}
+                  onChange={(e) => setAddConstraintVar(e.target.value)}
+                  style={{
+                    border: "1px solid var(--line)",
+                    borderRadius: 4,
+                    padding: "3px 6px",
+                    fontSize: 11,
+                    fontFamily: "inherit",
+                    background: "#fff",
+                    maxWidth: 130,
+                  }}
+                >
+                  {availablePredictors.map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </select>
+                <Btn small onClick={handleAddConstraint}>+ Add</Btn>
+              </div>
+            ) : undefined
+          }
+        >
           <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
             {constraints.length === 0 && (
               <div style={{ color: "var(--muted)", fontSize: 12, fontStyle: "italic", textAlign: "center", padding: 20 }}>
-                Configure predictor variables in the Data page first
+                Select a variable above and click <strong>+ Add</strong> to define a constraint
               </div>
             )}
             {constraints.map((c, i) => (
@@ -318,9 +464,9 @@ export default function PhysicsPage() {
                 onClick={() => setSelectedVar(c.variable)}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "1fr auto auto",
+                  gridTemplateColumns: "1fr auto auto auto",
                   alignItems: "center",
-                  gap: 10,
+                  gap: 8,
                   padding: "10px 8px",
                   borderTop: i > 0 ? "1px dashed var(--line)" : "none",
                   cursor: "pointer",
@@ -334,10 +480,13 @@ export default function PhysicsPage() {
                 </div>
                 <button
                   onClick={(e) => { e.stopPropagation(); handleToggleDirection(c.variable); }}
+                  title="Click to cycle: increasing → decreasing → none"
                   style={{
-                    width: 30, height: 30, borderRadius: 5, border: "1px solid var(--line)",
+                    width: 30, height: 30, borderRadius: 5,
+                    border: "1px solid " + (c.direction === "none" ? "var(--line)" : c.direction === "increasing" ? "var(--amber)" : "var(--purple)"),
                     background: c.direction === "none" ? "#fff" : c.direction === "increasing" ? "#fff3ea" : "#f5eaf8",
                     cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center",
+                    transition: "all 0.15s",
                   }}
                 >
                   {c.direction === "increasing" ? "↑" : c.direction === "decreasing" ? "↓" : "●"}
@@ -345,13 +494,30 @@ export default function PhysicsPage() {
                 <Tag color={c.direction === "increasing" ? "var(--amber)" : c.direction === "decreasing" ? "var(--purple)" : "var(--muted)"}>
                   {c.direction}
                 </Tag>
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleRemoveConstraint(c.variable); }}
+                  title="Remove constraint"
+                  style={{
+                    width: 20, height: 20, border: "none", background: "none",
+                    cursor: "pointer", color: "var(--muted)", fontSize: 14,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    borderRadius: 3,
+                  }}
+                >
+                  ×
+                </button>
               </div>
             ))}
           </div>
         </Card>
 
         <Card
-          title="Response curve"
+          title={
+            <SectionHelp
+              title="Response curve"
+              tip="Partial dependence plot (PDP) showing the marginal effect of the selected predictor on the target. The shaded band is ±1 standard deviation across spatial folds. Only available after a pipeline run."
+            /> as unknown as string
+          }
           subtitle={selectedVar ? selectedVar.replace(/_/g, " ") + " → target" : "select a variable"}
           actions={(() => {
             const v = selectedVar ? pdpData?.[selectedVar] : undefined;
@@ -369,76 +535,30 @@ export default function PhysicsPage() {
         </Card>
       </div>
 
-      {/* Row 2: PDE weights + editable guardrails */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 14 }}>
-        <Card title="PDE loss weights" subtitle="8-term physics-informed loss · staged sub-curriculum">
-          <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-            {(Object.keys(PDE_DEFAULTS) as Array<keyof PdeWeights>).map((key, i) => {
-              const info = PDE_EQUATIONS[key];
-              const val = pdeWeights[key];
-              const maxDefault = 1.0;
-              return (
-                <div
-                  key={key}
-                  style={{
-                    padding: "9px 0",
-                    borderTop: i > 0 ? "1px dashed var(--line)" : "none",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                    <div>
-                      <span style={{ fontSize: 12, fontWeight: 600 }}>{info.label}</span>
-                      <span className="mono" style={{ fontSize: 10, color: "var(--muted)", marginLeft: 8 }}>{info.eq}</span>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <Tag color="var(--ink-2)">{info.activates}</Tag>
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        max="10"
-                        value={val}
-                        onChange={(e) => setPdeWeights((prev) => ({ ...prev, [key]: parseFloat(e.target.value) || 0 }))}
-                        className="mono"
-                        style={{
-                          width: 58, padding: "3px 6px", border: "1px solid var(--line)", borderRadius: 4,
-                          fontSize: 12, fontWeight: 700, textAlign: "right", fontFamily: "inherit",
-                        }}
-                      />
-                    </div>
-                  </div>
-                  <div style={{ height: 4, background: "rgba(0,0,0,0.05)", borderRadius: 2, overflow: "hidden" }}>
-                    <div
-                      style={{
-                        width: `${Math.min((val / maxDefault) * 100, 100)}%`,
-                        height: "100%",
-                        background: val > 0 ? "var(--crimson)" : "var(--muted)",
-                        transition: "width 0.2s",
-                      }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-
+      {/* Row 2: variable guardrails */}
+      <div style={{ marginTop: 14 }}>
         <Card
-          title="Variable guardrails"
-          subtitle="physical bounds per predictor — applied during training"
-          actions={
-            <button
-              onClick={handleAddBound}
-              style={{ padding: "3px 10px", background: "var(--ink)", color: "#fff", border: "none", borderRadius: 4, fontSize: 11, cursor: "pointer", fontWeight: 600 }}
-            >
-              + Add
-            </button>
+          title={
+            <SectionHelp
+              title="Variable guardrails"
+              tip="Hard physical bounds applied per predictor during training. Predictions that would require inputs outside these ranges are clipped. Use these to prevent extrapolation to physically impossible values (e.g. negative tree cover)."
+            /> as unknown as string
           }
+          subtitle="physical bounds per predictor — applied during training"
+          actions={<Btn small onClick={handleAddBound}>+ Add</Btn>}
         >
           <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
             {variableBounds.length === 0 && (
               <div style={{ color: "var(--muted)", fontSize: 12, fontStyle: "italic", textAlign: "center", padding: 14 }}>
                 No guardrails set. Click <strong>+ Add</strong> to constrain a variable range.
+              </div>
+            )}
+            {variableBounds.length > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 80px auto", gap: 6, padding: "0 0 6px" }}>
+                <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)" }}>Variable</div>
+                <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)", textAlign: "right" }}>Min</div>
+                <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)", textAlign: "right" }}>Max</div>
+                <div />
               </div>
             )}
             {variableBounds.map((b, i) => (
@@ -449,7 +569,7 @@ export default function PhysicsPage() {
                   gridTemplateColumns: "1fr 80px 80px auto",
                   gap: 6,
                   alignItems: "center",
-                  padding: "8px 0",
+                  padding: "6px 0",
                   borderTop: i > 0 ? "1px dashed var(--line)" : "none",
                 }}
               >
@@ -458,7 +578,7 @@ export default function PhysicsPage() {
                   placeholder="variable name"
                   value={b.variable}
                   onChange={(e) => handleBoundChange(i, "variable", e.target.value)}
-                  style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "4px 6px", fontSize: 11, fontFamily: "inherit" }}
+                  style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "4px 6px", fontSize: 11, fontFamily: "inherit", background: "#fff" }}
                 />
                 <input
                   type="number"
@@ -466,7 +586,7 @@ export default function PhysicsPage() {
                   value={b.min}
                   onChange={(e) => handleBoundChange(i, "min", e.target.value)}
                   className="mono"
-                  style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "4px 6px", fontSize: 11, fontFamily: "inherit", textAlign: "right" }}
+                  style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "4px 6px", fontSize: 11, fontFamily: "inherit", textAlign: "right", background: "#fff" }}
                 />
                 <input
                   type="number"
@@ -474,138 +594,181 @@ export default function PhysicsPage() {
                   value={b.max}
                   onChange={(e) => handleBoundChange(i, "max", e.target.value)}
                   className="mono"
-                  style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "4px 6px", fontSize: 11, fontFamily: "inherit", textAlign: "right" }}
+                  style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "4px 6px", fontSize: 11, fontFamily: "inherit", textAlign: "right", background: "#fff" }}
                 />
                 <button
                   onClick={() => handleRemoveBound(i)}
+                  title="Remove guardrail"
                   style={{ width: 22, height: 22, border: "none", background: "none", cursor: "pointer", color: "var(--muted)", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center" }}
                 >
                   ×
                 </button>
               </div>
             ))}
-            {variableBounds.length > 0 && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 80px auto", gap: 6, padding: "4px 0 0" }}>
-                <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)" }}>Variable</div>
-                <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)", textAlign: "right" }}>Min</div>
-                <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)", textAlign: "right" }}>Max</div>
-                <div />
-              </div>
-            )}
           </div>
         </Card>
       </div>
 
-      {/* Row 3: Boundary conditions */}
+      {/* Advanced section: PDE weights + boundary conditions */}
       <div style={{ marginTop: 14 }}>
-        <Card
-          title="Boundary conditions"
-          subtitle="physics-informed constraint applied at domain edges · detected automatically from fishnet"
+        <button
+          onClick={() => setAdvancedOpen((v) => !v)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            padding: "6px 0",
+            fontFamily: "inherit",
+            color: "var(--muted)",
+            fontSize: 11,
+            fontWeight: 600,
+            letterSpacing: "0.1em",
+            textTransform: "uppercase",
+          }}
         >
-          <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 14 }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {([
-                { id: "none", label: "None", hint: "no BC loss" },
-                { id: "dirichlet", label: "Dirichlet", hint: "fixed value  T = Tᵇ" },
-                { id: "neumann", label: "Neumann", hint: "flux  ∂T/∂n = q" },
-                { id: "robin", label: "Robin", hint: "convective  −k∇T·n = h(T − T∞)" },
-              ] as const).map((opt) => (
-                <button
-                  key={opt.id}
-                  onClick={() => setBc((prev) => ({ ...prev, type: opt.id }))}
-                  style={{
-                    textAlign: "left",
-                    padding: "8px 10px",
-                    border: "1px solid " + (bc.type === opt.id ? "var(--crimson)" : "var(--line)"),
-                    background: bc.type === opt.id ? "rgba(231,60,37,0.05)" : "#fff",
-                    borderRadius: 5,
-                    cursor: "pointer",
-                    fontFamily: "inherit",
-                  }}
-                >
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>{opt.label}</div>
-                  <div className="mono" style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
-                    {opt.hint}
-                  </div>
-                </button>
-              ))}
-            </div>
+          <span style={{ fontSize: 10 }}>{advancedOpen ? "▼" : "▶"}</span>
+          Advanced physics
+          <span
+            title="PDE loss weights and boundary conditions. These control the physics-informed neural network (PINN) training curriculum. Only adjust if you understand the underlying partial differential equations."
+            style={{
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              width: 15, height: 15, borderRadius: "50%", border: "1px solid var(--muted)",
+              color: "var(--muted)", fontSize: 9, fontWeight: 700, cursor: "default",
+              lineHeight: 1, fontFamily: "inherit",
+            }}
+          >
+            ?
+          </span>
+        </button>
 
-            <div>
-              {bc.type === "none" && (
-                <div style={{ color: "var(--muted)", fontSize: 12, fontStyle: "italic", padding: "20px 10px" }}>
-                  No boundary constraint applied. PDE loss will not penalize behaviour at the
-                  fishnet edge. Suitable when the study area is large relative to edge effects
-                  or when the outcome has no meaningful boundary value.
-                </div>
-              )}
+        {advancedOpen && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 10 }}>
+            <Card
+              title={
+                <SectionHelp
+                  title="PDE loss weights"
+                  tip="8-term physics-informed loss function staged across training epochs. Each weight controls how strongly that physical equation is enforced. The curriculum activates terms progressively — earlier epochs use simpler physics before adding complex constraints."
+                /> as unknown as string
+              }
+              subtitle="8-term physics-informed loss · staged sub-curriculum"
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                {(Object.keys(PDE_DEFAULTS) as Array<keyof PdeWeights>).map((key, i) => {
+                  const info = PDE_EQUATIONS[key];
+                  const val = pdeWeights[key];
+                  const maxDefault = 1.0;
+                  return (
+                    <div
+                      key={key}
+                      style={{ padding: "9px 0", borderTop: i > 0 ? "1px dashed var(--line)" : "none" }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                        <div>
+                          <span style={{ fontSize: 12, fontWeight: 600 }}>{info.label}</span>
+                          <span className="mono" style={{ fontSize: 10, color: "var(--muted)", marginLeft: 8 }}>{info.eq}</span>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <Tag color="var(--ink-2)">{info.activates}</Tag>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            max="10"
+                            value={val}
+                            onChange={(e) => setPdeWeights((prev) => ({ ...prev, [key]: parseFloat(e.target.value) || 0 }))}
+                            className="mono"
+                            style={{
+                              width: 58, padding: "3px 6px", border: "1px solid var(--line)", borderRadius: 4,
+                              fontSize: 12, fontWeight: 700, textAlign: "right", fontFamily: "inherit", background: "#fff",
+                            }}
+                          />
+                        </div>
+                      </div>
+                      <div style={{ height: 4, background: "rgba(0,0,0,0.05)", borderRadius: 2, overflow: "hidden" }}>
+                        <div
+                          style={{
+                            width: `${Math.min((val / maxDefault) * 100, 100)}%`,
+                            height: "100%",
+                            background: val > 0 ? "var(--crimson)" : "var(--muted)",
+                            transition: "width 0.2s",
+                          }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
 
-              {bc.type === "dirichlet" && (
-                <div style={{ display: "grid", gap: 10 }}>
-                  <BcField
-                    label="Boundary value  Tᵇ"
-                    hint="fixed value at edge (e.g. ambient temperature °C)"
-                    value={bc.value}
-                    onChange={(v) => setBc((prev) => ({ ...prev, value: v }))}
-                    placeholder="e.g. 24.0"
-                  />
-                  <BcField
-                    label="BC loss weight  λᴾᶜ"
-                    hint="multiplier for BC loss term (relative to diffusion)"
-                    value={bc.weight}
-                    onChange={(v) => setBc((prev) => ({ ...prev, weight: v }))}
-                    placeholder="0.10"
-                  />
+            <Card
+              title={
+                <SectionHelp
+                  title="Boundary conditions"
+                  tip="Constrains what happens at the edges of your study area. None = no edge constraint. Dirichlet = fixed known value at boundary (e.g. ambient temperature). Neumann = fixed flux (e.g. no-flux insulated edge). Robin = convective cooling at boundary."
+                /> as unknown as string
+              }
+              subtitle="physics-informed constraint applied at domain edges"
+            >
+              <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 14 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {([
+                    { id: "none", label: "None", hint: "no BC loss" },
+                    { id: "dirichlet", label: "Dirichlet", hint: "fixed value  T = Tᵇ" },
+                    { id: "neumann", label: "Neumann", hint: "flux  ∂T/∂n = q" },
+                    { id: "robin", label: "Robin", hint: "convective  −k∇T·n = h(T − T∞)" },
+                  ] as const).map((opt) => (
+                    <button
+                      key={opt.id}
+                      onClick={() => setBc((prev) => ({ ...prev, type: opt.id }))}
+                      style={{
+                        textAlign: "left", padding: "8px 10px",
+                        border: "1px solid " + (bc.type === opt.id ? "var(--crimson)" : "var(--line)"),
+                        background: bc.type === opt.id ? "rgba(231,60,37,0.05)" : "#fff",
+                        borderRadius: 5, cursor: "pointer", fontFamily: "inherit",
+                        transition: "all 0.15s",
+                      }}
+                    >
+                      <div style={{ fontSize: 12, fontWeight: 600 }}>{opt.label}</div>
+                      <div className="mono" style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>{opt.hint}</div>
+                    </button>
+                  ))}
                 </div>
-              )}
 
-              {bc.type === "neumann" && (
-                <div style={{ display: "grid", gap: 10 }}>
-                  <BcField
-                    label="Boundary flux  q"
-                    hint="normal-derivative value (0 → insulated / no-flux)"
-                    value={bc.flux}
-                    onChange={(v) => setBc((prev) => ({ ...prev, flux: v }))}
-                    placeholder="0.0"
-                  />
-                  <BcField
-                    label="BC loss weight  λᴾᶜ"
-                    hint="multiplier for BC loss term"
-                    value={bc.weight}
-                    onChange={(v) => setBc((prev) => ({ ...prev, weight: v }))}
-                    placeholder="0.10"
-                  />
+                <div>
+                  {bc.type === "none" && (
+                    <div style={{ color: "var(--muted)", fontSize: 12, fontStyle: "italic", padding: "20px 10px" }}>
+                      No boundary constraint applied. PDE loss will not penalize behaviour at the
+                      fishnet edge. Suitable when the study area is large relative to edge effects
+                      or when the outcome has no meaningful boundary value.
+                    </div>
+                  )}
+                  {bc.type === "dirichlet" && (
+                    <div style={{ display: "grid", gap: 10 }}>
+                      <BcField label="Boundary value  Tᵇ" hint="fixed value at edge (e.g. ambient temperature °C)" value={bc.value} onChange={(v) => setBc((prev) => ({ ...prev, value: v }))} placeholder="e.g. 24.0" />
+                      <BcField label="BC loss weight  λᴾᶜ" hint="multiplier for BC loss term (relative to diffusion)" value={bc.weight} onChange={(v) => setBc((prev) => ({ ...prev, weight: v }))} placeholder="0.10" />
+                    </div>
+                  )}
+                  {bc.type === "neumann" && (
+                    <div style={{ display: "grid", gap: 10 }}>
+                      <BcField label="Boundary flux  q" hint="normal-derivative value (0 → insulated / no-flux)" value={bc.flux} onChange={(v) => setBc((prev) => ({ ...prev, flux: v }))} placeholder="0.0" />
+                      <BcField label="BC loss weight  λᴾᶜ" hint="multiplier for BC loss term" value={bc.weight} onChange={(v) => setBc((prev) => ({ ...prev, weight: v }))} placeholder="0.10" />
+                    </div>
+                  )}
+                  {bc.type === "robin" && (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                      <BcField label="Convective coef.  h" hint="surface heat-transfer (W m⁻² K⁻¹)" value={bc.h} onChange={(v) => setBc((prev) => ({ ...prev, h: v }))} placeholder="10" />
+                      <BcField label="Ambient  T∞" hint="far-field reference value" value={bc.t_inf} onChange={(v) => setBc((prev) => ({ ...prev, t_inf: v }))} placeholder="e.g. 24.0" />
+                      <BcField label="BC loss weight  λᴾᶜ" hint="multiplier for BC loss term" value={bc.weight} onChange={(v) => setBc((prev) => ({ ...prev, weight: v }))} placeholder="0.10" />
+                    </div>
+                  )}
                 </div>
-              )}
-
-              {bc.type === "robin" && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <BcField
-                    label="Convective coef.  h"
-                    hint="surface heat-transfer (W m⁻² K⁻¹)"
-                    value={bc.h}
-                    onChange={(v) => setBc((prev) => ({ ...prev, h: v }))}
-                    placeholder="10"
-                  />
-                  <BcField
-                    label="Ambient  T∞"
-                    hint="far-field reference value"
-                    value={bc.t_inf}
-                    onChange={(v) => setBc((prev) => ({ ...prev, t_inf: v }))}
-                    placeholder="e.g. 24.0"
-                  />
-                  <BcField
-                    label="BC loss weight  λᴾᶜ"
-                    hint="multiplier for BC loss term"
-                    value={bc.weight}
-                    onChange={(v) => setBc((prev) => ({ ...prev, weight: v }))}
-                    placeholder="0.10"
-                  />
-                </div>
-              )}
-            </div>
+              </div>
+            </Card>
           </div>
-        </Card>
+        )}
       </div>
     </div>
   );

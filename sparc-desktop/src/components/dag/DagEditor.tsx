@@ -18,1105 +18,680 @@ import {
 import "@xyflow/react/dist/style.css";
 import dagre from "@dagrejs/dagre";
 import { getDag, validateDag, getMc3Result } from "@/lib/api";
-import type { DagEdge, DagDefinition, DagValidation, MC3Result } from "@/lib/types";
+import type { DagEdge, DagDefinition, DagValidation, MC3Result, DagNodeType } from "@/lib/types";
 import { usePipeline } from "@/hooks/PipelineProvider";
+import { Btn, SectionHeader } from "@/components/ui/DesignSystem";
 
-// ---------------------------------------------------------------------------
-// Color palette for node types. SPARC v4 adds three more identification-
-// relevant types beyond the original four:
-//   - instrument: IV — affects outcome only via a treatment.
-//   - proxy_confounder: imperfect measurement of a latent confounder
-//     (residual confounding warning).
-//   - selection: drives sample inclusion; conditioning → collider bias.
-// ---------------------------------------------------------------------------
-const TYPE_COLORS: Record<string, { bg: string; border: string; text: string }> = {
-  treatment:        { bg: "#f3e8f5", border: "#602468", text: "#602468" },
-  mediator:         { bg: "#f5e0f8", border: "#a44eb4", text: "#7a2890" },
-  confounder:       { bg: "#fde8ec", border: "#f0a0b0", text: "#a04050" },
-  outcome:          { bg: "#fdf8e0", border: "#fbdd46", text: "#8a7000" },
-  instrument:       { bg: "#e6f0ff", border: "#1e4fb8", text: "#1e4fb8" },
-  proxy_confounder: { bg: "#fbe7d4", border: "#b86a1e", text: "#8a4a10" },
-  selection:        { bg: "#e8e8e8", border: "#555",    text: "#222"    },
+// ── Node type → brand color ───────────────────────────────────────────────
+const NODE_COLORS: Record<string, string> = {
+  treatment:        "#602468",
+  mediator:         "#a44eb4",
+  confounder:       "#e79024",
+  outcome:          "#e73c25",
+  instrument:       "#1e6fb8",
+  proxy_confounder: "#f0b632",
+  selection:        "#6e6358",
 };
 
-// ---------------------------------------------------------------------------
-// Custom node component
-// ---------------------------------------------------------------------------
-function DagNodeComponent({ data }: NodeProps) {
-  const d = data as { label: string; nodeType: string; description?: string; proposed?: boolean };
-  const colors = TYPE_COLORS[d.nodeType] ?? { bg: "#f0f0f0", border: "#888", text: "#333" };
+const NODE_TYPE_OPTIONS: DagNodeType[] = [
+  "treatment","mediator","confounder","outcome","instrument","proxy_confounder","selection",
+];
 
+// ── Custom DAG node ───────────────────────────────────────────────────────
+function SparcDagNode({ data }: NodeProps) {
+  const d = data as { label: string; nodeType: string; description?: string };
+  const color = NODE_COLORS[d.nodeType] ?? "#6e6358";
   return (
-    <div
-      className="rounded-lg px-4 py-3 shadow-sm min-w-[140px] text-center"
-      style={{
-        backgroundColor: colors.bg,
-        border: `2px ${d.proposed ? "dashed" : "solid"} ${colors.border}`,
-        opacity: d.proposed ? 0.7 : 1,
-      }}
-    >
-      <Handle type="target" position={Position.Top} className="!bg-gray-400 !w-2 !h-2" />
-      <div className="font-mono text-xs font-bold" style={{ color: colors.text }}>
+    <div style={{
+      background:"#fff", border:"1px solid #c9c2b3", borderLeft:`4px solid ${color}`,
+      borderRadius:6, minWidth:140, maxWidth:200, padding:"8px 10px",
+      boxShadow:"0 2px 8px rgba(26,20,18,0.10)", fontFamily:"inherit",
+    }}>
+      <Handle type="target" position={Position.Top}
+        style={{ width:8, height:8, background:"#c9c2b3", border:"1.5px solid #a09880" }} />
+      <div className="mono"
+        style={{ fontSize:11, fontWeight:700, color:"#1a1416", letterSpacing:"-0.01em", lineHeight:1.25 }}>
         {d.label}
       </div>
-      <div className="text-[10px] mt-0.5 capitalize" style={{ color: colors.text, opacity: 0.7 }}>
-        {d.nodeType}
+      <div style={{ fontSize:8.5, marginTop:4, fontWeight:700, letterSpacing:"0.08em",
+        textTransform:"uppercase", color, opacity:0.9 }}>
+        {d.nodeType.replace(/_/g, " ")}
       </div>
       {d.description && (
-        <div className="text-[9px] mt-1 text-gray-500 leading-tight">{d.description}</div>
+        <div style={{ fontSize:9, marginTop:3, color:"#6e6358", lineHeight:1.4 }}>{d.description}</div>
       )}
-      <Handle type="source" position={Position.Bottom} className="!bg-gray-400 !w-2 !h-2" />
+      <Handle type="source" position={Position.Bottom}
+        style={{ width:8, height:8, background:"#c9c2b3", border:"1.5px solid #a09880" }} />
     </div>
   );
 }
 
-const nodeTypes = { dag: DagNodeComponent };
+const nodeTypes = { dag: SparcDagNode };
 
-// ---------------------------------------------------------------------------
-// Dagre auto-layout
-// ---------------------------------------------------------------------------
-function layoutNodes(
-  nodes: Node[],
-  edges: Edge[],
-  direction: "TB" | "LR" = "TB",
-): Node[] {
+// ── Dagre layout ──────────────────────────────────────────────────────────
+function layoutNodes(nodes: Node[], edges: Edge[]): Node[] {
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: direction, ranksep: 80, nodesep: 60 });
-
-  nodes.forEach((n) => g.setNode(n.id, { width: 160, height: 70 }));
+  g.setGraph({ rankdir:"TB", ranksep:90, nodesep:70 });
+  nodes.forEach((n) => g.setNode(n.id, { width:160, height:70 }));
   edges.forEach((e) => g.setEdge(e.source, e.target));
   dagre.layout(g);
-
   return nodes.map((n) => {
     const pos = g.node(n.id);
-    return { ...n, position: { x: pos.x - 80, y: pos.y - 35 } };
+    return { ...n, position:{ x:pos.x - 80, y:pos.y - 35 } };
   });
 }
 
-// ---------------------------------------------------------------------------
-// Convert API DAG to ReactFlow nodes/edges
-// ---------------------------------------------------------------------------
-function dagToFlow(
-  dag: DagDefinition,
-  proposedEdges?: DagEdge[],
-): { nodes: Node[]; edges: Edge[] } {
+// ── API DAG → ReactFlow ───────────────────────────────────────────────────
+function dagToFlow(dag: DagDefinition): { nodes: Node[]; edges: Edge[] } {
   const flowNodes: Node[] = dag.nodes.map((n) => ({
-    id: n.name,
-    type: "dag",
-    position: { x: 0, y: 0 },
-    data: { label: n.name, nodeType: n.type, description: n.description },
+    id: n.name, type: "dag", position: { x:0, y:0 },
+    data: { label:n.name, nodeType:n.type, description:n.description },
   }));
-
+  const nodeTypeMap = Object.fromEntries(dag.nodes.map((n) => [n.name, n.type]));
   const flowEdges: Edge[] = dag.edges.map((e) => {
-    // Edge styling derives from sign_prior (hue) and confidence (opacity
-    // / width). `kind` and `lag` are surfaced in the label so the
-    // identification semantics are visible at a glance.
-    const sign = e.sign_prior;
-    const conf = typeof e.confidence === "number" ? Math.max(0, Math.min(1, e.confidence)) : null;
-    const baseColor =
-      sign === "+" ? "#1f7d1f"
-        : sign === "-" ? "#b91c1c"
-          : e.kind === "instrumental" ? "#1e4fb8"
-            : e.kind === "time_lagged" ? "#7a2890"
-              : "#602468";
-    const opacity = conf == null ? 1 : 0.4 + 0.6 * conf;
-    const strokeWidth = conf == null ? 1.4 : 1 + conf * 1.6;
-    const dash = e.kind === "time_lagged" ? "5,4" : e.kind === "mediated" ? "2,3" : undefined;
+    const color = NODE_COLORS[nodeTypeMap[e.parent] ?? ""] ?? "#602468";
     const labelBits: string[] = [];
     if (e.mechanism) labelBits.push(e.mechanism);
     if (e.lag) labelBits.push(`lag ${e.lag}`);
-    if (sign && sign !== "0") labelBits.push(sign);
-    if (conf != null) labelBits.push(`c=${conf.toFixed(2)}`);
+    if (e.sign_prior && e.sign_prior !== "0") labelBits.push(e.sign_prior);
     return {
-      id: `e-${e.parent}-${e.child}`,
-      source: e.parent,
-      target: e.child,
-      label: labelBits.join(" · "),
+      id: `e-${e.parent}-${e.child}`, source: e.parent, target: e.child,
+      label: labelBits.length > 0 ? labelBits.join(" · ") : undefined,
       animated: e.kind === "time_lagged",
-      style: { stroke: baseColor, opacity, strokeWidth, ...(dash ? { strokeDasharray: dash } : {}) },
-      markerEnd: { type: MarkerType.ArrowClosed, color: baseColor },
-      labelStyle: { fontSize: 9, fill: "#666" },
-      data: {
-        mechanism: e.mechanism,
-        kind: e.kind ?? "direct",
-        lag: e.lag,
-        sign_prior: e.sign_prior,
-        confidence: e.confidence,
-      },
+      style: { stroke:color, strokeWidth:1.6 },
+      markerEnd: { type:MarkerType.ArrowClosed, color },
+      labelStyle: { fontSize:9, fill:"#6e6358" },
     };
   });
-
-  // Proposed edges from Claude (dashed, amber)
-  if (proposedEdges) {
-    proposedEdges.forEach((e, i) => {
-      if (!flowEdges.find((fe) => fe.source === e.parent && fe.target === e.child)) {
-        flowEdges.push({
-          id: `proposal-${i}`,
-          source: e.parent,
-          target: e.child,
-          label: `💡 ${e.mechanism ?? "proposed"}`,
-          animated: true,
-          style: { stroke: "#e79024", strokeDasharray: "5,5" },
-          markerEnd: { type: MarkerType.ArrowClosed, color: "#e79024" },
-          labelStyle: { fontSize: 9, fill: "#e79024" },
-        });
-      }
-    });
-  }
-
-  const laid = layoutNodes(flowNodes, flowEdges);
-  return { nodes: laid, edges: flowEdges };
+  return { nodes: layoutNodes(flowNodes, flowEdges), edges: flowEdges };
 }
 
-// ---------------------------------------------------------------------------
-// Undo / Redo history stack
-// ---------------------------------------------------------------------------
-interface Snapshot {
-  nodes: Node[];
-  edges: Edge[];
-}
-
-function useUndoRedo(
-  nodes: Node[],
-  edges: Edge[],
-  setNodes: (ns: Node[]) => void,
-  setEdges: (es: Edge[]) => void,
-) {
-  const historyRef = useRef<Snapshot[]>([]);
-  const futureRef = useRef<Snapshot[]>([]);
-  const skipRef = useRef(false); // prevent recording when restoring
-
-  const pushSnapshot = useCallback(() => {
-    if (skipRef.current) return;
-    historyRef.current.push({
-      nodes: JSON.parse(JSON.stringify(nodes)),
-      edges: JSON.parse(JSON.stringify(edges)),
-    });
-    futureRef.current = []; // clear redo stack on new action
-    // Limit history size
-    if (historyRef.current.length > 50) historyRef.current.shift();
-  }, [nodes, edges]);
-
-  const undo = useCallback(() => {
-    if (historyRef.current.length === 0) return;
-    const snapshot = historyRef.current.pop()!;
-    futureRef.current.push({
-      nodes: JSON.parse(JSON.stringify(nodes)),
-      edges: JSON.parse(JSON.stringify(edges)),
-    });
-    skipRef.current = true;
-    setNodes(snapshot.nodes);
-    setEdges(snapshot.edges);
-    requestAnimationFrame(() => { skipRef.current = false; });
-  }, [nodes, edges, setNodes, setEdges]);
-
-  const redo = useCallback(() => {
-    if (futureRef.current.length === 0) return;
-    const snapshot = futureRef.current.pop()!;
-    historyRef.current.push({
-      nodes: JSON.parse(JSON.stringify(nodes)),
-      edges: JSON.parse(JSON.stringify(edges)),
-    });
-    skipRef.current = true;
-    setNodes(snapshot.nodes);
-    setEdges(snapshot.edges);
-    requestAnimationFrame(() => { skipRef.current = false; });
-  }, [nodes, edges, setNodes, setEdges]);
-
-  const canUndo = historyRef.current.length > 0;
-  const canRedo = futureRef.current.length > 0;
-
-  return { pushSnapshot, undo, redo, canUndo, canRedo };
-}
-
-// ---------------------------------------------------------------------------
-// Node type options for context menu
-// ---------------------------------------------------------------------------
-const NODE_TYPE_OPTIONS = [
-  "treatment",
-  "mediator",
-  "confounder",
-  "outcome",
-  "instrument",
-  "proxy_confounder",
-  "selection",
-] as const;
-
-// ---------------------------------------------------------------------------
-// MC³ edge styling helpers
-// ---------------------------------------------------------------------------
-function mc3EdgeStyle(prob: number): { stroke: string; strokeDasharray?: string; strokeWidth: number } {
-  if (prob >= 0.8) return { stroke: "#16a34a", strokeWidth: Math.max(1.5, prob * 3) };
-  if (prob >= 0.3) return { stroke: "#d97706", strokeDasharray: "6,4", strokeWidth: Math.max(1, prob * 2.5) };
-  return { stroke: "#9ca3af", strokeDasharray: "3,3", strokeWidth: 1 };
-}
-
-function mc3EdgesToFlow(mc3: MC3Result, threshold: number = 0.10): Edge[] {
+// ── MC³ posterior → ReactFlow ─────────────────────────────────────────────
+function mc3ToFlow(mc3: MC3Result, threshold: number): { nodes: Node[]; edges: Edge[] } {
   const { node_names, edge_probs } = mc3;
-  const edges: Edge[] = [];
+  const flowNodes: Node[] = node_names.map((name) => ({
+    id: name, type: "dag", position: { x:0, y:0 }, data: { label:name, nodeType:"confounder" },
+  }));
+  const flowEdges: Edge[] = [];
   for (let i = 0; i < node_names.length; i++) {
     for (let j = 0; j < node_names.length; j++) {
       if (i === j) continue;
       const prob = edge_probs[i][j];
-      if (prob < threshold) continue; // skip edges below threshold
-      const style = mc3EdgeStyle(prob);
-      edges.push({
+      if (prob < threshold) continue;
+      const color = prob >= 0.8 ? "#2d8a2d" : prob >= 0.5 ? "#e79024" : "#9ca3af";
+      flowEdges.push({
         id: `mc3-${node_names[i]}-${node_names[j]}`,
-        source: node_names[i],
-        target: node_names[j],
+        source: node_names[i], target: node_names[j],
         label: `${(prob * 100).toFixed(0)}%`,
-        animated: prob >= 0.5,
-        style,
-        markerEnd: { type: MarkerType.ArrowClosed, color: style.stroke },
-        labelStyle: { fontSize: 9, fill: style.stroke, fontWeight: prob >= 0.5 ? 600 : 400 },
+        animated: prob >= 0.8,
+        style: { stroke:color, strokeWidth:Math.max(1, prob * 2.5), strokeDasharray:prob < 0.5 ? "4,3" : undefined },
+        markerEnd: { type:MarkerType.ArrowClosed, color },
+        labelStyle: { fontSize:9, fill:color, fontWeight:prob >= 0.5 ? 600 : 400 },
       });
     }
   }
-  return edges;
+  return { nodes: layoutNodes(flowNodes, flowEdges), edges: flowEdges };
 }
 
-// ---------------------------------------------------------------------------
-// Main component
-// ---------------------------------------------------------------------------
+// ── Undo / redo ───────────────────────────────────────────────────────────
+interface Snapshot { nodes: Node[]; edges: Edge[] }
+function useUndoRedo(
+  nodes: Node[], edges: Edge[],
+  setNodes: (ns: Node[]) => void, setEdges: (es: Edge[]) => void,
+) {
+  const histRef = useRef<Snapshot[]>([]);
+  const futRef  = useRef<Snapshot[]>([]);
+  const skipRef = useRef(false);
+  const pushSnapshot = useCallback(() => {
+    if (skipRef.current) return;
+    histRef.current.push({ nodes:JSON.parse(JSON.stringify(nodes)), edges:JSON.parse(JSON.stringify(edges)) });
+    futRef.current = [];
+    if (histRef.current.length > 50) histRef.current.shift();
+  }, [nodes, edges]);
+  const undo = useCallback(() => {
+    if (histRef.current.length === 0) return;
+    const snap = histRef.current.pop()!;
+    futRef.current.push({ nodes:JSON.parse(JSON.stringify(nodes)), edges:JSON.parse(JSON.stringify(edges)) });
+    skipRef.current = true;
+    setNodes(snap.nodes); setEdges(snap.edges);
+    requestAnimationFrame(() => { skipRef.current = false; });
+  }, [nodes, edges, setNodes, setEdges]);
+  const redo = useCallback(() => {
+    if (futRef.current.length === 0) return;
+    const snap = futRef.current.pop()!;
+    histRef.current.push({ nodes:JSON.parse(JSON.stringify(nodes)), edges:JSON.parse(JSON.stringify(edges)) });
+    skipRef.current = true;
+    setNodes(snap.nodes); setEdges(snap.edges);
+    requestAnimationFrame(() => { skipRef.current = false; });
+  }, [nodes, edges, setNodes, setEdges]);
+  return { pushSnapshot, undo, redo, canUndo:histRef.current.length > 0, canRedo:futRef.current.length > 0 };
+}
+
+// ── Shared input style ────────────────────────────────────────────────────
+const inputStyle: React.CSSProperties = {
+  border:"1px solid var(--line)", borderRadius:4, padding:"5px 8px",
+  fontSize:11.5, fontFamily:"inherit", background:"#fff",
+  outline:"none", width:"100%", boxSizing:"border-box",
+};
+
+// ── Panel card ────────────────────────────────────────────────────────────
+function PanelCard({ title, subtitle, children }: { title:string; subtitle?:string; children:React.ReactNode }) {
+  return (
+    <div style={{ background:"#fff", border:"1px solid var(--line)", borderRadius:8 }}>
+      <div style={{ padding:"10px 12px", borderBottom:"1px solid var(--line)",
+        background:"#fdfbf7", borderRadius:"8px 8px 0 0" }}>
+        <div style={{ fontSize:12, fontWeight:700 }}>{title}</div>
+        {subtitle && <div className="mono" style={{ fontSize:9.5, color:"var(--muted)", marginTop:1 }}>{subtitle}</div>}
+      </div>
+      <div style={{ padding:12 }}>{children}</div>
+    </div>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────
 export default function DAGView() {
-  const { dagApprovalPending, handleApproveDag, handleRejectDag, runEndedAt, stageStatuses } = usePipeline();
-  const [dag, setDag] = useState<DagDefinition | null>(null);
-  const [validation, setValidation] = useState<DagValidation | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [mc3, setMc3] = useState<MC3Result | null>(null);
-  const [showMc3, setShowMc3] = useState(false);
-  const [mc3Threshold, setMc3Threshold] = useState(0.30);
-  const [mc3FetchError, setMc3FetchError] = useState<string | null>(null);
+  const { dagApprovalPending, handleApproveDag, handleRejectDag } = usePipeline();
+
+  const [mode, setMode] = useState<"build" | "mc3">("build");
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const [loading, setLoading]       = useState(true);
+  const [error, setError]           = useState<string | null>(null);
+  const [validation, setValidation] = useState<DagValidation | null>(null);
 
-  // Undo/Redo
+  const [mc3, setMc3]               = useState<MC3Result | null>(null);
+  const [mc3Loading, setMc3Loading] = useState(false);
+  const [mc3Error, setMc3Error]     = useState<string | null>(null);
+  const [mc3Threshold, setMc3Threshold] = useState(0.30);
+  const [mc3Nodes, setMc3Nodes, onMc3NodesChange] = useNodesState<Node>([]);
+  const [mc3Edges, setMc3Edges, onMc3EdgesChange] = useEdgesState<Edge>([]);
+
   const { pushSnapshot, undo, redo, canUndo, canRedo } = useUndoRedo(nodes, edges, setNodes, setEdges);
 
-  // Context menu state
-  const [contextMenu, setContextMenu] = useState<{
-    x: number;
-    y: number;
-    nodeId: string;
-  } | null>(null);
+  const [newNodeName, setNewNodeName] = useState("");
+  const [newNodeType, setNewNodeType] = useState<DagNodeType>("treatment");
+  const [qeSource, setQeSource]       = useState("");
+  const [qeTarget, setQeTarget]       = useState("");
+  const [contextMenu, setContextMenu] = useState<{ x:number; y:number; nodeId:string } | null>(null);
 
-  // Edge tooltip state (causal assumption + SPARC v4 attrs)
-  const [edgeTooltip, setEdgeTooltip] = useState<{
-    x: number;
-    y: number;
-    source: string;
-    target: string;
-    mechanism?: string;
-    kind?: string;
-    lag?: number;
-    sign_prior?: string;
-    confidence?: number;
-  } | null>(null);
-
-  // Quick edge form
-  const [quickEdge, setQuickEdge] = useState(false);
-  const [qeSource, setQeSource] = useState("");
-  const [qeTarget, setQeTarget] = useState("");
-  const [qeMechanism, setQeMechanism] = useState("");
-
-  // Check for Claude-proposed edges
-  const proposedEdges = useMemo<DagEdge[]>(() => {
-    try {
-      const raw = localStorage.getItem("sparc-proposed-edges");
-      if (raw) return JSON.parse(raw);
-    } catch {}
-    return [];
-  }, []);
-
-  const load = useCallback(async () => {
+  const loadDag = useCallback(async () => {
     setLoading(true);
     try {
       const d = await getDag();
-      setDag(d);
-      const { nodes: n, edges: e } = dagToFlow(d, proposedEdges);
-      setNodes(n);
-      setEdges(e);
-      setError(null);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [proposedEdges, setNodes, setEdges]);
+      const { nodes:n, edges:e } = dagToFlow(d);
+      setNodes(n); setEdges(e); setError(null);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to load DAG");
+    } finally { setLoading(false); }
+  }, [setNodes, setEdges]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadDag(); }, [loadDag]);
 
-  // -------- Phase 20: vim-style keyboard navigation --------
-  // j/k step through nodes (sorted by y, then x). gg → first, G → last.
-  // e on a selected node opens the quick-edge form pre-filled with it as
-  // the source. d deletes the selected node and any incident edges.
-  // We bail out when focus is in an editable element so typing in inputs
-  // is not hijacked.
-  const [vimSelectedId, setVimSelectedId] = useState<string | null>(null);
-  const lastGRef = useRef<number>(0);
   useEffect(() => {
-    function isEditable(el: EventTarget | null): boolean {
-      if (!(el instanceof HTMLElement)) return false;
-      const tag = el.tagName;
-      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (isEditable(e.target)) return;
-      if (nodes.length === 0) return;
-      const sorted = [...nodes].sort((a, b) => (a.position.y - b.position.y) || (a.position.x - b.position.x));
-      const idx = vimSelectedId ? sorted.findIndex((n) => n.id === vimSelectedId) : -1;
-
-      const select = (i: number) => {
-        const id = sorted[Math.max(0, Math.min(sorted.length - 1, i))].id;
-        setVimSelectedId(id);
-        setNodes((ns) => ns.map((n) => ({ ...n, selected: n.id === id })));
-      };
-
-      if (e.key === "j") { e.preventDefault(); select(idx < 0 ? 0 : Math.min(sorted.length - 1, idx + 1)); }
-      else if (e.key === "k") { e.preventDefault(); select(idx < 0 ? sorted.length - 1 : Math.max(0, idx - 1)); }
-      else if (e.key === "G") { e.preventDefault(); select(sorted.length - 1); }
-      else if (e.key === "g") {
-        e.preventDefault();
-        const now = Date.now();
-        if (now - lastGRef.current < 400) { select(0); lastGRef.current = 0; }
-        else { lastGRef.current = now; }
-      } else if (e.key === "e" && vimSelectedId) {
-        e.preventDefault();
-        setQeSource(vimSelectedId);
-        setQeTarget("");
-        setQeMechanism("");
-        setQuickEdge(true);
-      } else if ((e.key === "d" || e.key === "Delete" || e.key === "Backspace") && vimSelectedId) {
-        e.preventDefault();
-        pushSnapshot();
-        const id = vimSelectedId;
-        setNodes((ns) => ns.filter((n) => n.id !== id));
-        setEdges((es) => es.filter((ed) => ed.source !== id && ed.target !== id));
-        setVimSelectedId(null);
-      } else if (e.key === "Escape") {
-        setVimSelectedId(null);
-        setNodes((ns) => ns.map((n) => ({ ...n, selected: false })));
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [nodes, vimSelectedId, setNodes, setEdges, pushSnapshot]);
-
-  // Fetch MC³ results when DAG approval is requested OR user toggles overlay on
-  useEffect(() => {
-    if (!dagApprovalPending && !showMc3) {
-      setMc3FetchError(null);
-      // Strip any stale mc3 overlay edges when toggle is off
-      setEdges((eds) => eds.filter((e) => !e.id.startsWith("mc3-")));
-      return;
-    }
+    if (mode !== "mc3") return;
+    setMc3Loading(true);
     getMc3Result()
       .then((data) => {
-        setMc3(data);
-        setMc3FetchError(null);
-        if (dagApprovalPending) setShowMc3(true);
+        setMc3(data); setMc3Error(null);
         if (data) {
-          const mc3Edges = mc3EdgesToFlow(data, mc3Threshold);
-          setEdges((eds) => {
-            const cleaned = eds.filter((e) => !e.id.startsWith("mc3-"));
-            return [...cleaned, ...mc3Edges];
-          });
-          // Ensure all MC³ nodes exist in the canvas
-          const existingIds = new Set(nodes.map((n) => n.id));
-          const newNodes: Node[] = [];
-          for (const name of data.node_names) {
-            if (!existingIds.has(name)) {
-              newNodes.push({
-                id: name,
-                type: "dag",
-                position: { x: 0, y: 0 },
-                data: { label: name, nodeType: "confounder" },
-              });
-            }
-          }
-          if (newNodes.length > 0) {
-            setNodes((nds) => layoutNodes([...nds, ...newNodes], edges));
-          }
-        } else {
-          setMc3FetchError("No MC³ result available yet \u2014 run the pipeline through the DAG step first.");
+          const { nodes:n, edges:e } = mc3ToFlow(data, mc3Threshold);
+          setMc3Nodes(n); setMc3Edges(e);
         }
       })
-      .catch((err) => {
-        setMc3(null);
-        setMc3FetchError(
-          err instanceof Error
-            ? err.message
-            : "Could not fetch MC³ result \u2014 has the pipeline reached the DAG-learning step?",
-        );
-      });
+      .catch((err: unknown) => {
+        setMc3Error(err instanceof Error ? err.message : "MC³ result not available");
+      })
+      .finally(() => setMc3Loading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dagApprovalPending, showMc3, mc3Threshold]);
+  }, [mode]);
 
-  // Load MC³ after the causal stage finishes (re-fetches even if approval gate
-  // was previously cleared). Also poll every 3 s while the causal stage is
-  // running so users see edges accumulate live.
   useEffect(() => {
-    const causalStatus = stageStatuses[3]?.status;
-    const fetchMc3 = () => {
-      getMc3Result()
-        .then((data) => {
-          if (!data) return;
-          setMc3(data);
-          if (showMc3) {
-            const mc3Edges = mc3EdgesToFlow(data);
-            setEdges((eds) => {
-              const cleaned = eds.filter((e) => !e.id.startsWith("mc3-"));
-              return [...cleaned, ...mc3Edges];
-            });
-          }
-        })
-        .catch(() => {});
-    };
-    if (causalStatus === "running") {
-      fetchMc3();
-      const id = setInterval(fetchMc3, 3000);
-      return () => clearInterval(id);
-    }
-    if (causalStatus === "complete" || runEndedAt) fetchMc3();
-    return undefined;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stageStatuses[3]?.status, runEndedAt]);
+    if (!mc3) return;
+    const { nodes:n, edges:e } = mc3ToFlow(mc3, mc3Threshold);
+    setMc3Nodes(n); setMc3Edges(e);
+  }, [mc3, mc3Threshold, setMc3Nodes, setMc3Edges]);
 
-  // Keyboard shortcuts for undo/redo
+  useEffect(() => { if (dagApprovalPending) setMode("mc3"); }, [dagApprovalPending]);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
-        e.preventDefault();
-        undo();
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === "z" && e.shiftKey) {
-        e.preventDefault();
-        redo();
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === "y") {
-        e.preventDefault();
-        redo();
-      }
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.key === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
+      if ((e.key === "z" && e.shiftKey) || e.key === "y") { e.preventDefault(); redo(); }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [undo, redo]);
 
-  const onConnect = useCallback(
-    (params: Connection) => {
-      pushSnapshot();
-      setEdges((eds) => addEdge({ ...params, animated: false }, eds));
+  const onConnect = useCallback((params: Connection) => {
+    pushSnapshot();
+    const srcType = (nodes.find((n) => n.id === params.source)?.data as { nodeType?:string })?.nodeType ?? "";
+    const color = NODE_COLORS[srcType] ?? "#602468";
+    setEdges((eds) => addEdge({ ...params,
+      style:{ stroke:color, strokeWidth:1.6 },
+      markerEnd:{ type:MarkerType.ArrowClosed, color } }, eds));
+  }, [nodes, pushSnapshot, setEdges]);
 
-      const applyMc3 = (data: import("@/lib/types").MC3Result) => {
-        setMc3(data);
-        setShowMc3(true);
-        const mc3Edges = mc3EdgesToFlow(data);
-        setEdges((eds) => {
-          const cleaned = eds.filter((e) => !e.id.startsWith("mc3-"));
-          return [...cleaned, ...mc3Edges];
-        });
-        // Use functional setNodes to read latest state and avoid stale closure
-        setNodes((currentNodes) => {
-          const existingIds = new Set(currentNodes.map((n) => n.id));
-          const newNodes: Node[] = [];
-          for (const name of data.node_names) {
-            if (!existingIds.has(name)) {
-              newNodes.push({
-                id: name,
-                type: "dag",
-                position: { x: 0, y: 0 },
-                data: { label: name, nodeType: "confounder" },
-              });
-            }
-          }
-          return newNodes.length > 0
-            ? layoutNodes([...currentNodes, ...newNodes], mc3Edges)
-            : currentNodes;
-        });
-      };
+  const handleAddNode = useCallback(() => {
+    const name = newNodeName.trim();
+    if (!name || nodes.find((n) => n.id === name)) return;
+    pushSnapshot();
+    const maxY = nodes.reduce((m, n) => Math.max(m, n.position.y), 0);
+    setNodes((prev) => [...prev, {
+      id: name, type: "dag",
+      position:{ x:60 + (prev.length % 4) * 185, y:maxY + 130 },
+      data:{ label:name, nodeType:newNodeType },
+    }]);
+    setNewNodeName("");
+  }, [newNodeName, newNodeType, nodes, pushSnapshot, setNodes]);
 
-      getMc3Result()
-        .then((data) => { if (data) applyMc3(data); })
-        .catch(() => {
-          // MC³ result not ready yet — retry once after a short delay
-          setTimeout(() => {
-            getMc3Result()
-              .then((data) => { if (data) applyMc3(data); })
-              .catch(() => {});
-          }, 1500);
-        });
-    },
-    [addEdge, pushSnapshot],
-  );
-
-  // Quick edge: add edge from form inputs
-  const addQuickEdge = useCallback(() => {
+  const handleAddEdge = useCallback(() => {
     if (!qeSource || !qeTarget || qeSource === qeTarget) return;
     pushSnapshot();
-    const id = `qe-${qeSource}-${qeTarget}-${Date.now()}`;
-    setEdges((eds) => [
-      ...eds,
-      {
-        id,
-        source: qeSource,
-        target: qeTarget,
-        animated: false,
-        ...(qeMechanism ? { label: qeMechanism } : {}),
-      },
-    ]);
-    setQeSource("");
-    setQeTarget("");
-    setQeMechanism("");
-  }, [qeSource, qeTarget, qeMechanism, pushSnapshot, setEdges]);
+    const srcType = (nodes.find((n) => n.id === qeSource)?.data as { nodeType?:string })?.nodeType ?? "";
+    const color = NODE_COLORS[srcType] ?? "#602468";
+    setEdges((eds) => [...eds, {
+      id: `qe-${qeSource}-${qeTarget}-${Date.now()}`,
+      source:qeSource, target:qeTarget,
+      style:{ stroke:color, strokeWidth:1.6 },
+      markerEnd:{ type:MarkerType.ArrowClosed, color },
+    }]);
+    setQeSource(""); setQeTarget("");
+  }, [qeSource, qeTarget, nodes, pushSnapshot, setEdges]);
 
-  // Context menu: right-click on node
-  const onNodeContextMenu = useCallback(
-    (event: React.MouseEvent, node: Node) => {
-      event.preventDefault();
-      setContextMenu({ x: event.clientX, y: event.clientY, nodeId: node.id });
-    },
-    [],
-  );
+  const onNodeContextMenu = useCallback((event: React.MouseEvent, node: Node) => {
+    event.preventDefault();
+    setContextMenu({ x:event.clientX, y:event.clientY, nodeId:node.id });
+  }, []);
 
-  // Change node type from context menu
-  const changeNodeType = useCallback(
-    (nodeId: string, newType: string) => {
-      pushSnapshot();
-      setNodes((nds) =>
-        nds.map((n) =>
-          n.id === nodeId
-            ? { ...n, data: { ...n.data, nodeType: newType } }
-            : n,
-        ),
-      );
-      setContextMenu(null);
-    },
-    [setNodes, pushSnapshot],
-  );
+  const changeNodeType = useCallback((nodeId: string, newType: string) => {
+    pushSnapshot();
+    setNodes((nds) => nds.map((n) =>
+      n.id === nodeId ? { ...n, data:{ ...n.data, nodeType:newType } } : n));
+    setContextMenu(null);
+  }, [pushSnapshot, setNodes]);
 
-  // Close context menu on click
+  const deleteNode = useCallback((nodeId: string) => {
+    pushSnapshot();
+    setNodes((ns) => ns.filter((n) => n.id !== nodeId));
+    setEdges((es) => es.filter((e) => e.source !== nodeId && e.target !== nodeId));
+    setContextMenu(null);
+  }, [pushSnapshot, setNodes, setEdges]);
+
   useEffect(() => {
-    if (!contextMenu && !edgeTooltip) return;
-    const close = () => { setContextMenu(null); setEdgeTooltip(null); };
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
     document.addEventListener("click", close);
     return () => document.removeEventListener("click", close);
-  }, [contextMenu, edgeTooltip]);
+  }, [contextMenu]);
 
-  // Edge click → causal assumption tooltip (now surfaces SPARC v4
-  // identification attributes carried on `edge.data`).
-  const onEdgeClick = useCallback(
-    (event: React.MouseEvent, edge: Edge) => {
-      if (edge.id.startsWith("mc3-")) return; // skip MC³ overlay edges
-      event.stopPropagation();
-      const d = (edge.data ?? {}) as {
-        mechanism?: string;
-        kind?: string;
-        lag?: number;
-        sign_prior?: string;
-        confidence?: number;
-      };
-      setEdgeTooltip({
-        x: event.clientX,
-        y: event.clientY,
-        source: edge.source,
-        target: edge.target,
-        mechanism: d.mechanism ?? (typeof edge.label === "string" ? edge.label.replace("💡 ", "") : undefined),
-        kind: d.kind,
-        lag: d.lag,
-        sign_prior: d.sign_prior,
-        confidence: d.confidence,
-      });
-    },
-    [],
-  );
-
-  const validate = async () => {
-    if (!dag) return;
+  const handleValidate = async () => {
+    const currentDag: DagDefinition = {
+      nodes: nodes.map((n) => ({
+        name: n.id,
+        type: ((n.data as { nodeType?:string })?.nodeType ?? "confounder") as DagNodeType,
+      })),
+      edges: edges.filter((e) => !e.id.startsWith("mc3-"))
+        .map((e) => ({ parent:e.source, child:e.target } as DagEdge)),
+    };
     try {
-      const v = await validateDag(dag);
+      const v = await validateDag(currentDag);
       setValidation(v);
-    } catch (e: any) {
-      setError(e.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Validation failed");
     }
   };
 
-  // Client-side structural warnings
+  const importMc3 = useCallback(() => {
+    if (!mc3) return;
+    pushSnapshot();
+    const importDag: DagDefinition = {
+      nodes: mc3.median_dag.nodes.map((name) => ({ name, type:"confounder" as DagNodeType })),
+      edges: mc3.median_dag.edges.map((me) => ({ parent:me.source, child:me.target } as DagEdge)),
+    };
+    const { nodes:n, edges:e } = dagToFlow(importDag);
+    setNodes(n); setEdges(e); setMode("build");
+  }, [mc3, pushSnapshot, setNodes, setEdges]);
+
   const structuralWarnings = useMemo<string[]>(() => {
     if (nodes.length === 0) return [];
     const warns: string[] = [];
-    // Find user-defined edges (not mc3/proposal)
-    const userEdges = edges.filter(
-      (e) => !e.id.startsWith("mc3-") && !e.id.startsWith("proposal-"),
-    );
-    // Disconnected nodes
+    const userEdges = edges.filter((e) => !e.id.startsWith("mc3-"));
     const connected = new Set<string>();
     for (const e of userEdges) { connected.add(e.source); connected.add(e.target); }
     const disconnected = nodes.filter((n) => !connected.has(n.id));
-    if (disconnected.length > 0) {
-      warns.push(`Disconnected node${disconnected.length > 1 ? "s" : ""}: ${disconnected.map((n) => n.id).join(", ")}`);
-    }
-    // Outcome nodes with outgoing edges
-    const outcomes = nodes.filter((n) => (n.data as any).nodeType === "outcome");
-    for (const o of outcomes) {
-      if (userEdges.some((e) => e.source === o.id)) {
-        warns.push(`Outcome "${o.id}" has outgoing edges — outcomes should be terminal`);
-      }
-    }
-    // Treatment → Outcome path exists
-    const treatments = nodes.filter((n) => (n.data as any).nodeType === "treatment");
-    if (treatments.length > 0 && outcomes.length > 0) {
-      // BFS from any treatment to any outcome
-      const adj = new Map<string, string[]>();
-      for (const e of userEdges) {
-        if (!adj.has(e.source)) adj.set(e.source, []);
-        adj.get(e.source)!.push(e.target);
-      }
-      const outcomeIds = new Set(outcomes.map((o) => o.id));
-      let pathExists = false;
-      for (const t of treatments) {
-        const visited = new Set<string>();
-        const queue = [t.id];
-        while (queue.length > 0) {
-          const cur = queue.shift()!;
-          if (outcomeIds.has(cur) && cur !== t.id) { pathExists = true; break; }
-          if (visited.has(cur)) continue;
-          visited.add(cur);
-          for (const next of adj.get(cur) ?? []) queue.push(next);
-        }
-        if (pathExists) break;
-      }
-      if (!pathExists) {
-        warns.push("No directed path from any treatment to any outcome");
-      }
-    }
+    if (disconnected.length > 0)
+      warns.push(`Disconnected: ${disconnected.map((n) => n.id).join(", ")}`);
+    const outcomes = nodes.filter((n) => (n.data as { nodeType?:string }).nodeType === "outcome");
+    for (const o of outcomes)
+      if (userEdges.some((e) => e.source === o.id))
+        warns.push(`Outcome "${o.id}" has outgoing edges`);
     return warns;
   }, [nodes, edges]);
 
-  const acceptProposals = () => {
-    pushSnapshot();
-    // Convert proposal edges to permanent
-    setEdges((eds) =>
-      eds.map((e) =>
-        e.id.startsWith("proposal-")
-          ? {
-              ...e,
-              animated: false,
-              style: { stroke: "#602468" },
-              markerEnd: { type: MarkerType.ArrowClosed, color: "#602468" },
-              label: typeof e.label === "string" ? e.label.replace("💡 ", "") : e.label,
-              labelStyle: { fontSize: 9, fill: "#666" },
-            }
-          : e,
-      ),
-    );
-    localStorage.removeItem("sparc-proposed-edges");
-  };
-
-  const dismissProposals = () => {
-    pushSnapshot();
-    setEdges((eds) => eds.filter((e) => !e.id.startsWith("proposal-")));
-    localStorage.removeItem("sparc-proposed-edges");
-  };
+  const mc3Legend: [string, string][] = [
+    ["#2d8a2d", "≥80% — strong"],
+    ["#e79024", "50–79% — moderate"],
+    ["#9ca3af", "<50% — weak"],
+  ];
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <p className="text-sm text-sparc-gray-500">Loading DAG…</p>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:300, color:"var(--muted)" }}>
+        <span className="mono" style={{ fontSize:12 }}>Loading DAG…</span>
       </div>
     );
   }
-
-  if (error && !dag) {
-    return (
-      <div className="p-6">
-        <p className="text-red-600">{error}</p>
-        <p className="mt-2 text-sm text-sparc-gray-600">
-          Load a project with a causal DAG first.
-        </p>
-      </div>
-    );
-  }
-
-  const hasProposals = edges.some((e) => e.id.startsWith("proposal-"));
 
   return (
-    <div className="flex h-full flex-col">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between border-b border-sparc-gray-200 px-4 py-3">
-        <div>
-          <h2 className="text-lg font-bold">Causal DAG</h2>
-          <p className="text-xs text-sparc-gray-500">
-            Drag between nodes to create edges. Right-click a node to change its type.
-          </p>
-        </div>
-        <div className="flex gap-2">
-          {/* Undo/Redo */}
-          <button
-            onClick={undo}
-            disabled={!canUndo}
-            className="rounded border border-sparc-gray-300 px-2 py-1.5 text-xs hover:bg-sparc-gray-100 disabled:opacity-30"
-            title="Undo (Ctrl+Z)"
-          >
-            ↶ Undo
-          </button>
-          <button
-            onClick={redo}
-            disabled={!canRedo}
-            className="rounded border border-sparc-gray-300 px-2 py-1.5 text-xs hover:bg-sparc-gray-100 disabled:opacity-30"
-            title="Redo (Ctrl+Shift+Z)"
-          >
-            ↷ Redo
-          </button>
-          <div className="mx-1 w-px bg-sparc-gray-200" />
-          {/* Quick edge toggle */}
-          <button
-            onClick={() => setQuickEdge(!quickEdge)}
-            className={`rounded border px-3 py-1.5 text-xs font-medium ${
-              quickEdge
-                ? "border-sparc-purple bg-sparc-purple text-white"
-                : "border-sparc-gray-300 hover:bg-sparc-gray-100"
-            }`}
-          >
-            + Edge
-          </button>
-          <span
-            className="ml-2 hidden font-mono text-[10px] text-sparc-gray-500 lg:inline"
-            title="Vim-style navigation: j/k step nodes, gg/G first/last, e draw edge, d delete"
-          >
-            j/k · gg/G · e · d
-          </span>
-          {hasProposals && (
-            <>
-              <button
-                onClick={acceptProposals}
-                className="rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700"
-              >
-                Accept Proposals
-              </button>
-              <button
-                onClick={dismissProposals}
-                className="rounded border border-red-300 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
-              >
-                Dismiss
-              </button>
-            </>
-          )}
-          <button
-            onClick={validate}
-            className="rounded bg-sparc-purple px-3 py-1.5 text-xs font-medium text-white hover:bg-sparc-magenta"
-          >
-            Validate
-          </button>
-          <div className="mx-1 w-px bg-sparc-gray-200" />
-          {/* MC³ overlay toggle (always available) */}
-          <button
-            onClick={() => setShowMc3((v) => !v)}
-            className={`rounded border px-3 py-1.5 text-xs font-medium ${
-              showMc3
-                ? "border-emerald-500 bg-emerald-50 text-emerald-700"
-                : "border-sparc-gray-300 hover:bg-sparc-gray-100"
-            }`}
-            title="Show MC³ posterior edge probabilities"
-          >
-            {showMc3 ? "◉ MC³ on" : "○ MC³ off"}
-          </button>
-          <button
-            onClick={load}
-            className="rounded border border-sparc-gray-300 px-3 py-1.5 text-xs hover:bg-sparc-gray-100"
-          >
-            Reload
-          </button>
-        </div>
+    <div style={{ display:"flex", flexDirection:"column", height:"calc(100vh - 56px)" }}>
+
+      {/* Header */}
+      <div style={{ flexShrink:0, paddingBottom:10 }}>
+        <SectionHeader
+          kicker="04 · analysis"
+          label="Causal DAG"
+          right={
+            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              <div style={{ display:"flex", border:"1px solid var(--line)", borderRadius:5, overflow:"hidden" }}>
+                {(["build", "mc3"] as const).map((m, i) => (
+                  <button key={m} onClick={() => setMode(m)} style={{
+                    padding:"6px 14px", fontSize:11.5, fontWeight:600,
+                    border:"none", borderLeft:i > 0 ? "1px solid var(--line)" : "none",
+                    background:mode === m ? "var(--ink)" : "var(--paper-2)",
+                    color:mode === m ? "#fff" : "var(--ink-2)",
+                    cursor:"pointer", fontFamily:"inherit",
+                    transition:"background 120ms, color 120ms",
+                  }}>
+                    {m === "build" ? "Build" : "MC³ Review"}
+                  </button>
+                ))}
+              </div>
+              {mode === "build" && (
+                <>
+                  <Btn small onClick={undo} disabled={!canUndo}>↶</Btn>
+                  <Btn small onClick={redo} disabled={!canRedo}>↷</Btn>
+                  <Btn small onClick={loadDag}>Reload</Btn>
+                  <Btn small onClick={handleValidate}>Validate</Btn>
+                </>
+              )}
+              {dagApprovalPending && (
+                <>
+                  <Btn small onClick={handleRejectDag}>Reject</Btn>
+                  <Btn primary onClick={handleApproveDag}>Approve DAG</Btn>
+                </>
+              )}
+            </div>
+          }
+        />
       </div>
 
-      {/* MC³ status / threshold slider */}
-      {showMc3 && (
-        <div className="flex items-center gap-3 border-b border-emerald-100 bg-emerald-50 px-4 py-2">
-          {mc3 ? (
-            <>
-              <span className="text-xs font-semibold text-emerald-800">
-                MC³ posterior · {mc3.node_names.length} nodes
-              </span>
-              <span className="text-xs text-emerald-700">
-                threshold {(mc3Threshold * 100).toFixed(0)}%
-              </span>
-              <input
-                type="range"
-                min={0.05}
-                max={0.95}
-                step={0.05}
-                value={mc3Threshold}
-                onChange={(e) => setMc3Threshold(parseFloat(e.target.value))}
-                className="flex-1 max-w-xs"
-              />
-              <span className="text-[10px] text-emerald-700">
-                showing {edges.filter((e) => e.id.startsWith("mc3-")).length} edges
-              </span>
-            </>
-          ) : mc3FetchError ? (
-            <span className="text-xs text-amber-700">⚠ {mc3FetchError}</span>
-          ) : (
-            <span className="text-xs text-emerald-700">Loading MC³ result…</span>
-          )}
-        </div>
-      )}
-
-      {/* Quick edge form */}
-      {quickEdge && (
-        <div className="flex items-center gap-2 border-b border-sparc-gray-100 bg-sparc-gray-50 px-4 py-2">
-          <span className="text-xs text-sparc-gray-600">From:</span>
-          <select
-            value={qeSource}
-            onChange={(e) => setQeSource(e.target.value)}
-            className="rounded border border-sparc-gray-200 px-2 py-1 text-xs"
-          >
-            <option value="">Select…</option>
-            {nodes.map((n) => (
-              <option key={n.id} value={n.id}>{n.id}</option>
-            ))}
-          </select>
-          <span className="text-xs text-sparc-gray-400">→</span>
-          <span className="text-xs text-sparc-gray-600">To:</span>
-          <select
-            value={qeTarget}
-            onChange={(e) => setQeTarget(e.target.value)}
-            className="rounded border border-sparc-gray-200 px-2 py-1 text-xs"
-          >
-            <option value="">Select…</option>
-            {nodes.filter((n) => n.id !== qeSource).map((n) => (
-              <option key={n.id} value={n.id}>{n.id}</option>
-            ))}
-          </select>
-          <input
-            type="text"
-            value={qeMechanism}
-            onChange={(e) => setQeMechanism(e.target.value)}
-            placeholder="Mechanism (optional)"
-            className="rounded border border-sparc-gray-200 px-2 py-1 text-xs w-40"
-          />
-          <button
-            onClick={addQuickEdge}
-            disabled={!qeSource || !qeTarget || qeSource === qeTarget}
-            className="rounded bg-sparc-purple px-3 py-1 text-xs font-medium text-white hover:bg-sparc-magenta disabled:opacity-40"
-          >
-            Add
-          </button>
-        </div>
-      )}
-
-      {/* DAG Approval gate banner */}
+      {/* Approval banner */}
       {dagApprovalPending && (
-        <div className="flex items-center justify-between border-b border-amber-300 bg-amber-50 px-4 py-3">
-          <div>
-            <p className="text-sm font-semibold text-amber-800">
-              DAG Review Required — Pipeline Paused
-            </p>
-            <p className="text-xs text-amber-700">
-              MC³ structure learning is complete. Review the discovered edges (colored by probability)
-              then approve to continue to NUTS posterior sampling.
-              {mc3 && ` ${mc3.median_dag.edges.length} edges above 50% threshold.`}
-            </p>
+        <div style={{ flexShrink:0, marginBottom:8, padding:"10px 14px",
+          background:"#fff8ed", border:"1px solid var(--amber)", borderRadius:6 }}>
+          <div style={{ fontSize:12, fontWeight:700, color:"#7a4800" }}>
+            DAG Review Required — Pipeline Paused
           </div>
-          <div className="flex gap-2">
-            <button
-              onClick={() => setShowMc3(!showMc3)}
-              className="rounded border border-amber-400 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100"
-            >
-              {showMc3 ? "Hide MC³ Edges" : "Show MC³ Edges"}
-            </button>
-            <button
-              onClick={handleRejectDag}
-              className="rounded border border-red-300 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
-            >
-              Reject & Cancel
-            </button>
-            <button
-              onClick={handleApproveDag}
-              className="rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700"
-            >
-              Approve DAG
-            </button>
+          <div style={{ fontSize:11, color:"#8a5800", marginTop:2, lineHeight:1.5 }}>
+            MC³ structure learning complete. Review suggested edges in{" "}
+            <strong>MC³ Review</strong>, then approve to continue.
+            {mc3 && ` ${mc3.median_dag.edges.length} edges in median DAG.`}
           </div>
         </div>
       )}
 
       {/* Validation banner */}
       {validation && (
-        <div
-          className={`border-b px-4 py-2 text-xs ${
-            validation.valid
-              ? "border-green-200 bg-green-50 text-green-800"
-              : "border-red-200 bg-red-50 text-red-800"
-          }`}
-        >
-          {validation.valid
-            ? `✓ Valid — ${validation.n_nodes} nodes, ${validation.n_edges} edges`
-            : `✗ ${validation.error}`}
+        <div style={{ flexShrink:0, marginBottom:8, padding:"8px 14px",
+          background:validation.valid ? "#f0faf0" : "#fff0f0",
+          border:`1px solid ${validation.valid ? "#4a9a4a" : "var(--crimson)"}`,
+          borderRadius:6, fontSize:12,
+          color:validation.valid ? "#2a6a2a" : "var(--crimson)",
+          display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <span>
+            {validation.valid
+              ? `✓ Valid — ${validation.n_nodes} nodes, ${validation.n_edges} edges`
+              : `✗ ${validation.error}`}
+          </span>
+          <button onClick={() => setValidation(null)} style={{ background:"none", border:"none",
+            cursor:"pointer", fontSize:16, lineHeight:1, color:"inherit", opacity:0.5, padding:"0 4px" }}>
+            ×
+          </button>
         </div>
       )}
 
       {/* Structural warnings */}
-      {structuralWarnings.length > 0 && (
-        <div className="border-b border-amber-200 bg-amber-50 px-4 py-2">
+      {structuralWarnings.length > 0 && mode === "build" && (
+        <div style={{ flexShrink:0, marginBottom:8, padding:"8px 14px",
+          background:"#fffbf0", border:"1px solid var(--amber)", borderRadius:6 }}>
           {structuralWarnings.map((w, i) => (
-            <p key={i} className="text-xs text-amber-700">⚠ {w}</p>
+            <div key={i} style={{ fontSize:11.5, color:"#7a4800" }}>⚠ {w}</div>
           ))}
         </div>
       )}
 
-      {/* User-asserted identification assumptions (SPARC v4) */}
-      {dag?.assumptions && (
-        <div className="border-b border-sparc-gray-100 bg-sparc-gray-50 px-4 py-2">
-          <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-sparc-gray-500">
-            Identification Assumptions
-          </p>
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
-            {([
-              ["conditional_exchangeability", "Exchangeability"],
-              ["positivity", "Positivity"],
-              ["consistency", "Consistency"],
-              ["no_interference", "No interference"],
-            ] as const).map(([k, label]) => {
-              const v = (dag.assumptions as Record<string, unknown>)?.[k];
-              if (v === undefined) return null;
-              const ok = v === true;
-              return (
-                <span key={k} className="flex items-center gap-1">
-                  <span className={ok ? "text-emerald-700" : "text-amber-700"}>{ok ? "✓" : "✗"}</span>
-                  <span className="text-sparc-gray-700">{label}</span>
-                </span>
-              );
-            })}
-          </div>
-          {dag.assumptions.notes && (
-            <p className="mt-1 text-[10px] italic leading-snug text-sparc-gray-500">
-              {dag.assumptions.notes}
-            </p>
-          )}
+      {/* Error banner */}
+      {error && (
+        <div style={{ flexShrink:0, marginBottom:8, padding:"8px 14px",
+          background:"#fff0f0", border:"1px solid var(--crimson)", borderRadius:6,
+          fontSize:12, color:"var(--crimson)",
+          display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <span>{error}</span>
+          <button onClick={() => setError(null)} style={{ background:"none", border:"none",
+            cursor:"pointer", fontSize:16, lineHeight:1, color:"inherit", opacity:0.5, padding:"0 4px" }}>
+            ×
+          </button>
         </div>
       )}
 
-      {/* Legend */}
-      <div className="flex gap-4 border-b border-sparc-gray-100 px-4 py-2">
-        {Object.entries(TYPE_COLORS).map(([type, c]) => (
-          <div key={type} className="flex items-center gap-1.5 text-[10px]">
-            <span
-              className="inline-block h-2.5 w-2.5 rounded-sm border-2"
-              style={{ borderColor: c.border, backgroundColor: c.bg }}
-            />
-            <span className="capitalize">{type}</span>
-          </div>
-        ))}
-        {hasProposals && (
-          <div className="flex items-center gap-1.5 text-[10px]">
-            <span className="inline-block h-2.5 w-2.5 rounded-sm border-2 border-dashed" style={{ borderColor: "#e79024" }} />
-            <span>AI Proposal</span>
-          </div>
-        )}
-        {showMc3 && (
-          <>
-            <div className="mx-1 w-px bg-sparc-gray-200" />
-            <div className="flex items-center gap-1.5 text-[10px]">
-              <span className="inline-block h-0.5 w-4" style={{ backgroundColor: "#16a34a" }} />
-              <span>MC³ &gt;80%</span>
+      {/* Content row */}
+      <div style={{ flex:1, display:"flex", gap:12, minHeight:0 }}>
+
+        {/* Side panel */}
+        <div style={{ width:220, flexShrink:0, display:"flex", flexDirection:"column",
+          gap:10, overflowY:"auto" }}>
+          {mode === "build" ? (
+            <>
+              <PanelCard title="Add Node">
+                <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                  <input type="text" value={newNodeName}
+                    onChange={(e) => setNewNodeName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") handleAddNode(); }}
+                    placeholder="Variable name…" style={inputStyle} />
+                  <select value={newNodeType}
+                    onChange={(e) => setNewNodeType(e.target.value as DagNodeType)}
+                    style={{ ...inputStyle, color:NODE_COLORS[newNodeType], fontWeight:600 }}>
+                    {NODE_TYPE_OPTIONS.map((t) => (
+                      <option key={t} value={t}>{t.replace(/_/g, " ")}</option>
+                    ))}
+                  </select>
+                  <Btn primary small onClick={handleAddNode} disabled={!newNodeName.trim()}>
+                    Add Node
+                  </Btn>
+                </div>
+              </PanelCard>
+
+              <PanelCard title="Add Edge" subtitle="or drag from a node handle">
+                <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                  <select value={qeSource} onChange={(e) => setQeSource(e.target.value)} style={inputStyle}>
+                    <option value="">From…</option>
+                    {nodes.map((n) => <option key={n.id} value={n.id}>{n.id}</option>)}
+                  </select>
+                  <select value={qeTarget} onChange={(e) => setQeTarget(e.target.value)} style={inputStyle}>
+                    <option value="">To…</option>
+                    {nodes.filter((n) => n.id !== qeSource).map((n) => (
+                      <option key={n.id} value={n.id}>{n.id}</option>
+                    ))}
+                  </select>
+                  <Btn primary small onClick={handleAddEdge} disabled={!qeSource || !qeTarget}>
+                    Add Edge
+                  </Btn>
+                </div>
+              </PanelCard>
+
+              <PanelCard title="Node types">
+                <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                  {NODE_TYPE_OPTIONS.map((t) => (
+                    <div key={t} style={{ display:"flex", alignItems:"center", gap:8 }}>
+                      <span style={{ width:4, height:16, borderRadius:2, background:NODE_COLORS[t], flexShrink:0 }} />
+                      <span style={{ fontSize:11, color:"var(--ink-2)", textTransform:"capitalize" }}>
+                        {t.replace(/_/g, " ")}
+                      </span>
+                    </div>
+                  ))}
+                  <div style={{ marginTop:8, paddingTop:8, borderTop:"1px dashed var(--line)",
+                    fontSize:10, color:"var(--muted)", lineHeight:1.6 }}>
+                    Right-click any node to change its type or delete it.
+                  </div>
+                </div>
+              </PanelCard>
+            </>
+          ) : (
+            <>
+              <PanelCard title="Threshold" subtitle="min edge probability">
+                <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                    <input type="range" min={0.05} max={0.95} step={0.05}
+                      value={mc3Threshold}
+                      onChange={(e) => setMc3Threshold(parseFloat(e.target.value))}
+                      style={{ flex:1 }} />
+                    <span className="mono" style={{ fontSize:13, fontWeight:700, width:40, textAlign:"right" }}>
+                      {(mc3Threshold * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                  {mc3 ? (
+                    <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                      <div style={{ fontSize:11, color:"var(--muted)" }}>
+                        <strong style={{ color:"var(--ink)" }}>{mc3Edges.length}</strong> edges shown
+                      </div>
+                      <div style={{ fontSize:11, color:"var(--muted)" }}>
+                        <strong style={{ color:"var(--ink)" }}>{mc3.node_names.length}</strong> nodes
+                      </div>
+                      <div style={{ fontSize:11, color:"var(--muted)" }}>
+                        Acceptance:{" "}
+                        <strong style={{ color:"var(--ink)" }}>
+                          {(mc3.mc3_summary.acceptance_rate * 100).toFixed(1)}%
+                        </strong>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize:11, color:"var(--muted)", fontStyle:"italic" }}>
+                      {mc3Loading ? "Loading…" : "No results yet"}
+                    </div>
+                  )}
+                </div>
+              </PanelCard>
+
+              <PanelCard title="Edge strength">
+                <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                  {mc3Legend.map(([color, label]) => (
+                    <div key={label} style={{ display:"flex", alignItems:"center", gap:10 }}>
+                      <span style={{ width:24, height:2.5, background:color, flexShrink:0, borderRadius:1 }} />
+                      <span style={{ fontSize:11, color:"var(--ink-2)" }}>{label}</span>
+                    </div>
+                  ))}
+                </div>
+              </PanelCard>
+
+              <Btn primary onClick={importMc3} disabled={!mc3}>Import to Build</Btn>
+
+              <div style={{ fontSize:10.5, color:"var(--muted)", lineHeight:1.6 }}>
+                Imports the median DAG into your Build canvas. Node types default to{" "}
+                <em>confounder</em> — reassign them after importing.
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Canvas */}
+        <div style={{ flex:1, minWidth:0, borderRadius:8, border:"1px solid var(--line)",
+          overflow:"hidden", background:"var(--paper-2)", position:"relative" }}>
+          {mode === "build" ? (
+            nodes.length === 0 ? (
+              <div style={{ display:"flex", flexDirection:"column", alignItems:"center",
+                justifyContent:"center", height:"100%", gap:14, padding:40 }}>
+                <div style={{ fontSize:36, opacity:0.18, lineHeight:1 }}>◎</div>
+                <div style={{ fontSize:15, fontWeight:700, color:"var(--ink-2)" }}>No nodes yet</div>
+                <div style={{ fontSize:12, color:"var(--muted)", maxWidth:300, textAlign:"center", lineHeight:1.7 }}>
+                  Use <strong>Add Node</strong> to name your variables, then draw edges by
+                  dragging from node handles or using <strong>Add Edge</strong>.
+                </div>
+              </div>
+            ) : (
+              <ReactFlow nodes={nodes} edges={edges}
+                onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
+                onConnect={onConnect} onNodeContextMenu={onNodeContextMenu}
+                nodeTypes={nodeTypes} fitView fitViewOptions={{ padding:0.3 }}
+                proOptions={{ hideAttribution:true }} style={{ background:"var(--paper-2)" }}>
+                <Background variant={BackgroundVariant.Dots} gap={18} size={1} color="#c9c2b3" />
+                <Controls showInteractive={false} />
+              </ReactFlow>
+            )
+          ) : mc3Loading ? (
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"center",
+              height:"100%", color:"var(--muted)" }}>
+              <span className="mono" style={{ fontSize:12 }}>Loading MC³ result…</span>
             </div>
-            <div className="flex items-center gap-1.5 text-[10px]">
-              <span className="inline-block h-0.5 w-4 border-t-2 border-dashed" style={{ borderColor: "#d97706" }} />
-              <span>MC³ 30-80%</span>
+          ) : mc3Error ? (
+            <div style={{ display:"flex", flexDirection:"column", alignItems:"center",
+              justifyContent:"center", height:"100%", gap:12, padding:40 }}>
+              <div style={{ fontSize:15, fontWeight:700, color:"var(--ink-2)" }}>MC³ not available</div>
+              <div style={{ fontSize:12, color:"var(--muted)", maxWidth:320, textAlign:"center", lineHeight:1.7 }}>
+                {mc3Error}. Run the pipeline through the causal stage first.
+              </div>
             </div>
-            <div className="flex items-center gap-1.5 text-[10px]">
-              <span className="inline-block h-0.5 w-4 border-t border-dotted" style={{ borderColor: "#9ca3af" }} />
-              <span>MC³ &lt;30%</span>
-            </div>
-          </>
-        )}
+          ) : (
+            <ReactFlow nodes={mc3Nodes} edges={mc3Edges}
+              onNodesChange={onMc3NodesChange} onEdgesChange={onMc3EdgesChange}
+              nodeTypes={nodeTypes} fitView fitViewOptions={{ padding:0.3 }}
+              proOptions={{ hideAttribution:true }} style={{ background:"var(--paper-2)" }}
+              nodesConnectable={false} nodesDraggable={true}>
+              <Background variant={BackgroundVariant.Dots} gap={18} size={1} color="#c9c2b3" />
+              <Controls showInteractive={false} />
+            </ReactFlow>
+          )}
+        </div>
       </div>
 
-      {/* Flow canvas */}
-      <div className="flex-1">
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
-          onNodeContextMenu={onNodeContextMenu}
-          onEdgeClick={onEdgeClick}
-          nodeTypes={nodeTypes}
-          fitView
-          fitViewOptions={{ padding: 0.3 }}
-          proOptions={{ hideAttribution: true }}
-        >
-          <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="#e0e0e0" />
-          <Controls showInteractive={false} />
-        </ReactFlow>
-
-        {/* Node type context menu */}
-        {contextMenu && (
-          <div
-            className="fixed z-50 rounded border border-sparc-gray-200 bg-white py-1 shadow-lg"
-            style={{ left: contextMenu.x, top: contextMenu.y }}
-          >
-            <div className="px-3 py-1 text-[10px] font-bold text-sparc-gray-400 uppercase">
-              Change Type
-            </div>
-            {NODE_TYPE_OPTIONS.map((type) => {
-              const c = TYPE_COLORS[type];
-              return (
-                <button
-                  key={type}
-                  onClick={() => changeNodeType(contextMenu.nodeId, type)}
-                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-sparc-gray-50"
-                >
-                  <span
-                    className="inline-block h-2.5 w-2.5 rounded-sm border-2"
-                    style={{ borderColor: c.border, backgroundColor: c.bg }}
-                  />
-                  <span className="capitalize">{type}</span>
-                </button>
-              );
-            })}
+      {/* Context menu */}
+      {contextMenu && (
+        <div onClick={(e) => e.stopPropagation()} style={{
+          position:"fixed", left:contextMenu.x, top:contextMenu.y, zIndex:9999,
+          background:"#fff", border:"1px solid var(--line)", borderRadius:6,
+          boxShadow:"0 4px 18px rgba(26,20,18,0.16)",
+          paddingTop:4, paddingBottom:4, minWidth:170,
+        }}>
+          <div className="mono" style={{ padding:"4px 12px 8px", fontSize:9,
+            color:"var(--muted)", letterSpacing:"0.1em", textTransform:"uppercase",
+            borderBottom:"1px solid var(--line)", marginBottom:4 }}>
+            Change type
           </div>
-        )}
-
-        {/* Causal assumption tooltip on edge click */}
-        {edgeTooltip && (
-          <div
-            className="fixed z-50 max-w-xs rounded-lg border border-sparc-gray-200 bg-white p-3 shadow-lg"
-            style={{ left: edgeTooltip.x + 8, top: edgeTooltip.y - 8 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <p className="text-xs font-semibold text-sparc-gray-800 mb-1">
-              Causal Assumption
-            </p>
-            <p className="text-xs text-sparc-gray-600">
-              <span className="font-mono font-bold text-sparc-purple">{edgeTooltip.source}</span>
-              {" → "}
-              <span className="font-mono font-bold text-sparc-purple">{edgeTooltip.target}</span>
-            </p>
-            {(edgeTooltip.kind || edgeTooltip.sign_prior || edgeTooltip.confidence != null || edgeTooltip.lag != null) && (
-              <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[10px] text-sparc-gray-600">
-                {edgeTooltip.kind && (<><dt className="font-semibold">kind</dt><dd className="font-mono">{edgeTooltip.kind}</dd></>)}
-                {edgeTooltip.sign_prior && (<><dt className="font-semibold">sign</dt><dd className="font-mono">{edgeTooltip.sign_prior}</dd></>)}
-                {edgeTooltip.confidence != null && (<><dt className="font-semibold">confidence</dt><dd className="font-mono">{edgeTooltip.confidence.toFixed(2)}</dd></>)}
-                {edgeTooltip.lag != null && (<><dt className="font-semibold">lag</dt><dd className="font-mono">{edgeTooltip.lag}</dd></>)}
-              </dl>
-            )}
-            <p className="text-[11px] text-sparc-gray-500 mt-1.5 leading-relaxed">
-              You are asserting that <strong>{edgeTooltip.source}</strong> causally influences{" "}
-              <strong>{edgeTooltip.target}</strong>.
-              {edgeTooltip.mechanism && (
-                <> Mechanism: <em>{edgeTooltip.mechanism}</em>.</>
-              )}
-              {" "}This edge will be used for backdoor adjustment and counterfactual estimation.
-            </p>
+          {NODE_TYPE_OPTIONS.map((type) => (
+            <button key={type} onClick={() => changeNodeType(contextMenu.nodeId, type)}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "var(--paper-2)"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "none"; }}
+              style={{ display:"flex", alignItems:"center", gap:10, width:"100%",
+                padding:"6px 12px", border:"none", background:"none", cursor:"pointer",
+                fontSize:12, fontFamily:"inherit", textAlign:"left", color:"var(--ink-2)" }}>
+              <span style={{ width:4, height:14, borderRadius:2, background:NODE_COLORS[type], flexShrink:0 }} />
+              <span style={{ textTransform:"capitalize" }}>{type.replace(/_/g, " ")}</span>
+            </button>
+          ))}
+          <div style={{ borderTop:"1px solid var(--line)", marginTop:4, paddingTop:4 }}>
+            <button onClick={() => deleteNode(contextMenu.nodeId)}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#fff4f4"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "none"; }}
+              style={{ display:"flex", alignItems:"center", gap:10, width:"100%",
+                padding:"6px 12px", border:"none", background:"none", cursor:"pointer",
+                fontSize:12, fontFamily:"inherit", textAlign:"left", color:"var(--crimson)" }}>
+              Delete node
+            </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

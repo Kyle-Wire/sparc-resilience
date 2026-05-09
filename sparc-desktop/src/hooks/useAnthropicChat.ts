@@ -1,7 +1,8 @@
 import { useState, useCallback } from "react";
 import type { ChatMessage, ClaudeAction } from "@/lib/types";
+import { getToken } from "@/stores/tokenStore";
 
-const CLAUDE_MODEL = "claude-sonnet-4-6-20250514";
+const SIDECAR_BASE = "http://127.0.0.1:8008";
 
 /**
  * Extract structured JSON action blocks from Claude's response text.
@@ -26,7 +27,8 @@ function extractActions(text: string): ClaudeAction[] {
 
 /**
  * Chat hook for the Anthropic Claude API.
- * API calls go directly from the webview to api.anthropic.com.
+ * All API calls are proxied through the SPARC sidecar at /ai/chat.
+ * The API key is stored in the OS keychain — the webview never touches it.
  *
  * @param systemPrompt - The system prompt for this conversation mode.
  * @param onAction - Callback invoked for each structured action parsed from Claude's response.
@@ -40,7 +42,7 @@ export function useAnthropicChat(
   const [error, setError] = useState<string | null>(null);
 
   const sendMessage = useCallback(
-    async (content: string, apiKey: string) => {
+    async (content: string) => {
       setError(null);
       const userMsg: ChatMessage = { role: "user", content };
       const updated = [...messages, userMsg];
@@ -48,17 +50,14 @@ export function useAnthropicChat(
       setIsLoading(true);
 
       try {
-        const res = await fetch("https://api.anthropic.com/v1/messages", {
+        const token = getToken();
+        const res = await fetch(`${SIDECAR_BASE}/ai/chat`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "x-api-key": apiKey,
-            "anthropic-version": "2023-06-01",
-            "anthropic-dangerous-direct-browser-access": "true",
+            ...(token ? { "x-sparc-token": token } : {}),
           },
           body: JSON.stringify({
-            model: CLAUDE_MODEL,
-            max_tokens: 1024,
             system: systemPrompt,
             messages: updated.map((m) => ({ role: m.role, content: m.content })),
           }),
@@ -100,3 +99,4 @@ export function useAnthropicChat(
 
   return { messages, isLoading, error, sendMessage, clearChat };
 }
+

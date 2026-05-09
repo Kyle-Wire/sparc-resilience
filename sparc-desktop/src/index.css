@@ -81,7 +81,7 @@
 
 body {
   font-family: var(--font-sans);
-  background: #d8d3c6;
+  background: var(--paper-3, #d8d3c6);
   color: var(--color-sparc-ink);
   position: relative;
 }
@@ -94,10 +94,10 @@ body::before {
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(ellipse at 20% 30%, rgba(231,60,37,0.06) 0%, transparent 60%),
-    radial-gradient(ellipse at 80% 70%, rgba(96,36,104,0.08) 0%, transparent 60%),
-    repeating-linear-gradient(rgba(0,0,0,0.03) 0px, rgba(0,0,0,0.03) 1px, transparent 1px, transparent 24px),
-    repeating-linear-gradient(90deg, rgba(0,0,0,0.03) 0px, rgba(0,0,0,0.03) 1px, transparent 1px, transparent 24px);
+    radial-gradient(ellipse at 20% 30%, color-mix(in srgb, var(--crimson) 6%, transparent) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 70%, color-mix(in srgb, var(--purple) 8%, transparent) 0%, transparent 60%),
+    repeating-linear-gradient(var(--grid-line, rgba(0,0,0,0.03)) 0px, var(--grid-line, rgba(0,0,0,0.03)) 1px, transparent 1px, transparent 24px),
+    repeating-linear-gradient(90deg, var(--grid-line, rgba(0,0,0,0.03)) 0px, var(--grid-line, rgba(0,0,0,0.03)) 1px, transparent 1px, transparent 24px);
 }
 
 body > #root {
@@ -132,6 +132,61 @@ body > #root {
 .grid-paper > * {
   position: relative;
   z-index: 1;
+}
+
+/* ----------------------------------------------------------------
+   Modal overlay (wizard, dialogs)
+   ---------------------------------------------------------------- */
+@keyframes sparc-modal-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes sparc-modal-pop {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ----------------------------------------------------------------
+   Btn — hover + click ripple
+   ---------------------------------------------------------------- */
+@keyframes btn-ripple {
+  from { transform: translate(-50%, -50%) scale(0); opacity: 0.55; }
+  to   { transform: translate(-50%, -50%) scale(1); opacity: 0; }
+}
+
+.sparc-btn {
+  position: relative;
+  overflow: hidden;
+  transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease, box-shadow 140ms ease, transform 80ms ease;
+}
+.sparc-btn:hover:not(:disabled) {
+  background: var(--paper-2);
+  border-color: var(--ink-2);
+  color: var(--ink);
+  box-shadow: 0 1px 0 rgba(0,0,0,0.04), 0 4px 10px rgba(26,20,22,0.08);
+}
+.sparc-btn:active:not(:disabled) { transform: translateY(1px); }
+
+.sparc-btn--primary:hover:not(:disabled) {
+  background: var(--purple);
+  border-color: var(--purple);
+  color: #fff;
+  box-shadow: 0 1px 0 rgba(0,0,0,0.06), 0 6px 14px rgba(96,36,104,0.28);
+}
+
+.sparc-btn__ripple {
+  position: absolute;
+  border-radius: 9999px;
+  pointer-events: none;
+  width: 320px;
+  height: 320px;
+  background: radial-gradient(circle, rgba(255,255,255,0.85) 0%, rgba(255,255,255,0.35) 35%, rgba(255,255,255,0) 70%);
+  animation: btn-ripple 520ms ease-out forwards;
+  mix-blend-mode: overlay;
+}
+.sparc-btn--light .sparc-btn__ripple {
+  background: radial-gradient(circle, rgba(96,36,104,0.35) 0%, rgba(96,36,104,0.18) 35%, rgba(96,36,104,0) 70%);
+  mix-blend-mode: normal;
 }
 
 /* ----------------------------------------------------------------
@@ -171,6 +226,11 @@ body > #root {
 /* Cursor blink animation */
 @keyframes blink {
   50% { opacity: 0; }
+}
+
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
 }
 
 /* Slide up animation for panels */

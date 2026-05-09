@@ -4,9 +4,10 @@
  * single "Confidence" badge in the header band.
  */
 import { useMemo } from "react";
-import { Panel, PanelEmpty } from "@/components/ui/DesignSystem";
+import { Panel, PanelEmpty, Btn } from "@/components/ui/DesignSystem";
 import { useManifest } from "@/hooks/useManifest";
 import { useResult } from "@/hooks/useResult";
+import { useInsightsNavigate } from "@/hooks/InsightsProvider";
 import { getModelPerformance } from "@/lib/api";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
 
@@ -18,6 +19,7 @@ interface Row {
 
 export default function ModelPerformancePanel() {
   const manifest = useManifest();
+  const navigate = useInsightsNavigate();
   const present = !!manifest.lookup("2", "ensemble_results");
   const { data: perfData } = useResult<{ models: { name: string; r2: number }[] }>(
     present ? "s2:model_performance" : null,
@@ -40,6 +42,7 @@ export default function ModelPerformancePanel() {
         <PanelEmpty
           reason="Awaiting stage 2"
           hint="Ensemble model results aren't in the manifest yet. Run the Models stage."
+          action={navigate && <Btn small onClick={() => navigate("Run")}>Go to Run page →</Btn>}
         />
       </Panel>
     );

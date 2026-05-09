@@ -15,6 +15,8 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useResultCacheStore } from "@/stores/resultCache";
+import { WS_ORIGIN } from "@/lib/server";
+import { getToken } from "@/stores/tokenStore";
 
 export interface ArtifactWrittenEvent {
   type: "artifact_written";
@@ -32,7 +34,6 @@ export type ConnectionStatus = "idle" | "connecting" | "open" | "closed" | "erro
 
 type Listener = (event: ArtifactWrittenEvent) => void;
 
-const WS_URL = "ws://127.0.0.1:8008/run/stream";
 const MAX_BACKOFF_MS = 30_000;
 const INITIAL_BACKOFF_MS = 1_000;
 
@@ -69,7 +70,7 @@ class ArtifactStreamClient {
     this.setStatus("connecting");
     let ws: WebSocket;
     try {
-      ws = new WebSocket(WS_URL);
+      ws = new WebSocket(`${WS_ORIGIN}/run/stream?token=${encodeURIComponent(getToken())}`);
     } catch {
       this.scheduleReconnect();
       return;

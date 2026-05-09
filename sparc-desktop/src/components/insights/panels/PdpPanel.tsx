@@ -4,10 +4,11 @@
  * causal_dose_response). Source switcher + variable switcher.
  */
 import { useMemo, useState } from "react";
-import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
+import { Panel, PanelEmpty, Pill, Btn } from "@/components/ui/DesignSystem";
 import { PanelGate } from "@/components/ui/PanelGate";
 import { useManifest } from "@/hooks/useManifest";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
+import { useInsightsNavigate } from "@/hooks/InsightsProvider";
 import { useResult } from "@/hooks/useResult";
 import { getPdpCurves } from "@/lib/api";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
@@ -31,6 +32,7 @@ interface CurvePayload {
 export default function PdpPanel() {
   const manifest = useManifest();
   const linked = useLinkedSelection();
+  const navigate = useInsightsNavigate();
   const stage2Arts = manifest.stage("2")?.artifacts ?? {};
   const present =
     !!manifest.lookup("3", "dose_response_curves") ||
@@ -159,6 +161,7 @@ export default function PdpPanel() {
           <PanelEmpty
             reason="No PDP curves yet"
             hint="Run stage 2 (Models) or stage 3 (Causal) to generate response curves."
+            action={navigate && <Btn small onClick={() => navigate("Run")}>Go to Run page →</Btn>}
           />
         </Panel>
       </PanelGate>

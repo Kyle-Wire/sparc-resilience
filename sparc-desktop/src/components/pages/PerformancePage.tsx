@@ -32,13 +32,13 @@ const TIERS: { key: HardwareTier; label: string }[] = [
 
 function fieldStyle(invalid: boolean): React.CSSProperties {
   return {
-    border: `1px solid ${invalid ? "#c84545" : "var(--line)"}`,
+    border: `1px solid ${invalid ? "var(--crimson)" : "var(--line)"}`,
     borderRadius: 4,
     padding: "6px 8px",
     fontSize: 12,
     fontFamily: "'JetBrains Mono', monospace",
     width: 100,
-    background: "#fff",
+    background: "var(--paper)",
   };
 }
 
@@ -48,7 +48,7 @@ function HelperText({ children, error }: { children: React.ReactNode; error?: bo
       className="mono"
       style={{
         fontSize: 10,
-        color: error ? "#c84545" : "var(--muted)",
+        color: error ? "var(--crimson)" : "var(--muted)",
         marginTop: 4,
       }}
     >
@@ -151,7 +151,7 @@ export default function PerformancePage() {
 
       {error && (
         <Card title="Hardware profile unavailable" subtitle="see hint below">
-          <div style={{ fontSize: 12, color: "#c84545", marginBottom: 8 }}>{error}</div>
+          <div style={{ fontSize: 12, color: "var(--crimson)", marginBottom: 8 }}>{error}</div>
           {error.includes("404") && (
             <div className="mono" style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.6 }}>
               The <code>/api/hardware</code> endpoint is missing. Your bundled sidecar may be out

@@ -10,18 +10,21 @@
  * filters DoseResponsePanel + PdpPanel.
  */
 import { useMemo, useState } from "react";
-import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
+import { Panel, PanelEmpty, Pill, Btn } from "@/components/ui/DesignSystem";
 import { useManifest } from "@/hooks/useManifest";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
+import { useInsightsNavigate } from "@/hooks/InsightsProvider";
 import { useResult } from "@/hooks/useResult";
 import { getCateMap, getCateMapVariables } from "@/lib/api";
 import SpatialMap from "@/components/map/SpatialMap";
+import ResizableMapWrapper from "@/components/map/ResizableMapWrapper";
 import { MAP_HEIGHT_DEFAULT } from "@/lib/design-tokens";
 import type { GeoJsonData } from "@/lib/types";
 
 export default function CatePanel() {
   const manifest = useManifest();
   const linked = useLinkedSelection();
+  const navigate = useInsightsNavigate();
   const stage3 = manifest.stage("3");
   const present = !!stage3 && Object.keys(stage3.artifacts ?? {}).some((a) => a.startsWith("cate_multiplier::"));
 
@@ -49,12 +52,36 @@ export default function CatePanel() {
     () => getCateMap(resolvedVar!, withUncertainty) as Promise<GeoJsonData>,
   );
 
+  // Derive the actual property name the backend writes (cate_{variable})
+  const colorField = resolvedVar ? `cate_${resolvedVar}` : undefined;
+  // Significance mask: coef_ns_{variable} is true when the 90% CI brackets zero
+  const dimField = (withUncertainty && resolvedVar) ? `coef_ns_${resolvedVar}` : undefined;
+
+  // Compute symmetric domain centred at zero so the rdbu palette's neutral
+  // midpoint always lands at zero (no treatment effect). Falls back to
+  // undefined (auto) when no data is loaded yet.
+  const cateDomain = useMemo<[number, number] | undefined>(() => {
+    if (!geo || !colorField) return undefined;
+    let min = Infinity, max = -Infinity;
+    for (const f of geo.features) {
+      const v = f.properties[colorField];
+      if (typeof v === "number" && isFinite(v)) {
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+    }
+    if (!isFinite(min)) return undefined;
+    const maxAbs = Math.max(Math.abs(min), Math.abs(max));
+    return [-maxAbs, maxAbs];
+  }, [geo, colorField]);
+
   if (!present) {
     return (
       <Panel title="CATE — heterogeneous treatment effects" subtitle="stage 3 · causal">
         <PanelEmpty
           reason="No CATE multipliers"
           hint="Run the Causal stage with treatment variables to produce CATE surfaces."
+          action={navigate && <Btn small onClick={() => navigate("Run")}>Go to Run page →</Btn>}
         />
       </Panel>
     );
@@ -105,18 +132,22 @@ export default function CatePanel() {
       }
       bodyPadding={0}
     >
-      <div style={{ height: MAP_HEIGHT_DEFAULT, position: "relative" }}>
+      <ResizableMapWrapper defaultHeight={MAP_HEIGHT_DEFAULT}>
         <SpatialMap
           geojson={geo}
-          colorField="cate"
+          colorField={colorField}
+          dimField={dimField}
+          palette="rdbu"
+          domainOverride={cateDomain}
           mode="scatter"
           height="100%"
+          expandable
           onFeatureClick={(props) => {
             const id = props.id != null ? String(props.id) : null;
             if (id) linked.setIds([id]);
           }}
         />
-      </div>
+      </ResizableMapWrapper>
     </Panel>
   );
 }

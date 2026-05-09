@@ -6,9 +6,10 @@
  * available curve when nothing is selected.
  */
 import { useMemo } from "react";
-import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
+import { Panel, PanelEmpty, Pill, Btn } from "@/components/ui/DesignSystem";
 import { useManifest } from "@/hooks/useManifest";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
+import { useInsightsNavigate } from "@/hooks/InsightsProvider";
 import { useResult } from "@/hooks/useResult";
 import { getDoseResponseCurves } from "@/lib/api";
 import { useCanvas } from "./_useCanvas";
@@ -17,6 +18,7 @@ import type { DoseResponseData } from "@/lib/types";
 export default function DoseResponsePanel() {
   const manifest = useManifest();
   const linked = useLinkedSelection();
+  const navigate = useInsightsNavigate();
   const present = !!manifest.lookup("3", "dose_response_curves");
   const { data } = useResult<DoseResponseData>(
     present ? "s3:dose_response" : null,
@@ -115,6 +117,7 @@ export default function DoseResponsePanel() {
         <PanelEmpty
           reason="No dose-response curves"
           hint="Run the Causal stage with treatment variables configured."
+          action={navigate && <Btn small onClick={() => navigate("Run")}>Go to Run page →</Btn>}
         />
       </Panel>
     );

@@ -1,13 +1,15 @@
 import { useState, useEffect, useCallback } from "react";
 import { SectionHeader, Card, KeyVal, Tag, Btn } from "@/components/ui/DesignSystem";
-import { getConfig, saveConfig, listTemplates, initProject, dataSummary, getRunEvents } from "@/lib/api";
+import { getConfig, saveConfig, dataSummary, getRunEvents } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
-import { pickFolder, pickYaml } from "@/lib/fileDialogs";
-import { getWorkspaceDir, setWorkspaceDir, joinPath } from "@/lib/workspacePrefs";
+import { pickYaml } from "@/lib/fileDialogs";
 import ProjectCreationWizard from "@/components/project/ProjectCreationWizard";
-import type { ProjectConfig, TemplateInfo, DataSummary, PipelineEvent } from "@/lib/types";
+import type { ProjectConfig, DataSummary, PipelineEvent } from "@/lib/types";
+import { useProjectStore } from "@/stores/projectStore";
+import { useNavigationStore } from "@/stores/navigationStore";
 
-const TEMPLATE_COLORS: Record<string, string> = {
+
+const DOMAIN_COLORS: Record<string, string> = {
   uhi: "var(--crimson)",
   forcesmip: "var(--purple)",
   groundwater: "#9e337d",
@@ -21,40 +23,6 @@ const TEMPLATE_COLORS: Record<string, string> = {
   drought: "var(--amber)",
   water_quality: "var(--purple)",
 };
-
-interface ProjectPageProps {
-  projectPath: string | null;
-  onProjectLoaded: (path: string, meta?: { name?: string; template?: string }) => Promise<void>;
-}
-
-/** Lightweight YAML emitter for the read-only preview block. */
-function toYamlPreview(config: ProjectConfig | null): string {
-  if (!config) return "# No project loaded";
-  const project = config.project ?? {};
-  const data = config.data ?? {};
-  const crs = config.crs ?? {};
-  const flags = config.flags ?? {};
-  const predictors = config.predictors ?? [];
-  return [
-    "project:",
-    `  name: ${project.name ?? ""}`,
-    `  description: ${project.description ?? ""}`,
-    `  domain: ${project.domain ?? ""}`,
-    `  author: ${project.author ?? ""}`,
-    `  version: ${project.version ?? ""}`,
-    `  response_units: ${project.response_units ?? ""}`,
-    "data:",
-    `  file_path: ${data.file_path ?? ""}`,
-    `  target_column: ${data.target_column ?? ""}`,
-    "crs:",
-    `  input: ${crs.input ?? ""}`,
-    `  projected: ${crs.projected ?? ""}`,
-    "predictors:",
-    ...predictors.map((p) => `  - ${p}`),
-    "flags:",
-    ...Object.entries(flags).map(([k, v]) => `  ${k}: ${v}`),
-  ].join("\n");
-}
 
 /** Pull a list of recent pipeline runs out of the buffered event log. */
 function summarizeRuns(events: PipelineEvent[]): { time: string; stage: string; status: string; tint: string }[] {
@@ -77,14 +45,14 @@ function summarizeRuns(events: PipelineEvent[]): { time: string; stage: string; 
   return out.slice(-6).reverse();
 }
 
-export default function ProjectPage({ projectPath, onProjectLoaded }: ProjectPageProps) {
+export default function ProjectPage() {
+  const { projectPath, openProject } = useProjectStore();
+  const { navigate } = useNavigationStore();
   const [config, setConfig] = useState<ProjectConfig | null>(null);
   const [summary, setSummary] = useState<DataSummary | null>(null);
   const [runs, setRuns] = useState<{ time: string; stage: string; status: string; tint: string }[]>([]);
-  const [templates, setTemplates] = useState<TemplateInfo[]>([]);
-  const [yamlOpen, setYamlOpen] = useState(false);
-  const [templatesOpen, setTemplatesOpen] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [flashField, setFlashField] = useState<string | null>(null);
   const { notify } = useNotification();
 
   useEffect(() => {
@@ -95,47 +63,29 @@ export default function ProjectPage({ projectPath, onProjectLoaded }: ProjectPag
         .then((r) => setRuns(summarizeRuns(r.events)))
         .catch(() => setRuns([]));
     }
-    listTemplates()
-      .then((r) => setTemplates(r.templates))
-      .catch(() => {});
   }, [projectPath]);
 
-  const handleTemplateClick = useCallback(
-    async (t: TemplateInfo) => {
-      // Determine the parent directory: workspace pref if set, else native picker.
-      let parent = getWorkspaceDir();
-      let savedNew = false;
-      if (!parent) {
-        const picked = await pickFolder();
-        if (!picked) return; // user cancelled
-        parent = picked;
-        savedNew = true;
-      }
-      const output = joinPath(parent, `${t.name}_project`);
-      try {
-        const res = await initProject(t.name, output);
-        await onProjectLoaded(res.project_yml, { template: t.name });
-        if (savedNew) {
-          setWorkspaceDir(parent);
-          notify("success", `Project created · saved "${parent}" as default workspace`);
-        } else {
-          notify("success", `Project created from ${t.name} template`);
-        }
-      } catch (e) {
-        notify("error", e instanceof Error ? e.message : "Failed to create project");
-      }
-    },
-    [onProjectLoaded, notify],
-  );
+  // Esc closes the wizard modal
+  useEffect(() => {
+    if (!wizardOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setWizardOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [wizardOpen]);
 
   const handleOpenYml = useCallback(async () => {
     const path = await pickYaml();
-    if (path) await onProjectLoaded(path);
-  }, [onProjectLoaded]);
+    if (path) {
+      await openProject(path);
+      notify("success", "Project loaded successfully");
+      navigate("Data");
+    }
+  }, [openProject, notify, navigate]);
 
   const project = config?.project ?? {};
   const data = config?.data ?? {};
-  const crs = config?.crs ?? {};
   const domain = project.domain ?? "";
 
   /** Persist a single project-section field and refresh local state. */
@@ -147,12 +97,13 @@ export default function ProjectPage({ projectPath, onProjectLoaded }: ProjectPag
         setConfig(updated);
       } catch (e) {
         notify("error", e instanceof Error ? e.message : "Failed to save");
+        return;
       }
+      setFlashField(field);
+      window.setTimeout(() => setFlashField(null), 700);
     },
     [project, notify],
   );
-
-  const yamlPreview = toYamlPreview(config);
 
   return (
     <div>
@@ -161,32 +112,64 @@ export default function ProjectPage({ projectPath, onProjectLoaded }: ProjectPag
         label="Project"
         right={
           <div style={{ display: "flex", gap: 8 }}>
-            <Btn onClick={handleOpenYml}>Open project.yml</Btn>
-            <Btn onClick={() => setTemplatesOpen((o) => !o)}>
-              {templatesOpen ? "Hide templates" : "From template"}
-            </Btn>
+            <Btn onClick={handleOpenYml}>Open existing…</Btn>
             <Btn primary onClick={() => setWizardOpen(true)}>New project…</Btn>
           </div>
         }
       />
 
       {wizardOpen && (
-        <ProjectCreationWizard
-          templates={templates}
-          onCancel={() => setWizardOpen(false)}
-          onCreated={async (path, meta) => {
-            setWizardOpen(false);
-            await onProjectLoaded(path, meta);
+        <div
+          onMouseDown={(e) => {
+            // Click on backdrop (not the modal itself) closes the wizard
+            if (e.target === e.currentTarget) setWizardOpen(false);
           }}
-        />
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1000,
+            background: "rgba(26, 20, 22, 0.42)",
+            backdropFilter: "blur(4px)",
+            WebkitBackdropFilter: "blur(4px)",
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "center",
+            padding: "6vh 24px 24px",
+            overflowY: "auto",
+            animation: "sparc-modal-fade 160ms ease-out",
+          }}
+        >
+          <div
+            style={{
+              width: "100%",
+              maxWidth: 880,
+              animation: "sparc-modal-pop 200ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+              boxShadow: "0 24px 60px rgba(26,20,22,0.28), 0 4px 12px rgba(26,20,22,0.16)",
+              borderRadius: 8,
+            }}
+          >
+            <ProjectCreationWizard
+              templates={[]}
+              onCancel={() => setWizardOpen(false)}
+              onCreated={async (path, meta) => {
+                setWizardOpen(false);
+                await openProject(path, meta);
+                notify("success", "Project created successfully");
+                navigate("Data");
+              }}
+            />
+          </div>
+        </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14 }}>
-        {/* ---- Project Identity ---- */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        {/* ---- Project Identity (full width) ---- */}
         <Card title="Project identity" subtitle={projectPath ?? "no project loaded"}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+
+            {/* Name — large, prominent */}
             <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <span className="mono" style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+              <span className="mono" style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.12em" }}>
                 Name
               </span>
               <input
@@ -195,19 +178,50 @@ export default function ProjectPage({ projectPath, onProjectLoaded }: ProjectPag
                 onChange={(e) => setConfig((c) => c ? { ...c, project: { ...c.project, name: e.target.value } } : c)}
                 onBlur={(e) => saveProjectField("name", e.target.value)}
                 style={{
-                  border: "none", borderBottom: "1px dashed var(--line)",
+                  border: "none",
+                  borderBottom: `1.5px solid ${flashField === "name" ? "var(--purple)" : "var(--line)"}`,
                   background: "transparent", padding: "2px 0",
-                  fontSize: 13, fontFamily: "inherit", color: "var(--ink)", outline: "none",
+                  fontSize: 20, fontWeight: 800, fontFamily: "inherit",
+                  color: "var(--ink)", outline: "none",
+                  letterSpacing: "-0.02em",
+                  transition: "border-color 300ms ease",
                 }}
               />
             </label>
 
-            <KeyVal label="Domain" value={<Tag color="var(--crimson)">{domain || "—"}</Tag>} />
+            {/* Domain · Target variable · Response units — inline row */}
+            <div style={{ display: "flex", gap: 20, alignItems: "flex-end", flexWrap: "wrap" }}>
+              {domain && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <span className="mono" style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.12em" }}>Domain</span>
+                  <Tag color={DOMAIN_COLORS[domain] ?? "var(--muted)"}>{domain.replace(/_/g, " ")}</Tag>
+                </div>
+              )}
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span className="mono" style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.12em" }}>Target variable</span>
+                <Tag color="var(--purple)">{data.target_column ?? "—"}</Tag>
+              </div>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 130 }}>
+                <span className="mono" style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.12em" }}>Response units</span>
+                <input
+                  value={project.response_units ?? ""}
+                  placeholder="e.g. °C, mg/L, dB"
+                  onChange={(e) => setConfig((c) => c ? { ...c, project: { ...c.project, response_units: e.target.value } } : c)}
+                  onBlur={(e) => saveProjectField("response_units", e.target.value)}
+                  style={{
+                    border: "none",
+                    borderBottom: `1.5px solid ${flashField === "response_units" ? "var(--purple)" : "var(--line)"}`,
+                    background: "transparent", padding: "2px 0",
+                    fontSize: 13, fontFamily: "inherit", color: "var(--ink)", outline: "none",
+                    transition: "border-color 300ms ease",
+                  }}
+                />
+              </label>
+            </div>
 
-            <label style={{ display: "flex", flexDirection: "column", gap: 4, gridColumn: "1 / -1" }}>
-              <span className="mono" style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>
-                Description
-              </span>
+            {/* Description */}
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span className="mono" style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.12em" }}>Description</span>
               <textarea
                 value={project.description ?? ""}
                 placeholder="One-paragraph description of this project's purpose, scope, and target audience."
@@ -215,88 +229,96 @@ export default function ProjectPage({ projectPath, onProjectLoaded }: ProjectPag
                 onBlur={(e) => saveProjectField("description", e.target.value)}
                 rows={3}
                 style={{
-                  border: "1px dashed var(--line)", borderRadius: 4, background: "transparent",
-                  padding: "6px 8px", fontSize: 12, fontFamily: "inherit", color: "var(--ink-2)",
-                  outline: "none", resize: "vertical",
+                  border: `1px solid ${flashField === "description" ? "var(--purple)" : "var(--line)"}`,
+                  borderRadius: 4, background: "transparent",
+                  padding: "6px 8px", fontSize: 12, fontFamily: "inherit",
+                  color: "var(--ink-2)", outline: "none", resize: "vertical",
+                  transition: "border-color 300ms ease",
                 }}
               />
             </label>
 
-            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <span className="mono" style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>
-                Author
-              </span>
-              <input
-                value={project.author ?? ""}
-                placeholder="Author name or organization"
-                onChange={(e) => setConfig((c) => c ? { ...c, project: { ...c.project, author: e.target.value } } : c)}
-                onBlur={(e) => saveProjectField("author", e.target.value)}
-                style={{
-                  border: "none", borderBottom: "1px dashed var(--line)",
-                  background: "transparent", padding: "2px 0",
-                  fontSize: 13, fontFamily: "inherit", color: "var(--ink)", outline: "none",
-                }}
-              />
-            </label>
-
-            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <span className="mono" style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>
-                Version
-              </span>
-              <input
-                value={project.version ?? ""}
-                placeholder="e.g. 1.0.0"
-                onChange={(e) => setConfig((c) => c ? { ...c, project: { ...c.project, version: e.target.value } } : c)}
-                onBlur={(e) => saveProjectField("version", e.target.value)}
-                style={{
-                  border: "none", borderBottom: "1px dashed var(--line)",
-                  background: "transparent", padding: "2px 0",
-                  fontSize: 13, fontFamily: "inherit", color: "var(--ink)", outline: "none",
-                }}
-              />
-            </label>
-
-            <KeyVal label="Target column" value={data.target_column ?? "—"} />
-            <KeyVal label="Response units" value={
-              <input
-                value={project.response_units ?? ""}
-                placeholder="e.g. °C, mg/L, dB"
-                onChange={(e) => setConfig((c) => c ? { ...c, project: { ...c.project, response_units: e.target.value } } : c)}
-                onBlur={(e) => saveProjectField("response_units", e.target.value)}
-                style={{
-                  border: "none", borderBottom: "1px dashed var(--line)",
-                  background: "transparent", padding: "2px 0", width: "100%",
-                  fontSize: 12, fontFamily: "inherit", color: "var(--ink)", outline: "none",
-                }}
-              />
-            } />
+            {/* Predictors chip list */}
+            {config?.predictors && config.predictors.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span className="mono" style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.12em" }}>Predictors</span>
+                  <span
+                    className="mono"
+                    style={{
+                      fontSize: 9.5, fontWeight: 700, color: "var(--purple)",
+                      background: "rgba(96,36,104,0.08)", padding: "1px 7px", borderRadius: 10,
+                    }}
+                  >
+                    {config.predictors.length}
+                  </span>
+                  <span className="mono" style={{ fontSize: 9, color: "var(--muted)", letterSpacing: "0.06em" }}>
+                    · edit on Variables page
+                  </span>
+                </div>
+                <div
+                  style={{
+                    display: "flex", flexWrap: "wrap", gap: 5,
+                    maxHeight: 78, overflowY: "auto", paddingRight: 4,
+                  }}
+                >
+                  {config.predictors.map((p) => (
+                    <span
+                      key={p}
+                      className="mono"
+                      style={{
+                        fontSize: 10, padding: "2px 8px",
+                        background: "var(--paper-2)", border: "1px solid var(--line)",
+                        borderRadius: 3, color: "var(--ink-2)",
+                      }}
+                    >
+                      {p}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </Card>
 
-        {/* ---- Coordinate System (read-only summary) ---- */}
-        <Card title="Coordinate system" subtitle="edit on CRS page">
-          <KeyVal label="Input EPSG" value={crs.input ? `EPSG:${crs.input}` : "—"} />
-          <KeyVal label="Projected EPSG" value={crs.projected ? `EPSG:${crs.projected}` : "—"} />
-          <KeyVal label="Source CRS" value={summary?.crs ?? "—"} />
-        </Card>
+        {/* ---- Dataset + Pipeline history (side-by-side) ---- */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <Card title="Dataset snapshot" subtitle={data.file_path ? data.file_path.split(/[\\/]/).pop() : "no data linked"}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <KeyVal label="Rows" value={summary?.row_count?.toLocaleString() ?? "—"} />
+              <KeyVal label="Columns" value={summary?.column_count?.toString() ?? "—"} />
+              <KeyVal
+                label="Bounding box"
+                value={summary?.bbox
+                  ? `${summary.bbox.minx.toFixed(2)}, ${summary.bbox.miny.toFixed(2)}  →  ${summary.bbox.maxx.toFixed(2)}, ${summary.bbox.maxy.toFixed(2)}`
+                  : "—"}
+              />
+              <KeyVal
+                label="File"
+                value={
+                  data.file_path ? (
+                    <span
+                      className="mono"
+                      title={data.file_path}
+                      style={{
+                        fontSize: 10.5,
+                        color: "var(--ink-2)",
+                        display: "block",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        maxWidth: 220,
+                      }}
+                    >
+                      {data.file_path}
+                    </span>
+                  ) : "—"
+                }
+              />
+            </div>
+          </Card>
 
-        {/* ---- Dataset snapshot ---- */}
-        <Card title="Dataset snapshot" subtitle={data.file_path ? data.file_path.split(/[\\/]/).pop() : "no data linked"}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <KeyVal label="Rows" value={summary?.row_count?.toLocaleString() ?? "—"} />
-            <KeyVal label="Columns" value={summary?.column_count?.toString() ?? "—"} />
-            <KeyVal
-              label="Bounding box"
-              value={summary?.bbox
-                ? `${summary.bbox.minx.toFixed(2)}, ${summary.bbox.miny.toFixed(2)}  →  ${summary.bbox.maxx.toFixed(2)}, ${summary.bbox.maxy.toFixed(2)}`
-                : "—"}
-            />
-            <KeyVal label="Predictors" value={(config?.predictors?.length ?? 0).toString()} />
-          </div>
-        </Card>
-
-        {/* ---- Pipeline history ---- */}
-        <Card title="Pipeline history" subtitle={runs.length ? `${runs.length} recent stage events` : "no runs yet"}>
+          <Card title="Pipeline history" subtitle={runs.length ? `${runs.length} recent stage events` : "no runs yet"}>
           {runs.length === 0 ? (
             <div style={{ fontSize: 12, color: "var(--muted)", padding: "10px 0" }}>
               Run the pipeline to see stage completion history here.
@@ -313,92 +335,26 @@ export default function ProjectPage({ projectPath, onProjectLoaded }: ProjectPag
                   }}
                 >
                   <span className="mono" style={{ color: "var(--muted)", fontSize: 10 }}>{r.time}</span>
-                  <span style={{ color: "var(--ink-2)" }}>{r.stage}</span>
+                  <span style={{ color: r.tint === "var(--crimson)" ? "var(--crimson)" : "var(--ink-2)", fontWeight: r.tint === "var(--crimson)" ? 600 : 400 }}>{r.stage}</span>
                   <span className="mono" style={{ color: r.tint, fontSize: 10 }}>{r.status}</span>
                 </div>
               ))}
+              <div style={{ marginTop: 6, display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  onClick={() => navigate("Run")}
+                  style={{
+                    background: "none", border: "none", cursor: "pointer",
+                    fontFamily: "inherit", fontSize: 11, fontWeight: 600,
+                    color: "var(--purple)", padding: 0, letterSpacing: "-0.01em",
+                  }}
+                >
+                  → Run page
+                </button>
+              </div>
             </div>
           )}
         </Card>
-      </div>
-
-      {/* ---- Templates (collapsible) ---- */}
-      {templatesOpen && (
-        <div style={{ marginTop: 14 }}>
-          <Card title="Switch / re-init template" subtitle={`${templates.length || 12} domains available`}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 6 }}>
-              {(templates.length > 0
-                ? templates.map((t) => ({
-                    key: t.name,
-                    label: t.name,
-                    color: TEMPLATE_COLORS[t.name] ?? "var(--muted)",
-                  }))
-                : Object.entries(TEMPLATE_COLORS).map(([k, c]) => ({
-                    key: k,
-                    label: k.replace(/_/g, " "),
-                    color: c,
-                  }))
-              ).map((t) => (
-                <button
-                  key={t.key}
-                  onClick={() => {
-                    const info = templates.find((tt) => tt.name === t.key);
-                    if (info) handleTemplateClick(info);
-                  }}
-                  style={{
-                    textAlign: "left",
-                    border: "1px solid var(--line)",
-                    background: t.key === domain ? "#fff8ef" : "#fff",
-                    borderColor: t.key === domain ? "var(--amber)" : "var(--line)",
-                    borderRadius: 5,
-                    padding: "7px 9px",
-                    cursor: "pointer",
-                    fontFamily: "inherit",
-                  }}
-                >
-                  <div
-                    className="mono"
-                    style={{
-                      fontSize: 9, color: t.color,
-                      letterSpacing: "0.08em", textTransform: "uppercase",
-                    }}
-                  >
-                    {t.key}
-                  </div>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-2)", marginTop: 1 }}>
-                    {t.label}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </Card>
         </div>
-      )}
-
-      {/* ---- Raw config preview ---- */}
-      <div style={{ marginTop: 14 }}>
-        <button
-          onClick={() => setYamlOpen(!yamlOpen)}
-          className="mono"
-          style={{
-            fontSize: 10, color: "var(--muted)",
-            textTransform: "uppercase", letterSpacing: "0.1em",
-            background: "none", border: "none", cursor: "pointer",
-            fontFamily: "inherit", padding: "4px 0",
-          }}
-        >
-          project.yml · raw preview {yamlOpen ? "▲" : "▼"}
-        </button>
-        {yamlOpen && (
-          <Card>
-            <pre
-              className="mono"
-              style={{ fontSize: 10.5, margin: 0, lineHeight: 1.6, color: "var(--ink-2)", whiteSpace: "pre-wrap" }}
-            >
-              {yamlPreview}
-            </pre>
-          </Card>
-        )}
       </div>
     </div>
   );

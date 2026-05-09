@@ -1,10 +1,12 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useServer } from "@/hooks/useServer";
-import { useProject } from "@/hooks/useProject";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { NotificationContext, useNotificationState } from "@/hooks/useNotifications";
 import { PipelineProvider } from "@/hooks/PipelineProvider";
+import { useProjectStore } from "@/stores/projectStore";
+import { useNavigationStore } from "@/stores/navigationStore";
 import NotificationBanner from "@/components/layout/NotificationBanner";
+import ServerLostBanner from "@/components/layout/ServerLostBanner";
 import Splash, { type SplashStep } from "@/components/layout/Splash";
 import LoginScreen from "@/components/layout/LoginScreen";
 import AuthGate from "@/components/layout/AuthGate";
@@ -14,10 +16,12 @@ import { PAGES } from "@/components/layout/Sidebar";
 import ChatPanel from "@/components/chat/ChatPanel";
 import CommandPalette, { type PaletteItem } from "@/components/common/CommandPalette";
 import OnboardingTour from "@/components/common/OnboardingTour";
+import ErrorBoundary from "@/components/common/ErrorBoundary";
 import UpdateBanner from "@/components/updater/UpdateBanner";
 import { ExplainContext, useExplainHost } from "@/hooks/ExplainContext";
 import { loadThemeKey, applyTheme } from "@/lib/theme";
 import { useAuthStore } from "@/stores/authStore";
+import { setToken } from "@/stores/tokenStore";
 import { buildSystemPrompt } from "@/lib/prompts";
 import { getConfig, saveConfig, dataSummary, initProject, getReportData, getDag } from "@/lib/api";
 import type { ClaudeAction, DataSummary, ProjectConfig, ReportPayload, DagDefinition } from "@/lib/types";
@@ -29,25 +33,21 @@ import ProcessingPage from "@/components/pages/ProcessingPage";
 import DAGPage from "@/components/pages/DAGPage";
 import VariablesPage from "@/components/pages/VariablesPage";
 import PhysicsPage from "@/components/pages/PhysicsPage";
-import CRSPage from "@/components/pages/CRSPage";
 import ScenariosPage from "@/components/pages/ScenariosPage";
 import ModelsPage from "@/components/pages/ModelsPage";
-import CausalPage from "@/components/pages/CausalPage";
 import RunPage from "@/components/pages/RunPage";
 import InsightsPage from "@/components/pages/InsightsPage";
 import DecisionSupportPage from "@/components/pages/DecisionSupportPage";
-import ComparePage from "@/components/pages/ComparePage";
 import ReportPage from "@/components/pages/ReportPage";
 import SettingsPage from "@/components/pages/SettingsPage";
 import PerformancePage from "@/components/pages/PerformancePage";
 
-type AppPage = PageName | "Settings" | "Performance";
 
 export default function App() {
-  const { ready, status } = useServer();
+  const { ready, serverLost, status } = useServer();
   const notif = useNotificationState();
-  const project = useProject(ready);
-  const [page, setPage] = useState<AppPage>("Project");
+  const project = useProjectStore();
+  const { currentPage: page, navigate } = useNavigationStore();
   const [chatOpen, setChatOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const explainHost = useExplainHost();
@@ -57,6 +57,16 @@ export default function App() {
 
   // Auth
   const { user, init: initAuth, signOut } = useAuthStore();
+
+  // Fetch the sidecar session token from Tauri once on mount.
+  // Stored in memory only — never written to disk or localStorage.
+  useEffect(() => {
+    import("@tauri-apps/api/core").then(({ invoke }) => {
+      invoke<string>("get_sidecar_token")
+        .then(setToken)
+        .catch(() => { /* running in browser/dev without Tauri — token stays empty */ });
+    }).catch(() => { /* @tauri-apps/api not available */ });
+  }, []);
   const [splashStep, setSplashStep] = useState<SplashStep>("sidecar");
   const [splashDone, setSplashDone] = useState(false);
   const splashStartRef = useRef<number>(Date.now());
@@ -91,14 +101,11 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [splashStep]);
 
-  // Gate navigation: only Project and Settings are allowed without a loaded project
-  const navigate = useCallback(
-    (p: AppPage) => {
-      if (p !== "Project" && p !== "Settings" && p !== "Performance" && !project.projectLoaded) return;
-      setPage(p);
-    },
-    [project.projectLoaded],
-  );
+  // Trigger project rehydration once the sidecar is ready
+  useEffect(() => {
+    if (ready) project.rehydrate();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
 
   // Load data context for system prompt enrichment
   useEffect(() => {
@@ -268,48 +275,33 @@ export default function App() {
     switch (page) {
       case "Project":
         return gate(
-          <ProjectPage
-            projectPath={project.projectPath}
-            onProjectLoaded={async (path, meta) => {
-              await project.openProject(path, meta);
-              navigate("Data");
-              setRefreshKey((k) => k + 1);
-              notif.notify("success", "Project loaded successfully");
-            }}
-          />,
+          <ProjectPage />,
         );
       case "Data":
         return gate(<DataPage key={refreshKey} />);
       case "Processing":
         return gate(<ProcessingPage />);
       case "DAG":
-        return gate(<DAGPage key={refreshKey} onNavigate={(p) => navigate(p as AppPage)} />);
+        return gate(<DAGPage key={refreshKey} />);
       case "Variables":
         return gate(<VariablesPage />);
       case "Physics":
         return gate(<PhysicsPage />);
-      case "CRS":
-        return gate(<CRSPage />);
       case "Scenarios":
-        return gate(<ScenariosPage onNavigate={(p) => navigate(p as AppPage)} />);
+        return gate(<ScenariosPage />);
       case "Models":
         return gate(<ModelsPage />);
-      case "Causal":
-        return gate(<CausalPage />);
       case "Run":
         return gate(<RunPage />);
       case "Insights":
         return gate(<InsightsPage />);
       case "Decision Support":
         return gate(<DecisionSupportPage />);
-      case "Compare":
-        return gate(<ComparePage />);
       case "Report":
         return gate(<ReportPage />);
       case "Settings":
         return (
           <SettingsPage
-            onNavigate={(p) => navigate(p as AppPage)}
             onSignOut={async () => { await signOut(); }}
             parallaxEnabled={parallaxEnabled}
             onParallaxToggle={(v) => {
@@ -326,7 +318,7 @@ export default function App() {
   return (
     <NotificationContext.Provider value={notif}>
       <ExplainContext.Provider value={explainHost.value}>
-      <PipelineProvider serverReady={ready}>
+      <PipelineProvider serverReady={ready} serverLost={serverLost}>
         <div style={{ position: "relative", height: "100vh", width: "100vw", overflow: "hidden" }}>
           <Shell
             currentPage={page as any}
@@ -339,7 +331,9 @@ export default function App() {
             projectEpsg={undefined}
             status={status}
           >
-            {renderPage()}
+            <ErrorBoundary key={page} page={page}>
+              {renderPage()}
+            </ErrorBoundary>
           </Shell>
 
           {chatOpen && (
@@ -363,6 +357,7 @@ export default function App() {
           <OnboardingTour onNavigate={(p) => navigate(p as PageName)} />
 
           <NotificationBanner />
+          <ServerLostBanner serverLost={serverLost} />
           <UpdateBanner />
         </div>
       </PipelineProvider>

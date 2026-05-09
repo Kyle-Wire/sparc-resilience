@@ -4,19 +4,22 @@
  * defaults to first scenario.
  */
 import { useMemo, useState } from "react";
-import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
+import { Panel, PanelEmpty, Pill, Btn } from "@/components/ui/DesignSystem";
 import { PanelGate } from "@/components/ui/PanelGate";
 import { useManifest } from "@/hooks/useManifest";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
+import { useInsightsNavigate } from "@/hooks/InsightsProvider";
 import { useResult } from "@/hooks/useResult";
 import { getScenarioDetail } from "@/lib/api";
 import SpatialMap from "@/components/map/SpatialMap";
+import ResizableMapWrapper from "@/components/map/ResizableMapWrapper";
 import { MAP_HEIGHT_DEFAULT } from "@/lib/design-tokens";
 import type { ScenarioDetail } from "@/lib/types";
 
 export default function ScenarioMapPanel() {
   const manifest = useManifest();
   const linked = useLinkedSelection();
+  const navigate = useInsightsNavigate();
   const present = !!manifest.stage("4");
   const { data: detail } = useResult<ScenarioDetail>(
     present ? "s4:scenario_detail" : null,
@@ -48,6 +51,7 @@ export default function ScenarioMapPanel() {
           <PanelEmpty
             reason="No scenarios run"
             hint="Configure scenarios on the Scenarios page and run stage 4."
+            action={navigate && <Btn small onClick={() => navigate("Run")}>Go to Run page →</Btn>}
           />
         </Panel>
       </PanelGate>
@@ -92,18 +96,19 @@ export default function ScenarioMapPanel() {
       }
       bodyPadding={0}
     >
-      <div style={{ height: MAP_HEIGHT_DEFAULT, position: "relative" }}>
+      <ResizableMapWrapper defaultHeight={MAP_HEIGHT_DEFAULT}>
         <SpatialMap
           geojson={detail?.geojson ?? null}
           colorField={resolvedLayer}
           mode="scatter"
           height="100%"
+          expandable
           onFeatureClick={(p) => {
             const id = p.id != null ? String(p.id) : null;
             if (id) linked.setIds([id]);
           }}
         />
-      </div>
+      </ResizableMapWrapper>
     </Panel>
   );
 }

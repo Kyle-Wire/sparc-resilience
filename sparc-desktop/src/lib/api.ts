@@ -1,6 +1,8 @@
 /**
  * Typed fetch wrappers for the SPARC FastAPI server at localhost:8008.
  */
+import { getToken } from "@/stores/tokenStore";
+import { useAuthStore } from "@/stores/authStore";
 import type {
   HealthResponse,
   ProjectLoadResponse,
@@ -32,11 +34,21 @@ import type {
   DivergenceReport,
   ScenarioRoutingAuditData,
 } from "./types";
+import { SERVER_ORIGIN, WS_ORIGIN } from "./server";
 
-const BASE = "http://127.0.0.1:8008";
+const BASE = SERVER_ORIGIN;
+
+function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  const token = getToken();
+  const jwt = useAuthStore.getState().session?.access_token;
+  const headers: Record<string, string> = { ...extra };
+  if (token) headers["x-sparc-token"] = token;
+  if (jwt) headers["Authorization"] = `Bearer ${jwt}`;
+  return headers;
+}
 
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`);
+  const res = await fetch(`${BASE}${path}`, { headers: authHeaders() });
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`${res.status}: ${body}`);
@@ -47,7 +59,9 @@ async function get<T>(path: string): Promise<T> {
 async function post<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: "POST",
-    headers: body ? { "Content-Type": "application/json" } : undefined,
+    headers: body
+      ? authHeaders({ "Content-Type": "application/json" })
+      : authHeaders(),
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
@@ -71,6 +85,7 @@ export interface RunEventsResponse {
   events: PipelineEvent[];
 }
 export const getRunEvents = () => get<RunEventsResponse>("/run/events");
+export const cancelRun = () => post<{ status: string }>("/run/cancel", {});
 
 // ------------------------------------------------------------------
 // Panel availability — single declarative status snapshot for all
@@ -1139,7 +1154,7 @@ export async function downloadStageZip(stage: string | number): Promise<void> {
 // WebSocket helper
 // ------------------------------------------------------------------
 export function createPipelineSocket(): WebSocket {
-  return new WebSocket("ws://127.0.0.1:8008/run/stream");
+  return new WebSocket(`${WS_ORIGIN}/run/stream`);
 }
 
 // ------------------------------------------------------------------
@@ -1311,7 +1326,7 @@ export const getContextLayers = (domain?: string) =>
 // Audience-specific reports (Phase 19)
 // ------------------------------------------------------------------
 export type ReportAudience = "technical" | "planner" | "public";
-export type ReportFormat = "md" | "html" | "pdf";
+export type ReportFormat = "md" | "html" | "pdf" | "docx";
 
 /** Download an audience-specific report. Returns the markdown/html text
  *  (so the caller can render an in-app preview) and triggers the file

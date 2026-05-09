@@ -15,9 +15,12 @@ of dumping to stdout.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 import tempfile
+import time
+import urllib.request
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -26,8 +29,8 @@ from pydantic import BaseModel, Field
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Query, Body, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.base import BaseHTTPMiddleware
 from fastapi.responses import JSONResponse, FileResponse, Response
-
 from sparc.server.state import ServerState
 from sparc.server.stream import stream_stage
 
@@ -54,6 +57,147 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ------------------------------------------------------------------
+# Startup token — locks the sidecar to its hosting Tauri process.
+# The token is injected via the SPARC_SERVER_TOKEN env var at spawn
+# time. Every non-health request must supply it in X-SPARC-Token.
+# When the env var is absent (e.g. plain CLI launch), auth is skipped
+# so developers can still call the server manually.
+# ------------------------------------------------------------------
+
+_SERVER_TOKEN: str | None = os.environ.get("SPARC_SERVER_TOKEN") or None
+
+# ------------------------------------------------------------------
+# JWT / JWKS support (optional — enabled when SUPABASE_URL is set)
+# ------------------------------------------------------------------
+
+_SUPABASE_URL: str | None = os.environ.get("SUPABASE_URL") or None
+_REQUIRE_JWT: bool = os.environ.get("SPARC_REQUIRE_JWT", "").lower() in ("1", "true", "yes")
+
+_jwks_lock = asyncio.Lock()
+_jwks_cache: dict | None = None
+_jwks_fetched_at: float = 0.0
+_JWKS_TTL = 86_400  # 24 h
+
+
+async def _get_jwks() -> dict | None:
+    """Fetch and cache Supabase JWKS. Returns None if SUPABASE_URL not set."""
+    global _jwks_cache, _jwks_fetched_at
+    if not _SUPABASE_URL:
+        return None
+    async with _jwks_lock:
+        if _jwks_cache is not None and time.monotonic() - _jwks_fetched_at < _JWKS_TTL:
+            return _jwks_cache
+        try:
+            url = f"{_SUPABASE_URL}/auth/v1/keys"
+            raw = await asyncio.to_thread(
+                lambda: urllib.request.urlopen(url, timeout=5).read()  # noqa: S310
+            )
+            _jwks_cache = json.loads(raw)
+            _jwks_fetched_at = time.monotonic()
+        except Exception:
+            pass  # Return stale cache on error
+        return _jwks_cache
+
+
+async def _verify_jwt(token: str) -> bool:
+    """Verify a Supabase-issued JWT against cached JWKS.
+
+    Returns True if valid (or if SUPABASE_URL is unconfigured so verification
+    is not possible).  Returns False on any crypto / expiry error.
+    """
+    try:
+        from jose import jwt as jose_jwt  # lazy — only imported when JWT auth is active
+        jwks = await _get_jwks()
+        if jwks is None:
+            return True  # SUPABASE_URL not configured — skip
+        header = jose_jwt.get_unverified_header(token)
+        kid = header.get("kid")
+        keys = jwks.get("keys", [])
+        key = next((k for k in keys if k.get("kid") == kid), None) or (keys[0] if keys else None)
+        if key is None:
+            return False
+        jose_jwt.decode(token, key, algorithms=["RS256"], options={"verify_aud": False})
+        return True
+    except Exception:
+        return False
+
+
+class _TokenMiddleware(BaseHTTPMiddleware):
+    """Reject requests that are missing or present the wrong X-SPARC-Token.
+
+    Skipped for:
+    - OPTIONS (CORS preflight — browser sends no custom headers)
+    - /health  (UI polls this before the webview has the token)
+    - /shutdown (Tauri calls this from Rust, not the webview)
+    """
+
+    # Paths exempt from token checking.
+    _EXEMPT = {"/health", "/shutdown"}
+
+    async def dispatch(self, request: Request, call_next):
+        if _SERVER_TOKEN is None:
+            # Running outside Tauri (dev / CLI) — skip auth.
+            return await call_next(request)
+        if request.method == "OPTIONS":
+            return await call_next(request)
+        if request.url.path in self._EXEMPT:
+            return await call_next(request)
+        token = request.headers.get("x-sparc-token", "")
+        if token != _SERVER_TOKEN:
+            return JSONResponse({"detail": "forbidden"}, status_code=403)
+        # Optional JWT verification — only active when SPARC_REQUIRE_JWT=1
+        if _REQUIRE_JWT:
+            auth = request.headers.get("authorization", "")
+            if not auth.startswith("Bearer "):
+                return JSONResponse({"detail": "JWT required"}, status_code=401)
+            if not await _verify_jwt(auth[7:]):
+                return JSONResponse({"detail": "invalid token"}, status_code=401)
+        return await call_next(request)
+
+
+app.add_middleware(_TokenMiddleware)
+
+# ------------------------------------------------------------------
+# Path-containment guard
+# ------------------------------------------------------------------
+# All endpoints that accept filesystem paths from the client call this
+# helper.  It resolves symlinks and checks that the result sits inside
+# the user's home directory, preventing path-traversal attacks even if
+# an attacker somehow reaches the (token-protected) sidecar.
+_HOME = Path.home().resolve()
+
+def _resolve_safe(raw: str, *, allow_create: bool = False) -> Path:
+    """Resolve *raw* to an absolute path and assert it is inside the
+    user's home directory.
+
+    Parameters
+    ----------
+    raw:
+        The path string supplied by the client.
+    allow_create:
+        When *True* the resolved path need not exist yet (used for new
+        project scaffolding).  The *parent* directory is still checked
+        so that ``../../etc`` style attacks are blocked.
+
+    Raises
+    ------
+    HTTPException(400)
+        If the resolved path escapes the home directory.
+    """
+    resolved = Path(raw).resolve()
+    # For paths that don't exist yet, check their closest existing ancestor.
+    check = resolved if resolved.exists() else resolved.parent.resolve()
+    try:
+        check.relative_to(_HOME)
+    except ValueError:
+        raise HTTPException(
+            400,
+            "Path must be inside the user home directory.",
+        )
+    return resolved
+
 
 state = ServerState()
 
@@ -267,7 +411,7 @@ def _open_store():
     return ArtifactStore(state.registry)
 
 
-def _read_or_404(
+async def _read_or_404(
     stage: str | int,
     artifact_id: str,
     *,
@@ -287,7 +431,7 @@ def _read_or_404(
         raise _missing_artifact_response(
             artifact_id=artifact_id, stage=stage, hint=hint,
         )
-    result = store.read_any(stage, artifact_id)
+    result = await asyncio.to_thread(store.read_any, stage, artifact_id)
     state.result_cache.set(stage, artifact_id, result)
     return result
 
@@ -352,7 +496,7 @@ def _prewarm_results(cancel: _threading.Event) -> None:
                 continue
             try:
                 if reg.lookup(stage, artifact_id) is not None:
-                    _read_or_404(stage, artifact_id)
+                    await _read_or_404(stage, artifact_id)
             except Exception:
                 # Missing or unreadable artifact — not an error during pre-warm.
                 pass
@@ -416,7 +560,6 @@ async def health():
     return {
         "status": "ok",
         "project_loaded": state.project_config is not None,
-        "project_path": state.project_path,
         "is_running": state.is_running,
         "current_stage": state.current_stage,
         "manifest_loaded": state.registry is not None,
@@ -436,6 +579,19 @@ async def health():
 # Localhost-only by design: the sidecar binds to 127.0.0.1 already, but we
 # double-check the client host as a safety net in case the bind address is
 # ever changed.
+
+@app.post("/run/cancel")
+async def cancel_run():
+    """Immediately mark the pipeline as idle so the frontend can restart.
+
+    The background pipeline thread is a daemon — it will finish its current
+    operation naturally, but setting ``is_running = False`` unblocks the
+    WebSocket guard that prevents starting a new run and signals the frontend
+    that the run has ended.
+    """
+    state.set_idle()
+    return {"status": "cancelled"}
+
 
 @app.post("/shutdown")
 async def shutdown(request: Request):
@@ -791,13 +947,143 @@ async def export_block(req: BlockExportRequest):
 
 
 # ------------------------------------------------------------------
+# AI proxy — Anthropic key stored in OS keychain; calls never leave
+# the sidecar process.  The webview has no direct access to the key.
+# ------------------------------------------------------------------
+
+_AI_KEYRING_SERVICE = "SPARC Labs"
+_AI_KEYRING_USERNAME = "anthropic_api_key"
+
+
+def _keyring_get() -> str | None:
+    """Return the stored key, or None if keyring is unavailable / empty."""
+    try:
+        import keyring
+        return keyring.get_password(_AI_KEYRING_SERVICE, _AI_KEYRING_USERNAME) or None
+    except Exception:
+        return None
+
+
+def _keyring_set(key: str) -> None:
+    import keyring
+    keyring.set_password(_AI_KEYRING_SERVICE, _AI_KEYRING_USERNAME, key)
+
+
+def _keyring_delete() -> None:
+    try:
+        import keyring
+        keyring.delete_password(_AI_KEYRING_SERVICE, _AI_KEYRING_USERNAME)
+    except Exception:
+        pass
+
+
+@app.get("/ai/key")
+async def ai_key_status():
+    """Return whether an Anthropic API key is stored (never returns the key itself)."""
+    stored = _keyring_get()
+    return {"configured": stored is not None}
+
+
+@app.put("/ai/key")
+async def ai_key_save(body: dict[str, Any] = Body(...)):
+    """Store an Anthropic API key in the OS keychain.
+
+    Body: ``{ "key": "sk-ant-..." }``
+    The key is validated to start with ``sk-ant-`` before being stored.
+    """
+    key = body.get("key", "").strip()
+    if not key:
+        raise HTTPException(400, "key is required")
+    if not key.startswith("sk-ant-"):
+        raise HTTPException(400, "key must start with sk-ant-")
+    try:
+        _keyring_set(key)
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to store key in OS keychain: {exc}")
+    return {"status": "saved"}
+
+
+@app.delete("/ai/key")
+async def ai_key_delete():
+    """Remove the stored Anthropic API key from the OS keychain."""
+    _keyring_delete()
+    return {"status": "deleted"}
+
+
+class AiChatMessage(BaseModel):
+    role: str
+    content: str
+
+    class Config:
+        extra = "ignore"
+
+
+class AiChatRequest(BaseModel):
+    messages: list[AiChatMessage]
+    system: str = ""
+    max_tokens: int = Field(default=1024, ge=1, le=8192)
+
+    class Config:
+        extra = "ignore"
+
+
+@app.post("/ai/chat")
+async def ai_chat(req: AiChatRequest):
+    """Proxy a chat turn to the Anthropic Claude API using the key from the OS keychain.
+
+    The API key is never sent to or held by the frontend. If no key is
+    configured, returns 401 so the UI can prompt the user to add one.
+    """
+    import urllib.request
+    import urllib.error
+    import json as _json
+
+    api_key = _keyring_get()
+    if not api_key:
+        raise HTTPException(401, "No Anthropic API key configured. Add one in Settings.")
+
+    payload = {
+        "model": "claude-sonnet-4-6-20250514",
+        "max_tokens": req.max_tokens,
+        "messages": [{"role": m.role, "content": m.content} for m in req.messages],
+    }
+    if req.system:
+        payload["system"] = req.system
+
+    data = _json.dumps(payload).encode()
+    request = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as resp:
+            return _json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode(errors="replace")
+        raise HTTPException(exc.code, f"Anthropic API error: {body}")
+    except Exception as exc:
+        raise HTTPException(502, f"Failed to reach Anthropic API: {exc}")
+
+
+# ------------------------------------------------------------------
 # Project endpoints
 # ------------------------------------------------------------------
 
 @app.post("/project/load")
 async def load_project(path: str = Query(..., description="Absolute path to project.yml")):
-    """Load a project.yml and return its metadata."""
-    resolved = Path(path).resolve()
+    """Load a project.yml and return its metadata.
+
+    Returns immediately after YAML parse + registry attach so the UI can
+    show progress.  Heavy I/O (_load_data_into_state, _start_prewarm) runs
+    in a background asyncio task.
+    """
+    resolved = _resolve_safe(path)
     if not resolved.exists():
         raise HTTPException(404, f"Project file not found: {resolved}")
 
@@ -818,26 +1104,27 @@ async def load_project(path: str = Query(..., description="Absolute path to proj
     state.raw_project_yaml = raw_yaml
     _attach_registry(config)
 
-    # Pre-load data summary if the CSV exists
-    data_path = config["data"]["file_path"]
-    if os.path.exists(data_path):
-        _load_data_into_state(config)
+    # Heavy I/O runs in the background so the HTTP response returns fast.
+    async def _background_load():
+        data_path = config["data"]["file_path"]
+        if os.path.exists(data_path):
+            await asyncio.to_thread(_load_data_into_state, config)
+        _start_prewarm()
 
-    # Kick off background pre-warm of frontend-facing artifacts.
-    _start_prewarm()
+    asyncio.create_task(_background_load())
 
     return {
         "status": "loaded",
         "project": raw_yaml.get("project", {}),
-        "columns": list(state.data.columns) if state.data is not None else [],
-        "row_count": len(state.data) if state.data is not None else 0,
+        "columns": [],   # populated after background load; client may re-fetch
+        "row_count": 0,
     }
 
 
 @app.post("/project/validate")
 async def validate_project(path: str = Query(..., description="Absolute path to project.yml")):
     """Validate a project.yml without loading it into state."""
-    resolved = Path(path).resolve()
+    resolved = _resolve_safe(path)
     if not resolved.exists():
         raise HTTPException(404, f"Project file not found: {resolved}")
 
@@ -890,7 +1177,7 @@ async def init_project(
         available = [d.name for d in TEMPLATES_DIR.iterdir() if d.is_dir()]
         raise HTTPException(404, f"Template '{template}' not found. Available: {available}")
 
-    dest = Path(output).resolve()
+    dest = _resolve_safe(output, allow_create=True)
     dest.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source, dest, dirs_exist_ok=True)
 
@@ -935,7 +1222,7 @@ async def create_project(payload: dict[str, Any] = Body(...)):
         available = [d.name for d in TEMPLATES_DIR.iterdir() if d.is_dir()]
         raise HTTPException(404, f"Template '{template}' not found. Available: {available}")
 
-    dest = Path(output).resolve()
+    dest = _resolve_safe(str(output), allow_create=True)
     dest.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source, dest, dirs_exist_ok=True)
 
@@ -1233,23 +1520,53 @@ async def data_geojson(variable: str | None = Query(None)):
     return subset.__geo_interface__
 
 
+# Extensions accepted by /data/upload.  Anything else is rejected before
+# touching the filesystem.
+_UPLOAD_ALLOWED_SUFFIXES: frozenset[str] = frozenset({
+    ".csv", ".parquet",                      # tabular data
+    ".tif", ".tiff",                         # GeoTIFF rasters
+    ".shp", ".shx", ".dbf", ".prj", ".cpg", # Shapefile family
+    ".gpkg",                                 # GeoPackage
+    ".geojson",                              # GeoJSON
+})
+
+# Hard cap: 500 MB per upload.  Rasters can be large; we keep this generous
+# but not unbounded.
+_UPLOAD_MAX_BYTES: int = 500 * 1024 * 1024  # 500 MB
+
+
 @app.post("/data/upload")
 async def upload_data(file: UploadFile = File(...)):
     """Accept a CSV, raster (.tif/.tiff), or spatial file (.shp/.gpkg/.geojson) upload."""
     if state.project_config is None:
         raise HTTPException(400, "Load a project first.")
 
+    # ── Extension allowlist ──────────────────────────────────────────────────
+    safe_name = Path(file.filename).name  # strip any directory components
+    suffix = Path(safe_name).suffix.lower()
+    if suffix not in _UPLOAD_ALLOWED_SUFFIXES:
+        raise HTTPException(
+            400,
+            f"File type '{suffix or '(none)'}' is not accepted. "
+            f"Allowed: {', '.join(sorted(_UPLOAD_ALLOWED_SUFFIXES))}",
+        )
+
+    # ── Size cap ─────────────────────────────────────────────────────────────
+    content = await file.read(_UPLOAD_MAX_BYTES + 1)
+    if len(content) > _UPLOAD_MAX_BYTES:
+        raise HTTPException(
+            413,
+            f"Upload exceeds the {_UPLOAD_MAX_BYTES // (1024 * 1024)} MB limit.",
+        )
+
     project_dir = Path(state.project_config["paths"]["project_root"])
     data_dir = project_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    safe_name = Path(file.filename).name  # strip any directory components
     dest = data_dir / safe_name
-    content = await file.read()
     with open(dest, "wb") as f:
         f.write(content)
 
-    suffix = dest.suffix.lower()
     result: dict = {"status": "uploaded", "path": str(dest), "file_type": suffix}
 
     # CSV / Parquet — load as primary data
@@ -1332,7 +1649,7 @@ async def select_data_file(path: str = Query(..., description="Absolute path to 
     if state.project_config is None:
         raise HTTPException(400, "Load a project first.")
 
-    resolved = Path(path).resolve()
+    resolved = _resolve_safe(path)
     if not resolved.exists():
         raise HTTPException(404, f"File not found: {resolved}")
     if resolved.suffix.lower() not in (".csv", ".parquet"):
@@ -1463,7 +1780,7 @@ async def get_run_log():
 # ------------------------------------------------------------------
 
 @app.websocket("/run/stream")
-async def run_stream(ws: WebSocket):
+async def run_stream(ws: WebSocket, token: str = Query(default="")):
     """Stream structured pipeline events over a WebSocket.
 
     The client sends a JSON message to start:
@@ -1478,6 +1795,11 @@ async def run_stream(ws: WebSocket):
     ``artifact_written`` events are emitted whenever ``RunRegistry.register_artifact``
     is called, so the desktop reacts the moment new data lands in the database.
     """
+    # Validate sidecar token passed as query param (browsers cannot set custom
+    # headers on WebSocket upgrade requests).
+    if _SERVER_TOKEN is not None and token != _SERVER_TOKEN:
+        await ws.close(code=4003)
+        return
     await ws.accept()
 
     try:
@@ -1857,7 +2179,7 @@ async def post_report_audience(
 @app.get("/results/correlogram")
 async def get_correlogram_data():
     """Return correlogram analysis results with per-variable lag/Moran's I data."""
-    return _read_or_404(
+    return await _read_or_404(
         "0", "correlogram_results",
         hint="Stage 0 (EDA) has not produced correlogram_results. Run Stage 0.",
     )
@@ -1907,7 +2229,7 @@ async def get_kernel_field_artifact():
 @app.get("/results/causal/pdp_curves")
 async def get_causal_pdp_curves():
     """Return the Bayesian causal PDP curves (Stage 3, Phase C-2)."""
-    return _read_or_404(
+    return await _read_or_404(
         "3", "causal_pdp_curves",
         hint="Stage 3 has not produced causal_pdp_curves. Run Stage 3 with Bayesian-CATE enabled.",
     )
@@ -1916,7 +2238,7 @@ async def get_causal_pdp_curves():
 @app.get("/results/causal/divergence")
 async def get_cate_vs_gwr_divergence():
     """Return the CATE-vs-GWR divergence audit (Stage 3, Phase C-3)."""
-    return _read_or_404(
+    return await _read_or_404(
         "3", "cate_vs_gwr_divergence",
         hint="Stage 3 has not produced cate_vs_gwr_divergence.",
     )
@@ -1925,7 +2247,7 @@ async def get_cate_vs_gwr_divergence():
 @app.get("/results/scenarios/routing_audit")
 async def get_scenario_routing_audit():
     """Return the scenario routing + anisotropic-frame audit (Stage 4, Phase C-4)."""
-    return _read_or_404(
+    return await _read_or_404(
         "4", "scenario_routing_audit",
         hint="Stage 4 has not produced scenario_routing_audit.",
     )
@@ -2081,7 +2403,7 @@ async def get_causal_results():
 @app.get("/results/causal/dose_response")
 async def get_dose_response():
     """Return dose-response curves (DB-only)."""
-    return _read_or_404(
+    return await _read_or_404(
         "3", "dose_response_curves",
         hint=(
             "Dose-response curves are produced by Stage 3 (Causal Validation). "
@@ -2150,7 +2472,7 @@ async def get_causal_negative_control(
 @app.get("/results/causal/diagnostics")
 async def get_causal_diagnostics():
     """Return CATE diagnostics (calibration, cumulative effects, RATE)."""
-    return _read_or_404(
+    return await _read_or_404(
         "3", "causal_diagnostics",
         hint="Stage 3 (Causal Validation) has not produced causal_diagnostics.",
     )

@@ -51,8 +51,6 @@ export function useProject(serverReady: boolean): UseProjectReturn {
         if (h.project_loaded) {
           // Server already has a project — trust it
           setProjectLoaded(true);
-          // If server knows the path, prefer it
-          if (h.project_path) setProjectPath(h.project_path);
           setRehydrating(false);
           return;
         }

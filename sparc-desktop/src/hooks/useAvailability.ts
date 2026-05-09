@@ -22,7 +22,7 @@ let inFlight: Promise<PanelAvailabilityResponse | null> | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 const subscribers = new Set<(snapshot: PanelAvailabilityResponse | null) => void>();
 
-const FAST_INTERVAL_MS = 2_000;
+const FAST_INTERVAL_MS = 500;
 const SLOW_INTERVAL_MS = 30_000;
 
 function nextDelay(snap: PanelAvailabilityResponse | null): number {

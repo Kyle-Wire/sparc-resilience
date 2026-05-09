@@ -3,10 +3,11 @@
  * Click sets linked-selection.scenario, which the ScenarioMapPanel
  * picks up to switch its `pred_<scenario>` layer.
  */
-import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
+import { Panel, PanelEmpty, Pill, Btn } from "@/components/ui/DesignSystem";
 import { PanelGate } from "@/components/ui/PanelGate";
 import { useManifest } from "@/hooks/useManifest";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
+import { useInsightsNavigate } from "@/hooks/InsightsProvider";
 import { useResult } from "@/hooks/useResult";
 import { getScenarioDetail } from "@/lib/api";
 import type { ScenarioDetail } from "@/lib/types";
@@ -24,6 +25,7 @@ interface SummaryRow {
 export default function ScenarioStripPanel() {
   const manifest = useManifest();
   const linked = useLinkedSelection();
+  const navigate = useInsightsNavigate();
   const present = !!manifest.stage("4");
   const { data: detail } = useResult<ScenarioDetail>(
     present ? "s4:scenario_detail" : null,
@@ -37,6 +39,7 @@ export default function ScenarioStripPanel() {
           <PanelEmpty
             reason="No scenarios run"
             hint="Configure scenarios on the Scenarios page and run stage 4."
+            action={navigate && <Btn small onClick={() => navigate("Run")}>Go to Run page →</Btn>}
           />
         </Panel>
       </PanelGate>

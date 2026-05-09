@@ -1,7 +1,10 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect } from "react";
 import type { ReactNode } from "react";
 import type { PipelineEvent } from "@/lib/types";
-import { getRunEvents, approveDag, rejectDag } from "@/lib/api";
+import { getRunEvents, approveDag, rejectDag, cancelRun } from "@/lib/api";
+import { WS_ORIGIN } from "@/lib/server";
+import { getToken } from "@/stores/tokenStore";
+import { notifyManifestArtifactWritten } from "@/hooks/useManifest";
 
 // ---- Training telemetry derived state ----
 export interface CapacityResult {
@@ -76,7 +79,7 @@ export function usePipeline(): PipelineState {
   return ctx;
 }
 
-export function PipelineProvider({ children, serverReady }: { children: ReactNode; serverReady: boolean }) {
+export function PipelineProvider({ children, serverReady, serverLost }: { children: ReactNode; serverReady: boolean; serverLost?: boolean }) {
   const [events, setEvents] = useState<PipelineEvent[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -99,11 +102,27 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
   /** Options to reuse when chaining to the next stage. */
   const optsRef = useRef<{ fast: boolean; skip_gwen: boolean }>({ fast: false, skip_gwen: false });
 
+  // Terminal event buffering — same rAF approach as usePipelineStream:
+  // push into a ref (zero render cost per message), flush to state at display
+  // frame rate. Telemetry state updates (training, stageStatuses) remain
+  // synchronous since they update small bounded objects.
+  const eventsBufferRef = useRef<PipelineEvent[]>([]);
+  const eventsRafRef = useRef<number | null>(null);
+
+  const scheduleEventsFlush = useCallback(() => {
+    if (eventsRafRef.current !== null) return;
+    eventsRafRef.current = requestAnimationFrame(() => {
+      eventsRafRef.current = null;
+      setEvents([...eventsBufferRef.current]);
+    });
+  }, []);
+
   /** Process a single pipeline event and update training telemetry state. */
   const processEvent = useCallback((event: PipelineEvent) => {
     // Stamp with wall-clock time at receipt so terminal timestamps are frozen
     const stamped = { ...event, receivedAt: Date.now() };
-    setEvents((prev) => [...prev, stamped]);
+    eventsBufferRef.current.push(stamped);
+    scheduleEventsFlush();
 
     if (event.stage !== undefined) {
       setCurrentStage(event.stage);
@@ -180,6 +199,11 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
               elapsed_seconds: event.elapsed_seconds,
             },
           }));
+          // Immediately refresh the manifest when a stage finishes so the
+          // Insights panels light up as early as possible (T43).
+          if (event.status === "complete") {
+            notifyManifestArtifactWritten();
+          }
         }
         break;
       case "training_health":
@@ -201,6 +225,12 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
     }
 
     if (event.type === "complete") {
+      // Flush immediately so the terminal shows the final event without delay.
+      if (eventsRafRef.current !== null) {
+        cancelAnimationFrame(eventsRafRef.current);
+        eventsRafRef.current = null;
+      }
+      setEvents([...eventsBufferRef.current]);
       // If there are more stages queued, don't stop the pipeline
       if (stageQueueRef.current.length === 0) {
         setIsRunning(false);
@@ -210,6 +240,12 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
       return true; // signal to close current socket
     }
     if (event.type === "error") {
+      // Flush immediately on error so the terminal shows the failure.
+      if (eventsRafRef.current !== null) {
+        cancelAnimationFrame(eventsRafRef.current);
+        eventsRafRef.current = null;
+      }
+      setEvents([...eventsBufferRef.current]);
       setIsRunning(false);
       setRunEndedAt(Date.now());
       setError(event.message ?? "Unknown error");
@@ -217,7 +253,7 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
       return true;
     }
     return false;
-  }, []);
+  }, [scheduleEventsFlush]);
 
   // On mount (or server reconnect), rehydrate from buffered events
   useEffect(() => {
@@ -225,6 +261,7 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
     getRunEvents()
       .then((data) => {
         if (data.events.length > 0) {
+          eventsBufferRef.current = [...data.events];
           setEvents(data.events);
           setCurrentStage(data.current_stage);
           setIsRunning(data.is_running);
@@ -240,8 +277,32 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverReady]);
 
+  // On server recovery after mid-session loss, reload run state
+  const prevServerLost = useRef(false);
+  useEffect(() => {
+    const wasLost = prevServerLost.current;
+    prevServerLost.current = serverLost ?? false;
+    if (wasLost && !serverLost) {
+      // Server just came back — restore pipeline state
+      getRunEvents()
+        .then((data) => {
+          if (data.events.length > 0) {
+            eventsBufferRef.current = [...data.events];
+            setEvents(data.events);
+            setCurrentStage(data.current_stage);
+            setIsRunning(data.is_running);
+            if (data.is_running && data.current_stage != null) {
+              _connectWebSocket(data.current_stage, data.events.length);
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverLost]);
+
   const _connectWebSocket = useCallback((stage: number, skipCount = 0) => {
-    const ws = new WebSocket("ws://127.0.0.1:8008/run/stream");
+    const ws = new WebSocket(`${WS_ORIGIN}/run/stream?token=${encodeURIComponent(getToken())}`);
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -277,6 +338,12 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
       }
 
       if (resetState) {
+        // Clear the event buffer and any pending rAF flush before starting fresh.
+        if (eventsRafRef.current !== null) {
+          cancelAnimationFrame(eventsRafRef.current);
+          eventsRafRef.current = null;
+        }
+        eventsBufferRef.current = [];
         setDagApprovalPending(false);
         setEvents([]);
         setError(null);
@@ -296,7 +363,7 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
       setIsRunning(true);
       setCurrentStage(stage);
 
-      const ws = new WebSocket("ws://127.0.0.1:8008/run/stream");
+      const ws = new WebSocket(`${WS_ORIGIN}/run/stream?token=${encodeURIComponent(getToken())}`);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -358,6 +425,9 @@ export function PipelineProvider({ children, serverReady }: { children: ReactNod
 
   const cancel = useCallback(() => {
     stageQueueRef.current = [];
+    // Tell the backend to mark the run as idle so a new run can start
+    // immediately. The daemon thread finishes its current operation naturally.
+    cancelRun().catch(() => { /* best-effort */ });
     wsRef.current?.close();
     wsRef.current = null;
     setIsRunning(false);

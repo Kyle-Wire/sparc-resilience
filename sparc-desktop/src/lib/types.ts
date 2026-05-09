@@ -5,7 +5,6 @@
 export interface HealthResponse {
   status: string;
   project_loaded: boolean;
-  project_path: string | null;
   is_running: boolean;
   current_stage: number | null;
   /** True if the run registry was successfully attached to the loaded project. */

@@ -2,9 +2,10 @@
  * CorrelogramPanel — Moran's I vs lag distance, multi-variable.
  * Stage 0 spatial autocorrelation overview.
  */
-import { Panel, PanelEmpty } from "@/components/ui/DesignSystem";
+import { Panel, PanelEmpty, Btn } from "@/components/ui/DesignSystem";
 import { useManifest } from "@/hooks/useManifest";
 import { useResult } from "@/hooks/useResult";
+import { useInsightsNavigate } from "@/hooks/InsightsProvider";
 import { getCorrelogramData } from "@/lib/api";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
 import { useCanvas } from "./_useCanvas";
@@ -12,6 +13,7 @@ import type { CorrelogramData } from "@/lib/types";
 
 export default function CorrelogramPanel() {
   const manifest = useManifest();
+  const navigate = useInsightsNavigate();
   const present = !!manifest.lookup("0", "correlogram_results");
   const { data } = useResult<CorrelogramData>(
     present ? "s0:correlogram" : null,
@@ -131,6 +133,7 @@ export default function CorrelogramPanel() {
         <PanelEmpty
           reason="Awaiting stage 0"
           hint="Run the Correlogram stage to characterise spatial autocorrelation in the input variables."
+          action={navigate && <Btn small onClick={() => navigate("Run")}>Go to Run page →</Btn>}
         />
       </Panel>
     );

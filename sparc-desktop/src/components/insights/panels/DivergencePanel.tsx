@@ -6,14 +6,16 @@
  * single confidence chip; researcher mode shows the full table.
  */
 import { useMemo } from "react";
-import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
+import { Panel, PanelEmpty, Pill, Btn } from "@/components/ui/DesignSystem";
 import { useManifest } from "@/hooks/useManifest";
 import { useResult } from "@/hooks/useResult";
+import { useInsightsNavigate } from "@/hooks/InsightsProvider";
 import { getCateVsGwrDivergence } from "@/lib/api";
 import type { DivergenceReport } from "@/lib/types";
 
 export default function DivergencePanel() {
   const manifest = useManifest();
+  const navigate = useInsightsNavigate();
   const stage3 = manifest.stage("3");
   const present =
     !!stage3 && Object.keys(stage3.artifacts ?? {}).some((a) => a.includes("divergence"));
@@ -37,6 +39,7 @@ export default function DivergencePanel() {
         <PanelEmpty
           reason="No divergence audit"
           hint="Run the Causal stage with both Bayesian CATE and GWR baseline."
+          action={navigate && <Btn small onClick={() => navigate("Run")}>Go to Run page →</Btn>}
         />
       </Panel>
     );

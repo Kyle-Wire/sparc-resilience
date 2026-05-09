@@ -1,4 +1,4 @@
-import type { ReactNode, CSSProperties } from "react";
+import { useCallback, useState, type ReactNode, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 
 /* ----- Card ----- */
 interface CardProps {
@@ -155,10 +155,26 @@ interface BtnProps {
 }
 
 export function Btn({ children, primary, small, onClick, disabled }: BtnProps) {
+  const [ripples, setRipples] = useState<{ id: number; x: number; y: number }[]>([]);
+
+  const spawnRipple = useCallback((e: ReactMouseEvent<HTMLButtonElement>) => {
+    if (disabled) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const id = Date.now() + Math.random();
+    setRipples((prev) => [...prev, { id, x, y }]);
+    window.setTimeout(() => {
+      setRipples((prev) => prev.filter((r) => r.id !== id));
+    }, 540);
+  }, [disabled]);
+
   return (
     <button
       onClick={onClick}
+      onMouseDown={spawnRipple}
       disabled={disabled}
+      className={`sparc-btn${primary ? " sparc-btn--primary" : " sparc-btn--light"}`}
       style={{
         border: "1px solid " + (primary ? "var(--ink)" : "var(--line)"),
         background: primary ? "var(--ink)" : "#fff",
@@ -172,7 +188,14 @@ export function Btn({ children, primary, small, onClick, disabled }: BtnProps) {
         opacity: disabled ? 0.5 : 1,
       }}
     >
-      {children}
+      {ripples.map((r) => (
+        <span
+          key={r.id}
+          className="sparc-btn__ripple"
+          style={{ left: r.x, top: r.y }}
+        />
+      ))}
+      <span style={{ position: "relative", zIndex: 1 }}>{children}</span>
     </button>
   );
 }

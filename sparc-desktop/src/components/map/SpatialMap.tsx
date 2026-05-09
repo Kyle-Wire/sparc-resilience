@@ -107,26 +107,49 @@ function interpolateColor(t: number, palette: ColorPalette = "sparc"): [number, 
 }
 
 // ---------------------------------------------------------------------------
-// Compute bounding box from GeoJSON
+// Compute bounding box from GeoJSON — handles all geometry types.
 // ---------------------------------------------------------------------------
+function collectCoords(geometry: any, out: number[][]): void {
+  if (!geometry) return;
+  switch (geometry.type) {
+    case "Point":
+      out.push(geometry.coordinates);
+      break;
+    case "MultiPoint":
+    case "LineString":
+      for (const c of geometry.coordinates) out.push(c);
+      break;
+    case "MultiLineString":
+    case "Polygon":
+      for (const ring of geometry.coordinates)
+        for (const c of ring) out.push(c);
+      break;
+    case "MultiPolygon":
+      for (const poly of geometry.coordinates)
+        for (const ring of poly)
+          for (const c of ring) out.push(c);
+      break;
+    case "GeometryCollection":
+      for (const g of geometry.geometries ?? []) collectCoords(g, out);
+      break;
+  }
+}
+
 function computeBBox(geojson: GeoJsonData): {
   longitude: number;
   latitude: number;
   zoom: number;
 } {
   let minLng = 180, maxLng = -180, minLat = 90, maxLat = -90;
-  for (const f of geojson.features) {
-    const coords = f.geometry.type === "Point"
-      ? [f.geometry.coordinates as number[]]
-      : (f.geometry.coordinates as number[][]);
-    for (const c of coords) {
-      const [lng, lat] = c;
-      if (lng < minLng) minLng = lng;
-      if (lng > maxLng) maxLng = lng;
-      if (lat < minLat) minLat = lat;
-      if (lat > maxLat) maxLat = lat;
-    }
+  const pts: number[][] = [];
+  for (const f of geojson.features) collectCoords(f.geometry, pts);
+  for (const [lng, lat] of pts) {
+    if (lng < minLng) minLng = lng;
+    if (lng > maxLng) maxLng = lng;
+    if (lat < minLat) minLat = lat;
+    if (lat > maxLat) maxLat = lat;
   }
+  if (pts.length === 0) return { longitude: -98.5, latitude: 39.8, zoom: 4 };
   const longitude = (minLng + maxLng) / 2;
   const latitude = (minLat + maxLat) / 2;
   const spanLng = maxLng - minLng;

@@ -6,18 +6,21 @@
  * linked-selection store so other panels can filter on it.
  */
 import { useMemo, useState } from "react";
-import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
+import { Panel, PanelEmpty, Pill, Btn } from "@/components/ui/DesignSystem";
 import { useManifest } from "@/hooks/useManifest";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
+import { useInsightsNavigate } from "@/hooks/InsightsProvider";
 import { useResult } from "@/hooks/useResult";
 import { getSpatialCvPredictions } from "@/lib/api";
 import SpatialMap from "@/components/map/SpatialMap";
+import ResizableMapWrapper from "@/components/map/ResizableMapWrapper";
 import { MAP_HEIGHT_DEFAULT } from "@/lib/design-tokens";
 import type { GeoJsonData } from "@/lib/types";
 
 export default function PredictionsMapPanel() {
   const manifest = useManifest();
   const linked = useLinkedSelection();
+  const navigate = useInsightsNavigate();
   const present = !!manifest.lookup("2", "spatial_cv_predictions");
   const { data: geo } = useResult<GeoJsonData>(
     present ? "s2:spatial_cv_predictions" : null,
@@ -66,6 +69,7 @@ export default function PredictionsMapPanel() {
         <PanelEmpty
           reason="No predictions yet"
           hint="Run stage 2 (Models) to produce spatial cross-validation predictions."
+          action={navigate && <Btn small onClick={() => navigate("Run")}>Go to Run page →</Btn>}
         />
       </Panel>
     );
@@ -102,18 +106,19 @@ export default function PredictionsMapPanel() {
       }
       bodyPadding={0}
     >
-      <div style={{ height: MAP_HEIGHT_DEFAULT, position: "relative" }}>
+      <ResizableMapWrapper defaultHeight={MAP_HEIGHT_DEFAULT}>
         <SpatialMap
           geojson={geo}
           colorField={resolvedLayer || undefined}
           mode="scatter"
           height="100%"
+          expandable
           onFeatureClick={(props) => {
             const id = props.id != null ? String(props.id) : null;
             if (id) linked.setIds([id]);
           }}
         />
-      </div>
+      </ResizableMapWrapper>
     </Panel>
   );
 }

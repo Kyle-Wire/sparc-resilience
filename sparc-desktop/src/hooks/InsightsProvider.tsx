@@ -21,6 +21,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useNavigationStore } from "@/stores/navigationStore";
 
 export type Audience = "practitioner" | "researcher";
 
@@ -55,6 +56,9 @@ export interface InsightsContextValue {
 
   /** Convenience: true when any selection is active. */
   hasSelection: boolean;
+
+  /** Navigate to another app page (e.g. "Run"). Undefined if not provided. */
+  navigate: ((page: string) => void) | undefined;
 }
 
 const Ctx = createContext<InsightsContextValue | null>(null);
@@ -93,6 +97,8 @@ export function InsightsProvider({ children, initialAudience }: ProviderProps) {
 
   const clearSelection = useCallback(() => setSelectionState(EMPTY_SELECTION), []);
 
+  const { navigate } = useNavigationStore();
+
   const value = useMemo<InsightsContextValue>(
     () => ({
       audience,
@@ -105,8 +111,9 @@ export function InsightsProvider({ children, initialAudience }: ProviderProps) {
         selection.bbox !== null ||
         selection.variable !== null ||
         selection.scenario !== null,
+      navigate,
     }),
-    [audience, setAudience, selection, setSelection, clearSelection],
+    [audience, setAudience, selection, setSelection, clearSelection, navigate],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
@@ -124,4 +131,9 @@ export function useInsights(): InsightsContextValue {
 export function useAudience(): [Audience, (a: Audience) => void] {
   const { audience, setAudience } = useInsights();
   return [audience, setAudience];
+}
+
+/** Convenience: navigate to another app page. Returns undefined if not wired up. */
+export function useInsightsNavigate(): ((page: string) => void) | undefined {
+  return useInsights().navigate;
 }

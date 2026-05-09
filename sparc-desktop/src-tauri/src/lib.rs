@@ -10,7 +10,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(sidecar::SidecarHandle::new())
-        .invoke_handler(tauri::generate_handler![sidecar::stop_sidecar])
+        .invoke_handler(tauri::generate_handler![sidecar::stop_sidecar, sidecar::get_sidecar_token])
         .setup(|app| {
             let handle = app.handle().clone();
             // Spawn the Python server in the background

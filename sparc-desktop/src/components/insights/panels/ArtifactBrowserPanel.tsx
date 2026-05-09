@@ -3,8 +3,9 @@
  * stage tag and size.
  */
 import { useMemo } from "react";
-import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
+import { Panel, PanelEmpty, Pill, Btn } from "@/components/ui/DesignSystem";
 import { useManifest } from "@/hooks/useManifest";
+import { useInsightsNavigate } from "@/hooks/InsightsProvider";
 
 interface Row {
   stage: string;
@@ -15,6 +16,7 @@ interface Row {
 
 export default function ArtifactBrowserPanel() {
   const manifest = useManifest();
+  const navigate = useInsightsNavigate();
 
   const rows = useMemo<Row[]>(() => {
     const stages = manifest.manifest?.stages ?? {};
@@ -30,7 +32,11 @@ export default function ArtifactBrowserPanel() {
   if (!rows.length) {
     return (
       <Panel title="Artifact browser" subtitle="manifest">
-        <PanelEmpty reason="No artifacts yet" hint="Run any stage to populate the manifest." />
+        <PanelEmpty
+          reason="No artifacts yet"
+          hint="Run any stage to populate the manifest."
+          action={navigate && <Btn small onClick={() => navigate("Run")}>Go to Run page →</Btn>}
+        />
       </Panel>
     );
   }

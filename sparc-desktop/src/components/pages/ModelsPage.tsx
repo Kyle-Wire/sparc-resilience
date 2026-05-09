@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect } from "react";
-import { SectionHeader, Card } from "@/components/ui/DesignSystem";
+import { SectionHeader, Card, Btn } from "@/components/ui/DesignSystem";
 import { getConfig, saveConfig } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import type { ProjectConfig } from "@/lib/types";
@@ -81,12 +81,40 @@ function SelectInput({
   );
 }
 
+function ModelTooltip({ tip }: { tip: string }) {
+  return (
+    <span
+      title={tip}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 15,
+        height: 15,
+        borderRadius: "50%",
+        border: "1px solid var(--muted)",
+        color: "var(--muted)",
+        fontSize: 9,
+        fontWeight: 700,
+        cursor: "default",
+        lineHeight: 1,
+        fontFamily: "inherit",
+        flexShrink: 0,
+        marginLeft: 4,
+      }}
+    >
+      ?
+    </span>
+  );
+}
+
 function ModelToggle({
-  id, label, description, enabled, onToggle, children,
+  id, label, description, tooltip, enabled, onToggle, children,
 }: {
   id: string;
   label: string;
   description: string;
+  tooltip?: string;
   enabled: boolean;
   onToggle: () => void;
   children?: React.ReactNode;
@@ -107,16 +135,16 @@ function ModelToggle({
           gap: 10,
           padding: "10px 14px",
           background: enabled ? "rgba(231,60,37,0.04)" : "transparent",
-          cursor: "pointer",
+          cursor: id === "ols" ? "default" : "pointer",
         }}
-        onClick={onToggle}
+        onClick={id === "ols" ? undefined : onToggle}
       >
         <div
           style={{
             width: 36,
             height: 20,
             borderRadius: 10,
-            background: enabled ? "var(--crimson, #e73c25)" : "var(--line)",
+            background: id === "ols" ? "var(--muted)" : enabled ? "var(--crimson, #e73c25)" : "var(--line)",
             position: "relative",
             transition: "background 0.2s",
             flexShrink: 0,
@@ -135,12 +163,15 @@ function ModelToggle({
             }}
           />
         </div>
-        <div>
-          <div style={{ fontSize: 12.5, fontWeight: 600 }}>{label}</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, display: "inline-flex", alignItems: "center" }}>
+            {label}
+            {tooltip && <ModelTooltip tip={tooltip} />}
+          </div>
           <div style={{ fontSize: 10.5, color: "var(--muted)" }}>{description}</div>
         </div>
         {id === "ols" && (
-          <span style={{ marginLeft: "auto", fontSize: 10, color: "var(--muted)", fontStyle: "italic" }}>
+          <span style={{ fontSize: 10, color: "var(--muted)", fontStyle: "italic" }}>
             always on
           </span>
         )}
@@ -245,7 +276,11 @@ export default function ModelsPage() {
 
   return (
     <div>
-      <SectionHeader kicker="09 Â· analysis" label="Models" />
+      <SectionHeader
+        kicker="09 · analysis"
+        label="Models"
+        right={<Btn primary small onClick={handleSave} disabled={saving}>{saving ? "Saving…" : "Save Parameters"}</Btn>}
+      />
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
         {/* Model selection + params */}
@@ -253,14 +288,16 @@ export default function ModelsPage() {
           <ModelToggle
             id="ols"
             label="OLS"
-            description="Ordinary Least Squares â€” global baseline"
+            description="Ordinary Least Squares — global baseline"
+            tooltip="A standard linear regression fitted once across all observations. Serves as the global benchmark — fast, interpretable, and always included for comparison."
             enabled={true}
             onToggle={() => {}}
           />
           <ModelToggle
             id="gwr"
-            label="GWR"
-            description="Geographically Weighted Regression"
+            label="MGWR"
+            description="Multiscale Geographically Weighted Regression"
+            tooltip="Extends classic GWR by allowing each predictor to operate at its own spatial bandwidth — some effects may be local, others regional. Captures spatially varying relationships across multiple scales simultaneously."
             enabled={gwrEnabled}
             onToggle={() => setGwrEnabled((v) => !v)}
           >
@@ -281,6 +318,7 @@ export default function ModelsPage() {
             id="gwrf"
             label="GWRF"
             description="Geographically Weighted Random Forest"
+            tooltip="A non-linear ensemble method that fits a separate Random Forest for each observation using spatially-weighted neighbourhoods. Captures local non-linearities without assuming a functional form."
             enabled={gwrfEnabled}
             onToggle={() => setGwrfEnabled((v) => !v)}
           >
@@ -292,6 +330,7 @@ export default function ModelsPage() {
             id="ggpgam"
             label="GGPGAM"
             description="Gaussian Process + Generalized Additive Model"
+            tooltip="Combines a Gaussian Process spatial prior with smooth spline terms for each predictor. Provides calibrated uncertainty estimates and handles non-linear covariate effects with spatial autocorrelation."
             enabled={ggpgamEnabled}
             onToggle={() => setGgpgamEnabled((v) => !v)}
           >
@@ -301,8 +340,9 @@ export default function ModelsPage() {
           </ModelToggle>
           <ModelToggle
             id="neural"
-            label="Neural Network"
-            description="V2 Physics-Guided Meta-Learner"
+            label="SPARC Neural"
+            description="Physics-guided spatial meta-learner"
+            tooltip="A graph-attention network that ingests outputs from all other models as features alongside raw predictors. Physics constraints (monotonicity, bounds) are enforced during training. Typically the highest-accuracy model in the ensemble."
             enabled={neuralEnabled}
             onToggle={() => setNeuralEnabled((v) => !v)}
           >
@@ -316,7 +356,7 @@ export default function ModelsPage() {
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           {/* Neural training parameters */}
           {neuralEnabled && (
-            <Card title="Neural training" subtitle="epoch and optimiser settings">
+            <Card title="SPARC Neural training" subtitle="epoch and optimiser settings">
               <NumInput label="Epochs" value={training.n_epochs} onChange={(v) => setTraining({ ...training, n_epochs: v })} min={10} />
               <NumInput label="Pretrain Epochs" value={training.pretrain_epochs} onChange={(v) => setTraining({ ...training, pretrain_epochs: v })} min={10} />
               <NumInput label="Learning Rate" value={training.learning_rate} onChange={(v) => setTraining({ ...training, learning_rate: v })} min={0} step={0.0001} />
@@ -360,7 +400,7 @@ export default function ModelsPage() {
                   onChange={(e) => setSpatialCv({ ...spatialCv, buffer_size_auto: e.target.checked })}
                 />
                 <label htmlFor="buffer-auto" style={{ ...labelStyle, marginBottom: 0, cursor: "pointer" }}>
-                  Auto (â…“ of block size)
+                  Auto (⅓ of block size)
                 </label>
               </div>
               {!(spatialCv.buffer_size_auto) && (
@@ -376,25 +416,6 @@ export default function ModelsPage() {
             </div>
           </Card>
         </div>
-      </div>
-
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          style={{
-            padding: "8px 22px",
-            background: saving ? "var(--muted)" : "var(--crimson, #e73c25)",
-            color: "#fff",
-            border: "none",
-            borderRadius: 6,
-            fontSize: 12.5,
-            fontWeight: 600,
-            cursor: saving ? "not-allowed" : "pointer",
-          }}
-        >
-          {saving ? "Savingâ€¦" : "Save Parameters"}
-        </button>
       </div>
     </div>
   );

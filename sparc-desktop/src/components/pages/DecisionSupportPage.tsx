@@ -3,6 +3,7 @@ import { SectionHeader, Card, Btn, Stat, StatGrid, Tag } from "@/components/ui/D
 import { EmptyState } from "@/components/common/EmptyState";
 import { SPARC_RAMP_HEX, MAP_HEIGHT_DEFAULT } from "@/lib/design-tokens";
 import SpatialMap from "@/components/map/SpatialMap";
+import ResizableMapWrapper from "@/components/map/ResizableMapWrapper";
 import { ExportBlockButton } from "@/components/common/ExportBlockButton";
 import { usePipeline } from "@/hooks/PipelineProvider";
 import { useNotification } from "@/hooks/useNotifications";
@@ -16,8 +17,6 @@ import {
   getTargeting,
   optimizeBudget,
   dataSummary,
-  optimizeScenario,
-  getEquityLayer,
   type InterventionCandidate,
   type OptimizerResponse,
   type RankedIntervention,
@@ -26,25 +25,19 @@ import {
   type TargetingResponse,
   type UncertaintyRecord,
   type BudgetOptimizeResponse,
-  type OptimizeScenarioResponse,
-  type EquityLayerRecord,
-  type RuntimeScenarioSpec,
 } from "@/lib/api";
 
 /**
- * Decision Support — Phase 7 unified wizard.
+ * Decision Support — budget & equity optimization.
  *
- * Consolidates the former Decisions + BudgetOptimizer pages into a
- * 3-step flow:
- *   1. Candidates   — load, edit cost/equity, pick treatment variables
- *   2. Constraints  — budget, robustness λ, direction, benefit source,
- *                     solver, equity layers
- *   3. Recommendation — runs causal optimizer + budget allocator in
- *                     parallel, shows ranked table + spatial targeting
- *                     + allocation histogram + Pareto frontier
+ * Fine-tunes already-run scenarios to find the optimal locations and
+ * intervention mix given a budget and equity constraints:
+ *   1. Scenarios      — review candidates loaded from pipeline outputs
+ *   2. Budget & Equity — set budget cap, robustness, equity weighting
+ *   3. Results         — ranked options + spatial targeting + Pareto
  *
  * Wizard state persists in localStorage under WIZ_KEY so users can
- * step away and return without losing their edits.
+ * step away and return without losing their work.
  */
 
 type Step = 1 | 2 | 3;
@@ -329,791 +322,73 @@ export default function DecisionSupportPage() {
     setStep(1);
   }, []);
 
-  const [mode, setMode] = useState<"portfolio" | "scenario">("portfolio");
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <SectionHeader
-        kicker="Phase 7"
+        kicker="Budget & Equity"
         label="Decision Support"
-        right={
-          <div style={{ display: "flex", gap: 8 }}>
-            {mode === "portfolio" && <Btn small onClick={resetWizard}>Reset</Btn>}
-          </div>
-        }
+        right={<Btn small onClick={resetWizard}>Reset</Btn>}
       />
 
-      {/* Mode tabs */}
-      <div style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--line)" }}>
-        {(["portfolio", "scenario"] as const).map((m) => (
-          <button
-            key={m}
-            onClick={() => setMode(m)}
-            style={{
-              padding: "8px 18px",
-              fontSize: 13,
-              fontWeight: mode === m ? 700 : 400,
-              border: "none",
-              borderBottom: mode === m ? "2px solid var(--accent, #c9662b)" : "2px solid transparent",
-              background: "transparent",
-              color: mode === m ? "var(--accent, #c9662b)" : "var(--muted)",
-              cursor: "pointer",
-            }}
-          >
-            {m === "portfolio" ? "Portfolio Optimizer" : "Scenario Optimizer"}
-          </button>
-        ))}
-      </div>
-
-      {mode === "portfolio" && (
-        <>
-          <Stepper current={step} onNavigate={goToStep} />
-
-          {step === 1 && (
-            <Step1Candidates
-              candidates={mergedCandidates}
-              rawCandidates={candidates}
-              loading={loadingCandidates}
-              error={candidateError}
-              onReload={loadCandidates}
-              onEdit={editCandidate}
-              onNext={() => goToStep(2)}
-            />
-          )}
-
-          {step === 2 && (
-            <Step2Constraints
-              wiz={wiz}
-              updateWiz={updateWiz}
-              cateVars={cateVars}
-              columns={columns}
-              onBack={() => goToStep(1)}
-              onNext={() => {
-                autoRanRef.current = false;
-                goToStep(3);
-              }}
-            />
-          )}
-
-          {step === 3 && (
-            <Step3Recommendation
-              running={running}
-              error={runError}
-              ranked={ranked}
-              uncertainty={uncertainty}
-              equity={equityResult}
-              census={census}
-              budget={budgetResp}
-              targeting={targeting}
-              targetingLoading={targetingLoading}
-              cateVars={cateVars}
-              wiz={wiz}
-              updateWiz={updateWiz}
-              onBack={() => goToStep(2)}
-              onRerun={runRecommendation}
-            />
-          )}
-        </>
-      )}
-
-      {mode === "scenario" && <ScenarioOptimizer cateVars={cateVars} />}
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════
-// Scenario Optimizer — 4-step wizard
-// ════════════════════════════════════════════════════════════════
-
-type ScenStep = 1 | 2 | 3 | 4;
-
-interface ScenarioWizState {
-  /** Step 1: variable → magnitude map */
-  interventions: Record<string, number>;
-  scenarioName: string;
-  /** Step 2: budget + unit costs + equity slider */
-  budget: string;
-  unitCosts: Record<string, number>;
-  equityFocus: number;
-  solver: "auto" | "greedy" | "greedy_2opt" | "milp";
-  paretoSweep: boolean;
-}
-
-const SCEN_WIZ_KEY = "sparc:scenario-optimizer:wizard:v1";
-const SCEN_DEFAULT: ScenarioWizState = {
-  interventions: {},
-  scenarioName: "My Scenario",
-  budget: "",
-  unitCosts: {},
-  equityFocus: 0,
-  solver: "auto",
-  paretoSweep: true,
-};
-
-function loadScenWiz(): ScenarioWizState {
-  try {
-    const raw = localStorage.getItem(SCEN_WIZ_KEY);
-    return raw ? { ...SCEN_DEFAULT, ...JSON.parse(raw) } : { ...SCEN_DEFAULT };
-  } catch {
-    return { ...SCEN_DEFAULT };
-  }
-}
-
-function ScenarioOptimizer({ cateVars }: { cateVars: string[] }) {
-  const { notify } = useNotification();
-  const [step, setStep] = useState<ScenStep>(1);
-  const [wiz, setWiz] = useState<ScenarioWizState>(() => loadScenWiz());
-  const updateWiz = useCallback((patch: Partial<ScenarioWizState>) => {
-    setWiz((prev) => ({ ...prev, ...patch }));
-  }, []);
-
-  useEffect(() => {
-    try { localStorage.setItem(SCEN_WIZ_KEY, JSON.stringify(wiz)); } catch { /* ignore */ }
-  }, [wiz]);
-
-  // Step 3: equity layer
-  const [equityRecords, setEquityRecords] = useState<EquityLayerRecord[]>([]);
-  const [equityLoading, setEquityLoading] = useState(false);
-  const [equityError, setEquityError] = useState<string | null>(null);
-
-  const fetchEquity = useCallback(async () => {
-    setEquityLoading(true);
-    setEquityError(null);
-    try {
-      const res = await getEquityLayer();
-      setEquityRecords(res.records ?? []);
-    } catch (e) {
-      setEquityError(e instanceof Error ? e.message : String(e));
-      setEquityRecords([]);
-    } finally {
-      setEquityLoading(false);
-    }
-  }, []);
-
-  // Step 4: results
-  const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<OptimizeScenarioResponse | null>(null);
-  const [runError, setRunError] = useState<string | null>(null);
-
-  const runOptimize = useCallback(async () => {
-    const budget = Number(wiz.budget);
-    if (!Number.isFinite(budget) || budget <= 0) {
-      notify("warning", "Enter a positive budget first");
-      return;
-    }
-    if (Object.keys(wiz.interventions).length === 0) {
-      notify("warning", "Add at least one intervention in Step 1");
-      return;
-    }
-    setRunning(true);
-    setRunError(null);
-    try {
-      const spec: RuntimeScenarioSpec = {
-        name: wiz.scenarioName,
-        interventions: wiz.interventions,
-        unit_costs: wiz.unitCosts,
-        budget,
-        equity_focus: wiz.equityFocus,
-      };
-      const res = await optimizeScenario(spec, {
-        solver: wiz.solver,
-        pareto_sweep: wiz.paretoSweep,
-      });
-      setResult(res);
-      notify("success", `Allocation complete — ${res.summary.n_cells_treated} cells treated`);
-      setStep(4);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setRunError(msg);
-      notify("error", msg);
-    } finally {
-      setRunning(false);
-    }
-  }, [wiz, notify]);
-
-  const goTo = useCallback((s: ScenStep) => setStep(s), []);
-  const reset = useCallback(() => {
-    setWiz({ ...SCEN_DEFAULT });
-    setResult(null);
-    setRunError(null);
-    setEquityRecords([]);
-    setStep(1);
-  }, []);
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {/* Step pills */}
-      <div style={{ display: "flex", gap: 8 }}>
-        {([
-          [1, "1. Scenario Builder"],
-          [2, "2. Budget & Costs"],
-          [3, "3. Equity Layer"],
-          [4, "4. Allocation"],
-        ] as [ScenStep, string][]).map(([n, label]) => {
-          const active = n === step;
-          const done = n < step;
-          return (
-            <button
-              key={n}
-              onClick={() => goTo(n)}
-              disabled={n > step}
-              style={{
-                flex: 1, padding: "10px 12px", borderRadius: 8, textAlign: "left",
-                border: `1px solid ${active ? "var(--accent,#c9662b)" : "var(--line)"}`,
-                background: active ? "#fff4ec" : done ? "#f7f3eb" : "#fff",
-                cursor: n > step ? "default" : "pointer",
-                opacity: n > step ? 0.5 : 1,
-                fontSize: 12, fontWeight: active ? 700 : 400,
-              }}
-            >
-              {done ? "✓ " : ""}{label}
-            </button>
-          );
-        })}
-      </div>
+      <Stepper current={step} onNavigate={goToStep} />
 
       {step === 1 && (
-        <ScenStep1Builder
-          vars={cateVars}
-          interventions={wiz.interventions}
-          scenarioName={wiz.scenarioName}
-          onChange={(v) => updateWiz({ interventions: v })}
-          onNameChange={(v) => updateWiz({ scenarioName: v })}
-          onNext={() => goTo(2)}
+        <Step1Candidates
+          candidates={mergedCandidates}
+          rawCandidates={candidates}
+          loading={loadingCandidates}
+          error={candidateError}
+          onReload={loadCandidates}
+          onEdit={editCandidate}
+          onNext={() => goToStep(2)}
         />
       )}
 
       {step === 2 && (
-        <ScenStep2Budget
+        <Step2Constraints
           wiz={wiz}
           updateWiz={updateWiz}
-          onBack={() => goTo(1)}
+          cateVars={cateVars}
+          columns={columns}
+          onBack={() => goToStep(1)}
           onNext={() => {
-            void fetchEquity();
-            goTo(3);
+            autoRanRef.current = false;
+            goToStep(3);
           }}
         />
       )}
 
       {step === 3 && (
-        <ScenStep3Equity
-          records={equityRecords}
-          loading={equityLoading}
-          error={equityError}
-          equityFocus={wiz.equityFocus}
-          onRefetch={fetchEquity}
-          onEquityChange={(v) => updateWiz({ equityFocus: v })}
-          onBack={() => goTo(2)}
-          onRunOptimize={runOptimize}
+        <Step3Recommendation
           running={running}
-        />
-      )}
-
-      {step === 4 && (
-        <ScenStep4Allocation
-          result={result}
           error={runError}
-          running={running}
-          onBack={() => goTo(3)}
-          onReset={reset}
-          onRerun={runOptimize}
+          ranked={ranked}
+          uncertainty={uncertainty}
+          equity={equityResult}
+          census={census}
+          budget={budgetResp}
+          targeting={targeting}
+          targetingLoading={targetingLoading}
+          cateVars={cateVars}
+          wiz={wiz}
+          updateWiz={updateWiz}
+          onBack={() => goToStep(2)}
+          onRerun={runRecommendation}
         />
       )}
     </div>
   );
 }
 
-// ── ScenStep1Builder ───────────────────────────────────────────
-function ScenStep1Builder({
-  vars,
-  interventions,
-  scenarioName,
-  onChange,
-  onNameChange,
-  onNext,
-}: {
-  vars: string[];
-  interventions: Record<string, number>;
-  scenarioName: string;
-  onChange: (v: Record<string, number>) => void;
-  onNameChange: (n: string) => void;
-  onNext: () => void;
-}) {
-  const [newVar, setNewVar] = useState(vars[0] ?? "");
-  useEffect(() => { if (!newVar && vars.length) setNewVar(vars[0]); }, [vars, newVar]);
-
-  const addVar = () => {
-    if (!newVar || newVar in interventions) return;
-    onChange({ ...interventions, [newVar]: 1 });
-  };
-
-  const removeVar = (v: string) => {
-    const next = { ...interventions };
-    delete next[v];
-    onChange(next);
-  };
-
-  const setMag = (v: string, mag: number) => {
-    onChange({ ...interventions, [v]: mag });
-  };
-
-  const hasInterventions = Object.keys(interventions).length > 0;
-
-  return (
-    <Card>
-      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>
-        Define Interventions
-      </div>
-
-      <div style={{ marginBottom: 14 }}>
-        <label style={{ fontSize: 11, color: "var(--muted)", display: "block", marginBottom: 4 }}>
-          Scenario name
-        </label>
-        <input
-          value={scenarioName}
-          onChange={(e) => onNameChange(e.target.value)}
-          style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}
-          placeholder="My Scenario"
-        />
-      </div>
-
-      {/* Variable picker */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <select
-          value={newVar}
-          onChange={(e) => setNewVar(e.target.value)}
-          style={{ ...inputStyle, flex: 1 }}
-        >
-          {vars.map((v) => <option key={v} value={v}>{v}</option>)}
-          {vars.length === 0 && <option value="">— run Stage 3 first —</option>}
-        </select>
-        <Btn small onClick={addVar} disabled={!newVar || newVar in interventions}>
-          Add
-        </Btn>
-      </div>
-
-      {/* Intervention sliders */}
-      {hasInterventions ? (
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-          <thead>
-            <tr style={{ borderBottom: "1px solid var(--line)" }}>
-              <th style={thStyle}>Variable</th>
-              <th style={thStyle}>Change magnitude</th>
-              <th style={{ ...thStyle, textAlign: "right" }}></th>
-            </tr>
-          </thead>
-          <tbody>
-            {Object.entries(interventions).map(([v, mag]) => (
-              <tr key={v} style={{ borderBottom: "1px solid var(--line)" }}>
-                <td style={tdStyle}><Tag>{v}</Tag></td>
-                <td style={tdStyle}>
-                  <input
-                    type="range"
-                    min={-5} max={5} step={0.1}
-                    value={mag}
-                    onChange={(e) => setMag(v, Number(e.target.value))}
-                    style={{ width: 120 }}
-                  />
-                  <span style={{ marginLeft: 8, color: mag < 0 ? "#c0392b" : "#2e7d32" }}>
-                    {mag > 0 ? "+" : ""}{mag.toFixed(1)}
-                  </span>
-                </td>
-                <td style={{ ...tdStyle, textAlign: "right" }}>
-                  <button onClick={() => removeVar(v)} style={{ ...inputStyle, color: "#c0392b", background: "none", border: "none", cursor: "pointer" }}>✕</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : (
-        <EmptyState title="No interventions yet" body="Add at least one treatment variable to continue." />
-      )}
-
-      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
-        <Btn onClick={onNext} disabled={!hasInterventions}>Next →</Btn>
-      </div>
-    </Card>
-  );
-}
-
-// ── ScenStep2Budget ────────────────────────────────────────────
-function ScenStep2Budget({
-  wiz,
-  updateWiz,
-  onBack,
-  onNext,
-}: {
-  wiz: ScenarioWizState;
-  updateWiz: (p: Partial<ScenarioWizState>) => void;
-  onBack: () => void;
-  onNext: () => void;
-}) {
-  const setUnitCost = (v: string, cost: number) => {
-    updateWiz({ unitCosts: { ...wiz.unitCosts, [v]: cost } });
-  };
-
-  const budgetValid = Number(wiz.budget) > 0;
-
-  return (
-    <Card>
-      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Budget & Costs</div>
-
-      <div style={{ marginBottom: 14 }}>
-        <label style={{ fontSize: 11, color: "var(--muted)", display: "block", marginBottom: 4 }}>
-          Total budget ($)
-        </label>
-        <input
-          type="number"
-          min={0}
-          value={wiz.budget}
-          onChange={(e) => updateWiz({ budget: e.target.value })}
-          style={{ ...inputStyle, width: 180 }}
-          placeholder="e.g. 500000"
-        />
-      </div>
-
-      {/* Unit costs per intervention variable */}
-      {Object.keys(wiz.interventions).length > 0 && (
-        <div style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>
-            Unit cost per 1.0 change ($)
-          </div>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-            <thead>
-              <tr style={{ borderBottom: "1px solid var(--line)" }}>
-                <th style={thStyle}>Variable</th>
-                <th style={thStyle}>Cost / unit</th>
-              </tr>
-            </thead>
-            <tbody>
-              {Object.entries(wiz.interventions).map(([v]) => (
-                <tr key={v} style={{ borderBottom: "1px solid var(--line)" }}>
-                  <td style={tdStyle}><Tag>{v}</Tag></td>
-                  <td style={tdStyle}>
-                    <input
-                      type="number"
-                      min={0}
-                      value={wiz.unitCosts[v] ?? ""}
-                      onChange={(e) => setUnitCost(v, Number(e.target.value))}
-                      style={{ ...inputStyle, width: 100 }}
-                      placeholder="e.g. 5000"
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
-            Leave blank to use abstract cost = 1 (budget = cell count cap).
-          </div>
-        </div>
-      )}
-
-      {/* Equity focus */}
-      <div style={{ marginBottom: 14 }}>
-        <label style={{ fontSize: 11, color: "var(--muted)", display: "block", marginBottom: 4 }}>
-          Equity focus (α) — blends efficiency ↔ equity-first
-        </label>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 11 }}>Efficiency</span>
-          <input
-            type="range" min={0} max={1} step={0.05}
-            value={wiz.equityFocus}
-            onChange={(e) => updateWiz({ equityFocus: Number(e.target.value) })}
-            style={{ flex: 1 }}
-          />
-          <span style={{ fontSize: 11 }}>Equity</span>
-          <span style={{ width: 36, textAlign: "right", fontSize: 12, fontWeight: 600 }}>
-            {(wiz.equityFocus * 100).toFixed(0)}%
-          </span>
-        </div>
-      </div>
-
-      {/* Solver */}
-      <div style={{ marginBottom: 14 }}>
-        <label style={{ fontSize: 11, color: "var(--muted)", display: "block", marginBottom: 4 }}>
-          Solver
-        </label>
-        <select
-          value={wiz.solver}
-          onChange={(e) => updateWiz({ solver: e.target.value as ScenarioWizState["solver"] })}
-          style={inputStyle}
-        >
-          <option value="auto">Auto (recommended)</option>
-          <option value="greedy">Greedy</option>
-          <option value="greedy_2opt">Greedy + 2-opt</option>
-          <option value="milp">MILP (slow, exact, n≤5000)</option>
-        </select>
-      </div>
-
-      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 16 }}>
-        <Btn small onClick={onBack}>← Back</Btn>
-        <Btn onClick={onNext} disabled={!budgetValid}>Next →</Btn>
-      </div>
-    </Card>
-  );
-}
-
-// ── ScenStep3Equity ────────────────────────────────────────────
-function ScenStep3Equity({
-  records,
-  loading,
-  error,
-  equityFocus,
-  onRefetch,
-  onEquityChange,
-  onBack,
-  onRunOptimize,
-  running,
-}: {
-  records: EquityLayerRecord[];
-  loading: boolean;
-  error: string | null;
-  equityFocus: number;
-  onRefetch: () => void;
-  onEquityChange: (v: number) => void;
-  onBack: () => void;
-  onRunOptimize: () => void;
-  running: boolean;
-}) {
-  const avgEquity = records.length
-    ? records.reduce((s, r) => s + r.equity_score, 0) / records.length
-    : null;
-  const avgPoverty = records.filter((r) => r.poverty_rate != null).length
-    ? records.filter((r) => r.poverty_rate != null).reduce((s, r) => s + (r.poverty_rate ?? 0), 0) /
-      records.filter((r) => r.poverty_rate != null).length
-    : null;
-  const avgMinority = records.filter((r) => r.minority_pct != null).length
-    ? records.filter((r) => r.minority_pct != null).reduce((s, r) => s + (r.minority_pct ?? 0), 0) /
-      records.filter((r) => r.minority_pct != null).length
-    : null;
-
-  return (
-    <Card>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <div style={{ fontSize: 14, fontWeight: 700 }}>Equity Layer</div>
-        <Btn small onClick={onRefetch} disabled={loading}>
-          {loading ? "Loading…" : "Refresh"}
-        </Btn>
-      </div>
-
-      {error && (
-        <div style={{ padding: "8px 12px", borderRadius: 6, background: "#fff0f0", color: "#c0392b", fontSize: 12, marginBottom: 10 }}>
-          {error} — equity weighting will use uniform scores.
-        </div>
-      )}
-
-      {records.length > 0 && (
-        <StatGrid>
-          <Stat label="Cells" value={records.length.toLocaleString()} />
-          {avgEquity != null && <Stat label="Avg equity score" value={(avgEquity * 100).toFixed(1) + "%"} />}
-          {avgPoverty != null && <Stat label="Avg poverty rate" value={(avgPoverty * 100).toFixed(1) + "%"} />}
-          {avgMinority != null && <Stat label="Avg minority %" value={(avgMinority * 100).toFixed(1) + "%"} />}
-        </StatGrid>
-      )}
-
-      {records.length === 0 && !loading && !error && (
-        <div style={{ fontSize: 12, color: "var(--muted)", padding: "12px 0" }}>
-          No equity layer loaded. Allocation will use uniform equity scores (0.5).
-          Click Refresh to fetch Census tract data.
-        </div>
-      )}
-
-      <div style={{ marginTop: 14 }}>
-        <label style={{ fontSize: 11, color: "var(--muted)", display: "block", marginBottom: 4 }}>
-          Equity focus (α) — override from Step 2
-        </label>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 11 }}>Efficiency</span>
-          <input
-            type="range" min={0} max={1} step={0.05}
-            value={equityFocus}
-            onChange={(e) => onEquityChange(Number(e.target.value))}
-            style={{ flex: 1 }}
-          />
-          <span style={{ fontSize: 11 }}>Equity</span>
-          <span style={{ width: 36, textAlign: "right", fontSize: 12, fontWeight: 600 }}>
-            {(equityFocus * 100).toFixed(0)}%
-          </span>
-        </div>
-      </div>
-
-      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 16 }}>
-        <Btn small onClick={onBack}>← Back</Btn>
-        <Btn onClick={onRunOptimize} disabled={running}>
-          {running ? "Running…" : "Run Allocation →"}
-        </Btn>
-      </div>
-    </Card>
-  );
-}
-
-// ── ScenStep4Allocation ───────────────────────────────────────
-function ScenStep4Allocation({
-  result,
-  error,
-  running,
-  onBack,
-  onReset,
-  onRerun,
-}: {
-  result: OptimizeScenarioResponse | null;
-  error: string | null;
-  running: boolean;
-  onBack: () => void;
-  onReset: () => void;
-  onRerun: () => void;
-}) {
-  if (running) {
-    return (
-      <Card>
-        <EmptyState title="Running optimizer…" body="Computing equity-modulated allocation. This may take a moment." tone="waiting" />
-      </Card>
-    );
-  }
-
-  if (error) {
-    return (
-      <Card>
-        <div style={{ color: "#c0392b", fontSize: 13, marginBottom: 12 }}>Error: {error}</div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <Btn small onClick={onBack}>← Back</Btn>
-          <Btn small onClick={onRerun}>Retry</Btn>
-        </div>
-      </Card>
-    );
-  }
-
-  if (!result) {
-    return (
-      <Card>
-        <EmptyState title="No allocation results yet" body="Run the optimizer from Step 3." />
-        <div style={{ marginTop: 12 }}><Btn small onClick={onBack}>← Back</Btn></div>
-      </Card>
-    );
-  }
-
-  const s = result.summary;
-  const paretoPoints = result.pareto?.points ?? [];
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <Card>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <div style={{ fontSize: 14, fontWeight: 700 }}>Allocation: {result.scenario_name}</div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <Btn small onClick={onBack}>← Back</Btn>
-            <Btn small onClick={onRerun}>Re-run</Btn>
-            <Btn small onClick={onReset}>New scenario</Btn>
-          </div>
-        </div>
-        <StatGrid>
-          <Stat label="Budget" value={`$${result.budget.toLocaleString()}`} />
-          <Stat label="Total cost" value={`$${s.total_estimated_cost.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} />
-          <Stat label="Cells treated" value={s.n_cells_treated.toLocaleString()} />
-          <Stat label="Fully treated" value={s.n_cells_fully_treated.toLocaleString()} />
-          <Stat label="Projected Δ" value={s.total_projected_delta.toFixed(3)} />
-          <Stat label="Allocation Gini" value={s.allocation_gini.toFixed(3)} />
-          <Stat label="Equity Gini" value={s.equity_gini.toFixed(3)} />
-          <Stat label="Solver" value={s.solver} />
-        </StatGrid>
-      </Card>
-
-      {/* Allocation map */}
-      {result.allocation_geojson && (
-        <Card>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Allocation Map</div>
-          <SpatialMap
-            geojson={result.allocation_geojson}
-            colorField="allocation"
-            palette="viridis"
-            height={typeof MAP_HEIGHT_DEFAULT === "number" ? `${MAP_HEIGHT_DEFAULT}px` : MAP_HEIGHT_DEFAULT}
-          />
-          <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 6 }}>
-            Colour: allocation fraction [0–1] per grid cell.
-            Hover for equity_score, projected_delta, estimated_cost.
-          </div>
-        </Card>
-      )}
-
-      {/* Pareto frontier */}
-      {paretoPoints.length > 0 && (
-        <Card>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Pareto Frontier — budget vs. benefit</div>
-          <ParetoChart points={paretoPoints} />
-        </Card>
-      )}
-
-      {/* Export */}
-      <Card>
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Export</div>
-        <a
-          href={URL.createObjectURL(new Blob([JSON.stringify(result.allocation_geojson)], { type: "application/geo+json" }))}
-          download={`allocation_${result.scenario_name.replace(/\s+/g, "_")}.geojson`}
-          style={{ fontSize: 12, color: "var(--accent,#c9662b)", textDecoration: "underline" }}
-        >
-          Download allocation GeoJSON
-        </a>
-      </Card>
-    </div>
-  );
-}
-
-// Reuse ParetoChart type-safely
-interface _AP { budget: number; total_benefit: number; n_treated: number; gini: number }
-function ParetoChart({ points }: { points: _AP[] }) {
-  const ref = useRef<HTMLCanvasElement>(null);
-  useEffect(() => {
-    const canvas = ref.current;
-    if (!canvas || points.length === 0) return;
-    const DPR = Math.min(window.devicePixelRatio || 1, 2);
-    const w = canvas.clientWidth || 400;
-    const h = 160;
-    canvas.width = w * DPR;
-    canvas.height = h * DPR;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.scale(DPR, DPR);
-    ctx.clearRect(0, 0, w, h);
-    const pad = 30;
-    const xs = points.map((p) => p.budget);
-    const ys = points.map((p) => p.total_benefit);
-    const xMin = Math.min(...xs), xMax = Math.max(...xs);
-    const yMin = Math.min(...ys), yMax = Math.max(...ys);
-    const sx = (x: number) => pad + ((x - xMin) / Math.max(1e-9, xMax - xMin)) * (w - pad * 2);
-    const sy = (y: number) => h - pad - ((y - yMin) / Math.max(1e-9, yMax - yMin)) * (h - pad * 2);
-    ctx.strokeStyle = "#ccc";
-    ctx.beginPath();
-    ctx.moveTo(pad, pad / 2);
-    ctx.lineTo(pad, h - pad);
-    ctx.lineTo(w - pad / 2, h - pad);
-    ctx.stroke();
-    ctx.strokeStyle = "var(--accent, #c9662b)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    points.forEach((p, i) => { i === 0 ? ctx.moveTo(sx(p.budget), sy(p.total_benefit)) : ctx.lineTo(sx(p.budget), sy(p.total_benefit)); });
-    ctx.stroke();
-    ctx.fillStyle = "var(--accent, #c9662b)";
-    points.forEach((p) => {
-      ctx.beginPath();
-      ctx.arc(sx(p.budget), sy(p.total_benefit), 3, 0, Math.PI * 2);
-      ctx.fill();
-    });
-    ctx.fillStyle = "#6e6358";
-    ctx.font = "10px Inter, sans-serif";
-    ctx.fillText("Budget →", w - 56, h - 6);
-  }, [points]);
-  return <canvas ref={ref} style={{ width: "100%", height: 160 }} />;
-}
 
 // ════════════════════════════════════════════════════════════════
 // Stepper
 // ════════════════════════════════════════════════════════════════
 function Stepper({ current, onNavigate }: { current: Step; onNavigate: (s: Step) => void }) {
   const steps: Array<{ n: Step; label: string; sub: string }> = [
-    { n: 1, label: "Candidates", sub: "Load + edit intervention list" },
-    { n: 2, label: "Constraints", sub: "Budget, robustness, equity" },
-    { n: 3, label: "Recommendation", sub: "Ranked portfolio + spatial targeting" },
+    { n: 1, label: "Scenarios", sub: "Review modelled interventions" },
+    { n: 2, label: "Budget & Equity", sub: "Set constraints and allocation rules" },
+    { n: 3, label: "Results", sub: "Ranked options and spatial targeting" },
   ];
   return (
     <div style={{ display: "flex", gap: 12 }}>
@@ -1186,15 +461,15 @@ function Step1Candidates({
   const canAdvance = candidates.length > 0;
   return (
     <Card
-      title="Step 1 — Candidate Interventions"
-      subtitle="Loaded from scenario + posterior outputs. Edit cost or equity weight in place."
+      title="Step 1 — Modelled Scenarios"
+      subtitle="Review your pipeline scenarios. Adjust cost and equity weight to reflect real-world priorities before optimizing."
       actions={
         <div style={{ display: "flex", gap: 8 }}>
           <Btn small onClick={onReload} disabled={loading}>
             {loading ? "Loading…" : "Reload"}
           </Btn>
-          <Btn small primary onClick={onNext} disabled={!canAdvance}>
-            Next: Constraints →
+          <Btn primary onClick={onNext} disabled={!canAdvance}>
+            Next: Budget & Equity →
           </Btn>
         </div>
       }
@@ -1206,64 +481,106 @@ function Step1Candidates({
       )}
       {candidates.length === 0 && !loading ? (
         <EmptyState
-          title="No candidates yet"
-          body="Run the pipeline through Stage 4 so scenarios + CATE posterior means are available."
+          title="No scenarios found"
+          body="Run the pipeline through Stage 4 first — scenarios and CATE estimates will load automatically."
         />
       ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-            <thead>
-              <tr style={{ textAlign: "left", borderBottom: "1px solid var(--line)" }}>
-                <th style={thStyle}>Name</th>
-                <th style={thStyle}>Treatment</th>
-                <th style={thStyle}>Magnitude</th>
-                <th style={thStyle}>Mean effect</th>
-                <th style={thStyle}>σ effect</th>
-                <th style={thStyle}>Cost</th>
-                <th style={thStyle}>Equity wt.</th>
-              </tr>
-            </thead>
-            <tbody>
-              {candidates.map((c) => {
-                const baseline = rawCandidates.find((r) => r.name === c.name);
-                return (
-                  <tr key={c.name} style={{ borderBottom: "1px solid #eee" }}>
-                    <td style={tdStyle}>{c.name}</td>
-                    <td style={tdStyle}>
-                      <Tag>{c.treatment}</Tag>
-                    </td>
-                    <td style={tdStyle}>{c.magnitude.toFixed(3)}</td>
-                    <td style={tdStyle}>{c.mean_effect.toFixed(4)}</td>
-                    <td style={tdStyle}>{c.effect_std.toFixed(4)}</td>
-                    <td style={tdStyle}>
-                      <NumberField
-                        value={c.cost}
-                        baseline={baseline?.cost ?? c.cost}
-                        step={0.1}
-                        onChange={(v) => onEdit(c.name, { cost: v })}
-                      />
-                    </td>
-                    <td style={tdStyle}>
-                      <NumberField
-                        value={c.equity_weight}
-                        baseline={baseline?.equity_weight ?? c.equity_weight}
-                        step={0.05}
-                        onChange={(v) => onEdit(c.name, { equity_weight: v })}
-                      />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <>
+          {/* Legend */}
+          <div style={{ display: "flex", gap: 16, marginBottom: 10, fontSize: 11, color: "var(--muted)" }}>
+            <span>Pipeline outputs are read-only.</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: "#fff4ec", border: "1px solid var(--accent,#c9662b)" }} />
+              Shaded columns are editable — changes apply only to this optimization.
+            </span>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <colgroup>
+                {/* Read-only zone */}
+                <col /><col /><col /><col /><col />
+                {/* Editable zone */}
+                <col style={{ background: "#fffaf6" }} /><col style={{ background: "#fffaf6" }} />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th colSpan={5} style={{ ...thStyle, borderBottom: "none", paddingBottom: 2, color: "var(--muted)", fontWeight: 400, fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+                    From pipeline
+                  </th>
+                  <th colSpan={2} style={{ ...thStyle, borderBottom: "none", paddingBottom: 2, color: "var(--accent,#c9662b)", fontWeight: 600, fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase", background: "#fffaf6", borderRadius: "6px 6px 0 0" }}>
+                    Your inputs
+                  </th>
+                </tr>
+                <tr style={{ textAlign: "left", borderBottom: "1px solid var(--line)" }}>
+                  <th style={thStyle}>Scenario</th>
+                  <th style={thStyle}>Treatment</th>
+                  <th style={thStyle}>Magnitude</th>
+                  <th style={thStyle}>Mean effect</th>
+                  <th style={thStyle}>Uncertainty (σ)</th>
+                  <th style={{ ...thStyle, background: "#fffaf6" }}>Cost</th>
+                  <th style={{ ...thStyle, background: "#fffaf6" }}>Equity weight</th>
+                </tr>
+              </thead>
+              <tbody>
+                {candidates.map((c) => {
+                  const baseline = rawCandidates.find((r) => r.name === c.name);
+                  const costChanged = Math.abs(c.cost - (baseline?.cost ?? c.cost)) > 1e-9;
+                  const eqChanged = Math.abs(c.equity_weight - (baseline?.equity_weight ?? c.equity_weight)) > 1e-9;
+                  return (
+                    <tr key={c.name} style={{ borderBottom: "1px solid #eee" }}>
+                      <td style={{ ...tdStyle, fontWeight: 600 }}>{c.name}</td>
+                      <td style={tdStyle}><Tag>{c.treatment}</Tag></td>
+                      <td style={tdStyle}>{c.magnitude.toFixed(3)}</td>
+                      <td style={tdStyle}>{c.mean_effect.toFixed(4)}</td>
+                      <td style={{ ...tdStyle, color: "var(--muted)" }}>{c.effect_std.toFixed(4)}</td>
+                      <td style={{ ...tdStyle, background: "#fffaf6" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <NumberField
+                            value={c.cost}
+                            baseline={baseline?.cost ?? c.cost}
+                            step={0.1}
+                            onChange={(v) => onEdit(c.name, { cost: v })}
+                          />
+                          {costChanged && (
+                            <button
+                              onClick={() => onEdit(c.name, { cost: baseline?.cost ?? c.cost })}
+                              title="Reset to pipeline value"
+                              style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "var(--muted)", padding: "0 2px" }}
+                            >↺</button>
+                          )}
+                        </div>
+                      </td>
+                      <td style={{ ...tdStyle, background: "#fffaf6" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <NumberField
+                            value={c.equity_weight}
+                            baseline={baseline?.equity_weight ?? c.equity_weight}
+                            step={0.05}
+                            onChange={(v) => onEdit(c.name, { equity_weight: v })}
+                          />
+                          {eqChanged && (
+                            <button
+                              onClick={() => onEdit(c.name, { equity_weight: baseline?.equity_weight ?? c.equity_weight })}
+                              title="Reset to pipeline value"
+                              style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "var(--muted)", padding: "0 2px" }}
+                            >↺</button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </Card>
   );
 }
 
 // ════════════════════════════════════════════════════════════════
-// Step 2 — Constraints
+// Step 2 — Budget & Equity
 // ════════════════════════════════════════════════════════════════
 function Step2Constraints({
   wiz,
@@ -1280,174 +597,183 @@ function Step2Constraints({
   onBack: () => void;
   onNext: () => void;
 }) {
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const sourceList = wiz.benefitSource === "cate" ? cateVars : [];
   const sourceUnavailable = wiz.benefitSource !== "uniform" && sourceList.length === 0;
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-      <Card title="Step 2a — Budget & Direction" subtitle="Controls the causal ranking.">
-        <FieldRow label="Budget (optional, total cost cap)">
-          <input
-            type="number"
-            value={wiz.budget}
-            onChange={(e) => updateWiz({ budget: e.target.value })}
-            placeholder="Unconstrained"
-            style={inputStyle}
-          />
-        </FieldRow>
-        <FieldRow label={`Robustness λ — ${wiz.robustness.toFixed(2)}`}>
-          <input
-            type="range"
-            min={0}
-            max={2}
-            step={0.1}
-            value={wiz.robustness}
-            onChange={(e) => updateWiz({ robustness: Number(e.target.value) })}
-            style={{ width: "100%" }}
-          />
-        </FieldRow>
-        <FieldRow label="Objective">
-          <label style={{ fontSize: 12, display: "inline-flex", gap: 6, alignItems: "center" }}>
-            <input
-              type="checkbox"
-              checked={wiz.minimise}
-              onChange={(e) => updateWiz({ minimise: e.target.checked })}
-            />
-            Minimise effect (otherwise maximise)
-          </label>
-        </FieldRow>
-        <FieldRow label={`Uncertainty draws — ${wiz.nDraws}`}>
-          <input
-            type="range"
-            min={100}
-            max={2000}
-            step={100}
-            value={wiz.nDraws}
-            onChange={(e) => updateWiz({ nDraws: Number(e.target.value) })}
-            style={{ width: "100%" }}
-          />
-        </FieldRow>
-      </Card>
+    <Card
+      title="Step 2 — Budget & Equity"
+      subtitle="Set your spending limit and equity priorities. Advanced settings are optional."
+    >
+      {/* ── Core controls ── */}
+      <FieldRow label="Total budget (optional)">
+        <input
+          type="number"
+          value={wiz.budget}
+          onChange={(e) => updateWiz({ budget: e.target.value })}
+          placeholder="Leave blank for unconstrained"
+          style={{ ...inputStyle, width: 220 }}
+        />
+      </FieldRow>
 
-      <Card title="Step 2b — Budget Allocator" subtitle="Allocates capital across grid cells.">
-        <FieldRow label="Benefit source">
-          <div style={{ display: "flex", gap: 6 }}>
-            {(["cate", "uniform"] as BenefitSource[]).map((src) => (
-              <button
-                key={src}
-                onClick={() => updateWiz({ benefitSource: src })}
-                style={{
-                  padding: "4px 10px",
-                  fontSize: 11,
-                  borderRadius: 6,
-                  border: `1px solid ${wiz.benefitSource === src ? "var(--accent, #c9662b)" : "var(--line)"}`,
-                  background: wiz.benefitSource === src ? "#fff4ec" : "#fff",
-                  cursor: "pointer",
-                }}
-                title={
-                  src === "cate"
-                    ? "Bayesian local treatment effect β(s) from Stage 3 NUTS posterior"
-                    : "Uniform unit benefit — sanity check / equity reference only"
-                }
-              >
-                {src === "cate" ? "Bayesian β(s)" : "Uniform"}
-              </button>
-            ))}
-          </div>
-        </FieldRow>
-        {wiz.benefitSource !== "uniform" && (
-          <FieldRow label={`Treatment variable${sourceUnavailable ? " (none available)" : ""}`}>
-            <select
-              value={wiz.benefitVar}
-              onChange={(e) => updateWiz({ benefitVar: e.target.value })}
-              style={inputStyle}
-              disabled={sourceUnavailable}
-            >
-              {sourceList.map((v) => (
-                <option key={v} value={v}>{v}</option>
-              ))}
-            </select>
-          </FieldRow>
-        )}
-        <FieldRow label="Solver">
-          <select
-            value={wiz.solver}
-            onChange={(e) => updateWiz({ solver: e.target.value as Solver })}
-            style={inputStyle}
-          >
-            <option value="auto">Auto</option>
-            <option value="greedy">Greedy</option>
-            <option value="greedy_2opt">Greedy + 2-opt</option>
-            <option value="milp">MILP (exact)</option>
-          </select>
-        </FieldRow>
-        <FieldRow label="Cost column (optional)">
-          <select
-            value={wiz.costColumn}
-            onChange={(e) => updateWiz({ costColumn: e.target.value })}
-            style={inputStyle}
-          >
-            <option value="">— uniform —</option>
-            {columns.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </FieldRow>
-        <FieldRow label="Max-allocation column (optional)">
-          <select
-            value={wiz.xMaxColumn}
-            onChange={(e) => updateWiz({ xMaxColumn: e.target.value })}
-            style={inputStyle}
-          >
-            <option value="">— no cap —</option>
-            {columns.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </FieldRow>
-        <FieldRow label="Pareto sweep">
-          <label style={{ fontSize: 12, display: "inline-flex", gap: 6, alignItems: "center" }}>
-            <input
-              type="checkbox"
-              checked={wiz.paretoSweep}
-              onChange={(e) => updateWiz({ paretoSweep: e.target.checked })}
-            />
-            Compute benefit vs. budget curve
-          </label>
-        </FieldRow>
-      </Card>
+      <FieldRow label="Equity priority">
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>Efficiency first</span>
+          <input
+            type="range" min={0} max={1} step={0.05}
+            value={wiz.robustness / 2}
+            onChange={(e) => updateWiz({ robustness: Number(e.target.value) * 2 })}
+            style={{ flex: 1 }}
+          />
+          <span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>Equity first</span>
+          <span style={{ width: 36, textAlign: "right", fontSize: 12, fontWeight: 600 }}>
+            {Math.round((wiz.robustness / 2) * 100)}%
+          </span>
+        </div>
+        <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 3 }}>
+          Higher values prioritise underserved areas over maximum aggregate benefit.
+        </div>
+      </FieldRow>
 
-      <Card
-        title="Step 2c — Equity Layers"
-        subtitle="Provide one numeric value per candidate (comma or space separated). Leaving blank skips the layer."
-        style={{ gridColumn: "1 / -1" }}
+      <FieldRow label="Objective">
+        <label style={{ fontSize: 12, display: "inline-flex", gap: 6, alignItems: "center" }}>
+          <input
+            type="checkbox"
+            checked={wiz.minimise}
+            onChange={(e) => updateWiz({ minimise: e.target.checked })}
+          />
+          Minimise the outcome (e.g. reduce risk) — uncheck to maximise
+        </label>
+      </FieldRow>
+
+      {/* ── Advanced toggle ── */}
+      <button
+        onClick={() => setShowAdvanced((v) => !v)}
+        style={{
+          marginTop: 8,
+          background: "none",
+          border: "none",
+          padding: 0,
+          fontSize: 12,
+          color: "var(--accent, #c9662b)",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
+        }}
       >
-        {Object.keys(wiz.layerText).map((name) => (
-          <FieldRow key={name} label={name}>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <input
-                type="text"
-                value={wiz.layerText[name]}
-                onChange={(e) => updateWiz({ layerText: { ...wiz.layerText, [name]: e.target.value } })}
-                placeholder="e.g. 120, 80, 200, 50"
-                style={{ ...inputStyle, flex: 1 }}
-              />
-              <label style={{ fontSize: 11, display: "inline-flex", gap: 4 }}>
-                <input
-                  type="checkbox"
-                  checked={!!wiz.layerInvert[name]}
-                  onChange={(e) =>
-                    updateWiz({ layerInvert: { ...wiz.layerInvert, [name]: e.target.checked } })
-                  }
-                />
-                Invert
-              </label>
+        <span style={{ fontSize: 10 }}>{showAdvanced ? "▾" : "▸"}</span>
+        {showAdvanced ? "Hide advanced settings" : "Advanced settings"}
+      </button>
+
+      {showAdvanced && (
+        <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 0, borderTop: "1px solid var(--line)", paddingTop: 12 }}>
+          <FieldRow label={`Robustness λ — ${wiz.robustness.toFixed(2)}`}>
+            <input
+              type="range" min={0} max={2} step={0.1}
+              value={wiz.robustness}
+              onChange={(e) => updateWiz({ robustness: Number(e.target.value) })}
+              style={{ width: "100%" }}
+            />
+            <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
+              Penalises high-variance candidates. 0 = pure mean effect, 2 = strongly risk-averse.
             </div>
           </FieldRow>
-        ))}
-      </Card>
 
-      <div style={{ gridColumn: "1 / -1", display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <FieldRow label="Benefit source for spatial allocation">
+            <div style={{ display: "flex", gap: 6 }}>
+              {(["cate", "uniform"] as BenefitSource[]).map((src) => (
+                <button
+                  key={src}
+                  onClick={() => updateWiz({ benefitSource: src })}
+                  style={{
+                    padding: "4px 10px", fontSize: 11, borderRadius: 6, cursor: "pointer",
+                    border: `1px solid ${wiz.benefitSource === src ? "var(--accent, #c9662b)" : "var(--line)"}`,
+                    background: wiz.benefitSource === src ? "#fff4ec" : "#fff",
+                  }}
+                >
+                  {src === "cate" ? "Causal effect map" : "Uniform"}
+                </button>
+              ))}
+            </div>
+          </FieldRow>
+
+          {wiz.benefitSource !== "uniform" && (
+            <FieldRow label={`Treatment variable${sourceUnavailable ? " — none available yet" : ""}`}>
+              <select
+                value={wiz.benefitVar}
+                onChange={(e) => updateWiz({ benefitVar: e.target.value })}
+                style={inputStyle}
+                disabled={sourceUnavailable}
+              >
+                {sourceList.map((v) => <option key={v} value={v}>{v}</option>)}
+              </select>
+            </FieldRow>
+          )}
+
+          <FieldRow label="Solver">
+            <select
+              value={wiz.solver}
+              onChange={(e) => updateWiz({ solver: e.target.value as Solver })}
+              style={inputStyle}
+            >
+              <option value="auto">Auto (recommended)</option>
+              <option value="greedy">Greedy</option>
+              <option value="greedy_2opt">Greedy + 2-opt</option>
+              <option value="milp">MILP — exact, slow for n &gt; 5000</option>
+            </select>
+          </FieldRow>
+
+          <FieldRow label="Cost column (optional)">
+            <select
+              value={wiz.costColumn}
+              onChange={(e) => updateWiz({ costColumn: e.target.value })}
+              style={inputStyle}
+            >
+              <option value="">— uniform cost —</option>
+              {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </FieldRow>
+
+          <FieldRow label="Max-allocation column (optional)">
+            <select
+              value={wiz.xMaxColumn}
+              onChange={(e) => updateWiz({ xMaxColumn: e.target.value })}
+              style={inputStyle}
+            >
+              <option value="">— no cap —</option>
+              {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </FieldRow>
+
+          <FieldRow label={`Uncertainty draws — ${wiz.nDraws}`}>
+            <input
+              type="range" min={100} max={2000} step={100}
+              value={wiz.nDraws}
+              onChange={(e) => updateWiz({ nDraws: Number(e.target.value) })}
+              style={{ width: "100%" }}
+            />
+          </FieldRow>
+
+          <FieldRow label="Pareto sweep">
+            <label style={{ fontSize: 12, display: "inline-flex", gap: 6, alignItems: "center" }}>
+              <input
+                type="checkbox"
+                checked={wiz.paretoSweep}
+                onChange={(e) => updateWiz({ paretoSweep: e.target.checked })}
+              />
+              Compute benefit vs. budget curve
+            </label>
+          </FieldRow>
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, justifyContent: "space-between", marginTop: 20 }}>
         <Btn small onClick={onBack}>← Back</Btn>
-        <Btn small primary onClick={onNext}>Next: Recommendation →</Btn>
+        <Btn primary onClick={onNext}>Run Optimization →</Btn>
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -1497,8 +823,8 @@ function Step3Recommendation({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <Card
-        title="Step 3 — Recommendation"
-        subtitle={running ? "Crunching causal + budget optimizers…" : "Results from all parallel jobs."}
+        title="Step 3 — Results"
+        subtitle={running ? "Running optimization…" : "Scenarios ranked by projected benefit, cost, and equity."}
         actions={
           <div style={{ display: "flex", gap: 8 }}>
             <Btn small onClick={onBack}>← Back</Btn>
@@ -1516,15 +842,15 @@ function Step3Recommendation({
 
         {ranked && (
           <StatGrid>
-            <Stat label="Ranked" value={`${rankedRows.length}`} />
-            <Stat label="Selected" value={`${rankedRows.filter((r) => r.selected).length}`} />
+            <Stat label="Scenarios evaluated" value={`${rankedRows.length}`} />
+            <Stat label="Recommended" value={`${rankedRows.filter((r) => r.selected).length}`} />
             <Stat
-              label="Top pick effect"
+              label="Top scenario"
               value={topPick ? topPick.risk_adjusted_effect.toFixed(4) : "—"}
               sub={topPick?.name}
             />
             <Stat
-              label="Equity Gini"
+              label="Equity distribution (Gini)"
               value={ranked.equity_summary.gini == null ? "—" : ranked.equity_summary.gini.toFixed(3)}
             />
           </StatGrid>
@@ -1532,39 +858,58 @@ function Step3Recommendation({
       </Card>
 
       {ranked && (
-        <Card title="Ranked Portfolio" subtitle="Risk-adjusted causal effects × equity weights.">
+        <Card
+          title="Ranked Scenarios"
+          subtitle="Scenarios are ordered by projected benefit adjusted for cost and equity. Recommended scenarios are highlighted."
+        >
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
                 <tr style={{ textAlign: "left", borderBottom: "1px solid var(--line)" }}>
                   <th style={thStyle}>Rank</th>
-                  <th style={thStyle}>Name</th>
-                  <th style={thStyle}>Score</th>
-                  <th style={thStyle}>Risk-adj effect</th>
+                  <th style={thStyle}>Scenario</th>
+                  <th style={thStyle}>Projected benefit</th>
                   <th style={thStyle}>Cost</th>
-                  <th style={thStyle}>Equity wt.</th>
-                  <th style={thStyle}>Effect p10 / p90</th>
-                  <th style={thStyle}>Selected</th>
+                  <th style={thStyle}>Equity weight</th>
+                  <th style={thStyle}>Uncertainty range</th>
+                  <th style={{ ...thStyle, textAlign: "center" }}>Recommended</th>
                 </tr>
               </thead>
               <tbody>
                 {rankedRows.map((r, i) => {
                   const u = uncByName.get(r.name);
+                  const isTop = i === 0 && r.selected;
                   return (
                     <tr
                       key={r.name}
-                      style={{ borderBottom: "1px solid #eee", background: r.selected ? "#f1f7e8" : undefined }}
+                      style={{
+                        borderBottom: "1px solid #eee",
+                        background: isTop ? "#eaf4d9" : r.selected ? "#f1f7e8" : undefined,
+                      }}
                     >
-                      <td style={tdStyle}>{i + 1}</td>
-                      <td style={tdStyle}>{r.name}</td>
-                      <td style={tdStyle}>{r.score.toFixed(4)}</td>
+                      <td style={{ ...tdStyle, fontWeight: r.selected ? 700 : undefined }}>{i + 1}</td>
+                      <td style={{ ...tdStyle, fontWeight: r.selected ? 700 : undefined }}>{r.name}</td>
                       <td style={tdStyle}>{r.risk_adjusted_effect.toFixed(4)}</td>
                       <td style={tdStyle}>{r.cost.toFixed(2)}</td>
                       <td style={tdStyle}>{r.equity_weight.toFixed(2)}</td>
-                      <td style={tdStyle}>
-                        {u ? `${u.effect_p10.toFixed(3)} / ${u.effect_p90.toFixed(3)}` : "—"}
+                      <td style={{ ...tdStyle, color: "var(--muted)" }}>
+                        {u ? `${u.effect_p10.toFixed(3)} – ${u.effect_p90.toFixed(3)}` : "—"}
                       </td>
-                      <td style={tdStyle}>{r.selected ? "✓" : ""}</td>
+                      <td style={{ ...tdStyle, textAlign: "center" }}>
+                        {r.selected ? (
+                          <span style={{
+                            display: "inline-block",
+                            padding: "2px 8px",
+                            borderRadius: 10,
+                            fontSize: 11,
+                            fontWeight: 600,
+                            background: isTop ? "#c8e6a0" : "#dcedc8",
+                            color: "#2e7d32",
+                          }}>
+                            {isTop ? "★ Top pick" : "✓ Yes"}
+                          </span>
+                        ) : null}
+                      </td>
                     </tr>
                   );
                 })}
@@ -1575,30 +920,51 @@ function Step3Recommendation({
       )}
 
       {ranked && !budget && !running && (
-        <Card
-          title="Budget Optimization"
-          subtitle="not yet computed for this run"
-        >
-          <div style={{ fontSize: 12.5, color: "var(--muted)", lineHeight: 1.6 }}>
-            To produce a spatial budget allocation, return to{" "}
-            <strong>Step 2b — Budget Allocator</strong> and provide a positive
-            budget value plus a benefit source (Bayesian β or uniform). Then
-            re-run the recommendation.
+        <Card title="Budget Allocation" subtitle="No budget set — add one below to see where to spend it.">
+          <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>
+                Total budget ($)
+              </div>
+              <input
+                type="number"
+                min={0}
+                value={wiz.budget}
+                onChange={(e) => updateWiz({ budget: e.target.value })}
+                placeholder="e.g. 500000"
+                style={{ ...inputStyle, width: 180 }}
+                autoFocus
+              />
+            </div>
+            <Btn
+              primary
+              onClick={onRerun}
+              disabled={!wiz.budget || Number(wiz.budget) <= 0}
+            >
+              Run allocation →
+            </Btn>
+          </div>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
+            This shows which areas to prioritise and how much to spend in each, based on your ranked scenarios and equity settings.
           </div>
         </Card>
       )}
 
       {budget && (
         <Card
-          title="Budget Optimization · Allocation"
+          title="Budget Allocation"
           subtitle={`${budget.benefit_description} — solver: ${budget.result.solver}`}
         >
           <StatGrid>
-            <Stat label="Treated cells" value={`${budget.result.n_treated}/${budget.n_cells}`} />
+            <Stat label="Areas targeted" value={`${budget.result.n_treated} of ${budget.n_cells}`} />
             <Stat label="Fully treated" value={`${budget.result.n_fully_treated}`} />
-            <Stat label="Total benefit" value={budget.result.total_benefit.toFixed(3)} />
-            <Stat label="Spend" value={`${budget.result.total_cost.toFixed(2)} / ${budget.result.budget.toFixed(2)}`} />
-            <Stat label="Gini" value={budget.result.gini.toFixed(3)} />
+            <Stat label="Total projected benefit" value={budget.result.total_benefit.toFixed(3)} />
+            <Stat label="Budget used" value={`$${budget.result.total_cost.toFixed(0)} of $${budget.result.budget.toFixed(0)}`} />
+            <Stat
+              label="Distribution equity"
+              value={giniLabel(budget.result.gini)}
+              sub={`Gini ${budget.result.gini.toFixed(3)}`}
+            />
             <Stat label="Solve time" value={`${(budget.result.solve_time_s * 1000).toFixed(0)} ms`} />
           </StatGrid>
           <AllocationBars allocation={budget.result.allocation} />
@@ -1639,79 +1005,132 @@ function Step3Recommendation({
 
       {census && (
         <Card
-          title="ACS Demographic Context"
-          subtitle={`${census.context.n_counties} county/ies · vintage ${census.context.vintage}`}
+          title="Community Equity Profile"
+          subtitle={`Source: US Census ACS · ${census.context.n_counties} ${census.context.n_counties === 1 ? "county" : "counties"} · ${census.context.vintage} vintage`}
         >
-          <StatGrid>
-            <Stat
-              label="Population"
-              value={census.context.population == null ? "—" : census.context.population.toLocaleString()}
-            />
-            <Stat
-              label="Median income"
-              value={
-                census.context.median_income == null
-                  ? "—"
-                  : `$${census.context.median_income.toLocaleString()}`
-              }
-            />
-            <Stat
-              label="Poverty rate"
-              value={
-                census.context.poverty_rate == null
-                  ? "—"
-                  : `${(census.context.poverty_rate * 100).toFixed(1)}%`
-              }
-            />
-            <Stat
-              label="Mobile-home share"
-              value={
-                census.context.mobile_home_share == null
-                  ? "—"
-                  : `${(census.context.mobile_home_share * 100).toFixed(1)}%`
-              }
-            />
-          </StatGrid>
+          {(() => {
+            const ctx = census.context;
+            const pov = ctx.poverty_rate ?? null;
+            const inc = ctx.median_income ?? null;
+            const mh = ctx.mobile_home_share ?? null;
+            // Income deprivation: 0 at $80k+, 1 at $0
+            const incDep = inc == null ? null : Math.max(0, Math.min(1, 1 - inc / 80_000));
+            const known = [pov, incDep, mh].filter((v) => v != null) as number[];
+            const weights = [0.4, 0.4, 0.2].slice(0, known.length);
+            const weightSum = weights.reduce((a, b) => a + b, 0);
+            const score = known.length > 0
+              ? known.reduce((s, v, i) => s + v * weights[i], 0) / weightSum
+              : null;
+            const { label: vulnLabel, color: vulnColor, bg: vulnBg } = score == null
+              ? { label: "No data", color: "#6e6358", bg: "#f5f0ea" }
+              : score < 0.2
+              ? { label: "Low vulnerability", color: "#2e7d32", bg: "#eaf4d9" }
+              : score < 0.4
+              ? { label: "Moderate vulnerability", color: "#b45309", bg: "#fef3c7" }
+              : { label: "High vulnerability", color: "#b91c1c", bg: "#fee2e2" };
+
+            return (
+              <>
+                {/* Composite score banner */}
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 14,
+                  padding: "12px 14px", borderRadius: 8,
+                  background: vulnBg, marginBottom: 14,
+                }}>
+                  <div style={{ fontSize: 28, fontWeight: 800, color: vulnColor, lineHeight: 1 }}>
+                    {score == null ? "—" : Math.round(score * 100)}
+                    {score != null && <span style={{ fontSize: 14, fontWeight: 400 }}>/100</span>}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: vulnColor }}>{vulnLabel}</div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                      Composite equity score — weighted from poverty rate, income level, and housing insecurity
+                    </div>
+                  </div>
+                </div>
+
+                {/* Underlying indicators */}
+                <StatGrid>
+                  <Stat
+                    label="Poverty rate"
+                    value={pov == null ? "—" : `${(pov * 100).toFixed(1)}%`}
+                    sub={pov == null ? undefined : pov > 0.2 ? "Above national avg" : "Below national avg"}
+                  />
+                  <Stat
+                    label="Median household income"
+                    value={inc == null ? "—" : `$${inc.toLocaleString()}`}
+                    sub={inc == null ? undefined : inc < 50_000 ? "Below national median" : "Above national median"}
+                  />
+                  <Stat
+                    label="Housing insecurity"
+                    value={mh == null ? "—" : `${(mh * 100).toFixed(1)}%`}
+                    sub="Share of mobile / manufactured homes"
+                  />
+                  <Stat
+                    label="Population"
+                    value={ctx.population == null ? "—" : ctx.population.toLocaleString()}
+                    sub="Affected residents"
+                  />
+                </StatGrid>
+              </>
+            );
+          })()}
         </Card>
       )}
 
       <Card
-        title="Spatial Targeting"
-        subtitle="Top-K grid cells ranked by CATE ÷ cost."
+        title="Priority Targeting Map"
+        subtitle="Highest-priority areas for intervention based on causal effect and cost. Darker colour = higher priority."
         actions={
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <select
               value={wiz.activeTargetVar}
               onChange={(e) => updateWiz({ activeTargetVar: e.target.value })}
               style={{ ...inputStyle, maxWidth: 160 }}
               disabled={cateVars.length === 0}
             >
-              {cateVars.length === 0 ? <option value="">— no CATE maps —</option> : cateVars.map((v) => (
-                <option key={v} value={v}>{v}</option>
-              ))}
+              {cateVars.length === 0
+                ? <option value="">— run pipeline first —</option>
+                : cateVars.map((v) => <option key={v} value={v}>{v}</option>)}
             </select>
-            <input
-              type="number"
-              value={wiz.topK}
-              min={1}
-              max={500}
-              onChange={(e) => updateWiz({ topK: Math.max(1, Number(e.target.value) || 1) })}
-              style={{ ...inputStyle, width: 80 }}
-            />
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <span style={{ fontSize: 11, color: "var(--muted)" }}>Top</span>
+              <input
+                type="number"
+                value={wiz.topK}
+                min={1}
+                max={500}
+                onChange={(e) => updateWiz({ topK: Math.max(1, Number(e.target.value) || 1) })}
+                style={{ ...inputStyle, width: 64 }}
+              />
+              <span style={{ fontSize: 11, color: "var(--muted)" }}>areas</span>
+            </div>
           </div>
         }
       >
         {targetingLoading ? (
-          <div style={{ padding: 24, textAlign: "center", color: "var(--muted)" }}>Loading targeting…</div>
+          <div style={{ padding: 24, textAlign: "center", color: "var(--muted)" }}>Loading…</div>
         ) : targeting ? (
-          <div ref={targetingBlockRef} style={{ height: MAP_HEIGHT_DEFAULT, position: "relative" }}>
+          <div ref={targetingBlockRef} style={{ position: "relative" }}>
             <div style={{ position: "absolute", top: 8, right: 50, zIndex: 6 }}>
-              <ExportBlockButton targetRef={targetingBlockRef} artifactId="decision_targeting" label={`targeting_${wiz.activeTargetVar || "map"}`} compact />
+              <ExportBlockButton
+                targetRef={targetingBlockRef}
+                artifactId="decision_targeting"
+                label={`targeting_${wiz.activeTargetVar || "map"}`}
+                compact
+              />
             </div>
-            <SpatialMap geojson={targeting} expandable />
+            <ResizableMapWrapper defaultHeight={MAP_HEIGHT_DEFAULT}>
+              <SpatialMap
+                geojson={targeting}
+                colorField="priority"
+                palette="viridis"
+                expandable
+              />
+            </ResizableMapWrapper>
           </div>
         ) : (
-          <EmptyState title="No targeting map" body="Pick a treatment variable with a CATE map." />
+          <EmptyState title="No targeting map" body="Select a treatment variable above to see priority areas." />
         )}
       </Card>
     </div>
@@ -1872,6 +1291,12 @@ const tdStyle: React.CSSProperties = { padding: "6px 8px" };
 // ════════════════════════════════════════════════════════════════
 function errorMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+function giniLabel(gini: number): string {
+  if (gini < 0.3) return "Fairly distributed";
+  if (gini < 0.5) return "Moderately concentrated";
+  return "Highly concentrated";
 }
 
 type EquitySettled =

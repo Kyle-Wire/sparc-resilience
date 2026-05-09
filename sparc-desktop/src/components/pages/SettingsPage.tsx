@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { SectionHeader, Card, Btn, KeyVal, Tag } from "@/components/ui/DesignSystem";
 import { THEME_PRESETS, loadThemeKey, applyTheme } from "@/lib/theme";
 import EasterEgg from "@/components/common/EasterEgg";
@@ -9,6 +9,8 @@ import { updatePreferences, type PerformancePreset } from "@/lib/api";
 import { pickFolder } from "@/lib/fileDialogs";
 import { getWorkspaceDir, setWorkspaceDir } from "@/lib/workspacePrefs";
 import { useAuthStore } from "@/stores/authStore";
+import { getToken } from "@/stores/tokenStore";
+import { useNavigationStore } from "@/stores/navigationStore";
 
 interface SettingsPageProps {
   onNavigate?: (page: "Performance") => void;
@@ -18,20 +20,32 @@ interface SettingsPageProps {
 }
 
 export default function SettingsPage({
-  onNavigate,
   onSignOut,
   parallaxEnabled = true,
   onParallaxToggle,
-}: SettingsPageProps = {}) {
+}: Omit<SettingsPageProps, "onNavigate"> = {}) {
+  const { navigate } = useNavigationStore();
   const [activeTheme, setActiveTheme] = useState<string>(loadThemeKey);
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem("sparc_api_key") ?? "");
-  const [serverPort, setServerPort] = useState("8008");
+  const [apiKey, setApiKey] = useState("");
+  const [apiKeyConfigured, setApiKeyConfigured] = useState<boolean | null>(null);
+  const [serverPort, setServerPort] = useState(() => localStorage.getItem("sparc_server_port") ?? "8008");
   const [showSnake, setShowSnake] = useState(false);
   const [tourOpen, setTourOpen] = useState(false);
   const [workspaceDir, setWorkspaceDirState] = useState<string | null>(() => getWorkspaceDir());
   const { notify } = useNotification();
   const { data: hwData, refresh: refreshHw } = useHardwareProfile(true);
   const { user, signOut } = useAuthStore();
+
+  // Check whether a key is already stored in the OS keychain.
+  useEffect(() => {
+    const token = getToken();
+    fetch("http://127.0.0.1:8008/ai/key", {
+      headers: token ? { "x-sparc-token": token } : {},
+    })
+      .then((r) => r.json())
+      .then((d) => setApiKeyConfigured(Boolean(d?.configured)))
+      .catch(() => setApiKeyConfigured(false));
+  }, []);
 
   const handlePickWorkspace = useCallback(async () => {
     const picked = await pickFolder();
@@ -66,9 +80,27 @@ export default function SettingsPage({
     notify("success", `Theme changed to ${THEME_PRESETS.find((p) => p.key === key)?.label ?? key}`);
   }, [notify]);
 
-  const handleSaveApiKey = useCallback(() => {
-    localStorage.setItem("sparc_api_key", apiKey);
-    notify("success", "API key saved");
+  const handleSaveApiKey = useCallback(async () => {
+    try {
+      const token = getToken();
+      const res = await fetch("http://127.0.0.1:8008/ai/key", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "x-sparc-token": token } : {}),
+        },
+        body: JSON.stringify({ key: apiKey }),
+      });
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(msg);
+      }
+      setApiKeyConfigured(true);
+      setApiKey("");
+      notify("success", "API key saved to OS keychain");
+    } catch (err) {
+      notify("error", `Failed to save key: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }, [apiKey, notify]);
 
   const handleSignOut = useCallback(async () => {
@@ -198,30 +230,22 @@ export default function SettingsPage({
                     transition: "border-color 0.15s, background 0.15s",
                   }}
                 >
-                  {/* Swatch */}
+                  {/* Swatch — 4 chips: bg, primary, secondary, warning */}
                   <div
                     style={{
-                      width: 28,
-                      height: 28,
-                      borderRadius: 5,
-                      background: preset.swatch.bg,
-                      border: "1px solid rgba(0,0,0,0.12)",
-                      flexShrink: 0,
-                      position: "relative",
+                      display: "flex",
+                      borderRadius: 6,
                       overflow: "hidden",
+                      border: "1px solid rgba(0,0,0,0.15)",
+                      flexShrink: 0,
+                      width: 52,
+                      height: 28,
                     }}
                   >
-                    <div
-                      style={{
-                        position: "absolute",
-                        bottom: 0,
-                        right: 0,
-                        width: 12,
-                        height: 12,
-                        background: preset.swatch.accent,
-                        borderRadius: "3px 0 5px 0",
-                      }}
-                    />
+                    <div style={{ flex: 2, background: preset.swatch.bg }} />
+                    <div style={{ flex: 1, background: preset.swatch.primary }} />
+                    <div style={{ flex: 1, background: preset.swatch.secondary }} />
+                    <div style={{ flex: 1, background: preset.swatch.warning }} />
                   </div>
                   <span
                     style={{
@@ -300,14 +324,51 @@ export default function SettingsPage({
                   marginBottom: 4,
                 }}
               >
-                API Key
+                Anthropic API Key
               </div>
+              {apiKeyConfigured && (
+                <div
+                  className="mono"
+                  style={{
+                    fontSize: 10,
+                    color: "var(--muted)",
+                    marginBottom: 6,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  <span style={{ color: "var(--success, #2d7a2d)" }}>✓</span> key stored in OS keychain
+                  <button
+                    onClick={async () => {
+                      const t = getToken();
+                      await fetch("http://127.0.0.1:8008/ai/key", {
+                        method: "DELETE",
+                        headers: t ? { "x-sparc-token": t } : {},
+                      });
+                      setApiKeyConfigured(false);
+                      notify("info", "API key removed");
+                    }}
+                    style={{
+                      marginLeft: 8,
+                      fontSize: 10,
+                      background: "transparent",
+                      border: "none",
+                      cursor: "pointer",
+                      color: "var(--crimson)",
+                      padding: 0,
+                    }}
+                  >
+                    remove
+                  </button>
+                </div>
+              )}
               <div style={{ display: "flex", gap: 8 }}>
                 <input
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="sk-..."
+                  placeholder={apiKeyConfigured ? "Enter new key to replace…" : "sk-ant-…"}
                   style={{
                     border: "1px solid var(--line)",
                     borderRadius: 4,
@@ -336,21 +397,24 @@ export default function SettingsPage({
               >
                 Server Port
               </div>
-              <input
-                type="text"
-                value={serverPort}
-                onChange={(e) => setServerPort(e.target.value)}
-                style={{
-                  border: "1px solid var(--line)",
-                  borderRadius: 4,
-                  padding: "6px 8px",
-                  fontSize: 12,
-                  fontFamily: "'JetBrains Mono', monospace",
-                  width: 100,
-                  background: "var(--paper-2, #fff)",
-                  color: "var(--ink)",
-                }}
-              />
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  type="text"
+                  value={serverPort}
+                  onChange={(e) => setServerPort(e.target.value)}
+                  style={{
+                    border: "1px solid var(--line)",
+                    borderRadius: 4,
+                    padding: "6px 8px",
+                    fontSize: 12,
+                    fontFamily: "'JetBrains Mono', monospace",
+                    width: 80,
+                    background: "var(--paper-2, #fff)",
+                    color: "var(--ink)",
+                  }}
+                />
+                <Btn small onClick={() => { localStorage.setItem("sparc_server_port", serverPort); notify("success", "Port saved — restart backend to apply"); }}>Save</Btn>
+              </div>
             </div>
 
             <KeyVal label="Backend URL" value={`http://127.0.0.1:${serverPort}`} />
@@ -400,7 +464,7 @@ export default function SettingsPage({
           title="Performance"
           subtitle="hardware tier, parallelism, memory"
           actions={
-            <Btn small onClick={() => onNavigate?.("Performance")}>
+            <Btn small onClick={() => navigate("Performance")}>
               Open advanced…
             </Btn>
           }
@@ -532,10 +596,17 @@ export default function SettingsPage({
                   <div style={{ fontSize: 12.5, fontWeight: 600 }}>Keyboard Shortcuts</div>
                 </div>
               </div>
-              <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+              <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+                <div className="mono" style={{ fontSize: 10, color: "var(--muted)", padding: "2px 0", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Navigation</div>
                 {["⌘1 Project", "⌘2 Data", "⌘3 Processing", "⌘4 DAG", "⌘5 Variables", "⌘6 Physics",
-                  "⌘7 CRS", "⌘8 Scenarios", "⌘9 Models", "⌘0 Run", "⌘- Results", "⌘= Report",
+                  "⌘7 Scenarios", "⌘8 Models", "⌘9 Run", "⌘0 Insights",
                 ].map((s) => (
+                  <div key={s} className="mono" style={{ fontSize: 10, color: "var(--muted)", padding: "2px 0" }}>
+                    {s}
+                  </div>
+                ))}
+                <div className="mono" style={{ fontSize: 10, color: "var(--muted)", padding: "6px 0 2px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Global</div>
+                {["⌘K Command palette", "⌘J Toggle chat", "⌘, Settings", "⌘⇧R Refresh page"].map((s) => (
                   <div key={s} className="mono" style={{ fontSize: 10, color: "var(--muted)", padding: "2px 0" }}>
                     {s}
                   </div>

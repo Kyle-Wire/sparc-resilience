@@ -26,7 +26,6 @@ export default function Shell({
   projectName,
   projectDomain,
   projectEpsg,
-  status,
 }: ShellProps) {
   return (
     <div
@@ -50,7 +49,6 @@ export default function Shell({
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <Topbar
           page={currentPage}
-          status={status}
           onNavigateSettings={() => onNavigate("Settings")}
         />
         <main

@@ -6,9 +6,14 @@
  * Phase 1: panel registry is wired but most panels are placeholders.
  * Phase 2 fills in real renderers + brushed linking across them.
  */
-import { useMemo } from "react";
+import { useMemo, useCallback } from "react";
 import { InsightsProvider } from "@/hooks/InsightsProvider";
 import InsightsShell, { type InsightsPanelDescriptor } from "@/components/insights/InsightsShell";
+import { useManifest } from "@/hooks/useManifest";
+import { useResult } from "@/hooks/useResult";
+import { getModelPerformance, downloadResultsBundle } from "@/lib/api";
+import { Btn } from "@/components/ui/DesignSystem";
+import { useNotification } from "@/hooks/useNotifications";
 import OverviewPanel from "@/components/insights/panels/OverviewPanel";
 import ModelPerformancePanel from "@/components/insights/panels/ModelPerformancePanel";
 import PredictionsMapPanel from "@/components/insights/panels/PredictionsMapPanel";
@@ -27,6 +32,7 @@ import DivergencePanel from "@/components/insights/panels/DivergencePanel";
 import KernelFieldPanel from "@/components/insights/panels/KernelFieldPanel";
 import ScenarioTrajectoryPanel from "@/components/insights/panels/ScenarioTrajectoryPanel";
 import ScenarioUncertaintyPanel from "@/components/insights/panels/ScenarioUncertaintyPanel";
+import RoutingAuditPanel from "@/components/insights/panels/RoutingAuditPanel";
 import DatasetProfilePanel from "@/components/insights/panels/DatasetProfilePanel";
 
 function buildPanels(): InsightsPanelDescriptor[] {
@@ -46,6 +52,7 @@ function buildPanels(): InsightsPanelDescriptor[] {
       group: "Decisions",
       label: "Best intervention",
       audience: "practitioner",
+      stage: "Stage 4",
       render: () => <HeadlinePanel />,
     },
     {
@@ -69,6 +76,7 @@ function buildPanels(): InsightsPanelDescriptor[] {
       group: "Spatial",
       label: "Predictions map",
       audience: ["practitioner", "researcher"],
+      stage: "Stage 2",
       render: () => <PredictionsMapPanel />,
     },
     {
@@ -92,6 +100,7 @@ function buildPanels(): InsightsPanelDescriptor[] {
       group: "Evidence",
       label: "Dataset profile",
       audience: "researcher",
+      stage: "Stage 0–2",
       render: () => <DatasetProfilePanel />,
     },
     {
@@ -129,6 +138,7 @@ function buildPanels(): InsightsPanelDescriptor[] {
       group: "Causal diagnostics",
       label: "Sensitivity",
       audience: "researcher",
+      stage: "Stage 3",
       render: () => <SensitivityPanel />,
     },
     {
@@ -159,6 +169,7 @@ function buildPanels(): InsightsPanelDescriptor[] {
       group: "Scenario depth",
       label: "Trajectory",
       audience: "researcher",
+      stage: "Stage 4",
       render: () => <ScenarioTrajectoryPanel />,
     },
     {
@@ -167,6 +178,13 @@ function buildPanels(): InsightsPanelDescriptor[] {
       label: "Uncertainty bands",
       audience: "researcher",
       render: () => <ScenarioUncertaintyPanel />,
+    },
+    {
+      id: "routing-audit",
+      group: "Scenario depth",
+      label: "Routing audit",
+      audience: "researcher",
+      render: () => <RoutingAuditPanel />,
     },
 
     // ---- Raw artifact browser ----
@@ -180,11 +198,88 @@ function buildPanels(): InsightsPanelDescriptor[] {
   ];
 }
 
+function PipelineHealthBadge() {
+  const manifest = useManifest();
+  const stageCount = Object.keys(manifest.manifest?.stages ?? {}).length;
+  const perfPresent = !!manifest.lookup("2", "ensemble_results");
+  const { data: perfData } = useResult(
+    perfPresent ? "s2:model_performance" : null,
+    getModelPerformance,
+  );
+  const bestR2 = useMemo(() => {
+    if (!perfData?.models?.length) return null;
+    return perfData.models.reduce((a: any, b: any) => (b.r2 > a.r2 ? b : a)).r2 as number;
+  }, [perfData]);
+
+  if (stageCount === 0) return null;
+
+  return (
+    <div
+      className="mono"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "6px 12px",
+        border: "1px solid var(--line)",
+        borderRadius: 6,
+        background: "#fdfbf7",
+        fontSize: 10,
+        color: "var(--ink-2)",
+        letterSpacing: "0.06em",
+        textTransform: "uppercase",
+        whiteSpace: "nowrap",
+      }}
+    >
+      <span
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          background: stageCount >= 5 ? "var(--green, #2f7d32)" : "var(--amber)",
+          flexShrink: 0,
+        }}
+      />
+      {stageCount}/5 stages
+      {bestR2 != null && (
+        <>
+          <span style={{ color: "var(--line)" }}>·</span>
+          R² {bestR2.toFixed(3)}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function InsightsPage() {
   const panels = useMemo(buildPanels, []);
+  const { notify } = useNotification();
+  const handleDataBundle = useCallback(async () => {
+    notify("info", "Preparing results bundle…");
+    try {
+      const blob = await downloadResultsBundle();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "sparc_results_bundle.zip";
+      a.click();
+      URL.revokeObjectURL(url);
+      notify("success", "Results bundle downloaded");
+    } catch (e) {
+      notify("error", e instanceof Error ? e.message : "Bundle download failed");
+    }
+  }, [notify]);
   return (
     <InsightsProvider>
-      <InsightsShell panels={panels} />
+      <InsightsShell
+        panels={panels}
+        headerExtras={
+          <>
+            <Btn small onClick={handleDataBundle}>Download ZIP</Btn>
+            <PipelineHealthBadge />
+          </>
+        }
+      />
     </InsightsProvider>
   );
 }

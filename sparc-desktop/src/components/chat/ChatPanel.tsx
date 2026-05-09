@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import CubeLogo from "@/components/brand/CubeLogo";
 import { useAnthropicChat } from "@/hooks/useAnthropicChat";
 import type { ClaudeAction } from "@/lib/types";
+import { getToken } from "@/stores/tokenStore";
 
 interface ChatPanelProps {
   onClose?: () => void;
@@ -25,8 +26,18 @@ export default function ChatPanel({
   onClose, onAction, systemPrompt,
   seedMessage, seedNonce, onSeedConsumed,
 }: ChatPanelProps) {
-  const apiKey = localStorage.getItem("anthropic-api-key") ?? "";
-  const hasKey = apiKey.length > 0;
+  const [hasKey, setHasKey] = useState(false);
+
+  // Check whether an API key is configured in the OS keychain (via sidecar).
+  useEffect(() => {
+    const token = getToken();
+    fetch("http://127.0.0.1:8008/ai/key", {
+      headers: token ? { "x-sparc-token": token } : {},
+    })
+      .then((r) => r.json())
+      .then((d) => setHasKey(Boolean(d?.configured)))
+      .catch(() => setHasKey(false));
+  }, []);
 
   const { messages, isLoading, error, sendMessage } = useAnthropicChat(
     systemPrompt ?? "You are a spatial analysis assistant.",
@@ -56,7 +67,7 @@ export default function ChatPanel({
   useEffect(() => {
     if (!seedMessage || seedNonce == null) return;
     if (hasKey) {
-      sendMessage(seedMessage, apiKey);
+      sendMessage(seedMessage);
     } else {
       setDemoMsgs((m) => [
         ...m,
@@ -71,7 +82,7 @@ export default function ChatPanel({
   const send = () => {
     if (!input.trim()) return;
     if (hasKey) {
-      sendMessage(input, apiKey);
+      sendMessage(input);
     } else {
       const u = { role: "user" as const, text: input };
       setDemoMsgs((m) => [

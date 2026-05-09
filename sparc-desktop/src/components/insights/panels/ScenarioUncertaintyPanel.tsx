@@ -10,6 +10,7 @@ import { useLinkedSelection } from "@/hooks/useLinkedSelection";
 import { useResult } from "@/hooks/useResult";
 import { getScenarioUncertainty, type ScenarioUncertaintyResponse } from "@/lib/api";
 import SpatialMap from "@/components/map/SpatialMap";
+import ResizableMapWrapper from "@/components/map/ResizableMapWrapper";
 import { MAP_HEIGHT_DEFAULT } from "@/lib/design-tokens";
 
 export default function ScenarioUncertaintyPanel() {
@@ -98,14 +99,15 @@ export default function ScenarioUncertaintyPanel() {
       }
       bodyPadding={0}
     >
-      <div style={{ height: MAP_HEIGHT_DEFAULT, position: "relative" }}>
+      <ResizableMapWrapper defaultHeight={MAP_HEIGHT_DEFAULT}>
         <SpatialMap
           geojson={data.geojson}
           colorField={resolvedLayer || undefined}
           mode="scatter"
           height="100%"
+          expandable
         />
-      </div>
+      </ResizableMapWrapper>
       {consensus && (
         <div style={{ padding: 12, borderTop: "1px solid var(--line)" }}>
           <StatGrid>

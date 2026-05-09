@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { SectionHeader, Card, Stat, Tag, Btn, StatGrid, KeyVal } from "@/components/ui/DesignSystem";
-import { dataSummary, prepareData, getDataVersions, selectDataVersion, getConfig } from "@/lib/api";
-import { pickRasters, pickBoundary } from "@/lib/fileDialogs";
-import { useNotification } from "@/hooks/useNotifications";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { SectionHeader, Card, Stat, Btn, StatGrid, KeyVal, Tag } from "@/components/ui/DesignSystem";
+import { prepareData, getConfig, dataSummary, getDataVersions, selectDataVersion } from "@/lib/api";
 import type { DataSummary } from "@/lib/types";
+import { pickRasters, pickBoundary } from "@/lib/fileDialogs";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
+import { useNotification } from "@/hooks/useNotifications";
+
 
 type Pathway = "preprocessed" | "spatial";
 
@@ -177,7 +178,7 @@ export default function ProcessingPage() {
     ctx.fillStyle = "var(--muted)";
     ctx.font = "9px JetBrains Mono";
     ctx.textAlign = "center";
-    cols.forEach((col, i) => {
+    cols.forEach((col: string, i: number) => {
       ctx.save();
       ctx.translate(i * cellW + cellW / 2, h - 2);
       ctx.rotate(-Math.PI / 4);
@@ -259,9 +260,9 @@ export default function ProcessingPage() {
   const nRows = summary?.row_count ?? 0;
   const nCols = summary?.columns?.length ?? 0;
   // Compute total missing cells from numeric_summary: columns where count < row_count
-  const missingCount = summary
-    ? Object.values(summary.numeric_summary ?? {}).reduce(
-        (sum, s) => sum + Math.max(0, nRows - (s?.count ?? nRows)),
+  const missingCount = summary?.numeric_summary != null
+    ? Object.values(summary.numeric_summary).reduce<number>(
+        (sum, s) => sum + Math.max(0, nRows - (s.count ?? nRows)),
         0,
       )
     : null;
