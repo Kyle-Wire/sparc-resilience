@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=68.0", "wheel", "build>=1.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -12,6 +12,9 @@ license = {text = "Proprietary – SPARC Labs LLC"}
 authors = [
     {name = "SPARC Labs LLC"}
 ]
+
+[project.urls]
+"Engine Releases" = "https://github.com/Kyle-Wire/sparc-status/releases"
 
 dependencies = [
     # Core scientific stack

@@ -9,9 +9,65 @@ env:
   PYTHON_VERSION: "3.11"
   NODE_VERSION: "22"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  # Pinned uv version — bump here when you want to ship a newer uv binary
+  UV_VERSION: "0.5.29"
 
 jobs:
+  # ── Build Python wheel (once, on macOS arm64) ──────────────────────────────
+  # Other platforms download the same wheel from the sparc-labs/sparc-releases
+  # GitHub Release; we don't need to build per-platform because the wheel is
+  # pure-Python (no native extensions in the top-level package).
+  build-wheel:
+    runs-on: macos-latest
+    name: Build Python wheel
+    permissions:
+      contents: write
+    outputs:
+      url: ${{ steps.wheel.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install build deps
+        run: pip install build
+
+      - name: Audit Python dependencies for known CVEs
+        run: |
+          pip install --upgrade pip pip-audit
+          pip install -e ".[server]"
+          pip-audit --strict --skip-editable
+
+      - name: Build wheel
+        run: python -m build --wheel --no-isolation
+
+      - name: Upload wheel to sparc-labs/sparc-releases
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_REPO_PAT }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v-dev-build' }}
+        run: |
+          WHEEL=$(ls dist/*.whl | head -1)
+          echo "Uploading $WHEEL to sparc-labs/sparc-releases @ $TAG"
+          gh release upload "$TAG" "$WHEEL" \
+            --repo Kyle-Wire/sparc-status \
+            --clobber \
+            || gh release create "$TAG" "$WHEEL" \
+                 --repo Kyle-Wire/sparc-status \
+                 --title "SPARC Engine $TAG" \
+                 --notes "Engine wheel for SPARC Desktop $TAG"
+
+      - name: Store wheel URL as output
+        id: wheel
+        run: |
+          VER="${{ github.ref_name }}"
+          VER="${VER#v}"  # strip leading 'v'
+          echo "url=https://github.com/Kyle-Wire/sparc-status/releases/download/${{ github.ref_name }}/sparc-${VER}-py3-none-any.whl[server]" >> "$GITHUB_OUTPUT"
+
+  # ── Build Tauri desktop app (per platform) ────────────────────────────────
   build:
+    needs: build-wheel
     strategy:
       fail-fast: false
       matrix:
@@ -19,12 +75,18 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             label: macOS-arm64
+            uv_triple: aarch64-apple-darwin
+            uv_archive_ext: tar.gz
           - os: macos-latest
             target: x86_64-apple-darwin
             label: macOS-x64
+            uv_triple: x86_64-apple-darwin
+            uv_archive_ext: tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             label: Windows-x64
+            uv_triple: x86_64-pc-windows-msvc
+            uv_archive_ext: zip
 
     runs-on: ${{ matrix.os }}
     name: Build (${{ matrix.label }})
@@ -34,21 +96,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── Python (needed by beforeBuildCommand → pnpm build:sidecar) ──
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install Python dependencies
+      # ── Download + stage uv binary as Tauri externalBin sidecar ────────────
+      # Tauri expects externalBin sidecars at:
+      #   src-tauri/binaries/<name>-<target-triple>[.exe]
+      # We download the official uv release for each platform triple and
+      # rename it to match Tauri's convention.
+      - name: Download uv binary (${{ matrix.label }})
+        shell: bash
         run: |
-          pip install --upgrade pip
-          pip install -e ".[server]"
-          pip install pyinstaller
+          UV_VER="${{ env.UV_VERSION }}"
+          TRIPLE="${{ matrix.uv_triple }}"
+          EXT="${{ matrix.uv_archive_ext }}"
+          URL="https://github.com/astral-sh/uv/releases/download/${UV_VER}/uv-${TRIPLE}.${EXT}"
+          echo "Downloading uv from $URL"
+          curl -fsSL "$URL" -o "uv-${TRIPLE}.${EXT}"
 
-      - name: Audit Python dependencies for known CVEs
-        run: |
-          pip install pip-audit
-          pip-audit --strict --skip-editable
+          mkdir -p sparc-desktop/src-tauri/binaries
+
+          if [ "$EXT" = "tar.gz" ]; then
+            tar -xzf "uv-${TRIPLE}.${EXT}" "uv-${TRIPLE}/uv"
+            mv "uv-${TRIPLE}/uv" "sparc-desktop/src-tauri/binaries/uv-${TRIPLE}"
+          else
+            # Windows zip — PowerShell handles this more reliably, but bash
+            # unzip is available on windows-latest via Git Bash.
+            unzip -j "uv-${TRIPLE}.${EXT}" "uv-${TRIPLE}/uv.exe" -d "uv_tmp"
+            mv "uv_tmp/uv.exe" "sparc-desktop/src-tauri/binaries/uv-${TRIPLE}.exe"
+          fi
+
+          echo "Staged uv binary:"
+          ls -lh sparc-desktop/src-tauri/binaries/
 
       # ── Node + frontend ─────────────────────────────────────────
       - uses: actions/setup-node@v4
@@ -77,20 +153,16 @@ jobs:
         with:
           workspaces: sparc-desktop/src-tauri
 
-      # ── Build + publish GitHub Release ──────────────────────────
-      # Tag push → public release. Manual dispatch → draft release.
+      # ── Verify signing key ─────────────────────────────────────
       - name: Verify signing key present
         shell: bash
         run: |
           if [ -z "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" ]; then
-            echo "::error::TAURI_SIGNING_PRIVATE_KEY secret is empty or missing — updater .sig files will NOT be generated and latest.json will not be created."
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is missing — updater .sig files will not be generated."
             exit 1
-          else
-            echo "Signing key present (length: ${#TAURI_SIGNING_PRIVATE_KEY})"
           fi
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
+      # ── Build + publish GitHub Release ──────────────────────────
       - name: Build and release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -99,6 +171,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          SPARC_WHEEL_URL: ${{ needs.build-wheel.outputs.url }}
         with:
           projectPath: sparc-desktop
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v-dev-build' }}

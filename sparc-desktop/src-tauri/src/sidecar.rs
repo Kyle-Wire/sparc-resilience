@@ -160,14 +160,6 @@ fn log_dir() -> PathBuf {
     }
 }
 
-/// Name of the bundled sidecar binary.
-fn sidecar_name() -> &'static str {
-    #[cfg(target_os = "windows")]
-    { "sparc-sidecar.exe" }
-    #[cfg(not(target_os = "windows"))]
-    { "sparc-sidecar" }
-}
-
 // ─── Python resolution ──────────────────────────────────────────────────────
 
 /// Resolve the best Python interpreter that has the `sparc` package.
@@ -337,6 +329,7 @@ pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
     }
 
     // Prepare log file (truncated each launch).
+    // Prepare log file (truncated each launch).
     let ld = log_dir();
     std::fs::create_dir_all(&ld).ok();
     let log_path = ld.join("server.log");
@@ -355,57 +348,25 @@ pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
             .unwrap_or_else(Stdio::inherit)
     };
 
-    // 1. Bundled sidecar binary.
-    let sidecar_path: Option<PathBuf> = app
-        .path()
-        .resource_dir()
-        .ok()
-        .map(|d: PathBuf| d.join("binaries").join(sidecar_name()));
+    // Primary: launch the engine from the managed venv (~/.sparc/env).
+    // The setup wizard ensures this venv exists before spawn_server is called.
+    let venv_python: PathBuf = crate::setup::env_dir().join(if cfg!(windows) {
+        "Scripts/python.exe"
+    } else {
+        "bin/python"
+    });
 
-    if let Some(ref path) = sidecar_path {
-        if path.exists() {
-            // On Windows, suppress the console window for the bundled sidecar
-            // exe just like we do for the Python fallback below. Without this,
-            // a `cmd.exe`-style console pops up alongside the desktop app.
-            #[cfg(target_os = "windows")]
-            let spawn_result = {
-                use std::os::windows::process::CommandExt;
-                const CREATE_NO_WINDOW: u32 = 0x08000000;
-                Command::new(path)
-                    .args(["server", "--port", port])
-                    .env("SPARC_SERVER_TOKEN", &token)
-                    .env("SUPABASE_URL", env!("SPARC_SUPABASE_URL"))
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .stdout(stdio(&log_file))
-                    .stderr(stdio(&log_file))
-                    .spawn()
-            };
-            #[cfg(not(target_os = "windows"))]
-            let spawn_result = Command::new(path)
-                .args(["server", "--port", port])
-                .env("SPARC_SERVER_TOKEN", &token)
-                .env("SUPABASE_URL", env!("SPARC_SUPABASE_URL"))
-                .stdout(stdio(&log_file))
-                .stderr(stdio(&log_file))
-                .spawn();
+    let python = if venv_python.exists() {
+        venv_python.to_string_lossy().to_string()
+    } else {
+        // Fallback: resolve system Python (dev installs, or venv not ready).
+        eprintln!(
+            "WARNING: venv not found at {}, falling back to system Python",
+            venv_python.display()
+        );
+        resolve_python()
+    };
 
-            match spawn_result {
-                Ok(child) => {
-                    println!("Sidecar server started on port {port}");
-                    register_child(app, child);
-                    return Ok(());
-                }
-                Err(e) => {
-                    println!("Sidecar binary failed: {e}, trying Python fallback");
-                }
-            }
-        } else {
-            println!("No sidecar at {}, trying Python", path.display());
-        }
-    }
-
-    // 2. Resolve Python and spawn.
-    let python = resolve_python();
     println!("Spawning: {python} -m sparc server --port {port}");
 
     // On Windows, hide the console window so no cmd.exe flash appears.
