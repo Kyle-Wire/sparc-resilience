@@ -36,7 +36,7 @@ jobs:
 
       - name: Audit Python dependencies for known CVEs
         run: |
-          pip install --upgrade pip pip-audit
+          pip install --upgrade pip setuptools pip-audit
           pip install -e ".[server]"
           pip-audit --skip-editable
 
