@@ -8,7 +8,7 @@ version = "2.1.0"
 description = "SPARC – Spatial Analysis and Research Core pipeline for geographically weighted modeling"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "Proprietary – SPARC Labs LLC"}
+license = "LicenseRef-Proprietary"
 authors = [
     {name = "SPARC Labs LLC"}
 ]

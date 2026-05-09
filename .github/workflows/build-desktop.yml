@@ -32,7 +32,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install build deps
-        run: pip install build
+        run: pip install --upgrade pip setuptools wheel build
 
       - name: Audit Python dependencies for known CVEs
         run: |
