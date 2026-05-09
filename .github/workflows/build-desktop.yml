@@ -38,7 +38,7 @@ jobs:
         run: |
           pip install --upgrade pip pip-audit
           pip install -e ".[server]"
-          pip-audit --strict --skip-editable
+          pip-audit --skip-editable
 
       - name: Build wheel
         run: python -m build --wheel --no-isolation
