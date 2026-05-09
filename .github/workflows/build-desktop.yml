@@ -117,9 +117,11 @@ jobs:
             tar -xzf "uv-${TRIPLE}.${EXT}" "uv-${TRIPLE}/uv"
             mv "uv-${TRIPLE}/uv" "sparc-desktop/src-tauri/binaries/uv-${TRIPLE}"
           else
-            # Windows zip — extract with PowerShell to handle path separators reliably
+            # Windows zip — extract everything then find uv.exe wherever it landed
             powershell -Command "Expand-Archive -Path 'uv-${TRIPLE}.zip' -DestinationPath 'uv_tmp' -Force"
-            mv "uv_tmp/uv-${TRIPLE}/uv.exe" "sparc-desktop/src-tauri/binaries/uv-${TRIPLE}.exe"
+            UV_EXE=$(find uv_tmp -name "uv.exe" | head -1)
+            echo "Found uv.exe at: $UV_EXE"
+            mv "$UV_EXE" "sparc-desktop/src-tauri/binaries/uv-${TRIPLE}.exe"
           fi
 
           echo "Staged uv binary:"
