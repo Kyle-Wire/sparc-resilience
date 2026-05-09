@@ -1,6 +1,7 @@
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
 /// Wheel URL baked in at build time.
@@ -209,13 +210,18 @@ async fn run_uv(app: &AppHandle, args: &[&str]) -> Result<(), String> {
             .spawn()
             .map_err(|e| format!("Failed to spawn uv: {e}"))?;
 
+        // Shared buffer — collects all output so we can include it in errors
+        let log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
         // Drain stdout in a separate thread
         let stdout_handle = child.stdout.take().map(|stdout| {
             let app2 = app.clone();
+            let log2 = Arc::clone(&log);
             std::thread::spawn(move || {
                 for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                     let t = line.trim().to_string();
                     if !t.is_empty() {
+                        log2.lock().unwrap().push(t.clone());
                         app2.emit("setup://progress", &t).ok();
                     }
                 }
@@ -225,10 +231,12 @@ async fn run_uv(app: &AppHandle, args: &[&str]) -> Result<(), String> {
         // Drain stderr in a separate thread (uv writes progress here)
         let stderr_handle = child.stderr.take().map(|stderr| {
             let app2 = app.clone();
+            let log2 = Arc::clone(&log);
             std::thread::spawn(move || {
                 for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                     let t = line.trim().to_string();
                     if !t.is_empty() {
+                        log2.lock().unwrap().push(t.clone());
                         app2.emit("setup://progress", &t).ok();
                     }
                 }
@@ -245,7 +253,14 @@ async fn run_uv(app: &AppHandle, args: &[&str]) -> Result<(), String> {
         if status.success() {
             Ok(())
         } else {
-            Err(format!("uv exited with code {}", status.code().unwrap_or(-1)))
+            // Include the last 20 lines of output so the UI can display the real error
+            let lines = log.lock().unwrap();
+            let tail: Vec<&str> = lines.iter().rev().take(20).rev().map(String::as_str).collect();
+            Err(format!(
+                "uv exited with code {}\n{}",
+                status.code().unwrap_or(-1),
+                tail.join("\n")
+            ))
         }
     })
     .await

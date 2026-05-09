@@ -286,6 +286,10 @@ export default function Setup() {
         margin: 0,
         textAlign: "center",
         minHeight: 18,
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-word",
+        maxHeight: 80,
+        overflowY: "auto",
       }}>
         {dl.status === "error" ? `Error: ${dl.error}` : dl.message}
       </p>
