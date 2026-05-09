@@ -1,7 +1,7 @@
 {
   "identifier": "default",
   "description": "Default capabilities for the SPARC desktop app",
-  "windows": ["main"],
+  "windows": ["main", "setup"],
   "permissions": [
     "core:default",
     {
@@ -18,6 +18,11 @@
       "allow": [
         {
           "name": "binaries/sparc-sidecar",
+          "sidecar": true,
+          "args": true
+        },
+        {
+          "name": "binaries/uv",
           "sidecar": true,
           "args": true
         }

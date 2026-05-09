@@ -124,17 +124,18 @@ export default function Setup() {
   const runInstall = useCallback(async () => {
     setDl({ status: "running", progress: 0, message: "Starting\u2026", error: null });
 
-    const unlisten = await listen<string>("setup://progress", (event) => {
-      const line = event.payload;
-      setDl((prev) => {
-        const pct = line.match(/(\d+)%/);
-        const progress = pct ? parseInt(pct[1], 10) : prev.progress;
-        return { ...prev, message: line.slice(0, 80), progress };
-      });
-    });
-    unlistenRef.current = unlisten;
-
+    let unlisten: (() => void) | null = null;
     try {
+      unlisten = await listen<string>("setup://progress", (event) => {
+        const line = event.payload;
+        setDl((prev) => {
+          const pct = line.match(/(\d+)%/);
+          const progress = pct ? parseInt(pct[1], 10) : prev.progress;
+          return { ...prev, message: line.slice(0, 80), progress };
+        });
+      });
+      unlistenRef.current = unlisten;
+
       setDl((p) => ({ ...p, message: "Creating Python environment\u2026", progress: 5 }));
       await invoke("setup_create_venv");
 
@@ -153,8 +154,10 @@ export default function Setup() {
         message: "Installation failed.",
       }));
     } finally {
-      unlisten();
-      unlistenRef.current = null;
+      if (unlisten) {
+        unlisten();
+        unlistenRef.current = null;
+      }
     }
   }, []);
 

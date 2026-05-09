@@ -112,7 +112,7 @@ pub fn setup_finish(app: AppHandle) -> Result<(), String> {
 async fn run_uv(app: &AppHandle, args: &[&str]) -> Result<(), String> {
     let (mut rx, _child) = app
         .shell()
-        .sidecar("uv")
+        .sidecar("binaries/uv")
         .map_err(|e| format!("uv sidecar init: {e}"))?
         .args(args)
         .spawn()
