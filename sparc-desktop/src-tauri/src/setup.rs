@@ -1,7 +1,7 @@
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_shell::ShellExt;
-use tauri_plugin_shell::process::CommandEvent;
 
 /// Wheel URL baked in at build time.
 const WHEEL_URL: &str = {
@@ -40,6 +40,63 @@ pub fn engine_ready() -> bool {
     installed == env!("CARGO_PKG_VERSION")
 }
 
+// ── Binary resolution ────────────────────────────────────────────────────────
+
+/// Find the bundled uv binary regardless of the exact arch suffix in the name.
+///
+/// Tauri places external binaries in `<resource_dir>/binaries/`. We scan that
+/// directory for any file whose name starts with "uv-" (and isn't sparc-related)
+/// rather than hard-coding the full target-triple name. This is resilient to:
+///   - arm64 / x86_64 mismatches in local dev
+///   - Windows MSVC vs GNU variants
+///   - Any future triple changes
+fn find_uv(app: &AppHandle) -> Result<PathBuf, String> {
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("resource_dir: {e}"))?;
+
+    let bin_dir = resource_dir.join("binaries");
+
+    // Prefer exact arch match; fall back to any uv-* binary
+    let arch = std::env::consts::ARCH; // "aarch64" | "x86_64"
+
+    let exact_name = if cfg!(windows) {
+        format!("uv-{}-pc-windows-msvc.exe", arch)
+    } else if cfg!(target_os = "macos") {
+        format!("uv-{}-apple-darwin", arch)
+    } else {
+        format!("uv-{}-unknown-linux-musl", arch)
+    };
+
+    let exact = bin_dir.join(&exact_name);
+    if exact.exists() {
+        return Ok(exact);
+    }
+
+    // Scan for any uv-* file (handles arch mismatch in local dev)
+    let found = std::fs::read_dir(&bin_dir)
+        .map_err(|e| format!("read_dir {}: {e}", bin_dir.display()))?
+        .flatten()
+        .find(|e| {
+            let n = e.file_name();
+            let s = n.to_string_lossy();
+            (s.starts_with("uv-") || s == "uv" || s == "uv.exe")
+                && !s.contains("sparc")
+        })
+        .map(|e| e.path());
+
+    found.ok_or_else(|| {
+        format!(
+            "uv binary not found in {} (expected {})",
+            bin_dir.display(),
+            exact_name
+        )
+    })
+}
+
+// ── Tauri commands ───────────────────────────────────────────────────────────
+
 #[tauri::command]
 pub async fn setup_create_venv(app: AppHandle) -> Result<(), String> {
     let venv = env_dir();
@@ -56,7 +113,8 @@ pub async fn setup_create_venv(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn setup_install_engine(app: AppHandle) -> Result<(), String> {
-    let python = env_dir().join(if cfg!(windows) { "Scripts/python.exe" } else { "bin/python" });
+    let python = env_dir()
+        .join(if cfg!(windows) { "Scripts/python.exe" } else { "bin/python" });
     run_uv(
         &app,
         &["pip", "install", "--python", python.to_str().unwrap_or("python"), WHEEL_URL],
@@ -66,7 +124,8 @@ pub async fn setup_install_engine(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn setup_upgrade_engine(app: AppHandle) -> Result<(), String> {
-    let python = env_dir().join(if cfg!(windows) { "Scripts/python.exe" } else { "bin/python" });
+    let python = env_dir()
+        .join(if cfg!(windows) { "Scripts/python.exe" } else { "bin/python" });
     run_uv(
         &app,
         &["pip", "install", "--upgrade", "--python", python.to_str().unwrap_or("python"), WHEEL_URL],
@@ -107,39 +166,63 @@ pub fn setup_finish(app: AppHandle) -> Result<(), String> {
 
 // ── Internal helper ──────────────────────────────────────────────────────────
 
-/// Spawn the `uv` sidecar via tauri_plugin_shell (correct platform binary
-/// resolution) and stream stdout/stderr as `setup://progress` events.
+/// Spawn uv directly (std::process::Command) and stream stdout+stderr as
+/// `setup://progress` Tauri events.
+///
+/// We use two concurrent reader threads so neither pipe buffer can fill and
+/// deadlock the process, regardless of which stream uv writes to.
 async fn run_uv(app: &AppHandle, args: &[&str]) -> Result<(), String> {
-    let (mut rx, _child) = app
-        .shell()
-        .sidecar("binaries/uv")
-        .map_err(|e| format!("uv sidecar init: {e}"))?
-        .args(args)
-        .spawn()
-        .map_err(|e| format!("Failed to spawn uv: {e}"))?;
+    let uv = find_uv(app)?;
+    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    let app = app.clone();
 
-    loop {
-        match rx.recv().await {
-            Some(CommandEvent::Stdout(bytes)) => {
-                let line = String::from_utf8_lossy(&bytes);
-                let t = line.trim();
-                if !t.is_empty() { app.emit("setup://progress", t).ok(); }
-            }
-            Some(CommandEvent::Stderr(bytes)) => {
-                let line = String::from_utf8_lossy(&bytes);
-                let t = line.trim();
-                if !t.is_empty() { app.emit("setup://progress", t).ok(); }
-            }
-            Some(CommandEvent::Terminated(payload)) => {
-                return match payload.code {
-                    Some(0) => Ok(()),
-                    Some(code) => Err(format!("uv exited with code {code}")),
-                    None => Err("uv was terminated by a signal".to_string()),
-                };
-            }
-            Some(CommandEvent::Error(e)) => return Err(format!("uv error: {e}")),
-            None => return Ok(()), // channel closed
-            Some(_) => {}
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut child = Command::new(&uv)
+            .args(&args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to spawn uv: {e}"))?;
+
+        // Drain stdout in a separate thread
+        let stdout_handle = child.stdout.take().map(|stdout| {
+            let app2 = app.clone();
+            std::thread::spawn(move || {
+                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    let t = line.trim().to_string();
+                    if !t.is_empty() {
+                        app2.emit("setup://progress", &t).ok();
+                    }
+                }
+            })
+        });
+
+        // Drain stderr in a separate thread (uv writes progress here)
+        let stderr_handle = child.stderr.take().map(|stderr| {
+            let app2 = app.clone();
+            std::thread::spawn(move || {
+                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                    let t = line.trim().to_string();
+                    if !t.is_empty() {
+                        app2.emit("setup://progress", &t).ok();
+                    }
+                }
+            })
+        });
+
+        // Wait for process to finish (pipes are being drained concurrently)
+        let status = child.wait().map_err(|e| format!("uv wait: {e}"))?;
+
+        // Join reader threads (they exit when their pipe closes)
+        if let Some(h) = stdout_handle { h.join().ok(); }
+        if let Some(h) = stderr_handle { h.join().ok(); }
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("uv exited with code {}", status.code().unwrap_or(-1)))
         }
-    }
+    })
+    .await
+    .map_err(|e| format!("task join: {e}"))?
 }
