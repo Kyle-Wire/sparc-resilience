@@ -56,13 +56,22 @@ fn find_uv(app: &AppHandle) -> Result<PathBuf, String> {
         .resource_dir()
         .map_err(|e| format!("resource_dir: {e}"))?;
 
-    // Tauri 2 places externalBin files directly in <resource_dir> —
-    // the "binaries/" prefix in tauri.conf.json is only the *source* path.
-    // We also check resource_dir/binaries/ for local dev (pnpm tauri dev).
-    let search_dirs = [
-        resource_dir.clone(),
-        resource_dir.join("binaries"),
-    ];
+    // Where Tauri 2 actually places externalBin sidecars varies by platform:
+    //   - macOS:   <bundle>.app/Contents/MacOS/  (next to the main exe)
+    //   - Windows: next to the main .exe
+    //   - Linux:   varies (AppImage uses resource_dir)
+    // We also check resource_dir + resource_dir/binaries for local dev
+    // (`pnpm tauri dev`) where the layout is flatter.
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()));
+
+    let mut search_dirs: Vec<PathBuf> = Vec::new();
+    if let Some(d) = exe_dir.clone() {
+        search_dirs.push(d);
+    }
+    search_dirs.push(resource_dir.clone());
+    search_dirs.push(resource_dir.join("binaries"));
 
     let arch = std::env::consts::ARCH; // "aarch64" | "x86_64"
 
@@ -101,10 +110,13 @@ fn find_uv(app: &AppHandle) -> Result<PathBuf, String> {
     }
 
     Err(format!(
-        "uv binary not found (looked in {} and {}/binaries; expected {})",
-        resource_dir.display(),
-        resource_dir.display(),
-        exact_name
+        "uv binary not found (expected {}; searched: {})",
+        exact_name,
+        search_dirs
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
     ))
 }
 
