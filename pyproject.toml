@@ -13,9 +13,6 @@ authors = [
     {name = "SPARC Labs LLC"}
 ]
 
-[project.urls]
-"Engine Releases" = "https://github.com/Kyle-Wire/sparc-status/releases"
-
 dependencies = [
     # Core scientific stack
     "numpy>=1.24",
@@ -59,6 +56,9 @@ dependencies = [
     "jsonschema>=4.19",
     "pyarrow>=14.0",
 ]
+
+[project.urls]
+"Engine Releases" = "https://github.com/Kyle-Wire/sparc-status/releases"
 
 [project.optional-dependencies]
 server = [
