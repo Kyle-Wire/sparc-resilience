@@ -56,9 +56,14 @@ fn find_uv(app: &AppHandle) -> Result<PathBuf, String> {
         .resource_dir()
         .map_err(|e| format!("resource_dir: {e}"))?;
 
-    let bin_dir = resource_dir.join("binaries");
+    // Tauri 2 places externalBin files directly in <resource_dir> —
+    // the "binaries/" prefix in tauri.conf.json is only the *source* path.
+    // We also check resource_dir/binaries/ for local dev (pnpm tauri dev).
+    let search_dirs = [
+        resource_dir.clone(),
+        resource_dir.join("binaries"),
+    ];
 
-    // Prefer exact arch match; fall back to any uv-* binary
     let arch = std::env::consts::ARCH; // "aarch64" | "x86_64"
 
     let exact_name = if cfg!(windows) {
@@ -69,30 +74,38 @@ fn find_uv(app: &AppHandle) -> Result<PathBuf, String> {
         format!("uv-{}-unknown-linux-musl", arch)
     };
 
-    let exact = bin_dir.join(&exact_name);
-    if exact.exists() {
-        return Ok(exact);
+    // 1. Try exact arch name in each search dir
+    for dir in &search_dirs {
+        let p = dir.join(&exact_name);
+        if p.exists() {
+            return Ok(p);
+        }
     }
 
-    // Scan for any uv-* file (handles arch mismatch in local dev)
-    let found = std::fs::read_dir(&bin_dir)
-        .map_err(|e| format!("read_dir {}: {e}", bin_dir.display()))?
-        .flatten()
-        .find(|e| {
-            let n = e.file_name();
-            let s = n.to_string_lossy();
-            (s.starts_with("uv-") || s == "uv" || s == "uv.exe")
-                && !s.contains("sparc")
-        })
-        .map(|e| e.path());
+    // 2. Scan each dir for any uv-* (handles arch mismatch, future triples)
+    for dir in &search_dirs {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            let found = entries
+                .flatten()
+                .find(|e| {
+                    let n = e.file_name();
+                    let s = n.to_string_lossy();
+                    (s.starts_with("uv-") || s == "uv" || s == "uv.exe")
+                        && !s.contains("sparc")
+                })
+                .map(|e| e.path());
+            if let Some(p) = found {
+                return Ok(p);
+            }
+        }
+    }
 
-    found.ok_or_else(|| {
-        format!(
-            "uv binary not found in {} (expected {})",
-            bin_dir.display(),
-            exact_name
-        )
-    })
+    Err(format!(
+        "uv binary not found (looked in {} and {}/binaries; expected {})",
+        resource_dir.display(),
+        resource_dir.display(),
+        exact_name
+    ))
 }
 
 // ── Tauri commands ───────────────────────────────────────────────────────────
