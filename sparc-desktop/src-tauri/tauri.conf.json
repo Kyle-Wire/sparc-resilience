@@ -1,23 +1,36 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicedoc/static/main/tauri/schemas/config.schema.json",
   "productName": "SPARC Labs",
-  "version": "1.0.8",
+  "version": "1.1.0",
   "identifier": "com.sparclabs.desktop",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build:bundle",
+    "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "SPARC Labs",
         "width": 1280,
         "height": 800,
         "minWidth": 900,
         "minHeight": 600,
-        "resizable": true
+        "resizable": true,
+        "visible": false
+      },
+      {
+        "label": "setup",
+        "title": "SPARC Setup",
+        "url": "index.html#/setup",
+        "width": 640,
+        "height": 480,
+        "resizable": false,
+        "decorations": false,
+        "center": true,
+        "visible": false
       }
     ],
     "security": {
@@ -31,7 +44,7 @@
     "publisher": "SPARC Labs LLC",
     "copyright": "© 2025 SPARC Labs LLC",
     "category": "DeveloperTool",
-    "resources": ["binaries/*"],
+    "externalBin": ["binaries/uv"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -42,7 +55,15 @@
     "windows": {
       "nsis": {
         "installMode": "currentUser",
-        "displayLanguageSelector": false
+        "displayLanguageSelector": false,
+        "headerImage": "../assets/installer/nsis-header.bmp",
+        "sidebarImage": "../assets/installer/nsis-sidebar.bmp"
+      }
+    },
+    "macOS": {
+      "dmg": {
+        "background": "../assets/installer/dmg-background.png",
+        "windowSize": { "width": 660, "height": 400 }
       }
     }
   },
