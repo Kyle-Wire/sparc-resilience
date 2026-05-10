@@ -14,6 +14,32 @@ import { presetsForDomain, applyPresetToPredictors } from "@/lib/scenarioPresets
 
 type ScenariosTab = "configure" | "library";
 
+/** Infer the natural absolute range for a variable from its name. */
+function naturalRange(col: string): { lo: number; hi: number; step: number; unit: string } | null {
+  const lower = col.toLowerCase();
+  if (/pct|percent|impervious|canopy|cover|urban|green/.test(lower)) {
+    return { lo: 0, hi: 100, step: 1, unit: "%" };
+  }
+  if (/ndvi|evi|savi|lai|fpar|vegetation.index/.test(lower)) {
+    return { lo: -1, hi: 1, step: 0.05, unit: "" };
+  }
+  if (/albedo|reflect/.test(lower)) {
+    return { lo: 0, hi: 1, step: 0.02, unit: "" };
+  }
+  return null;
+}
+
+/** Compact label formatter for slider min/max/baseline values. */
+function fmtSlider(v: number): string {
+  if (!Number.isFinite(v)) return "—";
+  const abs = Math.abs(v);
+  if (abs >= 1000) return v.toFixed(0);
+  if (abs >= 100) return v.toFixed(1);
+  if (abs >= 10) return v.toFixed(1);
+  if (abs >= 1) return v.toFixed(2);
+  return v.toPrecision(3);
+}
+
 interface Scenario {
   id: string;
   name: string;
@@ -103,7 +129,7 @@ export default function ScenariosPage() {
           return merged;
         });
 
-        // Build sliders from predictors in config, bounded by /data/summary stats
+        // Build sliders from predictors in config, using domain-inferred natural ranges
         if (cols.length > 0) {
           const top = cols.slice(0, 6);
           dataSummary()
@@ -112,38 +138,37 @@ export default function ScenariosPage() {
               setSliders(
                 top.map((col: string) => {
                   const stats = ns[col];
-                  // Prefer ±2σ around the baseline (mean); fall back to data
-                  // min/max, then to legacy ±0.5 if neither is available.
-                  let baseline = 0;
-                  let lo = -0.5;
-                  let hi = 0.5;
-                  let step = 0.05;
-                  if (stats) {
-                    const mean = Number(stats.mean ?? 0);
-                    const std = Number(stats.std ?? 0);
-                    const dataMin = Number(stats.min ?? mean);
-                    const dataMax = Number(stats.max ?? mean);
-                    baseline = Number.isFinite(mean) ? mean : 0;
-                    if (Number.isFinite(std) && std > 0) {
-                      lo = baseline - 2 * std;
-                      hi = baseline + 2 * std;
-                    } else if (Number.isFinite(dataMin) && Number.isFinite(dataMax) && dataMax > dataMin) {
-                      lo = dataMin;
-                      hi = dataMax;
-                    }
-                    const span = hi - lo;
-                    if (span > 0 && Number.isFinite(span)) {
-                      step = span / 40;
-                    }
+                  const mean = stats ? Number(stats.mean ?? 0) : 0;
+                  const baseline = Number.isFinite(mean) ? mean : 0;
+
+                  const nr = naturalRange(col);
+                  let lo: number;
+                  let hi: number;
+                  let step: number;
+                  let unit: string;
+
+                  if (nr) {
+                    lo = nr.lo;
+                    hi = nr.hi;
+                    step = nr.step;
+                    unit = nr.unit;
+                  } else {
+                    const dataMin = stats ? Number(stats.min ?? baseline) : baseline - 0.5;
+                    const dataMax = stats ? Number(stats.max ?? baseline) : baseline + 0.5;
+                    lo = Number.isFinite(dataMin) ? dataMin : baseline - 0.5;
+                    hi = Number.isFinite(dataMax) ? dataMax : baseline + 0.5;
+                    step = Math.max((hi - lo) / 40, 1e-4);
+                    unit = "";
                   }
+
                   return {
                     variable: col,
-                    min: Number.isFinite(lo) ? lo : -0.5,
-                    max: Number.isFinite(hi) ? hi : 0.5,
-                    step: Number.isFinite(step) && step > 0 ? step : 0.05,
-                    unit: "",
-                    value: baseline,
-                    baseline,
+                    min: lo,
+                    max: hi,
+                    step,
+                    unit,
+                    value: Math.min(Math.max(baseline, lo), hi),
+                    baseline: Math.min(Math.max(baseline, lo), hi),
                   };
                 }),
               );
@@ -152,9 +177,9 @@ export default function ScenariosPage() {
               setSliders(
                 top.map((col: string) => ({
                   variable: col,
-                  min: -0.5,
-                  max: 0.5,
-                  step: 0.05,
+                  min: 0,
+                  max: 100,
+                  step: 1,
                   unit: "",
                   value: 0,
                   baseline: 0,
@@ -478,8 +503,8 @@ export default function ScenariosPage() {
                   </span>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span className="mono" style={{ fontSize: 9, color: "var(--muted)", width: 36, textAlign: "right" }}>
-                    {s.min}
+                  <span className="mono" style={{ fontSize: 9, color: "var(--muted)", width: 52, textAlign: "right", flexShrink: 0 }}>
+                    {fmtSlider(s.min)}{s.unit}
                   </span>
                   <input
                     type="range"
@@ -490,12 +515,12 @@ export default function ScenariosPage() {
                     onChange={(e) => handleSliderChange(s.variable, Number(e.target.value))}
                     style={{ flex: 1, accentColor: "var(--crimson)" }}
                   />
-                  <span className="mono" style={{ fontSize: 9, color: "var(--muted)", width: 36 }}>
-                    {s.max}
+                  <span className="mono" style={{ fontSize: 9, color: "var(--muted)", width: 52, flexShrink: 0 }}>
+                    {fmtSlider(s.max)}{s.unit}
                   </span>
                 </div>
                 <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)", marginTop: 2 }}>
-                  baseline: {s.baseline}{s.unit}
+                  baseline: {fmtSlider(s.baseline)}{s.unit}
                 </div>
               </div>
             ))}

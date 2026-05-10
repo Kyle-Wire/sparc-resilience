@@ -21,6 +21,16 @@ function utmEpsgFromLonLat(lon: number, lat: number): number {
   return (lat >= 0 ? 32600 : 32700) + zone;
 }
 
+function formatCrs(crs: string): string {
+  if (crs.startsWith("{")) {
+    try {
+      const obj = JSON.parse(crs) as { name?: string };
+      if (obj.name) return obj.name;
+    } catch {}
+  }
+  return crs.length > 42 ? crs.slice(0, 42) + "…" : crs;
+}
+
 export default function DataPage() {
   const [summary, setSummary] = useState<DataSummary | null>(null);
   const [target, setTarget] = useState<string>("AAT_z");
@@ -29,6 +39,7 @@ export default function DataPage() {
   const [projectedEpsg, setProjectedEpsg] = useState("3438");
   const [distortionResult, setDistortionResult] = useState<DistortionResult | null>(null);
   const [distortionLoading, setDistortionLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const { notify } = useNotification();
 
   const refresh = useCallback(async () => {
@@ -58,11 +69,14 @@ export default function DataPage() {
         multiple: false,
       });
       if (!path) return;
+      setIsLoading(true);
       await selectDataFile(path as string);
       await refresh();
       notify("success", "Data loaded successfully");
     } catch (err) {
       notify("error", err instanceof Error ? err.message : "Failed to load data");
+    } finally {
+      setIsLoading(false);
     }
   }, [notify, refresh]);
 
@@ -161,7 +175,7 @@ export default function DataPage() {
       <SectionHeader
         kicker="02 · setup"
         label="Data"
-        right={<Btn small onClick={handleUpload}>Load data…</Btn>}
+        right={<Btn small onClick={handleUpload} disabled={isLoading}>{isLoading ? "Loading…" : "Load data…"}</Btn>}
       />
 
       {!summary ? (
@@ -186,7 +200,7 @@ export default function DataPage() {
             <Stat label="Rows" value={nRows.toLocaleString()} tint="var(--ink)" />
             <Stat label="Columns" value={String(columns.length)} tint="var(--ink)" />
             {geomType && <Stat label="Geometry" value={geomType} tint="var(--purple)" />}
-            {summary.crs && <Stat label="Source CRS" value={summary.crs} tint="var(--muted)" />}
+            {summary.crs && <Stat label="Source CRS" value={formatCrs(summary.crs)} tint="var(--muted)" weight={400} />}
           </StatGrid>
 
           {/* Target + spatial preview side-by-side */}

@@ -24,6 +24,7 @@ jobs:
       contents: write
     outputs:
       url: ${{ steps.wheel.outputs.url }}
+      hash: ${{ steps.wheel.outputs.hash }}
     steps:
       - uses: actions/checkout@v4
 
@@ -41,7 +42,7 @@ jobs:
           pip-audit --skip-editable
 
       - name: Build wheel
-        run: python -m build --wheel --no-isolation
+        run: python -m build --wheel
 
       - name: Upload wheel to sparc-labs/sparc-releases
         env:
@@ -58,7 +59,7 @@ jobs:
                  --title "SPARC Engine $TAG" \
                  --notes "Engine wheel for SPARC Desktop $TAG"
 
-      - name: Store wheel URL as output
+      - name: Store wheel URL and hash as output
         id: wheel
         run: |
           # Derive the URL from the actual wheel filename so it stays correct
@@ -66,7 +67,9 @@ jobs:
           WHEEL=$(ls dist/*.whl | head -1)
           WHEEL_NAME=$(basename "$WHEEL")
           TAG="${{ github.ref_name }}"
+          WHEEL_HASH=$(shasum -a 256 "$WHEEL" | awk '{print $1}')
           echo "url=https://github.com/Kyle-Wire/sparc-status/releases/download/${TAG}/${WHEEL_NAME}[server]" >> "$GITHUB_OUTPUT"
+          echo "hash=${WHEEL_HASH}" >> "$GITHUB_OUTPUT"
 
   # ── Build Tauri desktop app (per platform) ────────────────────────────────
   build:
@@ -176,6 +179,7 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           SPARC_WHEEL_URL: ${{ needs.build-wheel.outputs.url }}
+          SPARC_WHEEL_HASH: ${{ needs.build-wheel.outputs.hash }}
         with:
           projectPath: sparc-desktop
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v-dev-build' }}

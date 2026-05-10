@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SectionHeader, Card, Stat, Tag, Btn, StatGrid, thStyle, tdStyle } from "@/components/ui/DesignSystem";
 import { getConfig, dataSummary, dataPreview, dataGeoJson, saveConfig } from "@/lib/api";
-import { Histogram } from "@/components/data/Histogram";
 import { useNotification } from "@/hooks/useNotifications";
 import SpatialMap from "@/components/map/SpatialMap";
 import type { GeoJsonData } from "@/lib/types";
@@ -161,12 +160,14 @@ export default function VariablesPage() {
     setVariables((prev) => prev.map((v) => v.name === name ? { ...v, selected: !v.selected } : v));
   }, []);
 
-  const handleToggleTreatment = useCallback((name: string) => {
-    setVariables((prev) => prev.map((v) => v.name === name ? { ...v, treatment: !v.treatment } : v));
-  }, []);
-
   const handleToggleActionable = useCallback((name: string) => {
-    setVariables((prev) => prev.map((v) => v.name === name ? { ...v, actionable: !v.actionable } : v));
+    setVariables((prev) =>
+      prev.map((v) =>
+        v.name === name
+          ? { ...v, actionable: !v.actionable, treatment: !v.actionable }
+          : v,
+      ),
+    );
   }, []);
 
   // Auto-select first numeric predictor for the spatial preview.
@@ -190,8 +191,8 @@ export default function VariablesPage() {
     const predictorList = variables
       .filter((v) => v.selected && v.role === "predictor")
       .map((v) => v.name);
-    const treatmentList = variables.filter((v) => v.treatment).map((v) => v.name);
     const actionableList = variables.filter((v) => v.actionable).map((v) => v.name);
+    const treatmentList = actionableList;
     try {
       await (saveConfig as (c: Record<string, unknown>) => Promise<{ status: string }>)({
         data: { ...origDataRef.current, target_column: target },
@@ -220,7 +221,7 @@ export default function VariablesPage() {
   );
 
   const predictorCount = variables.filter((v) => v.selected && v.role === "predictor").length;
-  const treatmentCount = variables.filter((v) => v.treatment).length;
+  const actionableCount = variables.filter((v) => v.actionable).length;
   const maxCorr = Math.max(
     0,
     ...variables.filter((v) => v.role === "predictor").map((v) => Math.abs(v.corr)),
@@ -238,7 +239,7 @@ export default function VariablesPage() {
       <StatGrid>
         <Stat label="Total" value={String(variables.length)} tint="var(--ink)" />
         <Stat label="Predictors" value={String(predictorCount)} tint="var(--crimson)" />
-        <Stat label="Treatments" value={String(treatmentCount)} tint="var(--amber)" />
+        <Stat label="Actionable" value={String(actionableCount)} tint="var(--amber)" />
         <Stat label="Max |ρ|" value={maxCorr.toFixed(3)} tint="var(--purple)" />
       </StatGrid>
 
@@ -307,7 +308,8 @@ export default function VariablesPage() {
               Load a dataset to see variable details
             </div>
           ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
                 <tr style={{ textAlign: "left", color: "var(--muted)" }}>
                   <th style={{ ...thStyle, width: 28 }}>☑</th>
@@ -316,17 +318,10 @@ export default function VariablesPage() {
                   <th style={thStyle}>Role</th>
                   <th
                     style={{ ...thStyle, textAlign: "center", width: 28 }}
-                    title="Treatment variable — used for CATE estimation"
-                  >
-                    T
-                  </th>
-                  <th
-                    style={{ ...thStyle, textAlign: "center", width: 28 }}
-                    title="Actionable variable — can be intervened on in scenarios"
+                    title="Actionable — used for CATE estimation and scenario sliders"
                   >
                     A
                   </th>
-                  <th style={thStyle} title="Mean value · hover cell for std dev">Mean</th>
                   <th style={thStyle}>Range</th>
                   <th
                     style={{ ...thStyle, textAlign: "right" }}
@@ -334,7 +329,6 @@ export default function VariablesPage() {
                   >
                     |ρ|
                   </th>
-                  <th style={{ ...thStyle, width: 80 }}>Distribution</th>
                 </tr>
               </thead>
               <tbody>
@@ -384,27 +378,9 @@ export default function VariablesPage() {
                       {v.role === "predictor" && (
                         <button
                           title={
-                            v.treatment
-                              ? "Remove treatment designation"
-                              : "Mark as treatment variable for CATE estimation"
-                          }
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleToggleTreatment(v.name);
-                          }}
-                          style={roleToggleStyle(v.treatment, "var(--amber)")}
-                        >
-                          T
-                        </button>
-                      )}
-                    </td>
-                    <td style={{ ...tdStyle, textAlign: "center" }}>
-                      {v.role === "predictor" && (
-                        <button
-                          title={
                             v.actionable
-                              ? "Remove actionable designation"
-                              : "Mark as actionable (can be intervened on in scenarios)"
+                              ? "Remove actionable/treatment designation"
+                              : "Mark as actionable — used for CATE estimation and scenario sliders"
                           }
                           onClick={(e) => {
                             e.stopPropagation();
@@ -415,13 +391,6 @@ export default function VariablesPage() {
                           A
                         </button>
                       )}
-                    </td>
-                    <td
-                      style={tdStyle}
-                      className="mono"
-                      title={`μ = ${v.mean.toFixed(4)}  σ = ${v.std.toFixed(4)}`}
-                    >
-                      {v.mean.toFixed(2)}
                     </td>
                     <td
                       style={tdStyle}
@@ -441,15 +410,11 @@ export default function VariablesPage() {
                     >
                       {Math.abs(v.corr).toFixed(3)}
                     </td>
-                    <td style={tdStyle}>
-                      <div style={{ width: 90 }}>
-                        <Histogram variable={v.name} bins={20} height={20} compact />
-                      </div>
-                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </Card>
 

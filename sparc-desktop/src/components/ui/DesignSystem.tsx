@@ -113,9 +113,10 @@ interface StatProps {
   value: string | number;
   tint?: string;
   sub?: string;
+  weight?: number;
 }
 
-export function Stat({ label, value, tint = "var(--ink)", sub }: StatProps) {
+export function Stat({ label, value, tint = "var(--ink)", sub, weight = 700 }: StatProps) {
   return (
     <div
       style={{
@@ -133,7 +134,7 @@ export function Stat({ label, value, tint = "var(--ink)", sub }: StatProps) {
       >
         {label}
       </div>
-      <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", color: tint, marginTop: 2 }}>
+      <div style={{ fontSize: 22, fontWeight: weight, letterSpacing: "-0.02em", color: tint, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {value}
       </div>
       {sub && (

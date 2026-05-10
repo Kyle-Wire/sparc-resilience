@@ -22,6 +22,10 @@ const WHEEL_URL: &str = {
     }
 };
 
+/// SHA-256 hash of the wheel, baked in by CI at build time.
+/// None in local dev builds — hash verification is skipped.
+const WHEEL_HASH: Option<&str> = option_env!("SPARC_WHEEL_HASH");
+
 pub fn env_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -145,22 +149,28 @@ pub async fn setup_create_venv(app: AppHandle) -> Result<(), String> {
 pub async fn setup_install_engine(app: AppHandle) -> Result<(), String> {
     let python = env_dir()
         .join(if cfg!(windows) { "Scripts/python.exe" } else { "bin/python" });
-    run_uv(
-        &app,
-        &["pip", "install", "--python", python.to_str().unwrap_or("python"), WHEEL_URL],
-    )
-    .await
+    let python_str = python.to_str().unwrap_or("python").to_string();
+    let mut args = vec!["pip".to_string(), "install".to_string(),
+                        "--python".to_string(), python_str, WHEEL_URL.to_string()];
+    if let Some(hash) = WHEEL_HASH {
+        args.push(format!("--hash=sha256:{}", hash));
+    }
+    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_uv(&app, &args_ref).await
 }
 
 #[tauri::command]
 pub async fn setup_upgrade_engine(app: AppHandle) -> Result<(), String> {
     let python = env_dir()
         .join(if cfg!(windows) { "Scripts/python.exe" } else { "bin/python" });
-    run_uv(
-        &app,
-        &["pip", "install", "--upgrade", "--python", python.to_str().unwrap_or("python"), WHEEL_URL],
-    )
-    .await
+    let python_str = python.to_str().unwrap_or("python").to_string();
+    let mut args = vec!["pip".to_string(), "install".to_string(), "--upgrade".to_string(),
+                        "--python".to_string(), python_str, WHEEL_URL.to_string()];
+    if let Some(hash) = WHEEL_HASH {
+        args.push(format!("--hash=sha256:{}", hash));
+    }
+    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_uv(&app, &args_ref).await
 }
 
 #[tauri::command]
