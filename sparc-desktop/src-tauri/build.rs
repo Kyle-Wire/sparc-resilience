@@ -12,13 +12,14 @@ fn main() {
     // local dev builds fall back to a URL derived from the Python package
     // version read directly from pyproject.toml (independent of the Tauri
     // desktop version, which has its own cadence).
+    //
+    // SPARC_PY_VERSION is always emitted so env!("SPARC_PY_VERSION") in
+    // setup.rs compiles even when SPARC_WHEEL_URL is also set (both sides
+    // of option_env! are evaluated by the compiler at macro expansion time).
+    let py_ver = read_pyproject_version().unwrap_or_else(|| "0.0.0".to_string());
+    println!("cargo:rustc-env=SPARC_PY_VERSION={py_ver}");
     if let Ok(url) = std::env::var("SPARC_WHEEL_URL") {
         println!("cargo:rustc-env=SPARC_WHEEL_URL={url}");
-    } else {
-        // Read the Python package version from pyproject.toml so the fallback
-        // URL in setup.rs doesn't need to assume it matches CARGO_PKG_VERSION.
-        let py_ver = read_pyproject_version().unwrap_or_else(|| "0.0.0".to_string());
-        println!("cargo:rustc-env=SPARC_PY_VERSION={py_ver}");
     }
     println!("cargo:rerun-if-env-changed=SPARC_WHEEL_URL");
     println!("cargo:rerun-if-changed=../../pyproject.toml");
