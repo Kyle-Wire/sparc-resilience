@@ -145,32 +145,43 @@ pub async fn setup_create_venv(app: AppHandle) -> Result<(), String> {
     .await
 }
 
-#[tauri::command]
-pub async fn setup_install_engine(app: AppHandle) -> Result<(), String> {
+/// Build uv pip install args, using a temp requirements file with `--require-hashes`
+/// when a baked-in hash is available (uv does not accept `--hash` as a CLI flag).
+async fn uv_pip_install(app: &AppHandle, extra_args: &[&str]) -> Result<(), String> {
     let python = env_dir()
         .join(if cfg!(windows) { "Scripts/python.exe" } else { "bin/python" });
     let python_str = python.to_str().unwrap_or("python").to_string();
-    let mut args = vec!["pip".to_string(), "install".to_string(),
-                        "--python".to_string(), python_str, WHEEL_URL.to_string()];
+
     if let Some(hash) = WHEEL_HASH {
-        args.push(format!("--hash=sha256:{}", hash));
+        // Write a temp requirements file so uv can enforce the hash.
+        let req_content = format!("{} --hash=sha256:{}", WHEEL_URL, hash);
+        let req_path = std::env::temp_dir().join("sparc-wheel.txt");
+        std::fs::write(&req_path, &req_content)
+            .map_err(|e| format!("Failed to write requirements file: {e}"))?;
+        let req_str = req_path.to_str().unwrap_or("").to_string();
+        let mut args = vec![
+            "pip", "install", "--python", &python_str,
+            "--require-hashes", "-r", &req_str,
+        ];
+        args.extend_from_slice(extra_args);
+        let result = run_uv(app, &args).await;
+        let _ = std::fs::remove_file(&req_path);
+        result
+    } else {
+        let mut args = vec!["pip", "install", "--python", &python_str, WHEEL_URL];
+        args.extend_from_slice(extra_args);
+        run_uv(app, &args).await
     }
-    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
-    run_uv(&app, &args_ref).await
+}
+
+#[tauri::command]
+pub async fn setup_install_engine(app: AppHandle) -> Result<(), String> {
+    uv_pip_install(&app, &[]).await
 }
 
 #[tauri::command]
 pub async fn setup_upgrade_engine(app: AppHandle) -> Result<(), String> {
-    let python = env_dir()
-        .join(if cfg!(windows) { "Scripts/python.exe" } else { "bin/python" });
-    let python_str = python.to_str().unwrap_or("python").to_string();
-    let mut args = vec!["pip".to_string(), "install".to_string(), "--upgrade".to_string(),
-                        "--python".to_string(), python_str, WHEEL_URL.to_string()];
-    if let Some(hash) = WHEEL_HASH {
-        args.push(format!("--hash=sha256:{}", hash));
-    }
-    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
-    run_uv(&app, &args_ref).await
+    uv_pip_install(&app, &["--upgrade"]).await
 }
 
 #[tauri::command]
