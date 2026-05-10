@@ -57,44 +57,25 @@ export default function Sidebar({
       {/* Brand lockup */}
       <div
         style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          padding: "14px 16px",
+          height: 95,
+          flexShrink: 0,
+          overflow: "hidden",
           borderBottom: "1px solid var(--line)",
+          cursor: "pointer",
         }}
+        onClick={handleLogoClick}
       >
-        <div
+        <img
+          ref={logoRef}
+          src="/splash-logo.png"
+          alt="SPARC Labs"
           style={{
-            width: 40,
-            height: 40,
-            marginTop: -2,
-            overflow: "hidden",
-            borderRadius: 6,
-            cursor: "pointer",
-            flexShrink: 0,
+            width: "100%",
+            height: "100%",
+            objectFit: "contain",
+            display: "block",
           }}
-          onClick={handleLogoClick}
-        >
-          <img
-            ref={logoRef}
-            src="/splash-logo.png"
-            alt="SPARC Labs"
-            style={{
-              width: "160%",
-              height: "160%",
-              objectFit: "cover",
-              objectPosition: "center center",
-              marginLeft: "-30%",
-              marginTop: "-30%",
-              display: "block",
-            }}
-          />
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", lineHeight: 1, gap: 3 }}>
-          <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "-0.01em" }}>SPARC</span>
-          <span style={{ fontSize: 9.5, fontWeight: 600, letterSpacing: "0.18em", color: "var(--muted)" }}>LABS</span>
-        </div>
+        />
       </div>
 
       {/* Project pill */}
