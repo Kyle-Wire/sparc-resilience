@@ -323,6 +323,10 @@ export default function ScenariosPage() {
     setAddingScenario(true);
   }, [scenarios.length]);
 
+  const refreshLibrary = useCallback(() => {
+    getScenarioLibrary().then(setLibrary).catch(() => setLibrary(null));
+  }, []);
+
   const handleConfirmAddScenario = useCallback(async () => {
     if (!newScenarioName.trim()) return;
     const interventions: Record<string, number> = {};
@@ -345,10 +349,6 @@ export default function ScenariosPage() {
       notify("warning", `Scenario "${name}" added locally — could not persist to server`);
     }
   }, [newScenarioName, sliders, libAuthor, notify, refreshLibrary]);
-
-  const refreshLibrary = useCallback(() => {
-    getScenarioLibrary().then(setLibrary).catch(() => setLibrary(null));
-  }, []);
 
   useEffect(() => { refreshLibrary(); }, [refreshLibrary]);
 
