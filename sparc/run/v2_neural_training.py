@@ -324,7 +324,7 @@ def _forward_surrogates(
     spatial_feats: torch.Tensor,
     knn_index: torch.Tensor | None = None,
     knn_dists: torch.Tensor | None = None,
-) -> list[torch.Tensor]:
+) -> tuple[list[torch.Tensor], torch.Tensor]:
     """
     Run all three differentiable surrogates.
 
@@ -335,7 +335,12 @@ def _forward_surrogates(
     knn_dists : (N, K) float tensor, optional
         Distances to K nearest neighbors for GWRF kernel.
 
-    Returns list of (N,) tensors [gwr_pred, gwrf_pred, ggpgam_pred].
+    Returns
+    -------
+    preds_list : list of (N,) tensors [gwr_pred, gwrf_pred, ggpgam_pred]
+    surrogate_std : (N, 1) tensor
+        Std of the three surrogate predictions — epistemic disagreement
+        proxy used by the SpatialGatingHead in SPARCMetaLearner.
     """
     gwr_pred, _beta = surrogates["gwr"](physics_feats, spatial_feats)
     gwrf_pred = surrogates["gwrf"](
@@ -343,7 +348,9 @@ def _forward_surrogates(
         neighbor_idx=knn_index, neighbor_dists=knn_dists,
     )
     ggpgam_pred = surrogates["ggpgam"](physics_feats, spatial_feats)
-    return [gwr_pred, gwrf_pred, ggpgam_pred]
+    preds_list = [gwr_pred, gwrf_pred, ggpgam_pred]
+    surrogate_std = torch.stack(preds_list, dim=-1).std(dim=-1, keepdim=True)  # (N, 1)
+    return preds_list, surrogate_std
 
 
 def _pretrain_surrogates(
@@ -1070,7 +1077,7 @@ def train_neural_meta(
             _card = torch.tensor(_card_np, dtype=torch.long, device=device)
             _src = torch.zeros(len(sweep_train_idx), device=device)
             for _ in range(20):
-                sp = _forward_surrogates(
+                sp, _surr_std = _forward_surrogates(
                     _s, sweep_phys[sweep_train_idx], sweep_spat[sweep_train_idx],
                 )
                 bi = torch.stack(sp, dim=1)
@@ -1082,6 +1089,7 @@ def train_neural_meta(
                     X_spatial=sweep_spat[sweep_train_idx],
                     coords=sweep_coords[sweep_train_idx],
                     knn_index=_knn, alpha=alpha,
+                    surrogate_std=_surr_std,
                 )
                 # Cache surrogate outputs as their own targets (no V1 data in sweep)
                 _surr_tgts = [s.detach() for s in sp]
@@ -1123,7 +1131,7 @@ def train_neural_meta(
                 _all_phys_ext = torch.cat([sweep_phys_ext[sweep_train_idx], sweep_phys_ext[sweep_test_idx]])
                 _all_spat = torch.cat([sweep_spat[sweep_train_idx], sweep_spat[sweep_test_idx]])
                 _all_coords = torch.cat([sweep_coords[sweep_train_idx], sweep_coords[sweep_test_idx]])
-                sp = _forward_surrogates(_s, _all_phys, _all_spat)
+                sp, _surr_std_eval = _forward_surrogates(_s, _all_phys, _all_spat)
                 bi = torch.stack(sp, dim=1)
                 pr_in = _all_phys[:, pr_col_idxs]
                 alpha = _p(pr_in)
@@ -1133,6 +1141,7 @@ def train_neural_meta(
                     X_spatial=_all_spat,
                     coords=_all_coords,
                     knn_index=_knn_full, alpha=alpha,
+                    surrogate_std=_surr_std_eval,
                 )
                 # Extract predictions for test portion only
                 _preds = T_pred[_n_train:].cpu().numpy().ravel()
@@ -1452,7 +1461,7 @@ def train_neural_meta(
                 b_gwrf_dists = fold_knn_dists[b_idx][:, :gwrf_k]
 
                 # Forward: surrogates → meta-learner
-                surrogate_preds = _forward_surrogates(
+                surrogate_preds, surrogate_std = _forward_surrogates(
                     surrogates, b_physics, b_spatial,
                     knn_index=b_gwrf_knn, knn_dists=b_gwrf_dists,
                 )
@@ -1479,6 +1488,7 @@ def train_neural_meta(
                     coords=b_coords,
                     knn_index=b_knn,
                     alpha=alpha,
+                    surrogate_std=surrogate_std,
                 )
 
                 # ---- JEPA forward (Phase 1) ----
@@ -1735,7 +1745,7 @@ def train_neural_meta(
         full_knn_dists = torch.tensor(full_knn_dists_np, dtype=torch.float32, device=device)
 
         with torch.no_grad():
-            full_surr_preds = _forward_surrogates(
+            full_surr_preds, full_surr_std = _forward_surrogates(
                 surrogates, tensors["physics_feats"], tensors["X_spatial"],
                 knn_index=full_knn[:, :gwrf_k],
                 knn_dists=full_knn_dists[:, :gwrf_k],
@@ -2048,7 +2058,7 @@ def train_neural_meta(
             )
             b_gwrf_dists_rt = full_knn_dists_rt[b_idx][:, :gwrf_k]
 
-            surrogate_preds = _forward_surrogates(
+            surrogate_preds, surrogate_std = _forward_surrogates(
                 final_surrogates, b_phys, b_spat,
                 knn_index=b_gwrf_knn_rt, knn_dists=b_gwrf_dists_rt,
             )
@@ -2073,6 +2083,7 @@ def train_neural_meta(
                 coords=b_coord,
                 knn_index=b_knn,
                 alpha=alpha,
+                surrogate_std=surrogate_std,
             )
 
             # ---- JEPA forward (final retrain) ----
@@ -2339,7 +2350,7 @@ def train_neural_meta(
                 )
                 b_gwrf_dists_swa = full_knn_dists_rt[b_idx][:, :gwrf_k]
 
-                surrogate_preds = _forward_surrogates(
+                surrogate_preds, surrogate_std_swa = _forward_surrogates(
                     final_surrogates, b_phys, b_spat,
                     knn_index=b_gwrf_knn_swa, knn_dists=b_gwrf_dists_swa,
                 )
@@ -2364,6 +2375,7 @@ def train_neural_meta(
                     coords=b_coord,
                     knn_index=b_knn,
                     alpha=alpha,
+                    surrogate_std=surrogate_std_swa,
                 )
 
                 total_loss, _ = sparc_joint_loss(
@@ -2617,6 +2629,30 @@ def train_neural_meta(
             logger.warning("Could not write v2_neural_meta_info struct: %s", _e)
     with open(artifact_dir / "meta_info.json", "w") as f:
         json.dump(meta_info, f, indent=2)
+
+    # Persist SpatialGatingHead weights — the final batch's softmax gate
+    # vector (N, 3) showing how much each surrogate (GWR/GWRF/GGPGAM) was
+    # weighted across the full training set.  Useful for diagnostics.
+    try:
+        gate_w = getattr(final_model, "_last_gate_weights", None)
+        if gate_w is not None:
+            gate_np = gate_w.cpu().numpy()  # (N_last_batch, 3)
+            surrogate_names = ["gwr", "gwrf", "ggpgam"]
+            gate_path = artifact_dir / "spatial_gate_weights.npz"
+            np.savez(gate_path, gate_weights=gate_np, surrogate_names=np.array(surrogate_names))
+            if _store is not None:
+                try:
+                    _store.write_blob(
+                        "2", "v2_spatial_gate_weights",
+                        {"gate_weights": gate_np, "surrogate_names": surrogate_names},
+                        serializer="pickle", producer="v2_neural_training",
+                        consumers=["desktop:model_performance", "report:/stage2/gating"],
+                    )
+                except Exception as _ge:
+                    logger.warning("Could not persist gate weights to artifacts.db: %s", _ge)
+            logger.info("  Saved spatial_gate_weights.npz (shape=%s)", gate_np.shape)
+    except Exception as _ge:  # noqa: BLE001
+        logger.warning("Gate weight persistence failed: %s", _ge)
 
     logger.info("V2 neural artifacts saved to %s", artifact_dir)
 

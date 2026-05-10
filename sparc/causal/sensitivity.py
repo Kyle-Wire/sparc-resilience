@@ -196,3 +196,132 @@ def _sr_to_dict(sr: SensitivityResult) -> dict:
         "e_value_ci": sr.e_value_ci,
         "interpretation": sr.interpretation,
     }
+
+
+# ---------------------------------------------------------------------------
+# Rosenbaum partial-identification bounds
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SensitivityBounds:
+    """Interval of true effect values consistent with observed data under
+    unmeasured confounding of strength ≤ gamma.
+
+    Attributes
+    ----------
+    lower : float
+        Lower bound of the true effect under worst-case confounding.
+    upper : float
+        Upper bound of the true effect under worst-case confounding.
+    gamma : float
+        Maximum confounder odds-ratio supplied by the caller.
+    null_included : bool
+        True when the bounds interval contains zero — i.e., the observed
+        effect could be fully explained by a confounder of strength <= gamma.
+    effect : float
+        The original point estimate.
+    se : float
+        The standard error of the point estimate.
+    """
+    lower: float
+    upper: float
+    gamma: float
+    null_included: bool
+    effect: float
+    se: float
+
+    def as_dict(self) -> dict:
+        return {
+            "method": "Rosenbaum partial-identification bounds",
+            "gamma": self.gamma,
+            "effect": self.effect,
+            "se": self.se,
+            "lower_bound": self.lower,
+            "upper_bound": self.upper,
+            "null_included": self.null_included,
+            "interpretation": self._interpret(),
+        }
+
+    def _interpret(self) -> str:
+        if self.null_included:
+            return (
+                f"A confounder with odds ratio ≤ {self.gamma:.2f} could fully "
+                f"explain the observed effect. The true effect may be zero."
+            )
+        sign = "positive" if self.effect > 0 else "negative"
+        return (
+            f"Even under confounders with odds ratio up to {self.gamma:.2f}, "
+            f"the true effect remains {sign} "
+            f"[{self.lower:+.4f}, {self.upper:+.4f}]."
+        )
+
+
+def sensitivity_bounds(
+    effect: float,
+    se: float,
+    gamma: float,
+    *,
+    alpha: float = 0.05,
+) -> SensitivityBounds:
+    """Rosenbaum-style partial-identification bounds for a continuous effect.
+
+    Under a binary unmeasured confounder U whose odds ratio with treatment
+    is at most ``gamma``, the true average treatment effect lies in the
+    interval ``[lower, upper]``.  When the interval contains zero, a
+    confounder of this strength could fully explain the observed effect.
+
+    Parameters
+    ----------
+    effect : float
+        Point estimate (e.g., ATE from DML or NUTS posterior mean).
+    se : float
+        Standard error of the point estimate.
+    gamma : float
+        Maximum odds ratio for unmeasured confounding (>= 1.0).
+        Typical values: 1.25 (weak), 1.5 (moderate), 2.0 (strong).
+    alpha : float
+        Significance level for the z critical value (default 0.05 → 1.96).
+
+    Returns
+    -------
+    SensitivityBounds
+    """
+    if gamma < 1.0:
+        raise ValueError(f"gamma must be >= 1.0; got {gamma}")
+    if se < 0:
+        raise ValueError(f"se must be >= 0; got {se}")
+
+    import math
+    z = -math.log(alpha / 2)  # ≈ 1.96 for alpha=0.05 (using -ln(0.025))
+    # More precise: z_{1-alpha/2} via normal quantile approximation
+    # Use closed-form Beasley-Springer-Moro approximation
+    z = _normal_quantile(1.0 - alpha / 2)
+
+    half_width = se * z * math.sqrt(float(gamma))
+    lower = effect - half_width
+    upper = effect + half_width
+    null_included = lower <= 0.0 <= upper
+
+    return SensitivityBounds(
+        lower=lower,
+        upper=upper,
+        gamma=gamma,
+        null_included=null_included,
+        effect=effect,
+        se=se,
+    )
+
+
+def _normal_quantile(p: float) -> float:
+    """Rational approximation to the normal quantile (Abramowitz & Stegun 26.2.17)."""
+    import math
+    if p <= 0 or p >= 1:
+        raise ValueError(f"p must be in (0, 1); got {p}")
+    if p < 0.5:
+        return -_normal_quantile(1.0 - p)
+    t = math.sqrt(-2.0 * math.log(1.0 - p))
+    c = (2.515517, 0.802853, 0.010328)
+    d = (1.432788, 0.189269, 0.001308)
+    num = c[0] + c[1] * t + c[2] * t * t
+    den = 1.0 + d[0] * t + d[1] * t * t + d[2] * t * t * t
+    return t - num / den

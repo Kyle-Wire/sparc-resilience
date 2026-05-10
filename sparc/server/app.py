@@ -1506,6 +1506,12 @@ async def data_geojson(variable: str | None = Query(None)):
     if not hasattr(df, "geometry") or df.geometry is None:
         raise HTTPException(400, "Loaded data has no geometry column.")
 
+    # Cache key scoped to the variable (or "__all__" for the default subset).
+    cache_key = variable or "__all__"
+    cached = state.result_cache.get("data_geojson", cache_key)
+    if cached is not None:
+        return cached
+
     if variable:
         if variable not in df.columns:
             raise HTTPException(400, f"Column '{variable}' not found.")
@@ -1519,7 +1525,9 @@ async def data_geojson(variable: str | None = Query(None)):
     if hasattr(subset, "crs") and subset.crs is not None and str(subset.crs) != "EPSG:4326":
         subset = subset.to_crs(epsg=4326)
 
-    return subset.__geo_interface__
+    result = subset.__geo_interface__
+    state.result_cache.set("data_geojson", cache_key, result)
+    return result
 
 
 # Extensions accepted by /data/upload.  Anything else is rejected before
@@ -6061,6 +6069,8 @@ def _load_data_into_state(config: dict) -> None:
             output_dir=config.get("output", {}).get("base_dir"),
         )
         state.data = gdf
+        # Invalidate the geojson cache so the next request re-reprojects with fresh data.
+        state.result_cache.invalidate_stage("data_geojson")
         _compute_summary(state)
     except Exception as exc:
         print(f"Warning: data pre-load failed: {exc}")

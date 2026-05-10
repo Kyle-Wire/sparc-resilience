@@ -550,6 +550,17 @@ export interface GwenRow {
 // ------------------------------------------------------------------
 // Causal
 // ------------------------------------------------------------------
+export interface SensitivityBounds {
+  method: string;
+  gamma: number;
+  effect: number;
+  se: number;
+  lower_bound: number;
+  upper_bound: number;
+  null_included: boolean;
+  interpretation: string;
+}
+
 export interface DirectEffect {
   structural_coeff: number;
   ate_backdoor?: number;
@@ -572,6 +583,8 @@ export interface DirectEffect {
   max_discrepancy_pct?: number;
   elasticity?: number;
   relative_importance?: number;
+  /** Rosenbaum partial-identification bounds (C4). Present when bootstrap_se > 0. */
+  sensitivity_bounds?: SensitivityBounds;
 }
 
 export interface MediationDecomposition {

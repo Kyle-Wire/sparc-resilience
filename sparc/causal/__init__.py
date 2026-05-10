@@ -37,6 +37,7 @@ __all__ = [
     "dag_validator",
     "counterfactual_engine",
     "causal_discovery",
+    "mediation",
     "spatial_cate",
     # V2 Bayesian
     "mc3",

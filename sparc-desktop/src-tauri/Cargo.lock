@@ -3499,7 +3499,7 @@ dependencies = [
 
 [[package]]
 name = "sparc-desktop"
-version = "1.0.8"
+version = "1.1.10"
 dependencies = [
  "dirs 5.0.1",
  "getrandom 0.2.17",

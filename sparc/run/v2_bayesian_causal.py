@@ -87,6 +87,7 @@ def run_bayesian_causal(
     config: dict | None = None,
     output_dir: str | Path = ".",
     approval_gate: Optional[Callable[[dict], None]] = None,
+    discovery_report: dict | None = None,
 ) -> dict[str, Any]:
     """
     Run Bayesian causal analysis with MC³ + NUTS.
@@ -102,6 +103,11 @@ def run_bayesian_causal(
         result summary dict.  The callback should block until the user
         approves (or raise ``RuntimeError`` to abort).  When *None* the
         pipeline proceeds without pausing.
+    discovery_report : optional dict from ``run_causal_discovery()``.
+        When provided, included in the ``approval_gate`` payload so the
+        user sees PC/LiNGAM/GES discrepancies alongside MC³ results
+        before deciding whether to proceed.  NUTS always receives the
+        original unmodified ``dag_def`` regardless of gate outcome.
 
     Returns
     -------
@@ -264,6 +270,10 @@ def run_bayesian_causal(
             "edge_probs": edge_probs.tolist(),
             "mc3_summary": mc3_summary,
             "median_dag": median_dag,
+            # Discovery discrepancies (PC/LiNGAM/GES vs expert DAG) included
+            # so the user can review data-driven findings alongside MC³ before
+            # deciding to proceed.  NUTS always receives the original dag_def.
+            "discovery_report": discovery_report or {},
         }
         logger.info("Awaiting DAG approval from user...")
         approval_gate(gate_payload)  # blocks until user approves or raises

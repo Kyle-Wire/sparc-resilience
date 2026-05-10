@@ -8,6 +8,25 @@ import type { GeoJsonData } from "@/lib/types";
 import MapLegend from "./MapLegend";
 
 // ---------------------------------------------------------------------------
+// Inline blank basemap style — avoids external tile fetches inside Tauri.
+// A light neutral background with subtle grid lines is sufficient for the
+// SPARC data overlays. Context tile layers (Phase 18) are added on top when
+// the user explicitly enables them.
+// ---------------------------------------------------------------------------
+const BLANK_BASEMAP_STYLE = {
+  version: 8 as const,
+  name: "SPARC Blank",
+  sources: {},
+  layers: [
+    {
+      id: "background",
+      type: "background" as const,
+      paint: { "background-color": "#f4f4f0" },
+    },
+  ],
+};
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -370,7 +389,7 @@ export default function SpatialMap({
         }}
       >
         <Map
-          mapStyle="https://basemaps.cartocdn.com/gl/positron-nolabels-gl-style/style.json"
+          mapStyle={BLANK_BASEMAP_STYLE}
           attributionControl={false}
         >
           <NavigationControl position="top-right" />

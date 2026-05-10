@@ -122,19 +122,63 @@ class GWRFModel:
         # Build BallTree for efficient k-NN lookups (O(n log n) vs O(n²) cdist)
         self._fit_tree = BallTree(self.coords)
 
+        # ----------------------------------------------------------------
+        # S1a: Pre-compute anisotropic distances when kernel_field present.
+        # For each subsample location we build a sorted list of (aniso_dist,
+        # training_idx) pairs and select the k_neighbors closest under the
+        # geometric-mean anisotropic Matérn metric.
+        # ----------------------------------------------------------------
+        _use_anisotropy = (
+            self.kernel_field is not None
+            and hasattr(self.kernel_field, "kernels")
+            and any(
+                kf.get("is_anisotropic", False)
+                for kf in self.kernel_field.kernels.values()
+            )
+        )
+        if _use_anisotropy:
+            try:
+                from sparc.models.kernel_field import anisotropic_distance, matern_kernel_weights
+            except ImportError:
+                _use_anisotropy = False
+
         print(f"Training {len(self.subsample_indices)} local random forest models...")
 
         for i, idx in enumerate(self.subsample_indices):
-            d_local, neighbor_indices = self._fit_tree.query(
-                self.coords[idx:idx+1], k=self.k_neighbors
-            )
-            d_local = d_local[0]
-            neighbor_indices = neighbor_indices[0]
+            if _use_anisotropy:
+                # Compute geometric-mean anisotropic distance from this location
+                # to every training point, then pick the k_neighbors smallest.
+                dx = self.coords[:, 0] - self.coords[idx, 0]
+                dy = self.coords[:, 1] - self.coords[idx, 1]
+                log_dist_sum = np.zeros(len(self.coords))
+                n_preds = 0
+                for kern in self.kernel_field.kernels.values():
+                    kappa_x = float(kern.get("kappa_x", 1.0))
+                    kappa_y = float(kern.get("kappa_y", 1.0))
+                    theta_rad = float(kern.get("theta_rad", 0.0))
+                    d_aniso = anisotropic_distance(dx, dy, kappa_x, kappa_y, theta_rad)
+                    log_dist_sum += np.log(d_aniso + 1e-12)
+                    n_preds += 1
+                geom_mean_dist = np.exp(log_dist_sum / max(n_preds, 1))
+                geom_mean_dist[idx] = 0.0  # self-distance = 0
+                neighbor_indices = np.argsort(geom_mean_dist)[: self.k_neighbors]
+                d_local = geom_mean_dist[neighbor_indices]
+                # Use the geometric-mean Matérn weights for sample_weight.
+                kern0 = next(iter(self.kernel_field.kernels.values()))
+                nu = float(kern0.get("nu", 1.5))
+                sigma2 = float(kern0.get("sigma2", 1.0))
+                weights = matern_kernel_weights(d_local, nu=nu, sigma2=sigma2)
+            else:
+                d_local, neighbor_indices_raw = self._fit_tree.query(
+                    self.coords[idx:idx+1], k=self.k_neighbors
+                )
+                d_local = d_local[0]
+                neighbor_indices = neighbor_indices_raw[0]
+                bandwidth = d_local[-1] if d_local[-1] > 0 else 1e-6
+                weights = np.exp(-0.5 * (d_local / bandwidth) ** 2)
 
             X_local = X[neighbor_indices]
             y_local = y[neighbor_indices]
-            bandwidth = d_local[-1] if d_local[-1] > 0 else 1e-6
-            weights = np.exp(-0.5 * (d_local / bandwidth) ** 2)
 
             rf = RandomForestRegressor(
                 n_estimators=self.n_estimators,
@@ -366,6 +410,72 @@ class GWRFModel:
         u = ((y[mask] - y_pred[mask]) ** 2).sum()
         v = ((y[mask] - y[mask].mean()) ** 2).sum()
         return 1 - u / v if v != 0 else np.nan
+
+    def predict_with_uncertainty(
+        self,
+        X: "np.ndarray",
+        coords: "np.ndarray",
+        k_blend: int = 1,
+    ) -> "tuple[np.ndarray, np.ndarray]":
+        """Return per-cell mean prediction and within-forest epistemic std.
+
+        Unlike :meth:`predict` (which measures *inter-model* disagreement),
+        this method uses the individual tree predictions from the nearest
+        local RandomForestRegressor to estimate *within-model* epistemic
+        uncertainty.  The result is suitable for routing to the divergence
+        audit (S4) and the neural meta-learner surrogate uncertainty head
+        (S2/S3).
+
+        Parameters
+        ----------
+        X : array-like of shape (N, p)
+            Feature matrix.
+        coords : array-like of shape (N, 2)
+            Spatial coordinates for local-model lookup.
+        k_blend : int, default=1
+            Number of nearest local models to blend.  ``k_blend=1`` uses
+            only the single closest model (lowest noise; recommended for
+            the divergence audit).
+
+        Returns
+        -------
+        predictions : np.ndarray of shape (N,)
+            Mean prediction per cell (average across tree predictions of
+            the nearest local RF).
+        std_per_cell : np.ndarray of shape (N,)
+            Std of per-tree predictions (epistemic uncertainty proxy).
+            NaN when no valid local model is found.
+        """
+        if self.local_models is None:
+            raise RuntimeError("predict_with_uncertainty() requires a fitted model.")
+
+        X = np.asarray(X)
+        coords = np.asarray(coords)
+        n = len(X)
+        predictions = np.full(n, np.nan)
+        std_per_cell = np.full(n, np.nan)
+
+        subsample_tree = BallTree(self.subsample_coords)
+        k_use = min(k_blend, len(self.local_models))
+        all_dists, all_idx = subsample_tree.query(coords, k=k_use)
+
+        for i in range(n):
+            tree_preds_all: list[float] = []
+            for j in range(k_use):
+                model = self.local_models[all_idx[i, j]]
+                if model is None:
+                    continue
+                # Per-tree predictions for this single observation.
+                xi = X[i : i + 1]
+                per_tree = np.array([est.predict(xi)[0] for est in model.estimators_])
+                tree_preds_all.extend(per_tree.tolist())
+
+            if tree_preds_all:
+                arr = np.array(tree_preds_all)
+                predictions[i] = float(arr.mean())
+                std_per_cell[i] = float(arr.std())
+
+        return predictions, std_per_cell
 
     def save_models(self, output_dir, prefix="gwrf"):
         """

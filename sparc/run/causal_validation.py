@@ -2638,7 +2638,13 @@ class CausalValidator:
                         "every treatment."
                     )
                 else:
-                    reports = divergence_audit_for_all(aligned_gwr, aligned_cate)
+                    reports = divergence_audit_for_all(
+                        aligned_gwr,
+                        aligned_cate,
+                        gwr_stds=self._load_gwrf_uncertainty_for_treatments(
+                            list(aligned_gwr.keys()),
+                        ),
+                    )
                     payload = {
                         "treatments": list(reports.keys()),
                         "reports": {
@@ -2715,6 +2721,79 @@ class CausalValidator:
                         continue
         return out
 
+    def _load_gwrf_uncertainty_for_treatments(
+        self, treatments: List[str],
+    ) -> Dict[str, np.ndarray]:
+        """Load the fitted GWRFModel from Stage-2 and compute per-cell epistemic std.
+
+        Uses ``GWRFModel.predict_with_uncertainty()`` (S1b) which returns the
+        std of individual tree predictions from the nearest local Random Forest.
+        Returns a dict ``{treatment: std_array}`` for treatments where the
+        std can be computed.  Returns an empty dict on any failure so that the
+        caller's divergence audit degrades gracefully to the global-std path.
+        """
+        try:
+            from sparc.registry.store import get_active_store
+            store = get_active_store()
+            if store is None:
+                return {}
+
+            # Load the GWRF model blob saved by Stage 2.
+            gwrf_model = None
+            for stage, aid in [
+                ("2", "gwrf_model_full"),   # enhanced_spatial_cv saves full model here
+                ("2", "gwrf_local_models"), # gwrf.save_models() fallback
+                ("2", "gwrf_model"),        # legacy alias
+            ]:
+                try:
+                    if hasattr(store, "has") and not store.has(stage, aid):
+                        continue
+                    gwrf_model = store.read_blob(stage, aid)
+                    if gwrf_model is not None:
+                        break
+                except Exception:
+                    continue
+
+            if gwrf_model is None or not hasattr(gwrf_model, "predict_with_uncertainty"):
+                return {}
+
+            # Load the feature matrix used in Stage 2 so we can call predict.
+            feat_table = None
+            for stage, aid in [("2", "features"), ("2", "v2_features"), ("0", "features")]:
+                try:
+                    if hasattr(store, "has") and not store.has(stage, aid):
+                        continue
+                    feat_table = store.read_table(stage, aid)
+                    if feat_table is not None and len(feat_table) > 0:
+                        break
+                except Exception:
+                    continue
+
+            if feat_table is None or gwrf_model.coords is None:
+                return {}
+
+            feat_cols = [
+                c for c in feat_table.columns
+                if c.lower() not in {"x", "y", "lon", "lat", "geometry"}
+                and hasattr(feat_table[c], "dtype")
+                and np.issubdtype(feat_table[c].dtype, np.number)
+            ]
+            X_all = feat_table[feat_cols].values.astype(np.float64)
+            coords_all = gwrf_model.coords
+
+            if X_all.shape[0] != coords_all.shape[0]:
+                return {}
+
+            # Compute once — shared std across all treatments (GWRF is outcome-
+            # level, not treatment-level, so the uncertainty is the same per cell).
+            _, std_per_cell = gwrf_model.predict_with_uncertainty(X_all, coords_all, k_blend=1)
+
+            # Broadcast the per-cell std to all requested treatments.
+            return {tr: std_per_cell for tr in treatments}
+
+        except Exception:
+            return {}
+
     # ------------------------------------------------------------------
     # Step 5: Produce scenario_coefficients.json
     # ------------------------------------------------------------------
@@ -2790,6 +2869,28 @@ class CausalValidator:
                     ref_ate = abs(ates[0]) if ates[0] != 0 else 1e-6
                     entry['estimator_agreement'] = (max_disc / ref_ate) < 0.30
                     entry['max_discrepancy_pct'] = float(max_disc / ref_ate * 100)
+
+                # Rosenbaum partial-identification bounds — bounds the range of
+                # true effects consistent with the observed estimate under
+                # unmeasured confounding of strength <= gamma.
+                try:
+                    from sparc.causal.sensitivity import sensitivity_bounds
+                    _effect_for_bounds = ate_info.get('ate') if ate_info.get('ate') is not None else coeff
+                    _se_for_bounds = boot_info.get('se')
+                    _gamma = (
+                        self.config.get('causal', {})
+                        .get('sensitivity', {})
+                        .get('gamma', 1.5)
+                    )
+                    if _effect_for_bounds is not None and _se_for_bounds is not None and float(_se_for_bounds) > 0:
+                        _bounds = sensitivity_bounds(
+                            float(_effect_for_bounds),
+                            float(_se_for_bounds),
+                            float(_gamma),
+                        )
+                        entry['sensitivity_bounds'] = _bounds.as_dict()
+                except Exception:
+                    pass
 
                 # Human-readable rendering of the headline effect.
                 if _var_reg is not None and target is not None:
@@ -3090,6 +3191,7 @@ def main(approval_gate=None) -> dict:
                 config=config,
                 output_dir=bayesian_dir,
                 approval_gate=approval_gate,
+                discovery_report=validator.discovery_report,
             )
 
             mc3_summary = bayesian_result.get("mc3_summary", {})

@@ -6,7 +6,8 @@ import { Panel, PanelEmpty, Pill } from "@/components/ui/DesignSystem";
 import { PanelGate } from "@/components/ui/PanelGate";
 import { useManifest } from "@/hooks/useManifest";
 import { useResult } from "@/hooks/useResult";
-import { getCausalSensitivity, type CausalSensitivity } from "@/lib/api";
+import { getCausalSensitivity, getCausalResults, type CausalSensitivity } from "@/lib/api";
+import type { CausalResults, SensitivityBounds } from "@/lib/types";
 
 export default function SensitivityPanel() {
   const manifest = useManifest();
@@ -19,6 +20,20 @@ export default function SensitivityPanel() {
     present ? "s3:causal_sensitivity" : null,
     getCausalSensitivity,
   );
+  const { data: causalData } = useResult<CausalResults>(
+    present ? "s3:causal_results" : null,
+    getCausalResults,
+  );
+
+  // Collect Rosenbaum bounds from direct_effects
+  const boundsEntries: { treatment: string; bounds: SensitivityBounds }[] = [];
+  if (causalData?.direct_effects) {
+    for (const [treatment, effect] of Object.entries(causalData.direct_effects)) {
+      if (effect.sensitivity_bounds) {
+        boundsEntries.push({ treatment, bounds: effect.sensitivity_bounds });
+      }
+    }
+  }
 
   return (
     <PanelGate panelId="sensitivity" title="Sensitivity analysis" subtitle="stage 3 · causal">
@@ -27,7 +42,10 @@ export default function SensitivityPanel() {
           <PanelEmpty reason="Loading…" />
         </Panel>
       ) : (
-        <SensitivityTable data={data} />
+        <>
+          <SensitivityTable data={data} />
+          {boundsEntries.length > 0 && <RosenbaumboundsTable entries={boundsEntries} />}
+        </>
       )}
     </PanelGate>
   );
@@ -70,6 +88,64 @@ function SensitivityTable({ data }: { data: CausalSensitivity }) {
                 </td>
                 <td style={{ padding: "6px 8px", color: "var(--ink-2)", fontFamily: "Inter, sans-serif" }}>
                   {r.interpretation}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Panel>
+  );
+}
+
+function RosenbaumboundsTable({
+  entries,
+}: {
+  entries: { treatment: string; bounds: SensitivityBounds }[];
+}) {
+  return (
+    <Panel
+      title="Partial-identification bounds"
+      subtitle={`Rosenbaum · γ=${entries[0]?.bounds.gamma ?? "?"}`}
+    >
+      <div style={{ overflowX: "auto" }}>
+        <table
+          className="mono"
+          style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}
+        >
+          <thead>
+            <tr style={{ textAlign: "left", borderBottom: "1px solid var(--line)" }}>
+              <th style={{ padding: "6px 8px" }}>Treatment</th>
+              <th style={{ padding: "6px 8px", textAlign: "right" }}>Effect</th>
+              <th style={{ padding: "6px 8px", textAlign: "right" }}>Lower</th>
+              <th style={{ padding: "6px 8px", textAlign: "right" }}>Upper</th>
+              <th style={{ padding: "6px 8px" }}>Null included?</th>
+              <th style={{ padding: "6px 8px" }}>Interpretation</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map(({ treatment, bounds }) => (
+              <tr
+                key={treatment}
+                style={{ borderBottom: "1px solid rgba(0,0,0,0.04)" }}
+              >
+                <td style={{ padding: "6px 8px" }}>{treatment}</td>
+                <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                  {bounds.effect.toFixed(4)}
+                </td>
+                <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                  {bounds.lower_bound.toFixed(4)}
+                </td>
+                <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                  {bounds.upper_bound.toFixed(4)}
+                </td>
+                <td style={{ padding: "6px 8px" }}>
+                  <Pill color={bounds.null_included ? "var(--orange, #e65100)" : "var(--green, #2f7d32)"}>
+                    {bounds.null_included ? "Yes" : "No"}
+                  </Pill>
+                </td>
+                <td style={{ padding: "6px 8px", color: "var(--ink-2)", fontFamily: "Inter, sans-serif" }}>
+                  {bounds.interpretation}
                 </td>
               </tr>
             ))}

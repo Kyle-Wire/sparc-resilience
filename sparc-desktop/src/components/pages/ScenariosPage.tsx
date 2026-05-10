@@ -323,20 +323,28 @@ export default function ScenariosPage() {
     setAddingScenario(true);
   }, [scenarios.length]);
 
-  const handleConfirmAddScenario = useCallback(() => {
+  const handleConfirmAddScenario = useCallback(async () => {
     if (!newScenarioName.trim()) return;
     const interventions: Record<string, number> = {};
     sliders.forEach((s) => {
       if (s.value !== 0) interventions[s.variable] = s.value;
     });
-    setScenarios((prev) => [
-      ...prev,
-      { id: `s${prev.length}`, name: newScenarioName.trim(), interventions, delta: 0, status: "draft" },
-    ]);
-    notify("success", `Scenario "${newScenarioName.trim()}" added`);
+    const name = newScenarioName.trim();
+    const newSc = { id: `s${Date.now()}`, name, interventions, delta: 0, status: "draft" as const };
+    setScenarios((prev) => [...prev, newSc]);
     setAddingScenario(false);
     setNewScenarioName("");
-  }, [newScenarioName, sliders, notify]);
+    try {
+      await appendScenarioToLibrary(
+        { name, interventions, delta: 0, status: "draft" },
+        { author: libAuthor, comment: name },
+      );
+      notify("success", `Scenario "${name}" added`);
+      refreshLibrary();
+    } catch {
+      notify("warning", `Scenario "${name}" added locally — could not persist to server`);
+    }
+  }, [newScenarioName, sliders, libAuthor, notify, refreshLibrary]);
 
   const refreshLibrary = useCallback(() => {
     getScenarioLibrary().then(setLibrary).catch(() => setLibrary(null));

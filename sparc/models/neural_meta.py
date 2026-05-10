@@ -36,6 +36,50 @@ from sparc.models.spatial_attention import SIRENLayer, SparseSpatialAttention
 from sparc.models.pde_encoder import PDEInformedPhysicsEncoder
 
 
+class SpatialGatingHead(nn.Module):
+    """Learned gate over the three differentiable surrogate outputs.
+
+    Given the spatial embedding, trunk embedding, and the cross-surrogate
+    standard deviation (an epistemic uncertainty proxy), produce a
+    soft-attention weight vector of shape ``(N, n_surrogates)`` that
+    dynamically down-weights surrogates with high prediction variance
+    relative to the local spatial context.
+
+    Parameters
+    ----------
+    hidden_dim : int
+        Trunk / spatial hidden dimension ``H``.
+    n_surrogates : int
+        Number of surrogate streams (default 3: GWR, GWRF, GGPGAM).
+    dropout : float
+        Dropout rate applied before the output softmax.
+    """
+
+    def __init__(self, hidden_dim: int, n_surrogates: int = 3, dropout: float = 0.1) -> None:
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(hidden_dim * 2 + 1, hidden_dim),   # [h_spatial ‖ h_trunk ‖ std]
+            nn.GELU(),
+            nn.LayerNorm(hidden_dim),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, n_surrogates),
+        )
+        # Zero-initialise final layer so gates start at uniform 1/n_surrogates.
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
+
+    def forward(
+        self,
+        h_spatial: torch.Tensor,   # (N, H)
+        h_trunk: torch.Tensor,     # (N, H)
+        surrogate_std: torch.Tensor,  # (N, 1)
+    ) -> torch.Tensor:
+        """Return soft gate weights ``(N, n_surrogates)``."""
+        x = torch.cat([h_spatial, h_trunk, surrogate_std], dim=-1)  # (N, 2H+1)
+        logits = self.mlp(x)                                          # (N, n_surr)
+        return F.softmax(logits, dim=-1)                              # (N, n_surr)
+
+
 class SPARCMetaLearner(nn.Module):
     """
     V2 end-to-end differentiable meta-learner.
@@ -120,6 +164,23 @@ class SPARCMetaLearner(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
         )
 
+        # Spatial gating head — soft-weights the n_base_models surrogates
+        # using spatial + trunk context + cross-surrogate std.  Produces a
+        # weighted blend that is projected back to hidden_dim via blend_proj.
+        self.spatial_gating = SpatialGatingHead(
+            hidden_dim=hidden_dim,
+            n_surrogates=n_base_models,
+            dropout=dropout,
+        )
+        # Projects the scalar gated-blend (weighted surrogate mean, shape N,1)
+        # up to hidden_dim so it can be residually added to the base stream.
+        self.blend_proj = nn.Linear(1, hidden_dim)
+        nn.init.zeros_(self.blend_proj.weight)
+        nn.init.zeros_(self.blend_proj.bias)
+        # Controls how much the gate blend replaces base_enc output.
+        # Zero-initialised → starts as pure base_enc (backward compatible).
+        self.gate_residual_weight = nn.Parameter(torch.zeros(1))
+
         # Stream 3: Sparse spatial attention
         self.spatial_enc = SparseSpatialAttention(
             d_model=d_spatial,
@@ -170,6 +231,7 @@ class SPARCMetaLearner(nn.Module):
         knn_index: torch.Tensor,
         alpha: torch.Tensor,
         time_idx: torch.Tensor | None = None,
+        surrogate_std: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, list[torch.Tensor], torch.Tensor]:
         """
         Parameters
@@ -181,6 +243,9 @@ class SPARCMetaLearner(nn.Module):
         knn_index    : (N, max_neighbors) — KNN indices
         alpha        : (N, 1) — process rate from ProcessRateNet
         time_idx     : (N,) int or None — snapshot index (0=morning, 1=midday, 2=night)
+        surrogate_std : (N, 1) or None — cross-surrogate std from _forward_surrogates.
+            When None, zeros are used and the SpatialGatingHead defaults to
+            uniform surrogate weights (fully backward compatible).
 
         Returns
         -------
@@ -189,7 +254,7 @@ class SPARCMetaLearner(nn.Module):
         attn_weights : (N, max_neighbors) — spatial attention weights
         """
         # Stream encoding
-        h_base = self.base_enc(base_preds)           # (N, H)
+        h_base_raw = self.base_enc(base_preds)           # (N, H)
         h_phys, w_source = self.physics_enc(physics_feats)  # (N, H), (N, 1)
         self._last_w_source = w_source  # keep gradients for variance penalty
 
@@ -204,6 +269,22 @@ class SPARCMetaLearner(nn.Module):
             h_time = self.time_embed(time_idx)         # (N, time_embed_dim)
             trunk_parts.append(h_time)
         h_trunk = self.trunk_fusion(torch.cat(trunk_parts, dim=-1))  # (N, H)
+
+        # SpatialGatingHead — soft-weight surrogates by epistemic uncertainty.
+        # Defaults to zeros → uniform gate → no effect when surrogate_std=None.
+        if surrogate_std is None:
+            _std = torch.zeros(base_preds.shape[0], 1, device=base_preds.device)
+        else:
+            _std = surrogate_std  # (N, 1)
+
+        gate_weights = self.spatial_gating(h_spatial, h_trunk, _std)  # (N, n_surr)
+        # Weighted blend of raw surrogate predictions: (N,)
+        blend = (base_preds * gate_weights).sum(dim=-1, keepdim=True)  # (N, 1)
+        # Project blend to hidden_dim and residually mix with base_enc output.
+        h_blend = self.blend_proj(blend)                               # (N, H)
+        h_base = h_base_raw + self.gate_residual_weight * h_blend      # (N, H)
+        # Store gate weights for diagnostics / divergence audit.
+        self._last_gate_weights = gate_weights.detach()
 
         # City fusion: trunk + base + spatial
         fused = torch.cat([h_trunk, h_base, h_spatial], dim=-1)  # (N, 3H)

@@ -437,6 +437,29 @@ class CounterfactualEngine:
         # Store training data medians for non-linear prediction baselines
         self._train_medians = data.median(numeric_only=True).to_dict()
 
+        # ---- Mediation decomposition (NDE / NIE / CTE per mediator path) ----
+        self._mediation_results: list = []
+        try:
+            from sparc.causal.mediation import MediationDecomposer
+            med_cfg = self.config.get("causal", {}).get("mediation", {})
+            if med_cfg.get("enabled", True) and self.roles.get("mediators"):
+                decomposer = MediationDecomposer(
+                    n_bootstrap=med_cfg.get("n_bootstrap", 1000),
+                    n_mc=med_cfg.get("n_mc", 500),
+                    treatment_delta=med_cfg.get("treatment_delta", 1.0),
+                )
+                self._mediation_results = decomposer.decompose_all(
+                    data=data,
+                    dag_def=self.dag_def,
+                    roles=self.roles,
+                )
+        except Exception as _med_exc:
+            import warnings as _w
+            _w.warn(
+                f"Mediation decomposition failed and will be skipped: {_med_exc}",
+                stacklevel=2,
+            )
+
     # ------------------------------------------------------------------
     # HGB edge estimator (shared logic with CausalValidator)
     # ------------------------------------------------------------------
