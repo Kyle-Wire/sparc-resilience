@@ -718,8 +718,10 @@ def _execute_stage(
 
     if stage == 0:
         print(">>> Correlogram Analysis")
-        from sparc.run.correlogram_analysis import main as run_correlogram
-        result = run_correlogram(fast_mode=fast)
+        from sparc.run.orchestrator import run_stage as _orch_run_stage
+        result, _decision = _orch_run_stage(
+            0, config, fast=fast, project_path=project_path,
+        )
         state.store_result(0, result)
 
         # Pipeline configuration
@@ -730,19 +732,23 @@ def _execute_stage(
 
     elif stage == 1 and not skip_gwen:
         print(">>> GWEN Variable Selection")
-        from sparc.run.gwen_variable_selection import main as run_gwen
-        result = run_gwen(config_path=project_path, fast_mode=fast)
+        from sparc.run.orchestrator import run_stage as _orch_run_stage
+        result, _decision = _orch_run_stage(
+            1, config, fast=fast, skip_gwen=skip_gwen, project_path=project_path,
+        )
         state.store_result(1, result)
 
     elif stage == 2:
         print(">>> Enhanced Spatial CV")
-        from sparc.run.enhanced_spatial_cv import main as run_spatial_cv
-        result = run_spatial_cv(fast_mode=fast)
+        from sparc.run.orchestrator import run_stage as _orch_run_stage
+        result, _decision = _orch_run_stage(
+            2, config, fast=fast, project_path=project_path,
+        )
         state.store_result(2, result)
 
     elif stage == 3:
         print(">>> Causal Validation")
-        from sparc.run.causal_validation import main as run_causal_validation
+        from sparc.run.orchestrator import run_stage as _orch_run_stage
 
         def _dag_approval_gate(mc3_payload: dict) -> None:
             """Block the pipeline thread until the user approves the DAG."""
@@ -767,7 +773,10 @@ def _execute_stage(
             # Block until POST /dag/approve sets the event
             state.dag_approved.wait()
 
-        result = run_causal_validation(approval_gate=_dag_approval_gate)
+        result, _decision = _orch_run_stage(
+            3, config, fast=fast, project_path=project_path,
+            approval_gate=_dag_approval_gate,
+        )
         state.store_result(3, result)
 
     elif stage == 4:
@@ -791,6 +800,16 @@ def _execute_stage(
             summary_df, results_gdf = sim.run(verbose=True)
 
         state.store_result(4, {"summary": summary_df, "spatial": results_gdf})
+
+        # Emit a Stage 4 decision so every stage has one in artifacts.db.
+        try:
+            from sparc.run.orchestrator import persist_stage_decision, score_stage
+            _stage4_summary = {
+                "n_scenarios": len(scenarios) if hasattr(scenarios, "__len__") else None,
+            }
+            persist_stage_decision(score_stage(4, _stage4_summary, source="legacy_dispatch"))
+        except Exception as _exc:  # noqa: BLE001
+            print(f"[orchestrator] stage 4 decision emission skipped: {_exc}")
 
     # Post-stage: scan output dirs for any artifacts produced by legacy
     # disk-fallback writers and register them so the desktop's /results/*

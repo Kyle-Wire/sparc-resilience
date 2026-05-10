@@ -16,6 +16,7 @@ rasterstats>=0.19
 optuna>=3.3
 pygam>=0.9
 pulp>=2.7  # exact MILP for budget optimizer (greedy fallback if missing)
+scikit-optimize>=0.9  # Bayesian optimization for Stage 2 surrogate inner loop
 
 # Deep learning
 torch>=2.0

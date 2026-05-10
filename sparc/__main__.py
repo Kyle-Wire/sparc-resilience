@@ -302,8 +302,8 @@ def cmd_run(args):
     if stage in ('0', 'all'):
         if not _stage_done("0"):
             print(">>> Stage 0: Correlogram Analysis")
-            from sparc.run.correlogram_analysis import main as run_correlogram
-            run_correlogram(fast_mode=fast)
+            from sparc.run.orchestrator import run_stage as _orch_run_stage
+            _orch_run_stage(0, config, fast=fast, project_path=project_path)
             _mark_stage_done("0")
         else:
             print(">>> Stage 0: Correlogram — skipped (already complete)")
@@ -362,8 +362,10 @@ def cmd_run(args):
 
         if use_gwen and not _stage_done('.gwen_complete'):
             print("\n>>> Stage 1: GWEN Variable Selection")
-            from sparc.run.gwen_variable_selection import main as run_gwen
-            approved = run_gwen(config_path=project_path, fast_mode=fast)
+            from sparc.run.orchestrator import run_stage as _orch_run_stage
+            approved, _decision = _orch_run_stage(
+                1, config, fast=fast, skip_gwen=skip_gwen, project_path=project_path,
+            )
 
             if not approved:
                 print(f"\n{'='*60}")
@@ -385,8 +387,8 @@ def cmd_run(args):
     if stage in ('2', 'all'):
         _memory_checkpoint()
         print("\n>>> Stage 2: Enhanced Spatial CV")
-        from sparc.run.enhanced_spatial_cv import main as run_spatial_cv
-        run_spatial_cv(fast_mode=fast)
+        from sparc.run.orchestrator import run_stage as _orch_run_stage
+        _orch_run_stage(2, config, fast=fast, project_path=project_path)
         _rescan_registry("2")
 
     # ────────────────────────────────────────────────────────────────
@@ -396,8 +398,8 @@ def cmd_run(args):
         _memory_checkpoint()
         print("\n>>> Stage 3: Causal Validation")
         try:
-            from sparc.run.causal_validation import main as run_causal_validation
-            run_causal_validation()
+            from sparc.run.orchestrator import run_stage as _orch_run_stage
+            _orch_run_stage(3, config, fast=fast, project_path=project_path)
         except ImportError as e:
             print(f"  Stage 3 module not available ({e}) — skipping.")
         except Exception as e:
@@ -433,6 +435,16 @@ def cmd_run(args):
         else:
             print("\n>>> Stage 4: No scenarios defined in project.yml — skipping.")
         _rescan_registry("4")
+
+        # Emit a Stage 4 StageDecision so every stage has one in artifacts.db.
+        try:
+            from sparc.run.orchestrator import persist_stage_decision, score_stage
+            _stage4_summary = {
+                "n_scenarios": len(scenarios) if hasattr(scenarios, "__len__") else None,
+            }
+            persist_stage_decision(score_stage(4, _stage4_summary, source="legacy_dispatch"))
+        except Exception as _exc:
+            print(f"  [orchestrator] stage 4 decision emission skipped: {_exc}")
 
     # Final bookkeeping: build master GPKG merging every spatial output.
     try:
