@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sparc"
-version = "2.1.0"
+version = "2.1.1"
 description = "SPARC – Spatial Analysis and Research Core pipeline for geographically weighted modeling"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -38,7 +38,10 @@ dependencies = [
     "cma>=3.0",
 
     # Causal inference
-    "dowhy>=0.11",
+    # cap dowhy at <0.12: that version introduced a numba dependency which
+    # pulls in llvmlite; llvmlite 0.47+ has no prebuilt wheels for macOS
+    # x86_64 / Windows x64 and requires a full LLVM toolchain to build.
+    "dowhy>=0.11,<0.12",
     "networkx>=3.1",
     "econml>=0.15",
     "causal-learn>=0.1.3.8",
