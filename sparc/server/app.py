@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Query, Body, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.responses import JSONResponse, FileResponse, Response
 from sparc.server.state import ServerState
 from sparc.server.stream import stream_stage
@@ -488,6 +488,7 @@ def _prewarm_results(cancel: _threading.Event) -> None:
             )
         ]
 
+        store = _open_store()
         for stage, artifact_id in frontend_ids:
             if cancel.is_set():
                 return
@@ -495,8 +496,9 @@ def _prewarm_results(cancel: _threading.Event) -> None:
             if state.result_cache.get(stage, artifact_id) is not None:
                 continue
             try:
-                if reg.lookup(stage, artifact_id) is not None:
-                    await _read_or_404(stage, artifact_id)
+                if reg.lookup(stage, artifact_id) is not None and store.has(stage, artifact_id):
+                    result = store.read_any(stage, artifact_id)
+                    state.result_cache.set(stage, artifact_id, result)
             except Exception:
                 # Missing or unreadable artifact — not an error during pre-warm.
                 pass
