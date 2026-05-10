@@ -305,6 +305,12 @@ fn resolve_python() -> String {
 pub async fn spawn_server(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let port = SIDECAR_PORT;
 
+    // Evict any stale process squatting on our port (e.g. a leftover
+    // `python -m sparc server` from a previous dev session). If we don't,
+    // our spawn will succeed but we'll silently talk to the zombie, which
+    // is almost certainly running an older code version with missing routes.
+    evict_port_squatter(port);
+
     // Retrieve the token from managed state so both spawn paths inject it.
     let token = app
         .try_state::<SidecarHandle>()
@@ -429,6 +435,109 @@ fn register_child(app: &AppHandle, child: Child) {
     if let Some(state) = app.try_state::<SidecarHandle>() {
         *state.child.lock().unwrap() = Some(child);
     }
+}
+
+/// Detect and evict any process already listening on the sidecar port
+/// before we spawn our own. Without this, a stale `python -m sparc server`
+/// from a previous dev session (or a crashed prior run) keeps the port
+/// bound; our new spawn fails silently and the webview ends up talking to
+/// the zombie, which serves an older code version with missing routes —
+/// surfacing as mysterious 404s on /data/select, /project/create, etc.
+///
+/// Strategy:
+///   1. Fast TCP probe — if the port is free, return immediately.
+///   2. Try `POST /shutdown` (localhost-only, no auth) so a real SPARC
+///      sidecar can flush state and exit cleanly.
+///   3. Poll for up to ~5 s for the port to free.
+///   4. If still bound (unknown squatter or shutdown ignored), fall back
+///      to OS-level kill of whichever PID owns the port.
+fn evict_port_squatter(port: &str) {
+    let parsed: u16 = match port.parse() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], parsed));
+
+    if !port_in_use(&addr) {
+        return;
+    }
+
+    eprintln!("Port {port} is in use; attempting to evict existing listener");
+
+    // Phase 1: graceful /shutdown. Works for any prior SPARC sidecar.
+    let url = format!("http://127.0.0.1:{port}/shutdown");
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(2))
+        .build();
+    let _ = agent.post(&url).call();
+
+    // Phase 2: wait briefly for the port to free.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(150));
+        if !port_in_use(&addr) {
+            eprintln!("Port {port} freed after /shutdown");
+            return;
+        }
+    }
+
+    // Phase 3: not a SPARC server (or it ignored /shutdown). Hard-kill.
+    if let Some(pid) = pid_listening_on(parsed) {
+        eprintln!("Force-killing PID {pid} holding port {port}");
+        force_kill_pid(pid);
+        std::thread::sleep(Duration::from_millis(300));
+    }
+
+    if port_in_use(&addr) {
+        eprintln!(
+            "WARNING: port {port} is still in use after eviction attempt; \
+             sidecar spawn will likely fail"
+        );
+    }
+}
+
+fn port_in_use(addr: &std::net::SocketAddr) -> bool {
+    std::net::TcpStream::connect_timeout(addr, Duration::from_millis(250)).is_ok()
+}
+
+#[cfg(unix)]
+fn pid_listening_on(port: u16) -> Option<u32> {
+    let out = Command::new("lsof")
+        .args(["-i", &format!(":{port}"), "-sTCP:LISTEN", "-t", "-n", "-P"])
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&out.stdout);
+    s.lines().next().and_then(|l| l.trim().parse().ok())
+}
+
+#[cfg(windows)]
+fn pid_listening_on(port: u16) -> Option<u32> {
+    let out = Command::new("netstat").args(["-ano", "-p", "TCP"]).output().ok()?;
+    let s = String::from_utf8_lossy(&out.stdout);
+    let needle = format!(":{port}");
+    for line in s.lines() {
+        if !line.contains("LISTENING") || !line.contains(&needle) {
+            continue;
+        }
+        if let Some(pid_str) = line.split_whitespace().last() {
+            if let Ok(pid) = pid_str.parse::<u32>() {
+                return Some(pid);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(unix)]
+fn force_kill_pid(pid: u32) {
+    let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+}
+
+#[cfg(windows)]
+fn force_kill_pid(pid: u32) {
+    let _ = Command::new("taskkill")
+        .args(["/F", "/PID", &pid.to_string()])
+        .status();
 }
 
 /// Ask the Python server to shut itself down cleanly via its `/shutdown`
