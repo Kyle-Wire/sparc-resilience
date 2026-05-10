@@ -1,4 +1,3 @@
-import CubeLogo from "../brand/CubeLogo";
 import { useRef, useCallback } from "react";
 
 const SECTIONS = [
