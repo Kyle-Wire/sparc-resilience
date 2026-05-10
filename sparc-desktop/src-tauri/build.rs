@@ -22,10 +22,6 @@ fn main() {
         println!("cargo:rustc-env=SPARC_WHEEL_URL={url}");
     }
     println!("cargo:rerun-if-env-changed=SPARC_WHEEL_URL");
-    if let Ok(hash) = std::env::var("SPARC_WHEEL_HASH") {
-        println!("cargo:rustc-env=SPARC_WHEEL_HASH={hash}");
-    }
-    println!("cargo:rerun-if-env-changed=SPARC_WHEEL_HASH");
     println!("cargo:rerun-if-changed=../../pyproject.toml");
 
     tauri_build::build();
