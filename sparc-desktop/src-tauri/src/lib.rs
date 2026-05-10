@@ -13,6 +13,7 @@ pub fn run() {
         .manage(sidecar::SidecarHandle::new())
         .invoke_handler(tauri::generate_handler![
             sidecar::stop_sidecar,
+            sidecar::restart_sidecar,
             sidecar::get_sidecar_token,
             setup::setup_create_venv,
             setup::setup_install_engine,

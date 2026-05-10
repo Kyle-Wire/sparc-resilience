@@ -623,3 +623,23 @@ pub fn stop_sidecar(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Tauri command: gracefully kill any existing sidecar, then re-spawn it.
+///
+/// Called from the webview when:
+///   - The startup splash times out (no /health response within ~15 s)
+///   - The server-lost overlay wants an automatic recovery
+///
+/// Returns immediately after spawning (does not wait for /health).
+/// The webview's useServer hook continues polling and will detect when
+/// the new sidecar is ready.
+#[tauri::command]
+pub async fn restart_sidecar(app: AppHandle) -> Result<(), String> {
+    // Phase 1: shut down any existing child.
+    kill_server(&app);
+    // Phase 2: brief pause so the OS can release the port (blocking is fine
+    // here — this runs on Tauri's async runtime thread pool, not the UI thread).
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    // Phase 3: spawn a fresh sidecar (includes the port-eviction guard).
+    spawn_server(&app).await.map_err(|e| e.to_string())
+}
+

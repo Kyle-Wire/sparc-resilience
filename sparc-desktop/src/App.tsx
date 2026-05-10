@@ -44,7 +44,7 @@ import PerformancePage from "@/components/pages/PerformancePage";
 
 
 export default function App() {
-  const { ready, serverLost, status } = useServer();
+  const { ready, serverLost, startupFailed, status, restart } = useServer();
   const notif = useNotificationState();
   const project = useProjectStore();
   const { currentPage: page, navigate } = useNavigationStore();
@@ -80,6 +80,13 @@ export default function App() {
   useEffect(() => {
     applyTheme(loadThemeKey());
   }, []);
+
+  // Startup failure timeout → show error step
+  useEffect(() => {
+    if (startupFailed && splashStep === "sidecar") {
+      setSplashStep("failed");
+    }
+  }, [startupFailed, splashStep]);
 
   // Step 1 → 2: sidecar is ready
   useEffect(() => {
@@ -258,9 +265,13 @@ export default function App() {
   // Must be defined before any early returns to satisfy rules-of-hooks
   const navigateToSettings = useCallback(() => navigate("Settings"), [navigate]);
 
-  // Show splash while loading
-  if (!splashDone || project.rehydrating) {
-    return <Splash step={splashStep} parallaxEnabled={parallaxEnabled} />;
+  // Show splash while loading (or on startup failure)
+  if (!splashDone || project.rehydrating || splashStep === "failed") {
+    const handleRetry = splashStep === "failed" ? async () => {
+      setSplashStep("sidecar");
+      await restart();
+    } : undefined;
+    return <Splash step={splashStep} parallaxEnabled={parallaxEnabled} onRetry={handleRetry} />;
   }
 
   // Show login if no authenticated user

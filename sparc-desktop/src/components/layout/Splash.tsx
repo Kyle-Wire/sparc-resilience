@@ -1,24 +1,28 @@
-export type SplashStep = "sidecar" | "session" | "ready";
+export type SplashStep = "sidecar" | "session" | "ready" | "failed";
 
 interface SplashProps {
   step: SplashStep;
   parallaxEnabled?: boolean;
+  onRetry?: () => void;
 }
 
 const STEP_LABELS: Record<SplashStep, string> = {
   sidecar: "Starting sidecar…",
   session: "Restoring session…",
   ready: "Ready",
+  failed: "Failed to start sidecar",
 };
 
 const STEP_PROGRESS: Record<SplashStep, number> = {
   sidecar: 33,
   session: 66,
   ready: 100,
+  failed: 33,
 };
 
-export default function Splash({ step }: SplashProps) {
+export default function Splash({ step, onRetry }: SplashProps) {
   const progress = STEP_PROGRESS[step];
+  const failed = step === "failed";
 
   return (
     <div
@@ -40,6 +44,8 @@ export default function Splash({ step }: SplashProps) {
           width: "100%",
           height: "100%",
           objectFit: "cover",
+          opacity: failed ? 0.4 : 1,
+          transition: "opacity 0.4s",
         }}
       />
 
@@ -53,7 +59,7 @@ export default function Splash({ step }: SplashProps) {
           width: 240,
           display: "flex",
           flexDirection: "column",
-          gap: 6,
+          gap: 8,
           alignItems: "center",
         }}
       >
@@ -70,7 +76,7 @@ export default function Splash({ step }: SplashProps) {
             style={{
               height: "100%",
               width: `${progress}%`,
-              background: "var(--crimson)",
+              background: failed ? "var(--danger, #c0392b)" : "var(--crimson)",
               borderRadius: 2,
               transition: "width 0.5s cubic-bezier(0.4, 0, 0.2, 1)",
             }}
@@ -78,10 +84,29 @@ export default function Splash({ step }: SplashProps) {
         </div>
         <div
           className="mono"
-          style={{ fontSize: 9.5, color: "var(--muted)", letterSpacing: "0.08em" }}
+          style={{ fontSize: 9.5, color: failed ? "var(--danger, #c0392b)" : "var(--muted)", letterSpacing: "0.08em" }}
         >
           {STEP_LABELS[step]}
         </div>
+        {failed && onRetry && (
+          <button
+            onClick={onRetry}
+            style={{
+              marginTop: 6,
+              padding: "6px 18px",
+              borderRadius: 6,
+              border: "none",
+              background: "var(--crimson, #8b1a2c)",
+              color: "#fff",
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: "pointer",
+              letterSpacing: "0.04em",
+            }}
+          >
+            Retry
+          </button>
+        )}
       </div>
     </div>
   );
