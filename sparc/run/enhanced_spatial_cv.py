@@ -1678,7 +1678,42 @@ class EnhancedSpatialCV:
             method='block',
             stratify_y=True
         )
-        
+
+        # ── Reasoning-engine spine: surrogate-assisted bandwidth search ──
+        # Gated by `pipeline.use_surrogate_search` (default false). When off,
+        # this block is a no-op and Stage 2 behaviour is byte-identical to
+        # the legacy path. When on, it mutates self.base_config['models'][...]
+        # to apply per-model winning hparams (or correlogram fallback) and
+        # emits a Stage 2 StageDecision to artifacts.db.
+        if (self.base_config.get('pipeline') or {}).get('use_surrogate_search', False):
+            try:
+                from sparc.run.inner_loops.stage2_search import (
+                    run_stage2_bandwidth_searches,
+                )
+                from sparc.run.orchestrator import persist_stage_decision
+
+                print("\n=== Surrogate-Assisted Bandwidth Search (Stage 2 inner loop) ===")
+                _stage2_decision = run_stage2_bandwidth_searches(
+                    X=X_augmented,
+                    y=y,
+                    coords=coords,
+                    base_config=self.base_config,
+                    correlogram_bandwidths=self.get_variable_bandwidths(),
+                )
+                persist_stage_decision(_stage2_decision)
+
+                # Brief console summary so users see what the gate decided.
+                _accepted = [d.evidence.get('model') for d in _stage2_decision.decisions
+                             if d.action == 'accept']
+                _fellback = [d.evidence.get('model') for d in _stage2_decision.decisions
+                             if d.action == 'fallback']
+                if _accepted:
+                    print(f"  promoted: {_accepted}")
+                if _fellback:
+                    print(f"  fell back to correlogram: {_fellback}")
+            except Exception as _exc:
+                print(f"  [surrogate-search] skipped due to error: {_exc}")
+
         # Generate OOF predictions
         print("\n=== Base Models ===")
         oof_predictions, model_names = self.generate_optimized_oof_predictions(
