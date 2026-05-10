@@ -1,4 +1,5 @@
 import CubeLogo from "../brand/CubeLogo";
+import { useRef, useCallback } from "react";
 
 const SECTIONS = [
   { label: "Setup", pages: ["Project", "Data", "Processing"] },
@@ -34,6 +35,13 @@ export default function Sidebar({
   projectDomain,
   projectEpsg,
 }: SidebarProps) {
+  const logoRef = useRef<HTMLImageElement>(null);
+  const handleLogoClick = useCallback(() => {
+    if (!logoRef.current) return;
+    const src = logoRef.current.src;
+    logoRef.current.src = "";
+    logoRef.current.src = src;
+  }, []);
   let idx = 0;
   return (
     <aside
@@ -57,8 +65,32 @@ export default function Sidebar({
           borderBottom: "1px solid var(--line)",
         }}
       >
-        <div style={{ width: 40, height: 40, marginTop: -2 }}>
-          <CubeLogo size={40} />
+        <div
+          style={{
+            width: 40,
+            height: 40,
+            marginTop: -2,
+            overflow: "hidden",
+            borderRadius: 6,
+            cursor: "pointer",
+            flexShrink: 0,
+          }}
+          onClick={handleLogoClick}
+        >
+          <img
+            ref={logoRef}
+            src="/splash-logo.png"
+            alt="SPARC Labs"
+            style={{
+              width: "160%",
+              height: "160%",
+              objectFit: "cover",
+              objectPosition: "center center",
+              marginLeft: "-30%",
+              marginTop: "-30%",
+              display: "block",
+            }}
+          />
         </div>
         <div style={{ display: "flex", flexDirection: "column", lineHeight: 1, gap: 3 }}>
           <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "-0.01em" }}>SPARC</span>

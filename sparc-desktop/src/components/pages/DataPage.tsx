@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { SectionHeader, Card, Stat, Tag, Btn, StatGrid, KeyVal, thStyle, tdStyle } from "@/components/ui/DesignSystem";
-import { dataSummary, uploadData, getConfig, dataGeoJson, saveConfig, checkCrsDistortion } from "@/lib/api";
+import { dataSummary, getConfig, dataGeoJson, saveConfig, checkCrsDistortion } from "@/lib/api";
 import { Histogram } from "@/components/data/Histogram";
 import { EmptyState } from "@/components/common/EmptyState";
 import SpatialMap from "@/components/map/SpatialMap";
@@ -62,22 +62,8 @@ export default function DataPage() {
       if (!resp.ok) throw new Error(await resp.text());
       await refresh();
       notify("success", "Data loaded successfully");
-    } catch {
-      const input = document.createElement("input");
-      input.type = "file";
-      input.accept = ".csv,.parquet,.gpkg";
-      input.onchange = async (e) => {
-        const file = (e.target as HTMLInputElement).files?.[0];
-        if (!file) return;
-        try {
-          await uploadData(file);
-          await refresh();
-          notify("success", "Data uploaded successfully");
-        } catch (err) {
-          notify("error", err instanceof Error ? err.message : "Upload failed");
-        }
-      };
-      input.click();
+    } catch (err) {
+      notify("error", err instanceof Error ? err.message : "Failed to load data");
     }
   }, [notify, refresh]);
 
