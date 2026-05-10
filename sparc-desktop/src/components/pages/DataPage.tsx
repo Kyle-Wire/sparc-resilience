@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { SectionHeader, Card, Stat, Tag, Btn, StatGrid, KeyVal, thStyle, tdStyle } from "@/components/ui/DesignSystem";
-import { dataSummary, getConfig, dataGeoJson, saveConfig, checkCrsDistortion } from "@/lib/api";
+import { dataSummary, getConfig, dataGeoJson, saveConfig, checkCrsDistortion, selectDataFile } from "@/lib/api";
 import { Histogram } from "@/components/data/Histogram";
 import { EmptyState } from "@/components/common/EmptyState";
 import SpatialMap from "@/components/map/SpatialMap";
@@ -58,8 +58,7 @@ export default function DataPage() {
         multiple: false,
       });
       if (!path) return;
-      const resp = await fetch(`http://127.0.0.1:8008/data/select?path=${encodeURIComponent(path as string)}`, { method: "POST" });
-      if (!resp.ok) throw new Error(await resp.text());
+      await selectDataFile(path as string);
       await refresh();
       notify("success", "Data loaded successfully");
     } catch (err) {

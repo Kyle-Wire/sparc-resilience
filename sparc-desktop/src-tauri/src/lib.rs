@@ -26,6 +26,11 @@ pub fn run() {
 
             if setup::engine_ready() {
                 // Normal launch — engine installed and version matches.
+                // Show the main window immediately (it starts hidden in tauri.conf.json).
+                if let Some(main) = app.get_webview_window("main") {
+                    main.show().ok();
+                    main.set_focus().ok();
+                }
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = sidecar::spawn_server(&handle).await {
                         eprintln!("Failed to start server: {}", e);
