@@ -288,16 +288,16 @@ export default function ModelsPage() {
           <ModelToggle
             id="ols"
             label="OLS"
-            description="Ordinary Least Squares — global baseline"
-            tooltip="A standard linear regression fitted once across all observations. Serves as the global benchmark — fast, interpretable, and always included for comparison."
+            description="The honest baseline"
+            tooltip="One equation for the whole city, fitted once. Deliberately simple — and that's the point. It tells you exactly how much better the spatial models are doing. If your fancy local models can't beat this, something's wrong."
             enabled={true}
             onToggle={() => {}}
           />
           <ModelToggle
             id="gwr"
             label="MGWR"
-            description="Multiscale Geographically Weighted Regression"
-            tooltip="Extends classic GWR by allowing each predictor to operate at its own spatial bandwidth — some effects may be local, others regional. Captures spatially varying relationships across multiple scales simultaneously."
+            description="Rules that change by neighborhood"
+            tooltip="Instead of one equation for the whole city, this fits a local equation at every location — and each predictor gets its own range of influence. Tree canopy might matter most within 200m. Distance to water might matter across the whole region. MGWR figures that out from your data."
             enabled={gwrEnabled}
             onToggle={() => setGwrEnabled((v) => !v)}
           >
@@ -317,8 +317,8 @@ export default function ModelsPage() {
           <ModelToggle
             id="gwrf"
             label="GWRF"
-            description="Geographically Weighted Random Forest"
-            tooltip="A non-linear ensemble method that fits a separate Random Forest for each observation using spatially-weighted neighbourhoods. Captures local non-linearities without assuming a functional form."
+            description="Local non-linear learning"
+            tooltip="Like MGWR, but without assuming the relationship is linear. It fits a small forest of decision trees around each location, weighted by how close other observations are. Great for landscapes where the relationship between, say, tree cover and temperature has curves and thresholds rather than a straight line."
             enabled={gwrfEnabled}
             onToggle={() => setGwrfEnabled((v) => !v)}
           >
@@ -329,8 +329,8 @@ export default function ModelsPage() {
           <ModelToggle
             id="ggpgam"
             label="GGPGAM"
-            description="Gaussian Process + Generalized Additive Model"
-            tooltip="Combines a Gaussian Process spatial prior with smooth spline terms for each predictor. Provides calibrated uncertainty estimates and handles non-linear covariate effects with spatial autocorrelation."
+            description="Smooth curves, spatially adjusted"
+            tooltip="Instead of straight lines or arbitrary kinks, this model fits smooth curves for each predictor and handles spatial autocorrelation through a probabilistic spatial prior. The bonus: it gives you honest uncertainty estimates, not just point predictions."
             enabled={ggpgamEnabled}
             onToggle={() => setGgpgamEnabled((v) => !v)}
           >
@@ -341,8 +341,8 @@ export default function ModelsPage() {
           <ModelToggle
             id="neural"
             label="SPARC Neural"
-            description="Physics-guided spatial meta-learner"
-            tooltip="A graph-attention network that ingests outputs from all other models as features alongside raw predictors. Physics constraints (monotonicity, bounds) are enforced during training. Typically the highest-accuracy model in the ensemble."
+            description="The synthesis"
+            tooltip="This model takes what all the others learned — their predictions, the raw data, the spatial structure — and learns how to combine them optimally. Physical constraints are baked in during training so the synthesis can't produce predictions that violate known physics. Typically the highest-accuracy model."
             enabled={neuralEnabled}
             onToggle={() => setNeuralEnabled((v) => !v)}
           >

@@ -380,7 +380,7 @@ export default function PhysicsPage() {
           title={
             <SectionHelp
               title="Physics strength"
-              tip="Controls the balance between data-driven learning and physics prior knowledge. 0 = fully data-driven, 1 = fully physics-constrained. Start at 0.25 and increase if the model violates known physical relationships."
+              tip="How much do the laws of thermodynamics sit in the driver's seat? At 0, the model learns purely from data. At 1, it defers entirely to physics priors from the literature. Most analyses land around 0.25 — let the data lead, but catch it if it goes physically implausible."
             /> as unknown as string
           }
           subtitle={`literature_weight = ${literatureWeight.toFixed(2)}`}
@@ -423,7 +423,7 @@ export default function PhysicsPage() {
           title={
             <SectionHelp
               title="Monotone constraints"
-              tip="Enforce a direction on how each predictor affects the outcome. ↑ = must increase the target, ↓ = must decrease it. These constraints are injected into gradient-boosted and neural models to prevent physically implausible predictions."
+              tip="Some things only go one direction: more trees only cool, more asphalt only warms. When you're confident about the direction, tell the model — it'll enforce that rule and prevent physically backwards predictions. ↑ = must increase the outcome. ↓ = must decrease it. ● = no constraint."
             /> as unknown as string
           }
           subtitle="click direction to cycle: ↑ ↓ ●"
@@ -515,7 +515,7 @@ export default function PhysicsPage() {
           title={
             <SectionHelp
               title="Response curve"
-              tip="Partial dependence plot (PDP) showing the marginal effect of the selected predictor on the target. The shaded band is ±1 standard deviation across spatial folds. Only available after a pipeline run."
+              tip="This is a dose-response plot — what happens to the outcome as you gradually change this one predictor, holding everything else fixed. The shaded band shows how much that response varies across spatial folds. Look for saturation: the curve flattening out is the model telling you that doubling the dose won't double the benefit. Only available after a pipeline run."
             /> as unknown as string
           }
           subtitle={selectedVar ? selectedVar.replace(/_/g, " ") + " → target" : "select a variable"}
@@ -541,7 +541,7 @@ export default function PhysicsPage() {
           title={
             <SectionHelp
               title="Variable guardrails"
-              tip="Hard physical bounds applied per predictor during training. Predictions that would require inputs outside these ranges are clipped. Use these to prevent extrapolation to physically impossible values (e.g. negative tree cover)."
+              tip="Every predictor has physical limits. Tree canopy can't be negative. Albedo can't exceed 1. These guardrails enforce those limits during training and clip any predictions that would require impossible inputs. Think of it as the physics department reviewing the model's homework."
             /> as unknown as string
           }
           subtitle="physical bounds per predictor — applied during training"
@@ -632,7 +632,7 @@ export default function PhysicsPage() {
           <span style={{ fontSize: 10 }}>{advancedOpen ? "▼" : "▶"}</span>
           Advanced physics
           <span
-            title="PDE loss weights and boundary conditions. These control the physics-informed neural network (PINN) training curriculum. Only adjust if you understand the underlying partial differential equations."
+            title="Advanced physics settings: PDE loss and boundary conditions. These let you encode specific thermodynamic equations as training constraints. Start with the defaults and only adjust once you've reviewed the response curves and understand which physical relationships your model isn't capturing."
             style={{
               display: "inline-flex", alignItems: "center", justifyContent: "center",
               width: 15, height: 15, borderRadius: "50%", border: "1px solid var(--muted)",
@@ -650,7 +650,7 @@ export default function PhysicsPage() {
               title={
                 <SectionHelp
                   title="PDE loss weights"
-                  tip="8-term physics-informed loss function staged across training epochs. Each weight controls how strongly that physical equation is enforced. The curriculum activates terms progressively — earlier epochs use simpler physics before adding complex constraints."
+                  tip="Physics equations can be used as training constraints — the model learns to fit data while also satisfying thermodynamic and diffusion relationships. Each weight controls how strongly one equation is enforced. Terms activate progressively during training: simpler physics first, then more complex. Setting a weight to 0 turns off that constraint entirely."
                 /> as unknown as string
               }
               subtitle="8-term physics-informed loss · staged sub-curriculum"
@@ -707,7 +707,7 @@ export default function PhysicsPage() {
               title={
                 <SectionHelp
                   title="Boundary conditions"
-                  tip="Constrains what happens at the edges of your study area. None = no edge constraint. Dirichlet = fixed known value at boundary (e.g. ambient temperature). Neumann = fixed flux (e.g. no-flux insulated edge). Robin = convective cooling at boundary."
+                  tip="What happens at the edges of your study area? None = the model ignores the edges (fine for most cases). Dirichlet = the temperature at the boundary is known and fixed — like clipping to ambient air temperature at the city edge. Neumann = the heat flux through the boundary is fixed. Robin = a cooling effect at the edge, like wind carrying heat away. Start with None unless you have reason to constrain the boundary."
                 /> as unknown as string
               }
               subtitle="physics-informed constraint applied at domain edges"

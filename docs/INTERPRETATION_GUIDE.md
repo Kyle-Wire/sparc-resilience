@@ -1,92 +1,104 @@
-# SPARC Results Interpretation Guide
+# Reading SPARC Results
 
-This guide explains — in plain language — what the numbers in SPARC's output mean, how to read scenario tables, and how different inputs affect results. For the full technical reference, see the [Manual](MANUAL.md) and [Pipeline Guide](PIPELINE_GUIDE.md).
+Here's the thing about data science outputs: they're easy to produce and hard to interpret. A model can spit out 47 metrics, and if you don't know what each one is *for*, you end up either trusting everything blindly or ignoring the numbers entirely and going with your gut anyway.
+
+Neither is right. This guide is about knowing what each number is actually telling you — and equally importantly, what it *isn't* telling you.
+
+For the full technical reference, see the [Manual](MANUAL.md). For a conceptual introduction before you dive in here, start with the [Concepts Guides](concepts/README.md).
 
 ---
 
 ## Table of Contents
 
-- [Stage 2: Model Performance Metrics](#stage-2-model-performance-metrics)
-- [Stage 3: Causal Validation Metrics](#stage-3-causal-validation-metrics)
-- [Stage 4: Scenario Output Metrics](#stage-4-scenario-output-metrics)
-- [How Inputs Affect Outputs](#how-inputs-affect-outputs)
-- [Quick Checklist for Reading Scenario Tables](#quick-checklist-for-reading-scenario-tables)
+- [Stage 2 — Did the Model Learn Your City?](#stage-2--did-the-model-learn-your-city)
+- [Stage 3 — Did the Model Learn the Right Causes?](#stage-3--did-the-model-learn-the-right-causes)
+- [Stage 4 — What Would Actually Happen?](#stage-4--what-would-actually-happen)
+- [How Configuration Choices Propagate](#how-configuration-choices-propagate)
+- [Quick Checklist Before Presenting Results](#quick-checklist-before-presenting-results)
 
 ---
 
-## Stage 2: Model Performance Metrics
+## Stage 2 — Did the Model Learn Your City?
 
-### R² (Coefficient of Determination)
+Stage 2 is where SPARC trains its models. Before you trust any causal estimate or scenario prediction, you need to know: did the model actually capture the spatial patterns in your data?
 
-**What it is:** The fraction of spatial variance in your target variable that the model explains. An R² of 0.915 means the model captures 91.5% of the spatial pattern.
+### R² — The Headline Number
 
-**How to read it:**
-- **0.0–0.3:** Poor — the model explains very little. Check your data quality, predictor selection, and CRS.
-- **0.3–0.6:** Moderate — useful for exploratory analysis but not reliable for scenario predictions.
-- **0.6–0.8:** Good — typical for coarser-resolution data or complex domains.
-- **0.8–1.0:** Excellent — strong predictive power. Common with dense, high-resolution spatial data.
+Imagine plotting every observation in your study area — one dot per location, with the actual temperature on one axis and the model's predicted temperature on the other. R² tells you how tightly that cloud of dots clusters around a perfect diagonal line.
 
-**Important:** R² is computed on out-of-fold predictions (spatial cross-validation), not on training data. This guards against overfitting and spatial leakage. A high R² on spatially-buffered folds is far more credible than a high training R².
+An R² of 0.94 means 94% of the spatial variation in temperature is explained by the model. The remaining 6% is noise, measurement error, or patterns the model couldn't capture.
 
-### RMSE (Root Mean Square Error)
+**What these ranges mean in practice:**
+- **0.0–0.3:** The model barely knows more than the city average. Check your data quality and predictor selection.
+- **0.3–0.6:** Useful for exploration. Not reliable for policy decisions.
+- **0.6–0.8:** Solid. Typical for coarser-resolution or more complex domains.
+- **0.8–1.0:** Excellent. The model has genuinely learned the spatial structure.
 
-**What it is:** The average magnitude of prediction error, in the same units as your target variable.
+**The critical detail:** SPARC computes R² on *held-out* data from spatially-separated folds — not on the data it was trained on. A model that memorizes training data can look perfect on paper and be useless for prediction. SPARC's spatial cross-validation keeps training and test locations physically separated. A 0.85 R² from spatially-buffered folds is worth far more than a 0.99 R² from random cross-validation on the same dataset.
 
-**How to read it:** Lower is better. Compare RMSE across models to see which one predicts most accurately. For example, if your target is temperature in °F, an RMSE of 0.50 means the model is typically off by about half a degree.
+### RMSE — The Human-Readable Error
 
-### Model Comparison
+R² tells you the fraction of variance explained. RMSE tells you the typical error in the same units as your outcome variable.
 
-SPARC trains four base models and a meta-ensemble:
+If your target is temperature in °F and the RMSE is 0.5, the model's predictions are typically off by about half a degree. If the RMSE is 2.0, you're off by two degrees on average — a very different situation for a heat vulnerability analysis. Lower is always better.
 
-| Model | Strengths | When It Shines |
-|-------|-----------|---------------|
-| **OLS** | Simple, interpretable, fast | Baseline reference; useful when relationships are globally linear |
-| **GWR** | Spatially varying coefficients | When the effect of a predictor changes across space |
-| **GWRF** | Non-linear + spatial | Complex interactions, heterogeneous landscapes |
-| **GGPGAM** | Semi-parametric flexibility | Smooth non-linear trends with spatial structure |
-| **Meta-ensemble** | Stacks all base models | Almost always the best; uses Optuna-tuned LightGBM with monotonic physics constraints |
+### The Model Comparison Table — Understanding the Ensemble
 
-The meta-ensemble typically matches or exceeds the best individual model. If it doesn't, it usually means one model dominates (as in the ForceSMIP case, where GWRF ≈ meta-ensemble).
+SPARC trains four fundamentally different models and then blends them. Each model sees the problem differently.
+
+| Model | What it is | When it's unusually strong |
+|-------|-----------|--------------------------|
+| **OLS** | One global equation, applied everywhere | When relationships are roughly uniform across the whole study area |
+| **GWR** | Locally-fitted linear models — the equation changes by location | When spatial nonstationarity is strong (effects differ by neighborhood) |
+| **GWRF** | Local random forest at each location — captures non-linear local effects | Complex heterogeneous landscapes with interaction effects |
+| **GGPGAM** | Smooth non-linear functions of predictors, spatially adjusted | Gradual non-linear trends without assuming a functional form |
+| **Meta-ensemble** | All of the above, combined with physics constraints | Almost always the best — it inherits the strengths of each component |
+
+If the meta-ensemble is substantially weaker than one of its components, something unusual is happening — worth investigating before moving to Stage 3.
 
 ---
 
-## Stage 3: Causal Validation Metrics
+## Stage 3 — Did the Model Learn the Right Causes?
 
-### Structural Coefficients
+Stage 3 is where SPARC goes from "the model fits the data" to "here is what actually drives the outcome, and by how much." This is where the causal structure you specified gets tested against reality.
 
-**What they are:** The estimated causal effect of each edge in your DAG, after controlling for confounders. For example, "Pct_Canopy → AAT_z = −0.022" means each 1 percentage-point increase in tree canopy is associated with a 0.022 z-unit decrease in temperature, holding other variables constant.
+### Structural Coefficients — The Causal Story in Numbers
 
-**How they're estimated:** SPARC uses one of three estimators:
-- **DML (Double Machine Learning):** Doubly-robust; best for most applications.
-- **HGB (Histogram Gradient Boosting):** Non-parametric; good for non-linear relationships.
-- **OLS:** Simple linear; interpretable but assumes linearity.
+A structural coefficient is not a correlation. It's an estimate of a *causal* effect — the change in the outcome you'd expect if you *set* the treatment to a new value, holding everything else constant.
 
-Coefficients are blended with literature priors via adaptive shrinkage when priors are provided. This pulls data-driven estimates toward known physics without overriding the data.
+For example: "Pct_Canopy → AAT_z = −0.022" means that each additional percentage point of tree canopy *causally* reduces temperature by 0.022 z-score units — after accounting for confounders like elevation and distance from water.
 
-### ATE (Average Treatment Effect)
+**What to look for:**
+- **Sign:** Does the direction match physics? Canopy should cool (negative), impervious should warm (positive). A sign flip needs investigation.
+- **Magnitude:** Is the size plausible given domain knowledge? A 1% canopy increase cooling the whole city by 5°F would be physically implausible.
+- **Confidence interval:** Wide CI means uncertain estimate — either weak signal in data, or multicollinearity.
 
-**What it is:** The average causal effect of a treatment across all spatial observations, estimated via the backdoor criterion. For example, "ATE of Pct_Canopy = −0.015" means increasing canopy by 1 pp cools the average location by 0.015 z-units.
+### ATE and CATE — Average vs. Spatially-Varying Effects
 
-### CATE (Conditional Average Treatment Effect)
+The **ATE (Average Treatment Effect)** answers "what is the typical effect of this treatment across the study area?"
 
-**What it is:** How the causal effect varies across space. SPARC estimates CATE using EconML's CausalForestDML, producing a per-observation treatment effect. The CATE mean and standard deviation tell you:
-- **Mean ≈ ATE:** The effect is relatively uniform across space.
-- **Large Std:** The effect varies significantly — some locations respond much more than others.
+The **CATE (Conditional Average Treatment Effect)** answers the more useful question: "where does this treatment work best?" CATE is estimated at every location, producing a map of effect strength. High CATE variability (large standard deviation) means the intervention has very different effects in different neighborhoods.
 
-### E-value
+If CATE mean ≈ ATE, the effect is relatively uniform across space. If CATE standard deviation is large relative to the mean, spatial variation is too important to ignore — map it before making targeting decisions.
 
-**What it is:** A sensitivity measure for unmeasured confounding. The E-value answers: "How strong would an unmeasured confounder need to be — in terms of its association with both the treatment and the outcome — to fully explain away the observed causal effect?"
+### E-value — A Number That Earns Its Place
 
-**How to read it:**
-- **E-value > 2.0:** Strong. An unmeasured confounder would need to double the risk of both treatment and outcome to nullify the finding.
-- **E-value 1.5–2.0:** Moderate. Some robustness, but a reasonably strong confounder could explain the effect.
-- **E-value < 1.5:** Weak. The causal claim is sensitive to unmeasured confounding — interpret with caution.
+The E-value might be the most honest metric in SPARC's output. It answers: *how strong would an unmeasured confounder need to be to completely explain away this causal finding?*
 
-**Important:** E-values are sensitivity bounds, not proof. They tell you how *robust* a finding is, not whether it is *true*.
+An E-value of 3.0 means a hidden variable would need to be associated with both the treatment and the outcome by a factor of 3× or more to nullify the result. An E-value of 1.2 means a fairly weak unmeasured confounder could flip the conclusion.
 
-### Refutation Tests
+| E-value | What it means |
+|---------|--------------|
+| > 3.0 | Robust. A substantial hidden confounder would be needed to explain it away. |
+| 2.0–3.0 | Reasonably robust. Interpret with standard caution. |
+| 1.5–2.0 | Moderately sensitive. Consider what unmeasured variables might exist. |
+| < 1.5 | Sensitive. The finding could be explained by a relatively weak confounder. |
 
-SPARC runs four refutation tests from DoWhy for each treatment:
+E-values are sensitivity bounds, not proof. They tell you how *robust* a finding is, not whether it is *true*.
+
+### Refutation Tests — The Adversarial Check
+
+SPARC runs four adversarial tests for each causal edge:
 
 | Test | What It Does | Pass Criterion |
 |------|-------------|----------------|
@@ -108,101 +120,71 @@ This is a diagnostic, not a replacement for domain expertise. Use it to sanity-c
 
 ---
 
-## Stage 4: Scenario Output Metrics
+## Stage 4 — What Would Actually Happen?
 
-### Three Prediction Modes
+This is the payoff stage: physics-constrained, causally-grounded predictions of what specific interventions would do to your outcome variable.
 
-SPARC simulates interventions using three complementary approaches:
+### Understanding the Three Prediction Modes
 
-#### Mode 1 — Ensemble Re-prediction
+SPARC computes scenario predictions three ways and reports all of them. They're complementary, not competing.
 
-The meta-ensemble re-predicts the outcome after modifying the treatment variable in the input data. This captures the full non-linear model response, including all learned interactions.
+**Mode 1 — Model re-prediction:** The trained ensemble is re-run with treatment variables set to their new values. This captures the full non-linear model response, including learned interaction effects. Best for understanding total effects including interactions the DAG might miss.
 
-**Best for:** Understanding the total effect including non-linear interactions the DAG might miss.
+**Mode 2 — Causal pathway propagation:** Structural coefficients from Stage 3 are applied through spatially-varying weights, tracing effects through mediator pathways in your DAG. Lets you decompose the total effect into direct and indirect components (e.g., how much of canopy's cooling is direct shading vs. mediated through NDVI?).
 
-#### Mode 2 — DAG Coefficients × Local Spatial Weights
+**Mode 3 — Monte Carlo uncertainty propagation:** Coefficients are sampled from their estimated distributions hundreds of times. Each draw produces a full prediction surface. The result is a credible interval over outcomes — not a single number, but an honest range.
 
-The structural causal coefficients from Stage 3 are applied through the MGWR spatial weight matrices, producing location-specific effect estimates. Indirect effects through mediators (e.g., Canopy → NDVI → Temperature) are traced through the DAG.
+Large disagreement between Mode 1 and Mode 2 is worth investigating: it often means the model has learned non-linear effects the DAG doesn't represent, or there's a confounding pathway the DAG missed.
 
-**Best for:** Decomposing effects by pathway and understanding spatial heterogeneity in treatment effects.
+### Physics Guardrails — What's Protecting Your Predictions
 
-#### Mode 3 — Monte Carlo Uncertainty Propagation
+These aren't warnings — they're enforced constraints that run on every scenario before results are shown.
 
-Coefficients are drawn from their estimated distributions (mean ± standard error) multiple times. Each draw produces a full prediction surface, yielding percentile-based credible intervals.
+| Guardrail | What it does |
+|-----------|-------------|
+| **Variable bounds** | Canopy can't exceed 100% or go below 0%. Physically impossible inputs are clipped. |
+| **Diminishing returns** | Large interventions are tapered. Planting twice as many trees doesn't cool twice as much. This is a feature, not a bug — it reflects how physical systems actually behave. |
+| **Sign enforcement** | If you've told SPARC that canopy can only cool, it enforces that. Physically implausible sign-reversals can't sneak through. |
+| **Combined constraints** | Canopy + impervious surface can't together exceed 100% of land cover. Multi-variable limits are respected. |
+| **Extrapolation guard** | If the scenario pushes feature values beyond what the training data covers, predictions are flagged. Numbers still appear, but with an explicit caution that you're in extrapolation territory. |
 
-**Best for:** Quantifying uncertainty. The 5th and 95th percentiles bracket the plausible range of effects.
+### Reading the Scenario Output Tables
 
-### Physics Constraints Applied in Scenarios
+| Column | What it's telling you |
+|--------|----------------------|
+| **Scenario name** | The intervention (e.g., "Canopy +10 pp") |
+| **Avg. Actual Change** | The change *after* physics constraints are applied. Less than requested means a physical bound was hit. |
+| **Mean Δ** | Average predicted effect across all spatial observations |
+| **Std** | How much the effect varies across space — high Std means some areas benefit much more than others |
+| **MC 5th / 50th / 95th** | The credible interval under causal uncertainty |
 
-| Constraint | What It Does | Example |
-|-----------|-------------|---------|
-| **Variable bounds (caps)** | Prevents variables from exceeding physical limits | Canopy cannot exceed 100% or go below 0% |
-| **Diminishing returns (√ taper)** | Compresses large deltas to reflect decreasing marginal effectiveness | +50 pp canopy doesn't cool 5× as much as +10 pp |
-| **Sign enforcement (monotone)** | Ensures interventions move outcomes in the physically correct direction | More canopy can only cool, never warm |
-| **Combined constraints** | Enforces multi-variable physical limits | Canopy + Impervious ≤ 100% |
-| **Extrapolation guards** | Flags observations pushed beyond training data range via Mahalanobis distance | Large values → predictions may be unreliable |
-
-### Reading the Scenario Tables
-
-Each scenario table row shows:
-
-| Column | Meaning |
-|--------|---------|
-| **Scenario name** | The intervention applied (e.g., "Canopy +10 pp") |
-| **Avg. Actual Change** | The change after physics constraints are applied — may be less than requested if caps were hit |
-| **Mean Δ (z-units or native)** | Average predicted change across all spatial observations |
-| **Std** | Standard deviation of the change across space — higher means more spatial heterogeneity |
-| **MC 5th / 50th / 95th** | Credible interval from Monte Carlo draws — the range of plausible effects |
+If the 5th and 95th percentiles have the same sign, the direction of effect is robust even under substantial uncertainty. If they straddle zero, you can't be confident the intervention helps — and this is important to know before committing resources.
 
 ---
 
-## How Inputs Affect Outputs
+## How Configuration Choices Propagate
 
-Understanding how your configuration choices propagate through the pipeline helps you make better modeling decisions.
+The choices you make in `project.yml` ripple forward through the whole pipeline.
 
-### Data and Predictors
+**Data and predictors:** More predictors can improve fit but risks collinearity. GWEN (Stage 1) selects spatially stable features. Higher data resolution generally improves GWR and GWRF. Use a projected metric CRS — not EPSG:4326 (degrees).
 
-- **Adding more predictors** can improve R² but risks overfitting if they are collinear. GWEN (Stage 1) helps by selecting only spatially-stable features.
-- **Data resolution** matters: denser data (more observations per unit area) generally improves geographically-weighted model performance. Coarse data limits GWR/GWRF's ability to detect local variation.
-- **CRS choice** affects distance calculations. Use a projected (metric) CRS appropriate for your study area — not EPSG:4326 (degrees).
+**Physics configuration:** Priors pull causal estimates toward literature-known values when data evidence is weak. Caps clip scenario predictions at physical bounds — tighter caps reduce apparent scenario effects but make them more reliable. Monotone constraints enforce directional physics and prevent physically absurd predictions.
 
-### Physics Configuration
-
-- **Priors (priors.yml):** Providing literature-based coefficient priors pulls the causal estimates toward known physics via adaptive shrinkage. Stronger priors have more influence when data evidence is weak.
-- **Caps (caps.yml):** Variable-level minimum/maximum bounds prevent scenarios from producing physically impossible values. Tight caps may reduce apparent scenario effects.
-- **Monotone constraints:** Enforcing that canopy can only cool (−1) or impervious can only warm (+1) improves plausibility but assumes the sign is universal across your study area.
-
-### DAG Structure
-
-- **Adding an edge** introduces a causal pathway. The coefficient will be estimated and used in Mode 2 scenario propagation.
-- **Removing an edge** drops that pathway — effects previously attributed to it will be redistributed or absorbed by other paths.
-- **Adding a mediator** (e.g., Canopy → NDVI → Temperature) decomposes the total effect into direct and indirect components.
-- **Changing the estimator** (OLS → DML → HGB) affects coefficient magnitude and confidence intervals. DML is recommended for most applications.
-
-### Scenario Definition
-
-- **Intervention magnitude** directly scales the predicted effect (approximately linearly for small changes, with √ taper for large changes).
-- **Joint scenarios** (multiple variables changed simultaneously) capture interaction effects and combined constraints that single-variable scenarios miss.
+**DAG structure:** Adding or removing edges changes both causal estimates and scenario predictions. Adding a mediator decomposes the total effect into direct and indirect pathways — useful for understanding mechanisms but requires confidence in the proposed pathway. Changing the estimator (OLS → DML → HGB) affects coefficient magnitude and confidence intervals; DML is recommended for most applications.
 
 ---
 
-## Quick Checklist for Reading Scenario Tables
+## Quick Checklist Before Presenting Results
 
-Use this checklist when reviewing SPARC scenario outputs:
-
-- [ ] **Did physics constraints cap the intervention?** Compare "Avg. Actual Change" to the requested change. If actual < requested, bounds were hit.
-- [ ] **Is the direction of effect physically plausible?** More canopy should cool, more impervious should warm. If not, investigate the DAG and data.
-- [ ] **Compare Mode 1 vs. Mode 2.** Large disagreement may indicate non-linear effects the DAG doesn't fully capture.
-- [ ] **Check the Std column.** High standard deviation means the effect varies significantly across space — consider mapping CATE to see where effects are strongest.
-- [ ] **Review MC percentiles.** If the 5th and 95th percentiles have the same sign, the direction of effect is robust under uncertainty.
-- [ ] **Look for diminishing returns.** For large interventions (e.g., +50 pp canopy), the √ taper compresses gains. This is intentional — don't extrapolate linearly.
-- [ ] **Check extrapolation flags.** If many observations are flagged by the Mahalanobis guard, the scenario may be pushing beyond the data's support.
-- [ ] **Cross-reference with refutation tests.** If a treatment failed refutation tests in Stage 3, treat its scenario predictions with extra caution.
+- [ ] **Check R²** — is it high enough to trust model predictions for policy use? (Generally ≥ 0.7 for scenario work)
+- [ ] **Verify all refutation tests passed** — failed tests mean treat that edge's scenario predictions with extra caution
+- [ ] **Check the sign of structural coefficients** — unexpected signs need investigation before presenting
+- [ ] **Compare Mode 1 vs. Mode 2** — large divergence means non-linear effects or DAG gaps worth exploring
+- [ ] **Check MC percentiles** — if 5th and 95th percentiles have different signs, the intervention direction is uncertain
+- [ ] **Look for diminishing returns** — for large interventions, actual predicted effect will be less than linear extrapolation
+- [ ] **Check extrapolation flags** — scenarios in extrapolation territory should be flagged when presented
+- [ ] **Report E-values alongside estimates** — this is what separates honest causal reporting from naive correlation
 
 ---
 
-## Further Reading
-
-- [**Manual**](MANUAL.md) — Complete configuration reference and model documentation
-- [**Pipeline Guide**](PIPELINE_GUIDE.md) — Step-by-step execution walkthrough with troubleshooting
-- [**Contributing**](CONTRIBUTING.md) — Developer guide for adding models and domain templates
+*Further reading: [Pipeline Guide](PIPELINE_GUIDE.md) · [Manual](MANUAL.md) · [Concepts](concepts/README.md)*

@@ -1,6 +1,8 @@
-# SPARC Pipeline Guide
+# The SPARC Pipeline — A Walking Tour
 
-**Step-by-step walkthrough of the five-stage pipeline.**
+Five stages. One data file. Policy-quality answers to "what would actually happen if we planted more trees?"
+
+That's the promise. This guide walks you through how each stage works, what knobs you can turn, and how to read the outputs. The [Concepts Guides](concepts/README.md) explain the *why* behind each step. The [Manual](MANUAL.md) has the complete configuration reference if you want to go deeper. This guide is for when you want to actually run the thing.
 
 ---
 
@@ -21,7 +23,7 @@
 
 ## Overview
 
-SPARC runs five stages in sequence. Each stage reads from the previous stage's output, producing a fully traceable chain from raw data to policy-relevant scenario maps.
+SPARC runs five stages in sequence. Each stage reads from the previous stage's output, building a fully traceable chain from raw data to policy-relevant scenario maps.
 
 > **Run registry (since v3):** every artifact written by every stage is recorded in
 > `<output_dir>/artifacts_manifest.json` (mirrored to `artifacts.db`). Server endpoints,
@@ -44,6 +46,8 @@ Stage 3   Causal Validation        →  structural coefficients, refutation test
      │
 Stage 4   Scenario Simulation      →  physics-constrained "what-if" predictions
 ```
+
+Think of it like building a house: Stage 0 surveys the land, Stage 1 selects the right materials, Stage 2 constructs the structure, Stage 3 stress-tests it, and Stage 4 runs the "what if the wind comes from the north?" simulations. Skip a stage and the structure is less sound.
 
 All stages are driven by a single `project.yml` configuration file. See the [MANUAL](MANUAL.md) for the full configuration reference.
 
@@ -69,14 +73,18 @@ All stages are driven by a single `project.yml` configuration file. See the [MAN
 sparc validate --project ./my_project/project.yml
 ```
 
-This checks that the data file exists, required columns are present, CRS codes are valid, and referenced physics/DAG files exist.
+This checks that the data file exists, required columns are present, CRS codes are valid, and referenced physics/DAG files exist. Run this first — it catches most common setup mistakes before anything expensive starts.
 
 ---
 
 ## Stage 0 — Correlogram Analysis
 
 **Module:** `sparc.run.correlogram_analysis`
-**Purpose:** Quantify spatial autocorrelation and auto-detect optimal model parameters.
+**Purpose:** Listen to your data before telling it what to do.
+
+Before you fit a single model, Stage 0 asks: *how does your phenomenon behave in space?* How far does one location's temperature predict a neighbor's? At what distance does that predictability fade to nothing? The answers to these questions determine nearly every important hyperparameter in the pipeline — bandwidth for the local models, block size for cross-validation, which kernel shape decays correctly.
+
+Without this stage, you're guessing. With it, the pipeline configures itself from the data's own geometry.
 
 ### What it does
 
@@ -133,7 +141,11 @@ sparc run -p project.yml -s 0
 ## Stage 1 — GWEN Variable Selection
 
 **Module:** `sparc.run.gwen_variable_selection`
-**Purpose:** Identify which predictors have spatially stable relationships with the target.
+**Purpose:** Figure out which predictors actually pull their weight across space.
+
+Here's the problem with just throwing all your predictors at a model: some relationships are real everywhere, some only appear in specific neighborhoods, and some are statistical noise that happened to correlate by chance. Standard feature selection doesn't know the difference.
+
+GWEN — Geographically Weighted Elastic Net — fits a local model at hundreds of locations across your study area and counts, for each predictor, *how often* it gets selected. A predictor chosen 90% of the time across all locations is clearly doing real work. A predictor chosen 8% of the time is probably noise. This separation is subtle but important: it means your Stage 2 models train on a cleaner signal, and your Stage 3 causal analysis doesn't need to untangle spurious associations from real ones.
 
 > **Optional.** Skip with `sparc run -s all --skip-gwen` or set `flags.use_gwen_selection: false` in `project.yml`.
 
@@ -205,7 +217,13 @@ sparc run -p project.yml -s 1
 ## Stage 2 — Spatial Cross-Validation & Model Training
 
 **Module:** `sparc.run.enhanced_spatial_cv`
-**Purpose:** Train all base models and the meta-ensemble using spatially-buffered cross-validation.
+**Purpose:** Train four fundamentally different models on your city, then combine them into something better than any of them alone.
+
+There's a deep insight behind running multiple model types rather than just picking the "best" one: different models are good at different things. A geographically weighted model captures local rules but assumes linearity. A random forest captures non-linearity but has no concept of space. A Gaussian process gives you calibrated uncertainty. A global linear model gives you interpretability and a sanity-check baseline.
+
+Instead of choosing, SPARC trains all four and then learns — from your data — how to optimally combine them. The combination process also incorporates physics constraints so the meta-ensemble can't produce predictions that violate known physical relationships.
+
+And critically: every metric you see is computed on data the models never saw during training, from locations that were spatially separated from the training locations by a buffer zone. This is the only honest way to measure how a model will perform in the real world.
 
 ### What it does
 
@@ -226,7 +244,7 @@ sparc run -p project.yml -s 1
 
 ### Laplacian eigenmaps
 
-When enabled (`flags.use_laplacian_eigenmaps_in_ols: true`), the pipeline computes eigenmaps from a spatial weights matrix. These capture smooth spatial variation and are used as features by OLS and as PCA inputs by the meta-ensemble.
+When enabled (`flags.use_laplacian_eigenmaps_in_ols: true`), the pipeline computes eigenmaps from a spatial weights matrix. These capture smooth spatial variation and are used as features by OLS and as PCA inputs by the meta-ensemble. Think of them as a way to encode "how connected this location is to its neighbors" as a feature.
 
 ```yaml
 laplacian:
@@ -297,7 +315,13 @@ sparc run -p project.yml -s 2
 ## Stage 3 — Causal Validation
 
 **Module:** `sparc.run.causal_validation`
-**Purpose:** Estimate structural causal coefficients and validate with refutation tests.
+**Purpose:** Go from "what predicts the outcome" to "what causes it, and by how much."
+
+This is where SPARC earns its credibility for policy work.
+
+A model that predicts temperature accurately is useful. But if you want to say "planting trees in this neighborhood will reduce peak temperature by X degrees," you need something more: a *causal* estimate that accounts for all the confounders — elevation, distance from water, prior land use — that could make trees look more or less effective than they actually are.
+
+Stage 3 takes your expert knowledge of the system (expressed as a DAG), combines it with doubly-robust estimation methods that control for confounders using machine learning, and then cross-examines the results with four adversarial tests. The output isn't just a coefficient — it's a coefficient that has been challenged and survived.
 
 ### What it does
 
@@ -398,8 +422,8 @@ sparc run -p project.yml -s 3
 
 ### Tips
 
-- If causal discovery disagrees with your DAG, review the F1 report — it may suggest missing or spurious edges.
-- E-values > 2.0 indicate robust results. E-values < 1.5 suggest sensitivity to unobserved confounding.
+- If causal discovery disagrees with your DAG, review the F1 report — it may suggest missing or spurious edges worth investigating.
+- E-values > 2.0 indicate robust results. E-values < 1.5 suggest sensitivity to unobserved confounding — be transparent about this when presenting results.
 - Stage 3 is optional: if no DAG file is provided, Stage 4 falls back to physics-prior-only coefficients.
 
 ---
@@ -407,7 +431,11 @@ sparc run -p project.yml -s 3
 ## Stage 4 — Scenario Simulation
 
 **Module:** `sparc.interventions.scenario_simulator`
-**Purpose:** Predict outcomes under user-defined "what-if" interventions with physics constraints.
+**Purpose:** Answer the actual question: what would change if we changed something?
+
+This is the stage that turns all the preceding work — spatial models, causal coefficients, physics priors — into answers a city planner can act on. "Plant 10% more trees in the highest-heat neighborhoods. What happens?"
+
+Stage 4 applies your interventions to baseline data, propagates them through the DAG's causal pathways, enforces physical constraints so predictions stay in the realm of the possible, and quantifies uncertainty honestly. You get not just a prediction, but a credible range and the spatial distribution of where the effect will be strongest.
 
 ### What it does
 
@@ -590,6 +618,8 @@ sparc run -p project.yml -s 3      # Causal validation
 sparc run -p project.yml -s 4      # Scenario simulation
 ```
 
+Running stage-by-stage is useful when you want to inspect outputs at each step before continuing, or when you're iterating on a specific stage (e.g., tweaking your DAG and re-running Stage 3 without re-training models).
+
 ### Useful flags
 
 | Flag | Description |
@@ -610,6 +640,8 @@ python -m sparc desktop
 
 ## Troubleshooting
 
+Most problems fall into one of two categories: setup issues (wrong path, missing file, wrong CRS) and resource issues (out of memory, slow run). The table below covers the most common cases.
+
 | Problem | Solution |
 |---------|----------|
 | `ModuleNotFoundError: No module named 'sparc'` | Run `pip install -e .` from the repo root |
@@ -623,9 +655,7 @@ python -m sparc desktop
 
 ## Scenario Modes (Stage 4)
 
-`scenario_mode` controls how Stage 4 composes baseline predictions, causal
-coefficients, and ensemble residuals.  The auto-fallback ladder picks the
-strongest mode whose required artifacts are present.
+`scenario_mode` controls how Stage 4 composes baseline predictions, causal coefficients, and ensemble residuals. The auto-fallback ladder picks the strongest mode whose required artifacts are present — you usually don't need to set this manually.
 
 | Mode | Status | When chosen automatically |
 |------|--------|---------------------------|
@@ -635,20 +665,14 @@ strongest mode whose required artifacts are present.
 | `mode_2_dag_local` | Legacy — kept for reproducibility | Per-edge NUTS + α + DAG (no ensemble) |
 | `mode_1_physics` | Legacy — fallback | Nothing else available |
 
-Modes 1–4 still produce valid scenario outputs and are preserved so existing
-runs remain reproducible.  Explicit selection of a legacy mode in
-`project.yml` (or `--scenario-mode mode_X`) emits a `DeprecationWarning`;
-auto-fallback to the same mode does **not** warn (it is a normal operating
-state when artifacts are missing).  Persisted scenario tables include a
-`legacy_mode` flag in their metadata so downstream consumers can detect
-which path produced them.
+Modes 1–4 still produce valid scenario outputs and are preserved so existing runs remain reproducible. Explicit selection of a legacy mode in `project.yml` (or `--scenario-mode mode_X`) emits a `DeprecationWarning`; auto-fallback to the same mode does **not** warn (it is a normal operating state when artifacts are missing). Persisted scenario tables include a `legacy_mode` flag in their metadata so downstream consumers can detect which path produced them.
 
 ## Variable Display Metadata
 
 Stage 3/4/5 producers emit human-readable `display` columns/fields such as
 `"-0.28 Fahrenheit (90% CI: -0.41 to -0.15) per 1% of canopy increase"`
-alongside the raw numeric values.  The phrasing is sourced from the
+alongside the raw numeric values. The phrasing is sourced from the
 optional `variables_meta:` block in `project.yml` (see
 `templates/blank/project.yml` for the full schema), with fallbacks to
-`output.response_units` and `scenarios[].unit`.  Existing numeric columns
+`output.response_units` and `scenarios[].unit`. Existing numeric columns
 are unchanged — `display` is purely additive.
