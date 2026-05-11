@@ -1623,7 +1623,12 @@ class EnhancedSpatialCV:
         
         X_gwen = data[selected_features].values
         y = data[self.base_config['variables']['target']].values
-        coords = data[self.base_config['variables']['coordinates']].values
+        # Use projected (metric) coordinates so block_size/buffer_size are in metres.
+        # load_and_preprocess_data always writes projected_X / projected_Y.
+        if 'projected_X' in data.columns and 'projected_Y' in data.columns:
+            coords = data[['projected_X', 'projected_Y']].values
+        else:
+            coords = data[self.base_config['variables']['coordinates']].values
         
         print(f"Using {len(selected_features)} features: {selected_features}")
         

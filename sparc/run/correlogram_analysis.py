@@ -43,7 +43,7 @@ class CorrelogramSpatialAnalyzer:
     Optimized for large datasets with intelligent sampling
     """
     
-    def __init__(self, max_distance=None, n_lags=15, max_sample_size=5000, cache_dir=None):
+    def __init__(self, max_distance=None, n_lags=15, max_sample_size=5000, cache_dir=None, fast_mode=False):
         """
         Initialize correlogram analyzer
         
@@ -53,6 +53,7 @@ class CorrelogramSpatialAnalyzer:
             n_lags: Number of distance lags for correlogram
             max_sample_size: Maximum sample size for analysis (to speed up computation)
             cache_dir: Optional directory for joblib caching of expensive Moran's I computations
+            fast_mode: If True, use reduced NUTS sample counts for faster runs
         """
         self.max_distance = max_distance
         self.n_lags = n_lags
@@ -60,6 +61,7 @@ class CorrelogramSpatialAnalyzer:
         self._memory = joblib.Memory(str(cache_dir), verbose=0) if cache_dir else None
         self.n_lags = n_lags
         self.max_sample_size = max_sample_size
+        self.fast_mode = fast_mode
         
     def analyze_variable_correlogram(self, coords, values, variable_name, output_dir):
         """
@@ -194,9 +196,11 @@ class CorrelogramSpatialAnalyzer:
                 [r.get('morans_i', 0.0) for r in correlogram_data], dtype=np.float64
             )
             if len(lag_dist_arr) >= 4 and len(lag_dist_arr) == len(morans_arr):
+                _matern_samples = 400 if self.fast_mode else 2000
+                _matern_warmup = 200 if self.fast_mode else 1000
                 fit_res = fit_matern(
                     lag_dist_arr, morans_arr,
-                    method="bayes", n_samples=2000, n_warmup=1000, n_chains=2, seed=42,
+                    method="bayes", n_samples=_matern_samples, n_warmup=_matern_warmup, n_chains=2, seed=42,
                 )
                 matern_fit_payload = fit_res.to_payload()
                 matern_fit_payload['variable'] = variable_name
@@ -225,13 +229,15 @@ class CorrelogramSpatialAnalyzer:
             dir_corr = analyzer.compute_directional_correlogram(
                 values_sample, n_angle_bins=4,
             )
+            _aniso_samples = 400 if self.fast_mode else 2000
+            _aniso_warmup = 200 if self.fast_mode else 1000
             aniso_res = fit_anisotropy(
                 dir_corr['lag_distances'],
                 dir_corr['angle_centers_rad'],
                 dir_corr['morans_i'],
                 n_pairs=dir_corr['n_pairs'],
                 method="bayes",
-                n_samples=2000, n_warmup=1000, n_chains=2, seed=42,
+                n_samples=_aniso_samples, n_warmup=_aniso_warmup, n_chains=2, seed=42,
                 kappa_init=kappa_init_aniso,
             )
             anisotropy_payload = aniso_res.to_payload()
@@ -436,13 +442,20 @@ def main(fast_mode=False):
         all_variables = selected_features
         print(f"Warning: Target variable {target_variable} not found in data")
     
-    coords = data[config['variables']['coordinates']].values
-    
+    # Use projected (metric) coordinates so all distances/bandwidths are in metres.
+    # load_and_preprocess_data always writes projected_X / projected_Y.
+    if 'projected_X' in data.columns and 'projected_Y' in data.columns:
+        coords = data[['projected_X', 'projected_Y']].values
+        coord_cols_for_profiler = ['projected_X', 'projected_Y']
+    else:
+        coords = data[config['variables']['coordinates']].values
+        coord_cols_for_profiler = config['variables']['coordinates']
+
     # â”€â”€ Use DatasetProfiler for data-driven correlogram parameters â”€â”€â”€
     from sparc.run.dataset_profiler import DatasetProfiler
     profiler = DatasetProfiler(
         data,
-        coord_cols=config['variables']['coordinates'],
+        coord_cols=coord_cols_for_profiler,
         feature_cols=selected_features,
     )
     profile = profiler.profile()
@@ -490,6 +503,7 @@ def main(fast_mode=False):
         n_lags=n_lags,
         max_sample_size=max_sample_size,
         cache_dir=cache_dir,
+        fast_mode=fast_mode,
     )
     
     print(f"Dataset size: {len(data):,} points")
