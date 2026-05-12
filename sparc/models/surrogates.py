@@ -448,20 +448,24 @@ class DifferentiableGGPGAM(nn.Module):
         self,
         n_vars: int,
         n_spatial_features: int,
-        hidden_dim: int = 32,
-        monotonic: bool = True,
+        hidden_dim: int = 64,
+        monotonic: bool = False,
     ) -> None:
         super().__init__()
         self.n_vars = n_vars
         self.n_spatial_features = n_spatial_features
         self.monotonic = monotonic
+        # Expose as attribute so forward() doesn't recompute it
+        self.spatial_input_dim = min(n_spatial_features, 32)
 
         # --- Spatial main effect smoothers: s(x_coord), s(y_coord) ---
-        spatial_input_dim = min(n_spatial_features, 16)
+        spatial_input_dim = self.spatial_input_dim
         self.spatial_smoother = nn.Sequential(
             nn.Linear(spatial_input_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
             nn.GELU(),
             nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
             nn.GELU(),
             nn.Linear(hidden_dim, 1),
         )
@@ -502,8 +506,11 @@ class DifferentiableGGPGAM(nn.Module):
         self.interactions = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(interaction_input_dim, hidden_dim),
+                nn.LayerNorm(hidden_dim),
                 nn.GELU(),
-                nn.Linear(hidden_dim, 1),
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.GELU(),
+                nn.Linear(hidden_dim // 2, 1),
             )
             for _ in range(n_vars)
         ])
@@ -565,8 +572,7 @@ class DifferentiableGGPGAM(nn.Module):
         y_pred : (N,)
         """
         # Spatial main effects
-        spatial_input_dim = min(self.n_spatial_features, 16)
-        spatial_sub = spatial_features[:, :spatial_input_dim]
+        spatial_sub = spatial_features[:, :self.spatial_input_dim]
         spatial_effect = self.spatial_smoother(spatial_sub).squeeze(-1)
 
         # Feature main effects: Σ s(f_k)
