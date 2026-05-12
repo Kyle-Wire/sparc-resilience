@@ -1046,6 +1046,8 @@ def train_neural_meta(
                 "ggpgam": DifferentiableGGPGAM(
                     n_physics, d_spatial, min(hidden_dim, 64),
                 ).to(device),
+            }
+            _p = ProcessRateNet(
                 n_inputs=pr_input_dim,
                 domain_config={
                     "name": pr_cfg.get("name", "rate"),
