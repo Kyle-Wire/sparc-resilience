@@ -2442,16 +2442,24 @@ def main(fast_mode=False):
                     'nbrs': None
                 }
         
-        X_laplacian_full, feature_transformers = generate_enhanced_laplacian_features(coords, n_components=150)
-        
-        # Save enhanced feature artifacts for final interpretation
-        paths = get_paths()
-        stage2_dir = paths.stage2_dir
-        save_blob_path(feature_transformers,
-                       os.path.join(stage2_dir, 'enhanced_spatial_features.pkl'),
-                       stage="2", artifact_id="enhanced_spatial_features",
-                       producer="enhanced_spatial_cv")
-        print(f"Saved Laplacian artifacts to {stage2_dir}/")
+        # Laplacian eigenmaps are superseded by sinusoidal spatial encoding in the
+        # neural meta-learner and are not consumed by any downstream stage.
+        # Skip by default; set compute_laplacian_features: true in config to re-enable.
+        _compute_laplacian = cv_system.base_config.get(
+            'pipeline_execution', {}
+        ).get('compute_laplacian_features', False)
+        if _compute_laplacian:
+            print("=== Generating Enhanced Laplacian Eigenmaps (150 components) ===")
+            X_laplacian_full, feature_transformers = generate_enhanced_laplacian_features(coords, n_components=150)
+            paths = get_paths()
+            stage2_dir = paths.stage2_dir
+            save_blob_path(feature_transformers,
+                           os.path.join(stage2_dir, 'enhanced_spatial_features.pkl'),
+                           stage="2", artifact_id="enhanced_spatial_features",
+                           producer="enhanced_spatial_cv")
+            print(f"Saved Laplacian artifacts to {stage2_dir}/")
+        else:
+            print("=== Skipping Laplacian Eigenmaps (superseded by sinusoidal encoding) ===")
         
         # Check spatial autocorrelation in meta-ensemble residuals
         print("\n=== Spatial Autocorrelation Analysis of Meta-Ensemble Residuals ===")
