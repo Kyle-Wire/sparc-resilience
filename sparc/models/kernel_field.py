@@ -208,30 +208,47 @@ class KernelField:
                 if v is not None:
                     outcome_row[vname] = float(v)
 
+        def _scalar(v):
+            """Return v['mean'] if v is a posterior-stats dict, else v itself."""
+            if isinstance(v, dict):
+                return v.get("mean")
+            return v
+
         predictors: list[PredictorKernel] = []
         for pname in predictor_names:
             mfit = matern_per_var.get(pname) or {}
             kappa_mean = (
                 ((mfit.get("posterior") or {}).get("kappa") or {}).get("mean")
                 if isinstance(mfit, dict) else None
-            ) or mfit.get("kappa")
+            ) or _scalar(mfit.get("kappa"))
             nu_mean = (
                 ((mfit.get("posterior") or {}).get("nu") or {}).get("mean")
                 if isinstance(mfit, dict) else None
-            ) or mfit.get("nu")
+            ) or _scalar(mfit.get("nu"))
             sigma2_mean = (
                 ((mfit.get("posterior") or {}).get("sigma2") or {}).get("mean")
                 if isinstance(mfit, dict) else None
+            ) or _scalar(mfit.get("sigma2"))
+            # kappa samples may live inside the kappa posterior dict
+            _kappa_raw = mfit.get("kappa") if isinstance(mfit, dict) else None
+            kappa_samples = (
+                mfit.get("kappa_samples")
+                or (_kappa_raw.get("samples") if isinstance(_kappa_raw, dict) else None)
             )
-            kappa_samples = mfit.get("kappa_samples") if isinstance(mfit, dict) else None
 
             afit = aniso_per_var.get(pname) or {}
-            kx = (((afit.get("posterior") or {}).get("kappa_x") or {}).get("mean")
-                  if isinstance(afit, dict) else None)
-            ky = (((afit.get("posterior") or {}).get("kappa_y") or {}).get("mean")
-                  if isinstance(afit, dict) else None)
-            theta = (((afit.get("posterior") or {}).get("theta_major_rad") or {}).get("mean")
-                     if isinstance(afit, dict) else None)
+            kx = (
+                ((afit.get("posterior") or {}).get("kappa_x") or {}).get("mean")
+                if isinstance(afit, dict) else None
+            ) or _scalar(afit.get("kappa_x"))
+            ky = (
+                ((afit.get("posterior") or {}).get("kappa_y") or {}).get("mean")
+                if isinstance(afit, dict) else None
+            ) or _scalar(afit.get("kappa_y"))
+            theta = (
+                ((afit.get("posterior") or {}).get("theta_major_rad") or {}).get("mean")
+                if isinstance(afit, dict) else None
+            ) or _scalar(afit.get("theta_major_rad")) or _scalar(afit.get("theta_rad"))
             ecc = (((afit.get("ellipse") or {}).get("eccentricity") or {}).get("mean")
                    if isinstance(afit, dict) else None)
 
