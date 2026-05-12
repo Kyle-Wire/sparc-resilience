@@ -1136,7 +1136,7 @@ class EnhancedSpatialCV:
                 valid_mask = ~np.isnan(model_predictions)
                 if valid_mask.sum() > 0:
                     mean_pred = np.mean(model_predictions[valid_mask])
-                    oof_predictions[valid_mask == False, i] = mean_pred
+                    oof_predictions[~valid_mask, i] = mean_pred
                     print(f"  Replaced NaN values with mean prediction: {mean_pred:.4f}")
                 else:
                     print(f"  ERROR: All predictions are NaN for {model_name}")
@@ -1910,10 +1910,18 @@ def main(fast_mode=False):
             # Get the identifier column name from config
             id_col = cv_system.base_config['variables']['identifier']
             
-            # Add ID column to OOF predictions (assuming they're in same order as processed data)
+            # Add ID column to OOF predictions.
+            # Row counts must match — both come from the same load_and_preprocess_data
+            # call (deterministic CSV read), so ordering is consistent.
             if id_col not in oof_predictions.columns:
                 # Check if ID is a column or the index
                 if id_col in data.columns:
+                    if len(data) != len(oof_predictions):
+                        raise ValueError(
+                            f"OOF/data row mismatch: data={len(data)}, "
+                            f"oof_predictions={len(oof_predictions)}. "
+                            "Re-run Stage 2 from scratch to regenerate OOF predictions."
+                        )
                     oof_predictions[id_col] = data[id_col].values
                 elif data.index.name == id_col:
                     oof_predictions[id_col] = data.index.values
