@@ -1030,6 +1030,7 @@ def train_neural_meta(
                 d_spatial=d_spatial, hidden_dim=hidden_dim, dropout=dropout,
                 thresholds=thresholds, n_heads=n_heads,
                 max_neighbors=max_neighbors, siren_omega=siren_omega,
+                init_bandwidth=float(predictor_bandwidths.mean()) if predictor_bandwidths is not None else 1000.0,
             ).to(device)
             _s = {
                 "gwr": DifferentiableGWR(
@@ -1218,6 +1219,7 @@ def train_neural_meta(
             n_heads=n_heads,
             max_neighbors=max_neighbors,
             siren_omega=siren_omega,
+            init_bandwidth=float(predictor_bandwidths.mean()) if predictor_bandwidths is not None else 1000.0,
         ).to(device)
 
         # ---- Differentiable surrogates ----
@@ -1489,6 +1491,7 @@ def train_neural_meta(
                     knn_index=b_knn,
                     alpha=alpha,
                     surrogate_std=surrogate_std,
+                    knn_dists=fold_knn_dists[b_idx],
                 )
 
                 # ---- JEPA forward (Phase 1) ----
@@ -1766,6 +1769,7 @@ def train_neural_meta(
             coords=tensors["coords"],
             knn_index=full_knn,
             alpha=full_alpha,
+            knn_dists=full_knn_dists,
             n_samples=50,
         )
 
@@ -1832,6 +1836,7 @@ def train_neural_meta(
         n_heads=n_heads,
         max_neighbors=max_neighbors,
         siren_omega=siren_omega,
+        init_bandwidth=float(predictor_bandwidths.mean()) if predictor_bandwidths is not None else 1000.0,
     ).to(device)
 
     final_surrogates = {
@@ -2084,6 +2089,7 @@ def train_neural_meta(
                 knn_index=b_knn,
                 alpha=alpha,
                 surrogate_std=surrogate_std,
+                knn_dists=full_knn_dists_rt[b_idx],
             )
 
             # ---- JEPA forward (final retrain) ----
@@ -2376,6 +2382,7 @@ def train_neural_meta(
                     knn_index=b_knn,
                     alpha=alpha,
                     surrogate_std=surrogate_std_swa,
+                    knn_dists=full_knn_dists_rt[b_idx],
                 )
 
                 total_loss, _ = sparc_joint_loss(
@@ -2793,6 +2800,7 @@ def _export_v2_outputs(
         coords=coords_t,
         knn_index=knn_idx,
         alpha=alpha,
+        knn_dists=knn_dists,
     )
 
     # De-normalise predictions
