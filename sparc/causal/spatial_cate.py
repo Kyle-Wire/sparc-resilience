@@ -424,6 +424,95 @@ class SpatialCATEEstimator:
         return gdf
 
     # ------------------------------------------------------------------
+    # GP surface regression over CATE estimates
+    # ------------------------------------------------------------------
+
+    def fit_gp_surface(
+        self,
+        coords: np.ndarray,
+        corr_payload: Optional[dict] = None,
+        treatments: Optional[List[str]] = None,
+        max_fit_rows: int = 2_000,
+        n_restarts_optimizer: int = 3,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Fit a GP surface over the estimated CATE for each treatment.
+
+        Produces a continuous, uncertainty-quantified CATE surface using
+        :class:`CATEGPSurface`.  The Matérn kernel is seeded from the Stage 0
+        correlogram when ``corr_payload`` is provided.
+
+        Parameters
+        ----------
+        coords : (N, 2) array
+            Raw spatial coordinates in world units (will be normalised
+            internally to [0, 1] per dimension).
+        corr_payload : dict, optional
+            Stage 0 correlogram artifact dict (``MaternCorrelogramResult.to_payload()``).
+            When provided, initialises ``nu`` and ``length_scale`` from it.
+        treatments : list[str], optional
+            Subset of treatments to process.  Defaults to all in ``cate_estimates``.
+        max_fit_rows : int
+            Sub-sampling limit for GPR fitting.
+        n_restarts_optimizer : int
+            Number of optimizer restarts for kernel hyperparameter fitting.
+
+        Returns
+        -------
+        dict
+            ``{treatment: {"gp_mean": ndarray, "gp_std": ndarray,
+                           "moran_i": dict, "log_ml": float}}``
+        """
+        if not self.cate_estimates:
+            raise RuntimeError(
+                "No CATE estimates found. Run estimate() or estimate_all() first."
+            )
+
+        treatments = treatments or list(self.cate_estimates.keys())
+        coords = np.asarray(coords, dtype=np.float64)
+
+        # Normalise coords to [0, 1] per dimension
+        coords_min = coords.min(axis=0)
+        coords_range = coords.max(axis=0) - coords_min
+        coords_range[coords_range == 0] = 1.0
+        coords_norm = (coords - coords_min) / coords_range
+
+        self._gp_surfaces: Dict[str, "CATEGPSurface"] = {}
+        results: Dict[str, Dict[str, Any]] = {}
+
+        for treatment in treatments:
+            if treatment not in self.cate_estimates:
+                continue
+            cate = self.cate_estimates[treatment]
+
+            gps = (
+                CATEGPSurface.from_correlogram(
+                    corr_payload,
+                    max_fit_rows=max_fit_rows,
+                    n_restarts_optimizer=n_restarts_optimizer,
+                    random_state=self.random_state,
+                )
+                if corr_payload
+                else CATEGPSurface(
+                    max_fit_rows=max_fit_rows,
+                    n_restarts_optimizer=n_restarts_optimizer,
+                    random_state=self.random_state,
+                )
+            )
+            gps.fit(cate, coords_norm)
+            gp_mean, gp_std = gps.predict(coords_norm)
+            self._gp_surfaces[treatment] = gps
+
+            results[treatment] = {
+                "gp_mean": gp_mean,
+                "gp_std": gp_std,
+                "moran_i": gps.moran_result,
+                "log_ml": gps.log_marginal_likelihood,
+                "kernel_params": gps.fitted_kernel_params,
+            }
+
+        return results
+
+    # ------------------------------------------------------------------
     # Summary statistics
     # ------------------------------------------------------------------
 
@@ -982,3 +1071,308 @@ def make_cate_estimator(config: dict) -> Any:
         f"Unknown causal.cate_estimator: {name!r}. "
         f"Use 'auto', 'bayesian', or 'frequentist'."
     )
+
+
+# ===========================================================================
+# GP Regression over CATE surface
+# ===========================================================================
+
+class CATEGPSurface:
+    """Continuous uncertainty-quantified CATE surface via sklearn GP regression.
+
+    Fits a :class:`~sklearn.gaussian_process.GaussianProcessRegressor` with a
+    Matérn kernel over normalised spatial coordinates.  The kernel is
+    initialised from Stage 0 correlogram parameters (``nu``, ``kappa``) when
+    available, which biases the GP toward the same spatial autocorrelation
+    structure already used by the causal-forest/Bayesian estimators.
+
+    A Moran's I test is run on the GP residuals (observed CATE − posterior
+    mean) to detect residual spatial autocorrelation that the GP surface has
+    not captured.
+
+    Parameters
+    ----------
+    nu : float
+        Matérn smoothness parameter ν ∈ {0.5, 1.5, 2.5, ∞}. Default 1.5.
+    length_scale : float
+        Initial Matérn length scale in normalised coordinate units [0, 1].
+        Default 0.2.
+    length_scale_bounds : tuple[float, float]
+        Optimiser search bounds for the length scale.
+    n_restarts_optimizer : int
+        Number of L-BFGS-B restarts for log-marginal-likelihood optimisation.
+    max_fit_rows : int
+        Hard cap on training points fed to GPR (GPR is O(N³)); rows beyond
+        this are sub-sampled uniformly.  Default 2 000.
+    random_state : int
+        RNG seed for sub-sampling and optimizer restarts.
+    """
+
+    def __init__(
+        self,
+        nu: float = 1.5,
+        length_scale: float = 0.2,
+        length_scale_bounds: Tuple[float, float] = (1e-3, 1.0),
+        n_restarts_optimizer: int = 3,
+        max_fit_rows: int = 2_000,
+        random_state: int = 42,
+    ):
+        self.nu = float(nu)
+        self.length_scale = float(length_scale)
+        self.length_scale_bounds = length_scale_bounds
+        self.n_restarts_optimizer = n_restarts_optimizer
+        self.max_fit_rows = max_fit_rows
+        self.random_state = random_state
+
+        self._gpr: Any = None            # fitted GaussianProcessRegressor
+        self._fit_coords: np.ndarray | None = None   # normalised training coords
+        self._fit_cate: np.ndarray | None = None     # training CATE values
+        self.moran_result: Dict[str, float] = {}     # populated by fit()
+
+    # ------------------------------------------------------------------
+    # Class method: seed from Stage 0 correlogram artifact
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_correlogram(
+        cls,
+        corr_payload: dict,
+        **kwargs,
+    ) -> "CATEGPSurface":
+        """Create a ``CATEGPSurface`` seeded from a Stage 0 correlogram dict.
+
+        The payload format is the ``to_payload()`` output of
+        :class:`~sparc.run.correlogram_matern_fit.MaternCorrelogramResult`:
+        ``{"nu": float, "kappa": {"mean": float, ...}, ...}``.
+        """
+        nu = float(corr_payload.get("nu", 1.5))
+        kappa_mean = float(
+            corr_payload.get("kappa", {}).get("mean", 0.2)
+        )
+        # kappa from correlogram is in raw coordinate units; assume
+        # coordinates will be normalised to [0,1] so we clamp kappa to
+        # [0.01, 1.0] as an initial length scale.
+        length_scale = float(np.clip(kappa_mean, 0.01, 1.0))
+        return cls(nu=nu, length_scale=length_scale, **kwargs)
+
+    # ------------------------------------------------------------------
+    # Fit
+    # ------------------------------------------------------------------
+
+    def fit(
+        self,
+        cate: np.ndarray,
+        coords_norm: np.ndarray,
+    ) -> "CATEGPSurface":
+        """Fit GP regression on per-point CATE estimates.
+
+        Parameters
+        ----------
+        cate : (N,) array
+            Per-point CATE estimates (from any estimator).
+        coords_norm : (N, D) array
+            Spatial coordinates normalised to [0, 1] per dimension.
+
+        Returns
+        -------
+        self
+        """
+        from sklearn.gaussian_process import GaussianProcessRegressor
+        from sklearn.gaussian_process.kernels import Matern, ConstantKernel
+
+        cate = np.asarray(cate, dtype=np.float64).ravel()
+        coords_norm = np.asarray(coords_norm, dtype=np.float64)
+        if coords_norm.ndim == 1:
+            coords_norm = coords_norm.reshape(-1, 1)
+
+        N = len(cate)
+        if N != len(coords_norm):
+            raise ValueError(
+                f"cate length {N} != coords_norm length {len(coords_norm)}"
+            )
+
+        # Sub-sample for fitting (GPR is O(N³))
+        if N > self.max_fit_rows:
+            rng = np.random.RandomState(self.random_state)
+            idx = rng.choice(N, size=self.max_fit_rows, replace=False)
+        else:
+            idx = np.arange(N)
+
+        X_fit = coords_norm[idx]
+        y_fit = cate[idx]
+
+        # Build kernel: constant amplitude × Matérn
+        cate_var = float(np.var(cate))
+        amplitude = ConstantKernel(
+            constant_value=max(cate_var, 1e-6),
+            constant_value_bounds=(1e-6, cate_var * 100 + 1e-3),
+        )
+        matern = Matern(
+            nu=self.nu,
+            length_scale=self.length_scale,
+            length_scale_bounds=self.length_scale_bounds,
+        )
+        kernel = amplitude * matern
+
+        self._gpr = GaussianProcessRegressor(
+            kernel=kernel,
+            n_restarts_optimizer=self.n_restarts_optimizer,
+            normalize_y=True,
+            random_state=self.random_state,
+        )
+        self._gpr.fit(X_fit, y_fit)
+
+        self._fit_coords = coords_norm
+        self._fit_cate = cate
+
+        # Moran's I on residuals over full dataset
+        gp_mean, _ = self._gpr.predict(coords_norm, return_std=True)
+        residuals = cate - gp_mean
+        self.moran_result = _moran_i(residuals, coords_norm, n_neighbors=8)
+
+        return self
+
+    # ------------------------------------------------------------------
+    # Predict
+    # ------------------------------------------------------------------
+
+    def predict(
+        self,
+        coords_norm: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Return GP posterior (mean, std) at query coordinates.
+
+        Parameters
+        ----------
+        coords_norm : (M, D) array
+            Query coordinates in the same normalised space used at fit time.
+
+        Returns
+        -------
+        mean : (M,) array
+        std  : (M,) array
+        """
+        if self._gpr is None:
+            raise RuntimeError("Call fit() before predict().")
+        coords_norm = np.asarray(coords_norm, dtype=np.float64)
+        if coords_norm.ndim == 1:
+            coords_norm = coords_norm.reshape(-1, 1)
+        mean, std = self._gpr.predict(coords_norm, return_std=True)
+        return mean, std
+
+    # ------------------------------------------------------------------
+    # Optimised kernel parameters (for diagnostics)
+    # ------------------------------------------------------------------
+
+    @property
+    def fitted_kernel_params(self) -> Dict[str, Any]:
+        """Return the optimised kernel parameters after fitting."""
+        if self._gpr is None:
+            return {}
+        k = self._gpr.kernel_
+        params = k.get_params()
+        return {k_: float(v) if hasattr(v, "__float__") else v
+                for k_, v in params.items()}
+
+    @property
+    def log_marginal_likelihood(self) -> float:
+        """Return the log marginal likelihood of the fitted GP."""
+        if self._gpr is None:
+            return float("nan")
+        return float(self._gpr.log_marginal_likelihood_value_)
+
+
+# ---------------------------------------------------------------------------
+# Moran's I helper
+# ---------------------------------------------------------------------------
+
+def _moran_i(
+    residuals: np.ndarray,
+    coords: np.ndarray,
+    n_neighbors: int = 8,
+) -> Dict[str, float]:
+    """Compute Moran's I spatial autocorrelation statistic on ``residuals``.
+
+    Uses a row-normalised k-NN spatial weights matrix.  The expected value
+    and variance under the randomisation assumption are used to compute a
+    z-score and two-tailed p-value.
+
+    Parameters
+    ----------
+    residuals : (N,) array
+        GP residuals: observed CATE − GP posterior mean.
+    coords : (N, D) array
+        Spatial coordinates used to build the k-NN weight matrix.
+    n_neighbors : int
+        Number of spatial neighbours per observation.
+
+    Returns
+    -------
+    dict with keys: ``I``, ``E_I``, ``z_score``, ``p_value``,
+    ``interpretation``.
+    """
+    from sklearn.neighbors import NearestNeighbors
+
+    residuals = np.asarray(residuals, dtype=np.float64)
+    coords = np.asarray(coords, dtype=np.float64)
+    if coords.ndim == 1:
+        coords = coords.reshape(-1, 1)
+
+    N = len(residuals)
+    k = min(n_neighbors, N - 1)
+
+    # Build k-NN graph (excluding self)
+    nbrs = NearestNeighbors(n_neighbors=k + 1, algorithm="ball_tree")
+    nbrs.fit(coords)
+    distances, indices = nbrs.kneighbors(coords)
+
+    # Build row-normalised weight matrix (binary k-NN, exclude self)
+    # W[i, j] = 1/k if j in the k-NN of i (and j != i)
+    W = np.zeros((N, N), dtype=np.float64)
+    for i in range(N):
+        neighbors = indices[i, 1:]  # skip self (index 0)
+        W[i, neighbors] = 1.0 / k
+
+    e = residuals - residuals.mean()
+    S0 = float(W.sum())
+    if S0 < 1e-12 or np.sum(e ** 2) < 1e-16:
+        return {"I": float("nan"), "E_I": float(-1.0 / (N - 1)),
+                "z_score": float("nan"), "p_value": float("nan"),
+                "interpretation": "degenerate"}
+
+    I = float((N / S0) * (e @ W @ e) / (e @ e))
+
+    # Expected value under randomisation
+    E_I = -1.0 / (N - 1)
+
+    # Variance under normality assumption (Moran 1948)
+    # Var[I] = (N²·S1 - N·S2 + 3·S0²) / ((N²-1)·S0²) − E[I]²
+    S1 = 0.5 * float(np.sum((W + W.T) ** 2))
+    S2 = float(np.sum((W.sum(axis=1) + W.sum(axis=0)) ** 2))
+    n = float(N)
+    var_I = (
+        (n ** 2 * S1 - n * S2 + 3.0 * S0 ** 2)
+        / ((n ** 2 - 1.0) * S0 ** 2)
+    ) - E_I ** 2
+    var_I = max(var_I, 1e-12)
+
+    import math as _math
+    z = (I - E_I) / _math.sqrt(var_I)
+    # Two-tailed p-value using normal approximation
+    p = 2.0 * (1.0 - 0.5 * (1.0 + _math.erf(abs(z) / _math.sqrt(2))))
+
+    if abs(z) < 1.96:
+        interp = "no significant spatial autocorrelation in residuals"
+    elif I > E_I:
+        interp = "positive spatial autocorrelation in residuals (GP under-smoothed)"
+    else:
+        interp = "negative spatial autocorrelation in residuals (GP over-smoothed)"
+
+    return {
+        "I": round(I, 6),
+        "E_I": round(E_I, 6),
+        "var_I": round(var_I, 8),
+        "z_score": round(z, 4),
+        "p_value": round(p, 6),
+        "interpretation": interp,
+    }

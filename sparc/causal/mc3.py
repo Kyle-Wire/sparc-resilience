@@ -253,6 +253,173 @@ class PhysicsInformedGraphPrior:
         np.fill_diagonal(probs, 0.0)
         return cls(edge_probs=probs, penalty_acyclic=penalty)
 
+    @classmethod
+    def from_pde_residuals(
+        cls,
+        data: np.ndarray,
+        node_names: list[str],
+        coords: np.ndarray,
+        knn_k: int = 8,
+        alpha_base: float = 0.1,
+        penalty: float = 1.0,
+    ) -> "PhysicsInformedGraphPrior":
+        """Build a physics-informed prior from PDE-residual direction asymmetry.
+
+        Calls :func:`pde_residual_edge_probs` to produce the ``(p, p)``
+        edge-probability matrix and wraps it in a
+        :class:`PhysicsInformedGraphPrior`.
+
+        Parameters
+        ----------
+        data : (N, p) float array — observational data for each node.
+        node_names : list of p node name strings.
+        coords : (N, 2) float array — spatial coordinates.
+        knn_k : k-nearest-neighbours used for the spatial Laplacian.
+        alpha_base : uniform base probability blended into the final matrix
+            (ensures no edge receives exactly 0 prior probability).
+        penalty : ``penalty_acyclic`` passed to the prior.
+
+        Returns
+        -------
+        PhysicsInformedGraphPrior
+        """
+        edge_probs = pde_residual_edge_probs(
+            data=data,
+            node_names=node_names,
+            coords=coords,
+            knn_k=knn_k,
+            alpha_base=alpha_base,
+        )
+        return cls(edge_probs=edge_probs, penalty_acyclic=penalty)
+
+
+# ---------------------------------------------------------------------------
+# PDE-residual edge probability estimation
+# ---------------------------------------------------------------------------
+
+def pde_residual_edge_probs(
+    data: np.ndarray,
+    node_names: list[str],
+    coords: np.ndarray,
+    knn_k: int = 8,
+    alpha_base: float = 0.1,
+) -> np.ndarray:
+    """Populate a ``(p, p)`` edge-probability matrix from spatial ANM direction asymmetry.
+
+    For each ordered pair of nodes ``(i, j)``, fits the bivariate Additive
+    Noise Model (ANM; Hoyer et al. 2009) in both causal directions using OLS,
+    then scores each direction by the **spatial Laplacian energy** of its
+    residuals:
+
+    .. math::
+
+        L(\\varepsilon) = \\frac{1}{N} \\sum_{n} \\bigl(\\varepsilon_n -
+        \\overline{\\varepsilon}_{\\mathcal{N}(n)}\\bigr)^{2}
+
+    where :math:`\\mathcal{N}(n)` is the k-nearest spatial neighbourhood.
+
+    Physical interpretation: in the true causal direction ``i → j``, the
+    noise term :math:`\\varepsilon = j - \\hat{j}(i)` should be
+    spatially homogeneous (near-zero Laplacian energy) because the
+    governing PDE constrains the residual spatial field to vary smoothly.
+    The reverse direction ``j → i`` produces residuals whose spatial
+    structure mirrors the confounder structure, giving higher Laplacian
+    energy.  The relative energies are converted to edge probabilities via
+    a softmax.
+
+    The diagonal is set to zero (no self-loops).  All off-diagonal entries
+    are blended with ``alpha_base`` so no edge receives exactly zero
+    probability.
+
+    Parameters
+    ----------
+    data : (N, p) float array
+        Observational data; columns correspond to ``node_names``.
+    node_names : list[str]
+        Node names of length ``p``.
+    coords : (N, 2) float array
+        2-D spatial coordinates used to build the k-NN Laplacian.
+    knn_k : int
+        Number of spatial neighbours per observation.  Default 8.
+    alpha_base : float
+        Uniform prior blended into the final matrix in [0, 1).  Keeps the
+        prior well-defined even for weakly informative data.
+
+    Returns
+    -------
+    np.ndarray
+        ``(p, p)`` matrix with entries in (0, 1) and zero diagonal.
+        Ready for ``PhysicsInformedGraphPrior(edge_probs=...)``.
+    """
+    from sklearn.neighbors import NearestNeighbors
+
+    data = np.asarray(data, dtype=np.float64)
+    coords = np.asarray(coords, dtype=np.float64)
+    N, p = data.shape
+    if p != len(node_names):
+        raise ValueError(
+            f"data has {p} columns but node_names has {len(node_names)} entries."
+        )
+    if coords.shape[0] != N:
+        raise ValueError(
+            f"coords has {coords.shape[0]} rows but data has {N}."
+        )
+
+    # ---- Build k-NN spatial weight structure ----
+    k = min(knn_k, N - 1)
+    nbrs = NearestNeighbors(n_neighbors=k + 1, algorithm="ball_tree")
+    nbrs.fit(coords)
+    _, knn_indices = nbrs.kneighbors(coords)
+    # knn_indices[:, 0] is self; neighbors are knn_indices[:, 1:]
+    neighbor_idx = knn_indices[:, 1:]  # (N, k)
+
+    def _laplacian_energy(resid: np.ndarray) -> float:
+        """Mean squared deviation of residual from its k-NN spatial mean."""
+        resid = resid - resid.mean()
+        nbr_mean = resid[neighbor_idx].mean(axis=1)  # (N,)
+        return float(np.mean((resid - nbr_mean) ** 2))
+
+    def _ols_residuals(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        """OLS residuals of y regressed on x (with intercept)."""
+        X = np.column_stack([np.ones(len(x)), x])
+        beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+        return y - X @ beta
+
+    # ---- Per-pair direction test ----
+    # energy_matrix[i, j] = Laplacian energy when we regress j on i (i → j)
+    energy_matrix = np.full((p, p), np.inf)
+    for i in range(p):
+        for j in range(p):
+            if i == j:
+                continue
+            resid = _ols_residuals(data[:, i], data[:, j])
+            energy_matrix[i, j] = _laplacian_energy(resid)
+
+    # ---- Convert to edge probabilities ----
+    # For each ordered edge (i→j), its "plausibility score" is the
+    # softmax of (−L(j|i)) over the two directions of the undirected pair.
+    # edge_prob[i, j] ∝ exp(−L_ij) / (exp(−L_ij) + exp(−L_ji))
+    # = sigmoid(L_ji − L_ij)
+    edge_probs = np.zeros((p, p), dtype=np.float64)
+    for i in range(p):
+        for j in range(p):
+            if i == j:
+                continue
+            L_ij = energy_matrix[i, j]   # i→j: j = f(i) + ε
+            L_ji = energy_matrix[j, i]   # j→i: i = f(j) + ε'
+            if not (np.isfinite(L_ij) and np.isfinite(L_ji)):
+                edge_probs[i, j] = 0.5
+                continue
+            # Sigmoid of (opposite energy - own energy): high when i→j
+            # residuals are spatially smoother than j→i residuals.
+            delta = float(np.clip(L_ji - L_ij, -20.0, 20.0))
+            edge_probs[i, j] = 1.0 / (1.0 + math.exp(-delta))
+
+    # Blend with uniform base prior
+    edge_probs = alpha_base + (1.0 - 2.0 * alpha_base) * edge_probs
+    np.fill_diagonal(edge_probs, 0.0)
+    return edge_probs
+
 
 # ---------------------------------------------------------------------------
 # MC³ sampler
@@ -337,6 +504,7 @@ class MC3Results:
     temperatures: np.ndarray = field(
         default_factory=lambda: np.zeros(0, dtype=np.float64),
     )
+    physical_plausibility_score: dict[str, float] = field(default_factory=dict)
 
 
 def run_mc3(
@@ -351,6 +519,9 @@ def run_mc3(
     swap_every: int = 10,
     burnin_frac: float = 0.25,
     seed: int = 42,
+    pde_coords: np.ndarray | None = None,
+    pde_knn_k: int = 8,
+    pde_scorer: Any | None = None,
 ) -> MC3Results:
     """
     Run parallel-tempering MC³ over DAG space.
@@ -367,6 +538,12 @@ def run_mc3(
     swap_every : attempt inter-chain swap every N steps
     burnin_frac : fraction of iterations to discard
     seed : random seed
+    pde_coords : (N, 2) float array — spatial coordinates for computing
+        physical plausibility scores on the winning DAG's edges via spatial
+        Laplacian residual energy.  If ``None``, ``physical_plausibility_score``
+        will be an empty dict.
+    pde_knn_k : k-NN neighbours used for the spatial Laplacian energy when
+        ``pde_coords`` is provided.
     """
     rng = np.random.default_rng(seed)
     temperatures = temperatures or [1.0, 0.5, 0.25, 0.1]
@@ -427,6 +604,13 @@ def run_mc3(
             prop_prior = prior.log_prior(prop)
             prop_score = prop_bge + prop_prior
 
+            # Optional PDE-identifiability penalty (injected by caller)
+            if pde_scorer is not None:
+                try:
+                    prop_score = prop_score + pde_scorer(prop)
+                except Exception as _e:  # noqa: BLE001
+                    logger.debug("pde_scorer raised %s — skipping", _e)
+
             # Metropolis-Hastings acceptance with Hastings correction
             # (Green 1995 §3.2): log α = β·(score_prop - score_curr) + log_hastings
             # The Hastings ratio corrects for asymmetric proposal pool sizes
@@ -480,6 +664,41 @@ def run_mc3(
 
     edge_probs = edge_counts / max(n_post_burnin, 1)
 
+    # ---- Physical plausibility score for winning-DAG edges ----
+    physical_plausibility: dict[str, float] = {}
+    if pde_coords is not None:
+        from sklearn.neighbors import NearestNeighbors as _NNS
+
+        data_arr_pps = data.values[:, col_idx].astype(np.float64)
+        coords_arr = np.asarray(pde_coords, dtype=np.float64)
+        k = min(pde_knn_k, len(coords_arr) - 1)
+        nbrs_pps = _NNS(n_neighbors=k + 1, algorithm="ball_tree")
+        nbrs_pps.fit(coords_arr)
+        _, knn_idx_pps = nbrs_pps.kneighbors(coords_arr)
+        neighbor_idx_pps = knn_idx_pps[:, 1:]
+
+        def _lap_energy(resid: np.ndarray) -> float:
+            resid = resid - resid.mean()
+            nbr_mean = resid[neighbor_idx_pps].mean(axis=1)
+            return float(np.mean((resid - nbr_mean) ** 2))
+
+        def _ols_resid(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+            X = np.column_stack([np.ones(len(x)), x])
+            beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+            return y - X @ beta
+
+        for i in range(len(node_names)):
+            for j in range(len(node_names)):
+                if i == j:
+                    continue
+                if best_dag.adj[i, j]:
+                    L_ij = _lap_energy(_ols_resid(data_arr_pps[:, i], data_arr_pps[:, j]))
+                    L_ji = _lap_energy(_ols_resid(data_arr_pps[:, j], data_arr_pps[:, i]))
+                    total = L_ij + L_ji
+                    score_ij = 1.0 - (L_ij / total) if total > 0 else 0.5
+                    key = f"{node_names[i]}->{node_names[j]}"
+                    physical_plausibility[key] = float(score_ij)
+
     logger.info(
         "MC³ finished: %d iterations, %d accepted (cold chain), best score=%.2f",
         n_iter, n_accepted, best_score,
@@ -493,4 +712,5 @@ def run_mc3(
         trace=trace,
         n_accepted_per_chain=n_accepted_per_chain.copy(),
         temperatures=np.asarray(temperatures, dtype=np.float64),
+        physical_plausibility_score=physical_plausibility,
     )

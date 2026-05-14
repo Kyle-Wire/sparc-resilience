@@ -176,6 +176,9 @@ def sparc_joint_loss(
     jepa_latent_neighbor_idx: torch.Tensor | None = None,
     jepa_latent_alpha: torch.Tensor | None = None,
     lambda_jepa_latent_pde: float = 0.0,
+    # Precomputed sparse Laplacian (optional — accelerates full-N PDE eval)
+    sparse_laplacian: torch.Tensor | None = None,
+    valid_laplacian_mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """
     Compute the 8-term joint loss.
@@ -290,6 +293,8 @@ def sparc_joint_loss(
             dT_dt_observed=dT_dt_observed,
             nocturnal_dT_dt=nocturnal_dT_dt,
             T_night=T_night,
+            sparse_laplacian=sparse_laplacian,
+            valid_laplacian_mask=valid_laplacian_mask,
         )
         pde_total = lambda_pde * pde_total
         for k, v in pde_dict.items():

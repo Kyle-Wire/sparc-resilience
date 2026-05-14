@@ -120,10 +120,21 @@ def train_continual(
             train_config["_transfer"]["freeze_trunk"] = False  # allow updates
 
         # Add EWC + replay config
+        # Load optimal params (θ*) from trunk checkpoints of previous cities
+        previous_optimal_params = []
+        for city_name, _ in previous_fishers:
+            try:
+                record = registry.load_city(city_name)
+                if record.trunk_checkpoint is not None:
+                    previous_optimal_params.append(record.trunk_checkpoint)
+            except Exception:
+                pass
+
         train_config["_continual"] = {
             "ewc_lambda": ewc_lambda if previous_fishers else 0.0,
             "replay_lambda": replay_lambda if previous_coresets else 0.0,
             "fisher_matrices": [fm for _, fm in previous_fishers],
+            "optimal_params_list": previous_optimal_params,
             "previous_coresets": previous_coresets,
         }
 
@@ -205,7 +216,7 @@ def _train_city(
     This wraps the existing train_neural_meta pipeline and returns
     the training result dict augmented with Fisher matrix and trunk state.
     """
-    from sparc.training.v2_neural_training import train_neural_meta
+    from sparc.run.v2_neural_training import train_neural_meta
 
     output_dir.mkdir(parents=True, exist_ok=True)
 

@@ -449,3 +449,185 @@ class MediationDecomposer:
         nde = float(np.mean(Y_direct - Y_base))   # T shifts, M stays natural
         nie = float(np.mean(Y_nie   - Y_base))    # T stays, M shifts as under T+δ
         return nde, nie
+
+    # ------------------------------------------------------------------
+    # Fairness audit — stratified NDE/NIE by protected attribute
+    # ------------------------------------------------------------------
+
+    def fairness_audit(
+        self,
+        data: pd.DataFrame,
+        treatment: str,
+        mediator: str,
+        outcome: str,
+        confounders: List[str],
+        protected_attr: str,
+        n_strata: int = 10,
+    ) -> "FairnessAuditResult":
+        """Stratify NDE / NIE by a protected attribute and report disparities.
+
+        For each stratum of ``protected_attr`` (quantile-bins for continuous
+        variables, unique levels for categorical) the full linear + nonlinear
+        mediation decomposition is re-run.  A disparity summary reports the
+        max–min range across strata for each effect estimate.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+        treatment, mediator, outcome, confounders : str / list[str]
+        protected_attr : str
+            Column to stratify by.  Continuous columns are binned into
+            ``n_strata`` equal-frequency quantile groups.  Categorical (object /
+            bool) columns are used as-is.
+        n_strata : int
+            Number of quantile bins when ``protected_attr`` is numeric.
+
+        Returns
+        -------
+        FairnessAuditResult
+        """
+        if protected_attr not in data.columns:
+            raise ValueError(
+                f"protected_attr '{protected_attr}' not found in data columns."
+            )
+
+        col_dtype = data[protected_attr].dtype
+        if col_dtype.kind in ("O", "b", "U"):  # categorical / boolean / string
+            strata_labels = data[protected_attr].unique().tolist()
+            strata_masks = {
+                str(lbl): data[protected_attr] == lbl
+                for lbl in strata_labels
+            }
+        else:
+            # Numeric: bin into n_strata equal-frequency quantiles
+            try:
+                bins = pd.qcut(
+                    data[protected_attr], q=n_strata, duplicates="drop"
+                )
+            except ValueError:
+                bins = pd.cut(data[protected_attr], bins=n_strata)
+            strata_masks = {
+                str(interval): bins == interval
+                for interval in bins.cat.categories
+            }
+
+        stratum_results: Dict[str, MediationResult] = {}
+        for label, mask in strata_masks.items():
+            stratum_df = data[mask].reset_index(drop=True)
+            if len(stratum_df) < 30:
+                logger.warning(
+                    "Fairness audit: stratum '%s' has only %d rows — skipping.",
+                    label, len(stratum_df),
+                )
+                continue
+            result = self._decompose_path(
+                data=stratum_df,
+                treatment=treatment,
+                mediator=mediator,
+                outcome=outcome,
+                confounders=confounders,
+            )
+            stratum_results[label] = result
+
+        return FairnessAuditResult(
+            treatment=treatment,
+            mediator=mediator,
+            outcome=outcome,
+            protected_attr=protected_attr,
+            stratum_results=stratum_results,
+        )
+
+
+@dataclass
+class FairnessAuditResult:
+    """Per-stratum mediation decomposition and disparity summary."""
+
+    treatment: str
+    mediator: str
+    outcome: str
+    protected_attr: str
+    stratum_results: Dict[str, "MediationResult"] = field(default_factory=dict)
+
+    # ------------------------------------------------------------------
+    # Disparity metrics
+    # ------------------------------------------------------------------
+
+    def _collect(self, attr: str) -> List[float]:
+        return [
+            getattr(r, attr)
+            for r in self.stratum_results.values()
+            if np.isfinite(getattr(r, attr, float("nan")))
+        ]
+
+    @property
+    def nde_disparity(self) -> float:
+        """Max − min NDE (linear) across strata."""
+        vals = self._collect("NDE_linear")
+        return float(max(vals) - min(vals)) if len(vals) >= 2 else float("nan")
+
+    @property
+    def nie_disparity(self) -> float:
+        """Max − min NIE (linear) across strata."""
+        vals = self._collect("NIE_linear")
+        return float(max(vals) - min(vals)) if len(vals) >= 2 else float("nan")
+
+    @property
+    def cte_disparity(self) -> float:
+        """Max − min CTE (linear) across strata."""
+        vals = self._collect("CTE_linear")
+        return float(max(vals) - min(vals)) if len(vals) >= 2 else float("nan")
+
+    @property
+    def disparity_ratio(self) -> float:
+        """max|NDE| / min|NDE| — relative size of the most- vs least-affected stratum.
+
+        Returns ``nan`` when any NDE is ~zero (avoids division by zero).
+        """
+        vals = [abs(v) for v in self._collect("NDE_linear")]
+        if len(vals) < 2 or min(vals) < 1e-9:
+            return float("nan")
+        return float(max(vals) / min(vals))
+
+    def summary_table(self) -> pd.DataFrame:
+        """DataFrame with one row per stratum and key effect estimates."""
+        rows = []
+        for label, r in self.stratum_results.items():
+            rows.append({
+                "stratum": label,
+                "n_obs": r.n_obs,
+                "NDE_linear": _f(r.NDE_linear),
+                "NIE_linear": _f(r.NIE_linear),
+                "CTE_linear": _f(r.CTE_linear),
+                "NDE_nonlinear": _f(r.NDE_nonlinear),
+                "NIE_nonlinear": _f(r.NIE_nonlinear),
+                "CTE_nonlinear": _f(r.CTE_nonlinear),
+            })
+        df = pd.DataFrame(rows)
+        if not df.empty:
+            # Append disparity row
+            disp_row = {
+                "stratum": "_disparity_",
+                "n_obs": None,
+                "NDE_linear": _f(self.nde_disparity),
+                "NIE_linear": _f(self.nie_disparity),
+                "CTE_linear": _f(self.cte_disparity),
+                "NDE_nonlinear": None,
+                "NIE_nonlinear": None,
+                "CTE_nonlinear": None,
+            }
+            df = pd.concat([df, pd.DataFrame([disp_row])], ignore_index=True)
+        return df
+
+    def as_dict(self) -> dict:
+        return {
+            "treatment": self.treatment,
+            "mediator": self.mediator,
+            "outcome": self.outcome,
+            "protected_attr": self.protected_attr,
+            "n_strata": len(self.stratum_results),
+            "nde_disparity": _f(self.nde_disparity),
+            "nie_disparity": _f(self.nie_disparity),
+            "cte_disparity": _f(self.cte_disparity),
+            "disparity_ratio": _f(self.disparity_ratio),
+            "strata": {k: v.as_dict() for k, v in self.stratum_results.items()},
+        }

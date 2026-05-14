@@ -207,18 +207,23 @@ def _remap_indices_to_local(
 
     Any global index not present in ``batch_idx`` is set to -1.
     """
-    # Build global→local map
-    local_map = -np.ones(global_idx.max() + 1 if len(global_idx) else 0,
-                         dtype=np.int64)
-    for local_i, global_i in enumerate(batch_idx):
-        if global_i < len(local_map):
-            local_map[global_i] = local_i
+    map_size = int(global_idx.max()) + 1 if len(global_idx) else 0
+    if map_size == 0:
+        return torch.full_like(neighbor_tensor, -1)
 
-    nb = neighbor_tensor.cpu().numpy()
-    remapped = np.full_like(nb, -1)
-    valid = (nb >= 0) & (nb < len(local_map))
-    remapped[valid] = local_map[nb[valid]]
-    return torch.tensor(remapped, dtype=torch.long, device=neighbor_tensor.device)
+    device = neighbor_tensor.device
+
+    # Build global→local map in torch — no .cpu().numpy() round-trip on
+    # neighbor_tensor, which may live on GPU/MPS.
+    local_map = torch.full((map_size,), -1, dtype=torch.long)
+    batch_t = torch.as_tensor(batch_idx, dtype=torch.long)
+    local_map[batch_t] = torch.arange(len(batch_idx), dtype=torch.long)
+    local_map = local_map.to(device)
+
+    nb = neighbor_tensor                        # (B, K) — stays on device
+    valid = (nb >= 0) & (nb < map_size)
+    nb_safe = nb.clamp(0, map_size - 1)        # safe index even for invalid entries
+    return torch.where(valid, local_map[nb_safe], torch.full_like(nb, -1))
 
 
 def _build_knn_index(
@@ -316,6 +321,18 @@ def _build_cardinal_neighbors(
         n_complete, N, n_boundary, resolution,
     )
     return neighbor_idx, resolution
+
+
+def _maybe_compile(
+    mod: torch.nn.Module, *, mode: str = "reduce-overhead"
+) -> torch.nn.Module:
+    """Apply torch.compile when available (torch ≥ 2.0); no-op otherwise."""
+    if not hasattr(torch, "compile"):
+        return mod
+    try:
+        return torch.compile(mod, mode=mode)
+    except Exception:
+        return mod
 
 
 def _forward_surrogates(
@@ -507,6 +524,49 @@ def _prepare_tensors(
             water_mask = None
             logger.info("No water-adjacent points found (Distance_from_water_m < 50)")
 
+    # ---- Temporal snapshot indices (for time embedding) ----
+    time_idx = None
+    tcfg = config.get("temporal", {})
+    if tcfg.get("snapshots"):
+        from sparc.data.temporal import get_snapshot_time_indices
+        import pandas as pd
+        # Build a minimal DataFrame with enough length for the index builder.
+        # The snapshot_column path requires the real DataFrame; single_snapshot
+        # only needs len(df). Both paths are guarded by tcfg.get("enabled").
+        _t_idx_np = get_snapshot_time_indices(
+            pd.DataFrame({"_n": range(len(y))}), config,
+        )
+        if _t_idx_np is not None:
+            time_idx = torch.tensor(_t_idx_np, dtype=torch.long, device=device)
+            logger.info(
+                "Temporal snapshot indices built: %d points, values %s",
+                len(_t_idx_np), set(_t_idx_np.tolist()),
+            )
+
+    # ---- Precomputed sparse Laplacian (full-N, constant across epochs) ----
+    _sparse_lap = None
+    _valid_lap_mask = None
+    if h_field is not None and cardinal_idx is not None:
+        from sparc.physics.pde_operators import build_sparse_laplacian
+        _sparse_lap, _valid_lap_mask = build_sparse_laplacian(cardinal_idx, h_field)
+        logger.info(
+            "Precomputed sparse Laplacian: N=%d, M=%d valid rows",
+            cardinal_idx.shape[0], int(_valid_lap_mask.sum().item()),
+        )
+
+    # ---- Sheaf Laplacian δ⁰ (full-N, constant — Term 11) ----
+    _sheaf_delta = None
+    if knn_index is not None and knn_index.shape[0] > 0:
+        try:
+            from sparc.physics.pde_operators import build_sheaf_laplacian
+            _sheaf_delta = build_sheaf_laplacian(knn_index, stalk_dim=2)
+            logger.info(
+                "Precomputed Sheaf coboundary δ⁰: N=%d, K=%d, shape=%s",
+                knn_index.shape[0], knn_index.shape[1], tuple(_sheaf_delta.shape),
+            )
+        except Exception as _sheaf_build_exc:
+            logger.debug("Sheaf Laplacian build failed (non-fatal): %s", _sheaf_build_exc)
+
     return {
         "physics_feats": physics_t,
         "physics_feats_extended": physics_extended,
@@ -529,6 +589,10 @@ def _prepare_tensors(
         "deriv_names": deriv_names,
         "water_mask": water_mask,
         "T_water": T_water,
+        "time_idx": time_idx,
+        "sparse_laplacian": _sparse_lap,
+        "valid_laplacian_mask": _valid_lap_mask,
+        "sheaf_delta": _sheaf_delta,
     }
 
 
@@ -851,7 +915,7 @@ def train_neural_meta(
     # local so the dependency is only paid when the feature is on.
     from sparc.models.ema_trunk import EMATrunk
     from sparc.models.latent_predictor import LatentPredictor
-    from sparc.training.jepa_loss import JEPALossWeights, jepa_curriculum_weight
+    from sparc.training.jepa_loss import JEPALossWeights, jepa_curriculum_weight, jepa_loss, spatial_patch_mask
     # JEPA Phase 2: action-conditioned predictor + scenario distillation.
     from sparc.models.action_embedding import ActionEmbedding
 
@@ -871,6 +935,7 @@ def train_neural_meta(
     max_neighbors = neural_cfg.get("max_neighbors", 128)
     siren_omega = neural_cfg.get("siren_omega", 30.0)
     thresholds = neural_cfg.get("exceedance_thresholds", [0.25, 0.50, 0.75])
+    time_embed_dim = neural_cfg.get("time_embed_dim", 0)
 
     n_epochs = training_cfg.get("n_epochs", 100)
     swa_epochs = training_cfg.get("swa_epochs", max(int(n_epochs * 0.2), 5))
@@ -933,6 +998,8 @@ def train_neural_meta(
     # ---- JEPA settings (Phase 1, off by default) ----
     jepa_enable = bool(jepa_cfg.get("enable", False))
     jepa_mask_ratio = float(jepa_cfg.get("mask_ratio", 0.4))
+    jepa_spatial_patch = bool(jepa_cfg.get("spatial_patch_masking", False))
+    jepa_n_patches = int(jepa_cfg.get("n_patches", 4))
     jepa_lambda = float(jepa_cfg.get("lambda", 1.0))
     jepa_ema_tau_start = float(jepa_cfg.get("ema_tau_start", 0.99))
     jepa_ema_tau_end = float(jepa_cfg.get("ema_tau_end", 0.9999))
@@ -1023,6 +1090,23 @@ def train_neural_meta(
         sweep_y = tensors["y"]
         sweep_epochs = max(pretrain_epochs + 20, 30)
 
+        # Precompute KNN/cardinal once — identical for every capacity trial
+        _sweep_knn = torch.tensor(
+            _build_knn_index(coords[sweep_train_idx], max_neighbors),
+            dtype=torch.long, device=device,
+        )
+        _sweep_card_np, _ = _build_cardinal_neighbors(
+            coords[sweep_train_idx], resolution=resolution,
+        )
+        _sweep_card = torch.tensor(_sweep_card_np, dtype=torch.long, device=device)
+        _sweep_knn_full = torch.tensor(
+            _build_knn_index(
+                coords[np.concatenate([sweep_train_idx, sweep_test_idx])],
+                max_neighbors,
+            ),
+            dtype=torch.long, device=device,
+        )
+
         def _sweep_factory(hidden_dim: int, **_kw):
             """Create model bundle for capacity sweep."""
             _m = SPARCMetaLearner(
@@ -1068,14 +1152,8 @@ def train_neural_meta(
                 sweep_y[sweep_train_idx], n_epochs=pretrain_epochs, lr=lr,
             )
             opt = build_optimizer(_m, _p, _s, base_lr=lr)
-            _knn = torch.tensor(
-                _build_knn_index(coords[sweep_train_idx], max_neighbors),
-                dtype=torch.long, device=device,
-            )
-            _card_np, _ = _build_cardinal_neighbors(
-                coords[sweep_train_idx], resolution=resolution,
-            )
-            _card = torch.tensor(_card_np, dtype=torch.long, device=device)
+            _knn = _sweep_knn
+            _card = _sweep_card
             _src = torch.zeros(len(sweep_train_idx), device=device)
             for _ in range(20):
                 sp, _surr_std = _forward_surrogates(
@@ -1118,14 +1196,7 @@ def train_neural_meta(
             for v in _s.values():
                 v.eval()
             with torch.no_grad():
-                # FIX A5: build KNN from all sweep coords, not test-only
-                _knn_full = torch.tensor(
-                    _build_knn_index(
-                        coords[np.concatenate([sweep_train_idx, sweep_test_idx])],
-                        max_neighbors,
-                    ),
-                    dtype=torch.long, device=device,
-                )
+                _knn_full = _sweep_knn_full
                 _n_train = len(sweep_train_idx)
                 _n_test = len(sweep_test_idx)
                 _all_phys = torch.cat([sweep_phys[sweep_train_idx], sweep_phys[sweep_test_idx]])
@@ -1161,6 +1232,363 @@ def train_neural_meta(
     # CV Loop
     # ==================================================================
     batch_size = training_cfg.get("batch_size", 2048)
+
+    # --- Continual learning (EWC) config ---
+    _cont = config.get("_continual", {})
+    _ewc_lambda = float(_cont.get("ewc_lambda", 0.0))
+    _cont_fisher = _cont.get("fisher_matrices", [])
+    _cont_optimal = _cont.get("optimal_params_list", [])
+    _ewc_active = _ewc_lambda > 0.0 and bool(_cont_fisher) and bool(_cont_optimal)
+    _TRUNK_KEYS = {"physics_enc", "alpha_emb", "trunk_fusion", "time_embed"}
+    if _ewc_active:
+        from sparc.training.ewc import ewc_penalty as _ewc_penalty
+        logger.info(
+            "Continual learning: EWC active (lambda=%.3f, %d previous cities)",
+            _ewc_lambda, len(_cont_fisher),
+        )
+
+    # --- Wasserstein trunk alignment (OT) config ---
+    _ot_lambda = float(_cont.get("ot_lambda", 0.0))
+    _coreset_acts = _cont.get("coreset_activations", None)  # (B, D) tensor or None
+    _ot_active = _ot_lambda > 0.0 and _coreset_acts is not None
+    if _ot_active:
+        from sparc.training.ewc import wasserstein_trunk_alignment as _wta
+        logger.info("Continual learning: OT alignment active (ot_lambda=%.3f)", _ot_lambda)
+
+    # Buckets populated by forward hooks when OT is active
+    _trunk_acts_cv_bucket: list = []
+    _trunk_acts_ret_bucket: list = []
+    _trunk_acts_swa_bucket: list = []
+
+    def _make_trunk_hook(bucket: list):
+        """Return a forward hook that appends trunk_fusion output (detached) to bucket."""
+        def _hook(module, inp, out):
+            bucket.append(out.detach())
+        return _hook
+
+    # ==================================================================
+    # Optional: Spatial Contrastive pretext (2.SS-5)
+    # Gated by config["continual"]["contrastive_pretext"]: true.
+    # Trains SharedTrunk via InfoNCE over cross-city coresets so that
+    # blocks from cities with similar Matérn bandwidths are aligned in
+    # latent space.  Single-city runs with no registry coresets are a
+    # no-op (zero coreset pool → skipped gracefully).
+    # ==================================================================
+    _cont_cfg = config.get("continual", {}) or {}
+    _contrastive_enabled = _cont_cfg.get("contrastive_pretext", False)
+    if _contrastive_enabled:
+        from sparc.training.spatial_contrastive import (
+            log_bandwidth_from_payload,
+            spatial_contrastive_pretext,
+        )
+        from sparc.registry.city_registry import CityRegistry
+
+        _cont_coresets: list[dict] = []
+
+        # 1. Load cross-city coresets from registry (if available)
+        _registry_path = _cont_cfg.get("registry_path", None)
+        if _registry_path:
+            try:
+                _creg = CityRegistry(_registry_path)
+                _cont_coresets = _creg.query_coresets_by_bandwidth_cluster(
+                    threshold=float(_cont_cfg.get("bw_threshold", 0.3))
+                )
+                logger.info(
+                    "Contrastive pretext: loaded %d cross-city coresets from registry",
+                    len(_cont_coresets),
+                )
+            except Exception as _creg_exc:
+                logger.warning("Could not load city registry coresets: %s", _creg_exc)
+
+        # 2. Always include current-city coreset (feature matrix subsample)
+        _current_log_bw = 0.0
+        try:
+            _vsba_store2 = get_active_store()
+            if _vsba_store2 is not None and _vsba_store2.has("0", "correlogram_results"):
+                _cur_corr = _vsba_store2.read_struct("0", "correlogram_results")
+                _current_log_bw = log_bandwidth_from_payload(_cur_corr)
+        except Exception:
+            pass
+
+        _n_current = min(512, len(feature_matrix))
+        _rng_c = np.random.default_rng(0)
+        _cur_idx = _rng_c.choice(len(feature_matrix), size=_n_current, replace=False)
+        _cont_coresets.append({
+            "X": feature_matrix[_cur_idx].astype(np.float32),
+            "log_bw": _current_log_bw,
+            "city": "_current",
+        })
+
+        logger.info(
+            "Contrastive pretext: %d total coreset pools, current log_bw=%.3f",
+            len(_cont_coresets), _current_log_bw,
+        )
+
+        try:
+            # Build a fresh SPARCMetaLearner for pretext (same trunk dims)
+            # then transfer weights back — avoids disrupting compiled model
+            from sparc.models.neural_meta import SPARCMetaLearner
+            _pt_model = SPARCMetaLearner(
+                n_base_models=n_base,
+                n_physics_features=n_physics,
+                d_spatial=d_spatial,
+                hidden_dim=hidden_dim,
+                dropout=dropout,
+                thresholds=thresholds,
+                n_heads=n_heads,
+                max_neighbors=max_neighbors,
+                siren_omega=siren_omega,
+                time_embed_dim=time_embed_dim,
+            ).to(device)
+            spatial_contrastive_pretext(
+                model=_pt_model,
+                coresets_with_bw=_cont_coresets,
+                n_epochs=int(_cont_cfg.get("contrastive_epochs", 10)),
+                lr=float(_cont_cfg.get("contrastive_lr", 1e-4)),
+                temperature=float(_cont_cfg.get("contrastive_temperature", 0.07)),
+                bw_threshold=float(_cont_cfg.get("bw_threshold", 0.3)),
+                device=device,
+            )
+            # Transfer pretrained trunk weights to main model
+            model.load_state_dict(_pt_model.state_dict(), strict=False)
+            del _pt_model
+            logger.info("Contrastive pretext trunk weights transferred to main model")
+        except Exception as _ct_exc:
+            logger.warning("Contrastive pretext failed (non-fatal): %s", _ct_exc)
+
+    # ==================================================================
+    # Optional: VSBA pretext — label-free fold quality scoring
+    # Gated by config["models"]["spatial_cv"]["vsba_fold_scoring"]: true.
+    # Trains a VariationalSpatialBlockAutoencoder on the full feature
+    # matrix and scores each CV fold by its ELBO (higher = in-dist).
+    # Results are logged; fold assignments are unchanged.
+    # ==================================================================
+    _vsba_enabled = (
+        config.get("models", {})
+        .get("spatial_cv", {})
+        .get("vsba_fold_scoring", False)
+    )
+    if _vsba_enabled and len(folds) > 0:
+        from sparc.run.enhanced_spatial_cv import _vsba_fold_quality_score
+
+        # Load Stage 0 correlogram payload for Matérn seeding
+        _vsba_corr_payload: dict | None = None
+        try:
+            from sparc.registry.store import get_active_store
+            _vsba_store = get_active_store()
+            if _vsba_store is not None and _vsba_store.has("0", "correlogram_results"):
+                _vsba_corr_payload = _vsba_store.read_struct(
+                    "0", "correlogram_results"
+                )
+        except Exception:
+            pass
+
+        logger.info(
+            "VSBA fold quality scoring: %d folds, features=%d, corr_payload=%s",
+            len(folds), feature_matrix.shape[1],
+            "loaded" if _vsba_corr_payload else "absent (uniform prior)",
+        )
+        try:
+            _vsba_fold_quality_score(
+                feature_matrix.astype(np.float32),
+                coords.astype(np.float32),
+                folds,
+                corr_payload=_vsba_corr_payload,
+                n_epochs=int(
+                    config.get("models", {})
+                    .get("spatial_cv", {})
+                    .get("vsba_n_epochs", 20)
+                ),
+                device=str(device),
+            )
+        except Exception as _vsba_exc:
+            logger.warning("VSBA fold scoring failed (non-fatal): %s", _vsba_exc)
+
+    # ==================================================================
+    # Optional: JEPA self-supervised pretraining on full dataset
+    # Gated by config["jepa"]["pretrain_epochs"] > 0 AND jepa_enable.
+    # Trains trunk encoder + latent predictor via masked-context JEPA
+    # before CV folds start.  Trunk weights are then transferred to each
+    # fold's SPARCMetaLearner via load_state_dict (strict=False).
+    # ==================================================================
+    jepa_pretrain_epochs = int(jepa_cfg.get("pretrain_epochs", 0))
+    jepa_pretrained_trunk_state: dict | None = None
+
+    # ---- Load OOF GWR beta-map for JEPA target conditioning (Stage 2 artifact) ----
+    _pt_beta_t: "torch.Tensor | None" = None
+    _pt_beta_n_feat: int = n_physics
+    try:
+        from sparc.registry.store import get_active_store
+        _oof_store = get_active_store()
+        if _oof_store is not None and _oof_store.has("2", "oof_gwr_beta_map"):
+            _oof_beta = np.asarray(
+                _oof_store.read_blob("2", "oof_gwr_beta_map", trusted=True),
+                dtype=np.float32,
+            )
+            _col_std = _oof_beta.std(axis=0, keepdims=True)
+            _col_std[_col_std < 1e-8] = 1.0
+            _oof_beta = (_oof_beta - _oof_beta.mean(axis=0, keepdims=True)) / _col_std
+            _pt_beta_t = torch.tensor(_oof_beta, dtype=torch.float32, device=device)
+            _pt_beta_n_feat = _oof_beta.shape[1]
+            logger.info(
+                "oof_intelligence loaded: gwr_local_coefficients (n=%d)", len(_oof_beta)
+            )
+    except Exception as _oof_e:
+        logger.debug("OOF beta map not available (normal on first Stage 2 run): %s", _oof_e)
+
+    if jepa_enable and jepa_pretrain_epochs > 0:
+        logger.info(
+            "JEPA pretraining: %d epochs on %d points (mask_ratio=%.2f)",
+            jepa_pretrain_epochs, len(y), jepa_mask_ratio,
+        )
+        _pt_t0 = _time.perf_counter()
+
+        # Build a temporary online model (trunk only used)
+        _pt_model = SPARCMetaLearner(
+            n_base_models=n_base,
+            n_physics_features=n_physics_extended,
+            d_spatial=d_spatial,
+            hidden_dim=hidden_dim,
+            dropout=dropout,
+            thresholds=thresholds,
+            n_heads=n_heads,
+            max_neighbors=max_neighbors,
+            siren_omega=siren_omega,
+            init_bandwidth=float(predictor_bandwidths.mean()) if predictor_bandwidths is not None else 1000.0,
+            time_embed_dim=time_embed_dim,
+        ).to(device)
+
+        _pt_ema_trunk = EMATrunk(
+            _pt_model,
+            tau_start=jepa_ema_tau_start,
+            tau_end=jepa_ema_tau_end,
+            warmup_steps=jepa_warmup_steps,
+        ).to(device)
+
+        _pt_latent_predictor = LatentPredictor(
+            hidden_dim=hidden_dim,
+            action_dim=0,
+            dropout=dropout,
+            n_blocks=jepa_predictor_blocks,
+            film=jepa_predictor_film,
+        ).to(device)
+
+        _pt_params = (
+            list(_pt_model.parameters()) + list(_pt_latent_predictor.parameters())
+        )
+        _pt_optimizer = torch.optim.AdamW(_pt_params, lr=lr)
+
+        # Frozen beta-map projector: projects OOF GWR β-map → hidden_dim and
+        # adds to EMA target encoding so the trunk learns spatial process structure.
+        _pt_beta_proj: "torch.nn.Linear | None" = None
+        if _pt_beta_t is not None:
+            _pt_beta_proj = torch.nn.Linear(_pt_beta_n_feat, hidden_dim, bias=False).to(device)
+            for _p in _pt_beta_proj.parameters():
+                _p.requires_grad_(False)
+
+        # Constant prior alpha (ProcessRateNet not trained yet)
+        _pt_alpha = torch.full(
+            (len(y), 1), prior_mean, dtype=torch.float32, device=device,
+        )
+        _pt_time_idx = tensors.get("time_idx")
+
+        _pt_model.train()
+        N_pt = len(y)
+        _pt_use_minibatch = N_pt > batch_size * 2
+
+        for _pt_epoch in range(jepa_pretrain_epochs):
+            if _pt_use_minibatch:
+                from sparc.training.optimizer import spatial_minibatch_sampler
+                _pt_batches = spatial_minibatch_sampler(
+                    coords, None, batch_size=batch_size,
+                )
+            else:
+                _pt_batches = [np.arange(N_pt)]
+
+            _pt_epoch_loss = 0.0
+            _pt_n = 0
+
+            for _pt_b_idx in _pt_batches:
+                b_phys_ext = tensors["physics_feats_extended"][_pt_b_idx]
+                b_alpha = _pt_alpha[_pt_b_idx]
+                b_time = _pt_time_idx[_pt_b_idx] if _pt_time_idx is not None else None
+
+                # --- Masking strategy ---
+                if jepa_spatial_patch:
+                    # Spatial patch masking: hide geographically contiguous regions
+                    b_coords_t = coords_t[_pt_b_idx]
+                    _pt_patch_mask = spatial_patch_mask(
+                        b_coords_t, mask_ratio=jepa_mask_ratio, n_patches=jepa_n_patches,
+                    )  # (B,) bool — True = masked point
+                    b_phys_ctx = b_phys_ext.clone()
+                    b_phys_ctx[_pt_patch_mask] = 0.0
+                    channel_mask = None
+                else:
+                    # Legacy: random feature-channel masking
+                    b_phys_ctx = b_phys_ext
+                    n_phys_feat = b_phys_ext.shape[-1]
+                    keep_p = max(0.0, 1.0 - jepa_mask_ratio)
+                    channel_mask = (
+                        torch.rand(n_phys_feat, device=device) < keep_p
+                    ).to(b_phys_ext.dtype)
+
+                h_context = _pt_model.encode(
+                    physics_feats=b_phys_ctx,
+                    alpha=b_alpha,
+                    time_idx=b_time,
+                    channel_mask=channel_mask,
+                )
+                h_pred = _pt_latent_predictor(h_context)
+
+                with torch.no_grad():
+                    # Target always sees the full (unmasked) features
+                    h_target = _pt_ema_trunk.encode_target(
+                        physics_feats=b_phys_ext,
+                        alpha=b_alpha,
+                        time_idx=b_time,
+                    )
+                    # Enrich target with OOF β-map spatial structure when available
+                    if _pt_beta_proj is not None and _pt_beta_t is not None:
+                        h_target = h_target + _pt_beta_proj(_pt_beta_t[_pt_b_idx])
+
+                _pt_loss, _pt_components = jepa_loss(
+                    h_pred, h_target, weights=jepa_weights,
+                )
+
+                _pt_optimizer.zero_grad()
+                _pt_loss.backward()
+                torch.nn.utils.clip_grad_norm_(_pt_params, clip_norm)
+                _pt_optimizer.step()
+                _pt_ema_trunk.update(_pt_model)
+
+                _bsz = len(_pt_b_idx)
+                _pt_epoch_loss += _pt_loss.item() * _bsz
+                _pt_n += _bsz
+
+            _pt_epoch_loss /= max(_pt_n, 1)
+
+            if (_pt_epoch + 1) % max(1, jepa_pretrain_epochs // 5) == 0 or _pt_epoch == 0:
+                logger.info(
+                    "  JEPA pretrain epoch %d/%d  loss=%.4f  "
+                    "[align=%.3f var=%.3f cov=%.4f]  (%.1fs)",
+                    _pt_epoch + 1, jepa_pretrain_epochs, _pt_epoch_loss,
+                    _pt_components.get("jepa_align", 0),
+                    _pt_components.get("jepa_variance", 0),
+                    _pt_components.get("jepa_covariance", 0),
+                    _time.perf_counter() - _pt_t0,
+                )
+
+        # Extract trunk state for transfer into each fold model
+        jepa_pretrained_trunk_state = {
+            k: v.detach().clone()
+            for k, v in _pt_model.state_dict().items()
+            if any(k.startswith(pfx) for pfx in _TRUNK_KEYS)
+        }
+        logger.info(
+            "JEPA pretraining done in %.1fs — trunk state (%d tensors) ready for transfer",
+            _time.perf_counter() - _pt_t0, len(jepa_pretrained_trunk_state),
+        )
+        del _pt_model, _pt_ema_trunk, _pt_latent_predictor, _pt_optimizer, _pt_alpha, _pt_beta_proj
 
     for fold_idx, (train_idx, test_idx) in enumerate(folds):
         _fold_t0 = _time.perf_counter()
@@ -1220,7 +1648,18 @@ def train_neural_meta(
             max_neighbors=max_neighbors,
             siren_omega=siren_omega,
             init_bandwidth=float(predictor_bandwidths.mean()) if predictor_bandwidths is not None else 1000.0,
+            time_embed_dim=time_embed_dim,
         ).to(device)
+
+        # OT trunk alignment: register forward hook to capture trunk_fusion output
+        if _ot_active:
+            _trunk_acts_cv_bucket.clear()
+            model.trunk_fusion.register_forward_hook(_make_trunk_hook(_trunk_acts_cv_bucket))
+
+        # Transfer JEPA-pretrained trunk weights if available
+        if jepa_pretrained_trunk_state is not None:
+            model.load_state_dict(jepa_pretrained_trunk_state, strict=False)
+            logger.info("  Fold %d: transferred JEPA-pretrained trunk", fold_idx + 1)
 
         # ---- Differentiable surrogates ----
         surrogates = {
@@ -1242,6 +1681,13 @@ def train_neural_meta(
                 hidden_dim=min(hidden_dim, 64),
             ).to(device),
         }
+
+        # ── E-Perf-A: compile forward passes when torch ≥ 2.0 ──────────
+        model = _maybe_compile(model)
+        process_net = _maybe_compile(process_net)
+        source_net = _maybe_compile(source_net)
+        for _k in list(surrogates):
+            surrogates[_k] = _maybe_compile(surrogates[_k])
 
         # ---- Per-component optimizer + warmup scheduler ----
         optimizer = build_optimizer(
@@ -1492,6 +1938,7 @@ def train_neural_meta(
                     alpha=alpha,
                     surrogate_std=surrogate_std,
                     knn_dists=fold_knn_dists[b_idx],
+                    time_idx=tensors["time_idx"][b_idx] if tensors["time_idx"] is not None else None,
                 )
 
                 # ---- JEPA forward (Phase 1) ----
@@ -1525,14 +1972,23 @@ def train_neural_meta(
                     h_state_online: torch.Tensor | None = None
 
                     if jepa_lambda_eff > 0.0:
-                        n_phys_feat = b_physics_ext.shape[-1]
-                        # Bernoulli mask: 1 = keep, 0 = mask out.
-                        keep_p = max(0.0, 1.0 - jepa_mask_ratio)
-                        channel_mask = (
-                            torch.rand(n_phys_feat, device=device) < keep_p
-                        ).to(b_physics_ext.dtype)
+                        if jepa_spatial_patch:
+                            _patch_mask = spatial_patch_mask(
+                                b_coords, mask_ratio=jepa_mask_ratio,
+                                n_patches=jepa_n_patches,
+                            )
+                            b_phys_ctx = b_physics_ext.clone()
+                            b_phys_ctx[_patch_mask] = 0.0
+                            channel_mask = None
+                        else:
+                            b_phys_ctx = b_physics_ext
+                            n_phys_feat = b_physics_ext.shape[-1]
+                            keep_p = max(0.0, 1.0 - jepa_mask_ratio)
+                            channel_mask = (
+                                torch.rand(n_phys_feat, device=device) < keep_p
+                            ).to(b_physics_ext.dtype)
                         h_context = model.encode(
-                            physics_feats=b_physics_ext,
+                            physics_feats=b_phys_ctx,
                             alpha=alpha,
                             channel_mask=channel_mask,
                         )
@@ -1643,6 +2099,9 @@ def train_neural_meta(
                     jepa_latent_neighbor_idx=b_jepa_latent_neighbor,
                     jepa_latent_alpha=b_jepa_latent_alpha,
                     lambda_jepa_latent_pde=jepa_lambda_latent_pde_eff,
+                    sparse_laplacian=tensors.get("sparse_laplacian"),
+                    valid_laplacian_mask=tensors.get("valid_laplacian_mask"),
+                    sheaf_delta=tensors.get("sheaf_delta"),
                 )
 
                 # Variance penalty on w(s): encourage spatial diversity
@@ -1652,6 +2111,19 @@ def train_neural_meta(
                 # Alpha supervision loss: maintain land-cover signal
                 if train_alpha_targets is not None:
                     total_loss = total_loss + 0.1 * torch.nn.functional.mse_loss(alpha, train_alpha_targets[b_idx])
+
+                # EWC penalty (continual learning across cities)
+                if _ewc_active:
+                    total_loss = total_loss + _ewc_lambda * _ewc_penalty(
+                        model, _cont_fisher, _cont_optimal, _TRUNK_KEYS,
+                    )
+
+                # Wasserstein trunk alignment (OT continual learning)
+                if _ot_active:
+                    _trunk_acts_cv = _trunk_acts_cv_bucket.pop() if _trunk_acts_cv_bucket else None
+                    if _trunk_acts_cv is not None:
+                        ot_loss = _wta(_trunk_acts_cv, _coreset_acts.to(_trunk_acts_cv.device))
+                        total_loss = total_loss + _ot_lambda * ot_loss
 
                 optimizer.zero_grad()
                 if jepa_optimizer is not None:
@@ -1837,7 +2309,20 @@ def train_neural_meta(
         max_neighbors=max_neighbors,
         siren_omega=siren_omega,
         init_bandwidth=float(predictor_bandwidths.mean()) if predictor_bandwidths is not None else 1000.0,
+        time_embed_dim=time_embed_dim,
     ).to(device)
+
+    # OT trunk alignment: register forward hook to capture trunk_fusion output
+    if _ot_active:
+        _trunk_acts_ret_bucket.clear()
+        _trunk_acts_swa_bucket.clear()
+        final_model.trunk_fusion.register_forward_hook(_make_trunk_hook(_trunk_acts_ret_bucket))
+        final_model.trunk_fusion.register_forward_hook(_make_trunk_hook(_trunk_acts_swa_bucket))
+
+    # Transfer JEPA-pretrained trunk weights if available
+    if jepa_pretrained_trunk_state is not None:
+        final_model.load_state_dict(jepa_pretrained_trunk_state, strict=False)
+        logger.info("Full retrain: transferred JEPA-pretrained trunk")
 
     final_surrogates = {
         "gwr": DifferentiableGWR(
@@ -1861,6 +2346,13 @@ def train_neural_meta(
 
     # FIX A1: Learned source term for full retrain
     final_source_net = SourceTermNet(n_inputs=n_physics).to(device)
+
+    # ── E-Perf-A: compile forward passes when torch ≥ 2.0 ──────────────
+    final_model = _maybe_compile(final_model)
+    final_process = _maybe_compile(final_process)
+    final_source_net = _maybe_compile(final_source_net)
+    for _k in list(final_surrogates):
+        final_surrogates[_k] = _maybe_compile(final_surrogates[_k])
 
     final_optimizer = build_optimizer(
         final_model, final_process, final_surrogates, base_lr=lr,
@@ -2090,6 +2582,7 @@ def train_neural_meta(
                 alpha=alpha,
                 surrogate_std=surrogate_std,
                 knn_dists=full_knn_dists_rt[b_idx],
+                time_idx=tensors["time_idx"][b_idx] if tensors["time_idx"] is not None else None,
             )
 
             # ---- JEPA forward (final retrain) ----
@@ -2116,14 +2609,25 @@ def train_neural_meta(
                 h_state_online: torch.Tensor | None = None
 
                 if jepa_lambda_eff > 0.0:
-                    n_phys_feat = b_phys_ext.shape[-1]
-                    keep_p = max(0.0, 1.0 - jepa_mask_ratio)
-                    channel_mask = (
-                        torch.rand(n_phys_feat, device=device) < keep_p
-                    ).to(b_phys_ext.dtype)
+                    if jepa_spatial_patch:
+                        _rt_coords = coords_t[b_idx]
+                        _rt_patch_mask = spatial_patch_mask(
+                            _rt_coords, mask_ratio=jepa_mask_ratio,
+                            n_patches=jepa_n_patches,
+                        )
+                        b_phys_ctx_rt = b_phys_ext.clone()
+                        b_phys_ctx_rt[_rt_patch_mask] = 0.0
+                        channel_mask = None
+                    else:
+                        b_phys_ctx_rt = b_phys_ext
+                        n_phys_feat = b_phys_ext.shape[-1]
+                        keep_p = max(0.0, 1.0 - jepa_mask_ratio)
+                        channel_mask = (
+                            torch.rand(n_phys_feat, device=device) < keep_p
+                        ).to(b_phys_ext.dtype)
                     b_jepa_h_pred = final_latent_predictor(
                         final_model.encode(
-                            physics_feats=b_phys_ext,
+                            physics_feats=b_phys_ctx_rt,
                             alpha=alpha,
                             channel_mask=channel_mask,
                         )
@@ -2225,6 +2729,9 @@ def train_neural_meta(
                 jepa_latent_neighbor_idx=b_jepa_latent_neighbor,
                 jepa_latent_alpha=b_jepa_latent_alpha,
                 lambda_jepa_latent_pde=jepa_lambda_latent_pde_eff,
+                sparse_laplacian=tensors.get("sparse_laplacian"),
+                valid_laplacian_mask=tensors.get("valid_laplacian_mask"),
+                sheaf_delta=tensors.get("sheaf_delta"),
             )
 
             # Variance penalty on w(s): encourage spatial diversity
@@ -2234,6 +2741,19 @@ def train_neural_meta(
             # Alpha supervision loss: maintain land-cover signal
             if alpha_targets is not None:
                 total_loss = total_loss + 0.1 * torch.nn.functional.mse_loss(alpha, alpha_targets[b_idx])
+
+            # EWC penalty (continual learning across cities)
+            if _ewc_active:
+                total_loss = total_loss + _ewc_lambda * _ewc_penalty(
+                    final_model, _cont_fisher, _cont_optimal, _TRUNK_KEYS,
+                )
+
+            # Wasserstein trunk alignment (OT continual learning)
+            if _ot_active:
+                _trunk_acts_ret = _trunk_acts_ret_bucket.pop() if _trunk_acts_ret_bucket else None
+                if _trunk_acts_ret is not None:
+                    ot_loss = _wta(_trunk_acts_ret, _coreset_acts.to(_trunk_acts_ret.device))
+                    total_loss = total_loss + _ot_lambda * ot_loss
 
             final_optimizer.zero_grad()
             if final_jepa_optimizer is not None:
@@ -2383,6 +2903,7 @@ def train_neural_meta(
                     alpha=alpha,
                     surrogate_std=surrogate_std_swa,
                     knn_dists=full_knn_dists_rt[b_idx],
+                    time_idx=tensors["time_idx"][b_idx] if tensors["time_idx"] is not None else None,
                 )
 
                 total_loss, _ = sparc_joint_loss(
@@ -2413,6 +2934,9 @@ def train_neural_meta(
                     lambda_bc=lambdas.get("bc", 0.0),
                     water_mask=b_water_mask_swa,
                     T_water=tensors.get("T_water"),
+                    sparse_laplacian=tensors.get("sparse_laplacian"),
+                    valid_laplacian_mask=tensors.get("valid_laplacian_mask"),
+                    sheaf_delta=tensors.get("sheaf_delta"),
                 )
 
                 # Variance penalty on w(s): encourage spatial diversity
@@ -2422,6 +2946,19 @@ def train_neural_meta(
                 # Alpha supervision loss: maintain land-cover signal
                 if alpha_targets is not None:
                     total_loss = total_loss + 0.1 * torch.nn.functional.mse_loss(alpha, alpha_targets[b_idx])
+
+                # EWC penalty (continual learning across cities)
+                if _ewc_active:
+                    total_loss = total_loss + _ewc_lambda * _ewc_penalty(
+                        final_model, _cont_fisher, _cont_optimal, _TRUNK_KEYS,
+                    )
+
+                # Wasserstein trunk alignment (OT continual learning)
+                if _ot_active:
+                    _trunk_acts_swa = _trunk_acts_swa_bucket.pop() if _trunk_acts_swa_bucket else None
+                    if _trunk_acts_swa is not None:
+                        ot_loss = _wta(_trunk_acts_swa, _coreset_acts.to(_trunk_acts_swa.device))
+                        total_loss = total_loss + _ot_lambda * ot_loss
 
                 final_optimizer.zero_grad()
                 total_loss.backward()
@@ -2707,6 +3244,47 @@ def train_neural_meta(
     # rendered live in the desktop app from artifacts.db data.
     # ==================================================================
 
+    # --- Continual learning: extract trunk params + compute Fisher matrix ---
+    from sparc.training.ewc import compute_fisher_matrix as _compute_fisher, extract_trunk_params as _extract_trunk
+    _result_trunk = _extract_trunk(final_model, _TRUNK_KEYS)
+    logger.info("Extracted trunk params for EWC (%d param tensors)", len(_result_trunk))
+
+    def _fisher_data_loader():
+        N_all = len(y)
+        for _start in range(0, N_all, batch_size):
+            _idx = np.arange(_start, min(_start + batch_size, N_all))
+            with torch.no_grad():
+                _b_phys = tensors["physics_feats"][_idx]
+                _b_spat = tensors["X_spatial"][_idx]
+                _b_coord = tensors["coords"][_idx]
+                _b_knn = _remap_indices_to_local(
+                    np.arange(N_all), _idx, full_knn[_idx]
+                )
+                _b_gwrf_knn = _b_knn[:, :gwrf_k]
+                _b_gwrf_dists = full_knn_dists_rt[_idx][:, :gwrf_k]
+                _b_preds, _ = _forward_surrogates(
+                    final_surrogates, _b_phys, _b_spat,
+                    knn_index=_b_gwrf_knn, knn_dists=_b_gwrf_dists,
+                )
+                _base_input = torch.stack(_b_preds, dim=1).detach()
+                _pr_in = _b_phys[:, pr_col_idxs]
+                _alpha_b = final_process(_pr_in).detach()
+                if _alpha_b.shape[-1] > 1:
+                    _alpha_b = _alpha_b.mean(dim=-1, keepdim=True)
+            yield {
+                "base_preds": _base_input,
+                "physics_feats": tensors["physics_feats_extended"][_idx],
+                "X_spatial": _b_spat,
+                "coords": _b_coord,
+                "knn_index": _b_knn,
+                "alpha": _alpha_b,
+            }, tensors["y"][_idx]
+
+    _result_fisher = _compute_fisher(
+        final_model, _fisher_data_loader(), _TRUNK_KEYS, device=device,
+    )
+    logger.info("Fisher matrix computed for EWC (%d trunk param tensors)", len(_result_fisher))
+
     return {
         "model": final_model,
         "process_rate": final_process,
@@ -2717,6 +3295,8 @@ def train_neural_meta(
         "metrics": {"r2": r2, "rmse": rmse},
         "encoder": tensors["encoder"],
         "meta_info": meta_info,
+        "fisher_matrix": _result_fisher,
+        "trunk_state_dict": _result_trunk,
     }
 
 

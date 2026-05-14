@@ -16,6 +16,7 @@ warnings.filterwarnings('ignore')
 os.environ['PYTHONWARNINGS'] = 'ignore::UserWarning,ignore::FutureWarning,ignore::RuntimeWarning'
 
 import json
+import math
 import time
 import numpy as np
 import pandas as pd
@@ -113,9 +114,8 @@ from copy import deepcopy
 # Shared evaluator instance for benchmark metrics
 _evaluator = SpatialEvaluator()
 
-# Global flag for OOF extraction (set to True to enable spatial intelligence extraction)
-# Requires oof_extraction_hooks module — disable until implemented
-EXTRACT_OOF_INTELLIGENCE = False
+# Global flag for OOF extraction — enabled now that oof_extraction_hooks is implemented
+EXTRACT_OOF_INTELLIGENCE = True
 
 def train_single_model_fold_worker(args):
     """
@@ -208,9 +208,7 @@ def train_single_model_fold_worker(args):
         oof_intelligence = None
         if EXTRACT_OOF_INTELLIGENCE and model_name in ['gwr', 'gwrf', 'ggpgam']:
             try:
-                # Import extraction hooks
-                sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'interventions'))
-                from oof_extraction_hooks import extract_from_fitted_model
+                from sparc.interventions.oof_extraction_hooks import extract_from_fitted_model
                 
                 oof_intelligence = extract_from_fitted_model(
                     model=model_copy,
@@ -230,7 +228,7 @@ def train_single_model_fold_worker(args):
         # Return NaN predictions as fallback
         return fold_idx, test_idx, np.full(len(test_idx), np.nan), None
 
-def calculate_fold_spatial_autocorr(residuals, coords, threshold=1000):
+def calculate_fold_spatial_autocorr(residuals, coords, threshold=1000, _precomputed_indices=None):
     """
     Calculate Moran's I for a single fold's residuals using K-NN weights.
     Returns a simple spatial autocorrelation metric.
@@ -238,43 +236,103 @@ def calculate_fold_spatial_autocorr(residuals, coords, threshold=1000):
     try:
         if len(residuals) < 10:  # Skip tiny folds
             return 0.0
-            
-        from sklearn.neighbors import NearestNeighbors
+
         k_neighbors = min(8, len(residuals) - 1)
-        
+
         if k_neighbors < 1:
             return 0.0
-            
-        # Use K-NN weights for consistency
-        nbrs = NearestNeighbors(n_neighbors=k_neighbors+1).fit(coords)
-        distances, indices = nbrs.kneighbors(coords)
-        
-        # Simple Moran's I calculation
+
+        if _precomputed_indices is not None:
+            indices = _precomputed_indices
+        else:
+            from sklearn.neighbors import NearestNeighbors
+            nbrs = NearestNeighbors(n_neighbors=k_neighbors + 1).fit(coords)
+            _, indices = nbrs.kneighbors(coords)
+
         n = len(residuals)
         y_mean = np.mean(residuals)
         y_centered = residuals - y_mean
-        
-        # Create weights matrix (row-standardized)
-        total_similarity = 0.0
-        total_weight = 0.0
-        
-        for i in range(n):
-            for j in range(1, k_neighbors+1):  # Skip self
-                if j < len(indices[i]):
-                    neighbor_idx = indices[i, j]
-                    weight = 1.0 / k_neighbors  # Equal weights for neighbors
-                    total_similarity += weight * y_centered[i] * y_centered[neighbor_idx]
-                    total_weight += weight
-        
-        if total_weight > 0 and np.sum(y_centered**2) > 0:
-            morans_i = (n / total_weight) * (total_similarity / np.sum(y_centered**2))
+
+        # Vectorised Moran's I (row-standardised equal weights)
+        yc_nb = y_centered[indices[:, 1:]]              # (N, K) — neighbour values
+        cross = float((y_centered[:, None] * yc_nb).sum())
+        denom = float(np.sum(y_centered ** 2))
+        if denom > 0:
+            morans_i = cross / (k_neighbors * denom)
             return morans_i
         else:
             return 0.0
-            
-    except Exception as e:
+
+    except Exception:
         # Silently return 0 on errors to avoid breaking the pipeline
         return 0.0
+
+
+def _spatial_smooth(predictions, coords, bandwidth=500, k=8, _precomputed=None):
+    """Inverse-distance-weighted spatial smoothing of predictions.
+
+    For each point computes the IDW mean of its k nearest neighbours'
+    predictions using a Gaussian kernel with the given bandwidth (metres).
+    Returns smoothed predictions as a float32 array of the same length.
+    """
+    n = len(predictions)
+    k_use = min(k, n - 1)
+    if k_use < 1:
+        return predictions.copy()
+    if _precomputed is not None:
+        distances, indices = _precomputed
+    else:
+        from sklearn.neighbors import NearestNeighbors
+        nbrs = NearestNeighbors(n_neighbors=k_use + 1).fit(coords)
+        distances, indices = nbrs.kneighbors(coords)
+    # Skip self (index 0) — neighbours are columns 1..k_use
+    dists = distances[:, 1:]          # (n, k_use)
+    nbr_idx = indices[:, 1:]          # (n, k_use)
+    weights = np.exp(-0.5 * (dists / max(bandwidth, 1e-3)) ** 2)  # Gaussian
+    weight_sum = weights.sum(axis=1, keepdims=True)
+    weight_sum[weight_sum < 1e-12] = 1.0
+    weights = weights / weight_sum
+    smoothed = (weights * predictions[nbr_idx]).sum(axis=1)
+    return smoothed.astype(np.float32)
+
+
+def score_model_spatial_consistency(predictions, coords, bandwidth=500):
+    """Label-free spatial consistency score for a set of model predictions.
+
+    Computes ``pseudo_residuals = predictions - _spatial_smooth(predictions)``
+    and returns Moran's I on those pseudo-residuals (via
+    ``calculate_fold_spatial_autocorr``).  Lower Moran's I = spatially
+    consistent predictions = better model for label-free hyperparameter
+    selection.
+
+    Parameters
+    ----------
+    predictions : array-like, shape (n,)
+    coords : array-like, shape (n, 2)
+    bandwidth : float, metres — Gaussian kernel bandwidth for IDW smoothing
+
+    Returns
+    -------
+    float : Moran's I on pseudo-residuals (lower is better).
+            Returns 0.0 on any failure.
+    """
+    try:
+        predictions = np.asarray(predictions, dtype=np.float32)
+        coords = np.asarray(coords)
+        if len(predictions) < 10:
+            return 0.0
+        from sklearn.neighbors import NearestNeighbors
+        k = min(8, len(coords) - 1)
+        nbrs = NearestNeighbors(n_neighbors=k + 1).fit(coords)
+        distances, indices = nbrs.kneighbors(coords)
+        smoothed = _spatial_smooth(predictions, coords, bandwidth=bandwidth,
+                                   _precomputed=(distances, indices))
+        pseudo_residuals = predictions - smoothed
+        return calculate_fold_spatial_autocorr(pseudo_residuals, coords,
+                                               _precomputed_indices=indices)
+    except Exception:
+        return 0.0
+
 
 def estimate_spatial_autocorrelation_range(coords, y, max_distance=None, n_bins=20, sample_size=5000):
     """
@@ -480,6 +538,223 @@ def spatial_kfold_enhanced(X, y, coords, n_splits=5, block_size=None, buffer_siz
     return folds
 
 
+def latent_guided_spatial_kfold(
+    X,
+    y,
+    coords,
+    n_splits=5,
+    block_size=None,
+    buffer_size=0,
+    method="block",
+    stratify_y=True,
+    prior_trunk=None,
+    alpha_val: float = 1.0,
+    vsba_scoring: bool = False,
+    corr_payload: dict | None = None,
+    vsba_n_epochs: int = 20,
+):
+    """
+    Wrapper around ``spatial_kfold_enhanced`` that annotates folds with
+    Area-of-Applicability (AoA) dissimilarity scores when a prior-city
+    trunk is available (multi-city continual mode).
+
+    Folds are generated via geographic blocking exactly as before.
+    If ``prior_trunk`` is provided, each fold is scored via the NNCV
+    dissimilarity index (Meyer et al. 2021)::
+
+        D_i = min_d(test_i → train_embeddings) / mean_d(train_embeddings)
+
+    Folds where > 30% of test points have D_i > 1.5 are logged as
+    out-of-distribution (OOD-heavy).  The fold assignments are unchanged.
+
+    Parameters
+    ----------
+    prior_trunk : SPARCMetaLearner | None
+        Frozen trunk loaded from a prior city in CityRegistry.
+        When ``None`` (single-city mode) the function is a pure
+        pass-through to ``spatial_kfold_enhanced``.
+    alpha_val : float
+        Constant process-rate value used for latent embedding. Default 1.0.
+    """
+    folds = spatial_kfold_enhanced(
+        X=X,
+        y=y,
+        coords=coords,
+        n_splits=n_splits,
+        block_size=block_size,
+        buffer_size=buffer_size,
+        method=method,
+        stratify_y=stratify_y,
+    )
+
+    if prior_trunk is None:
+        return folds
+
+    # ---- Latent-space AoA annotation (multi-city continual mode only) ----
+    try:
+        import torch
+        from sklearn.metrics.pairwise import euclidean_distances
+        from sklearn.neighbors import NearestNeighbors as _NNModel
+
+        X_arr = np.asarray(X, dtype=np.float32)
+        N = len(X_arr)
+        physics_t = torch.from_numpy(X_arr)
+        alpha_t = torch.full((N, 1), alpha_val, dtype=torch.float32)
+
+        with torch.no_grad():
+            embeddings = prior_trunk.encode(physics_t, alpha_t).cpu().numpy()  # (N, hidden_dim)
+
+        rng_aoa = np.random.RandomState(42)
+        for fold_idx, (train_idx, test_idx) in enumerate(folds):
+            if len(train_idx) == 0 or len(test_idx) == 0:
+                continue
+
+            emb_train = embeddings[train_idx]
+            emb_test = embeddings[test_idx]
+
+            # mean_d(train, train) — sampled to keep cost linear
+            n_sample = min(500, len(emb_train))
+            sample_idx = rng_aoa.choice(len(emb_train), n_sample, replace=False)
+            emb_sample = emb_train[sample_idx]
+            d_tt = euclidean_distances(emb_sample, emb_sample)
+            off_diag = d_tt[np.triu_indices(n_sample, k=1)]
+            mean_d_train = float(off_diag.mean()) if len(off_diag) > 0 else 1.0
+            if mean_d_train == 0.0:
+                mean_d_train = 1.0  # guard against degenerate trunk
+
+            # min_d(test_i → train)
+            nn_model = _NNModel(n_neighbors=1, algorithm="ball_tree")
+            nn_model.fit(emb_train)
+            min_dists, _ = nn_model.kneighbors(emb_test)
+            D_i = min_dists[:, 0] / mean_d_train
+
+            ood_frac = float((D_i > 1.5).mean())
+            if ood_frac > 0.30:
+                print(
+                    f"Fold {fold_idx + 1}: {ood_frac * 100:.0f}% OOD test points "
+                    f"(AoA D > 1.5) — flagged as out-of-distribution"
+                )
+            else:
+                print(f"Fold {fold_idx + 1} AoA: {ood_frac * 100:.0f}% OOD (D > 1.5, threshold 30%)")
+
+    except Exception as exc:
+        print(f"Latent AoA annotation failed (non-fatal): {exc}")
+
+    # ---- VSBA label-free fold quality scoring ----
+    if vsba_scoring:
+        try:
+            X_arr = np.asarray(X, dtype=np.float32)
+            coords_arr = np.asarray(coords, dtype=np.float32)
+            _vsba_fold_quality_score(
+                X_arr, coords_arr, folds,
+                corr_payload=corr_payload,
+                n_epochs=vsba_n_epochs,
+            )
+        except Exception as exc:
+            print(f"VSBA fold scoring failed (non-fatal): {exc}")
+
+    return folds
+
+
+def _vsba_fold_quality_score(
+    X: np.ndarray,
+    coords: np.ndarray,
+    folds: list,
+    corr_payload: dict | None = None,
+    n_epochs: int = 20,
+    latent_dim: int = 16,
+    device: str = "cpu",
+) -> list[dict]:
+    """Train a VSBA on training-fold data and score each test fold by ELBO.
+
+    Parameters
+    ----------
+    X : (N, F) float array
+        Standardised feature matrix (same input as SPARC surrogates).
+    coords : (N, 2) float array
+        Spatial coordinates in world units.
+    folds : list of (train_idx, test_idx)
+        CV fold assignments from ``spatial_kfold_enhanced`` or
+        ``latent_guided_spatial_kfold``.
+    corr_payload : dict, optional
+        Stage 0 Matérn correlogram payload (``{"nu": …, "kappa": …}``).
+        When provided, seeds ν and ρ from the correlogram fit.
+    n_epochs : int
+        Training epochs for the VSBA. Default 20.
+    latent_dim : int
+        Latent space dimensionality. Default 16.
+    device : str
+        PyTorch device. Default "cpu".
+
+    Returns
+    -------
+    list of dict
+        Per-fold dict with keys:
+        ``{"fold": int, "elbo_score": float, "ood_label": bool,
+           "elbo_percentile": float}``
+    """
+    try:
+        from sparc.models.vsba import VariationalSpatialBlockAutoencoder
+    except ImportError:
+        print("VSBA: sparc.models.vsba not available — skipping fold scoring")
+        return []
+
+    n_features = X.shape[1]
+
+    # Train VSBA on the union of all training indices (leave-one-out basis)
+    # Use the union across all folds so it sees representative coverage.
+    all_train_idx = np.unique(
+        np.concatenate([tr for tr, _ in folds]) if folds else np.arange(len(X))
+    )
+    X_train = X[all_train_idx].astype(np.float32)
+    coords_train = coords[all_train_idx].astype(np.float32)
+
+    vsba = VariationalSpatialBlockAutoencoder.from_correlogram(
+        corr_payload,
+        n_features=n_features,
+        latent_dim=latent_dim,
+    )
+    try:
+        vsba.fit(X_train, coords_train, n_epochs=n_epochs, device=device)
+    except Exception as exc:
+        print(f"VSBA training failed (non-fatal): {exc}")
+        return []
+
+    # Score each test fold
+    scores = []
+    for fold_idx, (_, test_idx) in enumerate(folds):
+        if len(test_idx) == 0:
+            scores.append({"fold": fold_idx + 1, "elbo_score": float("nan"),
+                           "ood_label": False, "elbo_percentile": 50.0})
+            continue
+        try:
+            score = vsba.elbo_score(
+                X[test_idx].astype(np.float32),
+                coords[test_idx].astype(np.float32),
+                device=device,
+            )
+        except Exception:
+            score = float("nan")
+        scores.append({"fold": fold_idx + 1, "elbo_score": score,
+                       "ood_label": False, "elbo_percentile": float("nan")})
+
+    # Annotate percentile ranks and OOD flag (below 10th percentile)
+    valid_scores = [s["elbo_score"] for s in scores if not math.isnan(s["elbo_score"])]
+    if valid_scores:
+        p10 = float(np.percentile(valid_scores, 10))
+        for s in scores:
+            if not math.isnan(s["elbo_score"]):
+                pct = float(np.mean(np.array(valid_scores) <= s["elbo_score"]) * 100)
+                s["elbo_percentile"] = pct
+                s["ood_label"] = s["elbo_score"] <= p10
+                label = "OOD" if s["ood_label"] else "in-dist"
+                print(
+                    f"  Fold {s['fold']} VSBA ELBO: {s['elbo_score']:.4f} "
+                    f"(p{pct:.0f}, {label})"
+                )
+
+    return scores
+
 
 class EnhancedSpatialCV:
     """
@@ -493,7 +768,44 @@ class EnhancedSpatialCV:
         self.base_config = load_config()
         # Centralised physics constraints from project.yml (or legacy defaults)
         self._monotone_constraints = load_monotone_constraints(self.base_config)
-    
+
+    def _load_prior_trunk(self):
+        """
+        Try to load the prior-city trunk checkpoint from CityRegistry for
+        latent-space AoA scoring.  Returns None on single-city runs or
+        when the registry / prior city are not configured.
+        """
+        registry_path = self.base_config.get("continual", {}).get("registry_path")
+        prior_city = self.base_config.get("continual", {}).get("prior_city")
+        if not registry_path or not prior_city:
+            return None
+        try:
+            from sparc.registry.city_registry import CityRegistry
+            from sparc.models.neural_meta import SPARCMetaLearner
+
+            record = CityRegistry(registry_path).load_city(prior_city)
+            if record.trunk_checkpoint is None:
+                return None
+            sd = record.trunk_checkpoint
+            # Infer trunk architecture dims from state-dict weight shapes
+            n_phys = sd["physics_enc.source_enc.net.0.weight"].shape[1]
+            hidden_dim = sd["trunk_fusion.0.weight"].shape[0]
+            trunk = SPARCMetaLearner(
+                n_base_models=3,
+                n_physics_features=n_phys,
+                d_spatial=64,
+                hidden_dim=hidden_dim,
+            )
+            trunk.load_state_dict(sd, strict=False)
+            trunk.eval()
+            for p in trunk.parameters():
+                p.requires_grad_(False)
+            print(f"Loaded prior-city trunk from '{prior_city}' for latent AoA scoring")
+            return trunk
+        except Exception as exc:
+            print(f"Could not load prior trunk for latent AoA (non-fatal): {exc}")
+            return None
+
     def _load_correlogram_results(self):
         """Load correlogram_analysis_results.json — store-first, disk fallback."""
         if hasattr(self, '_correlogram_cache'):
@@ -510,7 +822,7 @@ class EnhancedSpatialCV:
 
     def get_block_size_from_config(self):
         """
-        Get the block size: user config > correlogram results > None.
+        Get the block size: user config > correlogram results > ERM self-supervised > None.
         """
         # 1. User-specified in models.spatial_cv.block_size (via UI or project.yml)
         block_size = self.base_config.get('models', {}).get('spatial_cv', {}).get('block_size', None)
@@ -525,6 +837,23 @@ class EnhancedSpatialCV:
             if opt is not None:
                 print(f"Block size from correlogram analysis: {opt}m")
                 return float(opt)
+
+        # 3. Self-supervised: 10th-percentile of effective ranges from Stage 0 ERM
+        try:
+            from sparc.registry.store import get_active_store
+            _store = get_active_store()
+            if _store is not None:
+                erm = _store.read_struct("0", "effective_range_matrix")
+                if erm is not None:
+                    M = erm.get("range_matrix", [])
+                    ranges = [v for row in M for v in row if v is not None and v > 0]
+                    if ranges:
+                        mer = float(np.percentile(ranges, 10))
+                        mer = max(mer, 500.0)
+                        print(f"Self-supervised block size from MER (p10 of effective ranges): {mer:.0f}m")
+                        return mer
+        except Exception:
+            pass
 
         return None
     
@@ -1047,6 +1376,15 @@ class EnhancedSpatialCV:
             print(f"SEQUENTIAL MODE: Processing folds one at a time")
             print(f"{'='*80}\n")
             oof_predictions = self._sequential_cv_training(X, y, coords, models, model_names, folds, feature_names)
+
+        # --- Label-free spatial consistency scoring (gated by config flag) ---
+        if self.base_config.get('models', {}).get('spatial_cv', {}).get('self_supervised_hparam_scoring', False):
+            _bw = float(self.get_block_size_from_config() or 500.0)
+            print("\n=== Label-Free Spatial Consistency Scores (lower = better) ===")
+            for _mi, _mn in enumerate(model_names):
+                _sc = score_model_spatial_consistency(oof_predictions[:, _mi], coords, bandwidth=_bw)
+                print(f"  {_mn}: spatial_consistency_score = {_sc:.4f}  (bandwidth={_bw:.0f}m)")
+
         # Save OOF predictions to artifacts.db (single source of truth).
         oof_df = pd.DataFrame(oof_predictions, columns=model_names)
         _oof_path = os.path.join(output_dir, 'optimized_oof_predictions.csv')
@@ -1673,15 +2011,16 @@ class EnhancedSpatialCV:
         
         # Generate spatial folds
         print("\n=== Generating Spatial Folds ===")
-        folds = spatial_kfold_enhanced(
+        folds = latent_guided_spatial_kfold(
             X=X_augmented,
             y=y,
             coords=coords,
             n_splits=5,
             block_size=self.get_block_size_from_config(),
             buffer_size=self.get_buffer_size_from_config(),
-            method='block',
-            stratify_y=True
+            method="block",
+            stratify_y=True,
+            prior_trunk=self._load_prior_trunk(),
         )
         
         # Generate OOF predictions

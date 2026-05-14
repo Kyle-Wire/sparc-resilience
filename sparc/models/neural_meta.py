@@ -395,14 +395,17 @@ class SPARCMetaLearner(nn.Module):
         mean : (N,) — posterior mean prediction
         std  : (N,) — epistemic uncertainty (MC std)
         """
+        was_training = self.training
         self.train()  # keep dropout active
         predictions = []
 
-        with torch.no_grad():
+        with torch.inference_mode():
             for _ in range(n_samples):
                 T_pred, _, _ = self.forward(*args, **kwargs)
                 predictions.append(T_pred)
 
+        if not was_training:
+            self.eval()  # restore prior eval state
         predictions = torch.stack(predictions, dim=0)  # (S, N)
         return predictions.mean(dim=0), predictions.std(dim=0)
 
