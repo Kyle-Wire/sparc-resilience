@@ -335,6 +335,47 @@ def _maybe_compile(
         return mod
 
 
+def _pad_batch_to_size(
+    b_idx: np.ndarray,
+    target_size: int,
+    device: torch.device,
+) -> tuple[np.ndarray, torch.Tensor | None]:
+    """Pad *b_idx* to *target_size* by repeating the last element.
+
+    Returns ``(padded_idx, valid_mask)``.  When ``len(b_idx) == target_size``
+    the function is a no-op and returns ``(b_idx, None)`` to avoid the mask
+    allocation on full batches.
+    """
+    n = len(b_idx)
+    if n == target_size:
+        return b_idx, None
+    pad_n = target_size - n
+    padded = np.concatenate([b_idx, np.full(pad_n, b_idx[-1], dtype=b_idx.dtype)])
+    valid_mask = torch.zeros(target_size, dtype=torch.bool, device=device)
+    valid_mask[:n] = True
+    return padded, valid_mask
+
+
+def _capture_cuda_graph(
+    mod: torch.nn.Module,
+    sample_inputs: tuple,
+) -> torch.nn.Module:
+    """Wrap *mod* forward with a CUDA Graph via ``make_graphed_callables``.
+
+    Falls back to the original module when CUDA is unavailable, torch < 2.1
+    does not have ``make_graphed_callables``, or capture raises any error.
+    """
+    if not torch.cuda.is_available():
+        return mod
+    if not hasattr(torch.cuda, "make_graphed_callables"):
+        return mod
+    try:
+        return torch.cuda.make_graphed_callables(mod, sample_inputs)
+    except Exception as exc:
+        logger.warning("CUDA Graph capture skipped (%s)", exc)
+        return mod
+
+
 def _forward_surrogates(
     surrogates: dict[str, torch.nn.Module],
     physics_feats: torch.Tensor,
@@ -963,6 +1004,17 @@ def train_neural_meta(
     _scaler = torch.cuda.amp.GradScaler(enabled=_use_amp)
     if _use_amp:
         logger.info("AMP active (bfloat16)")
+
+    # CU-9b: CUDA Graph batch padding — static shapes required for graph capture.
+    # Reads the cuda_graphs flag from HardwareProfile; off by default.
+    _use_cuda_graphs: bool = False
+    try:
+        from sparc.config.hardware_profile import detect_profile as _dp
+        _use_cuda_graphs = device.type == "cuda" and bool(getattr(_dp(), "cuda_graphs", False))
+    except Exception:
+        pass
+    if _use_cuda_graphs:
+        logger.info("CUDA Graphs enabled — batches padded to static size=%d", batch_size)
 
     # ---- Prepare data ----
     # Stash feature_names into config for _prepare_tensors
@@ -1900,6 +1952,11 @@ def train_neural_meta(
             n_batch_points = 0
 
             for b_idx in batches:
+                # CU-9b: pad last (short) batch to static size for CUDA Graph
+                _valid_mask: torch.Tensor | None = None
+                if _use_cuda_graphs and len(b_idx) < batch_size:
+                    b_idx, _valid_mask = _pad_batch_to_size(b_idx, batch_size, device)
+
                 b_physics = train_physics[b_idx]
                 b_physics_ext = train_physics_ext[b_idx]
                 b_spatial = train_spatial[b_idx]
@@ -2128,6 +2185,7 @@ def train_neural_meta(
                     sparse_laplacian=tensors.get("sparse_laplacian"),
                     valid_laplacian_mask=tensors.get("valid_laplacian_mask"),
                     sheaf_delta=tensors.get("sheaf_delta"),
+                    valid_mask=_valid_mask,
                 )
 
                 # Variance penalty on w(s): encourage spatial diversity
@@ -2188,7 +2246,7 @@ def train_neural_meta(
                 if ema_trunk is not None and _any_jepa:
                     ema_trunk.update(model)
 
-                bsize = len(b_idx)
+                bsize = int(_valid_mask.sum().item()) if _valid_mask is not None else len(b_idx)
                 epoch_loss += total_loss.item() * bsize
                 n_batch_points += bsize
                 for k, v in components.items():
@@ -2568,6 +2626,11 @@ def train_neural_meta(
         rt_epoch_components: dict[str, float] = {}
 
         for b_idx in rt_batches:
+            # CU-9b: pad last (short) batch to static size for CUDA Graph
+            _valid_mask_rt: torch.Tensor | None = None
+            if _use_cuda_graphs and len(b_idx) < batch_size:
+                b_idx, _valid_mask_rt = _pad_batch_to_size(b_idx, batch_size, device)
+
             b_phys = tensors["physics_feats"][b_idx]
             b_phys_ext = tensors["physics_feats_extended"][b_idx]
             b_spat = tensors["X_spatial"][b_idx]
@@ -2776,6 +2839,7 @@ def train_neural_meta(
                 sparse_laplacian=tensors.get("sparse_laplacian"),
                 valid_laplacian_mask=tensors.get("valid_laplacian_mask"),
                 sheaf_delta=tensors.get("sheaf_delta"),
+                valid_mask=_valid_mask_rt,
             )
 
             # Variance penalty on w(s): encourage spatial diversity
@@ -2826,7 +2890,7 @@ def train_neural_meta(
             if final_ema_trunk is not None and _any_jepa_rt:
                 final_ema_trunk.update(final_model)
 
-            bsz = len(b_idx)
+            bsz = int(_valid_mask_rt.sum().item()) if _valid_mask_rt is not None else len(b_idx)
             rt_epoch_loss += total_loss.item() * bsz
             rt_epoch_n += bsz
             for k, v in components.items():
@@ -2902,6 +2966,11 @@ def train_neural_meta(
             swa_epoch_n = 0
 
             for b_idx in swa_batches:
+                # CU-9b: pad last (short) batch to static size for CUDA Graph
+                _valid_mask_swa: torch.Tensor | None = None
+                if _use_cuda_graphs and len(b_idx) < batch_size:
+                    b_idx, _valid_mask_swa = _pad_batch_to_size(b_idx, batch_size, device)
+
                 b_phys = tensors["physics_feats"][b_idx]
                 b_phys_ext = tensors["physics_feats_extended"][b_idx]
                 b_spat = tensors["X_spatial"][b_idx]
@@ -2994,6 +3063,7 @@ def train_neural_meta(
                     sparse_laplacian=tensors.get("sparse_laplacian"),
                     valid_laplacian_mask=tensors.get("valid_laplacian_mask"),
                     sheaf_delta=tensors.get("sheaf_delta"),
+                    valid_mask=_valid_mask_swa,
                 )
 
                 # Variance penalty on w(s): encourage spatial diversity
@@ -3027,7 +3097,7 @@ def train_neural_meta(
                 _scaler.step(final_optimizer)
                 _scaler.update()
 
-                bsz = len(b_idx)
+                bsz = int(_valid_mask_swa.sum().item()) if _valid_mask_swa is not None else len(b_idx)
                 swa_epoch_loss += total_loss.item() * bsz
                 swa_epoch_n += bsz
 

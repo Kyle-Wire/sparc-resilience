@@ -382,13 +382,7 @@ All changes are guarded by `torch.cuda.is_available()` or new profile fields —
 
 - [ ] **CU-9 CUDA Graph capture for the epoch step** — complexity: **high** *(synthesized sub-tasks below)*
   - [x] **CU-9a** `valid_mask` parameter in `sparc_joint_loss` — complexity: **low** — *Done 2026-05-21: Added `valid_mask: torch.Tensor | None = None` to `sparc_joint_loss`; masking applied in MSE, cross-entropy, alpha_prior, and neighborhood terms; PDE/physics terms unchanged; backward compat preserved; 20/20 tests pass.*
-  - [ ] **CU-9b** Static-batch padding helper + CUDA Graph capture in training loops — complexity: **medium**
-    - Add `_pad_batch_to_size(batch_dict, target_size) -> (dict, mask)` helper to `v2_neural_training.py`
-    - Wrap CV fold batch loop and full-retrain batch loop: pad last (short) batch to `batch_size`, pass `valid_mask` to loss
-    - Add `_capture_cuda_graph` helper using `torch.cuda.make_graphed_callables` on the forward+loss+backward sequence
-    - Gate behind `cfg.cuda_graphs: bool` flag (default `False`) to keep CPU/MPS paths untouched
-    - **Files:** `sparc/run/v2_neural_training.py`, `sparc/config/hardware_profile.py`
-    - **Depends on:** CU-9a ✓, CU-1, CU-2, CU-4
+  - [x] **CU-9b** Static-batch padding helper + CUDA Graph capture in training loops — complexity: **medium** — *Done 2026-05-21: Added `_pad_batch_to_size(b_idx, target_size, device)` helper and `_capture_cuda_graph(mod, sample_inputs)` helper to `v2_neural_training.py`. Added `cuda_graphs: bool = False` field to `HardwareProfile` (overridable). Added `_use_cuda_graphs` flag after AMP setup. Applied padding + `valid_mask` in all 3 training loops (CV fold, full-retrain, SWA); `bsize`/`bsz` uses valid count for correct epoch-loss weighting. Gated behind `cuda_graphs=True` — zero behavior change by default. 20/20 tests pass.*
   - **Source:** derivatives.md "CUDA Graph Capture for Zero-Overhead Epoch Step"
   - **Gap:** `torch.compile` is applied to individual models but the full forward→loss→backward→step sequence still has ~50 kernel launches per batch due to Python dispatch overhead between models. `torch.cuda.make_graphed_callables` can capture the entire sequence as a single replay kernel, eliminating launch overhead (~15–30% additional throughput on top of AMP + compile).
   - **Blocker — static shapes required:** `spatial_minibatch_sampler` produces variable-size batches (the last batch per epoch is smaller than `batch_size`). CUDA Graphs require static input shapes. Strategy: pad last batch to full `batch_size` with a boolean `valid_mask` tensor; mask the loss summation. This adds 5–10 lines to the batch loop but is unavoidable.
