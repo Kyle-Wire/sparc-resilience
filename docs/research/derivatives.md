@@ -1,6 +1,6 @@
 # SPARC — Novel Research Derivatives
 
-**Last updated by research agent:** 2026-05-20
+**Last updated by research agent:** 2026-05-20b
 
 This file is maintained by the research agent. Each session, the agent appends its top 3–5 novel cross-pollination ideas here. The synthesis agent reads this file and converts entries into concrete proposals in `backlog.md`.
 
@@ -133,7 +133,21 @@ Each entry follows this structure:
 
 ---
 
-### Causal Bandits for Sequential Intervention Design
+### CUDA Graph Capture for Zero-Overhead Epoch Step
+**Source fields:** `sparc/run/v2_neural_training.py` (epoch loop) × CUDA Graphs (NVIDIA 2020; PyTorch `torch.cuda.CUDAGraph`) × `_maybe_compile()` (already wired)
+**Core idea:** `torch.compile` has already traced the computation graph. CUDA Graphs can go further: capture the entire forward + backward + optimizer step as a single replay-able GPU kernel sequence. The `torch.cuda.make_graphed_callables` API handles first-step warmup automatically. The spatial minibatch sampler produces fixed-size batches for all but the final batch, which is the prerequisite for CUDA Graph's static shape requirement. Captured graphs eliminate ~50 kernel launch overheads per batch step (~0.1–0.5 ms per batch on modern hardware). This is complementary to AMP (CU-2) — a CUDA Graph captures a BF16 autocast region equally well. The `_maybe_compile` pattern already in place is the natural insertion point for `make_graphed_callables` after compile, guarded by `torch.cuda.is_available() and hasattr(torch.cuda, "make_graphed_callables")`.
+**Potential impact:** performance (15–30% additional throughput on A100/H100 on top of AMP + torch.compile; effectively free throughput with zero functional change), new capability (enables sub-millisecond batch processing for real-time city digital twin updates)
+**Relevant SPARC modules:** `sparc/run/v2_neural_training.py` (`_maybe_compile`, epoch loop), `sparc/training/optimizer.py` (`training_step`)
+**Status:** in-backlog
+
+---
+
+### Multi-GPU Fold-Parallel Training via `DistributedDataParallel`
+**Source fields:** `sparc/run/v2_neural_training.py` (CV fold loop) × PyTorch `DistributedDataParallel` (DDP) × `HardwareProfile.gpu_count` (once CU-1 adds this field)
+**Core idea:** Each CV fold is fully independent — no cross-fold communication during training, only OOF collection afterward. With K GPUs, fold `i` can be assigned to GPU `i`, giving K× training speedup for the CV phase. `torch.multiprocessing.spawn` with DDP init and one process per GPU follows the standard PyTorch multi-GPU pattern. The `gpu_count` field in `HardwareProfile` (once CU-1 is implemented) provides the worker count. For the full retrain, standard DDP with `batch_size * world_size` linear scaling. The spatial minibatch sampler needs a partitioned-N version for DDP (each rank processes a disjoint spatial partition — the natural partition is already geographic blocks from `spatial_kfold_enhanced`). EWC and OT alignment penalties need gradient reduction across ranks. The JEPA pretraining loop is also trivially data-parallel (same architecture, separate random masks per rank). This gives SPARC a clear path to K× training speedup for large cities (N > 10k) with zero accuracy change.
+**Potential impact:** performance (K× training speedup for K-GPU machines; 2-GPU = 2× for free; enables running 10-fold CV in same wall-clock as 1-fold CV), new capability (enables training on large-N cities that are memory-constrained per GPU but feasible with tensor parallel split), methodological (unlock distributed training as a first-class pipeline mode)
+**Relevant SPARC modules:** `sparc/run/v2_neural_training.py` (fold loop, full retrain), `sparc/config/hardware_profile.py` (`gpu_count` field from CU-1), `sparc/training/optimizer.py`, `sparc/training/ewc.py` (gradient reduction for EWC penalty)
+**Status:** in-backlog
 **Source fields:** Multi-armed bandits with Thompson sampling (Thompson 1933; Russo et al. 2018 *A Tutorial on Thompson Sampling*) × `sparc/decision/policy_learning.py` (`EmpiricalWelfareMaximizer`) × `sparc/causal/spatial_cate.py` (`CATEGPSurface`) × `sparc/interventions/scenario_simulator.py`
 **Core idea:** `EmpiricalWelfareMaximizer` learns a one-shot policy: given AIPW scores, choose treatments to maximize welfare under budget. But urban heat interventions are sequential — planting canopy in year 1 changes the effective treatment response for impervious reduction in year 2 (interaction effects, carry-over). A Thompson sampling bandit treats each intervention type (canopy, albedo, impervious) as an arm. The posterior over arm rewards is the CATE GP surface from `spatial_cate.py` — a Matérn GP fitted with Stage 0 covariance parameters. At each "decision round" (year), the bandit samples from the CATE posterior via `sklearn.GaussianProcessRegressor.sample_y()`, executes the highest-posterior-sample arm, and updates the GP posterior with the observed spatial field change (simulated via `scenario_simulator.py` as a cheap oracle). After T rounds, the optimal multi-year intervention sequence is revealed. The infrastructure is nearly complete: add `sample_posterior()` to `CATEGPSurface` (~5 lines exposing `gpr.sample_y()`) and write a `CausalBandit` class (~80 lines). `EmpiricalWelfareMaximizer` becomes the one-shot baseline to beat. Provably sublinear regret (GP-UCB; Srinivas et al. 2012).
 **Potential impact:** new capability (optimal multi-year intervention planning under uncertainty — directly relevant for municipal climate adaptation with budget constraints), methodological (bridges causal inference and sequential decision-making, publishable as GP-UCB / Thompson sampling over causal posteriors), performance (sublinear regret vs. greedy one-shot allocation from `EmpiricalWelfareMaximizer`)

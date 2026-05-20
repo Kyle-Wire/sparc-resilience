@@ -24,6 +24,12 @@ def _patch_vm(monkeypatch, total_gb: float, available_gb: float | None = None):
     hp.reset_profile_cache()
 
 
+def _patch_no_gpu(monkeypatch):
+    """Patch _detect_gpu to simulate a CPU-only machine."""
+    monkeypatch.setattr(hp, "_detect_gpu", lambda: (False, 0, 0.0, ""))
+    hp.reset_profile_cache()
+
+
 @pytest.fixture(autouse=True)
 def _clear_env(monkeypatch):
     monkeypatch.delenv("SPARC_HARDWARE_TIER", raising=False)
@@ -36,6 +42,7 @@ def _clear_env(monkeypatch):
 
 def test_low_tier_8gb_machine(monkeypatch):
     _patch_vm(monkeypatch, total_gb=8.0)
+    _patch_no_gpu(monkeypatch)
     profile = hp.detect_profile()
 
     assert profile.tier == "low"
@@ -47,6 +54,21 @@ def test_low_tier_8gb_machine(monkeypatch):
     assert profile.force_cpu is True
     assert profile.high_memory_mode is False
     assert profile.total_ram_gb == pytest.approx(8.0, rel=0.01)
+
+
+def test_low_tier_with_gpu_enables_cuda(monkeypatch):
+    """CU-1: low-RAM machine with a GPU should have force_cpu=False."""
+    _patch_vm(monkeypatch, total_gb=8.0)
+    monkeypatch.setattr(hp, "_detect_gpu", lambda: (True, 1, 8.0, "NVIDIA GeForce RTX 3070"))
+    hp.reset_profile_cache()
+    profile = hp.detect_profile()
+
+    assert profile.tier == "low"
+    assert profile.force_cpu is False
+    assert profile.gpu_available is True
+    assert profile.gpu_vram_gb == pytest.approx(8.0)
+    assert profile.gpu_name == "NVIDIA GeForce RTX 3070"
+    assert profile.gpu_batch_size == 2048  # floor(8 * 256)
 
 
 def test_standard_tier_16gb_machine(monkeypatch):
@@ -102,6 +124,7 @@ def test_profile_is_cached(monkeypatch):
 
 def test_banner_is_human_readable(monkeypatch):
     _patch_vm(monkeypatch, total_gb=8.0)
+    _patch_no_gpu(monkeypatch)
     banner = hp.detect_profile().banner()
     assert "tier=low" in banner
     assert "ram=" in banner

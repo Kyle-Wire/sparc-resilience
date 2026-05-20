@@ -294,6 +294,9 @@ def fit_matern_bayes(
         ]
         chain_results = []
         try:
+            _nuts_device = "cuda" if torch.cuda.is_available() else "cpu"
+            if _nuts_device == "cuda":
+                logger.debug("Matérn NUTS: using cuda")
             for chain_idx in range(max(1, n_chains)):
                 res = run_nuts(
                     log_prob_fn=make_log_prob(nu_val),
@@ -303,7 +306,7 @@ def fit_matern_bayes(
                     max_depth=8,
                     target_accept=0.80,
                     seed=seed + chain_idx,
-                    device="cpu",
+                    device=_nuts_device,
                 )
                 chain_results.append(res)
         except Exception as exc:

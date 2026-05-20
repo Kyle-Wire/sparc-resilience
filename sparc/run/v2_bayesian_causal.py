@@ -296,11 +296,31 @@ def run_bayesian_causal(
             mc3_results=mc3_results,
         )
 
+    # ---- Wager (2025) audit add-ons (auto-run at end of Stage 3) ----
+    wager2025_summary: dict = {}
+    try:
+        from sparc.run.wager2025_addons import run_wager2025_gaps as _run_wager
+        from sparc.causal.dag_definition import dag_to_networkx, get_node_roles
+        _G = dag_to_networkx(dag_def)
+        _roles = get_node_roles(_G)
+        wager2025_summary = _run_wager(
+            data=data,
+            config=config,
+            dag_def=dag_def,
+            graph=_G,
+            roles=_roles,
+            output_dir=str(output_dir / "wager2025"),
+            nuts_results=nuts_results,
+        )
+    except Exception as _w_exc:
+        logger.warning("Wager-2025 add-ons failed (non-fatal): %s", _w_exc)
+
     return {
         "mc3_results": mc3_results,
         "nuts_results": nuts_results,
         "edge_probs": edge_probs,
         "mc3_summary": mc3_summary,
+        "wager2025_summary": wager2025_summary,
     }
 
 

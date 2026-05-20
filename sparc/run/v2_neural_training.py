@@ -956,6 +956,14 @@ def train_neural_meta(
         pass
     logger.info("V2 neural training on device: %s", device)
 
+    # CU-2: Automatic Mixed Precision — active only on CUDA (Ampere/Hopper).
+    # GradScaler handles FP16 loss scaling; bfloat16 doesn't need scaling but
+    # we keep the Scaler for uniformity (it is a no-op when enabled=False).
+    _use_amp: bool = device.type == "cuda"
+    _scaler = torch.cuda.amp.GradScaler(enabled=_use_amp)
+    if _use_amp:
+        logger.info("AMP active (bfloat16)")
+
     # ---- Prepare data ----
     # Stash feature_names into config for _prepare_tensors
     config["_feature_names"] = feature_names
@@ -1232,6 +1240,19 @@ def train_neural_meta(
     # CV Loop
     # ==================================================================
     batch_size = training_cfg.get("batch_size", 2048)
+    # CU-3: Override with GPU-optimised batch size when CUDA is active.
+    if device.type == "cuda":
+        try:
+            from sparc.config.hardware_profile import detect_profile as _dp
+            _hp = _dp()
+            if _hp.gpu_batch_size > batch_size:
+                logger.info(
+                    "GPU batch size override: %d → %d (%.1f GB VRAM)",
+                    batch_size, _hp.gpu_batch_size, _hp.gpu_vram_gb,
+                )
+                batch_size = _hp.gpu_batch_size
+        except Exception:  # pragma: no cover
+            pass
 
     # --- Continual learning (EWC) config ---
     _cont = config.get("_continual", {})
@@ -1843,9 +1864,6 @@ def train_neural_meta(
 
         if use_minibatch:
             from sparc.training.optimizer import spatial_minibatch_sampler
-            fold_cardinal_np, _ = _build_cardinal_neighbors(
-                coords[train_idx], resolution=resolution,
-            )
             logger.info(
                 "  Using spatial minibatching: N=%d, batch_size=%d",
                 N_train, batch_size,
@@ -1870,7 +1888,7 @@ def train_neural_meta(
                 # Spatial minibatch: iterate over contiguous batches
                 batches = list(spatial_minibatch_sampler(
                     coords[train_idx],
-                    fold_cardinal.cpu().numpy(),
+                    fold_cardinal_np,
                     batch_size=batch_size,
                     n_batches=max(1, N_train // batch_size),
                 ))
@@ -1908,7 +1926,9 @@ def train_neural_meta(
                 )
                 b_gwrf_dists = fold_knn_dists[b_idx][:, :gwrf_k]
 
-                # Forward: surrogates → meta-learner
+                # Forward: surrogates → meta-learner  (inside AMP context)
+                _fwd_amp = torch.autocast("cuda", dtype=torch.bfloat16, enabled=_use_amp)
+                _fwd_amp.__enter__()
                 surrogate_preds, surrogate_std = _forward_surrogates(
                     surrogates, b_physics, b_spatial,
                     knn_index=b_gwrf_knn, knn_dists=b_gwrf_dists,
@@ -1940,6 +1960,12 @@ def train_neural_meta(
                     knn_dists=fold_knn_dists[b_idx],
                     time_idx=tensors["time_idx"][b_idx] if tensors["time_idx"] is not None else None,
                 )
+                # Close AMP context; cast mixed-precision outputs to FP32 for PDE loss.
+                _fwd_amp.__exit__(None, None, None)
+                if _use_amp:
+                    T_pred = T_pred.float()
+                    if isinstance(exceedance, torch.Tensor):
+                        exceedance = exceedance.float()
 
                 # ---- JEPA forward (Phase 1) ----
                 # Compute the masked context embedding from the online
@@ -2128,7 +2154,7 @@ def train_neural_meta(
                 optimizer.zero_grad()
                 if jepa_optimizer is not None:
                     jepa_optimizer.zero_grad()
-                total_loss.backward()
+                _scaler.scale(total_loss).backward()
 
                 # Global gradient norm clipping across all components
                 all_params = (
@@ -2140,11 +2166,15 @@ def train_neural_meta(
                     all_params.extend(latent_predictor.parameters())
                 if action_embed is not None:
                     all_params.extend(action_embed.parameters())
+                _scaler.unscale_(optimizer)
+                if jepa_optimizer is not None:
+                    _scaler.unscale_(jepa_optimizer)
                 torch.nn.utils.clip_grad_norm_(all_params, clip_norm)
 
-                optimizer.step()
+                _scaler.step(optimizer)
                 if jepa_optimizer is not None:
-                    jepa_optimizer.step()
+                    _scaler.step(jepa_optimizer)
+                _scaler.update()
                 # EMA target trunk update — must follow the optimizer
                 # step so the target tracks the *post-update* online
                 # weights.  Skipped when JEPA contribution was zero
@@ -2247,6 +2277,11 @@ def train_neural_meta(
 
         oof_preds[test_idx] = mean_pred[test_idx].cpu().numpy()
         oof_std[test_idx] = std_pred[test_idx].cpu().numpy()
+
+        # CU-5: Release fold models immediately to free CUDA allocator memory.
+        del model, surrogates, process_net, source_net
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
 
     # ---- Denormalise OOF predictions back to original scale ----
     oof_preds = oof_preds * y_std + y_mean
@@ -2555,14 +2590,10 @@ def train_neural_meta(
             )
             b_gwrf_dists_rt = full_knn_dists_rt[b_idx][:, :gwrf_k]
 
+            # Forward: surrogates → meta-learner  (inside AMP context)
+            _fwd_amp_rt = torch.autocast("cuda", dtype=torch.bfloat16, enabled=_use_amp)
+            _fwd_amp_rt.__enter__()
             surrogate_preds, surrogate_std = _forward_surrogates(
-                final_surrogates, b_phys, b_spat,
-                knn_index=b_gwrf_knn_rt, knn_dists=b_gwrf_dists_rt,
-            )
-            base_input = torch.stack(surrogate_preds, dim=1)
-
-            pr_input = b_phys[:, pr_col_idxs]
-            alpha_full = final_process(pr_input)
             alpha = (
                 alpha_full
                 if alpha_full.shape[-1] == 1
@@ -2584,6 +2615,12 @@ def train_neural_meta(
                 knn_dists=full_knn_dists_rt[b_idx],
                 time_idx=tensors["time_idx"][b_idx] if tensors["time_idx"] is not None else None,
             )
+            # Close AMP context; cast mixed-precision outputs to FP32 for PDE loss.
+            _fwd_amp_rt.__exit__(None, None, None)
+            if _use_amp:
+                T_pred = T_pred.float()
+                if isinstance(exceedance, torch.Tensor):
+                    exceedance = exceedance.float()
 
             # ---- JEPA forward (final retrain) ----
             b_jepa_h_pred = None
@@ -2758,7 +2795,7 @@ def train_neural_meta(
             final_optimizer.zero_grad()
             if final_jepa_optimizer is not None:
                 final_jepa_optimizer.zero_grad()
-            total_loss.backward()
+            _scaler.scale(total_loss).backward()
             all_p = list(final_model.parameters()) + list(final_process.parameters())
             for s in final_surrogates.values():
                 all_p.extend(s.parameters())
@@ -2766,10 +2803,14 @@ def train_neural_meta(
                 all_p.extend(final_latent_predictor.parameters())
             if final_action_embed is not None:
                 all_p.extend(final_action_embed.parameters())
-            torch.nn.utils.clip_grad_norm_(all_p, clip_norm)
-            final_optimizer.step()
+            _scaler.unscale_(final_optimizer)
             if final_jepa_optimizer is not None:
-                final_jepa_optimizer.step()
+                _scaler.unscale_(final_jepa_optimizer)
+            torch.nn.utils.clip_grad_norm_(all_p, clip_norm)
+            _scaler.step(final_optimizer)
+            if final_jepa_optimizer is not None:
+                _scaler.step(final_jepa_optimizer)
+            _scaler.update()
             _any_jepa_rt = (
                 jepa_lambda_eff > 0.0
                 or jepa_lambda_scenario_eff > 0.0
@@ -2876,6 +2917,9 @@ def train_neural_meta(
                 )
                 b_gwrf_dists_swa = full_knn_dists_rt[b_idx][:, :gwrf_k]
 
+                # Forward: surrogates → meta-learner  (inside AMP context)
+                _fwd_amp_swa = torch.autocast("cuda", dtype=torch.bfloat16, enabled=_use_amp)
+                _fwd_amp_swa.__enter__()
                 surrogate_preds, surrogate_std_swa = _forward_surrogates(
                     final_surrogates, b_phys, b_spat,
                     knn_index=b_gwrf_knn_swa, knn_dists=b_gwrf_dists_swa,
@@ -2905,6 +2949,12 @@ def train_neural_meta(
                     knn_dists=full_knn_dists_rt[b_idx],
                     time_idx=tensors["time_idx"][b_idx] if tensors["time_idx"] is not None else None,
                 )
+                # Close AMP context; cast outputs to FP32 for PDE loss.
+                _fwd_amp_swa.__exit__(None, None, None)
+                if _use_amp:
+                    T_pred = T_pred.float()
+                    if isinstance(exceedance, torch.Tensor):
+                        exceedance = exceedance.float()
 
                 total_loss, _ = sparc_joint_loss(
                     T_pred=T_pred,
@@ -2961,12 +3011,14 @@ def train_neural_meta(
                         total_loss = total_loss + _ot_lambda * ot_loss
 
                 final_optimizer.zero_grad()
-                total_loss.backward()
+                _scaler.scale(total_loss).backward()
                 all_p = list(final_model.parameters()) + list(final_process.parameters())
                 for s in final_surrogates.values():
                     all_p.extend(s.parameters())
+                _scaler.unscale_(final_optimizer)
                 torch.nn.utils.clip_grad_norm_(all_p, clip_norm)
-                final_optimizer.step()
+                _scaler.step(final_optimizer)
+                _scaler.update()
 
                 bsz = len(b_idx)
                 swa_epoch_loss += total_loss.item() * bsz
