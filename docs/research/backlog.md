@@ -1,7 +1,7 @@
 # SPARC — Research Backlog
 
 **Maintained by:** synthesis agent
-**Last updated:** 2026-05-12 (self-grill revisions)
+**Last updated:** 2026-05-20 (research scan + Wager runner dead-code finding)
 
 Items are ranked by impact/effort. Improvement agent picks the top `[ ]` item with complexity **low** or **medium**.
 
@@ -27,9 +27,11 @@ Complexity: **low** = < 1 hour of focused edits | **medium** = half-day | **high
   - Add `fisher_matrix` + `trunk_state_dict` to `train_neural_meta()` return dict (Gap 1.4 — bundle in same PR).
   - Success criterion: `sparc continual --cities a.yml,b.yml` runs without `ImportError`; second city's loss log shows `ewc_penalty > 0`.
 
-- [!] **1.1-b Wire replay loss into training epoch loop** — complexity: medium — **BLOCKED: interface mismatch**
-  - `compute_replay_loss()` calls `model(features=X)` but `SPARCMetaLearner.forward()` requires `base_preds, physics_feats, X_spatial, coords, knn_index, alpha`. Must redesign `compute_replay_loss()` to accept a SPARC-compatible forward dict before this can be wired.
-  - **Do not bundle with 1.1-a.** Fix the interface first, then wire.
+- [!] **1.1-b Wire replay loss into training epoch loop** — complexity: medium — **BLOCKED: interface mismatch (2-phase fix)**
+  - **Phase 1 — Interface redesign:** `compute_replay_loss()` calls `model(features=X)` but `SPARCMetaLearner.forward()` requires `(base_preds, physics_feats, X_spatial, coords, knn_index, alpha)`. Must redesign `compute_replay_loss()` signature to accept a SPARC-compatible dict.
+  - **Phase 2 — Coreset schema extension:** Spatial encodings can be recomputed from `coords` cheaply at replay time (no schema change needed). Surrogate predictions must be cached: either (a) load saved surrogate checkpoints at replay time (surrogates already persisted to disk — safe), or (b) cache surrogate outputs in the registry at city-registration time (faster but requires CityRegistry schema change). Option (a) recommended.
+  - **Do not bundle with 1.1-a.** Fix the interface + cache the surrogate outputs, then wire.
+  - **Self-grill 2026-05-20:** Both phases confirmed required. Complexity is medium (not low). Cannot be done in a single pass without first testing the 2-city continual loop.
 
 - [x] **1.2 Wire temporal features into training runner** — complexity: low (~30 lines, 1 file) — *Done 2026-05-12: added `time_embed_dim = neural_cfg.get("time_embed_dim", 0)`, passed it to both SPARCMetaLearner constructors; built time_idx tensor in `_prepare_tensors` via `get_snapshot_time_indices()`; passed `time_idx` to all 3 forward call sites (CV fold, main retrain, SWA). Guarded by `if tensors["time_idx"] is not None`.*
   - File: `sparc/run/v2_neural_training.py`
@@ -47,6 +49,25 @@ Complexity: **low** = < 1 hour of focused edits | **medium** = half-day | **high
   - Success criterion: positive `r2_improvement` in `transfer_comparison.json`.
 
 ### Phase 5 — Causal Inference Leadership
+
+- [ ] **W-1 Wire `run_wager2025_gaps()` into Stage 3 pipeline** — complexity: **low** (~15 lines, 1 file)
+  - **Gap:** `sparc/run/wager2025_addons.py::run_wager2025_gaps()` is a complete auto-runner for all 10 Wager (2025) audit gaps. All 10 underlying estimator modules are implemented and individually tested (`_audit.py` + `GAP_N_IMPLEMENTED` flags). The function is **never called** — no import or call site exists in `v2_bayesian_causal.py` or `run_enhanced_pipeline.py`. All 10 Wager gaps are dead code during a default `sparc run`.
+  - **File:** `sparc/run/v2_bayesian_causal.py` — after NUTS block completes (~line 300), add:
+    ```python
+    from sparc.run.wager2025_addons import run_wager2025_gaps as _run_wager
+    from sparc.causal.utils import dag_to_networkx, get_node_roles
+    _G = dag_to_networkx(dag_def)
+    _roles = get_node_roles(_G)
+    run_wager2025_gaps(
+        data=data, config=config, dag_def=dag_def,
+        graph=_G, roles=_roles,
+        output_dir=str(output_dir / "wager2025"),
+        nuts_results=nuts_results,
+    )
+    ```
+  - **Why safe:** Every gap is wrapped in `try/except` — a failing estimator logs a warning and continues, never aborting Stage 3. Strictly additive: no existing logic changes.
+  - **Success criterion:** `sparc run --stage 3` produces `Stage_3_Causal/wager2025/` with `overlap_diagnostics.json`, `cbps_balance.json`, `policy_learning.json` etc. `_audit.report()` shows 10/10 gaps addressed.
+  - **Academic source:** Wager (2025) *Introduction to Causal Inference* — each gap is a documented estimator from the text.
 
 - [x] **GP regression over CATE surface** — complexity: medium — *Done 2026-05-12: Added `CATEGPSurface` class and `_moran_i()` helper to `sparc/causal/spatial_cate.py`. `CATEGPSurface` uses `sklearn.gaussian_process.GaussianProcessRegressor` with a `ConstantKernel × Matérn` kernel seeded from the Stage 0 correlogram payload (`nu`, `kappa.mean`) via `CATEGPSurface.from_correlogram()`. Fits on sub-sampled CATE estimates (default 2 000 rows, O(N³) GPR) and exposes `predict(coords_norm) → (mean, std)`. Moran's I (normality-assumption variance) on GP residuals reports `I`, `z_score`, `p_value`, and a one-line interpretation. Wired into `SpatialCATEEstimator.fit_gp_surface()` which loops over all treatments, returns `{treatment: {"gp_mean", "gp_std", "moran_i", "log_ml", "kernel_params"}}`, and stores per-treatment `CATEGPSurface` in `self._gp_surfaces`.*
 
@@ -291,7 +312,23 @@ Created `sparc/causal/pde_identifiability.py` with `compute_dag_pde_plausibility
 
 ---
 
-### Session Digest — 2026-05-14b
+### Session Digest — 2026-05-20
+
+**Focus:** Codebase scan after push; Wager (2025) audit dead-code finding; replay interface analysis.
+
+**No implementations this session** — research/synthesis only.
+
+**Key finding — Wager runner is dead code:** All 10 Wager (2025) audit gap modules are implemented (`dynamic.py`, `balancing.py`, `policy_learning.py`, `counterfactual_engine.py`, etc.) and the `run_wager2025_gaps()` auto-runner exists in `wager2025_addons.py`. However, no call site was found in `v2_bayesian_causal.py` or `run_enhanced_pipeline.py`. All 10 gaps are built but never exercised during `sparc run`. Added `W-1` to backlog (complexity: **low**).
+
+**Replay interface mismatch confirmed (1.1-b):** `compute_replay_loss()` in `replay.py` lines 158–165 calls `model(**{"features": X})` which will throw `TypeError` against `SPARCMetaLearner.forward(base_preds, physics_feats, X_spatial, coords, knn_index, alpha)`. Updated 1.1-b to document the 2-phase fix (interface redesign + surrogate cache strategy).
+
+**Phase 1 wiring audit:** All Phase 1 items confirmed wired except 1.1-b (replay, blocked). EWC at all 3 loops confirmed at lines 2116–2119, 2746–2749, 2951–2954. Fisher matrix + trunk_state_dict returned at lines 3288–3300. Temporal, JEPA, contrastive pretext, VSBA, sparse Laplacian, sheaf Laplacian, torch.compile — all confirmed wired.
+
+**2 blue-sky derivatives added to derivatives.md:** (1) Latent Diffusion for Posterior Scenario Sampling (DDPM over JEPA trunk latent), (2) Causal Bandits for Sequential Intervention Design (Thompson sampling over CATE GP surface with `scenario_simulator.py` as oracle).
+
+**Streaming Provenance derivative promoted:** `under-synthesis` (was `new`).
+
+**Priority recommendation for next implementation session:** `W-1` (wire Wager runner, complexity low, zero regression risk, 15 lines).
 
 **Focus:** Desktop Processing page correctness and data-quality tooling.
 
