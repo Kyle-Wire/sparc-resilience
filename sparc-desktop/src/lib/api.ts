@@ -1019,6 +1019,51 @@ export const validateData = () =>
   post<ValidationReport>("/data/validate");
 
 // ------------------------------------------------------------------
+// Data preprocessing (8-step pipeline with SSE progress)
+// ------------------------------------------------------------------
+export interface PreprocessStepEvent {
+  step: string;
+  done: boolean;
+  rows: number;
+  sha: string;
+}
+
+/** Stream the 8-step preprocessing pipeline; calls `onStep` for each
+ *  completed step. Resolves when the final ``__done__`` event arrives. */
+export async function preprocessData(
+  onStep: (event: PreprocessStepEvent) => void,
+): Promise<void> {
+  const res = await fetch(`${BASE}/data/preprocess`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`${res.status}: ${await res.text()}`);
+  }
+  const reader = res.body?.getReader();
+  if (!reader) return;
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const blocks = buffer.split("\n\n");
+    buffer = blocks.pop() ?? "";
+    for (const block of blocks) {
+      const dataLine = block.split("\n").find((l) => l.startsWith("data: "));
+      if (!dataLine) continue;
+      try {
+        const event = JSON.parse(dataLine.slice(6)) as PreprocessStepEvent;
+        onStep(event);
+      } catch {
+        /* skip malformed event */
+      }
+    }
+  }
+}
+
+// ------------------------------------------------------------------
 // Data versioning
 // ------------------------------------------------------------------
 export const getDataVersions = () =>

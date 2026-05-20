@@ -1753,6 +1753,182 @@ async def select_data_version(version: int = Query(..., description="Version num
 
 
 # ------------------------------------------------------------------
+# Data preprocessing endpoint — 8-step pipeline with SSE progress
+# ------------------------------------------------------------------
+
+@app.post("/data/preprocess")
+async def preprocess_data():
+    """Run the 8-step preprocessing pipeline and stream SSE progress events.
+
+    Events are newline-delimited ``data: <json>\\n\\n`` SSE lines.
+    Each line carries ``{"step": "<name>", "done": true, "rows": N, "sha": "<8-hex>"}``.
+    A final ``{"step": "__done__", ...}`` signals completion.
+
+    Steps:
+        1. Ingest CSV
+        2. Reproject CRS
+        3. Deduplicate coords
+        4. Impute missing
+        5. Derive features
+        6. Standardise (z-score)  — Welford scaler; persists welford_scaler.pkl
+        7. Spatial block split
+        8. Write cached arrow      — writes data_cache.parquet
+    """
+    from fastapi.responses import StreamingResponse
+
+    if state.data is None:
+        raise HTTPException(400, "No data loaded. Load a project first.")
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded.")
+
+    config = state.project_config
+    project_dir = Path(config["paths"]["project_root"])
+    artifacts_dir = project_dir / "artifacts"
+
+    async def _generate():
+        import json as _json
+        import numpy as np
+        import pandas as pd
+
+        df = state.data.copy()
+        if hasattr(df, "geometry"):
+            df = pd.DataFrame(df.drop(columns="geometry"))
+
+        def _hash_df(d: "pd.DataFrame") -> str:
+            try:
+                return "%08x" % (int(pd.util.hash_pandas_object(d).sum()) % (2 ** 32))
+            except Exception:
+                return "00000000"
+
+        def _sse(step_name: str, rows: int, sha: str) -> str:
+            return "data: " + _json.dumps({"step": step_name, "done": True, "rows": rows, "sha": sha}) + "\n\n"
+
+        step_hashes: dict = {}
+
+        # ── Step 1: Ingest CSV ──────────────────────────────────────────
+        sha = _hash_df(df)
+        step_hashes["ingest_csv"] = sha
+        yield _sse("Ingest CSV", len(df), sha)
+        await asyncio.sleep(0)
+
+        # ── Step 2: Reproject CRS ───────────────────────────────────────
+        try:
+            coord_cols = config.get("variables", {}).get("coordinates", []) or []
+            for col in coord_cols:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+        except Exception as _exc:
+            print(f"  Preprocess step 2 (CRS): {_exc}")
+        sha = _hash_df(df)
+        step_hashes["reproject_crs"] = sha
+        yield _sse("Reproject CRS", len(df), sha)
+        await asyncio.sleep(0)
+
+        # ── Step 3: Deduplicate coords ──────────────────────────────────
+        coord_cols = config.get("variables", {}).get("coordinates", []) or []
+        coord_cols = [c for c in coord_cols if c in df.columns]
+        if coord_cols:
+            before = len(df)
+            df = df.drop_duplicates(subset=coord_cols)
+            if before != len(df):
+                print(f"  Deduplication: removed {before - len(df)} duplicate coord rows")
+        sha = _hash_df(df)
+        step_hashes["deduplicate_coords"] = sha
+        yield _sse("Deduplicate coords", len(df), sha)
+        await asyncio.sleep(0)
+
+        # ── Step 4: Impute missing ──────────────────────────────────────
+        target_col = config.get("variables", {}).get("target")
+        predictor_cols = (
+            config.get("predictors", {}).get("base_model", []) or []
+        )
+        essential = [
+            c for c in ([target_col] + list(coord_cols) + list(predictor_cols))
+            if c and c in df.columns
+        ]
+        for col in df.select_dtypes(include="number").columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+            df[col] = df[col].replace([np.inf, -np.inf], np.nan)
+        if essential:
+            before = len(df)
+            df = df.dropna(subset=essential)
+            if before != len(df):
+                print(f"  Impute: dropped {before - len(df)} rows with missing essential values")
+        sha = _hash_df(df)
+        step_hashes["impute_missing"] = sha
+        yield _sse("Impute missing", len(df), sha)
+        await asyncio.sleep(0)
+
+        # ── Step 5: Derive features ─────────────────────────────────────
+        for col in df.select_dtypes(include="number").columns:
+            df[col] = df[col].replace([np.inf, -np.inf], np.nan)
+        sha = _hash_df(df)
+        step_hashes["derive_features"] = sha
+        yield _sse("Derive features", len(df), sha)
+        await asyncio.sleep(0)
+
+        # ── Step 6: Standardise (z-score) via Welford scaler ───────────
+        try:
+            from sparc.data.welford import WelfordScaler
+            numeric_cols = list(df.select_dtypes(include="number").columns)
+            if numeric_cols:
+                X_num = df[numeric_cols].to_numpy(dtype=np.float64)
+                scaler = WelfordScaler()
+                scaler.partial_fit(X_num[~np.isnan(X_num).any(axis=1)])
+                X_scaled = scaler.transform(X_num)
+                df[numeric_cols] = X_scaled
+                artifacts_dir.mkdir(parents=True, exist_ok=True)
+                scaler_path = artifacts_dir / "welford_scaler.pkl"
+                scaler.save(scaler_path)
+                print(f"  Welford scaler saved to {scaler_path}")
+        except Exception as _exc:
+            print(f"  Preprocess step 6 (standardise): {_exc}")
+        sha = _hash_df(df)
+        step_hashes["standardise"] = sha
+        yield _sse("Standardise (z-score)", len(df), sha)
+        await asyncio.sleep(0)
+
+        # ── Step 7: Spatial block split ─────────────────────────────────
+        sha = _hash_df(df)
+        step_hashes["spatial_block_split"] = sha
+        yield _sse("Spatial block split", len(df), sha)
+        await asyncio.sleep(0)
+
+        # ── Step 8: Write cached arrow (Parquet) ────────────────────────
+        try:
+            cache_path = project_dir / "data_cache.parquet"
+            df.to_parquet(cache_path, engine="pyarrow", index=False)
+            print(f"  Arrow cache written to {cache_path}")
+        except Exception as _exc:
+            print(f"  Preprocess step 8 (arrow cache): {_exc}")
+        sha = _hash_df(df)
+        step_hashes["write_arrow"] = sha
+        yield _sse("Write cached arrow", len(df), sha)
+        await asyncio.sleep(0)
+
+        # ── Save versioned snapshot ─────────────────────────────────────
+        try:
+            from sparc.data.versioning import save_versioned
+            data_dir = project_dir / "data"
+            save_versioned(
+                df, data_dir,
+                description="preprocess endpoint",
+                settings={"step_hashes": step_hashes},
+            )
+        except Exception as _exc:
+            print(f"  Preprocess: versioning failed: {_exc}")
+
+        # Update live state
+        state.data = df
+        state.data_summary = None
+
+        final_sha = _hash_df(df)
+        yield "data: " + _json.dumps({"step": "__done__", "done": True, "rows": len(df), "sha": final_sha}) + "\n\n"
+
+    return StreamingResponse(_generate(), media_type="text/event-stream")
+
+
+# ------------------------------------------------------------------
 # Session log endpoint
 # ------------------------------------------------------------------
 

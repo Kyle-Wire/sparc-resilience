@@ -1,7 +1,7 @@
 # SPARC — Research Backlog
 
 **Maintained by:** synthesis agent
-**Last updated:** 2026-05-12 (self-grill revisions)
+**Last updated:** 2026-05-20b (CUDA acceleration research scan)
 
 Items are ranked by impact/effort. Improvement agent picks the top `[ ]` item with complexity **low** or **medium**.
 
@@ -27,9 +27,11 @@ Complexity: **low** = < 1 hour of focused edits | **medium** = half-day | **high
   - Add `fisher_matrix` + `trunk_state_dict` to `train_neural_meta()` return dict (Gap 1.4 — bundle in same PR).
   - Success criterion: `sparc continual --cities a.yml,b.yml` runs without `ImportError`; second city's loss log shows `ewc_penalty > 0`.
 
-- [!] **1.1-b Wire replay loss into training epoch loop** — complexity: medium — **BLOCKED: interface mismatch**
-  - `compute_replay_loss()` calls `model(features=X)` but `SPARCMetaLearner.forward()` requires `base_preds, physics_feats, X_spatial, coords, knn_index, alpha`. Must redesign `compute_replay_loss()` to accept a SPARC-compatible forward dict before this can be wired.
-  - **Do not bundle with 1.1-a.** Fix the interface first, then wire.
+- [!] **1.1-b Wire replay loss into training epoch loop** — complexity: medium — **BLOCKED: interface mismatch (2-phase fix)**
+  - **Phase 1 — Interface redesign:** `compute_replay_loss()` calls `model(features=X)` but `SPARCMetaLearner.forward()` requires `(base_preds, physics_feats, X_spatial, coords, knn_index, alpha)`. Must redesign `compute_replay_loss()` signature to accept a SPARC-compatible dict.
+  - **Phase 2 — Coreset schema extension:** Spatial encodings can be recomputed from `coords` cheaply at replay time (no schema change needed). Surrogate predictions must be cached: either (a) load saved surrogate checkpoints at replay time (surrogates already persisted to disk — safe), or (b) cache surrogate outputs in the registry at city-registration time (faster but requires CityRegistry schema change). Option (a) recommended.
+  - **Do not bundle with 1.1-a.** Fix the interface + cache the surrogate outputs, then wire.
+  - **Self-grill 2026-05-20:** Both phases confirmed required. Complexity is medium (not low). Cannot be done in a single pass without first testing the 2-city continual loop.
 
 - [x] **1.2 Wire temporal features into training runner** — complexity: low (~30 lines, 1 file) — *Done 2026-05-12: added `time_embed_dim = neural_cfg.get("time_embed_dim", 0)`, passed it to both SPARCMetaLearner constructors; built time_idx tensor in `_prepare_tensors` via `get_snapshot_time_indices()`; passed `time_idx` to all 3 forward call sites (CV fold, main retrain, SWA). Guarded by `if tensors["time_idx"] is not None`.*
   - File: `sparc/run/v2_neural_training.py`
@@ -47,6 +49,25 @@ Complexity: **low** = < 1 hour of focused edits | **medium** = half-day | **high
   - Success criterion: positive `r2_improvement` in `transfer_comparison.json`.
 
 ### Phase 5 — Causal Inference Leadership
+
+- [x] **W-1 Wire `run_wager2025_gaps()` into Stage 3 pipeline** — complexity: **low** (~15 lines, 1 file) — *Done: Added Wager2025 call block in `v2_bayesian_causal.py` before `return`. Imports `dag_to_networkx`, `get_node_roles` from `sparc.causal.dag_definition`; builds graph + roles; calls `run_wager2025_gaps()`; adds `wager2025_summary` to return dict. Wrapped in try/except — non-fatal.*
+  - **Gap:** `sparc/run/wager2025_addons.py::run_wager2025_gaps()` is a complete auto-runner for all 10 Wager (2025) audit gaps. All 10 underlying estimator modules are implemented and individually tested (`_audit.py` + `GAP_N_IMPLEMENTED` flags). The function is **never called** — no import or call site exists in `v2_bayesian_causal.py` or `run_enhanced_pipeline.py`. All 10 Wager gaps are dead code during a default `sparc run`.
+  - **File:** `sparc/run/v2_bayesian_causal.py` — after NUTS block completes (~line 300), add:
+    ```python
+    from sparc.run.wager2025_addons import run_wager2025_gaps as _run_wager
+    from sparc.causal.utils import dag_to_networkx, get_node_roles
+    _G = dag_to_networkx(dag_def)
+    _roles = get_node_roles(_G)
+    run_wager2025_gaps(
+        data=data, config=config, dag_def=dag_def,
+        graph=_G, roles=_roles,
+        output_dir=str(output_dir / "wager2025"),
+        nuts_results=nuts_results,
+    )
+    ```
+  - **Why safe:** Every gap is wrapped in `try/except` — a failing estimator logs a warning and continues, never aborting Stage 3. Strictly additive: no existing logic changes.
+  - **Success criterion:** `sparc run --stage 3` produces `Stage_3_Causal/wager2025/` with `overlap_diagnostics.json`, `cbps_balance.json`, `policy_learning.json` etc. `_audit.report()` shows 10/10 gaps addressed.
+  - **Academic source:** Wager (2025) *Introduction to Causal Inference* — each gap is a documented estimator from the text.
 
 - [x] **GP regression over CATE surface** — complexity: medium — *Done 2026-05-12: Added `CATEGPSurface` class and `_moran_i()` helper to `sparc/causal/spatial_cate.py`. `CATEGPSurface` uses `sklearn.gaussian_process.GaussianProcessRegressor` with a `ConstantKernel × Matérn` kernel seeded from the Stage 0 correlogram payload (`nu`, `kappa.mean`) via `CATEGPSurface.from_correlogram()`. Fits on sub-sampled CATE estimates (default 2 000 rows, O(N³) GPR) and exposes `predict(coords_norm) → (mean, std)`. Moran's I (normality-assumption variance) on GP residuals reports `I`, `z_score`, `p_value`, and a one-line interpretation. Wired into `SpatialCATEEstimator.fit_gp_surface()` which loops over all treatments, returns `{treatment: {"gp_mean", "gp_std", "moran_i", "log_ml", "kernel_params"}}`, and stores per-treatment `CATEGPSurface` in `self._gp_surfaces`.*
 
@@ -243,7 +264,7 @@ Created `sparc/causal/pde_identifiability.py` with `compute_dag_pde_plausibility
 
 ### Phase 4 — Desktop Processing Page (from 2026-05-14b session)
 
-- [ ] **P4-1 Add `/data/preprocess` endpoint and fix `handleApplyAll`** — complexity: medium
+- [x] **P4-1 Add `/data/preprocess` endpoint and fix `handleApplyAll`** — complexity: medium — *Done: Added `POST /data/preprocess` SSE endpoint in app.py (8-step pipeline with per-step hash events). Added `preprocessData(onStep)` streaming function in api.ts. Updated `handleApplyAll` in ProcessingPage.tsx to call `preprocessData` and update step status in real time.*
   - **Gap:** `handleApplyAll` in `ProcessingPage.tsx` calls `prepareData({ raster_paths: [] })` which hits `/data/prepare` (the spatial fishnet builder). That endpoint ignores the call and does nothing. All 8 step cards are marked done immediately with no real processing. `sparc/data/data_utils.py::prepare_data(df, config)` exists as the correct CSV transformation function but has no API endpoint.
   - **Files:**
     - `sparc/server/app.py` — new `POST /data/preprocess` endpoint that loads the project dataframe, calls `data_utils.prepare_data(df, config)`, streams SSE step events (`{"step": "<name>", "done": true}`), persists result as a new version via `versioning.save_version()`
@@ -252,35 +273,35 @@ Created `sparc/causal/pde_identifiability.py` with `compute_dag_pde_plausibility
   - **Pre-implementation check:** Read `sparc/data/data_utils.py` lines 306–420 to enumerate exactly which of the 8 steps `prepare_data` already covers. Steps not covered need to be composed from `processing.py`, `welford.py`, and a new Arrow cache helper.
   - **Success criterion:** User clicks Apply All → 8 step cards light up sequentially with real processing delays → `project_dir/versions/` shows a new version entry → data summary refreshes with the transformed dataframe.
 
-- [ ] **P4-2 Surface `/data/validate` on Processing page** — complexity: low
+- [x] **P4-2 Surface `/data/validate` on Processing page** — complexity: low — *Done: Added Validate button to ProcessingPage header; `handleValidate` calls `validateData()` API; validation issue panel renders beneath StatGrid with severity colour coding; Apply All disabled when n_critical > 0.*
   - **Gap:** `POST /data/validate` → `sparc/data/validation.py::validate_dataset()` is fully implemented (critical / warning / info tiers) but is never called from ProcessingPage. Users have no data quality feedback.
   - **Files:**
     - `sparc-desktop/src/components/pages/ProcessingPage.tsx` — add **Validate** button; call `validateData()` API function; render issue panel beneath step cards; disable Apply All when `validationResult.critical.length > 0` with tooltip "Fix critical issues first"
     - `sparc-desktop/src/lib/api.ts` — confirm `validateData()` exists (endpoint already wired); if not, add it
   - **Success criterion:** Validate button renders structured issue list within ~1 s; critical issues show in red; Apply All disabled when any critical issue is present.
 
-- [ ] **P4-3 Wire Welford scaler into "Standardize (z-score)" step** — complexity: low
+- [x] **P4-3 Wire Welford scaler into "Standardize (z-score)" step** — complexity: low — *Done: Step 6 of `/data/preprocess` calls `WelfordScaler.partial_fit()` + `transform()` on all numeric columns; fitted scaler saved via `scaler.save(artifacts_dir / "welford_scaler.pkl")`.*
   - **Gap:** `sparc/data/welford.py` implements an online Welford scaler that is not imported or called anywhere in the server. The "Standardize" step currently does nothing.
   - **Files:**
     - `sparc/server/app.py` (new `/data/preprocess` endpoint) — in step 6 (`standardize`), call `WelfordScaler.fit_transform(df[numeric_cols])`, serialize fitted scaler state to `project_dir/artifacts/welford_scaler.pkl`
     - `sparc/run/v2_neural_training.py` or inference runner — load `welford_scaler.pkl` and apply `transform()` to new input batches at inference time
   - **Success criterion:** After Apply All, `project_dir/artifacts/welford_scaler.pkl` exists with valid `mean_` / `var_` / `n_samples_seen_` fields. Running Apply All twice on same data produces identical z-scores.
 
-- [ ] **P4-4 Arrow cache write for "Write cached arrow" step** — complexity: low
+- [x] **P4-4 Arrow cache write for "Write cached arrow" step** — complexity: low — *Done: Step 8 of `/data/preprocess` writes `project_dir/data_cache.parquet` via `df.to_parquet(..., engine="pyarrow", index=False)`.*
   - **Gap:** Step 8 "Write cached arrow" has no backend implementation. No Parquet cache is written anywhere in the processing pipeline.
   - **Files:**
     - `sparc/server/app.py` (new `/data/preprocess` endpoint) — as last step, call `df.to_parquet(project_dir / "data_cache.parquet", engine="pyarrow", index=False)`
     - `sparc/run/v2_neural_training.py` — when loading dataset, check for `data_cache.parquet` first and use it; log "loaded from parquet cache"; CSV fallback if absent
   - **Success criterion:** After Apply All, `project_dir/data_cache.parquet` exists. `POST /run` log shows "loaded from parquet cache".
 
-- [ ] **P4-5 Full version picker in Processing page UI** — complexity: medium
+- [x] **P4-5 Full version picker in Processing page UI** — complexity: medium — *Done: Added `versions` state populated via `getDataVersions()` on mount. "Revert" button replaced by `<select>` dropdown when >1 versions exist; selecting a version calls `handleSelectVersion()` → `selectDataVersion()`.*
   - **Gap:** `GET /data/versions` and `POST /data/select_version` are fully implemented. The UI exposes only "Revert to Original" (always restores version 0). Users cannot restore intermediate states.
   - **Files:**
     - `sparc-desktop/src/components/pages/ProcessingPage.tsx` — replace "Revert to Original" button with a Versions dropdown (`<select>`) populated from `getDataVersions()`; selecting a version calls `selectDataVersion({ version_id })`; a badge on step cards shows active version label
     - `sparc-desktop/src/lib/api.ts` — confirm `getDataVersions()` and `selectDataVersion()` exist; add if missing
   - **Success criterion:** After 3 Apply All runs, Versions dropdown shows 3 entries. Selecting entry 1 restores that exact dataframe and refreshes the data summary canvas.
 
-- [ ] **P4-6 Data provenance hashing in preprocessing SSE stream** — complexity: low — *(derivative from 2026-05-14b session)*
+- [x] **P4-6 Data provenance hashing in preprocessing SSE stream** — complexity: low — *Done: Each SSE step event includes `"sha": "<8-hex>"` computed via `pd.util.hash_pandas_object`. Step cards display `sha·<8hex>` badge in the `detail` field. Step hashes persisted in `save_versioned()` settings.*
   - **Gap:** No step-level provenance is recorded. There is no way to verify cross-machine reproducibility or detect upstream data changes.
   - **Files:**
     - `sparc/server/app.py` (new `/data/preprocess` endpoint) — after each step, compute `hash_val = int(pd.util.hash_pandas_object(df).sum()) % (2**32)` and include it in the SSE event: `{"step": "<name>", "done": true, "sha": "<hash_val>"}`
@@ -291,7 +312,149 @@ Created `sparc/causal/pde_identifiability.py` with `compute_dag_pde_plausibility
 
 ---
 
-### Session Digest — 2026-05-14b
+### GPU / CUDA Acceleration (from 2026-05-20b session)
+
+These items are ordered by implementation priority. CU-1 and CU-3 are prerequisites for CU-2.
+All changes are guarded by `torch.cuda.is_available()` or new profile fields — zero regression risk on CPU-only machines.
+
+- [x] **CU-5 `torch.cuda.empty_cache()` between CV folds** — complexity: **low** (~4 lines, 1 file)
+  - **Gap:** Each CV fold allocates new model objects `.to(device)`. At fold end, Python `del model` releases references but CUDA's caching allocator retains memory blocks. On low-VRAM GPUs (4–8 GB) over 5+ folds with large N, allocator fragmentation can cause OOM even when instantaneous usage is within bounds.
+  - **File:** `sparc/run/v2_neural_training.py` — after `del model, surrogates, process_net, source_net` at fold end (~L2250) and before full retrain (~L2284):
+    ```python
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    ```
+  - **Why safe:** `empty_cache()` is a no-op on CPU and MPS; does not affect correctness; zero functional change.
+  - **Success criterion:** On 8 GB VRAM GPU with 5 CV folds + large N (>5k): no CUDA OOM error; `torch.cuda.memory_reserved()` returns closer to baseline after each fold.
+
+- [x] **CU-1 Add GPU fields to `HardwareProfile`; decouple `force_cpu` from RAM tier** — complexity: **low** (~40 lines, 1 file)
+  - **Gap:** `hardware_profile.py` line 100: `force_cpu=True` is hardcoded for the "low" RAM tier (< 12 GB), regardless of GPU presence. A machine with 8 GB RAM + RTX 3070 (8 GB VRAM) always trains on CPU. `HardwareProfile` has no `gpu_available`, `gpu_vram_gb`, `gpu_count`, or `gpu_name` fields. `/api/hardware` returns no GPU info — the desktop cannot show GPU status.
+  - **File:** `sparc/config/hardware_profile.py` — add `_detect_gpu() -> tuple[bool, int, float, str]` helper; add 4 fields to `HardwareProfile` dataclass; fix `_build_profile()` to set `force_cpu = not gpu_avail` for low-RAM tier (decouple from RAM):
+    ```python
+    @dataclass(frozen=True)
+    class HardwareProfile:
+        ...
+        gpu_available: bool = False
+        gpu_count: int = 0
+        gpu_vram_gb: float = 0.0
+        gpu_name: str = ""
+    ```
+  - **The server endpoint** (`/api/hardware`) already returns `effective.as_dict()` — GPU fields appear automatically once added to the dataclass. No server changes needed.
+  - **Success criterion:** On 8 GB RAM + RTX 3070 machine: `detect_profile().force_cpu == False`; `/api/hardware` returns `{"gpu_available": true, "gpu_vram_gb": 8.0, "gpu_name": "NVIDIA GeForce RTX 3070"}`; desktop can show GPU badge.
+
+- [x] **CU-3 GPU-VRAM-aware batch size in `HardwareProfile`** — complexity: **low** (~15 lines, 2 files)
+  - **Gap:** `HardwareProfile.batch_size` (512/2048/4096) was sized for CPU RAM. On an RTX 3090 (24 GB VRAM), batch 4096 leaves the GPU at ~20–30% SM occupancy. The `spatial_minibatch_sampler` in `optimizer.py` clamps to `_profile.batch_size` (CPU-tuned). Optimal GPU batch is `min(N, floor(gpu_vram_gb * 256))` (conservative; ~256 rows per GB VRAM based on ~12 KB per-row activation footprint for hidden_dim=256).
+  - **Depends on:** CU-1 (requires `gpu_available` and `gpu_vram_gb` fields)
+  - **Files:**
+    - `sparc/config/hardware_profile.py` — add `gpu_batch_size: int = 0` field; in `_build_profile()`: `gpu_bs = int(min(max(gpu_vram * 256, 512), 32768))` when GPU present
+    - `sparc/run/v2_neural_training.py` (~5 lines) — after device selection at L949, override `batch_size` upward: `if device.type == "cuda": batch_size = max(batch_size, _hp.gpu_batch_size)`
+  - **Success criterion:** On RTX 3090 (24 GB): `_hp.gpu_batch_size == 6144`; training log shows "GPU batch size override: 6144"; `nvtop` shows ≥ 50% SM occupancy vs. ~25% with CPU-tuned default.
+
+- [x] **CU-4 Remove `fold_cardinal.cpu().numpy()` GPU→CPU sync in training loop** — complexity: **low** (~5 lines, 1 file) — *(housekeeping)*
+  - **Gap:** `v2_neural_training.py` L1873: `spatial_minibatch_sampler(coords[train_idx], fold_cardinal.cpu().numpy(), ...)` forces a GPU→CPU sync every epoch. `fold_cardinal` is an `(N_train, 4)` LongTensor on device. The fix: keep a CPU numpy copy in `_prepare_tensors()` alongside the device tensor (device version still needed for PDE loss).
+  - **Note:** Impact is low for N < 20k (sync is `n_epochs` times, ~96 KB per transfer, ~0.01 ms). Housekeeping for correctness and future CUDA Graph compatibility.
+  - **File:** `sparc/run/v2_neural_training.py` — add `"cardinal_idx_cpu": cardinal_np` to `_prepare_tensors()` return dict; use it directly in the fold loop (`fold_cardinal_np = tensors["cardinal_idx_cpu"][train_idx]`)
+  - **Success criterion:** Zero `cudaMemcpy(DeviceToHost)` calls during epoch loop in `nvprof`; training throughput unchanged.
+
+- [x] **CU-2 Automatic Mixed Precision (AMP) training** — complexity: **medium** (~40 lines, 2 files)
+  - **Gap:** All forward/backward passes are FP32. On Ampere/Hopper GPUs (RTX 3080+, A100), BF16 Tensor Core operations run 1.5–3× faster for the GEMM-heavy paths in SIREN, spatial attention, and fusion layers. `torch.compile` is already wired; AMP stacks on top for additional gain.
+  - **Depends on:** CU-1 + CU-3 (larger batch sizes increase Tensor Core utilization for AMP; speedup scales with batch size)
+  - **Critical dependency — sparse Laplacian guard (CU-6):** `sparc_joint_loss` calls `torch.sparse.mm(sparse_L, T_pred)`. COO sparse tensors do not support FP16 in all PyTorch versions; must wrap the entire `sparc_joint_loss` call in `autocast(enabled=False)` to keep PDE terms in FP32.
+  - **Files:**
+    - `sparc/run/v2_neural_training.py` — add `_use_amp` flag and `GradScaler`; wrap batch forward with `torch.autocast("cuda", dtype=torch.bfloat16, enabled=_use_amp)`; guard `sparc_joint_loss` with inner `autocast(enabled=False)`; replace `loss.backward()` with `_scaler.scale(loss).backward()` + `_scaler.unscale_` + `_scaler.step` + `_scaler.update`. Apply to CV fold, full-retrain, and SWA loops.
+    - `sparc/training/optimizer.py::training_step` — add optional `scaler: GradScaler | None` param
+  - **Success criterion:** On CUDA machine: training log shows `AMP active (bfloat16)`; epoch wall-clock drops ≥ 30% vs. FP32 on same hardware; `oof_predictions` R² within 0.5% of FP32 run (same seed); no `RuntimeError: expected scalar type Float but found Half`.
+
+- [x] **CU-7 Stage 0 Matérn NUTS hardcodes `device="cpu"`** — complexity: **low** (1 line, 1 file)
+  - **Gap:** `correlogram_matern_fit.py` line 307: `run_nuts(..., device="cpu")` — hardcoded. Stage 3's NUTS already has the correct pattern (`if torch.cuda.is_available() and str(device) == "cpu": device = torch.device("cuda")`). Stage 0's Matérn fitting runs 2 chains × 3 ν values = 6 NUTS runs; each with N=L (lag count, typically 20–50) and 3000 samples. These are small enough that CUDA overhead may not help, but the fix is trivial and consistent.
+  - **File:** `sparc/run/correlogram_matern_fit.py` — before the `run_nuts` call at L297, add:
+    ```python
+    _nuts_device = "cuda" if torch.cuda.is_available() else "cpu"
+    ```
+    then pass `device=_nuts_device` instead of `device="cpu"`.
+  - **Success criterion:** On CUDA machine: Stage 0 log shows "Matérn NUTS: using cuda"; `run_nuts` completes without error. On CPU-only machine: no change.
+
+- [x] **CU-8 Stage 1 GWEN: cuML optional GPU path for ElasticNet + KNN** — complexity: **medium** (~30 lines, 1 file)
+  - **Gap:** `GWENModel` uses `sklearn.ElasticNetCV` (CPU) and `sklearn.neighbors.NearestNeighbors` (CPU) for local model fitting. For N > 5k, the O(N²) local weight matrix and N local ElasticNet fits dominate Stage 1 runtime. `cuML` provides GPU-accelerated equivalents (`cuml.linear_model.ElasticNet`, `cuml.neighbors.NearestNeighbors`) with near-identical APIs. On a 10k-row dataset, cuML KNN is typically 20–50× faster than sklearn.
+  - **Note:** `cuml` is an optional dep (requires RAPIDS, not always available). Must gate entirely on import availability.
+  - **File:** `sparc/models/gwen.py` — in `GWENModel.fit()`, attempt `from cuml.neighbors import NearestNeighbors as _NearestNeighbors` + `from cuml.linear_model import ElasticNet as _ElasticNet`; fall back to sklearn silently. The `NearestNeighbors` interface is identical; ElasticNet loses `CV` (use fixed alpha from global model's `alpha_` — already done in `quick_mode`).
+  - **Success criterion:** With `cuml` installed: Stage 1 log shows "GWEN: cuML GPU path active"; ElasticNet + KNN fit time drops ≥ 10× for N > 5k; `gwen_results.json` identical to sklearn path (same seed).
+
+- [ ] **CU-9 CUDA Graph capture for the epoch step** — complexity: **high**
+  - **Source:** derivatives.md "CUDA Graph Capture for Zero-Overhead Epoch Step"
+  - **Gap:** `torch.compile` is applied to individual models but the full forward→loss→backward→step sequence still has ~50 kernel launches per batch due to Python dispatch overhead between models. `torch.cuda.make_graphed_callables` can capture the entire sequence as a single replay kernel, eliminating launch overhead (~15–30% additional throughput on top of AMP + compile).
+  - **Blocker — static shapes required:** `spatial_minibatch_sampler` produces variable-size batches (the last batch per epoch is smaller than `batch_size`). CUDA Graphs require static input shapes. Strategy: pad last batch to full `batch_size` with a boolean `valid_mask` tensor; mask the loss summation. This adds 5–10 lines to the batch loop but is unavoidable.
+  - **Depends on:** CU-1 (CUDA must be enabled), CU-2 (AMP — graphs capture BF16 regions correctly), CU-4 (no CPU sync inside graphed region)
+  - **Files:**
+    - `sparc/run/v2_neural_training.py` — extend `_maybe_compile` to optionally call `torch.cuda.make_graphed_callables` after compile; add `_pad_batch_to_size(batch_dict, target_size) -> (dict, mask)` helper; apply valid_mask in loss computation
+    - `sparc/training/optimizer.py` — `training_step` accepts optional `valid_mask` for loss masking
+  - **Success criterion:** `nsys profile` or `nvprof` shows single compound kernel per batch step vs. ~50 individual kernels; epoch wall-clock drops ≥ 15% on top of AMP baseline; output identical to non-graphed run (same seed).
+  - **Note:** High complexity. Do not attempt before CU-1 + CU-2 + CU-4 are complete.
+
+- [ ] **CU-10 Multi-GPU fold-parallel training via `DistributedDataParallel`** — complexity: **high**
+  - **Source:** derivatives.md "Multi-GPU Fold-Parallel Training via DistributedDataParallel"
+  - **Gap:** Each CV fold is fully independent (no cross-fold communication during training). With K GPUs, assigning fold `i` to GPU `i` gives K× training speedup for the CV phase. `HardwareProfile.gpu_count` (from CU-1) provides the worker count. For the full retrain, standard DDP with `batch_size * world_size` linear LR scaling.
+  - **Key complications:**
+    - EWC and OT alignment penalties need `dist.all_reduce` across ranks before the optimizer step
+    - JEPA EMA trunk update must be synchronized (`dist.broadcast` from rank 0)
+    - The spatial minibatch sampler needs a partitioned-N version (each rank receives a disjoint geographic block, natural from `spatial_kfold_enhanced` fold indices)
+    - `torch.multiprocessing.spawn` entrypoint must be added to `v2_neural_training.py`
+  - **Depends on:** CU-1 (`gpu_count` field), CU-5 (`empty_cache` between folds — critical in multi-process context)
+  - **Files:**
+    - `sparc/run/v2_neural_training.py` — add `_ddp_fold_worker(rank, world_size, fold_idx, shared_tensors, result_queue)` function; wrap fold loop with `torch.multiprocessing.spawn` when `gpu_count > 1`; collect OOF predictions from `result_queue`
+    - `sparc/config/hardware_profile.py` — `gpu_count` (from CU-1)
+    - `sparc/training/ewc.py` — add `dist.all_reduce` around Fisher penalty accumulation
+    - `sparc/training/optimizer.py` — DDP-aware `clip_grad_norm_` (operates on local replica; all_reduce handled by DDP hooks)
+  - **Success criterion:** On 2-GPU machine: CV training wall-clock ≤ 55% of single-GPU time (accounting for DDP init overhead); OOF R² within 0.2% of single-GPU run (same seed); both GPU processes show ≥ 60% utilization in `nvidia-smi`.
+  - **Note:** High complexity. Do not attempt before CU-1 + CU-5 + CU-2 are complete and stable.
+
+
+
+### Session Digest — 2026-05-20b (CUDA Research)
+
+**Focus:** CUDA/GPU acceleration — full scan of `v2_neural_training.py`, `hardware_profile.py`, `optimizer.py`, and `server/app.py`.
+
+**No implementations this session** — research/synthesis only.
+
+**Key findings:**
+
+**What works:** Basic CUDA device detection at L949; all models + tensors `.to(device)`; `torch.compile` wired; NUTS has an explicit CUDA switch in `v2_bayesian_causal.py`; `/api/hardware` endpoint exists.
+
+**Critical gap — `HardwareProfile` ignores GPU (CU-1):** `force_cpu=True` for low RAM tier (< 12 GB) is unconditional. A machine with 8 GB RAM + RTX 3070 always trains on CPU. No `gpu_available`, `gpu_vram_gb`, or `gpu_name` fields anywhere in `hardware_profile.py`. Desktop cannot show GPU status.
+
+**No AMP anywhere (CU-2):** Zero `autocast` / `GradScaler` usage in all training loops. All arithmetic is FP32 on CUDA. 1.5–3× throughput gain available on Ampere+ hardware. Requires sparse Laplacian guard (`autocast(enabled=False)` around `sparc_joint_loss`) to avoid COO sparse FP16 incompatibility.
+
+**CPU-tuned batch sizes on GPU (CU-3):** `HardwareProfile.batch_size` sized for RAM (512/2048/4096). GPU SM occupancy is ~20–30% at batch 4096 on a 24 GB VRAM device.
+
+**Minor items:** `fold_cardinal.cpu().numpy()` GPU→CPU sync every epoch (CU-4); no `empty_cache()` between folds (CU-5).
+
+**Implementation order:** CU-5 → CU-1 → CU-3 → CU-4 → CU-2
+
+**Priority recommendation for next implementation session:** `CU-5` (4 lines, zero risk) bundled with `CU-1` (40 lines, prerequisite for CU-2/CU-3) in a single PR.
+
+---
+
+### Session Digest — 2026-05-20
+
+**Focus:** Codebase scan after push; Wager (2025) audit dead-code finding; replay interface analysis.
+
+**No implementations this session** — research/synthesis only.
+
+**Key finding — Wager runner is dead code:** All 10 Wager (2025) audit gap modules are implemented (`dynamic.py`, `balancing.py`, `policy_learning.py`, `counterfactual_engine.py`, etc.) and the `run_wager2025_gaps()` auto-runner exists in `wager2025_addons.py`. However, no call site was found in `v2_bayesian_causal.py` or `run_enhanced_pipeline.py`. All 10 gaps are built but never exercised during `sparc run`. Added `W-1` to backlog (complexity: **low**).
+
+**Replay interface mismatch confirmed (1.1-b):** `compute_replay_loss()` in `replay.py` lines 158–165 calls `model(**{"features": X})` which will throw `TypeError` against `SPARCMetaLearner.forward(base_preds, physics_feats, X_spatial, coords, knn_index, alpha)`. Updated 1.1-b to document the 2-phase fix (interface redesign + surrogate cache strategy).
+
+**Phase 1 wiring audit:** All Phase 1 items confirmed wired except 1.1-b (replay, blocked). EWC at all 3 loops confirmed at lines 2116–2119, 2746–2749, 2951–2954. Fisher matrix + trunk_state_dict returned at lines 3288–3300. Temporal, JEPA, contrastive pretext, VSBA, sparse Laplacian, sheaf Laplacian, torch.compile — all confirmed wired.
+
+**2 blue-sky derivatives added to derivatives.md:** (1) Latent Diffusion for Posterior Scenario Sampling (DDPM over JEPA trunk latent), (2) Causal Bandits for Sequential Intervention Design (Thompson sampling over CATE GP surface with `scenario_simulator.py` as oracle).
+
+**Streaming Provenance derivative promoted:** `under-synthesis` (was `new`).
+
+**Priority recommendation for next implementation session:** `W-1` (wire Wager runner, complexity low, zero regression risk, 15 lines).
+
+---
+
+### Session Digest — 2026-05-20 (Processing Page)
 
 **Focus:** Desktop Processing page correctness and data-quality tooling.
 

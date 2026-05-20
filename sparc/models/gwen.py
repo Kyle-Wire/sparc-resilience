@@ -13,6 +13,16 @@ from tqdm import tqdm
 import warnings
 warnings.filterwarnings('ignore')
 
+# CU-8: Optional cuML GPU-accelerated equivalents (RAPIDS).
+# Falls back to sklearn silently when cuml is not installed.
+_cuml_available = False
+try:
+    from cuml.neighbors import NearestNeighbors as _cuNearestNeighbors  # type: ignore[import]
+    from cuml.linear_model import ElasticNet as _cuElasticNet  # type: ignore[import]
+    _cuml_available = True
+except ImportError:
+    pass
+
 class GWENModel:
     """
     Geographically Weighted Elastic Net model for spatial variable selection.
@@ -122,7 +132,11 @@ class GWENModel:
         
         # Pre-compute k-NN indices once (reusable across all local models)
         print(f"\n3. Computing adaptive bandwidths using {self.k_neighbors}-NN...")
-        nn = NearestNeighbors(n_neighbors=self.k_neighbors, algorithm='ball_tree')
+        if _cuml_available:
+            print("   GWEN: cuML GPU path active (NearestNeighbors + ElasticNet)")
+            nn = _cuNearestNeighbors(n_neighbors=self.k_neighbors, algorithm='brute')
+        else:
+            nn = NearestNeighbors(n_neighbors=self.k_neighbors, algorithm='ball_tree')
         nn.fit(coords)
         distances, indices = nn.kneighbors(coords)
         self._nn_indices = indices
@@ -145,11 +159,17 @@ class GWENModel:
             y_local = y[local_indices]
             
             if use_global_alpha:
-                model = ElasticNet(
-                    alpha=self.global_model.alpha_,
-                    l1_ratio=self.global_model.l1_ratio_,
-                    random_state=42,
-                )
+                if _cuml_available:
+                    model = _cuElasticNet(
+                        alpha=self.global_model.alpha_,
+                        l1_ratio=self.global_model.l1_ratio_,
+                    )
+                else:
+                    model = ElasticNet(
+                        alpha=self.global_model.alpha_,
+                        l1_ratio=self.global_model.l1_ratio_,
+                        random_state=42,
+                    )
             else:
                 model = ElasticNetCV(
                     l1_ratio=self.l1_ratios,
