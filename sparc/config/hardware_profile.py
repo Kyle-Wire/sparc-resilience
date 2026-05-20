@@ -85,6 +85,8 @@ class HardwareProfile:
     gpu_batch_size: int = 0
     # CU-9b: CUDA Graph capture for static-shape batch loops (default off)
     cuda_graphs: bool = False
+    # CU-10a: Multi-GPU fold-parallel training via DDP (default off)
+    ddp_enabled: bool = False
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -320,6 +322,7 @@ _OVERRIDABLE_FIELDS = (
     "high_memory_mode",
     "memory_limit_gb",
     "cuda_graphs",
+    "ddp_enabled",
 )
 
 
@@ -332,7 +335,7 @@ def _coerce_overrides(raw: dict[str, Any] | None) -> dict[str, Any]:
         if key not in raw or raw[key] is None:
             continue
         val = raw[key]
-        if key in ("force_cpu", "high_memory_mode", "cuda_graphs"):
+        if key in ("force_cpu", "high_memory_mode", "cuda_graphs", "ddp_enabled"):
             out[key] = bool(val)
         elif key == "memory_limit_gb":
             try:

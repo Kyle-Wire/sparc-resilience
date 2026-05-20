@@ -394,9 +394,9 @@ All changes are guarded by `torch.cuda.is_available()` or new profile fields —
   - **Note:** High complexity. Do not attempt before CU-1 + CU-2 + CU-4 are complete.
 
 - [ ] **CU-10 Multi-GPU fold-parallel training via `DistributedDataParallel`** — complexity: **high** *(synthesized sub-tasks below)*
-  - [ ] **CU-10a** DDP spawn entrypoint — complexity: **medium** — Add `_ddp_fold_worker(rank, world_size, fold_idx, shared_tensors, result_queue)` in `v2_neural_training.py`; wrap fold loop with `torch.multiprocessing.spawn` when `gpu_count > 1`. Gate behind `cfg.ddp_enabled: bool`.
-  - [ ] **CU-10b** `dist.all_reduce` in EWC penalty accumulation — complexity: **low** — In `sparc/training/ewc.py`, wrap Fisher penalty accumulation with `dist.all_reduce(fisher, op=dist.ReduceOp.SUM)` when `dist.is_initialized()`.
-  - [ ] **CU-10c** `dist.all_reduce` in OT alignment loop — complexity: **low** — Same pattern as CU-10b for the optimal-transport penalty in the optimizer step; add `if dist.is_initialized(): dist.all_reduce(ot_loss, ...)` guard.
+  - [x] **CU-10a** DDP spawn entrypoint — complexity: **medium** — Add `_ddp_fold_worker(rank, world_size, fold_idx, shared_tensors, result_queue)` in `v2_neural_training.py`; wrap fold loop with `torch.multiprocessing.spawn` when `gpu_count > 1`. Gate behind `cfg.ddp_enabled: bool`.
+  - [x] **CU-10b** `dist.all_reduce` in EWC penalty accumulation — complexity: **low** — In `sparc/training/ewc.py`, wrap Fisher penalty accumulation with `dist.all_reduce(fisher, op=dist.ReduceOp.SUM)` when `dist.is_initialized()`.
+  - [x] **CU-10c** `dist.all_reduce` in OT alignment loop — complexity: **low** — Same pattern as CU-10b for the optimal-transport penalty in the optimizer step; add `if dist.is_initialized(): dist.all_reduce(ot_loss, ...)` guard.
   - [ ] **CU-10d** JEPA EMA broadcast from rank 0 — complexity: **low** — After each EMA trunk update, broadcast state dict from rank 0 to all ranks: `for p in ema_trunk.parameters(): dist.broadcast(p.data, src=0)`.
   - [ ] **CU-10e** Partitioned spatial minibatch sampler — complexity: **medium** — Add `rank` / `world_size` parameters to `spatial_minibatch_sampler`; each rank receives its disjoint geographic block from the fold's spatial partition. Collect OOF predictions from `result_queue` after spawn. **Files:** `sparc/run/v2_neural_training.py`, `sparc/config/hardware_profile.py`, `sparc/training/ewc.py`, `sparc/training/optimizer.py`. **Depends on:** CU-1, CU-5.
   - **Source:** derivatives.md "Multi-GPU Fold-Parallel Training via DistributedDataParallel"

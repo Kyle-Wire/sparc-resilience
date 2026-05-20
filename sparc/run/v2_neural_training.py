@@ -376,6 +376,886 @@ def _capture_cuda_graph(
         return mod
 
 
+
+# CU-10a: Trunk parameter prefix set — used by EWC and DDP broadcast.
+_TRUNK_KEYS: frozenset[str] = frozenset(
+    {"physics_enc", "alpha_emb", "trunk_fusion", "time_embed"}
+)
+
+
+def _init_ddp_process_group(
+    rank: int,
+    world_size: int,
+    backend: str = "nccl",
+) -> None:
+    """Initialise the default torch.distributed process group for DDP.
+
+    Uses the ``env://`` init method — the launcher (``torch.multiprocessing.spawn``)
+    sets ``MASTER_ADDR`` / ``MASTER_PORT`` before forking worker processes.
+
+    Falls back to the ``gloo`` backend when NCCL is unavailable (CPU-only or
+    non-CUDA builds) so that unit tests can still exercise the DDP paths.
+    """
+    import torch.distributed as dist
+
+    if dist.is_initialized():
+        return
+
+    import os
+
+    os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+    os.environ.setdefault("MASTER_PORT", "29500")
+
+    try:
+        dist.init_process_group(
+            backend=backend,
+            rank=rank,
+            world_size=world_size,
+        )
+    except Exception as exc:
+        logger.warning(
+            "DDP: NCCL init failed (%s); falling back to gloo backend", exc
+        )
+        dist.init_process_group(
+            backend="gloo",
+            rank=rank,
+            world_size=world_size,
+        )
+
+
+def _destroy_ddp_process_group() -> None:
+    """Tear down the distributed process group if one was initialised."""
+    try:
+        import torch.distributed as dist
+
+        if dist.is_initialized():
+            dist.destroy_process_group()
+    except Exception:
+        pass
+
+
+def _ddp_fold_worker(
+    rank: int,
+    world_size: int,
+    fold_assignments: "list[tuple[int, np.ndarray, np.ndarray]]",
+    shared_state: dict,
+    oof_preds_shared: "torch.Tensor",
+    oof_std_shared: "torch.Tensor",
+) -> None:
+    """Worker function spawned by ``torch.multiprocessing.spawn`` for DDP folds.
+
+    Each rank processes the fold at ``fold_assignments[rank]``.  Results are
+    written back into the pre-allocated shared-memory tensors
+    ``oof_preds_shared`` and ``oof_std_shared``.
+
+    Parameters
+    ----------
+    rank             : worker rank (0 … world_size-1)
+    world_size       : total number of worker processes
+    fold_assignments : list of ``(fold_idx, train_idx, test_idx)`` tuples;
+                       rank ``r`` processes ``fold_assignments[r]``
+    shared_state     : serialisable dict produced by ``train_neural_meta``
+                       before the fold loop (see ``_build_fold_shared_state``)
+    oof_preds_shared : shared-memory 1-D float32 tensor of length N
+    oof_std_shared   : shared-memory 1-D float32 tensor of length N
+    """
+    _init_ddp_process_group(rank, world_size)
+    device = torch.device(f"cuda:{rank}" if torch.cuda.is_available() else "cpu")
+
+    try:
+        # Move tensors in the shared state to this worker's device.
+        # Large tensors start on CPU (shared memory); we move them here so
+        # each worker operates on its own GPU copy.
+        s = dict(shared_state)
+        raw_tensors = s.get("tensors", {})
+        s["tensors"] = {
+            k: (v.to(device) if isinstance(v, torch.Tensor) else v)
+            for k, v in raw_tensors.items()
+        }
+        if s.get("alpha_targets") is not None:
+            s["alpha_targets"] = s["alpha_targets"].to(device)
+
+        if rank < len(fold_assignments):
+            fold_idx, train_idx, test_idx = fold_assignments[rank]
+            test_out, oof_p, oof_s = _exec_cv_fold(
+                fold_idx, train_idx, test_idx, s, device
+            )
+            oof_preds_shared[test_out] = torch.from_numpy(oof_p)
+            oof_std_shared[test_out] = torch.from_numpy(oof_s)
+    finally:
+        _destroy_ddp_process_group()
+
+
+def _exec_cv_fold(
+    fold_idx: int,
+    train_idx: "np.ndarray",
+    test_idx: "np.ndarray",
+    ss: dict,
+    device: "torch.device",
+) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
+    """Train one CV fold and return ``(test_idx, oof_preds_slice, oof_std_slice)``.
+
+    All outer-scope state that the fold body needs is packaged in *ss* (the
+    shared-state dict produced by ``_build_fold_shared_state`` inside
+    ``train_neural_meta``).  The function is module-level so it can be called
+    from ``_ddp_fold_worker`` (via ``torch.multiprocessing.spawn``) as well
+    as from the sequential fold loop.
+
+    Parameters
+    ----------
+    fold_idx  : 0-based fold index (for logging)
+    train_idx : row indices into the full dataset for this fold's training set
+    test_idx  : row indices for the held-out set
+    ss        : shared-state dict (see ``_build_fold_shared_state``)
+    device    : torch device this fold runs on
+
+    Returns
+    -------
+    test_idx       : same array as input (passed through for DDP convenience)
+    oof_preds_fold : (len(test_idx),) float32 predictions in *normalised* space
+    oof_std_fold   : (len(test_idx),) float32 MC-Dropout uncertainty
+    """
+    from sparc.models.neural_meta import SPARCMetaLearner
+    from sparc.models.process_rate_net import ProcessRateNet, SourceTermNet
+    from sparc.models.surrogates import (
+        DifferentiableGGPGAM,
+        DifferentiableGWR,
+        DifferentiableGWRF,
+    )
+    from sparc.training.curriculum import get_lambda_schedule
+    from sparc.training.loss import sparc_joint_loss
+    from sparc.training.optimizer import (
+        build_optimizer,
+        build_scheduler,
+        spatial_minibatch_sampler,
+    )
+    from sparc.models.ema_trunk import EMATrunk
+    from sparc.models.latent_predictor import LatentPredictor
+    from sparc.training.jepa_loss import (
+        JEPALossWeights,  # noqa: F401 — imported for type compat
+        jepa_curriculum_weight,
+        jepa_loss,
+        spatial_patch_mask,
+    )
+    from sparc.models.action_embedding import ActionEmbedding
+
+    # ---- Unpack shared state ----
+    tensors                   = ss["tensors"]
+    coords                    = ss["coords_np"]
+    alpha_targets             = ss["alpha_targets"]
+    jepa_pretrained_trunk_state = ss["jepa_pretrained_trunk_state"]
+    base_oof_predictions      = ss["base_oof_predictions"]
+    hidden_dim                = ss["hidden_dim"]
+    dropout                   = ss["dropout"]
+    n_heads                   = ss["n_heads"]
+    max_neighbors             = ss["max_neighbors"]
+    siren_omega               = ss["siren_omega"]
+    thresholds                = ss["thresholds"]
+    thresholds_norm           = ss["thresholds_norm"]
+    time_embed_dim            = ss["time_embed_dim"]
+    n_base                    = ss["n_base"]
+    n_physics                 = ss["n_physics"]
+    n_physics_extended        = ss["n_physics_extended"]
+    d_spatial                 = ss["d_spatial"]
+    resolution                = ss["resolution"]
+    y_mean                    = ss["y_mean"]
+    y_std                     = ss["y_std"]
+    pr_input_dim              = ss["pr_input_dim"]
+    pr_col_idxs               = ss["pr_col_idxs"]
+    prior_mean                = ss["prior_mean"]
+    pr_cfg                    = ss["pr_cfg"]
+    n_treatments              = ss["n_treatments"]
+    material_priors           = ss["material_priors"]
+    pr_pretrain_epochs        = ss["pr_pretrain_epochs"]
+    n_epochs                  = ss["n_epochs"]
+    pretrain_epochs           = ss["pretrain_epochs"]
+    lr                        = ss["lr"]
+    clip_norm                 = ss["clip_norm"]
+    warmup_epochs             = ss["warmup_epochs"]
+    ramp_epochs               = ss["ramp_epochs"]
+    batch_size                = ss["batch_size"]
+    target_lambdas            = ss["target_lambdas"]
+    feature_names             = ss["feature_names"]
+    gwrf_k                    = ss["gwrf_k"]
+    predictor_bandwidths      = ss["predictor_bandwidths"]
+    predictor_kernel_field    = ss["predictor_kernel_field"]
+    jepa_enable               = ss["jepa_enable"]
+    jepa_weights              = ss["jepa_weights"]
+    jepa_mask_ratio           = ss["jepa_mask_ratio"]
+    jepa_spatial_patch        = ss["jepa_spatial_patch"]
+    jepa_n_patches            = ss["jepa_n_patches"]
+    jepa_lambda               = ss["jepa_lambda"]
+    jepa_ema_tau_start        = ss["jepa_ema_tau_start"]
+    jepa_ema_tau_end          = ss["jepa_ema_tau_end"]
+    jepa_warmup_steps         = ss["jepa_warmup_steps"]
+    jepa_curric_start         = ss["jepa_curric_start"]
+    jepa_curric_end           = ss["jepa_curric_end"]
+    jepa_lambda_scenario      = ss["jepa_lambda_scenario"]
+    jepa_lambda_latent_pde    = ss["jepa_lambda_latent_pde"]
+    jepa_scenario_perturb_std = ss["jepa_scenario_perturb_std"]
+    jepa_predictor_blocks     = ss["jepa_predictor_blocks"]
+    jepa_predictor_film       = ss["jepa_predictor_film"]
+    jepa_action_dim           = ss["jepa_action_dim"]
+    _ewc_active               = ss["ewc_active"]
+    _ewc_lambda               = ss["ewc_lambda"]
+    _cont_fisher              = ss["cont_fisher"]
+    _cont_optimal             = ss["cont_optimal"]
+    _ot_active                = ss["ot_active"]
+    _ot_lambda                = ss["ot_lambda"]
+    _coreset_acts             = ss["coreset_acts"]
+    _use_amp                  = ss["use_amp"]
+    _use_cuda_graphs          = ss["use_cuda_graphs"]
+    n_folds                   = ss["n_folds"]
+
+    # ---- Per-fold AMP scaler (fresh per-process instance) ----
+    _scaler = torch.cuda.amp.GradScaler(enabled=_use_amp)
+
+    # ---- OT trunk hook (mutable; created fresh per fold) ----
+    _trunk_acts_cv_bucket: list = []
+
+    def _make_trunk_hook(bucket: list):
+        def _hook(module, inp, out):
+            bucket.append(out.detach())
+        return _hook
+
+    # ---- Conditionally import EWC / OT functions ----
+    _ewc_penalty = None
+    if _ewc_active:
+        from sparc.training.ewc import ewc_penalty as _ewc_penalty  # type: ignore[assignment]
+
+    _wta = None
+    if _ot_active:
+        from sparc.training.ewc import wasserstein_trunk_alignment as _wta  # type: ignore[assignment]
+
+    # =====================================================================
+    # Fold body — extracted from train_neural_meta (originally lines 1667–2342)
+    # =====================================================================
+    _fold_t0 = _time.perf_counter()
+    logger.info(
+        "Fold %d / %d  (%d train, %d test)",
+        fold_idx + 1, n_folds, len(train_idx), len(test_idx),
+    )
+
+    # ---- Slice training data ----
+    train_physics     = tensors["physics_feats"][train_idx]
+    train_physics_ext = tensors["physics_feats_extended"][train_idx]
+    train_spatial     = tensors["X_spatial"][train_idx]
+    train_coords      = tensors["coords"][train_idx]
+    train_y           = tensors["y"][train_idx]
+    train_h           = tensors["h_field"][train_idx] if tensors["h_field"] is not None else None
+    train_water_mask  = tensors["water_mask"][train_idx] if tensors.get("water_mask") is not None else None
+    train_alpha_targets = alpha_targets[train_idx] if alpha_targets is not None else None
+
+    # ---- Build fold-local KNN for spatial attention + GWRF kernel ----
+    logger.info("  Building KNN index (k=%d) ...", max_neighbors)
+    fold_knn_np, fold_knn_dists_np = _build_knn_index(
+        coords[train_idx], max_neighbors, return_dists=True,
+    )
+    fold_knn       = torch.tensor(fold_knn_np,       dtype=torch.long,    device=device)
+    fold_knn_dists = torch.tensor(fold_knn_dists_np, dtype=torch.float32, device=device)
+    logger.info("  KNN ready.")
+
+    # ---- Build fold-local cardinal neighbors for physics loss ----
+    fold_cardinal_np, _ = _build_cardinal_neighbors(
+        coords[train_idx], resolution=resolution,
+    )
+    fold_cardinal = torch.tensor(fold_cardinal_np, dtype=torch.long, device=device)
+
+    # ---- Instantiate models ----
+    process_net = ProcessRateNet(
+        n_inputs=pr_input_dim,
+        domain_config={
+            "name": pr_cfg.get("name", "rate"),
+            "units": pr_cfg.get("units", ""),
+            "bounds": pr_cfg.get("bounds", [0.0, 1.0]),
+            "prior_mean": pr_cfg.get("prior_mean", 0.5),
+        },
+        n_treatments=n_treatments,
+    ).to(device)
+
+    source_net = SourceTermNet(n_inputs=n_physics).to(device)
+
+    model = SPARCMetaLearner(
+        n_base_models=n_base,
+        n_physics_features=n_physics_extended,
+        d_spatial=d_spatial,
+        hidden_dim=hidden_dim,
+        dropout=dropout,
+        thresholds=thresholds,
+        n_heads=n_heads,
+        max_neighbors=max_neighbors,
+        siren_omega=siren_omega,
+        init_bandwidth=float(predictor_bandwidths.mean()) if predictor_bandwidths is not None else 1000.0,
+        time_embed_dim=time_embed_dim,
+    ).to(device)
+
+    # OT trunk alignment: register forward hook
+    if _ot_active:
+        _trunk_acts_cv_bucket.clear()
+        model.trunk_fusion.register_forward_hook(_make_trunk_hook(_trunk_acts_cv_bucket))
+
+    # Transfer JEPA-pretrained trunk weights if available
+    if jepa_pretrained_trunk_state is not None:
+        model.load_state_dict(jepa_pretrained_trunk_state, strict=False)
+        logger.info("  Fold %d: transferred JEPA-pretrained trunk", fold_idx + 1)
+
+    # ---- Differentiable surrogates ----
+    surrogates = {
+        "gwr": DifferentiableGWR(
+            n_vars=n_physics, n_spatial_features=d_spatial,
+            hidden_dim=hidden_dim,
+            bandwidths=predictor_bandwidths,
+            kernel_field=predictor_kernel_field,
+            feature_names=feature_names,
+        ).to(device),
+        "gwrf": DifferentiableGWRF(
+            n_vars=n_physics, n_spatial_features=d_spatial,
+            hidden_dim=hidden_dim,
+            kernel_field=predictor_kernel_field,
+            feature_names=feature_names,
+        ).to(device),
+        "ggpgam": DifferentiableGGPGAM(
+            n_vars=n_physics, n_spatial_features=d_spatial,
+            hidden_dim=min(hidden_dim, 64),
+        ).to(device),
+    }
+
+    # E-Perf-A: compile forward passes when torch >= 2.0
+    model      = _maybe_compile(model)
+    process_net = _maybe_compile(process_net)
+    source_net  = _maybe_compile(source_net)
+    for _k in list(surrogates):
+        surrogates[_k] = _maybe_compile(surrogates[_k])
+
+    # ---- Per-component optimizer + warmup scheduler ----
+    optimizer = build_optimizer(
+        model, process_net, surrogates, base_lr=lr,
+        source_term_net=source_net,
+    )
+    scheduler = build_scheduler(optimizer, n_epochs, warmup_epochs=warmup_epochs)
+
+    # ---- JEPA target trunk + latent predictor (Phase 1) ----
+    ema_trunk:        "EMATrunk | None"    = None
+    latent_predictor: "LatentPredictor | None" = None
+    action_embed:     "ActionEmbedding | None" = None
+    jepa_optimizer:   "torch.optim.Optimizer | None" = None
+    if jepa_enable:
+        ema_trunk = EMATrunk(
+            model,
+            tau_start=jepa_ema_tau_start,
+            tau_end=jepa_ema_tau_end,
+            warmup_steps=jepa_warmup_steps,
+        ).to(device)
+        use_action = (jepa_lambda_scenario > 0.0 or jepa_predictor_blocks > 1)
+        action_dim = jepa_action_dim if use_action else 0
+        latent_predictor = LatentPredictor(
+            hidden_dim=hidden_dim,
+            action_dim=action_dim,
+            dropout=dropout,
+            n_blocks=jepa_predictor_blocks,
+            film=jepa_predictor_film,
+        ).to(device)
+        jepa_params = list(latent_predictor.parameters())
+        if use_action:
+            action_embed = ActionEmbedding(
+                treatment_vocab=feature_names,
+                embed_dim=action_dim,
+            ).to(device)
+            jepa_params += list(action_embed.parameters())
+        jepa_optimizer = torch.optim.AdamW(jepa_params, lr=lr)
+
+    # ---- Build per-fold V1 base-model targets (normalised) ----
+    _fold_base_targets: "dict[str, torch.Tensor] | None" = None
+    if base_oof_predictions is not None:
+        _fold_base_targets = {}
+        for sname in ("gwr", "gwrf", "ggpgam"):
+            if sname in base_oof_predictions:
+                _raw  = base_oof_predictions[sname][train_idx]
+                _norm = (_raw - y_mean) / y_std
+                _fold_base_targets[sname] = torch.tensor(
+                    _norm, dtype=torch.float32, device=device,
+                )
+        if not _fold_base_targets:
+            _fold_base_targets = None
+
+    # ---- Surrogate pre-training (MSE only, no physics/meta) ----
+    if pretrain_epochs > 0:
+        logger.info(
+            "  Pre-training surrogates (%d epochs, MSE only)...", pretrain_epochs,
+        )
+        _pretrain_surrogates(
+            surrogates, train_physics, train_spatial, train_y,
+            n_epochs=pretrain_epochs, lr=lr,
+            base_targets=_fold_base_targets,
+        )
+
+    # ---- Surrogate fidelity targets ----
+    with torch.no_grad():
+        _surr_targets: dict = {}
+        for sname, surr in surrogates.items():
+            if _fold_base_targets and sname in _fold_base_targets:
+                _surr_targets[sname] = _fold_base_targets[sname].detach()
+                r2_vs = "vs V1 base model (anchor)"
+            else:
+                surr.eval()
+                if sname == "gwr":
+                    _out, _ = surr(train_physics, train_spatial)
+                else:
+                    _out = surr(train_physics, train_spatial)
+                _surr_targets[sname] = _out.squeeze().detach()
+                r2_vs = "vs y (no V1 target)"
+            ss_res = ((_surr_targets[sname] - train_y) ** 2).sum()
+            ss_tot = ((train_y - train_y.mean()) ** 2).sum()
+            r2 = (1.0 - ss_res / (ss_tot + 1e-12)).item()
+            logger.info("  Surrogate %s fidelity R²=%.4f %s", sname, r2, r2_vs)
+
+    # ---- Validate surrogates before joint training ----
+    if _fold_base_targets:
+        from sparc.models.surrogates import validate_surrogates
+        validation_results = validate_surrogates(
+            surrogates=surrogates,
+            true_predictions=_fold_base_targets,
+            X=train_physics,
+            spatial_features=train_spatial,
+            threshold=0.85,
+        )
+        failed = [name for name, res in validation_results.items() if not res["passed"]]
+        if failed:
+            raise RuntimeError(
+                f"Surrogate validation failed for: {failed}. "
+                "Joint training aborted — fix surrogate architecture before proceeding."
+            )
+        logger.info("  All surrogates passed validation (R² >= 0.85)")
+
+    # ---- ProcessRateNet pre-training toward mixture prior ----
+    pr_pretrain_epochs_eff = pr_pretrain_epochs
+    if pr_pretrain_epochs_eff > 0 and material_priors:
+        logger.info(
+            "  Pre-training ProcessRateNet with land-cover classification "
+            "(%d epochs, %d materials, monotonicity reg)...",
+            pr_pretrain_epochs_eff, len(material_priors),
+        )
+        pr_final_loss = _pretrain_process_rate_net(
+            process_net=process_net,
+            physics_feats=train_physics,
+            feature_names=feature_names,
+            pr_col_idxs=pr_col_idxs,
+            material_priors=material_priors,
+            n_epochs=pr_pretrain_epochs_eff,
+            device=device,
+            feat_mean=tensors["feat_mean"],
+            feat_std=tensors["feat_std"],
+        )
+        logger.info("  ProcessRateNet pre-training done — final loss=%.6f", pr_final_loss)
+
+    # ---- Training loop ----
+    model.train()
+    process_net.train()
+    for _sv in surrogates.values():
+        _sv.train()
+
+    N_train = len(train_idx)
+    use_minibatch = N_train > batch_size * 2
+
+    if use_minibatch:
+        logger.info(
+            "  Using spatial minibatching: N=%d, batch_size=%d",
+            N_train, batch_size,
+        )
+
+    for epoch in range(n_epochs):
+        lambdas = get_lambda_schedule(
+            epoch, target_lambdas,
+            warmup_end=warmup_epochs,
+            ramp_end=ramp_epochs,
+        )
+
+        # ---- Curriculum transition markers ----
+        if epoch == 0:
+            logger.info("[CURRICULUM] Stage A: Representation Warmup")
+        elif epoch == warmup_epochs:
+            logger.info("[CURRICULUM] Stage B: Physics Activation")
+        elif epoch == ramp_epochs:
+            logger.info("[CURRICULUM] Stage C: Joint Optimization")
+
+        if use_minibatch:
+            batches = list(spatial_minibatch_sampler(
+                coords[train_idx],
+                fold_cardinal_np,
+                batch_size=batch_size,
+                n_batches=max(1, N_train // batch_size),
+            ))
+        else:
+            batches = [np.arange(N_train)]
+
+        epoch_loss      = 0.0
+        epoch_components: dict = {}
+        n_batch_points  = 0
+
+        for b_idx in batches:
+            # CU-9b: pad last (short) batch to static size for CUDA Graph
+            _valid_mask: "torch.Tensor | None" = None
+            if _use_cuda_graphs and len(b_idx) < batch_size:
+                b_idx, _valid_mask = _pad_batch_to_size(b_idx, batch_size, device)
+
+            b_physics     = train_physics[b_idx]
+            b_physics_ext = train_physics_ext[b_idx]
+            b_spatial     = train_spatial[b_idx]
+            b_coords      = train_coords[b_idx]
+            b_y           = train_y[b_idx]
+            b_h           = train_h[b_idx] if train_h is not None else resolution
+            b_water_mask  = train_water_mask[b_idx] if train_water_mask is not None else None
+            b_surr_targets = {k: v[b_idx] for k, v in _surr_targets.items()}
+
+            # Remap KNN and cardinal indices to batch-local space
+            b_knn = _remap_indices_to_local(
+                np.arange(N_train), b_idx, fold_knn[b_idx],
+            )
+            b_cardinal = _remap_indices_to_local(
+                np.arange(N_train), b_idx, fold_cardinal[b_idx],
+            )
+
+            # GWRF kernel
+            b_gwrf_knn = _remap_indices_to_local(
+                np.arange(N_train), b_idx,
+                fold_knn[b_idx][:, :gwrf_k],
+            )
+            b_gwrf_dists = fold_knn_dists[b_idx][:, :gwrf_k]
+
+            # Forward: surrogates → meta-learner (inside AMP context)
+            _fwd_amp = torch.autocast("cuda", dtype=torch.bfloat16, enabled=_use_amp)
+            _fwd_amp.__enter__()
+            surrogate_preds, surrogate_std = _forward_surrogates(
+                surrogates, b_physics, b_spatial,
+                knn_index=b_gwrf_knn, knn_dists=b_gwrf_dists,
+            )
+            base_input = torch.stack(surrogate_preds, dim=1)
+
+            pr_input   = b_physics[:, pr_col_idxs]
+            alpha_full = process_net(pr_input)
+            alpha = (
+                alpha_full
+                if alpha_full.shape[-1] == 1
+                else alpha_full.mean(dim=-1, keepdim=True)
+            )
+            alpha_prior = torch.full_like(alpha, prior_mean)
+
+            b_source = source_net(b_physics).squeeze(-1)
+
+            T_pred, exceedance, _ = model(
+                base_preds=base_input,
+                physics_feats=b_physics_ext,
+                X_spatial=b_spatial,
+                coords=b_coords,
+                knn_index=b_knn,
+                alpha=alpha,
+                surrogate_std=surrogate_std,
+                knn_dists=fold_knn_dists[b_idx],
+                time_idx=tensors["time_idx"][b_idx] if tensors["time_idx"] is not None else None,
+            )
+            _fwd_amp.__exit__(None, None, None)
+            if _use_amp:
+                T_pred = T_pred.float()
+                if isinstance(exceedance, torch.Tensor):
+                    exceedance = exceedance.float()
+
+            # ---- JEPA Phase 1 ----
+            b_jepa_h_pred            = None
+            b_jepa_h_target          = None
+            b_jepa_scenario_h_pred   = None
+            b_jepa_scenario_h_target = None
+            b_jepa_latent_h          = None
+            b_jepa_latent_neighbor   = None
+            b_jepa_latent_alpha      = None
+            jepa_lambda_eff             = 0.0
+            jepa_lambda_scenario_eff    = 0.0
+            jepa_lambda_latent_pde_eff  = 0.0
+            if jepa_enable:
+                curric = jepa_curriculum_weight(
+                    epoch,
+                    warmup_start=jepa_curric_start,
+                    warmup_end=jepa_curric_end,
+                )
+                jepa_lambda_eff            = jepa_lambda * curric
+                jepa_lambda_scenario_eff   = jepa_lambda_scenario * curric
+                jepa_lambda_latent_pde_eff = jepa_lambda_latent_pde * curric
+
+                h_state_online: "torch.Tensor | None" = None
+
+                if jepa_lambda_eff > 0.0:
+                    if jepa_spatial_patch:
+                        _patch_mask = spatial_patch_mask(
+                            b_coords, mask_ratio=jepa_mask_ratio,
+                            n_patches=jepa_n_patches,
+                        )
+                        b_phys_ctx = b_physics_ext.clone()
+                        b_phys_ctx[_patch_mask] = 0.0
+                        channel_mask = None
+                    else:
+                        b_phys_ctx = b_physics_ext
+                        n_phys_feat = b_physics_ext.shape[-1]
+                        keep_p = max(0.0, 1.0 - jepa_mask_ratio)
+                        channel_mask = (
+                            torch.rand(n_phys_feat, device=device) < keep_p
+                        ).to(b_physics_ext.dtype)
+                    h_context = model.encode(
+                        physics_feats=b_phys_ctx,
+                        alpha=alpha,
+                        channel_mask=channel_mask,
+                    )
+                    b_jepa_h_pred   = latent_predictor(h_context)
+                    b_jepa_h_target = ema_trunk.encode_target(
+                        physics_feats=b_physics_ext, alpha=alpha,
+                    )
+
+                # ---- JEPA Phase 2: scenario distillation ----
+                if (
+                    jepa_lambda_scenario_eff > 0.0
+                    and action_embed is not None
+                    and len(feature_names) > 0
+                ):
+                    treat_pos = int(torch.randint(
+                        0, len(feature_names), (1,), device=device,
+                    ).item())
+                    delta_x_val = float(
+                        torch.randn((), device=device).item()
+                        * jepa_scenario_perturb_std
+                    )
+
+                    b_phys_perturbed = b_physics_ext.clone()
+                    b_phys_perturbed[:, treat_pos] = (
+                        b_phys_perturbed[:, treat_pos] + delta_x_val
+                    )
+
+                    if h_state_online is None:
+                        h_state_online = model.encode(
+                            physics_feats=b_physics_ext, alpha=alpha,
+                        )
+
+                    n_pts = b_physics_ext.shape[0]
+                    treat_idx = torch.full(
+                        (n_pts,), treat_pos, dtype=torch.long, device=device,
+                    )
+                    dx = torch.full(
+                        (n_pts,), delta_x_val,
+                        dtype=b_physics_ext.dtype, device=device,
+                    )
+                    dt = torch.zeros_like(dx)
+                    a_emb = action_embed(treat_idx, dx, dt)
+
+                    b_jepa_scenario_h_pred   = latent_predictor(h_state_online, a_emb)
+                    b_jepa_scenario_h_target = ema_trunk.encode_target(
+                        physics_feats=b_phys_perturbed, alpha=alpha,
+                    )
+
+                # ---- JEPA Phase 2: latent PDE consistency ----
+                if (
+                    jepa_lambda_latent_pde_eff > 0.0
+                    and b_cardinal is not None
+                    and b_cardinal.numel() > 0
+                ):
+                    if h_state_online is None:
+                        h_state_online = model.encode(
+                            physics_feats=b_physics_ext, alpha=alpha,
+                        )
+                    b_jepa_latent_h        = h_state_online
+                    b_jepa_latent_neighbor = b_cardinal
+                    b_jepa_latent_alpha    = alpha
+
+            total_loss, components = sparc_joint_loss(
+                T_pred=T_pred,
+                exceedance_preds=exceedance,
+                y_true=b_y,
+                thresholds=thresholds_norm,
+                alpha=alpha,
+                alpha_prior=alpha_prior,
+                neighbor_idx=b_cardinal,
+                source_term=b_source,
+                resolution=resolution,
+                surrogate_preds=surrogate_preds,
+                surrogate_targets=[
+                    b_surr_targets["gwr"],
+                    b_surr_targets["gwrf"],
+                    b_surr_targets["ggpgam"],
+                ],
+                lambda_physics=lambdas.get("physics", 0.0),
+                lambda_smooth=lambdas.get("smooth", 0.0),
+                lambda_alpha_smooth=lambdas.get("alpha_smooth", 0.0),
+                lambda_prior=lambdas.get("prior", 1.0),
+                lambda_base=lambdas.get("base", 0.0),
+                lambda_neighbor=lambdas.get("neighbor", 0.0),
+                epoch=epoch,
+                h_field=b_h,
+                lambda_pde=lambdas.get("pde", 0.0),
+                lambda_bc=lambdas.get("bc", 0.0),
+                water_mask=b_water_mask,
+                T_water=tensors.get("T_water"),
+                jepa_h_pred=b_jepa_h_pred,
+                jepa_h_target=b_jepa_h_target,
+                jepa_weights=jepa_weights,
+                lambda_jepa=jepa_lambda_eff,
+                jepa_scenario_h_pred=b_jepa_scenario_h_pred,
+                jepa_scenario_h_target=b_jepa_scenario_h_target,
+                lambda_jepa_scenario=jepa_lambda_scenario_eff,
+                jepa_latent_h=b_jepa_latent_h,
+                jepa_latent_neighbor_idx=b_jepa_latent_neighbor,
+                jepa_latent_alpha=b_jepa_latent_alpha,
+                lambda_jepa_latent_pde=jepa_lambda_latent_pde_eff,
+                sparse_laplacian=tensors.get("sparse_laplacian"),
+                valid_laplacian_mask=tensors.get("valid_laplacian_mask"),
+                sheaf_delta=tensors.get("sheaf_delta"),
+                valid_mask=_valid_mask,
+            )
+
+            # Variance penalty on w(s)
+            if hasattr(model, "_last_w_source") and model._last_w_source is not None:
+                total_loss = total_loss - 0.01 * model._last_w_source.var()
+
+            # Alpha supervision loss
+            if train_alpha_targets is not None:
+                total_loss = total_loss + 0.1 * torch.nn.functional.mse_loss(
+                    alpha, train_alpha_targets[b_idx]
+                )
+
+            # EWC penalty
+            if _ewc_active and _ewc_penalty is not None:
+                total_loss = total_loss + _ewc_lambda * _ewc_penalty(
+                    model, _cont_fisher, _cont_optimal, _TRUNK_KEYS,
+                )
+
+            # OT trunk alignment
+            if _ot_active and _wta is not None:
+                _trunk_acts_cv = _trunk_acts_cv_bucket.pop() if _trunk_acts_cv_bucket else None
+                if _trunk_acts_cv is not None:
+                    ot_loss    = _wta(_trunk_acts_cv, _coreset_acts.to(_trunk_acts_cv.device))
+                    total_loss = total_loss + _ot_lambda * ot_loss
+
+            optimizer.zero_grad()
+            if jepa_optimizer is not None:
+                jepa_optimizer.zero_grad()
+            _scaler.scale(total_loss).backward()
+
+            all_params = (
+                list(model.parameters()) + list(process_net.parameters())
+            )
+            for _sv2 in surrogates.values():
+                all_params.extend(_sv2.parameters())
+            if latent_predictor is not None:
+                all_params.extend(latent_predictor.parameters())
+            if action_embed is not None:
+                all_params.extend(action_embed.parameters())
+            _scaler.unscale_(optimizer)
+            if jepa_optimizer is not None:
+                _scaler.unscale_(jepa_optimizer)
+            torch.nn.utils.clip_grad_norm_(all_params, clip_norm)
+
+            _scaler.step(optimizer)
+            if jepa_optimizer is not None:
+                _scaler.step(jepa_optimizer)
+            _scaler.update()
+
+            _any_jepa = (
+                jepa_lambda_eff > 0.0
+                or jepa_lambda_scenario_eff > 0.0
+                or jepa_lambda_latent_pde_eff > 0.0
+            )
+            if ema_trunk is not None and _any_jepa:
+                ema_trunk.update(model)
+
+            bsize = int(_valid_mask.sum().item()) if _valid_mask is not None else len(b_idx)
+            epoch_loss     += total_loss.item() * bsize
+            n_batch_points += bsize
+            for k, v in components.items():
+                epoch_components[k] = epoch_components.get(k, 0) + v * bsize
+
+        scheduler.step()
+
+        epoch_loss /= max(n_batch_points, 1)
+        for k in epoch_components:
+            epoch_components[k] /= max(n_batch_points, 1)
+
+        logger.info(
+            "  Epoch %d/%d  loss=%.4f  "
+            "[mse=%.3f phys=%.3f nbr=%.3f ce=%.3f "
+            "pde=%.3f bc=%.3f prior=%.3f base=%.3f]  (%.1fs)",
+            epoch + 1, n_epochs, epoch_loss,
+            epoch_components.get("mse", 0),
+            epoch_components.get("physics", 0),
+            epoch_components.get("neighborhood", 0),
+            epoch_components.get("cross_entropy", 0),
+            epoch_components.get("pde_total", 0),
+            epoch_components.get("bc_total", 0),
+            epoch_components.get("alpha_prior", 0),
+            epoch_components.get("surrogate", 0),
+            _time.perf_counter() - _fold_t0,
+        )
+
+        # Convergence tracking
+        if not hasattr(model, "_loss_history"):
+            model._loss_history = []
+        model._loss_history.append(epoch_loss)
+        if len(model._loss_history) > 10:
+            old_loss = model._loss_history[-11]
+            rel_improvement = (old_loss - epoch_loss) / max(abs(old_loss), 1e-8)
+            if rel_improvement < 0.001:
+                logger.info("[CONVERGENCE] converged")
+            elif rel_improvement < 0.01:
+                logger.info("[CONVERGENCE] converging")
+
+    logger.info(
+        "  Fold %d training done in %.1fs",
+        fold_idx + 1, _time.perf_counter() - _fold_t0,
+    )
+
+    # ---- OOF prediction (surrogates → meta-learner) ----
+    model.eval()
+    process_net.eval()
+    for _sv3 in surrogates.values():
+        _sv3.eval()
+
+    full_knn_np, full_knn_dists_np = _build_knn_index(
+        coords, max_neighbors, return_dists=True,
+    )
+    full_knn       = torch.tensor(full_knn_np,       dtype=torch.long,    device=device)
+    full_knn_dists = torch.tensor(full_knn_dists_np, dtype=torch.float32, device=device)
+
+    with torch.no_grad():
+        full_surr_preds, full_surr_std = _forward_surrogates(
+            surrogates, tensors["physics_feats"], tensors["X_spatial"],
+            knn_index=full_knn[:, :gwrf_k],
+            knn_dists=full_knn_dists[:, :gwrf_k],
+        )
+        full_base_input = torch.stack(full_surr_preds, dim=1)
+        full_pr         = tensors["physics_feats"][:, pr_col_idxs]
+        full_alpha_full = process_net(full_pr)
+        full_alpha = (
+            full_alpha_full
+            if full_alpha_full.shape[-1] == 1
+            else full_alpha_full.mean(dim=-1, keepdim=True)
+        )
+
+    mean_pred, std_pred = model.predict_with_uncertainty(
+        base_preds=full_base_input,
+        physics_feats=tensors["physics_feats_extended"],
+        X_spatial=tensors["X_spatial"],
+        coords=tensors["coords"],
+        knn_index=full_knn,
+        alpha=full_alpha,
+        knn_dists=full_knn_dists,
+        n_samples=50,
+    )
+
+    oof_p_fold = mean_pred[test_idx].cpu().numpy()
+    oof_s_fold = std_pred[test_idx].cpu().numpy()
+
+    # CU-5: Release fold models immediately to free CUDA allocator memory.
+    del model, surrogates, process_net, source_net
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
+    return test_idx, oof_p_fold, oof_s_fold
+
+
 def _forward_surrogates(
     surrogates: dict[str, torch.nn.Module],
     physics_feats: torch.Tensor,
@@ -969,6 +1849,7 @@ def train_neural_meta(
     optim_cfg = config.get("optimization", {})
     pr_cfg = config.get("process_rate", {})
     jepa_cfg = config.get("jepa", {}) or {}
+    pr_pretrain_epochs = int(pr_cfg.get("pretrain_epochs", 0))
 
     hidden_dim = neural_cfg.get("hidden_dim", 256)
     dropout = neural_cfg.get("dropout", 0.1)
@@ -1312,7 +2193,6 @@ def train_neural_meta(
     _cont_fisher = _cont.get("fisher_matrices", [])
     _cont_optimal = _cont.get("optimal_params_list", [])
     _ewc_active = _ewc_lambda > 0.0 and bool(_cont_fisher) and bool(_cont_optimal)
-    _TRUNK_KEYS = {"physics_enc", "alpha_emb", "trunk_fusion", "time_embed"}
     if _ewc_active:
         from sparc.training.ewc import ewc_penalty as _ewc_penalty
         logger.info(
@@ -1663,683 +2543,116 @@ def train_neural_meta(
         )
         del _pt_model, _pt_ema_trunk, _pt_latent_predictor, _pt_optimizer, _pt_alpha, _pt_beta_proj
 
-    for fold_idx, (train_idx, test_idx) in enumerate(folds):
-        _fold_t0 = _time.perf_counter()
-        logger.info(
-            "Fold %d / %d  (%d train, %d test)",
-            fold_idx + 1, len(folds), len(train_idx), len(test_idx),
-        )
+    # ---- DDP detection (CU-10a) ----
+    _ddp_enabled: bool = False
+    try:
+        from sparc.config.hardware_profile import detect_profile as _dp_ddp
+        _ddp_enabled = bool(getattr(_dp_ddp(), "ddp_enabled", False))
+    except Exception:
+        pass
+    _gpu_count_ddp = getattr(__import__("torch").cuda, "device_count", lambda: 1)() if _ddp_enabled else 1
+    _use_ddp = _ddp_enabled and _gpu_count_ddp > 1 and len(folds) > 1
 
-        # ---- Slice training data ----
-        train_physics = tensors["physics_feats"][train_idx]
-        train_physics_ext = tensors["physics_feats_extended"][train_idx]
-        train_spatial = tensors["X_spatial"][train_idx]
-        train_coords = tensors["coords"][train_idx]
-        train_y = tensors["y"][train_idx]
-        train_h = tensors["h_field"][train_idx] if tensors["h_field"] is not None else None
-        train_water_mask = tensors["water_mask"][train_idx] if tensors.get("water_mask") is not None else None
-        train_alpha_targets = alpha_targets[train_idx] if alpha_targets is not None else None
+    # ---- Build shared state dict for fold workers (CU-10a) ----
+    _fold_shared: dict = {
+        "tensors":                    tensors,
+        "coords_np":                  coords,
+        "alpha_targets":              alpha_targets,
+        "jepa_pretrained_trunk_state": jepa_pretrained_trunk_state,
+        "base_oof_predictions":       base_oof_predictions,
+        "hidden_dim":                 hidden_dim,
+        "dropout":                    dropout,
+        "n_heads":                    n_heads,
+        "max_neighbors":              max_neighbors,
+        "siren_omega":                siren_omega,
+        "thresholds":                 thresholds,
+        "thresholds_norm":            thresholds_norm,
+        "time_embed_dim":             time_embed_dim,
+        "n_base":                     n_base,
+        "n_physics":                  n_physics,
+        "n_physics_extended":         n_physics_extended,
+        "d_spatial":                  d_spatial,
+        "resolution":                 resolution,
+        "y_mean":                     y_mean,
+        "y_std":                      y_std,
+        "pr_input_dim":               pr_input_dim,
+        "pr_col_idxs":                pr_col_idxs,
+        "prior_mean":                 prior_mean,
+        "pr_cfg":                     pr_cfg,
+        "n_treatments":               n_treatments,
+        "material_priors":            material_priors,
+        "pr_pretrain_epochs":         pr_pretrain_epochs,
+        "n_epochs":                   n_epochs,
+        "pretrain_epochs":            pretrain_epochs,
+        "lr":                         lr,
+        "clip_norm":                  clip_norm,
+        "warmup_epochs":              warmup_epochs,
+        "ramp_epochs":                ramp_epochs,
+        "batch_size":                 batch_size,
+        "target_lambdas":             target_lambdas,
+        "feature_names":              feature_names,
+        "gwrf_k":                     gwrf_k,
+        "predictor_bandwidths":       predictor_bandwidths,
+        "predictor_kernel_field":     predictor_kernel_field,
+        "jepa_enable":                jepa_enable,
+        "jepa_weights":               jepa_weights,
+        "jepa_mask_ratio":            jepa_mask_ratio,
+        "jepa_spatial_patch":         jepa_spatial_patch,
+        "jepa_n_patches":             jepa_n_patches,
+        "jepa_lambda":                jepa_lambda,
+        "jepa_ema_tau_start":         jepa_ema_tau_start,
+        "jepa_ema_tau_end":           jepa_ema_tau_end,
+        "jepa_warmup_steps":          jepa_warmup_steps,
+        "jepa_curric_start":          jepa_curric_start,
+        "jepa_curric_end":            jepa_curric_end,
+        "jepa_lambda_scenario":       jepa_lambda_scenario,
+        "jepa_lambda_latent_pde":     jepa_lambda_latent_pde,
+        "jepa_scenario_perturb_std":  jepa_scenario_perturb_std,
+        "jepa_predictor_blocks":      jepa_predictor_blocks,
+        "jepa_predictor_film":        jepa_predictor_film,
+        "jepa_action_dim":            jepa_action_dim,
+        "ewc_active":                 _ewc_active,
+        "ewc_lambda":                 _ewc_lambda,
+        "cont_fisher":                _cont_fisher,
+        "cont_optimal":               _cont_optimal,
+        "ot_active":                  _ot_active,
+        "ot_lambda":                  _ot_lambda,
+        "coreset_acts":               _coreset_acts,
+        "use_amp":                    _use_amp,
+        "use_cuda_graphs":            _use_cuda_graphs,
+        "n_folds":                    len(folds),
+    }
 
-        # ---- Build fold-local KNN for spatial attention + GWRF kernel ----
-        logger.info("  Building KNN index (k=%d) ...", max_neighbors)
-        fold_knn_np, fold_knn_dists_np = _build_knn_index(
-            coords[train_idx], max_neighbors, return_dists=True,
-        )
-        fold_knn = torch.tensor(fold_knn_np, dtype=torch.long, device=device)
-        fold_knn_dists = torch.tensor(fold_knn_dists_np, dtype=torch.float32, device=device)
-        logger.info("  KNN ready.")
-
-        # ---- Build fold-local cardinal neighbors for physics loss ----
-        fold_cardinal_np, _ = _build_cardinal_neighbors(
-            coords[train_idx], resolution=resolution,
-        )
-        fold_cardinal = torch.tensor(fold_cardinal_np, dtype=torch.long, device=device)
-
-        # ---- Instantiate models ----
-        process_net = ProcessRateNet(
-            n_inputs=pr_input_dim,
-            domain_config={
-                "name": pr_cfg.get("name", "rate"),
-                "units": pr_cfg.get("units", ""),
-                "bounds": pr_cfg.get("bounds", [0.0, 1.0]),
-                "prior_mean": pr_cfg.get("prior_mean", 0.5),
-            },
-            n_treatments=n_treatments,
-        ).to(device)
-
-        # FIX A1: Learned source term instead of zeros
-        source_net = SourceTermNet(n_inputs=n_physics).to(device)
-
-        model = SPARCMetaLearner(
-            n_base_models=n_base,
-            n_physics_features=n_physics_extended,
-            d_spatial=d_spatial,
-            hidden_dim=hidden_dim,
-            dropout=dropout,
-            thresholds=thresholds,
-            n_heads=n_heads,
-            max_neighbors=max_neighbors,
-            siren_omega=siren_omega,
-            init_bandwidth=float(predictor_bandwidths.mean()) if predictor_bandwidths is not None else 1000.0,
-            time_embed_dim=time_embed_dim,
-        ).to(device)
-
-        # OT trunk alignment: register forward hook to capture trunk_fusion output
-        if _ot_active:
-            _trunk_acts_cv_bucket.clear()
-            model.trunk_fusion.register_forward_hook(_make_trunk_hook(_trunk_acts_cv_bucket))
-
-        # Transfer JEPA-pretrained trunk weights if available
-        if jepa_pretrained_trunk_state is not None:
-            model.load_state_dict(jepa_pretrained_trunk_state, strict=False)
-            logger.info("  Fold %d: transferred JEPA-pretrained trunk", fold_idx + 1)
-
-        # ---- Differentiable surrogates ----
-        surrogates = {
-            "gwr": DifferentiableGWR(
-                n_vars=n_physics, n_spatial_features=d_spatial,
-                hidden_dim=hidden_dim,
-                bandwidths=predictor_bandwidths,
-                kernel_field=predictor_kernel_field,
-                feature_names=feature_names,
-            ).to(device),
-            "gwrf": DifferentiableGWRF(
-                n_vars=n_physics, n_spatial_features=d_spatial,
-                hidden_dim=hidden_dim,
-                kernel_field=predictor_kernel_field,
-                feature_names=feature_names,
-            ).to(device),
-            "ggpgam": DifferentiableGGPGAM(
-                n_vars=n_physics, n_spatial_features=d_spatial,
-                hidden_dim=min(hidden_dim, 64),
-            ).to(device),
+    # ---- CV fold loop (CU-10a: DDP-parallel or sequential) ----
+    if _use_ddp:
+        import torch.multiprocessing as _tmp
+        _world_size_ddp = min(_gpu_count_ddp, len(folds))
+        _fold_list_ddp = [(fi, tr, te) for fi, (tr, te) in enumerate(folds)]
+        _oof_preds_shared = torch.zeros(len(y), dtype=torch.float32).share_memory_()
+        _oof_std_shared   = torch.zeros(len(y), dtype=torch.float32).share_memory_()
+        # Move tensors to CPU shared memory before spawn
+        _fold_shared["tensors"] = {
+            k: (v.cpu().share_memory_() if isinstance(v, torch.Tensor) else v)
+            for k, v in tensors.items()
         }
-
-        # ── E-Perf-A: compile forward passes when torch ≥ 2.0 ──────────
-        model = _maybe_compile(model)
-        process_net = _maybe_compile(process_net)
-        source_net = _maybe_compile(source_net)
-        for _k in list(surrogates):
-            surrogates[_k] = _maybe_compile(surrogates[_k])
-
-        # ---- Per-component optimizer + warmup scheduler ----
-        optimizer = build_optimizer(
-            model, process_net, surrogates, base_lr=lr,
-            source_term_net=source_net,
+        if alpha_targets is not None:
+            _fold_shared["alpha_targets"] = alpha_targets.cpu().share_memory_()
+        _tmp.spawn(
+            _ddp_fold_worker,
+            nprocs=_world_size_ddp,
+            args=(_world_size_ddp, _fold_list_ddp, _fold_shared,
+                  _oof_preds_shared, _oof_std_shared),
+            join=True,
         )
-        scheduler = build_scheduler(optimizer, n_epochs, warmup_epochs=warmup_epochs)
-
-        # ---- JEPA target trunk + latent predictor (Phase 1) ----
-        ema_trunk: EMATrunk | None = None
-        latent_predictor: LatentPredictor | None = None
-        action_embed: ActionEmbedding | None = None
-        jepa_optimizer: torch.optim.Optimizer | None = None
-        if jepa_enable:
-            ema_trunk = EMATrunk(
-                model,
-                tau_start=jepa_ema_tau_start,
-                tau_end=jepa_ema_tau_end,
-                warmup_steps=jepa_warmup_steps,
-            ).to(device)
-            # Phase 2: action conditioning is enabled when any P2 term
-            # is on (lambda_scenario > 0) OR predictor depth > 1.
-            use_action = (
-                jepa_lambda_scenario > 0.0 or jepa_predictor_blocks > 1
+        oof_preds = _oof_preds_shared.numpy().copy()
+        oof_std   = _oof_std_shared.numpy().copy()
+    else:
+        for fold_idx, (train_idx, test_idx) in enumerate(folds):
+            test_out, oof_p, oof_s = _exec_cv_fold(
+                fold_idx, train_idx, test_idx, _fold_shared, device,
             )
-            action_dim = jepa_action_dim if use_action else 0
-            latent_predictor = LatentPredictor(
-                hidden_dim=hidden_dim,
-                action_dim=action_dim,
-                dropout=dropout,
-                n_blocks=jepa_predictor_blocks,
-                film=jepa_predictor_film,
-            ).to(device)
-            jepa_params = list(latent_predictor.parameters())
-            if use_action:
-                action_embed = ActionEmbedding(
-                    treatment_vocab=feature_names,
-                    embed_dim=action_dim,
-                ).to(device)
-                jepa_params += list(action_embed.parameters())
-            # Predictor + action-embed parameters trained jointly via a
-            # sibling optimizer.
-            jepa_optimizer = torch.optim.AdamW(jepa_params, lr=lr)
-
-        # ---- Build per-fold V1 base-model targets (normalised) ----
-        _fold_base_targets: dict[str, torch.Tensor] | None = None
-        if base_oof_predictions is not None:
-            _fold_base_targets = {}
-            for sname in ("gwr", "gwrf", "ggpgam"):
-                if sname in base_oof_predictions:
-                    _raw = base_oof_predictions[sname][train_idx]
-                    _norm = (_raw - y_mean) / y_std      # same normalisation as y
-                    _fold_base_targets[sname] = torch.tensor(
-                        _norm, dtype=torch.float32, device=device,
-                    )
-            if not _fold_base_targets:
-                _fold_base_targets = None
-
-        # ---- Surrogate pre-training (MSE only, no physics/meta) ----
-        if pretrain_epochs > 0:
-            logger.info(
-                "  Pre-training surrogates (%d epochs, MSE only)...",
-                pretrain_epochs,
-            )
-            _pretrain_surrogates(
-                surrogates, train_physics, train_spatial, train_y,
-                n_epochs=pretrain_epochs, lr=lr,
-                base_targets=_fold_base_targets,
-            )
-
-        # ---- Surrogate fidelity targets ----
-        # When V1 base-model OOF predictions are available, use those
-        # directly as the fidelity anchor for Term 7 so surrogates
-        # stay close to the V1 models.  Otherwise fall back to
-        # caching the surrogate's own pretrained output.
-        with torch.no_grad():
-            _surr_targets = {}
-            for sname, surr in surrogates.items():
-                if _fold_base_targets and sname in _fold_base_targets:
-                    _surr_targets[sname] = _fold_base_targets[sname].detach()
-                    r2_vs = "vs V1 base model (anchor)"
-                else:
-                    surr.eval()
-                    if sname == "gwr":
-                        _out, _ = surr(train_physics, train_spatial)
-                    else:
-                        _out = surr(train_physics, train_spatial)
-                    _surr_targets[sname] = _out.squeeze().detach()
-                    r2_vs = "vs y (no V1 target)"
-                # Log fidelity target quality vs y
-                ss_res = ((_surr_targets[sname] - train_y) ** 2).sum()
-                ss_tot = ((train_y - train_y.mean()) ** 2).sum()
-                r2 = (1.0 - ss_res / (ss_tot + 1e-12)).item()
-                logger.info(
-                    "  Surrogate %s fidelity R²=%.4f %s", sname, r2, r2_vs,
-                )
-
-        # ---- Validate surrogates before joint training ----
-        # When base-model targets are available, gate on R² > threshold
-        # to prevent garbage surrogates from corrupting the meta-learner.
-        if _fold_base_targets:
-            from sparc.models.surrogates import validate_surrogates
-            validation_results = validate_surrogates(
-                surrogates=surrogates,
-                true_predictions=_fold_base_targets,
-                X=train_physics,
-                spatial_features=train_spatial,
-                threshold=0.85,
-            )
-            failed = [name for name, res in validation_results.items()
-                       if not res['passed']]
-            if failed:
-                raise RuntimeError(
-                    f"Surrogate validation failed for: {failed}. "
-                    f"Joint training aborted — fix surrogate architecture "
-                    f"before proceeding."
-                )
-            logger.info("  All surrogates passed validation (R² >= 0.85)")
-
-        # ---- ProcessRateNet pre-training toward mixture prior ----
-        pr_pretrain_epochs = training_cfg.get("pr_pretrain_epochs", 30)
-        material_priors = pr_cfg.get("material_priors", {})
-        if pr_pretrain_epochs > 0 and material_priors:
-            logger.info(
-                "  Pre-training ProcessRateNet with land-cover classification "
-                "(%d epochs, %d materials, monotonicity reg)...",
-                pr_pretrain_epochs, len(material_priors),
-            )
-            pr_final_loss = _pretrain_process_rate_net(
-                process_net=process_net,
-                physics_feats=train_physics,
-                feature_names=feature_names,
-                pr_col_idxs=pr_col_idxs,
-                material_priors=material_priors,
-                n_epochs=pr_pretrain_epochs,
-                device=device,
-                feat_mean=tensors["feat_mean"],
-                feat_std=tensors["feat_std"],
-            )
-            logger.info(
-                "  ProcessRateNet pre-training done — final loss=%.6f",
-                pr_final_loss,
-            )
-
-        # ---- Training loop ----
-        model.train()
-        process_net.train()
-        for s in surrogates.values():
-            s.train()
-
-        N_train = len(train_idx)
-        use_minibatch = N_train > batch_size * 2
-
-        if use_minibatch:
-            from sparc.training.optimizer import spatial_minibatch_sampler
-            logger.info(
-                "  Using spatial minibatching: N=%d, batch_size=%d",
-                N_train, batch_size,
-            )
-
-        for epoch in range(n_epochs):
-            lambdas = get_lambda_schedule(
-                epoch, target_lambdas,
-                warmup_end=warmup_epochs,
-                ramp_end=ramp_epochs,
-            )
-
-            # ---- Curriculum transition markers ----
-            if epoch == 0:
-                logger.info("[CURRICULUM] Stage A: Representation Warmup")
-            elif epoch == warmup_epochs:
-                logger.info("[CURRICULUM] Stage B: Physics Activation")
-            elif epoch == ramp_epochs:
-                logger.info("[CURRICULUM] Stage C: Joint Optimization")
-
-            if use_minibatch:
-                # Spatial minibatch: iterate over contiguous batches
-                batches = list(spatial_minibatch_sampler(
-                    coords[train_idx],
-                    fold_cardinal_np,
-                    batch_size=batch_size,
-                    n_batches=max(1, N_train // batch_size),
-                ))
-            else:
-                batches = [np.arange(N_train)]
-
-            epoch_loss = 0.0
-            epoch_components: dict = {}
-            n_batch_points = 0
-
-            for b_idx in batches:
-                # CU-9b: pad last (short) batch to static size for CUDA Graph
-                _valid_mask: torch.Tensor | None = None
-                if _use_cuda_graphs and len(b_idx) < batch_size:
-                    b_idx, _valid_mask = _pad_batch_to_size(b_idx, batch_size, device)
-
-                b_physics = train_physics[b_idx]
-                b_physics_ext = train_physics_ext[b_idx]
-                b_spatial = train_spatial[b_idx]
-                b_coords = train_coords[b_idx]
-                b_y = train_y[b_idx]
-                b_h = train_h[b_idx] if train_h is not None else resolution
-                b_water_mask = train_water_mask[b_idx] if train_water_mask is not None else None
-                b_surr_targets = {
-                    k: v[b_idx] for k, v in _surr_targets.items()
-                }
-
-                # Remap KNN and cardinal indices to batch-local space
-                b_knn = _remap_indices_to_local(
-                    np.arange(N_train), b_idx, fold_knn[b_idx],
-                )
-                b_cardinal = _remap_indices_to_local(
-                    np.arange(N_train), b_idx, fold_cardinal[b_idx],
-                )
-
-                # GWRF kernel: use first gwrf_k neighbors + remapped distances
-                b_gwrf_knn = _remap_indices_to_local(
-                    np.arange(N_train), b_idx,
-                    fold_knn[b_idx][:, :gwrf_k],
-                )
-                b_gwrf_dists = fold_knn_dists[b_idx][:, :gwrf_k]
-
-                # Forward: surrogates → meta-learner  (inside AMP context)
-                _fwd_amp = torch.autocast("cuda", dtype=torch.bfloat16, enabled=_use_amp)
-                _fwd_amp.__enter__()
-                surrogate_preds, surrogate_std = _forward_surrogates(
-                    surrogates, b_physics, b_spatial,
-                    knn_index=b_gwrf_knn, knn_dists=b_gwrf_dists,
-                )
-                base_input = torch.stack(surrogate_preds, dim=1)
-
-                pr_input = b_physics[:, pr_col_idxs]
-                alpha_full = process_net(pr_input)  # (N, n_treatments)
-                # Collapse to (N, 1) for the meta-learner / loss surface;
-                # mean across heads keeps every head in the gradient path.
-                alpha = (
-                    alpha_full
-                    if alpha_full.shape[-1] == 1
-                    else alpha_full.mean(dim=-1, keepdim=True)
-                )
-                alpha_prior = torch.full_like(alpha, prior_mean)
-
-                # FIX A1: learned source term from physics features
-                b_source = source_net(b_physics).squeeze(-1)
-
-                T_pred, exceedance, _ = model(
-                    base_preds=base_input,
-                    physics_feats=b_physics_ext,
-                    X_spatial=b_spatial,
-                    coords=b_coords,
-                    knn_index=b_knn,
-                    alpha=alpha,
-                    surrogate_std=surrogate_std,
-                    knn_dists=fold_knn_dists[b_idx],
-                    time_idx=tensors["time_idx"][b_idx] if tensors["time_idx"] is not None else None,
-                )
-                # Close AMP context; cast mixed-precision outputs to FP32 for PDE loss.
-                _fwd_amp.__exit__(None, None, None)
-                if _use_amp:
-                    T_pred = T_pred.float()
-                    if isinstance(exceedance, torch.Tensor):
-                        exceedance = exceedance.float()
-
-                # ---- JEPA forward (Phase 1) ----
-                # Compute the masked context embedding from the online
-                # trunk and the unmasked target embedding from the EMA
-                # trunk; the predictor maps context -> target.  All
-                # gated by jepa_enable + per-epoch curriculum weight so
-                # zero-cost when the feature is off.
-                b_jepa_h_pred = None
-                b_jepa_h_target = None
-                b_jepa_scenario_h_pred = None
-                b_jepa_scenario_h_target = None
-                b_jepa_latent_h = None
-                b_jepa_latent_neighbor = None
-                b_jepa_latent_alpha = None
-                jepa_lambda_eff = 0.0
-                jepa_lambda_scenario_eff = 0.0
-                jepa_lambda_latent_pde_eff = 0.0
-                if jepa_enable:
-                    curric = jepa_curriculum_weight(
-                        epoch,
-                        warmup_start=jepa_curric_start,
-                        warmup_end=jepa_curric_end,
-                    )
-                    jepa_lambda_eff = jepa_lambda * curric
-                    jepa_lambda_scenario_eff = jepa_lambda_scenario * curric
-                    jepa_lambda_latent_pde_eff = jepa_lambda_latent_pde * curric
-
-                    # Reusable: online context (no mask) — used by
-                    # both scenario branch and latent-PDE branch.
-                    h_state_online: torch.Tensor | None = None
-
-                    if jepa_lambda_eff > 0.0:
-                        if jepa_spatial_patch:
-                            _patch_mask = spatial_patch_mask(
-                                b_coords, mask_ratio=jepa_mask_ratio,
-                                n_patches=jepa_n_patches,
-                            )
-                            b_phys_ctx = b_physics_ext.clone()
-                            b_phys_ctx[_patch_mask] = 0.0
-                            channel_mask = None
-                        else:
-                            b_phys_ctx = b_physics_ext
-                            n_phys_feat = b_physics_ext.shape[-1]
-                            keep_p = max(0.0, 1.0 - jepa_mask_ratio)
-                            channel_mask = (
-                                torch.rand(n_phys_feat, device=device) < keep_p
-                            ).to(b_physics_ext.dtype)
-                        h_context = model.encode(
-                            physics_feats=b_phys_ctx,
-                            alpha=alpha,
-                            channel_mask=channel_mask,
-                        )
-                        b_jepa_h_pred = latent_predictor(h_context)
-                        b_jepa_h_target = ema_trunk.encode_target(
-                            physics_feats=b_physics_ext, alpha=alpha,
-                        )
-
-                    # ---- JEPA Phase 2: scenario distillation ----
-                    # Sample one treatment per batch and one signed
-                    # magnitude (in normalised feature units).  Build
-                    # a perturbed view, run online predictor with the
-                    # action embedding, target = EMA(perturbed).
-                    if (
-                        jepa_lambda_scenario_eff > 0.0
-                        and action_embed is not None
-                        and len(feature_names) > 0
-                    ):
-                        treat_pos = int(torch.randint(
-                            0, len(feature_names), (1,), device=device,
-                        ).item())
-                        delta_x_val = float(
-                            torch.randn((), device=device).item()
-                            * jepa_scenario_perturb_std
-                        )
-
-                        b_phys_perturbed = b_physics_ext.clone()
-                        b_phys_perturbed[:, treat_pos] = (
-                            b_phys_perturbed[:, treat_pos] + delta_x_val
-                        )
-
-                        if h_state_online is None:
-                            h_state_online = model.encode(
-                                physics_feats=b_physics_ext, alpha=alpha,
-                            )
-
-                        n_pts = b_physics_ext.shape[0]
-                        treat_idx = torch.full(
-                            (n_pts,), treat_pos, dtype=torch.long, device=device,
-                        )
-                        dx = torch.full(
-                            (n_pts,), delta_x_val,
-                            dtype=b_physics_ext.dtype, device=device,
-                        )
-                        dt = torch.zeros_like(dx)
-                        a_emb = action_embed(treat_idx, dx, dt)
-
-                        b_jepa_scenario_h_pred = latent_predictor(
-                            h_state_online, a_emb,
-                        )
-                        b_jepa_scenario_h_target = ema_trunk.encode_target(
-                            physics_feats=b_phys_perturbed, alpha=alpha,
-                        )
-
-                    # ---- JEPA Phase 2: latent PDE consistency ----
-                    # Cheap Laplacian smoothness penalty on the online
-                    # trunk embedding across the existing 4-cardinal
-                    # neighbour stencil — gated by alpha.
-                    if (
-                        jepa_lambda_latent_pde_eff > 0.0
-                        and b_cardinal is not None
-                        and b_cardinal.numel() > 0
-                    ):
-                        if h_state_online is None:
-                            h_state_online = model.encode(
-                                physics_feats=b_physics_ext, alpha=alpha,
-                            )
-                        b_jepa_latent_h = h_state_online
-                        b_jepa_latent_neighbor = b_cardinal
-                        b_jepa_latent_alpha = alpha
-
-                total_loss, components = sparc_joint_loss(
-                    T_pred=T_pred,
-                    exceedance_preds=exceedance,
-                    y_true=b_y,
-                    thresholds=thresholds_norm,
-                    alpha=alpha,
-                    alpha_prior=alpha_prior,
-                    neighbor_idx=b_cardinal,
-                    source_term=b_source,
-                    resolution=resolution,
-                    surrogate_preds=surrogate_preds,
-                    surrogate_targets=[
-                        b_surr_targets["gwr"],
-                        b_surr_targets["gwrf"],
-                        b_surr_targets["ggpgam"],
-                    ],
-                    lambda_physics=lambdas.get("physics", 0.0),
-                    lambda_smooth=lambdas.get("smooth", 0.0),
-                    lambda_alpha_smooth=lambdas.get("alpha_smooth", 0.0),
-                    lambda_prior=lambdas.get("prior", 1.0),
-                    lambda_base=lambdas.get("base", 0.0),
-                    lambda_neighbor=lambdas.get("neighbor", 0.0),
-                    epoch=epoch,
-                    h_field=b_h,
-                    lambda_pde=lambdas.get("pde", 0.0),
-                    lambda_bc=lambdas.get("bc", 0.0),
-                    water_mask=b_water_mask,
-                    T_water=tensors.get("T_water"),
-                    jepa_h_pred=b_jepa_h_pred,
-                    jepa_h_target=b_jepa_h_target,
-                    jepa_weights=jepa_weights,
-                    lambda_jepa=jepa_lambda_eff,
-                    jepa_scenario_h_pred=b_jepa_scenario_h_pred,
-                    jepa_scenario_h_target=b_jepa_scenario_h_target,
-                    lambda_jepa_scenario=jepa_lambda_scenario_eff,
-                    jepa_latent_h=b_jepa_latent_h,
-                    jepa_latent_neighbor_idx=b_jepa_latent_neighbor,
-                    jepa_latent_alpha=b_jepa_latent_alpha,
-                    lambda_jepa_latent_pde=jepa_lambda_latent_pde_eff,
-                    sparse_laplacian=tensors.get("sparse_laplacian"),
-                    valid_laplacian_mask=tensors.get("valid_laplacian_mask"),
-                    sheaf_delta=tensors.get("sheaf_delta"),
-                    valid_mask=_valid_mask,
-                )
-
-                # Variance penalty on w(s): encourage spatial diversity
-                if hasattr(model, "_last_w_source") and model._last_w_source is not None:
-                    total_loss = total_loss - 0.01 * model._last_w_source.var()
-
-                # Alpha supervision loss: maintain land-cover signal
-                if train_alpha_targets is not None:
-                    total_loss = total_loss + 0.1 * torch.nn.functional.mse_loss(alpha, train_alpha_targets[b_idx])
-
-                # EWC penalty (continual learning across cities)
-                if _ewc_active:
-                    total_loss = total_loss + _ewc_lambda * _ewc_penalty(
-                        model, _cont_fisher, _cont_optimal, _TRUNK_KEYS,
-                    )
-
-                # Wasserstein trunk alignment (OT continual learning)
-                if _ot_active:
-                    _trunk_acts_cv = _trunk_acts_cv_bucket.pop() if _trunk_acts_cv_bucket else None
-                    if _trunk_acts_cv is not None:
-                        ot_loss = _wta(_trunk_acts_cv, _coreset_acts.to(_trunk_acts_cv.device))
-                        total_loss = total_loss + _ot_lambda * ot_loss
-
-                optimizer.zero_grad()
-                if jepa_optimizer is not None:
-                    jepa_optimizer.zero_grad()
-                _scaler.scale(total_loss).backward()
-
-                # Global gradient norm clipping across all components
-                all_params = (
-                    list(model.parameters()) + list(process_net.parameters())
-                )
-                for s in surrogates.values():
-                    all_params.extend(s.parameters())
-                if latent_predictor is not None:
-                    all_params.extend(latent_predictor.parameters())
-                if action_embed is not None:
-                    all_params.extend(action_embed.parameters())
-                _scaler.unscale_(optimizer)
-                if jepa_optimizer is not None:
-                    _scaler.unscale_(jepa_optimizer)
-                torch.nn.utils.clip_grad_norm_(all_params, clip_norm)
-
-                _scaler.step(optimizer)
-                if jepa_optimizer is not None:
-                    _scaler.step(jepa_optimizer)
-                _scaler.update()
-                # EMA target trunk update — must follow the optimizer
-                # step so the target tracks the *post-update* online
-                # weights.  Skipped when JEPA contribution was zero
-                # this batch to avoid drifting the target during the
-                # off / pre-warmup phase.
-                _any_jepa = (
-                    jepa_lambda_eff > 0.0
-                    or jepa_lambda_scenario_eff > 0.0
-                    or jepa_lambda_latent_pde_eff > 0.0
-                )
-                if ema_trunk is not None and _any_jepa:
-                    ema_trunk.update(model)
-
-                bsize = int(_valid_mask.sum().item()) if _valid_mask is not None else len(b_idx)
-                epoch_loss += total_loss.item() * bsize
-                n_batch_points += bsize
-                for k, v in components.items():
-                    epoch_components[k] = epoch_components.get(k, 0) + v * bsize
-
-            scheduler.step()
-
-            # Normalise accumulated loss
-            epoch_loss /= max(n_batch_points, 1)
-            for k in epoch_components:
-                epoch_components[k] /= max(n_batch_points, 1)
-
-            # Log every epoch for live training telemetry
-            logger.info(
-                "  Epoch %d/%d  loss=%.4f  "
-                "[mse=%.3f phys=%.3f nbr=%.3f ce=%.3f "
-                "pde=%.3f bc=%.3f prior=%.3f base=%.3f]  (%.1fs)",
-                epoch + 1, n_epochs, epoch_loss,
-                epoch_components.get("mse", 0),
-                epoch_components.get("physics", 0),
-                epoch_components.get("neighborhood", 0),
-                epoch_components.get("cross_entropy", 0),
-                epoch_components.get("pde_total", 0),
-                epoch_components.get("bc_total", 0),
-                epoch_components.get("alpha_prior", 0),
-                epoch_components.get("surrogate", 0),
-                _time.perf_counter() - _fold_t0,
-            )
-
-            # Convergence tracking: compare to 10 epochs ago
-            if not hasattr(model, '_loss_history'):
-                model._loss_history = []
-            model._loss_history.append(epoch_loss)
-            if len(model._loss_history) > 10:
-                old_loss = model._loss_history[-11]
-                rel_improvement = (old_loss - epoch_loss) / max(abs(old_loss), 1e-8)
-                if rel_improvement < 0.001:
-                    logger.info("[CONVERGENCE] converged")
-                elif rel_improvement < 0.01:
-                    logger.info("[CONVERGENCE] converging")
-
-        logger.info(
-            "  Fold %d training done in %.1fs",
-            fold_idx + 1, _time.perf_counter() - _fold_t0,
-        )
-
-        # ---- OOF prediction (surrogates → meta-learner) ----
-        # FIX A5: Build KNN from ALL coords so test points find true spatial
-        # neighbours (including training points), not just other test points.
-        model.eval()
-        process_net.eval()
-        for s in surrogates.values():
-            s.eval()
-
-        full_knn_np, full_knn_dists_np = _build_knn_index(
-            coords, max_neighbors, return_dists=True,
-        )
-        full_knn = torch.tensor(full_knn_np, dtype=torch.long, device=device)
-        full_knn_dists = torch.tensor(full_knn_dists_np, dtype=torch.float32, device=device)
-
-        with torch.no_grad():
-            full_surr_preds, full_surr_std = _forward_surrogates(
-                surrogates, tensors["physics_feats"], tensors["X_spatial"],
-                knn_index=full_knn[:, :gwrf_k],
-                knn_dists=full_knn_dists[:, :gwrf_k],
-            )
-            full_base_input = torch.stack(full_surr_preds, dim=1)
-            full_pr = tensors["physics_feats"][:, pr_col_idxs]
-            full_alpha_full = process_net(full_pr)
-            full_alpha = (
-                full_alpha_full
-                if full_alpha_full.shape[-1] == 1
-                else full_alpha_full.mean(dim=-1, keepdim=True)
-            )
-
-        mean_pred, std_pred = model.predict_with_uncertainty(
-            base_preds=full_base_input,
-            physics_feats=tensors["physics_feats_extended"],
-            X_spatial=tensors["X_spatial"],
-            coords=tensors["coords"],
-            knn_index=full_knn,
-            alpha=full_alpha,
-            knn_dists=full_knn_dists,
-            n_samples=50,
-        )
-
-        oof_preds[test_idx] = mean_pred[test_idx].cpu().numpy()
-        oof_std[test_idx] = std_pred[test_idx].cpu().numpy()
-
-        # CU-5: Release fold models immediately to free CUDA allocator memory.
-        del model, surrogates, process_net, source_net
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
+            oof_preds[test_out] = oof_p
+            oof_std[test_out]   = oof_s
 
     # ---- Denormalise OOF predictions back to original scale ----
     oof_preds = oof_preds * y_std + y_mean
