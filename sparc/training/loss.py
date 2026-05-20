@@ -179,6 +179,8 @@ def sparc_joint_loss(
     # Precomputed sparse Laplacian (optional — accelerates full-N PDE eval)
     sparse_laplacian: torch.Tensor | None = None,
     valid_laplacian_mask: torch.Tensor | None = None,
+    # Static-batch padding mask (optional — CU-9 CUDA Graph support)
+    valid_mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """
     Compute the 8-term joint loss.
@@ -193,7 +195,11 @@ def sparc_joint_loss(
     # ------------------------------------------------------------------
     # 1. Data fidelity — regression MSE
     # ------------------------------------------------------------------
-    mse = F.mse_loss(T_pred.squeeze(), y_true)
+    _t = T_pred.squeeze()
+    if valid_mask is not None:
+        mse = F.mse_loss(_t[valid_mask], y_true[valid_mask])
+    else:
+        mse = F.mse_loss(_t, y_true)
     loss_components["mse"] = mse.item()
 
     # ------------------------------------------------------------------
@@ -206,6 +212,9 @@ def sparc_joint_loss(
             if not torch.isfinite(exc_clamped).all():
                 continue  # skip if NaN/inf leaked through
             target = (y_true > thresh).float()
+            if valid_mask is not None:
+                exc_clamped = exc_clamped[valid_mask]
+                target = target[valid_mask]
             ce = ce + F.binary_cross_entropy(exc_clamped, target)
         ce = ce * 0.5
     loss_components["cross_entropy"] = ce.item()
@@ -245,7 +254,10 @@ def sparc_joint_loss(
     # 6. Alpha prior regularization — decayed by curriculum
     # ------------------------------------------------------------------
     prior_weight = get_prior_weight(epoch, lambda_prior)
-    prior_reg = prior_weight * (alpha - alpha_prior).pow(2).mean()
+    if valid_mask is not None:
+        prior_reg = prior_weight * (alpha[valid_mask] - alpha_prior[valid_mask]).pow(2).mean()
+    else:
+        prior_reg = prior_weight * (alpha - alpha_prior).pow(2).mean()
     loss_components["alpha_prior"] = prior_reg.item()
 
     # ------------------------------------------------------------------
@@ -269,7 +281,12 @@ def sparc_joint_loss(
         for k in range(4):
             valid_k = neighbor_idx[:, k] != -1
             neighbor_loss[valid_k] += 0.25 * point_loss[neighbor_idx[valid_k, k]]
-        neighborhood = lambda_neighbor * (point_loss + 0.3 * neighbor_loss).mean()
+        combined = point_loss + 0.3 * neighbor_loss
+        if valid_mask is not None:
+            n_valid = valid_mask.float().sum().clamp(min=1)
+            neighborhood = lambda_neighbor * (combined * valid_mask.float()).sum() / n_valid
+        else:
+            neighborhood = lambda_neighbor * combined.mean()
     loss_components["neighborhood"] = neighborhood.item()
 
     # ------------------------------------------------------------------

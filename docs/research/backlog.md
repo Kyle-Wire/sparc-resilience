@@ -380,7 +380,15 @@ All changes are guarded by `torch.cuda.is_available()` or new profile fields —
   - **File:** `sparc/models/gwen.py` — in `GWENModel.fit()`, attempt `from cuml.neighbors import NearestNeighbors as _NearestNeighbors` + `from cuml.linear_model import ElasticNet as _ElasticNet`; fall back to sklearn silently. The `NearestNeighbors` interface is identical; ElasticNet loses `CV` (use fixed alpha from global model's `alpha_` — already done in `quick_mode`).
   - **Success criterion:** With `cuml` installed: Stage 1 log shows "GWEN: cuML GPU path active"; ElasticNet + KNN fit time drops ≥ 10× for N > 5k; `gwen_results.json` identical to sklearn path (same seed).
 
-- [ ] **CU-9 CUDA Graph capture for the epoch step** — complexity: **high**
+- [ ] **CU-9 CUDA Graph capture for the epoch step** — complexity: **high** *(synthesized sub-tasks below)*
+  - [x] **CU-9a** `valid_mask` parameter in `sparc_joint_loss` — complexity: **low** — *Done 2026-05-21: Added `valid_mask: torch.Tensor | None = None` to `sparc_joint_loss`; masking applied in MSE, cross-entropy, alpha_prior, and neighborhood terms; PDE/physics terms unchanged; backward compat preserved; 20/20 tests pass.*
+  - [ ] **CU-9b** Static-batch padding helper + CUDA Graph capture in training loops — complexity: **medium**
+    - Add `_pad_batch_to_size(batch_dict, target_size) -> (dict, mask)` helper to `v2_neural_training.py`
+    - Wrap CV fold batch loop and full-retrain batch loop: pad last (short) batch to `batch_size`, pass `valid_mask` to loss
+    - Add `_capture_cuda_graph` helper using `torch.cuda.make_graphed_callables` on the forward+loss+backward sequence
+    - Gate behind `cfg.cuda_graphs: bool` flag (default `False`) to keep CPU/MPS paths untouched
+    - **Files:** `sparc/run/v2_neural_training.py`, `sparc/config/hardware_profile.py`
+    - **Depends on:** CU-9a ✓, CU-1, CU-2, CU-4
   - **Source:** derivatives.md "CUDA Graph Capture for Zero-Overhead Epoch Step"
   - **Gap:** `torch.compile` is applied to individual models but the full forward→loss→backward→step sequence still has ~50 kernel launches per batch due to Python dispatch overhead between models. `torch.cuda.make_graphed_callables` can capture the entire sequence as a single replay kernel, eliminating launch overhead (~15–30% additional throughput on top of AMP + compile).
   - **Blocker — static shapes required:** `spatial_minibatch_sampler` produces variable-size batches (the last batch per epoch is smaller than `batch_size`). CUDA Graphs require static input shapes. Strategy: pad last batch to full `batch_size` with a boolean `valid_mask` tensor; mask the loss summation. This adds 5–10 lines to the batch loop but is unavoidable.
@@ -391,7 +399,12 @@ All changes are guarded by `torch.cuda.is_available()` or new profile fields —
   - **Success criterion:** `nsys profile` or `nvprof` shows single compound kernel per batch step vs. ~50 individual kernels; epoch wall-clock drops ≥ 15% on top of AMP baseline; output identical to non-graphed run (same seed).
   - **Note:** High complexity. Do not attempt before CU-1 + CU-2 + CU-4 are complete.
 
-- [ ] **CU-10 Multi-GPU fold-parallel training via `DistributedDataParallel`** — complexity: **high**
+- [ ] **CU-10 Multi-GPU fold-parallel training via `DistributedDataParallel`** — complexity: **high** *(synthesized sub-tasks below)*
+  - [ ] **CU-10a** DDP spawn entrypoint — complexity: **medium** — Add `_ddp_fold_worker(rank, world_size, fold_idx, shared_tensors, result_queue)` in `v2_neural_training.py`; wrap fold loop with `torch.multiprocessing.spawn` when `gpu_count > 1`. Gate behind `cfg.ddp_enabled: bool`.
+  - [ ] **CU-10b** `dist.all_reduce` in EWC penalty accumulation — complexity: **low** — In `sparc/training/ewc.py`, wrap Fisher penalty accumulation with `dist.all_reduce(fisher, op=dist.ReduceOp.SUM)` when `dist.is_initialized()`.
+  - [ ] **CU-10c** `dist.all_reduce` in OT alignment loop — complexity: **low** — Same pattern as CU-10b for the optimal-transport penalty in the optimizer step; add `if dist.is_initialized(): dist.all_reduce(ot_loss, ...)` guard.
+  - [ ] **CU-10d** JEPA EMA broadcast from rank 0 — complexity: **low** — After each EMA trunk update, broadcast state dict from rank 0 to all ranks: `for p in ema_trunk.parameters(): dist.broadcast(p.data, src=0)`.
+  - [ ] **CU-10e** Partitioned spatial minibatch sampler — complexity: **medium** — Add `rank` / `world_size` parameters to `spatial_minibatch_sampler`; each rank receives its disjoint geographic block from the fold's spatial partition. Collect OOF predictions from `result_queue` after spawn. **Files:** `sparc/run/v2_neural_training.py`, `sparc/config/hardware_profile.py`, `sparc/training/ewc.py`, `sparc/training/optimizer.py`. **Depends on:** CU-1, CU-5.
   - **Source:** derivatives.md "Multi-GPU Fold-Parallel Training via DistributedDataParallel"
   - **Gap:** Each CV fold is fully independent (no cross-fold communication during training). With K GPUs, assigning fold `i` to GPU `i` gives K× training speedup for the CV phase. `HardwareProfile.gpu_count` (from CU-1) provides the worker count. For the full retrain, standard DDP with `batch_size * world_size` linear LR scaling.
   - **Key complications:**

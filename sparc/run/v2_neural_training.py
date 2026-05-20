@@ -2594,6 +2594,13 @@ def train_neural_meta(
             _fwd_amp_rt = torch.autocast("cuda", dtype=torch.bfloat16, enabled=_use_amp)
             _fwd_amp_rt.__enter__()
             surrogate_preds, surrogate_std = _forward_surrogates(
+                final_surrogates, b_phys, b_spat,
+                knn_index=b_gwrf_knn_rt, knn_dists=b_gwrf_dists_rt,
+            )
+            base_input = torch.stack(surrogate_preds, dim=1)
+
+            pr_input = b_phys[:, pr_col_idxs]
+            alpha_full = final_process(pr_input)
             alpha = (
                 alpha_full
                 if alpha_full.shape[-1] == 1
