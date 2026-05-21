@@ -38,9 +38,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import time as _time
 from pathlib import Path
 from typing import Any
+
+from tqdm import tqdm as _tqdm
 
 import joblib
 import numpy as np
@@ -194,133 +197,118 @@ def _pretrain_process_rate_net(
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# FoldState — typed container for the shared state passed to _exec_cv_fold.
+#
+# Replaces the ~50-key ``ss: dict`` with grouped sub-configs so that
+# callers and the fold body can use attribute access instead of opaque
+# string keys, and IDEs / type-checkers can validate field names.
 # ---------------------------------------------------------------------------
+from dataclasses import dataclass, field
 
 
-def _remap_indices_to_local(
-    global_idx: np.ndarray,
-    batch_idx: np.ndarray,
-    neighbor_tensor: torch.Tensor,
-) -> torch.Tensor:
-    """Remap global neighbor indices to batch-local indices.
+@dataclass
+class _ArchConfig:
+    hidden_dim: int
+    dropout: float
+    n_heads: int
+    max_neighbors: int
+    siren_omega: float
+    thresholds: list
+    thresholds_norm: list
+    time_embed_dim: int
+    n_base: int
+    n_physics: int
+    n_physics_extended: int
+    d_spatial: int
+    resolution: float
+    pr_input_dim: int
+    pr_col_idxs: list
+    prior_mean: float
+    pr_cfg: dict
+    n_treatments: int
+    material_priors: dict
+    gwrf_k: int
+    predictor_bandwidths: Any
+    predictor_kernel_field: Any
+    feature_names: list
 
-    Any global index not present in ``batch_idx`` is set to -1.
+
+@dataclass
+class _TrainingConfig:
+    n_epochs: int
+    pretrain_epochs: int
+    pr_pretrain_epochs: int
+    lr: float
+    clip_norm: float
+    warmup_epochs: int
+    ramp_epochs: int
+    batch_size: int
+    target_lambdas: dict
+    y_mean: float
+    y_std: float
+    n_folds: int
+    use_amp: bool
+    use_cuda_graphs: bool
+
+
+@dataclass
+class _JEPAConfig:
+    enable: bool
+    weights: Any
+    mask_ratio: float
+    spatial_patch: bool
+    n_patches: int
+    lam: float
+    ema_tau_start: float
+    ema_tau_end: float
+    warmup_steps: int
+    curric_start: int
+    curric_end: int
+    lambda_scenario: float
+    lambda_latent_pde: float
+    scenario_perturb_std: float
+    predictor_blocks: int
+    predictor_film: bool
+    action_dim: int
+
+
+@dataclass
+class _ContinualConfig:
+    ewc_active: bool
+    ewc_lambda: float
+    cont_fisher: list
+    cont_optimal: list
+    ot_active: bool
+    ot_lambda: float
+    coreset_acts: Any
+
+
+@dataclass
+class FoldState:
+    """Typed container for all state shared with :func:`_exec_cv_fold`.
+
+    Grouping avoids the ~50-key opaque dict pattern and makes the
+    interface between the outer training loop and each CV fold explicit.
     """
-    map_size = int(global_idx.max()) + 1 if len(global_idx) else 0
-    if map_size == 0:
-        return torch.full_like(neighbor_tensor, -1)
-
-    device = neighbor_tensor.device
-
-    # Build global→local map in torch — no .cpu().numpy() round-trip on
-    # neighbor_tensor, which may live on GPU/MPS.
-    local_map = torch.full((map_size,), -1, dtype=torch.long)
-    batch_t = torch.as_tensor(batch_idx, dtype=torch.long)
-    local_map[batch_t] = torch.arange(len(batch_idx), dtype=torch.long)
-    local_map = local_map.to(device)
-
-    nb = neighbor_tensor                        # (B, K) — stays on device
-    valid = (nb >= 0) & (nb < map_size)
-    nb_safe = nb.clamp(0, map_size - 1)        # safe index even for invalid entries
-    return torch.where(valid, local_map[nb_safe], torch.full_like(nb, -1))
+    tensors: dict
+    coords_np: Any
+    alpha_targets: Any
+    jepa_pretrained_trunk_state: Any
+    base_oof_predictions: Any
+    arch: _ArchConfig
+    training: _TrainingConfig
+    jepa: _JEPAConfig
+    continual: _ContinualConfig
 
 
-def _build_knn_index(
-    coords: np.ndarray, max_neighbors: int, return_dists: bool = False,
-) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-    """Build KNN index (N, max_neighbors) from projected coords.
-
-    When *return_dists* is True, also returns (N, max_neighbors) distances.
-    """
-    from scipy.spatial import cKDTree
-
-    tree = cKDTree(coords)
-    dists, indices = tree.query(coords, k=max_neighbors + 1)
-    if return_dists:
-        return indices[:, 1:], dists[:, 1:]
-    return indices[:, 1:]  # exclude self
-
-
-def _build_cardinal_neighbors(
-    coords: np.ndarray,
-    resolution: float | None = None,
-    tol_factor: float = 1.5,
-) -> tuple[np.ndarray, float]:
-    """
-    Build N/S/E/W cardinal neighbor indices for the physics Laplacian.
-
-    Parameters
-    ----------
-    coords : (N, 2) — projected coordinates (x, y)
-    resolution : grid spacing; auto-detected from nearest-neighbour
-                 distances if None
-    tol_factor : max distance tolerance as multiple of resolution
-
-    Returns
-    -------
-    neighbor_idx : (N, 4) int64 — [North, South, East, West], -1 = missing
-    resolution   : detected/used resolution
-    """
-    from scipy.spatial import cKDTree
-
-    N = len(coords)
-    tree = cKDTree(coords)
-
-    if resolution is None:
-        dists, _ = tree.query(coords, k=2)
-        resolution = float(np.median(dists[:, 1]))
-
-    tol = resolution * tol_factor
-
-    # Offsets: North (+y), South (-y), East (+x), West (-x)
-    offsets = np.array([
-        [0, resolution],
-        [0, -resolution],
-        [resolution, 0],
-        [-resolution, 0],
-    ])
-
-    neighbor_idx = np.full((N, 4), -1, dtype=np.int64)
-    for k, offset in enumerate(offsets):
-        targets = coords + offset
-        dists, idxs = tree.query(targets, k=1)
-        valid = dists < tol
-        neighbor_idx[valid, k] = idxs[valid]
-
-    # ------------------------------------------------------------------
-    # Reject self-loops: edge points with no true neighbor in a direction
-    # get assigned themselves (distance = resolution < tol).
-    # ------------------------------------------------------------------
-    arange_N = np.arange(N)
-    for k in range(4):
-        self_loop = neighbor_idx[:, k] == arange_N
-        neighbor_idx[self_loop, k] = -1
-
-    # ------------------------------------------------------------------
-    # Reject wrong-direction assignments: ensure the found neighbor
-    # actually lies in the expected cardinal direction.
-    #   North: dy > 0,  South: dy < 0,  East: dx > 0,  West: dx < 0
-    # ------------------------------------------------------------------
-    _dir_axis = [1, 1, 0, 0]          # y, y, x, x
-    _dir_sign = [1, -1, 1, -1]        # +, -, +, -
-    for k in range(4):
-        valid_mask = neighbor_idx[:, k] >= 0
-        if not valid_mask.any():
-            continue
-        valid_idx = np.where(valid_mask)[0]
-        delta = (coords[neighbor_idx[valid_idx, k], _dir_axis[k]]
-                 - coords[valid_idx, _dir_axis[k]])
-        wrong = (delta * _dir_sign[k]) <= 0
-        neighbor_idx[valid_idx[wrong], k] = -1
-
-    n_complete = int((neighbor_idx != -1).all(axis=1).sum())
-    n_boundary = int((neighbor_idx == -1).any(axis=1).sum())
-    logger.info(
-        "Cardinal neighbors: %d/%d complete, %d boundary (res=%.2f)",
-        n_complete, N, n_boundary, resolution,
-    )
-    return neighbor_idx, resolution
+# ---------------------------------------------------------------------------
+# Geometry helpers — canonical implementations live in sparc.features.geometry
+# ---------------------------------------------------------------------------
+from sparc.features.geometry import (
+    build_knn_index as _build_knn_index,
+    build_cardinal_neighbors as _build_cardinal_neighbors,
+    remap_indices_to_local as _remap_indices_to_local,
+)
 
 
 def _maybe_compile(
@@ -329,6 +317,9 @@ def _maybe_compile(
     """Apply torch.compile when available (torch ≥ 2.0); no-op otherwise."""
     if not hasattr(torch, "compile"):
         return mod
+    import sys
+    if sys.platform == "win32":
+        return mod  # Triton is not supported on Windows
     try:
         return torch.compile(mod, mode=mode)
     except Exception:
@@ -466,19 +457,20 @@ def _ddp_fold_worker(
         # Move tensors in the shared state to this worker's device.
         # Large tensors start on CPU (shared memory); we move them here so
         # each worker operates on its own GPU copy.
-        s = dict(shared_state)
-        raw_tensors = s.get("tensors", {})
-        s["tensors"] = {
+        import copy
+        s = copy.copy(shared_state)  # shallow copy of FoldState
+        s.tensors = {
             k: (v.to(device) if isinstance(v, torch.Tensor) else v)
-            for k, v in raw_tensors.items()
+            for k, v in shared_state.tensors.items()
         }
-        if s.get("alpha_targets") is not None:
-            s["alpha_targets"] = s["alpha_targets"].to(device)
+        if s.alpha_targets is not None:
+            s.alpha_targets = s.alpha_targets.to(device)
 
         if rank < len(fold_assignments):
             fold_idx, train_idx, test_idx = fold_assignments[rank]
             test_out, oof_p, oof_s = _exec_cv_fold(
-                fold_idx, train_idx, test_idx, s, device
+                fold_idx, train_idx, test_idx, s, device,
+                rank=rank, world_size=world_size,
             )
             oof_preds_shared[test_out] = torch.from_numpy(oof_p)
             oof_std_shared[test_out] = torch.from_numpy(oof_s)
@@ -490,23 +482,24 @@ def _exec_cv_fold(
     fold_idx: int,
     train_idx: "np.ndarray",
     test_idx: "np.ndarray",
-    ss: dict,
+    ss: "FoldState",
     device: "torch.device",
+    rank: int = 0,
+    world_size: int = 1,
 ) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
     """Train one CV fold and return ``(test_idx, oof_preds_slice, oof_std_slice)``.
 
-    All outer-scope state that the fold body needs is packaged in *ss* (the
-    shared-state dict produced by ``_build_fold_shared_state`` inside
-    ``train_neural_meta``).  The function is module-level so it can be called
-    from ``_ddp_fold_worker`` (via ``torch.multiprocessing.spawn``) as well
-    as from the sequential fold loop.
+    All outer-scope state that the fold body needs is packaged in *ss* (a
+    :class:`FoldState` produced by ``train_neural_meta`` before the fold loop).
+    The function is module-level so it can be called from ``_ddp_fold_worker``
+    (via ``torch.multiprocessing.spawn``) as well as from the sequential fold loop.
 
     Parameters
     ----------
     fold_idx  : 0-based fold index (for logging)
     train_idx : row indices into the full dataset for this fold's training set
     test_idx  : row indices for the held-out set
-    ss        : shared-state dict (see ``_build_fold_shared_state``)
+    ss        : :class:`FoldState` with all shared configuration and tensors
     device    : torch device this fold runs on
 
     Returns
@@ -540,72 +533,72 @@ def _exec_cv_fold(
     from sparc.models.action_embedding import ActionEmbedding
 
     # ---- Unpack shared state ----
-    tensors                   = ss["tensors"]
-    coords                    = ss["coords_np"]
-    alpha_targets             = ss["alpha_targets"]
-    jepa_pretrained_trunk_state = ss["jepa_pretrained_trunk_state"]
-    base_oof_predictions      = ss["base_oof_predictions"]
-    hidden_dim                = ss["hidden_dim"]
-    dropout                   = ss["dropout"]
-    n_heads                   = ss["n_heads"]
-    max_neighbors             = ss["max_neighbors"]
-    siren_omega               = ss["siren_omega"]
-    thresholds                = ss["thresholds"]
-    thresholds_norm           = ss["thresholds_norm"]
-    time_embed_dim            = ss["time_embed_dim"]
-    n_base                    = ss["n_base"]
-    n_physics                 = ss["n_physics"]
-    n_physics_extended        = ss["n_physics_extended"]
-    d_spatial                 = ss["d_spatial"]
-    resolution                = ss["resolution"]
-    y_mean                    = ss["y_mean"]
-    y_std                     = ss["y_std"]
-    pr_input_dim              = ss["pr_input_dim"]
-    pr_col_idxs               = ss["pr_col_idxs"]
-    prior_mean                = ss["prior_mean"]
-    pr_cfg                    = ss["pr_cfg"]
-    n_treatments              = ss["n_treatments"]
-    material_priors           = ss["material_priors"]
-    pr_pretrain_epochs        = ss["pr_pretrain_epochs"]
-    n_epochs                  = ss["n_epochs"]
-    pretrain_epochs           = ss["pretrain_epochs"]
-    lr                        = ss["lr"]
-    clip_norm                 = ss["clip_norm"]
-    warmup_epochs             = ss["warmup_epochs"]
-    ramp_epochs               = ss["ramp_epochs"]
-    batch_size                = ss["batch_size"]
-    target_lambdas            = ss["target_lambdas"]
-    feature_names             = ss["feature_names"]
-    gwrf_k                    = ss["gwrf_k"]
-    predictor_bandwidths      = ss["predictor_bandwidths"]
-    predictor_kernel_field    = ss["predictor_kernel_field"]
-    jepa_enable               = ss["jepa_enable"]
-    jepa_weights              = ss["jepa_weights"]
-    jepa_mask_ratio           = ss["jepa_mask_ratio"]
-    jepa_spatial_patch        = ss["jepa_spatial_patch"]
-    jepa_n_patches            = ss["jepa_n_patches"]
-    jepa_lambda               = ss["jepa_lambda"]
-    jepa_ema_tau_start        = ss["jepa_ema_tau_start"]
-    jepa_ema_tau_end          = ss["jepa_ema_tau_end"]
-    jepa_warmup_steps         = ss["jepa_warmup_steps"]
-    jepa_curric_start         = ss["jepa_curric_start"]
-    jepa_curric_end           = ss["jepa_curric_end"]
-    jepa_lambda_scenario      = ss["jepa_lambda_scenario"]
-    jepa_lambda_latent_pde    = ss["jepa_lambda_latent_pde"]
-    jepa_scenario_perturb_std = ss["jepa_scenario_perturb_std"]
-    jepa_predictor_blocks     = ss["jepa_predictor_blocks"]
-    jepa_predictor_film       = ss["jepa_predictor_film"]
-    jepa_action_dim           = ss["jepa_action_dim"]
-    _ewc_active               = ss["ewc_active"]
-    _ewc_lambda               = ss["ewc_lambda"]
-    _cont_fisher              = ss["cont_fisher"]
-    _cont_optimal             = ss["cont_optimal"]
-    _ot_active                = ss["ot_active"]
-    _ot_lambda                = ss["ot_lambda"]
-    _coreset_acts             = ss["coreset_acts"]
-    _use_amp                  = ss["use_amp"]
-    _use_cuda_graphs          = ss["use_cuda_graphs"]
-    n_folds                   = ss["n_folds"]
+    tensors                     = ss.tensors
+    coords                      = ss.coords_np
+    alpha_targets               = ss.alpha_targets
+    jepa_pretrained_trunk_state = ss.jepa_pretrained_trunk_state
+    base_oof_predictions        = ss.base_oof_predictions
+    hidden_dim                  = ss.arch.hidden_dim
+    dropout                     = ss.arch.dropout
+    n_heads                     = ss.arch.n_heads
+    max_neighbors               = ss.arch.max_neighbors
+    siren_omega                 = ss.arch.siren_omega
+    thresholds                  = ss.arch.thresholds
+    thresholds_norm             = ss.arch.thresholds_norm
+    time_embed_dim              = ss.arch.time_embed_dim
+    n_base                      = ss.arch.n_base
+    n_physics                   = ss.arch.n_physics
+    n_physics_extended          = ss.arch.n_physics_extended
+    d_spatial                   = ss.arch.d_spatial
+    resolution                  = ss.arch.resolution
+    pr_input_dim                = ss.arch.pr_input_dim
+    pr_col_idxs                 = ss.arch.pr_col_idxs
+    prior_mean                  = ss.arch.prior_mean
+    pr_cfg                      = ss.arch.pr_cfg
+    n_treatments                = ss.arch.n_treatments
+    material_priors             = ss.arch.material_priors
+    gwrf_k                      = ss.arch.gwrf_k
+    predictor_bandwidths        = ss.arch.predictor_bandwidths
+    predictor_kernel_field      = ss.arch.predictor_kernel_field
+    feature_names               = ss.arch.feature_names
+    n_epochs                    = ss.training.n_epochs
+    pretrain_epochs             = ss.training.pretrain_epochs
+    pr_pretrain_epochs          = ss.training.pr_pretrain_epochs
+    lr                          = ss.training.lr
+    clip_norm                   = ss.training.clip_norm
+    warmup_epochs               = ss.training.warmup_epochs
+    ramp_epochs                 = ss.training.ramp_epochs
+    batch_size                  = ss.training.batch_size
+    target_lambdas              = ss.training.target_lambdas
+    y_mean                      = ss.training.y_mean
+    y_std                       = ss.training.y_std
+    n_folds                     = ss.training.n_folds
+    _use_amp                    = ss.training.use_amp
+    _use_cuda_graphs            = ss.training.use_cuda_graphs
+    jepa_enable                 = ss.jepa.enable
+    jepa_weights                = ss.jepa.weights
+    jepa_mask_ratio             = ss.jepa.mask_ratio
+    jepa_spatial_patch          = ss.jepa.spatial_patch
+    jepa_n_patches              = ss.jepa.n_patches
+    jepa_lambda                 = ss.jepa.lam
+    jepa_ema_tau_start          = ss.jepa.ema_tau_start
+    jepa_ema_tau_end            = ss.jepa.ema_tau_end
+    jepa_warmup_steps           = ss.jepa.warmup_steps
+    jepa_curric_start           = ss.jepa.curric_start
+    jepa_curric_end             = ss.jepa.curric_end
+    jepa_lambda_scenario        = ss.jepa.lambda_scenario
+    jepa_lambda_latent_pde      = ss.jepa.lambda_latent_pde
+    jepa_scenario_perturb_std   = ss.jepa.scenario_perturb_std
+    jepa_predictor_blocks       = ss.jepa.predictor_blocks
+    jepa_predictor_film         = ss.jepa.predictor_film
+    jepa_action_dim             = ss.jepa.action_dim
+    _ewc_active                 = ss.continual.ewc_active
+    _ewc_lambda                 = ss.continual.ewc_lambda
+    _cont_fisher                = ss.continual.cont_fisher
+    _cont_optimal               = ss.continual.cont_optimal
+    _ot_active                  = ss.continual.ot_active
+    _ot_lambda                  = ss.continual.ot_lambda
+    _coreset_acts               = ss.continual.coreset_acts
 
     # ---- Per-fold AMP scaler (fresh per-process instance) ----
     _scaler = torch.cuda.amp.GradScaler(enabled=_use_amp)
@@ -863,7 +856,17 @@ def _exec_cv_fold(
             N_train, batch_size,
         )
 
-    for epoch in range(n_epochs):
+    _ema_epoch_s = 0.0
+    _epoch_bar = _tqdm(
+        range(n_epochs),
+        desc=f"  Fold {fold_idx + 1} epochs",
+        disable=not sys.stdout.isatty(),
+        leave=False,
+        unit="ep",
+        position=1,
+    )
+    for epoch in _epoch_bar:
+        _epoch_t0 = _time.perf_counter()
         lambdas = get_lambda_schedule(
             epoch, target_lambdas,
             warmup_end=warmup_epochs,
@@ -884,6 +887,8 @@ def _exec_cv_fold(
                 fold_cardinal_np,
                 batch_size=batch_size,
                 n_batches=max(1, N_train // batch_size),
+                rank=rank,
+                world_size=world_size,
             ))
         else:
             batches = [np.arange(N_train)]
@@ -1161,6 +1166,10 @@ def _exec_cv_fold(
             )
             if ema_trunk is not None and _any_jepa:
                 ema_trunk.update(model)
+                import torch.distributed as _dist_ema
+                if _dist_ema.is_available() and _dist_ema.is_initialized():
+                    for _p in ema_trunk.parameters():
+                        _dist_ema.broadcast(_p.data, src=0)
 
             bsize = int(_valid_mask.sum().item()) if _valid_mask is not None else len(b_idx)
             epoch_loss     += total_loss.item() * bsize
@@ -1201,6 +1210,11 @@ def _exec_cv_fold(
                 logger.info("[CONVERGENCE] converged")
             elif rel_improvement < 0.01:
                 logger.info("[CONVERGENCE] converging")
+
+        _epoch_dur = _time.perf_counter() - _epoch_t0
+        _ema_epoch_s = _ema_epoch_s * 0.7 + _epoch_dur * 0.3
+        _remaining_m = _ema_epoch_s * (n_epochs - epoch - 1) / 60.0
+        _epoch_bar.set_postfix(loss=f"{epoch_loss:.4f}", eta=f"{_remaining_m:.1f}m")
 
     logger.info(
         "  Fold %d training done in %.1fs",
@@ -1360,7 +1374,7 @@ def _prepare_tensors(
     max_neighbors = neural_cfg.get("max_neighbors", 128)
 
     # Sinusoidal spatial encoding
-    encoder = SinusoidalSpatialEncoding(n_frequencies=n_freq)
+    encoder = SinusoidalSpatialEncoding(n_frequencies=n_freq).to(device)
     coords_t = torch.tensor(coords, dtype=torch.float32, device=device)
     X_spatial = encoder(coords_t)
 
@@ -1788,6 +1802,80 @@ def _resolve_treatment_list(config: dict) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Latent diffuser training hook (optional, gated by config)
+# ---------------------------------------------------------------------------
+
+def _pretrain_diffuser(model, tensors, alpha_all, config, device, artifact_dir, store):
+    """Train a LatentScenarioDiffuser on the final model's trunk embeddings.
+
+    This is dead code when ``config["diffuser"]["pretrain_epochs"] == 0`` (default).
+    Saves ``scenario_diffuser.pt`` to ``artifact_dir`` and mirrors to the store.
+
+    Parameters
+    ----------
+    model : SPARCMetaLearner
+    tensors : dict — must contain ``"physics_feats"`` and ``"physics_feats_extended"``
+    alpha_all : (N, n_treatments) tensor of process rates
+    config : pipeline config dict
+    device : torch.device
+    artifact_dir : Path
+    store : ArtifactStore or None
+    """
+    n_epochs = config.get("diffuser", {}).get("pretrain_epochs", 0)
+    if n_epochs <= 0:
+        return
+
+    from sparc.models.scenario_diffuser import LatentScenarioDiffuser
+
+    n_physics_cond = tensors["physics_feats"].shape[1]
+    bottleneck = config.get("diffuser", {}).get("bottleneck", 32)
+    T_steps = config.get("diffuser", {}).get("T", 200)
+    lr = config.get("diffuser", {}).get("lr", 1e-3)
+
+    diffuser = LatentScenarioDiffuser(
+        trunk_dim=model.hidden_dim,
+        bottleneck=bottleneck,
+        cond_dim=n_physics_cond,
+        T=T_steps,
+    ).to(device)
+
+    # Collect trunk embeddings once (no gradient needed)
+    model.eval()
+    with torch.no_grad():
+        alpha_t = alpha_all.mean(dim=-1, keepdim=True)          # (N, 1)
+        h_trunk = model.encode(tensors["physics_feats_extended"], alpha_t)  # (N, hidden_dim)
+        cond_feats = tensors["physics_feats"]                    # (N, n_physics_cond)
+
+    opt = torch.optim.Adam(diffuser.parameters(), lr=lr)
+    diffuser.train()
+    for ep in range(n_epochs):
+        opt.zero_grad()
+        loss = diffuser.loss(h_trunk, cond=cond_feats)
+        loss.backward()
+        opt.step()
+        if ep == 0 or (ep + 1) % max(1, n_epochs // 5) == 0:
+            logger.info("  Diffuser pretrain epoch %d/%d  loss=%.4f", ep + 1, n_epochs, loss.item())
+
+    diffuser.eval()
+    state = diffuser.state_dict()
+    torch.save(state, artifact_dir / "scenario_diffuser.pt")
+    # Save architecture config so run_with_diffusion_posterior can reconstruct correctly
+    import json as _json_diff
+    _diff_cfg = {"trunk_dim": model.hidden_dim, "bottleneck": bottleneck, "cond_dim": n_physics_cond, "T": T_steps}
+    with open(artifact_dir / "scenario_diffuser_config.json", "w") as _f:
+        _json_diff.dump(_diff_cfg, _f)
+    logger.info("  Saved scenario_diffuser.pt (trunk_dim=%d, cond_dim=%d, T=%d)",
+                model.hidden_dim, n_physics_cond, T_steps)
+
+    if store is not None:
+        try:
+            store.write_blob("2", "v2_diffuser_state", state,
+                             serializer="torch", producer="v2_neural_training")
+        except Exception as _e:
+            logger.warning("Could not mirror diffuser state to artifacts.db: %s", _e)
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -1894,9 +1982,6 @@ def train_neural_meta(
         _use_cuda_graphs = device.type == "cuda" and bool(getattr(_dp(), "cuda_graphs", False))
     except Exception:
         pass
-    if _use_cuda_graphs:
-        logger.info("CUDA Graphs enabled — batches padded to static size=%d", batch_size)
-
     # ---- Prepare data ----
     # Stash feature_names into config for _prepare_tensors
     config["_feature_names"] = feature_names
@@ -2186,6 +2271,8 @@ def train_neural_meta(
                 batch_size = _hp.gpu_batch_size
         except Exception:  # pragma: no cover
             pass
+    if _use_cuda_graphs:
+        logger.info("CUDA Graphs enabled — batches padded to static size=%d", batch_size)
 
     # --- Continual learning (EWC) config ---
     _cont = config.get("_continual", {})
@@ -2513,6 +2600,10 @@ def train_neural_meta(
                 torch.nn.utils.clip_grad_norm_(_pt_params, clip_norm)
                 _pt_optimizer.step()
                 _pt_ema_trunk.update(_pt_model)
+                import torch.distributed as _dist_ema_pt
+                if _dist_ema_pt.is_available() and _dist_ema_pt.is_initialized():
+                    for _p in _pt_ema_trunk.parameters():
+                        _dist_ema_pt.broadcast(_p.data, src=0)
 
                 _bsz = len(_pt_b_idx)
                 _pt_epoch_loss += _pt_loss.item() * _bsz
@@ -2554,74 +2645,82 @@ def train_neural_meta(
     _use_ddp = _ddp_enabled and _gpu_count_ddp > 1 and len(folds) > 1
 
     # ---- Build shared state dict for fold workers (CU-10a) ----
-    _fold_shared: dict = {
-        "tensors":                    tensors,
-        "coords_np":                  coords,
-        "alpha_targets":              alpha_targets,
-        "jepa_pretrained_trunk_state": jepa_pretrained_trunk_state,
-        "base_oof_predictions":       base_oof_predictions,
-        "hidden_dim":                 hidden_dim,
-        "dropout":                    dropout,
-        "n_heads":                    n_heads,
-        "max_neighbors":              max_neighbors,
-        "siren_omega":                siren_omega,
-        "thresholds":                 thresholds,
-        "thresholds_norm":            thresholds_norm,
-        "time_embed_dim":             time_embed_dim,
-        "n_base":                     n_base,
-        "n_physics":                  n_physics,
-        "n_physics_extended":         n_physics_extended,
-        "d_spatial":                  d_spatial,
-        "resolution":                 resolution,
-        "y_mean":                     y_mean,
-        "y_std":                      y_std,
-        "pr_input_dim":               pr_input_dim,
-        "pr_col_idxs":                pr_col_idxs,
-        "prior_mean":                 prior_mean,
-        "pr_cfg":                     pr_cfg,
-        "n_treatments":               n_treatments,
-        "material_priors":            material_priors,
-        "pr_pretrain_epochs":         pr_pretrain_epochs,
-        "n_epochs":                   n_epochs,
-        "pretrain_epochs":            pretrain_epochs,
-        "lr":                         lr,
-        "clip_norm":                  clip_norm,
-        "warmup_epochs":              warmup_epochs,
-        "ramp_epochs":                ramp_epochs,
-        "batch_size":                 batch_size,
-        "target_lambdas":             target_lambdas,
-        "feature_names":              feature_names,
-        "gwrf_k":                     gwrf_k,
-        "predictor_bandwidths":       predictor_bandwidths,
-        "predictor_kernel_field":     predictor_kernel_field,
-        "jepa_enable":                jepa_enable,
-        "jepa_weights":               jepa_weights,
-        "jepa_mask_ratio":            jepa_mask_ratio,
-        "jepa_spatial_patch":         jepa_spatial_patch,
-        "jepa_n_patches":             jepa_n_patches,
-        "jepa_lambda":                jepa_lambda,
-        "jepa_ema_tau_start":         jepa_ema_tau_start,
-        "jepa_ema_tau_end":           jepa_ema_tau_end,
-        "jepa_warmup_steps":          jepa_warmup_steps,
-        "jepa_curric_start":          jepa_curric_start,
-        "jepa_curric_end":            jepa_curric_end,
-        "jepa_lambda_scenario":       jepa_lambda_scenario,
-        "jepa_lambda_latent_pde":     jepa_lambda_latent_pde,
-        "jepa_scenario_perturb_std":  jepa_scenario_perturb_std,
-        "jepa_predictor_blocks":      jepa_predictor_blocks,
-        "jepa_predictor_film":        jepa_predictor_film,
-        "jepa_action_dim":            jepa_action_dim,
-        "ewc_active":                 _ewc_active,
-        "ewc_lambda":                 _ewc_lambda,
-        "cont_fisher":                _cont_fisher,
-        "cont_optimal":               _cont_optimal,
-        "ot_active":                  _ot_active,
-        "ot_lambda":                  _ot_lambda,
-        "coreset_acts":               _coreset_acts,
-        "use_amp":                    _use_amp,
-        "use_cuda_graphs":            _use_cuda_graphs,
-        "n_folds":                    len(folds),
-    }
+    _fold_shared = FoldState(
+        tensors=tensors,
+        coords_np=coords,
+        alpha_targets=alpha_targets,
+        jepa_pretrained_trunk_state=jepa_pretrained_trunk_state,
+        base_oof_predictions=base_oof_predictions,
+        arch=_ArchConfig(
+            hidden_dim=hidden_dim,
+            dropout=dropout,
+            n_heads=n_heads,
+            max_neighbors=max_neighbors,
+            siren_omega=siren_omega,
+            thresholds=thresholds,
+            thresholds_norm=thresholds_norm,
+            time_embed_dim=time_embed_dim,
+            n_base=n_base,
+            n_physics=n_physics,
+            n_physics_extended=n_physics_extended,
+            d_spatial=d_spatial,
+            resolution=resolution,
+            pr_input_dim=pr_input_dim,
+            pr_col_idxs=pr_col_idxs,
+            prior_mean=prior_mean,
+            pr_cfg=pr_cfg,
+            n_treatments=n_treatments,
+            material_priors=material_priors,
+            gwrf_k=gwrf_k,
+            predictor_bandwidths=predictor_bandwidths,
+            predictor_kernel_field=predictor_kernel_field,
+            feature_names=feature_names,
+        ),
+        training=_TrainingConfig(
+            n_epochs=n_epochs,
+            pretrain_epochs=pretrain_epochs,
+            pr_pretrain_epochs=pr_pretrain_epochs,
+            lr=lr,
+            clip_norm=clip_norm,
+            warmup_epochs=warmup_epochs,
+            ramp_epochs=ramp_epochs,
+            batch_size=batch_size,
+            target_lambdas=target_lambdas,
+            y_mean=y_mean,
+            y_std=y_std,
+            n_folds=len(folds),
+            use_amp=_use_amp,
+            use_cuda_graphs=_use_cuda_graphs,
+        ),
+        jepa=_JEPAConfig(
+            enable=jepa_enable,
+            weights=jepa_weights,
+            mask_ratio=jepa_mask_ratio,
+            spatial_patch=jepa_spatial_patch,
+            n_patches=jepa_n_patches,
+            lam=jepa_lambda,
+            ema_tau_start=jepa_ema_tau_start,
+            ema_tau_end=jepa_ema_tau_end,
+            warmup_steps=jepa_warmup_steps,
+            curric_start=jepa_curric_start,
+            curric_end=jepa_curric_end,
+            lambda_scenario=jepa_lambda_scenario,
+            lambda_latent_pde=jepa_lambda_latent_pde,
+            scenario_perturb_std=jepa_scenario_perturb_std,
+            predictor_blocks=jepa_predictor_blocks,
+            predictor_film=jepa_predictor_film,
+            action_dim=jepa_action_dim,
+        ),
+        continual=_ContinualConfig(
+            ewc_active=_ewc_active,
+            ewc_lambda=_ewc_lambda,
+            cont_fisher=_cont_fisher,
+            cont_optimal=_cont_optimal,
+            ot_active=_ot_active,
+            ot_lambda=_ot_lambda,
+            coreset_acts=_coreset_acts,
+        ),
+    )
 
     # ---- CV fold loop (CU-10a: DDP-parallel or sequential) ----
     if _use_ddp:
@@ -2631,12 +2730,12 @@ def train_neural_meta(
         _oof_preds_shared = torch.zeros(len(y), dtype=torch.float32).share_memory_()
         _oof_std_shared   = torch.zeros(len(y), dtype=torch.float32).share_memory_()
         # Move tensors to CPU shared memory before spawn
-        _fold_shared["tensors"] = {
+        _fold_shared.tensors = {
             k: (v.cpu().share_memory_() if isinstance(v, torch.Tensor) else v)
             for k, v in tensors.items()
         }
         if alpha_targets is not None:
-            _fold_shared["alpha_targets"] = alpha_targets.cpu().share_memory_()
+            _fold_shared.alpha_targets = alpha_targets.cpu().share_memory_()
         _tmp.spawn(
             _ddp_fold_worker,
             nprocs=_world_size_ddp,
@@ -2647,12 +2746,24 @@ def train_neural_meta(
         oof_preds = _oof_preds_shared.numpy().copy()
         oof_std   = _oof_std_shared.numpy().copy()
     else:
-        for fold_idx, (train_idx, test_idx) in enumerate(folds):
+        _fold_bar = _tqdm(
+            enumerate(folds), total=len(folds),
+            desc="  CV Folds",
+            disable=not sys.stdout.isatty(),
+            unit="fold", leave=True, position=0,
+        )
+        for fold_idx, (train_idx, test_idx) in _fold_bar:
+            _fold_bar.set_description(f"  Fold {fold_idx + 1}/{len(folds)}")
             test_out, oof_p, oof_s = _exec_cv_fold(
                 fold_idx, train_idx, test_idx, _fold_shared, device,
             )
             oof_preds[test_out] = oof_p
             oof_std[test_out]   = oof_s
+            try:
+                _r2 = r2_score(y[test_out], oof_p * y_std + y_mean)
+                _fold_bar.set_postfix(r2=f"{_r2:.3f}")
+            except Exception:
+                pass
 
     # ---- Denormalise OOF predictions back to original scale ----
     oof_preds = oof_preds * y_std + y_mean
@@ -3202,6 +3313,10 @@ def train_neural_meta(
             )
             if final_ema_trunk is not None and _any_jepa_rt:
                 final_ema_trunk.update(final_model)
+                import torch.distributed as _dist_ema_rt
+                if _dist_ema_rt.is_available() and _dist_ema_rt.is_initialized():
+                    for _p in final_ema_trunk.parameters():
+                        _dist_ema_rt.broadcast(_p.data, src=0)
 
             bsz = int(_valid_mask_rt.sum().item()) if _valid_mask_rt is not None else len(b_idx)
             rt_epoch_loss += total_loss.item() * bsz
@@ -3641,6 +3756,12 @@ def train_neural_meta(
         logger.warning("Gate weight persistence failed: %s", _ge)
 
     logger.info("V2 neural artifacts saved to %s", artifact_dir)
+
+    # Optional: train latent scenario diffuser on trunk embeddings
+    try:
+        _pretrain_diffuser(final_model, tensors, alpha_all, config, device, artifact_dir, _store)
+    except Exception as _diff_e:
+        logger.warning("Diffuser pretraining failed (non-fatal): %s", _diff_e)
 
     # ==================================================================
     # Phase 5c: base / surrogate consistency check

@@ -15,6 +15,7 @@ interface PipelineStep {
   detail: string;
   rows: number | null;
   status: "done" | "running" | "queued";
+  changed?: boolean;
 }
 
 const DEFAULT_STEPS: PipelineStep[] = [
@@ -237,7 +238,11 @@ export default function ProcessingPage() {
           const idx = prev.findIndex((s) => s.name === event.step);
           if (idx < 0) return prev;
           return prev.map((s, i) => {
-            if (i === idx) return { ...s, status: "done" as const, rows: event.rows, detail: `sha·${event.sha}` };
+            if (i === idx) return {
+              ...s, status: "done" as const, rows: event.rows,
+              detail: `sha·${event.sha}`,
+              changed: event.changed ?? false,
+            };
             if (i === idx + 1 && s.status === "queued") return { ...s, status: "running" as const };
             return s;
           });
@@ -460,6 +465,9 @@ export default function ProcessingPage() {
                     {step.detail && (
                       <div className="mono" style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
                         {step.detail}
+                        {step.changed && (
+                          <span title="Upstream data changed since last run" style={{ marginLeft: 6, color: "#f59e0b", fontWeight: 700 }}>⚠ upstream changed</span>
+                        )}
                       </div>
                     )}
                     {step.status === "running" && (

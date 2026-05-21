@@ -3860,6 +3860,145 @@ class ScenarioSimulator:
         return summary_df, mc_meta
 
     # ==================================================================
+    # Latent Diffusion Posterior — Trunk-Space Uncertainty
+    # ==================================================================
+
+    def run_with_diffusion_posterior(
+        self,
+        data: pd.DataFrame,
+        n_samples: int = 50,
+    ) -> Dict[str, np.ndarray]:
+        """Sample posterior predictions using the LatentScenarioDiffuser.
+
+        Loads the diffuser checkpoint trained by ``_pretrain_diffuser`` during
+        Stage 2.  Conditions the diffuser on the data's physics features, draws
+        ``n_samples`` trunk embeddings from the reverse-diffusion chain, and
+        decodes each into a full prediction vector.  Returns a spatial uncertainty
+        distribution as percentile bands.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Input data with the same feature columns used during training.
+        n_samples : int
+            Number of trunk samples to draw from the diffuser. Default 50.
+
+        Returns
+        -------
+        dict with keys ``mean``, ``p05``, ``p95`` — each shape ``(N,)``
+
+        Raises
+        ------
+        FileNotFoundError
+            If ``scenario_diffuser.pt`` is absent (train with
+            ``diffuser.pretrain_epochs > 0`` first).
+        """
+        import torch
+        from sparc.models.neural_meta import SPARCMetaLearner
+        from sparc.models.scenario_diffuser import LatentScenarioDiffuser
+
+        v2_dir = self.model_dir / "v2_neural"
+        diffuser_path = v2_dir / "scenario_diffuser.pt"
+        if not diffuser_path.exists():
+            raise FileNotFoundError(
+                f"Diffuser checkpoint not found: {diffuser_path}. "
+                "Run the pipeline with diffuser.pretrain_epochs > 0 first."
+            )
+
+        meta = self._v2_meta_info or {}
+        hidden_dim = meta.get("hidden_dim", 256)
+        n_base = meta.get("n_base_models", 3)
+        n_phys_ext = meta.get("n_physics_extended", meta.get("n_physics_features", 3))
+        n_phys_cond = meta.get("n_physics_original", n_phys_ext)
+        d_spatial = meta.get("d_spatial", 2)
+        thresholds = meta.get("thresholds", [0.0])
+        y_mean = float(meta.get("y_mean", 0.0))
+        y_std = float(meta.get("y_std", 1.0))
+
+        # Load SPARCMetaLearner
+        model = SPARCMetaLearner(
+            n_base_models=n_base,
+            n_physics_features=n_phys_ext,
+            d_spatial=d_spatial,
+            hidden_dim=hidden_dim,
+            thresholds=thresholds,
+        )
+        ckpt_path = v2_dir / "neural_meta.pt"
+        model.load_state_dict(
+            torch.load(ckpt_path, map_location="cpu", weights_only=True)
+        )
+        model.eval()
+
+        # Load diffuser — read architecture from sidecar config if present
+        import json as _json_diff
+        diff_cfg_path = v2_dir / "scenario_diffuser_config.json"
+        if diff_cfg_path.exists():
+            with open(diff_cfg_path) as _f:
+                _dc = _json_diff.load(_f)
+            _d_bottleneck = _dc.get("bottleneck", 32)
+            _d_T = _dc.get("T", 200)
+            _d_cond_dim = _dc.get("cond_dim", n_phys_cond)
+        else:
+            _d_bottleneck, _d_T, _d_cond_dim = 32, 200, n_phys_cond
+        diffuser = LatentScenarioDiffuser(
+            trunk_dim=hidden_dim, bottleneck=_d_bottleneck,
+            cond_dim=_d_cond_dim, T=_d_T,
+        )
+        diffuser.load_state_dict(
+            torch.load(diffuser_path, map_location="cpu", weights_only=True)
+        )
+        diffuser.eval()
+
+        # Prepare scaled physics features (base only) for conditioning
+        feat_cols = [c for c in self.features if c in data.columns]
+        X = data[feat_cols].fillna(0.0).values.astype(np.float32)
+        if self._feature_scaler is not None:
+            try:
+                X = self._feature_scaler.transform(X)
+            except Exception:
+                pass
+        N = len(X)
+        cond_feats = torch.tensor(X[:, :_d_cond_dim], dtype=torch.float32)
+
+        # Sample trunk embeddings
+        trunk_samples = diffuser.sample(cond=cond_feats, n_samples=n_samples)  # (n_samples, hidden_dim)
+
+        # Base predictions for decode
+        base_pred_list = []
+        for _bm in list(self._models.values())[:n_base]:
+            try:
+                bp = _bm.predict(X)
+                bp = bp if isinstance(bp, np.ndarray) else np.array(bp)
+            except Exception:
+                bp = np.zeros(N, dtype=np.float32)
+            base_pred_list.append(bp.astype(np.float32))
+        while len(base_pred_list) < n_base:
+            base_pred_list.append(np.zeros(N, dtype=np.float32))
+        base_preds_t = torch.tensor(np.stack(base_pred_list, axis=1), dtype=torch.float32)
+
+        # Spatial tensors (trivial self-referential graph — preserves API contract)
+        coord_cols = [c for c in self.coord_cols if c in data.columns]
+        coords_np = data[coord_cols[:2]].values.astype(np.float32) if len(coord_cols) >= 2 else np.zeros((N, 2), dtype=np.float32)
+        coords_t = torch.tensor(coords_np, dtype=torch.float32)
+        X_spatial_t = torch.tensor(X[:, :d_spatial], dtype=torch.float32)
+        knn_index = torch.arange(N, dtype=torch.long).unsqueeze(1)  # (N, 1) self-loop
+
+        # Decode each trunk sample
+        T_preds = []
+        with torch.no_grad():
+            for i in range(n_samples):
+                h_i = trunk_samples[i].unsqueeze(0).expand(N, -1)   # (N, hidden_dim)
+                T_i, _ = model.decode(h_i, base_preds_t, X_spatial_t, coords_t, knn_index)
+                T_preds.append((T_i.cpu().numpy() * y_std + y_mean).astype(np.float32))
+
+        T_matrix = np.stack(T_preds, axis=0)   # (n_samples, N)
+        return {
+            "mean": np.mean(T_matrix, axis=0),
+            "p05": np.percentile(T_matrix, 5, axis=0),
+            "p95": np.percentile(T_matrix, 95, axis=0),
+        }
+
+    # ==================================================================
     # Monte-Carlo Uncertainty — Base-Model Consensus
     # ==================================================================
 

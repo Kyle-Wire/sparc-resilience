@@ -17,6 +17,8 @@ If the package is **not** pip-installed you can also run::
 
     python -m sparc <command> ...
 
+    python -m sparc run -p project.yml -s 0
+
 from the repository root (the directory containing ``pyproject.toml``).
 """
 
@@ -295,16 +297,50 @@ def cmd_run(args):
         except Exception:
             pass
 
+    # ── Pipeline progress tracker ──────────────────────────────────
+    from sparc.run.progress import StageProgress as _StageProgress
+    _sp_stages: list[str] = []
+    if stage in ('0', 'all'):
+        _sp_stages += ['0', '0b']
+    if stage in ('1', 'all') and not skip_gwen:
+        _sp_stages.append('1')
+    if stage in ('2', 'all'):
+        _sp_stages.append('2')
+    if stage in ('3', 'all'):
+        _sp_stages.append('3')
+    if (stage in ('4', 'all') and config.get('scenarios', [])
+            and config.get('auto_run_scenarios_at_stage_4', True)):
+        _sp_stages.append('4')
+    if stage in ('5', 'all'):
+        _sp_stages.append('5')
+
+    def _stage_timing_sink(key: str, elapsed_s: float) -> None:
+        try:
+            from sparc.registry.store import get_active_store
+            _timing_store = get_active_store()
+            if _timing_store is not None:
+                import time as _t
+                _timing_store.write_struct(
+                    key, "stage_timing",
+                    {"stage": key, "elapsed_s": elapsed_s, "timestamp": _t.time()},
+                    producer="sparc.__main__",
+                )
+        except Exception:
+            pass
+
+    _sp = _StageProgress(len(_sp_stages), timing_sink=_stage_timing_sink)
+
     # ────────────────────────────────────────────────────────────────
     # Stage 0: Correlogram Analysis  (runs first so GWEN can auto-tune)
     # ────────────────────────────────────────────────────────────────
     _memory_checkpoint()
     if stage in ('0', 'all'):
         if not _stage_done("0"):
-            print(">>> Stage 0: Correlogram Analysis")
+            _sp.stage_start("0")
             from sparc.run.correlogram_analysis import main as run_correlogram
             run_correlogram(fast_mode=fast)
             _mark_stage_done("0")
+            _sp.stage_done("0")
         else:
             print(">>> Stage 0: Correlogram — skipped (already complete)")
         _rescan_registry("0")
@@ -313,7 +349,7 @@ def cmd_run(args):
     # Stage 0b: Pipeline Configuration (auto-wire correlogram → config)
     # ────────────────────────────────────────────────────────────────
     if stage in ('0', 'all'):
-        print("\n>>> Stage 0b: Pipeline Configuration")
+        _sp.stage_start("0b")
         from sparc.run.pipeline_configurator import PipelineConfigurator
         configurator = PipelineConfigurator(stage1_dir=str(paths.stage0_dir))
 
@@ -335,6 +371,12 @@ def cmd_run(args):
 
         if _profile is not None:
             print(f"  Dataset tier: {_profile.get('size_tier', 'unknown').upper()}")
+            try:
+                import torch as _torch_eta
+                _has_gpu = _torch_eta.cuda.is_available() or _torch_eta.backends.mps.is_available()
+            except Exception:
+                _has_gpu = False
+            _sp.print_eta_hint(_profile.get('size_tier', 'unknown'), _has_gpu)
 
             try:
                 from sparc.run.dataset_profiler import DatasetProfiler
@@ -351,6 +393,7 @@ def cmd_run(args):
                 print(f"  Warning: could not apply profiler recommendations: {e}")
 
         configurator.save_pipeline_config()
+        _sp.stage_done("0b")
 
     # ────────────────────────────────────────────────────────────────
     # Stage 1: GWEN variable selection (optional, now uses correlogram)
@@ -361,11 +404,12 @@ def cmd_run(args):
         approval_file = Path(config.get('output', {}).get('base_dir', 'output')) / 'gwen_approved.txt'
 
         if use_gwen and not _stage_done('.gwen_complete'):
-            print("\n>>> Stage 1: GWEN Variable Selection")
+            _sp.stage_start("1")
             from sparc.run.gwen_variable_selection import main as run_gwen
             approved = run_gwen(config_path=project_path, fast_mode=fast)
 
             if not approved:
+                _sp.finish()
                 print(f"\n{'='*60}")
                 print("  PIPELINE PAUSED — Review GWEN feature selection")
                 print(f"  Approve by creating: {approval_file}")
@@ -375,6 +419,7 @@ def cmd_run(args):
 
             (paths.stage1_dir).mkdir(parents=True, exist_ok=True)
             (paths.stage1_dir / '.gwen_complete').write_text('done')
+            _sp.stage_done("1")
         else:
             print("\n>>> Stage 1: GWEN — skipped (already complete or disabled)")
         _rescan_registry("1")
@@ -384,9 +429,10 @@ def cmd_run(args):
     # ────────────────────────────────────────────────────────────────
     if stage in ('2', 'all'):
         _memory_checkpoint()
-        print("\n>>> Stage 2: Enhanced Spatial CV")
+        _sp.stage_start("2")
         from sparc.run.enhanced_spatial_cv import main as run_spatial_cv
         run_spatial_cv(fast_mode=fast)
+        _sp.stage_done("2")
         _rescan_registry("2")
 
     # ────────────────────────────────────────────────────────────────
@@ -394,7 +440,7 @@ def cmd_run(args):
     # ────────────────────────────────────────────────────────────────
     if stage in ('3', 'all'):
         _memory_checkpoint()
-        print("\n>>> Stage 3: Causal Validation")
+        _sp.stage_start("3")
         try:
             from sparc.run.causal_validation import main as run_causal_validation
             run_causal_validation()
@@ -403,6 +449,7 @@ def cmd_run(args):
         except Exception as e:
             print(f"  Stage 3 warning: {e}")
             print("  Continuing — Stage 4 will use physics priors only.")
+        _sp.stage_done("3")
         _rescan_registry("3")
 
         # Wager (2025) audit add-ons.
@@ -425,8 +472,9 @@ def cmd_run(args):
         scenarios = config.get('scenarios', [])
         auto_run = config.get('auto_run_scenarios_at_stage_4', True)
         if scenarios and auto_run:
-            print("\n>>> Stage 4: Scenario Simulation")
+            _sp.stage_start("4")
             _run_scenarios(config, paths, project_path)
+            _sp.stage_done("4")
         elif scenarios and not auto_run:
             print("\n>>> Stage 4: Scenarios defined but `auto_run_scenarios_at_stage_4` is false — "
                   "use the Scenario Runner page to launch.")
@@ -449,6 +497,7 @@ def cmd_run(args):
     # Stage 5: Final interpretation report (auto-invoked at end of run)
     # ────────────────────────────────────────────────────────────────
     if stage in ('5', 'all'):
+        _sp.stage_start("5")
         try:
             from argparse import Namespace
             cmd_report(Namespace(
@@ -457,10 +506,12 @@ def cmd_run(args):
                 format='html',
                 section=None,
             ))
+            _sp.stage_done("5")
         except Exception as exc:
             print(f"\n>>> Stage 5 report generation failed ({exc})")
 
-    print(f"\nPipeline complete. Results in: {paths.output_dir}")
+    _sp.finish()
+    print(f"  Results in: {paths.output_dir}")
 
 
 def _resolve_auto_scenario_mode(*, has_dag: bool) -> str:

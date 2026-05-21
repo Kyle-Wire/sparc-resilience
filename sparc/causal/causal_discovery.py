@@ -165,6 +165,15 @@ class CausalDiscoveryValidator:
         # most common trigger.
         X = np.ascontiguousarray(self.data.values, dtype=np.float64)
 
+        # GES is O(n²) in samples; more importantly, causal-learn's BIC scorer
+        # calls float() on slice results which fails on numpy ≥ 2.0 for large
+        # arrays. Subsampling to ≤ 2000 rows avoids the issue and is standard
+        # practice — graph structure between a small set of variables doesn't
+        # require tens of thousands of samples.
+        if X.shape[0] > 2000:
+            rng = np.random.default_rng(42)
+            X = X[rng.choice(X.shape[0], 2000, replace=False)]
+
         # Pass parameters dict explicitly. Some causallearn versions look up
         # ``parameters['lambda_value']`` unconditionally and crash on KeyError
         # when omitted.

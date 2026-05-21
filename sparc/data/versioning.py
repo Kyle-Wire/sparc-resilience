@@ -169,3 +169,21 @@ def get_version_path(data_dir: Path, version: int) -> Path | None:
             if parquet_path.exists():
                 return parquet_path
     return None
+
+
+def get_last_hash(project_dir: Path, step_name: str) -> str | None:
+    """Return the step hash from the most recent versioned run, or None.
+
+    Parameters
+    ----------
+    project_dir : Path
+        Project root directory (parent of ``data/`` subfolder).
+    step_name : str
+        Key in the ``step_hashes`` settings dict (e.g. ``"ingest_csv"``).
+    """
+    data_dir = Path(project_dir) / "data"
+    changelog = _load_changelog(data_dir)
+    if not changelog:
+        return None
+    latest = max(changelog, key=lambda e: e.get("version", 0))
+    return latest.get("settings", {}).get("step_hashes", {}).get(step_name)

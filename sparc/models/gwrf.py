@@ -346,11 +346,12 @@ class GWRFModel:
         if self.local_models is None:
             raise ValueError("Model must be fitted before making predictions")
 
+        from collections import defaultdict
+
         X = np.asarray(X)
         coords = np.asarray(coords)
-        predictions = np.zeros(len(X))
-        prediction_uncertainty = np.zeros(len(X))
-        
+        n = len(X)
+
         # Limit k_blend to available models
         n_local = len(self.local_models)
         k_blend = min(k_blend, n_local)
@@ -359,46 +360,66 @@ class GWRFModel:
         subsample_tree = BallTree(self.subsample_coords)
         all_dists, all_idx = subsample_tree.query(coords, k=k_blend)
 
-        print(f"Making predictions with k={k_blend} blended models ({blend_kernel} kernel)...")
-        for i in tqdm(range(len(coords)), desc="Predicting"):
-            nearest_k_idx = all_idx[i]
-            nearest_k_dists = all_dists[i]
-            
-            # Compute blend weights
-            if blend_kernel == 'gaussian':
-                bandwidth = nearest_k_dists.max() + 1e-10
-                weights = np.exp(-0.5 * (nearest_k_dists / bandwidth) ** 2)
-            elif blend_kernel == 'idw':
-                weights = 1.0 / (nearest_k_dists + 1e-10)
-            elif blend_kernel == 'bisquare':
-                bandwidth = nearest_k_dists.max() + 1e-10
-                weights = (1 - (nearest_k_dists / bandwidth) ** 2) ** 2
-            else:
-                weights = np.ones(k_blend)  # uniform fallback
-            
-            weights /= weights.sum()  # Normalize
-            
-            # Blend predictions from valid models
-            local_preds = []
-            valid_weights = []
-            for j, idx in enumerate(nearest_k_idx):
-                model = self.local_models[idx]
-                if model is not None:
-                    local_preds.append(model.predict(X[i:i+1])[0])
-                    valid_weights.append(weights[j])
-            
-            if local_preds:
-                valid_weights = np.array(valid_weights)
-                valid_weights /= valid_weights.sum()
-                local_preds = np.array(local_preds)
-                predictions[i] = np.average(local_preds, weights=valid_weights)
-                # Weighted std: measure of local model disagreement
-                prediction_uncertainty[i] = np.sqrt(np.average(
-                    (local_preds - predictions[i])**2, weights=valid_weights
-                ))
-            else:
-                predictions[i] = np.nan
-                prediction_uncertainty[i] = np.nan
+        # ------------------------------------------------------------------
+        # Vectorised batch predict: group rows by local model, then call
+        # model.predict() once per local model on all rows that need it.
+        # This replaces the previous O(N × k_blend) row-by-row loop
+        # (273 k individual 1-row predict calls for a 54 k dataset) with
+        # O(n_local_models) batched calls, giving ~50–100× speedup.
+        # ------------------------------------------------------------------
+
+        # Build blend-weight matrix (n, k_blend) — fully vectorised.
+        if blend_kernel == 'gaussian':
+            bw = all_dists.max(axis=1, keepdims=True) + 1e-10
+            blend_weights = np.exp(-0.5 * (all_dists / bw) ** 2)
+        elif blend_kernel == 'idw':
+            blend_weights = 1.0 / (all_dists + 1e-10)
+        elif blend_kernel == 'bisquare':
+            bw = all_dists.max(axis=1, keepdims=True) + 1e-10
+            blend_weights = (1 - (all_dists / bw) ** 2) ** 2
+        else:
+            blend_weights = np.ones((n, k_blend))  # uniform fallback
+
+        row_sums = blend_weights.sum(axis=1, keepdims=True)
+        row_sums[row_sums == 0] = 1.0
+        blend_weights /= row_sums  # (n, k_blend), rows sum to 1
+
+        # Reverse lookup: local-model index → list of (row_i, blend_pos_j)
+        model_to_pairs: dict = defaultdict(list)
+        for i in range(n):
+            for j in range(k_blend):
+                model_to_pairs[int(all_idx[i, j])].append((i, j))
+
+        # Raw predictions per (row, blend-position), NaN for None models.
+        raw_preds = np.full((n, k_blend), np.nan)
+        print(f"Making predictions with k={k_blend} blended models "
+              f"({blend_kernel} kernel, {len(model_to_pairs)} active local models)...")
+        for midx, pairs in model_to_pairs.items():
+            model = self.local_models[midx]
+            if model is None:
+                continue
+            rows = [p[0] for p in pairs]
+            batch_preds = model.predict(X[rows])
+            for k, (i, j) in enumerate(pairs):
+                raw_preds[i, j] = batch_preds[k]
+
+        # Vectorised blending: mask NaN slots, renormalise weights, compute
+        # weighted mean and weighted std (inter-model disagreement).
+        valid = ~np.isnan(raw_preds)                          # (n, k_blend)
+        raw_filled = np.where(valid, raw_preds, 0.0)
+        w_masked = np.where(valid, blend_weights, 0.0)       # (n, k_blend)
+        wsum = w_masked.sum(axis=1, keepdims=True)
+        wsum = np.where(wsum == 0, 1.0, wsum)
+        w_masked /= wsum                                       # renormalise
+
+        predictions = (w_masked * raw_filled).sum(axis=1)     # weighted mean
+        diff2 = (raw_filled - predictions[:, np.newaxis]) ** 2
+        prediction_uncertainty = np.sqrt((w_masked * diff2).sum(axis=1))
+
+        # Points where every blend slot was NaN → no valid model nearby.
+        all_nan_rows = ~np.any(valid, axis=1)
+        predictions[all_nan_rows] = np.nan
+        prediction_uncertainty[all_nan_rows] = np.nan
 
         return predictions, prediction_uncertainty
 
@@ -449,6 +470,8 @@ class GWRFModel:
         if self.local_models is None:
             raise RuntimeError("predict_with_uncertainty() requires a fitted model.")
 
+        from collections import defaultdict
+
         X = np.asarray(X)
         coords = np.asarray(coords)
         n = len(X)
@@ -459,21 +482,41 @@ class GWRFModel:
         k_use = min(k_blend, len(self.local_models))
         all_dists, all_idx = subsample_tree.query(coords, k=k_use)
 
+        # ------------------------------------------------------------------
+        # Vectorised: for each unique (model, blend-slot) pair batch all
+        # rows that need per-tree predictions from that model, then gather.
+        # ------------------------------------------------------------------
+        model_to_pairs: dict = defaultdict(list)
         for i in range(n):
-            tree_preds_all: list[float] = []
             for j in range(k_use):
-                model = self.local_models[all_idx[i, j]]
-                if model is None:
-                    continue
-                # Per-tree predictions for this single observation.
-                xi = X[i : i + 1]
-                per_tree = np.array([est.predict(xi)[0] for est in model.estimators_])
-                tree_preds_all.extend(per_tree.tolist())
+                model_to_pairs[int(all_idx[i, j])].append((i, j))
 
-            if tree_preds_all:
-                arr = np.array(tree_preds_all)
-                predictions[i] = float(arr.mean())
-                std_per_cell[i] = float(arr.std())
+        n_estimators_max = max(
+            len(m.estimators_) for m in self.local_models if m is not None
+        )
+        # Store per-tree preds: shape (n, k_use, n_trees) — NaN-padded
+        per_tree_store = np.full((n, k_use, n_estimators_max), np.nan)
+
+        for midx, pairs in model_to_pairs.items():
+            model = self.local_models[midx]
+            if model is None:
+                continue
+            rows = [p[0] for p in pairs]
+            n_trees = len(model.estimators_)
+            # Batch per-tree predict: (n_trees, len(rows))
+            batch_tree_preds = np.array([
+                est.predict(X[rows]) for est in model.estimators_
+            ])  # shape (n_trees, len(rows))
+            for k, (i, j) in enumerate(pairs):
+                per_tree_store[i, j, :n_trees] = batch_tree_preds[:, k]
+
+        # Aggregate across all blend slots and trees for each row.
+        for i in range(n):
+            all_tree_preds = per_tree_store[i].ravel()
+            valid = all_tree_preds[~np.isnan(all_tree_preds)]
+            if len(valid) > 0:
+                predictions[i] = float(valid.mean())
+                std_per_cell[i] = float(valid.std())
 
         return predictions, std_per_cell
 

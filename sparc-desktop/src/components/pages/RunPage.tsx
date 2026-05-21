@@ -602,6 +602,14 @@ export default function RunPage() {
                         }}
                       >?</span>
                     </div>
+                    {status === "running" && pipeline.stageProgress[id] != null && (
+                      <div style={{ marginTop: 4, height: 3, borderRadius: 2, background: "rgba(0,0,0,0.08)", overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${pipeline.stageProgress[id]}%`, background: "var(--crimson)", transition: "width 0.3s ease" }} />
+                      </div>
+                    )}
+                    {status === "running" && pipeline.stageProgress[id] != null && (
+                      <div style={{ fontSize: 9, color: "var(--muted)", marginTop: 2 }}>{pipeline.stageProgress[id]}%</div>
+                    )}
                   </div>
 
                   <Tag

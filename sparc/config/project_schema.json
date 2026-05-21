@@ -550,6 +550,19 @@
       }
     },
 
+    "variables_meta": {
+      "type": "object",
+      "description": "Display metadata for variables (units, human-readable names) used in Stage 3/4/5 output.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "unit":         {"type": "string"},
+          "display_name": {"type": "string"}
+        },
+        "additionalProperties": true
+      }
+    },
+
     "interaction_scenarios": {
       "type": "array",
       "description": "Pairwise interaction scenarios showing marginal effects of two variables simultaneously",
@@ -875,6 +888,14 @@
           "type": "number",
           "minimum": 1.0,
           "description": "Per-stage memory ceiling enforced by the watchdog (GB)."
+        },
+        "cuda_graphs": {
+          "type": "boolean",
+          "description": "Enable CUDA graph capture for static-shape batch loops (reduces kernel launch overhead)."
+        },
+        "ddp_enabled": {
+          "type": "boolean",
+          "description": "Enable multi-GPU fold-parallel training via DistributedDataParallel."
         }
       }
     },

@@ -26,10 +26,44 @@ CAUSAL_DEFAULTS: Dict[str, Any] = {
 
     # MC³ structure-learning (Bayesian DAG search).
     "mc3": {
-        "n_iterations": 10000,
-        "n_chains": 4,
+        "n_iterations": 50000,
+        "min_iterations": 20000,
+        "n_chains": 7,
+        "temperatures": [1.0, 0.75, 0.55, 0.4, 0.28, 0.2, 0.1],
         "burnin_fraction": 0.25,
-        "edge_penalty": 1.0,
+        "edge_penalty": 0.5,
+        "seed": 42,
+        "warm_start": {"enabled": False, "n_particles": 4, "n_steps": 500, "lambda_h": 1.0},
+    },
+
+    # Structure-learning backend: "mc3" | "dibs" | "order_mcmc".
+    # MC³ is the production default.  Switch to "dibs" for gradient-based
+    # posterior approximation (Lorch et al. 2021) or "order_mcmc" for
+    # exact BGe posterior over topological orderings (Friedman & Koller 2003).
+    "inference_backend": "mc3",
+
+    # PCMCI+ temporal prior (panel.py). Off by default — requires time_col.
+    "use_pcmci_prior": False,
+    "pcmci_max_lag": 3,
+
+    # DiBS — Differentiable Bayesian Structure Learning (Lorch et al. 2021).
+    # Active when inference_backend == "dibs".
+    "dibs": {
+        "n_particles": 20,
+        "n_steps": 3000,
+        "lambda_h": 10.0,
+        "lr": 0.005,
+        "tau_start": 1.0,
+        "tau_end": 0.05,
+        "seed": 42,
+    },
+
+    # Order-MCMC (Friedman & Koller 2003).
+    # Active when inference_backend == "order_mcmc".
+    "order_mcmc": {
+        "n_iterations": 50000,
+        "burnin_fraction": 0.25,
+        "k_max_parents": 3,
         "seed": 42,
     },
 
@@ -40,6 +74,7 @@ CAUSAL_DEFAULTS: Dict[str, Any] = {
         "n_chains": 2,
         "target_accept_rate": 0.85,
         "max_tree_depth": 8,
+        "barrier_scale": 2.0,
     },
 
     # Bayesian spatial CATE (random Fourier features + NUTS).

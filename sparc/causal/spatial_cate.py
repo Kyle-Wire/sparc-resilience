@@ -1260,6 +1260,13 @@ class CATEGPSurface:
         mean, std = self._gpr.predict(coords_norm, return_std=True)
         return mean, std
 
+    def sample_posterior(self, n_samples: int, coords_norm: np.ndarray) -> np.ndarray:
+        """Draw n_samples from the GP posterior at coords_norm. Shape: (N, n_samples)."""
+        if self._gpr is None:
+            raise RuntimeError("fit() must be called before sample_posterior()")
+        coords_norm = np.atleast_2d(np.asarray(coords_norm, dtype=np.float64))
+        return self._gpr.sample_y(coords_norm, n_samples=n_samples, random_state=None)
+
     # ------------------------------------------------------------------
     # Optimised kernel parameters (for diagnostics)
     # ------------------------------------------------------------------
@@ -1376,3 +1383,93 @@ def _moran_i(
         "p_value": round(p, 6),
         "interpretation": interp,
     }
+
+
+# ---------------------------------------------------------------------------
+# NUTS-conditioned GP CATE posterior surface
+# ---------------------------------------------------------------------------
+
+def nuts_conditioned_cate_surface(
+    nuts_beta_samples: np.ndarray,
+    treatment_values: np.ndarray,
+    coords: np.ndarray,
+    treatment_names: list,
+    corr_payload: Optional[dict] = None,
+    n_posterior_draws: int = 50,
+    max_fit_rows: int = 2_000,
+    seed: int = 42,
+) -> Dict[str, Dict[str, np.ndarray]]:
+    """Build per-pixel CATE credible interval maps conditioned on NUTS posteriors.
+
+    For each treatment, draws ``n_posterior_draws`` β values from the NUTS
+    posterior, computes the structural CATE at each spatial point as
+    ``cate = beta_d * T_col``, fits a :class:`CATEGPSurface` per draw, and
+    stacks the GP posterior means into a ``(n_draws, N)`` ensemble.  The
+    per-pixel ``{cate_mean, cate_ci5, cate_ci95}`` summarise both coefficient
+    uncertainty (NUTS) and spatial interpolation uncertainty (GP).
+
+    Parameters
+    ----------
+    nuts_beta_samples : (D, n_treatments) ndarray
+        Raw NUTS β draws in original (unstandardised) units.
+    treatment_values : (N, n_treatments) ndarray
+        Raw treatment column values at each spatial point.
+    coords : (N, 2) ndarray
+        Spatial coordinates in any consistent unit (will be normalised).
+    treatment_names : list[str]
+        Names corresponding to columns of ``treatment_values`` and rows of
+        ``nuts_beta_samples``.
+    corr_payload : dict, optional
+        Stage 0 correlogram Matérn payload for GP kernel initialisation.
+        When ``None`` the default ``CATEGPSurface`` kernel is used.
+    n_posterior_draws : int
+        Number of thinned β draws to use (default 50).
+    max_fit_rows : int
+        Sub-sampling cap for each individual GPR fit.
+    seed : int
+        RNG seed for sub-sampling.
+
+    Returns
+    -------
+    dict mapping treatment name to ``{"cate_mean", "cate_ci5", "cate_ci95",
+    "n_posterior_draws"}`` where the array values have shape ``(N,)``.
+    """
+    rng = np.random.default_rng(seed)  # noqa: F841 — available for subclasses
+    D = len(nuts_beta_samples)
+    draw_idx = np.arange(0, D, max(1, D // n_posterior_draws))[:n_posterior_draws]
+
+    coords = np.asarray(coords, dtype=np.float64)
+    treatment_values = np.asarray(treatment_values, dtype=np.float64)
+    if treatment_values.ndim == 1:
+        treatment_values = treatment_values.reshape(-1, 1)
+
+    coords_min = coords.min(axis=0)
+    coords_range = coords.max(axis=0) - coords_min
+    coords_range[coords_range == 0] = 1.0
+    coords_norm = (coords - coords_min) / coords_range
+
+    results: Dict[str, Dict[str, np.ndarray]] = {}
+    for t_idx, tname in enumerate(treatment_names):
+        if t_idx >= treatment_values.shape[1]:
+            continue
+        T_col = treatment_values[:, t_idx]
+        n_points = len(T_col)
+        surfaces = np.empty((len(draw_idx), n_points), dtype=np.float64)
+        for k, d in enumerate(draw_idx):
+            beta_d = float(nuts_beta_samples[d, t_idx])
+            cate_d = beta_d * T_col
+            gps = (
+                CATEGPSurface.from_correlogram(corr_payload, max_fit_rows=max_fit_rows)
+                if corr_payload is not None
+                else CATEGPSurface(max_fit_rows=max_fit_rows)
+            )
+            gps.fit(cate_d, coords_norm)
+            gp_mean, _ = gps.predict(coords_norm)
+            surfaces[k] = gp_mean
+        results[tname] = {
+            "cate_mean": surfaces.mean(axis=0),
+            "cate_ci5": np.percentile(surfaces, 5, axis=0),
+            "cate_ci95": np.percentile(surfaces, 95, axis=0),
+            "n_posterior_draws": np.array([len(draw_idx)]),
+        }
+    return results

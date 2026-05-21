@@ -55,6 +55,8 @@ export interface PipelineState {
   training: TrainingTelemetry;
   /** Per-stage status map for the StageStatusTracker. */
   stageStatuses: Record<number, StageStatus>;
+  /** Per-stage progress percentage (0–100) from tqdm output. */
+  stageProgress: Record<number, number>;
   /** True when MC³ is done and the pipeline is paused awaiting DAG approval. */
   dagApprovalPending: boolean;
   /** Wall-clock ms when the current pipeline run started (persists through page navigation). */
@@ -95,6 +97,8 @@ export function PipelineProvider({ children, serverReady, serverLost }: { childr
   const wsRef = useRef<WebSocket | null>(null);
   const [dagApprovalPending, setDagApprovalPending] = useState(false);
   const [stageStatuses, setStageStatuses] = useState<Record<number, StageStatus>>({});
+  const [stageProgress, setStageProgress] = useState<Record<number, number>>({});
+  const currentStageRef = useRef<number | null>(null);
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [runEndedAt, setRunEndedAt] = useState<number | null>(null);
   /** Remaining stages to run after the current one completes. */
@@ -126,6 +130,14 @@ export function PipelineProvider({ children, serverReady, serverLost }: { childr
 
     if (event.stage !== undefined) {
       setCurrentStage(event.stage);
+      currentStageRef.current = event.stage;
+    }
+
+    if (event.progress_pct !== undefined) {
+      const s = event.stage ?? currentStageRef.current;
+      if (s != null) {
+        setStageProgress((prev) => ({ ...prev, [s]: event.progress_pct! }));
+      }
     }
 
     // Training telemetry events
@@ -348,6 +360,7 @@ export function PipelineProvider({ children, serverReady, serverLost }: { childr
         setEvents([]);
         setError(null);
         setStageStatuses({});
+        setStageProgress({});
         setRunStartedAt(Date.now());
         setRunEndedAt(null);
         setTraining({
@@ -449,7 +462,7 @@ export function PipelineProvider({ children, serverReady, serverLost }: { childr
 
   return (
     <PipelineContext.Provider value={{
-      events, isRunning, error, currentStage, training, stageStatuses,
+      events, isRunning, error, currentStage, training, stageStatuses, stageProgress,
       dagApprovalPending, runStartedAt, runEndedAt, startStage, startPipeline, cancel, handleApproveDag, handleRejectDag,
     }}>
       {children}

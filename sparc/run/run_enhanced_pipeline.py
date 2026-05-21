@@ -17,6 +17,60 @@ from sparc.run.pipeline_paths import get_paths
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+# ---------------------------------------------------------------------------
+# Stage completion registry
+#
+# Each entry maps a stage name → (stage_key, manifest_required, fallback_fn).
+#   stage_key        : int/str key for store.is_stage_complete(); None = skip
+#   manifest_required: list of artifact filenames for the manifest check
+#   fallback_fn      : callable(paths) -> bool for the file-existence path
+# ---------------------------------------------------------------------------
+def _stage_registry(paths):
+    """Return the per-stage completion descriptors (built lazily to defer get_paths)."""
+    from sparc.run.artifact_io import exists_path
+    return {
+        "GWEN Auto-Approval": (
+            1,
+            ["gwen_approved.txt"],
+            lambda p: os.path.exists(p.gwen_approved),
+        ),
+        "Variogram Analysis": (
+            0,
+            ["variogram_analysis_results.json", "variogram_summary.csv"],
+            lambda p: (
+                exists_path(p.correlogram_results, stage="0", artifact_id="correlogram_results")
+                and exists_path(p.correlogram_summary, stage="0", artifact_id="correlogram_summary")
+            ),
+        ),
+        "Pipeline Configuration": (
+            None,
+            None,
+            lambda p: exists_path(p.pipeline_config, stage="2", artifact_id="pipeline_config"),
+        ),
+        "Enhanced Spatial CV": (
+            2,
+            ["optimized_oof_predictions.csv"],
+            lambda p: (
+                exists_path(p.oof_predictions, stage="2", artifact_id="oof_predictions")
+                and exists_path(p.folds_file, stage="2", artifact_id="folds")
+            ),
+        ),
+        "Causal Validation": (
+            3,
+            ["scenario_coefficients.json"],
+            lambda p: exists_path(
+                os.path.join(str(p.stage3_dir), "scenario_coefficients.json"),
+                stage="3", artifact_id="scenario_coefficients",
+            ),
+        ),
+        "Final Interpretation": (
+            "final",
+            None,
+            lambda p: os.path.exists(p.performance_metrics),
+        ),
+    }
+
+
 def check_stage_completion(stage_name):
     """
     Check if a pipeline stage has already been completed.
@@ -26,56 +80,24 @@ def check_stage_completion(stage_name):
     checks for backward compatibility.
     """
     paths = get_paths()
+    registry = _stage_registry(paths)
+
+    if stage_name not in registry:
+        return False
+
+    stage_key, manifest_required, fallback_fn = registry[stage_name]
 
     # Try manifest-based check first
-    try:
-        from sparc.run.pipeline_paths import get_result_store
-        store = get_result_store()
-        stage_map = {
-            "GWEN Auto-Approval": (1, ["gwen_approved.txt"]),
-            "Variogram Analysis": (0, ["variogram_analysis_results.json", "variogram_summary.csv"]),
-            "Pipeline Configuration": (None, None),  # not stage-managed
-            "Enhanced Spatial CV": (2, ["optimized_oof_predictions.csv"]),
-            "Causal Validation": (3, ["scenario_coefficients.json"]),
-            "Final Interpretation": ("final", None),
-        }
-        if stage_name in stage_map:
-            stage_key, required = stage_map[stage_name]
-            if stage_key is not None:
-                return store.is_stage_complete(stage_key, required)
-    except Exception:
-        pass
+    if stage_key is not None and manifest_required is not None:
+        try:
+            from sparc.run.pipeline_paths import get_result_store
+            store = get_result_store()
+            return store.is_stage_complete(stage_key, manifest_required)
+        except Exception:
+            pass
 
-    # Fallback: store-first via catalogued artifact ids, then file-existence
-    from sparc.run.artifact_io import exists_path
-    if stage_name == "GWEN Auto-Approval":
-        # gwen_approved.txt is an on-disk sentinel by design (user-creatable
-        # approval gate); not stored in artifacts.db.
-        return os.path.exists(paths.gwen_approved)
-    elif stage_name == "Variogram Analysis":
-        # Stage 0 writes ``correlogram_analysis_results.json`` (see
-        # ``PipelinePaths.correlogram_results``); pair the matching
-        # summary path so artifact id, filename and stage naming all
-        # agree, otherwise legacy disk-mode flags this stage as
-        # incomplete even when the artifacts are present.
-        return (exists_path(paths.correlogram_results, stage="0", artifact_id="correlogram_results")
-                and exists_path(paths.correlogram_summary, stage="0", artifact_id="correlogram_summary"))
-    elif stage_name == "Pipeline Configuration":
-        return exists_path(paths.pipeline_config, stage="2", artifact_id="pipeline_config")
-    elif stage_name == "Enhanced Spatial CV":
-        return (exists_path(paths.oof_predictions, stage="2", artifact_id="oof_predictions")
-                and exists_path(paths.folds_file, stage="2", artifact_id="folds"))
-    elif stage_name == "Causal Validation":
-        return exists_path(
-            os.path.join(str(paths.stage3_dir), 'scenario_coefficients.json'),
-            stage="3", artifact_id="scenario_coefficients",
-        )
-    elif stage_name == "Final Interpretation":
-        # performance_metrics is not currently catalogued in artifacts.db;
-        # fall back to direct file check.
-        return os.path.exists(paths.performance_metrics)
-    else:
-        return False
+    # Fallback: artifact-store catalogued ids, then file-existence
+    return fallback_fn(paths)
 
 def run_stage(stage_name, script_path, description):
     """

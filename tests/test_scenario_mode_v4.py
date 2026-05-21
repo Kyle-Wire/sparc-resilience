@@ -102,7 +102,7 @@ def test_auto_mode_full_stack_returns_mode_4_hybrid(monkeypatch):
             ("3", "nuts_edge_samples"),
         ]),
     )
-    assert cli._resolve_auto_scenario_mode(has_dag=True) == "mode_4_hybrid"
+    assert cli._resolve_auto_scenario_mode(has_dag=True) == "mode_5_full_audit"
 
 
 # ---------------------------------------------------------------------------

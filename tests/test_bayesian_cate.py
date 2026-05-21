@@ -226,3 +226,38 @@ def test_persist_cate_artifacts_v2_frequentist(store):
     # Frequentist CIs collapse to the point estimate.
     assert np.allclose(summary["cate_mean"].values, summary["cate_ci5"].values)
     assert np.allclose(summary["cate_mean"].values, summary["cate_ci95"].values)
+
+
+# ---------------------------------------------------------------------------
+# CB-1: CATEGPSurface.sample_posterior
+# ---------------------------------------------------------------------------
+
+def test_cate_gp_surface_sample_posterior_shape():
+    """sample_posterior returns shape (N, n_samples) and spans > 1 posterior std."""
+    from sparc.causal.spatial_cate import CATEGPSurface
+
+    rng = np.random.default_rng(42)
+    n = 80
+    coords = rng.uniform(0, 1, (n, 2))
+    cate = -0.2 + 0.6 * coords[:, 0] + rng.normal(0, 0.05, n)
+
+    surf = CATEGPSurface(n_restarts_optimizer=0).fit(cate, coords)
+
+    n_samples = 10
+    samples = surf.sample_posterior(n_samples, coords)
+
+    assert samples.shape == (n, n_samples), (
+        f"Expected ({n}, {n_samples}), got {samples.shape}"
+    )
+    # Samples should span more than 1 posterior std across draws
+    sample_range = samples.max(axis=1) - samples.min(axis=1)
+    _, std = surf.predict(coords)
+    assert sample_range.mean() > std.mean() * 0.5
+
+
+def test_cate_gp_surface_sample_posterior_raises_before_fit():
+    from sparc.causal.spatial_cate import CATEGPSurface
+
+    surf = CATEGPSurface()
+    with pytest.raises(RuntimeError, match="fit\\(\\)"):
+        surf.sample_posterior(5, np.zeros((3, 2)))

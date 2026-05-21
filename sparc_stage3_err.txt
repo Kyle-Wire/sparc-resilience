@@ -1,0 +1,36 @@
+============================================================
+============================================================
+[   0.0s] >>> Stage 3: Causal Validation
+============================================================
+  Stage 3: Causal Validation
+============================================================
+    [consensus] SHD = 8
+    [consensus] Edge precision = 0.67, recall = 0.83, F1 = 0.74
+    [pc_stable] SHD=13, F1=0.67, edges=15
+    [lingam] SHD=12, F1=0.71, edges=19
+    [ges] SHD=12, F1=0.52, edges=11
+    d-separation: 0/0 implications held (0%)
+    Discovery report saved
+  Running DAG assumption diagnostics...
+  --- V2 Bayesian Causal Analysis (MC│ + NUTS) ---
+  Estimating structural coefficients (estimator=dml, shrinkage=0.25)...
+  V2 Bayesian causal analysis failed: cannot import name 'notears_h' from 'sparc.causal.mc3' (C:\Users\kylew\OneDrive\Documents\GitHub\sparc-resilience\sparc\causal\mc3.py)
+Depth=0, working on node 0:  14%|#4        | 1/7 [00:00<00:00, 1999.19it/s]Depth=0, working on node 1:  29%|##8       | 2/7 [00:00<00:00, 1999.67it/s]Depth=0, working on node 2:  43%|####2     | 3/7 [00:00<00:00, 2999.50it/s]Depth=0, working on node 3:  57%|#####7    | 4/7 [00:00<00:00, 2667.71it/s]Depth=0, working on node 4:  71%|#######1  | 5/7 [00:00<00:00, 3334.64it/s]Depth=0, working on node 5:  86%|########5 | 6/7 [00:00<00:00, 3000.93it/s]Depth=0, working on node 6: 100%|##########| 7/7 [00:00<00:00, 3501.09it/s]Depth=0, working on node 6: 100%|##########| 7/7 [00:00<00:00, 3501.09it/s]Depth=0, working on node 6:   0%|          | 0/7 [00:00<?, ?it/s]          Depth=1, working on node 0:  14%|#4        | 1/7 [00:00<?, ?it/s]Depth=1, working on node 1:  29%|##8       | 2/7 [00:00<00:00, 1993.96it/s]Depth=1, working on node 2:  43%|####2     | 3/7 [00:00<00:00, 1491.93it/s]Depth=1, working on node 3:  57%|#####7    | 4/7 [00:00<00:00, 1591.01it/s]Depth=1, working on node 4:  71%|#######1  | 5/7 [00:00<00:00, 1657.57it/s]Depth=1, working on node 5:  86%|########5 | 6/7 [00:00<00:00, 1706.16it/s]Depth=1, working on node 6: 100%|##########| 7/7 [00:00<00:00, 1990.52it/s]Depth=1, working on node 6: 100%|##########| 7/7 [00:00<00:00, 1742.65it/s]Depth=1, working on node 6:   0%|          | 0/7 [00:00<?, ?it/s]          Depth=2, working on node 0:  14%|#4        | 1/7 [00:00<?, ?it/s]Depth=2, working on node 1:  29%|##8       | 2/7 [00:00<00:00, 4000.29it/s]Depth=2, working on node 2:  43%|####2     | 3/7 [00:00<00:00, 1499.22it/s]Depth=2, working on node 3:  57%|#####7    | 4/7 [00:00<00:00, 1141.77it/s]Depth=2, working on node 4:  71%|#######1  | 5/7 [00:00<00:00, 1248.83it/s]Depth=2, working on node 5:  86%|########5 | 6/7 [00:00<00:00, 1332.23it/s]Depth=2, working on node 6: 100%|##########| 7/7 [00:00<00:00, 1271.88it/s]Depth=2, working on node 6: 100%|##########| 7/7 [00:00<00:00, 1271.88it/s]Depth=2, working on node 6:   0%|          | 0/7 [00:00<?, ?it/s]          Depth=3, working on node 0:  14%|#4        | 1/7 [00:00<?, ?it/s]Depth=3, working on node 1:  29%|##8       | 2/7 [00:00<?, ?it/s]Depth=3, working on node 2:  43%|####2     | 3/7 [00:00<00:00, 1996.65it/s]Depth=3, working on node 3:  57%|#####7    | 4/7 [00:00<00:00, 1137.59it/s]Depth=3, working on node 4:  71%|#######1  | 5/7 [00:00<00:00, 1421.99it/s]Depth=3, working on node 5:  86%|########5 | 6/7 [00:00<00:00, 1706.39it/s]Depth=3, working on node 6: 100%|##########| 7/7 [00:00<00:00, 1395.51it/s]Depth=3, working on node 6: 100%|##########| 7/7 [00:00<00:00, 1395.51it/s]Depth=3, working on node 6:   0%|          | 0/7 [00:00<?, ?it/s]          Depth=4, working on node 0:  14%|#4        | 1/7 [00:00<?, ?it/s]Depth=4, working on node 1:  29%|##8       | 2/7 [00:00<?, ?it/s]Depth=4, working on node 2:  43%|####2     | 3/7 [00:00<00:00, 5991.86it/s]Depth=4, working on node 3:  57%|#####7    | 4/7 [00:00<00:00, 1993.73it/s]Depth=4, working on node 4:  71%|#######1  | 5/7 [00:00<00:00, 2492.16it/s]Depth=4, working on node 5:  86%|########5 | 6/7 [00:00<00:00, 2990.59it/s]Depth=4, working on node 6: 100%|##########| 7/7 [00:00<00:00, 2792.48it/s]Depth=4, working on node 6: 100%|##########| 7/7 [00:00<00:00, 2328.51it/s]Depth=4, working on node 6:   0%|          | 0/7 [00:00<?, ?it/s]          Depth=5, working on node 0:  14%|#4        | 1/7 [00:00<?, ?it/s]Depth=5, working on node 1:  29%|##8       | 2/7 [00:00<?, ?it/s]Depth=5, working on node 2:  43%|####2     | 3/7 [00:00<?, ?it/s]Depth=5, working on node 3:  57%|#####7    | 4/7 [00:00<00:00, 7996.77it/s]Depth=5, working on node 4:  71%|#######1  | 5/7 [00:00<00:00, 9995.96it/s]Depth=5, working on node 5:  86%|########5 | 6/7 [00:00<00:00, 11995.15it/s]Depth=5, working on node 6: 100%|##########| 7/7 [00:00<00:00, 13994.34it/s]Depth=5, working on node 6: 100%|##########| 7/7 [00:00<00:00, 13994.34it/s]Depth=5, working on node 6: 100%|##########| 7/7 [00:00<00:00, 6998.84it/s] Traceback (most recent call last):
+  File "C:\Users\kylew\OneDrive\Documents\GitHub\sparc-resilience\sparc\run\causal_validation.py", line 3187, in main
+    bayesian_result = run_bayesian_causal(
+                      ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\kylew\OneDrive\Documents\GitHub\sparc-resilience\sparc\run\v2_bayesian_causal.py", line 162, in run_bayesian_causal
+    from sparc.causal.dibs import run_dibs
+  File "C:\Users\kylew\OneDrive\Documents\GitHub\sparc-resilience\sparc\causal\dibs.py", line 32, in <module>
+    from .dag_warm_start import _rbf_kernel, _threshold_to_dag
+  File "C:\Users\kylew\OneDrive\Documents\GitHub\sparc-resilience\sparc\causal\dag_warm_start.py", line 20, in <module>
+    from .mc3 import BGeSuffStats, notears_h
+ImportError: cannot import name 'notears_h' from 'sparc.causal.mc3' (C:\Users\kylew\OneDrive\Documents\GitHub\sparc-resilience\sparc\causal\mc3.py)
+[memory] critical pressure (98.2% used) during stage 'run/3' ù aborting cleanly to avoid OS kill
+[memory] high pressure (99.8% used) during stage 'run/3' ù releasing caches
+[memory] high pressure (88.1% used) during stage 'run/3' ù releasing caches
+forrtl: error (200): program aborting due to window-CLOSE event
+Image              PC                Routine            Line        Source             
+KERNELBASE.dll     00007FFB883C348D  Unknown               Unknown  Unknown
+KERNEL32.DLL       00007FFB8ADEE957  Unknown               Unknown  Unknown
+ntdll.dll          00007FFB8B60427C  Unknown               Unknown  Unknown

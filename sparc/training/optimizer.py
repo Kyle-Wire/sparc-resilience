@@ -257,6 +257,8 @@ def spatial_minibatch_sampler(
     neighbor_idx: np.ndarray,
     batch_size: int = 2048,
     n_batches: int | None = None,
+    rank: int = 0,
+    world_size: int = 1,
 ) -> Generator[np.ndarray, None, None]:
     """
     Generate spatially contiguous mini-batches such that each point's
@@ -271,7 +273,12 @@ def spatial_minibatch_sampler(
     coords : (N, 2) — projected coordinates
     neighbor_idx : (N, 4) — N/S/E/W neighbor indices (-1 = missing)
     batch_size : target batch size
-    n_batches : if given, stop after this many batches
+    n_batches : if given, stop after this many batches (per rank)
+    rank : DDP rank index (0-based); rank ``r`` receives every
+        ``world_size``-th batch starting at offset ``r``, preserving
+        geographic locality across ranks.
+    world_size : total number of DDP ranks.  Default 1 disables
+        partitioning and preserves the original single-process behaviour.
     """
     # Low-memory safety: clamp batch size on RAM-constrained machines so a
     # single batch fits comfortably in memory alongside the model and grads.
@@ -289,8 +296,10 @@ def spatial_minibatch_sampler(
         yield np.arange(N)
         return
 
-    count = 0
-    max_iter = (n_batches or (N // batch_size + 1)) * 3  # safety cap
+    global_count = 0
+    rank_count = 0
+    # Safety cap accounts for the extra batches generated for other ranks.
+    max_iter = (n_batches or (N // batch_size + 1)) * world_size * 3
 
     for _ in range(max_iter):
         # Sample centroid
@@ -318,7 +327,11 @@ def spatial_minibatch_sampler(
         clean_batch = batch_idx[valid_in_batch]
 
         if len(clean_batch) >= batch_size // 2:
-            yield clean_batch
-            count += 1
-            if n_batches is not None and count >= n_batches:
-                return
+            # Partitioned DDP: rank r takes every world_size-th accepted batch
+            # starting at offset r, interleaving geographic regions across ranks.
+            if global_count % world_size == rank:
+                yield clean_batch
+                rank_count += 1
+                if n_batches is not None and rank_count >= n_batches:
+                    return
+            global_count += 1

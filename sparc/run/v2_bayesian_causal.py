@@ -80,6 +80,42 @@ def _refresh_hardware_globals() -> None:
     _NUTS_THIN = _PROFILE.nuts_thin
 
 
+def _compute_dag_posterior_effects(
+    sampled_dags: list,
+    beta_chain: np.ndarray,
+    cols: list[str],
+    treatments: list[str],
+    target_col: str,
+) -> dict[str, dict]:
+    """Cross-multiply MC³ DAG samples with NUTS β draws for per-treatment CIs.
+
+    Each cell of the outer product = ``dag_edge_present * beta_draw``.  This
+    propagates both structural uncertainty (MC³) and coefficient uncertainty
+    (NUTS) into a single marginal credible interval per treatment.
+    """
+    if target_col not in cols:
+        return {}
+    target_idx = cols.index(target_col)
+    n_thin = max(1, len(beta_chain) // 200)
+    results: dict[str, dict] = {}
+    for t in treatments:
+        if t not in cols:
+            continue
+        t_idx = cols.index(t)
+        t_chain_idx = treatments.index(t)
+        dag_t_probs = [float(d[t_idx, target_idx]) for d in sampled_dags]
+        betas = beta_chain[::n_thin, t_chain_idx]
+        effects = np.outer(dag_t_probs, betas).ravel()
+        results[t] = {
+            "mean": float(effects.mean()),
+            "ci5": float(np.percentile(effects, 5)),
+            "ci95": float(np.percentile(effects, 95)),
+            "edge_inclusion_mean": float(np.mean(dag_t_probs)),
+            "n_dag_samples": len(sampled_dags),
+        }
+    return results
+
+
 def run_bayesian_causal(
     data: pd.DataFrame,
     dag_def: dict[str, Any],
@@ -123,6 +159,8 @@ def run_bayesian_causal(
         PhysicsInformedGraphPrior,
         run_mc3,
     )
+    from sparc.causal.dibs import run_dibs
+    from sparc.causal.order_mcmc import run_order_mcmc
 
     config = config or {}
     output_dir = Path(output_dir)
@@ -167,21 +205,78 @@ def run_bayesian_causal(
     prior = PhysicsInformedGraphPrior.from_config(
         node_names=available_cols,
         dag_def=dag_def,
-        penalty=mc3_cfg.get("edge_penalty", 1.0),
+        penalty=mc3_cfg.get("edge_penalty", 0.5),
     )
 
-    # Run MC³
-    logger.info("Running MC³ structure learning over %d nodes...", len(available_cols))
-    mc3_results = run_mc3(
-        data=data[available_cols],
-        node_names=available_cols,
-        prior=prior,
-        n_iter=mc3_cfg.get("n_iterations", 10_000),
-        n_chains=mc3_cfg.get("n_chains", 4),
-        temperatures=mc3_cfg.get("temperatures"),
-        burnin_frac=mc3_cfg.get("burnin_fraction", 0.25),
-        seed=mc3_cfg.get("seed", 42),
-    )
+    # Optional PCMCI+ temporal prior — blends edge_prob_matrix into prior
+    if causal_cfg.get("use_pcmci_prior", False):
+        time_col = causal_cfg.get("time_col", "time")
+        if time_col in data.columns:
+            try:
+                from sparc.causal.panel import discover_spatiotemporal_causal_structure
+                _pcmci = discover_spatiotemporal_causal_structure(
+                    data, available_cols,
+                    time_col=time_col,
+                    max_lag=causal_cfg.get("pcmci_max_lag", 3),
+                )
+                prior = PhysicsInformedGraphPrior(
+                    edge_probs=_pcmci["edge_prob_matrix"],
+                    penalty_acyclic=mc3_cfg.get("edge_penalty", 0.5),
+                )
+                logger.info(
+                    "PCMCI+ prior activated: p=%d, max_lag=%d",
+                    len(available_cols), causal_cfg.get("pcmci_max_lag", 3),
+                )
+            except Exception as _e:
+                logger.warning("PCMCI+ prior skipped: %s", _e)
+
+    # Dispatch to the configured structure-learning backend
+    inference_backend = causal_cfg.get("inference_backend", "mc3")
+
+    if inference_backend == "dibs":
+        dibs_cfg = causal_cfg.get("dibs", {})
+        logger.info("Running DiBS structure learning over %d nodes...", len(available_cols))
+        mc3_results = run_dibs(
+            data=data[available_cols],
+            node_names=available_cols,
+            prior=prior,
+            n_particles=dibs_cfg.get("n_particles", 20),
+            n_steps=dibs_cfg.get("n_steps", 3_000),
+            lambda_h=dibs_cfg.get("lambda_h", 10.0),
+            lr=dibs_cfg.get("lr", 0.005),
+            tau_start=dibs_cfg.get("tau_start", 1.0),
+            tau_end=dibs_cfg.get("tau_end", 0.05),
+            seed=dibs_cfg.get("seed", 42),
+        )
+    elif inference_backend == "order_mcmc":
+        order_cfg = causal_cfg.get("order_mcmc", {})
+        logger.info("Running Order-MCMC structure learning over %d nodes...", len(available_cols))
+        mc3_results = run_order_mcmc(
+            data=data[available_cols],
+            node_names=available_cols,
+            prior=prior,
+            n_iter=order_cfg.get("n_iterations", 50_000),
+            burnin_frac=order_cfg.get("burnin_fraction", 0.25),
+            k_max_parents=order_cfg.get("k_max_parents", 3),
+            seed=order_cfg.get("seed", 42),
+        )
+    else:
+        # Default: MC³ parallel-tempering MCMC
+        logger.info("Running MC³ structure learning over %d nodes...", len(available_cols))
+        mc3_results = run_mc3(
+            data=data[available_cols],
+            node_names=available_cols,
+            prior=prior,
+            n_iter=mc3_cfg.get("n_iterations", 50_000),
+            n_chains=mc3_cfg.get("n_chains", 7),
+            temperatures=mc3_cfg.get("temperatures"),
+            burnin_frac=mc3_cfg.get("burnin_fraction", 0.25),
+            seed=mc3_cfg.get("seed", 42),
+            min_iter=mc3_cfg.get("min_iterations", 10_000),
+            converge_tol=mc3_cfg.get("converge_tol", 0.01),
+            converge_window=mc3_cfg.get("converge_window", 2_000),
+            warm_start_cfg=mc3_cfg.get("warm_start"),
+        )
 
     # Save MC³ results
     edge_probs = mc3_results.edge_inclusion_probs
@@ -262,6 +357,12 @@ def run_bayesian_causal(
         "MC³ done: %d accepted / %d total, best score=%.2f",
         mc3_results.n_accepted, mc3_results.n_total, mc3_results.best_score,
     )
+    print(
+        f"  MC³: {mc3_results.n_accepted}/{mc3_results.n_total} accepted  "
+        f"(rate={mc3_results.n_accepted / max(mc3_results.n_total, 1):.1%})  "
+        f"best_score={mc3_results.best_score:.2f}",
+        flush=True,
+    )
 
     # ---- Approval gate: pause for user review of MC³ results ----
     if approval_gate is not None:
@@ -279,22 +380,184 @@ def run_bayesian_causal(
         approval_gate(gate_payload)  # blocks until user approves or raises
         logger.info("DAG approved — continuing to NUTS.")
 
-    # ---- NUTS posterior sampling (if neural model provided) ----
+    # ---- NUTS posterior sampling ----
+    # Runs whenever inference mode is "bayesian" (the default when unset).
+    # neural_model may be None — _run_nuts_sampling handles that gracefully
+    # by running in linear-only mode with neural_baseline=None.
     nuts_results = None
 
-    if neural_model is not None and causal_cfg.get("inference") == "bayesian":
-        logger.info("Running NUTS posterior sampling...")
-        # Thread DAG definition into config for NUTS treatment identification
+    _run_nuts = (causal_cfg.get("inference") or "bayesian").lower() == "bayesian"
+    if _run_nuts:
+        logger.info(
+            "NUTS mode: %s",
+            "neural-conditioned" if neural_model is not None else "linear-only (no neural model)",
+        )
         nuts_config = dict(config)
         nuts_config.setdefault("causal", {})["dag"] = dag_def
         nuts_results = _run_nuts_sampling(
             data=data,
             node_names=available_cols,
-            neural_model=neural_model,
+            neural_model=neural_model,   # None-safe: neural_baseline stays None
             config=nuts_config,
             output_dir=output_dir,
             mc3_results=mc3_results,
         )
+
+    # ---- DML–NUTS sign coherence check ----
+    # Compares per-edge DML frequentist coefficients against NUTS posteriors.
+    # Logs [WARN] and writes ("3","sign_coherence") when P(wrong sign|NUTS) > 0.10.
+    if _run_nuts and nuts_results is not None:
+        try:
+            import json as _json
+            _dml_coeffs: dict[str, float] = {}
+            _sc_path = output_dir / "scenario_coefficients.json"
+            if _sc_path.exists():
+                with open(_sc_path) as _f:
+                    _dml_coeffs = _json.load(_f).get("all_structural_coefficients", {})
+            _edge_samples: dict = {}
+            if _store is not None and _store.has("3", "nuts_edge_samples"):
+                _edge_samples = _store.read_blob("3", "nuts_edge_samples")
+            _coherence_rows: list[dict] = []
+            for (parent, child), beta_samples in _edge_samples.items():
+                dml_val = _dml_coeffs.get(f"{parent}->{child}")
+                if dml_val is None or float(dml_val) == 0.0:
+                    continue
+                dml_coeff = float(dml_val)
+                p_neg = float(np.mean(np.asarray(beta_samples) < 0))
+                p_wrong = p_neg if dml_coeff > 0 else (1.0 - p_neg)
+                _coherence_rows.append({
+                    "parent": parent,
+                    "child": child,
+                    "dml_coeff": dml_coeff,
+                    "nuts_mean": float(np.asarray(beta_samples).mean()),
+                    "p_wrong_sign": p_wrong,
+                    "discordant": bool(p_wrong > 0.10),
+                })
+                if p_wrong > 0.10:
+                    logger.warning(
+                        "Sign discordance: %s\u2192%s "
+                        "(DML=%.4f, NUTS mean=%.4f, P(wrong sign)=%.2f)",
+                        parent, child, dml_coeff,
+                        float(np.asarray(beta_samples).mean()), p_wrong,
+                    )
+                    print(
+                        f"  [WARN] Sign discordance: {parent}\u2192{child}  "
+                        f"DML={dml_coeff:.4f}  "
+                        f"NUTS mean={float(np.asarray(beta_samples).mean()):.4f}  "
+                        f"P(wrong sign)={p_wrong:.2f}",
+                        flush=True,
+                    )
+            if _coherence_rows and _store is not None:
+                _store.write_struct(
+                    "3", "sign_coherence", _coherence_rows,
+                    producer="v2_bayesian_causal",
+                )
+        except Exception as _sc_exc:
+            logger.warning("Sign coherence check failed (non-fatal): %s", _sc_exc)
+
+    # ---- Full DAG posterior intervention distributions ----
+    # Combines MC³ structural uncertainty with NUTS coefficient uncertainty
+    # into per-treatment credible intervals. Non-fatal.
+    if _run_nuts and nuts_results is not None and mc3_results is not None:
+        try:
+            from sparc.causal.mc3 import sample_dags_from_edge_probs as _sample_dags
+            _beta_chain = nuts_results.get("_beta_chain")
+            _dp_target = nuts_results.get("_target_col")
+            _dp_treatments = nuts_results.get("treatments", [])
+            if (
+                _beta_chain is not None
+                and hasattr(mc3_results, "edge_inclusion_probs")
+                and _dp_target is not None
+                and len(_dp_treatments) > 0
+            ):
+                _sampled_dags = _sample_dags(
+                    mc3_results.edge_inclusion_probs,
+                    node_names=available_cols,
+                    n_samples=50,
+                    seed=42,
+                )
+                _dag_effects = _compute_dag_posterior_effects(
+                    _sampled_dags, _beta_chain,
+                    available_cols, _dp_treatments, _dp_target,
+                )
+                if _dag_effects and _store is not None:
+                    _store.write_struct(
+                        "3", "dag_posterior_effects", _dag_effects,
+                        producer="v2_bayesian_causal",
+                    )
+                    logger.info(
+                        "DAG posterior effects computed for %d treatments "
+                        "(%d DAG samples)",
+                        len(_dag_effects), len(_sampled_dags),
+                    )
+        except Exception as _dp_exc:
+            logger.warning("DAG posterior effects failed (non-fatal): %s", _dp_exc)
+
+    # ---- NUTS-conditioned GP CATE posterior surface ----
+    # Produces per-pixel {cate_mean, ci5, ci95} for each treatment by fitting
+    # a GP CATE surface for each thinned NUTS beta draw. Non-fatal.
+    if _run_nuts and nuts_results is not None:
+        try:
+            from sparc.causal.spatial_cate import (
+                nuts_conditioned_cate_surface as _nuts_cate_surface,
+            )
+            _gp_beta_chain = nuts_results.get("_beta_chain")
+            _gp_treatments = nuts_results.get("treatments", [])
+            _gp_target = nuts_results.get("_target_col")
+            _gp_coord_cols = config.get("variables", {}).get(
+                "coordinates",
+                config.get("variables", {}).get("coords", ["POINT_X", "POINT_Y"]),
+            )
+            _gp_avail_coords = [c for c in _gp_coord_cols if c in data.columns]
+            if (
+                _gp_beta_chain is not None
+                and len(_gp_treatments) > 0
+                and len(_gp_avail_coords) >= 2
+            ):
+                _gp_coords = data[_gp_avail_coords].values.astype(np.float64)
+                _gp_tvals = data[
+                    [t for t in _gp_treatments if t in data.columns]
+                ].values.astype(np.float64)
+                _gp_tnames = [t for t in _gp_treatments if t in data.columns]
+                # Try to load Stage 0 correlogram Matern payload for kernel init
+                _gp_corr: dict | None = None
+                if _store is not None and _store.has("0", "correlogram_matern_fit"):
+                    try:
+                        _gp_corr = _store.read_struct("0", "correlogram_matern_fit")
+                    except Exception:
+                        pass
+                # Scale GP budget with N: GP fit is O(n³) so large datasets need
+                # smaller fit-row caps and fewer posterior draws.
+                _N = len(_gp_coords)
+                if _N > 5_000:
+                    _gp_draws, _gp_fit_rows = 10, 300
+                elif _N > 2_000:
+                    _gp_draws, _gp_fit_rows = 20, 600
+                else:
+                    _gp_draws, _gp_fit_rows = 50, 2_000
+                _gp_cate_result = _nuts_cate_surface(
+                    nuts_beta_samples=_gp_beta_chain,
+                    treatment_values=_gp_tvals,
+                    coords=_gp_coords,
+                    treatment_names=_gp_tnames,
+                    corr_payload=_gp_corr,
+                    n_posterior_draws=_gp_draws,
+                    max_fit_rows=_gp_fit_rows,
+                    seed=42,
+                )
+                if _gp_cate_result and _store is not None:
+                    _store.write_blob(
+                        "3", "nuts_gp_cate", _gp_cate_result,
+                        serializer="pickle", producer="v2_bayesian_causal",
+                    )
+                    logger.info(
+                        "NUTS-GP CATE surface computed for %d treatments",
+                        len(_gp_cate_result),
+                    )
+        except Exception as _gp_exc:
+            logger.warning(
+                "NUTS-conditioned GP CATE surface failed (non-fatal): %s", _gp_exc
+            )
 
     # ---- Wager (2025) audit add-ons (auto-run at end of Stage 3) ----
     wager2025_summary: dict = {}
@@ -397,7 +660,11 @@ def _run_nuts_sampling(
 
     n_treatments = len(treatments)
 
-    device = next(neural_model.parameters()).device
+    # Determine starting device: follow the neural model if present, else CPU.
+    if neural_model is not None:
+        device = next(neural_model.parameters()).device
+    else:
+        device = torch.device("cpu")
     dtype = torch.float64
 
     # Use CUDA if available for faster log_prob evaluation
@@ -593,7 +860,7 @@ def _run_nuts_sampling(
         beta = params["beta"]
         sigma2 = params["sigma2"]
 
-        barrier_scale = 10.0
+        barrier_scale = nuts_cfg.get("barrier_scale", 2.0)
         lp_sign = torch.tensor(0.0, dtype=dtype, device=device)
         for sc_idx, required_sign in sign_constraints.items():
             b = beta[sc_idx]
@@ -620,21 +887,40 @@ def _run_nuts_sampling(
         lp_sigma = -2.0 * torch.log(sigma2)
         return ll + lp_beta + lp_sigma + lp_sign
 
+    # Empirical Cholesky mass matrix from standardized predictor covariance.
+    # Covers the beta block (n_treatments dims) + sigma2 block (1 dim).
+    _n_t = n_treatments
+    _full_dim = _n_t + 1
+    X_t = torch.tensor(X_standardized, dtype=torch.float64)
+    cov_beta = X_t.T @ X_t / max(len(X_t), 1)
+    _full_cov = torch.eye(_full_dim, dtype=torch.float64)
+    _full_cov[:_n_t, :_n_t] = cov_beta
+    mass_L = torch.linalg.cholesky(
+        _full_cov + 1e-6 * torch.eye(_full_dim, dtype=torch.float64)
+    )
+    logger.info("NUTS mass_matrix: empirical_cholesky, p=%d", _n_t)
+
     results = run_nuts(
         log_prob_fn=log_prob,
         blocks=blocks,
-        n_samples=nuts_cfg.get("n_samples", 15000),
-        n_warmup=nuts_cfg.get("n_warmup", 1000),
+        n_samples=nuts_cfg.get("n_samples", 6000),
+        n_warmup=nuts_cfg.get("n_warmup", 600),
         max_depth=nuts_cfg.get("max_tree_depth", 10),
         target_accept=nuts_cfg.get("target_accept_rate", 0.65),
         seed=nuts_cfg.get("seed", 42),
         device=str(device),
         thin=_NUTS_THIN,
+        mass_matrix_chol=mass_L,
     )
 
     # ------------------------------------------------------------------
     # Extract posterior chains and save results
     # ------------------------------------------------------------------
+    print(
+        f"  NUTS: acceptance={results.acceptance_rate:.1%}, "
+        f"divergences={results.n_divergences}",
+        flush=True,
+    )
     beta_chain_std = results.samples["beta"]  # (n_samples, n_treatments)
     beta_chain_orig = beta_chain_std / X_stds[np.newaxis, :]
 
@@ -666,6 +952,8 @@ def _run_nuts_sampling(
         "r_hat": {k: v.tolist() for k, v in results.r_hat.items()},
         "ess": {k: v.tolist() for k, v in results.ess.items()},
         "alpha_weighted": alpha_weights is not None,
+        "_beta_chain": beta_chain_orig,
+        "_target_col": target_col,
     }
     if _store is not None:
         _store.write_struct(
@@ -908,8 +1196,8 @@ def _run_per_edge_nuts_sampling(
         edge_probs = mc3_results.edge_inclusion_probs
 
     # Reduced budgets for per-edge runs — many edges to sample.
-    n_samples = int(nuts_cfg.get("per_edge_n_samples", 3000))
-    n_warmup = int(nuts_cfg.get("per_edge_n_warmup", 500))
+    n_samples = int(nuts_cfg.get("per_edge_n_samples", 1500))
+    n_warmup = int(nuts_cfg.get("per_edge_n_warmup", 300))
     seed_base = int(nuts_cfg.get("seed", 42))
 
     # Sign constraints: only for direct edges to the target.
@@ -925,6 +1213,7 @@ def _run_per_edge_nuts_sampling(
     n_skipped_mc3 = 0
     n_skipped_missing = 0
     n_failed = 0
+    total_edges = len([e for e in edges if e.get("parent") and e.get("child") and e.get("parent") != e.get("child")])
 
     # Cast neural_baseline / alpha_weights once for arithmetic on numpy.
     nb_np = (
@@ -1064,6 +1353,12 @@ def _run_per_edge_nuts_sampling(
             NUTSBlock(name="sigma2", dim=1,
                       init=np.array([log_sigma2_init]), transform="log"),
         ]
+        # Progress banner — CHECKPOINT-visible at NORMAL verbosity.
+        print(
+            f"  Per-edge NUTS: edge {n_sampled + 1}/{total_edges} ({parent}\u2192{child})  "
+            f"[{n_samples} draws, n={len(y_arr)}]",
+            flush=True,
+        )
         try:
             res = run_nuts(
                 log_prob_fn=_log_prob,
@@ -1090,6 +1385,47 @@ def _run_per_edge_nuts_sampling(
 
         rh = res.r_hat.get("beta", np.array([np.nan]))
         es = res.ess.get("beta", np.array([np.nan]))
+
+        # Adaptive ESS budget: if chain ESS < 200 and budget cap not reached, retry.
+        # Re-run warmup with a larger budget so the mass matrix re-adapts — the root
+        # cause of low ESS is almost always a poorly-tuned step size, not sample count.
+        _ess_val = float(es[0]) if len(es) else float("nan")
+        if not math.isnan(_ess_val) and _ess_val < 200 and n_samples < 6000:
+            _n_retry = min(n_samples * 2, 6000)
+            _warmup_retry = min(n_warmup * 2, 1_200)
+            logger.warning(
+                "Per-edge NUTS: low ESS (%.0f) for %s\u2192%s \u2014 retry %d draws / %d warmup",
+                _ess_val, parent, child, _n_retry, _warmup_retry,
+            )
+            print(
+                f"  [WARN] Per-edge NUTS: low ESS ({_ess_val:.0f}) for {parent}\u2192{child}"
+                f" \u2014 retry {_n_retry} draws / {_warmup_retry} warmup",
+                flush=True,
+            )
+            try:
+                _res2 = run_nuts(
+                    log_prob_fn=_log_prob,
+                    blocks=blocks,
+                    n_samples=_n_retry,
+                    n_warmup=_warmup_retry,
+                    max_depth=int(nuts_cfg.get("max_tree_depth", 10)),
+                    target_accept=float(nuts_cfg.get("target_accept_rate", 0.90)),
+                    seed=_edge_seed(parent, child) + 1,
+                    device=str(device),
+                    thin=_NUTS_THIN,
+                )
+                res = _res2
+                beta_chain_std = np.asarray(res.samples["beta"]).reshape(-1)
+                beta_chain_raw = beta_chain_std / x_std
+                samples_dict[(parent, child)] = beta_chain_raw
+                rh = res.r_hat.get("beta", np.array([np.nan]))
+                es = res.ess.get("beta", np.array([np.nan]))
+            except Exception as _exc_retry:
+                logger.warning(
+                    "Per-edge NUTS: retry failed for %s→%s: %s",
+                    parent, child, _exc_retry,
+                )
+
         summary_rows.append({
             "parent": parent,
             "child": child,
@@ -1209,7 +1545,7 @@ def _build_nuts_input_dict(
     confounder + spatial effects, not treatment effects.
     """
     from sparc.features.sinusoidal_encoding import SinusoidalSpatialEncoding
-    from sparc.run.v2_neural_training import _build_knn_index
+    from sparc.features.geometry import build_knn_index as _build_knn_index
 
     device = next(neural_model.parameters()).device
 

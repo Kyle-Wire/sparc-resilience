@@ -1026,6 +1026,8 @@ export interface PreprocessStepEvent {
   done: boolean;
   rows: number;
   sha: string;
+  changed?: boolean;
+  message?: string;
 }
 
 /** Stream the 8-step preprocessing pipeline; calls `onStep` for each

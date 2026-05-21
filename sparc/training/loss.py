@@ -181,6 +181,8 @@ def sparc_joint_loss(
     valid_laplacian_mask: torch.Tensor | None = None,
     # Static-batch padding mask (optional — CU-9 CUDA Graph support)
     valid_mask: torch.Tensor | None = None,
+    # Sheaf Laplacian (optional — topological regularisation)
+    sheaf_delta: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """
     Compute the 8-term joint loss.
@@ -211,7 +213,7 @@ def sparc_joint_loss(
             exc_clamped = exc_pred.squeeze().clamp(1e-6, 1 - 1e-6)
             if not torch.isfinite(exc_clamped).all():
                 continue  # skip if NaN/inf leaked through
-            target = (y_true > thresh).float()
+            target = (y_true > thresh).to(dtype=exc_clamped.dtype)
             if valid_mask is not None:
                 exc_clamped = exc_clamped[valid_mask]
                 target = target[valid_mask]

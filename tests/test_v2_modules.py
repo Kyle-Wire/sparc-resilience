@@ -11,7 +11,7 @@ import torch
 # Fixtures — load brown4.csv once, subsample for speed
 # ---------------------------------------------------------------------------
 
-DATA_PATH = "examples/brown4.csv"
+DATA_PATH = "brown4.csv"
 FEATURES = ["Pct_Canopy", "Pct_Impervious", "NDVI", "Albedo", "Elevation_m", "Distance_from_water_m"]
 TARGET = "AAT_z"
 COORD_COLS = ["POINT_X", "POINT_Y"]

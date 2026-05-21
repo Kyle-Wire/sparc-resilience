@@ -204,15 +204,25 @@ class CorrelogramSpatialAnalyzer:
                 )
                 matern_fit_payload = fit_res.to_payload()
                 matern_fit_payload['variable'] = variable_name
-                if fit_res.converged:
+                # Promote to 'matern' when the kernel-shape parameters converge
+                # (kappa, sigma2), even when nuisance noise parameters (tau2,
+                # obs_sigma2) do not.  tau2/obs_sigma2 are near-identifiable in
+                # fast mode (both absorb non-spatial variance) and chronically
+                # fail ESS, but they have no bearing on the kernel's spatial
+                # shape — only kappa (range) and sigma2 (signal fraction) do.
+                # Use payload r_hat values (Python floats via to_payload()) to
+                # avoid a ValueError from numpy array truth-value comparison.
+                _kappa_rhat = matern_fit_payload.get('r_hat', {}).get('kappa', 9.9)
+                _sigma2_rhat = matern_fit_payload.get('r_hat', {}).get('sigma2', 9.9)
+                if _kappa_rhat < 1.05 and _sigma2_rhat < 1.05:
                     best_kernel = 'matern'
                 print(
-                    f"  Matérn fit ({fit_res.method}): κ={fit_res.kappa_mean:.4g} "
-                    f"[ν={fit_res.nu}], rmse={fit_res.fit_rmse:.4f}, "
+                    f"  Matern fit ({fit_res.method}): kappa={fit_res.kappa_mean:.4g} "
+                    f"[nu={fit_res.nu}], rmse={fit_res.fit_rmse:.4f}, "
                     f"converged={fit_res.converged}"
                 )
         except Exception as _exc:  # noqa: BLE001
-            print(f"  Matérn fit unavailable for {variable_name}: {_exc}")
+            print(f"  [WARNING] Matern fit unavailable for {variable_name}: {_exc}")
             matern_fit_payload = None
 
         # ─── Phase 2: Anisotropic Matérn fit (directional correlogram) ───

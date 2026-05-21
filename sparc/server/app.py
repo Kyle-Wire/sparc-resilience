@@ -1808,6 +1808,19 @@ async def preprocess_data():
         # ── Step 1: Ingest CSV ──────────────────────────────────────────
         sha = _hash_df(df)
         step_hashes["ingest_csv"] = sha
+        # Detect upstream CSV change vs. last run
+        try:
+            from sparc.data.versioning import get_last_hash as _get_last_hash
+            _prior_sha = _get_last_hash(project_dir, "ingest_csv")
+        except Exception:
+            _prior_sha = None
+        _changed = _prior_sha is not None and _prior_sha != sha
+        if _changed:
+            yield "data: " + _json.dumps({
+                "step": "Ingest CSV", "changed": True,
+                "message": "Raw data modified since last run", "sha": sha,
+            }) + "\n\n"
+            await asyncio.sleep(0)
         yield _sse("Ingest CSV", len(df), sha)
         await asyncio.sleep(0)
 
@@ -4375,7 +4388,7 @@ async def get_artifact_png(stage: str, artifact_id: str, dpi: int = 150):
             raise HTTPException(404, str(exc))
     finally:
         set_active_registry(prev)
-    return Response(content=data, media_type="image/png")
+    return Response(content=data, media_type="application/octet-stream")
 
 
 # Catch-all native route — declared LAST so the suffixed routes above
