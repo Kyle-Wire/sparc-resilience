@@ -42,4 +42,8 @@ __all__ = [
     # V2 Bayesian
     "mc3",
     "nuts",
+    # MAUP diagnostic
+    "maup_sensitivity",
+    # PDE identifiability
+    "pde_identifiability",
 ]

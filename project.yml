@@ -22,7 +22,7 @@ project:
 # Input Data
 # ---------------------------------------------------------------------------
 data:
-  file_path: "/Users/kylewire/Desktop/sparc-resilience/my_project/brown4.csv"              # Relative to this file, or absolute
+  file_path: "brown4.csv"              # Relative to this file, or absolute
   target_column: "AAT_z"                       # Ambient Air Temperature z-score
   identifier_column: "OBJECTID"                # Unique row ID
   coord_columns: ["POINT_X", "POINT_Y"]        # [Easting, Northing]
@@ -74,6 +74,11 @@ causal:
   estimate_cate: true           # Spatial CATE via Bayesian low-rank GP
   inference: "bayesian"         # "bayesian" (V2 default: MC³ + NUTS) or "frequentist" (V1, deprecated)
   cate_estimator: "bayesian"
+  # Structure-learning backend: "mc3" (default) | "dibs" | "order_mcmc"
+  # mc3        — parallel-tempering MCMC, production default
+  # dibs       — SVGD over continuous DAG space (Lorch et al. 2021), better posterior coverage
+  # order_mcmc — exact BGe posterior over orderings (Friedman & Koller 2003), no tempering needed
+  inference_backend: "mc3"
   discovery:
     enabled: true
     methods: [pc_stable, lingam, ges]
@@ -81,17 +86,30 @@ causal:
     consensus_threshold: 2      # min methods that must agree to keep an edge
     compare_expert: true
   mc3:
-    n_iterations: 10000
+    n_iterations: 50000       # max cap; converges early via moving-window check
+    min_iterations: 10000     # floor before convergence check activates
+    converge_tol: 0.005       # stop when max edge-prob change < 0.5% over window
+    converge_window: 2000     # window size (post-burnin samples) for comparison
     n_chains: 4
+    # Confirmed: MAP is global max.  4 chains [1.0, 0.75, 0.55, 0.40] are sufficient;
+    # hotter chains cost 7× compute but don't improve cold-chain mixing on large-n BGe.
+    temperatures: [1.0, 0.75, 0.55, 0.40]
     burnin_fraction: 0.25
     edge_penalty: 1.0
     seed: 42
+    warm_start:
+      enabled: true
+      n_particles: 4          # one per chain; SVGD diversifies starting DAGs
+      n_steps: 500
+      lambda_h: 1.0
   nuts:
-    n_samples: 2000
-    n_warmup: 500
+    n_samples: 4000
+    n_warmup: 1000            # Stan best-practice: ≥1000 for good mass-matrix adaptation
+    per_edge_n_samples: 2000
+    per_edge_n_warmup: 800    # per-edge model is 2-param; 800 warmup is robust
     n_chains: 2
-    target_accept_rate: 0.85
-    max_tree_depth: 8
+    target_accept_rate: 0.90  # higher = smaller step size = better mixing for tricky posteriors
+    max_tree_depth: 10
   bayesian_cate:
     n_features: 16              # low-RAM laptops: 16; servers: 32+
     n_samples: 2000
@@ -150,6 +168,17 @@ pipeline:
   # Global sensitivity analysis (Morris or Sobol)
   # run_sensitivity_analysis: true
   # sensitivity_method: "morris"   # "morris" or "sobol"
+
+# ---------------------------------------------------------------------------
+# Hardware Performance Override
+# ---------------------------------------------------------------------------
+# Auto-detection places 31.1 GB at the top of "standard" tier (threshold: 32 GB).
+# Force "high" tier + "max" preset to use all 24 cores, full RAM, and RTX 5070 Ti.
+performance:
+  hardware_tier_override: high   # force high tier (24 workers, high_memory_mode)
+  preset: max                    # saturate the machine (all cores, batch_size=8192)
+  cuda_graphs: true              # CUDA graph capture for static-shape batch loops
+  force_cpu: false               # always use GPU
 
 flags:
   use_gwen_selection: true
@@ -223,7 +252,7 @@ process_rate:
 # ---------------------------------------------------------------------------
 training:
   n_epochs: 100
-  batch_size: 512
+  batch_size: 2048              # RTX 5070 Ti has ~16 GB VRAM; 512 was leaving it mostly idle
   learning_rate: 0.001
   lambda_mse: 1.0
   lambda_exceedance: 0.1

@@ -37,21 +37,21 @@ import DatasetProfilePanel from "@/components/insights/panels/DatasetProfilePane
 
 function buildPanels(): InsightsPanelDescriptor[] {
   return [
-    // ---- Overview (both audiences) ----
+    // ---- Overview (all audiences) ----
     {
       id: "overview",
       group: "Overview",
       label: "At a glance",
-      audience: ["practitioner", "researcher"],
+      audience: ["practitioner", "researcher", "public"],
       render: () => <OverviewPanel />,
     },
 
-    // ---- Practitioner: decisions ----
+    // ---- Practitioner & public: decisions ----
     {
       id: "headline",
       group: "Decisions",
       label: "Best intervention",
-      audience: "practitioner",
+      audience: ["practitioner", "public"],
       stage: "Stage 4",
       render: () => <HeadlinePanel />,
     },
@@ -59,23 +59,23 @@ function buildPanels(): InsightsPanelDescriptor[] {
       id: "scenario-strip",
       group: "Decisions",
       label: "Scenarios",
-      audience: "practitioner",
+      audience: ["practitioner", "public"],
       render: () => <ScenarioStripPanel />,
     },
     {
       id: "equity",
       group: "Decisions",
       label: "Equity & cost",
-      audience: "practitioner",
+      audience: ["practitioner", "public"],
       render: () => <EquityCostPanel />,
     },
 
-    // ---- Spatial (both audiences) ----
+    // ---- Spatial (all audiences) ----
     {
       id: "predictions",
       group: "Spatial",
       label: "Predictions map",
-      audience: ["practitioner", "researcher"],
+      audience: ["practitioner", "researcher", "public"],
       stage: "Stage 2",
       render: () => <PredictionsMapPanel />,
     },
@@ -83,7 +83,7 @@ function buildPanels(): InsightsPanelDescriptor[] {
       id: "scenario-map",
       group: "Spatial",
       label: "Scenario map",
-      audience: ["practitioner", "researcher"],
+      audience: ["practitioner", "researcher", "public"],
       render: () => <ScenarioMapPanel />,
     },
     {
@@ -128,7 +128,7 @@ function buildPanels(): InsightsPanelDescriptor[] {
       id: "dose-response",
       group: "Evidence",
       label: "Dose-response",
-      audience: ["practitioner", "researcher"],
+      audience: ["practitioner", "researcher", "public"],
       render: () => <DoseResponsePanel />,
     },
 

@@ -283,3 +283,102 @@ def latent_pde_consistency_loss(
     loss = laplacian.pow(2).mean()
     return loss, {"latent_pde": loss.item()}
 
+
+# ---------------------------------------------------------------------------
+# Spatial patch masking
+# ---------------------------------------------------------------------------
+
+def spatial_patch_mask(
+    coords: torch.Tensor,
+    mask_ratio: float = 0.4,
+    n_patches: int = 4,
+    min_patch_radius: float | None = None,
+) -> torch.Tensor:
+    """Build a per-point boolean mask from spatial disk patches.
+
+    Rather than masking random feature channels (the old approach), this
+    function selects ``n_patches`` random centre points from the batch and
+    masks every point within a radius of each centre.  The result is a
+    geographically contiguous hidden region — consistent with the original
+    I-JEPA intuition that the model must predict a spatially coherent
+    neighbourhood, not just reconstruct isolated missing features.
+
+    Parameters
+    ----------
+    coords : (N, 2) float tensor
+        2-D spatial coordinates of the points in the current batch.
+    mask_ratio : float
+        Target fraction of points to mask overall.  The patch radius is
+        derived so that (on average) ``mask_ratio × N`` points fall inside
+        the union of the ``n_patches`` disks.
+    n_patches : int
+        Number of non-overlapping (best-effort) disk centres to sample.
+    min_patch_radius : float or None
+        Minimum radius.  If None, derived from the coordinate range so that
+        each patch covers approximately ``mask_ratio / n_patches`` of the
+        bounding box area.
+
+    Returns
+    -------
+    mask : (N,) bool tensor
+        ``True`` for points that are **masked** (hidden from the context
+        encoder).  Callers convert to a ``channel_mask`` or point-level
+        weight as appropriate.
+    """
+    N = coords.shape[0]
+    device = coords.device
+
+    if N < 4:
+        # Too few points — fall back to random point masking
+        return torch.rand(N, device=device) < mask_ratio
+
+    # Coordinate range
+    coord_min = coords.min(dim=0).values   # (2,)
+    coord_max = coords.max(dim=0).values   # (2,)
+    span = (coord_max - coord_min).clamp(min=1e-6)  # (2,)
+
+    if min_patch_radius is None:
+        # Each patch should cover mask_ratio/n_patches of the bounding box
+        # Area of bbox = span[0]*span[1]; target area per patch = (mask_ratio/n_patches)*bbox_area
+        # π*r² = target_area  →  r = sqrt(target_area / π)
+        bbox_area = span[0] * span[1]
+        target_area = (mask_ratio / max(n_patches, 1)) * bbox_area
+        radius = float((target_area / 3.14159).sqrt().clamp(min=span.min() * 0.05))
+    else:
+        radius = float(min_patch_radius)
+
+    masked = torch.zeros(N, dtype=torch.bool, device=device)
+    centres_used: list[torch.Tensor] = []
+
+    rng_idx = torch.randperm(N, device=device)
+
+    for candidate in rng_idx:
+        if len(centres_used) >= n_patches:
+            break
+        centre = coords[candidate]  # (2,)
+
+        # Soft non-overlap: skip if too close to an existing centre
+        too_close = any(
+            float((centre - c).norm()) < radius * 0.5
+            for c in centres_used
+        )
+        if too_close:
+            continue
+
+        dist = (coords - centre).norm(dim=1)  # (N,)
+        masked |= dist <= radius
+        centres_used.append(centre)
+
+    # Safety: if mask is empty or coverage is way off, supplement with random
+    n_masked = int(masked.sum())
+    target_n = int(mask_ratio * N)
+    if n_masked == 0:
+        # No patches landed — full random fallback
+        return torch.rand(N, device=device) < mask_ratio
+    if n_masked < target_n // 2:
+        # Patches covered very little — supplement randomly
+        extra = torch.rand(N, device=device) < (mask_ratio - n_masked / N)
+        masked = masked | extra
+
+    return masked
+

@@ -375,6 +375,42 @@ export interface ProjectConfig {
   output?: Record<string, unknown>;
 }
 
+// ------------------------------------------------------------------
+// Data Validation
+// ------------------------------------------------------------------
+export interface ValidationIssue {
+  id: string;
+  category: string;
+  severity: "critical" | "warning" | "info";
+  column?: string | null;
+  message: string;
+  detail?: string;
+  value?: unknown;
+}
+
+export interface ValidationReport {
+  passed: boolean;
+  n_critical: number;
+  n_warning: number;
+  n_info: number;
+  items: ValidationIssue[];
+  summary?: string;
+}
+
+// ------------------------------------------------------------------
+// Data Versioning
+// ------------------------------------------------------------------
+export interface DataVersion {
+  version: number;
+  filename: string;
+  path: string;
+  timestamp: string;
+  n_rows: number;
+  n_cols: number;
+  description?: string | null;
+  settings?: Record<string, unknown> | null;
+}
+
 /** Structured JSON actions returned by Claude in chat responses. */
 export type ClaudeAction =
   | { action: "suggest_template"; template: string; predictors: string[]; reasoning: string }

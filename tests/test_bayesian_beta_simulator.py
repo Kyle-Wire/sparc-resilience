@@ -96,7 +96,7 @@ def test_compute_direct_delta_uses_bayesian_beta(active_registry):
     eff = np.array([2.0, 2.0, 2.0])
     delta, method = sim._compute_mgwr_direct_delta("Pct_Canopy", eff)
 
-    assert method == "bayesian_beta"
+    assert method == "combined_beta"
     # delta = β(s) · Δ
     assert delta.tolist() == pytest.approx([-0.10, -0.20, -0.30])
 

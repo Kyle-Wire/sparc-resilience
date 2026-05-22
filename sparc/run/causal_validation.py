@@ -596,6 +596,31 @@ class CausalValidator:
     # Step 3: Formal ATE estimation via DoWhy
     # ------------------------------------------------------------------
 
+    def _populate_ate_from_nuts_posterior(self, nuts_summary: dict | None) -> None:
+        """Backfill ate_results with NUTS posterior means for DAG treatments.
+
+        In Bayesian mode the V1 frequentist estimators (DoWhy, IPW, GPS, etc.)
+        are skipped, leaving ate_results empty and the summary table full of
+        N/A.  This method maps the NUTS ``beta_mean`` values for each
+        DAG-defined treatment variable into ate_results so the table shows
+        the posterior-mean direct effect instead.
+
+        Only DAG treatment nodes (``self.roles['treatments']``) are written;
+        mediators and confounders that appear in the NUTS regression are
+        intentionally excluded.
+        """
+        if not nuts_summary:
+            return
+        treatments = nuts_summary.get("treatments") or []
+        beta_mean = nuts_summary.get("beta_mean") or []
+        nuts_beta_map = dict(zip(treatments, beta_mean))
+        for t in self.roles.get("treatments", []):
+            if t in nuts_beta_map:
+                self.ate_results[t] = {
+                    "ate": float(nuts_beta_map[t]),
+                    "method": "nuts_posterior_mean",
+                }
+
     def estimate_ate_all(self, data: pd.DataFrame) -> None:
         """
         Estimate Average Treatment Effect for every treatment → outcome
@@ -3194,6 +3219,10 @@ def main(approval_gate=None) -> dict:
                 discovery_report=validator.discovery_report,
             )
 
+            # Free neural model memory immediately — MC³/NUTS are done with it
+            neural_model = None
+            import gc; gc.collect()
+
             mc3_summary = bayesian_result.get("mc3_summary", {})
             print(f"  MC³: {mc3_summary.get('n_accepted', 0)} / "
                   f"{mc3_summary.get('n_total', 0)} accepted "
@@ -3207,6 +3236,10 @@ def main(approval_gate=None) -> dict:
                 treatments = nuts_summary.get("treatments", [])
                 for t, b in zip(treatments, beta_mean):
                     print(f"    {t}: beta = {b:+.5f}")
+                # Backfill the ATE table with NUTS posterior means so the
+                # summary doesn't show N/A for every treatment in Bayesian
+                # mode (V1 frequentist estimators are intentionally skipped).
+                validator._populate_ate_from_nuts_posterior(nuts_summary)
 
             # Merge bayesian results into the scenario coefficients
             result["bayesian_causal"] = bayesian_result
@@ -3258,6 +3291,13 @@ def main(approval_gate=None) -> dict:
             print(f"  V2 Bayesian causal analysis failed: {e}")
             import traceback
             traceback.print_exc()
+            # Release the neural model and any partially-allocated MC³ objects
+            # before running the coverage-parity validators below.
+            try:
+                neural_model = None  # type: ignore[assignment]
+            except NameError:
+                pass
+            import gc; gc.collect()
 
         # =================================================================
         # Bayesian-path coverage parity (former V1-only diagnostics).

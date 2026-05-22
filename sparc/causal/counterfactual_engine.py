@@ -174,7 +174,7 @@ class CounterfactualEngine:
         except Exception as exc:
             warnings.warn(
                 f"CounterfactualEngine.load_edge_posteriors: "
-                f"nuts_edge_samples missing ({exc}); falling back to OLS.",
+                f"nuts_edge_samples missing from store ({exc}); falling back to OLS.",
                 stacklevel=2,
             )
             return 0
@@ -337,6 +337,29 @@ class CounterfactualEngine:
             'spatial_block_size', None
         )
         dml_n_splits = self.config.get('causal', {}).get('dml_cv_folds', 5)
+
+        # Auto-detect spatial block size from Stage 0 effective_range_matrix
+        # when estimator is DML and user has not set spatial_block_size explicitly.
+        if estimator_name == 'dml' and spatial_block_size is None:
+            try:
+                from sparc.registry.store import get_active_store
+                import logging as _logging
+                _artifact_store = get_active_store()
+                if _artifact_store is not None and _artifact_store.has("0", "effective_range_matrix"):
+                    erm = _artifact_store.read_any("0", "effective_range_matrix")
+                    range_matrix = erm.get("range_matrix", [])
+                    range_values = [
+                        v for row in range_matrix for v in row
+                        if v is not None and v > 0
+                    ]
+                    if range_values:
+                        spatial_block_size = float(np.percentile(range_values, 10))
+                        _logging.getLogger(__name__).info(
+                            "DML spatial block CV activated (block_size=%.0fm from effective_range_matrix)",
+                            spatial_block_size,
+                        )
+            except Exception:
+                pass  # degrade gracefully to random K-fold
 
         # Storage for raw (pre-shrinkage) coefficients and SEs
         self._raw_coeffs: Dict[Tuple[str, str], float] = {}
@@ -574,11 +597,11 @@ class CounterfactualEngine:
                 cv_splitter = n_splits  # fall back to random
 
         model_y = HGB(
-            max_iter=200, max_depth=4, learning_rate=0.05,
+            max_iter=100, max_depth=3, learning_rate=0.05,
             min_samples_leaf=20, random_state=42,
         )
         model_t = HGB(
-            max_iter=200, max_depth=4, learning_rate=0.05,
+            max_iter=100, max_depth=3, learning_rate=0.05,
             min_samples_leaf=20, random_state=42,
         )
 
@@ -612,12 +635,16 @@ class CounterfactualEngine:
         except Exception as econml_err:
             # Fallback: manual Chernozhukov et al. (2018) cross-fit DML
             # using only sklearn — no dependency on econml.tree._utils.
+            # NOTE: call as CounterfactualEngine._fit_edge_dml_sklearn (not
+            # self._fit_edge_dml_sklearn) because _fit_edge_dml may be invoked
+            # via CounterfactualEngine._fit_edge_dml(validator_instance, ...)
+            # where the caller is a CausalValidator, not a CounterfactualEngine.
             import warnings
             warnings.warn(
                 f"econml LinearDML failed ({econml_err}); "
                 "using sklearn-only cross-fit DML fallback."
             )
-            return self._fit_edge_dml_sklearn(
+            return CounterfactualEngine._fit_edge_dml_sklearn(
                 T, Y, W, model_y, model_t, n_splits,
             )
 

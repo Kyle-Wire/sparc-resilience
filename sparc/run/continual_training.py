@@ -25,6 +25,7 @@ import numpy as np
 from sparc.data.welford import WelfordScaler
 from sparc.registry.city_registry import CityRegistry
 from sparc.run.transfer_training import _build_folds, _load_project
+from sparc.run.v2_neural_training import train_neural_meta
 from sparc.training.ewc import compute_fisher_matrix, extract_trunk_params
 from sparc.training.replay import CoresetSelector
 
@@ -120,10 +121,21 @@ def train_continual(
             train_config["_transfer"]["freeze_trunk"] = False  # allow updates
 
         # Add EWC + replay config
+        # Load optimal params (θ*) from trunk checkpoints of previous cities
+        previous_optimal_params = []
+        for city_name, _ in previous_fishers:
+            try:
+                record = registry.load_city(city_name)
+                if record.trunk_checkpoint is not None:
+                    previous_optimal_params.append(record.trunk_checkpoint)
+            except Exception:
+                pass
+
         train_config["_continual"] = {
             "ewc_lambda": ewc_lambda if previous_fishers else 0.0,
             "replay_lambda": replay_lambda if previous_coresets else 0.0,
             "fisher_matrices": [fm for _, fm in previous_fishers],
+            "optimal_params_list": previous_optimal_params,
             "previous_coresets": previous_coresets,
         }
 
@@ -131,12 +143,14 @@ def train_continual(
         city_output = output_dir / city_name
         folds = _build_folds(y, coords, config)
 
+        city_output.mkdir(parents=True, exist_ok=True)
+
         t0 = time.time()
-        train_result = _train_city(
+        train_result = train_neural_meta(
             config=train_config,
             y=y,
             coords=coords,
-            features=features_scaled,
+            feature_matrix=features_scaled,
             feature_names=feature_names,
             output_dir=city_output,
             folds=folds,
@@ -189,37 +203,6 @@ def train_continual(
 
     return results
 
-
-def _train_city(
-    config: dict,
-    y: np.ndarray,
-    coords: np.ndarray,
-    features: np.ndarray,
-    feature_names: list[str],
-    output_dir: Path,
-    folds: list,
-) -> dict[str, Any]:
-    """
-    Train a single city with transfer + continual learning hooks.
-
-    This wraps the existing train_neural_meta pipeline and returns
-    the training result dict augmented with Fisher matrix and trunk state.
-    """
-    from sparc.training.v2_neural_training import train_neural_meta
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    result = train_neural_meta(
-        config=config,
-        y=y,
-        coords=coords,
-        feature_matrix=features,
-        feature_names=feature_names,
-        output_dir=output_dir,
-        folds=folds,
-    )
-
-    return result
 
 
 def _load_or_init_welford(registry: CityRegistry) -> WelfordScaler:

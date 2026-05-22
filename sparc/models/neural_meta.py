@@ -109,6 +109,7 @@ class SPARCMetaLearner(nn.Module):
         max_neighbors: int = 128,
         siren_omega: float = 30.0,
         time_embed_dim: int = 0,
+        init_bandwidth: float = 1000.0,
     ) -> None:
         super().__init__()
 
@@ -187,6 +188,7 @@ class SPARCMetaLearner(nn.Module):
             n_heads=n_heads,
             max_neighbors=max_neighbors,
             dropout=dropout,
+            init_bandwidth=init_bandwidth,
         )
         # Project spatial stream to hidden_dim
         self.spatial_proj = nn.Linear(d_spatial, hidden_dim)
@@ -232,6 +234,7 @@ class SPARCMetaLearner(nn.Module):
         alpha: torch.Tensor,
         time_idx: torch.Tensor | None = None,
         surrogate_std: torch.Tensor | None = None,
+        knn_dists: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, list[torch.Tensor], torch.Tensor]:
         """
         Parameters
@@ -246,6 +249,9 @@ class SPARCMetaLearner(nn.Module):
         surrogate_std : (N, 1) or None — cross-surrogate std from _forward_surrogates.
             When None, zeros are used and the SpatialGatingHead defaults to
             uniform surrogate weights (fully backward compatible).
+        knn_dists    : (N, max_neighbors) float or None — metric distances to KNN.
+            Passed to SparseSpatialAttention to seed distance-biased attention
+            from Stage 0 correlogram bandwidths.
 
         Returns
         -------
@@ -258,7 +264,7 @@ class SPARCMetaLearner(nn.Module):
         h_phys, w_source = self.physics_enc(physics_feats)  # (N, H), (N, 1)
         self._last_w_source = w_source  # keep gradients for variance penalty
 
-        h_spatial, attn_weights = self.spatial_enc(X_spatial, coords, knn_index)
+        h_spatial, attn_weights = self.spatial_enc(X_spatial, coords, knn_index, knn_dists=knn_dists)
         h_spatial = self.spatial_proj(h_spatial)       # (N, H)
 
         h_alpha = self.alpha_emb(alpha)               # (N, H)
@@ -340,6 +346,7 @@ class SPARCMetaLearner(nn.Module):
         X_spatial: torch.Tensor,
         coords: torch.Tensor,
         knn_index: torch.Tensor,
+        knn_dists: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, list[torch.Tensor]]:
         """
         Decode a (potentially predictor-rolled-out) trunk embedding back
@@ -362,7 +369,7 @@ class SPARCMetaLearner(nn.Module):
         exceedance   : list[(N,)] — one tensor per threshold
         """
         h_base = self.base_enc(base_preds)
-        h_spatial, _ = self.spatial_enc(X_spatial, coords, knn_index)
+        h_spatial, _ = self.spatial_enc(X_spatial, coords, knn_index, knn_dists=knn_dists)
         h_spatial = self.spatial_proj(h_spatial)
 
         fused = torch.cat([h_trunk, h_base, h_spatial], dim=-1)
@@ -388,14 +395,17 @@ class SPARCMetaLearner(nn.Module):
         mean : (N,) — posterior mean prediction
         std  : (N,) — epistemic uncertainty (MC std)
         """
+        was_training = self.training
         self.train()  # keep dropout active
         predictions = []
 
-        with torch.no_grad():
+        with torch.inference_mode():
             for _ in range(n_samples):
                 T_pred, _, _ = self.forward(*args, **kwargs)
                 predictions.append(T_pred)
 
+        if not was_training:
+            self.eval()  # restore prior eval state
         predictions = torch.stack(predictions, dim=0)  # (S, N)
         return predictions.mean(dim=0), predictions.std(dim=0)
 

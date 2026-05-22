@@ -250,9 +250,10 @@ def fit_matern_bayes(
     #        because empirical Moran's I has more variance at long lags
     #        (fewer pairs).  This matches the heteroscedastic reality without
     #        needing to count pairs explicitly.
-    h_t = torch.tensor(lags, dtype=torch.float64)
-    y_t = torch.tensor(morans, dtype=torch.float64)
-    weight = torch.tensor(1.0 + lags / max(lags.max(), 1e-9), dtype=torch.float64)
+    _nuts_device = "cuda" if torch.cuda.is_available() else "cpu"
+    h_t = torch.tensor(lags, dtype=torch.float64, device=_nuts_device)
+    y_t = torch.tensor(morans, dtype=torch.float64, device=_nuts_device)
+    weight = torch.tensor(1.0 + lags / max(lags.max(), 1e-9), dtype=torch.float64, device=_nuts_device)
     log_kappa_prior_mean = math.log(max(kappa_init, 1e-9))
 
     def make_log_prob(nu_val: float):
@@ -262,7 +263,7 @@ def fit_matern_bayes(
             tau2 = params["tau2"]
             obs_sigma2 = params["obs_sigma2"]
             rho = matern_correlation_torch(h_t, kappa, nu_val)
-            mu = sigma2 * rho + tau2 * (h_t == 0).double()
+            mu = sigma2 * rho + tau2 * (h_t == 0).to(h_t.dtype)
             sigma2_obs = obs_sigma2 * weight
             ll = -0.5 * torch.sum(
                 torch.log(sigma2_obs) + (y_t - mu) ** 2 / sigma2_obs
@@ -294,6 +295,8 @@ def fit_matern_bayes(
         ]
         chain_results = []
         try:
+            if _nuts_device == "cuda":
+                logger.debug("Matérn NUTS: using cuda")
             for chain_idx in range(max(1, n_chains)):
                 res = run_nuts(
                     log_prob_fn=make_log_prob(nu_val),
@@ -303,7 +306,7 @@ def fit_matern_bayes(
                     max_depth=8,
                     target_accept=0.80,
                     seed=seed + chain_idx,
-                    device="cpu",
+                    device=_nuts_device,
                 )
                 chain_results.append(res)
         except Exception as exc:

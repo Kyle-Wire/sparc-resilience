@@ -39,6 +39,25 @@ _LOW_MAX_GB = 12.0
 _HIGH_MIN_GB = 32.0
 
 
+def _detect_gpu() -> tuple[bool, int, float, str]:
+    """Return (gpu_available, gpu_count, gpu_vram_gb, gpu_name).
+
+    Uses torch.cuda — returns all-zeros/False on CPU-only machines or when
+    torch is unavailable.  Wrapped in a broad try/except so hardware quirks
+    never crash the profiler.
+    """
+    try:
+        import torch  # lazy import — torch may not be installed yet
+        if not torch.cuda.is_available():
+            return False, 0, 0.0, ""
+        count = torch.cuda.device_count()
+        props = torch.cuda.get_device_properties(0)
+        vram_gb = round(props.total_memory / (1024 ** 3), 1)
+        return True, count, vram_gb, props.name
+    except Exception:  # pragma: no cover
+        return False, 0, 0.0, ""
+
+
 @dataclass(frozen=True)
 class HardwareProfile:
     """Resolved hardware settings for the current process."""
@@ -57,15 +76,31 @@ class HardwareProfile:
     memory_limit_gb: float
     preset: Preset = "balanced"
     source: str = "auto"  # "auto", "preset", "custom", "env"
+    # GPU fields (CU-1)
+    gpu_available: bool = False
+    gpu_count: int = 0
+    gpu_vram_gb: float = 0.0
+    gpu_name: str = ""
+    # GPU-tuned batch size (CU-3); 0 when no GPU detected
+    gpu_batch_size: int = 0
+    # CU-9b: CUDA Graph capture for static-shape batch loops (default off)
+    cuda_graphs: bool = False
+    # CU-10a: Multi-GPU fold-parallel training via DDP (default off)
+    ddp_enabled: bool = False
 
     def as_dict(self) -> dict:
         return asdict(self)
 
     def banner(self) -> str:
-        device = "cpu-only" if self.force_cpu else "gpu-ok"
+        if self.force_cpu:
+            device_tag = "cpu-only"
+        elif self.gpu_available:
+            device_tag = f"gpu={self.gpu_name}({self.gpu_vram_gb:.1f}GB)"
+        else:
+            device_tag = "gpu-ok"
         return (
             f"[hardware] tier={self.tier} ram={self.total_ram_gb:.1f}GB "
-            f"workers={self.max_workers} batch={self.batch_size} {device} "
+            f"workers={self.max_workers} batch={self.batch_size} {device_tag} "
             f"preset={self.preset}"
         )
 
@@ -85,6 +120,11 @@ def _classify(total_ram_gb: float) -> Tier:
 def _build_profile(tier: Tier, total_ram_gb: float, available_ram_gb: float) -> HardwareProfile:
     """Construct the auto-detected HardwareProfile for *tier*."""
     cpu_count = mp.cpu_count()
+    gpu_avail, gpu_count, gpu_vram_gb, gpu_name = _detect_gpu()
+
+    # GPU-aware batch size: ~256 rows per GB VRAM (12 KB/row at hidden_dim=256).
+    # Clamped to [512, 32768].
+    gpu_bs = int(min(max(gpu_vram_gb * 256, 512), 32768)) if gpu_avail else 0
 
     if tier == "low":
         return HardwareProfile(
@@ -97,11 +137,16 @@ def _build_profile(tier: Tier, total_ram_gb: float, available_ram_gb: float) -> 
             inner_jobs=1,
             batch_size=512,
             nuts_thin=2,
-            force_cpu=True,
+            force_cpu=not gpu_avail,  # CU-1: decouple from RAM tier
             high_memory_mode=False,
             memory_limit_gb=max(2.0, available_ram_gb * 0.6),
             preset="balanced",
             source="auto",
+            gpu_available=gpu_avail,
+            gpu_count=gpu_count,
+            gpu_vram_gb=gpu_vram_gb,
+            gpu_name=gpu_name,
+            gpu_batch_size=gpu_bs,
         )
 
     if tier == "high":
@@ -120,6 +165,11 @@ def _build_profile(tier: Tier, total_ram_gb: float, available_ram_gb: float) -> 
             memory_limit_gb=min(total_ram_gb * 0.75, 48.0),
             preset="balanced",
             source="auto",
+            gpu_available=gpu_avail,
+            gpu_count=gpu_count,
+            gpu_vram_gb=gpu_vram_gb,
+            gpu_name=gpu_name,
+            gpu_batch_size=gpu_bs,
         )
 
     # standard tier
@@ -138,6 +188,11 @@ def _build_profile(tier: Tier, total_ram_gb: float, available_ram_gb: float) -> 
         memory_limit_gb=min(total_ram_gb * 0.7, 24.0),
         preset="balanced",
         source="auto",
+        gpu_available=gpu_avail,
+        gpu_count=gpu_count,
+        gpu_vram_gb=gpu_vram_gb,
+        gpu_name=gpu_name,
+        gpu_batch_size=gpu_bs,
     )
 
 
@@ -266,6 +321,8 @@ _OVERRIDABLE_FIELDS = (
     "force_cpu",
     "high_memory_mode",
     "memory_limit_gb",
+    "cuda_graphs",
+    "ddp_enabled",
 )
 
 
@@ -278,7 +335,7 @@ def _coerce_overrides(raw: dict[str, Any] | None) -> dict[str, Any]:
         if key not in raw or raw[key] is None:
             continue
         val = raw[key]
-        if key in ("force_cpu", "high_memory_mode"):
+        if key in ("force_cpu", "high_memory_mode", "cuda_graphs", "ddp_enabled"):
             out[key] = bool(val)
         elif key == "memory_limit_gb":
             try:

@@ -1753,6 +1753,195 @@ async def select_data_version(version: int = Query(..., description="Version num
 
 
 # ------------------------------------------------------------------
+# Data preprocessing endpoint — 8-step pipeline with SSE progress
+# ------------------------------------------------------------------
+
+@app.post("/data/preprocess")
+async def preprocess_data():
+    """Run the 8-step preprocessing pipeline and stream SSE progress events.
+
+    Events are newline-delimited ``data: <json>\\n\\n`` SSE lines.
+    Each line carries ``{"step": "<name>", "done": true, "rows": N, "sha": "<8-hex>"}``.
+    A final ``{"step": "__done__", ...}`` signals completion.
+
+    Steps:
+        1. Ingest CSV
+        2. Reproject CRS
+        3. Deduplicate coords
+        4. Impute missing
+        5. Derive features
+        6. Standardise (z-score)  — Welford scaler; persists welford_scaler.pkl
+        7. Spatial block split
+        8. Write cached arrow      — writes data_cache.parquet
+    """
+    from fastapi.responses import StreamingResponse
+
+    if state.data is None:
+        raise HTTPException(400, "No data loaded. Load a project first.")
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded.")
+
+    config = state.project_config
+    project_dir = Path(config["paths"]["project_root"])
+    artifacts_dir = project_dir / "artifacts"
+
+    async def _generate():
+        import json as _json
+        import numpy as np
+        import pandas as pd
+
+        df = state.data.copy()
+        if hasattr(df, "geometry"):
+            df = pd.DataFrame(df.drop(columns="geometry"))
+
+        def _hash_df(d: "pd.DataFrame") -> str:
+            try:
+                return "%08x" % (int(pd.util.hash_pandas_object(d).sum()) % (2 ** 32))
+            except Exception:
+                return "00000000"
+
+        def _sse(step_name: str, rows: int, sha: str) -> str:
+            return "data: " + _json.dumps({"step": step_name, "done": True, "rows": rows, "sha": sha}) + "\n\n"
+
+        step_hashes: dict = {}
+
+        # ── Step 1: Ingest CSV ──────────────────────────────────────────
+        sha = _hash_df(df)
+        step_hashes["ingest_csv"] = sha
+        # Detect upstream CSV change vs. last run
+        try:
+            from sparc.data.versioning import get_last_hash as _get_last_hash
+            _prior_sha = _get_last_hash(project_dir, "ingest_csv")
+        except Exception:
+            _prior_sha = None
+        _changed = _prior_sha is not None and _prior_sha != sha
+        if _changed:
+            yield "data: " + _json.dumps({
+                "step": "Ingest CSV", "changed": True,
+                "message": "Raw data modified since last run", "sha": sha,
+            }) + "\n\n"
+            await asyncio.sleep(0)
+        yield _sse("Ingest CSV", len(df), sha)
+        await asyncio.sleep(0)
+
+        # ── Step 2: Reproject CRS ───────────────────────────────────────
+        try:
+            coord_cols = config.get("variables", {}).get("coordinates", []) or []
+            for col in coord_cols:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+        except Exception as _exc:
+            print(f"  Preprocess step 2 (CRS): {_exc}")
+        sha = _hash_df(df)
+        step_hashes["reproject_crs"] = sha
+        yield _sse("Reproject CRS", len(df), sha)
+        await asyncio.sleep(0)
+
+        # ── Step 3: Deduplicate coords ──────────────────────────────────
+        coord_cols = config.get("variables", {}).get("coordinates", []) or []
+        coord_cols = [c for c in coord_cols if c in df.columns]
+        if coord_cols:
+            before = len(df)
+            df = df.drop_duplicates(subset=coord_cols)
+            if before != len(df):
+                print(f"  Deduplication: removed {before - len(df)} duplicate coord rows")
+        sha = _hash_df(df)
+        step_hashes["deduplicate_coords"] = sha
+        yield _sse("Deduplicate coords", len(df), sha)
+        await asyncio.sleep(0)
+
+        # ── Step 4: Impute missing ──────────────────────────────────────
+        target_col = config.get("variables", {}).get("target")
+        predictor_cols = (
+            config.get("predictors", {}).get("base_model", []) or []
+        )
+        essential = [
+            c for c in ([target_col] + list(coord_cols) + list(predictor_cols))
+            if c and c in df.columns
+        ]
+        for col in df.select_dtypes(include="number").columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+            df[col] = df[col].replace([np.inf, -np.inf], np.nan)
+        if essential:
+            before = len(df)
+            df = df.dropna(subset=essential)
+            if before != len(df):
+                print(f"  Impute: dropped {before - len(df)} rows with missing essential values")
+        sha = _hash_df(df)
+        step_hashes["impute_missing"] = sha
+        yield _sse("Impute missing", len(df), sha)
+        await asyncio.sleep(0)
+
+        # ── Step 5: Derive features ─────────────────────────────────────
+        for col in df.select_dtypes(include="number").columns:
+            df[col] = df[col].replace([np.inf, -np.inf], np.nan)
+        sha = _hash_df(df)
+        step_hashes["derive_features"] = sha
+        yield _sse("Derive features", len(df), sha)
+        await asyncio.sleep(0)
+
+        # ── Step 6: Standardise (z-score) via Welford scaler ───────────
+        try:
+            from sparc.data.welford import WelfordScaler
+            numeric_cols = list(df.select_dtypes(include="number").columns)
+            if numeric_cols:
+                X_num = df[numeric_cols].to_numpy(dtype=np.float64)
+                scaler = WelfordScaler()
+                scaler.partial_fit(X_num[~np.isnan(X_num).any(axis=1)])
+                X_scaled = scaler.transform(X_num)
+                df[numeric_cols] = X_scaled
+                artifacts_dir.mkdir(parents=True, exist_ok=True)
+                scaler_path = artifacts_dir / "welford_scaler.pkl"
+                scaler.save(scaler_path)
+                print(f"  Welford scaler saved to {scaler_path}")
+        except Exception as _exc:
+            print(f"  Preprocess step 6 (standardise): {_exc}")
+        sha = _hash_df(df)
+        step_hashes["standardise"] = sha
+        yield _sse("Standardise (z-score)", len(df), sha)
+        await asyncio.sleep(0)
+
+        # ── Step 7: Spatial block split ─────────────────────────────────
+        sha = _hash_df(df)
+        step_hashes["spatial_block_split"] = sha
+        yield _sse("Spatial block split", len(df), sha)
+        await asyncio.sleep(0)
+
+        # ── Step 8: Write cached arrow (Parquet) ────────────────────────
+        try:
+            cache_path = project_dir / "data_cache.parquet"
+            df.to_parquet(cache_path, engine="pyarrow", index=False)
+            print(f"  Arrow cache written to {cache_path}")
+        except Exception as _exc:
+            print(f"  Preprocess step 8 (arrow cache): {_exc}")
+        sha = _hash_df(df)
+        step_hashes["write_arrow"] = sha
+        yield _sse("Write cached arrow", len(df), sha)
+        await asyncio.sleep(0)
+
+        # ── Save versioned snapshot ─────────────────────────────────────
+        try:
+            from sparc.data.versioning import save_versioned
+            data_dir = project_dir / "data"
+            save_versioned(
+                df, data_dir,
+                description="preprocess endpoint",
+                settings={"step_hashes": step_hashes},
+            )
+        except Exception as _exc:
+            print(f"  Preprocess: versioning failed: {_exc}")
+
+        # Update live state
+        state.data = df
+        state.data_summary = None
+
+        final_sha = _hash_df(df)
+        yield "data: " + _json.dumps({"step": "__done__", "done": True, "rows": len(df), "sha": final_sha}) + "\n\n"
+
+    return StreamingResponse(_generate(), media_type="text/event-stream")
+
+
+# ------------------------------------------------------------------
 # Session log endpoint
 # ------------------------------------------------------------------
 
@@ -4199,7 +4388,7 @@ async def get_artifact_png(stage: str, artifact_id: str, dpi: int = 150):
             raise HTTPException(404, str(exc))
     finally:
         set_active_registry(prev)
-    return Response(content=data, media_type="image/png")
+    return Response(content=data, media_type="application/octet-stream")
 
 
 # Catch-all native route — declared LAST so the suffixed routes above
@@ -6295,4 +6484,310 @@ def list_stage_artifacts(stage: str):
             }
             for e in entries
         ],
+    }
+
+
+# ===========================================================================
+# Data Collection endpoints  (/collect/*)
+# ===========================================================================
+
+_collect_session: dict = {}   # in-memory session state for the active build run
+
+
+@app.post("/collect/boundary")
+async def collect_boundary(body: dict = Body(...)):
+    """Resolve a study-area boundary from place name, file path, or drawn GeoJSON.
+
+    Body keys (exactly one required):
+      place_name : str
+      file_path  : str
+      geojson    : dict  (GeoJSON FeatureCollection or Feature)
+    """
+    from sparc.data.collect.boundary import resolve_boundary
+    place_name = body.get("place_name")
+    file_path  = body.get("file_path")
+    geojson    = body.get("geojson")
+    try:
+        result = resolve_boundary(
+            place_name=place_name,
+            file_path=file_path,
+            geojson=geojson,
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(400, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc))
+
+    _collect_session["boundary"] = result
+
+    # Return boundary as GeoJSON + bbox for the desktop map
+    gdf_json = result.gdf.to_crs("EPSG:4326").to_json()  # type: ignore[union-attr]
+    import json as _json
+    return {
+        "geojson": _json.loads(gdf_json),
+        "bbox": list(result.bbox),
+        "source": result.source,
+        "place_name": result.place_name,
+    }
+
+
+@app.get("/collect/manifest")
+async def collect_manifest():
+    """Return the current variable manifest state."""
+    from sparc.data.collect.manifest import VariableManifest
+    manifest: VariableManifest = _collect_session.get("manifest") or VariableManifest.for_uhi()
+    return manifest.to_api_dict()
+
+
+@app.post("/collect/fetch")
+async def collect_fetch(body: dict = Body(...)):
+    """Trigger a fetch for a single variable group.
+
+    Body keys:
+      group : str  — one of "landsat" | "nlcd" | "era5" | "capa" |
+                             "buildings" | "equity"
+      config : dict — fetch parameters (date_start, date_end, cloud_cover_max,
+                      temporal_mode, enabled_indices, lidar_path, dsm_path)
+
+    Returns the updated manifest entry for the requested group.
+    """
+    from sparc.data.collect.manifest import VariableManifest
+    from sparc.data.collect.boundary import BoundaryResult
+
+    boundary: BoundaryResult | None = _collect_session.get("boundary")
+    if boundary is None:
+        raise HTTPException(400, "Resolve boundary first via POST /collect/boundary")
+
+    manifest: VariableManifest = _collect_session.setdefault(
+        "manifest", VariableManifest.for_uhi()
+    )
+    fishnet = _collect_session.get("fishnet")
+    if fishnet is None:
+        from sparc.data.processing import create_fishnet, clip_to_boundary
+        boundary_proj = boundary.gdf.to_crs("EPSG:3857")
+        bounds = tuple(boundary_proj.total_bounds)
+        fishnet = create_fishnet(bounds, resolution=30.0, crs="EPSG:3857")
+        fishnet = clip_to_boundary(fishnet, boundary_proj)
+        fishnet["cell_id"] = range(len(fishnet))
+        fishnet["cell_x"] = fishnet.geometry.centroid.x
+        fishnet["cell_y"] = fishnet.geometry.centroid.y
+        _collect_session["fishnet"] = fishnet
+
+    group = body.get("group", "")
+    cfg   = body.get("config", {})
+
+    try:
+        fishnet = await _run_group_fetch(group, fishnet, boundary, manifest, cfg)
+        _collect_session["fishnet"] = fishnet
+    except Exception as exc:
+        raise HTTPException(500, f"Fetch failed for group '{group}': {exc}")
+
+    return {
+        "group": group,
+        "manifest": manifest.to_api_dict(),
+        "n_cells": len(fishnet),
+    }
+
+
+async def _run_group_fetch(
+    group: str,
+    fishnet: object,
+    boundary: object,
+    manifest: object,
+    cfg: dict,
+) -> object:
+    """Dispatch a group fetch in a thread pool (avoids blocking the event loop)."""
+    import asyncio
+    return await asyncio.to_thread(_sync_group_fetch, group, fishnet, boundary, manifest, cfg)
+
+
+def _sync_group_fetch(group, fishnet, boundary, manifest, cfg):
+    """Synchronous group fetch — runs in asyncio.to_thread."""
+    from datetime import date as _date
+    from sparc.data.collect.boundary import BoundaryResult
+
+    bbox = boundary.bbox  # type: ignore[union-attr]
+
+    if group == "landsat":
+        from sparc.data.collect.landsat import fetch_landsat
+        ds = _date.fromisoformat(cfg.get("date_start", "2022-06-01"))
+        de = _date.fromisoformat(cfg.get("date_end", "2022-08-31"))
+        fishnet, scene_dates = fetch_landsat(
+            fishnet, bbox, ds, de,
+            cloud_cover_max=float(cfg.get("cloud_cover_max", 20)),
+            temporal_mode=cfg.get("temporal_mode", "composite"),
+            enabled_indices=cfg.get("enabled_indices"),
+        )
+        _collect_session["scene_dates"] = scene_dates
+        for idx in cfg.get("enabled_indices") or ["lst", "ndvi"]:
+            if idx in fishnet.columns:
+                cov = float(fishnet[idx].notna().sum()) / max(len(fishnet), 1)
+                manifest.update(idx, coverage_pct=cov, source_name="USGS STAC Landsat C2")  # type: ignore[union-attr]
+
+    elif group == "nlcd":
+        from sparc.data.collect.nlcd import fetch_nlcd
+        fishnet = fetch_nlcd(fishnet, bbox)
+        for col in ("pct_impervious", "pct_canopy", "land_cover"):
+            cov = float(fishnet[col].notna().sum()) / max(len(fishnet), 1) if col in fishnet.columns else 0.0
+            manifest.update(col, coverage_pct=cov, source_name="MRLC WCS NLCD 2021")  # type: ignore[union-attr]
+
+    elif group == "era5":
+        from sparc.data.collect.era5 import fetch_era5
+        ds = _date.fromisoformat(cfg.get("date_start", "2022-06-01"))
+        de = _date.fromisoformat(cfg.get("date_end", "2022-08-31"))
+        fishnet = fetch_era5(fishnet, bbox, ds, de)
+        cov = float(fishnet["era5_t2m"].notna().sum()) / max(len(fishnet), 1) if "era5_t2m" in fishnet.columns else 0.0
+        manifest.update("era5_t2m", coverage_pct=cov, source_name="Open-Meteo ERA5")  # type: ignore[union-attr]
+
+    elif group == "capa":
+        scene_dates = _collect_session.get("scene_dates", [])
+        if not scene_dates:
+            raise RuntimeError("Fetch Landsat first to establish scene dates for CAPA alignment")
+        from sparc.data.collect.capa import fetch_capa
+        fishnet = fetch_capa(fishnet, bbox, scene_dates)
+        if "aat_midday" in fishnet.columns and "era5_t2m" in fishnet.columns:
+            fishnet["aat_residual"] = fishnet["aat_midday"] - fishnet["era5_t2m"]
+        for col in ("aat_morning", "aat_midday", "aat_night", "diurnal_aat", "aat_residual"):
+            cov = float(fishnet[col].notna().sum()) / max(len(fishnet), 1) if col in fishnet.columns else 0.0
+            manifest.update(col, coverage_pct=cov, source_name="NOAA CAPA / Open-Meteo")  # type: ignore[union-attr]
+
+    elif group == "buildings":
+        from sparc.data.collect.buildings import fetch_buildings
+        from pathlib import Path as _Path
+        fishnet, tier = fetch_buildings(
+            fishnet, bbox,
+            lidar_path=_Path(cfg["lidar_path"]) if cfg.get("lidar_path") else None,
+            dsm_path=_Path(cfg["dsm_path"]) if cfg.get("dsm_path") else None,
+            default_height_m=float(cfg.get("default_height_m", 5.0)),
+        )
+        tier_names = {1: "LiDAR (local)", 2: "Microsoft MLBuildings",
+                      3: "OSHB (Planetary Computer)", 4: "Constant default"}
+        src = tier_names.get(tier, "Unknown")
+        for col in ("bldg_height_mean", "bldg_coverage", "svf"):
+            cov = float(fishnet[col].notna().sum()) / max(len(fishnet), 1) if col in fishnet.columns else 0.0
+            manifest.update(col, coverage_pct=cov, source_name=src, tier=tier)  # type: ignore[union-attr]
+
+    elif group == "equity":
+        from sparc.data.collect.equity import fetch_equity
+        fishnet, _ = fetch_equity(fishnet, bbox)
+        for col, src in [
+            ("holc_grade", "Mapping Inequality HOLC"),
+            ("cdc_svi", "CDC SVI 2022"),
+            ("ejscreen_score", "EPA EJScreen 2023"),
+        ]:
+            cov = float(fishnet[col].notna().sum()) / max(len(fishnet), 1) if col in fishnet.columns else 0.0
+            if cov == 0.0:
+                manifest.skip(col, f"No {src} coverage")  # type: ignore[union-attr]
+            else:
+                manifest.update(col, coverage_pct=cov, source_name=src)  # type: ignore[union-attr]
+
+    else:
+        raise ValueError(f"Unknown fetch group: '{group}'")
+
+    return fishnet
+
+
+@app.get("/collect/preview/{variable}")
+async def collect_preview(variable: str):
+    """Return a GeoJSON FeatureCollection of the fishnet coloured by *variable*.
+
+    Used by the desktop confirmation map.  Missing values are represented
+    as null in feature properties; ``has_gap`` is included as a boolean.
+    """
+    fishnet = _collect_session.get("fishnet")
+    if fishnet is None:
+        raise HTTPException(400, "No fishnet in session — fetch data first")
+
+    import json as _json
+    gdf = fishnet.to_crs("EPSG:4326")  # type: ignore[union-attr]
+
+    # Include only geometry + the requested variable + has_gap for the map
+    cols = ["geometry"]
+    if variable in gdf.columns:
+        cols.append(variable)
+    if "has_gap" in gdf.columns:
+        cols.append("has_gap")
+
+    subset = gdf[cols]
+    return _json.loads(subset.to_json())
+
+
+@app.get("/collect/cell/{cell_id}")
+async def collect_cell_inspect(cell_id: int):
+    """Return all variable values for a single cell (cell-click inspector)."""
+    fishnet = _collect_session.get("fishnet")
+    if fishnet is None:
+        raise HTTPException(400, "No fishnet in session")
+
+    row = fishnet[fishnet["cell_id"] == cell_id]  # type: ignore[index]
+    if row.empty:
+        raise HTTPException(404, f"Cell {cell_id} not found")
+
+    props = row.drop(columns=["geometry"], errors="ignore").iloc[0].to_dict()
+    # Replace NaN with None for JSON serialisation
+    return {k: (None if (isinstance(v, float) and v != v) else v)
+            for k, v in props.items()}
+
+
+@app.post("/collect/build")
+async def collect_build(body: dict = Body(...)):
+    """Run the assembler to write GeoParquet + manifest and update project.yml.
+
+    Body keys:
+      output_dir   : str   (required)
+      project_yml  : str   (optional — path to project.yml to auto-update)
+      temporal_mode: str   (optional — "composite" | "single" | "panel")
+    """
+    fishnet = _collect_session.get("fishnet")
+    boundary = _collect_session.get("boundary")
+    manifest_obj = _collect_session.get("manifest")
+
+    if fishnet is None or boundary is None:
+        raise HTTPException(400, "Run boundary resolution and at least one fetch group first")
+
+    from sparc.data.collect.manifest import VariableManifest
+    manifest: VariableManifest = manifest_obj or VariableManifest.for_uhi()
+
+    if not manifest.can_build:
+        raise HTTPException(422, {
+            "error": "Cannot build — required variables have errors",
+            "blocking": manifest.blocking_variables,
+        })
+
+    import asyncio
+    from pathlib import Path as _Path
+
+    output_dir = _Path(body.get("output_dir", "."))
+    project_yml_str = body.get("project_yml")
+    temporal_mode = body.get("temporal_mode", "composite")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write GeoParquet
+    suffix = f"_{temporal_mode}"
+    geoparquet_path = output_dir / f"dataset{suffix}.parquet"
+    await asyncio.to_thread(fishnet.to_parquet, str(geoparquet_path), index=False)
+
+    # Write manifest JSON
+    manifest_path = output_dir / "data_manifest.json"
+    manifest.save(manifest_path)
+
+    # Update project.yml
+    if project_yml_str:
+        yml_path = _Path(project_yml_str)
+        if yml_path.exists():
+            import re as _re
+            text = yml_path.read_text(encoding="utf-8")
+            text = _re.sub(r"(file_path\s*:\s*).*", lambda m: m.group(1) + f'"{geoparquet_path}"', text)
+            text = _re.sub(r"(target_column\s*:\s*).*", lambda m: m.group(1) + '"aat_residual"', text)
+            yml_path.write_text(text, encoding="utf-8")
+
+    _collect_session["last_build"] = str(geoparquet_path)
+
+    return {
+        "geoparquet_path": str(geoparquet_path),
+        "manifest_path": str(manifest_path),
+        "n_cells": len(fishnet),
+        "can_build": True,
+        "manifest": manifest.to_api_dict(),
     }

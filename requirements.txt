@@ -43,3 +43,6 @@ keyring>=24.0
 
 # Sensitivity analysis (optional — Morris/Sobol)
 SALib>=1.4
+
+# OT-based continual learning (optional — used by wasserstein_trunk_alignment)
+# geomloss>=0.2

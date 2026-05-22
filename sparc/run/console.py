@@ -121,6 +121,34 @@ _CHECKPOINT_PATTERNS: tuple[re.Pattern, ...] = (
     re.compile(r"\bFold\s+\d+\s*/\s*\d+\b", re.IGNORECASE),
     re.compile(r"^\s*Pipeline configuration saved"),
     re.compile(r"^\s*\[(checkpoint|metric)\]", re.IGNORECASE),
+    # Correlogram stage progress lines
+    re.compile(r"\bAnalyzing spatial correlograms for\b", re.IGNORECASE),
+    re.compile(r"\bDataset size:\s*[\d,]+", re.IGNORECASE),
+    re.compile(r"\bEstimated analysis time:", re.IGNORECASE),
+    re.compile(r"\bMax correlogram distance:", re.IGNORECASE),
+    re.compile(r"\bDataset profile written\b", re.IGNORECASE),
+    re.compile(r"\bDataset tier:", re.IGNORECASE),
+    # tqdm bars from correlogram (description-first format: "Label: N%|...")
+    re.compile(r"\w.*:\s+\d+%\|"),
+    # Stage 3 Bayesian causal inference milestones
+    re.compile(r"\bMC[³3]\s+iter\s+\d+/\d+", re.IGNORECASE),           # MC³ iter 1000/10000 score=...
+    re.compile(r"\bMC[³3]:\s+\d+\s*/\s*\d+\s+accepted", re.IGNORECASE), # MC³: 3244/10000 accepted...
+    re.compile(r"\bNUTS\s+warmup:\s+\d+\s+transitions", re.IGNORECASE),  # NUTS warmup: 800 transitions...
+    re.compile(r"\bNUTS\s+sampling:\s+\d+\s+draws", re.IGNORECASE),     # NUTS sampling: 6000 draws...
+    re.compile(r"\bNUTS:\s+acceptance=", re.IGNORECASE),                  # NUTS: acceptance=61.2%, divergences=0
+    re.compile(r"\bNUTS:\s+\d+\s+CPU\s+thread", re.IGNORECASE),          # NUTS: 8 CPU threads...
+    re.compile(r"\bPer-edge\s+NUTS:", re.IGNORECASE),                    # Per-edge NUTS: edge 3/7 ...
+    re.compile(r"\bEstimating\s+structural\s+coeff", re.IGNORECASE),     # Estimating structural coefficients...
+    re.compile(r"\bStage\s+3\s+hardware", re.IGNORECASE),               # Stage 3 hardware-optimized config
+    re.compile(r"---\s*V2\s+Bayesian\s+Causal", re.IGNORECASE),         # --- V2 Bayesian Causal Analysis ---
+    re.compile(r"\bRunning\s+DAG\s+assumption", re.IGNORECASE),         # Running DAG assumption diagnostics
+)
+
+# Patterns that must be demoted to DEBUG *before* the broad _ALWAYS_PATTERNS
+# check runs — e.g. messages that contain words like "FAILED" but are
+# diagnostic noise, not genuine pipeline failures.
+_DEBUG_OVERRIDE_PATTERNS: tuple[re.Pattern, ...] = (
+    re.compile(r"\bNUTS convergence FAILED\b", re.IGNORECASE),
 )
 
 # Patterns that explicitly mark the noisiest debug-only lines. Listed
@@ -131,6 +159,7 @@ _DEBUG_PATTERNS: tuple[re.Pattern, ...] = (
     re.compile(r"^\s*NUTS sample\s+\d+\s*/\s*\d+"),
     re.compile(r"^\s*NUTS:\s*finding initial step size"),
     re.compile(r"^\s*\d+\s*%\|"),                    # tqdm bars
+    re.compile(r"^\s*sample\s+\d+/\d+\s+div="),      # per-sample NUTS ticks (e.g. "  sample  100/4000  div=0")
 )
 
 
@@ -138,6 +167,11 @@ def classify_line(line: str) -> LineCategory:
     """Decide the minimum verbosity required to print *line*."""
     if not line or not line.strip():
         return LineCategory.DEBUG
+    # Some messages contain words like "FAILED" but are diagnostic-only; suppress
+    # them before the broad ALWAYS pattern match.
+    for pat in _DEBUG_OVERRIDE_PATTERNS:
+        if pat.search(line):
+            return LineCategory.DEBUG
     for pat in _ALWAYS_PATTERNS:
         if pat.search(line):
             return LineCategory.ALWAYS
@@ -166,6 +200,7 @@ class _VerbosityFilter(io.TextIOBase):
     def __init__(self, downstream: TextIO):
         self._downstream = downstream
         self._buffer = ""
+        self._in_traceback = False  # stateful: emit all lines inside a traceback block
 
     # ------------------------------------------------------------------
     # io.TextIOBase interface
@@ -218,11 +253,35 @@ class _VerbosityFilter(io.TextIOBase):
     # ------------------------------------------------------------------
 
     def _emit(self, line: str) -> None:
-        category = classify_line(line.rstrip("\r\n"))
+        stripped = line.rstrip("\r\n")
+        # Enter traceback mode when we see "Traceback (most recent call last):".
+        # While in traceback mode every line is emitted as ALWAYS so frame lines
+        # ("  File '...', line N, in ..."), code context lines, and the final
+        # exception-type line are never silently dropped.  Exit on a blank line.
+        if not self._in_traceback:
+            if "traceback" in stripped.lower():
+                self._in_traceback = True
+            category = classify_line(stripped)
+        else:
+            category = LineCategory.ALWAYS
+            if not stripped.strip():
+                self._in_traceback = False
+
         if int(get_verbosity()) >= int(category):
             try:
                 self._downstream.write(line)
                 self._downstream.flush()
+            except UnicodeEncodeError:
+                # Downstream uses a narrower encoding (e.g. CP1252/CP437 on
+                # Windows). Re-encode with replacement so the line is visible
+                # (κ → ?, ν → ?) rather than silently dropped.
+                enc = getattr(self._downstream, "encoding", "utf-8") or "utf-8"
+                safe = line.encode(enc, errors="replace").decode(enc)
+                try:
+                    self._downstream.write(safe)
+                    self._downstream.flush()
+                except Exception:
+                    pass
             except Exception:
                 pass
 

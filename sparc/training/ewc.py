@@ -95,6 +95,20 @@ def compute_fisher_matrix(
 
     # Average over samples
     if n_samples > 0:
+        # CU-10b: synchronise Fisher across DDP ranks before averaging
+        try:
+            import torch.distributed as dist
+            if dist.is_initialized():
+                world_size = dist.get_world_size()
+                n_samples_t = torch.tensor(
+                    float(n_samples), device=next(iter(fisher.values())).device
+                )
+                dist.all_reduce(n_samples_t, op=dist.ReduceOp.SUM)
+                for name in fisher:
+                    dist.all_reduce(fisher[name], op=dist.ReduceOp.SUM)
+                n_samples = int(n_samples_t.item())
+        except Exception:
+            pass
         for name in fisher:
             fisher[name] /= n_samples
 
@@ -161,3 +175,80 @@ def extract_trunk_params(
         for name, param in model.named_parameters()
         if any(name.startswith(prefix) for prefix in trunk_keys)
     }
+
+
+def wasserstein_trunk_alignment(
+    trunk_activations_new: torch.Tensor,
+    coreset_activations: torch.Tensor,
+    blur: float = 0.01,
+) -> torch.Tensor:
+    """Sinkhorn (2-Wasserstein) distance between trunk activation distributions.
+
+    Penalises distributional divergence of trunk activations across cities,
+    complementing the EWC parameter-space penalty with a latent-geometry
+    penalty.  This is especially useful when the trunk has converged to
+    identical parameter values but still produces different activation
+    distributions on new-city inputs.
+
+    Uses ``geomloss.SamplesLoss("sinkhorn", p=2)`` when the package is
+    installed; falls back to a pure-PyTorch sliced-Wasserstein approximation
+    (mean of random 1-D projections) otherwise.
+
+    Parameters
+    ----------
+    trunk_activations_new : (B, D) tensor
+        Trunk activations on the current city's mini-batch.
+    coreset_activations : (B, D) tensor
+        Trunk activations stored from the previous city's coreset.
+    blur : float
+        Sinkhorn regularisation ε (only used by ``geomloss``).
+
+    Returns
+    -------
+    loss : scalar tensor (differentiable)
+    """
+    if trunk_activations_new.shape[0] == 0 or coreset_activations.shape[0] == 0:
+        return torch.tensor(0.0, device=trunk_activations_new.device)
+
+    try:
+        from geomloss import SamplesLoss  # type: ignore
+        loss_fn = SamplesLoss("sinkhorn", p=2, blur=blur)
+        ot_loss = loss_fn(trunk_activations_new, coreset_activations)
+    except ImportError:
+        # --- Pure-PyTorch sliced-Wasserstein fallback ---
+        # Project onto 64 random unit directions and average 1-D Wasserstein.
+        d = trunk_activations_new.shape[1]
+        n_proj = min(64, d)
+        device = trunk_activations_new.device
+        dtype = trunk_activations_new.dtype
+
+        g = torch.Generator(device=device)
+        g.manual_seed(42)
+        directions = torch.randn(d, n_proj, device=device, dtype=dtype,
+                                 generator=g)
+        directions = directions / (directions.norm(dim=0, keepdim=True) + 1e-8)
+
+        proj_new = trunk_activations_new @ directions      # (B, n_proj)
+        proj_cs  = coreset_activations   @ directions      # (B, n_proj)
+
+        proj_new_sorted, _ = torch.sort(proj_new, dim=0)
+        proj_cs_sorted,  _ = torch.sort(proj_cs,  dim=0)
+
+        # Interpolate if batch sizes differ
+        if proj_new_sorted.shape[0] != proj_cs_sorted.shape[0]:
+            n_common = min(proj_new_sorted.shape[0], proj_cs_sorted.shape[0])
+            proj_new_sorted = proj_new_sorted[:n_common]
+            proj_cs_sorted  = proj_cs_sorted[:n_common]
+
+        ot_loss = ((proj_new_sorted - proj_cs_sorted) ** 2).mean()
+
+    # CU-10c: synchronise OT loss across DDP ranks
+    try:
+        import torch.distributed as dist
+        if dist.is_initialized():
+            dist.all_reduce(ot_loss, op=dist.ReduceOp.SUM)
+            ot_loss = ot_loss / dist.get_world_size()
+    except Exception:
+        pass
+
+    return ot_loss

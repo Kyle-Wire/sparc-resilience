@@ -238,6 +238,8 @@ export default function RunPage() {
   const logEndRef = useRef<HTMLDivElement>(null);
   const [enabledStages, setEnabledStages] = useState<Set<number>>(new Set(STAGE_IDS));
   const [verbosity, setVerbosity] = useState<"summary" | "normal" | "debug">("normal");
+  const [fastMode, setFastMode] = useState(false);
+  const [skipGwen, setSkipGwen] = useState(false);
   // clearedAt tracks how many events existed when user last hit Clear,
   // so we can slice them away without mutating pipeline state.
   const [clearedAt, setClearedAt] = useState(0);
@@ -318,9 +320,9 @@ export default function RunPage() {
       notify("warning", "No stages selected");
       return;
     }
-    pipeline.startPipeline(stages, { fast: false });
+    pipeline.startPipeline(stages, { fast: fastMode, skip_gwen: skipGwen });
     notify("info", `Pipeline started (${stages.length} stage${stages.length > 1 ? "s" : ""})`);
-  }, [pipeline, enabledStages, notify]);
+  }, [pipeline, enabledStages, fastMode, skipGwen, notify]);
 
   const handleStop = useCallback(() => {
     pipeline.cancel();
@@ -602,6 +604,14 @@ export default function RunPage() {
                         }}
                       >?</span>
                     </div>
+                    {status === "running" && pipeline.stageProgress[id] != null && (
+                      <div style={{ marginTop: 4, height: 3, borderRadius: 2, background: "rgba(0,0,0,0.08)", overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${pipeline.stageProgress[id]}%`, background: "var(--crimson)", transition: "width 0.3s ease" }} />
+                      </div>
+                    )}
+                    {status === "running" && pipeline.stageProgress[id] != null && (
+                      <div style={{ fontSize: 9, color: "var(--muted)", marginTop: 2 }}>{pipeline.stageProgress[id]}%</div>
+                    )}
                   </div>
 
                   <Tag
@@ -730,6 +740,50 @@ export default function RunPage() {
                   {i < STAGE_IDS.length - 1 && <div style={{ width: 10, flexShrink: 0 }} />}
                 </div>
               ))}
+            </div>
+          </div>
+
+          {/* Pipeline run options */}
+          <div style={{ marginTop: 14, borderTop: "1px dashed var(--line)", paddingTop: 12 }}>
+            <div
+              className="mono"
+              style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}
+            >
+              options
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <label
+                style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: pipeline.isRunning ? "not-allowed" : "pointer", opacity: pipeline.isRunning ? 0.5 : 1 }}
+                title="Skip long secondary diagnostics for fast iteration runs"
+              >
+                <input
+                  type="checkbox"
+                  checked={fastMode}
+                  onChange={(e) => setFastMode(e.target.checked)}
+                  disabled={pipeline.isRunning}
+                  style={{ accentColor: "var(--crimson)", marginTop: 2, flexShrink: 0 }}
+                />
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>Fast mode</div>
+                  <div style={{ fontSize: 10.5, color: "var(--muted)", lineHeight: 1.4 }}>Skip secondary diagnostics — faster iteration, less detail</div>
+                </div>
+              </label>
+              <label
+                style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: pipeline.isRunning ? "not-allowed" : "pointer", opacity: pipeline.isRunning ? 0.5 : 1 }}
+                title="Bypass GWEN variable selection — use all predictors"
+              >
+                <input
+                  type="checkbox"
+                  checked={skipGwen}
+                  onChange={(e) => setSkipGwen(e.target.checked)}
+                  disabled={pipeline.isRunning}
+                  style={{ accentColor: "var(--crimson)", marginTop: 2, flexShrink: 0 }}
+                />
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>Skip GWEN</div>
+                  <div style={{ fontSize: 10.5, color: "var(--muted)", lineHeight: 1.4 }}>Use all predictors without GWEN variable selection</div>
+                </div>
+              </label>
             </div>
           </div>
         </Card>

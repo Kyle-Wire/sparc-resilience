@@ -75,7 +75,11 @@ def compute_rate(scores: np.ndarray,
 
     grid = np.linspace(1.0 / len(scores), 1.0, len(scores))
     toc_full = compute_toc(scores, dr, grid=grid)["toc"]
-    rate_auc = float(np.trapz(toc_full, grid))
+    try:
+        _trapz = np.trapezoid
+    except AttributeError:
+        _trapz = np.trapz  # type: ignore[attr-defined]  # numpy < 2.0
+    rate_auc = float(_trapz(toc_full, grid))
 
     rng = np.random.default_rng(random_state)
     boots = np.empty(n_bootstrap)
@@ -83,7 +87,7 @@ def compute_rate(scores: np.ndarray,
     for b in range(n_bootstrap):
         idx = rng.integers(0, n, size=n)
         toc_b = compute_toc(scores[idx], dr[idx], grid=grid)["toc"]
-        boots[b] = float(np.trapz(toc_b, grid))
+        boots[b] = float(_trapz(toc_b, grid))
     lo = float(np.quantile(boots, alpha / 2))
     hi = float(np.quantile(boots, 1 - alpha / 2))
 

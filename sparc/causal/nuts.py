@@ -470,6 +470,8 @@ def _dual_average_step_size(
 
         delta_H = H1 - H0
         alpha = 1.0 if delta_H > 0 else math.exp(delta_H)
+        if rng.random() < alpha:
+            theta = theta_prime.detach()
         w = 1.0 / (m + t0)
         H_bar = (1 - w) * H_bar + w * (target_accept - alpha)
         log_eps = mu - math.sqrt(m) / gamma * H_bar
@@ -534,6 +536,7 @@ def run_nuts(
     device: str = "cpu",
     param_scales: dict[str, np.ndarray] | None = None,
     thin: int = 1,
+    mass_matrix_chol: torch.Tensor | None = None,
 ) -> NUTSResults:
     """
     Run blocked NUTS sampling.
@@ -558,6 +561,11 @@ def run_nuts(
         Keep every ``thin``-th post-warmup sample to reduce peak memory of the
         accumulated trace.  ``thin=2`` halves memory at the cost of slightly
         coarser posterior summaries (still unbiased).  Must be ≥1.
+    mass_matrix_chol : torch.Tensor | None, default=None
+        Lower-triangular Cholesky factor L of an empirical mass matrix M = LLᵀ.
+        When provided, the diagonal of M⁻¹ is used for momentum scaling and
+        the warmup mass-matrix adaptation is skipped (caller's matrix takes
+        precedence).  Typically computed from predictor covariance.
     """
     rng = np.random.default_rng(seed)
     dtype = torch.float64
@@ -607,15 +615,40 @@ def run_nuts(
         return log_prob_fn(params) + lp_jac
 
     # FIX A4: Mass matrix adaptation during warmup
-    # Phase 1: FindReasonableEpsilon (Algorithm 4) + dual averaging
+    # Phase 1: Build initial mass matrix (from caller or default identity)
     inv_mass_diag: torch.Tensor | None = None
+    _provided_mass: bool = False
+    if mass_matrix_chol is not None:
+        # Convert Cholesky factor L (M = LLᵀ) to diagonal of M⁻¹.
+        # diag(M⁻¹)[j] = ||column j of L⁻¹||² = row-norms² of L⁻ᵀ.
+        _L = mass_matrix_chol.to(dtype=dtype, device=device)
+        _L_inv = torch.linalg.solve_triangular(
+            _L,
+            torch.eye(_L.shape[0], dtype=dtype, device=device),
+            upper=False,
+        )
+        inv_mass_diag = (_L_inv * _L_inv).sum(dim=0).clamp(min=1e-8)
+        _provided_mass = True
+        logger.info(
+            "NUTS mass_matrix_chol applied: dim=%d, inv_diag range [%.4e, %.4e]",
+            _L.shape[0], inv_mass_diag.min().item(), inv_mass_diag.max().item(),
+        )
     init_eps = _find_reasonable_epsilon(theta, flat_log_prob, rng, inv_mass_diag)
     logger.info("NUTS FindReasonableEpsilon: %.6f", init_eps)
-    n_adapt = max(50, n_warmup // 5)
+    n_adapt = max(200, n_warmup // 2)
     step_size = _dual_average_step_size(
         init_eps, flat_log_prob, theta, n_adapt, target_accept, rng,
         inv_mass_diag=inv_mass_diag,
     )
+    # Safety floor: if dual averaging shrunk the step size pathologically
+    # (can happen when theta explores a low-prob region during adaptation),
+    # fall back to the FindReasonableEpsilon result which is always valid.
+    if step_size < init_eps / 10.0:
+        logger.warning(
+            "NUTS dual averaging step_size %.2e < init_eps/10 (%.2e); reverting to init_eps",
+            step_size, init_eps / 10.0,
+        )
+        step_size = init_eps
     print(f"  NUTS: finding initial step size ({n_adapt} adaptation steps, ε₀={init_eps:.4f})...", flush=True)
     logger.info("NUTS initial step size: %.6f  (n_adapt=%d, eps0=%.6f)", step_size, n_adapt, init_eps)
 
@@ -623,7 +656,7 @@ def run_nuts(
     n_warmup_trans = n_warmup - n_adapt
     warmup_samples_for_mass: list[np.ndarray] = []
     if n_warmup_trans > 0:
-        print(f"  NUTS: warmup phase ({n_warmup_trans} transitions)...", flush=True)
+        print(f"  NUTS warmup: {n_warmup_trans} transitions...", flush=True)
         warmup_div = 0
         for _w in range(n_warmup_trans):
             theta, div, _ = _nuts_step(
@@ -634,14 +667,14 @@ def run_nuts(
                 warmup_div += 1
             warmup_samples_for_mass.append(theta.detach().cpu().numpy())
             if (_w + 1) % 25 == 0:
-                print(f"    warmup {_w + 1} / {n_warmup_trans}", flush=True)
+                print(f"    warmup {_w + 1:>4}/{n_warmup_trans}  div={warmup_div}", flush=True)
         logger.info(
             "NUTS warmup transitions: %d steps, %d divergences",
             n_warmup_trans, warmup_div,
         )
 
-        # Estimate diagonal mass matrix from warmup samples
-        if len(warmup_samples_for_mass) >= 20:
+        # Estimate diagonal mass matrix from warmup samples (skip if caller provided one)
+        if len(warmup_samples_for_mass) >= 20 and not _provided_mass:
             warmup_arr = np.stack(warmup_samples_for_mass)
             var_est = np.var(warmup_arr, axis=0)
             # Regularize: don't let any variance get too small or too large
@@ -662,10 +695,16 @@ def run_nuts(
                 min(n_adapt, 500), target_accept, rng,
                 inv_mass_diag=inv_mass_diag,
             )
+            if step_size < init_eps_mm / 10.0:
+                logger.warning(
+                    "NUTS mass-matrix re-adapt step_size %.2e < init_mm/10; reverting to init_eps_mm",
+                    step_size,
+                )
+                step_size = init_eps_mm
             logger.info("NUTS re-adapted step size with mass matrix: %.6f", step_size)
 
     # Sampling
-    print(f"  NUTS: sampling phase ({n_samples} draws)...", flush=True)
+    print(f"  NUTS sampling: {n_samples} draws...", flush=True)
     samples: dict[str, list[np.ndarray]] = {b.name: [] for b in blocks}
     log_probs: list[float] = []
     n_divergences = 0
@@ -682,10 +721,7 @@ def run_nuts(
 
         if thin > 1 and (i % thin) != 0:
             # Skip storing this draw to reduce peak memory of the trace.
-            if (i + 1) % 100 == 0 or (i + 1) == n_samples:
-                msg = f"  NUTS sample {i + 1} / {n_samples}  (divergences: {n_divergences}, accept: {sum_accept_prob / (i + 1):.1%})"
-                print(msg, flush=True)
-                logger.info("NUTS sample %d / %d  (divergences so far: %d)", i + 1, n_samples, n_divergences)
+            logger.info("NUTS sample %d / %d  (divergences so far: %d)", i + 1, n_samples, n_divergences)
             continue
 
         theta_req = theta.detach().requires_grad_(True)
@@ -700,8 +736,7 @@ def run_nuts(
             samples[b.name].append(constrained.detach().cpu().numpy())
 
         if (i + 1) % 100 == 0 or (i + 1) == n_samples:
-            msg = f"  NUTS sample {i + 1} / {n_samples}  (divergences: {n_divergences}, accept: {sum_accept_prob / (i + 1):.1%})"
-            print(msg, flush=True)
+            print(f"  sample {i + 1:>4}/{n_samples}  div={n_divergences}  acc={sum_accept_prob / (i + 1):.1%}", flush=True)
             logger.info("NUTS sample %d / %d  (divergences so far: %d)", i + 1, n_samples, n_divergences)
 
     # Stack

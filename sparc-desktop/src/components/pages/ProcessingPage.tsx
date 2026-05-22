@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { SectionHeader, Card, Stat, Btn, StatGrid, KeyVal, Tag } from "@/components/ui/DesignSystem";
-import { prepareData, getConfig, dataSummary, getDataVersions, selectDataVersion } from "@/lib/api";
-import type { DataSummary } from "@/lib/types";
+import { prepareData, getConfig, dataSummary, getDataVersions, selectDataVersion, validateData, preprocessData } from "@/lib/api";
+import type { DataSummary, ValidationReport, DataVersion } from "@/lib/types";
 import { pickRasters, pickBoundary } from "@/lib/fileDialogs";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
 import { useNotification } from "@/hooks/useNotifications";
@@ -15,6 +15,7 @@ interface PipelineStep {
   detail: string;
   rows: number | null;
   status: "done" | "running" | "queued";
+  changed?: boolean;
 }
 
 const DEFAULT_STEPS: PipelineStep[] = [
@@ -35,6 +36,9 @@ export default function ProcessingPage() {
   const { notify } = useNotification();
   const missingCanvasRef = useRef<HTMLCanvasElement>(null);
   const foldCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [validationResult, setValidationResult] = useState<ValidationReport | null>(null);
+  const [isValidating, setIsValidating] = useState(false);
+  const [versions, setVersions] = useState<DataVersion[]>([]);
 
   // Spatial builder state
   const [fishnetRes, setFishnetRes] = useState(30);
@@ -141,6 +145,11 @@ export default function ProcessingPage() {
       .catch(() => {});
   }, []);
 
+  // Load version list on mount and whenever data updates
+  useEffect(() => {
+    getDataVersions().then(({ versions: v }) => setVersions(v)).catch(() => {});
+  }, []);
+
   // Draw missing value matrix
   useEffect(() => {
     const canvas = missingCanvasRef.current;
@@ -219,19 +228,29 @@ export default function ProcessingPage() {
 
   const handleApplyAll = useCallback(async () => {
     notify("info", "Running processing pipeline…");
-    // Mark first step as running
     setSteps((prev) =>
       prev.map((s, j) => ({ ...s, status: j === 0 ? "running" : "queued" as const })),
     );
     try {
-      const result = await prepareData({ raster_paths: [] });
-      // Mark all steps done on success
-      setSteps((prev) =>
-        prev.map((s) => ({ ...s, status: "done" as const, rows: result.n_cells || s.rows })),
-      );
-      notify("success", `Processing complete — ${result.n_cells} cells, ${result.columns.length} columns`);
-      // Refresh summary
+      await preprocessData((event) => {
+        if (event.step === "__done__") return;
+        setSteps((prev) => {
+          const idx = prev.findIndex((s) => s.name === event.step);
+          if (idx < 0) return prev;
+          return prev.map((s, i) => {
+            if (i === idx) return {
+              ...s, status: "done" as const, rows: event.rows,
+              detail: `sha·${event.sha}`,
+              changed: event.changed ?? false,
+            };
+            if (i === idx + 1 && s.status === "queued") return { ...s, status: "running" as const };
+            return s;
+          });
+        });
+      });
+      notify("success", "Processing complete");
       dataSummary().then(setSummary).catch(() => {});
+      getDataVersions().then(({ versions: v }) => setVersions(v)).catch(() => {});
     } catch (e) {
       notify("error", e instanceof Error ? e.message : "Processing failed");
       setSteps((prev) => prev.map((s) => ({ ...s, status: "queued" as const })));
@@ -240,13 +259,13 @@ export default function ProcessingPage() {
 
   const handleRevert = useCallback(async () => {
     try {
-      const { versions } = await getDataVersions();
-      if (versions.length < 2) {
+      const { versions: v } = await getDataVersions();
+      if (v.length < 2) {
         notify("info", "No previous version to revert to");
         return;
       }
       // Select the earliest (original) version
-      await selectDataVersion(versions[0].version ?? 0);
+      await selectDataVersion(v[0].version ?? 0);
       setSteps(DEFAULT_STEPS);
       dataSummary().then(setSummary).catch(() => {});
       notify("success", "Reverted to original data");
@@ -254,6 +273,36 @@ export default function ProcessingPage() {
       // If versioning not available, just reset UI
       setSteps(DEFAULT_STEPS);
       notify("info", "Processing reverted (local only)");
+    }
+  }, [notify]);
+
+  const handleSelectVersion = useCallback(async (version: number) => {
+    try {
+      await selectDataVersion(version);
+      dataSummary().then(setSummary).catch(() => {});
+      notify("success", `Loaded version ${version}`);
+    } catch {
+      notify("error", "Failed to load version");
+    }
+  }, [notify]);
+
+  const handleValidate = useCallback(async () => {
+    setIsValidating(true);
+    setValidationResult(null);
+    try {
+      const report = await validateData();
+      setValidationResult(report);
+      if (report.n_critical > 0) {
+        notify("error", `Validation: ${report.n_critical} critical issues found`);
+      } else if (report.n_warning > 0) {
+        notify("info", `Validation: ${report.n_warning} warnings`);
+      } else {
+        notify("success", "Validation passed");
+      }
+    } catch (e) {
+      notify("error", e instanceof Error ? e.message : "Validation failed");
+    } finally {
+      setIsValidating(false);
     }
   }, [notify]);
 
@@ -273,11 +322,40 @@ export default function ProcessingPage() {
         kicker="03 · setup"
         label="Processing"
         right={
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {pathway === "preprocessed" && (
               <>
-                <Btn small onClick={handleRevert}>Revert</Btn>
-                <Btn primary small onClick={handleApplyAll}>Apply all</Btn>
+                <Btn small onClick={handleValidate} disabled={isValidating}>
+                  {isValidating ? "Validating…" : "Validate"}
+                </Btn>
+                {versions.length > 1 ? (
+                  <select
+                    defaultValue=""
+                    onChange={(e) => e.target.value && handleSelectVersion(Number(e.target.value))}
+                    style={{
+                      border: "1px solid var(--line)",
+                      borderRadius: 4,
+                      fontSize: 11,
+                      padding: "4px 8px",
+                      fontFamily: "inherit",
+                      background: "#fff",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <option value="" disabled>Version…</option>
+                    {versions.map((v) => (
+                      <option key={v.version} value={v.version}>
+                        v{v.version} · {v.n_rows?.toLocaleString()} rows
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <Btn small onClick={handleRevert}>Revert</Btn>
+                )}
+                <Btn primary small onClick={handleApplyAll}
+                  disabled={validationResult != null && validationResult.n_critical > 0}
+                  title={validationResult?.n_critical ? "Fix critical issues before processing" : undefined}
+                >Apply all</Btn>
               </>
             )}
           </div>
@@ -315,6 +393,36 @@ export default function ProcessingPage() {
             <Stat label="Missing Cells" value={missingCount != null ? String(missingCount) : "—"} tint="var(--amber)" sub={missingCount != null && nRows && nCols ? `${(missingCount / Math.max(1, nRows * nCols) * 100).toFixed(2)}% of cells` : undefined} />
             <Stat label="Spatial Folds" value={String(nFolds)} tint="var(--crimson)" />
           </StatGrid>
+
+          {/* P4-2: Validation issues panel */}
+          {validationResult && validationResult.items && validationResult.items.length > 0 && (
+            <div
+              style={{
+                marginBottom: 14,
+                border: `1px solid ${validationResult.n_critical > 0 ? "var(--crimson)" : "var(--amber)"}`,
+                borderRadius: 6,
+                padding: "10px 14px",
+                background: validationResult.n_critical > 0 ? "rgba(220,38,38,0.04)" : "rgba(245,158,11,0.04)",
+              }}
+            >
+              <div style={{ fontSize: 11.5, fontWeight: 700, marginBottom: 6, color: validationResult.n_critical > 0 ? "var(--crimson)" : "var(--amber)" }}>
+                Validation — {validationResult.n_critical} critical · {validationResult.n_warning} warning
+              </div>
+              {validationResult.items.slice(0, 10).map((issue, i) => (
+                <div key={i} className="mono" style={{ fontSize: 10, color: "var(--ink-2)", padding: "2px 0", borderTop: i > 0 ? "1px dashed var(--line)" : "none" }}>
+                  <span style={{ fontWeight: 700, color: issue.severity === "critical" ? "var(--crimson)" : "var(--amber)" }}>
+                    [{issue.severity?.toUpperCase() ?? "INFO"}]
+                  </span>
+                  {" "}{issue.message}
+                </div>
+              ))}
+              {validationResult.items.length > 10 && (
+                <div className="mono" style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
+                  + {validationResult.items.length - 10} more issues…
+                </div>
+              )}
+            </div>
+          )}
 
           <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 14 }}>
             <Card title="Transformation pipeline" subtitle="applied left-to-right · fold-aware where marked">
@@ -357,6 +465,9 @@ export default function ProcessingPage() {
                     {step.detail && (
                       <div className="mono" style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
                         {step.detail}
+                        {step.changed && (
+                          <span title="Upstream data changed since last run" style={{ marginLeft: 6, color: "#f59e0b", fontWeight: 700 }}>⚠ upstream changed</span>
+                        )}
                       </div>
                     )}
                     {step.status === "running" && (

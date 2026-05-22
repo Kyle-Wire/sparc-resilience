@@ -274,6 +274,12 @@ def _yaml_to_config(raw: dict, yaml_path: str) -> dict:
             'lambda_base': 0.2,
             'lambda_neighbor': 0.05,
         }),
+        'diffuser': raw.get('diffuser', {
+            'pretrain_epochs': 0,
+            'bottleneck': 32,
+            'T': 200,
+            'lr': 1e-3,
+        }),
     }
 
     # Resolve physics file paths relative to the YAML location
@@ -443,6 +449,7 @@ def load_config(config_path: str | None = None) -> dict:
         'process_rate': {'enabled': False},
         'optimization': {'run_cma_es': False, 'capacity_sweep': False},
         'training': {},
+        'diffuser': {'pretrain_epochs': 0, 'bottleneck': 32, 'T': 200, 'lr': 1e-3},
     }
 
 

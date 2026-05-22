@@ -759,8 +759,20 @@ class RunRegistry:
             if not entry.blob_sha256:
                 return False
             return (self.output_dir / "blobs" / entry.blob_sha256[:2] / entry.blob_sha256).exists()
-        # table / struct / blob_inline live inside artifacts.db
-        return self.sqlite_path.exists()
+        # table / struct / blob_inline live inside artifacts.db —
+        # verify the row actually exists, not just that the DB file exists.
+        if not self.sqlite_path.exists():
+            return False
+        try:
+            import sqlite3 as _sqlite3
+            with _sqlite3.connect(str(self.sqlite_path)) as _conn:
+                row = _conn.execute(
+                    "SELECT 1 FROM artifacts WHERE stage=? AND id=? LIMIT 1",
+                    (str(stage), artifact_id),
+                ).fetchone()
+                return row is not None
+        except Exception:  # noqa: BLE001
+            return False
 
     def list_for_stage(self, stage: str | int) -> list[ArtifactEntry]:
         sm = self._manifest.stages.get(str(stage))

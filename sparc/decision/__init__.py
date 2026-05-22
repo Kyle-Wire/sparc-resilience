@@ -24,6 +24,7 @@ from .uncertainty import (
     UncertaintyResult,
     monte_carlo_decision,
 )
+from .causal_bandit import CausalBandit
 
 __all__ = [
     "InterventionCandidate",
@@ -36,4 +37,5 @@ __all__ = [
     "disparity_index",
     "UncertaintyResult",
     "monte_carlo_decision",
+    "CausalBandit",
 ]

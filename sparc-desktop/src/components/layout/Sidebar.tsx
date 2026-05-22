@@ -1,7 +1,7 @@
 import { useRef, useCallback } from "react";
 
 const SECTIONS = [
-  { label: "Setup", pages: ["Project", "Data", "Processing"] },
+  { label: "Setup", pages: ["Project", "Data", "Data Collection"] },
   { label: "Analysis", pages: ["DAG", "Variables", "Physics", "Scenarios", "Models"] },
   { label: "Pipeline", pages: ["Run", "Insights", "Decision Support", "Report"] },
 ] as const;
@@ -9,7 +9,7 @@ const SECTIONS = [
 const PAGES = SECTIONS.flatMap((s) => s.pages) as unknown as readonly PageName[];
 
 export type PageName =
-  | "Project" | "Data" | "Processing"
+  | "Project" | "Data" | "Data Collection"
   | "DAG" | "Variables" | "Physics" | "Scenarios" | "Models"
   | "Run" | "Insights" | "Decision Support" | "Report";
 

@@ -57,6 +57,8 @@ class PDELossWeights:
     # Temporal terms (activated only when multi-snapshot data is available)
     transient: float = 0.05
     nocturnal: float = 0.08
+    # Sheaf Laplacian term 11 — multi-scale MAUP-resistance (activated when sheaf_laplacian provided)
+    sheaf: float = 0.03
 
 
 # Staged activation schedule: (term_name, activation_offset)
@@ -126,6 +128,11 @@ def compute_pde_loss(
     dT_dt_observed: torch.Tensor | None = None,
     nocturnal_dT_dt: torch.Tensor | None = None,
     T_night: torch.Tensor | None = None,
+    # Precomputed sparse Laplacian (optional — used when T_pred is full-N)
+    sparse_laplacian: torch.Tensor | None = None,
+    valid_laplacian_mask: torch.Tensor | None = None,
+    # Sheaf Laplacian coboundary δ⁰ (optional — Term 11)
+    sheaf_delta: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """
     Multi-term PDE physics loss with staged activation.
@@ -166,6 +173,23 @@ def compute_pde_loss(
     # Relative epoch: schedule offsets are relative to PDE activation
     pde_epoch = max(0, epoch - pde_start_epoch)
 
+    # Choose Laplacian backend: sparse matmul (full-N, precomputed) or
+    # 4-gather fallback (batched / no precomputed matrix).
+    _use_sparse = (
+        sparse_laplacian is not None
+        and valid_laplacian_mask is not None
+        and sparse_laplacian.shape[0] == N
+    )
+
+    def _laplacian_of(field: torch.Tensor):
+        if _use_sparse:
+            lap_full = torch.sparse.mm(
+                sparse_laplacian, field.unsqueeze(-1)
+            ).squeeze(-1)                               # (N,) — already expanded
+            return lap_full, valid_laplacian_mask
+        lap_raw, valid = laplacian(field, neighbor_idx, h)
+        return _expand(lap_raw, valid, N), valid
+
     # Cache full-size operator results (expanded from valid-only)
     lap_T_full: torch.Tensor | None = None
     valid_lap: torch.Tensor | None = None
@@ -182,8 +206,7 @@ def compute_pde_loss(
     alpha_mean = alpha_flat.detach().mean().clamp(min=1e-8)
     alpha_norm = alpha_flat / alpha_mean
     if sw_heat > 0:
-        lap_T_raw, valid_lap = laplacian(T_pred, neighbor_idx, h)
-        lap_T_full = _expand(lap_T_raw, valid_lap, N)
+        lap_T_full, valid_lap = _laplacian_of(T_pred)
         heat_residual = alpha_norm * lap_T_full - source_term
         heat_residual = _normalize_residual(heat_residual, valid_lap)
         heat_loss = (heat_residual[valid_lap] ** 2).mean() if valid_lap.any() else torch.tensor(0.0, device=T_pred.device)
@@ -215,8 +238,7 @@ def compute_pde_loss(
         d2_dx2_full = _expand(d2_dx2_raw, valid_dir, N)
         d2_dy2_full = _expand(d2_dy2_raw, valid_dir, N)
         if lap_T_full is None:
-            lap_T_raw, valid_lap = laplacian(T_pred, neighbor_idx, h)
-            lap_T_full = _expand(lap_T_raw, valid_lap, N)
+            lap_T_full, valid_lap = _laplacian_of(T_pred)
         combined_valid = valid_dir & valid_lap
         if combined_valid.any():
             dir_residual = d2_dx2_full + d2_dy2_full - lap_T_full
@@ -293,8 +315,7 @@ def compute_pde_loss(
     # ------------------------------------------------------------------
     sw_as = _stage_weight(pde_epoch, 15)
     if sw_as > 0:
-        lap_alpha_raw, valid_a = laplacian(alpha_flat, neighbor_idx, h)
-        lap_alpha_full = _expand(lap_alpha_raw, valid_a, N)
+        lap_alpha_full, valid_a = _laplacian_of(alpha_flat)
         if valid_a.any():
             as_norm = _normalize_residual(lap_alpha_full, valid_a)
             as_loss = (as_norm[valid_a] ** 2).mean()
@@ -325,8 +346,7 @@ def compute_pde_loss(
     sw_transient = _stage_weight(pde_epoch, 0) if (T_prev is not None and dt_hours) else 0.0
     if sw_transient > 0 and T_prev is not None and dt_hours:
         if lap_T_full is None:
-            lap_T_raw, valid_lap = laplacian(T_pred, neighbor_idx, h)
-            lap_T_full = _expand(lap_T_raw, valid_lap, N)
+            lap_T_full, valid_lap = _laplacian_of(T_pred)
         dt_seconds = dt_hours * 3600.0
         # Observed temporal derivative from snapshots
         if dT_dt_observed is not None:
@@ -354,8 +374,7 @@ def compute_pde_loss(
     # ------------------------------------------------------------------
     sw_nocturnal = _stage_weight(pde_epoch, 0) if (nocturnal_dT_dt is not None and T_night is not None) else 0.0
     if sw_nocturnal > 0 and nocturnal_dT_dt is not None and T_night is not None:
-        lap_T_night_raw, valid_night = laplacian(T_night, neighbor_idx, h)
-        lap_T_night_full = _expand(lap_T_night_raw, valid_night, N)
+        lap_T_night_full, valid_night = _laplacian_of(T_night)
         nocturnal_residual = alpha_norm * lap_T_night_full - nocturnal_dT_dt
         nocturnal_residual = _normalize_residual(nocturnal_residual, valid_night)
         if valid_night.any():
@@ -367,5 +386,36 @@ def compute_pde_loss(
         loss_dict["pde_nocturnal"] = term.item()
     else:
         loss_dict["pde_nocturnal"] = 0.0
+
+    # ------------------------------------------------------------------
+    # Term 11: Sheaf restriction loss — multi-scale MAUP consistency
+    # Penalizes predictions that are inconsistent across scales via the
+    # sheaf coboundary operator δ⁰.  Fine scale = T_pred; coarse scale
+    # = KNN-smoothed T_pred (acts as local average-pooling of T_pred
+    # without requiring a separate multi-resolution forward pass).
+    # Activated after nocturnal term (latest activation, optional data).
+    # Only active when sheaf_delta is provided.
+    # ------------------------------------------------------------------
+    sw_sheaf = _stage_weight(pde_epoch, 20) if sheaf_delta is not None else 0.0
+    if sw_sheaf > 0 and sheaf_delta is not None:
+        # Build 2-scale section: stalk = [T_fine, T_coarse]
+        # T_coarse: mean of KNN neighbors' T_pred (using neighbor_idx; 4 neighbors)
+        nb_vals = T_pred[neighbor_idx.clamp(min=0)]   # (N, 4)
+        valid_nb = (neighbor_idx >= 0).float()        # (N, 4)
+        T_coarse = (nb_vals * valid_nb).sum(dim=1) / valid_nb.sum(dim=1).clamp(min=1.0)
+
+        # Section f ∈ C⁰(ℱ): shape (N, 2) = [T_fine, T_coarse]
+        f = torch.stack([T_pred, T_coarse], dim=-1)   # (N, 2)
+        f_flat = f.reshape(-1, 1)                     # (N*2, 1)
+
+        # ||δ⁰ f||² / (E*d)
+        delta_f = torch.sparse.mm(sheaf_delta, f_flat)   # (E*2, 1)
+        sheaf_loss = delta_f.pow(2).mean()
+        sheaf_loss = _normalize_residual(sheaf_loss.unsqueeze(0)).squeeze(0)
+        term = weights.sheaf * sw_sheaf * sheaf_loss
+        total = total + term
+        loss_dict["pde_sheaf"] = term.item()
+    else:
+        loss_dict["pde_sheaf"] = 0.0
 
     return total, loss_dict

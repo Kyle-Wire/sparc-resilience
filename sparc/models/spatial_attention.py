@@ -89,6 +89,7 @@ class SparseSpatialAttention(nn.Module):
         n_heads: int = 4,
         max_neighbors: int = 128,
         dropout: float = 0.1,
+        init_bandwidth: float = 1000.0,
     ) -> None:
         super().__init__()
         assert d_model % n_heads == 0, "d_model must be divisible by n_heads"
@@ -105,6 +106,13 @@ class SparseSpatialAttention(nn.Module):
 
         self.attn_dropout = nn.Dropout(dropout)
         self.output_norm = nn.LayerNorm(d_model)
+
+        # Learnable distance scale: attention decays as exp(-d²/2σ²).
+        # Initialised from Stage 0 correlogram bandwidth so the spatial
+        # attention starts calibrated to the actual autocorrelation range.
+        self.log_dist_scale = nn.Parameter(
+            torch.tensor(math.log(max(init_bandwidth, 1.0)))
+        )
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -136,13 +144,19 @@ class SparseSpatialAttention(nn.Module):
         X: torch.Tensor,
         coords: torch.Tensor,
         knn_index: torch.Tensor,
+        knn_dists: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Parameters
         ----------
         X : (N, d_model) — input features
-        coords : (N, 2) — coordinates (used for potential distance weighting)
+        coords : (N, 2) — coordinates
         knn_index : (N, max_neighbors) long — KNN indices
+        knn_dists : (N, max_neighbors) float or None — metric distances.
+            When provided, a learnable Matérn-style Gaussian distance bias
+            is subtracted from dot-product scores before softmax, so the
+            model starts spatially calibrated to the Stage 0 correlogram
+            bandwidth and refines it during training.
 
         Returns
         -------
@@ -175,6 +189,14 @@ class SparseSpatialAttention(nn.Module):
         # Scaled dot-product attention
         scale = math.sqrt(self.d_k)
         scores = (Q @ K.transpose(-2, -1)) / scale  # (N, heads, 1, k)
+
+        # Distance bias: subtract d²/(2σ²) so near neighbors are favoured.
+        # σ = exp(log_dist_scale) starts at the Stage 0 correlogram bandwidth
+        # and is refined end-to-end.  Shape: (N, 1, 1, k) → broadcasts.
+        if knn_dists is not None:
+            sigma = torch.exp(self.log_dist_scale).clamp(min=1.0)
+            dist_bias = knn_dists.unsqueeze(1).unsqueeze(1) ** 2 / (2.0 * sigma ** 2)
+            scores = scores - dist_bias
 
         # Mask invalid neighbor positions to -inf before softmax
         inv_mask = (~valid_mask).unsqueeze(1).unsqueeze(1)   # (N, 1, 1, k)

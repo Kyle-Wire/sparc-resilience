@@ -149,7 +149,7 @@ def _theta_to_compass(theta_rad: float) -> str:
     idx = int(round((deg % 360.0) / 22.5)) % 16
     a = _COMPASS_16[idx]
     b = _COMPASS_16[(idx + 8) % 16]
-    return f"{a}–{b}"
+    return f"{a}-{b}"
 
 
 def _circular_mean_mod_pi(theta_samples: np.ndarray) -> float:
@@ -207,7 +207,7 @@ def _make_dominant_direction_hint(
     else:
         flavour = "strong anisotropy, likely advective transport along this axis"
     return (
-        f"{compass} ±{half_width_deg:.0f}°, "
+        f"{compass} +/-{half_width_deg:.0f}deg, "
         f"eccentricity {ecc_mean:.2f} [{ecc_lo:.2f}, {ecc_hi:.2f}]; {flavour}"
     )
 

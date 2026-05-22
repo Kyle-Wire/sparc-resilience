@@ -252,5 +252,28 @@ class CityRegistry:
         """Check if a city is registered."""
         return city_name in self._manifest["cities"]
 
+    def query_coresets_by_bandwidth_cluster(
+        self,
+        threshold: float = 0.3,
+    ) -> list[dict]:
+        """
+        Return all city coresets annotated with their log-bandwidth label.
+
+        Bandwidth is read from city metrics key ``"median_log_bandwidth"``.
+        Cities without this key are assigned ``log_bw = 0.0`` (neutral prior).
+
+        Parameters
+        ----------
+        threshold : float
+            Reserved for caller use; not applied here (returned for informational
+            parity with :func:`~sparc.training.spatial_contrastive.mine_positive_pairs`).
+
+        Returns
+        -------
+        List of dicts with keys ``"X"``, ``"coords"``, ``"log_bw"``, ``"city"``.
+        """
+        from sparc.training.spatial_contrastive import query_coresets_by_bandwidth_cluster
+        return query_coresets_by_bandwidth_cluster(self, threshold=threshold)
+
     def __repr__(self) -> str:
         return f"CityRegistry({self.root}, cities={self.list_cities()})"

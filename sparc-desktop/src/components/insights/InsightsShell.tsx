@@ -113,7 +113,9 @@ export default function InsightsShell({ panels, headerExtras }: ShellProps) {
           <div>
             <Kicker>Insights · linked dashboard</Kicker>
             <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em", marginTop: 4 }}>
-              {audience === "practitioner" ? "What should we do?" : "What's true & how sure?"}
+              {audience === "practitioner" ? "What should we do?"
+                : audience === "public" ? "What does this mean for me?"
+                : "What's true & how sure?"}
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -126,7 +128,7 @@ export default function InsightsShell({ panels, headerExtras }: ShellProps) {
                 className={audience === "practitioner" ? "active" : ""}
                 onClick={() => setAudience("practitioner")}
               >
-                Practitioner
+                Planner
               </button>
               <button
                 type="button"
@@ -136,6 +138,15 @@ export default function InsightsShell({ panels, headerExtras }: ShellProps) {
                 onClick={() => setAudience("researcher")}
               >
                 Researcher
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={audience === "public"}
+                className={audience === "public" ? "active" : ""}
+                onClick={() => setAudience("public")}
+              >
+                Public
               </button>
             </div>
           </div>
