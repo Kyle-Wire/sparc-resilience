@@ -411,7 +411,7 @@
       "type": "object",
       "description": "JEPA (V-JEPA 2-style) self-supervised auxiliary objective on the SharedTrunk. Adds an EMA target trunk + latent predictor + masked-channel context with VICReg anti-collapse. Off by default; pure additive when enabled.",
       "properties": {
-        "enable":              {"type": "boolean", "default": false, "description": "Master switch — when false, no JEPA modules are constructed and the training loop is byte-identical to pre-JEPA behavior."},
+        "enable":              {"type": "boolean", "default": true, "description": "Master switch — when false, no JEPA modules are constructed and the training loop is byte-identical to pre-JEPA behavior."},
         "mask_ratio":          {"type": "number", "default": 0.4, "minimum": 0.0, "maximum": 1.0, "description": "Bernoulli probability of zeroing each physics input channel for the context branch."},
         "lambda":              {"type": "number", "default": 1.0, "description": "Base weight on the JEPA loss term (multiplied by curriculum_weight(epoch))."},
         "ema_tau_start":       {"type": "number", "default": 0.99, "description": "Initial EMA momentum for the target trunk."},

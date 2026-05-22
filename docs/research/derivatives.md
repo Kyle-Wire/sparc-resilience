@@ -1,6 +1,6 @@
 # SPARC — Novel Research Derivatives
 
-**Last updated by research agent:** 2026-05-22b
+**Last updated by research agent:** 2026-06-02
 **Last synthesized by synthesis agent:** 2026-05-22c
 
 This file is maintained by the research agent. Each session, the agent appends its top 3–5 novel cross-pollination ideas here. The synthesis agent reads this file and converts entries into concrete proposals in `backlog.md`.
@@ -245,6 +245,24 @@ Each entry follows this structure:
 
 ---
 
+### Energy-Based Coreset Selection for Smarter Anti-Forgetting Replay (2026-06-02)
+**Source fields:** `sparc/training/replay.py` (`CoresetSelector`) × Energy-based models / Langevin dynamics (Du & Mordatch 2019; Grathwohl et al. 2020)
+**Core idea:** `CoresetSelector` uses greedy K-medoids (facility location in feature space) — optimal for feature-space coverage but ignorant of where the model is currently wrong. An energy-based selector defines `E(z) = ‖model(z) − y‖²` as the selection energy and uses Langevin-dynamics sampling to find points near the model's current failure modes. Each city's coreset is thus weighted toward the OOD frontier rather than the feature centroid — the most valuable anti-forgetting signal. The `CityReplayState` infrastructure (added 2026-06-02) already provides the interface; only `CoresetSelector._greedy_kmedoids()` needs a gradient-aware alternative.
+**Potential impact:** performance (dramatically better coreset quality for replay in OOD regions where forgetting is worst), methodological (replaces O(N·k) greedy heuristic with a principled EBM criterion)
+**Relevant SPARC modules:** `sparc/training/replay.py` (`CoresetSelector`, `CityReplayState`), `sparc/run/continual_training.py`
+**Status:** new
+
+---
+
+### Sheaf-Coboundary Operator as MAUP-Resistant Topology Loss (2026-06-02)
+**Source fields:** `sparc/physics/pde_operators.py` × Topological signal processing (Bodnar et al. 2022, *CW-Networks*; Hansen & Ghrist 2020)
+**Core idea:** The cardinal-neighbor graph built in `_build_cardinal_neighbors()` is a natural 1-complex. A cellular sheaf assigns a vector space (local prediction field) to each node and edge with restriction maps encoding the expected N/S/E/W prediction relationships. The sheaf coboundary operator `δ: C^0 → C^1` generalizes the graph Laplacian; `‖δT‖²` is zero iff adjacent predictions are consistent across all scales — a formal MAUP-resistance condition. The existing `sheaf_delta` parameter in `sparc_joint_loss()` already anticipates this integration. The architecture seam is in place; only the operator construction is missing.
+**Potential impact:** methodological (formal MAUP robustness proof — publishable differentiator for SPARC vs. all existing spatial models), new capability (multi-scale consistency certificate per prediction)
+**Relevant SPARC modules:** `sparc/physics/pde_operators.py`, new `sparc/physics/sheaf_operators.py`, `sparc/training/loss.py` (`sheaf_delta` param already present)
+**Status:** new
+
+---
+
 ### Normalizing Flows over DAG Posterior (2026-05-22b blue-sky)
 **Source fields:** `sparc/causal/dibs.py` × Continuous normalizing flows (Rezende & Mohamed 2015; Chen et al. 2018, Neural ODE)
 **Core idea:** DiBS does particle-based variational inference over Z-space (K fixed particles). The natural extension is a continuous normalizing flow (CNF) that learns p(Z | D, physics) directly — a flow-based distribution over Z-matrices rather than point masses. A CNF's adjoint ODE replaces the SVGD kernel step. This gives (1) direct density estimation of the DAG posterior, (2) richer exploration through ODE-parameterized flow trajectories, (3) exact log-likelihood of any candidate DAG under the posterior. Connects to the DiBS paper (Lorch et al. 2021) follow-up line and directly extends `sparc/causal/dibs.py`.
@@ -269,3 +287,21 @@ Each entry follows this structure:
 **Potential impact:** performance (warm-started chains begin near high-posterior regions; acceptance rate 2–3% → 15–30% immediately), methodological (SVGD finds diverse modes so parallel chains start at different high-quality DAGs rather than all at the empty graph)
 **Relevant SPARC modules:** `sparc/causal/mc3.py` (`run_mc3`, `BGeSuffStats`), new `sparc/causal/dag_warm_start.py`
 **Status:** in-backlog  *(backlog: S3-14 SVGD-NOTEARS MC³ warm-start)*
+
+---
+
+### JEPA Trunk Residualization for Causal Deconfounding (2026-05-22c)
+**Source fields:** `sparc/training/jepa_loss.py` (JEPA trunk) × `sparc/causal/counterfactual_engine.py` (DML) × Schölkopf et al. (2021) *Toward Causal Representation Learning* × Peters et al. (2016) *Causal and Anticausal Learning*
+**Core idea:** The JEPA SharedTrunk encodes physics-consistent, spatially-smooth latent representations h(x) ∈ ℝ^256 per spatial point. Spatial autocorrelation — a known confounder for causal discovery — is precisely the structure the trunk learns to represent via VICReg + spatial patch masking. Projecting raw treatment features onto the trunk embedding space (PCA-16 → Ridge probe) and taking the residuals removes the spatially-structured confounding from the features before DML treatment nuisance estimation. The DML `model_t` (predicting treatment T from confounders W) on residualized features is less biased by the spatially autocorrelated component that confounds both treatment assignment and outcome. This is a nonlinear generalization of spatial error models (Anselin 1988) applied to causal discovery. Simultaneously, Stage 2's `oof_preds` are the best available `model_y` for the DML outcome nuisance — the ensemble's R² on the full dataset is an upper bound on any nuisance model HGB could achieve from confounders alone, providing a free-win bias reduction on the Y side.
+**Potential impact:** methodological (nonlinear spatial deconfounding of causal estimates — publishable as first integration of self-supervised representation learning into spatial DML), performance (lower DML bias → tighter ATE credible intervals), interpretability (residualized features have lower Moran's I → conditional independence tests are more reliable)
+**Relevant SPARC modules:** `sparc/models/neural_meta.py` (`encode()`), `sparc/causal/counterfactual_engine.py` (`_fit_edge_dml`), new `sparc/causal/spatial_residualizer.py`, `sparc/run/v2_bayesian_causal.py`
+**Status:** in-backlog  *(backlog: JD-1, JD-2)*
+
+---
+
+### JEPA as Multi-Step World Model for Sequential Intervention Planning (2026-05-22c)
+**Source fields:** `sparc/inference/latent_rollout.py` (V-JEPA 2-AC single step) × V-JEPA 2 (Assran et al. 2025, arXiv:2506.09985) × Model Predictive Control (Camacho & Bordons 2007) × Physics cascade tables (domain knowledge)
+**Core idea:** The current `latent_rollout.py` applies a single action-conditioned predictor step. Urban climate interventions are sequential: planting tree canopy in year 1 changes the effective response landscape for impervious reduction in year 2 (carry-over, interaction effects). A multi-step rollout API extends V-JEPA 2-AC to sequences: `multi_step_latent_rollout(..., actions=[(treatment, Δx, Δt), ...])` chains `h_{t+1} = predictor(h_t, action_embed(actions[t]))` and decodes at each or the final step. Two rollout modes: (1) **latent chain** — pure predictor chaining in embedding space (fast, small drift risk, capped at 5 steps); (2) **re-encode** — apply a physics cascade table `{treatment: {feature: scale}}` per step to produce physically perturbed feature values, then re-encode via trunk for each step (physically grounded, requires domain knowledge). The physics cascade table is per-template YAML — auditable by domain experts, directly connects to SPARC's physical identifiability claim. This architecture is the precursor to a full MPC-style causal bandit: the world model simulates the sequential state trajectory, the bandit optimizes over intervention sequences.
+**Potential impact:** new capability (compound multi-year intervention planning — "tree canopy now, cool roofs year 2, permeable pavement year 3" with outcome trajectory), methodological (first physics-cascade-constrained JEPA world model for urban climate, publishable), prerequisite for causal bandit / MPC planning (which uses this world model as the oracle)
+**Relevant SPARC modules:** `sparc/inference/latent_rollout.py` (extend to `multi_step_latent_rollout`), new `sparc/inference/feature_perturbation.py` (`PhysicsCascade`), `sparc/models/latent_predictor.py`, `sparc/models/action_embedding.py`, domain template `caps.yml` files
+**Status:** in-backlog  *(backlog: JD-4, JD-5)*

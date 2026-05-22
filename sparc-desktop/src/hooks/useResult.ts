@@ -8,8 +8,8 @@
  *
  * Invalidation flow:
  *   1. WebSocket "artifact_written" event → useArtifactStream calls
- *      `invalidateStage(stage)` on the store.
- *   2. The Zustand store evicts all keys with the matching prefix.
+ *      `invalidateKey("s{stage}:{artifact_id}")` on the store.
+ *   2. The Zustand store evicts the specific key.
  *   3. `entry` becomes `undefined` → this hook re-fires the fetcher.
  *
  * Usage:
@@ -23,11 +23,16 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useResultCacheStore } from "@/stores/resultCache";
+import { parseMissingArtifact } from "@/lib/api";
+import type { MissingArtifactDetail } from "@/lib/types";
 
 export interface UseResultReturn<T> {
   data: T | null;
   loading: boolean;
   error: string | null;
+  /** Populated when the server responds with a structured 404 for a missing
+   * artifact.  Callers can render `detail.hint` directly in an empty-state. */
+  missingArtifact: MissingArtifactDetail | null;
 }
 
 export function useResult<T>(
@@ -43,6 +48,7 @@ export function useResult<T>(
     () => entry === undefined && key !== null,
   );
   const [error, setError] = useState<string | null>(null);
+  const [missingArtifact, setMissingArtifact] = useState<MissingArtifactDetail | null>(null);
   // Track which key is currently in-flight to avoid stale responses.
   const inflightRef = useRef<string | null>(null);
 
@@ -58,6 +64,7 @@ export function useResult<T>(
       // Cache hit — data is already in the store, nothing to do.
       setLoading(false);
       setError(null);
+      setMissingArtifact(null);
       return;
     }
 
@@ -78,7 +85,9 @@ export function useResult<T>(
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : "request failed");
+        const missing = parseMissingArtifact(err);
+        setMissingArtifact(missing);
+        setError(missing ? null : (err instanceof Error ? err.message : "request failed"));
         setLoading(false);
         inflightRef.current = null;
       });
@@ -95,5 +104,6 @@ export function useResult<T>(
     data: (entry?.data as T) ?? null,
     loading,
     error,
+    missingArtifact,
   };
 }

@@ -20,6 +20,10 @@ export type ArtifactFormat =
   | "pt" | "png" | "txt" | "html" | "joblib" | "yaml"
   | "geojson" | "other";
 
+/** Mirrors ``StorageKind`` in ``sparc/registry/manifest.py``. */
+export type StorageKind =
+  | "table" | "struct" | "blob_inline" | "blob_external" | "legacy_path";
+
 export type StageStatus =
   | "pending" | "running" | "complete" | "failed" | "partial";
 
@@ -30,6 +34,13 @@ export interface ArtifactEntry {
   /** Path relative to the project's `output_dir`. */
   path: string;
   format: ArtifactFormat;
+  storage_kind?: StorageKind | null;
+  /** SQLite table name when storage_kind is 'table'. */
+  data_table?: string | null;
+  /** FK into internal_blobs when storage_kind is 'blob_inline'. */
+  blob_id?: number | null;
+  /** Content hash for external blobs (storage_kind 'blob_external'). */
+  blob_sha256?: string | null;
   producer?: string | null;
   consumers: string[];
   size_bytes?: number | null;

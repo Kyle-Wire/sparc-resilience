@@ -325,3 +325,176 @@ def _normal_quantile(p: float) -> float:
     num = c[0] + c[1] * t + c[2] * t * t
     den = 1.0 + d[0] * t + d[1] * t * t + d[2] * t * t * t
     return t - num / den
+
+
+# ---------------------------------------------------------------------------
+# Cinelli-Hazlett Omitted Variable Bias (OVB) sensitivity
+# ---------------------------------------------------------------------------
+
+@dataclass
+class OVBResult:
+    """Cinelli-Hazlett partial-R² sensitivity result.
+
+    The robustness value (RV) is the minimum partial R² an unmeasured
+    confounder would need to have with *both* the treatment and the
+    outcome (above measured confounders) to bring the ATE to zero.
+
+    An RV of 0.10 means: a confounder explaining less than 10% of the
+    residual variance in both T and Y (given measured X) cannot fully
+    explain away the effect.
+
+    Attributes
+    ----------
+    effect : float
+        Original ATE / coefficient point estimate.
+    se : float
+        Standard error of the point estimate.
+    df : int
+        Residual degrees of freedom (n − k − 1).
+    t_stat : float
+        t-statistic = effect / se.
+    rv_q0 : float
+        Robustness value — minimum partial-R²_TZ = partial-R²_YZ
+        that would bring the t-statistic exactly to zero.
+    rv_qa : float
+        Robustness value for *significance* at level alpha — minimum
+        partial-R² needed to push the t-stat below t_{alpha/2,df}.
+    r2dz_benchmark : dict[str, float] | None
+        Benchmark partial-R² values for measured confounders (optional).
+    interpretation : str
+        Plain-English summary.
+    """
+    effect: float
+    se: float
+    df: int
+    t_stat: float
+    rv_q0: float
+    rv_qa: float
+    alpha: float
+    r2dz_benchmark: Optional[dict]
+    interpretation: str
+
+    def as_dict(self) -> dict:
+        return {
+            "method": "Cinelli-Hazlett OVB (partial-R² robustness value)",
+            "effect": self.effect,
+            "se": self.se,
+            "df": self.df,
+            "t_stat": self.t_stat,
+            "rv_q0": self.rv_q0,
+            "rv_qa": self.rv_qa,
+            "alpha": self.alpha,
+            "r2dz_benchmark": self.r2dz_benchmark,
+            "interpretation": self.interpretation,
+        }
+
+
+def _rv_formula(t_stat: float, df: int, critical_t: float = 0.0) -> float:
+    """Closed-form robustness value (Cinelli & Hazlett 2020, Proposition 1).
+
+    Returns the minimum partial-R² for a confounder to push the t-stat
+    below ``critical_t`` (default 0 = bring effect to zero).
+
+    RV = (t² - crit²) / (t² - crit² + df)    when t² > crit²
+    RV = 0                                     otherwise (already at/below crit)
+    """
+    f2_t = t_stat ** 2
+    f2_c = critical_t ** 2
+    if f2_t <= f2_c:
+        return 0.0
+    return (f2_t - f2_c) / (f2_t - f2_c + df)
+
+
+def _interpret_ovb(rv_q0: float, rv_qa: float) -> str:
+    if rv_q0 <= 0.0:
+        return "Effect is not statistically distinguishable from zero; robustness value is 0."
+    parts = [
+        f"A confounder must have partial-R² > {rv_q0:.3f} with BOTH treatment "
+        f"and outcome to bring the ATE to zero."
+    ]
+    if rv_qa > 0:
+        parts.append(
+            f"To push below significance, partial-R² > {rv_qa:.3f} is needed."
+        )
+    if rv_q0 < 0.02:
+        parts.append("Fragile: a very weak confounder could nullify the effect.")
+    elif rv_q0 < 0.10:
+        parts.append("Moderate robustness: a non-trivial confounder is required.")
+    else:
+        parts.append("Strong robustness: only a substantial confounder could overturn this.")
+    return " ".join(parts)
+
+
+def partial_r2_sensitivity(
+    effect: float,
+    se: float,
+    n: int,
+    k: int,
+    *,
+    alpha: float = 0.05,
+    benchmarks: Optional[dict[str, tuple[float, float]]] = None,
+) -> OVBResult:
+    """Cinelli-Hazlett (2020) OVB robustness value for a linear estimate.
+
+    Parameters
+    ----------
+    effect : float
+        ATE / regression coefficient point estimate.
+    se : float
+        Standard error of the estimate.
+    n : int
+        Sample size.
+    k : int
+        Number of covariates in the model (excluding intercept).
+    alpha : float
+        Significance level for rv_qa computation (default 0.05).
+    benchmarks : dict[str, (R²_TZ, R²_YZ)] | None
+        Optional partial-R² values for named measured covariates, used
+        as benchmarks.  E.g. ``{"Elevation": (0.12, 0.08)}``.  These are
+        compared against RV to provide context ("smaller than Elevation").
+
+    Returns
+    -------
+    OVBResult
+
+    References
+    ----------
+    Cinelli, C. & Hazlett, C. (2020). Making sense of sensitivity:
+    extending omitted variable bias. *Journal of the Royal Statistical
+    Society: Series B*, 82(1), 39-67.
+    """
+    if se <= 0:
+        raise ValueError(f"se must be > 0; got {se}")
+    df = max(n - k - 1, 1)
+    t_stat = effect / se
+
+    # Critical t for significance at alpha (two-sided)
+    critical_t = _normal_quantile(1.0 - alpha / 2.0)
+
+    rv_q0 = _rv_formula(t_stat, df, critical_t=0.0)
+    rv_qa = _rv_formula(t_stat, df, critical_t=critical_t)
+
+    # Benchmark comparison
+    r2dz_bench: Optional[dict] = None
+    if benchmarks:
+        r2dz_bench = {}
+        for name, (r2tz, r2yz) in benchmarks.items():
+            # Geometric mean partial-R² as single benchmark value
+            r2dz_bench[name] = {
+                "r2_treatment": r2tz,
+                "r2_outcome": r2yz,
+                "geometric_mean": math.sqrt(max(r2tz * r2yz, 0.0)),
+                "exceeds_rv": math.sqrt(max(r2tz * r2yz, 0.0)) >= rv_q0,
+            }
+
+    return OVBResult(
+        effect=float(effect),
+        se=float(se),
+        df=df,
+        t_stat=float(t_stat),
+        rv_q0=rv_q0,
+        rv_qa=rv_qa,
+        alpha=alpha,
+        r2dz_benchmark=r2dz_bench,
+        interpretation=_interpret_ovb(rv_q0, rv_qa),
+    )

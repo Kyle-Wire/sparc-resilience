@@ -15,7 +15,7 @@ export default function CorrelogramPanel() {
   const manifest = useManifest();
   const navigate = useInsightsNavigate();
   const present = !!manifest.lookup("0", "correlogram_results");
-  const { data } = useResult<CorrelogramData>(
+  const { data, missingArtifact } = useResult<CorrelogramData>(
     present ? "s0:correlogram" : null,
     getCorrelogramData,
   );
@@ -127,12 +127,12 @@ export default function CorrelogramPanel() {
     }
   }, [data, varNames.length]);
 
-  if (!present) {
+  if (!present || missingArtifact) {
     return (
       <Panel title="Correlogram" subtitle="stage 0 · spatial autocorrelation">
         <PanelEmpty
-          reason="Awaiting stage 0"
-          hint="Run the Correlogram stage to characterise spatial autocorrelation in the input variables."
+          reason={missingArtifact ? missingArtifact.hint : "Awaiting stage 0"}
+          hint={missingArtifact ? undefined : "Run the Correlogram stage to characterise spatial autocorrelation in the input variables."}
           action={navigate && <Btn small onClick={() => navigate("Run")}>Go to Run page →</Btn>}
         />
       </Panel>

@@ -36,6 +36,22 @@ except ImportError:  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_priors_yaml_for_resolver(config: dict) -> dict:
+    """Return the raw ``priors.yml`` content suitable for *CausalEffectResolver*.
+
+    The resolver needs the nested YAML structure (``coefficients.*``,
+    ``calibration.*``) — not the merged per-variable map produced by
+    ``build_physics_priors_map``, and not the raw physics config section.
+    """
+    from sparc.interventions.physics_priors_registry import load_physics_priors_yaml
+    return load_physics_priors_yaml(config)
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -268,7 +284,7 @@ class ScenarioEngineV4:
             self.resolver = CausalEffectResolver(
                 store,
                 dag=dag,
-                physics_priors=config.get("physics") or {},
+                physics_priors=_load_priors_yaml_for_resolver(config),
                 config=ResolverConfig(n_draws_cap=self.n_draws_cap),
             )
         else:

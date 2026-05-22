@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional  # noqa: F401 — used in MaternFitResult
 
 import numpy as np
 import torch
@@ -127,6 +127,7 @@ class MaternFitResult:
     converged: bool = True
     n_samples_used: int = 0
     nu_log_marginals: dict[float, float] = field(default_factory=dict)
+    fallback_reason: Optional[str] = None
 
     def to_payload(self) -> dict:
         """Convert to JSON-friendly dict for ``ArtifactStore.write_struct``.
@@ -155,6 +156,7 @@ class MaternFitResult:
             "ess": {k: float(v) for k, v in self.ess.items()},
             "converged": bool(self.converged),
             "n_samples_used": int(self.n_samples_used),
+            "fallback_reason": self.fallback_reason,
         }
 
 

@@ -280,6 +280,12 @@ def _yaml_to_config(raw: dict, yaml_path: str) -> dict:
             'T': 200,
             'lr': 1e-3,
         }),
+        # JD-3: jepa section passed through from raw YAML; enable defaults
+        # to True (schema default) so new projects get JEPA out of the box.
+        'jepa': {
+            'enable': True,
+            **raw.get('jepa', {}),
+        },
     }
 
     # Resolve physics file paths relative to the YAML location

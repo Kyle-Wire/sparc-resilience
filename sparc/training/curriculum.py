@@ -95,6 +95,19 @@ def get_lambda_schedule(
             # Prior handled separately via get_prior_weight in loss.py
             schedule[term] = target
 
+        elif term == "alpha_class":
+            # Candidate C: alpha classification scaffold
+            # Full pressure during Stage A/B (anchors alpha near land-cover centroids).
+            # Decays 1.0→0.1 across the ramp so it releases during Stage C, letting
+            # alpha differentiate freely under the physics loss.
+            if epoch < warmup_end:
+                schedule[term] = target
+            elif epoch < ramp_end:
+                frac = (epoch - warmup_end) / ramp_duration
+                schedule[term] = target * (1.0 - 0.9 * frac)
+            else:
+                schedule[term] = target * 0.1
+
         else:
             schedule[term] = target
 

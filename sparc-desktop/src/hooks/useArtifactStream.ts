@@ -144,11 +144,11 @@ const client = new ArtifactStreamClient();
 // Begin connecting as soon as this module is imported.
 if (typeof window !== "undefined") {
   client.start();
-  // Invalidate the result cache for the affected stage the moment an
-  // artifact_written event arrives. This makes panels refetch stale data
-  // immediately instead of waiting for the next manifest poll cycle.
+  // Invalidate the specific cached artifact the moment an artifact_written
+  // event arrives.  Artifact-scoped invalidation means unrelated panels on
+  // the same stage are not forced to refetch.
   client.addListener((evt) => {
-    useResultCacheStore.getState().invalidateStage(evt.stage);
+    useResultCacheStore.getState().invalidateKey(`s${evt.stage}:${evt.artifact_id}`);
   });
 }
 

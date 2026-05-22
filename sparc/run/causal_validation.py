@@ -816,13 +816,35 @@ class CausalValidator:
                 T_bin = (data[treatment] > t_median).astype(int).values
                 Y = data[target].values
                 X_conf = data[confounders].values
+                n_obs = len(Y)
 
-                # Propensity score via logistic regression
-                ps_model = LogisticRegression(
+                # Cross-fit propensity scores (Chernozhukov et al. 2018).
+                # Fitting the propensity model on held-out folds removes
+                # regularization bias from the IPW weights.  Falls back to
+                # a single in-sample fit when n < 100 (too few obs for folds).
+                from sklearn.model_selection import StratifiedKFold
+                from sklearn.base import clone as _clone
+
+                ps_base = LogisticRegression(
                     max_iter=500, solver='lbfgs', random_state=42,
                 )
-                ps_model.fit(X_conf, T_bin)
-                ps = ps_model.predict_proba(X_conf)[:, 1]
+                ps = np.zeros(n_obs)
+                n_cf_splits = min(5, max(2, n_obs // 50))
+
+                if n_obs >= 100:
+                    skf = StratifiedKFold(
+                        n_splits=n_cf_splits, shuffle=True, random_state=42,
+                    )
+                    for train_idx, test_idx in skf.split(X_conf, T_bin):
+                        ps_fold = _clone(ps_base)
+                        ps_fold.fit(X_conf[train_idx], T_bin[train_idx])
+                        ps[test_idx] = ps_fold.predict_proba(X_conf[test_idx])[:, 1]
+                    ps_method = f"cross-fit ({n_cf_splits}-fold)"
+                else:
+                    # Small sample: single fit (cross-fitting unreliable below n=100)
+                    ps_base.fit(X_conf, T_bin)
+                    ps = ps_base.predict_proba(X_conf)[:, 1]
+                    ps_method = "in-sample (n<100)"
 
                 # Trimming: discard extreme PS
                 trim_lo, trim_hi = 0.05, 0.95
@@ -843,6 +865,7 @@ class CausalValidator:
                     'ate_ipw': ate_ipw,
                     'n_trimmed': n_trimmed,
                     'binarization_threshold': t_median,
+                    'ps_method': ps_method,
                 }
 
                 # Propensity diagnostics
@@ -854,6 +877,7 @@ class CausalValidator:
                     'extreme_fraction': float((~mask).mean()),
                     'n_trimmed': n_trimmed,
                     'n_total': len(ps),
+                    'ps_method': ps_method,
                 }
 
                 # Compare with backdoor ATE
@@ -1924,6 +1948,35 @@ class CausalValidator:
     # Cinelli-Hazlett sensitivity analysis
     # ------------------------------------------------------------------
 
+
+def _partial_r2_covariate(
+    data: "pd.DataFrame",
+    covariate: str,
+    target: str,
+    other_cols: list[str],
+) -> float:
+    """Partial R² of ``covariate`` in predicting ``target`` given ``other_cols``.
+
+    Computed as the incremental R² when adding ``covariate`` to a model
+    that already contains ``other_cols``.  Used as a benchmark for the
+    Cinelli-Hazlett robustness value.
+    """
+    from sklearn.linear_model import LinearRegression as _LR
+    avail_others = [c for c in other_cols if c in data.columns and c != covariate]
+    Y = data[target].values
+
+    if avail_others:
+        lr_base = _LR().fit(data[avail_others].values, Y)
+        r2_base = lr_base.score(data[avail_others].values, Y)
+    else:
+        r2_base = 0.0
+
+    X_full = data[[covariate] + avail_others].values
+    lr_full = _LR().fit(X_full, Y)
+    r2_full = lr_full.score(X_full, Y)
+
+    return max(0.0, (r2_full - r2_base) / max(1.0 - r2_base, 1e-12))
+
     @staticmethod
     def _cinelli_hazlett_robustness(
         data: pd.DataFrame,
@@ -1932,43 +1985,76 @@ class CausalValidator:
         confounders: List[str],
     ) -> Optional[Dict[str, float]]:
         """
-        Compute the partial R² robustness value (Cinelli & Hazlett 2020).
+        Compute the proper Cinelli-Hazlett (2020) robustness value.
 
-        Returns the maximum R²_{Y~U|T,C} that an unmeasured confounder U
-        could explain while still leaving ATE != 0.
+        Uses the closed-form RV formula:
+            RV = (t² − crit²) / (t² − crit² + df)
+
+        where t is the OLS t-statistic for the treatment coefficient and
+        df = n − k − 1.  The RV answers: "What is the minimum partial-R²
+        an unmeasured confounder must have with *both* treatment and outcome
+        to bring the ATE to zero?"
+
+        Also computes per-confounder benchmark partial-R² values so the
+        caller can compare RV against the explanatory power of measured
+        covariates.
         """
         try:
             from sklearn.linear_model import LinearRegression
+            from sparc.causal.sensitivity import partial_r2_sensitivity
 
             avail = [c for c in confounders if c in data.columns]
-            T = data[treatment].values.reshape(-1, 1)
-            Y = data[outcome].values
+            n = len(data)
+            k = len(avail) + 1  # treatment + confounders (excl. intercept)
 
-            # Full model: Y ~ T + C
+            # Full OLS: Y ~ T + C  (for t-stat and SE)
             X_full = data[[treatment] + avail].values
+            Y = data[outcome].values
             lr_full = LinearRegression().fit(X_full, Y)
-            r2_full = lr_full.score(X_full, Y)
 
-            # Reduced model: Y ~ C only
-            if avail:
-                X_red = data[avail].values
-                lr_red = LinearRegression().fit(X_red, Y)
-                r2_reduced = lr_red.score(X_red, Y)
-            else:
-                r2_reduced = 0.0
+            # Residual SE for HC-consistent standard error of treatment coeff
+            Y_hat = lr_full.predict(X_full)
+            residuals = Y - Y_hat
+            # OLS SE via (X'X)^{-1} sigma² — treatment coefficient is index 0
+            import numpy as _np
+            XtX = X_full.T @ X_full
+            try:
+                XtX_inv = _np.linalg.inv(XtX)
+                sigma2 = _np.sum(residuals ** 2) / max(n - k - 1, 1)
+                se_treat = float(_np.sqrt(sigma2 * XtX_inv[0, 0]))
+            except _np.linalg.LinAlgError:
+                se_treat = 0.0
 
-            # Partial R² of T given C
-            partial_r2_t = (r2_full - r2_reduced) / (1.0 - r2_reduced + 1e-12)
+            ate_coef = float(lr_full.coef_[0])
 
-            # Robustness value: R²_{Y~D|X} — how much of residual variance
-            # T explains.  This is an upper bound on how strong an
-            # unmeasured confounder must be to nullify T's effect.
-            return {
-                'partial_r2_treatment': float(partial_r2_t),
-                'r2_full': float(r2_full),
-                'r2_reduced': float(r2_reduced),
-                'robustness_value': float(np.sqrt(partial_r2_t)),
-            }
+            # Benchmark partial-R² per measured confounder
+            benchmarks: dict[str, tuple[float, float]] = {}
+            for conf in avail[:5]:  # cap at 5 benchmarks to keep output compact
+                # partial-R²_{conf ~ T | others}
+                other_t = [c for c in avail if c != conf] + [outcome]
+                other_y = [c for c in avail if c != conf] + [treatment]
+                try:
+                    r2_t = _partial_r2_covariate(data, conf, treatment, other_t)
+                    r2_y = _partial_r2_covariate(data, conf, outcome, other_y)
+                    benchmarks[conf] = (r2_t, r2_y)
+                except Exception:
+                    pass
+
+            if se_treat <= 0:
+                return None
+
+            ovb = partial_r2_sensitivity(
+                effect=ate_coef,
+                se=se_treat,
+                n=n,
+                k=k,
+                benchmarks=benchmarks if benchmarks else None,
+            )
+            result = ovb.as_dict()
+            # Preserve legacy key for downstream consumers
+            result['robustness_value'] = ovb.rv_q0
+            return result
+
         except Exception:
             return None
 

@@ -778,6 +778,47 @@ class RunRegistry:
         sm = self._manifest.stages.get(str(stage))
         return list(sm.artifacts.values()) if sm else []
 
+    def stale_partials(self, *, threshold_minutes: float = 30.0) -> list[ArtifactEntry]:
+        """Return entries that are stuck in a partial state.
+
+        An entry is *stale* when ``partial=True`` and its ``written_at``
+        timestamp is older than *threshold_minutes*.  These represent
+        artifacts whose in-flight write was interrupted (e.g. by a crash)
+        and will never self-heal without explicit recovery.
+
+        Parameters
+        ----------
+        threshold_minutes:
+            Age in minutes beyond which a partial entry is considered stale.
+            Pass ``0`` to treat all partial entries as stale.
+
+        Returns
+        -------
+        list[ArtifactEntry]
+            Entries meeting the staleness criteria, in manifest order.
+        """
+        import datetime as _dt
+
+        now = _dt.datetime.now(_dt.timezone.utc)
+        threshold = _dt.timedelta(minutes=threshold_minutes)
+        stale: list[ArtifactEntry] = []
+        for entry in self._manifest.all_artifacts():
+            if not entry.partial:
+                continue
+            if not entry.written_at:
+                stale.append(entry)
+                continue
+            try:
+                written = _dt.datetime.fromisoformat(entry.written_at)
+                if written.tzinfo is None:
+                    written = written.replace(tzinfo=_dt.timezone.utc)
+                if (now - written) > threshold:
+                    stale.append(entry)
+            except (ValueError, TypeError):
+                # Unparseable timestamp — treat as stale.
+                stale.append(entry)
+        return stale
+
     def query(
         self,
         *,

@@ -71,12 +71,9 @@ def compute_physics_residual(
     valid = (neighbor_idx != -1).all(dim=1)
     T = T_pred
 
-    T_n = T[neighbor_idx[valid, 0]]
-    T_s = T[neighbor_idx[valid, 1]]
-    T_e = T[neighbor_idx[valid, 2]]
-    T_w = T[neighbor_idx[valid, 3]]
-
-    laplacian = (T_n + T_s + T_e + T_w - 4 * T[valid]) / (resolution ** 2)
+    # Single batched gather for all 4 neighbours — (M, 4) — replaces 4 separate index ops
+    T_nb = T[neighbor_idx[valid]]  # (M, 4)
+    laplacian = (T_nb.sum(dim=-1) - 4 * T[valid]) / (resolution ** 2)
 
     # Normalize alpha by its detached mean so the PDE residual is O(1).
     # This avoids mixing physical units (m²/s) with z-score units and
@@ -183,6 +180,11 @@ def sparc_joint_loss(
     valid_mask: torch.Tensor | None = None,
     # Sheaf Laplacian (optional — topological regularisation)
     sheaf_delta: torch.Tensor | None = None,
+    # Candidate A: per-surrogate fidelity weights from gate EMA feedback
+    surr_fidelity_weights: list[float] | None = None,
+    # Candidate C: alpha field classification scaffold
+    alpha_class_targets: torch.Tensor | None = None,
+    lambda_alpha_class: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """
     Compute the 8-term joint loss.
@@ -229,7 +231,16 @@ def sparc_joint_loss(
     alpha_smooth = torch.tensor(0.0, device=T_pred.device)
 
     has_neighbors = neighbor_idx is not None and neighbor_idx.numel() > 0
-    if has_neighbors and lambda_physics > 0:
+
+    # When V3 PDE loss is active, compute_pde_loss() already computes:
+    #   • heat_diffusion  (≡ V2 Term 3, physics residual)
+    #   • alpha_smooth    (≡ V2 Term 5)
+    #   • alpha_prior     (≡ V2 Term 6)
+    # Running those V2 terms simultaneously doubles the physics gradient.
+    # They are skipped here and delegated to compute_pde_loss() (Term 9).
+    _v3_active = lambda_pde > 0 and h_field is not None and has_neighbors
+
+    if has_neighbors and lambda_physics > 0 and not _v3_active:
         normalized_residual, laplacian, valid = compute_physics_residual(
             T_pred.squeeze(), alpha.squeeze(), neighbor_idx, source_term, resolution,
         )
@@ -239,13 +250,10 @@ def sparc_joint_loss(
             # 4. Prediction smoothness
             smooth = lambda_smooth * laplacian.pow(2).mean()
 
-            # 5. Alpha field smoothness
+            # 5. Alpha field smoothness — batched gather: one (M,4) op replaces 4 separate gathers
             a = alpha.squeeze()
-            a_n = a[neighbor_idx[valid, 0]]
-            a_s = a[neighbor_idx[valid, 1]]
-            a_e = a[neighbor_idx[valid, 2]]
-            a_w = a[neighbor_idx[valid, 3]]
-            alpha_lap = (a_n + a_s + a_e + a_w - 4 * a[valid]) / (resolution ** 2)
+            a_nb = a[neighbor_idx[valid]]  # (M, 4)
+            alpha_lap = (a_nb.sum(dim=-1) - 4 * a[valid]) / (resolution ** 2)
             alpha_smooth = lambda_alpha_smooth * alpha_lap.pow(2).mean()
 
     loss_components["physics"] = physics.item()
@@ -254,24 +262,51 @@ def sparc_joint_loss(
 
     # ------------------------------------------------------------------
     # 6. Alpha prior regularization — decayed by curriculum
+    #    Skipped in V3 mode: compute_pde_loss() Term 8 (alpha_prior) covers this.
     # ------------------------------------------------------------------
-    prior_weight = get_prior_weight(epoch, lambda_prior)
-    if valid_mask is not None:
-        prior_reg = prior_weight * (alpha[valid_mask] - alpha_prior[valid_mask]).pow(2).mean()
-    else:
-        prior_reg = prior_weight * (alpha - alpha_prior).pow(2).mean()
+    prior_reg = torch.tensor(0.0, device=T_pred.device)
+    if not _v3_active:
+        prior_weight = get_prior_weight(epoch, lambda_prior)
+        if valid_mask is not None:
+            prior_reg = prior_weight * (alpha[valid_mask] - alpha_prior[valid_mask]).pow(2).mean()
+        else:
+            prior_reg = prior_weight * (alpha - alpha_prior).pow(2).mean()
     loss_components["alpha_prior"] = prior_reg.item()
 
     # ------------------------------------------------------------------
-    # 7. Surrogate fidelity
+    # 7. Surrogate fidelity (Candidate A: gate-weight-scaled per surrogate)
     # ------------------------------------------------------------------
     surrogate_loss = torch.tensor(0.0, device=T_pred.device)
     if surrogate_preds and surrogate_targets:
-        surrogate_loss = lambda_base * sum(
-            F.mse_loss(pred, target)
-            for pred, target in zip(surrogate_preds, surrogate_targets)
-        )
+        if surr_fidelity_weights is not None and len(surr_fidelity_weights) == len(surrogate_preds):
+            surrogate_loss = lambda_base * sum(
+                surr_fidelity_weights[k] * F.mse_loss(pred, target)
+                for k, (pred, target) in enumerate(zip(surrogate_preds, surrogate_targets))
+            ) / max(len(surrogate_preds), 1)
+        else:
+            surrogate_loss = lambda_base * sum(
+                F.mse_loss(pred, target)
+                for pred, target in zip(surrogate_preds, surrogate_targets)
+            )
     loss_components["surrogate"] = surrogate_loss.item()
+
+    # ------------------------------------------------------------------
+    # 7b. Alpha classification scaffold (Candidate C: ProcessRateNet curriculum)
+    # Penalises alpha deviating from the land-cover class centroids computed
+    # during ProcessRateNet pre-training.  Decays via the alpha_class schedule
+    # so it acts as a soft anchor in Stage A/B and releases in Stage C.
+    # ------------------------------------------------------------------
+    alpha_class_loss = torch.tensor(0.0, device=T_pred.device)
+    if alpha_class_targets is not None and lambda_alpha_class > 0.0:
+        _act = alpha_class_targets.to(T_pred.device).squeeze()
+        _alp = alpha.squeeze()
+        if valid_mask is not None:
+            alpha_class_loss = lambda_alpha_class * F.mse_loss(
+                _alp[valid_mask], _act[valid_mask]
+            )
+        else:
+            alpha_class_loss = lambda_alpha_class * F.mse_loss(_alp, _act)
+    loss_components["alpha_class"] = alpha_class_loss.item()
 
     # ------------------------------------------------------------------
     # 8. Spatial neighborhood consistency
@@ -423,10 +458,182 @@ def sparc_joint_loss(
     # ------------------------------------------------------------------
     total = (
         mse + ce + physics + smooth + alpha_smooth
-        + prior_reg + surrogate_loss + neighborhood
+        + prior_reg + surrogate_loss + alpha_class_loss + neighborhood
         + pde_total + bc_total + ic_total
         + jepa_total + jepa_scenario_total + jepa_latent_pde_total
     )
     loss_components["total"] = total.item()
 
     return total, loss_components
+
+
+# ---------------------------------------------------------------------------
+# Adaptive loss weight balancing — ReLoBRaLo
+# ---------------------------------------------------------------------------
+
+class AdaptiveLossWeighter:
+    """Relative Loss Balancing with Residual Rescaling (ReLoBRaLo).
+
+    Adjusts per-term lambda weights each training step so that every loss
+    term contributes a comparable gradient signal — preventing any single
+    term (typically the PDE residual in high-κ domains) from dominating
+    the gradient flow and suppressing data-fidelity learning.
+
+    The update rule tracks a running mean of each term's loss value and
+    rescales its lambda so that all terms have equal *relative* contribution
+    to the total loss:
+
+        λ_i ← λ̄_i · (L̄_ref / L_i)
+
+    where L̄_ref is the running mean of the reference term (default: "mse")
+    and L_i is the current running mean of term i.
+
+    Parameters
+    ----------
+    base_lambdas : dict[str, float]
+        Initial lambda values keyed by loss component name.  These values
+        act as scale anchors — the adaptive weights cannot drift more than
+        ``max_scale_factor`` away from them.
+    reference_term : str
+        The loss term whose magnitude defines the target scale.  All other
+        terms are rescaled to match this term's running mean.
+        Defaults to "mse".
+    ema_alpha : float
+        Exponential moving average coefficient for tracking loss means.
+        Smaller = smoother but slower to adapt.  Default 0.01.
+    warmup_steps : int
+        Number of steps to use base_lambdas unchanged while the EMA warms
+        up.  Default 100.
+    max_scale_factor : float
+        Maximum ratio by which any lambda can deviate from its base value.
+        Prevents runaway weights.  Default 10.0.
+    enabled_terms : set[str] | None
+        If provided, only adapt weights for these terms; others stay at
+        their base value.  Defaults to all terms in base_lambdas.
+
+    Usage
+    -----
+    >>> weighter = AdaptiveLossWeighter(
+    ...     base_lambdas={"lambda_physics": 0.3, "lambda_smooth": 0.1, ...}
+    ... )
+    >>> # inside training loop:
+    >>> total, components = sparc_joint_loss(**fixed_kwargs)
+    >>> adapted = weighter.step(components)
+    >>> # adapted["lambda_physics"] etc. are now adaptively scaled
+    >>> # use them on the NEXT forward pass
+    """
+
+    def __init__(
+        self,
+        base_lambdas: dict[str, float],
+        *,
+        reference_term: str = "mse",
+        ema_alpha: float = 0.01,
+        warmup_steps: int = 100,
+        max_scale_factor: float = 10.0,
+        enabled_terms: set | None = None,
+    ) -> None:
+        self.base_lambdas = dict(base_lambdas)
+        self.reference_term = reference_term
+        self.ema_alpha = ema_alpha
+        self.warmup_steps = warmup_steps
+        self.max_scale_factor = max_scale_factor
+        self.enabled_terms = enabled_terms
+
+        # Running EMA of each loss component (keyed by component name)
+        self._ema: dict[str, float] = {}
+        self._step = 0
+
+        # Current adapted lambdas — starts equal to base
+        self.lambdas: dict[str, float] = dict(base_lambdas)
+
+    # Map from lambda parameter name → loss_components key
+    # e.g. "lambda_physics" → "physics", "lambda_smooth" → "smooth"
+    _LAMBDA_TO_COMPONENT: dict[str, str] = {
+        "lambda_physics":      "physics",
+        "lambda_smooth":       "smooth",
+        "lambda_alpha_smooth": "alpha_smooth",
+        "lambda_prior":        "alpha_prior",
+        "lambda_base":         "surrogate",
+        "lambda_neighbor":     "neighborhood",
+        "lambda_pde":          "pde_total",
+        "lambda_bc":           "bc_total",
+        "lambda_jepa":         "jepa_weighted",
+    }
+
+    def step(self, loss_components: dict[str, float]) -> dict[str, float]:
+        """Update EMA statistics and return adapted lambda dict.
+
+        Parameters
+        ----------
+        loss_components : dict
+            The ``loss_components`` dict returned by ``sparc_joint_loss``
+            from the *previous* step (or the current step — one step
+            behind is fine for the adaptive signal).
+
+        Returns
+        -------
+        dict[str, float]
+            Updated lambda values (same keys as ``base_lambdas``).
+            Pass these as keyword arguments to ``sparc_joint_loss`` on the
+            next forward pass.
+        """
+        self._step += 1
+
+        # Update EMA for each tracked component
+        for component_name, value in loss_components.items():
+            if not math.isfinite(value) or value < 0:
+                continue
+            prev = self._ema.get(component_name, value)
+            self._ema[component_name] = (
+                (1.0 - self.ema_alpha) * prev + self.ema_alpha * value
+            )
+
+        # During warmup: keep base lambdas unchanged
+        if self._step < self.warmup_steps:
+            return dict(self.lambdas)
+
+        # Reference term mean (must be positive and finite)
+        ref_mean = self._ema.get(self.reference_term, 0.0)
+        if not (math.isfinite(ref_mean) and ref_mean > 1e-12):
+            return dict(self.lambdas)
+
+        # Rescale each lambda so its component mean ≈ ref_mean
+        updated: dict[str, float] = {}
+        for lambda_key, base_val in self.base_lambdas.items():
+            component = self._LAMBDA_TO_COMPONENT.get(lambda_key)
+            should_adapt = (
+                component is not None
+                and (self.enabled_terms is None or lambda_key in self.enabled_terms)
+            )
+            if not should_adapt:
+                updated[lambda_key] = base_val
+                continue
+
+            comp_mean = self._ema.get(component, 0.0)
+            if not (math.isfinite(comp_mean) and comp_mean > 1e-12):
+                updated[lambda_key] = base_val
+                continue
+
+            # ReLoBRaLo: scale = ref_mean / comp_mean
+            scale = ref_mean / comp_mean
+            # Clamp to max_scale_factor around base
+            scale = max(1.0 / self.max_scale_factor, min(scale, self.max_scale_factor))
+            updated[lambda_key] = base_val * scale
+
+        self.lambdas = updated
+        return dict(updated)
+
+    def state_dict(self) -> dict:
+        """Serializable state for checkpoint saving."""
+        return {
+            "ema": dict(self._ema),
+            "step": self._step,
+            "lambdas": dict(self.lambdas),
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        """Restore from a checkpoint."""
+        self._ema = dict(state.get("ema", {}))
+        self._step = int(state.get("step", 0))
+        self.lambdas = dict(state.get("lambdas", self.base_lambdas))

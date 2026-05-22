@@ -1,7 +1,7 @@
 # SPARC — Research Backlog
 
 **Maintained by:** synthesis agent
-**Last updated:** 2026-05-22c (7 new proposals added — synthesis of `new`/`under-synthesis` derivatives: S3-14 SVGD warm-start, Causal Transportability, Sheaf Confounder Recovery, Normalizing Flows DAG Posterior, P4-7 upstream CSV detection, P4-8 WebSocket progress panel, Prov-2 provenance-aware transfer)
+**Last updated:** 2026-06-02 (Candidates A–E feedback learning; 1.1-b replay resolved; BS-1 energy coreset + BS-2 sheaf loss added)
 
 Items are ranked by impact/effort. Improvement agent picks the top `[ ]` item with complexity **low** or **medium**.
 
@@ -78,6 +78,54 @@ Complexity: **low** = < 1 hour of focused edits | **medium** = half-day | **high
 - [x] **`maup_sensitivity_analysis()` diagnostic** — complexity: medium — *Done 2026-05-13: Created `sparc/causal/maup_sensitivity.py`. Implements `maup_sensitivity_analysis(data, treatment, outcome, confounders, coord_cols, cell_sizes, ...)` which aggregates point data onto regular grids at each requested cell size, runs cross-fit DML (HistGradientBoosting nuisance models, `KFold` splitting) at each scale, and returns a `MAUPSensitivityResult` with per-scale `ScaleResult` objects and a scalar `maup_robustness_score` ∈ [0, 1] = 1 − CV(ATE across scales). Score ≥ 0.9 = excellent; < 0.8 = interpret cautiously; sign instability flagged separately. Auto-derives default cell sizes from coordinate range when `cell_sizes=None`. Added to `sparc/causal/__init__.py`. 11 synthetic-data tests all pass (`test_maup_sensitivity.py`).*
 
 - [x] **`fairness_audit()` in mediation.py** — complexity: medium — *Done 2026-05-14: Added `fairness_audit(data, treatment, mediator, outcome, confounders, protected_attr, n_strata=10) -> FairnessAuditResult` method to `MediationDecomposer` in `sparc/causal/mediation.py`. Categorical protected attrs use unique levels as strata; continuous attrs are binned into n_strata equal-frequency quantiles. Strata with <30 rows are skipped with a warning. `FairnessAuditResult` dataclass tracks `stratum_results`, exposes `nde_disparity` / `nie_disparity` / `cte_disparity` (max−min across strata) and `disparity_ratio` (max|NDE|/min|NDE|). `summary_table()` returns a DataFrame with a `_disparity_` footer row. 13 tests in `tests/test_fairness_audit.py` all pass.*
+
+### JEPA Deep Integration (from 2026-05-22c grill session)
+
+- [ ] **JD-1 Stage 2 OOF predictions as DML `model_y` nuisance (free win)** — complexity: **low**
+  - **Gap:** `CounterfactualEngine._fit_edge_dml()` refits a `HistGradientBoostingRegressor` as `model_y` (outcome nuisance) per edge. Stage 2 already computed strictly better `oof_preds` (full SPARCMetaLearner ensemble under spatial CV). These are discarded before Stage 3.
+  - **Files:** `sparc/run/v2_bayesian_causal.py` — load `oof_preds` from artifact store, pass as `precomputed_outcome_preds` to counterfactual engine; `sparc/causal/counterfactual_engine.py` — add optional `precomputed_outcome_preds: np.ndarray | None = None` param to `_fit_edge_dml()`; when present, skip `model_y.fit()` and compute `Ỹ = Y - precomputed_outcome_preds` directly.
+  - **Config flag:** `causal.use_stage2_outcome_nuisance: true` (default `true`). Falls back to HGB when flag is `false` or artifact absent.
+  - **Why:** Free accuracy win — Stage 2's R² is always ≥ HGB's on the same data; better `ĝ(X)` → lower DML bias. Zero new infrastructure.
+  - **Success criterion:** With `use_stage2_outcome_nuisance: true`, training log shows `DML model_y: using Stage 2 oof_preds (R²=X.XX)`; ATE estimates shift vs. HGB baseline (expected — bias reduction); `test_counterfactual_engine.py` passes with both flag states.
+
+- [ ] **JD-2 SpatialResidualizer — JEPA trunk residualization for DML treatment features** — complexity: **medium**
+  - **Gap:** Treatment features entering Stage 3 carry spatial autocorrelation structure that biases DML's `model_t` nuisance. The JEPA trunk has learned physics-consistent spatial representations that encode this structure but they never reach Stage 3.
+  - **Files:** New `sparc/causal/spatial_residualizer.py` (~60 lines) — `SpatialResidualizer.fit_transform(df, model, device) -> pd.DataFrame`; PCA trunk embedding to 16 dims, Ridge regression per treatment column, appends `{col}_resid` columns; `sparc/run/v2_bayesian_causal.py` — pre-step call before edge estimation when `causal.use_spatial_residuals: true`; `sparc/config/project_schema.json` — add `causal.use_spatial_residuals` boolean (default `false`).
+  - **Graceful degradation:** If no JEPA trunk checkpoint in artifact store, logs `[INFO] No JEPA trunk found — skipping spatial residualization` and passes DataFrame unchanged. Stage 3 remains runnable without JEPA.
+  - **Depends on:** JD-3 (`jepa.enable: true` by default so trunk is available in normal runs).
+  - **Success criterion:** With JEPA enabled and `use_spatial_residuals: true`, Stage 3 log shows `SpatialResidualizer: residualized N features (PCA-16, Ridge)`; `{col}_resid` columns appear in the Stage 3 working DataFrame; Moran's I on residualized columns < Moran's I on raw columns.
+
+- [ ] **JD-3 `jepa.enable: true` schema default** — complexity: **low**
+  - **Gap:** Schema default is `false`; `SpatialResidualizer` degrades to no-op for all existing runs. JEPA is mature enough (fully wired Phase 1 + Phase 2) to be on by default.
+  - **File:** `sparc/config/project_schema.json` — change `"default": false` → `"default": true` under `jepa.enable`. Update description string to remove "Off by default".
+  - **Cost:** ~25–35% additional training time per fold. Accepted.
+  - **Note:** Ship together with JD-2. Enabling JEPA by default without the residualizer adds cost with no visible user benefit.
+  - **Success criterion:** Fresh `sparc run` without explicit `jepa:` config block shows `JEPA enabled` in training log; all existing tests pass (JEPA is purely additive, no correctness change).
+
+- [ ] **JD-4 Multi-step latent rollout — recurrent latent chain (mode: latent)** — complexity: **medium**
+  - **Gap:** `latent_rollout.py` supports single-step action-conditioned rollout only. Compound intervention simulation ("plant trees in year 1, add cool roofs in year 2") requires chaining.
+  - **File:** `sparc/inference/latent_rollout.py` — add `MultiStepRolloutResult` dataclass (`steps: list[LatentRolloutResult]`, `final: LatentRolloutResult`, `n_steps: int`); add `multi_step_latent_rollout(..., actions: list[tuple[str, float, float]], mode: str = "latent", max_steps: int = 5)`. In `mode="latent"`: chain `h_{t+1} = predictor(h_t, action_embed(actions[t]))`, decode only at final step (and optionally each intermediate step for trajectory output). Hard cap: raise `ValueError` if `len(actions) > max_steps`.
+  - **Success criterion:** `multi_step_latent_rollout(..., actions=[("ndvi", 0.1, 0.0), ("albedo", -0.05, 1.0)])` returns `MultiStepRolloutResult` with `n_steps=2`; `final.delta` is non-zero and differs from single-step rollout with either action alone; `test_latent_rollout.py` covers 1-step, 2-step, and max_steps guard.
+
+- [ ] **JD-5 Multi-step re-encode with physics cascade table (mode: reencode)** — complexity: **medium**
+  - **Gap:** Re-encode mode requires knowing how each intervention cascades across correlated features (e.g., tree planting → NDVI ↑, albedo ↓, ET ↑) for physically plausible trunk re-encoding.
+  - **Files:** New `sparc/inference/feature_perturbation.py` (~40 lines) — `PhysicsCascade` dataclass reading `caps.yml` key `treatment_cascades: {treatment: {feature: scale_factor}}`; `PhysicsCascade.apply(df, treatment, delta_x) -> pd.DataFrame`; `sparc/inference/latent_rollout.py` — `multi_step_latent_rollout(..., mode="reencode")` calls `cascade.apply()` per step then `model.encode()` → `predictor()` → decode; all 13 domain template `caps.yml` files get a `treatment_cascades` section.
+  - **Example cascade entry (UHI template):**
+    ```yaml
+    treatment_cascades:
+      pct_canopy:
+        ndvi:        +0.80
+        albedo:      -0.05
+        et_flux:     +0.30
+      pct_impervious:
+        albedo:      +0.04
+        et_flux:     -0.15
+    ```
+  - **Depends on:** JD-4 (shares `multi_step_latent_rollout` API and `MultiStepRolloutResult`).
+  - **Future:** Replace physics cascade table with a learned `ΔX_cascade` network trained on observational feature covariance.
+  - **Success criterion:** `multi_step_latent_rollout(..., mode="reencode", cascade=PhysicsCascade.from_caps(caps_path))` produces `MultiStepRolloutResult` where intermediate `h_t` differ from `mode="latent"` (physically perturbed features vs. pure latent chaining); cascade tables present in all domain templates; `test_feature_perturbation.py` validates cascade arithmetic.
+
+---
 
 - [ ] **Causal transportability: transport ATE from source to target city without labels** — complexity: **high**
   - Files: `sparc/causal/transportability.py` (new, ~130 lines) — `build_selection_diagram(dag, selection_vars)`, `compute_transport_formula(dag, treatment, outcome, selection_vars, source_data, target_covariates) -> TransportabilityResult`; `sparc/run/v2_bayesian_causal.py` — optional call after NUTS when `causal.transportability.target_covariates_path` is set; new `tests/test_causal_transportability.py`
@@ -1039,7 +1087,7 @@ complexity low, highest-impact improvement, ~15 lines; prerequisite: confirm Sta
 
 ### Phase 1 Continuation — Continual Learning (from 2026-05-22b review)
 
-- [!] **1.1-b Replay loss interface redesign** — complexity: **medium** (~50 lines, 3 files) — **BLOCKED: interface mismatch between `compute_replay_loss()` call site and surrogate checkpoint format**
+- [x] **1.1-b Replay loss interface redesign** — complexity: **medium** — *Done 2026-06-02: Added `CityReplayState` dataclass + `compute_replay_loss_from_state()` to `sparc/training/replay.py`. Replay states pre-computed per fold from `previous_coresets` in `_ContinualConfig`. Replay loss fires once-per-epoch (not per-batch). `_ContinualConfig` extended with `replay_lambda` + `previous_coresets`.*
   - **Current state:** `_compute_replay_loss()` in `v2_neural_training.py` exists but has an interface mismatch — the function expects pre-computed replay predictions that are not available at training time without re-loading surrogate checkpoints.
   - **Gap:** Surrogate models are saved as `surrogate_{name}.pt` (line 3586) but the replay consumer must:
     1. Rebuild surrogate model objects with the same architecture from config
@@ -1072,4 +1120,48 @@ complexity low, highest-impact improvement, ~15 lines; prerequisite: confirm Sta
   - Why: When two SPARC deployments process the same raw data through identical preprocessing steps, their trunk feature distributions are already aligned — the OT alignment step is computational overhead; genealogy matching makes this principled: identical preprocessing genealogy = identical feature distribution = no re-alignment needed
   - Depends on: P4-6 (step hashes persisted — done); Wasserstein trunk alignment (wired)
   - Success: On a 2-city continual run where both cities share the same upstream CSV through preprocessing, log shows `"Genealogy match: skipping OT alignment"`; transfer time reduced ≥ 20%; model performance on second city unchanged vs. OT-aligned baseline
+
+---
+
+### Session Digest — 2026-06-02 (Feedback Learning Candidates A–E)
+
+**Focus:** 5 architectural improvements to base-learner / surrogate / meta-learner training loop:
+Candidate A (gate feedback), B (replay interface), C (alpha-class curriculum), D (learnable lambdas), E (FoldTrainer seams).
+
+**What was implemented:**
+- [x] **Candidate A** — `_gate_ema` buffer (decay=0.99) → `surr_fidelity_weights=(1−ema_gate_k).clamp(0.1)` passed to `sparc_joint_loss()`. Pressure on ignored surrogates increases automatically. Files: `sparc/training/loss.py`, `sparc/run/v2_neural_training.py`.
+- [x] **Candidate B** — `CityReplayState` dataclass + `compute_replay_loss_from_state()` added to `sparc/training/replay.py`. Replay states pre-computed per fold using current surrogates on old-city features. Replay loss fires **once per epoch** (moved out of batch loop to avoid ~97% per-batch overhead). Files: `sparc/training/replay.py`, `sparc/run/v2_neural_training.py`. Backlog item `1.1-b` is now resolved.
+- [x] **Candidate C** — `alpha_class_loss` term (Term 7b) in `sparc/training/loss.py` anchors `α` to land-cover classification centroids. Inverse-mirror ramp added to `sparc/training/curriculum.py` (`"alpha_class"` branch decays 1.0→0.1 across Stage B as physics ramps up).
+- [x] **Candidate D** — New `sparc/training/meta_lambda.py` with `LambdaOptimizer` (softplus-constrained, Adam outer, first-order DARTS). Fires every 5 epochs in Stage C. Files: new `sparc/training/meta_lambda.py`, `sparc/run/v2_neural_training.py`.
+- [x] **Candidate E** — New `sparc/run/fold_trainer.py` with `FoldTrainer` facade class (5 seams: `build_models`, `pretrain_surrogates`, `pretrain_process_rate`, `predict_oof`, `run`). `run()` delegates to `_exec_cv_fold` — zero regression risk.
+
+**All files verified:** `get_errors()` returned "No errors found" on all 5 modified/created files.
+
+**Self-grill revision applied:** Candidate B replay was initially wired inside the batch loop (O(N_batches × N_replay_states) overhead). Self-grill caught this; replay moved to once-per-epoch with its own optimizer step. No functional change to the anti-forgetting signal; ~50× less overhead.
+
+**2 new derivatives added to `docs/research/derivatives.md`:**
+- Energy-Based Coreset Selection for Failure-Mode-Aware Replay
+- Sheaf-Coboundary Operator as MAUP-Resistant Topology Loss
+
+**Priority recommendation for next session:** Activate replay in a two-city continual run with `continual.replay_lambda: 0.05` + `previous_coresets` from city 1's registry entry; verify `replay_loss` term appears in training log and fold 2 RMSE does not regress vs. no-replay baseline.
+
+---
+
+### Blue-Sky Candidates (from 2026-06-02 session)
+
+- [ ] **BS-1 Energy-Based Coreset Selection for Failure-Mode-Aware Replay** — complexity: **medium**
+  - **Source derivative:** "Energy-Based Coreset Selection" (derivatives.md, 2026-06-02)
+  - **Gap:** `CoresetSelector._greedy_kmedoids()` in `sparc/training/replay.py` selects coreset points by feature-space coverage. This is optimal for representativeness but picks easy points the model already handles well. Failure-mode-aware selection (weighted toward high-loss regions) would yield stronger anti-forgetting signals.
+  - **Method:** Define energy `E(z) = ‖model(z) − y‖²`. Run Langevin dynamics or rejection sampling to draw K coreset candidates with acceptance probability ∝ `exp(E(z)/τ)`. Anneal `τ` from high (uniform) to low (concentrated on failures) over city registration.
+  - **Files:** `sparc/training/replay.py` — new `_energy_coreset_selection(model, X, y, k, tau)` alternative to `_greedy_kmedoids`; `sparc/run/continual_training.py` — config key `continual.coreset_selector: "energy"` (default `"kmedoids"`)
+  - **Depends on:** Candidate B (CityReplayState wired — done)
+  - **Success criterion:** With `coreset_selector: "energy"`, continual run shows lower replay loss variance across epochs; forgetting gap (RMSE city 1 after city 2 training) is ≤ 10% larger than with `"kmedoids"`.
+
+- [ ] **BS-2 Sheaf-Coboundary Loss for MAUP-Resistant Spatial Consistency** — complexity: **high**
+  - **Source derivative:** "Sheaf-Coboundary Operator as MAUP-Resistant Topology Loss" (derivatives.md, 2026-06-02)
+  - **Gap:** `sparc_joint_loss()` has a `sheaf_delta` parameter (existing seam) but it is never populated — the sheaf coboundary operator `δ: C^0 → C^1` is not implemented. The existing cardinal-neighbor graph is the natural 1-complex substrate.
+  - **Method:** In `sparc/physics/pde_operators.py`, implement `build_sheaf_coboundary(cardinal, d_field=1)` → sparse `(|E|, N)` matrix where each row `(i,j)` has `+1` at col `i` and `−1` at col `j` (the signed incidence matrix). Sheaf loss = `‖δT‖²` = sum of squared prediction differences across all cardinal edges. Scaled by `sheaf_delta` in `sparc_joint_loss()`.
+  - **Files:** New `sparc/physics/sheaf_operators.py` (~50 lines), `sparc/physics/pde_operators.py` (expose `build_sheaf_coboundary`), `sparc/training/loss.py` (activate existing `sheaf_delta` term), `sparc/run/v2_neural_training.py` (pre-compute sheaf matrix, pass in tensor dict)
+  - **Depends on:** Sparse Laplacian wiring (done — cardinal graph already available)
+  - **Success criterion:** With `physics.sheaf_delta: 0.01`, training log shows `sheaf_loss > 0`; Moran's I on OOF residuals decreases vs. baseline (spatial consistency improved); existing `test_pde_loss.py` still passes.
 

@@ -626,109 +626,36 @@ def _build_v4_ensemble_predictor(sim):
 def _run_scenarios(config, paths, project_path):
     """Execute scenario simulation.
 
-    Modes:
-      1. **DAG + MGWR coefficient blend** (primary) — causally-identified
-         coefficients with per-point spatial heterogeneity and mediated
-         indirect effects via the DAG.  Falls back to physics-only when
-         no DAG is available.
-      2. **Monte-Carlo uncertainty propagation** (optional) — toggled via
-         ``run_mc_uncertainty: true`` in the pipeline section of project.yml.
-         Number of draws set by ``n_mc_draws`` (default 50).
-
-    The DAG-based result is saved as the primary output.
+    Delegates mode resolution and engine dispatch to ``ScenarioEngineSelector``,
+    which encapsulates legacy alias translation, artifact introspection, v4
+    engine init, and legacy fallback.  Only ``MissingArtifactsError`` from the
+    v4 engine triggers a downgrade; all other exceptions propagate.
     """
     from sparc.interventions.scenario_simulator import ScenarioSimulator
+    from sparc.run.scenario_engine_selector import ScenarioEngineSelector
     import pandas as pd
 
     sim = ScenarioSimulator(config)
     sim.load_models()
 
-    # Load baseline data
     csv_path = config['paths']['raw_csv_path']
     data = pd.read_csv(csv_path)
 
     dag_file = config.get('causal', {}).get('dag_file')
-    has_dag = dag_file and Path(dag_file).exists()
+    has_dag = bool(dag_file and Path(dag_file).exists())
+
+    selector = ScenarioEngineSelector(config, sim, data)
+
     requested_mode = config.get('pipeline', {}).get('scenario_mode', 'auto')
+    force_full_audit = getattr(args, 'full_audit', False)
+    scenario_mode = selector.resolve_mode(
+        requested_mode, has_dag, force_full_audit=force_full_audit
+    )
 
-    # --- Translate legacy mode aliases (one-shot deprecation warning) ----
-    _LEGACY_MODE_ALIASES = {
-        'physics':            'mode_1_physics',
-        'dag_coefficient':    'mode_2_dag_local',
-        'model_reprediction': 'mode_3_full_ensemble',
-        'hybrid':             'mode_4_hybrid',
-    }
-    scenario_mode = requested_mode
-    if requested_mode == 'bayesian':
-        raise RuntimeError(
-            "scenario_mode='bayesian' was removed in SPARC v4. "
-            "Use 'mode_3_full_ensemble' or 'auto' — credible intervals are "
-            "now native to all modes via the per-edge NUTS posterior + "
-            "Bayesian Spatial CATE."
-        )
-    if requested_mode in _LEGACY_MODE_ALIASES:
-        new_key = _LEGACY_MODE_ALIASES[requested_mode]
-        import warnings as _warnings
-        _warnings.warn(
-            f"scenario_mode='{requested_mode}' is deprecated; "
-            f"use '{new_key}' instead. (Auto-translated for this run.)",
-            DeprecationWarning, stacklevel=2,
-        )
-        scenario_mode = new_key
-
-    # --- Resolve 'auto' to a concrete mode using artifact introspection --
-    auto_resolved = False
-    if scenario_mode == 'auto':
-        scenario_mode = _resolve_auto_scenario_mode(has_dag=has_dag)
-        auto_resolved = True
-        print(f"  [auto] scenario_mode resolved to '{scenario_mode}'")
-
-    # --full-audit forces mode_5 even when 'auto' would have picked something
-    # weaker (e.g., when ensemble artifacts are missing).
-    if getattr(args, 'full_audit', False) and scenario_mode != 'mode_5_full_audit':
-        print(f"  [--full-audit] overriding '{scenario_mode}' → 'mode_5_full_audit'")
-        scenario_mode = 'mode_5_full_audit'
-
-    # --- Dispatch by scenario_mode ---------------------------------------
-    # Prefer the v4 unified engine when its required artifacts are present;
-    # fall back to the legacy ScenarioSimulator paths when they are not.
-    # The top-level ``--legacy`` flag (stashed on config by argparse) forces
-    # the legacy path even when v4 artifacts are available.
     force_legacy = bool(config.get('_force_legacy_scenarios'))
-    if force_legacy:
-        print("  [--legacy] forcing legacy V1/MGWR scenario path")
-        used_v4 = None
-    else:
-        used_v4 = _try_run_with_v4_engine(
-            config, sim, data, scenario_mode, has_dag,
-            from_auto_fallback=auto_resolved,
-        )
-    if used_v4 is not None:
-        summary_df, results_gdf = used_v4
-        print(f"  [v4 engine] mode={scenario_mode}: {len(summary_df)} summary rows")
-    elif scenario_mode == 'mode_4_hybrid':
-        print("  [legacy] mode_4_hybrid: ensemble direct + DAG/NUTS indirect")
-        summary_df, results_gdf = sim.run_with_hybrid_reprediction(data, verbose=True)
-    elif scenario_mode == 'mode_3_full_ensemble':
-        print("  [legacy] mode_3_full_ensemble: resolver + base-model reprediction blend")
-        summary_df, results_gdf = sim.run_with_model_reprediction(data, verbose=True)
-    elif scenario_mode == 'mode_2_dag_local':
-        if has_dag:
-            print("  [legacy] mode_2_dag_local: resolver + DAG + per-edge NUTS")
-            summary_df, results_gdf = sim.run_with_causal_dag(data, verbose=True)
-        else:
-            print("  [legacy] mode_2_dag_local requested but no DAG — falling back to mode_1_physics")
-            scenario_mode = 'mode_1_physics'
-            summary_df, results_gdf = sim.run(verbose=True)
-    elif scenario_mode == 'mode_1_physics':
-        print("  [legacy] mode_1_physics: resolver with literature priors")
-        summary_df, results_gdf = sim.run(verbose=True)
-    else:
-        raise ValueError(
-            f"Unknown scenario_mode '{scenario_mode}'. "
-            f"Valid: auto, mode_1_physics, mode_2_dag_local, "
-            f"mode_3_full_ensemble, mode_4_hybrid."
-        )
+    summary_df, results_gdf = selector.run(
+        scenario_mode, has_dag=has_dag, force_legacy=force_legacy
+    )
 
     print(f"  Scenario summary: {len(summary_df)} rows  (mode={scenario_mode})")
 

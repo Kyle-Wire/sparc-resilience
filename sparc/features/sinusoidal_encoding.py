@@ -58,12 +58,16 @@ class SinusoidalSpatialEncoding(nn.Module):
         n_frequencies: int = 64,
         learnable_freqs: bool = False,
         max_freq: float = 64.0,
+        kappa: Optional[float] = None,
     ) -> None:
         super().__init__()
         self.n_frequencies = n_frequencies
         self.n_bands = n_frequencies // 2
+        self.max_freq = max_freq
+        self._kappa = kappa
+        self._learnable_freqs = learnable_freqs
 
-        # Log-spaced frequencies from 1 to max_freq
+        # Log-spaced frequencies from 1 to max_freq (may be updated in fit())
         freqs = torch.exp(
             torch.linspace(
                 math.log(1.0),
@@ -89,14 +93,29 @@ class SinusoidalSpatialEncoding(nn.Module):
         return 4 * self.n_bands
 
     # ------------------------------------------------------------------
-    def fit(self, coords: torch.Tensor) -> "SinusoidalSpatialEncoding":
+    def fit(
+        self,
+        coords: torch.Tensor,
+        kappa: Optional[float] = None,
+    ) -> "SinusoidalSpatialEncoding":
         """
         Compute and store coordinate normalization bounds.
+
+        If ``kappa`` is provided (or was set at construction time) the
+        frequency bands are re-anchored so that the lowest band captures
+        the Matérn correlation scale of the domain.  This ensures that
+        sinusoidal features are aligned with the domain's actual spatial
+        structure rather than a fixed frequency grid.
 
         Parameters
         ----------
         coords : Tensor, shape ``(N, 2)``
-            Projected (x, y) coordinates from the training set.
+            Projected (x, y) coordinates from the training set.  Units
+            must match those of ``kappa`` (typically metres for projected
+            CRS).
+        kappa : float, optional
+            Matérn κ parameter from Stage 0 in units of 1 / coord_unit.
+            Overrides the value supplied at construction if provided.
 
         Returns
         -------
@@ -109,6 +128,37 @@ class SinusoidalSpatialEncoding(nn.Module):
         extent = extent.clamp(min=1e-6)
         self.coord_max = self.coord_min + extent
         self._fitted = True
+
+        # κ-informed frequency rescaling.
+        # After normalization to [0, 1], the number of cycles per unit
+        # corresponding to the Matérn correlation length (1/κ) is:
+        #
+        #   f_corr = κ × mean_extent_in_coord_units
+        #
+        # We set min_freq = f_corr / 4 (one octave below the correlation
+        # scale) so the first band captures spatial patterns at and above
+        # the correlation length.  max_freq is extended if f_corr × 4
+        # exceeds the current max_freq.
+        k = kappa if kappa is not None else self._kappa
+        if k is not None and k > 0:
+            mean_extent = float(extent.mean().item())
+            f_corr = float(k) * mean_extent  # cycles per normalized unit
+            if f_corr > 0:
+                min_freq = max(0.5, f_corr / 4.0)
+                new_max_freq = max(self.max_freq, f_corr * 4.0)
+                new_freqs = torch.exp(
+                    torch.linspace(
+                        math.log(min_freq),
+                        math.log(new_max_freq),
+                        self.n_bands,
+                        dtype=torch.float32,
+                    )
+                )
+                if isinstance(self.freqs, nn.Parameter):
+                    self.freqs.data.copy_(new_freqs)
+                else:
+                    self.freqs.copy_(new_freqs)
+
         return self
 
     # ------------------------------------------------------------------
@@ -153,10 +203,11 @@ class SinusoidalSpatialEncoding(nn.Module):
 
     # ------------------------------------------------------------------
     def __repr__(self) -> str:
+        kappa_str = f", kappa={self._kappa}" if self._kappa is not None else ""
         return (
             f"{self.__class__.__name__}("
             f"n_bands={self.n_bands}, "
             f"output_dim={self.output_dim}, "
             f"learnable={isinstance(self.freqs, nn.Parameter)}, "
-            f"fitted={self._fitted})"
+            f"fitted={self._fitted}{kappa_str})"
         )

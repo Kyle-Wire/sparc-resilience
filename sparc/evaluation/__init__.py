@@ -7,7 +7,15 @@ try:
 except ImportError:
     SensitivityAnalyzer = None
 
+try:
+    from .conformal import SpatialConformalPredictor, PredictionIntervals
+except ImportError:
+    SpatialConformalPredictor = None
+    PredictionIntervals = None
+
 __all__ = [
     'SpatialEvaluator',
     'SensitivityAnalyzer',
+    'SpatialConformalPredictor',
+    'PredictionIntervals',
 ]
