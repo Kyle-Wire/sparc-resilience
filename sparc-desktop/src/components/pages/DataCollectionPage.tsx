@@ -87,7 +87,7 @@ export default function DataCollectionPage() {
 
   // Load project config to pre-populate output_dir and project.yml path
   useEffect(() => {
-    getConfig().then((cfg: { paths?: { output_dir?: string }; project_yml?: string }) => {
+    getConfig().then((cfg: any) => {
       if (cfg?.paths?.output_dir) setOutputDir(cfg.paths.output_dir as string);
     }).catch(() => { /* not fatal */ });
   }, []);

@@ -153,9 +153,10 @@ interface BtnProps {
   small?: boolean;
   onClick?: () => void;
   disabled?: boolean;
+  title?: string;
 }
 
-export function Btn({ children, primary, small, onClick, disabled }: BtnProps) {
+export function Btn({ children, primary, small, onClick, disabled, title }: BtnProps) {
   const [ripples, setRipples] = useState<{ id: number; x: number; y: number }[]>([]);
 
   const spawnRipple = useCallback((e: ReactMouseEvent<HTMLButtonElement>) => {
@@ -175,6 +176,7 @@ export function Btn({ children, primary, small, onClick, disabled }: BtnProps) {
       onClick={onClick}
       onMouseDown={spawnRipple}
       disabled={disabled}
+      title={title}
       className={`sparc-btn${primary ? " sparc-btn--primary" : " sparc-btn--light"}`}
       style={{
         border: "1px solid " + (primary ? "var(--ink)" : "var(--line)"),

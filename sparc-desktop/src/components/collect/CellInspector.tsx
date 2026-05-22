@@ -20,6 +20,7 @@ export default function CellInspector({ cellId, data, loading, onClose }: Props)
     ? Object.entries(data)
         .filter(([k]) => !HIDDEN_KEYS.has(k))
         .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, value]) => ({ key, value }))
     : [];
 
   return (

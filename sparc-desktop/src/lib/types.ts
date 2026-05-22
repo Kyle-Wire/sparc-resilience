@@ -246,7 +246,7 @@ export interface ValidationReport {
   n_warning: number;
   n_info: number;
   items: ValidationItem[];
-  summary: string;
+  summary?: string;
 }
 
 // ------------------------------------------------------------------
@@ -261,10 +261,10 @@ export interface DataVersion {
   timestamp: string;
   n_rows: number;
   n_cols: number;
-  columns: string[];
-  description: string;
-  settings: Record<string, unknown>;
-  file_exists: boolean;
+  columns?: string[];
+  description?: string | null;
+  settings?: Record<string, unknown> | null;
+  file_exists?: boolean;
 }
 
 /**
@@ -397,29 +397,6 @@ export interface ValidationIssue {
   message: string;
   detail?: string;
   value?: unknown;
-}
-
-export interface ValidationReport {
-  passed: boolean;
-  n_critical: number;
-  n_warning: number;
-  n_info: number;
-  items: ValidationIssue[];
-  summary?: string;
-}
-
-// ------------------------------------------------------------------
-// Data Versioning
-// ------------------------------------------------------------------
-export interface DataVersion {
-  version: number;
-  filename: string;
-  path: string;
-  timestamp: string;
-  n_rows: number;
-  n_cols: number;
-  description?: string | null;
-  settings?: Record<string, unknown> | null;
 }
 
 /** Structured JSON actions returned by Claude in chat responses. */
