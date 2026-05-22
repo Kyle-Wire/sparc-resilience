@@ -2,7 +2,7 @@
  * BoundarySelector — lets the researcher define the study boundary via:
  *   1. Place-name text search (Nominatim)
  *   2. Local file upload (shapefile/GeoJSON/GeoPackage)
- *   3. Bounding-box draw (future: free-hand polygon draw)
+ *   3. Bounding-box draw (manual lat/lon coordinate entry)
  */
 import { useState, useRef } from "react";
 import { Btn } from "@/components/ui/DesignSystem";
@@ -21,6 +21,12 @@ export default function BoundarySelector({ onBoundaryChange }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Draw-mode bbox state
+  const [minLon, setMinLon] = useState("");
+  const [minLat, setMinLat] = useState("");
+  const [maxLon, setMaxLon] = useState("");
+  const [maxLat, setMaxLat] = useState("");
 
   async function handleSearch() {
     if (!placeName.trim()) return;
@@ -49,6 +55,29 @@ export default function BoundarySelector({ onBoundaryChange }: Props) {
       onBoundaryChange(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to read boundary file");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleBboxApply() {
+    const vals = [minLon, minLat, maxLon, maxLat].map(Number);
+    if (vals.some(isNaN)) {
+      setError("All four coordinate fields are required and must be numeric.");
+      return;
+    }
+    const [mLon, mLat, xLon, xLat] = vals;
+    if (mLon >= xLon || mLat >= xLat) {
+      setError("Min values must be less than max values.");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await collectBoundary({ bbox: [mLon, mLat, xLon, xLat] });
+      onBoundaryChange(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to set boundary");
     } finally {
       setLoading(false);
     }
@@ -118,10 +147,45 @@ export default function BoundarySelector({ onBoundaryChange }: Props) {
         )}
 
         {tab === "draw" && (
-          <p style={{ fontSize: 13, color: "var(--ink-muted)" }}>
-            Draw mode coming soon — use the map controls to draw a bounding box,
-            then click <strong>Use Selection</strong>.
-          </p>
+          <div>
+            <p style={{ marginBottom: 10, fontSize: 12, color: "var(--ink-muted)" }}>
+              Enter bounding-box coordinates in decimal degrees (WGS-84).
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+              {(
+                [
+                  ["Min Longitude (W)", minLon, setMinLon, "-180", "180"],
+                  ["Min Latitude (S)", minLat, setMinLat, "-90", "90"],
+                  ["Max Longitude (E)", maxLon, setMaxLon, "-180", "180"],
+                  ["Max Latitude (N)", maxLat, setMaxLat, "-90", "90"],
+                ] as [string, string, (v: string) => void, string, string][]
+              ).map(([label, value, setter, min, max]) => (
+                <label key={label} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: "var(--ink)" }}>{label}</span>
+                  <input
+                    type="number"
+                    value={value}
+                    min={min}
+                    max={max}
+                    step="any"
+                    onChange={(e) => setter(e.target.value)}
+                    placeholder="e.g. -112.07"
+                    style={{
+                      padding: "6px 10px",
+                      border: "1px solid var(--border)",
+                      borderRadius: 6,
+                      fontSize: 13,
+                      background: "var(--surface)",
+                      color: "var(--ink)",
+                    }}
+                  />
+                </label>
+              ))}
+            </div>
+            <Btn primary onClick={handleBboxApply} disabled={loading || !minLon || !minLat || !maxLon || !maxLat}>
+              {loading ? "Applying…" : "Apply bounding box"}
+            </Btn>
+          </div>
         )}
 
         {error && (

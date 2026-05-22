@@ -35,6 +35,9 @@ def build_knn_index(
     coords: np.ndarray,
     max_neighbors: int,
     return_dists: bool = False,
+    *,
+    z: np.ndarray | None = None,
+    z_scale: float | None = None,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Build KNN index (N, max_neighbors) from projected coords.
 
@@ -43,6 +46,13 @@ def build_knn_index(
     coords : (N, 2) projected coordinate array
     max_neighbors : number of nearest neighbours (excluding self)
     return_dists : when True, also return (N, max_neighbors) distances
+    z : (N,) elevation array in metres.  When provided the KNN index is
+        built on the terrain-surface distance ``√(Δx² + Δy² + Δz_scaled²)``
+        so that cells on opposite sides of a ridge rank further apart than
+        flat 2D Euclidean distance would suggest.
+    z_scale : metres-to-projection-unit scale factor.  When *None* and *z*
+        is provided, auto-detected as ``max(x_range, y_range) / z_range``
+        so elevation spans the same normalised range as the horizontal axes.
 
     Returns
     -------
@@ -50,6 +60,19 @@ def build_knn_index(
     dists   : (N, max_neighbors) float64 distances — only when return_dists=True
     """
     from scipy.spatial import cKDTree
+
+    coords = np.asarray(coords, dtype=float)
+
+    if z is not None:
+        z = np.asarray(z, dtype=float).ravel()
+        if z_scale is None:
+            xy_range = max(
+                float(coords[:, 0].max() - coords[:, 0].min()),
+                float(coords[:, 1].max() - coords[:, 1].min()),
+            )
+            z_range = float(z.max() - z.min())
+            z_scale = float(xy_range / z_range) if z_range > 1e-9 else 1.0
+        coords = np.column_stack([coords, z * z_scale])
 
     tree = cKDTree(coords)
     dists, indices = tree.query(coords, k=max_neighbors + 1)
@@ -66,7 +89,9 @@ def build_cardinal_neighbors(
     coords: np.ndarray,
     resolution: float | None = None,
     tol_factor: float = 1.5,
-) -> tuple[np.ndarray, float]:
+    *,
+    z: np.ndarray | None = None,
+) -> tuple[np.ndarray, float] | tuple[np.ndarray, float, np.ndarray]:
     """
     Build N/S/E/W cardinal neighbor indices for the physics Laplacian.
 
@@ -76,11 +101,17 @@ def build_cardinal_neighbors(
     resolution : grid spacing; auto-detected from nearest-neighbour
                  distances if None
     tol_factor : max distance tolerance as multiple of resolution
+    z : (N,) elevation array.  When provided a third element is returned:
+        ``edge_weights`` — an (N, 4) float64 array of slope-cosine weights
+        ``cos(arctan(|Δz| / resolution))`` for each cardinal edge.  Valid
+        edges range from 1.0 (flat) to near 0 (vertical).  Missing edges
+        (-1 in neighbor_idx) carry weight 0.0.
 
     Returns
     -------
     neighbor_idx : (N, 4) int64 — [North, South, East, West], -1 = missing
     resolution   : detected/used resolution
+    edge_weights : (N, 4) float64 — only returned when *z* is provided
     """
     from scipy.spatial import cKDTree
 
@@ -140,7 +171,23 @@ def build_cardinal_neighbors(
         "Cardinal neighbors: %d/%d complete, %d boundary (res=%.2f)",
         n_complete, N, n_boundary, resolution,
     )
-    return neighbor_idx, resolution
+
+    if z is None:
+        return neighbor_idx, resolution
+
+    # C5: slope-cosine edge weights for the Laplace-Beltrami approximation.
+    # weight = cos(slope) = resolution / √(resolution² + Δz²)
+    # Missing edges (-1) keep weight 0.0.
+    z = np.asarray(z, dtype=float).ravel()
+    edge_weights = np.zeros((N, 4), dtype=np.float64)
+    for k in range(4):
+        valid = neighbor_idx[:, k] >= 0
+        if valid.any():
+            j = neighbor_idx[valid, k]
+            dz = np.abs(z[valid] - z[j])
+            edge_weights[valid, k] = resolution / np.sqrt(resolution ** 2 + dz ** 2)
+
+    return neighbor_idx, resolution, edge_weights
 
 
 # ---------------------------------------------------------------------------

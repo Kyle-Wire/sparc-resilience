@@ -1,11 +1,3 @@
-/**
- * DataCollectionPage — 5-step stepper that lets researchers:
- *   1. Define a study boundary
- *   2. Configure temporal window + temporal mode
- *   3. Fetch each variable group from free public APIs
- *   4. Inspect and confirm data quality on a 30m choropleth map
- *   5. Export GeoParquet and update project.yml
- */
 import { useState, useCallback, useEffect } from "react";
 import { SectionHeader, Card, Btn, StatGrid, Stat } from "@/components/ui/DesignSystem";
 import { useNotification } from "@/hooks/useNotifications";
@@ -21,6 +13,7 @@ import type {
   BoundaryResponse,
   CollectManifest,
   FetchGroupResponse,
+  ContextLayer,
 } from "@/lib/api";
 import type { GeoJsonData } from "@/lib/types";
 import SpatialMap from "@/components/map/SpatialMap";
@@ -28,17 +21,48 @@ import BoundarySelector from "@/components/collect/BoundarySelector";
 import VariableManifestTable from "@/components/collect/VariableManifestTable";
 import CellInspector from "@/components/collect/CellInspector";
 
+// Default basemap tile layer — CartoDB Positron (free, no API key required)
+const DEFAULT_BASEMAP: { layer: ContextLayer; opacity: number } = {
+  layer: {
+    id: "carto-positron",
+    name: "CartoDB Positron",
+    kind: "basemap",
+    url_template: "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+    attribution: "© OpenStreetMap contributors, © CARTO",
+    description: "Light basemap",
+    domains: [],
+    default_for: [],
+    opacity_default: 1.0,
+    tile_size: 256,
+    max_zoom: 19,
+    available: true,
+  },
+  opacity: 1.0,
+};
+
 type Step = 1 | 2 | 3 | 4 | 5;
 type TemporalMode = "single" | "composite" | "panel";
-type FetchGroup = "landsat" | "nlcd" | "era5" | "capa" | "buildings" | "equity";
+type FetchGroup = "landsat" | "nlcd" | "era5" | "capa" | "buildings" | "equity" | "sentinel2";
 
-const FETCH_GROUPS: { id: FetchGroup; label: string; description: string }[] = [
+// Per-group variable names used to detect all-skipped outcomes
+const GROUP_VARIABLES: Record<FetchGroup, string[]> = {
+  landsat:   ["lst", "ndvi", "ndbi"],
+  nlcd:      ["pct_impervious", "pct_canopy", "land_cover"],
+  era5:      ["era5_t2m"],
+  capa:      ["aat_morning", "aat_midday", "aat_night", "diurnal_aat"],
+  buildings: ["bldg_height_mean", "bldg_coverage", "svf"],
+  equity:    ["holc_grade", "cdc_svi", "ejscreen_score"],
+  sentinel2: ["ndvi_s2", "ndbi_s2", "mndwi_s2"],
+};
+
+const FETCH_GROUPS: { id: FetchGroup; label: string; description: string; globalOnly?: boolean }[] = [
   { id: "landsat",   label: "Landsat (LST + spectral indices)", description: "USGS STAC Landsat C2L2 — 13 indices + thermal" },
-  { id: "nlcd",      label: "NLCD land cover", description: "MRLC WCS 2021 — impervious, canopy, land cover class" },
-  { id: "era5",      label: "ERA5 background temperature", description: "Open-Meteo ERA5 reanalysis — 2m air temp baseline" },
-  { id: "capa",      label: "CAPA air temperature", description: "NOAA CAPA via Open-Meteo — morning / midday / night AAT" },
-  { id: "buildings", label: "Buildings + SVF", description: "Microsoft MLBuildings → OSHB → constant fallback" },
-  { id: "equity",    label: "Equity layers", description: "HOLC redlining, CDC SVI, EPA EJScreen" },
+  { id: "sentinel2", label: "Sentinel-2 L2A (global)", description: "Microsoft Planetary Computer STAC — NDVI, NDBI, MNDWI · works outside the USA", globalOnly: true },
+  { id: "nlcd",      label: "NLCD land cover", description: "MRLC WCS 2021 — impervious, canopy, land cover class (US only)" },
+  { id: "era5",      label: "ERA5 background temperature", description: "Open-Meteo ERA5 reanalysis — 2m air temp baseline (global)" },
+  { id: "capa",      label: "CAPA air temperature", description: "NOAA CAPA via Open-Meteo — morning / midday / night AAT (US only)" },
+  { id: "buildings", label: "Buildings + SVF", description: "Microsoft MLBuildings → OSHB → constant fallback (global)" },
+  { id: "equity",    label: "Equity layers", description: "HOLC redlining, CDC SVI, EPA EJScreen (US only)" },
 ];
 
 const EMPTY_MANIFEST: CollectManifest = {
@@ -66,9 +90,9 @@ export default function DataCollectionPage() {
 
   // Step 3 — Fetch progress
   const [manifest, setManifest] = useState<CollectManifest>(EMPTY_MANIFEST);
-  const [groupStatus, setGroupStatus] = useState<Record<FetchGroup, "idle" | "running" | "done" | "error">>({
+  const [groupStatus, setGroupStatus] = useState<Record<FetchGroup, "idle" | "running" | "done" | "warn" | "error">>({
     landsat: "idle", nlcd: "idle", era5: "idle",
-    capa: "idle", buildings: "idle", equity: "idle",
+    capa: "idle", buildings: "idle", equity: "idle", sentinel2: "idle",
   });
 
   // Step 4 — Map QA
@@ -117,7 +141,15 @@ export default function DataCollectionPage() {
         },
       });
       setManifest(resp.manifest);
-      setGroupStatus((s) => ({ ...s, [groupId]: "done" }));
+
+      // If all variables for this group are SKIPPED, surface a warning instead
+      // of a green "Done" so the user understands coverage is absent.
+      const groupVars = GROUP_VARIABLES[groupId];
+      const allSkipped = groupVars.length > 0 && groupVars.every((varName) => {
+        const entry = resp.manifest.variables.find((v) => v.name === varName);
+        return entry == null || entry.status === "SKIPPED";
+      });
+      setGroupStatus((s) => ({ ...s, [groupId]: allSkipped ? "warn" : "done" }));
     } catch (err) {
       setGroupStatus((s) => ({ ...s, [groupId]: "error" }));
       notify("error", `${groupId} fetch failed: ${err instanceof Error ? err.message : err}`);
@@ -267,6 +299,7 @@ export default function DataCollectionPage() {
                   geojson={boundary.geojson}
                   mode="choropleth"
                   height="260px"
+                  contextLayers={[DEFAULT_BASEMAP]}
                 />
               </div>
             </div>
@@ -327,17 +360,26 @@ export default function DataCollectionPage() {
                   padding: "10px 14px",
                   border: "1px solid var(--border)", borderRadius: 6,
                   background: status === "done"  ? "#d4edda"
+                             : status === "warn"  ? "#fff3cd"
                              : status === "error" ? "#f8d7da"
-                             : status === "running" ? "#fff3cd"
+                             : status === "running" ? "#e8f4fe"
                              : "var(--surface)",
                 }}>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13 }}>{g.label}</div>
+                    <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+                      {g.label}
+                      {g.globalOnly && (
+                        <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", padding: "1px 6px", borderRadius: 10, background: "var(--blue, #1976d2)", color: "#fff" }}>
+                          Global
+                        </span>
+                      )}
+                    </div>
                     <div style={{ fontSize: 11, color: "var(--ink-muted)" }}>{g.description}</div>
                   </div>
-                  <span style={{ fontSize: 12, width: 80, textAlign: "center" }}>
+                  <span style={{ fontSize: 12, width: 100, textAlign: "center" }}>
                     {status === "running" ? "⏳ Running…"
                      : status === "done"   ? "✅ Done"
+                     : status === "warn"   ? "⚠️ Skipped"
                      : status === "error"  ? "❌ Error"
                      : "—"}
                   </span>
@@ -399,6 +441,7 @@ export default function DataCollectionPage() {
               mode="choropleth"
               height="420px"
               onFeatureClick={handleCellClick}
+              contextLayers={[DEFAULT_BASEMAP]}
             />
             <CellInspector
               cellId={inspectorCellId}

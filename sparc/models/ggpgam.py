@@ -26,7 +26,8 @@ class GGPGAM_SVC:
         self.X_train_ = None  # Store for derivative computation
         self.coords_train_ = None
 
-    def fit(self, X, y, coords, extract_derivatives=False, output_dir=None):
+    def fit(self, X, y, coords, extract_derivatives=False, output_dir=None,
+            elevation=None, elevation_scale=None):
         """
         Fit GGPGAM model
         
@@ -37,17 +38,41 @@ class GGPGAM_SVC:
         y : array-like
             Target variable
         coords : array-like
-            Spatial coordinates
+            Spatial coordinates (N, 2)
         extract_derivatives : bool, default=False
             Whether to extract partial derivative surfaces after fitting
         output_dir : str, optional
             Directory to save derivative outputs
+        elevation : array-like, optional
+            (N,) elevation values in metres.  When provided the spatial
+            basis is extended to a 3D tensor-product spline over (x, y, z)
+            so that terrain shape warps the smooth spatial surface.
+        elevation_scale : float, optional
+            Metres-to-projection-unit scale.  Auto-detected from data when
+            None: ``max(x_range, y_range) / elevation_range``.
         """
         print("Fitting GGPGAM-SVC...")
 
         X = np.asarray(X)
         y = np.asarray(y).ravel()
         coords = np.asarray(coords)
+
+        # C2: lift (x, y) to (x, y, z) when elevation is provided
+        if elevation is not None:
+            elevation = np.asarray(elevation, dtype=float).ravel()
+            if elevation_scale is None:
+                xy_range = max(
+                    float(coords[:, 0].max() - coords[:, 0].min()),
+                    float(coords[:, 1].max() - coords[:, 1].min()),
+                )
+                z_range = float(elevation.max() - elevation.min())
+                elevation_scale = float(xy_range / z_range) if z_range > 1e-9 else 1.0
+            self._elevation_scale_ = elevation_scale
+            coords = np.column_stack([coords, elevation * elevation_scale])
+        else:
+            self._elevation_scale_ = None
+
+        self._n_coord_dims_ = coords.shape[1]  # 2 or 3
         
         # Store training data for derivative computation
         self.X_train_ = X
@@ -63,18 +88,27 @@ class GGPGAM_SVC:
         X_scaled = self.feature_scaler.fit_transform(X)
         coords_scaled = self.coords_scaler.fit_transform(coords)
 
-        # Build the GAM model formula more efficiently
-        # Start with spatial effect
-        terms = s(0, n_splines=self.n_spatial_bases) + s(1, n_splines=self.n_spatial_bases)
-        
-        # Add individual feature effects
-        for i in range(X.shape[1]):
-            terms = terms + s(i + 2, n_splines=self.n_splines)
-
-        # Add simplified spatial interactions (only with coordinates separately)
-        for i in range(X.shape[1]):
-            terms = terms + te(0, i + 2, n_splines=[self.n_spatial_bases, self.n_splines])
-            terms = terms + te(1, i + 2, n_splines=[self.n_spatial_bases, self.n_splines])
+        n_coord_dims = self._n_coord_dims_
+        if n_coord_dims == 3:
+            # C2: 3D terrain-aware spatial basis
+            terms = te(0, 1, 2, n_splines=[self.n_spatial_bases,
+                                            self.n_spatial_bases,
+                                            self.n_spatial_bases])
+            for i in range(X.shape[1]):
+                terms = terms + s(i + 3, n_splines=self.n_splines)
+            for i in range(X.shape[1]):
+                terms = terms + te(0, 1, i + 3,
+                                   n_splines=[self.n_spatial_bases,
+                                              self.n_spatial_bases,
+                                              self.n_splines])
+        else:
+            # Original 2D spatial basis
+            terms = s(0, n_splines=self.n_spatial_bases) + s(1, n_splines=self.n_spatial_bases)
+            for i in range(X.shape[1]):
+                terms = terms + s(i + 2, n_splines=self.n_splines)
+            for i in range(X.shape[1]):
+                terms = terms + te(0, i + 2, n_splines=[self.n_spatial_bases, self.n_splines])
+                terms = terms + te(1, i + 2, n_splines=[self.n_spatial_bases, self.n_splines])
 
         # Initialize GAM with provided lambda
         self.model = LinearGAM(terms, lam=self.lam)
@@ -184,8 +218,15 @@ class GGPGAM_SVC:
             )
             print(f"      ✓ Saved derivatives for {feat_name}")
 
-    def predict(self, X, coords):
+    def predict(self, X, coords, elevation=None):
+        X = np.asarray(X)
+        coords = np.asarray(coords)
         X_scaled = self.feature_scaler.transform(X)
+        if (elevation is not None
+                and getattr(self, '_n_coord_dims_', 2) == 3
+                and self._elevation_scale_ is not None):
+            elevation = np.asarray(elevation, dtype=float).ravel()
+            coords = np.column_stack([coords, elevation * self._elevation_scale_])
         coords_scaled = self.coords_scaler.transform(coords)
         X_combined = np.column_stack([coords_scaled, X_scaled])
         return self.model.predict(X_combined)

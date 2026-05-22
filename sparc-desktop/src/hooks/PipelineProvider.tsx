@@ -59,6 +59,8 @@ export interface PipelineState {
   stageProgress: Record<number, number>;
   /** True when MC³ is done and the pipeline is paused awaiting DAG approval. */
   dagApprovalPending: boolean;
+  /** True when Stage 1 is done and the pipeline is awaiting GWEN variable approval. */
+  gwenApprovalPending: boolean;
   /** Wall-clock ms when the current pipeline run started (persists through page navigation). */
   runStartedAt: number | null;
   /** Wall-clock ms when the current pipeline run ended (success or error). Null while running. */
@@ -96,6 +98,7 @@ export function PipelineProvider({ children, serverReady, serverLost }: { childr
   });
   const wsRef = useRef<WebSocket | null>(null);
   const [dagApprovalPending, setDagApprovalPending] = useState(false);
+  const [gwenApprovalPending, setGwenApprovalPending] = useState(false);
   const [stageStatuses, setStageStatuses] = useState<Record<number, StageStatus>>({});
   const [stageProgress, setStageProgress] = useState<Record<number, number>>({});
   const currentStageRef = useRef<number | null>(null);
@@ -195,6 +198,9 @@ export function PipelineProvider({ children, serverReady, serverLost }: { childr
         break;
       case "dag_approval_requested":
         setDagApprovalPending(true);
+        break;
+      case "gwen_approval_requested":
+        setGwenApprovalPending(true);
         break;
       case "stage_status":
         if (event.stage != null && event.status) {
@@ -445,6 +451,7 @@ export function PipelineProvider({ children, serverReady, serverLost }: { childr
     wsRef.current = null;
     setIsRunning(false);
     setDagApprovalPending(false);
+    setGwenApprovalPending(false);
     // Freeze elapsed time at cancellation point (keep runStartedAt for display)
     setRunEndedAt((prev) => prev ?? Date.now());
   }, []);
@@ -463,7 +470,7 @@ export function PipelineProvider({ children, serverReady, serverLost }: { childr
   return (
     <PipelineContext.Provider value={{
       events, isRunning, error, currentStage, training, stageStatuses, stageProgress,
-      dagApprovalPending, runStartedAt, runEndedAt, startStage, startPipeline, cancel, handleApproveDag, handleRejectDag,
+      dagApprovalPending, gwenApprovalPending, runStartedAt, runEndedAt, startStage, startPipeline, cancel, handleApproveDag, handleRejectDag,
     }}>
       {children}
     </PipelineContext.Provider>

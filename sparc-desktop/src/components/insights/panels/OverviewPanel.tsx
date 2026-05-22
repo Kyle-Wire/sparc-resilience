@@ -102,6 +102,8 @@ export default function OverviewPanel() {
   }
 
   // ---- Researcher view ----
+  const maupScore = (headline as any)?.maup_robustness_score as number | undefined | null;
+
   return (
     <Panel title="Run health" subtitle="model summary">
       <StatGrid>
@@ -112,6 +114,12 @@ export default function OverviewPanel() {
         />
         <Stat label="Models" value={modelCount} />
         <Stat label="Stages run" value={stageCount} />
+        <Stat
+          label="MAUP robustness"
+          value={maupScore != null ? maupScore.toFixed(2) : "—"}
+          tint={maupScore == null ? undefined : maupScore >= 0.8 ? "var(--green, #2f7d32)" : "var(--amber, #e79024)"}
+          sub={maupScore == null ? "not yet computed" : maupScore >= 0.8 ? "scale-stable" : "caution: scale-sensitive"}
+        />
         <Stat
           label="Last update"
           value={manifest.lastUpdated ? manifest.lastUpdated.toLocaleTimeString() : "—"}

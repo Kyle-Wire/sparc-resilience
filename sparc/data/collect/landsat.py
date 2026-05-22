@@ -30,8 +30,14 @@ from typing import Literal, Optional
 import numpy as np
 
 HTTP_TIMEOUT = 120.0
-LANDSAT_STAC = "https://landsatonaws.com/stac/search"
-USGS_STAC    = "https://landsatlook.usgs.gov/stac-server/search"
+# Primary: AWS Element84 Earth-Search (reliable, no auth required)
+ELEMENT84_STAC = "https://earth-search.aws.element84.com/v1/search"
+# Fallback: USGS Landsat Look STAC server
+USGS_STAC      = "https://landsatlook.usgs.gov/stac-server/search"
+
+# Collection names per endpoint
+_ELEMENT84_COLLECTION = "landsat-c2-l2"
+_USGS_COLLECTION      = "landsat-c2l2-sr"
 
 TemporalMode = Literal["single", "composite", "panel"]
 
@@ -137,21 +143,51 @@ def _query_stac(
     date_end: date,
     cloud_max: float,
 ) -> list[dict]:
-    """Search USGS STAC for Landsat 8/9 Collection 2 Level-2 scenes."""
+    """Search for Landsat 8/9 Collection 2 Level-2 scenes.
+
+    Tries the AWS Element84 Earth-Search endpoint first (more reliable), then
+    falls back to the USGS Landsat Look STAC server.  Cloud-cover filtering is
+    done client-side after the response to avoid relying on optional STAC API
+    query extensions that may not be enabled on all servers.
+    """
+    endpoints = [
+        (ELEMENT84_STAC, _ELEMENT84_COLLECTION),
+        (USGS_STAC,      _USGS_COLLECTION),
+    ]
+
+    last_error: Exception | None = None
+    for url, collection in endpoints:
+        try:
+            scenes = _query_stac_endpoint(url, collection, bbox, date_start, date_end)
+            # Post-filter by cloud cover (avoids relying on unsupported query extensions)
+            return [s for s in scenes if s["cloud_cover"] <= cloud_max]
+        except Exception as exc:
+            last_error = exc
+            continue
+
+    raise RuntimeError(
+        f"STAC query failed on all endpoints: {last_error}"
+    ) from last_error
+
+
+def _query_stac_endpoint(
+    url: str,
+    collection: str,
+    bbox: tuple[float, float, float, float],
+    date_start: date,
+    date_end: date,
+) -> list[dict]:
+    """Send a minimal STAC search (no query/fields extensions) to one endpoint."""
     minx, miny, maxx, maxy = bbox
     payload = {
-        "collections": ["landsat-c2l2-sr"],
+        "collections": [collection],
         "bbox": [minx, miny, maxx, maxy],
         "datetime": f"{date_start.isoformat()}/{date_end.isoformat()}",
-        "query": {"eo:cloud_cover": {"lte": cloud_max}},
-        "limit": 100,
-        "fields": {
-            "include": ["id", "datetime", "properties.eo:cloud_cover", "assets"],
-        },
+        "limit": 200,
     }
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
-        USGS_STAC,
+        url,
         data=body,
         headers={
             "Content-Type": "application/json",
@@ -162,15 +198,16 @@ def _query_stac(
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except Exception as exc:
-        raise RuntimeError(f"STAC query failed: {exc}") from exc
+        raise RuntimeError(f"STAC query failed ({url}): {exc}") from exc
 
     items = data.get("features", [])
     scenes = []
     for item in items:
+        props = item.get("properties", {})
         scenes.append({
             "id": item["id"],
-            "datetime": item.get("properties", {}).get("datetime", ""),
-            "cloud_cover": item.get("properties", {}).get("eo:cloud_cover", 100),
+            "datetime": props.get("datetime", ""),
+            "cloud_cover": props.get("eo:cloud_cover", 100),
             "assets": item.get("assets", {}),
         })
     return scenes

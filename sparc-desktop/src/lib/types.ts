@@ -315,6 +315,16 @@ export interface DagValidation {
   error: string | null;
 }
 
+/** AI-suggested DAG edge from /dag/suggest-edges */
+export interface DagEdgeSuggestion {
+  parent: string;
+  child: string;
+  score: number;
+  partial_r: number;
+  toward_outcome: boolean;
+  reason: string;
+}
+
 /** MC³ edge inclusion probabilities returned by /dag/mc3_result */
 export interface MC3Result {
   node_names: string[];

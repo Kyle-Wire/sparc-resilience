@@ -23,6 +23,7 @@ from typing import Sequence
 import numpy as np
 import torch
 
+from sparc.data.units import z_to_original
 from sparc.models.action_embedding import ActionEmbedding
 from sparc.models.latent_predictor import LatentPredictor
 from sparc.models.neural_meta import SPARCMetaLearner
@@ -108,9 +109,9 @@ def latent_rollout(
         h_next, base_preds, X_spatial, coords, knn_index,
     )
 
-    # Denormalise.
-    T_pred_np = (T_pred.cpu().numpy() * y_std) + y_mean
-    T_base_np = (T_baseline.cpu().numpy() * y_std) + y_mean
+    # Denormalise — use the shared helper so the formula lives in one place.
+    T_pred_np = z_to_original(T_pred.cpu().numpy(), y_mean, y_std)
+    T_base_np = z_to_original(T_baseline.cpu().numpy(), y_mean, y_std)
 
     return LatentRolloutResult(
         treatment=treatment,
@@ -249,7 +250,7 @@ def multi_step_latent_rollout(
 
     # Baseline decode (before any action)
     T_baseline_t, _ = model.decode(h_state, base_preds, X_spatial, coords, knn_index)
-    T_baseline_np = (T_baseline_t.cpu().numpy() * y_std) + y_mean
+    T_baseline_np = z_to_original(T_baseline_t.cpu().numpy(), y_mean, y_std)
 
     for treatment, delta_x, delta_t in actions:
         if mode == "reencode" and cascade is not None:
@@ -275,7 +276,7 @@ def multi_step_latent_rollout(
             h_state = predictor(h_state, a)
 
         T_pred_t, _ = model.decode(h_state, base_preds, X_spatial, coords, knn_index)
-        T_pred_np = (T_pred_t.cpu().numpy() * y_std) + y_mean
+        T_pred_np = z_to_original(T_pred_t.cpu().numpy(), y_mean, y_std)
 
         step_result = LatentRolloutResult(
             treatment=treatment,

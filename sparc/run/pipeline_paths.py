@@ -10,6 +10,7 @@ Two construction modes:
 """
 
 import os
+import warnings
 from pathlib import Path
 
 class PipelinePaths:
@@ -64,7 +65,20 @@ class PipelinePaths:
         return obj
 
     def __init__(self):
-        """Legacy auto-discovery constructor (backward-compatible)."""
+        """Legacy auto-discovery constructor (backward-compatible).
+
+        .. deprecated::
+            Use ``PipelinePaths.from_config(config)`` instead.  The auto-
+            discovery path heuristic can silently resolve to the wrong
+            directory when the project tree differs from the expected layout.
+        """
+        warnings.warn(
+            "PipelinePaths() auto-discovery is deprecated. "
+            "Use PipelinePaths.from_config(config) or set the SPARC_PROJECT "
+            "env var to your project.yml path.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         # Find the run directory (where scripts are located)
         self.run_dir = self._find_run_directory()
         
@@ -126,8 +140,17 @@ class PipelinePaths:
         if expected_run_dir.exists():
             return expected_run_dir.resolve()
             
-        # If all else fails, use current directory
-        return Path.cwd()
+        # If all else fails, use current directory but warn loudly.
+        fallback = Path.cwd()
+        warnings.warn(
+            f"PipelinePaths could not locate the sparc/run/ directory via "
+            f"auto-discovery; falling back to cwd '{fallback}'. "
+            "Artifact paths may be wrong. Use PipelinePaths.from_config(config) "
+            "to specify paths explicitly.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+        return fallback
     
     def _ensure_directories(self):
         """Ensure necessary directories exist.

@@ -59,6 +59,7 @@ class SinusoidalSpatialEncoding(nn.Module):
         learnable_freqs: bool = False,
         max_freq: float = 64.0,
         kappa: Optional[float] = None,
+        n_dims: int = 2,
     ) -> None:
         super().__init__()
         self.n_frequencies = n_frequencies
@@ -66,6 +67,7 @@ class SinusoidalSpatialEncoding(nn.Module):
         self.max_freq = max_freq
         self._kappa = kappa
         self._learnable_freqs = learnable_freqs
+        self.n_dims = n_dims
 
         # Log-spaced frequencies from 1 to max_freq (may be updated in fit())
         freqs = torch.exp(
@@ -82,15 +84,15 @@ class SinusoidalSpatialEncoding(nn.Module):
             self.register_buffer("freqs", freqs)
 
         # Coordinate normalization bounds — set via fit() or first forward()
-        self.register_buffer("coord_min", torch.zeros(2))
-        self.register_buffer("coord_max", torch.ones(2))
+        self.register_buffer("coord_min", torch.zeros(n_dims))
+        self.register_buffer("coord_max", torch.ones(n_dims))
         self._fitted = False
 
     # ------------------------------------------------------------------
     @property
     def output_dim(self) -> int:
         """Dimensionality of the encoding vector per point."""
-        return 4 * self.n_bands
+        return 2 * self.n_dims * self.n_bands
 
     # ------------------------------------------------------------------
     def fit(
@@ -184,22 +186,21 @@ class SinusoidalSpatialEncoding(nn.Module):
               cos(omega_k·x), sin(omega_1·y), …, cos(omega_k·y)]``
         """
         normed = self._normalize(coords)
-        x = normed[:, 0:1]  # (N, 1)
-        y = normed[:, 1:2]  # (N, 1)
 
         freqs = self.freqs.unsqueeze(0)  # (1, n_bands)
 
         # Scale by 2*pi so that freq=1 → one full cycle across [0,1]
         omega = 2.0 * math.pi * freqs
 
-        # (N, n_bands) each
-        sin_x = torch.sin(x * omega)
-        cos_x = torch.cos(x * omega)
-        sin_y = torch.sin(y * omega)
-        cos_y = torch.cos(y * omega)
+        # Encode each spatial dimension as sin/cos pairs
+        parts = []
+        for d in range(self.n_dims):
+            x_d = normed[:, d:d + 1]  # (N, 1)
+            parts.append(torch.sin(x_d * omega))
+            parts.append(torch.cos(x_d * omega))
 
-        # (N, 4 * n_bands)
-        return torch.cat([sin_x, cos_x, sin_y, cos_y], dim=-1)
+        # (N, 2 * n_dims * n_bands)
+        return torch.cat(parts, dim=-1)
 
     # ------------------------------------------------------------------
     def __repr__(self) -> str:

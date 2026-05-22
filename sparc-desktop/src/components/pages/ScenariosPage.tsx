@@ -6,13 +6,16 @@ import {
   getScenarioLibrary,
   appendScenarioToLibrary,
   dataSummary,
+  runScenarioChain,
   type ScenarioTimeline,
+  type ChainAction,
+  type ChainStepResult,
 } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
 import { presetsForDomain, applyPresetToPredictors } from "@/lib/scenarioPresets";
 
-type ScenariosTab = "configure" | "library";
+type ScenariosTab = "configure" | "library" | "timeline";
 
 /** Infer the natural absolute range for a variable from its name. */
 function naturalRange(col: string): { lo: number; hi: number; step: number; unit: string } | null {
@@ -72,6 +75,14 @@ export default function ScenariosPage() {
   const [libComment, setLibComment] = useState("");
   const [libAuthor, setLibAuthor] = useState("me");
   const histRef = useRef<HTMLCanvasElement>(null);
+
+  // Timeline tab state
+  const [chainActions, setChainActions] = useState<ChainAction[]>([]);
+  const [chainRunning, setChainRunning] = useState(false);
+  const [chainResult, setChainResult] = useState<ChainStepResult[] | null>(null);
+  const [chainCumulative, setChainCumulative] = useState<number | null>(null);
+  const [chainTreatment, setChainTreatment] = useState("");
+  const [chainDeltaX, setChainDeltaX] = useState("0");
 
   useEffect(() => {
     // Load scenarios from API results
@@ -390,6 +401,7 @@ export default function ScenariosPage() {
           [
             ["configure", "Configure"],
             ["library", "Library"],
+            ["timeline", "Timeline"],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -623,6 +635,159 @@ export default function ScenariosPage() {
           </div>
         )}
       </Card>
+      )}
+
+      {/* ------------------------------------------------------------ */}
+      {/* Timeline tab — multi-step latent rollout (JD-4)               */}
+      {/* ------------------------------------------------------------ */}
+      {tab === "timeline" && (
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <Card title="Multi-step rollout" subtitle="chain interventions sequentially through the latent space">
+          {/* Step builder */}
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 12 }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: 3, flex: 2 }}>
+              <span style={{ fontSize: 11, fontWeight: 600 }}>Treatment variable</span>
+              <input
+                type="text"
+                value={chainTreatment}
+                onChange={(e) => setChainTreatment(e.target.value)}
+                placeholder="e.g. Pct_Canopy"
+                style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "5px 8px", fontSize: 12, fontFamily: "inherit" }}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
+              <span style={{ fontSize: 11, fontWeight: 600 }}>Δ value</span>
+              <input
+                type="number"
+                value={chainDeltaX}
+                onChange={(e) => setChainDeltaX(e.target.value)}
+                step="any"
+                style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "5px 8px", fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }}
+              />
+            </label>
+            <Btn
+              small
+              onClick={() => {
+                if (!chainTreatment.trim()) return;
+                const dx = parseFloat(chainDeltaX);
+                if (isNaN(dx)) return;
+                setChainActions((prev) => [...prev, { treatment: chainTreatment.trim(), delta_x: dx, delta_t: 1.0 }]);
+                setChainTreatment("");
+                setChainDeltaX("0");
+              }}
+            >
+              + Add step
+            </Btn>
+          </div>
+
+          {/* Step list */}
+          {chainActions.length === 0 ? (
+            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 12 }}>
+              No steps yet. Add at least one intervention above.
+            </div>
+          ) : (
+            <div style={{ marginBottom: 12 }}>
+              {chainActions.map((a, i) => (
+                <div
+                  key={i}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "7px 0",
+                    borderTop: i > 0 ? "1px dashed var(--line)" : undefined,
+                  }}
+                >
+                  <span
+                    className="mono"
+                    style={{ width: 22, height: 22, background: "var(--crimson)", color: "#fff", borderRadius: "50%", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0 }}
+                  >
+                    {i + 1}
+                  </span>
+                  <span style={{ flex: 1, fontSize: 12, fontWeight: 600 }}>{a.treatment}</span>
+                  <span className="mono" style={{ fontSize: 12, color: a.delta_x >= 0 ? "var(--crimson)" : "var(--purple)" }}>
+                    {a.delta_x >= 0 ? "+" : ""}{a.delta_x}
+                  </span>
+                  <button
+                    onClick={() => setChainActions((prev) => prev.filter((_, j) => j !== i))}
+                    style={{ background: "none", border: 0, color: "var(--muted)", cursor: "pointer", fontSize: 14, padding: 0, lineHeight: 1 }}
+                    title="Remove step"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn
+              primary
+              small
+              disabled={chainActions.length === 0 || chainRunning}
+              onClick={async () => {
+                setChainRunning(true);
+                setChainResult(null);
+                setChainCumulative(null);
+                try {
+                  const res = await runScenarioChain(chainActions);
+                  setChainResult(res.steps);
+                  setChainCumulative(res.cumulative_mean_delta);
+                } catch (err) {
+                  notify("error", err instanceof Error ? err.message : "Chain rollout failed");
+                } finally {
+                  setChainRunning(false);
+                }
+              }}
+            >
+              {chainRunning ? "Running…" : "Run chain"}
+            </Btn>
+            {chainActions.length > 0 && (
+              <Btn
+                small
+                onClick={() => { setChainActions([]); setChainResult(null); setChainCumulative(null); }}
+              >
+                Clear all
+              </Btn>
+            )}
+          </div>
+        </Card>
+
+        {chainResult && chainResult.length > 0 && (
+          <Card
+            title="Rollout results"
+            subtitle={`${chainResult.length} steps · cumulative Δ = ${chainCumulative != null ? (chainCumulative >= 0 ? "+" : "") + chainCumulative.toFixed(3) : "—"}`}
+          >
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  {["Step", "Treatment", "Δ applied", "Mean Δ response", "90% range"].map((h) => (
+                    <th key={h} style={thStyle}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {chainResult.map((s) => (
+                  <tr key={s.step} style={{ borderBottom: "1px dotted var(--line)" }}>
+                    <td style={tdStyle} className="mono">{s.step}</td>
+                    <td style={tdStyle}>{s.treatment}</td>
+                    <td style={tdStyle} className="mono">{s.delta_x >= 0 ? "+" : ""}{s.delta_x}</td>
+                    <td
+                      style={{ ...tdStyle, fontWeight: 700, color: s.mean_delta < 0 ? "var(--purple)" : s.mean_delta > 0 ? "var(--crimson)" : "var(--muted)" }}
+                      className="mono"
+                    >
+                      {s.mean_delta >= 0 ? "+" : ""}{s.mean_delta.toFixed(3)}
+                    </td>
+                    <td style={{ color: "var(--muted)", ...tdStyle }} className="mono">
+                      [{s.p5_delta.toFixed(3)}, {s.p95_delta.toFixed(3)}]
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        )}
+      </div>
       )}
     </div>
   );

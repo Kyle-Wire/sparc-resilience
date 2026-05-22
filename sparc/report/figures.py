@@ -34,6 +34,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
 
+from sparc.data.units import load_variable_meta as _load_var_meta  # noqa: E402
 from sparc.registry.run_registry import RunRegistry, get_active_registry  # noqa: E402
 from sparc.registry.store import ArtifactStore  # noqa: E402
 from sparc.report._style import RAMP_HEX  # noqa: E402
@@ -215,16 +216,38 @@ def render_predictions_map(store, stage, artifact_id, opts):
     gdf = _require_table(store, stage, artifact_id)
     col = opts.get("column", "prediction")
     if col not in gdf.columns:
-        # Try common fallbacks.
+        # Try common fallbacks, then pred_{model} columns from spatial CV.
         for candidate in ("pred", "y_hat", "prediction_mean", "mean"):
             if candidate in gdf.columns:
                 col = candidate
                 break
         else:
-            raise FigureRenderError(f"no prediction column on {artifact_id}")
+            pred_cols = [c for c in gdf.columns if c.startswith("pred_") and c != "_unit"]
+            if pred_cols:
+                col = pred_cols[0]
+            else:
+                raise FigureRenderError(f"no prediction column on {artifact_id}")
+
+    # Unit annotation: explicit opt > self-describing _unit column in artifact.
+    unit = opts.get("unit", "")
+    if not unit and "_unit" in gdf.columns and len(gdf) > 0:
+        unit = str(gdf["_unit"].iloc[0])
+    display_name = opts.get("display_name") or col.replace("pred_", "").replace("_", " ").title()
+    if opts.get("title"):
+        title = opts["title"]
+    elif unit:
+        title = f"{display_name} ({unit})"
+    else:
+        title = display_name
+
     fig, ax = plt.subplots(figsize=(7, 7))
     _plot_geo(ax, gdf, col, cmap=opts.get("cmap", "sparc"))
-    ax.set_title(opts.get("title", "Predictions"))
+    ax.set_title(title)
+    # Label the colorbar with the unit if we know it.
+    if unit:
+        cb_axes = [a for a in fig.axes if a is not ax]
+        if cb_axes:
+            cb_axes[-1].set_ylabel(unit, fontsize=8)
     return _fig_to_png(fig, dpi=opts.get("dpi", 144))
 
 

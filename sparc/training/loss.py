@@ -26,9 +26,16 @@ end-to-end via the main loss terms, not by matching V1 outputs.)
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass, field
+from typing import Any
 
 import torch
 import torch.nn.functional as F
+
+from sparc.physics.pde_operators import (
+    laplacian as _pde_laplacian,
+    normalize_residual as _normalize_residual,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -49,10 +56,15 @@ def compute_physics_residual(
 
         α∇²T − S ≈ 0
 
-    where α is the process rate (spatial responsiveness — sensitivity
-    of the temperature field to spatial thermal gradients) and S is the
+    where α is the process rate (spatial responsiveness) and S is the
     source/sink term.  Alpha is normalized by its detached mean so the
     residual stays O(1) in z-score space.
+
+    Uses the canonical :func:`sparc.physics.pde_operators.laplacian`
+    operator (same as V3 PDE path) to avoid duplicate implementations.
+    Residual normalisation delegates to
+    :func:`sparc.physics.pde_operators.normalize_residual` with
+    ``detach_scale=True``.
 
     Parameters
     ----------
@@ -65,28 +77,21 @@ def compute_physics_residual(
     Returns
     -------
     normalized_residual : (M,) — physics residual / running std
-    laplacian : (M,) — raw finite-difference Laplacian
+    lap : (M,) — raw finite-difference Laplacian
     valid : (N,) bool mask — points with all 4 neighbors present
     """
-    valid = (neighbor_idx != -1).all(dim=1)
-    T = T_pred
-
-    # Single batched gather for all 4 neighbours — (M, 4) — replaces 4 separate index ops
-    T_nb = T[neighbor_idx[valid]]  # (M, 4)
-    laplacian = (T_nb.sum(dim=-1) - 4 * T[valid]) / (resolution ** 2)
+    # Use the canonical pde_operators.laplacian — same operator as V3 path.
+    lap, valid = _pde_laplacian(T_pred, neighbor_idx, h=resolution)
 
     # Normalize alpha by its detached mean so the PDE residual is O(1).
-    # This avoids mixing physical units (m²/s) with z-score units and
-    # prevents gradient explosions when alpha → bounds_lo.
     alpha_mean = alpha.detach().mean().clamp(min=1e-8)
     alpha_norm = alpha[valid] / alpha_mean
-    physics_residual = alpha_norm * laplacian - source_term[valid]
+    physics_residual = alpha_norm * lap - source_term[valid]
 
-    # Normalize by residual magnitude — keeps physics loss on same scale as MSE
-    residual_scale = physics_residual.detach().std().clamp(min=1e-6)
-    normalized_residual = physics_residual / residual_scale
+    # Normalize by residual magnitude with detached scale (V2 convention).
+    normalized_residual = _normalize_residual(physics_residual, detach_scale=True)
 
-    return normalized_residual, laplacian, valid
+    return normalized_residual, lap, valid
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +114,85 @@ def get_prior_weight(epoch: int, lambda_prior_base: float) -> float:
         return lambda_prior_base
     decay = 0.1 + 0.9 * math.exp(-0.05 * (epoch - 30))
     return lambda_prior_base * decay
+
+
+# ---------------------------------------------------------------------------
+# Parameter bundles — structured alternative to the flat 60+ kwarg interface
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PhysicsContext:
+    """Spatial structure and physics tensors for one training step.
+
+    Groups all neighbour/grid/PDE tensors so ``JointLoss.forward_bundled``
+    callers pass a single object instead of 15+ individual kwargs.
+    """
+
+    neighbor_idx: "torch.Tensor"
+    source_term: "torch.Tensor"
+    resolution: float
+    h_field: "torch.Tensor | float | None" = None
+    alpha_prior_field: "torch.Tensor | None" = None
+    bc_specs: "dict | None" = None
+    water_mask: "torch.Tensor | None" = None
+    T_water: "float | None" = None
+    sparse_laplacian: "torch.Tensor | None" = None
+    valid_laplacian_mask: "torch.Tensor | None" = None
+    sheaf_delta: "torch.Tensor | None" = None
+    T_prev: "torch.Tensor | None" = None
+    dt_hours: "float | None" = None
+    dT_dt_observed: "torch.Tensor | None" = None
+    nocturnal_dT_dt: "torch.Tensor | None" = None
+    T_night: "torch.Tensor | None" = None
+    T0: "torch.Tensor | None" = None
+    valid_mask: "torch.Tensor | None" = None
+
+
+@dataclass
+class CurriculumState:
+    """Lambda weights and training-phase scalar for one step.
+
+    Decouples the loss weight schedule from the per-batch tensor arguments,
+    making it easy to test and tune weights independently.
+    """
+
+    epoch: int
+    lambda_physics: float = 0.01
+    lambda_smooth: float = 0.01
+    lambda_alpha_smooth: float = 0.001
+    lambda_prior: float = 0.01
+    lambda_base: float = 0.2
+    lambda_neighbor: float = 0.1
+    lambda_pde: float = 0.0
+    lambda_bc: float = 0.0
+    lambda_ic: float = 0.0
+    lambda_alpha_class: float = 0.0
+    pde_loss_weights: Any = None
+
+
+@dataclass
+class AuxTargets:
+    """Surrogate and self-supervised (JEPA) targets for one step.
+
+    Separates noisy auxiliary targets from the primary physics/data
+    arguments so the primary call signature stays readable.
+    """
+
+    surrogate_preds: list = field(default_factory=list)
+    surrogate_targets: list = field(default_factory=list)
+    surr_fidelity_weights: "list[float] | None" = None
+    alpha_class_targets: "torch.Tensor | None" = None
+    jepa_h_pred: "torch.Tensor | None" = None
+    jepa_h_target: "torch.Tensor | None" = None
+    jepa_weights: Any = None
+    lambda_jepa: float = 0.0
+    jepa_scenario_h_pred: "torch.Tensor | None" = None
+    jepa_scenario_h_target: "torch.Tensor | None" = None
+    lambda_jepa_scenario: float = 0.0
+    jepa_latent_h: "torch.Tensor | None" = None
+    jepa_latent_neighbor_idx: "torch.Tensor | None" = None
+    jepa_latent_alpha: "torch.Tensor | None" = None
+    lambda_jepa_latent_pde: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +228,6 @@ def sparc_joint_loss(
     h_field: torch.Tensor | float | None = None,
     pde_loss_weights=None,
     alpha_prior_field: torch.Tensor | None = None,
-    energy_residual: torch.Tensor | None = None,
     bc_specs: dict | None = None,
     water_mask: torch.Tensor | None = None,
     T_water: float | None = None,
@@ -341,7 +424,6 @@ def sparc_joint_loss(
             weights=pde_loss_weights,
             epoch=epoch,
             alpha_prior_field=alpha_prior_field,
-            energy_residual=energy_residual,
             T_prev=T_prev,
             dt_hours=dt_hours,
             dT_dt_observed=dT_dt_observed,
@@ -349,6 +431,7 @@ def sparc_joint_loss(
             T_night=T_night,
             sparse_laplacian=sparse_laplacian,
             valid_laplacian_mask=valid_laplacian_mask,
+            sheaf_delta=sheaf_delta,
         )
         pde_total = lambda_pde * pde_total
         for k, v in pde_dict.items():

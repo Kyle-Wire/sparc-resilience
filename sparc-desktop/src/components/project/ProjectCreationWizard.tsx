@@ -77,16 +77,34 @@ export default function ProjectCreationWizard({
   const [step, setStep] = useState<Step>(0);
   const [creating, setCreating] = useState(false);
   const [discoveredTemplates, setDiscoveredTemplates] = useState(templates);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [templateError, setTemplateError] = useState(false);
+
+  function loadTemplates() {
+    setLoadingTemplates(true);
+    setTemplateError(false);
+    listTemplates()
+      .then((r) => {
+        setDiscoveredTemplates(r.templates);
+      })
+      .catch(() => {
+        // Fallback: synthesise template list from hardcoded blurbs so the
+        // picker remains usable even when the server hasn't started yet.
+        setDiscoveredTemplates(
+          Object.keys(TEMPLATE_BLURBS).map((name) => ({ name, has_project_yml: true }))
+        );
+        setTemplateError(true);
+      })
+      .finally(() => setLoadingTemplates(false));
+  }
 
   useEffect(() => {
     if (templates.length === 0) {
-      listTemplates()
-        .then((r) => setDiscoveredTemplates(r.templates))
-        .catch(() => {});
+      loadTemplates();
     } else {
       setDiscoveredTemplates(templates);
     }
-  }, [templates]);
+  }, [templates]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [s, setS] = useState<WizardState>({
     name: "",
@@ -262,6 +280,20 @@ export default function ProjectCreationWizard({
               Templates seed sensible physics priors, monotonic constraints, and a starting DAG.
               Everything seeded is visible and editable — no hidden parameters.
             </div>
+            {templateError && (
+              <div style={{ fontSize: 11, color: "var(--amber)", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
+                ⚠ Server unreachable — showing built-in templates.{" "}
+                <button
+                  onClick={loadTemplates}
+                  style={{ border: "none", background: "none", color: "var(--amber)", cursor: "pointer", textDecoration: "underline", fontFamily: "inherit", fontSize: 11, padding: 0 }}
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+            {loadingTemplates && (
+              <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>Loading templates…</div>
+            )}
             <div
               style={{
                 display: "grid",

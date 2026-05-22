@@ -158,19 +158,18 @@ class TestPDELoss:
         _, d0 = compute_pde_loss(T, alpha, source, neighbor_idx, h,
                                  weights=weights, epoch=0)
         assert d0["pde_heat_diffusion"] >= 0
-        assert d0["pde_energy_balance"] == 0
+        # pde_energy_balance removed (C3 — phantom term deleted)
+        assert "pde_energy_balance" not in d0
         assert d0["pde_directional"] == 0
 
-        # Epoch 36: heat_diffusion fully active, energy_balance ramping
+        # Epoch 36: heat_diffusion fully active
         _, d36 = compute_pde_loss(T, alpha, source, neighbor_idx, h,
-                                  weights=weights, epoch=36,
-                                  energy_residual=torch.randn(N))
-        assert d36["pde_energy_balance"] > 0
+                                  weights=weights, epoch=36)
+        assert d36["pde_heat_diffusion"] > 0
 
         # Epoch 55: all terms fully active (pde_epoch=25, all offsets < 20)
         _, d55 = compute_pde_loss(T, alpha, source, neighbor_idx, h,
                                   weights=weights, epoch=55,
-                                  energy_residual=torch.randn(N),
                                   alpha_prior_field=torch.rand(N, 1))
         assert d55["pde_alpha_prior"] > 0
 

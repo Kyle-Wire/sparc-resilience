@@ -37,6 +37,43 @@ from sparc.run.cross_correlogram import (
     aggregate_outcome_cross_ranges,
 )
 
+
+def _analyze_variable_worker(
+    variable: str,
+    coords: "np.ndarray",
+    values: "np.ndarray",
+    stage0_dir: str,
+    max_distance: float,
+    n_lags: int,
+    max_sample_size: int,
+    cache_dir_str: str,
+    fast_mode: bool,
+    n_threads: int,
+) -> tuple:
+    """Module-level worker so joblib/loky can pickle it.
+
+    Constructs a fresh CorrelogramSpatialAnalyzer inside the spawned process
+    to avoid serialising the joblib.Memory object across the process boundary.
+    Sets torch thread count to prevent CPU oversubscription when multiple
+    variable workers run in parallel.
+    """
+    try:
+        import torch
+        torch.set_num_threads(max(1, n_threads))
+    except Exception:  # noqa: BLE001 — torch may not be imported yet
+        pass
+    _worker_analyzer = CorrelogramSpatialAnalyzer(
+        max_distance=max_distance,
+        n_lags=n_lags,
+        max_sample_size=max_sample_size,
+        cache_dir=Path(cache_dir_str) if cache_dir_str else None,
+        fast_mode=fast_mode,
+    )
+    result = _worker_analyzer.analyze_variable_correlogram(
+        coords, values, variable, stage0_dir
+    )
+    return variable, result
+
 class CorrelogramSpatialAnalyzer:
     """
     Analyzes spatial correlograms for all variables to determine optimal model parameters and CV block sizes
@@ -91,44 +128,61 @@ class CorrelogramSpatialAnalyzer:
             self.max_distance = float(np.linalg.norm(bounds[1] - bounds[0]) * 0.3)
             print(f"  Auto-detected max_distance: {self.max_distance:.0f}")
         
-        # Apply intelligent sampling for large datasets
-        n_samples = len(coords)
-        if n_samples > self.max_sample_size:
-            print(f"  Large dataset detected ({n_samples:,} points). Sampling {self.max_sample_size:,} points for efficiency...")
-            
-            # Use stratified sampling to maintain spatial distribution
-            import numpy as np
-            np.random.seed(42)  # For reproducibility
-            sample_indices = np.random.choice(n_samples, size=self.max_sample_size, replace=False)
-            coords_sample = coords[sample_indices]
-            values_sample = values[sample_indices]
-            
-            print(f"  Using {len(coords_sample):,} sampled points for correlogram analysis")
+        # Sample for the directional correlogram (anisotropy NUTS always needs
+        # a fixed-size set to bound the O(n_sample²) distance-matrix construction).
+        n_points = len(coords)
+        if n_points > self.max_sample_size:
+            _rng_s = np.random.default_rng(42)
+            _idx = _rng_s.choice(n_points, size=self.max_sample_size, replace=False)
+            coords_sample = coords[_idx]
+            values_sample = values[_idx]
         else:
             coords_sample = coords
             values_sample = values
-            print(f"  Using all {n_samples:,} points for correlogram analysis")
-        
-        # Create spatial autocorrelation analyzer
+
+        # Create analyzer with sampled coords — only used for the directional
+        # correlogram (compute_directional_correlogram needs the distance matrix).
         analyzer = SpatialAutocorrelationAnalyzer(coords_sample, max_distance=self.max_distance)
-        
-        # Compute correlogram (possibly cached via joblib)
-        if self._memory is not None:
-            @self._memory.cache
-            def _cached_correlogram(coords_key, values_key, max_dist, n_lags):
-                """Pure-function wrapper so joblib can hash the inputs."""
-                _analyzer = SpatialAutocorrelationAnalyzer(coords_key, max_distance=max_dist)
-                return _analyzer.compute_correlogram(values_key, plot=False,
-                                                     title=f"Spatial Correlogram")
-            correlogram_results = _cached_correlogram(
-                coords_sample, values_sample, self.max_distance, self.n_lags
+
+        # Main isotropic correlogram:
+        #  - Large datasets  → FFT path on ALL points, O(n log n), no subsampling.
+        #  - Small datasets  → classic Moran's I on all points.
+        if n_points > self.max_sample_size:
+            from sparc.run.spatial_autocorr_comprehensive import fft_correlogram as _fft_corr
+            print(
+                f"  FFT correlogram on all {n_points:,} points "
+                f"(directional uses {self.max_sample_size:,} sampled)..."
             )
+            if self._memory is not None:
+                @self._memory.cache
+                def _cached_fft(c, v, md, nl):
+                    from sparc.run.spatial_autocorr_comprehensive import fft_correlogram as _f
+                    return _f(c, v, md, nl)
+                correlogram_results = _cached_fft(
+                    coords, values, self.max_distance, self.n_lags
+                )
+            else:
+                correlogram_results = _fft_corr(
+                    coords, values, self.max_distance, self.n_lags
+                )
         else:
-            correlogram_results = analyzer.compute_correlogram(
-                values_sample,
-                plot=False,
-                title=f"Spatial Correlogram - {variable_name}"
-            )
+            print(f"  Using all {n_points:,} points for correlogram analysis")
+            if self._memory is not None:
+                @self._memory.cache
+                def _cached_correlogram(coords_key, values_key, max_dist, n_lags):
+                    """Pure-function wrapper so joblib can hash the inputs."""
+                    _analyzer = SpatialAutocorrelationAnalyzer(coords_key, max_distance=max_dist)
+                    return _analyzer.compute_correlogram(values_key, plot=False,
+                                                         title=f"Spatial Correlogram")
+                correlogram_results = _cached_correlogram(
+                    coords_sample, values_sample, self.max_distance, self.n_lags
+                )
+            else:
+                correlogram_results = analyzer.compute_correlogram(
+                    values_sample,
+                    plot=False,
+                    title=f"Spatial Correlogram - {variable_name}"
+                )
         
         # Extract key spatial parameters BEFORE plotting
         optimal_block_size = correlogram_results['optimal_block_size']
@@ -196,8 +250,8 @@ class CorrelogramSpatialAnalyzer:
                 [r.get('morans_i', 0.0) for r in correlogram_data], dtype=np.float64
             )
             if len(lag_dist_arr) >= 4 and len(lag_dist_arr) == len(morans_arr):
-                _matern_samples = 400 if self.fast_mode else 2000
-                _matern_warmup = 200 if self.fast_mode else 1000
+                _matern_samples = 400 if self.fast_mode else 800
+                _matern_warmup = 200 if self.fast_mode else 500
                 fit_res = fit_matern(
                     lag_dist_arr, morans_arr,
                     method="bayes", n_samples=_matern_samples, n_warmup=_matern_warmup, n_chains=2, seed=42,
@@ -239,8 +293,8 @@ class CorrelogramSpatialAnalyzer:
             dir_corr = analyzer.compute_directional_correlogram(
                 values_sample, n_angle_bins=4,
             )
-            _aniso_samples = 400 if self.fast_mode else 2000
-            _aniso_warmup = 200 if self.fast_mode else 1000
+            _aniso_samples = 400 if self.fast_mode else 800
+            _aniso_warmup = 200 if self.fast_mode else 500
             aniso_res = fit_anisotropy(
                 dir_corr['lag_distances'],
                 dir_corr['angle_centers_rad'],
@@ -521,25 +575,44 @@ def main(fast_mode=False):
     print(f"Using sample size: {max_sample_size:,} points for correlogram analysis")
     estimated_time = len(all_variables) * (1 if fast_mode else 2)
     print(f"Estimated analysis time: ~{estimated_time:.0f} minutes")
-    
-    # Analyze each variable
-    all_results = {}
-    
-    # Use tqdm for progress tracking
-    feature_progress = tqdm(all_variables, desc="Correlogram Analysis", unit="variable")
-    
-    for variable in feature_progress:
-        feature_progress.set_description(f"Analyzing {variable}")
-        
-        if variable in data.columns:
-            values = data[variable].values
-            result = analyzer.analyze_variable_correlogram(coords, values, variable, stage0_dir)
-            all_results[variable] = result
-            feature_progress.set_postfix(status="Complete")
-        else:
-            feature_progress.set_postfix(status="Skipped")
-    
-    feature_progress.close()
+
+    # Analyze variables — parallel across all available variables.
+    # Each call is independent (same coords, different values + NUTS chains).
+    # n_jobs capped at the number of valid variables; torch threads per worker
+    # are divided so cores are not oversubscribed across simultaneous workers.
+    available_vars = [v for v in all_variables if v in data.columns]
+    n_parallel = min(len(available_vars), int(os.cpu_count() or 4))
+    # Leave at least 1 thread per worker for PyTorch CPU ops; divide evenly.
+    n_torch_threads = max(1, (os.cpu_count() or 4) // max(n_parallel, 1))
+    cache_dir_str = str(cache_dir) if cache_dir else ""
+
+    print(
+        f"Parallelizing {len(available_vars)} variables across "
+        f"{n_parallel} workers ({n_torch_threads} torch thread(s) each)..."
+    )
+
+    worker_results = joblib.Parallel(n_jobs=n_parallel, backend="loky", verbose=2)(
+        joblib.delayed(_analyze_variable_worker)(
+            variable,
+            coords,
+            data[variable].values,
+            stage0_dir,
+            max_distance,
+            n_lags,
+            max_sample_size,
+            cache_dir_str,
+            fast_mode,
+            n_torch_threads,
+        )
+        for variable in available_vars
+    )
+
+    all_results = {name: result for name, result in worker_results}
+
+    # Report any variables that were skipped (not in data columns)
+    for variable in all_variables:
+        if variable not in data.columns:
+            print(f"  Skipped {variable} (not in data)")
     
     # Determine model bandwidths from correlogram results (predictors only)
     model_bandwidths = analyzer.determine_model_bandwidths(all_results, target_variable=target_variable)

@@ -32,10 +32,10 @@ import torch.nn as nn
 
 from sparc.models.neural_meta import SPARCMetaLearner
 
-
-# Subset of online-model module names that constitute the SharedTrunk.
-# Must remain in sync with SPARCMetaLearner._TRUNK_KEYS.
-_TRUNK_MODULE_NAMES = ("physics_enc", "alpha_emb", "trunk_fusion", "time_embed")
+# Canonical trunk module names — single source of truth lives on
+# SPARCMetaLearner._TRUNK_KEYS (neural_meta.py).  Imported here so
+# _iter_trunk_param_pairs can reference it without a hard-coded local copy.
+_TRUNK_MODULE_NAMES = SPARCMetaLearner._TRUNK_KEYS
 
 
 def _iter_trunk_param_pairs(

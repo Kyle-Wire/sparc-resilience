@@ -35,6 +35,7 @@ from sparc.physics.pde_operators import (
     directional_curvatures,
     gradient_magnitude,
     hessian_invariants,
+    normalize_residual as _normalize_residual_pub,
 )
 
 
@@ -47,7 +48,6 @@ class PDELossWeights:
     each term is O(1), so these weights control relative importance only.
     """
     heat_diffusion: float = 1.0
-    energy_balance: float = 0.50
     directional: float = 0.20
     anisotropy: float = 0.10
     gradient_flux: float = 0.10
@@ -59,6 +59,8 @@ class PDELossWeights:
     nocturnal: float = 0.08
     # Sheaf Laplacian term 11 — multi-scale MAUP-resistance (activated when sheaf_laplacian provided)
     sheaf: float = 0.03
+    # Fractional Laplacian term 12 — anomalous / non-local diffusion (activated when grid_shape provided)
+    fractional_diffusion: float = 0.20
 
 
 # Staged activation schedule: (term_name, activation_offset)
@@ -67,13 +69,14 @@ class PDELossWeights:
 # active ~20 epochs after PDE turns on.
 _ACTIVATION_SCHEDULE = [
     ("heat_diffusion", 0),
-    ("energy_balance", 5),
     ("directional", 10),
     ("anisotropy", 10),
     ("gradient_flux", 15),
     ("gaussian_curv", 15),
     ("alpha_smooth", 15),
     ("alpha_prior", 15),
+    # Term 12 activates late — after local terms stabilise
+    ("fractional_diffusion", 20),
 ]
 
 _RAMP_EPOCHS = 5  # epochs to ramp from 0→1 after activation
@@ -93,15 +96,13 @@ def _normalize_residual(
     residual: torch.Tensor,
     valid_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Normalize residual by running std to prevent scale dominance."""
-    if valid_mask is not None:
-        r = residual[valid_mask]
-    else:
-        r = residual
-    if r.numel() < 2:
-        return residual
-    std = r.std().clamp(min=1e-6)
-    return residual / std
+    """Normalize residual by running std (delegates to public normalize_residual).
+
+    Uses detach_scale=False so gradients flow through the denominator
+    (the V3 PDE path convention — compare compute_physics_residual which
+    uses detach_scale=True for the V2 path).
+    """
+    return _normalize_residual_pub(residual, valid_mask, detach_scale=False)
 
 
 def _expand(values: torch.Tensor, valid: torch.Tensor, N: int) -> torch.Tensor:
@@ -120,7 +121,6 @@ def compute_pde_loss(
     weights: PDELossWeights | None = None,
     epoch: int = 0,
     alpha_prior_field: torch.Tensor | None = None,
-    energy_residual: torch.Tensor | None = None,
     pde_start_epoch: int = 30,
     # Temporal / transient PDE terms (V3)
     T_prev: torch.Tensor | None = None,
@@ -133,6 +133,9 @@ def compute_pde_loss(
     valid_laplacian_mask: torch.Tensor | None = None,
     # Sheaf Laplacian coboundary δ⁰ (optional — Term 11)
     sheaf_delta: torch.Tensor | None = None,
+    # Fractional Laplacian grid info (optional — Term 12)
+    grid_shape: tuple[int, int] | None = None,
+    fractional_s: float = 0.75,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """
     Multi-term PDE physics loss with staged activation.
@@ -147,7 +150,6 @@ def compute_pde_loss(
     weights : PDELossWeights or None (uses defaults)
     epoch : current training epoch (controls staged activation)
     alpha_prior_field : (N, 1) optional mixture prior for α
-    energy_residual : (N,) optional pre-computed energy balance residual
     pde_start_epoch : epoch at which outer curriculum enables PDE lambda
                       (default 30 = ramp_end).  Internal sub-term schedule
                       offsets are relative to this value.
@@ -215,19 +217,6 @@ def compute_pde_loss(
         loss_dict["pde_heat_diffusion"] = term.item()
     else:
         loss_dict["pde_heat_diffusion"] = 0.0
-
-    # ------------------------------------------------------------------
-    # Term 2: Energy balance residual
-    # ------------------------------------------------------------------
-    sw_energy = _stage_weight(pde_epoch, 5)
-    if sw_energy > 0 and energy_residual is not None:
-        eb_norm = _normalize_residual(energy_residual)
-        eb_loss = (eb_norm ** 2).mean()
-        term = weights.energy_balance * sw_energy * eb_loss
-        total = total + term
-        loss_dict["pde_energy_balance"] = term.item()
-    else:
-        loss_dict["pde_energy_balance"] = 0.0
 
     # ------------------------------------------------------------------
     # Term 3: Directional curvature consistency
@@ -417,5 +406,33 @@ def compute_pde_loss(
         loss_dict["pde_sheaf"] = term.item()
     else:
         loss_dict["pde_sheaf"] = 0.0
+
+    # ------------------------------------------------------------------
+    # Term 12: Fractional Laplacian diffusion  (−Δ)ˢT − S ≈ 0
+    # Non-local operator via FFT, captures anomalous/long-range coupling.
+    # Requires a uniform fishnet grid; skipped when grid_shape is None.
+    # Activated after local terms stabilise (offset 20).
+    # ------------------------------------------------------------------
+    sw_frac = _stage_weight(pde_epoch, 20) if grid_shape is not None else 0.0
+    if sw_frac > 0 and grid_shape is not None:
+        try:
+            from sparc.physics.fractional_operators import fractional_laplacian_fft
+            _h_scalar = float(h.mean()) if hasattr(h, 'mean') else float(h)
+            frac_lap = fractional_laplacian_fft(
+                T_pred.detach(),  # detach: operator is non-differentiable via autograd
+                h=_h_scalar,
+                s=fractional_s,
+                grid_shape=grid_shape,
+            )
+            frac_residual = frac_lap - source_term
+            frac_norm = _normalize_residual(frac_residual)
+            frac_loss = (frac_norm ** 2).mean()
+            term = weights.fractional_diffusion * sw_frac * frac_loss
+            total = total + term
+            loss_dict["pde_fractional_diffusion"] = term.item()
+        except Exception:
+            loss_dict["pde_fractional_diffusion"] = 0.0
+    else:
+        loss_dict["pde_fractional_diffusion"] = 0.0
 
     return total, loss_dict

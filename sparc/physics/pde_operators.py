@@ -476,3 +476,46 @@ def build_sheaf_laplacian(
     # The loss is ||δ⁰ f||² / (E*d) which equals (f.T L f) / (E*d).
     return delta
 
+
+# ---------------------------------------------------------------------------
+# Residual normalisation
+# ---------------------------------------------------------------------------
+
+def normalize_residual(
+    residual: "torch.Tensor",
+    valid_mask: "torch.Tensor | None" = None,
+    *,
+    detach_scale: bool = True,
+) -> "torch.Tensor":
+    """Normalize a physics residual by its standard deviation.
+
+    Keeps every PDE loss term on the same scale as the data-fidelity MSE,
+    preventing any single residual from dominating gradient flow.
+
+    Parameters
+    ----------
+    residual : tensor of any shape — the raw (un-normalised) residual.
+    valid_mask : optional bool mask.  When provided, the std is computed
+        only on ``residual[valid_mask]`` but the *full* residual tensor
+        is divided by the resulting scalar.  This avoids information
+        leakage from masked-out points while preserving tensor shape.
+    detach_scale : if ``True`` (default), the standard deviation used as
+        the divisor is detached from the autograd graph.  This stops
+        gradients from flowing through the normalisation denominator,
+        which stabilises training — any denominator collapse gets no
+        gradient signal.  Set ``False`` only when you explicitly want
+        gradients to flow through the scale factor (rare).
+
+    Returns
+    -------
+    normalised : same shape as ``residual``, divided by
+        ``std(residual[valid_mask]).clamp(min=1e-6)``.
+    """
+    import torch  # local import keeps this usable as a pure utility
+
+    r = residual[valid_mask] if valid_mask is not None else residual
+    if r.numel() < 2:
+        return residual
+    scale = r.detach().std() if detach_scale else r.std()
+    return residual / scale.clamp(min=1e-6)
+

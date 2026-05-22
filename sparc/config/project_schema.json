@@ -110,6 +110,21 @@
           "minimum": 2,
           "description": "Number of cross-fitting folds for DML estimation"
         },
+        "use_stage2_outcome_nuisance": {
+          "type": "boolean",
+          "default": true,
+          "description": "When true, DML uses Stage 2 out-of-fold ensemble predictions as the outcome nuisance instead of refitting a separate HGB model. Improves causal estimate accuracy when Stage 2 has run."
+        },
+        "use_spatial_residualization": {
+          "type": "boolean",
+          "default": true,
+          "description": "When true, DML residualises treatment columns on JEPA trunk embeddings (SpatialResidualizer) before fitting, reducing bias from unobserved spatial confounders. Requires Stage 1 neural model."
+        },
+        "spatial_resid_pca_dims": {
+          "type": "integer",
+          "default": 16,
+          "description": "Number of PCA dimensions used by SpatialResidualizer to compress the JEPA trunk embedding before Ridge regression."
+        },
         "spatial_block_size": {
           "type": ["integer", "null"],
           "default": null,
@@ -409,7 +424,7 @@
 
     "jepa": {
       "type": "object",
-      "description": "JEPA (V-JEPA 2-style) self-supervised auxiliary objective on the SharedTrunk. Adds an EMA target trunk + latent predictor + masked-channel context with VICReg anti-collapse. Off by default; pure additive when enabled.",
+      "description": "JEPA (V-JEPA 2-style) self-supervised auxiliary objective on the SharedTrunk. Adds an EMA target trunk + latent predictor + masked-channel context with VICReg anti-collapse. Enabled by default; pure additive when enabled.",
       "properties": {
         "enable":              {"type": "boolean", "default": true, "description": "Master switch — when false, no JEPA modules are constructed and the training loop is byte-identical to pre-JEPA behavior."},
         "mask_ratio":          {"type": "number", "default": 0.4, "minimum": 0.0, "maximum": 1.0, "description": "Bernoulli probability of zeroing each physics input channel for the context branch."},

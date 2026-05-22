@@ -17,8 +17,8 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import dagre from "@dagrejs/dagre";
-import { getDag, validateDag, getMc3Result } from "@/lib/api";
-import type { DagEdge, DagDefinition, DagValidation, MC3Result, DagNodeType } from "@/lib/types";
+import { getDag, validateDag, getMc3Result, suggestDagEdges } from "@/lib/api";
+import type { DagEdge, DagDefinition, DagValidation, MC3Result, DagNodeType, DagEdgeSuggestion } from "@/lib/types";
 import { usePipeline } from "@/hooks/PipelineProvider";
 import { Btn, SectionHeader } from "@/components/ui/DesignSystem";
 
@@ -215,6 +215,10 @@ export default function DAGView() {
   const [qeSource, setQeSource]       = useState("");
   const [qeTarget, setQeTarget]       = useState("");
   const [contextMenu, setContextMenu] = useState<{ x:number; y:number; nodeId:string } | null>(null);
+
+  // AI edge suggestions
+  const [suggestions, setSuggestions] = useState<DagEdgeSuggestion[]>([]);
+  const [suggestLoading, setSuggestLoading] = useState(false);
 
   const loadDag = useCallback(async () => {
     setLoading(true);
@@ -415,6 +419,23 @@ export default function DAGView() {
                   <Btn small onClick={redo} disabled={!canRedo}>↷</Btn>
                   <Btn small onClick={loadDag}>Reload</Btn>
                   <Btn small onClick={handleValidate}>Validate</Btn>
+                  <Btn
+                    small
+                    disabled={suggestLoading}
+                    onClick={async () => {
+                      setSuggestLoading(true);
+                      try {
+                        const res = await suggestDagEdges({ max_suggestions: 10 });
+                        setSuggestions(res.suggestions);
+                      } catch {
+                        setSuggestions([]);
+                      } finally {
+                        setSuggestLoading(false);
+                      }
+                    }}
+                  >
+                    {suggestLoading ? "…" : "Suggest edges"}
+                  </Btn>
                 </>
               )}
               {dagApprovalPending && (
@@ -548,6 +569,70 @@ export default function DAGView() {
                   </div>
                 </div>
               </PanelCard>
+
+              {suggestions.length > 0 && (
+                <PanelCard title="AI suggestions" subtitle="click to accept edge">
+                  <div style={{ display:"flex", flexDirection:"column", gap:1 }}>
+                    {suggestions.map((s, i) => (
+                      <div
+                        key={i}
+                        onClick={() => {
+                          pushSnapshot();
+                          const srcType = (nodes.find((n) => n.id === s.parent)?.data as { nodeType?:string })?.nodeType ?? "";
+                          const color = NODE_COLORS[srcType] ?? "#602468";
+                          setEdges((eds) => [
+                            ...eds,
+                            {
+                              id: `suggest-${s.parent}-${s.child}-${Date.now()}`,
+                              source: s.parent,
+                              target: s.child,
+                              style: { stroke: color, strokeWidth: 1.6 },
+                              markerEnd: { type: MarkerType.ArrowClosed, color },
+                            },
+                          ]);
+                          setSuggestions((prev) => prev.filter((_, j) => j !== i));
+                        }}
+                        title={s.reason}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          padding: "5px 4px",
+                          borderRadius: 4,
+                          cursor: "pointer",
+                          borderTop: i > 0 ? "1px dashed var(--line)" : undefined,
+                          transition: "background 100ms",
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(0,0,0,0.04)")}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = "")}
+                      >
+                        <span className="mono" style={{ fontSize: 10, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {s.parent} → {s.child}
+                        </span>
+                        <span
+                          className="mono"
+                          style={{
+                            fontSize: 9,
+                            padding: "1px 5px",
+                            borderRadius: 3,
+                            background: s.toward_outcome ? "rgba(231,60,37,0.12)" : "rgba(0,0,0,0.06)",
+                            color: s.toward_outcome ? "var(--crimson)" : "var(--muted)",
+                            flexShrink: 0,
+                          }}
+                        >
+                          {s.score.toFixed(2)}
+                        </span>
+                      </div>
+                    ))}
+                    <button
+                      onClick={() => setSuggestions([])}
+                      style={{ marginTop: 6, fontSize: 10, color: "var(--muted)", background: "none", border: 0, cursor: "pointer", textAlign: "left", padding: 0 }}
+                    >
+                      dismiss all
+                    </button>
+                  </div>
+                </PanelCard>
+              )}
             </>
           ) : (
             <>

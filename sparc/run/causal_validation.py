@@ -420,6 +420,108 @@ class CausalValidator:
         spatial_block_size = self.config.get('causal', {}).get('spatial_block_size', None)
         dml_n_splits = self.config.get('causal', {}).get('dml_cv_folds', 5)
 
+        # JD-1: load Stage 2 out-of-fold ensemble predictions to use as the
+        # outcome nuisance in DML (avoids refitting a weaker HGB model_y).
+        # Only used when estimator is DML and config flag is enabled (default on).
+        _precomputed_outcome_preds = None
+        _use_s2_nuisance = self.config.get('causal', {}).get('use_stage2_outcome_nuisance', True)
+        if estimator_name == 'dml' and _use_s2_nuisance:
+            try:
+                from sparc.registry.run_registry import get_active_registry
+                from sparc.registry.store import ArtifactStore
+                _reg = get_active_registry()
+                if _reg is not None:
+                    _store = ArtifactStore(_reg)
+                    if _store.has("2", "oof_predictions"):
+                        _oof_df = _store.read_any("2", "oof_predictions")
+                        if _oof_df is not None and hasattr(_oof_df, 'columns'):
+                            # Prefer 'y_pred_oof' column, fall back to first numeric col
+                            import numpy as _np
+                            if 'y_pred_oof' in _oof_df.columns:
+                                _precomputed_outcome_preds = _oof_df['y_pred_oof'].values.astype(float)
+                            else:
+                                _num_cols = [c for c in _oof_df.columns if _np.issubdtype(_oof_df[c].dtype, _np.number)]
+                                if _num_cols:
+                                    _precomputed_outcome_preds = _oof_df[_num_cols[0]].values.astype(float)
+                            if _precomputed_outcome_preds is not None and len(_precomputed_outcome_preds) != len(data):
+                                # Mismatched length — cannot use; fall through to standard HGB
+                                import logging as _logging
+                                _logging.getLogger(__name__).warning(
+                                    "Stage 2 OOF preds length %d != data length %d; skipping nuisance shortcut",
+                                    len(_precomputed_outcome_preds), len(data),
+                                )
+                                _precomputed_outcome_preds = None
+            except Exception as _oof_exc:
+                import logging as _logging
+                _logging.getLogger(__name__).debug(
+                    "Stage 2 OOF load failed (non-fatal): %s", _oof_exc
+                )
+
+        # JD-2: SpatialResidualizer — residualise treatment columns on JEPA
+        # trunk embeddings to remove spatially-structured confounding before DML.
+        # Controlled by config flag causal.use_spatial_residualization (default True).
+        _use_spatial_resid = self.config.get('causal', {}).get('use_spatial_residualization', True)
+        if estimator_name == 'dml' and _use_spatial_resid:
+            try:
+                import json as _json
+                import logging as _logging
+                _sr_log = _logging.getLogger(__name__)
+                _v2_dir = self.paths.stage2_dir / "v2_neural"
+                _meta_path = _v2_dir / "meta_info.json"
+                if _meta_path.exists():
+                    import torch as _torch
+                    from sparc.models.neural_meta import SPARCMetaLearner as _SML
+                    from sparc.causal.spatial_residualizer import SpatialResidualizer as _SR
+                    with open(_meta_path) as _mf:
+                        _mi = _json.load(_mf)
+                    _sr_model = _SML(
+                        n_base_models=_mi["n_base_models"],
+                        n_physics_features=_mi.get("n_physics_extended", _mi["n_physics_features"]),
+                        d_spatial=_mi["d_spatial"],
+                        hidden_dim=_mi["hidden_dim"],
+                        thresholds=_mi.get("thresholds", [0.25, 0.50, 0.75]),
+                    )
+                    _ckpt_path = _v2_dir / "neural_meta.pt"
+                    if _ckpt_path.exists():
+                        _state = _torch.load(_ckpt_path, map_location="cpu", weights_only=True)
+                        _sr_model.load_state_dict(_state)
+                        _sr_model.eval()
+                        _phys_cols = [c for c in self.config.get('predictors', []) if c in data.columns]
+                        _treat_cols = list({p for p, _ in self.graph.edges() if p in data.columns})
+                        _alpha_np = np.ones(len(data), dtype=np.float32)
+                        _pca_dims = self.config.get('causal', {}).get('spatial_resid_pca_dims', 16)
+                        _residualizer = _SR(pca_dims=_pca_dims)
+                        data = _residualizer.fit_transform(
+                            data,
+                            model=_sr_model,
+                            physics_feat_cols=_phys_cols if _phys_cols else [data.columns[0]],
+                            treatment_cols=_treat_cols,
+                            alpha=_alpha_np,
+                            device="cpu",
+                        )
+                        # Swap treatment column references: if a parent col was
+                        # residualised, swap to _resid variant for the DML fit.
+                        _resid_map = {c: f"{c}_resid" for c in _treat_cols if f"{c}_resid" in data.columns}
+                        if _resid_map:
+                            import networkx as _nx
+                            _new_edges = [((_resid_map.get(p, p), ch)) for p, ch in self.graph.edges()]
+                            _new_graph = _nx.DiGraph()
+                            _new_graph.add_nodes_from(self.graph.nodes(data=True))
+                            _new_graph.add_edges_from(_new_edges)
+                            self.graph = _new_graph
+                            _sr_log.info(
+                                "SpatialResidualizer: residualised %d treatment columns", len(_resid_map)
+                            )
+                    else:
+                        _sr_log.debug("SpatialResidualizer: neural_meta.pt not found — skipping")
+                else:
+                    pass  # Stage 1 not yet run; silently skip
+            except Exception as _sr_exc:
+                import logging as _logging
+                _logging.getLogger(__name__).debug(
+                    "SpatialResidualizer failed (non-fatal): %s", _sr_exc
+                )
+
         for parent, child in self.graph.edges():
             if parent not in data.columns or child not in data.columns:
                 continue
@@ -439,6 +541,7 @@ class CausalValidator:
                         coords=coords,
                         spatial_block_size=spatial_block_size,
                         n_splits=dml_n_splits,
+                        precomputed_outcome_preds=_precomputed_outcome_preds,
                     )
                     self._dml_models[(parent, child)] = dml_model
                     self._coeff_ses[(parent, child)] = se

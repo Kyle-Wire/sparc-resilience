@@ -434,7 +434,11 @@ class SPARCMetaLearner(nn.Module):
     # Trunk management (transfer learning)
     # ==================================================================
 
-    _TRUNK_KEYS = {"physics_enc", "alpha_emb", "trunk_fusion", "time_embed"}
+    # Canonical set of submodule name-prefixes that belong to the SharedTrunk.
+    # ema_trunk.py and v2_neural_training.py import/reference this; keep in sync.
+    _TRUNK_KEYS: frozenset[str] = frozenset(
+        {"physics_enc", "alpha_emb", "trunk_fusion", "time_embed"}
+    )
 
     def save_trunk(self, path: str | Path) -> None:
         """Save SharedTrunk weights (physics_enc + alpha_emb + trunk_fusion)."""

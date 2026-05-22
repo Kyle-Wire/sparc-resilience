@@ -99,6 +99,84 @@ def _save_manifest(directory: Path, manifest: Dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# WriteTransaction — atomic disk write with rollback on registry failure
+# ---------------------------------------------------------------------------
+
+class WriteTransaction:
+    """Atomic disk write that rolls back when the registry write fails.
+
+    The artifact is first written to a sibling temp path
+    (``.<name>.sparc_tmp``).  When :meth:`commit` is called successfully, the
+    temp file is renamed to *dest* (atomic on POSIX; best-effort on Windows).
+    If the context block exits with an unhandled exception, or if :meth:`commit`
+    was never called, the temp file is cleaned up and *dest* is left untouched.
+
+    This guarantees that the on-disk file and the per-stage manifest are only
+    updated when the write was successful end-to-end, eliminating the
+    split-brain state where a file exists on disk but the registry is blind to
+    it (or vice-versa).
+
+    Parameters
+    ----------
+    dest : Path
+        Final destination path for the artifact.
+    write_fn : callable
+        ``write_fn(path)`` — writes the data to *path*.  Called with the temp
+        path inside ``__enter__``; called again with *dest* as fallback on
+        Windows rename failure.
+
+    Example
+    -------
+    ::
+
+        with WriteTransaction(dest, lambda p: df.to_csv(p)) as tx:
+            registry.put(artifact_id, data)   # may raise
+            tx.commit()                        # rename temp → dest only on success
+        # if registry.put raised, temp is cleaned up, dest unchanged
+    """
+
+    def __init__(self, dest: Path, write_fn) -> None:
+        self._dest = dest
+        self._write_fn = write_fn
+        self._tmp = dest.parent / f".{dest.name}.sparc_tmp"
+        self._entered = False
+        self._committed = False
+
+    # -- context protocol --
+
+    def __enter__(self) -> "WriteTransaction":
+        self._dest.parent.mkdir(parents=True, exist_ok=True)
+        self._write_fn(self._tmp)
+        self._entered = True
+        return self
+
+    def commit(self) -> None:
+        """Promote the temp file to *dest*.  Call exactly once per transaction."""
+        if not self._entered:
+            raise RuntimeError("WriteTransaction.commit() called outside context block")
+        try:
+            self._tmp.replace(self._dest)
+        except OSError:
+            # Windows can fail on cross-device or locked files — copy then delete.
+            import shutil
+            shutil.copy2(self._tmp, self._dest)
+            try:
+                self._tmp.unlink()
+            except OSError:
+                pass
+        self._committed = True
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        if not self._committed:
+            # Either an exception occurred, or commit() was never called.
+            try:
+                self._tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return False  # never suppress exceptions
+
+
+# ---------------------------------------------------------------------------
 # ResultStore
 # ---------------------------------------------------------------------------
 
@@ -237,16 +315,61 @@ class ResultStore:
 
         elapsed = 0.0
         size_bytes = 0
+        rel_key = str(Path(subdir) / name) if subdir else name
         if disk_on:
-            directory.mkdir(parents=True, exist_ok=True)
+            # Use WriteTransaction so that the manifest is only updated once the
+            # file is safely on disk and (if present) the registry has accepted
+            # the record.  If the registry write raises, the temp file is
+            # cleaned up and neither the destination file nor the manifest are
+            # touched — no split-brain state.
+            _fmt_ref = fmt  # capture for lambda closure
             t0 = time.monotonic()
-            self._write(dest, data, fmt)
+            with WriteTransaction(dest, lambda p: self._write(p, data, _fmt_ref)) as _tx:
+                # ── registry write (inside the transaction) ──────────────────
+                # We attempt this *before* committing so a registry failure
+                # can prevent the disk write from becoming visible.
+                if self.registry is not None:
+                    try:
+                        row_count = None
+                        if isinstance(data, pd.DataFrame):
+                            row_count = int(len(data))
+                        _meta = dict(metadata or {})
+                        _artifact_id = _meta.pop(
+                            "artifact_id",
+                            rel_key.rsplit(".", 1)[0],
+                        )
+                        _consumers = _meta.pop("consumers", None)
+                        _producer = _meta.pop("producer", None)
+                        self.registry.register_artifact(
+                            stage=self._stage_to_registry_key(stage),
+                            artifact_id=_artifact_id,
+                            path=dest,
+                            format=fmt,
+                            producer=_producer,
+                            consumers=_consumers,
+                            row_count=row_count,
+                            partial=partial,
+                            metadata=_meta,
+                            write_seconds=0.0,  # updated below after commit
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        warnings.warn(
+                            f"RunRegistry registration failed for {dest}: {exc}; "
+                            "disk write will NOT be committed.",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
+                        # Transaction __exit__ will clean up the temp file.
+                        raise
+
+                # Both temp write and registry succeeded — promote to final.
+                _tx.commit()
+
             elapsed = time.monotonic() - t0
             size_bytes = dest.stat().st_size if dest.exists() else 0
 
-            # Record in per-stage manifest (legacy / backward-compatible).
+            # Record in per-stage manifest only after the file exists on disk.
             manifest = _load_manifest(self.stage_dir(stage))
-            rel_key = str(Path(subdir) / name) if subdir else name
             manifest["artifacts"][rel_key] = {
                 "format": fmt,
                 "size_bytes": size_bytes,
@@ -256,41 +379,6 @@ class ResultStore:
                 **(metadata or {}),
             }
             _save_manifest(self.stage_dir(stage), manifest)
-        rel_key = str(Path(subdir) / name) if subdir else name
-
-        # Record in run-wide registry (single source of truth) — only when a
-        # real on-disk file exists.  When disk writes are off the dual-write
-        # block below registers the artifact via ArtifactStore instead.
-        if disk_on and self.registry is not None:
-            try:
-                row_count = None
-                if isinstance(data, pd.DataFrame):
-                    row_count = int(len(data))
-                meta = dict(metadata or {})
-                artifact_id = meta.pop(
-                    "artifact_id",
-                    rel_key.rsplit(".", 1)[0],  # filename without extension
-                )
-                consumers = meta.pop("consumers", None)
-                producer = meta.pop("producer", None)
-                self.registry.register_artifact(
-                    stage=self._stage_to_registry_key(stage),
-                    artifact_id=artifact_id,
-                    path=dest,
-                    format=fmt,
-                    producer=producer,
-                    consumers=consumers,
-                    row_count=row_count,
-                    partial=partial,
-                    metadata=meta,
-                    write_seconds=round(elapsed, 3),
-                )
-            except Exception as exc:  # noqa: BLE001
-                warnings.warn(
-                    f"RunRegistry registration failed for {dest}: {exc}",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
 
         # Phase C7: dual-write into the active ArtifactStore so legacy
         # ResultStore call sites automatically populate artifacts.db.

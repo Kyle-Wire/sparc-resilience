@@ -84,6 +84,36 @@ class PredictorKernel:
             return 1.0 / float(self.bandwidth_to_outcome)
         return 0.0
 
+    @staticmethod
+    def anisotropy_from_terrain(
+        slope_rad: float,
+        aspect_rad: float,
+        base_kappa: float,
+    ) -> dict:
+        """Derive anisotropic kernel parameters from local terrain gradient.
+
+        The major axis (smaller κ → larger range) aligns with the downhill
+        direction.  Eccentricity scales proportionally to the normalised slope
+        ``slope_rad / (π/2)`` so that flat terrain is perfectly isotropic.
+
+        Parameters
+        ----------
+        slope_rad : slope angle in radians [0, π/2]
+        aspect_rad : downhill azimuth clockwise from north, in [0, 2π).
+        base_kappa : isotropic decay rate (1/length) at zero slope.
+
+        Returns
+        -------
+        dict with keys ``kappa_x`` (along-slope), ``kappa_y`` (cross-slope),
+        and ``theta_rad`` (major-axis orientation in [0, π)).
+        """
+        eccentricity = float(slope_rad) / (math.pi / 2.0)
+        eccentricity = max(0.0, min(eccentricity, 1.0))
+        kappa_x = float(base_kappa) / (1.0 + eccentricity)  # along-slope: larger range
+        kappa_y = float(base_kappa) * (1.0 + eccentricity)  # cross-slope: smaller range
+        theta_rad = float(aspect_rad) % math.pi              # major axis in [0, π)
+        return {"kappa_x": kappa_x, "kappa_y": kappa_y, "theta_rad": theta_rad}
+
 
 # ---------------------------------------------------------------------------
 # KernelField (one per outcome variable)

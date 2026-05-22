@@ -1,15 +1,18 @@
 """
 Feature engineering module for SPARC.
 
-This module implements:
-- Laplacian Eigenmaps for spatial feature extraction
-- Fold-Aware Laplacian Eigenmaps (train/test separated, no leakage)
-- Graph-based feature generation
-- Spatial relationship encoding
+Active in V2:
+  - SinusoidalSpatialEncoding  — replaces Laplacian eigenmaps for V2 training
+  - LaplacianEigenmap          — V1 baseline; used by enhanced_spatial_cv
+  - geometry                   — KNN / cardinal-neighbour utilities (shared across pipeline)
+
+Inactive / V1-only:
+  - FoldAwareLaplacianEigenmap / generate_fold_aware_laplacian — V1 fold-separated
+    eigenmaps.  No callers in V2.  Available as ``sparc.features.fold_aware_laplacian``
+    for direct import if needed; not re-exported here to keep the public interface clean.
 """
 
 from .laplacian import LaplacianEigenmap
-from .fold_aware_laplacian import FoldAwareLaplacianEigenmap, generate_fold_aware_laplacian
 
 # V2 sinusoidal encoding (lazy — requires torch)
 try:
@@ -20,7 +23,5 @@ except ImportError:
 
 __all__ = [
     'LaplacianEigenmap',
-    'FoldAwareLaplacianEigenmap',
-    'generate_fold_aware_laplacian',
     'SinusoidalSpatialEncoding',
 ]

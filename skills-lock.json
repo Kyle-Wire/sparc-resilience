@@ -84,6 +84,11 @@
       "sourceType": "github",
       "skillPath": "skills/engineering/zoom-out/SKILL.md",
       "computedHash": "a8b8ed45609fdfa9f184d0c9f69326e43822a42eebea14db2792d777373de562"
+    },
+    "codebase-janitor": {
+      "source": "local",
+      "sourceType": "local",
+      "skillPath": ".agents/skills/codebase-janitor/SKILL.md"
     }
   }
 }

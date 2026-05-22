@@ -303,6 +303,22 @@ export const approveDag = () =>
 export const rejectDag = () =>
   post<{ status: string }>("/dag/reject", {});
 
+export interface DagEdgeSuggestion {
+  parent: string;
+  child: string;
+  score: number;
+  partial_r: number;
+  toward_outcome: boolean;
+  reason: string;
+}
+export interface DagSuggestEdgesResult {
+  suggestions: DagEdgeSuggestion[];
+  n_columns_analysed: number;
+  threshold: number;
+}
+export const suggestDagEdges = (opts: { threshold?: number; max_suggestions?: number } = {}) =>
+  post<DagSuggestEdgesResult>("/dag/suggest-edges", opts);
+
 // ------------------------------------------------------------------
 // Config
 // ------------------------------------------------------------------
@@ -483,6 +499,20 @@ export const getModelPerformance = () =>
 
 export const getGwenData = () =>
   get<{ rows: Record<string, unknown>[] }>("/results/gwen");
+
+// GWEN approval gate
+export interface GwenStatus {
+  approved: boolean;
+  approval_path: string;
+  stage1_complete: boolean;
+  rows: Record<string, unknown>[] | null;
+}
+export const getGwenStatus = () => get<GwenStatus>("/gwen/status");
+export const approveGwen = () => post<{ approved: boolean; approved_at: string }>("/gwen/approve", {});
+export const revokeGwenApproval = () =>
+  fetch(`${BASE}/gwen/approve`, { method: "DELETE", headers: authHeaders() }).then((r) =>
+    r.json(),
+  );
 
 export const getSpatialCvPredictions = () =>
   get<GeoJsonData>("/results/spatial_cv/predictions");
@@ -1320,6 +1350,32 @@ export const appendScenarioToLibrary = (
   scenario: Record<string, unknown>,
   opts: { author?: string; comment?: string; parent_id?: string | null } = {},
 ) => post<ScenarioLibraryEntry>("/scenarios/library", { scenario, ...opts });
+
+// ------------------------------------------------------------------
+// Multi-step scenario chain rollout (JD-4)
+// ------------------------------------------------------------------
+export interface ChainAction {
+  treatment: string;
+  delta_x: number;
+  delta_t?: number;
+}
+export interface ChainStepResult {
+  step: number;
+  treatment: string;
+  delta_x: number;
+  mean_delta: number;
+  p5_delta: number;
+  p95_delta: number;
+}
+export interface ChainRolloutResult {
+  n_steps: number;
+  steps: ChainStepResult[];
+  cumulative_mean_delta: number;
+}
+export const runScenarioChain = (
+  actions: ChainAction[],
+  mode: "latent" | "reencode" = "latent",
+) => post<ChainRolloutResult>("/scenarios/chain", { actions, mode });
 
 // ------------------------------------------------------------------
 // Standalone HTML snapshot (Phase 17)

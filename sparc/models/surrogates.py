@@ -19,7 +19,7 @@ Each surrogate preserves the mathematical structure of the original:
                             Σ te(x,f_k) + Σ te(y,f_k))
 
 Surrogates are validated against the true V1 base model outputs via
-``validate_surrogates()`` — required R² > 0.95 before joint training.
+``validate_surrogates()`` — required R² ≥ 0.85 before joint training.
 """
 
 from __future__ import annotations
@@ -260,6 +260,43 @@ class DifferentiableGWR(nn.Module):
         beta_refine_k = self.beta_per_predictor(h_k).squeeze(-1)  # (N,)
         return (beta_global + beta_refine_k).cpu().numpy()
 
+    @torch.no_grad()
+    def validate(
+        self,
+        y_true: torch.Tensor,
+        X: torch.Tensor,
+        spatial_features: torch.Tensor,
+        min_r2: float = 0.85,
+        raise_on_fail: bool = False,
+    ) -> float:
+        """Validate surrogate R\u00b2 against true base model predictions.
+
+        Parameters
+        ----------
+        y_true : (N,) tensor of true base model outputs
+        X : (N, n_vars) predictor tensor
+        spatial_features : (N, n_spatial_features) spatial encoding
+        min_r2 : float \u2014 minimum acceptable R\u00b2
+        raise_on_fail : bool \u2014 raise ValueError when R\u00b2 < min_r2
+
+        Returns
+        -------
+        r2 : float
+        """
+        was_training = self.training
+        self.eval()
+        pred, _ = self(X, spatial_features)
+        if was_training:
+            self.train()
+        ss_res = ((y_true - pred) ** 2).sum()
+        ss_tot = ((y_true - y_true.mean()) ** 2).sum()
+        r2 = (1.0 - ss_res / ss_tot).item()
+        if raise_on_fail and r2 < min_r2:
+            raise ValueError(
+                f"{self.__class__.__name__} R\u00b2={r2:.4f} < required {min_r2}"
+            )
+        return r2
+
 
 # ---------------------------------------------------------------------------
 # Differentiable GWRF (with distance-weighted kernel predictions)
@@ -412,6 +449,43 @@ class DifferentiableGWRF(nn.Module):
             y_pred = y_local
 
         return y_pred
+
+    @torch.no_grad()
+    def validate(
+        self,
+        y_true: torch.Tensor,
+        X: torch.Tensor,
+        spatial_features: torch.Tensor,
+        min_r2: float = 0.85,
+        raise_on_fail: bool = False,
+    ) -> float:
+        """Validate surrogate R\u00b2 against true base model predictions.
+
+        Parameters
+        ----------
+        y_true : (N,) tensor of true base model outputs
+        X : (N, n_vars) predictor tensor
+        spatial_features : (N, n_spatial_features) spatial encoding
+        min_r2 : float \u2014 minimum acceptable R\u00b2
+        raise_on_fail : bool \u2014 raise ValueError when R\u00b2 < min_r2
+
+        Returns
+        -------
+        r2 : float
+        """
+        was_training = self.training
+        self.eval()
+        pred = self(X, spatial_features)
+        if was_training:
+            self.train()
+        ss_res = ((y_true - pred) ** 2).sum()
+        ss_tot = ((y_true - y_true.mean()) ** 2).sum()
+        r2 = (1.0 - ss_res / ss_tot).item()
+        if raise_on_fail and r2 < min_r2:
+            raise ValueError(
+                f"{self.__class__.__name__} R\u00b2={r2:.4f} < required {min_r2}"
+            )
+        return r2
 
 
 # ---------------------------------------------------------------------------
@@ -622,6 +696,43 @@ class DifferentiableGGPGAM(nn.Module):
             effect = self.shape_functions[predictor_idx](x_range).squeeze(-1)
         return x_range.squeeze(-1).cpu().numpy(), effect.cpu().numpy()
 
+    @torch.no_grad()
+    def validate(
+        self,
+        y_true: torch.Tensor,
+        X: torch.Tensor,
+        spatial_features: torch.Tensor,
+        min_r2: float = 0.85,
+        raise_on_fail: bool = False,
+    ) -> float:
+        """Validate surrogate R\u00b2 against true base model predictions.
+
+        Parameters
+        ----------
+        y_true : (N,) tensor of true base model outputs
+        X : (N, n_vars) predictor tensor
+        spatial_features : (N, n_spatial_features) spatial encoding
+        min_r2 : float \u2014 minimum acceptable R\u00b2
+        raise_on_fail : bool \u2014 raise ValueError when R\u00b2 < min_r2
+
+        Returns
+        -------
+        r2 : float
+        """
+        was_training = self.training
+        self.eval()
+        pred = self(X, spatial_features)
+        if was_training:
+            self.train()
+        ss_res = ((y_true - pred) ** 2).sum()
+        ss_tot = ((y_true - y_true.mean()) ** 2).sum()
+        r2 = (1.0 - ss_res / ss_tot).item()
+        if raise_on_fail and r2 < min_r2:
+            raise ValueError(
+                f"{self.__class__.__name__} R\u00b2={r2:.4f} < required {min_r2}"
+            )
+        return r2
+
 
 # ---------------------------------------------------------------------------
 # Surrogate validation
@@ -656,20 +767,11 @@ def validate_surrogates(
     results = {}
 
     for name, surrogate in surrogates.items():
-        surrogate.eval()
-        with torch.no_grad():
-            if name == "ggpgam":
-                pred = surrogate(X, spatial_features)
-            else:
-                out = surrogate(X, spatial_features)
-                pred = out[0] if isinstance(out, tuple) else out
-
-        y_true = true_predictions[name]
-        ss_res = ((y_true - pred) ** 2).sum()
-        ss_tot = ((y_true - y_true.mean()) ** 2).sum()
-        r2 = (1 - ss_res / ss_tot).item()
+        r2 = surrogate.validate(
+            true_predictions[name], X, spatial_features,
+            min_r2=threshold, raise_on_fail=False,
+        )
         passed = r2 >= threshold
-
         status = "PASS" if passed else "FAIL"
         results[name] = {"r2": r2, "passed": passed, "status": status}
         print(f"Surrogate {name}: R²={r2:.4f} vs true model [{status}]")

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Optional  # noqa: F401 — used in MaternFitResult
 
@@ -280,7 +281,12 @@ def fit_matern_bayes(
         return _log_prob
 
     nu_results: dict[float, dict] = {}
-    for nu_val in nu_grid:
+
+    def _run_nu(nu_val: float) -> tuple[float, dict | None]:
+        """Run all chains for one ν value.  Designed to run in a thread."""
+        # Set torch to single-threaded inside each worker thread so the outer
+        # ThreadPoolExecutor controls the parallelism, not PyTorch's own pool.
+        torch.set_num_threads(1)
         blocks = [
             NUTSBlock(name="kappa", dim=1,
                       init=np.array([math.log(max(kappa_init, 1e-9))]),
@@ -313,24 +319,30 @@ def fit_matern_bayes(
                 chain_results.append(res)
         except Exception as exc:
             logger.warning("Matérn NUTS failed at ν=%.1f: %s", nu_val, exc)
-            continue
+            return nu_val, None
 
         # Pool chains
         pooled = {k: np.concatenate([r.samples[k] for r in chain_results], axis=0)
                   for k in chain_results[0].samples}
         log_probs = np.concatenate([r.log_probs for r in chain_results], axis=0)
-        # Harmonic-mean log-marginal estimate (Newton-Raftery): adequate for
-        # ν selection over a 3-point grid.  Stable in log space.
         lp_max = float(np.max(log_probs))
         log_marg = lp_max - math.log(np.mean(np.exp(lp_max - log_probs)))
-        # Per-chain split-R-hat from the first chain (chains pooled below).
         from sparc.causal.nuts import _split_r_hat, _ess_bulk
         r_hat = {k: float(_split_r_hat(pooled[k][:, 0])) for k in pooled}
         ess = {k: float(_ess_bulk(pooled[k][:, 0])) for k in pooled}
-        nu_results[nu_val] = dict(
+        return nu_val, dict(
             samples=pooled, log_marg=log_marg, r_hat=r_hat, ess=ess,
             n_chains=len(chain_results),
         )
+
+    # Run all ν values in parallel — each is independent; PyTorch releases
+    # the GIL for tensor ops so threads make real progress concurrently.
+    with ThreadPoolExecutor(max_workers=len(nu_grid)) as _pool:
+        futures = {_pool.submit(_run_nu, nu_val): nu_val for nu_val in nu_grid}
+        for fut in as_completed(futures):
+            nu_val, result = fut.result()
+            if result is not None:
+                nu_results[nu_val] = result
 
     if not nu_results:
         raise RuntimeError("All Matérn NUTS chains failed across ν grid")

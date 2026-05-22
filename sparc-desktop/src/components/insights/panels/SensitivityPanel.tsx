@@ -51,6 +51,41 @@ export default function SensitivityPanel() {
   );
 }
 
+/** E-value robustness levels:
+ * Fragile  < 1.5  — a weak confounder could explain away the effect
+ * Moderate 1.5–3  — moderate confounding needed
+ * Robust   > 3    — strong confounding required; result is credible
+ */
+function eValueLevel(v: number): { label: string; color: string; tip: string } {
+  if (v >= 3) return {
+    label: "Robust",
+    color: "var(--green, #2f7d32)",
+    tip: `E=${v.toFixed(2)}: An unmeasured confounder would need to more than triple both the exposure-outcome and confounder-outcome risk ratios to fully explain this effect. The finding is credible.`,
+  };
+  if (v >= 1.5) return {
+    label: "Moderate",
+    color: "var(--amber, #e79024)",
+    tip: `E=${v.toFixed(2)}: A moderately strong unmeasured confounder could explain away this effect. Interpret with caution.`,
+  };
+  return {
+    label: "Fragile",
+    color: "var(--crimson, #c0392b)",
+    tip: `E=${v.toFixed(2)}: Even a weak unmeasured confounder could nullify this finding. Results should not be acted on alone.`,
+  };
+}
+
+function EValueBadge({ value }: { value: number }) {
+  const { label, color, tip } = eValueLevel(value);
+  return (
+    <span title={tip} style={{ cursor: "help", display: "inline-flex", alignItems: "center", gap: 4 }}>
+      <Pill color={color}>{label}</Pill>
+      <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--ink-2)" }}>
+        {value.toFixed(2)}
+      </span>
+    </span>
+  );
+}
+
 function SensitivityTable({ data }: { data: CausalSensitivity }) {
   return (
     <Panel title="Sensitivity analysis" subtitle={`method · ${data.method}`}>
@@ -82,9 +117,7 @@ function SensitivityTable({ data }: { data: CausalSensitivity }) {
                   {r.rr_equivalent.toFixed(2)}
                 </td>
                 <td style={{ padding: "6px 8px", textAlign: "right" }}>
-                  <Pill color={r.e_value_point >= 2 ? "var(--green, #2f7d32)" : "var(--ink-2)"}>
-                    {r.e_value_point.toFixed(2)}
-                  </Pill>
+                  <EValueBadge value={r.e_value_point} />
                 </td>
                 <td style={{ padding: "6px 8px", color: "var(--ink-2)", fontFamily: "Inter, sans-serif" }}>
                   {r.interpretation}

@@ -182,532 +182,19 @@ def train_single_model_fold_worker(args):
         # Return NaN predictions as fallback
         return fold_idx, test_idx, np.full(len(test_idx), np.nan), None
 
-def calculate_fold_spatial_autocorr(residuals, coords, threshold=1000, _precomputed_indices=None):
-    """
-    Calculate Moran's I for a single fold's residuals using K-NN weights.
-    Returns a simple spatial autocorrelation metric.
-    """
-    try:
-        if len(residuals) < 10:  # Skip tiny folds
-            return 0.0
-
-        k_neighbors = min(8, len(residuals) - 1)
-
-        if k_neighbors < 1:
-            return 0.0
-
-        if _precomputed_indices is not None:
-            indices = _precomputed_indices
-        else:
-            from sklearn.neighbors import NearestNeighbors
-            nbrs = NearestNeighbors(n_neighbors=k_neighbors + 1).fit(coords)
-            _, indices = nbrs.kneighbors(coords)
-
-        n = len(residuals)
-        y_mean = np.mean(residuals)
-        y_centered = residuals - y_mean
-
-        # Vectorised Moran's I (row-standardised equal weights)
-        yc_nb = y_centered[indices[:, 1:]]              # (N, K) — neighbour values
-        cross = float((y_centered[:, None] * yc_nb).sum())
-        denom = float(np.sum(y_centered ** 2))
-        if denom > 0:
-            morans_i = cross / (k_neighbors * denom)
-            return morans_i
-        else:
-            return 0.0
-
-    except Exception:
-        # Silently return 0 on errors to avoid breaking the pipeline
-        return 0.0
-
-
-def _spatial_smooth(predictions, coords, bandwidth=500, k=8, _precomputed=None):
-    """Inverse-distance-weighted spatial smoothing of predictions.
-
-    For each point computes the IDW mean of its k nearest neighbours'
-    predictions using a Gaussian kernel with the given bandwidth (metres).
-    Returns smoothed predictions as a float32 array of the same length.
-    """
-    n = len(predictions)
-    k_use = min(k, n - 1)
-    if k_use < 1:
-        return predictions.copy()
-    if _precomputed is not None:
-        distances, indices = _precomputed
-    else:
-        from sklearn.neighbors import NearestNeighbors
-        nbrs = NearestNeighbors(n_neighbors=k_use + 1).fit(coords)
-        distances, indices = nbrs.kneighbors(coords)
-    # Skip self (index 0) — neighbours are columns 1..k_use
-    dists = distances[:, 1:]          # (n, k_use)
-    nbr_idx = indices[:, 1:]          # (n, k_use)
-    weights = np.exp(-0.5 * (dists / max(bandwidth, 1e-3)) ** 2)  # Gaussian
-    weight_sum = weights.sum(axis=1, keepdims=True)
-    weight_sum[weight_sum < 1e-12] = 1.0
-    weights = weights / weight_sum
-    smoothed = (weights * predictions[nbr_idx]).sum(axis=1)
-    return smoothed.astype(np.float32)
-
-
-def score_model_spatial_consistency(predictions, coords, bandwidth=500):
-    """Label-free spatial consistency score for a set of model predictions.
-
-    Computes ``pseudo_residuals = predictions - _spatial_smooth(predictions)``
-    and returns Moran's I on those pseudo-residuals (via
-    ``calculate_fold_spatial_autocorr``).  Lower Moran's I = spatially
-    consistent predictions = better model for label-free hyperparameter
-    selection.
-
-    Parameters
-    ----------
-    predictions : array-like, shape (n,)
-    coords : array-like, shape (n, 2)
-    bandwidth : float, metres — Gaussian kernel bandwidth for IDW smoothing
-
-    Returns
-    -------
-    float : Moran's I on pseudo-residuals (lower is better).
-            Returns 0.0 on any failure.
-    """
-    try:
-        predictions = np.asarray(predictions, dtype=np.float32)
-        coords = np.asarray(coords)
-        if len(predictions) < 10:
-            return 0.0
-        from sklearn.neighbors import NearestNeighbors
-        k = min(8, len(coords) - 1)
-        nbrs = NearestNeighbors(n_neighbors=k + 1).fit(coords)
-        distances, indices = nbrs.kneighbors(coords)
-        smoothed = _spatial_smooth(predictions, coords, bandwidth=bandwidth,
-                                   _precomputed=(distances, indices))
-        pseudo_residuals = predictions - smoothed
-        return calculate_fold_spatial_autocorr(pseudo_residuals, coords,
-                                               _precomputed_indices=indices)
-    except Exception:
-        return 0.0
-
-
-def estimate_spatial_autocorrelation_range(coords, y, max_distance=None, n_bins=20, sample_size=5000):
-    """
-    Estimate spatial autocorrelation range using Moran's I over increasing distance bands.
-    Uses downsampled spatial weights for memory efficiency.
-    """
-    if max_distance is None:
-        bounds = np.array([coords.min(axis=0), coords.max(axis=0)])
-        max_distance = np.linalg.norm(bounds[1] - bounds[0]) * 0.3
-    print("Estimating spatial autocorrelation range...")
-    
-    # Downsample to avoid memory overload (seeded for reproducibility)
-    if len(coords) > sample_size:
-        rng = np.random.RandomState(42)
-        idx = rng.choice(len(coords), sample_size, replace=False)
-        coords = coords[idx]
-        y = y[idx]
-
-    bins = np.linspace(0, max_distance, n_bins + 1)
-    bin_centers = (bins[:-1] + bins[1:]) / 2
-    moran_i_values = []
-
-    for i in range(len(bins) - 1):
-        try:
-            # Create spatial weight matrix within band
-            w = DistanceBand(coords, threshold=bins[i+1], binary=True, silence_warnings=True)
-            if len(w.neighbors) < 10:
-                moran_i_values.append(0)
-                continue
-
-            moran = Moran(y, w, two_tailed=False)
-            moran_i_values.append(moran.I)
-        except Exception:
-            moran_i_values.append(0)
-    
-    # Find distance where autocorrelation drops below threshold
-    threshold = 0.1
-    for i, mi in enumerate(moran_i_values):
-        if abs(mi) < threshold:
-            print(f"Autocorrelation drops at ~{bin_centers[i]:.0f}m (Moran's I = {mi:.2f})")
-            return bin_centers[i]
-    
-    print(f"No clear drop detected — defaulting to max: {max_distance}m")
-    return max_distance
-
-def spatial_kfold_enhanced(X, y, coords, n_splits=5, block_size=None, buffer_size=0, method='block', stratify_y=True):
-    """
-    Generate stratified spatial cross-validation folds with optional buffer.
-    
-    Parameters:
-    -----------
-    X : np.ndarray or pd.DataFrame
-        Feature matrix
-    y : np.ndarray
-        Target variable
-    coords : np.ndarray, shape (n_samples, 2)
-        Spatial coordinates
-    n_splits : int
-        Number of CV folds
-    block_size : float, optional
-        Block size in meters. If None, estimated from spatial autocorrelation
-    buffer_size : float, optional
-        Buffer distance in meters. Training samples within this distance of
-        any test block are excluded from training. Default is 0 (no buffer).
-    method : str
-        'block' for spatial blocks, 'kmeans' for clustering
-    stratify_y : bool
-        Whether to stratify by y distribution
-        
-    Returns:
-    --------
-    list of tuples : (train_idx, test_idx) for each fold
-    """
-    n_samples = len(X)
-    
-    # Estimate block size if not provided
-    if block_size is None:
-        print("Determining optimal block size from target variable autocorrelation...")
-        
-        try:
-            from sparc.run.spatial_autocorr_comprehensive import SpatialAutocorrelationAnalyzer
-            # Use a reasonable max_distance proportional to the spatial extent
-            bounds = np.array([coords.min(axis=0), coords.max(axis=0)])
-            spatial_extent = np.linalg.norm(bounds[1] - bounds[0])
-            max_dist = spatial_extent * 0.4
-            analyzer = SpatialAutocorrelationAnalyzer(coords, max_distance=max_dist)
-            correlogram_results = analyzer.compute_correlogram(
-                y, 
-                plot=False,
-                title="Block Size Selection Correlogram"
-            )
-            
-            # Use first-zero-crossing of the target variable
-            block_size = correlogram_results.get('first_zero_crossing',
-                                                  correlogram_results['optimal_block_size'])
-            print(f"Target variable zero-crossing: {block_size:.0f}m")
-            
-            # Cap at spatial_extent / (2 * n_splits) to keep folds viable
-            max_viable = spatial_extent / (2.0 * n_splits)
-            if block_size > max_viable:
-                print(f"Capping block size: {block_size:.0f}m > extent/(2*{n_splits}) = {max_viable:.0f}m")
-                block_size = max_viable
-            
-            # Floor
-            block_size = max(block_size, 500)
-                
-        except Exception as e:
-            print(f"Correlogram analysis failed: {e}")
-            print("Falling back to traditional autocorrelation range estimation...")
-            autocorr_range = estimate_spatial_autocorrelation_range(coords, y)
-            block_size = max(autocorr_range * 2, 500)
-        
-        print(f"Final block size: {block_size:.0f}m")
-    
-    if method == 'block':
-        # Create spatial blocks
-        bounds = np.array([coords.min(axis=0), coords.max(axis=0)])
-        n_blocks_x = int(np.ceil((bounds[1, 0] - bounds[0, 0]) / block_size))
-        n_blocks_y = int(np.ceil((bounds[1, 1] - bounds[0, 1]) / block_size))
-        
-        # Assign points to blocks
-        block_assignments = np.zeros(n_samples, dtype=int)
-        for i, (x, y_coord) in enumerate(coords):
-            block_x = int((x - bounds[0, 0]) / block_size)
-            block_y = int((y_coord - bounds[0, 1]) / block_size)
-            block_assignments[i] = block_x * n_blocks_y + block_y
-        
-        # Create folds from blocks (seeded for reproducibility)
-        unique_blocks = np.unique(block_assignments)
-        rng = np.random.RandomState(42)
-        rng.shuffle(unique_blocks)
-        
-        if stratify_y:
-            # Stratify blocks by y distribution
-            block_means = [y[block_assignments == block].mean() for block in unique_blocks]
-            sorted_blocks = [x for _, x in sorted(zip(block_means, unique_blocks))]
-        else:
-            sorted_blocks = unique_blocks
-        
-        # Distribute blocks across folds
-        folds = []
-        for fold_idx in range(n_splits):
-            fold_blocks = sorted_blocks[fold_idx::n_splits]
-            test_mask = np.isin(block_assignments, fold_blocks)
-            test_idx = np.where(test_mask)[0]
-
-            if buffer_size > 0:
-                # Compute distance from every point to nearest test point
-                from scipy.spatial import cKDTree
-                print(f"Applying {buffer_size}m buffer to fold {fold_idx + 1}")
-                tree = cKDTree(coords[test_idx])
-                dist, _ = tree.query(coords, k=1)
-                buffer_mask = dist <= buffer_size
-                
-                # Count excluded training points
-                excluded_count = np.sum(buffer_mask & ~test_mask)
-                print(f"  Excluded {excluded_count} training points within buffer zone")
-            else:
-                buffer_mask = np.zeros(len(coords), dtype=bool)
-
-            train_idx = np.where(~(test_mask | buffer_mask))[0]
-            folds.append((train_idx, test_idx))
-    
-    elif method == 'kmeans':
-        from sklearn.cluster import KMeans
-        
-        # Cluster coordinates
-        kmeans = KMeans(n_clusters=n_splits, random_state=42)
-        cluster_labels = kmeans.fit_predict(coords)
-        
-        # Create folds from clusters
-        folds = []
-        for fold_idx in range(n_splits):
-            test_mask = cluster_labels == fold_idx
-            test_idx = np.where(test_mask)[0]
-            
-            if buffer_size > 0:
-                # Compute distance from every point to nearest test point
-                from scipy.spatial import cKDTree
-                print(f"Applying {buffer_size}m buffer to fold {fold_idx + 1}")
-                tree = cKDTree(coords[test_idx])
-                dist, _ = tree.query(coords, k=1)
-                buffer_mask = dist <= buffer_size
-                
-                # Count excluded training points
-                excluded_count = np.sum(buffer_mask & ~test_mask)
-                print(f"  Excluded {excluded_count} training points within buffer zone")
-            else:
-                buffer_mask = np.zeros(len(coords), dtype=bool)
-            
-            train_idx = np.where(~(test_mask | buffer_mask))[0]
-            folds.append((train_idx, test_idx))
-    
-    else:
-        raise ValueError("Method must be 'block' or 'kmeans'")
-    
-    # Validate fold sizes
-    for i, (train_idx, test_idx) in enumerate(folds):
-        print(f"Fold {i+1}: Train={len(train_idx)}, Test={len(test_idx)}")
-        if len(test_idx) < 50:
-            print(f"Warning: Fold {i+1} has very small test set ({len(test_idx)} samples)")
-    
-    return folds
-
-
-def latent_guided_spatial_kfold(
-    X,
-    y,
-    coords,
-    n_splits=5,
-    block_size=None,
-    buffer_size=0,
-    method="block",
-    stratify_y=True,
-    prior_trunk=None,
-    alpha_val: float = 1.0,
-    vsba_scoring: bool = False,
-    corr_payload: dict | None = None,
-    vsba_n_epochs: int = 20,
-):
-    """
-    Wrapper around ``spatial_kfold_enhanced`` that annotates folds with
-    Area-of-Applicability (AoA) dissimilarity scores when a prior-city
-    trunk is available (multi-city continual mode).
-
-    Folds are generated via geographic blocking exactly as before.
-    If ``prior_trunk`` is provided, each fold is scored via the NNCV
-    dissimilarity index (Meyer et al. 2021)::
-
-        D_i = min_d(test_i → train_embeddings) / mean_d(train_embeddings)
-
-    Folds where > 30% of test points have D_i > 1.5 are logged as
-    out-of-distribution (OOD-heavy).  The fold assignments are unchanged.
-
-    Parameters
-    ----------
-    prior_trunk : SPARCMetaLearner | None
-        Frozen trunk loaded from a prior city in CityRegistry.
-        When ``None`` (single-city mode) the function is a pure
-        pass-through to ``spatial_kfold_enhanced``.
-    alpha_val : float
-        Constant process-rate value used for latent embedding. Default 1.0.
-    """
-    folds = spatial_kfold_enhanced(
-        X=X,
-        y=y,
-        coords=coords,
-        n_splits=n_splits,
-        block_size=block_size,
-        buffer_size=buffer_size,
-        method=method,
-        stratify_y=stratify_y,
-    )
-
-    if prior_trunk is None:
-        return folds
-
-    # ---- Latent-space AoA annotation (multi-city continual mode only) ----
-    try:
-        import torch
-        from sklearn.metrics.pairwise import euclidean_distances
-        from sklearn.neighbors import NearestNeighbors as _NNModel
-
-        X_arr = np.asarray(X, dtype=np.float32)
-        N = len(X_arr)
-        physics_t = torch.from_numpy(X_arr)
-        alpha_t = torch.full((N, 1), alpha_val, dtype=torch.float32)
-
-        with torch.no_grad():
-            embeddings = prior_trunk.encode(physics_t, alpha_t).cpu().numpy()  # (N, hidden_dim)
-
-        rng_aoa = np.random.RandomState(42)
-        for fold_idx, (train_idx, test_idx) in enumerate(folds):
-            if len(train_idx) == 0 or len(test_idx) == 0:
-                continue
-
-            emb_train = embeddings[train_idx]
-            emb_test = embeddings[test_idx]
-
-            # mean_d(train, train) — sampled to keep cost linear
-            n_sample = min(500, len(emb_train))
-            sample_idx = rng_aoa.choice(len(emb_train), n_sample, replace=False)
-            emb_sample = emb_train[sample_idx]
-            d_tt = euclidean_distances(emb_sample, emb_sample)
-            off_diag = d_tt[np.triu_indices(n_sample, k=1)]
-            mean_d_train = float(off_diag.mean()) if len(off_diag) > 0 else 1.0
-            if mean_d_train == 0.0:
-                mean_d_train = 1.0  # guard against degenerate trunk
-
-            # min_d(test_i → train)
-            nn_model = _NNModel(n_neighbors=1, algorithm="ball_tree")
-            nn_model.fit(emb_train)
-            min_dists, _ = nn_model.kneighbors(emb_test)
-            D_i = min_dists[:, 0] / mean_d_train
-
-            ood_frac = float((D_i > 1.5).mean())
-            if ood_frac > 0.30:
-                print(
-                    f"Fold {fold_idx + 1}: {ood_frac * 100:.0f}% OOD test points "
-                    f"(AoA D > 1.5) — flagged as out-of-distribution"
-                )
-            else:
-                print(f"Fold {fold_idx + 1} AoA: {ood_frac * 100:.0f}% OOD (D > 1.5, threshold 30%)")
-
-    except Exception as exc:
-        print(f"Latent AoA annotation failed (non-fatal): {exc}")
-
-    # ---- VSBA label-free fold quality scoring ----
-    if vsba_scoring:
-        try:
-            X_arr = np.asarray(X, dtype=np.float32)
-            coords_arr = np.asarray(coords, dtype=np.float32)
-            _vsba_fold_quality_score(
-                X_arr, coords_arr, folds,
-                corr_payload=corr_payload,
-                n_epochs=vsba_n_epochs,
-            )
-        except Exception as exc:
-            print(f"VSBA fold scoring failed (non-fatal): {exc}")
-
-    return folds
-
-
-def _vsba_fold_quality_score(
-    X: np.ndarray,
-    coords: np.ndarray,
-    folds: list,
-    corr_payload: dict | None = None,
-    n_epochs: int = 20,
-    latent_dim: int = 16,
-    device: str = "cpu",
-) -> list[dict]:
-    """Train a VSBA on training-fold data and score each test fold by ELBO.
-
-    Parameters
-    ----------
-    X : (N, F) float array
-        Standardised feature matrix (same input as SPARC surrogates).
-    coords : (N, 2) float array
-        Spatial coordinates in world units.
-    folds : list of (train_idx, test_idx)
-        CV fold assignments from ``spatial_kfold_enhanced`` or
-        ``latent_guided_spatial_kfold``.
-    corr_payload : dict, optional
-        Stage 0 Matérn correlogram payload (``{"nu": …, "kappa": …}``).
-        When provided, seeds ν and ρ from the correlogram fit.
-    n_epochs : int
-        Training epochs for the VSBA. Default 20.
-    latent_dim : int
-        Latent space dimensionality. Default 16.
-    device : str
-        PyTorch device. Default "cpu".
-
-    Returns
-    -------
-    list of dict
-        Per-fold dict with keys:
-        ``{"fold": int, "elbo_score": float, "ood_label": bool,
-           "elbo_percentile": float}``
-    """
-    try:
-        from sparc.models.vsba import VariationalSpatialBlockAutoencoder
-    except ImportError:
-        print("VSBA: sparc.models.vsba not available — skipping fold scoring")
-        return []
-
-    n_features = X.shape[1]
-
-    # Train VSBA on the union of all training indices (leave-one-out basis)
-    # Use the union across all folds so it sees representative coverage.
-    all_train_idx = np.unique(
-        np.concatenate([tr for tr, _ in folds]) if folds else np.arange(len(X))
-    )
-    X_train = X[all_train_idx].astype(np.float32)
-    coords_train = coords[all_train_idx].astype(np.float32)
-
-    vsba = VariationalSpatialBlockAutoencoder.from_correlogram(
-        corr_payload,
-        n_features=n_features,
-        latent_dim=latent_dim,
-    )
-    try:
-        vsba.fit(X_train, coords_train, n_epochs=n_epochs, device=device)
-    except Exception as exc:
-        print(f"VSBA training failed (non-fatal): {exc}")
-        return []
-
-    # Score each test fold
-    scores = []
-    for fold_idx, (_, test_idx) in enumerate(folds):
-        if len(test_idx) == 0:
-            scores.append({"fold": fold_idx + 1, "elbo_score": float("nan"),
-                           "ood_label": False, "elbo_percentile": 50.0})
-            continue
-        try:
-            score = vsba.elbo_score(
-                X[test_idx].astype(np.float32),
-                coords[test_idx].astype(np.float32),
-                device=device,
-            )
-        except Exception:
-            score = float("nan")
-        scores.append({"fold": fold_idx + 1, "elbo_score": score,
-                       "ood_label": False, "elbo_percentile": float("nan")})
-
-    # Annotate percentile ranks and OOD flag (below 10th percentile)
-    valid_scores = [s["elbo_score"] for s in scores if not math.isnan(s["elbo_score"])]
-    if valid_scores:
-        p10 = float(np.percentile(valid_scores, 10))
-        for s in scores:
-            if not math.isnan(s["elbo_score"]):
-                pct = float(np.mean(np.array(valid_scores) <= s["elbo_score"]) * 100)
-                s["elbo_percentile"] = pct
-                s["ood_label"] = s["elbo_score"] <= p10
-                label = "OOD" if s["ood_label"] else "in-dist"
-                print(
-                    f"  Fold {s['fold']} VSBA ELBO: {s['elbo_score']:.4f} "
-                    f"(p{pct:.0f}, {label})"
-                )
-
-    return scores
+# ---------------------------------------------------------------------------
+# Spatial fold helpers — implementations live in spatial_fold_factory.py.
+# Re-exported here for backward compatibility with existing importers.
+# ---------------------------------------------------------------------------
+from sparc.run.spatial_fold_factory import (  # noqa: E402
+    calculate_fold_spatial_autocorr,
+    _spatial_smooth,
+    score_model_spatial_consistency,
+    estimate_spatial_autocorrelation_range,
+    spatial_kfold_enhanced,
+    latent_guided_spatial_kfold,
+    _vsba_fold_quality_score,
+)
 
 
 class EnhancedSpatialCV:
@@ -720,6 +207,11 @@ class EnhancedSpatialCV:
         self.paths = get_paths()
 
         self.base_config = load_config()
+        # Typed, validated config facade — fail fast on bad project.yml rather
+        # than deep inside a fold.  All Stage 2 code should prefer ``self._cfg``
+        # over ``self.base_config`` for config lookups.
+        from sparc.run.stage_config import StageConfig
+        self._cfg = StageConfig.from_dict(self.base_config)
         # Centralised physics constraints from project.yml (or legacy defaults)
         self._monotone_constraints = load_monotone_constraints(self.base_config)
         # Hardware config: accept an explicit dict (for tests / overrides), else
@@ -732,8 +224,8 @@ class EnhancedSpatialCV:
         latent-space AoA scoring.  Returns None on single-city runs or
         when the registry / prior city are not configured.
         """
-        registry_path = self.base_config.get("continual", {}).get("registry_path")
-        prior_city = self.base_config.get("continual", {}).get("prior_city")
+        registry_path = self._cfg.continual_registry_path
+        prior_city = self._cfg.continual_prior_city
         if not registry_path or not prior_city:
             return None
         try:
@@ -788,7 +280,7 @@ class EnhancedSpatialCV:
         Get the block size: user config > correlogram results > ERM self-supervised > None.
         """
         # 1. User-specified in models.spatial_cv.block_size (via UI or project.yml)
-        block_size = self.base_config.get('models', {}).get('spatial_cv', {}).get('block_size', None)
+        block_size = self._cfg.block_size
         if block_size is not None:
             print(f"Block size from user config: {block_size}m")
             return float(block_size)
@@ -830,17 +322,15 @@ class EnhancedSpatialCV:
         """
         Get the buffer size from project configuration.
         """
-        buffer_size = self.base_config.get('models', {}).get('spatial_cv', {}).get('buffer_size', 0)
-
         # Auto-calculate buffer based on block size if enabled
-        if self.base_config.get('models', {}).get('spatial_cv', {}).get('buffer_size_auto', False):
+        if self._cfg.buffer_size_auto:
             block_size = self.get_block_size_from_config()
             if block_size is not None:
                 auto_buffer = max(100, int(block_size / 3))
                 print(f"Auto-calculated buffer size: {auto_buffer}m (1/3 of block size {block_size}m)")
                 return auto_buffer
 
-        return float(buffer_size) if buffer_size is not None else 0
+        return self._cfg.buffer_size
 
     def get_variable_bandwidths(self):
         """Get per-variable bandwidths (cached): correlogram > manual_parameters > None."""
@@ -859,7 +349,7 @@ class EnhancedSpatialCV:
         --------
         dict or None: Dictionary mapping variable names to bandwidths
         """
-        target_var = self.base_config.get('variables', {}).get('target', '')
+        target_var = self._cfg.target
 
         # 1. Read directly from correlogram_analysis_results.json
         corr = self._load_correlogram_results()
@@ -877,7 +367,7 @@ class EnhancedSpatialCV:
                 return bandwidths
 
         # 2. Legacy fallback: manual_parameters in project config
-        variable_bandwidths = self.base_config.get('manual_parameters', {}).get('bandwidths', None)
+        variable_bandwidths = self._cfg.raw.get('manual_parameters', {}).get('bandwidths', None)
         if variable_bandwidths:
             processed_bandwidths = {}
             for var, bandwidth in variable_bandwidths.items():
@@ -899,7 +389,7 @@ class EnhancedSpatialCV:
         Returns ``None`` when the artifacts are not available so legacy
         callers continue to work unchanged.
         """
-        target_var = self.base_config.get('variables', {}).get('target', '')
+        target_var = self._cfg.target
         if not target_var or not predictor_names:
             return None
         try:
@@ -976,8 +466,8 @@ class EnhancedSpatialCV:
         n_samples : int, optional
             Number of samples in the dataset (for safety checks)
         """
-        model_configs = self.base_config.get('models', {})
-        
+        model_configs = {'gwr': self._cfg.gwr_params, 'gwrf': self._cfg.gwrf_params, 'ggpgam': self._cfg.ggpgam_params}
+
         models = []
 
         # Resolve shared per-model dependencies once, before any model branch.
@@ -1128,7 +618,7 @@ class EnhancedSpatialCV:
             models.append(ggpgam)
         
         # Set output CRS on all models for GeoPackage export
-        _out_crs = self.base_config.get('crs', {}).get('target_projected', 'EPSG:26919')
+        _out_crs = self._cfg.output_crs
         for m in models:
             m._output_crs = _out_crs
         
@@ -1303,9 +793,27 @@ class EnhancedSpatialCV:
         
         Parameters
         ----------
+        X : np.ndarray, pd.DataFrame, or RawFeatureMatrix
+            **Unscaled** feature matrix.  Pass a ``RawFeatureMatrix`` at the call
+            site to make the scaling contract explicit.  Passing a
+            ``ScaledFeatureMatrix`` raises ``TypeError`` immediately — this method
+            applies its own canonical scaler internally; double-scaling silently
+            corrupts every base-model fit.
         feature_names : list, optional
             List of feature names for OOF extraction. If None, will be extracted from X if it's a DataFrame.
         """
+        # ── scaling-contract guard ────────────────────────────────────────────
+        from sparc.run.feature_matrix import RawFeatureMatrix, ScaledFeatureMatrix
+        if isinstance(X, ScaledFeatureMatrix):
+            raise TypeError(
+                "generate_optimized_oof_predictions received a ScaledFeatureMatrix. "
+                "Pass unscaled features (RawFeatureMatrix or a plain ndarray/DataFrame). "
+                "This method applies its own canonical StandardScaler internally; "
+                "passing pre-scaled features would double-scale and corrupt all base models."
+            )
+        if isinstance(X, RawFeatureMatrix):
+            X = X.data  # unwrap to ndarray; canonical scaler runs below
+
         # Extract feature names if not provided
         if feature_names is None:
             if hasattr(X, 'columns'):
@@ -1361,7 +869,7 @@ class EnhancedSpatialCV:
             oof_predictions = self._sequential_cv_training(X, y, coords, models, model_names, folds, feature_names)
 
         # --- Label-free spatial consistency scoring (gated by config flag) ---
-        if self.base_config.get('models', {}).get('spatial_cv', {}).get('self_supervised_hparam_scoring', False):
+        if self._cfg.self_supervised_scoring:
             _bw = float(self.get_block_size_from_config() or 500.0)
             print("\n=== Label-Free Spatial Consistency Scores (lower = better) ===")
             for _mi, _mn in enumerate(model_names):
@@ -1385,13 +893,13 @@ class EnhancedSpatialCV:
             # Access the source GeoDataFrame from the parent pipeline
             src_data = getattr(self, '_source_geodataframe', None)
             if src_data is not None and hasattr(src_data, 'geometry') and len(src_data) == len(oof_predictions):
-                target_col = self.base_config.get('variables', {}).get('target', 'target')
+                target_col = self._cfg.target
                 gpkg_gdf = gpd.GeoDataFrame(geometry=src_data.geometry.values, crs=src_data.crs)
                 # Add observed target
                 if target_col in src_data.columns:
                     gpkg_gdf['observed'] = src_data[target_col].values
                 # Add identifier if available
-                id_col = self.base_config.get('variables', {}).get('identifier')
+                id_col = self._cfg.identifier
                 if id_col and id_col in src_data.columns:
                     gpkg_gdf['identifier'] = src_data[id_col].values
                 # Add model predictions and residuals
@@ -1399,6 +907,18 @@ class EnhancedSpatialCV:
                     gpkg_gdf[f'pred_{mname}'] = oof_predictions[:, i]
                     if target_col in src_data.columns:
                         gpkg_gdf[f'residual_{mname}'] = oof_predictions[:, i] - src_data[target_col].values
+                # Annotate the GPKG with the target unit so every consumer
+                # (QGIS, the API, the renderer) is self-describing without
+                # needing to consult a separate artifact.
+                try:
+                    from sparc.data.units import load_variable_meta as _lvm
+                    _var_reg = _lvm(self.base_config)
+                    _unit_str = _var_reg.get(target_col).unit or ""
+                except Exception:
+                    _unit_str = ""
+                if _unit_str:
+                    gpkg_gdf['_unit'] = _unit_str
+                    print(f"  Target unit annotated on GPKG: {_unit_str!r}")
                 gpkg_path = os.path.join(output_dir, 'spatial_cv_predictions.gpkg')
                 save_geo_path(
                     gpkg_gdf, gpkg_path,
@@ -1445,7 +965,7 @@ class EnhancedSpatialCV:
                 rmse = np.sqrt(mean_squared_error(y, oof_predictions[:, model_idx]))
                 msg = f"{model_name.upper()}: R² = {r2:.4f}, RMSE = {rmse:.4f}"
                 # Append benchmark metrics when enabled
-                bm_cfg = getattr(self, 'base_config', {}).get('benchmark_metrics', {}) if hasattr(self, 'base_config') else {}
+                bm_cfg = {'enabled': self._cfg.benchmark_metrics_enabled}
                 if bm_cfg.get('enabled', False):
                     nrmse = _evaluator.calculate_nrmse(y, oof_predictions[:, model_idx])
                     pcorr = _evaluator.calculate_pattern_correlation(y, oof_predictions[:, model_idx])
@@ -1749,17 +1269,17 @@ class EnhancedSpatialCV:
             
             # Load data for performance calculation
             print("=== Loading Data for Performance Calculation ===")
-            selected_features = self.base_config.get('predictors', {}).get('base_model', [])
+            selected_features = list(self._cfg.features)
             
             data = load_and_preprocess_data(
-                raw_data_path=self.base_config["paths"]["raw_csv_path"],
-                identifier_col=self.base_config['variables']['identifier'],
-                target_col=self.base_config['variables']['target'],
-                coords_cols=self.base_config['variables']['coordinates'],
+                raw_data_path=self._cfg.raw_csv_path,
+                identifier_col=self._cfg.identifier,
+                target_col=self._cfg.target,
+                coords_cols=self._cfg.coordinates,
                 predictor_cols=selected_features,
-                initial_crs=self.base_config['crs']['initial'],
-                target_crs=self.base_config['crs']['target_projected'],
-                output_dir=self.base_config.get('output', {}).get('base_dir'),
+                initial_crs=self._cfg.initial_crs,
+                target_crs=self._cfg.target_crs,
+                output_dir=self._cfg.output_dir,
             )
 
             # Store reference for gpkg export
@@ -1769,7 +1289,7 @@ class EnhancedSpatialCV:
             selected_features = [f for f in selected_features if f in available_features]
             feature_names = selected_features
             
-            y = data[self.base_config['variables']['target']].values
+            y = data[self._cfg.target].values
             
             # Check for NaN values in OOF predictions and handle them
             print("\n=== Checking OOF predictions for NaN values ===")
@@ -1808,8 +1328,7 @@ class EnhancedSpatialCV:
                     model_rmse = np.sqrt(mean_squared_error(y, oof_predictions[:, i]))
                     perf = {'r2': model_r2, 'rmse': model_rmse, 'status': 'success'}
                     msg = f"{model_name.upper()}: R² = {model_r2:.4f}, RMSE = {model_rmse:.4f}"
-                    bm_cfg = self.base_config.get('benchmark_metrics', {})
-                    if bm_cfg.get('enabled', False):
+                    if self._cfg.benchmark_metrics_enabled:
                         perf['nrmse'] = _evaluator.calculate_nrmse(y, oof_predictions[:, i])
                         perf['pattern_correlation'] = _evaluator.calculate_pattern_correlation(y, oof_predictions[:, i])
                         perf['amplitude_ratio'] = _evaluator.calculate_amplitude_ratio(y, oof_predictions[:, i])
@@ -1848,23 +1367,23 @@ class EnhancedSpatialCV:
         
         # Load and preprocess data
         print("=== Loading and Preprocessing Data ===")
-        selected_features = self.base_config.get('predictors', {}).get('base_model', [])
+        selected_features = list(self._cfg.features)
         
         # GUARD: never allow the target variable into the feature matrix
-        target_col = self.base_config['variables']['target']
+        target_col = self._cfg.target
         if target_col in selected_features:
             print(f"[WARNING] Target variable '{target_col}' found in selected_features — removing to prevent data leakage!")
             selected_features = [f for f in selected_features if f != target_col]
         
         data = load_and_preprocess_data(
-            raw_data_path=self.base_config["paths"]["raw_csv_path"],
-            identifier_col=self.base_config['variables']['identifier'],
-            target_col=self.base_config['variables']['target'],
-            coords_cols=self.base_config['variables']['coordinates'],
+            raw_data_path=self._cfg.raw_csv_path,
+            identifier_col=self._cfg.identifier,
+            target_col=self._cfg.target,
+            coords_cols=self._cfg.coordinates,
             predictor_cols=selected_features,
-            initial_crs=self.base_config['crs']['initial'],
-            target_crs=self.base_config['crs']['target_projected'],
-            output_dir=self.base_config.get('output', {}).get('base_dir'),
+            initial_crs=self._cfg.initial_crs,
+            target_crs=self._cfg.target_crs,
+            output_dir=self._cfg.output_dir,
         )
 
         # Store reference to the source GeoDataFrame for gpkg export
@@ -1879,14 +1398,14 @@ class EnhancedSpatialCV:
             from sparc.run.dataset_profiler import DatasetProfiler
             profiler = DatasetProfiler(
                 data,
-                coord_cols=self.base_config['variables']['coordinates'],
+                coord_cols=self._cfg.coordinates,
                 feature_cols=selected_features,
             )
             print(profiler.summary())
             recs = profiler.recommend_parameters()
             # Only apply profiler overrides if explicitly enabled in config;
             # by default, honour the user-specified hyperparameters.
-            if self.base_config.get('pipeline', {}).get('use_dataset_profiler', False):
+            if self._cfg.use_dataset_profiler:
                 self.apply_profiler_overrides(recs)
                 print("DatasetProfiler overrides applied.")
             else:
@@ -1913,14 +1432,36 @@ class EnhancedSpatialCV:
             print(f"Warning: DatasetProfiler unavailable ({_e}). Using project config defaults.")
         
         X_gwen = data[selected_features].values
-        y = data[self.base_config['variables']['target']].values
+        y = data[self._cfg.target].values
         # Use projected (metric) coordinates so block_size/buffer_size are in metres.
         # load_and_preprocess_data always writes projected_X / projected_Y.
         if 'projected_X' in data.columns and 'projected_Y' in data.columns:
             coords = data[['projected_X', 'projected_Y']].values
         else:
-            coords = data[self.base_config['variables']['coordinates']].values
-        
+            coords = data[self._cfg.coordinates].values
+
+        # ── Optional SLX spatial-lag augmentation ──────────────────────────
+        # Appends neighbor-averaged predictors WX to X_gwen so that base
+        # models can distinguish own-location from spill-over covariates.
+        # Activated by setting ``predictors.include_spatial_lag: true`` in
+        # project.yml.  k controls queen contiguity (default 8 on a fishnet).
+        _slx_cfg = self._cfg.raw.get('predictors', {}) or {}
+        if _slx_cfg.get('include_spatial_lag', False):
+            try:
+                from sparc.features.spatial_lag import SpatialLagTransformer
+                _slx_k = int(_slx_cfg.get('spatial_lag_k', 8))
+                _slx = SpatialLagTransformer(k=_slx_k)
+                X_gwen, selected_features = _slx.fit_transform(
+                    coords, X_gwen, list(selected_features)
+                )
+                print(
+                    f"SLX: augmented feature matrix → {X_gwen.shape[1]} columns "
+                    f"({X_gwen.shape[1] // 2} predictors × 2, k={_slx_k} neighbors)"
+                )
+            except Exception as _slx_e:
+                print(f"Warning: SLX augmentation failed ({_slx_e}). Using original features.")
+        # ───────────────────────────────────────────────────────────────────
+
         print(f"Using {len(selected_features)} features: {selected_features}")
         
         # CRITICAL: Base models have INTERNAL scalers!
@@ -1998,8 +1539,7 @@ class EnhancedSpatialCV:
             model_rmse = np.sqrt(mean_squared_error(y, oof_predictions[:, i]))
             perf = {'r2': model_r2, 'rmse': model_rmse}
             msg = f"{model_name.upper()}: R² = {model_r2:.4f}, RMSE = {model_rmse:.4f}"
-            bm_cfg = self.base_config.get('benchmark_metrics', {})
-            if bm_cfg.get('enabled', False):
+            if self._cfg.benchmark_metrics_enabled:
                 perf['nrmse'] = _evaluator.calculate_nrmse(y, oof_predictions[:, i])
                 perf['pattern_correlation'] = _evaluator.calculate_pattern_correlation(y, oof_predictions[:, i])
                 perf['amplitude_ratio'] = _evaluator.calculate_amplitude_ratio(y, oof_predictions[:, i])
@@ -2051,7 +1591,7 @@ def main(fast_mode=False):
         cv_system = EnhancedSpatialCV()
         
         # Check if Stage 2 (base model OOF) should be skipped entirely
-        skip_stage_2 = cv_system.base_config.get('pipeline_execution', {}).get('skip_stage_2_base_models', False)
+        skip_stage_2 = cv_system._cfg.skip_stage_2_base_models
         
         if skip_stage_2:
             # =================================================================
@@ -2065,16 +1605,16 @@ def main(fast_mode=False):
             print("         Surrogates will train against raw y. This degrades surrogate quality.")
             print("         Set skip_stage_2_base_models=false to enable proper surrogate pretraining.")
             
-            selected_features = cv_system.base_config.get('predictors', {}).get('base_model', [])
+            selected_features = list(cv_system._cfg.features)
             data = load_and_preprocess_data(
-                raw_data_path=cv_system.base_config["paths"]["raw_csv_path"],
-                identifier_col=cv_system.base_config['variables']['identifier'],
-                target_col=cv_system.base_config['variables']['target'],
-                coords_cols=cv_system.base_config['variables']['coordinates'],
+                raw_data_path=cv_system._cfg.raw_csv_path,
+                identifier_col=cv_system._cfg.identifier,
+                target_col=cv_system._cfg.target,
+                coords_cols=cv_system._cfg.coordinates,
                 predictor_cols=selected_features,
-                initial_crs=cv_system.base_config['crs']['initial'],
-                target_crs=cv_system.base_config['crs']['target_projected'],
-                output_dir=cv_system.base_config.get('output', {}).get('base_dir'),
+                initial_crs=cv_system._cfg.initial_crs,
+                target_crs=cv_system._cfg.target_crs,
+                output_dir=cv_system._cfg.output_dir,
             )
             
             paths = get_paths()
@@ -2083,7 +1623,7 @@ def main(fast_mode=False):
             data_unscaled = data.copy()
             X_original_features = data_unscaled[selected_features_filtered].values
             
-            target_col = cv_system.base_config['variables']['target']
+            target_col = cv_system._cfg.target
             coords = data[['projected_X', 'projected_Y']].values
             y = data[target_col].values
             
@@ -2139,20 +1679,20 @@ def main(fast_mode=False):
             print("\n=== Loading and Merging Data by ID ===")
             
             # Load raw data and process it the same way as in Stage 2
-            raw_data = pd.read_csv(cv_system.base_config["paths"]["raw_csv_path"])
+            raw_data = pd.read_csv(cv_system._cfg.raw_csv_path)
             
             # Process the data the same way as Stage 2 to get correct coordinates
-            selected_features = cv_system.base_config.get('predictors', {}).get('base_model', [])
+            selected_features = list(cv_system._cfg.features)
             
             data = load_and_preprocess_data(
-                raw_data_path=cv_system.base_config["paths"]["raw_csv_path"],
-                identifier_col=cv_system.base_config['variables']['identifier'],
-                target_col=cv_system.base_config['variables']['target'],
-                coords_cols=cv_system.base_config['variables']['coordinates'],
+                raw_data_path=cv_system._cfg.raw_csv_path,
+                identifier_col=cv_system._cfg.identifier,
+                target_col=cv_system._cfg.target,
+                coords_cols=cv_system._cfg.coordinates,
                 predictor_cols=selected_features,
-                initial_crs=cv_system.base_config['crs']['initial'],
-                target_crs=cv_system.base_config['crs']['target_projected'],
-                output_dir=cv_system.base_config.get('output', {}).get('base_dir'),
+                initial_crs=cv_system._cfg.initial_crs,
+                target_crs=cv_system._cfg.target_crs,
+                output_dir=cv_system._cfg.output_dir,
             )
             
             # CRITICAL: Save UNSCALED features NOW before meta-ensemble scaling modifies them!
@@ -2200,7 +1740,7 @@ def main(fast_mode=False):
             )
             
             # Get the identifier column name from config
-            id_col = cv_system.base_config['variables']['identifier']
+            id_col = cv_system._cfg.identifier
             
             # Add ID column to OOF predictions.
             # Row counts must match — both come from the same load_and_preprocess_data
@@ -2240,7 +1780,7 @@ def main(fast_mode=False):
             print(f"Joined data shape: {joined_data.shape}")
             
             # Extract components
-            target_col = cv_system.base_config['variables']['target']
+            target_col = cv_system._cfg.target
             coords = joined_data[['projected_X', 'projected_Y']].values
             y = joined_data[target_col].values
             base_model_names = ['ols', 'gwr', 'gwrf', 'ggpgam']
@@ -2269,7 +1809,7 @@ def main(fast_mode=False):
         # ============================================================================
         # Check if full retrain should be skipped
         # (force-skip when base CV was skipped — no base models to retrain)
-        skip_stage_2b = skip_stage_2 or cv_system.base_config.get('pipeline_execution', {}).get('skip_stage_2b_full_retrain', False)
+        skip_stage_2b = skip_stage_2 or cv_system._cfg.skip_stage_2b_full_retrain
         
         if skip_stage_2b:
             print("\n=== Full Retrain: SKIPPED (skip_stage_2b_full_retrain=true) ===")
@@ -2294,15 +1834,15 @@ def main(fast_mode=False):
             
             # CRITICAL: Use data_unscaled (saved before meta-ensemble scaling!)
             # Get selected features
-            selected_features_2b = cv_system.base_config.get('predictors', {}).get('base_model', [])
+            selected_features_2b = list(cv_system._cfg.features)
             available_features_2b = data_unscaled.columns.tolist()
             selected_features_2b = [f for f in selected_features_2b if f in available_features_2b]
             
             # Extract UNSCALED features, target, and coordinates
             X_full_df = data_unscaled[selected_features_2b]          # DataFrame (keeps column names for GWR)
             X_full = X_full_df.values                                 # ndarray for other models
-            y_full = data_unscaled[cv_system.base_config['variables']['target']].values
-            coords_full = data_unscaled[cv_system.base_config['variables']['coordinates']].values
+            y_full = data_unscaled[cv_system._cfg.target].values
+            coords_full = data_unscaled[cv_system._cfg.coordinates].values
             
             print(f"Full dataset: {len(X_full)} samples, {len(selected_features_2b)} features")
             print(f"Features: {selected_features_2b}")
@@ -2360,7 +1900,7 @@ def main(fast_mode=False):
                 # Build DAG-informed physics priors for prior-centered ridge regression.
                 try:
                     from sparc.config.config import load_physics_priors
-                    _physics_raw = load_physics_priors(cv_system.base_config)
+                    _physics_raw = load_physics_priors(cv_system._cfg.raw)
                     _coefficients_section = _physics_raw.get('coefficients', {})
                     _prior_dict = {}
                     _temp_scaler = StandardScaler()
@@ -2503,7 +2043,7 @@ def main(fast_mode=False):
         
         # Load hyperparameters from project config
         print("\n=== Loading Hyperparameters ===")
-        cfg = cv_system.base_config
+        cfg = cv_system.base_config  # keep raw dict for hyperparams not yet in StageConfig
         
         # Compute base OOF residuals (needed by both cached and fresh paths)
         base_oof_residuals = {}
@@ -2737,7 +2277,7 @@ def main(fast_mode=False):
         # Laplacian eigenmaps are superseded by sinusoidal spatial encoding in the
         # neural meta-learner and are not consumed by any downstream stage.
         # Skip by default; set compute_laplacian_features: true in config to re-enable.
-        _compute_laplacian = cv_system.base_config.get(
+        _compute_laplacian = cv_system._cfg.raw.get(
             'pipeline_execution', {}
         ).get('compute_laplacian_features', False)
         if _compute_laplacian:
@@ -2898,7 +2438,7 @@ def main(fast_mode=False):
         final_scaler_components = {
             'approach': best_approach,
             'feature_names': selected_features,
-            'coordinate_columns': cv_system.base_config['variables']['coordinates'],
+            'coordinate_columns': cv_system._cfg.coordinates,
             'model_performance': {
                 'r2': best_meta_r2,
                 'rmse': best_meta_rmse,

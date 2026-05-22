@@ -376,6 +376,9 @@ def _capture_cuda_graph(
 
 
 # CU-10a: Trunk parameter prefix set — used by EWC and DDP broadcast.
+# Canonical definition lives on SPARCMetaLearner._TRUNK_KEYS (neural_meta.py).
+# Replicated here as a module-level constant to avoid a top-level SPARC import
+# (all SPARC model imports are deferred inside functions for startup performance).
 _TRUNK_KEYS: frozenset[str] = frozenset(
     {"physics_enc", "alpha_emb", "trunk_fusion", "time_embed"}
 )

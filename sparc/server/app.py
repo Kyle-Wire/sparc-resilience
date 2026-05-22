@@ -2250,6 +2250,148 @@ async def post_scenario_library(payload: dict = Body(...)):
 
 
 # ------------------------------------------------------------------
+# Multi-step scenario chain rollout (JD-4)
+# ------------------------------------------------------------------
+
+@app.post("/scenarios/chain")
+async def post_scenarios_chain(payload: dict = Body(...)):
+    """Run a multi-step latent rollout through a sequence of interventions.
+
+    Body::
+
+        {
+          "actions": [
+            {"treatment": "Pct_Canopy", "delta_x": 10, "delta_t": 1.0},
+            ...
+          ],
+          "mode": "latent"   // "latent" | "reencode"
+        }
+
+    Returns per-step mean delta and cumulative delta over the study area.
+    """
+    actions_raw = payload.get("actions", [])
+    if not isinstance(actions_raw, list) or len(actions_raw) == 0:
+        raise HTTPException(400, "'actions' list with at least one item required")
+    mode = str(payload.get("mode", "latent"))
+
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    try:
+        import numpy as _np
+        from sparc.run.pipeline_paths import PipelinePaths
+        _paths = PipelinePaths.from_config(state.project_config)
+        _v2_dir = _paths.stage2_dir / "v2_neural"
+        _meta_path = _v2_dir / "meta_info.json"
+        if not _meta_path.exists():
+            raise HTTPException(424, "Stage 1 neural model not available — run Stage 1 first")
+
+        import json as _json
+        import torch as _torch
+        from sparc.models.neural_meta import SPARCMetaLearner
+        from sparc.models.process_rate_net import ProcessRateNet
+        from sparc.models.latent_predictor import LatentPredictor
+        from sparc.models.action_embedding import ActionEmbedding
+        from sparc.inference.latent_rollout import multi_step_latent_rollout
+        import joblib as _joblib
+
+        with open(_meta_path) as _mf:
+            _mi = _json.load(_mf)
+
+        _model = SPARCMetaLearner(
+            n_base_models=_mi["n_base_models"],
+            n_physics_features=_mi.get("n_physics_extended", _mi["n_physics_features"]),
+            d_spatial=_mi["d_spatial"],
+            hidden_dim=_mi["hidden_dim"],
+            thresholds=_mi.get("thresholds", [0.25, 0.50, 0.75]),
+        )
+        _model.load_state_dict(_torch.load(_v2_dir / "neural_meta.pt", map_location="cpu", weights_only=True))
+        _model.eval()
+
+        _process = ProcessRateNet(n_inputs=_mi.get("pr_input_dim", _mi["n_physics_features"]))
+        _process.load_state_dict(_torch.load(_v2_dir / "process_rate_net.pt", map_location="cpu", weights_only=True))
+        _process.eval()
+
+        _hidden_dim = _mi["hidden_dim"]
+        _predictor = LatentPredictor(hidden_dim=_hidden_dim)
+        _predictor_path = _v2_dir / "latent_predictor.pt"
+        if _predictor_path.exists():
+            _predictor.load_state_dict(_torch.load(_predictor_path, map_location="cpu", weights_only=True))
+        _predictor.eval()
+
+        _treat_cols = state.project_config.get("treatments", []) or state.project_config.get("predictors", [])
+        _action_embed = ActionEmbedding(n_treatments=max(len(_treat_cols), 1), hidden_dim=_hidden_dim)
+        _ae_path = _v2_dir / "action_embedding.pt"
+        if _ae_path.exists():
+            _action_embed.load_state_dict(_torch.load(_ae_path, map_location="cpu", weights_only=True))
+        _action_embed.eval()
+
+        # Load physics tensors
+        _tensors_path = _v2_dir / "tensors.npz"
+        if not _tensors_path.exists():
+            raise HTTPException(424, "Physics tensors not found in v2_neural directory")
+        _tensors = _np.load(str(_tensors_path), allow_pickle=False)
+        _phys = _torch.tensor(_tensors["physics_feats"], dtype=_torch.float32)
+        _base = _torch.tensor(_tensors.get("base_preds", _np.zeros((_phys.shape[0], 1))), dtype=_torch.float32)
+        _spatial = _torch.tensor(_tensors.get("X_spatial", _np.zeros((_phys.shape[0], 2))), dtype=_torch.float32)
+        _coords = _torch.tensor(_tensors.get("coords", _np.zeros((_phys.shape[0], 2))), dtype=_torch.float32)
+        _knn = _torch.tensor(_tensors.get("knn_index", _np.zeros((_phys.shape[0], 8), dtype=_np.int64)), dtype=_torch.long)
+
+        # Compute alpha
+        _pr_col_idxs = _mi.get("pr_col_idxs", list(range(min(_process.n_inputs if hasattr(_process, "n_inputs") else _phys.shape[1], _phys.shape[1]))))
+        with _torch.no_grad():
+            _alpha = _process(_phys[:, _pr_col_idxs])
+
+        _y_mean = float(_mi.get("y_mean", 0.0))
+        _y_std = float(_mi.get("y_std", 1.0))
+
+        # Build action tuples
+        actions = []
+        for a in actions_raw:
+            actions.append((str(a["treatment"]), float(a.get("delta_x", 0.0)), float(a.get("delta_t", 1.0))))
+
+        result = multi_step_latent_rollout(
+            model=_model,
+            predictor=_predictor,
+            action_embed=_action_embed,
+            physics_feats=_phys,
+            base_preds=_base,
+            X_spatial=_spatial,
+            coords=_coords,
+            knn_index=_knn,
+            alpha=_alpha,
+            actions=actions,
+            mode=mode,
+            max_steps=10,
+            y_mean=_y_mean,
+            y_std=_y_std,
+        )
+
+        steps_out = []
+        for i, step in enumerate(result.steps):
+            steps_out.append({
+                "step": i + 1,
+                "treatment": step.treatment,
+                "delta_x": step.delta_x,
+                "mean_delta": float(_np.mean(step.delta)),
+                "p5_delta": float(_np.percentile(step.delta, 5)),
+                "p95_delta": float(_np.percentile(step.delta, 95)),
+            })
+
+        cumulative = float(_np.mean(result.final.delta)) if result.n_steps > 0 else 0.0
+        return {
+            "n_steps": result.n_steps,
+            "steps": steps_out,
+            "cumulative_mean_delta": cumulative,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"Chain rollout failed: {exc}") from exc
+
+
+# ------------------------------------------------------------------
 # Standalone snapshot HTML (Phase 17)
 # ------------------------------------------------------------------
 
@@ -2465,6 +2607,93 @@ async def get_gwen_data():
     )
 
 
+# ------------------------------------------------------------------
+# GWEN approval gate — allows the frontend to surface GWEN results and
+# let the user approve/skip before Stage 2 begins.
+# ------------------------------------------------------------------
+
+@app.get("/gwen/status")
+async def get_gwen_status():
+    """Return GWEN approval state and variable importance rows.
+
+    Response schema::
+
+        {
+          "approved": bool,
+          "approval_path": str,
+          "rows": [...] | null,    # gwen_variable_importance records
+          "stage1_complete": bool,
+        }
+    """
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+
+    paths = PipelinePaths.from_config(state.project_config)
+    approval_path = paths.gwen_approved
+    approved = approval_path.exists()
+    stage1_complete = False
+    rows = None
+
+    store = None
+    try:
+        if state.registry is not None:
+            from sparc.registry.store import ArtifactStore
+            store = ArtifactStore(state.registry)
+            stage1_complete = store.has("1", "gwen_variable_importance") or store.has("1", "gwen_results")
+            if store.has("1", "gwen_variable_importance"):
+                df = store.read_any("1", "gwen_variable_importance")
+                rows = df.to_dict(orient="records") if df is not None else None
+            elif store.has("1", "gwen_results"):
+                r = store.read_any("1", "gwen_results")
+                rows = r.get("rows") if isinstance(r, dict) else None
+    except Exception:
+        pass
+
+    return {
+        "approved": approved,
+        "approval_path": str(approval_path),
+        "stage1_complete": stage1_complete,
+        "rows": rows,
+    }
+
+
+@app.post("/gwen/approve")
+async def post_gwen_approve():
+    """Write the ``gwen_approved.txt`` sentinel so the pipeline can proceed to Stage 2.
+
+    Returns the approval path and the timestamp written.
+    """
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    import time
+    from sparc.run.pipeline_paths import PipelinePaths
+
+    paths = PipelinePaths.from_config(state.project_config)
+    approval_path = paths.gwen_approved
+    approval_path.parent.mkdir(parents=True, exist_ok=True)
+    ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+    approval_path.write_text(f"approved at {ts}\n", encoding="utf-8")
+    return {"approved": True, "approval_path": str(approval_path), "approved_at": ts}
+
+
+@app.delete("/gwen/approve")
+async def delete_gwen_approve():
+    """Revoke approval by removing the ``gwen_approved.txt`` sentinel."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    from sparc.run.pipeline_paths import PipelinePaths
+
+    paths = PipelinePaths.from_config(state.project_config)
+    approval_path = paths.gwen_approved
+    if approval_path.exists():
+        approval_path.unlink()
+    return {"approved": False, "approval_path": str(approval_path)}
+
+
 @app.get("/results/model_performance")
 async def get_model_performance():
     """Return per-model R²/RMSE for the R² bar chart on the Results page."""
@@ -2562,7 +2791,21 @@ async def get_spatial_cv_predictions():
         )
     if gdf.crs is not None and str(gdf.crs) != "EPSG:4326":
         gdf = gdf.to_crs(epsg=4326)
-    geojson = gdf.__geo_interface__
+    # Build a self-describing response: include the target unit so the
+    # frontend never has to decode z-scores or look up a separate artifact.
+    unit_str = ""
+    if "_unit" in gdf.columns and len(gdf) > 0:
+        unit_str = str(gdf["_unit"].iloc[0])
+    if not unit_str:
+        raw = getattr(state, "raw_project_yaml", None) or {}
+        unit_str = (
+            (raw.get("output") or {}).get("response_units")
+            or (raw.get("project") or {}).get("response_units")
+            or ""
+        )
+    geojson = dict(gdf.__geo_interface__)
+    if unit_str:
+        geojson["unit"] = unit_str
     state.result_cache.set("2", "spatial_cv_predictions_geojson", geojson)
     return geojson
 
@@ -5854,6 +6097,151 @@ async def reject_dag():
 
 
 # ------------------------------------------------------------------
+# AI-assisted DAG edge suggestions (Item #12)
+# ------------------------------------------------------------------
+
+@app.post("/dag/suggest-edges")
+async def post_dag_suggest_edges(payload: dict = Body(default={})):
+    """Suggest plausible causal edges based on partial-correlation analysis.
+
+    Uses the project data to rank variable pairs by partial correlation
+    (|r| > threshold), filtered by known domain priors from physics.yml.
+    Returns ordered list of (parent, child, score, reason) suggestions that
+    the user can accept or ignore.
+
+    Body (all optional)::
+
+        {
+          "threshold": 0.15,      // minimum |partial_r| to include
+          "max_suggestions": 10   // cap on output list length
+        }
+    """
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    threshold = float(payload.get("threshold", 0.15))
+    max_suggestions = int(payload.get("max_suggestions", 10))
+
+    try:
+        import pandas as _pd
+        import numpy as _np
+        from sparc.run.pipeline_paths import PipelinePaths
+        _paths = PipelinePaths.from_config(state.project_config)
+
+        # Load the merged dataset produced by Stage 0 / data collection
+        _data_path = _paths.output_dir / "merged_data.parquet"
+        if not _data_path.exists():
+            _data_path = _paths.output_dir / "merged_data.csv"
+        if not _data_path.exists():
+            # Try Stage 2 dir
+            _data_path = _paths.stage2_dir / "merged_data.parquet"
+
+        if not _data_path.exists():
+            raise HTTPException(424, "Merged data file not found — run Stage 0 first")
+
+        _df = _pd.read_parquet(str(_data_path)) if str(_data_path).endswith(".parquet") else _pd.read_csv(str(_data_path))
+
+        # Keep only numeric predictors + outcome
+        _predictors = state.project_config.get("predictors", [])
+        _outcome = (state.project_config.get("outcomes") or ["target"])[0]
+        _cols = [c for c in _predictors + [_outcome] if c in _df.columns]
+        _df_num = _df[_cols].select_dtypes(include=["number"]).dropna()
+
+        if _df_num.shape[1] < 2:
+            return {"suggestions": [], "message": "Insufficient numeric columns for correlation analysis"}
+
+        # Partial correlation via precision matrix (inverse of correlation matrix)
+        _corr = _df_num.corr().values  # (p, p)
+        _col_names = list(_df_num.columns)
+        _p = len(_col_names)
+
+        try:
+            _precision = _np.linalg.inv(_corr)
+        except _np.linalg.LinAlgError:
+            _precision = _np.linalg.pinv(_corr)
+
+        # Partial correlation: r_ij = -prec_ij / sqrt(prec_ii * prec_jj)
+        _diag = _np.diag(_precision)
+        _partial_r = _np.zeros((_p, _p))
+        for _i in range(_p):
+            for _j in range(_p):
+                if _i == _j:
+                    continue
+                _denom = _np.sqrt(abs(_diag[_i]) * abs(_diag[_j]))
+                _partial_r[_i, _j] = -_precision[_i, _j] / _denom if _denom > 0 else 0.0
+
+        # Load existing DAG edges to avoid duplicates
+        _existing_edges: set = set()
+        _dag_path = _paths.output_dir / "dag.yml"
+        if not _dag_path.exists():
+            _dag_path = _paths.project_dir / "dag.yml" if hasattr(_paths, "project_dir") else _dag_path
+        try:
+            import yaml as _yaml
+            if _dag_path.exists():
+                with open(_dag_path) as _df2:
+                    _dag_data = _yaml.safe_load(_df2) or {}
+                for _e in _dag_data.get("edges", []):
+                    _existing_edges.add((_e.get("parent"), _e.get("child")))
+        except Exception:
+            pass
+
+        # Load physics priors for extra context
+        _physics_priors: dict = {}
+        try:
+            from sparc.config.config import load_physics_priors
+            _pp = load_physics_priors(state.project_config)
+            _physics_priors = _pp.get("coefficients", {})
+        except Exception:
+            pass
+
+        # Build candidate list sorted by |partial_r|
+        _candidates = []
+        _outcome_idx = _col_names.index(_outcome) if _outcome in _col_names else -1
+        for _i in range(_p):
+            for _j in range(_p):
+                if _i == _j:
+                    continue
+                _r = float(_partial_r[_i, _j])
+                if abs(_r) < threshold:
+                    continue
+                _parent = _col_names[_i]
+                _child = _col_names[_j]
+                if (_parent, _child) in _existing_edges:
+                    continue
+                # Prefer edges toward the outcome
+                _toward_outcome = _j == _outcome_idx
+                _prior_known = _parent in _physics_priors and _child in _physics_priors
+                _reason = (
+                    "strong partial correlation toward outcome" if _toward_outcome
+                    else "both variables have physics priors" if _prior_known
+                    else "partial correlation above threshold"
+                )
+                _candidates.append({
+                    "parent": _parent,
+                    "child": _child,
+                    "score": round(abs(_r), 4),
+                    "partial_r": round(_r, 4),
+                    "toward_outcome": _toward_outcome,
+                    "reason": _reason,
+                })
+
+        # Sort: outcome-directed first, then by |score| desc
+        _candidates.sort(key=lambda x: (-int(x["toward_outcome"]), -x["score"]))
+        _candidates = _candidates[:max_suggestions]
+
+        return {
+            "suggestions": _candidates,
+            "n_columns_analysed": _p,
+            "threshold": threshold,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"Edge suggestion failed: {exc}") from exc
+
+
+# ------------------------------------------------------------------
 # Artifact download
 # ------------------------------------------------------------------
 
@@ -6694,7 +7082,16 @@ def _sync_group_fetch(group, fishnet, boundary, manifest, cfg):
     elif group == "capa":
         scene_dates = _collect_session.get("scene_dates", [])
         if not scene_dates:
-            raise RuntimeError("Fetch Landsat first to establish scene dates for CAPA alignment")
+            # Landsat has not run yet (or failed).  Generate synthetic scene dates
+            # within the configured window using the 16-day Landsat repeat cycle so
+            # CAPA can still be fetched independently.
+            from datetime import timedelta as _td
+            ds = _date.fromisoformat(cfg.get("date_start", "2022-06-01"))
+            de = _date.fromisoformat(cfg.get("date_end", "2022-08-31"))
+            cur = ds
+            while cur <= de:
+                scene_dates.append(cur)
+                cur = cur + _td(days=16)
         from sparc.data.collect.capa import fetch_capa
         fishnet = fetch_capa(fishnet, bbox, scene_dates)
         if "aat_midday" in fishnet.columns and "era5_t2m" in fishnet.columns:
@@ -6733,8 +7130,50 @@ def _sync_group_fetch(group, fishnet, boundary, manifest, cfg):
             else:
                 manifest.update(col, coverage_pct=cov, source_name=src)  # type: ignore[union-attr]
 
+    elif group == "sentinel2":
+        fishnet = _sync_fetch_sentinel2(group, fishnet, boundary, manifest, cfg)
+
     else:
         raise ValueError(f"Unknown fetch group: '{group}'")
+
+    return fishnet
+
+
+def _sync_fetch_sentinel2(group, fishnet, boundary, manifest, cfg):
+    """Fetch Sentinel-2 L2A imagery via Microsoft Planetary Computer STAC.
+
+    Produces the same surface columns as the Landsat group so that downstream
+    analysis is model-agnostic:
+        lst_s2       — land-surface temperature proxy (B11 TIR analogue via NDUI/NDVI)
+        ndvi_s2      — normalised difference vegetation index (B8/B4)
+        ndbi_s2      — normalised difference built-up index (B11/B8)
+        mndwi_s2     — modified NDWI (B3/B11) — water bodies
+    """
+    from datetime import date as _date
+
+    bbox = boundary.bbox  # type: ignore[union-attr]
+    ds = _date.fromisoformat(cfg.get("date_start", "2022-06-01"))
+    de = _date.fromisoformat(cfg.get("date_end", "2022-08-31"))
+
+    try:
+        from sparc.data.collect.sentinel2 import fetch_sentinel2
+        fishnet = fetch_sentinel2(
+            fishnet, bbox, ds, de,
+            cloud_cover_max=float(cfg.get("cloud_cover_max", 20)),
+            temporal_mode=cfg.get("temporal_mode", "composite"),
+        )
+    except ImportError:
+        # Graceful degradation — sentinel2 module not yet installed
+        for col in ("ndvi_s2", "ndbi_s2", "mndwi_s2"):
+            fishnet[col] = float("nan")
+
+    for col, src in [
+        ("ndvi_s2", "Sentinel-2 L2A (Planetary Computer)"),
+        ("ndbi_s2", "Sentinel-2 L2A (Planetary Computer)"),
+        ("mndwi_s2", "Sentinel-2 L2A (Planetary Computer)"),
+    ]:
+        cov = float(fishnet[col].notna().sum()) / max(len(fishnet), 1) if col in fishnet.columns else 0.0
+        manifest.update(col, coverage_pct=cov, source_name=src)  # type: ignore[union-attr]
 
     return fishnet
 

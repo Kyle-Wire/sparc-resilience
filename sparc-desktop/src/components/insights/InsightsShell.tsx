@@ -11,7 +11,7 @@
  */
 import { useMemo, useEffect, useState, useRef } from "react";
 import type { ReactNode } from "react";
-import { useAudience, type Audience } from "@/hooks/InsightsProvider";
+import { useAudience, useInsights, type Audience } from "@/hooks/InsightsProvider";
 import { Kicker, RampStrip } from "@/components/ui/DesignSystem";
 
 export interface InsightsPanelDescriptor {
@@ -45,6 +45,7 @@ function audienceMatches(want: Audience | Audience[], current: Audience): boolea
 
 export default function InsightsShell({ panels, headerExtras }: ShellProps) {
   const [audience, setAudience] = useAudience();
+  const { hasSelection, clearSelection, selection } = useInsights();
   const [activeId, setActiveId] = useState<string | null>(null);
   const mainRef = useRef<HTMLElement>(null);
 
@@ -119,6 +120,28 @@ export default function InsightsShell({ panels, headerExtras }: ShellProps) {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {hasSelection && (
+              <button
+                type="button"
+                onClick={clearSelection}
+                style={{
+                  fontSize: 11,
+                  padding: "3px 10px",
+                  borderRadius: 20,
+                  background: "var(--amber, #e79024)",
+                  color: "#fff",
+                  border: "none",
+                  cursor: "pointer",
+                  fontWeight: 600,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+                title={selection.ids.length > 0 ? `${selection.ids.length} features selected` : "Selection active"}
+              >
+                {selection.ids.length > 0 ? `${selection.ids.length} selected` : "Selection"} ✕
+              </button>
+            )}
             {headerExtras}
             <div className="audience-toggle" role="tablist" aria-label="Audience">
               <button

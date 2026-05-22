@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { SectionHeader, Card, Tag, Btn, Stat, StatGrid } from "@/components/ui/DesignSystem";
 import { usePipeline, type StageStatus } from "@/hooks/PipelineProvider";
 import { useNotification } from "@/hooks/useNotifications";
+import { GwenApprovalModal } from "@/components/run/GwenApprovalModal";
 import type { PipelineEvent } from "@/lib/types";
 import { useNavigationStore } from "@/stores/navigationStore";
 
@@ -136,7 +137,17 @@ const PHASE_LABELS: Record<string, string> = {
   cv: "Cross-validation",
   retrain: "Full retrain",
   swa: "SWA averaging",
+  jepa_pretrain: "JEPA pre-training",
+  jepa_finetune: "JEPA fine-tune",
 };
+
+function fmtEta(secs: number): string {
+  const s = Math.round(secs);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return r > 0 ? `${m}m ${r}s` : `${m}m`;
+}
 
 function TrainingPanel({ training, isRunning, currentStage }: {
   training: import("@/hooks/PipelineProvider").TrainingTelemetry;
@@ -240,6 +251,7 @@ export default function RunPage() {
   const [verbosity, setVerbosity] = useState<"summary" | "normal" | "debug">("normal");
   const [fastMode, setFastMode] = useState(false);
   const [skipGwen, setSkipGwen] = useState(false);
+  const [showGwenModal, setShowGwenModal] = useState(false);
   // clearedAt tracks how many events existed when user last hit Clear,
   // so we can slice them away without mutating pipeline state.
   const [clearedAt, setClearedAt] = useState(0);
@@ -367,6 +379,12 @@ export default function RunPage() {
 
   return (
     <div>
+      {showGwenModal && (
+        <GwenApprovalModal
+          onApproved={() => { setShowGwenModal(false); }}
+          onDismiss={() => setShowGwenModal(false)}
+        />
+      )}
       <SectionHeader
         kicker="10 · pipeline"
         label="Run"
@@ -416,6 +434,27 @@ export default function RunPage() {
         >
           <span>⚠ DAG approval required — the pipeline is paused until you review and approve the discovered causal graph.</span>
           <Btn small onClick={() => navigate("DAG")}>Review DAG →</Btn>
+        </div>
+      )}
+
+      {pipeline.gwenApprovalPending && (
+        <div
+          style={{
+            padding: "10px 14px",
+            background: "#f0f7ff",
+            border: "1px solid var(--blue, #1976d2)",
+            borderRadius: 6,
+            marginBottom: 14,
+            fontSize: 12,
+            color: "#0d47a1",
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            justifyContent: "space-between",
+          }}
+        >
+          <span>ℹ️ Stage 1 complete — review the GWEN variable rankings before Stage 2 begins.</span>
+          <Btn small onClick={() => setShowGwenModal(true)}>Review variables →</Btn>
         </div>
       )}
 
@@ -609,8 +648,13 @@ export default function RunPage() {
                         <div style={{ height: "100%", width: `${pipeline.stageProgress[id]}%`, background: "var(--crimson)", transition: "width 0.3s ease" }} />
                       </div>
                     )}
-                    {status === "running" && pipeline.stageProgress[id] != null && (
-                      <div style={{ fontSize: 9, color: "var(--muted)", marginTop: 2 }}>{pipeline.stageProgress[id]}%</div>
+                    {status === "running" && (pipeline.stageProgress[id] != null || pipeline.stageStatuses[id]?.eta_seconds != null) && (
+                      <div style={{ fontSize: 9, color: "var(--muted)", marginTop: 2, display: "flex", gap: 5 }}>
+                        {pipeline.stageProgress[id] != null && <span>{pipeline.stageProgress[id]}%</span>}
+                        {pipeline.stageStatuses[id]?.eta_seconds != null && (
+                          <span>· ETA {fmtEta(pipeline.stageStatuses[id]!.eta_seconds!)}</span>
+                        )}
+                      </div>
                     )}
                   </div>
 

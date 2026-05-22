@@ -634,3 +634,176 @@ class SpatialAutocorrelationAnalyzer:
         plt.tight_layout()
         plt.show()
 
+
+# ---------------------------------------------------------------------------
+# FFT-based correlogram (module-level — no distance matrix required)
+# ---------------------------------------------------------------------------
+
+def fft_correlogram(
+    coords: np.ndarray,
+    values: np.ndarray,
+    max_distance: float,
+    n_lags: int,
+) -> dict:
+    """Compute spatial correlogram via 2-D FFT (Wiener-Khinchin theorem).
+
+    O(n log n) alternative to the O(n²) distance-matrix approach.  Suitable
+    for full datasets of 50 k+ points without subsampling.
+
+    The point cloud is rasterized onto a regular grid at approximately
+    ``max_distance / (2 * n_lags)`` resolution, the spatial autocorrelation
+    field is computed via FFT cross-correlation of the mean-centred gridded
+    field, and the result is radially averaged into ``n_lags`` distance bins.
+
+    The zero-padding trick (2× in each dimension) converts the circular FFT
+    convolution into a linear one, so wrap-around contamination is zero for
+    lags ≤ ``max_distance``.
+
+    Returns
+    -------
+    Same dict format as ``SpatialAutocorrelationAnalyzer.compute_correlogram``:
+    ``lag_distances``, ``morans_i_values``, ``z_scores``, ``p_values``,
+    ``optimal_block_size``, ``first_zero_crossing``, ``correlogram_results``.
+    """
+    from scipy import stats as _stats
+
+    coords = np.asarray(coords, dtype=np.float64)
+    values = np.asarray(values, dtype=np.float64)
+
+    valid = np.isfinite(values) & ~np.isnan(values)
+    coords = coords[valid]
+    values = values[valid]
+
+    x, y = coords[:, 0], coords[:, 1]
+    x_min, x_max = float(x.min()), float(x.max())
+    y_min, y_max = float(y.min()), float(y.max())
+    x_span = x_max - x_min or 1.0
+    y_span = y_max - y_min or 1.0
+
+    # Grid resolution: at least 2 grid cells per lag band; never below 5 m.
+    # Cap at 2048×2048 (~16 MB for float64) to bound memory.
+    cell_size = max(max_distance / (n_lags * 2.0), 5.0)
+    nx = min(int(np.ceil(x_span / cell_size)) + 2, 2048)
+    ny = min(int(np.ceil(y_span / cell_size)) + 2, 2048)
+    dx = x_span / (nx - 1) if nx > 1 else cell_size
+    dy = y_span / (ny - 1) if ny > 1 else cell_size
+
+    # --- Rasterize: assign each point to nearest grid cell; average values ---
+    ix = np.clip(np.round((x - x_min) / dx).astype(np.int64), 0, nx - 1)
+    iy = np.clip(np.round((y - y_min) / dy).astype(np.int64), 0, ny - 1)
+
+    grid_sum = np.zeros((ny, nx), dtype=np.float64)
+    grid_cnt = np.zeros((ny, nx), dtype=np.float64)
+    np.add.at(grid_sum, (iy, ix), values)
+    np.add.at(grid_cnt, (iy, ix), 1.0)
+
+    occupied = grid_cnt > 0
+    grid = np.where(occupied, grid_sum / np.where(occupied, grid_cnt, 1.0), np.nan)
+
+    # Mean-centre the field; fill empty cells with 0 (neutral for cross-corr)
+    global_mean = float(np.nanmean(grid))
+    z = np.where(occupied, grid - global_mean, 0.0)
+
+    # Variance of ALL original point values — used to normalise ACF → [−1, 1]
+    variance = float(np.var(values))
+    if variance < 1e-12:
+        variance = 1e-12
+
+    # --- FFT cross-correlation (Wiener-Khinchin) ---
+    # 2× zero-padding in each dimension → linear (not circular) autocorrelation
+    pad_y = 1 << int(np.ceil(np.log2(max(2 * ny, 4))))
+    pad_x = 1 << int(np.ceil(np.log2(max(2 * nx, 4))))
+
+    F_z = np.fft.rfft2(z, s=(pad_y, pad_x))
+    acf_raw = np.fft.irfft2(F_z * np.conj(F_z), s=(pad_y, pad_x))[:ny, :nx]
+
+    # Count valid cell pairs at each offset via FFT of the occupancy mask
+    F_m = np.fft.rfft2(occupied.astype(np.float64), s=(pad_y, pad_x))
+    pair_counts = np.fft.irfft2(F_m * np.conj(F_m), s=(pad_y, pad_x))[:ny, :nx]
+    pair_counts = np.maximum(pair_counts, 1e-3)   # guard /0
+
+    # Normalise: ACF(offset) = raw_xcorr(offset) / (n_pairs(offset) * variance)
+    acf = acf_raw / (pair_counts * variance)
+
+    # --- Physical distance of each grid offset (i_off, j_off) ---
+    i_off = np.arange(ny, dtype=np.float64)
+    j_off = np.arange(nx, dtype=np.float64)
+    I_OFF, J_OFF = np.meshgrid(i_off, j_off, indexing='ij')   # (ny, nx)
+    dist_grid = np.sqrt((I_OFF * dy) ** 2 + (J_OFF * dx) ** 2)
+
+    dist_flat = dist_grid.ravel()
+    acf_flat = acf.ravel()
+    cnt_flat = pair_counts.ravel()
+
+    # --- Radial averaging into lag bins ---
+    lag_edges = np.linspace(0.0, max_distance, n_lags + 1)
+    lag_centers = 0.5 * (lag_edges[:-1] + lag_edges[1:])
+
+    correlogram_results = []
+    morans_i_values: list[float] = []
+    z_scores_out: list[float] = []
+    p_values_out: list[float] = []
+
+    for i in range(n_lags):
+        in_bin = (dist_flat >= lag_edges[i]) & (dist_flat < lag_edges[i + 1])
+        in_bin &= cnt_flat > 0.5
+
+        w = cnt_flat[in_bin]
+        # Each offset (di, dj) with di>0 or dj>0 contributes 2 directed pairs
+        # (i→j and j→i); offset (0,0) contributes n_occupied self-pairs.
+        n_pairs = int(np.round(w.sum() / 2.0))
+
+        if n_pairs < 1 or w.sum() < 1.0:
+            acf_lag = 0.0
+        else:
+            acf_lag = float(np.average(acf_flat[in_bin], weights=w))
+
+        # Significance: under spatial randomness E[ACF] ≈ 0 (h > 0),
+        # SE ≈ 1 / sqrt(n_pairs).
+        if n_pairs > 2:
+            se = 1.0 / np.sqrt(n_pairs)
+            z_score = float(acf_lag / se)
+            p_value = float(2.0 * (1.0 - _stats.norm.cdf(abs(z_score))))
+        else:
+            z_score = 0.0
+            p_value = 1.0
+
+        significant = abs(z_score) > 1.96
+        correlogram_results.append({
+            'lag_distance': float(lag_centers[i]),
+            'n_pairs': n_pairs,
+            'morans_i': float(acf_lag),
+            'z_score': float(z_score),
+            'p_value': float(p_value),
+            'significant': bool(significant),
+        })
+        morans_i_values.append(float(acf_lag))
+        z_scores_out.append(float(z_score))
+        p_values_out.append(float(p_value))
+
+    # First non-significant lag → optimal block size
+    optimal_block_size = max_distance
+    for res in correlogram_results:
+        if not res['significant'] and res['n_pairs'] > 0:
+            optimal_block_size = res['lag_distance']
+            break
+
+    # First zero-crossing → effective spatial range / bandwidth
+    first_zero_crossing: float | None = None
+    for res in correlogram_results:
+        if res['n_pairs'] > 0 and res['morans_i'] <= 0.0:
+            first_zero_crossing = res['lag_distance']
+            break
+    if first_zero_crossing is None:
+        first_zero_crossing = max_distance
+
+    return {
+        'lag_distances': np.array([r['lag_distance'] for r in correlogram_results]),
+        'morans_i_values': np.array(morans_i_values),
+        'z_scores': np.array(z_scores_out),
+        'p_values': np.array(p_values_out),
+        'optimal_block_size': float(optimal_block_size),
+        'first_zero_crossing': float(first_zero_crossing),
+        'correlogram_results': correlogram_results,
+    }
+

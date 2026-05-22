@@ -34,6 +34,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
+from sparc.data.units import delta_z_to_original, original_to_z, z_to_original
 from sparc.run.artifact_io import (
     load_blob_path, load_struct_path, exists_path,
 )
@@ -1209,7 +1210,7 @@ class ScenarioSimulator:
         delta_z = (T_post - T_init).numpy()
         meta = self._v2_meta_info or {}
         y_std = meta.get("y_std", 1.0)
-        delta_raw = delta_z * y_std
+        delta_raw = delta_z_to_original(delta_z, y_std)
 
         # Sanity guard: no scenario should predict > 20 units change
         mean_abs = float(np.abs(delta_raw).mean())
@@ -1292,7 +1293,7 @@ class ScenarioSimulator:
         modified_z = (raw_feats - feat_mean) / feat_std
 
         # Baseline z-scored predictions
-        baseline_z = (baseline_pred - y_mean) / y_std
+        baseline_z = original_to_z(baseline_pred, y_mean, y_std)
 
         return self._pde_joint_delta(baseline_z, modified_z, target_mask)
 
@@ -3836,7 +3837,7 @@ class ScenarioSimulator:
             for i in range(n_samples):
                 h_i = trunk_samples[i].unsqueeze(0).expand(N, -1)   # (N, hidden_dim)
                 T_i, _ = model.decode(h_i, base_preds_t, X_spatial_t, coords_t, knn_index)
-                T_preds.append((T_i.cpu().numpy() * y_std + y_mean).astype(np.float32))
+                T_preds.append(z_to_original(T_i.cpu().numpy(), y_mean, y_std).astype(np.float32))
 
         T_matrix = np.stack(T_preds, axis=0)   # (n_samples, N)
         return {

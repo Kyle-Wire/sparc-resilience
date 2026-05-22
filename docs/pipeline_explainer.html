@@ -1,0 +1,1375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SPARC Pipeline — Technical Walkthrough</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body, {
+      delimiters: [
+        {left: '$$', right: '$$', display: true},
+        {left: '$', right: '$', display: false}
+      ],
+      throwOnError: false
+    });"></script>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --surface2: #1c2128;
+      --border: #30363d;
+      --text: #e6edf3;
+      --text-dim: #8b949e;
+      --accent-blue: #58a6ff;
+      --accent-green: #3fb950;
+      --accent-orange: #f0883e;
+      --accent-purple: #bc8cff;
+      --accent-red: #ff7b72;
+      --accent-teal: #39d353;
+      --accent-yellow: #d29922;
+      --stage0: #388bfd;
+      --stage1: #3fb950;
+      --stage2: #f0883e;
+      --stage3: #bc8cff;
+      --stage4: #ff7b72;
+      --radius: 8px;
+      --nav-width: 240px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      display: flex;
+    }
+
+    /* ── Sidebar Nav ── */
+    nav {
+      position: fixed;
+      top: 0; left: 0;
+      width: var(--nav-width);
+      height: 100vh;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      padding: 20px 0;
+      z-index: 100;
+    }
+
+    nav .logo {
+      padding: 0 16px 20px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 12px;
+    }
+    nav .logo h2 {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--accent-blue);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    nav .logo p {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 2px;
+    }
+
+    nav a {
+      display: block;
+      padding: 6px 16px;
+      color: var(--text-dim);
+      text-decoration: none;
+      font-size: 12.5px;
+      border-left: 2px solid transparent;
+      transition: all 0.15s;
+    }
+    nav a:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+    nav a.active { color: var(--accent-blue); border-left-color: var(--accent-blue); background: rgba(88,166,255,0.08); }
+
+    nav .nav-section {
+      padding: 12px 16px 4px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+    }
+    nav a.stage-0 { border-left-color: transparent; }
+    nav a.stage-0:hover, nav a.stage-0.active { color: var(--stage0); border-left-color: var(--stage0); background: rgba(56,139,253,0.08); }
+    nav a.stage-1:hover, nav a.stage-1.active { color: var(--stage1); border-left-color: var(--stage1); background: rgba(63,185,80,0.08); }
+    nav a.stage-2:hover, nav a.stage-2.active { color: var(--stage2); border-left-color: var(--stage2); background: rgba(240,136,62,0.08); }
+    nav a.stage-3:hover, nav a.stage-3.active { color: var(--stage3); border-left-color: var(--stage3); background: rgba(188,140,255,0.08); }
+    nav a.stage-4:hover, nav a.stage-4.active { color: var(--stage4); border-left-color: var(--stage4); background: rgba(255,123,114,0.08); }
+
+    /* ── Main Content ── */
+    main {
+      margin-left: var(--nav-width);
+      flex: 1;
+      max-width: 900px;
+      padding: 48px 40px 120px;
+    }
+
+    section { margin-bottom: 80px; }
+
+    h1 {
+      font-size: 32px;
+      font-weight: 800;
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+    .hero-sub {
+      color: var(--text-dim);
+      font-size: 15px;
+      margin-bottom: 40px;
+      max-width: 640px;
+    }
+
+    h2 {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 24px 0 10px;
+      color: var(--text);
+    }
+
+    p { color: var(--text-dim); margin-bottom: 12px; font-size: 14px; }
+    p strong { color: var(--text); }
+
+    /* Stage color accents on h2 */
+    .s0 h2 { color: var(--stage0); border-color: rgba(56,139,253,0.3); }
+    .s1 h2 { color: var(--stage1); border-color: rgba(63,185,80,0.3); }
+    .s2 h2 { color: var(--stage2); border-color: rgba(240,136,62,0.3); }
+    .s3 h2 { color: var(--stage3); border-color: rgba(188,140,255,0.3); }
+    .s4 h2 { color: var(--stage4); border-color: rgba(255,123,114,0.3); }
+
+    /* ── Pipeline Flow Diagram ── */
+    .pipeline-flow {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      margin: 28px 0;
+    }
+    .flow-row {
+      display: flex;
+      align-items: stretch;
+      gap: 0;
+    }
+    .flow-stage {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      cursor: pointer;
+      transition: transform 0.15s, border-color 0.15s;
+      position: relative;
+    }
+    .flow-stage:hover { transform: translateY(-2px); }
+    .flow-stage .badge {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 100px;
+      margin-bottom: 8px;
+    }
+    .flow-stage h4 { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+    .flow-stage p { font-size: 12px; margin: 0; }
+
+    .flow-arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6px 0;
+      color: var(--text-dim);
+      font-size: 18px;
+    }
+
+    /* Stage color schemes */
+    .flow-stage.s0 { border-color: rgba(56,139,253,0.4); }
+    .flow-stage.s0 .badge { background: rgba(56,139,253,0.2); color: var(--stage0); }
+    .flow-stage.s0 h4 { color: var(--stage0); }
+
+    .flow-stage.s1 { border-color: rgba(63,185,80,0.4); }
+    .flow-stage.s1 .badge { background: rgba(63,185,80,0.2); color: var(--stage1); }
+    .flow-stage.s1 h4 { color: var(--stage1); }
+
+    .flow-stage.s2 { border-color: rgba(240,136,62,0.4); }
+    .flow-stage.s2 .badge { background: rgba(240,136,62,0.2); color: var(--stage2); }
+    .flow-stage.s2 h4 { color: var(--stage2); }
+
+    .flow-stage.s3 { border-color: rgba(188,140,255,0.4); }
+    .flow-stage.s3 .badge { background: rgba(188,140,255,0.2); color: var(--stage3); }
+    .flow-stage.s3 h4 { color: var(--stage3); }
+
+    .flow-stage.s4 { border-color: rgba(255,123,114,0.4); }
+    .flow-stage.s4 .badge { background: rgba(255,123,114,0.2); color: var(--stage4); }
+    .flow-stage.s4 h4 { color: var(--stage4); }
+
+    /* ── Cards ── */
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 12px;
+      margin: 16px 0;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+    }
+    .card h4 {
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: var(--text);
+    }
+    .card p { font-size: 12px; margin: 0; }
+    .card .tag {
+      display: inline-block;
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+
+    /* ── Table ── */
+    .table-wrap { overflow-x: auto; margin: 16px 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th {
+      background: var(--surface2);
+      padding: 10px 14px;
+      text-align: left;
+      font-weight: 600;
+      color: var(--text-dim);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border-bottom: 1px solid var(--border);
+    }
+    td {
+      padding: 10px 14px;
+      border-bottom: 1px solid rgba(48,54,61,0.5);
+      vertical-align: top;
+      color: var(--text-dim);
+    }
+    td:first-child { font-weight: 600; color: var(--text); font-family: monospace; font-size: 12px; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+
+    /* ── Code block ── */
+    pre {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      overflow-x: auto;
+      font-size: 12px;
+      line-height: 1.7;
+      margin: 12px 0;
+    }
+    code {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 12px;
+      background: var(--surface2);
+      padding: 1px 5px;
+      border-radius: 3px;
+      color: var(--accent-blue);
+    }
+    pre code { background: none; padding: 0; color: var(--text); }
+
+    /* ── Math blocks ── */
+    .math-block {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent-purple);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      margin: 16px 0;
+      overflow-x: auto;
+    }
+    .math-block .label {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--accent-purple);
+      margin-bottom: 10px;
+    }
+
+    /* ── Loss term list ── */
+    .loss-terms { margin: 16px 0; }
+    .loss-term {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin-bottom: 10px;
+      display: flex;
+      gap: 14px;
+    }
+    .loss-term .term-num {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--surface2);
+      color: var(--accent-purple);
+      font-weight: 700;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .loss-term .term-body h4 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+    .loss-term .term-body p { font-size: 12px; margin: 0; }
+    .loss-term .epoch-badge {
+      display: inline-block;
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 4px;
+      background: rgba(188,140,255,0.15);
+      color: var(--accent-purple);
+      font-weight: 600;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+
+    /* ── Callout boxes ── */
+    .callout {
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin: 16px 0;
+      font-size: 13px;
+      display: flex;
+      gap: 10px;
+    }
+    .callout-icon { font-size: 16px; flex-shrink: 0; }
+    .callout-body p { font-size: 13px; margin: 0; }
+    .callout-body strong { font-weight: 600; }
+    .callout.info { background: rgba(88,166,255,0.1); border: 1px solid rgba(88,166,255,0.3); }
+    .callout.success { background: rgba(63,185,80,0.1); border: 1px solid rgba(63,185,80,0.3); }
+    .callout.warning { background: rgba(240,136,62,0.1); border: 1px solid rgba(240,136,62,0.3); }
+    .callout.purple { background: rgba(188,140,255,0.1); border: 1px solid rgba(188,140,255,0.3); }
+
+    /* ── Performance metrics ── */
+    .metrics-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin: 16px 0;
+    }
+    .metric-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 18px;
+      text-align: center;
+      min-width: 110px;
+    }
+    .metric-card .val {
+      font-size: 24px;
+      font-weight: 800;
+      font-family: monospace;
+    }
+    .metric-card .name { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+    .metric-card.best .val { color: var(--accent-green); }
+    .metric-card.good .val { color: var(--accent-blue); }
+    .metric-card.ok .val { color: var(--accent-orange); }
+    .metric-card.base .val { color: var(--text-dim); }
+
+    /* ── Architecture diagram ── */
+    .arch-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      margin: 16px 0;
+    }
+    .arch-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .arch-block {
+      flex: 1;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-size: 12px;
+      text-align: center;
+    }
+    .arch-block strong { display: block; font-size: 11px; font-weight: 600; color: var(--accent-blue); margin-bottom: 2px; }
+    .arch-block span { color: var(--text-dim); font-size: 11px; }
+    .arch-arrow { color: var(--text-dim); font-size: 14px; flex-shrink: 0; }
+    .arch-divider {
+      text-align: center;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-dim);
+      padding: 6px 0;
+      border-top: 1px dashed var(--border);
+      border-bottom: 1px dashed var(--border);
+      margin: 10px 0;
+    }
+
+    /* ── Causal diagram ── */
+    .dag-viz {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin: 16px 0;
+      text-align: center;
+    }
+    .dag-nodes {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    .dag-node {
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      border: 1px solid;
+    }
+    .dag-node.treatment { background: rgba(88,166,255,0.15); border-color: var(--accent-blue); color: var(--accent-blue); }
+    .dag-node.outcome { background: rgba(255,123,114,0.15); border-color: var(--accent-red); color: var(--accent-red); }
+    .dag-node.confounder { background: rgba(240,136,62,0.15); border-color: var(--accent-orange); color: var(--accent-orange); }
+    .dag-node.mediator { background: rgba(63,185,80,0.15); border-color: var(--accent-green); color: var(--accent-green); }
+
+    .dag-legend {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+    .dag-legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    .dag-legend-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+    }
+
+    /* ── Curriculum timeline ── */
+    .timeline {
+      margin: 20px 0;
+      position: relative;
+      padding-left: 20px;
+    }
+    .timeline::before {
+      content: '';
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 2px;
+      background: var(--border);
+    }
+    .timeline-item {
+      position: relative;
+      margin-bottom: 18px;
+      padding-left: 20px;
+    }
+    .timeline-item::before {
+      content: '';
+      position: absolute;
+      left: -5px;
+      top: 7px;
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--accent-purple);
+      border: 2px solid var(--bg);
+    }
+    .timeline-item h4 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+    .timeline-item p { font-size: 12px; margin: 0; }
+    .timeline-item .epoch { font-size: 10px; color: var(--accent-purple); font-weight: 600; }
+
+    /* ── Scroll marker utility ── */
+    .scroll-target { scroll-margin-top: 24px; }
+
+    /* ── Responsive ── */
+    @media (max-width: 768px) {
+      nav { display: none; }
+      main { margin-left: 0; padding: 24px 16px 80px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════
+     SIDEBAR NAV
+═══════════════════════════════════════════ -->
+<nav>
+  <div class="logo">
+    <h2>SPARC</h2>
+    <p>Pipeline Walkthrough</p>
+  </div>
+
+  <div class="nav-section">Overview</div>
+  <a href="#overview" class="active">Introduction</a>
+  <a href="#pipeline-flow">Pipeline Flow</a>
+
+  <div class="nav-section">Stages</div>
+  <a href="#stage0" class="stage-0">Stage 0 — Correlogram</a>
+  <a href="#stage1" class="stage-1">Stage 1 — GWEN</a>
+  <a href="#stage2" class="stage-2">Stage 2 — Spatial CV</a>
+  <a href="#stage3" class="stage-3">Stage 3 — Causal</a>
+  <a href="#stage4" class="stage-4">Stage 4 — Scenarios</a>
+
+  <div class="nav-section">Deep Dives</div>
+  <a href="#models">Model Architecture</a>
+  <a href="#pde-loss">Loss Functions</a>
+  <a href="#causal-deep">Causal Framework</a>
+  <a href="#physics">Physics Constraints</a>
+</nav>
+
+<!-- ═══════════════════════════════════════════
+     MAIN CONTENT
+═══════════════════════════════════════════ -->
+<main>
+
+<!-- ── HERO ── -->
+<section id="overview" class="scroll-target">
+  <h1>SPARC Pipeline</h1>
+  <p class="hero-sub">
+    A geospatially-aware, physics-constrained machine learning pipeline for resilience analysis. 
+    SPARC combines classical geographically-weighted models, differentiable neural surrogates, 
+    and Bayesian causal inference to produce credible, physics-consistent predictions and 
+    actionable intervention recommendations.
+  </p>
+
+  <div class="callout info">
+    <span class="callout-icon">ℹ</span>
+    <div class="callout-body">
+      <p><strong>Domain Coverage:</strong> Urban heat islands, wildfire risk, groundwater, coastal flooding, air quality, stormwater, noise, seismic, drought, and more — via configurable domain templates.</p>
+    </div>
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <span class="tag" style="background:rgba(56,139,253,0.15);color:var(--stage0)">Stage 0</span>
+      <h4>Correlogram Analysis</h4>
+      <p>Auto-discovers spatial structure; derives all bandwidth parameters from data.</p>
+    </div>
+    <div class="card">
+      <span class="tag" style="background:rgba(63,185,80,0.15);color:var(--stage1)">Stage 1</span>
+      <h4>GWEN Variable Selection</h4>
+      <p>Geographically-weighted elastic net prunes irrelevant predictors.</p>
+    </div>
+    <div class="card">
+      <span class="tag" style="background:rgba(240,136,62,0.15);color:var(--stage2)">Stage 2</span>
+      <h4>Spatial CV + Neural</h4>
+      <p>Four classical models + physics-informed meta-learner with 10-term PDE loss.</p>
+    </div>
+    <div class="card">
+      <span class="tag" style="background:rgba(188,140,255,0.15);color:var(--stage3)">Stage 3</span>
+      <h4>Bayesian Causal</h4>
+      <p>DAG structure learning, DML, NUTS posteriors, CATE estimation.</p>
+    </div>
+    <div class="card">
+      <span class="tag" style="background:rgba(255,123,114,0.15);color:var(--stage4)">Stage 4</span>
+      <h4>Scenario Simulation</h4>
+      <p>Physics-guardrailed what-if analysis with budget-constrained allocation.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ── PIPELINE FLOW ── -->
+<section id="pipeline-flow" class="scroll-target">
+  <h2>Pipeline Flow</h2>
+  <p>Stages execute sequentially. Each stage produces <strong>artifacts</strong> consumed by downstream stages. Auto-wired configuration eliminates manual parameter tuning.</p>
+
+  <div class="pipeline-flow">
+    <div class="flow-stage s0" onclick="location.href='#stage0'">
+      <span class="badge">Stage 0</span>
+      <h4>Correlogram Analysis</h4>
+      <p>Moran's I · Bayesian Matérn fitting · Anisotropy detection → <code>KernelField</code> + <code>pipeline_config.json</code></p>
+    </div>
+    <div class="flow-arrow">↓</div>
+    <div class="flow-stage s1" onclick="location.href='#stage1'">
+      <span class="badge">Stage 1 (optional)</span>
+      <h4>GWEN Variable Selection</h4>
+      <p>Geographically-weighted ElasticNet · spatial selection frequency → pruned feature set</p>
+    </div>
+    <div class="flow-arrow">↓</div>
+    <div class="flow-stage s2" onclick="location.href='#stage2'">
+      <span class="badge">Stage 2</span>
+      <h4>Spatial CV &amp; Neural Meta-Learner</h4>
+      <p>OLS · GWR · GWRF · GGPGAM base models → PyTorch surrogates → SPARCMetaLearner with 10-term PDE loss</p>
+    </div>
+    <div class="flow-arrow">↓</div>
+    <div class="flow-stage s3" onclick="location.href='#stage3'">
+      <span class="badge">Stage 3</span>
+      <h4>Bayesian Causal Validation</h4>
+      <p>MC³ DAG search · DML structural coefficients · NUTS edge posteriors · Spatial CATE · Refutation tests</p>
+    </div>
+    <div class="flow-arrow">↓</div>
+    <div class="flow-stage s4" onclick="location.href='#stage4'">
+      <span class="badge">Stage 4</span>
+      <h4>Scenario Simulation</h4>
+      <p>PDE-alpha · Bayesian beta · PDE solve · Hybrid engine → budget-constrained Pareto allocation</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════
+     STAGE 0
+══════════════════════════════════════════════════════════ -->
+<section id="stage0" class="scroll-target s0">
+  <h2>Stage 0 — Correlogram Analysis</h2>
+  <p><strong>Module:</strong> <code>sparc.run.correlogram_analysis</code></p>
+  <p>
+    Before any model is fit, SPARC characterizes the spatial dependence structure of the data.
+    This stage answers: <em>how far does spatial correlation extend, and is it directionally symmetric?</em>
+    Every bandwidth and kernel shape used in later stages is derived here — not guessed.
+  </p>
+
+  <h3>What it computes</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Computation</th><th>Method</th><th>Output</th></tr></thead>
+      <tbody>
+        <tr><td>Spatial autocorrelation</td><td>Moran's I at 15 distance lags, per variable</td><td>Per-variable correlogram curves</td></tr>
+        <tr><td>Covariance model fitting</td><td>Bayesian Matérn($\kappa$, $\nu$) via NUTS sampling</td><td>Posterior $\kappa$ samples per variable</td></tr>
+        <tr><td>Anisotropy detection</td><td>Cardinal + 45° axis correlograms, $F$-test</td><td>$\kappa_x$, $\kappa_y$, $\theta$, eccentricity per predictor</td></tr>
+        <tr><td>Cross-correlation matrix</td><td>Predictor×predictor effective-range</td><td>$V \times V$ bandwidth matrix</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Matérn Covariance Model</h3>
+  <p>The spatial covariance between locations $s_i$ and $s_j$ is modeled as:</p>
+  <div class="math-block">
+    <div class="label">Matérn Covariance</div>
+    $$C(h; \kappa, \nu) = \sigma^2 \frac{2^{1-\nu}}{\Gamma(\nu)} \left(\sqrt{2\nu} \, \kappa \, h\right)^\nu K_\nu\!\left(\sqrt{2\nu} \, \kappa \, h\right)$$
+    <p style="margin-top:10px;font-size:12px;">where $h = \|s_i - s_j\|$, $\kappa$ = decay rate (1/length), $\nu \in \{0.5, 1.5, 2.5\}$ = smoothness, $K_\nu$ = modified Bessel function. $\nu = 0.5$ gives exponential decay; $\nu = 2.5$ gives twice-differentiable fields.</p>
+  </div>
+
+  <h3>Auto-Derived Parameters</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Parameter</th><th>Derivation</th><th>Used by</th></tr></thead>
+      <tbody>
+        <tr><td>GWR bandwidth</td><td>First zero-crossing distance of target correlogram</td><td>Stage 2 GWR</td></tr>
+        <tr><td>GGPGAM bandwidth</td><td>$0.8 \times$ zero-crossing</td><td>Stage 2 GGPGAM</td></tr>
+        <tr><td>GWRF bandwidth</td><td>$1.2 \times$ zero-crossing</td><td>Stage 2 GWRF</td></tr>
+        <tr><td>CV block size</td><td>Zero-crossing of target variable (prevents spatial leakage)</td><td>Stage 2 spatial CV</td></tr>
+        <tr><td>Kernel shape</td><td>Decay pattern: exponential / gaussian / spherical</td><td>All Stage 2 models</td></tr>
+        <tr><td>Spatial attention $\sigma$</td><td>Stage 0 bandwidth → CityHead attention scale initialization</td><td>Stage 2 meta-learner</td></tr>
+        <tr><td>NUTS prior scale</td><td>Matérn posterior $\kappa$ samples</td><td>Stage 3 NUTS</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>KernelField</h3>
+  <p>
+    The primary output is a <code>KernelField</code> — a per-predictor record holding:
+    isotropic $\kappa$ and $\nu$; anisotropic $\kappa_x$, $\kappa_y$, $\theta$, eccentricity;
+    per-pair bandwidth-to-outcome; and $\kappa$ posterior samples.
+    Every downstream model reads from this structure rather than using fixed hardcoded bandwidths.
+  </p>
+
+  <div class="callout success">
+    <span class="callout-icon">✓</span>
+    <div class="callout-body">
+      <p><strong>Key insight:</strong> Block sizes derived from the target correlogram prevent spatial leakage in cross-validation — a common pitfall when applying standard k-fold CV to spatial data.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════
+     STAGE 1
+══════════════════════════════════════════════════════════ -->
+<section id="stage1" class="scroll-target s1">
+  <h2>Stage 1 — GWEN Variable Selection</h2>
+  <p><strong>Module:</strong> <code>sparc.run.gwen_variable_selection</code> &nbsp;·&nbsp; <strong>Optional</strong></p>
+  <p>
+    Geographically Weighted Elastic Net — identifies predictors that matter <em>spatially</em> across the study area.
+    Unlike global variable selection, GWEN asks whether each predictor is selected at each location.
+  </p>
+
+  <h3>Algorithm</h3>
+  <ol style="margin-left:20px;font-size:14px;color:var(--text-dim);line-height:2;">
+    <li>Sample up to <strong>5,000 locations</strong> across the study area</li>
+    <li>At each location, weight neighboring observations by adaptive spatial kernel (<em>k</em>-NN, default $k=500$)</li>
+    <li>Fit a local <code>ElasticNetCV</code> on the kernel-weighted sample</li>
+    <li>Record which variables were selected (non-zero coefficient)</li>
+    <li>Compute per-variable <strong>selection frequency</strong> = fraction of locations where variable was selected</li>
+  </ol>
+
+  <h3>Selection Metrics</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Metric</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td>selection_frequency</td><td>Fraction of locations where variable entered the local model (threshold: ≥ 0.10 to retain)</td></tr>
+        <tr><td>mean_abs_coefficient</td><td>Average |β| across locations where selected — effect magnitude</td></tr>
+        <tr><td>coefficient_sign_stability</td><td>Fraction of locations where sign is consistent — robustness indicator</td></tr>
+        <tr><td>spatial_variability</td><td>Standard deviation of β across locations — non-stationarity measure</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout warning">
+    <span class="callout-icon">⚠</span>
+    <div class="callout-body">
+      <p><strong>Human Checkpoint:</strong> Stage 2 does not begin until the analyst approves <code>gwen_approved.txt</code>. This ensures domain experts review which variables were dropped before the expensive Stage 2 training run.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════
+     STAGE 2
+══════════════════════════════════════════════════════════ -->
+<section id="stage2" class="scroll-target s2">
+  <h2>Stage 2 — Spatial Cross-Validation &amp; Neural Meta-Learner</h2>
+  <p><strong>Modules:</strong> <code>sparc.run.enhanced_spatial_cv</code> · <code>sparc.run.v2_neural_training</code></p>
+  <p>
+    The core modeling stage. Four classical geographically-weighted models are trained under 
+    spatially-buffered cross-validation. Each is mirrored by a differentiable PyTorch surrogate. 
+    A physics-informed meta-learner fuses all surrogates and is trained with a 10-term staged PDE loss.
+  </p>
+
+  <h3>2a. Spatial Cross-Validation Strategy</h3>
+  <p>
+    Standard $k$-fold CV would produce overoptimistic estimates for spatial data because nearby observations 
+    in training and test sets share spatial autocorrelation. SPARC uses <strong>buffered spatial block CV</strong>:
+  </p>
+  <div class="callout info">
+    <span class="callout-icon">📐</span>
+    <div class="callout-body">
+      <p>Block size = zero-crossing of target correlogram (from Stage 0). 
+         A <strong>buffer zone</strong> equal to one block size surrounds each test block and is excluded from training — 
+         preventing leakage of spatially correlated information. Default: <strong>5 folds</strong>, parallelized via <code>ProcessPoolExecutor</code>.</p>
+    </div>
+  </div>
+
+  <h3>2b. Classical Base Models</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model</th><th>Type</th><th>Key Architecture</th><th>R² (Brown UHI)</th></tr></thead>
+      <tbody>
+        <tr><td>OLS</td><td>Global linear</td><td>Optional Laplacian eigenmaps as spatial side information</td><td>0.294</td></tr>
+        <tr><td>GWR</td><td>Local linear — spatially varying $\beta(s)$</td><td>Kernel-weighted local regression; adaptive bandwidth from Stage 0 KernelField</td><td>0.828</td></tr>
+        <tr><td>GWRF</td><td>Local non-linear (200 trees)</td><td>Per-location random forest; kernel-weighted; extracts per-predictor PDP curves</td><td>0.898</td></tr>
+        <tr><td>GGPGAM</td><td>Semi-parametric</td><td>Penalized splines + spatial tensor products; captures smooth feature×location interactions</td><td>0.839</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>2c. SPARCMetaLearner Architecture</h3>
+  <p>A <strong>SharedTrunk + CityHead</strong> design enables transfer learning across cities and domains.</p>
+
+  <div class="arch-box">
+    <div class="arch-row">
+      <div class="arch-block" style="border-color:var(--accent-blue)">
+        <strong>Physics Stream</strong>
+        <span>PDEInformedPhysicsEncoder<br/>SIREN layers<br/>T_p (source-driven) + T_h (harmonic)</span>
+      </div>
+      <div class="arch-arrow">+</div>
+      <div class="arch-block" style="border-color:var(--accent-green)">
+        <strong>Process Rate Stream</strong>
+        <span>ProcessRateNet<br/>Learnable α(x) field<br/>spatial process scaling</span>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-block" style="border-color:var(--accent-purple)">
+        <strong>Shared Latent z</strong>
+        <span>LayerNorm + GELU<br/>transfers across cities</span>
+      </div>
+    </div>
+    <div class="arch-divider">SharedTrunk (frozen on transfer) ↑ · CityHead (retrained per city) ↓</div>
+    <div class="arch-row">
+      <div class="arch-block" style="border-color:var(--accent-orange)">
+        <strong>Surrogate Encoder A</strong>
+        <span>Linear + LayerNorm + GELU<br/>encodes 4 base model predictions</span>
+      </div>
+      <div class="arch-arrow">+</div>
+      <div class="arch-block" style="border-color:var(--accent-teal)">
+        <strong>Sparse Spatial Attention B</strong>
+        <span>SparseSpatialAttention<br/>O(N·k_nn), not O(N²)<br/>σ init from Stage 0 bandwidth</span>
+      </div>
+      <div class="arch-arrow">+</div>
+      <div class="arch-block" style="border-color:var(--accent-yellow)">
+        <strong>Spatial Gating C</strong>
+        <span>SpatialGatingHead<br/>soft-attention over surrogates<br/>cross-surrogate std</span>
+      </div>
+    </div>
+    <div class="arch-row" style="margin-top:10px;">
+      <div class="arch-block" style="flex:2;border-color:var(--accent-red)">
+        <strong>Output Heads</strong>
+        <span>Regression head · Exceedance heads P(y &gt; τ_k) · MC-Dropout (500 passes → mean, std, 89% CI)</span>
+      </div>
+    </div>
+  </div>
+
+  <h3>Physics Encoder Detail</h3>
+  <p>
+    The <code>PDEInformedPhysicsEncoder</code> decomposes the temperature field into two physically meaningful parts:
+  </p>
+  <div class="math-block">
+    <div class="label">Physics Field Decomposition</div>
+    $$T(s) = w(s) \cdot T_p(s) + (1 - w(s)) \cdot T_h(s)$$
+    <p style="font-size:12px;margin-top:10px;">
+      $T_p(s)$ = <strong>particular solution</strong> — GELU MLP driven by forcing proxies (albedo, impervious fraction, anthropogenic heat)<br/>
+      $T_h(s)$ = <strong>homogeneous solution</strong> — SIREN network on coordinates; naturally satisfies $\nabla^2 T_h = 0$<br/>
+      $w(s)$ = learned blend weight balancing source-driven vs. harmonic contribution
+    </p>
+  </div>
+
+  <h3>Performance (Brown University UHI Dataset)</h3>
+  <div class="metrics-row">
+    <div class="metric-card base"><div class="val">0.294</div><div class="name">OLS R²</div></div>
+    <div class="metric-card ok"><div class="val">0.828</div><div class="name">GWR R²</div></div>
+    <div class="metric-card good"><div class="val">0.898</div><div class="name">GWRF R²</div></div>
+    <div class="metric-card good"><div class="val">0.839</div><div class="name">GGPGAM R²</div></div>
+    <div class="metric-card good"><div class="val">0.902</div><div class="name">Meta (std) R²</div></div>
+    <div class="metric-card best"><div class="val">0.944</div><div class="name">Meta (+150 Laplacian) R²</div></div>
+  </div>
+
+  <h3>Optional Enhancements</h3>
+  <div class="card-grid">
+    <div class="card">
+      <h4>Laplacian Eigenmaps</h4>
+      <p>150 eigenvectors of the spatial $k$-NN graph ($k=50$). Used as OLS features and meta-ensemble PCA inputs. Adds +4.2 pp R².</p>
+    </div>
+    <div class="card">
+      <h4>JEPA Pretraining</h4>
+      <p>V-JEPA-2-AC self-supervised pretraining of SharedTrunk. EMA encoder as teacher; cosine + VICReg loss prevents collapse.</p>
+    </div>
+    <div class="card">
+      <h4>Bayesian MGWR</h4>
+      <p>Re-fits GWR $N$ times sampling $\kappa$ from Stage 0 posterior → per-cell $\beta$ posterior used as NUTS prior in Stage 3.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════
+     STAGE 3
+══════════════════════════════════════════════════════════ -->
+<section id="stage3" class="scroll-target s3">
+  <h2>Stage 3 — Bayesian Causal Validation</h2>
+  <p><strong>Modules:</strong> <code>sparc.run.causal_validation</code> · <code>sparc.run.v2_bayesian_causal</code></p>
+  <p>
+    Predictive performance doesn't tell you what will happen <em>if you intervene</em>.
+    Stage 3 uses a multi-method Bayesian causal framework to answer: 
+    <em>does treatment $T$ causally affect outcome $Y$, by how much, and where does it vary?</em>
+  </p>
+
+  <h3>Causal DAG</h3>
+  <p>
+    SPARC's causal reasoning is grounded in an explicit <strong>directed acyclic graph (DAG)</strong> loaded from <code>dag.yml</code>.
+    The DAG classifies every variable and makes causal assumptions explicit and auditable.
+  </p>
+
+  <div class="dag-viz">
+    <div class="dag-nodes">
+      <div class="dag-node confounder">Confounders (Z)<br/><small>elevation, climate</small></div>
+      <div class="dag-node treatment">Treatments (T)<br/><small>canopy, impervious, albedo</small></div>
+      <div class="dag-node mediator">Mediators (M)<br/><small>NDVI, evapotranspiration</small></div>
+      <div class="dag-node outcome">Outcome (Y)<br/><small>air temperature</small></div>
+    </div>
+    <div style="font-size:12px;color:var(--text-dim)">
+      Edges Z→T, Z→Y, T→M→Y, T→Y encoded in <code>dag.yml</code>
+    </div>
+    <div class="dag-legend">
+      <div class="dag-legend-item"><div class="dag-legend-dot" style="background:var(--accent-blue)"></div>Treatment</div>
+      <div class="dag-legend-item"><div class="dag-legend-dot" style="background:var(--accent-red)"></div>Outcome</div>
+      <div class="dag-legend-item"><div class="dag-legend-dot" style="background:var(--accent-orange)"></div>Confounder</div>
+      <div class="dag-legend-item"><div class="dag-legend-dot" style="background:var(--accent-green)"></div>Mediator</div>
+    </div>
+  </div>
+
+  <h3>3a. MC³ — Bayesian DAG Structure Learning</h3>
+  <p>
+    When data-driven structure learning is enabled, SPARC runs <strong>Metropolis-Coupled MCMC (MC³)</strong>
+    over the space of DAG structures using parallel tempering.
+  </p>
+
+  <div class="math-block">
+    <div class="label">BGe Score — Bayesian Gaussian Equivalent</div>
+    $$\text{score}(G, D) = \log p(D \mid G) = \sum_{j=1}^{p} \log p(X_j \mid \text{PA}_j^G)$$
+    <p style="font-size:12px;margin-top:8px;">Each term computed from Wishart–Beta conjugate prior. Sufficient statistics $(\mathbf{S}, \bar{x})$ are precomputed for $O(m^2)$ lookup per edge subset — score-cached by sorted column tuple.</p>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>MC³ Parameter</th><th>Value</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td>n_chains</td><td>4</td><td>Parallel chains at temperatures [1.0, 0.75, 0.55, 0.40]</td></tr>
+        <tr><td>n_iterations</td><td>50,000</td><td>Maximum; early-stops when edge-prob Δ &lt; 0.5% over 2,000-step window</td></tr>
+        <tr><td>burnin_fraction</td><td>0.25</td><td>First 25% discarded</td></tr>
+        <tr><td>edge_penalty</td><td>1.0</td><td>Sparsity regularization</td></tr>
+        <tr><td>Warm start</td><td>SVGD, 4 particles, 500 steps</td><td>Diversifies initial DAG proposals</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>3b. Double Machine Learning (DML) — Structural Coefficients</h3>
+  <p>For each edge in the DAG, SPARC uses DML to obtain <strong>doubly-robust</strong> causal coefficient estimates that are consistent even if one nuisance model is misspecified.</p>
+
+  <div class="math-block">
+    <div class="label">DML Cross-Fitted Residualization</div>
+    $$\tilde{Y}_i = Y_i - \hat{E}[Y \mid Z_i], \quad \tilde{T}_i = T_i - \hat{E}[T \mid Z_i]$$
+    $$\hat{\beta}_{DML} = \arg\min_\beta \sum_i (\tilde{Y}_i - \beta \tilde{T}_i)^2$$
+    <p style="font-size:12px;margin-top:8px;">Nuisance models $\hat{E}[\cdot]$ are HGB or OLS, cross-fitted on $K$ folds (optionally spatial folds). Residuals are orthogonal to confounders, eliminating confounding bias.</p>
+  </div>
+
+  <div class="math-block">
+    <div class="label">Shrinkage Toward Physics Prior</div>
+    $$\hat{\beta}_{\text{final}} = (1 - \lambda_s)\,\hat{\beta}_{DML} + \lambda_s\,\beta_{\text{prior}}, \quad \lambda_s \approx 0.25$$
+    <p style="font-size:12px;margin-top:8px;">Adaptive shrinkage based on prior confidence. Clamped within ±50% of prior. Sign consistency enforced via monotone constraints.</p>
+  </div>
+
+  <h3>Example Structural Coefficients (Brown UHI)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Edge</th><th>$\hat\beta$</th><th>Interpretation</th></tr></thead>
+      <tbody>
+        <tr><td>Pct_Canopy → AAT_z</td><td>−0.022</td><td>Each +1 pp canopy → 0.022 z-unit cooling</td></tr>
+        <tr><td>Pct_Impervious → AAT_z</td><td>+0.022</td><td>Each +1 pp impervious → warming</td></tr>
+        <tr><td>NDVI → AAT_z</td><td>−4.131</td><td>Strong cooling via vegetation</td></tr>
+        <tr><td>Albedo → AAT_z</td><td>−2.759</td><td>Strong cooling via reflectance</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>3c. NUTS — Bayesian Edge Posteriors</h3>
+  <p>Per-edge Bayesian GLMs sampled with <strong>No-U-Turn Sampler (NUTS)</strong> via <code>numpyro</code>. Priors are informed by Stage 2 GWR $\beta$ posteriors from the Bayesian MGWR ensemble.</p>
+
+  <div class="math-block">
+    <div class="label">Per-Edge Bayesian GLM</div>
+    $$Y \sim \mathcal{N}(\beta T + X\gamma,\; \sigma^2)$$
+    $$\beta \sim \mathcal{N}(\mu_{\text{GWR}},\; \sigma_{\text{GWR}}^2) \quad \text{(informed by Stage 2 β posterior)}$$
+    <p style="font-size:12px;margin-top:8px;">4,000 samples + 1,000 warmup · 2 chains · target accept rate 0.90. Full posterior draws stored for direct sampling in Stages 4+.</p>
+  </div>
+
+  <h3>3d. Spatial CATE — Heterogeneous Treatment Effects</h3>
+  <p>
+    <code>CausalForestDML</code> (EconML) estimates per-location heterogeneous treatment effects, 
+    using spatial coordinates + Laplacian eigenmaps + confounders as effect modifiers.
+  </p>
+  <div class="callout purple">
+    <span class="callout-icon">🔷</span>
+    <div class="callout-body">
+      <p><strong>Phase 7 Anisotropic Warp:</strong> When a KernelField is available, spatial coordinates are warped into the treatment variable's anisotropic principal frame before feeding the causal forest — so forest neighborhoods respect the corrected length scales.</p>
+    </div>
+  </div>
+
+  <h3>3e. Causal Dose-Response Curves</h3>
+  <p>Bayesian dose-response curves $\tau(t) = \mathbb{E}[Y(\text{do}(T=t))] - \mathbb{E}[Y(\text{do}(T=t_0))]$ are computed per-cell with 89% HDI credible bands. Saturation is detected at the first dose where marginal slope drops below 50% of peak slope.</p>
+
+  <h3>3f. Robustness &amp; Refutation</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Test</th><th>What it checks</th></tr></thead>
+      <tbody>
+        <tr><td>Placebo treatment</td><td>Replace $T$ with random noise → effect should collapse to 0</td></tr>
+        <tr><td>Random common cause</td><td>Inject random confounder → identified effect should not change</td></tr>
+        <tr><td>Subset validation</td><td>Random subsamples → effect estimates should be stable</td></tr>
+        <tr><td>E-values</td><td>How strong must an unobserved confounder be to nullify each finding?</td></tr>
+        <tr><td>CATE vs GWR divergence</td><td>Flag cells where causal estimate diverges from spatial model by &gt;2σ</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>3g. Wager 2025 Causal Gaps (Optional)</h3>
+  <div class="card-grid">
+    <div class="card"><h4>Gap 1: Overlap</h4><p>Positivity diagnostic via propensity score common support</p></div>
+    <div class="card"><h4>Gap 2: QINI</h4><p>Rank-average treatment effect via Qini curves</p></div>
+    <div class="card"><h4>Gap 3: SUTVA</h4><p>Spatial autocorrelation of treatment — interference violation check</p></div>
+    <div class="card"><h4>Gap 4–5: IV/MTE</h4><p>Instrumental variable &amp; marginal treatment effect</p></div>
+    <div class="card"><h4>Gap 6: AIPW</h4><p>Augmented IPW for time-varying treatments</p></div>
+    <div class="card"><h4>Gap 7: Panel/DID</h4><p>Difference-in-differences for panel data</p></div>
+    <div class="card"><h4>Gap 8: EWM</h4><p>Empirical welfare maximization → ranked policy recommendations</p></div>
+    <div class="card"><h4>Gap 9: CBPS</h4><p>Covariate-balanced propensity scores</p></div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════
+     STAGE 4
+══════════════════════════════════════════════════════════ -->
+<section id="stage4" class="scroll-target s4">
+  <h2>Stage 4 — Scenario Simulation</h2>
+  <p><strong>Modules:</strong> <code>sparc.run.scenario_engine_selector</code> · <code>sparc.scenario.budget</code></p>
+  <p>
+    Stage 4 answers the planning question: <em>if we intervene on these variables, what happens, where, and how much does it cost?</em>
+    The <code>ScenarioSimulator</code> selects the most informative resolution method given available artifacts.
+  </p>
+
+  <h3>Four-Tier Resolution</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Tier</th><th>Method</th><th>Inputs</th><th>Best for</th></tr></thead>
+      <tbody>
+        <tr><td>Tier 0</td><td>PDE-Alpha Field</td><td>Stage 2 $\alpha(x)$ process-rate field</td><td>Fastest; per-cell magnitude scaling</td></tr>
+        <tr><td>Tier 1</td><td>Bayesian Beta</td><td>Stage 2 GWR locals + Stage 3 NUTS posteriors</td><td>Per-cell $\beta$ with full credible bands</td></tr>
+        <tr><td>Tier 2</td><td>PDE Solve</td><td>Forward Poisson / advection-diffusion</td><td>Spatial spillovers, physical propagation</td></tr>
+        <tr><td>Tier 3</td><td>Hybrid (ScenarioEngineV4)</td><td>PDE + Bayesian CATE + interaction terms</td><td>Joint multi-treatment with cross-effects</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Physics Guardrails</h3>
+  <p>All tiers automatically enforce:</p>
+  <div class="card-grid">
+    <div class="card"><h4>Variable Bounds</h4><p>min/max per variable (e.g., canopy ∈ [0, 100])</p></div>
+    <div class="card"><h4>Diminishing Returns</h4><p>$\sqrt{x}$ taper prevents unrealistic saturation</p></div>
+    <div class="card"><h4>Sign Monotonicity</h4><p>Physics constraints enforce direction (e.g., canopy → cooling only)</p></div>
+    <div class="card"><h4>Delta Caps</h4><p>Per-variable max $\Delta x$ (e.g., max Δ canopy = 25 pp)</p></div>
+    <div class="card"><h4>Mahalanobis Guard</h4><p>Flags scenarios beyond training data covariance $\Sigma$</p></div>
+    <div class="card"><h4>Combined Constraints</h4><p>E.g., Canopy + Impervious ≤ 100% land-cover</p></div>
+  </div>
+
+  <h3>Budget-Constrained Allocation</h3>
+  <p>SPARC solves a budget-constrained allocation problem for urban planning use cases:</p>
+  <div class="math-block">
+    <div class="label">Optimization Problem</div>
+    $$\max_{x} \sum_i b_i \cdot x_i \quad \text{s.t.} \quad \sum_i c_i \cdot x_i \leq B, \quad 0 \leq x_i \leq x_{\max}$$
+    <p style="font-size:12px;margin-top:8px;">$b_i$ = per-cell benefit (NUTS slope or $\alpha$ field) · $c_i$ = per-cell cost · $B$ = total budget</p>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Solver</th><th>Complexity</th><th>Used when</th></tr></thead>
+      <tbody>
+        <tr><td>Greedy</td><td>$O(n \log n)$</td><td>$n \leq 50{,}000$: sort by $b_i/c_i$, fill to budget</td></tr>
+        <tr><td>Greedy + 2-opt</td><td>$O(n^2 \log n)$</td><td>$n \in (50\text{k}, 250\text{k}]$: greedy + pairwise swap refinement</td></tr>
+        <tr><td>MILP (PuLP/CBC)</td><td>Exact</td><td>$n \leq 5{,}000$: binary treat/don't-treat decisions</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout info">
+    <span class="callout-icon">📊</span>
+    <div class="callout-body">
+      <p><strong>Pareto Frontier:</strong> Evaluates at budget multipliers {0.5×, 0.75×, 1.0×, 1.25×, 1.5×} — reporting total benefit and <strong>Gini coefficient</strong> (equity proxy) at each level. Gini ≈ 0 = evenly spread; Gini ≈ 1 = concentrated.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════
+     MODELS DEEP DIVE
+══════════════════════════════════════════════════════════ -->
+<section id="models" class="scroll-target">
+  <h2 style="color:var(--accent-blue);border-color:rgba(88,166,255,0.3)">Model Architecture — Deep Dive</h2>
+
+  <h3>Geographically Weighted Models</h3>
+  <p>
+    The classical models all share the same principle: instead of fitting a single global relationship 
+    $Y = X\beta + \epsilon$, fit a <em>separate local model</em> at each observation point $s_i$, 
+    weighting nearby observations by a spatial kernel.
+  </p>
+
+  <div class="math-block">
+    <div class="label">Geographically Weighted Regression (GWR)</div>
+    $$\hat{Y}(s_i) = \mathbf{x}(s_i)^T \hat{\beta}(s_i), \quad \hat{\beta}(s_i) = (X^T W(s_i) X)^{-1} X^T W(s_i) y$$
+    $$W(s_i) = \text{diag}\left[K\!\left(\frac{d(s_i, s_j)}{h_i}\right)\right]_j$$
+    <p style="font-size:12px;margin-top:8px;">$h_i$ = adaptive bandwidth (from Stage 0 KernelField); $K$ = kernel function (Gaussian, exponential, or bisquare). GWR produces a spatially-varying coefficient surface $\beta(s)$ — a map of how each predictor's relationship with the outcome varies across the study area.</p>
+  </div>
+
+  <h3>Differentiable Surrogates</h3>
+  <p>Each classical model has a PyTorch twin that can participate in end-to-end gradient-based training:</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Surrogate</th><th>Architecture</th><th>Special Feature</th></tr></thead>
+      <tbody>
+        <tr><td>DifferentiableGWR</td><td>MGWR-style network</td><td>Per-predictor bandwidth conditioning from KernelField; Phase 5b kernel-field feature injection ($\kappa_x, \kappa_y, \theta, \nu, \sigma^2$, bw_to_outcome)</td></tr>
+        <tr><td>DifferentiableGWRF</td><td>FiLM-modulated nonlinear</td><td>Distance-weighted kernel predictions; local expert blending via FiLM conditioning</td></tr>
+        <tr><td>DifferentiableGGPGAM</td><td>Spatial + feature smoothers</td><td>Spatial×feature interactions; monotonicity enforcement via cumulative softplus</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>SIREN Physics Encoder</h3>
+  <p>
+    Standard MLPs with ReLU activations produce poor derivatives — important when enforcing PDE residuals.
+    SPARC uses <strong>SIREN (Sinusoidal Representation Network)</strong> for the harmonic solution $T_h$:
+  </p>
+  <div class="math-block">
+    <div class="label">SIREN Activation</div>
+    $$\phi_i(x) = \sin(W_i x + b_i), \quad \frac{\partial^2 T_h}{\partial x^2} = -\omega^2 T_h$$
+    <p style="font-size:12px;margin-top:8px;">The sinusoidal activation means gradients are analytically meaningful — SIREN naturally satisfies $\nabla^2 T_h = 0$ on uniform coordinate inputs, making it ideal for the homogeneous part of the heat equation.</p>
+  </div>
+
+  <h3>Sparse Spatial Attention</h3>
+  <div class="math-block">
+    <div class="label">SparseSpatialAttention (O(N·k))</div>
+    $$\text{Attn}(s_i) = \text{softmax}\left(\frac{Q(s_i) K(s_j)^T}{\sqrt{d}} \cdot \mathbf{1}_{j \in \text{kNN}(i)}\right) V(s_j)$$
+    <p style="font-size:12px;margin-top:8px;">Attention is restricted to the $k$-nearest spatial neighbors of each point — $O(N \cdot k_{\text{nn}})$ instead of $O(N^2)$. Distance scale $\sigma$ is a learnable parameter initialized from Stage 0 bandwidth, making the attention head interpretable as a per-cell spatial influence surface.</p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════
+     LOSS FUNCTIONS DEEP DIVE
+══════════════════════════════════════════════════════════ -->
+<section id="pde-loss" class="scroll-target">
+  <h2 style="color:var(--accent-purple);border-color:rgba(188,140,255,0.3)">Loss Functions — Deep Dive</h2>
+
+  <p>The meta-learner is trained with a <strong>10-term staged-curriculum PDE loss</strong> plus 4 additional regularization terms — a total of up to 14 objectives, progressively activated to avoid destabilizing a partially-converged network.</p>
+
+  <div class="math-block">
+    <div class="label">Joint Loss Function</div>
+    $$\mathcal{L} = \lambda_{\text{MSE}} L_{\text{MSE}} + \lambda_{\text{CE}} L_{\text{CE}} + \lambda_{\text{phys}} L_{\text{phys}} + \lambda_{\text{smooth}} L_{\text{smooth}} + \lambda_{\alpha_s} L_{\alpha_s} + \lambda_{\text{prior}} L_{\text{prior}} + \lambda_n L_n + \lambda_{\text{PDE}} L_{\text{PDE}}$$
+  </div>
+
+  <h3>Core Loss Terms</h3>
+  <div class="loss-terms">
+
+    <div class="loss-term">
+      <div class="term-num">1</div>
+      <div class="term-body">
+        <h4>MSE — Data Fidelity</h4>
+        <div class="math-block" style="margin:8px 0">$$L_{\text{MSE}} = \frac{1}{N}\sum_i (T_{\text{pred}}(i) - y_i)^2$$</div>
+        <p>Standard supervised regression loss. Anchors the network to match observed temperatures.</p>
+      </div>
+    </div>
+
+    <div class="loss-term">
+      <div class="term-num">2</div>
+      <div class="term-body">
+        <h4>Cross-Entropy — Exceedance Calibration</h4>
+        <div class="math-block" style="margin:8px 0">$$L_{\text{CE}} = -\frac{1}{NK}\sum_i\sum_k \left[\mathbf{1}(y_i > \tau_k)\log p_k(i) + \mathbf{1}(y_i \leq \tau_k)\log(1 - p_k(i))\right]$$</div>
+        <p>Calibrates the exceedance probability heads $p_k(i) = \sigma(\text{head}_k(i))$ for threshold $\tau_k$. Critical for risk quantification (e.g., P(temp &gt; 35°C)).</p>
+      </div>
+    </div>
+
+    <div class="loss-term">
+      <div class="term-num">3</div>
+      <div class="term-body">
+        <h4>Physics Residual — Steady-State Heat Equation</h4>
+        <div class="math-block" style="margin:8px 0">$$L_{\text{phys}} = \frac{1}{M}\sum_{i \in \text{valid}} \left(\frac{\alpha(i)\,\nabla^2 T(i) - S(i)}{\sigma_{\text{res}}}\right)^2$$
+$$\nabla^2 T(i) \approx \frac{T_N + T_S + T_E + T_W - 4T(i)}{h^2}$$</div>
+        <p>Enforces the steady-state heat equation $\alpha \nabla^2 T = S$. $\alpha(i)$ = learned diffusivity field; $S(i)$ = observed source term. Normalized by running std $\sigma_{\text{res}}$ to keep scale at $O(1)$.</p>
+      </div>
+    </div>
+
+    <div class="loss-term">
+      <div class="term-num">4</div>
+      <div class="term-body">
+        <h4>Alpha Smoothness — Spatial Regularization of $\alpha(x)$</h4>
+        <div class="math-block" style="margin:8px 0">$$L_{\alpha_s} = \lambda_L \cdot \boldsymbol{\alpha}^T L_{\text{graph}}\, \boldsymbol{\alpha}$$</div>
+        <p>$L_{\text{graph}}$ = spatial graph Laplacian from $k$-NN ($k=50$). Encourages the learned diffusivity field to vary smoothly across space — a natural prior for physical processes.</p>
+      </div>
+    </div>
+
+    <div class="loss-term">
+      <div class="term-num">5</div>
+      <div class="term-body">
+        <h4>Alpha Prior Regularization</h4>
+        <div class="math-block" style="margin:8px 0">$$L_{\text{prior}} = \frac{1}{N}\sum_i \frac{(\alpha(i) - \alpha_{\text{prior}}(i))^2}{\sigma_{\text{prior}}(i)^2}$$</div>
+        <p>Weight decays with curriculum: $w(t) = w_0 \cdot (0.1 + 0.9 \exp(-0.05(t - 30)))$. Prevents $\alpha$ from drifting far from physics-informed expectations early in training, then relaxes to allow data-driven learning.</p>
+      </div>
+    </div>
+
+    <div class="loss-term">
+      <div class="term-num">6</div>
+      <div class="term-body">
+        <h4>Neighbor Consistency</h4>
+        <div class="math-block" style="margin:8px 0">$$L_n = \frac{1}{N}\sum_i \sum_{j \in \mathcal{N}(i)} \text{softmax}(\alpha(i))_j \cdot (T_{\text{pred}}(i) - T_{\text{pred}}(j))^2$$</div>
+        <p>Spatially-aware smoothness — nearby predictions should agree, weighted by the learned $\alpha$ field. Complements the physics residual by enforcing local consistency.</p>
+      </div>
+    </div>
+
+  </div>
+
+  <h3>10-Term PDE Curriculum Loss</h3>
+  <p>The <code>PDELoss</code> module adds 10 physics terms that <strong>activate progressively</strong> during training to avoid instability:</p>
+
+  <div class="timeline">
+    <div class="timeline-item">
+      <span class="epoch">Epoch 0</span>
+      <h4>Term 1 — Heat Diffusion</h4>
+      <p>$\alpha \nabla^2 T - S \approx 0$ — steady-state heat equation</p>
+    </div>
+    <div class="timeline-item">
+      <span class="epoch">Epoch 5</span>
+      <h4>Term 2 — Energy Balance</h4>
+      <p>$Q^* - Q_H - Q_E \approx 0$ — net radiation minus sensible and latent heat fluxes</p>
+    </div>
+    <div class="timeline-item">
+      <span class="epoch">Epoch 10</span>
+      <h4>Terms 3–4 — Directional Consistency &amp; Anisotropy Alignment</h4>
+      <p>Penalize inconsistent directional curvatures; penalize spurious isotropy where Stage 0 data shows anisotropy</p>
+    </div>
+    <div class="timeline-item">
+      <span class="epoch">Epoch 15</span>
+      <h4>Terms 5–8 — Gradient-Flux, Gaussian Curvature, Alpha Smoothness, Alpha Prior</h4>
+      <p>Fourier's law flux consistency; Hessian regularization; spatial smoothness of $\alpha(s)$; deviation from mixture-model prior</p>
+    </div>
+    <div class="timeline-item">
+      <span class="epoch">Epoch 20 (multi-snapshot only)</span>
+      <h4>Terms 9–10 — Transient Consistency &amp; Nocturnal Cooling</h4>
+      <p>$\partial T / \partial t$ consistency across time snapshots; radiative-cooling boundary condition at night</p>
+    </div>
+  </div>
+
+  <div class="math-block">
+    <div class="label">Curriculum Ramp Weight</div>
+    $$w_k(t) = \begin{cases} 0 & t < t_k \\ (t - t_k)\,/\,5 & t_k \leq t < t_k + 5 \\ 1 & t \geq t_k + 5 \end{cases}$$
+    <p style="font-size:12px;margin-top:8px;">Each newly activated term ramps linearly over 5 epochs — preventing gradient shocks to a partially converged network.</p>
+  </div>
+
+  <h3>Training Phases</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Phase</th><th>Epochs</th><th>Behavior</th></tr></thead>
+      <tbody>
+        <tr><td>A — Warmup</td><td>0 → 10</td><td>Physics weight = 0; surrogates track base models; $\alpha$ stabilizes near prior</td></tr>
+        <tr><td>B — Ramp</td><td>10 → 30</td><td>Physics + smoothness terms ramp in; $\alpha$ begins differentiating; lambda weights scaled by CMA-ES</td></tr>
+        <tr><td>C — Joint Optimization</td><td>30 → SWA start</td><td>All loss terms active at optimized weights; full end-to-end training</td></tr>
+        <tr><td>D — Stochastic Weight Averaging</td><td>Final 20</td><td>Cyclic LR + weight averaging → flatter optimum, better out-of-sample generalization</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════
+     CAUSAL FRAMEWORK DEEP DIVE
+══════════════════════════════════════════════════════════ -->
+<section id="causal-deep" class="scroll-target">
+  <h2 style="color:var(--accent-purple);border-color:rgba(188,140,255,0.3)">Causal Framework — Deep Dive</h2>
+
+  <p>SPARC's causal framework is designed around two core questions: <em>(1) do the data support the assumed causal structure?</em> and <em>(2) what is the effect of intervening on a treatment variable?</em></p>
+
+  <h3>Identification Strategy — Pearl's Do-Calculus</h3>
+  <p>
+    For each treatment-outcome pair, SPARC computes the <strong>backdoor adjustment set</strong> $Z$ — 
+    the minimal set of confounders that, when conditioned on, blocks all backdoor paths from treatment to outcome:
+  </p>
+  <div class="math-block">
+    <div class="label">Backdoor Adjustment (Pearl 2009)</div>
+    $$\mathbb{E}[Y \mid \text{do}(T = t)] = \int \mathbb{E}[Y \mid T = t, Z = z]\, p(z)\, dz$$
+    <p style="font-size:12px;margin-top:8px;">This quantity equals the observational conditional expectation after adjusting for all backdoor paths — without requiring a randomized experiment.</p>
+  </div>
+
+  <h3>Multi-Method Synthesis</h3>
+  <p>SPARC triangulates causal estimates across methods to assess robustness:</p>
+  <div class="card-grid">
+    <div class="card">
+      <span class="tag" style="background:rgba(88,166,255,0.15);color:var(--accent-blue)">Classical</span>
+      <h4>GWR β Posterior</h4>
+      <p>Spatially-varying regression coefficients from Bayesian MGWR ensemble. Local but assumes linearity.</p>
+    </div>
+    <div class="card">
+      <span class="tag" style="background:rgba(240,136,62,0.15);color:var(--accent-orange)">Semi-Param</span>
+      <h4>DML Residualized</h4>
+      <p>Doubly-robust cross-fitted estimator. Global but flexible nuisance models.</p>
+    </div>
+    <div class="card">
+      <span class="tag" style="background:rgba(188,140,255,0.15);color:var(--accent-purple)">Bayesian</span>
+      <h4>NUTS Posterior</h4>
+      <p>Full posterior over causal coefficient; priors from GWR. Propagates uncertainty to Stage 4.</p>
+    </div>
+    <div class="card">
+      <span class="tag" style="background:rgba(63,185,80,0.15);color:var(--accent-green)">Non-Param</span>
+      <h4>Spatial CATE</h4>
+      <p>Per-location heterogeneous effects via causal forest. Captures effect modification by location.</p>
+    </div>
+  </div>
+
+  <div class="callout success">
+    <span class="callout-icon">✓</span>
+    <div class="callout-body">
+      <p><strong>Uncertainty Propagation:</strong> NUTS posterior draws are stored and sampled directly in Stage 4 scenario simulation — so scenario confidence intervals inherit the full causal uncertainty from Stage 3.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════
+     PHYSICS CONSTRAINTS
+══════════════════════════════════════════════════════════ -->
+<section id="physics" class="scroll-target">
+  <h2 style="color:var(--accent-green);border-color:rgba(63,185,80,0.3)">Physics Constraints</h2>
+
+  <p>Physics constraints appear at multiple layers of the pipeline — from training-time loss terms to inference-time guardrails. The goal is to ensure SPARC's outputs are not just statistically plausible but <em>physically consistent</em>.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Layer</th><th>Constraint Type</th><th>Implementation</th></tr></thead>
+      <tbody>
+        <tr><td>Stage 0</td><td>Spatial correlation structure</td><td>Matérn covariance captures physical decay rates; anisotropy from topography/wind</td></tr>
+        <tr><td>Stage 2 Training</td><td>Steady-state heat equation</td><td>$\alpha \nabla^2 T = S$ residual in loss; SIREN ensures differentiable T field</td></tr>
+        <tr><td>Stage 2 Training</td><td>Energy balance</td><td>$Q^* - Q_H - Q_E \approx 0$ loss term (epoch 5+)</td></tr>
+        <tr><td>Stage 2 Training</td><td>Fourier's law</td><td>$-k\nabla T \approx Q_{\text{cond}}$ flux consistency (epoch 15+)</td></tr>
+        <tr><td>Stage 2 Training</td><td>Anisotropy alignment</td><td>Penalize isotropic fields where Stage 0 data shows directional structure</td></tr>
+        <tr><td>Stage 2 Inference</td><td>Monotone constraints</td><td>$\partial Y / \partial T_k \leq 0$ for cooling treatments (cumulative softplus in GGPGAM)</td></tr>
+        <tr><td>Stage 3 Priors</td><td>Physically informed priors</td><td>Literature coefficients per domain; sign constraints; scale harmonization</td></tr>
+        <tr><td>Stage 4</td><td>Variable bounds</td><td>min/max per variable (e.g., canopy ∈ [0, 100])</td></tr>
+        <tr><td>Stage 4</td><td>Diminishing returns</td><td>$\sqrt{x}$ response schedule</td></tr>
+        <tr><td>Stage 4</td><td>Combined constraints</td><td>Canopy + Impervious ≤ 100%</td></tr>
+        <tr><td>Stage 4</td><td>Extrapolation guard</td><td>Mahalanobis distance check against training covariance $\Sigma$</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Physics Priors by Domain</h3>
+  <p>Each domain template ships physics priors in <code>physics/priors.yml</code>:</p>
+  <div class="card-grid">
+    <div class="card"><h4>Urban Heat Island</h4><p>Albedo, canopy, impervious fraction; energy balance; radiative cooling schedule</p></div>
+    <div class="card"><h4>Groundwater</h4><p>Darcy's law; hydraulic conductivity priors; recharge-discharge balance</p></div>
+    <div class="card"><h4>Air Quality</h4><p>Advection-diffusion; atmospheric mixing height; emission-dispersion relationships</p></div>
+    <div class="card"><h4>Wildfire</h4><p>Fuel-moisture relationships; wind-driven spread; slope amplification factors</p></div>
+    <div class="card"><h4>Coastal</h4><p>Storm surge; wave run-up; bathymetric attenuation</p></div>
+    <div class="card"><h4>Stormwater</h4><p>Rational method coefficients; impervious runoff; detention volume priors</p></div>
+  </div>
+
+  <div class="callout purple">
+    <span class="callout-icon">🔬</span>
+    <div class="callout-body">
+      <p><strong>Why physics constraints matter:</strong> Without them, a neural network trained on limited observational data can find many equally good statistical fits — some physically implausible. Physics constraints act as an inductive bias, dramatically reducing the hypothesis space and improving generalization to unseen interventions.</p>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<script>
+  // Highlight active nav link on scroll
+  const sections = document.querySelectorAll('section[id]');
+  const navLinks = document.querySelectorAll('nav a[href^="#"]');
+
+  function updateActiveNav() {
+    let current = '';
+    sections.forEach(section => {
+      const top = section.getBoundingClientRect().top;
+      if (top <= 80) current = section.id;
+    });
+    navLinks.forEach(link => {
+      link.classList.remove('active');
+      if (link.getAttribute('href') === '#' + current) {
+        link.classList.add('active');
+      }
+    });
+  }
+
+  window.addEventListener('scroll', updateActiveNav, { passive: true });
+  updateActiveNav();
+</script>
+
+</body>
+</html>
