@@ -6485,3 +6485,309 @@ def list_stage_artifacts(stage: str):
             for e in entries
         ],
     }
+
+
+# ===========================================================================
+# Data Collection endpoints  (/collect/*)
+# ===========================================================================
+
+_collect_session: dict = {}   # in-memory session state for the active build run
+
+
+@app.post("/collect/boundary")
+async def collect_boundary(body: dict = Body(...)):
+    """Resolve a study-area boundary from place name, file path, or drawn GeoJSON.
+
+    Body keys (exactly one required):
+      place_name : str
+      file_path  : str
+      geojson    : dict  (GeoJSON FeatureCollection or Feature)
+    """
+    from sparc.data.collect.boundary import resolve_boundary
+    place_name = body.get("place_name")
+    file_path  = body.get("file_path")
+    geojson    = body.get("geojson")
+    try:
+        result = resolve_boundary(
+            place_name=place_name,
+            file_path=file_path,
+            geojson=geojson,
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(400, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc))
+
+    _collect_session["boundary"] = result
+
+    # Return boundary as GeoJSON + bbox for the desktop map
+    gdf_json = result.gdf.to_crs("EPSG:4326").to_json()  # type: ignore[union-attr]
+    import json as _json
+    return {
+        "geojson": _json.loads(gdf_json),
+        "bbox": list(result.bbox),
+        "source": result.source,
+        "place_name": result.place_name,
+    }
+
+
+@app.get("/collect/manifest")
+async def collect_manifest():
+    """Return the current variable manifest state."""
+    from sparc.data.collect.manifest import VariableManifest
+    manifest: VariableManifest = _collect_session.get("manifest") or VariableManifest.for_uhi()
+    return manifest.to_api_dict()
+
+
+@app.post("/collect/fetch")
+async def collect_fetch(body: dict = Body(...)):
+    """Trigger a fetch for a single variable group.
+
+    Body keys:
+      group : str  — one of "landsat" | "nlcd" | "era5" | "capa" |
+                             "buildings" | "equity"
+      config : dict — fetch parameters (date_start, date_end, cloud_cover_max,
+                      temporal_mode, enabled_indices, lidar_path, dsm_path)
+
+    Returns the updated manifest entry for the requested group.
+    """
+    from sparc.data.collect.manifest import VariableManifest
+    from sparc.data.collect.boundary import BoundaryResult
+
+    boundary: BoundaryResult | None = _collect_session.get("boundary")
+    if boundary is None:
+        raise HTTPException(400, "Resolve boundary first via POST /collect/boundary")
+
+    manifest: VariableManifest = _collect_session.setdefault(
+        "manifest", VariableManifest.for_uhi()
+    )
+    fishnet = _collect_session.get("fishnet")
+    if fishnet is None:
+        from sparc.data.processing import create_fishnet, clip_to_boundary
+        boundary_proj = boundary.gdf.to_crs("EPSG:3857")
+        bounds = tuple(boundary_proj.total_bounds)
+        fishnet = create_fishnet(bounds, resolution=30.0, crs="EPSG:3857")
+        fishnet = clip_to_boundary(fishnet, boundary_proj)
+        fishnet["cell_id"] = range(len(fishnet))
+        fishnet["cell_x"] = fishnet.geometry.centroid.x
+        fishnet["cell_y"] = fishnet.geometry.centroid.y
+        _collect_session["fishnet"] = fishnet
+
+    group = body.get("group", "")
+    cfg   = body.get("config", {})
+
+    try:
+        fishnet = await _run_group_fetch(group, fishnet, boundary, manifest, cfg)
+        _collect_session["fishnet"] = fishnet
+    except Exception as exc:
+        raise HTTPException(500, f"Fetch failed for group '{group}': {exc}")
+
+    return {
+        "group": group,
+        "manifest": manifest.to_api_dict(),
+        "n_cells": len(fishnet),
+    }
+
+
+async def _run_group_fetch(
+    group: str,
+    fishnet: object,
+    boundary: object,
+    manifest: object,
+    cfg: dict,
+) -> object:
+    """Dispatch a group fetch in a thread pool (avoids blocking the event loop)."""
+    import asyncio
+    return await asyncio.to_thread(_sync_group_fetch, group, fishnet, boundary, manifest, cfg)
+
+
+def _sync_group_fetch(group, fishnet, boundary, manifest, cfg):
+    """Synchronous group fetch — runs in asyncio.to_thread."""
+    from datetime import date as _date
+    from sparc.data.collect.boundary import BoundaryResult
+
+    bbox = boundary.bbox  # type: ignore[union-attr]
+
+    if group == "landsat":
+        from sparc.data.collect.landsat import fetch_landsat
+        ds = _date.fromisoformat(cfg.get("date_start", "2022-06-01"))
+        de = _date.fromisoformat(cfg.get("date_end", "2022-08-31"))
+        fishnet, scene_dates = fetch_landsat(
+            fishnet, bbox, ds, de,
+            cloud_cover_max=float(cfg.get("cloud_cover_max", 20)),
+            temporal_mode=cfg.get("temporal_mode", "composite"),
+            enabled_indices=cfg.get("enabled_indices"),
+        )
+        _collect_session["scene_dates"] = scene_dates
+        for idx in cfg.get("enabled_indices") or ["lst", "ndvi"]:
+            if idx in fishnet.columns:
+                cov = float(fishnet[idx].notna().sum()) / max(len(fishnet), 1)
+                manifest.update(idx, coverage_pct=cov, source_name="USGS STAC Landsat C2")  # type: ignore[union-attr]
+
+    elif group == "nlcd":
+        from sparc.data.collect.nlcd import fetch_nlcd
+        fishnet = fetch_nlcd(fishnet, bbox)
+        for col in ("pct_impervious", "pct_canopy", "land_cover"):
+            cov = float(fishnet[col].notna().sum()) / max(len(fishnet), 1) if col in fishnet.columns else 0.0
+            manifest.update(col, coverage_pct=cov, source_name="MRLC WCS NLCD 2021")  # type: ignore[union-attr]
+
+    elif group == "era5":
+        from sparc.data.collect.era5 import fetch_era5
+        ds = _date.fromisoformat(cfg.get("date_start", "2022-06-01"))
+        de = _date.fromisoformat(cfg.get("date_end", "2022-08-31"))
+        fishnet = fetch_era5(fishnet, bbox, ds, de)
+        cov = float(fishnet["era5_t2m"].notna().sum()) / max(len(fishnet), 1) if "era5_t2m" in fishnet.columns else 0.0
+        manifest.update("era5_t2m", coverage_pct=cov, source_name="Open-Meteo ERA5")  # type: ignore[union-attr]
+
+    elif group == "capa":
+        scene_dates = _collect_session.get("scene_dates", [])
+        if not scene_dates:
+            raise RuntimeError("Fetch Landsat first to establish scene dates for CAPA alignment")
+        from sparc.data.collect.capa import fetch_capa
+        fishnet = fetch_capa(fishnet, bbox, scene_dates)
+        if "aat_midday" in fishnet.columns and "era5_t2m" in fishnet.columns:
+            fishnet["aat_residual"] = fishnet["aat_midday"] - fishnet["era5_t2m"]
+        for col in ("aat_morning", "aat_midday", "aat_night", "diurnal_aat", "aat_residual"):
+            cov = float(fishnet[col].notna().sum()) / max(len(fishnet), 1) if col in fishnet.columns else 0.0
+            manifest.update(col, coverage_pct=cov, source_name="NOAA CAPA / Open-Meteo")  # type: ignore[union-attr]
+
+    elif group == "buildings":
+        from sparc.data.collect.buildings import fetch_buildings
+        from pathlib import Path as _Path
+        fishnet, tier = fetch_buildings(
+            fishnet, bbox,
+            lidar_path=_Path(cfg["lidar_path"]) if cfg.get("lidar_path") else None,
+            dsm_path=_Path(cfg["dsm_path"]) if cfg.get("dsm_path") else None,
+            default_height_m=float(cfg.get("default_height_m", 5.0)),
+        )
+        tier_names = {1: "LiDAR (local)", 2: "Microsoft MLBuildings",
+                      3: "OSHB (Planetary Computer)", 4: "Constant default"}
+        src = tier_names.get(tier, "Unknown")
+        for col in ("bldg_height_mean", "bldg_coverage", "svf"):
+            cov = float(fishnet[col].notna().sum()) / max(len(fishnet), 1) if col in fishnet.columns else 0.0
+            manifest.update(col, coverage_pct=cov, source_name=src, tier=tier)  # type: ignore[union-attr]
+
+    elif group == "equity":
+        from sparc.data.collect.equity import fetch_equity
+        fishnet, _ = fetch_equity(fishnet, bbox)
+        for col, src in [
+            ("holc_grade", "Mapping Inequality HOLC"),
+            ("cdc_svi", "CDC SVI 2022"),
+            ("ejscreen_score", "EPA EJScreen 2023"),
+        ]:
+            cov = float(fishnet[col].notna().sum()) / max(len(fishnet), 1) if col in fishnet.columns else 0.0
+            if cov == 0.0:
+                manifest.skip(col, f"No {src} coverage")  # type: ignore[union-attr]
+            else:
+                manifest.update(col, coverage_pct=cov, source_name=src)  # type: ignore[union-attr]
+
+    else:
+        raise ValueError(f"Unknown fetch group: '{group}'")
+
+    return fishnet
+
+
+@app.get("/collect/preview/{variable}")
+async def collect_preview(variable: str):
+    """Return a GeoJSON FeatureCollection of the fishnet coloured by *variable*.
+
+    Used by the desktop confirmation map.  Missing values are represented
+    as null in feature properties; ``has_gap`` is included as a boolean.
+    """
+    fishnet = _collect_session.get("fishnet")
+    if fishnet is None:
+        raise HTTPException(400, "No fishnet in session — fetch data first")
+
+    import json as _json
+    gdf = fishnet.to_crs("EPSG:4326")  # type: ignore[union-attr]
+
+    # Include only geometry + the requested variable + has_gap for the map
+    cols = ["geometry"]
+    if variable in gdf.columns:
+        cols.append(variable)
+    if "has_gap" in gdf.columns:
+        cols.append("has_gap")
+
+    subset = gdf[cols]
+    return _json.loads(subset.to_json())
+
+
+@app.get("/collect/cell/{cell_id}")
+async def collect_cell_inspect(cell_id: int):
+    """Return all variable values for a single cell (cell-click inspector)."""
+    fishnet = _collect_session.get("fishnet")
+    if fishnet is None:
+        raise HTTPException(400, "No fishnet in session")
+
+    row = fishnet[fishnet["cell_id"] == cell_id]  # type: ignore[index]
+    if row.empty:
+        raise HTTPException(404, f"Cell {cell_id} not found")
+
+    props = row.drop(columns=["geometry"], errors="ignore").iloc[0].to_dict()
+    # Replace NaN with None for JSON serialisation
+    return {k: (None if (isinstance(v, float) and v != v) else v)
+            for k, v in props.items()}
+
+
+@app.post("/collect/build")
+async def collect_build(body: dict = Body(...)):
+    """Run the assembler to write GeoParquet + manifest and update project.yml.
+
+    Body keys:
+      output_dir   : str   (required)
+      project_yml  : str   (optional — path to project.yml to auto-update)
+      temporal_mode: str   (optional — "composite" | "single" | "panel")
+    """
+    fishnet = _collect_session.get("fishnet")
+    boundary = _collect_session.get("boundary")
+    manifest_obj = _collect_session.get("manifest")
+
+    if fishnet is None or boundary is None:
+        raise HTTPException(400, "Run boundary resolution and at least one fetch group first")
+
+    from sparc.data.collect.manifest import VariableManifest
+    manifest: VariableManifest = manifest_obj or VariableManifest.for_uhi()
+
+    if not manifest.can_build:
+        raise HTTPException(422, {
+            "error": "Cannot build — required variables have errors",
+            "blocking": manifest.blocking_variables,
+        })
+
+    import asyncio
+    from pathlib import Path as _Path
+
+    output_dir = _Path(body.get("output_dir", "."))
+    project_yml_str = body.get("project_yml")
+    temporal_mode = body.get("temporal_mode", "composite")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write GeoParquet
+    suffix = f"_{temporal_mode}"
+    geoparquet_path = output_dir / f"dataset{suffix}.parquet"
+    await asyncio.to_thread(fishnet.to_parquet, str(geoparquet_path), index=False)
+
+    # Write manifest JSON
+    manifest_path = output_dir / "data_manifest.json"
+    manifest.save(manifest_path)
+
+    # Update project.yml
+    if project_yml_str:
+        yml_path = _Path(project_yml_str)
+        if yml_path.exists():
+            import re as _re
+            text = yml_path.read_text(encoding="utf-8")
+            text = _re.sub(r"(file_path\s*:\s*).*", lambda m: m.group(1) + f'"{geoparquet_path}"', text)
+            text = _re.sub(r"(target_column\s*:\s*).*", lambda m: m.group(1) + '"aat_residual"', text)
+            yml_path.write_text(text, encoding="utf-8")
+
+    _collect_session["last_build"] = str(geoparquet_path)
+
+    return {
+        "geoparquet_path": str(geoparquet_path),
+        "manifest_path": str(manifest_path),
+        "n_cells": len(fishnet),
+        "can_build": True,
+        "manifest": manifest.to_api_dict(),
+    }

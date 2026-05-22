@@ -9,20 +9,27 @@ echo.
 :: Navigate to repo root
 cd /d "%~dp0.."
 
-:: Check Python is available
-python --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo  [ERROR] Python was not found on your PATH.
-    echo  Install Python 3.10+ from https://www.python.org/downloads/
-    echo  Make sure to check "Add Python to PATH" during installation.
-    echo.
-    pause
-    exit /b 1
+:: Check Python is available — prefer Python 3.12 (has torch); fall back to any Python 3.10+
+set PY312=C:\Users\kylew\AppData\Local\Programs\Python\Python312\python.exe
+if exist "%PY312%" (
+    set PYTHON=%PY312%
+) else (
+    python --version >nul 2>&1
+    if %errorlevel% neq 0 (
+        echo  [ERROR] Python was not found on your PATH.
+        echo  Install Python 3.10+ from https://www.python.org/downloads/
+        echo  Make sure to check "Add Python to PATH" during installation.
+        echo.
+        pause
+        exit /b 1
+    )
+    set PYTHON=python
 )
+echo  Using Python: %PYTHON%
 
 echo  [1/3] Creating virtual environment...
 if not exist ".venv" (
-    python -m venv .venv
+    %PYTHON% -m venv .venv
 ) else (
     echo        .venv already exists — skipping.
 )

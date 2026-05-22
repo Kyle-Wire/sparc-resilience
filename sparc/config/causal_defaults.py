@@ -26,10 +26,10 @@ CAUSAL_DEFAULTS: Dict[str, Any] = {
 
     # MC³ structure-learning (Bayesian DAG search).
     "mc3": {
-        "n_iterations": 50000,
-        "min_iterations": 20000,
-        "n_chains": 7,
-        "temperatures": [1.0, 0.75, 0.55, 0.4, 0.28, 0.2, 0.1],
+        "n_iterations": 10000,
+        "min_iterations": 4000,
+        "n_chains": 3,
+        "temperatures": [1.0, 0.45, 0.1],
         "burnin_fraction": 0.25,
         "edge_penalty": 0.5,
         "seed": 42,

@@ -1372,7 +1372,7 @@ export const getContextLayers = (domain?: string) =>
 // ------------------------------------------------------------------
 // Audience-specific reports (Phase 19)
 // ------------------------------------------------------------------
-export type ReportAudience = "technical" | "planner" | "public";
+export type ReportAudience = "technical" | "planner" | "public" | "council" | "scientist" | "equity" | "auditor";
 export type ReportFormat = "md" | "html" | "pdf" | "docx";
 
 /** Download an audience-specific report. Returns the markdown/html text
@@ -1478,3 +1478,122 @@ export interface DatasetProfile {
 
 export const getDatasetProfile = () =>
   get<DatasetProfile>("/results/dataset/profile");
+
+// ===========================================================================
+// Data Collection API  (/collect/*)
+// ===========================================================================
+
+export interface BoundaryResponse {
+  geojson: GeoJsonData;
+  bbox: [number, number, number, number];
+  source: string;
+  place_name: string | null;
+}
+
+export interface ManifestEntry {
+  name: string;
+  required: boolean;
+  status: "PENDING" | "FETCHING" | "COMPLETE" | "WARNING" | "ERROR" | "SKIPPED";
+  coverage_pct: number | null;
+  source_name: string | null;
+  tier: number | null;
+  error_message: string | null;
+}
+
+export interface CollectManifest {
+  variables: ManifestEntry[];
+  can_build: boolean;
+  blocking_variables: string[];
+  boundary_description: string | null;
+  temporal_description: string | null;
+}
+
+export interface FetchGroupResponse {
+  group: string;
+  manifest: CollectManifest;
+  n_cells: number;
+}
+
+export interface BuildResponse {
+  geoparquet_path: string;
+  manifest_path: string;
+  n_cells: number;
+  can_build: boolean;
+  manifest: CollectManifest;
+}
+
+/** Resolve a study-area boundary. Exactly one of the three arguments must be set. */
+export async function collectBoundary(opts: {
+  place_name?: string;
+  file_path?: string;
+  geojson?: GeoJsonData;
+}): Promise<BoundaryResponse> {
+  const res = await fetch(`${BASE}/collect/boundary`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(opts),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error((detail as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<BoundaryResponse>;
+}
+
+/** Return the current variable manifest for the active session. */
+export const collectManifest = () => get<CollectManifest>("/collect/manifest");
+
+/** Trigger a fetch for one variable group (runs in server thread-pool). */
+export async function collectFetch(opts: {
+  group: "landsat" | "nlcd" | "era5" | "capa" | "buildings" | "equity";
+  config?: {
+    date_start?: string;
+    date_end?: string;
+    cloud_cover_max?: number;
+    temporal_mode?: "single" | "composite" | "panel";
+    enabled_indices?: string[];
+    lidar_path?: string;
+    dsm_path?: string;
+    default_height_m?: number;
+  };
+}): Promise<FetchGroupResponse> {
+  const res = await fetch(`${BASE}/collect/fetch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(opts),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error((detail as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<FetchGroupResponse>;
+}
+
+/** Return GeoJSON preview of the fishnet coloured by the requested variable. */
+export const collectPreview = (variable: string) =>
+  get<GeoJsonData>(`/collect/preview/${encodeURIComponent(variable)}`);
+
+/** Return all variable values for a single cell (for the cell-click inspector). */
+export const collectCellInspect = (cellId: number) =>
+  get<Record<string, unknown>>(`/collect/cell/${cellId}`);
+
+/** Assemble GeoParquet + manifest and optionally update project.yml. */
+export async function collectBuild(opts: {
+  output_dir: string;
+  project_yml?: string;
+  temporal_mode?: "single" | "composite" | "panel";
+}): Promise<BuildResponse> {
+  const res = await fetch(`${BASE}/collect/build`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(opts),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(
+      (detail as { detail?: string | Record<string, unknown> }).detail?.toString() ??
+        `HTTP ${res.status}`,
+    );
+  }
+  return res.json() as Promise<BuildResponse>;
+}

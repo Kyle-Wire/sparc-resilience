@@ -36,9 +36,9 @@ const DEFAULT_STEPS: TourStep[] = [
     body: "Set the project name, domain, and target column here. The YAML preview on the right is the canonical config — every other page is a structured editor for it.",
   },
   {
-    page: "Processing",
-    title: "2 · Processing",
-    body: "Pick predictors, inspect distributions, and audit data. Click any column to see its histogram, missingness, and bivariate scatter against the target.",
+    page: "Data Collection",
+    title: "2 · Data Collection",
+    body: "Define a study boundary, fetch geospatial variables from free public APIs, confirm data quality on a 30m choropleth map, and export a GeoParquet file for the pipeline.",
   },
   {
     page: "DAG",

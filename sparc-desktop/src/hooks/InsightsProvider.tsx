@@ -23,7 +23,7 @@ import {
 } from "react";
 import { useNavigationStore } from "@/stores/navigationStore";
 
-export type Audience = "practitioner" | "researcher";
+export type Audience = "practitioner" | "researcher" | "public";
 
 /** A bbox in the same CRS as the predictions GeoJSON. `[minX, minY, maxX, maxY]`. */
 export type BBox = [number, number, number, number];
@@ -68,7 +68,8 @@ const AUDIENCE_KEY = "sparc-insights-audience";
 function loadAudience(): Audience {
   if (typeof window === "undefined") return "practitioner";
   const v = window.localStorage.getItem(AUDIENCE_KEY);
-  return v === "researcher" ? "researcher" : "practitioner";
+  if (v === "researcher" || v === "public") return v;
+  return "practitioner";
 }
 
 interface ProviderProps {

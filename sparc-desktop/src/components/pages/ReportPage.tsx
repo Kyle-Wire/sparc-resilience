@@ -25,6 +25,34 @@ const AUDIENCE_OPTIONS: { id: ReportAudience; label: string; blurb: string; incl
     includes: "All sections · Full diagnostics · Uncertainty · DAG · Appendices",
     color: "var(--purple)",
   },
+  {
+    id: "council",
+    label: "Council / Elected Officials",
+    blurb: "Decision summary, ranked actions with cost per unit, budget allocation, equity analysis, and targeted rollout guidance.",
+    includes: "Decision summary · Ranked actions · Budget allocation · Equity · Optimal rollout",
+    color: "#2e7d32",
+  },
+  {
+    id: "scientist",
+    label: "Scientist / External Reviewer",
+    blurb: "Method stack, posterior diagnostics (R-hat, ESS), Wager-2025 audit roll-up, refutations table, and full provenance.",
+    includes: "Method stack · Posterior diagnostics · Wager-2025 audit · Refutations · Provenance",
+    color: "#1565c0",
+  },
+  {
+    id: "equity",
+    label: "Equity Advocate",
+    blurb: "Heterogeneous treatment effects, who benefits most, spillover decomposition, and targeted-policy fairness analysis.",
+    includes: "Effect heterogeneity · Who benefits · Spillover decomposition · Fairness analysis",
+    color: "#6a1b9a",
+  },
+  {
+    id: "auditor",
+    label: "Auditor / 3rd-Party",
+    blurb: "Full Wager-2025 gap completion checklist, data provenance trail, and reproducibility verification.",
+    includes: "Wager-2025 gap roll-up · Full provenance · Reproducibility verification",
+    color: "#37474f",
+  },
 ];
 
 export default function ReportPage() {

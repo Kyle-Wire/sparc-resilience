@@ -30,6 +30,7 @@ import type { PromptDataContext } from "@/lib/prompts";
 import ProjectPage from "@/components/pages/ProjectPage";
 import DataPage from "@/components/pages/DataPage";
 import ProcessingPage from "@/components/pages/ProcessingPage";
+import DataCollectionPage from "@/components/pages/DataCollectionPage";
 import DAGPage from "@/components/pages/DAGPage";
 import VariablesPage from "@/components/pages/VariablesPage";
 import PhysicsPage from "@/components/pages/PhysicsPage";
@@ -291,7 +292,8 @@ export default function App() {
       case "Data":
         return gate(<DataPage key={refreshKey} />);
       case "Processing":
-        return gate(<ProcessingPage />);
+      case "Data Collection":
+        return gate(<DataCollectionPage />);
       case "DAG":
         return gate(<DAGPage key={refreshKey} />);
       case "Variables":

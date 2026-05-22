@@ -159,8 +159,10 @@ def run_bayesian_causal(
         PhysicsInformedGraphPrior,
         run_mc3,
     )
-    from sparc.causal.dibs import run_dibs
-    from sparc.causal.order_mcmc import run_order_mcmc
+    # dibs and order_mcmc are imported lazily below, only when the backend
+    # is actually selected, to avoid loading their heavy import chains when
+    # the default MC³ backend is used.  (dag_warm_start → mc3 chain is
+    # especially sensitive on low-RAM machines.)
 
     config = config or {}
     output_dir = Path(output_dir)
@@ -234,6 +236,7 @@ def run_bayesian_causal(
     inference_backend = causal_cfg.get("inference_backend", "mc3")
 
     if inference_backend == "dibs":
+        from sparc.causal.dibs import run_dibs
         dibs_cfg = causal_cfg.get("dibs", {})
         logger.info("Running DiBS structure learning over %d nodes...", len(available_cols))
         mc3_results = run_dibs(
@@ -249,6 +252,7 @@ def run_bayesian_causal(
             seed=dibs_cfg.get("seed", 42),
         )
     elif inference_backend == "order_mcmc":
+        from sparc.causal.order_mcmc import run_order_mcmc
         order_cfg = causal_cfg.get("order_mcmc", {})
         logger.info("Running Order-MCMC structure learning over %d nodes...", len(available_cols))
         mc3_results = run_order_mcmc(
@@ -267,15 +271,14 @@ def run_bayesian_causal(
             data=data[available_cols],
             node_names=available_cols,
             prior=prior,
-            n_iter=mc3_cfg.get("n_iterations", 50_000),
-            n_chains=mc3_cfg.get("n_chains", 7),
+            n_iter=mc3_cfg.get("n_iterations", 10_000),
+            n_chains=mc3_cfg.get("n_chains", 3),
             temperatures=mc3_cfg.get("temperatures"),
             burnin_frac=mc3_cfg.get("burnin_fraction", 0.25),
             seed=mc3_cfg.get("seed", 42),
-            min_iter=mc3_cfg.get("min_iterations", 10_000),
+            min_iter=mc3_cfg.get("min_iterations", 4_000),
             converge_tol=mc3_cfg.get("converge_tol", 0.01),
             converge_window=mc3_cfg.get("converge_window", 2_000),
-            warm_start_cfg=mc3_cfg.get("warm_start"),
         )
 
     # Save MC³ results
