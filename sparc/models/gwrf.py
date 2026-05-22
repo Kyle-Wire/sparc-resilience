@@ -54,6 +54,22 @@ class GWRFModel:
         self.X_train_ = None  # Store training data for PDP computation
         self.y_train_ = None
 
+    def validate_for_fold(self, n_train: int, n_features: int = 0) -> None:
+        """Clamp k_neighbors / subsample_n so this model is safe for a fold
+        of *n_train* samples.  Mutates ``self`` in-place; call on a deep-copy
+        before fitting so the original model is unchanged.
+        """
+        if self.k_neighbors >= n_train:
+            safe = max(3, int(n_train * 0.8))
+            print(f"WARNING: GWRF k_neighbors {self.k_neighbors} >= n_train {n_train}; "
+                  f"clamped to {safe}")
+            self.k_neighbors = safe
+        if self.subsample_n is not None and self.subsample_n >= n_train:
+            safe = max(100, int(n_train * 0.65))
+            print(f"WARNING: GWRF subsample_n {self.subsample_n} >= n_train {n_train}; "
+                  f"clamped to {safe}")
+            self.subsample_n = safe
+
     def fit(self, X, y, coords, extract_derivatives=False, output_dir=None, feature_names=None):
         """
         Fit GWRF model

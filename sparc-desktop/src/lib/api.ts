@@ -439,6 +439,24 @@ export const getCorrelogramData = () =>
 export const getKernelFieldData = () =>
   get<KernelFieldData>("/results/kernel_field");
 
+/** Fetch multiple artifacts in a single round-trip via /results/batch.
+ *
+ * @param ids - Array of "stage:artifact_id" strings,
+ *              e.g. ["0:correlogram_results", "1:gwen_results"].
+ * @returns BatchResult with `results` (present) and `missing` (absent) maps.
+ */
+export interface BatchResultMissing {
+  id: string;
+  stage: string;
+  hint: string;
+}
+export interface BatchResult {
+  results: Record<string, unknown>;
+  missing: BatchResultMissing[];
+}
+export const getBatch = (ids: string[]) =>
+  get<BatchResult>(`/results/batch?ids=${ids.map(encodeURIComponent).join(",")}`);
+
 /** Fetch any registered struct/table artifact as JSON via the generic
  * `/artifacts/{stage}/{id}.json` endpoint. */
 export const getArtifactJson = <T = unknown>(

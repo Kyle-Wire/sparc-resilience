@@ -281,6 +281,13 @@ class _ContinualConfig:
     ot_active: bool
     ot_lambda: float
     coreset_acts: Any
+    # Candidate B: experience replay
+    replay_lambda: float = 0.0
+    previous_coresets: list = None  # list of dicts with keys X, y, coords
+
+    def __post_init__(self):
+        if self.previous_coresets is None:
+            self.previous_coresets = []
 
 
 @dataclass
@@ -599,6 +606,8 @@ def _exec_cv_fold(
     _ot_active                  = ss.continual.ot_active
     _ot_lambda                  = ss.continual.ot_lambda
     _coreset_acts               = ss.continual.coreset_acts
+    _replay_lambda              = ss.continual.replay_lambda
+    _previous_coresets          = ss.continual.previous_coresets
 
     # ---- Per-fold AMP scaler (fresh per-process instance) ----
     _scaler = torch.cuda.amp.GradScaler(enabled=_use_amp)
@@ -840,6 +849,129 @@ def _exec_cv_fold(
             feat_std=tensors["feat_std"],
         )
         logger.info("  ProcessRateNet pre-training done — final loss=%.6f", pr_final_loss)
+
+    # ------------------------------------------------------------------
+    # Candidate A: gate-weight EMA buffer for surrogate fidelity feedback
+    # Shape: (n_surr,) — one weight per differentiable surrogate.
+    # Initialised to 1/n_surr (uniform); converges to reflect actual gate
+    # utility over the first few epochs.
+    # ------------------------------------------------------------------
+    _n_surr = len(surrogates)  # typically 3: gwr, gwrf, ggpgam
+    _gate_ema = torch.ones(_n_surr, device=device) / _n_surr
+
+    # ------------------------------------------------------------------
+    # Candidate C: alpha classification targets (land-cover centroids)
+    # Pre-computed once per fold; normalised to the same scale as alpha.
+    # None when no material_priors are configured.
+    # ------------------------------------------------------------------
+    _alpha_class_targets: "torch.Tensor | None" = None
+    if material_priors and hasattr(process_net, 'bounds_lo'):
+        # Reuse _classify_land_cover result already computed globally;
+        # slice to the training fold and move to device.
+        if alpha_targets is not None:
+            _alpha_class_targets = alpha_targets[train_idx]  # already on device
+        else:
+            _alpha_class_targets = _classify_land_cover(
+                train_physics.cpu().numpy(),
+                feature_names,
+                material_priors,
+            ).to(device)
+
+    # ------------------------------------------------------------------
+    # Candidate B: pre-compute replay inputs from previous-city coresets
+    # For each past-city coreset (X, y, coords), we run the *current*
+    # surrogates to get base_preds once per fold (not per batch), then
+    # package the result as a CityReplayState.
+    # ------------------------------------------------------------------
+    _replay_states: "list" = []
+    if _replay_lambda > 0.0 and _previous_coresets:
+        from sparc.training.replay import CityReplayState as _CRS
+        logger.info(
+            "  Pre-computing replay states for %d past coresets...",
+            len(_previous_coresets),
+        )
+        with torch.no_grad():
+            for _cs in _previous_coresets:
+                try:
+                    _cs_X      = torch.tensor(_cs["X"],      dtype=torch.float32, device=device)
+                    _cs_y_raw  = torch.tensor(_cs["y"],      dtype=torch.float32, device=device)
+                    # Normalise targets to match the current city's z-score space
+                    _cs_y_norm = (_cs_y_raw - y_mean) / y_std
+                    _cs_coords = torch.tensor(_cs["coords"], dtype=torch.float32, device=device)
+
+                    # Spatial encoding (same encoder as training data)
+                    _cs_spatial = _cs_X  # placeholder when no separate spatial encoder
+                    if hasattr(model, "alpha_emb") and _cs_X.shape[-1] >= 2:
+                        # Try to use the same feature projection approach
+                        _cs_spatial = _cs_X  # surrogates accept raw physics feats
+
+                    # KNN for the coreset points
+                    _cs_knn_np, _ = _build_knn_index(_cs_coords.cpu().numpy(), max_neighbors)
+                    _cs_knn = torch.tensor(_cs_knn_np, dtype=torch.long, device=device)
+                    _cs_knn_gwrf = _cs_knn[:, :min(gwrf_k, _cs_knn.shape[1])]
+
+                    # Surrogate forward pass with current weights
+                    _cs_surr_preds = []
+                    for _sv in surrogates.values():
+                        _sv.eval()
+                        if hasattr(_sv, 'forward') and 'knn_index' in _sv.forward.__code__.co_varnames:
+                            _p, _ = _sv(_cs_X, _cs_spatial,
+                                         knn_index=_cs_knn_gwrf, knn_dists=None)
+                        else:
+                            try:
+                                _p, _ = _sv(_cs_X, _cs_spatial)
+                            except Exception:
+                                _p = _sv(_cs_X, _cs_spatial)
+                        _cs_surr_preds.append(_p.squeeze(-1) if _p.dim() > 1 else _p)
+                        _sv.train()
+
+                    _cs_base = torch.stack(_cs_surr_preds, dim=1)  # (K, n_surr)
+
+                    # Alpha from process net
+                    _cs_pr_in = _cs_X[:, pr_col_idxs] if len(pr_col_idxs) > 0 else _cs_X[:, :1]
+                    _cs_alpha = process_net(_cs_pr_in)
+                    if _cs_alpha.shape[-1] != 1:
+                        _cs_alpha = _cs_alpha.mean(dim=-1, keepdim=True)
+
+                    # Physics extended features
+                    _cs_phys_ext = _cs_X  # same dimensionality assumed
+
+                    _replay_states.append(_CRS(
+                        base_preds=_cs_base.detach(),
+                        physics_feats=_cs_phys_ext.detach(),
+                        X_spatial=_cs_spatial.detach(),
+                        coords=_cs_coords.detach(),
+                        knn_index=_cs_knn.detach(),
+                        alpha=_cs_alpha.detach(),
+                        y=_cs_y_norm.detach(),
+                    ))
+                except Exception as _rs_exc:
+                    logger.warning("  Replay state build failed for a coreset: %s", _rs_exc)
+
+        logger.info("  Built %d replay states.", len(_replay_states))
+
+    # ------------------------------------------------------------------
+    # Candidate D: bilevel meta-gradient lambda optimizer
+    # Reads meta_lambda_lr from training config; 0.0 disables.
+    # Only fires in Stage C (epoch >= ramp_epochs) to avoid interfering
+    # with the curriculum warm-up.
+    # ------------------------------------------------------------------
+    _meta_lambda_opt = None
+    _meta_lambda_lr = float(
+        getattr(ss.training, "meta_lambda_lr", 0.0)
+        if hasattr(ss.training, "meta_lambda_lr") else 0.0
+    )
+    if _meta_lambda_lr > 0.0:
+        from sparc.training.meta_lambda import LambdaOptimizer as _LambdaOpt
+        _meta_lambda_opt = _LambdaOpt(
+            names=list(target_lambdas.keys()),
+            init_vals=target_lambdas,
+            lr=_meta_lambda_lr,
+        )
+        logger.info(
+            "  Meta-lambda optimizer active (lr=%.4f, terms=%s)",
+            _meta_lambda_lr, list(target_lambdas.keys()),
+        )
 
     # ---- Training loop ----
     model.train()
@@ -1110,7 +1242,21 @@ def _exec_cv_fold(
                 valid_laplacian_mask=tensors.get("valid_laplacian_mask"),
                 sheaf_delta=tensors.get("sheaf_delta"),
                 valid_mask=_valid_mask,
+                # Candidate A: gate-feedback surrogate weights
+                surr_fidelity_weights=(1.0 - _gate_ema).clamp(min=0.1).tolist(),
+                # Candidate C: alpha classification scaffold
+                alpha_class_targets=(
+                    _alpha_class_targets[b_idx] if _alpha_class_targets is not None else None
+                ),
+                lambda_alpha_class=lambdas.get("alpha_class", 0.0),
             )
+
+            # Candidate A: update gate EMA after joint-loss forward pass
+            if hasattr(model, "_last_gate_weights") and model._last_gate_weights is not None:
+                _gw = model._last_gate_weights  # (N_batch, n_surr) or (n_surr,)
+                _gw_mean = _gw.mean(dim=0) if _gw.dim() > 1 else _gw
+                if _gw_mean.shape[0] == _n_surr:
+                    _gate_ema = (0.99 * _gate_ema + 0.01 * _gw_mean.detach().to(device)).detach()
 
             # Variance penalty on w(s)
             if hasattr(model, "_last_w_source") and model._last_w_source is not None:
@@ -1179,9 +1325,102 @@ def _exec_cv_fold(
 
         scheduler.step()
 
+        # Candidate B: experience replay — once per epoch (not per batch)
+        # Firing once per epoch avoids ~N_batches × len(replay_states) overhead
+        # while still providing the anti-forgetting gradient signal each epoch.
+        if _replay_lambda > 0.0 and _replay_states:
+            from sparc.training.replay import compute_replay_loss_from_state as _crls
+            _replay_total = torch.tensor(0.0, device=device)
+            for _rs in _replay_states:
+                _replay_total = _replay_total + _crls(model, _rs)
+            optimizer.zero_grad()
+            (_replay_lambda * _replay_total).backward()
+            torch.nn.utils.clip_grad_norm_(
+                list(model.parameters()) + list(process_net.parameters()),
+                clip_norm,
+            )
+            optimizer.step()
+
         epoch_loss /= max(n_batch_points, 1)
         for k in epoch_components:
             epoch_components[k] /= max(n_batch_points, 1)
+
+        # Candidate D: meta-lambda update in Stage C, every 5 epochs
+        # Uses a fresh mini-batch drawn from the training set as the
+        # validation signal for the outer-loop bilevel step.
+        if (
+            _meta_lambda_opt is not None
+            and epoch >= ramp_epochs
+            and (epoch - ramp_epochs) % 5 == 0
+        ):
+            try:
+                _ml_idx = np.random.choice(N_train, size=min(512, N_train), replace=False)
+                _ml_phys_ext = train_physics_ext[_ml_idx]
+                _ml_spatial  = train_spatial[_ml_idx]
+                _ml_coords   = train_coords[_ml_idx]
+                _ml_y        = train_y[_ml_idx]
+                _ml_knn      = _remap_indices_to_local(
+                    np.arange(N_train), _ml_idx, fold_knn[_ml_idx]
+                )
+                _ml_phys     = train_physics[_ml_idx]
+                _ml_surr, _ml_std = _forward_surrogates(
+                    surrogates, _ml_phys, _ml_spatial,
+                    knn_index=_ml_knn[:, :gwrf_k],
+                    knn_dists=fold_knn_dists[_ml_idx][:, :gwrf_k],
+                )
+                _ml_base  = torch.stack(_ml_surr, dim=1)
+                _ml_alpha = process_net(_ml_phys[:, pr_col_idxs])
+                if _ml_alpha.shape[-1] != 1:
+                    _ml_alpha = _ml_alpha.mean(dim=-1, keepdim=True)
+                _ml_source = source_net(_ml_phys).squeeze(-1)
+                _ml_alpha_prior = torch.full_like(_ml_alpha, prior_mean)
+
+                _ml_T, _ml_exc, _ = model(
+                    base_preds=_ml_base,
+                    physics_feats=_ml_phys_ext,
+                    X_spatial=_ml_spatial,
+                    coords=_ml_coords,
+                    knn_index=_ml_knn,
+                    alpha=_ml_alpha,
+                )
+
+                _ml_lambdas = _meta_lambda_opt.tensors()
+                _ml_loss, _ = sparc_joint_loss(
+                    T_pred=_ml_T,
+                    exceedance_preds=_ml_exc,
+                    y_true=_ml_y,
+                    thresholds=thresholds_norm,
+                    alpha=_ml_alpha,
+                    alpha_prior=_ml_alpha_prior,
+                    neighbor_idx=_ml_knn,
+                    source_term=_ml_source,
+                    resolution=resolution,
+                    surrogate_preds=_ml_surr,
+                    surrogate_targets=[
+                        b_surr_targets["gwr"][_ml_idx] if "gwr" in b_surr_targets else _ml_y,
+                        b_surr_targets["gwrf"][_ml_idx] if "gwrf" in b_surr_targets else _ml_y,
+                        b_surr_targets["ggpgam"][_ml_idx] if "ggpgam" in b_surr_targets else _ml_y,
+                    ],
+                    lambda_physics=float(_ml_lambdas.get("physics", lambdas.get("physics", 0.0))),
+                    lambda_smooth=float(_ml_lambdas.get("smooth", lambdas.get("smooth", 0.0))),
+                    lambda_alpha_smooth=float(_ml_lambdas.get("alpha_smooth", lambdas.get("alpha_smooth", 0.0))),
+                    lambda_prior=float(_ml_lambdas.get("prior", lambdas.get("prior", 1.0))),
+                    lambda_base=float(_ml_lambdas.get("base", lambdas.get("base", 0.0))),
+                    lambda_neighbor=float(_ml_lambdas.get("neighbor", lambdas.get("neighbor", 0.0))),
+                    epoch=epoch,
+                )
+                _meta_lambda_opt.step(_ml_loss)
+                # Merge updated meta-lambdas into the schedule for next epoch
+                _meta_vals = _meta_lambda_opt.values()
+                for _mk, _mv in _meta_vals.items():
+                    if _mk in lambdas:
+                        lambdas[_mk] = _mv
+                logger.debug(
+                    "  [Meta-λ] epoch %d: %s", epoch + 1,
+                    {k: f"{v:.4f}" for k, v in _meta_vals.items()},
+                )
+            except Exception as _ml_exc:
+                logger.warning("  Meta-lambda step failed: %s", _ml_exc)
 
         logger.info(
             "  Epoch %d/%d  loss=%.4f  "
@@ -2021,8 +2260,8 @@ def train_neural_meta(
 
     prior_mean = pr_cfg.get("prior_mean", 0.5)
 
-    # ---- JEPA settings (Phase 1, off by default) ----
-    jepa_enable = bool(jepa_cfg.get("enable", False))
+    # ---- JEPA settings (Phase 1, on by default per schema) ----
+    jepa_enable = bool(jepa_cfg.get("enable", True))
     jepa_mask_ratio = float(jepa_cfg.get("mask_ratio", 0.4))
     jepa_spatial_patch = bool(jepa_cfg.get("spatial_patch_masking", False))
     jepa_n_patches = int(jepa_cfg.get("n_patches", 4))
@@ -2086,6 +2325,7 @@ def train_neural_meta(
 
     # Target lambda dict for curriculum schedule.
     # "base" = surrogate fidelity: soft alignment with pretrained targets.
+    # "alpha_class" (Candidate C) = land-cover scaffold for ProcessRateNet.
     target_lambdas = {
         "physics": training_cfg.get("lambda_physics", 0.01),
         "smooth": training_cfg.get("lambda_smooth_pred", 0.01),
@@ -2095,6 +2335,7 @@ def train_neural_meta(
         "base": training_cfg.get("lambda_base", 0.2),
         "pde": training_cfg.get("lambda_pde", 0.05),
         "bc": training_cfg.get("lambda_bc", 0.02),
+        "alpha_class": training_cfg.get("lambda_alpha_class", 0.05),
     }
 
     # OOF containers
@@ -2286,6 +2527,19 @@ def train_neural_meta(
             "Continual learning: EWC active (lambda=%.3f, %d previous cities)",
             _ewc_lambda, len(_cont_fisher),
         )
+
+    # --- Candidate B: experience replay config ---
+    _replay_lambda = float(_cont.get("replay_lambda", 0.0))
+    _previous_coresets: list = _cont.get("previous_coresets", []) or []
+    _replay_active = _replay_lambda > 0.0 and bool(_previous_coresets)
+    if _replay_active:
+        logger.info(
+            "Continual learning: replay active (lambda=%.3f, %d prev coresets)",
+            _replay_lambda, len(_previous_coresets),
+        )
+
+    # --- Candidate D: bilevel meta-lambda config ---
+    _meta_lambda_lr = float(config.get("training", {}).get("meta_lambda_lr", 0.0))
 
     # --- Wasserstein trunk alignment (OT) config ---
     _ot_lambda = float(_cont.get("ot_lambda", 0.0))
@@ -2719,6 +2973,8 @@ def train_neural_meta(
             ot_active=_ot_active,
             ot_lambda=_ot_lambda,
             coreset_acts=_coreset_acts,
+            replay_lambda=_replay_lambda,
+            previous_coresets=_previous_coresets,
         ),
     )
 

@@ -266,72 +266,17 @@ class ScenarioSimulator:
     # ------------------------------------------------------------------
 
     def _build_physics_priors(self, physics: dict) -> None:
+        """Construct ``self.physics_priors`` from the ``priors.yml`` file.
+
+        Delegates to ``build_physics_priors_map`` — the single seam for
+        loading and merging physics priors.  Literature values are used for
+        sign checking and as regularisation guardrails.
         """
-        Construct ``self.physics_priors`` from the ``priors.yml`` file.
-
-        The YAML schema is::
-
-            coefficients:
-              Pct_Canopy:
-                value: -0.280
-                units: "°F per +10 pp"
-                uncertainty: 0.20
-                ...
-
-        These literature values are used for sign checking and as
-        regularisation guardrails.  The ``value`` field is stored as
-        ``lit_coef``; the ``ols_coef`` is left at 0 unless supplied
-        separately in the config.
-        """
-        from sparc.config.config import load_physics_priors
-
-        priors_data = load_physics_priors(self.config)
-
-        # priors.yml stores literature coefficients under 'coefficients'
-        coefficients_section = priors_data.get("coefficients", {})
-
-        # Also accept legacy flat dicts if present
-        ols_coeffs = priors_data.get("ols_coefficients", physics.get("ols_coefficients", {}))
-
-        self.physics_priors: Dict[str, dict] = {}
-        all_vars = set(list(coefficients_section.keys()) + list(ols_coeffs.keys()))
-
-        for var in all_vars:
-            # Literature coefficient from priors.yml nested structure
-            lit_entry = coefficients_section.get(var, {})
-            if isinstance(lit_entry, dict):
-                lit_c = lit_entry.get("value", 0.0)
-            else:
-                lit_c = float(lit_entry)
-
-            ols_c = ols_coeffs.get(var, 0.0)
-            # When no OLS prior exists (ols_c == 0 and var not in the
-            # ols_coefficients dict), use the literature value directly
-            # instead of blending with zero (which would halve it).
-            if ols_c == 0.0 and var not in ols_coeffs:
-                blended = lit_c
-            else:
-                blended = (1 - self.literature_weight) * ols_c + self.literature_weight * lit_c
-            direction = "cooling" if blended < 0 else "warming"
-
-            # Infer unit increment from the units string or defaults
-            if "Pct" in var or "pct" in var:
-                unit_inc = 10  # literature reports per +10 pp
-            elif var in ("NDVI", "Albedo"):
-                unit_inc = 0.1  # literature reports per +0.1
-            elif isinstance(lit_entry, dict) and "unit_increment" in lit_entry:
-                unit_inc = float(lit_entry["unit_increment"])
-            else:
-                unit_inc = priors_data.get("unit_increments", {}).get(var, 1.0)
-
-            self.physics_priors[var] = {
-                "coefficient": blended,       # literature value per unit_increment
-                "unit_increment": unit_inc,
-                "direction": direction,
-                "ols_coef": ols_c,
-                "lit_coef": lit_c,
-                "uncertainty": lit_entry.get("uncertainty", 0.2) if isinstance(lit_entry, dict) else 0.2,
-            }
+        from sparc.interventions.physics_priors_registry import build_physics_priors_map
+        self.physics_priors: Dict[str, dict] = build_physics_priors_map(
+            self.config,
+            literature_weight=self.literature_weight,
+        )
 
     # ------------------------------------------------------------------
     # MGWR coefficient conversion
@@ -477,128 +422,30 @@ class ScenarioSimulator:
     # Direct-effect delta computation
     # ------------------------------------------------------------------
 
-    def _compute_mgwr_direct_delta(
+    def _compute_causal_direct_delta(
         self, variable: str, effective_change: np.ndarray,
         baseline_values: Optional[np.ndarray] = None,
         modified_values: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, str]:
-        """
-        Per-point direct delta using a four-tier strategy:
+        """Per-point direct δ via the four-tier ``DirectEffectChain``.
 
-        1. **PDE alpha field** (V3) — if a learned spatial alpha field is
-           available, modulate the global structural coefficient by it.
-        2. **Bayesian β(s)** (v4) — per-cell posterior-mean coefficient
-           from Stage 3 ``cate_summary.cate_mean`` (NUTS spatial CATE).
-           This is the canonical causal local effect; MGWR/GWR local
-           coefficients are no longer used here because they are
-           correlation-based.
-        3. **Saturation curve** — GWRF condition curve PDP (when reliable).
-        4. **Physics literature** — pure prior fallback.
+        Delegates to ``DirectEffectChain.from_simulator(self)`` which builds
+        an ordered chain of adapters (AlphaField → NUTSBeta → Saturation →
+        PhysicsLit) and returns the first non-``None`` result.
 
         Returns
         -------
         (delta, method) : (ndarray, str)
-            ``delta`` — per-point change in outcome.
-            ``method`` — ``'pde_alpha_field*'``, ``'bayesian_beta'``,
+            ``delta`` — per-point change in outcome (°F or native units).
+            ``method`` — one of ``'pde_alpha_field*'``, ``'combined_beta*'``,
             ``'saturation_curve'``, or ``'physics_lit'``.
         """
-        # --- Physics literature coefficient per raw unit ---------------
-        prior = self.physics_priors.get(variable)
-        if prior and prior.get("unit_increment", 1.0) != 0:
-            lit_per_unit = prior["lit_coef"] / prior["unit_increment"]
-        else:
-            lit_per_unit = 0.0
-
-        # --- Tier 0: V3 alpha field (PDE-learned spatial heterogeneity) ---
-        if self._alpha_field is not None:
-            n = min(len(effective_change), len(self._alpha_field))
-            alpha_s = self._alpha_field[:n]
-            alpha_mean = float(np.mean(alpha_s))
-            if alpha_mean > 1e-12:
-                alpha_norm = alpha_s / alpha_mean  # centered at 1.0
-
-                # beta_global from NUTS posterior or counterfactual engine
-                beta_global = self.get_causal_coefficient(variable)
-                if beta_global is None:
-                    beta_global = lit_per_unit
-
-                # PDP saturation modulation (if available)
-                curve = self._condition_curves.get(variable)
-                if (
-                    curve is not None
-                    and curve['r2'] >= self._condition_curve_min_r2
-                    and baseline_values is not None
-                    and modified_values is not None
-                ):
-                    try:
-                        from sparc.interventions.extrapolation_guard import (
-                            predict_scenario_with_saturation,
-                        )
-                        condition_curve_dict = {
-                            'grid_values': curve['grid_values'],
-                            'pdp_values': curve['pdp_values'],
-                        }
-                        pdp_delta = predict_scenario_with_saturation(
-                            variable_name=variable,
-                            baseline_values=baseline_values[:n],
-                            modified_values=modified_values[:n],
-                            condition_curve=condition_curve_dict,
-                            spatial_multiplier=None,
-                        )
-                        # PDP slope: normalize by effective_change to get
-                        # per-unit marginal response
-                        eff_n = effective_change[:n]
-                        pdp_slope_raw = np.where(
-                            np.abs(eff_n) > 1e-8,
-                            pdp_delta / eff_n,
-                            0.0,
-                        )
-                        # Normalize PDP slope to a pure spatial shape modifier
-                        # (mean ≈ 1). Use absolute values so the sign comes
-                        # solely from beta_global — avoids double-counting the
-                        # direction already present in the PDP curve.
-                        # Only use active points (non-zero eff_inc) for the mean.
-                        abs_pdp = np.abs(pdp_slope_raw)
-                        active_mask = np.abs(eff_n) > 1e-8
-                        if active_mask.any():
-                            abs_pdp_mean = float(np.mean(abs_pdp[active_mask]))
-                        else:
-                            abs_pdp_mean = 0.0
-                        if abs_pdp_mean > 1e-10:
-                            pdp_slope = abs_pdp / abs_pdp_mean
-                        else:
-                            pdp_slope = np.ones_like(pdp_slope_raw)
-                        # Full formula: beta_global × increment × PDP_slope × alpha_norm
-                        delta = beta_global * eff_n * pdp_slope * alpha_norm
-                        gini = spatial_gini_coefficient(delta)
-                        print(f"   [Tier 0] alpha+PDP delta for {variable}: "
-                              f"Gini={gini:.4f}, mean={np.mean(delta):.4f}")
-                        print(f"     PDP diag: raw_slope_mean={np.mean(pdp_slope_raw):.6f}, "
-                              f"|raw|_mean={abs_pdp_mean:.6f}, "
-                              f"norm_slope_mean={np.mean(pdp_slope):.4f}, "
-                              f"beta_global={beta_global:.6f}")
-                        return delta, 'pde_alpha_field_pdp'
-                    except Exception:
-                        pass  # fall through to non-PDP alpha path
-
-                # Without PDP: beta_global × alpha_norm × effective_change
-                delta = beta_global * alpha_norm * effective_change[:n]
-                gini = spatial_gini_coefficient(delta)
-                print(f"   [Tier 0] alpha delta for {variable}: "
-                      f"Gini={gini:.4f}, mean={np.mean(delta):.4f}")
-                return delta, 'pde_alpha_field'
-
-        # --- Tiers 1-3: Combined final function ---------------------------
-        # When NUTS β(s) is available, combine all three evidence sources:
-        #   effect_i = β(s_i) × f_PDP(Δ_i) × physics_guard
-        # β(s_i) drives the per-cell magnitude (causal estimator),
-        # f_PDP shapes non-linear saturation, physics_guard bounds the result.
-        # Falls back gracefully when individual tiers are unavailable.
-        return self.compute_combined_effect(
+        from sparc.interventions.direct_effect import DirectEffectChain
+        chain = DirectEffectChain.from_simulator(self)
+        return chain.compute(
             variable, effective_change,
             baseline_values=baseline_values,
             modified_values=modified_values,
-            lit_per_unit=lit_per_unit,
         )
 
     def compute_combined_effect(
@@ -793,7 +640,7 @@ class ScenarioSimulator:
           heterogeneity.
 
         This avoids double-counting: the direct ``treatment → outcome``
-        effect is handled separately by ``_compute_mgwr_direct_delta()``.
+        effect is handled separately by ``_compute_causal_direct_delta()``.
 
         Parameters
         ----------
@@ -2480,7 +2327,7 @@ class ScenarioSimulator:
                 effective_change = self._diminishing_return(actual_change, threshold)
 
                 # 3. Direct effect — saturation curve or MGWR/physics blend
-                direct_delta, direct_method = self._compute_mgwr_direct_delta(
+                direct_delta, direct_method = self._compute_causal_direct_delta(
                     var_name, effective_change,
                     baseline_values=original_vals,
                     modified_values=modified_vals,
@@ -2579,7 +2426,7 @@ class ScenarioSimulator:
 
                 # Determine which coefficient source dominated
                 _mgwr_abs = abs(mgwr_coeff_mean) if not np.isnan(mgwr_coeff_mean) else 0.0
-                coeff_source = direct_method  # from _compute_mgwr_direct_delta return
+                coeff_source = direct_method  # from _compute_causal_direct_delta return
 
                 if verbose:
                     print(f"\n  {label}:")
@@ -2762,7 +2609,7 @@ class ScenarioSimulator:
             for vn, ac in actual_changes.items():
                 threshold = self._get_diminishing_threshold(vn)
                 eff_change = self._diminishing_return(ac, threshold)
-                direct, _ = self._compute_mgwr_direct_delta(
+                direct, _ = self._compute_causal_direct_delta(
                     vn, eff_change,
                     baseline_values=data[vn].values,
                     modified_values=modified_data[vn].values,

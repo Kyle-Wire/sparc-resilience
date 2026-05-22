@@ -540,6 +540,7 @@ class CounterfactualEngine:
         coords: np.ndarray | None = None,
         spatial_block_size: float | None = None,
         n_splits: int = 5,
+        precomputed_outcome_preds: np.ndarray | None = None,
     ) -> Tuple[float, float, Any]:
         """
         Estimate the causal coefficient for ``parent -> child`` via
@@ -564,6 +565,13 @@ class CounterfactualEngine:
             Block size in CRS units for spatial fold assignment.
         n_splits : int
             Number of cross-fitting folds (default 5).
+        precomputed_outcome_preds : np.ndarray, optional
+            Pre-fitted Stage 2 OOF predictions for the outcome variable
+            (shape ``(N,)``).  When provided, model_y is bypassed and the
+            outcome residual is computed as ``Ỹ = Y - precomputed_outcome_preds``
+            directly (Frisch-Waugh-Lovell).  The treatment nuisance model_t
+            is still cross-fitted normally.  Raises ``ValueError`` if the
+            array length does not match ``len(data)``.
 
         Returns
         -------
@@ -574,11 +582,45 @@ class CounterfactualEngine:
         dml_model : object
             Fitted econml.dml.LinearDML model (or None on fallback).
         """
+        import logging as _log
+        _logger = _log.getLogger(__name__)
+
         from sklearn.ensemble import HistGradientBoostingRegressor as HGB
 
         T = data[[parent]].values   # (N, 1)
         Y = data[child].values      # (N,)
         W = data[confounders].values if confounders else None  # (N, p) or None
+
+        # JD-1: When pre-computed OOF outcome predictions are provided, bypass
+        # the econml path (which would refit model_y internally) and use the
+        # sklearn fallback with the pre-computed outcome residual.
+        if precomputed_outcome_preds is not None:
+            preds = np.asarray(precomputed_outcome_preds).ravel()
+            if len(preds) != len(Y):
+                raise ValueError(
+                    f"precomputed_outcome_preds length {len(preds)} does not match "
+                    f"data length {len(Y)} for edge {parent}\u2192{child}."
+                )
+            Y_res = Y - preds
+            ss_res = float(np.sum(Y_res ** 2))
+            ss_tot = float(np.sum((Y - Y.mean()) ** 2))
+            stage2_r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+            _logger.info(
+                "DML model_y: using Stage 2 oof_preds (stage2_r2=%.4f) "
+                "for edge %s\u2192%s",
+                stage2_r2, parent, child,
+            )
+            model_t = HGB(
+                max_iter=100, max_depth=3, learning_rate=0.05,
+                min_samples_leaf=20, random_state=42,
+            )
+            return CounterfactualEngine._fit_edge_dml_sklearn(
+                T, Y, W,
+                model_y=None,
+                model_t=model_t,
+                n_splits=n_splits,
+                precomputed_Y_res=Y_res,
+            )
 
         # Build spatial cross-fitting splitter if coordinates are available
         cv_splitter: Any = n_splits
@@ -656,6 +698,7 @@ class CounterfactualEngine:
         model_y,
         model_t,
         n_splits: int = 5,
+        precomputed_Y_res: np.ndarray | None = None,
     ) -> Tuple[float, float, None]:
         """
         Manual Debiased ML (Chernozhukov et al. 2018) using only sklearn.
@@ -663,18 +706,34 @@ class CounterfactualEngine:
         Cross-fits nuisance models for Y and T on confounders W, then
         estimates the causal coefficient from the residual-on-residual
         regression with heteroskedasticity-robust standard errors.
+
+        Parameters
+        ----------
+        precomputed_Y_res : np.ndarray, optional
+            Pre-computed outcome residuals ``Ỹ = Y - ĝ(W)`` of shape ``(N,)``.
+            When provided, the model_y cross-fitting loop is skipped entirely
+            and these residuals are used directly.  model_y may be ``None``.
         """
         from sklearn.model_selection import KFold
         from sklearn.base import clone
 
         n = len(Y)
         T_flat = T.ravel()
-        Y_res = np.zeros(n)
         T_res = np.zeros(n)
 
         kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
 
-        if W is not None and W.shape[1] > 0:
+        if precomputed_Y_res is not None:
+            # JD-1: outcome residuals pre-computed by caller — skip model_y fitting.
+            Y_res = np.asarray(precomputed_Y_res).ravel()
+            if W is not None and W.shape[1] > 0:
+                for train_idx, test_idx in kf.split(W):
+                    mt = clone(model_t).fit(W[train_idx], T_flat[train_idx])
+                    T_res[test_idx] = T_flat[test_idx] - mt.predict(W[test_idx])
+            else:
+                T_res = T_flat - T_flat.mean()
+        elif W is not None and W.shape[1] > 0:
+            Y_res = np.zeros(n)
             for train_idx, test_idx in kf.split(W):
                 my = clone(model_y).fit(W[train_idx], Y[train_idx])
                 mt = clone(model_t).fit(W[train_idx], T_flat[train_idx])

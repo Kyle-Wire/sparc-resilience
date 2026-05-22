@@ -7,7 +7,7 @@ These tests pin the new behavior:
 
 * ``_get_bayesian_beta(treatment)`` reads the right column from the active
   store and caches per call.
-* ``_compute_mgwr_direct_delta`` returns ``β(s) · Δ`` with method
+* ``_compute_causal_direct_delta`` returns ``β(s) · Δ`` with method
   ``"bayesian_beta"`` whenever ``cate_summary`` is available.
 * When ``cate_summary`` is absent and no PDE alpha / saturation curve is
   registered, the method falls through to ``"physics_lit"`` — never to a
@@ -94,7 +94,7 @@ def test_compute_direct_delta_uses_bayesian_beta(active_registry):
     sim = _bare_sim()
 
     eff = np.array([2.0, 2.0, 2.0])
-    delta, method = sim._compute_mgwr_direct_delta("Pct_Canopy", eff)
+    delta, method = sim._compute_causal_direct_delta("Pct_Canopy", eff)
 
     assert method == "combined_beta"
     # delta = β(s) · Δ
@@ -107,7 +107,7 @@ def test_compute_direct_delta_falls_back_to_physics_lit(active_registry):
     sim = _bare_sim()  # no cate_summary written
 
     eff = np.array([10.0, 10.0])
-    delta, method = sim._compute_mgwr_direct_delta("Pct_Canopy", eff)
+    delta, method = sim._compute_causal_direct_delta("Pct_Canopy", eff)
 
     assert method == "physics_lit"
     # lit_per_unit = -0.28 / 10 = -0.028 → delta = -0.28 per +10pp

@@ -131,60 +131,14 @@ def train_single_model_fold_worker(args):
     y_tr = y[train_idx]
     coords_tr, coords_te = coords[train_idx], coords[test_idx]
     
-    # Runtime safety checks for spatial models
+    # Runtime safety: delegate fold-size invariants to each model.
+    # GWRModel.validate_for_fold clamps bandwidth/min_points;
+    # GWRFModel.validate_for_fold clamps k_neighbors/subsample_n.
     try:
         n_train = len(train_idx)
         n_features = X.shape[1] if hasattr(X, 'shape') else len(X[0])
-        
-        if model_name == 'gwr':
-            # Check if using MGWR (variable_bandwidths) or single bandwidth
-            if hasattr(model_copy, 'variable_bandwidths') and model_copy.variable_bandwidths:
-                # MGWR with distance-based variable bandwidths (in meters)
-                # These are spatial distances, not neighbor counts - no adjustment needed
-                # But ensure min_points is reasonable for the fold size
-                if hasattr(model_copy, 'min_points'):
-                    max_min_points = max(n_features + 2, min(50, n_train // 10))
-                    if model_copy.min_points > max_min_points:
-                        old_min = model_copy.min_points
-                        model_copy.min_points = max_min_points
-                        print(f"INFO: MGWR fold {fold_idx}: Adjusted min_points {old_min} -> {model_copy.min_points}")
-            elif hasattr(model_copy, 'bandwidth') and model_copy.bandwidth:
-                # Single global bandwidth (neighbor count)
-                min_safe_bandwidth = max(n_features + 5, 20)
-                max_safe_bandwidth = int(n_train * 0.5)
-                
-                if model_copy.bandwidth >= n_train:
-                    safe_bandwidth = max(min_safe_bandwidth, min(int(n_train * 0.3), 500))
-                    print(f"WARNING: GWR bandwidth ({model_copy.bandwidth}) >= training size ({n_train}) for fold {fold_idx}")
-                    print(f"         Adjusting to safe bandwidth: {safe_bandwidth}")
-                    model_copy.bandwidth = safe_bandwidth
-                elif model_copy.bandwidth > max_safe_bandwidth:
-                    safe_bandwidth = max(min_safe_bandwidth, min(max_safe_bandwidth, model_copy.bandwidth))
-                    print(f"INFO: GWR bandwidth ({model_copy.bandwidth}) > 50% of training ({max_safe_bandwidth}) for fold {fold_idx}")
-                    print(f"      Capping bandwidth at: {safe_bandwidth}")
-                    model_copy.bandwidth = safe_bandwidth
-                
-                # Also ensure min_points is reasonable
-                if hasattr(model_copy, 'min_points'):
-                    if model_copy.min_points > n_train // 2:
-                        model_copy.min_points = max(n_features + 2, n_train // 4)
-                        print(f"INFO: Adjusted GWR min_points to {model_copy.min_points}")
-                
-        elif model_name == 'gwrf' and hasattr(model_copy, 'k_neighbors'):
-            if model_copy.k_neighbors >= n_train:
-                print(f"WARNING: GWRF k_neighbors ({model_copy.k_neighbors}) >= training size ({n_train}) for fold {fold_idx}")
-                # Adjust k_neighbors to safe value
-                safe_k_neighbors = max(3, int(n_train * 0.8))
-                print(f"         Adjusting to safe k_neighbors: {safe_k_neighbors}")
-                model_copy.k_neighbors = safe_k_neighbors
-                
-            # Additional check for subsample_n parameter
-            if hasattr(model_copy, 'subsample_n') and model_copy.subsample_n is not None:
-                if model_copy.subsample_n >= n_train:
-                    print(f"WARNING: GWRF subsample_n ({model_copy.subsample_n}) >= training size ({n_train}) for fold {fold_idx}")
-                    safe_subsample = max(100, int(n_train * 0.65))  # Conservative subsample
-                    print(f"         Adjusting to safe subsample_n: {safe_subsample}")
-                    model_copy.subsample_n = safe_subsample
+        if hasattr(model_copy, 'validate_for_fold'):
+            model_copy.validate_for_fold(n_train, n_features)
     except Exception as safety_e:
         print(f"WARNING: Safety check failed for {model_name} fold {fold_idx}: {safety_e}")
     
@@ -761,13 +715,16 @@ class EnhancedSpatialCV:
     Enhanced Spatial Cross-Validation using variable-specific optimized parameters
     """
     
-    def __init__(self):
+    def __init__(self, hw: dict | None = None):
         # Use centralized path management
         self.paths = get_paths()
-        
+
         self.base_config = load_config()
         # Centralised physics constraints from project.yml (or legacy defaults)
         self._monotone_constraints = load_monotone_constraints(self.base_config)
+        # Hardware config: accept an explicit dict (for tests / overrides), else
+        # fall back to the module-level global populated at import time.
+        self._hw = hw if hw is not None else HARDWARE_CONFIG
 
     def _load_prior_trunk(self):
         """
@@ -821,6 +778,12 @@ class EnhancedSpatialCV:
         return self._correlogram_cache
 
     def get_block_size_from_config(self):
+        """Get block_size (cached): user config > correlogram > ERM p10 > None."""
+        if not hasattr(self, '_cv_block_size'):
+            self._cv_block_size = self._compute_block_size()
+        return self._cv_block_size
+
+    def _compute_block_size(self):
         """
         Get the block size: user config > correlogram results > ERM self-supervised > None.
         """
@@ -856,13 +819,19 @@ class EnhancedSpatialCV:
             pass
 
         return None
-    
+
     def get_buffer_size_from_config(self):
+        """Get buffer_size (cached): user config > auto-computed from block_size."""
+        if not hasattr(self, '_cv_buffer_size'):
+            self._cv_buffer_size = self._compute_buffer_size()
+        return self._cv_buffer_size
+
+    def _compute_buffer_size(self):
         """
         Get the buffer size from project configuration.
         """
         buffer_size = self.base_config.get('models', {}).get('spatial_cv', {}).get('buffer_size', 0)
-        
+
         # Auto-calculate buffer based on block size if enabled
         if self.base_config.get('models', {}).get('spatial_cv', {}).get('buffer_size_auto', False):
             block_size = self.get_block_size_from_config()
@@ -870,10 +839,16 @@ class EnhancedSpatialCV:
                 auto_buffer = max(100, int(block_size / 3))
                 print(f"Auto-calculated buffer size: {auto_buffer}m (1/3 of block size {block_size}m)")
                 return auto_buffer
-        
+
         return float(buffer_size) if buffer_size is not None else 0
-    
+
     def get_variable_bandwidths(self):
+        """Get per-variable bandwidths (cached): correlogram > manual_parameters > None."""
+        if not hasattr(self, '_cv_variable_bandwidths'):
+            self._cv_variable_bandwidths = self._compute_variable_bandwidths()
+        return self._cv_variable_bandwidths
+
+    def _compute_variable_bandwidths(self):
         """
         Get per-variable bandwidths from correlogram analysis results.
 
@@ -1004,28 +979,25 @@ class EnhancedSpatialCV:
         model_configs = self.base_config.get('models', {})
         
         models = []
-        
+
+        # Resolve shared per-model dependencies once, before any model branch.
+        # Both GWR and GWRF need kernel_field; resolving here means the GWRF
+        # branch can use `kernel_field` directly with no NameError risk.
+        variable_bandwidths = self.get_variable_bandwidths()
+        predictor_names_for_kf = list((variable_bandwidths or {}).keys())
+        if not predictor_names_for_kf:
+            predictor_names_for_kf = list(
+                (self.base_config.get('manual_parameters', {}) or {}).get('bandwidths', {}).keys()
+            )
+        kernel_field = self.get_kernel_field(predictor_names_for_kf)
+
         # OLS (no configurable parameters - it's a baseline model)
         models.append(OLSModel())
-        
+
         # GWR with variable-specific bandwidths
         if 'gwr' in model_configs:
             gwr_params = model_configs['gwr'].copy()
-            
-            # Get variable-specific bandwidths from manual_parameters
-            variable_bandwidths = self.get_variable_bandwidths()
-            # Phase 5a: matrix-aware kernel field (Matérn + anisotropy +
-            # per-pair bandwidths).  Returns None if Stage-0 artifacts
-            # haven't been written, in which case the legacy bandwidth
-            # path is used.
-            predictor_names_for_kf = list((variable_bandwidths or {}).keys())
-            if not predictor_names_for_kf:
-                # Fall back to manual_parameters bandwidths just to know names
-                predictor_names_for_kf = list(
-                    (self.base_config.get('manual_parameters', {}) or {}).get('bandwidths', {}).keys()
-                )
-            kernel_field = self.get_kernel_field(predictor_names_for_kf)
-            
+
             if variable_bandwidths:
                 print(f"GWR Variable-Specific Bandwidths:")
                 for var, bw in variable_bandwidths.items():
@@ -1098,7 +1070,7 @@ class EnhancedSpatialCV:
                 
                 # Force single thread for local RFs to avoid nested parallelism warnings
                 # Outer CV parallelization handles efficient resource utilization
-                gwrf_params['n_jobs'] = HARDWARE_CONFIG.get('gwrf_local_jobs', 1)
+                gwrf_params['n_jobs'] = self._hw.get('gwrf_local_jobs', 1)
                 
                 print(f"GWRF Global Parameters:")
                 print(f"  Dataset size: {n_samples}")
@@ -1112,15 +1084,11 @@ class EnhancedSpatialCV:
             for param in valid_params:
                 if param in gwrf_params:
                     gwrf_constructor_params[param] = gwrf_params[param]
-            # Phase 5a: attach the same matrix-aware kernel field used
-            # by GWRModel, so per-pair bandwidths flow into local-RF
-            # neighbourhoods as metadata for downstream artifacts.
-            try:
-                _kf_for_gwrf = kernel_field  # noqa: F821 (defined in gwr branch above)
-            except NameError:
-                _kf_for_gwrf = None
-            if _kf_for_gwrf is not None:
-                gwrf_constructor_params['kernel_field'] = _kf_for_gwrf
+            # Phase 5a: attach the matrix-aware kernel field assembled above
+            # (same instance used by GWRModel) so per-pair bandwidths flow into
+            # local-RF neighbourhoods as metadata for downstream artifacts.
+            if kernel_field is not None:
+                gwrf_constructor_params['kernel_field'] = kernel_field
             
             try:
                 gwrf = GWRFModel(**gwrf_constructor_params)
@@ -1347,22 +1315,37 @@ class EnhancedSpatialCV:
         
         models = self.create_optimized_models(n_samples=len(X))
         model_names = ['ols', 'gwr', 'gwrf', 'ggpgam']
-        
+
+        # ------------------------------------------------------------------
+        # Centralized feature scaling: fit one canonical scaler on the full
+        # feature matrix so every base model operates on the same normalized
+        # representation.  Each model still calls its own fit_transform
+        # internally, but since X is already ≈N(0,1), those internal scalers
+        # become a near-identity pass-through.
+        # This eliminates GWEN's subsample-induced scale drift and ensures
+        # all surrogate predictions share a consistent feature basis for
+        # meta-learner blending.
+        # ------------------------------------------------------------------
+        _X_arr = X.values if hasattr(X, 'values') else np.asarray(X)
+        from sklearn.preprocessing import StandardScaler as _CanonicalScaler
+        _canonical_scaler = _CanonicalScaler()
+        X = _canonical_scaler.fit_transform(_X_arr)
+
         n_samples = len(y)
         n_models = len(models)
         oof_predictions = np.zeros((n_samples, n_models))
         
         print(f"Generating OOF predictions with {n_models} optimized models...")
-        print(f"Hardware acceleration: {HARDWARE_CONFIG['max_workers']} cores, {HARDWARE_CONFIG['memory_limit_gb']}GB RAM limit")
+        print(f"Hardware acceleration: {self._hw['max_workers']} cores, {self._hw['memory_limit_gb']}GB RAM limit")
         print(f"Strategy: Per-model parallelization - each model runs all {len(folds)} folds in parallel")
         
         # Run each model in parallel across all folds
-        if HARDWARE_CONFIG['parallel_cv'] and len(folds) >= 2:
+        if self._hw['parallel_cv'] and len(folds) >= 2:
             print(f"\n{'='*80}")
             print(f"PARALLEL MODE: Each fold will be processed in parallel (per model)")
             print(f"  • Models will be processed sequentially: {', '.join(model_names)}")
             print(f"  • Each model's {len(folds)} folds will run in parallel")
-            print(f"  • Max parallel workers per model: {min(len(folds), HARDWARE_CONFIG['outer_jobs'])}")
+            print(f"  • Max parallel workers per model: {min(len(folds), self._hw['outer_jobs'])}")
             print(f"{'='*80}\n")
             try:
                 oof_predictions = self._parallel_cv_training(X, y, coords, models, model_names, folds, feature_names)
@@ -1385,28 +1368,18 @@ class EnhancedSpatialCV:
                 _sc = score_model_spatial_consistency(oof_predictions[:, _mi], coords, bandwidth=_bw)
                 print(f"  {_mn}: spatial_consistency_score = {_sc:.4f}  (bandwidth={_bw:.0f}m)")
 
-        # Save OOF predictions to artifacts.db (single source of truth).
+        # Save OOF predictions — route through artifact_io (store-or-disk seam).
         oof_df = pd.DataFrame(oof_predictions, columns=model_names)
         _oof_path = os.path.join(output_dir, 'optimized_oof_predictions.csv')
-        try:
-            from sparc.registry.store import get_active_store
-            _store = get_active_store()
-            if _store is not None:
-                _store.write_table(
-                    "2", "oof_predictions", oof_df,
-                    producer="enhanced_spatial_cv",
-                    consumers=["server:/results/spatial_cv/predictions"],
-                )
-            else:
-                # No active store: fall back to disk write.
-                oof_df.to_csv(_oof_path, index=False)
-                from sparc.registry.run_registry import register_path
-                register_path(_oof_path, stage="2", artifact_id="oof_predictions",
-                              format="csv", producer="enhanced_spatial_cv")
-        except Exception:
-            oof_df.to_csv(_oof_path, index=False)
+        save_table_path(
+            oof_df, _oof_path,
+            stage="2", artifact_id="oof_predictions",
+            producer="enhanced_spatial_cv",
+            consumers=["server:/results/spatial_cv/predictions"],
+        )
 
-        # Save spatial predictions as a geometry-bearing table in artifacts.db.
+        # Save spatial predictions as a geometry-bearing table — route through
+        # artifact_io so store and disk are written consistently.
         try:
             import geopandas as gpd
             # Access the source GeoDataFrame from the parent pipeline
@@ -1427,34 +1400,14 @@ class EnhancedSpatialCV:
                     if target_col in src_data.columns:
                         gpkg_gdf[f'residual_{mname}'] = oof_predictions[:, i] - src_data[target_col].values
                 gpkg_path = os.path.join(output_dir, 'spatial_cv_predictions.gpkg')
-                wrote_to_store = False
-                try:
-                    from sparc.registry.store import get_active_store
-                    _store = get_active_store()
-                    if _store is not None:
-                        _store.write_table(
-                            "2", "spatial_cv_predictions", gpkg_gdf,
-                            producer="enhanced_spatial_cv",
-                            consumers=["server:/results/2/predictions",
-                                       "server:/results/spatial_cv/predictions"],
-                        )
-                        print("Spatial CV predictions written to artifacts.db (table 'spatial_cv_predictions')")
-                        wrote_to_store = True
-                except Exception as _e:
-                    print(f"  [WARNING] Could not write spatial_cv_predictions to store: {_e}")
-                if not wrote_to_store:
-                    gpkg_gdf.to_file(gpkg_path, driver='GPKG')
-                    print(f"Spatial CV predictions saved to: {gpkg_path}")
-                    try:
-                        from sparc.registry.run_registry import register_path
-                        register_path(
-                            gpkg_path, stage="2", artifact_id="spatial_cv_predictions",
-                            format="gpkg", producer="enhanced_spatial_cv",
-                            consumers=["server:/results/2/predictions",
-                                       "server:/results/spatial_cv/predictions"],
-                        )
-                    except Exception:
-                        pass
+                save_geo_path(
+                    gpkg_gdf, gpkg_path,
+                    stage="2", artifact_id="spatial_cv_predictions",
+                    producer="enhanced_spatial_cv",
+                    consumers=["server:/results/2/predictions",
+                               "server:/results/spatial_cv/predictions"],
+                )
+                print(f"Spatial CV predictions saved (artifacts.db + {gpkg_path})")
             else:
                 print("  [INFO] Source GeoDataFrame not available for gpkg export")
         except Exception as e:
@@ -1539,7 +1492,7 @@ class EnhancedSpatialCV:
             Optimal subsample size
         """
         # Base subsample size based on hardware configuration
-        if HARDWARE_CONFIG['high_memory_mode']:
+        if self._hw['high_memory_mode']:
             base_subsample = min(n_samples, 3000)
         else:
             base_subsample = min(n_samples, 1500)
@@ -1548,7 +1501,7 @@ class EnhancedSpatialCV:
         min_subsample = max(k_neighbors * 5, 500)  # At least 10x k_neighbors
         
         # Adjust based on available memory
-        memory_adjusted = min(base_subsample, HARDWARE_CONFIG['memory_limit_gb'] * 50)
+        memory_adjusted = min(base_subsample, self._hw['memory_limit_gb'] * 50)
         
         # Take the maximum of constraints to ensure meaningful spatial analysis
         optimal_subsample = max(min_subsample, memory_adjusted)
@@ -1573,13 +1526,13 @@ class EnhancedSpatialCV:
         # Dynamic worker allocation based on dataset size and available resources
         optimal_workers = min(
             len(folds),  # One worker per fold (now per model)
-            HARDWARE_CONFIG['outer_jobs'],  # Controlled outer parallelization
-            max(1, HARDWARE_CONFIG['memory_limit_gb'] // 4)  # More memory per worker for model-level parallelization
+            self._hw['outer_jobs'],  # Controlled outer parallelization
+            max(1, self._hw['memory_limit_gb'] // 4)  # More memory per worker for model-level parallelization
         )
         
         print(f"Per-model parallel CV configuration:")
         print(f"  - Workers per model: {optimal_workers}")
-        print(f"  - Memory per worker: ~{HARDWARE_CONFIG['memory_limit_gb'] // optimal_workers}GB")
+        print(f"  - Memory per worker: ~{self._hw['memory_limit_gb'] // optimal_workers}GB")
         print(f"  - Models to process: {n_models} ({', '.join(model_names)})")
         
         # Train each model across all folds in parallel

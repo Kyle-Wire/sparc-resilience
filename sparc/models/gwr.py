@@ -108,7 +108,40 @@ class GWRModel(BaseEstimator, RegressorMixin):
         self.nn_ = None
         self.scaler = StandardScaler()
         self.M_ik = None  # Spatial modifier matrix for interventions
-        
+
+    def validate_for_fold(self, n_train: int, n_features: int = 0) -> None:
+        """Clamp bandwidth / min_points so this model is safe for a fold of
+        *n_train* samples.  Mutates ``self`` in-place; call on a deep-copy
+        before fitting so the original model is unchanged.
+        """
+        if self.variable_bandwidths:
+            # MGWR: distance-based bandwidths need no adjustment; only
+            # min_points must stay below half the training fold.
+            if hasattr(self, 'min_points') and self.min_points is not None:
+                max_mp = max(n_features + 2, min(50, n_train // 10))
+                if self.min_points > max_mp:
+                    print(f"INFO: GWR validate_for_fold: min_points {self.min_points} → {max_mp}")
+                    self.min_points = max_mp
+        else:
+            # Single global bandwidth (neighbour count)
+            if self.bandwidth is not None:
+                min_safe = max(n_features + 5, 20)
+                max_safe = int(n_train * 0.5)
+                if self.bandwidth >= n_train:
+                    safe = max(min_safe, min(int(n_train * 0.3), 500))
+                    print(f"WARNING: GWR bandwidth {self.bandwidth} >= n_train {n_train}; "
+                          f"clamped to {safe}")
+                    self.bandwidth = safe
+                elif self.bandwidth > max_safe:
+                    safe = max(min_safe, max_safe)
+                    print(f"INFO: GWR bandwidth {self.bandwidth} > 50% n_train; "
+                          f"capped at {safe}")
+                    self.bandwidth = safe
+            if hasattr(self, 'min_points') and self.min_points is not None:
+                if self.min_points > n_train // 2:
+                    self.min_points = max(n_features + 2, n_train // 4)
+                    print(f"INFO: GWR min_points adjusted to {self.min_points}")
+
     def _apply_kernel_field(self, kf) -> None:
         """Override legacy bandwidth/kernel from a KernelField (Phase 5a)."""
         # Per-pair (predictor → outcome) bandwidth replaces the legacy

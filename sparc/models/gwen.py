@@ -64,7 +64,26 @@ class GWENModel:
         self.feature_importance = None
         self.sample_indices = None
         self._nn_indices = None  # Cached k-NN indices
-        
+
+    @classmethod
+    def from_config(cls, cfg: "GWENConfig") -> "GWENModel":
+        """Construct a GWENModel from a validated :class:`~sparc.models.gwen_config.GWENConfig`.
+
+        This is the preferred construction path when the caller has a typed
+        config rather than individual keyword arguments.
+        """
+        return cls(
+            k_neighbors=cfg.k_neighbors,
+            cv_folds=cfg.cv_folds,
+            n_alphas=cfg.n_alphas,
+            l1_ratios=cfg.l1_ratios,
+            sample_size=cfg.sample_size,
+            quick_mode=cfg.quick_mode,
+            n_jobs=cfg.n_jobs,
+            spatial_cv_folds=cfg.spatial_cv_folds,
+            local_cv=cfg.local_cv,
+        )
+
     def fit(self, X, y, coords, feature_names=None):
         """
         Fit the GWEN model.

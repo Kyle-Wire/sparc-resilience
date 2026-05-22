@@ -33,6 +33,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.responses import JSONResponse, FileResponse, Response
 from sparc.server.state import ServerState
 from sparc.server.stream import stream_stage
+from sparc.server.artifact_reader import read_batch, prewarm_ids
 
 # ------------------------------------------------------------------
 # Application & shared state
@@ -467,26 +468,19 @@ _prewarm_cancel: _threading.Event | None = None
 
 
 def _prewarm_results(cancel: _threading.Event) -> None:
-    """Populate the server-side ResultCache with frontend-facing artifacts.
+    """Populate the server-side ResultCache with all complete artifacts.
 
     Runs in a daemon thread so it doesn't block the /project/load response.
-    Only reads artifacts that have a ``server:/results/...`` consumer so we
-    don't waste memory loading model weights or other pipeline-internal blobs.
+    Reads every complete (non-partial) artifact from the live manifest so
+    that any frontend fetch hits the cache instead of blocking a request thread.
     """
     try:
-        from sparc.registry.run_registry import _KNOWN_CATALOG
         reg = state.registry
         if reg is None:
             return
 
-        frontend_ids: list[tuple[str, str]] = [
-            (entry["stage"], entry["id"])
-            for entry in _KNOWN_CATALOG
-            if any(
-                isinstance(c, str) and c.startswith("server:/results/")
-                for c in entry.get("consumers", [])
-            )
-        ]
+        # Drive from the live manifest — no static catalog or consumer-tag filter.
+        frontend_ids = prewarm_ids(reg.manifest)
 
         store = _open_store()
         for stage, artifact_id in frontend_ids:
@@ -496,7 +490,7 @@ def _prewarm_results(cancel: _threading.Event) -> None:
             if state.result_cache.get(stage, artifact_id) is not None:
                 continue
             try:
-                if reg.lookup(stage, artifact_id) is not None and store.has(stage, artifact_id):
+                if store.has(stage, artifact_id):
                     result = store.read_any(stage, artifact_id)
                     state.result_cache.set(stage, artifact_id, result)
             except Exception:
@@ -4208,6 +4202,33 @@ async def get_scenario_increment(variable: str = Query(...), increment: float = 
 # swallow /results/manifest with a 422.
 # ------------------------------------------------------------------
 
+
+@app.get("/results/batch")
+async def get_batch_results(
+    ids: str = Query(
+        ...,
+        description=(
+            "Comma-separated 'stage:artifact_id' pairs, "
+            "e.g. '0:correlogram_results,1:gwen_results'."
+        ),
+    ),
+):
+    """Return multiple artifacts in a single round-trip.
+
+    Each entry in *ids* is resolved via :func:`~sparc.server.artifact_reader.read_batch`.
+    Present artifacts appear in ``results``; unresolvable ones appear in
+    ``missing`` with a hint string — never a 404.
+    """
+    pairs: list[tuple[str, str]] = []
+    for token in ids.split(","):
+        token = token.strip()
+        if ":" in token:
+            stage, artifact_id = token.split(":", 1)
+            pairs.append((stage.strip(), artifact_id.strip()))
+    store = _open_store()
+    return await asyncio.to_thread(read_batch, store, pairs)
+
+
 @app.get("/results/manifest")
 async def get_results_manifest(
     refresh: bool = Query(False, description="Reload from disk before returning."),
@@ -4265,6 +4286,37 @@ async def rescan_manifest():
     n = state.registry.migrate_from_disk(paths)
     return {"newly_registered": n,
             "total_artifacts": len(state.registry.manifest.all_artifacts())}
+
+
+@app.post("/results/manifest/repair")
+async def repair_manifest(threshold_minutes: float = Query(30.0)):
+    """Detect stale partial-write entries and tombstone them.
+
+    A partial entry is *stale* when it was last updated more than
+    *threshold_minutes* ago — indicating the writing process crashed
+    mid-flight and will never complete.  Stale entries are marked
+    ``partial=False`` and their stage status reset to ``failed`` so the
+    frontend can prompt the user to re-run the affected stage.
+
+    Returns the list of repaired artifact IDs grouped by stage.
+    """
+    if state.registry is None:
+        raise HTTPException(503, "Run registry unavailable")
+    stale = state.registry.stale_partials(threshold_minutes=threshold_minutes)
+    if not stale:
+        return {"repaired": {}}
+    repaired: dict[str, list[str]] = {}
+    for entry in stale:
+        entry.partial = False
+        stage_key = str(entry.stage)
+        repaired.setdefault(stage_key, []).append(entry.id)
+        # Mark the stage as failed so the frontend shows a re-run prompt.
+        sm = state.registry.manifest.stages.get(stage_key)
+        if sm is not None and sm.status not in ("failed",):
+            sm.status = "failed"
+            sm.error = f"Partial write detected for {entry.id!r}; re-run stage {stage_key}."
+    state.registry.save()
+    return {"repaired": repaired}
 
 
 # ------------------------------------------------------------------
