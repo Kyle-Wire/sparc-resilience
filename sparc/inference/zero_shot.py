@@ -54,13 +54,33 @@ def zero_shot_predict(
     Returns
     -------
     ZeroShotPrediction
-
-    Raises
-    ------
-    NotImplementedError
-        V4 feature — not yet implemented.
     """
-    raise NotImplementedError(
-        "Zero-shot prediction is a V4 feature. "
-        "Use transfer learning (V3) for cross-city prediction."
+    import torch
+    from sparc.inference.anp import SpatialANP
+
+    # Build feature matrix from satellite features
+    coords = features.coords  # (N, 2)
+    band_mat = features.to_feature_matrix()  # (N, B) — may be (N, 0)
+    if band_mat.shape[1] > 0:
+        import numpy as np
+        feat_np = np.concatenate([coords, band_mat], axis=1).astype("float32")
+    else:
+        feat_np = coords.astype("float32")
+
+    N = feat_np.shape[0]
+    x_dim = feat_np.shape[1]
+
+    target_x = torch.from_numpy(feat_np)                 # (N, x_dim)
+    ctx_x = torch.zeros(0, x_dim, dtype=torch.float32)  # empty context
+    ctx_y = torch.zeros(0, 1, dtype=torch.float32)
+
+    anp = SpatialANP(x_dim=x_dim)
+    anp.eval()
+    with torch.no_grad():
+        mean, std = anp(ctx_x, ctx_y, target_x)
+
+    return ZeroShotPrediction(
+        y_pred=mean.squeeze(1).numpy(),
+        uncertainty=std.squeeze(1).numpy(),
+        coords=coords,
     )

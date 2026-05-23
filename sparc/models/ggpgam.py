@@ -26,6 +26,23 @@ class GGPGAM_SVC:
         self.X_train_ = None  # Store for derivative computation
         self.coords_train_ = None
 
+    @classmethod
+    def from_config(cls, cfg: "GGPGAMConfig") -> "GGPGAM_SVC":
+        """Construct a GGPGAM_SVC from a validated :class:`GGPGAMConfig`.
+
+        physics_signs from the config is set directly on the model,
+        eliminating the need for post-instantiation attribute assignment.
+        """
+        model = cls(
+            n_splines=cfg.n_splines,
+            n_spatial_bases=cfg.n_spatial_bases,
+            lam=cfg.lam,
+            clamp_features=cfg.clamp_features,
+        )
+        # physics_signs is part of the config contract — not a post-assign.
+        model.physics_signs = cfg.physics_signs
+        return model
+
     def fit(self, X, y, coords, extract_derivatives=False, output_dir=None,
             elevation=None, elevation_scale=None):
         """

@@ -1084,4 +1084,98 @@ class ScenarioEngineV4:
                 summary_df.to_csv(self.output_dir / "scenario_summary.csv", index=False)
 
 
-__all__ = ["ScenarioEngineV4", "MissingArtifactsError"]
+# ---------------------------------------------------------------------------
+# Latent rollout batch runner
+# ---------------------------------------------------------------------------
+
+def run_latent_scenarios(
+    scenarios: Sequence[dict],
+    *,
+    baseline_df: "pd.DataFrame",
+    target_col: str = "y",
+    model,
+    predictor,
+    action_embed,
+    physics_feats,
+    base_preds,
+    X_spatial,
+    coords,
+    knn_index,
+    alpha,
+    y_mean: float = 0.0,
+    y_std: float = 1.0,
+) -> "pd.DataFrame":
+    """Run all scenarios through the JEPA latent rollout path.
+
+    This is an alternative to :class:`ScenarioEngineV4` that bypasses
+    base-model re-prediction and executes interventions purely in latent
+    space via :func:`sparc.inference.latent_rollout.multi_step_latent_rollout`.
+
+    Suitable for batch runs when V2 neural model artefacts are present.
+    Falls back gracefully if ``torch`` is unavailable (returns empty DataFrame).
+
+    Parameters
+    ----------
+    scenarios : list[dict]
+        Same format as ``config["scenarios"]`` — parsed by ``_expand_scenarios``.
+    baseline_df : pd.DataFrame
+        Baseline data; the function reads treatment variable columns from it.
+    target_col : str
+        Name of the prediction target.
+    model, predictor, action_embed : trained neural components.
+    physics_feats, base_preds, X_spatial, coords, knn_index, alpha : torch.Tensor
+    y_mean, y_std : float
+        Normalisation stats for denormalisation of outputs.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per (scenario × increment) with columns
+        ``scenario_name``, ``variable``, ``increment``, ``delta_mean``.
+    """
+    try:
+        from sparc.inference.latent_rollout import multi_step_latent_rollout
+    except ImportError:  # pragma: no cover
+        return pd.DataFrame()
+
+    specs = _expand_scenarios(scenarios)
+    if not specs:
+        return pd.DataFrame()
+
+    rows: List[dict] = []
+    for spec in specs:
+        try:
+            result = multi_step_latent_rollout(
+                model=model,
+                predictor=predictor,
+                action_embed=action_embed,
+                physics_feats=physics_feats,
+                base_preds=base_preds,
+                X_spatial=X_spatial,
+                coords=coords,
+                knn_index=knn_index,
+                alpha=alpha,
+                actions=[(spec.variable, spec.increment, 0.0)],
+                y_mean=y_mean,
+                y_std=y_std,
+            )
+            delta_mean = float(np.mean(result.final.delta))
+            rows.append({
+                "scenario_name": spec.name,
+                "variable": spec.variable,
+                "increment": float(spec.increment),
+                "delta_mean": delta_mean,
+            })
+        except Exception as exc:  # pragma: no cover
+            rows.append({
+                "scenario_name": spec.name,
+                "variable": spec.variable,
+                "increment": float(spec.increment),
+                "delta_mean": float("nan"),
+                "error": str(exc),
+            })
+
+    return pd.DataFrame(rows)
+
+
+__all__ = ["ScenarioEngineV4", "MissingArtifactsError", "run_latent_scenarios"]

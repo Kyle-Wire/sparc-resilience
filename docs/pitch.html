@@ -1,0 +1,1369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SPARC Labs — Spatial Research Platform</title>
+<style>
+  :root {
+    --bg:         #0d1117;
+    --surface:    #161b22;
+    --surface2:   #1c2128;
+    --surface3:   #21262d;
+    --border:     #30363d;
+    --text:       #e6edf3;
+    --muted:      #8b949e;
+    --blue:       #58a6ff;
+    --green:      #3fb950;
+    --orange:     #f0883e;
+    --purple:     #bc8cff;
+    --red:        #ff7b72;
+    --yellow:     #d29922;
+    --teal:       #39d353;
+    --radius:     12px;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    font-size: 16px;
+  }
+
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ─── TOPBAR ────────────────────────────────────── */
+  .topbar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 200;
+    background: rgba(13,17,23,0.90);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 32px;
+    height: 56px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .topbar-logo {
+    font-size: 15px; font-weight: 800; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--blue);
+  }
+  .topbar-logo span { color: var(--muted); font-weight: 400; margin-left: 6px; font-size: 13px; text-transform: none; letter-spacing: 0; }
+  .topbar-nav { display: flex; gap: 4px; align-items: center; }
+  .topbar-nav a {
+    color: var(--muted); font-size: 13px; font-weight: 500;
+    padding: 6px 12px; border-radius: 6px; transition: all 0.15s;
+  }
+  .topbar-nav a:hover { color: var(--text); background: rgba(255,255,255,0.06); text-decoration: none; }
+  .topbar-cta {
+    background: var(--blue); color: #0d1117 !important;
+    font-weight: 700 !important; border-radius: 6px !important;
+    padding: 7px 16px !important; font-size: 13px !important;
+    transition: opacity 0.15s !important;
+  }
+  .topbar-cta:hover { opacity: 0.85; background: var(--blue) !important; text-decoration: none !important; }
+
+  /* ─── HERO ──────────────────────────────────────── */
+  .hero {
+    padding: 140px 40px 100px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse 90% 55% at 50% -10%, rgba(88,166,255,0.10) 0%, transparent 65%),
+      radial-gradient(ellipse 60% 40% at 80% 80%, rgba(63,185,80,0.05) 0%, transparent 60%);
+    pointer-events: none;
+  }
+  /* subtle animated grid */
+  .hero::after {
+    content: '';
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(48,54,61,0.35) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(48,54,61,0.35) 1px, transparent 1px);
+    background-size: 60px 60px;
+    pointer-events: none;
+    mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 20%, transparent 80%);
+    -webkit-mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 20%, transparent 80%);
+  }
+  .hero-inner { position: relative; z-index: 1; max-width: 860px; margin: 0 auto; }
+
+  .hero-badge {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: rgba(88,166,255,0.10);
+    border: 1px solid rgba(88,166,255,0.28);
+    color: var(--blue);
+    padding: 5px 16px; border-radius: 20px;
+    font-size: 12.5px; font-weight: 600; letter-spacing: 0.05em;
+    text-transform: uppercase; margin-bottom: 32px;
+  }
+  .hero-badge::before { content: '●'; font-size: 8px; animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  .hero h1 {
+    font-size: clamp(2.6rem, 6vw, 4.4rem);
+    font-weight: 800;
+    letter-spacing: -2px;
+    line-height: 1.08;
+    margin-bottom: 24px;
+    background: linear-gradient(135deg, #e6edf3 0%, #e6edf3 40%, #58a6ff 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero-sub {
+    font-size: 1.2rem;
+    color: var(--muted);
+    max-width: 680px;
+    margin: 0 auto 48px;
+    line-height: 1.75;
+  }
+  .hero-sub strong { color: var(--text); }
+
+  .hero-ctas {
+    display: flex; gap: 14px; justify-content: center; flex-wrap: wrap;
+    margin-bottom: 60px;
+  }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 13px 26px; border-radius: 8px;
+    font-size: 15px; font-weight: 600; cursor: pointer;
+    transition: all 0.18s; text-decoration: none !important; border: none;
+  }
+  .btn-primary {
+    background: var(--blue); color: #0d1117;
+  }
+  .btn-primary:hover { opacity: 0.85; transform: translateY(-1px); }
+  .btn-secondary {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  .btn-secondary:hover { border-color: var(--blue); color: var(--blue); transform: translateY(-1px); }
+
+  .hero-stat-row {
+    display: flex; gap: 40px; justify-content: center; flex-wrap: wrap;
+  }
+  .hero-stat { text-align: center; }
+  .hero-stat .num {
+    font-size: 2.2rem; font-weight: 800; letter-spacing: -1px;
+    background: linear-gradient(135deg, var(--blue), var(--teal));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+    display: block;
+  }
+  .hero-stat .label { font-size: 12px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }
+  .stat-divider { width: 1px; background: var(--border); align-self: stretch; }
+
+  /* ─── SECTION SHELL ──────────────────────────────── */
+  .section {
+    padding: 88px 40px;
+    border-top: 1px solid var(--border);
+  }
+  .section-inner { max-width: 1120px; margin: 0 auto; }
+  .section-label {
+    font-size: 11px; font-weight: 700; letter-spacing: 1.8px;
+    text-transform: uppercase; color: var(--blue);
+    margin-bottom: 10px;
+  }
+  .section-title {
+    font-size: clamp(1.7rem, 3.5vw, 2.5rem);
+    font-weight: 800; letter-spacing: -0.8px;
+    margin-bottom: 16px; color: var(--text);
+  }
+  .section-desc {
+    font-size: 1.05rem; color: var(--muted);
+    max-width: 680px; line-height: 1.8;
+    margin-bottom: 52px;
+  }
+  .section-desc strong { color: var(--text); }
+
+  /* ─── PROBLEM ────────────────────────────────────── */
+  .problem-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 20px;
+  }
+  .problem-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px 28px 24px;
+    position: relative;
+    overflow: hidden;
+  }
+  .problem-card::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, var(--red), transparent);
+  }
+  .problem-icon { font-size: 26px; margin-bottom: 14px; display: block; }
+  .problem-card h3 { font-size: 1.0rem; font-weight: 700; margin-bottom: 8px; }
+  .problem-card p { font-size: 0.9rem; color: var(--muted); line-height: 1.7; }
+
+  /* ─── HOW IT WORKS / PIPELINE ────────────────────── */
+  .pipeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .pipe-stage {
+    display: grid;
+    grid-template-columns: 64px 3px 1fr;
+    gap: 0 20px;
+    align-items: stretch;
+  }
+  .pipe-num-col {
+    display: flex; flex-direction: column; align-items: center; padding-top: 8px;
+  }
+  .pipe-num {
+    width: 48px; height: 48px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 800; letter-spacing: 0.05em;
+    flex-shrink: 0;
+  }
+  .pipe-line {
+    width: 3px; margin-top: 4px; flex: 1;
+    min-height: 40px;
+  }
+  .pipe-line-col {
+    display: flex; justify-content: center; padding-top: 56px;
+  }
+  .pipe-line-inner { width: 2px; background: var(--border); flex: 1; border-radius: 2px; }
+  .pipe-last .pipe-line-inner { display: none; }
+
+  .pipe-body {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px 28px;
+    margin-bottom: 16px;
+    transition: border-color 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+  .pipe-body:hover { border-color: rgba(88,166,255,0.3); }
+  .pipe-body h3 { font-size: 1.0rem; font-weight: 700; margin-bottom: 6px; }
+  .pipe-body .pipe-sub { font-size: 0.83rem; color: var(--muted); margin-bottom: 12px; font-weight: 600; }
+  .pipe-body p { font-size: 0.9rem; color: var(--muted); line-height: 1.75; }
+  .pipe-body .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+  .tag {
+    font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 4px;
+    letter-spacing: 0.04em; background: var(--surface2); color: var(--muted);
+    border: 1px solid var(--border);
+  }
+  .pipe-body::after {
+    content: attr(data-accent);
+    position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  }
+  [data-stage="0"] .pipe-num { background: rgba(56,139,253,0.15); color: #388bfd; border: 1px solid rgba(56,139,253,0.3); }
+  [data-stage="0"] .pipe-body::after { background: linear-gradient(90deg, #388bfd, transparent); }
+  [data-stage="1"] .pipe-num { background: rgba(63,185,80,0.15); color: var(--green); border: 1px solid rgba(63,185,80,0.3); }
+  [data-stage="1"] .pipe-body::after { background: linear-gradient(90deg, var(--green), transparent); }
+  [data-stage="2"] .pipe-num { background: rgba(240,136,62,0.15); color: var(--orange); border: 1px solid rgba(240,136,62,0.3); }
+  [data-stage="2"] .pipe-body::after { background: linear-gradient(90deg, var(--orange), transparent); }
+  [data-stage="3"] .pipe-num { background: rgba(188,140,255,0.15); color: var(--purple); border: 1px solid rgba(188,140,255,0.3); }
+  [data-stage="3"] .pipe-body::after { background: linear-gradient(90deg, var(--purple), transparent); }
+  [data-stage="4"] .pipe-num { background: rgba(255,123,114,0.15); color: var(--red); border: 1px solid rgba(255,123,114,0.3); }
+  [data-stage="4"] .pipe-body::after { background: linear-gradient(90deg, var(--red), transparent); }
+
+  .pipeline-stack {
+    display: flex; flex-direction: column; gap: 4px; position: relative;
+  }
+  .pipeline-stack::before {
+    content: '';
+    position: absolute; top: 0; bottom: 0; left: 31px; width: 2px;
+    background: var(--border); border-radius: 2px; z-index: 0;
+  }
+  .ps-row {
+    display: grid; grid-template-columns: 64px 1fr;
+    align-items: flex-start; gap: 16px; position: relative; z-index: 1;
+    margin-bottom: 16px;
+  }
+  .ps-num {
+    width: 64px; height: 64px; border-radius: 12px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase;
+    flex-shrink: 0; position: relative;
+  }
+  .ps-num .stage-n { font-size: 19px; font-weight: 900; line-height: 1; }
+  .ps-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px 24px;
+    transition: border-color 0.2s, transform 0.2s;
+  }
+  .ps-card:hover { border-color: rgba(88,166,255,0.35); transform: translateX(3px); }
+  .ps-card h3 { font-size: 1.0rem; font-weight: 700; margin-bottom: 6px; }
+  .ps-card .ps-label { font-size: 0.8rem; font-weight: 600; margin-bottom: 10px; }
+  .ps-card p { font-size: 0.88rem; color: var(--muted); line-height: 1.75; }
+  .ps-card .tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 12px; }
+
+  /* stage colors */
+  .s0 .ps-num { background: rgba(56,139,253,0.12); color: #388bfd; border: 1px solid rgba(56,139,253,0.25); }
+  .s0 .ps-card::before { content: ''; display: block; height: 2px; margin: -22px -24px 18px; background: linear-gradient(90deg,#388bfd,transparent); border-radius: var(--radius) var(--radius) 0 0; }
+  .s1 .ps-num { background: rgba(63,185,80,0.12); color: var(--green); border: 1px solid rgba(63,185,80,0.25); }
+  .s1 .ps-card::before { content: ''; display: block; height: 2px; margin: -22px -24px 18px; background: linear-gradient(90deg,var(--green),transparent); border-radius: var(--radius) var(--radius) 0 0; }
+  .s2 .ps-num { background: rgba(240,136,62,0.12); color: var(--orange); border: 1px solid rgba(240,136,62,0.25); }
+  .s2 .ps-card::before { content: ''; display: block; height: 2px; margin: -22px -24px 18px; background: linear-gradient(90deg,var(--orange),transparent); border-radius: var(--radius) var(--radius) 0 0; }
+  .s3 .ps-num { background: rgba(188,140,255,0.12); color: var(--purple); border: 1px solid rgba(188,140,255,0.25); }
+  .s3 .ps-card::before { content: ''; display: block; height: 2px; margin: -22px -24px 18px; background: linear-gradient(90deg,var(--purple),transparent); border-radius: var(--radius) var(--radius) 0 0; }
+  .s4 .ps-num { background: rgba(255,123,114,0.12); color: var(--red); border: 1px solid rgba(255,123,114,0.25); }
+  .s4 .ps-card::before { content: ''; display: block; height: 2px; margin: -22px -24px 18px; background: linear-gradient(90deg,var(--red),transparent); border-radius: var(--radius) var(--radius) 0 0; }
+
+  /* ─── RESULTS ────────────────────────────────────── */
+  .results-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
+  }
+  .result-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px 30px;
+    position: relative; overflow: hidden;
+  }
+  .result-card::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: linear-gradient(90deg, var(--green), var(--teal));
+  }
+  .result-card h3 { font-size: 1.1rem; font-weight: 700; margin-bottom: 5px; }
+  .result-card .context { font-size: 0.83rem; color: var(--muted); margin-bottom: 20px; }
+  .metric-row {
+    display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 14px;
+  }
+  .metric {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 18px; flex: 1; min-width: 100px;
+    text-align: center;
+  }
+  .metric .val {
+    font-size: 1.8rem; font-weight: 800; letter-spacing: -0.5px;
+    background: linear-gradient(135deg, var(--blue), var(--green));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+    display: block;
+  }
+  .metric .key { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }
+  .result-card p { font-size: 0.88rem; color: var(--muted); line-height: 1.75; }
+
+  .findings-list {
+    list-style: none; margin-top: 14px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .findings-list li {
+    display: flex; gap: 10px; font-size: 0.88rem; color: var(--muted);
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 14px; align-items: flex-start;
+  }
+  .findings-list li::before {
+    content: '→'; color: var(--green); flex-shrink: 0; font-weight: 700;
+  }
+
+  /* ─── DOMAINS ────────────────────────────────────── */
+  .domains-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px;
+  }
+  .domain-pill {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    transition: all 0.18s;
+    cursor: default;
+  }
+  .domain-pill:hover { border-color: rgba(88,166,255,0.4); transform: translateY(-2px); box-shadow: 0 4px 20px rgba(88,166,255,0.08); }
+  .domain-pill .d-icon { font-size: 22px; margin-bottom: 8px; display: block; }
+  .domain-pill .d-name { font-size: 0.9rem; font-weight: 700; color: var(--text); margin-bottom: 3px; }
+  .domain-pill .d-desc { font-size: 0.78rem; color: var(--muted); line-height: 1.5; }
+
+  /* ─── DIFFERENTIATORS ────────────────────────────── */
+  .diff-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
+  }
+  .diff-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 26px 28px;
+    display: flex; gap: 16px;
+    align-items: flex-start;
+    transition: border-color 0.2s;
+  }
+  .diff-card:hover { border-color: rgba(88,166,255,0.3); }
+  .diff-icon {
+    width: 44px; height: 44px; border-radius: 10px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+    background: rgba(88,166,255,0.10);
+    border: 1px solid rgba(88,166,255,0.2);
+  }
+  .diff-card h3 { font-size: 0.97rem; font-weight: 700; margin-bottom: 6px; }
+  .diff-card p { font-size: 0.87rem; color: var(--muted); line-height: 1.75; }
+  .diff-card .comp {
+    display: inline-block; margin-top: 10px;
+    font-size: 11.5px; color: var(--green); background: rgba(63,185,80,0.10);
+    border: 1px solid rgba(63,185,80,0.25); border-radius: 4px; padding: 3px 9px;
+    font-weight: 600;
+  }
+
+  /* ─── DESKTOP APP ────────────────────────────────── */
+  .desktop-layout {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: center;
+  }
+  .desktop-feat-list {
+    list-style: none;
+    display: flex; flex-direction: column; gap: 14px;
+    margin-top: 8px;
+  }
+  .desktop-feat-list li {
+    display: flex; gap: 14px; align-items: flex-start;
+    font-size: 0.93rem; color: var(--muted);
+  }
+  .feat-dot {
+    width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; margin-top: 1px;
+  }
+  .feat-dot.blue { background: rgba(88,166,255,0.12); border: 1px solid rgba(88,166,255,0.25); }
+  .feat-dot.green { background: rgba(63,185,80,0.12); border: 1px solid rgba(63,185,80,0.25); }
+  .feat-dot.orange { background: rgba(240,136,62,0.12); border: 1px solid rgba(240,136,62,0.25); }
+  .feat-dot.purple { background: rgba(188,140,255,0.12); border: 1px solid rgba(188,140,255,0.25); }
+  .feat-dot.teal { background: rgba(57,211,83,0.12); border: 1px solid rgba(57,211,83,0.25); }
+  .desktop-feat-list li strong { color: var(--text); display: block; font-size: 0.93rem; margin-bottom: 2px; }
+
+  .screenshot-stack {
+    position: relative;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+  }
+  .screenshot-stack img {
+    width: 100%; border-radius: 8px;
+    border: 1px solid var(--border);
+    transition: transform 0.2s, border-color 0.2s;
+    display: block;
+  }
+  .screenshot-stack img:hover { transform: scale(1.02); border-color: rgba(88,166,255,0.4); }
+  .screenshot-stack img:first-child {
+    grid-column: span 2;
+  }
+  .ss-caption {
+    font-size: 10.5px; color: var(--muted); text-align: center; margin-top: 3px;
+  }
+
+  /* ─── WHO IT'S FOR ───────────────────────────────── */
+  .audience-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 18px;
+  }
+  .audience-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 26px 24px;
+    position: relative; overflow: hidden;
+  }
+  .audience-card h3 { font-size: 1.0rem; font-weight: 700; margin-bottom: 8px; }
+  .audience-card p { font-size: 0.87rem; color: var(--muted); line-height: 1.7; }
+  .audience-card .a-icon { font-size: 24px; margin-bottom: 12px; display: block; }
+  .aud-tag {
+    display: inline-block; margin-top: 12px;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+    padding: 3px 10px; border-radius: 4px;
+  }
+  .aud-blue { background: rgba(88,166,255,0.12); color: var(--blue); border: 1px solid rgba(88,166,255,0.25); }
+  .aud-green { background: rgba(63,185,80,0.12); color: var(--green); border: 1px solid rgba(63,185,80,0.25); }
+  .aud-orange { background: rgba(240,136,62,0.12); color: var(--orange); border: 1px solid rgba(240,136,62,0.25); }
+  .aud-purple { background: rgba(188,140,255,0.12); color: var(--purple); border: 1px solid rgba(188,140,255,0.25); }
+  .aud-teal { background: rgba(57,211,83,0.12); color: var(--teal); border: 1px solid rgba(57,211,83,0.25); }
+
+  /* ─── SBIR ───────────────────────────────────────── */
+  .sbir-banner {
+    background: var(--surface);
+    border: 1px solid rgba(188,140,255,0.25);
+    border-radius: 16px;
+    padding: 40px 44px;
+    position: relative; overflow: hidden;
+  }
+  .sbir-banner::before {
+    content: '';
+    position: absolute; inset: 0;
+    background: radial-gradient(ellipse 70% 80% at 100% 50%, rgba(188,140,255,0.06), transparent);
+    pointer-events: none;
+  }
+  .sbir-banner h2 { font-size: 1.5rem; font-weight: 800; margin-bottom: 12px; }
+  .sbir-banner p { font-size: 0.97rem; color: var(--muted); max-width: 680px; line-height: 1.8; margin-bottom: 16px; }
+  .sbir-list {
+    list-style: none; display: flex; flex-direction: column; gap: 8px; margin-bottom: 28px;
+  }
+  .sbir-list li {
+    display: flex; gap: 10px; font-size: 0.9rem; color: var(--muted); align-items: flex-start;
+  }
+  .sbir-list li::before { content: '✓'; color: var(--purple); font-weight: 800; flex-shrink: 0; }
+  .sbir-list li strong { color: var(--text); }
+
+  .agency-tags {
+    display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px;
+  }
+  .agency-tag {
+    font-size: 12px; font-weight: 700; letter-spacing: 0.05em;
+    padding: 6px 14px; border-radius: 6px;
+    background: var(--surface2); border: 1px solid var(--border); color: var(--muted);
+  }
+  .agency-tag.highlight {
+    background: rgba(188,140,255,0.10);
+    border-color: rgba(188,140,255,0.3);
+    color: var(--purple);
+  }
+
+  /* ─── TRACTION ───────────────────────────────────── */
+  .traction-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
+  }
+  .traction-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 26px 24px;
+    text-align: center;
+  }
+  .traction-card .big {
+    font-size: 2.4rem; font-weight: 900; letter-spacing: -1px;
+    display: block; margin-bottom: 4px;
+  }
+  .traction-card .big.blue { color: var(--blue); }
+  .traction-card .big.green { color: var(--green); }
+  .traction-card .big.purple { color: var(--purple); }
+  .traction-card .big.orange { color: var(--orange); }
+  .traction-card .big.teal { color: var(--teal); }
+  .traction-card .big.yellow { color: var(--yellow); }
+  .traction-card h4 { font-size: 0.9rem; font-weight: 700; margin-bottom: 6px; }
+  .traction-card p { font-size: 0.82rem; color: var(--muted); line-height: 1.6; }
+
+  /* ─── CTA SECTION ────────────────────────────────── */
+  .cta-section {
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 88px 40px;
+    text-align: center;
+    position: relative; overflow: hidden;
+  }
+  .cta-section::before {
+    content: '';
+    position: absolute; inset: 0;
+    background: radial-gradient(ellipse 70% 70% at 50% 50%, rgba(88,166,255,0.05), transparent);
+    pointer-events: none;
+  }
+  .cta-section h2 { font-size: clamp(1.8rem, 4vw, 3rem); font-weight: 800; letter-spacing: -0.8px; margin-bottom: 16px; }
+  .cta-section p { font-size: 1.05rem; color: var(--muted); max-width: 560px; margin: 0 auto 40px; line-height: 1.75; }
+  .cta-cards {
+    display: flex; gap: 20px; justify-content: center; flex-wrap: wrap;
+    max-width: 800px; margin: 0 auto 52px;
+  }
+  .cta-card {
+    flex: 1; min-width: 220px; max-width: 260px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px 22px;
+    text-align: center;
+    transition: border-color 0.2s;
+  }
+  .cta-card:hover { border-color: rgba(88,166,255,0.4); }
+  .cta-card .c-icon { font-size: 26px; display: block; margin-bottom: 10px; }
+  .cta-card h4 { font-size: 0.95rem; font-weight: 700; margin-bottom: 6px; }
+  .cta-card p { font-size: 0.83rem; color: var(--muted); line-height: 1.6; margin-bottom: 14px; }
+
+  .cta-email {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: rgba(88,166,255,0.10);
+    border: 1px solid rgba(88,166,255,0.25);
+    color: var(--blue);
+    padding: 12px 28px; border-radius: 8px;
+    font-size: 1.1rem; font-weight: 700;
+    transition: all 0.18s; text-decoration: none;
+  }
+  .cta-email:hover { background: rgba(88,166,255,0.18); text-decoration: none; transform: translateY(-1px); }
+
+  /* ─── FOOTER ─────────────────────────────────────── */
+  footer {
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    padding: 32px 40px;
+    display: flex; gap: 24px; align-items: center;
+    justify-content: space-between; flex-wrap: wrap;
+  }
+  footer .foot-brand { font-size: 14px; font-weight: 700; color: var(--muted); letter-spacing: 0.05em; text-transform: uppercase; }
+  footer .foot-links { display: flex; gap: 20px; }
+  footer .foot-links a { font-size: 13px; color: var(--muted); transition: color 0.15s; }
+  footer .foot-links a:hover { color: var(--text); text-decoration: none; }
+  footer .foot-legal { font-size: 12px; color: var(--muted); opacity: 0.6; }
+
+  /* ─── DIVIDER ────────────────────────────────────── */
+  .divider { width: 100%; height: 1px; background: var(--border); }
+
+  /* ─── RESPONSIVE ─────────────────────────────────── */
+  @media (max-width: 860px) {
+    .topbar-nav { display: none; }
+    .results-grid { grid-template-columns: 1fr; }
+    .diff-grid { grid-template-columns: 1fr; }
+    .desktop-layout { grid-template-columns: 1fr; }
+    .traction-grid { grid-template-columns: 1fr 1fr; }
+    .section { padding: 60px 24px; }
+    .hero { padding: 100px 24px 72px; }
+  }
+  @media (max-width: 540px) {
+    .traction-grid { grid-template-columns: 1fr; }
+    .hero-stat-row { gap: 24px; }
+    footer { flex-direction: column; align-items: flex-start; }
+  }
+
+  /* ─── QUOTE BLOCK ────────────────────────────────── */
+  .quote-block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--blue);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    padding: 22px 28px;
+    margin: 32px 0;
+    font-size: 1.0rem;
+    color: var(--muted);
+    font-style: italic;
+    line-height: 1.8;
+  }
+  .quote-block strong { color: var(--text); font-style: normal; }
+
+  /* ─── ANNOUNCEMENT BAR ───────────────────────────── */
+  .announce {
+    background: linear-gradient(90deg, rgba(88,166,255,0.08), rgba(63,185,80,0.08));
+    border-bottom: 1px solid rgba(88,166,255,0.15);
+    text-align: center;
+    padding: 11px 20px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .announce strong { color: var(--blue); }
+  .announce a { color: var(--blue); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<!-- ── ANNOUNCEMENT ───────────────────────────────────────── -->
+<div class="announce">
+  <strong>Published in Urban Climate (2025)</strong> · 94.4% R² on urban heat prediction · 13 domain templates · Native desktop app
+  &nbsp;·&nbsp; <a href="mailto:sparcurbanlabs@gmail.com">Interested in piloting? Get in touch →</a>
+</div>
+
+<!-- ── TOPBAR ─────────────────────────────────────────────── -->
+<nav class="topbar">
+  <div class="topbar-logo">SPARC <span>Spatial Research Labs</span></div>
+  <div class="topbar-nav">
+    <a href="#problem">Problem</a>
+    <a href="#pipeline">How It Works</a>
+    <a href="#results">Results</a>
+    <a href="#domains">Domains</a>
+    <a href="#desktop">App</a>
+    <a href="#sbir">SBIR</a>
+    <a href="#contact" class="topbar-cta btn">Get in Touch</a>
+  </div>
+</nav>
+
+<!-- ── HERO ──────────────────────────────────────────────── -->
+<section class="hero">
+  <div class="hero-inner">
+    <div class="hero-badge">SPARC Labs LLC · v2.1</div>
+    <h1>Environmental Intelligence<br>for the Built World</h1>
+    <p class="hero-sub">
+      SPARC turns raw geospatial data into <strong>causal, uncertainty-quantified intervention plans</strong>
+      — telling planners and policymakers not just <em>what is happening</em>,
+      but <em>what to do about it</em>, and exactly <em>how confident</em> to be.
+    </p>
+    <div class="hero-ctas">
+      <a href="mailto:sparcurbanlabs@gmail.com" class="btn btn-primary">Request a Pilot</a>
+      <a href="#pipeline" class="btn btn-secondary">See How It Works</a>
+      <a href="https://doi.org/10.1016/j.uclim.2025.102671" target="_blank" rel="noopener" class="btn btn-secondary">Read the Paper →</a>
+    </div>
+    <div class="hero-stat-row">
+      <div class="hero-stat">
+        <span class="num">94.4%</span>
+        <span class="label">R² — UHI prediction</span>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="hero-stat">
+        <span class="num">13</span>
+        <span class="label">Domain templates</span>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="hero-stat">
+        <span class="num">54k+</span>
+        <span class="label">Spatial points modeled</span>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="hero-stat">
+        <span class="num">5</span>
+        <span class="label">Pipeline stages</span>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="hero-stat">
+        <span class="num">100%</span>
+        <span class="label">Offline / on-device</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── PROBLEM ─────────────────────────────────────────────── -->
+<section class="section" id="problem">
+  <div class="section-inner">
+    <div class="section-label">The Problem</div>
+    <h2 class="section-title">Data-rich cities. Decision-poor planning.</h2>
+    <p class="section-desc">
+      Municipalities, engineers, and federal agencies are drowning in spatial data but lack
+      the analytical infrastructure to turn it into defensible, physics-grounded intervention plans.
+    </p>
+    <div class="problem-grid">
+      <div class="problem-card">
+        <span class="problem-icon">📊</span>
+        <h3>Correlation ≠ Causation</h3>
+        <p>Standard GIS tools and spatial regressions show associations, not causes. Decision-makers act on correlations and waste budget on ineffective interventions.</p>
+      </div>
+      <div class="problem-card">
+        <span class="problem-icon">🌡️</span>
+        <h3>No "What-If" Capability</h3>
+        <p>Existing tools have no way to simulate "what happens if we plant 10,000 trees here?" with physics constraints, uncertainty bounds, and spatial spillover effects.</p>
+      </div>
+      <div class="problem-card">
+        <span class="problem-icon">⚫</span>
+        <h3>Black-Box Models</h3>
+        <p>ML predictions are uninterpretable, unverifiable, and fail regulatory scrutiny. Planners can't defend a neural network to a city council or grant panel.</p>
+      </div>
+      <div class="problem-card">
+        <span class="problem-icon">💸</span>
+        <h3>Budget Without Optimization</h3>
+        <p>Infrastructure and resilience spending lacks spatial allocation logic. No tool links causal effect size, cost surface, and equity metrics into a single optimized plan.</p>
+      </div>
+      <div class="problem-card">
+        <span class="problem-icon">🔒</span>
+        <h3>Sensitive Data Can't Leave</h3>
+        <p>Municipal and federal datasets are confidential. Cloud-based analytics create data-sharing barriers that slow or block projects entirely.</p>
+      </div>
+      <div class="problem-card">
+        <span class="problem-icon">🔄</span>
+        <h3>Domain Fragmentation</h3>
+        <p>Every environmental domain — heat, flood, air quality, seismic — requires a bespoke modeling stack. Building one from scratch takes years and costs millions.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── SOLUTION / PIPELINE ─────────────────────────────────── -->
+<section class="section" id="pipeline">
+  <div class="section-inner">
+    <div class="section-label">How It Works</div>
+    <h2 class="section-title">One pipeline. Raw data to policy-ready scenarios.</h2>
+    <p class="section-desc">
+      SPARC executes five stages in sequence — from automatic spatial structure discovery to
+      physics-constrained, budget-optimized intervention maps — driven entirely by a single
+      <strong>project.yml</strong> configuration file.
+    </p>
+
+    <div class="pipeline-stack">
+
+      <div class="ps-row s0">
+        <div class="ps-num">
+          <span style="font-size:10px;letter-spacing:0.1em;text-transform:uppercase;font-weight:800;opacity:0.7">Stage</span>
+          <span class="stage-n">0</span>
+        </div>
+        <div class="ps-card">
+          <h3>Correlogram Analysis &amp; Auto-Wiring</h3>
+          <div class="ps-label" style="color:var(--blue)">Bayesian Spatial Structure Discovery</div>
+          <p>Quantifies spatial autocorrelation (Moran's I) for every variable, fits Bayesian Matérn covariance models via NUTS, detects directional anisotropy, and packages everything into a <strong>KernelField</strong> that auto-configures all downstream stages — no manual bandwidth tuning required.</p>
+          <div class="tags">
+            <span class="tag">Moran's I</span>
+            <span class="tag">Bayesian Matérn</span>
+            <span class="tag">NUTS</span>
+            <span class="tag">Anisotropy</span>
+            <span class="tag">Cross-correlogram</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="ps-row s1">
+        <div class="ps-num">
+          <span style="font-size:10px;letter-spacing:0.1em;text-transform:uppercase;font-weight:800;opacity:0.7">Stage</span>
+          <span class="stage-n">1</span>
+        </div>
+        <div class="ps-card">
+          <h3>GWEN Variable Selection <em style="font-weight:400;font-size:0.82rem;color:var(--muted)">(optional)</em></h3>
+          <div class="ps-label" style="color:var(--green)">Geographically-Weighted Elastic Net</div>
+          <p>Ranks predictor importance spatially. An analyst approval gate lets domain experts inspect and prune variables before expensive model training begins.</p>
+          <div class="tags">
+            <span class="tag">GW Elastic Net</span>
+            <span class="tag">Feature Importance</span>
+            <span class="tag">Human-in-loop</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="ps-row s2">
+        <div class="ps-num">
+          <span style="font-size:10px;letter-spacing:0.1em;text-transform:uppercase;font-weight:800;opacity:0.7">Stage</span>
+          <span class="stage-n">2</span>
+        </div>
+        <div class="ps-card">
+          <h3>Spatial CV &amp; Physics-Constrained Neural Meta-Learner</h3>
+          <div class="ps-label" style="color:var(--orange)">SharedTrunk + CityHead · 10-Term PDE Curriculum</div>
+          <p>Trains four geographically-weighted base models (OLS, GWR, GWRF, GGPGAM) on spatially-buffered folds, then fuses them through a PyTorch meta-learner with sparse spatial attention, MC-Dropout uncertainty, and a 10-term staged PDE loss covering heat diffusion, energy balance, Fourier flux, and more. Achieves <strong style="color:var(--text)">94.4% R²</strong> on urban heat in Providence, RI.</p>
+          <div class="tags">
+            <span class="tag">GWR / GWRF</span>
+            <span class="tag">SharedTrunk</span>
+            <span class="tag">CityHead</span>
+            <span class="tag">SIREN</span>
+            <span class="tag">PDE Loss</span>
+            <span class="tag">MC-Dropout</span>
+            <span class="tag">JEPA Pretraining</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="ps-row s3">
+        <div class="ps-num">
+          <span style="font-size:10px;letter-spacing:0.1em;text-transform:uppercase;font-weight:800;opacity:0.7">Stage</span>
+          <span class="stage-n">3</span>
+        </div>
+        <div class="ps-card">
+          <h3>Bayesian Causal Validation</h3>
+          <div class="ps-label" style="color:var(--purple)">MC³ DAG Search · DML · NUTS · DoWhy Refutations</div>
+          <p>Given a user-defined causal DAG, produces full Bayesian posteriors over causal structure and effect magnitudes. MC³ MCMC searches over edge inclusion, DML estimates per-cell CATE with credible bands, NUTS samples edge posteriors, and DoWhy refutations test robustness. Every finding comes with an E-value quantifying how large a hidden confounder would need to be to nullify it.</p>
+          <div class="tags">
+            <span class="tag">MC³ DAG</span>
+            <span class="tag">DML / CATE</span>
+            <span class="tag">NUTS</span>
+            <span class="tag">DoWhy</span>
+            <span class="tag">E-values</span>
+            <span class="tag">LiNGAM / GES</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="ps-row s4">
+        <div class="ps-num">
+          <span style="font-size:10px;letter-spacing:0.1em;text-transform:uppercase;font-weight:800;opacity:0.7">Stage</span>
+          <span class="stage-n">4</span>
+        </div>
+        <div class="ps-card">
+          <h3>Scenario Simulation &amp; Budget Optimization</h3>
+          <div class="ps-label" style="color:var(--red)">Physics-Guardrailed Counterfactuals · Pareto Frontier · Equity Scoring</div>
+          <p>Turns causal posteriors into counterfactual maps across four computational tiers (PDE α-field → Bayesian β → PDE solve → hybrid). Physics guardrails prevent extrapolation beyond training covariance. Budget-constrained allocation solves greedy / MILP optimization and sweeps a Pareto frontier over spending levels, scoring every solution for equity via Gini coefficient.</p>
+          <div class="tags">
+            <span class="tag">Counterfactual Maps</span>
+            <span class="tag">PDE Solve</span>
+            <span class="tag">MILP Allocation</span>
+            <span class="tag">Pareto Frontier</span>
+            <span class="tag">Gini Equity</span>
+            <span class="tag">Scenario Library</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="quote-block" style="margin-top:40px">
+      "From a CSV and a project.yml to <strong>physics-validated, causal, budget-optimized intervention maps</strong>
+      with full uncertainty quantification — in a single command."
+    </div>
+  </div>
+</section>
+
+<!-- ── RESULTS ──────────────────────────────────────────────── -->
+<section class="section" id="results">
+  <div class="section-inner">
+    <div class="section-label">Proven Results</div>
+    <h2 class="section-title">Real data. Peer-reviewed findings.</h2>
+    <p class="section-desc">
+      SPARC has been validated on two real-world deployments spanning urban heat at neighborhood scale
+      and global climate forcing attribution.
+    </p>
+
+    <div class="results-grid">
+
+      <div class="result-card">
+        <h3>Urban Heat Island — Providence, RI</h3>
+        <p class="context">Brown University campus &amp; surrounding neighborhoods · 54,701 spatial points at ~30 m resolution · Published in <em>Urban Climate</em> (2025)</p>
+        <div class="metric-row">
+          <div class="metric"><span class="val">94.4%</span><span class="key">R² (Meta-ensemble)</span></div>
+          <div class="metric"><span class="val">0.42</span><span class="key">RMSE (z-score)</span></div>
+          <div class="metric"><span class="val">0.71</span><span class="key">DAG Edge F1</span></div>
+        </div>
+        <ul class="findings-list">
+          <li>Each 1 pp of additional tree canopy cools by <strong>0.022 z-units</strong> — causal, not correlational</li>
+          <li>Impervious surface is the <strong>#1 driver (51%)</strong> of excess urban heat</li>
+          <li>All three interventions passed all four DoWhy refutation tests</li>
+          <li>+10 pp canopy delivers ~<strong>−0.258 z-unit</strong> cooling with diminishing returns beyond 15 pp</li>
+          <li>+9 pp R² uplift over the original <em>Urban Climate</em> paper — driven by PDE curriculum training</li>
+        </ul>
+      </div>
+
+      <div class="result-card">
+        <h3 style="position:relative">ForceSMIP Climate Forcing Attribution <span style="font-size:11px;font-weight:600;color:var(--orange);background:rgba(240,136,62,0.12);border:1px solid rgba(240,136,62,0.25);border-radius:4px;padding:2px 8px;vertical-align:middle;margin-left:8px">Global Scale</span></h3>
+        <p class="context">GCM ensemble sea-surface temperature forcing · 71,498 grid cells · 2.5° global grid (EPSG:6933 equal-area)</p>
+        <div class="metric-row">
+          <div class="metric"><span class="val">64.2%</span><span class="key">R² (GWRF)</span></div>
+          <div class="metric"><span class="val">2.03</span><span class="key">E-value (GMST)</span></div>
+          <div class="metric"><span class="val">65.3%</span><span class="key">GMST importance</span></div>
+        </div>
+        <ul class="findings-list">
+          <li>1°C global warming → <strong>+1.44°C</strong> local SST trend amplification (causal fingerprint)</li>
+          <li>AMV index strongly imprints on SST (<strong>coefficient = 5.9</strong>) — robust across all refutations</li>
+          <li>GMST_trend passed all four DoWhy refutation tests with E-value of 2.03</li>
+          <li>Demonstrates SPARC scales from <strong>city-blocks to the global ocean</strong> without re-engineering</li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ── DOMAINS ──────────────────────────────────────────────── -->
+<section class="section" id="domains">
+  <div class="section-inner">
+    <div class="section-label">Domain Templates</div>
+    <h2 class="section-title">13 domains. One platform.</h2>
+    <p class="section-desc">
+      Each template ships with a pre-configured <code style="font-size:0.9em;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;">project.yml</code>,
+      physics priors, constraint caps, and a causal DAG.
+      Point SPARC at your data and run — no methodology decisions required.
+    </p>
+    <div class="domains-grid">
+      <div class="domain-pill">
+        <span class="d-icon">🌆</span>
+        <div class="d-name">Urban Heat Island</div>
+        <div class="d-desc">Ambient temperature vs. land cover, canopy, impervious surface, albedo</div>
+      </div>
+      <div class="domain-pill">
+        <span class="d-icon">🌊</span>
+        <div class="d-name">Climate Forcing</div>
+        <div class="d-desc">GCM forced-response attribution (ForceSMIP Tier 1) at global scale</div>
+      </div>
+      <div class="domain-pill">
+        <span class="d-icon">💧</span>
+        <div class="d-name">Groundwater</div>
+        <div class="d-desc">Groundwater level &amp; contaminant spatial modeling</div>
+      </div>
+      <div class="domain-pill">
+        <span class="d-icon">💨</span>
+        <div class="d-name">Air Quality</div>
+        <div class="d-desc">Pollutant concentration spatial analysis and source attribution</div>
+      </div>
+      <div class="domain-pill">
+        <span class="d-icon">🚿</span>
+        <div class="d-name">Water Quality</div>
+        <div class="d-desc">Surface water quality indicators and intervention scenarios</div>
+      </div>
+      <div class="domain-pill">
+        <span class="d-icon">🌧️</span>
+        <div class="d-name">Stormwater</div>
+        <div class="d-desc">Runoff, stormwater management, and green infrastructure ROI</div>
+      </div>
+      <div class="domain-pill">
+        <span class="d-icon">🌊</span>
+        <div class="d-name">Coastal Engineering</div>
+        <div class="d-desc">Coastal erosion, sea-level response, shoreline change</div>
+      </div>
+      <div class="domain-pill">
+        <span class="d-icon">🏗️</span>
+        <div class="d-name">Geotechnical</div>
+        <div class="d-desc">Soil properties, ground deformation, and subsidence</div>
+      </div>
+      <div class="domain-pill">
+        <span class="d-icon">📉</span>
+        <div class="d-name">Seismic Hazard</div>
+        <div class="d-desc">Ground motion modeling and seismic response assessment</div>
+      </div>
+      <div class="domain-pill">
+        <span class="d-icon">🔊</span>
+        <div class="d-name">Noise / Acoustics</div>
+        <div class="d-desc">Environmental noise modeling and mitigation scenarios</div>
+      </div>
+      <div class="domain-pill">
+        <span class="d-icon">🌾</span>
+        <div class="d-name">Drought</div>
+        <div class="d-desc">Drought index, vegetation stress, and water-use interventions</div>
+      </div>
+      <div class="domain-pill">
+        <span class="d-icon">🔥</span>
+        <div class="d-name">Wildfire</div>
+        <div class="d-desc">Fire risk, burn severity, and defensible-space optimization</div>
+      </div>
+      <div class="domain-pill" style="border-style:dashed;border-color:rgba(88,166,255,0.3)">
+        <span class="d-icon">⚙️</span>
+        <div class="d-name" style="color:var(--blue)">Custom Domain</div>
+        <div class="d-desc">Blank skeleton — bring your own variables, DAG, and physics constraints</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── DIFFERENTIATORS ──────────────────────────────────────── -->
+<section class="section" id="why">
+  <div class="section-inner">
+    <div class="section-label">Why SPARC</div>
+    <h2 class="section-title">Not another spatial statistics tool.</h2>
+    <p class="section-desc">
+      SPARC is the only platform that integrates geographically-weighted learning,
+      Bayesian causal discovery, physics-constrained simulation, and budget optimization
+      into a single, auditable pipeline.
+    </p>
+    <div class="diff-grid">
+      <div class="diff-card">
+        <div class="diff-icon">⚗️</div>
+        <div>
+          <h3>Causal, Not Just Predictive</h3>
+          <p>MC³ DAG search, DML, NUTS edge posteriors, and DoWhy refutations produce defensible causal effect estimates — not correlation heat maps. Every finding ships with an E-value.</p>
+          <span class="comp">vs. ArcGIS / QGIS: correlation only</span>
+        </div>
+      </div>
+      <div class="diff-card">
+        <div class="diff-icon">🧲</div>
+        <div>
+          <h3>Physics-Constrained by Design</h3>
+          <p>A 10-term PDE loss (heat diffusion, energy balance, Fourier flux, anisotropy) is baked into model training — not bolted on after. Predictions respect thermodynamics.</p>
+          <span class="comp">vs. standard ML: physics-agnostic</span>
+        </div>
+      </div>
+      <div class="diff-card">
+        <div class="diff-icon">📐</div>
+        <div>
+          <h3>Uncertainty at Every Step</h3>
+          <p>MC-Dropout (500 passes), NUTS posteriors, and bootstrap credible intervals propagate through to every scenario map. Planners see mean <em>and</em> spread — not false precision.</p>
+          <span class="comp">vs. point-estimate tools: no uncertainty</span>
+        </div>
+      </div>
+      <div class="diff-card">
+        <div class="diff-icon">💼</div>
+        <div>
+          <h3>Budget-Optimized Allocation</h3>
+          <p>Greedy, greedy-2opt, and MILP solvers pair causal effect sizes with cost surfaces to produce a Pareto frontier of spend-vs-benefit — with equity (Gini) scoring on every plan.</p>
+          <span class="comp">vs. manual GIS planning: no optimization</span>
+        </div>
+      </div>
+      <div class="diff-card">
+        <div class="diff-icon">🖥️</div>
+        <div>
+          <h3>100% On-Device</h3>
+          <p>Runs entirely on the analyst's machine via a native Tauri v2 desktop app. No cloud, no API keys, no data-sharing agreements. Sensitive municipal &amp; federal data stays local.</p>
+          <span class="comp">vs. cloud SaaS: data sovereignty issues</span>
+        </div>
+      </div>
+      <div class="diff-card">
+        <div class="diff-icon">🗺️</div>
+        <div>
+          <h3>Geographically-Weighted Everything</h3>
+          <p>Spatial non-stationarity is a first-class citizen. Bandwidths, kernel geometries, and anisotropy are auto-wired from Stage 0 — not assumed constant across space.</p>
+          <span class="comp">vs. global models: stationarity assumption</span>
+        </div>
+      </div>
+      <div class="diff-card">
+        <div class="diff-icon">📋</div>
+        <div>
+          <h3>Audit-Ready Outputs</h3>
+          <p>Every artifact — model weights, NUTS samples, scenario configs — is versioned in an immutable artifact store and fully reproducible from the project.yml. Built for regulatory and grant review.</p>
+          <span class="comp">vs. notebook workflows: non-reproducible</span>
+        </div>
+      </div>
+      <div class="diff-card">
+        <div class="diff-icon">⚡</div>
+        <div>
+          <h3>Zero Domain Re-Engineering</h3>
+          <p>13 pre-configured templates mean a wildfire analyst and a coastal engineer run the same pipeline. Switching domains is a one-line YAML change, not a 6-month development sprint.</p>
+          <span class="comp">vs. bespoke models: years &amp; millions</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── DESKTOP APP ──────────────────────────────────────────── -->
+<section class="section" id="desktop">
+  <div class="section-inner">
+    <div class="section-label">Desktop Application</div>
+    <h2 class="section-title">A native app. No setup friction.</h2>
+    <p class="section-desc">
+      SPARC ships as a full native desktop application built with Tauri v2 and React.
+      Lightweight, fast, and completely offline — your data never leaves the machine.
+    </p>
+    <div class="desktop-layout">
+      <div>
+        <ul class="desktop-feat-list">
+          <li>
+            <div class="feat-dot blue">🖥️</div>
+            <div>
+              <strong>Native performance, tiny footprint</strong>
+              Tauri v2 (not Electron) — ~15 MB install. Starts in under 2 seconds.
+            </div>
+          </li>
+          <li>
+            <div class="feat-dot green">🔒</div>
+            <div>
+              <strong>100% offline operation</strong>
+              No internet required for the core pipeline. No cloud API, no data egress, no FISMA surprises.
+            </div>
+          </li>
+          <li>
+            <div class="feat-dot orange">🗂️</div>
+            <div>
+              <strong>Upload rasters &amp; shapefiles</strong>
+              Drag-and-drop spatial data import with CRS auto-detection and variable preview.
+            </div>
+          </li>
+          <li>
+            <div class="feat-dot purple">🔗</div>
+            <div>
+              <strong>Visual drag-and-drop DAG editor</strong>
+              Build causal graphs interactively — no YAML editing required for DAG construction.
+            </div>
+          </li>
+          <li>
+            <div class="feat-dot blue">🗺️</div>
+            <div>
+              <strong>GPU-accelerated spatial maps</strong>
+              deck.gl + MapLibre GL renders 50k+ point prediction surfaces at 60 fps.
+            </div>
+          </li>
+          <li>
+            <div class="feat-dot teal">📈</div>
+            <div>
+              <strong>Dose-response curves &amp; reports</strong>
+              Scenario results, credible bands, and causal attribution — exportable for any audience.
+            </div>
+          </li>
+          <li>
+            <div class="feat-dot orange">🤖</div>
+            <div>
+              <strong>AI-assisted project setup</strong>
+              Optional Claude integration for guided project configuration (bring your own API key).
+            </div>
+          </li>
+        </ul>
+      </div>
+      <div>
+        <div class="screenshot-stack">
+          <div>
+            <img src="screenshots/06-run.png" alt="Pipeline running with live terminal output" loading="lazy" />
+            <div class="ss-caption">Live pipeline execution with real-time terminal output</div>
+          </div>
+          <div>
+            <img src="screenshots/02-dag-builder.png" alt="Visual causal DAG editor" loading="lazy" />
+            <div class="ss-caption">Visual DAG editor</div>
+          </div>
+          <div>
+            <img src="screenshots/07-results.png" alt="Results and dose-response curves" loading="lazy" />
+            <div class="ss-caption">Prediction surfaces &amp; statistics</div>
+          </div>
+          <div>
+            <img src="screenshots/05-scenarios.png" alt="Scenario builder" loading="lazy" />
+            <div class="ss-caption">Scenario builder</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── TRACTION ─────────────────────────────────────────────── -->
+<section class="section" id="traction">
+  <div class="section-inner">
+    <div class="section-label">Traction &amp; Proof Points</div>
+    <h2 class="section-title">Built, tested, and published.</h2>
+    <p class="section-desc">
+      SPARC is not a concept — it is a working pipeline with peer-reviewed results,
+      a native desktop app, and active development across multiple domains.
+    </p>
+    <div class="traction-grid">
+      <div class="traction-card">
+        <span class="big blue">94.4%</span>
+        <h4>R² on Urban Heat</h4>
+        <p>Out-of-fold spatial cross-validation on 54,701 points. Best-in-class for geographically-weighted models.</p>
+      </div>
+      <div class="traction-card">
+        <span class="big green">Pub'd</span>
+        <h4>Urban Climate (2025)</h4>
+        <p>Peer-reviewed publication. DOI: 10.1016/j.uclim.2025.102671. Foundation methodology validated by journal review.</p>
+      </div>
+      <div class="traction-card">
+        <span class="big purple">13</span>
+        <h4>Domain Templates</h4>
+        <p>UHI, climate forcing, groundwater, air/water quality, coastal, wildfire, seismic, and more — shipping today.</p>
+      </div>
+      <div class="traction-card">
+        <span class="big orange">5</span>
+        <h4>Pipeline Stages</h4>
+        <p>Fully automated end-to-end: spatial structure → variable selection → ML → causal validation → scenario simulation.</p>
+      </div>
+      <div class="traction-card">
+        <span class="big teal">Global</span>
+        <h4>Scale Tested</h4>
+        <p>Applied at both city-block scale (30 m, Providence RI) and global scale (2.5°, ForceSMIP climate data).</p>
+      </div>
+      <div class="traction-card">
+        <span class="big yellow">v2.1</span>
+        <h4>Active Development</h4>
+        <p>SharedTrunk + CityHead architecture, JEPA pretraining, V3 temporal terms, and budget-MILP optimizer — all shipping in v2.1.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── WHO IT'S FOR ─────────────────────────────────────────── -->
+<section class="section" id="audience">
+  <div class="section-inner">
+    <div class="section-label">Who It's For</div>
+    <h2 class="section-title">Built for the people who decide.</h2>
+    <p class="section-desc">
+      SPARC bridges the gap between data scientists and decision-makers — giving analysts
+      the rigor they need and planners the plain-language outputs they can defend.
+    </p>
+    <div class="audience-grid">
+      <div class="audience-card">
+        <span class="a-icon">🏛️</span>
+        <h3>Municipal &amp; State Government</h3>
+        <p>Urban planners, sustainability offices, and public works departments need defensible evidence for capital investments. SPARC turns GIS data into causal intervention plans with uncertainty bounds city councils can approve.</p>
+        <span class="aud-tag aud-blue">Pilot Partner Target</span>
+      </div>
+      <div class="audience-card">
+        <span class="a-icon">🏦</span>
+        <h3>Federal Agencies</h3>
+        <p>EPA, USGS, NOAA, FEMA, and DOE programs require reproducible, physics-grounded spatial analysis for grant reporting and regulatory decisions. SPARC is 100% offline-capable for FISMA-sensitive environments.</p>
+        <span class="aud-tag aud-purple">SBIR Target</span>
+      </div>
+      <div class="audience-card">
+        <span class="a-icon">🎓</span>
+        <h3>Academic &amp; Research Institutions</h3>
+        <p>Environmental scientists, urban climatologists, and public health researchers who need reproducible causal spatial analysis without building bespoke ML pipelines from scratch.</p>
+        <span class="aud-tag aud-green">Open for Partnerships</span>
+      </div>
+      <div class="audience-card">
+        <span class="a-icon">🏗️</span>
+        <h3>Engineering &amp; Consulting Firms</h3>
+        <p>Infrastructure and environmental consulting firms that want to embed advanced causal-spatial analytics into client deliverables — differentiating their practice without in-house ML headcount.</p>
+        <span class="aud-tag aud-orange">Commercial License</span>
+      </div>
+      <div class="audience-card">
+        <span class="a-icon">🌿</span>
+        <h3>Climate Resilience &amp; Adaptation</h3>
+        <p>Resilience officers, climate adaptation planners, and NGOs allocating green infrastructure and resilience capital need spatial allocation logic that accounts for cost, benefit, and equity simultaneously.</p>
+        <span class="aud-tag aud-teal">High Impact</span>
+      </div>
+      <div class="audience-card">
+        <span class="a-icon">🔬</span>
+        <h3>Defense &amp; Intelligence</h3>
+        <p>Installations management, environmental health, and operational planning use cases requiring physics-constrained spatial modeling in air-gapped, on-premises environments.</p>
+        <span class="aud-tag aud-purple">SBIR / STTR</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── SBIR ──────────────────────────────────────────────────── -->
+<section class="section" id="sbir">
+  <div class="section-inner">
+    <div class="section-label">SBIR / STTR Opportunity</div>
+    <h2 class="section-title">Ready for federal funding.</h2>
+    <p class="section-desc">
+      SPARC Labs LLC is a small business actively pursuing SBIR and STTR funding to
+      accelerate deployment into federal agency workflows and climate resilience programs.
+    </p>
+    <div class="sbir-banner">
+      <h2>Why SPARC is SBIR-Ready</h2>
+      <p>SPARC directly addresses priority research areas across multiple federal agencies — from
+      climate adaptation and environmental justice to infrastructure resilience and geospatial
+      intelligence. The platform is technically mature (v2.1, peer-reviewed), domain-flexible,
+      and uniquely positioned to close the gap between advanced ML research and operational
+      decision-making at scale.</p>
+      <ul class="sbir-list">
+        <li><strong>Published R&amp;D foundation</strong> — peer-reviewed methodology in <em>Urban Climate</em> (2025) establishes scientific credibility</li>
+        <li><strong>Physics-informed AI</strong> — aligns with NSF, DOE, and DARPA interest in trustworthy, interpretable AI for physical systems</li>
+        <li><strong>Causal inference for policy</strong> — directly relevant to EPA, USDA, and HUD environmental justice and resilience mandates</li>
+        <li><strong>Offline / air-gap capable</strong> — addresses DOD and intelligence community data sovereignty requirements</li>
+        <li><strong>Multi-domain transferability</strong> — 13 templates covering priority hazard domains (wildfire, flood, drought, seismic, coastal)</li>
+        <li><strong>Budget optimization with equity scoring</strong> — aligns with EJ40 environmental justice screening and allocation requirements</li>
+        <li><strong>Reproducible, auditable artifacts</strong> — versioned artifact store satisfies federal reproducibility and transparency standards</li>
+      </ul>
+      <div class="agency-tags">
+        <span class="agency-tag highlight">NSF</span>
+        <span class="agency-tag highlight">DOE ARPA-E</span>
+        <span class="agency-tag highlight">EPA</span>
+        <span class="agency-tag highlight">NOAA</span>
+        <span class="agency-tag highlight">FEMA</span>
+        <span class="agency-tag highlight">USGS</span>
+        <span class="agency-tag highlight">DOD / AFWERX</span>
+        <span class="agency-tag highlight">HUD</span>
+        <span class="agency-tag highlight">USDA</span>
+        <span class="agency-tag">Phase I Ready</span>
+        <span class="agency-tag">Phase II Pipeline</span>
+        <span class="agency-tag">STTR Eligible</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── CTA ──────────────────────────────────────────────────── -->
+<section class="cta-section" id="contact">
+  <div class="section-inner" style="max-width:900px">
+    <div class="section-label" style="text-align:center">Get Involved</div>
+    <h2>Let's build something together.</h2>
+    <p>Whether you're a city looking to pilot, a researcher seeking a collaborator,
+    or a program manager evaluating SBIR proposals — we want to hear from you.</p>
+
+    <div class="cta-cards">
+      <div class="cta-card">
+        <span class="c-icon">🏙️</span>
+        <h4>Pilot Partnership</h4>
+        <p>Run SPARC on your city's data. We provide setup support, training, and custom domain configuration.</p>
+        <a href="mailto:sparcurbanlabs@gmail.com?subject=Pilot%20Partnership%20Inquiry" class="btn btn-secondary" style="width:100%;justify-content:center;font-size:13px">Contact Us</a>
+      </div>
+      <div class="cta-card">
+        <span class="c-icon">🏛️</span>
+        <h4>SBIR / Grant Collaboration</h4>
+        <p>Interested in co-authoring a proposal or serving as a technical partner on a federal award?</p>
+        <a href="mailto:sparcurbanlabs@gmail.com?subject=SBIR%20Collaboration%20Inquiry" class="btn btn-secondary" style="width:100%;justify-content:center;font-size:13px">Let's Talk</a>
+      </div>
+      <div class="cta-card">
+        <span class="c-icon">🔬</span>
+        <h4>Academic Partnership</h4>
+        <p>Apply SPARC to your research domain. We're open to joint publications and STTR collaborations.</p>
+        <a href="mailto:sparcurbanlabs@gmail.com?subject=Academic%20Partnership%20Inquiry" class="btn btn-secondary" style="width:100%;justify-content:center;font-size:13px">Get in Touch</a>
+      </div>
+    </div>
+
+    <a href="mailto:sparcurbanlabs@gmail.com" class="cta-email">
+      ✉ sparcurbanlabs@gmail.com
+    </a>
+
+    <p style="font-size:12px;color:var(--muted);margin-top:20px;opacity:0.7">
+      SPARC Labs LLC · Providence, RI &amp; Remote · Kyle Wire, Founder
+    </p>
+  </div>
+</section>
+
+<!-- ── FOOTER ───────────────────────────────────────────────── -->
+<footer>
+  <div class="foot-brand">SPARC Labs LLC</div>
+  <div class="foot-links">
+    <a href="https://doi.org/10.1016/j.uclim.2025.102671" target="_blank" rel="noopener">Publication</a>
+    <a href="pipeline_explainer.html">Technical Docs</a>
+    <a href="SPARC_Architecture_Explainer.html">Architecture</a>
+    <a href="mailto:sparcurbanlabs@gmail.com">Contact</a>
+  </div>
+  <div class="foot-legal">© 2026 SPARC Labs LLC · All rights reserved · Proprietary License</div>
+</footer>
+
+</body>
+</html>

@@ -14,6 +14,7 @@ Each gap's invocation can be opted-out per-project via
 from __future__ import annotations
 
 import json
+import math
 import os
 from typing import Any, Dict, List, Optional
 
@@ -80,6 +81,8 @@ def run_wager2025_gaps(
         "skipped": {},
         "failed": {},
     }
+    # Collect per-treatment ATEs as gaps run; consumed by the E-value block at the end.
+    _ate_registry: Dict[str, float] = {}
 
     if not target or target not in data.columns:
         print("  Wager-2025 add-ons: outcome missing — all gaps skipped.")
@@ -130,6 +133,7 @@ def run_wager2025_gaps(
                 Y = data[target].to_numpy(dtype=float)
                 est = CBPSEstimator(binarize_continuous=True).fit(X, W)
                 ate = est.ate(Y)
+                _ate_registry[t] = float(ate)  # collected for E-value pass
                 bal = est.balance_diagnostics()
                 rows.append({
                     "treatment": t,
@@ -402,7 +406,43 @@ def run_wager2025_gaps(
     else:
         summary["skipped"]["policy_learning"] = "disabled"
 
-    # ── Triangulation report (audit registry snapshot) ───────────────
+    # ── E-value sensitivity report (VanderWeele 2017) ─────────────────
+    try:
+        import dataclasses
+        from sparc.causal.sensitivity import e_value_continuous
+
+        # Supplement with any NUTS ATEs that may have been passed in
+        if nuts_results is not None:
+            for t in treatments:
+                if t not in _ate_registry:
+                    for key in (t, f"{t}_ate", f"ate_{t}"):
+                        if key in nuts_results and nuts_results[key] is not None:
+                            try:
+                                _ate_registry[t] = float(nuts_results[key])
+                            except (TypeError, ValueError):
+                                pass
+                            break
+
+        sensitivity_rows = []
+        for t, ate_val in _ate_registry.items():
+            if math.isfinite(ate_val):
+                sr = e_value_continuous(ate_val, label=t)
+                row = dataclasses.asdict(sr)
+                row["treatment"] = t
+                sensitivity_rows.append(row)
+
+        if sensitivity_rows:
+            _save_json(
+                os.path.join(output_dir, "sensitivity_report.json"),
+                {"method": "VanderWeele E-value (2017)", "results": sensitivity_rows},
+            )
+            print(f"  [Sensitivity] E-values computed for {len(sensitivity_rows)} treatment(s) \u2713")
+            summary["ran"]["sensitivity"] = len(sensitivity_rows)
+    except Exception as exc:
+        print(f"  [Sensitivity] E-value computation FAILED: {exc}")
+        summary["failed"]["sensitivity"] = str(exc)
+
+    # ── Triangulation report (audit registry snapshot) ─────────────────
     try:
         from sparc.causal import _audit
         _audit._autodetect()

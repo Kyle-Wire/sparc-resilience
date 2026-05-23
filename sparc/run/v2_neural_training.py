@@ -2071,7 +2071,10 @@ def _pretrain_diffuser(model, tensors, alpha_all, config, device, artifact_dir, 
 
     n_physics_cond = tensors["physics_feats"].shape[1]
     bottleneck = config.get("diffuser", {}).get("bottleneck", 32)
-    T_steps = config.get("diffuser", {}).get("T", 200)
+    sampler = config.get("diffuser", {}).get("sampler", "flow_matching")
+    # Flow matching needs far fewer steps — default to 20; DDPM keeps 200
+    default_T = 20 if sampler == "flow_matching" else 200
+    T_steps = config.get("diffuser", {}).get("T", default_T)
     lr = config.get("diffuser", {}).get("lr", 1e-3)
 
     diffuser = LatentScenarioDiffuser(
@@ -2079,6 +2082,7 @@ def _pretrain_diffuser(model, tensors, alpha_all, config, device, artifact_dir, 
         bottleneck=bottleneck,
         cond_dim=n_physics_cond,
         T=T_steps,
+        sampler=sampler,
     ).to(device)
 
     # Collect trunk embeddings once (no gradient needed)
@@ -2103,11 +2107,11 @@ def _pretrain_diffuser(model, tensors, alpha_all, config, device, artifact_dir, 
     torch.save(state, artifact_dir / "scenario_diffuser.pt")
     # Save architecture config so run_with_diffusion_posterior can reconstruct correctly
     import json as _json_diff
-    _diff_cfg = {"trunk_dim": model.hidden_dim, "bottleneck": bottleneck, "cond_dim": n_physics_cond, "T": T_steps}
+    _diff_cfg = {"trunk_dim": model.hidden_dim, "bottleneck": bottleneck, "cond_dim": n_physics_cond, "T": T_steps, "sampler": sampler}
     with open(artifact_dir / "scenario_diffuser_config.json", "w") as _f:
         _json_diff.dump(_diff_cfg, _f)
-    logger.info("  Saved scenario_diffuser.pt (trunk_dim=%d, cond_dim=%d, T=%d)",
-                model.hidden_dim, n_physics_cond, T_steps)
+    logger.info("  Saved scenario_diffuser.pt (trunk_dim=%d, cond_dim=%d, T=%d, sampler=%s)",
+                model.hidden_dim, n_physics_cond, T_steps, sampler)
 
     if store is not None:
         try:

@@ -109,6 +109,27 @@ class GWRModel(BaseEstimator, RegressorMixin):
         self.scaler = StandardScaler()
         self.M_ik = None  # Spatial modifier matrix for interventions
 
+    @classmethod
+    def from_config(cls, cfg: "GWRConfig") -> "GWRModel":
+        """Construct a GWRModel from a validated :class:`GWRConfig`.
+
+        This is the preferred construction path.  All parameters are
+        sourced from the config; no post-instantiation attribute
+        assignment is needed.
+        """
+        return cls(
+            bandwidth=cfg.bandwidth,
+            variable_bandwidths=cfg.variable_bandwidths,
+            kernel=cfg.kernel,
+            coords_cols=cfg.coords_cols,
+            alpha=cfg.alpha,
+            min_points=cfg.min_points,
+            use_constrained_regression=cfg.use_constrained_regression,
+            physics_priors=cfg.physics_priors,
+            sign_constraints=cfg.sign_constraints,
+            kernel_field=cfg.kernel_field,
+        )
+
     def validate_for_fold(self, n_train: int, n_features: int = 0) -> None:
         """Clamp bandwidth / min_points so this model is safe for a fold of
         *n_train* samples.  Mutates ``self`` in-place; call on a deep-copy

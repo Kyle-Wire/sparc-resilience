@@ -506,9 +506,36 @@ def cmd_run(args):
                 format='html',
                 section=None,
             ))
-            _sp.stage_done("5")
         except Exception as exc:
             print(f"\n>>> Stage 5 report generation failed ({exc})")
+
+        # ── Decision stage: rank interventions by causal benefit/cost ──────
+        try:
+            import json as _json
+            from sparc.run.decision_stage import run_decision_stage
+            from sparc.decision import propose_candidates_from_scenarios
+
+            _s4_path = paths.stage4_dir / "scenario_results.json"
+            if _s4_path.exists():
+                with open(_s4_path, encoding="utf-8") as _fh:
+                    _s4_data = _json.load(_fh)
+                _scenarios = _s4_data if isinstance(_s4_data, list) else _s4_data.get("scenarios", [])
+                _candidates = propose_candidates_from_scenarios(_scenarios)
+                if _candidates:
+                    _stage5_dir = paths.output_dir / "Stage_5_Reports"
+                    _stage5_dir.mkdir(exist_ok=True, parents=True)
+                    _dec_cfg = config.get("decision", {}) or {}
+                    run_decision_stage(
+                        candidates=_candidates,
+                        budget=_dec_cfg.get("budget"),
+                        robustness_lambda=float(_dec_cfg.get("robustness_lambda", 0.0)),
+                        minimise=bool(_dec_cfg.get("minimise", False)),
+                        output_dir=str(_stage5_dir),
+                    )
+        except Exception as exc:
+            print(f"  [Decision] Stage 5 decision ranking skipped: {exc}")
+
+        _sp.stage_done("5")
 
     _sp.finish()
     print(f"  Results in: {paths.output_dir}")

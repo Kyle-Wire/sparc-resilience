@@ -3786,11 +3786,12 @@ class ScenarioSimulator:
             _d_bottleneck = _dc.get("bottleneck", 32)
             _d_T = _dc.get("T", 200)
             _d_cond_dim = _dc.get("cond_dim", n_phys_cond)
+            _d_sampler = _dc.get("sampler", "ddpm")
         else:
-            _d_bottleneck, _d_T, _d_cond_dim = 32, 200, n_phys_cond
+            _d_bottleneck, _d_T, _d_cond_dim, _d_sampler = 32, 200, n_phys_cond, "ddpm"
         diffuser = LatentScenarioDiffuser(
             trunk_dim=hidden_dim, bottleneck=_d_bottleneck,
-            cond_dim=_d_cond_dim, T=_d_T,
+            cond_dim=_d_cond_dim, T=_d_T, sampler=_d_sampler,
         )
         diffuser.load_state_dict(
             torch.load(diffuser_path, map_location="cpu", weights_only=True)

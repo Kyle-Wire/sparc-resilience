@@ -340,6 +340,8 @@
             "n_heads":       {"type": "integer", "default": 4, "description": "Number of spatial attention heads"},
             "max_neighbors": {"type": "integer", "default": 128, "description": "KNN neighborhood size for sparse spatial attention"},
             "siren_omega":   {"type": "number", "default": 30.0, "description": "SIREN frequency parameter for physics encoder"},
+            "time_embed_dim": {"type": "integer", "default": 0, "description": "Temporal embedding dimension. 0 = disabled. Set > 0 to add a learned nn.Embedding for time-of-day / season snapshots."},
+            "init_bandwidth": {"type": "number", "default": 1000.0, "description": "Initial spatial attention decay scale (metres)."},
             "exceedance_thresholds": {
               "type": "array",
               "items": {"type": "number"},
@@ -352,10 +354,14 @@
         "gwr": {
           "type": "object",
           "properties": {
-            "bandwidth":   {"type": ["integer", "null"], "description": "Adaptive bandwidth (k-NN). null = auto-select."},
-            "kernel":      {"type": "string", "enum": ["gaussian", "bisquare", "exponential"], "default": "gaussian"},
-            "alpha":       {"type": "number", "default": 0.1},
-            "min_points":  {"type": "integer", "default": 50}
+            "bandwidth":                  {"type": ["integer", "null"], "description": "Adaptive bandwidth (k-NN). null = auto-select."},
+            "variable_bandwidths":        {"type": ["object", "null"], "description": "Per-predictor bandwidth dict for MGWR mode. Mutually exclusive with bandwidth."},
+            "kernel":                     {"type": "string", "enum": ["gaussian", "bisquare", "exponential"], "default": "gaussian"},
+            "alpha":                      {"type": "number", "default": 0.1},
+            "min_points":                 {"type": "integer", "default": 50},
+            "use_constrained_regression": {"type": "boolean", "default": true, "description": "Apply physics sign constraints during fitting. Disabled during CV to prevent systematic bias."},
+            "physics_priors":             {"type": ["object", "null"], "description": "Dict mapping predictor names to prior coefficient values."},
+            "sign_constraints":           {"type": ["object", "null"], "description": "Dict mapping predictor names to -1|0|+1. Overrides module-level physics defaults."}
           }
         },
 
@@ -377,7 +383,10 @@
             "n_splines":       {"type": "integer", "default": 5},
             "n_spatial_bases": {"type": "integer", "default": 10},
             "lam":             {"type": "number", "default": 0.6},
-            "max_iter":        {"type": "integer", "default": 100}
+            "max_iter":        {"type": "integer", "default": 100},
+            "clamp_features":  {"type": "boolean", "default": false, "description": "Clamp feature values to training range before prediction."},
+            "elevation":       {"type": ["string", "null"], "description": "Optional elevation column name for terrain-aware smoothers."},
+            "elevation_scale": {"type": ["number", "null"], "description": "Scale factor applied to elevation values."}
           }
         },
 
@@ -414,6 +423,7 @@
         "bounds":     {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "[lower, upper] physical bounds"},
         "prior_mean": {"type": "number", "description": "Domain prior mean for initialization"},
         "inputs":     {"type": "array", "items": {"type": "string"}, "description": "Input feature columns for the process rate network"},
+        "n_treatments": {"type": "integer", "default": 1, "description": "Number of treatment-specific output channels (Phase 3 / v4). 1 = legacy single-channel."},
         "material_priors": {
           "type": "object",
           "description": "Per-material literature values for process rate (e.g. impervious: 7.5e-7)",

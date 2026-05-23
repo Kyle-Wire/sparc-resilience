@@ -236,3 +236,58 @@ def test_phase5_audit_registry_addresses_all_ten():
     _audit._autodetect()
     n_done = sum(_audit.WAGER2025_GAPS_ADDRESSED.values())
     assert n_done == 10, _audit.report()
+
+
+# ---------------------------------------------------------------------------
+# Sensitivity — E-value report
+# ---------------------------------------------------------------------------
+
+def test_wager2025_gaps_writes_sensitivity_report():
+    """run_wager2025_gaps writes sensitivity_report.json with E-values per treatment."""
+    import json
+    import os
+    import tempfile
+
+    import numpy as np
+    import pandas as pd
+
+    from sparc.run.wager2025_addons import run_wager2025_gaps
+
+    rng = np.random.default_rng(42)
+    n = 400
+    X = rng.normal(size=(n, 3))
+    W = 0.5 * X[:, 0] + rng.normal(scale=0.5, size=n)
+    Y = 0.8 * W + X @ np.array([0.3, -0.2, 0.1]) + rng.normal(scale=0.5, size=n)
+
+    data = pd.DataFrame(X, columns=["x0", "x1", "x2"])
+    data["W"] = W
+    data["Y"] = Y
+
+    dag_def = {
+        "nodes": [
+            {"name": "W", "type": "treatment"},
+            {"name": "Y", "type": "outcome"},
+        ],
+        "edges": [{"from": "W", "to": "Y"}],
+    }
+    roles = {"treatments": ["W"], "outcomes": ["Y"], "confounders": ["x0", "x1", "x2"]}
+    config = {"causal": {"wager2025": {"cbps": True}}}
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        run_wager2025_gaps(
+            data=data, config=config, dag_def=dag_def,
+            graph=None, roles=roles, output_dir=tmpdir,
+        )
+
+        report_path = os.path.join(tmpdir, "sensitivity_report.json")
+        assert os.path.exists(report_path), "sensitivity_report.json not written"
+
+        with open(report_path) as fh:
+            report = json.load(fh)
+
+        assert "results" in report
+        assert len(report["results"]) >= 1
+        result = report["results"][0]
+        assert result["treatment"] == "W"
+        assert result["e_value_point"] >= 1.0
+        assert "interpretation" in result

@@ -2052,33 +2052,34 @@ class CausalValidator:
     # ------------------------------------------------------------------
 
 
-def _partial_r2_covariate(
-    data: "pd.DataFrame",
-    covariate: str,
-    target: str,
-    other_cols: list[str],
-) -> float:
-    """Partial R² of ``covariate`` in predicting ``target`` given ``other_cols``.
+    @staticmethod
+    def _partial_r2_covariate(
+        data: "pd.DataFrame",
+        covariate: str,
+        target: str,
+        other_cols: list[str],
+    ) -> float:
+        """Partial R² of ``covariate`` in predicting ``target`` given ``other_cols``.
 
-    Computed as the incremental R² when adding ``covariate`` to a model
-    that already contains ``other_cols``.  Used as a benchmark for the
-    Cinelli-Hazlett robustness value.
-    """
-    from sklearn.linear_model import LinearRegression as _LR
-    avail_others = [c for c in other_cols if c in data.columns and c != covariate]
-    Y = data[target].values
+        Computed as the incremental R² when adding ``covariate`` to a model
+        that already contains ``other_cols``.  Used as a benchmark for the
+        Cinelli-Hazlett robustness value.
+        """
+        from sklearn.linear_model import LinearRegression as _LR
+        avail_others = [c for c in other_cols if c in data.columns and c != covariate]
+        Y = data[target].values
 
-    if avail_others:
-        lr_base = _LR().fit(data[avail_others].values, Y)
-        r2_base = lr_base.score(data[avail_others].values, Y)
-    else:
-        r2_base = 0.0
+        if avail_others:
+            lr_base = _LR().fit(data[avail_others].values, Y)
+            r2_base = lr_base.score(data[avail_others].values, Y)
+        else:
+            r2_base = 0.0
 
-    X_full = data[[covariate] + avail_others].values
-    lr_full = _LR().fit(X_full, Y)
-    r2_full = lr_full.score(X_full, Y)
+        X_full = data[[covariate] + avail_others].values
+        lr_full = _LR().fit(X_full, Y)
+        r2_full = lr_full.score(X_full, Y)
 
-    return max(0.0, (r2_full - r2_base) / max(1.0 - r2_base, 1e-12))
+        return max(0.0, (r2_full - r2_base) / max(1.0 - r2_base, 1e-12))
 
     @staticmethod
     def _cinelli_hazlett_robustness(
@@ -2137,8 +2138,8 @@ def _partial_r2_covariate(
                 other_t = [c for c in avail if c != conf] + [outcome]
                 other_y = [c for c in avail if c != conf] + [treatment]
                 try:
-                    r2_t = _partial_r2_covariate(data, conf, treatment, other_t)
-                    r2_y = _partial_r2_covariate(data, conf, outcome, other_y)
+                    r2_t = CausalValidator._partial_r2_covariate(data, conf, treatment, other_t)
+                    r2_y = CausalValidator._partial_r2_covariate(data, conf, outcome, other_y)
                     benchmarks[conf] = (r2_t, r2_y)
                 except Exception:
                     pass

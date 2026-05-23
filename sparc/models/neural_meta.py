@@ -381,6 +381,29 @@ class SPARCMetaLearner(nn.Module):
 
 
     # ------------------------------------------------------------------
+    @classmethod
+    def from_config(cls, cfg: "NeuralMetaConfig") -> "SPARCMetaLearner":
+        """Construct a SPARCMetaLearner from a validated :class:`NeuralMetaConfig`.
+
+        This is the preferred construction path.  It closes the wiring gap
+        where ``time_embed_dim`` from the project config dict was silently
+        discarded by the intermediate _ArchConfig object.
+        """
+        return cls(
+            n_base_models=cfg.n_base_models,
+            n_physics_features=cfg.n_physics_features,
+            d_spatial=cfg.d_spatial,
+            hidden_dim=cfg.hidden_dim,
+            dropout=cfg.dropout,
+            thresholds=cfg.thresholds,
+            n_heads=cfg.n_heads,
+            max_neighbors=cfg.max_neighbors,
+            siren_omega=cfg.siren_omega,
+            time_embed_dim=cfg.time_embed_dim,
+            init_bandwidth=cfg.init_bandwidth,
+        )
+
+    # ------------------------------------------------------------------
     def predict_with_uncertainty(
         self,
         *args,

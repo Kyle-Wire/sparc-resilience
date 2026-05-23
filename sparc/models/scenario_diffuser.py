@@ -29,18 +29,26 @@ class LatentScenarioDiffuser(nn.Module):
         Number of DDPM diffusion timesteps. Default 200.
     """
 
+    _VALID_SAMPLERS = ("ddpm", "flow_matching")
+
     def __init__(
         self,
         trunk_dim: int = 256,
         bottleneck: int = 32,
         cond_dim: int = 0,
         T: int = 200,
+        sampler: str = "ddpm",
     ) -> None:
         super().__init__()
+        if sampler not in self._VALID_SAMPLERS:
+            raise ValueError(
+                f"Invalid sampler '{sampler}'. Choose from {self._VALID_SAMPLERS}."
+            )
         self.trunk_dim = trunk_dim
         self.bottleneck = bottleneck
         self.cond_dim = cond_dim
         self.T = T
+        self.sampler = sampler
 
         # Linear noise schedule — registered as buffers (serialized with state_dict)
         betas = torch.linspace(1e-4, 0.02, T)
@@ -101,20 +109,43 @@ class LatentScenarioDiffuser(nn.Module):
         -------
         loss : scalar tensor
         """
-        z0 = self.proj_down(trunk_feats)          # (N, bottleneck)
-        N = z0.size(0)
-        device = z0.device
+        z1 = self.proj_down(trunk_feats)          # (N, bottleneck)
+        N = z1.size(0)
+        device = z1.device
+        c = self._cond_embed(cond, N, device)      # (N, bottleneck)
 
+        if self.sampler == "flow_matching":
+            return self._flow_matching_loss(z1, c, device)
+
+        # --- DDPM loss ---
+        z0 = z1  # naming alias for clarity (z0 = clean target)
         t = torch.randint(0, self.T, (N,), device=device)   # (N,)
         ab = self.alpha_bars[t].unsqueeze(1)                 # (N, 1)
         eps = torch.randn_like(z0)
         z_t = ab.sqrt() * z0 + (1.0 - ab).sqrt() * eps      # (N, bottleneck)
 
-        c = self._cond_embed(cond, N, device)                # (N, bottleneck)
         t_n = t.float().unsqueeze(1) / self.T                # (N, 1)
         eps_pred = self.net(torch.cat([z_t, c, t_n], dim=1))
 
         return F.mse_loss(eps_pred, eps)
+
+    def _flow_matching_loss(
+        self,
+        z1: torch.Tensor,
+        c: torch.Tensor,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Conditional flow matching (linear path) training loss.
+
+        Target velocity: v = z1 - z0  (constant along the linear path).
+        """
+        N = z1.size(0)
+        z0 = torch.randn_like(z1)                    # (N, bottleneck) — source noise
+        t = torch.rand(N, 1, device=device)          # (N, 1) — uniform time
+        z_t = (1.0 - t) * z0 + t * z1               # linear interpolation
+        u_t = z1 - z0                                # target velocity
+        v_pred = self.net(torch.cat([z_t, c, t], dim=1))
+        return F.mse_loss(v_pred, u_t)
 
     # ------------------------------------------------------------------
 
@@ -154,12 +185,21 @@ class LatentScenarioDiffuser(nn.Module):
         else:
             c = torch.zeros(n_samples, self.bottleneck, device=device)
 
-        for t_idx in reversed(range(self.T)):
-            t_n = torch.full((n_samples, 1), t_idx / self.T, device=device)
-            eps = self.net(torch.cat([z, c, t_n], dim=1))
-            ab = self.alpha_bars[t_idx]
-            z = (z - (1.0 - ab).sqrt() * eps) / ab.sqrt()
-            if t_idx > 0:
-                z = z + self.betas[t_idx].sqrt() * torch.randn_like(z)
+        if self.sampler == "flow_matching":
+            # Euler ODE: t runs 0 → 1
+            dt = 1.0 / self.T
+            for i in range(self.T):
+                t_n = torch.full((n_samples, 1), i * dt, device=device)
+                v = self.net(torch.cat([z, c, t_n], dim=1))
+                z = z + dt * v
+        else:
+            # DDPM reverse diffusion
+            for t_idx in reversed(range(self.T)):
+                t_n = torch.full((n_samples, 1), t_idx / self.T, device=device)
+                eps = self.net(torch.cat([z, c, t_n], dim=1))
+                ab = self.alpha_bars[t_idx]
+                z = (z - (1.0 - ab).sqrt() * eps) / ab.sqrt()
+                if t_idx > 0:
+                    z = z + self.betas[t_idx].sqrt() * torch.randn_like(z)
 
         return self.proj_up(z)    # (n_samples, trunk_dim)

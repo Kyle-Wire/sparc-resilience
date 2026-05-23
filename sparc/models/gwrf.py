@@ -54,6 +54,22 @@ class GWRFModel:
         self.X_train_ = None  # Store training data for PDP computation
         self.y_train_ = None
 
+    @classmethod
+    def from_config(cls, cfg: "GWRFConfig") -> "GWRFModel":
+        """Construct a GWRFModel from a validated :class:`GWRFConfig`.
+
+        This is the preferred construction path.
+        """
+        return cls(
+            n_estimators=cfg.n_estimators,
+            k_neighbors=cfg.k_neighbors,
+            min_samples_leaf=cfg.min_samples_leaf,
+            n_jobs=cfg.n_jobs,
+            subsample_fraction=cfg.subsample_fraction,
+            subsample_n=cfg.subsample_n,
+            kernel_field=cfg.kernel_field,
+        )
+
     def validate_for_fold(self, n_train: int, n_features: int = 0) -> None:
         """Clamp k_neighbors / subsample_n so this model is safe for a fold
         of *n_train* samples.  Mutates ``self`` in-place; call on a deep-copy

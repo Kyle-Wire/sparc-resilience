@@ -64,11 +64,17 @@ class ProcessRateNet(nn.Module):
     def __init__(
         self,
         n_inputs: int,
-        domain_config: dict,
+        domain_config: "dict | ProcessRateDomainConfig",
         n_temporal_inputs: int = 0,
         n_treatments: int = 1,
     ) -> None:
         super().__init__()
+
+        # Accept either a validated ProcessRateDomainConfig dataclass or the
+        # legacy raw dict so that existing call-sites need no changes.
+        from sparc.models.process_rate_config import ProcessRateDomainConfig as _PRDConfig
+        if isinstance(domain_config, _PRDConfig):
+            domain_config = domain_config.to_dict()
 
         self.bounds_lo = max(float(domain_config["bounds"][0]), 1e-8)
         self.bounds_hi = float(domain_config["bounds"][1])

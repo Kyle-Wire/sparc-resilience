@@ -108,6 +108,9 @@ from sparc.models.ols import OLSModel
 from sparc.models.gwr import GWRModel
 from sparc.models.gwrf import GWRFModel
 from sparc.models.ggpgam import GGPGAM_SVC
+from sparc.models.gwr_config import GWRConfig
+from sparc.models.gwrf_config import GWRFConfig
+from sparc.models.ggpgam_config import GGPGAMConfig
 from sparc.evaluation.evaluation import SpatialEvaluator
 from copy import deepcopy
 
@@ -339,47 +342,17 @@ class EnhancedSpatialCV:
         return self._cv_variable_bandwidths
 
     def _compute_variable_bandwidths(self):
-        """
-        Get per-variable bandwidths from correlogram analysis results.
+        """Delegate to the pure resolve_bandwidth() function."""
+        from sparc.run.gwr_bandwidth import resolve_bandwidth
 
-        Falls back to project config manual_parameters.bandwidths if
-        correlogram results are not available.
-        
-        Returns:
-        --------
-        dict or None: Dictionary mapping variable names to bandwidths
-        """
-        target_var = self._cfg.target
-
-        # 1. Read directly from correlogram_analysis_results.json
-        corr = self._load_correlogram_results()
-        if corr:
-            individual = corr.get('individual_results', {})
-            bandwidths = {}
-            for var, result in individual.items():
-                if var == target_var:
-                    continue  # target is not a predictor
-                bw = result.get('optimal_bandwidth')
-                if bw is not None and float(bw) > 0:
-                    bandwidths[var] = float(bw)
-            if bandwidths:
-                print(f"Loaded {len(bandwidths)} per-variable bandwidths from correlogram results")
-                return bandwidths
-
-        # 2. Legacy fallback: manual_parameters in project config
-        variable_bandwidths = self._cfg.raw.get('manual_parameters', {}).get('bandwidths', None)
-        if variable_bandwidths:
-            processed_bandwidths = {}
-            for var, bandwidth in variable_bandwidths.items():
-                try:
-                    processed_bandwidths[var] = float(bandwidth)
-                except (ValueError, TypeError):
-                    print(f"Warning: Invalid bandwidth value for {var}: {bandwidth}. Skipping.")
-                    continue
-            if processed_bandwidths:
-                return processed_bandwidths
-
-        return None
+        result = resolve_bandwidth(
+            config=self._cfg.raw,
+            stage0_result=self._load_correlogram_results(),
+            target_var=self._cfg.target,
+        )
+        if result:
+            print(f"Loaded {len(result)} per-variable bandwidths")
+        return result
     
     def get_kernel_field(self, predictor_names):
         """Phase 5a: assemble the matrix-aware ``KernelField`` for the
@@ -512,23 +485,18 @@ class EnhancedSpatialCV:
                     print(f"  Config bandwidth: {config_bandwidth}")
                     print(f"  Final bandwidth: {gwr_params['bandwidth']}")
             
-            # Extract only parameters supported by GWRModel constructor
-            gwr_constructor_params = {}
-            valid_params = ['bandwidth', 'variable_bandwidths', 'kernel', 'coords_cols', 'alpha', 'min_points']
-            for param in valid_params:
-                if param in gwr_params:
-                    gwr_constructor_params[param] = gwr_params[param]
+            # Build a validated GWRConfig — no hard-coded param lists needed.
             # Constrained regression is disabled during CV to avoid systematic
             # bias; sign constraints are applied post-hoc for interpretation only.
-            gwr_constructor_params['use_constrained_regression'] = False
-            gwr_constructor_params['sign_constraints'] = self._monotone_constraints
-            # Phase 5a: pass the matrix-aware kernel field (additive; None
-            # leaves legacy behaviour intact).
+            _gwr_cfg_kwargs = {k: v for k, v in gwr_params.items()
+                               if k in GWRConfig.__dataclass_fields__}
+            _gwr_cfg_kwargs['use_constrained_regression'] = False
+            _gwr_cfg_kwargs['sign_constraints'] = self._monotone_constraints
             if kernel_field is not None:
-                gwr_constructor_params['kernel_field'] = kernel_field
-            
+                _gwr_cfg_kwargs['kernel_field'] = kernel_field
+
             try:
-                models.append(GWRModel(**gwr_constructor_params))
+                models.append(GWRModel.from_config(GWRConfig(**_gwr_cfg_kwargs)))
             except Exception as e:
                 print(f"Warning: Failed to create GWR with configured params: {e}")
                 models.append(GWRModel(bandwidth=100, kernel='gaussian'))
@@ -567,22 +535,18 @@ class EnhancedSpatialCV:
                 print(f"  Config k_neighbors: {config_k_neighbors}")
                 print(f"  Final k_neighbors: {gwrf_params['k_neighbors']}")
             
-            # Extract only parameters supported by GWRFModel constructor
-            gwrf_constructor_params = {}
-            valid_params = ['n_estimators', 'k_neighbors', 'min_samples_leaf', 'n_jobs', 
-                          'subsample_fraction', 'subsample_n']
-            for param in valid_params:
-                if param in gwrf_params:
-                    gwrf_constructor_params[param] = gwrf_params[param]
-            # Phase 5a: attach the matrix-aware kernel field assembled above
-            # (same instance used by GWRModel) so per-pair bandwidths flow into
-            # local-RF neighbourhoods as metadata for downstream artifacts.
+            # Build a validated GWRFConfig — physics_signs flows in via config,
+            # no post-instantiation attribute assignment needed.
+            _gwrf_cfg_kwargs = {k: v for k, v in gwrf_params.items()
+                                if k in GWRFConfig.__dataclass_fields__}
             if kernel_field is not None:
-                gwrf_constructor_params['kernel_field'] = kernel_field
-            
+                _gwrf_cfg_kwargs['kernel_field'] = kernel_field
+
             try:
-                gwrf = GWRFModel(**gwrf_constructor_params)
-                # Inject physics sign constraints from centralised config
+                gwrf_cfg = GWRFConfig(**_gwrf_cfg_kwargs)
+                gwrf = GWRFModel.from_config(gwrf_cfg)
+                # physics_signs is injected here; GWRF stores it for downstream
+                # monotonicity diagnostics.
                 gwrf.physics_signs = self._monotone_constraints
                 models.append(gwrf)
             except Exception as e:
@@ -592,26 +556,25 @@ class EnhancedSpatialCV:
         # GGPGAM with global hyperparameters (adaptive via DatasetProfiler)
         if 'ggpgam' in model_configs:
             ggpgam_params = model_configs['ggpgam'].copy()
-            
-            # Remove parameters that aren't part of GGPGAM_SVC constructor
-            ggpgam_constructor_params = {}
-            valid_params = ['n_splines', 'n_spatial_bases', 'lam']
-            for param in valid_params:
-                if param in ggpgam_params:
-                    ggpgam_constructor_params[param] = ggpgam_params[param]
+
+            # Build a validated GGPGAMConfig — physics_signs is a constructor
+            # argument now, eliminating the post-instantiation assignment.
+            _ggpgam_cfg_kwargs = {k: v for k, v in ggpgam_params.items()
+                                  if k in GGPGAMConfig.__dataclass_fields__}
+            _ggpgam_cfg_kwargs['physics_signs'] = self._monotone_constraints
 
             print(f"GGPGAM Parameters (adaptive):")
-            for k, v in ggpgam_constructor_params.items():
-                print(f"  {k}: {v}")
-            
+            for k, v in _ggpgam_cfg_kwargs.items():
+                if k != 'physics_signs':
+                    print(f"  {k}: {v}")
+
             try:
-                ggpgam = GGPGAM_SVC(**ggpgam_constructor_params)
-                # Inject physics sign constraints from centralised config
-                ggpgam.physics_signs = self._monotone_constraints
-                models.append(ggpgam)
+                models.append(GGPGAM_SVC.from_config(GGPGAMConfig(**_ggpgam_cfg_kwargs)))
             except Exception as e:
                 print(f"Warning: Failed to create GGPGAM with configured params: {e}")
-                models.append(GGPGAM_SVC())
+                ggpgam = GGPGAM_SVC()
+                ggpgam.physics_signs = self._monotone_constraints
+                models.append(ggpgam)
         else:
             ggpgam = GGPGAM_SVC()
             ggpgam.physics_signs = self._monotone_constraints
@@ -2635,7 +2598,60 @@ def main(fast_mode=False):
         except Exception as e:
             print(f"Warning: Could not consolidate sensitivity package: {e}")
             sensitivity_package = None
-        
+
+        # ----------------------------------------------------------------
+        # ANP uncertainty surface — few-shot inference using the OOF
+        # predictions as calibration context.  Produces anp_uncertainty.json
+        # with per-point mean and uncertainty estimates.
+        # ----------------------------------------------------------------
+        try:
+            from sparc.inference.few_shot import few_shot_predict
+            from sparc.data.satellite_types import SatelliteFeatureSet
+            import numpy as _np_anp
+
+            _coords_np = self._coords if hasattr(self, "_coords") else final_results.get("coords")
+            _feat_np = self._feature_matrix if hasattr(self, "_feature_matrix") else None
+
+            if _coords_np is not None and _feat_np is not None:
+                _N = len(_coords_np)
+                _feat_np = _np_anp.asarray(_feat_np, dtype=_np_anp.float32)
+                _coords_np = _np_anp.asarray(_coords_np, dtype=_np_anp.float32)
+
+                _feats_obj = SatelliteFeatureSet(coords=_coords_np)
+
+                # Use OOF predictions (normalised back to raw space) as calibration y
+                _oof_pred = final_results.get("oof_predictions")
+                _y_mean = final_results.get("y_mean", 0.0)
+                _y_std = final_results.get("y_std", 1.0)
+                if _oof_pred is not None:
+                    _calib_y = _np_anp.asarray(_oof_pred, dtype=_np_anp.float32) * _y_std + _y_mean
+                    _anp_result = few_shot_predict(
+                        features=_feats_obj,
+                        calibration_X=_feat_np,
+                        calibration_y=_calib_y,
+                        calibration_coords=_coords_np,
+                    )
+                    import json as _json_anp
+                    _anp_payload = {
+                        "mean": _anp_result.y_pred.tolist(),
+                        "uncertainty": _anp_result.uncertainty.tolist(),
+                        "n_calibration": _anp_result.n_calibration,
+                        "note": "SpatialANP uncertainty surface (untrained prior — improve by loading trunk checkpoint)",
+                    }
+                    _anp_path = os.path.join(stage2_dir, "anp_uncertainty.json")
+                    with open(_anp_path, "w") as _fh:
+                        _json_anp.dump(_anp_payload, _fh)
+                    try:
+                        save_struct_path(_anp_payload, _anp_path, stage="2",
+                                         artifact_id="anp_uncertainty",
+                                         producer="enhanced_spatial_cv",
+                                         consumers=["stage4:scenario", "report"])
+                    except Exception:
+                        pass
+                    print(f"✅ ANP uncertainty surface written: {_anp_path}")
+        except Exception as _anp_exc:
+            print(f"Warning: ANP uncertainty surface skipped: {_anp_exc}")
+
         print("\n" + "="*80)
         
         return final_results
