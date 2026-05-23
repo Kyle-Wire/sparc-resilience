@@ -1,6 +1,6 @@
 {
   "name": "sparc-desktop",
-  "version": "1.x.xgit",
+  "version": "1.2.3",
   "description": "SPARC Labs Desktop Application",
   "type": "module",
   "scripts": {
