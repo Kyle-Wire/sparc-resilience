@@ -54,6 +54,11 @@ class BandwidthAdvisor:
     ) -> "GWENConfig":
         """Derive a :class:`~sparc.models.gwen_config.GWENConfig` from Stage 0 results.
 
+        .. deprecated::
+            Prefer ``report.gwen_config(coords)`` directly.  This method now
+            delegates to that implementation so both paths return identical
+            results.
+
         Parameters
         ----------
         report:
@@ -68,10 +73,7 @@ class BandwidthAdvisor:
             A validated configuration ready to pass to
             :meth:`~sparc.models.gwen.GWENModel.from_config`.
         """
-        from sparc.models.gwen_config import GWENConfig
-
-        k_neighbors = BandwidthAdvisor._k_from_report(report, coords)
-        return GWENConfig(k_neighbors=k_neighbors)
+        return report.gwen_config(coords)
 
     # ------------------------------------------------------------------
     # Internal helpers

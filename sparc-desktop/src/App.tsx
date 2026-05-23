@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 import { useServer } from "@/hooks/useServer";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { NotificationContext, useNotificationState } from "@/hooks/useNotifications";
@@ -7,7 +7,7 @@ import { useProjectStore } from "@/stores/projectStore";
 import { useNavigationStore } from "@/stores/navigationStore";
 import NotificationBanner from "@/components/layout/NotificationBanner";
 import ServerLostBanner from "@/components/layout/ServerLostBanner";
-import Splash, { type SplashStep } from "@/components/layout/Splash";
+import Splash from "@/components/layout/Splash";
 import LoginScreen from "@/components/layout/LoginScreen";
 import AuthGate from "@/components/layout/AuthGate";
 import Shell from "@/components/layout/Shell";
@@ -19,13 +19,11 @@ import OnboardingTour from "@/components/common/OnboardingTour";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import UpdateBanner from "@/components/updater/UpdateBanner";
 import { ExplainContext, useExplainHost } from "@/hooks/ExplainContext";
-import { loadThemeKey, applyTheme } from "@/lib/theme";
 import { useAuthStore } from "@/stores/authStore";
-import { setToken } from "@/stores/tokenStore";
 import { buildSystemPrompt } from "@/lib/prompts";
-import { getConfig, saveConfig, dataSummary, initProject, getReportData, getDag } from "@/lib/api";
-import type { ClaudeAction, DataSummary, ProjectConfig, ReportPayload, DagDefinition } from "@/lib/types";
-import type { PromptDataContext } from "@/lib/prompts";
+import { useStartup } from "@/hooks/useStartup";
+import { useProjectContext } from "@/hooks/useProjectContext";
+import { useChatActions } from "@/hooks/useChatActions";
 
 import ProjectPage from "@/components/pages/ProjectPage";
 import DataPage from "@/components/pages/DataPage";
@@ -36,7 +34,7 @@ import PhysicsPage from "@/components/pages/PhysicsPage";
 import ScenariosPage from "@/components/pages/ScenariosPage";
 import ModelsPage from "@/components/pages/ModelsPage";
 import RunPage from "@/components/pages/RunPage";
-import InsightsPage from "@/components/pages/InsightsPage";
+import StageResultsPage from "@/components/results/StageResultsPage";
 import DecisionSupportPage from "@/components/pages/DecisionSupportPage";
 import ReportPage from "@/components/pages/ReportPage";
 import SettingsPage from "@/components/pages/SettingsPage";
@@ -48,101 +46,23 @@ export default function App() {
   const notif = useNotificationState();
   const project = useProjectStore();
   const { currentPage: page, navigate } = useNavigationStore();
+  const { user, signOut } = useAuthStore();
   const [chatOpen, setChatOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const explainHost = useExplainHost();
   const explainSeed = explainHost.seed;
-  const [dataCtx, setDataCtx] = useState<PromptDataContext | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
 
-  // Auth
-  const { user, init: initAuth, signOut } = useAuthStore();
-
-  // Fetch the sidecar session token from Tauri once on mount.
-  // Stored in memory only — never written to disk or localStorage.
-  useEffect(() => {
-    import("@tauri-apps/api/core").then(({ invoke }) => {
-      invoke<string>("get_sidecar_token")
-        .then(setToken)
-        .catch(() => { /* running in browser/dev without Tauri — token stays empty */ });
-    }).catch(() => { /* @tauri-apps/api not available */ });
-  }, []);
-  const [splashStep, setSplashStep] = useState<SplashStep>("sidecar");
-  const [splashDone, setSplashDone] = useState(false);
-  const splashStartRef = useRef<number>(Date.now());
-
-  // Parallax preference
-  const [parallaxEnabled, setParallaxEnabled] = useState(
-    () => localStorage.getItem("sparc-parallax") !== "false",
-  );
-
-  // Apply persisted theme on mount
-  useEffect(() => {
-    applyTheme(loadThemeKey());
-  }, []);
-
-  // Startup failure timeout → show error step
-  useEffect(() => {
-    if (startupFailed && splashStep === "sidecar") {
-      setSplashStep("failed");
-    }
-  }, [startupFailed, splashStep]);
-
-  // Step 1 → 2: sidecar is ready
-  useEffect(() => {
-    if (ready && splashStep === "sidecar") {
-      setSplashStep("session");
-    }
-  }, [ready, splashStep]);
-
-  // Step 2 → 3: restore auth session
-  useEffect(() => {
-    if (splashStep !== "session") return;
-    initAuth().then(() => {
-      setSplashStep("ready");
-      // Hold splash for at least 10 seconds from app start
-      const elapsed = Date.now() - splashStartRef.current;
-      const remaining = Math.max(400, 5_000 - elapsed);
-      setTimeout(() => setSplashDone(true), remaining);
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [splashStep]);
+  const { splashStep, splashDone, parallaxEnabled, setParallaxEnabled, handleRetry } =
+    useStartup(ready, startupFailed, restart);
+  const { dataCtx, projectDomain, projectEpsg, refreshKey, refresh } =
+    useProjectContext(ready, project.projectLoaded);
+  const { handleAction } = useChatActions(navigate, notif, project, refresh);
 
   // Trigger project rehydration once the sidecar is ready
   useEffect(() => {
     if (ready) project.rehydrate();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
-
-  // Load data context for system prompt enrichment
-  useEffect(() => {
-    if (!ready || !project.projectLoaded) return;
-    Promise.all([
-      getConfig().catch(() => null),
-      dataSummary().catch(() => null),
-      getDag().catch(() => null),
-      getReportData().catch(() => null),
-    ]).then(([cfg, summary, dag, report]: [ProjectConfig | null, DataSummary | null, DagDefinition | null, ReportPayload | null]) => {
-      const ctx: PromptDataContext = {
-        columns: summary?.columns ?? [],
-        target: cfg?.data?.target_column,
-        summary: summary?.numeric_summary,
-      };
-      if (dag?.edges && dag.edges.length > 0) ctx.dagEdges = dag.edges;
-      const mono = cfg?.physics?.monotone_constraints;
-      if (mono && typeof mono === "object") ctx.physicsConstraints = mono as Record<string, number>;
-      const scenarios = cfg?.scenarios;
-      if (Array.isArray(scenarios) && scenarios.length > 0) ctx.scenarios = scenarios;
-      const causal = report?.causal_results;
-      if (causal?.direct_effects && Object.keys(causal.direct_effects).length > 0) {
-        ctx.causalResults = causal.direct_effects;
-      }
-      if (report?.scenario_summary && report.scenario_summary.length > 0) {
-        ctx.scenarioSummary = report.scenario_summary;
-      }
-      setDataCtx(ctx);
-    });
-  }, [ready, project.projectLoaded, refreshKey]);
 
   // Derive prompt mode from current page (or seed override).
   const promptMode = (() => {
@@ -152,7 +72,7 @@ export default function App() {
       case "Project": return "domain" as const;
       case "DAG": return "dag" as const;
       case "Physics": return "physics" as const;
-      case "Insights":
+      case "Results":
       case "Report": return "results" as const;
       default: return "general" as const;
     }
@@ -168,10 +88,10 @@ export default function App() {
         if (i < PAGES.length) navigate(PAGES[i]);
       },
       openSettings: () => navigate("Settings"),
-      refresh: () => setRefreshKey((k) => k + 1),
+      refresh,
       openPalette: () => setPaletteOpen(true),
     }),
-    [navigate],
+    [navigate, refresh],
   );
 
   // Open the chat automatically whenever something requests an explanation.
@@ -223,54 +143,11 @@ export default function App() {
   }, [dataCtx, explainHost.value]);
   useKeyboardShortcuts(kbHandlers);
 
-  // Chat → config action dispatch
-  const handleAction = useCallback(async (action: ClaudeAction) => {
-    try {
-      switch (action.action) {
-        case "suggest_template": {
-          const home = prompt("Choose output directory:", `${action.template}_project`);
-          if (!home) break;
-          const res = await initProject(action.template, home);
-          await project.openProject(res.project_yml, { template: action.template });
-          navigate("Data");
-          setRefreshKey((k) => k + 1);
-          break;
-        }
-        case "propose_dag_edges": {
-          localStorage.setItem("sparc-proposed-edges", JSON.stringify(action.edges));
-          navigate("DAG");
-          setRefreshKey((k) => k + 1);
-          break;
-        }
-        case "suggest_physics": {
-          await saveConfig({
-            physics: { monotone_constraints: action.monotonic_constraints },
-          });
-          navigate("Physics");
-          setRefreshKey((k) => k + 1);
-          break;
-        }
-        case "suggest_predictors": {
-          await saveConfig({ predictors: action.predictors });
-          navigate("Variables");
-          setRefreshKey((k) => k + 1);
-          break;
-        }
-      }
-    } catch (e) {
-      notif.notify("error", e instanceof Error ? e.message : "Action dispatch failed");
-    }
-  }, [notif, project, navigate]);
-
   // Must be defined before any early returns to satisfy rules-of-hooks
   const navigateToSettings = useCallback(() => navigate("Settings"), [navigate]);
 
   // Show splash while loading (or on startup failure)
   if (!splashDone || project.rehydrating || splashStep === "failed") {
-    const handleRetry = splashStep === "failed" ? async () => {
-      setSplashStep("sidecar");
-      await restart();
-    } : undefined;
     return <Splash step={splashStep} parallaxEnabled={parallaxEnabled} onRetry={handleRetry} />;
   }
 
@@ -285,9 +162,7 @@ export default function App() {
     );
     switch (page) {
       case "Project":
-        return gate(
-          <ProjectPage />,
-        );
+        return gate(<ProjectPage />);
       case "Data":
         return gate(<DataPage key={refreshKey} />);
       case "Data Collection":
@@ -304,8 +179,8 @@ export default function App() {
         return gate(<ModelsPage />);
       case "Run":
         return gate(<RunPage />);
-      case "Insights":
-        return gate(<InsightsPage />);
+      case "Results":
+        return gate(<StageResultsPage />);
       case "Decision Support":
         return gate(<DecisionSupportPage />);
       case "Report":
@@ -315,10 +190,7 @@ export default function App() {
           <SettingsPage
             onSignOut={async () => { await signOut(); }}
             parallaxEnabled={parallaxEnabled}
-            onParallaxToggle={(v) => {
-              setParallaxEnabled(v);
-              localStorage.setItem("sparc-parallax", v ? "true" : "false");
-            }}
+            onParallaxToggle={setParallaxEnabled}
           />
         );
       case "Performance":
@@ -338,8 +210,8 @@ export default function App() {
             chatOpen={chatOpen}
             projectLoaded={project.projectLoaded}
             projectName={project.projectPath?.split(/[\\/]/).pop()?.replace(".yml", "") ?? undefined}
-            projectDomain={undefined}
-            projectEpsg={undefined}
+            projectDomain={projectDomain}
+            projectEpsg={projectEpsg ? `EPSG:${projectEpsg}` : undefined}
             status={status}
           >
             <ErrorBoundary key={page} page={page}>

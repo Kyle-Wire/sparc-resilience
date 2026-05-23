@@ -129,3 +129,27 @@ class SpatialANP(nn.Module):
         std = F.softplus(log_std) + 1e-6                      # (N, 1) — strictly positive
 
         return mean, std
+
+    # ------------------------------------------------------------------
+    # SpatialTrunk protocol implementation
+    # ------------------------------------------------------------------
+
+    def save_checkpoint(self, path: str) -> None:
+        """Save model state_dict to *path*."""
+        import torch as _torch
+        _torch.save(self.state_dict(), path)
+
+    def load_checkpoint(self, path: str) -> None:
+        """Load model state_dict from *path*.
+
+        Raises
+        ------
+        FileNotFoundError
+            If *path* does not exist.
+        """
+        import os
+        import torch as _torch
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"SpatialANP.load_checkpoint: no file at {path!r}")
+        state = _torch.load(path, weights_only=True)
+        self.load_state_dict(state)

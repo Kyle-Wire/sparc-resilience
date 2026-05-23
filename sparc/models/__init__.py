@@ -10,6 +10,8 @@ This module includes:
   - Geographically Weighted Generalized Additive Model (GGPGAM)
 - Neural Meta-Learner:
   - SPARCMetaLearner (PyTorch, physics-informed, multi-stream)
+- ModelSpec:
+  - Unified discriminated-union config factory
 """
 
 from .gwen import GWENModel
@@ -17,6 +19,7 @@ from .ols import OLSModel
 from .gwr import GWRModel
 from .gwrf import GWRFModel
 from .ggpgam import GGPGAM_SVC
+from .spec import ModelSpec
 
 # V2 neural modules (lazy imports — require torch)
 try:
@@ -34,6 +37,7 @@ __all__ = [
     'GWRModel',
     'GWRFModel',
     'GGPGAM_SVC',
+    'ModelSpec',
     # V2 Neural
     'SPARCMetaLearner',
     'DifferentiableGWR',
@@ -42,4 +46,4 @@ __all__ = [
     'ProcessRateNet',
     'SIRENLayer',
     'SparseSpatialAttention',
-] 
+]

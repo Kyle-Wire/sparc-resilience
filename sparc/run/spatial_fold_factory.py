@@ -456,3 +456,142 @@ def _vsba_fold_quality_score(
                 print(f"  Fold {s['fold']} VSBA ELBO: {s['elbo_score']:.4f} (p{pct:.0f}, {label})")
 
     return scores
+
+
+# ---------------------------------------------------------------------------
+# SpatialFoldPlan + SpatialFoldFactory
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass as _dataclass
+from typing import Any as _Any
+
+
+@_dataclass
+class SpatialFoldPlan:
+    """Result of :meth:`SpatialFoldFactory.build`.
+
+    Attributes
+    ----------
+    folds : list[tuple[np.ndarray, np.ndarray]]
+        Each element is ``(train_indices, test_indices)`` for one CV fold.
+    block_size_m : float
+        Spatial block size used to generate the folds (metres).
+    buffer_size_m : float
+        Exclusion buffer between train and test blocks (metres).
+    """
+
+    folds: list
+    block_size_m: float
+    buffer_size_m: float
+
+
+class SpatialFoldFactory:
+    """Centralised factory for Stage 2 spatial CV fold generation.
+
+    Eliminates the scattered block-size resolution, fold-size validation,
+    and buffer calculation that previously lived inside
+    ``EnhancedSpatialCV``.
+
+    Usage
+    -----
+    ::
+
+        plan = SpatialFoldFactory.build(config, X, y, coords)
+        for train_idx, test_idx in plan.folds:
+            ...
+
+    Block-size priority
+    -------------------
+    1. ``config["block_size"]`` — explicit user override
+    2. ``config["_correlogram_result"]["spatial_cv_configuration"]["optimal_block_size"]``
+    3. :attr:`DEFAULT_BLOCK_SIZE_M` (500 m)
+
+    Buffer-size priority
+    --------------------
+    1. ``config["buffer_size"]`` — explicit user override
+    2. ``max(100, int(block_size / 3))``
+    """
+
+    MIN_FOLD_SAMPLES: int = 50
+    DEFAULT_BLOCK_SIZE_M: float = 500.0
+
+    @staticmethod
+    def build(
+        config: dict,
+        X: "np.ndarray",
+        y: "np.ndarray",
+        coords: "np.ndarray",
+    ) -> SpatialFoldPlan:
+        """Generate spatial CV folds and return a :class:`SpatialFoldPlan`.
+
+        Parameters
+        ----------
+        config : dict
+            Pipeline configuration dict.  Recognised keys:
+            ``block_size``, ``buffer_size``, ``n_splits``,
+            ``_correlogram_result``.
+        X : np.ndarray, shape (n, p)
+        y : np.ndarray, shape (n,)
+        coords : np.ndarray, shape (n, 2)
+
+        Returns
+        -------
+        SpatialFoldPlan
+
+        Raises
+        ------
+        ValueError
+            When any test fold contains fewer than :attr:`MIN_FOLD_SAMPLES`
+            samples.
+        """
+        block_size = SpatialFoldFactory._resolve_block_size(config)
+        buffer_size = SpatialFoldFactory._resolve_buffer_size(config, block_size)
+        n_splits = config.get("n_splits", 5)
+
+        folds = spatial_kfold_enhanced(
+            X, y, coords,
+            n_splits=n_splits,
+            block_size=block_size,
+            buffer_size=buffer_size,
+            method="block",
+            stratify_y=True,
+        )
+        SpatialFoldFactory._validate_fold_sizes(folds)
+        return SpatialFoldPlan(
+            folds=folds,
+            block_size_m=block_size,
+            buffer_size_m=buffer_size,
+        )
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_block_size(config: dict) -> float:
+        # 1. Explicit user config
+        if config.get("block_size") is not None:
+            return float(config["block_size"])
+        # 2. Correlogram recommendation
+        corr = config.get("_correlogram_result") or {}
+        opt = (corr.get("spatial_cv_configuration") or {}).get("optimal_block_size")
+        if opt is not None:
+            return float(opt)
+        # 3. Hard default
+        return SpatialFoldFactory.DEFAULT_BLOCK_SIZE_M
+
+    @staticmethod
+    def _resolve_buffer_size(config: dict, block_size: float) -> float:
+        if config.get("buffer_size") is not None:
+            return float(config["buffer_size"])
+        return float(max(100, int(block_size / 3)))
+
+    @staticmethod
+    def _validate_fold_sizes(folds: list) -> None:
+        for i, (train_idx, test_idx) in enumerate(folds):
+            if len(test_idx) < SpatialFoldFactory.MIN_FOLD_SAMPLES:
+                raise ValueError(
+                    f"Fold {i} has only {len(test_idx)} test samples "
+                    f"(minimum {SpatialFoldFactory.MIN_FOLD_SAMPLES}). "
+                    "Increase block_size or reduce n_splits."
+                )

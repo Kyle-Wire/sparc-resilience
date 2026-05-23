@@ -29,6 +29,80 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 
+# ---------------------------------------------------------------------------
+# Model defaults — single source of truth for all model hyperparameter
+# fallbacks.  These are merged into the project.yml model dicts by
+# StageConfig.from_dict(), so callers never need to import
+# PipelineConfigurator just to get defaults.
+# ---------------------------------------------------------------------------
+
+_GWR_DEFAULTS: Dict = {
+    "kernel": "gaussian",
+    "alpha": 0.1,
+    "min_points": 50,
+    "bandwidth": None,
+    "coords_cols": None,
+}
+
+_GWRF_DEFAULTS: Dict = {
+    "n_estimators": 100,
+    "k_neighbors": 100,
+    "min_samples_leaf": 5,
+    "n_jobs": 1,
+    "subsample_fraction": None,
+    "subsample_n": None,
+}
+
+_GGPGAM_DEFAULTS: Dict = {
+    "n_splines": 5,
+    "n_spatial_bases": 10,
+    "lam": 0.6,
+    "fit_intercept": True,
+    "max_iter": 100,
+    "tol": 1e-4,
+    "verbose": False,
+    "distribution": "normal",
+    "link": "identity",
+}
+
+
+def _with_defaults(user_dict: Dict, defaults: Dict) -> Dict:
+    """Return *defaults* updated with any keys present in *user_dict*.
+
+    Keys in *user_dict* take precedence; missing keys fall back to *defaults*.
+    """
+    merged = dict(defaults)
+    merged.update(user_dict)
+    return merged
+
+
+def get_model_defaults() -> Dict:
+    """Return a copy of the built-in model hyperparameter defaults.
+
+    Returns
+    -------
+    dict
+        ``{"gwr": {...}, "gwrf": {...}, "ggpgam": {...}}``
+
+    Each value is an independent copy so callers can freely modify it
+    without affecting future calls.
+
+    Examples
+    --------
+    ::
+
+        from sparc.run.stage_config import get_model_defaults
+
+        defaults = get_model_defaults()
+        gwr_params = {**defaults["gwr"], **project_overrides.get("gwr", {})}
+    """
+    return {
+        "gwr": dict(_GWR_DEFAULTS),
+        "gwrf": dict(_GWRF_DEFAULTS),
+        "ggpgam": dict(_GGPGAM_DEFAULTS),
+    }
+
+
 @dataclass
 class StageConfig:
     """Typed representation of every project.yml key consumed by Stage 2.
@@ -64,7 +138,9 @@ class StageConfig:
     ggpgam_params: Dict     # full ggpgam sub-dict from project.yml
 
     # ── pipeline flags ────────────────────────────────────────────────────────
-    skip_stage_2_base_models: bool    skip_stage_2b_full_retrain: bool    use_dataset_profiler: bool
+    skip_stage_2_base_models: bool
+    skip_stage_2b_full_retrain: bool
+    use_dataset_profiler: bool
     benchmark_metrics_enabled: bool
 
     # ── output CRS for GeoPackage files ──────────────────────────────────────
@@ -160,9 +236,9 @@ class StageConfig:
             self_supervised_scoring=bool(
                 spatial_cv_sec.get("self_supervised_hparam_scoring", False)
             ),
-            gwr_params=dict(models_section.get("gwr", {})),
-            gwrf_params=dict(models_section.get("gwrf", {})),
-            ggpgam_params=dict(models_section.get("ggpgam", {})),
+            gwr_params=_with_defaults(dict(models_section.get("gwr", {})), _GWR_DEFAULTS),
+            gwrf_params=_with_defaults(dict(models_section.get("gwrf", {})), _GWRF_DEFAULTS),
+            ggpgam_params=_with_defaults(dict(models_section.get("ggpgam", {})), _GGPGAM_DEFAULTS),
             skip_stage_2_base_models=bool(
                 pipeline_exec_sec.get("skip_stage_2_base_models", False)
             ),

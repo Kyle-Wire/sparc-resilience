@@ -78,7 +78,75 @@ class CausalEffectResolver:
         and shrinkage weight.
     config : ResolverConfig, optional
         Numerical knobs (draw cap, shrinkage, multiplier clip).
+
+    Notes
+    -----
+    The I/O layer has been extracted into :class:`~sparc.interventions.causal_inputs.CausalInputLoader`.
+    Use :meth:`from_inputs` when you have a pre-loaded
+    :class:`~sparc.interventions.causal_inputs.CausalInputs` struct (e.g. in
+    tests) to bypass all artifact loading.
     """
+
+    # ------------------------------------------------------------------
+    # Seam: construct from pre-loaded CausalInputs (no I/O)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_inputs(
+        cls,
+        inputs: Any,  # CausalInputs
+        *,
+        dag: Any = None,
+        physics_priors: Optional[Dict[str, Any]] = None,
+        config: Optional[ResolverConfig] = None,
+    ) -> "CausalEffectResolver":
+        """Construct from a pre-loaded :class:`~sparc.interventions.causal_inputs.CausalInputs`.
+
+        No I/O is performed.  Use this in tests or when you have already
+        loaded the inputs via :class:`~sparc.interventions.causal_inputs.CausalInputLoader`.
+        """
+        instance = cls.__new__(cls)
+        instance.store = None
+        instance.dag = dag or inputs.dag if hasattr(inputs, "dag") else dag
+        instance.physics_priors = physics_priors or {}
+        instance.config = config or ResolverConfig()
+
+        cal = (instance.physics_priors.get("calibration") or {})
+        if "shrinkage_weight" in cal:
+            try:
+                instance.config.shrinkage_weight = float(cal["shrinkage_weight"])
+            except (TypeError, ValueError):
+                pass
+
+        instance._warned: set = set()
+        instance._report = _LoadReport(
+            loaded=list(inputs.missing.__class__()),
+            missing=list(inputs.missing),
+        )
+
+        # Populate from CausalInputs directly (no I/O)
+        instance._alpha_full = inputs.alpha_full
+        instance._alpha_coords = inputs.alpha_coords
+        instance._alpha_treatments = list(inputs.alpha_treatments)
+        instance._alpha_schema_version = inputs.alpha_schema_version
+        instance._edge_samples = dict(inputs.edge_samples)
+        instance._edge_summary = inputs.edge_summary
+        instance._mc3_probs = dict(inputs.mc3_probs)
+        instance._cate_samples = dict(inputs.cate_samples)
+        instance._cate_summary = inputs.cate_summary
+        instance._pdp_curves: Dict = {}
+
+        n_alpha = 0 if instance._alpha_full is None else instance._alpha_full.shape[0]
+        n_alpha_t = 0 if instance._alpha_full is None else instance._alpha_full.shape[1]
+        print(
+            f"   CausalEffectResolver(from_inputs): "
+            f"α=({n_alpha},{n_alpha_t}) "
+            f"edges={len(instance._edge_samples)}  "
+            f"CATE={len(instance._cate_samples)}  "
+            f"MC³={len(instance._mc3_probs)}  "
+            f"missing={len(inputs.missing)}"
+        )
+        return instance
 
     def __init__(
         self,
@@ -549,7 +617,67 @@ class CausalEffectResolver:
                 )
             delta = (1.0 - gamma) * delta + gamma * ld
 
-        return delta
+        # Confidence tiers: z-score of |Δx| relative to baseline variation.
+        sigma_baseline = float(np.std(baseline_x))
+        z = np.abs(delta_x) / (sigma_baseline + 1e-8)  # (n_cells,)
+        tiers = np.empty(n_cells, dtype=object)
+        tiers[z < 0.5] = "HIGH"
+        tiers[(z >= 0.5) & (z < 2.0)] = "MODERATE"
+        tiers[(z >= 2.0) & (z < 5.0)] = "LOW"
+        tiers[z >= 5.0] = "SPECULATIVE"
+
+        return ResolvedEffect(delta=delta, confidence_tiers=tiers.astype(str))
+
+
+# ---------------------------------------------------------------------------
+# Resolved-effect result container
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ResolvedEffect:
+    """Return type for :meth:`CausalEffectResolver.resolve_direct_effect`.
+
+    Attributes
+    ----------
+    delta : np.ndarray
+        Shape ``(n_draws_eff, n_cells)`` posterior samples of the treatment
+        effect per cell.  Identical to the plain ndarray previously returned.
+    confidence_tiers : np.ndarray
+        Shape ``(n_cells,)`` string array.  Each element is one of
+        ``{"HIGH", "MODERATE", "LOW", "SPECULATIVE"}`` derived from the
+        z-score of the intervention magnitude relative to the baseline
+        distribution:
+
+        * HIGH         — |Δx[i]| / σ_baseline < 0.5
+        * MODERATE     — 0.5 ≤ z < 2.0
+        * LOW          — 2.0 ≤ z < 5.0
+        * SPECULATIVE  — z ≥ 5.0  (extrapolation territory)
+    """
+
+    delta: np.ndarray
+    confidence_tiers: np.ndarray
+
+    # ------------------------------------------------------------------
+    # Array-like delegation — preserves backward compatibility with code
+    # that treated the return value as a plain ndarray.
+    # ------------------------------------------------------------------
+
+    @property
+    def shape(self) -> tuple:
+        return self.delta.shape
+
+    def mean(self, axis=None, **kwargs) -> np.ndarray:
+        return self.delta.mean(axis=axis, **kwargs)
+
+    def __array__(self, dtype=None) -> np.ndarray:
+        return np.asarray(self.delta, dtype=dtype)
+
+    def __getitem__(self, key):
+        return self.delta[key]
+
+    def __len__(self) -> int:
+        return len(self.delta)
 
 
 # ---------------------------------------------------------------------------
@@ -557,4 +685,4 @@ class CausalEffectResolver:
 # ---------------------------------------------------------------------------
 
 
-__all__ = ["CausalEffectResolver", "ResolverConfig"]
+__all__ = ["CausalEffectResolver", "ResolvedEffect", "ResolverConfig"]

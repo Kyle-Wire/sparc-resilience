@@ -3,11 +3,20 @@ assembler.py — Compose all fetched layers onto the 30m fishnet and write GeoPa
 
 Orchestrates the full data collection pipeline:
   1. Build the 30m fishnet clipped to the study boundary
-  2. Call each collect sub-module (landsat, nlcd, capa, era5, buildings, equity)
-  3. Compute AAT_residual = CAPA midday − ERA5 background
-  4. Write output GeoParquet named by temporal mode
-  5. Write data_manifest.json sidecar
-  6. Update project.yml data.file_path and data.target_column in-place
+  2. CAPA — fetch ground-truth air temperature; discover anchor dates
+  3. Landsat — search for scenes within ±tolerance of each CAPA anchor date
+  4. NLCD — land cover, impervious surface, canopy
+  5. ERA5 — background air temperature
+  6. Compute AAT_residual = CAPA midday − ERA5 background
+  7. Buildings + SVF
+  8. Equity layers
+  9. Write output GeoParquet named by temporal mode
+  10. Write data_manifest.json sidecar
+  11. Update project.yml data.file_path and data.target_column in-place
+
+CAPA runs first because its measurement dates are the prediction targets.
+All covariates (Landsat spectral state, ERA5 background) are aligned to
+those dates via a TemporalWindow, not the other way around.
 
 The assembler is the only module that imports the other collect sub-modules.
 It accepts a CollectConfig dataclass to keep the caller interface stable.
@@ -124,15 +133,47 @@ def run(config: CollectConfig) -> AssemblerResult:
     # --- Step 1: Build 30m fishnet ---
     fishnet = _build_fishnet(config.boundary)
 
-    # --- Step 2: Landsat (spectral indices + LST) ---
+    # --- Step 2: CAPA — fetch label data first, discover anchor dates ---
+    # CAPA ground-truth air temperature measurements define the prediction
+    # targets.  Their acquisition dates become the canonical temporal anchors
+    # for Landsat and ERA5 alignment.
+    for col in ("aat_morning", "aat_midday", "aat_night", "diurnal_aat"):
+        manifest.fetching(col)
+    from .capa import fetch_capa
+    from ._temporal import TemporalWindow
+    try:
+        fishnet, capa_dates = fetch_capa(
+            fishnet, config.boundary.bbox, config.date_start, config.date_end
+        )
+        for col, src in [
+            ("aat_morning",  "NOAA CAPA / Open-Meteo"),
+            ("aat_midday",   "NOAA CAPA / Open-Meteo"),
+            ("aat_night",    "NOAA CAPA / Open-Meteo"),
+            ("diurnal_aat",  "Derived: CAPA midday − night"),
+        ]:
+            manifest.update(col, coverage_pct=_coverage(fishnet, col), source_name=src)
+    except Exception as exc:
+        for col in ("aat_morning", "aat_midday", "aat_night", "diurnal_aat"):
+            manifest.error(col, str(exc))
+        capa_dates = []
+
+    # Build the temporal search contract from CAPA anchor dates.
+    # Landsat will search within ±tolerance_days of each anchor.
+    # If CAPA failed (empty list), Landsat falls back to the full date range.
+    window = TemporalWindow.from_capa_dates(
+        capa_dates,
+        date_start=config.date_start,
+        date_end=config.date_end,
+    )
+
+    # --- Step 3: Landsat (spectral indices + LST) — aligned to CAPA anchors ---
     manifest.fetching("lst")
     from .landsat import fetch_landsat
     try:
-        fishnet, scene_dates = fetch_landsat(
+        fishnet = fetch_landsat(
             fishnet,
             config.boundary.bbox,
-            config.date_start,
-            config.date_end,
+            window,
             cloud_cover_max=config.cloud_cover_max,
             temporal_mode=config.temporal_mode,
             enabled_indices=config.enabled_indices,
@@ -144,9 +185,8 @@ def run(config: CollectConfig) -> AssemblerResult:
     except Exception as exc:
         for idx in config.enabled_indices:
             manifest.error(idx, str(exc))
-        scene_dates = []
 
-    # --- Step 3: NLCD ---
+    # --- Step 4: NLCD ---
     for col in ("pct_impervious", "pct_canopy", "land_cover"):
         manifest.fetching(col)
     from .nlcd import fetch_nlcd
@@ -162,7 +202,7 @@ def run(config: CollectConfig) -> AssemblerResult:
         for col in ("pct_impervious", "pct_canopy", "land_cover"):
             manifest.error(col, str(exc))
 
-    # --- Step 4: ERA5 ---
+    # --- Step 5: ERA5 ---
     manifest.fetching("era5_t2m")
     from .era5 import fetch_era5
     try:
@@ -171,27 +211,6 @@ def run(config: CollectConfig) -> AssemblerResult:
                         source_name="Open-Meteo ERA5")
     except Exception as exc:
         manifest.error("era5_t2m", str(exc))
-
-    # --- Step 5: CAPA (requires Landsat scene dates) ---
-    for col in ("aat_morning", "aat_midday", "aat_night", "diurnal_aat"):
-        manifest.fetching(col)
-    if scene_dates:
-        from .capa import fetch_capa
-        try:
-            fishnet = fetch_capa(fishnet, config.boundary.bbox, scene_dates)
-            for col, src in [
-                ("aat_morning",  "NOAA CAPA / Open-Meteo"),
-                ("aat_midday",   "NOAA CAPA / Open-Meteo"),
-                ("aat_night",    "NOAA CAPA / Open-Meteo"),
-                ("diurnal_aat",  "Derived: CAPA midday − night"),
-            ]:
-                manifest.update(col, coverage_pct=_coverage(fishnet, col), source_name=src)
-        except Exception as exc:
-            for col in ("aat_morning", "aat_midday", "aat_night", "diurnal_aat"):
-                manifest.error(col, str(exc))
-    else:
-        for col in ("aat_morning", "aat_midday", "aat_night", "diurnal_aat"):
-            manifest.error(col, "No valid Landsat scene dates — CAPA alignment not possible")
 
     # --- Step 6: AAT residual ---
     manifest.fetching("aat_residual")
@@ -293,8 +312,8 @@ def run(config: CollectConfig) -> AssemblerResult:
         manifest_path=manifest_path,
         stations_path=stations_path,
         n_cells=len(fishnet),
-        n_scenes=len(scene_dates),
-        scene_dates=scene_dates,
+        n_scenes=len(capa_dates),
+        scene_dates=capa_dates,
         manifest=manifest,
         building_tier=bldg_tier,
     )

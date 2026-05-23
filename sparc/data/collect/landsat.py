@@ -63,15 +63,14 @@ LST_OFFSET = 149.0          # K; subtract 273.15 for °C
 def fetch_landsat(
     fishnet_gdf: object,
     bbox: tuple[float, float, float, float],
-    date_start: date,
-    date_end: date,
+    window: "TemporalWindow",
     *,
     cloud_cover_max: float = 20.0,
     temporal_mode: TemporalMode = "composite",
     enabled_indices: Optional[list[str]] = None,
     cache_dir: Optional[Path] = None,
-) -> tuple[object, list[date]]:
-    """Fetch Landsat data and compute spectral indices + LST.
+) -> object:
+    """Fetch Landsat data aligned to CAPA anchor dates.
 
     Parameters
     ----------
@@ -79,8 +78,11 @@ def fetch_landsat(
         30m analysis grid.
     bbox : (minx, miny, maxx, maxy)
         Study bounding box in EPSG:4326.
-    date_start, date_end : date
-        Acquisition date range.
+    window : TemporalWindow
+        Temporal search contract.  ``window.anchor_dates`` are the CAPA
+        measurement dates; Landsat searches within ``±window.tolerance_days``
+        of each anchor.  If ``anchor_dates`` is empty, falls back to searching
+        the full ``window.date_start`` → ``window.date_end`` range.
     cloud_cover_max : float
         Maximum cloud cover percentage (0–100).  Default 20%.
     temporal_mode : "single" | "composite" | "panel"
@@ -92,45 +94,129 @@ def fetch_landsat(
 
     Returns
     -------
-    (gdf, scene_dates)
-        ``gdf`` — fishnet (or panel) GeoDataFrame with spectral columns.
-        ``scene_dates`` — list of acquisition dates used (for CAPA alignment).
+    gpd.GeoDataFrame
+        Fishnet (or panel) with spectral columns.  NaN-filled when no scenes
+        are available — never raises on empty STAC results.
+
+    Raises
+    ------
+    TypeError
+        If ``window`` is not a ``TemporalWindow`` instance.  The old bare
+        ``date_start / date_end`` positional interface has been removed.
     """
+    from ._temporal import TemporalWindow as _TemporalWindow
+    if not isinstance(window, _TemporalWindow):
+        raise TypeError(
+            f"fetch_landsat() expects a TemporalWindow as the third argument, "
+            f"got {type(window).__name__}. The bare date_start/date_end interface "
+            f"has been replaced — use TemporalWindow.from_capa_dates()."
+        )
+
     cache_dir = cache_dir or _default_cache_dir()
     enabled = set(enabled_indices or list(SPECTRAL_INDEX_FORMULAS.keys()) + ["lst"])
 
-    scenes = _query_stac(bbox, date_start, date_end, cloud_cover_max)
-    if not scenes:
-        raise RuntimeError(
-            f"No Landsat scenes found for bbox {bbox} between "
-            f"{date_start} and {date_end} with cloud cover ≤ {cloud_cover_max}%"
+    if window.anchor_dates:
+        scene_arrays, scene_dates = _fetch_anchored_scenes(
+            bbox, window, enabled, cache_dir, cloud_cover_max, temporal_mode
         )
+    else:
+        # No CAPA anchors: fall back to full date-range search (degraded mode)
+        scene_arrays, scene_dates = _fetch_full_range_scenes(
+            bbox, window.date_start, window.date_end, enabled, cache_dir,
+            cloud_cover_max, temporal_mode
+        )
+
+    if not scene_arrays:
+        return _nan_fishnet(fishnet_gdf, enabled)
+
+    if temporal_mode == "panel":
+        return _build_panel(fishnet_gdf, scene_arrays, scene_dates)
+
+    composite = _median_composite(scene_arrays)
+    return _assign_arrays_to_fishnet(fishnet_gdf, composite)
+
+
+def _nan_fishnet(fishnet_gdf: object, enabled: set) -> object:
+    """Return fishnet with NaN columns for all requested indices."""
+    try:
+        gdf = fishnet_gdf.copy()  # type: ignore[union-attr]
+    except Exception:
+        gdf = fishnet_gdf
+    for idx in list(enabled) + ["lst"]:
+        gdf[idx] = float("nan")  # type: ignore[index]
+    return gdf
+
+
+def _fetch_anchored_scenes(
+    bbox: tuple,
+    window: "TemporalWindow",
+    enabled: set,
+    cache_dir: Path,
+    cloud_max: float,
+    temporal_mode: str,
+) -> tuple[list, list]:
+    """Fetch one best-match Landsat scene per CAPA anchor date."""
+    scene_arrays: list[dict] = []
+    scene_dates: list[date] = []
+
+    for anchor in window.anchor_dates:
+        start, end = window.search_range(anchor)
+        try:
+            scenes = _query_stac(bbox, start, end, cloud_max)
+        except RuntimeError:
+            scenes = []
+
+        if not scenes:
+            continue
+
+        # Report date offset via TemporalWindow warnings
+        available_dates = [_parse_date(s["datetime"]) for s in scenes]
+        closest_date, _offset = window.closest_match(available_dates, anchor)
+
+        # Pick the scene with the closest acquisition date to the anchor
+        target = min(scenes, key=lambda s: abs((_parse_date(s["datetime"]) - anchor).days))
+        bands = _download_bands(target, bbox, enabled, cache_dir)
+        if bands is None:
+            continue
+
+        scene_arrays.append(_compute_indices(bands, enabled))
+        scene_dates.append(closest_date or anchor)
+
+    return scene_arrays, scene_dates
+
+
+def _fetch_full_range_scenes(
+    bbox: tuple,
+    date_start: date,
+    date_end: date,
+    enabled: set,
+    cache_dir: Path,
+    cloud_max: float,
+    temporal_mode: str,
+) -> tuple[list, list]:
+    """Fallback: fetch all Landsat scenes in the full date range."""
+    try:
+        scenes = _query_stac(bbox, date_start, date_end, cloud_max)
+    except RuntimeError:
+        return [], []
+
+    if not scenes:
+        return [], []
 
     if temporal_mode == "single":
         scenes = [min(scenes, key=lambda s: s["cloud_cover"])]
 
+    scene_arrays: list[dict] = []
     scene_dates: list[date] = []
-    scene_arrays: list[dict[str, np.ndarray]] = []
-
     for scene in scenes:
         acq_date = _parse_date(scene["datetime"])
         bands = _download_bands(scene, bbox, enabled, cache_dir)
         if bands is None:
             continue
-        indices = _compute_indices(bands, enabled)
-        scene_arrays.append(indices)
+        scene_arrays.append(_compute_indices(bands, enabled))
         scene_dates.append(acq_date)
 
-    if not scene_arrays:
-        raise RuntimeError("No Landsat scenes could be downloaded for the study area.")
-
-    if temporal_mode == "panel":
-        return _build_panel(fishnet_gdf, scene_arrays, scene_dates), scene_dates
-
-    # composite or single → median across scenes
-    composite = _median_composite(scene_arrays)
-    gdf = _assign_arrays_to_fishnet(fishnet_gdf, composite)
-    return gdf, scene_dates
+    return scene_arrays, scene_dates
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +268,7 @@ def _query_stac_endpoint(
     payload = {
         "collections": [collection],
         "bbox": [minx, miny, maxx, maxy],
-        "datetime": f"{date_start.isoformat()}/{date_end.isoformat()}",
+        "datetime": f"{date_start.isoformat()}T00:00:00Z/{date_end.isoformat()}T23:59:59Z",
         "limit": 200,
     }
     body = json.dumps(payload).encode("utf-8")

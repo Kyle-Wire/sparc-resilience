@@ -445,7 +445,11 @@ def run_wager2025_gaps(
     # ── Triangulation report (audit registry snapshot) ─────────────────
     try:
         from sparc.causal import _audit
-        _audit._autodetect()
+        # Note: _autodetect() is intentionally NOT called here.
+        # Gaps self-register via mark_addressed() as they run; calling
+        # _autodetect() would eagerly import all 10 gap modules (including
+        # heavy torch/PyMC dependencies) even for disabled gaps.
+        # Use `sparc audit causal` from the CLI to run _autodetect() explicitly.
         report_text = _audit.report()
         with open(os.path.join(output_dir, "wager2025_audit_report.txt"),
                   "w", encoding="utf-8") as fh:

@@ -1098,6 +1098,133 @@ class MultiSourcePriorAggregator:
         print("=" * 70)
 
 
+class PhysicsCalibrationModel:
+    """Single deep interface for physics-constrained delta adjustment.
+
+    Orchestrates the sign guard, ±3σ magnitude cap, and shrinkage blending
+    that were previously spread across :func:`_apply_physics_guard` (in
+    ``direct_effect.py``) and :class:`CoefficientCalibrator`.
+
+    Parameters
+    ----------
+    physics_priors : dict, optional
+        Mapping ``{variable: {"direction": ..., "lit_coef": ..., ...}}``.
+        Same format consumed by ``_apply_physics_guard`` and
+        ``PhysicsLitStrategy``.
+    shrinkage_weight : float
+        Weight on the literature coefficient when blending with an
+        empirical estimate (default 0.3, i.e. 30 % literature).
+
+    Example
+    -------
+    >>> model = PhysicsCalibrationModel(
+    ...     physics_priors={"Pct_Canopy": {"direction": "cooling",
+    ...                                     "lit_coef": -0.28}},
+    ...     shrinkage_weight=0.3,
+    ... )
+    >>> delta_constrained = model.constrain(delta_array, "Pct_Canopy")
+    >>> beta_blended     = model.apply_shrinkage(empirical_beta, "Pct_Canopy")
+    """
+
+    def __init__(
+        self,
+        physics_priors: Optional[Dict[str, dict]] = None,
+        shrinkage_weight: float = 0.3,
+    ) -> None:
+        if not 0.0 <= shrinkage_weight <= 1.0:
+            raise ValueError(
+                f"shrinkage_weight must be in [0, 1], got {shrinkage_weight}"
+            )
+        self._priors: Dict[str, dict] = physics_priors or {}
+        self._shrinkage_weight = shrinkage_weight
+
+    def constrain(self, delta: "np.ndarray", variable: str) -> "np.ndarray":
+        """Apply sign guard + ±3σ cap to *delta*.
+
+        Parameters
+        ----------
+        delta : np.ndarray
+            Per-cell effect estimate, shape ``(n_cells,)`` or broadcastable.
+        variable : str
+            Variable name — looked up in the priors dict for direction.
+
+        Returns
+        -------
+        np.ndarray
+            Constrained delta, same shape as input.
+        """
+        import numpy as np
+
+        delta = np.asarray(delta, dtype=np.float64).copy()
+        prior = self._priors.get(variable, {})
+        direction = prior.get("direction")
+
+        # --- Sign guard ---
+        if direction in ("negative", "decrease", "cooling"):
+            wrong_sign = delta > 0
+        elif direction in ("positive", "increase", "warming"):
+            wrong_sign = delta < 0
+        else:
+            wrong_sign = np.zeros(len(delta), dtype=bool)
+
+        if wrong_sign.any():
+            delta = np.where(wrong_sign, 0.0, delta)
+            warnings.warn(
+                f"PhysicsCalibrationModel: {int(wrong_sign.sum())} cells for "
+                f"'{variable}' zeroed (wrong sign vs. literature prior).",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+        # --- ±3σ magnitude cap ---
+        abs_d = np.abs(delta)
+        d_mean = float(np.mean(abs_d))
+        d_std = float(np.std(abs_d))
+        cap = d_mean + 3.0 * d_std
+        if cap > 1e-10:
+            clipped = np.clip(delta, -cap, cap)
+            if not np.array_equal(clipped, delta):
+                n_clipped = int(np.sum(np.abs(delta) > cap))
+                warnings.warn(
+                    f"PhysicsCalibrationModel: {n_clipped} cells for '{variable}' "
+                    "clipped at ±3σ magnitude cap.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                delta = clipped
+
+        return delta
+
+    def apply_shrinkage(self, empirical_beta: float, variable: str) -> float:
+        """Blend an empirical β with the literature prior using shrinkage.
+
+        Formula::
+
+            β_blended = w * β_lit + (1 - w) * β_empirical
+
+        where *w* is ``shrinkage_weight``.  When ``lit_coef`` is absent or
+        zero for the given variable, ``empirical_beta`` is returned unchanged.
+
+        Parameters
+        ----------
+        empirical_beta : float
+            β estimate from local data (e.g. NUTS posterior mean).
+        variable : str
+            Variable name.
+
+        Returns
+        -------
+        float
+            Blended coefficient.
+        """
+        prior = self._priors.get(variable, {})
+        beta_lit = float(prior.get("lit_coef", 0.0))
+        if beta_lit == 0.0:
+            return empirical_beta
+        w = self._shrinkage_weight
+        return w * beta_lit + (1.0 - w) * empirical_beta
+
+
 # Example usage and testing
 if __name__ == "__main__":
     print("\n" + "="*80)

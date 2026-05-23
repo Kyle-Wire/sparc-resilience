@@ -3,7 +3,7 @@ import { useRef, useCallback } from "react";
 const SECTIONS = [
   { label: "Setup", pages: ["Project", "Data", "Data Collection"] },
   { label: "Analysis", pages: ["DAG", "Variables", "Physics", "Scenarios", "Models"] },
-  { label: "Pipeline", pages: ["Run", "Insights", "Decision Support", "Report"] },
+  { label: "Pipeline", pages: ["Run", "Results", "Decision Support", "Report"] },
 ] as const;
 
 const PAGES = SECTIONS.flatMap((s) => s.pages) as unknown as readonly PageName[];
@@ -11,7 +11,7 @@ const PAGES = SECTIONS.flatMap((s) => s.pages) as unknown as readonly PageName[]
 export type PageName =
   | "Project" | "Data" | "Data Collection"
   | "DAG" | "Variables" | "Physics" | "Scenarios" | "Models"
-  | "Run" | "Insights" | "Decision Support" | "Report";
+  | "Run" | "Results" | "Decision Support" | "Report";
 
 interface SidebarProps {
   currentPage: PageName;
@@ -143,6 +143,8 @@ export default function Sidebar({
                 <button
                   key={p}
                   onClick={() => !disabled && onNavigate(p as PageName)}
+                  title={disabled ? "Open or create a project first (→ 01 Project)" : undefined}
+                  aria-disabled={disabled || undefined}
                   style={{
                     display: "flex",
                     alignItems: "center",

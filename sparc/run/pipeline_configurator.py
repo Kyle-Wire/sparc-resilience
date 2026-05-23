@@ -58,12 +58,18 @@ class PipelineConfigurator:
         
         # Comprehensive model hyperparameters
         self._initialize_model_defaults()
-        # Comprehensive model hyperparameters
-        self._initialize_model_defaults()
         
     def _initialize_model_defaults(self):
-        """Initialize default hyperparameters for all models"""
-        
+        """Initialize default hyperparameters for all models.
+
+        GWR, GWRF, and GGPGAM defaults are sourced from
+        ``stage_config.get_model_defaults()`` — the single source of truth.
+        Only OLS, meta-ensemble, and spatial-CV defaults (not present in
+        stage_config) are defined inline here.
+        """
+        from sparc.run.stage_config import get_model_defaults
+        _model_defaults = get_model_defaults()
+
         # OLS Model (Ordinary Least Squares)
         self.ols_defaults = {
             'fit_intercept': True,
@@ -73,43 +79,13 @@ class PipelineConfigurator:
             'positive': False  # Force coefficients to be positive
         }
         
-        # GWR Model (Geographically Weighted Regression)
-        self.gwr_defaults = {
-            'bandwidth': None,  # Will be set from default_bandwidths
-            'kernel': 'gaussian',  # 'gaussian', 'exponential', 'bisquare'
-            'coords_cols': None,  # Coordinate column names
-            'alpha': 0.1,  # L2 regularization strength
-            'min_points': 50  # Minimum number of points for local regression
-        }
-        
-        # GWRF Model (Geographically Weighted Random Forest)
-        self.gwrf_defaults = {
-            'n_estimators': 100,  # Number of trees in each local forest
-            'k_neighbors': 100,  # Number of neighbors for spatial weighting
-            'min_samples_leaf': 5,  # Minimum samples at leaf node
-            'n_jobs': 1,  # Number of jobs (1 for compatibility with spatial CV)
-            'subsample_fraction': None,  # Fraction of locations to fit models at
-            'subsample_n': None  # Number of locations to fit models at
-        }
-        
-        # GGPGAM Model (Geographically Guided Penalized GAM)
-        self.ggpgam_defaults = {
-            'n_splines': 5,  # Number of splines for non-spatial features
-            'n_spatial_bases': 10,  # Number of basis functions for spatial effects
-            'lam': 0.6,  # Smoothing parameter (regularization strength)
-            'fit_intercept': True,  # Include intercept term
-            'max_iter': 100,  # Maximum iterations for fitting
-            'tol': 1e-4,  # Tolerance for convergence
-            'verbose': False,  # Print fitting progress
-            'callbacks': None,  # Callback functions during fitting
-            'distribution': 'normal',  # Distribution family for GAM
-            'link': 'identity',  # Link function
-            'dtype': 'float64',  # Data type for computations
-            'scale': None,  # Scale parameter (if None, estimated)
-            'fit_linear': False,  # Include linear terms alongside splines
-            'constraints': None,  # Constraints on coefficients
-            'weights': None  # Sample weights
-        }
+        # GWR / GWRF / GGPGAM — delegate to stage_config (single source of truth)
+        self.gwr_defaults = dict(_model_defaults["gwr"])
+        self.gwrf_defaults = dict(_model_defaults["gwrf"])
+        self.ggpgam_defaults = dict(_model_defaults["ggpgam"])
+        # Extra keys that PipelineConfigurator callers may rely on but are
+        # not in the core stage_config defaults:
+        self.gwr_defaults.setdefault('bandwidth', None)
         
         # Meta Ensemble hyperparameters (neural-only)
         self.meta_ensemble_defaults = {

@@ -24,6 +24,7 @@ if _project_root not in sys.path:
 from sparc.run.pipeline_paths import get_paths
 from sparc.config.config import load_config
 from sparc.data.data_utils import load_and_preprocess_data
+from sparc.run.correlogram_report import CorrelogramReport, Degradation
 
 warnings.filterwarnings('ignore')
 
@@ -241,6 +242,7 @@ class CorrelogramSpatialAnalyzer:
         # succeeds we promote ``best_kernel`` to "matern" and attach the
         # full posterior summary; the legacy heuristic above is kept as
         # a guaranteed-non-empty fallback for back-compat.
+        _per_var_degradations: list[Degradation] = []
         matern_fit_payload: dict | None = None
         try:
             lag_dist_arr = np.asarray(
@@ -278,6 +280,9 @@ class CorrelogramSpatialAnalyzer:
         except Exception as _exc:  # noqa: BLE001
             print(f"  [WARNING] Matern fit unavailable for {variable_name}: {_exc}")
             matern_fit_payload = None
+            _per_var_degradations.append(
+                Degradation(phase="matern_fit", fallback_used="none", reason=str(_exc))
+            )
 
         # ─── Phase 2: Anisotropic Matérn fit (directional correlogram) ───
         # Bins point pairs by both lag and angle (4 directors by default)
@@ -319,7 +324,10 @@ class CorrelogramSpatialAnalyzer:
         except Exception as _exc:  # noqa: BLE001
             print(f"  Anisotropy fit unavailable for {variable_name}: {_exc}")
             anisotropy_payload = None
-        
+            _per_var_degradations.append(
+                Degradation(phase="anisotropy_fit", fallback_used="isotropic", reason=str(_exc))
+            )
+
         # Calculate additional spatial statistics
         max_moran = max(moran_values) if moran_values else 0
         
@@ -340,6 +348,7 @@ class CorrelogramSpatialAnalyzer:
             },
             'matern_fit': matern_fit_payload,
             'anisotropy': anisotropy_payload,
+            'degradations': _per_var_degradations,
         }
         
         return analysis_result
@@ -447,6 +456,87 @@ class CorrelogramSpatialAnalyzer:
         validation_results = {}
         return optimal_block_size, validation_results
 
+
+# ---------------------------------------------------------------------------
+# Pure helper — assembles a CorrelogramReport from the payloads produced by
+# main().  Extracted so it can be unit-tested without running the full pipeline.
+# ---------------------------------------------------------------------------
+
+def _build_correlogram_report(
+    *,
+    all_results: dict,
+    model_bandwidths: dict,
+    optimal_cv_block_size: float,
+    block_size_source: str,
+    target_variable: "str | None",
+    matern_artifact_payload: "dict | None",
+    anisotropy_artifact_payload: "dict | None",
+    effective_range_matrix_payload: "dict | None",
+    cross_range_uplift: "dict | None" = None,
+    dataset_profile: "dict | None" = None,
+    sampling_config: "dict | None" = None,
+    degradations: "list[Degradation] | None" = None,
+) -> CorrelogramReport:
+    """Assemble a :class:`CorrelogramReport` from Stage 0 assembled payloads.
+
+    Parameters
+    ----------
+    all_results:
+        Per-variable analysis results dict (keyed by variable name).
+    model_bandwidths:
+        Model-level bandwidth mapping from :meth:`determine_model_bandwidths`.
+    optimal_cv_block_size:
+        Final spatial-CV block size in metres.
+    block_size_source:
+        How the block size was determined (``"user"`` / ``"correlogram"`` …).
+    target_variable:
+        The outcome variable name; excluded from ``bandwidths``.
+    matern_artifact_payload, anisotropy_artifact_payload, effective_range_matrix_payload:
+        Phase 1-4 payloads (``None`` when the phase degraded).
+    cross_range_uplift:
+        Phase 4 CV uplift event dict, or ``None``.
+    dataset_profile:
+        Dataset-level summary from :class:`~sparc.run.dataset_profiler.DatasetProfiler`.
+    sampling_config:
+        NUTS / permutation budgets used during Stage 0.
+    degradations:
+        :class:`Degradation` objects collected during ``main()``.
+    """
+    if degradations is None:
+        degradations = []
+
+    bandwidths: dict[str, float] = {
+        var: float(res["optimal_bandwidth"])
+        for var, res in all_results.items()
+        if res.get("optimal_bandwidth") is not None
+    }
+    variable_effective_ranges: dict[str, float] = {
+        var: float(res["effective_range"])
+        for var, res in all_results.items()
+        if res.get("effective_range") is not None
+    }
+    stationarity_warnings: list[str] = []
+    if matern_artifact_payload is not None:
+        stationarity_warnings = list(
+            matern_artifact_payload.get("stationarity_warnings", [])
+        )
+
+    return CorrelogramReport(
+        bandwidths=bandwidths,
+        block_size=float(optimal_cv_block_size),
+        block_size_source=block_size_source,
+        stationarity_warnings=stationarity_warnings,
+        variable_effective_ranges=variable_effective_ranges,
+        cross_range_uplift=cross_range_uplift,
+        dataset_profile=dataset_profile,
+        degradations=list(degradations),
+        sampling_config=sampling_config,
+        matern_fits=matern_artifact_payload,
+        anisotropy_fits=anisotropy_artifact_payload,
+        effective_range_matrix=effective_range_matrix_payload,
+    )
+
+
 def main(fast_mode=False):
     """
     Main function to run correlogram-based spatial analysis on all variables
@@ -457,7 +547,14 @@ def main(fast_mode=False):
         If True, use reduced sample sizes and fewer lags for faster analysis
     """
     print("\n=== SPARC Correlogram-Based Spatial Analysis ===\n")
-    
+
+    # Collect Degradation records from all fallback paths.
+    # A Degradation is appended each time a non-critical phase is caught and
+    # falls back to a default; the list is attached to the CorrelogramReport
+    # at the end of main() so downstream consumers can see execution health
+    # without grepping logs.
+    _degradations: list[Degradation] = []
+
     if fast_mode:
         print("[FAST] Running in FAST MODE - reduced precision but much faster")
     
@@ -609,6 +706,12 @@ def main(fast_mode=False):
 
     all_results = {name: result for name, result in worker_results}
 
+    # Harvest per-variable degradations from worker results into _degradations.
+    # Each worker returns a 'degradations' key; aggregate here in the main process.
+    for _var, _res in all_results.items():
+        for _d in _res.get("degradations", []):
+            _degradations.append(_d)
+
     # Report any variables that were skipped (not in data columns)
     for variable in all_variables:
         if variable not in data.columns:
@@ -698,7 +801,10 @@ def main(fast_mode=False):
                         optimal_cv_block_size = float(_new_block)
             except Exception as _exc:  # noqa: BLE001
                 print(f"Phase 4 CV uplift skipped: {_exc}")
-    
+                _degradations.append(
+                    Degradation(phase="phase4_uplift", fallback_used="none", reason=str(_exc))
+                )
+
     # Create comprehensive results structure
     comprehensive_results = {
         'metadata': {
@@ -766,6 +872,9 @@ def main(fast_mode=False):
     except Exception as _exc:  # noqa: BLE001
         print(f"Matérn artifact assembly failed: {_exc}")
         matern_artifact_payload = None
+        _degradations.append(
+            Degradation(phase="matern_fit", fallback_used="none", reason=str(_exc))
+        )
 
     # ─── Phase 2: Anisotropy artifact ────────────────────────────────────
     # Aggregates per-variable anisotropy posteriors (ellipse + dominant
@@ -791,6 +900,9 @@ def main(fast_mode=False):
     except Exception as _exc:  # noqa: BLE001
         print(f"Anisotropy artifact assembly failed: {_exc}")
         anisotropy_artifact_payload = None
+        _degradations.append(
+            Degradation(phase="anisotropy_fit", fallback_used="none", reason=str(_exc))
+        )
 
     # ─── Phase 3: Cross-correlogram kernel field ──────────────────────────
     # V×V matrix-valued correlogram with sym/antisym decomposition.  The
@@ -835,6 +947,9 @@ def main(fast_mode=False):
     except Exception as _exc:  # noqa: BLE001
         print(f"Cross-correlogram assembly failed: {_exc}")
         cross_correlogram_payload = None
+        _degradations.append(
+            Degradation(phase="cross_correlogram", fallback_used="none", reason=str(_exc))
+        )
 
     # ─── Phase 4: Per-pair effective-range matrix ────────────────────────
     # Build the V×V effective-range matrix from the cross-correlogram per-pair
@@ -864,6 +979,9 @@ def main(fast_mode=False):
         except Exception as _exc:  # noqa: BLE001
             print(f"Effective-range matrix assembly failed: {_exc}")
             effective_range_matrix_payload = None
+            _degradations.append(
+                Degradation(phase="cross_correlogram", fallback_used="none", reason=str(_exc))
+            )
 
     # ─── Phase 6: Scale-hierarchy / fractal-signature diagnostic ────────
     # Per-variable spectral exponent β, lacunarity, κ scale-drift, and
@@ -913,6 +1031,9 @@ def main(fast_mode=False):
     except Exception as _exc:  # noqa: BLE001
         print(f"Scale-hierarchy diagnostic failed: {_exc}")
         scale_hierarchy_payload = None
+        _degradations.append(
+            Degradation(phase="artifact_write", fallback_used="none", reason=str(_exc))
+        )
 
     # Save comprehensive results (replaces variogram_analysis_results.json).
     # Now persisted via ArtifactStore below; legacy disk path retained only
@@ -1093,6 +1214,9 @@ def main(fast_mode=False):
                 )
         except Exception as _exc:  # noqa: BLE001
             print(f"Unified KernelField persistence skipped: {_exc}")
+            _degradations.append(
+                Degradation(phase="artifact_write", fallback_used="none", reason=str(_exc))
+            )
 
         print("Correlogram results + summary written to artifacts.db (stage=0)")
     elif disk_writes_enabled():
@@ -1134,7 +1258,52 @@ def main(fast_mode=False):
     
     # -- Auto-wire per-variable bandwidths into pipeline_config.json --
     _auto_wire_bandwidths(all_results, model_bandwidths, optimal_cv_block_size, paths, target_variable=target_variable)
-    
+
+    # ─── Build and persist the typed CorrelogramReport ───────────────────
+    # This is the canonical typed seam between Stage 0 and all downstream
+    # consumers.  It is built here — after all phases have run — so that the
+    # degradations list is complete.
+    _sampling_cfg = {
+        "fast_mode": fast_mode,
+        "n_samples": 400 if fast_mode else 800,
+        "n_warmup": 200 if fast_mode else 500,
+        "n_chains": 2,
+        "n_perm": 0 if fast_mode else 20,
+        "sample_cap": max_sample_size,
+    }
+    correlogram_report = _build_correlogram_report(
+        all_results=all_results,
+        model_bandwidths=model_bandwidths,
+        optimal_cv_block_size=optimal_cv_block_size,
+        block_size_source=block_size_source,
+        target_variable=target_variable,
+        matern_artifact_payload=matern_artifact_payload,
+        anisotropy_artifact_payload=anisotropy_artifact_payload,
+        effective_range_matrix_payload=effective_range_matrix_payload,
+        cross_range_uplift=locals().get("cv_cross_range_uplift"),
+        dataset_profile=profile,
+        sampling_config=_sampling_cfg,
+        degradations=_degradations,
+    )
+    if _store is not None:
+        try:
+            _store.write_struct(
+                stage="0",
+                artifact_id="correlogram_report",
+                payload=convert_numpy_types(correlogram_report.to_artifact()),
+                producer="correlogram_analysis.main",
+                consumers=[
+                    "pipeline:stage1_gwen",
+                    "pipeline:stage2_mgwr",
+                    "server:/results/correlogram",
+                    "report:correlogram",
+                ],
+            )
+            _status = "clean" if correlogram_report.is_clean else f"{len(correlogram_report.degradations)} degradation(s)"
+            print(f"CorrelogramReport written to artifacts.db (stage=0, id=correlogram_report, status={_status})")
+        except Exception as _exc:  # noqa: BLE001
+            print(f"CorrelogramReport persistence skipped: {_exc}")
+
     return comprehensive_results
 
 

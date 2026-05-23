@@ -46,4 +46,12 @@ __all__ = [
     "maup_sensitivity",
     # PDE identifiability
     "pde_identifiability",
+    # Audit public interface
+    "mark_addressed",
+    "audit_report",
 ]
+
+# ---------------------------------------------------------------------------
+# Audit public interface — callers must use these, not sparc.causal._audit
+# ---------------------------------------------------------------------------
+from sparc.causal._audit import mark_addressed, report as audit_report  # noqa: E402

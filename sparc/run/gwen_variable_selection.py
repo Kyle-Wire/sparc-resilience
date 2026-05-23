@@ -32,6 +32,9 @@ if _project_root not in sys.path:
 from sparc.config.config import load_config
 from sparc.data.data_utils import load_data, prepare_data
 from sparc.models.gwen import GWENModel
+from sparc.run.gwen_tuning import suggest_gwen_config
+from sparc.run.gwen_diagnostics import GWENDiagnosticBuilder
+from sparc.run.gwen_handoff import GWENApprovalGate, SelectionDecision
 
 
 def setup_output_directory(output_dir):
@@ -585,20 +588,34 @@ def main(config_path=None, fast_mode=False):
 
         # Auto-suggest params from correlogram if available
         gwen_cfg = config.get('gwen', {})
-        if gwen_cfg.get('auto_tune', True):
-            try:
-                correlogram_dir = str(_gwen_paths.stage0_dir)
-            except Exception:
-                correlogram_dir = os.path.join(str(_gwen_paths.output_dir), 'Stage_0_Correlogram')
-            suggestions = auto_suggest_gwen_params(config, correlogram_dir=correlogram_dir)
-            if suggestions:
-                # Merge suggestions (user config takes precedence)
-                for k, v in suggestions.items():
-                    if not k.startswith('_') and k not in gwen_params:
-                        gwen_params[k] = v
-                        print(f"   Auto-tuned {k} = {v}")
-                if '_condition_number' in suggestions:
-                    print(f"   High multicollinearity detected (cond={suggestions['_condition_number']:.0f}), using L1-heavy ratios")
+        try:
+            correlogram_dir = str(_gwen_paths.stage0_dir)
+        except Exception:
+            correlogram_dir = os.path.join(str(_gwen_paths.output_dir), 'Stage_0_Correlogram')
+        try:
+            from sparc.registry.store import get_active_store as _gas
+            _tune_store = _gas()
+        except Exception:
+            _tune_store = None
+        _gwen_config = suggest_gwen_config(
+            config,
+            store=_tune_store,
+            correlogram_dir=correlogram_dir,
+        )
+        # Merge: config['gwen_params'] explicit values take precedence over
+        # suggest_gwen_config suggestions; quick_mode is controlled by fast_mode arg.
+        gwen_params = {
+            'k_neighbors': _gwen_config.k_neighbors,
+            'cv_folds': _gwen_config.cv_folds,
+            'n_alphas': _gwen_config.n_alphas,
+            'l1_ratios': _gwen_config.l1_ratios,
+            'sample_size': _gwen_config.sample_size,
+            'quick_mode': fast_mode,
+            'n_jobs': _gwen_config.n_jobs,
+            'selection_threshold': _gwen_config.selection_threshold,
+            'local_cv': _gwen_config.local_cv,
+        }
+        print(f"   k_neighbors={gwen_params['k_neighbors']}  cv_folds={gwen_params['cv_folds']}  threshold={gwen_params['selection_threshold']}")
 
         # Build spatial block folds if spatial_cv is enabled
         spatial_folds = None
@@ -663,7 +680,22 @@ def main(config_path=None, fast_mode=False):
         
         # Generate comprehensive diagnostics
         print("\n7. Generating comprehensive diagnostics...")
-        diagnostics = save_gwen_diagnostics(gwen, selected_features, feature_names, config, output_dir)
+        diagnostics = GWENDiagnosticBuilder.build(
+            gwen, feature_names, selection_threshold=gwen_params['selection_threshold']
+        )
+        # Persist diagnostics to artifact store (same as before)
+        try:
+            from sparc.registry.store import get_active_store as _gas2
+            _diag_store = _gas2()
+        except Exception:
+            _diag_store = None
+        if _diag_store is not None:
+            _diag_store.write_struct(
+                stage="1",
+                artifact_id="gwen_diagnostics",
+                payload=diagnostics,
+                producer="gwen_variable_selection.main",
+            )
         
         # Create diagnostic plots
         create_gwen_diagnostic_plots(gwen, feature_names, output_dir)
@@ -732,19 +764,63 @@ def main(config_path=None, fast_mode=False):
         
         # Print comprehensive summary
         print_results_summary(selected_features, feature_names, importance_df, output_dir)
-        
-        # Check if approval already exists (for pipeline automation)
+
+        # ── Typed approval gate ────────────────────────────────────────────────
+        # Record GWEN's result so the gate can produce a typed handoff.
+        original_predictors = list(config.get('predictors', {}).get('base_model') or feature_names)
+        try:
+            from sparc.registry.store import get_active_store as _gas3
+            _gate_store = _gas3()
+        except Exception:
+            _gate_store = None
+        gate = GWENApprovalGate(store=_gate_store)
+        gate.record_gwen_result(
+            gwen_selected_features=selected_features,
+            original_predictors=original_predictors,
+            selection_threshold=gwen_params['selection_threshold'],
+        )
+
+        # Check for approval sentinel — support both approval paths.
         approval_file = os.path.join(output_dir, 'gwen_approved.txt')
+        original_approval_file = os.path.join(output_dir, 'gwen_approved_original.txt')
+
+        if os.path.exists(original_approval_file):
+            # User chose to keep their original predictor set despite GWEN results.
+            handoff = gate.approve_original()
+            print(f"\n[OK] GWEN stage complete — keeping original predictor set "
+                  f"({len(handoff.active_features)} features)")
+            update_pipeline_status(output_dir, 'approved_original')
+            return True
+
         if os.path.exists(approval_file):
-            print(f"\n[OK] GWEN selection already approved")
-            print(f"   Pipeline can proceed to next stage")
+            # User accepted GWEN's recommendations.
+            handoff = gate.approve_gwen()
+            print(f"\n[OK] GWEN selection approved — "
+                  f"{len(handoff.active_features)} features forwarded to Stage 2")
             update_pipeline_status(output_dir, 'approved')
             return True
-        else:
-            print(f"\n[PAUSE]  PIPELINE PAUSED FOR REVIEW")
-            print(f"   Create 'gwen_approved.txt' in output directory to proceed")
-            print(f"   Or approve via frontend interface at /pipeline/gwen")
-            return False
+
+        # Check store for a prior approval decision.
+        if _gate_store is not None:
+            try:
+                if _gate_store.has("1", "variable_selection_handoff"):
+                    _prior = _gate_store.read_struct("1", "variable_selection_handoff")
+                    if _prior and _prior.get("decision") in (
+                        SelectionDecision.GWEN_SELECTED.value,
+                        SelectionDecision.ORIGINAL_PREDICTOR_SET.value,
+                    ):
+                        print(f"\n[OK] Prior approval found in store "
+                              f"(decision={_prior['decision']})")
+                        update_pipeline_status(output_dir, 'approved')
+                        return True
+            except Exception:
+                pass
+
+        print(f"\n[PAUSE]  PIPELINE PAUSED FOR REVIEW")
+        print(f"   To accept GWEN selection: create 'gwen_approved.txt' in output directory")
+        print(f"   To keep original predictor set: create 'gwen_approved_original.txt'")
+        print(f"   Or approve via frontend interface at /pipeline/gwen")
+        return False
             
     except Exception as e:
         print(f"\n❌ ERROR in GWEN stage: {str(e)}")

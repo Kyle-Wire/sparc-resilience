@@ -55,6 +55,16 @@ def zero_shot_predict(
     -------
     ZeroShotPrediction
     """
+    if trunk_path is not None:
+        raise NotImplementedError(
+            "zero_shot_predict: trunk checkpoint loading is not yet implemented. "
+            "Remove trunk_path to use the random-weight ANP baseline, or wait for V4."
+        )
+    if registry_path is not None:
+        raise NotImplementedError(
+            "zero_shot_predict: registry_path loading is not yet implemented."
+        )
+
     import torch
     from sparc.inference.anp import SpatialANP
 

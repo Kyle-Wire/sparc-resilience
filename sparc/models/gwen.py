@@ -259,8 +259,10 @@ class GWENModel:
         y_sub = np.asarray(y)[subset_idx]
         coords_sub = np.asarray(coords)[subset_idx]
 
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X_sub)
+        # Reuse the scaler fitted on the full dataset so that local coefficients
+        # are on the same scale as the main model — a fresh fit_transform() here
+        # would produce divergent scales and break cross-fold stability comparisons.
+        X_scaled = self.scaler.transform(X_sub)
 
         k = min(self.k_neighbors or min(500, len(X_sub) // 2), len(X_sub) - 1)
 

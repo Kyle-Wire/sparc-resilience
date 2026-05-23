@@ -50,5 +50,10 @@ __all__ = [
     'InterventionConfig',
     'OOFExtractor',
     'OOFExtractionConfig',
-    'SpatialIntelligence'
+    'SpatialIntelligence',
+    # Causal inputs seam (Candidate 4)
+    'CausalInputs',
+    'CausalInputLoader',
 ]
+
+from .causal_inputs import CausalInputs, CausalInputLoader

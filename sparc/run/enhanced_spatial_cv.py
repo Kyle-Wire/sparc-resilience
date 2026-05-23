@@ -133,7 +133,15 @@ def train_single_model_fold_worker(args):
     X_tr, X_te = X[train_idx], X[test_idx]
     y_tr = y[train_idx]
     coords_tr, coords_te = coords[train_idx], coords[test_idx]
-    
+
+    # Fold-scoped feature scaling: fit only on training split so test-fold
+    # statistics cannot influence the scaler (eliminates C1 data leakage).
+    from sparc.features.pipeline import FeaturePipeline as _FP
+    _fp = _FP()
+    _fn = list(feature_names) if feature_names else [f'f{i}' for i in range(X_tr.shape[1])]
+    X_tr, _ = _fp.fit_transform(X_tr, coords_tr, _fn)
+    X_te = _fp.transform(X_te, coords_te)
+
     # Runtime safety: delegate fold-size invariants to each model.
     # GWRModel.validate_for_fold clamps bandwidth/min_points;
     # GWRFModel.validate_for_fold clamps k_neighbors/subsample_n.
@@ -790,17 +798,13 @@ class EnhancedSpatialCV:
         # ------------------------------------------------------------------
         # Centralized feature scaling: fit one canonical scaler on the full
         # feature matrix so every base model operates on the same normalized
-        # representation.  Each model still calls its own fit_transform
-        # internally, but since X is already ≈N(0,1), those internal scalers
-        # become a near-identity pass-through.
-        # This eliminates GWEN's subsample-induced scale drift and ensures
-        # all surrogate predictions share a consistent feature basis for
-        # meta-learner blending.
+        # Raw feature matrix is passed through to the fold workers.  Each
+        # worker creates its own fold-scoped FeaturePipeline (fit only on
+        # that fold's training data) so the test fold never influences the
+        # normalisation statistics.  The legacy full-dataset scaler has
+        # been removed to eliminate data leakage into Stage 3.
         # ------------------------------------------------------------------
-        _X_arr = X.values if hasattr(X, 'values') else np.asarray(X)
-        from sklearn.preprocessing import StandardScaler as _CanonicalScaler
-        _canonical_scaler = _CanonicalScaler()
-        X = _canonical_scaler.fit_transform(_X_arr)
+        X = X.values if hasattr(X, 'values') else np.asarray(X, dtype=np.float64)
 
         n_samples = len(y)
         n_models = len(models)
@@ -1152,11 +1156,18 @@ class EnhancedSpatialCV:
         with tqdm(total=len(folds), desc="Sequential CV Folds", unit="fold") as pbar:
             for fold_idx, (train_idx, test_idx) in enumerate(folds):
                 fold_predictions = np.zeros((len(test_idx), n_models))
-                
-                X_train, X_test = X[train_idx], X[test_idx]
+
+                X_train_raw, X_test_raw = X[train_idx], X[test_idx]
                 y_train = y[train_idx]
                 coords_train, coords_test = coords[train_idx], coords[test_idx]
-                
+
+                # Fold-scoped scaling: fit only on train split (no leakage).
+                from sparc.features.pipeline import FeaturePipeline as _FP
+                _fp = _FP()
+                _fn = list(feature_names) if feature_names else [f'f{i}' for i in range(X_train_raw.shape[1])]
+                X_train, _ = _fp.fit_transform(X_train_raw, coords_train, _fn)
+                X_test = _fp.transform(X_test_raw, coords_test)
+
                 print(f"\nFold {fold_idx + 1}/{len(folds)}")
                 print(f"Train: {len(train_idx)}, Test: {len(test_idx)}")
                 

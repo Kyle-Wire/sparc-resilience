@@ -283,9 +283,63 @@ def render_png(
 
 __all__ = [
     "RenderError",
+    "ArtifactRenderer",
     "render_csv",
     "render_json",
     "render_geojson",
     "render_native",
     "render_png",
 ]
+
+
+# ---------------------------------------------------------------------------
+# ArtifactRenderer — deep module with injected store seam
+# ---------------------------------------------------------------------------
+
+class ArtifactRenderer:
+    """Render pipeline artifacts to user-facing bytes with an injected store.
+
+    Unlike the module-level ``render_*`` functions — which call
+    ``get_active_registry()`` (global state) — ``ArtifactRenderer`` receives
+    its :class:`~sparc.registry.store.ArtifactStore` at construction.  This
+    makes it testable in isolation and usable outside a live pipeline run.
+
+    Parameters
+    ----------
+    store : ArtifactStore
+        The store to read artifacts from.  Pass a real store in production;
+        pass a store backed by a temporary directory in tests.
+
+    Usage
+    -----
+    ::
+
+        store = ArtifactStore(registry)
+        renderer = ArtifactRenderer(store)
+        csv_bytes  = renderer.render_csv("2", "predictions")
+        json_bytes = renderer.render_json("2", "metrics")
+        data, ext  = renderer.render_native("3", "ate_summary")
+    """
+
+    def __init__(self, store: ArtifactStore) -> None:
+        self._store = store
+
+    def render_csv(self, stage: "str | int", artifact_id: str, *, index: bool = False) -> bytes:
+        """Serialize a registered artifact as CSV bytes."""
+        return render_csv(stage, artifact_id, registry=self._store.registry, index=index)
+
+    def render_json(self, stage: "str | int", artifact_id: str, *, indent: int = 2) -> bytes:
+        """Serialize a registered artifact as JSON bytes."""
+        return render_json(stage, artifact_id, registry=self._store.registry, indent=indent)
+
+    def render_geojson(self, stage: "str | int", artifact_id: str) -> bytes:
+        """Serialize a geometry-bearing table as GeoJSON bytes."""
+        return render_geojson(stage, artifact_id, registry=self._store.registry)
+
+    def render_native(self, stage: "str | int", artifact_id: str) -> "tuple[bytes, str]":
+        """Return (bytes, extension) using the artifact's native format."""
+        return render_native(stage, artifact_id, registry=self._store.registry)
+
+    def render_png(self, stage: "str | int", artifact_id: str, **opts: Any) -> bytes:
+        """Render the artifact as a PNG via :mod:`sparc.report.figures`."""
+        return render_png(stage, artifact_id, registry=self._store.registry, **opts)

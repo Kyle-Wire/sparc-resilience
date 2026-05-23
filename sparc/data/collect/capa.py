@@ -1,19 +1,23 @@
 """
-capa.py — NOAA CAPA air temperature aligned to Landsat overpass dates.
+capa.py — CAPA-first air temperature anchor for the SPARC pipeline.
 
-Fetches NOAA CAPA (Climate-Adjusted Parameter Analysis) gridded air
-temperature at morning (~6 AM), midday (~12–2 PM), and night (~10 PM)
-windows, filtered to only dates that have a valid Landsat overpass in the
-study area (supplied by the caller from landsat.py results).
+Fetches Open-Meteo / NOAA CAPA gridded air temperature at morning (~6 AM),
+midday (~12–2 PM), and night (~10 PM) windows across a date range, then
+returns both the enriched fishnet and the list of dates on which valid
+midday readings were found.
+
+Design: CAPA is the label source — it provides ground-truth air temperature
+measurements. The returned ``capa_dates`` become the anchor dates for
+downstream sensors (Landsat, ERA5). Landsat searches for scenes within
+±tolerance days of each CAPA anchor, not the other way around.
 
 Outputs four columns onto the fishnet:
-  aat_morning  — mean morning air temp (°C) over aligned dates
-  aat_midday   — mean midday air temp (°C) over aligned dates
-  aat_night    — mean night air temp (°C) over aligned dates
+  aat_morning  — mean morning air temp (°C) over valid anchor dates
+  aat_midday   — mean midday air temp (°C) over valid anchor dates
+  aat_night    — mean night air temp (°C) over valid anchor dates
   diurnal_aat  — midday − night delta (°C)
 
-NOAA CAPA is accessed via the NOAA Physical Sciences Laboratory (PSL)
-THREDDS/OPeNDAP endpoint, which requires no API key.
+Returns NaN columns and an empty date list on any failure — never raises.
 """
 
 from __future__ import annotations
@@ -44,44 +48,62 @@ OPEN_METEO_FORECAST = "https://archive-api.open-meteo.com/v1/archive"
 def fetch_capa(
     fishnet_gdf: object,
     bbox: tuple[float, float, float, float],
-    landsat_dates: list[date],
-) -> object:
-    """Fetch NOAA CAPA air temperature aligned to Landsat overpass dates.
+    date_start: date,
+    date_end: date,
+) -> tuple[object, list[date]]:
+    """Fetch CAPA air temperature for a date range and discover anchor dates.
+
+    CAPA is the label source for the SPARC pipeline. This function fetches
+    all available temperature data within the requested date range, identifies
+    which dates had valid midday readings (the "anchor dates"), and returns
+    both the enriched fishnet and that list of dates.
+
+    The caller uses the returned ``capa_dates`` to build a ``TemporalWindow``
+    for Landsat alignment — Landsat searches for scenes near those dates.
 
     Parameters
     ----------
     fishnet_gdf : gpd.GeoDataFrame
-        30m analysis grid.  Returns with four new columns.
+        30m analysis grid.  Returned with four new columns.
     bbox : (minx, miny, maxx, maxy)
         Study bounding box in EPSG:4326.
-    landsat_dates : list[date]
-        Dates of cloud-cleared Landsat acquisitions.  CAPA observations are
-        averaged over these dates only.
+    date_start, date_end : date
+        Date range to search for CAPA measurements.
 
     Returns
     -------
-    gpd.GeoDataFrame
-        Input fishnet with ``aat_morning``, ``aat_midday``, ``aat_night``,
-        and ``diurnal_aat`` columns appended.
+    (gdf, capa_dates)
+        ``gdf`` — fishnet with ``aat_morning``, ``aat_midday``, ``aat_night``,
+        and ``diurnal_aat`` columns.  NaN-filled on failure.
+        ``capa_dates`` — dates with valid midday readings; empty on failure.
     """
-    if not landsat_dates:
-        raise ValueError("landsat_dates must not be empty — Landsat dates anchor CAPA alignment")
-
-    # Derive bbox centre for representative grid point fetching
-    minx, miny, maxx, maxy = bbox
-    cx = (minx + maxx) / 2
-    cy = (miny + maxy) / 2
-
-    # Fetch hourly temperatures for the bounding box at ERA5/NOAA resolution
     grid_lons, grid_lats = _capa_grid_points(bbox)
-    point_data = _fetch_point_hourly(grid_lons, grid_lats, landsat_dates)
+    try:
+        point_data, capa_dates = _fetch_point_hourly(
+            grid_lons, grid_lats, date_start, date_end
+        )
+    except Exception:
+        fishnet_out = _nan_fishnet(fishnet_gdf)
+        return fishnet_out, []
 
-    return _aggregate_to_fishnet(fishnet_gdf, grid_lons, grid_lats, point_data)
+    fishnet_out = _aggregate_to_fishnet(fishnet_gdf, grid_lons, grid_lats, point_data)
+    return fishnet_out, capa_dates
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _nan_fishnet(fishnet_gdf: object) -> object:
+    """Return the fishnet with NaN columns for all four CAPA outputs."""
+    try:
+        gdf = fishnet_gdf.copy()  # type: ignore[union-attr]
+    except Exception:
+        gdf = fishnet_gdf
+    for col in ("aat_morning", "aat_midday", "aat_night", "diurnal_aat"):
+        gdf[col] = float("nan")  # type: ignore[index]
+    return gdf
+
 
 def _capa_grid_points(
     bbox: tuple[float, float, float, float],
@@ -97,23 +119,33 @@ def _capa_grid_points(
 def _fetch_point_hourly(
     lons: list[float],
     lats: list[float],
-    dates: list[date],
-) -> dict[tuple[float, float], dict[str, float]]:
+    date_start: date,
+    date_end: date,
+) -> tuple[dict[tuple[float, float], dict[str, float]], list[date]]:
     """
-    Return {(lon, lat): {aat_morning, aat_midday, aat_night}} for each
-    grid point, averaged over the supplied *dates*.
-    """
-    date_start = min(dates)
-    date_end = max(dates)
-    date_set = {d.isoformat() for d in dates}
+    Fetch hourly temperature for the bbox grid; return point data and the
+    list of dates that had valid midday readings ("anchor dates").
 
+    Returns
+    -------
+    (results, capa_dates)
+        ``results`` — {(lon, lat): {aat_morning, aat_midday, aat_night}}
+        ``capa_dates`` — sorted list of dates with valid midday readings
+    """
     results: dict[tuple[float, float], dict[str, float]] = {}
+    found_midday_dates: set[date] = set()
+
     for lon in lons:
         for lat in lats:
-            windows = _fetch_single_point_hourly(lon, lat, date_start, date_end, date_set)
+            windows, midday_dates = _fetch_single_point_hourly(
+                lon, lat, date_start, date_end
+            )
             if windows is not None:
                 results[(round(lon, 4), round(lat, 4))] = windows
-    return results
+                found_midday_dates.update(midday_dates)
+
+    capa_dates = sorted(found_midday_dates)
+    return results, capa_dates
 
 
 def _fetch_single_point_hourly(
@@ -121,9 +153,15 @@ def _fetch_single_point_hourly(
     lat: float,
     date_start: date,
     date_end: date,
-    date_set: set[str],
-) -> Optional[dict[str, float]]:
-    """Fetch hourly temperature for one point; average to three windows."""
+) -> tuple[Optional[dict[str, float]], list[date]]:
+    """Fetch hourly temperature for one grid point across the full date range.
+
+    Returns
+    -------
+    (windows | None, midday_dates)
+        ``windows`` — averaged temperature per window, or None if no midday data.
+        ``midday_dates`` — dates that had at least one valid midday reading.
+    """
     params = urllib.parse.urlencode({
         "latitude": f"{lat:.4f}",
         "longitude": f"{lon:.4f}",
@@ -140,36 +178,51 @@ def _fetch_single_point_hourly(
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except Exception:
-        return None
+        return None, []
 
     hourly = data.get("hourly", {})
     times = hourly.get("time", [])
     temps = hourly.get("temperature_2m", [])
 
-    # Filter to Landsat-anchored dates only
-    morning, midday, night = [], [], []
+    # Collect per-date readings by time window
+    from datetime import date as date_type
+    from collections import defaultdict
+    morning_by_date: dict[str, list[float]] = defaultdict(list)
+    midday_by_date:  dict[str, list[float]] = defaultdict(list)
+    night_by_date:   dict[str, list[float]] = defaultdict(list)
+
     for t_str, temp in zip(times, temps):
         if temp is None:
             continue
-        day_str, hour_str = t_str[:10], t_str[11:13]
-        if day_str not in date_set:
-            continue
-        hour = int(hour_str)
-        if 5 <= hour <= 7:     # morning window ~6 AM
-            morning.append(temp)
-        elif 12 <= hour <= 14:  # midday window ~12–2 PM
-            midday.append(temp)
-        elif 21 <= hour <= 23:  # night window ~10 PM
-            night.append(temp)
+        day_str = t_str[:10]
+        hour = int(t_str[11:13])
+        if 5 <= hour <= 7:
+            morning_by_date[day_str].append(temp)
+        elif 12 <= hour <= 14:
+            midday_by_date[day_str].append(temp)
+        elif 21 <= hour <= 23:
+            night_by_date[day_str].append(temp)
 
-    if not midday:  # midday is the critical anchor
-        return None
+    # Only days with midday readings become anchor dates
+    midday_date_strs = sorted(midday_by_date.keys())
+    if not midday_date_strs:
+        return None, []
 
-    return {
-        "aat_morning": float(np.mean(morning)) if morning else float("nan"),
-        "aat_midday":  float(np.mean(midday)),
-        "aat_night":   float(np.mean(night)) if night else float("nan"),
+    # Average across all anchor dates for the spatial interpolation values
+    all_morning = [v for vals in morning_by_date.values() for v in vals]
+    all_midday  = [v for vals in midday_by_date.values() for v in vals]
+    all_night   = [v for vals in night_by_date.values() for v in vals]
+
+    windows = {
+        "aat_morning": float(np.mean(all_morning)) if all_morning else float("nan"),
+        "aat_midday":  float(np.mean(all_midday)),
+        "aat_night":   float(np.mean(all_night)) if all_night else float("nan"),
     }
+
+    capa_dates = [
+        date_type.fromisoformat(ds) for ds in midday_date_strs
+    ]
+    return windows, capa_dates
 
 
 def _aggregate_to_fishnet(

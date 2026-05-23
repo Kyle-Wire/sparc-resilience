@@ -65,6 +65,20 @@ def few_shot_predict(
     -------
     FewShotPrediction
     """
+    if n_finetune_epochs > 0:
+        raise NotImplementedError(
+            "few_shot_predict: fine-tuning the city head (n_finetune_epochs > 0) is not "
+            "yet implemented. Pass n_finetune_epochs=0 to use the ANP context baseline."
+        )
+    if trunk_path is not None:
+        raise NotImplementedError(
+            "few_shot_predict: trunk checkpoint loading is not yet implemented."
+        )
+    if registry_path is not None:
+        raise NotImplementedError(
+            "few_shot_predict: registry_path loading is not yet implemented."
+        )
+
     import torch
     import numpy as np
     from sparc.inference.anp import SpatialANP

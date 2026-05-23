@@ -3,6 +3,7 @@ import { SectionHeader, Card, Tag, Btn, Stat, StatGrid } from "@/components/ui/D
 import { usePipeline, type StageStatus } from "@/hooks/PipelineProvider";
 import { useNotification } from "@/hooks/useNotifications";
 import { GwenApprovalModal } from "@/components/run/GwenApprovalModal";
+import RunCompletionCard from "@/components/run/RunCompletionCard";
 import type { PipelineEvent } from "@/lib/types";
 import { useNavigationStore } from "@/stores/navigationStore";
 
@@ -415,6 +416,15 @@ export default function RunPage() {
           tint={pipeline.runEndedAt ? "var(--purple)" : "var(--ink)"}
         />
       </StatGrid>
+
+      {doneCount === STAGE_IDS.length && pipeline.runEndedAt && !pipeline.error && (
+        <RunCompletionCard
+          elapsedSeconds={elapsed}
+          stagesComplete={doneCount}
+          totalStages={STAGE_IDS.length}
+          onViewResults={() => navigate("Results")}
+        />
+      )}
 
       {pipeline.dagApprovalPending && (
         <div

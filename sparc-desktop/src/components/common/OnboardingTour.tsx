@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 const STORAGE_KEY = "sparc-onboarding";
-const TOTAL_VERSION = 1; // bump to force re-show
+const TOTAL_VERSION = 2; // bump to force re-show
 
 interface OnboardingState {
   step: number;
@@ -53,17 +53,17 @@ const DEFAULT_STEPS: TourStep[] = [
   {
     page: "Run",
     title: "5 · Run the pipeline",
-    body: "Execute Stage 0 (correlogram) → 1 (GWEN weighting) → 2 (spatial CV) → 3 (causal validation, MC³) → 4 (scenarios). Live progress streams from the FastAPI backend.",
+    body: "Execute Stage 0 (correlogram) → 1 (GWEN weighting) → 2 (spatial CV) → 3 (causal validation, MC³) → 4 (scenarios). Live progress streams from the FastAPI backend. When the run completes you'll see a summary card with a direct link to Results.",
   },
   {
-    page: "Insights",
-    title: "6 · Insights & maps",
-    body: "Every result is wired up here: predictions map, scenarios, correlogram, dose-response, CATE surface, sensitivity, equity & cost. Switch between Practitioner and Researcher audiences from the toolbar; selections (variable, scenario, brush) are linked across panels.",
+    page: "Results",
+    title: "6 · Results",
+    body: "Walk through each stage using the pipeline navigator at the top. Stage 0 shows spatial geometry, Stage 2 model predictions on a map, Stage 3 causal dose-response, and Stage 4 ranked interventions. Each section has a Technical Disclosure for deeper diagnostics.",
   },
   {
-    page: "Compare",
-    title: "7 · Reproducibility & sharing",
-    body: "Compare two runs, freeze the active config + data hash, or share a self-contained HTML snapshot from the Insights page. Generate audience-tuned reports (technical / planner / public) on the Report page.",
+    page: "Report",
+    title: "7 · Reporting",
+    body: "Generate audience-tuned reports (planner, public, technical, council, equity, scientist, auditor) as PDF or Word. Decision Support on the same panel lets you set a budget cap and run the equity optimiser.",
   },
   {
     title: "You're ready",

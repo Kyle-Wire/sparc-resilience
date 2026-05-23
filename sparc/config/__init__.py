@@ -9,5 +9,6 @@ This module handles all configuration management, including:
 """
 
 from .config import load_config
+from .project_config import ProjectConfig
 
-__all__ = ['load_config']
+__all__ = ['load_config', 'ProjectConfig']

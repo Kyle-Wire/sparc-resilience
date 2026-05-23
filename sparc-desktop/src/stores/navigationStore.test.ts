@@ -53,6 +53,22 @@ describe("navigationStore", () => {
       useNavigationStore.getState().navigate("Data");
       expect(useNavigationStore.getState().currentPage).toBe("Data");
     });
+
+    it("returns { ok: true } on successful navigation to ungated page", () => {
+      const result = useNavigationStore.getState().navigate("Settings");
+      expect(result).toEqual({ ok: true });
+    });
+
+    it("returns { ok: true } on successful navigation to gated page with project loaded", () => {
+      mockProjectLoaded.value = true;
+      const result = useNavigationStore.getState().navigate("Data");
+      expect(result).toEqual({ ok: true });
+    });
+
+    it("returns { ok: false, reason: 'no_project' } when navigation is blocked", () => {
+      const result = useNavigationStore.getState().navigate("Data");
+      expect(result).toEqual({ ok: false, reason: "no_project" });
+    });
   });
 
   describe("localStorage persistence", () => {
@@ -78,6 +94,25 @@ describe("navigationStore", () => {
     it("returns undefined for a page with no saved UI state", () => {
       const state = useNavigationStore.getState().getPageUIState("Run");
       expect(state).toBeUndefined();
+    });
+  });
+
+  describe("Results page — project-gated navigation", () => {
+    it("blocks navigation to Results when no project is loaded", () => {
+      useNavigationStore.getState().navigate("Results");
+      expect(useNavigationStore.getState().currentPage).toBe("Project");
+    });
+
+    it("allows navigation to Results when a project is loaded", () => {
+      mockProjectLoaded.value = true;
+      useNavigationStore.getState().navigate("Results");
+      expect(useNavigationStore.getState().currentPage).toBe("Results");
+    });
+
+    it("persists Results to localStorage when navigation succeeds", () => {
+      mockProjectLoaded.value = true;
+      useNavigationStore.getState().navigate("Results");
+      expect(localStorage.getItem("sparc-active-page")).toBe("Results");
     });
   });
 });

@@ -780,11 +780,12 @@ class ScenarioEngineV4:
     ) -> np.ndarray:
         """Return ``(n_eff, n_cells)`` posterior samples of Δtarget."""
         # Direct effect — every mode uses the resolver.
-        direct = self.resolver.resolve_direct_effect(
+        resolved = self.resolver.resolve_direct_effect(
             treatment, target,
             baseline_x=baseline_x, modified_x=modified_x,
             n_draws=n_draws,
         )
+        direct = resolved.delta  # (n_draws_eff, n_cells)
 
         if self.mode == "mode_1_physics":
             return direct

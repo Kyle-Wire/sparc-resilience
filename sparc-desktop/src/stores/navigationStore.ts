@@ -9,16 +9,23 @@ const UNGATED_PAGES = new Set<AppPage>(["Project", "Settings", "Performance"]);
 
 const STORAGE_KEY = "sparc-active-page";
 
+export interface NavigateResult {
+  ok: boolean;
+  /** Present when ok is false; describes why navigation was blocked. */
+  reason?: "no_project";
+}
+
 interface NavigationState {
   currentPage: AppPage;
   /** Map of page → arbitrary UI state (tab, scroll offset, etc.) */
   pageUIState: Record<string, unknown>;
 
   /**
-   * Navigate to a page. Navigation to project-gated pages is silently blocked
-   * if no project is currently loaded.
+   * Navigate to a page. Returns { ok: true } on success, or
+   * { ok: false, reason } when navigation is blocked (e.g. no project loaded).
+   * Callers can use the reason to surface a tooltip or notification.
    */
-  navigate: (page: AppPage | string) => void;
+  navigate: (page: AppPage | string) => NavigateResult;
 
   /** Persist arbitrary UI state for a page (e.g. active tab, scroll offset). */
   setPageUIState: <T>(page: string, state: T) => void;
@@ -40,10 +47,11 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   navigate: (page) => {
     const target = page as AppPage;
     if (!UNGATED_PAGES.has(target) && !useProjectStore.getState().projectLoaded) {
-      return; // silently block: project required
+      return { ok: false, reason: "no_project" };
     }
     set({ currentPage: target });
     localStorage.setItem(STORAGE_KEY, target);
+    return { ok: true };
   },
 
   setPageUIState: (page, state) => {

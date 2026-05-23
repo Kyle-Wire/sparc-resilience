@@ -222,19 +222,26 @@ def cmd_run(args):
         print(f"  (registry unavailable: {_reg_err})")
         _registry = None
 
-    def _rescan_registry(stage_label: str) -> None:
-        if _registry is None:
-            return
-        try:
-            _registry.start_stage(stage_label)
-            n = _registry.migrate_from_disk(paths)
-            _registry.complete_stage(stage_label, status="complete")
-            if n:
-                print(f"  [registry] stage {stage_label}: +{n} artifact(s)")
-        except Exception as exc:
-            import traceback
-            print(f"  [registry] rescan failed for stage {stage_label}: {exc}")
-            traceback.print_exc()
+    # ── RunContext — single holder for pipeline-wide dependencies ──────
+    # Callers that want the orchestration seam can construct a
+    # PipelineOrchestrator from this context and inject custom runners.
+    from sparc.run.orchestrator import RunContext
+    _run_context = RunContext(
+        config=config,
+        paths=paths,
+        registry=_registry,
+        project_path=project_path,
+    )
+
+    def _rescan_registry(stage_label: str) -> None:  # noqa: ARG001
+        """No-op: artifact writes now route through ArtifactStore (db-resident).
+
+        All stage outputs go through ``artifact_io.save_*/write_*`` which
+        write directly to ``artifacts.db`` via the active
+        :class:`~sparc.registry.store.ArtifactStore`.  Rescanning disk is
+        therefore unnecessary and this function is kept only to avoid
+        breaking any external call sites.
+        """
 
     # Memory watchdog: emits warnings on rising RAM, releases caches, and
     # signals a clean abort before the OS OOM-kills the process.
@@ -1222,7 +1229,7 @@ def _run_wager2025_audit_addons(args, config: dict) -> None:
     # ---- Triangulation summary -----------------------------------------
     if getattr(args, 'full_triangulation', False):
         try:
-            from sparc.causal._audit import report
+            from sparc.causal import audit_report as report
             store.write_blob("3", "wager2025_audit_report",
                              report(),
                              serializer="text",

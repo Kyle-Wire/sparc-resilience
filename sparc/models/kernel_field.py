@@ -334,6 +334,44 @@ class KernelField:
             source=payload.get("source", "deserialised"),
         )
 
+    @classmethod
+    def from_report(
+        cls,
+        report: "Any",  # sparc.run.correlogram_report.CorrelogramReport
+        outcome_name: str,
+        predictor_names: list[str],
+        *,
+        default_nu: float = 1.5,
+    ) -> "KernelField":
+        """Assemble a ``KernelField`` from a typed :class:`~sparc.run.correlogram_report.CorrelogramReport`.
+
+        This is the preferred constructor for Stage 2 — it routes through the
+        typed seam rather than reading raw artifact dicts directly.  When the
+        report carries ``None`` for any of the three payload fields the result
+        falls back to ``None`` kernel parameters (identical behaviour to
+        calling :meth:`from_artifacts` with all-``None`` inputs).
+
+        Parameters
+        ----------
+        report:
+            A :class:`~sparc.run.correlogram_report.CorrelogramReport` as
+            produced by Stage 0 (or restored via ``from_artifact``).
+        outcome_name:
+            The outcome variable this ``KernelField`` is for.
+        predictor_names:
+            The predictor variables to assemble kernels for.
+        default_nu:
+            Fallback Matérn smoothness when no Matérn fit is available.
+        """
+        return cls.from_artifacts(
+            outcome_name=outcome_name,
+            predictor_names=predictor_names,
+            matern_artifact=getattr(report, "matern_fits", None),
+            anisotropy_artifact=getattr(report, "anisotropy_fits", None),
+            effective_range_matrix=getattr(report, "effective_range_matrix", None),
+            default_nu=default_nu,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Matérn kernel (closed-form for the standard ν values)

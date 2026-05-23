@@ -26,6 +26,7 @@ export default function Shell({
   projectName,
   projectDomain,
   projectEpsg,
+  status,
 }: ShellProps) {
   return (
     <div
@@ -50,6 +51,7 @@ export default function Shell({
         <Topbar
           page={currentPage}
           onNavigateSettings={() => onNavigate("Settings")}
+          serverStatus={status}
         />
         <main
           className="scroll"

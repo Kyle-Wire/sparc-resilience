@@ -18,4 +18,23 @@ boundary_conditions
     Neumann, Dirichlet, and Robin boundary condition losses.
 initial_conditions
     Initial condition generation and warmup-scheduled IC loss.
+constraint
+    PhysicsConstraint protocol — seam between training-time PDE loss
+    (PDEAdapter) and inference-time prior shrinkage (PriorsAdapter).
 """
+
+from .constraint import (
+    PhysicsConstraint,
+    PDEAdapter,
+    PriorsAdapter,
+    NullPhysicsConstraint,
+    make_physics_constraint,
+)
+
+__all__ = [
+    "PhysicsConstraint",
+    "PDEAdapter",
+    "PriorsAdapter",
+    "NullPhysicsConstraint",
+    "make_physics_constraint",
+]

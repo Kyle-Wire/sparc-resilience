@@ -25,7 +25,7 @@ from typing import Optional, Sequence
 import numpy as np
 from sklearn.tree import DecisionTreeRegressor
 
-from sparc.causal._audit import mark_addressed
+from sparc.causal import mark_addressed
 
 GAP_8_IMPLEMENTED = True
 
