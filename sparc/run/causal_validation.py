@@ -3279,12 +3279,14 @@ class CausalValidator:
 # Main entry point (called by sparc __main__.py, Stage 3)
 # ---------------------------------------------------------------------------
 
-def main(approval_gate=None) -> dict:
+def main(ctx, approval_gate=None) -> dict:
     """
     Run the full Stage 3 Causal Validation pipeline.
 
     Parameters
     ----------
+    ctx : RunContext
+        Pipeline-wide dependencies (config, paths, registry).
     approval_gate : callable, optional
         If provided, called after MC³ with the result dict.  Should
         block until the user approves (or raise to abort).
@@ -3298,8 +3300,8 @@ def main(approval_gate=None) -> dict:
     print("  Stage 3: Causal Validation")
     print("=" * 60)
 
-    config = load_config()
-    paths = get_paths()
+    config = ctx.config
+    paths = ctx.paths
 
     # Determine output directory
     stage3_dir = str(paths.stage3_dir)

@@ -70,7 +70,7 @@ class ArtifactStreamClient {
     this.setStatus("connecting");
     let ws: WebSocket;
     try {
-      ws = new WebSocket(`${WS_ORIGIN}/run/stream?token=${encodeURIComponent(getToken())}`);
+      ws = new WebSocket(`${WS_ORIGIN}/run/artifacts?token=${encodeURIComponent(getToken())}`);
     } catch {
       this.scheduleReconnect();
       return;
@@ -80,9 +80,6 @@ class ArtifactStreamClient {
     ws.onopen = () => {
       this.backoff = INITIAL_BACKOFF_MS;
       this.setStatus("open");
-      try {
-        ws.send(JSON.stringify({ subscribe: "artifacts" }));
-      } catch { /* ignore */ }
     };
 
     ws.onmessage = (msg) => {

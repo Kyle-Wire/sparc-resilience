@@ -22,6 +22,9 @@ assembler   — compose all layers onto the 30m fishnet; write GeoParquet output
 
 from .boundary import resolve_boundary, BoundaryResult
 from .manifest import VariableManifest, VariableStatus, ManifestEntry
+from .sources import FetchResult, DataSource, SourceRegistry, SOURCE_REGISTRY
+from .domain import DomainSpec
+from .dispatch import sync_group_fetch
 
 __all__ = [
     "resolve_boundary",
@@ -29,4 +32,13 @@ __all__ = [
     "VariableManifest",
     "VariableStatus",
     "ManifestEntry",
+    # C1 — SourceRegistry
+    "FetchResult",
+    "DataSource",
+    "SourceRegistry",
+    "SOURCE_REGISTRY",
+    # C3 — DomainSpec
+    "DomainSpec",
+    # C4 — dispatch
+    "sync_group_fetch",
 ]

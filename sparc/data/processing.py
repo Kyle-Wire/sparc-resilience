@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from enum import Enum
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -23,6 +24,25 @@ try:
     HAS_RASTERSTATS = True
 except ImportError:
     HAS_RASTERSTATS = False
+
+
+class ClipMethod(str, Enum):
+    """How fishnet cells are filtered against the study-area boundary.
+
+    CENTROID_WITHIN
+        Retain cells whose centroid falls inside the boundary (original
+        behaviour; fast but lossy at boundary edges).
+    AREA_PROPORTION
+        Retain cells whose intersection area with the boundary is at least
+        *min_coverage* (0–1) of the cell's own area.
+    INTERSECTION
+        Clip each cell to the exact boundary intersection; returns trimmed
+        geometries instead of the original full cells.
+    """
+
+    CENTROID_WITHIN = "centroid_within"
+    AREA_PROPORTION = "area_proportion"
+    INTERSECTION = "intersection"
 
 
 def create_fishnet(
@@ -64,16 +84,51 @@ def create_fishnet(
 def clip_to_boundary(
     fishnet: "gpd.GeoDataFrame",
     boundary: "gpd.GeoDataFrame",
+    method: ClipMethod = ClipMethod.CENTROID_WITHIN,
+    min_coverage: float = 0.0,
 ) -> "gpd.GeoDataFrame":
     """Clip fishnet cells to a study-area boundary polygon.
 
-    Only cells whose centroid falls inside the boundary are retained.
+    Parameters
+    ----------
+    fishnet : GeoDataFrame of polygon cells.
+    boundary : GeoDataFrame containing the study-area boundary polygon(s).
+    method : ClipMethod
+        How cells are filtered / trimmed.  See :class:`ClipMethod` for details.
+        Default is ``CENTROID_WITHIN`` (original behaviour).
+    min_coverage : float
+        Only used with ``AREA_PROPORTION``.  Cells with
+        ``intersection_area / cell_area < min_coverage`` are dropped.
+        Values in [0, 1]; default 0.0 keeps any cell with non-zero overlap.
+
+    Returns
+    -------
+    GeoDataFrame — filtered (or trimmed) fishnet cells.
     """
     if not HAS_GEO:
         raise ImportError("geopandas is required")
+
     boundary_union = boundary.geometry.unary_union
-    mask = fishnet.geometry.centroid.within(boundary_union)
-    return fishnet.loc[mask].reset_index(drop=True)
+
+    if method is ClipMethod.CENTROID_WITHIN:
+        mask = fishnet.geometry.centroid.within(boundary_union)
+        return fishnet.loc[mask].reset_index(drop=True)
+
+    if method is ClipMethod.AREA_PROPORTION:
+        cell_area = fishnet.geometry.area
+        overlap = fishnet.geometry.intersection(boundary_union).area
+        coverage = overlap / cell_area.replace(0, float("nan"))
+        mask = coverage >= min_coverage
+        return fishnet.loc[mask].reset_index(drop=True)
+
+    if method is ClipMethod.INTERSECTION:
+        result = fishnet.copy()
+        result["geometry"] = fishnet.geometry.intersection(boundary_union)
+        # Drop cells with no intersection (empty geometry)
+        result = result[~result.geometry.is_empty].reset_index(drop=True)
+        return result
+
+    raise ValueError(f"Unknown ClipMethod: {method!r}")
 
 
 def run_zonal_stats(

@@ -1,10 +1,9 @@
 import { create } from "zustand";
 import { loadProject as apiLoadProject, health } from "@/lib/api";
 import { addRecent } from "@/lib/recentProjects";
+import { localStore } from "@/lib/localStore";
 import { useResultCacheStore } from "./resultCache";
 import { resetManifest } from "@/hooks/useManifest";
-
-const STORAGE_KEY = "sparc-current-project";
 
 interface ProjectState {
   /** Absolute path to loaded project.yml, or null. */
@@ -32,7 +31,7 @@ interface ProjectState {
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
-  projectPath: localStorage.getItem(STORAGE_KEY),
+  projectPath: localStore.get("current-project"),
   projectLoaded: false,
   rehydrating: true,
 
@@ -52,7 +51,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
     } catch {
       // Server unreachable or project file gone — clear stale path
-      localStorage.removeItem(STORAGE_KEY);
+      localStore.remove("current-project");
       set({ projectPath: null, projectLoaded: false });
     } finally {
       set({ rehydrating: false });
@@ -63,7 +62,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     useResultCacheStore.getState().clear();
     resetManifest();
     await apiLoadProject(path);
-    localStorage.setItem(STORAGE_KEY, path);
+    localStore.set("current-project", path);
     set({ projectPath: path, projectLoaded: true });
     addRecent({
       path,
@@ -75,7 +74,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   clearProject: () => {
     useResultCacheStore.getState().clear();
     resetManifest();
-    localStorage.removeItem(STORAGE_KEY);
+    localStore.remove("current-project");
     set({ projectPath: null, projectLoaded: false });
   },
 }));

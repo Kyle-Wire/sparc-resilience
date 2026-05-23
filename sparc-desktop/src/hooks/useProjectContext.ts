@@ -2,11 +2,14 @@
  * useProjectContext — loads data context for the AI system prompt and
  * exposes domain/EPSG metadata for the sidebar pill.
  *
- * Re-runs whenever eady, projectLoaded, or efreshKey changes.
+ * Config is read from useProjectConfigStore (already fetched by useProjectConfig
+ * on project load). This hook fetches the remaining three data sources
+ * (dataSummary, DAG, reportData) and does NOT call getConfig() independently.
  */
 import { useState, useCallback, useEffect } from "react";
-import { getConfig, dataSummary, getDag, getReportData } from "@/lib/api";
-import type { ProjectConfig, DataSummary, DagDefinition, ReportPayload } from "@/lib/types";
+import { dataSummary, getDag, getReportData } from "@/lib/api";
+import { useProjectConfigStore } from "@/stores/projectConfigStore";
+import type { DataSummary, DagDefinition, ReportPayload } from "@/lib/types";
 import type { PromptDataContext } from "@/lib/prompts";
 
 export interface ProjectContextResult {
@@ -21,6 +24,7 @@ export function useProjectContext(
   ready: boolean,
   projectLoaded: boolean,
 ): ProjectContextResult {
+  const config = useProjectConfigStore((s) => s.config);
   const [dataCtx, setDataCtx] = useState<PromptDataContext | null>(null);
   const [projectDomain, setProjectDomain] = useState<string | undefined>();
   const [projectEpsg, setProjectEpsg] = useState<string | undefined>();
@@ -29,25 +33,23 @@ export function useProjectContext(
   useEffect(() => {
     if (!ready || !projectLoaded) return;
     Promise.all([
-      getConfig().catch(() => null),
       dataSummary().catch(() => null),
       getDag().catch(() => null),
       getReportData().catch(() => null),
-    ]).then(([cfg, summary, dag, report]: [
-      ProjectConfig | null,
+    ]).then(([summary, dag, report]: [
       DataSummary | null,
       DagDefinition | null,
       ReportPayload | null,
     ]) => {
       const ctx: PromptDataContext = {
         columns: summary?.columns ?? [],
-        target: cfg?.data?.target_column,
+        target: config?.data?.target_column,
         summary: summary?.numeric_summary,
       };
       if (dag?.edges && dag.edges.length > 0) ctx.dagEdges = dag.edges;
-      const mono = cfg?.physics?.monotone_constraints;
+      const mono = config?.physics?.monotone_constraints;
       if (mono && typeof mono === "object") ctx.physicsConstraints = mono as Record<string, number>;
-      const scenarios = cfg?.scenarios;
+      const scenarios = config?.scenarios;
       if (Array.isArray(scenarios) && scenarios.length > 0) ctx.scenarios = scenarios;
       const causal = report?.causal_results;
       if (causal?.direct_effects && Object.keys(causal.direct_effects).length > 0) {
@@ -57,11 +59,11 @@ export function useProjectContext(
         ctx.scenarioSummary = report.scenario_summary;
       }
       setDataCtx(ctx);
-      setProjectDomain(cfg?.project?.domain ?? undefined);
-      const epsgRaw = cfg?.crs?.projected;
+      setProjectDomain(config?.project?.domain ?? undefined);
+      const epsgRaw = config?.crs?.projected;
       setProjectEpsg(epsgRaw ? String(epsgRaw).replace("EPSG:", "") : undefined);
     });
-  }, [ready, projectLoaded, refreshKey]);
+  }, [ready, projectLoaded, refreshKey, config]);
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
 

@@ -345,7 +345,7 @@ def cmd_run(args):
         if not _stage_done("0"):
             _sp.stage_start("0")
             from sparc.run.correlogram_analysis import main as run_correlogram
-            run_correlogram(fast_mode=fast)
+            run_correlogram(_run_context, fast_mode=fast)
             _mark_stage_done("0")
             _sp.stage_done("0")
         else:
@@ -413,7 +413,7 @@ def cmd_run(args):
         if use_gwen and not _stage_done('.gwen_complete'):
             _sp.stage_start("1")
             from sparc.run.gwen_variable_selection import main as run_gwen
-            approved = run_gwen(config_path=project_path, fast_mode=fast)
+            approved = run_gwen(_run_context, fast_mode=fast)
 
             if not approved:
                 _sp.finish()
@@ -438,7 +438,7 @@ def cmd_run(args):
         _memory_checkpoint()
         _sp.stage_start("2")
         from sparc.run.enhanced_spatial_cv import main as run_spatial_cv
-        run_spatial_cv(fast_mode=fast)
+        run_spatial_cv(_run_context, fast_mode=fast)
         _sp.stage_done("2")
         _rescan_registry("2")
 
@@ -450,7 +450,7 @@ def cmd_run(args):
         _sp.stage_start("3")
         try:
             from sparc.run.causal_validation import main as run_causal_validation
-            run_causal_validation()
+            run_causal_validation(_run_context)
         except ImportError as e:
             print(f"  Stage 3 module not available ({e}) — skipping.")
         except Exception as e:

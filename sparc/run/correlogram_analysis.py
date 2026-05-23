@@ -537,12 +537,14 @@ def _build_correlogram_report(
     )
 
 
-def main(fast_mode=False):
+def main(ctx, *, fast_mode=False):
     """
     Main function to run correlogram-based spatial analysis on all variables
     
     Parameters:
     -----------
+    ctx : RunContext
+        Pipeline-wide dependencies (config, paths, registry).
     fast_mode : bool
         If True, use reduced sample sizes and fewer lags for faster analysis
     """
@@ -559,10 +561,10 @@ def main(fast_mode=False):
         print("[FAST] Running in FAST MODE - reduced precision but much faster")
     
     # Load configuration
-    config = load_config()
+    config = ctx.config
     
     # Create Stage 0 output directory using centralized paths
-    paths = get_paths()
+    paths = ctx.paths
     stage0_dir = paths.stage0_dir
     # Only mkdir when disk writes are enabled; otherwise the canonical
     # store is artifacts.db and Stage_0 directory must remain absent.

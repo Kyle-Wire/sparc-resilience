@@ -52,6 +52,11 @@ MANIFEST_FILENAME = "artifacts_manifest.json"
 SQLITE_FILENAME = "artifacts.db"
 LOCK_FILENAME = "artifacts_manifest.json.lock"
 
+
+def _utcnow() -> str:
+    """Return current UTC time as an ISO-8601 string."""
+    return datetime.now(timezone.utc).isoformat()
+
 # Catalog of artifact ids → expected (stage, relative path, format) used by the
 # disk-scan migration.  The migration is best-effort; unknown files are
 # ignored.  ``{stage}`` placeholders are resolved against PipelinePaths.
@@ -446,10 +451,121 @@ class RunRegistry:
             raise
 
     @contextlib.contextmanager
-    def sqlite_connection(self) -> Iterator[sqlite3.Connection]:
-        """Public access to the registry's SQLite connection for ArtifactStore."""
+    def _sqlite_connection(self) -> Iterator[sqlite3.Connection]:
+        """Internal access to the registry's SQLite connection.
+
+        Use the typed data-layer methods (``write_df``, ``read_df``,
+        ``write_blob_payload``, etc.) instead of calling this directly.
+        """
         with self._sqlite() as conn:
             yield conn
+
+    # ------------------------------------------------------------------
+    # Typed data-layer — callers never need a raw sqlite3.Connection
+    # ------------------------------------------------------------------
+
+    def write_df(
+        self,
+        table_name: str,
+        df: Any,
+        if_exists: str = "replace",
+    ) -> None:
+        """Write a :class:`pandas.DataFrame` to a SQLite table."""
+        with self._sqlite() as conn:
+            df.to_sql(table_name, conn, if_exists=if_exists, index=False)
+
+    def read_df(self, table_name: str) -> Any:
+        """Read a SQLite table into a :class:`pandas.DataFrame`."""
+        import pandas as _pd
+        with self._sqlite() as conn:
+            return _pd.read_sql(f"SELECT * FROM {table_name}", conn)
+
+    def write_struct_payload(
+        self,
+        stage: str | int,
+        artifact_id: str,
+        json_text: str,
+    ) -> None:
+        """Upsert a JSON string into ``result_structs``."""
+        with self._sqlite() as conn:
+            conn.execute(
+                "INSERT INTO result_structs (stage, artifact_id, json, created_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(stage, artifact_id) DO UPDATE SET "
+                "json=excluded.json, created_at=excluded.created_at",
+                (str(stage), artifact_id, json_text, _utcnow()),
+            )
+
+    def read_struct_payload(
+        self,
+        stage: str | int,
+        artifact_id: str,
+    ) -> Optional[str]:
+        """Return the JSON string from ``result_structs``, or ``None``."""
+        with self._sqlite() as conn:
+            row = conn.execute(
+                "SELECT json FROM result_structs WHERE stage=? AND artifact_id=?",
+                (str(stage), artifact_id),
+            ).fetchone()
+        return row[0] if row is not None else None
+
+    def write_blob_payload(
+        self,
+        stage: str | int,
+        artifact_id: str,
+        data: bytes,
+        *,
+        serializer: str,
+        mime: Optional[str],
+        sha: str,
+    ) -> int:
+        """Upsert raw bytes into ``internal_blobs``; return the row id."""
+        with self._sqlite() as conn:
+            cur = conn.execute(
+                "INSERT INTO internal_blobs "
+                "(stage, artifact_id, mime, serializer, sha256, size_bytes, "
+                " bytes, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(stage, artifact_id) DO UPDATE SET "
+                "mime=excluded.mime, serializer=excluded.serializer, "
+                "sha256=excluded.sha256, size_bytes=excluded.size_bytes, "
+                "bytes=excluded.bytes, created_at=excluded.created_at",
+                (str(stage), artifact_id, mime, serializer, sha, len(data),
+                 sqlite3.Binary(data), _utcnow()),
+            )
+            blob_id = cur.lastrowid
+            if not blob_id:
+                row = conn.execute(
+                    "SELECT id FROM internal_blobs WHERE stage=? AND artifact_id=?",
+                    (str(stage), artifact_id),
+                ).fetchone()
+                blob_id = int(row[0]) if row else 0
+        return int(blob_id)
+
+    def read_blob_payload(
+        self,
+        stage: str | int,
+        artifact_id: str,
+    ) -> Optional[bytes]:
+        """Return the raw bytes from ``internal_blobs``, or ``None``."""
+        with self._sqlite() as conn:
+            row = conn.execute(
+                "SELECT bytes FROM internal_blobs WHERE stage=? AND artifact_id=?",
+                (str(stage), artifact_id),
+            ).fetchone()
+        return bytes(row[0]) if row is not None else None
+
+    def list_blob_shas(self) -> set[str]:
+        """Return the set of ``blob_sha256`` values referenced in ``artifacts``.
+
+        Used by :meth:`~sparc.registry.store.ArtifactStore.prune_unreferenced_blobs`
+        to determine which external CAS files are still live.
+        """
+        with self._sqlite() as conn:
+            rows = conn.execute(
+                "SELECT blob_sha256 FROM artifacts WHERE blob_sha256 IS NOT NULL"
+            ).fetchall()
+        return {row[0] for row in rows if row[0]}
 
     def close(self) -> None:
         """Close all thread-local connections held by this registry.

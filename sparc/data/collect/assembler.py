@@ -130,8 +130,13 @@ def run(config: CollectConfig) -> AssemblerResult:
         f"cloud ≤ {config.cloud_cover_max}%"
     )
 
-    # --- Step 1: Build 30m fishnet ---
-    fishnet = _build_fishnet(config.boundary)
+    # --- Step 1: Build 30m fishnet as SpatialGrid ---
+    from sparc.data.spatial_grid import SpatialGrid
+    grid = SpatialGrid.from_boundary(config.boundary, resolution_m=30.0)
+    fishnet = grid.cells_3857.copy()
+    fishnet["cell_id"] = range(len(fishnet))
+    fishnet["cell_x"] = fishnet.geometry.centroid.x
+    fishnet["cell_y"] = fishnet.geometry.centroid.y
 
     # --- Step 2: CAPA — fetch label data first, discover anchor dates ---
     # CAPA ground-truth air temperature measurements define the prediction
@@ -202,11 +207,11 @@ def run(config: CollectConfig) -> AssemblerResult:
         for col in ("pct_impervious", "pct_canopy", "land_cover"):
             manifest.error(col, str(exc))
 
-    # --- Step 5: ERA5 ---
+    # --- Step 5: ERA5 — aligned to CAPA anchors when available ---
     manifest.fetching("era5_t2m")
     from .era5 import fetch_era5
     try:
-        fishnet = fetch_era5(fishnet, config.boundary.bbox, config.date_start, config.date_end)
+        fishnet = fetch_era5(fishnet, config.boundary.bbox, window)
         manifest.update("era5_t2m", coverage_pct=_coverage(fishnet, "era5_t2m"),
                         source_name="Open-Meteo ERA5")
     except Exception as exc:
@@ -322,21 +327,6 @@ def run(config: CollectConfig) -> AssemblerResult:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _build_fishnet(boundary: BoundaryResult) -> object:
-    """Create a 30m fishnet clipped to the boundary polygon."""
-    from sparc.data.processing import create_fishnet, clip_to_boundary
-    import geopandas as gpd
-
-    boundary_proj = boundary.gdf.to_crs("EPSG:3857")  # type: ignore[union-attr]
-    bounds = boundary_proj.total_bounds  # type: ignore[union-attr]
-    fishnet = create_fishnet(tuple(bounds), resolution=30.0, crs="EPSG:3857")
-    fishnet = clip_to_boundary(fishnet, boundary_proj)
-    fishnet["cell_id"] = range(len(fishnet))
-    fishnet["cell_x"] = fishnet.geometry.centroid.x
-    fishnet["cell_y"] = fishnet.geometry.centroid.y
-    return fishnet
-
 
 def _coverage(gdf: object, col: str) -> float:
     """Return fraction of non-null values in *col*."""

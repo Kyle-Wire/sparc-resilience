@@ -1,4 +1,5 @@
-const STORAGE_KEY = "sparc-recent-projects";
+import { localStore } from "./localStore";
+
 const MAX_RECENTS = 10;
 
 export interface RecentProject {
@@ -10,7 +11,7 @@ export interface RecentProject {
 
 export function getRecents(): RecentProject[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStore.get("recent-projects");
     if (!raw) return [];
     const parsed: RecentProject[] = JSON.parse(raw);
     return parsed.sort(
@@ -24,17 +25,17 @@ export function getRecents(): RecentProject[] {
 export function addRecent(entry: Omit<RecentProject, "lastOpened">): void {
   const recents = getRecents().filter((r) => r.path !== entry.path);
   recents.unshift({ ...entry, lastOpened: new Date().toISOString() });
-  localStorage.setItem(
-    STORAGE_KEY,
+  localStore.set(
+    "recent-projects",
     JSON.stringify(recents.slice(0, MAX_RECENTS)),
   );
 }
 
 export function removeRecent(path: string): void {
   const recents = getRecents().filter((r) => r.path !== path);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(recents));
+  localStore.set("recent-projects", JSON.stringify(recents));
 }
 
 export function clearRecents(): void {
-  localStorage.removeItem(STORAGE_KEY);
+  localStore.remove("recent-projects");
 }

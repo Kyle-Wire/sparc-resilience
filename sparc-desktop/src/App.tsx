@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useMemo } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { useServer } from "@/hooks/useServer";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { NotificationContext, useNotificationState } from "@/hooks/useNotifications";
@@ -14,7 +14,7 @@ import Shell from "@/components/layout/Shell";
 import type { PageName } from "@/components/layout/Sidebar";
 import { PAGES } from "@/components/layout/Sidebar";
 import ChatPanel from "@/components/chat/ChatPanel";
-import CommandPalette, { type PaletteItem } from "@/components/common/CommandPalette";
+import CommandPalette from "@/components/common/CommandPalette";
 import OnboardingTour from "@/components/common/OnboardingTour";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import UpdateBanner from "@/components/updater/UpdateBanner";
@@ -24,6 +24,8 @@ import { buildSystemPrompt } from "@/lib/prompts";
 import { useStartup } from "@/hooks/useStartup";
 import { useProjectContext } from "@/hooks/useProjectContext";
 import { useChatActions } from "@/hooks/useChatActions";
+import { usePromptMode } from "@/hooks/usePromptMode";
+import { useCommandPaletteItems } from "@/hooks/useCommandPaletteItems";
 
 import ProjectPage from "@/components/pages/ProjectPage";
 import DataPage from "@/components/pages/DataPage";
@@ -65,18 +67,7 @@ export default function App() {
   }, [ready]);
 
   // Derive prompt mode from current page (or seed override).
-  const promptMode = (() => {
-    if (explainSeed?.mode === "narrator") return "narrator" as const;
-    if (explainSeed?.mode === "hypothesis") return "hypothesis" as const;
-    switch (page) {
-      case "Project": return "domain" as const;
-      case "DAG": return "dag" as const;
-      case "Physics": return "physics" as const;
-      case "Results":
-      case "Report": return "results" as const;
-      default: return "general" as const;
-    }
-  })();
+  const promptMode = usePromptMode(page, explainSeed);
 
   const systemPrompt = buildSystemPrompt(promptMode, dataCtx ?? undefined);
 
@@ -100,47 +91,7 @@ export default function App() {
   }, [explainSeed]);
 
   // Build the command palette items from currently-known data context.
-  const paletteItems = useMemo<PaletteItem[]>(() => {
-    const out: PaletteItem[] = PAGES.map((p) => ({
-      id: `page:${p}`, kind: "page", label: p, page: p, hint: "→ navigate",
-    }));
-    out.push({ id: "page:Settings", kind: "page", label: "Settings", page: "Settings", hint: "→ navigate" });
-    out.push({
-      id: "action:toggle-chat", kind: "action", label: "Toggle chat panel",
-      hint: "Cmd+J", run: () => setChatOpen((o) => !o),
-    });
-    out.push({
-      id: "action:hypothesis", kind: "action", label: "Generate hypotheses",
-      hint: "narrator",
-      run: () => explainHost.value.requestExplain(
-        "Propose 3-5 ranked, testable causal hypotheses for the loaded dataset.",
-        "hypothesis",
-      ),
-    });
-    if (dataCtx?.columns) {
-      for (const col of dataCtx.columns.slice(0, 80)) {
-        out.push({ id: `pred:${col}`, kind: "predictor", label: col, page: "Variables" });
-      }
-    }
-    if (dataCtx?.scenarios) {
-      for (const s of dataCtx.scenarios) {
-        out.push({ id: `scn:${s.name}`, kind: "scenario", label: s.name, hint: s.variable, page: "Scenarios" });
-      }
-    }
-    if (dataCtx?.causalResults) {
-      for (const treatment of Object.keys(dataCtx.causalResults)) {
-        out.push({
-          id: `tr:${treatment}`, kind: "treatment", label: treatment,
-          hint: "explain effect",
-          run: () => explainHost.value.requestExplain(
-            `Explain the causal effect of ${treatment} on the outcome, citing magnitudes, mechanism, and confidence.`,
-            "narrator",
-          ),
-        });
-      }
-    }
-    return out;
-  }, [dataCtx, explainHost.value]);
+  const paletteItems = useCommandPaletteItems(dataCtx, explainHost.value, navigate, setChatOpen);
   useKeyboardShortcuts(kbHandlers);
 
   // Must be defined before any early returns to satisfy rules-of-hooks

@@ -142,6 +142,28 @@ class VariableManifest:
         return cls(entries=entries)
 
     @classmethod
+    def for_domain(cls, domain: str) -> "VariableManifest":
+        """Return a manifest pre-populated with variable definitions for *domain*.
+
+        Parameters
+        ----------
+        domain : str
+            Domain identifier, e.g. ``"uhi"``, ``"wildfire"``, ``"coastal"``.
+
+        Raises
+        ------
+        KeyError
+            If no variable definitions are registered for *domain*.
+        """
+        if domain not in _DOMAIN_VARIABLE_REGISTRY:
+            raise KeyError(
+                f"No variable definitions registered for domain '{domain}'. "
+                f"Known domains: {sorted(_DOMAIN_VARIABLE_REGISTRY)}"
+            )
+        import copy
+        return cls.empty([copy.copy(e) for e in _DOMAIN_VARIABLE_REGISTRY[domain]])
+
+    @classmethod
     def empty(cls, variables: List[ManifestEntry]) -> "VariableManifest":
         """Return a manifest from an explicit variable list."""
         return cls(entries={e.name: e for e in variables})
@@ -336,3 +358,20 @@ _UHI_VARIABLE_DEFINITIONS: list[ManifestEntry] = [
     ManifestEntry("cdc_svi",             "CDC Social Vulnerability Index (0–1)",                        required=False),
     ManifestEntry("ejscreen_score",      "EPA EJScreen composite score",                               required=False),
 ]
+
+# ---------------------------------------------------------------------------
+# Domain variable registry
+# ---------------------------------------------------------------------------
+
+#: Maps domain identifier → ordered list of ManifestEntry definitions.
+#: Add a new domain by inserting a key here; no other code changes are needed.
+#:
+#: Example — adding a wildfire domain::
+#:
+#:     _DOMAIN_VARIABLE_REGISTRY["wildfire"] = [
+#:         ManifestEntry("dnbr", "Differenced Normalized Burn Ratio", required=True),
+#:         ...
+#:     ]
+_DOMAIN_VARIABLE_REGISTRY: Dict[str, List[ManifestEntry]] = {
+    "uhi": _UHI_VARIABLE_DEFINITIONS,
+}

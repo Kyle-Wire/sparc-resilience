@@ -336,9 +336,10 @@ def _attach_registry(config: dict) -> None:
 # Live artifact-event broadcasting
 # ------------------------------------------------------------------
 
-# Active /run/stream subscribers — populated when a websocket connects.
-# Each entry is an ``asyncio.Queue`` of pending events for that subscriber.
-_artifact_subscribers: list[Any] = []
+from sparc.server.event_broadcaster import EventBroadcaster as _EventBroadcaster
+
+# Single broadcaster instance shared by all WebSocket handlers.
+_broadcaster = _EventBroadcaster()
 
 
 def _on_artifact_registered(entry: Any) -> None:
@@ -369,17 +370,8 @@ def _on_artifact_registered(entry: Any) -> None:
             state.result_cache.invalidate_stage(stage_str)
     except Exception:  # noqa: BLE001
         pass
-    # Fan out to live ws subscribers via their queues. Listener may run on a
-    # background thread; use ``call_soon_threadsafe`` if a loop is running.
-    for q in list(_artifact_subscribers):
-        try:
-            loop = getattr(q, "_sparc_loop", None)
-            if loop is not None and loop.is_running():
-                loop.call_soon_threadsafe(q.put_nowait, event)
-            else:
-                q.put_nowait(event)
-        except Exception:  # noqa: BLE001
-            pass
+    # Fan out to live ws subscribers via the broadcaster.
+    _broadcaster.broadcast(event)
 
 
 def _registry_path(stage: str | int, artifact_id: str) -> Path | None:
@@ -618,19 +610,11 @@ async def _on_shutdown() -> None:
     Best-effort: anything that fails here is logged and swallowed so we
     don't block uvicorn's exit path.
     """
-    # Drain WebSocket subscriber queues so any consumers see the connection
-    # close instead of hanging on a never-arriving message.
+    # Broadcast server_shutdown so all WebSocket consumers can clean up.
     try:
-        subs = globals().get("_artifact_subscribers")
-        if subs:
-            for q in list(subs):
-                try:
-                    q.put_nowait({"type": "server_shutdown"})
-                except Exception:
-                    pass
-            subs.clear()
+        _broadcaster.broadcast({"type": "server_shutdown"})
     except Exception as exc:
-        print(f"Shutdown: subscriber drain failed: {exc}")
+        print(f"Shutdown: broadcaster drain failed: {exc}")
 
     # Release the cached scenario GeoDataFrame(s) so the file handle is
     # closed before PyInstaller's `_MEI` cleanup runs.
@@ -1972,21 +1956,20 @@ async def get_run_log():
 # Pipeline streaming (WebSocket)
 # ------------------------------------------------------------------
 
-@app.websocket("/run/stream")
-async def run_stream(ws: WebSocket, token: str = Query(default="")):
-    """Stream structured pipeline events over a WebSocket.
+@app.websocket("/run/execute")
+async def run_execute(ws: WebSocket, token: str = Query(default="")):
+    """Execute a pipeline stage and stream structured events over WebSocket.
 
     The client sends a JSON message to start:
         ``{"stage": 2, "fast": false, "skip_gwen": false}``
-        ``{"subscribe": "artifacts"}``  — no stage executed; receive artifact events only
 
     The server pushes events until the stage completes or errors:
         ``{"type": "metric", "stage": 2, "fold": 3, "metric": "r2", "value": 0.891}``
         ``{"type": "complete", "stage": 2}``
         ``{"type": "artifact_written", "stage": "4", "artifact_id": "scenario_results", ...}``
 
-    ``artifact_written`` events are emitted whenever ``RunRegistry.register_artifact``
-    is called, so the desktop reacts the moment new data lands in the database.
+    ``artifact_written`` events are also pushed here (via the broadcaster) so the
+    desktop reacts the moment new data lands in the database.
     """
     # Validate sidecar token passed as query param (browsers cannot set custom
     # headers on WebSocket upgrade requests).
@@ -2000,30 +1983,13 @@ async def run_stream(ws: WebSocket, token: str = Query(default="")):
     except WebSocketDisconnect:
         return
 
-    # Subscribe-only mode: client wants artifact events but is not starting a run.
-    if init_msg.get("subscribe") == "artifacts" or init_msg.get("stage") is None:
-        queue: asyncio.Queue = asyncio.Queue()
-        queue._sparc_loop = asyncio.get_running_loop()  # type: ignore[attr-defined]
-        _artifact_subscribers.append(queue)
-        # Ack so clients (and tests) know the subscription is live before
-        # they trigger downstream writes.
-        await ws.send_json({"type": "subscribed", "channel": "artifacts"})
-        try:
-            while True:
-                event = await queue.get()
-                await ws.send_json(event)
-        except WebSocketDisconnect:
-            pass
-        finally:
-            try:
-                _artifact_subscribers.remove(queue)
-            except ValueError:
-                pass
-            if ws.client_state.name != "DISCONNECTED":
-                await ws.close()
+    stage_raw = init_msg.get("stage")
+    if stage_raw is None:
+        await ws.send_json({"type": "error", "message": "Missing required field: stage"})
+        await ws.close()
         return
 
-    stage = int(init_msg.get("stage", 0))
+    stage = int(stage_raw)
     fast = bool(init_msg.get("fast", False))
     skip_gwen = bool(init_msg.get("skip_gwen", False))
 
@@ -2039,14 +2005,14 @@ async def run_stream(ws: WebSocket, token: str = Query(default="")):
 
     # Subscribe to artifact events while running so the same socket carries
     # both metric/complete and artifact_written events.
-    queue = asyncio.Queue()
-    queue._sparc_loop = asyncio.get_running_loop()  # type: ignore[attr-defined]
-    _artifact_subscribers.append(queue)
+    artifact_queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+    unsub = _broadcaster.subscribe(artifact_queue, loop=loop)
 
     async def _drain_artifacts() -> None:
         try:
             while True:
-                event = await queue.get()
+                event = await artifact_queue.get()
                 await ws.send_json(event)
         except (asyncio.CancelledError, WebSocketDisconnect):
             pass
@@ -2059,10 +2025,41 @@ async def run_stream(ws: WebSocket, token: str = Query(default="")):
         pass
     finally:
         drain_task.cancel()
-        try:
-            _artifact_subscribers.remove(queue)
-        except ValueError:
-            pass
+        unsub()
+        if ws.client_state.name != "DISCONNECTED":
+            await ws.close()
+
+
+@app.websocket("/run/artifacts")
+async def run_artifacts(ws: WebSocket, token: str = Query(default="")):
+    """Subscribe to artifact-written events over WebSocket.
+
+    No init message required.  The server immediately starts pushing
+    ``artifact_written`` events whenever ``RunRegistry.register_artifact``
+    is called:
+        ``{"type": "artifact_written", "stage": "4", "artifact_id": "...", ...}``
+
+    Connection stays open until the client disconnects.
+    """
+    if _SERVER_TOKEN is not None and token != _SERVER_TOKEN:
+        await ws.close(code=4003)
+        return
+    await ws.accept()
+
+    artifact_queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+    unsub = _broadcaster.subscribe(artifact_queue, loop=loop)
+    # Ack so clients (and tests) know the subscription is live before
+    # they trigger downstream writes.
+    await ws.send_json({"type": "subscribed", "channel": "artifacts"})
+    try:
+        while True:
+            event = await artifact_queue.get()
+            await ws.send_json(event)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        unsub()
         if ws.client_state.name != "DISCONNECTED":
             await ws.close()
 
@@ -4927,49 +4924,6 @@ class RunScenariosBody(BaseModel):
         extra = "ignore"
 
 
-def _runtime_spec_to_config_scenarios(specs: list[RuntimeScenarioSpec]) -> list[dict]:
-    """Convert RuntimeScenarioSpec objects to the internal ScenarioSimulator format."""
-    out = []
-    for spec in specs:
-        # Build one config-style scenario entry per treatment variable.
-        # For a joint scenario (multiple variables), we emit one entry per
-        # variable so the DAG can handle indirect paths; the caller joins them
-        # as interaction_scenarios when co-interventions are present.
-        for var, magnitude in spec.interventions.items():
-            direction = "decrease" if magnitude < 0 else "increase"
-            increment = abs(magnitude)
-            out.append({
-                "name": spec.name,
-                "variable": var,
-                "direction": direction,
-                "increments": [increment],
-                "min_val": None,
-                "max_val": None,
-                "unit": "",
-            })
-    return out
-
-
-def _runtime_specs_to_interaction_scenarios(
-    specs: list[RuntimeScenarioSpec],
-) -> list[dict]:
-    """Emit joint/interaction scenario entries for multi-variable specs."""
-    out = []
-    for spec in specs:
-        if len(spec.interventions) > 1:
-            out.append({
-                "name": spec.name,
-                "interventions": [
-                    {
-                        "variable": var,
-                        "increment": abs(mag),
-                        "direction": "decrease" if mag < 0 else "increase",
-                    }
-                    for var, mag in spec.interventions.items()
-                ],
-            })
-    return out
-
 
 @app.post("/scenarios/run")
 async def run_scenarios(body: Optional[RunScenariosBody] = Body(default=None)):
@@ -4988,8 +4942,13 @@ async def run_scenarios(body: Optional[RunScenariosBody] = Body(default=None)):
 
     if runtime_specs:
         # Build simulator config from runtime specs
-        scenarios = _runtime_spec_to_config_scenarios(runtime_specs)
-        interaction_scenarios = _runtime_specs_to_interaction_scenarios(runtime_specs)
+        from sparc.scenario.spec_translator import InterventionSpec, ScenarioSpecTranslator
+        _sim_cfg = ScenarioSpecTranslator.to_simulator_config([
+            InterventionSpec(name=s.name, interventions=s.interventions)
+            for s in runtime_specs
+        ])
+        scenarios = _sim_cfg.scenarios
+        interaction_scenarios = _sim_cfg.joint_scenarios
     else:
         scenarios = state.project_config.get("scenarios", [])
         interaction_scenarios = state.project_config.get("interaction_scenarios", [])
@@ -5021,50 +4980,10 @@ async def run_scenarios(body: Optional[RunScenariosBody] = Body(default=None)):
     has_dag = dag_file and Path(dag_file).exists()
     requested_mode = config.get("pipeline", {}).get("scenario_mode", "auto")
 
-    # Translate legacy mode aliases (one-shot deprecation warning).
-    _LEGACY_MODE_ALIASES = {
-        "physics":            "mode_1_physics",
-        "dag_coefficient":    "mode_2_dag_local",
-        "model_reprediction": "mode_3_full_ensemble",
-        "hybrid":             "mode_4_hybrid",
-    }
-    scenario_mode = requested_mode
-    if requested_mode == "bayesian":
-        raise RuntimeError(
-            "scenario_mode='bayesian' was removed in SPARC v4. "
-            "Use 'mode_3_full_ensemble' or 'auto'."
-        )
-    if requested_mode in _LEGACY_MODE_ALIASES:
-        new_key = _LEGACY_MODE_ALIASES[requested_mode]
-        import warnings as _warnings
-        _warnings.warn(
-            f"scenario_mode='{requested_mode}' is deprecated; use '{new_key}'.",
-            DeprecationWarning, stacklevel=2,
-        )
-        scenario_mode = new_key
-
-    if scenario_mode == "auto":
-        from sparc.__main__ import _resolve_auto_scenario_mode
-        scenario_mode = _resolve_auto_scenario_mode(has_dag=has_dag)
-
-    if scenario_mode == "mode_4_hybrid":
-        summary_df, results_gdf = sim.run_with_hybrid_reprediction(data, verbose=True)
-    elif scenario_mode == "mode_3_full_ensemble":
-        summary_df, results_gdf = sim.run_with_model_reprediction(data, verbose=True)
-    elif scenario_mode == "mode_2_dag_local":
-        if has_dag:
-            summary_df, results_gdf = sim.run_with_causal_dag(data, verbose=True)
-        else:
-            scenario_mode = "mode_1_physics"
-            summary_df, results_gdf = sim.run(verbose=True)
-    elif scenario_mode == "mode_1_physics":
-        summary_df, results_gdf = sim.run(verbose=True)
-    else:
-        raise ValueError(
-            f"Unknown scenario_mode '{scenario_mode}'. "
-            f"Valid: auto, mode_1_physics, mode_2_dag_local, "
-            f"mode_3_full_ensemble, mode_4_hybrid."
-        )
+    from sparc.run.scenario_engine_selector import ScenarioEngineSelector
+    selector = ScenarioEngineSelector(config, sim, data)
+    scenario_mode = selector.resolve_mode(requested_mode, has_dag)
+    summary_df, results_gdf = selector.run(scenario_mode, has_dag=has_dag)
 
     # --- Conservation checks on scenario results ---------------------
     conservation_violations = []
@@ -5135,8 +5054,12 @@ async def optimize_scenario(body: OptimizeScenarioBody):
     from sparc.scenario.budget import optimize as _budget_opt, pareto_sweep as _budget_sweep
 
     # ── 1. Build config and run the simulator ──────────────────────────────
-    scenarios = _runtime_spec_to_config_scenarios([spec])
-    interaction_scenarios = _runtime_specs_to_interaction_scenarios([spec])
+    from sparc.scenario.spec_translator import InterventionSpec, ScenarioSpecTranslator
+    _sim_cfg = ScenarioSpecTranslator.to_simulator_config([
+        InterventionSpec(name=spec.name, interventions=spec.interventions)
+    ])
+    scenarios = _sim_cfg.scenarios
+    interaction_scenarios = _sim_cfg.joint_scenarios
     config = dict(state.project_config)
     config["scenarios"] = scenarios
     config["interaction_scenarios"] = interaction_scenarios
@@ -5156,8 +5079,9 @@ async def optimize_scenario(body: OptimizeScenarioBody):
     else:
         summary_df, results_gdf, *_ = sim.run(verbose=False)
 
-    # ── 2. Extract per-cell delta for the dominant total_ column ───────────
+    # ── 2. Extract per-cell delta and build benefit surface ────────────────
     import numpy as np
+    from sparc.scenario.benefit_surface import BenefitSurface
     delta_col: Optional[str] = None
     if results_gdf is not None and hasattr(results_gdf, "columns"):
         total_cols = [c for c in results_gdf.columns if c.startswith("total_")]
@@ -5173,7 +5097,6 @@ async def optimize_scenario(body: OptimizeScenarioBody):
 
     raw_deltas = np.asarray(results_gdf[delta_col].to_numpy(), dtype=float)
     raw_deltas = np.nan_to_num(raw_deltas, nan=0.0)
-    benefits_base = np.abs(raw_deltas)
 
     # ── 3. Equity layer ────────────────────────────────────────────────────
     equity_scores = np.ones(n_cells, dtype=float)
@@ -5211,11 +5134,8 @@ async def optimize_scenario(body: OptimizeScenarioBody):
             import warnings as _w
             _w.warn(f"Equity layer unavailable: {_eq_err}. Using uniform equity.")
 
-    # ── 4. Equity-modulated benefit ────────────────────────────────────────
+    # ── 4. Build equity-modulated benefit surface ──────────────────────────
     alpha = float(np.clip(spec.equity_focus, 0.0, 1.0))
-    modulated_benefits = benefits_base * ((1.0 - alpha) + alpha * equity_scores)
-
-    # ── 5. Per-cell costs from unit_costs ──────────────────────────────────
     total_unit_cost = sum(
         spec.unit_costs.get(var, 0.0) * abs(mag)
         for var, mag in spec.interventions.items()
@@ -5228,13 +5148,14 @@ async def optimize_scenario(body: OptimizeScenarioBody):
             "No unit_costs provided for scenario interventions. "
             "Using abstract cost=1 per cell."
         )
-    costs = np.full(n_cells, float(total_unit_cost), dtype=float)
+    surface = BenefitSurface.from_results_gdf(
+        results_gdf, delta_col=delta_col, unit_cost=total_unit_cost
+    ).with_equity(equity_scores, spec.equity_focus)
 
-    # ── 6. Allocate ────────────────────────────────────────────────────────
+    # ── 5. Allocate ────────────────────────────────────────────────────────
     alloc_result = _budget_opt(
-        benefits=modulated_benefits,
+        **surface.to_optimize_args(),
         budget=spec.budget,
-        costs=costs,
         solver=body.solver,
     )
     allocation = np.asarray(alloc_result.allocation, dtype=float)
@@ -5251,7 +5172,7 @@ async def optimize_scenario(body: OptimizeScenarioBody):
     out_gdf["allocation"] = allocation
     out_gdf["projected_delta"] = raw_deltas
     out_gdf["equity_score"] = equity_scores
-    out_gdf["estimated_cost"] = allocation * costs
+    out_gdf["estimated_cost"] = allocation * surface.costs
 
     if out_gdf.crs is not None and str(out_gdf.crs) != "EPSG:4326":
         out_gdf = out_gdf.to_crs(epsg=4326)
@@ -5263,9 +5184,8 @@ async def optimize_scenario(body: OptimizeScenarioBody):
     if body.pareto_sweep:
         try:
             sweep = _budget_sweep(
-                benefits=modulated_benefits,
+                **surface.to_optimize_args(),
                 budget=spec.budget,
-                costs=costs,
                 solver=body.solver,
             )
             pareto_out = sweep.to_dict()
@@ -6046,6 +5966,40 @@ async def get_dag():
     from sparc.causal.dag_definition import load_dag
     dag = load_dag(dag_file)
     return dag
+
+
+@app.put("/dag")
+async def save_dag(dag: dict):
+    """Validate and persist an edited DAG definition back to the project dag_file."""
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+
+    dag_file = state.project_config.get("causal", {}).get("dag_file")
+    if not dag_file:
+        raise HTTPException(400, "No dag_file configured in project")
+
+    from sparc.causal.dag_definition import dag_to_networkx
+    import networkx as nx
+    import yaml as _yaml
+
+    try:
+        G = dag_to_networkx(dag)
+    except Exception as exc:
+        raise HTTPException(422, f"Invalid DAG: {exc}")
+
+    if not nx.is_directed_acyclic_graph(G):
+        raise HTTPException(422, "DAG contains cycles")
+
+    p = Path(dag_file)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w", encoding="utf-8") as fh:
+        _yaml.safe_dump(dag, fh, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+    return {
+        "status": "saved",
+        "n_nodes": len(dag.get("nodes", [])),
+        "n_edges": len(dag.get("edges", [])),
+    }
 
 
 @app.post("/dag/validate")

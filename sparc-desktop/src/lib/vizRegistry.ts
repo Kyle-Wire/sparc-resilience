@@ -39,6 +39,14 @@ export interface VizEntry {
   endpoint?: string;
   /** Human label for menus / tooltips. */
   label: string;
+  /**
+   * Optional lazy-loaded React component that renders this visualization.
+   * When set, the viz panel can render the component directly without a
+   * separate switch statement. Null means "no component wired yet".
+   *
+   * Assign at startup via `registerVizComponent(stage, artifactId, component)`.
+   */
+  component?: React.LazyExoticComponent<React.ComponentType<unknown>> | null;
 }
 
 export const VIZ_REGISTRY: VizEntry[] = [
@@ -89,4 +97,35 @@ export function getVizEntry(stage: string, artifactId: string): VizEntry | undef
 
 export function getVizByStage(stage: string): VizEntry[] {
   return VIZ_REGISTRY.filter((e) => e.stage === stage);
+}
+
+/**
+ * Look up the lazy-loaded React component for a viz entry, if any.
+ * Returns `null` when no component has been registered.
+ */
+export function getVizComponent(
+  stage: string,
+  artifactId: string,
+): React.LazyExoticComponent<React.ComponentType<unknown>> | null {
+  return BY_KEY.get(`${stage}__${artifactId}`)?.component ?? null;
+}
+
+/**
+ * Register (or unregister) a React component for a viz entry.
+ * Pass `null` to detach a previously registered component.
+ *
+ * Call this at startup — e.g. in `main.tsx` — once per viz component
+ * you want to wire in. This is the single operation needed to fully
+ * integrate a new visualization.
+ *
+ * @example
+ *   registerVizComponent("2", "cate", React.lazy(() => import("@/components/CateViz")));
+ */
+export function registerVizComponent(
+  stage: string,
+  artifactId: string,
+  component: React.LazyExoticComponent<React.ComponentType<unknown>> | null,
+): void {
+  const entry = BY_KEY.get(`${stage}__${artifactId}`);
+  if (entry) entry.component = component;
 }

@@ -230,9 +230,9 @@ class PipelineOrchestrator:
             import importlib
             mod = importlib.import_module(module_path)
             real_fn = getattr(mod, fn_name)
-            # Wrap to match (context, flags) signature
-            def _wrapped(ctx: RunContext, flags: dict) -> None:
-                real_fn(fast_mode=flags.get("fast", False))
+            # Wrap to match (context, flags) signature, passing ctx through
+            def _wrapped(ctx: RunContext, flags: dict, _fn=real_fn) -> None:
+                _fn(ctx, fast_mode=flags.get("fast", False))
             return _wrapped
         except (ImportError, AttributeError):
             return None

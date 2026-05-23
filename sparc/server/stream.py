@@ -18,6 +18,7 @@ import threading
 import time
 from typing import Any, AsyncGenerator
 
+from sparc.server.event_classifier import classify
 from sparc.server.state import ServerState
 
 
@@ -26,162 +27,19 @@ from sparc.server.state import ServerState
 # ------------------------------------------------------------------
 
 class _EventCapture(io.TextIOBase):
-    """Captures writes to stdout, parses progress hints, and pushes
-    structured events into an ``asyncio.Queue``."""
+    """Thin stdout/stderr adapter.
 
-    # Patterns we try to extract from raw stdout lines
+    Captures writes line-by-line, delegates classification to
+    ``sparc.server.event_classifier.classify``, and pushes the
+    resulting PipelineEvent dicts into an ``asyncio.Queue``.
+
+    All classification logic (regex patterns, checkpoint list, model
+    weight map, ETA) now lives in ``event_classifier.py`` where it
+    can be tested as a pure function without asyncio or I/O.
+    """
+
+    # Keep _STAGE_RE only for the legacy ``_handle_dag_gate`` path below
     _STAGE_RE = re.compile(r"Stage\s+(\d+)", re.IGNORECASE)
-    _FOLD_RE = re.compile(r"[Ff]old\s+(\d+)")
-    _METRIC_RE = re.compile(r"(r2|rmse|mae|mape)\s*[=:]\s*([\d.]+)", re.IGNORECASE)
-    # Match a tqdm-style progress percentage at the start of a token, e.g.
-    # "  50%|██▌       |" or "100%|##########|".  Restricting to these
-    # tqdm-shaped contexts avoids matching the trailing "accept: 69.7%"
-    # NUTS line, which would otherwise capture the units digit (e.g. "7")
-    # and corrupt the desktop progress bar.
-    _PCT_RE = re.compile(r"(?:^|\s)(\d{1,3})%\s*\|")
-
-    # ---- Training telemetry patterns ----
-    # Capacity sweep result:  "hidden_dim=256: CV R²=0.8912"
-    _CAPACITY_RE = re.compile(
-        r"hidden_dim=(\d+):\s*CV\s+R[²2]=\s*([\d.]+)"
-    )
-    # Epoch log:  "Epoch 10/100  loss=0.1234  [mse=0.050 phys=0.020 ...]"
-    _EPOCH_RE = re.compile(
-        r"(?:Epoch|Retrain|SWA epoch)\s+(\d+)/(\d+)\s+loss=([\d.]+)"
-    )
-    # Loss components inside brackets: [mse=0.050 phys=0.020 ...]
-    _COMPONENTS_RE = re.compile(
-        r"\[([\w=.\s]+)\]"
-    )
-    # Curriculum stage marker: "[CURRICULUM] Stage B: Physics Activation"
-    _CURRICULUM_RE = re.compile(
-        r"\[CURRICULUM\]\s+(Stage\s+\w+):\s*(.+)"
-    )
-    # Convergence marker: "[CONVERGENCE] converging" or "[CONVERGENCE] converged"
-    _CONVERGENCE_RE = re.compile(
-        r"\[CONVERGENCE\]\s+(\w+)"
-    )
-
-    # DAG approval gate marker
-    _DAG_GATE_RE = re.compile(r"\[DAG_APPROVAL_REQUESTED\]\s*(\{.*\})")
-
-    # Structured model-level markers emitted by enhanced_spatial_cv.py
-    _MODEL_START_RE = re.compile(r"\[MODEL_START\]\s+(\w+)\s+\((\d+)/(\d+)\)")
-    _MODEL_DONE_RE = re.compile(r"\[MODEL_DONE\]\s+(\w+)\s+\((\d+)/(\d+)\)")
-
-    # OOF model result line: "OLS: R² = 0.2942, RMSE = 1.4375"
-    _MODEL_RESULT_RE = re.compile(
-        r"^(\w+):\s*R[\u00b22]\s*=\s*([\d.]+),\s*RMSE\s*=\s*([\d.]+)",
-        re.IGNORECASE,
-    )
-    # Neural fold boundary: "Fold 1 / 5  (32914 train, 11011 test)"
-    _NEURAL_FOLD_RE = re.compile(
-        r"[Ff]old\s+(\d+)\s*/\s*(\d+)\s*\((\d+)\s+train,\s*(\d+)\s+test\)"
-    )
-    # Fold training complete: "Fold 1 training done in 964.0s"
-    _FOLD_DONE_RE = re.compile(
-        r"[Ff]old\s+(\d+)\s+training\s+done\s+in\s+([\d.]+)s"
-    )
-
-    # Stage 2 model weight map (% of total stage 2 progress)
-    _MODEL_WEIGHTS: dict[str, tuple[int, int]] = {
-        # model_name → (start_pct, end_pct) within stage 2
-        "ols":     (5, 15),
-        "gwr":     (15, 35),
-        "gwrf":    (35, 55),
-        "ggpgam":  (55, 70),
-    }
-
-    # Phase-based progress markers (pattern → label displayed in the UI)
-    _PHASE_RE: list[tuple[re.Pattern, str]] = [
-        # Correlogram
-        (re.compile(r"Correlogram Analysis", re.IGNORECASE), "Correlogram analysis"),
-        (re.compile(r"Analyzing\s+(\S+)"), "Analyzing variable"),
-        (re.compile(r"Pipeline Configuration", re.IGNORECASE), "Pipeline configuration"),
-        # GWEN
-        (re.compile(r"GWEN Variable Selection", re.IGNORECASE), "GWEN variable selection"),
-        (re.compile(r"GWEN SELECTION RATIONALE", re.IGNORECASE), "GWEN results"),
-        # Spatial CV
-        (re.compile(r"Loading and Preprocessing", re.IGNORECASE), "Loading data"),
-        (re.compile(r"Loading Spatial Folds", re.IGNORECASE), "Loading spatial folds"),
-        (re.compile(r"Generating Spatial Folds", re.IGNORECASE), "Generating spatial folds"),
-        (re.compile(r"Training\s+(\S+)\s+across all folds", re.IGNORECASE), "Training model"),
-        (re.compile(r"Training\s+(\S+)\s+on\s+\d+\s+samples", re.IGNORECASE), "Training model"),
-        (re.compile(r"completed.*folds successful", re.IGNORECASE), "Model complete"),
-        (re.compile(r"Generating OOF predictions", re.IGNORECASE), "OOF predictions"),
-        (re.compile(r"Retraining Base Models", re.IGNORECASE), "Retraining base models"),
-        (re.compile(r"Spatial autocorrelation analysis", re.IGNORECASE), "Spatial autocorrelation"),
-        (re.compile(r"Spatial CV Complete", re.IGNORECASE), "Spatial CV complete"),
-        # Neural meta-learner
-        (re.compile(r"Neural Meta.?Learner", re.IGNORECASE), "Neural meta-learner"),
-        (re.compile(r"Capacity sweep", re.IGNORECASE), "Capacity sweep"),
-        # Causal
-        (re.compile(r"Causal Validation", re.IGNORECASE), "Causal validation"),
-        # Scenarios
-        (re.compile(r"Scenario Simulation", re.IGNORECASE), "Scenario simulation"),
-    ]
-
-    # Checkpoint patterns: (regex, checkpoint_id, curated_message, level)
-    # {0}, {1}, ... are replaced with regex capture groups.
-    _CHECKPOINTS: list[tuple[re.Pattern, str, str, str]] = [
-        # Stage 0 — Correlogram
-        (re.compile(r"Computing spatial correlogram for (\w+)"),
-         "correlogram_var", "Computing correlogram for {0}", "info"),
-        (re.compile(r"Optimal CV block size:\s*(\S+)"),
-         "block_size", "Optimal CV block size: {0}", "info"),
-        (re.compile(r"Correlogram-Based Spatial Analysis Complete"),
-         "correlogram_done", "Correlogram analysis complete", "success"),
-        (re.compile(r"Pipeline configuration saved"),
-         "config_saved", "Pipeline configuration saved", "info"),
-        # Stage 1 — GWEN
-        (re.compile(r"Fitting GWEN model"),
-         "gwen_fitting", "Fitting GWEN model \u2014 evaluating variable stability", "info"),
-        (re.compile(r"\[OK\] GWEN model fitted"),
-         "gwen_fitted", "GWEN model fitted successfully", "success"),
-        (re.compile(r"Selected (\d+) predictors"),
-         "gwen_selected", "{0} predictor variables selected", "success"),
-        (re.compile(r"GWEN VARIABLE SELECTION COMPLETE"),
-         "gwen_done", "GWEN variable selection complete", "success"),
-        # Stage 2 — Spatial CV
-        (re.compile(r"Generating Spatial Folds"),
-         "folds_gen", "Generating spatial validation folds", "info"),
-        (re.compile(r"Fold (\d+):\s*Train=(\d+),\s*Test=(\d+)"),
-         "fold_size", "Fold {0} prepared \u2014 {1} train / {2} test samples", "info"),
-        (re.compile(r"Optimized OOF Performance"),
-         "oof_perf", "Computing out-of-fold performance metrics", "info"),
-        (re.compile(r"Spatial CV Complete"),
-         "cv_done", "Spatial cross-validation complete", "success"),
-        (re.compile(r"Retraining Base Models on Full Dataset"),
-         "retrain_start", "Retraining models on full dataset", "info"),
-        (re.compile(r"\[OK\] Saved (\S+\.pkl)"),
-         "model_saved", "Model saved: {0}", "success"),
-        (re.compile(r"Final Results"),
-         "final_results", "Compiling final ensemble results", "info"),
-        (re.compile(r"V2 Neural Meta-Learner"),
-         "meta_learner", "Training neural meta-learner ensemble", "info"),
-        (re.compile(r"All surrogates passed validation"),
-         "surrogates_ok", "All surrogates passed validation", "success"),
-        # Stage 3 — Causal
-        (re.compile(r"Running DAG assumption diagnostics"),
-         "dag_diag", "Running DAG assumption diagnostics", "info"),
-        (re.compile(r"NUTS:\s*warmup phase \((\d+)"),
-         "nuts_warmup", "NUTS warmup \u2014 {0} transitions", "info"),
-        (re.compile(r"NUTS:\s*sampling phase \((\d+)"),
-         "nuts_sampling", "NUTS sampling \u2014 drawing {0} posterior samples", "info"),
-        (re.compile(r"NUTS convergence FAILED"),
-         "nuts_conv_fail", "NUTS convergence check needs attention", "warn"),
-        (re.compile(r"MC.{1,3}:\s*(\d+)\s*/\s*(\d+)\s*accepted"),
-         "mc3_result", "MC\u00b3 complete \u2014 {0}/{1} proposals accepted", "success"),
-        # Stage 4 — Scenarios
-        (re.compile(r"PHYSICS-CONSTRAINED SCENARIO PREDICTOR"),
-         "scenario_engine", "Initializing physics-constrained predictor", "info"),
-        (re.compile(r"Variable:\s+(\S+)\s+\(direction=(\w+)\)"),
-         "scenario_var", "Simulating {0} ({1})", "info"),
-        (re.compile(r"RUNNING JOINT SCENARIOS"),
-         "joint_scenarios", "Running joint intervention scenarios", "info"),
-        (re.compile(r"GENERATING INTERPRETATION MAPS"),
-         "gen_maps", "Generating spatial interpretation maps", "info"),
-    ]
 
     def __init__(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
         self._queue = queue
@@ -202,13 +60,17 @@ class _EventCapture(io.TextIOBase):
         pass
 
     def _emit(self, line: str) -> None:
-        # Take last \r-segment (tqdm overwrites previous content with \r)
-        if '\r' in line:
-            line = line.rsplit('\r', 1)[-1].strip()
-            if not line:
-                return
+        event = classify(line)
+        # Skip empty results (e.g. line was only whitespace after \r strip)
+        if not event.get("message") and event.get("type") == "log":
+            return
+        asyncio.run_coroutine_threadsafe(self._queue.put(event), self._loop)
 
-        event: dict[str, Any] = {"type": "log", "message": line}
+
+# ------------------------------------------------------------------
+# Session logger — persistent JSONL log file
+# ------------------------------------------------------------------
+
 
         m = self._STAGE_RE.search(line)
         if m:
@@ -295,84 +157,6 @@ class _EventCapture(io.TextIOBase):
             else:
                 event["train_phase"] = "cv"
             # Parse per-component losses from brackets
-            m_comp = self._COMPONENTS_RE.search(line)
-            if m_comp:
-                components: dict[str, float] = {}
-                for pair in m_comp.group(1).split():
-                    if "=" in pair:
-                        k, v = pair.split("=", 1)
-                        try:
-                            components[k] = float(v)
-                        except ValueError:
-                            pass
-                event["components"] = components
-
-        # Curriculum stage transition
-        m_cur = self._CURRICULUM_RE.search(line)
-        if m_cur:
-            event["type"] = "curriculum_stage"
-            event["curriculum"] = m_cur.group(1)
-            event["label"] = m_cur.group(2)
-
-        # Convergence status
-        m_conv = self._CONVERGENCE_RE.search(line)
-        if m_conv:
-            event["type"] = "convergence"
-            event["status"] = m_conv.group(1).lower()
-
-        # DAG approval gate
-        m_gate = self._DAG_GATE_RE.search(line)
-        if m_gate:
-            import json as _json
-            try:
-                payload = _json.loads(m_gate.group(1))
-            except _json.JSONDecodeError:
-                payload = {}
-            event["type"] = "dag_approval_requested"
-            event["n_edges"] = payload.get("n_edges", 0)
-            event["n_nodes"] = payload.get("n_nodes", 0)
-
-        # ---- Fold boundary and model result detection ----
-        if event["type"] == "log":
-            m_nf = self._NEURAL_FOLD_RE.search(line)
-            if m_nf:
-                event.update({
-                    "type": "fold_start",
-                    "fold": int(m_nf.group(1)),
-                    "n_folds": int(m_nf.group(2)),
-                    "n_train": int(m_nf.group(3)),
-                    "n_test": int(m_nf.group(4)),
-                })
-            elif (m_fd := self._FOLD_DONE_RE.search(line)):
-                event.update({
-                    "type": "fold_complete",
-                    "fold": int(m_fd.group(1)),
-                    "elapsed_seconds": float(m_fd.group(2)),
-                })
-            elif (m_mr := self._MODEL_RESULT_RE.search(line)):
-                event.update({
-                    "type": "model_result",
-                    "model": m_mr.group(1).upper(),
-                    "r2": float(m_mr.group(2)),
-                    "rmse": float(m_mr.group(3)),
-                })
-
-        # ---- Checkpoint promotion ----
-        # If still a raw "log" event, check if it matches a known checkpoint.
-        if event["type"] == "log":
-            for _cp_pat, _cp_id, _cp_msg, _cp_lvl in self._CHECKPOINTS:
-                _cm = _cp_pat.search(line)
-                if _cm:
-                    event["type"] = "checkpoint"
-                    event["checkpoint_id"] = _cp_id
-                    event["level"] = _cp_lvl
-                    try:
-                        event["message"] = _cp_msg.format(*_cm.groups())
-                    except (IndexError, KeyError):
-                        event["message"] = _cp_msg
-                    break
-
-        asyncio.run_coroutine_threadsafe(self._queue.put(event), self._loop)
 
 
 # ------------------------------------------------------------------

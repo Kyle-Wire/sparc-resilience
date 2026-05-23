@@ -1,16 +1,16 @@
 /**
  * Default workspace folder preference.
  *
- * Stored in localStorage so it travels with the install but not across
+ * Stored via localStore so it travels with the install but not across
  * machines. When set, new projects (template click + wizard) default to
  * this directory instead of prompting the user every time.
  */
 
-const STORAGE_KEY = "sparc-workspace-dir";
+import { localStore } from "./localStore";
 
 export function getWorkspaceDir(): string | null {
   try {
-    return localStorage.getItem(STORAGE_KEY);
+    return localStore.get("workspace-dir");
   } catch {
     return null;
   }
@@ -19,9 +19,9 @@ export function getWorkspaceDir(): string | null {
 export function setWorkspaceDir(path: string | null): void {
   try {
     if (path && path.trim().length > 0) {
-      localStorage.setItem(STORAGE_KEY, path);
+      localStore.set("workspace-dir", path);
     } else {
-      localStorage.removeItem(STORAGE_KEY);
+      localStore.remove("workspace-dir");
     }
   } catch {
     /* ignore */

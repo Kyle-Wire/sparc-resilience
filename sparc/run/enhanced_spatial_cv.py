@@ -1542,10 +1542,17 @@ class EnhancedSpatialCV:
             'performance': performance_summary
         }
 
-def main(fast_mode=False):
+def main(ctx, *, fast_mode=False):
     """
     Main function to run the complete enhanced spatial cross-validation pipeline
     with integrated V2 Neural Meta-Learner
+
+    Parameters
+    ----------
+    ctx : RunContext
+        Pipeline-wide dependencies (config, paths, registry).
+    fast_mode : bool
+        When True, use reduced settings for a quicker run.
     """
     # Re-resolve hardware profile so that any performance settings the user
     # changed since this module was first imported take effect for this run.
@@ -1591,7 +1598,7 @@ def main(fast_mode=False):
                 output_dir=cv_system._cfg.output_dir,
             )
             
-            paths = get_paths()
+            paths = ctx.paths
             available_features = data.columns.tolist()
             selected_features_filtered = [f for f in selected_features if f in available_features]
             data_unscaled = data.copy()
@@ -1671,7 +1678,7 @@ def main(fast_mode=False):
             
             # CRITICAL: Save UNSCALED features NOW before meta-ensemble scaling modifies them!
             # Base models need the original unscaled data (they scale internally)
-            paths = get_paths()
+            paths = ctx.paths
             available_features = data.columns.tolist()
             selected_features_filtered = [f for f in selected_features if f in available_features]
             
@@ -1774,7 +1781,7 @@ def main(fast_mode=False):
             print(f"Loaded {len(folds)} spatial folds")
 
             # Define spatial_intel_dir early so it's available for all stages
-            paths = get_paths()
+            paths = ctx.paths
             spatial_intel_dir = os.path.join(paths.output_dir, "spatial_intelligence")
             ensure_dir(spatial_intel_dir)
         
@@ -1798,7 +1805,7 @@ def main(fast_mode=False):
             print("\n=== Retraining Base Models on Full Dataset ===")
             
             # Create output directory for full models
-            paths = get_paths()
+            paths = ctx.paths
             full_models_dir = os.path.join(paths.stage2_dir, "base_models_full")
             ensure_dir(full_models_dir)
             print(f"Full models will be saved to: {full_models_dir}")
@@ -2257,7 +2264,7 @@ def main(fast_mode=False):
         if _compute_laplacian:
             print("=== Generating Enhanced Laplacian Eigenmaps (150 components) ===")
             X_laplacian_full, feature_transformers = generate_enhanced_laplacian_features(coords, n_components=150)
-            paths = get_paths()
+            paths = ctx.paths
             stage2_dir = paths.stage2_dir
             save_blob_path(feature_transformers,
                            os.path.join(stage2_dir, 'enhanced_spatial_features.pkl'),
@@ -2345,7 +2352,7 @@ def main(fast_mode=False):
             }
         }
         
-        paths = get_paths()
+        paths = ctx.paths
         results_file = paths.stage2_dir / 'final_ensemble_results.json'
         predictions_file = paths.stage2_dir / 'final_ensemble_predictions.csv'
 

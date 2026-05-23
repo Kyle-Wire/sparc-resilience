@@ -14,7 +14,12 @@ interface AuthState {
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   clearError: () => void;
+  /** Unsubscribe the auth-state listener; call on app teardown. */
+  destroy: () => void;
 }
+
+// Module-level ref so `destroy()` can cancel the Supabase subscription.
+let _unsubscribe: (() => void) | null = null;
 
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
@@ -32,10 +37,12 @@ export const useAuthStore = create<AuthState>((set) => ({
         user: data.session?.user ?? null,
         loading: false,
       });
-      // Keep store in sync with Supabase token refreshes
-      supabase.auth.onAuthStateChange((_event, session) => {
+      // Keep store in sync with Supabase token refreshes.
+      // Capture the returned subscription so destroy() can clean up.
+      const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
         set({ session, user: session?.user ?? null });
       });
+      _unsubscribe = () => sub.subscription.unsubscribe();
     } catch (err) {
       set({
         loading: false,
@@ -60,4 +67,9 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   clearError: () => set({ error: null }),
+
+  destroy: () => {
+    _unsubscribe?.();
+    _unsubscribe = null;
+  },
 }));

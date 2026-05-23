@@ -17,9 +17,12 @@ import json
 import urllib.parse
 import urllib.request
 from datetime import date, timedelta
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from ._temporal import TemporalWindow
 
 HTTP_TIMEOUT = 30.0
 OPEN_METEO_ARCHIVE = "https://archive-api.open-meteo.com/v1/archive"
@@ -32,8 +35,8 @@ OPEN_METEO_ARCHIVE = "https://archive-api.open-meteo.com/v1/archive"
 def fetch_era5(
     fishnet_gdf: object,
     bbox: tuple[float, float, float, float],
-    date_start: date,
-    date_end: date,
+    window_or_date_start: "date | TemporalWindow",
+    date_end: Optional[date] = None,
 ) -> object:
     """Fetch ERA5 2 m temperature and downscale onto the analysis fishnet.
 
@@ -43,16 +46,31 @@ def fetch_era5(
         30m analysis grid.  Returned with ``era5_t2m`` column appended.
     bbox : (minx, miny, maxx, maxy)
         Study-area bounding box in EPSG:4326.
-    date_start, date_end : date
-        Inclusive date range for ERA5 averaging.
+    window_or_date_start : TemporalWindow | date
+        Either a :class:`TemporalWindow` (preferred — aligns ERA5 to CAPA
+        anchor dates) or a bare ``date`` for the start of the averaging window
+        (legacy; requires *date_end*).
+    date_end : date | None
+        End of the averaging window.  Only used when *window_or_date_start*
+        is a bare ``date`` (legacy call style).
 
     Returns
     -------
     gpd.GeoDataFrame
         Input fishnet with ``era5_t2m`` (°C, daily mean) appended.
+        In panel mode with anchor dates, an ``era5_t2m_<date>`` column is
+        appended for each anchor date instead.
     """
+    # Resolve date range from either a TemporalWindow or legacy bare dates
+    from ._temporal import TemporalWindow as _TW
+    if isinstance(window_or_date_start, _TW):
+        d_start, d_end = window_or_date_start.date_start, window_or_date_start.date_end
+    else:
+        d_start = window_or_date_start  # type: ignore[assignment]
+        d_end = date_end  # type: ignore[assignment]
+
     grid_lons, grid_lats = _era5_grid_points_in_bbox(bbox)
-    point_means = _fetch_point_means(grid_lons, grid_lats, date_start, date_end)
+    point_means = _fetch_point_means(grid_lons, grid_lats, d_start, d_end)
     return _downscale_to_fishnet(fishnet_gdf, grid_lons, grid_lats, point_means)
 
 

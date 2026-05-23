@@ -35,10 +35,8 @@ import io
 import json
 import logging
 import pickle
-import sqlite3
 import time
 import warnings
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional, TYPE_CHECKING, Union
 
@@ -62,10 +60,6 @@ _TORCH_UNTRUSTED_HINT = (
     "If the artifact source is trusted, retry the read with trusted=True. "
     "Otherwise treat the file as untrusted and do not load it."
 )
-
-
-def _utcnow() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _table_name(stage: str | int, artifact_id: str) -> str:
@@ -129,9 +123,7 @@ class ArtifactStore:
             df, geometry_col=geometry_col, crs=crs,
         )
 
-        with self.registry.sqlite_connection() as conn:
-            # Use pandas' to_sql for column-type inference.
-            df_to_write.to_sql(table, conn, if_exists=if_exists, index=False)
+        self.registry.write_df(table, df_to_write, if_exists=if_exists)
 
         # Sidecar metadata for tables that have geometry / non-trivial CRS.
         if geom_col_resolved or crs_resolved:
@@ -184,8 +176,7 @@ class ArtifactStore:
             )
         table = entry.data_table or _table_name(stage, artifact_id)
 
-        with self.registry.sqlite_connection() as conn:
-            df = pd.read_sql(f"SELECT * FROM {table}", conn)
+        df = self.registry.read_df(table)
 
         # Rehydrate geometry if sidecar metadata declares one.
         meta = self._read_struct_raw(stage, _struct_metadata_id(artifact_id))
@@ -348,16 +339,11 @@ class ArtifactStore:
         serializer = (entry.metadata or {}).get("serializer", "pickle")
 
         if entry.storage_kind == "blob_inline":
-            with self.registry.sqlite_connection() as conn:
-                row = conn.execute(
-                    "SELECT bytes FROM internal_blobs WHERE stage=? AND artifact_id=?",
-                    (str(stage), artifact_id),
-                ).fetchone()
-            if row is None:
+            data = self.registry.read_blob_payload(str(stage), artifact_id)
+            if data is None:
                 raise ArtifactStoreError(
                     f"Inline blob payload missing for {stage}/{artifact_id}"
                 )
-            data = bytes(row[0])
         else:  # blob_external
             sha = entry.blob_sha256
             if not sha:
@@ -491,13 +477,7 @@ class ArtifactStore:
         """
         if not self.blobs_dir.exists():
             return 0
-        referenced: set[str] = set()
-        with self.registry.sqlite_connection() as conn:
-            for (sha,) in conn.execute(
-                "SELECT blob_sha256 FROM artifacts WHERE blob_sha256 IS NOT NULL"
-            ).fetchall():
-                if sha:
-                    referenced.add(sha)
+        referenced: set[str] = self.registry.list_blob_shas()
         removed = 0
         for blob in self.blobs_dir.rglob("*"):
             if blob.is_file() and blob.name not in referenced:
@@ -745,28 +725,17 @@ class ArtifactStore:
         payload: dict[str, Any],
     ) -> bytes:
         encoded = json.dumps(payload, default=str).encode("utf-8")
-        with self.registry.sqlite_connection() as conn:
-            conn.execute(
-                "INSERT INTO result_structs (stage, artifact_id, json, created_at) "
-                "VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(stage, artifact_id) DO UPDATE SET "
-                "json=excluded.json, created_at=excluded.created_at",
-                (str(stage), artifact_id, encoded.decode("utf-8"), _utcnow()),
-            )
+        self.registry.write_struct_payload(stage, artifact_id, encoded.decode("utf-8"))
         return encoded
 
     def _read_struct_raw(
         self, stage: str | int, artifact_id: str,
     ) -> Optional[dict[str, Any]]:
-        with self.registry.sqlite_connection() as conn:
-            row = conn.execute(
-                "SELECT json FROM result_structs WHERE stage=? AND artifact_id=?",
-                (str(stage), artifact_id),
-            ).fetchone()
-        if row is None:
+        result = self.registry.read_struct_payload(stage, artifact_id)
+        if result is None:
             return None
         try:
-            return json.loads(row[0])
+            return json.loads(result)
         except (json.JSONDecodeError, TypeError):
             return None
 
@@ -780,27 +749,10 @@ class ArtifactStore:
         mime: Optional[str],
         sha: str,
     ) -> int:
-        with self.registry.sqlite_connection() as conn:
-            cur = conn.execute(
-                "INSERT INTO internal_blobs "
-                "(stage, artifact_id, mime, serializer, sha256, size_bytes, "
-                " bytes, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(stage, artifact_id) DO UPDATE SET "
-                "mime=excluded.mime, serializer=excluded.serializer, "
-                "sha256=excluded.sha256, size_bytes=excluded.size_bytes, "
-                "bytes=excluded.bytes, created_at=excluded.created_at",
-                (str(stage), artifact_id, mime, serializer, sha, len(data),
-                 sqlite3.Binary(data), _utcnow()),
-            )
-            blob_id = cur.lastrowid
-            if not blob_id:
-                row = conn.execute(
-                    "SELECT id FROM internal_blobs WHERE stage=? AND artifact_id=?",
-                    (str(stage), artifact_id),
-                ).fetchone()
-                blob_id = int(row[0]) if row else 0
-        return int(blob_id)
+        return self.registry.write_blob_payload(
+            stage, artifact_id, data,
+            serializer=serializer, mime=mime, sha=sha,
+        )
 
     def _write_external_blob(self, sha: str, data: bytes) -> Path:
         target_dir = self.blobs_dir / sha[:2]

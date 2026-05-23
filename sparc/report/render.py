@@ -221,14 +221,9 @@ def render_native(
         # We return the raw stored bytes (NOT the deserialized object).
         inline = entry.storage_kind == "blob_inline"
         if inline:
-            with store.registry.sqlite_connection() as conn:
-                row = conn.execute(
-                    "SELECT bytes FROM internal_blobs WHERE stage=? AND artifact_id=?",
-                    (str(stage), artifact_id),
-                ).fetchone()
-            if row is None:
+            data = store.registry.read_blob_payload(str(stage), artifact_id)
+            if data is None:
                 raise RenderError(f"Inline blob payload missing for {stage}/{artifact_id}")
-            data = bytes(row[0])
         else:
             sha = entry.blob_sha256
             if not sha:

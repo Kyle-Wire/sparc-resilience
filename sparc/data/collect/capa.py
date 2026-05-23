@@ -26,9 +26,12 @@ import json
 import urllib.parse
 import urllib.request
 from datetime import date
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from ._temporal import TemporalWindow
 
 HTTP_TIMEOUT = 45.0
 
@@ -48,8 +51,8 @@ OPEN_METEO_FORECAST = "https://archive-api.open-meteo.com/v1/archive"
 def fetch_capa(
     fishnet_gdf: object,
     bbox: tuple[float, float, float, float],
-    date_start: date,
-    date_end: date,
+    window_or_date_start: "date | TemporalWindow",
+    date_end: Optional[date] = None,
 ) -> tuple[object, list[date]]:
     """Fetch CAPA air temperature for a date range and discover anchor dates.
 
@@ -67,8 +70,11 @@ def fetch_capa(
         30m analysis grid.  Returned with four new columns.
     bbox : (minx, miny, maxx, maxy)
         Study bounding box in EPSG:4326.
-    date_start, date_end : date
-        Date range to search for CAPA measurements.
+    window_or_date_start : TemporalWindow | date
+        Either a :class:`TemporalWindow` (preferred) or a bare ``date``
+        start value (legacy; requires *date_end*).
+    date_end : date | None
+        End of date range.  Only used with legacy bare-date call style.
 
     Returns
     -------
@@ -77,10 +83,18 @@ def fetch_capa(
         and ``diurnal_aat`` columns.  NaN-filled on failure.
         ``capa_dates`` — dates with valid midday readings; empty on failure.
     """
+    from ._temporal import TemporalWindow as _TW
+    if isinstance(window_or_date_start, _TW):
+        d_start = window_or_date_start.date_start
+        d_end = window_or_date_start.date_end
+    else:
+        d_start = window_or_date_start  # type: ignore[assignment]
+        d_end = date_end  # type: ignore[assignment]
+
     grid_lons, grid_lats = _capa_grid_points(bbox)
     try:
         point_data, capa_dates = _fetch_point_hourly(
-            grid_lons, grid_lats, date_start, date_end
+            grid_lons, grid_lats, d_start, d_end
         )
     except Exception:
         fishnet_out = _nan_fishnet(fishnet_gdf)

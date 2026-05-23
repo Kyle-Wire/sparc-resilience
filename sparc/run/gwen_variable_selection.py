@@ -550,7 +550,7 @@ def auto_suggest_gwen_params(config, correlogram_dir=None):
     return suggestions
 
 
-def main(config_path=None, fast_mode=False):
+def main(ctx, *, fast_mode=False):
     """Main GWEN variable selection workflow."""
     print("🔍 GW3C Pipeline - Stage 1: GWEN Variable Selection")
     print("=" * 60)
@@ -558,13 +558,11 @@ def main(config_path=None, fast_mode=False):
     try:
         # Load configuration
         print("\n1. Loading configuration...")
-        config = load_config(config_path)
+        config = ctx.config
         print(f"   [OK] Configuration loaded")
         
-        # Setup output directory — GWEN writes to its own stage directory
-        from sparc.run.pipeline_paths import PipelinePaths
-        _gwen_paths = PipelinePaths.from_config(config)
-        output_dir = str(_gwen_paths.stage1_dir)
+        # Setup output directory — use ctx.paths directly
+        output_dir = str(ctx.paths.stage1_dir)
         setup_output_directory(output_dir)
         print(f"   [OK] Output directory: {output_dir}")
         
@@ -589,9 +587,9 @@ def main(config_path=None, fast_mode=False):
         # Auto-suggest params from correlogram if available
         gwen_cfg = config.get('gwen', {})
         try:
-            correlogram_dir = str(_gwen_paths.stage0_dir)
+            correlogram_dir = str(ctx.paths.stage0_dir)
         except Exception:
-            correlogram_dir = os.path.join(str(_gwen_paths.output_dir), 'Stage_0_Correlogram')
+            correlogram_dir = os.path.join(str(ctx.paths.output_dir), 'Stage_0_Correlogram')
         try:
             from sparc.registry.store import get_active_store as _gas
             _tune_store = _gas()

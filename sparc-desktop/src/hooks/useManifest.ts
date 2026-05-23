@@ -74,12 +74,39 @@ let _timer: ReturnType<typeof setTimeout> | null = null;
 let _burstTimer: ReturnType<typeof setTimeout> | null = null;
 let _started = false;
 
+/** Injectable fetcher — replaced in tests via `__setFetcherForTesting`. */
+type ManifestFetcher = (opts: { refresh: boolean; rescan?: boolean }) => Promise<RunManifest>;
+let _fetcher: ManifestFetcher = (opts) => getManifest(opts);
+
+/**
+ * Replace the manifest fetcher for unit tests. Always pair with a
+ * `__resetForTesting()` call in `afterEach` to restore module state.
+ */
+export function __setFetcherForTesting(fn: ManifestFetcher) {
+  _fetcher = fn;
+}
+
+/**
+ * Reset all module-level singleton state for unit tests.
+ */
+export function __resetForTesting() {
+  if (_timer) clearTimeout(_timer);
+  if (_burstTimer) clearTimeout(_burstTimer);
+  _timer = null;
+  _burstTimer = null;
+  _inFlight = null;
+  _started = false;
+  _fetcher = (opts) => getManifest(opts);
+  _listeners.clear();
+  _state = { manifest: null, loading: false, error: null, lastUpdated: null };
+}
+
 async function _fetchOnce(opts: { rescan?: boolean } = {}): Promise<void> {
   if (_inFlight && !opts.rescan) return;
   const run = async () => {
     _notify({ loading: true });
     try {
-      const m = await getManifest({ refresh: true, rescan: opts.rescan });
+      const m = await _fetcher({ refresh: true, rescan: opts.rescan });
       _notify({ manifest: m, error: null, lastUpdated: new Date(), loading: false });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

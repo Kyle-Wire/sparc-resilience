@@ -28,12 +28,18 @@ from typing import TYPE_CHECKING, Any, Optional
 from fastapi import HTTPException
 
 from sparc.server.state import ServerState
+from sparc.server.project_session import ProjectSession
+from sparc.server.execution_context import ExecutionContext
 
 # ---------------------------------------------------------------------------
 # Process-global server state — THE single instance
 # ---------------------------------------------------------------------------
 
 state: ServerState = ServerState()
+
+# Structured replacements for ServerState — new routes should prefer these.
+session: ProjectSession = ProjectSession()
+execution: ExecutionContext = ExecutionContext()
 
 # ---------------------------------------------------------------------------
 # Store accessor — raises 400 when nothing is loaded

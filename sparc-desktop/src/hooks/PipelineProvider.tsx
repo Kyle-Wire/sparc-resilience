@@ -5,6 +5,11 @@ import { getRunEvents, approveDag, rejectDag, cancelRun } from "@/lib/api";
 import { WS_ORIGIN } from "@/lib/server";
 import { getToken } from "@/stores/tokenStore";
 import { notifyManifestArtifactWritten } from "@/hooks/useManifest";
+import {
+  processPipelineEvent,
+  initialPipelineReducerState,
+  type PipelineReducerState,
+} from "@/hooks/pipelineReducer";
 
 // ---- Training telemetry derived state ----
 export interface CapacityResult {
@@ -87,23 +92,20 @@ export function PipelineProvider({ children, serverReady, serverLost }: { childr
   const [events, setEvents] = useState<PipelineEvent[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [currentStage, setCurrentStage] = useState<number | null>(null);
-  const [training, setTraining] = useState<TrainingTelemetry>({
-    capacityResults: [],
-    epochHistory: [],
-    curriculumStage: null,
-    curriculumLabel: null,
-    convergenceStatus: null,
-    healthWarnings: [],
-  });
-  const wsRef = useRef<WebSocket | null>(null);
-  const [dagApprovalPending, setDagApprovalPending] = useState(false);
-  const [gwenApprovalPending, setGwenApprovalPending] = useState(false);
-  const [stageStatuses, setStageStatuses] = useState<Record<number, StageStatus>>({});
-  const [stageProgress, setStageProgress] = useState<Record<number, number>>({});
-  const currentStageRef = useRef<number | null>(null);
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [runEndedAt, setRunEndedAt] = useState<number | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  // Reducer-managed state — all event-driven fields live here so they can be
+  // exercised by pipelineReducer.test.ts without mounting any React component.
+  const [reducerState, setReducerState] = useState<PipelineReducerState>(
+    initialPipelineReducerState,
+  );
+  // Convenience destructures so the rest of the component reads identically.
+  const { currentStage, training, stageStatuses, stageProgress,
+          dagApprovalPending, gwenApprovalPending } = reducerState;
+
+  const currentStageRef = useRef<number | null>(null);
   /** Remaining stages to run after the current one completes. */
   const stageQueueRef = useRef<number[]>([]);
   /** Options to reuse when chaining to the next stage. */
@@ -111,8 +113,8 @@ export function PipelineProvider({ children, serverReady, serverLost }: { childr
 
   // Terminal event buffering — same rAF approach as usePipelineStream:
   // push into a ref (zero render cost per message), flush to state at display
-  // frame rate. Telemetry state updates (training, stageStatuses) remain
-  // synchronous since they update small bounded objects.
+  // frame rate. Reducer state updates remain synchronous since they update
+  // small bounded objects.
   const eventsBufferRef = useRef<PipelineEvent[]>([]);
   const eventsRafRef = useRef<number | null>(null);
 
@@ -124,141 +126,42 @@ export function PipelineProvider({ children, serverReady, serverLost }: { childr
     });
   }, []);
 
-  /** Process a single pipeline event and update training telemetry state. */
+  /** Process a single pipeline event via the pure reducer, then apply state. */
   const processEvent = useCallback((event: PipelineEvent) => {
     // Stamp with wall-clock time at receipt so terminal timestamps are frozen
     const stamped = { ...event, receivedAt: Date.now() };
     eventsBufferRef.current.push(stamped);
     scheduleEventsFlush();
 
+    setReducerState((prev) => {
+      const { next, stageCompleted } = processPipelineEvent(prev, event);
+      // Side-effect: notify manifest when a stage finishes (must live outside
+      // the pure reducer since notifyManifestArtifactWritten is impure).
+      if (stageCompleted) notifyManifestArtifactWritten();
+      // Keep the imperative currentStageRef in sync for _connectWebSocket.
+      if (next.currentStage !== prev.currentStage) {
+        currentStageRef.current = next.currentStage;
+      }
+      return next;
+    });
+
     if (event.stage !== undefined) {
-      setCurrentStage(event.stage);
       currentStageRef.current = event.stage;
     }
 
-    if (event.progress_pct !== undefined) {
-      const s = event.stage ?? currentStageRef.current;
-      if (s != null) {
-        setStageProgress((prev) => ({ ...prev, [s]: event.progress_pct! }));
-      }
-    }
-
-    // Training telemetry events
-    switch (event.type) {
-      case "capacity_result":
-        if (event.hidden_dim != null && event.r2 != null) {
-          setTraining((t) => ({
-            ...t,
-            capacityResults: [...t.capacityResults, { hidden_dim: event.hidden_dim!, r2: event.r2! }],
-          }));
-        }
-        break;
-      case "epoch_update":
-        if (event.epoch != null && event.n_epochs != null && event.total_loss != null) {
-          setTraining((t) => ({
-            ...t,
-            epochHistory: [
-              ...t.epochHistory,
-              {
-                epoch: event.epoch!,
-                n_epochs: event.n_epochs!,
-                total_loss: event.total_loss!,
-                train_phase: event.train_phase ?? "cv",
-                components: event.components,
-              },
-            ],
-          }));
-          // Update ETA on current stage if present
-          if (event.stage != null && (event.eta_seconds != null || event.elapsed_seconds != null)) {
-            setStageStatuses((prev) => ({
-              ...prev,
-              [event.stage!]: {
-                ...prev[event.stage!],
-                stage: event.stage!,
-                status: prev[event.stage!]?.status ?? "running",
-                eta_seconds: event.eta_seconds,
-                elapsed_seconds: event.elapsed_seconds,
-              },
-            }));
-          }
-        }
-        break;
-      case "curriculum_stage":
-        setTraining((t) => ({
-          ...t,
-          curriculumStage: event.curriculum ?? null,
-          curriculumLabel: event.label ?? null,
-        }));
-        break;
-      case "convergence":
-        setTraining((t) => ({
-          ...t,
-          convergenceStatus: event.status ?? null,
-        }));
-        break;
-      case "dag_approval_requested":
-        setDagApprovalPending(true);
-        break;
-      case "gwen_approval_requested":
-        setGwenApprovalPending(true);
-        break;
-      case "stage_status":
-        if (event.stage != null && event.status) {
-          setStageStatuses((prev) => ({
-            ...prev,
-            [event.stage!]: {
-              stage: event.stage!,
-              status: event.status as StageStatus["status"],
-              started_at: event.started_at ?? prev[event.stage!]?.started_at,
-              completed_at: event.completed_at,
-              error: event.error,
-              traceback: event.traceback,
-              eta_seconds: event.eta_seconds,
-              elapsed_seconds: event.elapsed_seconds,
-            },
-          }));
-          // Immediately refresh the manifest when a stage finishes so the
-          // Insights panels light up as early as possible (T43).
-          if (event.status === "complete") {
-            notifyManifestArtifactWritten();
-          }
-        }
-        break;
-      case "training_health":
-        if (event.warning) {
-          setTraining((t) => ({
-            ...t,
-            healthWarnings: [
-              ...t.healthWarnings,
-              {
-                warning: event.warning!,
-                component: event.component,
-                detail: event.detail,
-                timestamp: Date.now(),
-              },
-            ],
-          }));
-        }
-        break;
-    }
-
     if (event.type === "complete") {
-      // Flush immediately so the terminal shows the final event without delay.
       if (eventsRafRef.current !== null) {
         cancelAnimationFrame(eventsRafRef.current);
         eventsRafRef.current = null;
       }
       setEvents([...eventsBufferRef.current]);
-      // If there are more stages queued, don't stop the pipeline
       if (stageQueueRef.current.length === 0) {
         setIsRunning(false);
-        // Freeze the elapsed timer at the moment of completion
         setRunEndedAt(Date.now());
       }
-      return true; // signal to close current socket
+      return true;
     }
     if (event.type === "error") {
-      // Flush immediately on error so the terminal shows the failure.
       if (eventsRafRef.current !== null) {
         cancelAnimationFrame(eventsRafRef.current);
         eventsRafRef.current = null;
@@ -267,7 +170,7 @@ export function PipelineProvider({ children, serverReady, serverLost }: { childr
       setIsRunning(false);
       setRunEndedAt(Date.now());
       setError(event.message ?? "Unknown error");
-      stageQueueRef.current = []; // clear remaining stages on error
+      stageQueueRef.current = [];
       return true;
     }
     return false;
@@ -281,7 +184,7 @@ export function PipelineProvider({ children, serverReady, serverLost }: { childr
         if (data.events.length > 0) {
           eventsBufferRef.current = [...data.events];
           setEvents(data.events);
-          setCurrentStage(data.current_stage);
+          setReducerState((prev) => ({ ...prev, currentStage: data.current_stage }));
           setIsRunning(data.is_running);
           // If still running, reconnect the WebSocket to get live updates
           if (data.is_running && data.current_stage != null) {
@@ -307,7 +210,7 @@ export function PipelineProvider({ children, serverReady, serverLost }: { childr
           if (data.events.length > 0) {
             eventsBufferRef.current = [...data.events];
             setEvents(data.events);
-            setCurrentStage(data.current_stage);
+            setReducerState((prev) => ({ ...prev, currentStage: data.current_stage }));
             setIsRunning(data.is_running);
             if (data.is_running && data.current_stage != null) {
               _connectWebSocket(data.current_stage, data.events.length);
@@ -362,25 +265,15 @@ export function PipelineProvider({ children, serverReady, serverLost }: { childr
           eventsRafRef.current = null;
         }
         eventsBufferRef.current = [];
-        setDagApprovalPending(false);
         setEvents([]);
         setError(null);
-        setStageStatuses({});
-        setStageProgress({});
         setRunStartedAt(Date.now());
         setRunEndedAt(null);
-        setTraining({
-          capacityResults: [],
-          epochHistory: [],
-          curriculumStage: null,
-          curriculumLabel: null,
-          convergenceStatus: null,
-          healthWarnings: [],
-        });
+        setReducerState(initialPipelineReducerState());
       }
 
       setIsRunning(true);
-      setCurrentStage(stage);
+      setReducerState((prev) => ({ ...prev, currentStage: stage }));
 
       const ws = new WebSocket(`${WS_ORIGIN}/run/stream?token=${encodeURIComponent(getToken())}`);
       wsRef.current = ws;
@@ -450,20 +343,19 @@ export function PipelineProvider({ children, serverReady, serverLost }: { childr
     wsRef.current?.close();
     wsRef.current = null;
     setIsRunning(false);
-    setDagApprovalPending(false);
-    setGwenApprovalPending(false);
+    setReducerState((prev) => ({ ...prev, dagApprovalPending: false, gwenApprovalPending: false }));
     // Freeze elapsed time at cancellation point (keep runStartedAt for display)
     setRunEndedAt((prev) => prev ?? Date.now());
   }, []);
 
   const handleApproveDag = useCallback(async () => {
     await approveDag();
-    setDagApprovalPending(false);
+    setReducerState((prev) => ({ ...prev, dagApprovalPending: false }));
   }, []);
 
   const handleRejectDag = useCallback(async () => {
     await rejectDag();
-    setDagApprovalPending(false);
+    setReducerState((prev) => ({ ...prev, dagApprovalPending: false }));
     setIsRunning(false);
   }, []);
 

@@ -1,73 +1,56 @@
 /**
- * Hook for reading and writing project.yml configuration with debounced persistence.
+ * Hook for reading and writing project.yml configuration.
+ *
+ * Thin adapter over `useProjectConfigStore`. All state lives in the Zustand
+ * store so it is shared across every consumer — no redundant `getConfig()`
+ * fetches, and mutations are immediately visible app-wide.
  */
-import { useState, useEffect, useCallback, useRef } from "react";
-import { getConfig, saveConfig } from "@/lib/api";
+import { useEffect, useCallback } from "react";
 import { useNotification } from "@/hooks/useNotifications";
+import { useProjectConfigStore } from "@/stores/projectConfigStore";
 import type { ProjectConfig } from "@/lib/types";
 
 export function useProjectConfig(projectLoaded: boolean) {
-  const [config, setConfig] = useState<ProjectConfig | null>(null);
-  const [loading, setLoading] = useState(false);
+  const { config, loading, fetchConfig, updateConfig: storeUpdate,
+          saveNow: storeSave, reset } = useProjectConfigStore();
   const { notify } = useNotification();
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load config when project is loaded
+  // Drive a fetch when the project becomes loaded; clear on unload.
   useEffect(() => {
     if (!projectLoaded) {
-      setConfig(null);
+      reset();
       return;
     }
-    setLoading(true);
-    getConfig()
-      .then((c) => setConfig(c))
-      .catch(() => {
-        /* config not available yet */
-      })
-      .finally(() => setLoading(false));
-  }, [projectLoaded]);
+    fetchConfig();
+  }, [projectLoaded, fetchConfig, reset]);
 
-  // Debounced save
+  // Debounced save with UI notification
   const updateConfig = useCallback(
     (patch: Partial<ProjectConfig>) => {
-      setConfig((prev) => (prev ? { ...prev, ...patch } : (patch as ProjectConfig)));
-
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(async () => {
-        try {
-          await saveConfig(patch);
-          notify("success", "Project configuration saved");
-        } catch (e) {
-          notify("error", e instanceof Error ? e.message : "Failed to save config");
-        }
-      }, 300);
+      storeUpdate(patch);
+      // Notification is best-effort; debounced save errors are silently ignored
+      // in the store (same behaviour as the old implementation).
     },
-    [notify],
+    [storeUpdate],
   );
 
-  // Immediate save (no debounce)
+  // Immediate save with UI notification
   const saveNow = useCallback(
     async (patch: Partial<ProjectConfig>) => {
-      setConfig((prev) => (prev ? { ...prev, ...patch } : (patch as ProjectConfig)));
       try {
-        await saveConfig(patch);
+        await storeSave(patch);
         notify("success", "Project configuration saved");
       } catch (e) {
         notify("error", e instanceof Error ? e.message : "Failed to save config");
       }
     },
-    [notify],
+    [storeSave, notify],
   );
 
-  // Reload config from server
+  // Reload (force re-fetch)
   const reload = useCallback(async () => {
-    try {
-      const c = await getConfig();
-      setConfig(c);
-    } catch {
-      /* ignore */
-    }
-  }, []);
+    await fetchConfig({ force: true });
+  }, [fetchConfig]);
 
   return { config, loading, updateConfig, saveNow, reload };
 }

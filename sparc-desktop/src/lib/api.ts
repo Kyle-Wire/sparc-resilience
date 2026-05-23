@@ -1,8 +1,7 @@
 /**
  * Typed fetch wrappers for the SPARC FastAPI server at localhost:8008.
  */
-import { getToken } from "@/stores/tokenStore";
-import { useAuthStore } from "@/stores/authStore";
+import { getAuthHeaders } from "./authHeaders";
 import type {
   HealthResponse,
   ProjectLoadResponse,
@@ -39,12 +38,7 @@ import { SERVER_ORIGIN, WS_ORIGIN } from "./server";
 const BASE = SERVER_ORIGIN;
 
 function authHeaders(extra?: Record<string, string>): Record<string, string> {
-  const token = getToken();
-  const jwt = useAuthStore.getState().session?.access_token;
-  const headers: Record<string, string> = { ...extra };
-  if (token) headers["x-sparc-token"] = token;
-  if (jwt) headers["Authorization"] = `Bearer ${jwt}`;
-  return headers;
+  return { ...getAuthHeaders(), ...extra };
 }
 
 async function get<T>(path: string): Promise<T> {
@@ -318,6 +312,9 @@ export interface DagSuggestEdgesResult {
 }
 export const suggestDagEdges = (opts: { threshold?: number; max_suggestions?: number } = {}) =>
   post<DagSuggestEdgesResult>("/dag/suggest-edges", opts);
+
+export const saveDag = (dag: DagDefinition) =>
+  put<{ status: string; n_nodes: number; n_edges: number }>("/dag", dag);
 
 // ------------------------------------------------------------------
 // Config

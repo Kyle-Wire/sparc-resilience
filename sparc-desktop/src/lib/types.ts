@@ -130,17 +130,19 @@ export interface DataPreview {
   total: number;
 }
 
-/** Structured event from the /run/stream WebSocket. */
+/** Structured event from the /run/execute WebSocket. */
 export interface PipelineEvent {
   type: "log" | "metric" | "complete" | "error"
     | "capacity_result" | "epoch_update" | "curriculum_stage" | "convergence"
-    | "dag_approval_requested" | "stage_status" | "training_health";
+    | "dag_approval_requested" | "stage_status" | "training_health"
+    | "run_progress" | "checkpoint" | "model_result" | "fold_start" | "fold_complete";
   message?: string;
   stage?: number;
   fold?: number;
   metric?: string;
   value?: number;
-  progress_pct?: number;
+  /** Progress percentage (0–100) on run_progress events and checkpoint events with model weights. */
+  pct?: number;
   /** Human-readable phase label emitted by the server for progress display. */
   phase?: string;
   /** Model name for model-level checkpoint events (e.g. "gwr", "ols"). */

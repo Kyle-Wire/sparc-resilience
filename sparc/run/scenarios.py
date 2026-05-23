@@ -196,6 +196,7 @@ def run_budget_optimization(
 
     try:
         from sparc.scenario.budget import optimize, pareto_sweep
+        from sparc.scenario.benefit_surface import BenefitSurface
     except Exception as exc:
         print(f"  [budget] sparc.scenario.budget unavailable: {exc}")
         return None
@@ -203,33 +204,24 @@ def run_budget_optimization(
     summary: dict[str, Any] = {"per_treatment": {}, "config": dict(bcfg)}
     allocations_long: list[dict] = []
     for treatment, sub in results_long_df.groupby("variable", sort=False):
-        sub = sub.copy()
-        sub["abs_inc"] = sub["increment"].astype(float).abs()
-        if sub["abs_inc"].max() == 0:
-            continue
-        biggest = sub[sub["abs_inc"] == sub["abs_inc"].max()]
-        cell_id = biggest["cell_id"].astype(int).to_numpy()
-        # Benefit: negative delta = cooling (good) for UHI; flip sign so
-        # benefit is positive. Reports show absolute value either way.
-        benefit = -biggest["delta_mean"].astype(float).to_numpy()
-        # Drop non-beneficial cells (benefit <= 0) — the optimizer keeps
-        # them but they never get selected, so this just speeds things up.
         unit_cost = float(cost_per_unit.get(treatment, 1.0))
-        cost_vec = np.full(benefit.shape, unit_cost, dtype=float)
+        surface = BenefitSurface.from_long_df(sub, unit_cost=unit_cost)
+        if surface.benefits.max() == 0:
+            continue
         # If a budget is set, run a single optimization at it AND a sweep.
         # If no budget set, do a unitless sweep with multipliers × max-cost.
         if total is None:
-            base_budget = float(np.sum(cost_vec))  # 100% cost = treat all
+            base_budget = float(np.sum(surface.costs))  # 100% cost = treat all
         else:
             base_budget = float(total)
         try:
             res = optimize(
-                benefits=benefit, budget=base_budget,
-                costs=cost_vec, solver=solver,
+                **surface.to_optimize_args(), budget=base_budget,
+                solver=solver,
             )
             sweep = pareto_sweep(
-                benefits=benefit, budget=base_budget,
-                costs=cost_vec, multipliers=tuple(multipliers),
+                **surface.to_optimize_args(), budget=base_budget,
+                multipliers=tuple(multipliers),
                 solver=solver,
             )
         except Exception as exc:
@@ -242,17 +234,16 @@ def run_budget_optimization(
             "pareto":  sweep.to_dict(),
             "n_cells_treated": res.n_treated,
         }
-        # Annotate `optimum` with a display-string for the headline
-        # benefit, expressed in *target* units.  Benefits are stored
-        # negated (cooling = positive), so we flip sign back for prose.
+        # Annotate `optimum` with a display-string for the headline benefit,
+        # expressed in *target* units.  Benefits are abs(delta_mean), so the
+        # cumulative total_benefit approximates |total target change|.
         try:
             from sparc.data.units import format_value, load_variable_meta
             _var_reg = load_variable_meta(config)
             target_col = config.get("variables", {}).get("target")
             if target_col is not None:
                 tot = float(res.total_benefit)
-                # Per-cell "benefit" was -delta_mean, so the cumulative
-                # benefit corresponds to a -tot change in the target.
+                # Display as negative change (cooling lowers the target).
                 summary_value = -tot
                 summary["per_treatment"][treatment]["optimum"][
                     "total_benefit_display"
@@ -262,10 +253,10 @@ def run_budget_optimization(
         for i, x in enumerate(res.allocation):
             allocations_long.append({
                 "treatment": treatment,
-                "cell_id": int(cell_id[i]),
+                "cell_id": int(surface.cell_ids[i]),
                 "allocation": float(x),
-                "benefit": float(benefit[i]),
-                "cost": float(cost_vec[i]),
+                "benefit": float(surface.benefits[i]),
+                "cost": float(surface.costs[i]),
             })
 
         share_treated = 100.0 * res.n_treated / max(1, len(benefit))

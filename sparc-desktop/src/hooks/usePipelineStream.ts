@@ -41,7 +41,7 @@ export function usePipelineStream() {
       setError(null);
       setIsRunning(true);
 
-      const ws = new WebSocket("ws://127.0.0.1:8008/run/stream");
+      const ws = new WebSocket("ws://127.0.0.1:8008/run/execute");
       wsRef.current = ws;
 
       ws.onopen = () => {

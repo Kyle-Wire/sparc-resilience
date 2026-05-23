@@ -1,13 +1,12 @@
 import { create } from "zustand";
 import type { PageName } from "@/components/layout/Sidebar";
+import { localStore } from "@/lib/localStore";
 import { useProjectStore } from "./projectStore";
 
 export type AppPage = PageName | "Settings" | "Performance";
 
 /** Pages that can be entered without a loaded project. */
 const UNGATED_PAGES = new Set<AppPage>(["Project", "Settings", "Performance"]);
-
-const STORAGE_KEY = "sparc-active-page";
 
 export interface NavigateResult {
   ok: boolean;
@@ -36,7 +35,7 @@ interface NavigationState {
 
 export const useNavigationStore = create<NavigationState>((set, get) => ({
   currentPage: (() => {
-    const saved = localStorage.getItem(STORAGE_KEY) as AppPage | null;
+    const saved = localStore.get("active-page") as AppPage | null;
     // Only restore safe pages on cold start — project gate handles the rest
     const safeOnColdStart: AppPage[] = ["Project", "Settings", "Performance"];
     return saved && safeOnColdStart.includes(saved) ? saved : "Project";
@@ -50,7 +49,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       return { ok: false, reason: "no_project" };
     }
     set({ currentPage: target });
-    localStorage.setItem(STORAGE_KEY, target);
+    localStore.set("active-page", target);
     return { ok: true };
   },
 
