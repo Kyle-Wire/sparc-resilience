@@ -15,7 +15,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
-from typing import Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from sparc.decision.equity import combine_equity_layers
 from sparc.decision.optimizer import InterventionCandidate, rank_interventions
@@ -87,6 +87,17 @@ def run_decision_stage(
         minimise=minimise,
         n_draws=n_mc_draws,
     )
+
+
+# ===================================================================== main
+def main(ctx: "Any | None" = None, *, fast_mode: bool = False) -> None:
+    """Pipeline entry-point for the Decision stage.
+
+    Called by :mod:`sparc.run.stages` via the stage runner protocol
+    ``main(ctx, fast_mode=<bool>)``.  Interactive / batch callers use
+    :func:`run_decision_stage` directly.
+    """
+    pass  # interactive callers use run_decision_stage() directly
 
     result: dict = {
         "ranked": opt_result.ranked,

@@ -977,3 +977,6 @@ def run_gwrf(X, y, coords, cv_mode=True, output_dir=None, **model_params):
         model.save_models(output_dir, prefix="gwrf_full")
         
         return predictions, model
+
+
+from sparc.models.gwrf_config import GWRFConfig  # noqa: F401

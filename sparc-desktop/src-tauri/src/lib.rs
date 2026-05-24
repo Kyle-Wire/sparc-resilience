@@ -1,7 +1,7 @@
 mod sidecar;
 mod setup;
 
-use tauri::{Manager, RunEvent};
+use tauri::{Manager, RunEvent, WindowEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -32,6 +32,14 @@ pub fn run() {
                     main.show().ok();
                     main.set_focus().ok();
                 }
+                // Close the setup window so it doesn't orphan the event loop.
+                // Both windows are created at startup (tauri.conf.json) even though
+                // setup is `visible: false`. If we don't close it, Tauri never fires
+                // RunEvent::ExitRequested when the user closes main, which means
+                // kill_server is never called and the Python sidecar leaks.
+                if let Some(setup_win) = app.get_webview_window("setup") {
+                    setup_win.close().ok();
+                }
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = sidecar::spawn_server(&handle).await {
                         eprintln!("Failed to start server: {}", e);
@@ -54,8 +62,23 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building SPARC desktop app")
         .run(|app, event| {
-            if let RunEvent::ExitRequested { .. } | RunEvent::Exit = event {
-                sidecar::kill_server(app);
+            match event {
+                // Normal exit path: all windows closed, event loop shutting down.
+                RunEvent::ExitRequested { .. } | RunEvent::Exit => {
+                    sidecar::kill_server(app);
+                }
+                // Safety net: if the main window is destroyed while other windows
+                // (e.g. a dialog or hidden setup window) keep the loop alive,
+                // force a clean shutdown so the sidecar is never orphaned.
+                RunEvent::WindowEvent {
+                    label,
+                    event: WindowEvent::Destroyed,
+                    ..
+                } if label == "main" => {
+                    sidecar::kill_server(app);
+                    app.exit(0);
+                }
+                _ => {}
             }
         });
 }

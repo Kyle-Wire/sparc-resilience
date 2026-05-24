@@ -139,10 +139,23 @@ class SpatialCVEngine:
         if self._fast:
             k = min(k, 3)
 
+        n = len(coords)
+        X_proxy = coords
+        y_proxy = np.zeros(n)
+
+        # Map strategy → method; spatial_kfold_enhanced accepts "block", "kmeans", "knn"
+        method_map = {"kmeans": "kmeans", "grid": "block", "knn": "knn"}
+        method = method_map.get(strategy, strategy)
+
         return spatial_kfold_enhanced(
+            X_proxy,
+            y_proxy,
             coords,
             n_splits=k,
-            strategy=strategy,
+            block_size=None,
+            buffer_size=0,
+            method=method,
+            stratify_y=False,
         )
 
     def run(self, fast: Optional[bool] = None) -> CVResult:

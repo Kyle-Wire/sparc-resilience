@@ -58,32 +58,54 @@ def few_shot_predict(
     calibration_y : (K,) target values for calibration points
     calibration_coords : (K, 2) coordinates for calibration points
     trunk_path : path to a trained shared trunk checkpoint
-    registry_path : path to city registry (loads global trunk)
+    registry_path : path to city registry.  When supplied, the registry is
+        queried by ``features.climate_zone`` first; if no city matches the
+        zone, the global trunk is used; if no global trunk exists either, a
+        fresh model is initialised.  ``trunk_path`` takes precedence when
+        both are supplied.
     n_finetune_epochs : epochs for city head fine-tuning
 
     Returns
     -------
     FewShotPrediction
     """
-    if n_finetune_epochs > 0:
-        raise NotImplementedError(
-            "few_shot_predict: fine-tuning the city head (n_finetune_epochs > 0) is not "
-            "yet implemented. Pass n_finetune_epochs=0 to use the ANP context baseline."
+    if registry_path is not None and trunk_path is None:
+        # Resolve a trunk_path from the registry before entering the main flow.
+        from sparc.registry.city_registry import CityRegistry
+        import tempfile, os
+        _reg = CityRegistry(registry_path)
+        _record = (
+            _reg.load_by_climate(features.climate_zone)
+            if features.climate_zone is not None
+            else None
         )
-    if trunk_path is not None:
-        raise NotImplementedError(
-            "few_shot_predict: trunk checkpoint loading is not yet implemented."
-        )
-    if registry_path is not None:
-        raise NotImplementedError(
-            "few_shot_predict: registry_path loading is not yet implemented."
-        )
+        if _record is not None and _record.trunk_checkpoint is not None:
+            # Materialise the state dict to a temp file so the rest of the
+            # function can use trunk_path uniformly.
+            import torch as _t
+            _tmp = tempfile.NamedTemporaryFile(suffix=".pt", delete=False)
+            _tmp.close()
+            _t.save(_record.trunk_checkpoint, _tmp.name)
+            trunk_path = _tmp.name
+        else:
+            # Fall back to global trunk
+            _global = _reg.load_global_trunk()
+            if _global is not None:
+                import torch as _t
+                _tmp = tempfile.NamedTemporaryFile(suffix=".pt", delete=False)
+                _tmp.close()
+                _t.save(_global, _tmp.name)
+                trunk_path = _tmp.name
+            # else: trunk_path stays None → fresh model
 
     import torch
+    import torch.nn.functional as F
     import numpy as np
     from sparc.inference.anp import SpatialANP
 
-    # Build target feature matrix
+    # ------------------------------------------------------------------ #
+    # Step 1 — Build raw feature matrices                                  #
+    # ------------------------------------------------------------------ #
     coords = features.coords                  # (N, 2)
     band_mat = features.to_feature_matrix()   # (N, B)
     if band_mat.shape[1] > 0:
@@ -91,27 +113,123 @@ def few_shot_predict(
     else:
         feat_np = coords.astype("float32")
 
-    N = feat_np.shape[0]
-    x_dim = feat_np.shape[1]
-
-    # Build context feature matrix from calibration inputs
-    # calibration_coords (K, 2) + calibration_X (K, D)
     calib_X_np = calibration_X.astype("float32")       # (K, D)
     calib_c_np = calibration_coords.astype("float32")  # (K, 2)
     ctx_feat = np.concatenate([calib_c_np, calib_X_np], axis=1)  # (K, 2+D)
 
-    # Pad or truncate context features to match x_dim
-    K, ctx_dim = ctx_feat.shape
-    if ctx_dim < x_dim:
-        ctx_feat = np.pad(ctx_feat, ((0, 0), (0, x_dim - ctx_dim)))
-    elif ctx_dim > x_dim:
-        ctx_feat = ctx_feat[:, :x_dim]
+    # ------------------------------------------------------------------ #
+    # Step 2 — Optional climate zone conditioning                          #
+    #          Append a learned 8-dim embedding to every feature vector.   #
+    #          When trunk_path is a bundle, use its saved encoder weights   #
+    #          instead of random initialisation.                            #
+    # ------------------------------------------------------------------ #
+    if features.climate_zone is not None:
+        from sparc.models.climate_encoder import ClimateZoneEncoder
+        # Prefer saved encoder weights from the checkpoint bundle; fall back
+        # to random init when no encoder is present (plain checkpoint or none).
+        if trunk_path is not None:
+            _cze = ClimateZoneEncoder.from_checkpoint(trunk_path) or ClimateZoneEncoder(embed_dim=8)
+        else:
+            _cze = ClimateZoneEncoder(embed_dim=8)
+        _idx = torch.tensor([ClimateZoneEncoder.zone_to_index(features.climate_zone)])
+        with torch.no_grad():
+            climate_emb = _cze(_idx).numpy()  # (1, 8)
+        feat_np = np.concatenate(
+            [feat_np, np.tile(climate_emb, (feat_np.shape[0], 1))], axis=1
+        )  # (N, x_dim + 8)
+        ctx_feat = np.concatenate(
+            [ctx_feat, np.tile(climate_emb, (ctx_feat.shape[0], 1))], axis=1
+        )  # (K, ctx_dim + 8)
+
+    K = ctx_feat.shape[0]
+
+    # ------------------------------------------------------------------ #
+    # Step 3 — Load or create the trunk                                    #
+    # ------------------------------------------------------------------ #
+    def _align_cols(mat: np.ndarray, target_dim: int) -> np.ndarray:
+        """Pad or truncate a 2-D array to *target_dim* columns."""
+        d = mat.shape[1]
+        if d < target_dim:
+            return np.pad(mat, ((0, 0), (0, target_dim - d)))
+        return mat[:, :target_dim]
+
+    if trunk_path is not None:
+        anp = SpatialANP.from_checkpoint(trunk_path)
+        # Align feature matrices to the x_dim embedded in the checkpoint.
+        ckpt_x_dim = anp.x_dim
+        feat_np = _align_cols(feat_np, ckpt_x_dim)
+        ctx_feat = _align_cols(ctx_feat, ckpt_x_dim)
+    else:
+        x_dim = feat_np.shape[1]
+        # Align context features to the target x_dim.
+        ctx_feat = _align_cols(ctx_feat, x_dim)
+        anp = SpatialANP(x_dim=x_dim)
 
     target_t = torch.from_numpy(feat_np)
     ctx_x_t = torch.from_numpy(ctx_feat)
     ctx_y_t = torch.from_numpy(calibration_y.astype("float32")).unsqueeze(1)  # (K, 1)
 
-    anp = SpatialANP(x_dim=x_dim)
+    # ------------------------------------------------------------------ #
+    # Step 4 — City-head fine-tuning on calibration data                   #
+    #          Trunk (encoder + attention) stays frozen;                    #
+    #          only the decoder (city head) is updated.                     #
+    # ------------------------------------------------------------------ #
+    calibration_r2: float | None = None
+
+    if n_finetune_epochs > 0:
+        # Freeze trunk; enable gradients only for the decoder.
+        for name, param in anp.named_parameters():
+            param.requires_grad = name.startswith("decoder")
+
+        optimizer = torch.optim.Adam(
+            [p for p in anp.decoder.parameters()], lr=1e-3
+        )
+        anp.train()
+
+        for _epoch in range(n_finetune_epochs):
+            if K < 2:
+                # Single calibration point: use it as both context and target.
+                optimizer.zero_grad()
+                mean_cal, _ = anp(ctx_x_t, ctx_y_t, ctx_x_t)
+                loss = F.mse_loss(mean_cal, ctx_y_t)
+            else:
+                # Random 80/20 context/target split within calibration.
+                perm = torch.randperm(K)
+                n_ctx = max(1, K * 4 // 5)
+                ctx_idx = perm[:n_ctx]
+                # Ensure at least one target point even when K is tiny.
+                tgt_idx = perm[n_ctx:] if n_ctx < K else perm[-1:]
+                optimizer.zero_grad()
+                mean_cal, _ = anp(
+                    ctx_x_t[ctx_idx], ctx_y_t[ctx_idx], ctx_x_t[tgt_idx]
+                )
+                loss = F.mse_loss(mean_cal, ctx_y_t[tgt_idx])
+            loss.backward()
+            optimizer.step()
+
+        anp.eval()
+        # Freeze all params now that fine-tuning is done.
+        for param in anp.parameters():
+            param.requires_grad = False
+
+        # Compute LOO calibration R² to characterise fit quality.
+        if K >= 2:
+            with torch.no_grad():
+                loo_preds: list[float] = []
+                for i in range(K):
+                    mask = torch.ones(K, dtype=torch.bool)
+                    mask[i] = False
+                    m, _ = anp(ctx_x_t[mask], ctx_y_t[mask], ctx_x_t[[i]])
+                    loo_preds.append(float(m.squeeze()))
+            loo_arr = np.array(loo_preds, dtype="float32")
+            y_true = calibration_y.astype("float32")
+            ss_res = float(np.sum((y_true - loo_arr) ** 2))
+            ss_tot = float(np.sum((y_true - y_true.mean()) ** 2))
+            calibration_r2 = float(1.0 - ss_res / ss_tot) if ss_tot > 1e-12 else None
+
+    # ------------------------------------------------------------------ #
+    # Step 5 — Full-context prediction on the target city                  #
+    # ------------------------------------------------------------------ #
     anp.eval()
     with torch.no_grad():
         mean, std = anp(ctx_x_t, ctx_y_t, target_t)
@@ -121,4 +239,5 @@ def few_shot_predict(
         uncertainty=std.squeeze(1).numpy(),
         coords=coords,
         n_calibration=K,
+        calibration_r2=calibration_r2,
     )

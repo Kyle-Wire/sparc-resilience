@@ -134,13 +134,38 @@ class SpatialANP(nn.Module):
     # SpatialTrunk protocol implementation
     # ------------------------------------------------------------------
 
-    def save_checkpoint(self, path: str) -> None:
-        """Save model state_dict to *path*."""
+    def save_checkpoint(self, path: str, climate_encoder=None) -> None:  # type: ignore[override]
+        """Save model state_dict to *path*.
+
+        Parameters
+        ----------
+        path :
+            Destination file path.
+        climate_encoder :
+            Optional :class:`~sparc.models.climate_encoder.ClimateZoneEncoder`.
+            When supplied the checkpoint is written as a *bundle* dict::
+
+                {"anp": <state_dict>, "climate_encoder": <state_dict>}
+
+            Bundle checkpoints are fully backward-compatible: all existing
+            load methods detect the format automatically.
+        """
         import torch as _torch
-        _torch.save(self.state_dict(), path)
+        if climate_encoder is not None:
+            payload = {
+                "anp": self.state_dict(),
+                "climate_encoder": climate_encoder.state_dict(),
+            }
+        else:
+            payload = self.state_dict()
+        _torch.save(payload, path)
 
     def load_checkpoint(self, path: str) -> None:
         """Load model state_dict from *path*.
+
+        Handles both plain checkpoints (raw ``state_dict``) and bundle
+        checkpoints produced by :meth:`save_checkpoint` when a
+        ``climate_encoder`` is supplied.
 
         Raises
         ------
@@ -151,5 +176,46 @@ class SpatialANP(nn.Module):
         import torch as _torch
         if not os.path.exists(path):
             raise FileNotFoundError(f"SpatialANP.load_checkpoint: no file at {path!r}")
-        state = _torch.load(path, weights_only=True)
+        payload = _torch.load(path, weights_only=True)
+        state = payload["anp"] if isinstance(payload, dict) and "anp" in payload else payload
         self.load_state_dict(state)
+
+    @classmethod
+    def from_checkpoint(cls, path: str) -> "SpatialANP":
+        """Restore a SpatialANP from a saved checkpoint.
+
+        Infers architecture dims (x_dim, hidden_dim, encoder_dim) from the
+        saved weights so the caller does not need to track them separately.
+        The returned model is in eval mode.
+
+        Parameters
+        ----------
+        path :
+            Path to a checkpoint produced by :meth:`save_checkpoint`.
+
+        Returns
+        -------
+        SpatialANP
+
+        Raises
+        ------
+        FileNotFoundError
+            If *path* does not exist.
+        """
+        import os
+        import torch as _torch
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"SpatialANP.from_checkpoint: no file at {path!r}")
+        payload = _torch.load(path, map_location="cpu", weights_only=True)
+        # Support both plain state_dict and bundle format.
+        state = payload["anp"] if isinstance(payload, dict) and "anp" in payload else payload
+        # Infer architecture dims from weight shapes:
+        #   target_key_encoder.0.weight : (hidden_dim, x_dim)
+        #   empty_context_prior          : (1, encoder_dim)
+        x_dim = int(state["target_key_encoder.0.weight"].shape[1])
+        hidden_dim = int(state["target_key_encoder.0.weight"].shape[0])
+        encoder_dim = int(state["empty_context_prior"].shape[1])
+        model = cls(x_dim=x_dim, hidden_dim=hidden_dim, encoder_dim=encoder_dim)
+        model.load_state_dict(state)
+        model.eval()
+        return model

@@ -406,3 +406,5 @@ class GWENModel:
         print("\nTop variables by importance score:")
         print(imp_df.head())
         return imp_df 
+
+from sparc.models.gwen_config import GWENConfig  # noqa: F401

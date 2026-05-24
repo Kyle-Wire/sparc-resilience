@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicedoc/static/main/tauri/schemas/config.schema.json",
   "productName": "SPARC Labs",
-  "version": "1.2.9",
+  "version": "1.0.0-beta",
   "identifier": "com.sparclabs.desktop",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -74,7 +74,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI1RTZBNzQwNkZFOEU5RDUKUldUVjZlaHZRS2ZtdFhqTVpQa0lKUGdURmh1MTF3c3IxUnk0STdGMDhDcTM5UmJNV3VVRWN3WFAK",
       "endpoints": [
-        "https://github.com/Kyle-Wire/sparc-resilience/releases/latest/download/latest.json"
+        "https://github.com/Kyle-Wire/sparc-status/releases/latest/download/latest.json"
       ]
     }
   }

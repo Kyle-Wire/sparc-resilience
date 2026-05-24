@@ -75,7 +75,12 @@ class CityRegistry:
         if self._manifest_path.exists():
             with open(self._manifest_path) as f:
                 return json.load(f)
-        return {"cities": [], "training_order": [], "created": datetime.now(timezone.utc).isoformat()}
+        return {
+            "cities": [],
+            "training_order": [],
+            "city_index": {},
+            "created": datetime.now(timezone.utc).isoformat(),
+        }
 
     def _save_manifest(self) -> None:
         with open(self._manifest_path, "w") as f:
@@ -95,6 +100,7 @@ class CityRegistry:
         coreset_y: np.ndarray | None = None,
         welford_state: Any | None = None,
         metrics: dict[str, Any] | None = None,
+        climate_zone: str | None = None,
     ) -> None:
         """
         Register a city's training artifacts in the registry.
@@ -137,9 +143,18 @@ class CityRegistry:
             "city": city_name,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
+        # city_index: keyed by city name, stores metadata including climate_zone
+        if "city_index" not in self._manifest:
+            self._manifest["city_index"] = {}
+        self._manifest["city_index"][city_name] = {
+            "name": city_name,
+            "climate_zone": climate_zone,
+            "registered_at": datetime.now(timezone.utc).isoformat(),
+        }
         self._save_manifest()
 
-        logger.info("Registered city '%s' in registry at %s", city_name, self.root)
+        logger.info("Registered city '%s' (zone=%s) in registry at %s",
+                    city_name, climate_zone, self.root)
 
     # ------------------------------------------------------------------
     # City loading
@@ -186,6 +201,33 @@ class CityRegistry:
                 record.metrics = json.load(f)
 
         return record
+
+    def load_by_climate(self, climate_zone: str) -> "CityRecord | None":
+        """Load artifacts for the most-recently registered city with *climate_zone*.
+
+        Parameters
+        ----------
+        climate_zone :
+            Köppen-Geiger zone string (e.g. ``"Cfa"``).
+
+        Returns
+        -------
+        CityRecord or None
+            The city record, or ``None`` when no city with that zone is
+            registered.  Multiple cities sharing a zone return the most
+            recently registered one (last write wins).
+        """
+        city_index = self._manifest.get("city_index", {})
+        # Collect cities matching the zone, preserving registration order
+        matching = [
+            entry["name"]
+            for entry in city_index.values()
+            if entry.get("climate_zone") == climate_zone
+        ]
+        if not matching:
+            return None
+        # Most-recently registered city is last in the list
+        return self.load_city(matching[-1])
 
     # ------------------------------------------------------------------
     # Global trunk management

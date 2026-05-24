@@ -189,3 +189,58 @@ jobs:
           prerelease: false
           includeUpdaterJson: true
           args: --target ${{ matrix.target }}
+
+  # ── Mirror Tauri release artifacts to public sparc-status repo ───────────────
+  # tauri-action publishes installers + latest.json to the private sparc-resilience
+  # repo (via GITHUB_TOKEN).  The app's updater runs unauthenticated, so it can't
+  # reach a private release.  This job runs after ALL platform builds complete,
+  # downloads every asset, patches the download URLs in latest.json to point at
+  # the public sparc-status repo, then re-uploads everything there.
+  mirror-release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    name: Mirror release to sparc-status
+    permissions:
+      contents: read
+    steps:
+      - name: Download all Tauri release assets from private repo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p release-assets
+          gh release download "$TAG" \
+            --repo Kyle-Wire/sparc-resilience \
+            --dir release-assets
+
+      - name: Patch latest.json to use sparc-status download URLs
+        run: |
+          if [ -f release-assets/latest.json ]; then
+            sed -i 's|https://github\.com/Kyle-Wire/sparc-resilience/releases/download|https://github.com/Kyle-Wire/sparc-status/releases/download|g' \
+              release-assets/latest.json
+            echo "Patched latest.json:"
+            cat release-assets/latest.json
+          else
+            echo "::error::latest.json not found in release assets — updater manifest will be missing."
+            exit 1
+          fi
+
+      - name: Upload all artifacts to sparc-status
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_REPO_PAT }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Create the release if it doesn't already exist (build-wheel may have
+          # already created it; the || true suppresses the "already exists" error).
+          gh release create "$TAG" \
+            --repo Kyle-Wire/sparc-status \
+            --title "SPARC Labs $TAG" \
+            --notes "SPARC Desktop $TAG — desktop installers and update manifest." \
+            || true
+
+          for f in release-assets/*; do
+            gh release upload "$TAG" "$f" \
+              --repo Kyle-Wire/sparc-status \
+              --clobber
+          done

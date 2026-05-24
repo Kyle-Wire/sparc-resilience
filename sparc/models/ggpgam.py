@@ -571,3 +571,5 @@ class GGPGAM_SVC:
         u = ((y - y_pred) ** 2).sum()
         v = ((y - y.mean()) ** 2).sum()
         return 1 - u / v if v != 0 else 0.0
+
+from sparc.models.ggpgam_config import GGPGAMConfig  # noqa: F401

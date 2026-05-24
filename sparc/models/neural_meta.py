@@ -487,3 +487,6 @@ class SPARCMetaLearner(nn.Module):
         for name, param in self.named_parameters():
             if any(name.startswith(prefix) for prefix in self._TRUNK_KEYS):
                 param.requires_grad = True
+
+
+from sparc.models.neural_meta_config import NeuralMetaConfig  # noqa: F401

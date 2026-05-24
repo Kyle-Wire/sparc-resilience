@@ -67,3 +67,32 @@ class ClimateZoneEncoder(nn.Module):
     def zone_to_index(zone: str) -> int:
         """Convert a Köppen zone string to an embedding index."""
         return KOPPEN_TO_IDX.get(zone, len(KOPPEN_ZONES))
+
+    @classmethod
+    def from_checkpoint(cls, path: str) -> "ClimateZoneEncoder | None":
+        """Load a :class:`ClimateZoneEncoder` from a bundle checkpoint.
+
+        Parameters
+        ----------
+        path :
+            Path to a bundle checkpoint produced by
+            :meth:`~sparc.inference.anp.SpatialANP.save_checkpoint` with a
+            ``climate_encoder`` argument.
+
+        Returns
+        -------
+        ClimateZoneEncoder or None
+            The restored encoder, or ``None`` when the checkpoint does not
+            contain encoder weights (plain ANP checkpoint).
+        """
+        import torch as _torch
+        payload = _torch.load(path, map_location="cpu", weights_only=True)
+        if not (isinstance(payload, dict) and "climate_encoder" in payload):
+            return None
+        # Infer embed_dim and n_zones from saved weight shape (n_zones+1, embed_dim)
+        weight = payload["climate_encoder"]["embedding.weight"]
+        n_zones_plus_one, embed_dim = weight.shape
+        encoder = cls(embed_dim=embed_dim, n_zones=n_zones_plus_one - 1)
+        encoder.load_state_dict(payload["climate_encoder"])
+        encoder.eval()
+        return encoder

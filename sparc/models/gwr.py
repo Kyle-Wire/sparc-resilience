@@ -1288,3 +1288,5 @@ class GWRModel(BaseEstimator, RegressorMixin):
             })
         
         return pd.DataFrame(stability_metrics) 
+
+from sparc.models.gwr_config import GWRConfig  # noqa: F401

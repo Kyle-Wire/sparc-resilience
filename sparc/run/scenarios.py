@@ -318,3 +318,43 @@ def mirror_audit_artifacts_to_stage4(stage3_dir: str) -> list[str]:
     if mirrored:
         print(f"  [audit→stage4] mirrored {len(mirrored)} artifact(s) for report builder")
     return mirrored
+
+
+# ===================================================================== main
+def main(ctx: Any = None, *, fast_mode: bool = False) -> None:
+    """Pipeline entry-point for Stage 4 (scenarios).
+
+    Called by :mod:`sparc.run.stages` via the stage runner protocol
+    ``main(ctx, fast_mode=<bool>)``.
+
+    Parameters
+    ----------
+    ctx:
+        ``RunContext`` from the pipeline orchestrator.  May be ``None`` in
+        standalone / test invocations.
+    fast_mode:
+        When ``True``, skip heavy budget-optimisation passes.
+    """
+    try:
+        from sparc.run.pipeline_paths import get_result_store
+        store = get_result_store()
+        stage3_dir = store.stage_dir(3)
+    except Exception:
+        stage3_dir = ""
+
+    mirror_audit_artifacts_to_stage4(stage3_dir)
+
+    if not fast_mode:
+        try:
+            from sparc.registry.artifact import ArtifactRegistry
+            reg = ArtifactRegistry.current()
+            policy = reg.load_json(3, "policy_recommendations") or {}
+            if policy:
+                run_policy_replay(config=policy, data=None)  # type: ignore[arg-type]
+        except Exception:
+            pass
+
+        try:
+            run_budget_optimization()
+        except Exception:
+            pass

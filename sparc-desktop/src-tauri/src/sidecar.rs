@@ -535,8 +535,10 @@ fn force_kill_pid(pid: u32) {
 
 #[cfg(windows)]
 fn force_kill_pid(pid: u32) {
+    // /T kills the entire process tree (not just the root PID) so that any
+    // child processes spawned by the sidecar are also reaped.
     let _ = Command::new("taskkill")
-        .args(["/F", "/PID", &pid.to_string()])
+        .args(["/F", "/T", "/PID", &pid.to_string()])
         .status();
 }
 
