@@ -11,7 +11,6 @@ import { describe, it, expect, vi } from "vitest";
 import type { VizEntry } from "./vizRegistry";
 import {
   VIZ_REGISTRY,
-  getVizEntry,
   getVizComponent,
   registerVizComponent,
 } from "./vizRegistry";

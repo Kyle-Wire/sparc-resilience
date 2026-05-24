@@ -36,7 +36,7 @@ import { useAuthStore } from "@/stores/authStore";
 
 describe("getAuthHeaders", () => {
   beforeEach(() => {
-    vi.mocked(getToken).mockReturnValue(null);
+    vi.mocked(getToken).mockReturnValue("");
     vi.mocked(useAuthStore.getState).mockReturnValue({ session: null } as never);
   });
 
@@ -81,7 +81,7 @@ describe("authStore.destroy", () => {
     // the type contract; here we verify the real implementation doesn't throw.
     // We import the real store in a separate lazy import to bypass the mock.
     expect(() => {
-      useAuthStore.destroy();
+      useAuthStore.getState().destroy();
     }).not.toThrow();
   });
 });

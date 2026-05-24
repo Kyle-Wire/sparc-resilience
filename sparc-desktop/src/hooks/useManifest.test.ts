@@ -31,8 +31,8 @@ afterEach(() => {
 });
 
 const makeManifest = (stages = {}): RunManifest => ({
+  schema_version: 1,
   stages,
-  generated_at: "2025-01-01T00:00:00Z",
 });
 
 // ---------------------------------------------------------------------------

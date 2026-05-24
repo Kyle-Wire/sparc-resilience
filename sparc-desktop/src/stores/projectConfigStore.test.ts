@@ -90,7 +90,7 @@ describe("useProjectConfigStore", () => {
     await useProjectConfigStore.getState().saveNow({ project: { name: "renamed" } } as Partial<ProjectConfig>);
 
     const { config } = useProjectConfigStore.getState();
-    expect((config as ProjectConfig).project.name).toBe("renamed");
+    expect((config as ProjectConfig).project!.name).toBe("renamed");
     expect(mockSaveConfig).toHaveBeenCalledTimes(1);
   });
 

@@ -144,7 +144,7 @@ export function GwenApprovalModal({ onApproved, onDismiss }: Props) {
         )}
 
         <div style={{ display: "flex", gap: 10, marginTop: 20, justifyContent: "flex-end" }}>
-          <Btn onClick={onDismiss} style={{}}>Dismiss — decide later</Btn>
+          <Btn onClick={onDismiss}>Dismiss — decide later</Btn>
           <Btn primary onClick={handleApprove} disabled={approving}>
             {approving ? "Approving…" : "✓ Approve & continue to Stage 2"}
           </Btn>

@@ -9,7 +9,6 @@ import { describe, it, expect } from "vitest";
 import {
   processPipelineEvent,
   initialPipelineReducerState,
-  type PipelineReducerState,
 } from "./pipelineReducer";
 import type { PipelineEvent } from "@/lib/types";
 
