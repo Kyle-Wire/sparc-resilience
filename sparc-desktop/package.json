@@ -1,6 +1,6 @@
 {
   "name": "sparc-desktop",
-  "version": "1.2.6",
+  "version": "1.2.7",
   "description": "SPARC Labs Desktop Application",
   "type": "module",
   "scripts": {
