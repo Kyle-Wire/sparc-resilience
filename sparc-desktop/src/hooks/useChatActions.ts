@@ -28,7 +28,7 @@ export function useChatActions(
       try {
         switch (action.action) {
           case "suggest_template": {
-            const home = prompt("Choose output directory:", ${action.template}_project);
+            const home = prompt("Choose output directory:", `${action.template}_project`);
             if (!home) break;
             const res = await initProject(action.template, home);
             await project.openProject(res.project_yml, { template: action.template });
