@@ -66,6 +66,11 @@ def sync_group_fetch(
     bbox = boundary.bbox  # type: ignore[union-attr]
     result = source.fetch(fishnet, bbox, cfg)
 
+    # If the adapter encountered a hard failure, leave the manifest untouched.
+    # The caller is responsible for surfacing result.error to the user.
+    if result.error:
+        return result
+
     # Update manifest from what the adapter declared it produced
     for col, src_name in result.columns.items():
         _update_manifest(manifest, col, src_name, result.coverage.get(col, 0.0))

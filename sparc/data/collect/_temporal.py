@@ -69,6 +69,34 @@ class TemporalWindow:
             tolerance_days=tolerance_days,
         )
 
+    @classmethod
+    def from_range(
+        cls,
+        date_start: date,
+        date_end: date,
+        *,
+        tolerance_days: int = 3,
+    ) -> "TemporalWindow":
+        """Build a TemporalWindow from a bare date range with no anchor dates.
+
+        Use this when you have a study period but CAPA has not yet run (or is
+        not applicable).  All adapters accept a :class:`TemporalWindow`; this
+        factory lets callers avoid the legacy ``(date_start, date_end)`` pair.
+
+        Parameters
+        ----------
+        date_start, date_end : date
+            Outer bounds of the study period.
+        tolerance_days : int
+            Maximum offset (days) between anchor and scene.  Default 3.
+        """
+        return cls(
+            date_start=date_start,
+            date_end=date_end,
+            anchor_dates=[],
+            tolerance_days=tolerance_days,
+        )
+
     # ------------------------------------------------------------------
     # Search helpers
     # ------------------------------------------------------------------

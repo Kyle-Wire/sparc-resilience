@@ -25,6 +25,8 @@ from .manifest import VariableManifest, VariableStatus, ManifestEntry
 from .sources import FetchResult, DataSource, SourceRegistry, SOURCE_REGISTRY
 from .domain import DomainSpec
 from .dispatch import sync_group_fetch
+from .session import CollectSession
+import sparc.data.collect.adapters as _adapters  # noqa: F401 — registers all adapters
 
 __all__ = [
     "resolve_boundary",
@@ -37,6 +39,8 @@ __all__ = [
     "DataSource",
     "SourceRegistry",
     "SOURCE_REGISTRY",
+    # C2 — CollectSession
+    "CollectSession",
     # C3 — DomainSpec
     "DomainSpec",
     # C4 — dispatch

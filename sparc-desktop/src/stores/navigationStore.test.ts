@@ -115,4 +115,23 @@ describe("navigationStore", () => {
       expect(localStorage.getItem("sparc-active-page")).toBe("Results");
     });
   });
+
+  describe("Configure page — collapsed analysis configuration", () => {
+    it("allows navigation to Configure when a project is loaded", () => {
+      mockProjectLoaded.value = true;
+      useNavigationStore.getState().navigate("Configure");
+      expect(useNavigationStore.getState().currentPage).toBe("Configure");
+    });
+
+    it("blocks navigation to Configure without a loaded project", () => {
+      useNavigationStore.getState().navigate("Configure");
+      expect(useNavigationStore.getState().currentPage).toBe("Project");
+    });
+
+    it("persists Configure to localStorage on successful navigation", () => {
+      mockProjectLoaded.value = true;
+      useNavigationStore.getState().navigate("Configure");
+      expect(localStorage.getItem("sparc-active-page")).toBe("Configure");
+    });
+  });
 });

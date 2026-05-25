@@ -36,14 +36,18 @@ Pending migration (still in app.py):
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from typing import Annotated, Any
 
-from sparc.server.deps import read_or_404
+from fastapi import APIRouter, Depends
+
+from sparc.server.deps import read_or_404, get_open_store
 
 router = APIRouter(tags=["results"])
 
 
 @router.get("/results/correlogram")
-async def results_correlogram():
+async def results_correlogram(
+    store: Annotated[Any, Depends(get_open_store)],
+):
     """Return the Stage 0 correlogram analysis payload."""
-    return await read_or_404("0", "correlogram_results", hint="Run Stage 0 first")
+    return await read_or_404("0", "correlogram_results", hint="Run Stage 0 first", store=store)

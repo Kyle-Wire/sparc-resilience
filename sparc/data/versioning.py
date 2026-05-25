@@ -8,6 +8,7 @@ a changelog so users can compare results across processing runs.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +16,7 @@ from typing import Any
 
 import pandas as pd
 
+logger = logging.getLogger(__name__)
 
 CHANGELOG_FILENAME = "data_changelog.json"
 
@@ -118,7 +120,7 @@ def save_versioned(
                 producer="data.versioning",
             )
         except Exception:
-            pass
+            logger.warning("Failed to mirror changelog to artifact store", exc_info=True)
 
     return entry
 

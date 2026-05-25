@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+pytest.importorskip("torch")
+
 import numpy as np
 import pandas as pd
 import pytest

@@ -50,7 +50,25 @@ class InferenceDispatcher:
     -----
     >>> result = InferenceDispatcher().predict(features)
     >>> result = InferenceDispatcher().predict(features, calib_X, calib_y, calib_coords)
+
+    Adapter injection
+    -----------------
+    Pass *zero_shot_fn* and/or *few_shot_fn* to replace the default
+    implementations.  This exposes the routing seam for testing without
+    requiring torch to be installed::
+
+        dispatcher = InferenceDispatcher(zero_shot_fn=my_stub, few_shot_fn=my_stub)
+
+    Each callable matches the signature of the private helper methods below.
     """
+
+    def __init__(
+        self,
+        zero_shot_fn=None,
+        few_shot_fn=None,
+    ) -> None:
+        self._zero_shot_fn = zero_shot_fn
+        self._few_shot_fn = few_shot_fn
 
     def predict(
         self,
@@ -91,6 +109,8 @@ class InferenceDispatcher:
 
     # ------------------------------------------------------------------
     def _zero_shot(self, features: SatelliteFeatureSet) -> Prediction:
+        if self._zero_shot_fn is not None:
+            return self._zero_shot_fn(features)
         from sparc.inference.zero_shot import zero_shot_predict
 
         raw = zero_shot_predict(features)
@@ -110,6 +130,8 @@ class InferenceDispatcher:
         calibration_coords: np.ndarray,
         K: int,
     ) -> Prediction:
+        if self._few_shot_fn is not None:
+            return self._few_shot_fn(features, calibration_X, calibration_y, calibration_coords, K)
         from sparc.inference.few_shot import few_shot_predict
 
         raw = few_shot_predict(

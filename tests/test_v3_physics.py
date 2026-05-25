@@ -1,6 +1,8 @@
 """
 Tests for SPARC V3 physics integration and α(s) → simulation wiring.
 """
+import pytest
+pytest.importorskip("torch")
 
 import numpy as np
 import pytest

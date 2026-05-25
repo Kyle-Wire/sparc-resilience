@@ -59,6 +59,21 @@ class RunContext:
     paths: Any              # PipelinePaths — typed as Any to avoid circular import
     registry: Any           # RunRegistry | None
     project_path: str
+    cfg: Optional[Any] = field(default=None)   # ProjectConfig | None
+    checkpoint_handler: Optional[Callable] = field(default=None)
+
+    def checkpoint(self, pct: int, label: str = "") -> None:
+        """Invoke the checkpoint handler if one is set.
+
+        Parameters
+        ----------
+        pct:
+            Completion percentage (0–100).
+        label:
+            Short human-readable description of the current step.
+        """
+        if self.checkpoint_handler is not None:
+            self.checkpoint_handler(pct, label)
 
     # ------------------------------------------------------------------
     # Factory
@@ -109,11 +124,19 @@ class RunContext:
             # Registry is optional; leave as None if unavailable
             pass
 
+        cfg = None
+        try:
+            from sparc.config.project_config import ProjectConfig
+            cfg = ProjectConfig(raw=config, source_path=str(p))
+        except Exception:
+            pass
+
         return cls(
             config=config,
             paths=paths,
             registry=registry,
             project_path=str(p),
+            cfg=cfg,
         )
 
 
@@ -133,16 +156,26 @@ class PipelineOrchestrator:
         ``(context: RunContext, flags: dict) -> None``.  When *None*, the
         real SPARC stage runners are used (imported lazily).  Pass a custom
         dict in tests to avoid disk I/O and external dependencies.
+    completion_store : object | None
+        Optional ArtifactStore-compatible object used to persist stage
+        completion state across process restarts.  Must support::
+
+            store.write_struct(stage, artifact_id, data, **kwargs) -> None
+            store.read_struct(stage, artifact_id) -> dict | None
+
+        When *None*, completion is tracked in-memory only (prior behaviour).
     """
 
     def __init__(
         self,
         context: RunContext,
         stage_runners: Optional[Dict[str, Callable]] = None,
+        completion_store: Optional[Any] = None,
     ) -> None:
         self._ctx = context
         self._runners = dict(stage_runners) if stage_runners is not None else {}
         self._completed: set[str] = set()
+        self._completion_store = completion_store
 
     # ------------------------------------------------------------------
     # Public API
@@ -182,28 +215,64 @@ class PipelineOrchestrator:
             self._run_one(stage, flags, resume=resume)
 
     def mark_complete(self, stage_key: str) -> None:
-        """Mark a stage as complete (used by ``--resume`` logic and tests)."""
+        """Mark a stage as complete in memory and in the completion_store (if any).
+
+        Also writes ``{"complete": True}`` to the store under the key
+        ``(stage_key, "status")`` so that the status survives process restarts.
+        """
         self._completed.add(stage_key)
+        if self._completion_store is not None:
+            try:
+                self._completion_store.write_struct(
+                    stage_key, "status",
+                    {"complete": True},
+                    producer="sparc.run.orchestrator",
+                )
+            except Exception:  # noqa: BLE001
+                pass  # persistence is best-effort
 
     def is_complete(self, stage_key: str) -> bool:
-        """Return True if the stage has been marked complete."""
+        """Return True if the stage has been marked complete (in-memory check only)."""
         return stage_key in self._completed
+
+    def stage_done(self, stage_key: str) -> bool:
+        """Return True if the stage is marked complete in memory OR in the store.
+
+        This is the preferred check for callers that want to honour both
+        in-memory state (set via :meth:`mark_complete`) and persisted state
+        from a previous run (stored in ``completion_store``).
+        """
+        if stage_key in self._completed:
+            return True
+        if self._completion_store is not None:
+            try:
+                status = self._completion_store.read_struct(stage_key, "status")
+                if isinstance(status, dict) and status.get("complete"):
+                    return True
+            except Exception:  # noqa: BLE001
+                pass
+        return False
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
     def _run_one(self, key: str, flags: dict, *, resume: bool) -> None:
-        """Execute a single stage runner unless resume+already-complete."""
-        if resume and key in self._completed:
+        """Execute a single stage runner unless resume+already-complete.
+
+        Completion is checked via :meth:`stage_done` so that both in-memory
+        state and ``completion_store``-persisted state are honoured.
+        On success, :meth:`mark_complete` writes to both.
+        """
+        if resume and self.stage_done(key):
             return
 
         runner = self._get_runner(key)
         if runner is None:
             return   # stage not in runner map — silently skip
 
-        runner(self._ctx, flags)
-        self._completed.add(key)
+        runner(self._ctx, flags)   # raises on failure — no completion written
+        self.mark_complete(key)
 
     def _get_runner(self, key: str) -> Optional[Callable]:
         """Return the runner for *key*, falling back to real stage imports."""
@@ -221,6 +290,8 @@ class PipelineOrchestrator:
             "1":  "sparc.run.gwen_variable_selection:main",
             "2":  "sparc.run.enhanced_spatial_cv:main",
             "3":  "sparc.run.causal_validation:main",
+            "4":  "sparc.run.stage4_runner:main",
+            "5":  "sparc.run.stage5_runner:main",
         }
         spec = _REAL_RUNNERS.get(key)
         if spec is None:

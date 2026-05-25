@@ -27,27 +27,22 @@ import { useChatActions } from "@/hooks/useChatActions";
 import { usePromptMode } from "@/hooks/usePromptMode";
 import { useCommandPaletteItems } from "@/hooks/useCommandPaletteItems";
 
-import ProjectPage from "@/components/pages/ProjectPage";
-import DataPage from "@/components/pages/DataPage";
-import DataCollectionPage from "@/components/pages/DataCollectionPage";
-import DAGPage from "@/components/pages/DAGPage";
-import VariablesPage from "@/components/pages/VariablesPage";
-import PhysicsPage from "@/components/pages/PhysicsPage";
-import ScenariosPage from "@/components/pages/ScenariosPage";
-import ModelsPage from "@/components/pages/ModelsPage";
-import RunPage from "@/components/pages/RunPage";
-import StageResultsPage from "@/components/results/StageResultsPage";
-import DecisionSupportPage from "@/components/pages/DecisionSupportPage";
-import ReportPage from "@/components/pages/ReportPage";
-import SettingsPage from "@/components/pages/SettingsPage";
-import PerformancePage from "@/components/pages/PerformancePage";
+const ProjectPage         = React.lazy(() => import("@/components/pages/ProjectPage"));
+const DataPage            = React.lazy(() => import("@/components/pages/DataPage"));
+const ConfigurePage       = React.lazy(() => import("@/components/pages/ConfigurePage"));
+const RunPage             = React.lazy(() => import("@/components/pages/RunPage"));
+const InsightsPage        = React.lazy(() => import("@/components/pages/InsightsPage"));
+const DecisionSupportPage = React.lazy(() => import("@/components/pages/DecisionSupportPage"));
+const ReportPage          = React.lazy(() => import("@/components/pages/ReportPage"));
+const SettingsPage        = React.lazy(() => import("@/components/pages/SettingsPage"));
+const PerformancePage     = React.lazy(() => import("@/components/pages/PerformancePage"));
 
 
 export default function App() {
   const { ready, serverLost, startupFailed, status, restart } = useServer();
   const notif = useNotificationState();
   const project = useProjectStore();
-  const { currentPage: page, navigate } = useNavigationStore();
+  const { currentPage: page, navigate, workflowStep } = useNavigationStore();
   const { user, signOut } = useAuthStore();
   const [chatOpen, setChatOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -116,22 +111,12 @@ export default function App() {
         return gate(<ProjectPage />);
       case "Data":
         return gate(<DataPage key={refreshKey} />);
-      case "Data Collection":
-        return gate(<DataCollectionPage />);
-      case "DAG":
-        return gate(<DAGPage key={refreshKey} />);
-      case "Variables":
-        return gate(<VariablesPage />);
-      case "Physics":
-        return gate(<PhysicsPage />);
-      case "Scenarios":
-        return gate(<ScenariosPage />);
-      case "Models":
-        return gate(<ModelsPage />);
+      case "Configure":
+        return gate(<ConfigurePage />);
       case "Run":
         return gate(<RunPage />);
       case "Results":
-        return gate(<StageResultsPage />);
+        return gate(<InsightsPage />);
       case "Decision Support":
         return gate(<DecisionSupportPage />);
       case "Report":
@@ -164,9 +149,12 @@ export default function App() {
             projectDomain={projectDomain}
             projectEpsg={projectEpsg ? `EPSG:${projectEpsg}` : undefined}
             status={status}
+            workflowStep={workflowStep}
           >
             <ErrorBoundary key={page} page={page}>
-              {renderPage()}
+              <React.Suspense fallback={null}>
+                {renderPage()}
+              </React.Suspense>
             </ErrorBoundary>
           </Shell>
 

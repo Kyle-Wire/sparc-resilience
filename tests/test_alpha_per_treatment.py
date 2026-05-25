@@ -1,6 +1,8 @@
 """Tests for ProcessRateNet per-treatment alpha-field output (Phase 3, v4)."""
 
 from __future__ import annotations
+import pytest
+pytest.importorskip("torch")
 
 import numpy as np
 import pytest

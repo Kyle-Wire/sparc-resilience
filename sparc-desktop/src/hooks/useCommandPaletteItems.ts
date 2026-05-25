@@ -33,12 +33,12 @@ export function useCommandPaletteItems(
     });
     if (dataCtx?.columns) {
       for (const col of dataCtx.columns.slice(0, 80)) {
-        out.push({ id: `pred:${col}`, kind: "predictor", label: col, page: "Variables" });
+        out.push({ id: `pred:${col}`, kind: "predictor", label: col, page: "Configure" });
       }
     }
     if (dataCtx?.scenarios) {
       for (const s of dataCtx.scenarios) {
-        out.push({ id: `scn:${s.name}`, kind: "scenario", label: s.name, hint: s.variable, page: "Scenarios" });
+        out.push({ id: `scn:${s.name}`, kind: "scenario", label: s.name, hint: s.variable, page: "Configure" });
       }
     }
     if (dataCtx?.causalResults) {

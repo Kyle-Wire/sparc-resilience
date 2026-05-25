@@ -3,6 +3,7 @@ import CubeLogo from "@/components/brand/CubeLogo";
 import { useAuthStore } from "@/stores/authStore";
 import { useMouseParallax } from "@/hooks/useMouseParallax";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
+import { SPARC_SIGNUP_URL } from "@/lib/constants";
 
 interface LoginScreenProps {
   parallaxEnabled?: boolean;
@@ -45,7 +46,7 @@ export default function LoginScreen({ parallaxEnabled = true }: LoginScreenProps
       e.preventDefault();
       clearError();
       if (mode === "signup") {
-        shellOpen("https://sparclabs.co");
+        shellOpen(SPARC_SIGNUP_URL);
         return;
       }
       await signIn(email, password);
@@ -190,7 +191,7 @@ export default function LoginScreen({ parallaxEnabled = true }: LoginScreenProps
               Create your SPARC Labs account on our website to get started.
             </p>
             <button
-              onClick={() => shellOpen("https://sparclabs.co")}
+              onClick={() => shellOpen(SPARC_SIGNUP_URL)}
               style={{
                 width: "100%",
                 padding: "10px 0",

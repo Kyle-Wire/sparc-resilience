@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { HealthResponse } from "@/lib/types";
+import type { WorkflowStep } from "@/stores/navigationStore";
 import Sidebar, { type PageName } from "./Sidebar";
 import Topbar from "./Topbar";
 
@@ -14,6 +15,7 @@ interface ShellProps {
   projectDomain?: string;
   projectEpsg?: string;
   status?: HealthResponse | null;
+  workflowStep?: WorkflowStep;
 }
 
 export default function Shell({
@@ -27,6 +29,7 @@ export default function Shell({
   projectDomain,
   projectEpsg,
   status,
+  workflowStep,
 }: ShellProps) {
   return (
     <div
@@ -46,6 +49,7 @@ export default function Shell({
         projectName={projectName}
         projectDomain={projectDomain}
         projectEpsg={projectEpsg}
+        workflowStep={workflowStep}
       />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <Topbar

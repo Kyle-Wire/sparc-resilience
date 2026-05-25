@@ -33,6 +33,7 @@ export function useServer() {
   const [ready, setReady] = useState(false);
   const [serverLost, setServerLost] = useState(false);
   const [startupFailed, setStartupFailed] = useState(false);
+  const [respawning, setRespawning] = useState(false);
   const [status, setStatus] = useState<HealthResponse | null>(null);
   const readyRef = useRef(false);
   const intervalRef = useRef<ReturnType<typeof setInterval>>(undefined);
@@ -63,11 +64,13 @@ export function useServer() {
         // Server was previously healthy — try to auto-respawn.
         if (respawnAttemptsRef.current < MAX_RESPAWN_ATTEMPTS) {
           respawningRef.current = true;
+          setRespawning(true);
           respawnAttemptsRef.current += 1;
           const delay = Math.min(1000 * respawnAttemptsRef.current, 4000);
           setTimeout(async () => {
             await invokeRestartSidecar();
             respawningRef.current = false;
+            setRespawning(false);
           }, delay);
         } else {
           // All retries exhausted — surface the error to the user.
@@ -87,6 +90,7 @@ export function useServer() {
     setReady(false);
     setServerLost(false);
     setStartupFailed(false);
+    setRespawning(false);
 
     await invokeRestartSidecar();
 
@@ -122,5 +126,5 @@ export function useServer() {
     }
   }, []);
 
-  return { ready, serverLost, startupFailed, status, refresh, restart };
+  return { ready, serverLost, startupFailed, respawning, status, refresh, restart };
 }

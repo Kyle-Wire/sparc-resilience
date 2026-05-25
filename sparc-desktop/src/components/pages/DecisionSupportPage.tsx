@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SectionHeader, Card, Btn, Stat, StatGrid, Tag } from "@/components/ui/DesignSystem";
 import { EmptyState } from "@/components/common/EmptyState";
+import { parseBudget } from "@/lib/decisionValidation";
 import { SPARC_RAMP_HEX, MAP_HEIGHT_DEFAULT } from "@/lib/design-tokens";
 import SpatialMap from "@/components/map/SpatialMap";
 import ResizableMapWrapper from "@/components/map/ResizableMapWrapper";
@@ -229,7 +230,13 @@ export default function DecisionSupportPage() {
     setRunning(true);
     setRunError(null);
     try {
-      const parsedBudget = wiz.budget.trim() === "" ? null : Number(wiz.budget);
+      const budgetResult = parseBudget(wiz.budget);
+      if (budgetResult.error) {
+        notify("warning", budgetResult.error);
+        setRunning(false);
+        return;
+      }
+      const parsedBudget = budgetResult.value;
       const optBody = {
         candidates: mergedCandidates,
         budget: parsedBudget,

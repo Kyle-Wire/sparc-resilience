@@ -1056,17 +1056,9 @@ def make_cate_estimator(config: dict) -> Any:
     if name == "bayesian":
         return BayesianSpatialCATE(config)
     if name == "auto":
-        # PyTorch + sparc.causal.nuts is a hard dependency of the repo;
-        # only fall back if the module raises on import for some reason.
-        try:
-            from sparc.causal.nuts import run_nuts  # noqa: F401
-            return BayesianSpatialCATE(config)
-        except Exception:
-            warnings.warn(
-                "make_cate_estimator: sparc.causal.nuts unavailable, "
-                "falling back to frequentist SpatialCATEEstimator."
-            )
-            return SpatialCATEEstimator(config)
+        # BayesianSpatialCATE is always available; torch is only needed
+        # at estimate() call time, not at construction.
+        return BayesianSpatialCATE(config)
     raise ValueError(
         f"Unknown causal.cate_estimator: {name!r}. "
         f"Use 'auto', 'bayesian', or 'frequentist'."

@@ -190,7 +190,13 @@ class LayerDownscaler:
         src_pts = np.column_stack([np.asarray(lons), np.asarray(lats)])
         vals = np.asarray(values, dtype=float)
 
-        interpolated = griddata(src_pts, vals, centroids, method=method)
+        # griddata with "linear" or "cubic" requires enough points for a
+        # Delaunay triangulation (≥3 in 2D). Fall back to nearest when the
+        # primary method fails (e.g. only 1–2 source points supplied).
+        try:
+            interpolated = griddata(src_pts, vals, centroids, method=method)
+        except Exception:
+            interpolated = np.full(len(centroids), np.nan)
 
         # Fill NaN cells (outside hull) with nearest-neighbour
         nan_mask = np.isnan(interpolated)

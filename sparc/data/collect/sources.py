@@ -36,12 +36,18 @@ class FetchResult:
     metadata : dict[str, object]
         Optional pass-through data (e.g. ``{"anchor_dates": [...]}``) that
         downstream callers or the session store may need.
+    error : str | None
+        When set, the adapter encountered a hard failure.  ``gdf`` may be
+        the original (unenriched) fishnet or ``None``.  The manifest is *not*
+        updated — callers should surface the error to the user and let them
+        decide whether to retry or proceed without the variable.
     """
 
     gdf: object
     columns: Dict[str, str] = field(default_factory=dict)
     coverage: Dict[str, float] = field(default_factory=dict)
     metadata: Dict[str, object] = field(default_factory=dict)
+    error: "str | None" = None
 
 
 # ---------------------------------------------------------------------------

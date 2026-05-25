@@ -55,10 +55,11 @@ def zero_shot_predict(
     -------
     ZeroShotPrediction
     """
-    if registry_path is not None:
-        raise NotImplementedError(
-            "zero_shot_predict: registry_path loading is not yet implemented."
-        )
+    if registry_path is not None and trunk_path is None:
+        # Trunk will be resolved via TrunkLoader once x_dim is known.
+        _use_registry = True
+    else:
+        _use_registry = False
 
     import torch
     import numpy as np
@@ -93,9 +94,12 @@ def zero_shot_predict(
     ctx_x = torch.zeros(0, x_dim, dtype=torch.float32)  # empty context
     ctx_y = torch.zeros(0, 1, dtype=torch.float32)
 
-    # Load trunk from checkpoint or instantiate a fresh model
+    # Load trunk from checkpoint, registry, or fresh model
     if trunk_path is not None:
         anp = SpatialANP.from_checkpoint(trunk_path)
+    elif _use_registry:
+        from sparc.inference.trunk import TrunkLoader
+        anp = TrunkLoader.from_registry(registry_path, features.climate_zone, x_dim=x_dim)
     else:
         anp = SpatialANP(x_dim=x_dim)
         anp.eval()

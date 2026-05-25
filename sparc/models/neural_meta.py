@@ -34,6 +34,7 @@ import torch.nn.functional as F
 
 from sparc.models.spatial_attention import SIRENLayer, SparseSpatialAttention
 from sparc.models.pde_encoder import PDEInformedPhysicsEncoder
+from sparc.features.geo_positional_encoding import GeoPositionalEncoding
 
 
 class SpatialGatingHead(nn.Module):
@@ -95,6 +96,7 @@ class SPARCMetaLearner(nn.Module):
     n_heads : int — attention heads for sparse spatial attention
     max_neighbors : int — KNN neighborhood size
     siren_omega : float — SIREN frequency parameter
+    geo_pe_dim : int — geographic positional encoding dim (0 = disabled)
     """
 
     def __init__(
@@ -110,6 +112,7 @@ class SPARCMetaLearner(nn.Module):
         siren_omega: float = 30.0,
         time_embed_dim: int = 0,
         init_bandwidth: float = 1000.0,
+        geo_pe_dim: int = 0,
     ) -> None:
         super().__init__()
 
@@ -144,6 +147,15 @@ class SPARCMetaLearner(nn.Module):
         if time_embed_dim > 0:
             self.time_embed = nn.Embedding(3, time_embed_dim)
             trunk_fusion_input += time_embed_dim
+
+        # Optional: Geographic positional encoding (Space2Vec-style)
+        # Encodes projected (x, y) coords as multi-scale Fourier features.
+        # Ref: Mai et al. (2020) Space2Vec, ICLR 2020.
+        self.geo_pe_dim = geo_pe_dim
+        self.geo_pe_enc: GeoPositionalEncoding | None = None
+        if geo_pe_dim > 0:
+            self.geo_pe_enc = GeoPositionalEncoding(geo_pe_dim)
+            trunk_fusion_input += geo_pe_dim
 
         # Trunk fusion: physics + alpha [+ time] → shared representation
         self.trunk_fusion = nn.Sequential(
@@ -269,11 +281,14 @@ class SPARCMetaLearner(nn.Module):
 
         h_alpha = self.alpha_emb(alpha)               # (N, H)
 
-        # Trunk fusion: physics + alpha [+ time] → shared representation
+        # Trunk fusion: physics + alpha [+ time] [+ geo-PE] → shared representation
         trunk_parts = [h_phys, h_alpha]
         if self.time_embed is not None and time_idx is not None:
             h_time = self.time_embed(time_idx)         # (N, time_embed_dim)
             trunk_parts.append(h_time)
+        if self.geo_pe_enc is not None:
+            h_geo = self.geo_pe_enc(coords)            # (N, geo_pe_dim)
+            trunk_parts.append(h_geo)
         h_trunk = self.trunk_fusion(torch.cat(trunk_parts, dim=-1))  # (N, H)
 
         # SpatialGatingHead — soft-weight surrogates by epistemic uncertainty.
@@ -309,6 +324,7 @@ class SPARCMetaLearner(nn.Module):
         alpha: torch.Tensor,
         time_idx: torch.Tensor | None = None,
         channel_mask: torch.Tensor | None = None,
+        coords: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Compute the SharedTrunk embedding ``h_trunk`` only.
@@ -325,6 +341,8 @@ class SPARCMetaLearner(nn.Module):
         time_idx : (N,) long or None — snapshot index for time embedding
         channel_mask : (n_physics_features,) or None
             Optional JEPA context mask (see ``PDEInformedPhysicsEncoder``).
+        coords : (N, 2) float or None — projected coordinates for geo-PE.
+            When None and geo_pe_dim > 0, zeros are used (backward compatible).
 
         Returns
         -------
@@ -336,6 +354,15 @@ class SPARCMetaLearner(nn.Module):
         trunk_parts = [h_phys, h_alpha]
         if self.time_embed is not None and time_idx is not None:
             trunk_parts.append(self.time_embed(time_idx))
+        if self.geo_pe_enc is not None:
+            if coords is not None:
+                h_geo = self.geo_pe_enc(coords)
+            else:
+                h_geo = torch.zeros(
+                    physics_feats.shape[0], self.geo_pe_dim,
+                    device=physics_feats.device, dtype=physics_feats.dtype,
+                )
+            trunk_parts.append(h_geo)
         return self.trunk_fusion(torch.cat(trunk_parts, dim=-1))
 
     # ------------------------------------------------------------------
@@ -401,6 +428,7 @@ class SPARCMetaLearner(nn.Module):
             siren_omega=cfg.siren_omega,
             time_embed_dim=cfg.time_embed_dim,
             init_bandwidth=cfg.init_bandwidth,
+            geo_pe_dim=cfg.geo_pe_dim,
         )
 
     # ------------------------------------------------------------------
@@ -460,7 +488,7 @@ class SPARCMetaLearner(nn.Module):
     # Canonical set of submodule name-prefixes that belong to the SharedTrunk.
     # ema_trunk.py and v2_neural_training.py import/reference this; keep in sync.
     _TRUNK_KEYS: frozenset[str] = frozenset(
-        {"physics_enc", "alpha_emb", "trunk_fusion", "time_embed"}
+        {"physics_enc", "alpha_emb", "trunk_fusion", "time_embed", "geo_pe_enc"}
     )
 
     def save_trunk(self, path: str | Path) -> None:

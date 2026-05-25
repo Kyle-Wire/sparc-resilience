@@ -177,6 +177,35 @@ def test_apply_preset_custom_returns_empty(monkeypatch):
     assert hp.apply_preset("custom", raw) == {}
 
 
+# ---------------------------------------------------------------------------
+# HardwareProfile.stub() — for test injection
+# ---------------------------------------------------------------------------
+
+class TestStubProfile:
+    def test_stub_returns_hardware_profile(self):
+        profile = hp.HardwareProfile.stub()
+        assert isinstance(profile, hp.HardwareProfile)
+
+    def test_stub_is_low_tier_single_worker(self):
+        profile = hp.HardwareProfile.stub()
+        assert profile.max_workers == 1
+        assert profile.tier == "low"
+        assert profile.force_cpu is True
+
+    def test_stub_is_fast_deterministic(self):
+        a = hp.HardwareProfile.stub()
+        b = hp.HardwareProfile.stub()
+        assert a == b
+
+    def test_stub_does_not_call_psutil(self, monkeypatch):
+        """stub() must never call psutil — it's used in environments without real hardware."""
+        def boom():
+            raise AssertionError("psutil called")
+        monkeypatch.setattr(hp.psutil, "virtual_memory", boom)
+        profile = hp.HardwareProfile.stub()  # must not raise
+        assert profile is not None
+
+
 def test_resolve_profile_project_overrides_global(monkeypatch):
     _patch_vm(monkeypatch, total_gb=64.0)
     profile = hp.resolve_profile(

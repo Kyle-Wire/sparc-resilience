@@ -70,33 +70,12 @@ def few_shot_predict(
     FewShotPrediction
     """
     if registry_path is not None and trunk_path is None:
-        # Resolve a trunk_path from the registry before entering the main flow.
-        from sparc.registry.city_registry import CityRegistry
-        import tempfile, os
-        _reg = CityRegistry(registry_path)
-        _record = (
-            _reg.load_by_climate(features.climate_zone)
-            if features.climate_zone is not None
-            else None
-        )
-        if _record is not None and _record.trunk_checkpoint is not None:
-            # Materialise the state dict to a temp file so the rest of the
-            # function can use trunk_path uniformly.
-            import torch as _t
-            _tmp = tempfile.NamedTemporaryFile(suffix=".pt", delete=False)
-            _tmp.close()
-            _t.save(_record.trunk_checkpoint, _tmp.name)
-            trunk_path = _tmp.name
-        else:
-            # Fall back to global trunk
-            _global = _reg.load_global_trunk()
-            if _global is not None:
-                import torch as _t
-                _tmp = tempfile.NamedTemporaryFile(suffix=".pt", delete=False)
-                _tmp.close()
-                _t.save(_global, _tmp.name)
-                trunk_path = _tmp.name
-            # else: trunk_path stays None → fresh model
+        # Resolve trunk from registry in-memory via TrunkLoader (no tempfile needed).
+        # x_dim is not known yet at this point — TrunkLoader.from_registry is called
+        # later inside the main flow once feat_np.shape[1] is determined.
+        _use_registry = True
+    else:
+        _use_registry = False
 
     import torch
     import torch.nn.functional as F
@@ -159,6 +138,11 @@ def few_shot_predict(
         ckpt_x_dim = anp.x_dim
         feat_np = _align_cols(feat_np, ckpt_x_dim)
         ctx_feat = _align_cols(ctx_feat, ckpt_x_dim)
+    elif _use_registry:
+        x_dim = feat_np.shape[1]
+        ctx_feat = _align_cols(ctx_feat, x_dim)
+        from sparc.inference.trunk import TrunkLoader
+        anp = TrunkLoader.from_registry(registry_path, features.climate_zone, x_dim=x_dim)
     else:
         x_dim = feat_np.shape[1]
         # Align context features to the target x_dim.

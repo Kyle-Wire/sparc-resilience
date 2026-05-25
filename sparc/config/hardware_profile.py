@@ -104,6 +104,26 @@ class HardwareProfile:
             f"preset={self.preset}"
         )
 
+    @classmethod
+    def stub(cls) -> "HardwareProfile":
+        """Return a deterministic minimal profile for tests — never calls psutil."""
+        return cls(
+            tier="low",
+            total_ram_gb=8.0,
+            available_ram_gb=4.0,
+            cpu_count=2,
+            max_workers=1,
+            outer_jobs=1,
+            inner_jobs=1,
+            batch_size=512,
+            nuts_thin=2,
+            force_cpu=True,
+            high_memory_mode=False,
+            memory_limit_gb=6.8,
+            preset="eco",
+            source="stub",
+        )
+
 
 # ---------------------------------------------------------------------------
 # Tier classification + base profile builder (raw detection)

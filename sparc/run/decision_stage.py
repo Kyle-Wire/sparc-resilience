@@ -88,6 +88,28 @@ def run_decision_stage(
         n_draws=n_mc_draws,
     )
 
+    # ── 4. Add rank numbers ───────────────────────────────────────────────
+    ranked = [dict(row, rank=i + 1) for i, row in enumerate(opt_result.ranked)]
+
+    # ── 5. Serialize uncertainty results ─────────────────────────────────
+    uncertainty = [dataclasses.asdict(u) for u in unc_results]
+
+    result: dict = {
+        "ranked": ranked,
+        "uncertainty": uncertainty,
+        "settings": opt_result.settings,
+        "equity_summary": opt_result.equity_summary,
+    }
+
+    # ── 6. Persist artifact ───────────────────────────────────────────────
+    if output_dir is not None:
+        os.makedirs(output_dir, exist_ok=True)
+        artifact_path = os.path.join(output_dir, "decision_ranked.json")
+        with open(artifact_path, "w", encoding="utf-8") as fh:
+            json.dump(result, fh, indent=2, default=str)
+
+    return result
+
 
 # ===================================================================== main
 def main(ctx: "Any | None" = None, *, fast_mode: bool = False) -> None:

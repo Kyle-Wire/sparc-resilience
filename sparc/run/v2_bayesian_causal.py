@@ -56,15 +56,30 @@ def _get_store() -> ArtifactStore | None:
 # exclusive access to all CPU cores and available RAM, scaled by the
 # detected hardware tier so low-RAM machines don't get OOM-killed.
 #
-# These are populated at import and refreshed at the top of `run_bayesian_causal`
-# so user-changed performance settings take effect on the next pipeline run.
+# Lazy-initialised: safe literal defaults at import; populated in
+# _refresh_hardware_globals() or _apply_profile() at the top of each run.
 # ---------------------------------------------------------------------------
-_PROFILE = detect_profile()
-_TOTAL_RAM_GB = _PROFILE.total_ram_gb
-_N_CORES = _PROFILE.cpu_count
-_MEMORY_LIMIT_GB = _PROFILE.memory_limit_gb
-_HIGH_MEMORY = _PROFILE.high_memory_mode
-_NUTS_THIN = _PROFILE.nuts_thin
+_PROFILE = None
+_TOTAL_RAM_GB: float = 0.0
+_N_CORES: int = 0
+_MEMORY_LIMIT_GB: float = 0.0
+_HIGH_MEMORY: bool = False
+_NUTS_THIN: int = 1
+
+
+def _apply_profile(profile) -> None:
+    """Apply a pre-built HardwareProfile object to the module globals.
+
+    Used when the caller provides a ``profile`` argument to
+    :func:`run_bayesian_causal` so hardware detection is skipped.
+    """
+    global _PROFILE, _TOTAL_RAM_GB, _N_CORES, _MEMORY_LIMIT_GB, _HIGH_MEMORY, _NUTS_THIN
+    _PROFILE = profile
+    _TOTAL_RAM_GB = profile.total_ram_gb
+    _N_CORES = profile.cpu_count
+    _MEMORY_LIMIT_GB = profile.memory_limit_gb
+    _HIGH_MEMORY = profile.high_memory_mode
+    _NUTS_THIN = profile.nuts_thin
 
 
 def _refresh_hardware_globals() -> None:
@@ -73,11 +88,7 @@ def _refresh_hardware_globals() -> None:
     from sparc.config.hardware_profile import reset_profile_cache
     reset_profile_cache()
     _PROFILE = detect_profile()
-    _TOTAL_RAM_GB = _PROFILE.total_ram_gb
-    _N_CORES = _PROFILE.cpu_count
-    _MEMORY_LIMIT_GB = _PROFILE.memory_limit_gb
-    _HIGH_MEMORY = _PROFILE.high_memory_mode
-    _NUTS_THIN = _PROFILE.nuts_thin
+    _apply_profile(_PROFILE)
 
 
 def _compute_dag_posterior_effects(
@@ -124,6 +135,7 @@ def run_bayesian_causal(
     output_dir: str | Path = ".",
     approval_gate: Optional[Callable[[dict], None]] = None,
     discovery_report: dict | None = None,
+    profile: Optional[Any] = None,
 ) -> dict[str, Any]:
     """
     Run Bayesian causal analysis with MC³ + NUTS.
@@ -150,8 +162,11 @@ def run_bayesian_causal(
     dict with ``mc3_results``, ``nuts_results`` (if neural_model given),
     ``edge_probs``, ``posterior_summaries``.
     """
-    # Pick up any user-changed performance settings before this run.
-    _refresh_hardware_globals()
+    # Pick up hardware settings: injected profile takes priority over detection.
+    if profile is not None:
+        _apply_profile(profile)
+    else:
+        _refresh_hardware_globals()
 
     from sparc.causal.mc3 import (
         DAGStructure,

@@ -216,6 +216,40 @@ class ModelSpec:
             raise ValueError(f"Unknown model name for from_kwargs: {name!r}")
         return cls(name, _cls_map[name](**kwargs))
 
+    @staticmethod
+    def field_names(name: str) -> frozenset:
+        """Return the valid constructor field names for a given model.
+
+        Parameters
+        ----------
+        name:
+            One of ``"gwr"``, ``"gwrf"``, ``"gwen"``, ``"ggpgam"``, ``"ols"``.
+
+        Returns
+        -------
+        frozenset[str]
+            All field names accepted by the model's config dataclass.
+
+        Raises
+        ------
+        ValueError
+            If *name* is not a recognised model.
+        """
+        _cls_map = {
+            "gwr": GWRConfig,
+            "gwrf": GWRFConfig,
+            "gwen": GWENConfig,
+            "ggpgam": GGPGAMConfig,
+            "ols": OLSConfig,
+        }
+        name = name.lower().strip()
+        if name not in _cls_map:
+            raise ValueError(
+                f"Unknown model name {name!r}. "
+                f"Choose from: {', '.join(sorted(_cls_map))}"
+            )
+        return frozenset(_cls_map[name].__dataclass_fields__)
+
     # ------------------------------------------------------------------
     # Accessors
     # ------------------------------------------------------------------
@@ -229,6 +263,14 @@ class ModelSpec:
     def spec(self) -> Any:
         """The underlying concrete config object."""
         return self._spec
+
+    @property
+    def bandwidth(self) -> Optional[float]:
+        """Bandwidth for spatial kernel models (GWR/GWRF).
+
+        Returns ``None`` for models without a bandwidth parameter.
+        """
+        return getattr(self._spec, "bandwidth", None)
 
     def as_gwr_config(self) -> GWRConfig:
         if not isinstance(self._spec, GWRConfig):

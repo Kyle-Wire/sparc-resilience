@@ -6,11 +6,14 @@ surfacing them as a structured checklist the user can resolve in the UI.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field, asdict
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------
@@ -224,7 +227,7 @@ def _check_crs(
                     message=f"CRS matches expected: {expected_crs}",
                 ))
         except Exception:
-            pass
+            logger.warning("CRS check failed — skipping CRS validation", exc_info=True)
 
 
 def _check_duplicates(

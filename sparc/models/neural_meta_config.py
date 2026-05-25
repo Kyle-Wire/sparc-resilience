@@ -54,6 +54,7 @@ class NeuralMetaConfig:
     siren_omega: float = 30.0
     time_embed_dim: int = 0
     init_bandwidth: float = 1000.0
+    geo_pe_dim: int = 0  # 0 = disabled; must be divisible by 4 when > 0
 
     def __post_init__(self) -> None:
         if self.hidden_dim <= 0:
@@ -80,4 +81,9 @@ class NeuralMetaConfig:
         if self.siren_omega <= 0:
             raise ValueError(
                 f"siren_omega must be > 0, got {self.siren_omega}"
+            )
+        if self.geo_pe_dim != 0 and self.geo_pe_dim % 4 != 0:
+            raise ValueError(
+                f"geo_pe_dim must be 0 (disabled) or divisible by 4, "
+                f"got {self.geo_pe_dim}"
             )

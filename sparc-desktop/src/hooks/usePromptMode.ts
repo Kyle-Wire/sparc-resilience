@@ -13,11 +13,10 @@ export function usePromptMode(
   if (explainSeed?.mode === "narrator") return "narrator";
   if (explainSeed?.mode === "hypothesis") return "hypothesis";
   switch (page) {
-    case "Project": return "domain";
-    case "DAG": return "dag";
-    case "Physics": return "physics";
+    case "Project":   return "domain";
+    case "Configure": return "dag";
     case "Results":
-    case "Report": return "results";
-    default: return "general";
+    case "Report":    return "results";
+    default:          return "general";
   }
 }

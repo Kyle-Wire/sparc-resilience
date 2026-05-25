@@ -225,6 +225,7 @@ models:
     max_neighbors: 128
     siren_omega: 30.0
     exceedance_thresholds: [0.25, 0.50, 0.75]
+    geo_pe_dim: 32                # Geographic positional encoding dim (Space2Vec-style Fourier; 0 = disabled)
 
   spatial_cv:
     block_size: 300          # Block size in meters (300m for fine-grained urban analysis)
@@ -262,6 +263,7 @@ training:
   lambda_alpha_prior: 1.0
   lambda_surrogate: 0.1
   lambda_neighbor: 0.1
+  lambda_pde: 0.05              # V3 multi-term PDE loss (heat diffusion + energy balance + anisotropy)
 
 # ---------------------------------------------------------------------------
 # V2 Optimization
@@ -291,6 +293,7 @@ optimization:
 # ---------------------------------------------------------------------------
 jepa:
   enable: true                  # Master switch
+  pretrain_epochs: 20           # Phase 1 EMA-trunk pretraining epochs (0 = skip)
   mask_ratio: 0.4               # P(zero each physics input channel for context branch)
   lambda: 1.0                   # Base weight on JEPA loss (× curriculum_weight(epoch))
 

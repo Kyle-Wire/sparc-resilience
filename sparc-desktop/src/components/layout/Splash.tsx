@@ -1,4 +1,4 @@
-export type SplashStep = "sidecar" | "session" | "ready" | "failed";
+export type SplashStep = "sidecar" | "token" | "session" | "ready" | "failed";
 
 interface SplashProps {
   step: SplashStep;
@@ -8,16 +8,18 @@ interface SplashProps {
 
 const STEP_LABELS: Record<SplashStep, string> = {
   sidecar: "Starting sidecar…",
+  token: "Securing session…",
   session: "Restoring session…",
   ready: "Ready",
   failed: "Failed to start sidecar",
 };
 
 const STEP_PROGRESS: Record<SplashStep, number> = {
-  sidecar: 33,
-  session: 66,
+  sidecar: 25,
+  token: 50,
+  session: 75,
   ready: 100,
-  failed: 33,
+  failed: 25,
 };
 
 export default function Splash({ step, onRetry }: SplashProps) {

@@ -7,6 +7,10 @@ import SpatialMap from "@/components/map/SpatialMap";
 import { useNotification } from "@/hooks/useNotifications";
 import type { DataSummary, GeoJsonData } from "@/lib/types";
 import { MAP_HEIGHT_DEFAULT } from "@/lib/design-tokens";
+import DataCollectionPage from "@/components/pages/DataCollectionPage";
+import { useNavigationStore } from "@/stores/navigationStore";
+
+type DataTab = "my-data" | "collect-data";
 
 interface DistortionResult {
   k_mean: number;
@@ -32,6 +36,7 @@ function formatCrs(crs: string): string {
 }
 
 export default function DataPage() {
+  const [dataTab, setDataTab] = useState<DataTab>("my-data");
   const [summary, setSummary] = useState<DataSummary | null>(null);
   const [target, setTarget] = useState<string>("AAT_z");
   const [geo, setGeo] = useState<GeoJsonData | null>(null);
@@ -73,6 +78,7 @@ export default function DataPage() {
       await selectDataFile(path as string);
       await refresh();
       notify("success", "Data loaded successfully");
+      useNavigationStore.getState().markDataReady();
     } catch (err) {
       notify("error", err instanceof Error ? err.message : "Failed to load data");
     } finally {
@@ -170,8 +176,38 @@ export default function DataPage() {
     return null;
   })();
 
+  const tabBtnStyle = (active: boolean): React.CSSProperties => ({
+    padding: "7px 16px",
+    border: "none",
+    borderBottom: active ? "2px solid var(--crimson)" : "2px solid transparent",
+    background: "transparent",
+    color: active ? "var(--ink)" : "var(--muted)",
+    fontWeight: active ? 700 : 500,
+    fontSize: 13,
+    cursor: "pointer",
+    fontFamily: "inherit",
+    transition: "color 0.12s, border-color 0.12s",
+  });
+
   return (
-    <div>
+    <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      {/* Tab bar */}
+      <div style={{ display: "flex", alignItems: "center", borderBottom: "1px solid var(--line)", background: "var(--paper)", padding: "0 16px", gap: 2, flexShrink: 0 }}>
+        <button style={tabBtnStyle(dataTab === "my-data")} onClick={() => setDataTab("my-data")}>My Data</button>
+        <button style={tabBtnStyle(dataTab === "collect-data")} onClick={() => setDataTab("collect-data")}>Collect Data</button>
+      </div>
+
+      {/* Collect Data tab */}
+      {dataTab === "collect-data" && (
+        <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
+          <DataCollectionPage />
+        </div>
+      )}
+
+      {/* My Data tab */}
+      {dataTab === "my-data" && (
+      <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
+      <div>
       <SectionHeader
         kicker="02 · setup"
         label="Data"
@@ -187,7 +223,7 @@ export default function DataPage() {
               <>
                 Load a <code>.csv</code>, <code>.parquet</code>, or <code>.gpkg</code> file to
                 see schema, distributions, and a spatial preview. You can also build a dataset from
-                rasters and a boundary on the <strong>Processing</strong> page.
+                rasters and a boundary on the <strong>Collect Data</strong> tab.
               </>
             }
             action={<Btn primary onClick={handleUpload}>Load data…</Btn>}
@@ -383,6 +419,9 @@ export default function DataPage() {
             </div>
           </Card>
         </>
+      )}
+    </div>
+    </div>
       )}
     </div>
   );

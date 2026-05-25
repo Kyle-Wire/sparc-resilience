@@ -95,20 +95,22 @@ async def read_or_404(
     artifact_id: str,
     *,
     hint: str = "",
+    store: Optional[Any] = None,
 ) -> Any:
     """DB-only read: ``store.read_any`` or structured 404 if missing.
 
     Results are served from the in-process LRU cache when available.
+    If *store* is not provided, the active registry store is used.
     """
     cached = state.result_cache.get(stage, artifact_id)
     if cached is not None:
         return cached
-    store = get_open_store()
-    if not store.has(stage, artifact_id):
+    _store = store if store is not None else get_open_store()
+    if not _store.has(stage, artifact_id):
         raise missing_artifact_response(
             artifact_id=artifact_id, stage=stage, hint=hint,
         )
-    result = await asyncio.to_thread(store.read_any, stage, artifact_id)
+    result = await asyncio.to_thread(_store.read_any, stage, artifact_id)
     state.result_cache.set(stage, artifact_id, result)
     return result
 

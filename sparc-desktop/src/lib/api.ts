@@ -17,6 +17,7 @@ import type {
   CorrelogramData,
   CausalResults,
   PdpCurves,
+  PdpResponse,
   DoseResponseData,
   CausalDiagnostics,
   ScenarioDetail,
@@ -507,9 +508,10 @@ export interface GwenStatus {
 export const getGwenStatus = () => get<GwenStatus>("/gwen/status");
 export const approveGwen = () => post<{ approved: boolean; approved_at: string }>("/gwen/approve", {});
 export const revokeGwenApproval = () =>
-  fetch(`${BASE}/gwen/approve`, { method: "DELETE", headers: authHeaders() }).then((r) =>
-    r.json(),
-  );
+  fetch(`${BASE}/gwen/approve`, { method: "DELETE", headers: authHeaders() }).then((r) => {
+    if (!r.ok) throw new Error(`revokeGwenApproval failed: ${r.status} ${r.statusText}`);
+    return r.json();
+  });
 
 export const getSpatialCvPredictions = () =>
   get<GeoJsonData>("/results/spatial_cv/predictions");
@@ -642,7 +644,7 @@ export const diffRuns = (runA: string, runB: string) =>
   );
 
 export const getPdpCurves = () =>
-  get<PdpCurves>("/results/pdp_curves");
+  get<PdpResponse>("/results/pdp_curves");
 
 /** PINN / PDE-constrained neural-network PDP curves (preferred over GWRF). */
 export const getNeuralPdp = () =>

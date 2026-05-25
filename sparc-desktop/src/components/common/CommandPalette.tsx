@@ -26,6 +26,7 @@ export default function CommandPalette({ open, onClose, items, onNavigate }: Com
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // Reset on open / focus the input.
   useEffect(() => {
@@ -75,6 +76,24 @@ export default function CommandPalette({ open, onClose, items, onNavigate }: Com
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Tab") {
+      e.preventDefault();
+      // Cycle focus through all focusable elements inside the palette.
+      const focusable = containerRef.current?.querySelectorAll<HTMLElement>(
+        'input, button, [href], select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      if (!focusable || focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey) {
+        if (document.activeElement === first) last.focus();
+        else first.focus();
+      } else {
+        if (document.activeElement === last) first.focus();
+        else last.focus();
+      }
+      return;
+    }
     if (e.key === "Escape") {
       e.preventDefault();
       onClose();
@@ -101,6 +120,10 @@ export default function CommandPalette({ open, onClose, items, onNavigate }: Com
       }}
     >
       <div
+        ref={containerRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
         style={{

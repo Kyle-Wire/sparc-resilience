@@ -28,10 +28,18 @@ import re
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Callable, Literal, Optional
 
 from .boundary import BoundaryResult
 from .manifest import VariableManifest, VariableStatus
+from sparc.data.spatial_grid import SpatialGrid
+from .capa import fetch_capa
+from ._temporal import TemporalWindow
+from .landsat import fetch_landsat
+from .nlcd import fetch_nlcd
+from .era5 import fetch_era5
+from .buildings import fetch_buildings
+from .equity import fetch_equity
 
 TemporalMode = Literal["single", "composite", "panel"]
 
@@ -101,12 +109,16 @@ class AssemblerResult:
 # Public API
 # ---------------------------------------------------------------------------
 
-def run(config: CollectConfig) -> AssemblerResult:
+def run(config: CollectConfig, *, on_step: Optional[Callable[[str, bool], None]] = None) -> AssemblerResult:
     """Execute the full data collection pipeline.
 
     Parameters
     ----------
     config : CollectConfig
+    on_step : callable(group_name: str, success: bool) | None
+        Optional progress callback.  Called after each service fetch
+        completes (whether it succeeded or raised an exception).
+        Useful for streaming live progress to a desktop wizard.
 
     Returns
     -------
@@ -131,7 +143,6 @@ def run(config: CollectConfig) -> AssemblerResult:
     )
 
     # --- Step 1: Build 30m fishnet as SpatialGrid ---
-    from sparc.data.spatial_grid import SpatialGrid
     grid = SpatialGrid.from_boundary(config.boundary, resolution_m=30.0)
     fishnet = grid.cells_3857.copy()
     fishnet["cell_id"] = range(len(fishnet))
@@ -144,8 +155,6 @@ def run(config: CollectConfig) -> AssemblerResult:
     # for Landsat and ERA5 alignment.
     for col in ("aat_morning", "aat_midday", "aat_night", "diurnal_aat"):
         manifest.fetching(col)
-    from .capa import fetch_capa
-    from ._temporal import TemporalWindow
     try:
         fishnet, capa_dates = fetch_capa(
             fishnet, config.boundary.bbox, config.date_start, config.date_end
@@ -162,7 +171,8 @@ def run(config: CollectConfig) -> AssemblerResult:
             manifest.error(col, str(exc))
         capa_dates = []
 
-    # Build the temporal search contract from CAPA anchor dates.
+    if on_step is not None:
+        on_step("capa", bool(capa_dates))
     # Landsat will search within ±tolerance_days of each anchor.
     # If CAPA failed (empty list), Landsat falls back to the full date range.
     window = TemporalWindow.from_capa_dates(
@@ -173,7 +183,6 @@ def run(config: CollectConfig) -> AssemblerResult:
 
     # --- Step 3: Landsat (spectral indices + LST) — aligned to CAPA anchors ---
     manifest.fetching("lst")
-    from .landsat import fetch_landsat
     try:
         fishnet = fetch_landsat(
             fishnet,
@@ -191,10 +200,12 @@ def run(config: CollectConfig) -> AssemblerResult:
         for idx in config.enabled_indices:
             manifest.error(idx, str(exc))
 
+    if on_step is not None:
+        on_step("landsat", "lst" in fishnet.columns)
+
     # --- Step 4: NLCD ---
     for col in ("pct_impervious", "pct_canopy", "land_cover"):
         manifest.fetching(col)
-    from .nlcd import fetch_nlcd
     try:
         fishnet = fetch_nlcd(fishnet, config.boundary.bbox)
         for col, src in [
@@ -207,15 +218,20 @@ def run(config: CollectConfig) -> AssemblerResult:
         for col in ("pct_impervious", "pct_canopy", "land_cover"):
             manifest.error(col, str(exc))
 
+    if on_step is not None:
+        on_step("nlcd", "pct_impervious" in fishnet.columns)
+
     # --- Step 5: ERA5 — aligned to CAPA anchors when available ---
     manifest.fetching("era5_t2m")
-    from .era5 import fetch_era5
     try:
         fishnet = fetch_era5(fishnet, config.boundary.bbox, window)
         manifest.update("era5_t2m", coverage_pct=_coverage(fishnet, "era5_t2m"),
                         source_name="Open-Meteo ERA5")
     except Exception as exc:
         manifest.error("era5_t2m", str(exc))
+
+    if on_step is not None:
+        on_step("era5", "era5_t2m" in fishnet.columns)
 
     # --- Step 6: AAT residual ---
     manifest.fetching("aat_residual")
@@ -229,7 +245,6 @@ def run(config: CollectConfig) -> AssemblerResult:
     # --- Step 7: Buildings + SVF ---
     for col in ("bldg_height_mean", "bldg_coverage", "svf"):
         manifest.fetching(col)
-    from .buildings import fetch_buildings
     try:
         fishnet, bldg_tier = fetch_buildings(
             fishnet,
@@ -249,10 +264,12 @@ def run(config: CollectConfig) -> AssemblerResult:
             manifest.error(col, str(exc))
         bldg_tier = -1
 
+    if on_step is not None:
+        on_step("buildings", bldg_tier > 0)
+
     # --- Step 8: Equity ---
     for col in ("holc_grade", "cdc_svi", "ejscreen_score"):
         manifest.fetching(col)
-    from .equity import fetch_equity
     try:
         fishnet, holc_overlay = fetch_equity(fishnet, config.boundary.bbox)
         holc_cov = _coverage(fishnet, "holc_grade")
@@ -273,6 +290,9 @@ def run(config: CollectConfig) -> AssemblerResult:
     except Exception as exc:
         for col in ("holc_grade", "cdc_svi", "ejscreen_score"):
             manifest.error(col, str(exc))
+
+    if on_step is not None:
+        on_step("equity", "cdc_svi" in fishnet.columns)
 
     # --- Step 9: has_gap flag ---
     required_cols = [e.name for e in manifest.entries.values() if e.required]

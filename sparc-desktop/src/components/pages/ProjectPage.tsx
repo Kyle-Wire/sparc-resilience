@@ -28,7 +28,7 @@ const DOMAIN_COLORS: Record<string, string> = {
 function summarizeRuns(events: PipelineEvent[]): { time: string; stage: string; status: string; tint: string }[] {
   if (!events.length) return [];
   const stageNames: Record<number, string> = {
-    0: "Correlogram", 1: "GWEN", 2: "Spatial CV", 3: "Causal", 4: "Scenarios",
+    0: "Spatial Patterns", 1: "Variable Selection", 2: "Spatial Validation", 3: "Causal Modelling", 4: "Scenario Simulation",
   };
   const out: { time: string; stage: string; status: string; tint: string }[] = [];
   for (const e of events) {

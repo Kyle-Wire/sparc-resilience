@@ -35,10 +35,7 @@ from dataclasses import dataclass, field
 from typing import Optional  # noqa: F401 — used in MaternFitResult
 
 import numpy as np
-import torch
 from scipy import optimize, special
-
-from sparc.causal.nuts import NUTSBlock, run_nuts
 
 logger = logging.getLogger(__name__)
 
@@ -74,8 +71,8 @@ def matern_correlation_np(h: np.ndarray, kappa: float, nu: float) -> np.ndarray:
 
 
 def matern_correlation_torch(
-    h: torch.Tensor, kappa: torch.Tensor, nu: float
-) -> torch.Tensor:
+    h: "torch.Tensor", kappa: "torch.Tensor", nu: float
+) -> "torch.Tensor":
     """Differentiable Matérn correlation for NUTS log-prob.
 
     Restricted to ν ∈ {0.5, 1.5, 2.5} so we have closed-form gradients;
@@ -83,6 +80,7 @@ def matern_correlation_torch(
     restriction is honoured by construction.  ``h`` is the lag distance
     tensor, ``kappa`` is a scalar tensor (positive).
     """
+    import torch  # lazy import: only needed when NUTS is running
     z = kappa * h
     out = torch.ones_like(h)
     if math.isclose(nu, 0.5, abs_tol=1e-3):
@@ -243,6 +241,9 @@ def fit_matern_bayes(
     sigma2_init = float(np.clip(np.max(morans), 1e-3, 2.0))
     tau2_init = float(np.clip(np.var(morans - sigma2_init * np.exp(-kappa_init * lags)), 1e-6, 1.0))
     obs_var = float(np.var(morans).clip(min=1e-6))
+
+    import torch  # lazy import: only needed at estimation time
+    from sparc.causal.nuts import NUTSBlock, run_nuts  # noqa: F401
 
     # Priors (in transformed/unconstrained space the NUTS sampler uses):
     #   κ ~ LogNormal(log(kappa_init), 1.0)

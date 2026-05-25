@@ -5,14 +5,15 @@ import { useNotification } from "@/hooks/useNotifications";
 import { GwenApprovalModal } from "@/components/run/GwenApprovalModal";
 import RunCompletionCard from "@/components/run/RunCompletionCard";
 import type { PipelineEvent } from "@/lib/types";
+import { eventToLogLine } from "@/lib/pipelineEventFormat";
 import { useNavigationStore } from "@/stores/navigationStore";
 
 const STAGE_NAMES: Record<number, string> = {
-  0: "Correlogram",
-  1: "GWEN",
-  2: "Validation",
-  3: "Inference",
-  4: "Simulation",
+  0: "Spatial Patterns",
+  1: "Variable Selection",
+  2: "Spatial Validation",
+  3: "Causal Modelling",
+  4: "Scenario Simulation",
 };
 
 const STAGE_DESCRIPTIONS: Record<number, string> = {
@@ -35,104 +36,7 @@ const LEVEL_COLORS: Record<string, string> = {
   log: "#607d8b",
 };
 
-function eventToLogLine(evt: PipelineEvent) {
-  // Use the timestamp frozen at event receipt — not current time — so lines don't update
-  const receivedAt = (evt as any).receivedAt as number | undefined;
-  const ts = receivedAt
-    ? new Date(receivedAt).toTimeString().slice(0, 8)
-    : new Date().toTimeString().slice(0, 8);
-  const type = (evt as any).type ?? "";
-
-  if (type === "stage_status") {
-    const ss = evt as any;
-    const name = STAGE_NAMES[ss.stage] ?? `Stage ${ss.stage}`;
-    const desc = STAGE_DESCRIPTIONS[ss.stage] ?? "";
-    if (ss.status === "running") return { text: `[STAGE] Starting ${name} — ${desc}`, level: "info" as const, ts };
-    if (ss.status === "complete") {
-      const dur = ss.elapsed_seconds ? ` (${ss.elapsed_seconds.toFixed(1)}s)` : "";
-      return { text: `✓ ${name} completed${dur}`, level: "success" as const, ts };
-    }
-    if (ss.status === "failed") return { text: `✕ ${name} failed: ${ss.error ?? "unknown error"}`, level: "error" as const, ts };
-    return null;
-  }
-  if (type === "epoch_update") {
-    const e = evt as any;
-    const eta = e.eta_seconds ? `  eta=${Math.round(e.eta_seconds)}s` : "";
-    const phase = e.train_phase ? ` [${e.train_phase}]` : "";
-    return { text: `[EPOCH]${phase} ${e.epoch} / ${e.n_epochs}  loss=${e.total_loss?.toFixed(4) ?? "?"}${eta}`, level: "debug" as const, ts };
-  }
-  if (type === "metric") {
-    const e = evt as any;
-    const fold = e.fold != null ? `  fold ${e.fold}` : "";
-    const model = e.model ? `  ${e.model}` : "";
-    return { text: `[METRIC]${model}${fold}  —  ${e.metric ?? "metric"} = ${typeof e.value === "number" ? e.value.toFixed(4) : e.value}`, level: "info" as const, ts };
-  }
-  if (type === "fold_start") {
-    const e = evt as any;
-    const counts = (e.n_train != null && e.n_test != null)
-      ? `  —  ${e.n_train.toLocaleString()} train  /  ${e.n_test.toLocaleString()} test` : "";
-    return { text: `[FOLD] Fold ${e.fold} / ${e.n_folds}${counts}`, level: "info" as const, ts };
-  }
-  if (type === "fold_complete") {
-    const e = evt as any;
-    const dur = e.elapsed_seconds != null ? `  (${Math.round(e.elapsed_seconds)}s)` : "";
-    return { text: `✓ Fold ${e.fold} complete${dur}`, level: "success" as const, ts };
-  }
-  if (type === "model_result") {
-    const e = evt as any;
-    return { text: `[MODEL] ${e.model ?? "Model"}  R²=${e.r2?.toFixed(4) ?? "?"}  RMSE=${e.rmse?.toFixed(4) ?? "?"}`, level: "success" as const, ts };
-  }
-  if (type === "model_start") {
-    const e = evt as any;
-    return { text: `[MODEL] Training ${e.model_name ?? "model"}`, level: "info" as const, ts };
-  }
-  if (type === "model_complete") {
-    const e = evt as any;
-    const r2 = e.r2 != null ? `  R²=${e.r2.toFixed(4)}` : "";
-    return { text: `✓ ${e.model_name ?? "Model"} complete${r2}`, level: "success" as const, ts };
-  }
-  if (type === "convergence") {
-    return { text: `[INFO] Convergence: ${(evt as any).status ?? "unknown"}`, level: "info" as const, ts };
-  }
-  if (type === "curriculum_stage") {
-    const e = evt as any;
-    return { text: `[INFO] Curriculum phase — ${e.label ?? e.curriculum ?? "next phase"}`, level: "info" as const, ts };
-  }
-  if (type === "capacity_result") {
-    const e = evt as any;
-    return { text: `[INFO] Capacity check  dim=${e.hidden_dim}  R²=${e.r2?.toFixed(4) ?? "?"}`, level: "debug" as const, ts };
-  }
-  if (type === "error") {
-    return { text: `[ERROR] ${(evt as any).message ?? "An error occurred"}`, level: "error" as const, ts };
-  }
-  if (type === "complete") {
-    return { text: "✓ Pipeline complete", level: "success" as const, ts };
-  }
-  if (type === "dag_approval_requested") {
-    return { text: "[WARN] DAG approval required — review on the DAG page", level: "warn" as const, ts };
-  }
-  if (type === "training_health") {
-    return { text: `[WARN] ${(evt as any).warning ?? "Training health warning"}`, level: "warn" as const, ts };
-  }
-  if (type === "progress") {
-    const e = evt as any;
-    return { text: `[INFO] ${e.message ?? `Progress: ${e.pct ?? 0}%`}`, level: "debug" as const, ts };
-  }
-  if (type === "checkpoint") {
-    const e = evt as any;
-    const lvl = e.level === "success" ? "success" as const
-      : e.level === "warn" ? "warn" as const
-      : "milestone" as const;
-    return { text: e.message ?? "Checkpoint", level: lvl, ts };
-  }
-  // Raw log events: surfaced in debug mode only
-  if (type === "log") {
-    const msg = (evt as any).message ?? "";
-    if (!msg.trim()) return null;
-    return { text: msg, level: "log" as const, ts };
-  }
-  return null;
-}
+// eventToLogLine is defined in @/lib/pipelineEventFormat (imported above)
 
 const PHASE_LABELS: Record<string, string> = {
   cv: "Cross-validation",
@@ -356,6 +260,13 @@ export default function RunPage() {
     : "Idle";
 
   const doneCount = STAGE_IDS.filter((id) => stageStatus(id) === "complete").length;
+
+  // Advance workflow step when all stages complete
+  useEffect(() => {
+    if (doneCount === STAGE_IDS.length && !pipeline.isRunning) {
+      useNavigationStore.getState().markPipelineRun();
+    }
+  }, [doneCount, pipeline.isRunning]);
   const wasStopped =
     pipeline.runStartedAt !== null &&
     !pipeline.isRunning &&
@@ -443,7 +354,7 @@ export default function RunPage() {
           }}
         >
           <span>⚠ DAG approval required — the pipeline is paused until you review and approve the discovered causal graph.</span>
-          <Btn small onClick={() => navigate("DAG")}>Review DAG →</Btn>
+          <Btn small onClick={() => navigate("Configure")}>Review configuration →</Btn>
         </div>
       )}
 

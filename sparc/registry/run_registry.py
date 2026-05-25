@@ -29,12 +29,29 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
+
+# ---------------------------------------------------------------------------
+# SQL safety
+# ---------------------------------------------------------------------------
+
+_SAFE_TABLE_NAME_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+
+
+def _validate_table_name(name: str) -> None:
+    """Raise ValueError for table names that could be used in SQL injection."""
+    if not _SAFE_TABLE_NAME_RE.match(name):
+        raise ValueError(
+            f"Unsafe table name: {name!r}. "
+            "Table names must contain only letters, digits, and underscores, "
+            "and must start with a letter or underscore."
+        )
 
 from sparc.registry.manifest import (
     ArtifactEntry,
@@ -471,14 +488,16 @@ class RunRegistry:
         if_exists: str = "replace",
     ) -> None:
         """Write a :class:`pandas.DataFrame` to a SQLite table."""
+        _validate_table_name(table_name)
         with self._sqlite() as conn:
             df.to_sql(table_name, conn, if_exists=if_exists, index=False)
 
     def read_df(self, table_name: str) -> Any:
         """Read a SQLite table into a :class:`pandas.DataFrame`."""
+        _validate_table_name(table_name)
         import pandas as _pd
         with self._sqlite() as conn:
-            return _pd.read_sql(f"SELECT * FROM {table_name}", conn)
+            return _pd.read_sql(f'SELECT * FROM "{table_name}"', conn)
 
     def write_struct_payload(
         self,
@@ -712,6 +731,7 @@ class RunRegistry:
 
     def rebuild_cache(self) -> None:
         """Recreate the SQLite cache from the JSON manifest."""
+        self.close()  # release all thread-local handles before deleting on Windows
         try:
             self.sqlite_path.unlink()
         except FileNotFoundError:
@@ -719,6 +739,62 @@ class RunRegistry:
         self._ensure_sqlite_schema()
         with _FileLock(self.lock_path):
             self._sync_sqlite()
+
+    # ------------------------------------------------------------------
+    # Incremental SQLite upserts (O(1) per artifact / stage)
+    # ------------------------------------------------------------------
+
+    def _upsert_stage_sqlite(self, sm: StageManifest, stage_id: str) -> None:
+        """Upsert a single stage row without rebuilding the whole table."""
+        with self._sqlite() as conn:
+            conn.execute(
+                "INSERT INTO stages "
+                "(stage, status, started_at, finished_at, duration_seconds, error) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(stage) DO UPDATE SET "
+                "status=excluded.status, started_at=excluded.started_at, "
+                "finished_at=excluded.finished_at, "
+                "duration_seconds=excluded.duration_seconds, error=excluded.error",
+                (
+                    stage_id, sm.status, sm.started_at, sm.finished_at,
+                    sm.duration_seconds, sm.error,
+                ),
+            )
+
+    def _upsert_artifact_sqlite(self, art: ArtifactEntry) -> None:
+        """Upsert a single artifact row without rebuilding the whole table."""
+        with self._sqlite() as conn:
+            conn.execute(
+                "INSERT INTO artifacts "
+                "(id, stage, name, path, format, storage_kind, "
+                " data_table, blob_id, blob_sha256, producer, "
+                " consumers, size_bytes, sha256, row_count, "
+                " written_at, write_seconds, partial, metadata) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(stage, id) DO UPDATE SET "
+                "name=excluded.name, path=excluded.path, format=excluded.format, "
+                "storage_kind=excluded.storage_kind, data_table=excluded.data_table, "
+                "blob_id=excluded.blob_id, blob_sha256=excluded.blob_sha256, "
+                "producer=excluded.producer, consumers=excluded.consumers, "
+                "size_bytes=excluded.size_bytes, sha256=excluded.sha256, "
+                "row_count=excluded.row_count, written_at=excluded.written_at, "
+                "write_seconds=excluded.write_seconds, partial=excluded.partial, "
+                "metadata=excluded.metadata",
+                (
+                    art.id, art.stage, art.name, art.path, art.format,
+                    getattr(art, "storage_kind", "legacy_path"),
+                    getattr(art, "data_table", None),
+                    getattr(art, "blob_id", None),
+                    getattr(art, "blob_sha256", None),
+                    art.producer,
+                    json.dumps(list(art.consumers)),
+                    int(art.size_bytes or 0),
+                    art.sha256, art.row_count,
+                    art.written_at, art.write_seconds,
+                    1 if art.partial else 0,
+                    json.dumps(art.metadata or {}, default=str),
+                ),
+            )
 
     # ------------------------------------------------------------------
     # Stage lifecycle
@@ -729,7 +805,9 @@ class RunRegistry:
         sm.status = "running"
         sm.started_at = datetime.now(timezone.utc).isoformat()
         sm.error = None
-        self.save()
+        with _FileLock(self.lock_path):
+            self._save_manifest()
+        self._upsert_stage_sqlite(sm, str(stage))
         return sm
 
     def complete_stage(
@@ -750,7 +828,9 @@ class RunRegistry:
                 sm.duration_seconds = (t1 - t0).total_seconds()
             except ValueError:
                 pass
-        self.save()
+        with _FileLock(self.lock_path):
+            self._save_manifest()
+        self._upsert_stage_sqlite(sm, str(stage))
         return sm
 
     # ------------------------------------------------------------------
@@ -826,7 +906,9 @@ class RunRegistry:
 
         sm = self._manifest.get_stage(str(stage))
         sm.artifacts[artifact_id] = entry
-        self.save()
+        with _FileLock(self.lock_path):
+            self._save_manifest()
+        self._upsert_artifact_sqlite(entry)
         self._emit_registered(entry)
         return entry
 
@@ -842,7 +924,9 @@ class RunRegistry:
             abs_path = self.resolve(art)
             if abs_path.exists():
                 art.size_bytes = abs_path.stat().st_size
-        self.save()
+        with _FileLock(self.lock_path):
+            self._save_manifest()
+        self._upsert_artifact_sqlite(art)
 
     def remove_artifact(self, stage: str | int, artifact_id: str) -> None:
         sm = self._manifest.stages.get(str(stage))

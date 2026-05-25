@@ -1,6 +1,8 @@
 """
 Integration tests for all SPARC V2 modules using brown4.csv example data.
 """
+import pytest
+pytest.importorskip("torch")
 
 import numpy as np
 import pandas as pd

@@ -17,8 +17,11 @@ mechanisms populate :data:`WAGER2025_GAPS_ADDRESSED`:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Dict
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -99,7 +102,7 @@ def _autodetect() -> None:
                 if getattr(mod, "EDGE_NUISANCE_CACHE_ENABLED", False):
                     mark_addressed(gid)
             except Exception:
-                pass
+                logger.debug("Gap 10 edge-nuisance check failed for %s", spec.module, exc_info=True)
         else:
             mod = importlib.import_module(spec.module)
             if getattr(mod, f"GAP_{gid}_IMPLEMENTED", False):

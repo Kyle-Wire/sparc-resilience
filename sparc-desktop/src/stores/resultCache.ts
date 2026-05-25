@@ -16,6 +16,9 @@
  */
 import { create } from "zustand";
 
+/** Entries older than this are considered stale and evicted on read. */
+export const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
 export interface CacheEntry {
   data: unknown;
   fetchedAt: number;
@@ -25,6 +28,11 @@ interface ResultCacheState {
   cache: Record<string, CacheEntry>;
   /** Write or overwrite a cache slot. */
   set: (key: string, data: unknown) => void;
+  /**
+   * Return the cache entry if it exists and has not exceeded the TTL.
+   * Evicts and returns null if the entry is stale.
+   */
+  getIfFresh: (key: string) => CacheEntry | null;
   /** Evict all keys whose name starts with `s{stage}:`. */
   invalidateStage: (stage: string | number) => void;
   /** Evict a single key. */
@@ -33,13 +41,28 @@ interface ResultCacheState {
   clear: () => void;
 }
 
-export const useResultCacheStore = create<ResultCacheState>((set) => ({
+export const useResultCacheStore = create<ResultCacheState>((set, get) => ({
   cache: {},
 
   set: (key, data) =>
     set((s) => ({
       cache: { ...s.cache, [key]: { data, fetchedAt: Date.now() } },
     })),
+
+  getIfFresh: (key) => {
+    const entry = get().cache[key];
+    if (!entry) return null;
+    if (Date.now() - entry.fetchedAt > CACHE_TTL_MS) {
+      // Evict on read
+      set((s) => {
+        const next = { ...s.cache };
+        delete next[key];
+        return { cache: next };
+      });
+      return null;
+    }
+    return entry;
+  },
 
   invalidateStage: (stage) =>
     set((s) => {

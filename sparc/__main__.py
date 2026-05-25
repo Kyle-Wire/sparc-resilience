@@ -23,11 +23,14 @@ from the repository root (the directory containing ``pyproject.toml``).
 """
 
 import argparse
+import logging
 import os
 import shutil
 import sys
 import json
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -165,10 +168,10 @@ def cmd_run(args):
     sys.path.insert(0, repo_root)
     sys.path.insert(0, str(Path(repo_root) / 'run'))
 
-    from sparc.config.config import load_config
+    from sparc.config.project_config import ProjectConfig
     from sparc.run.pipeline_paths import set_paths_from_config
 
-    config = load_config(project_path)
+    config = ProjectConfig.load(project_path).raw
     paths = set_paths_from_config(config)
 
     # Propagate the project file so that downstream load_config() calls
@@ -203,7 +206,7 @@ def cmd_run(args):
         try:
             print(f"  {detect_profile().banner()}")
         except Exception:
-            pass
+            logger.debug("Hardware profile banner unavailable", exc_info=True)
 
     # ── Run-wide artifact registry ──────────────────────────────
     # A single registry instance is carried through the run; after every
@@ -225,12 +228,28 @@ def cmd_run(args):
     # ── RunContext — single holder for pipeline-wide dependencies ──────
     # Callers that want the orchestration seam can construct a
     # PipelineOrchestrator from this context and inject custom runners.
-    from sparc.run.orchestrator import RunContext
+    from sparc.run.orchestrator import RunContext, PipelineOrchestrator
     _run_context = RunContext(
         config=config,
         paths=paths,
         registry=_registry,
         project_path=project_path,
+    )
+
+    # ── PipelineOrchestrator — store-backed stage completion ──────────
+    # Resolve the active ArtifactStore (may be None if registry unavailable).
+    # The orchestrator writes {"complete": True} to (stage, "status") on
+    # each successful stage so that --resume can skip finished work.
+    _completion_store = None
+    try:
+        from sparc.registry.store import get_active_store as _get_active_store
+        _completion_store = _get_active_store()
+    except Exception:
+        logger.debug("ArtifactStore unavailable for completion tracking", exc_info=True)
+
+    _orch = PipelineOrchestrator(
+        _run_context,
+        completion_store=_completion_store,
     )
 
     def _rescan_registry(stage_label: str) -> None:  # noqa: ARG001
@@ -256,53 +275,12 @@ def cmd_run(args):
 
 
     # ── Helper: stage-complete checks for --resume ───────────────
-    def _stage_done(stage_key: str) -> bool:
-        """Check whether a stage is marked complete.
+    # Stage completion is now delegated to _orch.stage_done(key) and
+    # _orch.mark_complete(key), which persist state to the ArtifactStore
+    # via _completion_store so that --resume works across process restarts.
+    # The legacy GWEN key ('.gwen_complete') is also tracked through the
+    # same interface; the on-disk file sentinel is kept as a fallback.
 
-        Prefers an ArtifactStore status struct (db-only runs); falls
-        back to legacy on-disk sentinel files for older runs.
-        """
-        if not resume:
-            return False
-        try:
-            from sparc.registry.store import get_active_store
-            _store = get_active_store()
-            if _store is not None:
-                status = None
-                try:
-                    status = _store.read_struct(stage_key, "status")
-                except Exception:
-                    status = None
-                if isinstance(status, dict) and status.get("complete"):
-                    return True
-        except Exception:
-            pass
-        # Legacy fallback: file sentinel.
-        legacy_marker = {
-            "0": paths.stage1_dir / ".correlogram_complete",
-        }.get(stage_key)
-        return bool(legacy_marker and legacy_marker.exists())
-
-    def _mark_stage_done(stage_key: str) -> None:
-        """Persist stage-complete status to ArtifactStore (and disk if on)."""
-        try:
-            from sparc.registry.store import get_active_store
-            _store = get_active_store()
-            if _store is not None:
-                _store.write_struct(
-                    stage_key, "status",
-                    {"complete": True},
-                    producer="sparc.__main__",
-                )
-        except Exception:
-            pass
-        try:
-            from sparc.run.disk_policy import disk_writes_enabled
-            if disk_writes_enabled() and stage_key == "0":
-                paths.stage1_dir.mkdir(parents=True, exist_ok=True)
-                (paths.stage1_dir / ".correlogram_complete").write_text("done")
-        except Exception:
-            pass
 
     # ── Pipeline progress tracker ──────────────────────────────────
     from sparc.run.progress import StageProgress as _StageProgress
@@ -333,21 +311,26 @@ def cmd_run(args):
                     producer="sparc.__main__",
                 )
         except Exception:
-            pass
-
-    _sp = _StageProgress(len(_sp_stages), timing_sink=_stage_timing_sink)
+            logger.debug("Stage timing write failed (non-fatal)", exc_info=True)
 
     # ────────────────────────────────────────────────────────────────
     # Stage 0: Correlogram Analysis  (runs first so GWEN can auto-tune)
     # ────────────────────────────────────────────────────────────────
     _memory_checkpoint()
     if stage in ('0', 'all'):
-        if not _stage_done("0"):
+        if not (resume and _orch.stage_done("0")):
             _sp.stage_start("0")
             from sparc.run.correlogram_analysis import main as run_correlogram
             run_correlogram(_run_context, fast_mode=fast)
-            _mark_stage_done("0")
-            _sp.stage_done("0")
+            _orch.mark_complete("0")
+            # Legacy: write on-disk sentinel for very old --resume checks.
+            try:
+                from sparc.run.disk_policy import disk_writes_enabled
+                if disk_writes_enabled():
+                    paths.stage1_dir.mkdir(parents=True, exist_ok=True)
+                    (paths.stage1_dir / ".correlogram_complete").write_text("done")
+            except Exception:
+                logger.debug("Disk sentinel write failed (non-fatal)", exc_info=True)
         else:
             print(">>> Stage 0: Correlogram — skipped (already complete)")
         _rescan_registry("0")
@@ -358,7 +341,7 @@ def cmd_run(args):
     if stage in ('0', 'all'):
         _sp.stage_start("0b")
         from sparc.run.pipeline_configurator import PipelineConfigurator
-        configurator = PipelineConfigurator(stage1_dir=str(paths.stage0_dir))
+        configurator = PipelineConfigurator(stage1_dir=str(paths.stage0_dir), config=config)
 
         # Prefer artifacts.db; fall back to legacy on-disk JSON.
         _profile = None
@@ -410,7 +393,7 @@ def cmd_run(args):
         use_gwen = config.get('flags', {}).get('use_gwen_selection', True)
         approval_file = Path(config.get('output', {}).get('base_dir', 'output')) / 'gwen_approved.txt'
 
-        if use_gwen and not _stage_done('.gwen_complete'):
+        if use_gwen and not (resume and _orch.stage_done('.gwen_complete')):
             _sp.stage_start("1")
             from sparc.run.gwen_variable_selection import main as run_gwen
             approved = run_gwen(_run_context, fast_mode=fast)
@@ -437,8 +420,8 @@ def cmd_run(args):
     if stage in ('2', 'all'):
         _memory_checkpoint()
         _sp.stage_start("2")
-        from sparc.run.enhanced_spatial_cv import main as run_spatial_cv
-        run_spatial_cv(_run_context, fast_mode=fast)
+        from sparc.run.cv_engine import SpatialCVEngine
+        SpatialCVEngine(_run_context, fast=fast).run()
         _sp.stage_done("2")
         _rescan_registry("2")
 

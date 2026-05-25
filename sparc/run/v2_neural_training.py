@@ -199,113 +199,18 @@ def _pretrain_process_rate_net(
 # ---------------------------------------------------------------------------
 # FoldState — typed container for the shared state passed to _exec_cv_fold.
 #
-# Replaces the ~50-key ``ss: dict`` with grouped sub-configs so that
-# callers and the fold body can use attribute access instead of opaque
-# string keys, and IDEs / type-checkers can validate field names.
+# Extracted to sparc.run.fold_state to remove the circular dependency with
+# fold_trainer.py.  Imported here for backwards compatibility and re-exported
+# so existing callers are unaffected.
 # ---------------------------------------------------------------------------
+from sparc.run.fold_state import (  # noqa: E402
+    _ArchConfig,
+    _ContinualConfig,
+    _JEPAConfig,
+    _TrainingConfig,
+    FoldState,
+)
 from dataclasses import dataclass, field
-
-
-@dataclass
-class _ArchConfig:
-    hidden_dim: int
-    dropout: float
-    n_heads: int
-    max_neighbors: int
-    siren_omega: float
-    thresholds: list
-    thresholds_norm: list
-    time_embed_dim: int
-    n_base: int
-    n_physics: int
-    n_physics_extended: int
-    d_spatial: int
-    resolution: float
-    pr_input_dim: int
-    pr_col_idxs: list
-    prior_mean: float
-    pr_cfg: dict
-    n_treatments: int
-    material_priors: dict
-    gwrf_k: int
-    predictor_bandwidths: Any
-    predictor_kernel_field: Any
-    feature_names: list
-
-
-@dataclass
-class _TrainingConfig:
-    n_epochs: int
-    pretrain_epochs: int
-    pr_pretrain_epochs: int
-    lr: float
-    clip_norm: float
-    warmup_epochs: int
-    ramp_epochs: int
-    batch_size: int
-    target_lambdas: dict
-    y_mean: float
-    y_std: float
-    n_folds: int
-    use_amp: bool
-    use_cuda_graphs: bool
-
-
-@dataclass
-class _JEPAConfig:
-    enable: bool
-    weights: Any
-    mask_ratio: float
-    spatial_patch: bool
-    n_patches: int
-    lam: float
-    ema_tau_start: float
-    ema_tau_end: float
-    warmup_steps: int
-    curric_start: int
-    curric_end: int
-    lambda_scenario: float
-    lambda_latent_pde: float
-    scenario_perturb_std: float
-    predictor_blocks: int
-    predictor_film: bool
-    action_dim: int
-
-
-@dataclass
-class _ContinualConfig:
-    ewc_active: bool
-    ewc_lambda: float
-    cont_fisher: list
-    cont_optimal: list
-    ot_active: bool
-    ot_lambda: float
-    coreset_acts: Any
-    # Candidate B: experience replay
-    replay_lambda: float = 0.0
-    previous_coresets: list = None  # list of dicts with keys X, y, coords
-
-    def __post_init__(self):
-        if self.previous_coresets is None:
-            self.previous_coresets = []
-
-
-@dataclass
-class FoldState:
-    """Typed container for all state shared with :func:`_exec_cv_fold`.
-
-    Grouping avoids the ~50-key opaque dict pattern and makes the
-    interface between the outer training loop and each CV fold explicit.
-    """
-    tensors: dict
-    coords_np: Any
-    alpha_targets: Any
-    jepa_pretrained_trunk_state: Any
-    base_oof_predictions: Any
-    arch: _ArchConfig
-    training: _TrainingConfig
-    jepa: _JEPAConfig
-    continual: _ContinualConfig
 
 
 # ---------------------------------------------------------------------------
@@ -496,6 +401,7 @@ def _exec_cv_fold(
     device: "torch.device",
     rank: int = 0,
     world_size: int = 1,
+    fold_models: "object | None" = None,
 ) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
     """Train one CV fold and return ``(test_idx, oof_preds_slice, oof_std_slice)``.
 
@@ -511,6 +417,14 @@ def _exec_cv_fold(
     test_idx  : row indices for the held-out set
     ss        : :class:`FoldState` with all shared configuration and tensors
     device    : torch device this fold runs on
+    fold_models : optional pre-built :class:`~sparc.run.fold_trainer.FoldModels`
+        container.  When supplied, model instantiation *and* the two
+        pre-training phases (surrogate MSE warm-up and ProcessRateNet
+        land-cover scaffold) are skipped — the caller has already done that
+        work via :meth:`FoldTrainer.build_models`,
+        :meth:`FoldTrainer.pretrain_surrogates` and
+        :meth:`FoldTrainer.pretrain_process_rate`.
+        All existing callers that omit this argument are unaffected.
 
     Returns
     -------
@@ -556,6 +470,7 @@ def _exec_cv_fold(
     thresholds                  = ss.arch.thresholds
     thresholds_norm             = ss.arch.thresholds_norm
     time_embed_dim              = ss.arch.time_embed_dim
+    geo_pe_dim                  = ss.arch.geo_pe_dim
     n_base                      = ss.arch.n_base
     n_physics                   = ss.arch.n_physics
     n_physics_extended          = ss.arch.n_physics_extended
@@ -692,6 +607,7 @@ def _exec_cv_fold(
         siren_omega=siren_omega,
         init_bandwidth=float(predictor_bandwidths.mean()) if predictor_bandwidths is not None else 1000.0,
         time_embed_dim=time_embed_dim,
+        geo_pe_dim=geo_pe_dim,
     ).to(device)
 
     # OT trunk alignment: register forward hook
@@ -769,6 +685,28 @@ def _exec_cv_fold(
             jepa_params += list(action_embed.parameters())
         jepa_optimizer = torch.optim.AdamW(jepa_params, lr=lr)
 
+    # ---- Use pre-built FoldModels when provided by FoldTrainer ----
+    # When fold_models is not None, the caller already instantiated and
+    # pre-trained all models via FoldTrainer.build_models() /
+    # pretrain_surrogates() / pretrain_process_rate().  Override the locally-
+    # created instances so the rest of the fold uses the caller's models.
+    # The two pre-training blocks below are also skipped via the same guard.
+    if fold_models is not None:
+        model            = fold_models.model
+        process_net      = fold_models.process_net
+        source_net       = fold_models.source_net
+        surrogates       = dict(fold_models.surrogates)
+        optimizer        = fold_models.optimizer
+        scheduler        = fold_models.scheduler
+        ema_trunk        = fold_models.ema_trunk
+        latent_predictor = fold_models.latent_predictor
+        action_embed     = fold_models.action_embed
+        jepa_optimizer   = fold_models.jepa_optimizer
+        logger.info(
+            "Fold %d: reusing pre-built FoldModels (skipping model build + pre-training)",
+            fold_idx + 1,
+        )
+
     # ---- Build per-fold V1 base-model targets (normalised) ----
     _fold_base_targets: "dict[str, torch.Tensor] | None" = None
     if base_oof_predictions is not None:
@@ -784,7 +722,8 @@ def _exec_cv_fold(
             _fold_base_targets = None
 
     # ---- Surrogate pre-training (MSE only, no physics/meta) ----
-    if pretrain_epochs > 0:
+    # Skipped when fold_models is provided (caller already ran pretrain_surrogates())
+    if pretrain_epochs > 0 and fold_models is None:
         logger.info(
             "  Pre-training surrogates (%d epochs, MSE only)...", pretrain_epochs,
         )
@@ -833,8 +772,9 @@ def _exec_cv_fold(
         logger.info("  All surrogates passed validation (R² >= 0.85)")
 
     # ---- ProcessRateNet pre-training toward mixture prior ----
+    # Skipped when fold_models is provided (caller already ran pretrain_process_rate())
     pr_pretrain_epochs_eff = pr_pretrain_epochs
-    if pr_pretrain_epochs_eff > 0 and material_priors:
+    if pr_pretrain_epochs_eff > 0 and material_priors and fold_models is None:
         logger.info(
             "  Pre-training ProcessRateNet with land-cover classification "
             "(%d epochs, %d materials, monotonicity reg)...",
@@ -1998,6 +1938,23 @@ def _run_base_vs_surrogate_alignment(
     )
 
 
+def _resolve_jepa_pretrain_epochs(jepa_cfg: dict, default: int = 20) -> int:
+    """Return the JEPA pretrain epoch count from config, defaulting to *default*.
+
+    Extracted as a standalone function so it can be tested directly and
+    to make the default (20) explicit and auditable.
+
+    Parameters
+    ----------
+    jepa_cfg : dict
+        The ``config["jepa"]`` sub-dict (may be empty or missing keys).
+    default : int
+        Fallback when ``pretrain_epochs`` is absent. Defaults to 20 so
+        that JEPA Phase-1 pretraining runs automatically on new projects.
+    """
+    return int(jepa_cfg.get("pretrain_epochs", default))
+
+
 def _resolve_treatment_list(config: dict) -> list[str]:
     """Resolve ordered treatment names for per-head alpha output.
 
@@ -2192,6 +2149,7 @@ def train_neural_meta(
     siren_omega = neural_cfg.get("siren_omega", 30.0)
     thresholds = neural_cfg.get("exceedance_thresholds", [0.25, 0.50, 0.75])
     time_embed_dim = neural_cfg.get("time_embed_dim", 0)
+    geo_pe_dim     = neural_cfg.get("geo_pe_dim", 0)
 
     n_epochs = training_cfg.get("n_epochs", 100)
     swa_epochs = training_cfg.get("swa_epochs", max(int(n_epochs * 0.2), 5))
@@ -2389,6 +2347,7 @@ def train_neural_meta(
                 thresholds=thresholds, n_heads=n_heads,
                 max_neighbors=max_neighbors, siren_omega=siren_omega,
                 init_bandwidth=float(predictor_bandwidths.mean()) if predictor_bandwidths is not None else 1000.0,
+                geo_pe_dim=geo_pe_dim,
             ).to(device)
             _s = {
                 "gwr": DifferentiableGWR(
@@ -2640,6 +2599,7 @@ def train_neural_meta(
                 max_neighbors=max_neighbors,
                 siren_omega=siren_omega,
                 time_embed_dim=time_embed_dim,
+                geo_pe_dim=geo_pe_dim,
             ).to(device)
             spatial_contrastive_pretext(
                 model=_pt_model,
@@ -2712,7 +2672,7 @@ def train_neural_meta(
     # before CV folds start.  Trunk weights are then transferred to each
     # fold's SPARCMetaLearner via load_state_dict (strict=False).
     # ==================================================================
-    jepa_pretrain_epochs = int(jepa_cfg.get("pretrain_epochs", 0))
+    jepa_pretrain_epochs = _resolve_jepa_pretrain_epochs(jepa_cfg)
     jepa_pretrained_trunk_state: dict | None = None
 
     # ---- Load OOF GWR beta-map for JEPA target conditioning (Stage 2 artifact) ----
@@ -2757,6 +2717,7 @@ def train_neural_meta(
             siren_omega=siren_omega,
             init_bandwidth=float(predictor_bandwidths.mean()) if predictor_bandwidths is not None else 1000.0,
             time_embed_dim=time_embed_dim,
+            geo_pe_dim=geo_pe_dim,
         ).to(device)
 
         _pt_ema_trunk = EMATrunk(
@@ -2921,6 +2882,7 @@ def train_neural_meta(
             thresholds=thresholds,
             thresholds_norm=thresholds_norm,
             time_embed_dim=time_embed_dim,
+            geo_pe_dim=geo_pe_dim,
             n_base=n_base,
             n_physics=n_physics,
             n_physics_extended=n_physics_extended,
@@ -3090,6 +3052,7 @@ def train_neural_meta(
         siren_omega=siren_omega,
         init_bandwidth=float(predictor_bandwidths.mean()) if predictor_bandwidths is not None else 1000.0,
         time_embed_dim=time_embed_dim,
+        geo_pe_dim=geo_pe_dim,
     ).to(device)
 
     # OT trunk alignment: register forward hook to capture trunk_fusion output

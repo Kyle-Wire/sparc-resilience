@@ -27,6 +27,7 @@ class ServerState:
     registry: Any = None  # sparc.registry.RunRegistry, attached on project load
     is_running: bool = False
     current_stage: int | None = None
+    is_loading: bool = False
     event_buffer: list[dict] = field(default_factory=list)
     # DAG approval gate — set by the streaming layer, waited on by the
     # pipeline thread.  ``pending_mc3`` holds MC³ results for the frontend;
@@ -48,6 +49,18 @@ class ServerState:
         with self._lock:
             self.is_running = False
             self.current_stage = None
+
+    def begin_loading(self) -> None:
+        with self._lock:
+            self.is_loading = True
+
+    def finish_loading(self) -> None:
+        with self._lock:
+            self.is_loading = False
+
+    def abort_loading(self) -> None:
+        with self._lock:
+            self.is_loading = False
 
     def buffer_event(self, event: dict) -> None:
         """Append an event to the in-memory buffer for reconnecting clients."""

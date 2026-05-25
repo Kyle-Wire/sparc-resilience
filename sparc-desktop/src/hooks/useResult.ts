@@ -41,8 +41,15 @@ export function useResult<T>(
 ): UseResultReturn<T> {
   // Reactive subscription to the specific cache slot.
   // Zustand re-renders the component whenever the slot changes.
-  const entry = useResultCacheStore((s) => (key ? s.cache[key] : undefined));
+  // Note: we subscribe to the raw cache entry so that invalidation
+  // (via invalidateStage / invalidateKey) triggers a re-render. TTL
+  // eviction is checked below via getIfFresh before treating as a hit.
+  const rawEntry = useResultCacheStore((s) => (key ? s.cache[key] : undefined));
+  const getIfFresh = useResultCacheStore((s) => s.getIfFresh);
   const setCache = useResultCacheStore((s) => s.set);
+
+  // Resolve whether the cached entry is still within TTL.
+  const entry = rawEntry && key ? getIfFresh(key) ?? undefined : rawEntry;
 
   const [loading, setLoading] = useState<boolean>(
     () => entry === undefined && key !== null,

@@ -26,9 +26,6 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
-import torch
-
-from sparc.causal.nuts import NUTSBlock, run_nuts, _split_r_hat, _ess_bulk
 from sparc.run.correlogram_matern_fit import (
     _hdi,
     _heuristic_kappa_init,
@@ -267,6 +264,9 @@ def fit_anisotropy_bayes(
     log_k0 = math.log(max(float(kappa_init), 1e-9))
     sigma2_init = float(np.clip(np.nanmax(morans), 1e-3, 2.0))
     obs_var = float(np.nanvar(morans).clip(min=1e-6))
+
+    import torch  # lazy import: only needed at estimation time
+    from sparc.causal.nuts import NUTSBlock, run_nuts, _split_r_hat, _ess_bulk  # noqa: F401
 
     # Tensor inputs ---------------------------------------------------------
     h_t = torch.tensor(lags, dtype=torch.float64)            # (L,)

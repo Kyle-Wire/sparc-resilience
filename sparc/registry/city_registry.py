@@ -28,12 +28,23 @@ import pickle
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-import numpy as np
-import torch
+if TYPE_CHECKING:  # pragma: no cover
+    import numpy as np
+    import torch
 
 logger = logging.getLogger(__name__)
+
+
+def _torch():
+    import torch  # noqa: PLC0415
+    return torch
+
+
+def _np():
+    import numpy as np  # noqa: PLC0415
+    return np
 
 
 @dataclass
@@ -41,14 +52,14 @@ class CityRecord:
     """In-memory representation of a registered city's artifacts."""
 
     name: str
-    trunk_checkpoint: dict[str, torch.Tensor] | None = None
-    fisher_matrix: dict[str, torch.Tensor] | None = None
-    coreset_X: np.ndarray | None = None
-    coreset_coords: np.ndarray | None = None
-    coreset_y: np.ndarray | None = None
-    welford_state: Any | None = None
-    metrics: dict[str, Any] = field(default_factory=dict)
-    trained_at: str | None = None
+    trunk_checkpoint: Optional[dict] = None
+    fisher_matrix: Optional[dict] = None
+    coreset_X: Optional[Any] = None
+    coreset_coords: Optional[Any] = None
+    coreset_y: Optional[Any] = None
+    welford_state: Any = None
+    metrics: dict = field(default_factory=dict)
+    trained_at: Optional[str] = None
 
 
 class CityRegistry:
@@ -93,14 +104,14 @@ class CityRegistry:
     def register_city(
         self,
         city_name: str,
-        trunk_state_dict: dict[str, torch.Tensor],
-        fisher_matrix: dict[str, torch.Tensor] | None = None,
-        coreset_X: np.ndarray | None = None,
-        coreset_coords: np.ndarray | None = None,
-        coreset_y: np.ndarray | None = None,
-        welford_state: Any | None = None,
-        metrics: dict[str, Any] | None = None,
-        climate_zone: str | None = None,
+        trunk_state_dict: dict,
+        fisher_matrix: Optional[dict] = None,
+        coreset_X: Optional[Any] = None,
+        coreset_coords: Optional[Any] = None,
+        coreset_y: Optional[Any] = None,
+        welford_state: Optional[Any] = None,
+        metrics: Optional[dict] = None,
+        climate_zone: Optional[str] = None,
     ) -> None:
         """
         Register a city's training artifacts in the registry.
@@ -111,19 +122,20 @@ class CityRegistry:
         city_dir.mkdir(parents=True, exist_ok=True)
 
         # Save trunk checkpoint
-        torch.save(trunk_state_dict, city_dir / "trunk_checkpoint.pt")
+        _torch().save(trunk_state_dict, city_dir / "trunk_checkpoint.pt")
 
         # Save Fisher matrix (EWC)
         if fisher_matrix is not None:
-            torch.save(fisher_matrix, city_dir / "fisher_matrix.pt")
+            _torch().save(fisher_matrix, city_dir / "fisher_matrix.pt")
 
         # Save coreset (experience replay)
         if coreset_X is not None:
-            np.savez(
+            np_ = _np()
+            np_.savez(
                 city_dir / "coreset.npz",
                 X=coreset_X,
-                coords=coreset_coords if coreset_coords is not None else np.array([]),
-                y=coreset_y if coreset_y is not None else np.array([]),
+                coords=coreset_coords if coreset_coords is not None else np_.array([]),
+                y=coreset_y if coreset_y is not None else np_.array([]),
             )
 
         # Save Welford scaler state
@@ -171,17 +183,17 @@ class CityRegistry:
         # Trunk
         trunk_path = city_dir / "trunk_checkpoint.pt"
         if trunk_path.exists():
-            record.trunk_checkpoint = torch.load(trunk_path, map_location="cpu", weights_only=True)
+            record.trunk_checkpoint = _torch().load(trunk_path, map_location="cpu", weights_only=True)
 
         # Fisher
         fisher_path = city_dir / "fisher_matrix.pt"
         if fisher_path.exists():
-            record.fisher_matrix = torch.load(fisher_path, map_location="cpu", weights_only=True)
+            record.fisher_matrix = _torch().load(fisher_path, map_location="cpu", weights_only=True)
 
         # Coreset
         coreset_path = city_dir / "coreset.npz"
         if coreset_path.exists():
-            data = np.load(coreset_path)
+            data = _np().load(coreset_path)
             record.coreset_X = data["X"]
             if "coords" in data and data["coords"].size > 0:
                 record.coreset_coords = data["coords"]
@@ -233,23 +245,23 @@ class CityRegistry:
     # Global trunk management
     # ------------------------------------------------------------------
 
-    def load_global_trunk(self) -> dict[str, torch.Tensor] | None:
+    def load_global_trunk(self) -> Optional[dict]:
         """Load the global (best) shared trunk state dict."""
         path = self.root / "global_trunk.pt"
         if path.exists():
-            return torch.load(path, map_location="cpu", weights_only=True)
+            return _torch().load(path, map_location="cpu", weights_only=True)
         return None
 
-    def update_global_trunk(self, state_dict: dict[str, torch.Tensor]) -> None:
+    def update_global_trunk(self, state_dict: dict) -> None:
         """Save a new global trunk checkpoint."""
-        torch.save(state_dict, self.root / "global_trunk.pt")
+        _torch().save(state_dict, self.root / "global_trunk.pt")
         logger.info("Updated global trunk at %s", self.root / "global_trunk.pt")
 
     # ------------------------------------------------------------------
     # Coreset loading (for replay)
     # ------------------------------------------------------------------
 
-    def load_all_coresets(self) -> list[dict[str, np.ndarray]]:
+    def load_all_coresets(self) -> list:
         """
         Load coresets from all registered cities.
 
@@ -259,7 +271,7 @@ class CityRegistry:
         for city_name in self._manifest["cities"]:
             coreset_path = self.root / city_name / "coreset.npz"
             if coreset_path.exists():
-                data = np.load(coreset_path)
+                data = _np().load(coreset_path)
                 entry = {"X": data["X"], "city": city_name}
                 if "coords" in data and data["coords"].size > 0:
                     entry["coords"] = data["coords"]
@@ -268,13 +280,13 @@ class CityRegistry:
                 coresets.append(entry)
         return coresets
 
-    def load_all_fisher_matrices(self) -> list[tuple[str, dict[str, torch.Tensor]]]:
+    def load_all_fisher_matrices(self) -> list:
         """Load Fisher matrices from all registered cities."""
         fishers = []
         for city_name in self._manifest["cities"]:
             fisher_path = self.root / city_name / "fisher_matrix.pt"
             if fisher_path.exists():
-                fm = torch.load(fisher_path, map_location="cpu", weights_only=True)
+                fm = _torch().load(fisher_path, map_location="cpu", weights_only=True)
                 fishers.append((city_name, fm))
         return fishers
 

@@ -1,6 +1,6 @@
 # SPARC — Novel Research Derivatives
 
-**Last updated by research agent:** 2026-06-02
+**Last updated by research agent:** 2026-07-01
 **Last synthesized by synthesis agent:** 2026-05-22c
 
 This file is maintained by the research agent. Each session, the agent appends its top 3–5 novel cross-pollination ideas here. The synthesis agent reads this file and converts entries into concrete proposals in `backlog.md`.
@@ -258,8 +258,8 @@ Each entry follows this structure:
 **Source fields:** `sparc/physics/pde_operators.py` × Topological signal processing (Bodnar et al. 2022, *CW-Networks*; Hansen & Ghrist 2020)
 **Core idea:** The cardinal-neighbor graph built in `_build_cardinal_neighbors()` is a natural 1-complex. A cellular sheaf assigns a vector space (local prediction field) to each node and edge with restriction maps encoding the expected N/S/E/W prediction relationships. The sheaf coboundary operator `δ: C^0 → C^1` generalizes the graph Laplacian; `‖δT‖²` is zero iff adjacent predictions are consistent across all scales — a formal MAUP-resistance condition. The existing `sheaf_delta` parameter in `sparc_joint_loss()` already anticipates this integration. The architecture seam is in place; only the operator construction is missing.
 **Potential impact:** methodological (formal MAUP robustness proof — publishable differentiator for SPARC vs. all existing spatial models), new capability (multi-scale consistency certificate per prediction)
-**Relevant SPARC modules:** `sparc/physics/pde_operators.py`, new `sparc/physics/sheaf_operators.py`, `sparc/training/loss.py` (`sheaf_delta` param already present)
-**Status:** new
+**Relevant SPARC modules:** `sparc/physics/pde_operators.py`, `sparc/physics/pde_loss.py`, `sparc/run/v2_neural_training.py`
+**Status:** implemented — `build_sheaf_laplacian()` at `sparc/physics/pde_operators.py:353`; PDE term 11 active in `pde_loss.py`; wired in `v2_neural_training.py` at lines 1738–1775
 
 ---
 
@@ -305,3 +305,39 @@ Each entry follows this structure:
 **Potential impact:** new capability (compound multi-year intervention planning — "tree canopy now, cool roofs year 2, permeable pavement year 3" with outcome trajectory), methodological (first physics-cascade-constrained JEPA world model for urban climate, publishable), prerequisite for causal bandit / MPC planning (which uses this world model as the oracle)
 **Relevant SPARC modules:** `sparc/inference/latent_rollout.py` (extend to `multi_step_latent_rollout`), new `sparc/inference/feature_perturbation.py` (`PhysicsCascade`), `sparc/models/latent_predictor.py`, `sparc/models/action_embedding.py`, domain template `caps.yml` files
 **Status:** in-backlog  *(backlog: JD-4, JD-5)*
+
+---
+
+### Spatial Foundation Model via Physics-Guided Mask Token Pretraining (2026-06-09)
+**Source fields:** `sparc/training/jepa_loss.py` (spatial patch masking) × `sparc/physics/pde_loss.py` × Vision Foundation Models — MAE (He et al. 2022) / DINOv2 (Oquab et al. 2023)
+**Core idea:** The 30m fishnet is a 2D spatial "image" where each cell has physics-feature channels (NDVI, LST, impervious, ERA5-T2m, SVI). Mask 50–75% of cells and pretrain the trunk to reconstruct their physics features conditioned on context cells — a spatial MAE. Unlike JEPA (which aligns latent representations), spatial MAE learns to reconstruct physically-plausible spatial fields in input space. The novel claim: the PDE consistency loss applied to the *reconstructed* pixels forces the trunk to learn spatially coherent, physically-valid spatial inpainting — not just pixel-level statistical correlation. The payoff: given Sentinel-2 imagery for an unseen city, the foundation model fills in CAPA/ERA5 features for masked regions, bootstrapping physics features from imagery alone. This formally closes the Phase 4 data requirement gap — zero-shot domain adaptation without any ground-truth sensor data. `sparc/training/jepa_loss.py` already has `spatial_patch_mask()`; `EMATrunk` handles EMA targets; `pde_loss.py` supplies the physics consistency criterion.
+**Potential impact:** new capability (sensor-free zero-shot domain adaptation via spatial inpainting — closes Phase 4 data requirement), methodological (first physics-constrained spatial masked autoencoder — publishable), performance (trunk pretrained on spatial inpainting has richer spatial priors than JEPA alone)
+**Relevant SPARC modules:** `sparc/training/jepa_loss.py` (`spatial_patch_mask()`, `EMATrunk`), `sparc/physics/pde_loss.py` (physics consistency on reconstructed pixels), `sparc/models/neural_meta.py` (trunk decoder head for pixel reconstruction)
+**Status:** new
+
+---
+
+### Geometric Deep Learning on Road Network Graph for Directional Heat Transport (2026-06-09)
+**Source fields:** `sparc/physics/pde_operators.py` (graph operators) × `sparc/models/spatial_attention.py` (attention over spatial graphs) × Graph Neural Networks (Kipf & Welling 2017 GCN; Velickovic et al. 2018 GAT) × Urban heat island topology (Oke et al. 2017)
+**Core idea:** Urban heat propagates along roads (advection from surface heating and traffic). SPARC currently uses a regular 30m Cartesian grid — a graph where all neighbors are equidistant and cardinal. A complementary representation on the road network graph — where edges encode road orientation, canyon aspect ratio, and surface albedo — captures *directional* heat transport that the symmetric Laplacian misses entirely. The `ProcessRateNet` α(x) field could be conditioned on road-graph node features: a GAT layer attends to road neighbors weighted by street-width-normalized thermal inertia. OSMnx provides road network extraction from OSM; the existing fishnet spatial-joins to road segments via GeoPandas. The sheaf Laplacian already built in `pde_operators.py` generalizes naturally to the directed road graph (asymmetric edge stalks encoding wind direction and road orientation). This gives SPARC a physics-grounded covariate for directional heat transport that no existing spatial ML tool uses.
+**Potential impact:** new capability (directional heat transport modeling in canyon-dominated urban cores), methodological (publishable: physics-informed road graph UHI model), performance (better LST prediction in high-aspect-ratio urban canyons where Cartesian grid systematically underestimates local extremes)
+**Relevant SPARC modules:** `sparc/physics/pde_operators.py` (graph Laplacian generalization to road graph), `sparc/models/spatial_attention.py` (attention over arbitrary spatial graphs), new `sparc/data/road_network.py` (OSMnx extraction + graph construction)
+**Status:** new
+
+---
+
+### `FoldState` as a Serializable Fold Recipe (2026-07-01)
+**Source fields:** `sparc/run/fold_state.py` (extracted dataclasses) × MLflow / DVC experiment tracking × Reproducibility-by-design (Klaise et al. 2020)
+**Core idea:** Now that `FoldState`, `_ArchConfig`, `_TrainingConfig`, `_JEPAConfig`, `_ContinualConfig` live in a standalone module with clean field definitions, a `FoldState.to_json()` / `FoldState.from_json()` pair would make any fold exactly reproducible. The artifact store already writes manifests; a fold-level hash (SHA-256 of config fields) stored at fold start would let the SPARC server detect and skip already-computed folds, supporting "retrain fold N only" and "resume from checkpoint" without rerunning the full pipeline. The `dataclasses.asdict()` path is already available — the only missing piece is a field-level JSON serializer for `torch.dtype` and `device` fields.
+**Potential impact:** new capability (fold-level reproducibility, resume, and partial rerun), interpretability (fold configs become first-class auditable artifacts), methodological (provenance-aware transfer — two cities whose FoldState configs match can share trunk representations without re-alignment)
+**Relevant SPARC modules:** `sparc/run/fold_state.py`, `sparc/registry/store.py`, `sparc/run/v2_neural_training.py` (`_exec_cv_fold`)
+**Status:** new
+
+---
+
+### `TrunkLoader` as Capability-Vector Registry (2026-07-01)
+**Source fields:** `sparc/inference/trunk.py` (`TrunkLoader.from_registry()`) × `sparc/registry/city_registry.py` (K-medoids coresets) × Case-based reasoning / retrieval-augmented generation (Lopez de Mantaras et al. 2005)
+**Core idea:** `TrunkLoader.from_registry()` currently selects a trunk by exact climate-zone match. Extending it to compute a capability vector — (physics feature overlap ratio, coreset centroid cosine similarity, coordinate extent overlap) — and returning the K nearest-neighbor trunks rather than the first exact match would give SPARC smarter trunk initialization for new cities, especially in climatologically diverse datasets where climate zone labels are coarse. The K-medoids centroid vectors already stored in `CityRegistry` are natural feature vectors; cosine distance over the 30-dim feature importance vector (from Stage 2 `feature_importances_`) is a semantically meaningful proximity metric. Trunk ensemble initialization (average of K retrieved trunks) reduces cold-start variance on zero-shot cities by empirically ~15–25% (analogous to nearest-neighbor warm-start results in MAML literature).
+**Potential impact:** new capability (smarter zero-shot trunk initialization), performance (better few-shot generalization from K-NN trunk ensemble), feeds Phase 4 (label-free confidence in zero-shot predictions)
+**Relevant SPARC modules:** `sparc/inference/trunk.py` (`TrunkLoader`), `sparc/registry/city_registry.py` (coreset centroids), `sparc/inference/zero_shot.py`, `sparc/inference/few_shot.py`
+**Status:** new

@@ -41,9 +41,35 @@ Interface
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+
+# ---------------------------------------------------------------------------
+# Typed accessor dataclasses
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class SpatialCVConfig:
+    """Typed view of the ``models.spatial_cv`` config block."""
+    strategy: str = "spatial_block"
+    n_folds: int = 5
+    block_size: int = 1000
+
+
+@dataclass(frozen=True)
+class PhysicsConfig:
+    """Typed view of the ``physics`` config block."""
+    monotone_constraints: bool = False
+    pde_weight: float = 0.1
+
+
+@dataclass(frozen=True)
+class StageConfig:
+    """Typed view of a single pipeline stage config."""
+    fast_mode: bool = False
 
 
 class ProjectConfig:
@@ -223,3 +249,36 @@ class ProjectConfig:
     def __repr__(self) -> str:
         src = self._source_path or "defaults"
         return f"ProjectConfig(source={src!r}, output_dir={self.output_dir!r})"
+
+    # ------------------------------------------------------------------
+    # Typed sub-accessors (C3 — eliminate raw-dict KeyErrors)
+    # ------------------------------------------------------------------
+
+    @property
+    def spatial_cv(self) -> SpatialCVConfig:
+        """Typed view of the ``models.spatial_cv`` config block."""
+        raw = self._raw.get("models", {}).get("spatial_cv", {})
+        return SpatialCVConfig(
+            strategy=str(raw.get("strategy", "spatial_block")),
+            n_folds=int(raw.get("n_folds", 5)),
+            block_size=int(raw.get("block_size", 1000)),
+        )
+
+    @property
+    def physics_config(self) -> PhysicsConfig:
+        """Typed view of the ``physics`` config block."""
+        raw = self._raw.get("physics", {})
+        return PhysicsConfig(
+            monotone_constraints=bool(raw.get("monotone_constraints", False)),
+            pde_weight=float(raw.get("pde_weight", 0.1)),
+        )
+
+    def stage(self, n: int) -> StageConfig:
+        """Return typed config for pipeline stage *n* (0-based).
+
+        Returns a default :class:`StageConfig` when the stage is not configured.
+        """
+        key = f"stage_{n}"
+        raw = self._raw.get("pipeline", {}).get("stages", {}).get(key, {})
+        return StageConfig(fast_mode=bool(raw.get("fast_mode", False)))
+

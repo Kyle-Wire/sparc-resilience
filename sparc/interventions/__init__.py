@@ -54,6 +54,9 @@ __all__ = [
     # Causal inputs seam (Candidate 4)
     'CausalInputs',
     'CausalInputLoader',
+    # Scenario engine selector seam
+    'ScenarioEngineSelector',
 ]
 
 from .causal_inputs import CausalInputs, CausalInputLoader
+from sparc.run.scenario_engine_selector import ScenarioEngineSelector

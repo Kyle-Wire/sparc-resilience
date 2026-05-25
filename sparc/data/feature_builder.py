@@ -112,14 +112,120 @@ class SpatialFeatureBuilder:
 
     @staticmethod
     def from_raster(path: str, coords: np.ndarray) -> SatelliteFeatureSet:
-        """Build from a GeoTIFF / raster file. Not yet implemented."""
-        raise NotImplementedError(
-            "SpatialFeatureBuilder.from_raster is not yet implemented."
+        """Build a SatelliteFeatureSet from a GeoTIFF / raster file.
+
+        Parameters
+        ----------
+        path : str
+            Path to a rasterio-readable raster file (e.g. GeoTIFF).
+        coords : (N, 2) array of (lon, lat) coordinates in the raster CRS.
+
+        Returns
+        -------
+        SatelliteFeatureSet
+        """
+        import rasterio  # optional dependency; caller should handle ImportError
+
+        coords_arr = np.asarray(coords, dtype=np.float64)
+        xy = [(float(c[0]), float(c[1])) for c in coords_arr]
+
+        bands: dict[SatelliteBand, np.ndarray] = {}
+        custom_arrays: list[np.ndarray] = []
+
+        with rasterio.open(path) as src:
+            # sample() returns one array per point, shape (n_bands,)
+            samples = np.array(list(src.sample(xy)), dtype=np.float32)  # (N, n_bands)
+
+            for band_idx in range(src.count):
+                desc = (src.descriptions[band_idx] or "").strip()
+                arr = samples[:, band_idx]
+                band_key = _COLUMN_TO_BAND.get(desc.lower())
+                if band_key is not None:
+                    bands[band_key] = arr
+                else:
+                    custom_arrays.append(arr)
+
+        if custom_arrays:
+            bands[SatelliteBand.CUSTOM] = (
+                np.column_stack(custom_arrays).mean(axis=1).astype(np.float32)
+            )
+
+        return SatelliteFeatureSet(
+            coords=coords_arr,
+            bands=bands,
+            resolution_m=30.0,
+            crs="EPSG:4326",
         )
 
     @staticmethod
     def from_geojson(path: str) -> SatelliteFeatureSet:
-        """Build from a GeoJSON file. Not yet implemented."""
-        raise NotImplementedError(
-            "SpatialFeatureBuilder.from_geojson is not yet implemented."
+        """Build a SatelliteFeatureSet from a GeoJSON FeatureCollection of Point features.
+
+        Parameters
+        ----------
+        path : str
+            Path to a GeoJSON file.  Only ``Point`` geometry features are
+            used; non-Point features are silently skipped.
+
+        Returns
+        -------
+        SatelliteFeatureSet
+
+        Raises
+        ------
+        ValueError
+            If the file contains no Point features.
+        """
+        import json
+
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+
+        features = data.get("features", [])
+        coords_list: list[list[float]] = []
+        props_list: list[dict[str, float]] = []
+
+        for feat in features:
+            geom = feat.get("geometry") or {}
+            if geom.get("type") != "Point":
+                continue
+            lon, lat = geom["coordinates"][:2]
+            coords_list.append([float(lon), float(lat)])
+
+            raw_props = feat.get("properties") or {}
+            numeric: dict[str, float] = {
+                k: float(v) for k, v in raw_props.items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)
+            }
+            props_list.append(numeric)
+
+        if not coords_list:
+            raise ValueError(
+                f"SpatialFeatureBuilder.from_geojson: no Point features found in {path!r}."
+            )
+
+        n = len(coords_list)
+        all_keys = {k for p in props_list for k in p}
+
+        bands: dict[SatelliteBand, np.ndarray] = {}
+        custom_arrays: list[np.ndarray] = []
+
+        for key in all_keys:
+            arr = np.array(
+                [p.get(key, float("nan")) for p in props_list], dtype=np.float32
+            )
+            band = _COLUMN_TO_BAND.get(key.lower())
+            if band is not None:
+                bands[band] = arr
+            else:
+                custom_arrays.append(arr)
+
+        if custom_arrays:
+            bands[SatelliteBand.CUSTOM] = (
+                np.column_stack(custom_arrays).mean(axis=1).astype(np.float32)
+            )
+
+        return SatelliteFeatureSet(
+            coords=np.array(coords_list, dtype=np.float64),
+            bands=bands,
         )

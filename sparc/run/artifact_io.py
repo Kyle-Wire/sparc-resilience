@@ -30,9 +30,29 @@ from typing import Any, Iterable, Optional, Union
 # Active store accessor
 # ---------------------------------------------------------------------------
 
+_injected_store = None  # set via set_store() for tests / isolated runs
+
+
+def set_store(store) -> None:
+    """Inject a store instance (e.g. :class:`~sparc.registry.memory_store.MemoryStore`).
+
+    All subsequent ``save_*`` calls in this process will route to *store*.
+    Call :func:`clear_store` to remove the override.
+    """
+    global _injected_store
+    _injected_store = store
+
+
+def clear_store() -> None:
+    """Remove any previously injected store; revert to the active-store discovery."""
+    global _injected_store
+    _injected_store = None
+
 
 def _store():
     """Return the active :class:`ArtifactStore`, or ``None`` when unavailable."""
+    if _injected_store is not None:
+        return _injected_store
     try:
         from sparc.registry.store import get_active_store
         return get_active_store()
@@ -248,6 +268,12 @@ def load_blob(
 def load_array(
     stage: Union[int, str], name: str, *, subdir: Optional[str] = None,
 ):
+    warnings.warn(
+        "load_array() is a deprecated pass-through for load_blob(); "
+        "use load_blob() directly instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return load_blob(stage, name, subdir=subdir)
 
 

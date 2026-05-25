@@ -99,10 +99,21 @@ class SpatialCVEngine:
         When ``True``, use reduced folds and epochs for quick iteration.
     """
 
-    def __init__(self, ctx: Any, *, fast: bool = False) -> None:
+    def __init__(self, ctx: Any, *, fast: bool = False, profile: Any = None, evaluator: Any = None) -> None:
         self._ctx = ctx
         self._fast = fast
         self._result: Optional[CVResult] = None
+        self._profile = profile
+        self._evaluator = evaluator
+        # Hardware config is populated lazily inside run() via
+        # enhanced_spatial_cv.main(), which calls refresh_hardware_config() at
+        # the top of every run.  Doing it here was a constructor side-effect
+        # that made tests order-dependent and triggered hardware probes on
+        # every import path that constructs an engine.
+
+    @property
+    def profile(self) -> Any:
+        return self._profile
 
     # ------------------------------------------------------------------
     # Public interface
@@ -174,12 +185,20 @@ class SpatialCVEngine:
 
         # Delegate to the Stage 2 runner — the implementation
         from sparc.run.enhanced_spatial_cv import main as _cv_main
+        from sparc.run.enhanced_spatial_cv import set_evaluator, clear_evaluator
 
+        # Wire the injected evaluator (if any) before the run; always clean up after.
+        if self._evaluator is not None:
+            set_evaluator(self._evaluator)
         try:
-            _cv_main(self._ctx, fast_mode=_fast)
-        except TypeError:
-            # Older signature: main(fast_mode=bool)
-            _cv_main(fast_mode=_fast)
+            try:
+                _cv_main(self._ctx, fast_mode=_fast)
+            except TypeError:
+                # Older signature: main(fast_mode=bool)
+                _cv_main(fast_mode=_fast)
+        finally:
+            if self._evaluator is not None:
+                clear_evaluator()
 
         # Collect result from registry
         self._result = self._read_result_from_registry()

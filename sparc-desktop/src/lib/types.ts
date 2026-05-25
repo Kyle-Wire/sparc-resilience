@@ -672,6 +672,24 @@ export interface PdpVariable {
   pdp_values?: number[];
 }
 
+export type PdpSource = "neural_pde" | "gwrf" | "causal_dose_response";
+
+/** Metadata injected by GET /results/pdp_curves to indicate which model
+ *  sources have curve data and provide per-source curve maps. */
+export interface PdpMeta {
+  available_sources?: PdpSource[];
+  by_source?: Record<PdpSource, Record<string, PdpVariable>>;
+}
+
+/** Full response shape from GET /results/pdp_curves.
+ *  Top-level keys are variable names (PdpVariable values) plus the
+ *  reserved `_meta` key (PdpMeta) that drives source selection. */
+export interface PdpResponse {
+  _meta?: PdpMeta;
+  [variable: string]: PdpVariable | PdpMeta | undefined;
+}
+
+/** @deprecated Use PdpResponse. Kept for callers that only need the variable map. */
 export type PdpCurves = Record<string, PdpVariable>;
 
 // ------------------------------------------------------------------

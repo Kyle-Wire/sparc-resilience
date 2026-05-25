@@ -509,7 +509,7 @@ def _execute_stage(
         # Pipeline configuration
         print(">>> Pipeline Configuration")
         from sparc.run.pipeline_configurator import PipelineConfigurator
-        configurator = PipelineConfigurator(stage1_dir=str(paths.stage0_dir))
+        configurator = PipelineConfigurator(stage1_dir=str(paths.stage0_dir), config=config)
         configurator.save_pipeline_config()
 
     elif stage == 1 and not skip_gwen:

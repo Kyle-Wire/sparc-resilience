@@ -13,14 +13,7 @@ import { useResult } from "@/hooks/useResult";
 import { getPdpCurves } from "@/lib/api";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
 import { useCanvas } from "./_useCanvas";
-import type { PdpCurves } from "@/lib/types";
-
-type PdpSource = "neural_pde" | "gwrf" | "causal_dose_response";
-
-interface PdpMeta {
-  available_sources?: PdpSource[];
-  by_source?: Record<PdpSource, Record<string, CurvePayload>>;
-}
+import type { PdpResponse, PdpSource } from "@/lib/types";
 
 interface CurvePayload {
   grid_values?: number[];
@@ -39,13 +32,13 @@ export default function PdpPanel() {
     !!manifest.lookup("2", "gwrf_condition_curves") ||
     Object.keys(stage2Arts).some((a) => a.startsWith("v2_neural_pdp::"));
 
-  const { data } = useResult<PdpCurves>(
+  const { data } = useResult<PdpResponse>(
     present ? "s3:pdp_curves" : null,
     getPdpCurves,
   );
   const [source, setSource] = useState<PdpSource | null>(null);
 
-  const meta = (data as unknown as { _meta?: PdpMeta })?._meta;
+  const meta = data?._meta;
   const availableSources = useMemo<PdpSource[]>(() => {
     return (meta?.available_sources ?? []).filter((s) => {
       const payload = meta?.by_source?.[s];
@@ -61,8 +54,9 @@ export default function PdpPanel() {
   const curves = useMemo<Record<string, CurvePayload> | null>(() => {
     if (effectiveSource && meta?.by_source) return meta.by_source[effectiveSource] ?? null;
     if (!data) return null;
+    // Fallback: treat all non-meta top-level keys as curve variables
     return Object.fromEntries(
-      Object.entries(data as Record<string, CurvePayload>).filter(([k]) => !k.startsWith("_")),
+      Object.entries(data).filter(([k]) => !k.startsWith("_")) as [string, CurvePayload][],
     );
   }, [data, meta, effectiveSource]);
 

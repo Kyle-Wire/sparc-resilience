@@ -38,7 +38,7 @@ export function useChatActions(
           }
           case "propose_dag_edges": {
             localStorage.setItem("sparc-proposed-edges", JSON.stringify(action.edges));
-            navigate("DAG");
+            navigate("Configure");
             refresh();
             break;
           }
@@ -46,13 +46,13 @@ export function useChatActions(
             await saveConfig({
               physics: { monotone_constraints: action.monotonic_constraints },
             });
-            navigate("Physics");
+            navigate("Configure");
             refresh();
             break;
           }
           case "suggest_predictors": {
             await saveConfig({ predictors: action.predictors });
-            navigate("Variables");
+            navigate("Configure");
             refresh();
             break;
           }

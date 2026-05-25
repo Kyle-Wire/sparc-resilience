@@ -1,7 +1,7 @@
 # SPARC — Research Backlog
 
 **Maintained by:** synthesis agent
-**Last updated:** 2026-06-02 (Candidates A–E feedback learning; 1.1-b replay resolved; BS-1 energy coreset + BS-2 sheaf loss added)
+**Last updated:** 2026-07-01 (5 architecture friction candidates C1–C5 implemented via TDD; 2 new backlog items from self-grill: arch-1 FoldTrainer redundancy elimination, arch-2 zero_shot registry)
 
 Items are ranked by impact/effort. Improvement agent picks the top `[ ]` item with complexity **low** or **medium**.
 
@@ -18,6 +18,22 @@ Complexity: **low** = < 1 hour of focused edits | **medium** = half-day | **high
 ---
 
 ## Queue
+
+### Architecture Improvements (from 2026-07-01 TDD session — self-grill verified)
+
+- [x] **arch-1 Pass `FoldModels` into `_exec_cv_fold` to eliminate redundant pre-training** — complexity: **medium** — *Done 2026-07-01: Added `fold_models: object | None = None` keyword param to `_exec_cv_fold`. When provided, assigns model/process_net/source_net/surrogates/optimizer/scheduler/ema_trunk/latent_predictor/action_embed/jepa_optimizer from fold_models and skips both the surrogate MSE pre-training block and ProcessRateNet pre-training block. `FoldTrainer._run_cv_fold_main_loop()` now passes `fold_models=self._models`. Tests: `tests/test_exec_cv_fold_models_param.py` (5 structural tests).*
+  - **Gap:** `FoldTrainer.run()` now calls `build_models()`, `pretrain_surrogates()`, `pretrain_process_rate()` — but then delegates to `_run_cv_fold_main_loop()` which calls `_exec_cv_fold()`. `_exec_cv_fold` rebuilds all models from scratch internally, making the three `run()` calls dead work.
+  - **Fix:** Add `fold_models: FoldModels | None = None` parameter to `_exec_cv_fold`. When provided, skip the model-building block (`if fold_models is None: ...`) and use the passed-in models. Update `FoldTrainer._run_cv_fold_main_loop()` to pass `self._models`.
+  - **Files:** `sparc/run/v2_neural_training.py` (`_exec_cv_fold` signature + internal guard), `sparc/run/fold_trainer.py` (`_run_cv_fold_main_loop`)
+  - **Risk:** Moderate — changing `_exec_cv_fold` signature. Add keyword-only parameter with `None` default to ensure backwards compatibility. All existing callers continue working unchanged.
+  - **Success criterion:** When `fold_models` is provided, training log shows `FoldTrainer: reusing pre-built models (skipping internal build)`; no model instantiation logs appear inside `_exec_cv_fold` for that fold.
+
+- [x] **arch-2 Implement `zero_shot_predict(registry_path=...)` via `TrunkLoader`** — complexity: **low** — *Done 2026-07-01: Replaced `raise NotImplementedError` with `_use_registry = True` flag (mirrors few_shot.py pattern). After x_dim is known, uses `TrunkLoader.from_registry(registry_path, features.climate_zone, x_dim)` for trunk loading. Tests: `tests/test_zero_shot_trunk_loader.py` (5 structural tests).*
+  - **Gap:** `sparc/inference/zero_shot.py::zero_shot_predict()` accepts `registry_path` but immediately raises `NotImplementedError("registry_path loading is not yet implemented.")`. `TrunkLoader.from_registry()` now exists in `sparc/inference/trunk.py` and handles exactly this case.
+  - **Fix:** Replace the `raise NotImplementedError` block with a `TrunkLoader.from_registry(registry_path, features.climate_zone, x_dim)` call — mirroring the `few_shot.py` pattern implemented in C4.
+  - **Files:** `sparc/inference/zero_shot.py` (~10 lines)
+  - **Risk:** Low — purely additive; existing `trunk_path` path is unchanged.
+  - **Success criterion:** `zero_shot_predict(features=..., registry_path="city_registry.json")` returns a `ZeroShotResult` without raising; test `test_trunk_loader.py` covers `TrunkLoader.from_registry` already.
 
 ### Phase 1 — Finish V3 Wiring (from SPARC_Future_Roadmap.md)
 
@@ -1164,4 +1180,52 @@ Candidate A (gate feedback), B (replay interface), C (alpha-class curriculum), D
   - **Files:** New `sparc/physics/sheaf_operators.py` (~50 lines), `sparc/physics/pde_operators.py` (expose `build_sheaf_coboundary`), `sparc/training/loss.py` (activate existing `sheaf_delta` term), `sparc/run/v2_neural_training.py` (pre-compute sheaf matrix, pass in tensor dict)
   - **Depends on:** Sparse Laplacian wiring (done — cardinal graph already available)
   - **Success criterion:** With `physics.sheaf_delta: 0.01`, training log shows `sheaf_loss > 0`; Moran's I on OOF residuals decreases vs. baseline (spatial consistency improved); existing `test_pde_loss.py` still passes.
+  - **Note (2026-06-09):** The full sheaf Laplacian (`build_sheaf_laplacian()`) is now **implemented** in `pde_operators.py` and wired in `v2_neural_training.py`. This item is superseded. Mark as done.
+
+---
+
+### Session Digest — 2026-06-09 (Data Collection Architecture + Research Scan)
+
+**Focus:** Complete data-collection architecture refactor (C1–C5 from prior session), then research scan.
+
+**What was implemented:**
+- [x] **C2 — `CollectSession` typed state** — New `sparc/data/collect/session.py`. Replaces `_collect_session: dict = {}` in app.py with a typed dataclass: `boundary`, `fishnet`, `manifest`, `anchor_dates`, `save()`, `load()`. `_build_fishnet()` module-level patchable function.
+- [x] **C1 — Wired `app.py` to use typed adapters + `CollectSession`** — `sparc/server/app.py` fully refactored: removed old `_sync_group_fetch()` / `_sync_fetch_sentinel2()` if/elif chains (~150 lines), replaced with `sync_group_fetch` dispatch. All 6 collect routes updated.
+- [x] **C5 — Assembler `on_step` callback** — `sparc/data/collect/assembler.py`: `run()` accepts `on_step: Callable[[str, bool], None] | None = None`. Called after each of 6 service fetches with group name and success bool.
+- [x] **C5 tests** — `tests/test_collect_assembler_callback.py`: 4 tests including `on_step_none_is_safe`, `called_for_each_service`, `called_even_when_service_raises`.
+- [x] **`__init__.py` exports** — Added `CollectSession` to `sparc/data/collect/__init__.py`; side-effect adapter registration via `import sparc.data.collect.adapters as _adapters`.
+
+**Research scan findings:**
+- All 4 Phase 1 V3 wiring gaps from May 2026 Integration Status doc are now **resolved**.
+- Sheaf Laplacian (`build_sheaf_laplacian`) confirmed **implemented** — derivatives.md and backlog status corrected.
+- CausalBandit (`sparc/decision/causal_bandit.py`) confirmed **implemented**.
+- `sparc/causal/transportability.py` — confirmed **does not exist** (Phase 4/5 gap).
+- `zero_shot_predict(registry_path=...)` — still raises `NotImplementedError` (Phase 4 gap).
+- JD-1, JD-2, JD-3 — still `[ ]`, no changes this session.
+
+**2 new derivatives added to `docs/research/derivatives.md`:**
+- Spatial Foundation Model via Physics-Guided Mask Token Pretraining
+- Geometric Deep Learning on Road Network Graph for Directional Heat Transport
+
+**Priority recommendation for next session:** JD-1 (Stage 2 OOF as DML nuisance, complexity: **low**, ~25 lines, zero regression risk). Run as first task before any blue-sky work.
+
+---
+
+### Blue-Sky Candidates (from 2026-06-09 session)
+
+- [ ] **BS-3 Spatial Foundation Model via Physics-Guided Mask Token Pretraining** — complexity: **high**
+  - **Source derivative:** "Spatial Foundation Model via Physics-Guided Mask Token Pretraining" (derivatives.md, 2026-06-09)
+  - **Gap:** JEPA aligns latent representations but never trains the trunk to reconstruct missing physics features. A Masked Autoencoder (MAE) variant for the fishnet would enable zero-shot sensor-free domain adaptation — given Sentinel-2 for an unseen city, infer CAPA/ERA5 features from imagery alone.
+  - **Method:** Mask 50–75% of fishnet cells using existing `spatial_patch_mask()`. Add a lightweight MLP decoder head to the trunk. Reconstruction target: masked cell physics features. PDE residual on reconstructed field enforces physical plausibility.
+  - **Files:** `sparc/models/neural_meta.py` (new `SpatialMAEDecoder` head), `sparc/training/jepa_loss.py` (new `spatial_mae_loss()` alongside JEPA loss), `sparc/run/v2_neural_training.py` (add MAE pretraining phase)
+  - **Depends on:** JEPA wired (done), PDE loss (done), spatial patch mask (done)
+  - **Success criterion:** After MAE pretraining, trunk zero-shot reconstruction RMSE for held-out cells < 15% of field range; trunk improves Stage 2 R² by ≥ 0.02 vs. JEPA-only baseline.
+
+- [ ] **BS-4 Road Network Graph GNN for Directional Urban Heat Transport** — complexity: **high**
+  - **Source derivative:** "Geometric Deep Learning on Road Network Graph for Directional Heat Transport" (derivatives.md, 2026-06-09)
+  - **Gap:** The 30m Cartesian grid is isotropic — all neighbors equidistant. Directional heat transport along roads (asymmetric, anisotropic) is systematically underestimated in high-aspect-ratio urban canyons.
+  - **Method:** OSMnx road network extraction for the study area. GAT layer conditioned on road attributes (orientation, width, canyon aspect ratio). `ProcessRateNet α(x)` conditioned on road graph node features. Sheaf Laplacian on the directed road graph (asymmetric edge stalks).
+  - **Files:** New `sparc/data/road_network.py` (~80 lines, OSMnx wrapper), `sparc/models/spatial_attention.py` (add `RoadGraphAttention` layer), `sparc/run/v2_neural_training.py` (optional road graph conditioning path)
+  - **Depends on:** Sheaf Laplacian (implemented), spatial attention (implemented)
+  - **Success criterion:** LST prediction RMSE in high-canyon-ratio zones improves by ≥ 5% vs. Cartesian grid baseline; road graph attention weights visually correlate with wind direction and street orientation.
 

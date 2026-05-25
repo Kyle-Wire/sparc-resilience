@@ -422,3 +422,8 @@ body > #root {
   background: var(--ink);
   color: #fff;
 }
+
+/* Sidebar nav button hover (replaces JS onMouseEnter/Leave) */
+.sidebar-nav-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+}

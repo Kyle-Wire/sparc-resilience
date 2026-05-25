@@ -1,6 +1,6 @@
 /**
- * useStartup — owns the 3-step splash state machine:
- *   sidecar → session (auth rehydration) → ready
+ * useStartup — owns the 4-step splash state machine:
+ *   sidecar → token (acquire auth token) → session (auth rehydration) → ready
  *
  * Returns a discriminated state that App.tsx uses to decide what to render,
  * plus parallax preference (persisted in localStorage).
@@ -43,27 +43,28 @@ export function useStartup(
     applyTheme(loadThemeKey());
   }, []);
 
-  // Fetch the sidecar session token from Tauri once on mount.
-  // Stored in memory only — never written to disk or localStorage.
-  useEffect(() => {
-    import("@tauri-apps/api/core").then(({ invoke }) => {
-      invoke<string>("get_sidecar_token")
-        .then(setToken)
-        .catch(() => { /* browser/dev — token stays empty */ });
-    }).catch(() => { /* @tauri-apps/api not available */ });
-  }, []);
-
   // Startup failure → show error step
   useEffect(() => {
     if (startupFailed && splashStep === "sidecar") setSplashStep("failed");
   }, [startupFailed, splashStep]);
 
-  // Step 1 → 2: sidecar ready
+  // Step 1 → 2: sidecar ready → acquire token
   useEffect(() => {
-    if (serverReady && splashStep === "sidecar") setSplashStep("session");
+    if (serverReady && splashStep === "sidecar") setSplashStep("token");
   }, [serverReady, splashStep]);
 
-  // Step 2 → 3: restore auth session
+  // Step 2 → 3: acquire token → then advance to session
+  // Token is stored in memory only — never written to disk or localStorage.
+  // On Tauri unavailability (browser/dev), we skip and advance anyway.
+  useEffect(() => {
+    if (splashStep !== "token") return;
+    import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke<string>("get_sidecar_token"))
+      .then((token) => { setToken(token); setSplashStep("session"); })
+      .catch(() => { setSplashStep("session"); /* browser/dev — token stays empty */ });
+  }, [splashStep]);
+
+  // Step 3 → 4: restore auth session
   useEffect(() => {
     if (splashStep !== "session") return;
     initAuth().then(() => {

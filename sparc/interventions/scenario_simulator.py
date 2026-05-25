@@ -85,6 +85,7 @@ def _persist_scenario_summary(
     output_dir: Path,
     disk_filename: str,
     also_register_as: Optional[str] = None,
+    store=None,
 ) -> None:
     """Write a scenario summary table to artifacts.db when active, disk otherwise.
 
@@ -92,7 +93,7 @@ def _persist_scenario_summary(
     additionally register itself under the canonical ``scenario_summary``
     id so consumers don't need to know the mode.
     """
-    store = _stage4_store()
+    store = store if store is not None else _stage4_store()
     if store is not None:
         try:
             store.write_table("4", artifact_id, summary_df,
@@ -120,11 +121,12 @@ def _persist_scenario_geo(
     output_dir: Path,
     disk_filename: str,
     also_register_as: Optional[str] = None,
+    store=None,
 ) -> None:
     """Write a scenario GeoDataFrame to artifacts.db (WKB table) or disk gpkg."""
     if not GEOPANDAS_AVAILABLE or not isinstance(results_gdf, gpd.GeoDataFrame):
         return
-    store = _stage4_store()
+    store = store if store is not None else _stage4_store()
     if store is not None:
         try:
             crs = str(results_gdf.crs) if results_gdf.crs is not None else None
@@ -197,8 +199,9 @@ class ScenarioSimulator:
     # Construction
     # ------------------------------------------------------------------
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, *, store=None):
         self.config = config
+        self._store = store
 
         # Paths
         self.data_path = Path(config["paths"]["raw_csv_path"])
@@ -261,6 +264,16 @@ class ScenarioSimulator:
 
         # Base-model consensus weights (populated by _compute_base_model_weights())
         self._base_model_weights: Dict[str, float] = {}
+
+    # ------------------------------------------------------------------
+    # Store injection seam
+    # ------------------------------------------------------------------
+
+    @property
+    def _active_store(self):
+        """Return the injected store, or fall back to the global _stage4_store()."""
+        _s = getattr(self, '_store', None)
+        return _s if _s is not None else _stage4_store()
 
     # ------------------------------------------------------------------
     # Physics priors
@@ -403,8 +416,7 @@ class ScenarioSimulator:
 
         beta: Optional[np.ndarray] = None
         try:
-            from sparc.registry.store import get_active_store
-            store = get_active_store()
+            store = self._active_store
             if store is not None and store.has("3", "cate_summary"):
                 df = store.read_table("3", "cate_summary")
                 if df is not None and "treatment" in df.columns and "cate_mean" in df.columns:
@@ -871,8 +883,7 @@ class ScenarioSimulator:
         has_v2 = (v2_dir / "neural_meta.pt").exists() and (v2_dir / "meta_info.json").exists()
         if not has_v2:
             try:
-                from sparc.registry.store import get_active_store
-                _store = get_active_store()
+                _store = self._active_store
                 if _store is not None and _store.has("2", "v2_neural_meta_info"):
                     # Even if disk pt is gone, db-resident meta is sufficient
                     # for V2-aware modes (disk pt restored separately if needed).
@@ -917,8 +928,7 @@ class ScenarioSimulator:
         # Load feature info (actual features used during training)
         _fi = None
         try:
-            from sparc.registry.store import get_active_store
-            _store = get_active_store()
+            _store = self._active_store
             if _store is not None and _store.has("2", "feature_info"):
                 _fi = _store.read_any("2", "feature_info")
         except Exception:
@@ -971,8 +981,7 @@ class ScenarioSimulator:
         # Resolve meta_info: prefer artifacts.db.
         meta_info_loaded = None
         try:
-            from sparc.registry.store import get_active_store
-            _store = get_active_store()
+            _store = self._active_store
             if _store is not None and _store.has("2", "v2_neural_meta_info"):
                 meta_info_loaded = _store.read_any("2", "v2_neural_meta_info")
         except Exception:
@@ -994,8 +1003,7 @@ class ScenarioSimulator:
 
             # Load V3 alpha field if available (store-first, disk-fallback)
             try:
-                from sparc.registry.store import get_active_store
-                _store = get_active_store()
+                _store = self._active_store
             except Exception:
                 _store = None
 
@@ -1077,8 +1085,7 @@ class ScenarioSimulator:
         import torch
 
         try:
-            from sparc.registry.store import get_active_store
-            _store = get_active_store()
+            _store = self._active_store
         except Exception:
             _store = None
 
@@ -1254,8 +1261,7 @@ class ScenarioSimulator:
         feat_mean = None
         feat_std = None
         try:
-            from sparc.registry.store import get_active_store
-            _store = get_active_store()
+            _store = self._active_store
         except Exception:
             _store = None
         if _store is not None:
@@ -1379,8 +1385,7 @@ class ScenarioSimulator:
         neural_skipped = 0
         loaded_from_store = False
         try:
-            from sparc.registry.store import get_active_store
-            _store = get_active_store()
+            _store = self._active_store
             if _store is not None:
                 manifest_stages = getattr(_store.registry.manifest, "stages", {}) or {}
                 stage2 = manifest_stages.get("2", {}) or {}
@@ -1982,9 +1987,8 @@ class ScenarioSimulator:
             ]
             _kf = None
             try:
-                from sparc.registry.store import get_active_store
                 from sparc.models.kernel_field import KernelField
-                _store = get_active_store()
+                _store = self._active_store
                 if _store is not None and _store.has("0", "kernel_field"):
                     _kf_payload = _store.read_any("0", "kernel_field")
                     if isinstance(_kf_payload, dict):

@@ -16,10 +16,50 @@ from __future__ import annotations
 import json
 import math
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 import numpy as np
 import pandas as pd
+
+
+@runtime_checkable
+class GapRunnerProtocol(Protocol):
+    """Structural protocol for a pluggable per-gap estimator.
+
+    Implementations receive the same keyword arguments as ``run_wager2025_gaps``
+    and must return a value (typically ``int`` or ``dict``) that is stored in
+    ``summary["ran"][gap_name]``.
+    """
+
+    def run(
+        self,
+        *,
+        data: Any,
+        config: dict,
+        dag_def: dict,
+        graph: Any,
+        roles: dict,
+        output_dir: str,
+        nuts_results: Optional[dict] = None,
+    ) -> Any: ...
+
+
+# ---------------------------------------------------------------------------
+# Injection seam — keyed by gap name (same strings as _GAP_FLAGS)
+# ---------------------------------------------------------------------------
+_gap_runners: Optional[dict] = None
+
+
+def set_gap_runners(runners: dict) -> None:
+    """Inject a mapping of ``{gap_name: GapRunnerProtocol}`` for testing."""
+    global _gap_runners
+    _gap_runners = runners
+
+
+def clear_gap_runners() -> None:
+    """Remove all injected gap runners, restoring default behaviour."""
+    global _gap_runners
+    _gap_runners = None
 
 
 _GAP_FLAGS = (
@@ -92,32 +132,43 @@ def run_wager2025_gaps(
 
     # ── Gap 1: Generalized-propensity overlap ────────────────────────
     if enabled["overlap"]:
-        try:
-            from sparc.causal.overlap import GeneralizedPropensityOverlap
-            rows = []
-            for t in treatments:
-                X = data[confounders].to_numpy(dtype=float) if confounders \
-                    else np.zeros((len(data), 1))
-                W = data[t].to_numpy(dtype=float)
-                est = GeneralizedPropensityOverlap(method="kernel").fit(X, W)
-                # Assess at zero-shift (in-distribution baseline density).
-                dens = float(np.median(est._density_train))
-                rows.append({
-                    "treatment": t,
-                    "median_density": dens,
-                    "p05_density": float(np.percentile(est._density_train, 5)),
-                    "p95_density": float(np.percentile(est._density_train, 95)),
-                })
-            if rows:
-                _save_json(
-                    os.path.join(output_dir, "overlap_diagnostics.json"),
-                    {"gap_id": 1, "rows": rows},
+        _runner = (_gap_runners or {}).get("overlap")
+        if _runner is not None:
+            try:
+                result = _runner.run(
+                    data=data, config=config, dag_def=dag_def, graph=graph,
+                    roles=roles, output_dir=output_dir, nuts_results=nuts_results,
                 )
-                print(f"    [Gap 1] overlap: {len(rows)} treatment(s) ✓")
-                summary["ran"]["overlap"] = len(rows)
-        except Exception as exc:
-            print(f"    [Gap 1] overlap FAILED: {exc}")
-            summary["failed"]["overlap"] = str(exc)
+                summary["ran"]["overlap"] = result
+            except Exception as exc:
+                summary["failed"]["overlap"] = str(exc)
+        else:
+            try:
+                from sparc.causal.overlap import GeneralizedPropensityOverlap
+                rows = []
+                for t in treatments:
+                    X = data[confounders].to_numpy(dtype=float) if confounders \
+                        else np.zeros((len(data), 1))
+                    W = data[t].to_numpy(dtype=float)
+                    est = GeneralizedPropensityOverlap(method="kernel").fit(X, W)
+                    # Assess at zero-shift (in-distribution baseline density).
+                    dens = float(np.median(est._density_train))
+                    rows.append({
+                        "treatment": t,
+                        "median_density": dens,
+                        "p05_density": float(np.percentile(est._density_train, 5)),
+                        "p95_density": float(np.percentile(est._density_train, 95)),
+                    })
+                if rows:
+                    _save_json(
+                        os.path.join(output_dir, "overlap_diagnostics.json"),
+                        {"gap_id": 1, "rows": rows},
+                    )
+                    print(f"    [Gap 1] overlap: {len(rows)} treatment(s) ✓")
+                    summary["ran"]["overlap"] = len(rows)
+            except Exception as exc:
+                print(f"    [Gap 1] overlap FAILED: {exc}")
+                summary["failed"]["overlap"] = str(exc)
     else:
         summary["skipped"]["overlap"] = "disabled"
 

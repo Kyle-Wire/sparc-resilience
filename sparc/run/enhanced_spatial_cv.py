@@ -88,9 +88,6 @@ def refresh_hardware_config(verbose: bool = True) -> dict:
     return HARDWARE_CONFIG
 
 
-# Initial population at import (uses any overrides already set on the resolver).
-refresh_hardware_config(verbose=True)
-
 # Spatial analysis imports
 from libpysal.weights import DistanceBand
 from esda.moran import Moran
@@ -108,14 +105,33 @@ from sparc.models.ols import OLSModel
 from sparc.models.gwr import GWRModel
 from sparc.models.gwrf import GWRFModel
 from sparc.models.ggpgam import GGPGAM_SVC
-from sparc.models.gwr_config import GWRConfig
-from sparc.models.gwrf_config import GWRFConfig
-from sparc.models.ggpgam_config import GGPGAMConfig
+from sparc.models.spec import ModelSpec
 from sparc.evaluation.evaluation import SpatialEvaluator
 from copy import deepcopy
 
-# Shared evaluator instance for benchmark metrics
+# Shared evaluator instance for benchmark metrics (default, created lazily on demand)
 _evaluator = SpatialEvaluator()
+
+# Injection seam — mirrors the _injected_store pattern in artifact_io.py
+_injected_evaluator = None  # set via set_evaluator() for tests / isolated runs
+
+
+def set_evaluator(evaluator) -> None:
+    """Inject a custom evaluator (e.g., a test stub) for the duration of a run."""
+    global _injected_evaluator
+    _injected_evaluator = evaluator
+
+
+def clear_evaluator() -> None:
+    """Remove the injected evaluator and restore the module-level default."""
+    global _injected_evaluator
+    _injected_evaluator = None
+
+
+def _get_evaluator():
+    """Return the active evaluator: injected one if set, else the module default."""
+    return _injected_evaluator if _injected_evaluator is not None else _evaluator
+
 
 # Global flag for OOF extraction — enabled now that oof_extraction_hooks is implemented
 EXTRACT_OOF_INTELLIGENCE = True
@@ -226,8 +242,12 @@ class EnhancedSpatialCV:
         # Centralised physics constraints from project.yml (or legacy defaults)
         self._monotone_constraints = load_monotone_constraints(self.base_config)
         # Hardware config: accept an explicit dict (for tests / overrides), else
-        # fall back to the module-level global populated at import time.
-        self._hw = hw if hw is not None else HARDWARE_CONFIG
+        # populate lazily from the hardware profile so import time is side-effect free.
+        if hw is not None:
+            self._hw = hw
+        else:
+            refresh_hardware_config(verbose=False)
+            self._hw = HARDWARE_CONFIG
 
     def _load_prior_trunk(self):
         """
@@ -497,14 +517,14 @@ class EnhancedSpatialCV:
             # Constrained regression is disabled during CV to avoid systematic
             # bias; sign constraints are applied post-hoc for interpretation only.
             _gwr_cfg_kwargs = {k: v for k, v in gwr_params.items()
-                               if k in GWRConfig.__dataclass_fields__}
+                               if k in ModelSpec.field_names("gwr")}
             _gwr_cfg_kwargs['use_constrained_regression'] = False
             _gwr_cfg_kwargs['sign_constraints'] = self._monotone_constraints
             if kernel_field is not None:
                 _gwr_cfg_kwargs['kernel_field'] = kernel_field
 
             try:
-                models.append(GWRModel.from_config(GWRConfig(**_gwr_cfg_kwargs)))
+                models.append(GWRModel.from_config(ModelSpec.from_kwargs("gwr", **_gwr_cfg_kwargs).as_gwr_config()))
             except Exception as e:
                 print(f"Warning: Failed to create GWR with configured params: {e}")
                 models.append(GWRModel(bandwidth=100, kernel='gaussian'))
@@ -546,12 +566,12 @@ class EnhancedSpatialCV:
             # Build a validated GWRFConfig — physics_signs flows in via config,
             # no post-instantiation attribute assignment needed.
             _gwrf_cfg_kwargs = {k: v for k, v in gwrf_params.items()
-                                if k in GWRFConfig.__dataclass_fields__}
+                                if k in ModelSpec.field_names("gwrf")}
             if kernel_field is not None:
                 _gwrf_cfg_kwargs['kernel_field'] = kernel_field
 
             try:
-                gwrf_cfg = GWRFConfig(**_gwrf_cfg_kwargs)
+                gwrf_cfg = ModelSpec.from_kwargs("gwrf", **_gwrf_cfg_kwargs).as_gwrf_config()
                 gwrf = GWRFModel.from_config(gwrf_cfg)
                 # physics_signs is injected here; GWRF stores it for downstream
                 # monotonicity diagnostics.
@@ -568,7 +588,7 @@ class EnhancedSpatialCV:
             # Build a validated GGPGAMConfig — physics_signs is a constructor
             # argument now, eliminating the post-instantiation assignment.
             _ggpgam_cfg_kwargs = {k: v for k, v in ggpgam_params.items()
-                                  if k in GGPGAMConfig.__dataclass_fields__}
+                                  if k in ModelSpec.field_names("ggpgam")}
             _ggpgam_cfg_kwargs['physics_signs'] = self._monotone_constraints
 
             print(f"GGPGAM Parameters (adaptive):")
@@ -577,7 +597,7 @@ class EnhancedSpatialCV:
                     print(f"  {k}: {v}")
 
             try:
-                models.append(GGPGAM_SVC.from_config(GGPGAMConfig(**_ggpgam_cfg_kwargs)))
+                models.append(GGPGAM_SVC.from_config(ModelSpec.from_kwargs("ggpgam", **_ggpgam_cfg_kwargs).as_ggpgam_config()))
             except Exception as e:
                 print(f"Warning: Failed to create GGPGAM with configured params: {e}")
                 ggpgam = GGPGAM_SVC()
@@ -934,12 +954,12 @@ class EnhancedSpatialCV:
                 # Append benchmark metrics when enabled
                 bm_cfg = {'enabled': self._cfg.benchmark_metrics_enabled}
                 if bm_cfg.get('enabled', False):
-                    nrmse = _evaluator.calculate_nrmse(y, oof_predictions[:, model_idx])
-                    pcorr = _evaluator.calculate_pattern_correlation(y, oof_predictions[:, model_idx])
-                    aratio = _evaluator.calculate_amplitude_ratio(y, oof_predictions[:, model_idx])
+                    nrmse = _get_evaluator().calculate_nrmse(y, oof_predictions[:, model_idx])
+                    pcorr = _get_evaluator().calculate_pattern_correlation(y, oof_predictions[:, model_idx])
+                    aratio = _get_evaluator().calculate_amplitude_ratio(y, oof_predictions[:, model_idx])
                     msg += f", nRMSE = {nrmse:.4f}, PatCorr = {pcorr:.4f}, AmpRatio = {aratio:.4f}"
                     # Extreme-value / tail metrics
-                    ext = _evaluator.calculate_extreme_metrics(y, oof_predictions[:, model_idx])
+                    ext = _get_evaluator().calculate_extreme_metrics(y, oof_predictions[:, model_idx])
                     msg += (f"\n        Tail-lo RMSE={ext['tail_low_rmse']:.4f}  "
                             f"Tail-hi RMSE={ext['tail_high_rmse']:.4f}  "
                             f"Extreme ratio={ext['extreme_rmse_ratio']:.2f}")
@@ -947,7 +967,7 @@ class EnhancedSpatialCV:
                     coords_arr = None
                     if hasattr(self, 'coords') and self.coords is not None:
                         coords_arr = self.coords
-                    bl = _evaluator.calculate_baseline_comparisons(
+                    bl = _get_evaluator().calculate_baseline_comparisons(
                         y, oof_predictions[:, model_idx], coords=coords_arr,
                     )
                     msg += (f"\n        Skill vs global-mean={bl['skill_vs_global_mean']:.4f}  "
@@ -1303,17 +1323,17 @@ class EnhancedSpatialCV:
                     perf = {'r2': model_r2, 'rmse': model_rmse, 'status': 'success'}
                     msg = f"{model_name.upper()}: R² = {model_r2:.4f}, RMSE = {model_rmse:.4f}"
                     if self._cfg.benchmark_metrics_enabled:
-                        perf['nrmse'] = _evaluator.calculate_nrmse(y, oof_predictions[:, i])
-                        perf['pattern_correlation'] = _evaluator.calculate_pattern_correlation(y, oof_predictions[:, i])
-                        perf['amplitude_ratio'] = _evaluator.calculate_amplitude_ratio(y, oof_predictions[:, i])
+                        perf['nrmse'] = _get_evaluator().calculate_nrmse(y, oof_predictions[:, i])
+                        perf['pattern_correlation'] = _get_evaluator().calculate_pattern_correlation(y, oof_predictions[:, i])
+                        perf['amplitude_ratio'] = _get_evaluator().calculate_amplitude_ratio(y, oof_predictions[:, i])
                         msg += f", nRMSE = {perf['nrmse']:.4f}, PatCorr = {perf['pattern_correlation']:.4f}, AmpRatio = {perf['amplitude_ratio']:.4f}"
-                        ext = _evaluator.calculate_extreme_metrics(y, oof_predictions[:, i])
+                        ext = _get_evaluator().calculate_extreme_metrics(y, oof_predictions[:, i])
                         perf.update(ext)
                         msg += (f"\n        Tail-lo RMSE={ext['tail_low_rmse']:.4f}  "
                                 f"Tail-hi RMSE={ext['tail_high_rmse']:.4f}  "
                                 f"Extreme ratio={ext['extreme_rmse_ratio']:.2f}")
                         coords_arr = getattr(self, 'coords', None)
-                        bl = _evaluator.calculate_baseline_comparisons(
+                        bl = _get_evaluator().calculate_baseline_comparisons(
                             y, oof_predictions[:, i], coords=coords_arr,
                         )
                         perf.update(bl)
@@ -1514,17 +1534,17 @@ class EnhancedSpatialCV:
             perf = {'r2': model_r2, 'rmse': model_rmse}
             msg = f"{model_name.upper()}: R² = {model_r2:.4f}, RMSE = {model_rmse:.4f}"
             if self._cfg.benchmark_metrics_enabled:
-                perf['nrmse'] = _evaluator.calculate_nrmse(y, oof_predictions[:, i])
-                perf['pattern_correlation'] = _evaluator.calculate_pattern_correlation(y, oof_predictions[:, i])
-                perf['amplitude_ratio'] = _evaluator.calculate_amplitude_ratio(y, oof_predictions[:, i])
+                perf['nrmse'] = _get_evaluator().calculate_nrmse(y, oof_predictions[:, i])
+                perf['pattern_correlation'] = _get_evaluator().calculate_pattern_correlation(y, oof_predictions[:, i])
+                perf['amplitude_ratio'] = _get_evaluator().calculate_amplitude_ratio(y, oof_predictions[:, i])
                 msg += f", nRMSE = {perf['nrmse']:.4f}, PatCorr = {perf['pattern_correlation']:.4f}, AmpRatio = {perf['amplitude_ratio']:.4f}"
-                ext = _evaluator.calculate_extreme_metrics(y, oof_predictions[:, i])
+                ext = _get_evaluator().calculate_extreme_metrics(y, oof_predictions[:, i])
                 perf.update(ext)
                 msg += (f"\n        Tail-lo RMSE={ext['tail_low_rmse']:.4f}  "
                         f"Tail-hi RMSE={ext['tail_high_rmse']:.4f}  "
                         f"Extreme ratio={ext['extreme_rmse_ratio']:.2f}")
                 coords_arr = getattr(self, 'coords', None)
-                bl = _evaluator.calculate_baseline_comparisons(
+                bl = _get_evaluator().calculate_baseline_comparisons(
                     y, oof_predictions[:, i], coords=coords_arr,
                 )
                 perf.update(bl)

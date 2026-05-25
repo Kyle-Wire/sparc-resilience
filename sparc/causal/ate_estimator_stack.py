@@ -30,6 +30,35 @@ from typing import Any, Optional
 
 import numpy as np
 
+
+# ---------------------------------------------------------------------------
+# Error taxonomy
+# ---------------------------------------------------------------------------
+
+class EstimatorError(Exception):
+    """Base class for typed ATE estimator failures.
+
+    Raised by individual ``_run_*`` methods when a failure can be
+    classified.  ``ATEEstimatorStack.estimate()`` always catches these
+    and populates ``ATEResult["failure_reasons"]``; they are never
+    propagated to the caller.
+    """
+
+
+class DependencyMissing(EstimatorError):
+    """A required optional dependency (e.g. ``econml``, ``dowhy``) is
+    not installed or cannot be imported."""
+
+
+class NumericalInstability(EstimatorError):
+    """Computation failed due to degenerate data (near-zero variance,
+    rank-deficient matrix, etc.)."""
+
+
+class InvalidInput(EstimatorError):
+    """A required column is absent from the data, or the data does not
+    meet minimum size / type requirements for this estimator."""
+
 try:
     import pandas as pd
     _HAS_PANDAS = True
@@ -139,12 +168,26 @@ class ATEEstimatorStack:
             was disabled.
         """
         result = ATEResult.empty()
+        failure_reasons: dict[str, str] = {}
 
-        result["ate_backdoor"] = self._run_backdoor(treatment, outcome, confounders, data)
-        result["ate_ipw"] = self._run_ipw(treatment, outcome, confounders, data)
-        result["ate_gps"] = self._run_gps(treatment, outcome, confounders, data)
-        result["att_matching"] = self._run_matching(treatment, outcome, confounders, data)
-        result["ate_doubly_robust"] = self._run_dr(treatment, outcome, confounders, data)
+        _estimators = [
+            ("ate_backdoor",    lambda: self._run_backdoor(treatment, outcome, confounders, data)),
+            ("ate_ipw",         lambda: self._run_ipw(treatment, outcome, confounders, data)),
+            ("ate_gps",         lambda: self._run_gps(treatment, outcome, confounders, data)),
+            ("att_matching",    lambda: self._run_matching(treatment, outcome, confounders, data)),
+            ("ate_doubly_robust", lambda: self._run_dr(treatment, outcome, confounders, data)),
+        ]
+
+        for key, fn in _estimators:
+            try:
+                result[key] = fn()
+            except EstimatorError as exc:
+                result[key] = None
+                failure_reasons[key] = str(exc)
+                log.debug("ATEEstimatorStack %s: %s", key, exc)
+
+        if failure_reasons:
+            result["failure_reasons"] = failure_reasons
 
         all_none = all(result[k] is None for k in ATEResult.__required_keys__ - {"error"})
         if all_none:
@@ -164,11 +207,24 @@ class ATEEstimatorStack:
         data: Any,
     ) -> Optional[float]:
         """OLS backdoor ATE via DoWhy (falls back to sklearn LinearRegression)."""
+        if treatment not in data.columns:
+            raise InvalidInput(
+                f"Treatment column '{treatment}' not found in data "
+                f"(available: {list(data.columns)})"
+            )
+        if outcome not in data.columns:
+            raise InvalidInput(
+                f"Outcome column '{outcome}' not found in data "
+                f"(available: {list(data.columns)})"
+            )
         try:
             from sklearn.linear_model import LinearRegression
+        except ImportError as exc:
+            raise DependencyMissing(
+                f"sklearn is required for the backdoor estimator: {exc}"
+            ) from exc
+        try:
             avail = [c for c in [treatment] + confounders if c in data.columns]
-            if treatment not in avail:
-                return None
             lr = LinearRegression()
             lr.fit(data[avail], data[outcome])
             idx = avail.index(treatment)

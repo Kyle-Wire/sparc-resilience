@@ -16,11 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 import tempfile
 import time
 import urllib.request
+
+logger = logging.getLogger("sparc.server")
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -97,8 +100,10 @@ async def _get_jwks() -> dict | None:
             )
             _jwks_cache = json.loads(raw)
             _jwks_fetched_at = time.monotonic()
-        except Exception:
-            pass  # Return stale cache on error
+        except (urllib.error.URLError, OSError, json.JSONDecodeError):
+            pass  # Transport / parse errors — silenced, return stale cache
+        except Exception as exc:
+            logger.warning("JWKS fetch unexpected error: %s", exc)
         return _jwks_cache
 
 
@@ -200,6 +205,18 @@ def _resolve_safe(raw: str, *, allow_create: bool = False) -> Path:
     return resolved
 
 
+def _safe_error(exc: Exception, *, context: str = "") -> HTTPException:
+    """Return a generic 500 HTTPException that does not expose internal details.
+
+    The original exception and context are logged server-side so operators can
+    trace the error without leaking file paths or implementation details to
+    HTTP clients.
+    """
+    log_msg = f"{context}: {exc}" if context else str(exc)
+    logger.error("internal error — %s", log_msg, exc_info=exc)
+    return HTTPException(status_code=500, detail="An internal error occurred.")
+
+
 state = ServerState()
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
@@ -299,7 +316,7 @@ def _attach_registry(config: dict) -> None:
         try:
             reg.migrate_from_disk(paths)
         except Exception as exc:  # noqa: BLE001
-            print(f"Warning: registry migration failed: {exc}")
+            logger.warning("registry migration failed: %s", exc)
         # Detach previous listener (if any) before swapping registries.
         prev = state.registry
         if prev is not None:
@@ -310,7 +327,7 @@ def _attach_registry(config: dict) -> None:
         try:
             reg.add_register_listener(_on_artifact_registered)
         except Exception as exc:  # noqa: BLE001
-            print(f"Warning: could not attach artifact listener: {exc}")
+            logger.warning("could not attach artifact listener: %s", exc)
         state.registry = reg
         # Clear stale cached results from the previous project.
         state.result_cache.clear()
@@ -321,9 +338,9 @@ def _attach_registry(config: dict) -> None:
             from sparc.registry.run_registry import set_active_registry
             set_active_registry(reg)
         except Exception as exc:  # noqa: BLE001
-            print(f"Warning: could not set active registry: {exc}")
+            logger.warning("could not set active registry: %s", exc)
     except Exception as exc:  # noqa: BLE001
-        print(f"Warning: could not attach RunRegistry: {exc}")
+        logger.warning("could not attach RunRegistry: %s", exc)
         state.registry = None
         try:
             from sparc.registry.run_registry import set_active_registry
@@ -361,15 +378,15 @@ def _on_artifact_registered(entry: Any) -> None:
     }
     try:
         state.buffer_event(event)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("_on_artifact_registered buffer_event failed: %s", exc)
     # Invalidate cached results for this stage so the next read re-fetches.
     try:
         stage_str = str(getattr(entry, "stage", ""))
         if stage_str:
             state.result_cache.invalidate_stage(stage_str)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("_on_artifact_registered cache invalidation failed: %s", exc)
     # Fan out to live ws subscribers via the broadcaster.
     _broadcaster.broadcast(event)
 
@@ -467,6 +484,9 @@ def _prewarm_results(cancel: _threading.Event) -> None:
     that any frontend fetch hits the cache instead of blocking a request thread.
     """
     try:
+        # _open_store() raises HTTPException(400) when no project/registry is
+        # loaded — silenced here since prewarm is a best-effort background task.
+        store = _open_store()
         reg = state.registry
         if reg is None:
             return
@@ -474,7 +494,6 @@ def _prewarm_results(cancel: _threading.Event) -> None:
         # Drive from the live manifest — no static catalog or consumer-tag filter.
         frontend_ids = prewarm_ids(reg.manifest)
 
-        store = _open_store()
         for stage, artifact_id in frontend_ids:
             if cancel.is_set():
                 return
@@ -489,8 +508,10 @@ def _prewarm_results(cancel: _threading.Event) -> None:
                 # Missing or unreadable artifact — not an error during pre-warm.
                 pass
 
+    except HTTPException:
+        return  # No project/registry loaded — expected before /project/load
     except Exception as exc:
-        print(f"[prewarm] failed: {exc}")
+        logger.warning("prewarm failed: %s", exc)
 
 
 def _start_prewarm() -> None:
@@ -520,7 +541,7 @@ async def _auto_load_project():
         return
     resolved = Path(project_env).resolve()
     if not resolved.exists():
-        print(f"Warning: SPARC_SERVER_PROJECT file not found: {resolved}")
+        logger.warning("SPARC_SERVER_PROJECT file not found: %s", resolved)
         return
     try:
         from sparc.config.config import load_config
@@ -534,24 +555,27 @@ async def _auto_load_project():
         _attach_registry(config)
         _load_data_into_state(config)
         _start_prewarm()
-        print(f"Auto-loaded project: {resolved}")
+        logger.info("Auto-loaded project: %s", resolved)
     except Exception as exc:
-        print(f"Warning: auto-load failed for {resolved}: {exc}")
+        logger.warning("auto-load failed for %s: %s", resolved, exc)
 
 
 # ------------------------------------------------------------------
-# Health
+# Route modules — imported and mounted here so they can be tested
+# independently.  The inline routes below remain for features not yet
+# migrated to a router module.
 # ------------------------------------------------------------------
+from sparc.server.routes.health import router as _health_router
+from sparc.server.routes.project import router as _project_router
+from sparc.server.routes.data import router as _data_router
 
-@app.get("/health")
-async def health():
-    return {
-        "status": "ok",
-        "project_loaded": state.project_config is not None,
-        "is_running": state.is_running,
-        "current_stage": state.current_stage,
-        "manifest_loaded": state.registry is not None,
-    }
+app.include_router(_health_router)
+app.include_router(_project_router)
+app.include_router(_data_router)
+
+# ------------------------------------------------------------------
+# Health  (REMOVED — now served by routes.health)
+# ------------------------------------------------------------------
 
 
 # ------------------------------------------------------------------
@@ -597,7 +621,7 @@ async def shutdown(request: Request):
         try:
             os.kill(os.getpid(), signal.SIGINT)
         except Exception as exc:  # pragma: no cover - defensive
-            print(f"Failed to deliver SIGINT during /shutdown: {exc}")
+            logger.warning("failed to deliver SIGINT during /shutdown: %s", exc)
 
     asyncio.create_task(_terminate_soon())
     return {"status": "shutting down"}
@@ -614,7 +638,7 @@ async def _on_shutdown() -> None:
     try:
         _broadcaster.broadcast({"type": "server_shutdown"})
     except Exception as exc:
-        print(f"Shutdown: broadcaster drain failed: {exc}")
+        logger.warning("shutdown: broadcaster drain failed: %s", exc)
 
     # Release the cached scenario GeoDataFrame(s) so the file handle is
     # closed before PyInstaller's `_MEI` cleanup runs.
@@ -630,9 +654,9 @@ async def _on_shutdown() -> None:
         if callable(close):
             close()
     except Exception as exc:
-        print(f"Shutdown: registry close failed: {exc}")
+        logger.warning("shutdown: registry close failed: %s", exc)
 
-    print("SPARC server shutdown complete")
+    logger.info("SPARC server shutdown complete")
 
 
 @app.get("/api/hardware")
@@ -886,7 +910,7 @@ async def export_block(req: BlockExportRequest):
     try:
         paths = PipelinePaths.from_config(state.project_config)
     except Exception as exc:
-        raise HTTPException(500, f"Cannot resolve paths: {exc}")
+        raise _safe_error(exc, context="export: resolve paths")
 
     exports_dir = paths.output_dir / "exports"
     exports_dir.mkdir(parents=True, exist_ok=True)
@@ -979,7 +1003,7 @@ async def ai_key_save(body: dict[str, Any] = Body(...)):
     try:
         _keyring_set(key)
     except Exception as exc:
-        raise HTTPException(500, f"Failed to store key in OS keychain: {exc}")
+        raise _safe_error(exc, context="credentials: keychain store")
     return {"status": "saved"}
 
 
@@ -1380,6 +1404,13 @@ async def crs_distortion(
     if not projected_epsg:
         raise HTTPException(400, "projected_epsg is required")
 
+    from sparc.server.crs_validation import validate_epsg
+    try:
+        input_code = validate_epsg(input_epsg)
+        projected_code = validate_epsg(projected_epsg)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
     try:
         from pyproj import Transformer, CRS
         import numpy as np
@@ -1404,10 +1435,8 @@ async def crs_distortion(
                 cy = (bb["miny"] + bb["maxy"]) / 2
 
         # Short-circuit: same CRS → no distortion
-        norm_in = input_epsg.replace("EPSG:", "").strip()
-        norm_proj = projected_epsg.replace("EPSG:", "").strip()
-        if norm_in == norm_proj:
-            src_crs = CRS.from_epsg(int(norm_in))
+        if input_code == projected_code:
+            src_crs = CRS.from_epsg(input_code)
             return {
                 "center_lon": cx,
                 "center_lat": cy,
@@ -1425,8 +1454,8 @@ async def crs_distortion(
         delta_deg = 0.001  # ~100m along latitude
         try:
             t = Transformer.from_crs(
-                f"EPSG:{input_epsg.replace('EPSG:', '')}",
-                f"EPSG:{projected_epsg.replace('EPSG:', '')}",
+                f"EPSG:{input_code}",
+                f"EPSG:{projected_code}",
                 always_xy=True,
             )
             x0, y0 = t.transform(cx, cy)
@@ -1441,7 +1470,7 @@ async def crs_distortion(
 
             # If projected CRS has angular units (i.e. it is also geographic),
             # convert projected delta from degrees to metres using geod distances.
-            tgt_crs_obj = CRS.from_epsg(int(norm_proj))
+            tgt_crs_obj = CRS.from_epsg(projected_code)
             tgt_is_angular = tgt_crs_obj.axis_info[0].unit_name in ("degree", "grad")
             if tgt_is_angular:
                 # Both input and output are in degrees — distances are the same
@@ -1453,8 +1482,8 @@ async def crs_distortion(
             k_mean = (k_x + k_y) / 2
             area_distortion_pct = float(abs(k_mean ** 2 - 1) * 100)
 
-            src_crs = CRS.from_epsg(int(input_epsg.replace("EPSG:", "")))
-            tgt_crs = CRS.from_epsg(int(projected_epsg.replace("EPSG:", "")))
+            src_crs = CRS.from_epsg(input_code)
+            tgt_crs = CRS.from_epsg(projected_code)
 
             return {
                 "center_lon": cx,
@@ -1809,7 +1838,7 @@ async def preprocess_data():
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
         except Exception as _exc:
-            print(f"  Preprocess step 2 (CRS): {_exc}")
+            logger.warning("preprocess step 2 (CRS): %s", _exc)
         sha = _hash_df(df)
         step_hashes["reproject_crs"] = sha
         yield _sse("Reproject CRS", len(df), sha)
@@ -1822,7 +1851,7 @@ async def preprocess_data():
             before = len(df)
             df = df.drop_duplicates(subset=coord_cols)
             if before != len(df):
-                print(f"  Deduplication: removed {before - len(df)} duplicate coord rows")
+                logger.debug("deduplication: removed %d duplicate coord rows", before - len(df))
         sha = _hash_df(df)
         step_hashes["deduplicate_coords"] = sha
         yield _sse("Deduplicate coords", len(df), sha)
@@ -1844,7 +1873,7 @@ async def preprocess_data():
             before = len(df)
             df = df.dropna(subset=essential)
             if before != len(df):
-                print(f"  Impute: dropped {before - len(df)} rows with missing essential values")
+                logger.debug("impute: dropped %d rows with missing essential values", before - len(df))
         sha = _hash_df(df)
         step_hashes["impute_missing"] = sha
         yield _sse("Impute missing", len(df), sha)
@@ -1871,9 +1900,9 @@ async def preprocess_data():
                 artifacts_dir.mkdir(parents=True, exist_ok=True)
                 scaler_path = artifacts_dir / "welford_scaler.pkl"
                 scaler.save(scaler_path)
-                print(f"  Welford scaler saved to {scaler_path}")
+                logger.debug("Welford scaler saved to %s", scaler_path)
         except Exception as _exc:
-            print(f"  Preprocess step 6 (standardise): {_exc}")
+            logger.warning("preprocess step 6 (standardise): %s", _exc)
         sha = _hash_df(df)
         step_hashes["standardise"] = sha
         yield _sse("Standardise (z-score)", len(df), sha)
@@ -1889,9 +1918,9 @@ async def preprocess_data():
         try:
             cache_path = project_dir / "data_cache.parquet"
             df.to_parquet(cache_path, engine="pyarrow", index=False)
-            print(f"  Arrow cache written to {cache_path}")
+            logger.debug("arrow cache written to %s", cache_path)
         except Exception as _exc:
-            print(f"  Preprocess step 8 (arrow cache): {_exc}")
+            logger.warning("preprocess step 8 (arrow cache): %s", _exc)
         sha = _hash_df(df)
         step_hashes["write_arrow"] = sha
         yield _sse("Write cached arrow", len(df), sha)
@@ -1907,7 +1936,7 @@ async def preprocess_data():
                 settings={"step_hashes": step_hashes},
             )
         except Exception as _exc:
-            print(f"  Preprocess: versioning failed: {_exc}")
+            logger.warning("preprocess: versioning failed: %s", _exc)
 
         # Update live state
         state.data = df
@@ -2064,6 +2093,49 @@ async def run_artifacts(ws: WebSocket, token: str = Query(default="")):
             await ws.close()
 
 
+@app.websocket("/run/stream")
+async def run_stream(ws: WebSocket, token: str = Query(default="")):
+    """Subscribe to live artifact-written events over WebSocket.
+
+    Handshake:
+      1. Client sends  ``{"subscribe": "artifacts"}``
+      2. Server replies ``{"type": "subscribed"}``
+      3. Server pushes  ``{"type": "artifact_written", ...}`` for each new artifact.
+
+    Connection stays open until the client disconnects.
+    """
+    if _SERVER_TOKEN is not None and token != _SERVER_TOKEN:
+        await ws.close(code=4003)
+        return
+    await ws.accept()
+
+    try:
+        msg = await ws.receive_json()
+    except WebSocketDisconnect:
+        return
+
+    channel = msg.get("subscribe", "")
+    if channel != "artifacts":
+        await ws.close(code=4001)
+        return
+
+    await ws.send_json({"type": "subscribed"})
+
+    artifact_queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+    unsub = _broadcaster.subscribe(artifact_queue, loop=loop)
+    try:
+        while True:
+            event = await artifact_queue.get()
+            await ws.send_json(event)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        unsub()
+        if ws.client_state.name != "DISCONNECTED":
+            await ws.close()
+
+
 @app.get("/run/events")
 async def get_run_events():
     """Return buffered events for the current (or most recent) pipeline run.
@@ -2120,7 +2192,7 @@ async def get_runs_diff(
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc))
     except Exception as exc:
-        raise HTTPException(500, f"Diff failed: {exc}")
+        raise _safe_error(exc, context="runs: diff")
 
 
 # ------------------------------------------------------------------
@@ -2151,7 +2223,7 @@ async def post_reproduce_freeze():
         paths = PipelinePaths.from_config(state.project_config)
         out = paths.output_dir
     except Exception as exc:
-        raise HTTPException(500, f"Cannot resolve output_dir: {exc}")
+        raise _safe_error(exc, context="reproduce: resolve output_dir")
     repo_root = Path(__file__).resolve().parents[2]
     p = freeze_run(out, state.project_config, repo_root=repo_root)
     return {"path": str(p), "output_dir": str(out)}
@@ -2385,7 +2457,7 @@ async def post_scenarios_chain(payload: dict = Body(...)):
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(500, f"Chain rollout failed: {exc}") from exc
+        raise _safe_error(exc, context="scenarios: chain rollout") from exc
 
 
 # ------------------------------------------------------------------
@@ -2451,8 +2523,8 @@ async def get_context_layers(domain: str | None = Query(default=None)):
 
 @app.post("/report/audience")
 async def post_report_audience(
-    audience: str = Query(..., regex="^(technical|planner|public)$"),
-    fmt: str = Query("html", regex="^(md|html|pdf)$"),
+    audience: str = Query(..., pattern="^(technical|planner|public)$"),
+    fmt: str = Query("html", pattern="^(md|html|pdf)$"),
     payload: dict | None = Body(default=None),
 ):
     """Render a SPARC run for a specific audience.
@@ -4443,6 +4515,11 @@ async def get_scenario_increment(variable: str = Query(...), increment: float = 
 # ------------------------------------------------------------------
 
 
+# Maximum number of IDs accepted by GET /results/batch — prevents DoS via
+# oversized comma-separated lists that would each trigger a DB lookup.
+_BATCH_IDS_MAX: int = 50
+
+
 @app.get("/results/batch")
 async def get_batch_results(
     ids: str = Query(
@@ -4465,6 +4542,8 @@ async def get_batch_results(
         if ":" in token:
             stage, artifact_id = token.split(":", 1)
             pairs.append((stage.strip(), artifact_id.strip()))
+    if len(pairs) > _BATCH_IDS_MAX:
+        raise HTTPException(413, f"Too many IDs: max {_BATCH_IDS_MAX} per request")
     store = _open_store()
     return await asyncio.to_thread(read_batch, store, pairs)
 
@@ -4818,7 +4897,7 @@ async def get_results_bundle():
 # ------------------------------------------------------------------
 
 @app.get("/results/{stage:int}")
-async def get_results(stage: int, format: str = Query("json", regex="^(json|geojson)$")):
+async def get_results(stage: int, format: str = Query("json", pattern="^(json|geojson)$")):
     """Return in-memory results for a completed pipeline stage (DB-only).
 
     For artifact-style data use the dedicated `/results/<name>` endpoints.
@@ -4840,7 +4919,7 @@ async def get_results(stage: int, format: str = Query("json", regex="^(json|geoj
 
 
 @app.get("/results/{stage:int}/predictions")
-async def get_predictions(stage: int, format: str = Query("geojson", regex="^(json|geojson)$")):
+async def get_predictions(stage: int, format: str = Query("geojson", pattern="^(json|geojson)$")):
     """Return spatial predictions for a stage (DB-only).
 
     Mapping:
@@ -5003,7 +5082,7 @@ async def run_scenarios(body: Optional[RunScenariosBody] = Body(default=None)):
                     violations = checker.check(data, deltas, target_deltas=target_deltas, verbose=True)
                     conservation_violations.extend(violations)
     except Exception as e:
-        print(f"  [CONSERVATION] Check skipped ({e})")
+        logger.warning("[CONSERVATION] check skipped: %s", e)
 
     state.store_result(4, {"summary": summary_df, "spatial": results_gdf})
 
@@ -5263,7 +5342,7 @@ async def get_equity_layer():
 
 
 @app.get("/scenarios/results")
-async def scenario_results(format: str = Query("geojson", regex="^(json|geojson)$")):
+async def scenario_results(format: str = Query("geojson", pattern="^(json|geojson)$")):
     """Return scenario simulation results."""
     result = state.get_result(4)
     if result is None:
@@ -5440,7 +5519,7 @@ async def physics_defaults():
             k: c.to_dict() for k, c in pp.coefficients.items()
         }
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _safe_error(e, context="scenarios: pde coefficients")
 
 
 # ------------------------------------------------------------------
@@ -5624,7 +5703,7 @@ async def prepare_data_pipeline(body: dict = Body(...)):
 # ------------------------------------------------------------------
 
 @app.post("/report/generate")
-async def generate_report(format: str = Query("markdown", regex="^(markdown|json)$")):
+async def generate_report(format: str = Query("markdown", pattern="^(markdown|json)$")):
     """Generate a pipeline report summarising config, data, and results.
 
     Returns Markdown by default; JSON structure when ``format=json``.
@@ -6192,7 +6271,7 @@ async def post_dag_suggest_edges(payload: dict = Body(default={})):
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(500, f"Edge suggestion failed: {exc}") from exc
+        raise _safe_error(exc, context="causal: edge suggestion") from exc
 
 
 # ------------------------------------------------------------------
@@ -6593,7 +6672,7 @@ async def download_geopackage():
         for layer_name, gdf in layers.items():
             gdf.to_file(tmp_path, layer=layer_name, driver="GPKG")
     except Exception as exc:
-        raise HTTPException(500, f"GeoPackage creation failed: {exc}")
+        raise _safe_error(exc, context="export: geopackage creation")
 
     return FileResponse(
         tmp_path,
@@ -6656,7 +6735,7 @@ def _load_data_into_state(config: dict) -> None:
         state.result_cache.invalidate_stage("data_geojson")
         _compute_summary(state)
     except Exception as exc:
-        print(f"Warning: data pre-load failed: {exc}")
+        logger.warning("data pre-load failed: %s", exc)
 
 
 def _compute_summary(st: ServerState) -> dict:
@@ -6821,7 +6900,7 @@ def download_artifact(stage: str, artifact_id: str, fmt: Optional[str] = None):
     try:
         path = store.export(stage, artifact_id, fmt=fmt)
     except Exception as exc:
-        raise HTTPException(500, f"Export failed: {exc}") from exc
+        raise _safe_error(exc, context="export: artifact") from exc
     suffix = path.suffix.lstrip(".") or "bin"
     media = {
         "csv": "text/csv",
@@ -6851,7 +6930,7 @@ def export_stage_zip(stage: str):
         if not isinstance(zip_path, Path):
             raise RuntimeError("export_stage did not return a zip path")
     except Exception as exc:
-        raise HTTPException(500, f"Stage export failed: {exc}") from exc
+        raise _safe_error(exc, context="export: stage artifacts") from exc
     return _FileResponse(
         zip_path,
         media_type="application/zip",
@@ -6885,7 +6964,10 @@ def list_stage_artifacts(stage: str):
 # Data Collection endpoints  (/collect/*)
 # ===========================================================================
 
-_collect_session: dict = {}   # in-memory session state for the active build run
+import sparc.data.collect.adapters as _adapters_module  # noqa: F401 — side-effect: registers all adapters
+from sparc.data.collect.session import CollectSession
+
+_collect_session: CollectSession = CollectSession()
 
 
 @app.post("/collect/boundary")
@@ -6912,7 +6994,7 @@ async def collect_boundary(body: dict = Body(...)):
     except RuntimeError as exc:
         raise HTTPException(502, str(exc))
 
-    _collect_session["boundary"] = result
+    _collect_session.set_boundary(result)
 
     # Return boundary as GeoJSON + bbox for the desktop map
     gdf_json = result.gdf.to_crs("EPSG:4326").to_json()  # type: ignore[union-attr]
@@ -6928,9 +7010,7 @@ async def collect_boundary(body: dict = Body(...)):
 @app.get("/collect/manifest")
 async def collect_manifest():
     """Return the current variable manifest state."""
-    from sparc.data.collect.manifest import VariableManifest
-    manifest: VariableManifest = _collect_session.get("manifest") or VariableManifest.for_uhi()
-    return manifest.to_api_dict()
+    return _collect_session.manifest.to_api_dict()
 
 
 @app.post("/collect/fetch")
@@ -6939,197 +7019,60 @@ async def collect_fetch(body: dict = Body(...)):
 
     Body keys:
       group : str  — one of "landsat" | "nlcd" | "era5" | "capa" |
-                             "buildings" | "equity"
+                             "buildings" | "equity" | "sentinel2"
       config : dict — fetch parameters (date_start, date_end, cloud_cover_max,
                       temporal_mode, enabled_indices, lidar_path, dsm_path)
 
     Returns the updated manifest entry for the requested group.
     """
-    from sparc.data.collect.manifest import VariableManifest
     from sparc.data.collect.boundary import BoundaryResult
 
-    boundary: BoundaryResult | None = _collect_session.get("boundary")
-    if boundary is None:
+    if _collect_session.boundary is None:
         raise HTTPException(400, "Resolve boundary first via POST /collect/boundary")
 
-    manifest: VariableManifest = _collect_session.setdefault(
-        "manifest", VariableManifest.for_uhi()
-    )
-    fishnet = _collect_session.get("fishnet")
-    if fishnet is None:
-        from sparc.data.processing import create_fishnet, clip_to_boundary
-        boundary_proj = boundary.gdf.to_crs("EPSG:3857")
-        bounds = tuple(boundary_proj.total_bounds)
-        fishnet = create_fishnet(bounds, resolution=30.0, crs="EPSG:3857")
-        fishnet = clip_to_boundary(fishnet, boundary_proj)
-        fishnet["cell_id"] = range(len(fishnet))
-        fishnet["cell_x"] = fishnet.geometry.centroid.x
-        fishnet["cell_y"] = fishnet.geometry.centroid.y
-        _collect_session["fishnet"] = fishnet
+    if _collect_session.fishnet is None:
+        raise HTTPException(400, "Fishnet not initialised — call /collect/boundary first")
 
     group = body.get("group", "")
     cfg   = body.get("config", {})
 
+    # Inject the current anchor_dates into cfg so adapters have access
+    # to the temporal window that CAPA already discovered.
+    if _collect_session.anchor_dates:
+        from sparc.data.collect._temporal import TemporalWindow
+        from datetime import date as _date
+        ds = _date.fromisoformat(cfg.get("date_start", "2022-06-01"))
+        de = _date.fromisoformat(cfg.get("date_end", "2022-08-31"))
+        cfg = dict(cfg, window=TemporalWindow.from_capa_dates(
+            _collect_session.anchor_dates, date_start=ds, date_end=de
+        ))
+
     try:
-        fishnet = await _run_group_fetch(group, fishnet, boundary, manifest, cfg)
-        _collect_session["fishnet"] = fishnet
+        import asyncio
+        from sparc.data.collect.dispatch import sync_group_fetch
+        result = await asyncio.to_thread(
+            sync_group_fetch,
+            group,
+            _collect_session.fishnet,
+            _collect_session.boundary,
+            _collect_session.manifest,
+            cfg,
+        )
+        _collect_session.apply_fetch(result)
+        if result.error:
+            raise HTTPException(502, f"Fetch failed for group '{group}': {result.error}")
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(500, f"Fetch failed for group '{group}': {exc}")
+        raise _safe_error(exc, context=f"data: fetch group '{group}'")
 
     return {
         "group": group,
-        "manifest": manifest.to_api_dict(),
-        "n_cells": len(fishnet),
+        "manifest": _collect_session.manifest.to_api_dict(),
+        "n_cells": len(_collect_session.fishnet),
     }
 
 
-async def _run_group_fetch(
-    group: str,
-    fishnet: object,
-    boundary: object,
-    manifest: object,
-    cfg: dict,
-) -> object:
-    """Dispatch a group fetch in a thread pool (avoids blocking the event loop)."""
-    import asyncio
-    return await asyncio.to_thread(_sync_group_fetch, group, fishnet, boundary, manifest, cfg)
-
-
-def _sync_group_fetch(group, fishnet, boundary, manifest, cfg):
-    """Synchronous group fetch — runs in asyncio.to_thread."""
-    from datetime import date as _date
-    from sparc.data.collect.boundary import BoundaryResult
-
-    bbox = boundary.bbox  # type: ignore[union-attr]
-
-    if group == "landsat":
-        from sparc.data.collect.landsat import fetch_landsat
-        ds = _date.fromisoformat(cfg.get("date_start", "2022-06-01"))
-        de = _date.fromisoformat(cfg.get("date_end", "2022-08-31"))
-        fishnet, scene_dates = fetch_landsat(
-            fishnet, bbox, ds, de,
-            cloud_cover_max=float(cfg.get("cloud_cover_max", 20)),
-            temporal_mode=cfg.get("temporal_mode", "composite"),
-            enabled_indices=cfg.get("enabled_indices"),
-        )
-        _collect_session["scene_dates"] = scene_dates
-        for idx in cfg.get("enabled_indices") or ["lst", "ndvi"]:
-            if idx in fishnet.columns:
-                cov = float(fishnet[idx].notna().sum()) / max(len(fishnet), 1)
-                manifest.update(idx, coverage_pct=cov, source_name="USGS STAC Landsat C2")  # type: ignore[union-attr]
-
-    elif group == "nlcd":
-        from sparc.data.collect.nlcd import fetch_nlcd
-        fishnet = fetch_nlcd(fishnet, bbox)
-        for col in ("pct_impervious", "pct_canopy", "land_cover"):
-            cov = float(fishnet[col].notna().sum()) / max(len(fishnet), 1) if col in fishnet.columns else 0.0
-            manifest.update(col, coverage_pct=cov, source_name="MRLC WCS NLCD 2021")  # type: ignore[union-attr]
-
-    elif group == "era5":
-        from sparc.data.collect.era5 import fetch_era5
-        ds = _date.fromisoformat(cfg.get("date_start", "2022-06-01"))
-        de = _date.fromisoformat(cfg.get("date_end", "2022-08-31"))
-        fishnet = fetch_era5(fishnet, bbox, ds, de)
-        cov = float(fishnet["era5_t2m"].notna().sum()) / max(len(fishnet), 1) if "era5_t2m" in fishnet.columns else 0.0
-        manifest.update("era5_t2m", coverage_pct=cov, source_name="Open-Meteo ERA5")  # type: ignore[union-attr]
-
-    elif group == "capa":
-        scene_dates = _collect_session.get("scene_dates", [])
-        if not scene_dates:
-            # Landsat has not run yet (or failed).  Generate synthetic scene dates
-            # within the configured window using the 16-day Landsat repeat cycle so
-            # CAPA can still be fetched independently.
-            from datetime import timedelta as _td
-            ds = _date.fromisoformat(cfg.get("date_start", "2022-06-01"))
-            de = _date.fromisoformat(cfg.get("date_end", "2022-08-31"))
-            cur = ds
-            while cur <= de:
-                scene_dates.append(cur)
-                cur = cur + _td(days=16)
-        from sparc.data.collect.capa import fetch_capa
-        fishnet = fetch_capa(fishnet, bbox, scene_dates)
-        if "aat_midday" in fishnet.columns and "era5_t2m" in fishnet.columns:
-            fishnet["aat_residual"] = fishnet["aat_midday"] - fishnet["era5_t2m"]
-        for col in ("aat_morning", "aat_midday", "aat_night", "diurnal_aat", "aat_residual"):
-            cov = float(fishnet[col].notna().sum()) / max(len(fishnet), 1) if col in fishnet.columns else 0.0
-            manifest.update(col, coverage_pct=cov, source_name="NOAA CAPA / Open-Meteo")  # type: ignore[union-attr]
-
-    elif group == "buildings":
-        from sparc.data.collect.buildings import fetch_buildings
-        from pathlib import Path as _Path
-        fishnet, tier = fetch_buildings(
-            fishnet, bbox,
-            lidar_path=_Path(cfg["lidar_path"]) if cfg.get("lidar_path") else None,
-            dsm_path=_Path(cfg["dsm_path"]) if cfg.get("dsm_path") else None,
-            default_height_m=float(cfg.get("default_height_m", 5.0)),
-        )
-        tier_names = {1: "LiDAR (local)", 2: "Microsoft MLBuildings",
-                      3: "OSHB (Planetary Computer)", 4: "Constant default"}
-        src = tier_names.get(tier, "Unknown")
-        for col in ("bldg_height_mean", "bldg_coverage", "svf"):
-            cov = float(fishnet[col].notna().sum()) / max(len(fishnet), 1) if col in fishnet.columns else 0.0
-            manifest.update(col, coverage_pct=cov, source_name=src, tier=tier)  # type: ignore[union-attr]
-
-    elif group == "equity":
-        from sparc.data.collect.equity import fetch_equity
-        fishnet, _ = fetch_equity(fishnet, bbox)
-        for col, src in [
-            ("holc_grade", "Mapping Inequality HOLC"),
-            ("cdc_svi", "CDC SVI 2022"),
-            ("ejscreen_score", "EPA EJScreen 2023"),
-        ]:
-            cov = float(fishnet[col].notna().sum()) / max(len(fishnet), 1) if col in fishnet.columns else 0.0
-            if cov == 0.0:
-                manifest.skip(col, f"No {src} coverage")  # type: ignore[union-attr]
-            else:
-                manifest.update(col, coverage_pct=cov, source_name=src)  # type: ignore[union-attr]
-
-    elif group == "sentinel2":
-        fishnet = _sync_fetch_sentinel2(group, fishnet, boundary, manifest, cfg)
-
-    else:
-        raise ValueError(f"Unknown fetch group: '{group}'")
-
-    return fishnet
-
-
-def _sync_fetch_sentinel2(group, fishnet, boundary, manifest, cfg):
-    """Fetch Sentinel-2 L2A imagery via Microsoft Planetary Computer STAC.
-
-    Produces the same surface columns as the Landsat group so that downstream
-    analysis is model-agnostic:
-        lst_s2       — land-surface temperature proxy (B11 TIR analogue via NDUI/NDVI)
-        ndvi_s2      — normalised difference vegetation index (B8/B4)
-        ndbi_s2      — normalised difference built-up index (B11/B8)
-        mndwi_s2     — modified NDWI (B3/B11) — water bodies
-    """
-    from datetime import date as _date
-
-    bbox = boundary.bbox  # type: ignore[union-attr]
-    ds = _date.fromisoformat(cfg.get("date_start", "2022-06-01"))
-    de = _date.fromisoformat(cfg.get("date_end", "2022-08-31"))
-
-    try:
-        from sparc.data.collect.sentinel2 import fetch_sentinel2
-        fishnet = fetch_sentinel2(
-            fishnet, bbox, ds, de,
-            cloud_cover_max=float(cfg.get("cloud_cover_max", 20)),
-            temporal_mode=cfg.get("temporal_mode", "composite"),
-        )
-    except ImportError:
-        # Graceful degradation — sentinel2 module not yet installed
-        for col in ("ndvi_s2", "ndbi_s2", "mndwi_s2"):
-            fishnet[col] = float("nan")
-
-    for col, src in [
-        ("ndvi_s2", "Sentinel-2 L2A (Planetary Computer)"),
-        ("ndbi_s2", "Sentinel-2 L2A (Planetary Computer)"),
-        ("mndwi_s2", "Sentinel-2 L2A (Planetary Computer)"),
-    ]:
-        cov = float(fishnet[col].notna().sum()) / max(len(fishnet), 1) if col in fishnet.columns else 0.0
-        manifest.update(col, coverage_pct=cov, source_name=src)  # type: ignore[union-attr]
-
-    return fishnet
 
 
 @app.get("/collect/preview/{variable}")
@@ -7139,7 +7082,7 @@ async def collect_preview(variable: str):
     Used by the desktop confirmation map.  Missing values are represented
     as null in feature properties; ``has_gap`` is included as a boolean.
     """
-    fishnet = _collect_session.get("fishnet")
+    fishnet = _collect_session.fishnet
     if fishnet is None:
         raise HTTPException(400, "No fishnet in session — fetch data first")
 
@@ -7160,7 +7103,7 @@ async def collect_preview(variable: str):
 @app.get("/collect/cell/{cell_id}")
 async def collect_cell_inspect(cell_id: int):
     """Return all variable values for a single cell (cell-click inspector)."""
-    fishnet = _collect_session.get("fishnet")
+    fishnet = _collect_session.fishnet
     if fishnet is None:
         raise HTTPException(400, "No fishnet in session")
 
@@ -7183,15 +7126,12 @@ async def collect_build(body: dict = Body(...)):
       project_yml  : str   (optional — path to project.yml to auto-update)
       temporal_mode: str   (optional — "composite" | "single" | "panel")
     """
-    fishnet = _collect_session.get("fishnet")
-    boundary = _collect_session.get("boundary")
-    manifest_obj = _collect_session.get("manifest")
+    fishnet = _collect_session.fishnet
+    boundary = _collect_session.boundary
+    manifest = _collect_session.manifest
 
     if fishnet is None or boundary is None:
         raise HTTPException(400, "Run boundary resolution and at least one fetch group first")
-
-    from sparc.data.collect.manifest import VariableManifest
-    manifest: VariableManifest = manifest_obj or VariableManifest.for_uhi()
 
     if not manifest.can_build:
         raise HTTPException(422, {
@@ -7227,7 +7167,10 @@ async def collect_build(body: dict = Body(...)):
             text = _re.sub(r"(target_column\s*:\s*).*", lambda m: m.group(1) + '"aat_residual"', text)
             yml_path.write_text(text, encoding="utf-8")
 
-    _collect_session["last_build"] = str(geoparquet_path)
+    # Persist sidecar alongside the geoparquet so the session can be
+    # recovered on server restart without re-fetching all data.
+    sidecar_path = geoparquet_path.with_suffix(".session.json")
+    _collect_session.save(sidecar_path)
 
     return {
         "geoparquet_path": str(geoparquet_path),
@@ -7296,7 +7239,7 @@ async def inference_zero_shot(body: _ZeroShotRequest):
     try:
         result = zero_shot_predict(features=features)
     except Exception as exc:
-        raise HTTPException(500, f"Zero-shot inference failed: {exc}") from exc
+        raise _safe_error(exc, context="inference: zero-shot") from exc
 
     return {
         "mean": result.y_pred.tolist(),
@@ -7349,7 +7292,7 @@ async def inference_few_shot(body: _FewShotRequest):
             calibration_coords=calib_coords,
         )
     except Exception as exc:
-        raise HTTPException(500, f"Few-shot inference failed: {exc}") from exc
+        raise _safe_error(exc, context="inference: few-shot") from exc
 
     return {
         "mean": result.y_pred.tolist(),

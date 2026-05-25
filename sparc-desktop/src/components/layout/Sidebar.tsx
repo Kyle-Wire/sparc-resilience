@@ -1,17 +1,34 @@
 import { useRef, useCallback } from "react";
+import type { WorkflowStep } from "@/stores/navigationStore";
 
 const SECTIONS = [
-  { label: "Setup", pages: ["Project", "Data", "Data Collection"] },
-  { label: "Analysis", pages: ["DAG", "Variables", "Physics", "Scenarios", "Models"] },
+  { label: "Setup",    pages: ["Project", "Data"] },
+  { label: "Configure", pages: ["Configure"] },
   { label: "Pipeline", pages: ["Run", "Results", "Decision Support", "Report"] },
 ] as const;
 
 const PAGES = SECTIONS.flatMap((s) => s.pages) as unknown as readonly PageName[];
 
 export type PageName =
-  | "Project" | "Data" | "Data Collection"
-  | "DAG" | "Variables" | "Physics" | "Scenarios" | "Models"
+  | "Project" | "Data"
+  | "Configure"
   | "Run" | "Results" | "Decision Support" | "Report";
+
+/** Map workflow step → which sidebar section is "done" (shows ✓). */
+function sectionDone(label: string, step: WorkflowStep): boolean {
+  if (label === "Setup")    return step !== "awaiting_data";
+  if (label === "Configure") return step === "ready_to_run" || step === "results_available";
+  if (label === "Pipeline") return step === "results_available";
+  return false;
+}
+
+/** Map workflow step → which section is currently active (shows dot). */
+function sectionActive(label: string, step: WorkflowStep): boolean {
+  if (label === "Setup")    return step === "awaiting_data";
+  if (label === "Configure") return step === "ready_to_configure";
+  if (label === "Pipeline") return step === "ready_to_run";
+  return false;
+}
 
 interface SidebarProps {
   currentPage: PageName;
@@ -22,6 +39,7 @@ interface SidebarProps {
   projectName?: string;
   projectDomain?: string;
   projectEpsg?: string;
+  workflowStep?: WorkflowStep;
 }
 
 export default function Sidebar({
@@ -33,6 +51,7 @@ export default function Sidebar({
   projectName,
   projectDomain,
   projectEpsg,
+  workflowStep = "awaiting_data",
 }: SidebarProps) {
   const logoRef = useRef<HTMLImageElement>(null);
   const handleLogoClick = useCallback(() => {
@@ -131,8 +150,16 @@ export default function Sidebar({
               }}
             >
               <span>{section.label}</span>
-              <span className="mono" style={{ fontSize: 9, opacity: 0.6 }}>
-                {String(si + 1).padStart(2, "0")}
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                {sectionDone(section.label, workflowStep) && (
+                  <span style={{ color: "#16a34a", fontSize: 10, fontWeight: 800 }}>✓</span>
+                )}
+                {sectionActive(section.label, workflowStep) && !sectionDone(section.label, workflowStep) && (
+                  <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--crimson)", display: "inline-block" }} />
+                )}
+                <span className="mono" style={{ fontSize: 9, opacity: 0.6 }}>
+                  {String(si + 1).padStart(2, "0")}
+                </span>
               </span>
             </div>
             {section.pages.map((p) => {
@@ -145,6 +172,7 @@ export default function Sidebar({
                   onClick={() => !disabled && onNavigate(p as PageName)}
                   title={disabled ? "Open or create a project first (→ 01 Project)" : undefined}
                   aria-disabled={disabled || undefined}
+                  tabIndex={disabled ? -1 : undefined}
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -162,12 +190,7 @@ export default function Sidebar({
                     opacity: disabled ? 0.5 : 1,
                     transition: "background 0.15s",
                   }}
-                  onMouseEnter={(e) => {
-                    if (!active && !disabled) e.currentTarget.style.background = "rgba(0,0,0,0.05)";
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!active && !disabled) e.currentTarget.style.background = "transparent";
-                  }}
+                  className={!active && !disabled ? "sidebar-nav-btn" : undefined}
                 >
                   <span
                     className="mono"

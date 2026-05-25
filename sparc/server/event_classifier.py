@@ -11,7 +11,48 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional, Tuple
+
+# ---------------------------------------------------------------------------
+# ProgressContract — injectable model-weight bands
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ProgressContract:
+    """Defines the [0, 100] progress bands for each Stage-2 model.
+
+    Parameters
+    ----------
+    model_weights:
+        Mapping of model name → ``(start_pct, end_pct)`` where both values
+        are in ``[0, 100]`` and no two bands overlap (touching is fine).
+
+    Raises
+    ------
+    ValueError
+        If any band is outside ``[0, 100]`` or two bands overlap.
+    """
+
+    model_weights: Dict[str, Tuple[int, int]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for model, (start, end) in self.model_weights.items():
+            if start < 0 or end > 100:
+                raise ValueError(
+                    f"Band for '{model}' ({start}, {end}) is outside [0, 100]."
+                )
+        # Check pairwise overlaps: two bands overlap when start1 < end2 and start2 < end1
+        bands = sorted(self.model_weights.values(), key=lambda b: b[0])
+        for i in range(len(bands) - 1):
+            s1, e1 = bands[i]
+            s2, e2 = bands[i + 1]
+            if s2 < e1:
+                raise ValueError(
+                    f"Overlapping progress bands: ({s1}, {e1}) and ({s2}, {e2})."
+                )
+
 
 # ---------------------------------------------------------------------------
 # Compiled patterns
@@ -144,7 +185,7 @@ _CHECKPOINTS: list[tuple[re.Pattern[str], str, str, str]] = [
 # Public interface
 # ---------------------------------------------------------------------------
 
-def classify(line: str) -> dict[str, Any]:
+def classify(line: str, *, contract: Optional[ProgressContract] = None) -> dict[str, Any]:
     """Classify a raw stdout line into a PipelineEvent dict.
 
     The input must already be stripped and non-empty (caller's responsibility).
@@ -152,7 +193,19 @@ def classify(line: str) -> dict[str, Any]:
     segment after any ``\\r`` is used.
 
     Always returns a dict with at least ``{"type": ..., "message": ...}``.
+
+    Parameters
+    ----------
+    line:
+        Raw stripped stdout line.
+    contract:
+        Optional :class:`ProgressContract` supplying model-weight bands.
+        When provided its ``model_weights`` map is used instead of the
+        module-level ``_MODEL_WEIGHTS`` dict.  This allows callers to add new
+        models or override default bands without editing this module.
     """
+    # Resolve weights: injected contract takes priority over defaults
+    _weights = contract.model_weights if contract is not None else _MODEL_WEIGHTS
     # Handle tqdm \r overwrites — take the last segment
     if "\r" in line:
         line = line.rsplit("\r", 1)[-1].strip()
@@ -211,7 +264,7 @@ def classify(line: str) -> dict[str, Any]:
             model_total=model_total,
             message=f"Training {model_name.upper()} ({model_idx}/{model_total})",
         )
-        w = _MODEL_WEIGHTS.get(model_name)
+        w = _weights.get(model_name)
         if w:
             event["pct"] = w[0]
 
@@ -231,7 +284,7 @@ def classify(line: str) -> dict[str, Any]:
             model_total=model_total,
             message=f"{model_name.upper()} training complete ({model_idx}/{model_total})",
         )
-        w = _MODEL_WEIGHTS.get(model_name)
+        w = _weights.get(model_name)
         if w:
             event["pct"] = w[1]
 

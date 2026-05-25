@@ -21,7 +21,7 @@ class PipelineConfigurator:
     Generates pipeline configuration with manual parameter specification
     """
     
-    def __init__(self, stage1_dir=None, correlogram_dir=None):
+    def __init__(self, stage1_dir=None, correlogram_dir=None, config=None):
         if correlogram_dir is not None:
             self.stage1_dir = correlogram_dir
         elif stage1_dir is not None:
@@ -29,7 +29,10 @@ class PipelineConfigurator:
         else:
             paths = get_paths()
             self.stage1_dir = paths.stage0_dir
-        self.base_config = load_config()
+        if config is not None:
+            self.base_config = config
+        else:
+            self.base_config = load_config()
         
         # Default parameters: prefer predictors from project.yml, fall back
         # to a hard-coded list only when no project config is available.

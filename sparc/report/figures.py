@@ -101,10 +101,11 @@ Renderer = Callable[[ArtifactStore, str, str, dict[str, Any]], bytes]
 
 
 def _resolve_store(registry: Optional[RunRegistry] = None) -> ArtifactStore:
-    reg = registry or get_active_registry()
-    if reg is None:
-        raise FigureRenderError("No active RunRegistry")
-    return ArtifactStore(reg)
+    if registry is None:
+        raise FigureRenderError(
+            "No registry provided. Pass registry= explicitly to render_for_artifact()."
+        )
+    return ArtifactStore(registry)
 
 
 def _fig_to_png(fig: "plt.Figure", dpi: int = 144) -> bytes:
@@ -708,3 +709,15 @@ def render_for_artifact(
             pass  # caching is best-effort
 
     return png
+
+
+# ---------------------------------------------------------------------------
+# Wire FIGURES_REGISTRY into the global FigureRendererRegistry singleton.
+# This lets callers use FIGURE_REGISTRY.render() / list_registered() while
+# FIGURES_REGISTRY continues to work unchanged for existing callers.
+# ---------------------------------------------------------------------------
+
+from sparc.report.figure_registry import FIGURE_REGISTRY as _FIGURE_REGISTRY  # noqa: E402
+
+for (_fr_stage, _fr_aid), _fr_fn in FIGURES_REGISTRY.items():
+    _FIGURE_REGISTRY.register(_fr_stage, _fr_aid, _fr_fn)

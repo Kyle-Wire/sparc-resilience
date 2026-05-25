@@ -1,3 +1,0 @@
-#!/bin/bash
-# Dev placeholder — actual sidecar built by PyInstaller
-exec python3 -m sparc "$@"

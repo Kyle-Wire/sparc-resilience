@@ -98,7 +98,7 @@ class JointLoss:
     lambda_prior: float = 0.01
     lambda_base: float = 0.2
     lambda_neighbor: float = 0.1
-    lambda_pde: float = 0.0
+    lambda_pde: float = 0.05
     lambda_bc: float = 0.0
     lambda_ic: float = 0.0
     lambda_jepa: float = 0.0
@@ -143,7 +143,7 @@ class JointLoss:
             lambda_prior=target_lambdas.get("prior", 0.01),
             lambda_base=target_lambdas.get("base", 0.2),
             lambda_neighbor=target_lambdas.get("neighbor", 0.1),
-            lambda_pde=target_lambdas.get("pde", 0.0),
+            lambda_pde=target_lambdas.get("pde", 0.05),
             lambda_bc=target_lambdas.get("bc", 0.0),
             lambda_ic=lambda_ic,
             lambda_jepa=lambda_jepa,

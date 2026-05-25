@@ -138,8 +138,8 @@ class VariableManifest:
     @classmethod
     def for_uhi(cls) -> "VariableManifest":
         """Return a manifest pre-populated with the full UHI variable set."""
-        entries = {e.name: e for e in _UHI_VARIABLE_DEFINITIONS}
-        return cls(entries=entries)
+        import copy
+        return cls.empty([copy.copy(e) for e in _UHI_VARIABLE_DEFINITIONS])
 
     @classmethod
     def for_domain(cls, domain: str) -> "VariableManifest":

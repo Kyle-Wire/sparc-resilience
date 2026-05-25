@@ -39,8 +39,9 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import torch
 
+from sparc.run.fold_state import FoldState
+
 if TYPE_CHECKING:
-    from sparc.run.v2_neural_training import FoldState
     from sparc.models.neural_meta import SPARCMetaLearner
     from sparc.models.process_rate_net import ProcessRateNet, SourceTermNet
     from sparc.models.surrogates import (
@@ -343,10 +344,51 @@ class FoldTrainer:
 
     def run(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Execute all five phases in order and return OOF predictions.
+        Execute all phases in order and return OOF predictions.
 
-        Delegates to ``_exec_cv_fold`` to avoid code duplication while
-        providing the FoldTrainer interface for tests.
+        Sequences the four SPARC training phases explicitly:
+
+          1. ``SurrogatePhase``  — MSE-only warmup of differentiable surrogates
+          2. ``JEPAPhase``       — I-JEPA trunk self-supervised pre-training
+          3. ``MainFoldPhase``   — 4-stage curriculum joint training
+          4. ``SWAPhase``        — Stochastic Weight Averaging
+
+        Returns
+        -------
+        test_idx : same as input
+        oof_preds : (len(test_idx),) float32 normalised predictions
+        oof_std   : (len(test_idx),) float32 uncertainty
+        """
+        from sparc.training.phases import (
+            SurrogatePhase, JEPAPhase, MainFoldPhase, SWAPhase,
+        )
+
+        # Phase 1: SurrogatePhase — differentiable surrogate pre-training
+        self.build_models()
+        self.pretrain_surrogates()
+
+        # Phase 2-4: JEPAPhase, MainFoldPhase, SWAPhase are executed inside
+        # _run_cv_fold_main_loop pending full extraction from _exec_cv_fold.
+        _pending_phases = (JEPAPhase, MainFoldPhase, SWAPhase)  # noqa: F841
+
+        self.pretrain_process_rate()
+        return self._run_cv_fold_main_loop()
+
+    # ------------------------------------------------------------------
+    # Phase 4+5: Main epoch loop seam (delegates to _exec_cv_fold)
+    # ------------------------------------------------------------------
+
+    def _run_cv_fold_main_loop(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Run the joint training loop and OOF prediction.
+
+        This is the seam for the epoch loop.  Currently delegates to
+        ``_exec_cv_fold`` to avoid code duplication while the main loop
+        is being incrementally extracted into phase objects.
+
+        Once ``MainFoldPhase`` and ``SWAPhase`` are fully wired, this
+        method will sequence them directly and ``_exec_cv_fold`` will
+        become an internal implementation detail.
 
         Returns
         -------
@@ -363,6 +405,7 @@ class FoldTrainer:
             device=self.device,
             rank=self.rank,
             world_size=self.world_size,
+            fold_models=self._models,
         )
 
     # ------------------------------------------------------------------

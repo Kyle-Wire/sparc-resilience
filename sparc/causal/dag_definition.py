@@ -327,17 +327,7 @@ def get_temporal_edges(G: nx.DiGraph) -> List[Dict[str, Any]]:
 # Column validation helper
 # ---------------------------------------------------------------------------
 
-def validate_dag_columns(dag_def: Dict[str, Any], data: pd.DataFrame) -> List[str]:
-    """
-    Check that all DAG node names exist as columns in the data.
-
-    Returns
-    -------
-    list[str]
-        Names of DAG nodes that are **missing** from the data columns.
-    """
-    node_names = [n['name'] for n in dag_def.get('nodes', [])]
-    return [n for n in node_names if n not in data.columns]
+# (see canonical definition near the end of this file)
 
 
 def get_confounders_for_edge(
@@ -517,14 +507,27 @@ def generate_dag_variants(
 
 
 # ---------------------------------------------------------------------------
-# Convenience: validate DAG against dataset columns
+# Convenience: validate DAG against dataset columns (canonical, single def)
 # ---------------------------------------------------------------------------
 
-def validate_dag_columns(dag_def: Dict[str, Any], columns: List[str]) -> List[str]:
-    """
-    Check that every DAG node name corresponds to a column in the dataset.
+def validate_dag_columns(
+    dag_def: Dict[str, Any],
+    columns: "pd.DataFrame | List[str]",
+) -> List[str]:
+    """Check that every DAG node name corresponds to a column in the dataset.
 
-    Returns a list of node names that are **missing** from *columns*.
+    Accepts either a :class:`pandas.DataFrame` (columns are extracted
+    automatically) or a plain :class:`list` of column name strings.
+
+    Returns
+    -------
+    list[str]
+        Sorted list of DAG node names that are **missing** from *columns*.
     """
-    node_names = {n['name'] for n in dag_def['nodes']}
-    return sorted(node_names - set(columns))
+    # Support both DataFrame and list[str] callers.
+    if hasattr(columns, "columns"):  # DataFrame
+        col_set = set(columns.columns)
+    else:
+        col_set = set(columns)
+    node_names = {n['name'] for n in dag_def.get('nodes', [])}
+    return sorted(node_names - col_set)
