@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 const STORAGE_KEY = "sparc-onboarding";
-const TOTAL_VERSION = 2; // bump to force re-show
+const TOTAL_VERSION = 3; // bump to force re-show
 
 interface OnboardingState {
   step: number;
@@ -36,33 +36,28 @@ const DEFAULT_STEPS: TourStep[] = [
     body: "Set the project name, domain, and target column here. The YAML preview on the right is the canonical config — every other page is a structured editor for it.",
   },
   {
-    page: "Data Collection",
-    title: "2 · Data Collection",
+    page: "Data",
+    title: "2 · Data",
     body: "Define a study boundary, fetch geospatial variables from free public APIs, confirm data quality on a 30m choropleth map, and export a GeoParquet file for the pipeline.",
   },
   {
-    page: "DAG",
-    title: "3 · Causal DAG",
-    body: "Declare what causes what. Use j/k to walk nodes (vim-style), e to draw an edge, and d to delete. MC³ later returns posterior edge probabilities to validate your prior structure.",
-  },
-  {
-    page: "Physics",
-    title: "4 · Physics priors",
-    body: "Add monotone constraints and dose-response shapes. These become hard physics constraints the neural network must respect.",
+    page: "Configure",
+    title: "3 · Configure",
+    body: "Build the causal DAG (declare what causes what), set monotone constraints and physics priors, define scenarios, and tune model settings — all in one unified configuration panel.",
   },
   {
     page: "Run",
-    title: "5 · Run the pipeline",
+    title: "4 · Run the pipeline",
     body: "Execute Stage 0 (correlogram) → 1 (GWEN weighting) → 2 (spatial CV) → 3 (causal validation, MC³) → 4 (scenarios). Live progress streams from the FastAPI backend. When the run completes you'll see a summary card with a direct link to Results.",
   },
   {
     page: "Results",
-    title: "6 · Results",
+    title: "5 · Results",
     body: "Walk through each stage using the pipeline navigator at the top. Stage 0 shows spatial geometry, Stage 2 model predictions on a map, Stage 3 causal dose-response, and Stage 4 ranked interventions. Each section has a Technical Disclosure for deeper diagnostics.",
   },
   {
     page: "Report",
-    title: "7 · Reporting",
+    title: "6 · Reporting",
     body: "Generate audience-tuned reports (planner, public, technical, council, equity, scientist, auditor) as PDF or Word. Decision Support on the same panel lets you set a budget cap and run the equity optimiser.",
   },
   {

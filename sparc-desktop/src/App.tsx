@@ -89,6 +89,10 @@ export default function App() {
   const paletteItems = useCommandPaletteItems(dataCtx, explainHost.value, navigate, setChatOpen);
   useKeyboardShortcuts(kbHandlers);
 
+  // Stable callback for OnboardingTour — prevents the tour's useEffect from
+  // re-firing on every render due to a new inline arrow function reference.
+  const handleTourNavigate = useCallback((p: string) => navigate(p as PageName), [navigate]);
+
   // Must be defined before any early returns to satisfy rules-of-hooks
   const navigateToSettings = useCallback(() => navigate("Settings"), [navigate]);
 
@@ -99,7 +103,11 @@ export default function App() {
 
   // Show login if no authenticated user
   if (!user) {
-    return <LoginScreen parallaxEnabled={parallaxEnabled} />;
+    return (
+      <ErrorBoundary page="login">
+        <LoginScreen parallaxEnabled={parallaxEnabled} />
+      </ErrorBoundary>
+    );
   }
 
   const renderPage = () => {
@@ -131,6 +139,8 @@ export default function App() {
         );
       case "Performance":
         return <PerformancePage />;
+      default:
+        return null;
     }
   };
 
@@ -176,7 +186,7 @@ export default function App() {
             onNavigate={(p) => navigate(p)}
           />
 
-          <OnboardingTour onNavigate={(p) => navigate(p as PageName)} />
+          <OnboardingTour onNavigate={handleTourNavigate} />
 
           <NotificationBanner />
           <ServerLostBanner serverLost={serverLost} />
