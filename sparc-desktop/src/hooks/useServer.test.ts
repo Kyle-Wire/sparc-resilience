@@ -11,7 +11,6 @@ import { renderHook, act } from "@testing-library/react";
 import { useServer } from "./useServer";
 
 // -- Timing constants mirrored from useServer.ts ----------------------------
-const FAST_MS = 500;
 const SLOW_MS = 30_000;
 
 // -- Mocks ------------------------------------------------------------------

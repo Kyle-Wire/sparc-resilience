@@ -3,7 +3,7 @@ import { SectionHeader, Card, Tag, Btn, Stat, StatGrid } from "@/components/ui/D
 import { getConfig, saveConfig, getPdpCurves, dataSummary } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import { usePipeline } from "@/hooks/PipelineProvider";
-import type { PdpCurves } from "@/lib/types";
+import type { PdpResponse } from "@/lib/types";
 
 interface MonotoneConstraint {
   variable: string;
@@ -110,7 +110,7 @@ export default function PhysicsPage() {
   const [bc, setBc] = useState<BoundaryConditions>({ ...BC_DEFAULTS });
   const [literatureWeight, setLiteratureWeight] = useState<number>(0.25);
   const [selectedVar, setSelectedVar] = useState<string>("");
-  const [pdpData, setPdpData] = useState<PdpCurves | null>(null);
+  const [pdpData, setPdpData] = useState<PdpResponse | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [addConstraintVar, setAddConstraintVar] = useState<string>("");
   const [availablePredictors, setAvailablePredictors] = useState<string[]>([]);
@@ -226,7 +226,7 @@ export default function PhysicsPage() {
     ctx.fillText("∂y / ∂x", 0, 0);
     ctx.restore();
 
-    const pdpVar = pdpData?.[selectedVar];
+    const pdpVar = pdpData?.[selectedVar] as import("@/lib/types").PdpVariable | undefined;
     const gridVals = pdpVar?.pdp?.grid_values ?? pdpVar?.grid_values;
     const pdpVals = pdpVar?.pdp?.pdp_values ?? pdpVar?.pdp_values;
     const pdpStd = pdpVar?.pdp?.pdp_std;

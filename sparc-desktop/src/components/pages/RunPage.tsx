@@ -4,7 +4,6 @@ import { usePipeline, type StageStatus } from "@/hooks/PipelineProvider";
 import { useNotification } from "@/hooks/useNotifications";
 import { GwenApprovalModal } from "@/components/run/GwenApprovalModal";
 import RunCompletionCard from "@/components/run/RunCompletionCard";
-import type { PipelineEvent } from "@/lib/types";
 import { eventToLogLine } from "@/lib/pipelineEventFormat";
 import { useNavigationStore } from "@/stores/navigationStore";
 

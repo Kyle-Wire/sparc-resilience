@@ -5,7 +5,7 @@
  * excluded from the keyboard tab order so screen-reader/keyboard users cannot
  * accidentally land on non-functional controls.
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import Sidebar from "./Sidebar";
 

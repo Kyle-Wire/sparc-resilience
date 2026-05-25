@@ -4,7 +4,7 @@
  * Behavior: revokeGwenApproval should reject when the server returns a
  * non-OK HTTP status, so callers can surface the error to the user.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 
 const mockGetToken = vi.fn(() => "");
 const mockGetState = vi.fn(() => ({ session: null as null | { access_token: string } }));

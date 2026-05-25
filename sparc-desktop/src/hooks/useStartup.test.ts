@@ -14,7 +14,7 @@
  * Public interface under test: `useStartup(serverReady, startupFailed, restart)`
  * which returns `{ splashStep, splashDone, ... }`.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 
 // ── Deferred promise helper ───────────────────────────────────────────────

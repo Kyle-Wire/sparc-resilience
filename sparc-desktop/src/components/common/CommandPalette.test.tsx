@@ -7,7 +7,7 @@
  *   2. The search input receives focus when the palette opens
  *   3. Tab while the palette is open does not move focus outside it
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import CommandPalette, { type PaletteItem } from "./CommandPalette";
