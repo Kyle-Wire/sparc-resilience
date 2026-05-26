@@ -177,7 +177,7 @@ pub fn setup_cleanup_env() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn setup_finish(app: AppHandle) -> Result<(), String> {
+pub async fn setup_finish(app: AppHandle) -> Result<(), String> {
     if let Some(main) = app.get_webview_window("main") {
         main.show().ok();
         main.set_focus().ok();
@@ -185,6 +185,14 @@ pub fn setup_finish(app: AppHandle) -> Result<(), String> {
     if let Some(setup_win) = app.get_webview_window("setup") {
         setup_win.close().ok();
     }
+    // Spawn the sidecar now so the main window's startup poll finds a healthy
+    // server immediately instead of timing out and asking the user to retry.
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = crate::sidecar::spawn_server(&app2).await {
+            eprintln!("setup_finish: sidecar spawn failed: {e}");
+        }
+    });
     Ok(())
 }
 
