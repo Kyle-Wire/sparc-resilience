@@ -76,11 +76,7 @@ export default function ProjectCreationWizard({
   const { notify } = useNotification();
   const [step, setStep] = useState<Step>(0);
   const [creating, setCreating] = useState(false);
-  const [discoveredTemplates, setDiscoveredTemplates] = useState<TemplateInfo[]>(
-    templates.length > 0
-      ? templates
-      : Object.keys(TEMPLATE_BLURBS).map((name) => ({ name, has_project_yml: true })),
-  );
+  const [discoveredTemplates, setDiscoveredTemplates] = useState(templates);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
   const [templateError, setTemplateError] = useState(false);
 
@@ -109,17 +105,12 @@ export default function ProjectCreationWizard({
   }
 
   useEffect(() => {
-    // Run once on mount: use parent-provided templates if non-empty,
-    // otherwise fetch from server. The [templates] dependency was removed
-    // because ProjectPage passes a new [] reference on every render, causing
-    // this effect to re-fire (and the "loading" flash to repeat) for every
-    // parent re-render while the wizard is open.
-    if (templates.length > 0) {
-      setDiscoveredTemplates(templates);
-    } else {
+    if (templates.length === 0) {
       loadTemplates();
+    } else {
+      setDiscoveredTemplates(templates);
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [templates]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [s, setS] = useState<WizardState>({
     name: "",
