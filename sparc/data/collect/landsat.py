@@ -30,26 +30,31 @@ from typing import Literal, Optional
 import numpy as np
 
 HTTP_TIMEOUT = 120.0
-# Primary: AWS Element84 Earth-Search (reliable, no auth required)
-ELEMENT84_STAC = "https://earth-search.aws.element84.com/v1/search"
-# Fallback: USGS Landsat Look STAC server
-USGS_STAC      = "https://landsatlook.usgs.gov/stac-server/search"
 
-# Collection names per endpoint
-_ELEMENT84_COLLECTION = "landsat-c2-l2"
-_USGS_COLLECTION      = "landsat-c2l2-sr"
+# Primary: Microsoft Planetary Computer — signed Azure Blob Storage URLs (no
+# user credentials required; the planetary-computer SDK handles token exchange).
+PC_STAC        = "https://planetarycomputer.microsoft.com/api/stac/v1/search"
+_PC_COLLECTION = "landsat-c2-l2"
+
+# Fallback: AWS Element84 Earth-Search (for STAC metadata only; data is on
+# the usgs-landsat Requester Pays S3 bucket, which requires AWS credentials).
+ELEMENT84_STAC    = "https://earth-search.aws.element84.com/v1/search"
+_E84_COLLECTION   = "landsat-c2-l2"
 
 TemporalMode = Literal["single", "composite", "panel"]
 
-# Landsat 8/9 OLI band mapping (Collection 2, Level-2 SR/ST)
+# Landsat 8/9 OLI / Landsat 7 ETM+ band mapping on AWS Element84 Earth-Search.
+# Element84 uses human-readable asset keys (consistent across L7, L8, L9).
+# USGS Landsat Look STAC used the raw file names (SR_B2, SR_B5, ST_B10, etc.)
+# which is why these were wrong before — the fallback to USGS never triggered.
 BAND_ASSETS = {
-    "blue":   "SR_B2",
-    "green":  "SR_B3",
-    "red":    "SR_B4",
-    "nir":    "SR_B5",
-    "swir1":  "SR_B6",
-    "swir2":  "SR_B7",
-    "thermal": "ST_B10",  # Surface Temperature (Kelvin × 0.00341802 + 149.0)
+    "blue":    "blue",    # Band 2 (OLI) / Band 1 (ETM+)   ~0.45–0.52 µm
+    "green":   "green",   # Band 3 (OLI) / Band 2 (ETM+)   ~0.52–0.60 µm
+    "red":     "red",     # Band 4 (OLI) / Band 3 (ETM+)   ~0.63–0.69 µm
+    "nir":     "nir08",   # Band 5 (OLI) / Band 4 (ETM+)   ~0.85–0.88 µm
+    "swir1":   "swir16",  # Band 6 (OLI) / Band 5 (ETM+)   ~1.57–1.65 µm
+    "swir2":   "swir22",  # Band 7 (OLI) / Band 7 (ETM+)   ~2.11–2.29 µm
+    "thermal": "lwir11",  # Band 10 (OLI) / Band 6 (ETM+)  ~10.6–11.2 µm (ST)
 }
 
 LST_SCALE  = 0.00341802
@@ -57,7 +62,114 @@ LST_OFFSET = 149.0          # K; subtract 273.15 for °C
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public API — two-phase (download then assign to grid)
+# ---------------------------------------------------------------------------
+
+def download_landsat(
+    bbox: tuple[float, float, float, float],
+    window: "TemporalWindow",
+    *,
+    cloud_cover_max: float = 20.0,
+    temporal_mode: TemporalMode = "composite",
+    enabled_indices: Optional[list[str]] = None,
+    cache_dir: Optional[Path] = None,
+) -> tuple[Optional[object], list[date]]:
+    """Download Landsat scenes and compute composite arrays without grid assignment.
+
+    This is **Phase 1** of the two-phase collection pattern.  Raw COG bands are
+    fetched from the Planetary Computer STAC, spectral indices are computed, and
+    the composite is returned as a dict of arrays keyed by index name.  No
+    fishnet is required at this stage.
+
+    Call :func:`assign_landsat_to_grid` afterwards to apply the composite to
+    a fishnet created at the desired resolution.
+
+    Parameters
+    ----------
+    bbox : (minx, miny, maxx, maxy) in EPSG:4326
+    window : TemporalWindow
+    cloud_cover_max : float
+    temporal_mode : "single" | "composite" | "panel"
+    enabled_indices : list[str] | None
+    cache_dir : Path, optional
+
+    Returns
+    -------
+    (composite_arrays | scene_list | None, scene_dates)
+        ``composite_arrays`` is a ``dict[str, np.ndarray]`` for
+        composite/single mode.  ``scene_list`` is a list of scene dicts for
+        panel mode.  ``None`` when no suitable scenes are found.
+    """
+    from ._temporal import TemporalWindow as _TemporalWindow
+    if not isinstance(window, _TemporalWindow):
+        raise TypeError(
+            f"download_landsat() expects a TemporalWindow, got {type(window).__name__}."
+        )
+    cache_dir = cache_dir or _default_cache_dir()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    enabled = set(enabled_indices or list(SPECTRAL_INDEX_FORMULAS.keys()) + ["lst"])
+
+    if window.anchor_dates:
+        scene_arrays, scene_dates = _fetch_anchored_scenes(
+            bbox, window, enabled, cache_dir, cloud_cover_max, temporal_mode
+        )
+    else:
+        scene_arrays, scene_dates = _fetch_full_range_scenes(
+            bbox, window.date_start, window.date_end, enabled, cache_dir,
+            cloud_cover_max, temporal_mode
+        )
+
+    if not scene_arrays:
+        return None, []
+
+    if temporal_mode == "panel":
+        return scene_arrays, scene_dates  # list of per-scene dicts
+
+    composite = _median_composite(scene_arrays)
+    return composite, scene_dates
+
+
+def assign_landsat_to_grid(
+    fishnet_gdf: object,
+    composite_or_panels: Optional[object],
+    scene_dates: list[date],
+    *,
+    enabled_indices: Optional[list[str]] = None,
+    temporal_mode: TemporalMode = "composite",
+) -> object:
+    """Apply Landsat composite arrays to fishnet cells via zonal statistics.
+
+    This is **Phase 2** of the two-phase collection pattern.
+
+    Parameters
+    ----------
+    fishnet_gdf : gpd.GeoDataFrame
+        Analysis grid at any resolution.
+    composite_or_panels : dict[str, np.ndarray] | list | None
+        Composite dict or panel scene list from :func:`download_landsat`.
+        NaN-fills all requested indices when ``None``.
+    scene_dates : list[date]
+    enabled_indices : list[str] | None
+    temporal_mode : str
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Fishnet with spectral index columns appended.
+    """
+    enabled = set(enabled_indices or list(SPECTRAL_INDEX_FORMULAS.keys()) + ["lst"])
+
+    if composite_or_panels is None:
+        return _nan_fishnet(fishnet_gdf, enabled)
+
+    if temporal_mode == "panel":
+        return _build_panel(fishnet_gdf, composite_or_panels, scene_dates)
+
+    return _assign_arrays_to_fishnet(fishnet_gdf, composite_or_panels)
+
+
+# ---------------------------------------------------------------------------
+# Legacy single-call API (kept for backward compatibility)
 # ---------------------------------------------------------------------------
 
 def fetch_landsat(
@@ -112,28 +224,19 @@ def fetch_landsat(
             f"has been replaced — use TemporalWindow.from_capa_dates()."
         )
 
-    cache_dir = cache_dir or _default_cache_dir()
     enabled = set(enabled_indices or list(SPECTRAL_INDEX_FORMULAS.keys()) + ["lst"])
-
-    if window.anchor_dates:
-        scene_arrays, scene_dates = _fetch_anchored_scenes(
-            bbox, window, enabled, cache_dir, cloud_cover_max, temporal_mode
-        )
-    else:
-        # No CAPA anchors: fall back to full date-range search (degraded mode)
-        scene_arrays, scene_dates = _fetch_full_range_scenes(
-            bbox, window.date_start, window.date_end, enabled, cache_dir,
-            cloud_cover_max, temporal_mode
-        )
-
-    if not scene_arrays:
-        return _nan_fishnet(fishnet_gdf, enabled)
-
-    if temporal_mode == "panel":
-        return _build_panel(fishnet_gdf, scene_arrays, scene_dates)
-
-    composite = _median_composite(scene_arrays)
-    return _assign_arrays_to_fishnet(fishnet_gdf, composite)
+    composite, scene_dates = download_landsat(
+        bbox, window,
+        cloud_cover_max=cloud_cover_max,
+        temporal_mode=temporal_mode,
+        enabled_indices=enabled_indices,
+        cache_dir=cache_dir,
+    )
+    return assign_landsat_to_grid(
+        fishnet_gdf, composite, scene_dates,
+        enabled_indices=enabled_indices,
+        temporal_mode=temporal_mode,
+    )
 
 
 def _nan_fishnet(fishnet_gdf: object, enabled: set) -> object:
@@ -236,16 +339,18 @@ def _query_stac(
     done client-side after the response to avoid relying on optional STAC API
     query extensions that may not be enabled on all servers.
     """
+    # PC returns better quality metadata and provides signed Azure Blob URLs;
+    # fall back to Element84 (S3 — needs AWS creds) if PC is unreachable.
     endpoints = [
-        (ELEMENT84_STAC, _ELEMENT84_COLLECTION),
-        (USGS_STAC,      _USGS_COLLECTION),
+        (PC_STAC,        _PC_COLLECTION,  True),   # (url, collection, needs_signing)
+        (ELEMENT84_STAC, _E84_COLLECTION, False),
     ]
 
     last_error: Exception | None = None
-    for url, collection in endpoints:
+    for url, collection, sign in endpoints:
         try:
-            scenes = _query_stac_endpoint(url, collection, bbox, date_start, date_end)
-            # Post-filter by cloud cover (avoids relying on unsupported query extensions)
+            scenes = _query_stac_endpoint(url, collection, bbox, date_start, date_end,
+                                          sign_assets=sign)
             return [s for s in scenes if s["cloud_cover"] <= cloud_max]
         except Exception as exc:
             last_error = exc
@@ -262,6 +367,8 @@ def _query_stac_endpoint(
     bbox: tuple[float, float, float, float],
     date_start: date,
     date_end: date,
+    *,
+    sign_assets: bool = False,
 ) -> list[dict]:
     """Send a minimal STAC search (no query/fields extensions) to one endpoint."""
     minx, miny, maxx, maxy = bbox
@@ -287,6 +394,16 @@ def _query_stac_endpoint(
         raise RuntimeError(f"STAC query failed ({url}): {exc}") from exc
 
     items = data.get("features", [])
+
+    # Sign Planetary Computer items so Azure Blob URLs include SAS tokens.
+    # This is a no-op if planetary_computer is not installed.
+    if sign_assets:
+        try:
+            import planetary_computer as pc  # type: ignore[import]
+            items = [pc.sign(item) for item in items]
+        except ImportError:
+            pass  # Fall through; download will likely fail but won't crash here
+
     scenes = []
     for item in items:
         props = item.get("properties", {})
@@ -325,7 +442,11 @@ def _download_bands(
         # Only download bands actually needed for enabled indices
         if not _band_needed(band_name, enabled):
             continue
-        asset = assets.get(asset_key) or assets.get(asset_key.lower())
+        asset = (assets.get(asset_key) or assets.get(asset_key.lower())
+                 # thermal band fallback: lwir11 (E84) ↔ lwir (older metadata)
+                 or (assets.get("lwir11") if asset_key in ("lwir", "lwir11") else None)
+                 or (assets.get("lwir")   if asset_key in ("lwir", "lwir11") else None)
+                 or assets.get(f"ST_{asset_key.upper()}"))
         if asset is None:
             continue
         href = asset.get("href", asset.get("url", ""))
@@ -340,13 +461,23 @@ def _download_bands(
             continue
 
         try:
-            with rasterio.open(href) as src:
-                window = from_bounds(minx, miny, maxx, maxy, src.transform)
-                arr = src.read(1, window=window).astype(np.float32)
-                arr[arr <= 0] = np.nan  # mask fill values
-                np.save(str(cache_path), arr)
-                bands[band_name] = arr
-        except Exception:
+            # PC URLs are signed Azure Blob Storage SAS URLs — no special
+            # GDAL env vars needed.  GDAL_DISABLE_READDIR_ON_OPEN speeds up
+            # COG HTTP range requests by skipping aux-file probing.
+            with rasterio.Env(GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR"):
+                with rasterio.open(href) as src:
+                    # Transform bbox from EPSG:4326 to the COG's native CRS
+                    # (Landsat COGs are in UTM, not geographic)
+                    from rasterio.warp import transform_bounds as _tfm_bounds
+                    src_bbox = _tfm_bounds("EPSG:4326", src.crs, minx, miny, maxx, maxy)
+                    window = from_bounds(*src_bbox, src.transform)
+                    arr = src.read(1, window=window).astype(np.float32)
+                    arr[arr <= 0] = np.nan  # mask fill values
+                    np.save(str(cache_path), arr)
+                    bands[band_name] = arr
+        except Exception as _dl_exc:
+            import warnings
+            warnings.warn(f"Landsat band download failed for {band_name}: {_dl_exc}")
             continue
 
     # Scale thermal to LST in °C
@@ -442,7 +573,13 @@ def _assign_arrays_to_fishnet(
     from rasterio.transform import from_bounds
 
     gdf = fishnet_gdf.copy()  # type: ignore[union-attr]
-    bounds = gdf.to_crs("EPSG:4326").total_bounds  # type: ignore[union-attr]
+
+    # Reproject fishnet to EPSG:4326 so it matches the geographic transform
+    # built from EPSG:4326 bounds.  Without this rasterstats receives EPSG:3857
+    # metre coordinates against a degree-scale affine, allocating a 3+ TiB
+    # interim array.
+    gdf_4326 = gdf.to_crs("EPSG:4326")  # type: ignore[union-attr]
+    bounds = gdf_4326.total_bounds  # type: ignore[union-attr]
 
     for name, arr in index_arrays.items():
         if arr is None or arr.size == 0:
@@ -451,7 +588,7 @@ def _assign_arrays_to_fishnet(
         rows, cols = arr.shape
         transform = from_bounds(*bounds, cols, rows)
         results = rasterstats.zonal_stats(
-            gdf,  # type: ignore[arg-type]
+            gdf_4326,  # fishnet in same CRS as transform
             arr,
             affine=transform,
             stats=["mean"],

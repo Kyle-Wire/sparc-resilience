@@ -27,12 +27,13 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 MRLC_WCS_BASE = "https://www.mrlc.gov/geoserver/mrlc_display/wcs"
-HTTP_TIMEOUT = 60.0
+HTTP_TIMEOUT = 300.0  # 5 min — the server may return a full CONUS tile (~50–100 MB)
 
-# MRLC layer identifiers (NLCD 2021)
-_LAYER_IMPERVIOUS = "NLCD_2021_Impervious_L48_20230630"
-_LAYER_CANOPY     = "NLCD_2021_TreeCanopy_L48_20221101"
-_LAYER_LANDCOVER  = "NLCD_2021_Land_Cover_L48_20230630"
+# MRLC layer identifiers (NLCD 2021, verified from WCS GetCapabilities 2025)
+# Full IDs include the workspace prefix "mrlc_display__"
+_LAYER_IMPERVIOUS = "mrlc_display__NLCD_2021_Impervious_L48"
+_LAYER_CANOPY     = "mrlc_display__nlcd_tcc_conus_2021_v2021-4"
+_LAYER_LANDCOVER  = "mrlc_display__NLCD_2021_Land_Cover_L48"
 
 # NLCD string → numeric class mapping (NLCD Anderson Level I/II codes)
 NLCD_CLASS_MAP: dict[str, int] = {
@@ -60,7 +61,74 @@ NLCD_CLASS_MAP: dict[str, int] = {
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public API — two-phase (download then assign to grid)
+# ---------------------------------------------------------------------------
+
+def download_nlcd(
+    bbox: tuple[float, float, float, float],
+    *,
+    cache_dir: Optional[Path] = None,
+) -> dict[str, Path]:
+    """Download NLCD tiles for *bbox* and return cached GeoTIFF paths.
+
+    This is **Phase 1** of the two-phase collection pattern: raw rasters are
+    fetched and clipped to the bounding box without requiring a fishnet.
+    Call :func:`assign_nlcd_to_grid` afterwards to compute zonal statistics
+    once the fishnet has been created at the desired resolution.
+
+    Returns
+    -------
+    dict[str, Path]
+        Mapping of ``column_name → clipped GeoTIFF path``.
+        Keys: ``"pct_impervious"``, ``"pct_canopy"``, ``"land_cover"``.
+    """
+    cache_dir = cache_dir or _default_cache_dir()
+    layers = [
+        (_LAYER_IMPERVIOUS, "pct_impervious"),
+        (_LAYER_CANOPY,     "pct_canopy"),
+        (_LAYER_LANDCOVER,  "land_cover"),
+    ]
+    return {col: _fetch_wcs_tile(lid, bbox, cache_dir) for lid, col in layers}
+
+
+def assign_nlcd_to_grid(
+    fishnet_gdf: object,
+    tif_paths: dict[str, Path],
+) -> object:
+    """Apply NLCD zonal statistics to fishnet cells.
+
+    This is **Phase 2** of the two-phase collection pattern.
+
+    Parameters
+    ----------
+    fishnet_gdf : gpd.GeoDataFrame
+        Analysis grid at any resolution.
+    tif_paths : dict[str, Path]
+        Mapping from ``column_name → GeoTIFF path`` as returned by
+        :func:`download_nlcd`.
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Fishnet with ``pct_impervious``, ``pct_canopy``, and ``land_cover``
+        columns appended.
+    """
+    col_stat_map = {
+        "pct_impervious": "mean",
+        "pct_canopy":     "mean",
+        "land_cover":     "majority",
+    }
+    gdf = fishnet_gdf
+    for col_name, stat in col_stat_map.items():
+        if col_name in tif_paths:
+            gdf = _zonal_stat_onto_fishnet(gdf, tif_paths[col_name], col_name, stat)
+    if "land_cover" in gdf.columns:
+        gdf["land_cover"] = gdf["land_cover"].fillna(-1).astype(int)  # type: ignore[union-attr]
+    return gdf
+
+
+# ---------------------------------------------------------------------------
+# Legacy single-call API (kept for backward compatibility)
 # ---------------------------------------------------------------------------
 
 def fetch_nlcd(
@@ -98,24 +166,8 @@ def fetch_nlcd(
             "rasterio and rasterstats are required for NLCD fetch: pip install rasterio rasterstats"
         ) from exc
 
-    cache_dir = cache_dir or _default_cache_dir()
-
-    layers = [
-        (_LAYER_IMPERVIOUS, "pct_impervious", "mean"),
-        (_LAYER_CANOPY,     "pct_canopy",     "mean"),
-        (_LAYER_LANDCOVER,  "land_cover",     "majority"),
-    ]
-
-    gdf = fishnet_gdf  # type: ignore[assignment]
-    for layer_id, col_name, stat in layers:
-        tif_path = _fetch_wcs_tile(layer_id, bbox, cache_dir)
-        gdf = _zonal_stat_onto_fishnet(gdf, tif_path, col_name, stat)
-
-    # Convert land cover majority to int; fill NaN with -1 (no-data sentinel)
-    if "land_cover" in gdf.columns:
-        gdf["land_cover"] = gdf["land_cover"].fillna(-1).astype(int)
-
-    return gdf
+    tif_paths = download_nlcd(bbox, cache_dir=cache_dir)
+    return assign_nlcd_to_grid(fishnet_gdf, tif_paths)
 
 
 # ---------------------------------------------------------------------------
@@ -127,37 +179,91 @@ def _fetch_wcs_tile(
     bbox: tuple[float, float, float, float],
     cache_dir: Path,
 ) -> Path:
-    """Download a WCS GeoTIFF for *layer_id* clipped to *bbox*."""
+    """Download a WCS GeoTIFF for *layer_id* and clip it to *bbox*.
+
+    The MRLC GeoServer WCS sometimes ignores the ``subset`` parameters and
+    returns the full CONUS raster (~50–100 MB compressed, ~1.5 TiB
+    uncompressed).  This function handles both cases:
+
+    1. Streams the raw WCS response to a temp file in chunks so that it
+       never needs to fit in RAM all at once.
+    2. Opens the saved file with rasterio and reads **only the bbox window**,
+       producing a small clipped GeoTIFF.  The raw download is then deleted.
+
+    The clipped file is cached under a ``_clipped`` suffix so that subsequent
+    calls (e.g. re-running a project) skip the download entirely.
+    """
+    import rasterio
+    from rasterio.windows import from_bounds
+    from rasterio.warp import transform_bounds
+
     minx, miny, maxx, maxy = bbox
     cache_key = f"{layer_id}_{minx:.4f}_{miny:.4f}_{maxx:.4f}_{maxy:.4f}"
-    out_path = cache_dir / f"{cache_key}.tif"
-    if out_path.exists():
-        return out_path
-
-    params = urllib.parse.urlencode({
-        "service": "WCS",
-        "version": "2.0.1",
-        "request": "GetCoverage",
-        "coverageId": layer_id,
-        "subsettingCrs": "http://www.opengis.net/def/crs/EPSG/0/4326",
-        "subset": [
-            f"Long({minx},{maxx})",
-            f"Lat({miny},{maxy})",
-        ],
-        "format": "image/tiff",
-    }, doseq=True)
-    url = f"{MRLC_WCS_BASE}?{params}"
-
-    req = urllib.request.Request(url, headers={"User-Agent": "SPARC-DataCollection/1.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
-            data = resp.read()
-    except Exception as exc:
-        raise RuntimeError(f"MRLC WCS request failed for layer {layer_id}: {exc}") from exc
+    # Cached *clipped* tile — fast path
+    clipped_path = cache_dir / f"{cache_key}_clipped.tif"
+    if clipped_path.exists():
+        return clipped_path
 
     cache_dir.mkdir(parents=True, exist_ok=True)
-    out_path.write_bytes(data)
-    return out_path
+    raw_path = cache_dir / f"{cache_key}_raw.tif"
+
+    # ---------- 1. Stream-download the WCS response to disk ----------------
+    if not raw_path.exists():
+        params = urllib.parse.urlencode({
+            "service": "WCS",
+            "version": "2.0.1",
+            "request": "GetCoverage",
+            "coverageId": layer_id,
+            "subsettingCrs": "http://www.opengis.net/def/crs/EPSG/0/4326",
+            "subset": [
+                f"Long({minx},{maxx})",
+                f"Lat({miny},{maxy})",
+            ],
+            "format": "image/tiff",
+        }, doseq=True)
+        url = f"{MRLC_WCS_BASE}?{params}"
+
+        req = urllib.request.Request(url, headers={"User-Agent": "SPARC-DataCollection/1.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+                with open(raw_path, "wb") as fh:
+                    while True:
+                        chunk = resp.read(1 << 17)  # 128 KB chunks
+                        if not chunk:
+                            break
+                        fh.write(chunk)
+        except Exception as exc:
+            raw_path.unlink(missing_ok=True)
+            raise RuntimeError(f"MRLC WCS request failed for layer {layer_id}: {exc}") from exc
+
+    # ---------- 2. Clip to bbox window using rasterio ----------------------
+    try:
+        with rasterio.open(raw_path) as src:
+            # Transform the WGS-84 bbox to the raster's native CRS
+            bounds_src = transform_bounds("EPSG:4326", src.crs, minx, miny, maxx, maxy)
+            window = from_bounds(*bounds_src, src.transform)
+            clipped_arr = src.read(1, window=window)
+            clipped_transform = src.window_transform(window)
+
+            with rasterio.open(
+                clipped_path, "w",
+                driver="GTiff",
+                height=clipped_arr.shape[0],
+                width=clipped_arr.shape[1],
+                count=1,
+                dtype=clipped_arr.dtype,
+                crs=src.crs,
+                transform=clipped_transform,
+                compress="lzw",
+            ) as dst:
+                dst.write(clipped_arr, 1)
+    except Exception as exc:
+        raw_path.unlink(missing_ok=True)
+        raise RuntimeError(f"Failed to clip WCS tile for {layer_id}: {exc}") from exc
+
+    # Remove the raw (possibly full-CONUS) file to save disk space
+    raw_path.unlink(missing_ok=True)
+    return clipped_path
 
 
 def _zonal_stat_onto_fishnet(
@@ -166,11 +272,23 @@ def _zonal_stat_onto_fishnet(
     col_name: str,
     stat: str,
 ) -> object:
-    """Compute zonal statistic *stat* for each fishnet cell from *raster_path*."""
+    """Compute zonal statistic *stat* for each fishnet cell from *raster_path*.
+
+    The raster at *raster_path* is already clipped to the study bbox by
+    ``_fetch_wcs_tile``, so rasterstats only loads a small in-memory tile.
+    The fishnet is reprojected to the raster's CRS for the spatial join.
+    """
     import rasterstats
+    import rasterio
+
+    with rasterio.open(raster_path) as src:
+        raster_crs = src.crs
+
+    # Reproject fishnet to raster CRS so rasterstats pixel-cell alignment is exact
+    gdf_proj = gdf.to_crs(raster_crs)  # type: ignore[union-attr]
 
     results = rasterstats.zonal_stats(
-        gdf,  # type: ignore[arg-type]
+        gdf_proj,
         str(raster_path),
         stats=[stat],
         nodata=None,

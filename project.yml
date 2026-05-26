@@ -19,6 +19,20 @@ project:
   response_units: "°F"      # Units for the target variable (used in reports & physics priors)
 
 # ---------------------------------------------------------------------------
+# Data Collection (sparc collect)
+# ---------------------------------------------------------------------------
+collect:
+  # OSF project node ID for the NOAA/NIHHIS Heat Watch campaign.
+  # Find your city's campaign at:
+  #   https://heat.gov/urban-heat-islands-mapping-campaign-program/
+  # The node ID is the 5-character code in the URL: https://osf.io/{node_id}/files/
+  # Example campaigns:
+  #   3xts6  — Philadelphia, PA (2022)
+  # Leave blank or remove to skip CAPA (returns NaN air temperature columns).
+  capa_osf_node: ""
+      # capa_osf_folder: ""  # optional: city folder hint for multi-city nodes (e.g. "Boston" inside tdsy7)
+
+# ---------------------------------------------------------------------------
 # Input Data
 # ---------------------------------------------------------------------------
 data:

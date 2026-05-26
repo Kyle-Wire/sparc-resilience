@@ -1,0 +1,72 @@
+# Variable Caps & Constraints — Seismic Ground Motion Domain
+
+variable_bounds:
+  magnitude:
+    min: 3.0
+    max: 9.5
+    units: "Mw"
+    physical_justification: "Minimum felt earthquake to great megathrust"
+
+  distance_to_rupture_km:
+    min: 0.1
+    max: 500.0
+    units: "km"
+    physical_justification: "On-fault to far-field"
+
+  Vs30_ms:
+    min: 100.0
+    max: 2000.0
+    units: "m/s"
+    physical_justification: "Soft clay (NEHRP E) to hard rock (NEHRP A)"
+
+  depth_km:
+    min: 0.0
+    max: 300.0
+    units: "km"
+    physical_justification: "Surface rupture to deep subduction"
+
+  fault_mechanism:
+    min: -1
+    max: 1
+    units: "code"
+    physical_justification: "Normal (-1), strike-slip (0), reverse (1)"
+
+  basin_depth_z1p0_m:
+    min: 0.0
+    max: 5000.0
+    units: "m"
+    physical_justification: "Shallow rock to deep sedimentary basin"
+
+  water_table_depth_m:
+    min: 0.0
+    max: 30.0
+    units: "m"
+    physical_justification: "Surface to deep water table"
+
+  SPT_N60:
+    min: 0
+    max: 100
+    units: "blows/30cm"
+    physical_justification: "Very loose to very dense/refusal"
+
+  soil_fines_pct:
+    min: 0
+    max: 100
+    units: "%"
+    physical_justification: "Clean sand to pure fines"
+
+delta_constraints:
+  Vs30_ms:
+    max_increase: 300.0
+    max_decrease: 0.0
+    typical_increase: 100.0
+
+  water_table_depth_m:
+    max_increase: 5.0
+    max_decrease: 0.0
+    typical_increase: 2.0
+
+  SPT_N60:
+    max_increase: 30
+    max_decrease: 0
+    typical_increase: 10

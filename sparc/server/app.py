@@ -16,14 +16,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 import shutil
 import tempfile
 import time
 import urllib.request
-
-logger = logging.getLogger("sparc.server")
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -100,10 +97,8 @@ async def _get_jwks() -> dict | None:
             )
             _jwks_cache = json.loads(raw)
             _jwks_fetched_at = time.monotonic()
-        except (urllib.error.URLError, OSError, json.JSONDecodeError):
-            pass  # Transport / parse errors — silenced, return stale cache
-        except Exception as exc:
-            logger.warning("JWKS fetch unexpected error: %s", exc)
+        except Exception:
+            pass  # Return stale cache on error
         return _jwks_cache
 
 
@@ -205,18 +200,6 @@ def _resolve_safe(raw: str, *, allow_create: bool = False) -> Path:
     return resolved
 
 
-def _safe_error(exc: Exception, *, context: str = "") -> HTTPException:
-    """Return a generic 500 HTTPException that does not expose internal details.
-
-    The original exception and context are logged server-side so operators can
-    trace the error without leaking file paths or implementation details to
-    HTTP clients.
-    """
-    log_msg = f"{context}: {exc}" if context else str(exc)
-    logger.error("internal error — %s", log_msg, exc_info=exc)
-    return HTTPException(status_code=500, detail="An internal error occurred.")
-
-
 state = ServerState()
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
@@ -316,7 +299,7 @@ def _attach_registry(config: dict) -> None:
         try:
             reg.migrate_from_disk(paths)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("registry migration failed: %s", exc)
+            print(f"Warning: registry migration failed: {exc}")
         # Detach previous listener (if any) before swapping registries.
         prev = state.registry
         if prev is not None:
@@ -327,7 +310,7 @@ def _attach_registry(config: dict) -> None:
         try:
             reg.add_register_listener(_on_artifact_registered)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("could not attach artifact listener: %s", exc)
+            print(f"Warning: could not attach artifact listener: {exc}")
         state.registry = reg
         # Clear stale cached results from the previous project.
         state.result_cache.clear()
@@ -338,9 +321,9 @@ def _attach_registry(config: dict) -> None:
             from sparc.registry.run_registry import set_active_registry
             set_active_registry(reg)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("could not set active registry: %s", exc)
+            print(f"Warning: could not set active registry: {exc}")
     except Exception as exc:  # noqa: BLE001
-        logger.warning("could not attach RunRegistry: %s", exc)
+        print(f"Warning: could not attach RunRegistry: {exc}")
         state.registry = None
         try:
             from sparc.registry.run_registry import set_active_registry
@@ -378,15 +361,15 @@ def _on_artifact_registered(entry: Any) -> None:
     }
     try:
         state.buffer_event(event)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("_on_artifact_registered buffer_event failed: %s", exc)
+    except Exception:  # noqa: BLE001
+        pass
     # Invalidate cached results for this stage so the next read re-fetches.
     try:
         stage_str = str(getattr(entry, "stage", ""))
         if stage_str:
             state.result_cache.invalidate_stage(stage_str)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("_on_artifact_registered cache invalidation failed: %s", exc)
+    except Exception:  # noqa: BLE001
+        pass
     # Fan out to live ws subscribers via the broadcaster.
     _broadcaster.broadcast(event)
 
@@ -484,9 +467,6 @@ def _prewarm_results(cancel: _threading.Event) -> None:
     that any frontend fetch hits the cache instead of blocking a request thread.
     """
     try:
-        # _open_store() raises HTTPException(400) when no project/registry is
-        # loaded — silenced here since prewarm is a best-effort background task.
-        store = _open_store()
         reg = state.registry
         if reg is None:
             return
@@ -494,6 +474,7 @@ def _prewarm_results(cancel: _threading.Event) -> None:
         # Drive from the live manifest — no static catalog or consumer-tag filter.
         frontend_ids = prewarm_ids(reg.manifest)
 
+        store = _open_store()
         for stage, artifact_id in frontend_ids:
             if cancel.is_set():
                 return
@@ -508,10 +489,8 @@ def _prewarm_results(cancel: _threading.Event) -> None:
                 # Missing or unreadable artifact — not an error during pre-warm.
                 pass
 
-    except HTTPException:
-        return  # No project/registry loaded — expected before /project/load
     except Exception as exc:
-        logger.warning("prewarm failed: %s", exc)
+        print(f"[prewarm] failed: {exc}")
 
 
 def _start_prewarm() -> None:
@@ -541,7 +520,7 @@ async def _auto_load_project():
         return
     resolved = Path(project_env).resolve()
     if not resolved.exists():
-        logger.warning("SPARC_SERVER_PROJECT file not found: %s", resolved)
+        print(f"Warning: SPARC_SERVER_PROJECT file not found: {resolved}")
         return
     try:
         from sparc.config.config import load_config
@@ -555,9 +534,9 @@ async def _auto_load_project():
         _attach_registry(config)
         _load_data_into_state(config)
         _start_prewarm()
-        logger.info("Auto-loaded project: %s", resolved)
+        print(f"Auto-loaded project: {resolved}")
     except Exception as exc:
-        logger.warning("auto-load failed for %s: %s", resolved, exc)
+        print(f"Warning: auto-load failed for {resolved}: {exc}")
 
 
 # ------------------------------------------------------------------
@@ -621,7 +600,7 @@ async def shutdown(request: Request):
         try:
             os.kill(os.getpid(), signal.SIGINT)
         except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("failed to deliver SIGINT during /shutdown: %s", exc)
+            print(f"Failed to deliver SIGINT during /shutdown: {exc}")
 
     asyncio.create_task(_terminate_soon())
     return {"status": "shutting down"}
@@ -638,7 +617,7 @@ async def _on_shutdown() -> None:
     try:
         _broadcaster.broadcast({"type": "server_shutdown"})
     except Exception as exc:
-        logger.warning("shutdown: broadcaster drain failed: %s", exc)
+        print(f"Shutdown: broadcaster drain failed: {exc}")
 
     # Release the cached scenario GeoDataFrame(s) so the file handle is
     # closed before PyInstaller's `_MEI` cleanup runs.
@@ -654,9 +633,9 @@ async def _on_shutdown() -> None:
         if callable(close):
             close()
     except Exception as exc:
-        logger.warning("shutdown: registry close failed: %s", exc)
+        print(f"Shutdown: registry close failed: {exc}")
 
-    logger.info("SPARC server shutdown complete")
+    print("SPARC server shutdown complete")
 
 
 @app.get("/api/hardware")
@@ -910,7 +889,7 @@ async def export_block(req: BlockExportRequest):
     try:
         paths = PipelinePaths.from_config(state.project_config)
     except Exception as exc:
-        raise _safe_error(exc, context="export: resolve paths")
+        raise HTTPException(500, f"Cannot resolve paths: {exc}")
 
     exports_dir = paths.output_dir / "exports"
     exports_dir.mkdir(parents=True, exist_ok=True)
@@ -1003,7 +982,7 @@ async def ai_key_save(body: dict[str, Any] = Body(...)):
     try:
         _keyring_set(key)
     except Exception as exc:
-        raise _safe_error(exc, context="credentials: keychain store")
+        raise HTTPException(500, f"Failed to store key in OS keychain: {exc}")
     return {"status": "saved"}
 
 
@@ -1404,13 +1383,6 @@ async def crs_distortion(
     if not projected_epsg:
         raise HTTPException(400, "projected_epsg is required")
 
-    from sparc.server.crs_validation import validate_epsg
-    try:
-        input_code = validate_epsg(input_epsg)
-        projected_code = validate_epsg(projected_epsg)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-
     try:
         from pyproj import Transformer, CRS
         import numpy as np
@@ -1435,8 +1407,10 @@ async def crs_distortion(
                 cy = (bb["miny"] + bb["maxy"]) / 2
 
         # Short-circuit: same CRS → no distortion
-        if input_code == projected_code:
-            src_crs = CRS.from_epsg(input_code)
+        norm_in = input_epsg.replace("EPSG:", "").strip()
+        norm_proj = projected_epsg.replace("EPSG:", "").strip()
+        if norm_in == norm_proj:
+            src_crs = CRS.from_epsg(int(norm_in))
             return {
                 "center_lon": cx,
                 "center_lat": cy,
@@ -1454,8 +1428,8 @@ async def crs_distortion(
         delta_deg = 0.001  # ~100m along latitude
         try:
             t = Transformer.from_crs(
-                f"EPSG:{input_code}",
-                f"EPSG:{projected_code}",
+                f"EPSG:{input_epsg.replace('EPSG:', '')}",
+                f"EPSG:{projected_epsg.replace('EPSG:', '')}",
                 always_xy=True,
             )
             x0, y0 = t.transform(cx, cy)
@@ -1470,7 +1444,7 @@ async def crs_distortion(
 
             # If projected CRS has angular units (i.e. it is also geographic),
             # convert projected delta from degrees to metres using geod distances.
-            tgt_crs_obj = CRS.from_epsg(projected_code)
+            tgt_crs_obj = CRS.from_epsg(int(norm_proj))
             tgt_is_angular = tgt_crs_obj.axis_info[0].unit_name in ("degree", "grad")
             if tgt_is_angular:
                 # Both input and output are in degrees — distances are the same
@@ -1482,8 +1456,8 @@ async def crs_distortion(
             k_mean = (k_x + k_y) / 2
             area_distortion_pct = float(abs(k_mean ** 2 - 1) * 100)
 
-            src_crs = CRS.from_epsg(input_code)
-            tgt_crs = CRS.from_epsg(projected_code)
+            src_crs = CRS.from_epsg(int(input_epsg.replace("EPSG:", "")))
+            tgt_crs = CRS.from_epsg(int(projected_epsg.replace("EPSG:", "")))
 
             return {
                 "center_lon": cx,
@@ -1838,7 +1812,7 @@ async def preprocess_data():
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
         except Exception as _exc:
-            logger.warning("preprocess step 2 (CRS): %s", _exc)
+            print(f"  Preprocess step 2 (CRS): {_exc}")
         sha = _hash_df(df)
         step_hashes["reproject_crs"] = sha
         yield _sse("Reproject CRS", len(df), sha)
@@ -1851,7 +1825,7 @@ async def preprocess_data():
             before = len(df)
             df = df.drop_duplicates(subset=coord_cols)
             if before != len(df):
-                logger.debug("deduplication: removed %d duplicate coord rows", before - len(df))
+                print(f"  Deduplication: removed {before - len(df)} duplicate coord rows")
         sha = _hash_df(df)
         step_hashes["deduplicate_coords"] = sha
         yield _sse("Deduplicate coords", len(df), sha)
@@ -1873,7 +1847,7 @@ async def preprocess_data():
             before = len(df)
             df = df.dropna(subset=essential)
             if before != len(df):
-                logger.debug("impute: dropped %d rows with missing essential values", before - len(df))
+                print(f"  Impute: dropped {before - len(df)} rows with missing essential values")
         sha = _hash_df(df)
         step_hashes["impute_missing"] = sha
         yield _sse("Impute missing", len(df), sha)
@@ -1900,9 +1874,9 @@ async def preprocess_data():
                 artifacts_dir.mkdir(parents=True, exist_ok=True)
                 scaler_path = artifacts_dir / "welford_scaler.pkl"
                 scaler.save(scaler_path)
-                logger.debug("Welford scaler saved to %s", scaler_path)
+                print(f"  Welford scaler saved to {scaler_path}")
         except Exception as _exc:
-            logger.warning("preprocess step 6 (standardise): %s", _exc)
+            print(f"  Preprocess step 6 (standardise): {_exc}")
         sha = _hash_df(df)
         step_hashes["standardise"] = sha
         yield _sse("Standardise (z-score)", len(df), sha)
@@ -1918,9 +1892,9 @@ async def preprocess_data():
         try:
             cache_path = project_dir / "data_cache.parquet"
             df.to_parquet(cache_path, engine="pyarrow", index=False)
-            logger.debug("arrow cache written to %s", cache_path)
+            print(f"  Arrow cache written to {cache_path}")
         except Exception as _exc:
-            logger.warning("preprocess step 8 (arrow cache): %s", _exc)
+            print(f"  Preprocess step 8 (arrow cache): {_exc}")
         sha = _hash_df(df)
         step_hashes["write_arrow"] = sha
         yield _sse("Write cached arrow", len(df), sha)
@@ -1936,7 +1910,7 @@ async def preprocess_data():
                 settings={"step_hashes": step_hashes},
             )
         except Exception as _exc:
-            logger.warning("preprocess: versioning failed: %s", _exc)
+            print(f"  Preprocess: versioning failed: {_exc}")
 
         # Update live state
         state.data = df
@@ -2192,7 +2166,7 @@ async def get_runs_diff(
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc))
     except Exception as exc:
-        raise _safe_error(exc, context="runs: diff")
+        raise HTTPException(500, f"Diff failed: {exc}")
 
 
 # ------------------------------------------------------------------
@@ -2223,7 +2197,7 @@ async def post_reproduce_freeze():
         paths = PipelinePaths.from_config(state.project_config)
         out = paths.output_dir
     except Exception as exc:
-        raise _safe_error(exc, context="reproduce: resolve output_dir")
+        raise HTTPException(500, f"Cannot resolve output_dir: {exc}")
     repo_root = Path(__file__).resolve().parents[2]
     p = freeze_run(out, state.project_config, repo_root=repo_root)
     return {"path": str(p), "output_dir": str(out)}
@@ -2457,7 +2431,7 @@ async def post_scenarios_chain(payload: dict = Body(...)):
     except HTTPException:
         raise
     except Exception as exc:
-        raise _safe_error(exc, context="scenarios: chain rollout") from exc
+        raise HTTPException(500, f"Chain rollout failed: {exc}") from exc
 
 
 # ------------------------------------------------------------------
@@ -2523,8 +2497,8 @@ async def get_context_layers(domain: str | None = Query(default=None)):
 
 @app.post("/report/audience")
 async def post_report_audience(
-    audience: str = Query(..., pattern="^(technical|planner|public)$"),
-    fmt: str = Query("html", pattern="^(md|html|pdf)$"),
+    audience: str = Query(..., regex="^(technical|planner|public)$"),
+    fmt: str = Query("html", regex="^(md|html|pdf)$"),
     payload: dict | None = Body(default=None),
 ):
     """Render a SPARC run for a specific audience.
@@ -4515,11 +4489,6 @@ async def get_scenario_increment(variable: str = Query(...), increment: float = 
 # ------------------------------------------------------------------
 
 
-# Maximum number of IDs accepted by GET /results/batch — prevents DoS via
-# oversized comma-separated lists that would each trigger a DB lookup.
-_BATCH_IDS_MAX: int = 50
-
-
 @app.get("/results/batch")
 async def get_batch_results(
     ids: str = Query(
@@ -4542,8 +4511,6 @@ async def get_batch_results(
         if ":" in token:
             stage, artifact_id = token.split(":", 1)
             pairs.append((stage.strip(), artifact_id.strip()))
-    if len(pairs) > _BATCH_IDS_MAX:
-        raise HTTPException(413, f"Too many IDs: max {_BATCH_IDS_MAX} per request")
     store = _open_store()
     return await asyncio.to_thread(read_batch, store, pairs)
 
@@ -4897,7 +4864,7 @@ async def get_results_bundle():
 # ------------------------------------------------------------------
 
 @app.get("/results/{stage:int}")
-async def get_results(stage: int, format: str = Query("json", pattern="^(json|geojson)$")):
+async def get_results(stage: int, format: str = Query("json", regex="^(json|geojson)$")):
     """Return in-memory results for a completed pipeline stage (DB-only).
 
     For artifact-style data use the dedicated `/results/<name>` endpoints.
@@ -4919,7 +4886,7 @@ async def get_results(stage: int, format: str = Query("json", pattern="^(json|ge
 
 
 @app.get("/results/{stage:int}/predictions")
-async def get_predictions(stage: int, format: str = Query("geojson", pattern="^(json|geojson)$")):
+async def get_predictions(stage: int, format: str = Query("geojson", regex="^(json|geojson)$")):
     """Return spatial predictions for a stage (DB-only).
 
     Mapping:
@@ -5082,7 +5049,7 @@ async def run_scenarios(body: Optional[RunScenariosBody] = Body(default=None)):
                     violations = checker.check(data, deltas, target_deltas=target_deltas, verbose=True)
                     conservation_violations.extend(violations)
     except Exception as e:
-        logger.warning("[CONSERVATION] check skipped: %s", e)
+        print(f"  [CONSERVATION] Check skipped ({e})")
 
     state.store_result(4, {"summary": summary_df, "spatial": results_gdf})
 
@@ -5342,7 +5309,7 @@ async def get_equity_layer():
 
 
 @app.get("/scenarios/results")
-async def scenario_results(format: str = Query("geojson", pattern="^(json|geojson)$")):
+async def scenario_results(format: str = Query("geojson", regex="^(json|geojson)$")):
     """Return scenario simulation results."""
     result = state.get_result(4)
     if result is None:
@@ -5519,7 +5486,7 @@ async def physics_defaults():
             k: c.to_dict() for k, c in pp.coefficients.items()
         }
     except Exception as e:
-        raise _safe_error(e, context="scenarios: pde coefficients")
+        raise HTTPException(500, str(e))
 
 
 # ------------------------------------------------------------------
@@ -5703,7 +5670,7 @@ async def prepare_data_pipeline(body: dict = Body(...)):
 # ------------------------------------------------------------------
 
 @app.post("/report/generate")
-async def generate_report(format: str = Query("markdown", pattern="^(markdown|json)$")):
+async def generate_report(format: str = Query("markdown", regex="^(markdown|json)$")):
     """Generate a pipeline report summarising config, data, and results.
 
     Returns Markdown by default; JSON structure when ``format=json``.
@@ -6271,7 +6238,7 @@ async def post_dag_suggest_edges(payload: dict = Body(default={})):
     except HTTPException:
         raise
     except Exception as exc:
-        raise _safe_error(exc, context="causal: edge suggestion") from exc
+        raise HTTPException(500, f"Edge suggestion failed: {exc}") from exc
 
 
 # ------------------------------------------------------------------
@@ -6672,7 +6639,7 @@ async def download_geopackage():
         for layer_name, gdf in layers.items():
             gdf.to_file(tmp_path, layer=layer_name, driver="GPKG")
     except Exception as exc:
-        raise _safe_error(exc, context="export: geopackage creation")
+        raise HTTPException(500, f"GeoPackage creation failed: {exc}")
 
     return FileResponse(
         tmp_path,
@@ -6735,7 +6702,7 @@ def _load_data_into_state(config: dict) -> None:
         state.result_cache.invalidate_stage("data_geojson")
         _compute_summary(state)
     except Exception as exc:
-        logger.warning("data pre-load failed: %s", exc)
+        print(f"Warning: data pre-load failed: {exc}")
 
 
 def _compute_summary(st: ServerState) -> dict:
@@ -6900,7 +6867,7 @@ def download_artifact(stage: str, artifact_id: str, fmt: Optional[str] = None):
     try:
         path = store.export(stage, artifact_id, fmt=fmt)
     except Exception as exc:
-        raise _safe_error(exc, context="export: artifact") from exc
+        raise HTTPException(500, f"Export failed: {exc}") from exc
     suffix = path.suffix.lstrip(".") or "bin"
     media = {
         "csv": "text/csv",
@@ -6930,7 +6897,7 @@ def export_stage_zip(stage: str):
         if not isinstance(zip_path, Path):
             raise RuntimeError("export_stage did not return a zip path")
     except Exception as exc:
-        raise _safe_error(exc, context="export: stage artifacts") from exc
+        raise HTTPException(500, f"Stage export failed: {exc}") from exc
     return _FileResponse(
         zip_path,
         media_type="application/zip",
@@ -7064,7 +7031,7 @@ async def collect_fetch(body: dict = Body(...)):
     except HTTPException:
         raise
     except Exception as exc:
-        raise _safe_error(exc, context=f"data: fetch group '{group}'")
+        raise HTTPException(500, f"Fetch failed for group '{group}': {exc}")
 
     return {
         "group": group,
@@ -7239,7 +7206,7 @@ async def inference_zero_shot(body: _ZeroShotRequest):
     try:
         result = zero_shot_predict(features=features)
     except Exception as exc:
-        raise _safe_error(exc, context="inference: zero-shot") from exc
+        raise HTTPException(500, f"Zero-shot inference failed: {exc}") from exc
 
     return {
         "mean": result.y_pred.tolist(),
@@ -7292,7 +7259,7 @@ async def inference_few_shot(body: _FewShotRequest):
             calibration_coords=calib_coords,
         )
     except Exception as exc:
-        raise _safe_error(exc, context="inference: few-shot") from exc
+        raise HTTPException(500, f"Few-shot inference failed: {exc}") from exc
 
     return {
         "mean": result.y_pred.tolist(),

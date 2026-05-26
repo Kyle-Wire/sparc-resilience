@@ -1,0 +1,156 @@
+# =============================================================================
+# SPARC Project Configuration — Wildfire Risk / Burn Severity Domain
+# =============================================================================
+# Spatial analysis of burn severity (dNBR) or fire probability as a function
+# of fuel load, weather, topography, and vegetation.
+#
+# Key references:
+#   - Rothermel (1972) — Fire spread model
+#   - Scott & Burgan (2005) — Standard fire behavior fuel models
+#   - Parks et al. (2018) — dNBR severity classification
+# =============================================================================
+
+project:
+  name: "Wildfire Burn Severity Analysis"
+  description: "Spatial regression of post-fire burn severity driven by fuel, weather, topography, and vegetation conditions"
+  domain: wildfire
+  version: "1.0.0"
+  author: ""
+  response_units: "dNBR"
+
+data:
+  file_path: ""
+  target_column: "dnbr"                        # Differenced Normalized Burn Ratio
+  identifier_column: "pixel_id"
+  coord_columns: ["longitude", "latitude"]
+
+crs:
+  input: "EPSG:4326"
+  projected: ""
+
+predictors:
+  - fuel_load_tha              # Surface fuel load (tonnes/ha) — LANDFIRE
+  - canopy_cover_pct           # Tree canopy cover (%)
+  - slope_deg                  # Terrain slope (degrees)
+  - aspect_cos                 # Cosine of aspect (north = 1, south = -1)
+  - elevation_m                # Elevation (m)
+  - VPD_kPa                   # Vapor pressure deficit (kPa) — fire weather
+  - wind_speed_ms              # Maximum wind speed during fire (m/s)
+  - temperature_max_C          # Maximum temperature (°C)
+  - drought_index              # PDSI or KBDI drought severity
+  - NDVI_prefire               # Pre-fire vegetation greenness
+  - distance_to_road_km        # Distance to nearest road (km) — ignition proxy
+
+physics:
+  priors_file: "physics/priors.yml"
+  caps_file:   "physics/caps.yml"
+  monotone_constraints:
+    fuel_load_tha:  1            # More fuel → higher severity
+    canopy_cover_pct:  0         # Complex: crown fire vs fire break
+    slope_deg:  1                # Steeper → faster uphill spread
+    VPD_kPa:  1                  # Drier atmosphere → worse fire
+    wind_speed_ms:  1            # Higher wind → faster spread
+    temperature_max_C:  1        # Higher temp → lower fuel moisture
+    drought_index:  1            # More drought → drier fuels
+    NDVI_prefire:  0             # Complex: green = less flammable but more fuel
+    elevation_m:  0              # Non-monotone: mid-elevation fire belt
+
+causal:
+  dag_file: "causal/dag.yml"
+  estimator: "dml"              # "dml" (Wager 2025 default), "hgb", or "ols"
+  estimate_cate: true           # Spatial CATE via Bayesian low-rank GP
+  inference: "bayesian"         # "bayesian" (V2 default: MC³ + NUTS) or "frequentist" (V1, deprecated)
+  cate_estimator: "bayesian"
+  discovery:
+    enabled: true
+    methods: [pc_stable, lingam, ges]
+    alpha: 0.05
+    consensus_threshold: 2
+    compare_expert: true
+  mc3:
+    n_iterations: 10000
+    n_chains: 4
+    burnin_fraction: 0.25
+    edge_penalty: 1.0
+    seed: 42
+  nuts:
+    n_samples: 2000
+    n_warmup: 500
+    n_chains: 2
+    target_accept_rate: 0.85
+    max_tree_depth: 8
+  bayesian_cate:
+    n_features: 16              # low-RAM laptops: 16; servers: 32+
+    n_samples: 2000
+    n_warmup: 500
+    n_chains: 2
+    target_accept_rate: 0.85
+    max_tree_depth: 8
+    kernel_lengthscale: 0.20
+  wager2025:
+    overlap: true               # Gap 1
+    rate_qini: true             # Gap 2
+    spillover: true             # Gap 3
+    iv: true                    # Gaps 4-5 (only fires if DAG has instrument)
+    sequential_aipw: true       # Gap 6
+    panel: true                 # Gap 7 (only fires with panel cols)
+    policy_learning: true       # Gap 8
+    cbps: true                  # Gap 9
+  actionable_variables:
+    - fuel_load_tha
+    - canopy_cover_pct
+  fixed_variables:
+    - slope_deg
+    - aspect_cos
+    - elevation_m
+    - distance_to_road_km
+
+output:
+  base_dir: "output"
+
+pipeline:
+  random_seed: 42
+  n_spatial_folds: 5
+
+# temporal:
+#   enabled: true
+#   time_column: "fire_date"
+#   frequency: "daily"
+#   lag_features:
+#     enabled: true
+#     lags: [1, 7, 30]
+#     rolling_windows: [7, 30, 90]
+#     variables: [VPD_kPa, temperature_max_C, drought_index]
+#   temporal_cv:
+#     method: "expanding_window"
+#     n_splits: 5
+#     gap: 0
+
+# ---------------------------------------------------------------------------
+# Stage-4 Budget Optimizer (cell-level allocation under a budget)
+# ---------------------------------------------------------------------------
+# Reads the per-cell cooling/benefit surface from Stage 4's
+# ``scenario_results`` and allocates a budget across cells using
+# greedy / 2-opt / MILP solvers.  Set ``total: null`` to skip the
+# constrained optimum and emit only the Pareto frontier (cost vs benefit).
+budget:
+  total: null                  # null → unconstrained Pareto only
+  solver: greedy_2opt          # greedy | greedy_2opt | milp
+  multipliers: [0.25, 0.5, 0.75, 1.0, 1.5]
+  cost_per_unit: {}            # e.g. {Pct_Canopy: 250}; empty = unit cost
+
+# ---------------------------------------------------------------------------
+# Stage-4 Wager-2025 caps (saturation + spillover folding)
+# ---------------------------------------------------------------------------
+# ``spillover_mode``:
+#   diagnostic       — direct/spillover/total are side-columns only.
+#   fold_into_delta  — headline ``delta_mean`` becomes the SUTVA-corrected
+#                      total; ``delta_direct_only`` preserves the unit-level
+#                      number for review.  Default in mode_5_full_audit.
+# ``saturation_clipping``: when true, per-cell delta is capped at the
+# Stage-3 dose-response knee (saturation_marginal_floor × peak |slope|).
+caps:
+  spillover_mode: fold_into_delta
+  saturation_clipping: true
+  saturation_marginal_floor: 0.5
+

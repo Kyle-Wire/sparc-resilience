@@ -1,0 +1,84 @@
+# Variable Caps & Constraints — Wildfire Burn Severity Domain
+
+variable_bounds:
+  fuel_load_tha:
+    min: 0.0
+    max: 300.0
+    units: "tonnes/ha"
+    physical_justification: "Bare ground to old-growth forest litter"
+
+  canopy_cover_pct:
+    min: 0.0
+    max: 100.0
+    units: "percentage"
+    physical_justification: "Open grassland to closed-canopy forest"
+
+  slope_deg:
+    min: 0.0
+    max: 70.0
+    units: "degrees"
+    physical_justification: "Flat to very steep terrain"
+
+  aspect_cos:
+    min: -1.0
+    max: 1.0
+    units: "cosine"
+    physical_justification: "South-facing to north-facing"
+
+  elevation_m:
+    min: 0.0
+    max: 4500.0
+    units: "m"
+    physical_justification: "Sea level to alpine treeline"
+
+  VPD_kPa:
+    min: 0.0
+    max: 8.0
+    units: "kPa"
+    physical_justification: "Humid to extreme desert conditions"
+
+  wind_speed_ms:
+    min: 0.0
+    max: 40.0
+    units: "m/s"
+    physical_justification: "Calm to extreme Santa Ana / Chinook winds"
+
+  temperature_max_C:
+    min: -10.0
+    max: 55.0
+    units: "°C"
+    physical_justification: "Cold-season to extreme heat wave"
+
+  drought_index:
+    min: -6.0
+    max: 6.0
+    units: "PDSI"
+    physical_justification: "Extreme wet to extreme drought"
+
+  NDVI_prefire:
+    min: -0.1
+    max: 0.9
+    units: "index"
+    physical_justification: "Bare/water to dense forest"
+
+  distance_to_road_km:
+    min: 0.0
+    max: 100.0
+    units: "km"
+    physical_justification: "Roadside to deep wilderness"
+
+delta_constraints:
+  fuel_load_tha:
+    max_increase: 0.0
+    max_decrease: 50.0
+    typical_decrease: 15.0
+
+  canopy_cover_pct:
+    max_increase: 0.0
+    max_decrease: 40.0
+    typical_decrease: 15.0
+
+  VPD_kPa:
+    max_increase: 3.0
+    max_decrease: 0.0
+    typical_increase: 1.0

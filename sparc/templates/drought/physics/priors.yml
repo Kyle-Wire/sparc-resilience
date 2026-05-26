@@ -1,0 +1,55 @@
+# Physics Priors — Drought Severity Domain
+# Sources: Vicente-Serrano et al. (2010), Trenberth et al. (2014)
+
+coefficients:
+  precipitation_mm:
+    value: 0.015
+    units: "SPEI per mm monthly precipitation"
+    uncertainty: 0.005
+    source_scale: "grid cell"
+    literature_source: "McKee et al. (1993); Vicente-Serrano et al. (2010)"
+    confidence: "high"
+    description: "Primary positive driver of water balance"
+
+  temperature_C:
+    value: -0.10
+    units: "SPEI per °C warming"
+    uncertainty: 0.05
+    source_scale: "grid cell"
+    literature_source: "Trenberth et al. (2014) Nature Climate Change; Dai (2013)"
+    confidence: "high"
+    description: "Temperature-driven ET increase exacerbates drought"
+
+  potential_ET_mm:
+    value: -0.012
+    units: "SPEI per mm PET"
+    uncertainty: 0.005
+    source_scale: "grid cell"
+    literature_source: "Vicente-Serrano et al. (2010) J. Climate"
+    confidence: "high"
+    description: "ET demand is the negative water balance term"
+
+  soil_moisture_pct:
+    value: 0.03
+    units: "SPEI per % soil moisture"
+    uncertainty: 0.015
+    source_scale: "grid cell"
+    literature_source: "Seneviratne et al. (2010) Earth-Science Reviews"
+    confidence: "medium"
+    description: "Soil moisture feedback amplifies or dampens drought"
+
+  NDVI:
+    value: 1.5
+    units: "SPEI per 0.1 NDVI"
+    uncertainty: 0.8
+    source_scale: "250m satellite"
+    literature_source: "Mu et al. (2013) Remote Sensing of Environment"
+    confidence: "low"
+    description: "Vegetation response is a drought diagnostic, not purely causal"
+
+scale_harmonization:
+  target_resolution: 1000
+  factors:
+    "grid cell":
+      precipitation_mm: 1.0
+      temperature_C: 1.0

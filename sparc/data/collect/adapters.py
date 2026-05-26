@@ -99,14 +99,16 @@ class CAPAAdapter:
     def fetch(self, fishnet: object, bbox: tuple, params: dict) -> FetchResult:
         from .capa import fetch_capa
         window = _parse_window(params)
+        osf_node_id   = params.get("capa_osf_node")
+        osf_folder    = params.get("capa_osf_folder")
         try:
-            gdf, anchor_dates = fetch_capa(fishnet, bbox, window)
+            gdf, anchor_dates = fetch_capa(fishnet, bbox, window, osf_node_id=osf_node_id, osf_folder_hint=osf_folder)
         except Exception as exc:
             return FetchResult(gdf=fishnet, error=str(exc))
         cols = {
-            "aat_morning":  "NOAA CAPA / Open-Meteo",
-            "aat_midday":   "NOAA CAPA / Open-Meteo",
-            "aat_night":    "NOAA CAPA / Open-Meteo",
+            "aat_morning":  "NOAA/NIHHIS Heat Watch (OSF)",
+            "aat_midday":   "NOAA/NIHHIS Heat Watch (OSF)",
+            "aat_night":    "NOAA/NIHHIS Heat Watch (OSF)",
             "diurnal_aat":  "Derived: CAPA midday − night",
         }
         present = {k: v for k, v in cols.items() if k in gdf.columns}  # type: ignore[operator]

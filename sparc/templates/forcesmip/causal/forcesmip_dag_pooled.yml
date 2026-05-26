@@ -1,0 +1,109 @@
+# =============================================================================
+# ForceSMIP Causal DAG — Cross-Member Pooled Analysis
+# =============================================================================
+# Only includes variables that VARY across the 10 ensemble members.
+# GHG, aerosol, volcanic, solar, ENSO are constant across members → dropped.
+# Treatments: GMST_trend, AMV_index, IPO_index (vary across members).
+# Additional indices: PDO_index, NAO_index (vary across members).
+# =============================================================================
+
+nodes:
+  - name: GMST_trend
+    type: treatment
+    description: "Global mean surface temperature trend — varies 0.73–1.72°C across members"
+
+  - name: AMV_index
+    type: treatment
+    description: "Atlantic Multidecadal Variability index — varies across members"
+
+  - name: IPO_index
+    type: treatment
+    description: "Interdecadal Pacific Oscillation index — varies across members"
+
+  - name: PDO_index
+    type: treatment
+    description: "Pacific Decadal Oscillation (EOF-1 of N. Pacific SST) — varies across members"
+
+  - name: NAO_index
+    type: treatment
+    description: "North Atlantic Oscillation index — varies across members"
+
+  - name: member_id
+    type: confounder
+    description: "Climate model identity — captures model-specific biases"
+
+  - name: lat_abs
+    type: confounder
+    description: "Absolute latitude — spatial structure"
+
+  - name: land_fraction
+    type: confounder
+    description: "Land coverage fraction"
+
+  - name: ocean_basin
+    type: confounder
+    description: "Ocean basin classification"
+
+  # Outcome — swapped per target variable
+  - name: tos_trend
+    type: outcome
+    description: "Local trend — forced component to isolate"
+
+edges:
+  # GMST → local target (pattern scaling — primary mechanism)
+  - parent: GMST_trend
+    child: tos_trend
+    mechanism: "spatial pattern scaling of global warming"
+
+  # AMV → local target (Atlantic influence)
+  - parent: AMV_index
+    child: tos_trend
+    mechanism: "Atlantic multidecadal teleconnection"
+
+  # IPO → local target (Pacific influence)
+  - parent: IPO_index
+    child: tos_trend
+    mechanism: "Pacific decadal teleconnection"
+
+  # PDO → local target
+  - parent: PDO_index
+    child: tos_trend
+    mechanism: "PDO modulates North Pacific and downstream SST patterns"
+
+  # NAO → local target (North Atlantic / European influence)
+  - parent: NAO_index
+    child: tos_trend
+    mechanism: "NAO drives North Atlantic SST and European climate patterns"
+
+  # GMST mediates AMV/IPO effects on global scale
+  - parent: AMV_index
+    child: GMST_trend
+    mechanism: "AMV contribution to global mean temperature"
+
+  - parent: IPO_index
+    child: GMST_trend
+    mechanism: "IPO contribution to global mean temperature"
+
+  # Teleconnection edges (inter-mode relationships)
+  - parent: AMV_index
+    child: NAO_index
+    mechanism: "AMV phase modulates NAO via Atlantic SST forcing of jet stream"
+
+  - parent: IPO_index
+    child: PDO_index
+    mechanism: "IPO is the leading low-frequency mode underlying PDO variability"
+
+# Temporal lagged edges (for spatiotemporal mode if activated)
+temporal_edges:
+  - source: AMV_index
+    target: NAO_index
+    lag: 1
+    description: "AMV → NAO teleconnection operates on multi-year timescale"
+  - source: IPO_index
+    target: PDO_index
+    lag: 1
+    description: "IPO phase modulates PDO on decadal timescale"
+  - source: GMST_trend
+    target: tos_trend
+    lag: 1
+    description: "Global warming signal propagates to SST field with ~1-step lag"

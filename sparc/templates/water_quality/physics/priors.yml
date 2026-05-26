@@ -1,0 +1,55 @@
+# Physics Priors — Water Quality (Dissolved Oxygen) Domain
+# Sources: Streeter-Phelps (1925), Chapra (2008), EPA QUAL2K
+
+coefficients:
+  temperature_C:
+    value: -0.30
+    units: "mg/L DO per °C"
+    uncertainty: 0.10
+    source_scale: "station"
+    literature_source: "Henry's Law DO saturation; Chapra (2008)"
+    confidence: "high"
+    description: "DO saturation decreases ~0.3 mg/L per °C above 10°C"
+
+  BOD_mgL:
+    value: -0.50
+    units: "mg/L DO per mg/L BOD"
+    uncertainty: 0.20
+    source_scale: "reach"
+    literature_source: "Streeter-Phelps (1925); O'Connor & Dobbins (1958)"
+    confidence: "high"
+    description: "Deoxygenation rate depends on BOD and temperature"
+
+  streamflow_m3s:
+    value: 0.10
+    units: "mg/L DO per m³/s flow increase"
+    uncertainty: 0.05
+    source_scale: "reach"
+    literature_source: "O'Connor & Dobbins (1958) reaeration coefficient"
+    confidence: "medium"
+    description: "Reaeration increases with turbulence and velocity"
+
+  agriculture_pct:
+    value: -0.04
+    units: "mg/L DO per % agricultural land"
+    uncertainty: 0.02
+    source_scale: "catchment"
+    literature_source: "Allan (2004) Landscape Ecology; USGS SPARROW"
+    confidence: "medium"
+    description: "Agricultural nutrient loading degrades downstream DO"
+
+  forest_pct:
+    value: 0.03
+    units: "mg/L DO per % forest cover"
+    uncertainty: 0.02
+    source_scale: "catchment"
+    literature_source: "Allan (2004); Sweeney et al. (2004)"
+    confidence: "medium"
+    description: "Riparian forest shade, filtration, and bank stabilization"
+
+scale_harmonization:
+  target_resolution: 100
+  factors:
+    "catchment":
+      agriculture_pct: 1.0
+      forest_pct: 1.0

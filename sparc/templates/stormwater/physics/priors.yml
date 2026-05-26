@@ -1,0 +1,57 @@
+# Physics Priors — Stormwater Runoff Domain
+# Literature-based coefficients for intervention analysis
+# Sources: NRCS TR-55 (1986), Schueler (1994), EPA (2003)
+
+coefficients:
+  impervious_pct:
+    value: 0.95
+    units: "mm runoff per 1% impervious increase (for 25mm storm)"
+    uncertainty: 0.30
+    source_scale: "catchment"
+    literature_source: "Schueler (1994) Watershed Protection Techniques; Arnold & Gibbons (1996)"
+    confidence: "high"
+    description: "Impervious cover drives near-linear runoff increase"
+
+  canopy_pct:
+    value: -0.40
+    units: "mm runoff per 1% canopy increase (for 25mm storm)"
+    uncertainty: 0.25
+    source_scale: "catchment"
+    literature_source: "Xiao et al. (1998) J. Arboriculture; Berland et al. (2017)"
+    confidence: "medium"
+    description: "Canopy interception and root-zone infiltration"
+
+  curve_number:
+    value: 0.52
+    units: "mm runoff per +1 CN (for 25mm storm)"
+    uncertainty: 0.15
+    source_scale: "catchment"
+    literature_source: "NRCS TR-55 (1986); Hawkins et al. (2009)"
+    confidence: "high"
+    description: "Nonlinear but locally linear around typical CN values"
+
+  rainfall_depth_mm:
+    value: 0.65
+    units: "mm runoff per mm rainfall (C ~ 0.65 for suburban)"
+    uncertainty: 0.20
+    source_scale: "event"
+    literature_source: "Rational Method; EPA SWMM Manual (2020)"
+    confidence: "high"
+    description: "Runoff coefficient for mixed-use suburban catchment"
+
+  slope_pct:
+    value: 0.18
+    units: "mm runoff per 1% slope increase"
+    uncertainty: 0.10
+    source_scale: "subcatchment"
+    literature_source: "Saghafian et al. (2008) J. Hydrology; SCS lag equation"
+    confidence: "medium"
+    description: "Slope effect on time of concentration and peak discharge"
+
+scale_harmonization:
+  target_resolution: 30  # meters
+  factors:
+    "catchment":
+      impervious_pct: 1.0
+      canopy_pct: 1.0
+      curve_number: 1.0

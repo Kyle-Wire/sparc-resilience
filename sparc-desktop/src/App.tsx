@@ -96,19 +96,33 @@ export default function App() {
   // Must be defined before any early returns to satisfy rules-of-hooks
   const navigateToSettings = useCallback(() => navigate("Settings"), [navigate]);
 
+  // ── [DEBUG-sparc-blank] render-branch probes ─────────────────────────
+  console.log("[DEBUG-sparc-blank] render", {
+    splashDone,
+    rehydrating: project.rehydrating,
+    splashStep,
+    user: user?.email ?? null,
+    page,
+  });
+  // ──────────────────────────────────────────────────────────────────────
+
   // Show splash while loading (or on startup failure)
   if (!splashDone || project.rehydrating || splashStep === "failed") {
+    console.log("[DEBUG-sparc-blank] → Splash", { splashStep, splashDone, rehydrating: project.rehydrating });
     return <Splash step={splashStep} parallaxEnabled={parallaxEnabled} onRetry={handleRetry} />;
   }
 
   // Show login if no authenticated user
   if (!user) {
+    console.log("[DEBUG-sparc-blank] → LoginScreen (user=null)");
     return (
       <ErrorBoundary page="login">
         <LoginScreen parallaxEnabled={parallaxEnabled} />
       </ErrorBoundary>
     );
   }
+
+  console.log("[DEBUG-sparc-blank] → Shell", { page });
 
   const renderPage = () => {
     const gate = (el: React.ReactNode) => (
@@ -140,6 +154,7 @@ export default function App() {
       case "Performance":
         return <PerformancePage />;
       default:
+        console.warn("[DEBUG-sparc-blank] renderPage: unknown page →", page);
         return null;
     }
   };

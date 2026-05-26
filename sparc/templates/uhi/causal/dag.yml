@@ -1,0 +1,120 @@
+# =============================================================================
+# Causal Directed Acyclic Graph — Urban Heat Island Domain
+# =============================================================================
+# Defines the causal structure among predictors and the target variable.
+# Used by DoWhy for identifiability checks, backdoor adjustment, and
+# counterfactual scenario propagation.
+#
+# You can also draw this graph visually at https://www.dagitty.net/dags.html
+# and export as JSON, then convert to this format.
+#
+# Referenced by: project.yml → causal.dag_file
+# =============================================================================
+
+# Nodes — every variable in the causal system
+nodes:
+  - name: Pct_Canopy
+    type: treatment         # Can be intervened on
+    description: "Tree canopy cover (%)"
+
+  - name: Pct_Impervious
+    type: treatment
+    description: "Impervious surface cover (%)"
+
+  - name: NDVI
+    type: mediator          # Partially mediates canopy → temperature
+    description: "Normalized Difference Vegetation Index"
+
+  - name: Albedo
+    type: treatment
+    description: "Surface reflectance"
+
+  - name: Elevation_m
+    type: confounder        # Cannot be changed; affects multiple variables
+    description: "Terrain elevation (m)"
+
+  - name: Distance_from_water_m
+    type: confounder
+    description: "Distance to nearest water body (m)"
+
+  - name: AAT_z
+    type: outcome           # The response variable
+    description: "Ambient air temperature z-score"
+
+# Directed edges — parent → child
+# Each edge represents a hypothesised direct causal effect.
+edges:
+  # ------ Direct effects on temperature ------
+  - parent: Pct_Canopy
+    child: AAT_z
+    mechanism: "Evapotranspiration + shading"
+
+  - parent: Pct_Impervious
+    child: AAT_z
+    mechanism: "Heat absorption and re-radiation"
+
+  - parent: NDVI
+    child: AAT_z
+    mechanism: "Evapotranspiration cooling"
+
+  - parent: Albedo
+    child: AAT_z
+    mechanism: "Solar reflectance reduces absorbed heat"
+
+  - parent: Elevation_m
+    child: AAT_z
+    mechanism: "Lapse rate and cold-air pooling"
+
+  - parent: Distance_from_water_m
+    child: AAT_z
+    mechanism: "Proximity to water moderates temperature"
+
+  # ------ Mediated / cross-predictor effects ------
+  - parent: Pct_Canopy
+    child: NDVI
+    mechanism: "Trees increase vegetation index"
+
+  - parent: Pct_Impervious
+    child: Albedo
+    mechanism: "Paved surfaces have characteristic albedo"
+
+  - parent: Pct_Canopy
+    child: Pct_Impervious
+    mechanism: "Land cover trade-off (inverse)"
+
+  # ------ Confounder effects ------
+  - parent: Elevation_m
+    child: Pct_Canopy
+    mechanism: "Topography influences land use"
+
+  - parent: Elevation_m
+    child: Pct_Impervious
+    mechanism: "Development patterns follow terrain"
+
+  - parent: Distance_from_water_m
+    child: NDVI
+    mechanism: "Riparian vegetation near water"
+
+# Structural equations (optional)
+# If omitted, linear relationships are estimated from the data.
+# You can supply functional forms here for more precise causal estimation.
+structural_equations:
+  # Example: NDVI = f(Canopy, Distance_from_water) + noise
+  # NDVI:
+  #   form: "linear"
+  #   parents: [Pct_Canopy, Distance_from_water_m]
+
+# -----------------------------------------------------------------------------
+# SPARC v4 — User-asserted identification assumptions.
+# Surfaced in the validation report alongside empirical checks
+# (positivity, SUTVA / Moran's I, d-separation).
+# Per-edge `sign_prior` / `confidence` / `kind` / `lag` may also be added.
+# -----------------------------------------------------------------------------
+assumptions:
+  conditional_exchangeability: true
+  positivity: true
+  consistency: true
+  no_interference: false
+  notes: |
+    Heat-island advection couples adjacent blocks.
+    Greening/cool-roof interventions diffuse 50–200 m.

@@ -17,7 +17,7 @@ vi.mock("@/stores/tokenStore", () => ({
 
 vi.mock("@/stores/authStore", () => ({
   useAuthStore: {
-    getState: vi.fn(() => ({ session: null })),
+    getState: vi.fn(() => ({ session: null, destroy: vi.fn() })),
     destroy: vi.fn(),
   },
 }));
@@ -76,6 +76,13 @@ describe("getAuthHeaders", () => {
 // ---------------------------------------------------------------------------
 
 describe("authStore.destroy", () => {
+  beforeEach(() => {
+    vi.mocked(useAuthStore.getState).mockReturnValue({
+      session: null,
+      destroy: vi.fn(),
+    } as never);
+  });
+
   it("can be called without throwing even before init()", () => {
     // Directly test the real store's destroy method — the mock verifies
     // the type contract; here we verify the real implementation doesn't throw.

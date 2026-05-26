@@ -30,7 +30,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 // ---------------------------------------------------------------------------
 // Now import api helpers — they will use the mocked stores
 // ---------------------------------------------------------------------------
-import { health } from "@/lib/api";
+import { health, selectDataFile } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
 // Fetch mock
@@ -92,5 +92,41 @@ describe("authHeaders forwarding", () => {
     const headers = (init as RequestInit).headers as Record<string, string>;
     expect(headers["x-sparc-token"]).toBeUndefined();
     expect(headers["Authorization"]).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-selectDataFile — path sent in request body (not query-string only)
+// ---------------------------------------------------------------------------
+describe("selectDataFile", () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({ status: "selected", path: "/tmp/test.csv", columns: [], row_count: 0 }),
+      text: () => Promise.resolve(""),
+    } as Partial<Response> as Response);
+    vi.stubGlobal("fetch", fetchSpy);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it("sends the file path in the JSON request body", async () => {
+    await selectDataFile("/tmp/test.csv");
+    const [, init] = fetchSpy.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body).toEqual({ path: "/tmp/test.csv" });
+  });
+
+  it("includes Content-Type: application/json", async () => {
+    await selectDataFile("/tmp/test.csv");
+    const [, init] = fetchSpy.mock.calls[0];
+    const headers = (init as RequestInit).headers as Record<string, string>;
+    expect(headers["Content-Type"]).toBe("application/json");
   });
 });

@@ -1,0 +1,54 @@
+# Physics Priors — Wildfire Burn Severity Domain
+# Sources: Rothermel (1972), Abatzoglou & Williams (2016), Parks et al. (2018)
+
+coefficients:
+  fuel_load_tha:
+    value: 8.0
+    units: "dNBR per 10 tonnes/ha fuel"
+    uncertainty: 4.0
+    source_scale: "30m pixel"
+    literature_source: "Parks et al. (2018) Ecosphere; Prichard et al. (2017)"
+    confidence: "medium"
+    description: "Higher fuel loads increase fire energy release and severity"
+
+  VPD_kPa:
+    value: 45.0
+    units: "dNBR per 1 kPa VPD increase"
+    uncertainty: 20.0
+    source_scale: "4km weather grid"
+    literature_source: "Abatzoglou & Williams (2016) PNAS; Williams et al. (2019)"
+    confidence: "high"
+    description: "VPD is the strongest climate driver of fire severity"
+
+  slope_deg:
+    value: 2.5
+    units: "dNBR per 10° slope"
+    uncertainty: 1.5
+    source_scale: "30m DEM"
+    literature_source: "Rothermel (1972); Dillon et al. (2011)"
+    confidence: "medium"
+    description: "Uphill fire spread amplification"
+
+  wind_speed_ms:
+    value: 12.0
+    units: "dNBR per 5 m/s wind"
+    uncertainty: 8.0
+    source_scale: "event"
+    literature_source: "Rothermel (1972) fire spread equation"
+    confidence: "medium"
+    description: "Wind-driven fire spread rate and intensity"
+
+  canopy_cover_pct:
+    value: 3.0
+    units: "dNBR per 10% canopy cover"
+    uncertainty: 5.0
+    source_scale: "30m pixel"
+    literature_source: "Cansler & McKenzie (2014) Int J Wildland Fire"
+    confidence: "low"
+    description: "Complex: enables crown fire but lower for sparse fuels"
+
+scale_harmonization:
+  target_resolution: 30
+  factors:
+    "4km weather grid":
+      VPD_kPa: 1.20

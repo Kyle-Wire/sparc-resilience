@@ -1,0 +1,106 @@
+# Causal DAG — Seismic Ground Motion Domain
+# References: Boore & Atkinson (2008), Abrahamson et al. (2014), Youd et al. (2001)
+
+nodes:
+  - name: magnitude
+    type: confounder
+    description: "Earthquake moment magnitude (Mw)"
+
+  - name: distance_to_rupture_km
+    type: confounder
+    description: "Closest distance to fault rupture plane (km)"
+
+  - name: Vs30_ms
+    type: confounder
+    description: "Time-averaged shear-wave velocity in top 30m (m/s)"
+
+  - name: depth_km
+    type: confounder
+    description: "Hypocentral depth (km)"
+
+  - name: fault_mechanism
+    type: confounder
+    description: "Faulting style: 0=strike-slip, 1=reverse, -1=normal"
+
+  - name: basin_depth_z1p0_m
+    type: confounder
+    description: "Depth to Vs=1.0 km/s horizon (m) — basin geometry"
+
+  - name: site_amplification
+    type: mediator
+    description: "Site amplification factor (latent)"
+
+  - name: water_table_depth_m
+    type: confounder
+    description: "Depth to groundwater table (m)"
+
+  - name: SPT_N60
+    type: confounder
+    description: "Standard penetration test corrected blow count"
+
+  - name: soil_fines_pct
+    type: confounder
+    description: "Fines content of liquefiable layer (%)"
+
+  - name: PGA_g
+    type: outcome
+    description: "Peak ground acceleration (g)"
+
+edges:
+  - parent: magnitude
+    child: PGA_g
+    mechanism: "Energy release scales exponentially with magnitude (Gutenberg-Richter)"
+
+  - parent: distance_to_rupture_km
+    child: PGA_g
+    mechanism: "Geometric spreading (1/R) + anelastic attenuation (e^{-αR})"
+
+  - parent: depth_km
+    child: PGA_g
+    mechanism: "Deeper events attenuate more but affect wider area"
+
+  - parent: fault_mechanism
+    child: PGA_g
+    mechanism: "Reverse faults produce ~20% higher PGA than strike-slip (Abrahamson 2014)"
+
+  - parent: Vs30_ms
+    child: site_amplification
+    mechanism: "Softer soils (low Vs30) amplify seismic waves — impedance contrast"
+
+  - parent: basin_depth_z1p0_m
+    child: site_amplification
+    mechanism: "Deep basins trap and amplify long-period ground motions"
+
+  - parent: site_amplification
+    child: PGA_g
+    mechanism: "Site response modifies bedrock motion to surface motion"
+
+  - parent: water_table_depth_m
+    child: PGA_g
+    mechanism: "Shallow water table increases liquefaction potential and ground failure"
+
+  - parent: SPT_N60
+    child: PGA_g
+    mechanism: "Denser soils (higher N) resist liquefaction — higher CRR (Youd et al. 2001)"
+
+  - parent: soil_fines_pct
+    child: PGA_g
+    mechanism: "Higher fines content can increase or decrease liquefaction susceptibility (Bray & Sancio 2006)"
+
+  - parent: magnitude
+    child: distance_to_rupture_km
+    mechanism: "Larger magnitude ruptures extend closer to distant sites"
+
+# -----------------------------------------------------------------------------
+# SPARC v4 — User-asserted identification assumptions.
+# Surfaced in the validation report alongside empirical checks
+# (positivity, SUTVA / Moran's I, d-separation).
+# Per-edge `sign_prior` / `confidence` / `kind` / `lag` may also be added.
+# -----------------------------------------------------------------------------
+assumptions:
+  conditional_exchangeability: true
+  positivity: true
+  consistency: true
+  no_interference: true
+  notes: |
+    Site amplification is treated as a local property; regional source effects are absorbed by ground-motion prediction equations.

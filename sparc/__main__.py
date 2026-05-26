@@ -55,9 +55,24 @@ def _resolve_project_path(args) -> str:
 
 def cmd_init(args):
     """Scaffold a new project from a template."""
+    # --list-cities early exit
+    if getattr(args, 'list_cities', False):
+        from sparc.data.collect.capa_catalog import list_cities
+        print("Cities with CAPA Heat Watch data in the catalog:")
+        for city in list_cities():
+            print(f"  {city}")
+        print()
+        print("Usage: sparc init --template uhi --city \"Boston\" --output ./boston_project")
+        return
+
+    if not args.output:
+        print("ERROR: --output is required unless --list-cities is specified.", file=sys.stderr)
+        sys.exit(1)
+
     template_name = args.template
     output_dir = Path(args.output).resolve()
     source_dir = TEMPLATES_DIR / template_name
+    city_query = getattr(args, 'city', None)
 
     if not source_dir.exists():
         available = [d.name for d in TEMPLATES_DIR.iterdir() if d.is_dir()]
@@ -74,8 +89,110 @@ def cmd_init(args):
 
     print(f"Creating project from template '{template_name}' -> {output_dir}")
     shutil.copytree(source_dir, output_dir, dirs_exist_ok=True)
-    print(f"Done. Edit {output_dir / 'project.yml'} and then run:")
-    print(f"  sparc validate --project {output_dir / 'project.yml'}")
+
+    # ── City auto-fill ───────────────────────────────────────────────────
+    if city_query:
+        _init_patch_city(output_dir, city_query)
+
+    yml_path = output_dir / 'project.yml'
+    if city_query:
+        print(f"Done. Project scaffolded with city settings for '{city_query}'.")
+    else:
+        print(f"Done. Edit {yml_path} and then run:")
+    print(f"  sparc validate --project {yml_path}")
+
+
+def _init_patch_city(output_dir: Path, city_query: str) -> None:
+    """Look up city in the CAPA catalog and patch project.yml in-place."""
+    from sparc.data.collect.capa_catalog import lookup_city, list_cities
+    import re
+
+    canonical, entry = lookup_city(city_query)
+
+    if canonical is None:
+        if entry and "ambiguous" in entry:
+            matches = entry["ambiguous"]
+            print(f"  [city] Ambiguous city '{city_query}'. Did you mean one of:")
+            for m in matches:
+                print(f"    - {m}")
+            print("  Leaving collect fields blank — fill them in manually.")
+            return
+        if entry and "suggestions" in entry:
+            print(f"  [city] City '{city_query}' not found in catalog. Did you mean:")
+            for s in entry["suggestions"]:
+                print(f"    - {s}")
+        else:
+            print(f"  [city] City '{city_query}' not found in catalog.")
+            print(f"  Known cities: {', '.join(list_cities())}")
+        print("  Leaving collect fields blank — fill them in manually or add the")
+        print("  entry to sparc/data/collect/capa_catalog.py.")
+        return
+
+    osf_node   = entry["osf_node"]
+    folder_hint = entry.get("folder_hint")
+    utm_epsg   = entry.get("utm_epsg", "")
+    year       = entry.get("year", "")
+
+    print(f"  [city] Matched '{canonical}' (OSF node: {osf_node}, year: {year})")
+
+    yml_path = output_dir / 'project.yml'
+    if not yml_path.exists():
+        return
+
+    text = yml_path.read_text(encoding='utf-8')
+
+    # ── project.name ─────────────────────────────────────────────────────
+    text = re.sub(
+        r'(^project:\s*\n(?:  #[^\n]*\n)*  name:\s*)"[^"]*"',
+        lambda m: m.group(1) + f'"{canonical} Urban Heat Island Analysis"',
+        text, count=1, flags=re.MULTILINE,
+    )
+
+    # ── crs.projected ─────────────────────────────────────────────────────
+    if utm_epsg:
+        text = re.sub(
+            r'(projected:\s*)"?EPSG:\d+"?',
+            lambda m: m.group(1) + f'"{utm_epsg}"',
+            text, count=1,
+        )
+
+    # ── collect.capa_osf_node ────────────────────────────────────────────
+    # Case 1: field exists → replace the empty or existing value
+    if re.search(r'^\s*capa_osf_node:', text, re.MULTILINE):
+        text = re.sub(
+            r'(^\s*capa_osf_node:\s*)"[^"]*"',
+            lambda m: m.group(1) + f'"{osf_node}"',
+            text, count=1, flags=re.MULTILINE,
+        )
+    else:
+        # Case 2: no collect section → append one
+        text += (
+            "\n# ---------------------------------------------------------------------------\n"
+            "# Data Collection — NOAA/NIHHIS CAPA Heat Watch\n"
+            "# ---------------------------------------------------------------------------\n"
+            "collect:\n"
+            f'  capa_osf_node: "{osf_node}"\n'
+        )
+
+    # ── collect.capa_osf_folder ──────────────────────────────────────────
+    if folder_hint:
+        # Replace existing commented or empty capa_osf_folder line
+        if re.search(r'^\s*#?\s*capa_osf_folder:', text, re.MULTILINE):
+            text = re.sub(
+                r'^(\s*)#?\s*(capa_osf_folder:\s*).*$',
+                lambda m: m.group(1) + m.group(2) + f'"{folder_hint}"',
+                text, count=1, flags=re.MULTILINE,
+            )
+        else:
+            # Append after capa_osf_node line
+            text = re.sub(
+                r'(capa_osf_node: "[^"]*")',
+                lambda m: m.group(1) + f'\n  capa_osf_folder: "{folder_hint}"',
+                text, count=1,
+            )
+
+    yml_path.write_text(text, encoding='utf-8')
+    print(f"  [city] Patched {yml_path.name}")
 
 
 def cmd_validate(args):
@@ -1252,10 +1369,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- init ---
     p_init = subparsers.add_parser('init', help='Scaffold a new project from a template')
-    p_init.add_argument('--template', '-t', default='blank',
-                        help='Template name (default: blank). See templates/ directory.')
-    p_init.add_argument('--output', '-o', required=True,
-                        help='Output directory for the new project')
+    p_init.add_argument('--template', '-t', default='uhi',
+                        help='Template name (default: uhi). See templates/ directory.')
+    p_init.add_argument('--output', '-o', default=None,
+                        help='Output directory for the new project (required unless --list-cities)')
+    p_init.add_argument('--city', '-c', default=None,
+                        help='City name to auto-fill OSF node ID and CRS in project.yml '
+                             '(e.g. "Boston" or "Philadelphia, PA"). '
+                             'Run `sparc init --list-cities` to see all supported cities.')
+    p_init.add_argument('--list-cities', action='store_true', dest='list_cities',
+                        help='Print all cities in the CAPA catalog and exit.')
     p_init.set_defaults(func=cmd_init)
 
     # --- validate ---
@@ -1374,11 +1497,15 @@ def main():
     args = parser.parse_args()
     # Install verbosity filter before any subcommand prints. The CLI flag
     # wins over the env var; if neither is set, default is "normal".
-    try:
-        from sparc.run.console import install as _install_verbosity
-        _install_verbosity(getattr(args, 'verbosity', None) or os.environ.get('SPARC_VERBOSITY'))
-    except Exception:
-        pass  # Verbosity is a UX nicety -- never block the pipeline on it.
+    # Skip for utility commands (init, validate, report, audit) — they use
+    # plain print() and the pipeline filter would swallow all their output.
+    _pipeline_commands = {"run", "scenario"}
+    if getattr(args, 'command', None) in _pipeline_commands:
+        try:
+            from sparc.run.console import install as _install_verbosity
+            _install_verbosity(getattr(args, 'verbosity', None) or os.environ.get('SPARC_VERBOSITY'))
+        except Exception:
+            pass  # Verbosity is a UX nicety -- never block the pipeline on it.
     try:
         args.func(args)
     except Exception as exc:

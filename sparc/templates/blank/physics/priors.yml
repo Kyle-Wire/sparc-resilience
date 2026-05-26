@@ -1,0 +1,38 @@
+# =============================================================================
+# Physics Priors — Blank Template
+# =============================================================================
+# Literature-based coefficients for your domain.
+# Fill in each predictor variable with its expected effect on the response.
+#
+# Referenced by: project.yml → physics.priors_file
+# =============================================================================
+
+coefficients:
+  # Add one entry per predictor that has a known literature-based effect.
+  # Example:
+  # My_Predictor_A:
+  #   value: -0.5              # Expected coefficient (sign matters)
+  #   units: "response_units per predictor_units"
+  #   uncertainty: 0.20        # Relative uncertainty (0-1)
+  #   source_scale: "30m-100m" # Resolution of the literature source
+  #   literature_source: "Author et al. (Year) Journal"
+  #   confidence: "high"       # high / medium / low
+  #   description: "Brief explanation"
+
+# Scale Harmonization (optional)
+# If your literature coefficients come from different spatial scales,
+# apply correction factors here to normalize to your analysis resolution.
+scale_harmonization:
+  target_resolution: 30  # meters
+  factors: {}
+
+# Calibration Settings
+calibration:
+  shrinkage_weight: 0.7     # 0 = pure local estimate, 1 = pure physics prior
+  max_deviation: 0.5
+  adaptive_weighting: true
+
+# Sensitivity Analysis
+sensitivity:
+  tornado_uncertainty: 0.20
+  n_samples: 1000

@@ -1,0 +1,106 @@
+# Causal DAG — Groundwater Domain
+# References: Darcy (1856), Theis (1935), Healy (2010), Winter et al. (1998)
+
+nodes:
+  - name: precipitation_mm
+    type: treatment
+    description: "Monthly/annual precipitation (mm)"
+
+  - name: recharge_rate_mmyr
+    type: mediator
+    description: "Groundwater recharge rate (mm/yr)"
+
+  - name: pumping_rate_m3d
+    type: treatment
+    description: "Nearby extraction well pumping rate (m³/day)"
+
+  - name: hydraulic_conductivity_md
+    type: confounder
+    description: "Aquifer hydraulic conductivity (m/day)"
+
+  - name: transmissivity_m2d
+    type: confounder
+    description: "Aquifer transmissivity (m²/day)"
+
+  - name: distance_to_river_m
+    type: confounder
+    description: "Distance to nearest surface water body (m)"
+
+  - name: aquifer_thickness_m
+    type: confounder
+    description: "Saturated aquifer thickness (m)"
+
+  - name: elevation_m
+    type: confounder
+    description: "Land surface elevation (m)"
+
+  - name: NDVI
+    type: confounder
+    description: "Vegetation greenness — proxy for evapotranspiration demand"
+
+  - name: gw_level_m
+    type: outcome
+    description: "Groundwater level (m below ground surface)"
+
+edges:
+  - parent: precipitation_mm
+    child: recharge_rate_mmyr
+    mechanism: "Precipitation is the primary driver of diffuse recharge"
+
+  - parent: precipitation_mm
+    child: gw_level_m
+    mechanism: "Direct rapid recharge through macropores / karst"
+
+  - parent: recharge_rate_mmyr
+    child: gw_level_m
+    mechanism: "Recharge raises the water table (Healy 2010)"
+
+  - parent: pumping_rate_m3d
+    child: gw_level_m
+    mechanism: "Extraction creates cone of depression (Theis 1935)"
+
+  - parent: hydraulic_conductivity_md
+    child: gw_level_m
+    mechanism: "Controls how quickly water flows to/from pumping wells (Darcy's Law)"
+
+  - parent: hydraulic_conductivity_md
+    child: transmissivity_m2d
+    mechanism: "T = K × b (aquifer thickness)"
+
+  - parent: aquifer_thickness_m
+    child: transmissivity_m2d
+    mechanism: "Thicker aquifer = higher transmissivity"
+
+  - parent: transmissivity_m2d
+    child: gw_level_m
+    mechanism: "Higher T → flatter hydraulic gradient → less local drawdown"
+
+  - parent: distance_to_river_m
+    child: gw_level_m
+    mechanism: "Stream-aquifer interaction: closer = more baseflow exchange"
+
+  - parent: elevation_m
+    child: gw_level_m
+    mechanism: "Topography drives regional groundwater flow gradients"
+
+  - parent: NDVI
+    child: gw_level_m
+    mechanism: "Dense vegetation increases ET → lowers water table"
+
+  - parent: NDVI
+    child: recharge_rate_mmyr
+    mechanism: "Root uptake reduces deep percolation"
+
+# -----------------------------------------------------------------------------
+# SPARC v4 — User-asserted identification assumptions.
+# Surfaced in the validation report alongside empirical checks
+# (positivity, SUTVA / Moran's I, d-separation).
+# Per-edge `sign_prior` / `confidence` / `kind` / `lag` may also be added.
+# -----------------------------------------------------------------------------
+assumptions:
+  conditional_exchangeability: true
+  positivity: true
+  consistency: true
+  no_interference: false
+  notes: |
+    Hydraulic head propagates through aquifers — pumping at one well affects neighbouring wells (Theis 1935).

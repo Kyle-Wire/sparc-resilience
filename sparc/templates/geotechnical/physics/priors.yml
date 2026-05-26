@@ -1,0 +1,63 @@
+# Physics Priors — Geotechnical / Slope Stability Domain
+# Sources: Mohr-Coulomb, Iverson (2000), Wu et al. (1979)
+
+coefficients:
+  slope_angle_deg:
+    value: -0.035
+    units: "FoS per degree"
+    uncertainty: 0.015
+    source_scale: "cell"
+    literature_source: "Infinite slope: FoS = (c' + (γz cos²α - u) tanφ') / (γz sinα cosα)"
+    confidence: "high"
+    description: "From infinite slope equation, linearized around 25° with typical soil"
+
+  soil_cohesion_kPa:
+    value: 0.05
+    units: "FoS per kPa cohesion"
+    uncertainty: 0.02
+    source_scale: "lab test"
+    literature_source: "Mohr-Coulomb; Duncan & Wright (2005)"
+    confidence: "high"
+    description: "Linear contribution to shear strength"
+
+  friction_angle_deg:
+    value: 0.04
+    units: "FoS per degree friction angle"
+    uncertainty: 0.02
+    source_scale: "lab test"
+    literature_source: "Mohr-Coulomb criterion"
+    confidence: "high"
+    description: "tan(φ) contribution to shear resistance"
+
+  pore_pressure_ratio:
+    value: -1.2
+    units: "FoS per unit ru increase"
+    uncertainty: 0.5
+    source_scale: "field"
+    literature_source: "Bishop (1955); Iverson (2000) Water Resources Research"
+    confidence: "high"
+    description: "Pore pressure directly reduces effective stress and FoS"
+
+  vegetation_root_kPa:
+    value: 0.05
+    units: "FoS per kPa root cohesion"
+    uncertainty: 0.02
+    source_scale: "field"
+    literature_source: "Wu et al. (1979) Canadian Geotechnical Journal; Schwarz et al. (2010)"
+    confidence: "medium"
+    description: "Root reinforcement equivalent to adding cohesion"
+
+  precipitation_mm:
+    value: -0.002
+    units: "FoS per mm cumulative rainfall"
+    uncertainty: 0.001
+    source_scale: "event"
+    literature_source: "Iverson (2000); Caine (1980) intensity-duration thresholds"
+    confidence: "medium"
+    description: "Rainfall infiltration raises pore pressure toward critical state"
+
+scale_harmonization:
+  target_resolution: 30
+  factors:
+    "cell":
+      slope_angle_deg: 1.0

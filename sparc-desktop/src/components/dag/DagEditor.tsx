@@ -22,6 +22,7 @@ import { getDag, validateDag, getMc3Result, suggestDagEdges, saveDag } from "@/l
 import type { DagEdge, DagDefinition, DagValidation, MC3Result, DagNodeType, DagEdgeSuggestion } from "@/lib/types";
 import { usePipeline } from "@/hooks/PipelineProvider";
 import { Btn, SectionHeader } from "@/components/ui/DesignSystem";
+import { useProjectStore } from "@/stores/projectStore";
 
 // -- Custom DAG node -------------------------------------------------------
 function SparcDagNode({ data }: NodeProps) {
@@ -87,6 +88,8 @@ export default function DAGView() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState<string | null>(null);
+  const [noProject, setNoProject]   = useState(false);
+  const projectLoaded = useProjectStore((s) => s.projectLoaded);
   const [validation, setValidation] = useState<DagValidation | null>(null);
 
   const [mc3, setMc3]               = useState<MC3Result | null>(null);
@@ -112,16 +115,29 @@ export default function DAGView() {
 
   const loadDag = useCallback(async () => {
     setLoading(true);
+    setNoProject(false);
     try {
       const d = await getDag();
       const { nodes: n, edges: e } = fromExpert(d);
       setNodes(n); setEdges(e); setError(null);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to load DAG");
+      const msg = err instanceof Error ? err.message : "Failed to load DAG";
+      if (/no project loaded/i.test(msg)) {
+        setNoProject(true);
+        setError(null);
+      } else {
+        setError(msg);
+      }
     } finally { setLoading(false); }
   }, [setNodes, setEdges]);
 
   useEffect(() => { loadDag(); }, [loadDag]);
+
+  // Auto-reload when a project is opened
+  useEffect(() => {
+    if (projectLoaded) loadDag();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectLoaded]);
 
   useEffect(() => {
     if (mode !== "mc3") return;
@@ -257,6 +273,14 @@ export default function DAGView() {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 300, color: "var(--muted)" }}>
         <span className="mono" style={{ fontSize: 12 }}>Loading DAG...</span>
+      </div>
+    );
+  }
+
+  if (noProject) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 300, color: "var(--muted)", flexDirection: "column", gap: 8 }}>
+        <span className="mono" style={{ fontSize: 12 }}>No project — load a project to use the causal DAG editor.</span>
       </div>
     );
   }

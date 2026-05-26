@@ -1,0 +1,45 @@
+# Physics Priors — Coastal Erosion Domain
+# Sources: Bruun (1962), Zhang et al. (2004), Luijendijk et al. (2018)
+
+coefficients:
+  sig_wave_height_m:
+    value: -2.5
+    units: "m/yr shoreline change per 1m Hs increase"
+    uncertainty: 1.5
+    source_scale: "transect"
+    literature_source: "Zhang et al. (2004) J. Coastal Research; Vitousek et al. (2017)"
+    confidence: "medium"
+    description: "Wave energy drives cross-shore erosion"
+
+  sea_level_rise_mmyr:
+    value: -0.15
+    units: "m/yr shoreline change per mm/yr SLR"
+    uncertainty: 0.10
+    source_scale: "regional"
+    literature_source: "Bruun (1962); Ranasinghe (2016) Earth-Science Reviews"
+    confidence: "medium"
+    description: "Bruun rule modified: depends on closure depth and profile"
+
+  coastal_vegetation_pct:
+    value: 0.03
+    units: "m/yr per 1% vegetation increase"
+    uncertainty: 0.02
+    source_scale: "transect"
+    literature_source: "Möller et al. (2014) Nature Geoscience; Shepard et al. (2011)"
+    confidence: "medium"
+    description: "Vegetation reduces wave energy and stabilizes sediment"
+
+  storm_frequency_yr:
+    value: -0.80
+    units: "m/yr per additional storm event"
+    uncertainty: 0.50
+    source_scale: "reach"
+    literature_source: "Harley et al. (2017) Nature Geoscience"
+    confidence: "low"
+    description: "Cumulative storm damage between recovery periods"
+
+scale_harmonization:
+  target_resolution: 50
+  factors:
+    "regional":
+      sea_level_rise_mmyr: 1.0

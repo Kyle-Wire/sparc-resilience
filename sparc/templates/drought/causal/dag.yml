@@ -1,0 +1,127 @@
+# Causal DAG — Drought Severity Domain
+# References: McKee et al. (1993), Vicente-Serrano et al. (2010), Trenberth et al. (2014)
+
+nodes:
+  - name: precipitation_mm
+    type: treatment
+    description: "Monthly precipitation (mm)"
+
+  - name: temperature_C
+    type: treatment
+    description: "Mean monthly temperature (°C)"
+
+  - name: potential_ET_mm
+    type: mediator
+    description: "Potential evapotranspiration (mm)"
+
+  - name: soil_moisture_pct
+    type: mediator
+    description: "Root zone soil moisture (%)"
+
+  - name: NDVI
+    type: mediator
+    description: "Vegetation greenness index"
+
+  - name: relative_humidity_pct
+    type: confounder
+    description: "Relative humidity (%)"
+
+  - name: wind_speed_ms
+    type: confounder
+    description: "Mean wind speed (m/s)"
+
+  - name: solar_radiation_Wm2
+    type: confounder
+    description: "Incoming shortwave radiation (W/m²)"
+
+  - name: elevation_m
+    type: confounder
+    description: "Terrain elevation (m)"
+
+  - name: clay_content_pct
+    type: confounder
+    description: "Soil clay content (%) — affects water holding capacity"
+
+  - name: SPEI
+    type: outcome
+    description: "Standardized Precipitation-Evapotranspiration Index"
+
+edges:
+  - parent: precipitation_mm
+    child: SPEI
+    mechanism: "SPEI = f(P - PET): precipitation is the positive water balance term"
+
+  - parent: precipitation_mm
+    child: soil_moisture_pct
+    mechanism: "Rainfall recharges soil moisture"
+
+  - parent: temperature_C
+    child: potential_ET_mm
+    mechanism: "Temperature drives ET via Penman-Monteith / Thornthwaite"
+
+  - parent: temperature_C
+    child: SPEI
+    mechanism: "Higher temp → more ET → negative water balance → lower SPEI"
+
+  - parent: potential_ET_mm
+    child: SPEI
+    mechanism: "PET is the negative term in the SPEI water balance"
+
+  - parent: potential_ET_mm
+    child: soil_moisture_pct
+    mechanism: "ET draws down soil moisture"
+
+  - parent: soil_moisture_pct
+    child: SPEI
+    mechanism: "Soil moisture integrates water balance over time"
+
+  - parent: soil_moisture_pct
+    child: NDVI
+    mechanism: "Drying soil stresses vegetation → lower NDVI"
+
+  - parent: NDVI
+    child: SPEI
+    mechanism: "Vegetation stress is a diagnostic indicator correlating with drought"
+
+  - parent: relative_humidity_pct
+    child: potential_ET_mm
+    mechanism: "Lower humidity increases vapor pressure deficit → higher ET"
+
+  - parent: wind_speed_ms
+    child: potential_ET_mm
+    mechanism: "Wind removes boundary-layer moisture → increases ET"
+
+  - parent: solar_radiation_Wm2
+    child: potential_ET_mm
+    mechanism: "Radiation provides latent heat energy for ET"
+
+  - parent: solar_radiation_Wm2
+    child: temperature_C
+    mechanism: "Radiation drives surface heating"
+
+  - parent: elevation_m
+    child: temperature_C
+    mechanism: "Temperature lapse rate: ~6.5°C per 1000m"
+
+  - parent: elevation_m
+    child: precipitation_mm
+    mechanism: "Orographic enhancement of precipitation"
+
+  - parent: clay_content_pct
+    child: soil_moisture_pct
+    mechanism: "Clay soils have higher water-holding capacity (field capacity)"
+
+# -----------------------------------------------------------------------------
+# SPARC v4 — User-asserted identification assumptions.
+# Surfaced in the validation report alongside empirical checks
+# (positivity, SUTVA / Moran's I, d-separation).
+# Per-edge `sign_prior` / `confidence` / `kind` / `lag` may also be added.
+# -----------------------------------------------------------------------------
+assumptions:
+  conditional_exchangeability: true
+  positivity: true
+  consistency: true
+  no_interference: false
+  notes: |
+    Drought indices (SPI/SPEI) are smoothed across catchments.
+    Watershed-level interventions interfere via shared groundwater + atmosphere.

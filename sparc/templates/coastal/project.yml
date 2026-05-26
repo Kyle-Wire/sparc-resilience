@@ -1,0 +1,151 @@
+# =============================================================================
+# SPARC Project Configuration — Coastal Erosion Domain
+# =============================================================================
+# Spatial analysis of shoreline change rates driven by wave energy, sea-level
+# rise, sediment properties, and coastal morphology.
+#
+# Key references:
+#   - Bruun (1962) — Sea-level rise and shoreline recession
+#   - CERC formula — Longshore sediment transport
+#   - Thieler & Hammar-Klose (2000) — Coastal vulnerability index
+# =============================================================================
+
+project:
+  name: "Coastal Erosion Analysis"
+  description: "Spatial regression of shoreline change rates driven by wave climate, sea-level rise, and coastal geomorphology"
+  domain: coastal
+  version: "1.0.0"
+  author: ""
+  response_units: "m/yr"
+
+data:
+  file_path: ""
+  target_column: "shoreline_change_myr"        # Negative = erosion, positive = accretion
+  identifier_column: "transect_id"
+  coord_columns: ["longitude", "latitude"]
+
+crs:
+  input: "EPSG:4326"
+  projected: ""
+
+predictors:
+  - sig_wave_height_m          # Significant wave height (m) — Hs
+  - mean_wave_period_s         # Mean wave period (s)
+  - tidal_range_m              # Mean tidal range (m)
+  - sea_level_rise_mmyr        # Local relative sea-level rise rate (mm/yr)
+  - sediment_grain_size_mm     # Median grain size D50 (mm)
+  - beach_slope                # Foreshore slope (dimensionless)
+  - coastal_vegetation_pct     # Vegetated dune / mangrove cover (%)
+  - storm_frequency_yr         # Number of storm events per year exceeding threshold
+  - distance_to_inlet_m       # Distance to nearest tidal inlet (m)
+  - cliff_height_m             # Bluff/cliff height (m, 0 for sandy beaches)
+
+physics:
+  priors_file: "physics/priors.yml"
+  caps_file:   "physics/caps.yml"
+  monotone_constraints:
+    sig_wave_height_m: -1          # Higher waves → more erosion (negative change)
+    sea_level_rise_mmyr: -1        # SLR → erosion
+    sediment_grain_size_mm:  1     # Coarser sediment resists erosion
+    beach_slope: -1                # Steeper → more vulnerable to overwash
+    coastal_vegetation_pct:  1     # Vegetation stabilizes shoreline
+    storm_frequency_yr: -1         # More storms → more erosion
+
+causal:
+  dag_file: "causal/dag.yml"
+  estimator: "dml"              # "dml" (Wager 2025 default), "hgb", or "ols"
+  estimate_cate: true           # Spatial CATE via Bayesian low-rank GP
+  inference: "bayesian"         # "bayesian" (V2 default: MC³ + NUTS) or "frequentist" (V1, deprecated)
+  cate_estimator: "bayesian"
+  discovery:
+    enabled: true
+    methods: [pc_stable, lingam, ges]
+    alpha: 0.05
+    consensus_threshold: 2
+    compare_expert: true
+  mc3:
+    n_iterations: 10000
+    n_chains: 4
+    burnin_fraction: 0.25
+    edge_penalty: 1.0
+    seed: 42
+  nuts:
+    n_samples: 2000
+    n_warmup: 500
+    n_chains: 2
+    target_accept_rate: 0.85
+    max_tree_depth: 8
+  bayesian_cate:
+    n_features: 16              # low-RAM laptops: 16; servers: 32+
+    n_samples: 2000
+    n_warmup: 500
+    n_chains: 2
+    target_accept_rate: 0.85
+    max_tree_depth: 8
+    kernel_lengthscale: 0.20
+  wager2025:
+    overlap: true               # Gap 1
+    rate_qini: true             # Gap 2
+    spillover: true             # Gap 3
+    iv: true                    # Gaps 4-5 (only fires if DAG has instrument)
+    sequential_aipw: true       # Gap 6
+    panel: true                 # Gap 7 (only fires with panel cols)
+    policy_learning: true       # Gap 8
+    cbps: true                  # Gap 9
+  actionable_variables:
+    - coastal_vegetation_pct
+  fixed_variables:
+    - sig_wave_height_m
+    - tidal_range_m
+    - sediment_grain_size_mm
+    - cliff_height_m
+    - distance_to_inlet_m
+
+output:
+  base_dir: "output"
+
+pipeline:
+  random_seed: 42
+  n_spatial_folds: 5
+
+# temporal:
+#   enabled: true
+#   time_column: "survey_date"
+#   frequency: "annual"
+#   lag_features:
+#     enabled: true
+#     lags: [1, 2, 3]
+#     variables: [sig_wave_height_m, storm_frequency_yr, sea_level_rise_mmyr]
+#   temporal_cv:
+#     method: "expanding_window"
+#     n_splits: 5
+#     gap: 0
+
+# ---------------------------------------------------------------------------
+# Stage-4 Budget Optimizer (cell-level allocation under a budget)
+# ---------------------------------------------------------------------------
+# Reads the per-cell cooling/benefit surface from Stage 4's
+# ``scenario_results`` and allocates a budget across cells using
+# greedy / 2-opt / MILP solvers.  Set ``total: null`` to skip the
+# constrained optimum and emit only the Pareto frontier (cost vs benefit).
+budget:
+  total: null                  # null → unconstrained Pareto only
+  solver: greedy_2opt          # greedy | greedy_2opt | milp
+  multipliers: [0.25, 0.5, 0.75, 1.0, 1.5]
+  cost_per_unit: {}            # e.g. {Pct_Canopy: 250}; empty = unit cost
+
+# ---------------------------------------------------------------------------
+# Stage-4 Wager-2025 caps (saturation + spillover folding)
+# ---------------------------------------------------------------------------
+# ``spillover_mode``:
+#   diagnostic       — direct/spillover/total are side-columns only.
+#   fold_into_delta  — headline ``delta_mean`` becomes the SUTVA-corrected
+#                      total; ``delta_direct_only`` preserves the unit-level
+#                      number for review.  Default in mode_5_full_audit.
+# ``saturation_clipping``: when true, per-cell delta is capped at the
+# Stage-3 dose-response knee (saturation_marginal_floor × peak |slope|).
+caps:
+  spillover_mode: fold_into_delta
+  saturation_clipping: true
+  saturation_marginal_floor: 0.5
+

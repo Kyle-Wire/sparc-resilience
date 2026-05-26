@@ -15,18 +15,58 @@ Currently migrated:
 
 from __future__ import annotations
 
+import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query
 
-from sparc.server.deps import session
+from sparc.server.deps import session, state
 
 router = APIRouter(tags=["project"])
 
-# Resolve the templates directory once at import time.
-_TEMPLATES_DIR = Path(__file__).parent.parent.parent.parent / "templates"
+
+def _find_templates_dir() -> Path:
+    """Return the first accessible templates directory.
+
+    Search order:
+    1. ``SPARC_TEMPLATES_DIR`` env var — operator override.
+    2. ``sparc/templates/`` bundled inside the installed package — works for
+       wheel installs where the templates were co-packaged with sparc.
+    3. Project-root ``templates/`` — editable (development) installs.
+    4. PyInstaller ``sys._MEIPASS/templates`` — onefile sidecar builds.
+    Falls back to the project-root candidate if nothing is found so that
+    the ``list_templates`` endpoint can still return an informative empty
+    list rather than crashing.
+    """
+    candidates: list[Path] = []
+
+    env_override = os.environ.get("SPARC_TEMPLATES_DIR")
+    if env_override:
+        candidates.append(Path(env_override))
+
+    # Bundled inside the sparc package (wheel installs)
+    candidates.append(Path(__file__).parent.parent.parent / "templates")
+
+    # Project root (editable / source installs)
+    candidates.append(Path(__file__).parent.parent.parent.parent / "templates")
+
+    # PyInstaller onefile
+    if hasattr(sys, "_MEIPASS"):
+        candidates.append(Path(sys._MEIPASS) / "templates")  # type: ignore[attr-defined]
+
+    for p in candidates:
+        if p.is_dir():
+            return p
+
+    # Fallback — return project-root path even if absent; callers check .exists()
+    return candidates[-2]
+
+
+# Resolve once at import time.
+_TEMPLATES_DIR = _find_templates_dir()
 
 
 def _resolve_safe(path: str, allow_create: bool = False) -> Path:
@@ -68,6 +108,12 @@ async def load_project(path: str = Query(..., description="Absolute path to proj
         registry=None,
     )
 
+    # Sync to the legacy ServerState so inline app.py endpoints that still
+    # read state.project_config (e.g. /dag, /run/stream) see the loaded project.
+    state.project_path = str(resolved)
+    state.project_config = config
+    state.raw_project_yaml = raw_yaml
+
     return {
         "status": "loaded",
         "project": raw_yaml.get("project", {}),
@@ -106,7 +152,7 @@ async def init_project(
     """Scaffold a new project from a domain template."""
     source = _TEMPLATES_DIR / template
     if not source.exists():
-        available = [d.name for d in _TEMPLATES_DIR.iterdir() if d.is_dir()]
+        available = [d.name for d in _TEMPLATES_DIR.iterdir() if d.is_dir()] if _TEMPLATES_DIR.is_dir() else []
         raise HTTPException(404, f"Template '{template}' not found. Available: {available}")
 
     dest = _resolve_safe(output, allow_create=True)
@@ -140,7 +186,7 @@ async def create_project(payload: dict[str, Any] = Body(...)):
 
     source = _TEMPLATES_DIR / template
     if not source.exists():
-        available = [d.name for d in _TEMPLATES_DIR.iterdir() if d.is_dir()]
+        available = [d.name for d in _TEMPLATES_DIR.iterdir() if d.is_dir()] if _TEMPLATES_DIR.is_dir() else []
         raise HTTPException(404, f"Template '{template}' not found. Available: {available}")
 
     dest = _resolve_safe(str(output), allow_create=True)

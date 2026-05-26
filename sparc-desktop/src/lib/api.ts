@@ -200,7 +200,7 @@ export const listDataFiles = () =>
   get<{ project_dir: string; files: { name: string; path: string; relative: string; size: number }[] }>("/data/files");
 
 export const selectDataFile = (path: string) =>
-  post<ProjectLoadResponse>(`/data/select?path=${encodeURIComponent(path)}`);
+  post<ProjectLoadResponse>("/data/select", { path });
 
 // ------------------------------------------------------------------
 // Results

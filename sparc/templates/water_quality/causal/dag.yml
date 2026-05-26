@@ -1,0 +1,135 @@
+# Causal DAG — Water Quality (Dissolved Oxygen) Domain
+# References: Streeter-Phelps (1925), QUAL2K, Chapra (2008)
+
+nodes:
+  - name: temperature_C
+    type: confounder
+    description: "Water temperature (°C)"
+
+  - name: streamflow_m3s
+    type: confounder
+    description: "Stream discharge (m³/s)"
+
+  - name: BOD_mgL
+    type: treatment
+    description: "Biochemical oxygen demand (mg/L)"
+
+  - name: total_nitrogen_mgL
+    type: confounder
+    description: "Total nitrogen (mg/L)"
+
+  - name: total_phosphorus_mgL
+    type: confounder
+    description: "Total phosphorus (mg/L)"
+
+  - name: agriculture_pct
+    type: treatment
+    description: "Agricultural land use in upstream catchment (%)"
+
+  - name: impervious_pct
+    type: treatment
+    description: "Impervious surface in upstream catchment (%)"
+
+  - name: forest_pct
+    type: treatment
+    description: "Forest cover in upstream catchment (%)"
+
+  - name: precipitation_mm
+    type: confounder
+    description: "Recent precipitation (mm)"
+
+  - name: distance_to_wwtp_km
+    type: confounder
+    description: "Distance to nearest WWTP discharge (km)"
+
+  - name: algal_biomass
+    type: mediator
+    description: "Algal productivity (latent — driven by nutrients and temperature)"
+
+  - name: DO_mgL
+    type: outcome
+    description: "Dissolved oxygen concentration (mg/L)"
+
+edges:
+  - parent: temperature_C
+    child: DO_mgL
+    mechanism: "DO saturation decreases ~0.3 mg/L per °C (Henry's Law)"
+
+  - parent: temperature_C
+    child: algal_biomass
+    mechanism: "Warmer water promotes algal growth up to thermal optimum"
+
+  - parent: streamflow_m3s
+    child: DO_mgL
+    mechanism: "Higher flow → more turbulent reaeration (O'Connor & Dobbins 1958)"
+
+  - parent: streamflow_m3s
+    child: BOD_mgL
+    mechanism: "Higher flow dilutes BOD concentration"
+
+  - parent: BOD_mgL
+    child: DO_mgL
+    mechanism: "Microbial decomposition consumes O₂ (Streeter-Phelps oxygen sag)"
+
+  - parent: total_nitrogen_mgL
+    child: algal_biomass
+    mechanism: "Nitrogen is a limiting nutrient for algal growth"
+
+  - parent: total_phosphorus_mgL
+    child: algal_biomass
+    mechanism: "Phosphorus is often the primary limiting nutrient (Schindler 1977)"
+
+  - parent: algal_biomass
+    child: DO_mgL
+    mechanism: "Algal decay consumes O₂; diel photosynthesis/respiration cycle"
+
+  - parent: agriculture_pct
+    child: total_nitrogen_mgL
+    mechanism: "Fertilizer and manure runoff (USGS SPARROW model)"
+
+  - parent: agriculture_pct
+    child: total_phosphorus_mgL
+    mechanism: "Particulate-P from erosion and dissolved-P from fertilizer"
+
+  - parent: impervious_pct
+    child: DO_mgL
+    mechanism: "Thermal loading and flashy hydrology degrade water quality"
+
+  - parent: impervious_pct
+    child: BOD_mgL
+    mechanism: "Urban runoff carries organic matter and pollutants"
+
+  - parent: forest_pct
+    child: DO_mgL
+    mechanism: "Riparian buffers filter runoff, shade stream, stabilize banks"
+
+  - parent: forest_pct
+    child: total_nitrogen_mgL
+    mechanism: "Forest nutrient uptake and denitrification in riparian zone"
+
+  - parent: precipitation_mm
+    child: streamflow_m3s
+    mechanism: "Rainfall drives runoff and streamflow"
+
+  - parent: precipitation_mm
+    child: total_nitrogen_mgL
+    mechanism: "Storm runoff mobilizes agricultural non-point source N"
+
+  - parent: distance_to_wwtp_km
+    child: BOD_mgL
+    mechanism: "BOD decay with travel time downstream of discharge"
+
+# -----------------------------------------------------------------------------
+# SPARC v4 — User-asserted identification assumptions.
+# Surfaced in the validation report alongside empirical checks
+# (positivity, SUTVA / Moran's I, d-separation).
+# Per-edge `sign_prior` / `confidence` / `kind` / `lag` may also be added.
+# -----------------------------------------------------------------------------
+assumptions:
+  conditional_exchangeability: true
+  positivity: true
+  consistency: true
+  no_interference: false
+  notes: |
+    Pollutant transport along stream networks violates SUTVA.
+    Use upstream/downstream graph adjacency in CV.

@@ -1,0 +1,110 @@
+# Causal DAG — Environmental Noise Domain
+# References: FHWA TNM, ISO 9613-2, Kang (2007)
+
+nodes:
+  - name: traffic_volume_vph
+    type: treatment
+    description: "Hourly traffic volume (vehicles/hour)"
+
+  - name: heavy_truck_pct
+    type: confounder
+    description: "Heavy truck percentage (%)"
+
+  - name: distance_to_road_m
+    type: confounder
+    description: "Perpendicular distance to road (m)"
+
+  - name: road_speed_kmh
+    type: treatment
+    description: "Posted speed limit (km/h)"
+
+  - name: building_density_pct
+    type: confounder
+    description: "Building footprint coverage (%)"
+
+  - name: barrier_height_m
+    type: treatment
+    description: "Noise barrier height (m)"
+
+  - name: vegetation_buffer_m
+    type: treatment
+    description: "Dense vegetation buffer depth (m)"
+
+  - name: elevation_diff_m
+    type: confounder
+    description: "Elevation difference: receptor - road (m)"
+
+  - name: wind_speed_ms
+    type: confounder
+    description: "Mean wind speed (m/s)"
+
+  - name: temperature_C
+    type: confounder
+    description: "Ambient temperature (°C)"
+
+  - name: source_emission_dBA
+    type: mediator
+    description: "Reference noise emission at source (latent)"
+
+  - name: Leq_dBA
+    type: outcome
+    description: "A-weighted equivalent continuous noise level (dBA)"
+
+edges:
+  - parent: traffic_volume_vph
+    child: source_emission_dBA
+    mechanism: "Leq ∝ 10·log10(N): doubling volume → +3 dB"
+
+  - parent: heavy_truck_pct
+    child: source_emission_dBA
+    mechanism: "Trucks 8–10 dB louder than cars (FHWA TNM)"
+
+  - parent: road_speed_kmh
+    child: source_emission_dBA
+    mechanism: "Tire-road noise ∝ 30·log10(V): doubling speed → +9 dB"
+
+  - parent: source_emission_dBA
+    child: Leq_dBA
+    mechanism: "Source strength determines baseline level"
+
+  - parent: distance_to_road_m
+    child: Leq_dBA
+    mechanism: "Geometric spreading: -3 dB per doubling for line source (ISO 9613-2)"
+
+  - parent: barrier_height_m
+    child: Leq_dBA
+    mechanism: "Diffraction attenuation: 5–15 dB for typical barriers (Maekawa 1968)"
+
+  - parent: vegetation_buffer_m
+    child: Leq_dBA
+    mechanism: "Ground and foliage attenuation ~1 dB per 10m dense vegetation (Fang & Ling 2003)"
+
+  - parent: elevation_diff_m
+    child: Leq_dBA
+    mechanism: "Elevated receptor has less barrier effect; depressed receptor benefits"
+
+  - parent: building_density_pct
+    child: Leq_dBA
+    mechanism: "Buildings scatter/absorb/reflect sound energy"
+
+  - parent: wind_speed_ms
+    child: Leq_dBA
+    mechanism: "Downwind refraction focuses sound towards ground; upwind creates shadow zone"
+
+  - parent: temperature_C
+    child: Leq_dBA
+    mechanism: "Temperature inversions refract sound downward"
+
+# -----------------------------------------------------------------------------
+# SPARC v4 — User-asserted identification assumptions.
+# Surfaced in the validation report alongside empirical checks
+# (positivity, SUTVA / Moran's I, d-separation).
+# Per-edge `sign_prior` / `confidence` / `kind` / `lag` may also be added.
+# -----------------------------------------------------------------------------
+assumptions:
+  conditional_exchangeability: true
+  positivity: true
+  consistency: true
+  no_interference: false
+  notes: |
+    Noise propagates omnidirectionally; barriers and source reductions affect a wide footprint, violating SUTVA at fine scales.

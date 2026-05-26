@@ -8,16 +8,21 @@ Currently migrated:
   - /data/preview
   - /data/histogram
   - /data/geojson
-  - /data/upload
   - /data/files
   - /data/select
+
+NOTE: POST /data/upload is intentionally NOT registered here.
+The full upload handler in app.py (which saves the file, loads it into
+state, and handles rasters/shapefiles) must remain the canonical handler.
+A previous incomplete migration of this route caused it to shadow the full
+handler and silently discard uploads. See tests/test_upload_encoding.py.
 """
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, HTTPException, Query
 
 from sparc.server.deps import session
 
@@ -105,42 +110,6 @@ async def data_geojson(
     return {"type": "FeatureCollection", "features": features}
 
 
-@router.post("/data/upload")
-async def data_upload(file: UploadFile = File(...)):
-    """Accept a CSV upload, save it temporarily, and return its summary."""
-    import tempfile
-    import os
-
-    suffix = ".csv"
-    if file.filename:
-        ext = os.path.splitext(file.filename)[1]
-        if ext in (".csv", ".parquet"):
-            suffix = ext
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        content = await file.read()
-        tmp.write(content)
-        tmp_path = tmp.name
-
-    try:
-        import pandas as pd
-
-        if suffix == ".parquet":
-            df = pd.read_parquet(tmp_path)
-        else:
-            df = pd.read_csv(tmp_path)
-    except Exception as exc:
-        raise HTTPException(422, f"Could not parse uploaded file: {exc}")
-    finally:
-        os.unlink(tmp_path)
-
-    return {
-        "filename": file.filename,
-        "row_count": len(df),
-        "columns": list(df.columns),
-    }
-
-
 @router.get("/data/files")
 async def data_files(
     directory: Optional[str] = Query(None, description="Directory to scan; defaults to project output"),
@@ -167,11 +136,8 @@ async def data_files(
 
 
 @router.post("/data/select")
-async def data_select(payload: dict[str, Any]):
-    """Set the active data file from a path payload."""
-    path = payload.get("path")
-    if not path:
-        raise HTTPException(400, "path is required.")
+async def data_select(path: str = Query(..., description="Absolute path to CSV/Parquet file")):
+    """Set the active data file by path (passed as a query parameter)."""
 
     from pathlib import Path
 

@@ -33,13 +33,13 @@ from typing import Callable, Literal, Optional
 from .boundary import BoundaryResult
 from .manifest import VariableManifest, VariableStatus
 from sparc.data.spatial_grid import SpatialGrid
-from .capa import fetch_capa
+from .capa import download_capa, assign_capa_to_grid, fetch_capa
 from ._temporal import TemporalWindow
-from .landsat import fetch_landsat
-from .nlcd import fetch_nlcd
-from .era5 import fetch_era5
-from .buildings import fetch_buildings
-from .equity import fetch_equity
+from .landsat import download_landsat, assign_landsat_to_grid, fetch_landsat
+from .nlcd import download_nlcd, assign_nlcd_to_grid, fetch_nlcd
+from .era5 import download_era5, assign_era5_to_grid, fetch_era5
+from .buildings import download_buildings, assign_buildings_to_grid, fetch_buildings
+from .equity import download_equity, assign_equity_to_grid, fetch_equity
 
 TemporalMode = Literal["single", "composite", "panel"]
 
@@ -90,6 +90,9 @@ class CollectConfig:
     lidar_path: Optional[Path] = None
     dsm_path: Optional[Path] = None
     default_building_height_m: float = 5.0
+    capa_osf_node: Optional[str] = None   # OSF project node ID, e.g. "rk75w" for Brockton MA
+    capa_osf_folder: Optional[str] = None  # Folder hint for multi-city nodes, e.g. "Boston" in tdsy7
+    resolution_m: float = 30.0            # Analysis grid cell size in metres (user-defined)
 
 
 @dataclass
@@ -112,13 +115,28 @@ class AssemblerResult:
 def run(config: CollectConfig, *, on_step: Optional[Callable[[str, bool], None]] = None) -> AssemblerResult:
     """Execute the full data collection pipeline.
 
+    The pipeline is split into two explicit phases:
+
+    **Phase 1 — Raw data collection (no fishnet required)**
+        Downloads all source data for the bounding box.  CAPA traverse rasters
+        are fetched to discover anchor dates; Landsat COG bands are downloaded
+        and composited; NLCD tiles are fetched from MRLC WCS; ERA5 temperatures
+        are fetched at 0.25° grid points; OSM building polygons are downloaded;
+        HOLC and CDC SVI equity data are downloaded.
+
+    **Phase 2 — Grid creation and assignment**
+        A spatial fishnet is built at ``config.resolution_m`` (default 30 m).
+        All Phase 1 data is then assigned to the grid via zonal statistics and
+        spatial joins, producing the final per-cell dataset.
+
     Parameters
     ----------
     config : CollectConfig
     on_step : callable(group_name: str, success: bool) | None
-        Optional progress callback.  Called after each service fetch
-        completes (whether it succeeded or raised an exception).
+        Optional progress callback.  Called after key pipeline milestones.
         Useful for streaming live progress to a desktop wizard.
+        Step names: ``"capa_download"``, ``"raw_download"``, ``"grid_created"``,
+        ``"landsat"``, ``"nlcd"``, ``"era5"``, ``"buildings"``, ``"equity"``.
 
     Returns
     -------
@@ -139,41 +157,34 @@ def run(config: CollectConfig, *, on_step: Optional[Callable[[str, bool], None]]
     manifest.boundary_description = config.boundary.source
     manifest.temporal_description = (
         f"{config.temporal_mode} | {config.date_start} → {config.date_end} | "
-        f"cloud ≤ {config.cloud_cover_max}%"
+        f"cloud ≤ {config.cloud_cover_max}% | grid {config.resolution_m:.0f} m"
     )
 
-    # --- Step 1: Build 30m fishnet as SpatialGrid ---
-    grid = SpatialGrid.from_boundary(config.boundary, resolution_m=30.0)
-    fishnet = grid.cells_3857.copy()
-    fishnet["cell_id"] = range(len(fishnet))
-    fishnet["cell_x"] = fishnet.geometry.centroid.x
-    fishnet["cell_y"] = fishnet.geometry.centroid.y
+    bbox = config.boundary.bbox
 
-    # --- Step 2: CAPA — fetch label data first, discover anchor dates ---
-    # CAPA ground-truth air temperature measurements define the prediction
-    # targets.  Their acquisition dates become the canonical temporal anchors
-    # for Landsat and ERA5 alignment.
+    # =========================================================================
+    # PHASE 1: Download raw data for the bounding box (no fishnet yet)
+    # =========================================================================
+
+    # --- 1a: CAPA — discover anchor dates (defines temporal alignment for all other sources) ---
     for col in ("aat_morning", "aat_midday", "aat_night", "diurnal_aat"):
         manifest.fetching(col)
+    capa_raster_data = None
+    capa_dates: list[date] = []
     try:
-        fishnet, capa_dates = fetch_capa(
-            fishnet, config.boundary.bbox, config.date_start, config.date_end
+        capa_raster_data, capa_dates = download_capa(
+            bbox, config.date_start, config.date_end,
+            osf_node_id=config.capa_osf_node,
+            osf_folder_hint=config.capa_osf_folder,
         )
-        for col, src in [
-            ("aat_morning",  "NOAA CAPA / Open-Meteo"),
-            ("aat_midday",   "NOAA CAPA / Open-Meteo"),
-            ("aat_night",    "NOAA CAPA / Open-Meteo"),
-            ("diurnal_aat",  "Derived: CAPA midday − night"),
-        ]:
-            manifest.update(col, coverage_pct=_coverage(fishnet, col), source_name=src)
     except Exception as exc:
         for col in ("aat_morning", "aat_midday", "aat_night", "diurnal_aat"):
             manifest.error(col, str(exc))
-        capa_dates = []
 
     if on_step is not None:
         on_step("capa", bool(capa_dates))
-    # Landsat will search within ±tolerance_days of each anchor.
+
+    # Landsat will search within ±tolerance_days of each CAPA anchor date.
     # If CAPA failed (empty list), Landsat falls back to the full date range.
     window = TemporalWindow.from_capa_dates(
         capa_dates,
@@ -181,16 +192,104 @@ def run(config: CollectConfig, *, on_step: Optional[Callable[[str, bool], None]]
         date_end=config.date_end,
     )
 
-    # --- Step 3: Landsat (spectral indices + LST) — aligned to CAPA anchors ---
+    # --- 1b: Landsat — download COG bands and compute composite arrays ---
     manifest.fetching("lst")
+    landsat_composite = None
+    landsat_scene_dates: list[date] = []
     try:
-        fishnet = fetch_landsat(
-            fishnet,
-            config.boundary.bbox,
-            window,
+        landsat_composite, landsat_scene_dates = download_landsat(
+            bbox, window,
             cloud_cover_max=config.cloud_cover_max,
             temporal_mode=config.temporal_mode,
             enabled_indices=config.enabled_indices,
+        )
+    except Exception as exc:
+        for idx in config.enabled_indices:
+            manifest.error(idx, str(exc))
+
+    # --- 1c: NLCD — download WCS tiles ---
+    for col in ("pct_impervious", "pct_canopy", "land_cover"):
+        manifest.fetching(col)
+    nlcd_tif_paths: dict = {}
+    try:
+        nlcd_tif_paths = download_nlcd(bbox)
+    except Exception as exc:
+        for col in ("pct_impervious", "pct_canopy", "land_cover"):
+            manifest.error(col, str(exc))
+
+    # --- 1d: ERA5 — fetch temperature at 0.25° grid points ---
+    manifest.fetching("era5_t2m")
+    era5_grid = None
+    try:
+        era5_grid = download_era5(bbox, window)
+    except Exception as exc:
+        manifest.error("era5_t2m", str(exc))
+
+    # --- 1e: Buildings — download polygons/determine source ---
+    for col in ("bldg_height_mean", "bldg_coverage", "svf"):
+        manifest.fetching(col)
+    buildings_raw: dict = {"type": "constant", "default_height_m": config.default_building_height_m}
+    bldg_tier = 4
+    try:
+        buildings_raw, bldg_tier = download_buildings(
+            bbox,
+            lidar_path=config.lidar_path,
+            dsm_path=config.dsm_path,
+            default_height_m=config.default_building_height_m,
+        )
+    except Exception as exc:
+        for col in ("bldg_height_mean", "bldg_coverage", "svf"):
+            manifest.error(col, str(exc))
+
+    # --- 1f: Equity — download HOLC + CDC SVI ---
+    for col in ("holc_grade", "cdc_svi", "ejscreen_score"):
+        manifest.fetching(col)
+    equity_holc_gdf = None
+    equity_cdc_svi_gdf = None
+    try:
+        equity_holc_gdf, equity_cdc_svi_gdf = download_equity(bbox)
+    except Exception as exc:
+        for col in ("holc_grade", "cdc_svi", "ejscreen_score"):
+            manifest.error(col, str(exc))
+
+    if on_step is not None:
+        on_step("raw_download", True)
+
+    # =========================================================================
+    # PHASE 2: Create fishnet at user-specified resolution, then assign data
+    # =========================================================================
+
+    # --- 2a: Build fishnet at config.resolution_m ---
+    grid = SpatialGrid.from_boundary(config.boundary, resolution_m=config.resolution_m)
+    fishnet = grid.cells_3857.copy()
+    fishnet["cell_id"] = range(len(fishnet))
+    fishnet["cell_x"] = fishnet.geometry.centroid.x
+    fishnet["cell_y"] = fishnet.geometry.centroid.y
+
+    if on_step is not None:
+        on_step("grid_created", True)
+
+    # --- 2b: Assign CAPA to fishnet ---
+    try:
+        fishnet = assign_capa_to_grid(fishnet, capa_raster_data)
+        for col, src in [
+            ("aat_morning",  "NOAA/NIHHIS Heat Watch (OSF)"),
+            ("aat_midday",   "NOAA/NIHHIS Heat Watch (OSF)"),
+            ("aat_night",    "NOAA/NIHHIS Heat Watch (OSF)"),
+            ("diurnal_aat",  "Derived: CAPA midday − night"),
+        ]:
+            if "error" not in manifest.entries.get(col, {}) if hasattr(manifest.entries.get(col, {}), "get") else True:
+                manifest.update(col, coverage_pct=_coverage(fishnet, col), source_name=src)
+    except Exception as exc:
+        for col in ("aat_morning", "aat_midday", "aat_night", "diurnal_aat"):
+            manifest.error(col, str(exc))
+
+    # --- 2c: Assign Landsat to fishnet ---
+    try:
+        fishnet = assign_landsat_to_grid(
+            fishnet, landsat_composite, landsat_scene_dates,
+            enabled_indices=config.enabled_indices,
+            temporal_mode=config.temporal_mode,
         )
         for idx in config.enabled_indices:
             if idx in fishnet.columns:
@@ -203,11 +302,9 @@ def run(config: CollectConfig, *, on_step: Optional[Callable[[str, bool], None]]
     if on_step is not None:
         on_step("landsat", "lst" in fishnet.columns)
 
-    # --- Step 4: NLCD ---
-    for col in ("pct_impervious", "pct_canopy", "land_cover"):
-        manifest.fetching(col)
+    # --- 2d: Assign NLCD to fishnet ---
     try:
-        fishnet = fetch_nlcd(fishnet, config.boundary.bbox)
+        fishnet = assign_nlcd_to_grid(fishnet, nlcd_tif_paths)
         for col, src in [
             ("pct_impervious", "MRLC WCS NLCD 2021"),
             ("pct_canopy",     "MRLC WCS NLCD 2021"),
@@ -221,10 +318,10 @@ def run(config: CollectConfig, *, on_step: Optional[Callable[[str, bool], None]]
     if on_step is not None:
         on_step("nlcd", "pct_impervious" in fishnet.columns)
 
-    # --- Step 5: ERA5 — aligned to CAPA anchors when available ---
-    manifest.fetching("era5_t2m")
+    # --- 2e: Assign ERA5 to fishnet ---
     try:
-        fishnet = fetch_era5(fishnet, config.boundary.bbox, window)
+        if era5_grid is not None:
+            fishnet = assign_era5_to_grid(fishnet, *era5_grid)
         manifest.update("era5_t2m", coverage_pct=_coverage(fishnet, "era5_t2m"),
                         source_name="Open-Meteo ERA5")
     except Exception as exc:
@@ -233,7 +330,7 @@ def run(config: CollectConfig, *, on_step: Optional[Callable[[str, bool], None]]
     if on_step is not None:
         on_step("era5", "era5_t2m" in fishnet.columns)
 
-    # --- Step 6: AAT residual ---
+    # --- 2f: Derived: AAT residual ---
     manifest.fetching("aat_residual")
     if "aat_midday" in fishnet.columns and "era5_t2m" in fishnet.columns:
         fishnet["aat_residual"] = fishnet["aat_midday"] - fishnet["era5_t2m"]
@@ -242,18 +339,13 @@ def run(config: CollectConfig, *, on_step: Optional[Callable[[str, bool], None]]
     else:
         manifest.error("aat_residual", "aat_midday or era5_t2m unavailable")
 
-    # --- Step 7: Buildings + SVF ---
-    for col in ("bldg_height_mean", "bldg_coverage", "svf"):
-        manifest.fetching(col)
+    # --- 2g: Assign buildings to fishnet ---
     try:
-        fishnet, bldg_tier = fetch_buildings(
-            fishnet,
-            config.boundary.bbox,
-            lidar_path=config.lidar_path,
-            dsm_path=config.dsm_path,
+        fishnet, bldg_tier = assign_buildings_to_grid(
+            fishnet, buildings_raw, bldg_tier,
             default_height_m=config.default_building_height_m,
         )
-        tier_names = {1: "LiDAR (local)", 2: "Microsoft MLBuildings",
+        tier_names = {1: "LiDAR (local)", 2: "OSM Overpass",
                       3: "OSHB (Planetary Computer)", 4: "Constant default"}
         bldg_src = tier_names.get(bldg_tier, "Unknown")
         for col in ("bldg_height_mean", "bldg_coverage", "svf"):
@@ -267,11 +359,9 @@ def run(config: CollectConfig, *, on_step: Optional[Callable[[str, bool], None]]
     if on_step is not None:
         on_step("buildings", bldg_tier > 0)
 
-    # --- Step 8: Equity ---
-    for col in ("holc_grade", "cdc_svi", "ejscreen_score"):
-        manifest.fetching(col)
+    # --- 2h: Assign equity to fishnet ---
     try:
-        fishnet, holc_overlay = fetch_equity(fishnet, config.boundary.bbox)
+        fishnet, holc_overlay = assign_equity_to_grid(fishnet, equity_holc_gdf, equity_cdc_svi_gdf)
         holc_cov = _coverage(fishnet, "holc_grade")
         if holc_cov == 0.0:
             manifest.skip("holc_grade", "No HOLC coverage for this study area")
@@ -280,7 +370,7 @@ def run(config: CollectConfig, *, on_step: Optional[Callable[[str, bool], None]]
                             source_name="Mapping Inequality HOLC API")
         for col, src in [
             ("cdc_svi",        "CDC SVI 2022"),
-            ("ejscreen_score", "EPA EJScreen 2023"),
+            ("ejscreen_score", "EPA EJScreen 2023 (unavailable — NaN)"),
         ]:
             cov = _coverage(fishnet, col)
             if cov == 0.0:
@@ -294,7 +384,11 @@ def run(config: CollectConfig, *, on_step: Optional[Callable[[str, bool], None]]
     if on_step is not None:
         on_step("equity", "cdc_svi" in fishnet.columns)
 
-    # --- Step 9: has_gap flag ---
+    # =========================================================================
+    # Phase 3: QA, export
+    # =========================================================================
+
+    # --- 3a: has_gap flag ---
     required_cols = [e.name for e in manifest.entries.values() if e.required]
     existing_cols = [c for c in required_cols if c in fishnet.columns]
     if existing_cols:

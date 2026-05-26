@@ -1,0 +1,150 @@
+# =============================================================================
+# SPARC Project Configuration — Environmental Noise Domain
+# =============================================================================
+# Spatial analysis of equivalent continuous noise levels (Leq) driven by
+# traffic, land use, barriers, and meteorology.
+#
+# Key references:
+#   - FHWA Traffic Noise Model (TNM)
+#   - ISO 9613-2 — Outdoor propagation
+#   - WHO Environmental Noise Guidelines (2018)
+# =============================================================================
+
+project:
+  name: "Environmental Noise Analysis"
+  description: "Spatial regression of noise levels from traffic and industrial sources, accounting for propagation, barriers, and land use"
+  domain: noise
+  version: "1.0.0"
+  author: ""
+  response_units: "dBA"
+
+data:
+  file_path: ""
+  target_column: "Leq_dBA"                    # A-weighted equivalent continuous level
+  identifier_column: "receptor_id"
+  coord_columns: ["longitude", "latitude"]
+
+crs:
+  input: "EPSG:4326"
+  projected: ""
+
+predictors:
+  - traffic_volume_vph         # Hourly traffic volume (vehicles/hour)
+  - heavy_truck_pct            # Heavy truck percentage (%)
+  - distance_to_road_m         # Perpendicular distance to nearest major road (m)
+  - road_speed_kmh             # Posted speed limit (km/h)
+  - building_density_pct       # Building footprint coverage (%)
+  - barrier_height_m           # Noise barrier height (m, 0 = none)
+  - vegetation_buffer_m        # Depth of dense vegetation between source and receptor (m)
+  - elevation_diff_m           # Elevation difference receptor minus road (m)
+  - wind_speed_ms              # Mean wind speed (m/s)
+  - temperature_C              # Ambient temperature (°C)
+
+physics:
+  priors_file: "physics/priors.yml"
+  caps_file:   "physics/caps.yml"
+  monotone_constraints:
+    traffic_volume_vph:  1       # More traffic → more noise
+    heavy_truck_pct:  1          # Trucks are louder
+    distance_to_road_m: -1       # Farther → less noise (geometric spreading)
+    road_speed_kmh:  1           # Faster → louder
+    barrier_height_m: -1         # Taller barrier → less noise
+    vegetation_buffer_m: -1      # Denser buffer → more attenuation
+
+causal:
+  dag_file: "causal/dag.yml"
+  estimator: "dml"              # "dml" (Wager 2025 default), "hgb", or "ols"
+  estimate_cate: true           # Spatial CATE via Bayesian low-rank GP
+  inference: "bayesian"         # "bayesian" (V2 default: MC³ + NUTS) or "frequentist" (V1, deprecated)
+  cate_estimator: "bayesian"
+  discovery:
+    enabled: true
+    methods: [pc_stable, lingam, ges]
+    alpha: 0.05
+    consensus_threshold: 2
+    compare_expert: true
+  mc3:
+    n_iterations: 10000
+    n_chains: 4
+    burnin_fraction: 0.25
+    edge_penalty: 1.0
+    seed: 42
+  nuts:
+    n_samples: 2000
+    n_warmup: 500
+    n_chains: 2
+    target_accept_rate: 0.85
+    max_tree_depth: 8
+  bayesian_cate:
+    n_features: 16              # low-RAM laptops: 16; servers: 32+
+    n_samples: 2000
+    n_warmup: 500
+    n_chains: 2
+    target_accept_rate: 0.85
+    max_tree_depth: 8
+    kernel_lengthscale: 0.20
+  wager2025:
+    overlap: true               # Gap 1
+    rate_qini: true             # Gap 2
+    spillover: true             # Gap 3
+    iv: true                    # Gaps 4-5 (only fires if DAG has instrument)
+    sequential_aipw: true       # Gap 6
+    panel: true                 # Gap 7 (only fires with panel cols)
+    policy_learning: true       # Gap 8
+    cbps: true                  # Gap 9
+  actionable_variables:
+    - barrier_height_m
+    - vegetation_buffer_m
+    - road_speed_kmh
+  fixed_variables:
+    - distance_to_road_m
+    - elevation_diff_m
+
+output:
+  base_dir: "output"
+
+pipeline:
+  random_seed: 42
+  n_spatial_folds: 5
+
+# temporal:
+#   enabled: true
+#   time_column: "datetime"
+#   frequency: "hourly"
+#   lag_features:
+#     enabled: true
+#     lags: [1, 2, 3]
+#     variables: [traffic_volume_vph, wind_speed_ms]
+#   temporal_cv:
+#     method: "expanding_window"
+#     n_splits: 5
+#     gap: 1
+
+# ---------------------------------------------------------------------------
+# Stage-4 Budget Optimizer (cell-level allocation under a budget)
+# ---------------------------------------------------------------------------
+# Reads the per-cell cooling/benefit surface from Stage 4's
+# ``scenario_results`` and allocates a budget across cells using
+# greedy / 2-opt / MILP solvers.  Set ``total: null`` to skip the
+# constrained optimum and emit only the Pareto frontier (cost vs benefit).
+budget:
+  total: null                  # null → unconstrained Pareto only
+  solver: greedy_2opt          # greedy | greedy_2opt | milp
+  multipliers: [0.25, 0.5, 0.75, 1.0, 1.5]
+  cost_per_unit: {}            # e.g. {Pct_Canopy: 250}; empty = unit cost
+
+# ---------------------------------------------------------------------------
+# Stage-4 Wager-2025 caps (saturation + spillover folding)
+# ---------------------------------------------------------------------------
+# ``spillover_mode``:
+#   diagnostic       — direct/spillover/total are side-columns only.
+#   fold_into_delta  — headline ``delta_mean`` becomes the SUTVA-corrected
+#                      total; ``delta_direct_only`` preserves the unit-level
+#                      number for review.  Default in mode_5_full_audit.
+# ``saturation_clipping``: when true, per-cell delta is capped at the
+# Stage-3 dose-response knee (saturation_marginal_floor × peak |slope|).
+caps:
+  spillover_mode: fold_into_delta
+  saturation_clipping: true
+  saturation_marginal_floor: 0.5
+

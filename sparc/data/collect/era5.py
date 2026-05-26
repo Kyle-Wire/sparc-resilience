@@ -29,7 +29,72 @@ OPEN_METEO_ARCHIVE = "https://archive-api.open-meteo.com/v1/archive"
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public API — two-phase (download then assign to grid)
+# ---------------------------------------------------------------------------
+
+def download_era5(
+    bbox: tuple[float, float, float, float],
+    window_or_date_start: "date | TemporalWindow",
+    date_end: Optional[date] = None,
+) -> tuple[list[float], list[float], dict]:
+    """Fetch ERA5 temperature at grid points covering *bbox*.
+
+    This is **Phase 1** of the two-phase collection pattern.  Temperature values
+    are fetched at ERA5 native 0.25° grid points without requiring a fishnet.
+    Call :func:`assign_era5_to_grid` afterwards to downscale these values onto
+    a fishnet created at the desired resolution.
+
+    Parameters
+    ----------
+    bbox : (minx, miny, maxx, maxy) in EPSG:4326
+    window_or_date_start : TemporalWindow | date
+    date_end : date | None
+
+    Returns
+    -------
+    (grid_lons, grid_lats, point_means)
+        ERA5 grid point coordinates and mean daily temperatures (°C).
+    """
+    from ._temporal import TemporalWindow as _TW
+    if isinstance(window_or_date_start, _TW):
+        d_start, d_end = window_or_date_start.date_start, window_or_date_start.date_end
+    else:
+        d_start = window_or_date_start  # type: ignore[assignment]
+        d_end = date_end  # type: ignore[assignment]
+
+    grid_lons, grid_lats = _era5_grid_points_in_bbox(bbox)
+    point_means = _fetch_point_means(grid_lons, grid_lats, d_start, d_end)
+    return grid_lons, grid_lats, point_means
+
+
+def assign_era5_to_grid(
+    fishnet_gdf: object,
+    grid_lons: list[float],
+    grid_lats: list[float],
+    point_means: dict,
+) -> object:
+    """Downscale ERA5 grid point temperatures to fishnet cells.
+
+    This is **Phase 2** of the two-phase collection pattern.
+
+    Parameters
+    ----------
+    fishnet_gdf : gpd.GeoDataFrame
+        Analysis grid at any resolution.
+    grid_lons, grid_lats : list[float]
+        ERA5 grid point coordinates from :func:`download_era5`.
+    point_means : dict
+        Temperature values from :func:`download_era5`.
+
+    Returns
+    -------
+    gpd.GeoDataFrame with ``era5_t2m`` column appended.
+    """
+    return _downscale_to_fishnet(fishnet_gdf, grid_lons, grid_lats, point_means)
+
+
+# ---------------------------------------------------------------------------
+# Legacy single-call API (kept for backward compatibility)
 # ---------------------------------------------------------------------------
 
 def fetch_era5(
@@ -69,9 +134,8 @@ def fetch_era5(
         d_start = window_or_date_start  # type: ignore[assignment]
         d_end = date_end  # type: ignore[assignment]
 
-    grid_lons, grid_lats = _era5_grid_points_in_bbox(bbox)
-    point_means = _fetch_point_means(grid_lons, grid_lats, d_start, d_end)
-    return _downscale_to_fishnet(fishnet_gdf, grid_lons, grid_lats, point_means)
+    grid_lons, grid_lats, point_means = download_era5(bbox, d_start, d_end)
+    return assign_era5_to_grid(fishnet_gdf, grid_lons, grid_lats, point_means)
 
 
 # ---------------------------------------------------------------------------
@@ -155,10 +219,12 @@ def _downscale_to_fishnet(
     src_points = np.array(list(point_means.keys()))   # (N, 2) lon/lat
     src_values = np.array(list(point_means.values())) # (N,)
 
-    # Fishnet centroids in EPSG:4326
-    gdf_4326 = fishnet_gdf.to_crs("EPSG:4326")  # type: ignore[union-attr]
-    centroids = gdf_4326.geometry.centroid
-    dst_points = np.column_stack([centroids.x, centroids.y])
+    # Compute centroids in projected CRS to avoid geographic-CRS warnings,
+    # then reproject the centroid points to lon/lat for griddata.
+    import geopandas as gpd
+    centroids_proj = fishnet_gdf.geometry.centroid  # type: ignore[union-attr]
+    centroids_4326 = gpd.GeoSeries(centroids_proj, crs=fishnet_gdf.crs).to_crs("EPSG:4326")  # type: ignore[union-attr]
+    dst_points = np.column_stack([centroids_4326.x, centroids_4326.y])
 
     interpolated = griddata(src_points, src_values, dst_points, method="linear")
     # Fall back to nearest for cells outside the convex hull of ERA5 points

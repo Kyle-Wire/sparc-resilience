@@ -1,0 +1,54 @@
+# Physics Priors — Environmental Noise Domain
+# Sources: FHWA TNM, ISO 9613-2, Maekawa (1968)
+
+coefficients:
+  traffic_volume_vph:
+    value: 0.003
+    units: "dBA per vehicle/hour"
+    uncertainty: 0.001
+    source_scale: "road segment"
+    literature_source: "FHWA TNM 2.5; Leq = 10·log10(N) + emission + propagation"
+    confidence: "high"
+    description: "10·log10 relationship linearized around 1000 vph"
+
+  distance_to_road_m:
+    value: -0.06
+    units: "dBA per meter (linearized)"
+    uncertainty: 0.03
+    source_scale: "receptor"
+    literature_source: "ISO 9613-2 geometric divergence for line source"
+    confidence: "high"
+    description: "-3 dB per doubling; linearized at 50m reference"
+
+  barrier_height_m:
+    value: -2.5
+    units: "dBA per meter barrier above line of sight"
+    uncertainty: 1.0
+    source_scale: "receptor"
+    literature_source: "Maekawa (1968); FHWA barrier insertion loss curves"
+    confidence: "high"
+    description: "Typical 5-15 dB insertion loss for 2-6m barriers"
+
+  vegetation_buffer_m:
+    value: -0.10
+    units: "dBA per meter of dense vegetation"
+    uncertainty: 0.05
+    source_scale: "transect"
+    literature_source: "Fang & Ling (2003); ISO 9613-2 foliage attenuation"
+    confidence: "medium"
+    description: "~1 dB per 10m dense vegetation"
+
+  road_speed_kmh:
+    value: 0.25
+    units: "dBA per km/h"
+    uncertainty: 0.10
+    source_scale: "road segment"
+    literature_source: "FHWA TNM; tire-road noise ∝ 30·log10(V)"
+    confidence: "high"
+    description: "Linearized around 60 km/h"
+
+scale_harmonization:
+  target_resolution: 10
+  factors:
+    "road segment":
+      traffic_volume_vph: 1.0

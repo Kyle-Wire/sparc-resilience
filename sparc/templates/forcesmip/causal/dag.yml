@@ -1,0 +1,104 @@
+# =============================================================================
+# ForceSMIP Causal DAG: External Forcings → Climate Response
+# =============================================================================
+# Encodes the causal structure assumed by ForceSMIP:
+#   - External forcings (GHG, aerosol, volcanic, solar) drive climate response
+#   - Internal modes (ENSO, AMV, IPO) are confounders to control
+#   - GMST mediates the global-to-local pattern scaling
+# =============================================================================
+
+nodes:
+  - name: GHG_forcing_index
+    type: treatment
+    description: "Anthropogenic greenhouse gas forcing timeseries"
+
+  - name: aerosol_forcing_index
+    type: treatment
+    description: "Anthropogenic aerosol forcing (negative, cooling)"
+
+  - name: volcanic_forcing_index
+    type: treatment
+    description: "Natural volcanic forcing"
+
+  - name: solar_forcing_index
+    type: treatment
+    description: "Natural solar variability forcing"
+
+  - name: ENSO_detrended
+    type: confounder
+    description: "Internal ENSO variability — must be controlled"
+
+  - name: AMV_index
+    type: confounder
+    description: "Atlantic Multidecadal Variability — partly forced, partly internal"
+
+  - name: IPO_index
+    type: confounder
+    description: "Interdecadal Pacific Oscillation — key source of epistemic uncertainty"
+
+  - name: GMST_trend
+    type: mediator
+    description: "Global mean temperature — mediates local forced responses via pattern scaling"
+
+  # Outcome node name is swapped per target variable run.
+  # Default: tos_trend (sea-surface temperature)
+  - name: tos_trend
+    type: outcome
+    description: "Local trend — the forced component to isolate"
+
+edges:
+  # Forcings → GMST (global radiative forcing)
+  - parent: GHG_forcing_index
+    child: GMST_trend
+    mechanism: "logarithmic radiative forcing"
+
+  - parent: aerosol_forcing_index
+    child: GMST_trend
+    mechanism: "aerosol radiative effect"
+
+  - parent: volcanic_forcing_index
+    child: GMST_trend
+    mechanism: "stratospheric optical depth"
+
+  - parent: solar_forcing_index
+    child: GMST_trend
+    mechanism: "total solar irradiance"
+
+  # GMST → local target (pattern scaling)
+  - parent: GMST_trend
+    child: tos_trend
+    mechanism: "spatial pattern scaling"
+
+  # Direct forcing → local target (beyond pattern scaling)
+  - parent: GHG_forcing_index
+    child: tos_trend
+    mechanism: "direct radiative pattern (e.g. polar amplification)"
+
+  # Internal variability → local target (confounding)
+  - parent: ENSO_detrended
+    child: tos_trend
+    mechanism: "tropical Pacific teleconnection"
+
+  - parent: AMV_index
+    child: tos_trend
+    mechanism: "Atlantic basin influence"
+
+  - parent: IPO_index
+    child: tos_trend
+    mechanism: "Pacific decadal modulation — main source of inter-method variance per ForceSMIP Fig A1"
+
+structural_equations: {}
+
+# -----------------------------------------------------------------------------
+# SPARC v4 — User-asserted identification assumptions.
+# Surfaced in the validation report alongside empirical checks
+# (positivity, SUTVA / Moran's I, d-separation).
+# Per-edge `sign_prior` / `confidence` / `kind` / `lag` may also be added.
+# -----------------------------------------------------------------------------
+assumptions:
+  conditional_exchangeability: true
+  positivity: true
+  consistency: true
+  no_interference: true
+  notes: |
+    Counterfactual forcing scenarios are independent by construction — each ensemble member is a self-contained Earth-system trajectory.

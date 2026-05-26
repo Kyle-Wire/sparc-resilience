@@ -1,0 +1,109 @@
+# =============================================================================
+# Physics Priors: Surface Air Temperature (tas) Forced Response
+# =============================================================================
+# Similar structure to tos but different sensitivity magnitudes.
+# Land warms faster than ocean → higher coefficients.
+# =============================================================================
+
+coefficients:
+  GHG_forcing_index:
+    value: 1.0
+    units: "°C per W/m2"
+    uncertainty: 0.15
+    source_scale: "global"
+    literature_source: "IPCC AR6 Chapter 7 — land amplification factor ~1.2-1.4x ocean"
+    confidence: "high"
+    description: "GHG forcing sensitivity including land amplification"
+    unit_increment: 1.0
+
+  aerosol_forcing_index:
+    value: -0.55
+    units: "°C per W/m2"
+    uncertainty: 0.20
+    source_scale: "global"
+    literature_source: "IPCC AR6 Chapter 7"
+    confidence: "medium"
+    description: "Aerosol cooling, stronger over land"
+    unit_increment: 1.0
+
+  volcanic_forcing_index:
+    value: -0.18
+    units: "°C per W/m2"
+    uncertainty: 0.25
+    source_scale: "global"
+    literature_source: "Santer et al. (2014)"
+    confidence: "medium"
+    description: "Volcanic aerosol transient cooling"
+    unit_increment: 1.0
+
+  solar_forcing_index:
+    value: 0.12
+    units: "°C per W/m2"
+    uncertainty: 0.30
+    source_scale: "global"
+    literature_source: "IPCC AR6 Chapter 7"
+    confidence: "low"
+    description: "Solar cycle contribution"
+    unit_increment: 1.0
+
+  ENSO_detrended:
+    value: 0.0
+    units: "°C per °C"
+    uncertainty: 0.05
+    source_scale: "tropical_pacific"
+    literature_source: "ForceSMIP"
+    confidence: "low"
+    description: "Forced ENSO trend — uncertain"
+    unit_increment: 1.0
+
+  AMV_index:
+    value: 0.0
+    units: "°C per °C"
+    uncertainty: 0.10
+    source_scale: "north_atlantic"
+    literature_source: "ForceSMIP"
+    confidence: "low"
+    description: "AMV forced component"
+    unit_increment: 1.0
+
+  IPO_index:
+    value: 0.0
+    units: "°C per °C"
+    uncertainty: 0.10
+    source_scale: "pacific"
+    literature_source: "ForceSMIP"
+    confidence: "low"
+    description: "IPO forced component"
+    unit_increment: 1.0
+
+  GMST_trend:
+    value: 1.0
+    units: "°C per °C GMST"
+    uncertainty: 0.10
+    source_scale: "global"
+    literature_source: "Pattern scaling"
+    confidence: "high"
+    description: "Local tas scales with GMST"
+    unit_increment: 1.0
+
+scale_harmonization:
+  target_resolution: 278000
+  factors:
+    "global":
+      GHG_forcing_index: 1.0
+      aerosol_forcing_index: 1.0
+      volcanic_forcing_index: 1.0
+      solar_forcing_index: 1.0
+      ENSO_detrended: 1.0
+      AMV_index: 1.0
+      IPO_index: 1.0
+      GMST_trend: 1.0
+
+calibration:
+  shrinkage_weight: 0.3
+  max_deviation: 2.0
+  adaptive_weighting: true
+
+sensitivity:
+  tornado_uncertainty: 20
+  n_samples: 500

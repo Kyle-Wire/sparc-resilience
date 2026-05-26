@@ -1,0 +1,98 @@
+# =============================================================================
+# ForceSMIP Variable Constraints (Shared Across Target Variables)
+# =============================================================================
+# Bounds, delta constraints, monotonicity, and combined constraints
+# for the forcing predictors used in causal estimation.
+# =============================================================================
+
+variable_bounds:
+  GHG_forcing_index:
+    min: 0.0
+    max: 10.0
+    units: "W/m2"
+    physical_justification: "GHG forcing is positive and bounded by physically plausible scenarios"
+  aerosol_forcing_index:
+    min: -5.0
+    max: 0.0
+    units: "W/m2"
+    physical_justification: "Aerosol forcing is negative (cooling)"
+  volcanic_forcing_index:
+    min: -3.0
+    max: 0.5
+    units: "W/m2"
+    physical_justification: "Volcanic forcing is predominantly negative"
+  solar_forcing_index:
+    min: -0.5
+    max: 0.5
+    units: "W/m2"
+    physical_justification: "Solar variability is small"
+  ENSO_detrended:
+    min: -3.0
+    max: 3.0
+    units: "°C"
+    physical_justification: "Detrended ENSO index range"
+  AMV_index:
+    min: -0.3
+    max: 0.3
+    units: "°C"
+    physical_justification: "AMV index range"
+  IPO_index:
+    min: -2.0
+    max: 2.0
+    units: "index"
+    physical_justification: "IPO tripole index range"
+  GMST_trend:
+    min: -1.0
+    max: 3.0
+    units: "°C"
+    physical_justification: "Plausible GMST trend range over 42 years"
+
+delta_constraints:
+  GHG_forcing_index:
+    max_increase: 3.0
+    max_decrease: 0.0
+    typical_increase: 1.0
+  aerosol_forcing_index:
+    max_increase: 0.0
+    max_decrease: 2.0
+    typical_decrease: 0.5
+
+monotonicity:
+  GHG_forcing_index:
+    expected_sign: "positive"
+    description: "GHG forcing should warm globally"
+  aerosol_forcing_index:
+    expected_sign: "negative"
+    description: "Aerosol forcing should cool globally"
+  volcanic_forcing_index:
+    expected_sign: null
+    description: "Regional volcanic effects can vary in sign"
+  solar_forcing_index:
+    expected_sign: null
+    description: "Small and uncertain"
+  ENSO_detrended:
+    expected_sign: null
+    description: "Sign genuinely uncertain per ForceSMIP"
+  AMV_index:
+    expected_sign: null
+    description: "Sign genuinely uncertain per ForceSMIP"
+  IPO_index:
+    expected_sign: null
+    description: "Sign genuinely uncertain per ForceSMIP"
+
+combined_constraints: {}
+
+diminishing_return_thresholds:
+  GHG_forcing_index: 2.0
+  aerosol_forcing_index: 1.5
+  default: 1.0
+
+sign_violation_strategy: "dampen"
+max_delta_magnitude: 3.0
+mgwr_reliability_threshold: 0.1
+
+validation:
+  max_single_cell_delta: 5.0
+  max_zone_avg_delta: 3.0
+  sign_violation_action: "dampen"
+  magnitude_violation_action: "clip"

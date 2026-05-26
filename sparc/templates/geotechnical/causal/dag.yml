@@ -1,0 +1,114 @@
+# Causal DAG — Geotechnical / Slope Stability Domain
+# References: Mohr-Coulomb, Bishop (1955), Iverson (2000)
+
+nodes:
+  - name: slope_angle_deg
+    type: confounder
+    description: "Slope inclination (degrees)"
+
+  - name: soil_cohesion_kPa
+    type: confounder
+    description: "Effective cohesion c' (kPa)"
+
+  - name: friction_angle_deg
+    type: confounder
+    description: "Effective friction angle φ' (degrees)"
+
+  - name: pore_pressure_ratio
+    type: mediator
+    description: "Pore water pressure ratio ru = u/(γ·z)"
+
+  - name: soil_depth_m
+    type: confounder
+    description: "Depth to failure surface (m)"
+
+  - name: precipitation_mm
+    type: treatment
+    description: "Cumulative antecedent rainfall (mm)"
+
+  - name: vegetation_root_kPa
+    type: treatment
+    description: "Root reinforcement cohesion (kPa)"
+
+  - name: soil_unit_weight_kNm3
+    type: confounder
+    description: "Soil unit weight γ (kN/m³)"
+
+  - name: seismic_PGA_g
+    type: confounder
+    description: "Peak ground acceleration from seismic hazard (g)"
+
+  - name: distance_to_fault_km
+    type: confounder
+    description: "Distance to nearest active fault (km)"
+
+  - name: factor_of_safety
+    type: outcome
+    description: "Slope factor of safety (dimensionless, <1.0 = failure)"
+
+edges:
+  - parent: slope_angle_deg
+    child: factor_of_safety
+    mechanism: "Steeper slopes increase driving shear stress (Mohr-Coulomb)"
+
+  - parent: soil_cohesion_kPa
+    child: factor_of_safety
+    mechanism: "Cohesion provides shear resistance independent of normal stress"
+
+  - parent: friction_angle_deg
+    child: factor_of_safety
+    mechanism: "Frictional resistance proportional to effective normal stress"
+
+  - parent: pore_pressure_ratio
+    child: factor_of_safety
+    mechanism: "Pore pressure reduces effective stress → reduces frictional resistance"
+
+  - parent: precipitation_mm
+    child: pore_pressure_ratio
+    mechanism: "Rainfall infiltration raises the water table and pore pressures (Iverson 2000)"
+
+  - parent: precipitation_mm
+    child: factor_of_safety
+    mechanism: "Rapid loading from saturation and seepage forces"
+
+  - parent: soil_depth_m
+    child: factor_of_safety
+    mechanism: "Deeper soil mass increases driving force relative to resistance"
+
+  - parent: vegetation_root_kPa
+    child: factor_of_safety
+    mechanism: "Root reinforcement adds apparent cohesion to shallow soil (Wu et al. 1979)"
+
+  - parent: vegetation_root_kPa
+    child: pore_pressure_ratio
+    mechanism: "Vegetation transpiration reduces soil moisture and pore pressure"
+
+  - parent: soil_unit_weight_kNm3
+    child: factor_of_safety
+    mechanism: "Heavier soil increases both driving and resisting forces"
+
+  - parent: seismic_PGA_g
+    child: factor_of_safety
+    mechanism: "Seismic pseudo-static force reduces FoS (Newmark 1965)"
+
+  - parent: distance_to_fault_km
+    child: seismic_PGA_g
+    mechanism: "PGA attenuates with distance from fault (GMPE)"
+
+  - parent: slope_angle_deg
+    child: pore_pressure_ratio
+    mechanism: "Steeper slopes may have less infiltration but concentrate subsurface flow"
+
+# -----------------------------------------------------------------------------
+# SPARC v4 — User-asserted identification assumptions.
+# Surfaced in the validation report alongside empirical checks
+# (positivity, SUTVA / Moran's I, d-separation).
+# Per-edge `sign_prior` / `confidence` / `kind` / `lag` may also be added.
+# -----------------------------------------------------------------------------
+assumptions:
+  conditional_exchangeability: true
+  positivity: true
+  consistency: true
+  no_interference: false
+  notes: |
+    Subsurface stress fields couple adjacent boreholes; treat SUTVA as approximate at the borehole scale.

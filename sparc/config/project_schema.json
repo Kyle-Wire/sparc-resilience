@@ -941,6 +941,29 @@
       "type": "object",
       "description": "Stage-5 decision-support configuration (allocation, optimisation, reporting).",
       "additionalProperties": true
+    },
+
+    "collect": {
+      "type": "object",
+      "description": "Data collection configuration (sparc collect command — UHI / geospatial pipelines).",
+      "additionalProperties": true,
+      "properties": {
+        "capa_osf_node": {
+          "type": "string",
+          "default": "",
+          "description": "OSF project node ID for the NOAA/NIHHIS Heat Watch campaign. 5-character code from https://osf.io/{node_id}/files/. Leave blank to skip CAPA."
+        },
+        "capa_osf_folder": {
+          "type": "string",
+          "description": "Optional city folder hint for multi-city OSF nodes (e.g. 'Boston' inside a node shared across campaigns)."
+        },
+        "grid_resolution_m": {
+          "type": "number",
+          "default": 30,
+          "minimum": 1,
+          "description": "Analysis grid cell size in metres. The fishnet is created at this resolution after all raw data is downloaded."
+        }
+      }
     }
 
   }

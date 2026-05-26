@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import CubeLogo from "@/components/brand/CubeLogo";
 import { useAuthStore } from "@/stores/authStore";
 import { useMouseParallax } from "@/hooks/useMouseParallax";
@@ -18,6 +18,12 @@ export default function LoginScreen({ parallaxEnabled = true }: LoginScreenProps
   const cardRef = useRef<HTMLDivElement>(null);
   const logoRef = useRef<HTMLDivElement>(null);
   const glowRef = useRef<HTMLDivElement>(null);
+
+  // [DEBUG-sparc-blank] confirm LoginScreen mounted and card ref attached
+  useEffect(() => {
+    console.log("[DEBUG-sparc-blank] LoginScreen mounted, cardRef attached=", !!cardRef.current);
+    return () => console.log("[DEBUG-sparc-blank] LoginScreen unmounted");
+  }, []);
 
   useMouseParallax(
     useCallback(({ nx, ny }) => {
@@ -96,6 +102,23 @@ export default function LoginScreen({ parallaxEnabled = true }: LoginScreenProps
           pointerEvents: "none",
         }}
       />
+
+      {/* [DEBUG-sparc-blank] visible render stamp */}
+      <div
+        style={{
+          position: "absolute",
+          top: 8,
+          left: 8,
+          fontSize: 9,
+          fontFamily: "monospace",
+          color: "var(--crimson)",
+          opacity: 0.5,
+          pointerEvents: "none",
+          zIndex: 9999,
+        }}
+      >
+        [debug] LoginScreen
+      </div>
 
       {/* Login card */}
       <div

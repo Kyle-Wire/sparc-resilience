@@ -33,19 +33,20 @@ import numpy as np
 
 HTTP_TIMEOUT = 120.0
 
-# Microsoft Planetary Computer STAC — no auth required for browse queries.
-PC_STAC_SEARCH = "https://planetarycomputer.microsoft.com/api/stac/v1/search"
-PC_COLLECTION = "sentinel-2-l2a"
+# AWS Element84 Earth-Search — public S3 COGs, no auth required.
+# Planetary Computer requires authentication for COG downloads (HTTP 409).
+E84_STAC_SEARCH = "https://earth-search.aws.element84.com/v1/search"
+E84_COLLECTION = "sentinel-2-l2a"
 
 TemporalMode = Literal["single", "composite"]
 
-# Sentinel-2 L2A band assets on Planetary Computer
+# Sentinel-2 L2A band assets on Element84 Earth-Search (AWS S3 COGs)
 BAND_ASSETS = {
-    "blue":  "B02",   # 10m
-    "green": "B03",   # 10m
-    "red":   "B04",   # 10m
-    "nir":   "B08",   # 10m
-    "swir1": "B11",   # 20m → we resample to 10m
+    "blue":  "blue",    # B02 10m
+    "green": "green",   # B03 10m
+    "red":   "red",     # B04 10m
+    "nir":   "nir",     # B08 10m
+    "swir1": "swir16",  # B11 20m
 }
 
 S2_SCALE = 0.0001  # DN → reflectance (divide by 10000)
@@ -122,18 +123,21 @@ def _query_stac(
     date_end: date,
     cloud_cover_max: float,
 ) -> list[dict]:
-    """Return list of STAC items sorted by cloud cover (ascending)."""
+    """Return list of STAC items sorted by cloud cover (ascending).
+
+    Uses AWS Element84 Earth-Search which hosts data on public S3 — no
+    authentication is required.  Planetary Computer is NOT used here because
+    its COG URLs require a SAS/access token (returns HTTP 409 without one).
+    """
     payload = json.dumps({
-        "collections": [PC_COLLECTION],
+        "collections": [E84_COLLECTION],
         "bbox": list(bbox),
         "datetime": f"{date_start.isoformat()}T00:00:00Z/{date_end.isoformat()}T23:59:59Z",
-        "query": {"eo:cloud_cover": {"lte": cloud_cover_max}},
-        "limit": 20,
-        "sortby": [{"field": "eo:cloud_cover", "direction": "asc"}],
+        "limit": 100,
     }).encode()
 
     req = urllib.request.Request(
-        PC_STAC_SEARCH,
+        E84_STAC_SEARCH,
         data=payload,
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -141,7 +145,13 @@ def _query_stac(
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
             data = json.load(resp)
-        return data.get("features", [])
+        features = data.get("features", [])
+        # Filter and sort client-side — the query/sortby STAC extensions are
+        # not reliably supported across API versions.
+        features = [f for f in features
+                    if f.get("properties", {}).get("eo:cloud_cover", 100) <= cloud_cover_max]
+        features.sort(key=lambda f: f.get("properties", {}).get("eo:cloud_cover", 100))
+        return features
     except Exception:
         return []
 
@@ -226,8 +236,14 @@ def _read_cog_window(url: str, bbox: tuple, fishnet) -> np.ndarray:
             win = from_bounds(*bounds_src, transform=src.transform)
             data = src.read(1, window=win, out_dtype="float32", resampling=Resampling.bilinear)
 
-            # Map each fishnet centroid to pixel value
-            centroids_wgs84 = fishnet.to_crs("EPSG:4326").geometry.centroid
+            # Map each fishnet centroid to pixel value.
+            # Compute centroid in the projected CRS first to avoid the
+            # "Geometry is in a geographic CRS" warning from geopandas.
+            import geopandas as _gpd
+            _centroids_proj = _gpd.GeoDataFrame(
+                geometry=fishnet.geometry.centroid, crs=fishnet.crs
+            ).to_crs("EPSG:4326")
+            centroids_wgs84 = _centroids_proj.geometry
             xs = centroids_wgs84.x.values
             ys = centroids_wgs84.y.values
 

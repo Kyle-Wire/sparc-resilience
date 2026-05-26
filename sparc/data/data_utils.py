@@ -116,7 +116,18 @@ def _read_csv_smart(path: str, low_memory: bool = False) -> pd.DataFrame:
         except Exception as exc:
             print(f"    Dask read failed ({exc}), falling back to pandas")
 
-    return pd.read_csv(path, low_memory=low_memory)
+    # Try common encodings in order.  Many real-world CSVs exported from
+    # Excel or legacy tools use Latin-1 / CP-1252 rather than UTF-8.
+    for enc in ("utf-8", "utf-8-sig", "latin-1", "cp1252"):
+        try:
+            return pd.read_csv(path, low_memory=low_memory, encoding=enc)
+        except UnicodeDecodeError:
+            continue
+    raise ValueError(
+        f"Cannot decode '{path}' with any supported encoding "
+        "(UTF-8, UTF-8-BOM, Latin-1, CP-1252). "
+        "Please save the file as UTF-8 and retry."
+    )
 
 def load_and_preprocess_data(
     raw_data_path: str,

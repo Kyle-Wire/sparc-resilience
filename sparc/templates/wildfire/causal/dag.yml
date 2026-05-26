@@ -1,0 +1,135 @@
+# Causal DAG — Wildfire Burn Severity Domain
+# References: Rothermel (1972), Scott & Burgan (2005), Parks et al. (2018)
+
+nodes:
+  - name: fuel_load_tha
+    type: treatment
+    description: "Surface fuel load (tonnes/ha)"
+
+  - name: canopy_cover_pct
+    type: treatment
+    description: "Tree canopy cover (%)"
+
+  - name: slope_deg
+    type: confounder
+    description: "Terrain slope (degrees)"
+
+  - name: aspect_cos
+    type: confounder
+    description: "Cosine of aspect (north=1, south=-1)"
+
+  - name: elevation_m
+    type: confounder
+    description: "Land surface elevation (m)"
+
+  - name: VPD_kPa
+    type: treatment
+    description: "Vapor pressure deficit (kPa)"
+
+  - name: wind_speed_ms
+    type: confounder
+    description: "Maximum wind speed during fire event (m/s)"
+
+  - name: temperature_max_C
+    type: confounder
+    description: "Maximum temperature (°C)"
+
+  - name: drought_index
+    type: confounder
+    description: "Palmer Drought Severity Index or KBDI"
+
+  - name: NDVI_prefire
+    type: confounder
+    description: "Pre-fire vegetation greenness"
+
+  - name: distance_to_road_km
+    type: confounder
+    description: "Distance to nearest road — ignition source proxy"
+
+  - name: fuel_moisture
+    type: mediator
+    description: "Live + dead fuel moisture content (latent)"
+
+  - name: dnbr
+    type: outcome
+    description: "Differenced Normalized Burn Ratio (burn severity)"
+
+edges:
+  - parent: fuel_load_tha
+    child: dnbr
+    mechanism: "More available fuel → higher energy release → greater severity"
+
+  - parent: canopy_cover_pct
+    child: dnbr
+    mechanism: "Crown fire potential: dense canopy enables torching and crowning"
+
+  - parent: canopy_cover_pct
+    child: fuel_load_tha
+    mechanism: "Canopy litter contributes to surface fuel accumulation"
+
+  - parent: slope_deg
+    child: dnbr
+    mechanism: "Uphill fire preheats fuels via radiation/convection (Rothermel 1972)"
+
+  - parent: aspect_cos
+    child: fuel_moisture
+    mechanism: "South-facing slopes receive more radiation → drier fuels"
+
+  - parent: elevation_m
+    child: fuel_moisture
+    mechanism: "Higher elevation → cooler/wetter → higher fuel moisture"
+
+  - parent: elevation_m
+    child: NDVI_prefire
+    mechanism: "Elevation controls vegetation type and productivity"
+
+  - parent: VPD_kPa
+    child: fuel_moisture
+    mechanism: "High VPD draws moisture from live and dead fuels"
+
+  - parent: VPD_kPa
+    child: dnbr
+    mechanism: "Atmospheric dryness amplifies fire intensity"
+
+  - parent: temperature_max_C
+    child: VPD_kPa
+    mechanism: "Temperature is primary driver of VPD"
+
+  - parent: temperature_max_C
+    child: fuel_moisture
+    mechanism: "Higher temperatures increase fuel drying rate"
+
+  - parent: drought_index
+    child: fuel_moisture
+    mechanism: "Prolonged drought reduces deep soil and fuel moisture"
+
+  - parent: fuel_moisture
+    child: dnbr
+    mechanism: "Dry fuels ignite more easily and burn more completely"
+
+  - parent: wind_speed_ms
+    child: dnbr
+    mechanism: "Wind accelerates spread rate and oxygen supply"
+
+  - parent: NDVI_prefire
+    child: fuel_load_tha
+    mechanism: "More productive vegetation → more biomass accumulation"
+
+  - parent: distance_to_road_km
+    child: dnbr
+    mechanism: "Proximity to roads: ignition probability + suppression access"
+
+# -----------------------------------------------------------------------------
+# SPARC v4 — User-asserted identification assumptions.
+# Surfaced in the validation report alongside empirical checks
+# (positivity, SUTVA / Moran's I, d-separation).
+# Per-edge `sign_prior` / `confidence` / `kind` / `lag` may also be added.
+# -----------------------------------------------------------------------------
+assumptions:
+  conditional_exchangeability: true
+  positivity: true
+  consistency: true
+  no_interference: false
+  notes: |
+    Fire spreads — fuel-treatment effectiveness depends on neighbouring patches.
+    SUTVA holds only at landscape scale.

@@ -3,7 +3,7 @@ buildings.py — Building footprints, heights, and Sky View Factor.
 
 Resolves building heights for the study area using a fallback chain:
   Tier 1 — Local LiDAR file (user-provided DSM or building height raster)
-  Tier 2 — Microsoft MLBuildings (Azure Blob GeoParquet tiles, ~1B buildings)
+  Tier 2 — OpenStreetMap Overpass API (building ways with height/levels tags)
   Tier 3 — OSHB via Microsoft Planetary Computer STAC (raster, ~90m source)
   Tier 4 — Constant default (configurable, e.g. 5.0 m)
 
@@ -32,16 +32,115 @@ import numpy as np
 
 HTTP_TIMEOUT = 60.0
 CELL_WIDTH_M = 30.0  # 30m fishnet cell width used in SVF formula
+_DEFAULT_HEIGHT_M = 5.0  # fallback for buildings without height data
 
-# Microsoft MLBuildings — Azure Blob Storage (publicly readable)
-# Tile index lists parquet files by quadkey / country
-ML_BUILDINGS_INDEX = (
-    "https://minedbuildings.blob.core.windows.net/global-buildings/dataset-links.csv"
-)
+# OpenStreetMap Overpass API
+OSM_OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public API — two-phase (download then assign to grid)
+# ---------------------------------------------------------------------------
+
+def download_buildings(
+    bbox: tuple[float, float, float, float],
+    *,
+    lidar_path: Optional[Path] = None,
+    dsm_path: Optional[Path] = None,
+    default_height_m: float = 5.0,
+    cache_dir: Optional[Path] = None,
+) -> tuple[dict, int]:
+    """Download building data for *bbox* without grid assignment.
+
+    This is **Phase 1** of the two-phase collection pattern.  Building
+    polygons are fetched from OSM (or OSHB), or a local LiDAR raster path
+    is recorded, without requiring a fishnet.  Call
+    :func:`assign_buildings_to_grid` once the fishnet has been created.
+
+    Returns
+    -------
+    (raw_data, tier)
+        ``raw_data`` is a dict consumed by :func:`assign_buildings_to_grid`.
+        ``tier`` is 1–4 indicating which source was used.
+    """
+    cache_dir = cache_dir or _default_cache_dir()
+
+    if lidar_path and Path(lidar_path).exists():
+        return {"type": "raster", "path": Path(lidar_path), "dsm_path": dsm_path}, 1
+
+    # Tier 2 — OSM Overpass
+    try:
+        buildings = _download_osm_buildings_raw(bbox, cache_dir)
+        if buildings is not None:
+            return {"type": "vector", "gdf": buildings, "dsm_path": dsm_path}, 2
+    except Exception:
+        pass
+
+    # Tier 3 — OSHB (Planetary Computer)
+    try:
+        oshb_href = _get_oshb_href(bbox)
+        if oshb_href is not None:
+            return {"type": "raster_url", "href": oshb_href, "dsm_path": dsm_path}, 3
+    except Exception:
+        pass
+
+    # Tier 4 — constant fallback
+    return {"type": "constant", "default_height_m": default_height_m, "dsm_path": dsm_path}, 4
+
+
+def assign_buildings_to_grid(
+    fishnet_gdf: object,
+    raw_data: dict,
+    tier: int,
+    *,
+    default_height_m: float = 5.0,
+) -> tuple[object, int]:
+    """Apply downloaded building data to fishnet cells.
+
+    This is **Phase 2** of the two-phase collection pattern.
+
+    Parameters
+    ----------
+    fishnet_gdf : gpd.GeoDataFrame
+        Analysis grid at any resolution.
+    raw_data : dict
+        Building raw data from :func:`download_buildings`.
+    tier : int
+        Tier code from :func:`download_buildings`.
+    default_height_m : float
+        Height for constant fallback (tier 4).
+
+    Returns
+    -------
+    (GeoDataFrame, tier_used)
+        Fishnet with ``bldg_height_mean``, ``bldg_coverage``, ``svf``; tier int.
+    """
+    btype = raw_data.get("type", "constant")
+    dsm_path = raw_data.get("dsm_path")
+
+    if btype == "raster":
+        gdf = _from_raster(fishnet_gdf, raw_data["path"], "bldg_height_mean")
+        gdf = _coverage_from_height(gdf)
+    elif btype == "vector":
+        gdf = _join_buildings_to_fishnet(fishnet_gdf, raw_data["gdf"])
+    elif btype == "raster_url":
+        gdf = _from_raster(fishnet_gdf, raw_data["href"], "bldg_height_mean")
+        gdf = _coverage_from_height(gdf)
+    else:
+        gdf = fishnet_gdf.copy()  # type: ignore[union-attr]
+        gdf["bldg_height_mean"] = raw_data.get("default_height_m", default_height_m)  # type: ignore[index]
+        gdf["bldg_coverage"] = 0.3  # type: ignore[index]
+
+    if dsm_path and Path(dsm_path).exists():
+        gdf = _true_svf_from_dsm(gdf, Path(dsm_path))
+    else:
+        gdf = _compute_svf_proxy(gdf)
+
+    return gdf, tier
+
+
+# ---------------------------------------------------------------------------
+# Legacy single-call API (kept for backward compatibility)
 # ---------------------------------------------------------------------------
 
 def fetch_buildings(
@@ -77,20 +176,14 @@ def fetch_buildings(
         integer tier (1–4) indicating which source was used.
     """
     cache_dir = cache_dir or _default_cache_dir()
-
-    if lidar_path and Path(lidar_path).exists():
-        gdf = _from_raster(fishnet_gdf, Path(lidar_path), "bldg_height_mean")
-        gdf = _coverage_from_height(gdf)
-        tier = 1
-    else:
-        gdf, tier = _from_mlbuildings_or_fallback(fishnet_gdf, bbox, default_height_m, cache_dir)
-
-    if dsm_path and Path(dsm_path).exists():
-        gdf = _true_svf_from_dsm(gdf, Path(dsm_path))
-    else:
-        gdf = _compute_svf_proxy(gdf)
-
-    return gdf, tier
+    raw_data, tier = download_buildings(
+        bbox,
+        lidar_path=lidar_path,
+        dsm_path=dsm_path,
+        default_height_m=default_height_m,
+        cache_dir=cache_dir,
+    )
+    return assign_buildings_to_grid(fishnet_gdf, raw_data, tier, default_height_m=default_height_m)
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +215,7 @@ def _coverage_from_height(fishnet_gdf: object) -> object:
 
 
 # ---------------------------------------------------------------------------
-# Tier 2 — Microsoft MLBuildings
+# Tier 2 — OSM Overpass + fallback chain
 # ---------------------------------------------------------------------------
 
 def _from_mlbuildings_or_fallback(
@@ -131,9 +224,9 @@ def _from_mlbuildings_or_fallback(
     default_height_m: float,
     cache_dir: Path,
 ) -> tuple[object, int]:
-    """Try MLBuildings (Tier 2), OSHB (Tier 3), constant (Tier 4)."""
+    """Try OSM Overpass (Tier 2), OSHB (Tier 3), constant (Tier 4)."""
     try:
-        gdf = _from_mlbuildings(fishnet_gdf, bbox, cache_dir)
+        gdf = _from_osm_overpass(fishnet_gdf, bbox, cache_dir)
         if gdf is not None:
             return gdf, 2
     except Exception:
@@ -153,97 +246,122 @@ def _from_mlbuildings_or_fallback(
     return gdf, 4
 
 
-def _from_mlbuildings(
+def _from_osm_overpass(
     fishnet_gdf: object,
     bbox: tuple[float, float, float, float],
     cache_dir: Path,
 ) -> Optional[object]:
-    """Join Microsoft MLBuildings footprints + heights to the fishnet."""
-    try:
-        import geopandas as gpd
-        import pandas as pd
-    except ImportError:
+    """Fetch building footprints from OSM Overpass API and join to fishnet."""
+    buildings = _download_osm_buildings_raw(bbox, cache_dir)
+    if buildings is None:
         return None
-
-    # Fetch the dataset index to find relevant country/tile parquet files
-    index_path = cache_dir / "mlbuildings_index.csv"
-    if not index_path.exists():
-        try:
-            req = urllib.request.Request(
-                ML_BUILDINGS_INDEX,
-                headers={"User-Agent": "SPARC-DataCollection/1.0"},
-            )
-            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
-                index_path.write_bytes(resp.read())
-        except Exception:
-            return None
-
-    # Parse CSV: Location,Quadkey,Url columns
-    import csv
-    minx, miny, maxx, maxy = bbox
-    parquet_urls: list[str] = []
-    with open(index_path, newline="", encoding="utf-8") as fh:
-        reader = csv.DictReader(fh)
-        for row in reader:
-            url = row.get("Url", "")
-            # Simple geographic filter: download tiles whose quadkey region
-            # overlaps bbox. We use the Location column (e.g. "United States")
-            # as a rough filter; finer filtering happens after download.
-            if url:
-                parquet_urls.append(url)
-
-    if not parquet_urls:
-        return None
-
-    # Download and union footprints that intersect bbox
-    from shapely.geometry import box as shapely_box
-    bbox_geom = shapely_box(minx, miny, maxx, maxy)
-    all_gdfs: list = []
-
-    # Limit to first 5 tile files to avoid unbounded downloads
-    for url in parquet_urls[:5]:
-        tile_path = cache_dir / f"mlb_{abs(hash(url))}.parquet"
-        if not tile_path.exists():
-            try:
-                req = urllib.request.Request(
-                    url, headers={"User-Agent": "SPARC-DataCollection/1.0"}
-                )
-                with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
-                    tile_path.write_bytes(resp.read())
-            except Exception:
-                continue
-        try:
-            tile_gdf = gpd.read_parquet(tile_path)
-            if tile_gdf.crs is None:
-                tile_gdf = tile_gdf.set_crs("EPSG:4326")
-            elif str(tile_gdf.crs.to_epsg()) != "4326":
-                tile_gdf = tile_gdf.to_crs("EPSG:4326")
-            clipped = tile_gdf[tile_gdf.intersects(bbox_geom)]
-            if not clipped.empty:
-                all_gdfs.append(clipped)
-        except Exception:
-            continue
-
-    if not all_gdfs:
-        return None
-
-    import pandas as pd
-    buildings = gpd.GeoDataFrame(
-        pd.concat(all_gdfs, ignore_index=True), crs="EPSG:4326"
-    )
     return _join_buildings_to_fishnet(fishnet_gdf, buildings)
 
 
-def _from_oshb(
-    fishnet_gdf: object,
+def _download_osm_buildings_raw(
     bbox: tuple[float, float, float, float],
     cache_dir: Path,
 ) -> Optional[object]:
-    """Fetch OSHB building heights from Planetary Computer STAC."""
+    """Download OSM building polygons for *bbox* without fishnet assignment.
+
+    Returns a GeoDataFrame of building polygons, or ``None`` if no buildings
+    are found or the API is unreachable.  Results are cached as a parquet file.
+    """
+    try:
+        import geopandas as gpd
+        from shapely.geometry import Polygon
+    except ImportError:
+        return None
+
+    minx, miny, maxx, maxy = bbox
+    safe_key = (
+        f"osm_bldg_{minx:.4f}_{miny:.4f}_{maxx:.4f}_{maxy:.4f}"
+        .replace(".", "p").replace("-", "m")
+    )
+    cache_path = cache_dir / f"{safe_key}.parquet"
+
+    if cache_path.exists():
+        try:
+            return gpd.read_parquet(cache_path)
+        except Exception:
+            cache_path.unlink(missing_ok=True)
+
+    query = (
+        f"[out:json][timeout:90];\n"
+        f"(way[\"building\"]({miny},{minx},{maxy},{maxx}););\n"
+        f"out body;\n>;\nout skel qt;\n"
+    )
+    data_enc = urllib.parse.urlencode({"data": query}).encode()
+    req = urllib.request.Request(
+        OSM_OVERPASS_URL,
+        data=data_enc,
+        headers={
+            "User-Agent": "SPARC-DataCollection/1.0",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=120.0) as resp:
+        result = json.loads(resp.read().decode("utf-8"))
+
+    # Build node-coordinate lookup then reconstruct polygons from ways
+    node_coords: dict[int, tuple[float, float]] = {}
+    ways_list: list[dict] = []
+    for elem in result.get("elements", []):
+        t = elem.get("type")
+        if t == "node":
+            node_coords[elem["id"]] = (elem["lon"], elem["lat"])
+        elif t == "way":
+            ways_list.append(elem)
+
+    records: list[dict] = []
+    for way in ways_list:
+        node_ids = way.get("nodes", [])
+        coords = [node_coords[nid] for nid in node_ids if nid in node_coords]
+        if len(coords) < 3:
+            continue
+
+        tags = way.get("tags", {})
+        height: Optional[float] = None
+        if "height" in tags:
+            try:
+                height = float(str(tags["height"]).split()[0])
+            except (ValueError, IndexError):
+                pass
+        if height is None and "building:levels" in tags:
+            try:
+                height = float(tags["building:levels"]) * 3.0
+            except (ValueError, TypeError):
+                pass
+
+        try:
+            poly = Polygon(coords)
+            if poly.is_valid and not poly.is_empty:
+                records.append({"geometry": poly, "height": height})
+        except Exception:
+            continue
+
+    if not records:
+        return None
+
+    buildings = gpd.GeoDataFrame(records, crs="EPSG:4326")
+    try:
+        buildings.to_parquet(cache_path)
+    except Exception:
+        pass
+    return buildings
+
+
+def _get_oshb_href(
+    bbox: tuple[float, float, float, float],
+) -> Optional[str]:
+    """Return the OSHB raster asset URL for *bbox* from Planetary Computer.
+
+    Returns ``None`` if no OSHB tile covers the area or the PC client is
+    unavailable.
+    """
     try:
         import pystac_client  # type: ignore[import]
         import planetary_computer  # type: ignore[import]
-        import rasterio
     except ImportError:
         return None
 
@@ -259,11 +377,21 @@ def _from_oshb(
     ).items())
     if not items:
         return None
-
-    # Use the first item's data asset
     item = items[0]
-    href = item.assets.get("data", item.assets.get("image", list(item.assets.values())[0])).href
-    return _from_raster(_coverage_from_height(fishnet_gdf), href, "bldg_height_mean")  # type: ignore[arg-type]
+    return item.assets.get("data", item.assets.get("image", list(item.assets.values())[0])).href
+
+
+def _from_oshb(
+    fishnet_gdf: object,
+    bbox: tuple[float, float, float, float],
+    cache_dir: Path,
+) -> Optional[object]:
+    """Fetch OSHB building heights from Planetary Computer STAC."""
+    href = _get_oshb_href(bbox)
+    if href is None:
+        return None
+    gdf = _from_raster(fishnet_gdf, href, "bldg_height_mean")  # type: ignore[arg-type]
+    return _coverage_from_height(gdf)
 
 
 # ---------------------------------------------------------------------------
@@ -293,8 +421,11 @@ def _join_buildings_to_fishnet(
     n_cells = len(fishnet)
 
     if height_col:
+        # Fill NaN heights with default so cells with footprints but no height
+        # tag produce a usable SVF estimate rather than NaN.
+        heights_filled = joined[height_col].fillna(_DEFAULT_HEIGHT_M)
         mean_heights = (
-            joined.groupby(cell_idx)[height_col]
+            heights_filled.groupby(cell_idx)
             .mean()
             .reindex(range(n_cells), fill_value=0.0)
         )

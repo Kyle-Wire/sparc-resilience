@@ -1,0 +1,152 @@
+# =============================================================================
+# SPARC Project Configuration — Stormwater Runoff Domain
+# =============================================================================
+# Spatial analysis of peak runoff / flood severity as a function of land use,
+# soil, topography, and rainfall.  Supports temporal mode for event-based or
+# continuous rainfall time-series analysis.
+#
+# Key references:
+#   - NRCS TR-55 (1986) — Curve Number method
+#   - EPA SWMM — Green–Ampt infiltration
+#   - Schueler (1994) — Impervious cover model
+# =============================================================================
+
+project:
+  name: "Stormwater Runoff Analysis"
+  description: "Spatial regression of peak runoff depth as a function of land cover, soil, topography, and precipitation"
+  domain: stormwater
+  version: "1.0.0"
+  author: ""
+  response_units: "mm"
+
+data:
+  file_path: ""                                # Path to input CSV
+  target_column: "runoff_depth_mm"             # Peak event runoff depth
+  identifier_column: "site_id"
+  coord_columns: ["longitude", "latitude"]
+  # areas_of_interest_file: ""
+
+crs:
+  input: "EPSG:4326"
+  projected: ""                                # Set to local UTM zone
+
+predictors:
+  - impervious_pct           # Impervious surface cover (%)
+  - canopy_pct               # Tree canopy cover (%)
+  - slope_pct                # Terrain slope (%)
+  - curve_number             # NRCS Curve Number (dimensionless, 30–98)
+  - soil_hydraulic_cond_mmhr # Saturated hydraulic conductivity (mm/hr)
+  - drainage_area_ha         # Contributing drainage area (hectares)
+  - rainfall_depth_mm        # Storm event total rainfall (mm)
+  - antecedent_moisture      # 5-day antecedent rainfall index (mm)
+
+physics:
+  priors_file: "physics/priors.yml"
+  caps_file:   "physics/caps.yml"
+  monotone_constraints:
+    impervious_pct:  1          # More impervious → more runoff
+    canopy_pct: -1              # More canopy → less runoff
+    slope_pct:  1               # Steeper → faster runoff
+    curve_number:  1            # Higher CN → more runoff
+    soil_hydraulic_cond_mmhr: -1  # Higher infiltration → less runoff
+    rainfall_depth_mm:  1       # More rain → more runoff
+
+causal:
+  dag_file: "causal/dag.yml"
+  estimator: "dml"              # "dml" (Wager 2025 default), "hgb", or "ols"
+  estimate_cate: true           # Spatial CATE via Bayesian low-rank GP
+  inference: "bayesian"         # "bayesian" (V2 default: MC³ + NUTS) or "frequentist" (V1, deprecated)
+  cate_estimator: "bayesian"
+  discovery:
+    enabled: true
+    methods: [pc_stable, lingam, ges]
+    alpha: 0.05
+    consensus_threshold: 2
+    compare_expert: true
+  mc3:
+    n_iterations: 10000
+    n_chains: 4
+    burnin_fraction: 0.25
+    edge_penalty: 1.0
+    seed: 42
+  nuts:
+    n_samples: 2000
+    n_warmup: 500
+    n_chains: 2
+    target_accept_rate: 0.85
+    max_tree_depth: 8
+  bayesian_cate:
+    n_features: 16              # low-RAM laptops: 16; servers: 32+
+    n_samples: 2000
+    n_warmup: 500
+    n_chains: 2
+    target_accept_rate: 0.85
+    max_tree_depth: 8
+    kernel_lengthscale: 0.20
+  wager2025:
+    overlap: true               # Gap 1
+    rate_qini: true             # Gap 2
+    spillover: true             # Gap 3
+    iv: true                    # Gaps 4-5 (only fires if DAG has instrument)
+    sequential_aipw: true       # Gap 6
+    panel: true                 # Gap 7 (only fires with panel cols)
+    policy_learning: true       # Gap 8
+    cbps: true                  # Gap 9
+  actionable_variables:
+    - impervious_pct
+    - canopy_pct
+    - curve_number
+  fixed_variables:
+    - slope_pct
+    - drainage_area_ha
+    - soil_hydraulic_cond_mmhr
+
+output:
+  base_dir: "output"
+
+pipeline:
+  random_seed: 42
+  n_spatial_folds: 5
+
+# temporal:
+#   enabled: true
+#   time_column: "event_date"
+#   frequency: "daily"
+#   lag_features:
+#     enabled: true
+#     lags: [1, 2, 3]
+#     rolling_windows: [3, 7]
+#     variables: [rainfall_depth_mm, antecedent_moisture]
+#   temporal_cv:
+#     method: "expanding_window"
+#     n_splits: 5
+#     gap: 1
+
+# ---------------------------------------------------------------------------
+# Stage-4 Budget Optimizer (cell-level allocation under a budget)
+# ---------------------------------------------------------------------------
+# Reads the per-cell cooling/benefit surface from Stage 4's
+# ``scenario_results`` and allocates a budget across cells using
+# greedy / 2-opt / MILP solvers.  Set ``total: null`` to skip the
+# constrained optimum and emit only the Pareto frontier (cost vs benefit).
+budget:
+  total: null                  # null → unconstrained Pareto only
+  solver: greedy_2opt          # greedy | greedy_2opt | milp
+  multipliers: [0.25, 0.5, 0.75, 1.0, 1.5]
+  cost_per_unit: {}            # e.g. {Pct_Canopy: 250}; empty = unit cost
+
+# ---------------------------------------------------------------------------
+# Stage-4 Wager-2025 caps (saturation + spillover folding)
+# ---------------------------------------------------------------------------
+# ``spillover_mode``:
+#   diagnostic       — direct/spillover/total are side-columns only.
+#   fold_into_delta  — headline ``delta_mean`` becomes the SUTVA-corrected
+#                      total; ``delta_direct_only`` preserves the unit-level
+#                      number for review.  Default in mode_5_full_audit.
+# ``saturation_clipping``: when true, per-cell delta is capped at the
+# Stage-3 dose-response knee (saturation_marginal_floor × peak |slope|).
+caps:
+  spillover_mode: fold_into_delta
+  saturation_clipping: true
+  saturation_marginal_floor: 0.5
+
