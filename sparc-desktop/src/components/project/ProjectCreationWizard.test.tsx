@@ -7,7 +7,7 @@
  * TEMPLATE_BLURBS catalog immediately, then replace with the server list
  * once the fetch resolves.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, waitFor, act } from "@testing-library/react";
 import ProjectCreationWizard from "./ProjectCreationWizard";
 

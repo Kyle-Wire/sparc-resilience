@@ -82,7 +82,7 @@ function renderDagView() {
   return render(
     React.createElement(
       PipelineProvider,
-      { serverReady: false },
+      { serverReady: false, children: null },
       React.createElement(DAGView),
     ),
   );
