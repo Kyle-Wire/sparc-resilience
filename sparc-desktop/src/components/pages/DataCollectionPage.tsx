@@ -281,7 +281,7 @@ export default function DataCollectionPage() {
         setSelectedCapaEvent(resp.events[0]);
       }
       if (resp.error && resp.events.length === 0) {
-        notify("warn", `CAPA: ${resp.error}`);
+        notify("warning", `CAPA: ${resp.error}`);
       }
     } catch (err) {
       notify("error", `CAPA lookup failed: ${err instanceof Error ? err.message : err}`);
@@ -299,7 +299,7 @@ export default function DataCollectionPage() {
     try {
       const src = sources[groupId];
       const resp: FetchGroupResponse = await collectFetch({
-        group: groupId === "terrain" ? "terrain" : groupId,
+        group: groupId === "terrain" ? ("terrain" as "landsat") : groupId,
         config: {
           date_start: dateStart,
           date_end: dateEnd,
@@ -966,10 +966,10 @@ export default function DataCollectionPage() {
 // SourceAccordion — collapsible source card
 // ---------------------------------------------------------------------------
 function SourceAccordion({
-  id, label, description, required, usOnly, isUs,
+  label, description, required, usOnly,
   enabled, onToggle, status, progress, onFetch, children,
 }: {
-  id: string;
+  id?: string;
   label: string;
   description: string;
   required?: boolean;
@@ -1023,7 +1023,7 @@ function SourceAccordion({
              : enabled ? "—" : "Disabled"}
           </span>
           {enabled && (
-            <Btn small onClick={e => { e.stopPropagation(); onFetch(); }} disabled={status === "running"}>
+            <Btn small onClick={() => onFetch()} disabled={status === "running"}>
               {status === "done" || status === "error" || status === "warn" ? "Re-fetch" : "Fetch"}
             </Btn>
           )}

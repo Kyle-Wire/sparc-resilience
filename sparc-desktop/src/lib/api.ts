@@ -1619,7 +1619,7 @@ export const collectManifest = () => get<CollectManifest>("/collect/manifest");
 
 /** Trigger a fetch for one variable group (runs in server thread-pool). */
 export async function collectFetch(opts: {
-  group: "landsat" | "nlcd" | "era5" | "capa" | "buildings" | "equity" | "sentinel2";
+  group: "landsat" | "nlcd" | "era5" | "capa" | "buildings" | "equity" | "sentinel2" | "terrain";
   config?: {
     date_start?: string;
     date_end?: string;
