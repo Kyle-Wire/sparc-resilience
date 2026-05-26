@@ -1671,3 +1671,59 @@ export async function collectBuild(opts: {
   }
   return res.json() as Promise<BuildResponse>;
 }
+
+// ---------------------------------------------------------------------------
+// New 6-step wizard API additions
+// ---------------------------------------------------------------------------
+
+export interface CapaEvent {
+  date: string | null;
+  label: string;
+  osf_node: string;
+  folder_hint: string | null;
+  source_name: string;
+}
+
+export interface CapaEventsResponse {
+  city: string;
+  canonical_name: string | null;
+  found_in_catalog: boolean;
+  us_city: boolean;
+  osf_node: string | null;
+  folder_hint: string | null;
+  events: CapaEvent[];
+  suggestions: string[];
+  error: string | null;
+}
+
+/** Look up available CAPA Heat Watch events for a city name. */
+export async function collectCapaEvents(city: string): Promise<CapaEventsResponse> {
+  return get<CapaEventsResponse>(`/collect/capa-events?city=${encodeURIComponent(city)}`);
+}
+
+export interface SaveConfigResponse {
+  status: "saved" | "not_persisted";
+  collection: Record<string, unknown>;
+}
+
+/** Persist the wizard configuration to project.yml collection: block. */
+export async function collectSaveConfig(opts: {
+  city_name: string;
+  boundary?: GeoJsonData | Record<string, unknown>;
+  capa_event_date: string | null;
+  capa_osf_node: string;
+  variables: Record<string, { enabled: string[]; [k: string]: unknown }>;
+  fishnet_m: number;
+  aggregation: Record<string, string>;
+}): Promise<SaveConfigResponse> {
+  const res = await fetch(`${BASE}/collect/save-config`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(opts),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error((detail as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<SaveConfigResponse>;
+}

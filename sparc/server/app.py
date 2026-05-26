@@ -1634,9 +1634,14 @@ async def list_data_files():
     return {"project_dir": str(project_dir), "files": files}
 
 
+class _DataSelectBody(BaseModel):
+    path: str
+
+
 @app.post("/data/select")
-async def select_data_file(path: str = Query(..., description="Absolute path to a data file")):
+async def select_data_file(body: _DataSelectBody):
     """Select an existing data file (must already be on disk)."""
+    path = body.path
     if state.project_config is None:
         raise HTTPException(400, "Load a project first.")
 
@@ -7146,6 +7151,254 @@ async def collect_build(body: dict = Body(...)):
         "can_build": True,
         "manifest": manifest.to_api_dict(),
     }
+
+
+# ---------------------------------------------------------------------------
+# /collect/capa-events  — look up available Heat Watch campaigns for a city
+# ---------------------------------------------------------------------------
+
+@app.get("/collect/capa-events")
+async def collect_capa_events(city: str = Query(..., description="City name to look up in CAPA catalog")):
+    """Return available CAPA Heat Watch events for a given city name.
+
+    Uses fuzzy matching against the built-in catalog. For each matched
+    catalog entry, queries the OSF API to resolve the campaign ZIP filename
+    and parses its date.
+
+    Response shape::
+
+        {
+          "city": str,
+          "canonical_name": str | null,
+          "found_in_catalog": bool,
+          "us_city": bool,
+          "osf_node": str | null,
+          "folder_hint": str | null,
+          "events": [
+            {
+              "date": "YYYY-MM-DD",
+              "label": str,
+              "osf_node": str,
+              "folder_hint": str | null,
+              "source_name": str
+            }, ...
+          ],
+          "suggestions": [str, ...],
+          "error": str | null
+        }
+    """
+    import asyncio as _asyncio
+    from sparc.data.collect.capa_catalog import lookup_city, CAPA_CATALOG
+    from sparc.data.collect.capa import _find_raster_source, _parse_campaign_date
+
+    canonical, entry = lookup_city(city)
+
+    # Ambiguous match — return suggestions so the UI can prompt
+    if canonical is None and isinstance(entry, dict) and "ambiguous" in entry:
+        return {
+            "city": city,
+            "canonical_name": None,
+            "found_in_catalog": False,
+            "us_city": False,
+            "osf_node": None,
+            "folder_hint": None,
+            "events": [],
+            "suggestions": entry["ambiguous"],
+            "error": "Ambiguous city name — multiple matches found.",
+        }
+
+    # Fuzzy suggestions only
+    if canonical is None and isinstance(entry, dict) and "suggestions" in entry:
+        return {
+            "city": city,
+            "canonical_name": None,
+            "found_in_catalog": False,
+            "us_city": False,
+            "osf_node": None,
+            "folder_hint": None,
+            "events": [],
+            "suggestions": entry.get("suggestions", []),
+            "error": "City not found in catalog. Did you mean one of the suggestions?",
+        }
+
+    # City not found at all
+    if canonical is None or entry is None:
+        return {
+            "city": city,
+            "canonical_name": None,
+            "found_in_catalog": False,
+            "us_city": False,
+            "osf_node": None,
+            "folder_hint": None,
+            "events": [],
+            "suggestions": [],
+            "error": "City not found in CAPA catalog.",
+        }
+
+    osf_node: str = entry["osf_node"]
+    folder_hint: str | None = entry.get("folder_hint")
+    state_abbr: str | None = entry.get("state")
+    us_city = bool(state_abbr)
+
+    # Query OSF (network I/O) in a thread to avoid blocking the event loop
+    events: list[dict] = []
+    error: str | None = None
+    try:
+        source = await _asyncio.to_thread(_find_raster_source, osf_node, folder_hint)
+        # Parse campaign date from the ZIP/TIF filename
+        source_name: str = source.get("name", "")
+        campaign_date = await _asyncio.to_thread(_parse_campaign_date, source_name)
+        if campaign_date is not None:
+            events.append({
+                "date": campaign_date.isoformat(),
+                "label": f"CAPA Heat Watch — {campaign_date.strftime('%B %Y')}",
+                "osf_node": osf_node,
+                "folder_hint": folder_hint,
+                "source_name": source_name,
+            })
+        else:
+            # No date parsed — still surface the event with unknown date
+            events.append({
+                "date": None,
+                "label": f"CAPA Heat Watch (date unknown)",
+                "osf_node": osf_node,
+                "folder_hint": folder_hint,
+                "source_name": source_name,
+            })
+    except FileNotFoundError as exc:
+        error = f"No raster data found in OSF node '{osf_node}': {exc}"
+    except Exception as exc:
+        error = f"OSF query failed: {exc}"
+
+    return {
+        "city": city,
+        "canonical_name": canonical,
+        "found_in_catalog": True,
+        "us_city": us_city,
+        "osf_node": osf_node,
+        "folder_hint": folder_hint,
+        "events": events,
+        "suggestions": [],
+        "error": error,
+    }
+
+
+# ---------------------------------------------------------------------------
+# /collect/stream  — WebSocket fan-out for data collection progress events
+# ---------------------------------------------------------------------------
+
+# Separate broadcaster for collect progress events so they don't pollute the
+# pipeline artifact channel.
+_collect_broadcaster = _EventBroadcaster()
+
+
+@app.websocket("/collect/stream")
+async def collect_stream(ws: WebSocket, token: str = Query(default="")):
+    """Subscribe to live data-collection progress events.
+
+    Handshake:
+      1. Client sends  ``{"subscribe": "collect"}``
+      2. Server replies ``{"type": "subscribed", "channel": "collect"}``
+      3. Server pushes  ``{"type": "collect_progress", "group": str,
+                           "status": str, "message": str,
+                           "progress": int|null, "total": int|null}``
+         for each fetch group that emits progress.
+
+    Connection stays open until the client disconnects.
+    """
+    if _SERVER_TOKEN is not None and token != _SERVER_TOKEN:
+        await ws.close(code=4003)
+        return
+    await ws.accept()
+
+    try:
+        msg = await ws.receive_json()
+    except WebSocketDisconnect:
+        return
+
+    channel = msg.get("subscribe", "")
+    if channel != "collect":
+        await ws.close(code=4001)
+        return
+
+    await ws.send_json({"type": "subscribed", "channel": "collect"})
+
+    collect_queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+    unsub = _collect_broadcaster.subscribe(collect_queue, loop=loop)
+    try:
+        while True:
+            event = await collect_queue.get()
+            await ws.send_json(event)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        unsub()
+        if ws.client_state.name != "DISCONNECTED":
+            await ws.close()
+
+
+# ---------------------------------------------------------------------------
+# /collect/save-config  — write a collection block to project.yml
+# ---------------------------------------------------------------------------
+
+@app.post("/collect/save-config")
+async def collect_save_config(body: dict = Body(...)):
+    """Persist the data-collection wizard configuration to project.yml.
+
+    Writes a ``collection:`` top-level block that describes the boundary,
+    CAPA event anchor, variable selection, fishnet resolution, and
+    aggregation method per variable. If a project is loaded the config is
+    merged into the existing ``project.yml``; if not, the config is returned
+    as-is (useful for testing or pre-project collection).
+
+    Body keys:
+      city_name        : str   — free-form study area name
+      boundary         : dict  — bbox or GeoJSON Feature representing the AOI
+      capa_event_date  : str   — ISO date of the selected CAPA event (may be null)
+      capa_osf_node    : str   — OSF node ID for the CAPA campaign
+      variables        : dict  — per-source dict with "enabled" lists and options
+      fishnet_m        : int   — cell size in metres (e.g. 30, 90, 250, 500)
+      aggregation      : dict  — {variable: "mean"|"max"|"min"|"pct_cover"|...}
+    """
+    import yaml as _yaml
+
+    city_name = body.get("city_name", "")
+    boundary = body.get("boundary")
+    capa_event_date = body.get("capa_event_date")
+    capa_osf_node = body.get("capa_osf_node", "")
+    variables = body.get("variables", {})
+    fishnet_m = int(body.get("fishnet_m", 30))
+    aggregation = body.get("aggregation", {})
+
+    collection_block: dict = {
+        "city_name": city_name,
+        "capa_event_date": capa_event_date,
+        "capa_osf_node": capa_osf_node,
+        "fishnet_m": fishnet_m,
+        "variables": variables,
+        "aggregation": aggregation,
+    }
+    if boundary is not None:
+        collection_block["boundary"] = boundary
+
+    if state.raw_project_yaml is None:
+        # No project loaded — return computed block without persisting
+        return {"status": "not_persisted", "collection": collection_block}
+
+    state.raw_project_yaml["collection"] = collection_block
+
+    if state.project_path:
+        yml_path = Path(state.project_path)
+        if yml_path.is_dir():
+            yml_path = yml_path / "project.yml"
+        with open(yml_path, "w", encoding="utf-8") as fh:
+            _yaml.dump(state.raw_project_yaml, fh, default_flow_style=False, sort_keys=False)
+        # Reload internal config
+        from sparc.config.config import load_config
+        state.project_config = load_config(str(yml_path))
+
+    return {"status": "saved", "collection": collection_block}
 
 
 # ---------------------------------------------------------------------------

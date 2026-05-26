@@ -430,6 +430,8 @@ def cmd_run(args):
         except Exception:
             logger.debug("Stage timing write failed (non-fatal)", exc_info=True)
 
+    _sp = _StageProgress(len(_sp_stages), timing_sink=_stage_timing_sink)
+
     # ────────────────────────────────────────────────────────────────
     # Stage 0: Correlogram Analysis  (runs first so GWEN can auto-tune)
     # ────────────────────────────────────────────────────────────────

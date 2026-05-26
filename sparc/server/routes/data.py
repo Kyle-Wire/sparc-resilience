@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 from sparc.server.deps import session
 
@@ -135,9 +136,14 @@ async def data_files(
     return {"files": files}
 
 
+class _SelectBody(BaseModel):
+    path: str
+
+
 @router.post("/data/select")
-async def data_select(path: str = Query(..., description="Absolute path to CSV/Parquet file")):
-    """Set the active data file by path (passed as a query parameter)."""
+async def data_select(body: _SelectBody):
+    """Set the active data file by path (passed as a JSON request body)."""
+    path = body.path
 
     from pathlib import Path
 
