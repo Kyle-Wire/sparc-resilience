@@ -67,11 +67,16 @@ export function useStartup(
   // Step 3 → 4: restore auth session
   useEffect(() => {
     if (splashStep !== "session") return;
-    initAuth().then(() => {
+    const advance = () => {
       setSplashStep("ready");
       const elapsed = Date.now() - splashStartRef.current;
       const remaining = Math.max(400, 5_000 - elapsed);
+      console.log(`[DEBUG-sparc-blank] initAuth done, splashDone in ${remaining}ms`);
       setTimeout(() => setSplashDone(true), remaining);
+    };
+    initAuth().then(advance).catch((err) => {
+      console.warn("[DEBUG-sparc-blank] initAuth failed, advancing anyway:", err);
+      advance();
     });
     // initAuth is stable; only re-run when splashStep changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
