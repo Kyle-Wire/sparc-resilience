@@ -555,6 +555,7 @@ from sparc.server.routes.report import router as _report_router
 from sparc.server.routes.run import router as _run_router
 from sparc.server.routes.scenarios import router as _scenarios_router
 from sparc.server.routes.decision import router as _decision_router
+from sparc.server.routes.artifacts import router as _artifacts_router
 
 app.include_router(_health_router)
 app.include_router(_project_router)
@@ -571,6 +572,7 @@ app.include_router(_report_router)
 app.include_router(_run_router)
 app.include_router(_scenarios_router)
 app.include_router(_decision_router)
+app.include_router(_artifacts_router)
 
 # ------------------------------------------------------------------
 # Health  (REMOVED — now served by routes.health)
@@ -3360,128 +3362,7 @@ def _ensure_registry_attached() -> None:
     if state.registry is None:
         raise HTTPException(503, "Run registry unavailable")
 
-
-@app.get("/artifacts/{stage}/{artifact_id}.csv")
-async def get_artifact_csv(stage: str, artifact_id: str, index: bool = False):
-    """Render a registered artifact as CSV bytes."""
-    _ensure_registry_attached()
-    from sparc.registry.run_registry import set_active_registry, get_active_registry
-    from sparc.report.render import render_csv, RenderError
-
-    prev = get_active_registry()
-    set_active_registry(state.registry)
-    try:
-        try:
-            data = render_csv(stage, artifact_id, index=index)
-        except RenderError as exc:
-            raise HTTPException(404, str(exc))
-    finally:
-        set_active_registry(prev)
-
-    return Response(
-        content=data,
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{artifact_id}.csv"'},
-    )
-
-
-@app.get("/artifacts/{stage}/{artifact_id}.json")
-async def get_artifact_json(stage: str, artifact_id: str):
-    """Render a registered artifact (struct or table) as JSON."""
-    _ensure_registry_attached()
-    from sparc.registry.run_registry import set_active_registry, get_active_registry
-    from sparc.report.render import render_json, RenderError
-
-    prev = get_active_registry()
-    set_active_registry(state.registry)
-    try:
-        try:
-            data = render_json(stage, artifact_id)
-        except RenderError as exc:
-            raise HTTPException(404, str(exc))
-    finally:
-        set_active_registry(prev)
-    return Response(content=data, media_type="application/json")
-
-
-@app.get("/artifacts/{stage}/{artifact_id}.geojson")
-async def get_artifact_geojson(stage: str, artifact_id: str):
-    """Render a geometry-bearing table as GeoJSON."""
-    _ensure_registry_attached()
-    from sparc.registry.run_registry import set_active_registry, get_active_registry
-    from sparc.report.render import render_geojson, RenderError
-
-    prev = get_active_registry()
-    set_active_registry(state.registry)
-    try:
-        try:
-            data = render_geojson(stage, artifact_id)
-        except RenderError as exc:
-            raise HTTPException(404, str(exc))
-    finally:
-        set_active_registry(prev)
-    return Response(content=data, media_type="application/geo+json")
-
-
-@app.get("/artifacts/{stage}/{artifact_id}.png")
-async def get_artifact_png(stage: str, artifact_id: str, dpi: int = 150):
-    """Render a registered artifact as a PNG via the figures module.
-
-    Dispatches through ``sparc.report.figures.render_for_artifact``; returns
-    404 when no renderer is registered for ``(stage, artifact_id)``.
-    """
-    _ensure_registry_attached()
-    from sparc.registry.run_registry import set_active_registry, get_active_registry
-    try:
-        from sparc.report.figures import FigureRenderError, render_for_artifact
-    except ImportError as exc:
-        raise HTTPException(503, f"figures module unavailable: {exc}")
-
-    if state.registry is None:
-        raise _missing_artifact_response(
-            artifact_id=artifact_id, stage=stage,
-            hint="No active run registry.",
-        )
-    prev = get_active_registry()
-    set_active_registry(state.registry)
-    try:
-        try:
-            data = render_for_artifact(stage, artifact_id, registry=state.registry, dpi=dpi)
-        except FigureRenderError as exc:
-            raise HTTPException(404, str(exc))
-    finally:
-        set_active_registry(prev)
-    return Response(content=data, media_type="application/octet-stream")
-
-
-# Catch-all native route — declared LAST so the suffixed routes above
-# match first. Otherwise ``{artifact_id}`` swallows ``foo.csv`` etc. and
-# the suffixed routes become dead code.
-@app.get("/artifacts/{stage}/{artifact_id}")
-async def get_artifact_native(stage: str, artifact_id: str):
-    """Return an artifact in its native format (CSV for tables, JSON for structs, raw bytes for blobs)."""
-    _ensure_registry_attached()
-    # Bind the active registry so render_* helpers can find it.
-    from sparc.registry.run_registry import set_active_registry, get_active_registry
-    from sparc.report.render import render_native, RenderError
-
-    prev = get_active_registry()
-    set_active_registry(state.registry)
-    try:
-        try:
-            data, ext = render_native(stage, artifact_id)
-        except RenderError as exc:
-            raise HTTPException(404, str(exc))
-    finally:
-        set_active_registry(prev)
-
-    return Response(
-        content=data,
-        media_type=_RENDER_MIME.get(ext, "application/octet-stream"),
-        headers={
-            "Content-Disposition": f'attachment; filename="{artifact_id}.{ext}"',
-        },
-    )
+# (Artifact routes moved to routes.artifacts via include_router above)
 
 
 @app.get("/results/bundle")
@@ -4452,95 +4333,7 @@ def _to_json(data: Any) -> Any:
         return data
     return {"data": str(data)}
 
-# ---------------------------------------------------------------------------
-# Phase 5: Artifact export-on-demand endpoints (db-only architecture)
-# ---------------------------------------------------------------------------
-# These let the desktop UI download any DB-resident artifact as a file
-# (CSV / parquet / JSON / GPKG / joblib / etc.) without keeping
-# stage folders on disk.
-
-from fastapi.responses import FileResponse as _FileResponse
-
-
-def _get_artifact_store():
-    if state.registry is None:
-        raise HTTPException(503, "No active run/registry")
-    from sparc.registry.store import ArtifactStore
-    return ArtifactStore(state.registry)
-
-
-@app.get("/artifacts/{stage}/{artifact_id}/download")
-def download_artifact(stage: str, artifact_id: str, fmt: Optional[str] = None):
-    """Download an artifact from artifacts.db as a file.
-
-    Query parameters:
-      fmt � one of csv, parquet, json, gpkg, geojson, joblib, pkl, npy.
-            If omitted, defaults to the artifact's natural format.
-    """
-    store = _get_artifact_store()
-    if not store.has(stage, artifact_id):
-        raise HTTPException(404, f"Artifact not found: {stage}/{artifact_id}")
-    try:
-        path = store.export(stage, artifact_id, fmt=fmt)
-    except Exception as exc:
-        raise HTTPException(500, f"Export failed: {exc}") from exc
-    suffix = path.suffix.lstrip(".") or "bin"
-    media = {
-        "csv": "text/csv",
-        "json": "application/json",
-        "parquet": "application/octet-stream",
-        "gpkg": "application/geopackage+sqlite3",
-        "geojson": "application/geo+json",
-        "joblib": "application/octet-stream",
-        "pkl": "application/octet-stream",
-        "npy": "application/octet-stream",
-    }.get(suffix, "application/octet-stream")
-    return _FileResponse(
-        path,
-        media_type=media,
-        filename=f"{artifact_id}.{suffix}",
-    )
-
-
-@app.post("/artifacts/{stage}/export")
-def export_stage_zip(stage: str):
-    """Bundle every artifact for a stage into a downloadable .zip."""
-    store = _get_artifact_store()
-    import tempfile
-    tmpdir = Path(tempfile.mkdtemp(prefix=f"sparc_export_{stage}_"))
-    try:
-        zip_path = store.export_stage(stage, tmpdir, as_zip=True)
-        if not isinstance(zip_path, Path):
-            raise RuntimeError("export_stage did not return a zip path")
-    except Exception as exc:
-        raise HTTPException(500, f"Stage export failed: {exc}") from exc
-    return _FileResponse(
-        zip_path,
-        media_type="application/zip",
-        filename=f"stage_{stage}_artifacts.zip",
-    )
-
-
-@app.get("/artifacts/{stage}")
-def list_stage_artifacts(stage: str):
-    """List all artifacts registered for a stage (id, format, storage_kind)."""
-    if state.registry is None:
-        raise HTTPException(503, "No active run/registry")
-    entries = state.registry.list_for_stage(stage)
-    return {
-        "stage": str(stage),
-        "count": len(entries),
-        "artifacts": [
-            {
-                "artifact_id": e.id,
-                "format": e.format,
-                "storage_kind": getattr(e, "storage_kind", "legacy_path"),
-                "partial": bool(e.partial),
-                "producer": getattr(e, "producer", None),
-            }
-            for e in entries
-        ],
-    }
+# (Artifact Phase-5 download/export/list routes moved to routes.artifacts via include_router above)
 
 
 # ===========================================================================
