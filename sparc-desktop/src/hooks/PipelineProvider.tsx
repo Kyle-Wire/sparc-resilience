@@ -223,7 +223,7 @@ export function PipelineProvider({ children, serverReady, serverLost }: { childr
   }, [serverLost]);
 
   const _connectWebSocket = useCallback((stage: number, skipCount = 0) => {
-    const ws = new WebSocket(`${WS_ORIGIN}/run/stream?token=${encodeURIComponent(getToken())}`);
+    const ws = new WebSocket(`${WS_ORIGIN}/run/execute?token=${encodeURIComponent(getToken())}`);
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -275,7 +275,7 @@ export function PipelineProvider({ children, serverReady, serverLost }: { childr
       setIsRunning(true);
       setReducerState((prev) => ({ ...prev, currentStage: stage }));
 
-      const ws = new WebSocket(`${WS_ORIGIN}/run/stream?token=${encodeURIComponent(getToken())}`);
+      const ws = new WebSocket(`${WS_ORIGIN}/run/execute?token=${encodeURIComponent(getToken())}`);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -308,11 +308,20 @@ export function PipelineProvider({ children, serverReady, serverLost }: { childr
         stageQueueRef.current = [];
       };
 
-      ws.onclose = () => {
-        // noop — state managed by onmessage
+      ws.onclose = (ev) => {
+        // If the socket closed before we received a "complete" or "error" event
+        // (e.g. server rejected the connection with 4003), surface the error so
+        // the UI doesn't stay stuck in "Running" state.
+        if (isRunning) {
+          const reason = ev.reason || `WebSocket closed (code ${ev.code})`;
+          setError(reason);
+          setIsRunning(false);
+          setRunEndedAt(Date.now());
+          stageQueueRef.current = [];
+        }
       };
     },
-    [processEvent],
+    [processEvent, isRunning],
   );
 
   const startStage = useCallback(

@@ -418,7 +418,7 @@ export default function SettingsPage({
             </div>
 
             <KeyVal label="Backend URL" value={`http://127.0.0.1:${serverPort}`} />
-            <KeyVal label="WebSocket" value={`ws://127.0.0.1:${serverPort}/run/stream`} />
+            <KeyVal label="WebSocket" value={`ws://127.0.0.1:${serverPort}/run/execute`} />
           </div>
         </Card>
       </div>

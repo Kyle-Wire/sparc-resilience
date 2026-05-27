@@ -1248,7 +1248,7 @@ export async function downloadStageZip(stage: string | number): Promise<void> {
 // WebSocket helper
 // ------------------------------------------------------------------
 export function createPipelineSocket(): WebSocket {
-  return new WebSocket(`${WS_ORIGIN}/run/stream`);
+  return new WebSocket(`${WS_ORIGIN}/run/execute`);
 }
 
 // ------------------------------------------------------------------
