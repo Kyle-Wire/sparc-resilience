@@ -22,10 +22,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel
 
-from sparc.server.deps import session
+from sparc.server.deps import session, state
 
 router = APIRouter(tags=["data"])
 
@@ -251,3 +251,455 @@ async def data_select(body: _SelectBody):
         raise HTTPException(422, f"Could not load file: {exc}")
 
     return {"status": "loaded", "row_count": len(session.data), "columns": list(session.data.columns)}
+
+
+# ---------------------------------------------------------------------------
+# B15 — remaining data routes migrated from app.py
+# ---------------------------------------------------------------------------
+
+@router.get("/crs/distortion")
+async def crs_distortion(
+    input_epsg: str = Query("4326"),
+    projected_epsg: str = Query(""),
+):
+    if not projected_epsg:
+        raise HTTPException(400, "projected_epsg is required")
+
+    try:
+        from pyproj import Transformer, CRS
+        import numpy as np
+
+        cx, cy = 0.0, 45.0
+        if state.data is not None and hasattr(state.data, "geometry"):
+            try:
+                import geopandas as gpd
+                gdf = state.data
+                if gdf.crs is not None and str(gdf.crs) != "EPSG:4326":
+                    gdf = gdf.to_crs(epsg=4326)
+                bounds = gdf.total_bounds
+                cx = float((bounds[0] + bounds[2]) / 2)
+                cy = float((bounds[1] + bounds[3]) / 2)
+            except Exception:
+                pass
+        elif state.data_summary and "bbox" in (state.data_summary or {}):
+            bb = state.data_summary["bbox"]
+            if isinstance(bb, dict):
+                cx = (bb["minx"] + bb["maxx"]) / 2
+                cy = (bb["miny"] + bb["maxy"]) / 2
+
+        norm_in = input_epsg.replace("EPSG:", "").strip()
+        norm_proj = projected_epsg.replace("EPSG:", "").strip()
+        if norm_in == norm_proj:
+            src_crs = CRS.from_epsg(int(norm_in))
+            return {
+                "center_lon": cx,
+                "center_lat": cy,
+                "k_x": 1.0,
+                "k_y": 1.0,
+                "k_mean": 1.0,
+                "area_distortion_pct": 0.0,
+                "input_crs_name": src_crs.name,
+                "projected_crs_name": src_crs.name,
+                "assessment": "acceptable",
+            }
+
+        delta_deg = 0.001
+        try:
+            t = Transformer.from_crs(
+                f"EPSG:{input_epsg.replace('EPSG:', '')}",
+                f"EPSG:{projected_epsg.replace('EPSG:', '')}",
+                always_xy=True,
+            )
+            x0, y0 = t.transform(cx, cy)
+            x1, y1 = t.transform(cx + delta_deg, cy)
+            x2, y2 = t.transform(cx, cy + delta_deg)
+
+            from pyproj import Geod
+            geod = Geod(ellps="WGS84")
+            _, _, dist_x = geod.inv(cx, cy, cx + delta_deg, cy)
+            _, _, dist_y = geod.inv(cx, cy, cx, cy + delta_deg)
+
+            tgt_crs_obj = CRS.from_epsg(int(norm_proj))
+            tgt_is_angular = tgt_crs_obj.axis_info[0].unit_name in ("degree", "grad")
+            if tgt_is_angular:
+                k_x = 1.0
+                k_y = 1.0
+            else:
+                k_x = float(np.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2) / dist_x) if dist_x else 1.0
+                k_y = float(np.sqrt((x2 - x0) ** 2 + (y2 - y0) ** 2) / dist_y) if dist_y else 1.0
+            k_mean = (k_x + k_y) / 2
+            area_distortion_pct = float(abs(k_mean ** 2 - 1) * 100)
+
+            src_crs = CRS.from_epsg(int(input_epsg.replace("EPSG:", "")))
+            tgt_crs = CRS.from_epsg(int(projected_epsg.replace("EPSG:", "")))
+
+            return {
+                "center_lon": cx,
+                "center_lat": cy,
+                "k_x": k_x,
+                "k_y": k_y,
+                "k_mean": k_mean,
+                "area_distortion_pct": area_distortion_pct,
+                "input_crs_name": src_crs.name,
+                "projected_crs_name": tgt_crs.name,
+                "assessment": "acceptable" if area_distortion_pct < 0.5 else "high",
+            }
+        except Exception as e:
+            raise HTTPException(400, f"Projection error: {e}")
+
+    except ImportError:
+        raise HTTPException(500, "pyproj not available")
+
+
+@router.post("/data/validate")
+async def validate_data():
+    if state.data is None:
+        raise HTTPException(400, "No data loaded. Load a project first.")
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded.")
+
+    from sparc.data.validation import validate_dataset
+
+    config = state.project_config
+    report = validate_dataset(
+        state.data,
+        target_col=config.get("variables", {}).get("target"),
+        predictor_cols=config.get("predictors", {}).get("base_model", []),
+        coord_cols=config.get("variables", {}).get("coordinates", []),
+        expected_crs=config.get("crs", {}).get("initial"),
+    )
+    return report.to_dict()
+
+
+@router.get("/data/versions")
+async def list_data_versions():
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded.")
+
+    from pathlib import Path
+    from sparc.data.versioning import list_versions
+
+    project_dir = Path(state.project_config["paths"]["project_root"])
+    data_dir = project_dir / "data"
+    versions = list_versions(data_dir)
+    return {"versions": versions}
+
+
+@router.post("/data/select_version")
+async def select_data_version(version: int = Query(..., description="Version number to activate")):
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded.")
+
+    from pathlib import Path
+    from sparc.data.versioning import get_version_path
+    from sparc.server.app import _set_data_path, _load_data_into_state
+
+    project_dir = Path(state.project_config["paths"]["project_root"])
+    data_dir = project_dir / "data"
+    path = get_version_path(data_dir, version)
+
+    if path is None:
+        raise HTTPException(404, f"Version {version} not found or file missing.")
+
+    _set_data_path(str(path))
+    _load_data_into_state(state.project_config)
+
+    return {
+        "status": "selected",
+        "version": version,
+        "path": str(path),
+        "columns": list(state.data.columns) if state.data is not None else [],
+        "row_count": len(state.data) if state.data is not None else 0,
+    }
+
+
+@router.post("/data/preprocess")
+async def preprocess_data():
+    import asyncio as _asyncio
+    from fastapi.responses import StreamingResponse
+
+    if state.data is None:
+        raise HTTPException(400, "No data loaded. Load a project first.")
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded.")
+
+    from pathlib import Path as _Path
+    config = state.project_config
+    project_dir = _Path(config["paths"]["project_root"])
+    artifacts_dir = project_dir / "artifacts"
+
+    async def _generate():
+        import json as _json
+        import numpy as np
+        import pandas as pd
+
+        df = state.data.copy()
+        if hasattr(df, "geometry"):
+            df = pd.DataFrame(df.drop(columns="geometry"))
+
+        def _hash_df(d):
+            try:
+                return "%08x" % (int(pd.util.hash_pandas_object(d).sum()) % (2 ** 32))
+            except Exception:
+                return "00000000"
+
+        def _sse(step_name, rows, sha):
+            return "data: " + _json.dumps({"step": step_name, "done": True, "rows": rows, "sha": sha}) + "\n\n"
+
+        step_hashes: dict = {}
+
+        sha = _hash_df(df)
+        step_hashes["ingest_csv"] = sha
+        try:
+            from sparc.data.versioning import get_last_hash as _get_last_hash
+            _prior_sha = _get_last_hash(project_dir, "ingest_csv")
+        except Exception:
+            _prior_sha = None
+        _changed = _prior_sha is not None and _prior_sha != sha
+        if _changed:
+            yield "data: " + _json.dumps({"step": "Ingest CSV", "changed": True, "message": "Raw data modified since last run", "sha": sha}) + "\n\n"
+            await _asyncio.sleep(0)
+        yield _sse("Ingest CSV", len(df), sha)
+        await _asyncio.sleep(0)
+
+        try:
+            coord_cols = config.get("variables", {}).get("coordinates", []) or []
+            for col in coord_cols:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+        except Exception as _exc:
+            print(f"  Preprocess step 2 (CRS): {_exc}")
+        sha = _hash_df(df)
+        step_hashes["reproject_crs"] = sha
+        yield _sse("Reproject CRS", len(df), sha)
+        await _asyncio.sleep(0)
+
+        coord_cols = config.get("variables", {}).get("coordinates", []) or []
+        coord_cols = [c for c in coord_cols if c in df.columns]
+        if coord_cols:
+            before = len(df)
+            df = df.drop_duplicates(subset=coord_cols)
+            if before != len(df):
+                print(f"  Deduplication: removed {before - len(df)} duplicate coord rows")
+        sha = _hash_df(df)
+        step_hashes["deduplicate_coords"] = sha
+        yield _sse("Deduplicate coords", len(df), sha)
+        await _asyncio.sleep(0)
+
+        target_col = config.get("variables", {}).get("target")
+        predictor_cols = config.get("predictors", {}).get("base_model", []) or []
+        essential = [c for c in ([target_col] + list(coord_cols) + list(predictor_cols)) if c and c in df.columns]
+        for col in df.select_dtypes(include="number").columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+            df[col] = df[col].replace([np.inf, -np.inf], np.nan)
+        if essential:
+            before = len(df)
+            df = df.dropna(subset=essential)
+            if before != len(df):
+                print(f"  Impute: dropped {before - len(df)} rows with missing essential values")
+        sha = _hash_df(df)
+        step_hashes["impute_missing"] = sha
+        yield _sse("Impute missing", len(df), sha)
+        await _asyncio.sleep(0)
+
+        for col in df.select_dtypes(include="number").columns:
+            df[col] = df[col].replace([np.inf, -np.inf], np.nan)
+        sha = _hash_df(df)
+        step_hashes["derive_features"] = sha
+        yield _sse("Derive features", len(df), sha)
+        await _asyncio.sleep(0)
+
+        try:
+            from sparc.data.welford import WelfordScaler
+            numeric_cols = list(df.select_dtypes(include="number").columns)
+            if numeric_cols:
+                X_num = df[numeric_cols].to_numpy(dtype=np.float64)
+                scaler = WelfordScaler()
+                scaler.partial_fit(X_num[~np.isnan(X_num).any(axis=1)])
+                X_scaled = scaler.transform(X_num)
+                df[numeric_cols] = X_scaled
+                artifacts_dir.mkdir(parents=True, exist_ok=True)
+                scaler_path = artifacts_dir / "welford_scaler.pkl"
+                scaler.save(scaler_path)
+        except Exception as _exc:
+            print(f"  Preprocess step 6 (standardise): {_exc}")
+        sha = _hash_df(df)
+        step_hashes["standardise"] = sha
+        yield _sse("Standardise (z-score)", len(df), sha)
+        await _asyncio.sleep(0)
+
+        sha = _hash_df(df)
+        step_hashes["spatial_block_split"] = sha
+        yield _sse("Spatial block split", len(df), sha)
+        await _asyncio.sleep(0)
+
+        try:
+            cache_path = project_dir / "data_cache.parquet"
+            df.to_parquet(cache_path, engine="pyarrow", index=False)
+        except Exception as _exc:
+            print(f"  Preprocess step 8 (arrow cache): {_exc}")
+        sha = _hash_df(df)
+        step_hashes["write_arrow"] = sha
+        yield _sse("Write cached arrow", len(df), sha)
+        await _asyncio.sleep(0)
+
+        try:
+            from sparc.data.versioning import save_versioned
+            data_dir = project_dir / "data"
+            save_versioned(df, data_dir, description="preprocess endpoint", settings={"step_hashes": step_hashes})
+        except Exception as _exc:
+            print(f"  Preprocess: versioning failed: {_exc}")
+
+        state.data = df
+        state.data_summary = None
+
+        final_sha = _hash_df(df)
+        yield "data: " + _json.dumps({"step": "__done__", "done": True, "rows": len(df), "sha": final_sha}) + "\n\n"
+
+    return StreamingResponse(_generate(), media_type="text/event-stream")
+
+
+@router.post("/data/fishnet")
+async def create_fishnet_endpoint(body: dict = Body(...)):
+    from pathlib import Path as _Path
+    from sparc.data.processing import create_fishnet, clip_to_boundary
+
+    bounds = body.get("bounds")
+    resolution = body.get("resolution", 100)
+    crs = body.get("crs", "EPSG:4326")
+
+    if not bounds or len(bounds) != 4:
+        raise HTTPException(400, "bounds must be [minx, miny, maxx, maxy]")
+
+    gdf = create_fishnet(tuple(bounds), resolution, crs)
+
+    boundary_path = body.get("boundary_path")
+    if boundary_path and _Path(boundary_path).exists():
+        import geopandas as _gpd
+        boundary = _gpd.read_file(boundary_path)
+        if boundary.crs and boundary.crs.to_string() != crs:
+            boundary = boundary.to_crs(crs)
+        gdf = clip_to_boundary(gdf, boundary)
+
+    if state.project_config:
+        out_dir = _Path(state.project_config.get("paths", {}).get("project_dir", "."))
+        out_path = out_dir / "fishnet.gpkg"
+        gdf.to_file(out_path, driver="GPKG")
+
+    return {"n_cells": len(gdf), "columns": list(gdf.columns)}
+
+
+@router.post("/data/zonal_stats")
+async def zonal_stats_endpoint(body: dict = Body(...)):
+    from pathlib import Path as _Path
+    from sparc.data.processing import run_zonal_stats
+    import geopandas as _gpd
+
+    fishnet_path = body.get("fishnet_path")
+    raster_paths = body.get("raster_paths", [])
+    stats = body.get("stats", "mean")
+
+    if not fishnet_path or not _Path(fishnet_path).exists():
+        raise HTTPException(400, "fishnet_path not found")
+    if not raster_paths:
+        raise HTTPException(400, "raster_paths required")
+
+    gdf = _gpd.read_file(fishnet_path)
+    gdf = run_zonal_stats(gdf, raster_paths, stats=stats)
+
+    out_path = _Path(fishnet_path).with_name("fishnet_with_stats.gpkg")
+    gdf.to_file(out_path, driver="GPKG")
+
+    csv_path = out_path.with_suffix(".csv")
+    gdf.drop(columns=["geometry"]).to_csv(csv_path, index=False)
+
+    return {"n_cells": len(gdf), "columns": list(gdf.columns), "csv_path": str(csv_path)}
+
+
+@router.post("/data/prepare")
+async def prepare_data_pipeline(body: dict = Body(...)):
+    if state.project_config is None:
+        raise HTTPException(400, "Load a project first.")
+
+    from pathlib import Path as _Path
+    from sparc.data.processing import create_fishnet, clip_to_boundary, run_zonal_stats
+    import geopandas as _gpd
+
+    boundary_path = body.get("boundary_path")
+    raster_paths = body.get("raster_paths", [])
+    resolution = body.get("resolution", 100)
+    crs = body.get("crs", "EPSG:4326")
+    stats = body.get("stats", "mean")
+    set_as_data = body.get("set_as_data", True)
+
+    if not raster_paths:
+        raise HTTPException(400, "At least one raster_path is required")
+
+    boundary_gdf = None
+    if boundary_path and _Path(boundary_path).exists():
+        boundary_gdf = _gpd.read_file(boundary_path)
+        if boundary_gdf.crs and boundary_gdf.crs.to_string() != crs:
+            boundary_gdf = boundary_gdf.to_crs(crs)
+        bounds = tuple(boundary_gdf.total_bounds)
+    else:
+        try:
+            import rasterio
+            with rasterio.open(raster_paths[0]) as src:
+                bounds = tuple(src.bounds)
+                if not crs:
+                    crs = str(src.crs)
+        except Exception as exc:
+            raise HTTPException(400, f"Cannot determine bounds: {exc}")
+
+    gdf = create_fishnet(bounds, resolution, crs)
+
+    if boundary_gdf is not None:
+        gdf = clip_to_boundary(gdf, boundary_gdf)
+
+    if len(gdf) == 0:
+        raise HTTPException(400, "Fishnet has 0 cells after clipping — check CRS/resolution")
+
+    valid_rasters = [r for r in raster_paths if _Path(r).exists()]
+    if not valid_rasters:
+        raise HTTPException(400, "None of the raster paths exist")
+    gdf = run_zonal_stats(gdf, valid_rasters, stats=stats)
+
+    project_dir = _Path(state.project_config["paths"]["project_root"])
+    data_dir = project_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    gpkg_path = data_dir / "fishnet_with_stats.gpkg"
+    gdf.to_file(gpkg_path, driver="GPKG")
+
+    export_df = gdf.copy()
+    export_df["centroid_x"] = gdf.geometry.centroid.x
+    export_df["centroid_y"] = gdf.geometry.centroid.y
+    export_flat = export_df.drop(columns=["geometry"])
+
+    from sparc.data.versioning import save_versioned
+    version_info = save_versioned(
+        export_flat,
+        data_dir,
+        settings={"resolution": resolution, "crs": crs, "stats": stats, "n_rasters": len(valid_rasters), "boundary": boundary_path},
+        description=f"Fishnet processing: {len(valid_rasters)} rasters, resolution={resolution}, CRS={crs}",
+    )
+    csv_path = version_info["csv_path"]
+
+    canonical_csv = data_dir / "fishnet_with_stats.csv"
+    export_flat.to_csv(canonical_csv, index=False)
+
+    if set_as_data:
+        from sparc.server.app import _set_data_path, _load_data_into_state
+        _set_data_path(str(csv_path))
+        _load_data_into_state(state.project_config)
+
+    return {
+        "status": "prepared",
+        "n_cells": len(gdf),
+        "columns": list(gdf.columns),
+        "csv_path": str(csv_path),
+        "gpkg_path": str(gpkg_path),
+        "set_as_data": set_as_data,
+        "version": version_info.get("version"),
+    }
+
