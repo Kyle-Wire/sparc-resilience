@@ -553,6 +553,7 @@ from sparc.server.routes.inference import router as _inference_router
 from sparc.server.routes.api import router as _api_router
 from sparc.server.routes.ai import router as _ai_router
 from sparc.server.routes.reproduce import router as _reproduce_router
+from sparc.server.routes.dag import router as _dag_router
 
 app.include_router(_health_router)
 app.include_router(_project_router)
@@ -564,6 +565,7 @@ app.include_router(_inference_router)
 app.include_router(_api_router)
 app.include_router(_ai_router)
 app.include_router(_reproduce_router)
+app.include_router(_dag_router)
 
 # ------------------------------------------------------------------
 # Health  (REMOVED — now served by routes.health)
@@ -5582,248 +5584,10 @@ async def generate_docx_report():
 
 # ------------------------------------------------------------------
 # DAG endpoints
+# (/dag GET+PUT, /dag/validate, /dag/mc3_result, /dag/approve,
+# /dag/reject, /dag/suggest-edges are now served by routes.dag via
+# include_router above)
 # ------------------------------------------------------------------
-
-@app.get("/dag")
-async def get_dag():
-    """Return the project's DAG definition."""
-    if state.project_config is None:
-        raise HTTPException(400, "No project loaded")
-
-    dag_file = state.project_config.get("causal", {}).get("dag_file")
-    if not dag_file or not Path(dag_file).exists():
-        return {"nodes": [], "edges": []}
-
-    from sparc.causal.dag_definition import load_dag
-    dag = load_dag(dag_file)
-    return dag
-
-
-@app.put("/dag")
-async def save_dag(dag: dict):
-    """Validate and persist an edited DAG definition back to the project dag_file."""
-    if state.project_config is None:
-        raise HTTPException(400, "No project loaded")
-
-    dag_file = state.project_config.get("causal", {}).get("dag_file")
-    if not dag_file:
-        raise HTTPException(400, "No dag_file configured in project")
-
-    from sparc.causal.dag_definition import dag_to_networkx
-    import networkx as nx
-    import yaml as _yaml
-
-    try:
-        G = dag_to_networkx(dag)
-    except Exception as exc:
-        raise HTTPException(422, f"Invalid DAG: {exc}")
-
-    if not nx.is_directed_acyclic_graph(G):
-        raise HTTPException(422, "DAG contains cycles")
-
-    p = Path(dag_file)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with open(p, "w", encoding="utf-8") as fh:
-        _yaml.safe_dump(dag, fh, default_flow_style=False, allow_unicode=True, sort_keys=False)
-
-    return {
-        "status": "saved",
-        "n_nodes": len(dag.get("nodes", [])),
-        "n_edges": len(dag.get("edges", [])),
-    }
-
-
-@app.post("/dag/validate")
-async def validate_dag(dag: dict):
-    """Validate a DAG definition without saving it."""
-    from sparc.causal.dag_definition import dag_to_networkx
-    import networkx as nx
-
-    try:
-        G = dag_to_networkx(dag)
-        is_dag = nx.is_directed_acyclic_graph(G)
-        return {
-            "valid": is_dag,
-            "n_nodes": G.number_of_nodes(),
-            "n_edges": G.number_of_edges(),
-            "error": None if is_dag else "Graph contains cycles",
-        }
-    except Exception as exc:
-        return {"valid": False, "error": str(exc)}
-
-
-@app.get("/dag/mc3_result")
-async def get_mc3_result():
-    """Return pending MC³ edge-inclusion probabilities for DAG approval."""
-    if state.pending_mc3 is None:
-        raise HTTPException(404, "No MC³ result pending")
-    return state.pending_mc3
-
-
-@app.post("/dag/approve")
-async def approve_dag():
-    """Approve the discovered DAG and unblock the pipeline."""
-    if state.pending_mc3 is None:
-        raise HTTPException(400, "No MC³ result pending approval")
-    state.dag_approved.set()
-    return {"status": "approved"}
-
-
-@app.post("/dag/reject")
-async def reject_dag():
-    """Reject the discovered DAG and cancel the pipeline."""
-    if state.pending_mc3 is None:
-        raise HTTPException(400, "No MC³ result pending approval")
-    # Unblock the gate — the pipeline will continue (we clear pending_mc3
-    # but the pipeline thread checks is_running which cancel sets to false)
-    state.pending_mc3 = None
-    state.dag_approved.set()
-    return {"status": "rejected"}
-
-
-# ------------------------------------------------------------------
-# AI-assisted DAG edge suggestions (Item #12)
-# ------------------------------------------------------------------
-
-@app.post("/dag/suggest-edges")
-async def post_dag_suggest_edges(payload: dict = Body(default={})):
-    """Suggest plausible causal edges based on partial-correlation analysis.
-
-    Uses the project data to rank variable pairs by partial correlation
-    (|r| > threshold), filtered by known domain priors from physics.yml.
-    Returns ordered list of (parent, child, score, reason) suggestions that
-    the user can accept or ignore.
-
-    Body (all optional)::
-
-        {
-          "threshold": 0.15,      // minimum |partial_r| to include
-          "max_suggestions": 10   // cap on output list length
-        }
-    """
-    if state.project_config is None:
-        raise HTTPException(400, "No project loaded")
-
-    threshold = float(payload.get("threshold", 0.15))
-    max_suggestions = int(payload.get("max_suggestions", 10))
-
-    try:
-        import pandas as _pd
-        import numpy as _np
-        from sparc.run.pipeline_paths import PipelinePaths
-        _paths = PipelinePaths.from_config(state.project_config)
-
-        # Load the merged dataset produced by Stage 0 / data collection
-        _data_path = _paths.output_dir / "merged_data.parquet"
-        if not _data_path.exists():
-            _data_path = _paths.output_dir / "merged_data.csv"
-        if not _data_path.exists():
-            # Try Stage 2 dir
-            _data_path = _paths.stage2_dir / "merged_data.parquet"
-
-        if not _data_path.exists():
-            raise HTTPException(424, "Merged data file not found — run Stage 0 first")
-
-        _df = _pd.read_parquet(str(_data_path)) if str(_data_path).endswith(".parquet") else _pd.read_csv(str(_data_path))
-
-        # Keep only numeric predictors + outcome
-        _predictors = state.project_config.get("predictors", [])
-        _outcome = (state.project_config.get("outcomes") or ["target"])[0]
-        _cols = [c for c in _predictors + [_outcome] if c in _df.columns]
-        _df_num = _df[_cols].select_dtypes(include=["number"]).dropna()
-
-        if _df_num.shape[1] < 2:
-            return {"suggestions": [], "message": "Insufficient numeric columns for correlation analysis"}
-
-        # Partial correlation via precision matrix (inverse of correlation matrix)
-        _corr = _df_num.corr().values  # (p, p)
-        _col_names = list(_df_num.columns)
-        _p = len(_col_names)
-
-        try:
-            _precision = _np.linalg.inv(_corr)
-        except _np.linalg.LinAlgError:
-            _precision = _np.linalg.pinv(_corr)
-
-        # Partial correlation: r_ij = -prec_ij / sqrt(prec_ii * prec_jj)
-        _diag = _np.diag(_precision)
-        _partial_r = _np.zeros((_p, _p))
-        for _i in range(_p):
-            for _j in range(_p):
-                if _i == _j:
-                    continue
-                _denom = _np.sqrt(abs(_diag[_i]) * abs(_diag[_j]))
-                _partial_r[_i, _j] = -_precision[_i, _j] / _denom if _denom > 0 else 0.0
-
-        # Load existing DAG edges to avoid duplicates
-        _existing_edges: set = set()
-        _dag_path = _paths.output_dir / "dag.yml"
-        if not _dag_path.exists():
-            _dag_path = _paths.project_dir / "dag.yml" if hasattr(_paths, "project_dir") else _dag_path
-        try:
-            import yaml as _yaml
-            if _dag_path.exists():
-                with open(_dag_path) as _df2:
-                    _dag_data = _yaml.safe_load(_df2) or {}
-                for _e in _dag_data.get("edges", []):
-                    _existing_edges.add((_e.get("parent"), _e.get("child")))
-        except Exception:
-            pass
-
-        # Load physics priors for extra context
-        _physics_priors: dict = {}
-        try:
-            from sparc.config.config import load_physics_priors
-            _pp = load_physics_priors(state.project_config)
-            _physics_priors = _pp.get("coefficients", {})
-        except Exception:
-            pass
-
-        # Build candidate list sorted by |partial_r|
-        _candidates = []
-        _outcome_idx = _col_names.index(_outcome) if _outcome in _col_names else -1
-        for _i in range(_p):
-            for _j in range(_p):
-                if _i == _j:
-                    continue
-                _r = float(_partial_r[_i, _j])
-                if abs(_r) < threshold:
-                    continue
-                _parent = _col_names[_i]
-                _child = _col_names[_j]
-                if (_parent, _child) in _existing_edges:
-                    continue
-                # Prefer edges toward the outcome
-                _toward_outcome = _j == _outcome_idx
-                _prior_known = _parent in _physics_priors and _child in _physics_priors
-                _reason = (
-                    "strong partial correlation toward outcome" if _toward_outcome
-                    else "both variables have physics priors" if _prior_known
-                    else "partial correlation above threshold"
-                )
-                _candidates.append({
-                    "parent": _parent,
-                    "child": _child,
-                    "score": round(abs(_r), 4),
-                    "partial_r": round(_r, 4),
-                    "toward_outcome": _toward_outcome,
-                    "reason": _reason,
-                })
-
-        # Sort: outcome-directed first, then by |score| desc
-        _candidates.sort(key=lambda x: (-int(x["toward_outcome"]), -x["score"]))
-        _candidates = _candidates[:max_suggestions]
-
-        return {
-            "suggestions": _candidates,
-            "n_columns_analysed": _p,
-            "threshold": threshold,
-        }
-
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(500, f"Edge suggestion failed: {exc}") from exc
 
 
 # ------------------------------------------------------------------
