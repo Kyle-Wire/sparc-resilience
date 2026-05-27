@@ -1858,3 +1858,77 @@ class TestAppCompatibilityCollect:
         assert "/collect/cell/{cell_id}" in paths
         assert "/collect/save-config" in paths
         assert "/collect/build" in paths
+
+
+# ---------------------------------------------------------------------------
+# E1 — ScenarioExecutor extraction
+# ---------------------------------------------------------------------------
+
+class TestScenarioExecutor:
+    def test_importable(self):
+        from sparc.scenario.executor import ScenarioExecutor  # noqa: F401
+        assert ScenarioExecutor is not None
+
+    def test_has_run_method(self):
+        from sparc.scenario.executor import ScenarioExecutor
+        assert callable(getattr(ScenarioExecutor, "run", None))
+
+    def test_run_with_stub_model_returns_structure(self):
+        """run() with a minimal stub returns the expected dict shape."""
+        import numpy as np
+        from sparc.scenario.executor import ScenarioExecutor
+
+        class _StubStep:
+            def __init__(self, treatment, delta_x, delta):
+                self.treatment = treatment
+                self.delta_x = delta_x
+                self.delta = delta
+
+        class _StubResult:
+            def __init__(self):
+                self.steps = [
+                    _StubStep("Pct_Canopy", 10.0, np.array([0.1, 0.2, 0.3])),
+                ]
+                self.final = _StubStep("Pct_Canopy", 10.0, np.array([0.1, 0.2, 0.3]))
+                self.n_steps = 1
+
+        def _stub_rollout(**kwargs):
+            return _StubResult()
+
+        actions = [("Pct_Canopy", 10.0, 1.0)]
+        result = ScenarioExecutor.run(
+            actions=actions,
+            rollout_fn=_stub_rollout,
+            rollout_kwargs={},
+            mode="latent",
+        )
+
+        assert "n_steps" in result
+        assert "steps" in result
+        assert "cumulative_mean_delta" in result
+        assert result["n_steps"] == 1
+        assert len(result["steps"]) == 1
+        step = result["steps"][0]
+        assert step["step"] == 1
+        assert step["treatment"] == "Pct_Canopy"
+        assert "mean_delta" in step
+        assert "p5_delta" in step
+        assert "p95_delta" in step
+
+    def test_run_empty_actions_raises(self):
+        from sparc.scenario.executor import ScenarioExecutor
+        import pytest
+        with pytest.raises(Exception):
+            ScenarioExecutor.run(
+                actions=[],
+                rollout_fn=lambda **kw: None,
+                rollout_kwargs={},
+                mode="latent",
+            )
+
+    def test_route_chain_handler_uses_executor(self):
+        """POST /scenarios/chain handler must delegate to ScenarioExecutor.run()."""
+        import inspect
+        import sparc.server.routes.scenarios as _mod
+        src = inspect.getsource(_mod.post_scenarios_chain)
+        assert "ScenarioExecutor" in src

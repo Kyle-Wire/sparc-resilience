@@ -269,6 +269,8 @@ async def post_scenarios_chain(payload: dict = Body(...)):
 
     Returns per-step mean delta and cumulative delta over the study area.
     """
+    from sparc.scenario.executor import ScenarioExecutor
+
     state = deps.state
     actions_raw = payload.get("actions", [])
     if not isinstance(actions_raw, list) or len(actions_raw) == 0:
@@ -377,48 +379,29 @@ async def post_scenarios_chain(payload: dict = Body(...)):
         _y_mean = float(_mi.get("y_mean", 0.0))
         _y_std = float(_mi.get("y_std", 1.0))
 
-        actions = []
-        for a in actions_raw:
-            actions.append(
-                (str(a["treatment"]), float(a.get("delta_x", 0.0)), float(a.get("delta_t", 1.0)))
-            )
+        actions = [
+            (str(a["treatment"]), float(a.get("delta_x", 0.0)), float(a.get("delta_t", 1.0)))
+            for a in actions_raw
+        ]
 
-        result = multi_step_latent_rollout(
-            model=_model,
-            predictor=_predictor,
-            action_embed=_action_embed,
-            physics_feats=_phys,
-            base_preds=_base,
-            X_spatial=_spatial,
-            coords=_coords,
-            knn_index=_knn,
-            alpha=_alpha,
+        return ScenarioExecutor.run(
             actions=actions,
+            rollout_fn=multi_step_latent_rollout,
+            rollout_kwargs=dict(
+                model=_model,
+                predictor=_predictor,
+                action_embed=_action_embed,
+                physics_feats=_phys,
+                base_preds=_base,
+                X_spatial=_spatial,
+                coords=_coords,
+                knn_index=_knn,
+                alpha=_alpha,
+                y_mean=_y_mean,
+                y_std=_y_std,
+            ),
             mode=mode,
-            max_steps=10,
-            y_mean=_y_mean,
-            y_std=_y_std,
         )
-
-        steps_out = []
-        for i, step in enumerate(result.steps):
-            steps_out.append(
-                {
-                    "step": i + 1,
-                    "treatment": step.treatment,
-                    "delta_x": step.delta_x,
-                    "mean_delta": float(_np.mean(step.delta)),
-                    "p5_delta": float(_np.percentile(step.delta, 5)),
-                    "p95_delta": float(_np.percentile(step.delta, 95)),
-                }
-            )
-
-        cumulative = float(_np.mean(result.final.delta)) if result.n_steps > 0 else 0.0
-        return {
-            "n_steps": result.n_steps,
-            "steps": steps_out,
-            "cumulative_mean_delta": cumulative,
-        }
 
     except HTTPException:
         raise
