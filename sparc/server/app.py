@@ -7134,6 +7134,81 @@ async def collect_cell_inspect(cell_id: int):
             for k, v in props.items()}
 
 
+@app.post("/collect/save-config")
+async def collect_save_config(body: dict = Body(...)):
+    """Persist the wizard configuration to the project.yml ``collect:`` block.
+
+    Body keys (all optional):
+      city_name       : str
+      capa_event_date : str | null   (ISO date)
+      capa_osf_node   : str
+      variables       : dict[group, {enabled: list[str]}]
+      fishnet_m       : int
+      aggregation     : dict[str, str]
+
+    Writes changes to the project.yml nearest to the server's working directory
+    when one exists; otherwise returns status ``"not_persisted"``.
+    """
+    import re as _re
+    import yaml as _yaml
+    from pathlib import Path as _Path
+
+    # Locate project.yml relative to the CWD (typical dev-server invocation)
+    yml_candidates = [
+        _Path("project.yml"),
+        _Path("../project.yml"),
+    ]
+    yml_path: _Path | None = next((p for p in yml_candidates if p.exists()), None)
+
+    city_name       = body.get("city_name", "")
+    capa_osf_node   = body.get("capa_osf_node", "")
+    capa_event_date = body.get("capa_event_date")
+    fishnet_m       = body.get("fishnet_m", 30)
+
+    # Build the collection block we want to persist
+    collection_block: dict = {
+        "city_name":    city_name,
+        "capa_osf_node": capa_osf_node,
+    }
+    if capa_event_date:
+        collection_block["capa_event_date"] = capa_event_date
+    if fishnet_m:
+        collection_block["fishnet_m"] = fishnet_m
+
+    if yml_path is None:
+        return {"status": "not_persisted", "collection": collection_block}
+
+    try:
+        text = yml_path.read_text(encoding="utf-8")
+
+        # Update or insert individual keys inside the collect: block
+        def _set_key(t: str, key: str, value: str) -> str:
+            pattern = rf"(collect:.*?\n(?:[ \t]+.*\n)*?[ \t]+{_re.escape(key)}\s*:)[^\n]*"
+            replacement = rf"\g<1> {value}"
+            updated, n = _re.subn(pattern, replacement, t, flags=_re.DOTALL)
+            if n:
+                return updated
+            # Key not present — append under collect: block (after the block header)
+            return _re.sub(
+                r"(collect:\s*\n)",
+                rf"\g<1>  {key}: {value}\n",
+                t,
+                count=1,
+            )
+
+        if capa_osf_node is not None:
+            quote = f'"{capa_osf_node}"'
+            text = _set_key(text, "capa_osf_node", quote)
+
+        yml_path.write_text(text, encoding="utf-8")
+    except Exception as exc:
+        import logging as _log
+        _log.getLogger(__name__).warning("save-config: could not update project.yml: %s", exc)
+        return {"status": "not_persisted", "collection": collection_block}
+
+    return {"status": "saved", "collection": collection_block}
+
+
 @app.post("/collect/build")
 async def collect_build(body: dict = Body(...)):
     """Run the assembler to write GeoParquet + manifest and update project.yml.
