@@ -26,6 +26,7 @@ from .sources import FetchResult, DataSource, SourceRegistry, SOURCE_REGISTRY
 from .domain import DomainSpec
 from .dispatch import sync_group_fetch
 from .session import CollectSession
+from .http_client import HttpClient, StubHttpClient, StubResponse
 import sparc.data.collect.adapters as _adapters  # noqa: F401 — registers all adapters
 
 __all__ = [
@@ -45,4 +46,8 @@ __all__ = [
     "DomainSpec",
     # C4 — dispatch
     "sync_group_fetch",
+    # C5 — HttpClient seam
+    "HttpClient",
+    "StubHttpClient",
+    "StubResponse",
 ]

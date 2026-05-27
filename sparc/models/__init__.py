@@ -24,9 +24,6 @@ from .spec import ModelSpec
 # V2 neural modules (lazy imports — require torch)
 try:
     from .neural_meta import SPARCMetaLearner
-    from .surrogates import DifferentiableGWR, DifferentiableGWRF, DifferentiableGGPGAM
-    from .process_rate_net import ProcessRateNet
-    from .spatial_attention import SIRENLayer, SparseSpatialAttention
     _V2_AVAILABLE = True
 except ImportError:
     _V2_AVAILABLE = False
@@ -38,12 +35,6 @@ __all__ = [
     'GWRFModel',
     'GGPGAM_SVC',
     'ModelSpec',
-    # V2 Neural
+    # V2 Neural — single public entry point
     'SPARCMetaLearner',
-    'DifferentiableGWR',
-    'DifferentiableGWRF',
-    'DifferentiableGGPGAM',
-    'ProcessRateNet',
-    'SIRENLayer',
-    'SparseSpatialAttention',
 ]

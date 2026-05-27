@@ -11,6 +11,8 @@ from sparc.registry.manifest import (
 )
 from sparc.registry.run_registry import RunRegistry
 from sparc.registry.store import ArtifactStore, ArtifactStoreError, get_active_store
+from sparc.registry.backend import StorageBackend
+from sparc.registry.memory_store import MemoryStore
 
 __all__ = [
     "CityRegistry",
@@ -24,4 +26,7 @@ __all__ = [
     "ArtifactStore",
     "ArtifactStoreError",
     "get_active_store",
+    # Storage seam (C1)
+    "StorageBackend",
+    "MemoryStore",
 ]

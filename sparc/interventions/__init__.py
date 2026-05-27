@@ -56,7 +56,11 @@ __all__ = [
     'CausalInputLoader',
     # Scenario engine selector seam
     'ScenarioEngineSelector',
+    # Scenario executor protocol (C3)
+    'ScenarioExecutor',
+    'ScenarioResult',
 ]
 
 from .causal_inputs import CausalInputs, CausalInputLoader
 from sparc.run.scenario_engine_selector import ScenarioEngineSelector
+from .scenario_executor import ScenarioExecutor, ScenarioResult
