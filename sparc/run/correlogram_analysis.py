@@ -1393,12 +1393,22 @@ def _auto_wire_bandwidths(all_results, model_bandwidths, optimal_cv_block_size, 
 
 if __name__ == "__main__":
     import sys
-    
-    # Check for fast mode flag
+
     fast_mode = "--fast" in sys.argv
-    
+
     if fast_mode:
         print("[FAST] FAST MODE ENABLED: Using reduced sample size and fewer lags for quick analysis")
         print("Note: Results may be less precise but much faster\n")
-    
-    main(fast_mode=fast_mode)
+
+    from sparc.run.orchestrator import RunContext
+    from sparc.run.pipeline_paths import PipelinePaths
+    from sparc.config.config import load_config as _load_config
+    _cfg = _load_config()
+    _paths = PipelinePaths.from_config(_cfg)
+    try:
+        from sparc.registry.run_registry import RunRegistry
+        _registry = RunRegistry(_paths.base_dir)
+    except Exception:
+        _registry = None
+    _ctx = RunContext(config=_cfg, paths=_paths, registry=_registry, project_path="")
+    main(_ctx, fast_mode=fast_mode)

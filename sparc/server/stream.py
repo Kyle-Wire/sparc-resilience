@@ -408,10 +408,18 @@ def _execute_stage(
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: could not (re)set active registry: {exc}")
 
+    from sparc.run.orchestrator import RunContext
+    _run_context = RunContext(
+        config=config,
+        paths=paths,
+        registry=state.registry,
+        project_path=project_path or "",
+    )
+
     if stage == 0:
         print(">>> Correlogram Analysis")
         from sparc.run.correlogram_analysis import main as run_correlogram
-        result = run_correlogram(fast_mode=fast)
+        result = run_correlogram(_run_context, fast_mode=fast)
         state.store_result(0, result)
 
         # Pipeline configuration
