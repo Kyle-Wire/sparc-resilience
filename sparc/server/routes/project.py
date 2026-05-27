@@ -114,10 +114,32 @@ async def load_project(path: str = Query(..., description="Absolute path to proj
     state.project_config = config
     state.raw_project_yaml = raw_yaml
 
+    # Attach the run registry so artifact and result endpoints work immediately.
+    # Use a lazy import to avoid a circular dependency (routes → app → routes).
+    try:
+        from sparc.server.app import _attach_registry
+        _attach_registry(config)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: could not attach registry on project load: {exc}")
+
+    # Heavy I/O (data load + model prewarm) runs in the background so the
+    # HTTP response returns quickly; the client may re-fetch columns.
+    async def _background_load() -> None:
+        try:
+            from sparc.server.app import _load_data_into_state, _start_prewarm
+            data_path = config.get("data", {}).get("file_path", "")
+            if data_path and os.path.exists(data_path):
+                await asyncio.to_thread(_load_data_into_state, config)
+            _start_prewarm()
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: background project load failed: {exc}")
+
+    asyncio.create_task(_background_load())
+
     return {
         "status": "loaded",
         "project": raw_yaml.get("project", {}),
-        "columns": [],
+        "columns": [],   # populated after background load; client may re-fetch
         "row_count": 0,
     }
 

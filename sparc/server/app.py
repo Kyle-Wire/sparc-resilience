@@ -34,6 +34,7 @@ from fastapi.responses import JSONResponse, FileResponse, Response
 from sparc.server.state import ServerState
 from sparc.server.stream import stream_stage
 from sparc.server.artifact_reader import read_batch, prewarm_ids
+from sparc.server.deps import state  # single shared instance; do NOT create another below
 
 # ------------------------------------------------------------------
 # Application & shared state
@@ -199,8 +200,6 @@ def _resolve_safe(raw: str, *, allow_create: bool = False) -> Path:
         )
     return resolved
 
-
-state = ServerState()
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 
@@ -1055,54 +1054,11 @@ async def ai_chat(req: AiChatRequest):
 
 
 # ------------------------------------------------------------------
-# Project endpoints
+# Project endpoints  (NOTE: /project/load, /project/validate, /project/init,
+# /project/create, /project/templates, and /project/config are served by
+# _project_router (sparc.server.routes.project), registered above.
+# The handlers below cover project-adjacent utilities not yet migrated.)
 # ------------------------------------------------------------------
-
-@app.post("/project/load")
-async def load_project(path: str = Query(..., description="Absolute path to project.yml")):
-    """Load a project.yml and return its metadata.
-
-    Returns immediately after YAML parse + registry attach so the UI can
-    show progress.  Heavy I/O (_load_data_into_state, _start_prewarm) runs
-    in a background asyncio task.
-    """
-    resolved = _resolve_safe(path)
-    if not resolved.exists():
-        raise HTTPException(404, f"Project file not found: {resolved}")
-
-    from sparc.config.config import load_config
-
-    # Also keep the raw YAML for the config editor
-    import yaml
-    with open(resolved, 'r', encoding='utf-8') as fh:
-        raw_yaml = yaml.safe_load(fh) or {}
-
-    try:
-        config = load_config(str(resolved))
-    except Exception as exc:
-        raise HTTPException(422, f"Invalid project configuration: {exc}")
-
-    state.project_path = str(resolved)
-    state.project_config = config
-    state.raw_project_yaml = raw_yaml
-    _attach_registry(config)
-
-    # Heavy I/O runs in the background so the HTTP response returns fast.
-    async def _background_load():
-        data_path = config["data"]["file_path"]
-        if os.path.exists(data_path):
-            await asyncio.to_thread(_load_data_into_state, config)
-        _start_prewarm()
-
-    asyncio.create_task(_background_load())
-
-    return {
-        "status": "loaded",
-        "project": raw_yaml.get("project", {}),
-        "columns": [],   # populated after background load; client may re-fetch
-        "row_count": 0,
-    }
-
 
 @app.post("/project/validate")
 async def validate_project(path: str = Query(..., description="Absolute path to project.yml")):
@@ -7045,6 +7001,95 @@ async def collect_fetch(body: dict = Body(...)):
     }
 
 
+
+
+@app.get("/collect/capa-events")
+async def collect_capa_events(city: str = ""):
+    """Look up available CAPA Heat Watch campaigns for a city name.
+
+    Query params:
+      city : str — city name to look up (fuzzy-matched against the catalog)
+
+    Returns a CapaEventsResponse with matching events, suggestions, or an
+    error message when the city is not found.
+    """
+    from sparc.data.collect.capa_catalog import lookup_city, CAPA_CATALOG
+
+    city = city.strip()
+    if not city:
+        return {
+            "city": city,
+            "canonical_name": None,
+            "found_in_catalog": False,
+            "us_city": False,
+            "osf_node": None,
+            "folder_hint": None,
+            "events": [],
+            "suggestions": [],
+            "error": "No city name provided.",
+        }
+
+    canonical, entry = lookup_city(city)
+
+    if canonical is None and entry is None:
+        return {
+            "city": city,
+            "canonical_name": None,
+            "found_in_catalog": False,
+            "us_city": False,
+            "osf_node": None,
+            "folder_hint": None,
+            "events": [],
+            "suggestions": [],
+            "error": f"No CAPA Heat Watch campaign found for '{city}'.",
+        }
+
+    if canonical is None and isinstance(entry, dict):
+        # Ambiguous or fuzzy-suggestion result
+        candidates: list[str] = entry.get("ambiguous") or entry.get("suggestions") or []
+        return {
+            "city": city,
+            "canonical_name": None,
+            "found_in_catalog": False,
+            "us_city": False,
+            "osf_node": None,
+            "folder_hint": None,
+            "events": [],
+            "suggestions": candidates,
+            "error": (
+                f"Multiple matches found for '{city}'. Did you mean one of: "
+                + ", ".join(candidates) + "?"
+                if candidates else f"No close match found for '{city}'."
+            ),
+        }
+
+    # Exact / confident match — build a single CapaEvent from catalog metadata
+    year: int | None = entry.get("year")
+    # Use July 1st of the campaign year as a placeholder date when known,
+    # otherwise leave null so the user knows no specific date is recorded.
+    event_date: str | None = f"{year}-07-01" if year else None
+    label_parts = [canonical]
+    if year:
+        label_parts.append(f"({year})")
+    event = {
+        "date": event_date,
+        "label": " ".join(label_parts),
+        "osf_node": entry["osf_node"],
+        "folder_hint": entry.get("folder_hint"),
+        "source_name": "NOAA/NIHHIS Heat Watch Campaign",
+    }
+
+    return {
+        "city": city,
+        "canonical_name": canonical,
+        "found_in_catalog": True,
+        "us_city": True,
+        "osf_node": entry["osf_node"],
+        "folder_hint": entry.get("folder_hint"),
+        "events": [event],
+        "suggestions": [],
+        "error": None,
+    }
 
 
 @app.get("/collect/preview/{variable}")
