@@ -32,8 +32,9 @@ async def results_causal_pdp_curves(
 ):
     """Return the Bayesian causal PDP curves (Stage 3, Phase C-2)."""
     return await read_or_404(
-        store, "3", "causal_pdp_curves",
+        "3", "causal_pdp_curves",
         hint="Stage 3 has not produced causal_pdp_curves. Run Stage 3 with Bayesian-CATE enabled.",
+        store=store,
     )
 
 
@@ -43,6 +44,7 @@ async def results_causal_divergence(
 ):
     """Return the CATE-vs-GWR divergence audit (Stage 3, Phase C-3)."""
     return await read_or_404(
-        store, "3", "cate_vs_gwr_divergence",
+        "3", "cate_vs_gwr_divergence",
         hint="Stage 3 has not produced cate_vs_gwr_divergence.",
+        store=store,
     )

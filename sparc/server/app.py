@@ -546,10 +546,14 @@ async def _auto_load_project():
 from sparc.server.routes.health import router as _health_router
 from sparc.server.routes.project import router as _project_router
 from sparc.server.routes.data import router as _data_router
+from sparc.server.routes.results import router as _results_router
+from sparc.server.routes.causal import router as _causal_router
 
 app.include_router(_health_router)
 app.include_router(_project_router)
 app.include_router(_data_router)
+app.include_router(_results_router)
+app.include_router(_causal_router)
 
 # ------------------------------------------------------------------
 # Health  (REMOVED — now served by routes.health)
@@ -2511,21 +2515,9 @@ async def post_report_audience(
 
 
 # ------------------------------------------------------------------
-# Structured results endpoints (MUST be defined before /results/{stage}
-# so FastAPI matches exact paths before the parameterized catch-all)
-# ------------------------------------------------------------------
-
-@app.get("/results/correlogram")
-async def get_correlogram_data():
-    """Return correlogram analysis results with per-variable lag/Moran's I data."""
-    return await _read_or_404(
-        "0", "correlogram_results",
-        hint="Stage 0 (EDA) has not produced correlogram_results. Run Stage 0.",
-    )
-
-
-# ------------------------------------------------------------------
 # Phase-C — KernelField, causal PDP, divergence, scenario routing
+# (correlogram, causal/pdp_curves and causal/divergence are now served
+# by routes.results and routes.causal via include_router above)
 # ------------------------------------------------------------------
 
 @app.get("/results/kernel_field")
@@ -2562,24 +2554,6 @@ async def get_kernel_field_artifact():
             "No KernelField artifact written by Stages 0/1 and no "
             "cross_correlogram_kernel_field fallback found in Stage 0."
         ),
-    )
-
-
-@app.get("/results/causal/pdp_curves")
-async def get_causal_pdp_curves():
-    """Return the Bayesian causal PDP curves (Stage 3, Phase C-2)."""
-    return await _read_or_404(
-        "3", "causal_pdp_curves",
-        hint="Stage 3 has not produced causal_pdp_curves. Run Stage 3 with Bayesian-CATE enabled.",
-    )
-
-
-@app.get("/results/causal/divergence")
-async def get_cate_vs_gwr_divergence():
-    """Return the CATE-vs-GWR divergence audit (Stage 3, Phase C-3)."""
-    return await _read_or_404(
-        "3", "cate_vs_gwr_divergence",
-        hint="Stage 3 has not produced cate_vs_gwr_divergence.",
     )
 
 
