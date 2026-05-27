@@ -91,18 +91,30 @@ causal:
     alpha: 0.05
     consensus_threshold: 2
     compare_expert: true
+  inference_backend: "mc3"   # "mc3" | "dibs" | "order_mcmc"
   mc3:
-    n_iterations: 10000
+    n_iterations: 50000        # max cap; converges early via moving-window check
+    min_iterations: 10000      # floor before convergence check activates
+    converge_tol: 0.005        # stop when max edge-prob change < 0.5% over window
+    converge_window: 2000      # window size (post-burnin samples)
     n_chains: 4
+    temperatures: [1.0, 0.75, 0.55, 0.40]
     burnin_fraction: 0.25
     edge_penalty: 1.0
     seed: 42
+    warm_start:
+      enabled: true
+      n_particles: 4
+      n_steps: 500
+      lambda_h: 1.0
   nuts:
     n_samples: 2000
-    n_warmup: 500
+    n_warmup: 1000             # ≥1000 for good mass-matrix adaptation
+    per_edge_n_samples: 2000
+    per_edge_n_warmup: 800
     n_chains: 2
-    target_accept_rate: 0.85
-    max_tree_depth: 8
+    target_accept_rate: 0.90   # higher = smaller step size = better mixing
+    max_tree_depth: 10
   bayesian_cate:
     n_features: 16              # low-RAM laptops: 16; servers: 32+
     n_samples: 2000
@@ -207,6 +219,8 @@ models:
     max_neighbors: 128
     siren_omega: 30.0
     exceedance_thresholds: [0.25, 0.50, 0.75]
+    geo_pe_dim: 32             # Geographic positional encoding dim (Space2Vec Fourier; 0 = disabled)
+
 
   spatial_cv:
     block_size: 300          # Block size in meters (300m for fine-grained urban analysis)
@@ -244,6 +258,7 @@ training:
   lambda_alpha_prior: 1.0
   lambda_surrogate: 0.1
   lambda_neighbor: 0.1
+  lambda_pde: 0.05             # V3 multi-term PDE loss (0 = disabled)
 
 # ---------------------------------------------------------------------------
 # V2 Optimization
@@ -273,6 +288,7 @@ optimization:
 # ---------------------------------------------------------------------------
 jepa:
   enable: true                  # Master switch
+  pretrain_epochs: 20           # Phase 1 EMA-trunk pretraining epochs (0 = skip)
   mask_ratio: 0.4               # P(zero each physics input channel for context branch)
   lambda: 1.0                   # Base weight on JEPA loss (× curriculum_weight(epoch))
 
