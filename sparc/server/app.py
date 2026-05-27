@@ -335,10 +335,7 @@ def _attach_registry(config: dict) -> None:
 # Live artifact-event broadcasting
 # ------------------------------------------------------------------
 
-from sparc.server.event_broadcaster import EventBroadcaster as _EventBroadcaster
-
-# Single broadcaster instance shared by all WebSocket handlers.
-_broadcaster = _EventBroadcaster()
+from sparc.server.deps import broadcaster as _broadcaster
 
 
 def _on_artifact_registered(entry: Any) -> None:
@@ -555,6 +552,7 @@ from sparc.server.routes.ai import router as _ai_router
 from sparc.server.routes.reproduce import router as _reproduce_router
 from sparc.server.routes.dag import router as _dag_router
 from sparc.server.routes.report import router as _report_router
+from sparc.server.routes.run import router as _run_router
 
 app.include_router(_health_router)
 app.include_router(_project_router)
@@ -568,6 +566,7 @@ app.include_router(_ai_router)
 app.include_router(_reproduce_router)
 app.include_router(_dag_router)
 app.include_router(_report_router)
+app.include_router(_run_router)
 
 # ------------------------------------------------------------------
 # Health  (REMOVED — now served by routes.health)
@@ -588,17 +587,10 @@ app.include_router(_report_router)
 # double-check the client host as a safety net in case the bind address is
 # ever changed.
 
-@app.post("/run/cancel")
-async def cancel_run():
-    """Immediately mark the pipeline as idle so the frontend can restart.
-
-    The background pipeline thread is a daemon — it will finish its current
-    operation naturally, but setting ``is_running = False`` unblocks the
-    WebSocket guard that prevents starting a new run and signals the frontend
-    that the run has ended.
-    """
-    state.set_idle()
-    return {"status": "cancelled"}
+# ------------------------------------------------------------------
+# Run control
+# (/run/cancel is now served by routes.run via include_router above)
+# ------------------------------------------------------------------
 
 
 @app.post("/shutdown")
@@ -1620,250 +1612,18 @@ async def preprocess_data():
 
 
 # ------------------------------------------------------------------
-# Session log endpoint
+# Session log, pipeline streaming WebSocket routes
+# (/run/log, /run/execute, /run/artifacts, /run/stream are now served
+# by routes.run via include_router above)
 # ------------------------------------------------------------------
-
-@app.get("/run/log")
-async def get_run_log():
-    """Return the persistent session log for the current project.
-
-    Each entry is a JSON object with timestamp, stage, type, message, and data.
-    """
-    if state.project_config is None:
-        raise HTTPException(400, "No project loaded.")
-
-    project_dir = Path(state.project_config["paths"]["project_root"])
-    log_path = project_dir / "session_log.jsonl"
-
-    if not log_path.exists():
-        return {"entries": [], "path": str(log_path)}
-
-    import json
-    entries = []
-    with open(log_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    entries.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-
-    return {"entries": entries, "path": str(log_path)}
 
 
 # ------------------------------------------------------------------
-# Pipeline streaming (WebSocket)
+# Run control, run events, run comparison
+# (/run/cancel, /run/log, /run/events, /run/execute WS,
+# /run/artifacts WS, /run/stream WS, /runs/discover, /runs/diff
+# are now served by routes.run via include_router above)
 # ------------------------------------------------------------------
-
-@app.websocket("/run/execute")
-async def run_execute(ws: WebSocket, token: str = Query(default="")):
-    """Execute a pipeline stage and stream structured events over WebSocket.
-
-    The client sends a JSON message to start:
-        ``{"stage": 2, "fast": false, "skip_gwen": false}``
-
-    The server pushes events until the stage completes or errors:
-        ``{"type": "metric", "stage": 2, "fold": 3, "metric": "r2", "value": 0.891}``
-        ``{"type": "complete", "stage": 2}``
-        ``{"type": "artifact_written", "stage": "4", "artifact_id": "scenario_results", ...}``
-
-    ``artifact_written`` events are also pushed here (via the broadcaster) so the
-    desktop reacts the moment new data lands in the database.
-    """
-    # Validate sidecar token passed as query param (browsers cannot set custom
-    # headers on WebSocket upgrade requests).
-    if _SERVER_TOKEN is not None and token != _SERVER_TOKEN:
-        await ws.close(code=4003)
-        return
-    await ws.accept()
-
-    try:
-        init_msg = await ws.receive_json()
-    except WebSocketDisconnect:
-        return
-
-    stage_raw = init_msg.get("stage")
-    if stage_raw is None:
-        await ws.send_json({"type": "error", "message": "Missing required field: stage"})
-        await ws.close()
-        return
-
-    stage = int(stage_raw)
-    fast = bool(init_msg.get("fast", False))
-    skip_gwen = bool(init_msg.get("skip_gwen", False))
-
-    if state.project_config is None:
-        await ws.send_json({"type": "error", "message": "No project loaded"})
-        await ws.close()
-        return
-
-    if state.is_running:
-        await ws.send_json({"type": "error", "message": f"Stage {state.current_stage} already running"})
-        await ws.close()
-        return
-
-    # Subscribe to artifact events while running so the same socket carries
-    # both metric/complete and artifact_written events.
-    artifact_queue: asyncio.Queue = asyncio.Queue()
-    loop = asyncio.get_running_loop()
-    unsub = _broadcaster.subscribe(artifact_queue, loop=loop)
-
-    async def _drain_artifacts() -> None:
-        try:
-            while True:
-                event = await artifact_queue.get()
-                await ws.send_json(event)
-        except (asyncio.CancelledError, WebSocketDisconnect):
-            pass
-
-    drain_task = asyncio.create_task(_drain_artifacts())
-    try:
-        async for event in stream_stage(state, stage, fast=fast, skip_gwen=skip_gwen):
-            await ws.send_json(event)
-    except WebSocketDisconnect:
-        pass
-    finally:
-        drain_task.cancel()
-        unsub()
-        if ws.client_state.name != "DISCONNECTED":
-            await ws.close()
-
-
-@app.websocket("/run/artifacts")
-async def run_artifacts(ws: WebSocket, token: str = Query(default="")):
-    """Subscribe to artifact-written events over WebSocket.
-
-    No init message required.  The server immediately starts pushing
-    ``artifact_written`` events whenever ``RunRegistry.register_artifact``
-    is called:
-        ``{"type": "artifact_written", "stage": "4", "artifact_id": "...", ...}``
-
-    Connection stays open until the client disconnects.
-    """
-    if _SERVER_TOKEN is not None and token != _SERVER_TOKEN:
-        await ws.close(code=4003)
-        return
-    await ws.accept()
-
-    artifact_queue: asyncio.Queue = asyncio.Queue()
-    loop = asyncio.get_running_loop()
-    unsub = _broadcaster.subscribe(artifact_queue, loop=loop)
-    # Ack so clients (and tests) know the subscription is live before
-    # they trigger downstream writes.
-    await ws.send_json({"type": "subscribed", "channel": "artifacts"})
-    try:
-        while True:
-            event = await artifact_queue.get()
-            await ws.send_json(event)
-    except WebSocketDisconnect:
-        pass
-    finally:
-        unsub()
-        if ws.client_state.name != "DISCONNECTED":
-            await ws.close()
-
-
-@app.websocket("/run/stream")
-async def run_stream(ws: WebSocket, token: str = Query(default="")):
-    """Subscribe to live artifact-written events over WebSocket.
-
-    Handshake:
-      1. Client sends  ``{"subscribe": "artifacts"}``
-      2. Server replies ``{"type": "subscribed"}``
-      3. Server pushes  ``{"type": "artifact_written", ...}`` for each new artifact.
-
-    Connection stays open until the client disconnects.
-    """
-    if _SERVER_TOKEN is not None and token != _SERVER_TOKEN:
-        await ws.close(code=4003)
-        return
-    await ws.accept()
-
-    try:
-        msg = await ws.receive_json()
-    except WebSocketDisconnect:
-        return
-
-    channel = msg.get("subscribe", "")
-    if channel != "artifacts":
-        await ws.close(code=4001)
-        return
-
-    await ws.send_json({"type": "subscribed"})
-
-    artifact_queue: asyncio.Queue = asyncio.Queue()
-    loop = asyncio.get_running_loop()
-    unsub = _broadcaster.subscribe(artifact_queue, loop=loop)
-    try:
-        while True:
-            event = await artifact_queue.get()
-            await ws.send_json(event)
-    except WebSocketDisconnect:
-        pass
-    finally:
-        unsub()
-        if ws.client_state.name != "DISCONNECTED":
-            await ws.close()
-
-
-@app.get("/run/events")
-async def get_run_events():
-    """Return buffered events for the current (or most recent) pipeline run.
-
-    Allows a client that reconnects (e.g. navigated away) to catch up on
-    events it missed without needing to re-open the WebSocket.
-    """
-    return {
-        "is_running": state.is_running,
-        "current_stage": state.current_stage,
-        "events": state.get_buffered_events(),
-    }
-
-
-# ------------------------------------------------------------------
-# Run comparison (Phase 15) — diff two output directories
-# ------------------------------------------------------------------
-
-@app.get("/runs/discover")
-async def get_runs_discover(search_root: str | None = Query(default=None)):
-    """List candidate output directories the user could compare.
-
-    If *search_root* is omitted we default to the project's ``output_dir``
-    parent (so siblings of the current run show up). Falls back to the
-    user's home directory.
-    """
-    from sparc.evaluation.diff import discover_runs
-
-    if search_root:
-        root = Path(search_root)
-    else:
-        root = Path.home()
-        if state.project_config is not None:
-            try:
-                from sparc.run.pipeline_paths import PipelinePaths
-                paths = PipelinePaths.from_config(state.project_config)
-                if paths.output_dir.parent.exists():
-                    root = paths.output_dir.parent
-            except Exception:
-                pass
-    return {"search_root": str(root), "runs": discover_runs(root)}
-
-
-@app.get("/runs/diff")
-async def get_runs_diff(
-    run_a: str = Query(...),
-    run_b: str = Query(...),
-):
-    """Diff two pipeline output directories on disk."""
-    from sparc.evaluation.diff import diff_runs
-
-    try:
-        return diff_runs(Path(run_a), Path(run_b))
-    except FileNotFoundError as exc:
-        raise HTTPException(404, str(exc))
-    except Exception as exc:
-        raise HTTPException(500, f"Diff failed: {exc}")
 
 
 # ------------------------------------------------------------------

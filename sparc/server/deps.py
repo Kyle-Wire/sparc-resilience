@@ -22,6 +22,7 @@ without triggering the full FastAPI + middleware initialisation in
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -30,6 +31,7 @@ from fastapi import HTTPException
 from sparc.server.state import ServerState
 from sparc.server.project_session import ProjectSession
 from sparc.server.execution_context import ExecutionContext
+from sparc.server.event_broadcaster import EventBroadcaster
 
 # ---------------------------------------------------------------------------
 # Process-global server state — THE single instance
@@ -40,6 +42,13 @@ state: ServerState = ServerState()
 # Structured replacements for ServerState — new routes should prefer these.
 session: ProjectSession = ProjectSession()
 execution: ExecutionContext = ExecutionContext()
+
+# ---------------------------------------------------------------------------
+# Shared broadcaster and security token — used by WebSocket run routes
+# ---------------------------------------------------------------------------
+
+broadcaster: EventBroadcaster = EventBroadcaster()
+server_token: str | None = os.environ.get("SPARC_SERVER_TOKEN") or None
 
 # ---------------------------------------------------------------------------
 # Store accessor — raises 400 when nothing is loaded
