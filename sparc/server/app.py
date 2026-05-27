@@ -17,24 +17,18 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import shutil
-import tempfile
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 
-import numpy as np
-from pydantic import BaseModel, Field
-
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Query, Body, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from fastapi.responses import JSONResponse, FileResponse, Response
-from sparc.server.state import ServerState
+from fastapi.responses import JSONResponse
 from sparc.server.stream import stream_stage
 from sparc.server.artifact_reader import read_batch, prewarm_ids
-from sparc.server.deps import state  # single shared instance; do NOT create another below
+from sparc.server.deps import state, get_open_store  # single shared instance; do NOT create another below
 
 # ------------------------------------------------------------------
 # Application & shared state
@@ -208,76 +202,6 @@ TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 # Physics helpers
 # ------------------------------------------------------------------
 
-def _resolve_expected_sign(cfg: dict, variable: str) -> str | None:
-    """Return ``'negative'``, ``'positive'``, or ``None`` for *variable*.
-
-    Checks three sources in order:
-      1. ``config["physics"]["monotone_constraints"]``  (inline in project.yml)
-      2. ``config["physics"]["caps_file"]`` → ``monotonicity.{var}.expected_sign``
-      3. Built-in PhysicsPriors defaults (Canopy → negative, etc.)
-    """
-    physics = cfg.get("physics", {})
-    if not isinstance(physics, dict):
-        return None
-
-    # 1. monotone_constraints  e.g. {"Pct_Canopy": -1, "NDVI": -1}
-    mc = physics.get("monotone_constraints", {})
-    if isinstance(mc, dict) and variable in mc:
-        val = mc[variable]
-        if val == -1 or val == "-1":
-            return "negative"
-        if val == 1 or val == "1":
-            return "positive"
-        return None  # 0 = unconstrained
-
-    # 2. caps_file → monotonicity section
-    caps_path = physics.get("caps_file")
-    if caps_path and os.path.exists(caps_path):
-        try:
-            import yaml
-            with open(caps_path, "r", encoding="utf-8") as fh:
-                caps = yaml.safe_load(fh) or {}
-            mono = caps.get("monotonicity", {})
-            if isinstance(mono, dict) and variable in mono:
-                return mono[variable].get("expected_sign") if isinstance(mono[variable], dict) else None
-        except Exception:
-            pass
-
-    # 3. Built-in PhysicsPriors class (literature defaults)
-    try:
-        from sparc.interventions.physics_priors import PhysicsPriors
-        pp = PhysicsPriors()
-        coef = pp.coefficients.get(variable)
-        if coef is not None:
-            return "negative" if coef.coefficient < 0 else "positive" if coef.coefficient > 0 else None
-    except Exception:
-        pass
-
-    return None
-
-
-# ------------------------------------------------------------------
-# Scenario GPKG cache (avoids re-reading multi-MB file per slider tick)
-# ------------------------------------------------------------------
-
-_scenario_gpkg_cache: dict[str, Any] = {}  # {path_str: GeoDataFrame}
-
-
-def _load_scenario_gpkg(paths) -> Any:
-    """Return the scenario GeoDataFrame (WGS84), cached after first load."""
-    for gpkg_name in ("scenario_results.gpkg", "scenario_results_dag.gpkg",
-                      "scenario_results_hybrid.gpkg", "scenario_results_reprediction.gpkg"):
-        candidate = paths.stage4_dir / gpkg_name
-        if candidate.exists():
-            key = str(candidate)
-            if key in _scenario_gpkg_cache:
-                return _scenario_gpkg_cache[key]
-            import geopandas as gpd
-            gdf = gpd.read_file(candidate)
-            _scenario_gpkg_cache[key] = gdf
-            return gdf
-    return None
-
 
 # ------------------------------------------------------------------
 # Run registry helpers
@@ -370,79 +294,6 @@ def _on_artifact_registered(entry: Any) -> None:
     _broadcaster.broadcast(event)
 
 
-def _registry_path(stage: str | int, artifact_id: str) -> Path | None:
-    """Look up an artifact's absolute path via the registry. None if missing."""
-    reg = state.registry
-    if reg is None:
-        return None
-    entry = reg.lookup(stage, artifact_id)
-    if entry is None or entry.partial:
-        return None
-    p = reg.resolve(entry)
-    return p if p.exists() else None
-
-
-def _open_store():
-    """Return an ``ArtifactStore`` bound to the active registry, or raise 400.
-
-    All ``/results/*`` endpoints are db-only: artifacts must live in
-    ``artifacts.db``. Disk fallbacks were removed in the v4 refresh.
-
-    The process-global "active" registry is set once at /project/load
-    (see ``_attach_registry``) and remains set for the lifetime of the
-    loaded project, so endpoints don't toggle it per-request.
-    """
-    if state.project_config is None:
-        raise HTTPException(400, "No project loaded")
-    if state.registry is None:
-        raise HTTPException(400, "No active run registry. Load a project first.")
-    from sparc.registry.store import ArtifactStore
-    return ArtifactStore(state.registry)
-
-
-async def _read_or_404(
-    stage: str | int,
-    artifact_id: str,
-    *,
-    hint: str = "",
-):
-    """DB-only read: ``store.read_any`` or structured 404 if missing.
-
-    The frontend's ``parseMissingArtifact`` consumes the structured
-    detail to render an actionable empty-state.
-    """
-    # Fast path: serve from in-process LRU cache if available.
-    cached = state.result_cache.get(stage, artifact_id)
-    if cached is not None:
-        return cached
-    store = _open_store()
-    if not store.has(stage, artifact_id):
-        raise _missing_artifact_response(
-            artifact_id=artifact_id, stage=stage, hint=hint,
-        )
-    result = await asyncio.to_thread(store.read_any, stage, artifact_id)
-    state.result_cache.set(stage, artifact_id, result)
-    return result
-
-
-def _missing_artifact_response(
-    *,
-    artifact_id: str,
-    stage: str | int,
-    expected_paths: list[Path] | None = None,
-    hint: str = "",
-) -> HTTPException:
-    """Return a structured 404 the frontend can render as an actionable empty-state."""
-    detail = {
-        "error": "missing_artifact",
-        "missing_artifact": artifact_id,
-        "produced_by_stage": str(stage),
-        "expected_path": (str(expected_paths[0]) if expected_paths else None),
-        "candidate_paths": [str(p) for p in (expected_paths or [])],
-        "hint": hint,
-    }
-    return HTTPException(status_code=404, detail=detail)
-
 
 # ------------------------------------------------------------------
 # Background result pre-warm
@@ -470,7 +321,7 @@ def _prewarm_results(cancel: _threading.Event) -> None:
         # Drive from the live manifest — no static catalog or consumer-tag filter.
         frontend_ids = prewarm_ids(reg.manifest)
 
-        store = _open_store()
+        store = get_open_store()
         for stage, artifact_id in frontend_ids:
             if cancel.is_set():
                 return
@@ -875,7 +726,7 @@ def _load_data_into_state(config: dict) -> None:
         print(f"Warning: data pre-load failed: {exc}")
 
 
-def _compute_summary(st: ServerState) -> dict:
+def _compute_summary(st) -> dict:
     """Build a compact data summary for the LLM and the UI."""
     if st.data is None:
         return {}
@@ -918,93 +769,6 @@ def _compute_summary(st: ServerState) -> dict:
     st.data_summary = summary
     return summary
 
-
-def _try_load_from_disk(stage: int) -> Any:
-    """Attempt to load stage results from the output directory."""
-    if state.project_config is None:
-        return None
-
-    from sparc.run.pipeline_paths import PipelinePaths
-    import pandas as pd
-
-    try:
-        paths = PipelinePaths.from_config(state.project_config)
-    except Exception:
-        return None
-
-    stage_map = {
-        0: paths.stage0_dir,
-        1: paths.stage1_dir,
-        2: paths.stage2_dir,
-        3: paths.stage3_dir,
-        4: paths.stage4_dir,
-    }
-    stage_dir = stage_map.get(stage)
-    if stage_dir is None or not stage_dir.exists():
-        return None
-
-    # For stage 2, look for V2 neural predictions CSV first (already in original scale)
-    if stage == 2:
-        neural_predictions = stage_dir / "v2_neural" / "predictions.csv"
-        if neural_predictions.exists():
-            import geopandas as gpd
-            from shapely.geometry import Point
-            df = pd.read_csv(neural_predictions)
-            if "lon" in df.columns and "lat" in df.columns:
-                geometry = [Point(xy) for xy in zip(df["lon"], df["lat"])]
-                gdf = gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
-                return gdf
-
-    # Look for common output files (recursive to catch subdirectories)
-    for pattern in ["*.gpkg", "*.geojson", "*.parquet", "*.csv"]:
-        files = sorted(stage_dir.rglob(pattern))
-        if files:
-            f = files[0]
-            if f.suffix == ".gpkg":
-                import geopandas as gpd
-                return gpd.read_file(f)
-            elif f.suffix == ".parquet":
-                import geopandas as gpd
-                return gpd.read_parquet(f)
-            elif f.suffix == ".geojson":
-                import geopandas as gpd
-                return gpd.read_file(f)
-            else:
-                df = pd.read_csv(f)
-                # If CSV has lon/lat, convert to GeoDataFrame
-                if "lon" in df.columns and "lat" in df.columns:
-                    import geopandas as gpd
-                    from shapely.geometry import Point
-                    geometry = [Point(xy) for xy in zip(df["lon"], df["lat"])]
-                    return gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
-                return df
-    return None
-
-
-def _to_geojson(data: Any) -> dict:
-    """Convert a GeoDataFrame or DataFrame to GeoJSON."""
-    import geopandas as gpd
-
-    if isinstance(data, gpd.GeoDataFrame):
-        return data.__geo_interface__
-    if isinstance(data, dict) and "spatial" in data:
-        return data["spatial"].__geo_interface__
-    raise HTTPException(400, "Data is not spatial; use format=json")
-
-
-def _to_json(data: Any) -> Any:
-    """Convert a DataFrame or dict to JSON-serializable form."""
-    import pandas as pd
-    import geopandas as gpd
-
-    if isinstance(data, (pd.DataFrame, gpd.GeoDataFrame)):
-        # Drop geometry for JSON serialization
-        if isinstance(data, gpd.GeoDataFrame):
-            data = pd.DataFrame(data.drop(columns="geometry"))
-        return {"rows": data.to_dict(orient="records")}
-    if isinstance(data, dict):
-        return data
-    return {"data": str(data)}
 
 # (Artifact Phase-5 download/export/list routes moved to routes.artifacts via include_router above)
 
