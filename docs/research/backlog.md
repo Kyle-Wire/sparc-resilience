@@ -1211,6 +1211,12 @@ Candidate A (gate feedback), B (replay interface), C (alpha-class curriculum), D
 
 ---
 
+### Session Digest — 2026-07-02 (Route Module Extraction)
+
+- [x] **A3 — Rewrite `routes/collect.py` and wire it (TDD)** — complexity: **medium** — *Done 2026-07-02: Rewrote `sparc/server/routes/collect.py` with all 8 real CollectSession-based handlers (boundary, manifest, fetch, capa-events, preview/{variable}, cell/{cell_id}, save-config, build). Added `include_router(_collect_router)` in `app.py`. Removed all 8 inline `@app.post/get` collect handlers plus the module-level `_collect_session` singleton and imports from `app.py`. 12 new tests in `test_server_route_modules.py` (TestCollectRouter + TestAppCompatibilityCollect). Result: 238 passing, 1 pre-existing failure (`test_has_upload_route`).*
+
+---
+
 ### Blue-Sky Candidates (from 2026-06-09 session)
 
 - [ ] **BS-3 Spatial Foundation Model via Physics-Guided Mask Token Pretraining** — complexity: **high**

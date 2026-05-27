@@ -1729,3 +1729,84 @@ class TestAppCompatibilityMisc:
         assert "/gwen/approve" in paths
         assert "/insights/headline" in paths
         assert "/panels/availability" in paths
+
+
+# ---------------------------------------------------------------------------
+# A3 — collect.py route module
+# ---------------------------------------------------------------------------
+
+class TestCollectRouter:
+    def test_importable_without_app(self):
+        from sparc.server.routes.collect import router
+        assert router is not None
+
+    def test_is_api_router(self):
+        from fastapi import APIRouter
+        from sparc.server.routes.collect import router
+        assert isinstance(router, APIRouter)
+
+    def test_has_boundary_route(self):
+        from sparc.server.routes.collect import router
+        paths = {r.path for r in router.routes}
+        assert "/collect/boundary" in paths
+
+    def test_has_manifest_route(self):
+        from sparc.server.routes.collect import router
+        paths = {r.path for r in router.routes}
+        assert "/collect/manifest" in paths
+
+    def test_has_fetch_route(self):
+        from sparc.server.routes.collect import router
+        paths = {r.path for r in router.routes}
+        assert "/collect/fetch" in paths
+
+    def test_has_capa_events_route(self):
+        from sparc.server.routes.collect import router
+        paths = {r.path for r in router.routes}
+        assert "/collect/capa-events" in paths
+
+    def test_has_preview_route(self):
+        from sparc.server.routes.collect import router
+        paths = {r.path for r in router.routes}
+        assert "/collect/preview/{variable}" in paths
+
+    def test_has_cell_route(self):
+        from sparc.server.routes.collect import router
+        paths = {r.path for r in router.routes}
+        assert "/collect/cell/{cell_id}" in paths
+
+    def test_has_save_config_route(self):
+        from sparc.server.routes.collect import router
+        paths = {r.path for r in router.routes}
+        assert "/collect/save-config" in paths
+
+    def test_has_build_route(self):
+        from sparc.server.routes.collect import router
+        paths = {r.path for r in router.routes}
+        assert "/collect/build" in paths
+
+    def test_manifest_returns_dict_when_no_session(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from sparc.server.routes.collect import router
+        test_app = FastAPI()
+        test_app.include_router(router)
+        client = TestClient(test_app, raise_server_exceptions=False)
+        resp = client.get("/collect/manifest")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, dict)
+
+
+class TestAppCompatibilityCollect:
+    def test_app_mounts_collect_router(self):
+        from sparc.server.app import app
+        paths = {r.path for r in app.routes}
+        assert "/collect/boundary" in paths
+        assert "/collect/manifest" in paths
+        assert "/collect/fetch" in paths
+        assert "/collect/capa-events" in paths
+        assert "/collect/preview/{variable}" in paths
+        assert "/collect/cell/{cell_id}" in paths
+        assert "/collect/save-config" in paths
+        assert "/collect/build" in paths
