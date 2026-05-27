@@ -548,12 +548,22 @@ from sparc.server.routes.project import router as _project_router
 from sparc.server.routes.data import router as _data_router
 from sparc.server.routes.results import router as _results_router
 from sparc.server.routes.causal import router as _causal_router
+from sparc.server.routes.physics import router as _physics_router
+from sparc.server.routes.inference import router as _inference_router
+from sparc.server.routes.api import router as _api_router
+from sparc.server.routes.ai import router as _ai_router
+from sparc.server.routes.reproduce import router as _reproduce_router
 
 app.include_router(_health_router)
 app.include_router(_project_router)
 app.include_router(_data_router)
 app.include_router(_results_router)
 app.include_router(_causal_router)
+app.include_router(_physics_router)
+app.include_router(_inference_router)
+app.include_router(_api_router)
+app.include_router(_ai_router)
+app.include_router(_reproduce_router)
 
 # ------------------------------------------------------------------
 # Health  (REMOVED — now served by routes.health)
@@ -641,172 +651,8 @@ async def _on_shutdown() -> None:
     print("SPARC server shutdown complete")
 
 
-@app.get("/api/hardware")
-async def hardware_profile():
-    """Return the auto-detected hardware tier and resulting pipeline knobs.
-
-    Used by the desktop app to show a low-memory badge and to confirm that
-    safety mode is active before launching a long-running stage. Includes
-    the safe caps + any active global/project overrides so the Performance
-    page can render the full picture in one round trip.
-    """
-    try:
-        from sparc.config.hardware_profile import (
-            compute_safe_caps,
-            detect_profile,
-            detect_raw_profile,
-            reset_profile_cache,
-        )
-        from sparc.config.user_preferences import load_preferences
-
-        # Force a re-resolve so freshly-saved prefs are reflected.
-        reset_profile_cache()
-
-        raw = detect_raw_profile()
-        effective = detect_profile()
-        prefs = load_preferences()
-        global_perf = prefs.get("performance", {}) if isinstance(prefs.get("performance"), dict) else {}
-        project_perf = {}
-        if state.project_config is not None:
-            cfg_perf = state.project_config.get("performance", {})
-            if isinstance(cfg_perf, dict):
-                project_perf = cfg_perf
-
-        return {
-            "detected": raw.as_dict(),
-            "safe_caps": compute_safe_caps(raw),
-            "global_prefs": global_perf,
-            "project_overrides": project_perf,
-            "effective": effective.as_dict(),
-        }
-    except Exception as exc:  # pragma: no cover - defensive
-        return JSONResponse({"error": str(exc)}, status_code=500)
-
-
-@app.get("/api/preferences")
-async def get_user_preferences():
-    """Return the global user preferences (machine-wide defaults)."""
-    try:
-        from sparc.config.user_preferences import get_prefs_path, load_preferences
-        return {"path": str(get_prefs_path()), "preferences": load_preferences()}
-    except Exception as exc:  # pragma: no cover - defensive
-        return JSONResponse({"error": str(exc)}, status_code=500)
-
-
-@app.put("/api/preferences")
-async def update_user_preferences(body: dict[str, Any]):
-    """Replace or merge the global user preferences.
-
-    Body may contain top-level keys; ``performance`` is the supported one
-    today. The returned object includes the freshly-resolved hardware
-    profile so the UI can update its display in a single round trip.
-    """
-    try:
-        from sparc.config.hardware_profile import detect_profile, reset_profile_cache
-        from sparc.config.user_preferences import (
-            load_preferences,
-            save_preferences,
-            update_performance_preferences,
-        )
-
-        if "performance" in body and isinstance(body["performance"], dict):
-            update_performance_preferences(body["performance"])
-        else:
-            # Generic merge — caller knows what they are doing.
-            current = load_preferences()
-            current.update(body)
-            save_preferences(current)
-            reset_profile_cache()
-
-        return {
-            "preferences": load_preferences(),
-            "effective": detect_profile().as_dict(),
-        }
-    except Exception as exc:  # pragma: no cover - defensive
-        return JSONResponse({"error": str(exc)}, status_code=500)
-
-
-@app.post("/api/hardware/validate")
-async def validate_performance_settings(body: dict[str, Any]):
-    """Validate proposed performance settings against the safe caps.
-
-    Returns ``{ ok, warnings: [...], errors: [...] }`` where warnings are
-    non-blocking (user may proceed via confirmation modal) and errors are
-    structurally invalid (negative values, unknown enum, etc.).
-    """
-    try:
-        from sparc.config.hardware_profile import (
-            VALID_PRESETS,
-            VALID_TIERS,
-            compute_safe_caps,
-            detect_raw_profile,
-        )
-
-        raw = detect_raw_profile()
-        caps = compute_safe_caps(raw)
-        warnings_out: list[dict[str, Any]] = []
-        errors_out: list[dict[str, Any]] = []
-
-        preset = body.get("preset")
-        if preset is not None and preset not in VALID_PRESETS:
-            errors_out.append({"field": "preset", "message": f"unknown preset '{preset}'"})
-
-        tier = body.get("hardware_tier_override")
-        if tier is not None and tier not in VALID_TIERS:
-            errors_out.append({"field": "hardware_tier_override", "message": f"unknown tier '{tier}'"})
-
-        for field, cap in (
-            ("max_workers", caps["max_workers"]),
-            ("outer_jobs", caps["outer_jobs"]),
-            ("inner_jobs", caps["inner_jobs"]),
-            ("batch_size", caps["batch_size"]),
-            ("nuts_thin", caps["nuts_thin"]),
-        ):
-            val = body.get(field)
-            if val is None:
-                continue
-            try:
-                n = int(val)
-            except (TypeError, ValueError):
-                errors_out.append({"field": field, "message": f"must be an integer"})
-                continue
-            if n < 1:
-                errors_out.append({"field": field, "message": "must be >= 1"})
-            elif n > cap:
-                warnings_out.append({
-                    "field": field,
-                    "value": n,
-                    "cap": cap,
-                    "message": f"{field}={n} exceeds the safe cap of {cap} for this hardware",
-                })
-
-        mem = body.get("memory_limit_gb")
-        if mem is not None:
-            try:
-                m = float(mem)
-                if m < 1.0:
-                    errors_out.append({"field": "memory_limit_gb", "message": "must be >= 1.0 GB"})
-                elif m > caps["memory_limit_gb"]:
-                    warnings_out.append({
-                        "field": "memory_limit_gb",
-                        "value": m,
-                        "cap": caps["memory_limit_gb"],
-                        "message": (
-                            f"memory_limit_gb={m:.1f} exceeds the safe cap of "
-                            f"{caps['memory_limit_gb']:.1f} GB; the OS may kill the pipeline"
-                        ),
-                    })
-            except (TypeError, ValueError):
-                errors_out.append({"field": "memory_limit_gb", "message": "must be numeric"})
-
-        return {
-            "ok": not errors_out,
-            "warnings": warnings_out,
-            "errors": errors_out,
-            "safe_caps": caps,
-        }
-    except Exception as exc:  # pragma: no cover - defensive
-        return JSONResponse({"error": str(exc)}, status_code=500)
+# (GET /api/hardware, GET+PUT /api/preferences, POST /api/hardware/validate
+# are now served by routes.api via include_router above)
 
 
 @app.get("/debug/paths")
@@ -933,128 +779,10 @@ async def export_block(req: BlockExportRequest):
 
 
 # ------------------------------------------------------------------
-# AI proxy — Anthropic key stored in OS keychain; calls never leave
-# the sidecar process.  The webview has no direct access to the key.
+# AI proxy
+# (/ai/key GET+PUT+DELETE and /ai/chat are now served by routes.ai via
+# include_router above)
 # ------------------------------------------------------------------
-
-_AI_KEYRING_SERVICE = "SPARC Labs"
-_AI_KEYRING_USERNAME = "anthropic_api_key"
-
-
-def _keyring_get() -> str | None:
-    """Return the stored key, or None if keyring is unavailable / empty."""
-    try:
-        import keyring
-        return keyring.get_password(_AI_KEYRING_SERVICE, _AI_KEYRING_USERNAME) or None
-    except Exception:
-        return None
-
-
-def _keyring_set(key: str) -> None:
-    import keyring
-    keyring.set_password(_AI_KEYRING_SERVICE, _AI_KEYRING_USERNAME, key)
-
-
-def _keyring_delete() -> None:
-    try:
-        import keyring
-        keyring.delete_password(_AI_KEYRING_SERVICE, _AI_KEYRING_USERNAME)
-    except Exception:
-        pass
-
-
-@app.get("/ai/key")
-async def ai_key_status():
-    """Return whether an Anthropic API key is stored (never returns the key itself)."""
-    stored = _keyring_get()
-    return {"configured": stored is not None}
-
-
-@app.put("/ai/key")
-async def ai_key_save(body: dict[str, Any] = Body(...)):
-    """Store an Anthropic API key in the OS keychain.
-
-    Body: ``{ "key": "sk-ant-..." }``
-    The key is validated to start with ``sk-ant-`` before being stored.
-    """
-    key = body.get("key", "").strip()
-    if not key:
-        raise HTTPException(400, "key is required")
-    if not key.startswith("sk-ant-"):
-        raise HTTPException(400, "key must start with sk-ant-")
-    try:
-        _keyring_set(key)
-    except Exception as exc:
-        raise HTTPException(500, f"Failed to store key in OS keychain: {exc}")
-    return {"status": "saved"}
-
-
-@app.delete("/ai/key")
-async def ai_key_delete():
-    """Remove the stored Anthropic API key from the OS keychain."""
-    _keyring_delete()
-    return {"status": "deleted"}
-
-
-class AiChatMessage(BaseModel):
-    role: str
-    content: str
-
-    class Config:
-        extra = "ignore"
-
-
-class AiChatRequest(BaseModel):
-    messages: list[AiChatMessage]
-    system: str = ""
-    max_tokens: int = Field(default=1024, ge=1, le=8192)
-
-    class Config:
-        extra = "ignore"
-
-
-@app.post("/ai/chat")
-async def ai_chat(req: AiChatRequest):
-    """Proxy a chat turn to the Anthropic Claude API using the key from the OS keychain.
-
-    The API key is never sent to or held by the frontend. If no key is
-    configured, returns 401 so the UI can prompt the user to add one.
-    """
-    import urllib.request
-    import urllib.error
-    import json as _json
-
-    api_key = _keyring_get()
-    if not api_key:
-        raise HTTPException(401, "No Anthropic API key configured. Add one in Settings.")
-
-    payload = {
-        "model": "claude-sonnet-4-6-20250514",
-        "max_tokens": req.max_tokens,
-        "messages": [{"role": m.role, "content": m.content} for m in req.messages],
-    }
-    if req.system:
-        payload["system"] = req.system
-
-    data = _json.dumps(payload).encode()
-    request = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
-        data=data,
-        headers={
-            "Content-Type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=60) as resp:
-            return _json.loads(resp.read())
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode(errors="replace")
-        raise HTTPException(exc.code, f"Anthropic API error: {body}")
-    except Exception as exc:
-        raise HTTPException(502, f"Failed to reach Anthropic API: {exc}")
 
 
 # ------------------------------------------------------------------
@@ -2135,74 +1863,10 @@ async def get_runs_diff(
 
 
 # ------------------------------------------------------------------
-# Reproducibility (Phase 17)
+# Reproducibility
+# (/reproduce/provenance, /reproduce/freeze, /reproduce/load,
+# /reproduce/verify are now served by routes.reproduce via include_router)
 # ------------------------------------------------------------------
-
-@app.get("/reproduce/provenance")
-async def get_provenance(run_dir: str = Query(...)):
-    """Return ``run_provenance.json`` for the given run directory (or 404)."""
-    from sparc.registry.provenance import load_provenance, load_frozen_config
-    p = load_provenance(run_dir)
-    if p is None:
-        raise HTTPException(404, f"No run_provenance.json under {run_dir}")
-    cfg = load_frozen_config(run_dir)
-    return {"provenance": p, "frozen_config_present": cfg is not None}
-
-
-@app.post("/reproduce/freeze")
-async def post_reproduce_freeze():
-    """Freeze the *current* project: write run_provenance.json + frozen_config.json
-    to the active output_dir.
-    """
-    from sparc.registry.provenance import freeze_run
-    if state.project_config is None:
-        raise HTTPException(400, "No project loaded")
-    try:
-        from sparc.run.pipeline_paths import PipelinePaths
-        paths = PipelinePaths.from_config(state.project_config)
-        out = paths.output_dir
-    except Exception as exc:
-        raise HTTPException(500, f"Cannot resolve output_dir: {exc}")
-    repo_root = Path(__file__).resolve().parents[2]
-    p = freeze_run(out, state.project_config, repo_root=repo_root)
-    return {"path": str(p), "output_dir": str(out)}
-
-
-@app.post("/reproduce/load")
-async def post_reproduce_load(payload: dict = Body(...)):
-    """Replace the active project_config with the frozen config from a run dir.
-
-    The client should then trigger ``/run/stream`` as usual to actually
-    execute the pipeline. After it completes, call ``/reproduce/verify``
-    to compare provenance against the original run.
-    """
-    from sparc.registry.provenance import load_frozen_config, load_provenance
-    run_dir = payload.get("run_dir")
-    if not run_dir:
-        raise HTTPException(400, "run_dir required")
-    cfg = load_frozen_config(run_dir)
-    if cfg is None:
-        raise HTTPException(404, f"frozen_config.json not found in {run_dir}")
-    state.project_config = cfg
-    prov = load_provenance(run_dir)
-    return {
-        "loaded": True,
-        "config_hash": (prov or {}).get("config_hash"),
-        "data": (prov or {}).get("data"),
-        "warnings": ["Re-run via /run/stream to reproduce. Then call /reproduce/verify."],
-    }
-
-
-@app.get("/reproduce/verify")
-async def get_reproduce_verify(
-    run_a: str = Query(...),
-    run_b: str = Query(...),
-):
-    """Compare provenance between two runs (config/data/git/env)."""
-    from sparc.registry.provenance import compare_runs, verify_sidecars
-    cmp = compare_runs(run_a, run_b)
-    cmp["sidecars_b"] = verify_sidecars(run_b)
-    return cmp
 
 
 # ------------------------------------------------------------------
@@ -5407,21 +5071,7 @@ async def budget_optimize(req: BudgetOptimizeRequest):
     return out
 
 
-# ------------------------------------------------------------------
-# Physics defaults endpoint
-# ------------------------------------------------------------------
-
-@app.get("/physics/defaults")
-async def physics_defaults():
-    """Return default literature-based physics priors."""
-    try:
-        from sparc.interventions.physics_priors import PhysicsPriors
-        pp = PhysicsPriors()
-        return {
-            k: c.to_dict() for k, c in pp.coefficients.items()
-        }
-    except Exception as e:
-        raise HTTPException(500, str(e))
+# (/physics/defaults is now served by routes.physics via include_router above)
 
 
 # ------------------------------------------------------------------
@@ -7249,121 +6899,6 @@ async def collect_build(body: dict = Body(...)):
 
 # ---------------------------------------------------------------------------
 # SpatialANP inference endpoints
+# (/inference/zero-shot and /inference/few-shot are now served by
+# routes.inference via include_router above)
 # ---------------------------------------------------------------------------
-
-class _ZeroShotRequest(BaseModel):
-    """Coordinates and optional band matrix for zero-shot inference.
-
-    coords: list of [lat, lon] pairs, shape (N, 2)
-    bands:  optional list of feature vectors, shape (N, F).  When omitted,
-            only coordinate features are used.
-    """
-    coords: list[list[float]]
-    bands: Optional[list[list[float]]] = None
-
-
-class _FewShotRequest(BaseModel):
-    """Zero-shot request augmented with calibration observations.
-
-    calibration_coords: shape (K, 2)
-    calibration_X:      shape (K, F) — must match bands width if supplied
-    calibration_y:      shape (K,)   — observed response values
-    """
-    coords: list[list[float]]
-    bands: Optional[list[list[float]]] = None
-    calibration_coords: list[list[float]]
-    calibration_X: list[list[float]]
-    calibration_y: list[float]
-
-
-@app.post("/inference/zero-shot")
-async def inference_zero_shot(body: _ZeroShotRequest):
-    """Run SpatialANP zero-shot inference over a target grid.
-
-    Returns per-point ``mean`` and ``uncertainty`` estimates.
-    No calibration data is required; the model uses its learned prior.
-    """
-    import numpy as _np
-    from sparc.inference.zero_shot import zero_shot_predict
-    from sparc.data.satellite_types import SatelliteFeatureSet
-
-    coords = _np.asarray(body.coords, dtype=_np.float32)
-    if coords.ndim != 2 or coords.shape[1] != 2:
-        raise HTTPException(400, "coords must be a list of [lat, lon] pairs")
-
-    if body.bands is not None:
-        bands = _np.asarray(body.bands, dtype=_np.float32)
-        if bands.shape[0] != coords.shape[0]:
-            raise HTTPException(400, "bands row count must match coords row count")
-    else:
-        bands = None
-
-    # SatelliteFeatureSet.bands expects dict[SatelliteBand, ndarray]; we use
-    # coords-only here and pass the raw band matrix via calibration_X if needed.
-    features = SatelliteFeatureSet(coords=coords)
-
-    try:
-        result = zero_shot_predict(features=features)
-    except Exception as exc:
-        raise HTTPException(500, f"Zero-shot inference failed: {exc}") from exc
-
-    return {
-        "mean": result.y_pred.tolist(),
-        "uncertainty": result.uncertainty.tolist(),
-        "n_points": int(coords.shape[0]),
-        "method": "SpatialANP-zero-shot",
-    }
-
-
-@app.post("/inference/few-shot")
-async def inference_few_shot(body: _FewShotRequest):
-    """Run SpatialANP few-shot inference calibrated on known observations.
-
-    Returns per-point ``mean`` and ``uncertainty`` estimates together with
-    the number of calibration points used.
-    """
-    import numpy as _np
-    from sparc.inference.few_shot import few_shot_predict
-    from sparc.data.satellite_types import SatelliteFeatureSet
-
-    coords = _np.asarray(body.coords, dtype=_np.float32)
-    if coords.ndim != 2 or coords.shape[1] != 2:
-        raise HTTPException(400, "coords must be a list of [lat, lon] pairs")
-
-    if body.bands is not None:
-        bands = _np.asarray(body.bands, dtype=_np.float32)
-        if bands.shape[0] != coords.shape[0]:
-            raise HTTPException(400, "bands row count must match coords row count")
-    else:
-        bands = None
-
-    calib_coords = _np.asarray(body.calibration_coords, dtype=_np.float32)
-    calib_X = _np.asarray(body.calibration_X, dtype=_np.float32)
-    calib_y = _np.asarray(body.calibration_y, dtype=_np.float32)
-
-    if calib_coords.ndim != 2 or calib_coords.shape[1] != 2:
-        raise HTTPException(400, "calibration_coords must be a list of [lat, lon] pairs")
-    if calib_X.shape[0] != calib_coords.shape[0] or calib_y.shape[0] != calib_coords.shape[0]:
-        raise HTTPException(400, "calibration_coords, calibration_X, and calibration_y must have the same number of rows")
-
-    # SatelliteFeatureSet.bands expects dict[SatelliteBand, ndarray]; use coords-only
-    # and pass raw feature matrix via calibration_X parameter instead.
-    features = SatelliteFeatureSet(coords=coords)
-
-    try:
-        result = few_shot_predict(
-            features=features,
-            calibration_X=calib_X,
-            calibration_y=calib_y,
-            calibration_coords=calib_coords,
-        )
-    except Exception as exc:
-        raise HTTPException(500, f"Few-shot inference failed: {exc}") from exc
-
-    return {
-        "mean": result.y_pred.tolist(),
-        "uncertainty": result.uncertainty.tolist(),
-        "n_calibration": result.n_calibration,
-        "n_points": int(coords.shape[0]),
-        "method": "SpatialANP-few-shot",
-    }
