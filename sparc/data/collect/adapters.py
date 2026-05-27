@@ -307,6 +307,45 @@ class Sentinel2Adapter:
 
 
 # ---------------------------------------------------------------------------
+# Terrain (DEM) adapter
+# ---------------------------------------------------------------------------
+
+_ALL_TERRAIN_COLS = ["elevation_m", "slope_deg", "aspect_deg", "distance_water_m"]
+_TERRAIN_SOURCE = "USGS 3DEP / Copernicus GLO-30"
+
+
+class TerrainAdapter:
+    """Wraps :func:`sparc.data.collect.dem.download_dem` and
+    :func:`sparc.data.collect.dem.assign_dem_to_grid`.
+
+    Accepts an optional ``enabled`` list of column names in *params*; all
+    four terrain variables are collected by default.
+    """
+
+    @property
+    def group_name(self) -> str:
+        return "terrain"
+
+    def fetch(self, fishnet: object, bbox: tuple, params: dict) -> FetchResult:
+        from .dem import download_dem, assign_dem_to_grid
+        enabled = params.get("enabled") or _ALL_TERRAIN_COLS
+        try:
+            dem_data, warnings = download_dem(bbox)
+            if warnings:
+                import logging as _logging
+                _logging.getLogger(__name__).warning("dem warnings: %s", "; ".join(warnings))
+            gdf = assign_dem_to_grid(fishnet, dem_data)
+        except Exception as exc:
+            return FetchResult(gdf=fishnet, error=str(exc))
+        cols = {col: _TERRAIN_SOURCE for col in enabled if col in gdf.columns}  # type: ignore[operator]
+        return FetchResult(
+            gdf=gdf,
+            columns=cols,
+            coverage={col: _coverage(gdf, col) for col in cols},
+        )
+
+
+# ---------------------------------------------------------------------------
 # Registration — importing this module populates SOURCE_REGISTRY
 # ---------------------------------------------------------------------------
 
@@ -318,6 +357,7 @@ def _register_all() -> None:
     SOURCE_REGISTRY.register(BuildingsAdapter())
     SOURCE_REGISTRY.register(EquityAdapter())
     SOURCE_REGISTRY.register(Sentinel2Adapter())
+    SOURCE_REGISTRY.register(TerrainAdapter())
 
 
 _register_all()
