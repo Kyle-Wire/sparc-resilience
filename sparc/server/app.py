@@ -28,7 +28,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.responses import JSONResponse
 from sparc.server.stream import stream_stage
 from sparc.server.artifact_reader import read_batch, prewarm_ids
-from sparc.server.deps import state, get_open_store  # single shared instance; do NOT create another below
+from sparc.server.deps import state, session, get_open_store  # single shared instance; do NOT create another below
 
 # ------------------------------------------------------------------
 # Application & shared state
@@ -36,7 +36,7 @@ from sparc.server.deps import state, get_open_store  # single shared instance; d
 
 app = FastAPI(
     title="SPARC Server",
-    version="1.0.0",
+    version="1.0.1",
     docs_url="/docs",
 )
 
@@ -575,6 +575,9 @@ async def upload_data(file: UploadFile = File(...)):
     if suffix in (".csv", ".parquet"):
         _set_data_path(str(dest))
         _load_data_into_state(state.project_config)
+        # Sync into session so routes/data.py endpoints see the new data.
+        session.data = state.data
+        session.data_summary = state.data_summary
         result.update({
             "columns": list(state.data.columns) if state.data is not None else [],
             "row_count": len(state.data) if state.data is not None else 0,
@@ -722,6 +725,9 @@ def _load_data_into_state(config: dict) -> None:
         # Invalidate the geojson cache so the next request re-reprojects with fresh data.
         state.result_cache.invalidate_stage("data_geojson")
         _compute_summary(state)
+        # Keep session in sync so routes/data.py endpoints see the loaded data.
+        session.data = state.data
+        session.data_summary = state.data_summary
     except Exception as exc:
         print(f"Warning: data pre-load failed: {exc}")
 

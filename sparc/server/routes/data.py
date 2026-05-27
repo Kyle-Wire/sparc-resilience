@@ -403,6 +403,9 @@ async def select_data_version(version: int = Query(..., description="Version num
 
     _set_data_path(str(path))
     _load_data_into_state(state.project_config)
+    # _load_data_into_state already syncs session.data; keep explicit sync as a safety net.
+    session.data = state.data
+    session.data_summary = state.data_summary
 
     return {
         "status": "selected",
@@ -459,6 +462,9 @@ async def preprocess_data():
         if final_df is not None:
             state.data = final_df
             state.data_summary = None
+            # Sync into session so routes/data.py endpoints see the preprocessed data.
+            session.data = final_df
+            session.data_summary = None
 
     return StreamingResponse(_generate(), media_type="text/event-stream")
 

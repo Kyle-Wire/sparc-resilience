@@ -130,6 +130,9 @@ async def load_project(path: str = Query(..., description="Absolute path to proj
             data_path = config.get("data", {}).get("file_path", "")
             if data_path and os.path.exists(data_path):
                 await asyncio.to_thread(_load_data_into_state, config)
+                # Sync loaded data into session so routes/data.py endpoints see it.
+                session.data = state.data
+                session.data_summary = state.data_summary
             _start_prewarm()
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: background project load failed: {exc}")
