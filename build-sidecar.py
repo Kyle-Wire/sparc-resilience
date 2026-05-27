@@ -26,6 +26,7 @@ HIDDEN_IMPORTS = [
     "sparc.server.app",
     "sparc.server.state",
     "sparc.server.stream",
+    "sparc.server.event_classifier",
     "sparc.config",
     "sparc.config.config",
     "sparc.data",

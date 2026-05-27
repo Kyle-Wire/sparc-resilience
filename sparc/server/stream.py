@@ -40,6 +40,10 @@ class _EventCapture(io.TextIOBase):
 
     # Keep _STAGE_RE only for the legacy ``_handle_dag_gate`` path below
     _STAGE_RE = re.compile(r"Stage\s+(\d+)", re.IGNORECASE)
+    # Defensive: keep _FOLD_RE as class attr so any code that accesses
+    # self._FOLD_RE (e.g. from an older installed package) doesn't raise
+    # AttributeError; actual classification is done via classify() below.
+    _FOLD_RE = re.compile(r"[Ff]old\s+(\d+)")
 
     def __init__(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
         self._queue = queue
