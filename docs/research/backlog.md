@@ -1,7 +1,7 @@
 # SPARC — Research Backlog
 
 **Maintained by:** synthesis agent
-**Last updated:** 2026-07-01 (5 architecture friction candidates C1–C5 implemented via TDD; 2 new backlog items from self-grill: arch-1 FoldTrainer redundancy elimination, arch-2 zero_shot registry)
+**Last updated:** 2026-07-02 (D1: extract preprocessing pipeline to sparc/data/preprocessing.py; 5 architecture friction candidates C1–C5 implemented via TDD; 2 new backlog items from self-grill: arch-1 FoldTrainer redundancy elimination, arch-2 zero_shot registry)
 
 Items are ranked by impact/effort. Improvement agent picks the top `[ ]` item with complexity **low** or **medium**.
 
@@ -18,6 +18,11 @@ Complexity: **low** = < 1 hour of focused edits | **medium** = half-day | **high
 ---
 
 ## Queue
+
+### Route Decomposition (from 2026-07-02 session)
+
+- [x] **D1 Extract preprocessing pipeline to sparc/data/preprocessing.py** — complexity: **medium** — *Done 2026-07-02: Created `sparc/data/preprocessing.py` with `run_pipeline(df, config, _result_ref)` sync generator yielding 9 step-result dicts (8 pipeline steps + `__done__` sentinel). Replaced 128-line inline `_generate()` in `sparc/server/routes/data.py` with a 35-line thin async wrapper that calls `run_pipeline`, formats SSE, and updates `state.data`. Scaler save, parquet cache, versioning moved into `run_pipeline` guarded by `config["paths"]["project_root"]`. 4 new tests in `TestPreprocessingPipeline`; 242 passing (1 intentional failure).*
+  - Files: `sparc/data/preprocessing.py` (new), `sparc/server/routes/data.py` (refactored), `tests/test_server_route_modules.py` (appended `TestPreprocessingPipeline`)
 
 ### Architecture Improvements (from 2026-07-01 TDD session — self-grill verified)
 

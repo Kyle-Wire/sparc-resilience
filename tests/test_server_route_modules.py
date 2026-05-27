@@ -1473,6 +1473,54 @@ class TestArtifactsRouter:
         from sparc.server.routes.artifacts import router
         assert router is not None
 
+
+# ---------------------------------------------------------------------------
+# D1 — preprocessing pipeline extraction
+# ---------------------------------------------------------------------------
+
+class TestPreprocessingPipeline:
+    def test_run_pipeline_importable(self):
+        from sparc.data.preprocessing import run_pipeline  # noqa: F401
+        assert callable(run_pipeline)
+
+    def test_run_pipeline_returns_step_dicts(self):
+        import pandas as pd
+        from sparc.data.preprocessing import run_pipeline
+
+        df = pd.DataFrame({
+            "x": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "y": [10.0, 20.0, 30.0, 40.0, 50.0],
+            "target": [0.1, 0.2, 0.3, 0.4, 0.5],
+        })
+        results = list(run_pipeline(df, config={}))
+        assert len(results) > 0
+        for r in results:
+            assert "step" in r
+            assert "rows" in r
+            assert "sha" in r
+
+    def test_run_pipeline_yields_known_steps(self):
+        import pandas as pd
+        from sparc.data.preprocessing import run_pipeline
+
+        df = pd.DataFrame({
+            "x": [1.0, 2.0, 3.0],
+            "y": [4.0, 5.0, 6.0],
+        })
+        step_names = [r["step"] for r in run_pipeline(df, config={})]
+        assert "Ingest CSV" in step_names
+        assert "__done__" in step_names
+
+    def test_run_pipeline_final_result_has_done_flag(self):
+        import pandas as pd
+        from sparc.data.preprocessing import run_pipeline
+
+        df = pd.DataFrame({"a": [1, 2, 3]})
+        results = list(run_pipeline(df, config={}))
+        last = results[-1]
+        assert last["step"] == "__done__"
+        assert last.get("done") is True
+
     def test_is_api_router(self):
         from fastapi import APIRouter
         from sparc.server.routes.artifacts import router
