@@ -667,41 +667,9 @@ async def _on_shutdown() -> None:
 # served by routes.data via include_router above)
 # ------------------------------------------------------------------
 
-@app.get("/data/geojson")
-async def data_geojson(variable: str | None = Query(None)):
-    """Return raw data as GeoJSON, optionally filtered to a single variable for map coloring."""
-    if state.data is None:
-        raise HTTPException(400, "No data loaded.")
+# (GET /data/geojson is now served by routes.data via include_router above)
 
-    df = state.data
-    if not hasattr(df, "geometry") or df.geometry is None:
-        raise HTTPException(400, "Loaded data has no geometry column.")
-
-    # Cache key scoped to the variable (or "__all__" for the default subset).
-    cache_key = variable or "__all__"
-    cached = state.result_cache.get("data_geojson", cache_key)
-    if cached is not None:
-        return cached
-
-    if variable:
-        if variable not in df.columns:
-            raise HTTPException(400, f"Column '{variable}' not found.")
-        subset = df[["geometry", variable]].copy()
-    else:
-        # Return just geometry + first 5 numeric cols to keep payload small
-        numeric_cols = list(df.select_dtypes(include="number").columns[:5])
-        subset = df[["geometry"] + numeric_cols].copy()
-
-    # Reproject to WGS84 for web display (deck.gl / maplibre expect EPSG:4326)
-    if hasattr(subset, "crs") and subset.crs is not None and str(subset.crs) != "EPSG:4326":
-        subset = subset.to_crs(epsg=4326)
-
-    result = subset.__geo_interface__
-    state.result_cache.set("data_geojson", cache_key, result)
-    return result
-
-
-# Extensions accepted by /data/upload.  Anything else is rejected before
+# Extensions accepted by /data/upload.Anything else is rejected before
 # touching the filesystem.
 _UPLOAD_ALLOWED_SUFFIXES: frozenset[str] = frozenset({
     ".csv", ".parquet",                      # tabular data
@@ -800,57 +768,7 @@ async def upload_data(file: UploadFile = File(...)):
     return result
 
 
-@app.get("/data/files")
-async def list_data_files():
-    """List CSV/Parquet files inside the project's working directory."""
-    if state.project_config is None:
-        raise HTTPException(400, "Load a project first.")
-
-    project_dir = Path(state.project_config["paths"]["project_root"])
-    files: list[dict] = []
-    for ext in ("*.csv", "*.parquet", "*.CSV", "*.tif", "*.tiff", "*.shp", "*.gpkg", "*.geojson"):
-        for p in project_dir.rglob(ext):
-            try:
-                rel = p.relative_to(project_dir)
-            except ValueError:
-                rel = p
-            files.append({
-                "name": p.name,
-                "path": str(p),
-                "relative": str(rel),
-                "size": p.stat().st_size,
-            })
-    files.sort(key=lambda f: f["relative"])
-    return {"project_dir": str(project_dir), "files": files}
-
-
-class _DataSelectBody(BaseModel):
-    path: str
-
-
-@app.post("/data/select")
-async def select_data_file(body: _DataSelectBody):
-    """Select an existing data file (must already be on disk)."""
-    path = body.path
-    if state.project_config is None:
-        raise HTTPException(400, "Load a project first.")
-
-    resolved = _resolve_safe(path)
-    if not resolved.exists():
-        raise HTTPException(404, f"File not found: {resolved}")
-    if resolved.suffix.lower() not in (".csv", ".parquet"):
-        raise HTTPException(400, "Only .csv and .parquet files are supported.")
-
-    # Update config to point to this file and persist to disk
-    _set_data_path(str(resolved))
-    _load_data_into_state(state.project_config)
-
-    return {
-        "status": "selected",
-        "path": str(resolved),
-        "columns": list(state.data.columns) if state.data is not None else [],
-        "row_count": len(state.data) if state.data is not None else 0,
-    }
+# (GET /data/files, POST /data/select are now served by routes.data via include_router above)
 
 
 # ------------------------------------------------------------------
