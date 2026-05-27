@@ -28,6 +28,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Sync Python package version from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          sed -i '' "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" pyproject.toml
+          sed -i '' "s/__version__ = \"[^\"]*\"/__version__ = \"${VERSION}\"/" sparc/__init__.py
+          echo "Python package versions set to ${VERSION}"
+
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -101,6 +111,27 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Sync desktop app version from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          python3 - "$VERSION" << 'PYEOF'
+          import sys, re, pathlib
+          version = sys.argv[1]
+          updates = [
+            ('sparc-desktop/src-tauri/tauri.conf.json', r'("version"\s*:\s*)"[^"]+"', 1, 0),
+            ('sparc-desktop/package.json',               r'("version"\s*:\s*)"[^"]+"', 1, 0),
+            ('sparc-desktop/src-tauri/Cargo.toml',       r'^(version\s*=\s*)"[^"]+"', 1, re.MULTILINE),
+          ]
+          for path, pat, n, flags in updates:
+            p = pathlib.Path(path)
+            p.write_text(re.sub(pat, rf'\g<1>"{version}"', p.read_text(), count=n, flags=flags))
+          print(f'Desktop version set to {version}')
+          PYEOF
 
       # ── Download + stage uv binary as Tauri externalBin sidecar ────────────
       # Tauri expects externalBin sidecars at:
