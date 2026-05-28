@@ -49,10 +49,11 @@
     "crs": {
       "type": "object",
       "description": "Coordinate reference systems",
-      "required": ["input", "projected"],
+      "required": ["input"],
       "properties": {
-        "input":     {"type": "string", "description": "EPSG code of the input data CRS (e.g. EPSG:4326)"},
-        "projected": {"type": "string", "description": "EPSG code of the target projected CRS for spatial analysis"}
+        "input":     {"type": "string", "description": "EPSG code of the data CRS (e.g. EPSG:4326)"},
+        "working":   {"type": "string", "description": "EPSG code of the working projected CRS for spatial analysis"},
+        "projected": {"type": "string", "description": "Legacy alias for working (deprecated; prefer working)"}
       }
     },
 

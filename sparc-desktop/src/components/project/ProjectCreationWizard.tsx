@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Card, Btn, Tag } from "@/components/ui/DesignSystem";
-import { listTemplates, createProject, detectCrs } from "@/lib/api";
+import { listTemplates, createProject } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import { getWorkspaceDir, joinPath } from "@/lib/workspacePrefs";
 import type { TemplateInfo } from "@/lib/types";
@@ -36,32 +36,23 @@ interface WizardState {
   template: string;
   author: string;
   responseUnits: string;
-  // Spatial
-  inputEpsg: string;
-  workingEpsg: string;
-  detectFilePath: string;
+  // Spatial — single CRS (what the data is in)
+  crs: string;
   // Output
   outputDir: string;
 }
 
-const COMMON_INPUT_CRS = [
-  { code: "EPSG:4326", label: "WGS 84 (lat/lon)", note: "Most CSVs with lat/lon" },
-  { code: "EPSG:3857", label: "Web Mercator", note: "Web maps, tiles" },
-  { code: "EPSG:32617", label: "UTM 17N", note: "Already projected" },
-  { code: "EPSG:32618", label: "UTM 18N", note: "Already projected" },
-  { code: "EPSG:5070", label: "Conus Albers", note: "Already projected" },
-  { code: "EPSG:3035", label: "LAEA Europe", note: "Already projected" },
-];
-
-const COMMON_WORKING_CRS = [
-  { code: "EPSG:32617", label: "UTM 17N (NAD83)", note: "Eastern US (Providence, NYC)" },
-  { code: "EPSG:32618", label: "UTM 18N (NAD83)", note: "US East Coast" },
-  { code: "EPSG:32614", label: "UTM 14N (NAD83)", note: "Central US" },
-  { code: "EPSG:32611", label: "UTM 11N (NAD83)", note: "Western US" },
-  { code: "EPSG:5070", label: "NAD83 / Conus Albers", note: "Continental US analysis" },
-  { code: "EPSG:3035", label: "ETRS89 / LAEA Europe", note: "Pan-European analysis" },
-  { code: "EPSG:3438", label: "RI State Plane (ft)", note: "Rhode Island (feet)" },
-  { code: "EPSG:26917", label: "UTM 17N (m)", note: "Eastern US / metric" },
+/** Common CRS presets — ordered by likelihood for typical SPARC projects. */
+const COMMON_CRS = [
+  { code: "EPSG:4326",  label: "WGS 84",               note: "lat/lon · most CSVs & GPS data" },
+  { code: "EPSG:3438",  label: "RI State Plane (ft)",   note: "Rhode Island · feet" },
+  { code: "EPSG:26919", label: "UTM 19N (NAD83)",       note: "New England · meters" },
+  { code: "EPSG:26918", label: "UTM 18N (NAD83)",       note: "Mid-Atlantic · meters" },
+  { code: "EPSG:26917", label: "UTM 17N (NAD83)",       note: "Great Lakes · meters" },
+  { code: "EPSG:32618", label: "UTM 18N (WGS84)",       note: "US East Coast · meters" },
+  { code: "EPSG:3857",  label: "Web Mercator",          note: "Tiles / web maps" },
+  { code: "EPSG:5070",  label: "Conus Albers",          note: "Continental US · meters" },
+  { code: "EPSG:3035",  label: "LAEA Europe",           note: "Pan-European · meters" },
 ];
 
 const TEMPLATE_BLURBS: Record<string, string> = {
@@ -88,8 +79,6 @@ export default function ProjectCreationWizard({
   const { notify } = useNotification();
   const [step, setStep] = useState<Step>(0);
   const [creating, setCreating] = useState(false);
-  const [detectingCrs, setDetectingCrs] = useState(false);
-  const [detectedUnitLabel, setDetectedUnitLabel] = useState<string | null>(null);
   const [discoveredTemplates, setDiscoveredTemplates] = useState(templates);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
   const [templateError, setTemplateError] = useState(false);
@@ -132,9 +121,7 @@ export default function ProjectCreationWizard({
     template: "blank",
     author: "",
     responseUnits: "",
-    inputEpsg: "EPSG:4326",
-    workingEpsg: "EPSG:32618",
-    detectFilePath: "",
+    crs: "EPSG:4326",
     outputDir: "",
   });
 
@@ -156,7 +143,7 @@ export default function ProjectCreationWizard({
 
   const stepValid = useMemo(() => {
     if (step === 0) return s.name.trim().length > 0 && s.template.length > 0;
-    if (step === 1) return s.inputEpsg.length > 0 && s.workingEpsg.length > 0;
+    if (step === 1) return s.crs.length > 0;
     if (step === 2) return s.outputDir.trim().length > 0;
     return false;
   }, [step, s]);
@@ -171,46 +158,6 @@ export default function ProjectCreationWizard({
     }
   };
 
-  const handlePickDataFile = async () => {
-    try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const picked = await open({
-        directory: false,
-        multiple: false,
-        filters: [{ name: "Spatial data", extensions: ["csv", "gpkg", "shp", "geojson", "tif", "tiff"] }],
-      });
-      if (typeof picked === "string") set("detectFilePath", picked);
-    } catch {
-      // Browser fallback — let the user type it
-    }
-  };
-
-  const handleDetectCrs = useCallback(async () => {
-    if (!s.detectFilePath.trim()) {
-      notify("info", "Enter or browse to a data file path first");
-      return;
-    }
-    setDetectingCrs(true);
-    try {
-      const result = await detectCrs(s.detectFilePath.trim());
-      if (result.detected_input_crs) {
-        set("inputEpsg", result.detected_input_crs);
-      }
-      if (result.working_crs) {
-        set("workingEpsg", result.working_crs);
-      }
-      if (result.unit_label) {
-        setDetectedUnitLabel(result.unit_label);
-      }
-      const src = result.source === "derived_utm" ? " (UTM derived from bounds)" : result.source === "detected" ? " (read from file)" : "";
-      notify("success", `CRS detected${src}: input=${result.detected_input_crs ?? "n/a"}, working=${result.working_crs ?? "n/a"} [${result.unit_label ?? "?"}]`);
-    } catch {
-      notify("error", "CRS detection failed — enter codes manually or check the sidecar is running");
-    } finally {
-      setDetectingCrs(false);
-    }
-  }, [s.detectFilePath, notify]);
-
   const handleCreate = async () => {
     setCreating(true);
     try {
@@ -224,8 +171,8 @@ export default function ProjectCreationWizard({
           response_units: s.responseUnits,
         },
         crs: {
-          input: s.inputEpsg,
-          working: s.workingEpsg,
+          input: s.crs,
+          working: s.crs,
         },
       });
       await onCreated(res.project_yml, { name: s.name, template: s.template });
@@ -406,85 +353,16 @@ export default function ProjectCreationWizard({
       {step === 1 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.55 }}>
-            Pick the CRS your input data is in (usually <code>EPSG:4326</code> for lat/lon CSVs)
-            and the working CRS used for all spatial analysis. You can change these later on the CRS page.
-          </div>
-
-          {/* Auto-detect CRS from file */}
-          <div
-            style={{
-              padding: 12,
-              background: "#f5f5fd",
-              border: "1px solid #d0d0f0",
-              borderRadius: 6,
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
-            }}
-          >
-            <div className="mono" style={{ fontSize: 9.5, color: "#5555aa", letterSpacing: "0.1em", textTransform: "uppercase" }}>
-              Auto-detect CRS from data file (optional)
-            </div>
-            <div style={{ display: "flex", gap: 6 }}>
-              <TextInput
-                value={s.detectFilePath}
-                onChange={(v) => set("detectFilePath", v)}
-                placeholder="Path to .csv / .gpkg / .shp / .tif …"
-              />
-              <button
-                onClick={handlePickDataFile}
-                style={{
-                  border: "1px solid var(--line)", background: "#fff", color: "var(--ink-2)",
-                  borderRadius: 4, padding: "4px 10px", fontSize: 11, fontWeight: 600,
-                  cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
-                }}
-              >
-                Browse…
-              </button>
-              <button
-                onClick={handleDetectCrs}
-                disabled={detectingCrs || !s.detectFilePath.trim()}
-                style={{
-                  border: "none", background: detectingCrs ? "var(--muted)" : "#5555aa",
-                  color: "#fff", borderRadius: 4, padding: "4px 12px",
-                  fontSize: 11, fontWeight: 600, cursor: detectingCrs ? "not-allowed" : "pointer",
-                  fontFamily: "inherit", whiteSpace: "nowrap",
-                }}
-              >
-                {detectingCrs ? "Detecting…" : "Detect CRS"}
-              </button>
-            </div>
-            {detectedUnitLabel && (
-              <div style={{
-                display: "inline-flex", alignItems: "center", gap: 5,
-                padding: "3px 8px", borderRadius: 3,
-                background: detectedUnitLabel === "meters" ? "#f0faf0" : "#fff8ef",
-                border: `1px solid ${detectedUnitLabel === "meters" ? "#b2dfb2" : "var(--amber)"}`,
-                fontSize: 11, fontWeight: 600, width: "fit-content",
-                color: detectedUnitLabel === "meters" ? "#2d7a2d" : "var(--amber)",
-              }}>
-                {detectedUnitLabel === "meters" ? "📏 Working in meters" : "📐 Working in feet"}
-              </div>
-            )}
-            <div style={{ fontSize: 10.5, color: "var(--muted)", lineHeight: 1.4 }}>
-              Spatial files (.gpkg, .shp, .tif) auto-read their embedded CRS.
-              For CSV files, the sidecar will suggest a UTM zone if it can read sample coordinates.
-            </div>
+            Select the coordinate system your data is already in. SPARC will use this CRS
+            for all spatial operations — no reprojection needed. You can change it later on the CRS page.
           </div>
 
           <CrsPicker
-            label="Input CRS"
-            hint="Coordinate system of your raw data file"
-            presets={COMMON_INPUT_CRS}
-            value={s.inputEpsg}
-            onChange={(v) => set("inputEpsg", v)}
-          />
-          <CrsPicker
-            label="Working CRS"
-            hint="Used for distances, neighborhoods, fishnet cells. Pick a meter-based (or feet-based) CRS local to your study area."
-            presets={COMMON_WORKING_CRS}
-            value={s.workingEpsg}
-            onChange={(v) => set("workingEpsg", v)}
+            label="Project CRS"
+            hint="The coordinate system your data file uses. Check your data source or GIS software if unsure."
+            presets={COMMON_CRS}
+            value={s.crs}
+            onChange={(v) => set("crs", v)}
           />
         </div>
       )}
@@ -510,23 +388,7 @@ export default function ProjectCreationWizard({
             <Review label="Template" value={<Tag color="var(--amber)">{s.template}</Tag>} />
             <Review label="Author" value={s.author || "—"} />
             <Review label="Response units" value={s.responseUnits || "—"} />
-            <Review label="Input CRS" value={s.inputEpsg} />
-            <Review
-              label="Working CRS"
-              value={
-                <span>
-                  {s.workingEpsg}
-                  {detectedUnitLabel && (
-                    <span style={{
-                      marginLeft: 6, fontSize: 10, fontWeight: 600,
-                      color: detectedUnitLabel === "meters" ? "#2d7a2d" : "var(--amber)",
-                    }}>
-                      [{detectedUnitLabel}]
-                    </span>
-                  )}
-                </span>
-              }
-            />
+            <Review label="CRS" value={s.crs} />
             {s.description && (
               <div style={{ gridColumn: "1 / -1" }}>
                 <Review label="Description" value={s.description} />

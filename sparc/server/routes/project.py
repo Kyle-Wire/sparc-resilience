@@ -209,8 +209,6 @@ async def create_project(payload: dict[str, Any] = Body(...)):
         raise HTTPException(400, "identity.name is required")
     if not crs.get("input"):
         raise HTTPException(400, "crs.input is required")
-    if not (crs.get("working") or crs.get("projected")):
-        raise HTTPException(400, "crs.working is required")
 
     source = _TEMPLATES_DIR / template
     if not source.exists():
@@ -237,7 +235,7 @@ async def create_project(payload: dict[str, Any] = Body(...)):
 
     cfg_crs = cfg.get("crs") or {}
     cfg_crs["input"] = crs["input"]
-    # Accept new 'working' key; fall back to legacy 'projected' from callers
+    # working defaults to input if caller didn't provide it
     cfg_crs["working"] = crs.get("working") or crs.get("projected") or crs["input"]
     # Remove old key if present so we don't write stale legacy keys
     cfg_crs.pop("projected", None)
