@@ -68,11 +68,13 @@ class MemoryEfficientSpatialAnalyzer:
         Create spatially representative sample using grid-based approach
         """
         print("Creating spatially representative sample...")
-        
+
         # Create spatial grid
         n_cells_side = int(np.sqrt(target_size))
-        
+
         # Get bounds
+        if len(self.coords) == 0:
+            raise ValueError("coords is empty — cannot create spatial sample")
         x_min, y_min = self.coords.min(axis=0)
         x_max, y_max = self.coords.max(axis=0)
         

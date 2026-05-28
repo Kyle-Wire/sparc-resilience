@@ -180,6 +180,8 @@ class SpatialCATEEstimator:
                 else:
                     self._kernel_field_applied[treatment] = False
                 # Normalize coordinates to [0, 1] for numeric stability
+                if len(coords) == 0:
+                    raise ValueError("coords is empty — cannot build spatial feature matrix")
                 coords_min = coords.min(axis=0)
                 coords_range = coords.max(axis=0) - coords_min
                 coords_range[coords_range == 0] = 1.0
@@ -469,6 +471,8 @@ class SpatialCATEEstimator:
 
         treatments = treatments or list(self.cate_estimates.keys())
         coords = np.asarray(coords, dtype=np.float64)
+        if len(coords) == 0:
+            raise ValueError("coords is empty — cannot fit GP CATE surfaces")
 
         # Normalise coords to [0, 1] per dimension
         coords_min = coords.min(axis=0)
@@ -642,6 +646,8 @@ class BayesianSpatialCATE:
 
     @staticmethod
     def _normalize_coords(coords: np.ndarray) -> np.ndarray:
+        if len(coords) == 0:
+            raise ValueError("coords is empty — cannot normalize coordinates")
         cmin = coords.min(axis=0)
         crange = coords.max(axis=0) - cmin
         crange[crange == 0] = 1.0
@@ -683,6 +689,11 @@ class BayesianSpatialCATE:
             if confounders else np.zeros((len(data), 1))
         )
         coords = data[avail_coords].values.astype(np.float64)
+        if len(coords) == 0:
+            raise ValueError(
+                "BayesianSpatialCATE.estimate received empty data — "
+                "check that data loading and CRS projection succeeded."
+            )
 
         # Phase 7: warp coords + derive RFF lengthscale from kernel field
         predictor = None
@@ -1435,6 +1446,8 @@ def nuts_conditioned_cate_surface(
     if treatment_values.ndim == 1:
         treatment_values = treatment_values.reshape(-1, 1)
 
+    if len(coords) == 0:
+        raise ValueError("coords is empty — cannot compute posterior CATE surfaces")
     coords_min = coords.min(axis=0)
     coords_range = coords.max(axis=0) - coords_min
     coords_range[coords_range == 0] = 1.0

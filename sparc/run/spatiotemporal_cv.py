@@ -118,6 +118,8 @@ def spatiotemporal_block_splits(
     n_times = len(unique_times)
 
     # --- Spatial blocks ---
+    if n == 0:
+        raise ValueError("coords is empty — cannot create spatiotemporal folds")
     bounds = np.array([coords.min(axis=0), coords.max(axis=0)])
     if block_size is None:
         extent = np.linalg.norm(bounds[1] - bounds[0])

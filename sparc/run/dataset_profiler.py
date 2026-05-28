@@ -100,6 +100,12 @@ class DatasetProfiler:
         coords = self.data[self.coord_cols].values.astype(np.float64)
         n_samples = len(coords)
 
+        if n_samples == 0:
+            raise ValueError(
+                "DatasetProfiler received an empty dataset. "
+                "Ensure data loading and CRS projection succeeded before profiling."
+            )
+
         # ── Spatial extent (bounding-box diagonal) ───────────────────
         x_min, y_min = coords.min(axis=0)
         x_max, y_max = coords.max(axis=0)

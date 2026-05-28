@@ -125,6 +125,11 @@ class CorrelogramSpatialAnalyzer:
         
         # Auto-detect max_distance from data extent if not set
         if self.max_distance is None:
+            if len(coords) == 0:
+                raise ValueError(
+                    f"Cannot compute correlogram for '{variable_name}': "
+                    "coordinate array is empty."
+                )
             bounds = np.array([coords.min(axis=0), coords.max(axis=0)])
             self.max_distance = float(np.linalg.norm(bounds[1] - bounds[0]) * 0.3)
             print(f"  Auto-detected max_distance: {self.max_distance:.0f}")
@@ -588,7 +593,14 @@ def main(ctx, *, fast_mode=False):
         target_crs=config['crs']['target_projected'],
         output_dir=config.get('output', {}).get('base_dir'),
     )
-    
+
+    if data is None or len(data) == 0:
+        raise ValueError(
+            "No data available after loading — the dataset is empty. "
+            "Verify your CSV path and that 'crs.input' in project.yml matches "
+            "the actual coordinate system of your source data."
+        )
+
     # Filter features to only those available in data
     available_features = data.columns.tolist()
     selected_features = [f for f in selected_features if f in available_features]

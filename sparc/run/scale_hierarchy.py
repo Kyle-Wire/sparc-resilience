@@ -57,6 +57,8 @@ def grid_scatter(
         raise ValueError("coords and values must have the same length")
     if coords.shape[1] != 2:
         raise ValueError("coords must be (N, 2)")
+    if coords.shape[0] == 0:
+        raise ValueError("coords is empty — cannot rasterize zero points")
     xmin, ymin = coords.min(axis=0)
     xmax, ymax = coords.max(axis=0)
     # Avoid degenerate grids

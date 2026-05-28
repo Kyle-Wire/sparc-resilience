@@ -140,6 +140,8 @@ def estimate_spatial_autocorrelation_range(coords, y, max_distance=None, n_bins=
     from esda.moran import Moran
 
     if max_distance is None:
+        if len(coords) == 0:
+            raise ValueError("coords is empty — cannot estimate spatial autocorrelation range")
         bounds = np.array([coords.min(axis=0), coords.max(axis=0)])
         max_distance = np.linalg.norm(bounds[1] - bounds[0]) * 0.3
     print("Estimating spatial autocorrelation range...")
@@ -201,6 +203,8 @@ def spatial_kfold_enhanced(X, y, coords, n_splits=5, block_size=None, buffer_siz
     n_samples = len(X)
 
     if block_size is None:
+        if len(coords) == 0:
+            raise ValueError("coords is empty — cannot determine block size")
         print("Determining optimal block size from target variable autocorrelation...")
         try:
             from sparc.run.spatial_autocorr_comprehensive import SpatialAutocorrelationAnalyzer
@@ -227,6 +231,8 @@ def spatial_kfold_enhanced(X, y, coords, n_splits=5, block_size=None, buffer_siz
         print(f"Final block size: {block_size:.0f}m")
 
     if method == 'block':
+        if len(coords) == 0:
+            raise ValueError("coords is empty — cannot create spatial folds")
         bounds = np.array([coords.min(axis=0), coords.max(axis=0)])
         n_blocks_x = int(np.ceil((bounds[1, 0] - bounds[0, 0]) / block_size))
         n_blocks_y = int(np.ceil((bounds[1, 1] - bounds[0, 1]) / block_size))

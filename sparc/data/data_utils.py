@@ -64,6 +64,11 @@ def save_prepared_geodataframe(gdf: gpd.GeoDataFrame, output_dir: str,
     -------
     Path to the written parquet file.
     """
+    if len(gdf) == 0:
+        raise ValueError(
+            "Refusing to cache an empty GeoDataFrame. "
+            "Fix the CRS mismatch or data issue before re-running."
+        )
     out = _cache_path(output_dir, raw_data_path, predictor_cols)
     out.parent.mkdir(parents=True, exist_ok=True)
     gdf.to_parquet(out, index=False)
@@ -255,6 +260,20 @@ def load_and_preprocess_data(
     if n_inf > 0:
         print(f"    Dropped {n_inf} rows with non-finite projected coordinates after CRS transform")
         gdf = gdf[finite_mask].copy()
+
+    if gdf.empty:
+        raise ValueError(
+            f"All {original_rows} rows were dropped because their projected coordinates "
+            f"are non-finite (inf/NaN) after reprojecting from '{initial_crs}' to "
+            f"'{target_crs}'.\n"
+            "This almost always means the 'crs.input' setting in your project.yml does "
+            "not match the actual coordinate system of the source CSV.\n"
+            f"  • Your CSV has coordinates like X={data[coords_cols[0]].iloc[0]:.2f}, "
+            f"Y={data[coords_cols[1]].iloc[0]:.2f}\n"
+            f"  • Your project says they are in {initial_crs}\n"
+            "Tip: Rhode Island State Plane (feet) data uses EPSG:3438.  "
+            "WGS84 lat/lon data uses EPSG:4326."
+        )
 
     print(f"    Data preparation complete. Final shape: {gdf.shape}")
 
