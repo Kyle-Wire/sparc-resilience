@@ -43,7 +43,7 @@ identifier_col = data_cfg.get("identifier_column", "OBJECTID")
 coord_columns = data_cfg.get("coord_columns", ["POINT_X", "POINT_Y"])
 crs_cfg = config.get("crs", {})
 initial_crs = crs_cfg.get("input", "EPSG:3438")
-target_crs = crs_cfg.get("projected", "EPSG:26919")
+target_crs = crs_cfg.get("working") or crs_cfg.get("projected", "EPSG:26919")
 
 gdf = load_and_preprocess_data(
     raw_data_path=raw_csv,

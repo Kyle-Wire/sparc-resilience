@@ -103,6 +103,75 @@ def get_model_defaults() -> Dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# CRS resolution helpers — keep resolution logic out of from_dict()
+# ---------------------------------------------------------------------------
+
+def _resolve_initial_crs(crs_section: dict) -> str:
+    """Extract input CRS, accepting new 'input' key and legacy 'initial' key."""
+    import warnings
+    value = crs_section.get("input") or crs_section.get("initial")
+    if crs_section.get("initial") and not crs_section.get("input"):
+        warnings.warn(
+            "project.yml: 'crs.initial' is deprecated. "
+            "Rename it to 'crs.input' to silence this warning.",
+            DeprecationWarning,
+            stacklevel=4,
+        )
+    if not value:
+        raise ValueError(
+            "crs.input is required in project.yml but was not found.\n"
+            "Add:\n\n  crs:\n    input: \"EPSG:NNNN\"\n"
+        )
+    return str(value)
+
+
+def _resolve_target_crs(crs_section: dict) -> str:
+    """Extract working/projected CRS with backward compat for old key names.
+
+    Lookup order: ``working`` → ``projected`` → ``target_projected`` →
+    derive via :func:`~sparc.config.crs_resolver.resolve_working_crs`.
+    """
+    import warnings
+    value = (
+        crs_section.get("working")
+        or crs_section.get("projected")
+        or crs_section.get("target_projected")
+    )
+    if crs_section.get("projected") and not crs_section.get("working"):
+        warnings.warn(
+            "project.yml: 'crs.projected' is deprecated. "
+            "Rename it to 'crs.working' to silence this warning.",
+            DeprecationWarning,
+            stacklevel=4,
+        )
+    elif crs_section.get("target_projected") and not crs_section.get("working"):
+        warnings.warn(
+            "project.yml: 'crs.target_projected' is deprecated. "
+            "Rename it to 'crs.working' to silence this warning.",
+            DeprecationWarning,
+            stacklevel=4,
+        )
+    if not value:
+        # Derive from input CRS using the resolver.
+        try:
+            from sparc.config.crs_resolver import resolve_working_crs
+            input_crs = crs_section.get("input") or crs_section.get("initial", "EPSG:4326")
+            value = resolve_working_crs(str(input_crs))
+        except Exception:
+            value = "EPSG:32601"  # safe UTM placeholder
+    return str(value)
+
+
+def _resolve_crs_unit(crs_section: dict) -> str:
+    """Return 'm' or 'ft' for the working CRS of this project."""
+    try:
+        from sparc.config.crs_resolver import crs_unit
+        return crs_unit(_resolve_target_crs(crs_section))
+    except Exception:
+        return "m"
+
+
 @dataclass
 class StageConfig:
     """Typed representation of every project.yml key consumed by Stage 2.
@@ -124,6 +193,7 @@ class StageConfig:
     # ── CRS settings ─────────────────────────────────────────────────────────
     initial_crs: str
     target_crs: str
+    crs_unit: str   # 'm' or 'ft' — derived from target_crs at construction
 
     # ── spatial CV settings ──────────────────────────────────────────────────
     block_size: Optional[float]
@@ -227,8 +297,9 @@ class StageConfig:
             identifier=variables_section.get("identifier", "id"),
             coordinates=list(variables_section.get("coordinates", ["lon", "lat"])),
             features=list(predictors_section.get("base_model", [])),
-            initial_crs=str(crs_section.get("initial", "EPSG:4326")),
-            target_crs=str(crs_section.get("target_projected", "EPSG:26919")),
+            initial_crs=_resolve_initial_crs(crs_section),
+            target_crs=_resolve_target_crs(crs_section),
+            crs_unit=_resolve_crs_unit(crs_section),
             block_size=block_size,
             buffer_size=buffer_size,
             buffer_size_auto=bool(spatial_cv_sec.get("buffer_size_auto", False)),
@@ -249,7 +320,7 @@ class StageConfig:
                 pipeline_section.get("use_dataset_profiler", False)
             ),
             benchmark_metrics_enabled=bool(benchmark_sec.get("enabled", False)),
-            output_crs=str(crs_section.get("target_projected", "EPSG:26919")),
+            output_crs=_resolve_target_crs(crs_section),
             continual_registry_path=continual_sec.get("registry_path"),
             continual_prior_city=continual_sec.get("prior_city"),
             stage2_dir_name=stage_dirs.get("stage_2", "Stage_2_Spatial_CV"),

@@ -8,6 +8,7 @@ Currently migrated:
   - /project/validate
   - /project/init
   - /project/create
+  - /project/detect-crs  (POST — detect and resolve CRS for a data file)
   - /project/templates
   - /project/config  (GET)
   - /project/config  (PUT)
@@ -206,8 +207,10 @@ async def create_project(payload: dict[str, Any] = Body(...)):
         raise HTTPException(400, "output directory is required")
     if not identity.get("name"):
         raise HTTPException(400, "identity.name is required")
-    if not crs.get("input") or not crs.get("projected"):
-        raise HTTPException(400, "crs.input and crs.projected are required")
+    if not crs.get("input"):
+        raise HTTPException(400, "crs.input is required")
+    if not (crs.get("working") or crs.get("projected")):
+        raise HTTPException(400, "crs.working is required")
 
     source = _TEMPLATES_DIR / template
     if not source.exists():
@@ -234,7 +237,11 @@ async def create_project(payload: dict[str, Any] = Body(...)):
 
     cfg_crs = cfg.get("crs") or {}
     cfg_crs["input"] = crs["input"]
-    cfg_crs["projected"] = crs["projected"]
+    # Accept new 'working' key; fall back to legacy 'projected' from callers
+    cfg_crs["working"] = crs.get("working") or crs.get("projected") or crs["input"]
+    # Remove old key if present so we don't write stale legacy keys
+    cfg_crs.pop("projected", None)
+    cfg_crs.pop("target_projected", None)
     cfg["crs"] = cfg_crs
 
     with open(yml_path, "w", encoding="utf-8") as fh:
@@ -246,6 +253,83 @@ async def create_project(payload: dict[str, Any] = Body(...)):
         "path": str(dest),
         "project_yml": str(yml_path),
     }
+
+
+
+@router.post("/project/detect-crs")
+async def detect_project_crs(payload: dict[str, Any] = Body(...)):
+    """Detect and resolve the CRS for a data file.
+
+    Request body
+    ------------
+    ``file_path`` : str
+        Path to the data file. For spatial files (shapefile, GeoPackage,
+        GeoTIFF, GeoJSON) the CRS is read from embedded metadata.  For CSV
+        files the CRS cannot be auto-detected and ``detected_input_crs``
+        will be ``null``.
+    ``sample_xy`` : [lon, lat] (optional)
+        A representative WGS-84 lon/lat coordinate from the dataset.  Used
+        to select the best UTM zone when the input CRS is geographic.
+        Required for accurate working-CRS selection when ``file_path`` is a
+        CSV.
+
+    Response
+    --------
+    ``detected_input_crs`` : str | null
+        Detected input CRS from the file, or ``null`` if unavailable.
+    ``working_crs`` : str
+        Resolved projected CRS for spatial operations.
+    ``unit`` : "m" | "ft"
+        Linear unit of the working CRS.
+    ``unit_label`` : "meters" | "feet"
+        Human-readable unit label (for UI placeholder text).
+    ``source`` : "detected" | "derived_utm" | "same_as_input"
+        How the working CRS was determined.
+    """
+    from sparc.config.crs_resolver import (
+        detect_crs_from_file,
+        resolve_working_crs,
+        crs_unit,
+        crs_unit_label,
+    )
+
+    file_path = payload.get("file_path")
+    sample_xy = payload.get("sample_xy")
+
+    if not file_path:
+        raise HTTPException(400, "file_path is required")
+
+    # Detect input CRS from file metadata (None for CSV)
+    detected = detect_crs_from_file(str(file_path))
+
+    input_crs = detected  # may be None for CSV
+
+    # Resolve working CRS
+    if input_crs:
+        sample_tuple = (
+            (float(sample_xy[0]), float(sample_xy[1]))
+            if sample_xy and len(sample_xy) == 2
+            else None
+        )
+        working = resolve_working_crs(input_crs, sample_xy=sample_tuple)
+        source = "same_as_input" if working == input_crs else "derived_utm"
+    elif sample_xy and len(sample_xy) == 2:
+        from sparc.config.crs_resolver import best_utm_zone
+        working = best_utm_zone(float(sample_xy[0]), float(sample_xy[1]))
+        source = "derived_utm"
+    else:
+        # No file CRS, no sample coords — cannot resolve
+        working = None
+        source = "unknown"
+
+    result: dict[str, Any] = {
+        "detected_input_crs": detected,
+        "working_crs": working,
+        "unit": crs_unit(working) if working else None,
+        "unit_label": crs_unit_label(working) if working else None,
+        "source": source,
+    }
+    return result
 
 
 @router.get("/project/templates")

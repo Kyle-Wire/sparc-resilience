@@ -35,17 +35,25 @@ from .sources import FetchResult
 # Fishnet builder (module-level so tests can patch it)
 # ---------------------------------------------------------------------------
 
-def _build_fishnet(br: BoundaryResult) -> object:
+def _build_fishnet(br: BoundaryResult, working_crs: str = "EPSG:3857") -> object:
     """Construct the 30m analysis grid from a resolved boundary.
 
-    Returns a GeoDataFrame in EPSG:3857 with ``cell_id``, ``cell_x``,
+    Returns a GeoDataFrame in *working_crs* with ``cell_id``, ``cell_x``,
     ``cell_y``, and ``geometry`` columns.
+
+    Parameters
+    ----------
+    br : BoundaryResult
+        Resolved study-area boundary.
+    working_crs : str
+        Projected CRS for the fishnet.  Defaults to ``"EPSG:3857"``
+        (Web Mercator) for backward compatibility.
     """
     from sparc.data.processing import create_fishnet, clip_to_boundary
 
-    boundary_proj = br.gdf.to_crs("EPSG:3857")  # type: ignore[union-attr]
+    boundary_proj = br.gdf.to_crs(working_crs)  # type: ignore[union-attr]
     bounds = tuple(boundary_proj.total_bounds)
-    fishnet = create_fishnet(bounds, resolution=30.0, crs="EPSG:3857")
+    fishnet = create_fishnet(bounds, resolution=30.0, crs=working_crs)
     fishnet = clip_to_boundary(fishnet, boundary_proj)
     fishnet["cell_id"] = range(len(fishnet))
     fishnet["cell_x"] = fishnet.geometry.centroid.x
@@ -86,21 +94,32 @@ class CollectSession:
     fishnet: Optional[object] = field(default=None, repr=False)
     manifest: VariableManifest = field(default_factory=VariableManifest.for_uhi)
     anchor_dates: list = field(default_factory=list)
+    working_crs: str = "EPSG:3857"  # Project projected CRS for fishnet and spatial ops
 
     # ------------------------------------------------------------------
     # Mutation interface
     # ------------------------------------------------------------------
 
-    def set_boundary(self, br: BoundaryResult) -> None:
+    def set_boundary(self, br: BoundaryResult, working_crs: Optional[str] = None) -> None:
         """Store the boundary and (re-)build the 30m analysis fishnet.
 
         Calling this a second time replaces the existing fishnet — all
         previously fetched columns are discarded.
+
+        Parameters
+        ----------
+        br : BoundaryResult
+            Resolved study-area boundary.
+        working_crs : str, optional
+            Override the session working CRS.  If not provided, uses the
+            session's existing ``working_crs`` (default ``"EPSG:3857"``).
         """
+        if working_crs is not None:
+            self.working_crs = working_crs
         self.boundary = br
         self.boundary_source = br.source
         self.boundary_place_name = br.place_name
-        self.fishnet = _build_fishnet(br)
+        self.fishnet = _build_fishnet(br, working_crs=self.working_crs)
         self.anchor_dates = []
 
     def apply_fetch(self, result: FetchResult) -> None:
@@ -136,6 +155,7 @@ class CollectSession:
             "boundary_source": self.boundary_source,
             "boundary": self.boundary_source,  # backward-compat alias
             "boundary_place_name": self.boundary_place_name,
+            "working_crs": self.working_crs,
             "anchor_dates": [d.isoformat() if isinstance(d, date) else str(d)
                              for d in self.anchor_dates],
         }
@@ -161,6 +181,7 @@ class CollectSession:
         session.boundary_place_name = data.get("boundary_place_name")
         session.fishnet = None
         session.manifest = VariableManifest.for_uhi()
+        session.working_crs = data.get("working_crs", "EPSG:3857")
         session.anchor_dates = [
             date.fromisoformat(d) for d in data.get("anchor_dates", [])
         ]

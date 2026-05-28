@@ -71,18 +71,90 @@ class VariablesConfig:
 
 @dataclass
 class CRSConfig:
-    """CRS block from ``project.yml``."""
+    """CRS block from ``project.yml``.
 
-    initial: str
-    target_projected: str
+    Fields
+    ------
+    input : str
+        The CRS of the input data (formerly ``initial``).  Must be an EPSG
+        code string (e.g. ``"EPSG:4326"`` or ``"EPSG:3438"``).
+    working : str
+        The projected CRS used for all spatial operations (formerly
+        ``target_projected`` / ``projected``).  Always projected —
+        never geographic.
+    """
+
+    input: str
+    working: str
 
     @classmethod
     def _from_raw(cls, cfg: dict) -> "CRSConfig":
+        import warnings
         crs = cfg.get("crs", {}) or {}
-        return cls(
-            initial=crs.get("initial", "EPSG:4326"),
-            target_projected=crs.get("target_projected", "EPSG:32618"),
+
+        # ── input CRS (new key: 'input'; old key: 'initial') ──────────────
+        input_crs = crs.get("input") or crs.get("initial")
+        if not input_crs:
+            raise ValueError(
+                "crs.input is required in project.yml but was not found.\n"
+                "Add the following block to your project.yml:\n\n"
+                "  crs:\n"
+                "    input: \"EPSG:NNNN\"   # CRS of your input data\n"
+            )
+
+        # ── working CRS (new key: 'working'; old keys: 'projected' / 'target_projected') ──
+        working_crs = (
+            crs.get("working")
+            or crs.get("projected")
+            or crs.get("target_projected")
         )
+        if crs.get("projected") and not crs.get("working"):
+            warnings.warn(
+                "project.yml: 'crs.projected' is deprecated. "
+                "Rename it to 'crs.working' to silence this warning.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+        elif crs.get("target_projected") and not crs.get("working"):
+            warnings.warn(
+                "project.yml: 'crs.target_projected' is deprecated. "
+                "Rename it to 'crs.working' to silence this warning.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+
+        if not working_crs:
+            # Derive from input CRS via the resolver.
+            from sparc.config.crs_resolver import resolve_working_crs
+            working_crs = resolve_working_crs(input_crs)
+
+        return cls(
+            input=str(input_crs),
+            working=str(working_crs),
+        )
+
+    # ── backward-compat aliases ──────────────────────────────────────────
+    @property
+    def initial(self) -> str:
+        """Deprecated alias for :attr:`input`."""
+        import warnings
+        warnings.warn(
+            "CRSConfig.initial is deprecated; use CRSConfig.input instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.input
+
+    @property
+    def target_projected(self) -> str:
+        """Deprecated alias for :attr:`working`."""
+        import warnings
+        warnings.warn(
+            "CRSConfig.target_projected is deprecated; use CRSConfig.working instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.working
 
 
 @dataclass

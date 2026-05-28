@@ -406,8 +406,11 @@ def _join_buildings_to_fishnet(
     import geopandas as gpd
 
     fishnet = fishnet_gdf.copy()  # type: ignore[union-attr]
-    fish_proj = fishnet.to_crs("EPSG:3857")  # type: ignore[union-attr]
-    bld_proj = buildings_gdf.to_crs("EPSG:3857")  # type: ignore[union-attr]
+    # Project both GDFs to the same CRS as the fishnet (the project working CRS).
+    # The fishnet is already in the correct projected CRS; buildings may be in any CRS.
+    working_crs = fishnet.crs  # type: ignore[union-attr]
+    fish_proj = fishnet  # already in working projected CRS
+    bld_proj = buildings_gdf.to_crs(working_crs)  # type: ignore[union-attr]
 
     # Spatial join — each building to the fishnet cell it falls within
     joined = gpd.sjoin(bld_proj, fish_proj, how="left", predicate="intersects")

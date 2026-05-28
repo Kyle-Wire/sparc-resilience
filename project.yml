@@ -45,9 +45,24 @@ data:
 # ---------------------------------------------------------------------------
 # Coordinate Reference Systems
 # ---------------------------------------------------------------------------
+# crs.input   — The CRS your data is in. For CSV files this must be set manually
+#               (CSVs carry no embedded CRS). For spatial files (shapefile, GeoTIFF,
+#               GeoPackage) SPARC can detect this automatically at project creation.
+#
+# crs.working — The projected CRS used for ALL spatial operations: block sizes,
+#               buffers, fishnet grids, GWR bandwidth, and parquet output.
+#               Must be projected (never geographic/degrees).
+#               • If your data is in feet, working CRS may also be in feet —
+#                 block_size and buffer values will then be in feet.
+#               • If omitted, SPARC will auto-select the best UTM zone for
+#                 geographic (lon/lat) input data.
+#
+# Legacy keys 'projected' and 'target_projected' are still accepted but
+# will emit deprecation warnings. Migrate to 'working'.
+# ---------------------------------------------------------------------------
 crs:
-  input: "EPSG:3438"          # Rhode Island State Plane (NAD83, feet)
-  projected: "EPSG:26919"     # NAD83 / UTM zone 19N (meters) — used for all spatial ops
+  input: "EPSG:3438"            # Rhode Island State Plane (NAD83, feet)
+  working: "EPSG:26919"         # NAD83 / UTM zone 19N (meters) — used for all spatial ops
 
 # ---------------------------------------------------------------------------
 # Predictor Variables

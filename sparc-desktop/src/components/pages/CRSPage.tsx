@@ -24,7 +24,8 @@ function utmEpsgFromLonLat(lon: number, lat: number): number {
 
 export default function CRSPage() {
   const [inputEpsg, setInputEpsg] = useState("4326");
-  const [projectedEpsg, setProjectedEpsg] = useState("3438");
+  const [workingEpsg, setWorkingEpsg] = useState("3438");
+  const [unitLabel, setUnitLabel] = useState<string | null>(null);
   const [distortionResult, setDistortionResult] = useState<DistortionResult | null>(null);
   const [distortionLoading, setDistortionLoading] = useState(false);
   const [summary, setSummary] = useState<DataSummary | null>(null);
@@ -36,7 +37,9 @@ export default function CRSPage() {
       .then((config) => {
         const crs = config.crs ?? {};
         if (crs.input) setInputEpsg(String(crs.input ?? "4326").replace("EPSG:", ""));
-        if (crs.projected) setProjectedEpsg(String(crs.projected ?? "3438").replace("EPSG:", ""));
+        // Prefer new 'working' key; fall back to legacy 'projected'
+        const wpEpsg = crs.working ?? crs.projected;
+        if (wpEpsg) setWorkingEpsg(String(wpEpsg).replace("EPSG:", ""));
       })
       .catch(() => {});
 
@@ -50,6 +53,16 @@ export default function CRSPage() {
       })
       .catch(() => {});
   }, []);
+
+  // Derive unit label from working EPSG via detect-crs endpoint whenever it changes
+  useEffect(() => {
+    if (!workingEpsg) return;
+    const derivedLabel =
+      workingEpsg === "3438" || workingEpsg.startsWith("26772") || workingEpsg.startsWith("26773")
+        ? "feet"
+        : "meters";
+    setUnitLabel(derivedLabel);
+  }, [workingEpsg]);
 
   /**
    * Suggest a UTM zone matching the data centroid (or bbox center).
@@ -68,33 +81,31 @@ export default function CRSPage() {
       return;
     }
     const epsg = utmEpsgFromLonLat(centerLon, centerLat);
-    setProjectedEpsg(String(epsg));
+    setWorkingEpsg(String(epsg));
     notify("success", `Suggested EPSG:${epsg} for UTM zone at ${centerLon.toFixed(2)}°, ${centerLat.toFixed(2)}°`);
   }, [summary, notify]);
 
   const handleCheckDistortion = useCallback(async () => {
-    if (!projectedEpsg) { notify("error", "Projected EPSG is required"); return; }
+    if (!workingEpsg) { notify("error", "Working EPSG is required"); return; }
     setDistortionLoading(true);
     try {
-      const result = await checkCrsDistortion(inputEpsg, projectedEpsg);
+      const result = await checkCrsDistortion(inputEpsg, workingEpsg);
       setDistortionResult(result);
     } catch {
       notify("error", "Could not compute distortion — check EPSG codes");
     } finally {
       setDistortionLoading(false);
     }
-  }, [inputEpsg, projectedEpsg, notify]);
+  }, [inputEpsg, workingEpsg, notify]);
 
-  // Draw reprojection preview using real data
-  // (Replaced by SpatialMap below; kept the load wiring above.)
   useEffect(() => {
     // no-op: preview now lives in <SpatialMap />
-  }, [inputEpsg, projectedEpsg, summary]);
+  }, [inputEpsg, workingEpsg, summary]);
 
   const handleSaveCRS = async () => {
     try {
       await saveConfig({
-        crs: { input: `EPSG:${inputEpsg}`, projected: `EPSG:${projectedEpsg}` },
+        crs: { input: `EPSG:${inputEpsg}`, working: `EPSG:${workingEpsg}` },
       });
       notify("success", "CRS settings saved");
     } catch {
@@ -112,7 +123,8 @@ export default function CRSPage() {
 
       <StatGrid>
         <Stat label="Input EPSG" value={inputEpsg} tint="var(--ink)" />
-        <Stat label="Projected EPSG" value={projectedEpsg} tint="var(--crimson)" />
+        <Stat label="Working EPSG" value={workingEpsg} tint="var(--crimson)" />
+        <Stat label="Working Units" value={unitLabel ?? "—"} tint="var(--purple)" />
         <Stat
           label="Area Distortion"
           value={distortionResult ? `${distortionResult.area_distortion_pct.toFixed(3)}%` : "—"}
@@ -151,17 +163,17 @@ export default function CRSPage() {
           </div>
         </Card>
 
-        <Card title="Projected CRS" subtitle={`EPSG:${projectedEpsg}${distortionResult ? ` · ${distortionResult.projected_crs_name}` : ""}`}>
+        <Card title="Working CRS" subtitle={`EPSG:${workingEpsg}${distortionResult ? ` · ${distortionResult.projected_crs_name}` : ""}${unitLabel ? ` · ${unitLabel}` : ""}`}>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <div>
               <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>
-                EPSG Code (projected CRS)
+                EPSG Code (projected working CRS)
               </div>
               <div style={{ display: "flex", gap: 6 }}>
                 <input
                   type="text"
-                  value={projectedEpsg}
-                  onChange={(e) => setProjectedEpsg(e.target.value)}
+                  value={workingEpsg}
+                  onChange={(e) => setWorkingEpsg(e.target.value)}
                   className="mono"
                   style={{
                     border: "1px solid var(--line)",
@@ -188,8 +200,22 @@ export default function CRSPage() {
                 </button>
               </div>
             </div>
+            {unitLabel && (
+              <div style={{
+                display: "inline-flex", alignItems: "center", gap: 5,
+                padding: "3px 8px", borderRadius: 3,
+                background: unitLabel === "meters" ? "#f0faf0" : "#fff8ef",
+                border: `1px solid ${unitLabel === "meters" ? "#b2dfb2" : "var(--amber)"}`,
+                fontSize: 11, fontWeight: 600,
+                color: unitLabel === "meters" ? "#2d7a2d" : "var(--amber)",
+                width: "fit-content",
+              }}>
+                {unitLabel === "meters" ? "📏 meters" : "📐 feet"}
+              </div>
+            )}
             <div style={{ fontSize: 11.5, color: "var(--muted)", lineHeight: 1.6 }}>
               Choose a local projected CRS (State Plane, UTM, etc.) matching your study area for accurate distance/area calculations.
+              Block sizes and buffer distances will use <strong>{unitLabel ?? "the working CRS units"}</strong>.
             </div>
           </div>
         </Card>
@@ -253,7 +279,7 @@ export default function CRSPage() {
                 </div>
                 <KeyVal label="Linear scale k" value={distortionResult.k_mean.toFixed(6)} />
                 <KeyVal label="Input CRS" value={distortionResult.input_crs_name} />
-                <KeyVal label="Projected CRS" value={distortionResult.projected_crs_name} />
+                <KeyVal label="Working CRS" value={distortionResult.projected_crs_name} />
                 <div style={{ padding: "8px 10px", background: distortionResult.assessment === "acceptable" ? "#f0faf0" : "#fff5f0", borderRadius: 6, fontSize: 12 }}>
                   {distortionResult.assessment === "acceptable"
                     ? "✓ Distortion within acceptable range for spatial analysis"

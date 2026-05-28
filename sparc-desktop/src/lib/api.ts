@@ -136,12 +136,29 @@ export interface CreateProjectPayload {
   };
   crs: {
     input: string;
-    projected: string;
+    /** Preferred key: projected working CRS (metric/feet, never geographic). */
+    working: string;
   };
 }
 
 export const createProject = (payload: CreateProjectPayload) =>
   post<InitResponse>("/project/create", payload);
+
+export interface DetectCrsResponse {
+  detected_input_crs: string | null;
+  working_crs: string | null;
+  unit: "m" | "ft" | "deg" | null;
+  unit_label: "meters" | "feet" | "degrees" | null;
+  source: "detected" | "derived_utm" | "same_as_input" | "unknown";
+}
+
+/**
+ * Ask the sidecar to detect the CRS embedded in a spatial file and resolve
+ * an appropriate projected working CRS.  For CSV files, `detected_input_crs`
+ * will be null; provide `sample_xy` to get a UTM suggestion.
+ */
+export const detectCrs = (file_path: string, sample_xy?: [number, number]) =>
+  post<DetectCrsResponse>("/project/detect-crs", { file_path, sample_xy });
 
 export const listTemplates = () =>
   get<{ templates: TemplateInfo[] }>("/project/templates");

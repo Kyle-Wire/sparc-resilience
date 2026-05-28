@@ -93,6 +93,7 @@ class CollectConfig:
     capa_osf_node: Optional[str] = None   # OSF project node ID, e.g. "rk75w" for Brockton MA
     capa_osf_folder: Optional[str] = None  # Folder hint for multi-city nodes, e.g. "Boston" in tdsy7
     resolution_m: float = 30.0            # Analysis grid cell size in metres (user-defined)
+    working_crs: str = "EPSG:3857"        # Projected CRS for spatial operations; defaults to Web Mercator
 
 
 @dataclass
@@ -259,8 +260,12 @@ def run(config: CollectConfig, *, on_step: Optional[Callable[[str, bool], None]]
     # PHASE 2: Create fishnet at user-specified resolution, then assign data
     # =========================================================================
 
-    # --- 2a: Build fishnet at config.resolution_m ---
-    grid = SpatialGrid.from_boundary(config.boundary, resolution_m=config.resolution_m)
+    # --- 2a: Build fishnet at config.resolution_m in the project working CRS ---
+    grid = SpatialGrid.from_boundary(
+        config.boundary,
+        resolution_m=config.resolution_m,
+        crs=config.working_crs,
+    )
     fishnet = grid.cells_3857.copy()
     fishnet["cell_id"] = range(len(fishnet))
     fishnet["cell_x"] = fishnet.geometry.centroid.x

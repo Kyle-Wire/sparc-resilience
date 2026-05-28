@@ -363,6 +363,9 @@ export interface ProjectConfig {
   };
   crs?: {
     input?: string;
+    /** New canonical key for the projected working CRS. */
+    working?: string;
+    /** Legacy key — still accepted by the server; prefer `working`. */
     projected?: string;
   };
   predictors?: string[];

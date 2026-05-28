@@ -36,6 +36,19 @@ def _resolve_causal_block(user: dict) -> dict:
         print(f"  ⚠ project.yml: {msg}")
     return merged_causal_block(user)
 
+
+def _derive_working_crs(input_crs: str) -> str:
+    """Derive a projected working CRS from the input CRS using the resolver.
+
+    Falls back to ``"EPSG:32601"`` (UTM 1N) if pyproj is unavailable or
+    the input is unrecognised.
+    """
+    try:
+        from sparc.config.crs_resolver import resolve_working_crs
+        return resolve_working_crs(input_crs)
+    except Exception:
+        return "EPSG:32601"
+
 # ---------------------------------------------------------------------------
 # Legacy constants (preserved for backward compatibility)
 # ---------------------------------------------------------------------------
@@ -146,6 +159,27 @@ def _yaml_to_config(raw: dict, yaml_path: str) -> dict:
     models_cfg = raw.get('models', {})
     random_seed = pipeline.get('random_seed', 42)
 
+    # ── CRS resolution — supports new schema and all legacy key names ──────
+    _crs_raw = raw.get('crs', {}) or {}
+    _crs_input = (
+        _crs_raw.get('input')
+        or _crs_raw.get('initial')
+    )
+    if not _crs_input:
+        raise ValueError(
+            "crs.input is required in project.yml but was not found.\n"
+            "Add the following to your project.yml:\n\n"
+            "  crs:\n"
+            "    input: \"EPSG:NNNN\"   # CRS of your input data\n"
+            "\nRun `sparc init` to auto-populate this value."
+        )
+    _crs_working = (
+        _crs_raw.get('working')
+        or _crs_raw.get('projected')
+        or _crs_raw.get('target_projected')
+        or _derive_working_crs(_crs_input)
+    )
+
     config = {
         # ---- paths (backward-compat keys) ----
         'paths': {
@@ -183,8 +217,12 @@ def _yaml_to_config(raw: dict, yaml_path: str) -> dict:
             'coordinates': list(raw['data']['coord_columns']),
         },
         'crs': {
-            'initial': raw['crs']['input'],
-            'target_projected': raw['crs']['projected'],
+            'input': _crs_input,
+            'working': _crs_working,
+            # Legacy aliases kept for backward compat with callers that still
+            # read config['crs']['initial'] or config['crs']['target_projected']
+            'initial': _crs_input,
+            'target_projected': _crs_working,
         },
         'predictors': {
             'base_model': predictors,
@@ -394,8 +432,11 @@ def load_config(config_path: str | None = None) -> dict:
             'coordinates': COORDS_COLS
         },
         'crs': {
+            'input': INITIAL_CRS,
+            'working': TARGET_PROJECTED_CRS,
+            # Legacy aliases
             'initial': INITIAL_CRS,
-            'target_projected': TARGET_PROJECTED_CRS
+            'target_projected': TARGET_PROJECTED_CRS,
         },
         'predictors': {
             'base_model': BASE_MODEL_PREDICTORS,

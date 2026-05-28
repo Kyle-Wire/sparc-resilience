@@ -155,6 +155,81 @@ class ProjectConfig:
     def coord_columns(self) -> list:
         return list(self._raw.get("data", {}).get("coord_columns", []))
 
+    # ------------------------------------------------------------------
+    # CRS accessors (Phase 1 — CRS auto-detection)
+    # ------------------------------------------------------------------
+
+    @property
+    def crs_input(self) -> str:
+        """The CRS of the input data (e.g. ``"EPSG:3438"``).
+
+        Read from ``crs.input`` in project.yml.  Falls back to the legacy
+        ``crs.initial`` key for backward compatibility.
+
+        Raises
+        ------
+        ValueError
+            When neither ``crs.input`` nor ``crs.initial`` is present in the
+            project file.  Run ``sparc init`` to set the input CRS.
+        """
+        crs_block = self._raw.get("crs") or {}
+        value = crs_block.get("input") or crs_block.get("initial")
+        if not value:
+            raise ValueError(
+                "crs.input is required in project.yml but was not found.\n"
+                "Run `sparc init` to set the coordinate reference system for "
+                "your data, or add the following block to your project.yml:\n\n"
+                "  crs:\n"
+                "    input: \"EPSG:NNNN\"   # CRS of your input data\n"
+            )
+        return str(value)
+
+    @property
+    def crs_working(self) -> str:
+        """The projected CRS used for all spatial operations.
+
+        Resolution order:
+        1. ``crs.working`` in project.yml (explicit override)
+        2. ``crs.projected`` (legacy key — deprecated, emits a warning)
+        3. Derived automatically via :func:`~sparc.config.crs_resolver.resolve_working_crs`
+           from ``crs_input``.
+
+        The working CRS is always projected (never geographic/degrees).
+        If ``crs_input`` is geographic, the best UTM zone is auto-selected.
+        """
+        crs_block = self._raw.get("crs") or {}
+
+        explicit = crs_block.get("working")
+        if explicit:
+            return str(explicit)
+
+        legacy = crs_block.get("projected")
+        if legacy:
+            import warnings
+            warnings.warn(
+                "project.yml: 'crs.projected' is deprecated. "
+                "Rename it to 'crs.working' to silence this warning.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return str(legacy)
+
+        # Derive from input CRS using the resolver.
+        from .crs_resolver import resolve_working_crs
+        return resolve_working_crs(self.crs_input)
+
+    @property
+    def crs_unit(self) -> str:
+        """Linear unit of the working CRS: ``'m'`` (metres) or ``'ft'`` (feet)."""
+        from .crs_resolver import crs_unit
+        return crs_unit(self.crs_working)
+
+    @property
+    def crs_unit_label(self) -> str:
+        """Human-readable unit label: ``'meters'`` or ``'feet'``."""
+        from .crs_resolver import crs_unit_label
+        return crs_unit_label(self.crs_working)
+
     @property
     def causal(self) -> Dict[str, Any]:
         """Fully merged causal block (user + Wager-2025 defaults)."""
