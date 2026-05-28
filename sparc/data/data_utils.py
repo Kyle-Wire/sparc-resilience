@@ -25,8 +25,13 @@ _CACHE_FILENAME = "_sparc_prepared_data.parquet"
 def _cache_key(raw_data_path: str, predictor_cols: list | None = None) -> str:
     """Deterministic hash of the source CSV (path + mtime + size + predictors)."""
     p = Path(raw_data_path)
-    stat = p.stat()
-    token = f"{p.resolve()}|{stat.st_mtime_ns}|{stat.st_size}"
+    try:
+        stat = p.stat()
+        token = f"{p.resolve()}|{stat.st_mtime_ns}|{stat.st_size}"
+    except OSError:
+        # File doesn't exist yet; use path string only so caller can still
+        # attempt a cache lookup (which will miss) without raising early.
+        token = str(p.resolve())
     if predictor_cols:
         token += "|" + ",".join(sorted(predictor_cols))
     return hashlib.sha256(token.encode()).hexdigest()[:16]
@@ -166,15 +171,22 @@ def load_and_preprocess_data(
     print(f"--- Starting Data Loading and Preprocessing ---")
     print(f"    Loading data from: {raw_data_path}")
 
+    # Validate the data file exists before any cache operations.  Doing this
+    # first surfaces a clear FileNotFoundError rather than an opaque OS error
+    # from _cache_key's stat() call (e.g. [WinError 3] when parent dir is missing).
+    if not os.path.exists(raw_data_path):
+        raise FileNotFoundError(
+            f"Data file not found: '{raw_data_path}'\n"
+            "Check the 'data.file_path' setting in your project.yml — "
+            "paths are resolved relative to the project.yml directory."
+        )
+
     # Check for cached GeoParquet first (3-5x faster than CSV re-parse)
     if output_dir is not None:
         cached = load_cached_geodataframe(output_dir, raw_data_path, predictor_cols)
         if cached is not None:
             print(f"--- Finished Data Loading (from cache) ---")
             return cached
-
-    if not os.path.exists(raw_data_path):
-        raise FileNotFoundError(f"ERROR: Raw data file not found at {raw_data_path}.")
 
     data = _read_csv_smart(raw_data_path)
     print(f"    Successfully loaded raw data. Initial shape: {data.shape}")

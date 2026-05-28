@@ -33,11 +33,11 @@ collect:
 # Input Data
 # ---------------------------------------------------------------------------
 data:
-  file_path: "../data/brown4.csv"              # Relative to this file, or absolute
+  file_path: "brown4.csv"                      # Relative to this file, or absolute
   target_column: "AAT_z"                       # Ambient Air Temperature z-score
   identifier_column: "OBJECTID"                # Unique row ID
   coord_columns: ["POINT_X", "POINT_Y"]        # [Easting, Northing]
-  areas_of_interest_file: "../data/Areas_of_Interest.csv"  # Optional zone/district mapping
+  areas_of_interest_file: "data/Areas_of_Interest.csv"  # Optional zone/district mapping
 
 # ---------------------------------------------------------------------------
 # Coordinate Reference Systems

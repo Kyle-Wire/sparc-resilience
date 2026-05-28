@@ -435,13 +435,13 @@ def _execute_stage(
     elif stage == 1 and not skip_gwen:
         print(">>> GWEN Variable Selection")
         from sparc.run.gwen_variable_selection import main as run_gwen
-        result = run_gwen(config_path=project_path, fast_mode=fast)
+        result = run_gwen(_run_context, fast_mode=fast)
         state.store_result(1, result)
 
     elif stage == 2:
         print(">>> Enhanced Spatial CV")
-        from sparc.run.enhanced_spatial_cv import main as run_spatial_cv
-        result = run_spatial_cv(fast_mode=fast)
+        from sparc.run.cv_engine import SpatialCVEngine
+        result = SpatialCVEngine(_run_context, fast=fast).run()
         state.store_result(2, result)
 
     elif stage == 3:
@@ -471,7 +471,7 @@ def _execute_stage(
             # Block until POST /dag/approve sets the event
             state.dag_approved.wait()
 
-        result = run_causal_validation(approval_gate=_dag_approval_gate)
+        result = run_causal_validation(_run_context, approval_gate=_dag_approval_gate)
         state.store_result(3, result)
 
     elif stage == 4:
