@@ -37,8 +37,8 @@ class SpatialAutocorrelationAnalyzer:
         """
         self.coords = np.array(coords)
         
-        # Remove any NaN coordinates
-        valid_coords_mask = ~np.isnan(self.coords).any(axis=1)
+        # Remove any non-finite coordinates (NaN or ±inf); pdist requires finite data
+        valid_coords_mask = np.isfinite(self.coords).all(axis=1)
         self.coords = self.coords[valid_coords_mask]
         
         self.n_samples = len(self.coords)
@@ -670,7 +670,7 @@ def fft_correlogram(
     coords = np.asarray(coords, dtype=np.float64)
     values = np.asarray(values, dtype=np.float64)
 
-    valid = np.isfinite(values) & ~np.isnan(values)
+    valid = np.isfinite(values) & np.isfinite(coords).all(axis=1)
     coords = coords[valid]
     values = values[valid]
 
