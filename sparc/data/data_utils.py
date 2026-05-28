@@ -86,6 +86,17 @@ def load_cached_geodataframe(output_dir: str, raw_data_path: str,
         try:
             gdf = gpd.read_parquet(cache)
             print(f"    Loaded cached data ← {cache.name} ({len(gdf)} rows)")
+            # Guard against non-finite projected coords baked into an old cache
+            # before this check was added (e.g. from a stale pre-fix parquet).
+            if 'projected_X' in gdf.columns and 'projected_Y' in gdf.columns:
+                finite_mask = (
+                    np.isfinite(gdf['projected_X'].values)
+                    & np.isfinite(gdf['projected_Y'].values)
+                )
+                n_inf = int((~finite_mask).sum())
+                if n_inf > 0:
+                    print(f"    Removed {n_inf} rows with non-finite projected coords from cache")
+                    gdf = gdf[finite_mask].copy()
             return gdf
         except Exception as exc:
             print(f"    Cache read failed ({exc}), falling back to CSV")
@@ -227,7 +238,15 @@ def load_and_preprocess_data(
 
     gdf['projected_X'] = gdf.geometry.x
     gdf['projected_Y'] = gdf.geometry.y
-    
+
+    # CRS reprojection can produce ±inf for points outside the projection's valid
+    # domain.  Drop those rows now so no downstream stage sees non-finite coords.
+    finite_mask = np.isfinite(gdf['projected_X'].values) & np.isfinite(gdf['projected_Y'].values)
+    n_inf = int((~finite_mask).sum())
+    if n_inf > 0:
+        print(f"    Dropped {n_inf} rows with non-finite projected coordinates after CRS transform")
+        gdf = gdf[finite_mask].copy()
+
     print(f"    Data preparation complete. Final shape: {gdf.shape}")
 
     # Write cache for downstream stages
@@ -311,6 +330,13 @@ def load_and_preprocess_panel(config: dict) -> tuple[gpd.GeoDataFrame, list[str]
         gdf = gdf.to_crs(proj_crs)
     gdf['projected_X'] = gdf.geometry.x
     gdf['projected_Y'] = gdf.geometry.y
+
+    # Drop rows where projection produced ±inf (e.g. points outside CRS domain).
+    finite_mask = np.isfinite(gdf['projected_X'].values) & np.isfinite(gdf['projected_Y'].values)
+    n_inf = int((~finite_mask).sum())
+    if n_inf > 0:
+        print(f"    Dropped {n_inf} rows with non-finite projected coordinates after CRS transform")
+        gdf = gdf[finite_mask].copy()
 
     print(f"    Final panel GeoDataFrame: {gdf.shape}")
     return gdf, new_features
