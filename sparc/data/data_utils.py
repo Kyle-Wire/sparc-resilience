@@ -97,6 +97,15 @@ def load_cached_geodataframe(output_dir: str, raw_data_path: str,
                 if n_inf > 0:
                     print(f"    Removed {n_inf} rows with non-finite projected coords from cache")
                     gdf = gdf[finite_mask].copy()
+            # If filtering emptied the cache entirely, fall back to CSV so the
+            # data is re-projected from scratch (the cache was fully corrupt).
+            if len(gdf) == 0:
+                print(f"    Cache is empty after filtering — falling back to CSV")
+                try:
+                    cache.unlink()
+                except Exception:
+                    pass
+                return None
             return gdf
         except Exception as exc:
             print(f"    Cache read failed ({exc}), falling back to CSV")

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sparc"
-version = "1.0.5"
+version = "1.0.6"
 description = "SPARC – Spatial Analysis and Research Core pipeline for geographically weighted modeling"
 readme = "README.md"
 requires-python = ">=3.10"
