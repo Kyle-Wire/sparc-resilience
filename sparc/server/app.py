@@ -36,7 +36,7 @@ from sparc.server.deps import state, session, get_open_store  # single shared in
 
 app = FastAPI(
     title="SPARC Server",
-    version="1.0.7",
+    version="1.0.10",
     docs_url="/docs",
 )
 
