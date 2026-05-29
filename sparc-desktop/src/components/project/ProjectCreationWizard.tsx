@@ -45,7 +45,7 @@ interface WizardState {
 /** Common CRS presets — ordered by likelihood for typical SPARC projects. */
 const COMMON_CRS = [
   { code: "EPSG:4326",  label: "WGS 84",               note: "lat/lon · most CSVs & GPS data" },
-  { code: "EPSG:3438",  label: "RI State Plane (ft)",   note: "Rhode Island · feet" },
+  { code: "EPSG:3438",  label: "RI State Plane (ft)",   note: "Rhode Island · NAD83 · feet" },
   { code: "EPSG:26919", label: "UTM 19N (NAD83)",       note: "New England · meters" },
   { code: "EPSG:26918", label: "UTM 18N (NAD83)",       note: "Mid-Atlantic · meters" },
   { code: "EPSG:26917", label: "UTM 17N (NAD83)",       note: "Great Lakes · meters" },
