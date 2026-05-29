@@ -4,9 +4,9 @@ DatasetProfiler — Automatic dataset characterisation and adaptive parameter re
 
 Inspects the loaded data to derive:
 - **n_samples**: total row count
-- **mean_nn_distance**: average nearest-neighbour distance (metres, projected CRS)
-- **spatial_extent**: bounding-box diagonal (metres)
-- **point_density**: points per km²
+- **mean_nn_distance**: average nearest-neighbour distance (projected CRS units)
+- **spatial_extent**: bounding-box diagonal (projected CRS units)
+- **point_density**: points per k-unit²
 - **available_ram_gb**: usable system RAM
 - **n_features**: number of predictor columns
 - **size_tier**: ``"small"`` / ``"medium"`` / ``"large"`` / ``"xlarge"``
@@ -62,6 +62,10 @@ class DatasetProfiler:
         Defaults to ``["projected_X", "projected_Y"]``.
     feature_cols : list[str], optional
         Predictor column names (for ``n_features``).
+    crs_unit : str, optional
+        Linear unit of the projected CRS: ``'m'`` (metres, default),
+        ``'ft'`` (feet), or ``'deg'`` (degrees).  Used for labels and
+        unit-aware floor values.
     """
 
     def __init__(
@@ -69,10 +73,12 @@ class DatasetProfiler:
         data: pd.DataFrame,
         coord_cols: Optional[List[str]] = None,
         feature_cols: Optional[List[str]] = None,
+        crs_unit: str = "m",
     ):
         self.data = data
         self.coord_cols = coord_cols or ["projected_X", "projected_Y"]
         self.feature_cols = feature_cols or []
+        self.crs_unit = crs_unit
         self._profile: Optional[Dict[str, Any]] = None
 
     # ------------------------------------------------------------------
@@ -114,9 +120,13 @@ class DatasetProfiler:
         # ── Nearest-neighbour distance ───────────────────────────────
         mean_nn = self._mean_nn_distance(coords, max_nn_sample)
 
-        # ── Point density (per km²) ─────────────────────────────────
-        area_km2 = ((x_max - x_min) / 1000.0) * ((y_max - y_min) / 1000.0)
-        point_density = n_samples / max(area_km2, 1e-6)
+        # ── Point density (per k-unit²) ──────────────────────────────
+        # Convert coordinate units to km-equivalent for density calculation.
+        # m → /1000; ft → /3280.84; deg → /111.32 (approximate)
+        _unit_to_km = {"m": 1000.0, "ft": 3280.84, "deg": 111320.0}
+        _k = _unit_to_km.get(self.crs_unit, 1000.0)
+        area_ku2 = ((x_max - x_min) / _k) * ((y_max - y_min) / _k)
+        point_density = n_samples / max(area_ku2, 1e-6)
 
         # ── Available RAM ────────────────────────────────────────────
         if PSUTIL_AVAILABLE:
@@ -295,10 +305,14 @@ class DatasetProfiler:
 
         Heuristic: 40 % of the spatial extent, but never less than
         20 × nearest-neighbour distance (to cover enough lags).
+        The absolute floor is 500 m equivalent, converted to the working CRS unit.
         """
         candidate = extent * 0.40
         floor = nn_dist * 20.0
-        return max(candidate, floor, 500.0)  # absolute floor of 500 m
+        # 500 m equivalent floor in working CRS units
+        _m_per_unit = {"m": 1.0, "ft": 0.3048, "deg": 111320.0}
+        floor_500m = 500.0 / _m_per_unit.get(self.crs_unit, 1.0)
+        return max(candidate, floor, floor_500m)
 
     def _recommend_correlogram_sample(self, tier: str, n: int) -> int:
         """Max sample size for correlogram analysis."""
@@ -344,6 +358,10 @@ class DatasetProfiler:
     def summary(self) -> str:
         """Return a formatted summary string of the profile."""
         p = self.profile()
+        _unit_labels = {"m": "m", "ft": "ft", "deg": "°"}
+        ul = _unit_labels.get(self.crs_unit, "m")
+        _density_labels = {"m": "pts/km²", "ft": "pts/kft²", "deg": "pts/°²"}
+        dl = _density_labels.get(self.crs_unit, "pts/km²")
         lines = [
             "=" * 60,
             "  DATASET PROFILE",
@@ -351,9 +369,9 @@ class DatasetProfiler:
             f"  Observations      : {p['n_samples']:,}",
             f"  Features          : {p['n_features']}",
             f"  Size tier         : {p['size_tier'].upper()}",
-            f"  Spatial extent    : {p['spatial_extent']:,.0f} m",
-            f"  Mean NN distance  : {p['mean_nn_distance']:.1f} m",
-            f"  Point density     : {p['point_density']:.1f} pts/km²",
+            f"  Spatial extent    : {p['spatial_extent']:,.0f} {ul}",
+            f"  Mean NN distance  : {p['mean_nn_distance']:.1f} {ul}",
+            f"  Point density     : {p['point_density']:.1f} {dl}",
             f"  Available RAM     : {p['available_ram_gb']:.1f} GB",
             "=" * 60,
         ]

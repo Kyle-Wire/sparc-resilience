@@ -22,7 +22,7 @@ class SpatialAutocorrelationAnalyzer:
     Comprehensive spatial autocorrelation analysis with formal statistical testing
     """
     
-    def __init__(self, coords, max_distance=None, n_lags=20):
+    def __init__(self, coords, max_distance=None, n_lags=20, unit_label="m"):
         """
         Initialize the spatial autocorrelation analyzer
         
@@ -34,8 +34,12 @@ class SpatialAutocorrelationAnalyzer:
             Maximum distance for correlogram analysis
         n_lags : int, default=20
             Number of distance lags for correlogram
+        unit_label : str, default="m"
+            Unit label for display (e.g. "m", "ft", "°"). Passed from the
+            working CRS so axis labels and printouts reflect the correct unit.
         """
         self.coords = np.array(coords)
+        self.unit_label = unit_label
         
         # Remove any non-finite coordinates (NaN or ±inf); pdist requires finite data
         valid_coords_mask = np.isfinite(self.coords).all(axis=1)
@@ -49,9 +53,10 @@ class SpatialAutocorrelationAnalyzer:
         # Calculate distance matrix
         self.distances = squareform(pdist(self.coords))
         
-        # Set maximum distance for analysis with reasonable default threshold
+        # Set maximum distance for analysis with reasonable default threshold.
+        # Default: 50th-percentile pairwise distance, capped at the 1800-unit
+        # fallback (which is 1800 m, 1800 ft, etc. depending on working CRS).
         if max_distance is None:
-            # Use 1800m as default maximum distance to prevent excessive computation
             self.max_distance = min(1800.0, np.percentile(self.distances[self.distances > 0], 50))
         else:
             self.max_distance = max_distance
@@ -448,8 +453,8 @@ class SpatialAutocorrelationAnalyzer:
         ax1.plot(distances, morans_i, 'k-', alpha=0.3)
         ax1.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
         ax1.axvline(x=optimal_block_size, color='green', linestyle='--', 
-                   label=f'Optimal Block Size: {optimal_block_size:.1f}m')
-        ax1.set_xlabel('Distance (m)')
+                   label=f'Optimal Block Size: {optimal_block_size:.1f} {self.unit_label}')
+        ax1.set_xlabel(f'Distance ({self.unit_label})')
         ax1.set_ylabel("Moran's I")
         ax1.set_title(f'{title} - Moran\'s I')
         ax1.set_ylim(-1, 1)  # Set y-axis range from -1 to +1
@@ -463,7 +468,7 @@ class SpatialAutocorrelationAnalyzer:
         ax2.axhline(y=-1.96, color='red', linestyle='--', alpha=0.7)
         ax2.axhline(y=0, color='gray', linestyle='-', alpha=0.5)
         ax2.axvline(x=optimal_block_size, color='green', linestyle='--')
-        ax2.set_xlabel('Distance (m)')
+        ax2.set_xlabel(f'Distance ({self.unit_label})')
         ax2.set_ylabel('Z-score')
         ax2.set_title('Statistical Significance (Z-scores)')
         ax2.legend()
@@ -608,7 +613,7 @@ class SpatialAutocorrelationAnalyzer:
                 axes[0].plot(var_data['Resolution'], var_data['Morans_I'], 
                            'o-', label=variable, linewidth=2, markersize=6)
         
-        axes[0].set_xlabel('Spatial Resolution (m)')
+        axes[0].set_xlabel(f'Spatial Resolution ({self.unit_label})')
         axes[0].set_ylabel("Moran's I")
         axes[0].set_title('Climate Autocorrelation Scaling')
         axes[0].legend()
@@ -625,7 +630,7 @@ class SpatialAutocorrelationAnalyzer:
         axes[1].axhline(y=1.96, color='red', linestyle='--', alpha=0.7, label='α = 0.05')
         axes[1].axhline(y=-1.96, color='red', linestyle='--', alpha=0.7)
         axes[1].axhline(y=0, color='gray', linestyle='-', alpha=0.5)
-        axes[1].set_xlabel('Spatial Resolution (m)')
+        axes[1].set_xlabel(f'Spatial Resolution ({self.unit_label})')
         axes[1].set_ylabel('Z-Score')
         axes[1].set_title('Statistical Significance Across Resolutions')
         axes[1].legend()

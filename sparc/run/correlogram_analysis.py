@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Correlogram-Based Spatial Analysis Module for SPARC Pipeline
 Replaces variogram analysis with correlogram analysis to determine optimal model bandwidths and CV block sizes
@@ -81,17 +81,18 @@ class CorrelogramSpatialAnalyzer:
     Optimized for large datasets with intelligent sampling
     """
     
-    def __init__(self, max_distance=None, n_lags=15, max_sample_size=5000, cache_dir=None, fast_mode=False):
+    def __init__(self, max_distance=None, n_lags=15, max_sample_size=5000, cache_dir=None, fast_mode=False, unit_label="m"):
         """
         Initialize correlogram analyzer
         
         Args:
-            max_distance: Maximum distance for spatial analysis (meters).
+            max_distance: Maximum distance for spatial analysis (working CRS units).
                           If None, auto-detected as 30% of data bounding-box diagonal.
             n_lags: Number of distance lags for correlogram
             max_sample_size: Maximum sample size for analysis (to speed up computation)
             cache_dir: Optional directory for joblib caching of expensive Moran's I computations
             fast_mode: If True, use reduced NUTS sample counts for faster runs
+            unit_label: Display unit string (e.g. "m", "ft") from the working CRS.
         """
         self.max_distance = max_distance
         self.n_lags = n_lags
@@ -100,6 +101,7 @@ class CorrelogramSpatialAnalyzer:
         self.n_lags = n_lags
         self.max_sample_size = max_sample_size
         self.fast_mode = fast_mode
+        self.unit_label = unit_label
         
     def analyze_variable_correlogram(self, coords, values, variable_name, output_dir):
         """
@@ -148,7 +150,7 @@ class CorrelogramSpatialAnalyzer:
 
         # Create analyzer with sampled coords — only used for the directional
         # correlogram (compute_directional_correlogram needs the distance matrix).
-        analyzer = SpatialAutocorrelationAnalyzer(coords_sample, max_distance=self.max_distance)
+        analyzer = SpatialAutocorrelationAnalyzer(coords_sample, max_distance=self.max_distance, unit_label=self.unit_label)
 
         # Main isotropic correlogram:
         #  - Large datasets  → FFT path on ALL points, O(n log n), no subsampling.
@@ -177,7 +179,7 @@ class CorrelogramSpatialAnalyzer:
                 @self._memory.cache
                 def _cached_correlogram(coords_key, values_key, max_dist, n_lags):
                     """Pure-function wrapper so joblib can hash the inputs."""
-                    _analyzer = SpatialAutocorrelationAnalyzer(coords_key, max_distance=max_dist)
+                    _analyzer = SpatialAutocorrelationAnalyzer(coords_key, max_distance=max_dist, unit_label=self.unit_label)
                     return _analyzer.compute_correlogram(values_key, plot=False,
                                                          title=f"Spatial Correlogram")
                 correlogram_results = _cached_correlogram(
@@ -617,8 +619,8 @@ def main(ctx, *, fast_mode=False):
         all_variables = selected_features
         print(f"Warning: Target variable {target_variable} not found in data")
     
-    # Use projected (metric) coordinates so all distances/bandwidths are in metres.
-    # load_and_preprocess_data always writes projected_X / projected_Y.
+    # Use working CRS coordinates (m, ft, etc.); load_and_preprocess_data
+    # always writes projected_X / projected_Y in the working CRS units.
     if 'projected_X' in data.columns and 'projected_Y' in data.columns:
         coords = data[['projected_X', 'projected_Y']].values
         coord_cols_for_profiler = ['projected_X', 'projected_Y']
@@ -627,11 +629,21 @@ def main(ctx, *, fast_mode=False):
         coord_cols_for_profiler = config['variables']['coordinates']
 
     # â”€â”€ Use DatasetProfiler for data-driven correlogram parameters â”€â”€â”€
+    # Resolve working-CRS unit for correct labels / floor values.
+    from sparc.config.crs_resolver import crs_unit as _crs_unit, crs_unit_label as _crs_unit_label
+    _working_crs = config['crs'].get('working') or config['crs'].get('target_projected', 'EPSG:4326')
+    try:
+        _unit = _crs_unit(_working_crs)
+        _unit_label = _crs_unit_label(_working_crs)
+    except Exception:
+        _unit, _unit_label = 'm', 'meters'
+
     from sparc.run.dataset_profiler import DatasetProfiler
     profiler = DatasetProfiler(
         data,
         coord_cols=coord_cols_for_profiler,
         feature_cols=selected_features,
+        crs_unit=_unit,
     )
     profile = profiler.profile()
     corr_recs = profiler.recommend_parameters().get("correlogram", {})
@@ -679,10 +691,11 @@ def main(ctx, *, fast_mode=False):
         max_sample_size=max_sample_size,
         cache_dir=cache_dir,
         fast_mode=fast_mode,
+        unit_label=_unit,
     )
     
     print(f"Dataset size: {len(data):,} points")
-    print(f"Max correlogram distance: {max_distance:,.0f} m (data-driven)")
+    print(f"Max correlogram distance: {max_distance:,.0f} {_unit_label} (data-driven)")
     print(f"Using sample size: {max_sample_size:,} points for correlogram analysis")
     estimated_time = len(all_variables) * (1 if fast_mode else 2)
     print(f"Estimated analysis time: ~{estimated_time:.0f} minutes")
