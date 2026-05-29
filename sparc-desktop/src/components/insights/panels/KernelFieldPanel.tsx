@@ -16,7 +16,7 @@ import { PanelGate } from "@/components/ui/PanelGate";
 import { useManifest } from "@/hooks/useManifest";
 import { useResult } from "@/hooks/useResult";
 import { getKernelFieldData, getArtifactJson } from "@/lib/api";
-import type { AnisotropyEntry, KernelFieldData, KernelFieldPair } from "@/lib/types";
+import type { AnisotropyEntry, BandwidthMismatchWarning, KernelFieldData, KernelFieldPair } from "@/lib/types";
 
 interface MaternFit {
   variable_names?: string[];
@@ -38,7 +38,7 @@ interface EffectiveRangeMatrix {
   variable_names: string[];
   range_matrix: (number | null)[][];
   mismatch_factor?: number;
-  mismatch_warnings?: { pair: string; range_pair_m?: number; ratio_max?: number }[];
+  mismatch_warnings?: { pair: string; range_pair_m?: number; marginal_i_m?: number | null; marginal_j_m?: number | null; ratio_max?: number }[];
   significant_pair_count?: number;
 }
 
@@ -119,6 +119,17 @@ export default function KernelFieldPanel() {
 // Legacy MGWR-derived KernelField table
 // ------------------------------------------------------------------
 
+function formatMismatchWarning(w: string | BandwidthMismatchWarning): string {
+  if (typeof w === "string") return w;
+  const rangeStr = w.range_pair_m != null ? ` pair=${fmtLag(w.range_pair_m)}m` : "";
+  const margStr =
+    w.marginal_i_m != null || w.marginal_j_m != null
+      ? ` marginals=${fmtLag(w.marginal_i_m)}/${fmtLag(w.marginal_j_m)}m`
+      : "";
+  const ratioStr = w.ratio_max != null ? ` ratio=${w.ratio_max.toFixed(2)}×` : "";
+  return `${w.pair}:${rangeStr}${margStr}${ratioStr}`.trim();
+}
+
 function LegacyPredictorTable({ data }: { data: KernelFieldData }) {
   const warn = data.bandwidth_mismatch_warnings ?? [];
   const predictors = data.predictors ?? [];
@@ -161,7 +172,7 @@ function LegacyPredictorTable({ data }: { data: KernelFieldData }) {
       </div>
       {warn.length > 0 && (
         <ul style={{ marginTop: 10, fontSize: 11, color: "var(--ink-2)", paddingLeft: 18 }}>
-          {warn.slice(0, 5).map((w, i) => <li key={i}>{w}</li>)}
+          {warn.slice(0, 5).map((w, i) => <li key={i}>{formatMismatchWarning(w)}</li>)}
         </ul>
       )}
     </>

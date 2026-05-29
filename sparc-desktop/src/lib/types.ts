@@ -488,12 +488,20 @@ export interface KernelFieldPair {
   significant_anti: boolean;
 }
 
+export interface BandwidthMismatchWarning {
+  pair: string;
+  range_pair_m?: number | null;
+  marginal_i_m?: number | null;
+  marginal_j_m?: number | null;
+  ratio_max?: number | null;
+}
+
 export interface KernelFieldData {
   outcome_name?: string;
   predictors?: KernelFieldPredictor[];
   variable_names?: string[];
   range_matrix?: (number | null)[][];
-  bandwidth_mismatch_warnings?: string[];
+  bandwidth_mismatch_warnings?: Array<string | BandwidthMismatchWarning>;
   matern_default_nu?: number;
   /** Discriminator: "kernel_field" (legacy MGWR) | "cross_correlogram". */
   source?: string;
