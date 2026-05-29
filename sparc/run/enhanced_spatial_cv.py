@@ -152,11 +152,11 @@ def train_single_model_fold_worker(args):
 
     # Fold-scoped feature scaling: fit only on training split so test-fold
     # statistics cannot influence the scaler (eliminates C1 data leakage).
-    from sparc.features.pipeline import FeaturePipeline as _FP
-    _fp = _FP()
+    from sparc.features.pipeline import FoldFeatureContext as _FFC
     _fn = list(feature_names) if feature_names else [f'f{i}' for i in range(X_tr.shape[1])]
-    X_tr, _ = _fp.fit_transform(X_tr, coords_tr, _fn)
-    X_te = _fp.transform(X_te, coords_te)
+    _ffc = _FFC(X_tr, coords_tr, X_te, coords_te, _fn)
+    X_tr, _ = _ffc.train_transform()
+    X_te = _ffc.test_transform()
 
     # Runtime safety: delegate fold-size invariants to each model.
     # GWRModel.validate_for_fold clamps bandwidth/min_points;
@@ -821,7 +821,7 @@ class EnhancedSpatialCV:
         # Centralized feature scaling: fit one canonical scaler on the full
         # feature matrix so every base model operates on the same normalized
         # Raw feature matrix is passed through to the fold workers.  Each
-        # worker creates its own fold-scoped FeaturePipeline (fit only on
+        # worker creates its own fold-scoped FoldFeatureContext (fit only on
         # that fold's training data) so the test fold never influences the
         # normalisation statistics.  The legacy full-dataset scaler has
         # been removed to eliminate data leakage into Stage 3.
@@ -1184,11 +1184,11 @@ class EnhancedSpatialCV:
                 coords_train, coords_test = coords[train_idx], coords[test_idx]
 
                 # Fold-scoped scaling: fit only on train split (no leakage).
-                from sparc.features.pipeline import FeaturePipeline as _FP
-                _fp = _FP()
+                from sparc.features.pipeline import FoldFeatureContext as _FFC
                 _fn = list(feature_names) if feature_names else [f'f{i}' for i in range(X_train_raw.shape[1])]
-                X_train, _ = _fp.fit_transform(X_train_raw, coords_train, _fn)
-                X_test = _fp.transform(X_test_raw, coords_test)
+                _ffc = _FFC(X_train_raw, coords_train, X_test_raw, coords_test, _fn)
+                X_train, _ = _ffc.train_transform()
+                X_test = _ffc.test_transform()
 
                 print(f"\nFold {fold_idx + 1}/{len(folds)}")
                 print(f"Train: {len(train_idx)}, Test: {len(test_idx)}")

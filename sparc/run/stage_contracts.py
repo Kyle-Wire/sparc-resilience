@@ -24,11 +24,39 @@ From the writer (Stage 3)::
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 
 class ContractViolation(Exception):
     """Raised when a stage output fails its contract validation."""
+
+
+# ---------------------------------------------------------------------------
+# Typed result dataclasses — returned by the parse() classmethods
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class CorrelogramResult:
+    """Typed representation of a validated CorrelogramOutputs payload."""
+    optimal_block_size: Any
+    effective_range: Any
+    correlogram_results: Any
+
+
+@dataclass(frozen=True)
+class SpatialCVResult:
+    """Typed representation of a validated SpatialCVOutputs payload."""
+    oof_df: Any
+
+
+@dataclass(frozen=True)
+class CausalResult:
+    """Typed representation of a validated CausalOutputs payload."""
+    metadata: dict
+    direct_effects: dict
+    mediator_propagation: dict
+    all_structural_coefficients: dict
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +112,20 @@ class CorrelogramOutputs:
                     "CorrelogramOutputs: 'correlogram_results.lag_distances' must be a list"
                 )
 
+    @staticmethod
+    def parse(d: Any) -> CorrelogramResult:
+        """Validate *d* and return a typed :class:`CorrelogramResult`.
+
+        Raises :exc:`ContractViolation` on invalid input — identical semantics
+        to :meth:`validate` but returns a structured object instead of ``None``.
+        """
+        CorrelogramOutputs.validate(d)
+        return CorrelogramResult(
+            optimal_block_size=d["optimal_block_size"],
+            effective_range=d["effective_range"],
+            correlogram_results=d["correlogram_results"],
+        )
+
 
 # ---------------------------------------------------------------------------
 # Stage 2 → Stage 3 seam
@@ -123,6 +165,15 @@ class SpatialCVOutputs:
                 "SpatialCVOutputs: OOF DataFrame has no numeric columns; "
                 f"found columns: {list(df.columns)}"
             )
+
+    @staticmethod
+    def parse(df: Any) -> SpatialCVResult:
+        """Validate *df* and return a typed :class:`SpatialCVResult`.
+
+        Raises :exc:`ContractViolation` on invalid input.
+        """
+        SpatialCVOutputs.validate(df)
+        return SpatialCVResult(oof_df=df)
 
 
 # ---------------------------------------------------------------------------
@@ -164,3 +215,17 @@ class CausalOutputs:
                     f"CausalOutputs: '{key}' must be a dict, "
                     f"got {type(val).__name__}"
                 )
+
+    @staticmethod
+    def parse(d: Any) -> CausalResult:
+        """Validate *d* and return a typed :class:`CausalResult`.
+
+        Raises :exc:`ContractViolation` on invalid input.
+        """
+        CausalOutputs.validate(d)
+        return CausalResult(
+            metadata=d["metadata"],
+            direct_effects=d["direct_effects"],
+            mediator_propagation=d["mediator_propagation"],
+            all_structural_coefficients=d["all_structural_coefficients"],
+        )

@@ -440,7 +440,8 @@ def _exec_cv_fold(
         DifferentiableGWRF,
     )
     from sparc.training.curriculum import get_lambda_schedule
-    from sparc.training.loss import sparc_joint_loss
+    from sparc.training.joint_loss import JointLoss
+    from sparc.training.loss import PhysicsContext, CurriculumState, AuxTargets
     from sparc.training.optimizer import (
         build_optimizer,
         build_scheduler,
@@ -526,6 +527,13 @@ def _exec_cv_fold(
     _coreset_acts               = ss.continual.coreset_acts
     _replay_lambda              = ss.continual.replay_lambda
     _previous_coresets          = ss.continual.previous_coresets
+
+    # ---- Fold-scoped JointLoss instance (bundles lambda state) ----
+    _joint_loss = JointLoss.from_target_lambdas(
+        target_lambdas,
+        thresholds=thresholds_norm,
+        resolution=resolution,
+    )
 
     # ---- Per-fold AMP scaler (fresh per-process instance) ----
     _scaler = torch.cuda.amp.GradScaler(enabled=_use_amp)
@@ -1142,34 +1150,43 @@ def _exec_cv_fold(
                     b_jepa_latent_neighbor = b_cardinal
                     b_jepa_latent_alpha    = alpha
 
-            total_loss, components = sparc_joint_loss(
-                T_pred=T_pred,
-                exceedance_preds=exceedance,
-                y_true=b_y,
-                thresholds=thresholds_norm,
-                alpha=alpha,
-                alpha_prior=alpha_prior,
+            _physics = PhysicsContext(
                 neighbor_idx=b_cardinal,
                 source_term=b_source,
                 resolution=resolution,
-                surrogate_preds=surrogate_preds,
-                surrogate_targets=[
-                    b_surr_targets["gwr"],
-                    b_surr_targets["gwrf"],
-                    b_surr_targets["ggpgam"],
-                ],
+                h_field=b_h,
+                water_mask=b_water_mask,
+                T_water=tensors.get("T_water"),
+                sparse_laplacian=tensors.get("sparse_laplacian"),
+                valid_laplacian_mask=tensors.get("valid_laplacian_mask"),
+                sheaf_delta=tensors.get("sheaf_delta"),
+                valid_mask=_valid_mask,
+            )
+            _curriculum = CurriculumState(
+                epoch=epoch,
                 lambda_physics=lambdas.get("physics", 0.0),
                 lambda_smooth=lambdas.get("smooth", 0.0),
                 lambda_alpha_smooth=lambdas.get("alpha_smooth", 0.0),
                 lambda_prior=lambdas.get("prior", 1.0),
                 lambda_base=lambdas.get("base", 0.0),
                 lambda_neighbor=lambdas.get("neighbor", 0.0),
-                epoch=epoch,
-                h_field=b_h,
                 lambda_pde=lambdas.get("pde", 0.0),
                 lambda_bc=lambdas.get("bc", 0.0),
-                water_mask=b_water_mask,
-                T_water=tensors.get("T_water"),
+                lambda_alpha_class=lambdas.get("alpha_class", 0.0),
+            )
+            _aux = AuxTargets(
+                surrogate_preds=surrogate_preds,
+                surrogate_targets=[
+                    b_surr_targets["gwr"],
+                    b_surr_targets["gwrf"],
+                    b_surr_targets["ggpgam"],
+                ],
+                # Candidate A: gate-feedback surrogate weights
+                surr_fidelity_weights=(1.0 - _gate_ema).clamp(min=0.1).tolist(),
+                # Candidate C: alpha classification scaffold
+                alpha_class_targets=(
+                    _alpha_class_targets[b_idx] if _alpha_class_targets is not None else None
+                ),
                 jepa_h_pred=b_jepa_h_pred,
                 jepa_h_target=b_jepa_h_target,
                 jepa_weights=jepa_weights,
@@ -1181,17 +1198,10 @@ def _exec_cv_fold(
                 jepa_latent_neighbor_idx=b_jepa_latent_neighbor,
                 jepa_latent_alpha=b_jepa_latent_alpha,
                 lambda_jepa_latent_pde=jepa_lambda_latent_pde_eff,
-                sparse_laplacian=tensors.get("sparse_laplacian"),
-                valid_laplacian_mask=tensors.get("valid_laplacian_mask"),
-                sheaf_delta=tensors.get("sheaf_delta"),
-                valid_mask=_valid_mask,
-                # Candidate A: gate-feedback surrogate weights
-                surr_fidelity_weights=(1.0 - _gate_ema).clamp(min=0.1).tolist(),
-                # Candidate C: alpha classification scaffold
-                alpha_class_targets=(
-                    _alpha_class_targets[b_idx] if _alpha_class_targets is not None else None
-                ),
-                lambda_alpha_class=lambdas.get("alpha_class", 0.0),
+            )
+            total_loss, components = _joint_loss.forward_bundled(
+                T_pred, exceedance, b_y, alpha, alpha_prior,
+                _physics, _curriculum, _aux,
             )
 
             # Candidate A: update gate EMA after joint-loss forward pass
@@ -1328,29 +1338,31 @@ def _exec_cv_fold(
                 )
 
                 _ml_lambdas = _meta_lambda_opt.tensors()
-                _ml_loss, _ = sparc_joint_loss(
-                    T_pred=_ml_T,
-                    exceedance_preds=_ml_exc,
-                    y_true=_ml_y,
-                    thresholds=thresholds_norm,
-                    alpha=_ml_alpha,
-                    alpha_prior=_ml_alpha_prior,
+                _ml_physics = PhysicsContext(
                     neighbor_idx=_ml_knn,
                     source_term=_ml_source,
                     resolution=resolution,
-                    surrogate_preds=_ml_surr,
-                    surrogate_targets=[
-                        b_surr_targets["gwr"][_ml_idx] if "gwr" in b_surr_targets else _ml_y,
-                        b_surr_targets["gwrf"][_ml_idx] if "gwrf" in b_surr_targets else _ml_y,
-                        b_surr_targets["ggpgam"][_ml_idx] if "ggpgam" in b_surr_targets else _ml_y,
-                    ],
+                )
+                _ml_curriculum = CurriculumState(
+                    epoch=epoch,
                     lambda_physics=float(_ml_lambdas.get("physics", lambdas.get("physics", 0.0))),
                     lambda_smooth=float(_ml_lambdas.get("smooth", lambdas.get("smooth", 0.0))),
                     lambda_alpha_smooth=float(_ml_lambdas.get("alpha_smooth", lambdas.get("alpha_smooth", 0.0))),
                     lambda_prior=float(_ml_lambdas.get("prior", lambdas.get("prior", 1.0))),
                     lambda_base=float(_ml_lambdas.get("base", lambdas.get("base", 0.0))),
                     lambda_neighbor=float(_ml_lambdas.get("neighbor", lambdas.get("neighbor", 0.0))),
-                    epoch=epoch,
+                )
+                _ml_aux = AuxTargets(
+                    surrogate_preds=_ml_surr,
+                    surrogate_targets=[
+                        b_surr_targets["gwr"][_ml_idx] if "gwr" in b_surr_targets else _ml_y,
+                        b_surr_targets["gwrf"][_ml_idx] if "gwrf" in b_surr_targets else _ml_y,
+                        b_surr_targets["ggpgam"][_ml_idx] if "ggpgam" in b_surr_targets else _ml_y,
+                    ],
+                )
+                _ml_loss, _ = _joint_loss.forward_bundled(
+                    _ml_T, _ml_exc, _ml_y, _ml_alpha, _ml_alpha_prior,
+                    _ml_physics, _ml_curriculum, _ml_aux,
                 )
                 _meta_lambda_opt.step(_ml_loss)
                 # Merge updated meta-lambdas into the schedule for next epoch
@@ -2120,7 +2132,8 @@ def train_neural_meta(
         DifferentiableGWRF,
     )
     from sparc.training.curriculum import get_lambda_schedule
-    from sparc.training.loss import sparc_joint_loss
+    from sparc.training.joint_loss import JointLoss
+    from sparc.training.loss import PhysicsContext, CurriculumState, AuxTargets
     from sparc.training.optimizer import build_optimizer, build_scheduler
 
     # JEPA Phase 1 (optional, gated by config.jepa.enable).  Imports are
@@ -2215,6 +2228,13 @@ def train_neural_meta(
 
     # Convert exceedance thresholds to normalised space
     thresholds_norm = [(t - y_mean) / y_std for t in thresholds]
+
+    # Training-scoped JointLoss instance (bundles lambda state for all folds)
+    _joint_loss = JointLoss.from_target_lambdas(
+        target_lambdas,
+        thresholds=thresholds_norm,
+        resolution=resolution,
+    )
 
     # Process rate input columns — use all physics features when not configured
     pr_inputs = pr_cfg.get("inputs", feature_names)
@@ -2405,18 +2425,28 @@ def train_neural_meta(
                 )
                 # Cache surrogate outputs as their own targets (no V1 data in sweep)
                 _surr_tgts = [s.detach() for s in sp]
-                loss, _ = sparc_joint_loss(
-                    T_pred=T_pred, exceedance_preds=exc,
-                    y_true=sweep_y[sweep_train_idx],
-                    thresholds=thresholds_norm, alpha=alpha,
-                    alpha_prior=torch.full_like(alpha, prior_mean),
-                    neighbor_idx=_card, source_term=_src,
+                _sweep_physics = PhysicsContext(
+                    neighbor_idx=_card,
+                    source_term=_src,
                     resolution=resolution,
+                )
+                _sweep_curriculum = CurriculumState(
+                    epoch=0,
+                    lambda_physics=0.0,
+                    lambda_smooth=0.0,
+                    lambda_alpha_smooth=0.0,
+                    lambda_prior=1.0,
+                    lambda_base=0.0,
+                    lambda_neighbor=0.0,
+                )
+                _sweep_aux = AuxTargets(
                     surrogate_preds=sp,
                     surrogate_targets=_surr_tgts,
-                    lambda_physics=0.0, lambda_smooth=0.0,
-                    lambda_alpha_smooth=0.0, lambda_prior=1.0,
-                    lambda_base=0.0, lambda_neighbor=0.0, epoch=0,
+                )
+                loss, _ = _joint_loss.forward_bundled(
+                    T_pred, exc, sweep_y[sweep_train_idx],
+                    alpha, torch.full_like(alpha, prior_mean),
+                    _sweep_physics, _sweep_curriculum, _sweep_aux,
                 )
                 opt.zero_grad()
                 loss.backward()
@@ -3447,34 +3477,36 @@ def train_neural_meta(
                     b_jepa_latent_neighbor = b_card
                     b_jepa_latent_alpha = alpha
 
-            total_loss, components = sparc_joint_loss(
-                T_pred=T_pred,
-                exceedance_preds=exceedance,
-                y_true=b_y,
-                thresholds=thresholds_norm,
-                alpha=alpha,
-                alpha_prior=alpha_prior,
+            _rt_physics = PhysicsContext(
                 neighbor_idx=b_card,
                 source_term=b_src,
                 resolution=resolution,
-                surrogate_preds=surrogate_preds,
-                surrogate_targets=[
-                    b_surr_tgt["gwr"],
-                    b_surr_tgt["gwrf"],
-                    b_surr_tgt["ggpgam"],
-                ],
+                h_field=b_h_rt,
+                water_mask=b_water_mask_rt,
+                T_water=tensors.get("T_water"),
+                sparse_laplacian=tensors.get("sparse_laplacian"),
+                valid_laplacian_mask=tensors.get("valid_laplacian_mask"),
+                sheaf_delta=tensors.get("sheaf_delta"),
+                valid_mask=_valid_mask_rt,
+            )
+            _rt_curriculum = CurriculumState(
+                epoch=epoch,
                 lambda_physics=lambdas.get("physics", 0.0),
                 lambda_smooth=lambdas.get("smooth", 0.0),
                 lambda_alpha_smooth=lambdas.get("alpha_smooth", 0.0),
                 lambda_prior=lambdas.get("prior", 1.0),
                 lambda_base=lambdas.get("base", 0.0),
                 lambda_neighbor=lambdas.get("neighbor", 0.0),
-                epoch=epoch,
-                h_field=b_h_rt,
                 lambda_pde=lambdas.get("pde", 0.0),
                 lambda_bc=lambdas.get("bc", 0.0),
-                water_mask=b_water_mask_rt,
-                T_water=tensors.get("T_water"),
+            )
+            _rt_aux = AuxTargets(
+                surrogate_preds=surrogate_preds,
+                surrogate_targets=[
+                    b_surr_tgt["gwr"],
+                    b_surr_tgt["gwrf"],
+                    b_surr_tgt["ggpgam"],
+                ],
                 jepa_h_pred=b_jepa_h_pred,
                 jepa_h_target=b_jepa_h_target,
                 jepa_weights=jepa_weights,
@@ -3486,10 +3518,10 @@ def train_neural_meta(
                 jepa_latent_neighbor_idx=b_jepa_latent_neighbor,
                 jepa_latent_alpha=b_jepa_latent_alpha,
                 lambda_jepa_latent_pde=jepa_lambda_latent_pde_eff,
-                sparse_laplacian=tensors.get("sparse_laplacian"),
-                valid_laplacian_mask=tensors.get("valid_laplacian_mask"),
-                sheaf_delta=tensors.get("sheaf_delta"),
-                valid_mask=_valid_mask_rt,
+            )
+            total_loss, components = _joint_loss.forward_bundled(
+                T_pred, exceedance, b_y, alpha, alpha_prior,
+                _rt_physics, _rt_curriculum, _rt_aux,
             )
 
             # Variance penalty on w(s): encourage spatial diversity
@@ -3686,38 +3718,40 @@ def train_neural_meta(
                     if isinstance(exceedance, torch.Tensor):
                         exceedance = exceedance.float()
 
-                total_loss, _ = sparc_joint_loss(
-                    T_pred=T_pred,
-                    exceedance_preds=exceedance,
-                    y_true=b_y,
-                    thresholds=thresholds_norm,
-                    alpha=alpha,
-                    alpha_prior=alpha_prior,
+                _swa_physics = PhysicsContext(
                     neighbor_idx=b_card,
                     source_term=b_src,
                     resolution=resolution,
-                    surrogate_preds=surrogate_preds,
-                    surrogate_targets=[
-                        b_surr_tgt["gwr"],
-                        b_surr_tgt["gwrf"],
-                        b_surr_tgt["ggpgam"],
-                    ],
-                    lambda_physics=lambdas.get("physics", 0.0),
-                    lambda_smooth=lambdas.get("smooth", 0.0),
-                    lambda_alpha_smooth=lambdas.get("alpha_smooth", 0.0),
-                    lambda_prior=lambdas.get("prior", 1.0),
-                    lambda_base=lambdas.get("base", 0.0),
-                    lambda_neighbor=lambdas.get("neighbor", 0.0),
-                    epoch=epoch_global,
                     h_field=b_h_swa,
-                    lambda_pde=lambdas.get("pde", 0.0),
-                    lambda_bc=lambdas.get("bc", 0.0),
                     water_mask=b_water_mask_swa,
                     T_water=tensors.get("T_water"),
                     sparse_laplacian=tensors.get("sparse_laplacian"),
                     valid_laplacian_mask=tensors.get("valid_laplacian_mask"),
                     sheaf_delta=tensors.get("sheaf_delta"),
                     valid_mask=_valid_mask_swa,
+                )
+                _swa_curriculum = CurriculumState(
+                    epoch=epoch_global,
+                    lambda_physics=lambdas.get("physics", 0.0),
+                    lambda_smooth=lambdas.get("smooth", 0.0),
+                    lambda_alpha_smooth=lambdas.get("alpha_smooth", 0.0),
+                    lambda_prior=lambdas.get("prior", 1.0),
+                    lambda_base=lambdas.get("base", 0.0),
+                    lambda_neighbor=lambdas.get("neighbor", 0.0),
+                    lambda_pde=lambdas.get("pde", 0.0),
+                    lambda_bc=lambdas.get("bc", 0.0),
+                )
+                _swa_aux = AuxTargets(
+                    surrogate_preds=surrogate_preds,
+                    surrogate_targets=[
+                        b_surr_tgt["gwr"],
+                        b_surr_tgt["gwrf"],
+                        b_surr_tgt["ggpgam"],
+                    ],
+                )
+                total_loss, _ = _joint_loss.forward_bundled(
+                    T_pred, exceedance, b_y, alpha, alpha_prior,
+                    _swa_physics, _swa_curriculum, _swa_aux,
                 )
 
                 # Variance penalty on w(s): encourage spatial diversity
