@@ -254,7 +254,7 @@ def training_step(
 
 def spatial_minibatch_sampler(
     coords: np.ndarray,
-    neighbor_idx: np.ndarray,
+    neighbor_idx: np.ndarray | None,
     batch_size: int = 2048,
     n_batches: int | None = None,
     rank: int = 0,
@@ -271,7 +271,9 @@ def spatial_minibatch_sampler(
     Parameters
     ----------
     coords : (N, 2) — projected coordinates
-    neighbor_idx : (N, 4) — N/S/E/W neighbor indices (-1 = missing)
+    neighbor_idx : (N, 4) — N/S/E/W neighbor indices (-1 = missing).
+        Pass ``None`` to skip the neighbor-coherence filter (e.g. during
+        pretraining phases before cardinal neighbors are available).
     batch_size : target batch size
     n_batches : if given, stop after this many batches (per rank)
     rank : DDP rank index (0-based); rank ``r`` receives every
@@ -314,17 +316,21 @@ def spatial_minibatch_sampler(
 
         batch_idx = np.where(distances <= radius)[0]
 
-        # Verify all neighbors present in batch
-        neighbor_set = set(batch_idx.tolist())
-        valid_in_batch = np.array([
-            all(
-                neighbor_idx[i, k] == -1 or int(neighbor_idx[i, k]) in neighbor_set
-                for k in range(neighbor_idx.shape[1])
-            )
-            for i in batch_idx
-        ])
-
-        clean_batch = batch_idx[valid_in_batch]
+        # Verify all neighbors present in batch.
+        # When neighbor_idx is None (e.g. during EPA pretraining before cardinal
+        # neighbors are built) skip the coherence filter entirely.
+        if neighbor_idx is None:
+            clean_batch = batch_idx
+        else:
+            neighbor_set = set(batch_idx.tolist())
+            valid_in_batch = np.array([
+                all(
+                    neighbor_idx[i, k] == -1 or int(neighbor_idx[i, k]) in neighbor_set
+                    for k in range(neighbor_idx.shape[1])
+                )
+                for i in batch_idx
+            ])
+            clean_batch = batch_idx[valid_in_batch]
 
         if len(clean_batch) >= batch_size // 2:
             # Partitioned DDP: rank r takes every world_size-th accepted batch
