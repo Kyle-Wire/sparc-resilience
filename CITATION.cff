@@ -6,7 +6,7 @@ message: >-
 type: software
 authors:
   - name: Kyle Wire
-version: "1.0.13"
+version: "1.0.14"
 date-released: "2026-05-29"
 repository-code: https://github.com/SPARCLabs/GW3C_v2.0
 license: Proprietary
