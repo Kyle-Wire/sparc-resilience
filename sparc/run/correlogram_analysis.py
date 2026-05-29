@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Correlogram-Based Spatial Analysis Module for SPARC Pipeline
 Replaces variogram analysis with correlogram analysis to determine optimal model bandwidths and CV block sizes
@@ -385,9 +385,9 @@ class CorrelogramSpatialAnalyzer:
         min_bandwidth = np.min(bandwidths)
         
         print(f"Bandwidth statistics:")
-        print(f"  Mean: {mean_bandwidth:.1f}m")
-        print(f"  Median: {median_bandwidth:.1f}m") 
-        print(f"  Range: {min_bandwidth:.1f}m - {max_bandwidth:.1f}m")
+        print(f"  Mean: {mean_bandwidth:.1f}{self.unit_label}")
+        print(f"  Median: {median_bandwidth:.1f}{self.unit_label}") 
+        print(f"  Range: {min_bandwidth:.1f}{self.unit_label} - {max_bandwidth:.1f}{self.unit_label}")
         
         # Assign model-specific bandwidths based on spatial characteristics
         model_bandwidths = {
@@ -402,7 +402,7 @@ class CorrelogramSpatialAnalyzer:
             if bw is None:
                 print(f"  {model}: Global model (no bandwidth)")
             else:
-                print(f"  {model}: {bw:.1f}m")
+                print(f"  {model}: {bw:.1f}{self.unit_label}")
         
         return model_bandwidths
     
@@ -431,33 +431,33 @@ class CorrelogramSpatialAnalyzer:
             target_zc = target_res.get('optimal_bandwidth')   # = first_zero_crossing
             target_block = target_res.get('optimal_block_size')  # first non-significant lag
             print(f"  Target variable ({target_variable}):")
-            print(f"    First zero-crossing (Moran's I <= 0): {target_zc:.0f}m")
-            print(f"    First non-significant lag:            {target_block:.0f}m")
+            print(f"    First zero-crossing (Moran's I <= 0): {target_zc:.0f}{self.unit_label}")
+            print(f"    First non-significant lag:            {target_block:.0f}{self.unit_label}")
 
         if target_zc is None or target_zc <= 0:
             # Fallback: median zero-crossing across all variables
             all_zc = [r.get('optimal_bandwidth', 0) for r in all_results.values() if r.get('optimal_bandwidth', 0) > 0]
             target_zc = float(np.median(all_zc)) if all_zc else 5000.0
-            print(f"  No usable target zero-crossing; falling back to median across variables: {target_zc:.0f}m")
+            print(f"  No usable target zero-crossing; falling back to median across variables: {target_zc:.0f}{self.unit_label}")
 
         proposed_block = target_zc
-        print(f"  Proposed block size (target zero-crossing): {proposed_block:.0f}m")
+        print(f"  Proposed block size (target zero-crossing): {proposed_block:.0f}{self.unit_label}")
 
         # --- Step 2: spatial-extent cap ------------------------------------
         if spatial_extent and spatial_extent > 0:
             max_viable = spatial_extent / (2.0 * n_folds)
             if proposed_block > max_viable:
-                print(f"  Capping: {proposed_block:.0f}m > spatial_extent/(2*{n_folds}) = {max_viable:.0f}m")
+                print(f"  Capping: {proposed_block:.0f}{self.unit_label} > spatial_extent/(2*{n_folds}) = {max_viable:.0f}{self.unit_label}")
                 proposed_block = max_viable
 
         # --- Step 3: sensible floor ----------------------------------------
         floor = 500.0
         if proposed_block < floor:
-            print(f"  Block size {proposed_block:.0f}m below floor; raising to {floor:.0f}m")
+            print(f"  Block size {proposed_block:.0f}{self.unit_label} below floor; raising to {floor:.0f}{self.unit_label}")
             proposed_block = floor
 
         optimal_block_size = proposed_block
-        print(f"  Final CV block size: {optimal_block_size:.0f}m")
+        print(f"  Final CV block size: {optimal_block_size:.0f}{self.unit_label}")
 
         # Build a lightweight validation summary (informational only)
         validation_results = {}
@@ -759,7 +759,7 @@ def main(ctx, *, fast_mode=False):
         optimal_cv_block_size = float(user_block_size)
         cv_validation_results = {}
         print(f"\n  Block size source: USER override")
-        print(f"  User-specified CV block size: {optimal_cv_block_size:.0f}m")
+        print(f"  User-specified CV block size: {optimal_cv_block_size:.0f}{_unit_label}")
         # Phase 4: still report what the auto-uplift WOULD have suggested,
         # purely informational — the user's choice is not modified.
         cv_cross_range_uplift = None
@@ -771,7 +771,7 @@ def main(ctx, *, fast_mode=False):
                     _max_xr = _outcome_cross.get('max_cross_range_m')
                     if _max_xr is not None and _max_xr > optimal_cv_block_size:
                         print(
-                            f"  Note: Phase 4 would have suggested ≥ {_max_xr:.0f}m "
+                            f"  Note: Phase 4 would have suggested ≥ {_max_xr:.0f}{_unit_label} "
                             f"(max target↔predictor cross-range) — keeping user value."
                         )
                         cv_cross_range_uplift = {
@@ -813,9 +813,9 @@ def main(ctx, *, fast_mode=False):
                     if _new_block > optimal_cv_block_size:
                         print(
                             f"  Phase 4 uplift: max (target↔predictor) cross-range "
-                            f"{_max_xr:.0f}m exceeds target zero-crossing "
-                            f"{optimal_cv_block_size:.0f}m → block size raised to "
-                            f"{_new_block:.0f}m"
+                            f"{_max_xr:.0f}{_unit_label} exceeds target zero-crossing "
+                            f"{optimal_cv_block_size:.0f}{_unit_label} → block size raised to "
+                            f"{_new_block:.0f}{_unit_label}"
                         )
                         cv_cross_range_uplift = {
                             'previous_block_size_m': float(optimal_cv_block_size),
@@ -1279,7 +1279,7 @@ def main(ctx, *, fast_mode=False):
     print(f"\n=== Correlogram-Based Spatial Analysis Complete ===")
     print(f"Results saved to: {stage0_dir}/")
     print(f"Analyzed {len(all_results)} variables")
-    print(f"Optimal CV block size: {optimal_cv_block_size:.0f}m")
+    print(f"Optimal CV block size: {optimal_cv_block_size:.0f}{_unit_label}")
     print(f"\nSummary:")
     print(summary_df.to_string(index=False))
     
