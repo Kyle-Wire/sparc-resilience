@@ -106,6 +106,32 @@ def _download_3dep(bbox: tuple[float, float, float, float]) -> bytes:
         return resp.read()
 
 
+def _download_srtm_opentopo(bbox: tuple[float, float, float, float]) -> bytes:
+    """Download SRTM GL1 (30m) elevation GeoTIFF from OpenTopography public API.
+
+    Uses the public demo API key.  No authentication beyond that is required.
+    """
+    minx, miny, maxx, maxy = bbox
+    params = urllib.parse.urlencode({
+        "demtype": "SRTMGL1",
+        "south": str(miny),
+        "north": str(maxy),
+        "west": str(minx),
+        "east": str(maxx),
+        "outputFormat": "GTiff",
+        "API_Key": "demoapikeyot",
+    })
+    url = f"https://portal.opentopography.org/API/globaldem?{params}"
+    log.info("dem: downloading SRTM from OpenTopography: %s", url)
+    req = urllib.request.Request(url, headers={"User-Agent": "SPARC/1.0"})
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+        data = resp.read()
+    # OpenTopography returns an error XML/JSON on failure
+    if len(data) < 100 or data[:4] not in (b"II\x2a\x00", b"MM\x00\x2a"):  # TIFF magic bytes
+        raise RuntimeError(f"OpenTopography returned non-TIFF response: {data[:200]}")
+    return data
+
+
 def _download_cop_dem(bbox: tuple[float, float, float, float]) -> bytes:
     """Download Copernicus GLO-30 DEM tiles for the given WGS84 bbox.
 
@@ -146,12 +172,10 @@ def _download_cop_dem(bbox: tuple[float, float, float, float]) -> bytes:
         href = (feat.get("assets", {}).get("data") or {}).get("href")
         if not href:
             continue
-        # Sign the PC URL if possible (no key required for public data)
-        try:
-            if "blob.core.windows.net" in href and "?" not in href:
-                href = href + "?st=&se=&sp=r&spr=https&sv=&sr=b&sig="
-        except Exception:
-            pass
+        # Strip any expired/empty SAS tokens from Azure Blob URLs — the
+        # public Copernicus DEM files do not require auth.
+        if "blob.core.windows.net" in href and "?" in href:
+            href = href.split("?")[0]
         try:
             tile_req = urllib.request.Request(href, headers={"User-Agent": "SPARC/1.0"})
             with urllib.request.urlopen(tile_req, timeout=HTTP_TIMEOUT) as tresp:
@@ -391,8 +415,16 @@ def download_dem(
             tiff_bytes = _download_3dep(bbox)
             source = "3dep"
         except Exception as exc:
-            warnings.append(f"3DEP download failed ({exc}); trying Copernicus GLO-30")
+            warnings.append(f"3DEP download failed ({exc}); trying OpenTopography SRTM")
             log.warning("dem: 3DEP failed: %s", exc)
+
+    if tiff_bytes is None:
+        try:
+            tiff_bytes = _download_srtm_opentopo(bbox)
+            source = "srtm_opentopo"
+        except Exception as exc:
+            warnings.append(f"OpenTopography SRTM also failed ({exc}); trying Copernicus GLO-30")
+            log.warning("dem: OpenTopography failed: %s", exc)
 
     if tiff_bytes is None:
         try:
@@ -470,23 +502,26 @@ def assign_dem_to_grid(
     cell_size_m = (pixel_lon * metres_per_degree_lon + pixel_lat * metres_per_degree_lat) / 2.0
     slope_arr, aspect_arr = _compute_slope_aspect(arr, cell_size_m)
 
-    # Reproject fishnet centroids to match DEM CRS for sampling
+    # Reproject fishnet centroids to match DEM CRS for sampling.
+    # Compute centroids in UTM (projected) for accuracy, then reproject to src_crs.
     gdf = fishnet_gdf.copy()
     orig_crs = gdf.crs
-    if orig_crs is not None and str(orig_crs) != str(src_crs):
-        centroids_wgs84 = gdf.to_crs(src_crs).geometry.centroid
-    else:
-        centroids_wgs84 = gdf.geometry.centroid
+    centroids_proj = gdf.geometry.centroid          # accurate in UTM
+    centroids_gdf = (
+        centroids_proj.to_frame("geometry")
+        .set_crs(orig_crs)
+        .to_crs(src_crs)
+    )
+    centroids_wgs84 = centroids_gdf.geometry
 
-    # Sample arrays at each centroid using rasterio transform
+    # Sample arrays at each centroid using rasterio transform — vectorized
     def _sample_array(arr2d: np.ndarray, xcoords, ycoords, nodata_val=np.nan) -> np.ndarray:
         rows, cols = rasterio.transform.rowcol(transform, xcoords, ycoords)
         nrows, ncols = arr2d.shape
-        out = np.full(len(rows), nodata_val, dtype=np.float32)
-        for i, (r, c) in enumerate(zip(rows, cols)):
-            if 0 <= r < nrows and 0 <= c < ncols:
-                v = arr2d[r, c]
-                out[i] = float(v) if np.isfinite(v) else nodata_val
+        r_idx = np.clip(np.array(rows, dtype=int), 0, nrows - 1)
+        c_idx = np.clip(np.array(cols, dtype=int), 0, ncols - 1)
+        out = arr2d[r_idx, c_idx].astype(np.float32)
+        out[~np.isfinite(out)] = nodata_val
         return out
 
     xs = centroids_wgs84.x.to_numpy()

@@ -668,6 +668,164 @@ async def optimize_scenario(body: OptimizeScenarioBody):
     }
 
 
+# ---------------------------------------------------------------------------
+# Scenario config write-back routes (project.yml ↔ UI bridge)
+# ---------------------------------------------------------------------------
+
+class SweepScenarioSpec(BaseModel):
+    """A single-variable sweep scenario (maps to the ``scenarios:`` list in project.yml)."""
+
+    name: str
+    variable: str
+    direction: Literal["increase", "decrease"] = "increase"
+    min_val: float = 0.0
+    max_val: float = 100.0
+    unit: str = ""
+    increments: list[float] = Field(default_factory=list)
+
+    class Config:
+        extra = "ignore"
+
+
+class JointScenarioInterventionSpec(BaseModel):
+    variable: str
+    direction: Literal["increase", "decrease"] = "increase"
+    increment: float
+
+    class Config:
+        extra = "ignore"
+
+
+class JointScenarioSpec(BaseModel):
+    """A multi-variable joint scenario (maps to ``joint_scenarios:`` in project.yml)."""
+
+    name: str
+    auto_propagate_dag: bool = True
+    interventions: list[JointScenarioInterventionSpec] = Field(default_factory=list)
+
+    class Config:
+        extra = "ignore"
+
+
+class UpdateScenariosBody(BaseModel):
+    scenarios: Optional[list[SweepScenarioSpec]] = None
+    joint_scenarios: Optional[list[JointScenarioSpec]] = None
+
+    class Config:
+        extra = "ignore"
+
+
+def _write_project_yaml() -> None:
+    """Persist ``state.raw_project_yaml`` back to disk."""
+    import yaml
+
+    yml_path = Path(deps.state.project_path) if deps.state.project_path else None
+    if yml_path is None:
+        return
+    if yml_path.is_dir():
+        yml_path = yml_path / "project.yml"
+    with open(yml_path, "w", encoding="utf-8") as fh:
+        yaml.dump(deps.state.raw_project_yaml, fh, default_flow_style=False, sort_keys=False)
+
+
+@router.patch("/scenarios/config")
+async def patch_scenario_config(body: UpdateScenariosBody):
+    """Write scenarios / joint_scenarios back to project.yml and library.jsonl.
+
+    Replaces *only* the sections included in the request body, leaving all
+    other project.yml keys untouched.  Also appends each new/changed scenario
+    to the append-only library as an audit record.
+    """
+    state = deps.state
+    if state.project_config is None or state.raw_project_yaml is None:
+        raise HTTPException(400, "No project loaded")
+
+    changed: list[str] = []
+
+    if body.scenarios is not None:
+        rows = [s.model_dump() for s in body.scenarios]
+        state.raw_project_yaml["scenarios"] = rows
+        state.project_config["scenarios"] = rows
+        changed.append("scenarios")
+
+    if body.joint_scenarios is not None:
+        rows = [s.model_dump() for s in body.joint_scenarios]
+        state.raw_project_yaml["joint_scenarios"] = rows
+        state.project_config["joint_scenarios"] = rows
+        changed.append("joint_scenarios")
+
+    if not changed:
+        raise HTTPException(400, "Request body must include 'scenarios' or 'joint_scenarios'")
+
+    _write_project_yaml()
+
+    # Auto-append each scenario to the library as audit trail
+    try:
+        from sparc.scenario.library import append_entry
+        from sparc.registry.provenance import compute_config_hash
+        from sparc.run.pipeline_paths import PipelinePaths
+
+        cfg_hash = compute_config_hash(state.project_config)
+        out_dir = PipelinePaths.from_config(state.project_config).output_dir
+        all_scenarios = list(body.scenarios or []) + list(body.joint_scenarios or [])
+        for sc in all_scenarios:
+            append_entry(
+                out_dir,
+                sc.model_dump(),
+                author="system",
+                comment=f"Saved via Scenario Builder ({', '.join(changed)})",
+                config_hash=cfg_hash,
+            )
+    except Exception:
+        pass
+
+    return {
+        "status": "saved",
+        "changed": changed,
+        "scenarios_count": len(state.raw_project_yaml.get("scenarios") or []),
+        "joint_scenarios_count": len(state.raw_project_yaml.get("joint_scenarios") or []),
+    }
+
+
+@router.delete("/scenarios/config/{scenario_name}")
+async def delete_scenario_config(
+    scenario_name: str,
+    kind: Literal["sweep", "joint"] = Query("sweep", description="'sweep' or 'joint'"),
+):
+    """Remove a named scenario from project.yml.
+
+    ``kind=sweep`` removes from ``scenarios:``; ``kind=joint`` removes from
+    ``joint_scenarios:``.  Returns 404 if the name is not found.
+    """
+    state = deps.state
+    if state.project_config is None or state.raw_project_yaml is None:
+        raise HTTPException(400, "No project loaded")
+
+    key = "scenarios" if kind == "sweep" else "joint_scenarios"
+    existing: list[dict] = list(state.raw_project_yaml.get(key) or [])
+    updated = [s for s in existing if s.get("name") != scenario_name]
+    if len(updated) == len(existing):
+        raise HTTPException(404, f"No {kind} scenario named '{scenario_name}' found")
+
+    state.raw_project_yaml[key] = updated
+    state.project_config[key] = updated
+    _write_project_yaml()
+
+    return {"status": "deleted", "name": scenario_name, "kind": kind, "remaining": len(updated)}
+
+
+@router.get("/scenarios/config")
+async def get_scenario_config():
+    """Return current scenarios and joint_scenarios from the loaded project config."""
+    state = deps.state
+    if state.project_config is None:
+        raise HTTPException(400, "No project loaded")
+    return {
+        "scenarios": state.project_config.get("scenarios") or [],
+        "joint_scenarios": state.project_config.get("joint_scenarios") or [],
+    }
+
+
 @router.get("/scenarios/results")
 async def scenario_results(format: str = Query("geojson", regex="^(json|geojson)$")):
     """Return scenario simulation results."""

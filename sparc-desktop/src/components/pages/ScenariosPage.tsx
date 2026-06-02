@@ -5,15 +5,20 @@ import {
   getScenarioDetail,
   getScenarioLibrary,
   appendScenarioToLibrary,
+  getScenarioConfig,
+  updateProjectScenarios,
+  deleteProjectScenario,
   dataSummary,
   runScenarioChain,
   type ScenarioTimeline,
   type ChainAction,
   type ChainStepResult,
+  type SweepScenarioSpec,
+  type JointScenarioSpec,
+  type JointScenarioIntervention,
 } from "@/lib/api";
 import { useNotification } from "@/hooks/useNotifications";
 import { SPARC_RAMP_HEX } from "@/lib/design-tokens";
-import { presetsForDomain, applyPresetToPredictors } from "@/lib/scenarioPresets";
 
 type ScenariosTab = "configure" | "library" | "timeline";
 
@@ -32,16 +37,6 @@ function naturalRange(col: string): { lo: number; hi: number; step: number; unit
   return null;
 }
 
-/** Compact label formatter for slider min/max/baseline values. */
-function fmtSlider(v: number): string {
-  if (!Number.isFinite(v)) return "—";
-  const abs = Math.abs(v);
-  if (abs >= 1000) return v.toFixed(0);
-  if (abs >= 100) return v.toFixed(1);
-  if (abs >= 10) return v.toFixed(1);
-  if (abs >= 1) return v.toFixed(2);
-  return v.toPrecision(3);
-}
 
 interface Scenario {
   id: string;
@@ -68,13 +63,34 @@ export default function ScenariosPage() {
   const [activeIdx, setActiveIdx] = useState(0);
   const [sliders, setSliders] = useState<InterventionSlider[]>([]);
   const [_configRaw, setConfigRaw] = useState<Record<string, unknown> | null>(null);
-  const [addingScenario, setAddingScenario] = useState(false);
-  const [newScenarioName, setNewScenarioName] = useState("");
   const [library, setLibrary] = useState<ScenarioTimeline | null>(null);
   const [libParent, setLibParent] = useState<string | null>(null);
   const [libComment, setLibComment] = useState("");
   const [libAuthor, setLibAuthor] = useState("me");
   const histRef = useRef<HTMLCanvasElement>(null);
+
+  // Defined scenarios (from project.yml, written back on save)
+  const [definedSweeps, setDefinedSweeps] = useState<SweepScenarioSpec[]>([]);
+  const [definedJoints, setDefinedJoints] = useState<JointScenarioSpec[]>([]);
+  const [showRerunBanner, setShowRerunBanner] = useState(false);
+
+  // Sweep builder state
+  type BuilderMode = "sweep" | "joint" | null;
+  const [builderMode, setBuilderMode] = useState<BuilderMode>(null);
+  const [sweepName, setSweepName] = useState("");
+  const [sweepVariable, setSweepVariable] = useState("");
+  const [sweepDirection, setSweepDirection] = useState<"increase" | "decrease">("increase");
+  const [sweepMin, setSweepMin] = useState("0");
+  const [sweepMax, setSweepMax] = useState("50");
+  const [sweepStep, setSweepStep] = useState("5");
+  const [sweepUnit, setSweepUnit] = useState("");
+
+  // Joint builder state
+  const [jointName, setJointName] = useState("");
+  const [jointPropagate, setJointPropagate] = useState(true);
+  const [jointRows, setJointRows] = useState<JointScenarioIntervention[]>([
+    { variable: "", direction: "increase", increment: 10 },
+  ]);
 
   // Timeline tab state
   const [chainActions, setChainActions] = useState<ChainAction[]>([]);
@@ -102,43 +118,23 @@ export default function ScenariosPage() {
       })
       .catch(() => {});
 
-    // Load config for intervention builder sliders + preset library
+    // Load defined scenarios from project.yml via /scenarios/config
+    getScenarioConfig()
+      .then((cfg) => {
+        setDefinedSweeps(cfg.scenarios ?? []);
+        setDefinedJoints(cfg.joint_scenarios ?? []);
+        // Pre-populate sweep builder variable from first defined sweep
+        if ((cfg.scenarios ?? []).length > 0 && cfg.scenarios[0].variable) {
+          setSweepVariable(cfg.scenarios[0].variable);
+        }
+      })
+      .catch(() => {});
+
+    // Load config for slider predictors + preset hints
     getConfig()
       .then((config) => {
         setConfigRaw(config as unknown as Record<string, unknown>);
-        const cfgScenarios = (config.scenarios ?? []) as any[];
         const cols = config.predictors ?? [];
-        const domain = config.project?.domain ?? "";
-        const presets = presetsForDomain(domain);
-
-        setScenarios((existing) => {
-          // Don't clobber API-loaded computed scenarios; merge config + presets only if empty.
-          if (existing.length > 0) return existing;
-          const merged: Scenario[] = [];
-          for (let i = 0; i < cfgScenarios.length; i++) {
-            const sc = cfgScenarios[i] ?? {};
-            merged.push({
-              id: `cfg-${i}`,
-              name: sc.name ?? `Scenario ${i + 1}`,
-              interventions: sc.interventions ?? {},
-              delta: sc.delta ?? 0,
-              status: "draft",
-            });
-          }
-          for (const p of presets) {
-            const interventions = applyPresetToPredictors(p, cols);
-            // Only include presets that match at least one project predictor.
-            if (p.id !== "preset-baseline" && Object.keys(interventions).length === 0) continue;
-            merged.push({
-              id: p.id,
-              name: p.name,
-              interventions,
-              delta: 0,
-              status: p.id === "preset-baseline" ? "baseline" : "draft",
-            });
-          }
-          return merged;
-        });
 
         // Build sliders from predictors in config, using domain-inferred natural ranges
         if (cols.length > 0) {
@@ -325,41 +321,11 @@ export default function ScenariosPage() {
     }
   }, [scenarios, activeIdx]);
 
-  const handleSliderChange = useCallback((variable: string, value: number) => {
-    setSliders((prev) => prev.map((s) => s.variable === variable ? { ...s, value } : s));
-  }, []);
-
-  const handleAddScenario = useCallback(() => {
-    setNewScenarioName(`Scenario ${scenarios.length + 1}`);
-    setAddingScenario(true);
-  }, [scenarios.length]);
 
   const refreshLibrary = useCallback(() => {
     getScenarioLibrary().then(setLibrary).catch(() => setLibrary(null));
   }, []);
 
-  const handleConfirmAddScenario = useCallback(async () => {
-    if (!newScenarioName.trim()) return;
-    const interventions: Record<string, number> = {};
-    sliders.forEach((s) => {
-      if (s.value !== 0) interventions[s.variable] = s.value;
-    });
-    const name = newScenarioName.trim();
-    const newSc = { id: `s${Date.now()}`, name, interventions, delta: 0, status: "draft" as const };
-    setScenarios((prev) => [...prev, newSc]);
-    setAddingScenario(false);
-    setNewScenarioName("");
-    try {
-      await appendScenarioToLibrary(
-        { name, interventions, delta: 0, status: "draft" },
-        { author: libAuthor, comment: name },
-      );
-      notify("success", `Scenario "${name}" added`);
-      refreshLibrary();
-    } catch {
-      notify("warning", `Scenario "${name}" added locally — could not persist to server`);
-    }
-  }, [newScenarioName, sliders, libAuthor, notify, refreshLibrary]);
 
   useEffect(() => { refreshLibrary(); }, [refreshLibrary]);
 
@@ -379,12 +345,111 @@ export default function ScenariosPage() {
     }
   }, [scenarios, activeIdx, libAuthor, libComment, libParent, notify, refreshLibrary]);
 
+  /** Generate increments list from sweep builder range inputs. */
+  const buildIncrements = useCallback((): number[] => {
+    const lo = parseFloat(sweepMin);
+    const hi = parseFloat(sweepMax);
+    const st = parseFloat(sweepStep);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || !Number.isFinite(st) || st <= 0) return [];
+    const out: number[] = [];
+    for (let v = lo; v <= hi + 1e-9; v += st) {
+      out.push(Math.round(v * 1e6) / 1e6);
+    }
+    return out;
+  }, [sweepMin, sweepMax, sweepStep]);
+
+  const handleSaveSweep = useCallback(async () => {
+    if (!sweepName.trim() || !sweepVariable.trim()) {
+      notify("warning", "Name and variable required");
+      return;
+    }
+    const increments = buildIncrements();
+    if (increments.length === 0) {
+      notify("warning", "Invalid range — check min/max/step");
+      return;
+    }
+    const newSweep: SweepScenarioSpec = {
+      name: sweepName.trim(),
+      variable: sweepVariable.trim(),
+      direction: sweepDirection,
+      min_val: parseFloat(sweepMin),
+      max_val: parseFloat(sweepMax),
+      unit: sweepUnit,
+      increments,
+    };
+    const updated = definedSweeps.some((s) => s.name === newSweep.name)
+      ? definedSweeps.map((s) => (s.name === newSweep.name ? newSweep : s))
+      : [...definedSweeps, newSweep];
+    try {
+      await updateProjectScenarios({ scenarios: updated, joint_scenarios: definedJoints });
+      setDefinedSweeps(updated);
+      setBuilderMode(null);
+      setSweepName("");
+      setShowRerunBanner(true);
+      notify("success", `Sweep "${newSweep.name}" saved to project.yml`);
+    } catch (err) {
+      notify("error", err instanceof Error ? err.message : String(err));
+    }
+  }, [sweepName, sweepVariable, sweepDirection, sweepMin, sweepMax, sweepStep, sweepUnit, buildIncrements, definedSweeps, definedJoints, notify]);
+
+  const handleSaveJoint = useCallback(async () => {
+    if (!jointName.trim()) { notify("warning", "Name required"); return; }
+    const validRows = jointRows.filter((r) => r.variable.trim());
+    if (validRows.length === 0) { notify("warning", "Add at least one variable"); return; }
+    const newJoint: JointScenarioSpec = {
+      name: jointName.trim(),
+      auto_propagate_dag: jointPropagate,
+      interventions: validRows,
+    };
+    const updated = definedJoints.some((j) => j.name === newJoint.name)
+      ? definedJoints.map((j) => (j.name === newJoint.name ? newJoint : j))
+      : [...definedJoints, newJoint];
+    try {
+      await updateProjectScenarios({ scenarios: definedSweeps, joint_scenarios: updated });
+      setDefinedJoints(updated);
+      setBuilderMode(null);
+      setJointName("");
+      setJointRows([{ variable: "", direction: "increase", increment: 10 }]);
+      setShowRerunBanner(true);
+      notify("success", `Joint scenario "${newJoint.name}" saved to project.yml`);
+    } catch (err) {
+      notify("error", err instanceof Error ? err.message : String(err));
+    }
+  }, [jointName, jointPropagate, jointRows, definedSweeps, definedJoints, notify]);
+
+  const handleDeleteSweep = useCallback(async (name: string) => {
+    try {
+      await deleteProjectScenario(name, "sweep");
+      setDefinedSweeps((prev) => prev.filter((s) => s.name !== name));
+      setShowRerunBanner(true);
+      notify("success", `Removed "${name}"`);
+    } catch (err) {
+      notify("error", err instanceof Error ? err.message : String(err));
+    }
+  }, [notify]);
+
+  const handleDeleteJoint = useCallback(async (name: string) => {
+    try {
+      await deleteProjectScenario(name, "joint");
+      setDefinedJoints((prev) => prev.filter((j) => j.name !== name));
+      setShowRerunBanner(true);
+      notify("success", `Removed "${name}"`);
+    } catch (err) {
+      notify("error", err instanceof Error ? err.message : String(err));
+    }
+  }, [notify]);
+
   return (
     <div>
       <SectionHeader
         kicker="08 · analysis"
         label="Scenarios"
-        right={<Btn small onClick={handleAddScenario}>+ Add scenario</Btn>}
+        right={
+          <div style={{ display: "flex", gap: 6 }}>
+            <Btn small onClick={() => setBuilderMode("sweep")}>+ Sweep</Btn>
+            <Btn small onClick={() => setBuilderMode("joint")}>+ Joint</Btn>
+          </div>
+        }
       />
 
       {/* Tab bar — Configure / Library */}
@@ -428,136 +493,272 @@ export default function ScenariosPage() {
       </div>
 
       <StatGrid>
-        <Stat label="Scenarios" value={String(scenarios.length)} tint="var(--ink)" />
+        <Stat label="Defined sweeps" value={String(definedSweeps.length)} tint="var(--ink)" />
+        <Stat label="Joint scenarios" value={String(definedJoints.length)} tint="var(--amber)" />
         <Stat label="Computed" value={String(scenarios.filter((s) => s.status === "computed").length)} tint="var(--crimson)" />
         <Stat label="Best Δ" value={scenarios.length ? `${Math.min(...scenarios.map((s) => s.delta)).toFixed(1)}` : "—"} tint="var(--purple)" />
-        <Stat label="Variables" value={String(sliders.length)} tint="var(--amber)" />
       </StatGrid>
 
+      {/* Re-run banner */}
+      {showRerunBanner && (
+        <div style={{
+          background: "rgba(91,58,140,.08)",
+          border: "1px solid var(--purple)",
+          borderRadius: 6,
+          padding: "10px 14px",
+          marginBottom: 12,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+        }}>
+          <span style={{ fontSize: 12 }}>
+            ✓ Scenarios saved to <span className="mono">project.yml</span>. Re-run Stage 4 to compute updated results.
+          </span>
+          <div style={{ display: "flex", gap: 6 }}>
+            <Btn small primary onClick={() => { setShowRerunBanner(false); setTab("timeline"); }}>Re-run</Btn>
+            <Btn small onClick={() => setShowRerunBanner(false)}>Dismiss</Btn>
+          </div>
+        </div>
+      )}
+
       {/* ------------------------------------------------------------ */}
-      {/* Configure tab — scenario library card + intervention builder  */}
+      {/* Configure tab — Defined (project.yml) + Computed (pipeline)  */}
       {/* ------------------------------------------------------------ */}
       {tab === "configure" && (
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <Card title="Scenario library" subtitle="click to select · compare to baseline">
-            {scenarios.map((sc, i) => (
-              <div
-                key={sc.id}
-                onClick={() => setActiveIdx(i)}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr auto auto",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "10px 8px",
-                  borderTop: i > 0 ? "1px dashed var(--line)" : "none",
-                  cursor: "pointer",
-                  background: activeIdx === i ? "rgba(231,60,37,0.04)" : "transparent",
-                  borderRadius: 4,
-                }}
-              >
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+
+        {/* Builder panel (shown when + Sweep or + Joint clicked) */}
+        {builderMode === "sweep" && (
+          <Card title="New sweep scenario" subtitle="single variable · range-based · written to project.yml">
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <span style={{ fontSize: 11, fontWeight: 600 }}>Scenario name</span>
+                <input value={sweepName} onChange={(e) => setSweepName(e.target.value)}
+                  placeholder="e.g. Canopy Increase"
+                  style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "5px 8px", fontSize: 12, fontFamily: "inherit" }} />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <span style={{ fontSize: 11, fontWeight: 600 }}>Variable</span>
+                {sliders.length > 0 ? (
+                  <select value={sweepVariable} onChange={(e) => setSweepVariable(e.target.value)}
+                    style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "5px 8px", fontSize: 12, fontFamily: "inherit" }}>
+                    <option value="">— select —</option>
+                    {sliders.map((s) => <option key={s.variable} value={s.variable}>{s.variable}</option>)}
+                  </select>
+                ) : (
+                  <input value={sweepVariable} onChange={(e) => setSweepVariable(e.target.value)}
+                    placeholder="e.g. Pct_Canopy"
+                    style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "5px 8px", fontSize: 12, fontFamily: "inherit" }} />
+                )}
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <span style={{ fontSize: 11, fontWeight: 600 }}>Direction</span>
+                <select value={sweepDirection} onChange={(e) => setSweepDirection(e.target.value as "increase" | "decrease")}
+                  style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "5px 8px", fontSize: 12, fontFamily: "inherit" }}>
+                  <option value="increase">increase</option>
+                  <option value="decrease">decrease</option>
+                </select>
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <span style={{ fontSize: 11, fontWeight: 600 }}>Unit (optional)</span>
+                <input value={sweepUnit} onChange={(e) => setSweepUnit(e.target.value)}
+                  placeholder="e.g. percentage points"
+                  style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "5px 8px", fontSize: 12, fontFamily: "inherit" }} />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <span style={{ fontSize: 11, fontWeight: 600 }}>Range min</span>
+                <input type="number" value={sweepMin} onChange={(e) => setSweepMin(e.target.value)} step="any"
+                  style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "5px 8px", fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }} />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <span style={{ fontSize: 11, fontWeight: 600 }}>Range max</span>
+                <input type="number" value={sweepMax} onChange={(e) => setSweepMax(e.target.value)} step="any"
+                  style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "5px 8px", fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }} />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <span style={{ fontSize: 11, fontWeight: 600 }}>Step</span>
+                <input type="number" value={sweepStep} onChange={(e) => setSweepStep(e.target.value)} step="any" min="0.001"
+                  style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "5px 8px", fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }} />
+              </label>
+              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <span style={{ fontSize: 11, fontWeight: 600 }}>Preview</span>
+                <span className="mono" style={{ fontSize: 10, color: "var(--muted)", paddingTop: 6 }}>
+                  {buildIncrements().slice(0, 8).join(", ")}{buildIncrements().length > 8 ? ` … (${buildIncrements().length} total)` : ""}
+                </span>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <Btn small primary onClick={handleSaveSweep}>Save to project.yml</Btn>
+              <Btn small onClick={() => setBuilderMode(null)}>Cancel</Btn>
+            </div>
+          </Card>
+        )}
+
+        {builderMode === "joint" && (
+          <Card title="New joint scenario" subtitle="multi-variable · fixed increment per variable · written to project.yml">
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <span style={{ fontSize: 11, fontWeight: 600 }}>Scenario name</span>
+                <input value={jointName} onChange={(e) => setJointName(e.target.value)}
+                  placeholder="e.g. Green Infrastructure Package"
+                  style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "5px 8px", fontSize: 12, fontFamily: "inherit" }} />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 3, justifyContent: "flex-end" }}>
+                <span style={{ fontSize: 11, fontWeight: 600 }}>Auto-propagate DAG</span>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                  <input type="checkbox" checked={jointPropagate} onChange={(e) => setJointPropagate(e.target.checked)} />
+                  <span style={{ fontSize: 11 }}>Propagate through causal DAG</span>
+                </label>
+              </label>
+            </div>
+            {jointRows.map((row, i) => (
+              <div key={i} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr auto", gap: 8, marginBottom: 8, alignItems: "flex-end" }}>
+                {sliders.length > 0 ? (
+                  <select value={row.variable} onChange={(e) => setJointRows((prev) => prev.map((r, j) => j === i ? { ...r, variable: e.target.value } : r))}
+                    style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "5px 8px", fontSize: 12, fontFamily: "inherit" }}>
+                    <option value="">— variable —</option>
+                    {sliders.map((s) => <option key={s.variable} value={s.variable}>{s.variable}</option>)}
+                  </select>
+                ) : (
+                  <input value={row.variable} onChange={(e) => setJointRows((prev) => prev.map((r, j) => j === i ? { ...r, variable: e.target.value } : r))}
+                    placeholder="variable"
+                    style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "5px 8px", fontSize: 12, fontFamily: "inherit" }} />
+                )}
+                <select value={row.direction} onChange={(e) => setJointRows((prev) => prev.map((r, j) => j === i ? { ...r, direction: e.target.value as "increase" | "decrease" } : r))}
+                  style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "5px 8px", fontSize: 12, fontFamily: "inherit" }}>
+                  <option value="increase">increase</option>
+                  <option value="decrease">decrease</option>
+                </select>
+                <input type="number" value={row.increment} onChange={(e) => setJointRows((prev) => prev.map((r, j) => j === i ? { ...r, increment: parseFloat(e.target.value) || 0 } : r))}
+                  placeholder="increment" step="any"
+                  style={{ border: "1px solid var(--line)", borderRadius: 4, padding: "5px 8px", fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }} />
+                <button onClick={() => setJointRows((prev) => prev.filter((_, j) => j !== i))}
+                  style={{ background: "none", border: 0, color: "var(--muted)", cursor: "pointer", fontSize: 16, padding: 0, lineHeight: 1 }}
+                  title="Remove row">×</button>
+              </div>
+            ))}
+            <Btn small onClick={() => setJointRows((prev) => [...prev, { variable: "", direction: "increase", increment: 10 }])}>+ Variable</Btn>
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <Btn small primary onClick={handleSaveJoint}>Save to project.yml</Btn>
+              <Btn small onClick={() => setBuilderMode(null)}>Cancel</Btn>
+            </div>
+          </Card>
+        )}
+
+        {/* Defined scenarios from project.yml */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <Card title="Defined sweeps" subtitle="single-variable · from project.yml · re-run to compute">
+            {definedSweeps.length === 0 ? (
+              <div style={{ fontSize: 11, color: "var(--muted)", padding: "8px 0" }}>
+                No sweeps defined. Click <strong>+ Sweep</strong> to create one.
+              </div>
+            ) : definedSweeps.map((sc) => (
+              <div key={sc.name} style={{
+                display: "grid",
+                gridTemplateColumns: "1fr auto auto",
+                alignItems: "center",
+                gap: 8,
+                padding: "9px 0",
+                borderTop: "1px dashed var(--line)",
+              }}>
                 <div>
                   <div style={{ fontSize: 12.5, fontWeight: 600 }}>{sc.name}</div>
                   <div className="mono" style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
-                    {Object.entries(sc.interventions)
-                      .map(([k, v]) => `${k}: ${v > 0 ? "+" : ""}${v}`)
-                      .join(", ") || "no interventions"}
+                    {sc.direction} {sc.variable} · {sc.increments.length} increment{sc.increments.length !== 1 ? "s" : ""}{sc.unit ? ` (${sc.unit})` : ""}
+                  </div>
+                  <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)" }}>
+                    [{sc.increments.slice(0, 5).join(", ")}{sc.increments.length > 5 ? "…" : ""}]
                   </div>
                 </div>
-                <span
-                  className="mono"
-                  style={{
-                    fontSize: 13,
-                    fontWeight: 700,
-                    color: sc.delta < 0 ? "var(--purple)" : sc.delta > 0 ? "var(--crimson)" : "var(--muted)",
-                  }}
-                >
-                  {sc.delta === 0 ? "—" : `${sc.delta > 0 ? "+" : ""}${sc.delta.toFixed(1)} °C`}
-                </span>
-                <Tag
-                  color={
-                    sc.status === "computed"
-                      ? "var(--ink)"
-                      : sc.status === "baseline"
-                      ? "var(--purple)"
-                      : "var(--muted)"
-                  }
-                >
-                  {sc.status}
-                </Tag>
+                <Tag color="var(--ink)">defined</Tag>
+                <button onClick={() => handleDeleteSweep(sc.name)}
+                  style={{ background: "none", border: 0, color: "var(--muted)", cursor: "pointer", fontSize: 15, padding: 0, lineHeight: 1 }}
+                  title="Delete">×</button>
               </div>
             ))}
-            {addingScenario && (
-              <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "10px 8px", borderTop: "1px dashed var(--line)", marginTop: 4 }}>
-                <input
-                  autoFocus
-                  type="text"
-                  value={newScenarioName}
-                  onChange={(e) => setNewScenarioName(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") handleConfirmAddScenario(); if (e.key === "Escape") setAddingScenario(false); }}
-                  placeholder="Scenario name…"
-                  style={{ flex: 1, border: "1px solid var(--crimson)", borderRadius: 4, padding: "5px 8px", fontSize: 12, fontFamily: "inherit" }}
-                />
-                <Btn small primary onClick={handleConfirmAddScenario}>Add</Btn>
-                <Btn small onClick={() => setAddingScenario(false)}>Cancel</Btn>
-              </div>
-            )}
           </Card>
 
-          <Card title="Intervention builder" subtitle="adjust sliders to create new scenario">
-            {sliders.map((s) => (
-              <div key={s.variable} style={{ padding: "10px 0", borderTop: "1px dashed var(--line)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                  <span style={{ fontSize: 12, fontWeight: 600 }}>{s.variable.replace(/_/g, " ")}</span>
-                  <span
-                    className="mono"
-                    style={{
-                      fontSize: 12,
-                      fontWeight: 700,
-                      color: s.value !== 0 ? "var(--crimson)" : "var(--muted)",
-                    }}
-                  >
-                    {s.value > 0 ? "+" : ""}
-                    {s.value.toFixed(2)} {s.unit}
-                  </span>
+          <Card title="Defined joint scenarios" subtitle="multi-variable · from project.yml · re-run to compute">
+            {definedJoints.length === 0 ? (
+              <div style={{ fontSize: 11, color: "var(--muted)", padding: "8px 0" }}>
+                No joint scenarios. Click <strong>+ Joint</strong> to create one.
+              </div>
+            ) : definedJoints.map((sc) => (
+              <div key={sc.name} style={{
+                display: "grid",
+                gridTemplateColumns: "1fr auto auto",
+                alignItems: "center",
+                gap: 8,
+                padding: "9px 0",
+                borderTop: "1px dashed var(--line)",
+              }}>
+                <div>
+                  <div style={{ fontSize: 12.5, fontWeight: 600 }}>{sc.name}</div>
+                  <div className="mono" style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
+                    {sc.interventions.map((v) => `${v.direction === "decrease" ? "−" : "+"}${v.increment} ${v.variable}`).join(", ")}
+                  </div>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span className="mono" style={{ fontSize: 9, color: "var(--muted)", width: 52, textAlign: "right", flexShrink: 0 }}>
-                    {fmtSlider(s.min)}{s.unit}
-                  </span>
-                  <input
-                    type="range"
-                    min={s.min}
-                    max={s.max}
-                    step={s.step}
-                    value={s.value}
-                    onChange={(e) => handleSliderChange(s.variable, Number(e.target.value))}
-                    style={{ flex: 1, accentColor: "var(--crimson)" }}
-                  />
-                  <span className="mono" style={{ fontSize: 9, color: "var(--muted)", width: 52, flexShrink: 0 }}>
-                    {fmtSlider(s.max)}{s.unit}
-                  </span>
-                </div>
-                <div className="mono" style={{ fontSize: 9.5, color: "var(--muted)", marginTop: 2 }}>
-                  baseline: {fmtSlider(s.baseline)}{s.unit}
-                </div>
+                <Tag color="var(--amber)">{sc.auto_propagate_dag ? "DAG" : "no-DAG"}</Tag>
+                <button onClick={() => handleDeleteJoint(sc.name)}
+                  style={{ background: "none", border: 0, color: "var(--muted)", cursor: "pointer", fontSize: 15, padding: 0, lineHeight: 1 }}
+                  title="Delete">×</button>
               </div>
             ))}
           </Card>
         </div>
 
-        <Card title="Posterior distribution" subtitle={scenarios[activeIdx]?.name ?? "select a scenario"}>
-          <canvas
-            ref={histRef}
-            style={{ width: "100%", height: 300, display: "block" }}
-          />
-          <div className="mono" style={{ fontSize: 10, color: "var(--muted)", marginTop: 8, textAlign: "center" }}>
-            {scenarios[activeIdx]?.status === "computed"
-              ? `Median Δ = ${scenarios[activeIdx]?.delta.toFixed(2)} · 95% CI: [${(scenarios[activeIdx]?.delta - 0.98).toFixed(2)}, ${(scenarios[activeIdx]?.delta + 0.98).toFixed(2)}]`
-              : "Not yet computed"}
-          </div>
+        {/* Computed results from pipeline */}
+        <Card title="Computed results" subtitle="from last pipeline run · click to inspect">
+          {scenarios.filter((s) => s.status === "computed").length === 0 ? (
+            <div style={{ fontSize: 11, color: "var(--muted)", padding: "8px 0" }}>
+              No computed results yet. Define scenarios above, then re-run the pipeline.
+            </div>
+          ) : scenarios.filter((s) => s.status === "computed").map((sc, i) => (
+            <div
+              key={sc.id}
+              onClick={() => setActiveIdx(scenarios.indexOf(sc))}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr auto auto",
+                alignItems: "center",
+                gap: 10,
+                padding: "10px 8px",
+                borderTop: i > 0 ? "1px dashed var(--line)" : "none",
+                cursor: "pointer",
+                background: activeIdx === scenarios.indexOf(sc) ? "rgba(231,60,37,0.04)" : "transparent",
+                borderRadius: 4,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 12.5, fontWeight: 600 }}>{sc.name}</div>
+                <div className="mono" style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
+                  {Object.entries(sc.interventions)
+                    .map(([k, v]) => `${k}: ${v > 0 ? "+" : ""}${v}`)
+                    .join(", ") || "—"}
+                </div>
+              </div>
+              <span className="mono" style={{
+                fontSize: 13, fontWeight: 700,
+                color: sc.delta < 0 ? "var(--purple)" : sc.delta > 0 ? "var(--crimson)" : "var(--muted)",
+              }}>
+                {sc.delta === 0 ? "—" : `${sc.delta > 0 ? "+" : ""}${sc.delta.toFixed(1)}`}
+              </span>
+              <Tag color="var(--ink)">computed</Tag>
+            </div>
+          ))}
+          {scenarios.filter((s) => s.status === "computed").length > 0 && (
+            <Card title="Posterior distribution" subtitle={scenarios[activeIdx]?.name ?? "select a scenario"}>
+              <canvas ref={histRef} style={{ width: "100%", height: 220, display: "block" }} />
+              <div className="mono" style={{ fontSize: 10, color: "var(--muted)", marginTop: 8, textAlign: "center" }}>
+                {scenarios[activeIdx]?.status === "computed"
+                  ? `Median Δ = ${scenarios[activeIdx]?.delta.toFixed(2)}`
+                  : "Not yet computed"}
+              </div>
+            </Card>
+          )}
         </Card>
+
       </div>
       )}
 
@@ -588,7 +789,7 @@ export default function ScenariosPage() {
       >
         {!library || library.count === 0 ? (
           <div style={{ fontSize: 11, color: "var(--muted)" }}>
-            No saved entries. Pick a scenario above and click "Save active" to seed the library.
+            No saved entries. Scenarios are auto-appended here when saved to project.yml.
           </div>
         ) : (
           <div style={{ overflowX: "auto" }}>

@@ -558,7 +558,15 @@ def _median_composite(scene_arrays: list[dict[str, np.ndarray]]) -> dict[str, np
     composite: dict[str, np.ndarray] = {}
     all_keys = {k for s in scene_arrays for k in s}
     for key in all_keys:
-        stack = np.array([s[key] for s in scene_arrays if key in s], dtype=np.float32)
+        arrays = [s[key] for s in scene_arrays if key in s and s[key] is not None]
+        if not arrays:
+            continue
+        # Filter to most common shape to avoid inhomogeneous-array errors when
+        # scenes from different WRS-2 tiles have slightly different dimensions.
+        from collections import Counter
+        target_shape = Counter(a.shape for a in arrays).most_common(1)[0][0]
+        filtered = [a for a in arrays if a.shape == target_shape]
+        stack = np.stack(filtered, axis=0).astype(np.float32)
         composite[key] = np.nanmedian(stack, axis=0)
     return composite
 
@@ -567,34 +575,43 @@ def _assign_arrays_to_fishnet(
     fishnet_gdf: object,
     index_arrays: dict[str, np.ndarray],
 ) -> object:
-    """Zonal-mean each index array onto fishnet cells."""
-    import rasterstats
+    """Assign index arrays to fishnet cells via centroid point sampling.
+
+    Each fishnet cell centroid is mapped to the nearest pixel in the array
+    using rasterio's rowcol transform — O(N) array indexing, orders of
+    magnitude faster than polygon zonal stats for large grids.
+    """
     import rasterio
-    from rasterio.transform import from_bounds
+    from rasterio.transform import from_bounds, rowcol as _rowcol
 
     gdf = fishnet_gdf.copy()  # type: ignore[union-attr]
 
-    # Reproject fishnet to EPSG:4326 so it matches the geographic transform
-    # built from EPSG:4326 bounds.  Without this rasterstats receives EPSG:3857
-    # metre coordinates against a degree-scale affine, allocating a 3+ TiB
-    # interim array.
+    # Compute accurate centroids in the original projected CRS, then reproject to
+    # EPSG:4326 to match the Landsat array grid. Avoids geographic-CRS centroid warning.
     gdf_4326 = gdf.to_crs("EPSG:4326")  # type: ignore[union-attr]
+    centroids_proj = gdf.geometry.centroid  # type: ignore[union-attr]
+    centroids = (
+        centroids_proj.to_frame("geometry")
+        .set_crs(gdf.crs)           # type: ignore[union-attr]
+        .to_crs("EPSG:4326")
+        .geometry
+    )
+    xs = centroids.x.values
+    ys = centroids.y.values
     bounds = gdf_4326.total_bounds  # type: ignore[union-attr]
 
     for name, arr in index_arrays.items():
         if arr is None or arr.size == 0:
             gdf[name] = float("nan")  # type: ignore[index]
             continue
-        rows, cols = arr.shape
-        transform = from_bounds(*bounds, cols, rows)
-        results = rasterstats.zonal_stats(
-            gdf_4326,  # fishnet in same CRS as transform
-            arr,
-            affine=transform,
-            stats=["mean"],
-            nodata=np.nan,
-        )
-        gdf[name] = [r.get("mean") for r in results]  # type: ignore[index]
+        n_rows, n_cols = arr.shape
+        transform = from_bounds(*bounds, n_cols, n_rows)
+        row_idx, col_idx = _rowcol(transform, xs, ys)
+        row_idx = np.clip(np.array(row_idx, dtype=int), 0, n_rows - 1)
+        col_idx = np.clip(np.array(col_idx, dtype=int), 0, n_cols - 1)
+        values = arr[row_idx, col_idx].astype(float)
+        values[~np.isfinite(values)] = np.nan
+        gdf[name] = values  # type: ignore[index]
     return gdf
 
 

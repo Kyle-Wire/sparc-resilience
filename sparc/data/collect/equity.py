@@ -320,7 +320,9 @@ def _assign_cdc_svi_to_grid(
     centroids = fishnet_gdf.copy()  # type: ignore[union-attr]
     centroids["geometry"] = centroids.geometry.centroid  # type: ignore[union-attr]
 
-    joined = gpd.sjoin_nearest(centroids, svi_gdf[["cdc_svi", "geometry"]], how="left")  # type: ignore[index]
+    # Reproject SVI to fishnet CRS before spatial join to avoid CRS mismatch
+    svi_proj = svi_gdf.to_crs(fishnet_gdf.crs)  # type: ignore[union-attr]
+    joined = gpd.sjoin_nearest(centroids, svi_proj[["cdc_svi", "geometry"]], how="left")  # type: ignore[index]
     result = fishnet_gdf.copy()  # type: ignore[union-attr]
     result["cdc_svi"] = joined["cdc_svi"].values  # type: ignore[index]
     return result

@@ -238,6 +238,225 @@ def _downscale_to_fishnet(
     return gdf
 
 
+# ---------------------------------------------------------------------------
+# ERA5 boundary conditions — hourly 3-window fetch
+# ---------------------------------------------------------------------------
+
+def download_era5_boundary(
+    bbox: tuple[float, float, float, float],
+    campaign_date: "date",
+) -> tuple[list[float], list[float], dict]:
+    """Fetch ERA5 hourly boundary conditions at 3 time windows on the campaign date.
+
+    Fetches ``temperature_2m``, ``windspeed_10m``, ``winddirection_10m``, and
+    ``relativehumidity_2m`` at ERA5 native grid points covering *bbox* for
+    morning (~6 am), midday (~1 pm), and evening (~8 pm) local solar time.
+
+    UTC hours are approximated from the bbox centroid longitude::
+
+        utc_offset = round(mean(minx, maxx) / 15)
+        morning_utc = (6  - utc_offset) % 24
+        midday_utc  = (13 - utc_offset) % 24
+        evening_utc = (20 - utc_offset) % 24
+
+    Parameters
+    ----------
+    bbox : (minx, miny, maxx, maxy) in EPSG:4326
+    campaign_date : date
+        The CAPA campaign date.  Only data from this single day is fetched.
+
+    Returns
+    -------
+    (grid_lons, grid_lats, boundary_data)
+        ``boundary_data`` maps ``(lon, lat)`` to a dict with keys
+        ``"morning"``, ``"midday"``, ``"evening"``, each holding a sub-dict
+        ``{"t2m": float, "windspeed": float, "winddir": float, "rh": float}``.
+    """
+    minx, miny, maxx, maxy = bbox
+    centroid_lon = (minx + maxx) / 2.0
+    utc_offset = round(centroid_lon / 15.0)
+    morning_utc = (6  - utc_offset) % 24
+    midday_utc  = (13 - utc_offset) % 24
+    evening_utc = (20 - utc_offset) % 24
+
+    grid_lons, grid_lats = _era5_grid_points_in_bbox(bbox)
+
+    boundary_data: dict = {}
+    for lon in grid_lons:
+        for lat in grid_lats:
+            point_data = _fetch_boundary_point(
+                lon, lat, campaign_date,
+                morning_utc, midday_utc, evening_utc,
+            )
+            boundary_data[(round(lon, 4), round(lat, 4))] = point_data
+
+    return grid_lons, grid_lats, boundary_data
+
+
+def assign_era5_boundary_to_grid(
+    fishnet_gdf: object,
+    grid_lons: list[float],
+    grid_lats: list[float],
+    boundary_data: dict,
+) -> object:
+    """Bilinearly downscale 3-window ERA5 boundary conditions onto fishnet centroids.
+
+    Appends 12 columns to *fishnet_gdf*::
+
+        era5_morning_t2m,  era5_morning_windspeed,  era5_morning_winddir,  era5_morning_rh,
+        era5_midday_t2m,   era5_midday_windspeed,   era5_midday_winddir,   era5_midday_rh,
+        era5_evening_t2m,  era5_evening_windspeed,  era5_evening_winddir,  era5_evening_rh
+
+    Falls back to NaN on any failure.
+
+    Parameters
+    ----------
+    fishnet_gdf : gpd.GeoDataFrame
+    grid_lons, grid_lats : list[float]
+        ERA5 grid point coordinates from :func:`download_era5_boundary`.
+    boundary_data : dict
+        Boundary data from :func:`download_era5_boundary`.
+    """
+    _ERA5_BOUNDARY_COLS = [
+        "era5_morning_t2m", "era5_morning_windspeed",
+        "era5_morning_winddir", "era5_morning_rh",
+        "era5_midday_t2m",  "era5_midday_windspeed",
+        "era5_midday_winddir",  "era5_midday_rh",
+        "era5_evening_t2m", "era5_evening_windspeed",
+        "era5_evening_winddir", "era5_evening_rh",
+    ]
+
+    gdf = fishnet_gdf.copy()  # type: ignore[union-attr]
+
+    if not boundary_data:
+        for col in _ERA5_BOUNDARY_COLS:
+            gdf[col] = float("nan")  # type: ignore[index]
+        return gdf
+
+    try:
+        from scipy.interpolate import griddata
+        import geopandas as gpd
+
+        centroids_proj = gdf.geometry.centroid  # type: ignore[union-attr]
+        centroids_4326 = gpd.GeoSeries(
+            centroids_proj, crs=gdf.crs  # type: ignore[union-attr]
+        ).to_crs("EPSG:4326")
+        dst_points = np.column_stack([centroids_4326.x, centroids_4326.y])
+
+        src_keys = list(boundary_data.keys())          # list of (lon, lat)
+        src_coords = np.array(src_keys)                # (M, 2)
+
+        windows = ("morning", "midday", "evening")
+        variables = ("t2m", "windspeed", "winddir", "rh")
+
+        for window in windows:
+            for var in variables:
+                col_name = f"era5_{window}_{var}"
+                try:
+                    src_vals = np.array([
+                        boundary_data[k].get(window, {}).get(var, float("nan"))
+                        for k in src_keys
+                    ], dtype=float)
+
+                    if np.all(np.isnan(src_vals)):
+                        gdf[col_name] = float("nan")  # type: ignore[index]
+                        continue
+
+                    valid_mask = ~np.isnan(src_vals)
+                    interp = griddata(
+                        src_coords[valid_mask],
+                        src_vals[valid_mask],
+                        dst_points,
+                        method="linear",
+                    )
+                    outside = np.isnan(interp)
+                    if outside.any():
+                        nearest = griddata(
+                            src_coords[valid_mask],
+                            src_vals[valid_mask],
+                            dst_points,
+                            method="nearest",
+                        )
+                        interp[outside] = nearest[outside]
+                    gdf[col_name] = interp  # type: ignore[index]
+                except Exception:
+                    gdf[col_name] = float("nan")  # type: ignore[index]
+
+    except Exception:
+        for col in _ERA5_BOUNDARY_COLS:
+            if col not in gdf.columns:  # type: ignore[union-attr]
+                gdf[col] = float("nan")  # type: ignore[index]
+
+    return gdf
+
+
+# ---------------------------------------------------------------------------
+# ERA5 boundary helpers
+# ---------------------------------------------------------------------------
+
+def _fetch_boundary_point(
+    lon: float,
+    lat: float,
+    campaign_date: "date",
+    morning_utc: int,
+    midday_utc: int,
+    evening_utc: int,
+) -> dict:
+    """Fetch hourly ERA5 boundary variables at one grid point for one day."""
+    _NAN_WINDOW = {"t2m": float("nan"), "windspeed": float("nan"),
+                   "winddir": float("nan"), "rh": float("nan")}
+    result = {
+        "morning": dict(_NAN_WINDOW),
+        "midday":  dict(_NAN_WINDOW),
+        "evening": dict(_NAN_WINDOW),
+    }
+
+    date_str = campaign_date.isoformat()
+    params = urllib.parse.urlencode({
+        "latitude":   f"{lat:.4f}",
+        "longitude":  f"{lon:.4f}",
+        "start_date": date_str,
+        "end_date":   date_str,
+        "hourly": "temperature_2m,windspeed_10m,winddirection_10m,relativehumidity_2m",
+        "temperature_unit": "celsius",
+        "windspeed_unit": "ms",
+        "timezone": "UTC",
+        "models": "era5",
+    })
+    url = f"{OPEN_METEO_ARCHIVE}?{params}"
+    req = urllib.request.Request(url, headers={"User-Agent": "SPARC-DataCollection/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return result
+
+    hourly = data.get("hourly", {})
+    t2m_arr   = hourly.get("temperature_2m", [])
+    ws_arr    = hourly.get("windspeed_10m", [])
+    wd_arr    = hourly.get("winddirection_10m", [])
+    rh_arr    = hourly.get("relativehumidity_2m", [])
+
+    def _safe_get(arr: list, idx: int):
+        if idx < len(arr) and arr[idx] is not None:
+            return float(arr[idx])
+        return float("nan")
+
+    for window, utc_hour in (
+        ("morning", morning_utc),
+        ("midday",  midday_utc),
+        ("evening", evening_utc),
+    ):
+        result[window] = {
+            "t2m":       _safe_get(t2m_arr, utc_hour),
+            "windspeed": _safe_get(ws_arr,  utc_hour),
+            "winddir":   _safe_get(wd_arr,  utc_hour),
+            "rh":        _safe_get(rh_arr,  utc_hour),
+        }
+
+    return result
+
+
 def _arange_inclusive(start: float, stop: float, step: float) -> list[float]:
     """np.arange that reliably includes *stop* within floating-point tolerance."""
     vals = []

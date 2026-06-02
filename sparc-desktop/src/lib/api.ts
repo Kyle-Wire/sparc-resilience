@@ -66,6 +66,33 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function patch<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "PATCH",
+    headers: body
+      ? authHeaders({ "Content-Type": "application/json" })
+      : authHeaders(),
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status}: ${text}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+async function del<T>(path: string): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status}: ${text}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 // ------------------------------------------------------------------
 // Health
 // ------------------------------------------------------------------
@@ -1339,6 +1366,65 @@ export interface ScenarioTimeline {
 }
 
 export const getScenarioLibrary = () => get<ScenarioTimeline>("/scenarios/library");
+
+// ---------------------------------------------------------------------------
+// Scenario config write-back (project.yml ↔ UI bridge)
+// ---------------------------------------------------------------------------
+
+export interface SweepScenarioSpec {
+  name: string;
+  variable: string;
+  direction: "increase" | "decrease";
+  min_val: number;
+  max_val: number;
+  unit: string;
+  /** Auto-generated from min_val/max_val/step in the UI. */
+  increments: number[];
+}
+
+export interface JointScenarioIntervention {
+  variable: string;
+  direction: "increase" | "decrease";
+  increment: number;
+}
+
+export interface JointScenarioSpec {
+  name: string;
+  auto_propagate_dag: boolean;
+  interventions: JointScenarioIntervention[];
+}
+
+export interface ScenarioConfigResponse {
+  scenarios: SweepScenarioSpec[];
+  joint_scenarios: JointScenarioSpec[];
+}
+
+export interface UpdateScenariosResult {
+  status: string;
+  changed: string[];
+  scenarios_count: number;
+  joint_scenarios_count: number;
+}
+
+export interface DeleteScenarioResult {
+  status: string;
+  name: string;
+  kind: "sweep" | "joint";
+  remaining: number;
+}
+
+/** Fetch current scenarios + joint_scenarios from the loaded project config. */
+export const getScenarioConfig = () => get<ScenarioConfigResponse>("/scenarios/config");
+
+/** Persist updated scenarios/joint_scenarios to project.yml + library audit. */
+export const updateProjectScenarios = (body: {
+  scenarios?: SweepScenarioSpec[];
+  joint_scenarios?: JointScenarioSpec[];
+}) => patch<UpdateScenariosResult>("/scenarios/config", body);
+
+/** Remove a named scenario from project.yml. */
+export const deleteProjectScenario = (name: string, kind: "sweep" | "joint" = "sweep") =>
+  del<DeleteScenarioResult>(`/scenarios/config/${encodeURIComponent(name)}?kind=${kind}`);
 
 // ---------------------------------------------------------------------------
 // Block export (Phase C) — capture a UI block as PNG and persist it via the

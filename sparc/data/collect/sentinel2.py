@@ -64,6 +64,7 @@ def fetch_sentinel2(
     *,
     cloud_cover_max: float = 20.0,
     temporal_mode: TemporalMode = "composite",
+    max_scenes: int = 3,
 ):
     """Fetch Sentinel-2 spectral indices for each fishnet cell.
 
@@ -74,6 +75,7 @@ def fetch_sentinel2(
     date_start / date_end : datetime.date
     cloud_cover_max : 0–100 percent
     temporal_mode : "single" | "composite"
+    max_scenes : maximum scenes to composite (caps network requests to max_scenes × 5)
 
     Returns
     -------
@@ -88,6 +90,9 @@ def fetch_sentinel2(
 
     if temporal_mode == "single":
         scenes = scenes[:1]
+    else:
+        # Cap composite scenes — sorted by cloud cover so we use the best ones
+        scenes = scenes[:max_scenes]
 
     # Attempt to fetch band data via COG tiles; fall back to NaN on failure.
     all_indices: list[dict] = []

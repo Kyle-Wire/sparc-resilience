@@ -415,13 +415,17 @@ def _sample_rasters_to_fishnet(fishnet_gdf: object, raster_data: dict) -> object
         # Build {prefix: Path} regardless of source format
         tif_paths: dict[str, pathlib.Path] = {}
         if "_zip" in raster_data:
-            # New format: extract ZIP; TIFs named {prefix}_t_f.tif
+            # New format: extract ZIP; try both naming conventions:
+            #   {prefix}_t_f.tif       (2022+ campaigns)
+            #   {prefix}_t_f_ranger.tif (2020-2021 campaigns using Ranger interpolation)
             with zipfile.ZipFile(io.BytesIO(raster_data["_zip"])) as z:
                 z.extractall(tmp_path)
             for prefix in _WINDOWS:
-                p = tmp_path / f"{prefix}_t_f.tif"
-                if p.exists():
-                    tif_paths[prefix] = p
+                for suffix in (f"{prefix}_t_f.tif", f"{prefix}_t_f_ranger.tif"):
+                    p = tmp_path / suffix
+                    if p.exists():
+                        tif_paths[prefix] = p
+                        break
         else:
             # Old format: write raw TIF bytes keyed by window prefix
             for prefix, tif_bytes in raster_data.items():

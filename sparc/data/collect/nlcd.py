@@ -272,29 +272,40 @@ def _zonal_stat_onto_fishnet(
     col_name: str,
     stat: str,
 ) -> object:
-    """Compute zonal statistic *stat* for each fishnet cell from *raster_path*.
+    """Sample raster values onto fishnet cells via centroid point lookup.
 
-    The raster at *raster_path* is already clipped to the study bbox by
-    ``_fetch_wcs_tile``, so rasterstats only loads a small in-memory tile.
-    The fishnet is reprojected to the raster's CRS for the spatial join.
+    Since the fishnet is at 30m resolution matching the NLCD rasters, each
+    cell maps to exactly one pixel. Centroid-based sampling via rasterio is
+    orders of magnitude faster than polygon zonal stats for large grids
+    (O(N) array indexing vs. O(N * polygon_size) intersection).
     """
-    import rasterstats
     import rasterio
+    from rasterio.transform import rowcol
+    import numpy as np
 
     with rasterio.open(raster_path) as src:
         raster_crs = src.crs
+        transform  = src.transform
+        arr        = src.read(1)          # read full (already-clipped) tile
+        nodata     = src.nodata
 
-    # Reproject fishnet to raster CRS so rasterstats pixel-cell alignment is exact
-    gdf_proj = gdf.to_crs(raster_crs)  # type: ignore[union-attr]
+    gdf_proj = gdf.to_crs(raster_crs)    # type: ignore[union-attr]
 
-    results = rasterstats.zonal_stats(
-        gdf_proj,
-        str(raster_path),
-        stats=[stat],
-        nodata=None,
-        all_touched=False,
-    )
-    values = [r.get(stat) for r in results]
+    # Compute centroids in the original UTM projection (accurate), then reproject
+    # to the raster CRS for the rowcol lookup. Avoids the geographic-CRS centroid warning.
+    centroids_utm = gdf.geometry.centroid  # type: ignore[union-attr]
+    centroids_gdf = centroids_utm.to_frame("geometry").set_crs(gdf.crs).to_crs(raster_crs)  # type: ignore[union-attr]
+    xs = centroids_gdf.geometry.x.values
+    ys = centroids_gdf.geometry.y.values
+
+    rows, cols = rowcol(transform, xs, ys)
+    rows = np.clip(np.array(rows, dtype=int), 0, arr.shape[0] - 1)
+    cols = np.clip(np.array(cols, dtype=int), 0, arr.shape[1] - 1)
+
+    values = arr[rows, cols].astype(float)
+    if nodata is not None:
+        values[values == nodata] = np.nan
+
     gdf = gdf.copy()  # type: ignore[union-attr]
     gdf[col_name] = values  # type: ignore[index]
     return gdf
