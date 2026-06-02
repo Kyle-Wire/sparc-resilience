@@ -59,6 +59,8 @@ class _TrainingConfig:
     n_folds: int
     use_amp: bool
     use_cuda_graphs: bool
+    head_weight_decay: float = 1e-4
+    seed: int | None = None
 
 
 @dataclass

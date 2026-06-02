@@ -122,8 +122,8 @@ multicity:
   # ── JEPA pretraining ────────────────────────────────────────────────────
   jepa:
     hidden_dim: 256
-    n_epochs: 50
-    batch_size: 2048
+    n_epochs: 150
+    batch_size: 4096   # GPU: ~20k gradient steps/city — empirical sweet spot
     mask_ratio: 0.40
     n_patches: 4
     ema_tau: 0.99

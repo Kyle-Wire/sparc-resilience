@@ -12,7 +12,7 @@ copy and update it via:
 
     θ_target ← τ · θ_target + (1 − τ) · θ_online
 
-The momentum coefficient τ follows V-JEPA 2's warmup schedule:
+The momentum coefficient τ follows a cosine warmup schedule (BS-B):
 starts at ``tau_start`` (e.g. 0.99) and ramps toward ``tau_end``
 (e.g. 0.9999) over the course of training.
 
@@ -25,6 +25,7 @@ exclusively from the online model.
 from __future__ import annotations
 
 import copy
+import math
 from typing import Iterable
 
 import torch
@@ -133,7 +134,7 @@ class EMATrunk(nn.Module):
         step = int(self.num_updates.item())
         if step >= self.warmup_steps:
             return self.tau_end
-        frac = step / float(self.warmup_steps)
+        frac = (1.0 - math.cos(math.pi * step / float(self.warmup_steps))) / 2.0
         return self.tau_start + (self.tau_end - self.tau_start) * frac
 
     # ------------------------------------------------------------------

@@ -144,6 +144,8 @@ class FoldTrainer:
         jepa   = ss.jepa
         n_base = arch.n_base
 
+        if ss.training.seed is not None:
+            torch.manual_seed(ss.training.seed + self.fold_idx)
         model = SPARCMetaLearner(
             n_base=n_base,
             n_physics=arch.n_physics_extended,
@@ -194,6 +196,7 @@ class FoldTrainer:
         optimizer = build_optimizer(
             model, process_net, surrogates, base_lr=ss.training.lr,
             source_term_net=source_net,
+            head_weight_decay=ss.training.head_weight_decay,
         )
         scheduler = build_scheduler(
             optimizer, ss.training.n_epochs,

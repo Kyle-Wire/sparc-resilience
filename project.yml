@@ -284,6 +284,8 @@ training:
   n_epochs: 100
   batch_size: 2048              # RTX 5070 Ti has ~16 GB VRAM; 512 was leaving it mostly idle
   learning_rate: 0.001
+  head_weight_decay: 0.1        # T-1: strong L2 on CityHead only (trunk stays at AdamW default 1e-4)
+  seed: 42                      # T-2: deterministic model init per fold (fold k uses seed+k)
   lambda_mse: 1.0
   lambda_exceedance: 0.1
   lambda_physics: 0.01

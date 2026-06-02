@@ -31,6 +31,13 @@ if str(_REPO_ROOT) not in sys.path:
 import numpy as np
 import yaml
 
+# Maximize CPU parallelism — PyTorch defaults to half the available cores
+import os as _os
+import torch as _torch
+_torch.set_num_threads(_os.cpu_count())
+_torch.set_num_interop_threads(max(1, _os.cpu_count() // 2))
+del _os, _torch
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(name)s -- %(message)s",
@@ -81,11 +88,17 @@ def _build_head(hidden_dim: int, era5_dim: int = 4):
     3-layer MLP gives more capacity to learn spatial heat gradients from the
     shared trunk embedding without needing to unfreeze the trunk heavily.
     Dropout regularises the wider first layer.
+
+    era5_dim per window:
+      morning: 8 (morning + evening)  — evening adds "preceding day" thermal context
+               since morning UHI is driven by overnight heat retention, not active sun
+      midday:  4 (midday only)         — active solar, no extra context needed
+      evening: 4 (evening only)        — daytime accumulation, no extra context needed
     """
     import torch.nn as nn
     in_dim = hidden_dim + era5_dim
     return nn.Sequential(
-        nn.Linear(in_dim, hidden_dim),  nn.GELU(), nn.Dropout(0.1),
+        nn.Linear(in_dim, hidden_dim),  nn.GELU(), nn.Dropout(0.15),
         nn.Linear(hidden_dim, hidden_dim // 4), nn.GELU(),
         nn.Linear(hidden_dim // 4, 1),
     )
@@ -235,11 +248,12 @@ class _CityModel:
     """Container for trunk + 3 supervised heads."""
 
     def __init__(self, trunk, heads: dict, device, has_labels: bool = True,
-                 has_labels_per_window: dict = None):
+                 has_labels_per_window: dict = None, city_slug: str = ""):
         self.trunk      = trunk
         self.heads      = heads   # {"morning": nn.Module, "midday": ..., "evening": ...}
         self.device     = device
         self.has_labels = has_labels  # False if city had no CAPA supervision at all
+        self.city_slug  = city_slug
         # Per-window label availability: {"morning": True, "midday": True, "evening": False}
         self.has_labels_per_window = has_labels_per_window or {
             w: has_labels for w in ("morning", "midday", "evening")
@@ -283,7 +297,7 @@ def run_city_finetune(
     ewc_lambda   = float(mc["continual_learning"].get("ewc_lambda", 400.0))
     hidden_dim   = int(mc["jepa"].get("hidden_dim", 256))
     n_epochs     = max(50, int(mc["jepa"].get("n_epochs", 50)))
-    batch_size   = min(512, int(mc["jepa"].get("batch_size", 2048)))
+    batch_size   = int(mc["jepa"].get("batch_size", 8192))  # large batch: fewer steps/epoch, faster on CPU
     lr           = float(mc["jepa"].get("lr", 1e-3))
 
     gdf = gpd.read_parquet(str(parquet_path))
@@ -347,8 +361,21 @@ def run_city_finetune(
         p.requires_grad_(False)
     trunk_local.eval()
 
+    # Per-window ERA5 context tensors.
+    # Morning gets [morning + evening] (8 dim): the preceding-day evening temperature
+    # provides thermal context for overnight heat retention driving morning UHI.
+    # Midday and evening use only their own 4 ERA5 features — active solar dynamics
+    # are captured well by the matching window alone, and cross-window features risk
+    # overfitting to city-specific ERA5 climate profiles across training cities.
+    era5_inputs = {
+        "morning": torch.cat([era5_tensors["morning"], era5_tensors["evening"]], dim=-1),  # (N, 8)
+        "midday":  era5_tensors["midday"],   # (N, 4)
+        "evening": era5_tensors["evening"],  # (N, 4)
+    }
+    era5_dims = {"morning": 8, "midday": 4, "evening": 4}
+
     heads = {
-        w: _build_head(hidden_dim, era5_dim=4).to(device)
+        w: _build_head(hidden_dim, era5_dim=era5_dims[w]).to(device)
         for w in ("morning", "midday", "evening")
     }
 
@@ -369,13 +396,12 @@ def run_city_finetune(
         for start in range(0, n, batch_size):
             b = idx[start:start + batch_size]
             x_b = X_land[b]
-            era5_b = {w: era5_tensors[w][b] for w in era5_tensors}
             with torch.no_grad():
                 h = trunk_local(x_b)  # frozen trunk — no grad needed
 
             sup_loss = torch.tensor(0.0, device=device)
             for w, head in heads.items():
-                inp  = torch.cat([h, era5_b[w]], dim=-1)
+                inp  = torch.cat([h, era5_inputs[w][b]], dim=-1)
                 pred = head(inp).squeeze(-1)
                 valid_mask = labels[f"{w}_valid"][b]
                 if valid_mask.sum() > 0:
@@ -428,6 +454,7 @@ def run_city_finetune(
         trunk_local, heads, device,
         has_labels=any_labels,
         has_labels_per_window=has_labels_per_window,
+        city_slug=city_slug,
     ), uhi_stats
 
 
@@ -545,6 +572,20 @@ def run_loo_eval(
         else:
             era5_tensors[w] = torch.zeros(len(X_land), 4, device=device)
 
+    # All 12 ERA5 features for each head (same as training)
+    era5_all = torch.cat([
+        era5_tensors["morning"],
+        era5_tensors["midday"],
+        era5_tensors["evening"],
+    ], dim=-1)  # (N, 12)
+
+    # Per-window ERA5 inputs matching the training configuration
+    era5_inputs_loo = {
+        "morning": torch.cat([era5_tensors["morning"], era5_tensors["evening"]], dim=-1),  # (N, 8)
+        "midday":  era5_tensors["midday"],   # (N, 4)
+        "evening": era5_tensors["evening"],  # (N, 4)
+    }
+
     _label_cols = {"morning": "aat_morning", "midday": "aat_midday", "evening": "aat_night"}
 
     # Collect CAPA-supervised city models for ensemble
@@ -572,15 +613,44 @@ def run_loo_eval(
                     continue
                 log.info("LOO %s ensemble: %d city heads", w, len(window_models))
                 h_shared_emb = shared_trunk(X_land)  # shared trunk embedding (computed once)
-                era5_feat = era5_tensors[w]
+                era5_feat = era5_inputs_loo[w]  # per-window ERA5 (matches training config)
+                era5_t2m_F = era5_tensors[w][:, 0] * 40.0 * 1.8 + 32.0
                 city_preds = []
                 for cm in window_models:
                     inp = torch.cat([h_shared_emb, era5_feat], dim=-1)
                     city_preds.append(cm.heads[w](inp).squeeze(-1))
-                # Ensemble average of anomaly predictions
-                pred_anomaly = torch.stack(city_preds, dim=0).mean(dim=0)
-                # Reconstruct absolute °F: anomaly + ERA5 t2m background
-                era5_t2m_F = era5_tensors[w][:, 0] * 40.0 * 1.8 + 32.0
+
+                # Log per-city stats and identify outlier heads by mean prediction.
+                # An outlier head is one whose spatial-mean absolute prediction deviates
+                # more than 2 robust-σ from the group median (MAD-based detection).
+                # MAD is much more resistant than mean/std to a single outlier in a small
+                # ensemble (5 cities), where one bad head inflates std and lets others slip
+                # through (e.g. Raleigh midday at 1.39σ survives a 1.5σ mean/std filter
+                # but is correctly flagged at ~6 robust-σ under MAD).
+                city_means = np.array([
+                    float((cp + era5_t2m_F).cpu().mean()) for cp in city_preds
+                ])
+                med = float(np.median(city_means))
+                mad = float(np.median(np.abs(city_means - med)))
+                # Scale MAD to equivalent normal σ (MAD / 0.6745 ≈ σ for Gaussian).
+                # Keep heads within ±2 robust-σ of the median.
+                robust_std = mad / 0.6745
+                if robust_std > 0:
+                    keep_mask = np.abs(city_means - med) <= 2.0 * robust_std
+                else:
+                    keep_mask = np.ones(len(city_means), dtype=bool)
+                for cm, cp, keep, cmean in zip(window_models, city_preds, keep_mask, city_means):
+                    log.info("  per-city head [%s] %s mean_pred=%.2f°F  keep=%s",
+                             cm.city_slug, w, cmean, "✓" if keep else "✗ (outlier — excluded)")
+                if keep_mask.sum() == 0:
+                    keep_mask[:] = True  # safety: never drop all cities
+                trimmed_preds = [cp for cp, k in zip(city_preds, keep_mask) if k]
+                if keep_mask.sum() < len(window_models):
+                    log.info("  trimmed ensemble: %d/%d city heads kept", keep_mask.sum(), len(window_models))
+
+                # Ensemble mean of anomaly predictions (outlier-trimmed).
+                pred_anomaly = torch.stack(trimmed_preds, dim=0).mean(dim=0)
+                # Reconstruct absolute °F: anomaly + ERA5 t2m background (era5_t2m_F already computed above)
                 pred = (pred_anomaly + era5_t2m_F).cpu().numpy()
                 pred_cols[f"pred_{w}"] = pred
 
@@ -598,9 +668,9 @@ def run_loo_eval(
             # Fallback: random heads with shared pretrained trunk (baseline only)
             log.warning("No supervised city models available — LOO predictions are from random heads")
             h_shared = trunk(X_land)
-            heads = {w: _build_head(hidden_dim, era5_dim=4).to(device) for w in ("morning", "midday", "evening")}
+            heads = {w: _build_head(hidden_dim, era5_dim={"morning": 8, "midday": 4, "evening": 4}[w]).to(device) for w in ("morning", "midday", "evening")}
             for w, head in heads.items():
-                inp  = torch.cat([h_shared, era5_tensors[w]], dim=-1)
+                inp  = torch.cat([h_shared, era5_inputs_loo[w]], dim=-1)
                 pred = head(inp).squeeze(-1).cpu().numpy()
                 pred_cols[f"pred_{w}"] = pred
 

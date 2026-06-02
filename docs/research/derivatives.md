@@ -1,6 +1,6 @@
 # SPARC — Novel Research Derivatives
 
-**Last updated by research agent:** 2026-07-01
+**Last updated by research agent:** 2026-07-03
 **Last synthesized by synthesis agent:** 2026-05-22c
 
 This file is maintained by the research agent. Each session, the agent appends its top 3–5 novel cross-pollination ideas here. The synthesis agent reads this file and converts entries into concrete proposals in `backlog.md`.
@@ -341,3 +341,21 @@ Each entry follows this structure:
 **Potential impact:** new capability (smarter zero-shot trunk initialization), performance (better few-shot generalization from K-NN trunk ensemble), feeds Phase 4 (label-free confidence in zero-shot predictions)
 **Relevant SPARC modules:** `sparc/inference/trunk.py` (`TrunkLoader`), `sparc/registry/city_registry.py` (coreset centroids), `sparc/inference/zero_shot.py`, `sparc/inference/few_shot.py`
 **Status:** new
+
+---
+
+### CORAL Temporal Window Alignment for Head Covariate Shift (2026-07-03)
+**Source fields:** `sparc/models/neural_meta.py` (CityHead regression_head) × CORAL domain alignment (Sun & Saenko 2016) × cross-city temporal transfer
+**Core idea:** SPARC never achieves all-windows-positive correlation simultaneously (best: t19 morning +0.304, t16 midday +0.262 — never together). The CityHead learns a single `regression_head.bias` representing the mean across all training windows. If Raleigh morning/midday distributions differ from Philly morning/midday distributions *differentially*, a single scalar bias term cannot compensate both windows simultaneously — it reaches a saddle. CORAL loss before CityHead fine-tuning aligns per-window covariance: `L_CORAL = ‖Cov(Raleigh_window_k) - Cov(Philly_window_k)‖_F²`, summed over windows k. No kernel bandwidth to tune; `O(d²)` per window. `sparc/training/ewc.py` Wasserstein alignment provides the infrastructure seam — CORAL adds ~10 lines.
+**Potential impact:** performance (could resolve never-simultaneously-positive window problem — potentially +0.05–0.10 OOF R² across all windows), methodological (first explicit temporal covariate shift correction in SPARC CityHead transfer)
+**Relevant SPARC modules:** `sparc/training/ewc.py` (alignment penalty infrastructure), `sparc/models/neural_meta.py` (CityHead `regression_head`), `sparc/run/v2_neural_training.py` (head fine-tuning phase)
+**Status:** in-backlog
+
+---
+
+### EMA Cosine Schedule for EMATrunk Momentum (2026-07-03)
+**Source fields:** `sparc/models/ema_trunk.py` (`EMATrunk`) × V-JEPA 2 (Bardes et al. 2025, arXiv) × cosine-annealing momentum schedules
+**Core idea:** SPARC's `EMATrunk.current_tau()` (line 136) uses linear interpolation from tau_start→tau_end. V-JEPA 2 shows cosine-scheduled τ: 0.996 → 1.0 over training outperforms fixed τ — rapid early adaptation + stable late-phase convergence. Replace linear frac with: `τ_t = τ_start + (τ_end - τ_start) * (1 - cos(π * step / warmup_steps)) / 2`. 3-line change in `current_tau()`. No config changes required.
+**Potential impact:** performance (better JEPA trunk geometry → more transferable representations → lower CityHead covariate shift, reinforces T-1), methodological (aligns EMATrunk with state-of-art JEPA training practice)
+**Relevant SPARC modules:** `sparc/models/ema_trunk.py` (`EMATrunk.current_tau()`), `sparc/run/v2_neural_training.py` (JEPA pretraining loop)
+**Status:** in-backlog

@@ -590,6 +590,8 @@ def _exec_cv_fold(
     fold_cardinal = torch.tensor(fold_cardinal_np, dtype=torch.long, device=device)
 
     # ---- Instantiate models ----
+    if ss.training.seed is not None:
+        torch.manual_seed(ss.training.seed + fold_idx)
     process_net = ProcessRateNet(
         n_inputs=pr_input_dim,
         domain_config={
@@ -660,6 +662,7 @@ def _exec_cv_fold(
     optimizer = build_optimizer(
         model, process_net, surrogates, base_lr=lr,
         source_term_net=source_net,
+        head_weight_decay=ss.training.head_weight_decay,
     )
     scheduler = build_scheduler(optimizer, n_epochs, warmup_epochs=warmup_epochs)
 
@@ -929,6 +932,9 @@ def _exec_cv_fold(
     process_net.train()
     for _sv in surrogates.values():
         _sv.train()
+
+    # T-3: snapshot head bias before training to measure drift
+    _rh_bias_before = model.regression_head[-1].bias.data.clone().cpu() if hasattr(model, "regression_head") else None
 
     N_train = len(train_idx)
     use_minibatch = N_train > batch_size * 2
@@ -1415,6 +1421,17 @@ def _exec_cv_fold(
         fold_idx + 1, _time.perf_counter() - _fold_t0,
     )
 
+    # T-3: log head bias drift
+    if _rh_bias_before is not None and hasattr(model, "regression_head"):
+        _rh_bias_after = model.regression_head[-1].bias.data.clone().cpu()
+        logger.info(
+            "  [T-3 head_bias_drift] fold=%d  before=%.4f  after=%.4f  delta=%.4f",
+            fold_idx + 1,
+            _rh_bias_before.item(),
+            _rh_bias_after.item(),
+            (_rh_bias_after - _rh_bias_before).item(),
+        )
+
     # ---- OOF prediction (surrogates → meta-learner) ----
     model.eval()
     process_net.eval()
@@ -1455,6 +1472,21 @@ def _exec_cv_fold(
 
     oof_p_fold = mean_pred[test_idx].cpu().numpy()
     oof_s_fold = std_pred[test_idx].cpu().numpy()
+
+    # T-3: per-window prediction scale audit (covariate shift diagnostic)
+    _t_idx_full = tensors.get("time_idx")
+    if _t_idx_full is not None:
+        _t_idx_test = _t_idx_full[test_idx].cpu().numpy()
+        _y_target_test = tensors["y"][test_idx].cpu().numpy()
+        for _win in sorted(set(_t_idx_test.tolist())):
+            _mask = _t_idx_test == _win
+            if _mask.sum() > 0:
+                _pred_mean = float(oof_p_fold[_mask].mean())
+                _tgt_mean  = float(_y_target_test[_mask].mean())
+                logger.info(
+                    "  [T-3 window_scale] fold=%d  window=%d  pred_mean=%.4f  tgt_mean=%.4f  gap=%.4f",
+                    fold_idx + 1, _win, _pred_mean, _tgt_mean, _pred_mean - _tgt_mean,
+                )
 
     # CU-5: Release fold models immediately to free CUDA allocator memory.
     del model, surrogates, process_net, source_net
@@ -2169,6 +2201,9 @@ def train_neural_meta(
     pretrain_epochs = training_cfg.get("pretrain_epochs", 200)
     main_epochs = n_epochs  # SWA runs *on top* of main epochs for full retrain
     lr = training_cfg.get("learning_rate", 1e-3)
+    head_weight_decay = float(training_cfg.get("head_weight_decay", 1e-4))
+    _seed_raw = training_cfg.get("seed", None)
+    seed: int | None = int(_seed_raw) if _seed_raw is not None else None
     clip_norm = optim_cfg.get("clip_norm", 1.0)
     warmup_epochs = training_cfg.get("warmup_epochs", 10)
     ramp_epochs = training_cfg.get("ramp_epochs", 30)
@@ -2404,7 +2439,7 @@ def train_neural_meta(
                 _s, sweep_phys[sweep_train_idx], sweep_spat[sweep_train_idx],
                 sweep_y[sweep_train_idx], n_epochs=pretrain_epochs, lr=lr,
             )
-            opt = build_optimizer(_m, _p, _s, base_lr=lr)
+            opt = build_optimizer(_m, _p, _s, base_lr=lr, head_weight_decay=head_weight_decay)
             _knn = _sweep_knn
             _card = _sweep_card
             _src = torch.zeros(len(sweep_train_idx), device=device)
@@ -2944,6 +2979,8 @@ def train_neural_meta(
             n_folds=len(folds),
             use_amp=_use_amp,
             use_cuda_graphs=_use_cuda_graphs,
+            head_weight_decay=head_weight_decay,
+            seed=seed,
         ),
         jepa=_JEPAConfig(
             enable=jepa_enable,
@@ -3059,6 +3096,8 @@ def train_neural_meta(
         main_epochs, swa_epochs,
     )
 
+    if seed is not None:
+        torch.manual_seed(seed)
     final_process = ProcessRateNet(
         n_inputs=pr_input_dim,
         domain_config={
@@ -3130,6 +3169,7 @@ def train_neural_meta(
     final_optimizer = build_optimizer(
         final_model, final_process, final_surrogates, base_lr=lr,
         source_term_net=final_source_net,
+        head_weight_decay=head_weight_decay,
     )
     final_scheduler = build_scheduler(
         final_optimizer, main_epochs, warmup_epochs=warmup_epochs,

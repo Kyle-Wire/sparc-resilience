@@ -26,12 +26,16 @@ logger = logging.getLogger(__name__)
 # Per-component optimizer
 # ---------------------------------------------------------------------------
 
+_HEAD_COMPONENTS = frozenset({"base_enc", "fusion", "regression_head", "exceedance_heads"})
+
+
 def build_optimizer(
     model: nn.Module,
     process_rate_net: nn.Module,
     surrogates: dict[str, nn.Module],
     base_lr: float = 1e-3,
     weight_decay: float = 1e-4,
+    head_weight_decay: float | None = None,
     source_term_net: nn.Module | None = None,
 ) -> torch.optim.AdamW:
     """
@@ -47,9 +51,18 @@ def build_optimizer(
     process_rate_net : ProcessRateNet
     surrogates : dict of DifferentiableGWR / GWRF / GGPGAM
     base_lr : default learning rate for generic components
-    weight_decay : AdamW weight decay
+    weight_decay : AdamW weight decay (trunk + surrogates + process_rate)
+    head_weight_decay : when set, overrides weight_decay for CityHead components
+        (base_enc, fusion, regression_head, exceedance_heads). Default None
+        preserves existing behaviour (uses global weight_decay).
     source_term_net : optional SourceTermNet
     """
+    _effective_head_wd = head_weight_decay if head_weight_decay is not None else weight_decay
+    if head_weight_decay is not None:
+        logger.info(
+            "build_optimizer: head_weight_decay=%.4f (trunk stays at %.4f)",
+            head_weight_decay, weight_decay,
+        )
     param_groups = []
 
     # Model sub-components (if present)
@@ -70,11 +83,10 @@ def build_optimizer(
         if sub is not None:
             params = list(sub.parameters())
             if params:
-                param_groups.append({
-                    "params": params,
-                    "lr": lr,
-                    "name": name,
-                })
+                pg: dict = {"params": params, "lr": lr, "name": name}
+                if name in _HEAD_COMPONENTS:
+                    pg["weight_decay"] = _effective_head_wd
+                param_groups.append(pg)
 
     # Split physics_enc into SIREN components (0.5× LR) and blend_net (1× LR)
     physics_enc = getattr(model, "physics_enc", None)
