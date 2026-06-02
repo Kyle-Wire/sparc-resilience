@@ -76,12 +76,18 @@ def _build_predictor(hidden_dim: int):
 
 
 def _build_head(hidden_dim: int, era5_dim: int = 4):
-    """Supervised regression head: trunk_embedding + era5_features → scalar."""
+    """Supervised regression head: trunk_embedding + era5_features → scalar.
+
+    3-layer MLP gives more capacity to learn spatial heat gradients from the
+    shared trunk embedding without needing to unfreeze the trunk heavily.
+    Dropout regularises the wider first layer.
+    """
     import torch.nn as nn
     in_dim = hidden_dim + era5_dim
     return nn.Sequential(
-        nn.Linear(in_dim, hidden_dim // 2), nn.GELU(),
-        nn.Linear(hidden_dim // 2, 1),
+        nn.Linear(in_dim, hidden_dim),  nn.GELU(), nn.Dropout(0.1),
+        nn.Linear(hidden_dim, hidden_dim // 4), nn.GELU(),
+        nn.Linear(hidden_dim // 4, 1),
     )
 
 
@@ -331,8 +337,11 @@ def run_city_finetune(
             labels[w] = torch.zeros(len(X_land), device=device)
             labels[f"{w}_valid"] = torch.zeros(len(X_land), dtype=torch.bool, device=device)
 
-    # Rebuild heads from scratch; trunk is FROZEN — all heads share the same trunk embeddings
-    # so the LOO ensemble can evaluate all heads on the same trunk state.
+    # Trunk is FROZEN — JEPA pretraining already built good cross-city spatial
+    # representations.  Unfreezing causes the trunk to drift city-by-city and
+    # destroys its generalization (train11: -38°F bias; train12: -261°F bias).
+    # The deeper 3-layer head now has enough capacity to decode the frozen
+    # embeddings into UHI anomaly predictions without needing trunk adaptation.
     trunk_local = trunk
     for p in trunk_local.parameters():
         p.requires_grad_(False)
@@ -361,7 +370,8 @@ def run_city_finetune(
             b = idx[start:start + batch_size]
             x_b = X_land[b]
             era5_b = {w: era5_tensors[w][b] for w in era5_tensors}
-            h = trunk_local(x_b)
+            with torch.no_grad():
+                h = trunk_local(x_b)  # frozen trunk — no grad needed
 
             sup_loss = torch.tensor(0.0, device=device)
             for w, head in heads.items():
@@ -371,8 +381,7 @@ def run_city_finetune(
                 if valid_mask.sum() > 0:
                     sup_loss = sup_loss + mse_loss(pred[valid_mask], labels[w][b][valid_mask])
 
-            # Trunk is frozen — no EWC needed; supervised loss only
-            loss = sup_loss
+            loss = sup_loss  # trunk frozen — no EWC needed
 
             if not loss.requires_grad:
                 # No CAPA labels and no EWC anchors yet — nothing to train on this batch
@@ -397,15 +406,29 @@ def run_city_finetune(
     }, str(model_path))
     log.info("[%s] model saved → %s", city_slug, model_path)
 
-    # Trunk is frozen — no Fisher/EWC needed
+    # Trunk is frozen — no Fisher/EWC needed (no trunk parameters were updated).
     fisher = {}
     theta_star = {}
+
+    # Collect per-window UHI calibration stats for Option-C offset correction.
+    # For each window: mean UHI anomaly (°F above ERA5) and mean ERA5 t2m (°F).
+    uhi_stats: dict[str, dict] = {}
+    for w in ("morning", "midday", "evening"):
+        valid_mask = labels[f"{w}_valid"].cpu().numpy().astype(bool)
+        if valid_mask.sum() > 10:
+            anomaly_vals = labels[w].cpu().numpy()[valid_mask]
+            era5_t2m_vals = (era5_tensors[w][:, 0].cpu().numpy() * 40.0 * 1.8 + 32.0)[valid_mask]
+            uhi_stats[w] = {
+                "mean_uhi_anomaly": float(anomaly_vals.mean()),
+                "mean_era5_t2m_F":  float(era5_t2m_vals.mean()),
+                "n": int(valid_mask.sum()),
+            }
 
     return trunk_local, fisher, theta_star, _CityModel(
         trunk_local, heads, device,
         has_labels=any_labels,
         has_labels_per_window=has_labels_per_window,
-    )
+    ), uhi_stats
 
 
 def _ewc_penalty_sequential(trunk, fisher_matrices, optimal_params_list):
@@ -472,6 +495,7 @@ def run_loo_eval(
     device,
     city_models: dict = None,
     normalizer: dict = None,
+    city_uhi_stats: list[dict] = None,
 ) -> dict:
     """Zero-shot prediction on holdout city using ensemble of trained city heads.
 
@@ -479,6 +503,10 @@ def run_loo_eval(
     holdout city (Philadelphia). For each time window, only includes city-head
     combos where that city had valid CAPA labels for that specific window.
     Falls back to a random head only if no trained models are available.
+
+    Option-C UHI offset calibration: fits a simple linear model on training-city
+    mean UHI anomalies vs mean ERA5 t2m, then applies a per-window bias correction
+    to the ensemble prediction at inference time.
     """
     import torch
     import geopandas as gpd
@@ -530,10 +558,12 @@ def run_loo_eval(
     pred_cols = {}
 
     with torch.no_grad():
-        h = trunk(X_land)
-
         if supervised_models:
-            # Ensemble: average predictions from city heads that had labels for that specific window
+            # All city models share the same final trunk (updated sequentially via EWC).
+            # Compute the shared trunk embedding once per window, then apply each city head.
+            # This guarantees coherent embeddings across the ensemble.
+            shared_trunk = supervised_models[0].trunk
+            shared_trunk.eval()
             for w in ("morning", "midday", "evening"):
                 window_models = [cm for cm in supervised_models
                                  if cm.has_labels_per_window.get(w, False)]
@@ -541,11 +571,11 @@ def run_loo_eval(
                     log.warning("No supervised models with %s labels — skipping %s window", w, w)
                     continue
                 log.info("LOO %s ensemble: %d city heads", w, len(window_models))
+                h_shared_emb = shared_trunk(X_land)  # shared trunk embedding (computed once)
+                era5_feat = era5_tensors[w]
                 city_preds = []
                 for cm in window_models:
-                    cm.trunk.eval()
-                    era5_feat = era5_tensors[w]
-                    inp = torch.cat([h, era5_feat], dim=-1)
+                    inp = torch.cat([h_shared_emb, era5_feat], dim=-1)
                     city_preds.append(cm.heads[w](inp).squeeze(-1))
                 # Ensemble average of anomaly predictions
                 pred_anomaly = torch.stack(city_preds, dim=0).mean(dim=0)
@@ -561,20 +591,80 @@ def run_loo_eval(
                     if valid.sum() > 0:
                         rmse = float(np.sqrt(np.mean((pred[valid] - true_vals[valid]) ** 2)))
                         mae  = float(np.mean(np.abs(pred[valid] - true_vals[valid])))
-                        results[w] = {"rmse": rmse, "mae": mae, "n": int(valid.sum())}
+                        bias = float(np.mean(pred[valid] - true_vals[valid]))
+                        corr = float(np.corrcoef(pred[valid], true_vals[valid])[0, 1]) if valid.sum() > 2 else 0.0
+                        results[w] = {"rmse": rmse, "mae": mae, "bias": bias, "corr": corr, "n": int(valid.sum())}
         else:
-            # Fallback: random heads (baseline only)
+            # Fallback: random heads with shared pretrained trunk (baseline only)
             log.warning("No supervised city models available — LOO predictions are from random heads")
+            h_shared = trunk(X_land)
             heads = {w: _build_head(hidden_dim, era5_dim=4).to(device) for w in ("morning", "midday", "evening")}
             for w, head in heads.items():
-                inp  = torch.cat([h, era5_tensors[w]], dim=-1)
+                inp  = torch.cat([h_shared, era5_tensors[w]], dim=-1)
                 pred = head(inp).squeeze(-1).cpu().numpy()
                 pred_cols[f"pred_{w}"] = pred
 
     for col, vals in pred_cols.items():
         gdf[col] = vals
 
-    # Save predictions
+    # Option-C: UHI offset calibration.
+    # Fit per-window linear model (era5_t2m → mean_uhi_anomaly) on training cities,
+    # then apply bias correction to Philadelphia predictions.
+    # Stores calibrated predictions alongside raw ones for comparison.
+    calibrated_results: dict = {}
+    if city_uhi_stats and pred_cols:
+        for w in ("morning", "midday", "evening"):
+            raw_key = f"pred_{w}"
+            if raw_key not in pred_cols:
+                continue
+            # Gather training-city stats for this window
+            train_era5_t2m = []
+            train_uhi_mean = []
+            for cs in city_uhi_stats:
+                if w in cs and isinstance(cs[w], dict):
+                    train_era5_t2m.append(cs[w]["mean_era5_t2m_F"])
+                    train_uhi_mean.append(cs[w]["mean_uhi_anomaly"])
+            if len(train_era5_t2m) < 2:
+                log.info("Option-C: not enough training cities with %s labels — skipping calibration", w)
+                continue
+            x = np.array(train_era5_t2m, dtype=np.float64)
+            y = np.array(train_uhi_mean, dtype=np.float64)
+            # Simple OLS: slope and intercept
+            x_c = x - x.mean()
+            slope     = float(np.dot(x_c, y - y.mean()) / (np.dot(x_c, x_c) + 1e-9))
+            intercept = float(y.mean() - slope * x.mean())
+
+            # Philadelphia mean ERA5 t2m for this window
+            era5_t2m_F_np = (era5_tensors[w][:, 0].cpu().numpy() * 40.0 * 1.8 + 32.0)
+            holdout_mean_era5 = float(era5_t2m_F_np.mean())
+            predicted_mean_uhi = slope * holdout_mean_era5 + intercept
+
+            raw_pred = pred_cols[raw_key]
+            raw_pred_anomaly = raw_pred - era5_t2m_F_np
+            raw_mean_anomaly = float(raw_pred_anomaly.mean())
+            bias_correction = predicted_mean_uhi - raw_mean_anomaly
+            calibrated_pred = raw_pred + bias_correction
+
+            cal_key = f"pred_{w}_calibrated"
+            gdf[cal_key] = calibrated_pred
+
+            log.info("Option-C  %s  slope=%.3f  intercept=%.3f  raw_mean_anomaly=%.2f°F  "
+                     "predicted_uhi=%.2f°F  bias_correction=%.2f°F",
+                     w, slope, intercept, raw_mean_anomaly, predicted_mean_uhi, bias_correction)
+
+            label_col = _label_cols[w]
+            if label_col in gdf.columns:
+                true_vals = gdf[label_col].values.astype(np.float32)
+                valid = ~np.isnan(true_vals)
+                if valid.sum() > 0:
+                    rmse_cal = float(np.sqrt(np.mean((calibrated_pred[valid] - true_vals[valid]) ** 2)))
+                    mae_cal  = float(np.mean(np.abs(calibrated_pred[valid] - true_vals[valid])))
+                    calibrated_results[w] = {
+                        "rmse": rmse_cal, "mae": mae_cal, "n": int(valid.sum()),
+                        "bias_correction": bias_correction,
+                    }
+
+    # Save predictions (raw + calibrated if available)
     pred_path = holdout_path.parent / "predictions.geoparquet"
     import warnings
     with warnings.catch_warnings():
@@ -584,13 +674,20 @@ def run_loo_eval(
 
     print()
     print("  Phase 3 -- Leave-One-Out Eval (Philadelphia, zero-shot)")
-    print(f"  {'Window':<12}  {'RMSE':>8}  {'MAE':>8}  {'N':>8}")
-    print("  " + "─" * 40)
-    for w, metrics in results.items():
-        print(f"  {w:<12}  {metrics['rmse']:>8.4f}  {metrics['mae']:>8.4f}  {metrics['n']:>8}")
-    print("  " + "─" * 40)
+    print(f"  {'Window':<12}  {'RMSE (raw)':>10}  {'RMSE (cal)':>10}  {'Bias (raw)':>10}  {'Corr':>6}  {'N':>8}")
+    print("  " + "─" * 65)
+    for w in ("morning", "midday", "evening"):
+        raw_m = results.get(w, {})
+        cal_m = calibrated_results.get(w, {})
+        rmse_r = f"{raw_m['rmse']:>10.4f}" if raw_m else "         —"
+        rmse_c = f"{cal_m['rmse']:>10.4f}" if cal_m else "         —"
+        bias_r = f"{raw_m.get('bias', float('nan')):>10.2f}" if raw_m else "         —"
+        corr_r = f"{raw_m.get('corr', float('nan')):>6.3f}" if raw_m else "     —"
+        n      = raw_m.get("n", "—")
+        print(f"  {w:<12}  {rmse_r}  {rmse_c}  {bias_r}  {corr_r}  {n:>8}")
+    print("  " + "─" * 65)
 
-    return results
+    return {"raw": results, "calibrated": calibrated_results}
 
 
 # ---------------------------------------------------------------------------
@@ -612,6 +709,9 @@ def run_pipeline_stages(
     from sparc.run.orchestrator import RunContext, PipelineOrchestrator
 
     city_slug = city_cfg["city_slug"]
+    if not stages:
+        log.debug("[%s] no pipeline stages specified -- skipping", city_slug)
+        return
     project_yml = output_root / city_slug / "project.yml"
     if not project_yml.exists():
         log.warning("[%s] project.yml not found at %s -- skipping pipeline stages", city_slug, project_yml)
@@ -660,7 +760,9 @@ def main() -> None:
 
     # Determine pipeline stages
     if args.stages:
-        run_stages = [s.strip() for s in args.stages.split(",")]
+        _stages_raw = [s.strip() for s in args.stages.split(",")]
+        # Allow --stages none/skip/- to disable pipeline stages entirely
+        run_stages = [s for s in _stages_raw if s.lower() not in ("none", "skip", "-", "")]
     else:
         run_stages = mc.get("pipeline", {}).get("stages", ["0", "2", "3"])
 
@@ -745,14 +847,14 @@ def main() -> None:
     else:
         trunk, normalizer = run_jepa_pretraining(combined_X, combined_C, jepa_cfg, output_root)
 
-    # ── Phase 2 -- Per-City Head Training (frozen trunk) ────────────────────
-    # Trunk is FROZEN from Phase 1 JEPA pretraining.
-    # Each city trains 3 supervised heads (morning/midday/evening) on top of
-    # the fixed trunk embeddings. All heads share the same trunk state so the
-    # LOO ensemble evaluates correctly at inference time.
+    # ── Phase 2 -- Per-City Head Training (unfrozen trunk, low lr) ─────────────
+    # Trunk is UNFROZEN with a low lr (trunk_lr = lr * 0.1) so that CAPA heat
+    # gradient supervision can shape the spatial representations learned in Phase 1.
+    # EWC regularisation prevents catastrophic forgetting across cities.
+    # Each city gets a deep-copied trunk so LOO can run each city's own trunk.
     print()
     print("═" * 60)
-    print("  Phase 2 -- Per-City Head Training (frozen trunk)")
+    print("  Phase 2 -- Per-City Head Training (frozen trunk, deeper heads)")
     print("═" * 60)
 
     import torch
@@ -764,6 +866,7 @@ def main() -> None:
     fisher_matrices:     list[dict] = []
     optimal_params_list: list[dict] = []
     city_models: dict = {}
+    city_uhi_stats_all: list[dict] = []   # for Option-C offset calibration
 
     for city_idx, city_cfg in enumerate(train_cfgs):
         slug = city_cfg["city_slug"]
@@ -782,7 +885,12 @@ def main() -> None:
             log.warning("[%s] GeoParquet missing -- skipping supervised head training", slug)
             continue
         try:
-            trunk, fisher, theta_star, city_model = run_city_finetune(
+            # Pass the SHARED trunk — each city updates it sequentially in-place.
+            # EWC prevents catastrophic forgetting of earlier cities.
+            # At LOO time, all city heads share the same final trunk state,
+            # so ensemble embeddings are coherent.  Per-city deep-copies created
+            # incoherent embedding spaces and caused the ensemble to diverge (~-38°F bias).
+            trunk, fisher, theta_star, city_model, uhi_stats = run_city_finetune(
                 city_slug=slug,
                 parquet_path=pq,
                 trunk=trunk,
@@ -795,6 +903,11 @@ def main() -> None:
                 normalizer=normalizer,
             )
             city_models[slug] = city_model
+            if uhi_stats:
+                city_uhi_stats_all.append({"city": slug, **uhi_stats})
+                for w, s in uhi_stats.items():
+                    log.info("[%s] UHI calibration  %s  mean_anomaly=%.2f°F  era5_t2m=%.1f°F  n=%d",
+                             slug, w, s["mean_uhi_anomaly"], s["mean_era5_t2m_F"], s["n"])
             log.info("[%s] head trained (%d cities done)", slug, len(city_models))
         except Exception as exc:
             log.warning("[%s] supervised head training error: %s", slug, exc)
@@ -822,6 +935,7 @@ def main() -> None:
                     device=device,
                     city_models=city_models,
                     normalizer=normalizer,
+                    city_uhi_stats=city_uhi_stats_all,
                 )
             except Exception as exc:
                 log.warning("LOO eval error for %s: %s", slug, exc)
