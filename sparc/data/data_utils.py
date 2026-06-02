@@ -206,6 +206,24 @@ def load_and_preprocess_data(
             "paths are resolved relative to the project.yml directory."
         )
 
+    # GeoParquet fast-path: already preprocessed, skip CSV pipeline entirely
+    if raw_data_path.endswith(('.geoparquet', '.parquet')):
+        import geopandas as _gpd
+        gdf = _gpd.read_parquet(raw_data_path)
+        # Ensure projected_X / projected_Y exist (multi-city pipeline uses centroid_x/y)
+        if 'projected_X' not in gdf.columns and 'centroid_x' in gdf.columns:
+            gdf['projected_X'] = gdf['centroid_x']
+            gdf['projected_Y'] = gdf['centroid_y']
+        elif 'projected_X' not in gdf.columns and gdf.geometry is not None:
+            gdf['projected_X'] = gdf.geometry.x
+            gdf['projected_Y'] = gdf.geometry.y
+        # Drop rows missing target or predictors
+        essential = [c for c in [identifier_col, target_col] + coords_cols if c in gdf.columns]
+        gdf = gdf.dropna(subset=essential)
+        print(f"    Loaded GeoParquet. Shape: {gdf.shape}")
+        print(f"--- Finished Data Loading (GeoParquet) ---")
+        return gdf
+
     # Check for cached GeoParquet first (3-5x faster than CSV re-parse)
     if output_dir is not None:
         cached = load_cached_geodataframe(output_dir, raw_data_path, predictor_cols)

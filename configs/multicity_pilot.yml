@@ -1,0 +1,135 @@
+# SPARC Multi-City Pilot — Zero-Shot UHI Transfer
+# ================================================
+# Edit feature_columns / label_columns to add/drop variables without code changes.
+# Bboxes are WGS-84 (minx, miny, maxx, maxy).
+
+multicity:
+  output_dir: "output/cities"
+  fishnet_resolution_m: 30
+
+  pilot_cities:
+    - city: "Philadelphia, PA"
+      city_slug: "philadelphia_pa"
+      holdout: true
+      bbox: [-75.28, 39.86, -74.96, 40.14]
+      utm_epsg: "EPSG:32618"
+
+    - city: "Providence, RI"
+      city_slug: "providence_ri"
+      holdout: false
+      bbox: [-71.50, 41.75, -71.35, 41.90]
+      utm_epsg: "EPSG:32619"
+
+    - city: "Raleigh, NC"
+      city_slug: "raleigh_nc"
+      holdout: false
+      bbox: [-78.78, 35.70, -78.54, 35.90]
+      utm_epsg: "EPSG:32617"
+      campaign_date_override: "2021-06-17"   # ERA5-matched; OSF filename date was upload date
+
+    - city: "Chicago, IL"
+      city_slug: "chicago_il"
+      holdout: false
+      bbox: [-87.94, 41.64, -87.52, 42.02]
+      utm_epsg: "EPSG:32616"
+      campaign_date_override: "2023-07-28"   # ERA5-matched; OSF filename date was upload date
+
+    - city: "Atlanta, GA"
+      city_slug: "atlanta_ga"
+      holdout: false
+      bbox: [-84.55, 33.65, -84.29, 33.89]
+      utm_epsg: "EPSG:32616"
+      campaign_date_override: "2021-09-26"   # ERA5-matched; OSF filename date was upload date
+
+    - city: "Seattle, WA"
+      city_slug: "seattle_wa"
+      holdout: false
+      bbox: [-122.46, 47.49, -122.24, 47.73]
+      utm_epsg: "EPSG:32610"
+      campaign_date_override: "2020-09-09"   # ERA5-matched; OSF filename date was upload date
+
+    - city: "Albuquerque, NM"
+      city_slug: "albuquerque_nm"
+      holdout: false
+      bbox: [-106.78, 35.04, -106.52, 35.22]
+      utm_epsg: "EPSG:32613"
+      campaign_date_override: "2021-06-06"   # ERA5-matched; OSF filename date was upload date
+
+    - city: "Burlington, VT"
+      city_slug: "burlington_vt"
+      holdout: false
+      bbox: [-73.27, 44.43, -73.15, 44.55]
+      utm_epsg: "EPSG:32618"
+
+  # ── Feature / label columns ─────────────────────────────────────────────
+  # Edit here to add/drop variables. No code changes needed.
+  feature_columns:
+    land_surface:
+      - pct_impervious
+      - pct_canopy
+      - land_cover
+      - ndvi
+      - ndbi
+      - lst
+      - ndvi_s2
+      - ndbi_s2
+      - mndwi_s2
+      - albedo
+      - bldg_height_mean
+      - bldg_coverage
+      - svf
+      - cdc_svi
+      - elevation_m
+      - slope_deg
+      - aspect_deg
+      - distance_water_m
+
+    era5_morning:
+      - era5_morning_t2m
+      - era5_morning_windspeed
+      - era5_morning_winddir
+      - era5_morning_rh
+
+    era5_midday:
+      - era5_midday_t2m
+      - era5_midday_windspeed
+      - era5_midday_winddir
+      - era5_midday_rh
+
+    era5_evening:
+      - era5_evening_t2m
+      - era5_evening_windspeed
+      - era5_evening_winddir
+      - era5_evening_rh
+
+  label_columns:
+    - aat_morning
+    - aat_midday
+    - aat_night
+    - diurnal_aat
+
+  metadata_columns:
+    - city_slug
+    - utm_epsg
+    - campaign_date
+
+  # ── Pipeline stages to run per city ────────────────────────────────────
+  pipeline:
+    stages: ["0", "2", "3"]   # skip stage 1 (GWEN) for speed on first pass
+    primary_target: "aat_midday"
+    coordinate_columns: ["centroid_x", "centroid_y"]
+
+  # ── JEPA pretraining ────────────────────────────────────────────────────
+  jepa:
+    hidden_dim: 256
+    n_epochs: 50
+    batch_size: 2048
+    mask_ratio: 0.40
+    n_patches: 4
+    ema_tau: 0.99
+    lr: 1e-3
+
+  # ── Continual learning (EWC) ─────────────────────────────────────────
+  continual_learning:
+    ewc_lambda: 400.0
+    replay_fraction: 0.05

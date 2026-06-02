@@ -3279,7 +3279,7 @@ class CausalValidator:
 # Main entry point (called by sparc __main__.py, Stage 3)
 # ---------------------------------------------------------------------------
 
-def main(ctx, approval_gate=None) -> dict:
+def main(ctx, approval_gate=None, fast_mode: bool = False) -> dict:
     """
     Run the full Stage 3 Causal Validation pipeline.
 
