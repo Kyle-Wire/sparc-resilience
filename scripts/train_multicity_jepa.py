@@ -107,34 +107,46 @@ class _FiLMHead(nn.Module):
 
     def __init__(self, hidden_dim: int, era5_dim: int):
         super().__init__()
+        self._hidden_dim = hidden_dim
         self.gamma_net = nn.Linear(era5_dim, hidden_dim)   # scale trunk dims
         self.beta_net  = nn.Linear(era5_dim, hidden_dim)   # shift trunk dims
         self.dropout   = nn.Dropout(0.15)
         self.proj1     = nn.Linear(hidden_dim, hidden_dim // 4)
-        self.proj2     = nn.Linear(hidden_dim // 4, 1)
+        self.proj2     = nn.Linear(hidden_dim // 4, hidden_dim // 8)
+        self.proj3     = nn.Linear(hidden_dim // 8, 1)
 
-    def forward(self, h_trunk, era5_feat):
-        """h_trunk: (N, D), era5_feat: (N, era5_dim) → (N, 1)"""
+    def forward(self, cat_input):
+        """Accepts cat([h_trunk, era5_feat], dim=-1) — same interface as concat MLP heads."""
         import torch.nn.functional as F
+        h_trunk  = cat_input[..., :self._hidden_dim]
+        era5_feat = cat_input[..., self._hidden_dim:]
         gamma = self.gamma_net(era5_feat)           # (N, D) — scale
         beta  = self.beta_net(era5_feat)            # (N, D) — shift
         h = self.dropout(F.gelu(h_trunk * gamma + beta))
         h = F.gelu(self.proj1(h))
-        return self.proj2(h)
+        h = F.gelu(self.proj2(h))
+        return self.proj3(h)
 
 
-def _build_head(hidden_dim: int, era5_dim: int = 4, deep: bool = False) -> nn.Module:
-    """Build a concat-MLP regression head with per-window depth (train32).
+def _build_head(hidden_dim: int, era5_dim: int = 4, deep: bool = False,
+                film: bool = False) -> nn.Module:
+    """Build a regression head with per-window depth and optional FiLM conditioning.
 
     train31 ablation revealed head depth is window-dependent:
       - Morning (overnight heat retention, simpler spatial pattern):
-        2-layer is better (+0.461 vs +0.408 with 3-layer)
-      - Midday/Evening (radiation-driven, richer feature interactions):
-        3-layer is better (+0.126/+0.327 vs +0.016/+0.255 with 2-layer)
+        2-layer concat MLP is best (+0.461 vs +0.408 with 3-layer)
+      - Midday (radiation+wind-driven, complex spatial pattern):
+        FiLM conditioning tested in train39 — ERA5 modulates which land
+        features matter rather than just being appended
+      - Evening (longwave radiation-driven):
+        3-layer concat MLP is best
 
-    deep=False → [h ‖ era5] → D/4 → 1          (morning)
-    deep=True  → [h ‖ era5] → D/4 → D/8 → 1    (midday, evening)
+    deep=False → [h ‖ era5] → D/4 → 1              (morning, concat)
+    deep=True  → [h ‖ era5] → D/4 → D/8 → 1        (evening, concat)
+    film=True  → FiLM(h, era5) → D/4 → D/8 → 1     (midday, FiLM)
     """
+    if film:
+        return _FiLMHead(hidden_dim, era5_dim)
     in_dim = hidden_dim + era5_dim
     if deep:
         return nn.Sequential(
@@ -509,10 +521,8 @@ def run_city_finetune(
     # Per-window ERA5 context tensors + solar zenith (train27).
     # Solar zenith cos(θ) is a city-level scalar (same for all pixels in a city)
     # that captures the radiation forcing intensity for each window.
-    # It is appended to ERA5 so the FiLM head learns how much solar energy
-    # is available to drive UHI at each time of day — without touching the trunk.
-    # morning: [morning(4) + evening(4) + solar_zenith(1)] = 9-dim
-    # midday:  [midday(4) + solar_zenith(1)] = 5-dim
+    # morning: [morning(4) + evening(4)] = 8-dim (prior evening = overnight heat retention)
+    # midday:  [midday(4) + morning(4) + solar_zenith(1)] = 9-dim (train40: temporal bridging)
     # evening: [evening(4) + solar_zenith(1)] = 5-dim
     # CRS is UTM (meters) — convert geometry centroid to WGS84 degrees for solar formula.
     _wgs84_pt = gdf.geometry.centroid.to_crs("EPSG:4326").iloc[0]
@@ -536,20 +546,22 @@ def run_city_finetune(
         # head into thinking radiation matters for morning prediction (it doesn't).
         # Morning stays [morning(4) + evening(4)] = 8-dim (restored to t23 config).
         "morning": torch.cat([era5_tensors["morning"], era5_tensors["evening"]], dim=-1),  # (N, 8)
-        # midday and evening keep solar zenith — midday at 2pm solar zenith 0.65-0.90
-        # directly drives UHI via radiation onto impervious surfaces (train28: +0.191 vs +0.144).
-        "midday":  torch.cat([era5_tensors["midday"],  solar_tensors["midday"]],  dim=-1),  # (N, 5)
+        # train40: midday gets morning ERA5 as temporal context (mirrors morning←evening strategy).
+        # Morning ERA5 captures overnight heat retention state that feeds into midday UHI buildup.
+        # [midday(4) + morning(4) + solar_zenith(1)] = 9-dim
+        "midday":  torch.cat([era5_tensors["midday"], era5_tensors["morning"], solar_tensors["midday"]], dim=-1),  # (N, 9)
         "evening": torch.cat([era5_tensors["evening"], solar_tensors["evening"]], dim=-1),  # (N, 5)
     }
-    era5_dims = {"morning": 8, "midday": 5, "evening": 5}
+    era5_dims = {"morning": 8, "midday": 9, "evening": 5}
 
     # Deterministic head init — fixes stochastic convergence across runs (T-2).
     import torch as _torch_seed
     _torch_seed.manual_seed(seed)
 
     heads = {
-        w: _build_head(hidden_dim, era5_dim=era5_dims[w], deep=(w != "morning")).to(device)
-        for w in ("morning", "midday", "evening")
+        "morning": _build_head(hidden_dim, era5_dim=era5_dims["morning"], deep=False, film=False).to(device),
+        "midday":  _build_head(hidden_dim, era5_dim=era5_dims["midday"],  deep=True,  film=False).to(device),
+        "evening": _build_head(hidden_dim, era5_dim=era5_dims["evening"], deep=True,  film=False).to(device),
     }
 
     head_params = [p for head in heads.values() for p in head.parameters()]
@@ -783,7 +795,7 @@ def run_loo_eval(
     # Per-window ERA5 inputs matching the training configuration (train27: + solar zenith)
     era5_inputs_loo = {
         "morning": torch.cat([era5_tensors["morning"], era5_tensors["evening"]], dim=-1),  # (N, 8)
-        "midday":  torch.cat([era5_tensors["midday"],  solar_tensors_loo["midday"]],  dim=-1),  # (N, 5)
+        "midday":  torch.cat([era5_tensors["midday"], era5_tensors["morning"], solar_tensors_loo["midday"]], dim=-1),  # (N, 9) train40: temporal bridging
         "evening": torch.cat([era5_tensors["evening"], solar_tensors_loo["evening"]], dim=-1),  # (N, 5)
     }
 
@@ -912,9 +924,9 @@ def run_loo_eval(
             log.warning("No supervised city models available — LOO predictions are from random heads")
             h_shared = trunk(X_land)
             heads = {
-                "morning": _build_head(hidden_dim, era5_dim=8, deep=False).to(device),
-                "midday":  _build_head(hidden_dim, era5_dim=5, deep=True).to(device),
-                "evening": _build_head(hidden_dim, era5_dim=5, deep=True).to(device),
+                "morning": _build_head(hidden_dim, era5_dim=8, deep=False, film=False).to(device),
+                "midday":  _build_head(hidden_dim, era5_dim=9, deep=True,  film=False).to(device),
+                "evening": _build_head(hidden_dim, era5_dim=5, deep=True,  film=False).to(device),
             }
             for w, head in heads.items():
                 pred = head(torch.cat([h_shared, era5_inputs_loo[w]], dim=-1)).squeeze(-1).cpu().numpy()
