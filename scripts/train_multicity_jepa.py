@@ -24,6 +24,14 @@ import time
 from pathlib import Path
 from typing import Optional
 
+# Force UTF-8 stdout/stderr so box-drawing chars and degree signs don't crash
+# on Windows terminals that default to cp1252. line_buffering=True preserves
+# the live epoch-by-epoch output that -u gave us before reconfigure.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -129,7 +137,7 @@ class _FiLMHead(nn.Module):
 
 
 def _build_head(hidden_dim: int, era5_dim: int = 4, deep: bool = False,
-                film: bool = False) -> nn.Module:
+                deeper: bool = False, film: bool = False) -> nn.Module:
     """Build a regression head with per-window depth and optional FiLM conditioning.
 
     train31 ablation revealed head depth is window-dependent:
@@ -141,13 +149,26 @@ def _build_head(hidden_dim: int, era5_dim: int = 4, deep: bool = False,
       - Evening (longwave radiation-driven):
         3-layer concat MLP is best
 
-    deep=False → [h ‖ era5] → D/4 → 1              (morning, concat)
-    deep=True  → [h ‖ era5] → D/4 → D/8 → 1        (evening, concat)
-    film=True  → FiLM(h, era5) → D/4 → D/8 → 1     (midday, FiLM)
+    deep=False  → [h ‖ era5] → D/4 → 1                      (morning, 2-layer)
+    deep=True   → [h ‖ era5] → D/4 → D/8 → 1                (evening, 3-layer)
+    deeper=True → [h ‖ era5] → D/4 → D/8 → D/16 → 1         (midday, 4-layer)
+    film=True   → FiLM(h, era5) → D/4 → D/8 → 1             (experimental)
     """
     if film:
         return _FiLMHead(hidden_dim, era5_dim)
     in_dim = hidden_dim + era5_dim
+    if deeper:
+        return nn.Sequential(
+            nn.Linear(in_dim,            hidden_dim // 4),
+            nn.GELU(),
+            nn.Dropout(0.15),
+            nn.Linear(hidden_dim // 4,   hidden_dim // 8),
+            nn.GELU(),
+            nn.Dropout(0.10),
+            nn.Linear(hidden_dim // 8,   hidden_dim // 16),
+            nn.GELU(),
+            nn.Linear(hidden_dim // 16,  1),
+        )
     if deep:
         return nn.Sequential(
             nn.Linear(in_dim,            hidden_dim // 4),
@@ -259,6 +280,40 @@ _WINDOW_HOUR = {"morning": 7.0, "midday": 14.0, "evening": 19.0}
 
 
 # ---------------------------------------------------------------------------
+# ERA5 tensor encoding helper
+# ---------------------------------------------------------------------------
+
+def _encode_era5_tensor(
+    gdf: object,
+    cols: list[str],
+    device: object,
+    n_cells: int,
+) -> "torch.Tensor":
+    """Build a 4-dim ERA5 tensor: ``[t2m/40, ws/15, wd/180, rh/100]``.
+
+    Parameters
+    ----------
+    gdf     : GeoDataFrame with ERA5 columns.
+    cols    : Column names in order ``[t2m, ws, wd, rh]``.
+    device  : torch device.
+    n_cells : Number of fishnet cells (used for zero-fill when no columns found).
+
+    Returns
+    -------
+    FloatTensor of shape (n_cells, 4).
+    """
+    avail = [c for c in cols if c in gdf.columns]  # type: ignore[union-attr]
+    if not avail:
+        return torch.zeros(n_cells, 4, device=device)
+    raw = np.nan_to_num(gdf[avail].values.astype(np.float32), nan=0.0)  # type: ignore[union-attr]
+    if raw.shape[1] < 4:
+        pad = np.zeros((len(raw), 4 - raw.shape[1]), dtype=np.float32)
+        raw = np.concatenate([raw, pad], axis=1)
+    encoded = raw[:, :4] * np.array([1/40.0, 1/15.0, 1/180.0, 1/100.0], dtype=np.float32)
+    return torch.tensor(encoded, device=device)
+
+
+# ---------------------------------------------------------------------------
 # Phase 1 -- JEPA pretraining
 # ---------------------------------------------------------------------------
 
@@ -303,16 +358,33 @@ def run_jepa_pretraining(
     ema_tau    = float(jepa_cfg.get("ema_tau", 0.99))
     lr         = float(jepa_cfg.get("lr", 1e-3))
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    log.info("JEPA pretraining on device=%s  N=%d  D=%d", device, len(all_X), all_X.shape[1])
+    seed = int(jepa_cfg.get("seed", 0))
+    if seed:
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        import numpy as _np_seed; _np_seed.random.seed(seed)
 
-    # Normalize globally (replace NaN mean/std with safe defaults to avoid warnings)
-    X_mean = np.where(np.isnan(np.nanmean(all_X, axis=0)), 0.0, np.nanmean(all_X, axis=0))
-    X_std  = np.where(np.isnan(np.nanstd(all_X,  axis=0)), 1.0, np.nanstd(all_X, axis=0)) + 1e-6
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    log.info("JEPA pretraining on device=%s  N=%d  D=%d  seed=%d", device, len(all_X), all_X.shape[1], seed)
+
+    # Normalize globally.  Some feature columns may be entirely NaN (e.g. a
+    # raster band missing for every city), which causes np.nanmean/nanstd to
+    # emit "mean of empty slice" / "degrees of freedom <= 0" warnings.  We
+    # compute each stat exactly once inside an errstate block, then replace
+    # any resulting NaN with a safe default (0 for mean, 1 for std).
+    with np.errstate(all="ignore"):
+        _xm = np.nanmean(all_X, axis=0)
+        _xs = np.nanstd(all_X,  axis=0)
+        _cm = np.nanmean(all_C, axis=0)
+        _cs = np.nanstd(all_C,  axis=0)
+
+    X_mean = np.where(np.isnan(_xm), 0.0, _xm)
+    X_std  = np.where(np.isnan(_xs), 1.0, _xs) + 1e-6
     all_X  = np.nan_to_num((all_X - X_mean) / X_std, nan=0.0).astype(np.float32)
 
-    C_mean = np.where(np.isnan(np.nanmean(all_C, axis=0)), 0.0, np.nanmean(all_C, axis=0))
-    C_std  = np.where(np.isnan(np.nanstd(all_C,  axis=0)), 1.0, np.nanstd(all_C, axis=0)) + 1e-6
+    C_mean = np.where(np.isnan(_cm), 0.0, _cm)
+    C_std  = np.where(np.isnan(_cs), 1.0, _cs) + 1e-6
     all_C  = np.nan_to_num((all_C - C_mean) / C_std, nan=0.0).astype(np.float32)
 
     X_t = torch.tensor(all_X, device=device)
@@ -334,10 +406,10 @@ def run_jepa_pretraining(
     opt     = torch.optim.AdamW(list(online.parameters()) + list(predict.parameters()), lr=lr)
     weights = JEPALossWeights()
 
-    print()
-    print("  Phase 1 -- JEPA Pretraining")
-    print(f"  {'Epoch':>6}  {'Loss':>10}  {'Align':>10}  {'Var':>10}  {'Cov':>10}")
-    print("  " + "─" * 50)
+    print(flush=True)
+    print("  Phase 1 -- JEPA Pretraining", flush=True)
+    print(f"  {'Epoch':>6}  {'Loss':>10}  {'Align':>10}  {'Var':>10}  {'Cov':>10}", flush=True)
+    print("  " + "-" * 50, flush=True)
 
     for epoch in range(1, n_epochs + 1):
         epoch_losses = []
@@ -373,10 +445,11 @@ def run_jepa_pretraining(
                 f"  {epoch:>6}  {avg['jepa_total']:>10.4f}"
                 f"  {avg['jepa_align']:>10.4f}"
                 f"  {avg['jepa_variance']:>10.4f}"
-                f"  {avg['jepa_covariance']:>10.4f}"
+                f"  {avg['jepa_covariance']:>10.4f}",
+                flush=True,
             )
 
-    print("  " + "─" * 50)
+    print("  " + "-" * 50, flush=True)
 
     # Save shared trunk
     trunk_path = output_dir / "jepa_pretrained_trunk.pt"
@@ -424,7 +497,7 @@ class _CityModel:
             for window, head in self.heads.items():
                 era5_feats = era5_dict.get(window)
                 if era5_feats is None:
-                    era5_feats = torch.zeros(h.shape[0], 4, device=self.device)
+                    era5_feats = torch.zeros(h.shape[0], 5, device=self.device)
                 preds[window] = head(torch.cat([h, era5_feats], dim=-1)).squeeze(-1)
         return preds
 
@@ -468,25 +541,17 @@ def run_city_finetune(
         X_raw  = (X_raw - X_mean) / X_std
     X_land = torch.tensor(X_raw, device=device)
 
-    # ERA5 per-window tensors (apply simple fixed normalization: t2m /40, ws /15, wd /180, rh /100)
-    _ERA5_SCALE = np.array([40.0, 15.0, 180.0, 100.0], dtype=np.float32)  # t2m(°C), ws(m/s), wd(°), rh(%)
+    # ERA5 per-window tensors — 5-dim each: [t2m/40, ws/15, sin(wd), cos(wd), rh/100]
+    # Wind direction is encoded as sin/cos to handle circular 0°/360° discontinuity.
     _era5_cols = {
         "morning": ["era5_morning_t2m","era5_morning_windspeed","era5_morning_winddir","era5_morning_rh"],
         "midday":  ["era5_midday_t2m", "era5_midday_windspeed", "era5_midday_winddir", "era5_midday_rh"],
         "evening": ["era5_evening_t2m","era5_evening_windspeed","era5_evening_winddir","era5_evening_rh"],
     }
-    era5_tensors = {}
-    for w, cols in _era5_cols.items():
-        avail = [c for c in cols if c in gdf.columns]
-        if avail:
-            vals = np.nan_to_num(gdf[avail].values.astype(np.float32), nan=0.0)
-            if vals.shape[1] < 4:
-                pad = np.zeros((len(vals), 4 - vals.shape[1]), dtype=np.float32)
-                vals = np.concatenate([vals, pad], axis=1)
-            vals = vals / _ERA5_SCALE  # normalize to roughly [-1, 1] range
-            era5_tensors[w] = torch.tensor(vals, device=device)
-        else:
-            era5_tensors[w] = torch.zeros(len(X_land), 4, device=device)
+    era5_tensors = {
+        w: _encode_era5_tensor(gdf, cols, device, len(X_land))
+        for w, cols in _era5_cols.items()
+    }  # each tensor: (N, 4)
 
     # Label tensors: predict UHI anomaly above ERA5 t2m (°F) rather than absolute °F.
     # This bounds all targets to ~3-10°F range across all cities, removes inter-city
@@ -521,9 +586,9 @@ def run_city_finetune(
     # Per-window ERA5 context tensors + solar zenith (train27).
     # Solar zenith cos(θ) is a city-level scalar (same for all pixels in a city)
     # that captures the radiation forcing intensity for each window.
-    # morning: [morning(4) + evening(4)] = 8-dim (prior evening = overnight heat retention)
-    # midday:  [midday(4) + morning(4) + solar_zenith(1)] = 9-dim (train40: temporal bridging)
-    # evening: [evening(4) + solar_zenith(1)] = 5-dim
+    # morning: [morning(5) + evening(5)] = 10-dim (prior evening = overnight heat retention)
+    # midday:  [midday(5) + morning(5) + solar_zenith(1)] = 11-dim (train40: temporal bridging)
+    # evening: [evening(5) + solar_zenith(1)] = 6-dim (cross-window context hurts: t41/t42)
     # CRS is UTM (meters) — convert geometry centroid to WGS84 degrees for solar formula.
     _wgs84_pt = gdf.geometry.centroid.to_crs("EPSG:4326").iloc[0]
     city_lat  = float(_wgs84_pt.y)
@@ -541,15 +606,11 @@ def run_city_finetune(
         for w in ("morning", "midday", "evening")
     }
     era5_inputs = {
-        # train29: morning drops solar zenith — morning UHI is overnight heat *retention*,
-        # not current radiation. Adding a low (0.2-0.4) solar value at 7am misleads the
-        # head into thinking radiation matters for morning prediction (it doesn't).
-        # Morning stays [morning(4) + evening(4)] = 8-dim (restored to t23 config).
+        # morning: [morning(4) + evening(4)] = 8-dim (prior evening = overnight heat retention)
         "morning": torch.cat([era5_tensors["morning"], era5_tensors["evening"]], dim=-1),  # (N, 8)
-        # train40: midday gets morning ERA5 as temporal context (mirrors morning←evening strategy).
-        # Morning ERA5 captures overnight heat retention state that feeds into midday UHI buildup.
-        # [midday(4) + morning(4) + solar_zenith(1)] = 9-dim
+        # midday: [midday(4) + morning(4) + solar_zenith(1)] = 9-dim (train40: temporal bridging)
         "midday":  torch.cat([era5_tensors["midday"], era5_tensors["morning"], solar_tensors["midday"]], dim=-1),  # (N, 9)
+        # evening: [evening(4) + solar_zenith(1)] = 5-dim (cross-window context hurts: t41/t42)
         "evening": torch.cat([era5_tensors["evening"], solar_tensors["evening"]], dim=-1),  # (N, 5)
     }
     era5_dims = {"morning": 8, "midday": 9, "evening": 5}
@@ -559,9 +620,9 @@ def run_city_finetune(
     _torch_seed.manual_seed(seed)
 
     heads = {
-        "morning": _build_head(hidden_dim, era5_dim=era5_dims["morning"], deep=False, film=False).to(device),
-        "midday":  _build_head(hidden_dim, era5_dim=era5_dims["midday"],  deep=True,  film=False).to(device),
-        "evening": _build_head(hidden_dim, era5_dim=era5_dims["evening"], deep=True,  film=False).to(device),
+        "morning": _build_head(hidden_dim, era5_dim=era5_dims["morning"], deep=False,  deeper=False, film=False).to(device),
+        "midday":  _build_head(hidden_dim, era5_dim=era5_dims["midday"],  deep=True,   deeper=False, film=False).to(device),
+        "evening": _build_head(hidden_dim, era5_dim=era5_dims["evening"], deep=True,   deeper=False, film=False).to(device),
     }
 
     head_params = [p for head in heads.values() for p in head.parameters()]
@@ -747,26 +808,17 @@ def run_loo_eval(
         X_raw  = (X_raw - X_mean) / X_std
     X_land = torch.tensor(X_raw, device=device)
 
-    _ERA5_SCALE = np.array([40.0, 15.0, 180.0, 100.0], dtype=np.float32)
     _era5_cols = {
         "morning": ["era5_morning_t2m","era5_morning_windspeed","era5_morning_winddir","era5_morning_rh"],
         "midday":  ["era5_midday_t2m", "era5_midday_windspeed", "era5_midday_winddir", "era5_midday_rh"],
         "evening": ["era5_evening_t2m","era5_evening_windspeed","era5_evening_winddir","era5_evening_rh"],
     }
-    era5_tensors = {}
-    for w, cols in _era5_cols.items():
-        avail = [c for c in cols if c in gdf.columns]
-        if avail:
-            vals = np.nan_to_num(gdf[avail].values.astype(np.float32), nan=0.0)
-            if vals.shape[1] < 4:
-                pad = np.zeros((len(vals), 4 - vals.shape[1]), dtype=np.float32)
-                vals = np.concatenate([vals, pad], axis=1)
-            vals = vals / _ERA5_SCALE
-            era5_tensors[w] = torch.tensor(vals, device=device)
-        else:
-            era5_tensors[w] = torch.zeros(len(X_land), 4, device=device)
+    era5_tensors = {
+        w: _encode_era5_tensor(gdf, cols, device, len(X_land))
+        for w, cols in _era5_cols.items()
+    }  # each tensor: (N, 4)
 
-    # All 12 ERA5 features for each head (same as training)
+    # All 12 ERA5 features (4-dim per window, 3 windows)
     era5_all = torch.cat([
         era5_tensors["morning"],
         era5_tensors["midday"],
@@ -792,10 +844,10 @@ def run_loo_eval(
         for w in ("morning", "midday", "evening")
     }
 
-    # Per-window ERA5 inputs matching the training configuration (train27: + solar zenith)
+    # Per-window ERA5 inputs matching the training configuration (t40 baseline: 4-dim ERA5 + temporal bridging)
     era5_inputs_loo = {
         "morning": torch.cat([era5_tensors["morning"], era5_tensors["evening"]], dim=-1),  # (N, 8)
-        "midday":  torch.cat([era5_tensors["midday"], era5_tensors["morning"], solar_tensors_loo["midday"]], dim=-1),  # (N, 9) train40: temporal bridging
+        "midday":  torch.cat([era5_tensors["midday"], era5_tensors["morning"], solar_tensors_loo["midday"]], dim=-1),  # (N, 9)
         "evening": torch.cat([era5_tensors["evening"], solar_tensors_loo["evening"]], dim=-1),  # (N, 5)
     }
 
@@ -827,6 +879,12 @@ def run_loo_eval(
             # This guarantees coherent embeddings across the ensemble.
             shared_trunk = supervised_models[0].trunk
             shared_trunk.eval()
+            # Heads must be in eval mode — Dropout(0.15) active in train mode
+            # would randomly zero 15% of hidden neurons per pixel, adding noise
+            # and reducing spatial correlation even inside torch.no_grad().
+            for cm in supervised_models:
+                for head in cm.heads.values():
+                    head.eval()
             for w in ("morning", "midday", "evening"):
                 excl_set = set(_loo_excl.get(w, []))
                 window_models = [cm for cm in supervised_models
@@ -872,7 +930,7 @@ def run_loo_eval(
                     keep_mask = np.ones(len(city_means), dtype=bool)
                 for cm, cp, keep, cmean in zip(window_models, city_preds, keep_mask, city_means):
                     log.info("  per-city head [%s] %s mean_pred=%.2f°F  keep=%s",
-                             cm.city_slug, w, cmean, "✓" if keep else "✗ (outlier — excluded)")
+                             cm.city_slug, w, cmean, "OK" if keep else "X (outlier — excluded)")
                 if keep_mask.sum() == 0:
                     keep_mask[:] = True  # safety: never drop all cities
                 trimmed_preds = [cp for cp, k in zip(city_preds, keep_mask) if k]
@@ -922,13 +980,15 @@ def run_loo_eval(
         else:
             # Fallback: random heads with shared pretrained trunk (baseline only)
             log.warning("No supervised city models available — LOO predictions are from random heads")
+            trunk.eval()
             h_shared = trunk(X_land)
             heads = {
-                "morning": _build_head(hidden_dim, era5_dim=8, deep=False, film=False).to(device),
-                "midday":  _build_head(hidden_dim, era5_dim=9, deep=True,  film=False).to(device),
-                "evening": _build_head(hidden_dim, era5_dim=5, deep=True,  film=False).to(device),
+                "morning": _build_head(hidden_dim, era5_dim=8, deep=False, deeper=False, film=False).to(device),
+                "midday":  _build_head(hidden_dim, era5_dim=9, deep=True,  deeper=False, film=False).to(device),
+                "evening": _build_head(hidden_dim, era5_dim=5,  deep=True,  deeper=False, film=False).to(device),
             }
             for w, head in heads.items():
+                head.eval()
                 pred = head(torch.cat([h_shared, era5_inputs_loo[w]], dim=-1)).squeeze(-1).cpu().numpy()
                 pred_cols[f"pred_{w}"] = pred
 
@@ -1014,7 +1074,7 @@ def run_loo_eval(
     print()
     print("  Phase 3 -- Leave-One-Out Eval (Philadelphia, zero-shot)")
     print(f"  {'Window':<12}  {'RMSE (raw)':>10}  {'RMSE (cal)':>10}  {'Bias (raw)':>10}  {'Corr':>6}  {'N':>8}")
-    print("  " + "─" * 65)
+    print("  " + "-" * 65)
     for w in ("morning", "midday", "evening"):
         raw_m = results.get(w, {})
         cal_m = calibrated_results.get(w, {})
@@ -1024,7 +1084,7 @@ def run_loo_eval(
         corr_r = f"{raw_m.get('corr', float('nan')):>6.3f}" if raw_m else "     —"
         n      = raw_m.get("n", "—")
         print(f"  {w:<12}  {rmse_r}  {rmse_c}  {bias_r}  {corr_r}  {n:>8}")
-    print("  " + "─" * 65)
+    print("  " + "-" * 65)
 
     return {"raw": results, "calibrated": calibrated_results}
 
@@ -1124,18 +1184,18 @@ def main() -> None:
     coord_cols = mc.get("pipeline", {}).get("coordinate_columns", ["centroid_x", "centroid_y"])
     jepa_cfg   = mc["jepa"]
 
-    # ── Optionally collect data first ──────────────────────────────────────
+    # -- Optionally collect data first --------------------------------------
     if not args.skip_collect:
         log.info("Running data collection via collect_cities.py ...")
         from scripts.collect_cities import collect_one_city
         for city_cfg in all_cities:
             collect_one_city(city_cfg, pilot_cfg, output_root, resume=True)
 
-    # ── Phase 1 -- JEPA Pretraining ─────────────────────────────────────────
+    # -- Phase 1 -- JEPA Pretraining -----------------------------------------
     print()
-    print("═" * 60)
+    print("=" * 60)
     print("  Phase 1 -- JEPA Pretraining (all non-holdout cities)")
-    print("═" * 60)
+    print("=" * 60)
 
     all_X_list, all_C_list = [], []
     for city_cfg in train_cfgs:
@@ -1189,15 +1249,15 @@ def main() -> None:
     else:
         trunk, normalizer = run_jepa_pretraining(combined_X, combined_C, jepa_cfg, output_root)
 
-    # ── Phase 2 -- Per-City Head Training (unfrozen trunk, low lr) ─────────────
+    # -- Phase 2 -- Per-City Head Training (unfrozen trunk, low lr) -------------
     # Trunk is UNFROZEN with a low lr (trunk_lr = lr * 0.1) so that CAPA heat
     # gradient supervision can shape the spatial representations learned in Phase 1.
     # EWC regularisation prevents catastrophic forgetting across cities.
     # Each city gets a deep-copied trunk so LOO can run each city's own trunk.
     print()
-    print("═" * 60)
+    print("=" * 60)
     print("  Phase 2 -- Per-City Head Training (frozen trunk, deeper heads)")
-    print("═" * 60)
+    print("=" * 60)
 
     import torch
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1215,7 +1275,7 @@ def main() -> None:
         pq   = output_root / slug / "data.geoparquet"
 
         print()
-        print(f"  ── City {city_idx + 1}/{len(train_cfgs)}: {slug} ──────────────────────────")
+        print(f"  -- City {city_idx + 1}/{len(train_cfgs)}: {slug} --------------------------")
 
         log.info("[%s] running pipeline stages %s ...", slug, run_stages)
         try:
@@ -1254,14 +1314,14 @@ def main() -> None:
         except Exception as exc:
             log.warning("[%s] supervised head training error: %s", slug, exc)
 
-    # ── Phase 3 -- LOO Eval on Philadelphia (zero-shot) ─────────────────────
+    # -- Phase 3 -- LOO Eval on Philadelphia (zero-shot) ---------------------
     # Only runs AFTER all training cities have been processed.
     # The model has never seen Philadelphia -- this is the true zero-shot test.
     print()
-    print("═" * 60)
+    print("=" * 60)
     print("  Phase 3 -- Zero-Shot Leave-One-Out Eval (Philadelphia)")
     print("  (runs after all training cities processed -- never seen during training)")
-    print("═" * 60)
+    print("=" * 60)
 
     for holdout_cfg in holdout_cfgs:
         slug = holdout_cfg["city_slug"]
