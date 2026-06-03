@@ -945,6 +945,17 @@ def run_loo_eval(
                 continue
             x = np.array(train_era5_t2m, dtype=np.float64)
             y = np.array(train_uhi_mean, dtype=np.float64)
+            # MAD-based outlier removal on UHI anomalies before fitting.
+            # Charlotte's midday anomaly (17.9°F) vs cluster (3-7°F) corrupts
+            # the linear calibration fit — same 2σ MAD filter as ensemble.
+            if len(y) >= 3:
+                med_y    = np.median(y)
+                mad_y    = np.median(np.abs(y - med_y))
+                rst_y    = mad_y / 0.6745
+                if rst_y > 0:
+                    keep_cal = np.abs(y - med_y) <= 2.0 * rst_y
+                    if keep_cal.sum() >= 2:
+                        x, y = x[keep_cal], y[keep_cal]
             # Simple OLS: slope and intercept
             x_c = x - x.mean()
             slope     = float(np.dot(x_c, y - y.mean()) / (np.dot(x_c, x_c) + 1e-9))
