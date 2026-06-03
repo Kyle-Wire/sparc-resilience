@@ -301,6 +301,13 @@ def _find_raster_source(node_id: str, folder_hint: Optional[str] = None) -> dict
         if nl.startswith("rasters_") and nl.endswith(".zip"):
             return {"type": "zip", "id": f["id"], "name": f["name"], "node_id": node_id}
 
+    # Priority 1b: any zip that looks like it contains all raster data
+    # (e.g. "All Data_Heat Watch New Orleans_110420.zip")
+    for f in files:
+        nl = f["name"].lower()
+        if nl.endswith(".zip") and ("data" in nl or "raster" in nl or "heat" in nl):
+            return {"type": "zip", "id": f["id"], "name": f["name"], "node_id": node_id}
+
     # Priority 2: individual temperature TIFs  (old format)
     tif_ids: dict[str, str] = {}
     for window, patterns in _WINDOW_TIF_PATTERNS.items():
@@ -421,9 +428,16 @@ def _sample_rasters_to_fishnet(fishnet_gdf: object, raster_data: dict) -> object
             with zipfile.ZipFile(io.BytesIO(raster_data["_zip"])) as z:
                 z.extractall(tmp_path)
             for prefix in _WINDOWS:
-                for suffix in (f"{prefix}_t_f.tif", f"{prefix}_t_f_ranger.tif"):
-                    # Search recursively — some zips nest files in subdirectories
-                    matches = list(tmp_path.rglob(suffix))
+                # Try multiple naming conventions (oldest → newest campaigns)
+                glob_patterns = [
+                    f"{prefix}_t_f.tif",            # 2022+ standard
+                    f"{prefix}_t_f_ranger.tif",     # 2020-2021 Ranger interpolation
+                    f"*_{prefix}_temp_f.tif",       # 2024+ city-prefixed format
+                    f"*_{prefix}_t_f.tif",          # variant with city prefix
+                ]
+                for pat in glob_patterns:
+                    # rglob handles both root-level and nested subdirectory files
+                    matches = list(tmp_path.rglob(pat))
                     if matches:
                         tif_paths[prefix] = matches[0]
                         break
