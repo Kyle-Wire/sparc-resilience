@@ -156,6 +156,14 @@ multicity:
     head_weight_decay: 0.1   # L2 on heads — prevents OOD extrapolation (train23)
     seed: 42                 # deterministic head init — reproducible convergence
 
+    # ── LOO ensemble per-window exclusions ───────────────────────────────
+    # Explicitly exclude specific city heads from LOO ensemble windows.
+    # Charlotte's evening head (69.84°F mean) drags ~9°F below the cluster
+    # (Raleigh 78.5, Atlanta 83.0, Seattle 87.6) hurting spatial correlation.
+    # Charlotte still participates in morning (all-time best +0.493) and midday.
+    loo_exclude_per_window:
+      evening: [charlotte_nc]
+
   # ── Continual learning (EWC) ─────────────────────────────────────────
   continual_learning:
     ewc_lambda: 400.0

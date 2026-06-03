@@ -62,6 +62,8 @@ def _parse_args() -> argparse.Namespace:
                    help="Skip auxiliary pipeline stages (correlogram/spatial analysis) — speeds up training runs")
     p.add_argument("--stages", default=None,
                    help="Comma-separated pipeline stages to run, e.g. '0,2,3'")
+    p.add_argument("--cfa-only-loo", action="store_true",
+                   help="Restrict LOO ensemble to Cfa Köppen zone cities (same climate as Philadelphia)")
     return p.parse_args()
 
 
@@ -700,6 +702,7 @@ def run_loo_eval(
     city_models: dict = None,
     normalizer: dict = None,
     city_uhi_stats: list[dict] = None,
+    cfa_only: bool = False,
 ) -> dict:
     """Zero-shot prediction on holdout city using ensemble of trained city heads.
 
@@ -717,6 +720,8 @@ def run_loo_eval(
 
     mc         = pilot_cfg["multicity"]
     hidden_dim = int(mc["jepa"].get("hidden_dim", 256))
+    # Per-window city exclusion list from config (e.g. charlotte_nc out of evening).
+    _loo_excl: dict[str, list[str]] = mc["jepa"].get("loo_exclude_per_window", {})
 
     log.info("")
     log.info("Phase 3 -- LOO Eval on %s", holdout_path)
@@ -788,7 +793,16 @@ def run_loo_eval(
     supervised_models = []
     if city_models:
         supervised_models = [m for m in city_models.values() if m.has_labels]
-        log.info("LOO ensemble: %d supervised city models", len(supervised_models))
+        if cfa_only:
+            holdout_zone = _KOPPEN_ZONE.get(holdout_path.parent.name, "")
+            supervised_models = [
+                m for m in supervised_models
+                if _KOPPEN_ZONE.get(m.city_slug, "") == holdout_zone
+            ]
+            log.info("LOO ensemble (Cfa-only): %d supervised city models (zone=%s)",
+                     len(supervised_models), holdout_zone)
+        else:
+            log.info("LOO ensemble: %d supervised city models", len(supervised_models))
 
     trunk.eval()
     results = {}
@@ -802,8 +816,15 @@ def run_loo_eval(
             shared_trunk = supervised_models[0].trunk
             shared_trunk.eval()
             for w in ("morning", "midday", "evening"):
+                excl_set = set(_loo_excl.get(w, []))
                 window_models = [cm for cm in supervised_models
-                                 if cm.has_labels_per_window.get(w, False)]
+                                 if cm.has_labels_per_window.get(w, False)
+                                 and cm.city_slug not in excl_set]
+                if excl_set:
+                    excluded_names = [cm.city_slug for cm in supervised_models
+                                      if cm.city_slug in excl_set]
+                    if excluded_names:
+                        log.info("LOO %s: explicitly excluded by config: %s", w, excluded_names)
                 if not window_models:
                     log.warning("No supervised models with %s labels — skipping %s window", w, w)
                     continue
@@ -1234,6 +1255,7 @@ def main() -> None:
                     city_models=city_models,
                     normalizer=normalizer,
                     city_uhi_stats=city_uhi_stats_all,
+                    cfa_only=args.cfa_only_loo,
                 )
             except Exception as exc:
                 log.warning("LOO eval error for %s: %s", slug, exc)
