@@ -29,6 +29,8 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 import numpy as np
+import torch
+import torch.nn as nn
 import yaml
 
 # Maximize CPU parallelism — PyTorch defaults to half the available cores
@@ -56,6 +58,8 @@ def _parse_args() -> argparse.Namespace:
                    help="Skip data collection (assume GeoParquets already exist)")
     p.add_argument("--skip-pretrain", action="store_true",
                    help="Skip Phase 1 JEPA pretraining and load existing trunk checkpoint")
+    p.add_argument("--skip-stages", action="store_true",
+                   help="Skip auxiliary pipeline stages (correlogram/spatial analysis) — speeds up training runs")
     p.add_argument("--stages", default=None,
                    help="Comma-separated pipeline stages to run, e.g. '0,2,3'")
     return p.parse_args()
@@ -82,26 +86,150 @@ def _build_predictor(hidden_dim: int):
     )
 
 
-def _build_head(hidden_dim: int, era5_dim: int = 4):
-    """Supervised regression head: trunk_embedding + era5_features → scalar.
+class _FiLMHead(nn.Module):
+    """FiLM-conditioned regression head: ERA5 modulates the trunk embedding.
 
-    3-layer MLP gives more capacity to learn spatial heat gradients from the
-    shared trunk embedding without needing to unfreeze the trunk heavily.
-    Dropout regularises the wider first layer.
+    Instead of concatenating ERA5 to the trunk embedding (which forces the first
+    linear layer to learn mixing), FiLM uses ERA5 to compute per-dimension scale
+    (gamma) and shift (beta) applied to the trunk embedding *before* the MLP.
+    This cleanly separates spatial structure (trunk) from weather conditioning (ERA5),
+    matching the V-JEPA 2 principle of keeping the encoder pure and conditioning
+    through the predictor pathway.
 
     era5_dim per window:
       morning: 8 (morning + evening)  — evening adds "preceding day" thermal context
                since morning UHI is driven by overnight heat retention, not active sun
-      midday:  4 (midday only)         — active solar, no extra context needed
-      evening: 4 (evening only)        — daytime accumulation, no extra context needed
+      midday:  4 (midday only)        — cross-window chaining (train24) degraded by -0.474
+      evening: 4 (evening only)       — same finding as midday
     """
-    import torch.nn as nn
+
+    def __init__(self, hidden_dim: int, era5_dim: int):
+        super().__init__()
+        self.gamma_net = nn.Linear(era5_dim, hidden_dim)   # scale trunk dims
+        self.beta_net  = nn.Linear(era5_dim, hidden_dim)   # shift trunk dims
+        self.dropout   = nn.Dropout(0.15)
+        self.proj1     = nn.Linear(hidden_dim, hidden_dim // 4)
+        self.proj2     = nn.Linear(hidden_dim // 4, 1)
+
+    def forward(self, h_trunk, era5_feat):
+        """h_trunk: (N, D), era5_feat: (N, era5_dim) → (N, 1)"""
+        import torch.nn.functional as F
+        gamma = self.gamma_net(era5_feat)           # (N, D) — scale
+        beta  = self.beta_net(era5_feat)            # (N, D) — shift
+        h = self.dropout(F.gelu(h_trunk * gamma + beta))
+        h = F.gelu(self.proj1(h))
+        return self.proj2(h)
+
+
+def _build_head(hidden_dim: int, era5_dim: int = 4) -> nn.Module:
+    """Build a concat-MLP regression head (train28: reverted from FiLM).
+
+    FiLM (train27) produced excellent evening (+0.303) but regressed morning
+    (-0.012 vs +0.467 in t23). Hypothesis: FiLM scale+shift distorts the trunk
+    embedding when ERA5 is heterogeneous (multi-window or cross-window features),
+    which is always the case for morning ([morning+evening+solar]=9-dim).
+    Concat-MLP treats ERA5 additively without corrupting the trunk representation.
+
+    Returns a 3-layer MLP: [h_trunk ‖ era5] → hidden/4 → hidden/8 → 1.
+    """
     in_dim = hidden_dim + era5_dim
     return nn.Sequential(
-        nn.Linear(in_dim, hidden_dim),  nn.GELU(), nn.Dropout(0.15),
-        nn.Linear(hidden_dim, hidden_dim // 4), nn.GELU(),
-        nn.Linear(hidden_dim // 4, 1),
+        nn.Linear(in_dim,        hidden_dim // 4),
+        nn.GELU(),
+        nn.Dropout(0.15),
+        nn.Linear(hidden_dim // 4, hidden_dim // 8),
+        nn.GELU(),
+        nn.Linear(hidden_dim // 8, 1),
     )
+
+
+# ---------------------------------------------------------------------------
+# Climate zone and solar zenith helpers (train27)
+# ---------------------------------------------------------------------------
+
+# Köppen climate zone classification for each city.
+# Used to weight the LOO ensemble — cities climatically similar to the
+# holdout city (Philadelphia, Cfa) contribute more to the ensemble.
+_KOPPEN_ZONE: dict[str, str] = {
+    "philadelphia_pa": "Cfa",
+    "atlanta_ga":      "Cfa",
+    "raleigh_nc":      "Cfa",
+    "chicago_il":      "Dfa",
+    "burlington_vt":   "Dfb",
+    "providence_ri":   "Dfb",
+    "seattle_wa":      "Cfb",
+    "albuquerque_nm":  "BSk",
+}
+
+# Pairwise climate distance between zone codes.
+# 0 = same zone, higher = more dissimilar.
+# Based on: C/D letter (2pt gap), a/b/c subtype (1pt gap), B arid (3pt from C/D).
+def _koppen_distance(zone_a: str, zone_b: str) -> float:
+    if zone_a == zone_b:
+        return 0.0
+    letter_a, letter_b = zone_a[0], zone_b[0]
+    # Arid (B) is very different from temperate/continental
+    if "B" in (letter_a, letter_b):
+        return 3.0
+    # C vs D: different thermal regime
+    letter_dist = 0.0 if letter_a == letter_b else 2.0
+    # a/b/c precipitation subtype
+    sub_a = zone_a[2] if len(zone_a) > 2 else ""
+    sub_b = zone_b[2] if len(zone_b) > 2 else ""
+    sub_dist = 0.0 if sub_a == sub_b else 1.0
+    return letter_dist + sub_dist
+
+
+def _koppen_weights(holdout_slug: str, city_slugs: list[str], temperature: float = 0.8) -> np.ndarray:
+    """Softmax weights for ensemble cities based on Köppen distance to holdout.
+
+    Closer climate zone → higher weight. temperature controls sharpness:
+    lower = sharper (dominant city), higher = more uniform.
+    """
+    holdout_zone = _KOPPEN_ZONE.get(holdout_slug, "Cfa")
+    distances = np.array([
+        _koppen_distance(holdout_zone, _KOPPEN_ZONE.get(s, "Cfa"))
+        for s in city_slugs
+    ], dtype=np.float32)
+    # Convert distance to similarity score: sim = exp(-dist / temperature)
+    sims = np.exp(-distances / temperature)
+    return sims / sims.sum()
+
+
+def _solar_zenith_cos(lat_deg: float, lon_deg: float, date_str: str, hour_local: float) -> float:
+    """Cosine of solar zenith angle for a city-window.
+
+    cos(zenith) = sin(lat)*sin(dec) + cos(lat)*cos(dec)*cos(hour_angle)
+    Returns cos(zenith) clipped to [0, 1] (negative = below horizon → 0).
+
+    Args:
+        lat_deg: city centroid latitude in degrees
+        lon_deg: city centroid longitude in degrees
+        date_str: ISO date string "YYYY-MM-DD"
+        hour_local: approximate local solar hour (e.g. 7.0 = 7am, 14.0 = 2pm)
+    """
+    from math import sin, cos, radians, floor
+    year_str, month_str, day_str = date_str.split("-")
+    # Day-of-year
+    import datetime
+    doy = datetime.date(int(year_str), int(month_str), int(day_str)).timetuple().tm_yday
+    # Solar declination (Spencer, 1971)
+    B = radians(360 / 365 * (doy - 81))
+    dec = radians(23.45 * sin(B))
+    # Equation of time correction (minutes) — small but improves accuracy
+    eot = 9.87 * sin(2 * B) - 7.53 * cos(B) - 1.5 * sin(B)
+    # Local standard meridian (nearest 15°)
+    lstm = 15 * round((-lon_deg) / 15)  # west lon → positive offset
+    # True solar time
+    tst = hour_local + (4 * (lstm - (-lon_deg)) + eot) / 60
+    hour_angle = radians(15 * (tst - 12))
+    lat = radians(lat_deg)
+    cos_z = sin(lat) * sin(dec) + cos(lat) * cos(dec) * cos(hour_angle)
+    return float(max(0.0, cos_z))
+
+
+# Approximate local hours for each measurement window
+_WINDOW_HOUR = {"morning": 7.0, "midday": 14.0, "evening": 19.0}
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +376,8 @@ class _CityModel:
     """Container for trunk + 3 supervised heads."""
 
     def __init__(self, trunk, heads: dict, device, has_labels: bool = True,
-                 has_labels_per_window: dict = None, city_slug: str = ""):
+                 has_labels_per_window: dict = None, city_slug: str = "",
+                 mean_embedding: object = None):
         self.trunk      = trunk
         self.heads      = heads   # {"morning": nn.Module, "midday": ..., "evening": ...}
         self.device     = device
@@ -258,6 +387,8 @@ class _CityModel:
         self.has_labels_per_window = has_labels_per_window or {
             w: has_labels for w in ("morning", "midday", "evening")
         }
+        # Mean trunk embedding for prototype-weighted ensemble (D,) tensor or None
+        self.mean_embedding = mean_embedding
 
     def predict(self, x_land: object, era5_dict: dict) -> dict:
         import torch
@@ -266,11 +397,9 @@ class _CityModel:
             h = self.trunk(x_land)
             for window, head in self.heads.items():
                 era5_feats = era5_dict.get(window)
-                if era5_feats is not None:
-                    inp = torch.cat([h, era5_feats], dim=-1)
-                else:
-                    inp = torch.cat([h, torch.zeros(h.shape[0], 4, device=self.device)], dim=-1)
-                preds[window] = head(inp).squeeze(-1)
+                if era5_feats is None:
+                    era5_feats = torch.zeros(h.shape[0], 4, device=self.device)
+                preds[window] = head(torch.cat([h, era5_feats], dim=-1)).squeeze(-1)
         return preds
 
 
@@ -299,6 +428,8 @@ def run_city_finetune(
     n_epochs     = max(50, int(mc["jepa"].get("n_epochs", 50)))
     batch_size   = int(mc["jepa"].get("batch_size", 8192))  # large batch: fewer steps/epoch, faster on CPU
     lr           = float(mc["jepa"].get("lr", 1e-3))
+    head_weight_decay = float(mc["jepa"].get("head_weight_decay", 0.1))
+    seed         = int(mc["jepa"].get("seed", 42))
 
     gdf = gpd.read_parquet(str(parquet_path))
 
@@ -361,18 +492,46 @@ def run_city_finetune(
         p.requires_grad_(False)
     trunk_local.eval()
 
-    # Per-window ERA5 context tensors.
-    # Morning gets [morning + evening] (8 dim): the preceding-day evening temperature
-    # provides thermal context for overnight heat retention driving morning UHI.
-    # Midday and evening use only their own 4 ERA5 features — active solar dynamics
-    # are captured well by the matching window alone, and cross-window features risk
-    # overfitting to city-specific ERA5 climate profiles across training cities.
-    era5_inputs = {
-        "morning": torch.cat([era5_tensors["morning"], era5_tensors["evening"]], dim=-1),  # (N, 8)
-        "midday":  era5_tensors["midday"],   # (N, 4)
-        "evening": era5_tensors["evening"],  # (N, 4)
+    # Per-window ERA5 context tensors + solar zenith (train27).
+    # Solar zenith cos(θ) is a city-level scalar (same for all pixels in a city)
+    # that captures the radiation forcing intensity for each window.
+    # It is appended to ERA5 so the FiLM head learns how much solar energy
+    # is available to drive UHI at each time of day — without touching the trunk.
+    # morning: [morning(4) + evening(4) + solar_zenith(1)] = 9-dim
+    # midday:  [midday(4) + solar_zenith(1)] = 5-dim
+    # evening: [evening(4) + solar_zenith(1)] = 5-dim
+    # CRS is UTM (meters) — convert geometry centroid to WGS84 degrees for solar formula.
+    _wgs84_pt = gdf.geometry.centroid.to_crs("EPSG:4326").iloc[0]
+    city_lat  = float(_wgs84_pt.y)
+    city_lon  = float(_wgs84_pt.x)
+    date_str  = str(gdf["campaign_date"].iloc[0])[:10] if "campaign_date" in gdf.columns else "2021-07-15"
+    solar_z = {
+        w: float(_solar_zenith_cos(city_lat, city_lon, date_str, _WINDOW_HOUR[w]))
+        for w in ("morning", "midday", "evening")
     }
-    era5_dims = {"morning": 8, "midday": 4, "evening": 4}
+    log.info("[%s] solar zenith cos  morning=%.3f  midday=%.3f  evening=%.3f  lat=%.2f  date=%s",
+             city_slug, solar_z["morning"], solar_z["midday"], solar_z["evening"], city_lat, date_str)
+    N = len(X_land)
+    solar_tensors = {
+        w: torch.full((N, 1), solar_z[w], device=device)
+        for w in ("morning", "midday", "evening")
+    }
+    era5_inputs = {
+        # train29: morning drops solar zenith — morning UHI is overnight heat *retention*,
+        # not current radiation. Adding a low (0.2-0.4) solar value at 7am misleads the
+        # head into thinking radiation matters for morning prediction (it doesn't).
+        # Morning stays [morning(4) + evening(4)] = 8-dim (restored to t23 config).
+        "morning": torch.cat([era5_tensors["morning"], era5_tensors["evening"]], dim=-1),  # (N, 8)
+        # midday and evening keep solar zenith — midday at 2pm solar zenith 0.65-0.90
+        # directly drives UHI via radiation onto impervious surfaces (train28: +0.191 vs +0.144).
+        "midday":  torch.cat([era5_tensors["midday"],  solar_tensors["midday"]],  dim=-1),  # (N, 5)
+        "evening": torch.cat([era5_tensors["evening"], solar_tensors["evening"]], dim=-1),  # (N, 5)
+    }
+    era5_dims = {"morning": 8, "midday": 5, "evening": 5}
+
+    # Deterministic head init — fixes stochastic convergence across runs (T-2).
+    import torch as _torch_seed
+    _torch_seed.manual_seed(seed)
 
     heads = {
         w: _build_head(hidden_dim, era5_dim=era5_dims[w]).to(device)
@@ -380,7 +539,8 @@ def run_city_finetune(
     }
 
     head_params = [p for head in heads.values() for p in head.parameters()]
-    opt = torch.optim.AdamW(head_params, lr=lr)
+    # L2 weight decay on heads prevents covariate-shift extrapolation on OOD cities (T-1).
+    opt = torch.optim.AdamW(head_params, lr=lr, weight_decay=head_weight_decay)
 
     n = len(X_land)
     idx = torch.randperm(n, device=device)
@@ -401,8 +561,7 @@ def run_city_finetune(
 
             sup_loss = torch.tensor(0.0, device=device)
             for w, head in heads.items():
-                inp  = torch.cat([h, era5_inputs[w][b]], dim=-1)
-                pred = head(inp).squeeze(-1)
+                pred = head(torch.cat([h, era5_inputs[w][b]], dim=-1)).squeeze(-1)
                 valid_mask = labels[f"{w}_valid"][b]
                 if valid_mask.sum() > 0:
                     sup_loss = sup_loss + mse_loss(pred[valid_mask], labels[w][b][valid_mask])
@@ -450,11 +609,18 @@ def run_city_finetune(
                 "n": int(valid_mask.sum()),
             }
 
+    # Compute mean trunk embedding for this city (used for prototype-weighted ensemble at LOO).
+    # This is the centroid of the trunk's representation space for this city's pixels.
+    with torch.no_grad():
+        trunk_local.eval()
+        mean_emb = trunk_local(X_land).mean(dim=0).cpu()  # (D,)
+
     return trunk_local, fisher, theta_star, _CityModel(
         trunk_local, heads, device,
         has_labels=any_labels,
         has_labels_per_window=has_labels_per_window,
         city_slug=city_slug,
+        mean_embedding=mean_emb,
     ), uhi_stats
 
 
@@ -491,8 +657,7 @@ def _compute_fisher_sequential(trunk, X_land, era5_tensors, labels, heads, devic
         loss = torch.tensor(0.0, device=device)
         for w, head in heads.items():
             era5_b = era5_tensors[w][b]
-            inp = torch.cat([h, era5_b], dim=-1)
-            pred = head(inp).squeeze(-1)
+            pred = head(torch.cat([h, era5_b], dim=-1)).squeeze(-1)
             valid = labels[f"{w}_valid"][b]
             if valid.sum() > 0:
                 loss = loss + mse(pred[valid], labels[w][b][valid])
@@ -579,11 +744,30 @@ def run_loo_eval(
         era5_tensors["evening"],
     ], dim=-1)  # (N, 12)
 
-    # Per-window ERA5 inputs matching the training configuration
+    # Solar zenith for holdout city (train27) — same computation as training
+    holdout_slug  = holdout_path.parent.name
+    # CRS is UTM (meters) — convert geometry centroid to WGS84 degrees for solar formula.
+    _wgs84_pt_loo = gdf.geometry.centroid.to_crs("EPSG:4326").iloc[0]
+    city_lat  = float(_wgs84_pt_loo.y)
+    city_lon  = float(_wgs84_pt_loo.x)
+    date_str  = str(gdf["campaign_date"].iloc[0])[:10] if "campaign_date" in gdf.columns else "2021-07-15"
+    solar_z_loo = {
+        w: float(_solar_zenith_cos(city_lat, city_lon, date_str, _WINDOW_HOUR[w]))
+        for w in ("morning", "midday", "evening")
+    }
+    log.info("LOO solar zenith cos  morning=%.3f  midday=%.3f  evening=%.3f  (%s)",
+             solar_z_loo["morning"], solar_z_loo["midday"], solar_z_loo["evening"], holdout_slug)
+    N_loo = len(X_land)
+    solar_tensors_loo = {
+        w: torch.full((N_loo, 1), solar_z_loo[w], device=device)
+        for w in ("morning", "midday", "evening")
+    }
+
+    # Per-window ERA5 inputs matching the training configuration (train27: + solar zenith)
     era5_inputs_loo = {
         "morning": torch.cat([era5_tensors["morning"], era5_tensors["evening"]], dim=-1),  # (N, 8)
-        "midday":  era5_tensors["midday"],   # (N, 4)
-        "evening": era5_tensors["evening"],  # (N, 4)
+        "midday":  torch.cat([era5_tensors["midday"],  solar_tensors_loo["midday"]],  dim=-1),  # (N, 5)
+        "evening": torch.cat([era5_tensors["evening"], solar_tensors_loo["evening"]], dim=-1),  # (N, 5)
     }
 
     _label_cols = {"morning": "aat_morning", "midday": "aat_midday", "evening": "aat_night"}
@@ -617,8 +801,7 @@ def run_loo_eval(
                 era5_t2m_F = era5_tensors[w][:, 0] * 40.0 * 1.8 + 32.0
                 city_preds = []
                 for cm in window_models:
-                    inp = torch.cat([h_shared_emb, era5_feat], dim=-1)
-                    city_preds.append(cm.heads[w](inp).squeeze(-1))
+                    city_preds.append(cm.heads[w](torch.cat([h_shared_emb, era5_feat], dim=-1)).squeeze(-1))
 
                 # Log per-city stats and identify outlier heads by mean prediction.
                 # An outlier head is one whose spatial-mean absolute prediction deviates
@@ -645,11 +828,35 @@ def run_loo_eval(
                 if keep_mask.sum() == 0:
                     keep_mask[:] = True  # safety: never drop all cities
                 trimmed_preds = [cp for cp, k in zip(city_preds, keep_mask) if k]
+                trimmed_models = [cm for cm, k in zip(window_models, keep_mask) if k]
                 if keep_mask.sum() < len(window_models):
                     log.info("  trimmed ensemble: %d/%d city heads kept", keep_mask.sum(), len(window_models))
 
-                # Ensemble mean of anomaly predictions (outlier-trimmed).
-                pred_anomaly = torch.stack(trimmed_preds, dim=0).mean(dim=0)
+                # train30: per-window ensemble weighting.
+                # Morning UHI = overnight heat RETENTION driven by urban fabric density.
+                # Chicago (Dfa) shares dense grid-pattern Rust Belt morphology with
+                # Philadelphia, contributing strongly to morning spatial pattern despite
+                # different climate zone. Köppen downweighting of Chicago from 0.25 → 0.04
+                # caused morning regression from +0.467 → ~0 (t28/t29).
+                # Solution: equal weight for morning (let MAD trimming do the work),
+                # Köppen weighting for midday/evening (radiation-driven UHI where climate
+                # zone correctly predicts relative intensity).
+                if w == "morning":
+                    kw_t = torch.ones(len(trimmed_preds), device=device) / len(trimmed_preds)
+                    log.info("  morning: equal-weight ensemble (%d cities)", len(trimmed_preds))
+                else:
+                    koppen_w = _koppen_weights(
+                        holdout_slug,
+                        [cm.city_slug for cm in trimmed_models],
+                        temperature=0.8,
+                    )
+                    for cm, kw in zip(trimmed_models, koppen_w):
+                        log.info("  koppen weight [%s] %s zone=%s  w=%.3f",
+                                 cm.city_slug, w,
+                                 _KOPPEN_ZONE.get(cm.city_slug, "?"), kw)
+                    kw_t = torch.tensor(koppen_w, dtype=torch.float32, device=device)
+                stacked = torch.stack(trimmed_preds, dim=0)  # (K, N)
+                pred_anomaly = (stacked * kw_t.unsqueeze(-1)).sum(dim=0)  # (N,)
                 # Reconstruct absolute °F: anomaly + ERA5 t2m background (era5_t2m_F already computed above)
                 pred = (pred_anomaly + era5_t2m_F).cpu().numpy()
                 pred_cols[f"pred_{w}"] = pred
@@ -668,10 +875,13 @@ def run_loo_eval(
             # Fallback: random heads with shared pretrained trunk (baseline only)
             log.warning("No supervised city models available — LOO predictions are from random heads")
             h_shared = trunk(X_land)
-            heads = {w: _build_head(hidden_dim, era5_dim={"morning": 8, "midday": 4, "evening": 4}[w]).to(device) for w in ("morning", "midday", "evening")}
+            heads = {
+                "morning": _build_head(hidden_dim, era5_dim=8).to(device),
+                "midday":  _build_head(hidden_dim, era5_dim=5).to(device),
+                "evening": _build_head(hidden_dim, era5_dim=5).to(device),
+            }
             for w, head in heads.items():
-                inp  = torch.cat([h_shared, era5_inputs_loo[w]], dim=-1)
-                pred = head(inp).squeeze(-1).cpu().numpy()
+                pred = head(torch.cat([h_shared, era5_inputs_loo[w]], dim=-1)).squeeze(-1).cpu().numpy()
                 pred_cols[f"pred_{w}"] = pred
 
     for col, vals in pred_cols.items():
@@ -829,7 +1039,10 @@ def main() -> None:
     output_root.mkdir(parents=True, exist_ok=True)
 
     # Determine pipeline stages
-    if args.stages:
+    if args.skip_stages:
+        run_stages = []
+        log.info("--skip-stages: auxiliary pipeline stages disabled for this run")
+    elif args.stages:
         _stages_raw = [s.strip() for s in args.stages.split(",")]
         # Allow --stages none/skip/- to disable pipeline stages entirely
         run_stages = [s for s in _stages_raw if s.lower() not in ("none", "skip", "-", "")]
