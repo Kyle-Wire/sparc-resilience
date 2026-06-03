@@ -61,6 +61,31 @@ multicity:
       bbox: [-73.27, 44.43, -73.15, 44.55]
       utm_epsg: "EPSG:32618"
 
+    - city: "Wilmington, DE"
+      city_slug: "wilmington_de"
+      holdout: false
+      bbox: [-75.61, 39.69, -75.51, 39.78]
+      utm_epsg: "EPSG:32618"   # Cfa, dedicated OSF node yef5w; 30mi from Philadelphia
+
+    - city: "Baltimore, MD"
+      city_slug: "baltimore_md"
+      holdout: false
+      bbox: [-76.72, 39.20, -76.53, 39.37]
+      utm_epsg: "EPSG:32618"
+      campaign_date_override: "2019-07-20"   # 2019 NIHHIS campaign; ERA5-matched
+
+    - city: "Charlotte, NC"
+      city_slug: "charlotte_nc"
+      holdout: false
+      bbox: [-80.99, 35.10, -80.72, 35.35]
+      utm_epsg: "EPSG:32617"
+
+    - city: "New Orleans, LA"
+      city_slug: "new_orleans_la"
+      holdout: false
+      bbox: [-90.14, 29.89, -89.90, 30.08]
+      utm_epsg: "EPSG:32615"
+
   # ── Feature / label columns ─────────────────────────────────────────────
   # Edit here to add/drop variables. No code changes needed.
   feature_columns:
@@ -128,6 +153,8 @@ multicity:
     n_patches: 4
     ema_tau: 0.99
     lr: 1e-3
+    head_weight_decay: 0.1   # L2 on heads — prevents OOD extrapolation (train23)
+    seed: 42                 # deterministic head init — reproducible convergence
 
   # ── Continual learning (EWC) ─────────────────────────────────────────
   continual_learning:

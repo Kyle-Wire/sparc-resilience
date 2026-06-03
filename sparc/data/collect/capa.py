@@ -422,9 +422,10 @@ def _sample_rasters_to_fishnet(fishnet_gdf: object, raster_data: dict) -> object
                 z.extractall(tmp_path)
             for prefix in _WINDOWS:
                 for suffix in (f"{prefix}_t_f.tif", f"{prefix}_t_f_ranger.tif"):
-                    p = tmp_path / suffix
-                    if p.exists():
-                        tif_paths[prefix] = p
+                    # Search recursively — some zips nest files in subdirectories
+                    matches = list(tmp_path.rglob(suffix))
+                    if matches:
+                        tif_paths[prefix] = matches[0]
                         break
         else:
             # Old format: write raw TIF bytes keyed by window prefix

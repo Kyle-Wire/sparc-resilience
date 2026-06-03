@@ -121,25 +121,33 @@ class _FiLMHead(nn.Module):
         return self.proj2(h)
 
 
-def _build_head(hidden_dim: int, era5_dim: int = 4) -> nn.Module:
-    """Build a concat-MLP regression head (train28: reverted from FiLM).
+def _build_head(hidden_dim: int, era5_dim: int = 4, deep: bool = False) -> nn.Module:
+    """Build a concat-MLP regression head with per-window depth (train32).
 
-    FiLM (train27) produced excellent evening (+0.303) but regressed morning
-    (-0.012 vs +0.467 in t23). Hypothesis: FiLM scale+shift distorts the trunk
-    embedding when ERA5 is heterogeneous (multi-window or cross-window features),
-    which is always the case for morning ([morning+evening+solar]=9-dim).
-    Concat-MLP treats ERA5 additively without corrupting the trunk representation.
+    train31 ablation revealed head depth is window-dependent:
+      - Morning (overnight heat retention, simpler spatial pattern):
+        2-layer is better (+0.461 vs +0.408 with 3-layer)
+      - Midday/Evening (radiation-driven, richer feature interactions):
+        3-layer is better (+0.126/+0.327 vs +0.016/+0.255 with 2-layer)
 
-    Returns a 3-layer MLP: [h_trunk ‖ era5] → hidden/4 → hidden/8 → 1.
+    deep=False → [h ‖ era5] → D/4 → 1          (morning)
+    deep=True  → [h ‖ era5] → D/4 → D/8 → 1    (midday, evening)
     """
     in_dim = hidden_dim + era5_dim
+    if deep:
+        return nn.Sequential(
+            nn.Linear(in_dim,            hidden_dim // 4),
+            nn.GELU(),
+            nn.Dropout(0.15),
+            nn.Linear(hidden_dim // 4,   hidden_dim // 8),
+            nn.GELU(),
+            nn.Linear(hidden_dim // 8,   1),
+        )
     return nn.Sequential(
         nn.Linear(in_dim,        hidden_dim // 4),
         nn.GELU(),
         nn.Dropout(0.15),
-        nn.Linear(hidden_dim // 4, hidden_dim // 8),
-        nn.GELU(),
-        nn.Linear(hidden_dim // 8, 1),
+        nn.Linear(hidden_dim // 4, 1),
     )
 
 
@@ -154,6 +162,10 @@ _KOPPEN_ZONE: dict[str, str] = {
     "philadelphia_pa": "Cfa",
     "atlanta_ga":      "Cfa",
     "raleigh_nc":      "Cfa",
+    "wilmington_de":  "Cfa",   # added train32
+    "baltimore_md":    "Cfa",   # added train32
+    "charlotte_nc":    "Cfa",   # added train32
+    "new_orleans_la":  "Cfa",   # added train32 (humid subtropical)
     "chicago_il":      "Dfa",
     "burlington_vt":   "Dfb",
     "providence_ri":   "Dfb",
@@ -534,7 +546,7 @@ def run_city_finetune(
     _torch_seed.manual_seed(seed)
 
     heads = {
-        w: _build_head(hidden_dim, era5_dim=era5_dims[w]).to(device)
+        w: _build_head(hidden_dim, era5_dim=era5_dims[w], deep=(w != "morning")).to(device)
         for w in ("morning", "midday", "evening")
     }
 
@@ -876,9 +888,9 @@ def run_loo_eval(
             log.warning("No supervised city models available — LOO predictions are from random heads")
             h_shared = trunk(X_land)
             heads = {
-                "morning": _build_head(hidden_dim, era5_dim=8).to(device),
-                "midday":  _build_head(hidden_dim, era5_dim=5).to(device),
-                "evening": _build_head(hidden_dim, era5_dim=5).to(device),
+                "morning": _build_head(hidden_dim, era5_dim=8, deep=False).to(device),
+                "midday":  _build_head(hidden_dim, era5_dim=5, deep=True).to(device),
+                "evening": _build_head(hidden_dim, era5_dim=5, deep=True).to(device),
             }
             for w, head in heads.items():
                 pred = head(torch.cat([h_shared, era5_inputs_loo[w]], dim=-1)).squeeze(-1).cpu().numpy()
