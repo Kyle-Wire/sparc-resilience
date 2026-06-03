@@ -817,7 +817,7 @@ def run_loo_eval(
 
                 # Log per-city stats and identify outlier heads by mean prediction.
                 # An outlier head is one whose spatial-mean absolute prediction deviates
-                # more than 2 robust-σ from the group median (MAD-based detection).
+                # more than the per-window robust-σ threshold from the group median (MAD).
                 # MAD is much more resistant than mean/std to a single outlier in a small
                 # ensemble (5 cities), where one bad head inflates std and lets others slip
                 # through (e.g. Raleigh midday at 1.39σ survives a 1.5σ mean/std filter
@@ -828,10 +828,13 @@ def run_loo_eval(
                 med = float(np.median(city_means))
                 mad = float(np.median(np.abs(city_means - med)))
                 # Scale MAD to equivalent normal σ (MAD / 0.6745 ≈ σ for Gaussian).
-                # Keep heads within ±2 robust-σ of the median.
+                # Per-window thresholds: evening uses 1.5σ (tighter) to keep Chicago's
+                # overnight cold-island head excluded even as the ensemble grows.
+                # Morning/midday use 2.0σ — less aggressive, preserves useful diversity.
+                _sigma_thresh = {"morning": 2.0, "midday": 2.0, "evening": 1.5}
                 robust_std = mad / 0.6745
                 if robust_std > 0:
-                    keep_mask = np.abs(city_means - med) <= 2.0 * robust_std
+                    keep_mask = np.abs(city_means - med) <= _sigma_thresh[w] * robust_std
                 else:
                     keep_mask = np.ones(len(city_means), dtype=bool)
                 for cm, cp, keep, cmean in zip(window_models, city_preds, keep_mask, city_means):
