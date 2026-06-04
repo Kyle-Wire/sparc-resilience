@@ -100,6 +100,9 @@ def _parse_args() -> argparse.Namespace:
                    help="Comma-separated pipeline stages to run, e.g. '0,2,3'")
     p.add_argument("--cfa-only-loo", action="store_true",
                    help="Restrict LOO ensemble to Cfa Köppen zone cities (same climate as Philadelphia)")
+    p.add_argument("--stage0-only", action="store_true",
+                   help="Run pipeline Stage 0 (correlogram + anisotropy) for all training cities then exit. "
+                        "Use this to generate Stage 0 artifacts before PI-JEPA training.")
     p.add_argument("--deterministic", action="store_true",
                    help="Single-threaded, fully-reproducible training (slower but bit-identical across runs)")
     p.add_argument("--threads", type=int, default=0,
@@ -396,7 +399,14 @@ def run_jepa_pretraining(
         _seed_everything(seed)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    log.info("JEPA pretraining on device=%s  N=%d  D=%d  seed=%d", device, len(all_X), all_X.shape[1], seed)
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True   # auto-tune kernels for this input size
+        gpu_name = torch.cuda.get_device_name(0)
+        gpu_mem  = torch.cuda.get_device_properties(0).total_memory // (1024 ** 2)
+        log.info("JEPA pretraining on GPU: %s  (%d MB)  N=%d  D=%d  seed=%d",
+                 gpu_name, gpu_mem, len(all_X), all_X.shape[1], seed)
+    else:
+        log.info("JEPA pretraining on device=%s  N=%d  D=%d  seed=%d", device, len(all_X), all_X.shape[1], seed)
 
     # Normalize globally.  Some feature columns may be entirely NaN (e.g. a
     # raster band missing for every city), which causes np.nanmean/nanstd to
@@ -421,7 +431,11 @@ def run_jepa_pretraining(
     C_t = torch.tensor(all_C, device=device)
 
     dataset    = TensorDataset(X_t, C_t)
-    loader     = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+    loader     = DataLoader(
+        dataset, batch_size=batch_size, shuffle=True, drop_last=True,
+        pin_memory=(device.type == "cpu"),   # pin_memory speeds CPU→GPU; data already on GPU here
+        num_workers=0,                        # tensors are pre-loaded to device; no worker overhead
+    )
 
     in_dim  = all_X.shape[1]
     online  = _build_trunk(in_dim, hidden_dim).to(device)
@@ -1205,6 +1219,32 @@ def main() -> None:
         run_stages = [s for s in _stages_raw if s.lower() not in ("none", "skip", "-", "")]
     else:
         run_stages = mc.get("pipeline", {}).get("stages", ["0", "2", "3"])
+
+    # --stage0-only: run pipeline Stage 0 for all training cities and exit.
+    # This generates the correlogram + anisotropy artifacts needed for PI-JEPA (B2 audit).
+    if args.stage0_only:
+        print()
+        print("=" * 60)
+        print("  Stage 0 -- Correlogram + Anisotropy (all training cities)")
+        print("=" * 60)
+        all_cities  = mc["pilot_cities"]
+        train_cfgs  = [c for c in all_cities if not c.get("holdout", False)]
+        n_ok, n_fail = 0, 0
+        for city_cfg in train_cfgs:
+            slug = city_cfg["city_slug"]
+            log.info("[%s] running Stage 0 ...", slug)
+            try:
+                run_pipeline_stages(city_cfg, output_root, ["0"])
+                log.info("[%s] Stage 0 complete", slug)
+                n_ok += 1
+            except Exception as exc:
+                log.warning("[%s] Stage 0 error: %s", slug, exc)
+                n_fail += 1
+        print()
+        print(f"  Stage 0 complete: {n_ok} OK, {n_fail} failed")
+        print(f"  Run audit: python scripts/audit_anisotropy.py")
+        print()
+        return
 
     # Separate holdout and training cities
     all_cities   = mc["pilot_cities"]
