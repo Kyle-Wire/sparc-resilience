@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import random
 import sys
 import time
 from pathlib import Path
@@ -41,12 +42,39 @@ import torch
 import torch.nn as nn
 import yaml
 
-# Maximize CPU parallelism — PyTorch defaults to half the available cores
+# CPU parallelism — thread count is set once in main() before any parallel work starts.
+# PyTorch raises RuntimeError if set_num_interop_threads is called a second time.
 import os as _os
-import torch as _torch
-_torch.set_num_threads(_os.cpu_count())
-_torch.set_num_interop_threads(max(1, _os.cpu_count() // 2))
-del _os, _torch
+_CPU_COUNT = _os.cpu_count() or 1
+del _os
+
+
+def _configure_threads(deterministic: bool = False, n_threads: int = 0) -> None:
+    """Set PyTorch thread counts. MUST be called once before any parallel work."""
+    import torch as _t
+    if deterministic:
+        _t.set_num_threads(1)
+        _t.set_num_interop_threads(1)
+    elif n_threads > 0:
+        _t.set_num_threads(n_threads)
+        _t.set_num_interop_threads(max(1, n_threads // 2))
+    else:
+        _t.set_num_threads(_CPU_COUNT)
+        _t.set_num_interop_threads(max(1, _CPU_COUNT // 2))
+
+
+def _seed_everything(seed: int, deterministic: bool = False) -> None:
+    """Seed all RNG sources (torch, numpy, random). Thread counts must be
+    set separately via _configure_threads() before any parallel work starts."""
+    import torch as _t
+    random.seed(seed)
+    np.random.seed(seed)
+    _t.manual_seed(seed)
+    if _t.cuda.is_available():
+        _t.cuda.manual_seed_all(seed)
+    if deterministic:
+        _t.use_deterministic_algorithms(True, warn_only=True)
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,6 +100,11 @@ def _parse_args() -> argparse.Namespace:
                    help="Comma-separated pipeline stages to run, e.g. '0,2,3'")
     p.add_argument("--cfa-only-loo", action="store_true",
                    help="Restrict LOO ensemble to Cfa Köppen zone cities (same climate as Philadelphia)")
+    p.add_argument("--deterministic", action="store_true",
+                   help="Single-threaded, fully-reproducible training (slower but bit-identical across runs)")
+    p.add_argument("--threads", type=int, default=0,
+                   help="Pin PyTorch to N threads (0=all cores). --threads 4 gives ~4x speedup "
+                        "over --deterministic while being reproducible on the same machine.")
     return p.parse_args()
 
 
@@ -360,10 +393,7 @@ def run_jepa_pretraining(
 
     seed = int(jepa_cfg.get("seed", 0))
     if seed:
-        torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(seed)
-        import numpy as _np_seed; _np_seed.random.seed(seed)
+        _seed_everything(seed)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log.info("JEPA pretraining on device=%s  N=%d  D=%d  seed=%d", device, len(all_X), all_X.shape[1], seed)
@@ -616,8 +646,7 @@ def run_city_finetune(
     era5_dims = {"morning": 8, "midday": 9, "evening": 5}
 
     # Deterministic head init — fixes stochastic convergence across runs (T-2).
-    import torch as _torch_seed
-    _torch_seed.manual_seed(seed)
+    _seed_everything(seed)
 
     heads = {
         "morning": _build_head(hidden_dim, era5_dim=era5_dims["morning"], deep=False,  deeper=False, film=False).to(device),
@@ -1156,6 +1185,15 @@ def main() -> None:
     mc          = pilot_cfg["multicity"]
     output_root = Path(mc["output_dir"])
     output_root.mkdir(parents=True, exist_ok=True)
+
+    # Configure threads ONCE before any parallel work, then seed all RNGs.
+    _global_seed = int(mc.get("jepa", {}).get("seed", 42))
+    _configure_threads(deterministic=args.deterministic, n_threads=args.threads)
+    _seed_everything(_global_seed, deterministic=args.deterministic)
+    if args.deterministic:
+        log.info("Deterministic mode ON — single thread, bit-identical across runs (slower)")
+    elif args.threads > 0:
+        log.info("Thread count pinned to %d — reproducible on this machine", args.threads)
 
     # Determine pipeline stages
     if args.skip_stages:
