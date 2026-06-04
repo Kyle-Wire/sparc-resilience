@@ -63,16 +63,42 @@ def _analyze_variable_worker(
         torch.set_num_threads(max(1, n_threads))
     except Exception:  # noqa: BLE001 — torch may not be imported yet
         pass
-    _worker_analyzer = CorrelogramSpatialAnalyzer(
-        max_distance=max_distance,
-        n_lags=n_lags,
-        max_sample_size=max_sample_size,
-        cache_dir=Path(cache_dir_str) if cache_dir_str else None,
-        fast_mode=fast_mode,
-    )
-    result = _worker_analyzer.analyze_variable_correlogram(
-        coords, values, variable, stage0_dir
-    )
+    try:
+        _worker_analyzer = CorrelogramSpatialAnalyzer(
+            max_distance=max_distance,
+            n_lags=n_lags,
+            max_sample_size=max_sample_size,
+            cache_dir=Path(cache_dir_str) if cache_dir_str else None,
+            fast_mode=fast_mode,
+        )
+        result = _worker_analyzer.analyze_variable_correlogram(
+            coords, values, variable, stage0_dir
+        )
+    except Exception as _exc:  # noqa: BLE001
+        # Return a degenerate result rather than letting one bad variable kill
+        # the entire Parallel run (which would prevent all other variables from
+        # being registered in the artifact store).
+        import warnings as _w
+        _w.warn(
+            f"[correlogram worker] {variable}: {_exc} — returning degenerate result",
+            stacklevel=1,
+        )
+        _lags = np.linspace(0, max_distance, n_lags + 1)[1:]
+        _empty = np.full(n_lags, np.nan)
+        result = {
+            "lag_distances": _lags,
+            "morans_i_values": _empty,
+            "z_scores": _empty,
+            "p_values": _empty,
+            "optimal_bandwidth": float(max_distance * 0.5),
+            "optimal_block_size": float(max_distance),
+            "first_zero_crossing": float(max_distance),
+            "best_kernel": "gaussian",
+            "effective_range": float(max_distance * 0.5),
+            "significant_lags": 0,
+            "correlogram_results": [],
+            "degradations": [{"phase": "correlogram_worker", "fallback_used": "degenerate", "reason": str(_exc)}],
+        }
     return variable, result
 
 class CorrelogramSpatialAnalyzer:
@@ -125,6 +151,23 @@ class CorrelogramSpatialAnalyzer:
         """
         print(f"Computing spatial correlogram for {variable_name}...")
         
+        # Skip variables with insufficient finite data
+        finite_mask = np.isfinite(values)
+        if int(finite_mask.sum()) < 4:
+            print(f"  Skipping {variable_name}: fewer than 4 finite values ({int(finite_mask.sum())} found)")
+            lags = np.linspace(0, self.max_distance or 1.0, self.n_lags + 1)[1:] if self.max_distance else np.zeros(self.n_lags)
+            empty = np.full(self.n_lags, np.nan)
+            return {
+                "lag_distances": lags,
+                "morans_i_values": empty,
+                "z_scores": empty,
+                "p_values": empty,
+                "optimal_block_size": float(self.max_distance or 1.0),
+                "first_zero_crossing": float(self.max_distance or 1.0),
+                "correlogram_results": [],
+                "degradations": [],
+            }
+
         # Auto-detect max_distance from data extent if not set
         if self.max_distance is None:
             if len(coords) == 0:

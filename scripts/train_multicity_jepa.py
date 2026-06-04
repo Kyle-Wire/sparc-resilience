@@ -1149,6 +1149,7 @@ def run_pipeline_stages(
     """
     import os
     from sparc.run.orchestrator import RunContext, PipelineOrchestrator
+    from sparc.registry.run_registry import set_active_registry
 
     city_slug = city_cfg["city_slug"]
     if not stages:
@@ -1166,6 +1167,11 @@ def run_pipeline_stages(
     os.environ["SPARC_PROJECT"] = str(project_yml.resolve())
     try:
         ctx = RunContext.from_project(str(project_yml))
+        # Activate the per-city registry globally so that correlogram_analysis.py
+        # and other stage modules can call get_active_store() and persist
+        # artifacts (e.g. correlogram_anisotropy, correlogram_matern_fit).
+        if ctx.registry is not None:
+            set_active_registry(ctx.registry)
         orch = PipelineOrchestrator(ctx)
         for stage in stages:
             log.info("[%s] running pipeline stage %s ...", city_slug, stage)
@@ -1174,6 +1180,8 @@ def run_pipeline_stages(
     except Exception as exc:
         log.warning("[%s] pipeline stage error: %s", city_slug, exc)
     finally:
+        # Deactivate the registry so the next city gets its own clean context.
+        set_active_registry(None, force=True)
         # Restore previous value so subsequent cities get their own project.yml
         if prev_sparc_project is None:
             os.environ.pop("SPARC_PROJECT", None)

@@ -679,6 +679,31 @@ def fft_correlogram(
     coords = coords[valid]
     values = values[valid]
 
+    if len(values) < 4:
+        # Not enough finite data to compute a correlogram — return a degenerate
+        # but structurally correct result so callers don't crash.
+        lags = np.linspace(0, max_distance, n_lags + 1)[1:]
+        empty = np.full(n_lags, np.nan)
+        return {
+            "lag_distances": lags,
+            "morans_i_values": empty,
+            "z_scores": empty,
+            "p_values": empty,
+            "optimal_block_size": float(max_distance),
+            "first_zero_crossing": float(max_distance),
+            "correlogram_results": [
+                {
+                    "lag_distance": float(lags[i]),
+                    "n_pairs": 0,
+                    "morans_i": np.nan,
+                    "z_score": np.nan,
+                    "p_value": np.nan,
+                    "significant": False,
+                }
+                for i in range(n_lags)
+            ],
+        }
+
     x, y = coords[:, 0], coords[:, 1]
     x_min, x_max = float(x.min()), float(x.max())
     y_min, y_max = float(y.min()), float(y.max())
