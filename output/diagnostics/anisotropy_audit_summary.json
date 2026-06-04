@@ -1,0 +1,4 @@
+{
+  "verdict": "DATA_MISSING",
+  "note": "Run: python scripts/train_multicity_jepa.py --skip-collect --stages 0"
+}

@@ -34,6 +34,7 @@ References
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -377,6 +378,134 @@ def spatial_patch_mask(
         return torch.rand(N, device=device) < mask_ratio
     if n_masked < target_n // 2:
         # Patches covered very little — supplement randomly
+        extra = torch.rand(N, device=device) < (mask_ratio - n_masked / N)
+        masked = masked | extra
+
+    return masked
+
+
+def anisotropic_patch_mask(
+    coords: torch.Tensor,
+    mask_ratio: float = 0.4,
+    n_patches: int = 4,
+    eccentricity: float | None = 1.0,
+    theta: float = 0.0,
+    min_patch_radius: float | None = None,
+) -> torch.Tensor:
+    """Spatially contiguous boolean mask using elliptical patch geometry.
+
+    Generalises ``spatial_patch_mask`` from isotropic disks to ellipses
+    shaped by the city's anisotropic spatial correlation structure (from
+    Stage 0 Matern fit).
+
+    Parameters
+    ----------
+    coords : (N, 2) float tensor
+        2-D spatial coordinates of points in the current batch.
+    mask_ratio : float
+        Target fraction of points to mask overall.
+    n_patches : int
+        Number of patch centres to sample (best-effort non-overlapping).
+    eccentricity : float or None
+        Ratio of major to minor semi-axis (a/b >= 1).
+        ``1.0`` → isotropic disk, byte-identical to ``spatial_patch_mask``.
+        ``None`` or ``<= 0`` → falls back gracefully to isotropic (no crash).
+    theta : float
+        Rotation of the major axis clockwise from the x-axis (radians).
+        Ignored when eccentricity == 1.0 (isotropic).
+    min_patch_radius : float or None
+        Minimum minor-axis radius.  If None, derived from coordinate range
+        (same formula as ``spatial_patch_mask``).
+
+    Returns
+    -------
+    mask : (N,) bool tensor
+        ``True`` for masked (hidden) points.
+
+    Notes
+    -----
+    When ``eccentricity == 1.0`` the function takes the exact same code path
+    as ``spatial_patch_mask`` and produces bit-identical results given the
+    same RNG state.  This is the spec acceptance criterion for I1.
+    """
+    # --- graceful degradation for invalid / missing eccentricity ------------
+    if eccentricity is None or eccentricity <= 0.0:
+        return spatial_patch_mask(
+            coords, mask_ratio=mask_ratio, n_patches=n_patches,
+            min_patch_radius=min_patch_radius,
+        )
+
+    # --- isotropic fast-path (byte-identical to spatial_patch_mask) ---------
+    if eccentricity == 1.0:
+        return spatial_patch_mask(
+            coords, mask_ratio=mask_ratio, n_patches=n_patches,
+            min_patch_radius=min_patch_radius,
+        )
+
+    # --- ellipse geometry ---------------------------------------------------
+    N = coords.shape[0]
+    device = coords.device
+
+    if N < 4:
+        return torch.rand(N, device=device) < mask_ratio
+
+    coord_min = coords.min(dim=0).values
+    coord_max = coords.max(dim=0).values
+    span = (coord_max - coord_min).clamp(min=1e-6)
+
+    if min_patch_radius is None:
+        bbox_area = span[0] * span[1]
+        target_area = (mask_ratio / max(n_patches, 1)) * bbox_area
+        # For an ellipse: area = pi*a*b = pi*r^2 for the equivalent isotropic
+        # disk.  Keep the same effective area so mask_ratio is preserved.
+        radius = float((target_area / 3.14159).sqrt().clamp(min=span.min() * 0.05))
+    else:
+        radius = float(min_patch_radius)
+
+    # Semi-axes: keep area = pi*a*b constant relative to the isotropic disk
+    # a*b = r^2  and  a/b = eccentricity  =>  b = r / sqrt(ecc), a = r * sqrt(ecc)
+    ecc_sqrt = math.sqrt(eccentricity)
+    semi_major = radius * ecc_sqrt          # a
+    semi_minor = radius / ecc_sqrt          # b
+
+    # Rotation matrix (clockwise by theta so theta=0 aligns major axis with x)
+    cos_t = math.cos(theta)
+    sin_t = math.sin(theta)
+
+    masked = torch.zeros(N, dtype=torch.bool, device=device)
+    centres_used: list[torch.Tensor] = []
+    rng_idx = torch.randperm(N, device=device)
+
+    for candidate in rng_idx:
+        if len(centres_used) >= n_patches:
+            break
+        centre = coords[candidate]
+
+        # Soft non-overlap check (same as isotropic path)
+        too_close = any(
+            float((centre - c).norm()) < semi_major * 0.5
+            for c in centres_used
+        )
+        if too_close:
+            continue
+
+        # Rotate displacement by -theta, then scale by semi-axes
+        dx = coords[:, 0] - centre[0]      # (N,)
+        dy = coords[:, 1] - centre[1]      # (N,)
+        # Rotate: u = cos*dx + sin*dy,  v = -sin*dx + cos*dy
+        u = cos_t * dx + sin_t * dy        # along major axis
+        v = -sin_t * dx + cos_t * dy       # along minor axis
+        # Point is inside ellipse when (u/a)^2 + (v/b)^2 <= 1
+        inside = (u / semi_major).pow(2) + (v / semi_minor).pow(2) <= 1.0
+        masked |= inside
+        centres_used.append(centre)
+
+    # Safety fallback (mirrors spatial_patch_mask)
+    n_masked = int(masked.sum())
+    target_n = int(mask_ratio * N)
+    if n_masked == 0:
+        return torch.rand(N, device=device) < mask_ratio
+    if n_masked < target_n // 2:
         extra = torch.rand(N, device=device) < (mask_ratio - n_masked / N)
         masked = masked | extra
 
