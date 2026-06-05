@@ -743,19 +743,18 @@ def main(ctx, *, fast_mode=False):
     estimated_time = len(all_variables) * (1 if fast_mode else 2)
     print(f"Estimated analysis time: ~{estimated_time:.0f} minutes")
 
-    # Analyze variables — parallel across all available variables.
-    # Each call is independent (same coords, different values + NUTS chains).
-    # n_jobs capped at the number of valid variables; torch threads per worker
-    # are divided so cores are not oversubscribed across simultaneous workers.
+    # Analyze variables — sequential for Matern/anisotropy NUTS (each fit runs
+    # HMC chains that compete for CUDA memory; running 23 workers simultaneously
+    # causes OOM on typical GPUs).  The FFT correlogram step inside each worker
+    # is fast enough that sequential execution is not a bottleneck.
     available_vars = [v for v in all_variables if v in data.columns]
-    n_parallel = min(len(available_vars), int(os.cpu_count() or 4))
-    # Leave at least 1 thread per worker for PyTorch CPU ops; divide evenly.
-    n_torch_threads = max(1, (os.cpu_count() or 4) // max(n_parallel, 1))
+    n_parallel = 1  # sequential: full GPU resources per variable, no OOM
+    n_torch_threads = max(1, int(os.cpu_count() or 4))
     cache_dir_str = str(cache_dir) if cache_dir else ""
 
     print(
-        f"Parallelizing {len(available_vars)} variables across "
-        f"{n_parallel} workers ({n_torch_threads} torch thread(s) each)..."
+        f"Processing {len(available_vars)} variables sequentially "
+        f"(full GPU per Matern NUTS fit, {n_torch_threads} torch thread(s))..."
     )
 
     worker_results = joblib.Parallel(n_jobs=n_parallel, backend="loky", verbose=2)(
