@@ -427,6 +427,16 @@ def _sample_rasters_to_fishnet(fishnet_gdf: object, raster_data: dict) -> object
             #   {prefix}_t_f_ranger.tif (2020-2021 campaigns using Ranger interpolation)
             with zipfile.ZipFile(io.BytesIO(raster_data["_zip"])) as z:
                 z.extractall(tmp_path)
+            # Some campaigns wrap rasters in a nested ZIP (e.g. Burlington "All Data" ZIP
+            # contains rasters_chw_burlington_MMDDYY.zip inside).  Recursively extract
+            # any nested ZIPs so rglob below can find the TIFs.
+            for nested_zip in list(tmp_path.rglob("*.zip")):
+                try:
+                    with zipfile.ZipFile(nested_zip) as nz:
+                        nz.extractall(nested_zip.parent)
+                    log.debug("capa: extracted nested ZIP %s", nested_zip.name)
+                except Exception:
+                    pass
             for prefix in _WINDOWS:
                 # Try multiple naming conventions (oldest → newest campaigns)
                 glob_patterns = [
