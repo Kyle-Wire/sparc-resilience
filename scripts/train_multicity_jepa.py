@@ -103,6 +103,9 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--stage0-only", action="store_true",
                    help="Run pipeline Stage 0 (correlogram + anisotropy) for all training cities then exit. "
                         "Use this to generate Stage 0 artifacts before PI-JEPA training.")
+    p.add_argument("--stage0-fast", action="store_true",
+                   help="When used with --stage0-only: use fast_mode=True (400 NUTS samples instead of 800, "
+                        "~2.5x faster). Recommended for re-runs when FFT correlograms are already cached.")
     p.add_argument("--deterministic", action="store_true",
                    help="Single-threaded, fully-reproducible training (slower but bit-identical across runs)")
     p.add_argument("--threads", type=int, default=0,
@@ -1140,6 +1143,7 @@ def run_pipeline_stages(
     city_cfg: dict,
     output_root: Path,
     stages: list[str],
+    fast: bool = False,
 ) -> None:
     """Run SPARC pipeline stages for one city using its generated project.yml.
 
@@ -1175,7 +1179,7 @@ def run_pipeline_stages(
         orch = PipelineOrchestrator(ctx)
         for stage in stages:
             log.info("[%s] running pipeline stage %s ...", city_slug, stage)
-            orch.run(stage)
+            orch.run(stage, fast=fast)
             log.info("[%s] stage %s complete", city_slug, stage)
     except Exception as exc:
         log.warning("[%s] pipeline stage error: %s", city_slug, exc)
@@ -1234,6 +1238,8 @@ def main() -> None:
         print()
         print("=" * 60)
         print("  Stage 0 -- Correlogram + Anisotropy (all training cities)")
+        if args.stage0_fast:
+            print("  [fast mode: 400 NUTS samples, ~2.5x faster]")
         print("=" * 60)
         all_cities  = mc["pilot_cities"]
         train_cfgs  = [c for c in all_cities if not c.get("holdout", False)]
@@ -1242,7 +1248,7 @@ def main() -> None:
             slug = city_cfg["city_slug"]
             log.info("[%s] running Stage 0 ...", slug)
             try:
-                run_pipeline_stages(city_cfg, output_root, ["0"])
+                run_pipeline_stages(city_cfg, output_root, ["0"], fast=args.stage0_fast)
                 log.info("[%s] Stage 0 complete", slug)
                 n_ok += 1
             except Exception as exc:

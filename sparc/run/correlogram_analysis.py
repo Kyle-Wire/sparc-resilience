@@ -1139,12 +1139,12 @@ def main(ctx, *, fast_mode=False):
     for variable, result in all_results.items():
         summary_data.append({
             'Variable': variable,
-            'Optimal_Bandwidth': result['optimal_bandwidth'],
-            'Effective_Range': result['effective_range'],
-            'Block_Size': result['optimal_block_size'],
-            'Best_Kernel': result['best_kernel'],
-            'Max_Moran_I': result['max_moran_i'],
-            'Significant_Lags': result['significant_lags']
+            'Optimal_Bandwidth': result.get('optimal_bandwidth'),
+            'Effective_Range': result.get('effective_range'),
+            'Block_Size': result.get('optimal_block_size'),
+            'Best_Kernel': result.get('best_kernel'),
+            'Max_Moran_I': result.get('max_moran_i'),
+            'Significant_Lags': result.get('significant_lags'),
         })
     summary_df = pd.DataFrame(summary_data)
 

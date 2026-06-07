@@ -102,14 +102,20 @@ def _extract_variable_rows(
     variables_with_data = set()
 
     # Collect from matern payload
+    # Artifact uses "per_variable_fits"; legacy format uses "variables"
     matern_vars: dict = {}
     if matern_payload and isinstance(matern_payload, dict):
-        matern_vars = matern_payload.get("variables", {})
+        matern_vars = (matern_payload.get("per_variable_fits")
+                       or matern_payload.get("variables")
+                       or {})
 
     # Collect from anisotropy payload
+    # Artifact uses "per_variable_fits"; legacy format uses "variables"
     aniso_vars: dict = {}
     if aniso_payload and isinstance(aniso_payload, dict):
-        aniso_vars = aniso_payload.get("variables", {})
+        aniso_vars = (aniso_payload.get("per_variable_fits")
+                      or aniso_payload.get("variables")
+                      or {})
 
     all_vars = set(matern_vars) | set(aniso_vars)
     variables_with_data.update(all_vars)
@@ -138,21 +144,27 @@ def _extract_variable_rows(
                 r_hat_theta = float(rh)
 
         # --- anisotropy fields ---
+        # Actual payload structure (from AnisotropyFitResult.to_payload()):
+        #   ellipse.eccentricity.mean   -- eccentricity
+        #   theta_rad.mean              -- orientation in radians
+        #   ess["theta_unit"]           -- ESS for the direction parameter
+        #   converged                   -- bool
         ecc_mean = None
         theta_deg = None
         ess_theta = None
         converged = None
 
         if isinstance(a, dict):
-            # eccentricity
-            ecc = a.get("eccentricity", {})
+            # eccentricity: nested under "ellipse" → "eccentricity" → "mean"
+            ellipse = a.get("ellipse", {})
+            ecc = (ellipse.get("eccentricity", {}) if isinstance(ellipse, dict) else {})
             if isinstance(ecc, dict):
                 ecc_mean = ecc.get("mean", None)
             elif isinstance(ecc, (int, float)):
                 ecc_mean = float(ecc)
 
-            # theta_unit -> convert to degrees
-            th = a.get("theta_unit", a.get("theta", None))
+            # theta direction in degrees
+            th = a.get("theta_rad", a.get("theta_unit", a.get("theta", None)))
             if isinstance(th, dict):
                 th_mean = th.get("mean", None)
                 if th_mean is not None:
@@ -160,7 +172,13 @@ def _extract_variable_rows(
             elif isinstance(th, (int, float)):
                 theta_deg = math.degrees(float(th)) % 180
 
-            ess_theta = a.get("ess_theta", a.get("ess", None))
+            # ESS for theta direction parameter
+            ess_dict = a.get("ess", {})
+            if isinstance(ess_dict, dict):
+                ess_theta = ess_dict.get("theta_unit", ess_dict.get("theta", None))
+            elif isinstance(ess_dict, (int, float)):
+                ess_theta = float(ess_dict)
+
             converged = a.get("converged", None)
 
         rows.append({
