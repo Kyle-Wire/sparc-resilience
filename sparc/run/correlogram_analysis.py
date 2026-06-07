@@ -157,15 +157,18 @@ class CorrelogramSpatialAnalyzer:
             print(f"  Skipping {variable_name}: fewer than 4 finite values ({int(finite_mask.sum())} found)")
             lags = np.linspace(0, self.max_distance or 1.0, self.n_lags + 1)[1:] if self.max_distance else np.zeros(self.n_lags)
             empty = np.full(self.n_lags, np.nan)
+            _md = float(self.max_distance or 1.0)
             return {
                 "lag_distances": lags,
                 "morans_i_values": empty,
                 "z_scores": empty,
                 "p_values": empty,
-                "optimal_block_size": float(self.max_distance or 1.0),
-                "first_zero_crossing": float(self.max_distance or 1.0),
+                "optimal_bandwidth": _md * 0.5,
+                "effective_range": _md * 0.5,
+                "optimal_block_size": _md,
+                "first_zero_crossing": _md,
                 "correlogram_results": [],
-                "degradations": [],
+                "degradations": [{"phase": "skip", "fallback_used": "insufficient_data", "reason": "fewer than 4 finite values"}],
             }
 
         # Auto-detect max_distance from data extent if not set
@@ -412,9 +415,9 @@ class CorrelogramSpatialAnalyzer:
         
         # Extract bandwidths from predictor variables only
         bandwidths = [
-            result['optimal_bandwidth']
+            result.get('optimal_bandwidth', 0.0)
             for var, result in all_results.items()
-            if var != target_variable
+            if var != target_variable and result.get('optimal_bandwidth') is not None
         ]
         
         if not bandwidths:
@@ -887,15 +890,15 @@ def main(ctx, *, fast_mode=False):
         'spatial_cv_configuration': {
             'optimal_block_size': optimal_cv_block_size,
             'validation_results': cv_validation_results,
-            'block_size_candidates': [result['optimal_block_size'] for result in all_results.values()],
+            'block_size_candidates': [result.get('optimal_block_size', 0.0) for result in all_results.values()],
             'cross_range_uplift': locals().get('cv_cross_range_uplift', None),
         },
         'summary_statistics': {
             'bandwidth_range': {
-                'min': min([r['optimal_bandwidth'] for r in all_results.values()]),
-                'max': max([r['optimal_bandwidth'] for r in all_results.values()]),
-                'mean': np.mean([r['optimal_bandwidth'] for r in all_results.values()]),
-                'median': np.median([r['optimal_bandwidth'] for r in all_results.values()])
+                'min': min((r.get('optimal_bandwidth') for r in all_results.values() if r.get('optimal_bandwidth') is not None), default=None),
+                'max': max((r.get('optimal_bandwidth') for r in all_results.values() if r.get('optimal_bandwidth') is not None), default=None),
+                'mean': float(np.mean([r['optimal_bandwidth'] for r in all_results.values() if r.get('optimal_bandwidth') is not None])) if any(r.get('optimal_bandwidth') for r in all_results.values()) else None,
+                'median': float(np.median([r['optimal_bandwidth'] for r in all_results.values() if r.get('optimal_bandwidth') is not None])) if any(r.get('optimal_bandwidth') for r in all_results.values()) else None,
             }
         }
     }
