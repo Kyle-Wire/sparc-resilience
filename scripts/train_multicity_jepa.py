@@ -111,6 +111,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--threads", type=int, default=0,
                    help="Pin PyTorch to N threads (0=all cores). --threads 4 gives ~4x speedup "
                         "over --deterministic while being reproducible on the same machine.")
+    p.add_argument("--seed", type=int, default=None,
+                   help="Override the RNG seed from config (used for multi-seed B1 baseline runs).")
     return p.parse_args()
 
 
@@ -1214,6 +1216,9 @@ def main() -> None:
 
     # Configure threads ONCE before any parallel work, then seed all RNGs.
     _global_seed = int(mc.get("jepa", {}).get("seed", 42))
+    if args.seed is not None:
+        _global_seed = args.seed
+        log.info("Seed overridden by --seed %d", _global_seed)
     _configure_threads(deterministic=args.deterministic, n_threads=args.threads)
     _seed_everything(_global_seed, deterministic=args.deterministic)
     if args.deterministic:
