@@ -118,6 +118,9 @@ def _parse_args() -> argparse.Namespace:
                         "pixels, then evaluate on the remaining held-out labeled pixels. "
                         "Runs AFTER Phase 3 zero-shot eval for a direct comparison. "
                         "Example: --fewshot-n 10  (try 10, 100, 1000)")
+    p.add_argument("--fewshot-hybrid", action="store_true",
+                   help="When used with --fewshot-n: also report a hybrid eval using zero-shot morning "
+                        "predictions combined with few-shot midday/evening, on the same held-out test split.")
     return p.parse_args()
 
 
@@ -1167,12 +1170,17 @@ def run_fewshot_finetune(
     normalizer: dict = None,
     n_samples: int = 10,
     city_uhi_stats: list[dict] = None,
+    hybrid: bool = False,
 ) -> dict:
     """Few-shot transfer: fine-tune a city head on N labeled Philadelphia pixels.
 
     Experimental setup (no data leakage):
       - Randomly sample ``n_samples`` labeled pixels  → training set
       - Evaluate on ALL remaining labeled pixels       → held-out test set
+
+    If ``hybrid=True``, also loads the saved zero-shot morning predictions and
+    reports a hybrid row: morning=zero-shot-calibrated, midday/evening=few-shot-raw.
+    This is evaluated on the *same* held-out test_idx for a fair comparison.
     Uses the FROZEN trunk from Phase 1/2 — same setup as Phase 2 city heads.
     Prints a side-by-side comparison with zero-shot ensemble results.
     """
@@ -1451,7 +1459,59 @@ def run_fewshot_finetune(
     print(f"  sum_corr (few-shot n={n_samples}): {sum_corr:.3f}")
     print()
 
-    return {"raw": results, "calibrated": cal_results, "sum_corr": sum_corr}
+    # --- Hybrid eval: zero-shot morning + few-shot midday/evening ----------------
+    hybrid_results = {}
+    if hybrid:
+        pred_path = holdout_path.parent / "predictions.geoparquet"
+        if pred_path.exists():
+            import geopandas as _gpd_mod
+            zs_gdf = _gpd_mod.read_parquet(str(pred_path))
+            _label_cols_h = {"morning": "aat_morning", "midday": "aat_midday", "evening": "aat_night"}
+            # Evaluate zero-shot morning on the SAME held-out test_idx for fair comparison
+            zs_col = "pred_morning_calibrated"
+            if zs_col in zs_gdf.columns:
+                zs_morning = zs_gdf[zs_col].values.astype(np.float32)
+                true_col    = _label_cols_h["morning"]
+                if true_col in gdf.columns:
+                    true_morn = gdf[true_col].values.astype(np.float32)[test_idx]
+                    zs_morn   = zs_morning[test_idx]
+                    v         = ~np.isnan(true_morn) & ~np.isnan(zs_morn)
+                    if v.sum() > 0:
+                        rmse_h = float(np.sqrt(np.mean((zs_morn[v] - true_morn[v]) ** 2)))
+                        bias_h = float(np.mean(zs_morn[v] - true_morn[v]))
+                        corr_h = float(np.corrcoef(zs_morn[v], true_morn[v])[0, 1])
+                        hybrid_results["morning"] = {"rmse": rmse_h, "bias": bias_h,
+                                                     "corr": corr_h, "n": int(v.sum()),
+                                                     "source": "zero-shot-calibrated"}
+            # Midday/evening come from few-shot
+            hybrid_results["midday"]  = results.get("midday",  {})
+            hybrid_results["evening"] = results.get("evening", {})
+            hybrid_sum = sum(hybrid_results.get(w, {}).get("corr", 0.0)
+                             for w in ("morning", "midday", "evening"))
+
+            print()
+            print("=" * 60)
+            print(f"  Phase 3C -- Hybrid Eval (morning=zero-shot, mid/eve=few-shot n={n_samples})")
+            print(f"  (evaluated on {len(test_idx)} held-out pixels — same split as few-shot)")
+            print("=" * 60)
+            print(f"  {'Window':<12}  {'RMSE':>10}  {'Bias':>10}  {'Corr':>6}  {'N':>8}  Source")
+            print("  " + "-" * 70)
+            for w in ("morning", "midday", "evening"):
+                h = hybrid_results.get(w, {})
+                src   = h.get("source", f"few-shot-n{n_samples}")
+                rmse_ = f"{h['rmse']:>10.4f}" if h else "         —"
+                bias_ = f"{h.get('bias', float('nan')):>10.2f}" if h else "         —"
+                corr_ = f"{h.get('corr', float('nan')):>6.3f}"  if h else "     —"
+                n_    = h.get("n", "—")
+                print(f"  {w:<12}  {rmse_}  {bias_}  {corr_}  {n_:>8}  {src}")
+            print("  " + "-" * 70)
+            print(f"  sum_corr (hybrid): {hybrid_sum:.3f}")
+            print()
+        else:
+            log.warning("hybrid: zero-shot predictions not found at %s -- skipping hybrid eval", pred_path)
+
+    return {"raw": results, "calibrated": cal_results, "sum_corr": sum_corr,
+            "hybrid": hybrid_results}
 
 
 # ---------------------------------------------------------------------------
@@ -1787,6 +1847,7 @@ def main() -> None:
                         normalizer=normalizer,
                         n_samples=args.fewshot_n,
                         city_uhi_stats=city_uhi_stats_all,
+                        hybrid=args.fewshot_hybrid,
                     )
                 except Exception as exc:
                     log.warning("Few-shot eval error for %s: %s", slug, exc)
