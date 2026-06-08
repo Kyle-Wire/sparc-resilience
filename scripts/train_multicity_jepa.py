@@ -405,7 +405,7 @@ def run_jepa_pretraining(
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if device.type == "cuda":
-        torch.backends.cudnn.benchmark = True   # auto-tune kernels for this input size
+        torch.backends.cudnn.benchmark = False  # keep deterministic across GPU generations
         gpu_name = torch.cuda.get_device_name(0)
         gpu_mem  = torch.cuda.get_device_properties(0).total_memory // (1024 ** 2)
         log.info("JEPA pretraining on GPU: %s  (%d MB)  N=%d  D=%d  seed=%d",
@@ -1214,17 +1214,24 @@ def main() -> None:
     output_root = Path(mc["output_dir"])
     output_root.mkdir(parents=True, exist_ok=True)
 
-    # Configure threads ONCE before any parallel work, then seed all RNGs.
+    # Configure threads ONCE before any parallel work.
+    # Seeding happens later inside run_jepa_pretraining() and train_city_heads(),
+    # same as the reference commit -- do NOT seed here or RNG state at the point
+    # of weight init will differ from the 1.277 baseline.
     _global_seed = int(mc.get("jepa", {}).get("seed", 42))
     if args.seed is not None:
         _global_seed = args.seed
         log.info("Seed overridden by --seed %d", _global_seed)
     _configure_threads(deterministic=args.deterministic, n_threads=args.threads)
-    _seed_everything(_global_seed, deterministic=args.deterministic)
     if args.deterministic:
         log.info("Deterministic mode ON — single thread, bit-identical across runs (slower)")
     elif args.threads > 0:
         log.info("Thread count pinned to %d — reproducible on this machine", args.threads)
+
+    # Apply --seed override directly into the config so run_jepa_pretraining/
+    # train_city_heads pick it up without needing an RNG pre-seed in main().
+    if args.seed is not None:
+        mc["jepa"]["seed"] = args.seed
 
     # Determine pipeline stages
     if args.skip_stages:
