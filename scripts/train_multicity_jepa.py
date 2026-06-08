@@ -582,12 +582,18 @@ def run_city_finetune(
     gdf = gpd.read_parquet(str(parquet_path))
 
     # Build feature tensors (apply same normalization used during JEPA pretraining)
+    # NaN handling MUST match Phase 1: normalize first, then nan_to_num → NaN becomes 0
+    # in NORMALIZED space.  Doing nan_to_num before normalizing maps NaN to
+    # (0 - X_mean)/X_std, which is far out-of-distribution for features like albedo
+    # (X_mean≈11960) and causes garbage trunk embeddings (negative spatial correlation).
     X_land_cols = [c for c in feature_cols_land if c in gdf.columns]
-    X_raw = np.nan_to_num(gdf[X_land_cols].values.astype(np.float32), nan=0.0)
+    X_raw = gdf[X_land_cols].values.astype(np.float32)
     if normalizer is not None:
         X_mean = normalizer["X_mean"][:X_raw.shape[1]]
         X_std  = normalizer["X_std"][:X_raw.shape[1]]
-        X_raw  = (X_raw - X_mean) / X_std
+        X_raw  = np.nan_to_num((X_raw - X_mean) / X_std, nan=0.0)  # NaN → 0 in norm space
+    else:
+        X_raw = np.nan_to_num(X_raw, nan=0.0)
     X_land = torch.tensor(X_raw, device=device)
 
     # ERA5 per-window tensors — 5-dim each: [t2m/40, ws/15, sin(wd), cos(wd), rh/100]
@@ -849,11 +855,16 @@ def run_loo_eval(
     gdf = gpd.read_parquet(str(holdout_path))
 
     X_land_cols = [c for c in feature_cols_land if c in gdf.columns]
-    X_raw = np.nan_to_num(gdf[X_land_cols].values.astype(np.float32), nan=0.0)
+    # NaN handling MUST match Phase 1: normalize first, then nan_to_num → NaN = 0 in
+    # normalized space.  Doing nan_to_num before normalizing maps NaN to
+    # (0 - X_mean)/X_std — far OOD for high-mean features like albedo.
+    X_raw = gdf[X_land_cols].values.astype(np.float32)
     if normalizer is not None:
         X_mean = normalizer["X_mean"][:X_raw.shape[1]]
         X_std  = normalizer["X_std"][:X_raw.shape[1]]
-        X_raw  = (X_raw - X_mean) / X_std
+        X_raw  = np.nan_to_num((X_raw - X_mean) / X_std, nan=0.0)  # NaN → 0 in norm space
+    else:
+        X_raw = np.nan_to_num(X_raw, nan=0.0)
     X_land = torch.tensor(X_raw, device=device)
 
     _era5_cols = {
