@@ -363,6 +363,117 @@ def _encode_era5_tensor(
 
 
 # ---------------------------------------------------------------------------
+# PI-JEPA helpers -- read Stage 0 anisotropy payload from artifact stores
+# ---------------------------------------------------------------------------
+
+_PI_JEPA_FOCUS_VARS = ("lst", "pct_impervious", "svf", "ndvi", "albedo")
+
+
+def _load_pi_jepa_params(
+    train_cfgs: list[dict],
+    output_root: Path,
+) -> dict:
+    """Read Stage 0 correlogram artifacts and return PI-JEPA pretraining params.
+
+    Returns a dict with:
+      "median_effective_range_m" : median effective range across focus variables
+                                   and cities that have Stage 0 data (float | None)
+      "median_eccentricity_a_over_b" : median a/b eccentricity (>= 1.0) across
+                                       anisotropic focus-variable pairs (float | None)
+
+    Cities missing Stage 0 artifacts are silently skipped with a WARNING log.
+    """
+    import sqlite3
+
+    effective_ranges: list[float] = []
+    eccentricities_a_over_b: list[float] = []
+
+    for city_cfg in train_cfgs:
+        slug = city_cfg["city_slug"]
+        db_path = output_root / slug / "output" / "artifacts.db"
+        if not db_path.exists():
+            log.warning("[PI-JEPA] %s: Stage 0 artifact DB not found -- skipped", slug)
+            continue
+        try:
+            conn = sqlite3.connect(str(db_path))
+            cur = conn.cursor()
+
+            # --- effective ranges from correlogram summary ---
+            placeholders = ",".join(["?" for _ in _PI_JEPA_FOCUS_VARS])
+            cur.execute(
+                f'SELECT Effective_Range FROM "data__0__correlogram_summary"'
+                f' WHERE Variable IN ({placeholders})',
+                _PI_JEPA_FOCUS_VARS,
+            )
+            for (eff_r,) in cur.fetchall():
+                if eff_r and float(eff_r) > 0:
+                    effective_ranges.append(float(eff_r))
+
+            # --- eccentricity from anisotropy struct ---
+            cur.execute(
+                "SELECT json FROM result_structs WHERE stage=? AND artifact_id=?",
+                ("0", "correlogram_anisotropy"),
+            )
+            row = cur.fetchone()
+            if row:
+                import json as _json
+                aniso = _json.loads(row[0])
+                pvf = aniso.get("per_variable_fits", {})
+                for varname, vdata in pvf.items():
+                    if varname not in _PI_JEPA_FOCUS_VARS:
+                        continue
+                    ellipse = vdata.get("ellipse", {})
+                    if not isinstance(ellipse, dict):
+                        try:
+                            ellipse = _json.loads(ellipse)
+                        except Exception:
+                            continue
+                    ecc_raw = ellipse.get("eccentricity", {})
+                    if isinstance(ecc_raw, dict):
+                        b_over_a = float(ecc_raw.get("mean", 0.0))
+                    elif isinstance(ecc_raw, (int, float)):
+                        b_over_a = float(ecc_raw)
+                    else:
+                        continue
+                    # B2 verdict: V-DIR-UNRELIABLE -- only use eccentricity magnitude
+                    # Stage 0 stores b/a (0-1); anisotropic_patch_mask expects a/b (>= 1)
+                    # Only include if meaningfully anisotropic (b/a < 0.87 threshold)
+                    if 0.0 < b_over_a < 0.87:
+                        eccentricities_a_over_b.append(1.0 / b_over_a)
+
+            conn.close()
+        except Exception as exc:
+            log.warning("[PI-JEPA] %s: error reading artifacts: %s", slug, exc)
+
+    import statistics
+    result: dict = {
+        "median_effective_range_m": None,
+        "median_eccentricity_a_over_b": None,
+    }
+    if effective_ranges:
+        result["median_effective_range_m"] = float(statistics.median(effective_ranges))
+        log.info(
+            "[PI-JEPA] effective ranges: n=%d  median=%.0fm  min=%.0fm  max=%.0fm",
+            len(effective_ranges),
+            result["median_effective_range_m"],
+            min(effective_ranges),
+            max(effective_ranges),
+        )
+    if eccentricities_a_over_b:
+        result["median_eccentricity_a_over_b"] = float(
+            statistics.median(eccentricities_a_over_b)
+        )
+        log.info(
+            "[PI-JEPA] eccentricities (a/b): n=%d  median=%.3f  min=%.3f  max=%.3f",
+            len(eccentricities_a_over_b),
+            result["median_eccentricity_a_over_b"],
+            min(eccentricities_a_over_b),
+            max(eccentricities_a_over_b),
+        )
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Phase 1 -- JEPA pretraining
 # ---------------------------------------------------------------------------
 
@@ -389,15 +500,36 @@ def run_jepa_pretraining(
     all_C: np.ndarray,
     jepa_cfg: dict,
     output_dir: Path,
+    pi_patch_radius_m: float | None = None,
+    pi_eccentricity_a_over_b: float | None = None,
+    city_sizes: list[int] | None = None,
 ) -> object:
     """Run JEPA spatial-patch pretraining on combined city features.
+
+    Parameters
+    ----------
+    pi_patch_radius_m : float or None
+        If set (I2 flag), the patch radius is set to this value in physical
+        UTM metres, then converted to normalised coordinate units using C_std.
+        Overrides the default bbox-derived radius.  Set via
+        ``jepa.range_scaled_radius: true`` in the config.
+    pi_eccentricity_a_over_b : float or None
+        If set (I1 flag), patches are elliptical with this a/b ratio (>= 1).
+        Direction theta=0 (no rotation -- B2 verdict: V-DIR-UNRELIABLE).
+        Set via ``jepa.anisotropic_mask: true`` in the config.
+    city_sizes : list[int] or None
+        Row counts per city in all_X / all_C (in order).  Required when
+        ``jepa.per_city_batching: true``.  Batches are then drawn from a
+        single city at a time, making city-local coordinate masking valid.
 
     Returns the trained online trunk (nn.Module).
     """
     import torch
     import torch.nn as nn
     from torch.utils.data import DataLoader, TensorDataset
-    from sparc.training.jepa_loss import JEPALossWeights, jepa_loss, spatial_patch_mask
+    from sparc.training.jepa_loss import (
+        JEPALossWeights, jepa_loss, spatial_patch_mask, anisotropic_patch_mask,
+    )
 
     hidden_dim = int(jepa_cfg.get("hidden_dim", 256))
     n_epochs   = int(jepa_cfg.get("n_epochs", 50))
@@ -406,6 +538,7 @@ def run_jepa_pretraining(
     n_patches  = int(jepa_cfg.get("n_patches", 4))
     ema_tau    = float(jepa_cfg.get("ema_tau", 0.99))
     lr         = float(jepa_cfg.get("lr", 1e-3))
+    per_city   = bool(jepa_cfg.get("per_city_batching", False))
 
     seed = int(jepa_cfg.get("seed", 0))
     if seed:
@@ -440,15 +573,57 @@ def run_jepa_pretraining(
     C_std  = np.where(np.isnan(_cs), 1.0, _cs) + 1e-6
     all_C  = np.nan_to_num((all_C - C_mean) / C_std, nan=0.0).astype(np.float32)
 
+    # I2: Convert physical effective range (metres) to normalised coordinate units.
+    # Uses the mean of x-std and y-std as the length scale.  min_patch_radius_normed
+    # is None when I2 is disabled, which reverts to the bbox-derived radius.
+    if pi_patch_radius_m is not None:
+        mean_c_std = float((C_std[0] + C_std[1]) / 2.0)
+        min_patch_radius_normed: float | None = pi_patch_radius_m / mean_c_std
+        log.info(
+            "I2 range-scaled radius: %.0fm / %.0fm_std = %.5f normalised units",
+            pi_patch_radius_m, mean_c_std, min_patch_radius_normed,
+        )
+    else:
+        min_patch_radius_normed = None
+
+    # I1: eccentricity for anisotropic masking (a/b ratio, >= 1.0).
+    # theta=0 (no rotation -- B2 verdict: V-DIR-UNRELIABLE).
+    # None = disabled (use isotropic spatial_patch_mask).
+    if pi_eccentricity_a_over_b is not None and pi_eccentricity_a_over_b > 1.0:
+        log.info(
+            "I1 anisotropic mask enabled: eccentricity(a/b)=%.3f  theta=0.0 (no rotation)",
+            pi_eccentricity_a_over_b,
+        )
+
     X_t = torch.tensor(all_X, device=device)
     C_t = torch.tensor(all_C, device=device)
 
-    dataset    = TensorDataset(X_t, C_t)
-    loader     = DataLoader(
-        dataset, batch_size=batch_size, shuffle=True, drop_last=True,
-        pin_memory=(device.type == "cpu"),   # pin_memory speeds CPU→GPU; data already on GPU here
-        num_workers=0,                        # tensors are pre-loaded to device; no worker overhead
-    )
+    # Per-city batching: precompute [start, end) index ranges per city so each
+    # batch comes from one city only.  This makes city-local coordinates valid
+    # for spatial masking (no cross-city coordinate overlap).
+    city_ranges: list[tuple[int, int]] | None = None
+    if per_city and city_sizes:
+        offsets: list[int] = []
+        cur = 0
+        for sz in city_sizes:
+            offsets.append(cur)
+            cur += sz
+        city_ranges = [(offsets[i], offsets[i] + city_sizes[i]) for i in range(len(city_sizes))]
+        log.info("B6 per-city batching: %d cities, batch_size=%d drawn per-city", len(city_ranges), batch_size)
+
+    if not per_city:
+        dataset = TensorDataset(X_t, C_t)
+        loader  = DataLoader(
+            dataset, batch_size=batch_size, shuffle=True, drop_last=True,
+            pin_memory=(device.type == "cpu"),
+            num_workers=0,
+        )
+        batches_per_epoch = len(loader)
+    else:
+        loader = None
+        # Estimate steps per epoch: same total pixels as the DataLoader would give
+        total_N = sum(city_sizes) if city_sizes else len(all_X)
+        batches_per_epoch = max(1, total_N // batch_size)
 
     in_dim  = all_X.shape[1]
     online  = _build_trunk(in_dim, hidden_dim).to(device)
@@ -465,13 +640,47 @@ def run_jepa_pretraining(
 
     print(flush=True)
     print("  Phase 1 -- JEPA Pretraining", flush=True)
+    mask_mode = ("I1+I2" if pi_eccentricity_a_over_b and min_patch_radius_normed
+                 else "I1" if pi_eccentricity_a_over_b
+                 else "I2" if min_patch_radius_normed
+                 else "isotropic")
+    print(f"  mask_mode={mask_mode}", flush=True)
     print(f"  {'Epoch':>6}  {'Loss':>10}  {'Align':>10}  {'Var':>10}  {'Cov':>10}", flush=True)
     print("  " + "-" * 50, flush=True)
 
     for epoch in range(1, n_epochs + 1):
         epoch_losses = []
-        for x_batch, c_batch in loader:
-            mask = spatial_patch_mask(c_batch, mask_ratio=mask_ratio, n_patches=n_patches)
+
+        # --- batch iterator ---
+        if loader is not None:
+            batch_iter = loader
+        else:
+            # Per-city batching: for each step, pick a random city then random pixels
+            import random as _random
+            def _per_city_batches(n_steps: int):
+                for _ in range(n_steps):
+                    city_idx = _random.randrange(len(city_ranges))
+                    lo, hi   = city_ranges[city_idx]
+                    city_n   = hi - lo
+                    size     = min(batch_size, city_n)
+                    perm     = torch.randperm(city_n, device=device)[:size]
+                    idx      = perm + lo
+                    yield X_t[idx], C_t[idx]
+            batch_iter = _per_city_batches(batches_per_epoch)
+
+        for x_batch, c_batch in batch_iter:
+            # Select mask function based on PI-JEPA flags
+            if pi_eccentricity_a_over_b is not None and pi_eccentricity_a_over_b > 1.0:
+                mask = anisotropic_patch_mask(
+                    c_batch, mask_ratio=mask_ratio, n_patches=n_patches,
+                    eccentricity=pi_eccentricity_a_over_b, theta=0.0,
+                    min_patch_radius=min_patch_radius_normed,
+                )
+            else:
+                mask = spatial_patch_mask(
+                    c_batch, mask_ratio=mask_ratio, n_patches=n_patches,
+                    min_patch_radius=min_patch_radius_normed,
+                )
 
             # Context (visible) = ~masked; target (hidden) = masked
             x_context = x_batch.clone()
@@ -1679,6 +1888,7 @@ def main() -> None:
     print("=" * 60)
 
     all_X_list, all_C_list = [], []
+    city_sizes: list[int] = []   # track row count per city for per-city coord normalization
     for city_cfg in train_cfgs:
         slug = city_cfg["city_slug"]
         pq   = output_root / slug / "data.geoparquet"
@@ -1689,6 +1899,7 @@ def main() -> None:
             X, C = load_city_features(pq, feat_cols_land, coord_cols)
             all_X_list.append(X)
             all_C_list.append(C)
+            city_sizes.append(len(X))
             log.info("[%s] loaded  X=%s  C=%s", slug, X.shape, C.shape)
         except Exception as exc:
             log.warning("[%s] load error: %s", slug, exc)
@@ -1709,6 +1920,51 @@ def main() -> None:
     combined_X = np.concatenate(aligned_X,  axis=0)
     combined_C = np.concatenate(all_C_list, axis=0)
 
+    # -- PI-JEPA params (I2 range-scaled radius, I1 anisotropic mask) ----------
+    pi_patch_radius_m: float | None = None
+    pi_eccentricity_a_over_b: float | None = None
+    all_C_local: np.ndarray | None = None   # city-local (per-city centered) coords for masking
+    range_scaled = bool(jepa_cfg.get("range_scaled_radius", False))
+    aniso_mask   = bool(jepa_cfg.get("anisotropic_mask", False))
+    if (range_scaled or aniso_mask) and not args.skip_pretrain:
+        log.info("Loading PI-JEPA Stage 0 params (range_scaled=%s  aniso_mask=%s)", range_scaled, aniso_mask)
+        pi_params = _load_pi_jepa_params(train_cfgs, output_root)
+        if range_scaled:
+            pi_patch_radius_m = pi_params["median_effective_range_m"]
+            if pi_patch_radius_m is None:
+                log.warning("I2 requested but no effective ranges found -- using default radius")
+            else:
+                # Build PER-CITY LOCAL coordinates for masking.
+                # Problem: combined_C uses global normalisation; each city's UTM origin is
+                # different, so a 6km effective range = only 0.018 global-std units (≈0 points).
+                # Fix: subtract each city's own centroid, normalise by each city's own std.
+                # Then effective_range_m / median_city_std gives the mask radius in local-std units.
+                local_C_list: list[np.ndarray] = []
+                city_local_stds: list[float] = []
+                for raw_C in all_C_list:
+                    c_city_mean = np.nanmean(raw_C, axis=0)
+                    c_city_std  = np.nanstd(raw_C,  axis=0) + 1e-6
+                    c_city_std_scalar = float(np.mean(c_city_std))
+                    city_local_stds.append(c_city_std_scalar)
+                    local_C_list.append(
+                        np.nan_to_num((raw_C - c_city_mean) / c_city_std, nan=0.0).astype(np.float32)
+                    )
+                all_C_local = np.concatenate(local_C_list, axis=0)
+                median_city_std_m = float(np.median(city_local_stds))
+                # Convert effective range from physical metres to city-local std units
+                pi_patch_radius_m_local = pi_patch_radius_m / median_city_std_m
+                log.info(
+                    "I2 city-local coords: median_city_std=%.0fm  "
+                    "patch_radius=%.0fm / %.0fm = %.4f local-std units",
+                    median_city_std_m, pi_patch_radius_m, median_city_std_m, pi_patch_radius_m_local,
+                )
+                pi_patch_radius_m = pi_patch_radius_m_local   # overwrite with normalised value
+
+        if aniso_mask:
+            pi_eccentricity_a_over_b = pi_params["median_eccentricity_a_over_b"]
+            if pi_eccentricity_a_over_b is None:
+                log.warning("I1 requested but no eccentricity data found -- using isotropic mask")
+
     if args.skip_pretrain:
         # Load existing trunk checkpoint and reconstruct normalizer
         trunk_path = output_root / "jepa_pretrained_trunk.pt"
@@ -1728,7 +1984,16 @@ def main() -> None:
         }
         log.info("Loaded pretrained trunk from %s (skipping Phase 1)", trunk_path)
     else:
-        trunk, normalizer = run_jepa_pretraining(combined_X, combined_C, jepa_cfg, output_root)
+        trunk, normalizer = run_jepa_pretraining(
+            combined_X,
+            # Use city-local coords for masking when I2 is active (avoids degenerate
+            # masking from mixed-UTM global normalisation where 6km = 0.018 global-std)
+            all_C_local if all_C_local is not None else combined_C,
+            jepa_cfg, output_root,
+            pi_patch_radius_m=pi_patch_radius_m,
+            pi_eccentricity_a_over_b=pi_eccentricity_a_over_b,
+            city_sizes=city_sizes,
+        )
 
     # -- Phase 2 -- Per-City Head Training (unfrozen trunk, low lr) -------------
     # Trunk is UNFROZEN with a low lr (trunk_lr = lr * 0.1) so that CAPA heat

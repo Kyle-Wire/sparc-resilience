@@ -51,7 +51,13 @@ log = logging.getLogger("audit_anisotropy")
 FOCUS_VARIABLES = ["lst", "pct_impervious", "pct_canopy", "svf", "ndvi", "albedo"]
 
 # Thresholds
-ECCENTRICITY_THRESHOLD = 1.15   # below this = effectively isotropic
+# Stage 0 stores eccentricity as b/a (semi_minor / semi_major), range [0, 1]:
+#   1.0  = perfect circle (isotropic)
+#   ~0.5 = strong anisotropy (major axis 2x minor)
+# PI-JEPA spec was written with a/b convention where threshold = 1.15, which
+# in b/a convention is 1/1.15 = 0.87.
+# So: b/a > 0.87 = effectively isotropic,  b/a <= 0.87 = anisotropic.
+ECCENTRICITY_THRESHOLD = 0.87   # b/a ABOVE this = effectively isotropic
 # ESS floor for theta direction to be considered trustworthy
 # Stage 0 uses 400 fast-mode draws; a reasonable floor is ~50 effective samples
 ESS_FLOOR = 50.0
@@ -199,6 +205,9 @@ def _classify_row(row: dict) -> str:
     """Classify one (city, variable) row.
 
     Returns: 'V-ISO', 'V-DIR-UNRELIABLE', 'V-DIR-GOOD', or 'MISSING'
+
+    Stage 0 eccentricity uses b/a convention (0-1 range; 1.0 = circle).
+    Threshold 0.87 corresponds to spec's a/b < 1.15 requirement.
     """
     ecc = row.get("eccentricity")
     ess = row.get("ess_theta")
@@ -208,10 +217,11 @@ def _classify_row(row: dict) -> str:
         return "MISSING"
 
     ecc = float(ecc)
-    if ecc < ECCENTRICITY_THRESHOLD:
+    # b/a convention: values ABOVE threshold are near-isotropic
+    if ecc > ECCENTRICITY_THRESHOLD:
         return "V-ISO"
 
-    # eccentricity >= threshold -- check if direction is trustworthy
+    # eccentricity <= threshold -- anisotropic; check if direction is trustworthy
     ess_ok = (ess is not None and float(ess) >= ESS_FLOOR)
     conv_ok = bool(conv) if conv is not None else False
 
@@ -348,9 +358,9 @@ def main() -> None:
     print()
     print(f"  Scope: {scope}  (N={n})")
     print()
-    print(f"  V-ISO            (ecc < {ECCENTRICITY_THRESHOLD}):         {frac_iso:.1%}  ({n_iso}/{n})")
-    print(f"  V-DIR-UNRELIABLE (ecc >= {ECCENTRICITY_THRESHOLD}, low ESS/conv): {frac_unrel:.1%}  ({n_unrel}/{n})")
-    print(f"  V-DIR-GOOD       (ecc >= {ECCENTRICITY_THRESHOLD}, ESS+conv OK):  {frac_good:.1%}  ({n_good}/{n})")
+    print(f"  V-ISO            (b/a > {ECCENTRICITY_THRESHOLD}):         {frac_iso:.1%}  ({n_iso}/{n})")
+    print(f"  V-DIR-UNRELIABLE (b/a <= {ECCENTRICITY_THRESHOLD}, low ESS/conv): {frac_unrel:.1%}  ({n_unrel}/{n})")
+    print(f"  V-DIR-GOOD       (b/a <= {ECCENTRICITY_THRESHOLD}, ESS+conv OK):  {frac_good:.1%}  ({n_good}/{n})")
     if n_missing:
         print(f"  MISSING (no payload):              {n_missing/n:.1%}  ({n_missing}/{n})")
     print()

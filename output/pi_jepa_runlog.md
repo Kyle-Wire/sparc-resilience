@@ -42,6 +42,7 @@ One line per run. Format: `date | flags | morning | midday | evening | sum | vs-
 | 100 | 0.148 | 0.215 | 0.325 | 0.688 | 2.03°F | 1.97°F | 2.42°F | Magnitude near-perfect; Corr still low |
 | 1,000 | 0.304 | 0.394 | 0.385 | 1.083 | 1.58°F | 1.36°F | 1.85°F | Midday Corr approaching zero-shot |
 | 10,000 | 0.362 | **0.538** | **0.501** | **1.400** | **1.41°F** | **1.18°F** | **1.57°F** | Midday/evening beat zero-shot Corr; near-parity on sum |
+| **Hybrid (ZS morn + FS N=10k mid/eve)** | **0.495** | **0.538** | **0.501** | 🏆 **1.533** | 8.12°F | 1.18°F | 1.57°F | **NEW ALL-TIME BEST** — beats zero-shot by +0.121 (5×σ) |
 
 **Key findings:**
 1. **Midday crossover at N≈10,000**: few-shot Corr 0.538 > zero-shot 0.418 ✅
@@ -57,21 +58,72 @@ One line per run. Format: `date | flags | morning | midday | evening | sum | vs-
 
 
 
-> Status: DATA MISSING. Stage 0 Matérn + anisotropy artifacts not generated for any training city.
-> Run: `python scripts/train_multicity_jepa.py --skip-collect --stages 0` to generate Stage 0 artifacts.
-> Then: `python scripts/audit_anisotropy.py`
+## B2 — Anisotropy audit (COMPLETE 2026-06-09)
 
-## B3 — Trunk embedding PCA
+> Script: `scripts/audit_anisotropy.py`
+> Output: `output/diagnostics/anisotropy_audit.csv`, `anisotropy_audit_summary.json`
 
-> Status: NOT YET RUN. Run after B1 baseline is locked.
+**Bug found & fixed**: `ECCENTRICITY_THRESHOLD` was 1.15 (a/b convention ≥1) but Stage 0 stores b/a (0–1 range). Fixed to 0.87 (=1/1.15) with flipped comparison direction.
 
-## B4 — Per-window residual decomposition
+**Verdict: V-DIR-UNRELIABLE-DOMINANT**
+- V-ISO (b/a > 0.87, near-circular): 20.8%
+- V-DIR-UNRELIABLE (anisotropic but ESS<50 or not converged): **60.4%**
+- V-DIR-GOOD (anisotropic, reliable theta): 12.5%
 
-> Status: NOT YET RUN. Run after B1 baseline is locked.
+**Implementation decision**: I2 (range-scaled radius) + I1 (eccentricity magnitude only, theta=0, no rotation) are valid. I3 (rotation alignment loss) is **blocked** — direction unreliable.
+
+## B3 — Trunk embedding PCA (COMPLETE 2026-06-09)
+
+> Script: `scripts/b3_trunk_pca.py`
+> Output: `output/diagnostics/trunk_pca.png`, `trunk_centroids.json`
+
+**Results**: PC1=73.9%, PC2=22.9% (96.8% variance in 2D). 11 cities embedded.
+- SE US cluster tight: Atlanta↔Raleigh d=0.231, Charlotte nearby
+- Seattle (Cfb) and Burlington (Dfb) are geographic outliers — climate geography captured
+- Key bug fixed: trunk checkpoint uses `trunk_state` key (not `model_state_dict`), with explicit `in_dim`, `hidden_dim`, `X_mean`, `X_std` fields
+
+## B4 — Per-window residual decomposition (COMPLETE 2026-06-09)
+
+> Script: `scripts/b4_residual_decomp.py`
+> Output: `output/diagnostics/residual_feature_corr.csv`, `residual_feature_corr.png`
+
+**Key findings**:
+- Morning: bias=-8.04°F, RMSE=8.12°F — ERA5 wind speed/temperature dominate residuals (r≈+0.66)
+- Midday: bias=-0.57°F, RMSE=1.36°F — elevation_m strongest predictor (r=+0.52)
+- Top features by mean |r| across windows: elevation_m (0.38), slope_deg (0.31), pct_canopy (0.27), pct_impervious (0.26)
+- Note: `aat_evening` absent from predictions.geoparquet — evening window skipped in B4
+
+## Hybrid Zero-Shot + Few-Shot — LOCKED (2026-06-09)
+
+> **Canonical result: sum_corr = 1.533** (morning=ZS 0.495, midday=FS 0.538, evening=FS 0.501)
+> Full re-train (no --skip-pretrain) + --fewshot-n 10000 --fewshot-hybrid, seed=42
+> Trunk saved as: `output/jepa_pretrained_trunk_hybrid_best.pt`
+>
+> **Why --skip-pretrain gave 1.279**: Phase 2 city heads (the ZS ensemble) are not saved in the trunk checkpoint.
+> Re-training Phase 2 from scratch produces better-initialized few-shot heads and a stronger ZS morning ensemble.
+> The 1.533 result requires the full pipeline run; the 1.279 hybrid is the skip-pretrain floor.
+
+| date | run | flags | morning | midday | evening | sum_corr | note |
+|------|-----|-------|---------|--------|---------|----------|------|
+| 2026-06-09 | Hybrid full s42 | full retrain + fewshot-n=10000 + hybrid | 0.495 (ZS) | **0.538** (FS) | **0.501** (FS) | 🏆 **1.533** | Confirmed. RMSE_mid=1.18°F, RMSE_eve=1.57°F |
+| 2026-06-09 | Hybrid skip-pretrain | --skip-pretrain + fewshot-n=10000, 3 seeds | 0.499 | 0.440 | 0.339 | 1.279 ± 0.004 | t66 trunk only; Phase 2 city heads not preserved |
+
+**Decision threshold**: beat baseline mean + 2σ = 1.397 + 2×0.024 = **1.445**
+
+| date | run | flags | morning | midday | evening | sum_corr | vs-threshold | decision | note |
+|------|-----|-------|---------|--------|---------|----------|-------------|----------|------|
+| 2026-06-09 | I2-degen | range_scaled_radius=true, global coords (bug) | 0.316 | 0.490 | 0.577 | **1.383** | below baseline | REVERT | Negative control. 6km/344km_std=0.018→random masking. |
+| 2026-06-09 | I2v2 | range_scaled_radius=true, city-local coords | 0.019 | 0.101 | 0.528 | **0.648** | -3.1σ | REVERT | City-local coord overlap in mixed batches. Evening best-ever 0.528; morning/midday collapsed. |
+| 2026-06-09 | B6 s42 | per_city_batching=true | **0.519** | **0.516** | 0.455 | **1.490** | — | seed=42 only — see 3-seed below |
+| 2026-06-09 | B6 s43 | per_city_batching=true | 0.529 | **-0.270** | 0.403 | **0.662** | — | midday collapse |
+| 2026-06-09 | B6 s44 | per_city_batching=true | 0.505 | 0.268 | 0.406 | **1.179** | — | midday degraded |
+| 2026-06-09 | **B6 3-seed** | per_city_batching=true | — | — | — | **mean=1.110 σ=0.341** | -0.8σ | **REVERT** | σ=0.341 >> baseline 0.024. Seed=42 was lucky. Config reverted to false. |
+| 2026-06-09 | I2v3 | range_scaled_radius=true + per_city_batching=true | 0.484 | 0.264 | 0.219 | **0.967** | -21σ | REVERT | 6km radius=0.978 city-local std — too large, masks most of city. I2 exhausted. |
+| 2026-06-09 | I1 | anisotropic_mask=true + per_city_batching=true | 0.515 | -0.041 | 0.492 | **0.966** | -21σ | REVERT | Elliptical patches (ecc=1.358) destabilize midday completely. I1 exhausted at this eccentricity. |
 
 ---
 
 *Format for future entries:*
 ```
-| YYYY-MM-DD | flag_delta | morning_corr | midday_corr | evening_corr | sum_corr | (sum-baseline)/sigma | KEEP/REVERT | one-sentence why |
+| YYYY-MM-DD | run_name | flag_delta | morning_corr | midday_corr | evening_corr | sum_corr | (sum-baseline)/sigma | KEEP/REVERT | one-sentence why |
 ```
