@@ -177,6 +177,18 @@ multicity:
     energy_balance_weight: 0.0  # set to 0.1 to enable; ablate 3 seeds; keep if sum_corr > 1.445
     energy_balance_albedo_idx: 9
 
+    # ── E5: Eigenmap-FCM auxiliary head ──────────────────────────────────
+    # Auxiliary head predicts fuzzy cluster memberships in Laplacian eigenspace.
+    # LAPEIG_1 (Fiedler vector) = urban core vs. periphery gradient.
+    # LAPEIG_2 = secondary spatial gradient (river corridor, E-W axis, etc.).
+    # FCM with k=4: cluster-0=dense core, cluster-3=rural/suburban periphery.
+    # Sign-aligned so LAPEIG_1 is always positive at urban core.
+    # Soft cross-entropy loss: -sum(u_target * log_softmax(logits)).
+    eigen_target_weight: 0.0   # set to 0.1 to enable; ablate 3 seeds; keep if sum_corr > 1.445
+    eigen_k_clusters: 4        # Fuzzy C-Means clusters (core/transition/suburban/rural)
+    eigen_n_components: 2      # LAPEIG_1 + LAPEIG_2 (Fiedler + secondary)
+    eigen_max_subsample: 15000 # subsample threshold for eigsh (cities > 15K pixels are subsampled)
+
     # ── LOO ensemble per-window exclusions ───────────────────────────────
     # Explicitly exclude specific city heads from LOO ensemble windows.
     # Charlotte's evening head (69.84°F mean) drags ~9°F below the cluster

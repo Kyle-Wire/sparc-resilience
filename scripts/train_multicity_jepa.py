@@ -503,6 +503,7 @@ def run_jepa_pretraining(
     pi_patch_radius_m: float | None = None,
     pi_eccentricity_a_over_b: float | None = None,
     city_sizes: list[int] | None = None,
+    all_U: np.ndarray | None = None,
 ) -> object:
     """Run JEPA spatial-patch pretraining on combined city features.
 
@@ -521,6 +522,10 @@ def run_jepa_pretraining(
         Row counts per city in all_X / all_C (in order).  Required when
         ``jepa.per_city_batching: true``.  Batches are then drawn from a
         single city at a time, making city-local coordinate masking valid.
+    all_U : ndarray of shape (N, k_clusters) or None
+        E5 fuzzy cluster memberships aligned row-for-row with all_X.
+        When not None and ``jepa.eigen_target_weight > 0``, an auxiliary
+        head predicts these memberships from the online trunk embedding.
 
     Returns the trained online trunk (nn.Module).
     """
@@ -544,6 +549,10 @@ def run_jepa_pretraining(
     # albedo is index 9 in land_surface feature list (confirmed against live feature order).
     eb_weight  = float(jepa_cfg.get("energy_balance_weight", 0.0))
     eb_albedo_idx = int(jepa_cfg.get("energy_balance_albedo_idx", 9))
+    # E5: eigenmap-FCM auxiliary head.
+    # Predicts fuzzy cluster memberships in Laplacian eigenspace (urban structure proxy).
+    # Memberships passed in as all_U: (N_total, k_clusters) float32 aligned with all_X rows.
+    eigen_weight = float(jepa_cfg.get("eigen_target_weight", 0.0))
 
     seed = int(jepa_cfg.get("seed", 0))
     if seed:
@@ -621,7 +630,9 @@ def run_jepa_pretraining(
         log.info("B6 per-city batching: %d cities, batch_size=%d drawn per-city", len(city_ranges), batch_size)
 
     if not per_city:
-        dataset = TensorDataset(X_t, C_t)
+        # Include row indices so E5 can look up U_t[idx] in the training loop.
+        idx_t   = torch.arange(len(X_t), dtype=torch.long, device=device)
+        dataset = TensorDataset(X_t, C_t, idx_t)
         loader  = DataLoader(
             dataset, batch_size=batch_size, shuffle=True, drop_last=True,
             pin_memory=(device.type == "cpu"),
@@ -651,6 +662,20 @@ def run_jepa_pretraining(
             eb_weight, eb_albedo_idx,
         )
 
+    # E5: eigenmap-FCM auxiliary head — predicts fuzzy cluster memberships.
+    # Softmax output so predicted memberships sum to 1 (mirrors FCM constraint).
+    eigen_head: nn.Module | None = None
+    U_t: object = None   # (N, k) float32 tensor on device, or None
+    k_clusters = 0
+    if eigen_weight > 0.0 and all_U is not None:
+        k_clusters = all_U.shape[1]
+        eigen_head = nn.Linear(hidden_dim, k_clusters).to(device)
+        U_t = torch.tensor(all_U, dtype=torch.float32, device=device)
+        log.info(
+            "E5 eigenmap-FCM pretext: weight=%.3f  k_clusters=%d  N=%d",
+            eigen_weight, k_clusters, all_U.shape[0],
+        )
+
     # Initialize EMA target = online weights
     for p_t, p_o in zip(target.parameters(), online.parameters()):
         p_t.data.copy_(p_o.data)
@@ -659,6 +684,8 @@ def run_jepa_pretraining(
     opt_params = list(online.parameters()) + list(predict.parameters())
     if eb_head is not None:
         opt_params += list(eb_head.parameters())
+    if eigen_head is not None:
+        opt_params += list(eigen_head.parameters())
     opt     = torch.optim.AdamW(opt_params, lr=lr)
     weights = JEPALossWeights()
 
@@ -668,8 +695,9 @@ def run_jepa_pretraining(
                  else "I1" if pi_eccentricity_a_over_b
                  else "I2" if min_patch_radius_normed
                  else "isotropic")
-    eb_str = f"+A2(w={eb_weight})" if eb_weight > 0.0 else ""
-    print(f"  mask_mode={mask_mode}{eb_str}", flush=True)
+    eb_str    = f"+A2(w={eb_weight})" if eb_weight > 0.0 else ""
+    eigen_str = f"+E5(w={eigen_weight},k={k_clusters})" if eigen_weight > 0.0 and eigen_head is not None else ""
+    print(f"  mask_mode={mask_mode}{eb_str}{eigen_str}", flush=True)
     print(f"  {'Epoch':>6}  {'Loss':>10}  {'Align':>10}  {'Var':>10}  {'Cov':>10}", flush=True)
     print("  " + "-" * 50, flush=True)
 
@@ -690,10 +718,10 @@ def run_jepa_pretraining(
                     size     = min(batch_size, city_n)
                     perm     = torch.randperm(city_n, device=device)[:size]
                     idx      = perm + lo
-                    yield X_t[idx], C_t[idx]
+                    yield X_t[idx], C_t[idx], idx
             batch_iter = _per_city_batches(batches_per_epoch)
 
-        for x_batch, c_batch in batch_iter:
+        for x_batch, c_batch, batch_idx in batch_iter:
             # Select mask function based on PI-JEPA flags
             if pi_eccentricity_a_over_b is not None and pi_eccentricity_a_over_b > 1.0:
                 mask = anisotropic_patch_mask(
@@ -732,6 +760,18 @@ def run_jepa_pretraining(
                 eb_target = 1.0 - alb_raw                 # shortwave absorption proxy
                 eb_loss   = torch.nn.functional.mse_loss(eb_pred, eb_target)
                 loss = loss + eb_weight * eb_loss
+
+            # E5: eigenmap-FCM auxiliary loss on ALL pixels.
+            # Target: fuzzy cluster memberships U[batch_idx] from Laplacian eigenspace.
+            # Cross-entropy over the membership distribution (soft labels).
+            # Softmax of logits vs FCM memberships = KL-like alignment to spatial topology.
+            if eigen_head is not None and eigen_weight > 0.0 and U_t is not None:
+                eigen_logits = eigen_head(h_online)              # (B, k)
+                u_target     = U_t[batch_idx]                    # (B, k) — soft targets
+                # Soft cross-entropy: -sum(u_target * log_softmax(logits))
+                log_probs    = torch.nn.functional.log_softmax(eigen_logits, dim=-1)
+                eigen_loss   = -(u_target * log_probs).sum(dim=-1).mean()
+                loss         = loss + eigen_weight * eigen_loss
 
             opt.zero_grad()
             loss.backward()
@@ -2023,6 +2063,37 @@ def main() -> None:
         }
         log.info("Loaded pretrained trunk from %s (skipping Phase 1)", trunk_path)
     else:
+        # E5: compute Laplacian-FCM memberships per city before pretraining.
+        # Only pays the eigsh cost (~2s/city) when eigen_target_weight > 0.
+        combined_U: np.ndarray | None = None
+        eigen_weight = float(jepa_cfg.get("eigen_target_weight", 0.0))
+        if eigen_weight > 0.0:
+            from scripts.e5_eigenmap_prep import compute_city_fcm_memberships
+            k_clusters_cfg = int(jepa_cfg.get("eigen_k_clusters", 4))
+            n_eigen_cfg    = int(jepa_cfg.get("eigen_n_components", 2))
+            log.info(
+                "E5: computing Laplacian-FCM memberships  "
+                "n_eigen=%d  k_clusters=%d  n_cities=%d",
+                n_eigen_cfg, k_clusters_cfg, len(all_C_list),
+            )
+            u_list: list[np.ndarray] = []
+            for ci, (raw_C, slug_cfg) in enumerate(zip(all_C_list, train_cfgs)):
+                slug = slug_cfg["city_slug"]
+                try:
+                    U_city, _vecs, _centers = compute_city_fcm_memberships(
+                        raw_C.astype(np.float64),
+                        n_eigen=n_eigen_cfg,
+                        k_clusters=k_clusters_cfg,
+                        max_n=int(jepa_cfg.get("eigen_max_subsample", 15_000)),
+                    )
+                    u_list.append(U_city)
+                    log.info("[%s] E5 memberships: shape=%s", slug, U_city.shape)
+                except Exception as exc:
+                    log.warning("[%s] E5 eigenmap failed (%s) -- using uniform memberships", slug, exc)
+                    N_city = city_sizes[ci]
+                    u_list.append(np.full((N_city, k_clusters_cfg), 1.0 / k_clusters_cfg, dtype=np.float32))
+            combined_U = np.concatenate(u_list, axis=0)
+
         trunk, normalizer = run_jepa_pretraining(
             combined_X,
             # Use city-local coords for masking when I2 is active (avoids degenerate
@@ -2032,6 +2103,7 @@ def main() -> None:
             pi_patch_radius_m=pi_patch_radius_m,
             pi_eccentricity_a_over_b=pi_eccentricity_a_over_b,
             city_sizes=city_sizes,
+            all_U=combined_U,
         )
 
     # -- Phase 2 -- Per-City Head Training (unfrozen trunk, low lr) -------------
