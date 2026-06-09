@@ -127,3 +127,34 @@ One line per run. Format: `date | flags | morning | midday | evening | sum | vs-
 ```
 | YYYY-MM-DD | run_name | flag_delta | morning_corr | midday_corr | evening_corr | sum_corr | (sum-baseline)/sigma | KEEP/REVERT | one-sentence why |
 ```
+
+## A2 — Energy-Balance Pretext Head (IMPLEMENTED 2026-06-09, PENDING ABLATION)
+
+> Code: scripts/train_multicity_jepa.py — eb_head: Linear(hidden_dim, 1)  
+> Config: configs/multicity_pilot.yml jepa.energy_balance_weight (default 0.0)  
+> Target: (1 - albedo) = shortwave absorption proxy  
+> albedo = land_surface feature index 9 (confirmed against live data)  
+
+**Design**: Auxiliary MSE loss added to JEPA pretraining loss:
+  	otal_loss = jepa_loss + energy_balance_weight * mse(eb_head(h_online), 1-albedo_raw)
+- Un-normalizes albedo via X_mean_t/X_std_t tensors, clamps to [0,1]  
+- eb_head params included in AdamW optimizer (same lr as trunk)  
+- No EMA copy needed (auxiliary head only on online trunk)  
+- mask_mode print now shows +A2(w=...) suffix when enabled  
+
+**Ablation protocol** (zero-shot, --skip-collect --skip-stages):  
+Run with weight=0.1 for seeds 42/43/44. Keep if mean sum_corr > 1.445 (baseline + 2s).
+
+**Run commands**:
+`
+python scripts/train_multicity_jepa.py --skip-collect --skip-stages --seed 42 2>&1 | Tee-Object output\train_a2_s42_log.txt
+python scripts/train_multicity_jepa.py --skip-collect --skip-stages --seed 43 2>&1 | Tee-Object output\train_a2_s43_log.txt
+python scripts/train_multicity_jepa.py --skip-collect --skip-stages --seed 44 2>&1 | Tee-Object output\train_a2_s44_log.txt
+`
+(Set energy_balance_weight: 0.1 in config before running)
+
+| date | seed | morning | midday | evening | sum_corr | eb_weight | note |
+|------|------|---------|--------|---------|----------|-----------|------|
+| — | 42 | — | — | — | — | 0.1 | pending |
+| — | 43 | — | — | — | — | 0.1 | pending |
+| — | 44 | — | — | — | — | 0.1 | pending |

@@ -170,6 +170,13 @@ multicity:
     #     KEEP -- sum_corr=1.490, +3.9σ above baseline. Unblocked I2v3.
     per_city_batching: false     # B6 REVERTED — 3-seed mean=1.110 σ=0.341 (seed43 midday=-0.270)
 
+    # ── A2: Energy-balance pretext head ──────────────────────────────────
+    # Auxiliary head predicts (1 - albedo) = shortwave absorption proxy.
+    # Forces trunk to encode surface energy uptake, grounding UHI representation.
+    # albedo is land_surface feature index 9 (confirmed against live feature order).
+    energy_balance_weight: 0.0  # set to 0.1 to enable; ablate 3 seeds; keep if sum_corr > 1.445
+    energy_balance_albedo_idx: 9
+
     # ── LOO ensemble per-window exclusions ───────────────────────────────
     # Explicitly exclude specific city heads from LOO ensemble windows.
     # Charlotte's evening head (69.84°F mean) drags ~9°F below the cluster

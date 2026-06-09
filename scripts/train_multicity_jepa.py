@@ -539,6 +539,11 @@ def run_jepa_pretraining(
     ema_tau    = float(jepa_cfg.get("ema_tau", 0.99))
     lr         = float(jepa_cfg.get("lr", 1e-3))
     per_city   = bool(jepa_cfg.get("per_city_batching", False))
+    # A2: auxiliary energy-balance pretext head.
+    # Predicts shortwave absorption proxy (1 - albedo) from trunk embedding.
+    # albedo is index 9 in land_surface feature list (confirmed against live feature order).
+    eb_weight  = float(jepa_cfg.get("energy_balance_weight", 0.0))
+    eb_albedo_idx = int(jepa_cfg.get("energy_balance_albedo_idx", 9))
 
     seed = int(jepa_cfg.get("seed", 0))
     if seed:
@@ -568,6 +573,10 @@ def run_jepa_pretraining(
     X_mean = np.where(np.isnan(_xm), 0.0, _xm)
     X_std  = np.where(np.isnan(_xs), 1.0, _xs) + 1e-6
     all_X  = np.nan_to_num((all_X - X_mean) / X_std, nan=0.0).astype(np.float32)
+
+    # Tensor versions of normalization stats for A2 un-normalization in the training loop
+    X_mean_t = torch.tensor(X_mean, dtype=torch.float32, device=device)
+    X_std_t  = torch.tensor(X_std,  dtype=torch.float32, device=device)
 
     C_mean = np.where(np.isnan(_cm), 0.0, _cm)
     C_std  = np.where(np.isnan(_cs), 1.0, _cs) + 1e-6
@@ -630,12 +639,27 @@ def run_jepa_pretraining(
     target  = _build_trunk(in_dim, hidden_dim).to(device)
     predict = _build_predictor(hidden_dim).to(device)
 
+    # A2: energy-balance auxiliary head — predicts (1 - albedo) from trunk embedding.
+    # Single linear layer is sufficient: we want the trunk to encode absorption magnitude,
+    # not to overfit a complex albedo mapping.
+    eb_head: nn.Module | None = None
+    if eb_weight > 0.0:
+        eb_head = nn.Linear(hidden_dim, 1).to(device)
+        log.info(
+            "A2 energy-balance pretext: weight=%.3f  albedo_idx=%d  "
+            "(target: 1 - albedo, shortwave absorption proxy)",
+            eb_weight, eb_albedo_idx,
+        )
+
     # Initialize EMA target = online weights
     for p_t, p_o in zip(target.parameters(), online.parameters()):
         p_t.data.copy_(p_o.data)
         p_t.requires_grad_(False)
 
-    opt     = torch.optim.AdamW(list(online.parameters()) + list(predict.parameters()), lr=lr)
+    opt_params = list(online.parameters()) + list(predict.parameters())
+    if eb_head is not None:
+        opt_params += list(eb_head.parameters())
+    opt     = torch.optim.AdamW(opt_params, lr=lr)
     weights = JEPALossWeights()
 
     print(flush=True)
@@ -644,7 +668,8 @@ def run_jepa_pretraining(
                  else "I1" if pi_eccentricity_a_over_b
                  else "I2" if min_patch_radius_normed
                  else "isotropic")
-    print(f"  mask_mode={mask_mode}", flush=True)
+    eb_str = f"+A2(w={eb_weight})" if eb_weight > 0.0 else ""
+    print(f"  mask_mode={mask_mode}{eb_str}", flush=True)
     print(f"  {'Epoch':>6}  {'Loss':>10}  {'Align':>10}  {'Var':>10}  {'Cov':>10}", flush=True)
     print("  " + "-" * 50, flush=True)
 
@@ -693,6 +718,20 @@ def run_jepa_pretraining(
                 h_target = target(x_batch)         # (B, D) -- full, EMA trunk
 
             loss, comps = jepa_loss(h_pred, h_target.detach(), weights)
+
+            # A2: energy-balance auxiliary loss on ALL pixels (not just masked).
+            # Target: (1 - albedo_raw) in original (unnormalized) space.
+            # x_batch is normalized; recover albedo via X_mean/X_std then compute proxy.
+            if eb_head is not None and eb_weight > 0.0:
+                # h_online already computed above from masked context
+                eb_pred = eb_head(h_online).squeeze(-1)   # (B,)
+                # Un-normalize albedo column to get physical [0,1] range
+                alb_norm = x_batch[:, eb_albedo_idx]      # normalized albedo
+                alb_raw  = alb_norm * X_std_t[eb_albedo_idx] + X_mean_t[eb_albedo_idx]
+                alb_raw  = alb_raw.clamp(0.0, 1.0)
+                eb_target = 1.0 - alb_raw                 # shortwave absorption proxy
+                eb_loss   = torch.nn.functional.mse_loss(eb_pred, eb_target)
+                loss = loss + eb_weight * eb_loss
 
             opt.zero_grad()
             loss.backward()
