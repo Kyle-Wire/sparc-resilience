@@ -589,119 +589,10 @@ def _exec_cv_fold(
     )
     fold_cardinal = torch.tensor(fold_cardinal_np, dtype=torch.long, device=device)
 
-    # ---- Instantiate models ----
-    if ss.training.seed is not None:
-        torch.manual_seed(ss.training.seed + fold_idx)
-    process_net = ProcessRateNet(
-        n_inputs=pr_input_dim,
-        domain_config={
-            "name": pr_cfg.get("name", "rate"),
-            "units": pr_cfg.get("units", ""),
-            "bounds": pr_cfg.get("bounds", [0.0, 1.0]),
-            "prior_mean": pr_cfg.get("prior_mean", 0.5),
-        },
-        n_treatments=n_treatments,
-    ).to(device)
-
-    source_net = SourceTermNet(n_inputs=n_physics).to(device)
-
-    model = SPARCMetaLearner(
-        n_base_models=n_base,
-        n_physics_features=n_physics_extended,
-        d_spatial=d_spatial,
-        hidden_dim=hidden_dim,
-        dropout=dropout,
-        thresholds=thresholds,
-        n_heads=n_heads,
-        max_neighbors=max_neighbors,
-        siren_omega=siren_omega,
-        init_bandwidth=float(predictor_bandwidths.mean()) if predictor_bandwidths is not None else 1000.0,
-        time_embed_dim=time_embed_dim,
-        geo_pe_dim=geo_pe_dim,
-    ).to(device)
-
-    # OT trunk alignment: register forward hook
-    if _ot_active:
-        _trunk_acts_cv_bucket.clear()
-        model.trunk_fusion.register_forward_hook(_make_trunk_hook(_trunk_acts_cv_bucket))
-
-    # Transfer JEPA-pretrained trunk weights if available
-    if jepa_pretrained_trunk_state is not None:
-        model.load_state_dict(jepa_pretrained_trunk_state, strict=False)
-        logger.info("  Fold %d: transferred JEPA-pretrained trunk", fold_idx + 1)
-
-    # ---- Differentiable surrogates ----
-    surrogates = {
-        "gwr": DifferentiableGWR(
-            n_vars=n_physics, n_spatial_features=d_spatial,
-            hidden_dim=hidden_dim,
-            bandwidths=predictor_bandwidths,
-            kernel_field=predictor_kernel_field,
-            feature_names=feature_names,
-        ).to(device),
-        "gwrf": DifferentiableGWRF(
-            n_vars=n_physics, n_spatial_features=d_spatial,
-            hidden_dim=hidden_dim,
-            kernel_field=predictor_kernel_field,
-            feature_names=feature_names,
-        ).to(device),
-        "ggpgam": DifferentiableGGPGAM(
-            n_vars=n_physics, n_spatial_features=d_spatial,
-            hidden_dim=min(hidden_dim, 64),
-        ).to(device),
-    }
-
-    # E-Perf-A: compile forward passes when torch >= 2.0
-    model      = _maybe_compile(model)
-    process_net = _maybe_compile(process_net)
-    source_net  = _maybe_compile(source_net)
-    for _k in list(surrogates):
-        surrogates[_k] = _maybe_compile(surrogates[_k])
-
-    # ---- Per-component optimizer + warmup scheduler ----
-    optimizer = build_optimizer(
-        model, process_net, surrogates, base_lr=lr,
-        source_term_net=source_net,
-        head_weight_decay=ss.training.head_weight_decay,
-    )
-    scheduler = build_scheduler(optimizer, n_epochs, warmup_epochs=warmup_epochs)
-
-    # ---- JEPA target trunk + latent predictor (Phase 1) ----
-    ema_trunk:        "EMATrunk | None"    = None
-    latent_predictor: "LatentPredictor | None" = None
-    action_embed:     "ActionEmbedding | None" = None
-    jepa_optimizer:   "torch.optim.Optimizer | None" = None
-    if jepa_enable:
-        ema_trunk = EMATrunk(
-            model,
-            tau_start=jepa_ema_tau_start,
-            tau_end=jepa_ema_tau_end,
-            warmup_steps=jepa_warmup_steps,
-        ).to(device)
-        use_action = (jepa_lambda_scenario > 0.0 or jepa_predictor_blocks > 1)
-        action_dim = jepa_action_dim if use_action else 0
-        latent_predictor = LatentPredictor(
-            hidden_dim=hidden_dim,
-            action_dim=action_dim,
-            dropout=dropout,
-            n_blocks=jepa_predictor_blocks,
-            film=jepa_predictor_film,
-        ).to(device)
-        jepa_params = list(latent_predictor.parameters())
-        if use_action:
-            action_embed = ActionEmbedding(
-                treatment_vocab=feature_names,
-                embed_dim=action_dim,
-            ).to(device)
-            jepa_params += list(action_embed.parameters())
-        jepa_optimizer = torch.optim.AdamW(jepa_params, lr=lr)
-
-    # ---- Use pre-built FoldModels when provided by FoldTrainer ----
-    # When fold_models is not None, the caller already instantiated and
-    # pre-trained all models via FoldTrainer.build_models() /
-    # pretrain_surrogates() / pretrain_process_rate().  Override the locally-
-    # created instances so the rest of the fold uses the caller's models.
-    # The two pre-training blocks below are also skipped via the same guard.
+    # ---- Instantiate models (or adopt pre-built FoldModels) ----
+    # When fold_models is provided by FoldTrainer, skip all construction and
+    # use the caller's pre-built models directly.  OT-hook registration and
+    # JEPA trunk state transfer are applied to the provided models here.
     if fold_models is not None:
         model            = fold_models.model
         process_net      = fold_models.process_net
@@ -713,10 +604,122 @@ def _exec_cv_fold(
         latent_predictor = fold_models.latent_predictor
         action_embed     = fold_models.action_embed
         jepa_optimizer   = fold_models.jepa_optimizer
+        if _ot_active:
+            _trunk_acts_cv_bucket.clear()
+            model.trunk_fusion.register_forward_hook(_make_trunk_hook(_trunk_acts_cv_bucket))
+        if jepa_pretrained_trunk_state is not None:
+            model.load_state_dict(jepa_pretrained_trunk_state, strict=False)
+            logger.info("  Fold %d: transferred JEPA-pretrained trunk", fold_idx + 1)
         logger.info(
             "Fold %d: reusing pre-built FoldModels (skipping model build + pre-training)",
             fold_idx + 1,
         )
+    else:
+        if ss.training.seed is not None:
+            torch.manual_seed(ss.training.seed + fold_idx)
+        process_net = ProcessRateNet(
+            n_inputs=pr_input_dim,
+            domain_config={
+                "name": pr_cfg.get("name", "rate"),
+                "units": pr_cfg.get("units", ""),
+                "bounds": pr_cfg.get("bounds", [0.0, 1.0]),
+                "prior_mean": pr_cfg.get("prior_mean", 0.5),
+            },
+            n_treatments=n_treatments,
+        ).to(device)
+
+        source_net = SourceTermNet(n_inputs=n_physics).to(device)
+
+        model = SPARCMetaLearner(
+            n_base_models=n_base,
+            n_physics_features=n_physics_extended,
+            d_spatial=d_spatial,
+            hidden_dim=hidden_dim,
+            dropout=dropout,
+            thresholds=thresholds,
+            n_heads=n_heads,
+            max_neighbors=max_neighbors,
+            siren_omega=siren_omega,
+            init_bandwidth=float(predictor_bandwidths.mean()) if predictor_bandwidths is not None else 1000.0,
+            time_embed_dim=time_embed_dim,
+            geo_pe_dim=geo_pe_dim,
+        ).to(device)
+
+        # OT trunk alignment: register forward hook
+        if _ot_active:
+            _trunk_acts_cv_bucket.clear()
+            model.trunk_fusion.register_forward_hook(_make_trunk_hook(_trunk_acts_cv_bucket))
+
+        # Transfer JEPA-pretrained trunk weights if available
+        if jepa_pretrained_trunk_state is not None:
+            model.load_state_dict(jepa_pretrained_trunk_state, strict=False)
+            logger.info("  Fold %d: transferred JEPA-pretrained trunk", fold_idx + 1)
+
+        # ---- Differentiable surrogates ----
+        surrogates = {
+            "gwr": DifferentiableGWR(
+                n_vars=n_physics, n_spatial_features=d_spatial,
+                hidden_dim=hidden_dim,
+                bandwidths=predictor_bandwidths,
+                kernel_field=predictor_kernel_field,
+                feature_names=feature_names,
+            ).to(device),
+            "gwrf": DifferentiableGWRF(
+                n_vars=n_physics, n_spatial_features=d_spatial,
+                hidden_dim=hidden_dim,
+                kernel_field=predictor_kernel_field,
+                feature_names=feature_names,
+            ).to(device),
+            "ggpgam": DifferentiableGGPGAM(
+                n_vars=n_physics, n_spatial_features=d_spatial,
+                hidden_dim=min(hidden_dim, 64),
+            ).to(device),
+        }
+
+        # E-Perf-A: compile forward passes when torch >= 2.0
+        model       = _maybe_compile(model)
+        process_net = _maybe_compile(process_net)
+        source_net  = _maybe_compile(source_net)
+        for _k in list(surrogates):
+            surrogates[_k] = _maybe_compile(surrogates[_k])
+
+        # ---- Per-component optimizer + warmup scheduler ----
+        optimizer = build_optimizer(
+            model, process_net, surrogates, base_lr=lr,
+            source_term_net=source_net,
+            head_weight_decay=ss.training.head_weight_decay,
+        )
+        scheduler = build_scheduler(optimizer, n_epochs, warmup_epochs=warmup_epochs)
+
+        # ---- JEPA target trunk + latent predictor (Phase 1) ----
+        ema_trunk:        "EMATrunk | None"    = None
+        latent_predictor: "LatentPredictor | None" = None
+        action_embed:     "ActionEmbedding | None" = None
+        jepa_optimizer:   "torch.optim.Optimizer | None" = None
+        if jepa_enable:
+            ema_trunk = EMATrunk(
+                model,
+                tau_start=jepa_ema_tau_start,
+                tau_end=jepa_ema_tau_end,
+                warmup_steps=jepa_warmup_steps,
+            ).to(device)
+            use_action = (jepa_lambda_scenario > 0.0 or jepa_predictor_blocks > 1)
+            action_dim = jepa_action_dim if use_action else 0
+            latent_predictor = LatentPredictor(
+                hidden_dim=hidden_dim,
+                action_dim=action_dim,
+                dropout=dropout,
+                n_blocks=jepa_predictor_blocks,
+                film=jepa_predictor_film,
+            ).to(device)
+            jepa_params = list(latent_predictor.parameters())
+            if use_action:
+                action_embed = ActionEmbedding(
+                    treatment_vocab=feature_names,
+                    embed_dim=action_dim,
+                ).to(device)
+                jepa_params += list(action_embed.parameters())
+            jepa_optimizer = torch.optim.AdamW(jepa_params, lr=lr)
 
     # ---- Build per-fold V1 base-model targets (normalised) ----
     _fold_base_targets: "dict[str, torch.Tensor] | None" = None

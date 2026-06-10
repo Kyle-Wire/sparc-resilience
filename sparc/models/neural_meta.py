@@ -491,6 +491,24 @@ class SPARCMetaLearner(nn.Module):
         {"physics_enc", "alpha_emb", "trunk_fusion", "time_embed", "geo_pe_enc"}
     )
 
+    def save_checkpoint(self, path: str) -> None:
+        """Persist full model state to *path* (satisfies :class:`SpatialTrunk` Protocol)."""
+        torch.save(self.state_dict(), path)
+
+    def load_checkpoint(self, path: str) -> None:
+        """Restore full model state from *path* (satisfies :class:`SpatialTrunk` Protocol).
+
+        Raises
+        ------
+        FileNotFoundError
+            If *path* does not exist.
+        """
+        import os
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Checkpoint not found: {path}")
+        state = torch.load(path, map_location="cpu", weights_only=True)
+        self.load_state_dict(state)
+
     def save_trunk(self, path: str | Path) -> None:
         """Save SharedTrunk weights (physics_enc + alpha_emb + trunk_fusion)."""
         trunk_state = {
