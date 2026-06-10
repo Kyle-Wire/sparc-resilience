@@ -2071,6 +2071,28 @@ def main() -> None:
         combined_U: np.ndarray | None = None
         eigen_weight = float(jepa_cfg.get("eigen_target_weight", 0.0))
         if eigen_weight > 0.0:
+            # Warm the CUDA context BEFORE eigsh to prevent Blackwell (sm_120)
+            # context timeout. eigsh runs ~4 min of pure CPU work; if the GPU is
+            # never touched first the CUDA context dies and the first tensor
+            # allocation (torch.tensor(all_X, device=device)) raises
+            # cudaErrorLaunchFailure. A keepalive thread pings the GPU every 30s
+            # during the CPU-only eigsh phase to prevent context eviction.
+            import torch as _torch_warmup
+            import threading as _threading
+            _warmup_dev = _torch_warmup.device("cuda" if _torch_warmup.cuda.is_available() else "cpu")
+            _keepalive_stop = _threading.Event()
+            if _warmup_dev.type == "cuda":
+                _keepalive_tensor = _torch_warmup.zeros(1, device=_warmup_dev)
+                def _gpu_keepalive():
+                    while not _keepalive_stop.wait(timeout=30):
+                        try:
+                            _ = _keepalive_tensor + 0  # minimal GPU op every 30s
+                        except Exception:
+                            pass
+                _ka_thread = _threading.Thread(target=_gpu_keepalive, daemon=True)
+                _ka_thread.start()
+                log.info("GPU keepalive thread started (Blackwell sm_120 context preservation)")
+
             from scripts.e5_eigenmap_prep import compute_city_fcm_memberships
             k_clusters_cfg = int(jepa_cfg.get("eigen_k_clusters", 4))
             n_eigen_cfg    = int(jepa_cfg.get("eigen_n_components", 2))
@@ -2096,6 +2118,11 @@ def main() -> None:
                     N_city = city_sizes[ci]
                     u_list.append(np.full((N_city, k_clusters_cfg), 1.0 / k_clusters_cfg, dtype=np.float32))
             combined_U = np.concatenate(u_list, axis=0)
+
+            # Stop GPU keepalive thread now that eigsh is done
+            _keepalive_stop.set()
+            if _warmup_dev.type == "cuda":
+                log.info("GPU keepalive thread stopped")
 
         trunk, normalizer = run_jepa_pretraining(
             combined_X,
