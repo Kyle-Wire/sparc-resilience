@@ -154,7 +154,7 @@ multicity:
     ema_tau: 0.99
     lr: 1e-3
     head_weight_decay: 0.1   # L2 on heads — prevents OOD extrapolation (train23)
-    seed: 42                 # deterministic head init — reproducible convergence
+    seed: 43                 # deterministic head init — reproducible convergence
 
     # ── PI-JEPA physics-informed masking (I2 / I1) ───────────────────────
     # Enable ONE at a time; revert if sum_corr does not beat baseline + 2*sigma.
@@ -174,7 +174,8 @@ multicity:
     # Auxiliary head predicts (1 - albedo) = shortwave absorption proxy.
     # Forces trunk to encode surface energy uptake, grounding UHI representation.
     # albedo is land_surface feature index 9 (confirmed against live feature order).
-    energy_balance_weight: 0.1  # KEEP — 3-seed mean=1.424 (+0.027 vs baseline); morning +0.038
+    # LOCKED w=0.05 (2026-06-10): 3-seed mean=1.492 (+6.8σ above baseline), midday +0.075 vs w=0.1
+    energy_balance_weight: 0.05
     energy_balance_albedo_idx: 9
 
     # ── E5: Eigenmap-FCM auxiliary head ──────────────────────────────────
