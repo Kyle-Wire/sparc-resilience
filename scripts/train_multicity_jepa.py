@@ -664,15 +664,18 @@ def run_jepa_pretraining(
 
     # E5: eigenmap-FCM auxiliary head — predicts fuzzy cluster memberships.
     # Softmax output so predicted memberships sum to 1 (mirrors FCM constraint).
+    # U_t kept on CPU to avoid a large sudden GPU allocation after the eigsh idle period
+    # (Blackwell RTX 5070 Ti driver TDR on ~640MB burst after 4min GPU idle).
+    # Per-batch transfer is 2048×4×4B = ~32KB — negligible.
     eigen_head: nn.Module | None = None
-    U_t: object = None   # (N, k) float32 tensor on device, or None
+    U_t: object = None   # (N, k) float32 tensor on CPU, or None
     k_clusters = 0
     if eigen_weight > 0.0 and all_U is not None:
         k_clusters = all_U.shape[1]
         eigen_head = nn.Linear(hidden_dim, k_clusters).to(device)
-        U_t = torch.tensor(all_U, dtype=torch.float32, device=device)
+        U_t = torch.tensor(all_U, dtype=torch.float32)   # CPU — moved per-batch
         log.info(
-            "E5 eigenmap-FCM pretext: weight=%.3f  k_clusters=%d  N=%d",
+            "E5 eigenmap-FCM pretext: weight=%.3f  k_clusters=%d  N=%d  (U_t on CPU)",
             eigen_weight, k_clusters, all_U.shape[0],
         )
 
@@ -769,12 +772,14 @@ def run_jepa_pretraining(
             # Cross-entropy over the membership distribution (soft labels).
             # Softmax of logits vs FCM memberships = KL-like alignment to spatial topology.
             if eigen_head is not None and eigen_weight > 0.0 and U_t is not None:
-                eigen_logits = eigen_head(h_online)              # (B, k)
-                u_target     = U_t[batch_idx]                    # (B, k) — soft targets
+                eigen_logits = eigen_head(h_online)                        # (B, k)
+                # U_t lives on CPU; batch_idx is on device — move idx to CPU for lookup,
+                # then move the 32KB result to device. Avoids large GPU allocation.
+                u_target = U_t[batch_idx.cpu()].to(device)                 # (B, k)
                 # Soft cross-entropy: -sum(u_target * log_softmax(logits))
-                log_probs    = torch.nn.functional.log_softmax(eigen_logits, dim=-1)
-                eigen_loss   = -(u_target * log_probs).sum(dim=-1).mean()
-                loss         = loss + eigen_weight * eigen_loss
+                log_probs  = torch.nn.functional.log_softmax(eigen_logits, dim=-1)
+                eigen_loss = -(u_target * log_probs).sum(dim=-1).mean()
+                loss       = loss + eigen_weight * eigen_loss
 
             opt.zero_grad()
             loss.backward()
@@ -2072,16 +2077,38 @@ def main() -> None:
         eigen_weight = float(jepa_cfg.get("eigen_target_weight", 0.0))
         if eigen_weight > 0.0:
             # Warm the CUDA context BEFORE eigsh to prevent Blackwell (sm_120)
-            # context timeout. eigsh runs ~4 min of pure CPU work; if the GPU is
-            # never touched first the CUDA context dies and the first tensor
-            # allocation (torch.tensor(all_X, device=device)) raises
-            # cudaErrorLaunchFailure. A keepalive thread pings the GPU every 30s
-            # during the CPU-only eigsh phase to prevent context eviction.
+            # driver TDR. eigsh runs ~4 min of pure CPU work; on Blackwell the
+            # GPU driver evicts idle contexts and crashes on re-entry.
+            # Strategy: (1) keepalive thread pings GPU every 30s, (2) pre-allocate
+            # the main training tensors NOW so GPU memory is claimed before eigsh.
+            # This avoids a sudden ~550MB GPU burst after a long idle period.
             import torch as _torch_warmup
             import threading as _threading
             _warmup_dev = _torch_warmup.device("cuda" if _torch_warmup.cuda.is_available() else "cpu")
             _keepalive_stop = _threading.Event()
             if _warmup_dev.type == "cuda":
+                # Pre-allocate main tensors (X_t, C_t, idx_t) on GPU before eigsh
+                # so the large allocation happens while the GPU is already active.
+                import numpy as _np_warmup
+                max_feats_w = max(X.shape[1] for X in all_X_list)
+                aligned_X_w = []
+                for _X in all_X_list:
+                    if _X.shape[1] < max_feats_w:
+                        _X = _np_warmup.concatenate(
+                            [_X, _np_warmup.zeros((_X.shape[0], max_feats_w - _X.shape[1]), dtype=_np_warmup.float32)], axis=1
+                        )
+                    aligned_X_w.append(_X)
+                _combined_X_w = _np_warmup.concatenate(aligned_X_w, axis=0)
+                _combined_C_w = _np_warmup.concatenate(all_C_list, axis=0)
+                log.info(
+                    "Pre-allocating training tensors on GPU before eigsh  X=%s  C=%s",
+                    _combined_X_w.shape, _combined_C_w.shape,
+                )
+                _X_t_pre = _torch_warmup.tensor(_combined_X_w, device=_warmup_dev)
+                _C_t_pre = _torch_warmup.tensor(_combined_C_w, device=_warmup_dev)
+                _idx_t_pre = _torch_warmup.arange(len(_X_t_pre), dtype=_torch_warmup.long, device=_warmup_dev)
+                del _combined_X_w, _combined_C_w, aligned_X_w  # free numpy copies
+
                 _keepalive_tensor = _torch_warmup.zeros(1, device=_warmup_dev)
                 def _gpu_keepalive():
                     while not _keepalive_stop.wait(timeout=30):
@@ -2119,10 +2146,14 @@ def main() -> None:
                     u_list.append(np.full((N_city, k_clusters_cfg), 1.0 / k_clusters_cfg, dtype=np.float32))
             combined_U = np.concatenate(u_list, axis=0)
 
-            # Stop GPU keepalive thread now that eigsh is done
+            # Stop GPU keepalive thread now that eigsh is done.
+            # Delete pre-allocated tensors — run_jepa_pretraining will re-allocate
+            # them, but the GPU context is now proven live and the memory is free.
             _keepalive_stop.set()
             if _warmup_dev.type == "cuda":
-                log.info("GPU keepalive thread stopped")
+                del _X_t_pre, _C_t_pre, _idx_t_pre, _keepalive_tensor
+                import torch as _tc; _tc.cuda.empty_cache()
+                log.info("GPU keepalive thread stopped; pre-alloc tensors freed")
 
         trunk, normalizer = run_jepa_pretraining(
             combined_X,
