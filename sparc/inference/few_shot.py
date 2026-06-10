@@ -143,6 +143,11 @@ def few_shot_predict(
         ctx_feat = _align_cols(ctx_feat, x_dim)
         from sparc.inference.trunk import TrunkLoader
         anp = TrunkLoader.from_registry(registry_path, features.climate_zone, x_dim=x_dim)
+        # Align feature matrices to the x_dim embedded in the checkpoint
+        # (same as the trunk_path branch above).
+        ckpt_x_dim = anp.x_dim
+        feat_np   = _align_cols(feat_np,   ckpt_x_dim)
+        ctx_feat  = _align_cols(ctx_feat,  ckpt_x_dim)
     else:
         x_dim = feat_np.shape[1]
         # Align context features to the target x_dim.

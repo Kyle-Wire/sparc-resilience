@@ -121,6 +121,13 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--fewshot-hybrid", action="store_true",
                    help="When used with --fewshot-n: also report a hybrid eval using zero-shot morning "
                         "predictions combined with few-shot midday/evening, on the same held-out test split.")
+    p.add_argument("--pretrain-only", action="store_true",
+                   help="Run Phase 1 (JEPA pretraining) only, then exit immediately after saving the trunk. "
+                        "Useful for I1 eccentricity sweep screening: run with reduced n_epochs + A3 diagnostics "
+                        "as a proxy before committing to full Phase 2+3 runs.")
+    p.add_argument("--screen-epochs", type=int, default=None,
+                   help="Override jepa.n_epochs for this run only (e.g. --screen-epochs 50). "
+                        "Use with --pretrain-only for fast proxy screening of hyperparameter sweeps.")
     return p.parse_args()
 
 
@@ -1908,6 +1915,11 @@ def main() -> None:
     if args.seed is not None:
         mc["jepa"]["seed"] = args.seed
 
+    # Apply --screen-epochs override (fast proxy screening for hyperparameter sweeps).
+    if args.screen_epochs is not None:
+        mc["jepa"]["n_epochs"] = args.screen_epochs
+        log.info("--screen-epochs %d: overriding jepa.n_epochs for this run", args.screen_epochs)
+
     # Determine pipeline stages
     if args.skip_stages:
         run_stages = []
@@ -2181,6 +2193,15 @@ def main() -> None:
     # gradient supervision can shape the spatial representations learned in Phase 1.
     # EWC regularisation prevents catastrophic forgetting across cities.
     # Each city gets a deep-copied trunk so LOO can run each city's own trunk.
+
+    # --pretrain-only: exit here after saving trunk. Use with --screen-epochs for
+    # fast I1/I2 sweep screening before committing to a full Phase 2+3 run.
+    if args.pretrain_only:
+        log.info("--pretrain-only: Phase 1 complete. Trunk saved to output/jepa_pretrained_trunk.pt")
+        log.info("Run: python scripts/a3_causal_diagnostics.py  to measure trunk proxy quality.")
+        print("\n  Phase 1 complete (--pretrain-only). Exiting before Phase 2+3.")
+        print("  Next: python scripts/a3_causal_diagnostics.py")
+        return
     print()
     print("=" * 60)
     print("  Phase 2 -- Per-City Head Training (frozen trunk, deeper heads)")

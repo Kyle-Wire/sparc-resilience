@@ -141,7 +141,12 @@ class TrunkLoader:
             model.load_state_dict(state_dict)
             return model
         # Default: SpatialANP
+        # Infer x_dim from checkpoint weights so callers don't need to know it.
+        # target_key_encoder.0.weight has shape (hidden_dim, x_dim) in SpatialANP.
         from sparc.inference.anp import SpatialANP
+        _key = "target_key_encoder.0.weight"
+        if _key in state_dict:
+            x_dim = int(state_dict[_key].shape[1])
         model = SpatialANP(x_dim=x_dim, hidden_dim=hidden_dim, n_heads=n_heads)
         model.load_state_dict(state_dict)
         return model

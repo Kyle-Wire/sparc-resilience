@@ -276,7 +276,43 @@ def run_diagnostics(output_root: Path, trunk_path: Path | None = None) -> list[d
     return rows
 
 
-def print_summary(rows: list[dict]) -> None:
+def compute_proxy_score(rows: list[dict]) -> float:
+    """Weighted composite R² score for sweep comparison.
+
+    Weights reflect UHI explanatory relevance:
+      pct_impervious  0.40  (primary UHI driver — heat absorption)
+      albedo          0.25  (surface reflectance — cooling proxy)
+      pct_canopy      0.20  (vegetation cooling)
+      ndvi            0.10  (vegetation proxy)
+      ndbi            0.05  (built-up index)
+
+    Returns a float in [0, 1].  Higher = trunk better represents UHI-relevant
+    spatial structure = better expected LOO performance.
+    """
+    import numpy as np
+
+    WEIGHTS = {
+        "pct_impervious": 0.40,
+        "albedo":         0.25,
+        "pct_canopy":     0.20,
+        "ndvi":           0.10,
+        "ndbi":           0.05,
+    }
+    treatments = {r["treatment"] for r in rows}
+    weighted_sum = 0.0
+    weight_used  = 0.0
+    for trt, w in WEIGHTS.items():
+        if trt not in treatments:
+            continue
+        sub = [r for r in rows if r["treatment"] == trt]
+        r2  = float(np.nanmean([r["r2_trunk"] for r in sub]))
+        weighted_sum += w * max(0.0, r2)
+        weight_used  += w
+
+    return weighted_sum / weight_used if weight_used > 0 else 0.0
+
+
+def print_summary(rows: list[dict], label: str | None = None) -> None:
     import numpy as np
 
     if not rows:
@@ -284,8 +320,11 @@ def print_summary(rows: list[dict]) -> None:
         return
 
     treatments = sorted({r["treatment"] for r in rows})
+    header = "  A3 Causal Deconfounding Diagnostics - Summary"
+    if label:
+        header += f"  [{label}]"
     print("\n" + "=" * 80)
-    print("  A3 Causal Deconfounding Diagnostics - Summary")
+    print(header)
     print()
     print("  PRIMARY metric: R2 (trunk explains treatment variance)")
     print("  R2 > 0.10: trunk captures spatial structure -> residualisation reduces confounding")
@@ -308,8 +347,13 @@ def print_summary(rows: list[dict]) -> None:
     print("=" * 80)
     overall_r2    = float(np.nanmean([r["r2_trunk"] for r in rows]))
     overall_delta = float(np.nanmean([r["delta_mi"] for r in rows if not np.isnan(r["delta_mi"])]))
+    proxy = compute_proxy_score(rows)
+
     print(f"\n  Mean R2 (trunk explains treatment):          {overall_r2:.4f}")
     print(f"  Mean delta-MI across all cities+treatments:  {overall_delta:+.4f}")
+    print(f"  SWEEP PROXY SCORE (weighted R2):             {proxy:.4f}")
+    if label:
+        print(f"\n  SWEEP RESULT LINE: {label}  proxy={proxy:.4f}  mean_r2={overall_r2:.4f}")
     if overall_r2 > 0.25:
         print("\n  --> A3 RECOMMENDED: trunk explains >25% of treatment variance")
         print("      Residualising treatments on trunk PCA-16 will remove substantial")
@@ -329,6 +373,9 @@ def main() -> None:
                         help="Path to jepa_pretrained_trunk.pt (auto-detected if omitted)")
     parser.add_argument("--max-n", type=int, default=MAX_N,
                         help=f"Max pixels per city to subsample (default: {MAX_N})")
+    parser.add_argument("--label", default=None,
+                        help="Label for this sweep trial (e.g. 'ecc=1.05 ep=50'). "
+                             "Printed in the SWEEP RESULT LINE for easy grep comparison.")
     args = parser.parse_args()
 
     output_root = Path(args.output_root)
@@ -348,11 +395,14 @@ def main() -> None:
         import io, contextlib
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            print_summary(rows)
+            print_summary(rows, label=args.label)
         summary = buf.getvalue()
         out_txt.write_text(summary, encoding="utf-8")
         sys.stdout.write(summary)
         log.info("Summary saved -> %s", out_txt)
+
+        proxy = compute_proxy_score(rows)
+        log.info("SWEEP PROXY SCORE: %.4f  (higher = better trunk for UHI prediction)", proxy)
     else:
         log.error("No results produced — check that training has run and trunk exists.")
 

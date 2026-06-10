@@ -97,9 +97,31 @@ def zero_shot_predict(
     # Load trunk from checkpoint, registry, or fresh model
     if trunk_path is not None:
         anp = SpatialANP.from_checkpoint(trunk_path)
+        # Align feature matrix to the x_dim embedded in the checkpoint.
+        ckpt_x_dim = anp.x_dim
+        if ckpt_x_dim != feat_np.shape[1]:
+            d = feat_np.shape[1]
+            if d < ckpt_x_dim:
+                feat_np = np.pad(feat_np, ((0, 0), (0, ckpt_x_dim - d)))
+            else:
+                feat_np = feat_np[:, :ckpt_x_dim]
+        x_dim = ckpt_x_dim
+        target_x = torch.from_numpy(feat_np)
+        ctx_x = torch.zeros(0, x_dim, dtype=torch.float32)
     elif _use_registry:
         from sparc.inference.trunk import TrunkLoader
         anp = TrunkLoader.from_registry(registry_path, features.climate_zone, x_dim=x_dim)
+        # Align feature matrix to the x_dim embedded in the loaded/fresh model.
+        ckpt_x_dim = anp.x_dim
+        if ckpt_x_dim != feat_np.shape[1]:
+            d = feat_np.shape[1]
+            if d < ckpt_x_dim:
+                feat_np = np.pad(feat_np, ((0, 0), (0, ckpt_x_dim - d)))
+            else:
+                feat_np = feat_np[:, :ckpt_x_dim]
+        x_dim = ckpt_x_dim
+        target_x = torch.from_numpy(feat_np)
+        ctx_x = torch.zeros(0, x_dim, dtype=torch.float32)
     else:
         anp = SpatialANP(x_dim=x_dim)
         anp.eval()
