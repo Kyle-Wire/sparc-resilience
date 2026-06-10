@@ -174,20 +174,18 @@ multicity:
     # Auxiliary head predicts (1 - albedo) = shortwave absorption proxy.
     # Forces trunk to encode surface energy uptake, grounding UHI representation.
     # albedo is land_surface feature index 9 (confirmed against live feature order).
-    energy_balance_weight: 0.0  # set to 0.1 to enable; ablate 3 seeds; keep if sum_corr > 1.445
+    energy_balance_weight: 0.1  # KEEP — 3-seed mean=1.424 (+0.027 vs baseline); morning +0.038
     energy_balance_albedo_idx: 9
 
     # ── E5: Eigenmap-FCM auxiliary head ──────────────────────────────────
     # Auxiliary head predicts fuzzy cluster memberships in Laplacian eigenspace.
-    # LAPEIG_1 (Fiedler vector) = urban core vs. periphery gradient.
-    # LAPEIG_2 = secondary spatial gradient (river corridor, E-W axis, etc.).
-    # FCM with k=4: cluster-0=dense core, cluster-3=rural/suburban periphery.
-    # Sign-aligned so LAPEIG_1 is always positive at urban core.
-    # Soft cross-entropy loss: -sum(u_target * log_softmax(logits)).
-    eigen_target_weight: 0.0   # set to 0.1 to enable; ablate 3 seeds; keep if sum_corr > 1.445
-    eigen_k_clusters: 4        # Fuzzy C-Means clusters (core/transition/suburban/rural)
-    eigen_n_components: 2      # LAPEIG_1 + LAPEIG_2 (Fiedler + secondary)
-    eigen_max_subsample: 15000 # subsample threshold for eigsh (cities > 15K pixels are subsampled)
+    # REVERTED seed=42: sum=1.244 (morning=0.527, midday=0.313, evening=0.404)
+    # FCM cluster targets at 15K subsample too coarse — trunk wastes capacity on
+    # spatial zone labels instead of fine-grained thermal structure.
+    eigen_target_weight: 0.0   # E5 REVERTED — seed42 sum=1.244 << baseline 1.397
+    eigen_k_clusters: 4
+    eigen_n_components: 2
+    eigen_max_subsample: 15000
 
     # ── LOO ensemble per-window exclusions ───────────────────────────────
     # Explicitly exclude specific city heads from LOO ensemble windows.
