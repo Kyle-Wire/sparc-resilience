@@ -504,6 +504,7 @@ def run_jepa_pretraining(
     pi_eccentricity_a_over_b: float | None = None,
     city_sizes: list[int] | None = None,
     all_U: np.ndarray | None = None,
+    feat_cols: list[str] | None = None,
 ) -> object:
     """Run JEPA spatial-patch pretraining on combined city features.
 
@@ -814,6 +815,7 @@ def run_jepa_pretraining(
         "X_std":       X_std.tolist(),
         "C_mean":      C_mean.tolist(),
         "C_std":       C_std.tolist(),
+        "feat_cols":   feat_cols,
     }, str(trunk_path))
     log.info("Shared trunk saved → %s", trunk_path)
 
@@ -2165,6 +2167,7 @@ def main() -> None:
             pi_eccentricity_a_over_b=pi_eccentricity_a_over_b,
             city_sizes=city_sizes,
             all_U=combined_U,
+            feat_cols=feat_cols_land,
         )
 
     # -- Phase 2 -- Per-City Head Training (unfrozen trunk, low lr) -------------

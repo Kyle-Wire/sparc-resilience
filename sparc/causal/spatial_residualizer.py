@@ -74,15 +74,19 @@ class SpatialResidualizer:
         ----------
         df : pd.DataFrame
             Input data with ``physics_feat_cols`` and ``treatment_cols`` present.
-        model : SPARCMetaLearner or None
-            JEPA-enabled trunk model.  Must expose ``encode(physics_feats,
-            alpha) -> Tensor(N, hidden_dim)``.  Pass ``None`` to skip.
+        model : SPARCMetaLearner, JEPATrunkAdapter, or None
+            Trunk encoder.  Must expose either:
+            - ``encode(physics_t, alpha_t) -> Tensor(N, hidden_dim)`` [SPARCMetaLearner]
+            - ``encode_by_names(X_raw, col_names) -> ndarray(N, hidden_dim)`` [JEPATrunkAdapter]
+            The JEPATrunkAdapter path is used automatically when the model
+            exposes ``encode_by_names``.  Pass ``None`` to skip.
         physics_feat_cols : list[str]
             Columns in *df* used as physics inputs to the trunk.
         treatment_cols : list[str]
             Columns to residualise.  Adds ``{col}_resid`` to the output.
         alpha : np.ndarray of shape ``(N,)``
-            Process-rate values (same as passed to :class:`SPARCMetaLearner`).
+            Process-rate values (passed to SPARCMetaLearner; ignored by
+            JEPATrunkAdapter which is physics-only).
         device : str
             PyTorch device string (e.g. ``"cpu"`` or ``"cuda"``).
 
@@ -111,20 +115,26 @@ class SpatialResidualizer:
 
         n = len(df)
 
-        # 1. Encode physics features via JEPA trunk
-        physics_np = df[physics_feat_cols].values.astype(np.float32)
-        alpha_np = np.asarray(alpha, dtype=np.float32).reshape(-1, 1)
+        # 1. Encode physics features via trunk.
+        # JEPATrunkAdapter exposes encode_by_names() for column-aligned encoding;
+        # SPARCMetaLearner uses the legacy encode(tensor, alpha) path.
+        if hasattr(model, "encode_by_names"):
+            physics_np = df[physics_feat_cols].values.astype(np.float32)
+            h_np: np.ndarray = model.encode_by_names(physics_np, physics_feat_cols)
+        else:
+            physics_np = df[physics_feat_cols].values.astype(np.float32)
+            alpha_np = np.asarray(alpha, dtype=np.float32).reshape(-1, 1)
 
-        physics_t = torch.tensor(physics_np, dtype=torch.float32).to(device)
-        alpha_t = torch.tensor(alpha_np, dtype=torch.float32).to(device)
+            physics_t = torch.tensor(physics_np, dtype=torch.float32).to(device)
+            alpha_t = torch.tensor(alpha_np, dtype=torch.float32).to(device)
 
-        model = model.to(device)
-        model.eval()
+            model = model.to(device)
+            model.eval()
 
-        with torch.no_grad():
-            h = model.encode(physics_t, alpha_t)
+            with torch.no_grad():
+                h = model.encode(physics_t, alpha_t)
 
-        h_np: np.ndarray = h.detach().cpu().numpy()  # (N, hidden_dim)
+            h_np: np.ndarray = h.detach().cpu().numpy()  # (N, hidden_dim)
 
         # 2. PCA-reduce trunk embedding
         n_components = min(self.pca_dims, h_np.shape[1], n - 1)

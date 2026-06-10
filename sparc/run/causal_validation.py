@@ -457,8 +457,11 @@ class CausalValidator:
                     "Stage 2 OOF load failed (non-fatal): %s", _oof_exc
                 )
 
-        # JD-2: SpatialResidualizer — residualise treatment columns on JEPA
+        # JD-2 / A3: SpatialResidualizer — residualise treatment columns on JEPA
         # trunk embeddings to remove spatially-structured confounding before DML.
+        # Priority order:
+        #   1. neural_meta.pt from Stage 2 v2_neural (SPARCMetaLearner, original path)
+        #   2. jepa_pretrained_trunk.pt from output root (JEPATrunkAdapter, A3 path)
         # Controlled by config flag causal.use_spatial_residualization (default True).
         _use_spatial_resid = self.config.get('causal', {}).get('use_spatial_residualization', True)
         if estimator_name == 'dml' and _use_spatial_resid:
@@ -466,56 +469,75 @@ class CausalValidator:
                 import json as _json
                 import logging as _logging
                 _sr_log = _logging.getLogger(__name__)
+                from sparc.causal.spatial_residualizer import SpatialResidualizer as _SR
+
+                _sr_model = None  # will be set by whichever path succeeds
+
+                # --- Path 1: SPARCMetaLearner (Stage 2 neural meta) ---
                 _v2_dir = self.paths.stage2_dir / "v2_neural"
                 _meta_path = _v2_dir / "meta_info.json"
                 if _meta_path.exists():
                     import torch as _torch
                     from sparc.models.neural_meta import SPARCMetaLearner as _SML
-                    from sparc.causal.spatial_residualizer import SpatialResidualizer as _SR
                     with open(_meta_path) as _mf:
                         _mi = _json.load(_mf)
-                    _sr_model = _SML(
-                        n_base_models=_mi["n_base_models"],
-                        n_physics_features=_mi.get("n_physics_extended", _mi["n_physics_features"]),
-                        d_spatial=_mi["d_spatial"],
-                        hidden_dim=_mi["hidden_dim"],
-                        thresholds=_mi.get("thresholds", [0.25, 0.50, 0.75]),
-                    )
                     _ckpt_path = _v2_dir / "neural_meta.pt"
                     if _ckpt_path.exists():
-                        _state = _torch.load(_ckpt_path, map_location="cpu", weights_only=True)
-                        _sr_model.load_state_dict(_state)
-                        _sr_model.eval()
-                        _phys_cols = [c for c in self.config.get('predictors', []) if c in data.columns]
-                        _treat_cols = list({p for p, _ in self.graph.edges() if p in data.columns})
-                        _alpha_np = np.ones(len(data), dtype=np.float32)
-                        _pca_dims = self.config.get('causal', {}).get('spatial_resid_pca_dims', 16)
-                        _residualizer = _SR(pca_dims=_pca_dims)
-                        data = _residualizer.fit_transform(
-                            data,
-                            model=_sr_model,
-                            physics_feat_cols=_phys_cols if _phys_cols else [data.columns[0]],
-                            treatment_cols=_treat_cols,
-                            alpha=_alpha_np,
-                            device="cpu",
+                        _sml = _SML(
+                            n_base_models=_mi["n_base_models"],
+                            n_physics_features=_mi.get("n_physics_extended", _mi["n_physics_features"]),
+                            d_spatial=_mi["d_spatial"],
+                            hidden_dim=_mi["hidden_dim"],
+                            thresholds=_mi.get("thresholds", [0.25, 0.50, 0.75]),
                         )
-                        # Swap treatment column references: if a parent col was
-                        # residualised, swap to _resid variant for the DML fit.
-                        _resid_map = {c: f"{c}_resid" for c in _treat_cols if f"{c}_resid" in data.columns}
-                        if _resid_map:
-                            import networkx as _nx
-                            _new_edges = [((_resid_map.get(p, p), ch)) for p, ch in self.graph.edges()]
-                            _new_graph = _nx.DiGraph()
-                            _new_graph.add_nodes_from(self.graph.nodes(data=True))
-                            _new_graph.add_edges_from(_new_edges)
-                            self.graph = _new_graph
-                            _sr_log.info(
-                                "SpatialResidualizer: residualised %d treatment columns", len(_resid_map)
-                            )
-                    else:
-                        _sr_log.debug("SpatialResidualizer: neural_meta.pt not found — skipping")
+                        _state = _torch.load(_ckpt_path, map_location="cpu", weights_only=True)
+                        _sml.load_state_dict(_state)
+                        _sml.eval()
+                        _sr_model = _sml
+                        _sr_log.info("SpatialResidualizer: using SPARCMetaLearner (neural_meta.pt)")
+
+                # --- Path 2 (A3): PI-JEPA trunk adapter (fallback) ---
+                if _sr_model is None:
+                    try:
+                        from sparc.causal.jepa_trunk_adapter import load_jepa_trunk_adapter as _load_adapter
+                        _output_root = getattr(self.paths, 'output_root', None) or getattr(self.paths, 'root', None)
+                        if _output_root is not None:
+                            _adapter = _load_adapter(_output_root, device="cpu")
+                            if _adapter is not None:
+                                _sr_model = _adapter
+                                _sr_log.info("SpatialResidualizer: using PI-JEPA trunk (A3 deconfounding path)")
+                    except Exception as _a3_exc:
+                        _sr_log.debug("A3 JEPATrunkAdapter load failed (non-fatal): %s", _a3_exc)
+
+                if _sr_model is not None:
+                    _phys_cols = [c for c in self.config.get('predictors', []) if c in data.columns]
+                    _treat_cols = list({p for p, _ in self.graph.edges() if p in data.columns})
+                    _alpha_np = np.ones(len(data), dtype=np.float32)
+                    _pca_dims = self.config.get('causal', {}).get('spatial_resid_pca_dims', 16)
+                    _residualizer = _SR(pca_dims=_pca_dims)
+                    data = _residualizer.fit_transform(
+                        data,
+                        model=_sr_model,
+                        physics_feat_cols=_phys_cols if _phys_cols else list(data.columns[:1]),
+                        treatment_cols=_treat_cols,
+                        alpha=_alpha_np,
+                        device="cpu",
+                    )
+                    # Swap treatment column references: if a parent col was
+                    # residualised, swap to _resid variant for the DML fit.
+                    _resid_map = {c: f"{c}_resid" for c in _treat_cols if f"{c}_resid" in data.columns}
+                    if _resid_map:
+                        import networkx as _nx
+                        _new_edges = [((_resid_map.get(p, p), ch)) for p, ch in self.graph.edges()]
+                        _new_graph = _nx.DiGraph()
+                        _new_graph.add_nodes_from(self.graph.nodes(data=True))
+                        _new_graph.add_edges_from(_new_edges)
+                        self.graph = _new_graph
+                        _sr_log.info(
+                            "SpatialResidualizer: residualised %d treatment columns", len(_resid_map)
+                        )
                 else:
-                    pass  # Stage 1 not yet run; silently skip
+                    _sr_log.debug("SpatialResidualizer: no trunk found — skipping")
             except Exception as _sr_exc:
                 import logging as _logging
                 _logging.getLogger(__name__).debug(
