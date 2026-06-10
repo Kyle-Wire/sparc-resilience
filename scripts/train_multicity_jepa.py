@@ -2050,7 +2050,13 @@ def main() -> None:
                 pi_patch_radius_m = pi_patch_radius_m_local   # overwrite with normalised value
 
         if aniso_mask:
-            pi_eccentricity_a_over_b = pi_params["median_eccentricity_a_over_b"]
+            # Check for direct override first (I1-sweep: test specific eccentricities)
+            _ecc_override = jepa_cfg.get("eccentricity_override", None)
+            if _ecc_override is not None:
+                pi_eccentricity_a_over_b = float(_ecc_override)
+                log.info("I1 eccentricity_override=%.3f (bypassing Stage 0 median)", pi_eccentricity_a_over_b)
+            else:
+                pi_eccentricity_a_over_b = pi_params["median_eccentricity_a_over_b"]
             if pi_eccentricity_a_over_b is None:
                 log.warning("I1 requested but no eccentricity data found -- using isotropic mask")
 
