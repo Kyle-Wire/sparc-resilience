@@ -241,3 +241,30 @@ A2 energy-balance head relies on.
 
 **Summary: all ANP todos complete.** Best Philadelphia midday result remains Option-C calibrated zero-shot at 1.33°F RMSE. ANP is validated as an architecture but requires non-airport station data to add value over calibration.
 
+---
+
+## GPU Performance Fix (2026-06-11)
+
+> Commits: `816cbb0` (vectorize spatial_patch_mask), `9b548fe` (replace DataLoader with GPU shuffle)
+> Benchmark machine: RTX 5070 Ti (sm_120 Blackwell), 16 GB VRAM, N=6,197,359, batch_size=4096
+
+**Root cause**: Two separate bottlenecks caused Phase 1 to run at ~46s/epoch (minutes for full run):
+
+1. **Python loop bottleneck** (`spatial_patch_mask`): Old implementation iterated up to N=4096 Python steps to find n_patches=4 non-overlapping centres. Fix: candidate pool of n_patches×8=32; vectorized distance as `(N,1,2)-(1,K,2)` broadcast, `.any(dim=1)`. Result: 4.85ms → 0.71ms/batch on CPU, now runs directly on GPU (1.40ms). No Blackwell CPU round-trip needed.
+
+2. **DataLoader collate bottleneck**: `DataLoader(TensorDataset(GPU_tensors))` triggers `default_collate` which does batch_size=4096 individual Python-level tensor accesses per batch. Fix: direct GPU shuffle `perm = torch.randperm(N, device='cuda'); X_t[perm[i*B:(i+1)*B]]`. Result: 29.3ms → 0.5ms/batch (56× speedup).
+
+3. **`pin_memory` bug**: Previously set `pin_memory=(device.type == "cuda")` which tried to pin already-GPU tensors → `RuntimeError: cannot pin 'torch.cuda.FloatTensor'`. Fixed to `pin_memory=False` (tensors already on device).
+
+**Before/after timing (N=6.2M, B=4096, 1513 batches/epoch):**
+
+| Bottleneck | Before | After | Speedup |
+|---|---|---|---|
+| spatial_patch_mask | 4.85ms/batch (CPU round-trip) | 1.40ms/batch (GPU) | 3.5× |
+| DataLoader | 29.3ms/batch | 0.5ms/batch | 56× |
+| Phase 1 epoch | ~46s | ~8.4s | **5.5×** |
+| 100-epoch run | ~76 min | ~14 min | **5.5×** |
+
+**Ceiling run**: Re-started with fixes on 2026-06-11, seed=42, --fewshot-n 10000 --fewshot-hybrid.
+Log: `output/train_hybrid_a2_s42_gpu_fixed.txt`
+
