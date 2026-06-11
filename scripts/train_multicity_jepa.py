@@ -577,6 +577,14 @@ def run_jepa_pretraining(
         gpu_mem  = torch.cuda.get_device_properties(0).total_memory // (1024 ** 2)
         log.info("JEPA pretraining on GPU: %s  (%d MB)  N=%d  D=%d  seed=%d",
                  gpu_name, gpu_mem, len(all_X), all_X.shape[1], seed)
+        # Warm the GPU context with a synchronous kernel before the CPU-bound
+        # normalization step.  Without this, the first real CUDA kernel (large
+        # host→device tensor copy) fires after several seconds of CPU-only
+        # work.  On Blackwell (sm_120) this can stall the driver long enough to
+        # trigger Windows TDR and freeze the entire system.
+        _warmup = torch.zeros(1, device=device)
+        torch.cuda.synchronize()
+        del _warmup
     else:
         log.info("JEPA pretraining on device=%s  N=%d  D=%d  seed=%d", device, len(all_X), all_X.shape[1], seed)
 

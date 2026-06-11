@@ -354,22 +354,30 @@ def spatial_patch_mask(
     pool_idx  = torch.randperm(N, device=device)[:pool_size]
     pool      = coords[pool_idx]          # (pool_size, 2)
 
-    selected: list[torch.Tensor] = []
+    # Move pool to CPU for candidate selection — pool is at most n_patches*8=32
+    # elements, so the host transfer is negligible (~1 µs).  This avoids calling
+    # .norm() on GPU tensors, which uses a sqrt kernel.  On Blackwell (sm_120)
+    # the sqrt kernel triggers cudaErrorLaunchFailure that can escalate via
+    # Windows TDR into a full system freeze.  The vectorised distance below
+    # (already on GPU) correctly avoids sqrt via squared comparison.
+    pool_cpu = pool.cpu()       # (pool_size, 2)
+    r_sq     = (radius * 0.5) ** 2
+    sel_idx: list[int] = []
     for i in range(pool_size):
-        if len(selected) >= n_patches:
+        if len(sel_idx) >= n_patches:
             break
-        c = pool[i]
-        if not any(float((c - s).norm()) < radius * 0.5 for s in selected):
-            selected.append(c)
+        c = pool_cpu[i]
+        if not any(float(((c - pool_cpu[j]) ** 2).sum()) < r_sq for j in sel_idx):
+            sel_idx.append(i)
 
-    if not selected:
+    if not sel_idx:
         return torch.rand(N, device=device) < mask_ratio
 
     # Vectorized distance: (N, 1, 2) - (1, K, 2) → (N, K) squared distances.
     # Use squared distance to avoid sqrt — Blackwell (sm_120) has a driver bug
     # that causes cudaErrorLaunchFailure inside sqrt-containing GPU kernels when
     # launched asynchronously.  Comparing dist² ≤ r² is mathematically identical.
-    centres  = torch.stack(selected)                                        # (K, 2)
+    centres  = pool[sel_idx]                                                # (K, 2) on device
     diff     = coords.unsqueeze(1) - centres.unsqueeze(0)                   # (N, K, 2)
     dist_sq  = diff.pow(2).sum(dim=2)                                       # (N, K)
     masked   = (dist_sq <= radius * radius).any(dim=1)                      # (N,)
@@ -480,20 +488,24 @@ def anisotropic_patch_mask(
     pool_idx  = torch.randperm(N, device=device)[:pool_size]
     pool      = coords[pool_idx]          # (pool_size, 2)
 
-    selected: list[torch.Tensor] = []
+    # Move pool to CPU for candidate selection (same rationale as spatial_patch_mask:
+    # avoids .norm() sqrt kernel on Blackwell sm_120 which causes system freeze).
+    pool_cpu = pool.cpu()   # (pool_size, 2) — negligible for 32 rows
+    r_sq     = (semi_major * 0.5) ** 2
+    sel_idx: list[int] = []
     for i in range(pool_size):
-        if len(selected) >= n_patches:
+        if len(sel_idx) >= n_patches:
             break
-        c = pool[i]
-        if not any(float((c - s).norm()) < semi_major * 0.5 for s in selected):
-            selected.append(c)
+        c = pool_cpu[i]
+        if not any(float(((c - pool_cpu[j]) ** 2).sum()) < r_sq for j in sel_idx):
+            sel_idx.append(i)
 
-    if not selected:
+    if not sel_idx:
         return torch.rand(N, device=device) < mask_ratio
 
     # Vectorized ellipse test for all selected centres at once.
     # centres: (K, 2);  coords: (N, 2)
-    centres = torch.stack(selected)                                    # (K, 2)
+    centres = pool[sel_idx]                                            # (K, 2) on device
     dx = coords[:, 0].unsqueeze(1) - centres[:, 0].unsqueeze(0)       # (N, K)
     dy = coords[:, 1].unsqueeze(1) - centres[:, 1].unsqueeze(0)       # (N, K)
     u  =  cos_t * dx + sin_t * dy                                      # (N, K)
