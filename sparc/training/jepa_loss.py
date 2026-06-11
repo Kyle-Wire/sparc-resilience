@@ -365,10 +365,14 @@ def spatial_patch_mask(
     if not selected:
         return torch.rand(N, device=device) < mask_ratio
 
-    # Vectorized distance: (N, 1, 2) - (1, K, 2) → (N, K) distances
-    centres = torch.stack(selected)                                    # (K, 2)
-    dists   = (coords.unsqueeze(1) - centres.unsqueeze(0)).norm(dim=2)  # (N, K)
-    masked  = (dists <= radius).any(dim=1)                             # (N,)
+    # Vectorized distance: (N, 1, 2) - (1, K, 2) → (N, K) squared distances.
+    # Use squared distance to avoid sqrt — Blackwell (sm_120) has a driver bug
+    # that causes cudaErrorLaunchFailure inside sqrt-containing GPU kernels when
+    # launched asynchronously.  Comparing dist² ≤ r² is mathematically identical.
+    centres  = torch.stack(selected)                                        # (K, 2)
+    diff     = coords.unsqueeze(1) - centres.unsqueeze(0)                   # (N, K, 2)
+    dist_sq  = diff.pow(2).sum(dim=2)                                       # (N, K)
+    masked   = (dist_sq <= radius * radius).any(dim=1)                      # (N,)
 
     n_masked = int(masked.sum())
     target_n = int(mask_ratio * N)
