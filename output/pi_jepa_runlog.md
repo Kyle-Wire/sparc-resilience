@@ -194,3 +194,36 @@ Config reverted to: `anisotropic_mask: false`, `eccentricity_override: null`.
 (e.g. urban canyon orientation), but midday UHI is governed by surface energy absorption which is
 isotropic at 30m scale. Circular masking preserves the albedo/impervious gradient structure that the
 A2 energy-balance head relies on.
+
+---
+
+## ANP Station-Conditioned Correction (2026-06-11)
+
+> Architecture: SpatialANP in JEPA trunk embedding space (256-dim), Matérn-3/2 spatial attention bias.
+> Trained: `scripts/train_anp_station_conditioned.py` — 60 epochs, 80 episodes/city, 4096 px/city.
+> Station data: `scripts/fetch_open_meteo_stations.py` — 11 ASOS stations near Philadelphia (IEM METAR + Open-Meteo ERA5).
+> Meta-training UHI: `uhi_anomaly = aat_window - era5_t2m_fahrenheit` clipped to [-25, +30]°F.
+> Best training loss: 1.5906. Final eval (New Orleans morning): zero-shot RMSE=22.43°F → few-shot(K=3) RMSE=1.12°F.
+
+**E2: CAPA pseudo-station N-curve (Philadelphia midday, seed=42, 10 trials):**
+
+| N (stations) | RMSE (°F) | ± std | vs ZS-cal |
+|---|---|---|---|
+| 0 (ANP prior) | 6.19 | — | +4.86 |
+| 1 | 2.17 | 0.75 | +0.84 |
+| 2 | 2.18 | 0.63 | +0.85 |
+| 3 | 1.91 | 0.33 | +0.57 |
+| 5 | 1.81 | 0.16 | +0.47 |
+| 10 | 1.74 | 0.07 | +0.41 |
+| 20 | 1.79 | 0.11 | +0.46 |
+| — | Zero-shot raw | 5.23°F | — |
+| — | Zero-shot calibrated (Option-C) | **1.33°F** | 0.00 |
+
+**Finding: ANP doesn't yet beat calibrated zero-shot (1.33°F).** Few-shot converges ~1.74°F at N=10.
+
+**Root cause**: ANP prior biased toward large UHI corrections (Burlington/New Orleans ERA5 mismatch in Nov training data pulls prior to ~6°F offset). The Option-C calibration is strong because it directly models the ERA5 background bias.
+
+**Next direction options**:
+1. **Option-C + ANP stacking**: apply Option-C first, then ANP corrects residuals (requires residual-space retraining)
+2. **Clean training data**: exclude Burlington/New Orleans from meta-training (only 6 reliable cities)
+3. **E1 honest eval**: run with real ASOS stations (`--anp-checkpoint output/anp_station_conditioned.pt`) — airports are cool islands, context_y will be negative, may improve predictions for urban core
