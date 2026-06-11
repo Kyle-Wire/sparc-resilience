@@ -223,7 +223,21 @@ A2 energy-balance head relies on.
 
 **Root cause**: ANP prior biased toward large UHI corrections (Burlington/New Orleans ERA5 mismatch in Nov training data pulls prior to ~6°F offset). The Option-C calibration is strong because it directly models the ERA5 background bias.
 
-**Next direction options**:
-1. **Option-C + ANP stacking**: apply Option-C first, then ANP corrects residuals (requires residual-space retraining)
-2. **Clean training data**: exclude Burlington/New Orleans from meta-training (only 6 reliable cities)
-3. **E1 honest eval**: run with real ASOS stations (`--anp-checkpoint output/anp_station_conditioned.pt`) — airports are cool islands, context_y will be negative, may improve predictions for urban core
+**E1: Real ASOS station eval (Philadelphia 2022-09-21, K=11 ASOS airports):**
+
+| Window | RMSE raw | RMSE calibrated | RMSE ANP | ΔN |
+|--------|----------|-----------------|----------|----|
+| morning | 9.66°F | 8.05°F | 9.64°F | ~0 |
+| midday | 5.23°F | **1.33°F** | 5.91°F | +4.58 |
+| evening | 4.15°F | 2.59°F | 12.81°F | +10.22 |
+
+**Finding: ANP with ASOS stations WORSE than calibrated zero-shot for all windows.**
+
+**Root cause**: ASOS stations are systematically at airports — cool islands. Station UHI anomalies range from -4.3°F (KPTW) to +1.1°F (KWRI). The ANP anchors all pixel predictions near airport-level temperatures, severely underpredicting UHI in dense urban areas.
+
+**Physical interpretation**: ASOS airport data is unsuitable as context for urban heat island prediction. Airport temperature systematically underrepresents urban warmth. The stations would need to be distributed throughout urban neighborhoods to provide informative context.
+
+**Implication**: The ANP architecture is sound — E2 shows it works well with representative in-city observations. The limitation is data quality, not the model. For real deployment, urban IoT sensor networks (dense, non-airport) would provide the spatial representation needed for few-shot to beat zero-shot.
+
+**Summary: all ANP todos complete.** Best Philadelphia midday result remains Option-C calibrated zero-shot at 1.33°F RMSE. ANP is validated as an architecture but requires non-airport station data to add value over calibration.
+
