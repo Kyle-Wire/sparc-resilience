@@ -121,6 +121,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--fewshot-hybrid", action="store_true",
                    help="When used with --fewshot-n: also report a hybrid eval using zero-shot morning "
                         "predictions combined with few-shot midday/evening, on the same held-out test split.")
+    p.add_argument("--fewshot-sampling", choices=["random", "fps"], default="random",
+                   help="Sampling strategy for few-shot training pixels. "
+                        "'random': uniform random sample (default, current behaviour). "
+                        "'fps': farthest-point sampling in trunk embedding space — "
+                        "maximises feature-space coverage so N≤1000 can represent the full city. "
+                        "Example: --fewshot-n 1000 --fewshot-sampling fps")
     p.add_argument("--pretrain-only", action="store_true",
                    help="Run Phase 1 (JEPA pretraining) only, then exit immediately after saving the trunk. "
                         "Useful for I1 eccentricity sweep screening: run with reduced n_epochs + A3 diagnostics "
@@ -1579,6 +1585,49 @@ def run_loo_eval(
 # Phase 3B -- Few-Shot Fine-Tune on Holdout City
 # ---------------------------------------------------------------------------
 
+def _farthest_point_sampling_gpu(emb_t, n: int, device, seed: int = 42):
+    """Select n maximally-diverse indices via farthest-point sampling.
+
+    Iteratively picks the point furthest (in L2 embedding distance) from all
+    previously selected points.  Using trunk embeddings as the feature space
+    ensures we sample pixels that are physically diverse (different land-cover
+    type, impervious fraction, canopy density, etc.) rather than spatially
+    clustered, so each label is informationally unique.
+
+    Complexity: O(n × N) distances — feasible for N=350k, n≤10k on GPU.
+
+    Parameters
+    ----------
+    emb_t : Tensor of shape ``(N, D)`` — trunk embeddings for all labeled pixels.
+    n     : int — number of samples to select.
+    device: torch.device
+    seed  : int — determines the random starting point.
+
+    Returns
+    -------
+    Tensor of shape ``(n,)`` — indices into emb_t (row indices of labeled_idx).
+    """
+    import torch
+    N = emb_t.shape[0]
+    if n >= N:
+        return torch.arange(N, device=device)
+
+    rng = np.random.default_rng(seed)
+    first = int(rng.integers(N))
+    selected = [first]
+    # min-distance from every point to the selected set — starts all-inf
+    min_dists = torch.full((N,), float("inf"), device=device)
+
+    for _ in range(n - 1):
+        # Update min_dists: L2² to the last-added point
+        diff = emb_t - emb_t[selected[-1]]       # (N, D)
+        d2   = (diff * diff).sum(dim=1)            # (N,)  — no .pow(2) for Blackwell compat
+        min_dists = torch.minimum(min_dists, d2)
+        selected.append(int(torch.argmax(min_dists).item()))
+
+    return torch.tensor(selected, dtype=torch.long, device=device)
+
+
 def run_fewshot_finetune(
     holdout_path: Path,
     trunk,
@@ -1590,11 +1639,12 @@ def run_fewshot_finetune(
     n_samples: int = 10,
     city_uhi_stats: list[dict] = None,
     hybrid: bool = False,
+    sampling: str = "random",
 ) -> dict:
     """Few-shot transfer: fine-tune a city head on N labeled Philadelphia pixels.
 
     Experimental setup (no data leakage):
-      - Randomly sample ``n_samples`` labeled pixels  → training set
+      - Sample ``n_samples`` labeled pixels  → training set (random or FPS)
       - Evaluate on ALL remaining labeled pixels       → held-out test set
 
     If ``hybrid=True``, also loads the saved zero-shot morning predictions and
@@ -1602,6 +1652,15 @@ def run_fewshot_finetune(
     This is evaluated on the *same* held-out test_idx for a fair comparison.
     Uses the FROZEN trunk from Phase 1/2 — same setup as Phase 2 city heads.
     Prints a side-by-side comparison with zero-shot ensemble results.
+
+    Parameters
+    ----------
+    sampling : "random" | "fps"
+        "random"  — uniform random sample of labeled pixels (default).
+        "fps"     — farthest-point sampling in trunk embedding space; selects a
+                    maximally diverse set of N pixels so each label covers unique
+                    surface-feature territory.  Improves low-N accuracy by
+                    avoiding redundant samples in spatially-autocorrelated clusters.
     """
     import torch
     import torch.nn as nn
@@ -1692,7 +1751,33 @@ def run_fewshot_finetune(
         log.warning("fewshot: only %d labeled pixels — using all for training", len(labeled_idx))
         train_idx = labeled_idx
         test_idx  = labeled_idx
+    elif sampling == "fps":
+        # Farthest-point sampling in trunk embedding space:
+        # Pre-compute trunk embeddings for labeled pixels, then greedily select
+        # the n_samples most spatially-diverse points.  Avoids redundant labels
+        # from spatially-autocorrelated clusters (same land-cover repeated N times).
+        log.info("fewshot FPS: encoding %d labeled pixels for diversity sampling ...", len(labeled_idx))
+        labeled_t = torch.tensor(labeled_idx, device=device)
+        trunk_local_fps = trunk
+        for p in trunk_local_fps.parameters():
+            p.requires_grad_(False)
+        trunk_local_fps.eval()
+        with torch.no_grad():
+            emb_list = []
+            fps_batch = int(mc["jepa"].get("batch_size", 8192))
+            for s in range(0, len(labeled_idx), fps_batch):
+                b = labeled_t[s:s + fps_batch]
+                emb_list.append(trunk_local_fps(X_land[b]))
+            emb_labeled = torch.cat(emb_list, dim=0)  # (n_labeled, D)
+        fps_local_idx = _farthest_point_sampling_gpu(emb_labeled, n_samples, device, seed=seed)
+        fps_set = set(fps_local_idx.cpu().tolist())
+        chosen_set = fps_set
+        train_idx = labeled_idx[fps_local_idx.cpu().numpy()]
+        test_idx  = labeled_idx[np.array([i for i in range(len(labeled_idx))
+                                           if i not in chosen_set])]
+        log.info("fewshot FPS: selected %d diverse training pixels from %d labeled", len(train_idx), len(labeled_idx))
     else:
+        # Default: uniform random sample
         chosen   = rng.choice(len(labeled_idx), size=n_samples, replace=False)
         chosen_set = set(chosen.tolist())
         train_idx = labeled_idx[chosen]
@@ -2073,10 +2158,13 @@ def main() -> None:
         print()
         return
 
-    # Separate holdout and training cities
-    all_cities   = mc["pilot_cities"]
-    holdout_cfgs = [c for c in all_cities if c.get("holdout", False)]
-    train_cfgs   = [c for c in all_cities if not c.get("holdout", False)]
+    # Separate holdout and training cities.
+    # phase1_only=true cities participate in Phase 1 JEPA pretraining (spatial features useful)
+    # but are excluded from Phase 2 supervised fine-tuning and ZS ensemble (bad-season CAPA labels).
+    all_cities     = mc["pilot_cities"]
+    holdout_cfgs   = [c for c in all_cities if c.get("holdout", False)]
+    train_cfgs     = [c for c in all_cities if not c.get("holdout", False)]
+    supervised_cfgs = [c for c in train_cfgs if not c.get("phase1_only", False)]
 
     # Feature columns
     feat_cols_land = mc["feature_columns"].get("land_surface", [])
@@ -2332,12 +2420,12 @@ def main() -> None:
     city_models: dict = {}
     city_uhi_stats_all: list[dict] = []   # for Option-C offset calibration
 
-    for city_idx, city_cfg in enumerate(train_cfgs):
+    for city_idx, city_cfg in enumerate(supervised_cfgs):
         slug = city_cfg["city_slug"]
         pq   = output_root / slug / "data.geoparquet"
 
         print()
-        print(f"  -- City {city_idx + 1}/{len(train_cfgs)}: {slug} --------------------------")
+        print(f"  -- City {city_idx + 1}/{len(supervised_cfgs)}: {slug} --------------------------")
 
         log.info("[%s] running pipeline stages %s ...", slug, run_stages)
         try:
@@ -2430,6 +2518,7 @@ def main() -> None:
                         n_samples=args.fewshot_n,
                         city_uhi_stats=city_uhi_stats_all,
                         hybrid=args.fewshot_hybrid,
+                        sampling=args.fewshot_sampling,
                     )
                 except Exception as exc:
                     log.warning("Few-shot eval error for %s: %s", slug, exc)
@@ -2441,7 +2530,8 @@ def main() -> None:
     print(f"  Trunk checkpoint  : output/jepa_pretrained_trunk.pt")
     print(f"  City models       : output/cities/<slug>/model.pt")
     print(f"  LOO predictions   : output/cities/philadelphia_pa/predictions.geoparquet")
-    print(f"  Cities trained    : {[c['city_slug'] for c in train_cfgs]}")
+    print(f"  Cities trained    : {[c['city_slug'] for c in supervised_cfgs]}")
+    print(f"  Cities P1-only    : {[c['city_slug'] for c in train_cfgs if c.get('phase1_only')]}")
     print(f"  Cities evaluated  : {[c['city_slug'] for c in holdout_cfgs]}")
     print()
 

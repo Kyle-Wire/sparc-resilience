@@ -55,9 +55,31 @@ multicity:
       utm_epsg: "EPSG:32613"
       campaign_date_override: "2021-06-06"   # ERA5-matched; OSF filename date was upload date
 
+    - city: "Milwaukee, WI"
+      city_slug: "milwaukee_wi"
+      holdout: false
+      bbox: [-88.07, 42.92, -87.85, 43.14]
+      utm_epsg: "EPSG:32616"
+      campaign_date_override: "2022-08-06"   # NIHHIS Aug 2022; summer CAPA ✓
+
+    - city: "Boston, MA"
+      city_slug: "boston_ma"
+      holdout: false
+      bbox: [-71.19, 42.23, -70.99, 42.43]
+      utm_epsg: "EPSG:32619"
+      campaign_date_override: "2019-08-28"   # NIHHIS Aug 2019; summer CAPA ✓
+
+    - city: "Brooklyn, NY"
+      city_slug: "brooklyn_ny"
+      holdout: false
+      bbox: [-74.06, 40.57, -73.83, 40.74]
+      utm_epsg: "EPSG:32618"
+      campaign_date_override: "2022-09-29"   # NIHHIS Sep 2022; morning/midday CAPA ✓ (night absent)
+
     - city: "Burlington, VT"
       city_slug: "burlington_vt"
       holdout: false
+      phase1_only: true     # Nov 2020 winter campaign → fake UHI 58°F; JEPA pretraining only
       bbox: [-73.27, 44.43, -73.15, 44.55]
       utm_epsg: "EPSG:32618"
 
@@ -83,6 +105,7 @@ multicity:
     - city: "New Orleans, LA"
       city_slug: "new_orleans_la"
       holdout: false
+      phase1_only: true     # Nov 2020 winter campaign → UHI 20°F implausible; JEPA pretraining only
       bbox: [-90.14, 29.89, -89.90, 30.08]
       utm_epsg: "EPSG:32615"
 

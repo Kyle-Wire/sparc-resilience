@@ -308,3 +308,66 @@ Log: `output/train_hybrid_a2_s42_gpu_fixed.txt`
 - eval_anp_real_stations.py — E1 real ASOS test (equal/20km/5km Matern)
 - eval_anp_relative_uhi.py — relative UHI ANP eval
 - train_anp_relative_uhi.py — relative UHI training with live IEM airport background fetch
+
+---
+
+## 2026-06-11 — Session 2 Changes
+
+### Target 2: A3 Causal Bridge — Confirmed Ablated
+
+> Verified: `SpatialResidualizer` (sparc/causal/spatial_residualizer.py) and `JEPATrunkAdapter`
+> are **NOT wired into** `scripts/train_multicity_jepa.py` at any phase.
+> Grep confirms only a `--pretrain-only` log message referencing `a3_causal_diagnostics.py`.
+
+**Finding**: The ceiling run sum_corr=1.544 is already the A3-ablated baseline.
+The A3 proxy score (weighted R² in `a3_causal_diagnostics.py`) was used for I1 eccentricity
+screening and found to be **misleading**: proxy improved 0.365→0.411 at ecc=1.15 but
+LOO sum_corr REGRESSED (1.492→1.470). A3 proxy ≠ LOO improvement.
+
+**Decision**: Do NOT wire A3 residualisation into the prediction pipeline.
+Residualising input features removes spatially-structured signal that is useful for prediction
+(even though it introduces confounding for causal inference). The causal and prediction
+objectives diverge. SpatialResidualizer belongs in Stage 3 DML analysis only, not Phase 2/3.
+
+---
+
+### Target 1: Expand Training Cities (7→12 supervised)
+
+**Config change**: `configs/multicity_pilot.yml`
+
+New cities added (summer CAPA labels ✓):
+- `milwaukee_wi` (2022-08-06 August, 389K rows, CAPA morning/midday/night ✓)
+- `boston_ma` (2019-08-28 August, 453K rows, CAPA morning/midday/night ✓)
+- `brooklyn_ny` (2022-09-29 September, 541K rows, CAPA morning/midday ✓; night absent)
+
+Bad-date cities marked `phase1_only: true` (JEPA pretraining only, skip Phase 2):
+- `burlington_vt` — Nov 2020 winter campaign → fake UHI ~58°F; poisoned Phase 2 previously
+- `new_orleans_la` — Nov 2020 winter campaign → implausible UHI 20°F
+
+**Code change**: `scripts/train_multicity_jepa.py`
+- `supervised_cfgs` = non-holdout, non-phase1_only cities (12 cities: 10 with CAPA)
+- `train_cfgs` = all non-holdout including phase1_only (14, all go to Phase 1 JEPA)
+- Phase 2 loop and summary now iterate `supervised_cfgs`
+
+**Expected effect**: More cities → denser ZS ensemble → better morning ZS corr (already saw
++0.031 boost from 8→11 cities in ceiling run). Target: morning ZS ≥ 0.540 with 12 supervised.
+
+---
+
+### Target 4: FPS Sampling for N-Curve Improvement
+
+**Code change**: `scripts/train_multicity_jepa.py`
+
+Added `_farthest_point_sampling_gpu(emb_t, n, device, seed)`:
+- Iterative greedy FPS: O(n × N_labeled) GPU tensor ops
+- Uses `(diff * diff).sum(dim=1)` — avoids `.norm()` Blackwell (sm_120) crash
+- N=351k labeled, n=1000: 351M L2² ops on GPU (~0.5s)
+
+Added `--fewshot-sampling {random|fps}` argument:
+- `random` (default): unchanged uniform random
+- `fps`: encodes all labeled pixels via trunk → runs FPS → uses diverse N pixels
+
+**Hypothesis**: Spatially-autocorrelated random samples cover ~N/50 unique surface-feature
+cells; FPS covers N unique cells. At N=1000, FPS should match random N=5000-10000.
+Target: sum_corr crossover vs ZS at N≤1000 (current crossover: N=10,000).
+
