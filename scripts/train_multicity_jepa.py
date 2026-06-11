@@ -128,6 +128,11 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--screen-epochs", type=int, default=None,
                    help="Override jepa.n_epochs for this run only (e.g. --screen-epochs 50). "
                         "Use with --pretrain-only for fast proxy screening of hyperparameter sweeps.")
+    p.add_argument("--anp-checkpoint", type=str, default=None,
+                   help="Path to a trained station-conditioned ANP checkpoint "
+                        "(output of train_anp_station_conditioned.py). When provided, "
+                        "applies ANP residual correction after Phase 3 zero-shot eval. "
+                        "Requires output/cities/{holdout_slug}/stations.parquet to exist.")
     return p.parse_args()
 
 
@@ -1143,6 +1148,7 @@ def run_loo_eval(
     normalizer: dict = None,
     city_uhi_stats: list[dict] = None,
     cfa_only: bool = False,
+    anp_path: str | None = None,
 ) -> dict:
     """Zero-shot prediction on holdout city using ensemble of trained city heads.
 
@@ -1367,6 +1373,101 @@ def run_loo_eval(
     for col, vals in pred_cols.items():
         gdf[col] = vals
 
+    # ANP station-conditioned correction (optional: requires --anp-checkpoint)
+    anp_results: dict = {}
+    if anp_path is not None:
+        try:
+            import pandas as pd
+            from scipy.spatial import cKDTree
+            from sparc.inference.anp import SpatialANP
+
+            stations_parquet = holdout_path.parent / "stations.parquet"
+            if not stations_parquet.exists():
+                log.warning("ANP: stations.parquet not found at %s — run "
+                            "scripts/fetch_open_meteo_stations.py first", stations_parquet)
+            else:
+                log.info("ANP correction: loading model from %s", anp_path)
+                anp = SpatialANP.from_checkpoint(str(anp_path))
+                anp = anp.to(device)
+                anp.eval()
+
+                stations_df = pd.read_parquet(str(stations_parquet))
+
+                # Shared trunk embedding for ALL pixels (one forward pass)
+                _shared_trunk = supervised_models[0].trunk if supervised_models else trunk
+                _shared_trunk.eval()
+                with torch.no_grad():
+                    trunk_emb = _shared_trunk(X_land)  # (N, 256)
+
+                # Pixel centroids in UTM metres
+                pixel_easting  = gdf.geometry.centroid.x.values
+                pixel_northing = gdf.geometry.centroid.y.values
+                pixel_xy = np.column_stack([pixel_easting, pixel_northing])
+                kd_tree  = cKDTree(pixel_xy)
+
+                for w in ("morning", "midday", "evening"):
+                    raw_key = f"pred_{w}"
+                    if raw_key not in pred_cols:
+                        continue
+
+                    # Stations with valid observations for this window
+                    st_w = stations_df[stations_df["window"] == w].dropna(
+                        subset=["obs_temp_f", "uhi_anomaly_f"]
+                    )
+                    if len(st_w) == 0:
+                        log.info("ANP %s: no stations with valid observations — skipping", w)
+                        continue
+
+                    # Nearest pixel per station → use its trunk embedding as context_x
+                    st_xy = np.column_stack([st_w["easting"].values, st_w["northing"].values])
+                    _, nn_idx = kd_tree.query(st_xy)
+
+                    with torch.no_grad():
+                        ctx_x = trunk_emb[nn_idx]  # (K, 256)
+                        ctx_y = torch.tensor(
+                            st_w["uhi_anomaly_f"].values, dtype=torch.float32, device=device
+                        ).unsqueeze(-1)  # (K, 1)
+                        ctx_coords = torch.tensor(st_xy,   dtype=torch.float32, device=device)
+                        tgt_coords = torch.tensor(pixel_xy, dtype=torch.float32, device=device)
+
+                        mu, sigma = anp(
+                            context_x=ctx_x,
+                            context_y=ctx_y,
+                            target_x=trunk_emb,
+                            context_coords=ctx_coords,
+                            target_coords=tgt_coords,
+                            matern_range_m=6266.0,
+                        )  # mu: (N, 1)
+
+                        uhi_anp = mu.squeeze(-1).cpu().numpy()  # (N,)
+
+                    # Absolute temperature = ERA5 background + ANP-predicted UHI
+                    era5_t2m_F_anp = era5_tensors[w][:, 0].cpu().numpy() * 40.0 * 1.8 + 32.0
+                    anp_pred = era5_t2m_F_anp + uhi_anp
+                    anp_key  = f"pred_{w}_anp"
+                    gdf[anp_key] = anp_pred
+
+                    sig_mean = float(sigma.squeeze(-1).cpu().numpy().mean())
+                    log.info("ANP %s: K=%d stations, UHI mean=%.2f°F  sigma_mean=%.2f°F",
+                             w, len(st_w), float(uhi_anp.mean()), sig_mean)
+
+                    label_col = _label_cols[w]
+                    if label_col in gdf.columns:
+                        true_vals = gdf[label_col].values.astype(np.float32)
+                        valid = ~np.isnan(true_vals)
+                        if valid.sum() > 0:
+                            rmse_anp = float(np.sqrt(np.mean((anp_pred[valid] - true_vals[valid]) ** 2)))
+                            mae_anp  = float(np.mean(np.abs(anp_pred[valid] - true_vals[valid])))
+                            anp_results[w] = {"rmse": rmse_anp, "mae": mae_anp, "n": int(valid.sum())}
+
+                if anp_results:
+                    log.info("ANP correction complete (%d windows evaluated)", len(anp_results))
+
+        except Exception as exc:
+            import traceback
+            log.warning("ANP correction failed: %s", exc)
+            log.debug(traceback.format_exc())
+
     # Option-C: UHI offset calibration.
     # Fit per-window linear model (era5_t2m → mean_uhi_anomaly) on training cities,
     # then apply bias correction to Philadelphia predictions.
@@ -1445,20 +1546,23 @@ def run_loo_eval(
 
     print()
     print("  Phase 3 -- Leave-One-Out Eval (Philadelphia, zero-shot)")
-    print(f"  {'Window':<12}  {'RMSE (raw)':>10}  {'RMSE (cal)':>10}  {'Bias (raw)':>10}  {'Corr':>6}  {'N':>8}")
-    print("  " + "-" * 65)
+    _anp_hdr = f"  {'RMSE (ANP)':>10}" if anp_results else ""
+    print(f"  {'Window':<12}  {'RMSE (raw)':>10}  {'RMSE (cal)':>10}{_anp_hdr}  {'Bias (raw)':>10}  {'Corr':>6}  {'N':>8}")
+    print("  " + "-" * (65 + (13 if anp_results else 0)))
     for w in ("morning", "midday", "evening"):
         raw_m = results.get(w, {})
         cal_m = calibrated_results.get(w, {})
+        anp_m = anp_results.get(w, {})
         rmse_r = f"{raw_m['rmse']:>10.4f}" if raw_m else "         —"
         rmse_c = f"{cal_m['rmse']:>10.4f}" if cal_m else "         —"
+        rmse_a = (f"  {anp_m['rmse']:>10.4f}" if anp_m else ("           —" if anp_results else "")) 
         bias_r = f"{raw_m.get('bias', float('nan')):>10.2f}" if raw_m else "         —"
         corr_r = f"{raw_m.get('corr', float('nan')):>6.3f}" if raw_m else "     —"
         n      = raw_m.get("n", "—")
-        print(f"  {w:<12}  {rmse_r}  {rmse_c}  {bias_r}  {corr_r}  {n:>8}")
-    print("  " + "-" * 65)
+        print(f"  {w:<12}  {rmse_r}  {rmse_c}{rmse_a}  {bias_r}  {corr_r}  {n:>8}")
+    print("  " + "-" * (65 + (13 if anp_results else 0)))
 
-    return {"raw": results, "calibrated": calibrated_results}
+    return {"raw": results, "calibrated": calibrated_results, "anp": anp_results}
 
 
 # ---------------------------------------------------------------------------
@@ -2287,6 +2391,7 @@ def main() -> None:
                     normalizer=normalizer,
                     city_uhi_stats=city_uhi_stats_all,
                     cfa_only=args.cfa_only_loo,
+                    anp_path=args.anp_checkpoint,
                 )
             except Exception as exc:
                 log.warning("LOO eval error for %s: %s", slug, exc)

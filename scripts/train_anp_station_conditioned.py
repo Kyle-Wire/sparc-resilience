@@ -227,13 +227,7 @@ def load_city_tensors(
                         w, n_clipped, len(uhi_raw), clip_lo, clip_hi)
         uhi_raw = np.clip(uhi_raw, clip_lo, clip_hi)
 
-        # Normalize per city per window: mean=0, std=1
-        # Store stats so inference can denormalize
-        uhi_mean = float(np.mean(uhi_raw))
-        uhi_std = float(np.std(uhi_raw)) + 1e-6
-        uhi_norm = (uhi_raw - uhi_mean) / uhi_std
-
-        uhi = torch.tensor(uhi_norm).unsqueeze(-1)  # (N, 1)
+        uhi = torch.tensor(uhi_raw).unsqueeze(-1)  # (N, 1) — raw °F, NOT normalized
 
         city_data[w] = {
             "embeddings": embeddings,   # (N, 256) — same across windows
@@ -242,7 +236,7 @@ def load_city_tensors(
         mean_uhi = float(uhi.mean())
         std_uhi = float(uhi.std())
         log.info("  %s: n=%d | UHI mean=%.2f°F std=%.2f°F",
-                 w, n_sample, mean_uhi, std_uhi)
+                 w, len(uhi_raw), mean_uhi, std_uhi)
 
     return city_data
 
