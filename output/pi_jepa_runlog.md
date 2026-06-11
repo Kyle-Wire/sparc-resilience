@@ -268,3 +268,43 @@ A2 energy-balance head relies on.
 **Ceiling run**: Re-started with fixes on 2026-06-11, seed=42, --fewshot-n 10000 --fewshot-hybrid.
 Log: `output/train_hybrid_a2_s42_gpu_fixed.txt`
 
+**Ceiling run results (2026-06-11) — NEW ALL-TIME BEST:**
+
+| Window | RMSE (raw) | RMSE (cal) | Corr | Source |
+|--------|-----------|-----------|------|--------|
+| morning | 9.47°F | 8.10°F | **0.526** | zero-shot (11 cities) |
+| midday | 1.18°F | 1.18°F | **0.526** | few-shot N=10k |
+| evening | 1.56°F | 1.56°F | **0.491** | few-shot N=10k |
+| **hybrid sum_corr** | — | — | **1.544** | morning=ZS, mid/eve=FS |
+
+- Zero-shot alone: sum_corr = 0.526 + 0.439 + 0.474 = **1.440** (morning improved with 3 extra cities: providence, wilmington, baltimore)
+- Hybrid: **1.544** → new ceiling (+0.011 vs 1.533 from 8-city run)
+- Trunk saved: `output/cities/jepa_pretrained_trunk.pt` (2026-06-11 14:32)
+
+
+## 2026-06-11 — Weather Station ANP Experiments
+
+### Relative-UHI Retraining
+- Trained ANP v3 (np_relative_uhi.pt) on relative UHI = UHI_pixel - airport_bg
+- Airport backgrounds fetched live from IEM ASOS on campaign dates (2-3 stations/city)
+- best_loss=1.6090, Milwaukee holdout ZS=1.44 → FS(K=3)=0.36°F
+
+### Final Comparison Table (Philadelphia)
+
+| Approach           | Morning | Midday | Evening |
+|--------------------|---------|--------|---------|
+| ZS calibrated      | 8.10    | 1.32 ✓ | 2.66    |
+| ANP CAPA N=3       | 1.38 🏆 | 1.66   | 1.70 🏆 |
+| ANP ASOS absolute  | 11.38 ✗ | 7.47 ✗ | 14.72 ✗ |
+| ANP ASOS relative  | 12.07 ✗ | 9.29 ✗ | 14.21 ✗ |
+
+### Key Findings
+- ANP with 3 CAPA pseudo-stations: morning 8.10→1.38°F (5.8× improvement)
+- Airport stations (ASOS) are structurally cool islands — can't anchor urban UHI in any formulation
+- Relative UHI (airport-background-subtracted) does not help: training city relative UHI means are inconsistent due to ERA5 temporal misalignment
+- **Operational path**: pre-deploy 3 sensors 1hr before survey, or use Day-1 CAPA readings as morning context
+
+### New Scripts
+- eval_anp_real_stations.py — E1 real ASOS test (equal/20km/5km Matern)
+- eval_anp_relative_uhi.py — relative UHI ANP eval
+- train_anp_relative_uhi.py — relative UHI training with live IEM airport background fetch
