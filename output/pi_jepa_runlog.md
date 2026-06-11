@@ -371,3 +371,73 @@ Added `--fewshot-sampling {random|fps}` argument:
 cells; FPS covers N unique cells. At N=1000, FPS should match random N=5000-10000.
 Target: sum_corr crossover vs ZS at N≤1000 (current crossover: N=10,000).
 
+**B6 FPS N=1000 result (2026-06-11, seed=42, --skip-pretrain):**
+
+| Sampling | N | morn Corr | mid Corr | eve Corr | sum_corr | vs ZS | note |
+|----------|---|-----------|----------|----------|----------|-------|------|
+| ZS (12-city) | 0 | 0.510 | 0.440 | 0.510 | **1.460** | — | 12-city ensemble (old trunk; boston/brooklyn outlier-filtered) |
+| FPS | 1000 | 0.107 | 0.170 | 0.273 | **0.550** | -0.910 | **FAILED — worse than random** |
+| Hybrid ZS+FPS | 1000 | 0.511 | 0.170 | 0.273 | **0.954** | — | ZS morning + FPS mid/eve |
+
+**FPS failure analysis:**
+FPS (farthest-point sampling) selects the N points with MAXIMUM pairwise distance in
+embedding space — i.e., the CONVEX HULL of the distribution. For UHI prediction:
+- Philadelphia's pixels cluster near 50% impervious / 30% canopy (the mode)
+- FPS selects extreme outliers: 100% impervious OR 0% impervious rare combinations
+- The head trained on convex-hull extremes interpolates poorly in the dense middle region
+  where 90%+ of Philadelphia pixels live → catastrophic generalization failure
+
+**Root cause**: FPS optimizes coverage of feature-space BOUNDARIES, not the DATA MANIFOLD.
+For regression on a smooth function (UHI surface), we need samples near the MODE, not the tails.
+
+**Next approach (planned)**: K-medoids sampling
+- Cluster N_labeled embeddings into K=n_samples groups via K-means
+- Select the cluster MEDOID (closest pixel to centroid) from each cluster
+- This samples the mode: covers the distribution proportional to density
+- Each selected pixel is a "typical representative" of its neighborhood
+- Expected: same benefit as FPS without the convex-hull pathology
+
+---
+
+### Target 4: K-Medoids Implementation & N=1000 Result (2026-06-11)
+
+**Code change**: `scripts/train_multicity_jepa.py`
+
+Added `_kmedoids_sampling_gpu(emb_t, n, device, seed, n_iter=10)`:
+- K-means++ initialization (weighted D² sampling) → Lloyd's iterations → medoid selection
+- Assignment uses squared-norm identity `||a-b||² = ||a||²+||b||²-2aᵀb` → (N, chunk) not (N, chunk, D)
+  - Avoids ~92 GB intermediate tensor that caused OOM with naïve `unsqueeze(1)` approach
+- Re-centering uses `scatter_add_` (O(N) GPU, not Python loop over K clusters)
+- Medoid = pixel closest to centroid per cluster; de-duplicates final set
+- Encoding step: same trunk-embedding pipeline as FPS; ~5 seconds for N=351k
+
+Added `kmedoids` to `--fewshot-sampling` choices; FPS deprecated but kept for ablation.
+
+Also fixed: `_KOPPEN_ZONE` entries for new cities:
+- `milwaukee_wi: Dfa` (hot-summer humid continental, same as Chicago)
+- `boston_ma: Dfb` (warm-summer humid continental, same as Providence/Burlington)
+- `brooklyn_ny: Cfa` (humid subtropical, same as Philadelphia — correct zone)
+Previously all three got the `"?"` fallback = Cfa default weight 0.228.
+Milwaukee getting Dfa (weight=0.019) will downweight it in the midday ensemble vs Philadelphia.
+
+**B6 K-medoids N=1000 result (2026-06-11, seed=42, --skip-pretrain, old trunk):**
+
+| Sampling | N | morn Corr | mid Corr | eve Corr | sum_corr | vs ZS | note |
+|----------|---|-----------|----------|----------|----------|-------|------|
+| ZS (12-city) | 0 | 0.510 | 0.440 | 0.510 | **1.460** | — | old trunk (boston/brooklyn outlier-filtered) |
+| Random | 1000 | 0.304 | 0.394 | 0.385 | **1.083** | -0.377 | from B5 baseline |
+| FPS | 1000 | 0.107 | 0.170 | 0.273 | **0.550** | -0.910 | FAILED (convex hull extremes) |
+| K-medoids | 1000 | 0.226 | 0.349 | 0.374 | **0.948** | -0.512 | **worse than random** |
+| Hybrid ZS+K-medoids | 1000 | 0.510 | 0.349 | 0.374 | **1.233** | -0.227 | ZS morning + kmedoids mid/eve |
+
+**K-medoids N=1000 analysis:**
+- Better than FPS (0.948 vs 0.550) ✓ — cluster centers better than convex-hull extremes
+- **Worse than random N=1000** (0.948 vs 1.083) ✗ — unexpected
+- Possible cause: K-medoids cluster centers are "average" pixels that avoid extreme values;
+  regression head needs some coverage of the full target range (low-UHI parks + high-UHI asphalt)
+  to learn the correct slope. Random sampling naturally includes extremes that anchor the fit.
+- K-medoids samples the MODE of feature space; random samples the full distribution including tails
+- Sweet spot hypothesis: stratified sampling by trunk PCA bins would be optimal
+
+**Next**: Run K-medoids at N=3000 to see if the crossover vs random shifts.
+

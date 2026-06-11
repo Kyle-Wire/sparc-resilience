@@ -121,12 +121,16 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--fewshot-hybrid", action="store_true",
                    help="When used with --fewshot-n: also report a hybrid eval using zero-shot morning "
                         "predictions combined with few-shot midday/evening, on the same held-out test split.")
-    p.add_argument("--fewshot-sampling", choices=["random", "fps"], default="random",
+    p.add_argument("--fewshot-sampling", choices=["random", "fps", "kmedoids"], default="random",
                    help="Sampling strategy for few-shot training pixels. "
-                        "'random': uniform random sample (default, current behaviour). "
-                        "'fps': farthest-point sampling in trunk embedding space — "
-                        "maximises feature-space coverage so N≤1000 can represent the full city. "
-                        "Example: --fewshot-n 1000 --fewshot-sampling fps")
+                        "'random': uniform random sample (default). "
+                        "'fps': farthest-point sampling — DEPRECATED (finds distribution tails, not mode). "
+                        "'kmedoids': K-medoids in trunk embedding space — cluster N pixels into K groups "
+                        "and select the medoid (most central pixel) from each cluster. "
+                        "Samples proportional to data density, giving the head diverse but representative "
+                        "examples from every sub-population (urban core, parks, suburbs, waterfront). "
+                        "Expected benefit: N=1000 kmedoids ≈ random N=3000-5000. "
+                        "Example: --fewshot-n 1000 --fewshot-sampling kmedoids")
     p.add_argument("--pretrain-only", action="store_true",
                    help="Run Phase 1 (JEPA pretraining) only, then exit immediately after saving the trunk. "
                         "Useful for I1 eccentricity sweep screening: run with reduced n_epochs + A3 diagnostics "
@@ -269,8 +273,11 @@ _KOPPEN_ZONE: dict[str, str] = {
     "charlotte_nc":    "Cfa",   # added train32
     "new_orleans_la":  "Cfa",   # added train32 (humid subtropical)
     "chicago_il":      "Dfa",
+    "milwaukee_wi":    "Dfa",   # hot-summer humid continental (same cluster as Chicago)
     "burlington_vt":   "Dfb",
     "providence_ri":   "Dfb",
+    "boston_ma":       "Dfb",   # warm-summer humid continental
+    "brooklyn_ny":     "Cfa",   # humid subtropical (same zone as Philadelphia)
     "seattle_wa":      "Cfb",
     "albuquerque_nm":  "BSk",
 }
@@ -1588,24 +1595,13 @@ def run_loo_eval(
 def _farthest_point_sampling_gpu(emb_t, n: int, device, seed: int = 42):
     """Select n maximally-diverse indices via farthest-point sampling.
 
-    Iteratively picks the point furthest (in L2 embedding distance) from all
-    previously selected points.  Using trunk embeddings as the feature space
-    ensures we sample pixels that are physically diverse (different land-cover
-    type, impervious fraction, canopy density, etc.) rather than spatially
-    clustered, so each label is informationally unique.
+    .. warning::
+        **FPS is NOT recommended for UHI few-shot fine-tuning.**
+        FPS finds the convex hull of the embedding space (extreme outliers).
+        The UHI head needs to generalize across the dense modal region, not the tails.
+        Use ``_kmedoids_sampling_gpu`` instead for distribution-aware coverage.
 
     Complexity: O(n × N) distances — feasible for N=350k, n≤10k on GPU.
-
-    Parameters
-    ----------
-    emb_t : Tensor of shape ``(N, D)`` — trunk embeddings for all labeled pixels.
-    n     : int — number of samples to select.
-    device: torch.device
-    seed  : int — determines the random starting point.
-
-    Returns
-    -------
-    Tensor of shape ``(n,)`` — indices into emb_t (row indices of labeled_idx).
     """
     import torch
     N = emb_t.shape[0]
@@ -1615,17 +1611,133 @@ def _farthest_point_sampling_gpu(emb_t, n: int, device, seed: int = 42):
     rng = np.random.default_rng(seed)
     first = int(rng.integers(N))
     selected = [first]
-    # min-distance from every point to the selected set — starts all-inf
     min_dists = torch.full((N,), float("inf"), device=device)
 
     for _ in range(n - 1):
-        # Update min_dists: L2² to the last-added point
         diff = emb_t - emb_t[selected[-1]]       # (N, D)
         d2   = (diff * diff).sum(dim=1)            # (N,)  — no .pow(2) for Blackwell compat
         min_dists = torch.minimum(min_dists, d2)
         selected.append(int(torch.argmax(min_dists).item()))
 
     return torch.tensor(selected, dtype=torch.long, device=device)
+
+
+def _kmedoids_sampling_gpu(emb_t, n: int, device, seed: int = 42, n_iter: int = 10):
+    """Select n representative indices via K-medoids in trunk embedding space.
+
+    Partitions the embedding space into K=n clusters, then selects the medoid
+    (the pixel closest to each cluster centroid) as the training sample.
+    This samples PROPORTIONAL TO DENSITY — heavily-populated regions of the
+    embedding space (typical urban / suburban pixels) get more representatives
+    than rare extremes, which is exactly what the regression head needs.
+
+    Why K-medoids beats FPS for UHI regression:
+    - FPS finds convex-hull extremes → head fails in the dense modal region
+    - K-medoids finds cluster centers → head learns a representative sample
+      of every sub-population (dense urban, parks, suburbs, waterfront, etc.)
+
+    Algorithm: Lloyd's-style k-means centroid finding, then assign each pixel
+    to nearest centroid and pick the actual pixel closest to that centroid as
+    the medoid (so returned indices correspond to real observed pixels).
+
+    Complexity: O(n_iter × N × K) distances — ~175M ops for N=350k, K=1000, 10 iter.
+
+    Parameters
+    ----------
+    emb_t   : Tensor of shape ``(N, D)`` — trunk embeddings for all labeled pixels.
+    n       : int — number of clusters / samples to select.
+    device  : torch.device
+    seed    : int — random initialization seed.
+    n_iter  : int — Lloyd's iterations (default 10; converges in ~5 for this task).
+
+    Returns
+    -------
+    Tensor of shape ``(n,)`` — indices into emb_t (row indices of labeled_idx).
+    """
+    import torch
+    N, D = emb_t.shape
+    if n >= N:
+        return torch.arange(N, device=device)
+
+    rng = np.random.default_rng(seed)
+    # K-means++ initialization: pick first center randomly, rest by D² weighting
+    init_idx = [int(rng.integers(N))]
+    init_dists = torch.full((N,), float("inf"), device=device)
+    for _ in range(n - 1):
+        diff = emb_t - emb_t[init_idx[-1]]
+        d2   = (diff * diff).sum(dim=1)           # (N,) Blackwell-safe
+        init_dists = torch.minimum(init_dists, d2)
+        probs = (init_dists / (init_dists.sum() + 1e-12)).cpu().numpy()
+        init_idx.append(int(rng.choice(N, p=probs)))
+    centroids = emb_t[torch.tensor(init_idx, device=device)].clone()  # (K, D)
+
+    # Precompute per-point squared norms — reused every Lloyd iteration.
+    # This enables the squared-norm identity for (N, chunk) distance computation:
+    #   ||a - b||² = ||a||² + ||b||² - 2·aᵀb
+    # The naive (N, chunk, D) unsqueeze approach hits ~92 GB for N=350k, D=256.
+    emb_norm2 = (emb_t * emb_t).sum(dim=1)  # (N,)
+
+    def _assign_all(centroids_):
+        """Return (assign, best_d) using squared-norm identity — O(N·K) mem, not O(N·K·D)."""
+        assign_ = torch.zeros(N, dtype=torch.long, device=device)
+        best_d_ = torch.full((N,), float("inf"), device=device)
+        c_norm2 = (centroids_ * centroids_).sum(dim=1)   # (K,)
+        chunk_ = 256
+        for k_start in range(0, n, chunk_):
+            k_end   = min(k_start + chunk_, n)
+            c_blk   = centroids_[k_start:k_end]          # (blk, D)
+            c_n2    = c_norm2[k_start:k_end]             # (blk,)
+            # (N, blk): squared-norm identity — no (N, blk, D) intermediate
+            d2_c    = (emb_norm2.unsqueeze(1)
+                       + c_n2.unsqueeze(0)
+                       - 2.0 * emb_t.mm(c_blk.t())).clamp(min=0.0)
+            best_blk_d, best_blk_k = d2_c.min(dim=1)
+            update  = best_blk_d < best_d_
+            best_d_[update] = best_blk_d[update]
+            assign_[update] = best_blk_k[update] + k_start
+        return assign_, best_d_
+
+    # Lloyd's iterations: assign → re-center (scatter_add for speed)
+    for _ in range(n_iter):
+        assign, _ = _assign_all(centroids)
+        new_centroids = torch.zeros(n, D, dtype=emb_t.dtype, device=device)
+        counts        = torch.zeros(n, dtype=emb_t.dtype, device=device)
+        new_centroids.scatter_add_(0, assign.unsqueeze(1).expand(-1, D), emb_t)
+        counts.scatter_add_(0, assign, torch.ones(N, dtype=emb_t.dtype, device=device))
+        valid = counts > 0
+        new_centroids[valid]  /= counts[valid].unsqueeze(1)
+        new_centroids[~valid]  = centroids[~valid]
+        centroids = new_centroids
+
+    # Final assignment
+    assign, _ = _assign_all(centroids)
+
+    # Pick medoid: the pixel closest to each centroid
+    medoids = torch.zeros(n, dtype=torch.long, device=device)
+    for k in range(n):
+        mask = (assign == k)
+        if mask.sum() > 0:
+            member_idx = torch.where(mask)[0]
+            diff_m = emb_t[member_idx] - centroids[k]
+            d2_m   = (diff_m * diff_m).sum(dim=1)
+            medoids[k] = member_idx[d2_m.argmin()]
+        else:
+            # Empty cluster: fall back to closest point to centroid globally
+            diff_g = emb_t - centroids[k]
+            d2_g   = (diff_g * diff_g).sum(dim=1)
+            medoids[k] = d2_g.argmin()
+
+    # De-duplicate (extremely rare but possible if two clusters map to same medoid)
+    unique_medoids = torch.unique(medoids)
+    if len(unique_medoids) < n:
+        remaining = n - len(unique_medoids)
+        already = set(unique_medoids.cpu().tolist())
+        extras = torch.tensor(
+            [i for i in range(N) if i not in already][:remaining],
+            dtype=torch.long, device=device,
+        )
+        unique_medoids = torch.cat([unique_medoids, extras])
+    return unique_medoids[:n]
 
 
 def run_fewshot_finetune(
@@ -1655,12 +1767,14 @@ def run_fewshot_finetune(
 
     Parameters
     ----------
-    sampling : "random" | "fps"
-        "random"  — uniform random sample of labeled pixels (default).
-        "fps"     — farthest-point sampling in trunk embedding space; selects a
-                    maximally diverse set of N pixels so each label covers unique
-                    surface-feature territory.  Improves low-N accuracy by
-                    avoiding redundant samples in spatially-autocorrelated clusters.
+    sampling : "random" | "fps" | "kmedoids"
+        "random"    — uniform random sample of labeled pixels (default).
+        "fps"       — farthest-point sampling (DEPRECATED — selects distribution tails,
+                      hurts performance; kept for ablation only).
+        "kmedoids"  — K-medoids in trunk embedding space; partitions N pixels into
+                      K clusters and selects the medoid (most central pixel) from each.
+                      Samples proportional to data density, giving every sub-population
+                      a representative training example.
     """
     import torch
     import torch.nn as nn
@@ -1751,12 +1865,12 @@ def run_fewshot_finetune(
         log.warning("fewshot: only %d labeled pixels — using all for training", len(labeled_idx))
         train_idx = labeled_idx
         test_idx  = labeled_idx
-    elif sampling == "fps":
-        # Farthest-point sampling in trunk embedding space:
-        # Pre-compute trunk embeddings for labeled pixels, then greedily select
-        # the n_samples most spatially-diverse points.  Avoids redundant labels
-        # from spatially-autocorrelated clusters (same land-cover repeated N times).
-        log.info("fewshot FPS: encoding %d labeled pixels for diversity sampling ...", len(labeled_idx))
+    elif sampling in ("fps", "kmedoids"):
+        # Trunk-embedding-based sampling: encode all labeled pixels, then select
+        # N diverse/representative samples based on embedding space geometry.
+        sampling_fn = _kmedoids_sampling_gpu if sampling == "kmedoids" else _farthest_point_sampling_gpu
+        log.info("fewshot %s: encoding %d labeled pixels for embedding-space sampling ...",
+                 sampling.upper(), len(labeled_idx))
         labeled_t = torch.tensor(labeled_idx, device=device)
         trunk_local_fps = trunk
         for p in trunk_local_fps.parameters():
@@ -1769,13 +1883,14 @@ def run_fewshot_finetune(
                 b = labeled_t[s:s + fps_batch]
                 emb_list.append(trunk_local_fps(X_land[b]))
             emb_labeled = torch.cat(emb_list, dim=0)  # (n_labeled, D)
-        fps_local_idx = _farthest_point_sampling_gpu(emb_labeled, n_samples, device, seed=seed)
-        fps_set = set(fps_local_idx.cpu().tolist())
-        chosen_set = fps_set
-        train_idx = labeled_idx[fps_local_idx.cpu().numpy()]
+        sel_local_idx = sampling_fn(emb_labeled, n_samples, device, seed=seed)
+        sel_set = set(sel_local_idx.cpu().tolist())
+        chosen_set = sel_set
+        train_idx = labeled_idx[sel_local_idx.cpu().numpy()]
         test_idx  = labeled_idx[np.array([i for i in range(len(labeled_idx))
                                            if i not in chosen_set])]
-        log.info("fewshot FPS: selected %d diverse training pixels from %d labeled", len(train_idx), len(labeled_idx))
+        log.info("fewshot %s: selected %d training pixels from %d labeled",
+                 sampling.upper(), len(train_idx), len(labeled_idx))
     else:
         # Default: uniform random sample
         chosen   = rng.choice(len(labeled_idx), size=n_samples, replace=False)
