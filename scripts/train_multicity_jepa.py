@@ -738,21 +738,21 @@ def run_jepa_pretraining(
             batch_iter = _per_city_batches(batches_per_epoch)
 
         for x_batch, c_batch, batch_idx in batch_iter:
-            # Compute spatial mask on CPU to avoid Blackwell (sm_120) kernel issues
-            # with simple scalar ops (sqrt/clamp) in spatial_patch_mask.
-            # The mask is (B,) booleans — CPU compute is negligible, device transfer is ~2KB.
-            c_cpu = c_batch.cpu()
+            # spatial_patch_mask / anisotropic_patch_mask are now fully
+            # vectorized and run directly on whatever device c_batch is on
+            # (GPU or CPU).  The old CPU round-trip was a Blackwell (sm_120)
+            # workaround that is no longer needed after the vectorization fix.
             if pi_eccentricity_a_over_b is not None and pi_eccentricity_a_over_b > 1.0:
                 mask = anisotropic_patch_mask(
-                    c_cpu, mask_ratio=mask_ratio, n_patches=n_patches,
+                    c_batch, mask_ratio=mask_ratio, n_patches=n_patches,
                     eccentricity=pi_eccentricity_a_over_b, theta=0.0,
                     min_patch_radius=min_patch_radius_normed,
-                ).to(device)
+                )
             else:
                 mask = spatial_patch_mask(
-                    c_cpu, mask_ratio=mask_ratio, n_patches=n_patches,
+                    c_batch, mask_ratio=mask_ratio, n_patches=n_patches,
                     min_patch_radius=min_patch_radius_normed,
-                ).to(device)
+                )
 
             # Context (visible) = ~masked; target (hidden) = masked
             x_context = x_batch.clone()

@@ -304,6 +304,9 @@ def spatial_patch_mask(
     I-JEPA intuition that the model must predict a spatially coherent
     neighbourhood, not just reconstruct isolated missing features.
 
+    Fully vectorized: avoids Python loops over N points so it runs fast
+    on both CPU and GPU (including Blackwell sm_120).
+
     Parameters
     ----------
     coords : (N, 2) float tensor
@@ -313,7 +316,8 @@ def spatial_patch_mask(
         derived so that (on average) ``mask_ratio × N`` points fall inside
         the union of the ``n_patches`` disks.
     n_patches : int
-        Number of non-overlapping (best-effort) disk centres to sample.
+        Number of disk centres to sample (best-effort non-overlapping via
+        a small candidate pool; at most ``n_patches * 8`` Python iterations).
     min_patch_radius : float or None
         Minimum radius.  If None, derived from the coordinate range so that
         each patch covers approximately ``mask_ratio / n_patches`` of the
@@ -330,55 +334,48 @@ def spatial_patch_mask(
     device = coords.device
 
     if N < 4:
-        # Too few points — fall back to random point masking
         return torch.rand(N, device=device) < mask_ratio
 
-    # Coordinate range
-    coord_min = coords.min(dim=0).values   # (2,)
-    coord_max = coords.max(dim=0).values   # (2,)
-    span = (coord_max - coord_min).clamp(min=1e-6)  # (2,)
+    coord_min = coords.min(dim=0).values
+    coord_max = coords.max(dim=0).values
+    span = (coord_max - coord_min).clamp(min=1e-6)
 
     if min_patch_radius is None:
-        # Each patch should cover mask_ratio/n_patches of the bounding box
-        # Area of bbox = span[0]*span[1]; target area per patch = (mask_ratio/n_patches)*bbox_area
-        # π*r² = target_area  →  r = sqrt(target_area / π)
         bbox_area = span[0] * span[1]
         target_area = (mask_ratio / max(n_patches, 1)) * bbox_area
         radius = float((target_area / 3.14159).sqrt().clamp(min=span.min() * 0.05))
     else:
         radius = float(min_patch_radius)
 
-    masked = torch.zeros(N, dtype=torch.bool, device=device)
-    centres_used: list[torch.Tensor] = []
+    # Draw a small candidate pool and greedily pick non-overlapping centres.
+    # Pool size = n_patches * 8 caps Python iterations at 32 (vs up to N=4096
+    # in the old sequential scan) while preserving spatial diversity.
+    pool_size = min(n_patches * 8, N)
+    pool_idx  = torch.randperm(N, device=device)[:pool_size]
+    pool      = coords[pool_idx]          # (pool_size, 2)
 
-    rng_idx = torch.randperm(N, device=device)
-
-    for candidate in rng_idx:
-        if len(centres_used) >= n_patches:
+    selected: list[torch.Tensor] = []
+    for i in range(pool_size):
+        if len(selected) >= n_patches:
             break
-        centre = coords[candidate]  # (2,)
+        c = pool[i]
+        if not any(float((c - s).norm()) < radius * 0.5 for s in selected):
+            selected.append(c)
 
-        # Soft non-overlap: skip if too close to an existing centre
-        too_close = any(
-            float((centre - c).norm()) < radius * 0.5
-            for c in centres_used
-        )
-        if too_close:
-            continue
+    if not selected:
+        return torch.rand(N, device=device) < mask_ratio
 
-        dist = (coords - centre).norm(dim=1)  # (N,)
-        masked |= dist <= radius
-        centres_used.append(centre)
+    # Vectorized distance: (N, 1, 2) - (1, K, 2) → (N, K) distances
+    centres = torch.stack(selected)                                    # (K, 2)
+    dists   = (coords.unsqueeze(1) - centres.unsqueeze(0)).norm(dim=2)  # (N, K)
+    masked  = (dists <= radius).any(dim=1)                             # (N,)
 
-    # Safety: if mask is empty or coverage is way off, supplement with random
     n_masked = int(masked.sum())
     target_n = int(mask_ratio * N)
     if n_masked == 0:
-        # No patches landed — full random fallback
         return torch.rand(N, device=device) < mask_ratio
     if n_masked < target_n // 2:
-        # Patches covered very little — supplement randomly
-        extra = torch.rand(N, device=device) < (mask_ratio - n_masked / N)
+        extra  = torch.rand(N, device=device) < (mask_ratio - n_masked / N)
         masked = masked | extra
 
     return masked
@@ -472,33 +469,33 @@ def anisotropic_patch_mask(
     cos_t = math.cos(theta)
     sin_t = math.sin(theta)
 
-    masked = torch.zeros(N, dtype=torch.bool, device=device)
-    centres_used: list[torch.Tensor] = []
-    rng_idx = torch.randperm(N, device=device)
+    # Draw a small candidate pool and greedily pick non-overlapping centres.
+    # Pool size caps Python iterations at n_patches*8 (same strategy as
+    # spatial_patch_mask), enabling GPU-tensor centre selection.
+    pool_size = min(n_patches * 8, N)
+    pool_idx  = torch.randperm(N, device=device)[:pool_size]
+    pool      = coords[pool_idx]          # (pool_size, 2)
 
-    for candidate in rng_idx:
-        if len(centres_used) >= n_patches:
+    selected: list[torch.Tensor] = []
+    for i in range(pool_size):
+        if len(selected) >= n_patches:
             break
-        centre = coords[candidate]
+        c = pool[i]
+        if not any(float((c - s).norm()) < semi_major * 0.5 for s in selected):
+            selected.append(c)
 
-        # Soft non-overlap check (same as isotropic path)
-        too_close = any(
-            float((centre - c).norm()) < semi_major * 0.5
-            for c in centres_used
-        )
-        if too_close:
-            continue
+    if not selected:
+        return torch.rand(N, device=device) < mask_ratio
 
-        # Rotate displacement by -theta, then scale by semi-axes
-        dx = coords[:, 0] - centre[0]      # (N,)
-        dy = coords[:, 1] - centre[1]      # (N,)
-        # Rotate: u = cos*dx + sin*dy,  v = -sin*dx + cos*dy
-        u = cos_t * dx + sin_t * dy        # along major axis
-        v = -sin_t * dx + cos_t * dy       # along minor axis
-        # Point is inside ellipse when (u/a)^2 + (v/b)^2 <= 1
-        inside = (u / semi_major).pow(2) + (v / semi_minor).pow(2) <= 1.0
-        masked |= inside
-        centres_used.append(centre)
+    # Vectorized ellipse test for all selected centres at once.
+    # centres: (K, 2);  coords: (N, 2)
+    centres = torch.stack(selected)                                    # (K, 2)
+    dx = coords[:, 0].unsqueeze(1) - centres[:, 0].unsqueeze(0)       # (N, K)
+    dy = coords[:, 1].unsqueeze(1) - centres[:, 1].unsqueeze(0)       # (N, K)
+    u  =  cos_t * dx + sin_t * dy                                      # (N, K)
+    v  = -sin_t * dx + cos_t * dy                                      # (N, K)
+    inside = (u / semi_major).pow(2) + (v / semi_minor).pow(2) <= 1.0  # (N, K)
+    masked = inside.any(dim=1)                                          # (N,)
 
     # Safety fallback (mirrors spatial_patch_mask)
     n_masked = int(masked.sum())
