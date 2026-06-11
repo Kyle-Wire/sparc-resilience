@@ -648,7 +648,7 @@ def run_jepa_pretraining(
         dataset = TensorDataset(X_t, C_t, idx_t)
         loader  = DataLoader(
             dataset, batch_size=batch_size, shuffle=True, drop_last=True,
-            pin_memory=(device.type == "cpu"),
+            pin_memory=(device.type == "cuda"),
             num_workers=0,
         )
         batches_per_epoch = len(loader)
