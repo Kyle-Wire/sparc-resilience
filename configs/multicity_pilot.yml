@@ -164,11 +164,12 @@ multicity:
     range_scaled_radius: false   # I2v3 REVERTED: 6km radius too large per-city (bbox-derived radius is better)
     # I1: use elliptical patches shaped by eccentricity (B2 verdict: V-DIR-UNRELIABLE
     #     so theta=0, no rotation -- uses axis-ratio magnitude only).
-    anisotropic_mask: false      # I1 REVERTED: ecc=1.358 destabilizes midday (corr=-0.041)
+    anisotropic_mask: false      # I1 EXHAUSTED: full sweep 1.05-1.20 shows proxy improves but
+                                 # LOO midday regresses at every eccentricity (s42: 1.05->1.470,
+                                 # vs A2-locked baseline 1.513). A3 proxy != LOO correlation.
     # I1-sweep: override eccentricity directly (bypasses Stage 0 median=1.358).
-    # Set anisotropic_mask: true and eccentricity_override to desired value.
-    # Sweep candidates: 1.05 (barely elliptical) / 1.10 / 1.15 / 1.20
-    # Set to null to use Stage 0 median (default behavior).
+    # SWEEP COMPLETE -- winner was ecc=1.15 by proxy (0.4112) but LOO sum=1.470 < baseline 1.492.
+    # Set to null to use Stage 0 median (not recommended -- ecc=1.358 is catastrophic).
     eccentricity_override: null
     # B6: sample each batch from a single city only (instead of shuffled multi-city).
     #     Makes spatial masking physically meaningful (no cross-city coord overlap).

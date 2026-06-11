@@ -162,23 +162,35 @@ Midday: w=0.05=0.432 vs w=0.1=0.383 (+0.049). Config energy_balance_weight: 0.05
 
 ---
 
-## I1-sweep -- Anisotropic mask eccentricity sweep (PLANNED)
+## I1-sweep -- Anisotropic mask eccentricity sweep (EXHAUSTED 2026-06-11)
 
 > Prior result: I1 at ecc=1.358 (median from B2) caused midday=-0.041 (catastrophic). The direction
 > signal is unreliable (60% V-DIR-UNRELIABLE per B2 audit) so theta=0; we test eccentricity magnitude only.
 > New approach: sweep lighter values to find benefit without midday collapse.
 > New baseline: A2-locked mean=1.492. Keep threshold: mean + 2*sigma_new.
-> Run protocol: single seed s42, accept winner only if > new baseline + 2*sigma.
 
-**Sweep plan** (s42 per trial, 3-seed confirmation only if >baseline+2sigma):
-- I1-a: ecc=1.05 (barely elliptical)
-- I1-b: ecc=1.10 (gentle)
-- I1-c: ecc=1.15 (original threshold from B2 audit)
-- I1-d: ecc=1.20 (moderate)
+**Proxy screening** (--pretrain-only --screen-epochs 75, scored via A3 weighted R²):
 
-| date | ecc | morning | midday | evening | sum_corr | note |
-|------|-----|---------|--------|---------|----------|------|
-| -- | 1.05 | -- | -- | -- | -- | pending |
-| -- | 1.10 | -- | -- | -- | -- | pending |
-| -- | 1.15 | -- | -- | -- | -- | pending |
-| -- | 1.20 | -- | -- | -- | -- | pending |
+| ecc | proxy score | pct_impervious R² | trend |
+|-----|-------------|-------------------|-------|
+| baseline (no mask) | 0.3653 | 0.455 | — |
+| 1.05 | 0.3851 | 0.496 | ↑ |
+| 1.10 | 0.3969 | 0.510 | ↑ |
+| **1.15** | **0.4112** | **0.515** | ↑ peak |
+| 1.20 | 0.3867 | 0.519 | ↓ (ndvi/ndbi collapse) |
+
+**Full 150-epoch run on winner (ecc=1.15, seed=42):**
+
+| date | ecc | morning | midday | evening | sum_corr | vs-baseline | decision |
+|------|-----|---------|--------|---------|----------|-------------|----------|
+| 2026-06-11 | 1.15 (proxy winner) | 0.522 | **0.422** | 0.526 | **1.470** | **-0.022 below** | **REVERT** |
+
+**Verdict: I1 EXHAUSTED.** A3 proxy score improved monotonically up to ecc=1.15 but LOO midday
+regressed vs A2-locked baseline (0.422 vs 0.432). The proxy measures spatial structure captured by the
+trunk, not the temporal discriminability of the midday thermal peak — these are different objectives.
+Config reverted to: `anisotropic_mask: false`, `eccentricity_override: null`.
+
+**Root cause hypothesis**: Elliptical masking forces the encoder to learn directional spatial gradients
+(e.g. urban canyon orientation), but midday UHI is governed by surface energy absorption which is
+isotropic at 30m scale. Circular masking preserves the albedo/impervious gradient structure that the
+A2 energy-balance head relies on.
