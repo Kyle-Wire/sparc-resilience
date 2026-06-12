@@ -17,6 +17,7 @@ multicity:
     - city: "Providence, RI"
       city_slug: "providence_ri"
       holdout: false
+      phase1_only: true     # 2019 NIHHIS; CAPA AAT data absent (tdsy7 folder not matched)
       bbox: [-71.50, 41.75, -71.35, 41.90]
       utm_epsg: "EPSG:32619"
 
@@ -86,12 +87,14 @@ multicity:
     - city: "Wilmington, DE"
       city_slug: "wilmington_de"
       holdout: false
+      phase1_only: true     # CAPA AAT data absent from parquet (yef5w node CAPA download failed)
       bbox: [-75.61, 39.69, -75.51, 39.78]
       utm_epsg: "EPSG:32618"   # Cfa, dedicated OSF node yef5w; 30mi from Philadelphia
 
     - city: "Baltimore, MD"
       city_slug: "baltimore_md"
       holdout: false
+      phase1_only: true     # 2019 NIHHIS; CAPA AAT data absent (tdsy7 folder not matched)
       bbox: [-76.72, 39.20, -76.53, 39.37]
       utm_epsg: "EPSG:32618"
       campaign_date_override: "2019-07-20"   # 2019 NIHHIS campaign; ERA5-matched
@@ -101,6 +104,9 @@ multicity:
       holdout: false
       bbox: [-80.99, 35.10, -80.72, 35.35]
       utm_epsg: "EPSG:32617"
+      campaign_date_override: "2024-07-09"   # Jul 2024 campaign; OSF upload date was 2024-08-06
+                                              # Aug 6: ERA5 midday=80F but CAPA=94.8F (impossible)
+                                              # Jul 9: ERA5 morning=73F/midday=90F -> UHI=3.7/4.8F ✓
 
     - city: "New Orleans, LA"
       city_slug: "new_orleans_la"
@@ -313,11 +319,11 @@ multicity:
 
     # ── LOO ensemble per-window exclusions ───────────────────────────────
     # Explicitly exclude specific city heads from LOO ensemble windows.
-    # Charlotte's evening head (69.84°F mean) drags ~9°F below the cluster
-    # (Raleigh 78.5, Atlanta 83.0, Seattle 87.6) hurting spatial correlation.
-    # Charlotte still participates in morning (all-time best +0.493) and midday.
+    # NOTE: Charlotte exclusion was needed when charlotte_nc used wrong campaign date
+    # (2024-08-06 upload vs 2024-07-09 actual). After date fix + re-collection, its
+    # evening head calibration should normalize. Clear this after re-collecting.
     loo_exclude_per_window:
-      evening: [charlotte_nc]
+      evening: []
 
   # ── Continual learning (EWC) ─────────────────────────────────────────
   continual_learning:
