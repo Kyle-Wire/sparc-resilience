@@ -125,6 +125,18 @@ CAPA_CATALOG: dict[str, dict] = {
         "osf_node": "3xvmg", "folder_hint": "Petersburg",
         "utm_epsg": "EPSG:32618", "state": "VA",
     },
+    "Richmond, VA": {
+        "osf_node": "3xvmg", "folder_hint": "Richmond",
+        "utm_epsg": "EPSG:32618", "year": 2021, "state": "VA",
+    },
+    "Virginia Beach, VA": {
+        "osf_node": "3xvmg", "folder_hint": "Virginia Beach",
+        "utm_epsg": "EPSG:32618", "year": 2021, "state": "VA",
+    },
+    "Salem, VA": {
+        "osf_node": "3xvmg", "folder_hint": "Salem",
+        "utm_epsg": "EPSG:32617", "year": 2021, "state": "VA",
+    },
     "Raleigh, NC": {
         "osf_node": "rwjnx", "folder_hint": None,
         "utm_epsg": "EPSG:32617", "state": "NC",
@@ -264,7 +276,7 @@ CAPA_CATALOG: dict[str, dict] = {
         "utm_epsg": "EPSG:32612", "state": "AZ",
     },
     "Las Vegas, NV": {
-        "osf_node": "ktr56", "folder_hint": "Las Vegas",
+        "osf_node": "xsvjm", "folder_hint": None,   # xsvjm = Clark County NV (ktr56 is SF only)
         "utm_epsg": "EPSG:32611", "state": "NV",
     },
     "Boise, ID": {

@@ -165,53 +165,207 @@ multicity:
     - city: "Columbia, SC"
       city_slug: "columbia_sc"
       holdout: false
-      phase1_only: true     # OSF upload date 2022-10-17 — actual campaign probably Jul/Aug 2022; midday UHI +13°F suspicious
       bbox: [-81.20, 33.90, -80.86, 34.14]
       utm_epsg: "EPSG:32617"
+      campaign_date_override: "2022-08-20"   # OSF upload date was 2022-10-17; re-collected Aug 20 2022 ✓
+                                              # Verified: UHI morn=+4.2°F, mid=+6.9°F ✓
 
     - city: "Charleston, SC"
       city_slug: "charleston_sc"
       holdout: false
-      phase1_only: true     # OSF upload date 2021-11-18 (winter) — actual campaign July/Aug 2021; UHI +27°F confirms bad date
       bbox: [-80.05, 32.72, -79.85, 32.92]
       utm_epsg: "EPSG:32617"
+      campaign_date_override: "2021-08-10"   # OSF upload date was 2021-11-18; re-collected Aug 10 2021 ✓
+                                              # Verified: UHI morn=+4.8°F, mid=+2.2°F ✓
 
     - city: "Oklahoma City, OK"
       city_slug: "oklahoma_city_ok"
       holdout: false
-      phase1_only: true     # OSF upload date 2023-10-16 — actual campaign probably Jul/Aug 2023; pending date verification
       bbox: [-97.70, 35.32, -97.34, 35.58]
       utm_epsg: "EPSG:32614"
+      campaign_date_override: "2023-07-08"   # OSF upload date was 2023-10-16; re-collected Jul 8 2023 ✓
+                                              # Verified: UHI morn=+12.0°F, mid=+3.0°F ✓
 
     - city: "Salt Lake City, UT"
       city_slug: "salt_lake_city_ut"
       holdout: false
       bbox: [-112.10, 40.62, -111.82, 40.82]
       utm_epsg: "EPSG:32612"
+      campaign_date_override: "2023-06-25"   # OSF upload date was 2023-09-19; re-collected Jun 25 2023 ✓
+                                              # Verified: UHI morn=+8.0°F, mid=+7.9°F ✓ (symmetric, compact mountain city)
 
     - city: "Boulder, CO"
       city_slug: "boulder_co"
       holdout: false
+      phase1_only: true     # ERA5 elevation bias: Rocky Mountain foothills in 0.25° grid → UHI +15°F artifact
       bbox: [-105.38, 39.94, -105.10, 40.12]
       utm_epsg: "EPSG:32613"
 
     - city: "Portland, OR"
       city_slug: "portland_or"
       holdout: false
+      phase1_only: true     # 2019 NIHHIS; CAPA AAT data absent (all NaN, same tdsy7 format mismatch as NY/Louisville/KC)
       bbox: [-122.82, 45.44, -122.52, 45.68]
       utm_epsg: "EPSG:32610"
 
     - city: "Las Vegas, NV"
       city_slug: "las_vegas_nv"
       holdout: false
+      phase1_only: true     # 2022 campaign (xsvjm Clark County NV); OSF upload 2022-10-24 → needs ERA5 date forensics
       bbox: [-115.32, 36.04, -115.04, 36.26]
       utm_epsg: "EPSG:32611"
+      campaign_date_override: "2022-08-24"   # estimated: ~2 months before Oct 24 upload; verify with ERA5
+                                              # NOTE: previous failure was wrong catalog node (ktr56=SF only); now uses xsvjm
 
     - city: "San Diego, CA"
       city_slug: "san_diego_ca"
       holdout: false
       bbox: [-117.28, 32.64, -117.04, 32.84]
       utm_epsg: "EPSG:32611"
+      campaign_date_override: "2021-08-07"   # OSF upload date was 2021-12-07; re-collected Aug 7 2021 ✓
+                                              # Verified: UHI morn=-0.4°F, mid=+0.6°F ✓ (near-zero — coastal marine layer city)
+
+    # ── Mid-Atlantic / Northeast expansion ───────────────────────────────────
+    - city: "Brockton, MA"
+      city_slug: "brockton_ma"
+      holdout: false
+      phase1_only: true     # 2023 campaign (rk75w); OSF upload 2023-09-28 → needs ERA5 date forensics
+      bbox: [-71.12, 42.04, -70.96, 42.14]
+      utm_epsg: "EPSG:32619"
+      campaign_date_override: "2023-07-28"   # estimated: ~2 months before Sep 28 upload; verify with ERA5
+
+    - city: "Scranton, PA"
+      city_slug: "scranton_pa"
+      holdout: false
+      phase1_only: true     # 2023 campaign (8cnq4); OSF upload 2023-09-11 → needs ERA5 date forensics
+      bbox: [-75.77, 41.38, -75.57, 41.50]
+      utm_epsg: "EPSG:32618"
+      campaign_date_override: "2023-07-11"   # estimated: ~2 months before Sep 11 upload; verify with ERA5
+
+    - city: "Manhattan, NY"
+      city_slug: "manhattan_ny"
+      holdout: false
+      phase1_only: true     # 2021 campaign (j6eqr); OSF upload 2021-11-05 → needs ERA5 date forensics
+      bbox: [-74.02, 40.70, -73.91, 40.88]
+      utm_epsg: "EPSG:32618"
+      campaign_date_override: "2021-08-05"   # estimated: ~3 months before Nov 5 upload; verify with ERA5
+
+    - city: "Bronx, NY"
+      city_slug: "bronx_ny"
+      holdout: false
+      phase1_only: true     # 2021 campaign (j6eqr, same rasters as Manhattan); needs ERA5 date forensics
+      bbox: [-73.95, 40.78, -73.75, 40.91]
+      utm_epsg: "EPSG:32618"
+      campaign_date_override: "2021-08-05"   # same campaign date as Manhattan; verify with ERA5
+
+    - city: "Jersey City, NJ"
+      city_slug: "jersey_city_nj"
+      holdout: false
+      phase1_only: true     # 2021 campaign (6rwbg); OSF upload 2021-10-13 → needs ERA5 date forensics
+      bbox: [-74.13, 40.67, -74.02, 40.76]
+      utm_epsg: "EPSG:32618"
+      campaign_date_override: "2021-08-13"   # estimated: ~2 months before Oct 13 upload; verify with ERA5
+
+    - city: "Newark, NJ"
+      city_slug: "newark_nj"
+      holdout: false
+      phase1_only: true     # 2021 campaign (6rwbg, same rasters as Jersey City); needs ERA5 date forensics
+      bbox: [-74.26, 40.69, -74.10, 40.78]
+      utm_epsg: "EPSG:32618"
+      campaign_date_override: "2021-08-13"   # same campaign date as Jersey City; verify with ERA5
+
+    # ── Virginia / South Atlantic expansion ──────────────────────────────────
+    - city: "Arlington, VA"
+      city_slug: "arlington_va"
+      holdout: false
+      phase1_only: true     # 2021 campaign (3xvmg/Arlington); OSF upload 2021-10-29 → needs ERA5 date forensics
+      bbox: [-77.17, 38.83, -77.03, 38.93]
+      utm_epsg: "EPSG:32618"
+      campaign_date_override: "2021-08-29"   # estimated: ~2 months before Oct 29 upload; verify with ERA5
+
+    - city: "Richmond, VA"
+      city_slug: "richmond_va"
+      holdout: false
+      phase1_only: true     # 2021 campaign (3xvmg/Richmond); OSF upload 2021-11-01 → needs ERA5 date forensics
+      bbox: [-77.60, 37.44, -77.30, 37.62]
+      utm_epsg: "EPSG:32618"
+      campaign_date_override: "2021-08-01"   # estimated: ~3 months before Nov 1 upload; verify with ERA5
+
+    - city: "Virginia Beach, VA"
+      city_slug: "virginia_beach_va"
+      holdout: false
+      phase1_only: true     # 2021 campaign (3xvmg/Virginia Beach); OSF upload 2021-10-29 → needs ERA5 date forensics
+      bbox: [-76.15, 36.72, -75.87, 36.98]
+      utm_epsg: "EPSG:32618"
+      campaign_date_override: "2021-08-29"   # estimated: ~2 months before Oct 29 upload; verify with ERA5
+
+    # ── Midwest expansion ────────────────────────────────────────────────────
+    - city: "Kansas City, KS"
+      city_slug: "kansas_city_ks"
+      holdout: false
+      phase1_only: true     # 2023 campaign (hxyrv, Johnson & Wyandotte Counties); upload 2023-10-15 → needs ERA5
+      bbox: [-95.10, 38.82, -94.52, 39.18]
+      utm_epsg: "EPSG:32615"
+      campaign_date_override: "2023-07-15"   # estimated: ~3 months before Oct 15 upload; verify with ERA5
+
+    - city: "Omaha, NE"
+      city_slug: "omaha_ne"
+      holdout: false
+      phase1_only: true     # 2022 campaign (z7xw5); OSF upload 2022-09-20 → needs ERA5 date forensics
+      bbox: [-96.25, 41.18, -95.84, 41.40]
+      utm_epsg: "EPSG:32614"
+      campaign_date_override: "2022-07-20"   # estimated: ~2 months before Sep 20 upload; verify with ERA5
+
+    - city: "Columbia, MO"
+      city_slug: "columbia_mo"
+      holdout: false
+      phase1_only: true     # 2022 campaign (ucmde); OSF upload 2022-10-04 → needs ERA5 date forensics
+      bbox: [-92.44, 38.88, -92.22, 39.04]
+      utm_epsg: "EPSG:32615"
+      campaign_date_override: "2022-07-04"   # estimated: ~3 months before Oct 4 upload; verify with ERA5
+
+    - city: "Iowa City, IA"
+      city_slug: "iowa_city_ia"
+      holdout: false
+      phase1_only: true     # 2023 campaign (rbd3q, Iowa City+Cedar Rapids combined rasters); upload 2023-09-22
+      bbox: [-91.70, 41.61, -91.47, 41.75]
+      utm_epsg: "EPSG:32615"
+      campaign_date_override: "2023-08-22"   # estimated: ~1 month before Sep 22 upload; verify with ERA5
+
+    - city: "Cedar Rapids, IA"
+      city_slug: "cedar_rapids_ia"
+      holdout: false
+      phase1_only: true     # 2023 campaign (rbd3q, same rasters as Iowa City); upload 2023-09-22
+      bbox: [-91.79, 41.88, -91.55, 42.07]
+      utm_epsg: "EPSG:32615"
+      campaign_date_override: "2023-08-22"   # same campaign date as Iowa City; verify with ERA5
+
+    # ── Southeast / Appalachian expansion ────────────────────────────────────
+    - city: "Asheville, NC"
+      city_slug: "asheville_nc"
+      holdout: false
+      phase1_only: true     # 2023 campaign (mtxy5); OSF upload 2023-09-11 → needs ERA5 date forensics
+      bbox: [-82.65, 35.52, -82.46, 35.65]  # ~2100ft elevation; watch for ERA5 elevation bias
+      utm_epsg: "EPSG:32617"
+      campaign_date_override: "2023-07-11"   # estimated: ~2 months before Sep 11 upload; verify with ERA5
+
+    # ── Mountain West expansion ──────────────────────────────────────────────
+    - city: "Las Cruces, NM"
+      city_slug: "las_cruces_nm"
+      holdout: false
+      phase1_only: true     # 2020 campaign (zd5mb, "All Data" format); OSF upload 2020-09-15 → needs ERA5 date forensics
+      bbox: [-106.90, 32.27, -106.62, 32.44]
+      utm_epsg: "EPSG:32613"
+      campaign_date_override: "2020-08-15"   # estimated: ~1 month before Sep 15 upload; verify with ERA5
+
+    # ── Pacific expansion ────────────────────────────────────────────────────
+    - city: "San Francisco, CA"
+      city_slug: "san_francisco_ca"
+      holdout: false
+      phase1_only: true     # 2022 campaign (ktr56); OSF upload 2022-11-03 → needs ERA5 date forensics
+      bbox: [-122.52, 37.70, -122.33, 37.84]
+      utm_epsg: "EPSG:32610"
+      campaign_date_override: "2022-08-03"   # estimated: ~3 months before Nov 3 upload; verify with ERA5
 
   # ── Feature / label columns ─────────────────────────────────────────────
   # Edit here to add/drop variables. No code changes needed.
