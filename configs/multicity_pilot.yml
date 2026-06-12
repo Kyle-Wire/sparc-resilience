@@ -154,6 +154,7 @@ multicity:
       holdout: false
       bbox: [-81.80, 30.14, -81.44, 30.50]
       utm_epsg: "EPSG:32617"
+      campaign_date_override: "2022-07-25"   # filename rasters_chw_jacksonville_072522.zip confirmed
 
     - city: "Austin, TX"
       city_slug: "austin_tx"
@@ -164,18 +165,21 @@ multicity:
     - city: "Columbia, SC"
       city_slug: "columbia_sc"
       holdout: false
+      phase1_only: true     # OSF upload date 2022-10-17 — actual campaign probably Jul/Aug 2022; midday UHI +13°F suspicious
       bbox: [-81.20, 33.90, -80.86, 34.14]
       utm_epsg: "EPSG:32617"
 
     - city: "Charleston, SC"
       city_slug: "charleston_sc"
       holdout: false
+      phase1_only: true     # OSF upload date 2021-11-18 (winter) — actual campaign July/Aug 2021; UHI +27°F confirms bad date
       bbox: [-80.05, 32.72, -79.85, 32.92]
       utm_epsg: "EPSG:32617"
 
     - city: "Oklahoma City, OK"
       city_slug: "oklahoma_city_ok"
       holdout: false
+      phase1_only: true     # OSF upload date 2023-10-16 — actual campaign probably Jul/Aug 2023; pending date verification
       bbox: [-97.70, 35.32, -97.34, 35.58]
       utm_epsg: "EPSG:32614"
 

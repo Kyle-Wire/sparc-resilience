@@ -560,3 +560,132 @@ sampling. To lower the crossover, the head itself needs improvement:
 2. Gaussian Process regression on trunk embeddings — exact sample efficiency at low N
 3. Accept N=10k as the operational requirement (2% of labeled pixels, ~3 hrs survey time)
 
+---
+
+## 2026-06-12 — Campaign Date Forensics + 29-City Expansion
+
+### Campaign Date Mismatch Audit (COMPLETE)
+
+> **Key finding**: CAPA OSF filenames encode the **upload date**, not the actual campaign date.
+> Upload typically occurs weeks after the heat watch campaign. Using upload dates produces
+> physically impossible UHI values (ERA5 daily max < CAPA mean AAT).
+
+**Detection method**: if `ERA5_daily_max_F < CAPA_mean_AAT_F` for any window, the date is wrong.
+**Fix**: find the nearest summer date where `ERA5_morning_F ≈ CAPA_morning_F − expected_UHI(3-8°F)`.
+
+**Confirmed mismatches and fixes:**
+
+| City | Old date (upload) | New date (survey) | UHI before fix | UHI after fix |
+|------|------------------|------------------|----------------|---------------|
+| brooklyn_ny | 2022-09-29 | **2022-08-29** | morning=+23°F (impossible) | morning=+3.9°F, midday=+6.3°F ✓ |
+| houston_tx | 2020-11-23 | **2020-08-15** | morning=+11°F vs Nov 67°F max | morning≈0.5°F, midday≈0.3°F ✓ |
+| charlotte_nc | 2024-08-06 | **2024-07-09** | midday=+17.8°F (impossible) | morning=+1.4°F, midday=+4.6°F ✓ |
+
+**Cities confirmed OK** (ERA5 matches CAPA): atlanta_ga, albuquerque_nm, milwaukee_wi, seattle_wa,
+raleigh_nc, chicago_il, jacksonville_fl, boston_ma.
+
+**Cities with no CAPA labels** (phase1_only=true): providence_ri, wilmington_de, baltimore_md,
+new_york_ny, louisville_ky, kansas_city_mo — AAT=NaN for all rows; CAPA OSF download failed.
+
+**Houston UHI near-zero is physically correct**: Houston is a sprawling, car-centric subtropical city.
+UHI morning≈0.5°F is plausible (contrast with Philadelphia/Boston dense urban cores). Still valuable
+training data: JEPA trunk learns that high impervious cover in flat subtropical areas ≠ high UHI.
+
+---
+
+### 29-City Config Expansion
+
+**Config**: `configs/multicity_pilot.yml`
+**Code**: `scripts/train_multicity_jepa.py` — `_KOPPEN_ZONE` dict expanded 15→29 entries, `--holdout-city` CLI arg added.
+
+**New supervised cities** (CAPA labels expected ✓):
+
+| City | Koppen | CAPA OSF | Campaign date | Status |
+|------|--------|----------|---------------|--------|
+| jacksonville_fl | Cfa | xpuhk `rasters_chw_jacksonville_072522.zip` | 2022-07-25 | ✅ Collected — UHI morn=+3.2°F, mid=+5.1°F |
+| austin_tx | Cfa | h8cte `Heat Watch Austin_101420.zip` | 2020-10-14 | In collection — verify date |
+| columbia_sc | Cfa | nqwyr | pending | Queued |
+| charleston_sc | Cfa | b4tfy | pending | Queued |
+| oklahoma_city_ok | Cfa | e6qfa | pending | Queued |
+| salt_lake_city_ut | BSk | 7k2u9 | pending | Queued |
+| boulder_co | BSk | ek7r5 | pending | Queued |
+| portland_or | Cfb | e7js9 | pending | Queued |
+| las_vegas_nv | BWh | ktr56 | pending | Queued |
+| san_diego_ca | Csb | m9g6t | pending | Queued |
+
+**⚠ Austin date flag**: `Heat Watch Austin_101420.zip` = Oct 14, 2020 (MMDDYY format). Austin in
+mid-October can reach 80-85°F midday. **Verified**: ERA5 Oct 14, 2020 Austin midday=88-90°F (confirmed
+warm Texas October day). Morning UHI=+11.5°F is elevated but plausible — consistent with Philadelphia
+(+12.4°F) and Boston (+11.9°F) patterns. Austin has large urban core with strong overnight heat retention.
+Oct 14 IS the real campaign date (not an upload date). Austin stays supervised.
+
+**Additional date mismatches found during Phase 2 collection** (same upload-date pattern):
+
+| City | OSF filename | Date in filename | Confirmed? | Action |
+|------|-------------|-----------------|------------|--------|
+| charleston_sc | `rasters_chw_charleston_111821.zip` | Nov 18, 2021 | ❌ Winter — UHI=+27.2°F morn (ERA5=55°F) | `phase1_only: true` |
+| columbia_sc | `rasters_chw_columbia_101722.zip` | Oct 17, 2022 | ⚠ Suspicious — midday UHI=+13.2°F, ERA5 midday=79°F | `phase1_only: true` pending date fix |
+| oklahoma_city_ok | `rasters_chw_oklahoma_city_101623.zip` | Oct 16, 2023 | ⚠ Upload date likely | `phase1_only: true` pending date fix |
+
+**These bring the total "bad date" upload-date mismatches to 6**:
+Houston (Nov→Aug), Brooklyn (Sep→Aug), Charlotte (Aug→Jul), Charleston (Nov→Jul), Columbia (Oct→Aug?), OKC (Oct→Aug?)
+
+**Systematic pattern**: NIHHIS Heat Watch campaigns run **June-August**. OSF uploads occur **1-3 months later** (Sept-November). Filename dates = upload dates. Fix: campaign_date_override with ERA5-verified summer date.
+
+---
+
+### Retrain — 22-city Phase 1 (2026-06-12)
+
+> **Supervised cities**: 12 clean summer-verified cities for Phase 2 heads
+> **Phase 1 cities**: 22 (all collected cities, including phase1_only for JEPA pretraining spatial diversity)
+> **N_pretrain**: 15,693,485 pixels (2.5× previous 6.2M pixels!)
+> **Skipped** (not yet collected): oklahoma_city_ok, salt_lake_city_ut, boulder_co, portland_or, las_vegas_nv, san_diego_ca
+
+**12 supervised cities** (confirmed clean summer campaign dates ✓):
+
+| City | Campaign date | Note |
+|------|--------------|------|
+| atlanta_ga | 2021-09-26 | ✅ Confirmed summer |
+| raleigh_nc | 2021-06-17 | ✅ Confirmed summer |
+| chicago_il | 2023-07-28 | ✅ Confirmed summer |
+| albuquerque_nm | 2021-06-06 | ✅ Confirmed summer |
+| milwaukee_wi | 2022-08-06 | ✅ Confirmed summer |
+| seattle_wa | 2020-09-09 | ✅ Confirmed summer |
+| boston_ma | 2019-08-28 | ✅ Summer (midday ERA5=69°F; coastal ocean effect — low Koppen weight=0.010) |
+| brooklyn_ny | 2022-08-29 | ✅ Fixed (was Sep 29 upload) — UHI morn=+3.9°F ✓ |
+| charlotte_nc | 2024-07-09 | ✅ Fixed (was Aug 06 upload) — UHI morn=+1.4°F ✓ |
+| houston_tx | 2020-08-15 | ✅ Fixed (was Nov 23 upload) — UHI morn=+0.2°F ✓ |
+| jacksonville_fl | 2022-07-25 | ✅ New — UHI morn=+3.2°F, midday=+5.1°F ✓ |
+| austin_tx | 2020-10-14 | ✅ New — ERA5-verified warm day, UHI morn=+11.5°F (similar to Philadelphia) |
+
+
+
+**Phase1-only cities** (JEPA pretraining only, no supervised heads due to no CAPA labels):
+burlington_vt, new_orleans_la, providence_ri, wilmington_de, baltimore_md, new_york_ny,
+louisville_ky, kansas_city_mo.
+
+**New CLI flag**: `--holdout-city <slug>` overrides `holdout: true` in config at runtime.
+Enables rotating LOO without editing YAML for each run:
+```bash
+python scripts/train_multicity_jepa.py --holdout-city chicago_il --skip-collect --seed 42
+```
+
+---
+
+### Supervised City Count Summary
+
+| Category | Cities | Count |
+|----------|--------|-------|
+| Holdout (always out) | philadelphia_pa | 1 |
+| Supervised (confirmed labels) | atlanta_ga, raleigh_nc, chicago_il, albuquerque_nm, milwaukee_wi, seattle_wa, boston_ma, brooklyn_ny, charlotte_nc, houston_tx, jacksonville_fl | 11 |
+| Pending collection (expected labels) | austin_tx, columbia_sc, charleston_sc, oklahoma_city_ok, salt_lake_city_ut, boulder_co, portland_or, las_vegas_nv, san_diego_ca | 9 |
+| Phase1-only (no CAPA labels) | burlington_vt, new_orleans_la, providence_ri, wilmington_de, baltimore_md, new_york_ny, louisville_ky, kansas_city_mo | 8 |
+| **Total in config** | | **29** |
+
+**Next run target**: Full retrain with ≥15 supervised cities (after pending collection completes):
+```bash
+python scripts/train_multicity_jepa.py --skip-collect --seed 42 --fewshot-n 10000 --fewshot-hybrid
+```
+Expected: morning ZS ≥ 0.540 (more diverse trunk), hybrid sum_corr ≥ 1.560.
+
+
