@@ -146,6 +146,12 @@ def _parse_args() -> argparse.Namespace:
                         "(output of train_anp_station_conditioned.py). When provided, "
                         "applies ANP residual correction after Phase 3 zero-shot eval. "
                         "Requires output/cities/{holdout_slug}/stations.parquet to exist.")
+    p.add_argument("--holdout-city", type=str, default=None, metavar="SLUG",
+                   help="Override the holdout city for this run (e.g. --holdout-city chicago_il). "
+                        "When set, the specified city slug is treated as the holdout regardless of "
+                        "the 'holdout: true' flag in the YAML config. All other cities become "
+                        "training cities. Use this for rotating LOO evaluation across all cities: "
+                        "run once per city to measure mean ± std sum_corr as the canonical metric.")
     return p.parse_args()
 
 
@@ -268,21 +274,35 @@ def _build_head(hidden_dim: int, era5_dim: int = 4, deep: bool = False,
 # Used to weight the LOO ensemble — cities climatically similar to the
 # holdout city (Philadelphia, Cfa) contribute more to the ensemble.
 _KOPPEN_ZONE: dict[str, str] = {
-    "philadelphia_pa": "Cfa",
-    "atlanta_ga":      "Cfa",
-    "raleigh_nc":      "Cfa",
-    "wilmington_de":  "Cfa",   # added train32
-    "baltimore_md":    "Cfa",   # added train32
-    "charlotte_nc":    "Cfa",   # added train32
-    "new_orleans_la":  "Cfa",   # added train32 (humid subtropical)
-    "chicago_il":      "Dfa",
-    "milwaukee_wi":    "Dfa",   # hot-summer humid continental (same cluster as Chicago)
-    "burlington_vt":   "Dfb",
-    "providence_ri":   "Dfb",
-    "boston_ma":       "Dfb",   # warm-summer humid continental
-    "brooklyn_ny":     "Cfa",   # humid subtropical (same zone as Philadelphia)
-    "seattle_wa":      "Cfb",
-    "albuquerque_nm":  "BSk",
+    "philadelphia_pa":    "Cfa",
+    "atlanta_ga":         "Cfa",
+    "raleigh_nc":         "Cfa",
+    "wilmington_de":      "Cfa",   # added train32
+    "baltimore_md":       "Cfa",   # added train32
+    "charlotte_nc":       "Cfa",   # added train32
+    "new_orleans_la":     "Cfa",   # added train32 (humid subtropical)
+    "houston_tx":         "Cfa",   # humid subtropical (subtropical gulf coast)
+    "jacksonville_fl":    "Cfa",   # humid subtropical (NE Florida)
+    "austin_tx":          "Cfa",   # humid subtropical / borderline BSh
+    "columbia_sc":        "Cfa",   # humid subtropical
+    "charleston_sc":      "Cfa",   # humid subtropical (coastal)
+    "oklahoma_city_ok":   "Cfa",   # humid subtropical / borderline Dfa
+    "louisville_ky":      "Cfa",   # humid subtropical
+    "kansas_city_mo":     "Cfa",   # humid subtropical / borderline Dfa
+    "new_york_ny":        "Cfa",   # humid subtropical (same zone as Philadelphia)
+    "chicago_il":         "Dfa",
+    "milwaukee_wi":       "Dfa",   # hot-summer humid continental (same cluster as Chicago)
+    "burlington_vt":      "Dfb",
+    "providence_ri":      "Dfb",
+    "boston_ma":          "Dfb",   # warm-summer humid continental
+    "brooklyn_ny":        "Cfa",   # humid subtropical (same zone as Philadelphia)
+    "seattle_wa":         "Cfb",
+    "portland_or":        "Cfb",   # oceanic temperate (Pacific Northwest)
+    "san_diego_ca":       "Csb",   # Mediterranean / oceanic (Mediterranean California)
+    "albuquerque_nm":     "BSk",
+    "salt_lake_city_ut":  "BSk",   # cold semi-arid (high-desert basin)
+    "boulder_co":         "BSk",   # cold semi-arid / highland (Front Range)
+    "las_vegas_nv":       "BWh",   # hot desert (Mojave)
 }
 
 # Pairwise climate distance between zone codes.
@@ -2305,6 +2325,9 @@ def main() -> None:
             print("  [fast mode: 400 NUTS samples, ~2.5x faster]")
         print("=" * 60)
         all_cities  = mc["pilot_cities"]
+        if args.holdout_city:
+            for c in all_cities:
+                c["holdout"] = (c["city_slug"] == args.holdout_city)
         train_cfgs  = [c for c in all_cities if not c.get("holdout", False)]
         n_ok, n_fail = 0, 0
         for city_cfg in train_cfgs:
@@ -2327,6 +2350,16 @@ def main() -> None:
     # phase1_only=true cities participate in Phase 1 JEPA pretraining (spatial features useful)
     # but are excluded from Phase 2 supervised fine-tuning and ZS ensemble (bad-season CAPA labels).
     all_cities     = mc["pilot_cities"]
+
+    # --holdout-city CLI arg overrides YAML holdout: true for rotating LOO evaluation.
+    if args.holdout_city:
+        for c in all_cities:
+            c["holdout"] = (c["city_slug"] == args.holdout_city)
+        if not any(c.get("holdout") for c in all_cities):
+            log.error("--holdout-city '%s' not found in config. Available: %s",
+                      args.holdout_city, [c["city_slug"] for c in all_cities])
+            sys.exit(1)
+
     holdout_cfgs   = [c for c in all_cities if c.get("holdout", False)]
     train_cfgs     = [c for c in all_cities if not c.get("holdout", False)]
     supervised_cfgs = [c for c in train_cfgs if not c.get("phase1_only", False)]

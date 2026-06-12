@@ -74,7 +74,7 @@ multicity:
       holdout: false
       bbox: [-74.06, 40.57, -73.83, 40.74]
       utm_epsg: "EPSG:32618"
-      campaign_date_override: "2022-09-29"   # NIHHIS Sep 2022; morning/midday CAPA ✓ (night absent)
+      campaign_date_override: "2022-08-29"   # NIHHIS Aug 2022 heat wave; OSF upload date was 092922
 
     - city: "Burlington, VT"
       city_slug: "burlington_vt"
@@ -108,6 +108,100 @@ multicity:
       phase1_only: true     # Nov 2020 winter campaign → UHI 20°F implausible; JEPA pretraining only
       bbox: [-90.14, 29.89, -89.90, 30.08]
       utm_epsg: "EPSG:32615"
+
+    # ── Downloaded but no CAPA labels (AAT=NaN) — JEPA pretraining only ──────
+    - city: "New York, NY"
+      city_slug: "new_york_ny"
+      holdout: false
+      phase1_only: true     # 2019 NIHHIS; AAT data absent from parquet (tdsy7 folder mismatch)
+      bbox: [-74.06, 40.60, -73.72, 40.88]
+      utm_epsg: "EPSG:32618"
+      campaign_date_override: "2019-08-28"   # 2019 NIHHIS campaign date
+
+    - city: "Louisville, KY"
+      city_slug: "louisville_ky"
+      holdout: false
+      phase1_only: true     # 2019 NIHHIS; AAT data absent from parquet (tdsy7 folder mismatch)
+      bbox: [-85.82, 38.10, -85.56, 38.35]
+      utm_epsg: "EPSG:32616"
+      campaign_date_override: "2019-08-28"   # 2019 NIHHIS campaign date
+
+    - city: "Kansas City, MO"
+      city_slug: "kansas_city_mo"
+      holdout: false
+      phase1_only: true     # 2019 NIHHIS; AAT data absent from parquet (tdsy7 folder mismatch)
+      bbox: [-94.71, 38.92, -94.42, 39.18]
+      utm_epsg: "EPSG:32615"
+      campaign_date_override: "2019-08-28"   # 2019 NIHHIS campaign date
+
+    # ── Houston TX — summer campaign (OSF upload date 2020-11-23; actual Aug 2020) ──
+    - city: "Houston, TX"
+      city_slug: "houston_tx"
+      holdout: false
+      bbox: [-95.61, 29.61, -95.23, 29.90]
+      utm_epsg: "EPSG:32615"
+      campaign_date_override: "2020-08-15"   # Aug 2020 heat wave; OSF upload date was 2020-11-23
+
+    # ── New cities to collect ─────────────────────────────────────────────────
+    - city: "Jacksonville, FL"
+      city_slug: "jacksonville_fl"
+      holdout: false
+      bbox: [-81.80, 30.14, -81.44, 30.50]
+      utm_epsg: "EPSG:32617"
+
+    - city: "Austin, TX"
+      city_slug: "austin_tx"
+      holdout: false
+      bbox: [-97.90, 30.10, -97.54, 30.46]
+      utm_epsg: "EPSG:32614"
+
+    - city: "Columbia, SC"
+      city_slug: "columbia_sc"
+      holdout: false
+      bbox: [-81.20, 33.90, -80.86, 34.14]
+      utm_epsg: "EPSG:32617"
+
+    - city: "Charleston, SC"
+      city_slug: "charleston_sc"
+      holdout: false
+      bbox: [-80.05, 32.72, -79.85, 32.92]
+      utm_epsg: "EPSG:32617"
+
+    - city: "Oklahoma City, OK"
+      city_slug: "oklahoma_city_ok"
+      holdout: false
+      bbox: [-97.70, 35.32, -97.34, 35.58]
+      utm_epsg: "EPSG:32614"
+
+    - city: "Salt Lake City, UT"
+      city_slug: "salt_lake_city_ut"
+      holdout: false
+      bbox: [-112.10, 40.62, -111.82, 40.82]
+      utm_epsg: "EPSG:32612"
+
+    - city: "Boulder, CO"
+      city_slug: "boulder_co"
+      holdout: false
+      bbox: [-105.38, 39.94, -105.10, 40.12]
+      utm_epsg: "EPSG:32613"
+
+    - city: "Portland, OR"
+      city_slug: "portland_or"
+      holdout: false
+      bbox: [-122.82, 45.44, -122.52, 45.68]
+      utm_epsg: "EPSG:32610"
+
+    - city: "Las Vegas, NV"
+      city_slug: "las_vegas_nv"
+      holdout: false
+      bbox: [-115.32, 36.04, -115.04, 36.26]
+      utm_epsg: "EPSG:32611"
+
+    - city: "San Diego, CA"
+      city_slug: "san_diego_ca"
+      holdout: false
+      bbox: [-117.28, 32.64, -117.04, 32.84]
+      utm_epsg: "EPSG:32611"
 
   # ── Feature / label columns ─────────────────────────────────────────────
   # Edit here to add/drop variables. No code changes needed.
