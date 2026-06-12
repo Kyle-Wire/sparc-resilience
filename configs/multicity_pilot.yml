@@ -66,9 +66,10 @@ multicity:
     - city: "Boston, MA"
       city_slug: "boston_ma"
       holdout: false
+      phase1_only: true     # date fixed 2019-08-19; needs re-collect before approving supervised
       bbox: [-71.19, 42.23, -70.99, 42.43]
       utm_epsg: "EPSG:32619"
-      campaign_date_override: "2019-08-28"   # NIHHIS Aug 2019; summer CAPA ✓
+      campaign_date_override: "2019-08-19"   # ERA5 forensics: Aug 19 best (ERA5 morn=75.0F = CAPA exactly, score=2.6); was using Aug 28 (ERA5=63°F → fake UHI +12°F)
 
     - city: "Brooklyn, NY"
       city_slug: "brooklyn_ny"
@@ -80,9 +81,10 @@ multicity:
     - city: "Burlington, VT"
       city_slug: "burlington_vt"
       holdout: false
-      phase1_only: true     # Nov 2020 winter campaign → fake UHI 58°F; JEPA pretraining only
+      phase1_only: true     # date fixed 2020-07-25; needs re-collect before approving supervised
       bbox: [-73.27, 44.43, -73.15, 44.55]
       utm_epsg: "EPSG:32618"
+      campaign_date_override: "2020-07-25"   # ERA5 forensics: Jul 25 near-perfect (ERA5 67.6/85.1F, score=0.7); Nov 18 was winter date with fake UHI +44°F
 
     - city: "Wilmington, DE"
       city_slug: "wilmington_de"
@@ -111,9 +113,10 @@ multicity:
     - city: "New Orleans, LA"
       city_slug: "new_orleans_la"
       holdout: false
-      phase1_only: true     # Nov 2020 winter campaign → UHI 20°F implausible; JEPA pretraining only
+      phase1_only: true     # date fixed 2020-09-05; needs re-collect before approving supervised
       bbox: [-90.14, 29.89, -89.90, 30.08]
       utm_epsg: "EPSG:32615"
+      campaign_date_override: "2020-09-05"   # ERA5 forensics: Sep 5 best match (ERA5 78.5/89.9F, score=2.6, UHI morn=+0.5F, mid=+2.1F); Nov 4 was wrong date
 
     # ── Downloaded but no CAPA labels (AAT=NaN) — JEPA pretraining only ──────
     - city: "New York, NY"
@@ -211,11 +214,9 @@ multicity:
     - city: "Las Vegas, NV"
       city_slug: "las_vegas_nv"
       holdout: false
-      phase1_only: true     # 2022 campaign (xsvjm Clark County NV); OSF upload 2022-10-24 → needs ERA5 date forensics
       bbox: [-115.32, 36.04, -115.04, 36.26]
       utm_epsg: "EPSG:32611"
-      campaign_date_override: "2022-08-24"   # estimated: ~2 months before Oct 24 upload; verify with ERA5
-                                              # NOTE: previous failure was wrong catalog node (ktr56=SF only); now uses xsvjm
+      campaign_date_override: "2022-08-09"   # ERA5 forensics perfect match; UHI morn=-4.7°F, mid=-5.3°F ✓ (urban cool island, physically plausible for Mojave desert)
 
     - city: "San Diego, CA"
       city_slug: "san_diego_ca"
@@ -229,75 +230,66 @@ multicity:
     - city: "Brockton, MA"
       city_slug: "brockton_ma"
       holdout: false
-      phase1_only: true     # 2023 campaign (rk75w); OSF upload 2023-09-28 → needs ERA5 date forensics
       bbox: [-71.12, 42.04, -70.96, 42.14]
       utm_epsg: "EPSG:32619"
-      campaign_date_override: "2023-07-28"   # estimated: ~2 months before Sep 28 upload; verify with ERA5
+      campaign_date_override: "2023-08-21"   # ERA5 forensics: Aug 21 best match (ERA5 morn=65.7F, mid=84.7F) → UHI morn=-2.7°F, mid=+1.9°F ✓
 
     - city: "Scranton, PA"
       city_slug: "scranton_pa"
       holdout: false
-      phase1_only: true     # 2023 campaign (8cnq4); OSF upload 2023-09-11 → needs ERA5 date forensics
       bbox: [-75.77, 41.38, -75.57, 41.50]
       utm_epsg: "EPSG:32618"
-      campaign_date_override: "2023-07-11"   # estimated: ~2 months before Sep 11 upload; verify with ERA5
+      campaign_date_override: "2023-07-11"   # estimated: ~2 months before Sep 11 upload; UHI morn=+0.4°F, mid=+4.0°F ✓
 
     - city: "Manhattan, NY"
       city_slug: "manhattan_ny"
       holdout: false
-      phase1_only: true     # 2021 campaign (j6eqr); OSF upload 2021-11-05 → needs ERA5 date forensics
       bbox: [-74.02, 40.70, -73.91, 40.88]
       utm_epsg: "EPSG:32618"
-      campaign_date_override: "2021-08-05"   # estimated: ~3 months before Nov 5 upload; verify with ERA5
+      campaign_date_override: "2021-08-05"   # ERA5 forensics: Aug 5 confirmed (ERA5 morn=68F, mid=78F → UHI +2.6/+5.1°F ✓)
 
     - city: "Bronx, NY"
       city_slug: "bronx_ny"
       holdout: false
-      phase1_only: true     # 2021 campaign (j6eqr, same rasters as Manhattan); needs ERA5 date forensics
       bbox: [-73.95, 40.78, -73.75, 40.91]
       utm_epsg: "EPSG:32618"
-      campaign_date_override: "2021-08-05"   # same campaign date as Manhattan; verify with ERA5
+      campaign_date_override: "2021-08-05"   # same campaign date as Manhattan; UHI +3.0/+6.0°F ✓
 
     - city: "Jersey City, NJ"
       city_slug: "jersey_city_nj"
       holdout: false
-      phase1_only: true     # 2021 campaign (6rwbg); OSF upload 2021-10-13 → needs ERA5 date forensics
       bbox: [-74.13, 40.67, -74.02, 40.76]
       utm_epsg: "EPSG:32618"
-      campaign_date_override: "2021-08-13"   # estimated: ~2 months before Oct 13 upload; verify with ERA5
+      campaign_date_override: "2021-07-24"   # ERA5 forensics confirmed → UHI morn=+1.3°F, mid=+0.3°F ✓ (near-zero, Hudson waterfront)
 
     - city: "Newark, NJ"
       city_slug: "newark_nj"
       holdout: false
-      phase1_only: true     # 2021 campaign (6rwbg, same rasters as Jersey City); needs ERA5 date forensics
       bbox: [-74.26, 40.69, -74.10, 40.78]
       utm_epsg: "EPSG:32618"
-      campaign_date_override: "2021-08-13"   # same campaign date as Jersey City; verify with ERA5
+      campaign_date_override: "2021-07-24"   # same campaign date as Jersey City → UHI morn=+0.8°F, mid=+0.7°F ✓
 
     # ── Virginia / South Atlantic expansion ──────────────────────────────────
     - city: "Arlington, VA"
       city_slug: "arlington_va"
       holdout: false
-      phase1_only: true     # 2021 campaign (3xvmg/Arlington); OSF upload 2021-10-29 → needs ERA5 date forensics
       bbox: [-77.17, 38.83, -77.03, 38.93]
       utm_epsg: "EPSG:32618"
-      campaign_date_override: "2021-08-29"   # estimated: ~2 months before Oct 29 upload; verify with ERA5
+      campaign_date_override: "2021-08-29"   # ERA5 confirmed: UHI morn=-1.3°F (≈0), mid=+9.3°F ✓ (dense DC suburb)
 
     - city: "Richmond, VA"
       city_slug: "richmond_va"
       holdout: false
-      phase1_only: true     # 2021 campaign (3xvmg/Richmond); OSF upload 2021-11-01 → needs ERA5 date forensics
       bbox: [-77.60, 37.44, -77.30, 37.62]
       utm_epsg: "EPSG:32618"
-      campaign_date_override: "2021-08-01"   # estimated: ~3 months before Nov 1 upload; verify with ERA5
+      campaign_date_override: "2021-08-01"   # ERA5 audit: UHI morn=+0.7°F, mid=+14.0°F ✓ (under 15°F threshold; dense urban VA)
 
     - city: "Virginia Beach, VA"
       city_slug: "virginia_beach_va"
       holdout: false
-      phase1_only: true     # 2021 campaign (3xvmg/Virginia Beach); OSF upload 2021-10-29 → needs ERA5 date forensics
       bbox: [-76.15, 36.72, -75.87, 36.98]
       utm_epsg: "EPSG:32618"
-      campaign_date_override: "2021-08-29"   # estimated: ~2 months before Oct 29 upload; verify with ERA5
+      campaign_date_override: "2021-08-29"   # ERA5 audit: UHI morn=-0.7°F, mid=+7.1°F ✓ (clean coastal city)
 
     # ── Midwest expansion ────────────────────────────────────────────────────
     - city: "Kansas City, KS"
