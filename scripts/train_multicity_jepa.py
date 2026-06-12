@@ -121,7 +121,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--fewshot-hybrid", action="store_true",
                    help="When used with --fewshot-n: also report a hybrid eval using zero-shot morning "
                         "predictions combined with few-shot midday/evening, on the same held-out test split.")
-    p.add_argument("--fewshot-sampling", choices=["random", "fps", "kmedoids"], default="random",
+    p.add_argument("--fewshot-sampling", choices=["random", "fps", "kmedoids", "stratified"], default="random",
                    help="Sampling strategy for few-shot training pixels. "
                         "'random': uniform random sample (default). "
                         "'fps': farthest-point sampling — DEPRECATED (finds distribution tails, not mode). "
@@ -130,7 +130,10 @@ def _parse_args() -> argparse.Namespace:
                         "Samples proportional to data density, giving the head diverse but representative "
                         "examples from every sub-population (urban core, parks, suburbs, waterfront). "
                         "Expected benefit: N=1000 kmedoids ≈ random N=3000-5000. "
-                        "Example: --fewshot-n 1000 --fewshot-sampling kmedoids")
+                        "'stratified': stratify labeled pixels into Q quantile bins by pct_impervious "
+                        "(strongest UHI predictor) and sample n/Q from each bin. Ensures the few-shot head "
+                        "sees the full UHI gradient from cool parks to hot asphalt at any N. "
+                        "Example: --fewshot-n 1000 --fewshot-sampling stratified")
     p.add_argument("--pretrain-only", action="store_true",
                    help="Run Phase 1 (JEPA pretraining) only, then exit immediately after saving the trunk. "
                         "Useful for I1 eccentricity sweep screening: run with reduced n_epochs + A3 diagnostics "
@@ -1660,16 +1663,14 @@ def _kmedoids_sampling_gpu(emb_t, n: int, device, seed: int = 42, n_iter: int = 
         return torch.arange(N, device=device)
 
     rng = np.random.default_rng(seed)
-    # K-means++ initialization: pick first center randomly, rest by D² weighting
-    init_idx = [int(rng.integers(N))]
-    init_dists = torch.full((N,), float("inf"), device=device)
-    for _ in range(n - 1):
-        diff = emb_t - emb_t[init_idx[-1]]
-        d2   = (diff * diff).sum(dim=1)           # (N,) Blackwell-safe
-        init_dists = torch.minimum(init_dists, d2)
-        probs = (init_dists / (init_dists.sum() + 1e-12)).cpu().numpy()
-        init_idx.append(int(rng.choice(N, p=probs)))
-    centroids = emb_t[torch.tensor(init_idx, device=device)].clone()  # (K, D)
+    # Random initialization — intentionally NOT K-means++.
+    # K-means++ does D²-proportional sampling over K-1 sequential rounds; for
+    # large K (e.g. K=3000) this degenerates toward FPS: each new center is
+    # chosen far from all existing ones, filling the convex hull instead of the
+    # data mode.  Random init + Lloyd's iterations converges to the density mode
+    # regardless of K, which is exactly what the regression head needs.
+    init_indices = rng.choice(N, size=n, replace=False)
+    centroids = emb_t[torch.tensor(init_indices, dtype=torch.long, device=device)].clone()  # (K, D)
 
     # Precompute per-point squared norms — reused every Lloyd iteration.
     # This enables the squared-norm identity for (N, chunk) distance computation:
@@ -1891,13 +1892,62 @@ def run_fewshot_finetune(
                                            if i not in chosen_set])]
         log.info("fewshot %s: selected %d training pixels from %d labeled",
                  sampling.upper(), len(train_idx), len(labeled_idx))
+    elif sampling == "stratified":
+        # Stratified sampling by pct_impervious quantile bins.
+        # pct_impervious is the strongest single predictor of UHI temperature (r≈+0.26,
+        # per B4 residual decomp), so binning by it ensures the few-shot head sees
+        # examples across the full UHI gradient: cool parks (0% imp) → hot asphalt (100% imp).
+        # Random sampling can miss one extreme at small N; stratified guarantees coverage.
+        imp_col = next((i for i, c in enumerate(feature_cols_land)
+                        if "impervious" in c.lower()), None)
+        if imp_col is None:
+            log.warning("fewshot stratified: pct_impervious not found in features — falling back to random")
+            chosen     = rng.choice(len(labeled_idx), size=n_samples, replace=False)
+            chosen_set = set(chosen.tolist())
+            train_idx  = labeled_idx[chosen]
+            test_idx   = labeled_idx[np.array([i for i in range(len(labeled_idx))
+                                                if i not in chosen_set])]
+        else:
+            imp_vals = X_land[labeled_idx, imp_col].cpu().numpy()  # (n_labeled,)
+            n_bins   = min(10, n_samples)                           # ≤10 quantile bins
+            # Assign each labeled pixel to a quantile bin
+            quantiles = np.percentile(imp_vals, np.linspace(0, 100, n_bins + 1))
+            quantiles[-1] += 1e-6  # include max in last bin
+            bin_ids = np.digitize(imp_vals, quantiles[1:])          # 0 … n_bins-1
+            # Sample floor(n/Q) from each bin, distribute remainder to largest bins
+            base_per_bin = n_samples // n_bins
+            remainder    = n_samples - base_per_bin * n_bins
+            bin_counts   = np.bincount(bin_ids, minlength=n_bins)   # pixels per bin
+            # Give extra draws to bins with the most pixels (won't exhaust them)
+            extra_bins   = np.argsort(bin_counts)[::-1][:remainder]
+            chosen_list  = []
+            for b in range(n_bins):
+                mask    = np.where(bin_ids == b)[0]
+                quota   = base_per_bin + (1 if b in extra_bins else 0)
+                quota   = min(quota, len(mask))
+                if quota > 0:
+                    chosen_list.append(rng.choice(mask, size=quota, replace=False))
+            chosen     = np.concatenate(chosen_list) if chosen_list else np.array([], dtype=int)
+            # Pad with random draws if any bins were too small
+            if len(chosen) < n_samples:
+                all_local = np.arange(len(labeled_idx))
+                leftover  = np.setdiff1d(all_local, chosen)
+                extra     = rng.choice(leftover, size=n_samples - len(chosen), replace=False)
+                chosen    = np.concatenate([chosen, extra])
+            chosen_set = set(chosen.tolist())
+            train_idx  = labeled_idx[chosen]
+            test_idx   = labeled_idx[np.array([i for i in range(len(labeled_idx))
+                                                if i not in chosen_set])]
+            log.info("fewshot STRATIFIED: %d bins × ~%d px/bin → %d training pixels (imp range %.2f–%.2f)",
+                     n_bins, base_per_bin, len(train_idx),
+                     float(imp_vals.min()), float(imp_vals.max()))
     else:
         # Default: uniform random sample
-        chosen   = rng.choice(len(labeled_idx), size=n_samples, replace=False)
+        chosen     = rng.choice(len(labeled_idx), size=n_samples, replace=False)
         chosen_set = set(chosen.tolist())
-        train_idx = labeled_idx[chosen]
-        test_idx  = labeled_idx[np.array([i for i in range(len(labeled_idx))
-                                           if i not in chosen_set])]
+        train_idx  = labeled_idx[chosen]
+        test_idx   = labeled_idx[np.array([i for i in range(len(labeled_idx))
+                                            if i not in chosen_set])]
 
     log.info("fewshot [philadelphia_pa]: n_train=%d  n_test=%d  epochs=%d",
              len(train_idx), len(test_idx), n_epochs)

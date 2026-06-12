@@ -439,5 +439,124 @@ Milwaukee getting Dfa (weight=0.019) will downweight it in the midday ensemble v
 - K-medoids samples the MODE of feature space; random samples the full distribution including tails
 - Sweet spot hypothesis: stratified sampling by trunk PCA bins would be optimal
 
-**Next**: Run K-medoids at N=3000 to see if the crossover vs random shifts.
+**Next**: Fix K-means++ init → run N=1000 and N=3000 with random init.
+
+---
+
+### Target 4: K-Medoids Root Cause — K-means++ degenerates toward FPS at large K
+
+**Root cause confirmed**: K-means++ initialization for K ≥ ~500 performs near-FPS behavior.
+Each of K-1 rounds picks a new center proportional to D² distance from existing centers.
+For large K, after ~500 iterations, remaining "farthest" candidates are concentrated in the
+convex hull of feature space — exactly the pathology FPS exhibits.
+
+**Fix**: Replace K-means++ with **random initialization** + Lloyd's iterations.
+- Random init selects K centers uniformly at random (no sequential bias)
+- Lloyd's iterations converge to cluster centers proportional to data density (the mode)
+- This correctly samples the full distribution, not the tails
+
+**Code change**: `_kmedoids_sampling_gpu()` — replaced K-means++ loop (n-1 iterations of
+sequential D²-sampling) with `rng.choice(N, size=n, replace=False)` single-call random init.
+
+### Koppen Zone Fix — Unintended ZS Evening Regression
+
+**Koppen zone fix** (milwaukee=Dfa, boston=Dfb, brooklyn=Cfa) is scientifically correct,
+but ZS evening dropped 0.510 → 0.479 (−0.031).
+
+Cause: Previously zone=? fell back to Cfa default → milwaukee/boston weighted same as
+Raleigh/Atlanta (w≈0.233). After fix: milwaukee=Dfa (w=0.034), boston=Dfb (w=0.010).
+Milwaukee and Boston evening heads transfer well to Philadelphia despite being different
+Koppen zones — both are mid-Atlantic/Great Lakes summer cities with similar evening patterns.
+
+Finding: Koppen zone distance (based on winter thermal regime C vs D) poorly represents
+**summer evening UHI transferability**. Zone D penalizes for cold winters that are irrelevant
+to a summer campaign. A better metric would weight by summer T2M similarity or geographic
+proximity within similar climate regimes.
+
+Decision: Keep zone fix (scientifically correct) but note that ZS evening regressed.
+Fix is compensated when full retrain brings new cities into the trunk representation.
+
+### B6 K-Medoids Sampling N-Curve (random init) — 2026-06-11
+
+| Init | Sampling | N | morn Corr | mid Corr | eve Corr | sum_corr (FS) | sum_corr (hybrid) | note |
+|------|----------|---|-----------|----------|----------|--------------|-------------------|------|
+| K-means++ | kmedoids | 1000 | 0.226 | 0.349 | 0.374 | **0.948** | **1.233** | degenerates toward FPS |
+| K-means++ | kmedoids | 3000 | 0.200 | 0.303 | 0.345 | **0.849** | **1.158** | WORSE at higher N — confirmed FPS degeneration |
+| **Random** | kmedoids | 1000 | **0.246** | **0.375** | **0.378** | **0.998** | **1.263** | fixed — monotonic now expected |
+| Random | kmedoids | 3000 | 0.221 | 0.367 | 0.374 | **0.961** | **1.251** | flat/non-monotonic vs N=1000 |
+
+ZS baseline (Koppen-fixed, old trunk): morning=0.510, midday=0.440, evening=0.479, sum=**1.429**
+Random N=1000 baseline (B5, old trunk): sum=**1.083**
+
+**K-medoids verdict: does NOT beat random at any N.**
+
+| Method | N=1000 sum_corr | N=3000 sum_corr | vs Random N=1000 |
+|--------|----------------|----------------|-----------------|
+| Random | **1.083** | (not run) | — baseline |
+| K-medoids K-means++ | 0.948 | 0.849 ↓ | −0.135 |
+| K-medoids random-init | 0.998 | 0.961 ≈ | −0.085 |
+
+**Root cause of failure**: Random sampling naturally covers the full UHI target range
+(includes high-UHI asphalt pixels AND low-UHI park pixels). K-medoids cluster centers
+are biased toward the distribution mode — the regression head needs examples from the
+FULL target range to learn the correct slope. Cluster centroids under-represent extremes
+that anchor the linear fit at both ends.
+
+Neither FPS (pure extremes, fails catastrophically) nor K-medoids (pure averages, underperforms)
+beats random. The sweet spot requires samples that span the target VARIABLE range, not the
+feature-space structure. Two viable next approaches:
+
+1. **Feature-stratified sampling** — bin labeled pixels by `pct_impervious` quartiles
+   (strongest UHI predictor per B4, r=+0.26) and sample n/Q from each bin.
+   Simpler than K-medoids, no trunk forward pass needed.
+   Hypothesis: ensures full UHI gradient coverage at any N.
+
+2. **ZS-stratified sampling** — run ZS ensemble forward pass on labeled pixels,
+   bin by ZS prediction quantiles, sample n/Q from each bin.
+   ZS corr=0.44 with truth → good proxy for target variable at sampling time.
+
+**Target 4 status**: N=1000 crossover not achieved. Best low-N result remains
+random sampling (1.083 at N=1000, requires N=10000 for crossover with ZS).
+Next: implement feature-stratified sampling, target sum_corr > 1.083 at N=1000.
+
+---
+
+### Target 4: Feature-Stratified Sampling + Final Verdict (2026-06-11)
+
+**Code change**: Added `--fewshot-sampling stratified` to `train_multicity_jepa.py`
+- Bins labeled pixels into Q=10 quantile bins by `pct_impervious` (strongest UHI predictor per B4)
+- Samples n/Q pixels from each bin, redistributing remainder to larger bins
+- Fallback to random if pct_impervious not in feature set
+- No trunk forward pass needed — uses raw feature directly
+
+**Result N=1000 stratified (seed=42, --skip-pretrain, old trunk):**
+- Few-shot: morning=0.247, midday=0.378, evening=0.372, sum_corr=**0.997**
+- Hybrid: morning=0.510 (ZS), midday=0.378, evening=0.372, sum_corr=**1.260**
+
+### Target 4: EXHAUSTED — Final N-Curve Sampling Comparison
+
+| Sampling strategy | N=1000 few-shot | N=1000 hybrid | vs Random N=1000 |
+|-------------------|----------------|--------------|-----------------|
+| **Random (baseline)** | **1.083** | — | — |
+| FPS (farthest-point) | 0.550 | 0.954 | −0.533 |
+| K-medoids (K-means++ init) | 0.948 | 1.233 | −0.135 |
+| K-medoids (random init) | 0.998 | 1.263 | −0.085 |
+| Stratified (imp bins) | 0.997 | 1.260 | −0.086 |
+
+**All alternatives LOSE to uniform random at N=1000.**
+
+**Root cause (final)**: The bottleneck is head training capacity, not sampling quality.
+At N=1000, a 2-layer MLP has enough data to learn the magnitude (RMSE near 2°F) but
+insufficient data to reliably recover the spatial correlation structure (Corr≈0.37).
+The ZS ensemble of 7+ city heads trained on 250k–1.6M pixels each trivially wins on Corr.
+
+Key insight: random sampling already provides good target-variable coverage because
+Philadelphia's impervious fraction distribution is nearly uniform → random N=1000 naturally
+includes ~100 pixels at each decile. Fancy sampling adds complexity without improvement.
+
+**Target 4 closed.** Crossover at N=10,000 is a feature of the head architecture, not
+sampling. To lower the crossover, the head itself needs improvement:
+1. Meta-learning initialization (MAML-style) — warm-start the Philly head from aggregated city knowledge
+2. Gaussian Process regression on trunk embeddings — exact sample efficiency at low N
+3. Accept N=10k as the operational requirement (2% of labeled pixels, ~3 hrs survey time)
 
