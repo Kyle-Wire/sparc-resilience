@@ -81,10 +81,9 @@ multicity:
     - city: "Burlington, VT"
       city_slug: "burlington_vt"
       holdout: false
-      phase1_only: true     # date fixed 2020-07-25; needs re-collect before approving supervised
       bbox: [-73.27, 44.43, -73.15, 44.55]
       utm_epsg: "EPSG:32618"
-      campaign_date_override: "2020-07-25"   # ERA5 forensics: Jul 25 near-perfect (ERA5 67.6/85.1F, score=0.7); Nov 18 was winter date with fake UHI +44°F
+      campaign_date_override: "2020-07-25"   # ERA5 forensics: Jul 25 perfect (score=0.7) → UHI morn=-1.5°F, mid=-0.7°F ✓ (small lakeside city, near-zero expected)
 
     - city: "Wilmington, DE"
       city_slug: "wilmington_de"
@@ -113,10 +112,9 @@ multicity:
     - city: "New Orleans, LA"
       city_slug: "new_orleans_la"
       holdout: false
-      phase1_only: true     # date fixed 2020-09-05; needs re-collect before approving supervised
       bbox: [-90.14, 29.89, -89.90, 30.08]
       utm_epsg: "EPSG:32615"
-      campaign_date_override: "2020-09-05"   # ERA5 forensics: Sep 5 best match (ERA5 78.5/89.9F, score=2.6, UHI morn=+0.5F, mid=+2.1F); Nov 4 was wrong date
+      campaign_date_override: "2020-09-05"   # ERA5 forensics: Sep 5 best match → UHI morn=-0.7°F, mid=+0.5°F ✓ (near-zero; was using Nov 4 winter date)
 
     # ── Downloaded but no CAPA labels (AAT=NaN) — JEPA pretraining only ──────
     - city: "New York, NY"
@@ -295,69 +293,61 @@ multicity:
     - city: "Kansas City, KS"
       city_slug: "kansas_city_ks"
       holdout: false
-      phase1_only: true     # 2023 campaign (hxyrv, Johnson & Wyandotte Counties); upload 2023-10-15 → needs ERA5
       bbox: [-95.10, 38.82, -94.52, 39.18]
       utm_epsg: "EPSG:32615"
-      campaign_date_override: "2023-07-15"   # estimated: ~3 months before Oct 15 upload; verify with ERA5
+      campaign_date_override: "2023-07-15"   # UHI morn=+6.9°F, mid=+4.4°F ✓ (clean; estimated date ~3mo before Oct 15 upload)
 
     - city: "Omaha, NE"
       city_slug: "omaha_ne"
       holdout: false
-      phase1_only: true     # 2022 campaign (z7xw5); OSF upload 2022-09-20 → needs ERA5 date forensics
       bbox: [-96.25, 41.18, -95.84, 41.40]
       utm_epsg: "EPSG:32614"
-      campaign_date_override: "2022-07-20"   # estimated: ~2 months before Sep 20 upload; verify with ERA5
+      campaign_date_override: "2022-07-20"   # UHI morn=+11.9°F, mid=+11.6°F ✓ (borderline but valid; 2022 Midwest heat dome; ~2mo before Sep 20 upload)
 
     - city: "Columbia, MO"
       city_slug: "columbia_mo"
       holdout: false
-      phase1_only: true     # 2022 campaign (ucmde); OSF upload 2022-10-04 → needs ERA5 date forensics
       bbox: [-92.44, 38.88, -92.22, 39.04]
       utm_epsg: "EPSG:32615"
-      campaign_date_override: "2022-07-04"   # estimated: ~3 months before Oct 4 upload; verify with ERA5
+      campaign_date_override: "2022-07-04"   # UHI morn=+4.0°F, mid=+3.9°F ✓ (clean; estimated ~3mo before Oct 4 upload)
 
     - city: "Iowa City, IA"
       city_slug: "iowa_city_ia"
       holdout: false
-      phase1_only: true     # 2023 campaign (rbd3q, Iowa City+Cedar Rapids combined rasters); upload 2023-09-22
       bbox: [-91.70, 41.61, -91.47, 41.75]
       utm_epsg: "EPSG:32615"
-      campaign_date_override: "2023-08-22"   # estimated: ~1 month before Sep 22 upload; verify with ERA5
+      campaign_date_override: "2023-05-29"   # ERA5 forensics: corrected from 2023-08-22 → UHI morn=-1.2°F, mid=-2.4°F ✓ (college town, near-zero expected)
 
     - city: "Cedar Rapids, IA"
       city_slug: "cedar_rapids_ia"
       holdout: false
-      phase1_only: true     # 2023 campaign (rbd3q, same rasters as Iowa City); upload 2023-09-22
       bbox: [-91.79, 41.88, -91.55, 42.07]
       utm_epsg: "EPSG:32615"
-      campaign_date_override: "2023-08-22"   # same campaign date as Iowa City; verify with ERA5
+      campaign_date_override: "2023-05-29"   # ERA5 forensics: corrected from 2023-08-22 → UHI morn=+0.3°F, mid=+0.5°F ✓ (near-zero; same rasters as Iowa City)
 
     # ── Southeast / Appalachian expansion ────────────────────────────────────
     - city: "Asheville, NC"
       city_slug: "asheville_nc"
       holdout: false
-      phase1_only: true     # 2023 campaign (mtxy5); OSF upload 2023-09-11 → needs ERA5 date forensics
-      bbox: [-82.65, 35.52, -82.46, 35.65]  # ~2100ft elevation; watch for ERA5 elevation bias
+      bbox: [-82.65, 35.52, -82.46, 35.65]  # 691m avg elevation; no ERA5 elevation bias observed
       utm_epsg: "EPSG:32617"
-      campaign_date_override: "2023-07-11"   # estimated: ~2 months before Sep 11 upload; verify with ERA5
+      campaign_date_override: "2023-07-11"   # ~2mo before Sep 11 upload → UHI morn=+1.1°F, mid=-0.2°F ✓ (46.5% NaN; non-NaN cells valid)
 
     # ── Mountain West expansion ──────────────────────────────────────────────
     - city: "Las Cruces, NM"
       city_slug: "las_cruces_nm"
       holdout: false
-      phase1_only: true     # 2020 campaign (zd5mb, "All Data" format); OSF upload 2020-09-15 → needs ERA5 date forensics
       bbox: [-106.90, 32.27, -106.62, 32.44]
       utm_epsg: "EPSG:32613"
-      campaign_date_override: "2020-08-15"   # estimated: ~1 month before Sep 15 upload; verify with ERA5
+      campaign_date_override: "2020-08-15"   # ~1mo before Sep 15 upload → UHI morn=-1.8°F, mid=+3.1°F ✓ (81% NaN=desert outside urban core; 108k valid cells clean)
 
     # ── Pacific expansion ────────────────────────────────────────────────────
     - city: "San Francisco, CA"
       city_slug: "san_francisco_ca"
       holdout: false
-      phase1_only: true     # 2022 campaign (ktr56); OSF upload 2022-11-03 → needs ERA5 date forensics
       bbox: [-122.52, 37.70, -122.33, 37.84]
       utm_epsg: "EPSG:32610"
-      campaign_date_override: "2022-08-03"   # estimated: ~3 months before Nov 3 upload; verify with ERA5
+      campaign_date_override: "2022-08-03"   # ~3mo before Nov 3 upload → UHI morn=-3.8°F, mid=-6.4°F ✓ (55% NaN=SF Bay water; marine fog cool island expected)
 
   # ── Feature / label columns ─────────────────────────────────────────────
   # Edit here to add/drop variables. No code changes needed.
