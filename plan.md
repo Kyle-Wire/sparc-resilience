@@ -1,14 +1,21 @@
-# SPARC — Remediation and Heat Early-Warning Pilot
+# SPARC — Remediation and Early-Warning Pilots
 
 **Status:** proposed
 **Branch:** `claude/sparc-resilience-review-eklzi2`
 **Baseline commit:** `0a04b7a`
 
-This plan does two things at once, because they are not independent: it clears the
-defects found in review, and it runs a scoped experiment to test whether SPARC can
-serve as the last mile of a heat early-warning system.
+This plan does three things, because they are not independent: it clears the defects
+found in review, it removes the accreted complexity those reviews exposed, and it runs
+two scoped experiments to test whether SPARC can serve as the last mile of an
+early-warning system.
 
-Two items from the defect list sit directly on the critical path to the pilot:
+The two pilots are ordered deliberately. **Groundwater comes first** — it is cheaper,
+it exercises more of the pipeline (including Tier 2, on physics it natively
+describes), it has far denser ground truth, and it is the only domain where the
+learned α field can be checked against an independently measured physical parameter.
+It de-risks the heat pilot rather than competing with it.
+
+Two items from the defect list sit directly on the critical path to both pilots:
 
 - **F1 (leakage)** — until it is fixed, no measurement in the repo can be trusted,
   including every ablation this plan proposes.
@@ -16,7 +23,7 @@ Two items from the defect list sit directly on the critical path to the pilot:
   probability. Without coverage validation there is no pilot, only a demo.
 
 So the sequence below is not "chores first, then the fun part." Phase 0 and Phase 2
-are prerequisites of Phase 3.
+are prerequisites of Phases 3 and 4.
 
 ---
 
@@ -25,8 +32,10 @@ are prerequisites of Phase 3.
 - [Phase 0 — Unblock measurement](#phase-0--unblock-measurement)
 - [Phase 1 — Subtract](#phase-1--subtract)
 - [Phase 2 — Calibration](#phase-2--calibration)
-- [Phase 3 — Heat EWS pilot](#phase-3--heat-ews-pilot)
-- [Phase 4 — Response layer](#phase-4--response-layer)
+- [Phase 3 — Groundwater pilot](#phase-3--groundwater-pilot)
+- [Phase 4 — Heat EWS pilot](#phase-4--heat-ews-pilot)
+- [Phase 5 — Response layer](#phase-5--response-layer)
+- [Phase 6 — Simulation cascade (design note only)](#phase-6--simulation-cascade-design-note-only)
 - [Not doing](#not-doing)
 - [Finding index](#finding-index)
 
@@ -259,7 +268,7 @@ the likelihood. Present MC³ as a coherence check on the expert DAG, not as disc
 
 ## Phase 2 — Calibration
 
-This is the bridge. It closes three findings and it is the precondition for Phase 3.
+This is the bridge. It closes three findings and it is the precondition for Phases 3 and 4.
 
 ### 2.1 — Wire spatial conformal prediction (F10)
 
@@ -318,7 +327,50 @@ thresholds physical and health-relevant so the head output means something to a 
 
 ---
 
-## Phase 3 — Heat EWS pilot
+## Phase 3 — Groundwater pilot
+
+**Full detail: [`docs/groundwater-pilot.md`](docs/groundwater-pilot.md).**
+
+Validate the core stack on the High Plains aquifer before taking on forecast
+integration. This was inserted ahead of the heat pilot deliberately — it is cheaper,
+it exercises *more* of the pipeline, and it de-risks Phase 4.
+
+Why it comes first:
+
+- **Tier 2 runs natively.** Steady-state groundwater flow is `K∇²h = −R`; the solver
+  in `sparc/physics/pde_solver.py` is `α∇²T = S`. The mapping is exact (α↔K, T↔h,
+  S↔−R) and `poisson_solve` runs unmodified. Tier 2 has never been exercised on
+  physics it natively describes.
+- **α becomes falsifiable.** Nobody measures urban thermal diffusivity, so the learned
+  α field cannot be checked in the heat domain. K is a real, independently measured
+  parameter with published regional estimates. This is the one place the
+  learned-parameter-field thesis can be tested before Phase 6 depends on it.
+- **Ground truth is dense and free.** 8,000–9,400 USGS monitoring wells measured
+  annually, plus a published gridded water-level-change raster. Compare with ~5–15
+  ASOS stations per city.
+- **Stage 3 gets an analytical check.** The Theis solution gives closed-form drawdown
+  for a given pumping rate. No other SPARC domain lets you check a causal estimate
+  against a known answer.
+- **New data regime.** ~8k sparse points is the opposite of UHI's 54,701. Expect the
+  neural path to lose to kriging here — that maps the boundary of where the
+  architecture applies, which is currently unknown.
+
+Two things to fix before starting, both in `templates/groundwater/`:
+
+1. **The target is the wrong quantity.** `target_column: "gw_level_m"` is depth below
+   ground surface. The flow equation is in hydraulic head, `h = surface_elevation −
+   depth_to_water`. Depth-to-water is dominated by topography and does not satisfy the
+   Laplacian. Every PDE term would fit the wrong surface.
+2. `grid_resolution_m: 30` over the High Plains extent is ~500 million cells. Use 1000.
+
+Kill criteria, baselines, data inventory and the full stage-by-stage walkthrough are
+in the linked document. The headline: **arm B is kriging-with-external-drift, and that
+is the real null.** Beating naive kriging while losing to KED means the pipeline is an
+expensive interpolator.
+
+---
+
+## Phase 4 — Heat EWS pilot
 
 **Thesis:** we do not forecast the atmosphere. NOAA does that, and we will not beat
 them. Our job is the last mile — downscale their forecast to a 30 m grid using learned
@@ -329,7 +381,7 @@ genuinely hard baseline — HRRR runs a WRF urban canopy scheme, so it is *not*
 UHI-blind, as your own `scripts/compare_era5_hrrr.py` notes. If we cannot beat
 bilinear HRRR at station locations, the thesis is dead and we should say so.
 
-### 3.1 — Scope
+### 4.1 — Scope
 
 One city, one season, one hazard. **Philadelphia** — you already have
 `output/cities/philadelphia_pa/stations.parquet` and the collection tooling.
@@ -338,7 +390,7 @@ One city, one season, one hazard. **Philadelphia** — you already have
 > you want to keep using it for transfer evaluation, either rotate the LOCO holdout to
 > another city first, or accept that the EWS pilot burns it. Decide before 3.4.
 
-### 3.2 — Data
+### 4.2 — Data
 
 | Layer | Source | Status |
 |---|---|---|
@@ -352,14 +404,14 @@ climatological unusualness, duration, overnight temperatures, and CDC health-imp
 data — which is precisely the framing an EWS needs, and it makes the output legible
 to the agencies who would use it.
 
-### 3.3 — Event catalogue
+### 4.3 — Event catalogue
 
 Select 3–5 historical heat events for Philadelphia from the NWS event archive and IEM,
 plus a matched set of hot-but-not-extreme control days. **Do not pick events by
 eyeballing the data you will validate on** — define the selection rule (e.g. HeatRisk
 ≥ 3 over ≥ 2 consecutive days) and take whatever it returns.
 
-### 3.4 — Model
+### 4.4 — Model
 
 Change the signature from `(features, coords) → T` to
 `(features, coords, HRRR fields at t+h) → P(exceed at t+h)`.
@@ -377,7 +429,7 @@ Change the signature from `(features, coords) → T` to
   units of m²/s, i.e. thermal diffusivity, and diurnal cooling curves are the classical
   way to estimate it.
 
-### 3.5 — Metrics
+### 4.5 — Metrics
 
 Accuracy is not a metric here — a classifier that always says "no" scores well on a
 rare event and is worthless.
@@ -398,7 +450,7 @@ Arm 2 is the important control. It separates "land cover helps" from "our physic
 helps," and without it a win over arm 1 tells you nothing about whether the PDE
 machinery earns its place.
 
-### 3.6 — Kill criteria
+### 4.6 — Kill criteria
 
 State these before running, and honour them.
 
@@ -408,7 +460,7 @@ State these before running, and honour them.
 - Empirical coverage misses nominal by more than 10 points → not shippable as a
   warning system at any skill level.
 
-### 3.7 — Cheap precursor (do this first)
+### 4.7 — Cheap precursor (do this first)
 
 Before touching HRRR: pull the hourly ERA5 you *already fetch* and currently collapse
 to a daily mean (`sparc/data/collect/era5.py` — `era5_t2m` is the daily mean), feed the
@@ -419,9 +471,9 @@ integration.
 
 ---
 
-## Phase 4 — Response layer
+## Phase 5 — Response layer
 
-**Conditional on Phase 3 clearing its kill criteria.** This is the differentiator —
+**Conditional on Phase 4 clearing its kill criteria.** This is the differentiator —
 every EWS on the market stops at the alert.
 
 Compose three things that already exist:
@@ -443,6 +495,97 @@ otherwise idle in this product, and that is fine — just do not claim otherwise
 
 ---
 
+## Phase 6 — Simulation cascade (design note only)
+
+**Not active work.** Recorded so the architectural decision is pinned while it is
+fresh, and so it does not get rebuilt wrong later. Nothing here starts before Phase 3
+and Phase 4 report.
+
+The idea: a calibrated trigger fires on a footprint, and a high-fidelity forward
+simulation runs on *just that footprint* — flood inundation, fire spread — producing
+a far more precise picture than the screening model can.
+
+### 6.1 — The decision: orchestrate, don't own
+
+`sparc/physics/pde_solver.py` is a 126-line **steady-state** Jacobi/SOR solver for
+`α∇²T = S`. It has no time-stepping. Flood spread is 2D shallow water (Saint-Venant);
+fire spread is Rothermel rate-of-spread with a level-set or cellular front. Those are
+moving-front, time-evolving problems — different mathematics, not a parameter change.
+
+Mature validated open solvers already exist: LISFLOOD-FP and HEC-RAS 2D for flood;
+ELMFIRE, Cell2Fire, WRF-SFIRE and ForeFire for fire. **Do not write our own.** Two
+reasons, and the second is decisive:
+
+1. We will not beat them on fidelity.
+2. **Agencies require validated models.** HEC-RAS is the USACE standard for regulatory
+   floodplain work. A bespoke solver, however good, has no path into the market this
+   product would sell to.
+
+### 6.2 — What SPARC contributes to the cascade
+
+The solvers are free. The unserved parts are the layers around them:
+
+| Layer | SPARC provides |
+|---|---|
+| Where / when to run | calibrated exceedance heads + conformal — the trigger |
+| Initial & boundary conditions | downscaled to the analysis grid, not the forecast grid |
+| **Which runs to make** | parameter posterior → solver ensemble, not one deterministic run |
+| Solver parameters | learned spatially varying fields (α ↔ Manning's *n*, fuel moisture) |
+| What it means | exposure + budget allocation on the output |
+
+Row three is the differentiator. People do run these solvers as ensembles — there is
+published work sweeping dozens of LISFLOOD-FP configurations over roughness, channel
+width and discharge — but the perturbations are ad hoc. Nobody drives them from a
+calibrated posterior. The product is *a calibrated ensemble wrapper around validated
+physics*.
+
+Row four is why Phase 3 matters: the α↔K result in `docs/groundwater-pilot.md` §7.4
+either supports or kills the learned-parameter-field claim this row depends on.
+
+### 6.3 — Prove the cascade on heat first
+
+Before swapping in any external solver, demonstrate the *pattern* end to end using
+physics already in the repo:
+
+> exceedance head trips on a block group → Tier 2 `poisson_solve` fires on just that
+> footprint at high resolution → ensemble over the NUTS posterior → exposure map
+
+That exercises triggering, sub-domain extraction, boundary conditions from the coarse
+field, ensemble orchestration, and hand-off to the exposure layer — with no new
+physics. If it works, swapping `poisson_solve` for an ELMFIRE or LISFLOOD-FP
+subprocess is an adapter, not a rewrite.
+
+### 6.4 — On drone-tasked survey
+
+The "fly LiDAR at the emergency and simulate" version does not survive contact:
+
+- **3DEP is at 99% coverage as of FY25.** The baseline LiDAR already exists nationally.
+- **Timing.** Task → fly → process point cloud → bare-earth DEM → simulate is not a
+  minutes-scale loop. Fire and flash flood move faster.
+- **Airspace.** Wildfires get TFRs, and drone incursions ground air tankers.
+- **Liability.** "Who NEEDS to evacuate" is the highest-stakes output in the space. A
+  model that says *you don't need to go* and is wrong kills someone. Evacuation orders
+  are a legal authority held by emergency managers; the defensible output is a ranked,
+  uncertainty-aware prioritisation supporting that decision — never a binary, never
+  with the human removed.
+
+**The version that does survive: value-of-information survey tasking.** Don't task
+surveys during the event — task them *before the season, where the model is most
+uncertain*. Three existing instruments already identify those locations:
+
+- `sparc/interventions/extrapolation_guard.py` — Mahalanobis distance, where we are
+  outside the training distribution
+- conformal interval width — where predictions are least certain
+- the CATE-vs-GWR divergence audit — where identification itself is shaky
+
+Survey the top-N uncertainty cells, re-run, repeat. The model says where to look,
+looking reduces uncertainty, the better model says where to look next. Novel,
+fundable, and not life-safety-critical. It also applies directly to groundwater —
+"where should we drill the next monitoring well" is the same question asked by people
+with budgets, and Phase 3 gives a cheap place to test it.
+
+---
+
 ## Not doing
 
 Explicitly out of scope, recorded so it does not get relitigated:
@@ -453,10 +596,19 @@ Explicitly out of scope, recorded so it does not get relitigated:
 - **Building a weather forecast model.** We downscale someone else's.
 - **Geostationary LST for intra-urban UHI.** ABI thermal bands are 2 km; the UHI work
   is 30 m. Landsat/GOES fusion at 30 m/5 min exists in the literature (~2 K RMSE) but
-  it is a research project, not a pilot. Revisit only if Phase 3 succeeds and the
+  it is a research project, not a pilot. Revisit only if Phase 4 succeeds and the
   bottleneck turns out to be temporal resolution rather than skill.
 - **Real MGWR via back-fitting.** At 54,701 points it is likely infeasible without a
   fitting-point subsample. See 1.5 — we rename instead.
+- **Writing our own flood or fire solver.** See Phase 6.1. Validated open solvers
+  exist, we will not beat them, and agencies require validated models. If the cascade
+  is ever built we orchestrate.
+- **Drone-tasked LiDAR during an event.** See Phase 6.4. 3DEP is already at 99%
+  coverage, the timing does not close, and wildfire TFRs ground drones. The
+  value-of-information tasking variant stays open.
+- **Any product that outputs a binary evacuate / do-not-evacuate.** The defensible
+  output is ranked and uncertainty-aware, supporting an emergency manager's legal
+  authority rather than replacing it.
 - **Operational deployment.** An EWS is a service with uptime and liability. That is a
   different company than a desktop research app, and it is a decision for after the
   pilot reports.
