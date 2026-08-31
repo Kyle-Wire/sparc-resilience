@@ -36,7 +36,9 @@ DEFAULT_SPACE: list[HyperparamSpec] = [
     HyperparamSpec("lambda_smooth_pred",  -4.0,  0.0, -2.0),
     HyperparamSpec("lambda_smooth_alpha", -4.0,  0.0, -3.0),
     HyperparamSpec("lambda_alpha_prior",  -3.0,  1.0,  0.0),
-    HyperparamSpec("lambda_surrogate",    -3.0,  0.0, -1.0),
+    # lambda_surrogate removed: the surrogate-fidelity term is inactive in
+    # training/loss.py, so searching it spent CMA-ES budget on a no-op.
+    # See docs/pipeline-remediation.md (R7).
     HyperparamSpec("lambda_neighbor",     -3.0,  0.0, -1.0),
     HyperparamSpec("clip_norm",           -1.0,  2.0,  0.0),
     HyperparamSpec("dropout",             -2.0, -0.3, -1.0),

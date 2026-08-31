@@ -351,23 +351,36 @@ class ScenarioSimulator:
         Apply diminishing-return scaling for feature changes beyond
         *threshold*.
 
-        Within ``[-threshold, +threshold]`` the mapping is linear.
-        Beyond that, a square-root taper reduces the effective magnitude::
+        Within ``[-threshold, +threshold]`` the mapping is the identity.
+        Beyond that a concave taper reduces the effective magnitude::
 
-            effective = sign(Δ) × [ threshold + √(|Δ| - threshold) × √threshold ]
+            effective = sign(Δ) × [ τ + 2τ(√(1 + (|Δ| - τ)/τ) − 1) ]     (τ = threshold)
 
-        This ensures the first ``threshold`` units of change have full
-        effect, but each additional unit has progressively less impact —
-        capturing the empirical observation that interventions have
-        diminishing marginal returns.
+        This is C¹-continuous at the knot with slope exactly 1, strictly
+        increasing, and strictly concave above the knot — so the first
+        ``threshold`` units of change have full effect and each additional
+        unit has progressively less.
+
+        The previous form, ``τ + √(|Δ| − τ)·√τ``, was neither: its
+        derivative at the knot was ``+∞`` and it returned ``effective > |Δ|``
+        for all ``τ < |Δ| < 2τ`` — amplifying interventions by up to 21%
+        across the range planners care about, rather than damping them.
+        See docs/pipeline-remediation.md (R2).
+
+        Note this fixes the *function*, not the choice of functional form.
+        A √-family taper imposes diminishing returns; for tree canopy the
+        cited source (Ziter et al. 2019, PNAS) reports cooling that
+        *accelerates* above ~40% cover. Prefer a dose-response fitted from
+        Stage 3 where one is available.
         """
         sign = np.sign(delta)
         abs_d = np.abs(delta)
-        effective = np.where(
-            abs_d <= threshold,
-            abs_d,
-            threshold + np.sqrt(np.maximum(abs_d - threshold, 0.0)) * np.sqrt(threshold),
-        )
+        tau = float(threshold)
+        if tau <= 0.0:
+            return delta.copy() if hasattr(delta, "copy") else np.asarray(delta)
+        excess = np.maximum(abs_d - tau, 0.0)
+        tapered = tau + 2.0 * tau * (np.sqrt(1.0 + excess / tau) - 1.0)
+        effective = np.where(abs_d <= tau, abs_d, tapered)
         return sign * effective
 
     def _get_diminishing_threshold(self, variable: str) -> float:

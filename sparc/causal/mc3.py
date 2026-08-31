@@ -356,10 +356,12 @@ class PhysicsInformedGraphPrior:
     Log-prior over DAG edges incorporating:
       * ``edge_probs``      (p, p) base probability of each edge (from spatial
                             autocorrelation / domain template)
-      * ``penalty_acyclic`` penalty per edge to discourage dense graphs
+      * ``penalty_low_prior`` extra penalty per included edge whose prior
+        probability is below 0.5 (discourages dense graphs). Despite the
+        former name ``penalty_acyclic`` this has nothing to do with cycles.
     """
     edge_probs: np.ndarray  # (p, p) in (0, 1)
-    penalty_acyclic: float = 0.5
+    penalty_low_prior: float = 0.5
 
     def log_prior(self, dag: DAGStructure) -> float:
         lp = 0.0
@@ -370,7 +372,7 @@ class PhysicsInformedGraphPrior:
                 prob = np.clip(self.edge_probs[i, j], 1e-6, 1 - 1e-6)
                 if dag.adj[i, j]:
                     # Only penalise surprise inclusions (edges not supported by physics)
-                    lp += math.log(prob) - (self.penalty_acyclic if prob < 0.5 else 0.0)
+                    lp += math.log(prob) - (self.penalty_low_prior if prob < 0.5 else 0.0)
                 else:
                     lp += math.log(1.0 - prob)
         return lp
@@ -391,7 +393,7 @@ class PhysicsInformedGraphPrior:
             if i is not None and j is not None:
                 probs[i, j] = 0.8
         np.fill_diagonal(probs, 0.0)
-        return cls(edge_probs=probs, penalty_acyclic=penalty)
+        return cls(edge_probs=probs, penalty_low_prior=penalty)
 
     @classmethod
     def from_pde_residuals(
@@ -417,7 +419,7 @@ class PhysicsInformedGraphPrior:
         knn_k : k-nearest-neighbours used for the spatial Laplacian.
         alpha_base : uniform base probability blended into the final matrix
             (ensures no edge receives exactly 0 prior probability).
-        penalty : ``penalty_acyclic`` passed to the prior.
+        penalty : ``penalty_low_prior`` passed to the prior.
 
         Returns
         -------
@@ -430,7 +432,7 @@ class PhysicsInformedGraphPrior:
             knn_k=knn_k,
             alpha_base=alpha_base,
         )
-        return cls(edge_probs=edge_probs, penalty_acyclic=penalty)
+        return cls(edge_probs=edge_probs, penalty_low_prior=penalty)
 
 
 # ---------------------------------------------------------------------------

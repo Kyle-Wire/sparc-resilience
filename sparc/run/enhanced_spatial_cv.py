@@ -2099,17 +2099,49 @@ def main(ctx, *, fast_mode=False):
                         cfg.setdefault("models", {}).setdefault("neural", {})["dropout"] = v
                 print(f"CMA-ES best params applied: {best_hparams}")
 
-            # Build base-model fitted values dict for surrogate pretraining
-            # Use full-model fitted values (Stage 2b) instead of OOF predictions
+            # Build the base-model anchor dict used to pre-train the surrogates.
+            #
+            # These values are sliced by [train_idx] inside each CV fold and used
+            # as surrogate pre-training targets, so they MUST be out-of-fold.
+            # Full-dataset fitted values leak: a GWR/GWRF fitted value at a
+            # training point is a kernel-weighted function of neighbouring y,
+            # and with the default block/3 buffer that neighbourhood reaches
+            # into the held-out block.
+            #
+            # ``models.surrogate_anchor`` selects the source:
+            #   "oof"  (default) — genuine out-of-fold predictions, leak-free
+            #   "full"           — legacy full-dataset fitted values; retained
+            #                      only so the leakage delta can be measured.
+            _anchor_mode = str(
+                cfg.get('models', {}).get('surrogate_anchor', 'oof')
+            ).lower()
+            if _anchor_mode not in ('oof', 'full'):
+                print(f"WARNING: unknown models.surrogate_anchor={_anchor_mode!r}; "
+                      "falling back to 'oof'")
+                _anchor_mode = 'oof'
+
+            if _anchor_mode == 'full':
+                _anchor_src = base_fitted_values
+                print("WARNING: surrogate_anchor='full' — surrogate targets are "
+                      "in-sample fits from models trained on the FULL dataset. "
+                      "OOF metrics from this run are optimistically biased and "
+                      "must not be published as out-of-sample.")
+            else:
+                _anchor_src = base_predictions
+                print("Surrogate anchor: out-of-fold base predictions (leak-free)")
+
             _base_oof = {}
             for _mn in ('gwr', 'gwrf', 'ggpgam'):
-                if _mn in base_fitted_values:
-                    fv = base_fitted_values[_mn]
+                if _mn in _anchor_src:
+                    fv = np.asarray(_anchor_src[_mn])
                     if len(fv) == len(y):
                         _base_oof[_mn] = fv
                     else:
-                        print(f"WARNING: base_fitted_values[{_mn}] length {len(fv)} "
+                        print(f"WARNING: surrogate anchor [{_mn}] length {len(fv)} "
                               f"!= y length {len(y)} — skipping (row mismatch)")
+            if not _base_oof:
+                print("No surrogate anchor available — surrogates will train "
+                      "against y directly.")
             v2_neural_result = train_neural_meta(
                 y=y,
                 coords=coords,

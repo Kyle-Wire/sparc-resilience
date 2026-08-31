@@ -237,10 +237,17 @@ def spatial_kfold_enhanced(X, y, coords, n_splits=5, block_size=None, buffer_siz
         n_blocks_x = int(np.ceil((bounds[1, 0] - bounds[0, 0]) / block_size))
         n_blocks_y = int(np.ceil((bounds[1, 1] - bounds[0, 1]) / block_size))
 
+        # Clip to [0, n_blocks-1]. Without this, a point lying exactly on the
+        # maximum x or y edge indexes to n_blocks_{x,y}, and the flattened id
+        # block_x * n_blocks_y + block_y then collides with (block_x+1, 0) —
+        # putting an edge point in a spatially distant block and breaking the
+        # contiguity invariant that spatial blocking depends on.
+        n_blocks_x = max(n_blocks_x, 1)
+        n_blocks_y = max(n_blocks_y, 1)
         block_assignments = np.zeros(n_samples, dtype=int)
         for i, (x, y_coord) in enumerate(coords):
-            block_x = int((x - bounds[0, 0]) / block_size)
-            block_y = int((y_coord - bounds[0, 1]) / block_size)
+            block_x = min(int((x - bounds[0, 0]) / block_size), n_blocks_x - 1)
+            block_y = min(int((y_coord - bounds[0, 1]) / block_size), n_blocks_y - 1)
             block_assignments[i] = block_x * n_blocks_y + block_y
 
         unique_blocks = np.unique(block_assignments)
