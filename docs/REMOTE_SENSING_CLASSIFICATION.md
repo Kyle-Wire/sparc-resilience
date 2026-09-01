@@ -183,9 +183,13 @@ The **nugget** τ² is the finding. It is fit with a full posterior and an 89% H
 `correlogram_matern_fit.py`, fit again in the anisotropic model in `anisotropy.py`, and
 then dropped: `PredictorKernel` carries `kappa`, `nu`, `sigma2`, `kappa_x`, `kappa_y`,
 `theta_rad`, `eccentricity`, `bandwidth_to_outcome` and `kappa_posterior_samples` — and no
-nugget. Grep confirms `tau2` appears nowhere downstream of the two fitters. Meanwhile
-`pipeline_configurator.py` hard-codes `'nugget': 0.1`. You are estimating the thing
-carefully and then substituting a constant.
+nugget. Grep confirms `tau2` appears nowhere downstream of the two fitters. You estimate the
+noise floor carefully, in full posterior, and then nothing consumes it.
+
+(A related `'nugget': 0.1` literal in `pipeline_configurator.create_mock_variogram_results()`
+is *not* a live substitution — that dict is passed to `generate_model_configs(mock_results)`,
+which never reads the parameter, and nothing anywhere reads `optimal_parameters`. It is dead
+code, and should be deleted rather than fixed.)
 
 > **Carry τ² through, and four things become derivable rather than tuned.**
 > 1. The label-smoothing coefficient, from τ²/(σ²+τ²) — the noise-to-total ratio of the
@@ -463,7 +467,7 @@ out-pretrain them, and it costs one adapter.
 |---|---|---|
 | `sparc/config/project_schema.json` | New `task:` block — type, classes, representation, label-noise policy | S |
 | `sparc/models/kernel_field.py` | Add `tau2` (and its HDI) to `PredictorKernel`; plumb from both fitters | S |
-| `sparc/run/pipeline_configurator.py` | Replace hard-coded `'nugget': 0.1` with the estimated posterior mean | S |
+| `sparc/run/pipeline_configurator.py` | Delete the dead `create_mock_variogram_results()` path (its `sill`/`nugget`/`range` are never read) | S |
 | `sparc/models/gwrf.py` | `RandomForestClassifier` branch on task type; `predict_proba` | S |
 | `sparc/models/ggpgam.py` | `LogisticGAM` branch, one-vs-rest for K > 2 | S |
 | `sparc/evaluation/conformal.py` | Adaptive-prediction-set nonconformity score; keep the κ-weighted calibration | S/M |
