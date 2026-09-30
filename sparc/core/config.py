@@ -64,7 +64,11 @@ DEFAULTS: dict[str, Any] = {
         "max_iter": 60,
     },
     "influence": {"max_lag_m": 2000.0, "n_rings": 10, "n_perm": 19, "scales": [0.5, 1.0, 2.0], "mass": 0.9},
-    "cv": {"n_folds": 5, "block_m": "auto", "buffer_m": "auto", "seed": 42},
+    "cv": {
+        "n_folds": 5, "block_m": "auto", "buffer_m": "auto", "seed": 42,
+        # Reporting-only skill-vs-distance curve (0 = random points, a leaky reference).
+        "distance_curve": {"enabled": False, "block_m": [0, 500, 1000]},
+    },
     "models": {"ols": True, "mgwr": True, "gwrf": True, "gam": True, "physics": True},
     "stacker": {
         "hidden": 64,

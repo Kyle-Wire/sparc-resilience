@@ -91,6 +91,8 @@ def build_manifest(result, timings: dict, fast: bool, folds=None) -> dict:
         m["physics"] = _physics_summary(ens)
         m["physics_advection"] = ens.physics_selection
         m["stacker"] = ens.stacker_info
+    if getattr(result, "cv_distance", None):
+        m["cv_distance"] = result.cv_distance
     if result.responses:
         m["response"] = {v: r.summary for v, r in result.responses.items()}
     if result.scenarios:
@@ -137,7 +139,10 @@ def render_report(result) -> str:
             L.append(f"| {v} | {_f(r, 0)} | {_f(a.get('ratio'), 2)} | {_f(a.get('theta_deg'), 0)} | {a.get('reliable')} |")
         L.append("")
     if "metrics" in m:
+        cv = m.get("cv") or {}
         L += ["## S2/S3 — Out-of-fold performance (spatial blocks, cross-fitted stacking)", "",
+              f"{cv.get('n_folds')} folds of square blocks ({_f(cv.get('block_m'), 0)} m, {cv.get('n_blocks')} blocks "
+              f"with data); training points within {_f(cv.get('buffer_m'), 0)} m of a test point are dropped.", "",
               f"| model | RMSE ({u}) | MAE | R² |", "|---|---|---|---|"]
         for k, v in m["metrics"].items():
             L.append(f"| {k} | {_f(v['rmse'])} | {_f(v['mae'])} | {_f(v['r2'])} |")
@@ -160,6 +165,22 @@ def render_report(result) -> str:
             p = m["physics"]
             L += ["**Physics (mean ± sd over folds):** " + ", ".join(
                 f"{k} = {_f(p[k]['mean'], 3)} ± {_f(p[k]['sd'], 3)}" for k in ("L_m", "vx_m", "vy_m", "a", "gamma") if k in p), ""]
+    if m.get("cv_distance"):
+        rows = m["cv_distance"]["rows"]
+        names = list(rows[0]["models"]) if rows else []
+        L += ["### Skill vs distance from training data (reporting only)", "",
+              "| CV partition | block / buffer (m) | blocks | train kept | stacker R² | stacker RMSE | fold R² range | "
+              + " | ".join(f"{n} R²" for n in names) + " |",
+              "|---|---|---|---|---|---|---|" + "---|" * len(names)]
+        for r in rows:
+            L.append(f"| {r['label']} | {_f(r['block_m'], 0)} / {_f(r['buffer_m'], 0)} | {r['n_blocks']} | "
+                     f"{_f(r['train_fraction_kept'], 2)} | {_f(r['stacker']['r2'])} | {_f(r['stacker']['rmse'])} | "
+                     f"{_f(r['fold_r2_min'], 2)} – {_f(r['fold_r2_max'], 2)} | "
+                     + " | ".join(_f(r["models"].get(n, {}).get("r2")) for n in names) + " |")
+        L += ["", "Random points leave every test point next to training data, so that row mostly measures "
+              "interpolation and overstates skill for new areas. The main blocks (≥ the target's residual "
+              "correlation range, buffer = block/3) measure prediction for an unseen neighbourhood; stacking, "
+              "model selection and intervals use them.", ""]
     if "response" in m:
         L += ["## S4 — Saturation and marginal effects", "",
               "| variable | saturating | censored | linear | median d90 | median max cooling | own effect/unit | footprint/unit |",

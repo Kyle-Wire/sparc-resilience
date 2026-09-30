@@ -215,6 +215,59 @@ def test_manifest_and_report_are_serialisable(synthetic_run):
     assert "S2/S3" in md and "S4" in md
 
 
+def _small_synthetic_cfg(out_dir=None):
+    from sparc.core.config import core_config_from_dict
+    from sparc.core.synthetic import synthetic_city_config
+
+    cfg = core_config_from_dict(synthetic_city_config())
+    cfg.raw["models"] = {"ols": True, "mgwr": False, "gwrf": False, "gam": False, "physics": True}
+    cfg.raw["stacker"]["epochs"] = 30
+    cfg.raw["stacker"]["tune_lambda"] = [0.0]
+    if out_dir is not None:
+        cfg.raw["output"]["dir"] = str(out_dir)
+    return cfg
+
+
+def test_resume_reuses_checkpoint_and_rejects_changed_config(synthetic_city, tmp_path, monkeypatch):
+    from sparc.core import pipeline
+
+    stages = ("S0", "S1", "S2", "S3")
+    r1 = pipeline.run_core(_small_synthetic_cfg(tmp_path), stages=stages, frame=synthetic_city.frame)
+    assert (r1.run_dir / pipeline.CHECKPOINT).exists()
+
+    def boom(*a, **k):
+        raise AssertionError("fit_ensemble must not run when resuming")
+
+    monkeypatch.setattr(pipeline, "fit_ensemble", boom)
+    r2 = pipeline.run_core(_small_synthetic_cfg(tmp_path), stages=stages, frame=synthetic_city.frame, resume=True)
+    np.testing.assert_array_equal(r2.ensemble.oof_pred, r1.ensemble.oof_pred)
+    assert r2.manifest["cv"]["block_m"] == r1.manifest["cv"]["block_m"]
+
+    changed = _small_synthetic_cfg(tmp_path)
+    changed.raw["stacker"]["epochs"] = 31                     # different fingerprint → refit
+    with pytest.raises(AssertionError, match="must not run"):
+        pipeline.run_core(changed, stages=stages, frame=synthetic_city.frame, resume=True)
+
+
+def test_cv_distance_curve_shows_leaky_random_cv(synthetic_city):
+    from sparc.core.pipeline import run_core
+    from sparc.core.report import render_report
+
+    cfg = _small_synthetic_cfg()
+    cfg.raw["cv"]["distance_curve"] = {"enabled": True, "block_m": [0, 300]}
+    r = run_core(cfg, stages=("S0", "S1", "S2", "S3"), frame=synthetic_city.frame, write=False)
+    rows = r.cv_distance["rows"]
+    assert [row["block_m"] for row in rows] == sorted(row["block_m"] for row in rows)
+    main = [row for row in rows if row["main"]]
+    assert len(main) == 1 and main[0]["block_m"] == pytest.approx(r.manifest["cv"]["block_m"])
+    random_row = rows[0]
+    assert random_row["buffer_m"] == 0.0 and random_row["n_blocks"] > r.data.n / 2
+    # random points leak through spatial autocorrelation: never harder than the main blocks
+    assert random_row["stacker"]["r2"] >= main[0]["stacker"]["r2"]
+    json.dumps(r.manifest["cv_distance"], default=str)
+    assert "Skill vs distance" in render_report(r)
+
+
 # ---------------------------------------------------------------------------
 # Providence (brown4.csv) — real-data smoke run
 # ---------------------------------------------------------------------------

@@ -9,9 +9,11 @@ Outputs (``cfg.output.dir``/<run name>/):
 * ``physics.json`` — per-fold fitted physics parameters
 * ``response_<var>.parquet`` + ``response_curves.json`` — S4 maps and curves
 * ``scenarios.json`` (+ ``scenario_deltas.parquet``) — S5
+* ``cv_distance.json`` — optional skill-vs-distance CV curve
 * ``causal.json`` — S6 estimates, sensitivity and model-vs-causal audit
 * ``optimize.json`` (+ ``allocation.parquet``) — S7
 * ``report.md`` — human-readable summary
+* ``checkpoint.pkl`` — fitted state after each expensive stage (``resume=True``)
 """
 
 from __future__ import annotations
@@ -69,6 +71,7 @@ class CoreResult:
     scenarios: list = field(default_factory=list)
     causal: dict = field(default_factory=dict)
     optimize: dict = field(default_factory=dict)
+    cv_distance: dict = field(default_factory=dict)
     manifest: dict = field(default_factory=dict)
 
 
@@ -92,12 +95,65 @@ def _block_and_buffer(cfg: CoreConfig, influence, data: CoreData) -> tuple[float
     return float(block), float(buf)
 
 
+CHECKPOINT = "checkpoint.pkl"
+
+
+def _fingerprint(cfg: CoreConfig, fast: bool, frame: pd.DataFrame | None) -> str:
+    """Identity of a run for resuming: effective config, input data and the
+    core source code (a code change invalidates saved fits; a docs commit
+    does not)."""
+    import hashlib
+
+    h = hashlib.sha256()
+    h.update(json.dumps(cfg.raw, sort_keys=True, default=str).encode())
+    h.update(str(bool(fast)).encode())
+    if frame is not None:
+        h.update(pd.util.hash_pandas_object(frame, index=True).to_numpy().tobytes())
+    else:
+        st = Path(cfg.data_path).stat()
+        h.update(f"{cfg.data_path}:{st.st_size}:{st.st_mtime_ns}".encode())
+    for src in sorted(Path(__file__).parent.glob("*.py")):
+        h.update(src.read_bytes())
+    return h.hexdigest()[:16]
+
+
+def _save_checkpoint(run_dir: Path | None, state: dict) -> None:
+    if run_dir is None:
+        return
+    import pickle
+
+    tmp = run_dir / (CHECKPOINT + ".tmp")
+    with open(tmp, "wb") as fh:
+        pickle.dump(state, fh, protocol=pickle.HIGHEST_PROTOCOL)
+    tmp.replace(run_dir / CHECKPOINT)
+    log.info("checkpoint saved (%s)", ", ".join(sorted(state.get("done", ()))))
+
+
+def _load_checkpoint(run_dir: Path | None, fingerprint: str) -> dict:
+    if run_dir is None or not (run_dir / CHECKPOINT).exists():
+        return {}
+    import pickle
+
+    with open(run_dir / CHECKPOINT, "rb") as fh:
+        state = pickle.load(fh)
+    if state.get("fingerprint") != fingerprint:
+        log.warning("checkpoint in %s is from a different config/data/code version — ignoring it", run_dir)
+        return {}
+    log.info("resuming from checkpoint (done: %s)", ", ".join(sorted(state.get("done", ()))))
+    return state
+
+
 def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False, frame: pd.DataFrame | None = None,
-             write: bool = True) -> CoreResult:
+             write: bool = True, resume: bool = False, cv_curve: bool | None = None) -> CoreResult:
     """Run the requested stages.  ``fast`` shrinks the problem (8k-point
-    window, 3 folds, fewer epochs) for smoke runs and CI."""
+    window, 3 folds, fewer epochs) for smoke runs and CI.  With ``write``,
+    fitted state is checkpointed after S3, the CV distance curve, S4, S5 and
+    S6; ``resume`` reuses a checkpoint whose fingerprint matches.
+    ``cv_curve`` overrides ``cv.distance_curve.enabled``."""
     if not isinstance(cfg, CoreConfig):
         cfg = load_core_config(cfg)
+    if cv_curve is not None:
+        cfg.raw["cv"].setdefault("distance_curve", {})["enabled"] = bool(cv_curve)
     if fast:
         if frame is None and not cfg.data.get("subsample"):
             cfg.raw["data"]["subsample"] = 8000
@@ -118,12 +174,19 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
         run_dir.mkdir(parents=True, exist_ok=True)
     result = CoreResult(cfg=cfg, data=data, run_dir=run_dir)
     log.info("S0: %d points, grid %s, cell %.2f m", data.n, data.grid.shape, data.grid.dx)
+    fp = _fingerprint(cfg, fast, frame) if run_dir is not None else ""
+    state = _load_checkpoint(run_dir, fp) if resume else {}
+    done = set(state.get("done", ()))
+    state = {**state, "fingerprint": fp, "done": done}
 
     # ------------------------------------------------------------------ S1
-    from sparc.core.influence import compute_influence
-
     t = time.time()
-    influence = compute_influence(data, cfg.raw["influence"], seed=int(cfg.raw["cv"].get("seed", 0)))
+    if "S3" in done:
+        influence = state["influence"]
+    else:
+        from sparc.core.influence import compute_influence
+
+        influence = compute_influence(data, cfg.raw["influence"], seed=int(cfg.raw["cv"].get("seed", 0)))
     result.influence = influence
     ranges = dict(influence.ranges_m)
     timings["S1"] = time.time() - t
@@ -135,12 +198,18 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
 
     # --------------------------------------------------------------- S2+S3
     t = time.time()
-    block, buf = _block_and_buffer(cfg, influence, data)
-    folds = make_spatial_folds(data.coords, n_folds=int(cfg.raw["cv"]["n_folds"]), block_m=block,
-                               buffer_m=buf, seed=int(cfg.raw["cv"].get("seed", 42)))
     ctx = build_context(data.frame, data, ranges, cfg)
-    ens = fit_ensemble(ctx, folds, cfg, ranges_m=ranges, intercept_range_m=influence.target_resid_range_m,
-                       L_init=influence.L_prior_m, seed=int(cfg.raw["cv"].get("seed", 0)))
+    if "S3" in done:
+        folds, ens = state["folds"], state["ensemble"]
+    else:
+        block, buf = _block_and_buffer(cfg, influence, data)
+        folds = make_spatial_folds(data.coords, n_folds=int(cfg.raw["cv"]["n_folds"]), block_m=block,
+                                   buffer_m=buf, seed=int(cfg.raw["cv"].get("seed", 42)))
+        ens = fit_ensemble(ctx, folds, cfg, ranges_m=ranges, intercept_range_m=influence.target_resid_range_m,
+                           L_init=influence.L_prior_m, seed=int(cfg.raw["cv"].get("seed", 0)))
+        state.update(influence=influence, folds=folds, ensemble=ens)
+        done.add("S3")
+        _save_checkpoint(run_dir, state)
     result.ensemble = ens
     timings["S2_S3"] = time.time() - t
     if run_dir:
@@ -155,6 +224,25 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
         if ens.has_physics:
             _write_json(run_dir / "physics.json", [st.physics.params for st in ens.stacks])
 
+    # ------------------------------------------------- CV distance diagnostic
+    dcfg = cfg.raw["cv"].get("distance_curve") or {}
+    if dcfg.get("enabled"):
+        t = time.time()
+        if "cv_curve" in done:
+            result.cv_distance = state["cv_distance"]
+        else:
+            from sparc.core.diagnostics import cv_distance_curve
+
+            result.cv_distance = cv_distance_curve(ctx, data, cfg, influence, ens, folds,
+                                                   block_sizes=dcfg.get("block_m", (0, 500, 1000)),
+                                                   seed=int(cfg.raw["cv"].get("seed", 42)))
+            state["cv_distance"] = result.cv_distance
+            done.add("cv_curve")
+            _save_checkpoint(run_dir, state)
+        timings["cv_curve"] = time.time() - t
+        if run_dir:
+            _write_json(run_dir / "cv_distance.json", result.cv_distance)
+
     if not ({"S4", "S5", "S6", "S7"} & stages):
         return _finish(result, timings, fast, folds=folds)
 
@@ -167,13 +255,18 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
     engine = ScenarioEngine(data, cfg, ens, ranges, mediators)
     resp = ResponseEngine(engine, influence_scales=cfg.raw["influence"].get("scales", (0.5, 1.0, 2.0)))
     if "S4" in stages or "S6" in stages or "S7" in stages:
-        for var in cfg.actionable:
-            vr = resp.sweep(var)
-            result.responses[var] = vr
-            if run_dir:
+        if "S4" in done:
+            result.responses = state["responses"]
+        else:
+            for var in cfg.actionable:
+                result.responses[var] = resp.sweep(var)
+            state["responses"] = result.responses
+            done.add("S4")
+            _save_checkpoint(run_dir, state)
+        if run_dir:
+            for var, vr in result.responses.items():
                 vr.maps.assign(id=data.ids, x_m=data.x, y_m=data.y_coord).to_parquet(
                     run_dir / f"response_{var}.parquet", index=False)
-        if run_dir:
             _write_json(run_dir / "response_curves.json",
                         {v: {"summary": r.summary, "curve": r.curve.to_dict(orient="list")}
                          for v, r in result.responses.items()})
@@ -181,11 +274,17 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
 
     t = time.time()
     if "S5" in stages:
-        deltas = {}
-        for spec in specs_from_config(cfg):
-            res = engine.run(spec)
-            result.scenarios.append(res.summary())
-            deltas[spec.name] = res.delta
+        if "S5" in done:
+            result.scenarios, deltas = state["scenarios"], state["scenario_deltas"]
+        else:
+            deltas = {}
+            for spec in specs_from_config(cfg):
+                res = engine.run(spec)
+                result.scenarios.append(res.summary())
+                deltas[spec.name] = res.delta
+            state.update(scenarios=result.scenarios, scenario_deltas=deltas)
+            done.add("S5")
+            _save_checkpoint(run_dir, state)
         if run_dir and deltas:
             _write_json(run_dir / "scenarios.json", result.scenarios)
             pd.DataFrame(deltas).assign(id=data.ids).to_parquet(run_dir / "scenario_deltas.parquet", index=False)
@@ -194,17 +293,23 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
     # ------------------------------------------------------------------ S6
     t = time.time()
     if "S6" in stages and cfg.raw["causal"].get("enabled", True) and cfg.raw["causal"].get("treatments"):
-        from sparc.core.causal import run_causal_validation
+        if "S6" in done:
+            result.causal = state["causal"]
+        else:
+            from sparc.core.causal import run_causal_validation
 
-        effects = {}
-        for tr in cfg.raw["causal"]["treatments"]:
-            if tr in result.responses:
-                x = data.frame[tr].to_numpy(float)
-                pos = x[x > 0] if (x > 0).mean() < 0.95 else x
-                t_grid = np.quantile(pos, np.linspace(0.1, 0.9, 7))
-                effects[tr] = resp.model_effects(tr, result.responses[tr], t_grid=t_grid)
-        result.causal = run_causal_validation(data, cfg.raw["causal"], folds, ranges, model_effects=effects,
-                                              seed=int(cfg.raw["cv"].get("seed", 0)))
+            effects = {}
+            for tr in cfg.raw["causal"]["treatments"]:
+                if tr in result.responses:
+                    x = data.frame[tr].to_numpy(float)
+                    pos = x[x > 0] if (x > 0).mean() < 0.95 else x
+                    t_grid = np.quantile(pos, np.linspace(0.1, 0.9, 7))
+                    effects[tr] = resp.model_effects(tr, result.responses[tr], t_grid=t_grid)
+            result.causal = run_causal_validation(data, cfg.raw["causal"], folds, ranges, model_effects=effects,
+                                                  seed=int(cfg.raw["cv"].get("seed", 0)))
+            state["causal"] = result.causal
+            done.add("S6")
+            _save_checkpoint(run_dir, state)
         if run_dir:
             _write_json(run_dir / "causal.json", _strip_arrays(result.causal))
     timings["S6"] = time.time() - t

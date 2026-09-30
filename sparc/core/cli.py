@@ -1,6 +1,6 @@
 """Command-line entry for the core pipeline.
 
-    sparc core run   --project configs/core_providence.yml [--stages S0,S1,S2,S3] [--fast]
+    sparc core run   --project configs/core_providence.yml [--stages S0,S1,S2,S3] [--fast] [--resume] [--cv-curve]
     sparc core synth --out output/core/synthetic_city.csv [--seed 0]
     python -m sparc.core run --project ...          (same, without the legacy CLI)
 """
@@ -20,6 +20,10 @@ def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
     p_run.add_argument("--stages", default="all", help="comma list of S0..S7, or 'all'")
     p_run.add_argument("--fast", action="store_true", help="8k-point window, 3 folds, fewer epochs (smoke run)")
     p_run.add_argument("--threads", type=int, default=0, help="torch threads (0 = torch default)")
+    p_run.add_argument("--resume", action="store_true",
+                       help="reuse fitted stages from <run dir>/checkpoint.pkl when config, data and code match")
+    p_run.add_argument("--cv-curve", action="store_true",
+                       help="also report skill vs CV block size (random points, 500 m, 1000 m; reporting only)")
     p_run.add_argument("--quiet", action="store_true")
     p_run.set_defaults(func=cmd_core_run)
 
@@ -39,7 +43,8 @@ def cmd_core_run(args) -> int:
 
         torch.set_num_threads(int(args.threads))
     stages = ALL_STAGES if args.stages in ("all", "", None) else tuple(s.strip().upper() for s in args.stages.split(","))
-    res = run_core(Path(args.project), stages=stages, fast=bool(args.fast))
+    res = run_core(Path(args.project), stages=stages, fast=bool(args.fast), resume=bool(args.resume),
+                   cv_curve=True if args.cv_curve else None)
     m = res.manifest.get("metrics", {})
     if m:
         s = m.get("stacker", {})
