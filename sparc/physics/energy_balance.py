@@ -1,20 +1,30 @@
 """
-Surface Energy Balance (SEB) components for SPARC V3.
+Surface Energy Balance (SEB) helper components for SPARC V3.
 
-Implements the four-component energy balance:
-  Q* = QH + QE + QS
+Reference balance:
+  Q* = QH + QE + QS   (+ ΔQA, anthropogenic, neglected here)
 
 Where:
-  Q*  — net all-wave radiation
-  QH  — sensible heat flux (conduction through surface layer)
-  QE  — latent heat flux (evapotranspiration)
-  QS  — ground/subsurface heat storage
+  Q*  — net all-wave radiation                       (:func:`net_radiation`)
+  QH  — turbulent sensible heat flux to the air
+  QE  — latent heat flux (evapotranspiration)        (:func:`latent_heat_flux`)
+  QS  — ground/subsurface heat storage               (:func:`storage_flux`)
 
-All fluxes are computed per spatial point from local surface properties
-and the predicted temperature field.  Units: W/m².
+IMPORTANT: this module is NOT wired into the PDE loss
+(:mod:`sparc.physics.pde_loss` has no energy-balance term) or anywhere else
+in training.  It provides stand-alone helpers only.
+
+In particular there is no sensible-heat parameterisation here: turbulent QH
+requires a bulk-transfer form ρ·c_p·(T_s − T_a)/r_a, i.e. air temperature and
+an aerodynamic resistance.  The former ``sensible_heat_flux`` computed
+−k·∇²T·d, which is a (lateral) ground-conduction proxy; it is now
+:func:`ground_conduction_proxy`, with ``sensible_heat_flux`` kept as a
+deprecated alias.  Units: W/m².
 """
 
 from __future__ import annotations
+
+import warnings
 
 import torch
 
@@ -65,15 +75,20 @@ def net_radiation(
     return sw_net + lw_down - lw_up
 
 
-def sensible_heat_flux(
+def ground_conduction_proxy(
     laplacian_T: torch.Tensor,
     depth: float = 0.5,
     k_thermal: float = K_SOIL_DEFAULT,
 ) -> torch.Tensor:
     """
-    Sensible heat flux through the surface layer via Fourier's law.
+    Conductive-flux proxy from the lateral temperature curvature.
 
-    QH = -k · ∇²T · d
+    G ≈ -k · ∇²T · d
+
+    This is a (Fourier's-law) ground/substrate conduction proxy integrated
+    over a layer of depth ``d``.  It is NOT the turbulent sensible heat flux
+    QH to the atmosphere (which needs air temperature and an aerodynamic
+    resistance).
 
     Parameters
     ----------
@@ -83,9 +98,28 @@ def sensible_heat_flux(
 
     Returns
     -------
-    QH : (N,) sensible heat flux (W/m²)
+    G : (N,) conduction proxy (W/m²)
     """
     return -k_thermal * laplacian_T * depth
+
+
+def sensible_heat_flux(
+    laplacian_T: torch.Tensor,
+    depth: float = 0.5,
+    k_thermal: float = K_SOIL_DEFAULT,
+) -> torch.Tensor:
+    """Deprecated alias of :func:`ground_conduction_proxy`.
+
+    The formula −k·∇²T·d is ground conduction, not sensible heat.
+    """
+    warnings.warn(
+        "sensible_heat_flux is deprecated and misnamed (it computes a ground "
+        "conduction proxy -k*lap(T)*d, not sensible heat); use "
+        "ground_conduction_proxy instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return ground_conduction_proxy(laplacian_T, depth=depth, k_thermal=k_thermal)
 
 
 def latent_heat_flux(
@@ -130,7 +164,9 @@ def storage_flux(
     QS = ρ·c·d·T  (proportional to temperature for steady-state)
 
     For steady-state analysis (no ∂T/∂t), storage is proportional
-    to T anomaly from reference.
+    to T anomaly from reference.  Note that ρ·c·d·T is a heat *content*
+    (J m⁻²), not a flux: the physical storage flux is ρ·c·d·∂T/∂t, which
+    needs at least two snapshots.  Not used by the training loss.
 
     Parameters
     ----------
@@ -143,44 +179,3 @@ def storage_flux(
     QS : (N,) storage flux scaling
     """
     return rho_c * depth * T
-
-
-def energy_balance_residual(
-    T: torch.Tensor,
-    albedo: torch.Tensor,
-    laplacian_T: torch.Tensor,
-    canopy_fraction: torch.Tensor,
-    solar_Wm2: float = 800.0,
-    T_sky_K: float = 260.0,
-    k_thermal: float = K_SOIL_DEFAULT,
-    depth: float = 0.5,
-    ndvi: torch.Tensor | None = None,
-) -> torch.Tensor:
-    """
-    Compute the energy balance residual: Q* - QH - QE·Q* - QS.
-
-    A physical temperature field should have residual ≈ 0.
-
-    Parameters
-    ----------
-    T : (N,) temperature in Kelvin
-    albedo : (N,) surface albedo
-    laplacian_T : (N,) ∇²T from PDE operators
-    canopy_fraction : (N,) vegetation cover fraction
-    solar_Wm2 : incoming shortwave
-    T_sky_K : sky temperature
-    k_thermal : thermal conductivity
-    depth : surface layer depth
-    ndvi : optional NDVI for latent heat modulation
-
-    Returns
-    -------
-    residual : (N,) energy balance residual (W/m²)
-    """
-    Q_star = net_radiation(T, albedo, solar_Wm2, T_sky_K)
-    QH = sensible_heat_flux(laplacian_T, depth, k_thermal)
-    QE_scale = latent_heat_flux(canopy_fraction, ndvi)
-    QE = QE_scale * Q_star
-
-    # Residual: Q* - QH - QE ≈ 0 for steady-state (ignoring storage)
-    return Q_star - QH - QE

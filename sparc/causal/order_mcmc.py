@@ -105,7 +105,7 @@ def _score_ordering(
             adj[par, j] = 1
 
     dag = DAGStructure(adj=adj, node_names=list(suff.node_names) if hasattr(suff, "node_names") else [str(i) for i in range(p)])
-    log_prior = prior.log_prior(dag, dag.node_names)
+    log_prior = prior.log_prior(dag)
 
     return bge_total + log_prior, parents_per_node
 

@@ -2,6 +2,23 @@
 # ================================================
 # Edit feature_columns / label_columns to add/drop variables without code changes.
 # Bboxes are WGS-84 (minx, miny, maxx, maxy).
+#
+# Per-city date/time metadata
+# ---------------------------
+# timezone:             IANA zone; ERA5 boundary windows are fetched in LOCAL time
+#                       (CAPA traverse protocol ~6–7 am, 3–4 pm, 7–8 pm), DST included.
+# campaign_date_source: where the campaign date came from —
+#   era5_matched   : chosen (or "verified") by comparing ERA5 t2m with the CAPA
+#                    temperatures.  The date therefore depends on ERA5, and the ERA5
+#                    boundary features (and the ERA5-anchored UHI anomaly labels) are
+#                    CIRCULAR for these cities — they were selected to agree.  Treat
+#                    results on these cities as optimistic.
+#   filename_guess : taken from, or estimated relative to, the OSF filename/upload date
+#                    (no override, or "~N months before upload").  Independent of ERA5
+#                    but may be wrong by days to months.
+# Target: replace both with the traverse timestamps in the CAPA metadata / raw
+# traverse points (capa_metadata; see sparc.data.collect.capa.download_capa_traverses),
+# which date the campaign independently of ERA5.
 
 multicity:
   output_dir: "output/cities"
@@ -13,6 +30,8 @@ multicity:
       holdout: true
       bbox: [-75.28, 39.86, -74.96, 40.14]
       utm_epsg: "EPSG:32618"
+      timezone: "America/New_York"
+      campaign_date_source: "filename_guess"
 
     - city: "Providence, RI"
       city_slug: "providence_ri"
@@ -20,12 +39,16 @@ multicity:
       phase1_only: true     # 2019 NIHHIS; CAPA AAT data absent (tdsy7 folder not matched)
       bbox: [-71.50, 41.75, -71.35, 41.90]
       utm_epsg: "EPSG:32619"
+      timezone: "America/New_York"
+      campaign_date_source: "filename_guess"
 
     - city: "Raleigh, NC"
       city_slug: "raleigh_nc"
       holdout: false
       bbox: [-78.78, 35.70, -78.54, 35.90]
       utm_epsg: "EPSG:32617"
+      timezone: "America/New_York"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2021-06-17"   # ERA5-matched; OSF filename date was upload date
 
     - city: "Chicago, IL"
@@ -33,6 +56,8 @@ multicity:
       holdout: false
       bbox: [-87.94, 41.64, -87.52, 42.02]
       utm_epsg: "EPSG:32616"
+      timezone: "America/Chicago"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2023-07-28"   # ERA5-matched; OSF filename date was upload date
 
     - city: "Atlanta, GA"
@@ -40,6 +65,8 @@ multicity:
       holdout: false
       bbox: [-84.55, 33.65, -84.29, 33.89]
       utm_epsg: "EPSG:32616"
+      timezone: "America/New_York"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2021-09-26"   # ERA5-matched; OSF filename date was upload date
 
     - city: "Seattle, WA"
@@ -47,6 +74,8 @@ multicity:
       holdout: false
       bbox: [-122.46, 47.49, -122.24, 47.73]
       utm_epsg: "EPSG:32610"
+      timezone: "America/Los_Angeles"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2020-09-09"   # ERA5-matched; OSF filename date was upload date
 
     - city: "Albuquerque, NM"
@@ -54,6 +83,8 @@ multicity:
       holdout: false
       bbox: [-106.78, 35.04, -106.52, 35.22]
       utm_epsg: "EPSG:32613"
+      timezone: "America/Denver"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2021-06-06"   # ERA5-matched; OSF filename date was upload date
 
     - city: "Milwaukee, WI"
@@ -61,6 +92,8 @@ multicity:
       holdout: false
       bbox: [-88.07, 42.92, -87.85, 43.14]
       utm_epsg: "EPSG:32616"
+      timezone: "America/Chicago"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2022-08-06"   # NIHHIS Aug 2022; summer CAPA ✓
 
     - city: "Boston, MA"
@@ -69,6 +102,8 @@ multicity:
       phase1_only: true     # date fixed 2019-08-19; needs re-collect before approving supervised
       bbox: [-71.19, 42.23, -70.99, 42.43]
       utm_epsg: "EPSG:32619"
+      timezone: "America/New_York"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2019-08-19"   # ERA5 forensics: Aug 19 best (ERA5 morn=75.0F = CAPA exactly, score=2.6); was using Aug 28 (ERA5=63°F → fake UHI +12°F)
 
     - city: "Brooklyn, NY"
@@ -76,6 +111,8 @@ multicity:
       holdout: false
       bbox: [-74.06, 40.57, -73.83, 40.74]
       utm_epsg: "EPSG:32618"
+      timezone: "America/New_York"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2022-08-29"   # NIHHIS Aug 2022 heat wave; OSF upload date was 092922
 
     - city: "Burlington, VT"
@@ -83,6 +120,8 @@ multicity:
       holdout: false
       bbox: [-73.27, 44.43, -73.15, 44.55]
       utm_epsg: "EPSG:32618"
+      timezone: "America/New_York"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2020-07-25"   # ERA5 forensics: Jul 25 perfect (score=0.7) → UHI morn=-1.5°F, mid=-0.7°F ✓ (small lakeside city, near-zero expected)
 
     - city: "Wilmington, DE"
@@ -91,6 +130,8 @@ multicity:
       phase1_only: true     # CAPA AAT data absent from parquet (yef5w node CAPA download failed)
       bbox: [-75.61, 39.69, -75.51, 39.78]
       utm_epsg: "EPSG:32618"   # Cfa, dedicated OSF node yef5w; 30mi from Philadelphia
+      timezone: "America/New_York"
+      campaign_date_source: "filename_guess"
 
     - city: "Baltimore, MD"
       city_slug: "baltimore_md"
@@ -98,6 +139,8 @@ multicity:
       phase1_only: true     # 2019 NIHHIS; CAPA AAT data absent (tdsy7 folder not matched)
       bbox: [-76.72, 39.20, -76.53, 39.37]
       utm_epsg: "EPSG:32618"
+      timezone: "America/New_York"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2019-07-20"   # 2019 NIHHIS campaign; ERA5-matched
 
     - city: "Charlotte, NC"
@@ -105,6 +148,8 @@ multicity:
       holdout: false
       bbox: [-80.99, 35.10, -80.72, 35.35]
       utm_epsg: "EPSG:32617"
+      timezone: "America/New_York"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2024-07-09"   # Jul 2024 campaign; OSF upload date was 2024-08-06
                                               # Aug 6: ERA5 midday=80F but CAPA=94.8F (impossible)
                                               # Jul 9: ERA5 morning=73F/midday=90F -> UHI=3.7/4.8F ✓
@@ -114,6 +159,8 @@ multicity:
       holdout: false
       bbox: [-90.14, 29.89, -89.90, 30.08]
       utm_epsg: "EPSG:32615"
+      timezone: "America/Chicago"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2020-09-05"   # ERA5 forensics: Sep 5 best match → UHI morn=-0.7°F, mid=+0.5°F ✓ (near-zero; was using Nov 4 winter date)
 
     # ── Downloaded but no CAPA labels (AAT=NaN) — JEPA pretraining only ──────
@@ -123,6 +170,8 @@ multicity:
       phase1_only: true     # 2019 NIHHIS; AAT data absent from parquet (tdsy7 folder mismatch)
       bbox: [-74.06, 40.60, -73.72, 40.88]
       utm_epsg: "EPSG:32618"
+      timezone: "America/New_York"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2019-08-28"   # 2019 NIHHIS campaign date
 
     - city: "Louisville, KY"
@@ -131,6 +180,8 @@ multicity:
       phase1_only: true     # 2019 NIHHIS; AAT data absent from parquet (tdsy7 folder mismatch)
       bbox: [-85.82, 38.10, -85.56, 38.35]
       utm_epsg: "EPSG:32616"
+      timezone: "America/Kentucky/Louisville"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2019-08-28"   # 2019 NIHHIS campaign date
 
     - city: "Kansas City, MO"
@@ -139,6 +190,8 @@ multicity:
       phase1_only: true     # 2019 NIHHIS; AAT data absent from parquet (tdsy7 folder mismatch)
       bbox: [-94.71, 38.92, -94.42, 39.18]
       utm_epsg: "EPSG:32615"
+      timezone: "America/Chicago"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2019-08-28"   # 2019 NIHHIS campaign date
 
     # ── Houston TX — summer campaign (OSF upload date 2020-11-23; actual Aug 2020) ──
@@ -147,6 +200,8 @@ multicity:
       holdout: false
       bbox: [-95.61, 29.61, -95.23, 29.90]
       utm_epsg: "EPSG:32615"
+      timezone: "America/Chicago"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2020-08-15"   # Aug 2020 heat wave; OSF upload date was 2020-11-23
 
     # ── New cities to collect ─────────────────────────────────────────────────
@@ -155,6 +210,8 @@ multicity:
       holdout: false
       bbox: [-81.80, 30.14, -81.44, 30.50]
       utm_epsg: "EPSG:32617"
+      timezone: "America/New_York"
+      campaign_date_source: "filename_guess"   # date encoded in the raster filename (072522), not ERA5-matched
       campaign_date_override: "2022-07-25"   # filename rasters_chw_jacksonville_072522.zip confirmed
 
     - city: "Austin, TX"
@@ -162,12 +219,16 @@ multicity:
       holdout: false
       bbox: [-97.90, 30.10, -97.54, 30.46]
       utm_epsg: "EPSG:32614"
+      timezone: "America/Chicago"
+      campaign_date_source: "filename_guess"
 
     - city: "Columbia, SC"
       city_slug: "columbia_sc"
       holdout: false
       bbox: [-81.20, 33.90, -80.86, 34.14]
       utm_epsg: "EPSG:32617"
+      timezone: "America/New_York"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2022-08-20"   # OSF upload date was 2022-10-17; re-collected Aug 20 2022 ✓
                                               # Verified: UHI morn=+4.2°F, mid=+6.9°F ✓
 
@@ -176,6 +237,8 @@ multicity:
       holdout: false
       bbox: [-80.05, 32.72, -79.85, 32.92]
       utm_epsg: "EPSG:32617"
+      timezone: "America/New_York"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2021-08-10"   # OSF upload date was 2021-11-18; re-collected Aug 10 2021 ✓
                                               # Verified: UHI morn=+4.8°F, mid=+2.2°F ✓
 
@@ -184,6 +247,8 @@ multicity:
       holdout: false
       bbox: [-97.70, 35.32, -97.34, 35.58]
       utm_epsg: "EPSG:32614"
+      timezone: "America/Chicago"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2023-07-08"   # OSF upload date was 2023-10-16; re-collected Jul 8 2023 ✓
                                               # Verified: UHI morn=+12.0°F, mid=+3.0°F ✓
 
@@ -192,6 +257,8 @@ multicity:
       holdout: false
       bbox: [-112.10, 40.62, -111.82, 40.82]
       utm_epsg: "EPSG:32612"
+      timezone: "America/Denver"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2023-06-25"   # OSF upload date was 2023-09-19; re-collected Jun 25 2023 ✓
                                               # Verified: UHI morn=+8.0°F, mid=+7.9°F ✓ (symmetric, compact mountain city)
 
@@ -201,6 +268,8 @@ multicity:
       phase1_only: true     # ERA5 elevation bias: Rocky Mountain foothills in 0.25° grid → UHI +15°F artifact
       bbox: [-105.38, 39.94, -105.10, 40.12]
       utm_epsg: "EPSG:32613"
+      timezone: "America/Denver"
+      campaign_date_source: "filename_guess"
 
     - city: "Portland, OR"
       city_slug: "portland_or"
@@ -208,12 +277,16 @@ multicity:
       phase1_only: true     # 2019 NIHHIS; CAPA AAT data absent (all NaN, same tdsy7 format mismatch as NY/Louisville/KC)
       bbox: [-122.82, 45.44, -122.52, 45.68]
       utm_epsg: "EPSG:32610"
+      timezone: "America/Los_Angeles"
+      campaign_date_source: "filename_guess"
 
     - city: "Las Vegas, NV"
       city_slug: "las_vegas_nv"
       holdout: false
       bbox: [-115.32, 36.04, -115.04, 36.26]
       utm_epsg: "EPSG:32611"
+      timezone: "America/Los_Angeles"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2022-08-09"   # ERA5 forensics perfect match; UHI morn=-4.7°F, mid=-5.3°F ✓ (urban cool island, physically plausible for Mojave desert)
 
     - city: "San Diego, CA"
@@ -221,6 +294,8 @@ multicity:
       holdout: false
       bbox: [-117.28, 32.64, -117.04, 32.84]
       utm_epsg: "EPSG:32611"
+      timezone: "America/Los_Angeles"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2021-08-07"   # OSF upload date was 2021-12-07; re-collected Aug 7 2021 ✓
                                               # Verified: UHI morn=-0.4°F, mid=+0.6°F ✓ (near-zero — coastal marine layer city)
 
@@ -230,6 +305,8 @@ multicity:
       holdout: false
       bbox: [-71.12, 42.04, -70.96, 42.14]
       utm_epsg: "EPSG:32619"
+      timezone: "America/New_York"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2023-08-21"   # ERA5 forensics: Aug 21 best match (ERA5 morn=65.7F, mid=84.7F) → UHI morn=-2.7°F, mid=+1.9°F ✓
 
     - city: "Scranton, PA"
@@ -237,6 +314,8 @@ multicity:
       holdout: false
       bbox: [-75.77, 41.38, -75.57, 41.50]
       utm_epsg: "EPSG:32618"
+      timezone: "America/New_York"
+      campaign_date_source: "filename_guess"
       campaign_date_override: "2023-07-11"   # estimated: ~2 months before Sep 11 upload; UHI morn=+0.4°F, mid=+4.0°F ✓
 
     - city: "Manhattan, NY"
@@ -244,6 +323,8 @@ multicity:
       holdout: false
       bbox: [-74.02, 40.70, -73.91, 40.88]
       utm_epsg: "EPSG:32618"
+      timezone: "America/New_York"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2021-08-05"   # ERA5 forensics: Aug 5 confirmed (ERA5 morn=68F, mid=78F → UHI +2.6/+5.1°F ✓)
 
     - city: "Bronx, NY"
@@ -251,6 +332,8 @@ multicity:
       holdout: false
       bbox: [-73.95, 40.78, -73.75, 40.91]
       utm_epsg: "EPSG:32618"
+      timezone: "America/New_York"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2021-08-05"   # same campaign date as Manhattan; UHI +3.0/+6.0°F ✓
 
     - city: "Jersey City, NJ"
@@ -258,6 +341,8 @@ multicity:
       holdout: false
       bbox: [-74.13, 40.67, -74.02, 40.76]
       utm_epsg: "EPSG:32618"
+      timezone: "America/New_York"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2021-07-24"   # ERA5 forensics confirmed → UHI morn=+1.3°F, mid=+0.3°F ✓ (near-zero, Hudson waterfront)
 
     - city: "Newark, NJ"
@@ -265,6 +350,8 @@ multicity:
       holdout: false
       bbox: [-74.26, 40.69, -74.10, 40.78]
       utm_epsg: "EPSG:32618"
+      timezone: "America/New_York"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2021-07-24"   # same campaign date as Jersey City → UHI morn=+0.8°F, mid=+0.7°F ✓
 
     # ── Virginia / South Atlantic expansion ──────────────────────────────────
@@ -273,6 +360,8 @@ multicity:
       holdout: false
       bbox: [-77.17, 38.83, -77.03, 38.93]
       utm_epsg: "EPSG:32618"
+      timezone: "America/New_York"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2021-08-29"   # ERA5 confirmed: UHI morn=-1.3°F (≈0), mid=+9.3°F ✓ (dense DC suburb)
 
     - city: "Richmond, VA"
@@ -280,6 +369,8 @@ multicity:
       holdout: false
       bbox: [-77.60, 37.44, -77.30, 37.62]
       utm_epsg: "EPSG:32618"
+      timezone: "America/New_York"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2021-08-01"   # ERA5 audit: UHI morn=+0.7°F, mid=+14.0°F ✓ (under 15°F threshold; dense urban VA)
 
     - city: "Virginia Beach, VA"
@@ -287,6 +378,8 @@ multicity:
       holdout: false
       bbox: [-76.15, 36.72, -75.87, 36.98]
       utm_epsg: "EPSG:32618"
+      timezone: "America/New_York"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2021-08-29"   # ERA5 audit: UHI morn=-0.7°F, mid=+7.1°F ✓ (clean coastal city)
 
     # ── Midwest expansion ────────────────────────────────────────────────────
@@ -295,6 +388,8 @@ multicity:
       holdout: false
       bbox: [-95.10, 38.82, -94.52, 39.18]
       utm_epsg: "EPSG:32615"
+      timezone: "America/Chicago"
+      campaign_date_source: "filename_guess"
       campaign_date_override: "2023-07-15"   # UHI morn=+6.9°F, mid=+4.4°F ✓ (clean; estimated date ~3mo before Oct 15 upload)
 
     - city: "Omaha, NE"
@@ -302,6 +397,8 @@ multicity:
       holdout: false
       bbox: [-96.25, 41.18, -95.84, 41.40]
       utm_epsg: "EPSG:32614"
+      timezone: "America/Chicago"
+      campaign_date_source: "filename_guess"
       campaign_date_override: "2022-07-20"   # UHI morn=+11.9°F, mid=+11.6°F ✓ (borderline but valid; 2022 Midwest heat dome; ~2mo before Sep 20 upload)
 
     - city: "Columbia, MO"
@@ -309,6 +406,8 @@ multicity:
       holdout: false
       bbox: [-92.44, 38.88, -92.22, 39.04]
       utm_epsg: "EPSG:32615"
+      timezone: "America/Chicago"
+      campaign_date_source: "filename_guess"
       campaign_date_override: "2022-07-04"   # UHI morn=+4.0°F, mid=+3.9°F ✓ (clean; estimated ~3mo before Oct 4 upload)
 
     - city: "Iowa City, IA"
@@ -316,6 +415,8 @@ multicity:
       holdout: false
       bbox: [-91.70, 41.61, -91.47, 41.75]
       utm_epsg: "EPSG:32615"
+      timezone: "America/Chicago"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2023-05-29"   # ERA5 forensics: corrected from 2023-08-22 → UHI morn=-1.2°F, mid=-2.4°F ✓ (college town, near-zero expected)
 
     - city: "Cedar Rapids, IA"
@@ -323,6 +424,8 @@ multicity:
       holdout: false
       bbox: [-91.79, 41.88, -91.55, 42.07]
       utm_epsg: "EPSG:32615"
+      timezone: "America/Chicago"
+      campaign_date_source: "era5_matched"
       campaign_date_override: "2023-05-29"   # ERA5 forensics: corrected from 2023-08-22 → UHI morn=+0.3°F, mid=+0.5°F ✓ (near-zero; same rasters as Iowa City)
 
     # ── Southeast / Appalachian expansion ────────────────────────────────────
@@ -331,6 +434,8 @@ multicity:
       holdout: false
       bbox: [-82.65, 35.52, -82.46, 35.65]  # 691m avg elevation; no ERA5 elevation bias observed
       utm_epsg: "EPSG:32617"
+      timezone: "America/New_York"
+      campaign_date_source: "filename_guess"
       campaign_date_override: "2023-07-11"   # ~2mo before Sep 11 upload → UHI morn=+1.1°F, mid=-0.2°F ✓ (46.5% NaN; non-NaN cells valid)
 
     # ── Mountain West expansion ──────────────────────────────────────────────
@@ -339,6 +444,8 @@ multicity:
       holdout: false
       bbox: [-106.90, 32.27, -106.62, 32.44]
       utm_epsg: "EPSG:32613"
+      timezone: "America/Denver"
+      campaign_date_source: "filename_guess"
       campaign_date_override: "2020-08-15"   # ~1mo before Sep 15 upload → UHI morn=-1.8°F, mid=+3.1°F ✓ (81% NaN=desert outside urban core; 108k valid cells clean)
 
     # ── Pacific expansion ────────────────────────────────────────────────────
@@ -347,6 +454,8 @@ multicity:
       holdout: false
       bbox: [-122.52, 37.70, -122.33, 37.84]
       utm_epsg: "EPSG:32610"
+      timezone: "America/Los_Angeles"
+      campaign_date_source: "filename_guess"
       campaign_date_override: "2022-08-03"   # ~3mo before Nov 3 upload → UHI morn=-3.8°F, mid=-6.4°F ✓ (55% NaN=SF Bay water; marine fog cool island expected)
 
   # ── Feature / label columns ─────────────────────────────────────────────

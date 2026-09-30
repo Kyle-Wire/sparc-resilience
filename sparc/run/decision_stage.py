@@ -119,20 +119,8 @@ def main(ctx: "Any | None" = None, *, fast_mode: bool = False) -> None:
     ``main(ctx, fast_mode=<bool>)``.  Interactive / batch callers use
     :func:`run_decision_stage` directly.
     """
-    pass  # interactive callers use run_decision_stage() directly
-
-    result: dict = {
-        "ranked": opt_result.ranked,
-        "settings": opt_result.settings,
-        "equity_summary": opt_result.equity_summary,
-        "uncertainty": [dataclasses.asdict(u) for u in unc_results],
-    }
-
-    # ── 4. Persist artifact ───────────────────────────────────────────────
-    if output_dir is not None:
-        artifact_path = os.path.join(output_dir, "decision_ranked.json")
-        with open(artifact_path, "w", encoding="utf-8") as fh:
-            json.dump(result, fh, indent=2, default=str)
-        print(f"  [Decision] Ranked {len(weighted)} interventions → {artifact_path}")
-
-    return result
+    # Interactive / batch callers use run_decision_stage() directly; the
+    # staged pipeline has no decision inputs to pass, so this is a no-op.
+    # (The body that used to follow referenced undefined names and raised
+    # NameError whenever the stage runner called main().)
+    return None

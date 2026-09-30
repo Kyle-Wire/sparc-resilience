@@ -1,13 +1,24 @@
 """
 capa.py — CAPA Heat Watch traverse data for the SPARC pipeline.
 
-Fetches NOAA/NIHHIS Heat Watch campaign traverse shapefiles from an OSF
-repository and spatially interpolates them to the 30m fishnet at three
-time-of-day windows:
+Fetches NOAA/NIHHIS Heat Watch campaign data from an OSF repository.
 
-  am (morning)   → aat_morning  (~06:00 local)
-  af (afternoon) → aat_midday   (~12:00–14:00 local)
-  pm (evening)   → aat_night    (~19:00–21:00 local)
+Labels (:func:`download_capa` / :func:`assign_capa_to_grid`) are the CAPA
+*area-wide* temperature RASTERS — random-forest (Ranger) interpolations of
+the traverse points — sampled at fishnet centroids for three windows
+(CAPA traverse protocol, local time):
+
+  am (morning)   → aat_morning  (~06:00–07:00 local)
+  af (afternoon) → aat_midday   (~15:00–16:00 local)
+  pm (evening)   → aat_night    (~19:00–20:00 local)
+
+Because they are interpolated surfaces, neighbouring cells share
+information; evaluation splits must be spatially separated.
+
+The raw traverse POINTS (time-stamped measurements) can be fetched with
+:func:`download_capa_traverses` / parsed with :func:`parse_traverse_table`
+(UNVERIFIED against real OSF files).  Their timestamps date the campaign
+independently of ERA5.
 
 The campaign date is parsed from the traverses ZIP filename:
   ``traverses_chw_{city}_{MMDDYY}.zip``
@@ -490,6 +501,297 @@ def _sample_rasters_to_fishnet(fishnet_gdf: object, raster_data: dict) -> object
     gdf["diurnal_aat"] = midday - night  # type: ignore[index]
 
     return gdf
+
+
+# ---------------------------------------------------------------------------
+# Raw traverse points (UNVERIFIED against real OSF files)
+# ---------------------------------------------------------------------------
+
+_TRAVERSE_EXTS = (".zip", ".csv", ".shp", ".geojson")
+TRAVERSE_COLUMNS = ["time", "lat", "lon", "temp_f", "window"]
+
+# Normalised column-name candidates, in priority order.
+_TIME_NAMES = ("datetime", "date_time", "timestamp", "time_stamp", "local_time",
+               "time_local", "time")
+_LAT_NAMES = ("lat", "latitude", "y")
+_LON_NAMES = ("lon", "long", "longitude", "lng", "x")
+_TEMP_F_NAMES = ("t_f", "temp_f", "temperature_f", "tf", "air_temp_f",
+                 "air_temperature_f", "temp_fahrenheit", "temperature_fahrenheit",
+                 "t_fahrenheit")
+_TEMP_C_NAMES = ("t_c", "temp_c", "temperature_c", "tc", "air_temp_c",
+                 "air_temperature_c", "temp_celsius", "temperature_celsius",
+                 "t_celsius")
+_TEMP_GENERIC = ("temperature", "temp", "air_temperature", "air_temp")
+
+
+def _norm_col(name: object) -> str:
+    return re.sub(r"_+", "_", re.sub(r"[^0-9a-z]+", "_", str(name).lower())).strip("_")
+
+
+def find_traverse_sources(files: list) -> list:
+    """Select raw-traverse files from an OSF listing.
+
+    *files* may be dicts with a ``"name"`` key (as returned by the OSF scan)
+    or plain filename strings.  A file matches when its basename matches
+    ``traverse*`` or ``*_traverses*`` (case-insensitive) and it ends in
+    ``.zip``, ``.csv``, ``.shp`` or ``.geojson``.  Input order is kept.
+    """
+    out = []
+    for f in files or []:
+        name = f.get("name", "") if isinstance(f, dict) else str(f)
+        base = name.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if not base.endswith(_TRAVERSE_EXTS):
+            continue
+        if base.startswith("traverse") or "_traverses" in base:
+            out.append(f)
+    return out
+
+
+def _window_from_hour(hour: object) -> object:
+    """CAPA window from the local clock hour: morning <10, midday 10–17, evening ≥17."""
+    try:
+        h = float(hour)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(h):
+        return None
+    if h < 10:
+        return "morning"
+    if h < 17:
+        return "midday"
+    return "evening"
+
+
+def parse_traverse_table(
+    df: object,
+    timezone: Optional[str] = None,
+    window_hint: Optional[str] = None,
+) -> object:
+    """Normalise a raw CAPA traverse table to ``time, lat, lon, temp_f, window``.
+
+    UNVERIFIED against real OSF traverse files (api.osf.io is not reachable
+    from the development environment); column detection is heuristic:
+
+    * time — ``datetime`` / ``timestamp`` / ``time`` (a separate ``date``
+      column is combined with a time-only ``time`` column).  Naive
+      timestamps are taken as local time; tz-aware ones are converted to
+      *timezone* when given.
+    * lat / lon — ``lat``/``latitude``/``y`` and ``lon``/``long``/
+      ``longitude``/``x``; for a GeoDataFrame without them the point
+      geometry (reprojected to EPSG:4326) is used.  Values must be WGS-84
+      degrees.
+    * temperature — ``T_F``/``temp_f``/``t_f``/… (°F); names indicating °C
+      (``T_C``, ``temp_c``, ``temperature (°C)``, …) are converted to °F;
+      a generic ``temperature``/``temp`` column is assumed to be °F (CAPA
+      reports °F).
+    * window — from the local hour: morning < 10, midday 10–17, evening ≥ 17
+      (or *window_hint* when there is no time column).
+
+    Rows missing lat, lon or temperature are dropped.
+    """
+    import pandas as pd
+
+    if df is None or len(df) == 0:
+        return pd.DataFrame(columns=TRAVERSE_COLUMNS)
+
+    cols = {}
+    for c in df.columns:
+        if str(c).lower() == "geometry":
+            continue
+        cols.setdefault(_norm_col(c), c)
+
+    def _pick(names: tuple) -> Optional[object]:
+        for n in names:
+            if n in cols:
+                return cols[n]
+        return None
+
+    # --- temperature ---
+    t_col = _pick(_TEMP_F_NAMES)
+    to_f = False
+    if t_col is None:
+        t_col = _pick(_TEMP_C_NAMES)
+        to_f = t_col is not None
+    if t_col is None:
+        # Any other column that clearly names a unit, e.g. "air_temp_deg_c"
+        for n, c in cols.items():
+            if re.match(r"^(t|temp|temperature|air_temp|air_temperature)(_deg)?_(c|celsius)$", n):
+                t_col, to_f = c, True
+                break
+            if re.match(r"^(t|temp|temperature|air_temp|air_temperature)(_deg)?_(f|fahrenheit)$", n):
+                t_col = c
+                break
+    if t_col is None:
+        t_col = _pick(_TEMP_GENERIC)
+    if t_col is None:
+        raise ValueError(f"parse_traverse_table: no temperature column in {list(df.columns)}")
+    temp = pd.to_numeric(df[t_col], errors="coerce").astype(float)
+    if to_f:
+        temp = temp * 9.0 / 5.0 + 32.0
+
+    # --- coordinates ---
+    lat_col, lon_col = _pick(_LAT_NAMES), _pick(_LON_NAMES)
+    if lat_col is not None and lon_col is not None:
+        lat = pd.to_numeric(df[lat_col], errors="coerce").astype(float)
+        lon = pd.to_numeric(df[lon_col], errors="coerce").astype(float)
+    elif "geometry" in df.columns:
+        geom = df["geometry"]
+        crs = getattr(df, "crs", None)
+        if crs is not None:
+            geom = geom.to_crs("EPSG:4326")
+        lat = pd.Series(geom.y.to_numpy(dtype=float), index=df.index)
+        lon = pd.Series(geom.x.to_numpy(dtype=float), index=df.index)
+    else:
+        raise ValueError(f"parse_traverse_table: no lat/lon columns in {list(df.columns)}")
+    if (lat.abs() > 90).any() or (lon.abs() > 180).any():
+        raise ValueError(
+            "parse_traverse_table: lat/lon values are outside WGS-84 degree ranges "
+            "(projected coordinates?)"
+        )
+
+    # --- time ---
+    time_col = _pick(_TIME_NAMES)
+    if time_col is not None:
+        raw_t = df[time_col]
+        date_col = cols.get("date")
+        if (date_col is not None and date_col != time_col
+                and _norm_col(time_col) == "time"):
+            raw_t = df[date_col].astype(str) + " " + df[time_col].astype(str)
+        times = pd.to_datetime(raw_t, errors="coerce")
+        if timezone and getattr(times.dt, "tz", None) is not None:
+            times = times.dt.tz_convert(timezone)   # aware → local clock time
+        hours = times.dt.hour + times.dt.minute / 60.0
+        window = hours.map(_window_from_hour)
+    elif window_hint is not None:
+        times = pd.Series(pd.NaT, index=df.index)
+        window = pd.Series(window_hint, index=df.index)
+    else:
+        raise ValueError(f"parse_traverse_table: no time column in {list(df.columns)}")
+
+    out = pd.DataFrame({
+        "time": times.array,
+        "lat": lat.to_numpy(),
+        "lon": lon.to_numpy(),
+        "temp_f": temp.to_numpy(),
+        "window": window.to_numpy(),
+    })
+    n0 = len(out)
+    out = out.dropna(subset=["lat", "lon", "temp_f"]).reset_index(drop=True)
+    if len(out) < n0:
+        log.debug("capa traverse: dropped %d rows missing lat/lon/temp", n0 - len(out))
+    return out
+
+
+def _window_hint_from_name(name: str) -> Optional[str]:
+    base = name.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    for prefix, win in (("am", "morning"), ("af", "midday"), ("pm", "evening")):
+        if base.startswith(prefix + "_") or f"_{prefix}_" in base or f"_{prefix}." in base:
+            return win
+    return None
+
+
+def parse_traverse_bytes(
+    name: str,
+    data: bytes,
+    timezone: Optional[str] = None,
+) -> object:
+    """Parse a downloaded traverse file (``.csv`` / ``.geojson`` / ``.shp``
+    or a ``.zip`` of those, nested zips included) into the table of
+    :func:`parse_traverse_table`, with a ``source_file`` column.
+
+    UNVERIFIED against real OSF traverse archives.
+    """
+    import pandas as pd
+    import pathlib
+
+    lname = name.lower()
+    frames = []
+
+    def _parse(df, src: str):
+        try:
+            parsed = parse_traverse_table(df, timezone=timezone,
+                                          window_hint=_window_hint_from_name(src))
+        except ValueError as exc:
+            log.warning("capa traverse: skipping %s (%s)", src, exc)
+            return
+        parsed["source_file"] = src
+        frames.append(parsed)
+
+    if lname.endswith(".csv"):
+        _parse(pd.read_csv(io.BytesIO(data)), name)
+    elif lname.endswith(".geojson"):
+        import geopandas as gpd
+        _parse(gpd.read_file(io.BytesIO(data)), name)
+    elif lname.endswith(".zip"):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                z.extractall(root)
+            for nested in list(root.rglob("*.zip")):
+                try:
+                    with zipfile.ZipFile(nested) as nz:
+                        nz.extractall(nested.parent)
+                except Exception:
+                    pass
+            for path in sorted(root.rglob("*")):
+                pl = path.name.lower()
+                if path.name.startswith(".") or "__macosx" in str(path).lower():
+                    continue
+                if pl.endswith(".csv"):
+                    _parse(pd.read_csv(path), path.name)
+                elif pl.endswith((".shp", ".geojson")):
+                    import geopandas as gpd
+                    _parse(gpd.read_file(path), path.name)
+    elif lname.endswith(".shp"):
+        log.warning("capa traverse: bare .shp %s needs its sidecar files; "
+                    "download the containing .zip instead", name)
+    if not frames:
+        return pd.DataFrame(columns=TRAVERSE_COLUMNS + ["source_file"])
+    return pd.concat(frames, ignore_index=True)
+
+
+def download_capa_traverses(
+    node_id: str,
+    *,
+    folder_hint: Optional[str] = None,
+    timezone: Optional[str] = None,
+) -> object:
+    """Download and parse raw CAPA traverse points for one OSF node.
+
+    Discovers ``traverse*`` / ``*_traverses*`` files
+    (:func:`find_traverse_sources`), downloads them via Waterbutler and
+    parses them (:func:`parse_traverse_bytes`).  Returns a DataFrame with
+    ``time, lat, lon, temp_f, window, source_file`` (empty on failure —
+    never raises).  The traverse timestamps date the campaign independently
+    of ERA5 (``configs/multicity_pilot.yml`` → ``campaign_date_source``).
+
+    UNVERIFIED: OSF (api.osf.io) is blocked in the development environment,
+    so discovery patterns and column detection have only been exercised on
+    synthetic files.
+    """
+    import pandas as pd
+
+    empty = pd.DataFrame(columns=TRAVERSE_COLUMNS + ["source_file"])
+    try:
+        files = _scan_storage(node_id, top_level_filter=folder_hint)
+    except Exception as exc:
+        log.warning("capa traverse: OSF scan failed for node %s (%s)", node_id, exc)
+        return empty
+    sources = find_traverse_sources(files)
+    if not sources:
+        log.warning("capa traverse: no traverse files found in node %s", node_id)
+        return empty
+    frames = []
+    for src in sources:
+        try:
+            url = OSF_WATERBUTLER.format(node_id=node_id, file_id=src["id"])
+            frames.append(parse_traverse_bytes(src["name"], _http_get(url), timezone=timezone))
+        except Exception as exc:
+            log.warning("capa traverse: failed to load %s (%s)", src.get("name"), exc)
+    frames = [f for f in frames if len(f)]
+    if not frames:
+        return empty
+    return pd.concat(frames, ignore_index=True)
 
 
 # ---------------------------------------------------------------------------

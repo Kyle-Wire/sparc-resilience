@@ -209,11 +209,14 @@ class CorrelogramSpatialAnalyzer:
             )
             if self._memory is not None:
                 @self._memory.cache
-                def _cached_fft(c, v, md, nl):
+                def _cached_fft(c, v, md, nl, impl_version):
+                    # ``impl_version`` is part of the cache key: bump it when
+                    # fft_correlogram's maths changes so stale results from
+                    # the old one-quadrant implementation are never served.
                     from sparc.run.spatial_autocorr_comprehensive import fft_correlogram as _f
                     return _f(c, v, md, nl)
                 correlogram_results = _cached_fft(
-                    coords, values, self.max_distance, self.n_lags
+                    coords, values, self.max_distance, self.n_lags, "full-plane-perm-v2"
                 )
             else:
                 correlogram_results = _fft_corr(

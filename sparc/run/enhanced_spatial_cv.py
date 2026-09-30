@@ -136,6 +136,167 @@ def _get_evaluator():
 # Global flag for OOF extraction — enabled now that oof_extraction_hooks is implemented
 EXTRACT_OOF_INTELLIGENCE = True
 
+# Surrogate-anchored base models (the neural meta-learner's differentiable
+# surrogates mirror these three).
+_SURROGATE_BASE_MODELS = ("gwr", "gwrf", "ggpgam")
+
+
+# ---------------------------------------------------------------------------
+# Small pure helpers (unit-tested in tests/test_fix_stage2_honesty.py)
+# ---------------------------------------------------------------------------
+
+def _resolve_model_coords(df, coord_cols):
+    """Return ``(coords, columns_used)`` in the CRS Stage-2 models are fit in.
+
+    ``load_and_preprocess_data`` writes projected (metre) coordinates to
+    ``projected_X`` / ``projected_Y``; the configured coordinate columns may
+    be in the input CRS (e.g. State-Plane US feet).  Both the spatial CV and
+    the full-data refit (Stage 2b) must use the same columns so bandwidths,
+    block sizes and neighbour searches share units.
+    """
+    if 'projected_X' in df.columns and 'projected_Y' in df.columns:
+        cols = ['projected_X', 'projected_Y']
+    else:
+        cols = list(coord_cols)
+    return np.asarray(df[cols].values), cols
+
+
+def _accepts_param(fn, name):
+    """True when callable *fn* declares an explicit parameter called *name*.
+
+    Unlike ``name in fn.__code__.co_varnames`` this ignores local variables
+    and follows ``functools.wraps`` wrappers.
+    """
+    import inspect
+    try:
+        param = inspect.signature(fn).parameters.get(name)
+    except (TypeError, ValueError):
+        code = getattr(fn, '__code__', None)
+        if code is None:
+            return False
+        return name in code.co_varnames[:code.co_argcount + code.co_kwonlyargcount]
+    return param is not None and param.kind not in (
+        inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD,
+    )
+
+
+def _fit_predict_fold(model, X_tr, y_tr, coords_tr, X_te, coords_te, feature_names=None):
+    """Fit *model* on one CV training split and predict its test split.
+
+    Passes ``coords`` / ``feature_names`` only to models whose ``fit``
+    accepts them (GWR needs the names to look up per-predictor kernels in
+    its ``KernelField``).  Tuple predictions ``(mean, uncertainty)`` are
+    reduced to the mean.
+    """
+    fit_kwargs = {}
+    if feature_names is not None and _accepts_param(model.fit, 'feature_names'):
+        fit_kwargs['feature_names'] = list(feature_names)
+    if _accepts_param(model.fit, 'coords'):
+        model.fit(X_tr, y_tr, coords_tr, **fit_kwargs)
+    else:
+        model.fit(X_tr, y_tr, **fit_kwargs)
+    if _accepts_param(model.predict, 'coords'):
+        preds = model.predict(X_te, coords_te)
+    else:
+        preds = model.predict(X_te)
+    if isinstance(preds, tuple):
+        preds = preds[0]
+    return np.asarray(preds, dtype=np.float64).reshape(-1)
+
+
+def _finite_scores(y, pred):
+    """``(r2, rmse, n_finite)`` on rows where both *y* and *pred* are finite.
+
+    Metric functions never see NaN; with fewer than two finite rows the
+    scores are NaN.
+    """
+    y = np.asarray(y, dtype=np.float64).reshape(-1)
+    pred = np.asarray(pred, dtype=np.float64).reshape(-1)
+    mask = np.isfinite(y) & np.isfinite(pred)
+    n = int(mask.sum())
+    if n < 2:
+        return float('nan'), float('nan'), n
+    return (float(r2_score(y[mask], pred[mask])),
+            float(np.sqrt(mean_squared_error(y[mask], pred[mask]))), n)
+
+
+def _failed_folds_from_predictions(oof_predictions, folds, model_names):
+    """``{model: [fold indices]}`` for folds whose OOF predictions are not all finite."""
+    oof = np.asarray(oof_predictions, dtype=np.float64)
+    failed = {}
+    for m_idx, name in enumerate(model_names):
+        bad = [f_idx for f_idx, (_tr, te) in enumerate(folds)
+               if len(te) and not np.all(np.isfinite(oof[np.asarray(te), m_idx]))]
+        if bad:
+            failed[name] = bad
+    return failed
+
+
+def _usable_base_models(base_predictions, failed_folds=None):
+    """Names of base models with complete OOF predictions.
+
+    A model with any failed fold (or any non-finite OOF value) is excluded
+    from downstream stacking / averaging, with a warning.
+    """
+    failed_folds = failed_folds or {}
+    usable = []
+    for name, pred in base_predictions.items():
+        pred = np.asarray(pred, dtype=np.float64)
+        if failed_folds.get(name):
+            why = f"failed CV fold(s) {sorted(failed_folds[name])}"
+        elif not np.all(np.isfinite(pred)):
+            why = f"{int((~np.isfinite(pred)).sum())} non-finite OOF predictions"
+        else:
+            usable.append(name)
+            continue
+        print(f"[WARNING] Excluding base model '{name}' from stacking/averaging: {why}")
+    return usable
+
+
+def _select_surrogate_targets(source, n, *, allowed=None, label="base"):
+    """Pick finite, length-``n`` gwr/gwrf/ggpgam arrays from *source*.
+
+    Returns ``None`` when nothing qualifies (callers treat that as "no V1
+    anchor").  *allowed* restricts the model set.
+    """
+    if not source:
+        return None
+    out = {}
+    for name in _SURROGATE_BASE_MODELS:
+        if name not in source or (allowed is not None and name not in allowed):
+            continue
+        arr = np.asarray(source[name], dtype=np.float64).reshape(-1)
+        if len(arr) != n:
+            print(f"WARNING: {label}[{name}] length {len(arr)} != y length {n} "
+                  f"— skipping (row mismatch)")
+            continue
+        if not np.all(np.isfinite(arr)):
+            print(f"WARNING: {label}[{name}] has non-finite values — skipping")
+            continue
+        out[name] = arr
+    return out or None
+
+
+def _build_neural_base_targets(base_oof_predictions, base_full_fitted, n, usable_models=None):
+    """Surrogate targets for ``train_neural_meta`` (A8).
+
+    Returns ``(oof_targets, full_fitted_targets)``:
+
+    * ``oof_targets`` — the TRUE Stage-2a out-of-fold predictions; used as
+      surrogate pretrain / fidelity targets inside each neural CV fold.
+    * ``full_fitted_targets`` — in-sample full-data (Stage 2b) fits; only
+      used by the final full-data retrain.  Restricted to the models that
+      also have OOF targets so the final model is anchored like the CV one.
+    """
+    oof_targets = _select_surrogate_targets(
+        base_oof_predictions, n, allowed=usable_models, label="Stage-2a OOF",
+    )
+    full_targets = _select_surrogate_targets(
+        base_full_fitted, n, allowed=set(oof_targets or ()),
+        label="Stage-2b full-data fit",
+    )
+    return oof_targets, full_targets
+
 def train_single_model_fold_worker(args):
     """
     Worker for one fold of one model.
@@ -155,7 +316,7 @@ def train_single_model_fold_worker(args):
     from sparc.features.pipeline import FoldFeatureContext as _FFC
     _fn = list(feature_names) if feature_names else [f'f{i}' for i in range(X_tr.shape[1])]
     _ffc = _FFC(X_tr, coords_tr, X_te, coords_te, _fn)
-    X_tr, _ = _ffc.train_transform()
+    X_tr, _fold_feature_names = _ffc.train_transform()
     X_te = _ffc.test_transform()
 
     # Runtime safety: delegate fold-size invariants to each model.
@@ -169,21 +330,12 @@ def train_single_model_fold_worker(args):
     except Exception as safety_e:
         print(f"WARNING: Safety check failed for {model_name} fold {fold_idx}: {safety_e}")
     
-    # Fit
+    # Fit + predict (feature names reach GWR's KernelField lookups)
     try:
-        if 'coords' in model_copy.fit.__code__.co_varnames:
-            model_copy.fit(X_tr, y_tr, coords_tr)
-        else:
-            model_copy.fit(X_tr, y_tr)
-        # Predict
-        if 'coords' in model_copy.predict.__code__.co_varnames:
-            preds = model_copy.predict(X_te, coords_te)
-        else:
-            preds = model_copy.predict(X_te)
-        
-        # Handle models that return (predictions, uncertainty) tuples (e.g., GWRF v2)
-        if isinstance(preds, tuple):
-            preds = preds[0]
+        preds = _fit_predict_fold(
+            model_copy, X_tr, y_tr, coords_tr, X_te, coords_te,
+            feature_names=_fold_feature_names,
+        )
         
         # === OOF SPATIAL INTELLIGENCE EXTRACTION ===
         oof_intelligence = None
@@ -206,7 +358,8 @@ def train_single_model_fold_worker(args):
         return fold_idx, test_idx, preds, oof_intelligence
     except Exception as e:
         print(f"ERROR: {model_name} Fold {fold_idx} failed: {e}")
-        # Return NaN predictions as fallback
+        # NaN marks the failed fold; the caller records it and excludes the
+        # model from stacking (never silently filled).
         return fold_idx, test_idx, np.full(len(test_idx), np.nan), None
 
 # ---------------------------------------------------------------------------
@@ -469,6 +622,10 @@ class EnhancedSpatialCV:
         """
         model_configs = {'gwr': self._cfg.gwr_params, 'gwrf': self._cfg.gwrf_params, 'ggpgam': self._cfg.ggpgam_params}
 
+        # Expected training fraction per CV fold: (k−1)/k for k = n_splits.
+        _n_splits = max(2, int(getattr(self._cfg, 'n_splits', 5) or 5))
+        train_frac = (_n_splits - 1) / _n_splits
+
         models = []
 
         # Resolve shared per-model dependencies once, before any model branch.
@@ -502,7 +659,7 @@ class EnhancedSpatialCV:
             else:
                 # Fallback to global bandwidth with safety checks
                 if n_samples is not None:
-                    min_fold_size = int(n_samples * 0.8 * 0.85)  # 80% training * 85% buffer
+                    min_fold_size = int(n_samples * train_frac * 0.85)  # (k−1)/k training * 85% buffer
                     raw_bandwidth = gwr_params.get('bandwidth')
                     config_bandwidth = int(raw_bandwidth) if raw_bandwidth is not None else 500
                     adaptive_bandwidth = min(config_bandwidth, min_fold_size)
@@ -535,8 +692,8 @@ class EnhancedSpatialCV:
             
             # Dataset size safety adjustments
             if n_samples is not None:
-                # Account for CV fold size (typically ~80% of data for training)
-                expected_train_size = int(n_samples * 0.8)
+                # Account for CV fold size ((k−1)/k of the data for training)
+                expected_train_size = int(n_samples * train_frac)
                 min_fold_size = int(expected_train_size * 0.85)  # Additional safety margin
                 config_k_neighbors = int(gwrf_params.get('k_neighbors', 100))
                 adaptive_k_neighbors = min(config_k_neighbors, min_fold_size // 2)
@@ -831,6 +988,8 @@ class EnhancedSpatialCV:
         n_samples = len(y)
         n_models = len(models)
         oof_predictions = np.zeros((n_samples, n_models))
+        # {model_name: [fold indices]} — folds whose OOF rows are NaN.
+        self.failed_folds_ = {}
         
         print(f"Generating OOF predictions with {n_models} optimized models...")
         print(f"Hardware acceleration: {self._hw['max_workers']} cores, {self._hw['memory_limit_gb']}GB RAM limit")
@@ -850,6 +1009,7 @@ class EnhancedSpatialCV:
             except Exception as e:
                 print(f"\n✗ Per-model parallel CV failed: {e}")
                 print("Falling back to sequential processing...")
+                self.failed_folds_ = {}
                 oof_predictions = self._sequential_cv_training(X, y, coords, models, model_names, folds, feature_names)
         else:
             print(f"\n{'='*80}")
@@ -922,55 +1082,51 @@ class EnhancedSpatialCV:
         except Exception as e:
             print(f"  [WARNING] Could not save spatial predictions gpkg: {e}")
         
-        # Check for and handle NaN values in OOF predictions
-        print("\n=== Checking OOF predictions for NaN values ===")
-        nan_counts = np.isnan(oof_predictions).sum(axis=0)
-        print(f"NaN counts per model: {dict(zip(model_names, nan_counts))}")
+        # Failed folds stay NaN — never filled with a mean.  Record every
+        # fold with non-finite OOF rows (worker failures included) and warn.
+        print("\n=== Checking OOF predictions for failed folds ===")
+        for _mn, _bad in _failed_folds_from_predictions(oof_predictions, folds, model_names).items():
+            for _f in _bad:
+                if _f not in self.failed_folds_.get(_mn, []):
+                    self._record_fold_failure(_mn, _f, "non-finite OOF predictions")
+        if self.failed_folds_:
+            print(f"[WARNING] Failed CV folds (0-based): {self.failed_folds_}. "
+                  f"Scores below use finite rows only; these models are excluded "
+                  f"from stacking/averaging.")
+        else:
+            print("No failed folds.")
         
-        # Handle NaN values by replacing with mean predictions
-        for i, (model_name, nan_count) in enumerate(zip(model_names, nan_counts)):
-            if nan_count > 0:
-                print(f"WARNING: {model_name} has {nan_count} NaN predictions ({nan_count/len(oof_predictions)*100:.1f}%)")
-                # Replace NaN values with the mean of non-NaN predictions for this model
-                model_predictions = oof_predictions[:, i]
-                valid_mask = ~np.isnan(model_predictions)
-                if valid_mask.sum() > 0:
-                    mean_pred = np.mean(model_predictions[valid_mask])
-                    oof_predictions[~valid_mask, i] = mean_pred
-                    print(f"  Replaced NaN values with mean prediction: {mean_pred:.4f}")
-                else:
-                    print(f"  ERROR: All predictions are NaN for {model_name}")
-        
-        # Calculate and display OOF performance
+        # Calculate and display OOF performance (finite rows only)
         print("\n=== Optimized OOF Performance ===")
         for model_idx, model_name in enumerate(model_names):
             try:
-                # Double-check for remaining NaN values
-                if np.isnan(oof_predictions[:, model_idx]).sum() > 0:
-                    print(f"SKIP: {model_name.upper()} still contains NaN values")
-                    continue
-                    
-                r2 = r2_score(y, oof_predictions[:, model_idx])
-                rmse = np.sqrt(mean_squared_error(y, oof_predictions[:, model_idx]))
+                _pred = oof_predictions[:, model_idx]
+                _fin = np.isfinite(_pred) & np.isfinite(y)
+                r2, rmse, _n_fin = _finite_scores(y, _pred)
                 msg = f"{model_name.upper()}: R² = {r2:.4f}, RMSE = {rmse:.4f}"
+                if _n_fin < len(y):
+                    msg += f"  [finite rows only: {_n_fin}/{len(y)}; failed folds {self.failed_folds_.get(model_name, [])}]"
+                if _n_fin < 2:
+                    print(msg)
+                    continue
                 # Append benchmark metrics when enabled
                 bm_cfg = {'enabled': self._cfg.benchmark_metrics_enabled}
                 if bm_cfg.get('enabled', False):
-                    nrmse = _get_evaluator().calculate_nrmse(y, oof_predictions[:, model_idx])
-                    pcorr = _get_evaluator().calculate_pattern_correlation(y, oof_predictions[:, model_idx])
-                    aratio = _get_evaluator().calculate_amplitude_ratio(y, oof_predictions[:, model_idx])
+                    nrmse = _get_evaluator().calculate_nrmse(y[_fin], _pred[_fin])
+                    pcorr = _get_evaluator().calculate_pattern_correlation(y[_fin], _pred[_fin])
+                    aratio = _get_evaluator().calculate_amplitude_ratio(y[_fin], _pred[_fin])
                     msg += f", nRMSE = {nrmse:.4f}, PatCorr = {pcorr:.4f}, AmpRatio = {aratio:.4f}"
                     # Extreme-value / tail metrics
-                    ext = _get_evaluator().calculate_extreme_metrics(y, oof_predictions[:, model_idx])
+                    ext = _get_evaluator().calculate_extreme_metrics(y[_fin], _pred[_fin])
                     msg += (f"\n        Tail-lo RMSE={ext['tail_low_rmse']:.4f}  "
                             f"Tail-hi RMSE={ext['tail_high_rmse']:.4f}  "
                             f"Extreme ratio={ext['extreme_rmse_ratio']:.2f}")
                     # Baseline skill scores
                     coords_arr = None
                     if hasattr(self, 'coords') and self.coords is not None:
-                        coords_arr = self.coords
+                        coords_arr = np.asarray(self.coords)[_fin]
                     bl = _get_evaluator().calculate_baseline_comparisons(
-                        y, oof_predictions[:, model_idx], coords=coords_arr,
+                        y[_fin], _pred[_fin], coords=coords_arr,
                     )
                     msg += (f"\n        Skill vs global-mean={bl['skill_vs_global_mean']:.4f}  "
                             f"vs spatial-KNN={bl['skill_vs_spatial_knn']:.4f}")
@@ -1020,6 +1176,18 @@ class EnhancedSpatialCV:
         
         return int(optimal_subsample)
     
+    def _record_fold_failure(self, model_name, fold_idx, reason=""):
+        """Record a failed CV fold (its OOF rows stay NaN) and warn loudly."""
+        if not hasattr(self, 'failed_folds_') or self.failed_folds_ is None:
+            self.failed_folds_ = {}
+        folds_failed = self.failed_folds_.setdefault(model_name, [])
+        if fold_idx not in folds_failed:
+            folds_failed.append(fold_idx)
+            folds_failed.sort()
+        print(f"[WARNING] {model_name} fold {fold_idx + 1} FAILED"
+              f"{f' ({reason})' if reason else ''} — OOF predictions left as NaN; "
+              f"{model_name} will be excluded from stacking/averaging")
+
     def _parallel_cv_training(self, X, y, coords, models, model_names, folds, feature_names=None):
         """
         Enhanced parallel cross-validation training using per-model parallelization
@@ -1077,6 +1245,8 @@ class EnhancedSpatialCV:
                                 else:
                                     fold_idx, test_idx, fold_predictions = result[:3] if len(result) >= 3 else result
                                 oof_predictions[test_idx, model_idx] = fold_predictions
+                                if not np.all(np.isfinite(np.asarray(fold_predictions, dtype=np.float64))):
+                                    self._record_fold_failure(model_name, fold_idx, "worker returned non-finite predictions")
                                 completed_folds += 1
                                 pbar.update(1)
                                 pbar.set_postfix(
@@ -1094,23 +1264,16 @@ class EnhancedSpatialCV:
                                 coords_train, coords_test = coords[train_idx], coords[test_idx]
                                 
                                 try:
-                                    if 'coords' in model.fit.__code__.co_varnames:
-                                        model.fit(X_train, y_train, coords_train)
-                                    else:
-                                        model.fit(X_train, y_train)
-                                    
-                                    if 'coords' in model.predict.__code__.co_varnames:
-                                        predictions = model.predict(X_test, coords_test)
-                                    else:
-                                        predictions = model.predict(X_test)
-                                    
-                                    # Handle tuple returns (e.g., GWRF returns (preds, uncertainty))
-                                    if isinstance(predictions, tuple):
-                                        predictions = predictions[0]
-                                    
+                                    predictions = _fit_predict_fold(
+                                        model, X_train, y_train, coords_train,
+                                        X_test, coords_test, feature_names=feature_names,
+                                    )
                                     oof_predictions[test_idx, model_idx] = predictions
-                                except:
-                                    oof_predictions[test_idx, model_idx] = np.mean(y_train)
+                                    if not np.all(np.isfinite(predictions)):
+                                        self._record_fold_failure(model_name, fold_idx, "non-finite predictions")
+                                except Exception as fb_e:
+                                    oof_predictions[test_idx, model_idx] = np.nan
+                                    self._record_fold_failure(model_name, fold_idx, f"fallback fit failed: {fb_e}")
                                 
                                 pbar.update(1)
                                 
@@ -1118,29 +1281,25 @@ class EnhancedSpatialCV:
                 print(f"Parallel processing failed for {model_name}: {e}")
                 # Sequential fallback for entire model
                 print(f"Using sequential fallback for {model_name}")
+                # The fallback re-runs every fold: forget partial failures.
+                if getattr(self, 'failed_folds_', None):
+                    self.failed_folds_.pop(model_name, None)
                 for fold_idx, (train_idx, test_idx) in enumerate(folds):
                     X_train, X_test = X[train_idx], X[test_idx]
                     y_train = y[train_idx]
                     coords_train, coords_test = coords[train_idx], coords[test_idx]
                     
                     try:
-                        if 'coords' in model.fit.__code__.co_varnames:
-                            model.fit(X_train, y_train, coords_train)
-                        else:
-                            model.fit(X_train, y_train)
-                        
-                        if 'coords' in model.predict.__code__.co_varnames:
-                            predictions = model.predict(X_test, coords_test)
-                        else:
-                            predictions = model.predict(X_test)
-                        
-                        # Handle tuple returns (e.g., GWRF returns (preds, uncertainty))
-                        if isinstance(predictions, tuple):
-                            predictions = predictions[0]
-                        
+                        predictions = _fit_predict_fold(
+                            model, X_train, y_train, coords_train,
+                            X_test, coords_test, feature_names=feature_names,
+                        )
                         oof_predictions[test_idx, model_idx] = predictions
-                    except:
-                        oof_predictions[test_idx, model_idx] = np.mean(y_train)
+                        if not np.all(np.isfinite(predictions)):
+                            self._record_fold_failure(model_name, fold_idx, "non-finite predictions")
+                    except Exception as fb_e:
+                        oof_predictions[test_idx, model_idx] = np.nan
+                        self._record_fold_failure(model_name, fold_idx, f"sequential fallback failed: {fb_e}")
             
             print(f"{model_name} completed: {completed_folds}/{len(folds)} folds successful")
             print(f"[MODEL_DONE] {model_name} ({model_idx+1}/{n_models})")
@@ -1187,7 +1346,7 @@ class EnhancedSpatialCV:
                 from sparc.features.pipeline import FoldFeatureContext as _FFC
                 _fn = list(feature_names) if feature_names else [f'f{i}' for i in range(X_train_raw.shape[1])]
                 _ffc = _FFC(X_train_raw, coords_train, X_test_raw, coords_test, _fn)
-                X_train, _ = _ffc.train_transform()
+                X_train, _fold_feature_names = _ffc.train_transform()
                 X_test = _ffc.test_transform()
 
                 print(f"\nFold {fold_idx + 1}/{len(folds)}")
@@ -1200,32 +1359,25 @@ class EnhancedSpatialCV:
                         print(f"    Training {model_name} on {len(train_idx)} samples...")
                         start_time = time.time()
                         
-                        # Model-specific training
-                        if 'coords' in model.fit.__code__.co_varnames:
-                            model.fit(X_train, y_train, coords_train)
-                        else:
-                            model.fit(X_train, y_train)
+                        # Model-specific training + prediction
+                        predictions = _fit_predict_fold(
+                            model, X_train, y_train, coords_train,
+                            X_test, coords_test, feature_names=_fold_feature_names,
+                        )
                         
                         train_time = time.time() - start_time
-                        print(f"    {model_name} training completed in {train_time:.2f}s")
-                        
-                        # Predict
-                        if 'coords' in model.predict.__code__.co_varnames:
-                            predictions = model.predict(X_test, coords_test)
-                        else:
-                            predictions = model.predict(X_test)
-                        
-                        # Handle tuple returns (e.g., GWRF returns (preds, uncertainty))
-                        if isinstance(predictions, tuple):
-                            predictions = predictions[0]
+                        print(f"    {model_name} fit+predict completed in {train_time:.2f}s")
                         
                         fold_predictions[:, model_idx] = predictions
-                        print(f"  {model_name} completed successfully")
+                        if np.all(np.isfinite(predictions)):
+                            print(f"  {model_name} completed successfully")
+                        else:
+                            self._record_fold_failure(model_name, fold_idx, "non-finite predictions")
                         
                     except Exception as e:
                         print(f"Sequential training error - Fold {fold_idx+1}, {model_name}: {e}")
-                        fold_predictions[:, model_idx] = np.mean(y_train)
-                        print(f"  Using fallback prediction for {model_name}")
+                        fold_predictions[:, model_idx] = np.nan
+                        self._record_fold_failure(model_name, fold_idx, str(e))
                 
                 oof_predictions[test_idx] = fold_predictions
                 pbar.update(1)
@@ -1247,8 +1399,20 @@ class EnhancedSpatialCV:
         oof_predictions_path = str(self.paths.oof_predictions)
         folds_path = str(self.paths.folds_file)
         
+        n_splits = int(self._cfg.n_splits)
+        cached_folds = None
         if exists_path(oof_predictions_path, stage="2", artifact_id="oof_predictions") and \
            exists_path(folds_path, stage="2", artifact_id="folds"):
+            cached_folds = load_blob_path(folds_path, stage="2", artifact_id="folds")
+            if cached_folds is None:
+                cached_folds = joblib.load(folds_path)
+            if len(cached_folds) != n_splits:
+                print(f"[WARNING] Cached spatial folds have {len(cached_folds)} splits but "
+                      f"spatial_cv.n_splits={n_splits} — invalidating cached folds and "
+                      f"OOF predictions; regenerating.")
+                cached_folds = None
+
+        if cached_folds is not None:
             print("=== Loading existing OOF predictions ===")
             print(f"Found existing OOF predictions at: {self.paths.get_relative_path(oof_predictions_path)}")
             print(f"Found existing folds at: {self.paths.get_relative_path(folds_path)}")
@@ -1256,12 +1420,10 @@ class EnhancedSpatialCV:
             # Load existing results (store-first, CSV fallback)
             oof_df = load_table_path(oof_predictions_path, stage="2", artifact_id="oof_predictions")
             model_names = oof_df.columns.tolist()
-            oof_predictions = oof_df.values
+            oof_predictions = oof_df.values.astype(np.float64)
             
-            # Load existing folds
-            folds = load_blob_path(folds_path, stage="2", artifact_id="folds")
-            if folds is None:
-                folds = joblib.load(folds_path)
+            # Existing folds (validated against n_splits above)
+            folds = cached_folds
             
             # Load data for performance calculation
             print("=== Loading Data for Performance Calculation ===")
@@ -1287,24 +1449,15 @@ class EnhancedSpatialCV:
             
             y = data[self._cfg.target].values
             
-            # Check for NaN values in OOF predictions and handle them
-            print("\n=== Checking OOF predictions for NaN values ===")
-            nan_counts = np.isnan(oof_predictions).sum(axis=0)
-            print(f"NaN counts per model: {dict(zip(model_names, nan_counts))}")
-            
-            # Handle NaN values by replacing with mean predictions or skipping problematic models
-            for i, (model_name, nan_count) in enumerate(zip(model_names, nan_counts)):
-                if nan_count > 0:
-                    print(f"WARNING: {model_name} has {nan_count} NaN predictions ({nan_count/len(oof_predictions)*100:.1f}%)")
-                    # Replace NaN values with the mean of non-NaN predictions for this model
-                    model_predictions = oof_predictions[:, i]
-                    valid_mask = ~np.isnan(model_predictions)
-                    if valid_mask.sum() > 0:
-                        mean_pred = np.mean(model_predictions[valid_mask])
-                        oof_predictions[valid_mask == False, i] = mean_pred
-                        print(f"  Replaced NaN values with mean prediction: {mean_pred:.4f}")
-                    else:
-                        print(f"  ERROR: All predictions are NaN for {model_name}")
+            # Failed folds (NaN OOF rows) are reported, never mean-filled.
+            print("\n=== Checking cached OOF predictions for failed folds ===")
+            self.failed_folds_ = _failed_folds_from_predictions(oof_predictions, folds, model_names)
+            if self.failed_folds_:
+                print(f"[WARNING] Failed CV folds (0-based): {self.failed_folds_}. "
+                      f"Scores use finite rows only; these models are excluded "
+                      f"from stacking/averaging.")
+            else:
+                print("No failed folds.")
             
             # Display performance
             print("\n=== Existing OOF Performance ===")
@@ -1312,31 +1465,31 @@ class EnhancedSpatialCV:
 
             for i, model_name in enumerate(model_names):
                 try:
-                    # Double-check for remaining NaN values
-                    if np.isnan(oof_predictions[:, i]).sum() > 0:
-                        print(f"SKIP: {model_name.upper()} still contains NaN values")
-                        performance_summary['individual_models'][model_name] = {
-                            'r2': np.nan, 'rmse': np.nan, 'status': 'failed_nan'
-                        }
-                        continue
-                        
-                    model_r2 = r2_score(y, oof_predictions[:, i])
-                    model_rmse = np.sqrt(mean_squared_error(y, oof_predictions[:, i]))
-                    perf = {'r2': model_r2, 'rmse': model_rmse, 'status': 'success'}
+                    _pred = oof_predictions[:, i]
+                    _fin = np.isfinite(_pred) & np.isfinite(y)
+                    model_r2, model_rmse, _n_fin = _finite_scores(y, _pred)
+                    status = 'success' if model_name not in self.failed_folds_ else 'failed_folds'
+                    perf = {'r2': model_r2, 'rmse': model_rmse, 'status': status,
+                            'n_finite': _n_fin,
+                            'failed_folds': list(self.failed_folds_.get(model_name, []))}
                     msg = f"{model_name.upper()}: R² = {model_r2:.4f}, RMSE = {model_rmse:.4f}"
-                    if self._cfg.benchmark_metrics_enabled:
-                        perf['nrmse'] = _get_evaluator().calculate_nrmse(y, oof_predictions[:, i])
-                        perf['pattern_correlation'] = _get_evaluator().calculate_pattern_correlation(y, oof_predictions[:, i])
-                        perf['amplitude_ratio'] = _get_evaluator().calculate_amplitude_ratio(y, oof_predictions[:, i])
+                    if _n_fin < len(y):
+                        msg += f"  [finite rows only: {_n_fin}/{len(y)}]"
+                    if _n_fin >= 2 and self._cfg.benchmark_metrics_enabled:
+                        perf['nrmse'] = _get_evaluator().calculate_nrmse(y[_fin], _pred[_fin])
+                        perf['pattern_correlation'] = _get_evaluator().calculate_pattern_correlation(y[_fin], _pred[_fin])
+                        perf['amplitude_ratio'] = _get_evaluator().calculate_amplitude_ratio(y[_fin], _pred[_fin])
                         msg += f", nRMSE = {perf['nrmse']:.4f}, PatCorr = {perf['pattern_correlation']:.4f}, AmpRatio = {perf['amplitude_ratio']:.4f}"
-                        ext = _get_evaluator().calculate_extreme_metrics(y, oof_predictions[:, i])
+                        ext = _get_evaluator().calculate_extreme_metrics(y[_fin], _pred[_fin])
                         perf.update(ext)
                         msg += (f"\n        Tail-lo RMSE={ext['tail_low_rmse']:.4f}  "
                                 f"Tail-hi RMSE={ext['tail_high_rmse']:.4f}  "
                                 f"Extreme ratio={ext['extreme_rmse_ratio']:.2f}")
                         coords_arr = getattr(self, 'coords', None)
+                        if coords_arr is not None:
+                            coords_arr = np.asarray(coords_arr)[_fin]
                         bl = _get_evaluator().calculate_baseline_comparisons(
-                            y, oof_predictions[:, i], coords=coords_arr,
+                            y[_fin], _pred[_fin], coords=coords_arr,
                         )
                         perf.update(bl)
                         msg += (f"\n        Skill vs global-mean={bl['skill_vs_global_mean']:.4f}  "
@@ -1355,7 +1508,8 @@ class EnhancedSpatialCV:
             return {
                 'oof_predictions': oof_predictions,
                 'feature_names': feature_names,
-                'performance': performance_summary
+                'performance': performance_summary,
+                'failed_folds': dict(self.failed_folds_),
             }
         
         # If results don't exist, run the full pipeline
@@ -1431,10 +1585,9 @@ class EnhancedSpatialCV:
         y = data[self._cfg.target].values
         # Use projected (metric) coordinates so block_size/buffer_size are in metres.
         # load_and_preprocess_data always writes projected_X / projected_Y.
-        if 'projected_X' in data.columns and 'projected_Y' in data.columns:
-            coords = data[['projected_X', 'projected_Y']].values
-        else:
-            coords = data[self._cfg.coordinates].values
+        # (Same helper as the Stage-2b full refit, so both share units.)
+        coords, _coord_cols_used = _resolve_model_coords(data, self._cfg.coordinates)
+        print(f"Spatial CV coordinates: {_coord_cols_used}")
 
         # ── Optional SLX spatial-lag augmentation ──────────────────────────
         # Appends neighbor-averaged predictors WX to X_gwen so that base
@@ -1505,7 +1658,7 @@ class EnhancedSpatialCV:
             X=X_augmented,
             y=y,
             coords=coords,
-            n_splits=5,
+            n_splits=n_splits,
             block_size=self.get_block_size_from_config(),
             buffer_size=self.get_buffer_size_from_config(),
             method="block",
@@ -1530,24 +1683,31 @@ class EnhancedSpatialCV:
             'individual_models': {}
         }
         
+        failed_folds = dict(getattr(self, 'failed_folds_', None) or {})
         for i, model_name in enumerate(model_names):
-            model_r2 = r2_score(y, oof_predictions[:, i])
-            model_rmse = np.sqrt(mean_squared_error(y, oof_predictions[:, i]))
-            perf = {'r2': model_r2, 'rmse': model_rmse}
+            _pred = oof_predictions[:, i]
+            _fin = np.isfinite(_pred) & np.isfinite(y)
+            model_r2, model_rmse, _n_fin = _finite_scores(y, _pred)
+            perf = {'r2': model_r2, 'rmse': model_rmse, 'n_finite': _n_fin,
+                    'failed_folds': list(failed_folds.get(model_name, []))}
             msg = f"{model_name.upper()}: R² = {model_r2:.4f}, RMSE = {model_rmse:.4f}"
-            if self._cfg.benchmark_metrics_enabled:
-                perf['nrmse'] = _get_evaluator().calculate_nrmse(y, oof_predictions[:, i])
-                perf['pattern_correlation'] = _get_evaluator().calculate_pattern_correlation(y, oof_predictions[:, i])
-                perf['amplitude_ratio'] = _get_evaluator().calculate_amplitude_ratio(y, oof_predictions[:, i])
+            if _n_fin < len(y):
+                msg += f"  [finite rows only: {_n_fin}/{len(y)}]"
+            if _n_fin >= 2 and self._cfg.benchmark_metrics_enabled:
+                perf['nrmse'] = _get_evaluator().calculate_nrmse(y[_fin], _pred[_fin])
+                perf['pattern_correlation'] = _get_evaluator().calculate_pattern_correlation(y[_fin], _pred[_fin])
+                perf['amplitude_ratio'] = _get_evaluator().calculate_amplitude_ratio(y[_fin], _pred[_fin])
                 msg += f", nRMSE = {perf['nrmse']:.4f}, PatCorr = {perf['pattern_correlation']:.4f}, AmpRatio = {perf['amplitude_ratio']:.4f}"
-                ext = _get_evaluator().calculate_extreme_metrics(y, oof_predictions[:, i])
+                ext = _get_evaluator().calculate_extreme_metrics(y[_fin], _pred[_fin])
                 perf.update(ext)
                 msg += (f"\n        Tail-lo RMSE={ext['tail_low_rmse']:.4f}  "
                         f"Tail-hi RMSE={ext['tail_high_rmse']:.4f}  "
                         f"Extreme ratio={ext['extreme_rmse_ratio']:.2f}")
                 coords_arr = getattr(self, 'coords', None)
+                if coords_arr is not None:
+                    coords_arr = np.asarray(coords_arr)[_fin]
                 bl = _get_evaluator().calculate_baseline_comparisons(
-                    y, oof_predictions[:, i], coords=coords_arr,
+                    y[_fin], _pred[_fin], coords=coords_arr,
                 )
                 perf.update(bl)
                 msg += (f"\n        Skill vs global-mean={bl['skill_vs_global_mean']:.4f}  "
@@ -1561,7 +1721,8 @@ class EnhancedSpatialCV:
         return {
             'oof_predictions': oof_predictions,
             'feature_names': feature_names,
-            'performance': performance_summary
+            'performance': performance_summary,
+            'failed_folds': failed_folds,
         }
 
 def main(ctx, *, fast_mode=False):
@@ -1603,7 +1764,7 @@ def main(ctx, *, fast_mode=False):
             print("\n=== Base Models: SKIPPED (skip_stage_2_base_models=true) ===")
             print("   Surrogates will train against y directly (no V1 OOF pretraining)")
 
-            base_fitted_values = {}
+            base_full_fitted_values = {}
             print("WARNING: Stage 2 skipped — no base model fitted values available.")
             print("         Surrogates will train against raw y. This degrades surrogate quality.")
             print("         Set skip_stage_2_base_models=false to enable proper surrogate pretraining.")
@@ -1646,7 +1807,12 @@ def main(ctx, *, fast_mode=False):
 
             # Generate or load spatial folds
             folds_path = str(cv_system.paths.folds_file)
+            _n_splits = int(cv_system._cfg.n_splits)
             cached_folds = load_blob_path(folds_path, stage="2", artifact_id="folds")
+            if cached_folds is not None and len(cached_folds) != _n_splits:
+                print(f"[WARNING] Cached spatial folds have {len(cached_folds)} splits but "
+                      f"spatial_cv.n_splits={_n_splits} — invalidating and regenerating.")
+                cached_folds = None
             if cached_folds is not None:
                 folds = cached_folds
                 print(f"Loaded {len(folds)} spatial folds from cache")
@@ -1656,7 +1822,7 @@ def main(ctx, *, fast_mode=False):
                     X=X_original_features,
                     y=y,
                     coords=coords,
-                    n_splits=5,
+                    n_splits=_n_splits,
                     block_size=cv_system.get_block_size_from_config(),
                     buffer_size=cv_system.get_buffer_size_from_config(),
                     method='block',
@@ -1788,10 +1954,10 @@ def main(ctx, *, fast_mode=False):
             y = joined_data[target_col].values
             base_model_names = ['ols', 'gwr', 'gwrf', 'ggpgam']
             
-            # Extract base model predictions by name
+            # Extract base model predictions by name (TRUE Stage-2a out-of-fold)
             base_predictions = {}
             for model_name in base_model_names:
-                base_predictions[model_name] = joined_data[model_name].values
+                base_predictions[model_name] = joined_data[model_name].values.astype(np.float64)
             
             # Load saved folds
             print("\n=== Loading Spatial Folds ===")
@@ -1819,10 +1985,11 @@ def main(ctx, *, fast_mode=False):
             print("   To enable full model retraining, set skip_stage_2b_full_retrain to false")
             full_models_dir = None  # Set to None to indicate skipped
             if not skip_stage_2:
-                # Stage 2 ran but 2b was skipped — no fitted values available
-                base_fitted_values = {}
-                print("WARNING: Stage 2b skipped — no base model fitted values available.")
-                print("         Surrogates will train against raw y. This degrades surrogate quality.")
+                # Stage 2 ran but 2b was skipped — no full-data fitted values;
+                # the neural final retrain falls back to the Stage-2a OOF targets.
+                base_full_fitted_values = {}
+                print("WARNING: Stage 2b skipped — no full-data base-model fits available.")
+                print("         The neural final retrain will anchor surrogates to Stage-2a OOF predictions.")
         else:
             print("\n=== Retraining Base Models on Full Dataset ===")
             
@@ -1845,7 +2012,12 @@ def main(ctx, *, fast_mode=False):
             X_full_df = data_unscaled[selected_features_2b]          # DataFrame (keeps column names for GWR)
             X_full = X_full_df.values                                 # ndarray for other models
             y_full = data_unscaled[cv_system._cfg.target].values
-            coords_full = data_unscaled[cv_system._cfg.coordinates].values
+            # Same (projected, metre) coordinates as the spatial CV — never the
+            # raw config columns, which may be in the input CRS (e.g. US feet).
+            coords_full, _coords_full_cols = _resolve_model_coords(
+                data_unscaled, cv_system._cfg.coordinates,
+            )
+            print(f"Stage 2b coordinates: {_coords_full_cols}")
             
             print(f"Full dataset: {len(X_full)} samples, {len(selected_features_2b)} features")
             print(f"Features: {selected_features_2b}")
@@ -2023,10 +2195,11 @@ def main(ctx, *, fast_mode=False):
             print(f"\n✅ Stage 2b Complete: All base models retrained and saved to {full_models_dir}/")
             print(f"These models can now be used for scenario predictions and deployment.")
 
-            # Collect full-model fitted values for surrogate pretraining
-            # These are in-sample predictions (not OOF) — surrogates should
-            # learn to reproduce the base model's full fitted surface.
-            base_fitted_values = {}
+            # Collect full-model fitted values.  These are IN-SAMPLE fits (the
+            # models saw every label), so they are only used as surrogate
+            # targets for the neural FINAL full-data retrain — never inside
+            # a CV fold (that would leak the fold's test labels).
+            base_full_fitted_values = {}
             for model, model_name in zip(models, model_names_2b):
                 try:
                     if model_name in ('gwr', 'gwrf', 'ggpgam'):
@@ -2035,8 +2208,8 @@ def main(ctx, *, fast_mode=False):
                         preds = model.predict(X_full)
                     if isinstance(preds, tuple):
                         preds = preds[0]
-                    base_fitted_values[model_name] = preds
-                    print(f"Collected fitted values for {model_name}: shape {preds.shape}")
+                    base_full_fitted_values[model_name] = preds
+                    print(f"Collected full-data fitted values for {model_name}: shape {preds.shape}")
                 except Exception as e:
                     print(f"WARNING: Could not collect fitted values for {model_name}: {e}")
         
@@ -2048,12 +2221,20 @@ def main(ctx, *, fast_mode=False):
         print("\n=== Loading Hyperparameters ===")
         cfg = cv_system.base_config  # keep raw dict for hyperparams not yet in StageConfig
         
+        # Base models with complete OOF predictions (a model with any failed
+        # CV fold is excluded from stacking / averaging below).
+        _stage2_failed_folds = (
+            (stage2_results.get('failed_folds') or {})  # pyright: ignore[reportPossiblyUnboundVariable]
+            if not skip_stage_2 else {}
+        )
+        usable_base_models = _usable_base_models(base_predictions, _stage2_failed_folds)
+
         # Compute base OOF residuals (needed by both cached and fresh paths)
         base_oof_residuals = {}
         if base_predictions:
             print("Computing OOF residuals from base model predictions...")
             for model_name in base_model_names:
-                if model_name in base_predictions:
+                if model_name in usable_base_models:
                     residuals = y - base_predictions[model_name]
                     base_oof_residuals[model_name] = residuals
                     print(f"  {model_name}: residual mean={np.mean(residuals):.4f}, std={np.std(residuals):.4f}")
@@ -2099,17 +2280,16 @@ def main(ctx, *, fast_mode=False):
                         cfg.setdefault("models", {}).setdefault("neural", {})["dropout"] = v
                 print(f"CMA-ES best params applied: {best_hparams}")
 
-            # Build base-model fitted values dict for surrogate pretraining
-            # Use full-model fitted values (Stage 2b) instead of OOF predictions
-            _base_oof = {}
-            for _mn in ('gwr', 'gwrf', 'ggpgam'):
-                if _mn in base_fitted_values:
-                    fv = base_fitted_values[_mn]
-                    if len(fv) == len(y):
-                        _base_oof[_mn] = fv
-                    else:
-                        print(f"WARNING: base_fitted_values[{_mn}] length {len(fv)} "
-                              f"!= y length {len(y)} — skipping (row mismatch)")
+            # Surrogate anchor targets:
+            #  * per-fold pretrain/fidelity → TRUE Stage-2a out-of-fold preds
+            #  * final full-data retrain    → Stage-2b in-sample full fits
+            _surrogate_oof_targets, _surrogate_full_targets = _build_neural_base_targets(
+                base_predictions, base_full_fitted_values, len(y),
+                usable_models=usable_base_models,
+            )
+            print(f"Surrogate targets: CV folds ← Stage-2a OOF "
+                  f"{sorted(_surrogate_oof_targets or [])}; final retrain ← "
+                  f"{'Stage-2b full fits ' + str(sorted(_surrogate_full_targets)) if _surrogate_full_targets else 'Stage-2a OOF (no full fits)'}")
             v2_neural_result = train_neural_meta(
                 y=y,
                 coords=coords,
@@ -2118,7 +2298,8 @@ def main(ctx, *, fast_mode=False):
                 folds=folds,
                 config=cfg,
                 output_dir=stage2_dir,
-                base_oof_predictions=_base_oof or None,
+                base_oof_predictions=_surrogate_oof_targets,
+                base_full_fitted=_surrogate_full_targets,
             )
 
             v2_r2 = v2_neural_result["metrics"]["r2"]
@@ -2158,15 +2339,20 @@ def main(ctx, *, fast_mode=False):
             print(f"[WARNING] V2 Neural Meta-Learner failed: {e}")
             import traceback
             traceback.print_exc()
-            # Fallback: use average of base model predictions
-            if base_predictions:
-                best_meta_predictions = np.mean(
-                    [base_predictions[m] for m in base_model_names], axis=0
-                )
-            else:
-                best_meta_predictions = np.full(len(y), np.mean(y))
-            best_meta_r2 = r2_score(y, best_meta_predictions)
-            best_meta_rmse = np.sqrt(mean_squared_error(y, best_meta_predictions))
+            # Fallback: average of the complete base-model OOF predictions.
+            # Never fabricate predictions (e.g. a constant mean(y)).
+            _avg_models = [m for m in base_model_names if m in usable_base_models]
+            if not _avg_models:
+                raise RuntimeError(
+                    "V2 Neural Meta-Learner failed and no base model has complete "
+                    "out-of-fold predictions to fall back on — refusing to "
+                    "fabricate meta predictions."
+                ) from e
+            print(f"  Falling back to the average of base-model OOF predictions: {_avg_models}")
+            best_meta_predictions = np.mean(
+                [base_predictions[m] for m in _avg_models], axis=0
+            )
+            best_meta_r2, best_meta_rmse, _ = _finite_scores(y, best_meta_predictions)
             best_approach = "Base Average (fallback)"
 
         # Compute residuals for the neural meta-learner
@@ -2649,8 +2835,8 @@ def main(ctx, *, fast_mode=False):
             from sparc.data.satellite_types import SatelliteFeatureSet
             import numpy as _np_anp
 
-            _coords_np = self._coords if hasattr(self, "_coords") else final_results.get("coords")
-            _feat_np = self._feature_matrix if hasattr(self, "_feature_matrix") else None
+            _coords_np = getattr(cv_system, "_coords", None) if getattr(cv_system, "_coords", None) is not None else final_results.get("coords")
+            _feat_np = getattr(cv_system, "_feature_matrix", None)
 
             if _coords_np is not None and _feat_np is not None:
                 _N = len(_coords_np)

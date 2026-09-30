@@ -2,7 +2,9 @@
 SPARC V3 physics module.
 
 PDE-informed components for physics-based regularization, boundary
-conditions, energy balance, and spatially-varying process rates.
+conditions, and spatially-varying process rates.  (The surface energy
+balance helpers in ``energy_balance`` are stand-alone and are NOT used by
+the PDE loss.)
 
 Submodules
 ----------
@@ -11,7 +13,8 @@ pde_operators
 input_derivatives
     Per-predictor spatial derivatives for physics feature enrichment.
 energy_balance
-    Urban energy balance terms (radiation, sensible, latent, storage).
+    Stand-alone surface energy balance helpers (net radiation, latent-heat
+    scaling, storage, ground-conduction proxy); not wired into training.
 pde_loss
     Multi-term PDE loss with staged curriculum activation.
 boundary_conditions

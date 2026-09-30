@@ -259,7 +259,7 @@ def run_budget_optimization(
                 "cost": float(surface.costs[i]),
             })
 
-        share_treated = 100.0 * res.n_treated / max(1, len(benefit))
+        share_treated = 100.0 * res.n_treated / max(1, len(surface.benefits))
         print(f"  [budget] {treatment}: solver={res.solver}  "
               f"benefit={res.total_benefit:.4f}  cost={res.total_cost:,.0f}  "
               f"({share_treated:.1f}% of cells treated)")

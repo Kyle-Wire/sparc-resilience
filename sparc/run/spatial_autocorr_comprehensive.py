@@ -649,6 +649,8 @@ def fft_correlogram(
     values: np.ndarray,
     max_distance: float,
     n_lags: int,
+    n_permutations: int = 99,
+    random_state: int | None = 0,
 ) -> dict:
     """Compute spatial correlogram via 2-D FFT (Wiener-Khinchin theorem).
 
@@ -663,6 +665,19 @@ def fft_correlogram(
     The zero-padding trick (2× in each dimension) converts the circular FFT
     convolution into a linear one, so wrap-around contamination is zero for
     lags ≤ ``max_distance``.
+
+    All directions are used: the autocorrelation is read on the half-plane
+    of signed offsets ``dy ≥ 0`` (with the duplicate half-line ``dy = 0,
+    dx < 0`` and the self-pair offset ``(0, 0)`` removed), so every unordered
+    pair of distinct occupied cells is counted exactly once.
+
+    Significance uses a permutation null: the cell values are shuffled among
+    the occupied cells ``n_permutations`` times (seeded by ``random_state``)
+    and each lag's statistic is standardised as
+    ``z = (acf − mean_null) / sd_null``; ``p`` is the two-sided normal
+    p-value of that ``z`` and ``significant`` means ``|z| > 1.96``.
+    ``n_permutations=0`` falls back to the analytic ``SE = 1/√n_pairs``
+    (which ignores autocorrelation and is anti-conservative).
 
     Returns
     -------
@@ -744,30 +759,62 @@ def fft_correlogram(
     pad_y = 1 << int(np.ceil(np.log2(max(2 * ny, 4))))
     pad_x = 1 << int(np.ceil(np.log2(max(2 * nx, 4))))
 
-    F_z = np.fft.rfft2(z, s=(pad_y, pad_x))
-    acf_raw = np.fft.irfft2(F_z * np.conj(F_z), s=(pad_y, pad_x))[:ny, :nx]
-
-    # Count valid cell pairs at each offset via FFT of the occupancy mask
-    F_m = np.fft.rfft2(occupied.astype(np.float64), s=(pad_y, pad_x))
-    pair_counts = np.fft.irfft2(F_m * np.conj(F_m), s=(pad_y, pad_x))[:ny, :nx]
-    pair_counts = np.maximum(pair_counts, 1e-3)   # guard /0
-
-    # Normalise: ACF(offset) = raw_xcorr(offset) / (n_pairs(offset) * variance)
-    acf = acf_raw / (pair_counts * variance)
-
-    # --- Physical distance of each grid offset (i_off, j_off) ---
+    # Signed offsets on the half-plane dy ≥ 0.  irfft2 stores offset
+    # (a, b) at index (a mod pad_y, b mod pad_x): rows [:ny] hold dy = 0..ny−1
+    # and columns [:nx] ∪ [pad_x−nx+1:] hold dx = 0..nx−1, −(nx−1)..−1.
+    col_idx = np.r_[0:nx, pad_x - nx + 1:pad_x]
     i_off = np.arange(ny, dtype=np.float64)
-    j_off = np.arange(nx, dtype=np.float64)
-    I_OFF, J_OFF = np.meshgrid(i_off, j_off, indexing='ij')   # (ny, nx)
-    dist_grid = np.sqrt((I_OFF * dy) ** 2 + (J_OFF * dx) ** 2)
+    j_off = np.r_[0:nx, -(nx - 1):0].astype(np.float64)
+    I_OFF, J_OFF = np.meshgrid(i_off, j_off, indexing='ij')   # (ny, 2nx−1)
+    # Offsets (dy, dx) and (−dy, −dx) describe the same unordered pair: keep
+    # dy > 0, plus dx > 0 on the dy = 0 line (drops the duplicate dx < 0
+    # half-line and the self-pair offset (0, 0)).
+    half_plane = (I_OFF > 0) | (J_OFF > 0)
 
-    dist_flat = dist_grid.ravel()
-    acf_flat = acf.ravel()
-    cnt_flat = pair_counts.ravel()
+    def _half_plane_xcorr(field: np.ndarray) -> np.ndarray:
+        F = np.fft.rfft2(field, s=(pad_y, pad_x))
+        full = np.fft.irfft2(F * np.conj(F), s=(pad_y, pad_x))
+        return full[:ny][:, col_idx]
+
+    acf_raw = _half_plane_xcorr(z)
+    # Count valid cell pairs at each offset via FFT of the occupancy mask
+    pair_counts = _half_plane_xcorr(occupied.astype(np.float64))
+
+    # --- Physical distance of each signed grid offset ---
+    dist_grid = np.sqrt((I_OFF * dy) ** 2 + (J_OFF * dx) ** 2)
 
     # --- Radial averaging into lag bins ---
     lag_edges = np.linspace(0.0, max_distance, n_lags + 1)
     lag_centers = 0.5 * (lag_edges[:-1] + lag_edges[1:])
+
+    bin_of = np.searchsorted(lag_edges, dist_grid, side='right') - 1
+    use = half_plane & (pair_counts > 0.5) & (bin_of >= 0) & (bin_of < n_lags)
+    use_bins = bin_of[use]
+    w_bin = np.bincount(use_bins, weights=pair_counts[use], minlength=n_lags)
+
+    def _lag_acf(raw: np.ndarray) -> np.ndarray:
+        # Pair-weighted mean of raw/(n_pairs·var) == Σ raw / (var · Σ n_pairs)
+        s_bin = np.bincount(use_bins, weights=raw[use], minlength=n_lags)
+        out = np.zeros(n_lags, dtype=np.float64)
+        ok = w_bin >= 1.0
+        out[ok] = s_bin[ok] / (variance * w_bin[ok])
+        return out
+
+    acf_lags = _lag_acf(acf_raw)
+
+    # --- Permutation null: shuffle cell values among occupied cells ---
+    n_permutations = int(max(0, n_permutations or 0))
+    null_mean = null_sd = None
+    if n_permutations > 0:
+        rng = np.random.default_rng(random_state)
+        z_occ = z[occupied]
+        null = np.empty((n_permutations, n_lags), dtype=np.float64)
+        z_perm = np.zeros_like(z)
+        for k in range(n_permutations):
+            z_perm[occupied] = rng.permutation(z_occ)
+            null[k] = _lag_acf(_half_plane_xcorr(z_perm))
+        null_mean = null.mean(axis=0)
+        null_sd = null.std(axis=0, ddof=1) if n_permutations > 1 else np.zeros(n_lags)
 
     correlogram_results = []
     morans_i_values: list[float] = []
@@ -775,22 +822,19 @@ def fft_correlogram(
     p_values_out: list[float] = []
 
     for i in range(n_lags):
-        in_bin = (dist_flat >= lag_edges[i]) & (dist_flat < lag_edges[i + 1])
-        in_bin &= cnt_flat > 0.5
+        # Each unordered pair of distinct occupied cells is counted once.
+        n_pairs = int(np.round(w_bin[i]))
+        acf_lag = float(acf_lags[i]) if n_pairs >= 1 else 0.0
 
-        w = cnt_flat[in_bin]
-        # Each offset (di, dj) with di>0 or dj>0 contributes 2 directed pairs
-        # (i→j and j→i); offset (0,0) contributes n_occupied self-pairs.
-        n_pairs = int(np.round(w.sum() / 2.0))
-
-        if n_pairs < 1 or w.sum() < 1.0:
-            acf_lag = 0.0
-        else:
-            acf_lag = float(np.average(acf_flat[in_bin], weights=w))
-
-        # Significance: under spatial randomness E[ACF] ≈ 0 (h > 0),
-        # SE ≈ 1 / sqrt(n_pairs).
-        if n_pairs > 2:
+        if n_pairs > 2 and null_sd is not None:
+            sd0 = float(null_sd[i])
+            if sd0 > 1e-12:
+                z_score = float((acf_lag - null_mean[i]) / sd0)
+                p_value = float(2.0 * (1.0 - _stats.norm.cdf(abs(z_score))))
+            else:
+                z_score, p_value = 0.0, 1.0
+        elif n_pairs > 2:
+            # Legacy analytic SE (n_permutations=0): E[ACF] ≈ 0, SE ≈ 1/√pairs.
             se = 1.0 / np.sqrt(n_pairs)
             z_score = float(acf_lag / se)
             p_value = float(2.0 * (1.0 - _stats.norm.cdf(abs(z_score))))

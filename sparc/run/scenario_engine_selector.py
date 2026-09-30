@@ -43,6 +43,17 @@ _LEGACY_ALIASES: dict[str, str] = {
 # Modes that require v4-only artifacts; not dispatchable by legacy engine.
 _V4_ONLY_MODES = frozenset({"mode_5_full_audit"})
 
+# Modes sharing mode_4 composition (direct + DAG indirect blended with the
+# ensemble).  Kept in sync with the v4 engine, which requires an
+# ``ensemble_predictor`` for mode_3 and every hybrid-like mode.
+try:
+    from sparc.interventions.scenario_engine_v4 import _HYBRID_LIKE_MODES
+except Exception:  # pragma: no cover - v4 engine unavailable
+    _HYBRID_LIKE_MODES = ("mode_4_hybrid", "mode_5_full_audit")
+
+# Modes for which ``ScenarioEngineV4`` needs an ensemble predictor.
+_ENSEMBLE_MODES = ("mode_3_full_ensemble",) + tuple(_HYBRID_LIKE_MODES)
+
 _VALID_MODES = frozenset({
     "auto",
     "mode_1_physics",
@@ -192,7 +203,7 @@ class ScenarioEngineSelector:
             return None
 
         ensemble_pred: Optional[object] = None
-        if mode in ("mode_3_full_ensemble", "mode_4_hybrid"):
+        if mode in _ENSEMBLE_MODES:
             ensemble_pred = _build_ensemble_predictor(self._sim)
             if ensemble_pred is None:
                 return None  # no usable base ensemble → skip v4
@@ -288,10 +299,16 @@ class ScenarioEngineSelector:
 def _build_ensemble_predictor(sim) -> Optional[object]:
     """Wrap loaded base models into a ``df → ndarray`` callable.
 
-    Returns ``None`` when *sim* has no usable base ensemble.
+    Returns ``None`` when *sim* has no usable base ensemble.  A meta model is
+    optional: Stage 2 does not persist a callable meta stacker, and
+    ``ScenarioSimulator._predict_baseline`` falls back to a weighted average
+    of the base models when ``sim._meta_model`` is ``None``.
     """
-    if not getattr(sim, "_models", None) or not getattr(sim, "_meta_model", None):
+    if not getattr(sim, "_models", None):
         return None
+    if getattr(sim, "_meta_model", None) is None:
+        print("  [v4 engine] no meta model loaded — ensemble predictor uses "
+              "the weighted base-model average")
     try:
         import numpy as _np
 

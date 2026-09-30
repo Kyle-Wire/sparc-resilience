@@ -265,9 +265,10 @@ class ScenarioEngineV4:
             caps.get("spillover_mode", "fold_into_delta")
         ).lower()
         # ``saturation_clipping``: when True, per-cell scenario delta is
-        # capped at the saturation knee detected in Stage-3 dose-response
-        # curves (the increment beyond which marginal effect drops below
-        # ``saturation_marginal_floor`` × peak marginal slope).
+        # scaled by the share of the cell's dose path [t0, t0 + increment]
+        # that lies below the saturation knee detected in Stage-3
+        # dose-response curves (the absolute dose beyond which the marginal
+        # effect drops below ``saturation_marginal_floor`` × peak slope).
         self.saturation_clipping = bool(caps.get("saturation_clipping", True))
         self.saturation_marginal_floor = float(
             caps.get("saturation_marginal_floor", 0.5)
@@ -434,6 +435,10 @@ class ScenarioEngineV4:
                     "delta_ci95": d_ci95,
                     "baseline":   float(target_baseline[i]),
                     "modified":   float(modified_target[i]),
+                    # Baseline value of the TREATMENT variable (not the
+                    # target) — needed to compare the scenario's dose path
+                    # [t0, t0 + increment] with the absolute saturation knee.
+                    "treatment_baseline": float(base_x[i]),
                     "area_code":  area_codes[i],
                     "e_value_point": float(e_pt),
                     "e_value_ci":    None if e_ci is None else float(e_ci),
@@ -619,9 +624,11 @@ class ScenarioEngineV4:
             return {}
 
     def _saturation_knee(self, curve: dict) -> Optional[float]:
-        """Return the dose level at which marginal effect first drops below
-        ``saturation_marginal_floor`` × peak |slope|.  ``None`` if curve is
-        flat / linear / missing.
+        """Return the (absolute) dose level at which the marginal effect
+        first drops below ``saturation_marginal_floor`` × peak |slope|,
+        searching only past the peak (so an initial flat region of a
+        convex/sigmoid curve is not mistaken for saturation).  ``None`` if
+        the curve is flat / linear / missing.
         """
         try:
             doses = np.asarray(curve.get("dose_levels") or [], dtype=float)
@@ -637,19 +644,54 @@ class ScenarioEngineV4:
             if peak <= 0:
                 return None
             floor = self.saturation_marginal_floor * peak
-            below = np.where(slopes < floor)[0]
+            order = np.argsort(doses)
+            doses, slopes = doses[order], slopes[order]
+            peak_idx = int(np.argmax(slopes))
+            below = np.where(slopes[peak_idx + 1:] < floor)[0]
             if below.size == 0:
                 return None
-            return float(doses[int(below[0])])
+            return float(doses[peak_idx + 1 + int(below[0])])
         except Exception:
             return None
 
-    def _apply_saturation_clipping(self, long_df: pd.DataFrame) -> pd.DataFrame:
-        """Clip per-cell delta when the scenario increment exceeds the
-        treatment's dose-response saturation knee.
+    @staticmethod
+    def _saturation_scale(
+        knee: float,
+        treatment_baseline: np.ndarray,
+        increment: np.ndarray,
+    ) -> np.ndarray:
+        """Fraction of each cell's dose move that lies below the knee.
 
-        The clipping factor for a given (variable, increment) is
-        ``min(1, knee / increment)`` so deltas at twice the knee are halved.
+        The knee is an ABSOLUTE dose; the scenario moves each cell along
+        ``[t0, t0 + increment]``.  Only the part of that path below the knee
+        (where the marginal effect is still active) counts:
+
+        * increase: ``clip((knee − t0) / increment, 0, 1)``
+        * decrease (mirror): ``clip((knee − (t0 − |increment|)) / |increment|, 0, 1)``
+          — the stretch of the decrease that is still above the knee (in the
+          saturated region) contributes nothing.
+
+        Cells already past the knee get 0 for increases; a zero increment
+        gets 1 (nothing to clip).
+        """
+        t0 = np.asarray(treatment_baseline, dtype=float)
+        inc = np.asarray(increment, dtype=float)
+        abs_inc = np.abs(inc)
+        lo = np.minimum(t0, t0 + inc)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            frac = np.clip((knee - lo) / np.where(abs_inc > 1e-12, abs_inc, 1.0), 0.0, 1.0)
+        frac = np.where(abs_inc > 1e-12, frac, 1.0)
+        return np.where(np.isfinite(frac), frac, 1.0)
+
+    def _apply_saturation_clipping(self, long_df: pd.DataFrame) -> pd.DataFrame:
+        """Scale per-cell delta by the share of the scenario's dose move
+        that lies below the treatment's dose-response saturation knee.
+
+        The knee (from Stage-3 dose-response curves) is an absolute
+        treatment level, so it is compared with each cell's dose path
+        ``[treatment_baseline, treatment_baseline + increment]`` — see
+        :meth:`_saturation_scale` — not with the increment itself.
+        Rows without a ``treatment_baseline`` column are left unclipped.
         """
         curves = self._load_dose_response()
         if not curves:
@@ -659,15 +701,24 @@ class ScenarioEngineV4:
         out["delta_pre_saturation"] = out.get(
             "delta_mean", pd.Series(np.nan, index=out.index)
         )
+        if "treatment_baseline" not in out.columns:
+            warnings.warn(
+                "Saturation clipping skipped: long_df has no 'treatment_baseline' "
+                "column, so the absolute knee cannot be compared with the "
+                "per-cell dose path.",
+                RuntimeWarning,
+            )
+            return out
         for variable, curve in curves.items():
             knee = self._saturation_knee(curve)
-            if knee is None or knee <= 0:
+            if knee is None or not np.isfinite(knee):
                 continue
             mask = out["variable"] == variable
             if not mask.any():
                 continue
             increments = out.loc[mask, "increment"].astype(float).to_numpy()
-            scale = np.minimum(1.0, knee / np.maximum(increments, 1e-12))
+            t0 = out.loc[mask, "treatment_baseline"].astype(float).to_numpy()
+            scale = self._saturation_scale(knee, t0, increments)
             for col in ("delta_mean", "delta_ci5", "delta_ci50", "delta_ci95"):
                 if col in out.columns:
                     out.loc[mask, col] = out.loc[mask, col].astype(float).to_numpy() * scale

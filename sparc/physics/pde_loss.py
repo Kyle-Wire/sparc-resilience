@@ -1,22 +1,44 @@
 """
 Multi-term PDE loss for SPARC V3.
 
-Implements an 8-term physics-informed loss with staged sub-curriculum:
-  1. heat_diffusion   — α∇²T - S ≈ 0
-  2. energy_balance   — Q* - QH - QE ≈ 0
-  3. directional      — consistent curvature ∂²T/∂x² + ∂²T/∂y²
-  4. anisotropy       — penalize spurious isotropy where data is anisotropic
-  5. gradient_flux    — Fourier's law flux consistency
-  6. gaussian_curv    — penalize extreme curvature (det(H) regularizer)
-  7. alpha_smooth     — spatial smoothness of learned α(s)
-  8. alpha_prior      — deviation of α(s) from mixture prior
+Implements a multi-term physics-informed loss with staged sub-curriculum.
+Terms (keys in the returned ``loss_dict`` are ``pde_<name>``):
 
-Terms activate progressively (staged sub-curriculum) to prevent
-destabilizing a partially-converged network:
-  - Epochs 1–10:  heat_diffusion only
-  - Epochs 11–20: + energy_balance
-  - Epochs 21–30: + directional + anisotropy
-  - Epochs 31+:   all 8 terms
+  1.  heat_diffusion   — α∇²T - S ≈ 0 (steady-state diffusion with a learned source)
+  3.  directional      — ∂²T/∂x² + ∂²T/∂y² - ∇²T.  NOTE: with the shared
+                         5-point stencil this residual is identically zero
+                         (up to float round-off, which per-residual
+                         normalisation then amplifies), so the term carries
+                         no information.  Default weight 0.0.
+  4.  anisotropy       — |∂²T/∂x² - ∂²T/∂y²|.  NOTE: this PENALISES anisotropy
+                         (i.e. enforces isotropy), the opposite of what its name
+                         suggests.  Default weight 0.0.
+  5.  gradient_flux    — α‖∇T‖².  NOTE: this is plain gradient (smoothness)
+                         regularisation, not a Fourier's-law flux-consistency
+                         check.  Default weight 0.0.
+  6.  gaussian_curv    — penalize extreme curvature (det(H) regularizer)
+  7.  alpha_smooth     — spatial smoothness of learned α(s)
+  8.  alpha_prior      — deviation of α(s) from mixture prior
+  9.  transient        — ∂T/∂t ≈ α∇²T + S (only with multi-snapshot data)
+  10. nocturnal        — α∇²T_night ≈ dT/dt_cool (only with night data)
+  11. sheaf            — multi-scale sheaf-coboundary consistency (only when a
+                         ``sheaf_delta`` matching the prediction size is given)
+  12. fractional_diffusion — (−Δ)ˢT − S ≈ 0 (only with a fishnet ``grid_shape``)
+
+There is NO surface-energy-balance term: the former term 2
+("energy_balance", Q* − QH − QE) was removed, and
+:mod:`sparc.physics.energy_balance` is not wired into this loss.
+
+Terms whose weight is 0.0 are skipped entirely (their ``loss_dict`` entry is
+reported as 0.0).  Weights can be set from config via
+``PDELossWeights.from_config(cfg)`` (reads ``physics.pde_weights``).
+
+Terms activate progressively (staged sub-curriculum, offsets relative to
+``pde_start_epoch``) to prevent destabilizing a partially-converged network:
+  - offset 0:  heat_diffusion (+ transient / nocturnal when data present)
+  - offset 10: directional + anisotropy (if weighted)
+  - offset 15: gradient_flux, gaussian_curv, alpha_smooth, alpha_prior
+  - offset 20: sheaf, fractional_diffusion
 
 Each newly activated term ramps linearly over 5 epochs to avoid
 step discontinuities in the loss landscape.
@@ -24,8 +46,9 @@ step discontinuities in the loss landscape.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Optional
+import logging
+from dataclasses import dataclass, field, fields
+from typing import Any, Mapping, Optional
 
 import torch
 import torch.nn.functional as F
@@ -38,6 +61,23 @@ from sparc.physics.pde_operators import (
     normalize_residual as _normalize_residual_pub,
 )
 
+logger = logging.getLogger(__name__)
+
+# Emit the sheaf size-mismatch debug message only once per process.
+_SHEAF_MISMATCH_LOGGED = False
+
+
+def _log_sheaf_mismatch_once(n_cols: int, n_pred: int) -> None:
+    global _SHEAF_MISMATCH_LOGGED
+    if _SHEAF_MISMATCH_LOGGED:
+        return
+    logger.debug(
+        "pde_sheaf skipped: sheaf_delta has %d columns but T_pred has %d "
+        "points (expected %d columns); term set to 0.",
+        n_cols, n_pred, 2 * n_pred,
+    )
+    _SHEAF_MISMATCH_LOGGED = True
+
 
 @dataclass
 class PDELossWeights:
@@ -46,11 +86,19 @@ class PDELossWeights:
     These weights are multiplied by lambda_pde (from the curriculum) and
     the per-term stage activation weight.  After per-residual normalization
     each term is O(1), so these weights control relative importance only.
+    A weight of 0.0 skips the term entirely.
+
+    ``directional``, ``anisotropy`` and ``gradient_flux`` default to 0.0:
+    the directional residual is identically zero with the shared stencil,
+    the anisotropy term penalises (rather than rewards) anisotropy, and the
+    gradient-flux term is plain smoothing.  Set them explicitly (e.g. via
+    ``physics.pde_weights`` and :meth:`from_config`) only to reproduce the
+    legacy behaviour.
     """
     heat_diffusion: float = 1.0
-    directional: float = 0.20
-    anisotropy: float = 0.10
-    gradient_flux: float = 0.10
+    directional: float = 0.0
+    anisotropy: float = 0.0
+    gradient_flux: float = 0.0
     gaussian_curv: float = 0.05
     alpha_smooth: float = 0.10
     alpha_prior: float = 0.10
@@ -61,6 +109,32 @@ class PDELossWeights:
     sheaf: float = 0.03
     # Fractional Laplacian term 12 — anomalous / non-local diffusion (activated when grid_shape provided)
     fractional_diffusion: float = 0.20
+
+    @classmethod
+    def from_config(cls, cfg: Mapping[str, Any] | None) -> "PDELossWeights":
+        """Build weights from a SPARC config dict.
+
+        Reads ``cfg["physics"]["pde_weights"]``; any key matching a field of
+        this dataclass overrides the default, unknown keys (e.g. the legacy
+        ``energy_balance``) are ignored.  ``None`` / missing sections return
+        the defaults.
+        """
+        if not cfg:
+            return cls()
+        physics = cfg.get("physics") if isinstance(cfg, Mapping) else None
+        pw = physics.get("pde_weights") if isinstance(physics, Mapping) else None
+        if not isinstance(pw, Mapping):
+            return cls()
+        known = {f.name for f in fields(cls)}
+        kwargs: dict[str, float] = {}
+        for key, val in pw.items():
+            if key not in known or val is None:
+                continue
+            try:
+                kwargs[key] = float(val)
+            except (TypeError, ValueError):
+                logger.warning("Ignoring non-numeric physics.pde_weights.%s=%r", key, val)
+        return cls(**kwargs)
 
 
 # Staged activation schedule: (term_name, activation_offset)
@@ -147,7 +221,8 @@ def compute_pde_loss(
     source_term : (N,) learned source term S(x)
     neighbor_idx : (N, 4) cardinal neighbor indices [N, S, E, W]
     h : (N,) or scalar — grid spacing
-    weights : PDELossWeights or None (uses defaults)
+    weights : PDELossWeights, a full config mapping (``physics.pde_weights``
+              is read via ``PDELossWeights.from_config``), or None (defaults)
     epoch : current training epoch (controls staged activation)
     alpha_prior_field : (N, 1) optional mixture prior for α
     pde_start_epoch : epoch at which outer curriculum enables PDE lambda
@@ -166,6 +241,9 @@ def compute_pde_loss(
     """
     if weights is None:
         weights = PDELossWeights()
+    elif isinstance(weights, Mapping):
+        # A full SPARC config dict: honour ``physics.pde_weights``.
+        weights = PDELossWeights.from_config(weights)
 
     N = T_pred.shape[0]
     alpha_flat = alpha.squeeze(-1)  # (N,)
@@ -221,7 +299,9 @@ def compute_pde_loss(
     # ------------------------------------------------------------------
     # Term 3: Directional curvature consistency
     # ------------------------------------------------------------------
-    sw_dir = _stage_weight(pde_epoch, 10)
+    # NOTE: d2x + d2y and ∇² use the same 5-point stencil, so this residual
+    # is identically zero; the default weight is 0.0 and the block is skipped.
+    sw_dir = _stage_weight(pde_epoch, 10) if weights.directional > 0 else 0.0
     if sw_dir > 0:
         d2_dx2_raw, d2_dy2_raw, valid_dir = directional_curvatures(T_pred, neighbor_idx, h)
         d2_dx2_full = _expand(d2_dx2_raw, valid_dir, N)
@@ -243,8 +323,10 @@ def compute_pde_loss(
 
     # ------------------------------------------------------------------
     # Term 4: Anisotropy penalty
+    # NOTE: penalises |d2x - d2y|, i.e. enforces isotropy.  Default weight
+    # 0.0 (skipped); set explicitly only to reproduce legacy behaviour.
     # ------------------------------------------------------------------
-    sw_aniso = _stage_weight(pde_epoch, 10)
+    sw_aniso = _stage_weight(pde_epoch, 10) if weights.anisotropy > 0 else 0.0
     if sw_aniso > 0:
         if d2_dx2_full is None:
             d2_dx2_raw, d2_dy2_raw, valid_dir = directional_curvatures(T_pred, neighbor_idx, h)
@@ -263,9 +345,10 @@ def compute_pde_loss(
         loss_dict["pde_anisotropy"] = 0.0
 
     # ------------------------------------------------------------------
-    # Term 5: Gradient–flux consistency (Fourier's law)
+    # Term 5: "Gradient–flux" — α‖∇T‖², i.e. plain gradient smoothing (it is
+    # not a Fourier's-law consistency check).  Default weight 0.0 (skipped).
     # ------------------------------------------------------------------
-    sw_grad = _stage_weight(pde_epoch, 15)
+    sw_grad = _stage_weight(pde_epoch, 15) if weights.gradient_flux > 0 else 0.0
     if sw_grad > 0:
         grad_mag_raw, _, _, valid_g = gradient_magnitude(T_pred, neighbor_idx, h)
         grad_mag_full = _expand(grad_mag_raw, valid_g, N)
@@ -386,6 +469,12 @@ def compute_pde_loss(
     # Only active when sheaf_delta is provided.
     # ------------------------------------------------------------------
     sw_sheaf = _stage_weight(pde_epoch, 20) if sheaf_delta is not None else 0.0
+    if sw_sheaf > 0 and sheaf_delta is not None and sheaf_delta.shape[1] != 2 * N:
+        # δ⁰ is built on the full KNN graph (N_full·2 columns) but T_pred may be
+        # a mini-batch; applying it would be a shape error or, worse, silently
+        # mix unrelated points.  Skip the term in that case.
+        _log_sheaf_mismatch_once(int(sheaf_delta.shape[1]), N)
+        sw_sheaf = 0.0
     if sw_sheaf > 0 and sheaf_delta is not None:
         # Build 2-scale section: stalk = [T_fine, T_coarse]
         # T_coarse: mean of KNN neighbors' T_pred (using neighbor_idx; 4 neighbors)

@@ -54,6 +54,31 @@ except Exception:
 # Backward-compatible alias
 PHYSICS_SIGN_CONSTRAINTS = DEFAULT_PHYSICS_SIGN_CONSTRAINTS
 
+# Anisotropy quality gate (Stage-0 B2 audit threshold): a predictor's
+# (κ_x, κ_y, θ) ellipse is only used when its axis ratio b/a ≤ 0.87, i.e.
+# flattening 1 − b/a ≥ 0.13.  Weaker "anisotropy" is indistinguishable from
+# estimation noise and is treated as isotropic.
+ANISOTROPY_MAX_AXIS_RATIO = 0.87
+
+
+def is_effectively_anisotropic(predictor_kernel,
+                               max_axis_ratio: float = ANISOTROPY_MAX_AXIS_RATIO) -> bool:
+    """True iff *predictor_kernel* carries a usable, strong-enough ellipse.
+
+    The axis ratio is computed from the decay rates: ranges scale as 1/κ, so
+    ``b/a = min(κ_x, κ_y) / max(κ_x, κ_y)``.
+    """
+    if predictor_kernel is None or not getattr(predictor_kernel, "is_anisotropic", False):
+        return False
+    try:
+        kx = abs(float(predictor_kernel.kappa_x))
+        ky = abs(float(predictor_kernel.kappa_y))
+    except (TypeError, ValueError):
+        return False
+    if not (np.isfinite(kx) and np.isfinite(ky)) or max(kx, ky) <= 0:
+        return False
+    return (min(kx, ky) / max(kx, ky)) <= max_axis_ratio
+
 class GWRModel(BaseEstimator, RegressorMixin):
     """
     Geographically Weighted Regression (GWR) model with adaptive bandwidth.
@@ -173,11 +198,19 @@ class GWRModel(BaseEstimator, RegressorMixin):
             if bw is not None and bw > 0:
                 derived[p.name] = float(bw)
         if derived:
-            # Don't clobber an explicit legacy override silently — only
-            # fill in missing entries.
+            # The target↔predictor cross-range supersedes a predictor's own
+            # autocorrelation range (auto bandwidths from Stage 0).  An
+            # explicit user override (manual_parameters.bandwidths, or an
+            # untagged dict passed directly) is never clobbered — the
+            # cross-range then only fills missing entries.
+            from sparc.run.gwr_bandwidth import bandwidths_are_user_specified
+            user_specified = bandwidths_are_user_specified(self.variable_bandwidths)
             existing = dict(self.variable_bandwidths or {})
             for k, v in derived.items():
-                existing.setdefault(k, v)
+                if user_specified:
+                    existing.setdefault(k, v)
+                else:
+                    existing[k] = v
             self.variable_bandwidths = existing
         # Promote to Matérn kernel (closed-form ν ∈ {0.5, 1.5, 2.5}).
         if self.kernel in (None, 'gaussian', 'exponential', 'bisquare'):
@@ -234,8 +267,8 @@ class GWRModel(BaseEstimator, RegressorMixin):
         anisotropic AND we know which X column maps to which predictor."""
         if self.kernel_field is None or self.feature_names_ is None:
             return False
-        for p in self.kernel_field.predictors:
-            if p.is_anisotropic:
+        for fname in self.feature_names_:
+            if is_effectively_anisotropic(self.kernel_field.predictor(fname)):
                 return True
         return False
 
@@ -272,7 +305,7 @@ class GWRModel(BaseEstimator, RegressorMixin):
             p = self.kernel_field.predictor(fname)
             if p is None:
                 continue
-            if p.is_anisotropic:
+            if is_effectively_anisotropic(p):
                 d_p = _KF.anisotropic_distance(
                     dx, dy, p.kappa_x, p.kappa_y, p.theta_rad,
                 )
@@ -626,7 +659,8 @@ class GWRModel(BaseEstimator, RegressorMixin):
     
     def fit(self, X: np.ndarray, y: np.ndarray, coords: Optional[np.ndarray] = None, 
             tune_bandwidth: bool = False, bandwidth_range: list = None,
-            extract_coefficients: bool = False, output_path: str = None) -> 'GWRModel':
+            extract_coefficients: bool = False, output_path: str = None,
+            feature_names: Optional[list] = None) -> 'GWRModel':
         """
         Fit GWR model
         
@@ -646,6 +680,10 @@ class GWRModel(BaseEstimator, RegressorMixin):
             Whether to extract and save MGWR local coefficients (only for full model)
         output_path : str, optional
             Path to save coefficient CSV (default: 'mgwr_local_coefficients.csv')
+        feature_names : list, optional
+            Column names for a numpy ``X`` (ignored for DataFrames, whose
+            own columns are used).  Needed so KernelField / physics-prior /
+            sign-constraint lookups by predictor name work in CV.
             
         Returns:
         --------
@@ -656,8 +694,13 @@ class GWRModel(BaseEstimator, RegressorMixin):
         if hasattr(X, 'columns'):
             self.feature_names_ = X.columns.tolist()
             X = X.values
+        elif feature_names is not None and len(feature_names) == np.shape(X)[1]:
+            self.feature_names_ = [str(f) for f in feature_names]
         else:
-            self.feature_names_ = [f'feature_{i}' for i in range(X.shape[1])]
+            if feature_names is not None:
+                print(f"WARNING: GWR.fit got {len(feature_names)} feature_names for "
+                      f"{np.shape(X)[1]} columns; using generic names")
+            self.feature_names_ = [f'feature_{i}' for i in range(np.shape(X)[1])]
             
         X = np.asarray(X)
         y = np.asarray(y)

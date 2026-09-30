@@ -443,3 +443,76 @@ def prepare_data(df, config):
     print(f"Coordinates shape: {coords.shape}")
     
     return X, y, coords, feature_names
+
+
+def project_coords(df: pd.DataFrame, config: dict) -> np.ndarray:
+    """Return (N, 2) model-space coordinates for *df* in the working CRS.
+
+    Stage 2 fits and cross-validates on projected metric coordinates
+    (``projected_X`` / ``projected_Y`` written by
+    :func:`load_and_preprocess_data`), whereas raw CSVs carry coordinates in
+    the input CRS (e.g. State Plane feet).  Downstream consumers that query
+    Stage-2 models must use the same space.
+
+    Resolution order:
+
+    1. ``projected_X`` / ``projected_Y`` columns, if present.
+    2. Reproject the config coordinate columns
+       (``variables.coordinates`` or ``data.coord_columns``) from
+       ``crs.input`` (legacy ``crs.initial``) to ``crs.working`` (legacy
+       ``crs.target_projected`` / ``crs.projected``) with
+       ``pyproj.Transformer.from_crs(..., always_xy=True)``.
+    3. Otherwise return the raw coordinates with a warning.
+    """
+    import warnings as _warnings
+
+    if 'projected_X' in df.columns and 'projected_Y' in df.columns:
+        return df[['projected_X', 'projected_Y']].to_numpy(dtype=float)
+
+    config = config or {}
+    coord_cols = (
+        (config.get('variables') or {}).get('coordinates')
+        or (config.get('data') or {}).get('coord_columns')
+    )
+    if not coord_cols or len(coord_cols) < 2:
+        raise ValueError(
+            "project_coords: no projected_X/Y columns and no coordinate "
+            "columns configured (variables.coordinates / data.coord_columns)."
+        )
+    raw = df[list(coord_cols[:2])].to_numpy(dtype=float)
+
+    crs_cfg = config.get('crs') or {}
+    src = crs_cfg.get('input') or crs_cfg.get('initial')
+    dst = (
+        crs_cfg.get('working')
+        or crs_cfg.get('target_projected')
+        or crs_cfg.get('projected')
+    )
+    if not src or not dst:
+        _warnings.warn(
+            "project_coords: crs.input/crs.working not configured and no "
+            "projected_X/Y columns — returning raw coordinates, which may not "
+            "match the space the Stage-2 models were fitted in.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return raw
+
+    try:
+        from pyproj import CRS, Transformer
+
+        src_crs = CRS.from_user_input(src)
+        dst_crs = CRS.from_user_input(dst)
+        if src_crs == dst_crs:
+            return raw
+        transformer = Transformer.from_crs(src_crs, dst_crs, always_xy=True)
+        x, y = transformer.transform(raw[:, 0], raw[:, 1])
+        return np.column_stack([np.asarray(x, dtype=float), np.asarray(y, dtype=float)])
+    except Exception as exc:  # pragma: no cover - depends on pyproj install
+        _warnings.warn(
+            f"project_coords: reprojection {src} -> {dst} failed ({exc}); "
+            "returning raw coordinates.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return raw

@@ -134,6 +134,16 @@ def _parse_args() -> argparse.Namespace:
                         "(strongest UHI predictor) and sample n/Q from each bin. Ensures the few-shot head "
                         "sees the full UHI gradient from cool parks to hot asphalt at any N. "
                         "Example: --fewshot-n 1000 --fewshot-sampling stratified")
+    p.add_argument("--fewshot-split", choices=["buffer", "block", "random"], default="buffer",
+                   help="Train/test split for the few-shot eval. Labels are CAPA's interpolated "
+                        "rasters, so neighbouring pixels leak. "
+                        "'buffer' (default): drop test pixels within --fewshot-buffer-m of any "
+                        "training pixel. 'block': draw training pixels only from a random half of "
+                        "2 km blocks and test on the other half (plus the buffer). "
+                        "'random': legacy behaviour (all other labeled pixels; leaks).")
+    p.add_argument("--fewshot-buffer-m", type=float, default=500.0,
+                   help="Exclusion buffer (metres) between few-shot training and test pixels "
+                        "for --fewshot-split buffer/block (default 500).")
     p.add_argument("--pretrain-only", action="store_true",
                    help="Run Phase 1 (JEPA pretraining) only, then exit immediately after saving the trunk. "
                         "Useful for I1 eccentricity sweep screening: run with reduced n_epochs + A3 diagnostics "
@@ -1761,6 +1771,82 @@ def _kmedoids_sampling_gpu(emb_t, n: int, device, seed: int = 42, n_iter: int = 
     return unique_medoids[:n]
 
 
+def _fewshot_block_partition(
+    xy: np.ndarray,
+    labeled_idx: np.ndarray,
+    block_m: float,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Split labeled pixels by square ``block_m`` blocks into two random halves.
+
+    Returns ``(train_pool, test_pool)`` — global indices of labeled pixels in
+    the training half / test half of the blocks.  Deterministic given ``rng``.
+    """
+    labeled_idx = np.asarray(labeled_idx, dtype=np.int64)
+    if labeled_idx.size == 0:
+        return labeled_idx, labeled_idx
+    pts = np.asarray(xy, dtype=np.float64)[labeled_idx]
+    bx = np.floor(pts[:, 0] / block_m).astype(np.int64)
+    by = np.floor(pts[:, 1] / block_m).astype(np.int64)
+    blocks, block_of = np.unique(np.column_stack([bx, by]), axis=0, return_inverse=True)
+    block_of = np.asarray(block_of).reshape(-1)
+    perm = rng.permutation(len(blocks))
+    train_blocks = np.zeros(len(blocks), dtype=bool)
+    train_blocks[perm[: (len(blocks) + 1) // 2]] = True
+    in_train = train_blocks[block_of]
+    return labeled_idx[in_train], labeled_idx[~in_train]
+
+
+def _spatial_fewshot_split(
+    xy: np.ndarray,
+    candidate_train_idx: np.ndarray,
+    labeled_idx: np.ndarray,
+    mode: str = "buffer",
+    buffer_m: float = 500.0,
+    block_m: float = 2000.0,
+    rng: Optional[np.random.Generator] = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Spatially separated few-shot train/test split (pure numpy/scipy).
+
+    Parameters
+    ----------
+    xy : (N, 2) projected pixel centroids in metres (UTM).
+    candidate_train_idx : global indices of the training pixels chosen by the
+        sampling strategy (random / fps / kmedoids / stratified).
+    labeled_idx : global indices of all labeled pixels.
+    mode : ``"random"`` — test = all other labeled pixels (legacy, leaks);
+        ``"buffer"`` — as random, minus test pixels within ``buffer_m`` of any
+        training pixel; ``"block"`` — labeled pixels are split into two random
+        halves of ``block_m`` blocks (:func:`_fewshot_block_partition`, using
+        ``rng``); training pixels are kept only if they lie in the training
+        half, the test set is the other half, then the buffer is applied.
+        The caller should restrict sampling to the training half beforehand
+        with an identically seeded ``rng`` so no candidates are dropped.
+    Returns ``(train_idx, test_idx)`` as global index arrays.
+    """
+    mode = str(mode).lower()
+    if mode not in ("buffer", "block", "random"):
+        raise ValueError(f"Unknown few-shot split mode {mode!r}")
+    if rng is None:
+        rng = np.random.default_rng(0)
+    xy = np.asarray(xy, dtype=np.float64)
+    labeled_idx = np.asarray(labeled_idx, dtype=np.int64)
+    train_idx = np.asarray(candidate_train_idx, dtype=np.int64)
+
+    if mode == "block":
+        train_pool, test_pool = _fewshot_block_partition(xy, labeled_idx, block_m, rng)
+        train_idx = train_idx[np.isin(train_idx, train_pool)]
+        test_idx = np.setdiff1d(test_pool, train_idx)
+    else:
+        test_idx = np.setdiff1d(labeled_idx, train_idx)
+
+    if mode in ("buffer", "block") and buffer_m > 0 and train_idx.size and test_idx.size:
+        from scipy.spatial import cKDTree
+        dist, _ = cKDTree(xy[train_idx]).query(xy[test_idx], k=1)
+        test_idx = test_idx[dist > buffer_m]
+    return train_idx, test_idx
+
+
 def run_fewshot_finetune(
     holdout_path: Path,
     trunk,
@@ -1773,8 +1859,18 @@ def run_fewshot_finetune(
     city_uhi_stats: list[dict] = None,
     hybrid: bool = False,
     sampling: str = "random",
+    split: str = "buffer",
+    buffer_m: float = 500.0,
+    block_m: float = 2000.0,
 ) -> dict:
     """Few-shot transfer: fine-tune a city head on N labeled Philadelphia pixels.
+
+    Spatial separation (``split``): labels are CAPA's interpolated rasters, so
+    pixels near a training pixel share its label information.  ``"buffer"``
+    (default) drops test pixels within ``buffer_m`` metres of any training
+    pixel; ``"block"`` samples training pixels only from a random half of
+    ``block_m`` blocks and tests on the other half (plus the buffer);
+    ``"random"`` is the legacy leaky split described below.
 
     Experimental setup (no data leakage):
       - Sample ``n_samples`` labeled pixels  → training set (random or FPS)
@@ -1881,6 +1977,22 @@ def run_fewshot_finetune(
         any_valid |= valid_mask[w]
     labeled_idx = np.where(any_valid)[0]
 
+    # --- Spatial separation setup (see ``split``) ---
+    labeled_idx_all = labeled_idx
+    _split_seed = seed + 7919
+    if split != "random":
+        _geom = gdf.geometry
+        if gdf.crs is not None and gdf.crs.is_geographic:
+            _geom = _geom.to_crs(gdf.estimate_utm_crs())
+        _cent = _geom.centroid
+        pixel_xy = np.column_stack([_cent.x.values, _cent.y.values])
+        if split == "block":
+            # Sampling below draws only from the training half of the blocks.
+            labeled_idx, _ = _fewshot_block_partition(
+                pixel_xy, labeled_idx_all, block_m, np.random.default_rng(_split_seed))
+            log.info("fewshot BLOCK split: %d of %d labeled pixels in training blocks (%.0f m)",
+                     len(labeled_idx), len(labeled_idx_all), block_m)
+
     rng = np.random.default_rng(seed)
     if len(labeled_idx) < n_samples:
         log.warning("fewshot: only %d labeled pixels — using all for training", len(labeled_idx))
@@ -1968,6 +2080,20 @@ def run_fewshot_finetune(
         train_idx  = labeled_idx[chosen]
         test_idx   = labeled_idx[np.array([i for i in range(len(labeled_idx))
                                             if i not in chosen_set])]
+
+    if split != "random":
+        n_test_before = len(np.setdiff1d(labeled_idx_all, train_idx))
+        train_idx, test_idx = _spatial_fewshot_split(
+            pixel_xy, train_idx, labeled_idx_all, mode=split,
+            buffer_m=buffer_m, block_m=block_m,
+            rng=np.random.default_rng(_split_seed),
+        )
+        log.info("fewshot %s split (buffer=%.0f m): n_test %d -> %d after spatial filtering",
+                 split.upper(), buffer_m, n_test_before, len(test_idx))
+        if len(test_idx) == 0 or len(train_idx) == 0:
+            raise RuntimeError(
+                f"fewshot {split} split left n_train={len(train_idx)}, n_test={len(test_idx)}; "
+                "reduce --fewshot-n / --fewshot-buffer-m or use --fewshot-split block")
 
     log.info("fewshot [philadelphia_pa]: n_train=%d  n_test=%d  epochs=%d",
              len(train_idx), len(test_idx), n_epochs)
@@ -2717,6 +2843,8 @@ def main() -> None:
                         city_uhi_stats=city_uhi_stats_all,
                         hybrid=args.fewshot_hybrid,
                         sampling=args.fewshot_sampling,
+                        split=args.fewshot_split,
+                        buffer_m=args.fewshot_buffer_m,
                     )
                 except Exception as exc:
                     log.warning("Few-shot eval error for %s: %s", slug, exc)

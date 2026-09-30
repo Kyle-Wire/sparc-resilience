@@ -102,6 +102,25 @@ CANONICAL_SCHEMA: list[str] = [
     "aat_midday",
     "aat_night",
     "diurnal_aat",
+    # ── ERA5 boundary — extended (opt-in) ─────────────────────────────────
+    # Appended AFTER the labels so existing column positions are unchanged.
+    # Kept in the full schema (feature_columns=None) so they are not silently
+    # dropped; configs that pass an explicit feature list must list them to
+    # keep them (the JEPA script's ERA5 dims are fixed to the 4 base vars).
+    # ssrd = shortwave radiation [W/m²], blh = boundary-layer height [m],
+    # u10 / v10 = vector-mean 10 m wind components [m/s].
+    "era5_morning_ssrd",
+    "era5_morning_blh",
+    "era5_morning_u10",
+    "era5_morning_v10",
+    "era5_midday_ssrd",
+    "era5_midday_blh",
+    "era5_midday_u10",
+    "era5_midday_v10",
+    "era5_evening_ssrd",
+    "era5_evening_blh",
+    "era5_evening_u10",
+    "era5_evening_v10",
 ]
 
 # Maps layer name → columns that layer GDF contributes.
@@ -120,6 +139,13 @@ LAYER_COLUMN_MAP: dict[str, list[str]] = {
         "era5_midday_winddir",  "era5_midday_rh",
         "era5_evening_t2m", "era5_evening_windspeed",
         "era5_evening_winddir", "era5_evening_rh",
+        # extended (opt-in; see CANONICAL_SCHEMA)
+        "era5_morning_ssrd", "era5_morning_blh",
+        "era5_morning_u10",  "era5_morning_v10",
+        "era5_midday_ssrd",  "era5_midday_blh",
+        "era5_midday_u10",   "era5_midday_v10",
+        "era5_evening_ssrd", "era5_evening_blh",
+        "era5_evening_u10",  "era5_evening_v10",
     ],
 }
 

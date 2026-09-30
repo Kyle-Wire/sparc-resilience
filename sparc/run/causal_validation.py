@@ -443,6 +443,14 @@ class CausalValidator:
                                 _num_cols = [c for c in _oof_df.columns if _np.issubdtype(_oof_df[c].dtype, _np.number)]
                                 if _num_cols:
                                     _precomputed_outcome_preds = _oof_df[_num_cols[0]].values.astype(float)
+                            if _precomputed_outcome_preds is not None and not np.all(np.isfinite(_precomputed_outcome_preds)):
+                                # Stage 2 now leaves failed folds as NaN instead of mean-filling.
+                                import logging as _logging
+                                _logging.getLogger(__name__).warning(
+                                    "Stage 2 OOF preds contain non-finite values (failed folds); "
+                                    "skipping nuisance shortcut",
+                                )
+                                _precomputed_outcome_preds = None
                             if _precomputed_outcome_preds is not None and len(_precomputed_outcome_preds) != len(data):
                                 # Mismatched length — cannot use; fall through to standard HGB
                                 import logging as _logging

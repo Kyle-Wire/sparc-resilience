@@ -155,51 +155,27 @@ class GWRFModel:
         self._fit_tree = BallTree(self.coords)
 
         # ----------------------------------------------------------------
-        # S1a: Pre-compute anisotropic distances when kernel_field present.
-        # For each subsample location we build a sorted list of (aniso_dist,
-        # training_idx) pairs and select the k_neighbors closest under the
-        # geometric-mean anisotropic Matérn metric.
+        # S1a: Anisotropic neighbourhoods when the KernelField carries a
+        # usable ellipse for at least one predictor.  Mirrors
+        # GWRModel._per_predictor_anisotropic_weights: each predictor's
+        # Matérn weight is computed in its own (κ_x, κ_y, θ) frame (or
+        # isotropically from its cross-range bandwidth), the weights are
+        # combined by geometric mean, and the k_neighbors training points
+        # with the largest combined weight form the local neighbourhood.
         # ----------------------------------------------------------------
-        _use_anisotropy = (
-            self.kernel_field is not None
-            and hasattr(self.kernel_field, "kernels")
-            and any(
-                kf.get("is_anisotropic", False)
-                for kf in self.kernel_field.kernels.values()
-            )
-        )
+        _use_anisotropy = self._has_anisotropic_field()
         if _use_anisotropy:
-            try:
-                from sparc.models.kernel_field import anisotropic_distance, matern_kernel_weights
-            except ImportError:
-                _use_anisotropy = False
+            print("GWRF: using anisotropic KernelField neighbourhoods "
+                  f"({sum(self._is_aniso(self.kernel_field.predictor(n)) for n in self.feature_names_)} "
+                  "anisotropic predictor(s))")
 
         print(f"Training {len(self.subsample_indices)} local random forest models...")
 
         for i, idx in enumerate(self.subsample_indices):
             if _use_anisotropy:
-                # Compute geometric-mean anisotropic distance from this location
-                # to every training point, then pick the k_neighbors smallest.
-                dx = self.coords[:, 0] - self.coords[idx, 0]
-                dy = self.coords[:, 1] - self.coords[idx, 1]
-                log_dist_sum = np.zeros(len(self.coords))
-                n_preds = 0
-                for kern in self.kernel_field.kernels.values():
-                    kappa_x = float(kern.get("kappa_x", 1.0))
-                    kappa_y = float(kern.get("kappa_y", 1.0))
-                    theta_rad = float(kern.get("theta_rad", 0.0))
-                    d_aniso = anisotropic_distance(dx, dy, kappa_x, kappa_y, theta_rad)
-                    log_dist_sum += np.log(d_aniso + 1e-12)
-                    n_preds += 1
-                geom_mean_dist = np.exp(log_dist_sum / max(n_preds, 1))
-                geom_mean_dist[idx] = 0.0  # self-distance = 0
-                neighbor_indices = np.argsort(geom_mean_dist)[: self.k_neighbors]
-                d_local = geom_mean_dist[neighbor_indices]
-                # Use the geometric-mean Matérn weights for sample_weight.
-                kern0 = next(iter(self.kernel_field.kernels.values()))
-                nu = float(kern0.get("nu", 1.5))
-                sigma2 = float(kern0.get("sigma2", 1.0))
-                weights = matern_kernel_weights(d_local, nu=nu, sigma2=sigma2)
+                w_all = self._anisotropic_weights(self.coords[idx], self.coords)
+                neighbor_indices = np.argsort(-w_all, kind="stable")[: self.k_neighbors]
+                weights = np.clip(w_all[neighbor_indices], 1e-10, None)
             else:
                 d_local, neighbor_indices_raw = self._fit_tree.query(
                     self.coords[idx:idx+1], k=self.k_neighbors
@@ -238,6 +214,56 @@ class GWRFModel:
         
         return self
     
+    # ------------------------------------------------------------------
+    # Anisotropic KernelField support (real KernelField API)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _is_aniso(predictor_kernel) -> bool:
+        """Anisotropic AND strong enough (axis ratio b/a ≤ 0.87, B2 gate)."""
+        from sparc.models.gwr import is_effectively_anisotropic
+        return is_effectively_anisotropic(predictor_kernel)
+
+    def _has_anisotropic_field(self) -> bool:
+        kf = self.kernel_field
+        if kf is None or not self.feature_names_ or not hasattr(kf, "predictor"):
+            return False
+        return any(self._is_aniso(kf.predictor(name)) for name in self.feature_names_)
+
+    def _anisotropic_weights(self, point_coord, neighbor_coords) -> np.ndarray:
+        """Geometric mean of per-predictor Matérn weights from *point_coord*.
+
+        Anisotropic predictors use ``KernelField.anisotropic_distance`` (already
+        κ-scaled, so ``κ = 1``); isotropic predictors use the Euclidean
+        distance with ``κ = 1 / bandwidth_for(predictor)``.
+        """
+        from sparc.models.kernel_field import KernelField, matern_kernel_weights
+        kf = self.kernel_field
+        nu = float(getattr(kf, "matern_default_nu", 1.5))
+        dxdy = np.asarray(neighbor_coords, dtype=np.float64) - np.asarray(point_coord, dtype=np.float64)
+        dx, dy = dxdy[:, 0], dxdy[:, 1]
+        euclid = np.sqrt(dx ** 2 + dy ** 2)
+        log_w_sum = np.zeros(len(dxdy), dtype=np.float64)
+        n_terms = 0
+        for name in self.feature_names_:
+            p = kf.predictor(name)
+            if p is None:
+                continue
+            if self._is_aniso(p):
+                d_p = KernelField.anisotropic_distance(
+                    dx, dy, p.kappa_x, p.kappa_y, p.theta_rad,
+                )
+                w_p = matern_kernel_weights(d_p, kappa=1.0, nu=nu)
+            else:
+                bw = kf.bandwidth_for(name, fallback=None)
+                if bw is None or bw <= 0:
+                    continue
+                w_p = matern_kernel_weights(euclid, kappa=1.0 / bw, nu=nu)
+            log_w_sum += np.log(np.clip(w_p, 1e-12, None))
+            n_terms += 1
+        if n_terms == 0:
+            return np.ones(len(dxdy), dtype=np.float64)
+        return np.exp(log_w_sum / float(n_terms))
+
     def _extract_pdp_and_derivatives(self, X, y, coords, output_dir):
         """
         Extract Partial Dependence Plots and compute derivatives at baseline values.

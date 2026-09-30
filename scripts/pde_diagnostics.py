@@ -15,11 +15,16 @@ import numpy as np
 import pandas as pd
 import torch
 
-# Fix Windows console encoding
-if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+# Force UTF-8 output on every platform: the report prints α/⚠ glyphs, and a
+# redirected stdout (e.g. `> out.txt` on Windows → cp1252) otherwise crashes
+# with UnicodeEncodeError.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
 # ── Paths ─────────────────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parent.parent

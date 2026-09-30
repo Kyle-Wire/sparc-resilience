@@ -2,19 +2,36 @@
 
 Builds dose-response (PDP / ICE) curves whose y-axis is a *causal*
 effect estimate τ(t) = Y(do(T=t)) − Y(do(T=t₀)) rather than a
-correlational marginal.  Two paths are supported:
+correlational marginal.
+
+Dose-response construction (``method = "tau_by_level_integral"``)
+------------------------------------------------------------------
+Each cell i carries a CATE τ_i — the local marginal effect of the
+treatment at its *own* treatment level T_i.  The population marginal
+effect at dose s is estimated by Nadaraya–Watson kernel regression of
+τ_i on T_i::
+
+    m̂(s) = Ê[τ | T ≈ s] = Σ_i K_h(T_i − s) τ_i / Σ_i K_h(T_i − s)
+
+(Gaussian kernel, Silverman bandwidth on T), and the response is the
+integral of the marginal effect from the median dose t₀::
+
+    R(d) = ∫_{t₀}^{d} m̂(s) ds        (trapezoid rule; negative for d < t₀)
+
+If the marginal effect declines with dose, R(d) is concave and the
+saturation knee can be detected.  (The previous construction,
+mean(τ)·(d − t₀), was linear by construction and could never show one.)
+
+Two paths are supported:
 
 1. **Bayesian (preferred)** — when a ``BayesianSpatialCATE`` estimator
    has been fit, full posterior samples ``τ_post[d, i]`` per draw d and
-   cell i are available.  Sweeping the treatment over a reference grid
-   yields per-cell, per-dose response curves with *exact posterior
-   credible bands* — no resampling tricks.
+   cell i are available; R(d) is computed per posterior draw, giving
+   posterior credible bands.
 
 2. **Frequentist fallback** — when only a ``SpatialCATEEstimator`` is
-   available, we use its CATE point estimate plus the pre-existing
-   confidence interval and treat the response as locally linear in the
-   treatment around its mean.  Wider, less informative, but still
-   monotonically interpretable.
+   available, R(d) is computed from the CATE point estimates, and the
+   band from the same integral applied to the per-cell interval bounds.
 
 In both paths a **saturation knee** is detected by locating the inner
 dose-grid index at which the posterior-mean marginal slope drops below
@@ -58,6 +75,7 @@ class CausalDoseResponseCurve:
     knee_marginal_slope: float = float("nan")
     source: str = "unknown"                        # "bayesian" | "frequentist"
     diagnostics: Dict[str, Any] = field(default_factory=dict)
+    method: str = "tau_by_level_integral"          # dose-response construction
 
     def to_payload(self) -> dict:
         """JSON-friendly dict ready for ``ArtifactStore.write_struct``."""
@@ -78,6 +96,7 @@ class CausalDoseResponseCurve:
             "peak_marginal_slope": float(self.peak_marginal_slope),
             "knee_marginal_slope": float(self.knee_marginal_slope),
             "source": self.source,
+            "method": self.method,
             "diagnostics": dict(self.diagnostics),
         }
         # Per-cell arrays are large; only emit when present and small.
@@ -115,6 +134,88 @@ def _hdi(samples: np.ndarray, prob: float = 0.89, axis: int = 0) -> tuple[np.nda
         s, j_exp + (width - 1), axis=axis,
     ).squeeze(axis=axis)
     return lo, hi
+
+
+def _silverman_bandwidth(t: np.ndarray) -> float:
+    """Silverman's rule-of-thumb bandwidth for a 1-D sample."""
+    t = np.asarray(t, dtype=np.float64)
+    t = t[np.isfinite(t)]
+    n = t.size
+    if n < 2:
+        return 1.0
+    sd = float(np.std(t, ddof=1))
+    q75, q25 = np.percentile(t, [75, 25])
+    iqr = float(q75 - q25)
+    spread = min(sd, iqr / 1.34) if iqr > 0 else sd
+    if not np.isfinite(spread) or spread <= 0:
+        spread = sd if (np.isfinite(sd) and sd > 0) else 1.0
+    return float(0.9 * spread * n ** (-0.2))
+
+
+def _kernel_weights(t: np.ndarray, grid: np.ndarray, bandwidth: float) -> np.ndarray:
+    """Column-normalised Gaussian kernel weights, shape (N, K).
+
+    ``W[:, k]`` sums to 1, so ``tau @ W`` is the Nadaraya–Watson estimate
+    Ê[τ | T ≈ grid[k]].  Grid points with no kernel mass fall back to the
+    nearest observations (weights computed with log-sum-exp stabilisation).
+    """
+    z = (np.asarray(t, dtype=np.float64)[:, None] - grid[None, :]) / bandwidth
+    logw = -0.5 * z * z
+    logw -= logw.max(axis=0, keepdims=True)
+    w = np.exp(logw)
+    return w / w.sum(axis=0, keepdims=True)
+
+
+def _integrated_response(
+    m_aug: np.ndarray,
+    aug_grid: np.ndarray,
+    t0_index: int,
+) -> np.ndarray:
+    """Cumulative trapezoid integral of ``m_aug`` along the last axis,
+    re-anchored so that the value at ``aug_grid[t0_index]`` is zero."""
+    dx = np.diff(aug_grid)
+    seg = 0.5 * (m_aug[..., 1:] + m_aug[..., :-1]) * dx
+    cum = np.concatenate(
+        [np.zeros(m_aug.shape[:-1] + (1,)), np.cumsum(seg, axis=-1)], axis=-1,
+    )
+    return cum - cum[..., t0_index:t0_index + 1]
+
+
+def _augmented_grid(dose_grid: np.ndarray, t0: float) -> tuple[np.ndarray, np.ndarray, int]:
+    """Dose grid with t₀ inserted.  Returns (aug_grid, dose_idx, t0_idx)."""
+    aug = np.unique(np.concatenate([dose_grid, [t0]]))
+    dose_idx = np.searchsorted(aug, dose_grid)
+    t0_idx = int(np.searchsorted(aug, t0))
+    return aug, dose_idx, t0_idx
+
+
+def tau_by_level_response(
+    tau: np.ndarray,
+    treatment_values: np.ndarray,
+    dose_grid: np.ndarray,
+    t0: float,
+    bandwidth: Optional[float] = None,
+) -> tuple[np.ndarray, float]:
+    """R(d) = ∫_{t₀}^{d} Ê[τ | T≈s] ds evaluated on ``dose_grid``.
+
+    ``tau`` may be (N,) or (D, N) (one row per posterior draw); the result
+    is (K,) or (D, K) respectively.  Returns (response, bandwidth).
+    """
+    t = np.asarray(treatment_values, dtype=np.float64)
+    tau = np.asarray(tau, dtype=np.float64)
+    finite = np.isfinite(t) & np.all(np.isfinite(np.atleast_2d(tau)), axis=0)
+    t = t[finite]
+    tau = tau[..., finite]
+    if bandwidth is None:
+        bandwidth = _silverman_bandwidth(t)
+    aug, dose_idx, t0_idx = _augmented_grid(np.asarray(dose_grid, dtype=np.float64), float(t0))
+    if t.size == 0:
+        shape = tau.shape[:-1] + (len(dose_grid),)
+        return np.zeros(shape), float(bandwidth)
+    W = _kernel_weights(t, aug, bandwidth)          # (N, K_aug)
+    m_aug = tau @ W                                   # (K_aug,) or (D, K_aug)
+    resp_aug = _integrated_response(m_aug, aug, t0_idx)
+    return resp_aug[..., dose_idx], float(bandwidth)
 
 
 def _detect_saturation(
@@ -202,25 +303,35 @@ def causal_pdp_bayesian(
         t_lo, t_hi = m - 1.0, m + 1.0
     dose_grid = np.linspace(t_lo, t_hi, n_dose)
     t_baseline = float(np.median(t))
-
-    # Causal response per draw, per cell, per dose:
-    #     R[d, i, k] = τ_post[d, i] · (dose_grid[k] − t_baseline)
-    # Memory note: D × N × K float64 — chunked over draws.
-    pop_mean_per_draw = tau_post.mean(axis=1, keepdims=False)           # (D,)
     delta_grid = dose_grid - t_baseline                                  # (K,)
-    pop_response_post = pop_mean_per_draw[:, None] * delta_grid[None, :] # (D, K)
+
+    # Population causal response per posterior draw:
+    #     R[d, k] = ∫_{t0}^{dose_k} Ê[τ_post[d, ·] | T ≈ s] ds
+    # (kernel regression of τ on T, integrated by the trapezoid rule)
+    tau_post = np.asarray(tau_post, dtype=np.float64)
+    pop_response_post, bandwidth = tau_by_level_response(
+        tau_post, t, dose_grid, t_baseline,
+    )                                                                    # (D, K)
     response_mean = pop_response_post.mean(axis=0)
     response_lo, response_hi = _hdi(pop_response_post, hdi_prob, axis=0)
 
     per_cell_mean = per_cell_lo = per_cell_hi = None
     if keep_per_cell:
-        per_cell_response_mean = tau_post.mean(axis=0)                  # (N,)
-        per_cell_mean = (per_cell_response_mean[:, None]
-                          * delta_grid[None, :])                        # (N, K)
-        # Per-cell HDIs are computed by full sweep — only when explicitly
-        # requested because memory is D·N·K floats.
-        full_response = (tau_post[:, :, None]
-                          * delta_grid[None, None, :])                  # (D, N, K)
+        # Per-cell curve = population curve + the cell's CATE deviation from
+        # the dose-level mean at its own dose, applied linearly:
+        #     R_i(d) = R(d) + (τ_i − m̂(T_i)) · (d − t0)
+        # (reduces to τ_i · (d − t0) when m̂ is flat).
+        aug, _, _ = _augmented_grid(dose_grid, t_baseline)
+        W = _kernel_weights(t, aug, bandwidth)                           # (N, Ka)
+        m_aug = tau_post @ W                                             # (D, Ka)
+        m_at_cell = np.stack(
+            [np.interp(t, aug, m_aug[d]) for d in range(n_draws)], axis=0,
+        )                                                                # (D, N)
+        resid = tau_post - m_at_cell                                     # (D, N)
+        # Memory: D·N·K floats — only when explicitly requested.
+        full_response = (pop_response_post[:, None, :]
+                         + resid[:, :, None] * delta_grid[None, None, :])  # (D, N, K)
+        per_cell_mean = full_response.mean(axis=0)                       # (N, K)
         per_cell_lo, per_cell_hi = _hdi(full_response, hdi_prob, axis=0)
 
     sat_idx, peak, knee_slope = _detect_saturation(
@@ -236,6 +347,8 @@ def causal_pdp_bayesian(
         "dose_p95": float(t_hi),
         "hdi_prob": float(hdi_prob),
         "saturation_floor": float(saturation_floor),
+        "method": "tau_by_level_integral",
+        "kernel_bandwidth": float(bandwidth),
     }
     return CausalDoseResponseCurve(
         treatment=treatment,
@@ -271,9 +384,10 @@ def causal_pdp_frequentist(
 ) -> CausalDoseResponseCurve:
     """Causal PDP from a fitted ``SpatialCATEEstimator`` (CausalForestDML).
 
-    Approximates the response as locally linear in the treatment using
-    the population-mean CATE.  The credible band uses the estimator's
-    pre-existing 95% confidence interval (cate_intervals).
+    Response R(d) = ∫_{t0}^{d} Ê[τ | T≈s] ds from the per-cell CATE point
+    estimates (see module docstring).  The band applies the same integral
+    to the per-cell lower/upper bounds of the estimator's 95% confidence
+    interval (``cate_intervals``).
     """
     if treatment not in estimator.cate_estimates:
         raise KeyError(f"Estimator has no CATE for '{treatment}'")
@@ -293,14 +407,17 @@ def causal_pdp_frequentist(
         t_lo, t_hi = m - 1.0, m + 1.0
     dose_grid = np.linspace(t_lo, t_hi, n_dose)
     t_baseline = float(np.median(t))
-    delta_grid = dose_grid - t_baseline
 
-    pop_cate = float(np.mean(cate))
-    pop_lo = float(np.mean(ci_lo))
-    pop_hi = float(np.mean(ci_hi))
-    response_mean = pop_cate * delta_grid
-    response_lo = np.minimum(pop_lo * delta_grid, pop_hi * delta_grid)
-    response_hi = np.maximum(pop_lo * delta_grid, pop_hi * delta_grid)
+    n = t.shape[0]
+    ci_lo = np.broadcast_to(ci_lo, (n,)) if ci_lo.ndim == 0 else ci_lo
+    ci_hi = np.broadcast_to(ci_hi, (n,)) if ci_hi.ndim == 0 else ci_hi
+    stacked = np.stack([cate, ci_lo, ci_hi], axis=0)                    # (3, N)
+    responses, bandwidth = tau_by_level_response(
+        stacked, t, dose_grid, t_baseline,
+    )                                                                    # (3, K)
+    response_mean = responses[0]
+    response_lo = np.minimum(responses[1], responses[2])
+    response_hi = np.maximum(responses[1], responses[2])
 
     sat_idx, peak, knee_slope = _detect_saturation(
         response_mean, dose_grid, saturation_floor,
@@ -312,7 +429,8 @@ def causal_pdp_frequentist(
         "dose_p5": float(t_lo),
         "dose_p95": float(t_hi),
         "saturation_floor": float(saturation_floor),
-        "approximation": "locally_linear",
+        "method": "tau_by_level_integral",
+        "kernel_bandwidth": float(bandwidth),
     }
     return CausalDoseResponseCurve(
         treatment=treatment,

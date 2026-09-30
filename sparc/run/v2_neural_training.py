@@ -52,6 +52,30 @@ from sklearn.metrics import mean_squared_error, r2_score
 
 logger = logging.getLogger(__name__)
 
+_WARNED_PR_BOUNDS = False
+
+
+def _process_rate_bounds(pr_cfg: dict) -> list:
+    """Configured α bounds, warning (once) when the [0, 1] fallback is used.
+
+    A missing ``process_rate.bounds`` usually means the project config was not
+    the one loaded (e.g. ``load_config()`` fell back to legacy defaults with
+    ``SPARC_PROJECT`` unset) — the learned α then lives in [0, 1] regardless
+    of the physical bounds in project.yml.
+    """
+    global _WARNED_PR_BOUNDS
+    bounds = (pr_cfg or {}).get("bounds")
+    if bounds is None:
+        if not _WARNED_PR_BOUNDS:
+            logger.warning(
+                "process_rate.bounds not found in the loaded config; using the [0, 1] fallback. "
+                "Check that SPARC_PROJECT / the project path points at the intended project.yml."
+            )
+            _WARNED_PR_BOUNDS = True
+        return [0.0, 1.0]
+    return list(bounds)
+
+
 
 # ---------------------------------------------------------------------------
 # Land cover classification for process-rate pretraining
@@ -622,7 +646,7 @@ def _exec_cv_fold(
             domain_config={
                 "name": pr_cfg.get("name", "rate"),
                 "units": pr_cfg.get("units", ""),
-                "bounds": pr_cfg.get("bounds", [0.0, 1.0]),
+                "bounds": _process_rate_bounds(pr_cfg),
                 "prior_mean": pr_cfg.get("prior_mean", 0.5),
             },
             n_treatments=n_treatments,
@@ -2129,6 +2153,20 @@ def _pretrain_diffuser(model, tensors, alpha_all, config, device, artifact_dir, 
 # Main entry point
 # ---------------------------------------------------------------------------
 
+def _final_retrain_base_source(
+    base_oof_predictions: dict[str, np.ndarray] | None,
+    base_full_fitted: dict[str, np.ndarray] | None,
+) -> dict[str, np.ndarray] | None:
+    """Base-model arrays that anchor the surrogates of the FINAL full-data retrain.
+
+    In-sample full-data fits when available (the final model sees every
+    label anyway); otherwise the out-of-fold predictions (backward
+    compatible for callers that only pass ``base_oof_predictions``).
+    CV folds always use ``base_oof_predictions``.
+    """
+    return base_full_fitted if base_full_fitted is not None else base_oof_predictions
+
+
 def train_neural_meta(
     y: np.ndarray,
     coords: np.ndarray,
@@ -2139,6 +2177,7 @@ def train_neural_meta(
     output_dir: str | Path,
     base_oof_predictions: dict[str, np.ndarray] | None = None,
     quick_eval: bool = False,
+    base_full_fitted: dict[str, np.ndarray] | None = None,
 ) -> dict[str, Any]:
     """
     Train the V2 neural meta-learner with differentiable surrogates,
@@ -2146,10 +2185,18 @@ def train_neural_meta(
     optimizer, 4-stage curriculum, and Stochastic Weight Averaging.
 
     When *base_oof_predictions* is provided (dict mapping model name
-    to (N,) OOF prediction arrays from V1 base models), the surrogates
-    are pretrained against V1 outputs and the fidelity loss anchors
-    them to those outputs.  Gradients from physics / MSE / smoothness
-    still flow end-to-end through the surrogates during joint training.
+    to (N,) **out-of-fold** prediction arrays from V1 base models), the
+    surrogates inside each CV fold are pretrained against those V1
+    outputs (indexed by the fold's ``train_idx``) and the fidelity loss
+    anchors them to those outputs.  Gradients from physics / MSE /
+    smoothness still flow end-to-end through the surrogates during joint
+    training.
+
+    *base_full_fitted* (optional) holds the V1 base models' in-sample
+    full-data fitted values.  They must never be used inside a CV fold
+    (the models saw the fold's test labels); they only anchor the
+    surrogates of the FINAL full-data retrain.  When ``None`` the final
+    retrain falls back to *base_oof_predictions*.
 
     Returns dict with:
       - ``model``           — trained SPARCMetaLearner
@@ -2267,13 +2314,6 @@ def train_neural_meta(
     # Convert exceedance thresholds to normalised space
     thresholds_norm = [(t - y_mean) / y_std for t in thresholds]
 
-    # Training-scoped JointLoss instance (bundles lambda state for all folds)
-    _joint_loss = JointLoss.from_target_lambdas(
-        target_lambdas,
-        thresholds=thresholds_norm,
-        resolution=resolution,
-    )
-
     # Process rate input columns — use all physics features when not configured
     pr_inputs = pr_cfg.get("inputs", feature_names)
     pr_input_dim = len(pr_inputs)
@@ -2361,6 +2401,16 @@ def train_neural_meta(
         "alpha_class": training_cfg.get("lambda_alpha_class", 0.05),
     }
 
+    # Training-scoped JointLoss instance (bundles lambda state for all folds).
+    # Built *after* target_lambdas is defined — it used to be constructed
+    # above this dict, raising UnboundLocalError on every call so Stage 2c
+    # silently fell back to the base-model average.
+    _joint_loss = JointLoss.from_target_lambdas(
+        target_lambdas,
+        thresholds=thresholds_norm,
+        resolution=resolution,
+    )
+
     # OOF containers
     oof_preds = np.zeros(len(y), dtype=np.float32)
     oof_std = np.zeros(len(y), dtype=np.float32)
@@ -2428,7 +2478,7 @@ def train_neural_meta(
                 domain_config={
                     "name": pr_cfg.get("name", "rate"),
                     "units": pr_cfg.get("units", ""),
-                    "bounds": pr_cfg.get("bounds", [0.0, 1.0]),
+                    "bounds": _process_rate_bounds(pr_cfg),
                     "prior_mean": prior_mean,
                 },
                 n_treatments=n_treatments,
@@ -2603,6 +2653,7 @@ def train_neural_meta(
     # no-op (zero coreset pool → skipped gracefully).
     # ==================================================================
     _cont_cfg = config.get("continual", {}) or {}
+    _contrastive_trunk_state: dict | None = None
     _contrastive_enabled = _cont_cfg.get("contrastive_pretext", False)
     if _contrastive_enabled:
         from sparc.training.spatial_contrastive import (
@@ -2631,6 +2682,7 @@ def train_neural_meta(
         # 2. Always include current-city coreset (feature matrix subsample)
         _current_log_bw = 0.0
         try:
+            from sparc.registry.store import get_active_store
             _vsba_store2 = get_active_store()
             if _vsba_store2 is not None and _vsba_store2.has("0", "correlogram_results"):
                 _cur_corr = _vsba_store2.read_struct("0", "correlogram_results")
@@ -2678,10 +2730,12 @@ def train_neural_meta(
                 bw_threshold=float(_cont_cfg.get("bw_threshold", 0.3)),
                 device=device,
             )
-            # Transfer pretrained trunk weights to main model
-            model.load_state_dict(_pt_model.state_dict(), strict=False)
+            # No fold model exists yet: keep the pretrained trunk state and
+            # hand it to every fold model through the same channel as the
+            # JEPA-pretrained trunk (``model`` was undefined here before).
+            _contrastive_trunk_state = {k: v.detach().clone() for k, v in _pt_model.state_dict().items()}
             del _pt_model
-            logger.info("Contrastive pretext trunk weights transferred to main model")
+            logger.info("Contrastive pretext trunk weights stored for fold models")
         except Exception as _ct_exc:
             logger.warning("Contrastive pretext failed (non-fatal): %s", _ct_exc)
 
@@ -2846,7 +2900,7 @@ def train_neural_meta(
                 # --- Masking strategy ---
                 if jepa_spatial_patch:
                     # Spatial patch masking: hide geographically contiguous regions
-                    b_coords_t = coords_t[_pt_b_idx]
+                    b_coords_t = tensors["coords"][_pt_b_idx]
                     _pt_patch_mask = spatial_patch_mask(
                         b_coords_t, mask_ratio=jepa_mask_ratio, n_patches=jepa_n_patches,
                     )  # (B,) bool — True = masked point
@@ -2923,6 +2977,9 @@ def train_neural_meta(
             _time.perf_counter() - _pt_t0, len(jepa_pretrained_trunk_state),
         )
         del _pt_model, _pt_ema_trunk, _pt_latent_predictor, _pt_optimizer, _pt_alpha, _pt_beta_proj
+
+    if jepa_pretrained_trunk_state is None and _contrastive_trunk_state is not None:
+        jepa_pretrained_trunk_state = _contrastive_trunk_state
 
     # ---- DDP detection (CU-10a) ----
     _ddp_enabled: bool = False
@@ -3106,7 +3163,7 @@ def train_neural_meta(
         domain_config={
             "name": pr_cfg.get("name", "rate"),
             "units": pr_cfg.get("units", ""),
-            "bounds": pr_cfg.get("bounds", [0.0, 1.0]),
+            "bounds": _process_rate_bounds(pr_cfg),
             "prior_mean": pr_cfg.get("prior_mean", 0.5),
         },
         n_treatments=n_treatments,
@@ -3223,13 +3280,17 @@ def train_neural_meta(
     _retrain_t0 = _time.perf_counter()
 
     # ---- Surrogate pre-training on full data ----
-    # Build full-data base-model targets (normalised) if available
+    # Build full-data base-model targets (normalised) if available: the
+    # in-sample full-data fits when supplied, else the OOF predictions.
+    _final_base_source = _final_retrain_base_source(
+        base_oof_predictions, base_full_fitted,
+    )
     _full_base_targets: dict[str, torch.Tensor] | None = None
-    if base_oof_predictions is not None:
+    if _final_base_source is not None:
         _full_base_targets = {}
         for sname in ("gwr", "gwrf", "ggpgam"):
-            if sname in base_oof_predictions:
-                _raw = base_oof_predictions[sname]
+            if sname in _final_base_source:
+                _raw = _final_base_source[sname]
                 _norm = (_raw - y_mean) / y_std
                 _full_base_targets[sname] = torch.tensor(
                     _norm, dtype=torch.float32, device=device,
@@ -3440,7 +3501,7 @@ def train_neural_meta(
 
                 if jepa_lambda_eff > 0.0:
                     if jepa_spatial_patch:
-                        _rt_coords = coords_t[b_idx]
+                        _rt_coords = b_coord
                         _rt_patch_mask = spatial_patch_mask(
                             _rt_coords, mask_ratio=jepa_mask_ratio,
                             n_patches=jepa_n_patches,

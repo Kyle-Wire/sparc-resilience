@@ -101,6 +101,11 @@ combined_constraints:
   canopy_impervious_sum:
     rule: "delta_canopy + current_canopy + delta_impervious + current_impervious <= 100"
     description: "Total coverage cannot exceed 100%"
+    # "warning": scenario inputs are never modified; cells above 100% are only
+    #            counted/logged.  Canopy overhangs pavement, so many cells
+    #            already exceed 100% at baseline (35% in brown4.csv).
+    # "enforce": baseline-relative cap — allowed = max(100, canopy0 + impervious0);
+    #            only the scenario increment is clipped (impervious first).
     enforcement: "warning"
 
   ndvi_canopy_consistency:
@@ -122,19 +127,26 @@ validation:
   magnitude_violation_action: "warning"
 
 # ---------------------------------------------------------------------------
-# Diminishing-Return Thresholds
+# Diminishing-Return Thresholds  (OPT-IN — disabled by default)
 # ---------------------------------------------------------------------------
-# Beyond this absolute-change threshold, the marginal response tapers via a
-# sqrt function.  Setting a small value = aggressive tapering; setting a
-# large value = nearly linear response across the full range.
-diminishing_return_thresholds:
-  Pct_Canopy: 10.0          # 10 percentage-points
-  Pct_Impervious: 10.0
-  NDVI: 0.10                # 0.10 NDVI units
-  Albedo: 0.10
-  Elevation_m: 5.0          # 5 metres
-  Distance_from_water_m: 100.0
-  default: 10.0             # fallback for unlisted variables
+# Saturation must come from FITTED response curves (GWRF condition curves /
+# causal dose-response), not from a hand-set taper.  The scenario simulator
+# therefore applies NO taper unless a threshold is set here, and it always
+# skips the taper for a variable that has a usable fitted curve (to avoid
+# double counting).
+#
+# Only uncomment / set thresholds to impose an ASSUMED taper: beyond the
+# threshold, the marginal response follows an assumed sqrt shape
+#   effective = threshold + sqrt(|Δ| - threshold) * sqrt(threshold).
+# The values below are the former (unvalidated) defaults, kept for reference.
+# diminishing_return_thresholds:
+#   Pct_Canopy: 10.0          # 10 percentage-points
+#   Pct_Impervious: 10.0
+#   NDVI: 0.10                # 0.10 NDVI units
+#   Albedo: 0.10
+#   Elevation_m: 5.0          # 5 metres
+#   Distance_from_water_m: 100.0
+#   default: 10.0             # fallback for unlisted variables
 
 # ---------------------------------------------------------------------------
 # Sign-Violation Guardrail Strategy

@@ -37,7 +37,8 @@ logger = logging.getLogger(__name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
-TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+# Single source of truth: the templates shipped inside the package.
+TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
 
 def _resolve_project_path(args) -> str:
@@ -582,6 +583,8 @@ def cmd_run(args):
         auto_run = config.get('auto_run_scenarios_at_stage_4', True)
         if scenarios and auto_run:
             _sp.stage_start("4")
+            # CLI flags reach the Stage-4 runner through the config dict.
+            config['_force_full_audit'] = bool(getattr(args, 'full_audit', False))
             _run_scenarios(config, paths, project_path)
             _sp.stage_done("4")
         elif scenarios and not auto_run:
@@ -688,194 +691,26 @@ def _resolve_auto_scenario_mode(*, has_dag: bool) -> str:
     return "mode_1_physics"
 
 
-def _try_run_with_v4_engine(config, sim, data, scenario_mode, has_dag,
-                             *, from_auto_fallback: bool = False):
-    """Attempt to execute ``scenario_mode`` via the unified v4 engine.
+def _run_scenarios(config, paths, project_path):  # noqa: ARG001 - kept for API compat
+    """Execute scenario simulation (Stage 4).
 
-    Returns ``(summary_df, results_gdf)`` on success, or ``None`` when
-    the engine cannot be constructed (missing artifacts, missing DAG,
-    or no ensemble predictor) — the caller then falls back to the
-    legacy ``ScenarioSimulator`` path.
+    Thin wrapper around :func:`sparc.run.stage4_runner._run_scenario_engine`,
+    which owns mode resolution (via ``ScenarioEngineSelector``), engine
+    dispatch and the post-processing add-ons (conservation checks, MC
+    uncertainty, global sensitivity analysis and the Wager-2025 Stage-4
+    add-ons).  CLI flags are communicated through the config dict rather
+    than an ``args`` closure:
+
+    * ``config['_force_full_audit']``       — ``--full-audit``
+    * ``config['_force_legacy_scenarios']`` — ``--legacy``
+    * ``config['scenarios']``               — the (optionally filtered)
+      scenario list to run.
+
+    Returns ``(summary_df, results_gdf)``.
     """
-    try:
-        from sparc.interventions.scenario_engine_v4 import (
-            ScenarioEngineV4, MissingArtifactsError,
-        )
-    except Exception:
-        return None
+    from sparc.run.stage4_runner import _run_scenario_engine
 
-    # Optional DAG load.
-    dag = None
-    if scenario_mode in ("mode_2_dag_local", "mode_4_hybrid") and has_dag:
-        try:
-            from sparc.causal.dag_definition import load_dag, dag_to_networkx
-            dag = dag_to_networkx(load_dag(config["causal"]["dag_file"]))
-        except Exception as exc:
-            print(f"  [v4 engine] DAG load failed ({exc}); using legacy path")
-            return None
-
-    # Optional ensemble predictor (for mode_3 / mode_4) — adapter that
-    # delegates to ``ScenarioSimulator._predict_consensus_delta``-style
-    # base-model averaging.  When unavailable, the v4 engine is skipped.
-    ensemble_pred = None
-    if scenario_mode in ("mode_3_full_ensemble", "mode_4_hybrid"):
-        ensemble_pred = _build_v4_ensemble_predictor(sim)
-        if ensemble_pred is None:
-            return None
-
-    try:
-        engine = ScenarioEngineV4(
-            config,
-            mode=scenario_mode,
-            dag=dag,
-            ensemble_predictor=ensemble_pred,
-            _from_auto_fallback=from_auto_fallback,
-        )
-    except MissingArtifactsError as exc:
-        print(f"  [v4 engine] {exc} — using legacy path")
-        return None
-    except Exception as exc:
-        print(f"  [v4 engine] init failed ({exc}); using legacy path")
-        return None
-
-    return engine.run(data, verbose=True)
-
-
-def _build_v4_ensemble_predictor(sim):
-    """Wrap loaded base models into a ``df → ndarray`` callable.
-
-    Returns ``None`` when the simulator has no usable base ensemble.
-    """
-    if not getattr(sim, "_models", None) or not getattr(sim, "_meta_model", None):
-        return None
-    try:
-        # Re-use the existing baseline predictor to keep behaviour consistent.
-        def _predict(df):
-            base_pred, *_ = sim._predict_baseline(df, verbose=False)
-            import numpy as _np
-            return _np.asarray(base_pred, dtype=_np.float64).reshape(-1)
-        return _predict
-    except Exception:
-        return None
-
-
-def _run_scenarios(config, paths, project_path):
-    """Execute scenario simulation.
-
-    Delegates mode resolution and engine dispatch to ``ScenarioEngineSelector``,
-    which encapsulates legacy alias translation, artifact introspection, v4
-    engine init, and legacy fallback.  Only ``MissingArtifactsError`` from the
-    v4 engine triggers a downgrade; all other exceptions propagate.
-    """
-    from sparc.interventions.scenario_simulator import ScenarioSimulator
-    from sparc.run.scenario_engine_selector import ScenarioEngineSelector
-    import pandas as pd
-
-    sim = ScenarioSimulator(config)
-    sim.load_models()
-
-    csv_path = config['paths']['raw_csv_path']
-    data = pd.read_csv(csv_path)
-
-    dag_file = config.get('causal', {}).get('dag_file')
-    has_dag = bool(dag_file and Path(dag_file).exists())
-
-    selector = ScenarioEngineSelector(config, sim, data)
-
-    requested_mode = config.get('pipeline', {}).get('scenario_mode', 'auto')
-    force_full_audit = getattr(args, 'full_audit', False)
-    scenario_mode = selector.resolve_mode(
-        requested_mode, has_dag, force_full_audit=force_full_audit
-    )
-
-    force_legacy = bool(config.get('_force_legacy_scenarios'))
-    summary_df, results_gdf = selector.run(
-        scenario_mode, has_dag=has_dag, force_legacy=force_legacy
-    )
-
-    print(f"  Scenario summary: {len(summary_df)} rows  (mode={scenario_mode})")
-
-    # --- Conservation checks on scenario results ---------------------
-    try:
-        from sparc.interventions.physics_priors import ConservationChecker
-        import numpy as np
-        checker = ConservationChecker()
-        for scenario in config.get('scenarios', []):
-            var = scenario['variable']
-            for inc in scenario.get('increments', []):
-                direction = scenario.get('direction', 'increase')
-                delta_signed = -inc if direction == 'decrease' else inc
-                col_label = f"total_{var}_{'minus' if delta_signed < 0 else 'plus'}_{str(inc).replace('.', 'p')}"
-                if hasattr(results_gdf, 'columns') and col_label in results_gdf.columns:
-                    deltas = {var: np.full(len(data), delta_signed)}
-                    target_deltas = results_gdf[col_label].values
-                    checker.check(data, deltas, target_deltas=target_deltas, verbose=True)
-    except Exception as e:
-        print(f"  [CONSERVATION] Check skipped ({e})")
-
-    # --- Mode 2: Monte-Carlo uncertainty propagation (optional) ------
-    run_mc = config.get('pipeline', {}).get('run_mc_uncertainty', False)
-    n_mc = config.get('pipeline', {}).get('n_mc_draws', 50)
-    if run_mc:
-        print(f"\n  [Mode 2] MC uncertainty — Base-Model Consensus (n={n_mc})")
-        try:
-            mc_summary, mc_meta = sim.run_with_consensus_uncertainty(
-                data, n_mc=n_mc, verbose=True,
-            )
-            print(f"  MC meta: {mc_meta}")
-        except Exception as e:
-            print(f"  MC uncertainty propagation failed ({e})")
-    else:
-        print(f"\n  [Mode 2] MC uncertainty skipped (set run_mc_uncertainty: true, n_mc_draws: {n_mc} to enable)")
-
-    # --- Global Sensitivity Analysis (optional) ----------------------
-    run_sa = config.get('pipeline', {}).get('run_sensitivity_analysis', False)
-    sa_method = config.get('pipeline', {}).get('sensitivity_method', 'morris')
-    if run_sa:
-        try:
-            from sparc.evaluation.sensitivity import SensitivityAnalyzer
-            sa = SensitivityAnalyzer(config, sim)
-            sa_result = sa.run(data, method=sa_method, verbose=True)
-            sa_out = paths.output_dir / f"sensitivity_{sa_method}.csv"
-            sa_result['summary_df'].to_csv(sa_out, index=False)
-            print(f"  Sensitivity analysis saved: {sa_out}")
-        except Exception as e:
-            print(f"  Sensitivity analysis failed ({e})")
-    else:
-        print(f"\n  [SA] Sensitivity analysis skipped (set run_sensitivity_analysis: true to enable)")
-
-    # ------------------------------------------------------------------
-    # Stage-4 Wager-2025 add-ons:
-    #   * mirror Stage-3 audit artifacts under Stage 4 for Stage-5 report
-    #   * Optimal-Targeted (Wager-EWM) policy replay
-    #   * Budget Optimizer (allocation + Pareto frontier)
-    # All best-effort; any single failure is logged and skipped.
-    # ------------------------------------------------------------------
-    try:
-        from sparc.run.scenarios import (
-            mirror_audit_artifacts_to_stage4,
-            run_policy_replay,
-            run_budget_optimization,
-        )
-        stage3_dir = str(paths.stage_dir(3)) if hasattr(paths, "stage_dir") else None
-        if stage3_dir is None:
-            stage_dirs = (config.get("output") or {}).get("stage_dirs") or {}
-            base = (config.get("output") or {}).get("base_dir", "output")
-            s3 = stage_dirs.get("stage_3", "Stage_3_Causal_Validation")
-            stage3_dir = os.path.join(str(paths.output_dir), s3)
-        mirror_audit_artifacts_to_stage4(stage3_dir)
-        run_policy_replay(
-            config=config, data=data,
-            summary_df=summary_df,
-            results_long_df=results_gdf,
-        )
-        run_budget_optimization(
-            config=config, results_long_df=results_gdf,
-        )
-    except Exception as e:
-        print(f"  [stage4 add-ons] failed ({e}); continuing")
-
-    return summary_df, results_gdf
+    return _run_scenario_engine(config, paths)
 
 
 def cmd_scenario(args):
@@ -893,9 +728,10 @@ def cmd_scenario(args):
     paths = set_paths_from_config(config)
     os.environ['SPARC_PROJECT'] = project_path
 
-    # Stash --legacy flag on config for _run_scenarios dispatch.
+    # Stash --legacy / --full-audit flags on config for _run_scenarios dispatch.
     if getattr(args, 'legacy', False):
         config['_force_legacy_scenarios'] = True
+    config['_force_full_audit'] = bool(getattr(args, 'full_audit', False))
 
     scenarios = config.get('scenarios', [])
 
@@ -910,6 +746,8 @@ def cmd_scenario(args):
             for s in config.get('scenarios', []):
                 print(f"  - {s['name']}")
             sys.exit(1)
+        # Hand the filtered list to the engine (it reads config['scenarios']).
+        config['scenarios'] = scenarios
 
     print(f"Running {len(scenarios)} scenario(s)...")
     for s in scenarios:
@@ -1419,6 +1257,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.set_defaults(func=cmd_run)
 
     # --- audit ---
+    # core: the lean, tested S0–S7 pipeline (sparc/core; see docs/roadmap/CORE_ROADMAP.md)
+    p_core = subparsers.add_parser(
+        'core',
+        help='Core pipeline: influence → GW base models + physics → stacker → saturation → scenarios → causal audit → budget',
+    )
+    from sparc.core.cli import add_core_subparsers
+    add_core_subparsers(p_core)
+
     p_audit = subparsers.add_parser(
         'audit', help='Causal-inference audit utilities (Wager 2025).',
     )

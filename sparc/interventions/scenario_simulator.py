@@ -24,6 +24,7 @@ Usage::
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 import warnings
@@ -183,6 +184,80 @@ def spatial_gini_coefficient(values: np.ndarray) -> float:
     n = len(arr)
     index = np.arange(1, n + 1)
     return float(((2.0 * index - n - 1) * arr).sum() / (n * arr.sum()))
+
+
+_CANOPY_COL = 'Pct_Canopy'
+_IMPERVIOUS_COL = 'Pct_Impervious'
+
+
+def apply_canopy_impervious_constraint(
+    baseline: pd.DataFrame,
+    modified: pd.DataFrame,
+    enforcement: str = "warning",
+    cap: float = 100.0,
+    canopy_col: str = _CANOPY_COL,
+    impervious_col: str = _IMPERVIOUS_COL,
+) -> Dict[str, Any]:
+    """Apply the ``Canopy + Impervious ≤ cap`` combined constraint.
+
+    Canopy can overhang pavement, so many real cells already exceed 100 %
+    at baseline (35 % of cells in brown4.csv).  The constraint therefore
+    never alters baseline inputs:
+
+    * ``enforcement == "warning"`` (default, matches caps.yml): *modified*
+      is left untouched; cells above the cap are only counted.
+    * ``enforcement == "enforce"`` (alias ``"hard"``): the cap is relative
+      to the baseline — ``allowed = max(cap, canopy₀ + impervious₀)`` — so
+      only the scenario increment is constrained.  Any excess over
+      ``allowed`` is removed from impervious first, then canopy (legacy
+      order).  A zero-increment scenario is never modified.
+
+    *modified* is changed in place (enforce mode only).  Returns a stats
+    dict with ``mode``, ``n_above_cap`` (modified cells above ``cap``),
+    ``n_baseline_above_cap``, ``n_new_above_cap`` (above cap only because
+    of the scenario) and ``n_clipped`` (cells changed by enforcement).
+    """
+    stats: Dict[str, Any] = {
+        "mode": "warning", "n_above_cap": 0, "n_baseline_above_cap": 0,
+        "n_new_above_cap": 0, "n_clipped": 0,
+    }
+    if not all(c in df.columns for df in (baseline, modified)
+               for c in (canopy_col, impervious_col)):
+        stats["mode"] = "skipped"
+        return stats
+
+    mode = str(enforcement or "warning").strip().lower()
+    mode = "enforce" if mode in ("enforce", "hard") else "warning"
+    stats["mode"] = mode
+
+    base_can = baseline[canopy_col].to_numpy(dtype=float)
+    base_imp = baseline[impervious_col].to_numpy(dtype=float)
+    mod_can = modified[canopy_col].to_numpy(dtype=float)
+    mod_imp = modified[impervious_col].to_numpy(dtype=float)
+    base_total = base_can + base_imp
+    mod_total = mod_can + mod_imp
+
+    base_above = base_total > cap
+    mod_above = mod_total > cap
+    stats["n_baseline_above_cap"] = int(np.sum(base_above))
+    stats["n_above_cap"] = int(np.sum(mod_above))
+    stats["n_new_above_cap"] = int(np.sum(mod_above & ~base_above))
+
+    if mode != "enforce":
+        return stats
+
+    allowed = np.maximum(cap, base_total)
+    excess = np.maximum(mod_total - allowed, 0.0)
+    clip_mask = excess > 1e-12
+    if not np.any(clip_mask):
+        return stats
+    reduction = np.minimum(excess, np.maximum(mod_imp, 0.0))
+    remaining = excess - reduction
+    modified[impervious_col] = mod_imp - reduction
+    if np.any(remaining > 0):
+        modified[canopy_col] = mod_can - remaining
+    stats["n_clipped"] = int(np.sum(clip_mask))
+    return stats
 
 
 class ScenarioSimulator:
@@ -357,10 +432,13 @@ class ScenarioSimulator:
             effective = sign(Δ) × [ threshold + √(|Δ| - threshold) × √threshold ]
 
         This ensures the first ``threshold`` units of change have full
-        effect, but each additional unit has progressively less impact —
-        capturing the empirical observation that interventions have
-        diminishing marginal returns.
+        effect, but each additional unit has progressively less impact.
+        NOTE: the √ shape is an *assumed* taper, not a fitted saturation
+        curve.  A non-finite threshold (``math.inf``, the default when no
+        threshold is configured) is the identity.
         """
+        if threshold is None or not np.isfinite(threshold):
+            return np.asarray(delta, dtype=float)
         sign = np.sign(delta)
         abs_d = np.abs(delta)
         effective = np.where(
@@ -370,24 +448,79 @@ class ScenarioSimulator:
         )
         return sign * effective
 
+    def _canopy_impervious_enforcement(self) -> str:
+        """``combined_constraints.canopy_impervious_sum.enforcement`` (default "warning")."""
+        caps = self.config.get('caps', {}) or {}
+        rule = ((caps.get('combined_constraints') or {})
+                .get('canopy_impervious_sum') or {})
+        return str(rule.get('enforcement', 'warning') or 'warning')
+
+    def _apply_combined_cover_constraint(
+        self,
+        data: pd.DataFrame,
+        modified_data: pd.DataFrame,
+        actual_changes: Dict[str, np.ndarray],
+        verbose: bool = False,
+    ) -> Dict[str, Any]:
+        """Apply the Canopy + Impervious ≤ 100 rule per the caps.yml setting.
+
+        See :func:`apply_canopy_impervious_constraint`.  In enforce mode the
+        recorded ``actual_changes`` of already-intervened cover variables
+        are recomputed after clipping.
+        """
+        stats = apply_canopy_impervious_constraint(
+            data, modified_data, enforcement=self._canopy_impervious_enforcement(),
+        )
+        if stats["mode"] == "skipped":
+            return stats
+        if stats["n_clipped"] > 0:
+            for vn in (_CANOPY_COL, _IMPERVIOUS_COL):
+                if vn in actual_changes:
+                    actual_changes[vn] = modified_data[vn].values - data[vn].values
+        if verbose and (stats["n_above_cap"] > 0 or stats["n_clipped"] > 0):
+            if stats["mode"] == "enforce":
+                print(f"  Combined constraint (enforce, baseline-relative): clipped "
+                      f"{stats['n_clipped']} cells; {stats['n_baseline_above_cap']} "
+                      f"cells already >100% at baseline left unchanged")
+            else:
+                print(f"  Combined constraint (warning only, inputs unchanged): "
+                      f"{stats['n_above_cap']} cells Canopy+Impervious > 100% "
+                      f"({stats['n_baseline_above_cap']} already at baseline, "
+                      f"{stats['n_new_above_cap']} due to the scenario)")
+        return stats
+
+    def _has_usable_condition_curve(self, variable: str) -> bool:
+        """True when a fitted condition/saturation curve passes the R² gate."""
+        curves = getattr(self, '_condition_curves', None) or {}
+        curve = curves.get(variable)
+        min_r2 = getattr(self, '_condition_curve_min_r2', 0.5)
+        return (
+            curve is not None
+            and curve.get('r2', 0.0) >= min_r2
+            and 'grid_values' in curve
+            and 'pdp_values' in curve
+        )
+
     def _get_diminishing_threshold(self, variable: str) -> float:
         """Return the per-variable diminishing-return threshold.
 
-        Reads from ``caps.yml → diminishing_return_thresholds`` when
-        available; otherwise falls back to hardcoded defaults for
-        backward compatibility.
+        The √ taper is OPT-IN: saturation should come from fitted curves.
+        Returns ``math.inf`` (identity taper) unless a threshold is
+        explicitly configured in ``caps.yml → diminishing_return_thresholds``
+        (per variable, or via a ``default`` key).  The taper is also skipped
+        (``math.inf``) when a usable condition curve exists for *variable*,
+        because the Tier-2 saturation path already models the diminishing
+        response and applying both would double count it.
         """
-        # Try config-driven thresholds first
-        caps = self.config.get('caps', {})
-        cfg_thresholds = caps.get('diminishing_return_thresholds', {})
-        if variable in cfg_thresholds:
+        if self._has_usable_condition_curve(variable):
+            return math.inf
+        caps = self.config.get('caps', {}) or {}
+        cfg_thresholds = caps.get('diminishing_return_thresholds') or {}
+        if variable in cfg_thresholds and cfg_thresholds[variable] is not None:
             return float(cfg_thresholds[variable])
-        if 'default' in cfg_thresholds:
+        if cfg_thresholds.get('default') is not None:
             return float(cfg_thresholds['default'])
-        # Hardcoded per-variable defaults removed in SPARC v4 — declare
-        # diminishing_return_thresholds in caps.yml. Returning a neutral
-        # 10.0 keeps legacy behavior for unconfigured variables.
-        return 10.0
+        return math.inf
 
     # ------------------------------------------------------------------
     # Bayesian per-cell coefficient β(s) loader
@@ -899,9 +1032,19 @@ class ScenarioSimulator:
             "ggpgam": (self.model_dir / "base_models_full" / "ggpgam_model_full.pkl", "ggpgam_model_full"),
         }
 
+        self._coord_space = None  # re-detect fitted coordinate space (see _model_coords)
         v1_loaded = 0
         for name, (path, art_id) in model_files.items():
             if not exists_path(path, stage="2", artifact_id=art_id):
+                if name == "meta":
+                    # Stage 2 never writes ``standard_meta_ensemble`` (it writes
+                    # ``final_meta_ensemble.pkl``, a result dict, not a model).
+                    # The meta stacker is optional: _predict_baseline falls back
+                    # to the weighted base-model average when it is None.
+                    self._meta_model = None
+                    print("   Meta-ensemble model (standard_meta_ensemble) not found — "
+                          "baseline will use the weighted base-model average")
+                    continue
                 if has_v2:
                     continue  # V1 models optional when V2 is available
                 raise FileNotFoundError(f"Model file not found: stage=2 id={art_id} (and no file at {path})")
@@ -910,6 +1053,12 @@ class ScenarioSimulator:
                 # exists_path was true but load returned None — fall back to direct read.
                 obj = joblib.load(path)
             if name == "meta":
+                if not hasattr(obj, "predict"):
+                    # e.g. a result dict rather than a fitted stacker
+                    print("   Meta-ensemble artifact has no .predict() — ignoring "
+                          "(weighted base-model average will be used)")
+                    self._meta_model = None
+                    continue
                 self._meta_model = obj
             else:
                 self._models[name] = obj
@@ -1547,10 +1696,64 @@ class ScenarioSimulator:
     # Prediction
     # ------------------------------------------------------------------
 
+    def _fitted_coord_sample(self) -> Optional[np.ndarray]:
+        """Training coordinates stored on a loaded spatial base model, if any."""
+        for name, attr in (("gwr", "coords_"), ("gwrf", "coords"), ("ggpgam", "coords_train_")):
+            model = (getattr(self, "_models", None) or {}).get(name)
+            arr = getattr(model, attr, None) if model is not None else None
+            if arr is None:
+                continue
+            try:
+                arr = np.asarray(arr, dtype=float)
+            except (TypeError, ValueError):
+                continue
+            if arr.ndim == 2 and arr.shape[1] >= 2 and len(arr):
+                return arr[:, :2]
+        return None
+
+    def _model_coords(self, df: pd.DataFrame) -> np.ndarray:
+        """Coordinates in the space Stage-2 base models were fitted in.
+
+        Stage 2 cross-validates on projected metres (``projected_X/Y``,
+        working CRS) while the raw CSV carries input-CRS coordinates (e.g.
+        State Plane feet); see :func:`sparc.data.data_utils.project_coords`.
+        Base-model artifacts fitted before the Stage-2 full refit used
+        projected coordinates carry raw-CRS training coords; when a loaded
+        model's stored training coordinates are clearly in the raw space the
+        raw coordinates are used instead (decided once, with a warning).
+        """
+        from sparc.data.data_utils import project_coords
+        proj = project_coords(df, self.config)
+        space = getattr(self, "_coord_space", None)
+        if space is None:
+            space = "projected"
+            fitted = self._fitted_coord_sample()
+            raw_cols = [c for c in (getattr(self, "coord_cols", None) or []) if c in df.columns]
+            if fitted is not None and len(raw_cols) >= 2:
+                raw = df[raw_cols[:2]].to_numpy(dtype=float)
+                centre = np.nanmedian(fitted, axis=0)
+                d_proj = float(np.linalg.norm(np.nanmedian(proj, axis=0) - centre))
+                d_raw = float(np.linalg.norm(np.nanmedian(raw, axis=0) - centre))
+                if d_raw < d_proj:
+                    space = "raw"
+                    print("   Warning: base models were fitted on raw input-CRS "
+                          "coordinates — querying with raw coordinates")
+                    warnings.warn(
+                        "Stage-2 base models were fitted on raw input-CRS "
+                        "coordinates (legacy full refit); querying them with raw "
+                        "coordinates. Re-run Stage 2 to fit in projected metres.",
+                        RuntimeWarning,
+                    )
+            self._coord_space = space
+        if space == "raw":
+            raw_cols = [c for c in self.coord_cols if c in df.columns]
+            return df[raw_cols[:2]].to_numpy(dtype=float)
+        return proj
+
     def _predict_baseline(self, df: pd.DataFrame, verbose: bool = False) -> Tuple:
         """Run the full prediction pipeline and return (final, ols, gwr, gwrf, ggpgam)."""
         X = df[self.features].values
-        coords = df[self.coord_cols].values
+        coords = self._model_coords(df)
 
         preds = {}
         for name in ("ols", "gwr", "gwrf", "ggpgam"):
@@ -1620,12 +1823,12 @@ class ScenarioSimulator:
         df_mod[variable] = modified_values
 
         X_mod = df_mod[self.features].values
-        coords = df_mod[self.coord_cols].values
+        coords = self._model_coords(df_mod)
 
         # Baseline per-model predictions (reuse cache when available)
         if baseline_base_preds is None:
             X_base = df[self.features].values
-            coords_base = df[self.coord_cols].values
+            coords_base = self._model_coords(df)
             baseline_base_preds = {}
             for name in ("ols", "gwr", "gwrf", "ggpgam"):
                 model = self._models[name]
@@ -1663,11 +1866,11 @@ class ScenarioSimulator:
         accepts a fully modified DataFrame instead of a single variable.
         """
         X_mod = modified_df[self.features].values
-        coords = modified_df[self.coord_cols].values
+        coords = self._model_coords(modified_df)
 
         if baseline_base_preds is None:
             X_base = df[self.features].values
-            coords_base = df[self.coord_cols].values
+            coords_base = self._model_coords(df)
             baseline_base_preds = {}
             for name in ("ols", "gwr", "gwrf", "ggpgam"):
                 model = self._models[name]
@@ -2244,7 +2447,8 @@ class ScenarioSimulator:
         Architecture (per scenario increment):
 
         1. Compute ``actual_change`` per point (with physical bounds).
-        2. Apply diminishing returns (square-root taper beyond threshold).
+        2. Apply diminishing returns (opt-in square-root taper; identity
+           unless a threshold is configured and no fitted curve exists).
         3. **Direct effect** — per-point MGWR local coefficient × effective Δ.
         4. **Indirect effects** — DAG structural coefficients propagate Δ
            through mediator nodes; the *final* edge to the outcome still
@@ -2580,34 +2784,11 @@ class ScenarioSimulator:
                                   f"(coeff={edge_coeff:+.4f}, "
                                   f"mean Δ={induced.mean():+.3f})")
 
-            # 3. Enforce combined constraint: Canopy + Impervious ≤ 100
-            if ('Pct_Canopy' in modified_data.columns
-                    and 'Pct_Impervious' in modified_data.columns):
-                total_cover = (
-                    modified_data['Pct_Canopy'].values
-                    + modified_data['Pct_Impervious'].values
-                )
-                excess = np.maximum(total_cover - 100.0, 0.0)
-                if np.any(excess > 0):
-                    # Reduce impervious first (more actionable), then canopy
-                    imp_vals = modified_data['Pct_Impervious'].values
-                    reduction = np.minimum(excess, imp_vals)
-                    modified_data['Pct_Impervious'] = imp_vals - reduction
-                    remaining = excess - reduction
-                    if np.any(remaining > 0):
-                        modified_data['Pct_Canopy'] = (
-                            modified_data['Pct_Canopy'].values - remaining
-                        )
-                    if verbose:
-                        n_clipped = int(np.sum(excess > 0))
-                        print(f"  Combined constraint: clipped {n_clipped} "
-                              f"cells (Canopy+Impervious > 100%)")
-                    # Recalculate actual changes after clipping
-                    for vn in ('Pct_Canopy', 'Pct_Impervious'):
-                        if vn in actual_changes:
-                            actual_changes[vn] = (
-                                modified_data[vn].values - data[vn].values
-                            )
+            # 3. Combined constraint: Canopy + Impervious ≤ 100
+            #    ("warning" → count only; "enforce" → baseline-relative cap)
+            self._apply_combined_cover_constraint(
+                data, modified_data, actual_changes, verbose=verbose,
+            )
 
             # 4. Sum direct + indirect effects from all changed variables
             total_joint_delta = np.zeros(len(data))
@@ -2753,7 +2934,7 @@ class ScenarioSimulator:
         df_mod[variable] = modified_values
 
         X_mod = df_mod[self.features].values
-        coords = df_mod[self.coord_cols].values
+        coords = self._model_coords(df_mod)
 
         preds = {}
         for name in ("ols", "gwr", "gwrf", "ggpgam"):
@@ -2764,6 +2945,10 @@ class ScenarioSimulator:
                 raw = model.predict(X_mod, coords)
                 preds[name] = raw[0] if isinstance(raw, tuple) else raw
 
+        if self._meta_model is None:
+            # Meta stacker is optional (see load_models) — weighted base average
+            weights = self._base_model_weights
+            return sum(weights.get(n, 0.25) * preds[n] for n in preds)
         final = self._meta_model.predict(preds, coords=coords, original_X=X_mod)
         return final
 
@@ -3018,31 +3203,10 @@ class ScenarioSimulator:
                 actual_changes[vn] = mod - orig
 
             # 2. Canopy + Impervious <= 100 constraint
-            if ('Pct_Canopy' in modified_data.columns
-                    and 'Pct_Impervious' in modified_data.columns):
-                total_cover = (
-                    modified_data['Pct_Canopy'].values
-                    + modified_data['Pct_Impervious'].values
-                )
-                excess = np.maximum(total_cover - 100.0, 0.0)
-                if np.any(excess > 0):
-                    imp_vals = modified_data['Pct_Impervious'].values
-                    reduction = np.minimum(excess, imp_vals)
-                    modified_data['Pct_Impervious'] = imp_vals - reduction
-                    remaining = excess - reduction
-                    if np.any(remaining > 0):
-                        modified_data['Pct_Canopy'] = (
-                            modified_data['Pct_Canopy'].values - remaining
-                        )
-                    if verbose:
-                        n_clipped = int(np.sum(excess > 0))
-                        print(f"  Combined constraint: clipped {n_clipped} "
-                              f"cells (Canopy+Impervious > 100%)")
-                    for vn in ('Pct_Canopy', 'Pct_Impervious'):
-                        if vn in actual_changes:
-                            actual_changes[vn] = (
-                                modified_data[vn].values - data[vn].values
-                            )
+            #    ("warning" → count only; "enforce" → baseline-relative cap)
+            self._apply_combined_cover_constraint(
+                data, modified_data, actual_changes, verbose=verbose,
+            )
 
             # 3. Consensus delta across all simultaneous changes
             joint_delta = self._predict_joint_consensus_delta(
@@ -3414,23 +3578,10 @@ class ScenarioSimulator:
                 actual_changes[vn] = mod - orig
 
             # Canopy + Impervious <= 100 constraint
-            if ('Pct_Canopy' in modified_data.columns
-                    and 'Pct_Impervious' in modified_data.columns):
-                total_cover = modified_data['Pct_Canopy'].values + modified_data['Pct_Impervious'].values
-                excess = np.maximum(total_cover - 100.0, 0.0)
-                if np.any(excess > 0):
-                    imp_vals = modified_data['Pct_Impervious'].values
-                    reduction = np.minimum(excess, imp_vals)
-                    modified_data['Pct_Impervious'] = imp_vals - reduction
-                    remaining = excess - reduction
-                    if np.any(remaining > 0):
-                        modified_data['Pct_Canopy'] = modified_data['Pct_Canopy'].values - remaining
-                    if verbose:
-                        n_clipped = int(np.sum(excess > 0))
-                        print(f"  Combined constraint: clipped {n_clipped} cells")
-                    for vn in ('Pct_Canopy', 'Pct_Impervious'):
-                        if vn in actual_changes:
-                            actual_changes[vn] = modified_data[vn].values - data[vn].values
+            # ("warning" → count only; "enforce" → baseline-relative cap)
+            self._apply_combined_cover_constraint(
+                data, modified_data, actual_changes, verbose=verbose,
+            )
 
             # Direct: joint consensus delta
             joint_direct = self._predict_joint_consensus_delta(
@@ -3831,7 +3982,13 @@ class ScenarioSimulator:
 
         # Spatial tensors (trivial self-referential graph — preserves API contract)
         coord_cols = [c for c in self.coord_cols if c in data.columns]
-        coords_np = data[coord_cols[:2]].values.astype(np.float32) if len(coord_cols) >= 2 else np.zeros((N, 2), dtype=np.float32)
+        # V2 neural models are always trained on projected metres.
+        from sparc.data.data_utils import project_coords
+        coords_np = (
+            project_coords(data, self.config).astype(np.float32)
+            if len(coord_cols) >= 2 or 'projected_X' in data.columns
+            else np.zeros((N, 2), dtype=np.float32)
+        )
         coords_t = torch.tensor(coords_np, dtype=torch.float32)
         X_spatial_t = torch.tensor(X[:, :d_spatial], dtype=torch.float32)
         knn_index = torch.arange(N, dtype=torch.long).unsqueeze(1)  # (N, 1) self-loop
@@ -3935,7 +4092,7 @@ class ScenarioSimulator:
             df_mod = data.copy()
             df_mod[var_name] = modified_vals
             X_mod = df_mod[self.features].values
-            coords = df_mod[self.coord_cols].values
+            coords = self._model_coords(df_mod)
 
             per_model = {}
             for name in ("ols", "gwr", "gwrf", "ggpgam"):

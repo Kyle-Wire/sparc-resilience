@@ -103,7 +103,12 @@ combined_constraints:
   canopy_impervious_sum:
     rule: "delta_canopy + current_canopy + delta_impervious + current_impervious <= 100"
     description: "Total coverage cannot exceed 100%"
-    enforcement: "warning"  # Warn but allow slight exceedance
+    # "warning": scenario inputs are never modified; cells above 100% are only
+    #            counted/logged (canopy overhangs pavement, so many cells
+    #            already exceed 100% at baseline).
+    # "enforce": baseline-relative cap — allowed = max(100, canopy0 + impervious0);
+    #            only the scenario increment is clipped (impervious first).
+    enforcement: "warning"  # Warn but allow exceedance
     
   # NDVI must be consistent with canopy
   ndvi_canopy_consistency:
@@ -129,6 +134,19 @@ validation:
   # Physics compliance
   sign_violation_action: "error"      # Block if signs wrong
   magnitude_violation_action: "warning"  # Warn if too large
+
+# ---------------------------------------------------------------------------
+# Diminishing-Return Thresholds  (OPT-IN — disabled by default)
+# ---------------------------------------------------------------------------
+# Saturation must come from FITTED response curves (GWRF condition curves /
+# causal dose-response), not from a hand-set taper.  The scenario simulator
+# applies NO taper unless thresholds are set here, and always skips it for a
+# variable with a usable fitted curve.  Set thresholds only to impose an
+# ASSUMED sqrt taper beyond |Δ| > threshold, e.g.:
+# diminishing_return_thresholds:
+#   Pct_Canopy: 10.0
+#   Pct_Impervious: 10.0
+#   default: 10.0
 
 # Maximum allowed absolute delta magnitude (z-score units)
 # Applied as a hard clip to all scenario deltas (direct + indirect).

@@ -66,7 +66,7 @@ def main() -> None:
 
         log.info("  Fetching ERA5 boundary …")
         try:
-            grid_lons, grid_lats, boundary_data = download_era5_boundary(bbox, campaign_date)
+            grid_lons, grid_lats, boundary_data = download_era5_boundary(bbox, campaign_date, timezone=city_cfg.get("timezone"))
         except Exception as exc:
             log.error("  ERA5 download failed: %s", exc)
             continue

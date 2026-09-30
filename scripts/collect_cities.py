@@ -172,10 +172,10 @@ def collect_capa(fishnet_gdf, bbox, osf_node_id, osf_folder_hint=None):
     return capa_gdf, campaign_date
 
 
-def collect_era5_boundary(fishnet_gdf, bbox, campaign_date):
+def collect_era5_boundary(fishnet_gdf, bbox, campaign_date, timezone=None):
     from sparc.data.collect.era5 import download_era5_boundary, assign_era5_boundary_to_grid
     grid_lons, grid_lats, boundary_data = _safe(
-        download_era5_boundary, bbox, campaign_date,
+        download_era5_boundary, bbox, campaign_date, timezone=timezone,
         default=([], [], {}), label="ERA5 boundary download",
     )
     return _safe(
@@ -317,6 +317,7 @@ def collect_one_city(
         log.warning("[%s] CAPA campaign date unknown -- defaulting to %s", city_slug, campaign_date)
 
     log.info("[%s] Campaign date: %s", city_slug, campaign_date)
+    if city_cfg.get("campaign_date_source") == "era5_matched": log.warning("[%s] campaign_date_source=era5_matched: date was chosen by ERA5<->CAPA matching, so ERA5 features are circular for this city (see configs/multicity_pilot.yml header)", city_slug)
 
     # ── Phase 2: Remaining layers ──────────────────────────────────────────
     log.info("[%s] Collecting NLCD ...", city_slug)
@@ -338,7 +339,7 @@ def collect_one_city(
     equity_gdf = collect_equity(fishnet, bbox)
 
     log.info("[%s] Collecting ERA5 boundary ...", city_slug)
-    era5_boundary_gdf = collect_era5_boundary(fishnet, bbox, campaign_date)
+    era5_boundary_gdf = collect_era5_boundary(fishnet, bbox, campaign_date, timezone=city_cfg.get("timezone"))
 
     # ── Phase 3: Assemble ──────────────────────────────────────────────────
     log.info("[%s] Assembling GeoParquet ...", city_slug)
