@@ -117,4 +117,5 @@ addopts = "-v --tb=short"
 markers = [
     "integration: marks tests as integration tests (may be slow)",
     "network: marks tests that require external network access (OSF, APIs)",
+    "slow: long-running statistical checks (deselect with -m 'not slow')",
 ]

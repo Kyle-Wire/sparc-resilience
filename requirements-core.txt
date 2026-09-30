@@ -1,0 +1,15 @@
+# Minimal dependencies for the core pipeline (sparc/core) and its tests.
+# Install torch first from the CPU index for small CI images:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements-core.txt && pip install --no-deps -e .
+numpy>=1.24
+pandas>=2.0
+scipy>=1.10
+scikit-learn>=1.5
+pyyaml>=6.0
+pyarrow>=14.0
+pyproj>=3.6
+torch>=2.0
+networkx>=3.1      # optional DAG audit (sparc.causal.mc3)
+pytest>=7.4
+pytest-timeout>=2.2

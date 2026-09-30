@@ -19,6 +19,18 @@ import pytest
 # deps module
 # ---------------------------------------------------------------------------
 
+
+def _route_paths(routes, prefix=""):
+    """All route paths, flattening FastAPI >= 0.140 ``_IncludedRouter`` wrappers."""
+    out = set()
+    for r in routes:
+        if hasattr(r, "path"):
+            out.add(prefix + r.path)
+        elif hasattr(r, "original_router"):
+            ctx = getattr(r, "include_context", None)
+            out |= _route_paths(r.original_router.routes, prefix + (getattr(ctx, "prefix", "") or ""))
+    return out
+
 class TestDepsModule:
     def test_importable(self):
         import sparc.server.deps as deps  # noqa: F401
@@ -112,7 +124,7 @@ class TestAppCompatibility:
         test_app.include_router(router)  # must not raise
 
         # Verify the route was added
-        paths = [r.path for r in test_app.routes]
+        paths = _route_paths(test_app.routes)
         assert "/results/correlogram" in paths
 
     def test_deps_state_is_importable_without_app(self):
@@ -138,21 +150,21 @@ class TestAppCompatibility:
         """The real SPARC app must have GET /health mounted from routes.health."""
         from sparc.server.app import app
 
-        paths = {r.path for r in app.routes}
+        paths = _route_paths(app.routes)
         assert "/health" in paths
 
     def test_app_mounts_project_router(self):
         """The real SPARC app must have /project/* routes mounted."""
         from sparc.server.app import app
 
-        paths = {r.path for r in app.routes}
+        paths = _route_paths(app.routes)
         assert "/project/config" in paths
 
     def test_app_mounts_data_router(self):
         """The real SPARC app must have /data/* routes mounted."""
         from sparc.server.app import app
 
-        paths = {r.path for r in app.routes}
+        paths = _route_paths(app.routes)
         assert "/data/summary" in paths
 
     def test_app_correlogram_uses_injectable_store(self):
@@ -231,19 +243,19 @@ class TestAppCompatibility:
     def test_app_mounts_physics_router(self):
         """The real SPARC app must have GET /physics/defaults mounted from routes.physics."""
         from sparc.server.app import app
-        paths = {r.path for r in app.routes}
+        paths = _route_paths(app.routes)
         assert "/physics/defaults" in paths
 
     def test_app_mounts_inference_router(self):
         """The real SPARC app must have /inference/* routes mounted from routes.inference."""
         from sparc.server.app import app
-        paths = {r.path for r in app.routes}
+        paths = _route_paths(app.routes)
         assert "/inference/zero-shot" in paths
 
     def test_app_mounts_api_router(self):
         """The real SPARC app must have /api/* routes mounted from routes.api."""
         from sparc.server.app import app
-        paths = {r.path for r in app.routes}
+        paths = _route_paths(app.routes)
         assert "/api/hardware" in paths
 
     def test_app_health_reflects_session_not_state(self):
@@ -503,9 +515,10 @@ class TestDataRouter:
         assert "/data/preview" in paths
 
     def test_has_upload_route(self):
-        from sparc.server.routes.data import router
-        paths = {r.path for r in router.routes}
-        assert "/data/upload" in paths
+        # POST /data/upload is intentionally registered on the app (see the
+        # note at the top of sparc/server/routes/data.py), not on this router.
+        from sparc.server.app import app
+        assert "/data/upload" in _route_paths(app.routes)
 
     def test_has_files_route(self):
         from sparc.server.routes.data import router
@@ -915,7 +928,7 @@ class TestAiRouter:
 class TestAppCompatibilityAi:
     def test_app_mounts_ai_router(self):
         from sparc.server.app import app
-        paths = {r.path for r in app.routes}
+        paths = _route_paths(app.routes)
         assert "/ai/key" in paths
         assert "/ai/chat" in paths
 
@@ -993,7 +1006,7 @@ class TestReproduceRouter:
 class TestAppCompatibilityReproduce:
     def test_app_mounts_reproduce_router(self):
         from sparc.server.app import app
-        paths = {r.path for r in app.routes}
+        paths = _route_paths(app.routes)
         assert "/reproduce/provenance" in paths
         assert "/reproduce/freeze" in paths
         assert "/reproduce/load" in paths
@@ -1089,7 +1102,7 @@ class TestDagRouter:
 class TestAppCompatibilityDag:
     def test_app_mounts_dag_router(self):
         from sparc.server.app import app
-        paths = {r.path for r in app.routes}
+        paths = _route_paths(app.routes)
         assert "/dag" in paths
         assert "/dag/validate" in paths
         assert "/dag/suggest-edges" in paths
@@ -1209,7 +1222,7 @@ class TestDecisionRouter:
 class TestAppCompatibilityDecision:
     def test_app_mounts_decision_router(self):
         from sparc.server.app import app
-        paths = {r.path for r in app.routes}
+        paths = _route_paths(app.routes)
         assert "/decision/candidates" in paths
         assert "/decision/optimize" in paths
         assert "/decision/uncertainty" in paths
@@ -1235,7 +1248,7 @@ class TestAppCompatibilityDecision:
 class TestAppCompatibilityReport:
     def test_app_mounts_report_router(self):
         from sparc.server.app import app
-        paths = {r.path for r in app.routes}
+        paths = _route_paths(app.routes)
         assert "/report/generate" in paths
         assert "/report/pdf" in paths
         assert "/report/docx" in paths
@@ -1378,7 +1391,7 @@ class TestRunRouter:
 class TestAppCompatibilityRun:
     def test_app_mounts_run_router(self):
         from sparc.server.app import app
-        paths = {r.path for r in app.routes}
+        paths = _route_paths(app.routes)
         assert "/run/cancel" in paths
         assert "/run/log" in paths
         assert "/run/events" in paths
@@ -1455,7 +1468,7 @@ class TestScenariosRouter:
 class TestAppCompatibilityScenarios:
     def test_app_mounts_scenarios_router(self):
         from sparc.server.app import app
-        paths = {r.path for r in app.routes}
+        paths = _route_paths(app.routes)
         assert "/scenarios/library" in paths
         assert "/scenarios/chain" in paths
         assert "/scenarios/run" in paths
@@ -1587,7 +1600,7 @@ class TestPreprocessingPipeline:
 class TestAppCompatibilityArtifacts:
     def test_app_mounts_artifacts_router(self):
         from sparc.server.app import app
-        paths = {r.path for r in app.routes}
+        paths = _route_paths(app.routes)
         assert "/artifacts/{stage}/{artifact_id}.csv" in paths
         assert "/artifacts/{stage}/{artifact_id}.json" in paths
         assert "/artifacts/{stage}/{artifact_id}.geojson" in paths
@@ -1684,7 +1697,7 @@ class TestResultsExtendedRouter:
 class TestAppCompatibilityResultsExtended:
     def test_app_mounts_results_extended_router(self):
         from sparc.server.app import app
-        paths = {r.path for r in app.routes}
+        paths = _route_paths(app.routes)
         assert "/results/export" in paths
         assert "/results/kernel_field" in paths
         assert "/results/model_performance" in paths
@@ -1769,7 +1782,7 @@ class TestMiscRouter:
 class TestAppCompatibilityMisc:
     def test_app_mounts_misc_router(self):
         from sparc.server.app import app
-        paths = {r.path for r in app.routes}
+        paths = _route_paths(app.routes)
         assert "/shutdown" in paths
         assert "/debug/paths" in paths
         assert "/context/layers" in paths
@@ -1849,7 +1862,7 @@ class TestCollectRouter:
 class TestAppCompatibilityCollect:
     def test_app_mounts_collect_router(self):
         from sparc.server.app import app
-        paths = {r.path for r in app.routes}
+        paths = _route_paths(app.routes)
         assert "/collect/boundary" in paths
         assert "/collect/manifest" in paths
         assert "/collect/fetch" in paths

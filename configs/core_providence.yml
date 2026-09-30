@@ -1,0 +1,146 @@
+# SPARC core pipeline — Brown University / Providence, RI (brown4.csv)
+# =============================================================================
+# Run:   sparc core run --project configs/core_providence.yml
+# Fast:  sparc core run --project configs/core_providence.yml --fast   (8k-point window)
+#
+# Data notes (see docs/results/providence_core.md):
+#   * AAT_z is ambient air temperature in °F (81–93.5), NOT a z-score.
+#   * Points sit on an exact 30 m lattice in EPSG:3438 (US survey feet); we keep
+#     that frame (scaled to metres) instead of reprojecting to UTM, which would
+#     rotate the lattice by ~1.6° and create binning holes.
+#   * 72% of target values are whole °F — the product looks like a rounded,
+#     interpolated raster, so physical parameters partly describe that
+#     interpolator.  RMSE below ~0.29 °F (rounding noise) is not meaningful.
+#   * Canopy + impervious > 100% on ~35% of cells (canopy overhangs pavement),
+#     so no canopy/impervious sum coupling is imposed.
+core:
+  name: providence_uhi
+
+  data:
+    path: ../brown4.csv
+    target: AAT_z
+    target_units: degF
+    id: OBJECTID
+    x: POINT_X
+    y: POINT_Y
+    crs: "EPSG:3438"
+    coord_unit: us_survey_foot
+    background: median          # no ERA5 for this campaign → field median
+
+  predictors:
+    - Pct_Canopy
+    - Pct_Impervious
+    - NDVI
+    - Albedo
+    - Elevation_m
+    - Distance_from_water_m
+
+  qa:
+    clip:
+      Albedo: [0.02, 0.9]        # 4 cells exceed 0.9 (max 1.022) in the source file
+      Pct_Canopy: [0, 100]
+      Pct_Impervious: [0, 100]
+
+  actionable:
+    Pct_Canopy:
+      min: 0
+      max: 100
+      unit: "pp"
+      doses: [0, 5, 10, 15, 20, 30, 40, 50]
+      cost_per_unit: 1.0
+    Pct_Impervious:
+      min: 0
+      max: 100
+      unit: "pp"
+      direction: decrease
+      doses: [0, 5, 10, 15, 20, 30, 40, 50]
+      cost_per_unit: 1.0
+    Albedo:
+      min: 0.02
+      max: 0.9
+      unit: "reflectance"
+      doses: [0, 0.05, 0.10, 0.15, 0.20, 0.30]
+      cost_per_unit: 100.0
+
+  coupling: []                   # see note above
+
+  mediators:
+    NDVI:
+      parents: [Pct_Canopy, Pct_Impervious]
+      context: [Elevation_m, Distance_from_water_m]
+      monotone: {Pct_Canopy: 1, Pct_Impervious: -1}
+
+  physics:
+    enabled: true
+    window: day                  # campaign time window undocumented; daytime forcing assumed
+    sw_down: 800.0
+    lw_net: -100.0
+    roles:
+      albedo: Albedo
+      canopy: Pct_Canopy
+      impervious: Pct_Impervious
+      ndvi: NDVI
+      elevation: Elevation_m
+      water_distance: Distance_from_water_m
+    wind: null                   # no wind record → advection learned under a penalty
+
+  influence:
+    max_lag_m: 2000
+    n_rings: 10
+    n_perm: 19
+
+  cv:
+    n_folds: 5
+    block_m: auto
+    buffer_m: auto
+    seed: 42
+
+  models: {ols: true, mgwr: true, gwrf: true, gam: true, physics: true}
+
+  stacker:
+    epochs: 400
+    tune_lambda: [0.0, 0.1, 1.0, 10.0]
+
+  scenarios:
+    - name: "Canopy Increase"
+      variable: Pct_Canopy
+      direction: increase
+      increments: [5, 10, 20, 30]
+    - name: "Impervious Decrease"
+      variable: Pct_Impervious
+      direction: decrease
+      increments: [5, 10, 20, 30]
+    - name: "Albedo Increase"
+      variable: Albedo
+      direction: increase
+      increments: [0.05, 0.10, 0.20]
+
+  joint_scenarios:
+    - name: "Green Infrastructure Package"
+      interventions:
+        - {variable: Pct_Canopy, direction: increase, increment: 15}
+        - {variable: Pct_Impervious, direction: decrease, increment: 15}
+        - {variable: Albedo, direction: increase, increment: 0.10}
+
+  causal:
+    enabled: true
+    treatments: [Pct_Canopy, Pct_Impervious, Albedo]
+    confounders:
+      Pct_Canopy: [Pct_Impervious, Albedo, Elevation_m, Distance_from_water_m]
+      Pct_Impervious: [Pct_Canopy, Albedo, Elevation_m, Distance_from_water_m]
+      Albedo: [Pct_Canopy, Pct_Impervious, Elevation_m, Distance_from_water_m]
+    exclude_controls:            # descendants (mediators) are never adjusted for
+      Pct_Canopy: [NDVI]
+      Pct_Impervious: [NDVI]
+    contrast: {Pct_Canopy: 10, Pct_Impervious: -10, Albedo: 0.1}
+    dag_audit: false
+
+  optimize:
+    enabled: true
+    variable: Pct_Canopy
+    budget: 20000                # dose-units (pp × cells) — e.g. +10 pp on 2,000 cells
+    cost_per_unit: 1.0
+    equity_column: null
+
+  output:
+    dir: ../output/core/providence

@@ -221,10 +221,13 @@ def test_local_coefficients_endpoint_removed():
 # ---------------------------------------------------------------------------
 
 
+from sparc.server.routes import scenarios as _scenarios_routes  # noqa: E402  (_resolve_benefits moved here)
+
+
 def test_budget_resolve_benefits_cate_reads_cate_mean(attached_registry, monkeypatch):
     _seed_cate_summary(attached_registry)
     _attach_geometry(monkeypatch)
-    benefits, desc = app_module._resolve_benefits("cate", "Pct_Canopy")
+    benefits, desc = _scenarios_routes._resolve_benefits("cate", "Pct_Canopy")
     assert benefits.shape == (3,)
     assert benefits.tolist() == pytest.approx([-0.05, -0.10, -0.15])
     assert "Bayesian local coefficient" in desc
@@ -232,7 +235,7 @@ def test_budget_resolve_benefits_cate_reads_cate_mean(attached_registry, monkeyp
 
 def test_budget_resolve_benefits_uniform_returns_ones(attached_registry, monkeypatch):
     _attach_geometry(monkeypatch, n=4)
-    benefits, desc = app_module._resolve_benefits("uniform", None)
+    benefits, desc = _scenarios_routes._resolve_benefits("uniform", None)
     assert benefits.shape == (4,)
     assert benefits.tolist() == [1.0, 1.0, 1.0, 1.0]
     assert "uniform" in desc.lower()
@@ -241,4 +244,4 @@ def test_budget_resolve_benefits_uniform_returns_ones(attached_registry, monkeyp
 def test_budget_resolve_benefits_rejects_unknown_source(monkeypatch):
     monkeypatch.setattr(app_module.state, "project_config", {"loaded": True}, raising=False)
     with pytest.raises(Exception):
-        app_module._resolve_benefits("local_coef", "Pct_Canopy")
+        _scenarios_routes._resolve_benefits("local_coef", "Pct_Canopy")

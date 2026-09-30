@@ -23,7 +23,6 @@ share/python-wheels/
 MANIFEST
 output/
 my_project/
-tests/
 
 # Environments
 .env
@@ -36,6 +35,8 @@ venv.bak/
 
 # IDEs and editors
 .vscode/
+.vs/
+.vite/
 .idea/
 *.swp
 *.swo
@@ -47,11 +48,15 @@ Thumbs.db
 # Project-specific
 brown_uhi_run/
 archive/
-*.bat          # Keep Start_SPARC.bat if you want, but we'll de-emphasize it
+# Windows launch scripts under scripts/ are tracked explicitly; ignore stray .bat files elsewhere
+/*.bat
 sparc.egg-info/
-data/          # Only keep small samples; gitignore large files
+# Only keep small samples at the repo root data dir (anchored so sparc/data/ is NOT ignored)
+/data/
 *.gpkg
-*.nc           # NetCDF files from ForceSMIP/GCMs
+!sparc/templates/forcesmip/data/*.gpkg
+# NetCDF files from ForceSMIP/GCMs
+*.nc
 *.pkl
 
 # Desktop app — Node / Rust build artifacts
