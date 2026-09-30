@@ -99,7 +99,7 @@ core:
 
   stacker:
     epochs: 400
-    tune_lambda: [0.0, 0.1, 1.0, 10.0]
+    tune_lambda: [0.0, 0.1, 1.0]
 
   scenarios:
     - name: "Canopy Increase"
