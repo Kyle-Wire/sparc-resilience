@@ -1,5 +1,11 @@
 # SPARC Integration Status
 
+> **⚠ Stale (2026-09-30).** This table does not match the code:
+> - Several modules it cites do not exist (`correlogram_runner.py`, `gwen_runner.py`, `spatial_cv_runner.py`, `mgwr_runner.py`, `sparc/training/v2_neural_training.py`, and more).
+> - Several items marked "Built + Wired" are disconnected or broken. Examples: anisotropic kernels in CV, the energy-balance loss, and Stage-4 scenarios under `sparc run`.
+>
+> See [`CORE_ROADMAP.md`](CORE_ROADMAP.md) (§1 and Appendix A) for the current status.
+
 **SPARC Labs LLC | May 2026**
 **Engineering Reference — What Is Built, What Is Wired, What Is Stubbed**
 

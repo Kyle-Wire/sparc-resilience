@@ -1,0 +1,358 @@
+# SPARC Core Roadmap
+
+**Status:** Proposed · **Date:** 2026-09-30 · **Scope:** the predictive core (urban air temperature / cooling)
+**Line references are pinned to `pi-jepa-dev` @ `0a04b7a`.**
+
+> Supersedes `docs/roadmap/SPARC_Integration_Status.md` as the source of truth for what is wired.
+> Related: `docs/adr/0002-jepa-rebuild-scope.md`.
+
+---
+
+## TL;DR
+
+- The core approach is sound. What drifted is the **wiring** and the **validation**:
+  - the stages are computed but not connected;
+  - several pieces are silently broken;
+  - the recent PI-JEPA work evolved into a second, disconnected system.
+- **The main reorder:** the trained physics-informed model becomes the scenario engine. Causal inference moves after it as a validator; it no longer runs as a parallel engine that feeds coefficients into scenarios.
+- **Sequence:** one city until the pipeline works, then few-shot, then zero-shot. PI-JEPA is rebuilt as a real spatial JEPA and is **gated**: it is kept only if it beats simpler neighbourhood features on held-out cities.
+- **The target core is about 12–15k lines,** down from about 36k core lines inside a roughly 131k-line repo.
+
+## Goals (unchanged)
+
+1. **Area of influence.** An anisotropic correlogram gives the spatial range and direction over which each variable influences air temperature.
+2. **Prediction.** Geographically weighted base models feed a **physics-informed neural network** that makes the final prediction, with PI-JEPA as an optional representation layer.
+3. **Saturation.** Per-variable dose-response curves: where cooling benefit saturates, and where it is largest.
+4. **Scenarios.** Predicted air temperature under adaptation strategies and new conditions.
+
+---
+
+## 1. Diagnosis: what actually happens today
+
+The full file:line index is in [Appendix A](#appendix-a--defect-index).
+
+### 1.1 Two disconnected systems
+- **(A) `sparc run`** (`sparc/__main__.py`): Stage 0 correlogram → Stage 2 GW base models + neural stacker + PDE loss → Stage 3 causal → Stage 4 scenarios. It runs on the Brown/Providence data (`brown4.csv`).
+- **(B) `scripts/train_multicity_jepa.py`** (2,737 lines): multi-city JEPA trunk with per-city heads, evaluated with Philadelphia left out.
+  - It uses **no GW base-model predictions and no PDE loss**.
+  - It runs Stage 0/2/3 per city, but ignores the outputs and swallows errors.
+- The only links between them are adapters (`sparc/inference/trunk.py`, `sparc/causal/jepa_trunk_adapter.py`), and those are not wired into training.
+
+### 1.2 Goal 1, area of influence: computed, then dropped
+- **Only one quadrant of offsets is used.** The FFT correlogram keeps offsets with dx, dy ≥ 0, so directional estimates are invalid. The 1/√pairs standard error also marks nearly every lag significant.
+- **"Range" means three different things:** Moran's-I zero-crossing, Matérn κ, and cross-range peak.
+  - GWR bandwidths use each predictor's *own* autocorrelation range, not its range of influence on temperature.
+  - The cross-range only fills gaps.
+- **Anisotropic weighting is effectively off.**
+  - GWR's anisotropic weighting silently collapses to uniform during CV: numpy inputs produce `feature_i` names that don't match the kernel field.
+  - GWRF's anisotropy branch is dead code.
+- **No feature uses a variable-specific radius.** Spatial lag is a fixed k=8 nearest-neighbour average, and the CV block size is a hard-coded 300 m user value that overrides the correlogram.
+
+### 1.3 Goal 2, base models → NN stacker: leakage and unit bugs
+- **The stacker does not stack out-of-fold predictions.** Differentiable surrogates are trained toward **in-sample full-data fits**, so the neural out-of-fold R² (0.944 in the README) is likely optimistic.
+- **Coordinate units are mixed.** The full-data refit uses coordinates in **feet** (EPSG:3438), while CV and the bandwidths use **metres**. The GWR that is evaluated (uniform weights) is not the GWR that is deployed (anisotropic weights).
+- **Failures are silent.** Failed folds are filled with `mean(y)`, and `n_splits=5` is hard-coded.
+
+### 1.4 Physics: mostly inert
+- **The live constraint is weak.** It is a Poisson equation with a free source, `α∇²T − S = 0`, on **z-scored** T. `SourceTermNet` is a free MLP, so it can absorb the constraint.
+- **α is effectively constant.** It is divided by its own mean. The learned α sits at 0.21–0.40 against configured bounds of 0.5–12.
+- **There is no advection term.** ERA5 wind never enters the physics.
+- **Several loss terms are always zero or wrong:**
+  - the "directional" term is always zero;
+  - the "anisotropy" term *penalizes* anisotropy;
+  - the "gradient-flux" term is plain smoothing.
+- **Written but never used:**
+  - `energy_balance_residual` has no caller, and its sensible-heat formula is actually ground conduction;
+  - the transient, nocturnal and fractional terms are never activated;
+  - the sheaf term has a shape mismatch.
+
+### 1.5 PI-JEPA: not a spatial JEPA
+- **No spatial information flows.**
+  - The trunk is a **per-pixel MLP**.
+  - Masked rows are set to zero, and each pixel predicts its **own** unmasked embedding.
+  - Batches are 4,096 random pixels drawn across 22 cities.
+- **Consequences:**
+  - Mask shape cannot matter, so the I1/I2/B6 verdicts and ADR-0001 only hold for this architecture (see ADR-0002).
+  - The "physics-informed" part is an auxiliary head predicting `1 − albedo`, which is already an input.
+- **Evaluation problems:**
+  - The keep-threshold σ = 0.024 came from `--skip-pretrain` runs, which measure head-seed noise only. It was then used to judge trunk changes, whose own σ is about 0.34 (B6).
+  - Few-shot uses random, non-blocked pixel splits on CAPA *area-wide* rasters, which CAPA interpolated with a random forest.
+  - About 50 `trainNN` iterations were tuned against Philadelphia, so it can no longer serve as an unbiased test.
+- **Data problems:**
+  - Campaign dates were chosen by matching ERA5 to CAPA, which is circular. Philadelphia's own 2022-09-21 date is suspect and could explain the persistent −8 °F morning bias.
+  - `land_cover` is fed as a number.
+  - Aspect and wind direction are treated as linear, not circular.
+  - `cdc_svi` (a social index) is used as a physical predictor.
+  - `lst` and `ndvi` are *mediators* of the interventions, so they cannot be held fixed in scenarios.
+  - ERA5 hour windows ignore daylight saving time.
+
+### 1.6 Goal 3, saturation: assumed, not learned
+- **The README's "diminishing returns beyond ~15 pp" is a hand-set √ taper** (`caps.yml` thresholds), not a fitted curve.
+- **The one real curve fitter (GWRF PDP) is disabled** (`skip_pdp = True`).
+- **The causal PDP is linear by construction,** `response = mean(τ)·(dose − median)`, so it can never find a knee.
+- **The v4 saturation clip has a unit mismatch:** it compares an absolute dose with an increment.
+- **Per-cell curves are thrown away,** so there is no map of *where* saturation happens.
+
+### 1.7 Goal 4, scenarios: bypass the trained model, and crash
+- **Scenarios don't use the model.** They multiply causal coefficients by heuristics. Re-prediction exists only in legacy modes 3/4, using the V1 base-model consensus, **never the physics-informed NN**.
+- **`sparc run` Stage 4 raises `NameError`:** `args` is not in scope.
+- **The default mode cannot run:** `mode_5` can never dispatch.
+- **An artifact name mismatch blocks re-prediction:** the code looks for `standard_meta_ensemble`, but Stage 2 writes `final_meta_ensemble`.
+
+### 1.8 Scope and hygiene
+- **Dead and duplicated code.** About 6k lines of modules have zero importers. There are four bandwidth resolvers, three KernelField builders and three Stage-4 entry points.
+- **Duplicated templates and tracked junk.** `templates/` is a byte-identical duplicate of `sparc/templates/` and adds about 520 MB of tracked ForceSMIP outputs. `.vs/` and `.vite/` are tracked.
+- **Tests don't cover the core.** 54 test files exist, but no CI runs them. The correlogram, GWR math, saturation and scenario math have no tests.
+
+---
+
+## 2. Target architecture: one pipeline, reordered
+
+```
+S0 Data + QA        independently verified campaign dates, traverse-point labels,
+                    ΔT target (°C, vs ERA5 background), ERA5 radiation / wind / BLH
+S1 Influence        full-plane directional cross-correlogram T↔X → per-variable influence kernel
+                    (range r_j, anisotropy behind a quality gate) → focal features X_j^(r_j)
+                    + physics length-scale prior
+S2 Base models      OLS | MGWR | GWRF | GAM | PHYSICS model → true spatial-block out-of-fold predictions
+S3 Stacker          NN(out-of-fold base preds, focal features, [JEPA embedding slot]) + consistent PDE loss
+                    → final ΔT + uncertainty (fold ensemble + spatial conformal)
+S4 Response         ICE sweeps through S1 re-featurisation → per-cell saturation curves → maps
+S5 Scenarios        perturb inputs → recompute focal features (spillover) → re-predict S3 → ΔT maps ± UQ
+S6 Causal validate  spatial DML / CATE / doubly-robust dose-response / spillover / sensitivity
+                    → gates S4–S5 outputs
+S7 Optimize         budget + equity allocation on validated S5 benefit surfaces
+```
+
+### 2.1 Physics formulation (replaces the free-source Poisson equation)
+
+This is a linearized canopy-layer heat budget for the anomaly ΔT = T_air − T_bg, where T_bg is the ERA5 2 m temperature for the window:
+
+```
+u·∇ΔT − K∇²ΔT + ΔT/τ = Q_H(x) / (ρ c_p h)
+
+Q_H  = Q* + Q_F − Q_E − ΔQ_S
+Q*   = (1 − albedo)·SW↓·(1 − shade(canopy, SVF)) + LW_net(SVF)        ERA5 ssrd / strd
+Q_E  = EF(ndvi, canopy, impervious) · (Q* − ΔQ_S)
+ΔQ_S = OHM: a1·Q* + a2·dQ*/dt + a3, by surface type                   night: stored-heat release
+```
+
+- **Learned:** a few scalars per city and window. These are K (horizontal eddy diffusivity), τ (vertical-exchange relaxation time), the canopy-layer wind fraction, and the OHM/EF coefficients, each bounded by literature values.
+- **From ERA5:** u (10 m wind vector) and h (boundary-layer height).
+- **Solution method.** With constant coefficients, ΔT = **G ⊛ Q_H**, where G is a wind-skewed Bessel-K₀ Green's function with length scale √(Kτ). It runs as an FFT convolution on the raster, so it is cheap and differentiable.
+- **Why this ties the goals together:**
+  - **Goal 1 ↔ physics.** By the Whittle–Matérn (ν = 1) SPDE link, the correlogram range of the target residual gives a prior on √(Kτ). Anisotropy direction should align with the wind, which is a testable check that replaces the unreliable θ estimates.
+  - **A label-free physics base model** in S2, which is the foundation for zero-shot.
+  - **The spillover mechanism** in S5: a local change in canopy or albedo changes Q_H locally, and G spreads the cooling to neighbours.
+- **PDE loss in S3.** The residual of the *same* operator on the NN output, with fitted K and τ and a known Q_H. Units are consistent and there is no free source.
+
+---
+
+## 3. Phased roadmap
+
+**Effort key:** S ≈ days, M ≈ 1–2 weeks, L ≈ 3+ weeks. **Every phase ships with tests and CI.**
+
+### P0: Stabilize and establish ground truth (M) — *nothing downstream is trustworthy until this is done*
+1. **Freeze and tag** `main` and `pi-jepa-dev` as reference.
+2. **Dev city (decision D1).**
+   - Pick a CAPA city with morning, midday and evening windows and traverse points, whose campaign date can be confirmed **independently of ERA5**. Candidates are Chicago (2023-07-28) and Raleigh (2021-06-17); both are currently only ERA5-matched.
+   - Document the provenance of `brown4.csv` and its z-score definition, then keep it as a legacy benchmark.
+   - Create a **locked final-test set** of Philadelphia plus 2 more cities, never used for tuning.
+3. **Labels.**
+   - Supervise on CAPA **traverse points**, not the random-forest-interpolated area-wide rasters.
+   - Take dates from CAPA metadata or traverse timestamps, never from ERA5 matching, and re-verify Philadelphia.
+   - The target is ΔT in °C, one model per time window, with timestamps DST-correct.
+4. **Features.**
+   - One-hot or embed `land_cover`; use sin/cos for aspect and wind direction.
+   - Move `cdc_svi` out of the predictors and into equity weighting in S7.
+   - Tag `lst` and `ndvi` as mediators: exclude them from the scenario model, or model them as a chain.
+   - Add ERA5 `ssrd`, `strd`, `blh` and `u10`/`v10`.
+5. **Evaluation protocol.** Write it down before any modelling:
+   - Spatial block CV with block size ≥ the target-residual range, plus a buffer; nested CV for hyperparameters.
+   - Metrics: RMSE/MAE (°C), R², spatial correlation, and interval coverage.
+   - σ from ≥ 3 seeds with **full retrain**.
+   - One declared primary metric per phase.
+6. **CI** runs pytest on every push and includes a **synthetic-city fixture**: an analytic field with a planted influence range, anisotropy and saturation, which every stage must recover.
+
+### P1: Area of influence, goal 1 (M)
+- **One correlogram module.** Full-plane FFT ACF/CCF, directional bins at 0°/45°/90°/135°, and standard errors from a spatial block bootstrap.
+- **One definition of influence range.** r_j is where the target↔X_j cross-correlogram of **model residuals** decays to noise, reported with a CI. The Matérn fit is kept only for the target residual, where it becomes the physics prior.
+- **Anisotropy quality gate.** θ is used only if its CI is narrower than 30° and it is consistent with the wind direction; otherwise the variable is treated as isotropic.
+- **Outputs:**
+  - an influence-kernel table (r_j, eccentricity, θ, CIs);
+  - **focal features**: kernel-weighted means at {r_j/2, r_j, 2r_j};
+  - the S2 block size.
+- **Exit criteria:** recovers the planted ranges on the fixture, and focal features beat raw per-pixel features in S2 CV.
+- **Port** `cross_correlogram.py`, `correlogram_matern_fit.py`, `anisotropy.py`. **Drop** `scale_hierarchy`, `memory_efficient_spatial_analysis`, `matern_fitter`, `bandwidth_advisor`, `pipeline_configurator`, and the duplicate KernelField builders.
+
+### P2: Base models with honest stacking, goal 2a (M)
+- **Base models:**
+  - OLS on focal features;
+  - **real MGWR** (the `mgwr` library is already a dependency) with per-variable bandwidths initialised from r_j and metres everywhere;
+  - GWRF;
+  - GAM;
+  - the **physics model** (§2.1).
+- **Stacking inputs:** true spatial-block out-of-fold predictions only. **Remove the differentiable surrogates.**
+- **A failed fold is a hard error.**
+- **Exit criteria:** per-model out-of-fold metrics on the dev city, plus a report of the variance the physics model explains with zero in-city labels.
+
+### P3: Physics-informed NN stacker, goal 2b (M–L)
+- **Inputs:** out-of-fold base predictions, focal features, and an optional embedding slot that stays empty until P7.
+- **Output:** **ΔT = physics prediction + NN residual**, with the residual regularized toward zero. A small MLP or gated mixture is enough.
+- **Loss:** the data term plus the §2.1 PDE residual. **Delete** the no-op, inverted, smoothing and never-activated PDE terms, and the SIREN, sheaf and fractional code.
+- **Uncertainty:** a deep ensemble across CV folds plus split-conformal calibration on spatial blocks (`sparc/evaluation/conformal.py`).
+- **Freeze:** CMA-ES, EWC/continual/optimal-transport, meta-λ, exceedance heads and VSBA.
+- **Exit criteria:** beats the best base model out-of-fold by more than seed σ, with 90% interval coverage between 0.85 and 0.95.
+
+### P4: Saturation surfaces, goal 3 (M)
+1. **Per-cell curves.** For each actionable variable (canopy, impervious, albedo, building coverage/height, SVF), sweep the dose **through S1 re-featurisation**, so neighbours' focal features update too. Re-predict with S3 to get per-cell ICE curves.
+2. **Fit a saturating curve** per cell (or per cluster where cells are noisy): ΔT(d) = A·(1 − e^(−(d − d₀)/d_s)). Fall back to logistic or piecewise-linear if either fits better.
+3. **Maps:**
+   - **max achievable cooling** A;
+   - **saturation dose** d_sat (the dose reaching 90% of A);
+   - **headroom** d_sat − current dose;
+   - **marginal benefit** ∂ΔT/∂d at the current dose.
+
+   Together these answer *where each variable is most beneficial*.
+4. **Remove** the √ taper, the v4 clip and the linear causal PDP. Guardrails become physical bounds plus an extrapolation flag.
+5. **Exit criteria:** recovers the planted saturation on the fixture, with CIs on d_sat that are stable across the fold ensemble.
+
+### P5: Scenario engine and optimizer, goal 4 (M)
+- **One engine, about 500 lines.** It replaces `scenario_simulator` (4.2k lines), v4, `causal_stack` and the selector.
+  - Pipeline: spec → constrained input edits (bounds, canopy + impervious ≤ 100%) → recompute focal features (spillover) → S3 plus physics → ΔT map with UQ plus a Mahalanobis extrapolation flag (reuse `extrapolation_guard.py`).
+- **New weather conditions** mean swapping the ERA5 forcing. These are flagged **extrapolative in single-city mode**, because one campaign day cannot identify a weather response. Real weather generalization arrives in P7.
+- **Optimizer.** Port `sparc/scenario/budget.py` (greedy/MILP, Pareto sweep) and the equity weighting (with SVI). It runs on validated S5 surfaces.
+- **Exit criteria:** S5 results equal the S4 curves at matching doses.
+
+### P6: State-of-the-art causal validation (M–L)
+**Core methods:**
+- **DML** (EconML) with **spatially blocked cross-fitting** and spatial-confounding adjustment. `spatial_residualizer.py` belongs here, consistent with the runlog's A3 conclusion.
+- **CATE** with `CausalForestDML`, to show *where* effects differ.
+- **Doubly-robust continuous-treatment dose-response** (Kennedy et al. 2017; Colangelo & Lee 2020). These give **causal saturation curves with CIs**, compared against the model-based curves from P4.
+- **Spillover estimation** via exposure mapping on the S1 kernels. This validates the physics kernel; reuse ideas from `interference.py`.
+- **Sensitivity:** E-values plus omitted-variable-bias bounds (Cinelli & Hazlett 2020), and the DoWhy refutations.
+- **Model-vs-causal audit** (evolved from `divergence_audit.py`). When the NN's implied effect disagrees with DML/CATE beyond its CI, the S4/S5 output is **flagged**. This is the gate.
+
+**DAG structure learning:**
+- MC³, DiBS and order-MCMC are three solvers for the *same* problem, a Bayesian posterior over DAGs. Running all three adds redundancy, not rigour.
+- With 6–10 spatially autocorrelated variables the structure is weakly identified, and physics largely dictates the DAG anyway.
+- **Keep one sampler** (MC³, which is already wired, or order-MCMC) as a **DAG audit** on spatial-block bootstrap resamples. It flags unexpected or missing edges against the expert DAG but does not drive predictions.
+- Archive DiBS and the rest. NUTS per-edge posteriors become an optional Bayesian cross-check.
+
+### P7: Multi-city — few-shot, then zero-shot, then PI-JEPA, gated (L)
+1. **Scale S0–S6** to the verified cities, using the same code and a city ID.
+2. **Few-shot.**
+   - A global stacker trained on the other cities, plus the physics model (no labels needed).
+   - **GW models act as the local residual correction** fitted on the few labels. This is their clean multi-city role.
+   - N-curves use spatially blocked splits.
+3. **Zero-shot.**
+   - Physics model plus the global NN, plus a city-offset regression on ERA5 and city morphology (a generalization of Option-C).
+   - Evaluate with rotating leave-one-city-out on at least 5 cities; score the locked test set once per milestone.
+4. **PI-JEPA, rebuilt** (see ADR-0002).
+   - **Encoder and objective:** a ViT/CNN on raster tiles (one city per batch) with I-JEPA context → target prediction, positional mask tokens, and loss only on masked targets.
+   - **Pretraining data:** unlabeled rasters from **100+ US cities** (NLCD, Landsat, Sentinel-2 and buildings are nationwide). This scale is JEPA's real advantage.
+   - **Where the physics comes in:**
+     - (a) target-block size is scaled to the S1 range and elongated along the wind;
+     - (b) auxiliary heads predict **non-input** physics fields: the physics-model ΔT (free pseudo-labels in unlabeled cities) and held-out LST.
+   - **Plugs into** the S3 embedding slot.
+   - **Kept only if** it beats focal features in rotating leave-one-city-out by more than full-retrain σ.
+5. **ANP** (optional) is used for station conditioning, trained *with* coordinates and a Matérn prior, and only with in-city (non-airport) sensors.
+
+---
+
+## 4. Keep / rewrite / freeze
+
+| Area | Action |
+|---|---|
+| `data/collect` (landsat, nlcd, sentinel2, dem, buildings, era5, capa, boundary, assembler_multicity, http_client) | **Port and fix**: traverse points, radiation vars, DST, date provenance |
+| Correlogram (`cross_correlogram`, `correlogram_matern_fit`, `anisotropy`, `spatial_autocorr_comprehensive`) | **Rewrite** into one `influence/` module (~1.5k lines) |
+| `models/ols, gwr, gwrf, ggpgam` | **Port**: real MGWR in metres; fix the CV feature-name bug; remove dead anisotropy code |
+| `physics/` | **Rewrite**: energy balance + advection–diffusion–relaxation kernel/solver; keep the 5-point stencils, add upwind advection |
+| `v2_neural_training` (4.6k), `neural_meta`, `surrogates`, `process_rate_net`, `training/loss` | **Rewrite** as a slim stacker (~800 lines) without the surrogates |
+| `interventions/*` (9.8k), `scenario_engine_selector`, `causal_pdp` | **Replace** with S4 response + S5 engine (~1k lines); port `extrapolation_guard` and the caps |
+| `sparc/scenario/budget.py`, `sparc/decision/equity.py` | **Port** |
+| Causal: `cate_validation`, `spatial_cate`, `spatial_residualizer`, `sensitivity`, refutations, `divergence_audit`, one DAG sampler | **Port and upgrade** (P6) |
+| DiBS, the other DAG samplers, `iv`, `panel`, `dynamic`, `wager2025_addons`, `mediation` (revisit), `nuts` (optional) | **Freeze** |
+| JEPA/ANP/continual/transfer (`training/jepa_*`, `ewc`, `replay`, `inference/*`, `scripts/train_multicity_jepa.py`) | **Freeze** as reference; rebuild in P7 |
+| GWEN, VSBA, CMA-ES, meta-λ, `scale_hierarchy`, `latent_rollout`, `scenario_diffuser` | **Freeze** |
+| `server/`, `sparc-desktop/`, `supabase/`, `report/`, 12 non-UHI templates, `.agents/` | **Freeze** (re-attach later through an adapter) |
+| `registry/` (artifacts.db) | **Simplify** to run directories (parquet + JSON manifest) unless the desktop app returns |
+| `.vs/`, `.vite/`, duplicate `templates/` + ~520 MB outputs, root `brown4.csv` | **Delete or move** (data goes in `data/` or a release asset) |
+
+## 5. Repo decision (open, decision D2)
+
+The evidence favours a **new lean repo** (for example `sparc-core`):
+- `pi-jepa-dev` already has no shared git history with `main`.
+- Most of the code is peripheral or dead.
+- Hundreds of MB of tracked outputs would otherwise come along.
+- Nearly every core module needs a rewrite rather than a patch.
+
+**If you go with a new repo:** port module by module in phase order P0 → P6, each with tests and the synthetic fixture, and keep this repo read-only as reference.
+
+**If you prune in place instead:** use a `core-cleanup` branch cut from `main` and fix these first:
+1. the Stage-4 `NameError`;
+2. the stacker leakage;
+3. the feet/metre mismatch;
+4. the correlogram quadrant bug.
+
+## 6. Open decisions
+
+| ID | Decision | Recommendation |
+|---|---|---|
+| D1 | Development city | A CAPA city with traverse points and an ERA5-independent date (Chicago or Raleigh); Philadelphia goes to the locked test set |
+| D2 | New repo vs prune in place | New lean repo |
+| D3 | Which single DAG sampler to keep | Whichever of MC³ or order-MCMC has better tests on the synthetic fixture |
+
+---
+
+## Appendix A — Defect index
+
+All references are at `0a04b7a`.
+
+| # | Area | Location | Defect |
+|---|---|---|---|
+| A1 | Correlogram | `sparc/run/spatial_autocorr_comprehensive.py:748` | FFT ACF sliced `[:ny, :nx]` keeps only offsets with dx, dy ≥ 0 |
+| A2 | Correlogram | `sparc/run/spatial_autocorr_comprehensive.py:791-796` | SE = 1/√pairs ignores autocorrelation, so nearly every lag is "significant" |
+| A3 | Bandwidth | `sparc/run/gwr_bandwidth.py:39-50`, `sparc/models/gwr.py:176-181` | Bandwidth taken from a predictor's own range; cross-range only fills gaps via `setdefault` |
+| A4 | GWR | `sparc/models/gwr.py:660`, `:271-293` | numpy input → `feature_i` names → kernel-field lookup fails → uniform weights in CV |
+| A5 | GWRF | `sparc/models/gwrf.py:163-175` | Anisotropy branch checks a nonexistent `.kernels` attribute; dead |
+| A6 | Spatial CV | `sparc/run/enhanced_spatial_cv.py:309-317`, `project.yml:260-262` | User's 300 m block size overrides the correlogram-derived size |
+| A7 | Features | `sparc/run/enhanced_spatial_cv.py:1444-1450` | Spatial lag uses fixed k=8 nearest neighbours, not a variable-specific radius |
+| A8 | Stacking | `sparc/run/enhanced_spatial_cv.py:2026-2041`, `sparc/run/v2_neural_training.py:724-755` | Surrogate targets are in-sample full-data fits (named `base_oof_predictions`), so information leaks into the neural out-of-fold score |
+| A9 | Units | `sparc/run/enhanced_spatial_cv.py:1848` vs `:1434-1437` | Full refit uses raw config coordinates (feet); CV uses projected metres |
+| A10 | CV | `sparc/run/enhanced_spatial_cv.py:1113, 1143, 1227, 2167` | Failed folds and predictions silently filled with `mean(y)` |
+| A11 | CV | `sparc/run/enhanced_spatial_cv.py:1508, 1659` | `n_splits=5` hard-coded |
+| A12 | Physics | `sparc/training/loss.py:87-89` | α divided by its own mean; only the relative pattern survives |
+| A13 | Physics | `sparc/physics/pde_loss.py:233` | Directional residual `d²x + d²y − ∇²` is zero with the same stencil |
+| A14 | Physics | `sparc/physics/pde_loss.py:254` | "Anisotropy" term penalizes `|d²x − d²y|`, i.e. enforces isotropy |
+| A15 | Physics | `sparc/physics/pde_loss.py:273` | Gradient-flux term is α‖∇T‖², plain smoothing |
+| A16 | Physics | `sparc/physics/energy_balance.py:68-88` | Sensible heat computed as −k∇²T·d (ground conduction); `energy_balance_residual` has no caller |
+| A17 | Physics | `sparc/physics/pde_loss.py:399-402` | Sheaf operator is built on the full graph but applied to batch-sized predictions |
+| A18 | Physics | `scripts/pde_diagnostics_output.txt` | Learned α in [0.21, 0.40] vs configured bounds [0.5, 12]; script then crashes on a Unicode print |
+| A19 | JEPA | `scripts/train_multicity_jepa.py:162-176`, `:805-814` | Per-pixel MLP trunk; masked rows zeroed; each pixel predicts its own embedding, with no cross-pixel flow |
+| A20 | JEPA | `scripts/train_multicity_jepa.py:819-828` | "Energy-balance" head predicts `1 − albedo`, an input feature |
+| A21 | JEPA eval | `scripts/train_multicity_jepa.py:1920-1960` | Few-shot train/test split is random pixels, not spatially blocked |
+| A22 | Labels | `sparc/data/collect/capa.py:74-76`, `:427-444` | Labels are CAPA area-wide (random-forest/Ranger interpolated) rasters, not traverse points |
+| A23 | Labels | `configs/multicity_pilot.yml` (`campaign_date_override`) | Dates chosen by ERA5↔CAPA matching, which is circular with the ERA5 features |
+| A24 | ERA5 | `sparc/data/collect/era5.py:276-280` | Window hours from longitude/15 (standard time); DST ignored |
+| A25 | Saturation | `sparc/interventions/scenario_simulator.py:348-390`, `sparc/templates/uhi/physics/caps.yml:127-137` | Diminishing returns are a hand-set √ taper |
+| A26 | Saturation | `sparc/run/enhanced_spatial_cv.py:1964` | `skip_pdp = True` disables the GWRF curve fitter (`sparc/models/gwrf.py:721-834`) |
+| A27 | Saturation | `sparc/causal/causal_pdp.py:207-211` | Response = mean(τ)·(dose − median), linear by construction |
+| A28 | Saturation | `sparc/interventions/scenario_engine_v4.py:621-675` | Knee dose (absolute) compared with scenario increment |
+| A29 | Scenarios | `sparc/__main__.py:786` | `args` not in scope in `_run_scenarios` → `NameError` in `sparc run` Stage 4 |
+| A30 | Scenarios | `sparc/run/scenario_engine_selector.py:195`, `:272-277` | Ensemble predictor built only for modes 3/4; mode_5 (default) raises |
+| A31 | Scenarios | `sparc/interventions/scenario_simulator.py:895` vs `sparc/run/enhanced_spatial_cv.py:2470` | Reads `standard_meta_ensemble.pkl`; Stage 2 writes `final_meta_ensemble.pkl` |
+| A32 | Scenarios | `sparc/interventions/causal_stack.py:539-602` | Scenario Δ is causal β × heuristics; no re-prediction through the trained NN |
+| A33 | Docs | `docs/roadmap/SPARC_Integration_Status.md` | Cites nonexistent `correlogram_runner.py`, `gwen_runner.py`, `spatial_cv_runner.py`, `mgwr_runner.py` |
+| A34 | Repo | `templates/` vs `sparc/templates/`, `.vs/`, `.vite/` | Byte-identical duplicate templates plus ~520 MB of tracked outputs and IDE caches |
+
+## Appendix B — References
+
+- **Assran et al. (2023):** *Self-Supervised Learning from Images with a Joint-Embedding Predictive Architecture* (I-JEPA).
+- **Chernozhukov et al. (2018):** *Double/debiased machine learning for treatment and structural parameters.*
+- **Cinelli & Hazlett (2020):** *Making sense of sensitivity: extending omitted variable bias.*
+- **Colangelo & Lee (2020):** *Double debiased machine learning nonparametric inference with continuous treatments.*
+- **Dupont, Wood & Augustin (2022):** *Spatial+: a novel approach to spatial confounding.*
+- **Grimmond, Cleugh & Oke (1991):** *An objective urban heat storage model* (OHM).
+- **Kennedy, Ma, McHugh & Small (2017):** *Non-parametric methods for doubly robust estimation of continuous treatment effects.*
+- **Lindgren, Rue & Lindström (2011):** *An explicit link between Gaussian fields and Gaussian Markov random fields: the SPDE approach.*
