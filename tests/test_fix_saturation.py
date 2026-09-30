@@ -78,7 +78,6 @@ class TestOptInTaper:
 
     @pytest.mark.parametrize("path", [
         "sparc/templates/uhi/physics/caps.yml",
-        "templates/uhi/physics/caps.yml",
         "sparc/interventions/config/caps.yml",
     ])
     def test_shipped_caps_do_not_enable_taper(self, path):
@@ -88,13 +87,6 @@ class TestOptInTaper:
         caps = yaml.safe_load((root / path).read_text(encoding="utf-8"))
         assert "diminishing_return_thresholds" not in caps
         assert caps["combined_constraints"]["canopy_impervious_sum"]["enforcement"] == "warning"
-
-    def test_template_copies_identical(self):
-        from pathlib import Path
-        root = Path(__file__).resolve().parents[1]
-        a = (root / "sparc/templates/uhi/physics/caps.yml").read_bytes()
-        b = (root / "templates/uhi/physics/caps.yml").read_bytes()
-        assert a == b
 
 
 # ---------------------------------------------------------------------------

@@ -77,9 +77,15 @@ def _block_and_buffer(cfg: CoreConfig, influence, data: CoreData) -> tuple[float
     block = cv.get("block_m", "auto")
     if block in (None, "auto"):
         block = influence.block_size_m if influence is not None else 10 * data.grid.dx
-        # keep ≥ 3 blocks per fold on small study areas
-        extent = min(np.ptp(data.x), np.ptp(data.y))
+        # keep ≥ 3 blocks per fold on small study areas (coordinates, not the
+        # target: data.y is ΔT)
+        extent = min(np.ptp(data.x), np.ptp(data.y_coord))
         block = float(min(block, extent / 3.0))
+    if float(block) < 3.0 * data.grid.dx:
+        # A block smaller than a few cells is random-point CV in disguise:
+        # neighbours of every test point sit in training and scores leak.
+        log.warning("cv.block_m=%.1f m is below 3 grid cells (%.1f m); raising it", float(block), 3.0 * data.grid.dx)
+        block = 3.0 * data.grid.dx
     buf = cv.get("buffer_m", "auto")
     if buf in (None, "auto"):
         buf = float(block) / 3.0
