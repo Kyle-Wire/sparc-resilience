@@ -2,10 +2,14 @@
 
 The final prediction is a base prediction plus a learned residual:
 
-    ΔT̂ = mean(Ẑ) + r_θ(z),     z = [Ẑ_other, Ẑ_phys, X, focal]      ("feature" mode, default)
+    ΔT̂ = Ẑ·w + r_θ(z),         z = [Ẑ_other, Ẑ_phys, X, focal]      ("feature" mode, default)
     ΔT̂ = ΔT_phys + r_θ(z),     z = [Ẑ_other, X, focal]              ("backbone" mode)
 
-where Ẑ are *out-of-fold* base-model predictions.  In feature mode the
+where Ẑ are *out-of-fold* base-model predictions and w ≥ 0, Σw = 1 are
+non-negative least-squares weights (a convex super-learner base).  The MLP
+residual r_θ is early-stopped on an inner spatial-block split of the training
+rows and **gated**: if it does not beat the convex base on those held-out
+blocks it is switched off and the stacker is Ẑ·w.  In feature mode the
 physics model is one of the base models the network digests — its weight in
 the final prediction (and therefore in scenario magnitudes) is learned from
 data, which matters on single-snapshot data where the physics gain is weakly
@@ -23,7 +27,7 @@ e = y − ΔT_phys on training cells, so λ = 1 penalises a residual that is as
 penalty is evaluated on the full raster (rows without labels are valid
 collocation points — only features are used there).  Because 𝓛 contains the
 identity it doubles as a Sobolev smoother on r.  Without a physics model the
-stacker falls back to ΔT̂ = mean(Ẑ) + r_θ(z) with no PDE term.
+stacker falls back to ΔT̂ = Ẑ·w + r_θ(z) with no PDE term.
 
 Uncertainty: cross-conformal intervals — for fold k the interval half-width
 is the (1−α) quantile of |OOF residuals| from the *other* folds, so reported
@@ -80,30 +84,93 @@ class PhysicsInformedStacker:
         # use.  "backbone": ΔT̂ = ΔT_phys + r (physics passes through with
         # coefficient 1 — forces physics-driven scenario magnitudes).
         self.mode = str(cfg.get("physics_mode", "feature")).lower()
+        self.use_features = bool(cfg.get("use_features", True))
+        self.weights: np.ndarray | None = None
+        self.gated = False
         if self.mode not in ("feature", "backbone"):
             raise ValueError(f"stacker.physics_mode must be 'feature' or 'backbone', got {self.mode!r}")
 
     # ---------------------------------------------------------------- utils
-    def _design(self, inp: StackerInputs) -> tuple[np.ndarray, np.ndarray]:
-        if inp.phys is None:
-            return np.hstack([inp.Z, inp.feats]), inp.Z.mean(axis=1)
-        if self.mode == "backbone":
-            return np.hstack([inp.Z, inp.feats]), inp.phys
-        allb = np.column_stack([inp.Z, inp.phys])
-        return np.hstack([allb, inp.feats]), allb.mean(axis=1)
+    def _base_matrix(self, inp: StackerInputs) -> np.ndarray:
+        if inp.phys is None or self.mode == "backbone":
+            return inp.Z
+        return np.column_stack([inp.Z, inp.phys])
 
-    def fit(self, inp: StackerInputs, y: np.ndarray, train_idx: np.ndarray) -> "PhysicsInformedStacker":
+    def _design(self, inp: StackerInputs) -> tuple[np.ndarray, np.ndarray]:
+        B = self._base_matrix(inp)
+        D = np.hstack([B, inp.feats]) if self.use_features else B
+        if inp.phys is not None and self.mode == "backbone":
+            return D, np.asarray(inp.phys, float)
+        return D, B @ self.weights
+
+    def _inner_split(self, train_idx: np.ndarray, groups: np.ndarray | None,
+                     buffer_m: float = 0.0) -> tuple[np.ndarray, np.ndarray | None]:
+        """Hold out ~25 % of the training *blocks* for early stopping and the
+        residual gate, dropping inner-training rows within ``buffer_m`` of the
+        held-out rows (random rows, or unbuffered blocks, leak through spatial
+        autocorrelation and make the residual look better than it is)."""
+        frac = float(self.cfg.get("val_fraction", 0.25))
+        rng = np.random.default_rng(self.seed)
+        if groups is not None:
+            g = np.asarray(groups)[train_idx]
+            ug = np.unique(g)
+            if ug.size >= 4:
+                vg = rng.choice(ug, max(1, int(round(frac * ug.size))), replace=False)
+                is_val = np.isin(g, vg)
+            else:
+                is_val = rng.random(train_idx.size) < frac
+        else:
+            is_val = rng.random(train_idx.size) < frac
+        fit_idx, val_idx = train_idx[~is_val], train_idx[is_val]
+        if buffer_m > 0 and val_idx.size:
+            from scipy.ndimage import distance_transform_edt
+
+            g = self.grid
+            vm = np.zeros(g.shape, dtype=bool)
+            vm[g.iy[val_idx], g.ix[val_idx]] = True
+            dist = distance_transform_edt(~vm, sampling=(g.dy, g.dx))
+            fit_idx = fit_idx[dist[g.iy[fit_idx], g.ix[fit_idx]] > buffer_m]
+        if val_idx.size < 20 or fit_idx.size < 20:
+            return train_idx, None
+        return fit_idx, val_idx
+
+    def fit(self, inp: StackerInputs, y: np.ndarray, train_idx: np.ndarray,
+            groups: np.ndarray | None = None, buffer_m: float = 0.0,
+            residual: bool = True) -> "PhysicsInformedStacker":
+        """``groups`` (spatial block ids for every row) and ``buffer_m`` set
+        up the inner block split used for early stopping and the residual
+        gate.  ``residual=False`` fits the convex base only."""
+        import copy
+
         import torch
+        from scipy.optimize import nnls
+
+        fit_idx, val_idx = self._inner_split(np.asarray(train_idx), groups, buffer_m)
+        if not residual:
+            fit_idx, val_idx = np.asarray(train_idx), None
+        # Convex base: non-negative least-squares weights of the OOF base
+        # predictions, normalised to sum to one (super-learner style).
+        B = self._base_matrix(inp)
+        if inp.phys is not None and self.mode == "backbone":
+            self.weights = None
+        else:
+            w, _ = nnls(B[fit_idx], np.asarray(y, float)[fit_idx])
+            self.weights = w / w.sum() if w.sum() > 1e-12 else np.full(B.shape[1], 1.0 / B.shape[1])
 
         D, base = self._design(inp)
-        self.mu = D[train_idx].mean(axis=0)
-        sd = D[train_idx].std(axis=0)
+        if not residual:
+            self.gated, self.val_mse_base, self.val_mse_best, self.best_epoch = True, None, None, 0
+            self.history = []
+            return self
+        self.mu = D[fit_idx].mean(axis=0)
+        sd = D[fit_idx].std(axis=0)
         self.sd = np.where(sd > 1e-12, sd, 1.0)
         Dt = torch.as_tensor((D - self.mu) / self.sd, dtype=torch.float64)
         base_t = torch.as_tensor(base, dtype=torch.float64)
         y_t = torch.as_tensor(y, dtype=torch.float64)
-        tr = torch.as_tensor(train_idx, dtype=torch.long)
-        sigma_y2 = float(np.var(y[train_idx])) + 1e-12
+        tr = torch.as_tensor(fit_idx, dtype=torch.long)
+        va = torch.as_tensor(val_idx, dtype=torch.long) if val_idx is not None else None
+        sigma_y2 = float(np.var(y[fit_idx])) + 1e-12
 
         use_pde = self.physics is not None and self.lambda_pde > 0
         if use_pde:
@@ -112,13 +179,13 @@ class PhysicsInformedStacker:
             pp = self.physics.params
             L, vx, vy = float(pp["L_m"]), float(pp.get("vx_m", 0.0)), float(pp.get("vy_m", 0.0))
             interior = torch.as_tensor(stencil_valid(self.grid.mask)[1:-1, 1:-1])
-            # Normalise by the operator roughness of the data's own residual
-            # (y − base) on training cells: λ = 1 then penalises a learned
+            # Normalise by the operator roughness of the data's own misfit
+            # (y − ΔT_phys) on training cells: λ = 1 then penalises a learned
             # residual that is as "unphysical" as the raw misfit itself.
             phys_np = np.array(inp.phys, dtype=float)
             phys_t = torch.as_tensor(phys_np, dtype=torch.float64)
             with torch.no_grad():
-                resid_rast = self.grid.rasterize(np.asarray(y, float) - phys_np, subset=train_idx)
+                resid_rast = self.grid.rasterize(np.asarray(y, float) - phys_np, subset=fit_idx)
                 ok = np.isfinite(resid_rast)
                 sv = stencil_valid(ok)[1:-1, 1:-1]
                 if sv.sum() >= 50:
@@ -126,12 +193,17 @@ class PhysicsInformedStacker:
                                               self.grid.dx, self.grid.dy)[torch.as_tensor(sv)]
                     self.pde_scale = float((Rr**2).mean()) or 1.0
                 else:
-                    self.pde_scale = float(np.var(np.asarray(y, float)[train_idx])) or 1.0
+                    self.pde_scale = float(np.var(np.asarray(y, float)[fit_idx])) or 1.0
         self.net = _mlp(D.shape[1], int(self.cfg.get("hidden", 64)), self.seed)
         opt = torch.optim.Adam(self.net.parameters(), lr=float(self.cfg.get("lr", 3e-3)),
                                weight_decay=float(self.cfg.get("weight_decay", 1e-4)))
         epochs = int(self.cfg.get("epochs", 400))
+        every = int(self.cfg.get("eval_every", 10))
+        patience = int(self.cfg.get("patience", 10))
         self.history = []
+        best = (np.inf, None, 0)
+        self.val_mse_base = float(((base_t[va] - y_t[va]) ** 2).mean()) if va is not None else None
+        bad = 0
         for ep in range(epochs):
             self.net.train()
             opt.zero_grad()
@@ -149,6 +221,25 @@ class PhysicsInformedStacker:
             opt.step()
             if ep % 100 == 0 or ep == epochs - 1:
                 self.history.append(float(loss.detach()))
+            if va is not None and (ep % every == every - 1 or ep == epochs - 1):
+                self.net.eval()
+                with torch.no_grad():
+                    v = float(((base_t[va] + self.net(Dt[va]).squeeze(-1) - y_t[va]) ** 2).mean())
+                if v < best[0]:
+                    best, bad = (v, copy.deepcopy(self.net.state_dict()), ep + 1), 0
+                else:
+                    bad += 1
+                    if bad >= patience:
+                        break
+        if best[1] is not None:
+            self.net.load_state_dict(best[1])
+        self.best_epoch = best[2]
+        self.val_mse_best = best[0] if np.isfinite(best[0]) else None
+        # Gate: the learned residual must beat the convex base on held-out
+        # blocks by ≥ min_gain (relative), otherwise the stacker is the base.
+        min_gain = float(self.cfg.get("min_gain", 0.01))
+        self.gated = bool(self.val_mse_base is not None and self.val_mse_best is not None
+                          and self.val_mse_best > (1.0 - min_gain) * self.val_mse_base)
         self.net.eval()
         return self
 
@@ -156,9 +247,16 @@ class PhysicsInformedStacker:
         import torch
 
         D, base = self._design(inp)
+        if self.gated:
+            return base
         with torch.no_grad():
             r = self.net(torch.as_tensor((D - self.mu) / self.sd, dtype=torch.float64)).squeeze(-1).numpy()
         return base + r
+
+    def summary(self, names: list[str]) -> dict:
+        return {"weights": (None if self.weights is None else {n: float(w) for n, w in zip(names, self.weights)}),
+                "residual_gated_off": self.gated, "val_mse_base": self.val_mse_base,
+                "val_mse_with_residual": self.val_mse_best, "best_epoch": self.best_epoch}
 
 
 def cross_conformal_halfwidth(y: np.ndarray, oof: np.ndarray, fold_id: np.ndarray, coverage: float = 0.9) -> np.ndarray:

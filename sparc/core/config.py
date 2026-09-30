@@ -74,6 +74,12 @@ DEFAULTS: dict[str, Any] = {
         "weight_decay": 1e-4,
         "lambda_pde": 1.0,
         "tune_lambda": [0.0, 0.01, 0.1, 1.0],
+        "use_features": True,        # raw + focal features as MLP inputs (besides base predictions)
+        "val_fraction": 0.25,        # inner held-out share of training blocks (early stopping + gate)
+        "eval_every": 10,
+        "patience": 10,              # evaluations without improvement before stopping
+        "min_gain": 0.01,            # residual kept only if it lowers held-out MSE by ≥ 1 %
+        "allow_residual_off": True,  # also score the convex base alone; pick by outer out-of-fold RMSE
         "coverage": 0.9,
         "seed": 0,
     },

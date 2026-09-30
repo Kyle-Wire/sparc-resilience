@@ -90,6 +90,7 @@ def build_manifest(result, timings: dict, fast: bool, folds=None) -> dict:
         m["lambda_scores"] = ens.lambda_scores
         m["physics"] = _physics_summary(ens)
         m["physics_advection"] = ens.physics_selection
+        m["stacker"] = ens.stacker_info
     if result.responses:
         m["response"] = {v: r.summary for v, r in result.responses.items()}
     if result.scenarios:
@@ -141,9 +142,20 @@ def render_report(result) -> str:
         for k, v in m["metrics"].items():
             L.append(f"| {k} | {_f(v['rmse'])} | {_f(v['mae'])} | {_f(v['r2'])} |")
         s = m["metrics"].get("stacker", {})
-        L += ["", f"Stacker λ_PDE = {m.get('lambda_pde')} (tuned: {m.get('lambda_scores')}); "
+        lam = m.get("lambda_pde")
+        lam_txt = "residual off — convex base only" if lam is None else f"λ_PDE = {lam}"
+        L += ["", f"Stacker: {lam_txt} (out-of-fold RMSE by candidate: {m.get('lambda_scores')}); "
               f"{int(100 * s.get('interval_target', 0.9))}% cross-conformal interval coverage "
               f"{_f(s.get('interval_coverage'), 3)} (mean half-width {_f(s.get('interval_mean_halfwidth'), 3)} {u}).", ""]
+        if m.get("stacker"):
+            st = m["stacker"]
+            wts = [x.get("weights") or {} for x in st]
+            names = list(wts[0]) if wts and wts[0] else []
+            if names:
+                L += ["**Stacker base weights (mean over folds):** " + ", ".join(
+                    f"{n} {np.mean([w.get(n, 0.0) for w in wts]):.2f}" for n in names)
+                      + f"; neural residual kept in {sum(not x['residual_gated_off'] for x in st)}/{len(st)} folds "
+                      "(gated off where it did not beat the convex base on held-out inner blocks).", ""]
         if m.get("physics"):
             p = m["physics"]
             L += ["**Physics (mean ± sd over folds):** " + ", ".join(
