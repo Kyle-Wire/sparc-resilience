@@ -54,8 +54,9 @@ def _find_templates_dir() -> Path:
     # Project root (editable / source installs)
     candidates.append(Path(__file__).parent.parent.parent.parent / "templates")
 
-    # PyInstaller onefile
+    # PyInstaller onefile (build-sidecar.py bundles sparc/templates)
     if hasattr(sys, "_MEIPASS"):
+        candidates.append(Path(sys._MEIPASS) / "sparc" / "templates")  # type: ignore[attr-defined]
         candidates.append(Path(sys._MEIPASS) / "templates")  # type: ignore[attr-defined]
 
     for p in candidates:

@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 
 ROOT = Path(__file__).resolve().parents[1]
-TEMPLATES = ROOT / "templates"
+TEMPLATES = ROOT / "sparc" / "templates"
 
 # Per-domain identification assumptions.  Spatial domains generally
 # violate `no_interference` (spillover); we mark that explicitly so

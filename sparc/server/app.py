@@ -195,7 +195,7 @@ def _resolve_safe(raw: str, *, allow_create: bool = False) -> Path:
     return resolved
 
 
-TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
+TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 
 # ------------------------------------------------------------------

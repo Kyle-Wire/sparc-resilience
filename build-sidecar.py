@@ -120,7 +120,7 @@ HIDDEN_IMPORTS = [
 
 # Data files to include (templates, schemas)
 DATA_DIRS = [
-    ("templates", "templates"),
+    ("sparc/templates", "sparc/templates"),
     ("sparc/config/project_schema.json", "sparc/config/project_schema.json"),
     ("sparc/report/templates", "sparc/report/templates"),
 ]
