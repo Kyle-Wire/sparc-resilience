@@ -1,6 +1,6 @@
 # SPARC Core Roadmap
 
-**Status:** Proposed · **Date:** 2026-09-30 · **Scope:** the predictive core (urban air temperature / cooling)
+**Status:** P0–P6 implemented in `sparc/core/` (single city; see Appendix C) · P7 not started · **Date:** 2026-09-30 · **Scope:** the predictive core (urban air temperature / cooling)
 **Line references are pinned to `pi-jepa-dev` @ `0a04b7a`.**
 
 > Supersedes `docs/roadmap/SPARC_Integration_Status.md` as the source of truth for what is wired.
@@ -345,6 +345,96 @@ All references are at `0a04b7a`.
 | A32 | Scenarios | `sparc/interventions/causal_stack.py:539-602` | Scenario Δ is causal β × heuristics; no re-prediction through the trained NN |
 | A33 | Docs | `docs/roadmap/SPARC_Integration_Status.md` | Cites nonexistent `correlogram_runner.py`, `gwen_runner.py`, `spatial_cv_runner.py`, `mgwr_runner.py` |
 | A34 | Repo | `templates/` vs `sparc/templates/`, `.vs/`, `.vite/` | Byte-identical duplicate templates plus ~520 MB of tracked outputs and IDE caches |
+| A35 | Scenarios | `sparc/interventions/scenario_simulator.py` (canopy + impervious ≤ 100 at three sites) | Constraint hard-enforced although `caps.yml` says `enforcement: warning`. On Brown 35% of cells already exceed 100% (canopy overhangs pavement), so every canopy scenario silently removed impervious cover there and inflated cooling |
+
+## Appendix C — Implementation status (2026-09-30)
+
+### The new core: `sparc/core/`
+
+The core is a lean, self-contained package (numpy, scipy, pandas, scikit-learn, torch, pyproj). It imports nothing from `sparc.models`.
+
+- **Run it:** `sparc core run --project configs/core_providence.yml [--fast] [--stages S0,S1,...]`, or `python -m sparc.core run ...`.
+- **Tests:** `pytest tests/core` (runs in CI), covering a synthetic city with planted truths and a Providence (`brown4.csv`) integration run.
+- **Results:** `docs/results/providence_core.md`.
+
+| Stage | Module | Status |
+|---|---|---|
+| S0 data, grid, QA | `data.py`, `grid.py`, `config.py` | Done |
+| S1 area of influence | `influence.py` | Done: full-plane FFT ACF/CCF, permutation noise band, kernel-shape distributed-lag ranges, bootstrap-gated anisotropy, focal features at {r/2, r, 2r} |
+| S2 base models | `base_models.py`, `cv.py` | Done: ridge OLS, MGWR (FFT backfitting, per-variable bandwidths from S1 tuned on an inner split), GRF-lite, GAM, physics; one shared spatial-block partition with buffers |
+| S3 physics + stacker | `physics.py`, `operators.py`, `stacker.py`, `ensemble.py` | Done: steady advection–diffusion–relaxation operator with an energy-balance source (variable projection + L-BFGS); cross-fitted physics-informed MLP stacker with an operator penalty (λ tuned out of fold); cross-conformal intervals |
+| S4 saturation and marginal effects | `response.py` | Done: neighbourhood-adoption sweeps; per-cell saturating fit against realised neighbourhood dose, with censoring; own-only vs footprint marginals (analytic chain rule through the focal kernels and the physics Green's function, mediator-aware) |
+| S5 scenarios | `scenarios.py`, `mediators.py` | Done: add/set/scale, bounds, optional baseline-relative coupling, mediator abduction, re-featurisation through the trained stack, fold-spread uncertainty, extrapolation flags |
+| S6 causal validation | `causal.py` | Done: spatial DML; exposure-mapping spillover (θ_own, θ_nbr); R-learner CATE with BLP calibration; Kennedy DR dose-response; E-value and Cinelli–Hazlett RV; model-vs-causal audit on matched estimands; optional MC³ DAG audit |
+| S7 budget and equity | `optimize.py` | Done: concave segments from footprint × saturation into `sparc.scenario.budget`; closed-loop re-prediction of the chosen allocation |
+| P7 multi-city / PI-JEPA | — | Not started. Needs the multi-city dataset and a GPU; the specification is ADR-0002 |
+
+### Appendix A items
+
+- **Fixed in place:** the legacy `sparc run` path, each with a regression test in `tests/test_fix_*.py`.
+- **Superseded:** the core pipeline does it correctly; legacy code is left as is.
+- **Frozen:** untouched until the P7 gate (ADR-0002).
+- **Needs data:** the code is fixed and mock-tested, but live verification needs network or data not available here.
+
+| # | Status | Note |
+|---|---|---|
+| A1, A2 | Fixed | Full-plane ACF with signed offsets; permutation null for z-scores |
+| A3 | Fixed | Cross-range bandwidths override own-range; only explicit `manual_parameters.bandwidths` win |
+| A4 | Fixed | `GWRModel.fit(feature_names=...)`; CV workers pass names |
+| A5 | Fixed | GWRF anisotropy via `KernelField.anisotropic_distance`, with an eccentricity gate |
+| A6, A7 | Superseded | Core derives block size from the S1 target-residual range and uses variable-specific focal features |
+| A8 | Fixed | `train_neural_meta(base_full_fitted=...)`; fold path uses the true Stage-2a out-of-fold predictions |
+| A9 | Fixed | Stage 2b and `ScenarioSimulator` use projected metres (`data_utils.project_coords`) |
+| A10 | Fixed | Failed folds are NaN and dropped from stacking, not `mean(y)` |
+| A11 | Fixed | `cfg.n_splits` honoured; stale cached folds invalidated |
+| A12 | Superseded | Core physics fits an absolute gain `a` with a sign constraint |
+| A13–A15 | Fixed | The inert or wrong terms default to weight 0 and can be configured through `physics.pde_weights` |
+| A16 | Fixed | Renamed `ground_conduction_proxy` (deprecated alias kept); dead residual removed |
+| A17 | Fixed | Sheaf term skipped unless the operator matches the batch |
+| A18 | Fixed | Configured α bounds reach `ProcessRateNet`; diagnostics script UTF-8 safe |
+| A19, A20 | Frozen | ADR-0002 |
+| A21 | Fixed | Few-shot split drops test pixels within a buffer of training pixels; `block` sampler added |
+| A22 | Needs data | `download_capa_traverses()` + parser, tested on a synthetic ZIP (OSF blocked here) |
+| A23 | Needs data | Per-city `campaign_date_source` provenance + warning; real dates need traverse timestamps |
+| A24 | Needs data | ERA5 requested in local time (`timezone=`), CAPA-protocol windows, SW↓/BLH/u10/v10 added; mock-tested (Open-Meteo blocked here) |
+| A25 | Fixed | √ taper only when a threshold is explicitly configured; skipped when a condition curve exists |
+| A26 | Fixed | GWRF condition curves exported by default |
+| A27 | Fixed | Causal PDP integrates E[τ | T] over dose; DR variant via `sparc.core.causal` |
+| A28 | Fixed | Knee compared against baseline + increment per cell |
+| A29–A31 | Fixed | Stage 4 delegates to `stage4_runner`; mode_5 builds the ensemble; meta model optional |
+| A32 | Superseded | Core scenarios re-predict through the trained stack |
+| A33 | Fixed | Stale banner on `SPARC_Integration_Status.md` |
+| A34 | Fixed | Single template source in `sparc/templates/`; root `templates/`, `.vs/`, `.vite/` removed |
+| A35 | Fixed | `enforcement` honoured; when enforced the cap is relative to the baseline, so a zero scenario is an identity |
+
+### Found while fixing
+
+- **The legacy neural stacker never ran.** `train_neural_meta` raised `UnboundLocalError` on `target_lambdas` before its first epoch, so Stage 2 silently fell back to a weighted average of base models.
+  - The README's 0.944 R² therefore came from that fallback, evaluated with the leakage in A8/A9.
+  - It is fixed, but no legacy number from before this date should be cited.
+- **Other latent crashes:** undefined names in `v2_neural_training.py` (`get_active_store`, `model`, `coords_t`, `self`), `decision_stage.main`, `scenarios.benefit` and the mediation logger.
+- **`AAT_z` in `brown4.csv` is air temperature in °F** (81–93.5), not a z-score, and 72% of values are whole degrees. RMSE below about 0.29 °F is below the rounding noise.
+- **On Brown the operator penalty does not help.** λ = 0 wins the out-of-fold tuning, and forcing physics as the backbone overstated canopy and albedo effects against the causal estimates. The default is therefore `physics_mode: feature`: the network learns how much of the physics to use.
+- **Fitted effects are attenuated (known limitation, next step).** On the synthetic city with planted truths, the stack recovers about 40–45% of the planted canopy effect, with a spatial-pattern correlation of about 0.8. Every base model lands below 65%:
+
+  | Model | Share of planted effect |
+  |---|---|
+  | physics | 63% |
+  | MGWR | 45% |
+  | OLS | 43% |
+  | GRF | 31% |
+  | GAM | 28% |
+
+  Three causes:
+  - flexible spatial terms (intercept surfaces, RBF smooths) absorb part of a spatially smooth covariate's effect;
+  - trees flatten effects;
+  - the linear shade term cannot follow a saturating response.
+
+  MGWR originally sat at 10% because it saw only raw, own-cell inputs; giving it the influence-range focal features fixed that and also halved its RMSE. The S6 audit exists to catch this on real data, and on Brown the canopy footprint agrees with the causal θ_own + θ_nbr. Next steps:
+  - Spatial+ residualised covariates in MGWR/GAM (Dupont et al. 2022);
+  - a saturating shade term in the physics source;
+  - reporting audit-calibrated scenario magnitudes when the audit disagrees.
+- **Albedo scenarios on Brown extrapolate.** Observed albedo is narrow, so +0.05 or more pushes most cells outside the joint support. The core flags these, and the numbers should not be used.
 
 ## Appendix B — References
 

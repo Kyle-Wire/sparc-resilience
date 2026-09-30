@@ -18,7 +18,7 @@
 
 **SPARC turns environmental and infrastructure data into causal, uncertainty-quantified intervention scenarios — powered by physics-constrained spatial machine learning and Bayesian causal inference.**
 
-Published in [*Urban Climate* (2025)](https://doi.org/10.1016/j.uclim.2025.102671), SPARC has since reached **94.4% R²** on urban heat island prediction in Providence, RI, and has been applied to **ForceSMIP climate forcing attribution** at global scale. The pipeline auto-tunes itself from a Bayesian Matérn correlogram, trains four geographically-weighted base models alongside their differentiable neural surrogates, fuses them through a **SharedTrunk + CityHead meta-learner** with sparse spatial attention and a **10-term staged-curriculum PDE loss**, validates causal structure with **MC³ DAG search**, **NUTS edge posteriors** (informed by Bayesian MGWR priors), and **DoWhy refutations**, then simulates physics-constrained, **budget-optimized** "what-if" scenarios with built-in uncertainty quantification — all from a single `project.yml` configuration file across **13 domain templates**.
+Published in [*Urban Climate* (2025)](https://doi.org/10.1016/j.uclim.2025.102671), SPARC has been applied to urban heat island prediction in Providence, RI (current core pipeline: out-of-fold R² ≈ 0.96 on spatially blocked folds, see [results](docs/results/providence_core.md)) and to **ForceSMIP climate forcing attribution** at global scale. The pipeline auto-tunes itself from a Bayesian Matérn correlogram, trains four geographically-weighted base models alongside their differentiable neural surrogates, fuses them through a **SharedTrunk + CityHead meta-learner** with sparse spatial attention and a **10-term staged-curriculum PDE loss**, validates causal structure with **MC³ DAG search**, **NUTS edge posteriors** (informed by Bayesian MGWR priors), and **DoWhy refutations**, then simulates physics-constrained, **budget-optimized** "what-if" scenarios with built-in uncertainty quantification — all from a single `project.yml` configuration file across **13 domain templates**.
 
 > **Get started:** [Watch the demo](#see-sparc-in-action) · [Try it locally](#quick-start) · [Download the desktop app](#desktop-app) · Interested in piloting? [Contact us](mailto:sparcurbanlabs@gmail.com)
 
@@ -31,6 +31,7 @@ Published in [*Urban Climate* (2025)](https://doi.org/10.1016/j.uclim.2025.10267
 - [Supported Domains](#supported-domains)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [Core Pipeline (single city)](#core-pipeline-single-city)
 - [Desktop App](#desktop-app)
 - [Results: Urban Heat Island](#results-urban-heat-island-brown-uhi)
 - [Results: ForceSMIP Climate Forcing Attribution](#results-forcesmip-climate-forcing-attribution)
@@ -236,6 +237,40 @@ sparc run -p project.yml -s 4      # Scenario simulation
 
 ---
 
+## Core Pipeline (single city)
+
+`sparc/core/` is the lean, tested implementation of the four goals. See [`docs/roadmap/CORE_ROADMAP.md`](docs/roadmap/CORE_ROADMAP.md) for the design, and Appendix C there for status. It runs one city end to end:
+
+| Stage | What it does |
+|---|---|
+| **S0** Data | Loads the CSV, converts coordinates to metres, recovers the lattice, applies QA clipping, and computes ΔT = T − background |
+| **S1** Area of influence | Full-plane FFT auto- and cross-correlograms with a permutation noise band, per-variable influence ranges, a bootstrap-gated anisotropy estimate, and focal (neighbourhood) features at ½r, r and 2r |
+| **S2** Base models | Ridge OLS, MGWR (exact FFT backfitting), a geographically weighted random forest, a GAM and a physics model, all fitted on one shared spatial-block partition |
+| **S3** Physics + stacker | Steady advection–diffusion–relaxation operator driven by an energy-balance source; a cross-fitted physics-informed MLP stacker with an operator penalty; cross-conformal intervals |
+| **S4** Saturation | Neighbourhood-adoption dose sweeps; per-cell saturating fits (d90, headroom, censoring); own-cell vs footprint marginal effects |
+| **S5** Scenarios | Add/set/scale edits with bounds, mediators (e.g. NDVI ← canopy) and re-featurisation through the trained stack, with fold-spread uncertainty and extrapolation flags |
+| **S6** Causal validation | Spatial DML, spillover (own vs neighbour), R-learner CATE, doubly robust dose-response, E-value and Cinelli–Hazlett RV, and a model-vs-causal audit |
+| **S7** Budget | Concave-segment allocation under a budget, optional equity weighting, and a closed-loop re-prediction check |
+
+```bash
+pip install -e .                  # or: pip install -r requirements-core.txt
+sparc core run --project configs/core_providence.yml --fast     # ~20 min smoke run (8k-point window)
+sparc core run --project configs/core_providence.yml            # full run, all stages
+sparc core synth --out ./synthetic_city                         # synthetic city with planted truths
+pytest tests/core -m "not slow"                                 # unit + synthetic + Providence tests
+```
+
+Each run writes a directory containing:
+- `manifest.json`, `report.md`
+- `predictions.parquet`
+- `influence.json`, `physics.json`
+- `response_<var>.parquet`
+- `scenarios.json`, `causal.json`, `optimize.json`
+
+The legacy `sparc run` stages below still work, and their defects have been fixed in place. New work should target the core.
+
+---
+
 ## Desktop App
 
 SPARC ships as a **native desktop application** built with Tauri v2 and React — no browser or cloud required. Your data stays on your machine.
@@ -260,7 +295,16 @@ SPARC ships as a **native desktop application** built with Tauri v2 and React �
 ## Results: Urban Heat Island (Brown UHI)
 
 **Study area:** Brown University campus and surrounding Providence, RI neighborhoods
-**Target variable:** Ambient Air Temperature z-score (AAT_z, °F)
+> **Read this first (2026-09-30 audit).** The numbers in this section come from the legacy pipeline *before* the fixes in [`CORE_ROADMAP.md`](docs/roadmap/CORE_ROADMAP.md) Appendix C, and should not be cited.
+>
+> - **R² 0.944 is not a neural meta-learner result.** The legacy neural stacker crashed before training, so Stage 2 fell back to a weighted average of base models.
+> - **That score was inflated by leakage.** In-sample surrogate targets leaked into the out-of-fold score, and the full refit mixed feet and metres.
+> - **The unit is °F, not z-units.** `AAT_z` is air temperature in °F, so the "z-units" below are °F.
+> - **Canopy scenarios were distorted.** Each one also removed impervious cover wherever canopy + impervious already exceeded 100% (35% of cells).
+>
+> Current results: [`docs/results/providence_core.md`](docs/results/providence_core.md).
+
+**Target variable:** Ambient air temperature (column `AAT_z`, °F; despite the name, not a z-score)
 **Observations:** 54,701 spatial points at ~30 m resolution
 **CRS:** EPSG:3438 (RI State Plane)
 **Predictors:** Pct_Canopy, Pct_Impervious, NDVI, Albedo, Elevation_m, Distance_from_water_m
@@ -463,7 +507,7 @@ Transparency builds trust. Here is what SPARC does well, where it has boundaries
 | **Physics constraints are user-specified** | Monotone signs, variable caps, priors, and diminishing-return tapers reflect domain knowledge encoded by the analyst. They improve plausibility but are not ground truth — review them critically for each application. |
 | **Extrapolation** | Scenarios that push variables beyond the training data range trigger extrapolation guards (Mahalanobis distance), but out-of-distribution predictions should always be interpreted cautiously. |
 | **Uncertainty quantification** | Monte Carlo draws are parametric (sampled over estimated coefficient distributions). True epistemic uncertainty — from model mis-specification or missing variables — may be wider than reported intervals. |
-| **Resolution sensitivity** | Performance varies with data density and resolution. The Providence UHI study (30 m, R² = 0.944) benefited from dense local data; coarser grids like ForceSMIP (2.5°, R² = 0.642) naturally yield lower explanatory power. |
+| **Resolution sensitivity** | Performance varies with data density and resolution. The Providence UHI study (30 m, core out-of-fold R² ≈ 0.96) benefited from dense local data; coarser grids like ForceSMIP (2.5°, R² = 0.642) naturally yield lower explanatory power. |
 | **Budget-constrained allocation** | Pareto-optimal spend-vs-benefit curves and Gini equity scores depend on a user-supplied per-cell cost surface. Garbage in, garbage out — review the cost model with the same scrutiny as the DAG. |
 | **Cross-sectional design** | The current pipeline models spatial variation at a single time slice. Longitudinal causal claims (e.g., "planting trees *will* cool a neighborhood over 10 years") require temporal extensions not yet implemented. |
 | **Causal discovery** | Automated structure learning (PC-stable, LiNGAM, GES) is provided as a diagnostic, not a replacement for expert DAG specification. Edge F1 against expert graphs is typically 0.6–0.8. |
@@ -492,7 +536,8 @@ Have ideas or want to collaborate? Reach out at [sparcurbanlabs@gmail.com](mailt
 ```
 sparc-resilience/
 ├── sparc/                   # Main package
-│   ├── __main__.py          # CLI entry point (sparc init / validate / run / scenario / report)
+│   ├── __main__.py          # CLI entry point (sparc init / validate / run / scenario / report / core)
+│   ├── core/                # Lean single-city pipeline S0–S7 (see Core Pipeline above)
 │   ├── config/              # Configuration loader, JSON schema validation, hardware profile
 │   ├── data/                # Data utilities, temporal helpers
 │   ├── models/              # OLS, GWR, GWRF, GGPGAM, GWEN, differentiable surrogates,
@@ -512,10 +557,10 @@ sparc-resilience/
 │   ├── scenario/            # Scenario builder/validator, budget allocation, scenario library
 │   ├── report/              # Report generation
 │   ├── registry/            # Artifact store (SQLite), city registry, domain template registry
-│   └── server/              # Local pipeline/IPC server for the desktop app
-├── templates/               # Domain templates (13 domains)
+│   ├── server/              # Local pipeline/IPC server for the desktop app
+│   └── templates/           # Domain templates (13 domains)
 ├── examples/                # Example projects (Brown UHI)
-├── tests/                   # Smoke tests
+├── tests/                   # Unit + regression tests; tests/core = core pipeline (CI)
 ├── docs/                    # MANUAL, PIPELINE_GUIDE, CONTRIBUTING, INTERPRETATION_GUIDE
 ├── sparc-desktop/           # Tauri v2 + React desktop application
 ├── scripts/                 # Helper scripts
