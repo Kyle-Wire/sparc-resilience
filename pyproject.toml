@@ -81,6 +81,14 @@ server = [
     "websockets>=12.0",
     "python-multipart>=0.0.9",
 ]
+studio = [
+    # SPARC Studio, the local web app (`sparc studio`). httpx is listed because FastAPI's TestClient needs it.
+    # fastapi 0.136.3 was flagged as a malicious PyPI upload (MAL-2026-4750)
+    "fastapi>=0.111,!=0.136.3",
+    "uvicorn>=0.29",
+    "threadpoolctl>=3",
+    "httpx>=0.27",
+]
 dask = [
     "dask[dataframe]>=2024.1",
     "dask-geopandas>=0.3",
@@ -106,6 +114,8 @@ include = ["sparc*"]
 [tool.setuptools.package-data]
 "*" = ["*.yml", "*.yaml", "*.json", "*.csv"]
 "sparc" = ["templates/**/*.yml", "templates/**/*.yaml", "templates/**/*.json", "templates/**/*.csv", "templates/**/*.py", "templates/**/.gitkeep", "templates/**/*.txt"]
+"sparc.studio" = ["static/**/*", "examples/**/*"]
+"sparc.core" = ["results_page/*.html"]
 
 [tool.ruff]
 target-version = "py310"
@@ -123,4 +133,6 @@ markers = [
     "integration: marks tests as integration tests (may be slow)",
     "network: marks tests that require external network access (OSF, APIs)",
     "slow: long-running statistical checks (deselect with -m 'not slow')",
+    "studio: SPARC Studio server and web app tests (tests/studio)",
+    "e2e: SPARC Studio end-to-end browser tests (Playwright; tests/studio/e2e)",
 ]
