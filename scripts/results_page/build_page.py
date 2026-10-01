@@ -109,9 +109,13 @@ def collect(run: Path, cfg) -> dict:
         L[f"A_{v}"] = _enc(r["max_cooling_A"])
         L[f"d90_{v}"] = _enc(r["d90"])
         cm = r["curve_model"].astype(str).to_numpy()
-        cls = np.where(r["censored"].to_numpy(bool), 3,
-                       np.where(cm == "saturating", 1, np.where(cm == "linear", 2, 0))).astype(np.uint8)
-        L[f"cls_{v}"] = {"kind": "cat", "b64": _b64(cls), "labels": ["no fit", "saturating", "linear", "censored"]}
+        # three coloured shapes (a map carries at most three distinguishable
+        # categorical colours); censored / insufficient cells are grey
+        cls = np.where(r["censored"].to_numpy(bool), 0,
+                       np.where(cm == "saturating", 1, np.where(cm == "linear", 2,
+                                np.where(cm == "sigmoid", 3, 0)))).astype(np.uint8)
+        L[f"cls_{v}"] = {"kind": "cat", "b64": _b64(cls),
+                         "labels": ["too little headroom to tell", "saturating", "linear", "accelerating (S-shaped)"]}
     scen_layers = []
     if (run / "scenario_deltas.parquet").exists():
         d = pd.read_parquet(run / "scenario_deltas.parquet")

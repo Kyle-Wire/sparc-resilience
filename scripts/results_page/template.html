@@ -389,7 +389,7 @@ add({ group: "Cooling effects", key: "fp_Pct_Impervious", name: "Impervious: foo
 add({ group: "Cooling effects", key: "fp_Albedo", name: "Albedo: footprint per +0.01", unit: `${U}`, scale: "div", center: 0, d: 4, mult: 0.01, desc: "Total temperature change when this cell's albedo rises by 0.01." });
 for (const [v, nm] of [["Pct_Canopy", "Canopy"], ["Pct_Impervious", "Impervious removal"], ["Albedo", "Albedo"]]) {
   const unit = v === "Albedo" ? "" : "pp";
-  add({ group: "Saturation", key: `cls_${v}`, name: `${nm}: response shape`, scale: "cat", desc: "Saturating: cooling levels off within the tested doses. Linear: no knee yet. Censored: too little headroom to tell." });
+  add({ group: "Saturation", key: `cls_${v}`, name: `${nm}: response shape`, scale: "cat", desc: "Saturating: cooling levels off within the tested doses. Linear: no knee yet. Accelerating: little effect at first, then a sharp rise before levelling off. Grey: too little headroom to tell." });
   add({ group: "Saturation", key: `marg_${v}`, name: `${nm}: cooling per unit at today's level`, unit: `${U}/${unit || "unit"}`, scale: "seq", d: 3, desc: "Initial slope of the fitted curve: the cooling the first unit of change would buy here. High values are the best places to act first." });
   add({ group: "Saturation", key: `A_${v}`, name: `${nm}: maximum cooling`, unit: U, scale: "seq", d: 2, desc: "Plateau of the fitted saturating curve (for linear cells, the cooling at the largest dose tested)." });
   add({ group: "Saturation", key: `d90_${v}`, name: `${nm}: dose for 90% of the maximum`, unit: unit, scale: "seq", d: v === "Albedo" ? 2 : 1, desc: "Neighbourhood dose that gets 90% of the achievable cooling. Small values mean the benefit saturates quickly." });
@@ -457,7 +457,7 @@ function render() {
   for (let i = 0; i < N; i++) {
     const p = ((G.ny - 1 - IY[i]) * G.nx + IX[i]) * 4; let c;
     if (Ly.scale === "folds") { c = FOLD[i] === curFold ? cat[0] : ((EXCL[i] >> curFold) & 1) ? cat[1] : grayc; }
-    else if (Ly.scale === "cat") { const k = vals[i]; c = k === 0 ? nodata : cat[k - 1]; }
+    else if (Ly.scale === "cat") { const k = vals[i]; c = k === 0 ? grayc : cat[k - 1]; }
     else if (Ly.scale === "climthr") { c = vals[i] >= THR ? cat[1] : grayc; }
     else if (Ly.scale === "climtemp") { c = colorFor({ scale: "div" }, vals[i]); }
     else { const v = vals[i]; if (!isFinite(v) || (Ly.zeroBlank && v <= 0)) { if (Ly.zeroBlank && isFinite(v)) c = nodata; else continue; } else c = colorFor(Ly, v * m); }
@@ -487,8 +487,8 @@ function drawLegend() {
   const Ly = cur; const box = $("legend"); box.replaceChildren();
   $("layerName").textContent = Ly.name; $("layerDesc").textContent = Ly.desc || "";
   if (Ly.scale === "folds" || Ly.scale === "cat" || Ly.scale === "climthr") {
-    const labs = Ly.scale === "folds" ? ["Held out (test)", "Buffer: dropped from training", "Training"] : Ly.scale === "climthr" ? [`At or above ${THR} ${U}`, `Below ${THR} ${U}`] : DATA.layers[Ly.key].labels.slice(1);
-    const cols = Ly.scale === "folds" ? [V("--s1"), V("--s2"), V("--gray-mark")] : Ly.scale === "climthr" ? [V("--s2"), V("--gray-mark")] : [V("--s1"), V("--s2"), V("--s3")];
+    const labs = Ly.scale === "folds" ? ["Held out (test)", "Buffer: dropped from training", "Training"] : Ly.scale === "climthr" ? [`At or above ${THR} ${U}`, `Below ${THR} ${U}`] : [...DATA.layers[Ly.key].labels.slice(1), DATA.layers[Ly.key].labels[0]];
+    const cols = Ly.scale === "folds" ? [V("--s1"), V("--s2"), V("--gray-mark")] : Ly.scale === "climthr" ? [V("--s2"), V("--gray-mark")] : [V("--s1"), V("--s2"), V("--s3"), V("--gray-mark")];
     const wrap = el("div", { class: "swatches" });
     labs.forEach((t, i) => { const r = el("div"); const s = el("span", { class: "sw" }); s.style.background = cols[i]; r.append(s, document.createTextNode(t)); wrap.append(r); });
     box.append(wrap); return;

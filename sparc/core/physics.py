@@ -14,8 +14,10 @@ Source (normalised sensible heat, per point, from the configured roles)
 ----------------------------------------------------------------------
 Day window (SW = sw_down, LW = lw_net)::
 
-    Q*   = SW·(1 − albedo)·(1 − s·h_κ(canopy/100)) + LW
-    h_κ(c) = (1 − e^{−c/κ}) / (1 − e^{−1/κ})        (shading saturates with cover; κ → ∞ is linear)
+    Q*   = SW·(1 − albedo)·(1 − s·h(canopy/100)) + LW
+    h(c) = (1 − e^{−c/κ}) / (1 − e^{−1/κ})            (default: saturating; κ → ∞ is linear)
+    h(c) = [σ((c−c0)/w) − σ(−c0/w)] / [σ((1−c0)/w) − σ(−c0/w)]   (shade_form: sigmoid —
+           accelerating above c0, e.g. canopy that cools sharply above ~40% cover)
     EF   = sigmoid(e0 + e1⁺·ndvi_c + e2⁺·canopy_c/100 − e3⁺·imp_c/100)    (x⁺ = softplus)
     ΔQ_S = a1·(imp/100)·Q*
     Q_H  = (Q* − ΔQ_S)·(1 − EF) − w⁺·1[water_distance ≤ dx/2]
@@ -103,6 +105,9 @@ KAPPA_BOUNDS = (0.05, 20.0)        # canopy-fraction scale of shade saturation
 KAPPA_PRIOR = (0.0, 3.0)           # log κ ~ N(0, 3²): a weak regulariser — a tighter prior pinned κ near 1
                                    # on the synthetic city (planted 0.15) and halved the shade nonlinearity
 KAPPA_INIT = 2.0
+# Optional S-shaped shade (physics.shade_form: sigmoid): h(c) rises fastest near c0.
+C0_BOUNDS = (0.05, 0.95)
+CW_BOUNDS = (0.02, 0.5)
 _EF0 = 0.35                      # initial evaporative fraction
 _EF_INIT = {"e1": 2.0, "e2": 1.0, "e3": 1.0}
 _EF_PRIOR_SD = 5.0               # weak: keeps flat directions from drifting
@@ -340,6 +345,9 @@ class PhysicsModel:
         self.seed = int(seed)
         self.dx = float(grid.dx)
         self.window = str(self.cfg.get("window") or "day").lower()
+        self.shade_form = str(self.cfg.get("shade_form") or "saturating").lower()
+        if self.shade_form not in ("saturating", "sigmoid"):
+            raise ValueError(f"physics.shade_form must be 'saturating' or 'sigmoid', got {self.shade_form!r}")
         if self.window not in ("day", "night"):
             raise ValueError(f"physics.window must be 'day' or 'night', got {self.window!r}")
         self.roles = {k: v for k, v in (self.cfg.get("roles") or {}).items() if v and k in _ROLES}
@@ -429,6 +437,8 @@ class PhysicsModel:
             "s": p(_logit(SOURCE_PRIORS["s"][0])),
             "ukc": p(_logit((math.log(KAPPA_INIT) - math.log(KAPPA_BOUNDS[0]))
                             / (math.log(KAPPA_BOUNDS[1]) - math.log(KAPPA_BOUNDS[0])))),
+            "uc0": p(_logit((0.4 - C0_BOUNDS[0]) / (C0_BOUNDS[1] - C0_BOUNDS[0]))),
+            "ucw": p(_logit((math.log(0.1) - math.log(CW_BOUNDS[0])) / (math.log(CW_BOUNDS[1]) - math.log(CW_BOUNDS[0])))),
             "a1": p(_logit(SOURCE_PRIORS["a1"][0])),
             "a1n": p(_logit(SOURCE_PRIORS["a1n"][0])),
             "e0": p(_logit(_EF0)),
@@ -443,7 +453,7 @@ class PhysicsModel:
         if self.fit_advection:
             names += ["ux", "uy"]
         if self.window == "day" and "canopy" in feats:
-            names += ["s", "ukc"]
+            names += ["s"] + (["uc0", "ucw"] if self.shade_form == "sigmoid" else ["ukc"])
         if "impervious" in feats:
             names.append("a1" if self.window == "day" else "a1n")
         names += [e for e, r in (("e1", "ndvi"), ("e2", "canopy"), ("e3", "impervious")) if r in feats]
@@ -463,6 +473,9 @@ class PhysicsModel:
             "s": torch.sigmoid(P["s"]),
             "kc": torch.exp(math.log(KAPPA_BOUNDS[0]) + (math.log(KAPPA_BOUNDS[1]) - math.log(KAPPA_BOUNDS[0]))
                             * torch.sigmoid(P["ukc"])),
+            "c0": C0_BOUNDS[0] + (C0_BOUNDS[1] - C0_BOUNDS[0]) * torch.sigmoid(P["uc0"]),
+            "cw": torch.exp(math.log(CW_BOUNDS[0]) + (math.log(CW_BOUNDS[1]) - math.log(CW_BOUNDS[0]))
+                            * torch.sigmoid(P["ucw"])),
             "a1": torch.sigmoid(P["a1"]),
             "a1n": torch.sigmoid(P["a1n"]),
             "e0": P["e0"],
@@ -478,7 +491,10 @@ class PhysicsModel:
         pen = 0.0
         if self.window == "day" and "canopy" in feats:
             pen = pen + ((T["s"] - SOURCE_PRIORS["s"][0]) / SOURCE_PRIORS["s"][1]) ** 2
-            pen = pen + ((torch.log(T["kc"]) - KAPPA_PRIOR[0]) / KAPPA_PRIOR[1]) ** 2
+            if self.shade_form == "sigmoid":
+                pen = pen + ((T["c0"] - 0.4) / 0.3) ** 2 + ((torch.log(T["cw"]) - math.log(0.1)) / 1.5) ** 2
+            else:
+                pen = pen + ((torch.log(T["kc"]) - KAPPA_PRIOR[0]) / KAPPA_PRIOR[1]) ** 2
         if "impervious" in feats:
             k = "a1" if self.window == "day" else "a1n"
             pen = pen + ((T[k] - SOURCE_PRIORS[k][0]) / SOURCE_PRIORS[k][1]) ** 2
@@ -509,7 +525,12 @@ class PhysicsModel:
         one_minus_ef = 1.0 - torch.sigmoid(z)
         if self.window == "day":
             alb = tf["albedo"] if "albedo" in tf else _DEFAULT_ALBEDO
-            if "canopy" in tf:
+            if "canopy" in tf and self.shade_form == "sigmoid":
+                c0, cw = T["c0"], T["cw"]
+                s0 = torch.sigmoid(-c0 / cw)
+                h = (torch.sigmoid((tf["canopy"] - c0) / cw) - s0) / (torch.sigmoid((1.0 - c0) / cw) - s0)
+                shade = 1.0 - T["s"] * h
+            elif "canopy" in tf:
                 kc = T["kc"]
                 shade = 1.0 - T["s"] * (1.0 - torch.exp(-tf["canopy"] / kc)) / (1.0 - torch.exp(-1.0 / kc))
             else:
@@ -758,7 +779,8 @@ class PhysicsModel:
         return {
             "L_m": T["L"], "vx_m": T["vx"], "vy_m": T["vy"], "v_norm_m": float(math.hypot(T["vx"], T["vy"])),
             "a": self.a, "b": self.b, "gamma": self.gamma, "beta_x": self.beta_x, "beta_y": self.beta_y,
-            "s": T["s"], "kappa_canopy": T["kc"], "a1": T["a1"], "a1n": T["a1n"], "e0": T["e0"], "e1": T["e1"], "e2": T["e2"],
+            "s": T["s"], "shade_form": self.shade_form, "kappa_canopy": T["kc"],
+            "shade_c0": T["c0"], "shade_width": T["cw"], "a1": T["a1"], "a1n": T["a1n"], "e0": T["e0"], "e1": T["e1"], "e2": T["e2"],
             "e3": T["e3"], "w": T["w"], "q_mean": self._q_mean,
             "train_rmse": self.train_rmse, "train_r2": self.train_r2, "fit_warning": self.fit_warning,
             "window": self.window, "roles_used": list(self.roles_used), "pad_cells": int(self.pad),

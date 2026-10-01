@@ -62,6 +62,25 @@ def test_fit_saturation_recovers_planted_scale_and_flags_linear_and_censored():
     assert np.all(np.isnan(out["d90"][200:]) | (out["d90"][200:] <= 40))
 
 
+def test_fit_saturation_detects_accelerating_sigmoid_curves():
+    rng = np.random.default_rng(4)
+    doses = np.array([0, 5, 10, 15, 20, 30, 40, 50], dtype=float)
+    n = 300
+    D = np.repeat(doses[:, None], n, axis=1)
+    sig = lambda z: 1 / (1 + np.exp(-z))                                   # noqa: E731
+    D0, w = 25.0, 4.0
+    f = (sig((D - D0) / w) - sig(-D0 / w)) / (1 - sig(-D0 / w))
+    B = np.empty_like(D)
+    B[:, :150] = 2.0 * f[:, :150] + 0.01 * rng.standard_normal((len(doses), 150))          # accelerating
+    B[:, 150:] = 2.0 * (1 - np.exp(-D[:, 150:] / 8.0)) + 0.01 * rng.standard_normal((len(doses), 150))  # saturating
+    B[0] = 0.0
+    out = fit_saturation(D, B, np.ones_like(D, dtype=bool))
+    assert (out["model"][:150] == "sigmoid").mean() > 0.8
+    assert np.nanmedian(out["inflection"][:150]) == pytest.approx(D0, rel=0.25)
+    assert (out["model"][150:] == "saturating").mean() > 0.8
+    assert np.nanmedian(out["slope0"][:150]) < 0.2 * np.nanmedian(out["slope0"][150:])  # slow start
+
+
 def test_gaussian_conv_adjoint_identity():
     rng = np.random.default_rng(2)
     a, b = rng.standard_normal((30, 30)), rng.standard_normal((30, 30))
@@ -260,6 +279,29 @@ def test_physics_learns_saturating_canopy_shade(synthetic_core_data):
     tr, _te = next(iter(folds.split()))
     m = PhysicsBaseModel(ctx.grid, cfg.raw["physics"], L_init=inf.L_prior_m, seed=0).fit(ctx, tr)
     assert m.params["kappa_canopy"] < 0.5                   # planted d_c = 15 pp → κ = 0.15
+
+
+def test_physics_sigmoid_shade_recovers_accelerating_canopy():
+    from sparc.core.base_models import FeatureContext, PhysicsBaseModel
+    from sparc.core.config import core_config_from_dict
+    from sparc.core.cv import make_spatial_folds
+    from sparc.core.data import prepare_frame
+    from sparc.core.synthetic import make_synthetic_city, synthetic_city_config
+
+    city = make_synthetic_city(seed=1, canopy_form="sigmoid")
+    cfg = core_config_from_dict(synthetic_city_config())
+    data = prepare_frame(city.frame, cfg)
+    ctx = FeatureContext(frame=data.frame, X=data.X, F=pd.DataFrame(index=data.frame.index), coords=data.coords,
+                         grid=data.grid, meta={"y": data.y})
+    tr, te = next(iter(make_spatial_folds(data.coords, 3, 600.0, 200.0, 42).split()))
+    rmse = {}
+    for form in ("saturating", "sigmoid"):
+        pc = dict(cfg.raw["physics"], shade_form=form)
+        m = PhysicsBaseModel(data.grid, pc, L_init=150.0, seed=0).fit(ctx, tr)
+        rmse[form] = float(np.sqrt(np.mean((m.predict(ctx)[te] - data.y[te]) ** 2)))
+        if form == "sigmoid":
+            assert m.params["shade_c0"] == pytest.approx(0.40, abs=0.12)     # planted inflection 40 % cover
+    assert rmse["sigmoid"] < rmse["saturating"]
 
 
 def test_causal_crosscheck_attaches_linear_band():

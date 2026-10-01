@@ -58,12 +58,28 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def fit_saturation(D: np.ndarray, B: np.ndarray, valid: np.ndarray, n_grid: int = 32, min_valid: int = 4,
-                   improvement: float = 0.05) -> dict:
-    """Per-column fit of B = A·(1 − exp(−D/d_s)) (arrays shaped doses × cells).
+def _sig(z):
+    return 1.0 / (1.0 + np.exp(-z))
 
-    Returns arrays over cells: A, ds, d90, r2, slope (A/d_s or linear slope),
-    model ("saturating" | "linear" | "insufficient"), censored.
+
+def fit_saturation(D: np.ndarray, B: np.ndarray, valid: np.ndarray, n_grid: int = 32, min_valid: int = 4,
+                   improvement: float = 0.05, allow_sigmoid: bool = True) -> dict:
+    """Per-column fit of the dose–benefit curve (arrays shaped doses × cells).
+
+    Three shapes compete, each with closed-form amplitude A on a grid of its
+    shape parameters:
+
+    * linear      B = s·D
+    * saturating  B = A·(1 − exp(−D/d_s))                     (diminishing returns)
+    * sigmoid     B = A·[σ((D−D0)/w) − σ(−D0/w)] / [1 − σ(−D0/w)]
+                  (accelerating, then saturating — e.g. canopy cooling that
+                  rises sharply above ~40% cover, Ziter et al. 2019)
+
+    A more complex shape is kept only if it lowers the SSE by ``improvement``
+    relative to the simpler ones *and* has the lower AIC.  Returns arrays over
+    cells: A, ds, inflection (D0), d90, r2, slope0 (marginal benefit at the
+    current dose), model ("linear" | "saturating" | "sigmoid" | "insufficient"),
+    censored.
     """
     D = np.where(valid, D, 0.0)
     B = np.where(valid, B, 0.0)
@@ -92,16 +108,54 @@ def fit_saturation(D: np.ndarray, B: np.ndarray, valid: np.ndarray, n_grid: int 
 
     enough = n_valid >= min_valid
     saturating = enough & (best_sse < (1.0 - improvement) * lin_sse)
+
+    # sigmoid alternative (3 parameters)
+    sg_sse = np.full(D.shape[1], np.inf)
+    sg_A = np.zeros(D.shape[1])
+    sg_D0 = np.full(D.shape[1], np.nan)
+    sg_w = np.full(D.shape[1], np.nan)
+    if allow_sigmoid:
+        for D0 in np.linspace(0.15, 0.85, 8) * top:
+            for w in np.array([0.04, 0.08, 0.15]) * top:
+                s0 = _sig(-D0 / w)
+                f = np.where(valid, (_sig((D - D0) / w) - s0) / (1.0 - s0), 0.0)
+                ff = (f * f).sum(axis=0)
+                A = np.where(ff > 0, (f * B).sum(axis=0) / np.maximum(ff, 1e-300), 0.0)
+                sse = (np.where(valid, B - A * f, 0.0) ** 2).sum(axis=0)
+                better = sse < sg_sse
+                sg_sse, sg_A = np.where(better, sse, sg_sse), np.where(better, A, sg_A)
+                sg_D0, sg_w = np.where(better, D0, sg_D0), np.where(better, w, sg_w)
+    nv = np.maximum(n_valid, 1)
+
+    def aic(sse, k):
+        return nv * np.log(np.maximum(sse, 1e-300) / nv) + 2 * k
+
+    simpler = np.where(saturating, best_sse, lin_sse)
+    sigmoid = (enough & allow_sigmoid & (sg_sse < (1.0 - improvement) * simpler)
+               & (aic(sg_sse, 3) < np.where(saturating, aic(best_sse, 2), aic(lin_sse, 1))))
+    saturating = saturating & ~sigmoid
+
     censored = saturating & (best_ds >= grid[-2])                  # knee beyond the tested range
     d90 = best_ds * math.log(10.0)
     d90 = np.where(saturating & ~censored & (d90 <= dmax), d90, np.nan)
-    slope = np.where(saturating, best_A / best_ds, lin_slope)
-    sse = np.where(saturating, best_sse, lin_sse)
+    # sigmoid: d90 solves f(d) = 0.9
+    s0 = _sig(-sg_D0 / sg_w)
+    p90 = 0.9 * (1.0 - s0) + s0
+    with np.errstate(invalid="ignore", divide="ignore"):
+        d90_sg = sg_D0 + sg_w * np.log(p90 / (1.0 - p90))
+    sg_cens = sigmoid & ~(d90_sg <= dmax)
+    censored = censored | sg_cens
+    d90 = np.where(sigmoid & ~sg_cens, d90_sg, d90)
+    slope_sg = sg_A * s0 * (1.0 - s0) / sg_w / (1.0 - s0)
+    slope = np.where(sigmoid, slope_sg, np.where(saturating, best_A / best_ds, lin_slope))
+    sse = np.where(sigmoid, sg_sse, np.where(saturating, best_sse, lin_sse))
     r2 = np.where(sst > 0, 1.0 - sse / np.maximum(sst, 1e-300), np.nan)
-    model = np.where(~enough, "insufficient", np.where(saturating, "saturating", "linear"))
+    model = np.where(~enough, "insufficient",
+                     np.where(sigmoid, "sigmoid", np.where(saturating, "saturating", "linear")))
     return {
-        "A": np.where(saturating, best_A, np.nan),
+        "A": np.where(sigmoid, sg_A, np.where(saturating, best_A, np.nan)),
         "ds": np.where(saturating & ~censored, best_ds, np.nan),
+        "inflection": np.where(sigmoid, sg_D0, np.nan),
         "d90": d90,
         "slope0": np.where(enough, slope, np.nan),
         "r2": np.where(enough, r2, np.nan),
@@ -333,6 +387,7 @@ class ResponseEngine:
         maps = pd.DataFrame({
             "max_cooling_A": fit["A"],
             "saturation_scale_ds": fit["ds"],
+            "inflection_dose": fit["inflection"],
             "d90": fit["d90"],
             "marginal_benefit_per_unit": fit["slope0"],
             "curve_model": fit["model"],
@@ -352,6 +407,7 @@ class ResponseEngine:
             "frac_saturating": float(np.mean(sat)),
             "frac_censored": float(np.mean(fit["censored"])),
             "frac_linear": float(np.mean(fit["model"] == "linear")),
+            "frac_sigmoid": float(np.mean(fit["model"] == "sigmoid")),
             "median_d90": float(np.nanmedian(fit["d90"])) if np.isfinite(fit["d90"]).any() else None,
             "median_max_cooling": float(np.nanmedian(fit["A"])) if np.isfinite(fit["A"]).any() else None,
             "mean_own_effect": float(np.mean(m["own"])),

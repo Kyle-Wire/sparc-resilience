@@ -100,7 +100,7 @@ class SyntheticCity:
         a·(Gᵀ∗mask)_i·∂q_i/∂c_i, including the NDVI mediator path."""
         t = self.truth
         c = self.frame["canopy"].to_numpy(float)
-        dq = -t["A_c"] * np.exp(-c / t["d_c"]) / t["d_c"] - t["w_ndvi"] * t["k_ndvi"]
+        dq = -t["A_c"] * canopy_shape_derivative(c, t) - t["w_ndvi"] * t["k_ndvi"]
         gm = ops.green_mass(self.mask.astype(float), t["L"], t["v"], t["dx"])
         return t["a"] * gm[self.fields["_iy"], self.fields["_ix"]] * dq
 
@@ -108,14 +108,31 @@ class SyntheticCity:
         """Exact ΔT change at every point for a uniform canopy increment
         (NDVI updated through its known mediator law)."""
         t = self.truth
-        c = self.fields["canopy"]
-        dq = -t["A_c"] * np.exp(-np.nan_to_num(c) / t["d_c"]) * (1.0 - np.exp(-canopy_increment / t["d_c"]))
+        c = np.nan_to_num(self.fields["canopy"])
+        dq = -t["A_c"] * (canopy_shape(c + canopy_increment, t) - canopy_shape(c, t))
         dq = np.where(self.mask, dq, 0.0)
         # NDVI mediator: ndvi += k_ndvi·Δc, entering q with weight -w_ndvi.
         dq = dq - t["w_ndvi"] * t["k_ndvi"] * canopy_increment * self.mask
         dphi = ops.solve(dq, t["L"], t["v"], dx=t["dx"])
         rows, cols = self.fields["_iy"], self.fields["_ix"]
         return t["a"] * dphi[rows, cols]
+
+
+def canopy_shape(c: np.ndarray, t: dict) -> np.ndarray:
+    """Planted canopy cooling shape h(c) ∈ [0, 1) (times A_c in the source)."""
+    if t.get("canopy_form", "saturating") == "sigmoid":
+        c0, w = t["c0"], t["cw"]
+        s0 = _sigmoid(-c0 / w)
+        return (_sigmoid((c - c0) / w) - s0) / (1.0 - s0)
+    return 1.0 - np.exp(-c / t["d_c"])
+
+
+def canopy_shape_derivative(c: np.ndarray, t: dict) -> np.ndarray:
+    if t.get("canopy_form", "saturating") == "sigmoid":
+        c0, w = t["c0"], t["cw"]
+        s0, s = _sigmoid(-c0 / w), _sigmoid((c - c0) / w)
+        return s * (1.0 - s) / w / (1.0 - s0)
+    return np.exp(-c / t["d_c"]) / t["d_c"]
 
 
 def make_synthetic_city(
@@ -126,6 +143,7 @@ def make_synthetic_city(
     v: tuple[float, float] = (60.0, 0.0),
     seed: int = 0,
     noise_frac: float = 0.05,
+    canopy_form: str = "saturating",
 ) -> SyntheticCity:
     """Synthetic city on an n×n lattice (dx metres) with a ragged footprint.
 
@@ -172,11 +190,12 @@ def make_synthetic_city(
     water_dist = ndimage.distance_transform_edt(~water) * dx
 
     A_c, d_c = 1.6, 15.0
+    shape_t = {"canopy_form": canopy_form, "d_c": d_c, "c0": 40.0, "cw": 6.0}
     w_ndvi = 1.0
     w_water = 1.2
     q = (
         (1.0 - albedo) * (0.4 + 0.6 * impervious / 100.0)
-        - A_c * (1.0 - np.exp(-canopy / d_c))
+        - A_c * canopy_shape(canopy, shape_t)
         - w_ndvi * ndvi
         - w_water * water
     )
@@ -217,6 +236,7 @@ def make_synthetic_city(
     }
     truth = {
         "L": L, "v": v, "a": a, "dx": dx, "A_c": A_c, "d_c": d_c, "gamma": gamma,
+        "canopy_form": canopy_form, "c0": shape_t["c0"], "cw": shape_t["cw"],
         "k_ndvi": k_ndvi, "w_ndvi": w_ndvi, "w_water": w_water,
         "influence_radius_90": kernel_mass_radius(L, v, dx, 0.9),
         "noise_sd": noise_frac * sd,
