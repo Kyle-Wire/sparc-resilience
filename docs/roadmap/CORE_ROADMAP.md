@@ -414,8 +414,26 @@ The core is a lean, self-contained package (numpy, scipy, pandas, scikit-learn, 
   - It is fixed, but no legacy number from before this date should be cited.
 - **Other latent crashes:** undefined names in `v2_neural_training.py` (`get_active_store`, `model`, `coords_t`, `self`), `decision_stage.main`, `scenarios.benefit` and the mediation logger.
 - **`AAT_z` in `brown4.csv` is air temperature in °F** (81–93.5), not a z-score, and 72% of values are whole degrees. RMSE below about 0.29 °F is below the rounding noise.
-- **On Brown the operator penalty does not help.** λ = 0 wins the out-of-fold tuning, and forcing physics as the backbone overstated canopy and albedo effects against the causal estimates. The default is therefore `physics_mode: feature`: the network learns how much of the physics to use.
-- **Fitted effects are attenuated (known limitation, next step).** On the synthetic city with planted truths, the stack recovers about 40–45% of the planted canopy effect, with a spatial-pattern correlation of about 0.8. Every base model lands below 65%:
+- **The core's own CV was leaking until 2026-09-30.** The block-size cap used the ΔT target range instead of the y-coordinate range, which gave 4 m blocks: random-point CV in disguise. Under it:
+  - the stack scored R² 0.975;
+  - the interpolating forest dominated;
+  - the canopy footprint came out with the wrong sign.
+
+  With the fix (2 km blocks, 667 m buffer, 23 blocks), the stack scores **R² 0.56 / RMSE 1.14 °F** on unseen neighbourhoods. A reporting-only skill-vs-distance table (`--cv-curve`) shows the decay:
+
+  | Held-out unit | R² |
+  |---|---|
+  | random cells | 0.975 |
+  | 500 m blocks | 0.74 |
+  | 1 km blocks | 0.66 |
+  | 2 km blocks | 0.56 |
+
+- **Under honest CV the neural residual does not earn its place, on Brown or on the synthetic city.**
+  - The stack is now a non-negative blend of base models. A gated MLP residual competes with it out of fold at each λ_PDE, and the residual helps only under leaky random-cell CV.
+  - On Brown the blend is GAM 0.59 + physics 0.35. The physics model alone scores R² 0.51 on unseen blocks (L ≈ 240 m, no advection).
+  - On the synthetic city the blend puts about 0.88 on physics, which generated the data.
+  - `physics_mode: feature` stays the default. Forcing physics as the backbone overstated canopy and albedo effects against the causal estimates.
+- **Fitted effects are attenuated (known limitation, next step).** On the synthetic city with planted truths, the stack recovers **53%** of the planted canopy footprint, with spatial correlation 0.87. Shares by base model, measured before the blend change:
 
   | Model | Share of planted effect |
   |---|---|
@@ -430,11 +448,29 @@ The core is a lean, self-contained package (numpy, scipy, pandas, scikit-learn, 
   - trees flatten effects;
   - the linear shade term cannot follow a saturating response.
 
-  MGWR originally sat at 10% because it saw only raw, own-cell inputs; giving it the influence-range focal features fixed that and also halved its RMSE. The S6 audit exists to catch this on real data, and on Brown the canopy footprint agrees with the causal θ_own + θ_nbr. Next steps:
+  MGWR originally sat at 10% because it saw only raw, own-cell inputs; giving it the influence-range focal features fixed that and also halved its RMSE. Next steps:
   - Spatial+ residualised covariates in MGWR/GAM (Dupont et al. 2022);
   - a saturating shade term in the physics source;
-  - reporting audit-calibrated scenario magnitudes when the audit disagrees.
-- **Albedo scenarios on Brown extrapolate.** Observed albedo is narrow, so +0.05 or more pushes most cells outside the joint support. The core flags these, and the numbers should not be used.
+  - audit-calibrated scenario magnitudes.
+- **On Brown the S6 audit agrees on the effects that drive scenarios.** The model's neighbourhood-adoption slopes match the causal θ_own + θ_nbr:
+
+  | Treatment | Model | Causal |
+  |---|---|---|
+  | Canopy (per pp) | −0.026 | −0.011 ± 0.008 |
+  | Impervious (per pp) | +0.065 | +0.044 ± 0.012 |
+  | Albedo (per +0.1) | −0.79 | −0.63 ± 0.28 |
+
+  The one flag is canopy's own-cell effect: a small warming association once neighbours are controlled (+0.007 ± 0.001 per pp), against about 0 in the model. Canopy's cooling acts through the neighbourhood (θ_nbr −0.018).
+- **Albedo scenarios on Brown extrapolate.** Observed albedo is narrow:
+
+  | Albedo change | Edited cells beyond observed conditions |
+  |---|---|
+  | +0.05 | 8% |
+  | +0.1 | 23% |
+  | +0.15 or more | essentially all |
+
+  The core flags these, and the large-change numbers should not be used.
+- **Results:** `docs/results/providence_core.md`. The interactive page is built by `scripts/results_page/build_page.py` from any run directory.
 
 ## Appendix B — References
 

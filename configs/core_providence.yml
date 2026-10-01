@@ -144,3 +144,11 @@ core:
 
   output:
     dir: ../output/core/providence
+
+  report:                        # text for scripts/results_page/build_page.py
+    title: Providence Heat Model
+    place: Providence, RI
+    area: the Brown University / Providence study area
+    caveats:
+      - "For tree canopy the causal check agrees with the model on the neighbourhood effect, but finds a small warming association for a cell's own canopy once its neighbours are accounted for, where the model sees almost none. Both agree that canopy's cooling comes from the surrounding area rather than the cell itself."
+      - "Numbers from the earlier pipeline (R² 0.944, 'z-units') came from a leaky evaluation and a neural stacker that never trained. AAT_z is air temperature in °F. Use this page instead."

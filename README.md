@@ -18,7 +18,7 @@
 
 **SPARC turns environmental and infrastructure data into causal, uncertainty-quantified intervention scenarios — powered by physics-constrained spatial machine learning and Bayesian causal inference.**
 
-Published in [*Urban Climate* (2025)](https://doi.org/10.1016/j.uclim.2025.102671), SPARC has been applied to urban heat island prediction in Providence, RI (current core pipeline: out-of-fold R² ≈ 0.96 on spatially blocked folds, see [results](docs/results/providence_core.md)) and to **ForceSMIP climate forcing attribution** at global scale. The pipeline auto-tunes itself from a Bayesian Matérn correlogram, trains four geographically-weighted base models alongside their differentiable neural surrogates, fuses them through a **SharedTrunk + CityHead meta-learner** with sparse spatial attention and a **10-term staged-curriculum PDE loss**, validates causal structure with **MC³ DAG search**, **NUTS edge posteriors** (informed by Bayesian MGWR priors), and **DoWhy refutations**, then simulates physics-constrained, **budget-optimized** "what-if" scenarios with built-in uncertainty quantification — all from a single `project.yml` configuration file across **13 domain templates**.
+Published in [*Urban Climate* (2025)](https://doi.org/10.1016/j.uclim.2025.102671), SPARC has been applied to urban heat island prediction in Providence, RI (current core pipeline: R² 0.56 when whole 2 km neighbourhoods are held out, 0.74 at 500 m; see [results](docs/results/providence_core.md)) and to **ForceSMIP climate forcing attribution** at global scale. The pipeline auto-tunes itself from a Bayesian Matérn correlogram, trains four geographically-weighted base models alongside their differentiable neural surrogates, fuses them through a **SharedTrunk + CityHead meta-learner** with sparse spatial attention and a **10-term staged-curriculum PDE loss**, validates causal structure with **MC³ DAG search**, **NUTS edge posteriors** (informed by Bayesian MGWR priors), and **DoWhy refutations**, then simulates physics-constrained, **budget-optimized** "what-if" scenarios with built-in uncertainty quantification — all from a single `project.yml` configuration file across **13 domain templates**.
 
 > **Get started:** [Watch the demo](#see-sparc-in-action) · [Try it locally](#quick-start) · [Download the desktop app](#desktop-app) · Interested in piloting? [Contact us](mailto:sparcurbanlabs@gmail.com)
 
@@ -255,7 +255,9 @@ sparc run -p project.yml -s 4      # Scenario simulation
 ```bash
 pip install -e .                  # or: pip install -r requirements-core.txt
 sparc core run --project configs/core_providence.yml --fast     # ~20 min smoke run (8k-point window)
-sparc core run --project configs/core_providence.yml            # full run, all stages
+sparc core run --project configs/core_providence.yml            # full run, all stages (~40 min on 3 threads)
+sparc core run --project configs/core_providence.yml --cv-curve --resume   # + skill-vs-distance CV table; resume after an interruption
+python scripts/results_page/build_page.py output/core/providence/providence_uhi configs/core_providence.yml   # interactive results page
 sparc core synth --out ./synthetic_city                         # synthetic city with planted truths
 pytest tests/core -m "not slow"                                 # unit + synthetic + Providence tests
 ```
@@ -507,7 +509,7 @@ Transparency builds trust. Here is what SPARC does well, where it has boundaries
 | **Physics constraints are user-specified** | Monotone signs, variable caps, priors, and diminishing-return tapers reflect domain knowledge encoded by the analyst. They improve plausibility but are not ground truth — review them critically for each application. |
 | **Extrapolation** | Scenarios that push variables beyond the training data range trigger extrapolation guards (Mahalanobis distance), but out-of-distribution predictions should always be interpreted cautiously. |
 | **Uncertainty quantification** | Monte Carlo draws are parametric (sampled over estimated coefficient distributions). True epistemic uncertainty — from model mis-specification or missing variables — may be wider than reported intervals. |
-| **Resolution sensitivity** | Performance varies with data density and resolution. The Providence UHI study (30 m, core out-of-fold R² ≈ 0.96) benefited from dense local data; coarser grids like ForceSMIP (2.5°, R² = 0.642) naturally yield lower explanatory power. |
+| **Resolution sensitivity** | Performance varies with data density and resolution. The Providence UHI study (30 m; core R² 0.56 on held-out 2 km blocks, 0.74 on 500 m blocks) benefited from dense local data; coarser grids like ForceSMIP (2.5°, R² = 0.642) naturally yield lower explanatory power. |
 | **Budget-constrained allocation** | Pareto-optimal spend-vs-benefit curves and Gini equity scores depend on a user-supplied per-cell cost surface. Garbage in, garbage out — review the cost model with the same scrutiny as the DAG. |
 | **Cross-sectional design** | The current pipeline models spatial variation at a single time slice. Longitudinal causal claims (e.g., "planting trees *will* cool a neighborhood over 10 years") require temporal extensions not yet implemented. |
 | **Causal discovery** | Automated structure learning (PC-stable, LiNGAM, GES) is provided as a diagnostic, not a replacement for expert DAG specification. Edge F1 against expert graphs is typically 0.6–0.8. |

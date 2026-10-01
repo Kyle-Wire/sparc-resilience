@@ -1,0 +1,759 @@
+<title>{{TITLE}}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@87,600;87,700&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a single reading column (≤ 1120px) with full-width map explorer; sections stack, charts wrap to one column on phones. */
+:root {
+  --page: #f5f6f4;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #7a7974;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --line: rgba(11, 11, 11, 0.10);
+  --accent: #2a78d6;
+  --accent-ink: #1c5cab;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a;
+  --gray-mark: #b9b8b1;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+  --good-ink: #006300; --warn-ink: #8a5a00; --crit-ink: #a8282a;
+  --chip: #eceeea;
+  --font-display: "Archivo", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page: #0f100f; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #9a998f;
+    --grid: #2c2c2a; --axis: #383835; --line: rgba(255, 255, 255, 0.10);
+    --accent: #3987e5; --accent-ink: #86b6ef; --s1: #3987e5; --s2: #d95926; --s3: #199e70; --gray-mark: #5e5d58;
+    --good-ink: #0ca30c; --warn-ink: #fab219; --crit-ink: #e66767; --chip: #242423;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --page: #0f100f; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #9a998f;
+  --grid: #2c2c2a; --axis: #383835; --line: rgba(255, 255, 255, 0.10);
+  --accent: #3987e5; --accent-ink: #86b6ef; --s1: #3987e5; --s2: #d95926; --s3: #199e70; --gray-mark: #5e5d58;
+  --good-ink: #0ca30c; --warn-ink: #fab219; --crit-ink: #e66767; --chip: #242423;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--page); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.55; }
+.wrap { max-width: 1120px; margin: 0 auto; padding-inline: 20px; padding-block: 0 64px; }
+h1, h2, h3 { font-family: var(--font-display); font-stretch: 87%; text-wrap: balance; margin: 0; letter-spacing: -0.01em; }
+h1 { font-size: clamp(2rem, 5vw, 3.1rem); line-height: 1.05; font-weight: 700; }
+h2 { font-size: 1.55rem; font-weight: 700; line-height: 1.15; }
+h3 { font-size: 1.05rem; font-weight: 600; }
+p { margin: 0; }
+.prose { max-width: 66ch; color: var(--ink-2); }
+.prose strong { color: var(--ink); font-weight: 600; }
+.eyebrow { font-family: var(--font-mono); font-size: 0.74rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.mono { font-family: var(--font-mono); }
+.num { font-variant-numeric: tabular-nums; }
+
+/* nav */
+.nav { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: color-mix(in srgb, var(--page) 92%, transparent); backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); }
+.nav ul { list-style: none; margin: 0 auto; padding: 10px 20px; max-width: 1120px; display: flex; gap: 18px; overflow-x: auto; scrollbar-width: none; }
+.nav a { color: var(--ink-2); text-decoration: none; font-size: 0.86rem; white-space: nowrap; }
+.nav a:hover, .nav a:focus-visible { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+
+/* masthead */
+.mast { display: grid; gap: 18px; padding-block: 40px 28px; }
+.lede { font-size: 1.08rem; max-width: 62ch; color: var(--ink-2); }
+.facts { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 0; font-size: 0.85rem; }
+.facts div { display: flex; gap: 6px; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; font-family: var(--font-mono); font-size: 0.82rem; }
+
+/* KPI row */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; gap: 4px; align-content: start; }
+.kpi .label { font-size: 0.82rem; color: var(--ink-2); }
+.kpi .value { font-size: 2rem; font-weight: 600; line-height: 1.1; }
+.kpi .value small { font-size: 0.95rem; font-weight: 500; color: var(--ink-2); margin-left: 3px; }
+.kpi .note { font-size: 0.8rem; color: var(--muted); }
+
+section.block { display: grid; gap: 16px; padding-block: 44px 0; scroll-margin-top: 56px; }
+.block > header { display: grid; gap: 8px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; min-width: 0; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.cap { font-size: 0.83rem; color: var(--muted); }
+
+/* map explorer */
+.explorer { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; align-items: start; }
+@media (max-width: 860px) { .explorer { grid-template-columns: minmax(0, 1fr); } }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg button { font: inherit; font-size: 0.84rem; padding: 6px 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.seg button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+select { font: inherit; font-size: 0.86rem; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); max-width: 100%; }
+.mapbox { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px; min-width: 0; }
+.mapbox canvas { display: block; width: 100%; height: auto; image-rendering: pixelated; cursor: crosshair; touch-action: none; }
+.mapbox .overlay { position: absolute; top: 10px; left: 10px; width: calc(100% - 20px); height: calc(100% - 20px); pointer-events: none; }
+.side { display: grid; gap: 12px; min-width: 0; }
+.side .card { display: grid; gap: 8px; }
+.legend canvas { width: 100%; height: 14px; border-radius: 3px; display: block; }
+.legend .ticks { display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.swatches { display: grid; gap: 6px; font-size: 0.85rem; }
+.swatches span.sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 8px; vertical-align: -1px; }
+.readout { font-size: 0.86rem; display: grid; gap: 3px; min-height: 92px; }
+.readout .big { font-size: 1.35rem; font-weight: 600; }
+.readout .dim { color: var(--muted); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 0.84rem; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* charts */
+.chart svg { width: 100%; height: auto; display: block; overflow: visible; }
+.chart .t-axis { font-size: 11px; fill: var(--muted); font-family: var(--font-body); }
+.chart .t-label { font-size: 11.5px; fill: var(--ink-2); font-family: var(--font-body); }
+.chart .t-strong { font-size: 12px; fill: var(--ink); font-weight: 600; font-family: var(--font-body); }
+.legend-row { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.82rem; color: var(--ink-2); }
+.legend-row i { display: inline-block; width: 16px; height: 2px; vertical-align: middle; margin-right: 6px; border-radius: 2px; }
+.legend-row i.box { height: 10px; width: 10px; border-radius: 2px; }
+.tip { position: fixed; z-index: 50; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 0.8rem; box-shadow: 0 6px 20px rgba(0,0,0,0.12); max-width: 260px; }
+.tip .v { font-weight: 600; font-size: 0.92rem; }
+.tip .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.tip .row i { width: 12px; height: 2px; display: inline-block; border-radius: 2px; }
+
+/* tables */
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.86rem; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; color: var(--ink-2); font-size: 0.8rem; }
+td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
+tr.hl td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.wbar { display: inline-block; height: 8px; border-radius: 0 3px 3px 0; background: var(--accent); vertical-align: middle; margin-right: 8px; }
+.pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; background: var(--chip); white-space: nowrap; }
+.pill.good { color: var(--good-ink); } .pill.warn { color: var(--warn-ink); } .pill.crit { color: var(--crit-ink); }
+.pill svg { width: 12px; height: 12px; }
+details { font-size: 0.86rem; }
+details summary { cursor: pointer; color: var(--accent-ink); }
+details[open] summary { margin-bottom: 8px; }
+.callout { border-left: 3px solid var(--warning); padding: 10px 14px; background: var(--surface); border-radius: 0 8px 8px 0; font-size: 0.9rem; color: var(--ink-2); }
+ul.plain { margin: 0; padding-left: 1.1em; display: grid; gap: 6px; color: var(--ink-2); max-width: 70ch; }
+footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<nav class="nav" aria-label="Sections">
+  <ul>
+    <li><a href="#map">Map explorer</a></li>
+    <li><a href="#accuracy">Accuracy</a></li>
+    <li><a href="#influence">Area of influence</a></li>
+    <li><a href="#saturation">Saturation</a></li>
+    <li><a href="#scenarios">Scenarios</a></li>
+    <li><a href="#causal">Causal check</a></li>
+    <li><a href="#budget">Budget plan</a></li>
+    <li><a href="#caveats">Caveats</a></li>
+  </ul>
+</nav>
+
+<main class="wrap">
+  <header class="mast">
+    <p class="eyebrow">SPARC core pipeline · single-city run · {{PLACE}}</p>
+    <h1>{{TITLE}}</h1>
+    <p class="lede">Air temperature across {{AREA}}, modelled from land cover, terrain and a heat-transport equation. The page shows where it is hot, how far each surface change reaches, where more canopy still pays off, what adaptation packages would do, and whether those effects survive an independent causal check. Every accuracy figure is scored on areas the models never saw.</p>
+    <dl class="facts" id="facts"></dl>
+  </header>
+
+  <section class="kpis" id="kpis" aria-label="Headline numbers"></section>
+
+  <section class="block" id="map">
+    <header>
+      <h2>Map explorer</h2>
+      <p class="prose">Pick a theme, then a layer. Hover or tap a cell for its value. Each pixel is one 30 m cell; blank areas had no observations. Blue is cooler and red is warmer, relative to the city median or to no change.</p>
+    </header>
+    <div class="controls">
+      <div class="seg" id="groups" role="group" aria-label="Map theme"></div>
+      <label class="cap" for="layerSel" style="margin-left:4px">Layer</label>
+      <select id="layerSel"></select>
+      <span id="foldWrap" hidden><label class="cap" for="foldSel">Held-out fold</label> <select id="foldSel"></select></span>
+    </div>
+    <div class="explorer">
+      <div class="mapbox">
+        <canvas id="map-canvas" aria-label="Map of the selected layer"></canvas>
+        <svg class="overlay" id="map-overlay" aria-hidden="true"></svg>
+      </div>
+      <div class="side">
+        <div class="card">
+          <h3 id="layerName"></h3>
+          <p class="cap" id="layerDesc"></p>
+          <div class="legend" id="legend"></div>
+        </div>
+        <div class="card">
+          <p class="eyebrow">Cell readout</p>
+          <div class="readout" id="readout"><span class="dim">Hover or tap the map.</span></div>
+        </div>
+        <div class="card">
+          <p class="eyebrow">Layer summary</p>
+          <dl class="kv" id="layerStats"></dl>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="accuracy">
+    <header>
+      <h2>How accurate is it, and how far does that hold?</h2>
+      <p class="prose" id="accText"></p>
+    </header>
+    <div class="grid2">
+      <div class="card chart">
+        <h3>Skill vs distance from training data</h3>
+        <p class="cap">Out-of-fold R² when whole areas of each size are held out (training cells within ⅓ block of a test cell are dropped). The stacked model is highlighted; base models are grey.</p>
+        <div id="chart-distance"></div>
+        <div class="legend-row"><span><i style="background:var(--accent)"></i>Stacked model</span><span><i style="background:var(--gray-mark)"></i>Base models (hover for each)</span></div>
+        <details><summary>Table view</summary><div class="tablewrap" id="tbl-distance"></div></details>
+      </div>
+      <div class="card">
+        <h3>Models on the main 2 km blocks</h3>
+        <p class="cap" id="modelCap"></p>
+        <div class="tablewrap" id="tbl-models"></div>
+      </div>
+    </div>
+    <div class="card" id="physicsCard"></div>
+  </section>
+
+  <section class="block" id="influence">
+    <header>
+      <h2>How far does a change reach?</h2>
+      <p class="prose">The area of influence of each variable: the distance over which its neighbourhood still explains air temperature, from a distributed-lag fit of the correlogram. The models use neighbourhood averages at half, one and two times these ranges. 60 m is the floor (the cell and its neighbours), so a 60 m variable acts locally.</p>
+    </header>
+    <div class="grid2">
+      <div class="card chart"><h3>Influence range by variable</h3><div id="chart-influence"></div></div>
+      <div class="card"><h3>Direction (anisotropy)</h3><p class="cap">Ratio of the short to the long axis of the correlation ellipse (1 = the same in every direction) and the long axis's bearing. "Reliable" means a bootstrap confirmed it.</p><div class="tablewrap" id="tbl-aniso"></div></div>
+    </div>
+  </section>
+
+  <section class="block" id="saturation">
+    <header>
+      <h2>Where does more cooling still pay off?</h2>
+      <p class="prose">Every cell's neighbourhood was given increasing doses of each intervention and re-predicted through the full model. The curves show the city-wide mean cooling; the band is the spread across the five fold models. Per cell, a saturating curve A·(1 − e<sup>−dose/d</sup>) was fitted against the dose the neighbourhood actually received, which gives the maximum cooling, the dose that reaches 90% of it, and today's marginal benefit. See the <a href="#map">Saturation</a> theme on the map.</p>
+    </header>
+    <div class="grid3" id="curves"></div>
+    <div class="card"><div class="tablewrap" id="tbl-sat"></div></div>
+  </section>
+
+  <section class="block" id="scenarios">
+    <header>
+      <h2>Adaptation scenarios</h2>
+      <p class="prose">Each scenario edits the land cover, updates NDVI through its fitted dependence on canopy and impervious cover, rebuilds the neighbourhood features and re-predicts through the five fold models. Bars show the mean change in air temperature; whiskers span the 10th to 90th percentile across cells. Scenarios that push many cells outside the observed range of conditions are flagged.</p>
+    </header>
+    <div class="card chart"><div id="chart-scen"></div>
+      <details><summary>Table view</summary><div class="tablewrap" id="tbl-scen"></div></details>
+    </div>
+  </section>
+
+  <section class="block" id="causal">
+    <header>
+      <h2>Do the model's effects survive a causal check?</h2>
+      <p class="prose">An independent estimate from double machine learning with spatial cross-fitting, split into the effect of a cell's own cover and its neighbours' cover. The audit compares like with like: the model's neighbourhood-adoption slope against the causal own + neighbour effect, and the model's own-cell slope against the causal own-cell effect. E-value and robustness value say how strong a hidden confounder would need to be to explain the estimate away.</p>
+    </header>
+    <div class="card"><div class="tablewrap" id="tbl-causal"></div></div>
+  </section>
+
+  <section class="block" id="budget">
+    <header>
+      <h2 id="budgetTitle">Budget plan</h2>
+      <p class="prose" id="budgetText"></p>
+    </header>
+    <div class="kpis" id="budgetKpis"></div>
+    <div class="card chart" id="paretoCard" hidden><h3>Cooling vs budget</h3><p class="cap" id="paretoCap">Total planned cooling (°F summed over cells) as the budget scales.</p><div id="chart-pareto"></div></div>
+  </section>
+
+  <section class="block" id="caveats">
+    <header><h2>Read these before using the numbers</h2></header>
+    <ul class="plain" id="caveatList"></ul>
+  </section>
+
+  <footer id="foot"></footer>
+</main>
+<div class="tip" id="tip" hidden></div>
+
+<script>
+const DATA = /*__DATA__*/;
+</script>
+<script>
+(() => {
+"use strict";
+const $ = (id) => document.getElementById(id);
+const SVGNS = "http://www.w3.org/2000/svg";
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const isDark = () => {
+  const t = document.documentElement.getAttribute("data-theme");
+  if (t === "dark") return true;
+  if (t === "light") return false;
+  return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+};
+const fmt = (v, d = 2) => (v === null || v === undefined || !isFinite(v)) ? "—" : Number(v).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const sfmt = (v, d = 2) => (v === null || v === undefined || !isFinite(v)) ? "—" : (v > 0 ? "+" : v < 0 ? "−" : "") + fmt(Math.abs(v), d);
+const el = (tag, attrs = {}, text) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (text !== undefined) e.textContent = text; return e; };
+const sv = (tag, attrs = {}, text) => { const e = document.createElementNS(SVGNS, tag); for (const [k, v] of Object.entries(attrs)) { if ((k === "fill" || k === "stroke") && String(v).startsWith("var(")) e.style.setProperty(k, v); else e.setAttribute(k, v); } if (text !== undefined) e.textContent = text; return e; };
+const V = (n) => `var(${n})`;
+const VAR = { Pct_Canopy: "Tree canopy", Pct_Impervious: "Impervious cover", Albedo: "Albedo", NDVI: "NDVI", Elevation_m: "Elevation", Distance_from_water_m: "Distance to water", target: "Air temperature residual" };
+const vname = (v) => VAR[v] || v;
+const U = DATA.units === "degF" ? "°F" : (DATA.units || "");
+
+/* ---------- decode layers ---------- */
+function b64bytes(s) { const bin = atob(s); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return a; }
+const G = DATA.geom;
+const IX = new Uint16Array(b64bytes(G.ix).buffer), IY = new Uint16Array(b64bytes(G.iy).buffer);
+const N = G.n;
+const cellToPt = new Int32Array(G.nx * G.ny).fill(-1);
+for (let i = 0; i < N; i++) cellToPt[(G.ny - 1 - IY[i]) * G.nx + IX[i]] = i;   // north up
+const decoded = {};
+function layer(key) {
+  if (decoded[key]) return decoded[key];
+  const L = DATA.layers[key]; if (!L) return null;
+  const raw = b64bytes(L.b64);
+  let out;
+  if (L.kind === "cat") out = raw;
+  else {
+    const q = L.kind === "u8" ? raw : new Uint16Array(raw.buffer);
+    const top = L.kind === "u8" ? 254 : 65534;
+    out = new Float32Array(N);
+    for (let i = 0; i < N; i++) out[i] = q[i] === 0 ? NaN : L.lo + (q[i] - 1) / top * (L.hi - L.lo);
+  }
+  decoded[key] = out; return out;
+}
+const FOLD = b64bytes(DATA.fold), EXCL = b64bytes(DATA.excl);
+
+/* ---------- colour (OKLab interpolation) ---------- */
+const hex2rgb = (h) => { h = h.replace("#", ""); return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255); };
+const lin = (c) => c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+const delin = (c) => c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
+function toLab(h) { const [r, g, b] = hex2rgb(h).map(lin);
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b), m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b), s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return [0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s, 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s, 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s]; }
+function fromLab([L, a, b]) { const l = Math.pow(L + 0.3963377774 * a + 0.2158037573 * b, 3), m = Math.pow(L - 0.1055613458 * a - 0.0638541728 * b, 3), s = Math.pow(L - 0.0894841775 * a - 1.2914855480 * b, 3);
+  const rgb = [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s, -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s, -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s];
+  return rgb.map((c) => Math.round(255 * Math.min(1, Math.max(0, delin(c))))); }
+function lut(stops, n = 256) { const labs = stops.map(toLab); const out = new Uint8ClampedArray(n * 3);
+  for (let i = 0; i < n; i++) { const t = i / (n - 1) * (labs.length - 1); const k = Math.min(labs.length - 2, Math.floor(t)); const f = t - k;
+    const c = fromLab(labs[k].map((v, j) => v + (labs[k + 1][j] - v) * f)); out.set(c, i * 3); } return out; }
+const RAMPS = {
+  seqLight: ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"],
+  seqDark: ["#1d2f45", "#184f95", "#256abf", "#3987e5", "#6da7ec", "#9ec5f4", "#cde2fb"],
+  divLight: ["#0d366b", "#256abf", "#6da7ec", "#f0efec", "#f19a8f", "#d6403f", "#8a1f22"],
+  divDark: ["#9ec5f4", "#3987e5", "#1f4f8a", "#383835", "#8f3434", "#e66767", "#f6b3ab"],
+};
+let LUTS = {};
+function buildLuts() { const d = isDark(); LUTS = { seq: lut(d ? RAMPS.seqDark : RAMPS.seqLight), div: lut(d ? RAMPS.divDark : RAMPS.divLight) }; }
+
+/* ---------- layer catalogue ---------- */
+const A = DATA.actionable || {};
+const has = (k) => !!DATA.layers[k];
+const LAYERS = [];
+const add = (o) => { if (o.key === "__folds" || has(o.key)) LAYERS.push(o); };
+add({ group: "Temperature", key: "obs", name: "Observed air temperature", unit: U, scale: "div", center: DATA.background, d: 1, desc: `Measured air temperature. Colours are relative to the city median (${fmt(DATA.background, 1)} ${U}).` });
+add({ group: "Temperature", key: "pred", name: "Predicted (held-out)", unit: U, scale: "div", center: DATA.background, d: 1, desc: "Each cell is predicted by the fold model that never saw its 2 km block, so this is what the model knows without local data." });
+add({ group: "Temperature", key: "err", name: "Error (observed − predicted)", unit: U, scale: "div", center: 0, d: 2, desc: "Red: warmer than predicted. Blue: cooler. Large coherent patches are local heat sources or sinks the inputs do not capture." });
+add({ group: "Temperature", key: "hw", name: "90% interval half-width", unit: U, scale: "seq", d: 2, desc: "Cross-conformal interval: 90% of held-out cells fall within this distance of the prediction." });
+add({ group: "Land cover", key: "in_Pct_Canopy", name: "Tree canopy", unit: "%", scale: "seq", d: 0, desc: "Share of the cell under tree canopy." });
+add({ group: "Land cover", key: "in_Pct_Impervious", name: "Impervious cover", unit: "%", scale: "seq", d: 0, desc: "Share of the cell that is paved or built." });
+add({ group: "Land cover", key: "in_NDVI", name: "NDVI", unit: "", scale: "seq", d: 2, desc: "Vegetation greenness. In scenarios it follows canopy and impervious cover through a fitted monotone model." });
+add({ group: "Land cover", key: "in_Albedo", name: "Albedo", unit: "", scale: "seq", d: 3, desc: "Surface reflectance (0–1)." });
+add({ group: "Cooling effects", key: "fp_Pct_Canopy", name: "Canopy: footprint per +1 pp", unit: `${U}`, scale: "div", center: 0, d: 4, desc: "Total temperature change summed over every cell affected when this cell gains 1 percentage point of canopy (through neighbourhood features and heat transport). This is what the budget optimiser ranks." });
+add({ group: "Cooling effects", key: "own_Pct_Canopy", name: "Canopy: own-cell effect per +1 pp", unit: `${U}`, scale: "div", center: 0, d: 5, desc: "Change in this cell's own temperature only, with its neighbours held fixed. Much smaller than the footprint: canopy cools its surroundings more than itself." });
+add({ group: "Cooling effects", key: "fp_Pct_Impervious", name: "Impervious: footprint per +1 pp", unit: `${U}`, scale: "div", center: 0, d: 4, desc: "Total temperature change when this cell gains 1 pp of impervious cover. Removing pavement reverses the sign." });
+add({ group: "Cooling effects", key: "fp_Albedo", name: "Albedo: footprint per +0.01", unit: `${U}`, scale: "div", center: 0, d: 4, mult: 0.01, desc: "Total temperature change when this cell's albedo rises by 0.01." });
+for (const [v, nm] of [["Pct_Canopy", "Canopy"], ["Pct_Impervious", "Impervious removal"], ["Albedo", "Albedo"]]) {
+  const unit = v === "Albedo" ? "" : "pp";
+  add({ group: "Saturation", key: `cls_${v}`, name: `${nm}: response shape`, scale: "cat", desc: "Saturating: cooling levels off within the tested doses. Linear: no knee yet. Censored: too little headroom to tell." });
+  add({ group: "Saturation", key: `marg_${v}`, name: `${nm}: cooling per unit at today's level`, unit: `${U}/${unit || "unit"}`, scale: "seq", d: 3, desc: "Initial slope of the fitted curve: the cooling the first unit of change would buy here. High values are the best places to act first." });
+  add({ group: "Saturation", key: `A_${v}`, name: `${nm}: maximum cooling`, unit: U, scale: "seq", d: 2, desc: "Plateau of the fitted saturating curve (for linear cells, the cooling at the largest dose tested)." });
+  add({ group: "Saturation", key: `d90_${v}`, name: `${nm}: dose for 90% of the maximum`, unit: unit, scale: "seq", d: v === "Albedo" ? 2 : 1, desc: "Neighbourhood dose that gets 90% of the achievable cooling. Small values mean the benefit saturates quickly." });
+}
+for (const s of DATA.scen_layers || []) add({ group: "Scenarios", key: s.key, name: s.name, unit: U, scale: "div", center: 0, d: 2, desc: "Re-predicted change in air temperature at every cell for this scenario (mean of the five fold models)." });
+add({ group: "Budget plan", key: "alloc_dose", name: "Planned canopy increase", unit: "pp", scale: "seq", d: 1, zeroBlank: true, desc: "Where the budget-optimal plan adds canopy, and how much. Untreated cells are blank." });
+add({ group: "Budget plan", key: "alloc_delta", name: "Re-predicted ΔT of the plan", unit: U, scale: "div", center: 0, d: 3, desc: "The whole plan applied at once and re-predicted through the model (closed-loop check)." });
+add({ group: "CV design", key: "__folds", name: "Spatial cross-validation folds", scale: "folds", desc: "For the chosen fold: blue cells are held out for testing, orange cells are dropped from training as a buffer, grey cells train the models. Every accuracy number on this page comes from this design." });
+const GROUPS = [...new Set(LAYERS.map((l) => l.group))];
+
+/* ---------- map ---------- */
+const canvas = $("map-canvas"), ctx2 = canvas.getContext("2d");
+canvas.width = G.nx; canvas.height = G.ny;
+const img = ctx2.createImageData(G.nx, G.ny);
+let cur = null, curFold = 0, domain = null;
+
+function layerValues(Ly) {
+  if (Ly.key === "__folds") return null;
+  return layer(Ly.key);
+}
+function computeDomain(Ly) {
+  const L = DATA.layers[Ly.key]; const m = Ly.mult || 1;
+  if (Ly.scale === "div") {
+    const c = Ly.center;
+    const span = Math.max(Math.abs(L.p[1] * m - c), Math.abs(L.p[3] * m - c)) || 1e-9;
+    return [c - span, c, c + span];
+  }
+  if (Ly.scale === "seq") {
+    const lo = Ly.zeroBlank ? 0 : L.p[1] * m; let hi = L.p[3] * m; if (!(hi > lo)) hi = lo + 1e-9;
+    return [lo, null, hi];
+  }
+  return null;
+}
+function colorFor(Ly, v) {
+  if (Ly.scale === "div") { const [a, c, b] = domain; let t = v < c ? 0.5 * (v - a) / (c - a) : 0.5 + 0.5 * (v - c) / (b - c); t = Math.min(1, Math.max(0, t)); const k = Math.round(t * 255) * 3; return [LUTS.div[k], LUTS.div[k + 1], LUTS.div[k + 2]]; }
+  const [a, , b] = domain; let t = (v - a) / ((b - a) || 1e-9); t = Math.min(1, Math.max(0, t)); const k = Math.round(t * 255) * 3; return [LUTS.seq[k], LUTS.seq[k + 1], LUTS.seq[k + 2]];
+}
+const CAT = () => [css("--s1"), css("--s2"), css("--s3")].map(hex2rgb).map((c) => c.map((x) => Math.round(x * 255)));
+function render() {
+  const Ly = cur; const data = img.data; data.fill(0);
+  const vals = layerValues(Ly); const m = Ly.mult || 1;
+  const cat = CAT(); const grayc = hex2rgb(css("--gray-mark")).map((x) => Math.round(x * 255));
+  const nodata = hex2rgb(isDark() ? "#2a2a28" : "#e4e4df").map((x) => Math.round(x * 255));
+  if (Ly.scale !== "folds" && Ly.scale !== "cat") domain = computeDomain(Ly);
+  for (let i = 0; i < N; i++) {
+    const p = ((G.ny - 1 - IY[i]) * G.nx + IX[i]) * 4; let c;
+    if (Ly.scale === "folds") { c = FOLD[i] === curFold ? cat[0] : ((EXCL[i] >> curFold) & 1) ? cat[1] : grayc; }
+    else if (Ly.scale === "cat") { const k = vals[i]; c = k === 0 ? nodata : cat[k - 1]; }
+    else { const v = vals[i]; if (!isFinite(v) || (Ly.zeroBlank && v <= 0)) { if (Ly.zeroBlank && isFinite(v)) c = nodata; else continue; } else c = colorFor(Ly, v * m); }
+    data[p] = c[0]; data[p + 1] = c[1]; data[p + 2] = c[2]; data[p + 3] = 255;
+  }
+  ctx2.putImageData(img, 0, 0);
+  drawOverlay(); drawLegend(); drawStats();
+}
+function drawOverlay() {
+  const svg = $("map-overlay"); svg.replaceChildren();
+  const w = svg.clientWidth || canvas.clientWidth, h = svg.clientHeight || canvas.clientHeight;
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  const pxPerM = w / (G.nx * G.dx);
+  const km = 2; const len = km * 1000 * pxPerM;
+  const x0 = 14, y0 = h - 18;
+  const ink = V("--ink"), bg = V("--surface");
+  svg.append(sv("rect", { x: x0 - 6, y: y0 - 22, width: len + 46, height: 32, rx: 6, fill: bg, "fill-opacity": 0.85 }));
+  svg.append(sv("line", { x1: x0, y1: y0, x2: x0 + len, y2: y0, stroke: ink, "stroke-width": 2 }));
+  for (const xx of [x0, x0 + len / 2, x0 + len]) svg.append(sv("line", { x1: xx, y1: y0 - 5, x2: xx, y2: y0, stroke: ink, "stroke-width": 1.5 }));
+  svg.append(sv("text", { x: x0, y: y0 - 9, "font-size": 11, fill: ink, "font-family": "IBM Plex Mono, monospace" }, "0"));
+  svg.append(sv("text", { x: x0 + len + 4, y: y0 - 9, "font-size": 11, fill: ink, "font-family": "IBM Plex Mono, monospace" }, `${km} km`));
+  const nx = w - 22, ny = 16;
+  svg.append(sv("path", { d: `M ${nx} ${ny} l 6 16 l -6 -4 l -6 4 z`, fill: ink }));
+  svg.append(sv("text", { x: nx, y: ny + 30, "font-size": 11, fill: ink, "text-anchor": "middle", "font-family": "IBM Plex Mono, monospace" }, "N"));
+}
+function drawLegend() {
+  const Ly = cur; const box = $("legend"); box.replaceChildren();
+  $("layerName").textContent = Ly.name; $("layerDesc").textContent = Ly.desc || "";
+  if (Ly.scale === "folds" || Ly.scale === "cat") {
+    const labs = Ly.scale === "folds" ? ["Held out (test)", "Buffer: dropped from training", "Training"] : DATA.layers[Ly.key].labels.slice(1);
+    const cols = Ly.scale === "folds" ? [V("--s1"), V("--s2"), V("--gray-mark")] : [V("--s1"), V("--s2"), V("--s3")];
+    const wrap = el("div", { class: "swatches" });
+    labs.forEach((t, i) => { const r = el("div"); const s = el("span", { class: "sw" }); s.style.background = cols[i]; r.append(s, document.createTextNode(t)); wrap.append(r); });
+    box.append(wrap); return;
+  }
+  const c = el("canvas", { width: 256, height: 1 }); const g2 = c.getContext("2d"); const id = g2.createImageData(256, 1);
+  const L = Ly.scale === "div" ? LUTS.div : LUTS.seq;
+  for (let i = 0; i < 256; i++) { id.data.set([L[i * 3], L[i * 3 + 1], L[i * 3 + 2], 255], i * 4); }
+  g2.putImageData(id, 0, 0); c.setAttribute("role", "img"); c.setAttribute("aria-label", "colour scale");
+  const t = el("div", { class: "ticks" });
+  const [a, mid, b] = domain; const d = Ly.d ?? 2; const u = Ly.unit ? ` ${Ly.unit}` : "";
+  const f = (v) => Ly.scale === "div" && Ly.center === 0 ? sfmt(v, d) : fmt(v, d);
+  t.append(el("span", {}, "≤ " + f(a)), el("span", {}, Ly.scale === "div" ? f(mid) + u : ""), el("span", {}, "≥ " + f(b) + (Ly.scale === "div" ? "" : u)));
+  box.append(c, t);
+  if (Ly.scale === "div") { const n = el("div", { class: "ticks" }); n.append(el("span", {}, "cooler"), el("span", {}, "warmer")); box.append(n); }
+}
+function drawStats() {
+  const Ly = cur; const dl = $("layerStats"); dl.replaceChildren();
+  const row = (k, v) => dl.append(el("dt", {}, k), el("dd", {}, v));
+  if (Ly.scale === "folds") {
+    let te = 0, ex = 0; for (let i = 0; i < N; i++) { if (FOLD[i] === curFold) te++; else if ((EXCL[i] >> curFold) & 1) ex++; }
+    row("Held-out cells", te.toLocaleString()); row("Buffer cells dropped", ex.toLocaleString()); row("Training cells", (N - te - ex).toLocaleString());
+    row("Block size", `${fmt(DATA.cv.block_m, 0)} m`); row("Buffer", `${fmt(DATA.cv.buffer_m, 0)} m`); row("Blocks with data", String(DATA.cv.n_blocks)); return;
+  }
+  const vals = layerValues(Ly);
+  if (Ly.scale === "cat") { const labs = DATA.layers[Ly.key].labels; const cnt = new Array(labs.length).fill(0); for (let i = 0; i < N; i++) cnt[vals[i]]++;
+    labs.forEach((l, k) => { if (k > 0 || cnt[0] > 0) row(l, `${fmt(100 * cnt[k] / N, 1)}%`); }); return; }
+  const m = Ly.mult || 1; let s = 0, n = 0; const arr = [];
+  for (let i = 0; i < N; i++) { const v = vals[i]; if (isFinite(v) && !(Ly.zeroBlank && v <= 0)) { s += v * m; n++; arr.push(v * m); } }
+  arr.sort((x, y) => x - y); const q = (p) => arr[Math.min(arr.length - 1, Math.floor(p * arr.length))];
+  const d = Ly.d ?? 2; const u = Ly.unit ? ` ${Ly.unit}` : ""; const f = (v) => (Ly.scale === "div" && Ly.center === 0 ? sfmt(v, d) : fmt(v, d)) + u;
+  row("Cells", n.toLocaleString()); row("Mean", f(s / n)); row("10th percentile", f(q(0.1))); row("Median", f(q(0.5))); row("90th percentile", f(q(0.9)));
+}
+const corner = G.corners;
+function latlon(cx, cy) { if (!corner) return ""; const fx = cx / (G.nx - 1), fy = 1 - cy / (G.ny - 1);
+  const lat = (1 - fx) * (1 - fy) * corner.sw[0] + fx * (1 - fy) * corner.se[0] + (1 - fx) * fy * corner.nw[0] + fx * fy * corner.ne[0];
+  const lon = (1 - fx) * (1 - fy) * corner.sw[1] + fx * (1 - fy) * corner.se[1] + (1 - fx) * fy * corner.nw[1] + fx * fy * corner.ne[1];
+  return `${lat.toFixed(4)}°N, ${Math.abs(lon).toFixed(4)}°W`; }
+function readout(ev) {
+  const r = canvas.getBoundingClientRect(); const cx = Math.floor((ev.clientX - r.left) / r.width * G.nx), cy = Math.floor((ev.clientY - r.top) / r.height * G.ny);
+  const box = $("readout"); box.replaceChildren();
+  if (cx < 0 || cy < 0 || cx >= G.nx || cy >= G.ny) return;
+  const i = cellToPt[cy * G.nx + cx];
+  if (i < 0) { box.append(el("span", { class: "dim" }, `No observation · ${latlon(cx, cy)}`)); return; }
+  const Ly = cur; let main;
+  if (Ly.scale === "folds") main = FOLD[i] === curFold ? "Held out (test)" : ((EXCL[i] >> curFold) & 1) ? "Buffer: dropped from training" : `Training (in fold ${FOLD[i] + 1}'s test set)`;
+  else if (Ly.scale === "cat") main = DATA.layers[Ly.key].labels[layer(Ly.key)[i]];
+  else { const v = layer(Ly.key)[i] * (Ly.mult || 1); main = !isFinite(v) ? "no estimate" : ((Ly.scale === "div" && Ly.center === 0 ? sfmt(v, Ly.d ?? 2) : fmt(v, Ly.d ?? 2)) + (Ly.unit ? " " + Ly.unit : "")); }
+  box.append(el("div", { class: "big" }, main), el("div", { class: "dim" }, latlon(cx, cy)));
+  const ctxl = el("div", { class: "dim" });
+  const o = layer("obs"), c = layer("in_Pct_Canopy"), im = layer("in_Pct_Impervious");
+  ctxl.textContent = `Observed ${fmt(o[i], 1)} ${U}` + (c ? ` · canopy ${fmt(c[i], 0)}%` : "") + (im ? ` · impervious ${fmt(im[i], 0)}%` : "");
+  box.append(ctxl);
+}
+canvas.addEventListener("pointermove", readout);
+canvas.addEventListener("pointerdown", readout);
+
+function setGroup(g) {
+  for (const b of $("groups").children) b.setAttribute("aria-pressed", String(b.dataset.g === g));
+  const sel = $("layerSel"); sel.replaceChildren();
+  LAYERS.filter((l) => l.group === g).forEach((l) => { const o = el("option", { value: l.key }, l.name); sel.append(o); });
+  $("foldWrap").hidden = g !== "CV design";
+  setLayer(sel.value);
+  try { localStorage.setItem("phm-group", g); } catch (e) {}
+}
+function setLayer(key) { cur = LAYERS.find((l) => l.key === key); render(); }
+GROUPS.forEach((g) => { const b = el("button", { type: "button", "data-g": g, "aria-pressed": "false" }, g); b.dataset.g = g; b.addEventListener("click", () => setGroup(g)); $("groups").append(b); });
+$("layerSel").addEventListener("change", (e) => setLayer(e.target.value));
+for (let k = 0; k < DATA.n_folds; k++) $("foldSel").append(el("option", { value: String(k) }, `Fold ${k + 1}`));
+$("foldSel").addEventListener("change", (e) => { curFold = +e.target.value; render(); });
+
+/* ---------- tooltip ---------- */
+const tip = $("tip");
+function showTip(ev, build) { tip.replaceChildren(); build(tip); tip.hidden = false;
+  const x = Math.min(window.innerWidth - tip.offsetWidth - 8, ev.clientX + 14), y = Math.min(window.innerHeight - tip.offsetHeight - 8, ev.clientY + 14);
+  tip.style.left = `${Math.max(8, x)}px`; tip.style.top = `${Math.max(8, y)}px`; }
+const hideTip = () => { tip.hidden = true; };
+
+/* ---------- facts & KPIs ---------- */
+function facts() {
+  const qa = DATA.qa || {}; const dl = $("facts");
+  const items = [["Cells", DATA.n.toLocaleString()], ["Grid", `${qa.grid_shape ? qa.grid_shape.join(" × ") : "—"} at ${fmt(qa.cell_m, 0)} m`], ["City median", `${fmt(DATA.background, 1)} ${U}`],
+    ["Whole-degree readings", `${fmt(100 * (qa.target_fraction_integer_valued || 0), 0)}%`], ["Run", (DATA.created || "").slice(0, 10)], ["Commit", DATA.commit || "—"]];
+  for (const [k, v] of items) { const d = el("div"); d.append(el("dt", {}, k), el("dd", {}, v)); dl.append(d); }
+}
+function kpi(box, label, value, unit, note) { const k = el("div", { class: "kpi" }); k.append(el("span", { class: "label" }, label)); const v = el("span", { class: "value" }, value); if (unit) v.append(el("small", {}, unit)); k.append(v); if (note) k.append(el("span", { class: "note" }, note)); box.append(k); }
+function kpis() {
+  const s = DATA.metrics.stacker; const box = $("kpis");
+  kpi(box, "Accuracy on unseen 2 km areas", fmt(s.r2, 2), "R²", `RMSE ${fmt(s.rmse, 2)} ${U} · whole areas held out`);
+  kpi(box, "90% prediction intervals", fmt(100 * s.interval_coverage, 1), "% covered", `±${fmt(s.interval_mean_halfwidth, 2)} ${U} on average`);
+  const cs = (DATA.scenarios || []).find((x) => /canopy/i.test(x.name) && /\b10\b/.test(x.name));
+  if (cs) kpi(box, "Canopy +10 pp everywhere", sfmt(cs.mean_delta, 2), U, "mean change in air temperature");
+  const gp = (DATA.scenarios || []).find((x) => /package/i.test(x.name));
+  if (gp) kpi(box, gp.name, sfmt(gp.mean_delta, 2), U, `${fmt(100 * gp.frac_extrapolated, 0)}% of edited cells beyond observed conditions`);
+}
+
+/* ---------- accuracy ---------- */
+const MODEL = { ols: "Ridge regression", mgwr: "MGWR", gwrf: "Geo. random forest", gam: "GAM + spatial smooth", physics: "Physics (heat transport)", stacker: "Stacked model" };
+function accuracy() {
+  const rows = (DATA.cv_distance && DATA.cv_distance.rows) || [];
+  const main = rows.find((r) => r.main) || {}; const rnd = rows.find((r) => r.buffer_m === 0);
+  $("accText").textContent = `Scored by holding out whole ${fmt(DATA.cv.block_m / 1000, 1)} km blocks (${DATA.cv.n_blocks} blocks, ${DATA.cv.n_folds} folds) and dropping training cells within ${fmt(DATA.cv.buffer_m, 0)} m of them, the stacked model explains ${fmt(100 * DATA.metrics.stacker.r2, 0)}% of the temperature variation in areas it never saw.` +
+    (rnd ? ` The same models score R² ${fmt(rnd.stacker.r2, 2)} when random cells are held out instead, because every test cell then has training neighbours one cell away. That gap is interpolation, not understanding: random-split scores overstate how well a model transfers to new areas.` : "");
+  if (rows.length) distanceChart(rows);
+  // models table
+  const m = DATA.metrics; const st = DATA.stacker || []; const names = Object.keys(m).filter((k) => !["stacker", "base_mean"].includes(k));
+  const w = {}; for (const n of names) { const ws = st.map((x) => (x.weights || {})[n]).filter((v) => v !== undefined); w[n] = ws.length ? ws.reduce((a, b) => a + b, 0) / ws.length : null; }
+  const kept = st.filter((x) => !x.residual_gated_off).length;
+  $("modelCap").textContent = DATA.lambda_pde === null ? `The stacked model is a non-negative blend of the base models (weights below, averaged over folds). A neural correction on top was tried at several physics-penalty strengths and rejected because it predicted held-out blocks worse.` : `Stacked model: blend of base models plus a neural correction (λ_PDE = ${DATA.lambda_pde}).`;
+  const t = el("table"); const th = el("tr"); ["Model", "R²", `RMSE (${U})`, "Blend weight"].forEach((h, i) => th.append(el("th", { class: i ? "r" : "" }, h))); t.append(th);
+  const best = Math.max(...names.map((n) => m[n].r2));
+  for (const n of [...names, "stacker"]) { const tr = el("tr"); if (n === "stacker") tr.className = "hl";
+    tr.append(el("td", {}, MODEL[n] || n), el("td", { class: "r" }, fmt(m[n].r2, 2)), el("td", { class: "r" }, fmt(m[n].rmse, 2)));
+    const td = el("td", { class: "r" }); if (n !== "stacker" && w[n] !== null) { const b = el("span", { class: "wbar" }); b.style.width = `${Math.round(60 * w[n])}px`; td.append(b, document.createTextNode(fmt(w[n], 2))); } else td.textContent = n === "stacker" ? "—" : "—"; tr.append(td); t.append(tr); }
+  $("tbl-models").append(t);
+  // physics
+  const p = DATA.physics || {}; const pc = $("physicsCard");
+  if (p.L_m) { pc.append(el("h3", {}, "Fitted heat-transport physics"));
+    const txt = el("p", { class: "prose" });
+    txt.textContent = `The physics model solves a steady heat-transport equation, (1 − L²∇² + v·∇)φ = q, driven by a surface energy balance built from albedo, shade, vegetation, impervious storage and water. Fitted on each fold: heat spreads over L ≈ ${fmt(p.L_m.mean, 0)} m (± ${fmt(p.L_m.sd, 0)}), source gain a ≈ ${fmt(p.a.mean, 1)}. ` + (p.v_norm_m && p.v_norm_m.mean > 1 ? `Advection kept: ${fmt(p.v_norm_m.mean, 0)} m.` : "No advection: there is no wind record for this campaign, so the wind term is switched off.") + ` On held-out blocks it scores R² ${fmt(m.physics ? m.physics.r2 : NaN, 2)} by itself.`;
+    pc.append(txt); }
+}
+function distanceChart(rows) {
+  const W = 520, H = 280, ml = 40, mr = 24, mt = 24, mb = 44; const iw = W - ml - mr, ih = H - mt - mb;
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Out-of-fold R² against held-out block size" });
+  const xs = rows.map((_, i) => ml + (rows.length === 1 ? iw / 2 : i * iw / (rows.length - 1)));
+  const allR2 = rows.flatMap((r) => [r.stacker.r2, ...Object.values(r.models).map((m) => m.r2)]);
+  const ymin = Math.min(0, Math.floor(Math.min(...allR2) * 10) / 10), ymax = 1;
+  const y = (v) => mt + ih * (1 - (v - ymin) / (ymax - ymin));
+  for (let v = ymin; v <= ymax + 1e-9; v += 0.2) { svg.append(sv("line", { x1: ml, x2: W - mr, y1: y(v), y2: y(v), stroke: V("--grid"), "stroke-width": 1 })); svg.append(sv("text", { x: ml - 8, y: y(v) + 4, "text-anchor": "end", class: "t-axis" }, v.toFixed(1))); }
+  rows.forEach((r, i) => { const lab = r.buffer_m === 0 ? "random cells" : `${fmt(r.block_m / 1000, r.block_m % 1000 ? 1 : 0)} km blocks`;
+    const anc = i === 0 ? "start" : i === rows.length - 1 ? "end" : "middle"; const xl = i === 0 ? xs[i] - 6 : i === rows.length - 1 ? xs[i] + 6 : xs[i];
+    svg.append(sv("text", { x: xl, y: H - mb + 18, "text-anchor": anc, class: "t-label" }, lab));
+    if (r.main) svg.append(sv("text", { x: xl, y: H - mb + 32, "text-anchor": anc, class: "t-axis" }, "main design")); });
+  const names = Object.keys(rows[0].models);
+  for (const n of names) { const d = rows.map((r, i) => `${i ? "L" : "M"} ${xs[i]} ${y(r.models[n].r2)}`).join(" ");
+    svg.append(sv("path", { d, fill: "none", stroke: V("--gray-mark"), "stroke-width": 1.5, "stroke-linejoin": "round" })); }
+  const d = rows.map((r, i) => `${i ? "L" : "M"} ${xs[i]} ${y(r.stacker.r2)}`).join(" ");
+  svg.append(sv("path", { d, fill: "none", stroke: V("--accent"), "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+  rows.forEach((r, i) => { svg.append(sv("circle", { cx: xs[i], cy: y(r.stacker.r2), r: 4.5, fill: V("--accent"), stroke: V("--surface"), "stroke-width": 2 }));
+    svg.append(sv("text", { x: xs[i] + (i === rows.length - 1 ? -8 : 8), y: y(r.stacker.r2) - 9, "text-anchor": i === rows.length - 1 ? "end" : "start", class: "t-strong" }, fmt(r.stacker.r2, 2))); });
+  const cross = sv("line", { y1: mt, y2: H - mb, stroke: V("--axis"), "stroke-width": 1, visibility: "hidden" }); svg.append(cross);
+  const hit = sv("rect", { x: ml - 20, y: mt, width: iw + 40, height: ih, fill: "transparent" }); svg.append(hit);
+  const pick = (ev) => { const r = svg.getBoundingClientRect(); const px = (ev.clientX - r.left) / r.width * W; let k = 0; xs.forEach((x, i) => { if (Math.abs(x - px) < Math.abs(xs[k] - px)) k = i; }); return k; };
+  hit.addEventListener("pointermove", (ev) => { const k = pick(ev); cross.setAttribute("x1", xs[k]); cross.setAttribute("x2", xs[k]); cross.setAttribute("visibility", "visible");
+    const r = rows[k]; showTip(ev, (t) => { t.append(el("div", { class: "eyebrow" }, r.label));
+      const line = (nm, v, col) => { const row = el("div", { class: "row" }); const k2 = el("span"); const i2 = el("i"); i2.style.background = col; k2.append(i2, document.createTextNode(" " + nm)); row.append(k2, el("span", { class: "v" }, fmt(v, 2))); t.append(row); };
+      line("Stacked model", r.stacker.r2, V("--accent")); for (const n of names) line(MODEL[n] || n, r.models[n].r2, V("--gray-mark"));
+      t.append(el("div", { class: "cap" }, `${r.n_blocks.toLocaleString()} blocks · ${fmt(100 * r.train_fraction_kept, 0)}% of training cells kept after the buffer`)); }); });
+  hit.addEventListener("pointerleave", () => { cross.setAttribute("visibility", "hidden"); hideTip(); });
+  $("chart-distance").append(svg);
+  const t = el("table"); const h = el("tr"); ["Held-out unit", "Buffer (m)", "Blocks", "Stacked R²", `Stacked RMSE (${U})`, "Fold R² range", ...names.map((n) => `${MODEL[n] || n} R²`)].forEach((x, i) => h.append(el("th", { class: i ? "r" : "" }, x))); t.append(h);
+  for (const r of rows) { const tr = el("tr"); tr.append(el("td", {}, r.label), el("td", { class: "r" }, fmt(r.buffer_m, 0)), el("td", { class: "r" }, r.n_blocks.toLocaleString()), el("td", { class: "r" }, fmt(r.stacker.r2, 3)), el("td", { class: "r" }, fmt(r.stacker.rmse, 3)), el("td", { class: "r" }, `${fmt(r.fold_r2_min, 2)} – ${fmt(r.fold_r2_max, 2)}`), ...names.map((n) => el("td", { class: "r" }, fmt(r.models[n].r2, 3)))); t.append(tr); }
+  $("tbl-distance").append(t);
+}
+
+/* ---------- influence ---------- */
+function influence() {
+  const inf = DATA.influence; if (!inf) return;
+  const ent = Object.entries(inf.ranges_m).sort((a, b) => b[1] - a[1]);
+  const W = 520, rowH = 30, ml = 130, mr = 70, mt = 6; const H = mt + ent.length * rowH + 26; const iw = W - ml - mr;
+  const xmax = Math.max(...ent.map((e) => e[1]), inf.target_resid_range_m || 0);
+  const x = (v) => ml + iw * v / xmax;
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Influence range by variable" });
+  for (let v = 0; v <= xmax + 1; v += 500) { svg.append(sv("line", { x1: x(v), x2: x(v), y1: mt, y2: H - 22, stroke: V("--grid") })); svg.append(sv("text", { x: x(v), y: H - 6, "text-anchor": "middle", class: "t-axis" }, v >= 1000 ? `${v / 1000} km` : `${v} m`)); }
+  ent.forEach(([k, v], i) => { const yy = mt + i * rowH + 6; const bw = Math.max(2, x(v) - ml);
+    svg.append(sv("text", { x: ml - 10, y: yy + 12, "text-anchor": "end", class: "t-label" }, vname(k)));
+    const bar = sv("path", { d: `M ${ml} ${yy} h ${bw - 4} a 4 4 0 0 1 4 4 v 10 a 4 4 0 0 1 -4 4 h ${-(bw - 4)} z`, fill: V("--s1") });
+    bar.addEventListener("pointermove", (ev) => showTip(ev, (t) => { t.append(el("div", { class: "v" }, `${fmt(v, 0)} m`), el("div", {}, vname(k))); }));
+    bar.addEventListener("pointerleave", hideTip); svg.append(bar);
+    svg.append(sv("text", { x: ml + bw + 6, y: yy + 12, class: "t-strong" }, `${fmt(v, 0)} m`)); });
+  $("chart-influence").append(svg);
+  const t = el("table"); const h = el("tr"); ["Variable", "Range (m)", "Short/long axis", "Long-axis bearing", "Reliable"].forEach((x2, i) => h.append(el("th", { class: i ? "r" : "" }, x2))); t.append(h);
+  for (const [k, a] of Object.entries(inf.anisotropy || {})) { const tr = el("tr"); tr.append(el("td", {}, k === "target" ? "Temperature residual" : vname(k)), el("td", { class: "r" }, k === "target" ? fmt(inf.target_resid_range_m, 0) : fmt(inf.ranges_m[k], 0)), el("td", { class: "r" }, fmt(a.ratio, 2)), el("td", { class: "r" }, `${fmt(a.theta_deg, 0)}°`), el("td", { class: "r" }, a.reliable ? "yes" : "no")); t.append(tr); }
+  $("tbl-aniso").append(t);
+}
+
+/* ---------- saturation ---------- */
+function curves() {
+  const C = DATA.curves || {}; const box = $("curves");
+  for (const [v, obj] of Object.entries(C)) {
+    const cv = obj.curve; const s = obj.summary; const dose = cv.dose, ben = cv.mean_benefit, sd = cv.fold_sd || dose.map(() => 0), ex = cv.frac_extrapolated || dose.map(() => 0);
+    const unit = v === "Albedo" ? "" : "pp"; const verb = s.direction === "decrease" ? "removed" : "added";
+    const card = el("div", { class: "card chart" }); card.append(el("h3", {}, `${vname(v)} ${verb}`));
+    const W = 340, H = 220, ml = 40, mr = 14, mt = 12, mb = 36; const iw = W - ml - mr, ih = H - mt - mb;
+    const xmax = Math.max(...dose), ymax = Math.max(...ben.map((b, i) => b + sd[i])) * 1.1 || 1;
+    const x = (d) => ml + iw * d / xmax, y = (b) => mt + ih * (1 - b / ymax);
+    const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Mean cooling vs dose for ${vname(v)}` });
+    const step = ymax > 2 ? 0.5 : ymax > 1 ? 0.25 : 0.1;
+    for (let b = 0; b <= ymax; b += step) { svg.append(sv("line", { x1: ml, x2: W - mr, y1: y(b), y2: y(b), stroke: V("--grid") })); svg.append(sv("text", { x: ml - 6, y: y(b) + 4, "text-anchor": "end", class: "t-axis" }, b.toFixed(step < 0.25 ? 1 : 2))); }
+    dose.forEach((d, i) => svg.append(sv("text", { x: x(d), y: H - mb + 16, "text-anchor": "middle", class: "t-axis" }, v === "Albedo" ? d.toFixed(2) : String(d))));
+    svg.append(sv("text", { x: ml + iw / 2, y: H - 4, "text-anchor": "middle", class: "t-label" }, `dose (${unit || "albedo units"}) · y: cooling (${U})`));
+    const up = dose.map((d, i) => `${x(d)},${y(ben[i] + sd[i])}`), dn = dose.map((d, i) => `${x(d)},${y(Math.max(0, ben[i] - sd[i]))}`).reverse();
+    svg.append(sv("polygon", { points: [...up, ...dn].join(" "), fill: V("--accent"), "fill-opacity": 0.12 }));
+    svg.append(sv("path", { d: dose.map((d, i) => `${i ? "L" : "M"} ${x(d)} ${y(ben[i])}`).join(" "), fill: "none", stroke: V("--accent"), "stroke-width": 2, "stroke-linejoin": "round" }));
+    dose.forEach((d, i) => { const bad = ex[i] > 0.2; const c = sv("circle", { cx: x(d), cy: y(ben[i]), r: 4.5, fill: bad ? V("--surface") : V("--accent"), stroke: bad ? V("--accent") : V("--surface"), "stroke-width": 2 });
+      const hit = sv("circle", { cx: x(d), cy: y(ben[i]), r: 12, fill: "transparent" });
+      hit.addEventListener("pointermove", (ev) => showTip(ev, (t) => { t.append(el("div", { class: "v" }, `${fmt(ben[i], 3)} ${U} cooler`), el("div", {}, `dose ${d} ${unit}`), el("div", { class: "cap" }, `fold spread ±${fmt(sd[i], 3)} · ${fmt(100 * ex[i], 0)}% of cells beyond observed conditions`)); }));
+      hit.addEventListener("pointerleave", hideTip); svg.append(c, hit); });
+    const last = dose.length - 1; svg.append(sv("text", { x: x(dose[last]) - 6, y: y(ben[last]) - 10, "text-anchor": "end", class: "t-strong" }, `${fmt(ben[last], 2)} ${U}`));
+    card.append(svg);
+    if (ex.some((e) => e > 0.2)) card.append(el("p", { class: "cap" }, "Hollow markers: more than 20% of edited cells are outside observed conditions, so treat those doses as extrapolation."));
+    box.append(card);
+  }
+  const t = el("table"); const h = el("tr"); ["Intervention", "Saturating", "Linear", "Censored", "Median dose for 90% of max", `Median max cooling (${U})`, `Own-cell effect / unit (${U})`, `Footprint / unit (${U})`].forEach((x2, i) => h.append(el("th", { class: i ? "r" : "" }, x2))); t.append(h);
+  for (const [v, s] of Object.entries(DATA.response || {})) { const tr = el("tr"); const verb = s.direction === "decrease" ? "removed" : "added";
+    tr.append(el("td", {}, `${vname(v)} ${verb}`), el("td", { class: "r" }, `${fmt(100 * s.frac_saturating, 0)}%`), el("td", { class: "r" }, `${fmt(100 * s.frac_linear, 0)}%`), el("td", { class: "r" }, `${fmt(100 * s.frac_censored, 0)}%`), el("td", { class: "r" }, fmt(s.median_d90, v === "Albedo" ? 2 : 1)), el("td", { class: "r" }, fmt(s.median_max_cooling, 2)), el("td", { class: "r" }, sfmt(s.mean_own_effect, 4)), el("td", { class: "r" }, sfmt(s.mean_footprint_effect, 4))); t.append(tr); }
+  $("tbl-sat").append(t);
+}
+
+/* ---------- scenarios ---------- */
+const warnIcon = () => { const s = sv("svg", { viewBox: "0 0 12 12", "aria-hidden": "true" }); s.append(sv("path", { d: "M6 1 L11 10.5 H1 Z", fill: "none", stroke: "currentColor", "stroke-width": 1.4, "stroke-linejoin": "round" }), sv("line", { x1: 6, y1: 4.5, x2: 6, y2: 7.2, stroke: "currentColor", "stroke-width": 1.4 }), sv("circle", { cx: 6, cy: 8.8, r: 0.8, fill: "currentColor" })); return s; };
+const okIcon = () => { const s = sv("svg", { viewBox: "0 0 12 12", "aria-hidden": "true" }); s.append(sv("path", { d: "M2 6.5 L5 9 L10 3", fill: "none", stroke: "currentColor", "stroke-width": 1.6, "stroke-linecap": "round", "stroke-linejoin": "round" })); return s; };
+const xIcon = () => { const s = sv("svg", { viewBox: "0 0 12 12", "aria-hidden": "true" }); s.append(sv("path", { d: "M3 3 L9 9 M9 3 L3 9", stroke: "currentColor", "stroke-width": 1.6, "stroke-linecap": "round" })); return s; };
+function pill(kind, text) { const p = el("span", { class: `pill ${kind}` }); p.append(kind === "good" ? okIcon() : kind === "crit" ? xIcon() : warnIcon(), document.createTextNode(text)); return p; }
+function scenarios() {
+  const S = DATA.scenarios || []; if (!S.length) return;
+  const W = 980, rowH = 30, ml = 220, mr = 200, mt = 8; const H = mt + S.length * rowH + 28; const iw = W - ml - mr;
+  const lo = Math.min(0, ...S.map((s) => s.p10_delta)), hi = Math.max(0, ...S.map((s) => s.p90_delta));
+  const x = (v) => ml + iw * (v - lo) / (hi - lo || 1);
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Mean change in air temperature by scenario" });
+  const step = (hi - lo) > 3 ? 1 : 0.5;
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) { svg.append(sv("line", { x1: x(v), x2: x(v), y1: mt, y2: H - 22, stroke: v === 0 ? V("--axis") : V("--grid") })); svg.append(sv("text", { x: x(v), y: H - 6, "text-anchor": "middle", class: "t-axis" }, `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v)} ${U}`)); }
+  S.forEach((s, i) => { const yy = mt + i * rowH + 7; const x0 = x(0), x1 = x(s.mean_delta); const bad = s.frac_extrapolated > 0.2;
+    svg.append(sv("text", { x: ml - 10, y: yy + 12, "text-anchor": "end", class: "t-label" }, s.name));
+    svg.append(sv("line", { x1: x(s.p10_delta), x2: x(s.p90_delta), y1: yy + 8, y2: yy + 8, stroke: V("--ink-2"), "stroke-width": 1 }));
+    const w2 = Math.abs(x1 - x0); const left = Math.min(x0, x1);
+    const r = Math.min(4, w2 / 2); const d = s.mean_delta < 0 ? `M ${x0} ${yy + 2} H ${left + r} a ${r} ${r} 0 0 0 ${-r} ${r} V ${yy + 14 - r} a ${r} ${r} 0 0 0 ${r} ${r} H ${x0} Z` : `M ${x0} ${yy + 2} H ${x1 - r} a ${r} ${r} 0 0 1 ${r} ${r} V ${yy + 14 - r} a ${r} ${r} 0 0 1 ${-r} ${r} H ${x0} Z`;
+    const bar = sv("path", { d, fill: bad ? V("--surface") : V("--s1"), stroke: bad ? V("--s1") : "none", "stroke-width": bad ? 1.5 : 0 });
+    bar.addEventListener("pointermove", (ev) => showTip(ev, (t) => { t.append(el("div", { class: "v" }, `${sfmt(s.mean_delta, 2)} ${U}`), el("div", {}, s.name), el("div", { class: "cap" }, `10th–90th percentile ${sfmt(s.p10_delta, 2)} to ${sfmt(s.p90_delta, 2)} · fold spread ±${fmt(s.mean_delta_sd, 2)} · ${fmt(100 * s.frac_extrapolated, 0)}% extrapolated`)); }));
+    bar.addEventListener("pointerleave", hideTip); svg.append(bar);
+    svg.append(sv("text", { x: W - mr + 10, y: yy + 12, class: "t-strong" }, `${sfmt(s.mean_delta, 2)} ${U}`));
+    if (bad) svg.append(sv("text", { x: W - mr + 84, y: yy + 12, class: "t-axis" }, `extrapolated (${fmt(100 * s.frac_extrapolated, 0)}%)`)); });
+  $("chart-scen").append(svg);
+  $("chart-scen").append(el("div", { class: "legend-row" }, ""));
+  const lr = $("chart-scen").lastChild; const a = el("span"); const ia = el("i", { class: "box" }); ia.style.background = V("--s1"); a.append(ia, document.createTextNode("within observed conditions")); const b = el("span"); const ib = el("i", { class: "box" }); ib.style.border = `1.5px solid ${V("--s1")}`; b.append(ib, document.createTextNode("more than 20% of edited cells beyond observed conditions (treat as extrapolation)")); lr.append(a, b);
+  const t = el("table"); const h = el("tr"); ["Scenario", `Mean (${U})`, `10th pct`, `90th pct`, "Fold spread", "Beyond observed"].forEach((x2, i) => h.append(el("th", { class: i ? "r" : "" }, x2))); t.append(h);
+  for (const s of S) { const tr = el("tr"); tr.append(el("td", {}, s.name), el("td", { class: "r" }, sfmt(s.mean_delta, 3)), el("td", { class: "r" }, sfmt(s.p10_delta, 2)), el("td", { class: "r" }, sfmt(s.p90_delta, 2)), el("td", { class: "r" }, `±${fmt(s.mean_delta_sd, 2)}`)); const td = el("td", { class: "r" }); td.append(s.frac_extrapolated > 0.2 ? pill("warn", `${fmt(100 * s.frac_extrapolated, 0)}%`) : document.createTextNode(`${fmt(100 * s.frac_extrapolated, 0)}%`)); tr.append(td); t.append(tr); }
+  $("tbl-scen").append(t);
+}
+
+/* ---------- causal ---------- */
+function causal() {
+  const C = DATA.causal; const box = $("tbl-causal");
+  if (!C || !Object.keys(C).filter((k) => !k.startsWith("_")).length) { box.append(el("p", { class: "cap" }, "Causal validation did not run for this result set.")); return; }
+  const per = (v) => v === "Albedo" ? 0.1 : 1, pu = (v) => v === "Albedo" ? "per +0.1" : "per +1 pp";
+  const t = el("table"); const h = el("tr"); ["Treatment", "Check", `Model (${U})`, `Causal (${U})`, "Verdict"].forEach((x2, i) => h.append(el("th", { class: i >= 2 && i <= 3 ? "r" : "" }, x2))); t.append(h);
+  const label = { adoption_vs_theta_sum: "Neighbourhood adoption vs own + neighbour effect", own_vs_theta_own: "Own cell vs own-cell effect", own_pd_vs_dr_curve: "Own-cell dose curve vs doubly robust curve" };
+  for (const [tr, c] of Object.entries(C)) { if (tr.startsWith("_")) continue; const aud = c.audit || {}; let first = true;
+    for (const [k, a] of Object.entries(aud)) { if (!a || typeof a !== "object" || !("verdict" in a)) continue; const row = el("tr");
+      row.append(el("td", {}, first ? `${vname(tr)} (${pu(tr)})` : ""), el("td", {}, label[k] || k));
+      const hasNum = typeof a.model === "number"; row.append(el("td", { class: "r" }, hasNum ? sfmt(a.model * per(tr), 4) : "—"), el("td", { class: "r" }, typeof a.causal === "number" ? sfmt(a.causal * per(tr), 4) : "—"));
+      const v = String(a.verdict); const kind = /consistent|agree/.test(v) ? "good" : /sign/.test(v) ? "crit" : "warn"; const td = el("td"); td.append(pill(kind, v)); row.append(td); t.append(row); first = false; }
+    const s = c.sensitivity || {}; const ev = s.e_value || {}, rb = s.robustness || {};
+    const row = el("tr"); row.append(el("td", {}, ""), el("td", { class: "cap" }, `DML total ${sfmt((c.dml_theta || NaN) * per(tr), 4)} ± ${fmt((c.dml_se || NaN) * per(tr), 4)} · E-value ${fmt(ev.e_value, 2)} · robustness value ${fmt(100 * (rb.rv_q || NaN), 1)}%`)); row.lastChild.setAttribute("colspan", "4"); t.append(row); }
+  box.append(t);
+}
+
+/* ---------- budget ---------- */
+function budget() {
+  const o = DATA.optimize; if (!o || !o.budget) { $("budgetText").textContent = "The budget step did not run for this result set."; return; }
+  const v = vname(o.variable).toLowerCase(); $("budgetTitle").textContent = `Budget plan for ${v}`;
+  $("budgetText").textContent = `Given ${fmt(o.budget, 0)} dose units of ${v} to place (1 unit = +1 pp on one ${fmt((DATA.qa || {}).cell_m, 0)} m cell), the optimiser ranks every cell's next increments by footprint cooling, respecting each cell's headroom and the saturation curve, and fills the budget greedily. The finished plan is then applied all at once and re-predicted through the model, so interactions between neighbouring plantings are counted.`;
+  const box = $("budgetKpis");
+  kpi(box, "Cells treated", (o.n_cells_treated || 0).toLocaleString(), "", `mean +${fmt(o.mean_dose_treated, 1)} pp each`);
+  kpi(box, "Planned total cooling", fmt(o.planned_total_cooling, 0), `${U}·cells`, "sum of footprint gains from the curves");
+  kpi(box, "Re-predicted total cooling", fmt(o.realized_total_cooling, 0), `${U}·cells`, `${fmt(100 * o.realized_total_cooling / o.planned_total_cooling, 0)}% of plan once neighbours interact`);
+  kpi(box, "Mean cooling in treated cells", fmt(o.realized_mean_cooling_treated, 2), U, `city-wide mean ${fmt(o.realized_mean_cooling_all, 3)} ${U}`);
+  const pts = (o.pareto && o.pareto.points) || []; if (!pts.length) return;
+  const xs0 = pts.map((q) => q.budget / o.budget), ys0 = pts.map((q) => q.total_benefit);
+  $("paretoCard").hidden = false;
+  const W = 980, H = 260, ml = 60, mr = 24, mt = 14, mb = 40, iw = W - ml - mr, ih = H - mt - mb;
+  const xm = Math.max(...xs0), ym = Math.max(...ys0) * 1.1; const x = (v2) => ml + iw * v2 / xm, y = (v2) => mt + ih * (1 - v2 / ym);
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Total cooling against budget multiplier" });
+  for (let k = 0; k <= 4; k++) { const v2 = ym * k / 4; svg.append(sv("line", { x1: ml, x2: W - mr, y1: y(v2), y2: y(v2), stroke: V("--grid") })); svg.append(sv("text", { x: ml - 6, y: y(v2) + 4, "text-anchor": "end", class: "t-axis" }, fmt(v2, 0))); }
+  xs0.forEach((v2) => svg.append(sv("text", { x: x(v2), y: H - mb + 18, "text-anchor": "middle", class: "t-axis" }, `${v2}×`)));
+  svg.append(sv("text", { x: ml + iw / 2, y: H - 4, "text-anchor": "middle", class: "t-label" }, `budget multiple (1× = ${fmt(o.budget, 0)} dose units)`));
+  const k1 = xs0.indexOf(1), k2 = xs0.indexOf(2);
+  if (k1 >= 0 && k2 >= 0) $("paretoCap").textContent = `Total planned cooling (°F summed over cells) as the budget scales. Doubling the budget from 1× to 2× raises total cooling ${fmt(ys0[k2] / ys0[k1], 2)}×, so returns diminish only slightly at this scale: plenty of high-benefit cells remain.`;
+  svg.append(sv("path", { d: xs0.map((v2, i) => `${i ? "L" : "M"} ${x(v2)} ${y(ys0[i])}`).join(" "), fill: "none", stroke: V("--accent"), "stroke-width": 2 }));
+  xs0.forEach((v2, i) => { svg.append(sv("circle", { cx: x(v2), cy: y(ys0[i]), r: 4.5, fill: V("--accent"), stroke: V("--surface"), "stroke-width": 2 }));
+    const hit = sv("circle", { cx: x(v2), cy: y(ys0[i]), r: 12, fill: "transparent" }); hit.addEventListener("pointermove", (ev) => showTip(ev, (t) => t.append(el("div", { class: "v" }, `${fmt(ys0[i], 0)} ${U}·cells`), el("div", {}, `${v2}× budget (${fmt(v2 * o.budget, 0)} units)`)))); hit.addEventListener("pointerleave", hideTip); svg.append(hit); });
+  $("chart-pareto").append(svg);
+}
+
+/* ---------- caveats & footer ---------- */
+function caveats() {
+  const ul = $("caveatList"); const qa = DATA.qa || {}; const items = [];
+  const fi = qa.target_fraction_integer_valued || 0;
+  if (fi > 0.3) items.push(`The temperature product is rounded: ${fmt(100 * fi, 0)}% of readings are whole degrees, so errors below about 0.3 ${U} are noise.`);
+  const main = ((DATA.cv_distance && DATA.cv_distance.rows) || []).find((r) => r.main);
+  if (main) items.push(`Accuracy varies by area: held-out fold R² ranges from ${fmt(main.fold_r2_min, 2)} to ${fmt(main.fold_r2_max, 2)}, so some neighbourhoods are predicted much better than others.`);
+  items.push("Fitted effects are attenuated. On a synthetic city with known answers, the model recovers about half of the true canopy effect with the right spatial pattern. Treat scenario magnitudes as conservative.");
+  const ext = (DATA.scenarios || []).filter((x) => x.frac_extrapolated > 0.2).map((x) => x.name);
+  if (ext.length) items.push(`These scenarios push more than 20% of edited cells beyond observed conditions: ${ext.join(", ")}. Treat them as extrapolation, not predictions.`);
+  const pv = DATA.physics && DATA.physics.v_norm_m;
+  if (pv && pv.mean < 1) items.push("The physics model runs without advection (no wind record was supplied) and with a generic energy balance for the configured time window.");
+  for (const c of DATA.caveats_extra || []) items.push(c);
+  for (const t of items) ul.append(el("li", {}, t));
+  const tm = DATA.timings || {}; const tot = Object.values(tm).reduce((a, b) => a + b, 0);
+  $("foot").textContent = `Generated from the run "${DATA.name}" (${DATA.created}). Total compute ${fmt(tot / 60, 0)} min on 3 CPU threads. Source: sparc/core in the sparc-resilience repository.`;
+}
+
+function init() {
+  buildLuts(); facts(); kpis(); accuracy(); influence(); curves(); scenarios(); causal(); budget(); caveats();
+  let g0 = GROUPS[0]; try { const s = localStorage.getItem("phm-group"); if (s && GROUPS.includes(s)) g0 = s; } catch (e) {}
+  setGroup(g0);
+}
+init();
+const rerender = () => { buildLuts(); render(); };
+window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", rerender);
+new MutationObserver(rerender).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+window.addEventListener("resize", () => drawOverlay());
+})();
+</script>
