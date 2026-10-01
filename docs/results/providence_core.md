@@ -149,9 +149,19 @@ City-wide mean cooling by neighbourhood dose (°F):
 
 **Canopy is now the most uncertain lever.** Its 95% jackknife interval includes zero at every dose, as does the causal estimate. With a weakly informative physics prior, the data do not pin the canopy effect down as tightly as before. The earlier tighter estimate was partly prior-driven (see [Validation](#validation-studies)).
 
-**Uncertainty components** (from `sparc core uncertainty`):
-- Estimation 95% intervals: canopy +10 pp −0.46 to +0.08; impervious −10 pp −0.78 to −0.03; package −2.80 to −0.65.
-- The multiverse specification range is added when that study completes.
+**Uncertainty components** (from `sparc core uncertainty`; each answers a different question):
+
+| Scenario | Estimate | Estimation 95% (jackknife) | Specification (multiverse) | Envelope | vs null simulation |
+|---|---|---|---|---|---|
+| Canopy +10 pp | −0.19 | −0.46 to +0.08 | −0.23 to −0.03 | −0.46 to +0.08 | **not distinguishable** |
+| Impervious −10 pp | −0.40 | −0.78 to −0.03 | −0.59 to −0.37 | −0.78 to −0.03 | — |
+| Albedo +0.1 | −0.85 | −1.83 to +0.12 | −0.87 to −0.34 | −1.83 to +0.12 | — |
+| Green package | −1.72 | −2.80 to −0.65 | −1.80 to −1.11 | −2.80 to −0.65 | — |
+
+- The specification range scales each multiverse variant's change to this run as a ratio to the multiverse baseline (the multiverse runs on 60 m cells).
+- The envelope is the union of the components: a plausible range for reading, not a confidence interval.
+- **Impervious and the package are the robust findings.** Their envelopes exclude zero, and every analysis variant agrees on the sign.
+- **Canopy is not established by this campaign.** The estimate is the same size as the spurious change the pipeline reports when the simulation plants no canopy effect (see [Validation](#validation-studies)).
 
 ## Climate futures (CMIP6, delta method)
 
@@ -273,7 +283,45 @@ The remaining spurious effect comes from the statistical models. Any smooth laye
 
 - The simulated worlds are somewhat easier than reality: held-out R² is 0.6–0.8, against 0.55.
 - The 5-fold jackknife intervals run narrower than nominal, so read them as lower bounds on uncertainty.
-- Other generators (null, additive, …) are added as they complete.
+
+**Null simulation: no planted canopy effect** (12 replicates each). Under the null, any canopy effect the pipeline reports is spurious:
+
+| Target product imitation | Mean spurious change, canopy +10 pp | Model flags it significant | Causal check flags it | 95% interval covers 0 |
+|---|---|---|---|---|
+| Route sampling + land-cover forest + whole-degree classing (as the real product) | **−0.19 ± 0.05 °F** | 25% | 42% | 75% |
+| Direct (noise + classing, no forest) | −0.06 ± 0.04 °F | 8% | 25% | 92% |
+
+- **The spurious canopy effect is mostly made by the target product.** The product's land-cover model fills unsampled streets using canopy (among other layers) as a proxy for what it cannot see. That writes a canopy–temperature relationship into the target even where none exists. Without the forest, the spurious change falls by two thirds and the model's false-positive rate is near nominal (8% at 5%).
+- The real canopy +10 pp estimate (−0.19 ± 0.14 °F) is the size of the product-made artefact (−0.18 °F at its dose). The real Heat Watch product was made with land-cover predictors, so this campaign cannot separate a real canopy effect from the product's own.
+- The causal check's false-positive rate (25–42%) shows its spatial-basis adjustment does not remove large-scale confounding on this layout either. Its intervals are too narrow under the null.
+- Impervious and albedo were not simulated under the null; the same mechanism could inflate them, which the placebo floor (≈ 0.3 °F per sd) bounds.
+
+**Multiverse** (`sparc core multiverse`, 60 m cells, 8 variants). Each column re-runs S0–S5 with one analysis choice changed:
+
+| Scenario (°F) | Baseline | Generic forcing | No physics | Spatial+ | 1 km blocks | 3 km blocks | No NDVI mediator | One scale | Sign stable |
+|---|---|---|---|---|---|---|---|---|---|
+| Canopy +10 | −0.35 | −0.35 | −0.06 | −0.39 | −0.16 | −0.37 | −0.34 | −0.42 | 100% |
+| Impervious −10 | −0.39 | −0.39 | −0.57 | −0.44 | −0.52 | −0.40 | −0.35 | −0.36 | 100% |
+| Albedo +0.1 | −1.56 | −1.58 | −0.63 | −1.43 | −0.86 | −1.39 | −1.56 | −1.59 | 100% |
+| Green package | −2.49 | −2.52 | −1.60 | −2.48 | −1.82 | −2.32 | −2.48 | −2.60 | 100% |
+
+Priority maps (where each extra unit cools most) against the baseline, as Kendall τ / top-decile overlap:
+
+| Variant | Held-out R² | Canopy | Impervious | Albedo |
+|---|---|---|---|---|
+| Generic forcing | 0.602 | 0.91 / 0.78 | 0.96 / 0.92 | 0.97 / 0.93 |
+| No physics | 0.515 | 0.07 / 0.02 | 0.32 / 0.24 | 0.07 / 0.02 |
+| Spatial+ | 0.579 | 0.67 / 0.35 | 0.61 / 0.55 | 0.83 / 0.57 |
+| 1 km blocks | 0.690 | 0.34 / 0.18 | 0.27 / 0.23 | 0.61 / 0.51 |
+| 3 km blocks | 0.606 | 0.56 / 0.20 | 0.57 / 0.44 | 0.82 / 0.53 |
+| No NDVI mediator | 0.603 | 0.51 / 0.12 | 0.78 / 0.70 | 1.00 / 1.00 |
+| One scale | 0.620 | 0.66 / 0.36 | 0.65 / 0.55 | 0.85 / 0.57 |
+
+- **Signs are stable everywhere:** every variant agrees every lever cools.
+- **Sizes depend on the physics model.** Without it, canopy +10 pp falls from −0.35 to −0.06 °F and albedo halves. Held-out skill also drops (0.603 → 0.515), so the physics model earns its place, but the canopy and albedo effects rest on its structure.
+- **The campaign-day forcing barely matters** (τ ≥ 0.91): the generic forcing gives the same answers.
+- **Priority maps are not robust.** Top-decile overlap with the baseline is below the 0.6 target for most variants and lever pairs. The *city-wide* effect of a plan is defensible; the exact ranking of *which cells first* is a modelling choice. Use the priority maps to shortlist areas, not to pick cells.
+- 1 km blocks inflate held-out skill (0.69): they leak neighbourhood information, which is why the main CV uses 2 km.
 
 **Literature:**
 - Canopy: 0.11 ± 0.08 °C per +0.10 cover. Ziter et al. 2019 report 0.07–0.15; the Krayenhoff et al. 2021 model review reports 0.3.
@@ -290,7 +338,19 @@ The remaining spurious effect comes from the statistical models. Any smooth laye
 | Albedo | 0.63 |
 | Water distance | 0.46 |
 
-A refit on open data only (`configs/core_providence_open.yml`) is in progress.
+**Refit on open data only** (`configs/core_providence_open.yml`, 60 m cells, S0–S6): the six predictors replaced by the open layers, everything else unchanged.
+
+| | brown4 layers (multiverse baseline) | Open layers |
+|---|---|---|
+| Held-out R² | 0.603 | **0.564** (within the 0.05 target) |
+| Canopy +10 pp | −0.35 | −0.36 ± 0.24 |
+| Impervious −10 pp | −0.39 | −0.28 ± 0.16 |
+| Green package | −2.49 | −1.58 ± 1.00 |
+| Stack vs best baseline (boosting on neighbourhood features) | ahead by > 2 SE | RMSE 1.13 vs 1.19: ahead by 1.6 SE, in 60% of blocks (**not decisive**) |
+
+- A city without its own GIS layers gets nearly the same skill and the same canopy and impervious effects (inside their intervals).
+- On open layers the stack's margin over a well-featured boosting model shrinks to within noise. The neighbourhood features carry most of the skill; the stack's extra value is its effect structure (physics, intervals), not raw accuracy.
+- Albedo is not comparable: the open layer is true broadband albedo (mean 0.15), so +0.1 is a far larger relative change than on brown4's index. Its effect (−1.14 ± 1.46 °F) is too uncertain to use.
 
 **Design-tool emulator vs the full model:**
 - canopy patches: 100% pass, median error 0.003 °F;
@@ -305,7 +365,8 @@ The in-browser emulator matches the Python reference to within 1e-4 °F.
 - **Uneven accuracy.** It varies strongly by area (fold R² 0.26–0.73).
 - **One afternoon only.** There is no night-time model.
 - **Albedo scale.** The layer is not broadband, so albedo effects are relative to it.
-- **Canopy effects are uncertain.** Read them with the placebo floor and the simulation check in mind.
+- **Canopy effects are not established.** The estimate matches the spurious change a land-cover-interpolated target produces with no canopy effect at all (null simulation). A test needs raw traverse points, not the gridded product.
+- **Priority maps are a modelling choice.** Their top-decile cells change with reasonable analysis choices (multiverse); city-wide effects and signs do not.
 
 ## Regenerating
 
@@ -318,8 +379,11 @@ R=output/core/providence/providence_uhi
 sparc core planner $R -p configs/core_providence.yml
 sparc core emulator $R -p configs/core_providence.yml
 sparc core placebo -p configs/core_providence.yml --coarse 60
-sparc core simcheck -p configs/core_providence.yml --design physics=20,null=12,additive=12 --out output/core/providence/simcheck/all
-sparc core multiverse -p configs/core_providence.yml --out output/core/providence/multiverse
+sparc core simcheck -p configs/core_providence.yml --design physics=20 --out output/core/providence/simcheck/physics
+sparc core simcheck -p configs/core_providence.yml --design null=12 --out output/core/providence/simcheck/null
+sparc core simcheck -p configs/core_providence.yml --design null=12 --product direct --out output/core/providence/simcheck/null_direct
+sparc core multiverse -p configs/core_providence.yml --coarse 60 --out output/core/providence/multiverse
+sparc core run -p configs/core_providence_open.yml --coarse 60 --stages S0,S1,S2,S3,S4,S5,S6
 sparc core uncertainty $R --multiverse output/core/providence/multiverse --simcheck output/core/providence/simcheck/* \
        --placebo output/core/providence/providence_uhi_placebo/placebo.json
 sparc core writeup $R

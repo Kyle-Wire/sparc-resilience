@@ -5,13 +5,19 @@ For every scenario of a finished run:
 * **estimation** — fold-to-fold (delete-a-group jackknife) SE of the city-wide
   change: what re-fitting on different parts of the city does;
 * **specification** — the spread of the same scenario across the multiverse
-  variants (analysis choices), applied as offsets from the multiverse
-  baseline;
+  variants (analysis choices), applied as ratios to the multiverse baseline
+  (the multiverse runs on coarser cells, so its absolute changes differ from
+  the run's; offsets are used only when the baseline is ~0 or of the other
+  sign);
 * **attribution** — for canopy scenarios, the simulation check's effect
   share on this city's layout: the planted effect is recovered times
   ``share``, so the true effect lies in estimate / [share range];
 * **model vs causal** — whether the independent causal estimate's band
-  contains the model's change (a flag, not added to any interval).
+  contains the model's change (a flag, not added to any interval);
+* **null artefact** — for canopy scenarios, the mean change the pipeline
+  reports when the simulation plants *no* canopy effect (scaled to the
+  scenario's dose), and whether the estimate is distinguishable from it
+  (a flag, not added to any interval).
 
 Climate futures carry their own spread (CMIP6 models within a pathway); the
 pathway itself is a scenario choice, not uncertainty.
@@ -24,7 +30,10 @@ reading, not a confidence interval.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
+
+SIM_DOSE = 10.0          # simcheck's canopy edit (pp); sparc.core.simcheck.DOSE
 
 
 def _canopy_var(m: dict) -> str | None:
@@ -45,8 +54,15 @@ def scenario_uncertainty(m: dict, multiverse: dict | None = None, simcheck: dict
              "frac_extrapolated": s.get("frac_extrapolated")}
         e = mv_eff.get(s["name"])
         if e:
-            off = [v - e["baseline"] for v in e["values"].values()]
-            r["specification"] = [est + min(off), est + max(off)]
+            base = float(e["baseline"])
+            vals = [float(v) for v in e["values"].values()]
+            if abs(base) > 1e-9 and base * est > 0:
+                spec = [est * v / base for v in vals]
+                r["specification_mode"] = "ratio"
+            else:
+                spec = [est + v - base for v in vals]
+                r["specification_mode"] = "offset"
+            r["specification"] = [float(min(spec)), float(max(spec))]
             r["sign_stability"] = e["sign_stability"]
         realised = set((s.get("mean_realized") or {}).keys())
         if share_rng and can and realised == {can}:
@@ -57,6 +73,17 @@ def scenario_uncertainty(m: dict, multiverse: dict | None = None, simcheck: dict
                 r["attribution_note"] = (f"simcheck effect share {lo:.2f}–{hi:.2f}"
                                          + (f"; stable → corrected {est * bias['correction_factor']:+.3f}"
                                             if bias.get("stable") and bias.get("correction_factor") else ""))
+        if can and realised == {can}:
+            dose = float((s.get("mean_realized") or {}).get(can) or 0.0)
+            for key, g in ((simcheck or {}).get("generators") or {}).items():
+                if key.split("/")[0] != "null" or g.get("null_mean_delta") is None:
+                    continue
+                k = dose / SIM_DOSE
+                nd, nse = g["null_mean_delta"] * k, (g.get("null_mean_delta_se") or 0.0) * abs(k)
+                z = abs(est - nd) / math.sqrt((se or 0.0) ** 2 + nse ** 2) if (se or nse) else float("inf")
+                r.setdefault("null_artifact", []).append(
+                    {"product": key.split("/")[1] if "/" in key else "rf", "delta": nd, "se": nse,
+                     "n": g.get("n"), "distinguishable": bool(z > 1.96)})
         cl = s.get("causal_linear")
         if cl:
             r["causal_band"] = [cl["lo"], cl["hi"]]
@@ -140,9 +167,20 @@ def uncertainty_markdown(u: dict, units: str = "") -> str:
                  f"{rng(r.get('specification'))} | {rng(r.get('attribution'))} | {rng(r.get('envelope'))} | "
                  f"{rng(r.get('causal_band'))}{flag} |")
     L += ["", "Estimation = fold-to-fold (jackknife) 95% interval. Specification = range across analysis choices "
-              "(multiverse). Attribution = canopy effect corrected by the simulation check's recovery share range. "
-              "Envelope = union of these (a plausible range, not a confidence interval). ⚠ = the model's change is "
-              "outside the independent causal band."]
+              "(multiverse, as ratios to the multiverse baseline). Attribution = canopy effect corrected by the "
+              "simulation check's recovery share range. Envelope = union of these (a plausible range, not a "
+              "confidence interval). ⚠ = the model's change is outside the independent causal band."]
+    nulls = [(r["scenario"], a) for r in u["scenarios"] for a in r.get("null_artifact") or []]
+    if nulls:
+        L += ["", f"| scenario | null simulation (target product) | spurious change ({units}) | estimate distinguishable? |",
+              "|---|---|---|---|"]
+        for name, a in nulls:
+            prod = "route sampling + land-cover forest" if a["product"] == "rf" else "direct (no forest)"
+            L.append(f"| {name} | {prod}, n={a.get('n')} | {a['delta']:+.2f} ± {a['se']:.2f} | "
+                     f"{'yes' if a['distinguishable'] else 'no'} |")
+        L += ["", "Null artefact = the mean change the pipeline reports when the simulation plants no canopy effect "
+                  "(scaled to the scenario's dose). An estimate that is not distinguishable from it cannot be "
+                  "attributed to canopy on this evidence."]
     if u.get("climate"):
         L += ["", f"| pathway | period | models | median warming ({units}) | 10th–90th percentile |", "|---|---|---|---|---|"]
         for c in u["climate"]:

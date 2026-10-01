@@ -545,7 +545,13 @@ Findings that changed the code are marked ⚑.
 
 **Validation studies**
 - ⚑ **Simulation check.** The first batch was much noisier than Providence (held-out R² ≈ 0.1 against 0.56). Generators now match the real explained-variance share.
-- The multiverse and the uncertainty report keep their components separate. The page shows them.
+  - Physics generator (20 runs): recovered share 1.13 (IQR 0.90–1.46), jackknife CI covers the truth 80%, per-cell rank correlation 0.27.
+- ⚑ **Null simulation found a product-made canopy effect.** With no planted canopy effect, the pipeline reports −0.19 ± 0.05 °F for canopy +10 pp (25% flagged significant; causal 42%), the size of the real estimate.
+  - A control without the product's land-cover forest (`--product direct`) cuts it to −0.06 ± 0.04 °F with an 8% false-positive rate: two thirds of the artefact is written into the target by the interpolation, not by SPARC.
+  - The uncertainty report now flags canopy estimates that are not distinguishable from the null artefact (all of Providence's are). Settling canopy needs raw traverse points.
+- **Multiverse** (8 variants, 60 m): every lever's sign is stable in 100% of variants. Sizes rest on the physics model (canopy +10 pp −0.35 → −0.06 °F without it). Priority maps are not robust (top-decile overlap mostly < 0.6), so they are for shortlisting, not cell picking.
+  - ⚑ The uncertainty report applied multiverse spread as offsets, which flipped canopy's sign across resolutions; it now uses ratios to the multiverse baseline.
+- The uncertainty report keeps estimation, specification, attribution and the null check separate. The page shows them.
 
 **Planner pack.** HRSL residents (all, 60+, under 5) and WorldCover land cover give:
 - exposure today and in each future, with and without the package;
@@ -573,7 +579,9 @@ Not done: quantile delta mapping with daily CMIP6 (the seasonal delta is used) a
 | Albedo | 0.63 |
 | Water distance | 0.46 |
 
-Canopy and impervious fall short of the 0.8 / 0.7 R² targets. The usual remedy is the Meta 1 m canopy-height map, but its bucket refuses listing from here. The refit with open features is in `configs/core_providence_open.yml`.
+Canopy and impervious fall short of the 0.8 / 0.7 R² targets. The usual remedy is the Meta 1 m canopy-height map, but its bucket refuses listing from here.
+
+The refit on open features only (`configs/core_providence_open.yml`, 60 m) meets the transfer target: held-out R² 0.564 against 0.603 with brown4's layers, canopy +10 pp −0.36 ± 0.24 (vs −0.35), impervious −10 pp −0.28 ± 0.16 (vs −0.39). The stack's margin over boosting on neighbourhood features shrinks to 1.6 SE.
 
 **Deferred:**
 - multi-city transfer (needs the other cities' CAPA data);
