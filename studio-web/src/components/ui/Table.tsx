@@ -36,9 +36,12 @@ export type TableProps<T> = {
   empty?: ReactNode;
 };
 
+/** Missing for sorting: null, undefined, NaN and ±Infinity (always listed last). */
+const isMissing = (v: CsvCell) => v === null || v === undefined || (typeof v === "number" && !Number.isFinite(v));
+
 function cmp(a: CsvCell, b: CsvCell): number {
-  const na = a === null || a === undefined || (typeof a === "number" && !Number.isFinite(a));
-  const nb = b === null || b === undefined || (typeof b === "number" && !Number.isFinite(b));
+  const na = isMissing(a);
+  const nb = isMissing(b);
   if (na || nb) return na === nb ? 0 : na ? 1 : -1; // missing values last
   if (typeof a === "number" && typeof b === "number") return a - b;
   return String(a).localeCompare(String(b), undefined, { numeric: true });
@@ -78,8 +81,8 @@ export function Table<T>({
     const out = [...rows].sort((a, b) => cmp(get(a), get(b)));
     if (sort.dir === "desc") {
       // keep missing values last when descending
-      const present = out.filter((r) => get(r) !== null && get(r) !== undefined);
-      const missing = out.filter((r) => get(r) === null || get(r) === undefined);
+      const present = out.filter((r) => !isMissing(get(r)));
+      const missing = out.filter((r) => isMissing(get(r)));
       return [...present.reverse(), ...missing];
     }
     return out;

@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { BACKOFF_S, StreamManager, backoffMs, type EventSourceLike, type StreamDeps } from "../api/sse";
+import { BACKOFF_S, FRAME_FALLBACK_MS, StreamManager, backoffMs, scheduleFrame, type EventSourceLike, type StreamDeps } from "../api/sse";
 import type { GlobalEvent, Job, JobEvent } from "../api/types";
 
-/** A controllable EventSource double. */
+/**
+ * A controllable EventSource double. Like a browser, a frame without an `id:` line carries
+ * the previous frame's id as its lastEventId (the "last event ID buffer" is sticky).
+ */
 class FakeES implements EventSourceLike {
   static all: FakeES[] = [];
   onopen: ((ev: Event) => void) | null = null;
@@ -11,6 +14,7 @@ class FakeES implements EventSourceLike {
   closed = false;
   listeners = new Map<string, ((ev: MessageEvent) => void)[]>();
   url: string;
+  lastId = "";
   constructor(url: string) {
     this.url = url;
     FakeES.all.push(this);
@@ -28,7 +32,8 @@ class FakeES implements EventSourceLike {
     this.onerror?.(new Event("error"));
   }
   send(type: string, data: unknown, id?: string) {
-    const ev = new MessageEvent(type, { data: JSON.stringify(data), lastEventId: id ?? "" });
+    if (id !== undefined) this.lastId = id;
+    const ev = new MessageEvent(type, { data: JSON.stringify(data), lastEventId: this.lastId });
     for (const l of this.listeners.get(type) ?? []) l(ev);
   }
 }
@@ -127,12 +132,18 @@ describe("StreamManager: job stream", () => {
     expect([1, 2, 3, 4, 5, 6, 7, 12].map(backoffMs)).toEqual([1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000]);
   });
 
-  it("falls back to polling after three failures, then returns to streaming", async () => {
+  it("falls back to polling after three failures and reads the backlog until the job ends", async () => {
+    let finished = false;
     const pages: Record<string, unknown> = {
-      "/api/jobs/j_1/events?after=500&limit=5000": { events: [ev(600), ev(700)], next_cursor: 700, eof: false },
-      "/api/jobs/j_1/events?after=700&limit=5000": { events: [ev(800, "job.status", { status: "succeeded" })], next_cursor: 800, eof: true },
+      // a backlog larger than one page is read in one tick…
+      "/api/jobs/j_1/events?after=500&limit=5000": { events: [ev(600), ev(650)], next_cursor: 650, eof: false },
+      "/api/jobs/j_1/events?after=650&limit=5000": { events: [ev(700)], next_cursor: 700, eof: true },
     };
-    const h = harness((p) => pages[p] ?? { events: [], next_cursor: 0, eof: false });
+    const h = harness((p) => {
+      // …then the job ends before the next tick.
+      if (p === "/api/jobs/j_1/events?after=700&limit=5000") return finished ? { events: [ev(800, "job.status", { status: "succeeded" })], next_cursor: 800, eof: true } : { events: [], next_cursor: 700, eof: true };
+      return pages[p] ?? { events: [], next_cursor: 0, eof: false };
+    });
     const m = new StreamManager(h.deps);
     const got: number[] = [];
     let ended: string | null = null;
@@ -145,15 +156,59 @@ describe("StreamManager: job stream", () => {
     h.latest().fail(); // 3 → polling
     expect(m.state).toBe("polling");
     await h.advance(0); // first poll is immediate
+    await h.advance(0);
     h.runFrames();
-    expect(h.fetched[0]).toBe("/api/jobs/j_1/events?after=500&limit=5000");
-    expect(got).toEqual([600, 700]);
+    expect(h.fetched.slice(0, 2)).toEqual(["/api/jobs/j_1/events?after=500&limit=5000", "/api/jobs/j_1/events?after=650&limit=5000"]);
+    expect(got).toEqual([600, 650, 700]);
+    expect(ended).toBeNull();
+    finished = true;
     await h.advance(5000); // next poll after 5 s, sees the final status at eof
+    await h.advance(0);
     h.runFrames();
     expect(h.fetched).toContain("/api/jobs/j_1/events?after=700&limit=5000");
-    expect(got).toEqual([600, 700, 800]);
+    expect(got).toEqual([600, 650, 700, 800]);
     expect(ended).toBe("succeeded");
     expect(m.jobStreamId).toBeNull();
+  });
+
+  it("polls from the first line when no cursor is known (the first event is at byte 0)", async () => {
+    const h = harness((p) =>
+      p === "/api/jobs/j_1/events?limit=5000" ? { events: [ev(0, "run.start"), ev(120)], next_cursor: 120, eof: true } : { events: [], next_cursor: 120, eof: true },
+    );
+    const m = new StreamManager(h.deps);
+    const got: number[] = [];
+    m.openJob("j_1", { onEvents: (b) => got.push(...b.map((e) => e.cursor!)) });
+    for (let i = 0; i < 3; i++) {
+      h.latest().fail();
+      await h.advance(i === 2 ? 0 : 1000 * 2 ** i);
+    }
+    expect(m.state).toBe("polling");
+    await h.advance(0);
+    h.runFrames();
+    expect(h.fetched[0]).toBe("/api/jobs/j_1/events?limit=5000");
+    expect(got).toEqual([0, 120]);
+    await h.advance(5000);
+    expect(h.fetched).toContain("/api/jobs/j_1/events?after=120&limit=5000");
+  });
+
+  it("drops a poll reply that arrives after the stream was closed", async () => {
+    let release: (v: unknown) => void = () => {};
+    const h = harness();
+    h.deps.getJson = <T,>() => new Promise<T>((r) => (release = r as (v: unknown) => void));
+    const m = new StreamManager(h.deps);
+    const got: number[] = [];
+    const sub = m.openJob("j_1", { after: 5, onEvents: (b) => got.push(...b.map((e) => e.cursor!)) });
+    for (let i = 0; i < 3; i++) {
+      h.latest().fail();
+      await h.advance(i === 2 ? 0 : 1000 * 2 ** i);
+    }
+    await h.advance(0); // the poll request is in flight
+    sub.close();
+    release({ events: [ev(10)], next_cursor: 10, eof: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    h.runFrames();
+    expect(got).toEqual([]);
   });
 
   it("a reconnect that opens stops polling", async () => {
@@ -220,17 +275,61 @@ describe("StreamManager: job stream", () => {
     expect(m.jobStreamId).toBe("j_2");
   });
 
-  it("transient resource events (no id) do not move the cursor", async () => {
+  it("transient resource events (no id) are delivered and do not move the cursor", async () => {
     const h = harness();
     const m = new StreamManager(h.deps);
-    m.openJob("j_1", { onEvents: () => {} });
+    const got: JobEvent[] = [];
+    m.openJob("j_1", { onEvents: (b) => got.push(...b) });
     const es = h.latest();
     es.open();
     es.send("log", ev(50), "50");
-    es.send("resource", { type: "resource", rss_mb: 100, cpu_pct: 50, n_procs: 2, threads: 4 });
+    // No id line: the browser hands it lastEventId "50" (the previous id).
+    es.send("resource", { rss_mb: 100, cpu_pct: 50, n_procs: 2, threads: 4 });
+    es.send("resource", { rss_mb: 120, cpu_pct: 40, n_procs: 2, threads: 4 });
+    es.send("log", ev(60), "60");
+    h.runFrames();
+    expect(got.map((e) => e.type)).toEqual(["log", "resource", "resource", "log"]);
+    expect(got.filter((e) => e.type === "resource").map((e) => (e as { rss_mb: number }).rss_mb)).toEqual([100, 120]);
+    expect(got[1].cursor).toBeUndefined();
     es.fail();
     await h.advance(1000);
-    expect(h.latest().url).toBe("/api/jobs/j_1/stream?after=50");
+    expect(h.latest().url).toBe("/api/jobs/j_1/stream?after=60");
+  });
+
+  it("a payload without `cursor` falls back to a fresh frame id, never to a repeated one", () => {
+    const h = harness();
+    const m = new StreamManager(h.deps);
+    const got: (number | undefined)[] = [];
+    m.openJob("j_1", { onEvents: (b) => got.push(...b.map((e) => e.cursor)) });
+    const es = h.latest();
+    es.open();
+    const bare = (type: string) => ({ v: 1, type, seq: 1, ts: 1, t_rel: 0, pid: 1, job: "j_1", lvl: "info", span: null, parent: null, path: [], ctx: {} });
+    es.send("log", bare("log"), "70");
+    es.send("log", bare("log")); // repeated lastEventId "70": not a duplicate of 70, just id-less
+    es.send("log", bare("log"), "90");
+    h.runFrames();
+    expect(got).toEqual([70, undefined, 90]);
+  });
+});
+
+describe("scheduleFrame", () => {
+  it("runs once, on the animation frame when it fires", () => {
+    const frames: (() => void)[] = [];
+    const timers: (() => void)[] = [];
+    let calls = 0;
+    scheduleFrame(() => calls++, (f) => frames.push(f), (f) => void timers.push(f));
+    frames[0]();
+    timers[0]();
+    expect(calls).toBe(1);
+  });
+  it("falls back to a timer when frames never fire (background tab)", () => {
+    const timers: { f: () => void; ms: number }[] = [];
+    let calls = 0;
+    scheduleFrame(() => calls++, () => {}, (f, ms) => void timers.push({ f, ms }));
+    expect(timers.map((t) => t.ms)).toEqual([FRAME_FALLBACK_MS]);
+    expect(calls).toBe(0);
+    timers[0].f();
+    expect(calls).toBe(1);
   });
 });
 

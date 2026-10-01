@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { GlobalEvent, Job } from "../api/types";
-import { activeJobs, mostImportantJob, reduceGlobal, tabTitle, tagsForGlobalEvent } from "../stores/jobs";
+import { ApiError } from "../api/client";
+import { clearResources, mutate, peekResource } from "../api/resource";
+import { activeJobs, mostImportantJob, reconcilePolledJobs, reduceGlobal, tabTitle, tagsForGlobalEvent, useJobs } from "../stores/jobs";
+import { useUi } from "../stores/ui";
 
 function job(p: Partial<Job>): Job {
   return {
@@ -64,5 +67,38 @@ describe("jobs store (global SSE)", () => {
     expect(tabTitle(jobs, progress, "Accuracy")).toBe("(2 running) ▶ 42% S2_S3 · SPARC Studio");
     expect(tabTitle({ b: jobs.b }, progress, "Accuracy")).toBe("▶ 42% S2_S3 · SPARC Studio");
     expect(tabTitle({ d: jobs.d }, {}, "Accuracy")).toBe("Accuracy · SPARC Studio");
+  });
+});
+
+describe("jobs store while polling", () => {
+  it("a job that leaves the active list is fetched, stored final, toasted and its resources refreshed", async () => {
+    useJobs.getState().reset();
+    useUi.setState({ toasts: [] });
+    useJobs.getState().setActive([job({ id: "j_1", status: "running" }), job({ id: "j_2", status: "queued", run_id: "r2", label: "Planner pack" })]);
+    mutate("run:r1", "old run detail"); // unmounted cached entries are dropped on invalidation
+    const fetched: string[] = [];
+    await reconcilePolledJobs([job({ id: "j_2", status: "running", run_id: "r2", label: "Planner pack" })], async (id) => {
+      fetched.push(id);
+      return job({ id, status: "succeeded", result: { r2: 0.81 } });
+    });
+    expect(fetched).toEqual(["j_1"]);
+    const s = useJobs.getState();
+    expect(s.jobs.j_1.status).toBe("succeeded");
+    expect(s.jobs.j_2.status).toBe("running");
+    expect(activeJobs(s.jobs).map((j) => j.id)).toEqual(["j_2"]);
+    expect(useUi.getState().toasts.map((t) => t.title)).toEqual(["Fast run finished"]);
+    expect(peekResource("run:r1")).toBeUndefined();
+    clearResources();
+  });
+
+  it("a job that disappeared (deleted) is dropped quietly", async () => {
+    useJobs.getState().reset();
+    useUi.setState({ toasts: [] });
+    useJobs.getState().setActive([job({ id: "j_1", status: "running" })]);
+    await reconcilePolledJobs([], async () => {
+      throw new ApiError(404, "not_found", "no job");
+    });
+    expect(useJobs.getState().jobs.j_1).toBeUndefined();
+    expect(useUi.getState().toasts).toEqual([]);
   });
 });

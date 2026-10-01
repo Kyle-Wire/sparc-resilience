@@ -20,9 +20,12 @@ export type LegendProps = {
   compact?: boolean;
 };
 
-/** Category colours for a cat layer in class order (class 0 grey, then s1..s3). */
-export function categorySwatches(meta: LayerMeta, dark: boolean): { label: string; color: string }[] {
-  const labels = meta.labels ?? [];
+/**
+ * Category colours for a cat layer in class order (class 0 grey, then s1..s3), matching
+ * colorize(). Without labels the classes are named "Class 0" … from `nCat`.
+ */
+export function categorySwatches(meta: LayerMeta, dark: boolean, nCat?: number): { label: string; color: string }[] {
+  const labels = meta.labels?.length ? meta.labels : Array.from({ length: nCat ?? 0 }, (_, k) => `Class ${k}`);
   const { colors, gray } = catColors(dark);
   if (labels.length > 4) return labels.map((l, k) => ({ label: l, color: rampColor("seq", k / (labels.length - 1), dark) }));
   return labels.map((l, k) => ({ label: l, color: k === 0 ? gray : colors[k - 1] }));
@@ -48,16 +51,19 @@ export function Legend({ meta, domain, dark, values, brush, onBrush, compact }: 
   const counts = useMemo(() => (values && domain.kind === "cat" ? categoryCounts(values, domain.nCat) : null), [values, domain]);
   const bins = useMemo(() => {
     if (!values || domain.kind === "cat") return null;
+    // Values beyond the 2–98% domain are painted with the end colours ("≤ lo", "≥ hi"), so
+    // they are counted in the end bins rather than dropped.
     const disp = new Float32Array(values.length);
     for (let i = 0; i < values.length; i++) {
       const v = values[i];
-      disp[i] = domain.zeroBlank && v <= 0 ? NaN : v * domain.mult;
+      const x = v * domain.mult;
+      disp[i] = domain.zeroBlank && v <= 0 ? NaN : x < domain.lo ? domain.lo : x > domain.hi ? domain.hi : x;
     }
     return histogram(disp, 32, [domain.lo, domain.hi]);
   }, [values, domain]);
 
   if (domain.kind === "cat") {
-    const sw = categorySwatches(meta, dark);
+    const sw = categorySwatches(meta, dark, domain.nCat);
     const total = counts ? counts.reduce((a, b) => a + b, 0) : 0;
     return (
       <div className="stack" style={{ gap: 8 }}>

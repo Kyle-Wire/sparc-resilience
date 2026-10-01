@@ -14,7 +14,7 @@ import { toast, useUi } from "../stores/ui";
 import { fmtNum, fmtSigned, unitLabel } from "../theme/format";
 import { getLuts, THEME_COLORS } from "../theme/palette";
 import { GridCanvas, type GridCanvasHandle } from "./GridCanvas";
-import { Legend } from "./Legend";
+import { Legend, categorySwatches, divergingEnds } from "./Legend";
 import { LayerPicker, findLayer } from "./LayerPicker";
 import { MapChrome, Overlay, type OverlayFeature } from "./Overlay";
 import { SwipeCompare } from "./SwipeCompare";
@@ -140,8 +140,12 @@ export function MapView(props: MapViewProps) {
   );
   const diffDomain = useMemo(() => (diffMeta && diff ? computeDomain(diffMeta, diff) : null), [diffMeta, diff]);
 
-  // Reset the legend brush when the layer changes.
-  useEffect(() => setBrushRange(null), [layerKey]);
+  // Reset the legend brush and a typed range when the layer changes: a range in one layer's
+  // units means nothing for the next (Lock scale is the way to keep a scale across layers).
+  useEffect(() => {
+    setBrushRange(null);
+    setManual(null);
+  }, [layerKey]);
 
   const tool: MapTool | null = useMemo(() => {
     switch (toolId) {
@@ -185,12 +189,13 @@ export function MapView(props: MapViewProps) {
       const v = showValues ? showValues[row] : NaN;
       let txt = "—";
       if (m && Number.isFinite(v)) {
-        if (m.scale === "cat") txt = m.labels?.[v] ?? String(v);
+        if (m.zero_blank && v <= 0) txt = "none"; // painted as no data (e.g. untreated cells)
+        else if (m.scale === "cat") txt = m.labels?.[v] ?? String(v);
         else {
           const x = v * (m.mult || 1);
           txt = `${m.scale === "div" && (m.center ?? 0) === 0 ? fmtSigned(x, m.decimals) : fmtNum(x, m.decimals)} ${unitLabel(m.unit)}`.trim();
         }
-      } else if (m?.zero_blank && v <= 0) txt = "none";
+      }
       return `${m?.label ?? "Value"}: ${txt}${ll ? " · " + ll : ""} · row ${row}`;
     },
     [grid, showMeta, showValues],
@@ -203,7 +208,8 @@ export function MapView(props: MapViewProps) {
       const S = 4;
       const legendW = 260;
       const W = grid.nx * S + legendW + 24;
-      const H = Math.max(grid.ny * S, 220) + 40;
+      const nClasses = showDomain.kind === "cat" ? categorySwatches(showMeta, dark, showDomain.nCat).length : 0;
+      const H = Math.max(grid.ny * S, 220, 20 * nClasses + 20) + 40;
       const c = document.createElement("canvas");
       c.width = W;
       c.height = H;
@@ -217,10 +223,19 @@ export function MapView(props: MapViewProps) {
       g.fillStyle = tc.ink;
       g.font = "600 16px 'Public Sans', sans-serif";
       g.fillText(`${props.title ? props.title + " · " : ""}${showMeta.label}`, 8, 20);
-      // legend ramp
+      // legend: class swatches for categorical layers, else the ramp with its range
       const lx = grid.nx * S + 16;
       const lut = getLuts(dark)[showDomain.kind === "div" ? "div" : "seq"];
-      if (showDomain.kind !== "cat") {
+      if (showDomain.kind === "cat") {
+        g.font = "12px 'Public Sans', sans-serif";
+        categorySwatches(showMeta, dark, showDomain.nCat).forEach((sw, k) => {
+          const y = 44 + k * 20;
+          g.fillStyle = sw.color;
+          g.fillRect(lx, y, 14, 14);
+          g.fillStyle = tc.ink2;
+          g.fillText(sw.label, lx + 20, y + 11);
+        });
+      } else {
         for (let i = 0; i < 200; i++) {
           const k = Math.round((i / 199) * 255) * 3;
           g.fillStyle = `rgb(${lut[k]},${lut[k + 1]},${lut[k + 2]})`;
@@ -231,6 +246,11 @@ export function MapView(props: MapViewProps) {
         g.fillText(`≤ ${fmtNum(showDomain.lo, showMeta.decimals)}`, lx, 84);
         const hiTxt = `≥ ${fmtNum(showDomain.hi, showMeta.decimals)} ${unitLabel(showMeta.unit)}`;
         g.fillText(hiTxt, lx + 200 - g.measureText(hiTxt).width, 84);
+        if (showDomain.kind === "div") {
+          const [lowEnd, highEnd] = divergingEnds(showMeta);
+          g.fillText(lowEnd, lx, 102);
+          g.fillText(highEnd, lx + 200 - g.measureText(highEnd).width, 102);
+        }
       }
       // scale bar
       const pxPerM = S / grid.meta.dx_m;
@@ -383,7 +403,12 @@ export function MapView(props: MapViewProps) {
                           props.onSelection?.({ spec: null, mask: null, label: "", portable: true, source: "legend" });
                           return;
                         }
-                        const mask = maskFromRange(showValues, showDomain.mult, r[0], r[1]);
+                        // A brush reaching an end of the ramp includes the cells painted with
+                        // that end colour (beyond the 2–98% clip).
+                        const eps = (showDomain.hi - showDomain.lo) * 1e-9;
+                        const lo = r[0] <= showDomain.lo + eps ? -Infinity : r[0];
+                        const hi = r[1] >= showDomain.hi - eps ? Infinity : r[1];
+                        const mask = maskFromRange(showValues, showDomain.mult, lo, hi);
                         let n = 0;
                         for (let i = 0; i < mask.length; i++) n += mask[i];
                         props.onSelection?.({ spec: null, mask, label: `${showMeta.label} ${fmtNum(r[0], showMeta.decimals)} to ${fmtNum(r[1], showMeta.decimals)} · ${n.toLocaleString("en-US")} cells`, portable: false, source: "legend" });

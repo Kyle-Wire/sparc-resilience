@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createRef } from "react";
+import { act, createRef } from "react";
 import type { LayerMeta } from "../api/types";
 import { buildCellToPt, colorize, mapPalette, outlinePath } from "../map/colour";
 import { computeDomain, type Domain } from "../map/domain";
@@ -147,6 +147,53 @@ describe("GridCanvas", () => {
     render(<Host />);
     await flush();
     expect(ref.current!.raster()?.width).toBe(3);
+  });
+
+  it("zooms on the wheel about the cursor and keeps the page from scrolling", async () => {
+    const g = grid3();
+    let view: ReturnType<typeof useMapView> | null = null;
+    function Host() {
+      const v = useMapView({ scale: 10, tx: 0, ty: 0 });
+      view = v;
+      return <GridCanvas grid={g} view={v} dark={false} values={Float32Array.from([0, 1, 2, 3, 4, 5, 6])} domain={seq(0, 6)} label="3x3" />;
+    }
+    const { container } = render(<Host />);
+    await flush();
+    const stage = container.querySelector('[role="application"]')!;
+    const ev = new WheelEvent("wheel", { deltaY: -200, clientX: 15, clientY: 15, bubbles: true, cancelable: true });
+    act(() => {
+      stage.dispatchEvent(ev);
+    });
+    expect(ev.defaultPrevented).toBe(true); // a passive (React) listener could not do this
+    const s = view!.state;
+    expect(s.scale).toBeCloseTo(10 * Math.exp(0.3), 9);
+    // the raster point under the cursor (1.5, 1.5) stays under it
+    expect((15 - s.tx) / s.scale).toBeCloseTo(1.5, 9);
+    expect((15 - s.ty) / s.scale).toBeCloseTo(1.5, 9);
+  });
+
+  it("a cancelled pointer ends the pan instead of panning on later moves", async () => {
+    const g = grid3();
+    let view: ReturnType<typeof useMapView> | null = null;
+    function Host() {
+      const v = useMapView({ scale: 10, tx: 0, ty: 0 });
+      view = v;
+      return <GridCanvas grid={g} view={v} dark={false} values={null} domain={null} label="3x3" />;
+    }
+    const { container } = render(<Host />);
+    await flush();
+    const stage = container.querySelector('[role="application"]')!;
+    const fire = (type: string, x: number, buttons: number) =>
+      act(() => {
+        stage.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: 5, button: 0, buttons, pointerId: 1, pointerType: "mouse", bubbles: true }));
+      });
+    fire("pointerdown", 5, 1);
+    fire("pointermove", 25, 1);
+    expect(view!.state.tx).toBe(20);
+    fire("pointercancel", 25, 0);
+    fire("pointermove", 60, 1);
+    expect(view!.state.tx).toBe(20);
+    expect(stage.getAttribute("data-dragging")).toBeNull();
   });
 
   it("moves a keyboard cursor and announces the cell in an aria-live region; Enter pins", async () => {

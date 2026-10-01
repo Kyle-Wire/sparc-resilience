@@ -1,6 +1,8 @@
 // Root component: matches the URL against the route registry and renders the page inside the
 // shell and its layout (/p/:pid/* → ProjectLayout, /r/:rid/* → RunLayout). Pages are lazy
-// chunks; each navigation gets a fresh error boundary.
+// chunks. Each page gets a fresh error boundary per path; the layouts stay mounted across
+// navigation (the run tab bar keeps its focus when a tab is followed), behind a boundary of
+// their own that resets on navigation.
 import { Suspense, useEffect, type ReactNode } from "react";
 import { AppShell } from "./layouts/AppShell";
 import { ErrorBoundary } from "./layouts/ErrorBoundary";
@@ -37,15 +39,20 @@ export function App() {
     else setContext({ runId: null });
   }, [pathname, params.pid, params.rid, setContext]);
 
-  let body: ReactNode = Page ? <Page /> : null;
-  if (route && params.rid && route.path.startsWith("/r/:rid")) body = <RunLayout rid={params.rid}>{body}</RunLayout>;
-  else if (route && params.pid && route.path.startsWith("/p/:pid")) body = <ProjectLayout pid={params.pid}>{body}</ProjectLayout>;
+  const page: ReactNode = Page ? (
+    <ErrorBoundary key={pathname}>
+      <Suspense fallback={<Loading />}>
+        <Page />
+      </Suspense>
+    </ErrorBoundary>
+  ) : null;
+  let body: ReactNode = page;
+  if (route && params.rid && route.path.startsWith("/r/:rid")) body = <RunLayout rid={params.rid}>{page}</RunLayout>;
+  else if (route && params.pid && route.path.startsWith("/p/:pid")) body = <ProjectLayout pid={params.pid}>{page}</ProjectLayout>;
 
   return (
     <AppShell pageTitle={route?.title ?? null} fullWidth={isFullWidth(route)}>
-      <ErrorBoundary key={pathname}>
-        <Suspense fallback={<Loading />}>{body}</Suspense>
-      </ErrorBoundary>
+      <ErrorBoundary resetKey={pathname}>{body}</ErrorBoundary>
     </AppShell>
   );
 }

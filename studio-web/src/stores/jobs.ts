@@ -3,10 +3,12 @@
 // `connectJobs()` (called once by the shell) opens the global stream, loads the active
 // jobs, applies `job.*` and `engine.status` events, invalidates resource tags for run,
 // scenario and study events, refetches everything on `resync`, and raises a toast (plus an
-// opt-in browser notification) when a job ends. The tracker of one job (Mission Control)
+// opt-in browser notification) when a job ends. While the stream is down and the manager
+// polls the active list, a job that leaves the list is fetched once so its end is still
+// toasted and its run, project and job resources are refreshed. The tracker of one job (Mission Control)
 // lives in stores/tracker.ts (frontend-tracking); this store only holds the 1 Hz summary.
 import { create } from "zustand";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import { invalidate, invalidateAll } from "../api/resource";
 import { getStreams, type StreamManager } from "../api/sse";
 import {
@@ -236,13 +238,57 @@ function notifyEnd(job: Job): void {
   }
 }
 
-async function refreshActive(): Promise<void> {
-  try {
-    const page = await api.get<Page<Job>>("/api/jobs", { status: "active", limit: 500 });
-    useJobs.getState().setActive(page.items ?? []);
-  } catch {
-    /* the connection pill reports the outage */
+/** Resource tags a job status change makes stale (the same as a `job.status` event). */
+function tagsForJob(job: Pick<Job, "id" | "run_id" | "project_id">): string[] {
+  const t = ["jobs", `job:${job.id}`];
+  if (job.run_id) t.push(`run:${job.run_id}`);
+  if (job.project_id) t.push(`project:${job.project_id}`);
+  return t;
+}
+
+/**
+ * Apply one polled active-job list (global stream in polling fallback). Jobs that were
+ * active and are missing from the list have ended (or were deleted): each is fetched once,
+ * stored with its final status, toasted and its tags invalidated; status changes of jobs
+ * still listed invalidate their tags as a `job.status` event would. Exported for tests.
+ */
+export async function reconcilePolledJobs(list: Job[], fetchJob: (id: string) => Promise<Job> = (id) => api.get<Job>(`/api/jobs/${encodeURIComponent(id)}`)): Promise<void> {
+  const before = useJobs.getState().jobs;
+  useJobs.getState().setActive(list);
+  const listed = new Set(list.map((j) => j.id));
+  const tags = new Set<string>();
+  for (const j of list) {
+    const prev = before[j.id];
+    if (!prev || prev.status !== j.status) for (const t of tagsForJob(j)) tags.add(t);
   }
+  const gone = Object.values(before).filter((j) => isActiveStatus(j.status) && !listed.has(j.id));
+  for (const t of tags) invalidate(t);
+  await Promise.all(
+    gone.map(async (old) => {
+      let j: Job;
+      try {
+        j = await fetchJob(old.id);
+      } catch (e) {
+        // Deleted, or the server is unreachable: leave it out of the active set either way.
+        if (e instanceof ApiError && e.status === 404) for (const t of tagsForJob(old)) invalidate(t);
+        return;
+      }
+      useJobs.getState().upsert(j);
+      for (const t of tagsForJob(j)) invalidate(t);
+      if (FINAL_JOB_STATUSES.includes(j.status)) notifyEnd(j);
+    }),
+  );
+}
+
+/** Reload the active jobs (start-up and after a `resync`, when events may have been lost). */
+async function refreshActive(): Promise<void> {
+  let page: Page<Job>;
+  try {
+    page = await api.get<Page<Job>>("/api/jobs", { status: "active", limit: 500 });
+  } catch {
+    return; // the connection pill reports the outage
+  }
+  await reconcilePolledJobs(page.items ?? []);
 }
 
 /**
@@ -287,7 +333,7 @@ export function connectJobs(manager: StreamManager = getStreams()): () => void {
       invalidateAll();
     }),
   );
-  offs.push(manager.onPollJobs((list) => useJobs.getState().setActive(list)));
+  offs.push(manager.onPollJobs((list) => void reconcilePolledJobs(list)));
   manager.startGlobal();
   void refreshActive();
   api

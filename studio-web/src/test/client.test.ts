@@ -88,6 +88,19 @@ describe("requests", () => {
     expect(r.offsets).toEqual(offsets);
     expect(r.buffer.byteLength).toBe(buffer.byteLength);
   });
+  it("getBin rejects truncated or malformed binaries instead of misaligning rows", async () => {
+    const f = Float32Array.from([1, 2, 3]);
+    restore = mockFetch({
+      "GET /api/runs/r1/layers/short.bin": { raw: f.buffer.slice(0, 8), headers: { "content-type": "application/octet-stream", "X-SPARC-Dtype": "float32", "X-SPARC-Length": "3" } },
+      "GET /api/runs/r1/layers/odd.bin": { raw: f.buffer.slice(0, 7), headers: { "content-type": "application/octet-stream", "X-SPARC-Dtype": "float32" } },
+      "GET /api/runs/r1/layers/kind.bin": { raw: f.buffer.slice(0), headers: { "content-type": "application/octet-stream", "X-SPARC-Dtype": "float16" } },
+      "GET /api/runs/r1/grid.bin": { raw: new ArrayBuffer(8), headers: { "content-type": "application/octet-stream", "X-SPARC-Offsets": '[{"name":"ix","dtype":"int32","offset":0,"length":5}]' } },
+    }).restore;
+    await expect(getBin("/api/runs/r1/layers/short.bin")).rejects.toMatchObject({ code: "bad_response", message: expect.stringContaining("X-SPARC-Length is 3") });
+    await expect(getBin("/api/runs/r1/layers/odd.bin")).rejects.toMatchObject({ code: "bad_response" });
+    await expect(getBin("/api/runs/r1/layers/kind.bin")).rejects.toMatchObject({ code: "bad_response", message: expect.stringContaining("float16") });
+    await expect(getBin("/api/runs/r1/grid.bin")).rejects.toMatchObject({ code: "bad_response", message: expect.stringContaining('"ix" overruns') });
+  });
   it("getBin errors carry the envelope", async () => {
     restore = mockFetch({ "GET /api/runs/r1/layers/nope.bin": { status: 404, body: { error: { code: "unknown_layer", message: "No layer nope" } } } }).restore;
     await expect(getBin("/api/runs/r1/layers/nope.bin")).rejects.toMatchObject({ code: "unknown_layer" });

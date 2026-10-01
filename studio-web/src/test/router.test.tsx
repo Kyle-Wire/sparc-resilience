@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { lazy } from "react";
 import { Link, buildRegistry, codecs, compileRoutes, fillPath, matchRoute, navigate, RegistryProvider, runTabForRoute, setQuery, useRoute, useUrlState, type RouteDef } from "../router";
-import { click, flush, render } from "./render";
+import { click, flush, render, waitFor } from "./render";
 
 const P = lazy(() => Promise.resolve({ default: () => null }));
 const def = (path: string, title = path): RouteDef => ({ path, component: P, title });
@@ -67,6 +67,7 @@ describe("query codecs", () => {
     const l = codecs.list();
     expect(l.parse("res_1,configured:green")).toEqual(["res_1", "configured:green"]);
     expect(l.format([])).toBeNull();
+    for (const items of [["a,b", "c"], ["50%", "x%2Cy", "%41"], ["configured:canopy_+10%"]]) expect(l.parse(l.format(items))).toEqual(items);
     const f = codecs.float(null);
     expect(f.parse("-1.5")).toBe(-1.5);
     expect(f.parse("")).toBeNull();
@@ -122,8 +123,37 @@ describe("history router", () => {
     await flush();
     expect(window.location.search).toBe("?sel=rg_1");
     expect(q("layer")).toBe("obs");
-    window.history.back();
-    await flush(5);
+    window.history.back(); // popstate: back to the path before the setQuery replace chain
+    await waitFor(() => q("path") === "/", 5000, "popstate");
+    expect(q("layer")).toBe("obs");
+  });
+
+  it("restores the scroll position of each history entry on back and forward", async () => {
+    let y = 0;
+    const scrolled: number[] = [];
+    const orig = Object.getOwnPropertyDescriptor(window, "scrollY");
+    const origTo = window.scrollTo;
+    Object.defineProperty(window, "scrollY", { configurable: true, get: () => y });
+    window.scrollTo = ((_x: number, top: number) => {
+      y = top;
+      scrolled.push(top);
+    }) as typeof window.scrollTo;
+    try {
+      navigate("/long-page");
+      y = 300;
+      navigate("/other"); // remembers 300 for /long-page, scrolls to the top
+      expect(y).toBe(0);
+      y = 120;
+      window.history.back();
+      await waitFor(() => window.location.pathname === "/long-page" && y === 300, 5000, "restore on back");
+      window.history.forward();
+      await waitFor(() => window.location.pathname === "/other" && y === 120, 5000, "restore on forward");
+      expect(scrolled.slice(-2)).toEqual([300, 120]);
+    } finally {
+      if (orig) Object.defineProperty(window, "scrollY", orig);
+      else delete (window as { scrollY?: number }).scrollY;
+      window.scrollTo = origTo;
+    }
   });
 
   it("Link leaves modified clicks to the browser", () => {

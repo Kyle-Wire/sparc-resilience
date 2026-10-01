@@ -74,6 +74,34 @@ describe("useResource", () => {
     expect(container.textContent).toBe("ready:fixed");
   });
 
+  it("retries a failed resource when it is mounted again", async () => {
+    let n = 0;
+    const f = async () => {
+      n += 1;
+      if (n === 1) throw new Error("server down");
+      return "back";
+    };
+    const r1 = render(<Probe k="flaky" fetcher={f} label="a" />);
+    await flush();
+    expect(r1.container.textContent).toBe("error:-");
+    r1.unmount();
+    const r2 = render(<Probe k="flaky" fetcher={f} label="a" />);
+    await flush();
+    expect(n).toBe(2);
+    expect(r2.container.textContent).toBe("ready:back");
+  });
+
+  it("a local mutation wins over a request that was already in flight", async () => {
+    let resolve: (v: string) => void = () => {};
+    const slow = () => new Promise<string>((r) => (resolve = r));
+    const { container } = render(<Probe k="patched" fetcher={slow} label="a" />);
+    await flush();
+    mutate("patched", "after PATCH");
+    resolve("stale GET");
+    await flush();
+    expect(container.textContent).toBe("ready:after PATCH");
+  });
+
   it("skips fetching for a null key and keeps previous data while a new key loads", async () => {
     let resolve: (v: string) => void = () => {};
     const slow = () => new Promise<string>((r) => (resolve = r));

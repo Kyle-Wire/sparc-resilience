@@ -371,6 +371,7 @@ details.table-view[open] summary { margin-bottom: 8px; }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 0.84rem; margin: 0; }
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.kv > .kv-row { display: contents; } /* <div> groups of dt/dd keep the two-column grid */
 .swipe-divider { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px solid var(--ink); pointer-events: auto; cursor: ew-resize; }
 .swipe-divider button { position: absolute; top: 50%; left: -14px; width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--ink); background: var(--surface); color: var(--ink); cursor: ew-resize; padding: 0; transform: translateY(-50%); }
 .side-by-side { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

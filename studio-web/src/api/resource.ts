@@ -160,8 +160,14 @@ export function invalidateAll(): void {
 export function mutate<T>(key: string, data: T | ((prev: T | undefined) => T)): void {
   const e = getEntry(key);
   const next = typeof data === "function" ? (data as (p: T | undefined) => T)(e.snap.data as T | undefined) : data;
+  if (e.inflight) {
+    // A request started before the change would overwrite it with older data.
+    e.controller?.abort();
+    e.inflight = null;
+    e.controller = null;
+  }
   e.stale = false;
-  setSnap(e, { data: next, error: null, status: "ready" });
+  setSnap(e, { data: next, error: null, status: "ready", loading: false });
 }
 
 /** Read the cached data for a key without subscribing. */
@@ -229,7 +235,8 @@ export function useResource<T>(key: string | null, fetcher: Fetcher<T>, opts: Re
     if (key === null) return;
     const e = getEntry(key);
     configure(e, stableFetcher, { tags: tagsKey ? tagsKey.split("|") : [], immutable });
-    if (e.stale || e.snap.status === "idle") void load(e);
+    // A failed load is retried by the next mount (the server may be back, the output written).
+    if (e.stale || e.snap.status === "idle" || e.snap.status === "error") void load(e);
   }, [key, tagsKey, immutable, stableFetcher]);
 
   const prev = useRef<T | undefined>(undefined);

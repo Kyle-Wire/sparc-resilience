@@ -1,13 +1,21 @@
 // Keeps a crashing page from taking the shell down; shows the error with a reload button.
+// `resetKey` clears the error when it changes (e.g. on navigation) without remounting the
+// children, so a layout around the page keeps its state and focus.
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
 type State = { error: Error | null };
 
-export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
+type Props = { children: ReactNode; resetKey?: unknown };
+
+export class ErrorBoundary extends Component<Props, State> {
   override state: State = { error: null };
 
   static getDerivedStateFromError(error: Error): State {
     return { error };
+  }
+
+  override componentDidUpdate(prev: Props): void {
+    if (this.state.error && prev.resetKey !== this.props.resetKey) this.setState({ error: null });
   }
 
   override componentDidCatch(error: Error, info: ErrorInfo): void {

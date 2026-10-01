@@ -1,11 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { lastDownload } from "../components/ui/download";
 import { act } from "react";
 import type { LayerGroup, LayerMeta } from "../api/types";
 import { MapView, type MapSelectionEvent } from "../map/MapView";
 import { Legend, divergingEnds } from "../map/Legend";
 import { computeDomain } from "../map/domain";
+import { runLayerLoader } from "../map/data";
 import { grid3 } from "./grid";
-import { byText, click, flush, render, typeInto } from "./render";
+import { byText, click, flush, key, mockFetch, render, typeInto } from "./render";
 
 const stats = (lo: number, hi: number) => ({ n: 7, lo, hi, mean: (lo + hi) / 2, p1: lo, p2: lo, p50: (lo + hi) / 2, p98: hi, p99: hi });
 const L = (p: Partial<LayerMeta> & { key: string }): LayerMeta => ({
@@ -78,6 +80,31 @@ describe("MapView", () => {
     expect([...events[0].mask!].reduce((a, b) => a + b, 0)).toBeGreaterThan(0);
   });
 
+  it("the end bins of the legend histogram hold the cells beyond the 2–98% clip, and brushing them selects those cells", async () => {
+    // Stats clip at 81..85, but cells 80 and 86 are painted with the end colours.
+    const meta = L({ key: "obs", label: "Observed", stats: { n: 7, lo: 80, hi: 86, mean: 83, p1: 80, p2: 81, p50: 83, p98: 85, p99: 86 } });
+    const events: MapSelectionEvent[] = [];
+    const { container } = render(<MapView grid={grid3()} groups={[{ id: "t", label: "T", layers: [meta] }]} layerKey="obs" onSelection={(e) => events.push(e)} loadLayer={async () => data.obs} />);
+    await flush(4);
+    const bars = container.querySelectorAll('.map-side svg.chart rect[role="img"]');
+    const counts = [...bars].map((b) => Number(/: (\d+) cells/.exec(b.getAttribute("aria-label")!)![1]));
+    expect(counts.reduce((a, b) => a + b, 0)).toBe(7); // every observed cell is in a bin
+    expect([counts[0], counts[counts.length - 1]]).toEqual([2, 2]);
+    key(bars[bars.length - 1], "Enter"); // the hottest bin
+    await flush(2);
+    expect([...events[0].mask!]).toEqual([0, 0, 0, 0, 0, 1, 1]); // 85 and 86 (above the clip)
+    key(bars[0], "Enter"); // the coolest bin
+    await flush(2);
+    expect([...events[1].mask!]).toEqual([1, 1, 0, 0, 0, 0, 0]); // 80 (below the clip) and 81
+  });
+
+  it("categorical layers without labels still get one swatch per class", () => {
+    const meta = L({ key: "cls", label: "Class", scale: "cat", unit: "", labels: null, dtype: "uint8", stats: stats(0, 2) });
+    const vals = Uint8Array.from([0, 1, 2, 2, 1, 0, 0]);
+    const { container } = render(<Legend meta={meta} domain={computeDomain(meta, vals)} dark={false} values={vals} />);
+    expect([...container.querySelectorAll('[role="listitem"]')].map((li) => li.textContent)).toEqual(["Class 0 · 42.9%", "Class 1 · 28.6%", "Class 2 · 28.6%"]);
+  });
+
   it("Legend shows ramp ends with units and the zero_blank note", () => {
     const meta = { ...groups[0].layers[0], key: "alloc_dose", label: "Planned canopy", unit: "pp", scale: "seq" as const, center: null, zero_blank: true };
     const vals = Float32Array.from([0, 0, 2, 4, 6, 8, 10]);
@@ -123,5 +150,83 @@ describe("MapView", () => {
     expect(divergingEnds({ unit: "degF", sign_note: "negative = cooler" })).toEqual(["cooler", "warmer"]);
     expect(divergingEnds({ unit: "degF", sign_note: "positive = cooler" })).toEqual(["less cooling", "more cooling"]);
     expect(divergingEnds({ unit: "pp", sign_note: null })).toEqual(["lower", "higher"]);
+  });
+});
+
+describe("MapView readout", () => {
+  it("reads zero_blank cells as 'none' and others with their unit", async () => {
+    const dose = L({ key: "dose", label: "Planned dose", unit: "pp", zero_blank: true, stats: stats(0, 4) });
+    const { container } = render(<MapView grid={grid3()} groups={[{ id: "budget", label: "Budget", layers: [dose] }]} layerKey="dose" loadLayer={async () => Float32Array.from([0, 2.5, 0, 1, 0, 3, 4])} />);
+    await flush(4);
+    const stage = container.querySelector('[role="application"]')!;
+    const live = container.querySelector('[data-testid="map-live"]')!;
+    key(stage, "Enter"); // places the cursor
+    key(stage, "ArrowLeft");
+    key(stage, "ArrowUp"); // north-west cell: row 0, untreated
+    expect(live.textContent).toMatch(/^Planned dose: none · .* · row 0$/);
+    key(stage, "ArrowRight"); // row 1
+    expect(live.textContent).toMatch(/^Planned dose: 2\.5 pp · .* · row 1$/);
+  });
+});
+
+describe("MapView PNG export", () => {
+  async function exportTexts(layerKey: string): Promise<string[]> {
+    const texts: string[] = [];
+    const { container } = render(<MapView grid={grid3()} groups={groups} layerKey={layerKey} loadLayer={async (m) => data[m.key]} />);
+    await flush(4);
+    // jsdom has no canvas: record what the export draws.
+    const ctx = new Proxy({} as Record<string, unknown>, {
+      get: (_t, k) => (k === "fillText" ? (t: string) => void texts.push(t) : k === "measureText" ? () => ({ width: 10 }) : () => {}),
+      set: () => true,
+    });
+    const gc = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation((() => ctx) as unknown as typeof HTMLCanvasElement.prototype.getContext);
+    const tb = vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation(function (cb: BlobCallback) {
+      cb(new Blob(["png"], { type: "image/png" }));
+    });
+    try {
+      click(container.querySelector('button[aria-label^="Export map as PNG"]'));
+      await flush(3);
+    } finally {
+      gc.mockRestore();
+      tb.mockRestore();
+    }
+    expect(lastDownload()!.name).toBe(`map-${layerKey}.png`);
+    return texts;
+  }
+
+  it("draws the class legend for categorical layers", async () => {
+    const texts = await exportTexts("fold");
+    expect(texts).toEqual(expect.arrayContaining(["Fold", "train", "test", "buffer"]));
+  });
+
+  it("draws the ramp range and cooler/warmer ends for diverging temperature layers", async () => {
+    const texts = await exportTexts("resid");
+    expect(texts.some((t) => t.startsWith("≤ −"))).toBe(true);
+    expect(texts).toEqual(expect.arrayContaining(["cooler", "warmer"]));
+  });
+});
+
+describe("runLayerLoader", () => {
+  it("fetches a layer once, shares concurrent loads, and refetches when the catalogue says it changed", async () => {
+    let served = Float32Array.from([1, 2, 3]);
+    const m = mockFetch({
+      "GET /api/runs/r_live/layers/pred.bin": () => ({ raw: served.slice().buffer, headers: { "content-type": "application/octet-stream", "X-SPARC-Dtype": "float32", "X-SPARC-Length": "3" } }),
+    });
+    try {
+      const load = runLayerLoader("r_live", "e1");
+      const meta = L({ key: "pred", stats: stats(1, 3) });
+      const [a, b] = await Promise.all([load(meta), load(meta)]);
+      expect(a).toBe(b);
+      expect([...a]).toEqual([1, 2, 3]);
+      expect(await load(meta)).toBe(a); // cached
+      expect(m.calls).toHaveLength(1);
+      // The run wrote new predictions: the refreshed catalogue carries new stats.
+      served = Float32Array.from([4, 5, 6]);
+      const fresh = await load(L({ key: "pred", stats: stats(4, 6) }));
+      expect([...fresh]).toEqual([4, 5, 6]);
+      expect(m.calls).toHaveLength(2);
+    } finally {
+      m.restore();
+    }
   });
 });

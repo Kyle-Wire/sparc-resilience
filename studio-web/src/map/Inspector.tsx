@@ -88,10 +88,10 @@ export function Inspector({ cell, layers, targetUnit, loading, error, onClose, f
               {Object.entries(cell.values)
                 .sort(([a], [b]) => (a === focusKey ? -1 : b === focusKey ? 1 : 0))
                 .map(([k, v]) => (
-                  <span key={k} style={{ display: "contents" }}>
+                  <div key={k} className="kv-row">
                     <dt title={k}>{byKey.get(k)?.label ?? k}</dt>
                     <dd>{fmtLayerValue(byKey.get(k), v)}</dd>
-                  </span>
+                  </div>
                 ))}
             </dl>
           </details>
@@ -100,10 +100,10 @@ export function Inspector({ cell, layers, targetUnit, loading, error, onClose, f
               <summary>Scenario change here</summary>
               <dl className="kv">
                 {Object.entries(cell.scenarios).map(([k, v]) => (
-                  <span key={k} style={{ display: "contents" }}>
+                  <div key={k} className="kv-row">
                     <dt>{k}</dt>
                     <dd>{fmtTempChange(v, targetUnit, 2)}</dd>
-                  </span>
+                  </div>
                 ))}
               </dl>
             </details>

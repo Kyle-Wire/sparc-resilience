@@ -76,6 +76,49 @@ describe("Markdown", () => {
     const { container } = render(<Markdown source="Hello **world**" />);
     expect(container.querySelector(".md strong")!.textContent).toBe("world");
   });
+
+  it("never emits a script URL, however it is encoded", () => {
+    const payloads = [
+      "[a](javascript:alert(1))",
+      "[a](JaVaScRiPt:alert(1))",
+      "[a](&#106;avascript:alert(1))",
+      "[a](javascript&colon;alert(1))",
+      "[a](java&#x09;script:alert(1))",
+      "[a](java&#x0A;script:alert(1))",
+      "[a](<java\tscript:alert(1)>)",
+      "[a](data:text/html;base64,PHNjcmlwdD4=)",
+      "[a](vbscript:msgbox(1))",
+      "[a]: javascript&colon;alert(1)\n\n[x][a]",
+      "![x](javascript&colon;alert(1))",
+      "![x](data:image/svg+xml;base64,PHN2Zz4=)",
+      "<a href=javascript:alert(1)>x</a>",
+    ];
+    for (const p of payloads) {
+      // Parse the HTML the way the browser will and inspect the resulting URLs.
+      const host = document.createElement("div");
+      host.innerHTML = renderMarkdown(p);
+      for (const el of host.querySelectorAll("[href], [src]")) {
+        const url = (el.getAttribute("href") ?? el.getAttribute("src") ?? "").replace(/[\u0000- ]/g, "").toLowerCase();
+        expect(url, p).not.toMatch(/^(javascript|vbscript|data:text|data:image\/svg)/);
+      }
+      expect(host.querySelector("a[href^='java'], script, img[src^='java']"), p).toBeNull();
+    }
+  });
+
+  it("keeps ordinary links, titles and local images intact", () => {
+    const host = document.createElement("div");
+    host.innerHTML = renderMarkdown('[docs](https://example.org/a?x=1&y=2 "Read \\"this\\"") [run](/r/r1/accuracy) [mail](mailto:a@b.org) [top](#methods) ![map](figures/map.png "Map")');
+    const links = [...host.querySelectorAll("a")].map((a) => [a.getAttribute("href"), a.getAttribute("title")]);
+    expect(links).toEqual([
+      ["https://example.org/a?x=1&y=2", 'Read "this"'],
+      ["/r/r1/accuracy", null],
+      ["mailto:a@b.org", null],
+      ["#methods", null],
+    ]);
+    const img = host.querySelector("img")!;
+    expect([img.getAttribute("src"), img.getAttribute("alt"), img.getAttribute("title")]).toEqual(["figures/map.png", "map", "Map"]);
+    expect(renderMarkdown("[x](//evil.example/p)")).not.toContain("href");
+  });
 });
 
 describe("Diff", () => {

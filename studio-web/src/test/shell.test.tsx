@@ -5,7 +5,7 @@ import { StreamManager, setStreams, type EventSourceLike } from "../api/sse";
 import { navigate } from "../router";
 import { useJobs } from "../stores/jobs";
 import { useUi } from "../stores/ui";
-import { byText, click, flush, key, mockFetch, render } from "./render";
+import { byText, click, flush, key, mockFetch, render, waitFor } from "./render";
 
 class QuietES implements EventSourceLike {
   static last: QuietES | null = null;
@@ -46,7 +46,9 @@ describe("AppShell", () => {
   it("renders landmarks, the 404 route and live status for an unknown URL", async () => {
     navigate("/definitely/not/here");
     const { container } = render(<App />);
-    await flush(6);
+    // The 404 page is a lazy chunk: wait for it rather than for a fixed number of ticks.
+    await waitFor(() => container.querySelector("h1"), 10000, "the 404 page");
+    await flush(2);
     expect(container.querySelector("a.skip-link")!.getAttribute("href")).toBe("#main");
     expect(container.querySelector("main#main")).not.toBeNull();
     expect(container.querySelector('aside[aria-label="Sidebar"]')).not.toBeNull();
@@ -82,13 +84,17 @@ describe("AppShell", () => {
     navigate("/nowhere");
     const { container } = render(<App />);
     await flush(3);
+    const opener = container.querySelector<HTMLButtonElement>('button[aria-label^="Command palette"]')!;
+    opener.focus();
     key(window as unknown as Element, "k", { ctrlKey: true });
     await flush(2);
     const dialog = document.querySelector('[role="dialog"][aria-label="Command palette"]');
     expect(dialog).not.toBeNull();
+    expect(document.activeElement).toBe(dialog!.querySelector("input"));
     expect(byText(document.body, '[role="option"]', "Activity (jobs)")).not.toBeNull();
     key(dialog, "Escape");
     expect(document.querySelector('[aria-label="Command palette"]')).toBeNull();
+    expect(document.activeElement).toBe(opener); // focus is restored
     const before = document.documentElement.getAttribute("data-theme");
     click(container.querySelector('button[aria-label^="Theme:"]'));
     const after = document.documentElement.getAttribute("data-theme");

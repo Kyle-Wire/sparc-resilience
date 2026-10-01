@@ -66,6 +66,10 @@ export function int64ToNumbers(a: BigInt64Array): number[] {
 
 const DTYPES = new Set<Dtype>(["float32", "uint8", "int16", "int32", "int64"]);
 
+export function isDtype(v: unknown): v is Dtype {
+  return typeof v === "string" && DTYPES.has(v as Dtype);
+}
+
 /** Parse the X-SPARC-Offsets header: `[{"name","dtype","offset","length"}, …]`. */
 export function parseOffsets(header: string): OffsetEntry[] {
   let raw: unknown;

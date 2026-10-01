@@ -5,22 +5,59 @@ import { createRoot, type Root } from "react-dom/client";
 
 export type Rendered = { container: HTMLElement; root: Root; rerender: (ui: ReactNode) => void; unmount: () => void };
 
+const mounted = new Set<Root>();
+
 export function render(ui: ReactNode): Rendered {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
+  mounted.add(root);
   act(() => root.render(ui));
   return {
     container,
     root,
     rerender: (next) => act(() => root.render(next)),
-    unmount: () => act(() => root.unmount()),
+    unmount: () => {
+      if (!mounted.delete(root)) return;
+      act(() => root.unmount());
+    },
   };
+}
+
+/**
+ * Unmount every tree rendered by the test (setup.ts runs it after each test), so effects,
+ * subscriptions and portals into document.body do not leak into the next test.
+ */
+export function cleanup(): void {
+  for (const root of [...mounted]) {
+    mounted.delete(root);
+    act(() => root.unmount());
+  }
 }
 
 /** Let pending promises and effects settle. */
 export async function flush(times = 3): Promise<void> {
   for (let i = 0; i < times; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)));
+}
+
+/**
+ * Flush until `check` returns a truthy value (or throws no more), then return it. For work
+ * whose duration is not a fixed number of ticks, such as a lazy route chunk that vitest
+ * transforms on first import.
+ */
+export async function waitFor<T>(check: () => T, timeoutMs = 5000, what = "condition"): Promise<NonNullable<T>> {
+  const end = Date.now() + timeoutMs;
+  let last: unknown = null;
+  for (;;) {
+    try {
+      const v = check();
+      if (v) return v as NonNullable<T>;
+    } catch (e) {
+      last = e;
+    }
+    if (Date.now() > end) throw new Error(`waitFor: ${what} not met within ${timeoutMs} ms${last ? ` (${String(last)})` : ""}`);
+    await act(async () => await new Promise((r) => setTimeout(r, 10)));
+  }
 }
 
 export function click(el: Element | null): void {

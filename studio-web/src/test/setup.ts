@@ -2,6 +2,7 @@
 // not available in jsdom (no `canvas` package): getContext returns null, which every renderer
 // handles (the colour buffers are still computed and tested directly).
 import { afterEach } from "vitest";
+import { cleanup } from "./render";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -48,5 +49,6 @@ if (typeof window !== "undefined") {
 }
 
 afterEach(() => {
+  cleanup();
   document.body.innerHTML = "";
 });

@@ -12,7 +12,13 @@
 // - handles `resync`: global → listeners refetch active jobs and open resources;
 //   job → reconnect immediately from `after` (the server closed the stream on overflow);
 // - closes a job stream on `end {status}`;
-// - batches deliveries per animation frame, so a burst of events causes one render.
+// - batches deliveries per animation frame, so a burst of events causes one render (with a
+//   timer fallback: browsers pause requestAnimationFrame in background tabs, and the tab
+//   title and job-end toasts must keep updating there).
+//
+// Ids: the browser's MessageEvent.lastEventId keeps the previous id for a frame that has
+// none (the per-job stream's transient `resource` events), so the payload's own `cursor` /
+// `gseq` is authoritative and a repeated lastEventId is never read as a new cursor.
 import { api } from "./client";
 import {
   GLOBAL_EVENT_TYPES,
@@ -51,23 +57,44 @@ export type StreamDeps = {
 export const BACKOFF_S = [1, 2, 4, 8, 16, 30] as const;
 export const POLL_MS = 5000;
 export const FAILURES_BEFORE_POLLING = 3;
+/** Pages of 5,000 events one job poll may read to catch up a backlog before waiting. */
+export const POLL_MAX_PAGES = 20;
 
 export function backoffMs(failures: number): number {
   const i = Math.max(0, Math.min(BACKOFF_S.length - 1, failures - 1));
   return BACKOFF_S[i] * 1000;
 }
 
+/** Longest a batch waits when animation frames do not fire (hidden tab). */
+export const FRAME_FALLBACK_MS = 250;
+
+/**
+ * Run `cb` once, on the next animation frame or after FRAME_FALLBACK_MS, whichever comes
+ * first. requestAnimationFrame never fires in a background tab; the timer still does
+ * (throttled to about once a second), so live state keeps flowing there.
+ */
+export function scheduleFrame(
+  cb: () => void,
+  raf: ((cb: () => void) => unknown) | null = typeof window !== "undefined" && typeof window.requestAnimationFrame === "function" ? (f) => window.requestAnimationFrame(() => f()) : null,
+  timer: (cb: () => void, ms: number) => unknown = (f, ms) => setTimeout(f, ms),
+): void {
+  let done = false;
+  const run = () => {
+    if (done) return;
+    done = true;
+    cb();
+  };
+  if (raf) raf(run);
+  timer(run, raf ? FRAME_FALLBACK_MS : 16);
+}
+
 function defaultDeps(): StreamDeps {
-  const raf =
-    typeof window !== "undefined" && typeof window.requestAnimationFrame === "function"
-      ? (cb: () => void) => void window.requestAnimationFrame(() => cb())
-      : (cb: () => void) => void setTimeout(cb, 16);
   return {
     EventSource: (typeof EventSource !== "undefined" ? EventSource : undefined) as unknown as EventSourceCtor,
     getJson: <T,>(path: string) => api.get<T>(path),
     setTimeout: (cb, ms) => setTimeout(cb, ms),
     clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
-    frame: raf,
+    frame: (cb) => scheduleFrame(cb),
   };
 }
 
@@ -86,6 +113,8 @@ abstract class Channel<E> {
   protected pollTimer: unknown = null;
   protected buffer: E[] = [];
   protected flushScheduled = false;
+  /** The previous frame's lastEventId on the current connection (see `freshId`). */
+  private prevId = "";
   state: ConnState = "connecting";
   closed = false;
 
@@ -102,6 +131,17 @@ abstract class Channel<E> {
   protected abstract handle(name: string, ev: MessageEvent): void;
   protected abstract poll(): Promise<void>;
   protected abstract deliver(batch: E[]): void;
+
+  /**
+   * The frame's own id, or "" when it carried none. EventSource repeats the last id on a
+   * frame without an `id:` line, so an unchanged lastEventId means "no id".
+   */
+  protected freshId(ev: MessageEvent): string {
+    const id = ev.lastEventId ?? "";
+    const fresh = id !== "" && id !== this.prevId ? id : "";
+    this.prevId = id;
+    return fresh;
+  }
 
   protected setState(s: ConnState): void {
     if (this.state !== s) {
@@ -121,6 +161,7 @@ abstract class Channel<E> {
       return;
     }
     this.es = es;
+    this.prevId = "";
     es.onopen = () => {
       if (this.es !== es) return;
       this.failures = 0;
@@ -261,10 +302,11 @@ class GlobalChannel extends Channel<GlobalEvent> {
 
   protected handle(name: string, ev: MessageEvent): void {
     const data = parseData(ev);
+    const id = this.freshId(ev);
     if (!data) return;
     const type = name === "message" ? String(data.type ?? "message") : name;
-    if (ev.lastEventId) this.lastId = ev.lastEventId;
-    else if (typeof data.gseq === "number") this.lastId = `g:${data.gseq}`;
+    if (typeof data.gseq === "number") this.lastId = `g:${data.gseq}`;
+    else if (id) this.lastId = id;
     const event = { ...data, type } as GlobalEvent;
     this.push(event);
     if (type === "resync") {
@@ -275,6 +317,7 @@ class GlobalChannel extends Channel<GlobalEvent> {
 
   protected async poll(): Promise<void> {
     const page = await this.deps.getJson<Page<Job>>("/api/jobs?status=active&limit=500");
+    if (this.closed) return;
     this.onPollJobs(page.items ?? []);
   }
 
@@ -313,6 +356,11 @@ class JobChannel extends Channel<JobEvent> {
   }
 
   private accept(data: Record<string, unknown>, idHeader: string): void {
+    if (data.type === "resource") {
+      // Transient (no id, never replayed): delivered as-is, never moves or dedupes the cursor.
+      this.push(data as unknown as JobEvent);
+      return;
+    }
     const cur = typeof data.cursor === "number" ? data.cursor : idHeader !== "" && Number.isFinite(Number(idHeader)) ? Number(idHeader) : null;
     if (cur !== null) {
       if (this.lastCursor !== null && cur <= this.lastCursor) return; // duplicate after a reconnect
@@ -324,6 +372,7 @@ class JobChannel extends Channel<JobEvent> {
 
   protected handle(name: string, ev: MessageEvent): void {
     const data = parseData(ev);
+    const id = this.freshId(ev);
     if (!data) return;
     if (name === "resync") {
       // The server dropped queued events and closes; resume from its cursor right away.
@@ -341,7 +390,7 @@ class JobChannel extends Channel<JobEvent> {
     }
     const type = name === "message" ? String(data.type ?? "log") : name;
     if (data.type === undefined) data.type = type;
-    this.accept(data, ev.lastEventId ?? "");
+    this.accept(data, id);
   }
 
   private finish(status: JobStatus): void {
@@ -352,15 +401,29 @@ class JobChannel extends Channel<JobEvent> {
   }
 
   protected async poll(): Promise<void> {
-    const after = this.pollAfter ?? this.resumeFrom() ?? 0;
-    const page = await this.deps.getJson<JobEventsPage>(`/api/jobs/${encodeURIComponent(this.jid)}/events?after=${after}&limit=5000`);
+    // Resume after the newest cursor either path has seen (a poll cursor left over from an
+    // earlier outage may be behind what the stream delivered since). With no cursor at all
+    // the query carries no `after`: the first line sits at byte 0, and `after=0` would skip it.
+    const known = [this.pollAfter, this.resumeFrom()].filter((v): v is number => v !== null && v >= 0);
+    let after: number | null = known.length ? Math.max(...known) : null;
     let final: JobStatus | null = null;
-    for (const e of page.events ?? []) {
-      this.accept(e as unknown as Record<string, unknown>, "");
-      if (e.type === "job.status" && FINAL_JOB_STATUSES.includes((e as { status: JobStatus }).status)) final = (e as { status: JobStatus }).status;
+    // A backlog (e.g. a long run's ticks) is read page after page now, not one page per tick.
+    for (let n = 0; n < POLL_MAX_PAGES; n++) {
+      const q = after === null ? "" : `after=${after}&`;
+      const page = await this.deps.getJson<JobEventsPage>(`/api/jobs/${encodeURIComponent(this.jid)}/events?${q}limit=5000`);
+      if (this.closed) return; // closed or replaced while the request was in flight
+      for (const e of page.events ?? []) {
+        this.accept(e as unknown as Record<string, unknown>, "");
+        if (e.type === "job.status") final = FINAL_JOB_STATUSES.includes((e as { status: JobStatus }).status) ? (e as { status: JobStatus }).status : null;
+      }
+      if (typeof page.next_cursor === "number" && page.next_cursor >= 0 && (after === null || page.next_cursor > after)) {
+        this.pollAfter = after = page.next_cursor;
+      } else if (!page.eof) break; // no progress: try again on the next tick
+      if (page.eof) {
+        if (final) this.finish(final);
+        return;
+      }
     }
-    if (typeof page.next_cursor === "number") this.pollAfter = page.next_cursor;
-    if (final && page.eof) this.finish(final);
   }
 
   protected deliver(batch: JobEvent[]): void {

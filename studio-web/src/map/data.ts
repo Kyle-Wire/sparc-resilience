@@ -43,12 +43,22 @@ export function cachedLayerCount(): number {
 const inflight = new Map<string, Promise<LayerValues>>();
 
 /**
- * Loader for `GET /api/runs/{rid}/layers/{key}.bin`. Cached per run, layer key and the
- * grid etag (a re-index invalidates it); concurrent requests share one fetch.
+ * Content signature of a layer from its catalogue entry. While a run is still writing, a
+ * layer's file can change under the same key; the catalogue is refetched on
+ * `output.written`, and new stats mean new bytes, so the cached copy is not reused.
+ */
+export function layerSignature(meta: LayerMeta): string {
+  const s = meta.stats;
+  return [meta.dtype, s.n, s.lo, s.hi, s.mean, s.p2, s.p50, s.p98].map((v) => (v === null || v === undefined ? "" : String(v))).join(",");
+}
+
+/**
+ * Loader for `GET /api/runs/{rid}/layers/{key}.bin`. Cached per run, layer key, grid etag
+ * (a re-index invalidates it) and layer signature; concurrent requests share one fetch.
  */
 export function runLayerLoader(rid: string, gridEtag = ""): (meta: LayerMeta) => Promise<LayerValues> {
   return (meta: LayerMeta) => {
-    const k = `${rid}|${gridEtag}|${meta.key}`;
+    const k = `${rid}|${gridEtag}|${meta.key}|${layerSignature(meta)}`;
     const hit = cache.get(k);
     if (hit) {
       remember(k, hit);

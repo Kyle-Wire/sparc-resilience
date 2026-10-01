@@ -35,13 +35,22 @@ export function CommandPalette({ base = [] }: { base?: Command[] }) {
   const shown = useMemo(() => filterCommands(all, q), [all, q]);
 
   useEffect(() => {
-    if (open) {
-      setQ("");
-      setActive(0);
-      setTimeout(() => inputRef.current?.focus(), 0);
-    }
+    if (!open) return;
+    // Focus returns to where it was (e.g. the search button) when the palette closes.
+    const restore = typeof document !== "undefined" ? (document.activeElement as HTMLElement | null) : null;
+    setQ("");
+    setActive(0);
+    const t = setTimeout(() => inputRef.current?.focus(), 0);
+    return () => {
+      clearTimeout(t);
+      if (restore && restore.isConnected && restore !== document.body) restore.focus?.();
+    };
   }, [open]);
   useEffect(() => setActive(0), [q]);
+  // Keep the highlighted option visible while arrowing through a long list.
+  useEffect(() => {
+    if (open) document.getElementById(`${listId}-${active}`)?.scrollIntoView?.({ block: "nearest" });
+  }, [open, active, listId]);
 
   if (!open) return null;
   const run = (c: Command | undefined) => {

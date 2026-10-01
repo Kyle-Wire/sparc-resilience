@@ -6,7 +6,9 @@
 // - Wheel zooms about the cursor (1–32 px per cell), drag pans (space + drag while a tool is
 //   active), +/−/0 zoom and fit, arrow keys move a cell cursor announced in an aria-live
 //   region, Enter pins the inspector, Escape cancels the tool.
-import { useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type Ref, type WheelEvent } from "react";
+// - The wheel listener is a native non-passive one: React attaches wheel handlers as passive,
+//   where preventDefault is ignored and the page would scroll under a zooming map.
+import { useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type Ref } from "react";
 import { colorize, mapPalette, maskRaster } from "./colour";
 import type { Domain } from "./domain";
 import { rowAt, rowCenter, type GridData } from "./grid";
@@ -73,6 +75,8 @@ export function GridCanvas(props: GridCanvasProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const off = useRef<HTMLCanvasElement | null>(null);
   const hatchOff = useRef<HTMLCanvasElement | null>(null);
+  // Scratch canvases for the hatch pass, reused across frames (pan/zoom redraws at 60 fps).
+  const hatchScratch = useRef<{ tmp: HTMLCanvasElement; pattern: CanvasPattern | null; patternDark: boolean | null } | null>(null);
   const buf = useRef<{ img: ImageData | null; u32: Uint32Array }>({ img: null, u32: new Uint32Array(0) });
   const [size, setSize] = useState({ w: 640, h: 480 });
   const [cursor, setCursor] = useState<RasterPoint | null>(null);
@@ -177,30 +181,40 @@ export function GridCanvas(props: GridCanvasProps) {
     g.globalAlpha = 1;
     if (hatchOff.current) {
       // Hatch: the mask raster scaled up, then a diagonal-line pattern kept only inside it.
-      const tmp = document.createElement("canvas");
-      tmp.width = Math.max(1, Math.round(size.w));
-      tmp.height = Math.max(1, Math.round(size.h));
+      const scratch = (hatchScratch.current ??= { tmp: document.createElement("canvas"), pattern: null, patternDark: null });
+      const tmp = scratch.tmp;
+      const tw = Math.max(1, Math.round(size.w));
+      const th = Math.max(1, Math.round(size.h));
+      if (tmp.width !== tw || tmp.height !== th) {
+        tmp.width = tw;
+        tmp.height = th;
+      }
       const t = tmp.getContext("2d");
       if (t) {
+        t.globalCompositeOperation = "source-over";
+        t.clearRect(0, 0, tw, th);
         t.imageSmoothingEnabled = false;
         t.drawImage(hatchOff.current, tx, ty, grid.nx * scale, grid.ny * scale);
         t.globalCompositeOperation = "source-in";
-        const pat = document.createElement("canvas");
-        pat.width = 6;
-        pat.height = 6;
-        const pg = pat.getContext("2d");
-        if (pg) {
-          pg.strokeStyle = dark ? THEME_COLORS.dark.hatch : THEME_COLORS.light.hatch;
-          pg.lineWidth = 1.2;
-          pg.beginPath();
-          pg.moveTo(0, 6);
-          pg.lineTo(6, 0);
-          pg.stroke();
-          const pattern = t.createPattern(pat, "repeat");
-          if (pattern) {
-            t.fillStyle = pattern;
-            t.fillRect(0, 0, tmp.width, tmp.height);
+        if (scratch.patternDark !== dark) {
+          const pat = document.createElement("canvas");
+          pat.width = 6;
+          pat.height = 6;
+          const pg = pat.getContext("2d");
+          if (pg) {
+            pg.strokeStyle = dark ? THEME_COLORS.dark.hatch : THEME_COLORS.light.hatch;
+            pg.lineWidth = 1.2;
+            pg.beginPath();
+            pg.moveTo(0, 6);
+            pg.lineTo(6, 0);
+            pg.stroke();
           }
+          scratch.pattern = pg ? t.createPattern(pat, "repeat") : null;
+          scratch.patternDark = dark;
+        }
+        if (scratch.pattern) {
+          t.fillStyle = scratch.pattern;
+          t.fillRect(0, 0, tw, th);
         }
         g.drawImage(tmp, 0, 0);
       }
@@ -255,12 +269,21 @@ export function GridCanvas(props: GridCanvasProps) {
     [grid, describe],
   );
 
-  const onWheel = (e: WheelEvent<HTMLDivElement>) => {
-    if (passive) return;
-    e.preventDefault();
-    const r = wrap.current?.getBoundingClientRect();
-    view.zoomAt(e.clientX - (r?.left ?? 0), e.clientY - (r?.top ?? 0), Math.exp(-e.deltaY * 0.0015));
-  };
+  // Wheel zoom about the cursor. Pixel, line and page deltas are normalised to pixels.
+  const zoomAtRef = useRef(view.zoomAt);
+  zoomAtRef.current = view.zoomAt;
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el || passive) return;
+    const onWheel = (e: globalThis.WheelEvent) => {
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * (r.height || 480) : e.deltaY;
+      zoomAtRef.current(e.clientX - r.left, e.clientY - r.top, Math.exp(-dy * 0.0015));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [passive]);
 
   const emit = (res: ToolResult | null) => {
     if (res) onToolResult?.(res);
@@ -277,7 +300,12 @@ export function GridCanvas(props: GridCanvasProps) {
   };
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
     const p = toRaster(e.clientX, e.clientY);
-    const d = drag.current;
+    let d = drag.current;
+    if (d && e.pointerType === "mouse" && (e.buttons & 1) === 0) {
+      // The button was released where we never heard the pointerup: the drag is over.
+      drag.current = d = null;
+      setDragging(false);
+    }
     if (d) {
       const dx = e.clientX - d.x;
       const dy = e.clientY - d.y;
@@ -310,6 +338,14 @@ export function GridCanvas(props: GridCanvasProps) {
       return;
     }
     if (tool) emit(tool.up(p));
+  };
+
+  /** The browser took the pointer away (touch scroll, focus loss): drop the drag. */
+  const onPointerCancel = () => {
+    const d = drag.current;
+    drag.current = null;
+    setDragging(false);
+    if (d && !d.pan) tool?.cancel();
   };
 
   const moveCursor = (dx: number, dy: number) => {
@@ -404,10 +440,10 @@ export function GridCanvas(props: GridCanvasProps) {
       aria-describedby={helpId}
       data-tool={tool?.id ?? "pan"}
       data-dragging={dragging || undefined}
-      onWheel={onWheel}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
       onPointerLeave={() => {
         setHover(null);
         onHover?.(-1, null);

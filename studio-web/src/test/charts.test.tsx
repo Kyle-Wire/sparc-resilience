@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRef, type ComponentProps, type ComponentType } from "react";
+import { act, createRef, type ComponentProps, type ComponentType } from "react";
 import { KIT, LineBand, type ChartHandle, type KitName } from "../charts";
 import { lastDownload } from "../components/ui/download";
 import { clearResources } from "../api/resource";
@@ -148,9 +148,16 @@ describe("chart kit: every chart renders inside ChartFrame", () => {
   it("marks are keyboard-focusable and announce their value", () => {
     const { container } = renderChart("DotRange");
     const mark = container.querySelector('svg.chart [tabindex="0"][aria-label]') as SVGElement;
-    expect(mark.getAttribute("aria-label")).toContain("Canopy +10");
-    mark.dispatchEvent(new FocusEvent("focus"));
-    mark.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    const label = mark.getAttribute("aria-label")!;
+    expect(label).toContain("Canopy +10");
+    const live = container.querySelector('figure.chart-frame [aria-live="polite"]')!;
+    expect(live.textContent).toBe("");
+    act(() => mark.focus());
+    expect(document.activeElement).toBe(mark);
+    expect(live.textContent).toBe(label); // the readout
+    expect(container.querySelector(".tip")!.textContent).toBe(label); // the tooltip on focus
+    act(() => mark.blur());
+    expect(container.querySelector(".tip")).toBeNull();
   });
 
   it("Pin to Findings posts the snapshot and uploads the SVG image", async () => {

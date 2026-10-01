@@ -303,6 +303,13 @@ function readLocation(): Location {
 let current: Location = readLocation();
 const listeners = new Set<() => void>();
 const scrollPositions = new Map<string, number>();
+/** A scroll restore waiting for the next frame; any later navigation cancels it. */
+let pendingRestore: number | null = null;
+
+function cancelRestore(): void {
+  if (pendingRestore !== null && typeof window !== "undefined") window.cancelAnimationFrame?.(pendingRestore);
+  pendingRestore = null;
+}
 
 function emit(): void {
   current = readLocation();
@@ -316,10 +323,22 @@ if (typeof window !== "undefined") {
     /* not supported */
   }
   window.addEventListener("popstate", () => {
+    cancelRestore();
+    // The browser has not scrolled yet (restoration is manual): remember where the page
+    // being left was, so going forward again returns there too.
+    try {
+      scrollPositions.set(current.key, window.scrollY ?? 0);
+    } catch {
+      /* ignore */
+    }
     emit();
     const y = scrollPositions.get(current.key) ?? 0;
-    const restore = () => window.scrollTo?.(0, y);
-    if (typeof window.requestAnimationFrame === "function") window.requestAnimationFrame(restore);
+    const restore = () => {
+      pendingRestore = null;
+      window.scrollTo?.(0, y);
+    };
+    // After the next frame, so the page being returned to has rendered its height.
+    if (typeof window.requestAnimationFrame === "function") pendingRestore = window.requestAnimationFrame(restore);
     else restore();
   });
 }
@@ -345,6 +364,7 @@ export function navigate(to: string, opts: NavigateOptions = {}): void {
   const url = new URL(to, window.location.href);
   const target = url.pathname + url.search + url.hash;
   const here = window.location.pathname + window.location.search + window.location.hash;
+  cancelRestore(); // a back/forward restore still pending would scroll the new page
   try {
     scrollPositions.set(current.key, window.scrollY ?? 0);
   } catch {
@@ -448,11 +468,11 @@ export const codecs = {
   enum<T extends string>(values: readonly T[], def: T): Codec<T> {
     return { parse: (r) => (r !== null && (values as readonly string[]).includes(r) ? (r as T) : def), format: (v) => (v === def ? null : v) };
   },
-  /** Comma-separated list (items may not contain commas). */
+  /** Comma-separated list; "%" and "," inside items are percent-escaped, so any string round-trips. */
   list(): Codec<string[]> {
     return {
       parse: (r) => (r === null || r === "" ? [] : r.split(",").map(decode).filter((s) => s.length > 0)),
-      format: (v) => (v.length ? v.map((s) => s.replace(/,/g, "%2C")).join(",") : null),
+      format: (v) => (v.length ? v.map((s) => s.replace(/%/g, "%25").replace(/,/g, "%2C")).join(",") : null),
     };
   },
   /** Any JSON value, URL-safe base64 encoded. */

@@ -9,7 +9,7 @@
 //   dtype) plus the packed-array offsets (X-SPARC-Offsets) when present.
 // - Raw uploads: `putRaw` streams a Blob/ArrayBuffer body; with `onProgress` it uses XHR so
 //   upload progress is observable.
-import { parseOffsets, viewOf, type Dtype, type OffsetEntry, type TypedArray } from "./binary";
+import { bytesPerElement, isDtype, parseOffsets, viewOf, type Dtype, type OffsetEntry, type TypedArray } from "./binary";
 import type { Action, ApiErrorBody, ValidationErrorItem } from "./types";
 
 export class ApiError extends Error {
@@ -144,7 +144,8 @@ async function send(method: string, path: string, opts: RequestOptions, retried:
   try {
     res = await fetch(apiUrl(path, opts.query), { method, headers, body, credentials: "same-origin", signal: opts.signal });
   } catch (e) {
-    if (e instanceof DOMException && e.name === "AbortError") throw new ApiError(0, "aborted", "Request cancelled");
+    // AbortError is a DOMException in browsers but not in every runtime: match on the name.
+    if ((e as { name?: unknown } | null)?.name === "AbortError") throw new ApiError(0, "aborted", "Request cancelled");
     throw new ApiError(0, "network", "Studio server is not reachable");
   }
   if (res.status === 401 && !retried && devToken()) {
@@ -189,12 +190,23 @@ export async function getBin<T extends TypedArray = TypedArray>(path: string, dt
   const res = await send("GET", path, { query: opts.query, signal: opts.signal, headers: { Accept: "application/octet-stream" } }, false);
   if (!res.ok) throw errorFromResponse(res.status, await readBody(res), res.statusText);
   const buffer = await res.arrayBuffer();
-  const hdrDtype = res.headers.get("X-SPARC-Dtype") as Dtype | null;
+  const bad = (why: string) => new ApiError(res.status, "bad_response", `Unexpected binary response from ${path}: ${why}`);
+  const hdrDtype = res.headers.get("X-SPARC-Dtype");
+  if (hdrDtype !== null && !isDtype(hdrDtype)) throw bad(`unknown dtype "${hdrDtype}"`);
   const dt: Dtype = hdrDtype ?? dtype ?? "float32";
   const offH = res.headers.get("X-SPARC-Offsets");
-  const offsets = offH ? parseOffsets(offH) : null;
+  let offsets: OffsetEntry[] | null = null;
+  try {
+    offsets = offH ? parseOffsets(offH) : null;
+  } catch (e) {
+    throw bad(errorMessage(e));
+  }
+  if (offsets) for (const o of offsets) if (o.offset + o.length * bytesPerElement(o.dtype) > buffer.byteLength) throw bad(`array "${o.name}" overruns the body`);
+  if (!offsets && buffer.byteLength % bytesPerElement(dt) !== 0) throw bad(`${buffer.byteLength} bytes is not a whole number of ${dt} values`);
   const lenH = res.headers.get("X-SPARC-Length");
   const data = (offsets ? new Uint8Array(buffer) : viewOf(buffer, dt)) as T;
+  // A truncated body would silently shift every value onto the wrong row.
+  if (lenH !== null && !offsets && Number(lenH) !== data.length) throw bad(`X-SPARC-Length is ${lenH} but the body holds ${data.length} values`);
   return {
     data,
     dtype: offsets ? "uint8" : dt,
@@ -229,12 +241,20 @@ export async function putRaw<T>(path: string, body: Blob | ArrayBuffer | ArrayBu
   const onProgress = opts.onProgress;
   const attempt = () =>
     new Promise<{ status: number; statusText: string; body: unknown }>((resolve, reject) => {
+      const signal = opts.signal;
+      if (signal?.aborted) {
+        reject(new ApiError(0, "aborted", "Upload cancelled"));
+        return;
+      }
       const xhr = new XMLHttpRequest();
+      const onAbort = () => xhr.abort();
+      const done = () => signal?.removeEventListener("abort", onAbort);
       xhr.open(method, url);
       xhr.withCredentials = true;
       for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
       xhr.upload.onprogress = (ev) => onProgress(ev.loaded, ev.lengthComputable ? ev.total : 0);
       xhr.onload = () => {
+        done();
         const ct = xhr.getResponseHeader("content-type") ?? "";
         let parsed: unknown = xhr.responseText;
         if (ct.includes("json") && xhr.responseText) {
@@ -246,9 +266,15 @@ export async function putRaw<T>(path: string, body: Blob | ArrayBuffer | ArrayBu
         }
         resolve({ status: xhr.status, statusText: xhr.statusText, body: parsed });
       };
-      xhr.onerror = () => reject(new ApiError(0, "network", "Upload failed: the Studio server is not reachable"));
-      xhr.onabort = () => reject(new ApiError(0, "aborted", "Upload cancelled"));
-      opts.signal?.addEventListener("abort", () => xhr.abort(), { once: true });
+      xhr.onerror = () => {
+        done();
+        reject(new ApiError(0, "network", "Upload failed: the Studio server is not reachable"));
+      };
+      xhr.onabort = () => {
+        done();
+        reject(new ApiError(0, "aborted", "Upload cancelled"));
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
       xhr.send(payload);
     });
   let r = await attempt();

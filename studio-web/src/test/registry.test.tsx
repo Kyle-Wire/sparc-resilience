@@ -4,7 +4,18 @@ import type { Project, RunOutputs } from "../api/types";
 import { ProjectNav } from "../layouts/AppShell";
 import { RunLayout, RunTabs } from "../layouts/RunLayout";
 import { buildRegistry, navigate, registry as appRegistry, RegistryProvider, type RouteModule } from "../router";
-import { flush, mockFetch, render } from "./render";
+import { App } from "../App";
+import { StreamManager, setStreams, type EventSourceLike } from "../api/sse";
+import { click, flush, mockFetch, render, waitFor } from "./render";
+
+/** An EventSource that never connects (the shell opens the global stream). */
+class SilentES implements EventSourceLike {
+  onopen: ((ev: Event) => void) | null = null;
+  onerror: ((ev: Event) => void) | null = null;
+  onmessage: ((ev: MessageEvent) => void) | null = null;
+  addEventListener() {}
+  close() {}
+}
 
 // The fixture route modules live under a test glob, exactly like src/pages/*/routes.ts.
 const fixtureModules = import.meta.glob<RouteModule>("./fixtures/pages/*/routes.ts", { eager: true });
@@ -105,6 +116,39 @@ describe("route registry", () => {
     expect(container.querySelector('a[data-tab="lab"]')!.getAttribute("aria-current")).toBe("page");
     expect(container.querySelector('a[data-tab="docs"] .tab-dot')!.getAttribute("data-a")).toBe("stale");
     expect(fetch.calls.map((c) => c.url).sort()).toEqual(["/api/runs/r1", "/api/runs/r1/outputs"]);
+  });
+
+  it("App keeps the run layout mounted across tab navigation, so the followed tab keeps focus", async () => {
+    const reg = buildRegistry(fixtureModules);
+    const fetch = mockFetch({
+      "GET /api/runs/r1": { body: { run: { id: "r1", project_id: null, label: "Fast run", status: "complete", mode: "fast", coarse_m: null, demo: false }, header: { name: "demo" } } },
+      "GET /api/runs/r1/outputs": { body: { outputs: [], tabs: [] } },
+      "GET /api/jobs": { body: { items: [], next_cursor: null } },
+      "GET /api/health": { body: { ok: true, engine: { state: "absent" } } },
+      "GET /api/projects": { body: [] },
+    });
+    setStreams(new StreamManager({ EventSource: SilentES, frame: (cb) => cb() }));
+    try {
+      navigate("/r/r1/accuracy");
+      const { container } = render(
+        <RegistryProvider registry={reg}>
+          <App />
+        </RegistryProvider>,
+      );
+      await waitFor(() => container.querySelector('[data-testid="fixture-page"]')?.textContent?.startsWith("Accuracy"), 10000, "the accuracy page");
+      const nav = container.querySelector("nav.run-tabs")!;
+      const causal = container.querySelector<HTMLAnchorElement>('a[data-tab="causal"]')!;
+      causal.focus();
+      click(causal);
+      await waitFor(() => container.querySelector('[data-testid="fixture-page"]')?.textContent?.startsWith("Causal"), 10000, "the causal page");
+      expect(window.location.pathname).toBe("/r/r1/causal");
+      expect(container.querySelector("nav.run-tabs")).toBe(nav); // not remounted
+      expect(document.activeElement).toBe(causal);
+      expect(causal.getAttribute("aria-current")).toBe("page");
+    } finally {
+      fetch.restore();
+      setStreams(null);
+    }
   });
 
   it("ProjectNav renders declared entries, hides null targets and greys disabled ones", () => {
