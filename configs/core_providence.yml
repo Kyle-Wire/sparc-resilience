@@ -73,9 +73,12 @@ core:
 
   physics:
     enabled: true
-    window: day                  # campaign time window undocumented; daytime forcing assumed
-    sw_down: 800.0
-    lw_net: -100.0
+    # Campaign forcing: 2020-07-18, 15–16 EDT (the afternoon traverse), from ERA5
+    # radiation (clear sky, SW↓ 708 W/m², net LW −63 W/m²) and the KPVD wind
+    # (5.9 m/s from SSE — a bay sea breeze ERA5 does not resolve).  Regenerate:
+    #   sparc core forcing -p configs/core_providence.yml --date 2020-07-18 --hours 15-16 \
+    #       --station 72507014765 --out configs/forcing/providence_2020-07-18.json
+    forcing: forcing/providence_2020-07-18.json
     roles:
       albedo: Albedo
       canopy: Pct_Canopy
@@ -83,7 +86,7 @@ core:
       ndvi: NDVI
       elevation: Elevation_m
       water_distance: Distance_from_water_m
-    wind: null                   # no wind record → advection learned under a penalty
+    # wind comes from the forcing file; S3 keeps advection only if it beats v = 0 out of fold
 
   influence:
     max_lag_m: 2000

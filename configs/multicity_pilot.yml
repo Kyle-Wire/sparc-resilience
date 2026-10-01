@@ -36,11 +36,12 @@ multicity:
     - city: "Providence, RI"
       city_slug: "providence_ri"
       holdout: false
-      phase1_only: true     # 2019 NIHHIS; CAPA AAT data absent (tdsy7 folder not matched)
+      phase1_only: true     # 2020 campaign (confirmed by the data owner); CAPA AAT data absent (tdsy7 folder not matched)
       bbox: [-71.50, 41.75, -71.35, 41.90]
       utm_epsg: "EPSG:32619"
       timezone: "America/New_York"
       campaign_date_source: "filename_guess"
+      campaign_date_override: "2020-07-18"   # KPVD: Tmax 91 °F, clear (ERA5 clear-sky index 0.95 at 15–16 EDT)
 
     - city: "Raleigh, NC"
       city_slug: "raleigh_nc"

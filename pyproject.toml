@@ -85,6 +85,11 @@ dask = [
     "dask[dataframe]>=2024.1",
     "dask-geopandas>=0.3",
 ]
+climate = [
+    # CMIP6 zarr chunks and ERA5 NetCDF4/HDF5 read over HTTPS (sparc core climate / forcing)
+    "numcodecs>=0.12",
+    "h5py>=3.9",
+]
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",

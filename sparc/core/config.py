@@ -56,6 +56,7 @@ DEFAULTS: dict[str, Any] = {
         "window": "day",
         "sw_down": 800.0,
         "lw_net": -100.0,
+        "forcing": None,            # JSON from `sparc core forcing`: sets window, sw_down, lw_net, wind
         "roles": {},
         "wind": None,
         "tau_s": 1800.0,
@@ -224,6 +225,11 @@ class CoreConfig:
 def core_config_from_dict(raw: dict, base_dir: str | Path | None = None) -> CoreConfig:
     block = raw.get("core", raw)
     cfg = CoreConfig(raw=_deep_merge(DEFAULTS, block), base_dir=Path(base_dir or Path.cwd()))
+    forcing = cfg.raw["physics"].get("forcing")
+    if forcing:                       # campaign-day radiation / wind from `sparc core forcing`
+        from sparc.core.forcing import apply_forcing_file
+
+        cfg.raw["physics"] = apply_forcing_file(cfg.raw["physics"], cfg.resolve_path(forcing), label=str(forcing))
     cfg.validate()
     return cfg
 

@@ -191,6 +191,20 @@ def render_report(result) -> str:
             p = m["physics"]
             L += ["**Physics (mean ± sd over folds):** " + ", ".join(
                 f"{k} = {_f(p[k]['mean'], 3)} ± {_f(p[k]['sd'], 3)}" for k in ("L_m", "vx_m", "vy_m", "a", "gamma") if k in p), ""]
+        ph = (m.get("config") or {}).get("physics") or {}
+        fi = ph.get("forcing_info")
+        if fi:
+            L += [f"**Forcing:** {fi.get('date')} {fi.get('hours_local')} local ({fi.get('tz')}) from `{fi.get('file')}` — "
+                  f"SW↓ {_f(ph.get('sw_down'), 0)} W/m², net LW {_f(ph.get('lw_net'), 0)} W/m², wind {ph.get('wind')} m/s "
+                  f"({fi.get('wind_source')}" + (f" {fi['station']}" if fi.get("station") else "") + "). "
+                  + " · ".join(fi.get("checks") or []), ""]
+        else:
+            L += [f"**Forcing:** generic (SW↓ {_f(ph.get('sw_down'), 0)} W/m², net LW {_f(ph.get('lw_net'), 0)} W/m², "
+                  f"wind {ph.get('wind')}); run `sparc core forcing` for the campaign day.", ""]
+        adv = m.get("physics_advection")
+        if adv:
+            L += [f"**Advection:** {'kept' if adv['kept'] else 'dropped'} — held-out RMSE with − without advection "
+                  f"= {_f(adv['delta_rmse_mean'], 4)} ± {_f(adv['delta_rmse_se'], 4)} {u} (kept only if lower by > 1 SE).", ""]
     if m.get("cv_distance"):
         rows = m["cv_distance"]["rows"]
         names = list(rows[0]["models"]) if rows else []

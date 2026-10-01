@@ -11,5 +11,7 @@ pyarrow>=14.0
 pyproj>=3.6
 torch>=2.0
 networkx>=3.1      # optional DAG audit (sparc.causal.mc3)
+numcodecs>=0.12    # CMIP6 zarr chunks (sparc core climate)
+h5py>=3.9          # ERA5 NetCDF4 over HTTP ranges (sparc core forcing)
 pytest>=7.4
 pytest-timeout>=2.2

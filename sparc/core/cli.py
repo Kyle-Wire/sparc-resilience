@@ -1,6 +1,8 @@
 """Command-line entry for the core pipeline.
 
     sparc core run   --project configs/core_providence.yml [--stages S0,S1,S2,S3] [--fast | --coarse 60] [--resume] [--cv-curve]
+    sparc core forcing --project configs/core_providence.yml --date 2020-07-18 --hours 15-16 \
+                       --station 72507014765 --out configs/forcing/providence_2020-07-18.json
     sparc core synth --out output/core/synthetic_city.csv [--seed 0]
     python -m sparc.core run --project ...          (same, without the legacy CLI)
 """
@@ -48,6 +50,19 @@ def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
     p_cl.add_argument("--workers", type=int, default=4)
     p_cl.set_defaults(func=cmd_core_climate)
 
+    p_fo = subs.add_parser("forcing", help="campaign-day radiation and wind (ERA5 + weather station) → JSON")
+    p_fo.add_argument("--project", "-p", default=None, help="core config (site from climate.site)")
+    p_fo.add_argument("--lat", type=float, default=None)
+    p_fo.add_argument("--lon", type=float, default=None)
+    p_fo.add_argument("--date", required=True, help="campaign date, YYYY-MM-DD")
+    p_fo.add_argument("--hours", default="15-16", help="local hour range of the traverse (default 15-16)")
+    p_fo.add_argument("--tz", default="America/New_York", help="IANA time zone of --hours")
+    p_fo.add_argument("--station", default=None, help="NOAA Global Hourly station id (USAF+WBAN, e.g. 72507014765)")
+    p_fo.add_argument("--wind-source", default="auto", choices=["auto", "station", "era5"])
+    p_fo.add_argument("--cache", default="output/core/cache")
+    p_fo.add_argument("--out", required=True, help="forcing JSON (reference it as physics.forcing)")
+    p_fo.set_defaults(func=cmd_core_forcing)
+
     p_syn = subs.add_parser("synth", help="write the synthetic test city (with planted truths) to CSV")
     p_syn.add_argument("--out", required=True)
     p_syn.add_argument("--seed", type=int, default=0)
@@ -73,6 +88,35 @@ def cmd_core_run(args) -> int:
               f"coverage {s.get('interval_coverage', float('nan')):.3f}")
     if res.run_dir:
         print(f"outputs → {res.run_dir}  (see report.md)")
+    return 0
+
+
+def cmd_core_forcing(args) -> int:
+    import json
+
+    from sparc.core.forcing import campaign_forcing
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    lat, lon = args.lat, args.lon
+    if (lat is None or lon is None) and args.project:
+        from sparc.core.config import load_core_config
+
+        site = (load_core_config(args.project).raw.get("climate") or {}).get("site")
+        if site:
+            lat, lon = float(site[0]), float(site[1])
+    if lat is None or lon is None:
+        raise SystemExit("give --lat/--lon or a --project with climate.site")
+    h0, h1 = (int(x) for x in args.hours.split("-"))
+    res = campaign_forcing(lat, lon, args.date, (h0, h1), args.tz, station=args.station,
+                           wind_source=args.wind_source, cache_dir=args.cache)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(res, indent=1, default=str) + "\n", encoding="utf-8")
+    ph = res["physics"]
+    print(f"sw_down {ph['sw_down']} W/m², lw_net {ph['lw_net']} W/m², wind {ph['wind']} m/s ({res['wind_source']})")
+    for c in res["checks"]:
+        print("  ·", c)
+    print(f"wrote {out}  →  reference it as physics.forcing (path relative to the config file)")
     return 0
 
 
