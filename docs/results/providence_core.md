@@ -1,6 +1,6 @@
 # Providence (brown4.csv): core pipeline results
 
-**Run:** `sparc core run --project configs/core_providence.yml --cv-curve` · 2026-10-01 · commit `1d361e0` · 103 min on 3 CPU threads.
+**Run:** `sparc core run --project configs/core_providence.yml --cv-curve` · 2026-10-01 · commit `d0d6cc9` · 102 min on 3 CPU threads (61 of them for the optional distance table).
 
 **Interactive version:** the "Providence Heat Model" results page (maps, charts and tables) is built from the same run directory. See [Regenerating](#regenerating).
 
@@ -40,7 +40,7 @@ Every accuracy number below is out of fold under **5-fold spatial-block CV**:
 | Random cells (leaky reference) | 0 | 54,137 | 0.975 | 0.27 | 0.97–0.98 | blend + neural residual |
 | 500 m blocks | 167 | 245 | 0.743 | 0.87 | 0.59–0.80 | blend only |
 | 1,000 m blocks | 333 | 73 | 0.660 | 1.00 | 0.41–0.81 | blend only |
-| **2,000 m blocks (main)** | **667** | **23** | **0.557** | **1.14** | **0.26–0.74** | **blend only** |
+| **2,000 m blocks (main)** | **667** | **23** | **0.556** | **1.14** | **0.26–0.74** | **blend only** |
 
 **Reading the curve:**
 - **Random-cell CV mostly measures interpolation.** Every test cell has training neighbours 30 m away. That is how the earlier pipeline reached 0.94–0.98.
@@ -55,12 +55,18 @@ Every accuracy number below is out of fold under **5-fold spatial-block CV**:
 | MGWR (FFT backfitting) | 0.39 | 1.34 | 0.04 |
 | Geographically weighted random forest | 0.42 | 1.30 | 0.01 |
 | GAM + spatial smooth | 0.55 | 1.15 | 0.59 |
-| Physics (heat transport) | 0.51 | 1.20 | 0.35 |
-| **Stacked model** | **0.557** | **1.14** | — |
+| Physics (heat transport) | 0.50 | 1.21 | 0.35 |
+| **Stacked model** | **0.556** | **1.14** | — |
 
-- **Stacker.** The stacker is a non-negative blend of the base models. A neural residual was scored out of fold at λ_PDE ∈ {0, 0.1, 1}, with RMSE 1.23, 1.27 and 1.30. It lost to the blend alone (1.14), so it is switched off.
+- **Stacker.** Chosen on the held-out blocks: a non-negative (NNLS) blend of the base models (RMSE 1.14). The other candidates were an equal-weight mean (1.19) and the blend plus a neural residual at λ_PDE ∈ {0, 0.1, 1} (1.23, 1.27, 1.30).
 - **Intervals.** 90% cross-conformal intervals cover 89.7% of held-out cells, with a mean half-width of ±1.86 °F.
-- **Physics.** The steady advection–diffusion–relaxation operator is driven by an energy-balance source. Across folds it gives L = 242 ± 22 m and gain a = 37 ± 8. There is no advection, because there is no wind record. On its own it scores R² 0.51 on unseen blocks, second only to the GAM, and it carries 20–50% of the blend.
+- **Physics.** The steady advection–diffusion–relaxation operator is driven by an energy-balance source, with a canopy shade term that can saturate with cover. Across folds:
+  - L = 240 ± 22 m and gain a = 36 ± 8;
+  - the shade-saturation scale κ = 3.4 ± 1.1, so on Brown the shade response stays close to linear;
+  - no advection, because there is no wind record.
+
+  On its own it scores R² 0.50 on unseen blocks, second only to the GAM, and it carries 19–50% of the blend.
+- **Spatial+** is available (`models.spatial_plus: [mgwr]`) but off here. It lowered MGWR's held-out R² from 0.39 to 0.31 on these data with no stack gain.
 
 ## S1: Area of influence
 
@@ -80,9 +86,9 @@ No anisotropy passed the bootstrap gate.
 
 | Intervention | Saturating | Linear | Censored | Median dose for 90% of max | Own-cell effect / unit | Footprint / unit |
 |---|---|---|---|---|---|---|
-| Canopy added (pp) | 54% | 40% | 6% | 7.4 pp | −0.0001 °F | −0.020 °F |
-| Impervious removed (pp) | 9% | 78% | 2% | 38.9 pp | +0.0031 °F per +1 pp | +0.052 °F per +1 pp |
-| Albedo added | 98% | 1% | 1% | 0.24 | −0.33 °F per unit | −7.6 °F per unit (−0.076 per +0.01) |
+| Canopy added (pp) | 56% | 37% | 5% | 11.4 pp | −0.0001 °F | −0.022 °F |
+| Impervious removed (pp) | 9% | 78% | 2% | 38.9 pp | +0.0032 °F per +1 pp | +0.052 °F per +1 pp |
+| Albedo added | 98% | 1% | 2% | 0.24 | −0.34 °F per unit | −7.4 °F per unit (−0.074 per +0.01) |
 
 **The footprint is about 15–150× the own-cell effect.** Interventions cool their surroundings far more than the treated cell, which is why S1's area of influence matters for the optimiser.
 
@@ -90,20 +96,68 @@ City-wide mean cooling by neighbourhood dose:
 
 | Dose | +5 | +10 | +15 | +20 | +30 | +40 | +50 |
 |---|---|---|---|---|---|---|---|
-| Canopy (pp) | 0.10 | 0.23 | 0.35 | 0.49 | 0.74 | 0.99 | 1.20 |
-| Impervious removed (pp) | 0.21 | 0.41 | 0.61 | 0.83 | 1.35 | 1.92* | 2.51* |
+| Canopy (pp) | 0.11 | 0.24 | 0.37 | 0.50 | 0.75 | 1.00 | 1.19 |
+| Impervious removed (pp) | 0.21 | 0.41 | 0.61 | 0.83 | 1.34 | 1.92* | 2.51* |
 
 \* Impervious doses of 40 pp or more leave 41–71% of cells beyond observed conditions. Albedo is extrapolated from +0.15 upwards.
 
 ## S5: Scenarios (mean ΔT, °F)
 
-| Scenario | Mean | 10th–90th pct | Fold spread | Beyond observed |
+The last column is an independent cross-check from S6: the causal own + neighbour effect × the scenario's mean realised change, with a 95% band. It is a straight-line extrapolation, so it cannot follow saturation. ⚑ marks a model mean outside the band.
+
+| Scenario | Model mean | 10th–90th pct (model) | Beyond observed | Linear causal estimate (95%) |
 |---|---|---|---|---|
-| Canopy +5 / +10 / +20 / +30 pp | −0.10 / −0.23 / −0.49 / −0.74 | −0.45 to +0.02 (at +10) | ±0.10 (at +10) | 6–7% |
-| Impervious −5 / −10 / −20 / −30 pp | −0.21 / −0.41 / −0.83 / −1.35 | −0.65 to −0.14 (at −10) | ±0.15 (at −10) | 4–18% |
-| Albedo +0.05 / +0.1 | −0.40 / −0.80 | −1.10 to −0.50 (at +0.1) | ±0.16 | 8% / 23% |
-| Albedo +0.2 | −1.35 | — | — | **100%: do not use** |
-| Green package (canopy +15, impervious −15, albedo +0.1) | −1.72 | −2.21 to −1.22 | ±0.28 | 26% |
+| Canopy +5 / +10 pp | −0.11 / −0.24 | −0.45 to +0.02 (at +10) | 6% | −0.05 (−0.12 to +0.02) / −0.10 (−0.25 to +0.04) |
+| Canopy +20 / +30 pp | −0.50 / −0.75 | — | 6–7% | −0.20 (−0.48 to +0.08) ⚑ / −0.30 (−0.71 to +0.12) ⚑ |
+| Impervious −5 / −10 pp | −0.21 / −0.41 | −0.65 to −0.14 (at −10) | 4–5% | −0.20 / −0.40 (−0.61 to −0.18) |
+| Impervious −20 / −30 pp | −0.83 / −1.34 | — | 9–18% | −0.78 / −1.15 (−1.77 to −0.52) |
+| Albedo +0.05 / +0.1 | −0.39 / −0.79 | −1.10 to −0.50 (at +0.1) | 8% / 23% | −0.32 / −0.63 (−1.18 to −0.09) |
+| Albedo +0.2 | −1.32 | — | **100%: do not use** | −1.27 |
+| Green package (canopy +15, impervious −15, albedo +0.1) | −1.71 | −2.21 to −1.22 | 26% | −1.38 (−2.04 to −0.71) |
+
+**Impervious and albedo:** the model and the causal estimate agree throughout.
+
+**Canopy:** the model's cooling is larger than the causal straight line from +20 pp upwards. The causal canopy effect is itself weakly identified (its band includes zero), so canopy magnitudes are the least certain part of the scenario set.
+
+## Climate futures (CMIP6, delta method)
+
+**Method:**
+- **Warming:** change in June–August mean daily maximum near-surface air temperature (`tasmax`) between 1995–2014 and each IPCC AR6 period. It comes from **24 CMIP6 models**, one member each, read from the public AWS archive.
+- **Location:** the four model grid cells around Providence (41.826°N, 71.403°W), weighted by land fraction.
+- **Future maps:** today's measured field plus each model's warming, plus an adaptation scenario's re-predicted change.
+- **Per-model values:** `configs/climate/providence_cmip6_tasmax_jja.csv`.
+
+| Pathway | 2021–2040 | 2041–2060 | 2081–2100 |
+|---|---|---|---|
+| SSP1-2.6 | +1.8 °F (1.1–2.8) | +2.6 (1.5–4.2) | +2.4 (1.5–4.5) |
+| SSP2-4.5 | +1.8 (1.2–3.3) | **+3.0 (2.3–4.9)** | +4.6 (3.3–7.0) |
+| SSP3-7.0 | +1.9 (1.2–3.6) | +3.6 (2.1–6.7) | +7.8 (4.6–11.6) |
+| SSP5-8.5 | +2.0 (1.2–3.6) | +4.1 (3.0–6.5) | +9.4 (5.8–13.6) |
+
+The table shows the median across models, with the 10th–90th percentile in brackets.
+
+**Heat exposure:** share of the study area at or above 90 °F. Today the share is 13% (and 0% reach 95 °F). Adaptation packages are each variable's largest in-support dose.
+
+| Pathway · period | No adaptation | Canopy +30 pp | Impervious −30 pp | Albedo +0.05 |
+|---|---|---|---|---|
+| SSP2-4.5 · 2041–2060 | 76% | 60% | 41% | 69% |
+| SSP2-4.5 · 2081–2100 | 90% | 88% | 77% | 90% |
+| SSP5-8.5 · 2041–2060 | 90% | 82% | 69% | 84% |
+| SSP5-8.5 · 2081–2100 | 100% (90% at ≥ 95 °F) | 100% | 100% | 100% |
+
+**Share of the median mid-century SSP2-4.5 warming each package offsets:**
+- impervious −30 pp: 44%;
+- canopy +30 pp: 25%;
+- albedo +0.05: 13%.
+
+By 2081–2100 under SSP3-7.0 or SSP5-8.5, no single land-cover package keeps the area below 90 °F.
+
+**Assumptions (delta method):**
+- Land-cover effects are assumed unchanged as the background warms.
+- The hottest days may warm more than the seasonal average of daily highs.
+- Campaign-day conditions are treated as representative.
+
+The CMIP6 output is used under the CMIP6 terms of use (CC BY 4.0 for most modelling groups).
 
 ## S6: Causal validation
 
@@ -131,15 +185,15 @@ Spatial DML with the same 2 km blocks for cross-fitting (22 block degrees of fre
 
 ## S7: Canopy budget plan
 
-- **Budget:** 20,000 dose units (+1 pp on one cell = 1 unit), placed on **783 cells** at a mean of +25.5 pp each.
-- **Planned vs re-predicted cooling:** planned 1,702 °F·cells. Re-predicting the whole plan at once gives 981 °F·cells (58%), because neighbouring plantings share footprints.
-- **Cooling achieved:** 0.15 °F mean in treated cells; 0.018 °F city-wide.
-- **Scaling:** doubling the budget raises planned cooling 1.73×.
+- **Budget:** 20,000 dose units (+1 pp on one cell = 1 unit), placed on **864 cells** at a mean of +23.1 pp each.
+- **Planned vs re-predicted cooling:** planned 1,704 °F·cells. Re-predicting the whole plan at once gives 1,037 °F·cells (61%), because neighbouring plantings share footprints.
+- **Cooling achieved:** 0.15 °F mean in treated cells; 0.019 °F city-wide.
+- **Scaling:** doubling the budget raises planned cooling 1.77×.
 
 ## Validation of the method (synthetic city with planted truths)
 
-- **Stack choice:** the stack puts about 0.88 weight on physics, which generated the data, and matches or beats the best base model.
-- **Effect recovery:** it recovers 53% of the planted canopy footprint, with spatial correlation 0.87. Effects are attenuated, so treat scenario magnitudes as conservative.
+- **Stack choice:** the stack puts most of its weight on physics, which generated the data, and beats the best base model (held-out R² 0.878 vs 0.872).
+- **Effect recovery** (`sparc core benchmark`): the stacked footprint recovers 63% of the planted canopy effect, with spatial correlation 0.95. Before the saturating physics shade it was 53% and 0.87. Effects are still attenuated, mostly by the prediction-tuned GAM and forest, so treat scenario magnitudes as conservative.
 
 ## Caveats
 
@@ -151,7 +205,9 @@ Spatial DML with the same 2 km blocks for cross-fitting (22 block degrees of fre
 ## Regenerating
 
 ```bash
+sparc core climate --lat 41.826 --lon -71.403 --out configs/climate/providence_cmip6_tasmax_jja.csv   # CMIP6 change factors (~5 min)
 sparc core run --project configs/core_providence.yml --cv-curve        # add --resume after an interruption
+sparc core benchmark                                                   # synthetic-city effect recovery
 python scripts/results_page/build_page.py output/core/providence/providence_uhi configs/core_providence.yml \
        --out output/core/providence/providence_uhi/results.html
 ```

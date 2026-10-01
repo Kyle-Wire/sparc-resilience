@@ -267,6 +267,7 @@ footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
       </div>
       <div class="card">
         <h3 id="exposureTitle">Heat exposure</h3>
+        <div class="seg" id="thrSeg" role="group" aria-label="Heat threshold"></div>
         <p class="cap" id="exposureCap"></p>
         <div class="tablewrap" id="tbl-exposure"></div>
       </div>
@@ -397,10 +398,10 @@ for (const s of DATA.scen_layers || []) add({ group: "Scenarios", key: s.key, na
 add({ group: "Budget plan", key: "alloc_dose", name: "Planned canopy increase", unit: "pp", scale: "seq", d: 1, zeroBlank: true, desc: "Where the budget-optimal plan adds canopy, and how much. Untreated cells are blank." });
 add({ group: "Budget plan", key: "alloc_delta", name: "Re-predicted ΔT of the plan", unit: U, scale: "div", center: 0, d: 3, desc: "The whole plan applied at once and re-predicted through the model (closed-loop check)." });
 const CL = DATA.climate;
-const THR = CL ? CL.thresholds[CL.thresholds.length - 1] : null;
+let THR = CL ? CL.thresholds[0] : null;
 if (CL) {
   add({ group: "Climate futures", key: "__clim_temp", name: "Future air temperature", unit: U, scale: "climtemp", center: DATA.background, d: 1, desc: "Observed temperature plus the CMIP6 multi-model median warming for the chosen pathway and period, plus the chosen adaptation scenario's re-predicted change. Colours keep today's scale, so warming shows as a shift to red." });
-  add({ group: "Climate futures", key: "__clim_thr", name: `Cells at or above ${THR} ${U}`, scale: "climthr", desc: `Cells whose projected temperature reaches ${THR} ${U} under the chosen pathway, period and adaptation.` });
+  add({ group: "Climate futures", key: "__clim_thr", name: "Cells at or above the heat threshold", scale: "climthr", desc: "Cells whose projected temperature reaches the threshold chosen in the Heat exposure table (Climate futures section) under the chosen pathway, period and adaptation." });
 }
 add({ group: "CV design", key: "__folds", name: "Spatial cross-validation folds", scale: "folds", desc: "For the chosen fold: blue cells are held out for testing, orange cells are dropped from training as a buffer, grey cells train the models. Every accuracy number on this page comes from this design." });
 const GROUPS = [...new Set(LAYERS.map((l) => l.group))];
@@ -515,7 +516,7 @@ function drawStats() {
   const vals = layerValues(Ly);
   if (Ly.scale === "climthr") { let k = 0; for (let i = 0; i < N; i++) if (vals[i] >= THR) k++;
     const p = CL.projections[climSel.proj];
-    row(`At or above ${THR} ${U}`, `${fmt(100 * k / N, 1)}%`); row("Today", `${fmt(100 * CL.present.share_at_or_above[String(Number(THR).toFixed(1))] , 1)}%`);
+    row(`At or above ${THR} ${U}`, `${fmt(100 * k / N, 1)}%`); row(`Today at or above ${THR} ${U}`, `${fmt(100 * CL.present.share_at_or_above[String(Number(THR).toFixed(1))], 1)}%`);
     row("Warming used", `${sfmt(p.warming.median, 2)} ${U} (median of ${p.n_models} models)`); return; }
   if (Ly.scale === "cat") { const labs = DATA.layers[Ly.key].labels; const cnt = new Array(labs.length).fill(0); for (let i = 0; i < N; i++) cnt[vals[i]]++;
     labs.forEach((l, k) => { if (k > 0 || cnt[0] > 0) row(l, `${fmt(100 * cnt[k] / N, 1)}%`); }); return; }
@@ -791,19 +792,26 @@ function climate() {
   const t = el("table"); const h = el("tr"); h.append(el("th", {}, "Model")); P.forEach((p) => h.append(el("th", { class: "r" }, `${p.label} ${p.period}`))); t.append(h);
   for (const m of models) { const tr = el("tr"); tr.append(el("td", {}, m)); P.forEach((p) => tr.append(el("td", { class: "r" }, sfmt(p.warming.by_model[m], 2)))); t.append(tr); }
   $("tbl-clim-models").append(t);
-  // exposure table
-  const thr = CL.thresholds[CL.thresholds.length - 1];
+  // exposure table (threshold toggle also drives the map's threshold layer)
+  for (const t of CL.thresholds) { const b = el("button", { type: "button", "aria-pressed": String(t === THR) }, `${t} ${U}`);
+    b.addEventListener("click", () => { THR = t; for (const x of $("thrSeg").children) x.setAttribute("aria-pressed", String(x === b)); exposure(); if (cur && cur.scale === "climthr") render(); });
+    $("thrSeg").append(b); }
+  exposure();
+}
+function exposure() {
+  const tkey = (t) => Number(t).toFixed(1); const P = CL.projections; const thr = THR;
+  const mid = P.find((p) => p.experiment === "ssp245" && p.period === "2041-2060") || P[0];
   $("exposureTitle").textContent = `Share of the study area at or above ${thr} ${U}`;
-  $("exposureCap").textContent = `Today ${fmt(100 * CL.present.share_at_or_above[tkey(thr)], 1)}% of cells reach ${thr} ${U}. Values are the median over climate models (hover for the 10–90% range). The last row of each period shows how much of the median warming each adaptation package offsets on average.`;
+  $("exposureCap").textContent = `Today ${fmt(100 * CL.present.share_at_or_above[tkey(thr)], 1)}% of cells reach ${thr} ${U} on the campaign day. Values are the median over climate models (hover a cell for the 10–90% range). The last row shows how much of the median mid-century SSP2-4.5 warming each package offsets on average.`;
   const vnames = P[0].variants.map((v) => v.name);
   const tb = el("table"); const hh = el("tr"); hh.append(el("th", {}, "Pathway"), el("th", {}, "Period")); vnames.forEach((n) => hh.append(el("th", { class: "r" }, n === "no adaptation" ? "No adaptation" : n))); tb.append(hh);
-  for (const p of P) { const tr = el("tr"); tr.append(el("td", {}, p.label), el("td", {}, p.period));
+  for (const p of P) { const tr = el("tr"); tr.append(el("td", { style: "white-space:nowrap" }, p.label), el("td", { style: "white-space:nowrap" }, p.period));
     for (const v of p.variants) { const s2 = v.share_at_or_above[tkey(thr)]; const td = el("td", { class: "r" }, `${fmt(100 * s2.median, 1)}%`); td.title = `10–90% of models: ${fmt(100 * s2.p10, 1)}–${fmt(100 * s2.p90, 1)}%`; tr.append(td); }
     tb.append(tr); }
-  const off = el("tr"); off.append(el("td", { class: "cap" }, "Offset of mid-century SSP2-4.5 warming"), el("td", {}, ""));
+  const off = el("tr"); off.append(el("td", { class: "cap" }, "Share of mid-century SSP2-4.5 warming offset"), el("td", {}, ""));
   for (const v of mid.variants) off.append(el("td", { class: "r cap" }, v.offset_share_of_median_warming == null ? "—" : `${fmt(100 * v.offset_share_of_median_warming, 0)}%`));
   tb.append(off);
-  $("tbl-exposure").append(tb);
+  $("tbl-exposure").replaceChildren(tb);
 }
 
 /* ---------- causal ---------- */
