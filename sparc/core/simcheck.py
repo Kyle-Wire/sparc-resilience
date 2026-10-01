@@ -119,7 +119,7 @@ def _grf_points(grid, range_m: float, rng) -> np.ndarray:
 class Generator:
     """Planted temperature T(canopy, impervious) on the real layout (°F, mean 0)."""
 
-    def __init__(self, kind: str, layout: Layout, rng: np.random.Generator):
+    def __init__(self, kind: str, layout: Layout, rng: np.random.Generator, target_signal_sd: float | None = None):
         if kind not in GENERATORS:
             raise ValueError(f"unknown generator {kind!r}")
         self.kind, self.L, self.g = kind, layout, layout.grid
@@ -145,7 +145,10 @@ class Generator:
         self.v = (300.0 * wind[0] / nv, 300.0 * wind[1] / nv) if any(wind[:2]) else (0.0, 0.0)
         self.beta_c = 1.0
         self.beta_i = 1.0
+        self.rest_scale = 1.0
         self._calibrate()
+        if target_signal_sd:
+            self._match_signal(float(target_signal_sd))
 
     # canopy and impervious terms ------------------------------------------------
     def _canopy_term(self, C: np.ndarray) -> np.ndarray:
@@ -173,14 +176,29 @@ class Generator:
         r[g.iy, g.ix] = self._source(C, imp) - self._q0_mean
         return ops.solve(r, 300.0, self.v, dx=g.dx)[g.iy, g.ix]
 
-    def signal(self, C: np.ndarray, imp: np.ndarray) -> np.ndarray:
+    def _parts(self, C: np.ndarray, imp: np.ndarray):
+        """(canopy-bearing part, rescalable rest, hidden confounder part)."""
         if self.kind == "physics":
-            return self.a_phys * self._physics(C, imp) + self.fixed
-        ct = 0.0 if self.kind == "null" else self.beta_c * self._canopy_term(C)
-        out = ct + self.beta_i * self._impervious_term(imp) + self.fixed
-        if self.U is not None:
-            out = out + 0.8 * self.U
-        return out
+            lead = self.a_phys * self._physics(C, imp)
+        else:
+            lead = 0.0 if self.kind == "null" else self.beta_c * self._canopy_term(C)
+        rest = self.beta_i * self._impervious_term(imp) + self.fixed
+        hidden = 0.8 * self.U if self.U is not None else 0.0
+        return lead, rest, hidden
+
+    def signal(self, C: np.ndarray, imp: np.ndarray) -> np.ndarray:
+        lead, rest, hidden = self._parts(C, imp)
+        return lead + self.rest_scale * rest + hidden
+
+    def _match_signal(self, target_sd: float) -> None:
+        """Rescale the non-canopy terms so the signal's spread matches the real
+        target's explained share (the canopy truth is untouched)."""
+        lead, rest, hidden = self._parts(self.C0, self.I0)
+        A = np.asarray(lead + hidden, float) * np.ones(self.C0.size)
+        B = np.asarray(rest, float)
+        va, vb, cab = A.var(), B.var(), float(np.cov(A, B)[0, 1])
+        disc = cab ** 2 - vb * (va - target_sd ** 2)
+        self.rest_scale = float(max((-cab + np.sqrt(disc)) / vb, 0.0)) if vb > 0 and disc >= 0 else 1.0
 
     def truth_delta(self, dose: float = DOSE) -> np.ndarray:
         """True per-cell change for a uniform canopy edit (clipped to [0, 100])."""
@@ -282,20 +300,23 @@ def gate_stats(product: np.ndarray, layout: Layout, X: np.ndarray, real: dict | 
 
 
 def draw(kind: str, layout: Layout, seed: int, real: dict, features: np.ndarray, X: np.ndarray,
-         max_tries: int = 3) -> tuple[np.ndarray, Generator, dict]:
-    """One gated simulated target: (product, generator, gate stats)."""
+         max_tries: int = 3, signal_share: float = 0.6) -> tuple[np.ndarray, Generator, dict]:
+    """One gated simulated target: (product, generator, gate stats).  The
+    planted signal explains ``signal_share`` of the real target's variance
+    (Providence's held-out R² is 0.56; the product adds smoothing on top)."""
     noise_scale = 1.0
     for attempt in range(max_tries):
         rng = np.random.default_rng([seed, attempt, GENERATORS.index(kind)])
-        gen = Generator(kind, layout, rng)
+        gen = Generator(kind, layout, rng, target_signal_sd=math.sqrt(signal_share) * real["sd"])
         sig = gen.signal(gen.C0, gen.I0)
-        resid_sd = math.sqrt(max(real["sd"] ** 2 - sig.var(), 0.25 * real["sd"] ** 2)) * noise_scale
+        resid_sd = math.sqrt(max(real["sd"] ** 2 - sig.var(), 0.2 * real["sd"] ** 2)) * noise_scale
         noise = resid_sd * (0.85 * _grf_points(layout.grid, real["residual_range_m"], rng)
                             + math.sqrt(1 - 0.85 ** 2) * rng.standard_normal(sig.size))
         T = real["mean"] + sig + noise
         prod = emulate_product(T, layout, rng, features)
         st = gate_stats(prod, layout, X, real)
         st["attempt"] = attempt
+        st["signal_share"] = float(sig.var() / T.var())
         if st["pass"]:
             return prod, gen, st
         noise_scale *= float(np.clip(1.0 / max(st["sd_ratio"], 1e-3), 0.5, 2.0))
@@ -325,7 +346,7 @@ def sim_config(cfg, coarse: float | None, epochs: int = 200):
     raw["cv"]["distance_curve"] = {**(raw["cv"].get("distance_curve") or {}), "enabled": False}
     raw["cv"]["baselines"] = False
     raw["stacker"]["epochs"] = min(int(raw["stacker"].get("epochs", 400)), epochs)
-    raw["stacker"]["tune_lambda"] = [0.0, 0.1]
+    raw["stacker"]["tune_lambda"] = [0.0]
     return c
 
 
@@ -462,14 +483,18 @@ def _rate(xs) -> float | None:
     return float(np.mean(xs)) if xs else None
 
 
-def summarize(rows: list[dict]) -> dict:
+def summarize(rows: list[dict], real_r2: float | None = None, r2_tol: float = 0.15) -> dict:
+    """Per-generator recovery statistics.  With ``real_r2`` (the real run's
+    held-out R²), replicates whose simulated held-out R² differs by more than
+    ``r2_tol`` fail the data-matching gate too."""
     ok = [r for r in rows if "error" not in r]
     gens = {}
     for kind in GENERATORS:
         rs = [r for r in ok if r["generator"] == kind]
         if not rs:
             continue
-        passed = [r for r in rs if (r.get("gate") or {}).get("pass")]
+        passed = [r for r in rs if (r.get("gate") or {}).get("pass")
+                  and (real_r2 is None or r.get("oof_r2") is None or abs(r["oof_r2"] - real_r2) <= r2_tol)]
         use = passed or rs
         sh = [r["share"] for r in use if r.get("share") is not None]
         rc = [r["rank_corr"] for r in use if r.get("rank_corr") is not None]

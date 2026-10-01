@@ -102,8 +102,14 @@ PHYSICS_DEFAULTS: dict[str, Any] = {
     "v_penalty": 1e-2,
 }
 
-#: Literature priors (mean, sd) for the penalised source coefficients.
-SOURCE_PRIORS = {"s": (0.6, 0.1), "a1": (0.3, 0.1), "a1n": (0.5, 0.15)}
+#: Priors (mean, sd) for the penalised source coefficients: literature means
+#: (canopy shading s ≈ 0.6 of absorbed shortwave, impervious storage a1/a1n),
+#: *weakly* informative.  With sd 0.1 the shading strength stayed at the prior
+#: even for a displaced (placebo) canopy layer, so the physics imposed canopy
+#: cooling the data could not overrule; at sd 0.3 Providence's real canopy
+#: keeps s ≈ 0.34 while placebo layers fall to ≈ 0.1.  Override per run with
+#: ``physics.priors: {s: [mean, sd], ...}``.
+SOURCE_PRIORS = {"s": (0.6, 0.3), "a1": (0.3, 0.3), "a1n": (0.5, 0.3)}
 KAPPA_BOUNDS = (0.05, 20.0)        # canopy-fraction scale of shade saturation
 KAPPA_PRIOR = (0.0, 3.0)           # log κ ~ N(0, 3²): a weak regulariser — a tighter prior pinned κ near 1
                                    # on the synthetic city (planted 0.15) and halved the shade nonlinearity
@@ -349,6 +355,8 @@ class PhysicsModel:
         self.dx = float(grid.dx)
         self.window = str(self.cfg.get("window") or "day").lower()
         self.shade_form = str(self.cfg.get("shade_form") or "saturating").lower()
+        self.priors = {k: tuple(float(x) for x in ((self.cfg.get("priors") or {}).get(k) or v))
+                       for k, v in SOURCE_PRIORS.items()}
         if self.shade_form not in ("saturating", "sigmoid"):
             raise ValueError(f"physics.shade_form must be 'saturating' or 'sigmoid', got {self.shade_form!r}")
         if self.window not in ("day", "night"):
@@ -455,13 +463,13 @@ class PhysicsModel:
             "uL": p(_uL_from_L(self.L_init, self.L_lo, self.L_hi)),
             "ux": p(v0[0] / self.v_max, self.fit_advection),
             "uy": p(v0[1] / self.v_max, self.fit_advection),
-            "s": p(_logit(SOURCE_PRIORS["s"][0])),
+            "s": p(_logit(self.priors["s"][0])),
             "ukc": p(_logit((math.log(KAPPA_INIT) - math.log(KAPPA_BOUNDS[0]))
                             / (math.log(KAPPA_BOUNDS[1]) - math.log(KAPPA_BOUNDS[0])))),
             "uc0": p(_logit((0.4 - C0_BOUNDS[0]) / (C0_BOUNDS[1] - C0_BOUNDS[0]))),
             "ucw": p(_logit((math.log(0.1) - math.log(CW_BOUNDS[0])) / (math.log(CW_BOUNDS[1]) - math.log(CW_BOUNDS[0])))),
-            "a1": p(_logit(SOURCE_PRIORS["a1"][0])),
-            "a1n": p(_logit(SOURCE_PRIORS["a1n"][0])),
+            "a1": p(_logit(self.priors["a1"][0])),
+            "a1n": p(_logit(self.priors["a1n"][0])),
             "e0": p(_logit(_EF0)),
             "e1": p(_inv_softplus(_EF_INIT["e1"])),
             "e2": p(_inv_softplus(_EF_INIT["e2"])),
@@ -511,14 +519,14 @@ class PhysicsModel:
 
         pen = 0.0
         if self.window == "day" and "canopy" in feats:
-            pen = pen + ((T["s"] - SOURCE_PRIORS["s"][0]) / SOURCE_PRIORS["s"][1]) ** 2
+            pen = pen + ((T["s"] - self.priors["s"][0]) / self.priors["s"][1]) ** 2
             if self.shade_form == "sigmoid":
                 pen = pen + ((T["c0"] - 0.4) / 0.3) ** 2 + ((torch.log(T["cw"]) - math.log(0.1)) / 1.5) ** 2
             else:
                 pen = pen + ((torch.log(T["kc"]) - KAPPA_PRIOR[0]) / KAPPA_PRIOR[1]) ** 2
         if "impervious" in feats:
             k = "a1" if self.window == "day" else "a1n"
-            pen = pen + ((T[k] - SOURCE_PRIORS[k][0]) / SOURCE_PRIORS[k][1]) ** 2
+            pen = pen + ((T[k] - self.priors[k][0]) / self.priors[k][1]) ** 2
         pen = pen + ((T["e0"] - _logit(_EF0)) / _EF_PRIOR_SD) ** 2
         for e, r in (("e1", "ndvi"), ("e2", "canopy"), ("e3", "impervious")):
             if r in feats:
@@ -805,6 +813,7 @@ class PhysicsModel:
             "e3": T["e3"], "w": T["w"], "q_mean": self._q_mean,
             "train_rmse": self.train_rmse, "train_r2": self.train_r2, "fit_warning": self.fit_warning,
             "window": self.window, "roles_used": list(self.roles_used), "pad_cells": int(self.pad),
+            "priors": {k: list(v) for k, v in getattr(self, "priors", SOURCE_PRIORS).items()},
             "albedo_map": ({"from": list(self._albedo_from), "to": list(self.cfg["albedo_map"].get("to", (0.08, 0.25)))}
                            if self.cfg.get("albedo_map") and getattr(self, "_albedo_from", None) else None),
             "L_bounds_m": [math.exp(self.L_lo), math.exp(self.L_hi)],

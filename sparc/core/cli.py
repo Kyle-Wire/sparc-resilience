@@ -130,6 +130,12 @@ def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
     p_pp.add_argument("--no-export", action="store_true")
     p_pp.set_defaults(func=cmd_core_planner)
 
+    p_em = subs.add_parser("emulator", help="linear emulator of a finished run for the page's design tool (+ validation)")
+    p_em.add_argument("run_dir")
+    p_em.add_argument("--project", "-p", required=True)
+    p_em.add_argument("--patches", type=int, default=8)
+    p_em.set_defaults(func=cmd_core_emulator)
+
     p_syn = subs.add_parser("synth", help="write the synthetic test city (with planted truths) to CSV")
     p_syn.add_argument("--out", required=True)
     p_syn.add_argument("--seed", type=int, default=0)
@@ -294,6 +300,19 @@ def cmd_core_planner(args) -> int:
     print(json.dumps({k: out[k] for k in ("people_total", "package", "plantable") if k in out}, indent=1))
     for r in out["exposure"]:
         print(r)
+    return 0
+
+
+def cmd_core_emulator(args) -> int:
+    from sparc.core.config import load_core_config
+    from sparc.core.emulator import emulator_for_run
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    meta = emulator_for_run(args.run_dir, load_core_config(args.project), n_patches=args.patches)
+    for v, d in meta["levers"].items():
+        val = d["validation"]
+        print(f"{v}: patch pass rate {val['patch_pass_rate']:.0%}, median patch error {val['patch_mean_abs_err_median']:.3f}, "
+              f"p95 cell error {val['p95_cell_err_median']:.3f}, uniform rel error {val['uniform']['rel_err']:.0%}")
     return 0
 
 
