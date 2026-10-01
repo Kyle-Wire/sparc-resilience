@@ -108,6 +108,11 @@ def build_manifest(result, timings: dict, fast: bool, folds=None) -> dict:
         m["causal"] = _causal_summary(result.causal)
     if result.optimize:
         m["optimize"] = {k: v for k, v in result.optimize.items() if k not in ("dose", "closed_loop_delta", "pareto")}
+    if m.get("scenarios"):
+        from sparc.core.literature import literature_panel
+
+        roles = (result.cfg.raw.get("physics") or {}).get("roles") or {}
+        m["literature"] = literature_panel(m, roles.get("canopy"), roles.get("albedo"), result.data.target_units)
     return m
 
 
@@ -254,6 +259,15 @@ def render_report(result) -> str:
         L += ["", "*Own effect*: only the cell itself changes. *Footprint*: total change summed over the "
               "neighbourhood (drives the optimiser). Saturation is fitted to neighbourhood-adoption sweeps "
               "against the realised neighbourhood dose; 'censored' = no knee within the tested doses/headroom.", ""]
+    if m.get("literature") and m["literature"]["sparc"]:
+        from sparc.core.literature import literature_markdown
+
+        L += ["## Consistency with published effect sizes", "", literature_markdown(m["literature"]), "",
+              "SPARC column: city-wide mean cooling of the closest uniform scenario, scaled to +0.10 cover / "
+              "albedo (fold-averaged ± jackknife SE). Status *abstract* = value from the paper's abstract or an "
+              "indexed summary; check the full text before citing. Other cities, methods and scales: agreement "
+              "within ×2 is what consistency can mean here. Albedo in this dataset may not be broadband "
+              "(see Data findings).", ""]
     if "scenarios" in m:
         L += ["## S5 — Scenarios", "", f"| scenario | mean Δ ({u}) | p10 | p90 | SE of mean (jackknife) | extrapolated | "
               f"linear causal Δ (95%) |", "|---|---|---|---|---|---|---|"]

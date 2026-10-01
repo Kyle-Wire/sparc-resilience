@@ -163,6 +163,8 @@ core:
     title: Providence Heat Model
     place: Providence, RI
     area: the Brown University / Providence study area
+    limitations:                 # model card (in addition to the data findings)
+      - "The target is CAPA's area-wide temperature surface: traverse measurements from the 2020-07-29 afternoon run extended to every cell by a model on land-cover predictors. Fitted land-cover effects partly describe that model, not only the atmosphere; refit on the raw traverse points when they are available."
     caveats:
       - "For tree canopy the causal check agrees with the model on the neighbourhood effect, but finds a small warming association for a cell's own canopy once its neighbours are accounted for, where the model sees almost none. Both agree that canopy's cooling comes from the surrounding area rather than the cell itself."
       - "Numbers from the earlier pipeline (R² 0.944, 'z-units') came from a leaky evaluation and a neural stacker that never trained. AAT_z is air temperature in °F. Use this page instead."

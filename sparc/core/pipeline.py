@@ -509,8 +509,11 @@ def _finish(result: CoreResult, timings: dict, fast: bool, folds=None) -> CoreRe
     result.manifest = build_manifest(result, timings, fast, folds)
     if result.run_dir:
         from sparc.core.provenance import environment_lock
+        from sparc.core.writeup import methods_markdown, model_card_markdown
 
         _write_json(result.run_dir / "manifest.json", result.manifest)
         (result.run_dir / "environment.txt").write_text(environment_lock(), encoding="utf-8")
+        (result.run_dir / "methods.md").write_text(methods_markdown(result.manifest), encoding="utf-8")
+        (result.run_dir / "model_card.md").write_text(model_card_markdown(result.manifest), encoding="utf-8")
         (result.run_dir / "report.md").write_text(render_report(result), encoding="utf-8")
     return result
