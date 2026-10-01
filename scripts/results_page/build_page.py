@@ -71,9 +71,12 @@ def _clean(o):
 def collect(run: Path, cfg) -> dict:
     from sparc.core.data import load_core_data
 
+    m = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
+    co = (m.get("qa") or {}).get("coarse")
+    if co:                                   # a coarse-mode run: rebuild the same aggregated cells
+        cfg.raw["data"]["coarse_m"] = float(co["cell_m"])
     data = load_core_data(cfg)
     g = data.grid
-    m = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
     pred = pd.read_parquet(run / "predictions.parquet")
     if not np.array_equal(pred["id"].to_numpy(), data.ids):
         raise SystemExit("predictions.parquet does not match the config's data (different subsample or file?)")

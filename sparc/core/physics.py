@@ -83,6 +83,9 @@ PHYSICS_DEFAULTS: dict[str, Any] = {
     "lw_net": -100.0,
     "roles": {},
     "wind": None,
+    # Optional linear rescale of a non-broadband albedo layer onto broadband
+    # values, e.g. {from: auto, to: [0.08, 0.25]} (see S0 QA flags).
+    "albedo_map": None,
     "tau_s": 1800.0,
     "L_max_m": 2000.0,
     "v_max_m": 1000.0,
@@ -395,8 +398,26 @@ class PhysicsModel:
             if bad.any():
                 fill = self._fill.get(role) if self._fitted else None
                 v[bad] = np.nanmean(v) if fill is None else fill
+            if role == "albedo" and self.cfg.get("albedo_map"):
+                v = self._map_albedo(v)
             out[role] = v
         return out
+
+    def _map_albedo(self, v: np.ndarray) -> np.ndarray:
+        """Linear rescale of a non-broadband albedo layer (``physics.albedo_map``:
+        ``{from: [lo, hi] | auto, to: [lo, hi]}``; ``auto`` = the 2nd/98th
+        percentiles at fit time).  Scenario doses stay in source units and
+        are scaled by the same map."""
+        am = self.cfg["albedo_map"]
+        if not self._fitted or getattr(self, "_albedo_from", None) is None:
+            src = am.get("from", "auto")
+            self._albedo_from = (tuple(float(x) for x in np.nanpercentile(v, [2, 98]))
+                                 if src in ("auto", None) else (float(src[0]), float(src[1])))
+        lo, hi = self._albedo_from
+        to_lo, to_hi = (float(x) for x in am.get("to", (0.08, 0.25)))
+        if hi <= lo:
+            raise ValueError(f"physics.albedo_map: empty source range {self._albedo_from}")
+        return to_lo + (v - lo) * (to_hi - to_lo) / (hi - lo)
 
     def _set_feature_constants(self, feats: dict[str, np.ndarray]) -> None:
         self.roles_used = sorted(feats)
@@ -784,5 +805,7 @@ class PhysicsModel:
             "e3": T["e3"], "w": T["w"], "q_mean": self._q_mean,
             "train_rmse": self.train_rmse, "train_r2": self.train_r2, "fit_warning": self.fit_warning,
             "window": self.window, "roles_used": list(self.roles_used), "pad_cells": int(self.pad),
+            "albedo_map": ({"from": list(self._albedo_from), "to": list(self.cfg["albedo_map"].get("to", (0.08, 0.25)))}
+                           if self.cfg.get("albedo_map") and getattr(self, "_albedo_from", None) else None),
             "L_bounds_m": [math.exp(self.L_lo), math.exp(self.L_hi)],
         }

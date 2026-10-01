@@ -146,14 +146,19 @@ def _load_checkpoint(run_dir: Path | None, fingerprint: str) -> dict:
 
 
 def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False, frame: pd.DataFrame | None = None,
-             write: bool = True, resume: bool = False, cv_curve: bool | None = None) -> CoreResult:
+             write: bool = True, resume: bool = False, cv_curve: bool | None = None,
+             coarse: float | None = None) -> CoreResult:
     """Run the requested stages.  ``fast`` shrinks the problem (8k-point
     window, 3 folds, fewer epochs) for smoke runs and CI.  With ``write``,
     fitted state is checkpointed after S3, the CV distance curve, S4, S5 and
     S6; ``resume`` reuses a checkpoint whose fingerprint matches.
-    ``cv_curve`` overrides ``cv.distance_curve.enabled``."""
+    ``cv_curve`` overrides ``cv.distance_curve.enabled``; ``coarse`` (metres)
+    overrides ``data.coarse_m`` — the full extent averaged onto coarser cells,
+    the resolution of the validation studies."""
     if not isinstance(cfg, CoreConfig):
         cfg = load_core_config(cfg)
+    if coarse:
+        cfg.raw["data"]["coarse_m"] = float(coarse)
     if cv_curve is not None:
         cfg.raw["cv"].setdefault("distance_curve", {})["enabled"] = bool(cv_curve)
     if fast:
@@ -172,7 +177,8 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
     timings["S0"] = time.time() - t0
     run_dir = None
     if write:
-        run_dir = cfg.output_dir / (cfg.name + ("_fast" if fast else ""))
+        cm = cfg.data.get("coarse_m")
+        run_dir = cfg.output_dir / (cfg.name + ("_fast" if fast else "") + (f"_coarse{float(cm):g}" if cm else ""))
         run_dir.mkdir(parents=True, exist_ok=True)
     result = CoreResult(cfg=cfg, data=data, run_dir=run_dir)
     log.info("S0: %d points, grid %s, cell %.2f m", data.n, data.grid.shape, data.grid.dx)

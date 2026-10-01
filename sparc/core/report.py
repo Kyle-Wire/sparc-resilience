@@ -130,8 +130,17 @@ def render_report(result) -> str:
           f"- grid {qa.get('grid_shape')} at {_f(qa.get('cell_m'), 2)} m, fill {_f(qa.get('grid_fill_fraction'), 2)}",
           f"- background (ΔT reference): {_f(qa.get('background'), 2)} {u} ({qa.get('background_source')})",
           f"- target values that are whole numbers: {_f(qa.get('target_fraction_integer_valued'), 2)} "
-          "(high values indicate a rounded/interpolated product; RMSE below the rounding noise ≈ 0.29 is not meaningful)",
-          f"- QA clips: {qa.get('clipped') or 'none'}", ""]
+          f"(rounding noise ≈ {_f(qa.get('target_rounding_noise_sd'), 2)} {u})",
+          f"- QA clips: {qa.get('clipped') or 'none'}"]
+    if qa.get("coarse"):
+        co = qa["coarse"]
+        L.append(f"- coarse mode: {co['n_fine']:,} input cells → {co['n_cells']:,} cells of {co['cell_m']:g} m "
+                 f"(mean {_f(co['members_mean'], 1)} inputs per cell; {co['frac_partial']:.0%} partial edge cells)")
+    L.append("")
+    if qa.get("flags"):
+        L += ["**Data findings** (read before using the results):", ""]
+        L += [f"- {'⚠' if f['severity'] == 'warn' else 'ℹ'} {f['message']}" for f in qa["flags"]]
+        L.append("")
     if "influence" in m:
         inf = m["influence"]
         L += ["## S1 — Area of influence", "",

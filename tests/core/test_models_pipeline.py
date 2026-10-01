@@ -15,7 +15,6 @@ from sparc.core.grid import Grid
 from sparc.core.response import fit_saturation
 from sparc.core.synthetic import gaussian_random_field
 
-
 # ---------------------------------------------------------------------------
 # Unit tests (fast)
 # ---------------------------------------------------------------------------

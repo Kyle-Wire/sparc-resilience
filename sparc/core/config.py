@@ -42,6 +42,8 @@ DEFAULTS: dict[str, Any] = {
         "background": "median",
         "subsample": None,
         "cell_m": None,
+        "coarse_m": None,          # aggregate to this cell size over the full extent (validation studies)
+        "zone": None,
     },
     "predictors": [],
     "encodings": {"categorical": [], "circular_degrees": []},

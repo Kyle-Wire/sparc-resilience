@@ -28,8 +28,12 @@ import pandas as pd
 
 from sparc.core.base_models import FeatureContext, PhysicsBaseModel, build_base_models
 from sparc.core.cv import SpatialFolds
-from sparc.core.stacker import (PhysicsInformedStacker, StackerInputs, cross_conformal_adaptive,
-                                cross_conformal_halfwidth)
+from sparc.core.stacker import (
+    PhysicsInformedStacker,
+    StackerInputs,
+    cross_conformal_adaptive,
+    cross_conformal_halfwidth,
+)
 
 log = logging.getLogger(__name__)
 

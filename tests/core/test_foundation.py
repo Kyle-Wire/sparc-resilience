@@ -103,3 +103,81 @@ def test_brown_loads_on_its_30m_lattice(brown_csv, providence_config_path):
     assert data.qa["cell_collisions"] < 0.001
     assert data.qa["clipped"].get("Albedo", 0) >= 1          # albedo > 0.9 exists in the file
     assert data.target_raw.min() > 70 and data.target_raw.max() < 100   # °F, not a z-score
+
+
+def test_coarse_mode_averages_full_extent_onto_coarser_cells(synthetic_city):
+    from sparc.core.config import core_config_from_dict
+    from sparc.core.data import prepare_frame
+    from sparc.core.synthetic import synthetic_city_config
+
+    raw = synthetic_city_config()
+    fine = prepare_frame(synthetic_city.frame, core_config_from_dict(raw))
+    raw["data"]["coarse_m"] = 60.0
+    df = synthetic_city.frame.assign(zone=np.where(synthetic_city.frame["x"] < synthetic_city.frame["x"].median(), 1, 2))
+    raw["data"]["zone"] = "zone"
+    coarse = prepare_frame(df, core_config_from_dict(raw))
+    assert coarse.grid.dx == pytest.approx(60.0)
+    assert coarse.n == pytest.approx(fine.n / 4, rel=0.05)
+    assert coarse.qa["coarse"]["n_fine"] == fine.n
+    # same extent (cell centres sit half a coarse cell inside the fine envelope)
+    assert np.ptp(coarse.x) == pytest.approx(np.ptp(fine.x), abs=60.0)
+    # cell means ≈ preserve the area mean (exactly, up to partial edge cells)
+    assert coarse.target_raw.mean() == pytest.approx(fine.target_raw.mean(), abs=0.05)
+    assert coarse.frame["canopy"].mean() == pytest.approx(fine.frame["canopy"].mean(), abs=0.5)
+    assert set(np.unique(coarse.zones)) == {1, 2}
+    assert coarse.qa["grid_fill_fraction"] >= fine.qa["grid_fill_fraction"] - 0.02
+    assert coarse.qa["cell_collisions"] == 0.0
+
+
+def test_qa_flags_classed_target_albedo_scale_and_dose_context():
+    from sparc.core.config import core_config_from_dict
+    from sparc.core.data import prepare_frame
+
+    rng = np.random.default_rng(0)
+    xx, yy = np.meshgrid(np.arange(40) * 30.0, np.arange(40) * 30.0)
+    n = xx.size
+    t = 85.0 + rng.normal(0, 2, n)
+    t[: int(0.7 * n)] = np.round(t[: int(0.7 * n)])
+    df = pd.DataFrame({"x": xx.ravel(), "y": yy.ravel(), "T": t, "alb": rng.normal(0.40, 0.05, n),
+                       "can": rng.uniform(0, 60, n), "imp": rng.uniform(30, 90, n)})
+    raw = {"name": "qa", "data": {"target": "T", "x": "x", "y": "y"}, "predictors": ["alb", "can", "imp"],
+           "actionable": {"alb": {"min": 0, "max": 1, "doses": [0, 0.05, 0.3]}},
+           "physics": {"roles": {"albedo": "alb", "canopy": "can", "impervious": "imp"}}}
+    data = prepare_frame(df, core_config_from_dict(raw))
+    codes = {f["code"] for f in data.qa["flags"]}
+    assert {"classed_target", "albedo_scale", "cover_overlap", "dose_scale_alb"} <= codes
+    assert data.qa["target_fraction_integer_valued"] == pytest.approx(0.7, abs=0.02)
+    hist = data.qa["target_fractional_histogram"]
+    assert hist[0] > 0.7 and sum(hist) == pytest.approx(1.0)
+    ds = data.qa["dose_scale"]["alb"]
+    assert ds["doses_in_sd"][-1] == pytest.approx(0.3 / 0.05, rel=0.1)
+    assert 50 < ds["median_cell_to_percentile"][0] < 95 and ds["median_cell_to_percentile"][-1] > 99
+
+
+def test_physics_albedo_map_rescales_to_broadband():
+    from sparc.core.grid import Grid
+    from sparc.core.physics import PhysicsModel
+
+    xx, yy = np.meshgrid(np.arange(20) * 30.0, np.arange(20) * 30.0)
+    g = Grid.from_points(xx.ravel(), yy.ravel(), cell=30.0)
+    a = np.linspace(0.3, 0.5, xx.size)
+    pm = PhysicsModel(g, {"roles": {"albedo": "alb"}, "albedo_map": {"from": "auto", "to": [0.1, 0.2]}})
+    v = pm._raw_features(pd.DataFrame({"alb": a}))["albedo"]
+    lo, hi = np.percentile(a, [2, 98])
+    assert np.interp(lo, a, v) == pytest.approx(0.1) and np.interp(hi, a, v) == pytest.approx(0.2)
+    pm2 = PhysicsModel(g, {"roles": {"albedo": "alb"}, "albedo_map": {"from": [0.3, 0.5], "to": [0.1, 0.2]}})
+    assert pm2._raw_features(pd.DataFrame({"alb": a}))["albedo"][[0, -1]] == pytest.approx([0.1, 0.2])
+
+
+def test_brown_coarse_mode_keeps_extent_and_flags_product(brown_csv, providence_config_path):
+    from sparc.core.config import load_core_config
+    from sparc.core.data import load_core_data
+
+    cfg = load_core_config(providence_config_path)
+    cfg.raw["data"]["coarse_m"] = 60.0
+    data = load_core_data(cfg)
+    assert 13000 < data.n < 14500 and data.grid.dx == pytest.approx(60.0)
+    codes = {f["code"] for f in data.qa["flags"]}
+    assert {"classed_target", "albedo_scale", "coarse"} <= codes
+    assert data.qa["target_fraction_integer_valued"] > 0.6          # source product, measured before averaging
+    assert set(np.unique(data.zones)) >= {0, 1, 2, 3, 4}
