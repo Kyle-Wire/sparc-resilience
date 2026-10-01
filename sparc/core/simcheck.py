@@ -516,9 +516,10 @@ def summarize(rows: list[dict], real_r2: float | None = None, r2_tol: float = 0.
     if shares:
         med = float(np.median(shares))
         spread = (max(shares) - min(shares)) / abs(med) if med else float("inf")
+        stable = bool(spread < 0.25 and len(shares) >= 2)         # stability needs ≥ 2 generators
         corr = {"share_median_across_generators": med, "share_range": [min(shares), max(shares)],
-                "relative_spread": spread, "stable": bool(spread < 0.25),
-                "correction_factor": (1.0 / med) if spread < 0.25 and med else None}
+                "relative_spread": spread, "stable": stable, "n_generators": len(shares),
+                "correction_factor": (1.0 / med) if stable and med else None}
     return {"generators": gens, "bias_correction": corr, "n_rows": len(rows), "n_errors": len(rows) - len(ok)}
 
 
@@ -540,6 +541,7 @@ def simcheck_markdown(summ: dict) -> str:
     if b:
         L += ["", (f"Effect share is stable across generators (spread {b['relative_spread']:.0%}): city-wide canopy "
                    f"effects can be divided by {b['share_median_across_generators']:.2f}." if b["stable"] else
+                   "Only one non-null generator so far: no correction." if b.get("n_generators", 2) < 2 else
                    f"Effect share varies across generators ({b['share_range'][0]:.2f}–{b['share_range'][1]:.2f}): "
                    "no single correction; read city-wide canopy effects as a range.")]
     return "\n".join(L)
