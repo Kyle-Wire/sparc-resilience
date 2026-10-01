@@ -44,7 +44,7 @@ MANIFEST_NAME = "manifest.json"
 
 
 def _jsonable(obj):
-    """JSON-safe copy: NaN/Inf → None, numpy scalars/arrays → Python, paths → str, sets → sorted lists."""
+    """JSON-safe copy: NaN/Inf → None, numpy/pandas values → Python, paths → str, sets → sorted lists."""
     if obj is None or isinstance(obj, (bool, int, str)):
         return obj
     if isinstance(obj, float):
@@ -57,10 +57,10 @@ def _jsonable(obj):
         return sorted((_jsonable(v) for v in obj), key=str)
     if isinstance(obj, os.PathLike):
         return os.fspath(obj)
-    if type(obj).__module__ == "numpy" and hasattr(obj, "tolist"):
-        return _jsonable(obj.tolist())
     if isinstance(obj, (_dt.datetime, _dt.date)):
         return obj.isoformat()
+    if hasattr(obj, "tolist") and type(obj).__module__.split(".")[0] in ("numpy", "pandas"):
+        return _jsonable(obj.tolist())             # arrays, scalars, Series: their NaN become null too
     return obj                                     # json's default=str handles the rest
 
 
@@ -221,7 +221,7 @@ def update_manifest(run_dir, sections: dict, *, source: str) -> dict:
     """Replace top-level ``sections`` of ``<run_dir>/manifest.json`` under :func:`run_lock`.
 
     Each section is recorded in ``post_run[]`` as ``{section, at_utc, source}``.
-    Returns the manifest as written.
+    A missing manifest starts empty.  Returns the manifest as written.
     """
     if "post_run" in sections:
         raise ValueError("post_run is maintained by update_manifest itself")

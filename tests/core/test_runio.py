@@ -33,13 +33,15 @@ def _leftovers(d: Path):
 def test_write_json_atomic_maps_nan_to_null(tmp_path):
     obj = {"nan": float("nan"), "inf": [float("inf"), -float("inf"), 1.5], "np32": np.float32("nan"),
            "np64": np.float64(2.5), "int": np.int64(3), "flag": np.bool_(True), "arr": np.array([1.0, np.nan]),
-           "path": tmp_path / "x", "set": {"b", "a"}, 7: "int key"}
+           "path": tmp_path / "x", "set": {"b", "a"}, 7: "int key",
+           "series": pd.Series([0.5, np.nan]), "when": pd.Timestamp("2026-10-01T12:00:00")}
     out = runio.write_json_atomic(tmp_path / "m.json", obj)
     text = out.read_text(encoding="utf-8")
     assert "NaN" not in text and "Infinity" not in text
     got = _strict_json(out)
     assert got == {"nan": None, "inf": [None, None, 1.5], "np32": None, "np64": 2.5, "int": 3, "flag": True,
-                   "arr": [1.0, None], "path": str(tmp_path / "x"), "set": ["a", "b"], "7": "int key"}
+                   "arr": [1.0, None], "path": str(tmp_path / "x"), "set": ["a", "b"], "7": "int key",
+                   "series": [0.5, None], "when": "2026-10-01T12:00:00"}
     assert _leftovers(tmp_path) == []
 
 

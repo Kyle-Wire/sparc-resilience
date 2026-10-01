@@ -136,6 +136,9 @@ _QUIET_SIGNALS = False           # pool workers do not print the cancel notice
 
 _SEQ = itertools.count(1)
 _SPAN_IDS = itertools.count(1)
+# Taken while a line gets its seq and is written, so seq increases in file order within a process.
+# Re-entrant: a signal handler may emit cancel.ack while the main thread is inside _write.
+_WRITE_LOCK = threading.RLock()
 _CUR: contextvars.ContextVar[_Span | None] = contextvars.ContextVar("sparc_progress_span", default=None)
 _CTX: contextvars.ContextVar[dict | None] = contextvars.ContextVar("sparc_progress_ctx", default=None)
 _RUN_DIR: contextvars.ContextVar[str | None] = contextvars.ContextVar("sparc_progress_run_dir", default=None)
@@ -148,6 +151,16 @@ _BRIDGE: LogBridge | None = None
 _BRIDGE_LOGGERS = ("sparc", "py.warnings")
 _CAPTURED_WARNINGS = False
 _PSUTIL: Any = None
+
+
+def _after_fork_in_child() -> None:
+    """A fork may copy the write lock while another thread holds it; the child starts with a free one."""
+    global _WRITE_LOCK
+    _WRITE_LOCK = threading.RLock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_after_fork_in_child)
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +181,7 @@ def configure(sink: str | Callable[[dict], None] | None, *, level: str = "info",
     s = _State()
     s.level = LEVELS.get(str(level or "info").lower(), LEVELS["info"])
     s.job = str(job_id) if job_id else ""
-    s.cancel_file = os.fspath(cancel_file) if cancel_file else None
+    s.cancel_file = os.path.abspath(os.fspath(cancel_file)) if cancel_file else None   # pool workers may chdir
     if sink is not None and sink != "":
         s.sink, s.own_fd, s.spec = _open_sink(sink)
     _S = s
@@ -261,13 +274,16 @@ def emit(type: str, /, *, lvl: str = "info", **fields) -> None:
     _write(_event(type, lvl, fields, None))
 
 
-def _event(type_: str, lvl: str, fields: dict, sp: _Span | None) -> dict:
+def _event(type_: str, lvl: str, fields: dict, sp: _Span | None, s: _State | None = None) -> dict:
+    """The event dict: envelope plus ``fields`` (``seq`` is assigned by ``_write``)."""
     if sp is None:
         sp = _CUR.get() or _ROOT
+    if s is None:
+        s = _S
     ctx = _CTX.get()
     now = time.time()
-    ev = {"v": SCHEMA, "type": type_, "seq": next(_SEQ), "ts": round(now, 3), "t_rel": round(now - _S.t0, 3),
-          "pid": os.getpid(), "job": _S.job, "lvl": lvl,
+    ev = {"v": SCHEMA, "type": type_, "seq": 0, "ts": round(now, 3), "t_rel": round(now - s.t0, 3),
+          "pid": os.getpid(), "job": s.job, "lvl": lvl,
           "span": sp.id if sp is not None else None, "parent": sp.parent if sp is not None else None,
           "path": list(sp.path) if sp is not None else [], "ctx": _clean(_ROOT_CTX if ctx is None else ctx)}
     for k, v in fields.items():
@@ -276,7 +292,7 @@ def _event(type_: str, lvl: str, fields: dict, sp: _Span | None) -> dict:
 
 
 def _clean(v):
-    """JSON-safe copy: NaN/Inf → None, numpy → Python, paths → str, anything else → str."""
+    """JSON-safe copy: NaN/Inf → None, numpy/pandas → Python, paths → str, anything else → str."""
     if v is None or isinstance(v, (bool, int, str)):
         return v
     if isinstance(v, float):
@@ -289,7 +305,7 @@ def _clean(v):
         return sorted((_clean(x) for x in v), key=str)
     if isinstance(v, os.PathLike):
         return os.fspath(v)
-    if type(v).__module__ == "numpy" and hasattr(v, "tolist"):
+    if hasattr(v, "tolist") and type(v).__module__.split(".")[0] in ("numpy", "pandas"):
         return _clean(v.tolist())
     return str(v)
 
@@ -333,20 +349,31 @@ def _encode(ev: dict) -> tuple[dict, bytes]:
         ev["ctx"] = {}
         ev["path"] = _trunc(ev["path"][-3:], 64) if isinstance(ev["path"], list) else _trunc(ev["path"], 256)
         data = _line(ev)
-    if len(data) > MAX_LINE:
+    if len(data) > MAX_LINE:             # last resort: bound every free-text envelope string
         ev["path"], ev["job"] = [], _trunc(ev["job"], 64)
+        ev["type"], ev["lvl"] = _trunc(ev["type"], 128), _trunc(ev["lvl"], 16)
         data = _line(ev)
     return ev, data
 
 
-def _write(ev: dict) -> None:
-    s = _S
+def _write(ev: dict, s: _State | None = None) -> None:
+    """Number ``ev`` and write it to the sink of ``s`` (default: the current configuration).
+
+    A file descriptor gets the line under ``_WRITE_LOCK``, so ``seq`` grows in
+    file order even with several threads reporting.  A callable sink is
+    called outside the lock (it may log, and logging takes its own locks).
+    """
+    if s is None:
+        s = _S
     try:
-        ev, data = _encode(ev)
         sink = s.sink
-        if isinstance(sink, int):
-            os.write(sink, data)
-        elif sink is not None:
+        with _WRITE_LOCK:
+            ev["seq"] = next(_SEQ)
+            ev, data = _encode(ev)
+            if isinstance(sink, int):
+                os.write(sink, data)
+                return
+        if sink is not None:
             sink(ev)
     except Exception:                  # reporting must never break the computation it reports on
         s.errors += 1
@@ -791,10 +818,13 @@ class _Heartbeat(threading.Thread):
         self.stopped = threading.Event()
 
     def run(self) -> None:
+        s = self.state
         while not self.stopped.wait(self.interval):
-            if _ENABLED and _S is self.state:      # paused while a job_scope reports elsewhere
-                emit("heartbeat", **_resources())
-                _check_log_cap(self.state)
+            if _ENABLED and _S is s:               # paused while a job_scope reports elsewhere
+                if LEVELS["info"] >= s.level:
+                    # written through its own state: a job_scope starting meanwhile never gets this beat
+                    _write(_event("heartbeat", "info", _resources(), None, s), s)
+                _check_log_cap(s)
 
     def stop(self) -> None:
         self.stopped.set()

@@ -189,11 +189,12 @@ def test_envelope_types_and_line_limit(tmp_path):
         progress.warn("qa.coarse", "coarse cells", n=float("nan"))
         progress.emit("custom", big="é" * 5000, long=list(range(3000)), small=1)
         progress.emit("custom2", **{f"f{i}": "x" * 300 for i in range(40)})
+        progress.emit("t" * 5000)                    # even an absurd type stays within the limit
         run.set(done=["S0"], timings_s={"S0": 0.1})
     ev = read_events(path)
     types = [e["type"] for e in ev]
     assert types == ["run.start", "stage.start", "task.start", "tick", "metric", "metric", "task.end", "checkpoint",
-                     "stage.end", "stage.skip", "warning", "custom", "custom2", "run.end"]
+                     "stage.end", "stage.skip", "warning", "custom", "custom2", "t" * 127 + "…", "run.end"]
     assert [e["seq"] for e in ev] == sorted(e["seq"] for e in ev)
     assert all(e["job"] == "j_test" and e["pid"] == os.getpid() for e in ev)
     by = {e["type"]: e for e in ev}
@@ -302,6 +303,27 @@ def test_spans_nest_across_contextvars_and_threads(tmp_path):
     task_ids = {e["span"] for e in starts}
     inner = [e for e in ev if e["type"] == "metric" and e["name"] == "i"]
     assert all(e["span"] in task_ids for e in inner) and len(task_ids) == 10
+
+
+def test_seq_follows_file_order_across_threads(tmp_path):
+    """Lines get their seq under the write lock, so seq never goes backwards in the file."""
+    path = tmp_path / "events.jsonl"
+    progress.configure(path, heartbeat_s=0)
+
+    def work(i):
+        for j in range(3000):
+            progress.metric("m", j, worker=i, pad="x" * (j % 200))
+
+    old = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)                      # switch threads as often as possible
+    try:
+        with ThreadPoolExecutor(4) as ex:
+            list(ex.map(progress.wrap_context(work), range(4)))
+    finally:
+        sys.setswitchinterval(old)
+    seqs = [e["seq"] for e in read_events(path)]
+    assert len(seqs) == 12000 and len(set(seqs)) == len(seqs)
+    assert seqs == sorted(seqs)
 
 
 def _pool_task(i):
@@ -489,6 +511,22 @@ def test_job_scope_reconfigures_and_restores(tmp_path):
     o, i = read_events(outer), read_events(inner)
     assert [e["type"] for e in o] == ["before", "after"] and {e["job"] for e in o} == {"j_host"}
     assert [e["type"] for e in i] == ["during", "cancel.ack"] and {e["job"] for e in i} == {"j_req"}
+
+
+def test_heartbeat_never_lands_in_a_job_scope(tmp_path):
+    """The host's heartbeat pauses during a request and never writes into the request's file."""
+    outer, inner = tmp_path / "outer.jsonl", tmp_path / "inner.jsonl"
+    progress.configure(outer, job_id="j_host", heartbeat_s=0.001)
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        with progress.job_scope("j_req", sink=str(inner)):
+            time.sleep(0.001)
+        time.sleep(0.001)
+    time.sleep(0.1)                                  # outside any scope the host beats again
+    progress.reset()
+    assert [e for e in read_events(inner) if e["type"] == "heartbeat"] == []
+    beats = [e for e in read_events(outer) if e["type"] == "heartbeat"]
+    assert beats and {e["job"] for e in beats} == {"j_host"}
 
 
 def test_configure_from_env_is_idempotent(tmp_path, monkeypatch):

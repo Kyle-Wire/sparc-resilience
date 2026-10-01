@@ -271,6 +271,43 @@ def test_sigterm_stops_a_check_cancel_loop_with_130(tmp_path):
     assert [e["status"] for e in ev if e["type"] == "task.end"] == ["cancelled"]
 
 
+_SIGNAL_REAL_CLI = """
+import runpy, sys, time
+from sparc.core import progress
+import sparc.core.synthetic as synthetic
+
+def make_synthetic_city(seed=0):          # the library call loops on a safe point instead of finishing
+    with progress.task("synth"):
+        print("ready", flush=True)
+        while True:
+            progress.check_cancel()
+            time.sleep(0.005)
+
+synthetic.make_synthetic_city = make_synthetic_city
+sys.argv = ["sparc.core"] + sys.argv[1:]
+runpy.run_module("sparc.core", run_name="__main__", alter_sys=True)
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+def test_sigterm_to_python_m_sparc_core_exits_130(tmp_path):
+    """The real parser and ``cmd_core_synth``: --progress/--job-id applied, SIGTERM → cancel.ack → exit 130."""
+    events = tmp_path / "events.jsonl"
+    p = subprocess.Popen([sys.executable, "-c", _SIGNAL_REAL_CLI, "synth", "--out", str(tmp_path / "c.csv"),
+                          "--progress", str(events), "--job-id", "j_real"], cwd=ROOT, env=_env(),
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        assert p.stdout.readline().strip() == "ready", p.stderr.read()
+        p.send_signal(signal.SIGTERM)
+        assert p.wait(timeout=30) == 130
+    finally:
+        p.kill() if p.poll() is None else None
+    ev = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+    assert [e["type"] for e in ev if e["type"] != "heartbeat"] == ["task.start", "cancel.ack", "task.end"]
+    assert {e["job"] for e in ev} == {"j_real"} and ev[-1]["status"] == "cancelled"
+    assert not (tmp_path / "c.csv").exists()
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
 def test_second_sigterm_interrupts_a_sleeping_process(tmp_path):
     p = _start("sleep", tmp_path / "events.jsonl")
