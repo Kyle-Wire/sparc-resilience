@@ -1,0 +1,134 @@
+"""Uncertainty report: the components of "how sure are we?", kept apart.
+
+For every scenario of a finished run:
+
+* **estimation** — fold-to-fold (delete-a-group jackknife) SE of the city-wide
+  change: what re-fitting on different parts of the city does;
+* **specification** — the spread of the same scenario across the multiverse
+  variants (analysis choices), applied as offsets from the multiverse
+  baseline;
+* **attribution** — for canopy scenarios, the simulation check's effect
+  share on this city's layout: the planted effect is recovered times
+  ``share``, so the true effect lies in estimate / [share range];
+* **model vs causal** — whether the independent causal estimate's band
+  contains the model's change (a flag, not added to any interval).
+
+Climate futures carry their own spread (CMIP6 models within a pathway); the
+pathway itself is a scenario choice, not uncertainty.
+
+The *envelope* is the union of the estimation 95% interval, the
+specification range and the attribution range — a plausible range for
+reading, not a confidence interval.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+
+def _canopy_var(m: dict) -> str | None:
+    return (((m.get("config") or {}).get("physics") or {}).get("roles") or {}).get("canopy")
+
+
+def scenario_uncertainty(m: dict, multiverse: dict | None = None, simcheck: dict | None = None) -> dict:
+    can = _canopy_var(m)
+    mv_eff = (multiverse or {}).get("effects") or {}
+    bias = (simcheck or {}).get("bias_correction") or {}
+    share_rng = bias.get("share_range")
+    rows = []
+    for s in m.get("scenarios") or []:
+        est = float(s["mean_delta"])
+        se = s.get("mean_delta_se")
+        r = {"scenario": s["name"], "estimate": est, "se": se,
+             "estimation_95": [est - 1.96 * se, est + 1.96 * se] if se is not None else None,
+             "frac_extrapolated": s.get("frac_extrapolated")}
+        e = mv_eff.get(s["name"])
+        if e:
+            off = [v - e["baseline"] for v in e["values"].values()]
+            r["specification"] = [est + min(off), est + max(off)]
+            r["sign_stability"] = e["sign_stability"]
+        realised = set((s.get("mean_realized") or {}).keys())
+        if share_rng and can and realised == {can}:
+            lo, hi = float(min(share_rng)), float(max(share_rng))
+            if lo > 0:
+                cands = [est / lo, est / hi]
+                r["attribution"] = [min(cands), max(cands)]
+                r["attribution_note"] = (f"simcheck effect share {lo:.2f}–{hi:.2f}"
+                                         + (f"; stable → corrected {est * bias['correction_factor']:+.3f}"
+                                            if bias.get("stable") and bias.get("correction_factor") else ""))
+        cl = s.get("causal_linear")
+        if cl:
+            r["causal_band"] = [cl["lo"], cl["hi"]]
+            r["model_within_causal"] = cl.get("model_within")
+        parts = [x for x in (r.get("estimation_95"), r.get("specification"), r.get("attribution")) if x]
+        if parts:
+            r["envelope"] = [float(min(p[0] for p in parts)), float(max(p[1] for p in parts))]
+            r["envelope_excludes_zero"] = bool(r["envelope"][1] < 0 or r["envelope"][0] > 0)
+        rows.append(r)
+    return {"scenarios": rows}
+
+
+def climate_uncertainty(m: dict) -> list[dict]:
+    c = m.get("climate") or {}
+    out = []
+    for p in c.get("projections") or []:
+        w = p.get("warming") or {}
+        out.append({"experiment": p.get("experiment"), "label": p.get("label"), "period": p.get("period"),
+                    "n_models": p.get("n_models"), "median": w.get("median"),
+                    "p10": w.get("p10"), "p90": w.get("p90"), "min": w.get("min"), "max": w.get("max")})
+    return out
+
+
+def uncertainty_report(run_dir, multiverse_dir=None, simcheck_dirs=()) -> dict:
+    run_dir = Path(run_dir)
+    m = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    mv = None
+    if multiverse_dir and (Path(multiverse_dir) / "multiverse_summary.json").exists():
+        mv = json.loads((Path(multiverse_dir) / "multiverse_summary.json").read_text(encoding="utf-8"))
+    sc = None
+    if simcheck_dirs:
+        from sparc.core.simcheck import merge_results, summarize
+
+        rows = merge_results(simcheck_dirs)
+        sc = summarize(rows) if rows else None
+    out = {**scenario_uncertainty(m, mv, sc), "climate": climate_uncertainty(m),
+           "sources": {"run": str(run_dir), "multiverse": str(multiverse_dir) if mv else None,
+                       "simcheck": [str(d) for d in simcheck_dirs] if sc else []},
+           "multiverse_stability": {k: (mv or {}).get(k) for k in ("sign_stability_min", "median_kendall_tau",
+                                                                   "median_top_decile_jaccard")} if mv else None,
+           "simcheck": sc}
+    (run_dir / "uncertainty.json").write_text(json.dumps(out, indent=1, default=float), encoding="utf-8")
+    m["uncertainty"] = {k: v for k, v in out.items() if k != "simcheck"}
+    if sc:
+        m["simcheck"] = sc
+    if mv:
+        m["multiverse"] = mv
+    (run_dir / "manifest.json").write_text(json.dumps(m, indent=1, default=str), encoding="utf-8")
+    (run_dir / "uncertainty.md").write_text(uncertainty_markdown(out, (m.get("config") or {}).get("data", {})
+                                                                 .get("target_units", "")) + "\n", encoding="utf-8")
+    return out
+
+
+def uncertainty_markdown(u: dict, units: str = "") -> str:
+    def rng(x):
+        return "—" if not x else f"{x[0]:+.2f} … {x[1]:+.2f}"
+
+    L = [f"| scenario | estimate ({units}) | estimation 95% | specification | attribution | envelope | causal band |",
+         "|---|---|---|---|---|---|---|"]
+    for r in u["scenarios"]:
+        flag = "" if r.get("model_within_causal") in (None, True) else " ⚠"
+        L.append(f"| {r['scenario']} | {r['estimate']:+.2f} | {rng(r.get('estimation_95'))} | "
+                 f"{rng(r.get('specification'))} | {rng(r.get('attribution'))} | {rng(r.get('envelope'))} | "
+                 f"{rng(r.get('causal_band'))}{flag} |")
+    L += ["", "Estimation = fold-to-fold (jackknife) 95% interval. Specification = range across analysis choices "
+              "(multiverse). Attribution = canopy effect corrected by the simulation check's recovery share range. "
+              "Envelope = union of these (a plausible range, not a confidence interval). ⚠ = the model's change is "
+              "outside the independent causal band."]
+    if u.get("climate"):
+        L += ["", f"| pathway | period | models | median warming ({units}) | 10th–90th percentile |", "|---|---|---|---|---|"]
+        for c in u["climate"]:
+            L.append(f"| {c.get('label') or c.get('experiment')} | {c['period']} | {c['n_models']} | "
+                     f"{c['median']:+.1f} | {c['p10']:+.1f} … {c['p90']:+.1f} |" if c.get("median") is not None
+                     else f"| {c.get('label')} | {c['period']} | {c['n_models']} | — | — |")
+    return "\n".join(L)

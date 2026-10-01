@@ -112,6 +112,12 @@ def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
     p_mv.add_argument("--out", required=True)
     p_mv.set_defaults(func=cmd_core_multiverse)
 
+    p_un = subs.add_parser("uncertainty", help="estimation / specification / attribution components for a run")
+    p_un.add_argument("run_dir")
+    p_un.add_argument("--multiverse", default=None, help="multiverse output directory")
+    p_un.add_argument("--simcheck", nargs="*", default=[], help="simcheck result directories")
+    p_un.set_defaults(func=cmd_core_uncertainty)
+
     p_syn = subs.add_parser("synth", help="write the synthetic test city (with planted truths) to CSV")
     p_syn.add_argument("--out", required=True)
     p_syn.add_argument("--seed", type=int, default=0)
@@ -237,6 +243,14 @@ def cmd_core_multiverse(args) -> int:
     md = multiverse_markdown(summ, cfg.data.get("target_units", ""))
     (Path(args.out) / "multiverse_summary.md").write_text(md + "\n", encoding="utf-8")
     print(md)
+    return 0
+
+
+def cmd_core_uncertainty(args) -> int:
+    from sparc.core.uncertainty import uncertainty_markdown, uncertainty_report
+
+    out = uncertainty_report(args.run_dir, args.multiverse, args.simcheck)
+    print(uncertainty_markdown(out))
     return 0
 
 
