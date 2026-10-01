@@ -116,7 +116,12 @@ def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
     p_un.add_argument("run_dir")
     p_un.add_argument("--multiverse", default=None, help="multiverse output directory")
     p_un.add_argument("--simcheck", nargs="*", default=[], help="simcheck result directories")
+    p_un.add_argument("--placebo", default=None, help="placebo.json from sparc core placebo (merged into the manifest)")
     p_un.set_defaults(func=cmd_core_uncertainty)
+
+    p_wu = subs.add_parser("writeup", help="re-render report.md, methods.md and model_card.md from a run's manifest")
+    p_wu.add_argument("run_dir")
+    p_wu.set_defaults(func=cmd_core_writeup)
 
     p_ly = subs.add_parser("layers", help="open-data layers on the study grid (HRSL people, WorldCover) → parquet")
     p_ly.add_argument("--project", "-p", required=True)
@@ -276,7 +281,7 @@ def cmd_core_multiverse(args) -> int:
 def cmd_core_uncertainty(args) -> int:
     from sparc.core.uncertainty import uncertainty_markdown, uncertainty_report
 
-    out = uncertainty_report(args.run_dir, args.multiverse, args.simcheck)
+    out = uncertainty_report(args.run_dir, args.multiverse, args.simcheck, placebo_path=args.placebo)
     print(uncertainty_markdown(out))
     return 0
 
@@ -353,6 +358,19 @@ def cmd_core_features(args) -> int:
         print(f"  {r['role']:15s} r {r['pearson_r']:.3f}  R² {r['r2_linear']:.3f}  ρ {r['spearman']:.3f}  "
               f"(city mean {r['city_mean']:.3g}, open {r['open_mean']:.3g})")
     print(f"wrote {out} and {out.with_suffix('.json')}")
+    return 0
+
+
+def cmd_core_writeup(args) -> int:
+    import json
+
+    from sparc.core.writeup import methods_markdown, model_card_markdown
+
+    run = Path(args.run_dir)
+    m = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
+    (run / "methods.md").write_text(methods_markdown(m), encoding="utf-8")
+    (run / "model_card.md").write_text(model_card_markdown(m), encoding="utf-8")
+    print(f"wrote {run / 'methods.md'} and {run / 'model_card.md'}")
     return 0
 
 

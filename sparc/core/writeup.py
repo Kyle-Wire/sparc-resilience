@@ -90,6 +90,12 @@ def methods_markdown(m: dict) -> str:
               "convex blend, and the blend plus a gated neural residual with a physics (PDE) penalty "
               f"(λ ∈ {cfg.get('stacker', {}).get('tune_lambda')}); the candidate with the lowest outer "
               f"out-of-fold RMSE is kept ({m.get('stacker_choice')})."]
+        pri = ((m.get("physics") or {}).get("priors") or {}) if isinstance(m.get("physics"), dict) else {}
+        pri = pri or ((m.get("config") or {}).get("physics") or {}).get("priors") or {}
+        L += ["", "The physics source terms carry weakly informative priors (mean, sd): canopy shading "
+                  "s ~ N(0.6, 0.3), impervious storage a₁ ~ N(0.3, 0.3)"
+                  + (f" (overridden: {pri})" if pri else "") + "; a tighter shading prior (sd 0.1) held s at its "
+                  "prior even for a displaced placebo canopy layer."]
         adv = m.get("physics_advection")
         if adv:
             L += ["", f"Advection by the campaign wind was {'kept' if adv['kept'] else 'dropped'} after an out-of-fold "
@@ -117,6 +123,25 @@ def methods_markdown(m: dict) -> str:
                       "clustered paired difference in squared error: " + "; ".join(
                 f"{r['label']} RMSE {_f(r['rmse'])} (ΔMSE {r['delta_mse']:+.3f} ± {_f(r['delta_mse_se'], 3)})"
                 for r in b["rows"].values()) + f". Verdict: {b['verdict']}."]
+    studies = []
+    pz = m.get("placebo")
+    if pz and pz.get("n_placebos"):
+        studies.append(f"placebo re-fits with displaced canopy/impervious layers and a random layer ({pz['n_pass_model']}/"
+                       f"{pz['n_placebos']} pass for the model, {pz['n_pass_causal']}/{pz['n_placebos']} for the causal "
+                       "check)")
+    sc = m.get("simcheck")
+    if sc and sc.get("generators"):
+        b = sc.get("bias_correction") or {}
+        studies.append("a simulation check planting −0.25 °F per +10 pp canopy on the real layout under "
+                       f"{len(sc['generators'])} generators with product emulation"
+                       + (f" (effect share {b['share_range'][0]:.2f}–{b['share_range'][1]:.2f})" if b.get("share_range") else ""))
+    mv = m.get("multiverse")
+    if mv and mv.get("effects"):
+        studies.append(f"a multiverse of {len(mv.get('runs', {}))} analysis variants (sign stability ≥ "
+                       f"{100 * (mv.get('sign_stability_min') or 0):.0f}%, priority-map Kendall τ "
+                       f"{mv.get('median_kendall_tau') or float('nan'):.2f})")
+    if studies:
+        L += ["", "## Validation studies", "", "Beyond cross-validation: " + "; ".join(studies) + "."]
     if m.get("response") or m.get("scenarios"):
         L += ["", "## Effects", "",
               "Decision quantities (scenario changes, own-cell and footprint sensitivities, saturation curves) "
@@ -191,6 +216,21 @@ def model_card_markdown(m: dict) -> str:
         L += ["- Causal audit (model vs DML/spillover/DR estimates): " + "; ".join(verdicts) + "."]
         if flags:
             L += [f"- Causal flags: {len(flags)} (see report)."]
+    pz = m.get("placebo")
+    if pz and pz.get("n_placebos"):
+        L += [f"- Placebo layers: the model passes {pz['n_pass_model']}/{pz['n_placebos']}, the causal check "
+              f"{pz['n_pass_causal']}/{pz['n_placebos']} (displaced or random layers should show no effect)."]
+    sc = m.get("simcheck")
+    if sc and (sc.get("bias_correction") or {}).get("share_range"):
+        b = sc["bias_correction"]
+        L += [f"- Planted-effect recovery on this layout: {b['share_range'][0]:.2f}–{b['share_range'][1]:.2f} × the truth "
+              f"across generators ({'stable' if b.get('stable') else 'not stable: read canopy effects as a range'})."]
+    mv = m.get("multiverse")
+    if mv and mv.get("effects"):
+        L += [f"- Across {len(mv.get('runs', {}))} analysis variants: effect signs stable in ≥ "
+              f"{100 * (mv.get('sign_stability_min') or 0):.0f}% of variants; priority maps τ "
+              f"{mv.get('median_kendall_tau') or float('nan'):.2f}, top-10% overlap "
+              f"{mv.get('median_top_decile_jaccard') or float('nan'):.2f}."]
     lit = m.get("literature")
     if lit and lit.get("sparc"):
         L += ["- Published effect sizes: " + "; ".join(

@@ -80,9 +80,14 @@ def climate_uncertainty(m: dict) -> list[dict]:
     return out
 
 
-def uncertainty_report(run_dir, multiverse_dir=None, simcheck_dirs=()) -> dict:
+def uncertainty_report(run_dir, multiverse_dir=None, simcheck_dirs=(), placebo_path=None, real_r2_gate: bool = False) -> dict:
     run_dir = Path(run_dir)
     m = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    if placebo_path and Path(placebo_path).exists():
+        pz = json.loads(Path(placebo_path).read_text(encoding="utf-8"))
+        m["placebo"] = {k: pz.get(k) for k in ("rows", "n_pass_model", "n_pass_causal", "n_placebos", "coarse_m",
+                                              "layer_correlation_with_original")}
+        (run_dir / "placebo.json").write_text(json.dumps(pz, indent=1, default=float), encoding="utf-8")
     mv = None
     if multiverse_dir and (Path(multiverse_dir) / "multiverse_summary.json").exists():
         mv = json.loads((Path(multiverse_dir) / "multiverse_summary.json").read_text(encoding="utf-8"))
@@ -91,7 +96,8 @@ def uncertainty_report(run_dir, multiverse_dir=None, simcheck_dirs=()) -> dict:
         from sparc.core.simcheck import merge_results, summarize
 
         rows = merge_results(simcheck_dirs)
-        sc = summarize(rows) if rows else None
+        real_r2 = ((m.get("metrics") or {}).get("stacker") or {}).get("r2") if real_r2_gate else None
+        sc = summarize(rows, real_r2=real_r2) if rows else None
     out = {**scenario_uncertainty(m, mv, sc), "climate": climate_uncertainty(m),
            "sources": {"run": str(run_dir), "multiverse": str(multiverse_dir) if mv else None,
                        "simcheck": [str(d) for d in simcheck_dirs] if sc else []},
