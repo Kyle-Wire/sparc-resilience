@@ -243,7 +243,7 @@ footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
   <section class="block" id="scenarios">
     <header>
       <h2>Adaptation scenarios</h2>
-      <p class="prose">Each scenario edits the land cover, updates NDVI through its fitted dependence on canopy and impervious cover, rebuilds the neighbourhood features and re-predicts through the five fold models. Bars show the mean change in air temperature; whiskers span the 10th to 90th percentile across cells. Scenarios that push many cells outside the observed range of conditions are flagged.</p>
+      <p class="prose">Each scenario edits the land cover, updates NDVI through its fitted dependence on canopy and impervious cover, rebuilds the neighbourhood features and re-predicts through the five fold models. Bars show the mean change in air temperature; whiskers span the 10th to 90th percentile across cells. Scenarios that push many cells outside the observed range of conditions are flagged. The orange marks are an independent check: the causal own + neighbour effect from the causal check below, times the average change each scenario applies, with its 95% band. It is a straight-line extrapolation, so expect it to drift from the model at large doses where the response saturates.</p>
     </header>
     <div class="card chart"><div id="chart-scen"></div>
       <details><summary>Table view</summary><div class="tablewrap" id="tbl-scen"></div></details>
@@ -550,7 +550,8 @@ function accuracy() {
   const m = DATA.metrics; const st = DATA.stacker || []; const names = Object.keys(m).filter((k) => !["stacker", "base_mean"].includes(k));
   const w = {}; for (const n of names) { const ws = st.map((x) => (x.weights || {})[n]).filter((v) => v !== undefined); w[n] = ws.length ? ws.reduce((a, b) => a + b, 0) / ws.length : null; }
   const kept = st.filter((x) => !x.residual_gated_off).length;
-  $("modelCap").textContent = DATA.lambda_pde === null ? `The stacked model is a non-negative blend of the base models (weights below, averaged over folds). A neural correction on top was tried at several physics-penalty strengths and rejected because it predicted held-out blocks worse.` : `Stacked model: blend of base models plus a neural correction (λ_PDE = ${DATA.lambda_pde}).`;
+  const choice = DATA.stacker_choice || (DATA.lambda_pde === null ? "convex (NNLS) blend of base models" : `blend + neural residual (λ_PDE = ${DATA.lambda_pde})`);
+  $("modelCap").textContent = `Stacked model chosen on the held-out blocks: ${choice} (weights below, averaged over folds).` + (DATA.lambda_pde === null ? " A neural correction on top was tried at several physics-penalty strengths and rejected because it predicted held-out blocks worse." : "");
   const t = el("table"); const th = el("tr"); ["Model", "R²", `RMSE (${U})`, "Blend weight"].forEach((h, i) => th.append(el("th", { class: i ? "r" : "" }, h))); t.append(th);
   const best = Math.max(...names.map((n) => m[n].r2));
   for (const n of [...names, "stacker"]) { const tr = el("tr"); if (n === "stacker") tr.className = "hl";
@@ -659,8 +660,9 @@ const xIcon = () => { const s = sv("svg", { viewBox: "0 0 12 12", "aria-hidden":
 function pill(kind, text) { const p = el("span", { class: `pill ${kind}` }); p.append(kind === "good" ? okIcon() : kind === "crit" ? xIcon() : warnIcon(), document.createTextNode(text)); return p; }
 function scenarios() {
   const S = DATA.scenarios || []; if (!S.length) return;
-  const W = 980, rowH = 30, ml = 220, mr = 200, mt = 8; const H = mt + S.length * rowH + 28; const iw = W - ml - mr;
-  const lo = Math.min(0, ...S.map((s) => s.p10_delta)), hi = Math.max(0, ...S.map((s) => s.p90_delta));
+  const W = 980, rowH = 38, ml = 220, mr = 200, mt = 8; const H = mt + S.length * rowH + 28; const iw = W - ml - mr;
+  const cl = S.filter((s) => s.causal_linear).map((s) => s.causal_linear);
+  const lo = Math.min(0, ...S.map((s) => s.p10_delta), ...cl.map((c) => c.lo)), hi = Math.max(0, ...S.map((s) => s.p90_delta), ...cl.map((c) => c.hi));
   const x = (v) => ml + iw * (v - lo) / (hi - lo || 1);
   const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Mean change in air temperature by scenario" });
   const step = (hi - lo) > 3 ? 1 : 0.5;
@@ -671,15 +673,24 @@ function scenarios() {
     const w2 = Math.abs(x1 - x0); const left = Math.min(x0, x1);
     const r = Math.min(4, w2 / 2); const d = s.mean_delta < 0 ? `M ${x0} ${yy + 2} H ${left + r} a ${r} ${r} 0 0 0 ${-r} ${r} V ${yy + 14 - r} a ${r} ${r} 0 0 0 ${r} ${r} H ${x0} Z` : `M ${x0} ${yy + 2} H ${x1 - r} a ${r} ${r} 0 0 1 ${r} ${r} V ${yy + 14 - r} a ${r} ${r} 0 0 1 ${-r} ${r} H ${x0} Z`;
     const bar = sv("path", { d, fill: bad ? V("--surface") : V("--s1"), stroke: bad ? V("--s1") : "none", "stroke-width": bad ? 1.5 : 0 });
-    bar.addEventListener("pointermove", (ev) => showTip(ev, (t) => { t.append(el("div", { class: "v" }, `${sfmt(s.mean_delta, 2)} ${U}`), el("div", {}, s.name), el("div", { class: "cap" }, `10th–90th percentile ${sfmt(s.p10_delta, 2)} to ${sfmt(s.p90_delta, 2)} · fold spread ±${fmt(s.mean_delta_sd, 2)} · ${fmt(100 * s.frac_extrapolated, 0)}% extrapolated`)); }));
+    const cc = s.causal_linear;
+    if (cc) { const cy = yy + 22;
+      svg.append(sv("line", { x1: x(cc.lo), x2: x(cc.hi), y1: cy, y2: cy, stroke: V("--s2"), "stroke-width": 2, "stroke-linecap": "round" }));
+      svg.append(sv("path", { d: `M ${x(cc.delta)} ${cy - 5} l 5 5 l -5 5 l -5 -5 z`, fill: V("--s2"), stroke: V("--surface"), "stroke-width": 1.5 })); }
+    bar.addEventListener("pointermove", (ev) => showTip(ev, (t) => { t.append(el("div", { class: "v" }, `${sfmt(s.mean_delta, 2)} ${U}`), el("div", {}, s.name), el("div", { class: "cap" }, `10th–90th percentile ${sfmt(s.p10_delta, 2)} to ${sfmt(s.p90_delta, 2)} · fold spread ±${fmt(s.mean_delta_sd, 2)} · ${fmt(100 * s.frac_extrapolated, 0)}% extrapolated`));
+      if (cc) t.append(el("div", { class: "cap" }, `Linear causal estimate ${sfmt(cc.delta, 2)} ${U} (95% ${sfmt(cc.lo, 2)} to ${sfmt(cc.hi, 2)})`)); }));
     bar.addEventListener("pointerleave", hideTip); svg.append(bar);
     svg.append(sv("text", { x: W - mr + 10, y: yy + 12, class: "t-strong" }, `${sfmt(s.mean_delta, 2)} ${U}`));
     if (bad) svg.append(sv("text", { x: W - mr + 84, y: yy + 12, class: "t-axis" }, `extrapolated (${fmt(100 * s.frac_extrapolated, 0)}%)`)); });
   $("chart-scen").append(svg);
   $("chart-scen").append(el("div", { class: "legend-row" }, ""));
-  const lr = $("chart-scen").lastChild; const a = el("span"); const ia = el("i", { class: "box" }); ia.style.background = V("--s1"); a.append(ia, document.createTextNode("within observed conditions")); const b = el("span"); const ib = el("i", { class: "box" }); ib.style.border = `1.5px solid ${V("--s1")}`; b.append(ib, document.createTextNode("more than 20% of edited cells beyond observed conditions (treat as extrapolation)")); lr.append(a, b);
-  const t = el("table"); const h = el("tr"); ["Scenario", `Mean (${U})`, `10th pct`, `90th pct`, "Fold spread", "Beyond observed"].forEach((x2, i) => h.append(el("th", { class: i ? "r" : "" }, x2))); t.append(h);
-  for (const s of S) { const tr = el("tr"); tr.append(el("td", {}, s.name), el("td", { class: "r" }, sfmt(s.mean_delta, 3)), el("td", { class: "r" }, sfmt(s.p10_delta, 2)), el("td", { class: "r" }, sfmt(s.p90_delta, 2)), el("td", { class: "r" }, `±${fmt(s.mean_delta_sd, 2)}`)); const td = el("td", { class: "r" }); td.append(s.frac_extrapolated > 0.2 ? pill("warn", `${fmt(100 * s.frac_extrapolated, 0)}%`) : document.createTextNode(`${fmt(100 * s.frac_extrapolated, 0)}%`)); tr.append(td); t.append(tr); }
+  const lr = $("chart-scen").lastChild; const a = el("span"); const ia = el("i", { class: "box" }); ia.style.background = V("--s1"); a.append(ia, document.createTextNode("model, within observed conditions")); const b = el("span"); const ib = el("i", { class: "box" }); ib.style.border = `1.5px solid ${V("--s1")}`; b.append(ib, document.createTextNode("model, more than 20% of edited cells beyond observed conditions")); lr.append(a, b);
+  if (cl.length) { const c2 = el("span"); const ic = el("i"); ic.style.background = V("--s2"); c2.append(ic, document.createTextNode("linear causal estimate and 95% band")); lr.append(c2); }
+  const t = el("table"); const h = el("tr"); ["Scenario", `Mean (${U})`, `10th pct`, `90th pct`, "Fold spread", "Beyond observed", `Linear causal (${U}, 95%)`].forEach((x2, i) => h.append(el("th", { class: i ? "r" : "" }, x2))); t.append(h);
+  for (const s of S) { const tr = el("tr"); tr.append(el("td", {}, s.name), el("td", { class: "r" }, sfmt(s.mean_delta, 3)), el("td", { class: "r" }, sfmt(s.p10_delta, 2)), el("td", { class: "r" }, sfmt(s.p90_delta, 2)), el("td", { class: "r" }, `±${fmt(s.mean_delta_sd, 2)}`)); const td = el("td", { class: "r" }); td.append(s.frac_extrapolated > 0.2 ? pill("warn", `${fmt(100 * s.frac_extrapolated, 0)}%`) : document.createTextNode(`${fmt(100 * s.frac_extrapolated, 0)}%`)); tr.append(td);
+    const tc = el("td", { class: "r" }); const cc = s.causal_linear;
+    if (cc) { tc.append(document.createTextNode(`${sfmt(cc.delta, 2)} (${sfmt(cc.lo, 2)} to ${sfmt(cc.hi, 2)}) `)); tc.append(cc.model_within ? pill("good", "model inside") : pill("warn", "model outside")); } else tc.textContent = "—";
+    tr.append(tc); t.append(tr); }
   $("tbl-scen").append(t);
 }
 

@@ -95,6 +95,15 @@ class SyntheticCity:
     fields: dict = field(default_factory=dict)  # full rasters (ny, nx), NaN outside mask
     mask: np.ndarray | None = None
 
+    def true_footprint(self) -> np.ndarray:
+        """Exact footprint per +1 pp canopy at every point: Σ_j ∂ΔT_j/∂c_i =
+        a·(Gᵀ∗mask)_i·∂q_i/∂c_i, including the NDVI mediator path."""
+        t = self.truth
+        c = self.frame["canopy"].to_numpy(float)
+        dq = -t["A_c"] * np.exp(-c / t["d_c"]) / t["d_c"] - t["w_ndvi"] * t["k_ndvi"]
+        gm = ops.green_mass(self.mask.astype(float), t["L"], t["v"], t["dx"])
+        return t["a"] * gm[self.fields["_iy"], self.fields["_ix"]] * dq
+
     def true_response(self, canopy_increment: float) -> np.ndarray:
         """Exact ΔT change at every point for a uniform canopy increment
         (NDVI updated through its known mediator law)."""

@@ -69,7 +69,13 @@ DEFAULTS: dict[str, Any] = {
         # Reporting-only skill-vs-distance curve (0 = random points, a leaky reference).
         "distance_curve": {"enabled": False, "block_m": [0, 500, 1000]},
     },
-    "models": {"ols": True, "mgwr": True, "gwrf": True, "gam": True, "physics": True},
+    "models": {"ols": True, "mgwr": True, "gwrf": True, "gam": True, "physics": True,
+               # Spatial+: covariate terms see only what the model's spatial term cannot
+               # represent, so spatial smooths stop absorbing (attenuating) covariate
+               # effects.  List of models (mgwr, gam), true = both, [] = none.  Off by
+               # default: it de-attenuates MGWR on the synthetic city but worsened
+               # held-out accuracy on Providence (see CORE_ROADMAP Appendix C).
+               "spatial_plus": []},
     "stacker": {
         "hidden": 64,
         "physics_mode": "feature",   # "feature" (physics is a base-model input) | "backbone"

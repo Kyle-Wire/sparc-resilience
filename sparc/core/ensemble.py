@@ -67,6 +67,7 @@ class FittedEnsemble:
     timings: dict = field(default_factory=dict)
     physics_selection: dict | None = None
     stacker_info: list | None = None
+    stacker_choice: str = ""
 
     @property
     def has_physics(self) -> bool:
@@ -195,29 +196,34 @@ def fit_ensemble(ctx: FeatureContext, folds: SpatialFolds, cfg, *, ranges_m: dic
     lambdas = list(scfg.get("tune_lambda") or [scfg.get("lambda_pde", 1.0)])
     if stacks[0].physics is None:
         lambdas = [0.0]
-    # Candidates: the convex base alone ("off") and the neural residual at
-    # each λ_PDE; the residual has to earn its place on the outer folds.
-    candidates = [None] + lambdas if scfg.get("allow_residual_off", True) else lambdas
+    # Candidates, simplest first: equal-weight mean, convex (NNLS) blend, and
+    # the blend plus the neural residual at each λ_PDE.  Anything beyond the
+    # mean has to earn its place on the outer (spatially blocked) folds.
+    candidates = [("mean", None), ("nnls", None)] if scfg.get("allow_residual_off", True) else []
+    candidates += [("nnls", lam) for lam in lambdas]
+    labels = {"mean": "equal-weight mean of base models", "nnls": "convex (NNLS) blend of base models"}
     t1 = time.time()
     scores, best = {}, None
-    for lam in candidates:
+    for base_mode, lam in candidates:
         stackers, pred = [], np.empty(n)
         for k, (tr, _te) in enumerate(folds.split()):
             st = PhysicsInformedStacker(scfg, ctx.grid, physics=(stacks[k].physics.model if stacks[k].physics else None),
                                         sigma_q=sigma_q, lambda_pde=(0.0 if lam is None else lam),
-                                        seed=int(scfg.get("seed", 0)) + k)
+                                        seed=int(scfg.get("seed", 0)) + k, base_mode=base_mode)
             st.fit(inp, y, tr, groups=folds.block_id, buffer_m=folds.buffer_m, residual=lam is not None)
             pk = st.predict(inp)
             pred[folds.test_masks[k]] = pk[folds.test_masks[k]]
             stackers.append(st)
         rmse = float(np.sqrt(np.mean((pred - y) ** 2)))
-        key = "off" if lam is None else str(lam)
+        key = base_mode if lam is None else str(lam)
+        key = "off" if key == "nnls" else key
+        choice = labels[base_mode] if lam is None else f"{labels[base_mode]} + neural residual (λ_PDE={lam:g})"
         scores[key] = rmse
-        log.info("stacker %s: OOF RMSE %.4f", "convex base only" if lam is None else f"λ_pde={lam:g}", rmse)
+        log.info("stacker %s: OOF RMSE %.4f", choice, rmse)
         # ties go to the simpler candidate (earlier in the list)
         if best is None or rmse < best[0] * (1.0 - 1e-3):
-            best = (rmse, lam, stackers, pred)
-    _, lam_best, stackers, oof_pred = best
+            best = (rmse, lam, stackers, pred, choice)
+    _, lam_best, stackers, oof_pred, stacker_choice = best
     for k in range(K):
         stacks[k].stacker = stackers[k]
     t_stack = time.time() - t1
@@ -236,4 +242,5 @@ def fit_ensemble(ctx: FeatureContext, folds: SpatialFolds, cfg, *, ranges_m: dic
                           halfwidth=hw, metrics=metrics, lambda_pde=(None if lam_best is None else float(lam_best)),
                           lambda_scores=scores,
                           timings={"base_models_s": t_base, "stackers_s": t_stack},
-                          physics_selection=physics_selection, stacker_info=stacker_info)
+                          physics_selection=physics_selection, stacker_info=stacker_info,
+                          stacker_choice=stacker_choice)

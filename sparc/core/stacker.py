@@ -6,7 +6,9 @@ The final prediction is a base prediction plus a learned residual:
     ΔT̂ = ΔT_phys + r_θ(z),     z = [Ẑ_other, X, focal]              ("backbone" mode)
 
 where Ẑ are *out-of-fold* base-model predictions and w ≥ 0, Σw = 1 are
-non-negative least-squares weights (a convex super-learner base).  The MLP
+non-negative least-squares weights (a convex super-learner base) or, as a
+candidate, equal weights — fitted weights can transfer poorly across a few
+large held-out blocks (the forecast-combination puzzle).  The MLP
 residual r_θ is early-stopped on an inner spatial-block split of the training
 rows and **gated**: if it does not beat the convex base on those held-out
 blocks it is switched off and the stacker is Ẑ·w.  In feature mode the
@@ -72,7 +74,7 @@ class PhysicsInformedStacker:
     :class:`sparc.core.physics.PhysicsModel` (or None)."""
 
     def __init__(self, cfg: dict, grid, physics=None, sigma_q: float | None = None, lambda_pde: float | None = None,
-                 seed: int = 0):
+                 seed: int = 0, base_mode: str = "nnls"):
         self.cfg = cfg
         self.grid = grid
         self.physics = physics
@@ -85,6 +87,7 @@ class PhysicsInformedStacker:
         # coefficient 1 — forces physics-driven scenario magnitudes).
         self.mode = str(cfg.get("physics_mode", "feature")).lower()
         self.use_features = bool(cfg.get("use_features", True))
+        self.base_mode = base_mode               # "nnls" (convex blend) | "mean" (equal weights)
         self.weights: np.ndarray | None = None
         self.gated = False
         if self.mode not in ("feature", "backbone"):
@@ -153,6 +156,8 @@ class PhysicsInformedStacker:
         B = self._base_matrix(inp)
         if inp.phys is not None and self.mode == "backbone":
             self.weights = None
+        elif self.base_mode == "mean":
+            self.weights = np.full(B.shape[1], 1.0 / B.shape[1])
         else:
             w, _ = nnls(B[fit_idx], np.asarray(y, float)[fit_idx])
             self.weights = w / w.sum() if w.sum() > 1e-12 else np.full(B.shape[1], 1.0 / B.shape[1])

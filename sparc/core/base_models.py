@@ -31,6 +31,29 @@ Models
   boosting model (Georganos et al., 2019).
 * :class:`GAMModel` — additive cubic splines per feature plus a Gaussian RBF
   spatial smooth, ridge-penalised with the penalty chosen by block CV.
+
+Spatial+ (Dupont, Wood & Augustin 2022) — GAM and MGWR, ``spatial_plus=True``
+---------------------------------------------------------------------------
+A penalised spatial term (RBF smooth, MGWR intercept surface) competes with
+the covariate terms for every spatially smooth part of a covariate's effect
+and takes a share of it, so fitted effects — and scenario magnitudes — are
+attenuated.  Spatial+ gives the covariate terms only the part of each
+covariate (here: of each covariate *basis function*) that the model's own
+spatial term cannot represent: x̃ = x − f̂_x(s), with f̂_x a spatial smooth of
+the covariate on the same basis / bandwidth.  f̂_x is fitted on the baseline
+covariates of all cells (no target information) and then frozen, so a
+scenario edit Δx passes through the covariate terms in full while the spatial
+term stays put.
+
+Opt-in via ``models.spatial_plus`` (a list of ``mgwr`` / ``gam``, or ``true``).
+On the synthetic-city benchmark (``sparc core benchmark``) Spatial+ raised
+MGWR's recovered share of the planted canopy effect from 0.50 to 0.69 at
+unchanged accuracy, but on Providence it worsened MGWR's held-out accuracy
+(scale-dependent covariate–temperature relations violate Spatial+'s premise),
+so it is off by default.  For the GAM it did not help (0.35 → 0.36) and cost
+accuracy: the GAM's attenuation comes from its prediction-tuned ridge
+shrinkage, not from its spatial smooth (without any spatial basis it still
+recovers only 0.36).
 * :class:`PhysicsBaseModel` — wraps :class:`sparc.core.physics.PhysicsModel`.
 """
 
@@ -192,9 +215,12 @@ class MGWRModel:
         tune: bool = True,
         tol: float = 1e-5,
         focal_scales: tuple = (1.0,),
+        spatial_plus: bool = True,
     ):
         self.ranges_m = dict(ranges_m or {})
         self.focal_scales = tuple(float(s) for s in focal_scales)
+        self.spatial_plus = spatial_plus
+        self.smooths: list | None = None
         self.intercept_range_m = float(intercept_range_m)
         self.kappa = float(kappa)
         self.n_iter = int(n_iter)
@@ -207,8 +233,10 @@ class MGWRModel:
         Z = self.std.transform(ctx.XF[self.cols].to_numpy(float))
         rs = [np.ones(ctx.grid.shape)]
         for j in range(Z.shape[1]):
-            r = ctx.grid.rasterize(Z[:, j])
-            rs.append(np.nan_to_num(r))
+            r = np.nan_to_num(ctx.grid.rasterize(Z[:, j]))
+            if self.smooths is not None:       # Spatial+: frozen baseline smooth
+                r = (r - self.smooths[j]) * ctx.grid.mask
+            rs.append(r)
         return rs
 
     def _backfit(self, xs, y_r, m, sigmas, beta_glob, conv, n_iter):
@@ -246,15 +274,26 @@ class MGWRModel:
         self.std = _Standardizer().fit(Z[train_idx])
         y = ctx.meta["y"]
         names = ["__intercept__"] + self.cols
-        xs = self._rasters(ctx)
-        m = np.isfinite(g.rasterize(np.ones(ctx.n), subset=train_idx)).astype(float)
-        y_r = np.nan_to_num(g.rasterize(y, subset=train_idx))
-        # Global OLS coefficients (shrinkage target).
-        design = np.column_stack([np.ones(len(train_idx)), self.std.transform(Z[train_idx])])
-        self.beta_glob = np.linalg.lstsq(design, y[train_idx], rcond=None)[0]
         max_range = max([self.intercept_range_m] + list(self.ranges_m.values()))
         pad = int(math.ceil(3.0 * 4.0 * max_range / 2.0 / g.dx)) + 2
         conv = _Convolver(g.shape, min(pad, max(g.shape)))
+        self.smooths = None
+        if self.spatial_plus:
+            # Normalised Gaussian smooth of each regressor at the intercept
+            # bandwidth over all observed cells (covariates only), frozen.
+            m_all = g.mask.astype(float)
+            sig = self._sigma_cells("__intercept__", 1.0, g.dx)
+            den = np.maximum(conv(m_all, sig), 1e-9)
+            Zs = self.std.transform(Z)
+            self.smooths = [conv(np.nan_to_num(g.rasterize(Zs[:, j])) * m_all, sig) / den * m_all
+                            for j in range(Zs.shape[1])]
+        xs = self._rasters(ctx)
+        m = np.isfinite(g.rasterize(np.ones(ctx.n), subset=train_idx)).astype(float)
+        y_r = np.nan_to_num(g.rasterize(y, subset=train_idx))
+        # Global OLS coefficients (shrinkage target), on the same (Spatial+
+        # residualised) regressors the local fits use.
+        design = np.column_stack([np.ones(len(train_idx)), self._point_regressors(ctx)[train_idx]])
+        self.beta_glob = np.linalg.lstsq(design, y[train_idx], rcond=None)[0]
         mults = {n: 1.0 for n in names}
 
         if self.tune and len(train_idx) > 200:
@@ -295,18 +334,24 @@ class MGWRModel:
         self.names = names
         return self
 
+    def _point_regressors(self, ctx: FeatureContext) -> np.ndarray:
+        """Standardised regressors at the points (minus the frozen Spatial+ smooth)."""
+        Z = self.std.transform(ctx.XF[self.cols].to_numpy(float))
+        if self.smooths is not None:
+            g = ctx.grid
+            Z = Z - np.column_stack([sm[g.iy, g.ix] for sm in self.smooths])
+        return Z
+
     def coefficient_rasters(self) -> dict[str, np.ndarray]:
         return dict(zip(self.names, self.betas))
 
     def predict(self, ctx: FeatureContext) -> np.ndarray:
-        xs = self._rasters(ctx)
         g = ctx.grid
         # Point-level x (not rasterised) so collisions keep their own values.
-        Z = self.std.transform(ctx.XF[self.cols].to_numpy(float))
+        Z = self._point_regressors(ctx)
         pred = self.betas[0][g.iy, g.ix].copy()
         for j in range(1, len(self.names)):
             pred += self.betas[j][g.iy, g.ix] * Z[:, j - 1]
-        del xs
         return pred
 
 
@@ -385,19 +430,26 @@ class GAMModel:
     name = "gam"
 
     def __init__(self, n_knots: int = 8, spatial_scale_m: float = 800.0, max_centres: int = 300, block_m: float = 500.0,
-                 seed: int = 0):
+                 seed: int = 0, spatial_plus: bool = False):
         self.n_knots = n_knots
         self.spatial_scale_m = spatial_scale_m
         self.max_centres = max_centres
         self.block_m = block_m
         self.seed = seed
+        self.spatial_plus = spatial_plus
+        self.W = None
+
+    def _parts(self, ctx: FeatureContext) -> tuple[np.ndarray, np.ndarray]:
+        Z = ctx.XF[self.cols].to_numpy(float)
+        Bx = self.splines.transform(np.clip(Z, self.lo, self.hi))
+        d2 = ((ctx.coords[:, None, :] - self.centres[None, :, :]) ** 2).sum(-1)
+        return Bx, np.exp(-0.5 * d2 / self.spatial_scale_m**2)
 
     def _basis(self, ctx: FeatureContext) -> np.ndarray:
-        Z = ctx.XF[self.cols].to_numpy(float)
-        parts = [self.splines.transform(np.clip(Z, self.lo, self.hi))]
-        d2 = ((ctx.coords[:, None, :] - self.centres[None, :, :]) ** 2).sum(-1)
-        parts.append(np.exp(-0.5 * d2 / self.spatial_scale_m**2))
-        return np.hstack(parts)
+        Bx, S = self._parts(ctx)
+        if self.W is not None:              # Spatial+: frozen baseline covariate smooth
+            Bx = Bx - S @ self.W
+        return np.hstack([Bx, S])
 
     def fit(self, ctx: FeatureContext, train_idx: np.ndarray) -> "GAMModel":
         from sklearn.cluster import KMeans
@@ -413,6 +465,14 @@ class GAMModel:
         area = np.ptp(c[:, 0]) * np.ptp(c[:, 1])
         k = int(np.clip(area / self.spatial_scale_m**2, 4, self.max_centres))
         self.centres = KMeans(n_clusters=k, n_init=2, random_state=self.seed).fit(c).cluster_centers_
+        self.W = None
+        if self.spatial_plus:
+            # Smooth of every spline column on the RBF basis over all cells
+            # (covariates only — no target information), then frozen.
+            Bx, S = self._parts(ctx)
+            G = S.T @ S
+            lam = 1e-3 * float(np.trace(G)) / G.shape[0]
+            self.W = np.linalg.solve(G + lam * np.eye(G.shape[0]), S.T @ Bx)
         B_all = self._basis(ctx)
         B = B_all[train_idx]
         self.std = _Standardizer().fit(B)
@@ -460,14 +520,18 @@ def build_base_models(cfg_models: dict, *, grid: Grid, cfg_physics: dict, ranges
                       intercept_range_m: float, block_m: float, L_init: float | None, seed: int = 0) -> list:
     """Instantiate the enabled base models (fresh, unfitted)."""
     models: list = []
+    sp_cfg = cfg_models.get("spatial_plus", [])
+    sp_set = {"mgwr", "gam"} if sp_cfg is True else set() if not sp_cfg else {str(m).lower() for m in sp_cfg}
     if cfg_models.get("ols", True):
         models.append(OLSModel(block_m=block_m))
     if cfg_models.get("mgwr", True):
-        models.append(MGWRModel(ranges_m=ranges_m, intercept_range_m=intercept_range_m))
+        models.append(MGWRModel(ranges_m=ranges_m, intercept_range_m=intercept_range_m,
+                                spatial_plus="mgwr" in sp_set))
     if cfg_models.get("gwrf", True):
         models.append(GWRFModel(seed=seed))
     if cfg_models.get("gam", True):
-        models.append(GAMModel(spatial_scale_m=max(2 * intercept_range_m, 300.0), block_m=block_m, seed=seed))
+        models.append(GAMModel(spatial_scale_m=max(2 * intercept_range_m, 300.0), block_m=block_m, seed=seed,
+                               spatial_plus="gam" in sp_set))
     if cfg_models.get("physics", True) and cfg_physics.get("enabled", True) and (cfg_physics.get("roles") or {}):
         models.append(PhysicsBaseModel(grid, cfg_physics, L_init=L_init, seed=seed))
     return models

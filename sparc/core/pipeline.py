@@ -310,8 +310,12 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
             state["causal"] = result.causal
             done.add("S6")
             _save_checkpoint(run_dir, state)
+        if result.scenarios:
+            causal_crosscheck(result.scenarios, result.causal)
         if run_dir:
             _write_json(run_dir / "causal.json", _strip_arrays(result.causal))
+            if result.scenarios:
+                _write_json(run_dir / "scenarios.json", result.scenarios)
     timings["S6"] = time.time() - t
 
     # ------------------------------------------------------------------ S7
@@ -337,6 +341,32 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
                 run_dir / "allocation.parquet", index=False)
     timings["S7"] = time.time() - t
     return _finish(result, timings, fast, folds=folds)
+
+
+def causal_crosscheck(scenarios: list[dict], causal: dict) -> list[dict]:
+    """Attach a linear causal estimate to every scenario whose edited
+    variables all have a spillover estimate: Σ_j (θ_own+θ_nbr)_j × mean
+    realised change_j, with a 95% band from the SEs (independence assumed).
+    It is a local-slope extrapolation — a cross-check on magnitude and sign,
+    not a replacement for the model's scenario."""
+    tr = (causal or {}).get("treatments") or {}
+    for sc in scenarios:
+        real = sc.get("mean_realized") or {}
+        if not real or any(not isinstance((tr.get(v) or {}).get("spillover"), dict) for v in real):
+            continue
+        est, var = 0.0, 0.0
+        for v, d in real.items():
+            sp = tr[v]["spillover"]
+            th, se = sp.get("theta_sum"), sp.get("se_sum")
+            if th is None or se is None or not np.isfinite(th) or not np.isfinite(se):
+                break
+            est += float(th) * float(d)
+            var += (float(se) * float(d)) ** 2
+        else:
+            half = 1.96 * float(np.sqrt(var))
+            sc["causal_linear"] = {"delta": est, "lo": est - half, "hi": est + half,
+                                   "model_within": bool(est - half <= sc["mean_delta"] <= est + half)}
+    return scenarios
 
 
 def _strip_arrays(d):

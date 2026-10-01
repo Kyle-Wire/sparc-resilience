@@ -27,6 +27,13 @@ def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
     p_run.add_argument("--quiet", action="store_true")
     p_run.set_defaults(func=cmd_core_run)
 
+    p_bm = subs.add_parser("benchmark", help="effect-recovery benchmark on the synthetic city (Spatial+ A/B)")
+    p_bm.add_argument("--out", default="output/core/benchmark")
+    p_bm.add_argument("--seed", type=int, default=0)
+    p_bm.add_argument("--no-ab", action="store_true", help="only the default (Spatial+) setting")
+    p_bm.add_argument("--threads", type=int, default=0)
+    p_bm.set_defaults(func=cmd_core_benchmark)
+
     p_syn = subs.add_parser("synth", help="write the synthetic test city (with planted truths) to CSV")
     p_syn.add_argument("--out", required=True)
     p_syn.add_argument("--seed", type=int, default=0)
@@ -52,6 +59,26 @@ def cmd_core_run(args) -> int:
               f"coverage {s.get('interval_coverage', float('nan')):.3f}")
     if res.run_dir:
         print(f"outputs → {res.run_dir}  (see report.md)")
+    return 0
+
+
+def cmd_core_benchmark(args) -> int:
+    import json
+
+    from sparc.core.diagnostics import benchmark_markdown, run_benchmark
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    if args.threads:
+        import torch
+
+        torch.set_num_threads(int(args.threads))
+    bench = run_benchmark(seed=int(args.seed), spatial_plus_ab=not args.no_ab)
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "benchmark.json").write_text(json.dumps(bench, indent=2), encoding="utf-8")
+    md = benchmark_markdown(bench)
+    (out / "benchmark.md").write_text(md + "\n", encoding="utf-8")
+    print(md)
     return 0
 
 

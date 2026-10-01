@@ -91,6 +91,8 @@ def build_manifest(result, timings: dict, fast: bool, folds=None) -> dict:
         m["physics"] = _physics_summary(ens)
         m["physics_advection"] = ens.physics_selection
         m["stacker"] = ens.stacker_info
+        m["stacker_choice"] = ens.stacker_choice
+        m["spatial_plus"] = (result.cfg.raw.get("models") or {}).get("spatial_plus")
     if getattr(result, "cv_distance", None):
         m["cv_distance"] = result.cv_distance
     if result.responses:
@@ -148,7 +150,7 @@ def render_report(result) -> str:
             L.append(f"| {k} | {_f(v['rmse'])} | {_f(v['mae'])} | {_f(v['r2'])} |")
         s = m["metrics"].get("stacker", {})
         lam = m.get("lambda_pde")
-        lam_txt = "residual off — convex base only" if lam is None else f"λ_PDE = {lam}"
+        lam_txt = m.get("stacker_choice") or ("residual off — convex base only" if lam is None else f"λ_PDE = {lam}")
         L += ["", f"Stacker: {lam_txt} (out-of-fold RMSE by candidate: {m.get('lambda_scores')}); "
               f"{int(100 * s.get('interval_target', 0.9))}% cross-conformal interval coverage "
               f"{_f(s.get('interval_coverage'), 3)} (mean half-width {_f(s.get('interval_mean_halfwidth'), 3)} {u}).", ""]
@@ -193,12 +195,15 @@ def render_report(result) -> str:
               "neighbourhood (drives the optimiser). Saturation is fitted to neighbourhood-adoption sweeps "
               "against the realised neighbourhood dose; 'censored' = no knee within the tested doses/headroom.", ""]
     if "scenarios" in m:
-        L += ["## S5 — Scenarios", "", f"| scenario | mean Δ ({u}) | p10 | p90 | fold sd | extrapolated |",
-              "|---|---|---|---|---|---|"]
+        L += ["## S5 — Scenarios", "", f"| scenario | mean Δ ({u}) | p10 | p90 | fold sd | extrapolated | "
+              f"linear causal Δ (95%) |", "|---|---|---|---|---|---|---|"]
         for s in m["scenarios"]:
+            c = s.get("causal_linear")
+            ctext = (f"{_f(c['delta'])} ({_f(c['lo'])} to {_f(c['hi'])})" + ("" if c["model_within"] else " ⚑")) if c else "—"
             L.append(f"| {s['name']} | {_f(s['mean_delta'])} | {_f(s['p10_delta'])} | {_f(s['p90_delta'])} | "
-                     f"{_f(s['mean_delta_sd'])} | {_f(s['frac_extrapolated'], 3)} |")
-        L.append("")
+                     f"{_f(s['mean_delta_sd'])} | {_f(s['frac_extrapolated'], 3)} | {ctext} |")
+        L += ["", "Linear causal Δ: the S6 own + neighbour effect × the mean realised change (a local-slope "
+              "extrapolation); ⚑ = the model's mean Δ lies outside its 95% band.", ""]
     if "causal" in m:
         L += ["## S6 — Causal validation", "",
               "| treatment | DML θ ± SE | θ_own | θ_nbr | θ_own+θ_nbr | audit |", "|---|---|---|---|---|---|"]

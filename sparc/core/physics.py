@@ -14,7 +14,8 @@ Source (normalised sensible heat, per point, from the configured roles)
 ----------------------------------------------------------------------
 Day window (SW = sw_down, LW = lw_net)::
 
-    Q*   = SW·(1 − albedo)·(1 − s·canopy/100) + LW
+    Q*   = SW·(1 − albedo)·(1 − s·h_κ(canopy/100)) + LW
+    h_κ(c) = (1 − e^{−c/κ}) / (1 − e^{−1/κ})        (shading saturates with cover; κ → ∞ is linear)
     EF   = sigmoid(e0 + e1⁺·ndvi_c + e2⁺·canopy_c/100 − e3⁺·imp_c/100)    (x⁺ = softplus)
     ΔQ_S = a1·(imp/100)·Q*
     Q_H  = (Q* − ΔQ_S)·(1 − EF) − w⁺·1[water_distance ≤ dx/2]
@@ -34,7 +35,8 @@ increase still changes q everywhere.
 Identifiability and fitting
 ---------------------------
 * s, a1, a1n are learnable but held near literature values (0.6, 0.3, 0.5)
-  by Gaussian penalties; e1..e3 ≥ 0 via softplus; e0 starts at logit(0.35).
+  by Gaussian penalties; the shade-saturation scale κ ∈ [0.05, 20] has a weak
+  log-normal prior (log κ ~ N(0, 3²); h_1 is mildly concave, large κ is linear); e1..e3 ≥ 0 via softplus; e0 starts at logit(0.35).
 * a, b, γ, βx, βy are profiled out by variable projection: for the current
   nonlinear parameters the linear least-squares problem on the training
   points is solved inside the (differentiable) loss.
@@ -97,6 +99,10 @@ PHYSICS_DEFAULTS: dict[str, Any] = {
 
 #: Literature priors (mean, sd) for the penalised source coefficients.
 SOURCE_PRIORS = {"s": (0.6, 0.1), "a1": (0.3, 0.1), "a1n": (0.5, 0.15)}
+KAPPA_BOUNDS = (0.05, 20.0)        # canopy-fraction scale of shade saturation
+KAPPA_PRIOR = (0.0, 3.0)           # log κ ~ N(0, 3²): a weak regulariser — a tighter prior pinned κ near 1
+                                   # on the synthetic city (planted 0.15) and halved the shade nonlinearity
+KAPPA_INIT = 2.0
 _EF0 = 0.35                      # initial evaporative fraction
 _EF_INIT = {"e1": 2.0, "e2": 1.0, "e3": 1.0}
 _EF_PRIOR_SD = 5.0               # weak: keeps flat directions from drifting
@@ -421,6 +427,8 @@ class PhysicsModel:
             "ux": p(v0[0] / self.v_max, self.fit_advection),
             "uy": p(v0[1] / self.v_max, self.fit_advection),
             "s": p(_logit(SOURCE_PRIORS["s"][0])),
+            "ukc": p(_logit((math.log(KAPPA_INIT) - math.log(KAPPA_BOUNDS[0]))
+                            / (math.log(KAPPA_BOUNDS[1]) - math.log(KAPPA_BOUNDS[0])))),
             "a1": p(_logit(SOURCE_PRIORS["a1"][0])),
             "a1n": p(_logit(SOURCE_PRIORS["a1n"][0])),
             "e0": p(_logit(_EF0)),
@@ -435,7 +443,7 @@ class PhysicsModel:
         if self.fit_advection:
             names += ["ux", "uy"]
         if self.window == "day" and "canopy" in feats:
-            names.append("s")
+            names += ["s", "ukc"]
         if "impervious" in feats:
             names.append("a1" if self.window == "day" else "a1n")
         names += [e for e, r in (("e1", "ndvi"), ("e2", "canopy"), ("e3", "impervious")) if r in feats]
@@ -453,6 +461,8 @@ class PhysicsModel:
             "vx": self.v_max * P["ux"] if self.fit_advection else zero,
             "vy": self.v_max * P["uy"] if self.fit_advection else zero,
             "s": torch.sigmoid(P["s"]),
+            "kc": torch.exp(math.log(KAPPA_BOUNDS[0]) + (math.log(KAPPA_BOUNDS[1]) - math.log(KAPPA_BOUNDS[0]))
+                            * torch.sigmoid(P["ukc"])),
             "a1": torch.sigmoid(P["a1"]),
             "a1n": torch.sigmoid(P["a1n"]),
             "e0": P["e0"],
@@ -463,9 +473,12 @@ class PhysicsModel:
         }
 
     def _penalty(self, P: dict, T: dict, feats: dict):
+        import torch
+
         pen = 0.0
         if self.window == "day" and "canopy" in feats:
             pen = pen + ((T["s"] - SOURCE_PRIORS["s"][0]) / SOURCE_PRIORS["s"][1]) ** 2
+            pen = pen + ((torch.log(T["kc"]) - KAPPA_PRIOR[0]) / KAPPA_PRIOR[1]) ** 2
         if "impervious" in feats:
             k = "a1" if self.window == "day" else "a1n"
             pen = pen + ((T[k] - SOURCE_PRIORS[k][0]) / SOURCE_PRIORS[k][1]) ** 2
@@ -496,7 +509,11 @@ class PhysicsModel:
         one_minus_ef = 1.0 - torch.sigmoid(z)
         if self.window == "day":
             alb = tf["albedo"] if "albedo" in tf else _DEFAULT_ALBEDO
-            shade = 1.0 - T["s"] * tf["canopy"] if "canopy" in tf else 1.0
+            if "canopy" in tf:
+                kc = T["kc"]
+                shade = 1.0 - T["s"] * (1.0 - torch.exp(-tf["canopy"] / kc)) / (1.0 - torch.exp(-1.0 / kc))
+            else:
+                shade = 1.0
             qstar = sw * (1.0 - alb) * shade + lw
             dqs = T["a1"] * tf["impervious"] * qstar if "impervious" in tf else 0.0
         else:
@@ -741,7 +758,7 @@ class PhysicsModel:
         return {
             "L_m": T["L"], "vx_m": T["vx"], "vy_m": T["vy"], "v_norm_m": float(math.hypot(T["vx"], T["vy"])),
             "a": self.a, "b": self.b, "gamma": self.gamma, "beta_x": self.beta_x, "beta_y": self.beta_y,
-            "s": T["s"], "a1": T["a1"], "a1n": T["a1n"], "e0": T["e0"], "e1": T["e1"], "e2": T["e2"],
+            "s": T["s"], "kappa_canopy": T["kc"], "a1": T["a1"], "a1n": T["a1n"], "e0": T["e0"], "e1": T["e1"], "e2": T["e2"],
             "e3": T["e3"], "w": T["w"], "q_mean": self._q_mean,
             "train_rmse": self.train_rmse, "train_r2": self.train_r2, "fit_warning": self.fit_warning,
             "window": self.window, "roles_used": list(self.roles_used), "pad_cells": int(self.pad),
