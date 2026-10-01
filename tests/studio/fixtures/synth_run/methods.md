@@ -42,4 +42,4 @@ Summer (June–August) mean daily maximum temperature change from 6 CMIP6 models
 
 ## Reproducibility
 
-Code commit `358200a0233a`, core code SHA-256 `f12ff6797b8c`, input SHA-256 `4bfb0ca0ba3b`, config SHA-256 `58f0d8cabbf3`; package versions in `environment.txt`. `sparc core reproduce <run dir>` re-runs and compares.
+Code commit `5a04f4472c57`, core code SHA-256 `9ef8fac0551a`, input SHA-256 `4bfb0ca0ba3b`, config SHA-256 `58f0d8cabbf3`; package versions in `environment.txt`. `sparc core reproduce <run dir>` re-runs and compares.

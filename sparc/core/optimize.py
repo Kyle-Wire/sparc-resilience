@@ -106,17 +106,18 @@ def planned_allocation(vr: VariableResponse, budget: float, cost_per_unit=1.0, e
         alloc = np.asarray(res.allocation, dtype=float)
         dose = np.zeros(n)
         np.add.at(dose, cells, alloc)
-        dropped_cost = 0.0
+        dropped_cost, dropped = 0.0, False
         if min_dose and min_dose > 0:
             low = (dose > 0) & (dose < float(min_dose))
-            drop = low[cells]
+            drop = low[cells] & (alloc > 0)
+            dropped = bool(drop.any())
             dropped_cost = float(np.sum(costs[drop] * alloc[drop]))
             alloc = np.where(drop, 0.0, alloc)
             dose = np.where(low, 0.0, dose)
         planned = np.zeros(n)
         np.add.at(planned, cells, benefits * alloc)
         treated = dose > 0
-        total = float(res.total_benefit) if not dropped_cost else float(np.sum(benefits * alloc))
+        total = float(np.sum(benefits * alloc)) if dropped else float(res.total_benefit)
         sp.metrics.update(planned_total=total, n_cells_treated=int(treated.sum()))
     progress.metric("planned_total", total, variable=vr.variable)
     with progress.task("pareto", unit="pareto"):

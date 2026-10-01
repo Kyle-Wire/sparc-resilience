@@ -57,3 +57,27 @@ def test_file_runs_write_no_input_frame(tmp_path):
     res = run_core(load_core_config(demo["config_path"]), stages=("S0", "S1"), run_dir=tmp_path / "run")
     assert not (res.run_dir / "input_frame.parquet").exists()
     assert "input_frame" not in res.manifest["provenance"]
+
+
+def test_input_frame_keeps_the_index_so_the_data_identity_matches(tmp_path):
+    """A frame with a non-default index (e.g. rows filtered out upstream) reads back hash-identical, so
+    ``checkpoint_status`` recognises the data of the run."""
+    from sparc.core.config import load_core_config
+    from sparc.core.pipeline import _data_identity, checkpoint_status, run_core
+    from sparc.core.synthetic import write_demo_project
+
+    demo = write_demo_project(tmp_path / "project", n=24, seed=1)
+    cfg = load_core_config(demo["config_path"])
+    cfg.raw["models"] = {"ols": True, "mgwr": False, "gwrf": False, "gam": False, "physics": False}
+    cfg.raw["stacker"].update(epochs=10, tune_lambda=[0.0])
+    cfg.raw["cv"]["baselines"] = False
+    df = pd.read_csv(demo["files"]["data"])
+    frame = df[df["id"] % 7 != 3]                                   # a gappy index, not a RangeIndex
+    assert not isinstance(frame.index, pd.RangeIndex)
+    run_dir = tmp_path / "run"
+    res = run_core(cfg, stages=("S0", "S1", "S2", "S3"), frame=frame, run_dir=run_dir)
+    back = pd.read_parquet(run_dir / "input_frame.parquet")
+    pd.testing.assert_frame_equal(back, frame)
+    assert _data_identity(res.cfg, back) == _data_identity(res.cfg, frame)
+    st = checkpoint_status(run_dir, res.cfg, fast=False)
+    assert st["matches"]["data"] is True and st["fingerprint_match"] is True

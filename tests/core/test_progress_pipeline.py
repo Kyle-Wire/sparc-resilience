@@ -125,6 +125,9 @@ def test_run_envelope_events(demo_run):
     for p in (e for e in ev if e["type"] == "run.plan"):
         assert [n["id"] for n in p["nodes"]] == ENABLED[:4] + ["cv_curve"] + ENABLED[4:]
         assert p["n_points"] in (None, demo_run.res.data.n)
+        for n in p["nodes"]:                                          # api.md PlanNode: every key, nulls included
+            assert set(n) == {"id", "label", "state", "reason", "units", "checkpoint_key", "est_s", "est_lo",
+                              "est_hi"}, n
     assert [e for e in ev if e["type"] == "run.plan"][-1]["n_points"] == demo_run.res.data.n
 
 
@@ -338,3 +341,41 @@ def test_network_retries_are_reported_and_cancellable(monkeypatch):
     warns = [e for e in events if e["type"] == "warning" and e["code"] == "network.retry"]
     assert warns[0]["data"] == {"host": "cmip6-pds.s3.amazonaws.com", "attempt": 1, "wait_s": 0.01, "error": "reset"}
     assert warns[-1]["data"]["host"] == "example.org" and warns[-1]["data"]["attempt"] == 2
+
+
+def test_cmip6_pool_drops_queued_models_on_any_abort(monkeypatch, tmp_path):
+    """Not only a cancel: any exception escaping the model pool (e.g. an interrupt) shuts it down with the
+    queued models dropped, instead of leaving them to run."""
+    import concurrent.futures as cf
+    import time
+
+    from sparc.core import climate as C
+
+    class Abort(BaseException):
+        pass
+
+    names = [f"M{i}" for i in range(8)]
+    monkeypatch.setattr(C, "load_catalog", lambda cache, fetch: pd.DataFrame({"source_id": names}))
+    monkeypatch.setattr(C, "select_runs", lambda cat, *a, **k: cat)
+    ran: list[str] = []
+
+    def fake_model(m, runs, *a, **k):
+        ran.append(m)
+        if m == "M0":
+            raise Abort()
+        time.sleep(0.2)                                               # long enough for the pool to be shut
+        return []
+
+    calls: list[dict] = []
+
+    class Pool(cf.ThreadPoolExecutor):
+        def shutdown(self, wait=True, *, cancel_futures=False):
+            calls.append({"wait": wait, "cancel_futures": cancel_futures})
+            return super().shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    monkeypatch.setattr(C, "_model_factors", fake_model)
+    monkeypatch.setattr(C, "ThreadPoolExecutor", Pool)
+    with pytest.raises(Abort):
+        C.cmip6_change_factors(41.8, -71.4, tmp_path, experiments=("ssp245",), max_workers=1)
+    assert calls[0] == {"wait": False, "cancel_futures": True}
+    assert ran[0] == "M0" and len(ran) <= 2                           # one worker: the queued models never ran

@@ -466,12 +466,19 @@ def _plan(cfg: CoreConfig, stages, done=frozenset(), *, n_points: int | None = N
 
 
 def plan_event(nodes: list[dict], n_points: int | None = None, max_bytes: int = 3600) -> dict:
-    """``run.plan`` fields, compact enough for one progress line: unset estimates are left out and, if
-    still too long, the labels too (they are in :data:`STAGE_NODES`) — never the units."""
-    slim = [{k: v for k, v in n.items() if not (k.startswith("est_") and v is None)} for n in nodes]
-    ev = {"nodes": slim, "total_units": plan_totals(nodes), "n_points": n_points}
-    if len(json.dumps(ev, separators=(",", ":"), ensure_ascii=False).encode()) > max_bytes:
-        ev["nodes"] = [{k: v for k, v in n.items() if k != "label"} for n in slim]
+    """``run.plan`` fields, compact enough for one progress line.
+
+    Nodes are sent whole (api.md ``PlanNode``, unset estimates as null) when
+    they fit in ``max_bytes``; otherwise unset estimates are left out first
+    and then the labels (they are in :data:`STAGE_NODES`) — never the units."""
+    def size(ev: dict) -> int:
+        return len(json.dumps(ev, separators=(",", ":"), ensure_ascii=False).encode())
+
+    ev = {"nodes": [dict(n) for n in nodes], "total_units": plan_totals(nodes), "n_points": n_points}
+    if size(ev) > max_bytes:
+        ev["nodes"] = [{k: v for k, v in n.items() if not (k.startswith("est_") and v is None)} for n in nodes]
+    if size(ev) > max_bytes:
+        ev["nodes"] = [{k: v for k, v in n.items() if k != "label"} for n in ev["nodes"]]
     return ev
 
 
@@ -850,9 +857,13 @@ class _Run:
         progress.skip(sid, reason)
 
     def save(self, key: str) -> None:
-        self.done.add(key)
-        self.state["done"] = self.done
+        """Checkpoint with ``key`` done.  The run's done set (``run_state.json``, ``run.end``) gains ``key``
+        only once the pickle and its sidecar are written, so a save interrupted by a second signal or a
+        full disk never claims a stage the checkpoint does not hold."""
+        done = set(self.done) | {key}
+        self.state["done"] = done
         _save_checkpoint(self.run_dir, self.state, self.sections)
+        self.done = done
 
     def artifact(self, path: Path, role: str, stage: str | None = None) -> None:
         progress.artifact(path, role=role, stage=stage)
@@ -862,9 +873,9 @@ class _Run:
             _write_json(self.run_dir / name, obj)
             self.artifact(self.run_dir / name, role, stage)
 
-    def write_parquet(self, name: str, df: pd.DataFrame, role: str, stage: str | None = None) -> None:
+    def write_parquet(self, name: str, df: pd.DataFrame, role: str, stage: str | None = None, **kwargs) -> None:
         if self.run_dir:
-            runio.write_parquet_atomic(df, self.run_dir / name)
+            runio.write_parquet_atomic(df, self.run_dir / name, **kwargs)
             self.artifact(self.run_dir / name, role, stage)
 
     def ensure_engine(self):
@@ -934,8 +945,9 @@ class _Run:
                 result.provenance["join_sha256"] = {j["path"]: sha256_file(cfg.resolve_path(j["path"]))
                                                     for j in cfg.data["join"]}
             if frame is not None and run_dir is not None:
-                # placebo children: the table they were fitted on differs from data.path; keep it readable
-                self.write_parquet(INPUT_FRAME, frame, "input_frame")
+                # placebo children: the table they were fitted on differs from data.path; keep it readable.
+                # The index is kept (pandas' default) so the table reads back hash-identical (data identity).
+                self.write_parquet(INPUT_FRAME, frame, "input_frame", index=None)
                 result.provenance["input_frame"] = INPUT_FRAME
             qa = data.qa
             sp.summary = {"n_points": int(data.n), "n_input": qa.get("n_input"),

@@ -1,6 +1,6 @@
 # Model card — synthetic_demo
 
-*Generated 2026-10-01T20:05:35+00:00 from the run manifest.*
+*Generated 2026-10-01T21:21:49+00:00 from the run manifest.*
 
 ## Intended use
 
@@ -40,4 +40,4 @@
 
 ## Reproducibility
 
-- commit `358200a0233a`, code `f12ff6797b8c`, input `4bfb0ca0ba3b`, config `58f0d8cabbf3`; `sparc core reproduce` re-runs and compares.
+- commit `5a04f4472c57`, code `9ef8fac0551a`, input `4bfb0ca0ba3b`, config `58f0d8cabbf3`; `sparc core reproduce` re-runs and compares.

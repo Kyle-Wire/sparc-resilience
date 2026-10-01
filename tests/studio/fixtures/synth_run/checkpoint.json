@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "fingerprint": "e9f44e47f65ba55f",
+  "fingerprint": "68c17c7b36fce387",
   "sections": {
     "data": "7b3865a8d59f2a8e",
     "core": "75afcbd29a1f524c",
@@ -9,7 +9,7 @@
     "climate": "6e2713ef303292ce",
     "s6": "30b76f32f7de9794",
     "s7": "2aede422f7941731",
-    "code": "b7c17fcc9fb7c51a"
+    "code": "d70e988c4a6ff3f0"
   },
   "done": [
     "S3",
@@ -19,7 +19,7 @@
     "baselines",
     "climate"
   ],
-  "bytes": 4149265,
-  "saved_utc": "2026-10-01T20:05:34Z",
-  "code_sha256": "b7c17fcc9fb7c51a9b6e14072fbf485c15f47a63569ba87294f5b8f208500596"
+  "bytes": 4149145,
+  "saved_utc": "2026-10-01T21:21:49Z",
+  "code_sha256": "d70e988c4a6ff3f088fd69d9c89b2ad7bee819e9f35dd319774dd532433d8903"
 }

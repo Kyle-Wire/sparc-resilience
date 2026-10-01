@@ -492,7 +492,6 @@ def run_simcheck(cfg, design: dict[str, int], out_dir: str | Path, coarse: float
     try:
         futs = [ex.submit(_worker, a) for a in args]
         for f in as_completed(futs):
-            progress.check_cancel()
             r = f.result()
             with open(path, "a", encoding="utf-8") as fh:        # one appended line per replicate (resumable)
                 fh.write(json.dumps(r, default=float) + "\n")
@@ -503,7 +502,8 @@ def run_simcheck(cfg, design: dict[str, int], out_dir: str | Path, coarse: float
             progress.tick(n_done, total, unit="replicates")
             log.info("simcheck %s/%s: share %s, %ss", r.get("generator"), r.get("seed"), r.get("share"),
                      r.get("seconds"))
-    except progress.Cancelled:
+            progress.check_cancel()                              # after the row is kept: a resume skips it
+    except BaseException:                       # Cancelled (or an error): drop the queued replicates, re-raise
         ex.shutdown(wait=False, cancel_futures=True)
         raise
     ex.shutdown(wait=True)

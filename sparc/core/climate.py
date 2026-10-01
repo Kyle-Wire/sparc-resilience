@@ -367,7 +367,7 @@ def cmip6_change_factors(site_lat: float, site_lon: float, cache_dir: str | Path
     try:
         for rows in ex.map(progress.wrap_context(work), names):
             out.extend(rows)
-    except progress.Cancelled:
+    except BaseException:                       # Cancelled (or an error): drop the queued models, then re-raise
         ex.shutdown(wait=False, cancel_futures=True)
         raise
     ex.shutdown(wait=True)

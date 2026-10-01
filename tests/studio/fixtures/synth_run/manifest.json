@@ -1,7 +1,7 @@
 {
   "name": "synthetic_demo",
-  "created_utc": "2026-10-01T20:05:35+00:00",
-  "git_commit": "358200a",
+  "created_utc": "2026-10-01T21:21:49+00:00",
+  "git_commit": "5a04f44",
   "versions": {
     "python": "3.11.15",
     "numpy": "1.26.4",
@@ -453,13 +453,13 @@
   "n_points": 1120,
   "timings_s": {
     "S0": 0.02,
-    "S1": 1.98,
-    "S2_S3": 14.82,
-    "baselines": 1.71,
-    "S4": 5.1,
-    "S5": 1.43,
-    "S6": 5.08,
-    "S7": 0.18
+    "S1": 1.94,
+    "S2_S3": 15.43,
+    "baselines": 1.61,
+    "S4": 5.47,
+    "S5": 1.5,
+    "S6": 5.14,
+    "S7": 0.19
   },
   "provenance": {
     "input_sha256": "4bfb0ca0ba3bb0dae1afea03e2d761d9657b5e7915cc046d5d56506819e79cbc",
@@ -467,9 +467,9 @@
     "data_path": "data/city.csv",
     "config_dir": "/tmp/sparc-fixture/project",
     "config_sha256": "58f0d8cabbf39f4b04f04e8228033ad8690490d470cd21beeb42c4dbaf2f6c3a",
-    "code_sha256": "f12ff6797b8c64b0a297045de48bfac65efe9ef8d2674973f291b5186bb5c11a",
+    "code_sha256": "9ef8fac0551ae9655ab83bffaa4650667cf5d07745c6ab264d8ad64d72b61245",
     "git": {
-      "commit": "358200a0233a3a73df681f281c083f7bd2262244",
+      "commit": "5a04f4472c57375b762fef21344d0a99a686dfd2",
       "core_dirty": true
     },
     "platform": {
@@ -2974,57 +2974,57 @@
   ],
   "timings_detail": {
     "stages": {
-      "S0": 0.031,
-      "S1": 1.984,
-      "S2_S3": 14.818,
-      "baselines": 1.705,
-      "S4": 5.084,
-      "S5": 1.363,
-      "climate": 0.05,
-      "S6": 5.061,
-      "S7": 0.177
+      "S0": 0.034,
+      "S1": 1.941,
+      "S2_S3": 15.425,
+      "baselines": 1.605,
+      "S4": 5.455,
+      "S5": 1.436,
+      "climate": 0.051,
+      "S6": 5.117,
+      "S7": 0.188
     },
     "ensemble": {
-      "base_models_s": 10.312650918960571,
-      "stackers_s": 3.58750581741333,
+      "base_models_s": 10.747725248336792,
+      "stackers_s": 3.7440555095672607,
       "stacker_candidates_s": {
         "mean": 0.002,
         "nnls": 0.002,
-        "residual:0": 1.62,
-        "residual:0.1": 1.962
+        "residual:0": 1.701,
+        "residual:0.1": 2.038
       }
     },
     "fold_model_s": {
       "ols": [
-        0.016,
-        0.018,
-        0.017
+        0.019,
+        0.017,
+        0.016
       ],
       "mgwr": [
-        0.574,
-        0.535,
-        0.523
+        0.58,
+        0.543,
+        0.537
       ],
       "gwrf": [
-        0.406,
-        0.36,
-        0.31
+        0.423,
+        0.394,
+        0.306
       ],
       "gam": [
-        0.08,
-        0.079,
+        0.087,
+        0.086,
         0.08
       ],
       "physics": [
-        3.974,
-        1.69,
-        1.645
+        4.131,
+        1.717,
+        1.806
       ]
     },
     "physics_fit_s": [
-      0.22021125800165464,
-      0.27063514300243696,
-      0.1880478259990923
+      0.2212424120000378,
+      0.2818267770001057,
+      0.1914257789999283
     ]
   },
   "run_meta": {

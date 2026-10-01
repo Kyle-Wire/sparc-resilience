@@ -1,6 +1,6 @@
 # SPARC core run — synthetic_demo
 
-*2026-10-01T20:05:35+00:00* · commit `358200a` · 1120 points · **fast mode**
+*2026-10-01T21:21:49+00:00* · commit `5a04f44` · 1120 points · **fast mode**
 
 ## S0 — Data
 
@@ -147,4 +147,4 @@ canopy: budget 2000 → 232 cells treated (mean dose 8.62); planned total coolin
 
 ## Timings (s)
 
-S0: 0.02, S1: 1.98, S2_S3: 14.82, baselines: 1.71, S4: 5.1, S5: 1.43, S6: 5.08, S7: 0.18
+S0: 0.02, S1: 1.94, S2_S3: 15.43, baselines: 1.61, S4: 5.47, S5: 1.5, S6: 5.14, S7: 0.19

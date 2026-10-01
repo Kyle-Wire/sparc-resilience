@@ -223,3 +223,27 @@ def test_resume_loads_the_checkpoint_and_marks_cached_stages(demo, tmp_path, eve
     assert states["S1"] == states["S2_S3"] == states["baselines"] == "cached"
     assert plans[-1]["total_units"] == {"s0_load": 1}
     assert again.ensemble.oof_pred.tolist() == first.ensemble.oof_pred.tolist()
+
+
+def test_a_failed_save_is_not_claimed_as_done(demo, tmp_path, events, monkeypatch):
+    """When a checkpoint save fails (a full disk, a second signal), ``run_state.json`` and ``run.end`` keep the
+    done set of the last checkpoint that was written: they never claim a stage the checkpoint does not hold."""
+    from sparc.core import pipeline
+
+    real = pipeline._save_checkpoint
+
+    def failing(run_dir, state, sections=None):
+        if "baselines" in state["done"]:
+            raise OSError(28, "No space left on device")
+        return real(run_dir, state, sections)
+
+    monkeypatch.setattr(pipeline, "_save_checkpoint", failing)
+    run_dir = tmp_path / "run"
+    with pytest.raises(OSError):
+        pipeline.run_core(_cfg(demo), stages=S0_S3, fast=True, run_dir=run_dir)
+    rs = json.loads((run_dir / pipeline.RUN_STATE).read_text())
+    side = json.loads((run_dir / pipeline.CHECKPOINT_JSON).read_text())
+    assert rs["status"] == "failed" and rs["error"]["type"] == "OSError"
+    assert rs["done"] == side["done"] == ["S3"]
+    end = next(e for e in events if e["type"] == "run.end")
+    assert end["status"] == "failed" and end["done"] == ["S3"]

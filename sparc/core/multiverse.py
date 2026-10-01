@@ -131,7 +131,6 @@ def run_multiverse(cfg, out_dir, variants=None, coarse: float | None = 60.0, wor
         futs = {ex.submit(run_variant, cfg.raw, str(cfg.base_dir), n, coarse, str(out_dir), threads,
                           extra.get(n), run_meta): n for n in todo}
         for f in as_completed(futs):
-            progress.check_cancel()
             try:
                 r = f.result()
                 log.info("multiverse %s: R² %.3f (%ss)", r["variant"], r["r2"], r["seconds"])
@@ -139,7 +138,8 @@ def run_multiverse(cfg, out_dir, variants=None, coarse: float | None = 60.0, wor
                 log.exception("multiverse variant %s failed", futs[f])
             n_done += 1
             progress.tick(n_done, total, unit="variants", label=futs[f])
-    except progress.Cancelled:
+            progress.check_cancel()
+    except BaseException:                       # Cancelled (or an error): drop the queued variants, re-raise
         ex.shutdown(wait=False, cancel_futures=True)
         raise
     ex.shutdown(wait=True)

@@ -196,3 +196,32 @@ def test_full_gating_matrix(demo):
                                                                (None, True), toggles):
         cfg = _toggle(_light(demo), **tg)
         _assert_plan_matches_run(cfg, stages, fast=fast, coarse=coarse, cv_curve=cv_curve)
+
+
+def test_plan_event_sends_whole_nodes_and_shrinks_only_when_too_long():
+    """``run.plan`` carries api.md ``PlanNode``s (estimates as null) when they fit in one progress line; a plan
+    that does not fit drops the unset estimates first, then the labels — never the units."""
+    import json
+
+    from sparc.core.config import core_config_from_dict
+    from sparc.core.pipeline import plan_event, plan_stages, plan_totals
+    from sparc.core.synthetic import synthetic_city_config
+
+    cfg = core_config_from_dict(synthetic_city_config())
+    nodes = plan_stages(cfg, ALL, n_points=100, extent=3000.0, dx=30.0, block_m=900.0)
+
+    def size(ev):
+        return len(json.dumps(ev, separators=(",", ":")).encode())
+
+    full = plan_event(nodes, 100)
+    assert full["nodes"] == nodes and full["total_units"] == plan_totals(nodes) and full["n_points"] == 100
+    assert all({"est_s", "est_lo", "est_hi", "label"} <= set(n) and n["est_s"] is None for n in full["nodes"])
+    no_est = plan_event(nodes, 100, max_bytes=size(full) - 1)
+    assert all("est_s" not in n and "label" in n for n in no_est["nodes"])
+    bare = plan_event(nodes, 100, max_bytes=size(no_est) - 1)
+    assert all("est_s" not in n and "label" not in n for n in bare["nodes"])
+    for ev in (no_est, bare):
+        assert [(n["id"], n["state"], n["reason"], n["units"], n["checkpoint_key"]) for n in ev["nodes"]] == \
+               [(n["id"], n["state"], n["reason"], n["units"], n["checkpoint_key"]) for n in nodes]
+    known = [dict(n, est_s=12.0) if n["id"] == "S0" else n for n in nodes]      # set estimates are always kept
+    assert plan_event(known, 100, max_bytes=size(full) - 1)["nodes"][0]["est_s"] == 12.0
