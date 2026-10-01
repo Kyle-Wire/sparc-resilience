@@ -31,8 +31,16 @@ def sha256_frame(frame: pd.DataFrame) -> str:
     return hashlib.sha256(pd.util.hash_pandas_object(frame, index=True).to_numpy().tobytes()).hexdigest()
 
 
+def _str_keys(o):
+    if isinstance(o, dict):
+        return {str(k): _str_keys(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_str_keys(v) for v in o]
+    return o
+
+
 def config_hash(raw: dict) -> str:
-    return hashlib.sha256(json.dumps(raw, sort_keys=True, default=str).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(_str_keys(raw), sort_keys=True, default=str).encode()).hexdigest()
 
 
 def code_fingerprint() -> str:

@@ -1,6 +1,6 @@
 # SPARC Studio — Product and Technical Specification
 
-Status: **approved design, ready for implementation** · Branch: `pi-jepa-dev` · Date: 2026-10-01
+Status: **approved design, ready for implementation** (revised after the completeness review, see §18) · Branch: `pi-jepa-dev` · Date: 2026-10-01
 Companion: [`api.md`](api.md) is the exact HTTP/SSE contract. If this file and `api.md` disagree, `api.md` wins for wire formats and this file wins for behaviour.
 
 SPARC Studio is a new local web app for the modern `sparc/core` pipeline (S0–S7 plus post-run studies). One user goes from a CSV of street-level temperatures to defensible, exportable cooling decisions, and always knows:
@@ -110,12 +110,12 @@ Each journey is an acceptance scenario. The e2e suite (§14.5) automates J1, J2 
 2. The lid closes and the server is killed.
 3. Next morning, run `sparc studio`. The job's worker pid is gone and there is no `run.end`, so the status is **interrupted**. The last RSS is shown; if it was above 80% of RAM, the label reads "possibly out of memory".
 4. The run page shows the checkpoint card: done S3 + baselines, saved 02:14, 525 MB, "matches launch snapshot". It also shows outputs already written (`predictions.parquet`, `baselines.json`), which are already viewable.
-5. **Resume** plan: S0/S1/S2_S3/baselines come from the checkpoint; cv_curve, S4–S7 will run; "saves ≈26 min".
+5. **Resume** plan: S0 reloads the data (0.3 s, always runs); S1/S2_S3/baselines come from the checkpoint; cv_curve, S4–S7 will run; "saves ≈26 min".
 6. Resume. The new job's rail marks reused stages as **cached**. Lineage links both jobs to the run.
 
 **J4 — Cancel, adjust, relaunch.**
 1. During S2_S3 the stacker leaderboard shows the equal-weight mean winning, and a `physics.antiphysical_a` warning appears.
-2. **Cancel**. The worker acknowledges at the next safe point (≤10 s at an MGWR tuning tick). Status becomes cancelled; the checkpoint card says "none (S3 not reached)".
+2. **Cancel**. The worker acknowledges at the next safe point (≤10 s: MGWR checks for cancel after every tuning score, §5.5). Status becomes cancelled; the checkpoint card says "none (S3 not reached)".
 3. Edit `stacker.tune_lambda` in the config editor. The impact preview says "2 existing runs would need a refit to reflect this change (section changed: models)". Save.
 4. Relaunch.
 
@@ -180,7 +180,21 @@ When attached studies finish, an `uncertainty` job runs automatically. Envelopes
 
 - **Left sidebar:**
   - project switcher;
-  - project nav: Overview · Setup · Inputs · Runs · **Scenario Lab** (emphasised) · Studies · Exports · Findings;
+  - project nav: Overview · Setup · Inputs · Launch · Runs · **Scenario Lab** (emphasised) · Studies · Exports · Findings. Each entry is declared by the route module that owns its target (§12.3 `projectNav`):
+
+    | Entry | Target | Owner |
+    |---|---|---|
+    | Overview | `/p/:pid` | tracking |
+    | Setup | `/p/:pid/setup/data` | projects |
+    | Inputs | `/p/:pid/setup/inputs` | projects |
+    | Launch | `/p/:pid/launch` | projects |
+    | Runs | `/p/:pid/runs` | tracking |
+    | Scenario Lab | `/r/<active run>/lab` (disabled with a reason until a run with a checkpoint exists) | lab |
+    | Studies | `/p/:pid/studies` | studies |
+    | Exports | `/p/:pid/exports` | studies |
+    | Findings | `/p/:pid/findings` | studies |
+
+    The config editor (`/p/:pid/config`) is reached from Setup, not from the nav.
   - at the bottom: Activity, Settings.
 - **Top bar:**
   - breadcrumb (Project › Run › Tab);
@@ -207,7 +221,7 @@ The owner column names the frontend work item that implements the route module (
 | `/p/:pid/launch` | Launch | Mode cards (Fast / Coarse M / Full) with time, RAM and disk estimates; stage checklist with dependency rules; CV-curve toggle; threads; "then run" chain; plan graph; preflight checks; Start | projects |
 | `/p/:pid/runs` · `/runs` | Run history | Status, label, mode, started, duration, R², RMSE, coverage, scenarios, checkpoint size, studies, commit (dirty flag), origin; saved filters; select two → Compare; stage-duration history chart | tracking |
 | `/p/:pid/compare?a=&b=` | Run comparison | Config diff tree, provenance chips, metrics table, scenario effects, timings, environment diff, difference map (same grid), priority τ / Jaccard | run-hub |
-| `/r/:rid` | Run overview | Header, KPIs, stage timings, data health, outputs grid, studies status, caveats, run findings. If running, a compact tracker on top | run-hub |
+| `/r/:rid` | Run overview | Header, KPIs, stage timings, data health, outputs grid, studies status, caveats, run findings. If running, a compact tracker on top (the foundation `JobStrip` component fed by the global `job.progress` events; feature folders never import each other) | run-hub |
 | `/r/:rid/track` | Tracker for the run's jobs | Mission Control of the latest job, with a job switcher (launch, resume, …) | tracking |
 | `/r/:rid/map` | Map explorer | Full-width MapView with all themes and the analysis-tools drawer | run-hub |
 | `/r/:rid/data` | Data & QA | §6.4 | run-hub |
@@ -247,7 +261,9 @@ The owner column names the frontend work item that implements the route module (
 - **Trust**: Validation, Uncertainty, Provenance
 - **Run**: Track, Map, Docs, Files
 
-Each tab shows a status dot computed from output availability: ready, partial, running, missing (+ action), stale.
+**Run tab ids** are a fixed vocabulary shared by the frontend route modules and the server: `overview, data, accuracy, distance, influence, response, causal, scenarios, climate, budget, planner, lab, validation, uncertainty, provenance, track, map, docs, files`.
+
+Each tab shows a status dot (ready, partial, running, missing (+ action), stale). The dot comes from `GET /api/runs/{rid}/outputs` → `tabs[]`, keyed by tab id. The server computes it by grouping catalog outputs by `OutputSpec.view` (§6.1), whose values are these tab ids or a viewer kind. Tabs with no catalog outputs of their own (`track`, `map`, `files`, `provenance`, `lab`, `validation`) use fixed rules: `track` = running if a job is active; `lab` = missing (+ "needs a checkpoint") without `checkpoint.pkl`; the others are always ready. Route modules do not declare outputs.
 
 ### 3.3 Navigation rules
 
@@ -296,7 +312,9 @@ projects/<slug>/
   inputs/{forcing,climate,layers,features}/
   runs/<run_id>/              # the core run_dir (run_core(run_dir=...)); studio/ inside
   studies/<study_id>/         # study outputs; child runs under children/
-  exports/<export_id>/
+  exports/<export_id>/        # every export of the project (bundles, GIS, pages, packs, reports, findings) — never inside a run dir
+  scenarios/<sid>.json        # durable mirror of each scenario (all revisions), rewritten on every save (§10.6)
+  findings/<fid>.json  findings/<fid>.<png|svg>   # durable mirror of findings and their images
 imports/<run_id>/studio/      # studio/ side folder for runs imported in place from elsewhere
 ```
 
@@ -314,9 +332,19 @@ imports/<run_id>/studio/      # studio/ side folder for runs imported in place f
    "created_utc": "...", "job_id": "j_..."}
   ```
 
-  The worker always builds the config from this file, via `core_config_from_dict(config_raw, base_dir=config_dir)`, and calls `run_core` with these exact args. **Resume reuses it byte-for-byte.** As a result:
+  The worker always builds the config from this file, via `core_config_from_dict(config_raw, base_dir=config_dir)`, and calls `run_core(cfg, run_dir=…, run_meta=…, **args)`. **Resume reuses it byte-for-byte.** As a result:
   - the core fingerprint (which hashes `cfg.raw`, the args and the data stat) is identical at launch and at resume;
   - later project-config edits never invalidate an interrupted run.
+
+  Rules for building `config_raw` at launch:
+  - every path key (`data.path`, `data.join[].path`, `physics.forcing`, `climate.table`, `planner.layers`) is made absolute;
+  - `climate.cache` is set to the absolute workspace cache `<ws>/cache`, because `climate_stage` writes its CMIP6 cache under `output.dir / climate.cache` and an absolute value wins the path join;
+  - `output.dir` is set to the absolute `projects/<slug>/runs` (only the climate cache and study children read it; `run_dir` is always explicit).
+
+  Two documented exceptions to "byte-for-byte":
+  - `args.threads` may differ on resume (`POST /api/runs/{rid}/resume {threads}`), because threads are not part of the fingerprint;
+  - **Resume with current project config** (`use_current_config: true`) renames the old file to `launch.<n>.json` and writes a new `launch.json` from the current project config. This is a deliberate refit and the dialog shows its impact first.
+- **`run_meta`** (passed to every `run_core` Studio starts, stored in `manifest.run_meta` and in the `run.start` event): `{studio_run_id, project_id, origin, study_id?, parent_run_id?, role?}`. `role` is `"placebo:<kind>"`, `"variant:<name>"` or `"reproduction"` for study children. The registry links child runs from this field, never from directory names.
 - Readers (`RunReader`, `open_run`, `load_run`) resolve the config in this order:
   1. `launch.json`
   2. `manifest.config` + `provenance.config_dir`
@@ -333,7 +361,8 @@ Every job of every kind is tracked:
 - runs and resumes;
 - post-run actions: baselines, planner, emulator, uncertainty, writeup;
 - studies: placebo, simcheck, multiverse, reproduce, benchmark;
-- input fetches: forcing, layers, features, CMIP6, GHCN;
+- input fetches: forcing, layers, features, CMIP6, GHCN, the ISD station index;
+- external CLI runs in watch roots (read-only pseudo-jobs, §5.14);
 - engine requests: open, scenario, batch, sweep, plan verify, rerun configured;
 - heavy scenario jobs (across runs);
 - exports: bundle, GIS, page, packs, report, findings.
@@ -375,7 +404,9 @@ def span(kind: Literal["stage", "task"], name: str, *, k: int | None = None, n: 
     # emits "<kind>.start" then "<kind>.end" {status: ok|error|cancelled, elapsed_s, error?, metrics?}
 def stage(name: str, **f); def task(name: str, **f)           # thin wrappers over span
 def skip(stage: str, reason: str, **fields) -> None            # "stage.skip"
-def tick(k: int, n: int, *, unit: str, label: str = "", **metrics) -> None   # ≤1/s per span; first & last always
+def tick(k: int, n: int, *, unit: str, label: str = "", **metrics) -> None
+    # throttled to ≤1/s per span, EXCEPT ticks with k == 1 or k == n, which are always written
+    # (they mark the start and completion of each counted sequence; §5.4 unit accounting relies on k == n)
 def metric(name: str, value: float | int | str | bool | None, *, unit: str | None = None, **tags) -> None
 def artifact(path, *, role: str, stage: str | None = None) -> None   # adds bytes; path made relative to run_dir context
 def checkpoint(action: str, *, done, bytes: int | None = None, elapsed_s: float | None = None,
@@ -396,11 +427,19 @@ def init_worker(env: dict) -> None        # ProcessPoolExecutor(initializer=prog
 def wrap_context(fn: Callable) -> Callable   # contextvars.copy_context().run wrapper for ThreadPoolExecutor.submit
 @contextmanager
 def limit_threads(n: int)                 # threadpoolctl + torch.set_num_threads + OMP/MKL/OPENBLAS env (restored on exit)
+def set_threads(n: int) -> None           # permanent form of limit_threads for a worker process (env + threadpoolctl + torch)
 class LogBridge(logging.Handler)          # attached to the "sparc" logger when a sink exists; record → "log" event;
                                           # WARNING+ also → "warning" {code: "log.<logger>"}; logging.captureWarnings(True)
 ```
 
-**Write discipline.** Each event is one `json.dumps(..., separators=(",",":"), allow_nan=False)` line, no longer than 4,096 bytes. Oversized string fields are truncated with `"…"`, scalars only, written by a **single `os.write`** on the O_APPEND file descriptor. Lines from pool workers therefore never interleave. A daemon thread emits `heartbeat` every `heartbeat_s` seconds while the sink is configured.
+`limit_threads` and `set_threads` import `threadpoolctl` and `torch` lazily and skip either when absent. `torch` is never imported by any other progress function.
+
+**Write discipline.** Each event is one `json.dumps(..., separators=(",",":"), allow_nan=False)` line, no longer than 4,096 bytes, written by a **single `os.write`** on the O_APPEND file descriptor. Lines from pool workers therefore never interleave.
+- Field values are JSON scalars or small lists/dicts of scalars (a plan, a done set, a path). Never per-cell arrays.
+- NaN/Inf become `null`.
+- If a line would exceed 4 KB, string fields are truncated with `"…"` first; if it is still too long, the largest field is dropped and `"truncated": true` is added.
+
+A daemon thread emits `heartbeat` every `heartbeat_s` seconds while the sink is configured. It reads RSS with psutil when importable, else `/proc/self/statm`, else `resource.getrusage` (the module stays stdlib-only).
 
 ### 5.3 Event envelope and types (schema v1)
 
@@ -421,10 +460,10 @@ Envelope, present on every line:
 |---|---|---|
 | `run.start` | `name, stages[], fast, coarse, resume, cv_curve, config_sha256, code_sha256, run_meta{}` | core `run_core` |
 | `run.dir` | `run_dir, fingerprint` | core |
-| `run.plan` | `nodes[PlanNode], total_units{}`. Re-emitted when nodes become cached or skipped | core |
+| `run.plan` | `nodes[PlanNode], total_units{}, n_points`. Re-emitted when nodes become cached or skipped, or when a count becomes known (e.g. CMIP6 models) | core |
 | `stage.start` / `stage.end` | `stage, label, est_s?` / `stage, status, elapsed_s, summary{}` | core |
 | `stage.skip` | `stage, reason` ∈ `not_requested`, `disabled_by_config:<key>`, `checkpoint`, `no_budget`, `no_treatments`, `no_responses`, `requires_S5`, `no_partitions` | core |
-| `task.start` / `task.end` | `name, key?, k?, n?, unit?` / `+ status, elapsed_s, metrics{}` | core |
+| `task.start` / `task.end` | `name, key?, k?, n?, unit?` / `+ status, elapsed_s, metrics{}`. `unit` is set when the task completes one planned unit (§5.4) | core |
 | `tick` | `k, n, unit, frac, label, ...metrics` | core |
 | `metric` | `name, value, unit?, tags{}` | core |
 | `artifact` | `path` (run-relative), `role, bytes, stage?` | core |
@@ -432,7 +471,7 @@ Envelope, present on every line:
 | `warning` | `code, message, data{}` | core / LogBridge |
 | `log` | `logger, level, msg` | LogBridge |
 | `heartbeat` | `rss_mb, cpu_s, threads` | core daemon thread |
-| `cancel.requested` | `by` (`user` or `kill`) | **server** (appended) |
+| `cancel.requested` | `by` (`user`, `kill` or `shutdown`) | **server** (appended) |
 | `cancel.ack` | `at_path[]` | core |
 | `run.end` | `status` ∈ `succeeded`/`failed`/`cancelled`, `elapsed_s, timings_s{}, done[], error{type, message, traceback_tail}?` | core |
 | `job.status` | `status, exit_code?, error?` | **server** (appended) |
@@ -444,9 +483,9 @@ Envelope, present on every line:
 
 - Data and pipeline:
   - `qa.<flag>` (classed_target, albedo_scale, canopy_scale, impervious_scale, cover_overlap, dose_scale_<var>, coarse, window)
-  - `cv.block_raised`
+  - `cv.block_raised`, `cv.partition_skipped`
   - `checkpoint.mismatch`
-  - `influence.few_cells`, `influence.constant_predictor`
+  - `influence.few_cells`, `influence.constant_predictor` (emitted by `influence.py`, which is instrumented, §11 item 7)
   - `physics.missing_roles`, `physics.antiphysical_a`
 - Causal:
   - `causal.hole_scale`, `causal.blp_constant`, `causal.dag_unavailable`
@@ -469,6 +508,8 @@ Envelope, present on every line:
 
 `PlanNode = {id, label, state: "will_run"|"skipped"|"cached", reason?: str, units: {unit_kind: n}, checkpoint_key?: str}`
 
+`reason` is a `stage.skip` reason (§5.3) for skipped nodes, `checkpoint` for cached nodes, and `required_by:<stage>` for a will_run node forced by a later stage (S4 when only S6 or S7 is requested).
+
 Each node's planned units:
 
 | Node | Units |
@@ -477,11 +518,20 @@ Each node's planned units:
 | `S1` | `s1_influence:1` |
 | `S2_S3` | `base_fit:<model>` × K per enabled model; `adv_refit` × K when advection is fitted; `stacker_fit:<mean\|nnls\|residual>` × K for each candidate (C = 2 + len(tune_lambda)); `checkpoint_save:1` |
 | `baselines` | `baseline_fit:<model>` × K |
-| `cv_curve` | P × (S2_S3 units), where P is the number of block sizes left after the skip rules (< 3·dx, > extent/3, equal to the main block) |
-| `S4` | Σ over levers of (non-zero doses + marginal passes) `engine_pass` |
-| `S5` | `engine_pass` × N_specs; plus `climate_model` × M when `climate.source == cmip6` |
+| `cv_curve` | P × (S2_S3 units without `checkpoint_save`), where P is the number of block sizes left after the skip rules (< 3·dx, > extent/3, equal to the main block); plus `baseline_fit` units per partition when baselines are on |
+| `S4` | `engine_pass:1` for the ScenarioEngine baseline pass, plus Σ over levers of (non-zero doses + marginal passes) `engine_pass`. Marginal passes per lever (`ResponseEngine.marginals`) = 2 (base + own) + len(influence.scales) × (number of moved columns: the lever plus every mediator it feeds) + 1 when the physics model is present; with the default 3 scales and physics, canopy and impervious (which both move NDVI) take 9 and albedo 6 |
+| `S5` | `engine_pass` × N_specs; plus `climate_model` × M when `climate.source == cmip6` (M = 24 until the catalogue is read, then the real count via a re-emitted `run.plan`) |
 | `S6` | Σ over treatments of (8 `engine_pass` + `causal_step:{dml,spillover,cate,dr,sens,audit}`) |
 | `S7` | `engine_pass:1`, `pareto:1` |
+
+**Unit accounting** (one rule for the Python projection, the TS reducer and the calibration feed). A planned unit of kind U is completed by:
+1. a `task.end` with `status: ok` and `unit == U` (one unit each). Examples: `base_model` → `base_fit:<model>`, `adv_refit`, `stacker_fold` → `stacker_fit:<mean|nnls|residual>`, `baseline_model` → `baseline_fit:<model>`, the causal steps → `causal_step:<s>`, `remote_object` → `climate_model`, `pareto`, `replicate` → `replicate:<g>`, `variant` → `variant:<name>`;
+2. a `tick` with `unit == U` and `k == n` (one unit each). `engine_pass` is counted this way: `fold_predictions` ticks `k/K` with `unit="engine_pass"`, and the `k == K` tick also carries `pass_s` (seconds for the whole pass, used by the calibration feed);
+3. `stage.end{ok}` of S0 / S1 for `s0_load` / `s1_influence`, and `checkpoint{saved}` for `checkpoint_save`.
+
+Ticks with `k < n` add fractional progress (k/n of one unit) but never count as completions.
+
+**Progress weights.** Cost-weighted progress uses the **seed rates** of the table below as weights (no host calibration, no n-scaling). This keeps the Python projection and the TS reducer identical; `/api/meta.unit_costs` serves the table. ETA seconds use the full cost model below.
 
 **Cost model.** Implemented in `sparc/studio/jobs/eta.py`, owned by the backend foundation:
 
@@ -509,9 +559,36 @@ seconds(unit) = rate(host, unit) × (n_cells / 54_701)^α(unit) × (4 / threads)
 | `s0_load` | 0.3 |
 | `s1_influence` | 3.3 |
 | `checkpoint_save` | 2 per 500 MB |
+| `pareto` | 0.5 |
 | `climate_model` | 20 |
+| `remote_object` (other network objects) | 5 |
 | `replicate:<generator>` | 254 at 90 m |
 | `variant:<name>` | 1,200 at 60 m |
+| `unpickle` | 1 per 20 MB |
+| `mediator_fit` | 1 |
+
+**Reference unit counts** for the recorded full Providence run (`configs/core_providence.yml` as of the recorded run: 5 folds, the five base models, no wind so no advection refits, `tune_lambda [0, 0.1, 1]` so C = 5, no in-run baselines, CV curve with 3 partitions, 3 levers with 7/7/5 non-zero doses and 9/9/6 marginal passes, 12 scenarios, 3 treatments, table climate, S7 on). The ETA calibration test (§14.2, foundation) embeds these counts as constants, so it does not need `plan_stages`; `test_plan_stages` (core) asserts that `plan_stages` reproduces them for that config.
+
+| Node | Units | Seed seconds |
+|---|---|---|
+| S0, S1 | 1 + 1 | 3.6 |
+| S2_S3 | `base_fit` 5 × {mgwr, gwrf, gam, physics, ols}; `stacker_fit` mean 5, nnls 5, residual 15; `checkpoint_save` 1 | 1,229.6 |
+| cv_curve | 3 × (S2_S3 without checkpoint) | 3,682.5 |
+| S4 | `engine_pass` 44 (1 + 19 doses + 24 marginal) | 572 |
+| S5 | `engine_pass` 12 | 156 |
+| S6 | 3 × (8 `engine_pass` + 6 steps) | 459 |
+| S7 | `engine_pass` 1, `pareto` 1 | 13.5 |
+| **Total** | | **≈6,116 vs 6,097 recorded (+0.3%)** |
+
+**Other job kinds** estimate through the same table (the `estimate=` callable of each kind, §10.2):
+- `post.emulator`: per lever (2 + channels + 2·n_patches + 1) `engine_pass`, plus `unpickle` for the checkpoint;
+- `post.baselines`: `baseline_fit:<m>` × K per model;
+- `post.planner`, `post.uncertainty`, `post.writeup`: fixed 30 s / 2 s / 1 s;
+- `engine.open`: `unpickle` + `mediator_fit` + 1 `engine_pass`; `engine.scenario`: 1 `engine_pass`;
+- `study.placebo`: kinds × `plan_stages(S0–S6)` at the study's coarse size;
+- `study.multiverse`: `variant` × variants not yet done; `study.simcheck`: `replicate` × pending pairs ÷ workers;
+- `study.reproduce`: `plan_stages(stages)` of the parent's snapshot;
+- `input.*`: `remote_object` × expected objects (CMIP6: `climate_model` × M).
 
 **Online refinement:**
 - After the first completed unit of a kind, the in-job mean of that kind replaces the prior rate.
@@ -526,7 +603,7 @@ seconds(unit) = rate(host, unit) × (n_cells / 54_701)^α(unit) × (4 / threads)
 
 **Calibration test.** The seed table predicts the full Providence run's recorded `timings_s` total within 20%.
 
-**Calibration feed.** Every `task.end` whose name maps to a unit kind writes a row to `unit_timings(host_id, unit, seconds, n_cells, threads, mode, ts)`. `host_id` = sha1(cpu model + cpu count + total RAM)[:12].
+**Calibration feed.** Every completed unit (unit accounting above) writes a row to `unit_timings(host_id, unit, seconds, n_cells, threads, mode, ts)`: `elapsed_s` of the `task.end`, or `pass_s` of the completing `engine_pass` tick. `host_id` = sha1(cpu model + cpu count + total RAM)[:12].
 
 ### 5.5 Emission map in core
 
@@ -534,13 +611,13 @@ The target is no info-level gap longer than 15 s at full resolution. This is enf
 
 **`pipeline.run_core`**
 - `run.start` → `run.plan` → `run.dir` → stage spans around each block:
-  - S0 181–195
-  - S1 202–213
+  - S0 181–195. `stage.end.summary` = `{n_points, n_input, n_dropped, clipped{col: n}, grid_shape, cell_m, fill_fraction, background, noise_floor}` (feeds the S0 KPI tiles)
+  - S1 202–213. After `compute_influence`, one `metric influence.range_m {predictor}` and one `metric influence.anisotropy_ratio {predictor}` per predictor; `stage.end.summary` = `{block_size_m, L_prior_m, target_resid_range_m}`
   - S2_S3 219–256
   - baselines 259–276
   - cv_curve 279–297
-  - S4 306–326, with `task variable[v/V]` at 314
-  - S5 328–343, with `task scenario[s/S]` per spec and a `metric scenario.summary` (mean_delta, se, frac_extrapolated) at 334
+  - S4 306–326: `task engine_init` (mediator fit + ScenarioEngine baseline pass) before the loop, then `task variable[v/V]` at 314
+  - S5 328–343, with `task scenario[s/S]` per spec, then scalar metrics `scenario.mean_delta`, `scenario.se` and `scenario.frac_extrapolated`, each tagged `{scenario: <name>}`, at 334
   - climate 344–353
   - S6 357–382, with `task model_effects[t/T]` at 365–370
   - S7 385–408
@@ -552,23 +629,26 @@ The target is no info-level gap longer than 15 s at full resolution. This is enf
 - `run.end` from `try/except/finally`, which also writes `run_state.json`.
 
 **`ensemble.fit_ensemble`**
-- `task fold[k/K]` at 208 › `task base_model[name]` at 213, with metrics `fit_s` and `heldout_rmse` / `heldout_r2` (computed at 222 from `p[te]` vs `y[te]`).
-- `task advection_check` at 178.
-- `task stacker_candidate[c/C]` at 269 › `task stacker_fold[k/K]` at 271.
-- `metric candidate_rmse {candidate}` at 284; final `metric` block (rmse, r2, coverage, halfwidth) before 306.
+- `task fold[k/K]` at 208 › `task base_model[name]` (`unit="base_fit:<name>"`) at 213, with metrics `fit_s` and `heldout_rmse` / `heldout_r2` (computed at 222 from `p[te]` vs `y[te]`).
+- `task advection_check` at 178 › `task adv_refit[k/K]` (`unit="adv_refit"`) per fold.
+- `task stacker_candidate[c/C]` (`key` = `mean`, `nnls` or `residual:<λ>`) at 269 › `task stacker_fold[k/K]` (`unit="stacker_fit:<mean|nnls|residual>"`) at 271.
+- `metric candidate_rmse {candidate}` at 284; final metrics `stacker_rmse`, `stacker_r2`, `interval_coverage`, `interval_halfwidth` before 306.
 
-**`FittedEnsemble.fold_predictions`** (91–99): `check_cancel()` + `tick(k+1, K, unit="engine_pass")`. This **one hook** gives fold-level progress and a cancel point to every S4/S5/S6/S7, scenario, sweep and emulator computation.
+**`FittedEnsemble.fold_predictions`** (91–99): `check_cancel()` + `tick(k+1, K, unit="engine_pass")`; the `k == K` tick carries `pass_s`. This **one hook** gives fold-level progress and a cancel point to every S4/S5/S6/S7, scenario, sweep and emulator computation.
 
 **Debug level only:**
 - `stacker.fit` eval epochs (229): `val_mse, best, bad`.
-- `base_models` MGWR tuning names (318) and GWRF anchors (393).
+- `base_models` MGWR tuning (318–328): one tick per (name, candidate) `score()` call; GWRF anchors (393).
 - `physics` multistart (226).
 
-All of these also call `check_cancel()`. This bounds cancel latency to seconds even inside one MGWR fold, which takes 150–365 s.
+All of these also call `check_cancel()` **at every level** (the level only gates writing the tick). Calling it after every MGWR `score()` (a 5-iteration backfit, ≈2–6 s at full resolution) bounds cancel latency to about 10 s even inside one MGWR fold, which takes 150–365 s.
+
+**Import rule.** Instrumented modules keep `torch` imports function-local, as they are today. A core test asserts that importing `sparc.core.pipeline`, `catalog`, `cv`, `data`, `optimize`, `emulator`, `planner`, `climate` and `baselines` leaves `torch` out of `sys.modules`. The Studio server imports these modules and must never load torch (§4.1).
 
 **Other modules**
-- `diagnostics.cv_distance_curve`: `task cv_partition[p/P]` inside `context(partition=label)` (91); skip → `warn("cv.partition_skipped")` (97); `metric cv_row` (114).
-- `baselines.baseline_oof`: `tick` per fold, `task` per model.
+- `influence.compute_influence`: `warn("influence.few_cells")` (528) and `warn("influence.constant_predictor")` (862), keeping the existing log lines.
+- `diagnostics.cv_distance_curve`: `task cv_partition[p/P]` inside `context(partition=label)` (91); skip → `warn("cv.partition_skipped")` (97); metrics `cv_row.r2` and `cv_row.rmse` tagged `{partition}` (114).
+- `baselines.baseline_oof`: `tick` per fold; `task baseline_model[name]` (`unit="baseline_fit:<name>"`) per model and fold.
 - `response.sweep`: `task dose[d/D]` + metrics `mean_benefit, mean_se, frac_extrapolated` (362). Also `task marginals` (261) and `own_only_pd` ticks (327).
 - `causal.run_causal_validation`:
   - `task treatment[t/T]` (1603);
@@ -576,23 +656,24 @@ All of these also call `check_cancel()`. This bounds cancel latency to seconds e
   - DR bootstrap tick every 10 (1249); dag_audit ticks (1491);
   - each `out["flags"]` entry → `warn("causal.audit_flag")`.
 - `optimize`: tasks `segments, allocate, closed_loop, pareto`.
-- Network fetchers tick per remote object:
+- Network fetchers emit one `task remote_object[name]` per remote object (`unit="climate_model"` for CMIP6 models, else `unit="remote_object"`):
   - `climate.cmip6_change_factors`: per model (ThreadPool submissions wrapped with `progress.wrap_context`)
   - `forcing.campaign_forcing`: ERA5 block, ISD file
   - `opendata.fetch_layers`: per HRSL/WorldCover window
   - `features_open`: per S2 scene and DEM tile
 - `planner.planner_pack`: steps. `emulator.emulator_for_run`: `task lever[v/V]` with patch ticks.
 - Studies:
-  - `placebo` kinds loop (193) in `context(placebo=kind)`;
-  - `simcheck._worker` (430) in `context(generator, seed)`, with parent ticks at 465/473 carrying replicate metrics;
-  - `multiverse.run_variant` (69) in `context(variant)`, with a parent tick at 107;
+  - `placebo` kinds loop (193): `task placebo_kind[kind]` in `context(placebo=kind)`;
+  - `simcheck._worker` (430): `task replicate[<generator>/<seed>]` (`unit="replicate:<generator>"`) in `context(generator, seed)`; the parent emits `metric share`, `metric oof_r2` (tagged generator, seed) and a `tick(done, total, unit="replicates")` at 465/473;
+  - `multiverse.run_variant` (69): `task variant[name]` (`unit="variant:<name>"`) in `context(variant)`, with a parent tick at 107;
+  - **nested runs.** `run_core` called inside a study emits its own `run.start`/`run.plan`/stage spans under the study's task span. The reducers attribute a nested `run.*` subtree to the matching `children[]` entry (by `ctx.placebo`/`ctx.variant` and `run_meta`), never to the job's own stage rail. Study-job progress = mean child progress (placebo, multiverse, reproduce) or completed ÷ planned replicates (simcheck);
   - every `ProcessPoolExecutor` uses `initializer=progress.init_worker`;
   - on `Cancelled` the parent calls `executor.shutdown(wait=False, cancel_futures=True)` and re-raises. Pool workers share the process group and receive SIGTERM too.
 
 ### 5.6 Job runner and persistence
 
 **Job directory** `<ws>/jobs/<jid>/`:
-- `job.json` — `{id, kind, params, project_id, run_id, study_id, scenario_id, created_utc, threads}`
+- `job.json` — `{id, kind, lane, executor, params, project_id, run_id, study_id, scenario_id, created_utc, threads}`
 - `state.json` — `{pid, pgid, proc_create_time, cmdline_token, executor, status, started_utc}`
 - `events.jsonl` — canonical, append-only
 - `stdout.log`, `stderr.log`
@@ -616,6 +697,10 @@ The worker then:
 
 On Windows, `CREATE_NEW_PROCESS_GROUP` is used, and `CTRL_BREAK_EVENT` stands in for SIGTERM.
 
+**Workers never write SQLite.** The server process is the only writer. Kinds report through `events.jsonl` and `result.json`. Server-side hooks registered with the kind (§10.2) turn those into rows:
+- registering study child runs on their `run.dir` event;
+- inserting `results`, `plans`, `sweeps` and `exports` rows on success.
+
 **Single ordered log per job.** The server appends `job.status` and `cancel.requested` lines to the same `events.jsonl` with a single `os.write` on its own O_APPEND file descriptor. **Cursor = byte offset of a line's first byte.** It is monotonic and unique, needs no coordination, and serves as the SSE `id`. The tailer reads only complete lines (terminated by `\n`).
 
 **JobTailer** (one asyncio task per live job) polls the file size every 250 ms and parses new complete lines. It validates them against the pydantic union, keeping unknown fields and storing unknown types as `log`. It then:
@@ -631,14 +716,15 @@ On Windows, `CREATE_NEW_PROCESS_GROUP` is used, and `CTRL_BREAK_EVENT` stands in
 
 - **Global stream** `GET /api/stream?topics=jobs,runs,engine,studies,storage`:
   - The server keeps a ring buffer of 10,000 global events with a monotonic `gseq`. The SSE id is `g:<gseq>`.
-  - Events: `job.created`, `job.status`, `job.progress` (throttled to 1 Hz per job: `{job, frac, eta_s, eta_lo, eta_hi, stage, path_tail}`), `run.updated`, `run.indexed`, `output.written`, `engine.status`, `scenario.result`, `study.updated`, `storage.low`, `resync`, `server_shutdown`.
+  - Events: `job.created`, `job.status`, `job.progress` (throttled to 1 Hz per job: `{job_id, frac, eta_s, eta_lo, eta_hi, stage, path_tail}`), `run.updated`, `run.indexed`, `output.written`, `engine.status`, `scenario.result`, `study.updated`, `storage.low`, `resync`, `server_shutdown`.
   - On reconnect with `Last-Event-ID` older than the buffer, the server sends `resync`, and the client refetches `GET /api/jobs?status=active` and its open resources.
 - **Per-job stream** `GET /api/jobs/{jid}/stream[?after=<cursor>]` carries every line of `events.jsonl`:
   - `event:` is the event `type`, `id:` is the byte cursor.
   - It honours `Last-Event-ID`. Backfill comes from the file, then live tail.
-  - `tick` events are coalesced to 4 Hz per span **on the wire only**; disk keeps every line.
+  - `tick` events are coalesced to 4 Hz per span **on the wire only**; disk keeps every line. Coalescing never drops a tick with `k == 1` or `k == n`, so unit accounting (§5.4) gives the same result on the wire as on disk.
   - It also carries transient `resource` events every 2 s with **no id**, so they are never replayed.
-- Each subscriber has a bounded queue: 2,000 events for per-job streams, 1,000 for the global stream. On overflow, queued events are dropped and `resync {after}` is sent.
+  - After the job reaches a final status and the file is drained, the server sends `end {status}` and closes the stream.
+- Each subscriber has a bounded queue: 2,000 events for per-job streams, 1,000 for the global stream. On overflow, queued events are dropped, `resync {after}` is sent, and the per-job stream closes; the client reconnects with `after`.
 - `: ping` comment every 15 s. Responses use `Cache-Control: no-store` and `X-Accel-Buffering: no`.
 - **Client rules.** At most 2 EventSources per tab: the global stream plus at most one job stream. Reconnect backoff 1 → 30 s. If streaming fails three times in a row, fall back to polling `GET /api/jobs/{jid}/events?after=` every 5 s, and the connection pill says "polling".
 - **Snapshot plus live.** `GET /api/jobs/{jid}/tracker` returns the projection plus `cursor`. The client opens the stream with `after=cursor`, so a reload mid-run reattaches with no gap.
@@ -660,7 +746,7 @@ queued --(dependency/lock)--> blocked → queued
 - terminal states that skip running: `skipped(reason)`, `cached` (from checkpoint), `disabled` (by config), `not_requested`
 
 **Run (registry):**
-- `running` · `complete` · `partial` (cancelled/failed/interrupted with a non-empty checkpoint done set) · `failed` · `cancelled` · `interrupted` · `external_live` · `imported`
+- `queued` (launched, job not started yet) · `running` · `complete` · `partial` (cancelled/failed/interrupted with a non-empty checkpoint done set) · `failed` · `cancelled` · `interrupted` · `external_live` · `imported`
 - `partial` runs always show **Resume**.
 
 ### 5.9 Checkpoints, cancel, resume, reattach
@@ -703,7 +789,7 @@ checkpoint.json  {fingerprint, sections: {data, core, s4, s5, climate, s6, s7, c
 4. After a 90 s grace the UI enables **Force stop** (`POST …/kill`), which sends SIGKILL to the process group, pool children included. Checkpoint writes are atomic (`.tmp` + `os.replace`), and so are artifact writes (§11, item 8). A force-stopped run is therefore always consistent with its last checkpoint.
 
 **Resume** (`POST /api/runs/{rid}/resume`) creates a new `run.core` job:
-- same `run_dir`, `resume=True`, args from `launch.json`;
+- same `run_dir`, `resume=True`, args from `launch.json` (only `threads` may be overridden, §4.3);
 - linked to the run (`jobs.run_id`) and to the previous job (`parent_job_id`);
 - the rail marks loaded stages as `cached` (core emits `stage.skip{reason:"checkpoint"}`).
 
@@ -809,7 +895,8 @@ Child runs are written under `studies/<sid>/children/` and registered with `orig
 - CLI runs get `--progress PATH` and `--job-id`. Alternatively the user sets `SPARC_PROGRESS=<file> python -m sparc.core run …`. The path is recorded as `run_state.events_path`.
 - Settings → **watch roots**: the registry scans them every 10 s.
 - A run whose `run_state.status == running` with `updated_utc` under 2 min old shows as **external_live**. Studio tails its `events_path` when present (full Mission Control). Otherwise it shows stage-level state from `run_state.json`.
-- External runs cannot be cancelled from Studio. Studio shows the pid and a hint instead.
+- To reuse the tracker endpoints unchanged, the registry creates a read-only **pseudo-job** for each external live run: kind `run.external`, executor `external`, lane `none`, no job dir. Its tailer reads `run_state.events_path` (or synthesises stage events from `run_state.json` every 10 s). The pseudo-job ends when `run_state.status` leaves `running`, or becomes `interrupted` when `updated_utc` is more than 2 min old and the pid is gone.
+- External runs cannot be cancelled from Studio (`409 not_cancellable`). Studio shows the pid and a hint instead.
 
 ---
 
@@ -823,28 +910,37 @@ The catalog is a single Python table imported by Studio, the results-page builde
 @dataclass(frozen=True)
 class OutputSpec:
     id: str                 # stable id, e.g. "predictions", "response_maps:{var}", "planner_hex:250"
-    files: tuple[str, ...]  # globs relative to run_dir
+    files: tuple[str, ...]  # globs relative to the root below
     label: str
     group: str              # model | effects | decisions | trust | docs | state | planner | studio
     produced_by: str        # "stage:S2_S3" | "post:planner" | "study:placebo" | "studio:scenario"
-    view: str               # frontend view id (run tab or viewer kind: table|markdown|json|map|download)
+    view: str               # a run tab id (§3.2) or a viewer kind: table|markdown|json|map|download
     formats: tuple[str, ...]  # native + conversions: csv|geojson|geotiff|json|html|md|zip
     manifest_key: str | None  # manifest section mirroring it, if any
     dictionary: str | None    # DATA_DICTIONARY key
+    root: str = "run"         # "run" (relative to run_dir) | "study" (relative to the study dir)
 OUTPUTS: list[OutputSpec]
+IGNORED: tuple[str, ...]    # never catalogued or flagged: ".sparc.lock", "*.tmp", "studio/**", "__pycache__/**"
 DATA_DICTIONARY: dict[str, dict[str, tuple[str, str, str]]]   # file → column → (units template, sign meaning, description)
 def units_for(cfg) -> dict          # resolves templates ("{target}", "{lever:Pct_Canopy}") for a config
+def scenario_slug(name: str, taken: set[str] = frozenset()) -> str
+    # configured-scenario id: lower-case; "−"/"-" before a number → "minus-", "+" → "plus-"; every other run of
+    # non [a-z0-9] → "-"; strip "-"; append "-2", "-3"… on collision.
+    # "Impervious Decrease −10" → "impervious-decrease-minus-10"; "Albedo Increase +0.1" → "albedo-increase-plus-0-1"
 ```
 
-**Catalogued outputs.** The test in §14.1 asserts that every file written by `run_core`, the post-run functions and the studies on the synthetic run matches an entry.
+`scenario_slug` is the single definition of configured-scenario ids. It is used for layer keys (`sc:<slug>`), `configured:<slug>` references, API paths and the project's `headline_scenario`. It lives in `catalog.py` so the runs, engine and studies items share it.
+
+**Catalogued outputs.** The test in §14.1 asserts that every file written by `run_core`, the post-run functions and the studies on the synthetic run matches an entry or `IGNORED`.
 
 | Source | Outputs |
 |---|---|
-| Run core | manifest.json; influence.json; predictions.parquet; physics.json; baselines.json; cv_distance.json; response_<var>.parquet; response_curves.json; scenarios.json; scenario_deltas.parquet; **scenario_detail.npz** (new); climate.json; causal.json; optimize.json; allocation.parquet; report.md, methods.md, model_card.md, environment.txt |
+| Run core | manifest.json; influence.json; predictions.parquet; physics.json; baselines.json; cv_distance.json; response_<var>.parquet; response_curves.json; scenarios.json; scenario_deltas.parquet; **scenario_detail.npz** (new); climate.json; causal.json; **causal_cells.parquet** (new, §11 item 21); optimize.json; allocation.parquet; report.md, methods.md, model_card.md, environment.txt; **input_frame.parquet** (new, frame-input runs only, §11 item 22) |
 | Run state | checkpoint.pkl, **checkpoint.json**, **run_state.json** |
-| Post-run | emulator.npz/.json; uncertainty.json/.md; placebo.json (copied); planner/ (planner.json, planner_cells.parquet, hex_250m.csv, hex_500m.csv, hexagons.gpkg, geotiff/*.tif, logger_sites.csv, before_after_pairs.csv) |
-| Studies (study dir) | placebo.json/.md; simcheck.jsonl, simcheck_summary.json/.md; <variant>.json, <variant>_maps.npz, multiverse_summary.json/.md; reproduce.json; benchmark.json/.md |
-| Studio (`studio/`) | launch.json; results/; plans/; sweeps/; comparisons/; exports/; cache/ |
+| Post-run | emulator.npz/.json; uncertainty.json/.md; placebo.json (copied); planner/ (planner.json, planner_cells.parquet, hex_250m.csv, hex_500m.csv, hexagons.gpkg, geotiff/*.tif, logger_sites.csv, before_after_pairs.csv); results.html (legacy standalone page found in imported runs; Studio itself writes pages to exports) |
+| Reproduction runs (run dir of the child) | reproduce.json |
+| Studies (study dir, `root="study"`) | placebo.json/.md; simcheck.jsonl, simcheck_summary.json/.md; <variant>.json, <variant>_maps.npz, multiverse_summary.json/.md; benchmark.json/.md. The library functions return dicts; the Studio study kinds write the `.json`/`.md` files the CLI would have written (§8) |
+| Studio (`studio/`) | launch.json (+ `launch.<n>.json`); results/; plans/; sweeps/; comparisons/; blobs/; engine/; cache/ (§12.2 of api.md). Exports never live here |
 
 **Data dictionary.** Conventions are surfaced in every legend, tooltip and table header. A `README.txt` sidecar with the same conventions goes into every export.
 - `delta` / `ΔT`: target units; **negative = cooler**.
@@ -869,7 +965,7 @@ A lazily loaded `RunContext` per run, cached in a byte-capped LRU (default 768 M
 
 - **`cfg`**: from `launch.json` → `manifest.config` + `provenance.config_dir` → the import-time config path.
 - **`manifest`**: the manifest **merged with per-stage files**. If the manifest lacks `causal`, `optimize`, `cv_distance`, `baselines`, `climate` or `response`, they are read from `causal.json`, `optimize.json`, `cv_distance.json`, `baselines.json`, `climate.json` or `response_curves.json`. Each section is tagged `{present, source: "manifest"|"file", stale, older_code}`. Older-code detection uses feature presence: provenance, literature, interval_diagnostics, mean_delta_se, frac_sigmoid, inflection_dose, qa.flags.
-- **`data`**: `load_core_data(cfg)`, applying coarse/subsample from `launch.json.args`, `run_state.meta` or `manifest.qa`. Cost: about 0.3 s for full Providence.
+- **`data`**: `load_core_data(cfg)`, applying coarse/subsample from `launch.json.args`, `run_state.meta` or `manifest.qa`. Cost: about 0.3 s for full Providence. Runs made from an in-memory frame (`provenance.input_kind == "frame"`: placebo children) are rebuilt from their `input_frame.parquet` (§11 item 22) instead of `data.path`, because the frame differs from the file (shifted, rotated or added GRF layers). Older frame-input runs without it are marked "inputs not reproducible": their predictor layers are hidden, and their prediction layers still work.
 - **`grid`**: `Grid.from_points(x_m, y_m, cell=cell_m)`. `cell_m` comes from `run_state.meta.cell_m`, `manifest.qa.cell_m` or `influence.json.cell_m`. The result is persisted to `<studio_dir>/cache/grid.npz` (ix, iy, ids, lon, lat, zone), keyed by `manifest.created_utc` or the `run_state` start time. Lon/lat come from a pyproj transform `data.crs → EPSG:4326` on `x_m / coord_scale`. They are null when there is no CRS.
 - **`folds`**: from the manifest `cv` section, or `run_state.meta.cv` mid-run, via `cv.make_spatial_folds` (deterministic). The result is cross-checked against `predictions.fold`. The checkpoint is **never** unpickled for browsing.
 - **`metrics_live`**: when the manifest has no metrics yet, R², RMSE, MAE and bias are computed from `predictions.parquet` (`target` vs `pred`), along with coverage of `[pi_lo, pi_hi]` and per-model OOF metrics from `oof_<model>`. This is what makes **Accuracy usable about 20 minutes into a 1.7 h run**.
@@ -890,7 +986,8 @@ A lazily loaded `RunContext` per run, cached in a byte-capped LRU (default 768 M
 | Inputs | Every predictor (actionable levers and roles first, labels and units from config); `zone` (cat) |
 | CV design | `fold` (cat); fold-k class arrays served separately (0 train, 1 test, 2 buffer) |
 | Effects (per lever) | `fp_<v>` footprint (div, `mult` 0.01 for albedo-type units); `own_<v>`; `own_sd_<v>`; `fp_sd_<v>`; `marg_<v>`; `A_<v>`; `d90_<v>`; `ds_<v>`; `infl_<v>`; `fitr2_<v>`; `headroom_<v>`; `cls_<v>` (cat: 0 censored/insufficient grey, 1 saturating, 2 linear, 3 S-shaped) |
-| Scenarios (configured) | `sc:<slug>` Δ per scenario column; plus `sc_sd:<slug>` and `sc_ex:<slug>` when `scenario_detail.npz` exists |
+| Causal (per treatment, when `causal_cells.parquet` exists) | `cate_<t>` (R-learner CATE per cell, div about 0); `mslope_<t>` (the model's per-cell adoption slope); `mslope_own_<t>` (own-cell slope) |
+| Scenarios (configured) | `sc:<slug>` Δ per scenario column (`scenario_slug`, §6.1); plus `sc_sd:<slug>` and `sc_ex:<slug>` when `scenario_detail.npz` exists |
 | Budget | `alloc_dose` (zero_blank); `alloc_delta` |
 | Climate | Computed client-side: `obs + warming(stat) + adaptation Δ`; ≥T exceedance (cat) |
 | Planner & people | `people`, `people_60_plus`, `people_under_5`, `lc_*`, `plantable_pp`, every `hot_days_ge_*` column (incl. `hd_95_ssp245_mid`) |
@@ -903,7 +1000,27 @@ A lazily loaded `RunContext` per run, cached in a byte-capped LRU (default 768 M
 - Caching: finished runs send a strong ETag plus `Cache-Control: private, max-age=31536000, immutable`. Running runs send `no-store`.
 - There is no u8/u16 quantisation on the wire. That encoding (`_enc`) survives only inside the standalone results page.
 
-**Colour.** The OKLab LUT and the four ramps (seqLight, seqDark, divLight, divDark) are ported verbatim from `scripts/results_page/template.html`, with one shared definition in Python (`/api/meta.palettes`) and TS. Domain rules:
+**Colour.** The OKLab LUT and the four ramps are ported verbatim from the results-page template (`scripts/results_page/template.html`, which moves to `sparc/core/results_page/template.html`, §6.9). There is one definition in Python (`/api/meta.palettes`, backend foundation) and one in TS (`palette.ts`, frontend foundation). The normative values are below, so each foundation tests against **this spec** rather than against the other's code.
+
+| Ramp | Stops |
+|---|---|
+| seqLight | `#cde2fb #9ec5f4 #6da7ec #3987e5 #256abf #184f95 #0d366b` |
+| seqDark | `#1d2f45 #184f95 #256abf #3987e5 #6da7ec #9ec5f4 #cde2fb` |
+| divLight | `#0d366b #256abf #6da7ec #f0efec #f19a8f #d6403f #8a1f22` |
+| divDark | `#9ec5f4 #3987e5 #1f4f8a #383835 #8f3434 #e66767 #f6b3ab` |
+
+`lut(stops, n=256)`: equally spaced stops; linear interpolation in OKLab (Ottosson matrices as in the template); sRGB gamma; clamp; `Math.round` (half up). Golden LUT entries, verified against the template's JS:
+
+| Ramp | [0] | [64] | [128] | [191] | [255] |
+|---|---|---|---|---|---|
+| seqLight | `#cde2fb` | `#85b6f0` | `#3987e5` | `#1e5caa` | `#0d366b` |
+| seqDark | `#1d2f45` | `#1e5caa` | `#3a87e5` | `#85b6f0` | `#cde2fb` |
+| divLight | `#0d366b` | `#4a89d6` | `#f0eeeb` | `#e57168` | `#8a1f22` |
+| divDark | `#9ec5f4` | `#2c6ab6` | `#393835` | `#b94d4d` | `#f6b3ab` |
+
+`studio-web/src/test/fixtures/palette.json` (frontend foundation) and the backend `test_meta.py` both encode this table.
+
+Domain rules:
 - clip to the 2nd–98th percentiles;
 - diverging scales are symmetric about the centre (city median for temperatures, 0 for deltas);
 - `zero_blank` paints values ≤ 0 as `--nodata`;
@@ -937,7 +1054,7 @@ Every chart is built from the SVG kit (§12.6). Each one has a **Table view**, S
 - Per-model table: R², RMSE, MAE, bias, blend weight as an inline bar.
 - Obs-vs-pred hexbin (canvas) with 1:1 line; residual histogram (brushable into a selection); residuals by zone and by fold (box).
 - **Interval honesty** small multiples: coverage by fold, distance quartile and zone; global vs adaptive; 0.9 line.
-- **Stacker panel**: candidate RMSE bars (from `lambda_scores`); 100%-stacked NNLS weights per fold; "residual kept in k/K folds"; val_mse_base vs with-residual; best_epoch.
+- **Stacker panel**: candidate RMSE bars (from `lambda_scores`); 100%-stacked NNLS weights per fold; "residual kept in k/K folds"; val_mse_base vs with-residual; best_epoch; a "Spatial+ on: mgwr, gam" chip from `manifest.spatial_plus`.
 - **Physics card**: parameters as mean ± sd with priors and plain labels; per-fold dots (L_m, a, s, a1); fit warnings.
 - **Advection verdict** with per-fold ΔRMSE dots.
 - **Forcing card**: date, hours, SW↓, LW net, wind arrow, station, checks.
@@ -981,7 +1098,8 @@ Every chart is built from the SVG kit (§12.6). Each one has a **Table view**, S
 **Causal**
 - Per-treatment forest of θ_own, θ_nbr and θ_sum (±1.96 SE) beside the model slopes.
 - Audit verdict chips.
-- DR dose–response with CI ribbon, ESS and clipped share; CATE quantile box with BLP calibration.
+- DR dose–response with CI ribbon, ESS and clipped share, with the **model's own-cell partial-dependence curve overlaid** (`causal.json treatments[t].model_effects.own_pd_curve`, §11 item 21; hidden with "not in this run (older code)" otherwise); CATE quantile box with BLP calibration.
+- CATE and model-slope maps (`cate_<t>`, `mslope_<t>`, linked to the Map tab) when `causal_cells.parquet` exists.
 - Sensitivity: E-value and its CI, robustness value, design effect.
 - Controls, basis scale, hole-scale warning, nuisance R².
 - DAG-audit table when present.
@@ -990,6 +1108,7 @@ Every chart is built from the SVG kit (§12.6). Each one has a **Table view**, S
 - KPIs: cells treated, mean dose, planned vs realised (labelled spillover non-additivity), cost, Gini, constraint, objective.
 - Pareto chart: labelled open-loop; `n_treated` relabelled "segments", with a note. The caption is computed (2×/1× ratio).
 - Dose and closed-loop maps; top-cells table.
+- `optimize.json` of the form `{status: "no positive-benefit segments"}` renders as an explained empty state ("no cell has a positive cooling footprint for this lever"), not as missing.
 - "Re-plan in Lab".
 
 **Planner**
@@ -1084,7 +1203,7 @@ Polygons in lon/lat make selections **portable across runs**: fast, coarse, full
 |---|---|---|
 | Any catalog file | Native, with Range | `GET /api/runs/{rid}/files/raw` |
 | Per-cell parquet | CSV (id, lon, lat if CRS, values), GeoJSON points (≤ 60,000 features, otherwise refused with a hint), parquet | conversion endpoint |
-| Any layer, incl. results, plans, diffs | GeoTIFF (float32, data CRS, deflate, nodata NaN), CSV, GeoJSON | `GET /api/runs/{rid}/export/layer/{key}?fmt=` via `runs/export.py::export_layer`, built on `planner.export_geotiffs` (inline, < 2 s) |
+| Any layer, incl. results, plans, diffs | GeoTIFF (float32, data CRS, deflate, nodata NaN), CSV, GeoJSON | `GET /api/runs/{rid}/export/layer/{key}?fmt=` via `runs/export.py::export_layer`, built on `planner.export_geotiffs` (inline, < 2 s; written to a temp file and streamed, never stored) |
 | Hexes | CSV, GeoJSON (EPSG:4326), GPKG | inline |
 | Charts and maps | SVG / PNG (client side) | ChartFrame / MapView |
 | Whole-run bundle | ZIP of selected outputs; checkpoint excluded unless ticked; contents manifest; README with units and sign | `export.bundle` job, streamed `FileResponse` |
@@ -1095,6 +1214,8 @@ Polygons in lon/lat make selections **portable across runs**: fast, coarse, full
 | Findings | Markdown ZIP (with images) or self-contained HTML | `export.findings` job |
 
 Runs without a CRS disable lon/lat, GeoTIFF, GPKG and GeoJSON, and the UI says why.
+
+Every export job (bundle, GIS, page, report, findings and the three packs) writes to `projects/<slug>/exports/<export_id>/`. `POST /api/exports` creates the `exports` row and the id first, then passes `export_id` in the job params.
 
 ### 6.8 Compare runs (`/p/:pid/compare?a=&b=`)
 

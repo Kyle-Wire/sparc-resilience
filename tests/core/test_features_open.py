@@ -32,7 +32,7 @@ def test_compare_features_and_data_join(tmp_path, synthetic_city):
     rng = np.random.default_rng(0)
     pd.DataFrame({"id": df["oid"], "open_canopy": df["canopy"] + rng.normal(0, 5, len(df))}).to_parquet(tmp_path / "f.parquet")
     raw = synthetic_city_config()
-    raw["data"].update(path="city.csv", id="oid", join=[{"path": "f.parquet", "on": "oid", "right_on": "id"}])
+    raw["data"].update(path="city.csv", id="oid", join=[{"path": "f.parquet", "key": "oid", "right_key": "id"}])
     raw["predictors"] = raw["predictors"] + ["open_canopy"]
     cfg = core_config_from_dict(raw, base_dir=tmp_path)
     data = load_core_data(cfg)

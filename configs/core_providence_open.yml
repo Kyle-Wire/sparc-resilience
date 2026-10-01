@@ -32,7 +32,7 @@ core:
     background: median          # ΔT reference = field median (ERA5 forcing is used by the physics only)
     zone: Location              # neighbourhood / zone codes (0 = unassigned) — reporting only
     join:
-      - {path: layers/providence_open_features.parquet, on: OBJECTID, right_on: id}
+      - {path: layers/providence_open_features.parquet, key: OBJECTID, right_key: id}
 
   predictors:
     - open_canopy

@@ -332,13 +332,14 @@ def prepare_frame(df: pd.DataFrame, cfg: CoreConfig) -> CoreData:
 
 def read_input(cfg: CoreConfig) -> pd.DataFrame:
     """The configured table, with ``data.join`` tables merged by id (e.g. open-data
-    features from ``sparc core features``: ``join: {path: ..., on: OBJECTID}``)."""
+    features from ``sparc core features``: ``join: [{path: ..., key: OBJECTID, right_key: id}]``)."""
     df = _read_csv(cfg.data_path)
     for j in cfg.data.get("join") or []:
         path = cfg.resolve_path(j["path"])
         extra = pd.read_parquet(path) if str(path).endswith(".parquet") else _read_csv(path)
-        key = j.get("on") or cfg.data.get("id")
-        right = j.get("right_on", "id" if "id" in extra.columns else key)
+        # 'key' / 'right_key' (YAML 1.1 reads a bare 'on:' key as boolean True, so accept that too)
+        key = j.get("key") or j.get("on") or j.get(True) or cfg.data.get("id")
+        right = j.get("right_key") or j.get("right_on") or ("id" if "id" in extra.columns else key)
         extra = extra.rename(columns={right: key}) if right != key else extra
         cols = [c for c in extra.columns if c != key and c not in df.columns]
         df = df.merge(extra[[key] + cols], on=key, how="left")

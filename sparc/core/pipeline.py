@@ -109,7 +109,9 @@ def _fingerprint(cfg: CoreConfig, fast: bool, frame: pd.DataFrame | None) -> str
     import hashlib
 
     h = hashlib.sha256()
-    h.update(json.dumps(cfg.raw, sort_keys=True, default=str).encode())
+    from sparc.core.provenance import _str_keys
+
+    h.update(json.dumps(_str_keys(cfg.raw), sort_keys=True, default=str).encode())
     h.update(str(bool(fast)).encode())
     if frame is not None:
         h.update(pd.util.hash_pandas_object(frame, index=True).to_numpy().tobytes())

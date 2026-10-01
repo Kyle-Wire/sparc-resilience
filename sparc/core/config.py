@@ -43,7 +43,7 @@ DEFAULTS: dict[str, Any] = {
         "subsample": None,
         "cell_m": None,
         "coarse_m": None,          # aggregate to this cell size over the full extent (validation studies)
-        "join": [],                # extra tables merged by id: [{path: features.parquet, on: OBJECTID}]
+        "join": [],                # extra tables merged by id: [{path: features.parquet, key: OBJECTID, right_key: id}]
         "zone": None,
     },
     "predictors": [],
