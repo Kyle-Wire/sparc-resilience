@@ -254,9 +254,7 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
         if "baselines" in done:
             result.baselines = state["baselines"]
         else:
-            from sparc.core.baselines import compare_baselines
-
-            from sparc.core.baselines import BASELINES
+            from sparc.core.baselines import BASELINES, compare_baselines
 
             result.baselines = compare_baselines(data.X.to_numpy(float), data.coords, data.y, ens.oof_pred, folds,
                                                  models=BASELINES if bl is True else tuple(bl),
