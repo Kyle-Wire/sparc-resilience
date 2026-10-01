@@ -526,6 +526,11 @@ def summarize(rows: list[dict], real_r2: float | None = None, r2_tol: float = 0.
         if kind == "null":
             g["false_positive_rate"] = _rate(r.get("significant") for r in use)
             g["causal_false_positive_rate"] = _rate(r.get("causal_significant") for r in use)
+            md = [r["model_mean_delta"] for r in use if r.get("model_mean_delta") is not None]
+            cd = [r["causal_theta_pp"] for r in use if r.get("causal_theta_pp") is not None]
+            g["null_mean_delta"] = float(np.mean(md)) if md else None           # spurious effect (°F, +DOSE pp)
+            g["null_mean_delta_se"] = float(np.std(md, ddof=1) / math.sqrt(len(md))) if len(md) > 1 else None
+            g["null_causal_pp"] = float(np.mean(cd)) if cd else None
         gens[label] = g
     shares = [g["share_median"] for k, g in gens.items()
               if k in GENERATORS and k != "null" and g.get("share_median") is not None]
@@ -552,8 +557,8 @@ def simcheck_markdown(summ: dict) -> str:
         L.append(f"| {k} | {g['n']} ({g['n_gate_pass']}) | {f(g['share_median'])}"
                  + (f" ({f(iqr[0])}–{f(iqr[1])})" if iqr else "") + f" | {f(g['rank_corr_mean'])} | "
                  f"{f(g['ci_coverage'])} | {f(g['causal_ci_coverage'])} | {f(g['interval_coverage_mean'])} | "
-                 + (f"model {f(g.get('false_positive_rate'))}, causal {f(g.get('causal_false_positive_rate'))}"
-                    if k.split("/")[0] == "null" else "") + " |")
+                 + (f"model {f(g.get('false_positive_rate'))}, causal {f(g.get('causal_false_positive_rate'))}; "
+                    f"mean spurious Δ {f(g.get('null_mean_delta'))} °F" if k.split("/")[0] == "null" else "") + " |")
     b = summ.get("bias_correction") or {}
     if b:
         L += ["", (f"Effect share is stable across generators (spread {b['relative_spread']:.0%}): city-wide canopy "
