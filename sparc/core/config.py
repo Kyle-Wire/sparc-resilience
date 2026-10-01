@@ -132,6 +132,8 @@ DEFAULTS: dict[str, Any] = {
         "variable": None,
         "budget": None,
         "cost_per_unit": 1.0,
+        "plantable": True,          # cap canopy doses by plantable space when planner.layers is set
+        "objective": "cooling",     # or "people": weight cooling by residents nearby (planner.layers)
         "equity_column": None,
         "equity_focus": 0.0,
     },

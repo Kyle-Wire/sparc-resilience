@@ -29,12 +29,20 @@ from sparc.core.scenarios import Intervention, ScenarioEngine, ScenarioSpec
 log = logging.getLogger(__name__)
 
 
-def build_segments(vr: VariableResponse, cost_per_unit, n_segments: int = 6) -> pd.DataFrame:
+def build_segments(vr: VariableResponse, cost_per_unit, n_segments: int = 6, cap: np.ndarray | None = None,
+                   benefit_weight: np.ndarray | None = None) -> pd.DataFrame:
+    """Dose segments per cell.  ``cap`` limits the dose a cell can take (e.g.
+    plantable space); ``benefit_weight`` rescales each cell's cooling (e.g.
+    residents around it, mean 1)."""
     sign = -1.0 if vr.direction == "decrease" else 1.0
     maps = vr.maps
     b = -sign * maps["footprint_effect_per_unit"].to_numpy(float)       # cooling per unit dose
+    if benefit_weight is not None:
+        b = b * np.asarray(benefit_weight, float)
     ds = maps["saturation_scale_ds"].to_numpy(float)
     head = np.maximum(maps["headroom"].to_numpy(float), 0.0)
+    if cap is not None:
+        head = np.minimum(head, np.maximum(np.asarray(cap, float), 0.0))
     dmax = float(max(vr.doses))
     edges = np.linspace(0.0, dmax, n_segments + 1)
     cost = np.broadcast_to(np.asarray(cost_per_unit, dtype=float), b.shape)
@@ -52,10 +60,11 @@ def build_segments(vr: VariableResponse, cost_per_unit, n_segments: int = 6) -> 
 
 def optimise_allocation(engine: ScenarioEngine, vr: VariableResponse, budget: float, cost_per_unit=1.0,
                         equity_scores: np.ndarray | None = None, equity_focus: float = 0.0,
-                        multipliers=(0.25, 0.5, 1.0, 2.0)) -> dict:
+                        multipliers=(0.25, 0.5, 1.0, 2.0), cap: np.ndarray | None = None,
+                        benefit_weight: np.ndarray | None = None) -> dict:
     from sparc.scenario.budget import optimize, pareto_sweep
 
-    seg = build_segments(vr, cost_per_unit)
+    seg = build_segments(vr, cost_per_unit, cap=cap, benefit_weight=benefit_weight)
     if seg.empty:
         return {"status": "no positive-benefit segments", "variable": vr.variable}
     eq = None

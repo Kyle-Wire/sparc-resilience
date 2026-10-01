@@ -390,9 +390,12 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
             raw = pd.read_csv(cfg.data_path, encoding="utf-8-sig")
             if ocfg["equity_column"] in raw.columns:
                 eq = raw[ocfg["equity_column"]].to_numpy(float)[: data.n]
+        cap, weight, constraint, objective = _optimizer_layers(cfg, data, var, ranges)
         opt = optimise_allocation(engine, result.responses[var], float(ocfg["budget"]),
                                   cost_per_unit=cfg.actionable[var].get("cost_per_unit", ocfg.get("cost_per_unit", 1.0)),
-                                  equity_scores=eq, equity_focus=float(ocfg.get("equity_focus", 0.0)))
+                                  equity_scores=eq, equity_focus=float(ocfg.get("equity_focus", 0.0)),
+                                  cap=cap, benefit_weight=weight)
+        opt.update(constraint=constraint, objective=objective)
         result.optimize = opt
         if run_dir:
             _write_json(run_dir / "optimize.json", {k: v for k, v in opt.items() if k not in ("dose", "closed_loop_delta")})
@@ -401,6 +404,32 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
                 run_dir / "allocation.parquet", index=False)
     timings["S7"] = time.time() - t
     return _finish(result, timings, fast, folds=folds)
+
+
+def _optimizer_layers(cfg: CoreConfig, data: CoreData, var: str, ranges: dict):
+    """Plantable-space cap and people weighting for S7 from the planner layers."""
+    from sparc.core import operators as ops
+    from sparc.core.opendata import load_layers
+
+    ocfg = cfg.raw["optimize"]
+    layers = load_layers(cfg, data) if (cfg.raw.get("planner") or {}).get("layers") else None
+    cap, weight = None, None
+    constraint, objective = "unconstrained (no plantable-space layer)", "total cooling"
+    canopy = cfg.physics_role("canopy")
+    if layers is not None and var == canopy and ocfg.get("plantable", True):
+        from sparc.core.planner import plantable_headroom
+
+        share = float((cfg.raw.get("planner") or {}).get("paved_plantable_share", 0.2))
+        cap = plantable_headroom(data.frame[var].to_numpy(float), layers, share)
+        constraint = f"plantable space (WorldCover open land + {share:.0%} of built-up area)"
+    if layers is not None and ocfg.get("objective", "cooling") == "people":
+        g = data.grid
+        r = g.rasterize(np.nan_to_num(layers["people"].to_numpy(float)))
+        sigma = max(float(ranges.get(var, 300.0)) / 2.0 / g.dx, 1.0)
+        dens = g.sample(ops.masked_gaussian(r, np.isfinite(r), sigma))
+        weight = np.nan_to_num(dens) / max(float(np.nanmean(dens)), 1e-9)
+        objective = "resident-weighted cooling (HRSL)"
+    return cap, weight, constraint, objective
 
 
 def _site_latlon(cfg: CoreConfig, data: CoreData) -> tuple[float, float]:

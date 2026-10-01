@@ -156,6 +156,11 @@ core:
     cost_per_unit: 1.0
     equity_column: null
 
+  planner:                       # sparc core layers / sparc core planner
+    layers: layers/providence_layers.parquet   # HRSL residents (all, 60+, under 5) + WorldCover fractions
+    paved_plantable_share: 0.2   # share of paved/built area counted as plantable (street trees, lots)
+    ghcn_station: USW00014765    # Providence T.F. Green airport, daily Tmax for hot-day counts
+
   output:
     dir: ../output/core/providence
 

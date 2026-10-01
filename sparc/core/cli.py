@@ -118,6 +118,18 @@ def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
     p_un.add_argument("--simcheck", nargs="*", default=[], help="simcheck result directories")
     p_un.set_defaults(func=cmd_core_uncertainty)
 
+    p_ly = subs.add_parser("layers", help="open-data layers on the study grid (HRSL people, WorldCover) → parquet")
+    p_ly.add_argument("--project", "-p", required=True)
+    p_ly.add_argument("--out", required=True, help="parquet; reference it as planner.layers")
+    p_ly.set_defaults(func=cmd_core_layers)
+
+    p_pp = subs.add_parser("planner", help="planner pack for a finished run: exposure, equity, hot days, hexes, exports")
+    p_pp.add_argument("run_dir")
+    p_pp.add_argument("--project", "-p", required=True)
+    p_pp.add_argument("--package", default=None, help="adaptation scenario (default: the climate stage's first)")
+    p_pp.add_argument("--no-export", action="store_true")
+    p_pp.set_defaults(func=cmd_core_planner)
+
     p_syn = subs.add_parser("synth", help="write the synthetic test city (with planted truths) to CSV")
     p_syn.add_argument("--out", required=True)
     p_syn.add_argument("--seed", type=int, default=0)
@@ -251,6 +263,37 @@ def cmd_core_uncertainty(args) -> int:
 
     out = uncertainty_report(args.run_dir, args.multiverse, args.simcheck)
     print(uncertainty_markdown(out))
+    return 0
+
+
+def cmd_core_layers(args) -> int:
+    from sparc.core.config import load_core_config
+    from sparc.core.data import load_core_data
+    from sparc.core.opendata import fetch_layers
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    cfg = load_core_config(args.project)
+    cfg.raw["data"]["coarse_m"] = None
+    cfg.raw["data"]["subsample"] = None
+    lay = fetch_layers(load_core_data(cfg), cfg)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    lay.to_parquet(out, index=False)
+    print(f"wrote {out}: {len(lay):,} cells, {lay['people'].sum():,.0f} residents (HRSL)")
+    return 0
+
+
+def cmd_core_planner(args) -> int:
+    import json
+
+    from sparc.core.config import load_core_config
+    from sparc.core.planner import planner_pack
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    out = planner_pack(args.run_dir, load_core_config(args.project), package=args.package, export=not args.no_export)
+    print(json.dumps({k: out[k] for k in ("people_total", "package", "plantable") if k in out}, indent=1))
+    for r in out["exposure"]:
+        print(r)
     return 0
 
 

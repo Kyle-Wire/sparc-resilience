@@ -315,6 +315,7 @@ def render_report(result) -> str:
         L += ["## S7 — Budget allocation", "",
               f"{o.get('variable')}: budget {_f(o.get('budget'), 0)} → {o.get('n_cells_treated')} cells treated "
               f"(mean dose {_f(o.get('mean_dose_treated'), 2)}); planned total cooling {_f(o.get('planned_total_cooling'), 2)}, "
-              f"closed-loop realised {_f(o.get('realized_total_cooling'), 2)} ({u}·cells).", ""]
+              f"closed-loop realised {_f(o.get('realized_total_cooling'), 2)} ({u}·cells). "
+              f"Constraint: {o.get('constraint', 'unconstrained')}; objective: {o.get('objective', 'total cooling')}.", ""]
     L += ["## Timings (s)", "", ", ".join(f"{k}: {v}" for k, v in m.get("timings_s", {}).items()), ""]
     return "\n".join(L)
