@@ -33,10 +33,14 @@ import io
 import json
 import logging
 import math
+import os
+import warnings
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from sparc.core import progress
 
 log = logging.getLogger(__name__)
 
@@ -132,8 +136,9 @@ def ghcn_tmax(station: str, cache_dir: str | Path | None = None, fetch=None) -> 
         if raw is None:
             raise FileNotFoundError(f"GHCN station {station} not found")
         if cache is not None:
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_bytes(raw)
+            from sparc.core import runio
+
+            runio.write_bytes_atomic(cache, raw)
     df = pd.read_csv(io.BytesIO(raw), dtype={"DATE": str, "Q_FLAG": str}, low_memory=False)
     df = df[(df["ELEMENT"] == "TMAX") & (df["Q_FLAG"].isna())]
     s = pd.Series(df["DATA_VALUE"].to_numpy(float) / 10.0 * 9.0 / 5.0 + 32.0,
@@ -279,9 +284,15 @@ def export_geotiffs(data, cfg, layers: dict[str, np.ndarray], out_dir: str | Pat
     for name, v in layers.items():
         r = g.rasterize(np.asarray(v, float))[::-1].astype("float32")
         p = out_dir / f"{name}.tif"
-        with rasterio.open(p, "w", driver="GTiff", height=g.ny, width=g.nx, count=1, dtype="float32", crs=crs,
-                           transform=tr, nodata=np.nan, compress="deflate") as dst:
-            dst.write(r, 1)
+        tmp = out_dir / f".{name}.tif.{os.getpid()}.tmp"            # atomic: readers never see half a GeoTIFF
+        try:
+            with rasterio.open(tmp, "w", driver="GTiff", height=g.ny, width=g.nx, count=1, dtype="float32",
+                               crs=crs, transform=tr, nodata=np.nan, compress="deflate") as dst:
+                dst.write(r, 1)
+            os.replace(tmp, p)
+        finally:
+            if tmp.exists():
+                tmp.unlink()
         paths.append(str(p))
     return paths
 
@@ -326,139 +337,196 @@ def _station_offsets(m: dict, target: np.ndarray) -> tuple[np.ndarray, float | N
 
 def planner_pack(run_dir, cfg, out_dir=None, thresholds=None, package: str | None = None,
                  hex_sizes=(250.0, 500.0), export: bool = True, cache_dir="output/core/cache") -> dict:
+    """Write the decision pack (``planner/``) for a finished run and record it in the manifest.
+
+    Each step is a ``task`` (``load_run``, ``exposure``, ``hot_days``,
+    ``plantable``, ``hexagons``, ``next_campaign``, ``exports``); every
+    file is written atomically and reported as an ``artifact``."""
+    from sparc.core import runio
     from sparc.core.baselines import load_run
     from sparc.core.opendata import load_layers
 
     run_dir = Path(run_dir)
     out_dir = Path(out_dir or run_dir / "planner")
     out_dir.mkdir(parents=True, exist_ok=True)
-    data, folds, m, pred = load_run(run_dir, cfg)
-    layers = load_layers(cfg, data)
-    if layers is None:
-        raise ValueError("planner.layers is not set or missing — run `sparc core layers` first")
-    units = data.target_units
-    pcfg = cfg.raw.get("planner") or {}
-    thresholds = list(thresholds or (cfg.raw.get("climate") or {}).get("thresholds") or [90, 95])
-    target = data.target_raw
-    people = np.nan_to_num(layers["people"].to_numpy(float))
-    out: dict = {"units": units, "thresholds": thresholds, "n_cells": int(data.n), "people_total": float(people.sum())}
 
-    # adaptation package and futures
-    deltas = pd.read_parquet(run_dir / "scenario_deltas.parquet") if (run_dir / "scenario_deltas.parquet").exists() else None
-    clim = json.loads((run_dir / "climate.json").read_text(encoding="utf-8")) if (run_dir / "climate.json").exists() else {}
-    joint = [j["name"] for j in (cfg.raw.get("joint_scenarios") or [])]
-    pkg = package or (joint[0] if joint else (clim.get("adaptation") or [None])[0])
-    adapt = deltas[pkg].to_numpy(float) if deltas is not None and pkg in deltas else None
-    futures = {}                                   # warming is stored in target units
-    by_model = {}
-    for p in clim.get("projections") or []:
-        if p["period"] in ("2041-2060", "2081-2100") and p["experiment"] in ("ssp245", "ssp585"):
-            label = f"{p.get('label')} {p['period']}"
-            futures[label] = float(p["warming"]["median"])
-            by_model[label] = p["warming"].get("by_model") or {}
-    out["package"] = pkg
-    out["exposure"] = exposure_table(target, people, thresholds, futures, adapt)
+    def wrote(path, role):
+        progress.artifact(path, role=role)
 
-    # who benefits
-    if adapt is not None:
-        out["equity"] = benefit_by_group(-adapt, layers)
+    with progress.run_dir_scope(run_dir):
+        with progress.task("load_run"):
+            data, folds, m, pred = load_run(run_dir, cfg)
+            layers = load_layers(cfg, data)
+        if layers is None:
+            raise ValueError("planner.layers is not set or missing — run `sparc core layers` first")
+        units = data.target_units
+        pcfg = cfg.raw.get("planner") or {}
+        thresholds = list(thresholds or (cfg.raw.get("climate") or {}).get("thresholds") or [90, 95])
+        target = data.target_raw
+        people = np.nan_to_num(layers["people"].to_numpy(float))
+        out: dict = {"units": units, "thresholds": thresholds, "n_cells": int(data.n),
+                     "people_total": float(people.sum())}
 
-    # hot days
-    offsets, t_station, ghcn = _station_offsets(m, target)
-    station = pcfg.get("ghcn_station") or ghcn
-    if station:
-        try:
-            tmax = ghcn_tmax(station, cache_dir)
-            hd = {"station": station, "station_campaign_temp": t_station, "baseline": [1995, 2014], "cases": []}
+        # adaptation package and futures
+        progress.check_cancel()
+        with progress.task("exposure"):
+            deltas = (pd.read_parquet(run_dir / "scenario_deltas.parquet")
+                      if (run_dir / "scenario_deltas.parquet").exists() else None)
+            clim = (json.loads((run_dir / "climate.json").read_text(encoding="utf-8"))
+                    if (run_dir / "climate.json").exists() else {})
+            joint = [j["name"] for j in (cfg.raw.get("joint_scenarios") or [])]
+            pkg = package or (joint[0] if joint else (clim.get("adaptation") or [None])[0])
+            adapt = deltas[pkg].to_numpy(float) if deltas is not None and pkg in deltas else None
+            futures = {}                                   # warming is stored in target units
+            by_model = {}
+            for p in clim.get("projections") or []:
+                if p["period"] in ("2041-2060", "2081-2100") and p["experiment"] in ("ssp245", "ssp585"):
+                    label = f"{p.get('label')} {p['period']}"
+                    futures[label] = float(p["warming"]["median"])
+                    by_model[label] = p["warming"].get("by_model") or {}
+            out["package"] = pkg
+            out["exposure"] = exposure_table(target, people, thresholds, futures, adapt)
+
+            # who benefits
+            if adapt is not None:
+                out["equity"] = benefit_by_group(-adapt, layers)
+
+        # hot days
+        progress.check_cancel()
+        offsets, t_station, ghcn = _station_offsets(m, target)
+        station = pcfg.get("ghcn_station") or ghcn
+        if station:
+            with progress.task("hot_days", key=station):
+                maps = _hot_days_section(out, station, cache_dir, t_station, offsets, thresholds, people, adapt,
+                                         by_model)
+        else:
             maps = {}
-            for scale, tag in ((1.0, "campaign-like"), (0.5, "lower bound")):
-                today = hot_days(tmax, offsets, thresholds, offset_scale=scale)
-                case = {"case": "today", "offset_scale": scale, "label": tag,
-                        **{f"days_ge_{k}": float(np.mean(v)) for k, v in today.items()},
-                        **{f"person_days_ge_{k}": float(np.sum(people * v)) for k, v in today.items()}}
-                hd["cases"].append(case)
-                if scale == 1.0:
-                    maps.update({f"hot_days_ge_{k}_today": v for k, v in today.items()})
-                for label, models in by_model.items():
-                    per_model = [hot_days(tmax, offsets, thresholds, shift=w, offset_scale=scale)
-                                 for w in models.values()]
-                    med = {k: np.median([pm[k] for pm in per_model], axis=0) for k in today}
-                    case = {"case": label, "offset_scale": scale, "label": tag,
-                            **{f"days_ge_{k}": float(np.mean(v)) for k, v in med.items()},
-                            **{f"person_days_ge_{k}": float(np.sum(people * v)) for k, v in med.items()}}
-                    if adapt is not None:
-                        pa = [hot_days(tmax, offsets + adapt / max(scale, 1e-9), thresholds,
-                                       shift=w, offset_scale=scale) for w in models.values()]
-                        meda = {k: np.median([x[k] for x in pa], axis=0) for k in today}
-                        case.update({f"days_ge_{k}_adapted": float(np.mean(v)) for k, v in meda.items()})
-                        case.update({f"person_days_ge_{k}_adapted": float(np.sum(people * v)) for k, v in meda.items()})
-                    hd["cases"].append(case)
-                    if scale == 1.0 and label.endswith("2041-2060") and "SSP2-4.5" in label:
-                        maps.update({f"hot_days_ge_{k}_ssp245_mid": v for k, v in med.items()})
-            out["hot_days"] = hd
-        except Exception as exc:                # noqa: BLE001 - optional component
-            log.warning("hot days skipped: %s", exc)
-            maps = {}
-    else:
-        maps = {}
 
-    # plantable space
-    roles = (cfg.raw.get("physics") or {}).get("roles") or {}
-    can, imp = roles.get("canopy"), roles.get("impervious")
-    head = plantable_headroom(data.frame[can].to_numpy(float), layers, float(pcfg.get("paved_plantable_share", 0.2)))
-    out["plantable"] = {"paved_share": float(pcfg.get("paved_plantable_share", 0.2)),
-                        "mean_headroom_pp": float(head.mean()), "total_pp_cells": float(head.sum()),
-                        "share_cells_no_room": float(np.mean(head < 1.0))}
+        # plantable space
+        progress.check_cancel()
+        with progress.task("plantable"):
+            roles = (cfg.raw.get("physics") or {}).get("roles") or {}
+            can, imp = roles.get("canopy"), roles.get("impervious")
+            head = plantable_headroom(data.frame[can].to_numpy(float), layers,
+                                      float(pcfg.get("paved_plantable_share", 0.2)))
+            out["plantable"] = {"paved_share": float(pcfg.get("paved_plantable_share", 0.2)),
+                                "mean_headroom_pp": float(head.mean()), "total_pp_cells": float(head.sum()),
+                                "share_cells_no_room": float(np.mean(head < 1.0))}
 
-    # districts and hexagons
-    vals = {"temperature": target, "people": people, "plantable_pp": head}
-    if adapt is not None:
-        vals["package_cooling"] = -adapt
-    vals.update({k: v for k, v in maps.items() if k.endswith("_today")})
-    if data.zones is not None:
-        out["zones"] = zone_table(data.zones, vals)
-    hexes = {}
-    for size in hex_sizes:
-        h = summarize_hex(data.x, data.y_coord, vals, size)
-        hexes[size] = h
-        h.to_csv(out_dir / f"hex_{int(size)}m.csv", index=False)
-    out["hex_files"] = [f"hex_{int(s)}m.csv" for s in hex_sizes]
+        # districts and hexagons
+        progress.check_cancel()
+        with progress.task("hexagons"):
+            vals = {"temperature": target, "people": people, "plantable_pp": head}
+            if adapt is not None:
+                vals["package_cooling"] = -adapt
+            vals.update({k: v for k, v in maps.items() if k.endswith("_today")})
+            if data.zones is not None:
+                out["zones"] = zone_table(data.zones, vals)
+            hexes = {}
+            for size in hex_sizes:
+                h = summarize_hex(data.x, data.y_coord, vals, size)
+                hexes[size] = h
+                runio.write_text_atomic(out_dir / f"hex_{int(size)}m.csv", h.to_csv(index=False))
+                wrote(out_dir / f"hex_{int(size)}m.csv", "planner_hex")
+            out["hex_files"] = [f"hex_{int(s)}m.csv" for s in hex_sizes]
 
-    # next campaign
-    if (run_dir / f"response_{can}.parquet").exists():
-        r = pd.read_parquet(run_dir / f"response_{can}.parquet")
-        sd_col = "footprint_effect_sd" if "footprint_effect_sd" in r else None
-        eff_sd = r[sd_col].to_numpy(float) if sd_col else np.abs(r["footprint_effect_per_unit"].to_numpy(float))
-        sites = logger_sites(data.frame[can].to_numpy(float), data.frame[imp].to_numpy(float), eff_sd,
-                             data.x, data.y_coord)
-        sites.to_csv(out_dir / "logger_sites.csv", index=False)
-        out["logger_sites"] = {"n": int(len(sites)), "file": "logger_sites.csv"}
-    if (run_dir / "allocation.parquet").exists():
-        a = pd.read_parquet(run_dir / "allocation.parquet")
-        dose = a["dose"].to_numpy(float)
-        top = dose >= np.quantile(dose[dose > 0], 0.5) if (dose > 0).any() else dose > 0
-        cov = data.frame[[c for c in (can, imp, roles.get("elevation"), roles.get("water_distance")) if c]].to_numpy(float)
-        pairs = matched_controls(top, cov, data.x, data.y_coord)
-        pairs.to_csv(out_dir / "before_after_pairs.csv", index=False)
-        out["before_after"] = {"n_pairs": int(len(pairs)), "file": "before_after_pairs.csv",
-                               "median_covariate_distance": float(pairs["covariate_distance"].median())
-                               if len(pairs) else None}
+        # next campaign
+        progress.check_cancel()
+        with progress.task("next_campaign"):
+            if (run_dir / f"response_{can}.parquet").exists():
+                r = pd.read_parquet(run_dir / f"response_{can}.parquet")
+                sd_col = "footprint_effect_sd" if "footprint_effect_sd" in r else None
+                eff_sd = (r[sd_col].to_numpy(float) if sd_col
+                          else np.abs(r["footprint_effect_per_unit"].to_numpy(float)))
+                sites = logger_sites(data.frame[can].to_numpy(float), data.frame[imp].to_numpy(float), eff_sd,
+                                     data.x, data.y_coord)
+                runio.write_text_atomic(out_dir / "logger_sites.csv", sites.to_csv(index=False))
+                wrote(out_dir / "logger_sites.csv", "planner_logger_sites")
+                out["logger_sites"] = {"n": int(len(sites)), "file": "logger_sites.csv"}
+            if (run_dir / "allocation.parquet").exists():
+                a = pd.read_parquet(run_dir / "allocation.parquet")
+                dose = a["dose"].to_numpy(float)
+                top = dose >= np.quantile(dose[dose > 0], 0.5) if (dose > 0).any() else dose > 0
+                cov = data.frame[[c for c in (can, imp, roles.get("elevation"), roles.get("water_distance"))
+                                  if c]].to_numpy(float)
+                pairs = matched_controls(top, cov, data.x, data.y_coord)
+                runio.write_text_atomic(out_dir / "before_after_pairs.csv", pairs.to_csv(index=False))
+                wrote(out_dir / "before_after_pairs.csv", "planner_before_after")
+                out["before_after"] = {"n_pairs": int(len(pairs)), "file": "before_after_pairs.csv",
+                                       "median_covariate_distance": float(pairs["covariate_distance"].median())
+                                       if len(pairs) else None}
 
-    if export:
-        lay = {"temperature_observed": target, "temperature_model": pred["pred"].to_numpy(float),
-               "people": people, "plantable_canopy_pp": head, **maps}
-        if adapt is not None:
-            lay["package_cooling"] = -adapt
-        out["geotiffs"] = [Path(p).name for p in export_geotiffs(data, cfg, lay, out_dir / "geotiff")]
-        try:
-            for size, h in hexes.items():
-                export_hex_gpkg(h, size, cfg, out_dir / "hexagons.gpkg")
-            out["geopackage"] = "hexagons.gpkg"
-        except Exception as exc:                # noqa: BLE001 - geopandas optional
-            log.warning("GeoPackage export skipped: %s", exc)
-    pd.DataFrame({"id": data.ids, "people": people, "plantable_canopy_pp": head,
-                  **{k: v for k, v in maps.items()}}).to_parquet(out_dir / "planner_cells.parquet", index=False)
-    (out_dir / "planner.json").write_text(json.dumps(out, indent=1, default=float), encoding="utf-8")
-    m["planner"] = out
-    (run_dir / "manifest.json").write_text(json.dumps(m, indent=1, default=str), encoding="utf-8")
+        progress.check_cancel()
+        with progress.task("exports"):
+            if export:
+                lay = {"temperature_observed": target, "temperature_model": pred["pred"].to_numpy(float),
+                       "people": people, "plantable_canopy_pp": head, **maps}
+                if adapt is not None:
+                    lay["package_cooling"] = -adapt
+                out["geotiffs"] = [Path(p).name for p in export_geotiffs(data, cfg, lay, out_dir / "geotiff")]
+                wrote(out_dir / "geotiff", "planner_geotiff")
+                gpkg = out_dir / "hexagons.gpkg"
+                tmp = out_dir / f".hexagons.gpkg.{os.getpid()}.tmp"
+                try:
+                    with warnings.catch_warnings():      # GDAL notes the temporary name's extension; harmless
+                        warnings.filterwarnings("ignore", message=".*extension.*", category=RuntimeWarning)
+                        for size, h in hexes.items():
+                            export_hex_gpkg(h, size, cfg, tmp)
+                    os.replace(tmp, gpkg)
+                    out["geopackage"] = "hexagons.gpkg"
+                    wrote(gpkg, "planner_gpkg")
+                except Exception as exc:        # noqa: BLE001 - geopandas optional
+                    log.warning("GeoPackage export skipped: %s", exc)
+                    progress.warn("planner.gpkg_skipped", f"GeoPackage export skipped: {exc}", error=repr(exc)[:300])
+                finally:
+                    if tmp.exists():
+                        tmp.unlink()
+            runio.write_parquet_atomic(pd.DataFrame({"id": data.ids, "people": people, "plantable_canopy_pp": head,
+                                                     **{k: v for k, v in maps.items()}}),
+                                       out_dir / "planner_cells.parquet")
+            wrote(out_dir / "planner_cells.parquet", "planner_cells")
+            runio.write_json_atomic(out_dir / "planner.json", out, indent=1)
+            wrote(out_dir / "planner.json", "planner")
+        runio.update_manifest(run_dir, {"planner": out}, source="planner")
+        wrote(run_dir / "manifest.json", "manifest")
     return out
+
+
+def _hot_days_section(out: dict, station: str, cache_dir, t_station, offsets, thresholds, people, adapt,
+                      by_model: dict) -> dict:
+    """``out["hot_days"]`` (station, cases per future, adapted) and the per-cell hot-day maps; {} on failure."""
+    try:
+        tmax = ghcn_tmax(station, cache_dir)
+        hd = {"station": station, "station_campaign_temp": t_station, "baseline": [1995, 2014], "cases": []}
+        maps = {}
+        for scale, tag in ((1.0, "campaign-like"), (0.5, "lower bound")):
+            today = hot_days(tmax, offsets, thresholds, offset_scale=scale)
+            case = {"case": "today", "offset_scale": scale, "label": tag,
+                    **{f"days_ge_{k}": float(np.mean(v)) for k, v in today.items()},
+                    **{f"person_days_ge_{k}": float(np.sum(people * v)) for k, v in today.items()}}
+            hd["cases"].append(case)
+            if scale == 1.0:
+                maps.update({f"hot_days_ge_{k}_today": v for k, v in today.items()})
+            for label, models in by_model.items():
+                per_model = [hot_days(tmax, offsets, thresholds, shift=w, offset_scale=scale)
+                             for w in models.values()]
+                med = {k: np.median([pm[k] for pm in per_model], axis=0) for k in today}
+                case = {"case": label, "offset_scale": scale, "label": tag,
+                        **{f"days_ge_{k}": float(np.mean(v)) for k, v in med.items()},
+                        **{f"person_days_ge_{k}": float(np.sum(people * v)) for k, v in med.items()}}
+                if adapt is not None:
+                    pa = [hot_days(tmax, offsets + adapt / max(scale, 1e-9), thresholds,
+                                   shift=w, offset_scale=scale) for w in models.values()]
+                    meda = {k: np.median([x[k] for x in pa], axis=0) for k in today}
+                    case.update({f"days_ge_{k}_adapted": float(np.mean(v)) for k, v in meda.items()})
+                    case.update({f"person_days_ge_{k}_adapted": float(np.sum(people * v)) for k, v in meda.items()})
+                hd["cases"].append(case)
+                if scale == 1.0 and label.endswith("2041-2060") and "SSP2-4.5" in label:
+                    maps.update({f"hot_days_ge_{k}_ssp245_mid": v for k, v in med.items()})
+        out["hot_days"] = hd
+        return maps
+    except Exception as exc:                # noqa: BLE001 - optional component
+        log.warning("hot days skipped: %s", exc)
+        progress.warn("planner.hot_days_skipped", f"hot days skipped: {exc}", station=station,
+                      error=repr(exc)[:300])
+        return {}

@@ -32,6 +32,7 @@ import math
 import numpy as np
 import pandas as pd
 
+from sparc.core import progress
 from sparc.core.opendata import (
     WC_CLASSES,
     WORLDCOVER,
@@ -133,19 +134,22 @@ def s2_composite(scenes: list[dict], bounds_lonlat, res: float = 10.0) -> dict:
                         WarpedVRT(src, crs=f"EPSG:{epsg}", transform=T, width=W, height=H,
                                   resampling=resampling, nodata=0) as vrt:
                     return vrt.read(1).astype("float32")
-            try:
-                scl = warp("SCL", Resampling.nearest)
-                bad = np.isin(scl, SCL_BAD)
-                if bad.mean() > 0.95:
-                    continue
-                for b in S2_BANDS:
-                    a = warp(b, Resampling.bilinear) / 10000.0
-                    a[bad | (a <= 0)] = np.nan
-                    stack[b].append(a)
-                used.append(sc["name"])
-                log.info("s2: %s (%.1f%% cloud) — %.0f%% usable", sc["name"], sc["cloud"], 100 * (1 - bad.mean()))
-            except Exception as exc:                          # noqa: BLE001 - skip a broken scene
-                log.warning("s2: skipping %s (%s)", sc["name"], exc)
+            progress.check_cancel()
+            with progress.task("remote_object", key=f"s2:{sc['name']}", unit="remote_object"):
+                try:
+                    scl = warp("SCL", Resampling.nearest)
+                    bad = np.isin(scl, SCL_BAD)
+                    if bad.mean() > 0.95:
+                        continue
+                    for b in S2_BANDS:
+                        a = warp(b, Resampling.bilinear) / 10000.0
+                        a[bad | (a <= 0)] = np.nan
+                        stack[b].append(a)
+                    used.append(sc["name"])
+                    log.info("s2: %s (%.1f%% cloud) — %.0f%% usable", sc["name"], sc["cloud"],
+                             100 * (1 - bad.mean()))
+                except Exception as exc:                      # noqa: BLE001 - skip a broken scene
+                    log.warning("s2: skipping %s (%s)", sc["name"], exc)
     if not used:
         raise RuntimeError("no usable Sentinel-2 scenes")
     with np.errstate(all="ignore"):
@@ -178,7 +182,8 @@ def build_open_features(data, cfg, months=((2020, 6), (2020, 7), (2020, 8)), max
     tiles = worldcover_tiles(b)
     if len(tiles) != 1:
         raise NotImplementedError(f"study area spans several WorldCover tiles {tiles}")
-    wc, tr, _ = read_window(WORLDCOVER.format(tile=tiles[0]), _bounds(lon, lat, margin=0.02))
+    with progress.task("remote_object", key=f"worldcover:{tiles[0]}", unit="remote_object"):
+        wc, tr, _ = read_window(WORLDCOVER.format(tile=tiles[0]), _bounds(lon, lat, margin=0.02))
     fr = raster_to_points(wc, tr, data, cfg, mode="fractions", classes=WC_CLASSES, sub=1, nodata=0)
     out["canopy"] = 100.0 * np.nan_to_num(fr["tree"])
     out["impervious"] = 100.0 * np.nan_to_num(fr["built"])
@@ -192,10 +197,13 @@ def build_open_features(data, cfg, months=((2020, 6), (2020, 7), (2020, 8)), max
     dts = dem_tiles(b)
     if len(dts) != 1:
         raise NotImplementedError(f"study area spans several DEM tiles {dts}")
-    dem, trd, nod = read_window(DEM.format(name=dts[0]), b)
+    progress.check_cancel()
+    with progress.task("remote_object", key=f"dem:{dts[0]}", unit="remote_object"):
+        dem, trd, nod = read_window(DEM.format(name=dts[0]), b)
     out["elevation"] = raster_to_points(dem.astype(float), trd, data, cfg, mode="mean", sub=3, nodata=nod)["mean"]
     prov["dem"] = dts[0]
     # Sentinel-2 composite
+    progress.check_cancel()
     scenes = s2_scenes(_s2_tile_prefixes(b, s2_tiles), list(months), max_cloud)
     comp = s2_composite(scenes, b)
     for k in ("ndvi", "albedo"):

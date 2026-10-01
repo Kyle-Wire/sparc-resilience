@@ -47,6 +47,7 @@ import numpy as np
 import pandas as pd
 
 from sparc.core import operators as ops
+from sparc.core import progress
 from sparc.core.features import build_context
 from sparc.core.scenarios import Intervention, ScenarioEngine, ScenarioSpec
 
@@ -324,7 +325,9 @@ class ResponseEngine:
             phys = [(st.physics.model, st.physics.model.params) for st in self.ens.stacks]
             q0 = [pm.source_points(data.frame) for pm, _ in phys]
         means, sds = [], []
-        for t in t_grid:
+        T = len(t_grid)
+        for i, t in enumerate(t_grid):
+            progress.tick(i + 1, T, unit="pd_point", label=f"{var}={float(t):.3g}")
             lo, hi = self.eng._bounds(var)
             fr = self._edited(var, np.full(data.n, float(np.clip(t, lo, hi))))
             moved = self._moved_columns(var, fr)
@@ -359,20 +362,28 @@ class ResponseEngine:
         Dn = np.zeros((len(doses), n))
         own = np.zeros((len(doses), n))
         rows = []
+        D = sum(1 for d in doses if d != 0.0)
+        j = 0
         for i, d in enumerate(doses):
             if d == 0.0:
                 rows.append({"dose": 0.0, "mean_benefit": 0.0, "mean_se": 0.0, "frac_extrapolated": 0.0})
                 continue
-            res = self.eng.run(ScenarioSpec(name=f"{var} {d:g}", interventions=[Intervention(var, "add", sign * d)],
-                                            dose=d, variable=var))
-            realized = np.abs(res.realized[var])
-            B[i] = -res.delta
-            own[i] = realized
-            Dn[i] = self._neigh_dose(realized, var)
-            se = res.summary()["mean_delta_se"]
-            rows.append({"dose": d, "mean_benefit": float(B[i].mean()), "mean_se": float(se if se is not None else 0.0),
-                         "frac_extrapolated": float(np.mean(res.extrapolation > 1.0)),
-                         "mean_realized_dose": float(realized.mean())})
+            j += 1
+            progress.check_cancel()
+            with progress.task("dose", k=j, n=D, key=f"{d:g}") as sp:
+                res = self.eng.run(ScenarioSpec(name=f"{var} {d:g}",
+                                                interventions=[Intervention(var, "add", sign * d)], dose=d, variable=var))
+                realized = np.abs(res.realized[var])
+                B[i] = -res.delta
+                own[i] = realized
+                Dn[i] = self._neigh_dose(realized, var)
+                se = res.summary()["mean_delta_se"]
+                rows.append({"dose": d, "mean_benefit": float(B[i].mean()),
+                             "mean_se": float(se if se is not None else 0.0),
+                             "frac_extrapolated": float(np.mean(res.extrapolation > 1.0)),
+                             "mean_realized_dose": float(realized.mean())})
+                sp.metrics.update(mean_benefit=rows[-1]["mean_benefit"], mean_se=rows[-1]["mean_se"],
+                                  frac_extrapolated=rows[-1]["frac_extrapolated"])
         # A dose is valid for a cell while its own dose is not capped (headroom).
         valid = np.zeros_like(B, dtype=bool)
         valid[0] = True
@@ -383,7 +394,9 @@ class ResponseEngine:
         lo, hi = self.eng._bounds(var)
         x = self.data.frame[var].to_numpy(float)
         headroom = (hi - x) if sign > 0 else (x - lo)
-        m = self.marginals(var)
+        progress.check_cancel()
+        with progress.task("marginals", key=var):
+            m = self.marginals(var)
         maps = pd.DataFrame({
             "max_cooling_A": fit["A"],
             "saturation_scale_ds": fit["ds"],

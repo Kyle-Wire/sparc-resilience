@@ -54,6 +54,7 @@ import numpy as np
 import pandas as pd
 
 from sparc.core import operators as ops
+from sparc.core import progress, runio
 
 log = logging.getLogger(__name__)
 
@@ -446,16 +447,20 @@ def _worker(args):
     from sparc.core.config import core_config_from_dict
 
     torch.set_num_threads(threads)
-    cfg = core_config_from_dict(cfg_raw, base_dir=base_dir)
-    layout = load_layout(cfg)
-    X = _covariates(layout)
-    real = real_reference(layout, X)
-    feats = _product_features(layout)
-    try:
-        return run_replicate(layout, kind, seed, real, feats, X, coarse=coarse, epochs=epochs, product=product)
-    except Exception as exc:                    # noqa: BLE001 - recorded, the study continues
-        log.exception("simcheck %s/%d failed", kind, seed)
-        return {"generator": kind, "product": product, "seed": seed, "error": repr(exc)}
+    with progress.context(generator=kind, seed=seed), \
+            progress.task("replicate", key=f"{kind}/{seed}", unit=f"replicate:{kind}") as sp:
+        cfg = core_config_from_dict(cfg_raw, base_dir=base_dir)
+        layout = load_layout(cfg)
+        X = _covariates(layout)
+        real = real_reference(layout, X)
+        feats = _product_features(layout)
+        try:
+            out = run_replicate(layout, kind, seed, real, feats, X, coarse=coarse, epochs=epochs, product=product)
+        except Exception as exc:                # noqa: BLE001 - recorded, the study continues
+            log.exception("simcheck %s/%d failed", kind, seed)
+            return {"generator": kind, "product": product, "seed": seed, "error": repr(exc)}
+        sp.metrics.update(share=out.get("share"), oof_r2=out.get("oof_r2"))
+        return out
 
 
 def run_simcheck(cfg, design: dict[str, int], out_dir: str | Path, coarse: float | None = 90.0, epochs: int = 200,
@@ -478,17 +483,33 @@ def run_simcheck(cfg, design: dict[str, int], out_dir: str | Path, coarse: float
     jobs = [(k, s) for k, n in design.items() for s in range(n) if (k, s) not in done]
     log.info("simcheck: %d replicates to run (%d done)", len(jobs), len(done))
     args = [(cfg.raw, str(cfg.base_dir), k, s, coarse, epochs, threads, product) for k, s in jobs]
-    with ProcessPoolExecutor(max_workers=max(1, workers)) as ex:
+    total, n_done = len(done) + len(jobs), len(done)
+    if jobs and n_done:
+        progress.tick(n_done, total, unit="replicates", label="resumed")
+    # Workers report into the same job (sink, span and context travel through init_worker).
+    ex = ProcessPoolExecutor(max_workers=max(1, workers), initializer=progress.init_worker,
+                             initargs=(progress.worker_env(),))
+    try:
         futs = [ex.submit(_worker, a) for a in args]
         for f in as_completed(futs):
+            progress.check_cancel()
             r = f.result()
-            with open(path, "a", encoding="utf-8") as fh:
+            with open(path, "a", encoding="utf-8") as fh:        # one appended line per replicate (resumable)
                 fh.write(json.dumps(r, default=float) + "\n")
+            n_done += 1
+            tags = {"generator": r.get("generator"), "seed": r.get("seed")}
+            progress.metric("share", r.get("share"), **tags)
+            progress.metric("oof_r2", r.get("oof_r2"), **tags)
+            progress.tick(n_done, total, unit="replicates")
             log.info("simcheck %s/%s: share %s, %ss", r.get("generator"), r.get("seed"), r.get("share"),
                      r.get("seconds"))
+    except progress.Cancelled:
+        ex.shutdown(wait=False, cancel_futures=True)
+        raise
+    ex.shutdown(wait=True)
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     summ = summarize(rows)
-    (out_dir / "simcheck_summary.json").write_text(json.dumps(summ, indent=1, default=float), encoding="utf-8")
+    runio.write_json_atomic(out_dir / "simcheck_summary.json", summ, indent=1)
     return summ
 
 

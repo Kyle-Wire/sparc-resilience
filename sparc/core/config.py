@@ -138,7 +138,8 @@ DEFAULTS: dict[str, Any] = {
         "equity_column": None,
         "equity_focus": 0.0,
     },
-    "output": {"dir": "output/core"},
+    # scenario_detail: also write scenario_detail.npz (per-fold Δ, jackknife SD and extrapolation per scenario)
+    "output": {"dir": "output/core", "scenario_detail": True},
 }
 
 

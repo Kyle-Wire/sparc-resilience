@@ -15,6 +15,14 @@ One spatial-block partition is shared by everything:
 
 There is deliberately no full-data refit: full-data tree/GWR fits are
 in-sample at every point and unlike the OOF features the stacker learned from.
+
+Progress (``sparc.core.progress``): ``task fold[k/K]`` › ``task base_model[name]``
+(unit ``base_fit:<name>``, metrics ``fit_s``, ``heldout_rmse``, ``heldout_r2``),
+``task advection_check`` › ``task adv_refit[k/K]``, ``task
+stacker_candidate[c/C]`` › ``task stacker_fold[k/K]`` (unit
+``stacker_fit:<mean|nnls|residual>``), and every :meth:`FittedEnsemble.fold_predictions`
+call ticks ``k/K`` in unit ``engine_pass`` (the last tick carries ``pass_s``).
+Each of these is also a cancellation point.
 """
 
 from __future__ import annotations
@@ -26,6 +34,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from sparc.core import progress
 from sparc.core.base_models import FeatureContext, PhysicsBaseModel, build_base_models
 from sparc.core.cv import SpatialFolds
 from sparc.core.stacker import (
@@ -36,6 +45,16 @@ from sparc.core.stacker import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _heldout(y: np.ndarray, p: np.ndarray, te: np.ndarray) -> dict:
+    """Held-out RMSE and R² of one fold's predictions (task metrics; not stored)."""
+    if te.size < 2:
+        return {}
+    r = y[te] - p[te]
+    sst = float(np.sum((y[te] - y[te].mean()) ** 2))
+    return {"heldout_rmse": float(np.sqrt(np.mean(r ** 2))),
+            "heldout_r2": float(1.0 - np.sum(r ** 2) / sst) if sst > 0 else None}
 
 
 def _metrics(y: np.ndarray, p: np.ndarray) -> dict:
@@ -87,9 +106,18 @@ class FittedEnsemble:
 
         ``phys_override`` (K, n) replaces the physics predictions (used for
         own-only perturbations, where the non-local physics response is
-        applied analytically)."""
-        out = np.empty((len(self.stacks), ctx.n))
+        applied analytically).
+
+        One call is one ``engine_pass``: it ticks ``k/K`` after each fold
+        (the ``k == K`` tick carries ``pass_s``, the seconds of the whole
+        pass) and checks for a cancel request before each fold — the single
+        hook that gives every scenario, sweep and emulator computation
+        progress and a cancellation point."""
+        K = len(self.stacks)
+        out = np.empty((K, ctx.n))
+        t0 = time.perf_counter()
         for k, st in enumerate(self.stacks):
+            progress.check_cancel()
             Z = np.column_stack([m.predict(ctx) for m in st.base]) if st.base else np.zeros((ctx.n, 0))
             if phys_override is not None:
                 phys = phys_override[k]
@@ -97,6 +125,10 @@ class FittedEnsemble:
                 phys = st.physics.predict(ctx) if st.physics is not None else None
             feats = ctx.XF.to_numpy(float)
             out[k] = st.stacker.predict(StackerInputs(Z=Z, phys=phys, feats=feats))
+            if k + 1 < K:
+                progress.tick(k + 1, K, unit="engine_pass")
+            else:
+                progress.tick(K, K, unit="engine_pass", pass_s=round(time.perf_counter() - t0, 4))
         return out
 
     def physics_predictions(self, ctx: FeatureContext) -> np.ndarray | None:
@@ -175,12 +207,16 @@ def _select_advection(ctx, folds, stacks, fold_base_preds, pcfg, L_init, seed) -
     cfg0 = dict(pcfg)
     cfg0["fit_advection"] = False
     d, alt = [], []
+    K = folds.n_folds
     for k, (tr, te) in enumerate(folds.split()):
-        m0 = PhysicsBaseModel(ctx.grid, cfg0, L_init=L_init, seed=seed + k).fit(ctx, tr)
-        p0 = m0.predict(ctx)
-        p1 = fold_base_preds[k]["physics"]
-        r0 = float(np.sqrt(np.mean((p0[te] - y[te]) ** 2)))
-        r1 = float(np.sqrt(np.mean((p1[te] - y[te]) ** 2)))
+        progress.check_cancel()
+        with progress.task("adv_refit", k=k + 1, n=K, unit="adv_refit") as sp:
+            m0 = PhysicsBaseModel(ctx.grid, cfg0, L_init=L_init, seed=seed + k).fit(ctx, tr)
+            p0 = m0.predict(ctx)
+            p1 = fold_base_preds[k]["physics"]
+            r0 = float(np.sqrt(np.mean((p0[te] - y[te]) ** 2)))
+            r1 = float(np.sqrt(np.mean((p1[te] - y[te]) ** 2)))
+            sp.metrics.update(heldout_rmse_no_adv=r0, heldout_rmse_adv=r1)
         d.append(r1 - r0)
         alt.append((m0, p0))
     d = np.asarray(d)
@@ -205,29 +241,37 @@ def fit_ensemble(ctx: FeatureContext, folds: SpatialFolds, cfg, *, ranges_m: dic
     stacks: list[FoldStack] = []
     fold_base_preds: list[dict[str, np.ndarray]] = []
     base_names: list[str] = []
-    for k, (tr, _te) in enumerate(folds.split()):
-        models = build_base_models(cfg.raw["models"], grid=ctx.grid, cfg_physics=cfg.raw["physics"],
-                                   ranges_m=ranges_m, intercept_range_m=intercept_range_m,
-                                   block_m=folds.block_m, L_init=L_init, seed=seed + k)
-        preds, fitted, phys = {}, [], None
-        for m in models:
-            t = time.time()
-            try:
-                m.fit(ctx, tr)
-                p = m.predict(ctx)
-            except Exception as exc:  # a failed fold is an error, never mean-filled
-                raise RuntimeError(f"base model {m.name!r} failed on fold {k}: {exc}") from exc
-            if not np.all(np.isfinite(p)):
-                raise RuntimeError(f"base model {m.name!r} produced non-finite predictions on fold {k}")
-            preds[m.name] = p
-            log.info("fold %d: %s fitted in %.1fs", k, m.name, time.time() - t)
-            if isinstance(m, PhysicsBaseModel):
-                phys = m
-            else:
-                fitted.append(m)
-        base_names = [m.name for m in models]
-        stacks.append(FoldStack(base=fitted, physics=phys))
-        fold_base_preds.append(preds)
+    fold_model_s: dict[str, list[float]] = {}
+    for k, (tr, te) in enumerate(folds.split()):
+        progress.check_cancel()
+        with progress.task("fold", k=k + 1, n=K):
+            models = build_base_models(cfg.raw["models"], grid=ctx.grid, cfg_physics=cfg.raw["physics"],
+                                       ranges_m=ranges_m, intercept_range_m=intercept_range_m,
+                                       block_m=folds.block_m, L_init=L_init, seed=seed + k)
+            preds, fitted, phys = {}, [], None
+            for m in models:
+                progress.check_cancel()
+                with progress.task("base_model", key=m.name, unit=f"base_fit:{m.name}") as sp:
+                    t = time.time()
+                    try:
+                        m.fit(ctx, tr)
+                        p = m.predict(ctx)
+                    except Exception as exc:  # a failed fold is an error, never mean-filled
+                        raise RuntimeError(f"base model {m.name!r} failed on fold {k}: {exc}") from exc
+                    if not np.all(np.isfinite(p)):
+                        raise RuntimeError(f"base model {m.name!r} produced non-finite predictions on fold {k}")
+                    fit_s = time.time() - t
+                    sp.metrics.update(fit_s=round(fit_s, 3), **_heldout(y, p, te))
+                preds[m.name] = p
+                fold_model_s.setdefault(m.name, []).append(round(fit_s, 3))
+                log.info("fold %d: %s fitted in %.1fs", k, m.name, fit_s)
+                if isinstance(m, PhysicsBaseModel):
+                    phys = m
+                else:
+                    fitted.append(m)
+            base_names = [m.name for m in models]
+            stacks.append(FoldStack(base=fitted, physics=phys))
+            fold_base_preds.append(preds)
     t_base = time.time() - t0
 
     physics_selection = None
@@ -235,7 +279,8 @@ def fit_ensemble(ctx: FeatureContext, folds: SpatialFolds, cfg, *, ranges_m: dic
     fa = pcfg.get("fit_advection", "auto")
     adv_on = (pcfg.get("wind") is not None) if fa in ("auto", None) else bool(fa)
     if "physics" in base_names and adv_on and pcfg.get("select_advection", True):
-        physics_selection = _select_advection(ctx, folds, stacks, fold_base_preds, pcfg, L_init, seed)
+        with progress.task("advection_check"):
+            physics_selection = _select_advection(ctx, folds, stacks, fold_base_preds, pcfg, L_init, seed)
 
     oof = pd.DataFrame({name: np.empty(n) for name in base_names})
     for k in range(K):
@@ -266,17 +311,30 @@ def fit_ensemble(ctx: FeatureContext, folds: SpatialFolds, cfg, *, ranges_m: dic
     labels = {"mean": "equal-weight mean of base models", "nnls": "convex (NNLS) blend of base models"}
     t1 = time.time()
     scores, best = {}, None
-    for base_mode, lam in candidates:
-        stackers, pred = [], np.empty(n)
-        for k, (tr, _te) in enumerate(folds.split()):
-            st = PhysicsInformedStacker(scfg, ctx.grid, physics=(stacks[k].physics.model if stacks[k].physics else None),
-                                        sigma_q=sigma_q, lambda_pde=(0.0 if lam is None else lam),
-                                        seed=int(scfg.get("seed", 0)) + k, base_mode=base_mode)
-            st.fit(inp, y, tr, groups=folds.block_id, buffer_m=folds.buffer_m, residual=lam is not None)
-            pk = st.predict(inp)
-            pred[folds.test_masks[k]] = pk[folds.test_masks[k]]
-            stackers.append(st)
-        rmse = float(np.sqrt(np.mean((pred - y) ** 2)))
+    candidate_s: dict[str, float] = {}
+    C = len(candidates)
+    for c, (base_mode, lam) in enumerate(candidates, start=1):
+        progress.check_cancel()
+        ckey = base_mode if lam is None else f"residual:{lam:g}"
+        unit = f"stacker_fit:{base_mode if lam is None else 'residual'}"
+        tc = time.time()
+        with progress.task("stacker_candidate", k=c, n=C, key=ckey) as csp:
+            stackers, pred = [], np.empty(n)
+            for k, (tr, _te) in enumerate(folds.split()):
+                progress.check_cancel()
+                with progress.task("stacker_fold", k=k + 1, n=K, unit=unit):
+                    st = PhysicsInformedStacker(scfg, ctx.grid,
+                                                physics=(stacks[k].physics.model if stacks[k].physics else None),
+                                                sigma_q=sigma_q, lambda_pde=(0.0 if lam is None else lam),
+                                                seed=int(scfg.get("seed", 0)) + k, base_mode=base_mode)
+                    st.fit(inp, y, tr, groups=folds.block_id, buffer_m=folds.buffer_m, residual=lam is not None)
+                    pk = st.predict(inp)
+                    pred[folds.test_masks[k]] = pk[folds.test_masks[k]]
+                    stackers.append(st)
+            rmse = float(np.sqrt(np.mean((pred - y) ** 2)))
+            csp.metrics["rmse"] = rmse
+        candidate_s[ckey] = round(time.time() - tc, 3)
+        progress.metric("candidate_rmse", rmse, candidate=ckey)
         key = base_mode if lam is None else str(lam)
         key = "off" if key == "nnls" else key
         choice = labels[base_mode] if lam is None else f"{labels[base_mode]} + neural residual (λ_PDE={lam:g})"
@@ -303,9 +361,15 @@ def fit_ensemble(ctx: FeatureContext, folds: SpatialFolds, cfg, *, ranges_m: dic
     metrics["stacker"]["interval_diagnostics"] = interval_diagnostics(y, oof_pred, hw, hw_ad, folds.fold_id, dist)
     wnames = other + (["physics"] if phys_oof is not None and str(scfg.get("physics_mode", "feature")) != "backbone" else [])
     stacker_info = [st.summary(wnames) for st in stackers]
+    s_m = metrics["stacker"]
+    progress.metric("stacker_rmse", s_m["rmse"])
+    progress.metric("stacker_r2", s_m["r2"])
+    progress.metric("interval_coverage", s_m["interval_coverage"])
+    progress.metric("interval_halfwidth", s_m["interval_mean_halfwidth"])
     return FittedEnsemble(folds=folds, stacks=stacks, base_names=base_names, oof_base=oof, oof_pred=oof_pred,
                           halfwidth=hw, metrics=metrics, lambda_pde=(None if lam_best is None else float(lam_best)),
                           lambda_scores=scores,
-                          timings={"base_models_s": t_base, "stackers_s": t_stack},
+                          timings={"base_models_s": t_base, "stackers_s": t_stack, "fold_model_s": fold_model_s,
+                                   "stacker_candidates_s": candidate_s},
                           physics_selection=physics_selection, stacker_info=stacker_info,
                           stacker_choice=stacker_choice, halfwidth_adaptive=hw_ad, dist_train=dist)

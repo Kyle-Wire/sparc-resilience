@@ -97,8 +97,16 @@ def specs_from_config(cfg: CoreConfig) -> list[ScenarioSpec]:
 
 
 class ScenarioEngine:
+    """Scenario Δ against the fold stacks' baseline predictions.
+
+    ``base_fold`` (K, n) is the baseline pass ``ensemble.fold_predictions``
+    of the unedited context; pass a saved copy to skip that pass (it is the
+    same array for the same run, data and code), read it back from
+    ``self.base_fold``.
+    """
+
     def __init__(self, data: CoreData, cfg: CoreConfig, ensemble: FittedEnsemble, ranges_m: dict[str, float],
-                 mediators: MediatorChain | None = None):
+                 mediators: MediatorChain | None = None, base_fold: np.ndarray | None = None):
         self.data = data
         self.cfg = cfg
         self.ens = ensemble
@@ -112,7 +120,13 @@ class ScenarioEngine:
         self._lo = XF.quantile(0.005)
         self._hi = XF.quantile(0.995)
         self._sd = XF.std().replace(0.0, 1.0)
-        self._base_fold = ensemble.fold_predictions(self.base_ctx)
+        if base_fold is None:
+            base_fold = ensemble.fold_predictions(self.base_ctx)
+        else:
+            base_fold = np.asarray(base_fold, dtype=float)
+            if base_fold.shape != (len(ensemble.stacks), data.n):
+                raise ValueError(f"base_fold has shape {base_fold.shape}; expected {(len(ensemble.stacks), data.n)}")
+        self._base_fold = base_fold
         self.baseline = ensemble.honest(self._base_fold)
         Z = data.frame[cfg.predictors].to_numpy(float)
         self._mu = Z.mean(axis=0)
@@ -120,6 +134,11 @@ class ScenarioEngine:
         self._icov = np.linalg.pinv(cov)
         d0 = self._mahal(Z)
         self._d95 = float(np.percentile(d0, 95)) or 1.0
+
+    @property
+    def base_fold(self) -> np.ndarray:
+        """(K, n) baseline predictions of every fold stack (the engine's baseline pass)."""
+        return self._base_fold
 
     # ------------------------------------------------------------ helpers
     def _mahal(self, Z: np.ndarray) -> np.ndarray:

@@ -81,13 +81,21 @@ def climate_uncertainty(m: dict) -> list[dict]:
 
 
 def uncertainty_report(run_dir, multiverse_dir=None, simcheck_dirs=(), placebo_path=None, real_r2_gate: bool = False) -> dict:
+    """Write ``uncertainty.json``/``.md`` and record ``uncertainty`` (plus ``placebo``, ``simcheck`` and
+    ``multiverse`` when given) in the manifest through :func:`sparc.core.runio.update_manifest`."""
+    from sparc.core import progress, runio
+
     run_dir = Path(run_dir)
     m = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    sections: dict = {}
     if placebo_path and Path(placebo_path).exists():
         pz = json.loads(Path(placebo_path).read_text(encoding="utf-8"))
-        m["placebo"] = {k: pz.get(k) for k in ("rows", "n_pass_model", "n_pass_causal", "n_placebos", "coarse_m",
-                                              "layer_correlation_with_original")}
-        (run_dir / "placebo.json").write_text(json.dumps(pz, indent=1, default=float), encoding="utf-8")
+        m["placebo"] = sections["placebo"] = {k: pz.get(k) for k in ("rows", "n_pass_model", "n_pass_causal",
+                                                                     "n_placebos", "coarse_m",
+                                                                     "layer_correlation_with_original")}
+        runio.write_json_atomic(run_dir / "placebo.json", pz, indent=1)
+        with progress.run_dir_scope(run_dir):
+            progress.artifact(run_dir / "placebo.json", role="placebo")
     mv = None
     if multiverse_dir and (Path(multiverse_dir) / "multiverse_summary.json").exists():
         mv = json.loads((Path(multiverse_dir) / "multiverse_summary.json").read_text(encoding="utf-8"))
@@ -104,15 +112,19 @@ def uncertainty_report(run_dir, multiverse_dir=None, simcheck_dirs=(), placebo_p
            "multiverse_stability": {k: (mv or {}).get(k) for k in ("sign_stability_min", "median_kendall_tau",
                                                                    "median_top_decile_jaccard")} if mv else None,
            "simcheck": sc}
-    (run_dir / "uncertainty.json").write_text(json.dumps(out, indent=1, default=float), encoding="utf-8")
-    m["uncertainty"] = {k: v for k, v in out.items() if k != "simcheck"}
+    sections["uncertainty"] = {k: v for k, v in out.items() if k != "simcheck"}
     if sc:
-        m["simcheck"] = sc
+        sections["simcheck"] = sc
     if mv:
-        m["multiverse"] = mv
-    (run_dir / "manifest.json").write_text(json.dumps(m, indent=1, default=str), encoding="utf-8")
-    (run_dir / "uncertainty.md").write_text(uncertainty_markdown(out, (m.get("config") or {}).get("data", {})
-                                                                 .get("target_units", "")) + "\n", encoding="utf-8")
+        sections["multiverse"] = mv
+    units = (m.get("config") or {}).get("data", {}).get("target_units", "")
+    with progress.run_dir_scope(run_dir):
+        runio.write_json_atomic(run_dir / "uncertainty.json", out, indent=1)
+        progress.artifact(run_dir / "uncertainty.json", role="uncertainty")
+        runio.update_manifest(run_dir, sections, source="uncertainty")
+        progress.artifact(run_dir / "manifest.json", role="manifest")
+        runio.write_text_atomic(run_dir / "uncertainty.md", uncertainty_markdown(out, units) + "\n")
+        progress.artifact(run_dir / "uncertainty.md", role="uncertainty")
     return out
 
 

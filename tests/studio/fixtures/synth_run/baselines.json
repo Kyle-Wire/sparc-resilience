@@ -1,0 +1,50 @@
+{
+  "block_m": 390.0,
+  "buffer_m": 130.0,
+  "rows": {
+    "hgb_xy": {
+      "label": "gradient boosting, covariates + x,y",
+      "rmse": 0.6712875158306163,
+      "r2": 0.28685283117264837,
+      "stack_rmse": 0.3419943733759523,
+      "delta_mse": 0.33366677748922974,
+      "delta_mse_se": 0.12138285946675946,
+      "delta_rmse": 0.329293142454664,
+      "z": 2.7488788693481387,
+      "stack_better": true,
+      "baseline_better": false,
+      "frac_blocks_stack_better": 0.75,
+      "n_blocks": 16
+    },
+    "hgb_focal": {
+      "label": "gradient boosting on the stack's inputs (covariates + neighbourhood features)",
+      "rmse": 0.47656521140706376,
+      "r2": 0.6405763138310151,
+      "stack_rmse": 0.3419943733759523,
+      "delta_mse": 0.11015424930264917,
+      "delta_mse_se": 0.06239952210773266,
+      "delta_rmse": 0.13457083803111147,
+      "z": 1.7653059764218715,
+      "stack_better": false,
+      "baseline_better": false,
+      "frac_blocks_stack_better": 0.875,
+      "n_blocks": 16
+    },
+    "idw": {
+      "label": "inverse-distance interpolation (no covariates)",
+      "rmse": 0.6443679230426813,
+      "r2": 0.34290245120584806,
+      "stack_rmse": 0.3419943733759523,
+      "delta_mse": 0.2982498688255285,
+      "delta_mse_se": 0.16095756698318014,
+      "delta_rmse": 0.302373549666729,
+      "z": 1.8529720249604371,
+      "stack_better": false,
+      "baseline_better": false,
+      "frac_blocks_stack_better": 0.8125,
+      "n_blocks": 16
+    }
+  },
+  "best_baseline": "hgb_focal",
+  "verdict": "stack not distinguishable from hgb_focal (|\u0394MSE| \u2264 2 SE)"
+}

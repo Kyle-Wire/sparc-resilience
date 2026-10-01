@@ -25,6 +25,8 @@ from pathlib import Path
 
 import numpy as np
 
+from sparc.core import progress
+
 log = logging.getLogger(__name__)
 
 VARIANTS: dict[str, dict] = {
@@ -66,49 +68,85 @@ def apply_variant(cfg, changes: dict, name: str):
     return c
 
 
-def run_variant(cfg_raw: dict, base_dir: str, name: str, coarse: float | None, out_dir: str, threads: int = 1) -> dict:
+def run_variant(cfg_raw: dict, base_dir: str, name: str, coarse: float | None, out_dir: str, threads: int = 1,
+                changes: dict | None = None, run_meta: dict | None = None) -> dict:
+    """Re-run S0–S5 with one analysis choice changed (``changes``, default ``VARIANTS[name]``).
+
+    A ``task variant[<name>]`` (unit ``variant:<name>``) in ``context(variant=<name>)``; the child run
+    resumes from its own checkpoint and gets ``run_meta`` with ``role = "variant:<name>"``."""
     import torch
 
+    from sparc.core import runio
     from sparc.core.config import core_config_from_dict
     from sparc.core.pipeline import run_core
 
     torch.set_num_threads(threads)
-    t0 = time.time()
-    cfg = core_config_from_dict(cfg_raw, base_dir=base_dir)
-    vc = apply_variant(cfg, VARIANTS[name], name)
-    if coarse:
-        vc.raw["data"]["coarse_m"] = float(coarse)
-    res = run_core(vc, stages=("S0", "S1", "S2", "S3", "S4", "S5"), write=True, resume=True)
-    maps = {v: r.maps["marginal_benefit_per_unit"].to_numpy(float) for v, r in res.responses.items()}
-    np.savez_compressed(Path(out_dir) / f"{name}_maps.npz", ids=res.data.ids, **maps)
-    out = {"variant": name, "label": LABELS.get(name, name), "seconds": round(time.time() - t0, 1),
-           "r2": res.manifest["metrics"]["stacker"]["r2"], "rmse": res.manifest["metrics"]["stacker"]["rmse"],
-           "block_m": res.manifest["cv"]["block_m"], "stacker_choice": res.manifest.get("stacker_choice"),
-           "scenarios": {s["name"]: {"mean_delta": s["mean_delta"], "se": s.get("mean_delta_se"),
-                                     "frac_extrapolated": s.get("frac_extrapolated")} for s in res.scenarios},
-           "run_dir": str(res.run_dir)}
-    (Path(out_dir) / f"{name}.json").write_text(json.dumps(out, indent=1, default=float), encoding="utf-8")
+    with progress.context(variant=name), progress.task("variant", key=name, unit=f"variant:{name}") as sp:
+        t0 = time.time()
+        cfg = core_config_from_dict(cfg_raw, base_dir=base_dir)
+        vc = apply_variant(cfg, VARIANTS[name] if changes is None else changes, name)
+        if coarse:
+            vc.raw["data"]["coarse_m"] = float(coarse)
+        meta = {**(run_meta or {}), "role": f"variant:{name}"}
+        res = run_core(vc, stages=("S0", "S1", "S2", "S3", "S4", "S5"), write=True, resume=True, run_meta=meta)
+        maps = {v: r.maps["marginal_benefit_per_unit"].to_numpy(float) for v, r in res.responses.items()}
+        runio.write_npz_atomic(Path(out_dir) / f"{name}_maps.npz", compressed=True, ids=res.data.ids, **maps)
+        out = {"variant": name, "label": LABELS.get(name, name), "seconds": round(time.time() - t0, 1),
+               "r2": res.manifest["metrics"]["stacker"]["r2"], "rmse": res.manifest["metrics"]["stacker"]["rmse"],
+               "block_m": res.manifest["cv"]["block_m"], "stacker_choice": res.manifest.get("stacker_choice"),
+               "scenarios": {s["name"]: {"mean_delta": s["mean_delta"], "se": s.get("mean_delta_se"),
+                                         "frac_extrapolated": s.get("frac_extrapolated")} for s in res.scenarios},
+               "run_dir": str(res.run_dir)}
+        if changes is not None and name not in VARIANTS:
+            out["changes"] = changes
+        runio.write_json_atomic(Path(out_dir) / f"{name}.json", out, indent=1)
+        sp.metrics.update(r2=out["r2"], rmse=out["rmse"])
     return out
 
 
-def run_multiverse(cfg, out_dir, variants=None, coarse: float | None = 60.0, workers: int = 1, threads: int = 1) -> dict:
+def run_multiverse(cfg, out_dir, variants=None, coarse: float | None = 60.0, workers: int = 1, threads: int = 1,
+                   extra_variants: dict[str, dict] | None = None, run_meta: dict | None = None) -> dict:
+    """Run the variants not done yet (a ``<name>.json`` marks one done) and summarise them.
+
+    ``extra_variants`` adds named variants ({name: {dotted.key: value}}) to
+    :data:`VARIANTS`; they run by default along with ``variants`` (all of
+    :data:`VARIANTS` when not given).  Child runs follow ``cfg.output.dir``.
+    The pool's workers report into the same job (``progress.init_worker``);
+    on a cancel queued variants are dropped and the cancel propagates."""
     from concurrent.futures import ProcessPoolExecutor, as_completed
 
+    extra = dict(extra_variants or {})
+    clash = sorted(set(extra) & set(VARIANTS))
+    if clash:
+        raise ValueError(f"extra variants {clash} reuse built-in names")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    names = list(variants or VARIANTS)
+    names = list(variants or VARIANTS) + [n for n in extra if n not in (variants or ())]
     todo = [n for n in names if not (out_dir / f"{n}.json").exists()]
     log.info("multiverse: %d variants to run (%d done)", len(todo), len(names) - len(todo))
-    with ProcessPoolExecutor(max_workers=max(1, workers)) as ex:
-        futs = {ex.submit(run_variant, cfg.raw, str(cfg.base_dir), n, coarse, str(out_dir), threads): n for n in todo}
+    total, n_done = len(names), len(names) - len(todo)
+    ex = ProcessPoolExecutor(max_workers=max(1, workers), initializer=progress.init_worker,
+                             initargs=(progress.worker_env(),))
+    try:
+        futs = {ex.submit(run_variant, cfg.raw, str(cfg.base_dir), n, coarse, str(out_dir), threads,
+                          extra.get(n), run_meta): n for n in todo}
         for f in as_completed(futs):
+            progress.check_cancel()
             try:
                 r = f.result()
                 log.info("multiverse %s: R² %.3f (%ss)", r["variant"], r["r2"], r["seconds"])
             except Exception:                   # noqa: BLE001 - recorded, others continue
                 log.exception("multiverse variant %s failed", futs[f])
+            n_done += 1
+            progress.tick(n_done, total, unit="variants", label=futs[f])
+    except progress.Cancelled:
+        ex.shutdown(wait=False, cancel_futures=True)
+        raise
+    ex.shutdown(wait=True)
     summ = summarize(out_dir, names)
-    (out_dir / "multiverse_summary.json").write_text(json.dumps(summ, indent=1, default=float), encoding="utf-8")
+    from sparc.core import runio
+
+    runio.write_json_atomic(out_dir / "multiverse_summary.json", summ, indent=1)
     return summ
 
 

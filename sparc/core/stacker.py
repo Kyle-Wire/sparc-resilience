@@ -43,6 +43,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from sparc.core import progress
+
 log = logging.getLogger(__name__)
 
 
@@ -234,8 +236,13 @@ class PhysicsInformedStacker:
                     best, bad = (v, copy.deepcopy(self.net.state_dict()), ep + 1), 0
                 else:
                     bad += 1
-                    if bad >= patience:
-                        break
+                # debug-level progress; the cancel check runs at every level
+                progress.tick(ep + 1, epochs, unit="epoch", lvl="debug", val_mse=v, best=best[0], bad=bad)
+                progress.check_cancel()
+                if bad >= patience:
+                    break
+            elif va is None and ep % every == every - 1:
+                progress.check_cancel()
         if best[1] is not None:
             self.net.load_state_dict(best[1])
         self.best_epoch = best[2]

@@ -35,6 +35,7 @@ import logging
 
 import numpy as np
 
+from sparc.core import progress
 from sparc.core.cv import SpatialFolds, make_spatial_folds
 from sparc.core.ensemble import FittedEnsemble, fit_ensemble
 
@@ -75,6 +76,32 @@ def _baseline_cells(b: dict | None) -> dict:
                 "baseline_better": r["baseline_better"]} for k, r in b["rows"].items()}
 
 
+def curve_partitions(block_sizes, dx: float | None, extent: float | None,
+                     main_block_m: float | None) -> tuple[list[tuple[float, float, str]], list[dict]]:
+    """The skill-vs-distance partitions that are fitted: ``(block, buffer, label)`` per kept size, and the
+    sizes skipped as outside ``[3·dx, extent/3]`` (``{block_m, lo, hi}``).
+
+    ``0`` means random points (1-cell blocks, no buffer) and is always kept.
+    A size equal to the main block (within half a cell) is dropped silently:
+    the main run supplies that row.  With ``dx``/``extent`` unknown (a plan
+    made before S0) every positive size is kept; with ``main_block_m``
+    unknown (before S1, ``cv.block_m: auto``) none is dropped as the main one.
+    """
+    kept, skipped = [], []
+    for b in block_sizes:
+        b = float(b)
+        if b <= 0:
+            kept.append((float(dx) if dx else 0.0, 0.0, "random points (leaky reference)"))
+            continue
+        if dx is not None and extent is not None and (b < 3 * dx or b > extent / 3.0):
+            skipped.append({"block_m": b, "lo": 3 * float(dx), "hi": float(extent) / 3.0})
+            continue
+        if main_block_m is not None and dx is not None and abs(b - main_block_m) < 0.5 * dx:
+            continue
+        kept.append((b, b / 3.0, f"{b:g} m blocks"))
+    return kept, skipped
+
+
 def cv_distance_curve(ctx, data, cfg, influence, main_ensemble: FittedEnsemble, main_folds: SpatialFolds,
                       block_sizes=(0, 500, 1000), seed: int = 42, baselines: bool | list = True,
                       main_baselines: dict | None = None) -> dict:
@@ -82,35 +109,38 @@ def cv_distance_curve(ctx, data, cfg, influence, main_ensemble: FittedEnsemble, 
     out-of-fold skill against block size.  ``0`` means random points.
 
     Sizes below 3 grid cells, above a third of the study-area extent, or equal
-    to the main block are skipped (the main run supplies its own row)."""
+    to the main block are skipped (the main run supplies its own row).
+    Each partition is a ``task cv_partition[p/P]`` in ``context(partition=…)``."""
     n_folds = main_folds.n_folds
     dx = data.grid.dx
     extent = min(np.ptp(data.x), np.ptp(data.y_coord))
     ranges = dict(influence.ranges_m)
+    parts, skipped = curve_partitions(block_sizes, dx, extent, main_folds.block_m)
+    for sk in skipped:
+        log.info("cv curve: skipping %.0f m blocks (outside [%.0f, %.0f] m for this study area)",
+                 sk["block_m"], sk["lo"], sk["hi"])
+        progress.warn("cv.partition_skipped", f"{sk['block_m']:g} m blocks are outside [{sk['lo']:.0f}, "
+                      f"{sk['hi']:.0f}] m for this study area", **sk)
     rows = []
-    for b in block_sizes:
-        b = float(b)
-        if b <= 0:
-            block, buf, label = dx, 0.0, "random points (leaky reference)"
-        else:
-            if b < 3 * dx or b > extent / 3.0:
-                log.info("cv curve: skipping %.0f m blocks (outside [%.0f, %.0f] m for this study area)",
-                         b, 3 * dx, extent / 3.0)
-                continue
-            if abs(b - main_folds.block_m) < 0.5 * dx:
-                continue
-            block, buf, label = b, b / 3.0, f"{b:g} m blocks"
+    P = len(parts)
+    for p, (block, buf, label) in enumerate(parts, start=1):
+        progress.check_cancel()
         log.info("cv curve: fitting %s", label)
-        folds = make_spatial_folds(data.coords, n_folds=n_folds, block_m=block, buffer_m=buf, seed=seed)
-        ens = fit_ensemble(ctx, folds, cfg, ranges_m=ranges, intercept_range_m=influence.target_resid_range_m,
-                           L_init=influence.L_prior_m, seed=seed)
-        rows.append(curve_row(label, folds, ens, data.y))
-        if baselines:
-            from sparc.core.baselines import BASELINES, compare_baselines
+        with progress.context(partition=label), progress.task("cv_partition", k=p, n=P, key=label) as sp:
+            folds = make_spatial_folds(data.coords, n_folds=n_folds, block_m=block, buffer_m=buf, seed=seed)
+            ens = fit_ensemble(ctx, folds, cfg, ranges_m=ranges, intercept_range_m=influence.target_resid_range_m,
+                               L_init=influence.L_prior_m, seed=seed)
+            rows.append(curve_row(label, folds, ens, data.y))
+            if baselines:
+                from sparc.core.baselines import BASELINES, compare_baselines
 
-            rows[-1]["baselines"] = _baseline_cells(compare_baselines(
-                data.X.to_numpy(float), data.coords, data.y, ens.oof_pred, folds, seed=seed,
-                models=BASELINES if baselines is True else tuple(baselines), XF=ctx.XF.to_numpy(float)))
+                rows[-1]["baselines"] = _baseline_cells(compare_baselines(
+                    data.X.to_numpy(float), data.coords, data.y, ens.oof_pred, folds, seed=seed,
+                    models=BASELINES if baselines is True else tuple(baselines), XF=ctx.XF.to_numpy(float)))
+            st = rows[-1]["stacker"]
+            sp.metrics.update(r2=st["r2"], rmse=st["rmse"])
+            progress.metric("cv_row.r2", st["r2"], partition=label)
+            progress.metric("cv_row.rmse", st["rmse"], partition=label)
         log.info("cv curve: %s → stacker R² %.3f (RMSE %.3f)", label, rows[-1]["stacker"]["r2"],
                  rows[-1]["stacker"]["rmse"])
     rows.append(curve_row(f"{main_folds.block_m:.0f} m blocks (main)", main_folds, main_ensemble, data.y, main=True))

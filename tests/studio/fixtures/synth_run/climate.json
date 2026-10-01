@@ -1,0 +1,522 @@
+{
+  "present": {
+    "mean": 88.1562169642857,
+    "share_at_or_above": {
+      "90.0": 0.03482142857142857,
+      "95.0": 0.0
+    }
+  },
+  "thresholds": [
+    90.0,
+    95.0
+  ],
+  "projections": [
+    {
+      "experiment": "ssp126",
+      "label": "SSP1-2.6",
+      "period": "2021-2040",
+      "n_models": 6,
+      "warming": {
+        "median": 1.701,
+        "p10": 1.3365,
+        "p90": 2.187,
+        "min": 1.215,
+        "max": 2.3489999999999998,
+        "by_model": {
+          "DEMO-A": 1.215,
+          "DEMO-B": 1.4580000000000002,
+          "DEMO-C": 1.62,
+          "DEMO-D": 1.782,
+          "DEMO-E": 2.025,
+          "DEMO-F": 2.3489999999999998
+        }
+      },
+      "variants": [
+        {
+          "name": "no adaptation",
+          "mean": 89.8572169642857,
+          "adaptation_mean_delta": 0.0,
+          "offset_share_of_median_warming": null,
+          "share_at_or_above": {
+            "90.0": {
+              "median": 0.3075892857142857,
+              "p10": 0.21919642857142857,
+              "p90": 0.6129464285714286
+            },
+            "95.0": {
+              "median": 0.0,
+              "p10": 0.0,
+              "p90": 0.0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "experiment": "ssp126",
+      "label": "SSP1-2.6",
+      "period": "2041-2060",
+      "n_models": 6,
+      "warming": {
+        "median": 2.457,
+        "p10": 1.9304999999999999,
+        "p90": 3.1590000000000003,
+        "min": 1.755,
+        "max": 3.3930000000000002,
+        "by_model": {
+          "DEMO-A": 1.755,
+          "DEMO-B": 2.106,
+          "DEMO-C": 2.3400000000000003,
+          "DEMO-D": 2.574,
+          "DEMO-E": 2.9250000000000003,
+          "DEMO-F": 3.3930000000000002
+        }
+      },
+      "variants": [
+        {
+          "name": "no adaptation",
+          "mean": 90.6132169642857,
+          "adaptation_mean_delta": 0.0,
+          "offset_share_of_median_warming": null,
+          "share_at_or_above": {
+            "90.0": {
+              "median": 0.8107142857142857,
+              "p10": 0.4214285714285715,
+              "p90": 0.978125
+            },
+            "95.0": {
+              "median": 0.0,
+              "p10": 0.0,
+              "p90": 0.0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "experiment": "ssp126",
+      "label": "SSP1-2.6",
+      "period": "2081-2100",
+      "n_models": 6,
+      "warming": {
+        "median": 2.835,
+        "p10": 2.2275,
+        "p90": 3.6449999999999996,
+        "min": 2.025,
+        "max": 3.9149999999999996,
+        "by_model": {
+          "DEMO-A": 2.025,
+          "DEMO-B": 2.43,
+          "DEMO-C": 2.7,
+          "DEMO-D": 2.9699999999999998,
+          "DEMO-E": 3.375,
+          "DEMO-F": 3.9149999999999996
+        }
+      },
+      "variants": [
+        {
+          "name": "no adaptation",
+          "mean": 90.9912169642857,
+          "adaptation_mean_delta": 0.0,
+          "offset_share_of_median_warming": null,
+          "share_at_or_above": {
+            "90.0": {
+              "median": 0.9441964285714286,
+              "p10": 0.6397321428571429,
+              "p90": 0.9977678571428572
+            },
+            "95.0": {
+              "median": 0.0,
+              "p10": 0.0,
+              "p90": 0.0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "experiment": "ssp245",
+      "label": "SSP2-4.5",
+      "period": "2021-2040",
+      "n_models": 6,
+      "warming": {
+        "median": 1.8900000000000001,
+        "p10": 1.485,
+        "p90": 2.4299999999999997,
+        "min": 1.35,
+        "max": 2.61,
+        "by_model": {
+          "DEMO-A": 1.35,
+          "DEMO-B": 1.62,
+          "DEMO-C": 1.8,
+          "DEMO-D": 1.9800000000000002,
+          "DEMO-E": 2.25,
+          "DEMO-F": 2.61
+        }
+      },
+      "variants": [
+        {
+          "name": "no adaptation",
+          "mean": 90.0462169642857,
+          "adaptation_mean_delta": 0.0,
+          "offset_share_of_median_warming": null,
+          "share_at_or_above": {
+            "90.0": {
+              "median": 0.390625,
+              "p10": 0.25044642857142857,
+              "p90": 0.7767857142857142
+            },
+            "95.0": {
+              "median": 0.0,
+              "p10": 0.0,
+              "p90": 0.0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "experiment": "ssp245",
+      "label": "SSP2-4.5",
+      "period": "2041-2060",
+      "n_models": 6,
+      "warming": {
+        "median": 3.213,
+        "p10": 2.5244999999999997,
+        "p90": 4.131,
+        "min": 2.295,
+        "max": 4.437,
+        "by_model": {
+          "DEMO-A": 2.295,
+          "DEMO-B": 2.754,
+          "DEMO-C": 3.06,
+          "DEMO-D": 3.366,
+          "DEMO-E": 3.825,
+          "DEMO-F": 4.437
+        }
+      },
+      "variants": [
+        {
+          "name": "no adaptation",
+          "mean": 91.3692169642857,
+          "adaptation_mean_delta": 0.0,
+          "offset_share_of_median_warming": null,
+          "share_at_or_above": {
+            "90.0": {
+              "median": 0.9830357142857142,
+              "p10": 0.8227678571428572,
+              "p90": 1.0
+            },
+            "95.0": {
+              "median": 0.0,
+              "p10": 0.0,
+              "p90": 0.0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "experiment": "ssp245",
+      "label": "SSP2-4.5",
+      "period": "2081-2100",
+      "n_models": 6,
+      "warming": {
+        "median": 4.914,
+        "p10": 3.8609999999999998,
+        "p90": 6.3180000000000005,
+        "min": 3.51,
+        "max": 6.7860000000000005,
+        "by_model": {
+          "DEMO-A": 3.51,
+          "DEMO-B": 4.212,
+          "DEMO-C": 4.680000000000001,
+          "DEMO-D": 5.148,
+          "DEMO-E": 5.8500000000000005,
+          "DEMO-F": 6.7860000000000005
+        }
+      },
+      "variants": [
+        {
+          "name": "no adaptation",
+          "mean": 93.0702169642857,
+          "adaptation_mean_delta": 0.0,
+          "offset_share_of_median_warming": null,
+          "share_at_or_above": {
+            "90.0": {
+              "median": 1.0,
+              "p10": 0.9995535714285715,
+              "p90": 1.0
+            },
+            "95.0": {
+              "median": 0.022767857142857142,
+              "p10": 0.0,
+              "p90": 0.24285714285714283
+            }
+          }
+        }
+      ]
+    },
+    {
+      "experiment": "ssp370",
+      "label": "SSP3-7.0",
+      "period": "2021-2040",
+      "n_models": 6,
+      "warming": {
+        "median": 1.8900000000000001,
+        "p10": 1.485,
+        "p90": 2.4299999999999997,
+        "min": 1.35,
+        "max": 2.61,
+        "by_model": {
+          "DEMO-A": 1.35,
+          "DEMO-B": 1.62,
+          "DEMO-C": 1.8,
+          "DEMO-D": 1.9800000000000002,
+          "DEMO-E": 2.25,
+          "DEMO-F": 2.61
+        }
+      },
+      "variants": [
+        {
+          "name": "no adaptation",
+          "mean": 90.0462169642857,
+          "adaptation_mean_delta": 0.0,
+          "offset_share_of_median_warming": null,
+          "share_at_or_above": {
+            "90.0": {
+              "median": 0.390625,
+              "p10": 0.25044642857142857,
+              "p90": 0.7767857142857142
+            },
+            "95.0": {
+              "median": 0.0,
+              "p10": 0.0,
+              "p90": 0.0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "experiment": "ssp370",
+      "label": "SSP3-7.0",
+      "period": "2041-2060",
+      "n_models": 6,
+      "warming": {
+        "median": 3.7800000000000002,
+        "p10": 2.97,
+        "p90": 4.859999999999999,
+        "min": 2.7,
+        "max": 5.22,
+        "by_model": {
+          "DEMO-A": 2.7,
+          "DEMO-B": 3.24,
+          "DEMO-C": 3.6,
+          "DEMO-D": 3.9600000000000004,
+          "DEMO-E": 4.5,
+          "DEMO-F": 5.22
+        }
+      },
+      "variants": [
+        {
+          "name": "no adaptation",
+          "mean": 91.9362169642857,
+          "adaptation_mean_delta": 0.0,
+          "offset_share_of_median_warming": null,
+          "share_at_or_above": {
+            "90.0": {
+              "median": 1.0,
+              "p10": 0.95625,
+              "p90": 1.0
+            },
+            "95.0": {
+              "median": 0.0,
+              "p10": 0.0,
+              "p90": 0.026339285714285714
+            }
+          }
+        }
+      ]
+    },
+    {
+      "experiment": "ssp370",
+      "label": "SSP3-7.0",
+      "period": "2081-2100",
+      "n_models": 6,
+      "warming": {
+        "median": 6.993,
+        "p10": 5.4945,
+        "p90": 8.991,
+        "min": 4.995,
+        "max": 9.657,
+        "by_model": {
+          "DEMO-A": 4.995,
+          "DEMO-B": 5.994000000000001,
+          "DEMO-C": 6.66,
+          "DEMO-D": 7.3260000000000005,
+          "DEMO-E": 8.325000000000001,
+          "DEMO-F": 9.657
+        }
+      },
+      "variants": [
+        {
+          "name": "no adaptation",
+          "mean": 95.1492169642857,
+          "adaptation_mean_delta": 0.0,
+          "offset_share_of_median_warming": null,
+          "share_at_or_above": {
+            "90.0": {
+              "median": 1.0,
+              "p10": 1.0,
+              "p90": 1.0
+            },
+            "95.0": {
+              "median": 0.515625,
+              "p10": 0.103125,
+              "p90": 0.9959821428571429
+            }
+          }
+        }
+      ]
+    },
+    {
+      "experiment": "ssp585",
+      "label": "SSP5-8.5",
+      "period": "2021-2040",
+      "n_models": 6,
+      "warming": {
+        "median": 2.079,
+        "p10": 1.6335,
+        "p90": 2.673,
+        "min": 1.4849999999999999,
+        "max": 2.871,
+        "by_model": {
+          "DEMO-A": 1.4849999999999999,
+          "DEMO-B": 1.782,
+          "DEMO-C": 1.9800000000000002,
+          "DEMO-D": 2.178,
+          "DEMO-E": 2.475,
+          "DEMO-F": 2.871
+        }
+      },
+      "variants": [
+        {
+          "name": "no adaptation",
+          "mean": 90.2352169642857,
+          "adaptation_mean_delta": 0.0,
+          "offset_share_of_median_warming": null,
+          "share_at_or_above": {
+            "90.0": {
+              "median": 0.5151785714285715,
+              "p10": 0.2888392857142857,
+              "p90": 0.8924107142857143
+            },
+            "95.0": {
+              "median": 0.0,
+              "p10": 0.0,
+              "p90": 0.0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "experiment": "ssp585",
+      "label": "SSP5-8.5",
+      "period": "2041-2060",
+      "n_models": 6,
+      "warming": {
+        "median": 4.5360000000000005,
+        "p10": 3.564,
+        "p90": 5.832000000000001,
+        "min": 3.24,
+        "max": 6.264,
+        "by_model": {
+          "DEMO-A": 3.24,
+          "DEMO-B": 3.8880000000000003,
+          "DEMO-C": 4.32,
+          "DEMO-D": 4.752000000000001,
+          "DEMO-E": 5.4,
+          "DEMO-F": 6.264
+        }
+      },
+      "variants": [
+        {
+          "name": "no adaptation",
+          "mean": 92.6922169642857,
+          "adaptation_mean_delta": 0.0,
+          "offset_share_of_median_warming": null,
+          "share_at_or_above": {
+            "90.0": {
+              "median": 1.0,
+              "p10": 0.9941964285714286,
+              "p90": 1.0
+            },
+            "95.0": {
+              "median": 0.0035714285714285713,
+              "p10": 0.0,
+              "p90": 0.1455357142857143
+            }
+          }
+        }
+      ]
+    },
+    {
+      "experiment": "ssp585",
+      "label": "SSP5-8.5",
+      "period": "2081-2100",
+      "n_models": 6,
+      "warming": {
+        "median": 8.693999999999999,
+        "p10": 6.831,
+        "p90": 11.178,
+        "min": 6.210000000000001,
+        "max": 12.006,
+        "by_model": {
+          "DEMO-A": 6.210000000000001,
+          "DEMO-B": 7.452,
+          "DEMO-C": 8.28,
+          "DEMO-D": 9.107999999999999,
+          "DEMO-E": 10.35,
+          "DEMO-F": 12.006
+        }
+      },
+      "variants": [
+        {
+          "name": "no adaptation",
+          "mean": 96.8502169642857,
+          "adaptation_mean_delta": 0.0,
+          "offset_share_of_median_warming": null,
+          "share_at_or_above": {
+            "90.0": {
+              "median": 1.0,
+              "p10": 1.0,
+              "p90": 1.0
+            },
+            "95.0": {
+              "median": 0.9946428571428572,
+              "p10": 0.5116071428571428,
+              "p90": 1.0
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "adaptation": [],
+  "site": {
+    "lat": 41.82060700431168,
+    "lon": -71.39018525808176
+  },
+  "source": "table",
+  "variable": "tasmax",
+  "months": [
+    6,
+    7,
+    8
+  ],
+  "baseline": "1995-2014",
+  "n_models": 6,
+  "units": "degF"
+}

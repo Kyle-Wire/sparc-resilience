@@ -73,6 +73,7 @@ import numpy as np
 import pandas as pd
 
 from sparc.core import operators as ops
+from sparc.core import progress
 from sparc.core.grid import Grid
 
 log = logging.getLogger(__name__)
@@ -217,17 +218,20 @@ def _multistart(starts: list, make_params: Callable, leaves: Callable, objective
     """L-BFGS from every start for ``start_iter`` iterations (default
     max(8, max_iter // 4)), then continue the lowest-loss start for
     ``max_iter`` iterations.  With a single start this is one full run."""
+    progress.check_cancel()
     if len(starts) == 1:
         P = make_params(starts[0])
         loss = _lbfgs(leaves(P), lambda: objective(P), max_iter)
         return loss, P, [loss]
     start_iter = start_iter if start_iter > 0 else max(8, max_iter // 4)
     best, losses = None, []
-    for v0 in starts:
+    for i, v0 in enumerate(starts):
         P = make_params(v0)
         loss = _lbfgs(leaves(P), lambda P=P: objective(P), start_iter)
         losses.append(loss)
         log.debug("multistart: v0=%s → loss %.6g", v0, loss)
+        progress.tick(i + 1, len(starts), unit="physics_start", lvl="debug", loss=loss)
+        progress.check_cancel()
         if best is None or loss < best[0]:
             best = (loss, P)
     P = best[1]
@@ -634,6 +638,8 @@ class PhysicsModel:
         missing = sorted(set(self.roles) - set(feats))
         if missing:
             log.warning("physics: role columns missing from frame, terms dropped: %s", missing)
+            progress.warn("physics.missing_roles", f"physics role columns missing, terms dropped: {missing}",
+                          roles=missing)
         self._set_feature_constants(feats)
         self._xy_mean = coords.mean(axis=0)
         self._prepare_grid_tensors()
@@ -687,6 +693,7 @@ class PhysicsModel:
             self.fit_warning = (f"fitted source amplitude a = {self.a:.4g} ≤ 0 (source anti-correlated with ΔT); "
                                 "physics term disabled (a = 0)")
             log.warning("physics: %s", self.fit_warning)
+            progress.warn("physics.antiphysical_a", self.fit_warning, a=float(self.a))
             D0 = torch.cat([ones[:, None], lin_t], dim=1)
             c0, fit0 = _varpro(D0, yt)
             c0 = c0.detach().numpy()

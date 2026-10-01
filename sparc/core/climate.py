@@ -40,6 +40,8 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
+from sparc.core import progress
+
 log = logging.getLogger(__name__)
 
 BUCKET = "https://cmip6-pds.s3.amazonaws.com/"
@@ -58,7 +60,6 @@ def http_fetch(url: str, timeout: float = 180.0, retries: int = 4) -> bytes | No
     Transient failures (connection resets, truncated reads) are retried with
     exponential backoff."""
     import http.client
-    import time
     import urllib.error
     import urllib.request
 
@@ -71,11 +72,29 @@ def http_fetch(url: str, timeout: float = 180.0, retries: int = 4) -> bytes | No
                 return None
             if exc.code < 500 or attempt == retries:
                 raise
-        except (urllib.error.URLError, http.client.IncompleteRead, ConnectionError, TimeoutError, OSError):
+            error = f"HTTP {exc.code}"
+        except (urllib.error.URLError, http.client.IncompleteRead, ConnectionError, TimeoutError, OSError) as exc:
             if attempt == retries:
                 raise
-        time.sleep(2.0 * 2 ** attempt)
+            error = repr(exc)[:200]
+        retry_wait(url, attempt, 2.0 * 2 ** attempt, error)
     return None
+
+
+def retry_wait(url: str, attempt: int, wait_s: float, error: str = "") -> None:
+    """Report a retried request (``network.retry``) and back off ``wait_s`` seconds, cancellable."""
+    import time
+    from urllib.parse import urlsplit
+
+    progress.warn("network.retry", f"retrying {urlsplit(url).netloc} in {wait_s:g} s (attempt {attempt + 1}): {error}",
+                  host=urlsplit(url).netloc, attempt=attempt + 1, wait_s=wait_s, error=error)
+    end = time.monotonic() + wait_s
+    while True:
+        progress.check_cancel()
+        left = end - time.monotonic()
+        if left <= 0:
+            return
+        time.sleep(min(0.5, left))
 
 
 def _store_url(zstore: str) -> str:
@@ -225,7 +244,9 @@ def load_catalog(cache_dir: Path, fetch: Callable[[str], bytes | None] = http_fe
     keep = ((df.table_id == "Amon") & (df.variable_id.isin(["tasmax", "tas"]))) | \
            ((df.table_id == "fx") & (df.variable_id == "sftlf"))
     df = df[keep & df.experiment_id.isin(("historical",) + EXPERIMENTS)]
-    df.to_csv(small, index=False)
+    from sparc.core import runio
+
+    runio.write_text_atomic(small, df.to_csv(index=False))            # a killed fetch never leaves half a cache
     return df
 
 
@@ -310,26 +331,46 @@ def cmip6_change_factors(site_lat: float, site_lon: float, cache_dir: str | Path
                          periods: dict | None = None, baseline: tuple[int, int] = BASELINE,
                          months: tuple[int, ...] = (6, 7, 8), variable: str = "tasmax",
                          models: list[str] | None = None, max_workers: int = 4,
-                         fetch: Callable[[str], bytes | None] = http_fetch) -> pd.DataFrame:
-    """Per-model change factors at a site (K), one row per model × SSP × period."""
+                         fetch: Callable[[str], bytes | None] = http_fetch,
+                         on_models: Callable[[int], None] | None = None) -> pd.DataFrame:
+    """Per-model change factors at a site (K), one row per model × SSP × period.
+
+    Each model is one ``task remote_object[<model>]`` (unit ``climate_model``)
+    run on a thread pool; ``on_models(M)`` is called once the catalogue has
+    told how many models there are.  On a cancel the pool's queued models are
+    dropped and :class:`~sparc.core.progress.Cancelled` propagates."""
     periods = dict(periods or PERIODS)
-    cat = load_catalog(Path(cache_dir), fetch)
+    with progress.task("remote_object", key="pangeo-cmip6.csv"):       # the catalogue: not a planned unit
+        cat = load_catalog(Path(cache_dir), fetch)
     runs = select_runs(cat, experiments, variable, models)
     names = sorted(runs.source_id.unique())
     log.info("climate: %d CMIP6 models with historical + %s", len(names), ", ".join(experiments))
+    if on_models is not None:
+        on_models(len(names))
     out: list[dict] = []
 
     def work(m):
-        try:
-            return _model_factors(m, runs[runs.source_id == m], cat, site_lat, site_lon, experiments, periods,
-                                  baseline, months, variable, fetch)
-        except Exception as exc:
-            log.warning("climate: skipping %s (%s)", m, exc)
-            return []
+        progress.check_cancel()
+        with progress.task("remote_object", key=m, unit="climate_model") as sp:
+            try:
+                rows = _model_factors(m, runs[runs.source_id == m], cat, site_lat, site_lon, experiments, periods,
+                                      baseline, months, variable, fetch)
+            except Exception as exc:
+                log.warning("climate: skipping %s (%s)", m, exc)
+                progress.warn("climate.model_skipped", f"CMIP6 model {m} skipped: {exc}", model=m,
+                              error=repr(exc)[:300])
+                rows = []
+            sp.metrics["rows"] = len(rows)
+            return rows
 
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        for rows in ex.map(work, names):
+    ex = ThreadPoolExecutor(max_workers=max_workers)
+    try:
+        for rows in ex.map(progress.wrap_context(work), names):
             out.extend(rows)
+    except progress.Cancelled:
+        ex.shutdown(wait=False, cancel_futures=True)
+        raise
+    ex.shutdown(wait=True)
     df = pd.DataFrame(out)
     if len(df):
         df.insert(0, "site_lat", site_lat)

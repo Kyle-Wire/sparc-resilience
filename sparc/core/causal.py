@@ -111,6 +111,7 @@ import pandas as pd
 from scipy import stats
 
 from sparc.core import operators as ops
+from sparc.core import progress
 from sparc.core.cv import SpatialFolds
 from sparc.core.grid import Grid
 
@@ -760,6 +761,10 @@ def _hole_scale_ratio(folds: SpatialFolds, scale: float | None) -> float | None:
         logger.warning("held-out holes (block %.0f m + 2×buffer %.0f m) exceed the spatial-basis scale %.0f m; "
                        "residual spatial confounding may bias θ̂ towards the unadjusted estimate",
                        folds.block_m, folds.buffer_m, scale)
+        progress.warn("causal.hole_scale", f"held-out holes (block {folds.block_m:.0f} m + 2×buffer "
+                      f"{folds.buffer_m:.0f} m) exceed the spatial-basis scale {float(scale):.0f} m; residual spatial "
+                      "confounding may bias the estimate towards the unadjusted one", ratio=ratio,
+                      block_m=float(folds.block_m), buffer_m=float(folds.buffer_m), basis_scale_m=float(scale))
     return ratio
 
 
@@ -907,6 +912,8 @@ def blp_calibration(
     s = np.asarray(s_model, dtype=np.float64).ravel()
     if not np.std(s) > 0:
         logger.warning("blp_calibration: heterogeneity signal is constant; interaction not identified")
+        progress.warn("causal.blp_constant", "the heterogeneity signal is constant; the BLP interaction is not "
+                      "identified", n=int(ry.size))
         th = float(rt @ ry / max(float(rt @ rt), 1e-300))
         return {"coef": None, "se": None, "p": None, "p_vs_one": None, "ate_coef": th, "ate_se": None,
                 "ate_p": None, "sd_s": 0.0, "n": int(ry.size)}
@@ -1249,6 +1256,9 @@ def dr_dose_response(
     for b in range(n_boot):
         counts = np.bincount(brng.integers(0, G, size=G), minlength=G).astype(np.float64)
         boots[b] = _curve(counts[blk])
+        if (b + 1) % 10 == 0 or b + 1 == n_boot:
+            progress.tick(b + 1, n_boot, unit="bootstrap")
+            progress.check_cancel()
     if n_boot > 1:
         lo, hi = np.nanpercentile(boots, [2.5, 97.5], axis=0)
         se = np.nanstd(boots, axis=0, ddof=1)
@@ -1479,6 +1489,7 @@ def dag_audit(
         from sparc.causal.mc3 import PhysicsInformedGraphPrior, run_mc3
     except Exception as exc:  # pragma: no cover - depends on optional stack
         logger.warning("dag_audit skipped: cannot import sparc.causal.mc3 (%s)", exc)
+        progress.warn("causal.dag_unavailable", f"DAG audit skipped: cannot import sparc.causal.mc3 ({exc})")
         return None
     nodes = list(node_names)
     edges = [(str(p), str(c)) for p, c in expert_edges]
@@ -1489,6 +1500,8 @@ def dag_audit(
     rng = np.random.default_rng(seed)
     probs = []
     for b in range(n_boot):
+        progress.check_cancel()
+        progress.tick(b + 1, n_boot, unit="dag_resample")
         chosen = rng.integers(0, G, size=G)
         idx = np.concatenate([members[g] for g in chosen])
         sub = df.iloc[idx].reset_index(drop=True)
@@ -1536,10 +1549,14 @@ def _controls_for(t: str, frame: pd.DataFrame, cfg: dict) -> list[str]:
         conf = [c for c in frame.columns if c != t]
         logger.warning("causal: no confounders listed for %s; using all other predictors minus "
                        "exclude_controls (%s) — make sure no mediator is included", t, sorted(excl))
+        progress.warn("causal.no_confounders", f"no confounders listed for {t}; using all other predictors minus "
+                      "exclude_controls (make sure no mediator is included)", treatment=t, excluded=sorted(excl))
     ctrl = [c for c in conf if c != t and c not in excl]
     missing = [c for c in ctrl if c not in frame.columns]
     if missing:
         logger.warning("causal: controls %s for %s are not in the data; dropped", missing, t)
+        progress.warn("causal.controls_missing", f"controls {missing} for {t} are not in the data; dropped",
+                      treatment=t, controls=missing)
     return [c for c in ctrl if c in frame.columns]
 
 
@@ -1597,30 +1614,73 @@ def run_causal_validation(
     for t in cfg.get("treatments") or []:
         if t not in frame.columns:
             logger.warning("causal: treatment %s not in data; skipped", t)
+            progress.warn("causal.treatment_missing", f"treatment {t} is not in the data; skipped", treatment=t)
     out: dict[str, Any] = {"enabled": True, "treatments": {}, "flags": [], "n": int(len(Y)),
                            "n_blocks": int(folds.n_blocks), "n_folds": int(folds.n_folds)}
 
-    for t in treatments:
-        logger.info("causal: validating %s", t)
-        T = frame[t].to_numpy(dtype=np.float64)
-        ctrl = _controls_for(t, frame, cfg)
-        W = frame[ctrl].to_numpy(dtype=np.float64) if ctrl else np.zeros((len(T), 0))
-        rng_t = float(ranges_m.get(t, 0.0) or 0.0)
-        radius = rng_t if rng_t > 0 else DEFAULT_RADIUS_M
-        scale = _basis_scale(cfg.get("spatial_basis_scale_m", "auto"), rng_t)
-        basis = spatial_basis(coords, scale, seed=seed)
-        res_t: dict[str, Any] = {"controls": ctrl, "basis_scale_m": scale, "n_basis": int(basis.shape[1]),
-                                 "radius_m": radius}
+    n_tr = len(treatments)
+    for i_t, t in enumerate(treatments, start=1):
+        progress.check_cancel()
+        with progress.task("treatment", k=i_t, n=n_tr, key=t) as tsp:
+            out["treatments"][t] = _validate_treatment(t, data, frame, Y, coords, grid, cfg, folds, ranges_m,
+                                                       model_effects.get(t), out["flags"], n_boot, seed, hgb_params)
+            sp = out["treatments"][t]["spillover"]
+            tsp.metrics.update(theta=sp.get("theta_sum"), theta_se=sp.get("se_sum"))
+        progress.metric("theta", sp.get("theta_sum"), treatment=t)
+        progress.metric("theta_se", sp.get("se_sum"), treatment=t)
 
+    dag_cfg = cfg.get("dag_audit")
+    if dag_cfg:
+        dc = dag_cfg if isinstance(dag_cfg, dict) else {}
+        target = "target"
+        nodes = list(dict.fromkeys(treatments + [c for t in treatments for c in _controls_for(t, frame, cfg)]))
+        df = frame[nodes].copy()
+        df[target] = Y
+        if dc.get("edges"):
+            edges = [(e["parent"], e["child"]) if isinstance(e, dict) else (e[0], e[1]) for e in dc["edges"]]
+        else:
+            edges = _default_expert_edges(cfg, treatments, target)
+        progress.check_cancel()
+        with progress.task("dag_audit"):
+            out["dag_audit"] = dag_audit(df, nodes + [target], edges, folds.block_id,
+                                         n_boot=int(dc.get("n_boot", 5)), n_iter=int(dc.get("n_iter", 2000)),
+                                         seed=seed)
+    return _jsonable(out)
+
+
+def _step(name: str, unit: str):
+    """One causal estimator of one treatment: a cancellation point and a ``task`` completing ``causal_step:<unit>``."""
+    progress.check_cancel()
+    return progress.task(name, unit=f"causal_step:{unit}")
+
+
+def _validate_treatment(t: str, data: Any, frame: pd.DataFrame, Y: np.ndarray, coords: np.ndarray, grid: Grid,
+                        cfg: dict, folds: SpatialFolds, ranges_m: dict[str, float], me: dict | None, flags: list,
+                        n_boot: int, seed: int, hgb_params: dict | None) -> dict:
+    """The estimators of :func:`run_causal_validation` for treatment ``t`` (audit flags appended to ``flags``)."""
+    logger.info("causal: validating %s", t)
+    T = frame[t].to_numpy(dtype=np.float64)
+    ctrl = _controls_for(t, frame, cfg)
+    W = frame[ctrl].to_numpy(dtype=np.float64) if ctrl else np.zeros((len(T), 0))
+    rng_t = float(ranges_m.get(t, 0.0) or 0.0)
+    radius = rng_t if rng_t > 0 else DEFAULT_RADIUS_M
+    scale = _basis_scale(cfg.get("spatial_basis_scale_m", "auto"), rng_t)
+    basis = spatial_basis(coords, scale, seed=seed)
+    res_t: dict[str, Any] = {"controls": ctrl, "basis_scale_m": scale, "n_basis": int(basis.shape[1]),
+                             "radius_m": radius}
+
+    with _step("dml", "dml"):
         dml = dml_plr(Y, T, W, folds, basis=basis, seed=seed, names=[t], hgb_params=hgb_params)
         res_t["dml"] = dml.summary()
         res_t["hole_scale_ratio"] = _hole_scale_ratio(folds, scale)
 
-        logger.info("causal: %s spillover (radius %.0f m)", t, radius)
+    logger.info("causal: %s spillover (radius %.0f m)", t, radius)
+    with _step("spillover", "spillover"):
         res_t["spillover"] = spillover_dml(Y, T, W, grid, radius, folds, basis_scale_m=scale, coords=coords,
                                            seed=seed, hgb_params=hgb_params)
 
-        logger.info("causal: %s CATE (R-learner)", t)
+    logger.info("causal: %s CATE (R-learner)", t)
+    with _step("cate", "cate"):
         feats = np.column_stack([W, coords - coords.mean(axis=0)])
         tau = r_learner_cate(Y, T, W, folds, dml.resid_Y, dml.resid_T[:, 0], feature_matrix=feats,
                              seed=seed, hgb_params=None)
@@ -1634,11 +1694,13 @@ def run_causal_validation(
             "tau_hat": tau,
         }
 
-        logger.info("causal: %s DR dose-response (adjusted for T̄ at %.0f m)", t, radius)
+    logger.info("causal: %s DR dose-response (adjusted for T̄ at %.0f m)", t, radius)
+    with _step("dr_curve", "dr"):
         dr = dr_dose_response(Y, T, W, folds, n_boot=n_boot, seed=seed, hgb_params=hgb_params, basis=basis,
                               exposure=exposure_mapping(T, grid, radius))
         res_t["dr_curve"] = {**dr.to_dict(), "exposure_radius_m": radius}
 
+    with _step("sensitivity", "sens"):
         contrast = (cfg.get("contrast") or {}).get(t)
         contrast = float(contrast) if contrast is not None else float(np.std(T))
         ev = e_value(float(dml.theta[0]), contrast, dml.sd_resid_y, ci=dml.ci95[0])
@@ -1646,8 +1708,8 @@ def run_causal_validation(
                               float(dml.se_iid[0]), dml.n_blocks, dml.n, dml.n_controls)
         res_t["sensitivity"] = {"e_value": ev, "robustness": rv}
 
-        me = model_effects.get(t)
-        if me:
+    if me:
+        with _step("audit", "audit"):
             aud: dict[str, Any] = {}
             sp = res_t["spillover"]
             if me.get("adoption_slope") is not None:
@@ -1665,20 +1727,7 @@ def run_causal_validation(
             res_t["audit"] = aud
             for name, a in aud.items():
                 if a.get("flag"):
-                    out["flags"].append({"treatment": t, "check": name, "verdict": a.get("verdict")})
-        out["treatments"][t] = res_t
-
-    dag_cfg = cfg.get("dag_audit")
-    if dag_cfg:
-        dc = dag_cfg if isinstance(dag_cfg, dict) else {}
-        target = "target"
-        nodes = list(dict.fromkeys(treatments + [c for t in treatments for c in _controls_for(t, frame, cfg)]))
-        df = frame[nodes].copy()
-        df[target] = Y
-        if dc.get("edges"):
-            edges = [(e["parent"], e["child"]) if isinstance(e, dict) else (e[0], e[1]) for e in dc["edges"]]
-        else:
-            edges = _default_expert_edges(cfg, treatments, target)
-        out["dag_audit"] = dag_audit(df, nodes + [target], edges, folds.block_id,
-                                     n_boot=int(dc.get("n_boot", 5)), n_iter=int(dc.get("n_iter", 2000)), seed=seed)
-    return _jsonable(out)
+                    flags.append({"treatment": t, "check": name, "verdict": a.get("verdict")})
+                    progress.warn("causal.audit_flag", f"{t}: {name} — {a.get('verdict')}", treatment=t,
+                                  check=name, verdict=a.get("verdict"))
+    return res_t

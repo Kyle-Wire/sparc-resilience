@@ -64,7 +64,14 @@ def compare_manifests(old: dict, new: dict, tol_r2: float = 0.01, tol_effect: fl
 
 
 def reproduce(run_dir: str | Path, stages=("S0", "S1", "S2", "S3"), tol_r2: float = 0.01,
-              tol_effect: float = 0.05, config_dir: str | Path | None = None) -> dict:
+              tol_effect: float = 0.05, config_dir: str | Path | None = None, out_dir: str | Path | None = None,
+              run_meta: dict | None = None) -> dict:
+    """Re-run ``stages`` of a finished run and compare the manifests.
+
+    The reproduction is written to ``out_dir`` (default ``<run dir>_reproduce``
+    next to the original), with ``run_meta`` plus ``role = "reproduction"``
+    recorded in its manifest; ``reproduce.json`` goes into it."""
+    from sparc.core import progress, runio
     from sparc.core.config import core_config_from_dict
     from sparc.core.pipeline import run_core
     from sparc.core.provenance import sha256_file
@@ -81,13 +88,19 @@ def reproduce(run_dir: str | Path, stages=("S0", "S1", "S2", "S3"), tol_r2: floa
     sha = sha256_file(cfg.data_path)
     if prov.get("input_sha256") and sha != prov["input_sha256"]:
         log.warning("input data differ from the original run (%s)", cfg.data_path)
+        progress.warn("reproduce.input_changed", f"input data differ from the original run ({cfg.data_path})",
+                      path=str(cfg.data_path), original_sha256=prov["input_sha256"], sha256=sha)
     cfg.raw["name"] = f"{run_dir.name}_reproduce"
     cfg.raw["output"]["dir"] = str(run_dir.resolve().parent)
     if "S3" in stages and not {"S4", "S5", "S6", "S7"} & set(stages):
         cfg.raw["cv"].setdefault("distance_curve", {})["enabled"] = False
-    res = run_core(cfg, stages=stages, write=True)
+    meta = {**(run_meta or {}), "role": "reproduction"}
+    res = run_core(cfg, stages=stages, write=True, run_dir=Path(out_dir) if out_dir is not None else None,
+                   run_meta=meta)
     out = compare_manifests(old, res.manifest, tol_r2=tol_r2, tol_effect=tol_effect)
     out["original"] = str(run_dir)
     out["reproduction"] = str(res.run_dir)
-    (res.run_dir / "reproduce.json").write_text(json.dumps(out, indent=1), encoding="utf-8")
+    runio.write_json_atomic(res.run_dir / "reproduce.json", out, indent=1)
+    with progress.run_dir_scope(res.run_dir):
+        progress.artifact(res.run_dir / "reproduce.json", role="reproduce")
     return out
