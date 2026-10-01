@@ -1,0 +1,17 @@
+# The repository's root .gitignore ignores `src`, `index.html`, `package.json`,
+# `tsconfig.json`, `vite.config.ts`, `assets` and `public` at any depth (they
+# belonged to an older desktop layout). Re-include this project's sources.
+!src
+!index.html
+!package.json
+!tsconfig.json
+!vite.config.ts
+!assets
+!public
+
+node_modules/
+dist/
+coverage/
+.vite/
+*.local
+*.tsbuildinfo
