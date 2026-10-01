@@ -75,6 +75,7 @@ class CoreResult:
     cv_distance: dict = field(default_factory=dict)
     baselines: dict = field(default_factory=dict)
     climate: dict = field(default_factory=dict)
+    provenance: dict = field(default_factory=dict)
     manifest: dict = field(default_factory=dict)
 
 
@@ -184,6 +185,10 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
         run_dir = cfg.output_dir / (cfg.name + ("_fast" if fast else "") + (f"_coarse{float(cm):g}" if cm else ""))
         run_dir.mkdir(parents=True, exist_ok=True)
     result = CoreResult(cfg=cfg, data=data, run_dir=run_dir)
+    from sparc.core.provenance import provenance, sha256_file, sha256_frame
+
+    result.provenance = provenance(cfg, sha256_frame(frame) if frame is not None else sha256_file(cfg.data_path),
+                                   "frame" if frame is not None else "file")
     log.info("S0: %d points, grid %s, cell %.2f m", data.n, data.grid.shape, data.grid.dx)
     fp = _fingerprint(cfg, fast, frame) if run_dir is not None else ""
     state = _load_checkpoint(run_dir, fp) if resume else {}
@@ -503,6 +508,9 @@ def _finish(result: CoreResult, timings: dict, fast: bool, folds=None) -> CoreRe
 
     result.manifest = build_manifest(result, timings, fast, folds)
     if result.run_dir:
+        from sparc.core.provenance import environment_lock
+
         _write_json(result.run_dir / "manifest.json", result.manifest)
+        (result.run_dir / "environment.txt").write_text(environment_lock(), encoding="utf-8")
         (result.run_dir / "report.md").write_text(render_report(result), encoding="utf-8")
     return result

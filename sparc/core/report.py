@@ -76,6 +76,7 @@ def build_manifest(result, timings: dict, fast: bool, folds=None) -> dict:
         "qa": result.data.qa,
         "n_points": result.data.n,
         "timings_s": {k: round(v, 2) for k, v in timings.items()},
+        "provenance": getattr(result, "provenance", None) or {},
     }
     if inf is not None:
         m["influence"] = {"ranges_m": inf.ranges_m, "target_resid_range_m": inf.target_resid_range_m,

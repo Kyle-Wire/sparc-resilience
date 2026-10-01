@@ -77,6 +77,16 @@ def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
     p_pl.add_argument("--threads", type=int, default=0)
     p_pl.set_defaults(func=cmd_core_placebo)
 
+    p_rp = subs.add_parser("reproduce", help="re-run a finished run from its manifest and compare the numbers")
+    p_rp.add_argument("run_dir")
+    p_rp.add_argument("--stages", default="S0,S1,S2,S3", help="stages to re-run (default S0–S3; 'all' for everything)")
+    p_rp.add_argument("--tol-r2", type=float, default=0.01)
+    p_rp.add_argument("--tol-effect", type=float, default=0.05)
+    p_rp.add_argument("--config-dir", default=None, help="directory the run's config paths are relative to "
+                                                          "(only for runs made before provenance was recorded)")
+    p_rp.add_argument("--threads", type=int, default=0)
+    p_rp.set_defaults(func=cmd_core_reproduce)
+
     p_syn = subs.add_parser("synth", help="write the synthetic test city (with planted truths) to CSV")
     p_syn.add_argument("--out", required=True)
     p_syn.add_argument("--seed", type=int, default=0)
@@ -142,6 +152,24 @@ def cmd_core_placebo(args) -> int:
     print(f"model passes {res['n_pass_model']}/{res['n_placebos']}, causal passes "
           f"{res['n_pass_causal']}/{res['n_placebos']}  →  {out}")
     return 0
+
+
+def cmd_core_reproduce(args) -> int:
+    from sparc.core.pipeline import ALL_STAGES
+    from sparc.core.reproduce import reproduce
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    if args.threads:
+        import torch
+
+        torch.set_num_threads(int(args.threads))
+    stages = ALL_STAGES if args.stages in ("all", "") else tuple(s.strip().upper() for s in args.stages.split(","))
+    out = reproduce(args.run_dir, stages=stages, tol_r2=args.tol_r2, tol_effect=args.tol_effect,
+                    config_dir=args.config_dir)
+    for c in out["checks"]:
+        print(f"  {'✓' if c['ok'] else ('✗' if c['hard'] else '·')} {c['check']}: {c['detail']}")
+    print("REPRODUCED" if out["pass"] else "NOT REPRODUCED", "→", out["reproduction"])
+    return 0 if out["pass"] else 1
 
 
 def cmd_core_forcing(args) -> int:

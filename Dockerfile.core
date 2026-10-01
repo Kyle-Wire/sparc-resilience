@@ -1,0 +1,26 @@
+# Reproducible environment for the SPARC core pipeline (CPU).
+#
+#   docker build -f Dockerfile.core -t sparc-core .
+#   docker run --rm -v "$PWD/output:/app/output" sparc-core \
+#       python -m sparc.core run -p configs/core_providence.yml
+#   docker run --rm -v "$PWD/output:/app/output" sparc-core \
+#       python -m sparc.core reproduce output/core/providence/providence_uhi
+#
+# A run directory's environment.txt lists the exact package versions it was
+# made with; pin them here (pip install -r environment.txt) to match a run.
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+WORKDIR /app
+
+RUN pip install torch --index-url https://download.pytorch.org/whl/cpu
+COPY requirements-core.txt .
+RUN pip install -r requirements-core.txt
+
+COPY pyproject.toml README.md ./
+COPY sparc ./sparc
+COPY configs ./configs
+COPY brown4.csv ./
+RUN pip install --no-deps -e .
+
+CMD ["python", "-m", "sparc.core", "--help"]
