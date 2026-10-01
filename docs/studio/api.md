@@ -17,7 +17,7 @@ The pydantic models that implement these schemas live in `sparc/studio/schemas/c
 
 ### 0.1 Base, formats, time
 
-- **Base path:** `/api`. The only exceptions are `GET /auth`, the SPA (`/`, `/assets/*`, and any unknown non-`/api` GET, which returns `index.html`) and `GET /openapi.json`.
+- **Base path:** `/api`. The only exceptions are `GET /auth`, the SPA (`/`, `/assets/*`, and any unknown non-`/api` GET, which returns `index.html`) and `GET /openapi.json`. `/openapi.json` requires auth like `/api/*`. FastAPI's `/docs` and `/redoc` are disabled. `sparc studio --dump-openapi PATH` writes the same document without a server.
 - **JSON:** UTF-8 in both directions. Requests with a body send `Content-Type: application/json`, except the raw uploads in §5.1, §6.3, §7.4 and §11.
 - **Timestamps:** ISO-8601 UTC strings (`"2026-10-01T14:22:33Z"`) unless named `*_ts`, which are unix seconds as float.
 - **Numbers:** finite. NaN and Inf in JSON are serialised as `null`. Binary arrays use NaN.
@@ -44,7 +44,7 @@ The pydantic models that implement these schemas live in `sparc/studio/schemas/c
 
 ### 0.2 Auth
 
-- `GET /auth?t=<token>[&next=<path>]` sets the cookie `sparc_studio` (HttpOnly; SameSite=Strict; Path=/; Secure when the request is https) and responds `302 Location: next` (default `/`). A wrong token returns `401` with an HTML message.
+- `GET /auth?t=<token>[&next=<path>]` sets the cookie `sparc_studio` (HttpOnly; SameSite=Strict; Path=/; Secure when the request is https) and responds `302 Location: next` (default `/`). `next` must be a same-origin path (leading `/`, not `//`, no scheme); otherwise it is replaced by `/`. A wrong token returns `401` with an HTML message.
 - Every `/api/*` route except `GET /api/health` requires either the cookie or `Authorization: Bearer <token>`. Missing auth returns `401 unauthorized`.
 - The `Host` header must be in the allowlist; otherwise `400 bad_host`. Unsafe methods (POST, PUT, PATCH, DELETE) must carry an `Origin` (or `Referer`) matching the serving origin; otherwise `403 bad_origin`.
 
@@ -89,7 +89,7 @@ Every endpoint documented as **→ 202 Job** creates a job and returns:
 
 ```ts
 type Job = {
-  id: string; kind: string; lane: "heavy"|"medium"|"network"|"engine"; executor: "process"|"engine";
+  id: string; kind: string; lane: "heavy"|"medium"|"network"|"engine"|"none"; executor: "process"|"engine"|"external";   // "none"/"external": run.external pseudo-jobs
   label: string; status: JobStatus;
   project_id: string|null; run_id: string|null; study_id: string|null; scenario_id: string|null;
   parent_job_id: string|null; after_job_id: string|null; priority: number;
@@ -184,10 +184,15 @@ No auth. → `200 {ok: true, version: string, workspace: string, pid: number, st
   output_catalog: { id: string; label: string; group: string; files: string[]; produced_by: string; view: string;
                     formats: string[]; manifest_key: string|null }[];
   palettes: { seqLight: string[]; seqDark: string[]; divLight: string[]; divDark: string[]; cat: string[] };
+  unit_costs: Record<string, number>;       // seed rates of SPEC §5.4: progress weights and ETA priors
   modes: { id: "fast"|"coarse"|"full"; label: string; desc: string; default_coarse_m?: number }[];
-  run_tabs: { id: string; label: string; group: string; outputs: string[] }[];
+  run_tab_outputs: Record<RunTabId, string[]>;   // derived: catalog output ids grouped by OutputSpec.view (informational)
   edit_modes: string[]; selection_kinds: string[]; warning_codes: { code: string; label: string; view: string|null }[] }
+type RunTabId = "overview"|"data"|"accuracy"|"distance"|"influence"|"response"|"causal"|"scenarios"|"climate"|"budget"
+  |"planner"|"lab"|"validation"|"uncertainty"|"provenance"|"track"|"map"|"docs"|"files";
 ```
+
+Run-tab labels, groups and order belong to the frontend route modules (SPEC §12.3). The server knows only the id vocabulary.
 
 ### `GET /api/meta/event-schema`
 → `200` JSON Schema of the per-job event union (§17). Used for codegen.
@@ -206,7 +211,7 @@ No auth. → `200 {ok: true, version: string, workspace: string, pid: number, st
 Errors: `422 validation`, e.g. `threads_heavy + engine_threads > thread_budget + 1`, or a watch root not a directory.
 
 ### `GET /api/system`
-→ `200 {cpu_count, cpu_model, mem_total_gb, mem_available_gb, disk_free_gb, workspace, workspace_bytes, host_id, versions: {python, sparc, numpy, pandas, torch, fastapi}, web_build: {src_sha256, built_utc}|null}`.
+→ `200 {cpu_count, cpu_model, mem_total_gb, mem_available_gb, disk_free_gb, workspace, workspace_bytes, host_id, versions: {python, sparc, numpy, pandas, torch: string|null, fastapi}, web_build: {src_sha256, vite, react}|null}`. `torch` is read from package metadata (`importlib.metadata`), never by importing torch.
 
 ### `POST /api/system/netcheck`
 Body: `{hosts?: string[]}`. Default: every host from job kinds and settings.
@@ -258,8 +263,8 @@ Errors:
                             reason: string|null; started_ts: number|null; ended_ts: number|null; elapsed_s: number|null;
                             est_s: number|null; progress: number|null }>|null;
   spans: Span[];                         // depth ≤ 4, collapsed beyond 2,000 nodes (aggregated rows)
-  metrics_latest: Record<string, {value: number|string|null, unit: string|null, tags: object, ts: number}>;
-  metric_series: Record<string, {ts: number, value: number}[]>;   // only: candidate_rmse, heldout_rmse, mean_benefit, scenario.summary.*
+  metrics_latest: Record<MetricKey, {value: number|string|null, unit: string|null, tags: object, ts: number}>;
+  metric_series: Record<MetricKey, {ts: number, value: number}[]>;   // only: candidate_rmse, heldout_rmse, mean_benefit, scenario.*, cv_row.*, influence.*
   warnings: {code: string, lvl: string, message: string, count: number, stage: string|null, first_cursor: number, data: object}[];
   artifacts: {relpath: string, role: string, bytes: number, stage: string|null, ts: number}[];
   checkpoints: {action: string, done: string[], bytes: number|null, ts: number}[];
@@ -269,7 +274,11 @@ Errors:
 type Span = { span_id: string; parent_id: string|null; kind: "run"|"stage"|"task"; name: string; key: string|null;
   k: number|null; n: number|null; unit: string|null; status: "running"|"ok"|"error"|"cancelled";
   started_ts: number; ended_ts: number|null; elapsed_s: number|null; ctx: object; metrics: object };
+type MetricKey = string;   // `name` when the metric has no tags, else `name{k1=v1,k2=v2}` with tags sorted by key,
+                           // e.g. "influence.range_m{predictor=Pct_Canopy}", "candidate_rmse{candidate=0.1}"
 ```
+
+Progress in the snapshot (`job.progress`, `stages[].progress`) is cost-weighted with the seed-rate weights (`/api/meta.unit_costs`) and SPEC §5.4 unit accounting. ETA fields use the calibrated per-host model.
 
 ### `GET /api/jobs/{jid}/spans`
 Query: `under?` (span id), `max_depth?` (default 4) → `200 Span[]`.
@@ -337,7 +346,9 @@ Query: `topics=jobs,runs,engine,studies,storage` (default all). The resume point
 Query: `after=<cursor>`, or the `Last-Event-ID` header (cursor).
 - Replays from the file, then tails it.
 - `id` = byte cursor, `event` = event `type`, `data` = the full event JSON (envelope + fields).
+- `tick` events are coalesced to 4 Hz per span, except ticks with `k == 1` or `k == n`, which are always sent.
 - Transient `resource` events carry no `id`.
+- For a `run.external` pseudo-job the stream tails `run_state.events_path` instead of a job dir.
 - The stream closes with `event: end` (`data: {status}`) after the job reaches a final status and the file is drained.
 - On subscriber overflow it sends `resync {after: <cursor>}` and closes; the client resumes from `after`.
 
@@ -480,7 +491,7 @@ Body: `{yaml?: string, raw?: object}` → `200`:
 **`GET /api/config/schema`** → `200` JSON Schema of `CoreConfigModel`, with `x-ui` hints per property: `{group, advanced, unit, help, enum_labels}`.
 
 **`POST /api/projects/{pid}/link`**
-Body: `{kind: "forcing"|"climate"|"layers"|"features_join"|"features_new_project", path: string, apply?: boolean = false}`
+Body: `{kind: "forcing"|"climate"|"layers"|"features_join"|"features_new_project", path: string, apply?: boolean = false}`. `features_join` writes the join and `open_*` predictors (with roles) into this project, and `features_new_project` creates `<name>_open`.
 → `200 {yaml_diff: string, applied: boolean, version?: number, new_project_id?: string}`.
 
 ### 5.4 Inputs (network jobs) `[P]`
@@ -494,13 +505,20 @@ Body: `{date: "YYYY-MM-DD", hours: [number, number], tz: string, lat?: number, l
 Body: `{link?: boolean = true}`. Errors: `422 needs_crs`.
 
 **`POST /api/projects/{pid}/inputs/features`**
-Body: `{months?: string[], max_cloud?: number = 20, s2_tiles?: string[], write_open_project?: boolean = true}`.
+Body: `{months?: string[], max_cloud?: number = 20, s2_tiles?: string[], target: "new_project"|"this_project" = "new_project"}`.
+- `new_project` creates `<name>_open`, the old `write_open_project: true`.
+- `this_project` writes the join and `open_*` predictors into the same project. It is the default UI choice in bootstrap mode, i.e. a project with no predictors (SPEC §9.3).
+
+Errors: `422 needs_crs`.
 
 **`POST /api/projects/{pid}/inputs/cmip6`**
-Body: `{lat?: number, lon?: number, experiments?: string[], months?: number[], variable?: "tasmax"|"tas", models?: string[], workers?: number = 4, link?: boolean = true}`.
+Body: `{lat?: number, lon?: number, experiments?: string[], periods?: Record<string, [number, number]>, baseline?: [number, number] = [1995, 2014], months?: number[], variable?: "tasmax"|"tas", models?: string[], workers?: number = 4, link?: boolean = true}`.
 
 **`POST /api/projects/{pid}/inputs/ghcn`**
 Body: `{station?: string}`. Caches the series under `<ws>/cache`.
+
+**`POST /api/projects/{pid}/inputs/stations`**
+Body: `{}`. Downloads and caches the NOAA ISD station index (`<ws>/cache/isd-history.csv`, ≈3 MB).
 
 Other input endpoints:
 
@@ -522,7 +540,7 @@ Other input endpoints:
 - features: `{agreement, scatter_bins}`
 
 **`GET /api/projects/{pid}/forcing/stations`**
-Query: `lat`, `lon`, `limit=10` → `200 {usaf_wban, name, lat, lon, dist_km, begin, end}[]`. The first call may fetch and cache `isd-history.csv` (network).
+Query: `lat`, `lon`, `limit=10` → `200 {usaf_wban, name, lat, lon, dist_km, begin, end}[]`. It reads the cached index only. When `isd-history.csv` is not cached it returns `404 not_found` (`detail.missing: "isd-history.csv"`) with `action: {kind: "fetch_input", method: "POST", path: "/api/projects/{pid}/inputs/stations"}`. It never downloads inside the request.
 
 ---
 
@@ -590,9 +608,10 @@ Errors: `404`, `422 needs_config`, `422 mismatch` (ids or folds differ from the 
   outputs_summary: { present: number; missing: number; stale: number; writing: number };
   sections: Record<string, { present: boolean; source: "manifest"|"file"|null; stale: boolean; older_code: boolean }>;
   flags: { code: string; severity: string; message: string }[];
-  children: RunSummary[]; studies: StudyStatusRow[]; jobs: Job[]; warnings_count: number;
-  engine: { state: EngineState } }
+  children: RunSummary[]; jobs: Job[]; warnings_count: number }
 ```
+
+Study status rows come from `GET /api/runs/{rid}/studies` `[S]`, and engine state from `GET /api/runs/{rid}/engine` `[E]`. `RunDetail` does not embed them, because the runs item cannot import items that depend on it.
 
 ### `PATCH /api/runs/{rid}`
 Body: `{label?, notes?, pinned?}` → `200 RunSummary`.
@@ -646,7 +665,7 @@ Query: `diff_with?=<rid>` → `200 {packages: string[], diff?: {added: string[],
 ### 6.1 Outputs, views, docs, files `[R]`
 
 **`GET /api/runs/{rid}/outputs`**
-→ `200 {outputs: OutputEntry[], tabs: {id: string, availability: Availability, missing: {output: string, produced_by: string, action: Action|null}[]}[]}`.
+→ `200 {outputs: OutputEntry[], tabs: {id: RunTabId, availability: Availability, missing: {output: string, produced_by: string, action: Action|null}[]}[]}`. There is one `tabs` entry per `RunTabId`, computed by grouping catalog outputs by `OutputSpec.view`, with the fixed rules of SPEC §3.2 for tabs that have no outputs.
 
 **`GET /api/runs/{rid}/outputs/{oid}`**
 → `200` the normalised JSON content of one catalog output (merged manifest section or file), plus `_meta: {source, stale, older_code}`. Errors: `404 output_missing` (`detail: {output, produced_by, expected_path}`, `action`).
@@ -676,8 +695,8 @@ Section keys per view. Each key is present or `null`.
 | `response` | `levers: {var: {curve, shapes, effects, fold_means}}, literature` |
 | `scenarios` | `rows, ladders, has_detail` |
 | `climate` | `warming, models_table, exposure, offset, thresholds` |
-| `causal` | `treatments: {t: {forest, audit, dr_curve, cate, sensitivity, controls}}, flags, dag_audit` |
-| `budget` | `kpis, pareto, caption, top_cells` |
+| `causal` | `treatments: {t: {forest, audit, dr_curve, model_pd_curve, cate, cate_layer, sensitivity, controls}}, flags, dag_audit` (`model_pd_curve` and `cate_layer` are null on older runs) |
+| `budget` | `kpis, pareto, caption, top_cells, status` (`status` = `"ok"` or core's `"no positive-benefit segments"`) |
 | `planner` | `exposure, person_mean, hot_days, equity, plantable, zones, hex_files, sites, pairs, gis` |
 | `uncertainty` | `rows, climate, sources` |
 | `provenance` | `hashes, git, platform, launch` |
@@ -731,7 +750,8 @@ Keys:
 - `res:<res_id>:<delta|delta_sd|extrapolation|abs|realized_<var>>`
 - `plan:<plid>:<dose|planned_benefit|closed_loop_delta>`
 - `cmp:<cid>:<a>__<b>`
-- `sc_sd:<slug>`, `sc_ex:<slug>`
+- `sc:<slug>`, `sc_sd:<slug>`, `sc_ex:<slug>`; `<slug>` = `sparc.core.catalog.scenario_slug(name)` (SPEC §6.1)
+- `cate_<t>`, `mslope_<t>`, `mslope_own_<t>` (from `causal_cells.parquet`, when present)
 
 Errors: `404 unknown_layer`, `404 output_missing`.
 
@@ -886,9 +906,15 @@ Errors:
 **`POST /api/runs/{rid}/preview`**
 Body: `{edits: Edit[], brush?: Record<string, SparseEdit>, options?: ScenarioDoc["options"], request_seq: number}`
 
-→ `200` Float32[n] ΔT in target units (negative = cooler), with headers:
+→ `200` packed binary (§0.4) with two arrays:
+- `delta`: float32[n] ΔT in target units (negative = cooler);
+- `edited`: uint8[ceil(n/8)], the edited-cell bitset as raw bytes (LSB-first).
+
+Headers:
+- `X-SPARC-Offsets` (as in §0.4)
 - `X-SPARC-Summary: {"mean": number, "edited_mean": number, "n_edited": number, "outside_share": number, "trust": "good"|"rough"|"none", "hatched": boolean, "reasons": string[], "request_seq": number}`
-- `X-SPARC-Edited: <bitset>` (base64)
+
+The mask is in the body, not a header, so large grids cannot overflow proxy header limits.
 
 Errors:
 - `404 no_emulator` (`action: build_emulator`)
@@ -959,7 +985,8 @@ Body: `{apply?: boolean = false}` → `200 {eligible: boolean, reason: string|nu
 Query: `run_id` → `text/csv` with columns `id,lever,change` (realised per-cell edit).
 
 **`POST /api/runs/{rid}/designs/import`**
-Body: raw CSV (`id,lever,change`) → `201 {blobs: Record<string, string>, n_rows: number, unknown_ids: (number|string)[], levers: string[]}`. Blob ids are used as `per_cell_ref: "blob:<id>"`.
+Body: raw CSV with columns `id,lever,change` (a per-cell increment) **or** `id,lever,value` (an absolute target; converted to `change = value − current input` on this run, which covers expert "upload an edited predictor table" use).
+→ `201 {blobs: Record<string, string>, n_rows: number, unknown_ids: (number|string)[], levers: string[], mode: "change"|"value"}`. Blob ids are used as `per_cell_ref: "blob:<id>"`.
 
 ### 7.5 Results
 
@@ -968,9 +995,12 @@ Body: raw CSV (`id,lever,change`) → `201 {blobs: Record<string, string>, n_row
 ```ts
 { configured: { slug: string; name: string; city: Likely; p10: number|null; p90: number|null; frac_extrapolated: number|null;
                 mean_realized: Record<string, number>; causal_linear: {delta: number, lo: number, hi: number, model_within: boolean}|null;
-                has_folds: boolean; layer_key: string }[];
+                has_folds: boolean; layer_key: string;
+                doc: ScenarioDoc }[];          // the equivalent add-mode doc, used by "Clone to edit"
   results: ResultSummary[] }
 ```
+
+`slug` = `scenario_slug(name)` (SPEC §6.1). `name` keeps the U+2212 minus.
 
 **`POST /api/runs/{rid}/configured/{slug}/rerun-exact`** → `202 Job` (`engine.rerun_configured`).
 
@@ -1024,6 +1054,10 @@ Body: `{items: ItemRef[] /* 2–4 */, regions?: string[], thresholds?: number[]}
 
 **`GET /api/comparisons/{cid}`** → `200 Comparison`.
 
+**`GET /api/runs/{rid}/comparisons`** → `200 {id, items: ItemRef[], created_utc}[]`.
+
+**`DELETE /api/comparisons/{cid}`** → `200 {ok: true}`.
+
 ### 7.7 Climate × adaptation
 
 **`GET /api/runs/{rid}/climate/factors`**
@@ -1041,16 +1075,21 @@ Body: `{lever: string, doses: number[], selection?: SelectionSpec}` → `202 {sw
 **`GET /api/sweeps/{swid}`**
 → `200 {params, status, curve: {dose: number, city: Likely, region: Likely|null, realized: number, frac_extrapolated: number}[], fit: {model: string, A: number|null, ds: number|null, d90: number|null}|null, pipeline_curve: object|null, points: string[]}`.
 
+**`GET /api/runs/{rid}/sweeps`** → `200 {id, lever, doses: number[], status, created_utc, job_id}[]`.
+
+**`DELETE /api/sweeps/{swid}`** → `200 {ok: true}` (also removes its `sweep_point` results). Errors: `409 active`.
+
 ### 7.9 Plans
 
 ```ts
 type PlanParams = { lever: string; budget: number;
-  cost: { scalar: number } | { column: string };
+  cost: { scalar: number } | { column: string };   // a namespaced column (§1) or "csv:<project-relative path>:<column>" joined by id
   cap: { plantable: boolean; paved_share?: number; region?: SelectionSpec };
   min_dose?: number; objective: "cooling"|"people";
-  equity?: { source: "share_60_plus"|"share_under_5"|"density"|"column"; column?: string; focus: number };
+  equity?: { source: "share_60_plus"|"share_under_5"|"density"|"column"; column?: string /* same forms as cost.column */; focus: number };
   multipliers?: number[] };
 type PlanPreview = { planned_total: number; n_cells_treated: number; mean_dose_treated: number; total_cost: number; gini: number;
+  min_dose_dropped_cost: number;   // budget freed by the min_dose post-filter, not re-spent
   pareto: { budget: number; benefit: number; n_cells: number; n_segments: number; gini: number }[];
   dose: string /* base64 Float32[n] */; constraint: string; objective: string; caption: string };
 ```
@@ -1089,32 +1128,36 @@ type PlanPreview = { planned_total: number; n_cells_treated: number; mean_dose_t
 
 Params are validated by pydantic per kind (`additionalProperties: false`). `result` is written to `result.json` and exposed as `Job.result`.
 
+`export_id` in the `export.*` params is **server-filled**. `POST /api/exports` creates the `exports` row first and injects the id; clients never send it. Every export writes under `projects/<slug>/exports/<export_id>/`.
+
 | Kind | Params | Result |
 |---|---|---|
-| `run.core` `[R]` | `{run_id: string, resume: boolean, use_current_config?: boolean}` (other args come from `launch.json`) | `{run_id, status, timings_s, metrics: {r2, rmse, coverage}\|null, done: string[]}` |
+| `run.core` `[R]` | `{run_id: string, resume: boolean, use_current_config?: boolean, threads?: number}` (other args come from `launch.json`; `use_current_config` re-snapshots it as SPEC §4.3) | `{run_id, status, timings_s, metrics: {r2, rmse, coverage}\|null, done: string[]}` |
+| `run.external` `[R]` | `{run_id}` (registry-created pseudo-job for a live CLI run; never queued, never cancellable) | `{run_id, status}` |
 | `input.forcing` `[P]` | as `POST …/inputs/forcing` | `{path, sw_down, lw_net, wind: [number, number], checks: string[], linked: boolean}` |
 | `input.layers` `[P]` | `{link: boolean}` | `{path, n_cells, people_total, linked}` |
-| `input.features` `[P]` | as the endpoint | `{path, agreement: object[], open_project_id: string\|null}` |
-| `input.cmip6` `[P]` | as the endpoint | `{path, n_models, experiments, skipped_models: string[], linked}` |
+| `input.features` `[P]` | as the endpoint | `{path, agreement: object[] (empty in bootstrap mode), open_project_id: string\|null, linked: boolean}` |
+| `input.cmip6` `[P]` | as the endpoint (incl. `periods`, `baseline`) | `{path, n_models, experiments, periods: string[], skipped_models: string[], linked}` |
 | `input.ghcn` `[P]` | `{station}` | `{path, years: [number, number]}` |
+| `input.stations` `[P]` | `{}` | `{path, n_stations}` |
 | `post.baselines` `[S]` | `{models?: string[]}` | `{verdict, best_baseline, rows: object}` |
-| `post.planner` `[S]` | `{package?: string, thresholds?: number[], hex_sizes?: number[], export?: boolean}` | `{people_total, package, files: string[], hot_days: boolean}` |
+| `post.planner` `[S]` | `{package?: string /* configured slug or exact name */, thresholds?: number[], hex_sizes?: number[], export?: boolean}` | `{people_total, package, files: string[], hot_days: boolean}` |
 | `post.emulator` `[S]` | `{patches?: number = 8}` | `{levers: Record<string, {patch_pass_rate, uniform_rel_err}>}` |
 | `post.uncertainty` `[S]` | `{multiverse_study?: string, simcheck_studies?: string[], placebo_study?: string, real_r2_gate?: boolean}` (default: attached studies) | `{n_scenarios, sources}` |
 | `post.writeup` `[S]` | `{}` | `{files: string[]}` |
 | `study.placebo` `[S]` | `{kinds: ("grf"\|"shift"\|"rotate")[], coarse_m: number\|null = 60, seed: number = 0, grf_range_m: number = 600}` | `{n_pass_model, n_pass_causal, n_placebos, children: string[]}` |
 | `study.simcheck` `[S]` | `{design: Record<"physics"\|"additive"\|"own_only"\|"coarse_scale"\|"confounded"\|"null", number>, coarse_m: number\|null = 90, epochs: number = 200, workers: number = 1, threads: number = 1, continue_study_id?: string}` | `{n_rows, n_errors, summary: object}` |
 | `study.multiverse` `[S]` | `{variants?: string[], custom_variants?: Record<string, Record<string, unknown>>, coarse_m: number\|null = 60, workers: number = 1, threads: number = 1}` | `{sign_stability_min, median_kendall_tau, children: string[]}` |
-| `study.reproduce` `[S]` | `{stages?: string[] = ["S0","S1","S2","S3"], tol_r2?: number = 0.01, tol_effect?: number = 0.05}` | `{pass: boolean, child_run_id, n_hard_fail: number}` |
-| `study.benchmark` `[S]` | `{seed?: 0, ab?: true, epochs?: 150, n?: 96}` | `{runs: object}` |
-| `export.bundle` `[S]` | `{run_id, outputs?: string[], include_checkpoint?: boolean = false}` | `{export_id, path, bytes}` |
-| `export.gis` `[S]` | `{run_id, layers?: string[]}` | `{export_id, path, bytes, files: string[]}` |
-| `export.page` `[S]` | `{run_id, placebo_study?: string}` | `{export_id, path, bytes}` |
-| `export.report` `[S]` | `{run_id, sections: string[], result_ids?: string[], plan_ids?: string[], finding_ids?: string[], format: "html"\|"md"}` | `{export_id, path, bytes}` |
-| `export.findings` `[S]` | `{project_id, run_id?, ids?: string[], format: "md"\|"html"}` | `{export_id, path, bytes}` |
-| `export.decision_pack` `[E]` | `{result_id, thresholds?: number[]}` | `{export_id, path, bytes, draft: boolean}` |
-| `export.plan_pack` `[E]` | `{plan_id}` | `{export_id, path, bytes}` |
-| `export.compare_pack` `[E]` | `{comparison_id}` | `{export_id, path, bytes}` |
+| `study.reproduce` `[S]` | `{stages?: string[] = ["S0","S1","S2","S3"], tol_r2?: number = 0.01, tol_effect?: number = 0.05}`. The server passes `config_dir` from the parent's `launch.json` or import config and `out_dir` = the child run dir; neither is a client param | `{pass: boolean, child_run_id, n_hard_fail: number}` |
+| `study.benchmark` `[S]` | `{seed?: 0, ab?: true, epochs?: 150, n?: 96}` | `{runs: object}` (the kind writes `benchmark.json`/`.md` in the study dir) |
+| `export.bundle` `[S]` | `{export_id, run_id, outputs?: string[], include_checkpoint?: boolean = false}` | `{export_id, path, bytes}` |
+| `export.gis` `[S]` | `{export_id, run_id, layers?: string[]}` | `{export_id, path, bytes, files: string[]}` |
+| `export.page` `[S]` | `{export_id, run_id, placebo_study?: string}` | `{export_id, path, bytes}` |
+| `export.report` `[S]` | `{export_id, run_id, sections: string[], result_ids?: string[], plan_ids?: string[], finding_ids?: string[], format: "html"\|"md"}` | `{export_id, path, bytes}` |
+| `export.findings` `[S]` | `{export_id, project_id, run_id?, ids?: string[], format: "md"\|"html"}` | `{export_id, path, bytes}` |
+| `export.decision_pack` `[E]` | `{export_id, result_id, thresholds?: number[]}` | `{export_id, path, bytes, draft: boolean}` |
+| `export.plan_pack` `[E]` | `{export_id, plan_id}` | `{export_id, path, bytes}` |
+| `export.compare_pack` `[E]` | `{export_id, comparison_id}` | `{export_id, path, bytes}` |
 | `engine.open` `[E]` | `{run_id}` | `{load_seconds: object, rss_mb, code_match}` |
 | `engine.scenario` `[E]` | `{run_id, scenario_id, revision}` | `{result_id}` |
 | `engine.batch` `[E]` | `{run_id, scenario_ids: string[]}` | `{result_ids: string[], failed: {scenario_id, error}[]}` |
@@ -1148,7 +1191,20 @@ Errors: `422 requirements` (`detail.missing`, e.g. `planner.layers`), `409 no_ch
 
 **`POST /api/runs/{rid}/studies/{kind}`**
 `kind ∈ placebo|simcheck|multiverse|reproduce`. Body: params → `202 {study: Study, job: Job}`.
-Errors: `422 requirements` (e.g. roles canopy and impervious missing for placebo/simcheck).
+Errors:
+- `422 requirements` (e.g. roles canopy and impervious missing for placebo/simcheck);
+- `422 validation` when `workers × threads > threads_heavy` (simcheck, multiverse).
+
+**`GET /api/runs/{rid}/truth`**
+Synthetic (demo) projects only. It compares `truth.json` (SPEC §9.2) with the run → `200`:
+
+```ts
+{ rows: { quantity: "canopy_scenario"|"footprint_mean"|"L_m"|"influence_radius_m"|"noise_sd"; label: string;
+          truth: number; recovered: number|null; se: number|null; share: number|null; unit: string;
+          scenario: string|null }[] }
+```
+
+Errors: `404 not_found` (not a demo project, or `truth.json` missing).
 
 **`POST /api/projects/{pid}/studies/benchmark`**
 Body: params → `202 {study, job}`.
@@ -1189,8 +1245,10 @@ Query: `files=false` → `200 {ok: true}`. Errors: `409 active`.
 ## 10. Exports and reports `[S]` (pack kinds `[E]`)
 
 **`POST /api/exports`**
-Body: `{kind: "bundle"|"gis"|"page"|"report"|"findings"|"decision_pack"|"plan_pack"|"compare_pack", project_id: string, params: object}`. The params are those of the `export.<kind>` job (§8).
+Body: `{kind: "bundle"|"gis"|"page"|"report"|"findings"|"decision_pack"|"plan_pack"|"compare_pack", project_id: string, params: object}`. The params are those of the `export.<kind>` job (§8), without `export_id`.
 → `202 {export: Export, job: Job}`.
+
+The route (owned by `[S]`) creates the `exports` row, injects `export_id`, and enqueues `export.<kind>` by name. The pack kinds are owned by `[E]`; the job registry dispatches them. Files go to `projects/<slug>/exports/<export_id>/`. The `exports` row is completed by the kind's `on_finish` hook (SPEC §10.2).
 
 ```ts
 type Export = { id: string; project_id: string; run_id: string|null; kind: string; ref: string|null; options: object; job_id: string;
@@ -1267,14 +1325,26 @@ plans/<plid>/{params.json, planned.json, dose.npy, planned_benefit.npy, realised
 sweeps/<swid>/{params.json, curve.json}
 comparisons/<cid>/{items.json, summary.json, diff_<a>__<b>.npy}
 blobs/<blob_id>.bin
-exports/<ex_id>/…
 ```
+
+Exports are **not** stored here. They live under the project (§12.4).
+
+### 12.4 Project dir (`<ws>/projects/<slug>/`)
+
+```
+project.json  config.yml  data/  inputs/{forcing,climate,layers,features}/  runs/<run_id>/  studies/<study_id>/
+exports/<export_id>/…                 # every export kind; never inside a run dir
+scenarios/<sid>.json                  # {"schema": 1, "revisions": [ScenarioDoc + id/revision/parent_id/content_hash/status], "archived": bool}
+findings/<fid>.json  findings/<fid>.png|svg   # Finding minus image_url, plus "image": filename|null
+```
+
+The scenario mirror is written by `[E]` on every create, patch or fork, and the findings mirror by `[S]` on every change. Both are atomic (tmp + rename). `sparc studio --reindex` rebuilds the `scenarios` and `findings` tables from them.
 
 ### 12.3 Job dir (`<ws>/jobs/<jid>/`)
 
 ```
 job.json      {id, kind, params, project_id, run_id, study_id, scenario_id, threads, created_utc, lane, executor}
-state.json    {pid, pgid, proc_create_time, cmdline_token, status, started_utc}
+state.json    {pid, pgid, proc_create_time, cmdline_token, executor, status, started_utc}
 events.jsonl  canonical event log (SPEC §5.3), byte-offset cursor
 stdout.log  stderr.log
 result.json   {status: "succeeded"|"failed"|"cancelled", exit_code, result: object|null, error: {type, message, traceback_tail}|null}
@@ -1328,7 +1398,9 @@ cancel        (presence = cancel requested)
 
 **Replay runner** (`SPARC_STUDIO_RUNNER=replay:<fixture_dir>`, tests only):
 - `run.core` jobs are executed by `python -m sparc.studio.jobs.replay <fixture_dir> <job_dir> --speed 20`.
-- The runner copies fixture outputs into the run dir at the times their `artifact` events occurred, and writes the fixture events with fresh `job`, `pid` and `ts` values.
+- The runner copies fixture outputs into the run dir at the times their `artifact` events occurred, and writes the fixture events with fresh `job`, `pid` and `ts` values. It also rewrites `run.dir.run_dir` and the copied `run_state.json` (`events_path`, `pid`, `job`) to the new run.
+- On cancel it stops at the next event boundary, writes `run_state.status = "cancelled"` and exits 130. On resume it reads the done set of the last `checkpoint{saved}` event replayed before the cancel, emits `stage.skip{checkpoint}` for those stages, and replays the remaining fixture events.
+- The fixture's `FIXTURE.json` gives the `n`/`seed` the project must be created with (SPEC §14.5).
 
 ---
 
@@ -1407,13 +1479,13 @@ Type-specific fields:
 |---|---|
 | `run.start` | `name: string, stages: string[], fast: boolean, coarse: number\|null, resume: boolean, cv_curve: boolean\|null, config_sha256: string, code_sha256: string, run_meta: object` |
 | `run.dir` | `run_dir: string, fingerprint: string` |
-| `run.plan` | `nodes: PlanNode[], total_units: Record<string, number>` |
+| `run.plan` | `nodes: PlanNode[], total_units: Record<string, number>, n_points: number\|null` (re-emitted when nodes become cached/skipped or a count becomes known; a nested `run.plan` inside a study task describes that child only) |
 | `stage.start` | `stage: StageId, label: string, est_s: number\|null` |
 | `stage.end` | `stage: StageId, status: "ok"\|"error"\|"cancelled", elapsed_s: number, summary: object` |
 | `stage.skip` | `stage: StageId, reason: string` |
-| `task.start` | `name: string, key: string\|null, k: number\|null, n: number\|null, unit: string\|null` |
+| `task.start` | `name: string, key: string\|null, k: number\|null, n: number\|null, unit: string\|null` (`unit` set ⇒ a successful `task.end` completes one planned unit, SPEC §5.4) |
 | `task.end` | `name, key, k, n, unit, status: "ok"\|"error"\|"cancelled", elapsed_s: number, metrics: object, error?: {type, message}` |
-| `tick` | `k: number, n: number, unit: string, frac: number, label: string, ...metrics (scalars)` |
+| `tick` | `k: number, n: number, unit: string, frac: number, label: string, ...metrics (scalars)`; a `k == n` tick completes one unit of `unit` (engine passes also carry `pass_s`); `k == 1` and `k == n` ticks are never throttled or coalesced |
 | `metric` | `name: string, value: number\|string\|boolean\|null, unit: string\|null, tags: object` |
 | `artifact` | `path: string, role: string, bytes: number, stage: string\|null` |
 | `checkpoint` | `action: "saved"\|"loaded"\|"mismatch", done: string[], bytes: number\|null, elapsed_s: number\|null, fingerprint: string\|null, changed_sections: string[]\|null` |
@@ -1430,19 +1502,58 @@ Type-specific fields:
 | `end` | `status: JobStatus` (stream closes after drain) |
 
 **Well-known `task.name` values** (the tracker maps these to panels):
-- `fold`, `base_model`, `advection_check`, `stacker_candidate`, `stacker_fold`
-- `cv_partition`, `variable`, `dose`, `marginals`, `scenario`, `model_effects`, `treatment`
+- `fold`, `base_model`, `advection_check`, `adv_refit`, `stacker_candidate`, `stacker_fold`, `baseline_model`
+- `cv_partition`, `engine_init`, `variable`, `dose`, `marginals`, `scenario`, `model_effects`, `treatment`
 - `dml`, `spillover`, `cate`, `dr_curve`, `sensitivity`, `audit`
 - `segments`, `allocate`, `closed_loop`, `pareto`
 - `lever`, `placebo_kind`, `replicate`, `variant`, `remote_object`
 - `load_run`, `unpickle`, `mediators`, `engine_init`
 
-**Well-known metric names:**
-- `fit_s`, `heldout_rmse`, `heldout_r2`, `candidate_rmse`
+**Well-known metric names** (tags in braces):
+- `fit_s`, `heldout_rmse`, `heldout_r2` (in `base_model` task metrics), `candidate_rmse {candidate}`
 - `stacker_rmse`, `stacker_r2`, `interval_coverage`, `interval_halfwidth`
-- `cv_row.r2`, `cv_row.rmse`
-- `mean_benefit`, `mean_se`, `frac_extrapolated`
-- `scenario.mean_delta`, `scenario.se`
+- `influence.range_m {predictor}`, `influence.anisotropy_ratio {predictor}`
+- `cv_row.r2 {partition}`, `cv_row.rmse {partition}`
+- `mean_benefit`, `mean_se`, `frac_extrapolated` (in `dose` task metrics)
+- `scenario.mean_delta {scenario}`, `scenario.se {scenario}`, `scenario.frac_extrapolated {scenario}`
 - `theta`, `theta_se`
 - `planned_total`, `realised_total`
 - `share`, `oof_r2`
+
+---
+
+## 18. Review changes (completeness pass, 2026-10-01)
+
+Wire-level changes made with SPEC §18. The `docs` item later appends "As-built changes" after this one.
+
+**Added**
+- Endpoints:
+  - `POST /api/projects/{pid}/inputs/stations` (+ kind `input.stations`);
+  - `GET /api/runs/{rid}/truth`;
+  - `GET /api/runs/{rid}/sweeps`, `DELETE /api/sweeps/{swid}`;
+  - `GET /api/runs/{rid}/comparisons`, `DELETE /api/comparisons/{cid}`.
+- Kind `run.external` (lane `none`, executor `external`).
+- Params and fields:
+  - `periods`/`baseline` on `input.cmip6`;
+  - `target` on `input.features` (replaces `write_open_project`);
+  - `threads` on `run.core`;
+  - `/api/meta.unit_costs` and `run_tab_outputs`;
+  - `MetricKey` format;
+  - `PlanPreview.min_dose_dropped_cost`;
+  - configured scenarios carry `doc`;
+  - `id,lever,value` design CSVs;
+  - `run.plan.n_points`;
+  - `budget.status` and `causal.model_pd_curve`/`cate_layer` view sections.
+- Layer keys: `sc:<slug>` (with the `scenario_slug` rule), `cate_<t>`, `mslope_<t>`, `mslope_own_<t>`.
+- On-disk §12.4 (project dir, scenario and findings mirrors); the replay runner's run-dir rewriting and cancel/resume behaviour.
+
+**Changed**
+- `POST /api/runs/{rid}/preview` returns a packed body (`delta` + `edited` bitset). `X-SPARC-Edited` was removed.
+- `export.*` params carry a server-filled `export_id`, and exports live only under `projects/<slug>/exports/`. They were removed from §12.2.
+- `RunDetail` no longer embeds `studies` or `engine`.
+- `/api/meta.run_tabs` was replaced by the `RunTabId` vocabulary plus the derived `run_tab_outputs`.
+- `web_build` has no `built_utc`.
+- `/openapi.json` requires auth; `/docs` and `/redoc` are disabled; `GET /auth?next=` is restricted to same-origin paths.
+- `GET /api/projects/{pid}/forcing/stations` never downloads; it returns `404` with a `fetch_input` action instead.
+- `state.json` carries `executor`.
+- Tick coalescing never drops `k == 1` or `k == n` ticks.

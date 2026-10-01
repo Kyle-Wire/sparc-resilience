@@ -500,6 +500,7 @@ Envelope, present on every line:
   - `layers.missing`, `layers.empty_points`
   - `forcing.lsm_unavailable`, `forcing.station_unavailable`
   - `climate.model_skipped`
+  - `network.retry` (one per retried request in `climate.http_fetch` / `forcing.http_range`, with host, attempt and wait; until now these retries were silent for up to ≈30 s)
   - `log.<logger>` (bridged)
 
 ### 5.4 Plan and ETA
@@ -1327,6 +1328,8 @@ Each edit becomes one core `Intervention`. Edits apply in list order, as in core
   - a direction opposite to the configured one;
   - cell-id or blob edits applied to a run with a different grid (resampled to the nearest cell centre).
 
+**Scenario options.** `options.clip_to_support` and `options.mediators` are applied per request: the engine host saves `engine.clip_support` and `engine.mediators`, sets them from the options (`mediators: false` → `None`), runs the scenario, and restores them in a `finally`. Both are part of `content_hash`, so they are part of the cache key. Coupling rules always come from the run's config.
+
 ### 7.4 Library
 
 **Statuses:** `draft` → `previewed` → `exact` (current) → `stale` (run checkpoint or core code changed) → `archived`.
@@ -1360,7 +1363,7 @@ Each edit becomes one core `Intervention`. Edits apply in list order, as in core
 - runs under `threadpool_limits(1)`;
 - is **single-flight, latest-wins per run**: a new request supersedes a queued one, and superseded requests return `409 superseded`, which the client ignores;
 - takes 20–150 ms on 54,701 cells;
-- returns Float32 ΔT with an `X-SPARC-Summary` header: `{mean, edited_mean, n_edited, outside_share, trust, hatched, reasons[]}`.
+- returns a **packed binary body** (api.md §0.4): `delta` (float32[n] ΔT) and `edited` (the edited-cell bitset, raw bytes), with offsets in `X-SPARC-Offsets` and a small `X-SPARC-Summary` header: `{mean, edited_mean, n_edited, outside_share, trust, hatched, reasons[], request_seq}`. The mask travels in the body, not in a header, so large grids cannot overflow proxy header limits (Node's 16 KB default in the Vite dev proxy).
 
 **Brushing** sends sparse `{lever: {idx: Int32 b64, val: Float32 b64}}` payloads, debounced at 120 ms on the client.
 
@@ -1485,11 +1488,11 @@ This uses the shared fold models and is usually much tighter than independent SE
 **Inputs:**
 - lever (actionable, with S4 responses);
 - budget (log slider);
-- cost: scalar, or a cost layer (any predictor/layer column, or an uploaded CSV by id);
+- cost: scalar, or a cost layer (any namespaced column, §6.6, or `csv:<project-relative path>:<column>` from an uploaded CSV joined by id);
 - cap: plantable headroom (canopy role + layers, editable paved share) and/or region (cap 0 outside the selection);
-- minimum dose per treated cell: a Studio post-filter, labelled;
+- minimum dose per treated cell: `planned_allocation(min_dose=…)` drops allocations below it after the greedy pass. The freed budget is not re-spent, and the result reports it as `min_dose_dropped_cost`, labelled in the UI;
 - objective: cooling, or people (HRSL smoothed at the lever range via `optimize.optimizer_layers`);
-- equity: score source (share 60+, under-5, density rank, or uploaded column joined **by id**, normalised 0–1) and focus 0–1;
+- equity: score source (share 60+, under-5, density rank, or a column — namespaced or `csv:<path>:<column>` — joined **by id**, normalised 0–1) and focus 0–1;
 - Pareto multipliers.
 
 **Planned mode** (inline, < 1 s, no engine). `VariableResponse` is rebuilt from `response_<var>.parquet` + `response_curves.json` + cfg, then `sparc.core.optimize.planned_allocation(...)` (§11, item 15).
@@ -1504,6 +1507,8 @@ This uses the shared fold models and is usually much tighter than independent SE
 - ranked cell list: rank, id, lon, lat, zone, dose, planned benefit, closed-loop Δ, people, plantable headroom;
 - `planner.logger_sites` on the plan;
 - `planner.matched_controls` (treated = dose ≥ median positive dose) as the evaluation design.
+
+The endpoint returns JSON with ids and lon/lat; the browser renders the CSV and GeoJSON downloads from it. The plan pack (§7.13) carries the same tables as files.
 
 ### 7.11 Climate × adaptation (`/r/:rid/lab/climate`)
 
@@ -1584,11 +1589,13 @@ All of these are tracked jobs. They run against the **parent run's launch snapsh
 | `post.emulator` | action | `emulator.emulator_for_run(run_dir, cfg, n_patches)` | heavy | emulator.npz/.json | Requires checkpoint |
 | `post.uncertainty` | action | `uncertainty.uncertainty_report(run_dir, multiverse_dir, simcheck_dirs, placebo_path, real_r2_gate)` | medium | uncertainty.json/.md, placebo.json; manifest | **Auto-enqueued** when an attached study finishes (setting `auto_uncertainty`, default on) |
 | `post.writeup` | action | `writeup.methods_markdown` / `model_card_markdown` on the merged manifest | medium | methods.md, model_card.md | report.md is not re-rendered (frozen at run end) |
-| `study.placebo` | study | `placebo.run_placebo_suite(cfg, kinds, coarse, seed, grf_range_m, children_dir, resume=True, run_meta)` | heavy | study dir: placebo.json/.md + 3 child runs | Needs canopy/impervious roles |
-| `study.simcheck` | study | `simcheck.run_simcheck(cfg, design, out_dir, coarse, epochs, workers, threads)` | heavy | simcheck.jsonl, simcheck_summary.json/.md | Resumable; `simcheck_merge` across studies is inline |
-| `study.multiverse` | study | `multiverse.run_multiverse(cfg, out_dir, variants, coarse, workers, threads, extra_variants, run_meta)` | heavy | <variant>.json/_maps.npz, multiverse_summary.json/.md + child runs | Custom variants as dotted overrides |
-| `study.reproduce` | study | `reproduce.reproduce(run_dir, stages, tol_r2, tol_effect, out_dir, run_meta)` | heavy | child run + reproduce.json | Refuses frame-input runs |
-| `study.benchmark` | study (project) | `diagnostics.run_benchmark(seed, spatial_plus_ab, epochs, n)` | heavy | benchmark.json/.md | No run needed |
+| `study.placebo` | study | `placebo.run_placebo_suite(cfg, kinds, coarse, seed, grf_range_m, children_dir, resume=True, run_meta)` | heavy | study dir: placebo.json/.md (written by the kind with `placebo_markdown`, as the CLI does) + 1 child run per kind | Needs canopy/impervious roles |
+| `study.simcheck` | study | `simcheck.run_simcheck(cfg, design, out_dir, coarse, epochs, workers, threads)` | heavy | simcheck.jsonl, simcheck_summary.json (by core); simcheck_summary.md (by the kind, `simcheck_markdown`) | Resumable; `simcheck_merge` across studies is inline |
+| `study.multiverse` | study | `multiverse.run_multiverse(cfg, out_dir, variants, coarse, workers, threads, extra_variants, run_meta)` | heavy | <variant>.json/_maps.npz, multiverse_summary.json (by core); multiverse_summary.md (by the kind, `multiverse_markdown`) + child runs | Custom variants as dotted overrides |
+| `study.reproduce` | study | `reproduce.reproduce(run_dir, stages, tol_r2, tol_effect, config_dir, out_dir, run_meta)` | heavy | child run + reproduce.json (in the child run dir) | Refuses frame-input runs. `config_dir` = the parent's `launch.json.config_dir`, else its import-time config dir (the full Providence example has no `provenance.config_dir`) |
+| `study.benchmark` | study (project) | `diagnostics.run_benchmark(seed, spatial_plus_ab, epochs, n)` | heavy | benchmark.json/.md (written by the kind with `benchmark_markdown`) | No run needed |
+
+All study and post-run writes use `runio` atomic helpers. For `study.simcheck` and `study.multiverse`, `workers × threads` must not exceed `threads_heavy` (`422 validation` otherwise), because the pool runs inside the single heavy slot.
 
 - **Validation tab** (`/r/:rid/validation`): one card per kind. Each card shows status (not run / queued / running / done / stale vs run / failed), estimated cost, a launch form, and the result chart:
   - baselines forest;
@@ -1599,7 +1606,12 @@ All of these are tracked jobs. They run against the **parent run's launch snapsh
   - literature panel;
   - reproduce checklist;
   - benchmark effect shares;
-  - for synthetic projects, **Truth vs recovered** (from `truth.json`).
+  - for synthetic projects, **Truth vs recovered** (`GET /api/runs/{rid}/truth`). It compares `truth.json` (§9.2) with the run, one row each:
+    - canopy +d city-mean ΔT: `derived.true_scenarios[name]` vs the configured scenario's mean ± SE, with share = model ÷ truth;
+    - mean canopy footprint per pp: `derived.true_footprint_mean` vs `mean(footprint_effect_per_unit)`;
+    - relaxation length: `L` vs the physics `L_m` mean ± sd;
+    - canopy influence radius: `influence_radius_90` vs the S1 canopy range;
+    - noise floor: `noise_sd` vs the held-out stack RMSE (a sanity bound: RMSE should not fall below the planted noise; the synthetic target is not rounded, so `qa.target_rounding_noise_sd` does not apply).
 - **Attach/detach.** A study can be attached to a run, which feeds its uncertainty. Attaching re-enqueues `post.uncertainty`.
 - **Stale.** A study is stale vs its run when the run's checkpoint fingerprint differs from the one recorded when the study ran.
 
@@ -1616,19 +1628,20 @@ All of these are tracked jobs. They run against the **parent run's launch snapsh
 - **`providence_example`**:
   - copies `brown4.csv`, `configs/forcing/providence_2020-07-29.json`, `configs/climate/providence_cmip6_tasmax_jja.csv` and `configs/layers/providence_layers.parquet` into the project, and rewrites `configs/core_providence.yml` paths relative to the project dir;
   - sources: a repo checkout when present, else the packaged copy in `sparc/studio/examples/providence/` (`brown4.csv.gz` ≈1.3 MB, decompressed on create; the other files as-is);
-  - option `import_existing_runs` (default true when `output/core/providence/` exists): registers `providence_uhi`, `providence_uhi_fast` and the `placebo`, `simcheck*` and `multiverse` study folders **in place** (`origin=imported`).
+  - option `import_existing_runs` (default true when `output/core/providence/` exists): registers `providence_uhi`, `providence_uhi_fast` and the `placebo`, `simcheck*` and `multiverse` study folders **in place** (`origin=imported`). The projects item does this through the cross-item contracts of §10.2: `sparc.studio.runs.registry.import_run(...)` and `sparc.studio.studies.service.import_study_dir(...)`, imported lazily. When either module is not installed yet, the project is still created and the response carries a warning ("run import unavailable in this build").
 - **`existing_config`** (`POST /api/projects/import`): imports a YAML with paths absolutised, and optionally `copy_data`, run dirs and study dirs.
 
 ### 9.2 Synthetic demo city (with a CRS)
 
-- Data: `make_synthetic_city(n, seed)` (default `n=96`; the e2e suite uses `n=48`).
+- **One generator for everything.** All files below come from the new core function `sparc.core.synthetic.write_demo_project(out_dir, n=96, seed=0) -> {config_path, files, truth}` (§11 item 20). The `synthetic_demo` template, `scripts/make_studio_fixtures.py` and the tests all call it. A demo project created with the same `n` and `seed` as the committed fixture is therefore byte-identical in its data, which the replay e2e relies on (§14.5).
+- Data: `make_synthetic_city(n, seed)` (default `n=96`; the committed fixture uses `n=40`; the real-run e2e uses `n=48`).
 - Location: coordinates offset to a **fictional location** (EPSG:32619, x + 300,000 m, y + 4,630,000 m). The project is flagged `demo: true`, and every page shows a **DEMO DATA** badge.
 - Files written:
   - `data/city.csv` and `data/city.truth.json`;
   - `inputs/layers/demo_layers.parquet`: people, people_60_plus, people_under_5 and lc_* derived deterministically from canopy/impervious;
   - `inputs/climate/demo_cmip6.csv`: 6 pseudo-models × 4 SSPs × 3 periods in the `cmip6_change_factors` schema;
   - `config.yml`, built from `synthetic_city_config()` plus: `data.path`, `data.crs`, physics roles; actionable canopy/impervious/albedo; one ladder per lever plus a package; `causal.treatments: [canopy]`; climate (table); optimize (canopy, budget); planner.layers; report title "Synthetic city (DEMO)".
-- `truth.json` drives the "Truth vs recovered" validation card.
+- `truth.json` = the generator's `truth` dict plus `derived: {true_scenarios: {<configured canopy scenario name>: city-mean ΔT from SyntheticCity.true_response(d)}, true_footprint_mean, n, seed}`. It drives the "Truth vs recovered" validation card (§8).
 - Generation is inline (< 2 s).
 
 ### 9.3 Steps (`/p/:pid/setup/:step`)
@@ -1653,10 +1666,11 @@ Steps are non-linear tabs with completion dots computed from server-side readine
    - Forcing file link showing its checks and values.
    - Advanced drawer: shade_form, priors, albedo_map, tau_s, L_max_m, v_max_m, fit/select advection, max_iter, num_threads.
 4. **inputs** — four cards. Each shows status, file summary and the network hosts used, with a host pre-check (`/api/system/netcheck`). Each launches a tracked network job and ends with **Link into config** (YAML diff preview):
-   - **Campaign forcing**: date, hours, tz, station (nearest ISD list from the cached `isd-history.csv`), wind source. The result shows ERA5 vs station side by side and the checks as warnings. Links `physics.forcing`.
+   - **Campaign forcing**: date, hours, tz, station (nearest ISD list from the cached `isd-history.csv`), wind source. If the station index is not cached yet, the picker offers **Fetch station list** (an `input.stations` network job, ≈3 MB); it never downloads inside a request. The result shows ERA5 vs station side by side and the checks as warnings. Links `physics.forcing`.
    - **People & land cover**: HRSL + WorldCover. Shows total residents and a preview map. Links `planner.layers`.
-   - **Open predictors**: months, max cloud, S2 tiles. Per-scene progress. Shows the agreement table and scatter. **Create _open config** writes a sibling project config with `data.join` and `open_*` predictors.
-   - **CMIP6 change factors**: site (default `climate.site` or the data centroid), SSPs, months, variable, models, workers. Per-model progress list. Links `climate.table`.
+   - **Open predictors**: months, max cloud, S2 tiles. Per-scene progress. Shows the agreement table and scatter (only when the project already maps physics roles). **Create _open project** creates a new project `<name>_open` whose config joins the parquet (`data.join` with `right_on: id`) and uses the `open_*` predictors with roles mapped to them.
+     - **Bootstrap mode (any city).** A project with only target, id, x/y and a CRS (no predictors yet) can still run this job. The kind loads S0 geometry with an in-memory copy of the config whose `predictors` is `[<target>]` and whose roles are empty. That copy is used only to build the grid and ids and is never saved. Agreement is skipped. With **Use as this project's predictors**, the join and `open_*` predictors are written into the same project instead. This closes the "features needs predictors" gap for a brand-new city.
+   - **CMIP6 change factors**: site (default `climate.site` or the data centroid), SSPs, periods (default 2021–2040, 2041–2060, 2081–2100), baseline (default 1995–2014), months, variable, models, workers. Per-model progress list. Links `climate.table`, and `climate.periods` when non-default periods were fetched.
 5. **scenarios** — configured ladders and joint packages, showing the exact generated names (U+2212). This step also notes that richer scenarios live in the Lab.
 6. **analysis** — causal (treatments, confounders, excluded mediators, contrasts, DAG audit), climate (enabled, table vs live, site pin, SSP and period chips, months, thresholds, adaptation picker populated from scenario names), optimize (variable, budget, cost, plantable, objective, equity column, focus), planner (layers, paved share, GHCN station). Advanced: influence, cv (block, buffer, seed, distance curve, baselines list), models (toggles, Spatial+), stacker (epochs, tune_lambda, coverage), `response.clip_to_support`.
 7. **about** — report title, place, area, limitations, caveats; headline scenario (by slug); cost model defaults.
@@ -1775,7 +1789,25 @@ ROUTER_MODULES = ["system", "jobs", "stream", "projects", "inputs", "runs", "lay
 def run_planner(ctx: JobContext, params: PlannerParams) -> dict: ...
 ```
 
-`JobContext` provides: `job_id, job_dir, workspace, project_dir, run_dir, studio_dir, threads, cache_dir, db (read-only helper), emit_result(dict)`.
+`JobContext` provides: `job_id, job_dir, workspace, project_dir, run_dir, studio_dir, study_id, study_dir, threads, cache_dir, db (read-only helper), run_config() (the run's launch-snapshot CoreConfig, §4.3 resolution order), emit_result(dict)`.
+
+**Kind modules import lazily.** The server imports every kind module to list kinds and params schemas. A kind module therefore imports heavy libraries (`sparc.core.session`, scenario/response engines, anything that may pull torch) inside the job function, never at module level.
+
+**Server-side hooks.** Workers never write SQLite (§5.6). `@job_kind` takes optional hooks that the foundation calls **in the server process**:
+- `on_event(sctx, job, event)` for selected event types (`run.dir`, `run.start`, `artifact`), used to register study child runs live;
+- `on_finish(sctx, job, result)` after the final status, used to insert `results` / `plans` / `sweeps` / `exports` rows, attach studies and enqueue `post.uncertainty`.
+
+`sctx` carries the writer DB handle, the EventHub and the registry. Hooks must be fast (< 50 ms) and idempotent, because reattach may replay them.
+
+**Cross-item function contracts** (called lazily with `importlib`; a missing module is tolerated with a logged warning, so parallel items never block each other):
+
+| Caller | Callee (owner) | Signature |
+|---|---|---|
+| projects (Providence import, `POST /api/projects/import`) | `sparc.studio.runs.registry` (runs) | `import_run(dir, project_id, config_path=None, trust_pickles=False) -> RunSummary` |
+| projects | `sparc.studio.studies.service` (studies) | `import_study_dir(dir, project_id, kind=None, target_run_id=None) -> Study` |
+| runs (Status Board study/post cells) | the `studies`, `study_links` and `jobs` tables | DB contract only |
+| engine, studies (narratives, packs, reports) | `sparc.studio.runs.caveats` (runs) | `caveats_for(run_ctx) -> list[str]` |
+| engine, studies | `sparc.core.catalog.scenario_slug` (runs) | §6.1 |
 
 **Executors.** `jobs/executors.py` defines `Executor` (`async submit(job)`, `async cancel(job)`, `async kill(job)`, `async reattach(job)`). Two implementations:
 - `ProcessExecutor` (foundation)
@@ -1790,8 +1822,9 @@ Params schemas are in `api.md` §8.
 | Kind | Lane | Executor | Owner | Locks run |
 |---|---|---|---|---|
 | `test.sleep`, `test.events`, `test.fail`, `test.ignore_sigterm`, `test.pool` | heavy | process | foundation | — |
-| `input.forcing`, `input.layers`, `input.features`, `input.cmip6`, `input.ghcn` | network | process | projects | — |
+| `input.forcing`, `input.layers`, `input.features`, `input.cmip6`, `input.ghcn`, `input.stations` | network | process | projects | — |
 | `run.core` (launch and resume) | heavy | process | runs | ✓ |
+| `run.external` (read-only pseudo-job for a live CLI run, §5.14; never queued or cancellable) | none | external | runs | — |
 | `post.baselines`, `post.planner`, `post.uncertainty`, `post.writeup` | medium | process | studies | ✓ |
 | `post.emulator` | heavy | process | studies | ✓ |
 | `study.placebo`, `study.simcheck`, `study.multiverse`, `study.reproduce`, `study.benchmark` | heavy | process | studies | — |
@@ -1900,7 +1933,13 @@ CREATE TABLE settings (key TEXT PRIMARY KEY, value_json TEXT);
 
 **Ids.** Generated with a prefix and 8 lowercase base32 characters: `p_`, `j_`, `st_`, `sc_`, `res_`, `pl_`, `sw_`, `cmp_`, `rg_`, `bl_`, `ex_`, `fd_`. Run ids follow §4.3.
 
-**Reindex.** `sparc studio --reindex` drops and rebuilds `runs`, `studies`, `stage_timings`, `artifacts` and `checkpoints` from disk, and `jobs` from `jobs/*/job.json` + `state.json` + `result.json`. `events.jsonl` and run directories remain the source of truth.
+**Reindex.** `sparc studio --reindex` drops and rebuilds these tables from disk:
+- `runs`, `studies`, `stage_timings`, `artifacts` and `checkpoints`;
+- `jobs`, from `jobs/*/job.json` + `state.json` + `result.json`;
+- `results`, `plans`, `sweeps` and `comparisons`, from the run `studio/` dirs (api.md §12.2);
+- `scenarios` and `findings`, from the project mirrors `projects/<slug>/scenarios/*.json` and `findings/*.json`. The engine item writes the scenario mirror on every save; the studies item writes the findings mirror.
+
+`events.jsonl`, run directories and the project mirrors remain the source of truth. Only `settings`, `config_versions` history, `regions` and `blobs` rows are lost if the database is deleted.
 
 ### 10.7 Caching
 
@@ -1935,20 +1974,28 @@ CREATE TABLE settings (key TEXT PRIMARY KEY, value_json TEXT);
   - Unpickled only from runs under the workspace, or from runs imported with explicit confirmation. The import dialog names the risk: "checkpoint files execute code when loaded; import only folders you produced".
   - The engine host never loads a checkpoint the registry has not marked trusted.
 - **Subprocesses** use argument lists, never `shell=True`.
+- **Other routes.**
+  - `GET /openapi.json` requires auth like `/api/*`.
+  - FastAPI's `/docs` and `/redoc` are disabled (`docs_url=None`, `redoc_url=None`): they load scripts from a CDN, which would break offline use and widen the surface.
+  - `GET /auth?next=` accepts only same-origin paths: a leading `/`, not `//`, no scheme. Anything else redirects to `/`.
+- **Raw image uploads** (findings, `PUT /api/findings/{id}/image`) are validated by content type (`image/png`, `image/svg+xml`) and size (≤ 10 MB), not by the file-suffix allowlist. SVGs are served with `Content-Security-Policy: sandbox` and are never inlined into Studio pages.
 
 ### 10.9 Startup, shutdown, CLI
 
 ```
 sparc studio [--workspace DIR] [--host 127.0.0.1] [--port 8765|0] [--no-browser] [--allow-remote]
              [--public-host H ...] [--token T] [--dev-origin URL] [--reindex] [--stop-jobs-on-exit] [--log-level info]
-python -m sparc.core studio …   ≡   python -m sparc.studio …   ≡   sparc core studio …
+sparc studio --dump-openapi PATH      # write the OpenAPI JSON without starting a server (used by `npm run gen:api`)
+python -m sparc.core studio …   ≡   python -m sparc.studio …   ≡   sparc core studio …   ≡   sparc studio …
 ```
+
+**Delegation** (core-progress). `sparc studio …`, `sparc core studio …` and `python -m sparc.core studio …` hand the remaining argv to `sparc.studio.cli.main(argv)` **before argparse runs**, so `--help` and every flag reach the studio parser verbatim. The `studio` subparsers still exist, with `add_help=False`, so they show up in the parent's help. Two cases print `pip install "sparc[studio]"` and exit 2: an `ImportError` from `sparc.studio`, or one from any of its server dependencies (`fastapi`, `starlette`, `uvicorn`, `threadpoolctl`). The core CI installs only `requirements-core.txt`, so this second case is the one tested there.
 
 **Start:**
 1. Resolve the workspace.
 2. If `studio.lock.json` names a live pid (psutil + `create_time`) and its `/api/health` answers, print and open that URL, then exit 0.
-3. Otherwise bind the port, falling back to an ephemeral port if it is busy. **The occupant is never killed.**
-4. Write the lock, generate the token, run uvicorn (`log_level=warning`), and open `/auth?t=…` unless `--no-browser`.
+3. Otherwise **bind the socket in the CLI** (preferred port, falling back to an ephemeral port if busy; `--port 0` asks for an ephemeral one) and hand the bound socket to uvicorn. The real port is known before the lock is written. **The occupant is never killed.**
+4. Write the lock (with the real port), generate the token, run uvicorn (`log_level=warning`) on the bound socket, and open `/auth?t=…` unless `--no-browser`.
 
 **Lifespan startup:** migrate the DB → load settings → `Registry.scan()` (workspace + watch roots) → `JobManager.start()` + reattach → reconnect to the engine host if alive → start ResourceSampler.
 
@@ -2000,7 +2047,10 @@ These are the core changes. The old app is not touched, and pickled classes gain
 3. **CLI** (`sparc/core/cli.py`, `sparc/__main__.py`):
    - Add `--progress PATH` and `--job-id` to every subcommand.
    - Every `cmd_*` calls `progress.configure_from_env()` (after applying the flags) and `install_signal_handlers()`, and returns **130** on `Cancelled`.
-   - Add a `studio` subparser (`nargs=REMAINDER`) to `add_core_subparsers`, and a top-level `studio` command in `sparc/__main__.py`. Both delegate to `sparc.studio.cli.main(args)`, imported lazily; when the studio extra is missing they print `pip install "sparc[studio]"`.
+   - Studio delegation as in §10.9:
+     - `cli.main(argv)` and `sparc/__main__.main()` intercept `studio` (and `core studio`) **before** argparse and call `sparc.studio.cli.main(rest)`, imported lazily;
+     - the `studio` subparsers are registered with `add_help=False` only so they are listed in help;
+     - a missing `sparc.studio` or a missing server dependency prints `pip install "sparc[studio]"` and exits 2.
    - `sparc/__main__.py` uses `sys.exit(args.func(args) or 0)` for `core` and `studio` only, so exit codes propagate. Legacy commands are unchanged.
 
 **Owner `core-instrumentation`:**
@@ -2029,13 +2079,16 @@ These are the core changes. The old app is not touched, and pickled classes gain
      - `code`
    - `checkpoint_status(run_dir, cfg=None, fast=None) -> {present, done, bytes, saved_utc, matches: {data, code, config}, changed_sections}`, which never unpickles.
    - `_fingerprint` skips `progress.py` and `runio.py`. Resume semantics are otherwise unchanged; stage-scoped resume is phase 2.
-7. **Instrumentation** at the sites in §5.5, in `pipeline, ensemble, stacker, base_models, physics, diagnostics, baselines, response, causal, optimize, climate, forcing, opendata, features_open, planner, emulator, placebo, simcheck, multiverse`.
+   - `STAGE_NODES`, the gating predicates, `apply_mode_overrides`, `plan_stages`, `fingerprint_sections` and `checkpoint_status` stay importable without torch (the import rule of §5.5).
+7. **Instrumentation** at the sites in §5.5, in `pipeline, ensemble, stacker, base_models, physics, influence, diagnostics, baselines, response, causal, optimize, climate, forcing, opendata, features_open, planner, emulator, placebo, simcheck, multiverse`.
    - ThreadPool submissions are wrapped with `progress.wrap_context`.
    - ProcessPools use `initializer=progress.init_worker`.
    - On `Cancelled`, pools call `shutdown(wait=False, cancel_futures=True)` and re-raise.
 8. **Atomic writes everywhere:**
    - `pipeline._write_json` → `runio.write_json_atomic`; parquet and markdown writes via runio.
-   - `baselines.py:196`, `planner.py:461–463`, `uncertainty.py:107–113` and `emulator.py:219` use `runio.update_manifest`.
+   - `baselines.py:196`, `planner.py:461–463` and `uncertainty.py:107–113` use `runio.update_manifest`.
+   - `emulator.py:218–219` writes `emulator.npz` / `emulator.json` with `runio.write_npz_atomic(..., compressed=True)` / `write_json_atomic`, and records a small `emulator` summary section (per-lever trust numbers) via `update_manifest`. It currently writes no manifest section.
+   - `run_lock` opens a fresh file descriptor per acquisition and also holds a process-local `threading.Lock`, so it serialises threads of one process as well as processes.
 9. **Manifest durability** in `_finish`:
    - adds `schema_version: 2`, `stages_run[]`, `timings_detail` (from `ens.timings`, per-fold model seconds, physics fit seconds) and `run_meta`;
    - preserves `POST_RUN_KEYS = (planner, uncertainty, simcheck, multiverse, placebo, emulator, post_run)` and a post-run `baselines` from an existing manifest when this invocation did not recompute them.
@@ -2046,13 +2099,14 @@ These are the core changes. The old app is not touched, and pickled classes gain
     - per scenario `i`: `f{i}` (float32 K×n `delta_folds`), `sd{i}` (float32), `ex{i}` (float32 extrapolation).
     - The mean over folds equals `scenario_deltas.parquet`.
 13. **Study parameters:**
-    - `run_placebo_suite(..., children_dir=None, resume=False, run_meta=None)`
-    - `run_multiverse(..., extra_variants: dict[str, dict] | None = None, run_meta=None)`; children follow `cfg.output.dir`, which Studio sets to `studies/<sid>/children`.
-    - `reproduce(..., out_dir=None, run_meta=None)`
-    - `run_simcheck` unchanged (already resumable).
-14. **Equity alignment.** `optimize.equity_column` is joined from the raw CSV **by `data.id`** and aggregated like predictors on coarse runs, instead of `[:data.n]` (pipeline.py:392–395).
+    - `run_placebo_suite(..., children_dir=None, resume=False, run_meta=None)`: each child gets `run_dir = children_dir / f"{name}_placebo_{kind}_coarse{M:g}"` and `run_meta = {**run_meta, "role": f"placebo:{kind}"}`.
+    - `run_multiverse(..., extra_variants: dict[str, dict] | None = None, run_meta=None)`; children follow `cfg.output.dir`, which Studio sets to `studies/<sid>/children`, with `role = "variant:<name>"`.
+    - `reproduce(..., config_dir=None, out_dir=None, run_meta=None)` (`config_dir` already exists): the child `run_dir` = `out_dir`, with `role = "reproduction"`.
+    - `run_simcheck` unchanged (already resumable; replicates use `write=False`, so no child runs).
+14. **Equity alignment.** `optimize.equity_column` stops being read from the raw CSV and sliced `[:data.n]` (pipeline.py:392–395). Instead `data.py` carries it through S0 as an **auxiliary column**: `CoreData.aux: dict[str, np.ndarray] | None = None`, filled for `optimize.equity_column` when present. It is filtered with the same non-finite mask as the frame and averaged onto coarse cells like predictors. It is not a predictor, so it never enters the models or the fingerprinted predictor list (it is fingerprinted under `s7`). This needs `data.py` (core-instrumentation).
 15. **`optimize.planned_allocation(vr, budget, cost_per_unit=1.0, equity_scores=None, equity_focus=0.0, multipliers=(0.25,0.5,1.0,2.0), cap=None, benefit_weight=None, min_dose=0.0) -> dict`**:
-    - returns `{dose[n], planned_total_cooling, n_cells_treated (cells), mean_dose_treated, total_cost, gini, pareto{points[{budget, total_benefit, n_cells, n_segments, gini}]}}`;
+    - returns `{dose[n], planned_benefit[n], planned_total_cooling, n_cells_treated (cells), mean_dose_treated, total_cost, gini, min_dose_dropped_cost, pareto{points[{budget, total_benefit, n_cells, n_segments, gini}]}}`;
+    - `min_dose` is a post-filter: allocations below it are set to 0 after the greedy pass, and the freed budget is reported, not re-spent;
     - `optimise_allocation` becomes `planned_allocation` + closed loop.
     - `optimizer_layers` is made public (the private alias is kept).
 16. **Lazy exports.** `sparc/core/__init__.py` lazily exports `plan_stages` and `open_run`.
@@ -2072,6 +2126,23 @@ These are the core changes. The old app is not touched, and pickled classes gain
 **Owner `backend-studies-exports`:**
 
 19. **`sparc/core/results_page/`** (§6.9), plus the `scripts/results_page/` shims.
+
+**Owner `core-instrumentation` (additions from the completeness review, §18).** These need three files outside the original list: `sparc/core/synthetic.py`, `sparc/core/influence.py` and `sparc/core/data.py`.
+
+20. **`synthetic.write_demo_project(out_dir, n=96, seed=0) -> dict`**. It writes the whole synthetic demo of §9.2:
+    - `data/city.csv` with the EPSG:32619 offset, and `data/city.truth.json` with `derived.true_scenarios` from `SyntheticCity.true_response`;
+    - `inputs/layers/demo_layers.parquet` and `inputs/climate/demo_cmip6.csv`;
+    - `config.yml` (relative paths).
+
+    It returns the paths and the truth dict. It is deterministic in `(n, seed)`: same bytes for CSV, parquet and YAML. `scripts/make_studio_fixtures.py` and the `synthetic_demo` template both use it.
+21. **Causal per-cell outputs.** S6 keeps what `_strip_arrays` drops, in two places:
+    - **`causal_cells.parquet`**: `id`, `cate:<t>` (R-learner `tau_hat`), `mslope:<t>` (model `per_point_slope`) and `mslope_own:<t>` (`per_point_own_slope`), float32, one column per treatment;
+    - **`causal.json treatments[t].model_effects`**: `{adoption_slope, adoption_se, own_slope, own_se, own_pd_curve: {t, y, se}}` (7 points).
+
+    `causal.json` itself stays array-free otherwise.
+22. **Frame-input runs are re-readable.** `run_core(frame=…, write=True)` writes the frame to **`input_frame.parquet`** (via runio) and records `provenance.input_frame = "input_frame.parquet"`. `baselines.load_run` (and so `RunReader` and `open_run`) loads data from it when present. This affects placebo children only; simcheck uses `write=False`.
+23. **`influence.py`**: the two warnings of §5.5, as `progress.warn` calls next to the existing log lines.
+24. **Torch-free import guard**: `tests/core/test_import_light.py` asserts the import rule of §5.5.
 
 ---
 
@@ -2105,6 +2176,7 @@ studio-web/
   src/components/ui/*            Button IconButton Seg Select NumberField Slider Chips Card Kpi Pill Badge StatusChip Tabs
                                  Table(sortable, virtualised>500, CSV) VirtualList Dialog Drawer Toast Tooltip ProgressBar
                                  EmptyState(output_missing→action) Markdown CodeArea Diff FileDrop CommandPalette JobTray
+                                 JobStrip(compact progress of one job from stores/jobs: bar, stage, ETA range, link)
                                  ConnectionPill PlainResult(likely-range card)   [foundation]
   src/charts/*                   scales ticks Axis ChartFrame(title, caption, units, Table view, SVG/PNG/CSV, Pin) LineBand
                                  Bars(h/v, grouped, stacked, 100%) DotRange Forest Heatmap Histogram(brushable)
@@ -2132,11 +2204,18 @@ studio-web/
 Each `src/pages/<group>/routes.ts` exports
 
 ```ts
+type RouteDef = { path: string; component: React.LazyExoticComponent<any>; title: string;
+  runTab?: { id: RunTabId; label: string; group: "Model"|"Effects"|"Decisions"|"Trust"|"Run"; order: number };
+  projectNav?: { id: string; label: string; order: number; to: (pid: string, project: Project) => string | null;
+                 disabledReason?: (project: Project) => string | null } };
 export const routes: RouteDef[] = [
   { path: "/r/:rid/accuracy", component: lazy(() => import("./Accuracy")), title: "Accuracy",
-    runTab: { id: "accuracy", label: "Accuracy", group: "Model", order: 30, outputs: ["predictions","metrics"] } },
+    runTab: { id: "accuracy", label: "Accuracy", group: "Model", order: 30 } },
 ];
 ```
+
+- `RunTabId` is the fixed vocabulary of §3.2. The tab's status dot is read from `/outputs.tabs[id]`, so route modules do not list outputs.
+- `projectNav` entries are declared only by the item that owns the target route (table in §3.1). `to` returning `null` hides the entry; `disabledReason` greys it out with a tooltip.
 
 The foundation collects them with `import.meta.glob("./pages/*/routes.ts", { eager: true })`. Groups that do not exist yet simply contribute nothing. Each group is code-split: the initial JS budget is ≤ 200 kB gzip, and the Lab chunk is ≤ 140 kB gzip.
 
@@ -2267,7 +2346,7 @@ These belong to the backend foundation item.
 `npm --prefix studio-web ci && npm --prefix studio-web run build` writes hashed assets to **`sparc/studio/static/`**:
 - `index.html`
 - `assets/*-<hash>.{js,css,woff2}`
-- `BUILD_INFO.json`: `{src_sha256` over `studio-web/src` + `package-lock.json`, `built_utc, vite, react}`
+- `BUILD_INFO.json`: `{src_sha256` over `studio-web/src` + `package-lock.json` + `vite.config.ts` + `index.html`, `vite, react}`. It has **no timestamp**, so rebuilding unchanged sources gives byte-identical output and the CI rebuild-diff can pass.
 
 The built assets are **committed**, so pip users need no Node.
 
@@ -2279,7 +2358,7 @@ If `static/index.html` is missing (fresh checkout before the first build), the s
 
 - **Backend:** `sparc studio --no-browser --token dev --dev-origin http://localhost:5173`.
 - **Frontend:** `npm --prefix studio-web run dev`. Vite on 5173 proxies `/api` and `/auth`, with SSE passthrough. The dev page reads `VITE_STUDIO_TOKEN=dev` and calls `/auth?t=dev` once.
-- **Typed API:** `npm --prefix studio-web run gen:api` writes `src/api/schema.gen.ts` from `/openapi.json`. `src/api/contract.check.ts` (type-only) asserts that the hand-written group types are assignable to and from the generated ones. `npm run typecheck` therefore fails on drift.
+- **Typed API:** `npm --prefix studio-web run gen:api` runs `python -m sparc.studio --dump-openapi <tmp>` (no server needed) and then `openapi-typescript` to write `src/api/schema.gen.ts`. `src/api/contract.check.ts` (type-only) asserts that the hand-written group types are assignable to and from the generated ones. `npm run typecheck` therefore fails on drift. `schema.gen.ts` and `contract.check.ts` are both created by the integration item, so the foundation's `typecheck` has nothing to check against before then; `gen-api.mjs` (foundation) only needs the `--dump-openapi` flag (backend foundation).
 
 ### 13.4 Old app
 
@@ -2307,7 +2386,8 @@ Markers are `slow`, `network`, `e2e` and `studio`. CI runs everything except `ne
 - The signal handler sets a flag; a second signal raises.
 - `LogBridge` forwards verbatim.
 - The heartbeat thread starts and stops.
-- Overhead when disabled is < 1% on a 1e6-call microbenchmark.
+- **Disabled cost.** With no sink, 1e6 calls each of `tick`, `metric` and `emit` (with keyword arguments) write nothing. The median over 5 repeats is ≤ 2× the time of 1e6 calls to a no-op function with the same signature. (A literal "< 1% of an empty loop" is impossible in CPython: one function call already costs more than an empty loop iteration.)
+- Ticks with `k == 1` and `k == n` survive throttling.
 
 **`test_runio.py`** (core-progress):
 - Atomic writes.
@@ -2315,27 +2395,38 @@ Markers are `slow`, `network`, `e2e` and `studio`. CI runs everything except `ne
 - Concurrent `update_manifest` from 8 threads plus 2 processes loses no section.
 
 **`test_cli_studio.py`** (core-progress):
-- `python -m sparc.core studio --help` delegates.
+- `python -m sparc.core studio --help` and `sparc studio --help` reach `sparc.studio.cli.main(["--help"])` verbatim (monkeypatched stub).
+- With `sparc.studio` unimportable, **and separately with only `fastapi` unimportable**, they print the install hint and exit 2.
 - Exit codes propagate through `sparc core`.
 - 130 on cancel.
 
-**`test_progress_pipeline.py`** (core-instrumentation; the **event-invariant test**). Uses a synthetic city (n=40, fast, all stages, causal on canopy, budget set) with `SPARC_PROGRESS` set. It asserts:
+**`test_progress_pipeline.py`** (core-instrumentation; the **event-invariant test**). Uses `write_demo_project(n=40, seed=0)` run in fast mode with all stages (causal on canopy, budget set, table climate, demo layers) and `SPARC_PROGRESS` set. It asserts:
 - every enabled stage has start and end;
 - disabled stages have `stage.skip` with the expected reason;
-- every file in the run dir has an `artifact` event;
+- every file in the run dir has an `artifact` event, except `run_state.json`, `checkpoint.pkl` and `checkpoint.json` (covered by `checkpoint` events) and the catalog's `IGNORED` globs;
 - `checkpoint` events match `checkpoint.json`;
 - `run_state.json` ends `succeeded`;
 - no info-level gap exceeds 15 s;
-- `run.plan` units equal the observed task counts.
+- for every unit kind, the completions counted by the unit-accounting rule (§5.4) equal the `run.plan` units.
 
-`scripts/make_studio_fixtures.py` (owned by core-instrumentation) runs the same synthetic run and saves `events.jsonl` plus the run dir **without `checkpoint.pkl`** as the committed fixture `tests/studio/fixtures/synth_run/` (≈2 MB). Tests that need an engine build a fresh run in a temp dir (marked `slow`).
+`scripts/make_studio_fixtures.py` (owned by core-instrumentation) runs the same synthetic run and saves `events.jsonl` plus the run dir **without `checkpoint.pkl`** as the committed fixture `tests/studio/fixtures/synth_run/` (≤ 3 MB). It also writes `tests/studio/fixtures/synth_run/FIXTURE.json` `{n: 40, seed: 0, mode: "fast", generator: "write_demo_project"}`, which the replay e2e reads (§14.5). **Determinism** means: re-running it yields the same file list; numerically identical arrays in every parquet/npz (`np.array_equal`); identical JSON apart from the volatile keys (`created_utc`, `timings_s`, `timings_detail`, `git_commit`, `provenance.git`, `pid`, `ts`, `elapsed_s`, `seconds`, `fit_s`, `pass_s`, `saved_utc`, `updated_utc`, `started_utc`, `bytes` of pickles); and the same sequence of `(type, name, key, stage, k, n, unit)` in `events.jsonl` after removing `heartbeat`, `log` and throttled `k < n` ticks. A test runs the script twice in temp dirs and compares under these rules (marked `slow`). Tests that need an engine build a fresh run in a temp dir (marked `slow`).
 
-**`test_plan_stages.py`**: a gating matrix (stage subsets × fast × coarse × cv_curve × climate/causal/optimize toggles). The `plan_stages` node states must equal the `stage.start`/`stage.skip` events of real `write=False` runs.
+**`test_plan_stages.py`**:
+- A gating matrix (stage subsets × fast × coarse × cv_curve × climate/causal/optimize toggles). The `plan_stages` node states must equal the `stage.start`/`stage.skip` events of real `write=False` runs on the n=40 demo. Six representative combinations run unmarked; the full matrix is `slow`.
+- A config-only case: `plan_stages(configs/core_providence.yml with the recorded-run settings, n_points=54701, …)` reproduces the reference unit counts of §5.4 without running anything.
 
 **`test_cancel_resume.py`**:
-- Inject a cancel at parametrised safe points: S1 end, fold 1 MGWR tick, stacker candidate 2, S4 dose 2, S6 treatment 1.
+- Inject a cancel at parametrised safe points through a callable sink that calls `request_cancel()` when it sees the trigger event: S1 end, fold 1 MGWR tick (`SPARC_PROGRESS_LEVEL=debug`), stacker candidate 2, S4 dose 2, S6 treatment 1.
 - Assert exit 130, `run_state.cancelled`, and that the `checkpoint.json` done set matches the pickle.
-- `resume=True` completes, and its metrics equal an uninterrupted run within 1e-9 (seeds fixed).
+- `resume=True` completes, and its metrics equal an uninterrupted run within 1e-9. Both runs use `threads=1` (`progress.set_threads(1)`) and fixed seeds, so torch and BLAS reductions are reproducible.
+
+**`test_demo_project.py`**: `write_demo_project` is deterministic (byte-identical CSV, parquet and YAML for the same `(n, seed)`), has a CRS, and `truth.json.derived.true_scenarios` matches `true_response`.
+
+**`test_causal_cells.py`**: `causal_cells.parquet` is row-aligned with `predictions.parquet`. `model_effects.own_pd_curve` has 7 points. `causal.json` stays free of per-cell arrays.
+
+**`test_input_frame.py`**: a placebo-style `run_core(frame=…, write=True)` writes `input_frame.parquet`, and `baselines.load_run` rebuilds identical ids and folds from it.
+
+**`test_import_light.py`**: the torch-free import rule of §5.5.
 
 **`test_checkpoint_sidecar.py`**:
 - `fingerprint_sections` pinpoints changed sections.
@@ -2363,9 +2454,10 @@ Test files live in `tests/studio/<group>/` (`foundation`, `projects`, `runs`, `e
 | `test_reattach.py` | foundation | Start a job, drop the app, create a new app → reattached and tails to completion. Kill the worker while the app is down → `interrupted`. Mismatched `create_time` → not reattached |
 | `test_sse.py` | foundation | Ordered cursors; reconnect with Last-Event-ID gives no gaps or duplicates; overflow → resync; tick coalescing on the wire; resource events carry no id; global ring buffer resync |
 | `test_tracker_reducer.py` | foundation | Replaying the foundation's own `tests/studio/fixtures/selftest_events.jsonl` (written by `test.events`, schema-complete: run/stage/task spans, ticks, metrics, artifacts, checkpoints, warnings, run.end) gives the committed golden projection; monotonic progress |
-| `test_eta.py` | foundation | Seed table predicts the full Providence `timings_s` total within 20%; online refinement converges after fold 0 on the fixture |
-| `test_projects.py` | projects | Templates blank / synthetic_demo (CRS present, DEMO flag) / providence_example (packaged and repo sources); YAML round trip keeps `core:`; `validate_deep` catches the listed errors; `If-Match` 409; data/check; columns/suggest; impact preview flags a changed `core` section; schema vs DEFAULTS diff test |
-| `test_inputs.py` | projects | Input kinds with fetchers monkeypatched (no network); link diffs; network-marked live tests |
+| `test_eta.py` | foundation | The cost model applied to the **reference unit counts of §5.4** (embedded as constants; `n_cells` 54,701, threads 4) predicts the recorded Providence `timings_s` total (6,096.6 s, also a constant) within 20%. Online refinement converges after fold 0 on the selftest fixture. No dependency on `plan_stages` |
+| `test_meta.py` | foundation | `/api/meta.palettes` LUT entries equal the golden table of §6.3; `unit_costs` equals the seed table of §5.4; stage list falls back to the static list when `sparc.core.pipeline.STAGE_NODES` is absent |
+| `test_projects.py` | projects | Templates blank / synthetic_demo (CRS present, DEMO flag, files byte-identical to `write_demo_project`) / providence_example (packaged and repo sources); YAML round trip keeps `core:`; `validate_deep` catches the listed errors; `If-Match` 409; data/check; columns/suggest; impact preview flags a changed `core` section; schema vs DEFAULTS diff test. The `import_existing_runs` case is skipped unless `sparc.studio.runs.registry` is importable (§10.2 contracts) |
+| `test_inputs.py` | projects | Input kinds with fetchers monkeypatched (no network), incl. `input.stations` and features bootstrap mode on a predictor-less project; link diffs; network-marked live tests |
 | `test_runs_api.py` | runs | Launch with the replay runner; plan endpoint = `plan_stages`; import `providence_uhi_fast` (skip if absent); stale detection of its Sep-30 `causal.json`; manifest/file merge; status board cells |
 | `test_reader_midrun.py` | runs | Partially copied fixture run (no manifest) → accuracy view, grid and folds work from `run_state` + predictions |
 | `test_layers.py` | runs | Catalogue keys match files; Float32 length n; NaN round trip; grid shapes (100, 86) and (334, 287); fold classes match `make_spatial_folds`; ETag/immutable headers |
@@ -2378,7 +2470,7 @@ Test files live in `tests/studio/<group>/` (`foundation`, `projects`, `runs`, `e
 | `test_results_stats.py` | engine | Region "all" equals `ScenarioResult.summary()`; paired SE(A−A) = 0; paired ≤ independent on correlated folds; spill shares sum to 1; plain-language confidence wording |
 | `test_plans_climate.py` | engine | Planned mode equals `planned_allocation`; region cap zeroes cells outside; climate explore equals `summarize_projections`; field kit uses ids + lon/lat |
 | `test_session.py` (slow) | engine | `open_run` delta equals the `emulator_for_run` path and the S5 stored delta (1e-9); `base_fold` passthrough identical; GWRF `n_jobs` override |
-| `test_studies.py` | studies | Each kind's dispatch with library functions monkeypatched; child-run registration; attach → auto uncertainty; stale vs fingerprint |
+| `test_studies.py` | studies | Each kind's dispatch with library functions monkeypatched (expected `cache_dir`, `children_dir`, `config_dir`, `run_meta`, launch-snapshot config); the kind writes `placebo.json/.md`, `multiverse_summary.md`, `simcheck_summary.md`, `benchmark.json/.md`; child-run registration via the `on_event` hook; attach → auto uncertainty; stale vs fingerprint; `workers × threads` validation; `GET /runs/{rid}/truth` on the demo fixture |
 | `test_exports.py` | studies | GeoTIFF readable by rasterio with correct CRS and transform; bundle ZIP contents and README; findings MD/HTML; results page renders and passes `check_page.py` |
 
 ### 14.3 Frontend (vitest, `studio-web`)
@@ -2388,7 +2480,7 @@ Test files live in `tests/studio/<group>/` (`foundation`, `projects`, `runs`, `e
 - `client` errors map to `ApiError`;
 - `sse` reconnect, `after`, resync and polling fallback with a fake EventSource;
 - bitset and offsets codecs;
-- OKLab LUT matches Python palette values (`fixtures/palette.json`);
+- OKLab LUT matches the golden table of §6.3 (`src/test/fixtures/palette.json` is hand-written from that table, not generated from Python);
 - domain rules (symmetric diverging, zero_blank, mult);
 - `format` (Unicode minus, units, durations, bytes);
 - GridCanvas `cellToPt` and colorize on a 3×3 grid;
@@ -2399,6 +2491,9 @@ Test files live in `tests/studio/<group>/` (`foundation`, `projects`, `runs`, `e
 - stage rail state mapping.
 
 **Integration (cross-language contract):** `tests/studio/test_reducer_contract.py` runs the Python `jobs/tracker.reduce` and the TS `applyEvent` (via `studio-web/src/contract/reducer.contract.test.ts`) over `tests/studio/fixtures/synth_run/events.jsonl`. It asserts identical stage states, progress (±1e-9), warnings and artifacts.
+- Both sides expose `to_contract(state)` / `toContract(state)` returning the same canonical JSON: `{stages: {id: {state, reason}}, progress, done_units: {unit: n}, warnings: [{code, count}] (sorted), artifacts: [relpath] (sorted)}`.
+- Progress uses the seed-rate weights (§5.4), so neither side needs host calibration.
+- The vitest file writes its projection to the path in `SPARC_CONTRACT_OUT` (a pytest temp file, so no gitignore entry is needed). The Python test runs `npm --prefix studio-web exec vitest run src/contract` with that variable set (skipped when Node is absent) and compares the file with its own projection.
 
 **Feature items** test their pure logic with `fetch` mocked:
 - projects: column suggestion display, plan graph layout;
@@ -2417,7 +2512,8 @@ Test files live in `tests/studio/<group>/` (`foundation`, `projects`, `runs`, `e
 The harness starts `python -m sparc.studio --workspace <tmp> --port 0 --no-browser --token e2e` as a subprocess and reads the URL from `studio.lock.json`. **Any console error fails a test.** Screenshots are taken per step in light and dark themes.
 
 1. **`test_e2e_replay.py`** (fast, deterministic, every CI run; `SPARC_STUDIO_RUNNER=replay:tests/studio/fixtures/synth_run`, time compression ×20):
-   - create the synthetic demo; walk the setup pages; launch Fast;
+   - create the synthetic demo **with the fixture's `n` and `seed` from `FIXTURE.json`** (`options: {n: 40, seed: 0}`). The project's data is then byte-identical to the data the fixture was produced from, so `RunReader` id and fold checks pass on the replayed outputs. Walk the setup pages; launch Fast;
+   - the replay runner rewrites `job`, `pid` and `ts` (as in api.md §14) and also `run.dir.run_dir` and `run_state.json.events_path`/`pid` to the new run's values;
    - the plan graph matches the fixture; the rail reaches done in order; the fold × model heatmap fills;
    - the Outputs feed lights up; Accuracy opens mid-replay;
    - reload mid-run → no gap in log cursors;
@@ -2431,7 +2527,7 @@ The harness starts `python -m sparc.studio --workspace <tmp> --port 0 --no-brows
    - climate explore with threshold change;
    - plan preview slider updates the Pareto curve; verify;
    - export a decision pack (zip has `brief.html`, `cells.csv`, `delta.tif`, `README.txt`) and a GeoTIFF.
-3. **`test_e2e_studies.py`** (nightly): placebo `kinds=["shift"]` at coarse 120 m on the synthetic city → child run and verdict; benchmark (`n=48`).
+3. **`test_e2e_studies.py`** (nightly): placebo `kinds=["shift"]` at coarse 60 m on the `n=96` synthetic city (≈1,600 coarse cells; at 120 m the n=40/48 cities shrink to under 200 cells and MGWR tuning is skipped) → child run and verdict; benchmark (`n=48`).
 4. **`test_e2e_providence.py`** (nightly; skipped if absent): open the Providence example with run import; every tab of `providence_uhi_fast` renders; stale badges shown; engine opens; one scenario; emulator preview parity hook.
 5. **`test_e2e_a11y_responsive.py`**:
    - tab through the shell;
@@ -2462,6 +2558,10 @@ The harness starts `python -m sparc.studio --workspace <tmp> --port 0 --no-brows
 5. `python scripts/check_studio_assets.py`
 6. `pytest tests/studio/e2e/test_e2e_replay.py tests/studio/e2e/test_e2e_real_fast.py`
 7. Wheel smoke test: build, install into a clean venv, run `sparc studio --no-browser --port 0`, and `GET /` returns index.html with hashed assets.
+8. If `docs/studio/doctest.py` exists (added later by the docs item), run it. The integration item adds this step with an existence guard, so the docs item never edits the workflow.
+9. Guard for the old app: `git diff --name-only <merge-base>...HEAD -- sparc-desktop sparc/server` must be empty.
+
+**Existing workflow.** `.github/workflows/tests.yml` already has a `legacy` job that runs `pytest tests --ignore=tests/core` with the `[server]` extra, which includes FastAPI. Without a change it would collect `tests/studio/**`, including slow, e2e and Node-dependent tests. The integration item therefore owns one edit to that file: add `--ignore=tests/studio` to the legacy job. Its `core` job installs only `requirements-core.txt`, so the new `tests/core` files must not need FastAPI, psutil or Node (the studio delegation test uses the install-hint path).
 
 **Nightly:** `-m slow`, studies e2e, Providence e2e and performance checks.
 
@@ -2521,7 +2621,7 @@ The parallel work breakdown is returned to the orchestrator. Ownership is exclus
 | Id | Layer | Depends on | Owns (summary) |
 |---|---|---|---|
 | `core-progress` | core | — | `sparc/core/progress.py`, `runio.py`, `cli.py`, `sparc/__main__.py` studio dispatch, their tests |
-| `core-instrumentation` | core | core-progress | All other edited `sparc/core/*.py` (pipeline, ensemble, stacker, base_models, physics, diagnostics, baselines, response, causal, optimize, scenarios, climate, forcing, opendata, features_open, planner, emulator, placebo, simcheck, multiverse, reproduce, uncertainty, `__init__`), their tests |
+| `core-instrumentation` | core | core-progress | All other edited `sparc/core/*.py` (pipeline, ensemble, stacker, base_models, physics, **influence**, **data**, **synthetic**, diagnostics, baselines, response, causal, optimize, scenarios, climate, forcing, opendata, features_open, planner, emulator, placebo, simcheck, multiverse, reproduce, uncertainty, report, config, `__init__`), their tests, `scripts/make_studio_fixtures.py`, `tests/studio/fixtures/synth_run/` |
 | `backend-foundation` | backend | core-progress | `sparc/studio/` core modules (app, settings, security, errors, db, workspace, events, sse, meta, schemas/common, routes/{__init__,system,jobs,stream}, jobs/*), `pyproject.toml`, foundation tests |
 | `frontend-foundation` | frontend | — | `studio-web/` scaffolding, router, layouts, api/{client,sse,binary,resource,types}, stores/{jobs,ui,selection}, theme, components/ui, charts, map |
 | `backend-projects` | backend | backend-foundation, core-instrumentation | `sparc/studio/projects/**`, `examples/**`, routes/{projects,inputs} |
@@ -2533,8 +2633,13 @@ The parallel work breakdown is returned to the orchestrator. Ownership is exclus
 | `frontend-run-hub` | frontend | frontend-foundation | `studio-web/src/pages/runhub/**`, `api/{runs,analysis}.ts` |
 | `frontend-lab` | frontend | frontend-foundation | `studio-web/src/pages/lab/**`, `api/lab.ts` |
 | `frontend-studies-exports` | frontend | frontend-foundation | `studio-web/src/pages/studies/**`, `api/{studies,exports,findings}.ts` |
-| `integration-e2e` | test | all of the above | `tests/studio/e2e/**`, fixtures, `sparc/studio/static/**`, contract check, CI workflow, scripts |
-| `docs` | docs | integration-e2e | `docs/studio/**` (incl. updating this spec to as-built), README section |
+| `integration-e2e` | test | all of the above | `tests/studio/e2e/**`, contract fixtures, `sparc/studio/static/**`, contract check, `.github/workflows/studio.yml`, **the one-line `--ignore=tests/studio` edit to `.github/workflows/tests.yml`**, `scripts/check_studio_assets.py` |
+| `docs` | docs | integration-e2e | `docs/studio/**` (incl. updating this spec to as-built, `doctest.py` and the api-doc check script), README section |
+
+**Ownership notes:**
+- **No file is owned by two items.** Shared directories are split by file: `tests/studio/fixtures/` holds the foundation's selftest files, core-instrumentation's `synth_run/` and integration's reducer golden.
+- **`sparc/core/__init__.py`** (core-instrumentation) lazily exports `open_run` from `sparc/core/session.py` (backend-engine) through a module-level `__getattr__`, so it does not fail before that file exists.
+- **Feature folders never import each other.** The compact tracker on the run overview is the foundation's `JobStrip`, and cross-item backend calls go through the lazy contracts of §10.2.
 
 ### 17.2 Milestones
 
@@ -2544,3 +2649,70 @@ The parallel work breakdown is returned to the orchestrator. Ownership is exclus
 | **M2 — Run & track** | Launch, track, cancel, resume and reattach a fast run; Status Board; Activity | + core-instrumentation, backend-projects (minimal), frontend-tracking, frontend-projects (Launch) |
 | **M3 — Lab core** | Selection, compile, preview, exact, inspector, library, compare, plans, climate, decision pack | backend-engine, frontend-lab |
 | **M4 — Setup, studies, exports** | Full setup wizard and inputs; studies hub; reports; findings | backend-projects, backend-studies-exports, frontend-projects, frontend-studies-exports, integration-e2e, docs |
+
+---
+
+## 18. Review changes (completeness pass, 2026-10-01)
+
+A completeness review checked this spec and `api.md` against the operation, output, simulation, tracking, results-page and legacy-server catalogs, and against the work breakdown. The changes it made are listed below. The `docs` item later appends an "As-built changes" section after this one.
+
+**Gaps closed against the catalogs**
+- **Features bootstrap for a brand-new city** (§9.3): a project with only target, id, x/y and a CRS can build open predictors.
+- **Study files the CLI used to write** (§8): Studio writes `placebo.json/.md`, `multiverse_summary.md`, `simcheck_summary.md` and `benchmark.json/.md` itself, because the library functions only return dicts.
+- **`study.reproduce` passes `config_dir`** (§8), so runs without `provenance.config_dir` can be reproduced.
+- **CMIP6 cache path** (§4.3): `climate.cache` is absolutised to `<ws>/cache` in `launch.json`; `climate_stage` would otherwise write under `output.dir`.
+- **Model-vs-causal outputs** (§11 item 21, §6.3, §6.4): the per-cell CATE and model slopes, plus the model's own-cell PD curve, are persisted (`causal_cells.parquet`, `model_effects`). This enables the overlay on the DR curve and the CATE maps.
+- **Placebo children are readable** (§11 item 22, §6.2): `input_frame.parquet` is written for frame-input runs.
+- **`influence.py` is instrumented** (§5.5, §11 item 23). The `influence.*` warning codes and the S1 per-predictor metrics had no emitter.
+- **More CLI options exposed**: CMIP6 `periods`/`baseline`; the design CSV accepts absolute `value`s (expert full-table edits); scenario options `clip_to_support`/`mediators` are applied per request (§7.3).
+- **`results.html` and `reproduce.json` placement** (§6.1): both are catalogued, and the catalog's `IGNORED` globs are defined.
+- **New job kinds**: `input.stations` (no network calls inside a request) and the `run.external` pseudo-job (Mission Control for CLI runs, §5.14).
+- **New endpoints** (api.md): `GET /api/runs/{rid}/truth`, sweep and comparison listings, and `DELETE /api/sweeps/{swid}`.
+- **The "Truth vs recovered" card has an exact definition** (§8, §9.2), and the demo writes `truth.json.derived`.
+
+**Contradictions resolved**
+- **Exports location**: always `projects/<slug>/exports/<export_id>/`. The run `studio/exports/` was removed, and `export_id` is passed in the job params.
+- **Run tabs**: one fixed id vocabulary, with tab status computed by the server from `OutputSpec.view`. The `outputs` field on route modules and the duplicate `run_tabs` source were removed (§3.2, §12.3).
+- **Project nav**: Launch was added, and each nav entry has one owner (§3.1). The frontend-projects work item claimed "Overview", which belongs to tracking.
+- **Event vocabulary**:
+  - `cancel.requested.by` includes `shutdown`;
+  - the per-job stream sends `end` and closes on overflow;
+  - `job.progress` uses `job_id`;
+  - `scenario.summary` is split into scalar metrics (`scenario.mean_delta`, `scenario.se`, `scenario.frac_extrapolated`);
+  - `cv_row` is split into `cv_row.r2` and `cv_row.rmse`;
+  - `cv.partition_skipped` is a registered code;
+  - the PlanNode reason `required_by:<stage>` is documented.
+- **Run status `queued`** (api.md) was added to the run state machine (§5.8). The fields of `job.json` and `state.json` were aligned.
+- **`min_dose`** is a core post-filter (`planned_allocation`), not a Studio-only filter (§7.10, §11 item 15).
+- **Preview mask**: it moved from a response header to the packed body (§7.5), because a 54k+ cell bitset can exceed proxy header limits.
+- **Resume "byte-for-byte"**: the two documented exceptions are `threads` and the explicit current-config resume (§4.3).
+- **`RunDetail` no longer embeds `studies` or `engine`** (api.md §6). Those come from endpoints owned by later items, which the runs item cannot import.
+- **`BUILD_INFO.json` has no timestamp**, so the committed-asset rebuild-diff can pass (§13.2).
+
+**Tracking made testable**
+- **Unit accounting** (§5.4): units are counted by `task.end` with a `unit`, or by `k == n` ticks. Neither the core throttle nor the wire coalescing ever drops `k == 1` or `k == n`. Progress weights are the seed rates, identical in Python and TS.
+- **Reference unit counts for full Providence** (§5.4): the ETA test no longer needs `plan_stages` (a foundation item cannot depend on core-instrumentation). The counts were corrected against `ResponseEngine.marginals`.
+- **Nested runs inside studies** are attributed to the job's `children[]`, not to the job's own stage rail (§5.5).
+- **Workers never write SQLite** (§5.6). Server-side `on_event`/`on_finish` hooks were added, plus lazy cross-item function contracts (§10.2).
+
+**Untestable or fragile acceptance criteria rewritten**
+- **Progress overhead**: "< 1% of an empty loop" is impossible in CPython; it is now "≤ 2× a no-op call with the same signature, nothing written" (§14.1).
+- **Fixture determinism** is defined field by field (§14.1).
+- **The cancel → resume equality test** runs with `threads=1` (§14.1).
+- **Palette tests** use golden LUT values printed in this spec (§6.3) instead of one foundation generating fixtures from the other's code.
+- **The replay e2e** creates the demo with the fixture's `n=40, seed=0`, from the one shared generator `synthetic.write_demo_project` (§9.2, §11 item 20). Otherwise the replayed outputs would fail the id and fold checks.
+- **Studio CLI delegation** happens before argparse (so `--help` reaches Studio), and the install hint also fires when only FastAPI is missing, which is what the core CI job has (§10.9, §11 item 3).
+- **The legacy CI job** would have collected `tests/studio`; the integration item adds `--ignore=tests/studio` (§14.6).
+- **The docs doctest** runs through a guarded CI step that the integration item adds (§14.6).
+- **Server never imports torch**: a torch-free import test now guards that requirement (§5.5, §11 item 24).
+
+**Work-breakdown changes this implies** (the breakdown itself lives with the orchestrator):
+- core-instrumentation also owns `sparc/core/influence.py`, `data.py` and `synthetic.py`, plus the new tests `test_demo_project.py`, `test_causal_cells.py`, `test_input_frame.py` and `test_import_light.py`;
+- backend-foundation adds `--dump-openapi` and `tests/studio/foundation/test_meta.py`;
+- frontend-foundation adds `JobStrip`;
+- backend-projects adds the `input.stations` kind and features bootstrap mode;
+- backend-runs adds the `run.external` pseudo-job and `scenario_slug` in `catalog.py`;
+- backend-studies-exports adds `GET /api/runs/{rid}/truth` and writes the study `.md`/`.json` files listed in §8;
+- backend-engine adds the sweep and comparison listings and the scenario mirror files;
+- integration-e2e also owns the `tests.yml` one-line edit;
+- frontend-projects declares nav entries for Setup, Inputs and Launch (not Overview).
