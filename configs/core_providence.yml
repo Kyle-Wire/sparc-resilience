@@ -73,12 +73,15 @@ core:
 
   physics:
     enabled: true
-    # Campaign forcing: 2020-07-18, 15–16 EDT (the afternoon traverse), from ERA5
-    # radiation (clear sky, SW↓ 708 W/m², net LW −63 W/m²) and the KPVD wind
-    # (5.9 m/s from SSE — a bay sea breeze ERA5 does not resolve).  Regenerate:
-    #   sparc core forcing -p configs/core_providence.yml --date 2020-07-18 --hours 15-16 \
-    #       --station 72507014765 --out configs/forcing/providence_2020-07-18.json
-    forcing: forcing/providence_2020-07-18.json
+    # Campaign forcing: the Rhode Island Heat Watch traverses ran on 2020-07-29
+    # (6–7, 15–16, 19–20 EDT and 0–1 on 07-30; RIDOH/RIDEM/American Forests with
+    # CAPA).  The target (median 88 °F, 81–93.5 °F) matches the afternoon
+    # traverse (KPVD 86–89 °F at 15–16 EDT; 80–84 °F at 19–20).  ERA5: SW↓
+    # 636 W/m² (clear-sky index 0.87), net LW −71 W/m², 2 m T 87.8 °F (KPVD
+    # 87.5 °F); KPVD wind 7.7 m/s from S (ERA5 4.5 m/s from SW).  Regenerate:
+    #   sparc core forcing -p configs/core_providence.yml --date 2020-07-29 --hours 15-16 \
+    #       --station 72507014765 --out configs/forcing/providence_2020-07-29.json
+    forcing: forcing/providence_2020-07-29.json
     roles:
       albedo: Albedo
       canopy: Pct_Canopy
