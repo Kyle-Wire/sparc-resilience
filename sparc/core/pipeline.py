@@ -114,8 +114,9 @@ def _fingerprint(cfg: CoreConfig, fast: bool, frame: pd.DataFrame | None) -> str
     if frame is not None:
         h.update(pd.util.hash_pandas_object(frame, index=True).to_numpy().tobytes())
     else:
-        st = Path(cfg.data_path).stat()
-        h.update(f"{cfg.data_path}:{st.st_size}:{st.st_mtime_ns}".encode())
+        for path in [cfg.data_path] + [cfg.resolve_path(j["path"]) for j in cfg.data.get("join") or []]:
+            st = Path(path).stat()
+            h.update(f"{path}:{st.st_size}:{st.st_mtime_ns}".encode())
     for src in sorted(Path(__file__).parent.glob("*.py")):
         h.update(src.read_bytes())
     return h.hexdigest()[:16]
@@ -189,6 +190,8 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
 
     result.provenance = provenance(cfg, sha256_frame(frame) if frame is not None else sha256_file(cfg.data_path),
                                    "frame" if frame is not None else "file")
+    if frame is None and cfg.data.get("join"):
+        result.provenance["join_sha256"] = {j["path"]: sha256_file(cfg.resolve_path(j["path"])) for j in cfg.data["join"]}
     log.info("S0: %d points, grid %s, cell %.2f m", data.n, data.grid.shape, data.grid.dx)
     fp = _fingerprint(cfg, fast, frame) if run_dir is not None else ""
     state = _load_checkpoint(run_dir, fp) if resume else {}

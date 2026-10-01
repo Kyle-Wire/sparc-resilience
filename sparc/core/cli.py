@@ -136,6 +136,15 @@ def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
     p_em.add_argument("--patches", type=int, default=8)
     p_em.set_defaults(func=cmd_core_emulator)
 
+    p_ft = subs.add_parser("features", help="the six predictors from open data (WorldCover, Sentinel-2, Copernicus DEM)")
+    p_ft.add_argument("--project", "-p", required=True)
+    p_ft.add_argument("--out", required=True, help="parquet keyed by id (merge with data.join)")
+    p_ft.add_argument("--months", default="", help="YYYY-MM list for the Sentinel-2 composite (default: the campaign "
+                                                   "month from the forcing file, else June–August of 2020)")
+    p_ft.add_argument("--max-cloud", type=float, default=20.0)
+    p_ft.add_argument("--s2-tiles", default="", help="MGRS tiles, e.g. 19TCG,19TBG (else from the 'mgrs' package)")
+    p_ft.set_defaults(func=cmd_core_features)
+
     p_syn = subs.add_parser("synth", help="write the synthetic test city (with planted truths) to CSV")
     p_syn.add_argument("--out", required=True)
     p_syn.add_argument("--seed", type=int, default=0)
@@ -313,6 +322,37 @@ def cmd_core_emulator(args) -> int:
         val = d["validation"]
         print(f"{v}: patch pass rate {val['patch_pass_rate']:.0%}, median patch error {val['patch_mean_abs_err_median']:.3f}, "
               f"p95 cell error {val['p95_cell_err_median']:.3f}, uniform rel error {val['uniform']['rel_err']:.0%}")
+    return 0
+
+
+def cmd_core_features(args) -> int:
+    import json
+
+    from sparc.core.config import load_core_config
+    from sparc.core.data import load_core_data
+    from sparc.core.features_open import build_open_features, compare_features
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    cfg = load_core_config(args.project)
+    cfg.raw["data"]["coarse_m"] = None
+    cfg.raw["data"]["subsample"] = None
+    data = load_core_data(cfg)
+    if args.months:
+        months = [tuple(int(x) for x in m.split("-")) for m in args.months.split(",")]
+    else:
+        date = ((cfg.raw.get("physics") or {}).get("forcing_info") or {}).get("date")
+        months = [(int(date[:4]), int(date[5:7]))] if date else [(2020, 6), (2020, 7), (2020, 8)]
+    tiles = [t.strip() for t in args.s2_tiles.split(",") if t.strip()] or None
+    df, prov = build_open_features(data, cfg, months=months, max_cloud=args.max_cloud, s2_tiles=tiles)
+    cmp = compare_features(df, data, (cfg.raw.get("physics") or {}).get("roles") or {})
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    df.rename(columns={c: f"open_{c}" for c in df.columns if c != "id"}).to_parquet(out, index=False)
+    out.with_suffix(".json").write_text(json.dumps({"provenance": prov, "agreement": cmp}, indent=1), encoding="utf-8")
+    for r in cmp:
+        print(f"  {r['role']:15s} r {r['pearson_r']:.3f}  R² {r['r2_linear']:.3f}  ρ {r['spearman']:.3f}  "
+              f"(city mean {r['city_mean']:.3g}, open {r['open_mean']:.3g})")
+    print(f"wrote {out} and {out.with_suffix('.json')}")
     return 0
 
 

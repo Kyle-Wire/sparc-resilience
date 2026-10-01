@@ -135,6 +135,13 @@ tr.hl td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 details { font-size: 0.86rem; }
 details summary { cursor: pointer; color: var(--accent-ink); }
 details[open] summary { margin-bottom: 8px; }
+.btn { font: inherit; font-size: 0.84rem; padding: 6px 11px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input[type="number"] { font: inherit; font-size: 0.86rem; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); width: 6.5em; }
+.flags { display: grid; gap: 8px; }
+.flags li { list-style: none; display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; font-size: 0.88rem; color: var(--ink-2); }
+.badge { font-size: 0.8rem; color: var(--ink-2); background: var(--chip); border-radius: 8px; padding: 8px 10px; }
 .callout { border-left: 3px solid var(--warning); padding: 10px 14px; background: var(--surface); border-radius: 0 8px 8px 0; font-size: 0.9rem; color: var(--ink-2); }
 ul.plain { margin: 0; padding-left: 1.1em; display: grid; gap: 6px; color: var(--ink-2); max-width: 70ch; }
 footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
@@ -151,6 +158,8 @@ footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
     <li id="navClimate" hidden><a href="#climate">Climate futures</a></li>
     <li><a href="#causal">Causal check</a></li>
     <li><a href="#budget">Budget plan</a></li>
+    <li id="navPlanner" hidden><a href="#planner">Planner view</a></li>
+    <li><a href="#validation">Methods &amp; validation</a></li>
     <li><a href="#caveats">Caveats</a></li>
   </ul>
 </nav>
@@ -177,6 +186,10 @@ footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
       <span id="foldWrap" hidden><label class="cap" for="foldSel">Held-out fold</label> <select id="foldSel"></select></span>
       <span id="climWrap" hidden><label class="cap" for="projSel">Projection</label> <select id="projSel"></select>
         <label class="cap" for="adaptSel">Adaptation</label> <select id="adaptSel"></select></span>
+      <span id="designWrap" hidden><label class="cap" for="leverSel">Lever</label> <select id="leverSel"></select>
+        <label class="cap" for="doseIn">Change</label> <input id="doseIn" type="number" step="any">
+        <label class="cap" for="brushSel">Brush</label> <select id="brushSel"><option value="60">60 m</option><option value="120" selected>120 m</option><option value="250">250 m</option><option value="500">500 m</option></select>
+        <button type="button" class="btn" id="undoBtn">Undo</button> <button type="button" class="btn" id="clearBtn">Clear</button> <button type="button" class="btn" id="csvBtn">Copy plan (CSV)</button></span>
     </div>
     <div class="explorer">
       <div class="mapbox">
@@ -251,6 +264,11 @@ footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
     <div class="card chart"><div id="chart-scen"></div>
       <details><summary>Table view</summary><div class="tablewrap" id="tbl-scen"></div></details>
     </div>
+    <div class="card" id="uncCard" hidden>
+      <h3>How sure are these numbers?</h3>
+      <p class="cap" id="uncCap"></p>
+      <div class="tablewrap" id="tbl-unc"></div>
+    </div>
   </section>
 
   <section class="block" id="climate" hidden>
@@ -289,6 +307,40 @@ footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
     </header>
     <div class="kpis" id="budgetKpis"></div>
     <div class="card chart" id="paretoCard" hidden><h3>Cooling vs budget</h3><p class="cap" id="paretoCap">Total planned cooling (°F summed over cells) as the budget scales.</p><div id="chart-pareto"></div></div>
+  </section>
+
+  <section class="block" id="planner" hidden>
+    <header>
+      <h2>Planner view: people, hot days and where to act</h2>
+      <p class="prose" id="plannerText"></p>
+    </header>
+    <div class="kpis" id="plannerKpis"></div>
+    <div class="grid2">
+      <div class="card"><h3>Residents by afternoon temperature</h3><p class="cap" id="expCap"></p><div class="tablewrap" id="tbl-pexp"></div></div>
+      <div class="card"><h3>Hot afternoons per summer</h3><p class="cap" id="hdCap"></p><div class="tablewrap" id="tbl-hd"></div></div>
+    </div>
+    <div class="grid2">
+      <div class="card"><h3>Who benefits from the package</h3><p class="cap" id="eqCap"></p><div class="tablewrap" id="tbl-eq"></div></div>
+      <div class="card"><h3>By zone</h3><p class="cap" id="zoneCap"></p><div class="tablewrap" id="tbl-zone"></div></div>
+    </div>
+    <div class="card"><h3>Next measurement campaign</h3><p class="cap" id="campCap"></p><div class="tablewrap" id="tbl-sites"></div></div>
+  </section>
+
+  <section class="block" id="validation">
+    <header>
+      <h2>Methods &amp; validation</h2>
+      <p class="prose">What a reviewer would ask before trusting the numbers: what is in the data, which weather drove the physics, whether the model beats standard tools on the same held-out areas, whether it finds effects for layers that cannot matter, whether it recovers effects planted on this city's own layout, whether its conclusions survive other reasonable analysis choices, how it compares with published cooling rates, and whether a run can be reproduced.</p>
+    </header>
+    <div class="grid2">
+      <div class="card"><h3>Data findings</h3><ul class="flags" id="flagList"></ul></div>
+      <div class="card"><h3>Campaign-day forcing</h3><div id="forcingBox" class="prose"></div></div>
+    </div>
+    <div class="card"><h3>Against standard baselines (same held-out blocks)</h3><p class="cap" id="baseCap"></p><div class="tablewrap" id="tbl-base"></div></div>
+    <div class="card" id="placeboCard" hidden><h3>Placebo tests: effects that should not exist</h3><p class="cap" id="placeboCap"></p><div class="tablewrap" id="tbl-placebo"></div></div>
+    <div class="card" id="simCard" hidden><h3>Simulation check on this city's layout</h3><p class="cap" id="simCap"></p><div class="tablewrap" id="tbl-sim"></div></div>
+    <div class="card" id="mvCard" hidden><h3>Multiverse: other reasonable analysis choices</h3><p class="cap" id="mvCap"></p><div class="tablewrap" id="tbl-mv"></div><div class="tablewrap" id="tbl-mv2" style="margin-top:12px"></div></div>
+    <div class="card" id="litCard" hidden><h3>Against published cooling rates</h3><p class="cap" id="litCap"></p><div class="tablewrap" id="tbl-lit"></div></div>
+    <div class="card"><h3>Reproducibility</h3><dl class="kv" id="reproBox" style="grid-template-columns:auto 1fr"></dl><p class="cap" style="margin-top:8px">Re-run and compare with <span class="mono">sparc core reproduce &lt;run dir&gt;</span>; the run directory's <span class="mono">environment.txt</span> pins every package version, and <span class="mono">methods.md</span> / <span class="mono">model_card.md</span> carry this run's numbers.</p></div>
   </section>
 
   <section class="block" id="caveats">
@@ -403,6 +455,14 @@ if (CL) {
   add({ group: "Climate futures", key: "__clim_temp", name: "Future air temperature", unit: U, scale: "climtemp", center: DATA.background, d: 1, desc: "Observed temperature plus the CMIP6 multi-model median warming for the chosen pathway and period, plus the chosen adaptation scenario's re-predicted change. Colours keep today's scale, so warming shows as a shift to red." });
   add({ group: "Climate futures", key: "__clim_thr", name: "Cells at or above the heat threshold", scale: "climthr", desc: "Cells whose projected temperature reaches the threshold chosen in the Heat exposure table (Climate futures section) under the chosen pathway, period and adaptation." });
 }
+add({ group: "Planner", key: "people", name: "Residents per cell (HRSL)", unit: "people", scale: "seq", d: 1, desc: "Residential population from Meta/CIESIN's High Resolution Settlement Layer (census-based, circa 2010s), summed onto each cell. Daytime presence differs." });
+add({ group: "Planner", key: "plantable", name: "Room for more canopy", unit: "pp", scale: "seq", d: 0, desc: "Canopy a cell could still gain: open green and bare land (ESA WorldCover 2021) plus a fifth of its built-up area for street trees and lots, never above 100% minus today's canopy. The budget plan respects it." });
+add({ group: "Planner", key: "hd_90_today", name: "Hot afternoons ≥ 90 °F per summer (today)", unit: "days", scale: "seq", d: 1, desc: "Summer days (June–August, 1995–2014 airport record) whose afternoon reaches 90 °F in this cell: the airport's daily maximum plus the cell's campaign-afternoon difference from the airport." });
+add({ group: "Planner", key: "hd_90_ssp245_mid", name: "Hot afternoons ≥ 90 °F (SSP2-4.5, 2041–2060)", unit: "days", scale: "seq", d: 1, desc: "As today, with each CMIP6 model's summer warming added to the airport record (median over models)." });
+add({ group: "Planner", key: "hd_95_today", name: "Hot afternoons ≥ 95 °F per summer (today)", unit: "days", scale: "seq", d: 1, desc: "As above for 95 °F." });
+if (DATA.sites) add({ group: "Planner", key: "__sites", name: "Suggested logger sites", scale: "sites", desc: "Where new temperature loggers would most sharpen the canopy effect: low- and high-canopy cells at matched impervious cover, favouring places where the fold models disagree most, at least 400 m apart." });
+const DS = DATA.design;
+if (DS && Object.keys(DS.levers || {}).length) add({ group: "Design", key: "__design", name: "Your design: change in air temperature", unit: U, scale: "design", center: 0, d: 3, desc: "Paint changes on the map with the brush; the change in afternoon air temperature updates as you go. It comes from a linear emulator of the fitted model (fold-averaged), checked against the full model on random patches; use the Scenarios theme for city-wide changes." });
 add({ group: "CV design", key: "__folds", name: "Spatial cross-validation folds", scale: "folds", desc: "For the chosen fold: blue cells are held out for testing, orange cells are dropped from training as a buffer, grey cells train the models. Every accuracy number on this page comes from this design." });
 const GROUPS = [...new Set(LAYERS.map((l) => l.group))];
 
@@ -421,11 +481,13 @@ function climValues() {
   return out;
 }
 function layerValues(Ly) {
-  if (Ly.key === "__folds") return null;
+  if (Ly.key === "__folds" || Ly.key === "__sites") return null;
+  if (Ly.key === "__design") return designDelta();
   if (Ly.scale === "climtemp" || Ly.scale === "climthr") return climValues();
   return layer(Ly.key);
 }
 function computeDomain(Ly) {
+  if (Ly.scale === "design") { let mx = 0.05; const d = designDelta(); for (let i = 0; i < N; i++) { const a = Math.abs(d[i]); if (a > mx) mx = a; } return [-mx, 0, mx]; }
   const L = DATA.layers[Ly.key]; const m = Ly.mult || 1;
   if (Ly.scale === "div") {
     const c = Ly.center;
@@ -457,6 +519,8 @@ function render() {
   for (let i = 0; i < N; i++) {
     const p = ((G.ny - 1 - IY[i]) * G.nx + IX[i]) * 4; let c;
     if (Ly.scale === "folds") { c = FOLD[i] === curFold ? cat[0] : ((EXCL[i] >> curFold) & 1) ? cat[1] : grayc; }
+    else if (Ly.scale === "sites") { c = nodata; }
+    else if (Ly.scale === "design") { const v = vals[i]; c = Math.abs(v) < 1e-4 ? nodata : colorFor({ scale: "div" }, v); }
     else if (Ly.scale === "cat") { const k = vals[i]; c = k === 0 ? grayc : cat[k - 1]; }
     else if (Ly.scale === "climthr") { c = vals[i] >= THR ? cat[1] : grayc; }
     else if (Ly.scale === "climtemp") { c = colorFor({ scale: "div" }, vals[i]); }
@@ -482,10 +546,19 @@ function drawOverlay() {
   const nx = w - 22, ny = 16;
   svg.append(sv("path", { d: `M ${nx} ${ny} l 6 16 l -6 -4 l -6 4 z`, fill: ink }));
   svg.append(sv("text", { x: nx, y: ny + 30, "font-size": 11, fill: ink, "text-anchor": "middle", "font-family": "IBM Plex Mono, monospace" }, "N"));
+  if (cur && cur.key === "__sites" && DATA.sites) {
+    DATA.sites.cell.forEach((i, k) => { const cx = (IX[i] + 0.5) / G.nx * w, cy = (G.ny - 1 - IY[i] + 0.5) / G.ny * h;
+      svg.append(sv("circle", { cx, cy, r: 5.5, fill: DATA.sites.role[k] === "low canopy" ? V("--s2") : V("--s3"), stroke: V("--surface"), "stroke-width": 1.5 })); });
+  }
 }
 function drawLegend() {
   const Ly = cur; const box = $("legend"); box.replaceChildren();
   $("layerName").textContent = Ly.name; $("layerDesc").textContent = Ly.desc || "";
+  if (Ly.scale === "sites") {
+    const wrap = el("div", { class: "swatches" });
+    [["Low-canopy site", V("--s2")], ["High-canopy site", V("--s3")]].forEach(([t, c]) => { const r = el("div"); const s2 = el("span", { class: "sw" }); s2.style.background = c; s2.style.borderRadius = "50%"; r.append(s2, document.createTextNode(t)); wrap.append(r); });
+    box.append(wrap); return;
+  }
   if (Ly.scale === "folds" || Ly.scale === "cat" || Ly.scale === "climthr") {
     const labs = Ly.scale === "folds" ? ["Held out (test)", "Buffer: dropped from training", "Training"] : Ly.scale === "climthr" ? [`At or above ${THR} ${U}`, `Below ${THR} ${U}`] : [...DATA.layers[Ly.key].labels.slice(1), DATA.layers[Ly.key].labels[0]];
     const cols = Ly.scale === "folds" ? [V("--s1"), V("--s2"), V("--gray-mark")] : Ly.scale === "climthr" ? [V("--s2"), V("--gray-mark")] : [V("--s1"), V("--s2"), V("--s3"), V("--gray-mark")];
@@ -494,16 +567,16 @@ function drawLegend() {
     box.append(wrap); return;
   }
   const c = el("canvas", { width: 256, height: 1 }); const g2 = c.getContext("2d"); const id = g2.createImageData(256, 1);
-  const L = (Ly.scale === "div" || Ly.scale === "climtemp") ? LUTS.div : LUTS.seq;
+  const L = (Ly.scale === "div" || Ly.scale === "climtemp" || Ly.scale === "design") ? LUTS.div : LUTS.seq;
   for (let i = 0; i < 256; i++) { id.data.set([L[i * 3], L[i * 3 + 1], L[i * 3 + 2], 255], i * 4); }
   g2.putImageData(id, 0, 0); c.setAttribute("role", "img"); c.setAttribute("aria-label", "colour scale");
   const t = el("div", { class: "ticks" });
   const [a, mid, b] = domain; const d = Ly.d ?? 2; const u = Ly.unit ? ` ${Ly.unit}` : "";
-  const f = (v) => Ly.scale === "div" && Ly.center === 0 ? sfmt(v, d) : fmt(v, d);
-  const dv = Ly.scale === "div" || Ly.scale === "climtemp";
+  const f = (v) => (Ly.scale === "div" || Ly.scale === "design") && Ly.center === 0 ? sfmt(v, d) : fmt(v, d);
+  const dv = Ly.scale === "div" || Ly.scale === "climtemp" || Ly.scale === "design";
   t.append(el("span", {}, "≤ " + f(a)), el("span", {}, dv ? f(mid) + u : ""), el("span", {}, "≥ " + f(b) + (dv ? "" : u)));
   box.append(c, t);
-  if (Ly.scale === "div" || Ly.scale === "climtemp") { const n = el("div", { class: "ticks" }); n.append(el("span", {}, "cooler"), el("span", {}, "warmer")); box.append(n); }
+  if (Ly.scale === "div" || Ly.scale === "climtemp" || Ly.scale === "design") { const n = el("div", { class: "ticks" }); n.append(el("span", {}, "cooler"), el("span", {}, "warmer")); box.append(n); }
 }
 function drawStats() {
   const Ly = cur; const dl = $("layerStats"); dl.replaceChildren();
@@ -513,6 +586,8 @@ function drawStats() {
     row("Held-out cells", te.toLocaleString()); row("Buffer cells dropped", ex.toLocaleString()); row("Training cells", (N - te - ex).toLocaleString());
     row("Block size", `${fmt(DATA.cv.block_m, 0)} m`); row("Buffer", `${fmt(DATA.cv.buffer_m, 0)} m`); row("Blocks with data", String(DATA.cv.n_blocks)); return;
   }
+  if (Ly.scale === "sites") { const r = DATA.sites.role; row("Sites", String(r.length)); row("Low-canopy sites", String(r.filter((x) => x === "low canopy").length)); row("High-canopy sites", String(r.filter((x) => x === "high canopy").length)); return; }
+  if (Ly.scale === "design") { designStats(row); return; }
   const vals = layerValues(Ly);
   if (Ly.scale === "climthr") { let k = 0; for (let i = 0; i < N; i++) if (vals[i] >= THR) k++;
     const p = CL.projections[climSel.proj];
@@ -538,7 +613,10 @@ function readout(ev) {
   const i = cellToPt[cy * G.nx + cx];
   if (i < 0) { box.append(el("span", { class: "dim" }, `No observation · ${latlon(cx, cy)}`)); return; }
   const Ly = cur; let main;
-  if (Ly.scale === "folds") main = FOLD[i] === curFold ? "Held out (test)" : ((EXCL[i] >> curFold) & 1) ? "Buffer: dropped from training" : `Training (in fold ${FOLD[i] + 1}'s test set)`;
+  if (Ly.scale === "sites") { const k = DATA.sites.cell.indexOf(i); main = k >= 0 ? `Logger site (${DATA.sites.role[k]})` : "—"; }
+  else if (Ly.scale === "design") { const v = designDelta()[i]; const ch = Object.keys(PLAN).filter((v2) => PLAN[v2][i] !== 0).map((v2) => `${vname(v2)} ${sfmt(PLAN[v2][i], v2 === "Albedo" ? 2 : 0)}`).join(", ");
+    main = `${sfmt(v, 3)} ${U}` + (ch ? ` · edited: ${ch}` : ""); }
+  else if (Ly.scale === "folds") main = FOLD[i] === curFold ? "Held out (test)" : ((EXCL[i] >> curFold) & 1) ? "Buffer: dropped from training" : `Training (in fold ${FOLD[i] + 1}'s test set)`;
   else if (Ly.scale === "cat") main = DATA.layers[Ly.key].labels[layer(Ly.key)[i]];
   else if (Ly.scale === "climtemp" || Ly.scale === "climthr") { const v = climValues()[i]; main = `${fmt(v, 1)} ${U}` + (Ly.scale === "climthr" ? (v >= THR ? ` · at or above ${THR}` : ` · below ${THR}`) : ""); }
   else { const v = layer(Ly.key)[i] * (Ly.mult || 1); main = !isFinite(v) ? "no estimate" : ((Ly.scale === "div" && Ly.center === 0 ? sfmt(v, Ly.d ?? 2) : fmt(v, Ly.d ?? 2)) + (Ly.unit ? " " + Ly.unit : "")); }
@@ -557,6 +635,7 @@ function setGroup(g) {
   LAYERS.filter((l) => l.group === g).forEach((l) => { const o = el("option", { value: l.key }, l.name); sel.append(o); });
   $("foldWrap").hidden = g !== "CV design";
   $("climWrap").hidden = g !== "Climate futures";
+  $("designWrap").hidden = g !== "Design";
   setLayer(sel.value);
   try { localStorage.setItem("phm-group", g); } catch (e) {}
 }
@@ -572,6 +651,91 @@ if (CL) {
   CL.adaptation.forEach((a) => $("adaptSel").append(el("option", { value: a }, a)));
   $("projSel").addEventListener("change", (e) => { climSel.proj = +e.target.value; render(); });
   $("adaptSel").addEventListener("change", (e) => { climSel.adapt = e.target.value; render(); });
+}
+
+/* ---------- design tool: linear emulator of the fitted model ---------- */
+const IDS = new Uint32Array(b64bytes(G.ids).buffer);
+const rIdx = new Int32Array(G.nx * G.ny).fill(-1);            // raster (iy·nx + ix) → point
+for (let i = 0; i < N; i++) rIdx[IY[i] * G.nx + IX[i]] = i;
+const PLAN = {};                                               // lever → Float32Array of changes
+let DELTA = new Float32Array(N), deltaDirty = false, undoStack = [];
+function decodeEnc(L) { const raw = b64bytes(L.b64); const q = L.kind === "u8" ? raw : new Uint16Array(raw.buffer); const top = L.kind === "u8" ? 254 : 65534; const out = new Float32Array(N);
+  for (let i = 0; i < N; i++) out[i] = q[i] === 0 ? 0 : L.lo + (q[i] - 1) / top * (L.hi - L.lo); return out; }
+const EM = {};
+function emLever(v) { if (EM[v]) return EM[v]; const d = DS.levers[v];
+  EM[v] = { own: decodeEnc(d.own), chans: d.chans.map((c) => ({ sigma: c.sigma, coef: decodeEnc(c.coef), w: c.w ? decodeEnc(c.w) : null })), dq: d.dq ? decodeEnc(d.dq) : null };
+  return EM[v]; }
+let KERN = null;
+function kernel() { if (KERN || !DS.kernel) return KERN; KERN = { k: DS.kernel.k, a: new Float32Array(b64bytes(DS.kernel.b64).buffer) }; return KERN; }
+function gaussW(sigma) { const r = Math.floor(4 * sigma + 0.5); const w = new Float64Array(2 * r + 1); let s = 0; for (let x = -r; x <= r; x++) { w[x + r] = Math.exp(-0.5 * x * x / (sigma * sigma)); s += w[x + r]; } for (let k = 0; k < w.length; k++) w[k] /= s; return { r, w }; }
+function emulate() {
+  const out = new Float32Array(N);
+  for (const v of Object.keys(PLAN)) {
+    const dx = PLAN[v]; let x0 = G.nx, x1 = -1, y0 = G.ny, y1 = -1, any = false;
+    for (let i = 0; i < N; i++) if (dx[i] !== 0) { any = true; if (IX[i] < x0) x0 = IX[i]; if (IX[i] > x1) x1 = IX[i]; if (IY[i] < y0) y0 = IY[i]; if (IY[i] > y1) y1 = IY[i]; }
+    if (!any) continue;
+    const em = emLever(v);
+    for (let i = 0; i < N; i++) if (dx[i] !== 0) out[i] += em.own[i] * dx[i];
+    for (const ch of em.chans) {
+      const { r, w } = gaussW(ch.sigma);
+      const wx0 = Math.max(0, x0 - r), wx1 = Math.min(G.nx - 1, x1 + r), wy0 = Math.max(0, y0 - r), wy1 = Math.min(G.ny - 1, y1 + r);
+      const W = wx1 - wx0 + 1, H = wy1 - wy0 + 1; const src = new Float64Array(W * H), tmp = new Float64Array(W * H);
+      for (let i = 0; i < N; i++) if (dx[i] !== 0) src[(IY[i] - wy0) * W + (IX[i] - wx0)] = (ch.w ? ch.w[i] : 1) * dx[i];
+      for (let yy = 0; yy < H; yy++) for (let xx = 0; xx < W; xx++) { let a = 0; for (let k = -r; k <= r; k++) { const q = xx + k; if (q >= 0 && q < W) a += w[k + r] * src[yy * W + q]; } tmp[yy * W + xx] = a; }
+      for (let yy = 0; yy < H; yy++) for (let xx = 0; xx < W; xx++) { let a = 0; for (let k = -r; k <= r; k++) { const q = yy + k; if (q >= 0 && q < H) a += w[k + r] * tmp[q * W + xx]; }
+        if (a !== 0) { const i = rIdx[(yy + wy0) * G.nx + xx + wx0]; if (i >= 0) out[i] += ch.coef[i] * a; } }
+    }
+    const K = kernel();
+    if (em.dq && K) { const k = K.k, S = 2 * k + 1;
+      for (let j = 0; j < N; j++) { if (dx[j] === 0) continue; const val = em.dq[j] * dx[j]; if (val === 0) continue;
+        for (let ky = -k; ky <= k; ky++) { const yy = IY[j] + ky; if (yy < 0 || yy >= G.ny) continue;
+          for (let kx = -k; kx <= k; kx++) { const xx = IX[j] + kx; if (xx < 0 || xx >= G.nx) continue; const i = rIdx[yy * G.nx + xx]; if (i >= 0) out[i] += val * K.a[(ky + k) * S + kx + k]; } } } }
+  }
+  return out;
+}
+function designDelta() { if (deltaDirty) { DELTA = emulate(); deltaDirty = false; } return DELTA; }
+function curLever() { return $("leverSel").value; }
+function paintAt(ev) {
+  const v = curLever(); if (!v) return; const d = DS.levers[v]; const dose = parseFloat($("doseIn").value); if (!isFinite(dose)) return;
+  const r = canvas.getBoundingClientRect(); const cx = Math.floor((ev.clientX - r.left) / r.width * G.nx), cyN = Math.floor((ev.clientY - r.top) / r.height * G.ny);
+  const cy = G.ny - 1 - cyN; const rad = (+$("brushSel").value) / G.dx; const R = Math.ceil(rad);
+  if (!PLAN[v]) PLAN[v] = new Float32Array(N);
+  const base = layer("in_" + v); const [lo, hi] = d.bounds;
+  for (let yy = Math.max(0, cy - R); yy <= Math.min(G.ny - 1, cy + R); yy++) for (let xx = Math.max(0, cx - R); xx <= Math.min(G.nx - 1, cx + R); xx++) {
+    if ((xx - cx) ** 2 + (yy - cy) ** 2 > rad * rad) continue; const i = rIdx[yy * G.nx + xx]; if (i < 0) continue;
+    const b = base && isFinite(base[i]) ? base[i] : 0; PLAN[v][i] = Math.min(hi, Math.max(lo, b + dose)) - b; }
+  deltaDirty = true;
+}
+function snapshot() { const s2 = {}; for (const [k, a] of Object.entries(PLAN)) s2[k] = a.slice(); undoStack.push(s2); if (undoStack.length > 20) undoStack.shift(); }
+let painting = false, lastPaint = 0;
+canvas.addEventListener("pointerdown", (ev) => { if (!cur || cur.key !== "__design") return; snapshot(); painting = true; try { canvas.setPointerCapture(ev.pointerId); } catch (e) {} paintAt(ev); render(); });
+canvas.addEventListener("pointermove", (ev) => { if (!painting) return; paintAt(ev); const t = performance.now(); if (t - lastPaint > 150) { lastPaint = t; render(); } });
+const endPaint = () => { if (!painting) return; painting = false; render(); };
+canvas.addEventListener("pointerup", endPaint); canvas.addEventListener("pointercancel", endPaint);
+function designStats(row) {
+  const d = designDelta(); let nEd = 0, sIn = 0, nCool = 0, sAll = 0, people = 0; const P = layer("people"); const edited = new Uint8Array(N);
+  for (const a of Object.values(PLAN)) for (let i = 0; i < N; i++) if (a[i] !== 0) edited[i] = 1;
+  for (let i = 0; i < N; i++) { sAll += d[i]; if (edited[i]) { nEd++; sIn += d[i]; } if (d[i] <= -0.1) { nCool++; if (P && isFinite(P[i])) people += P[i]; } }
+  row("Cells changed", nEd.toLocaleString());
+  for (const [v, a] of Object.entries(PLAN)) { let s2 = 0, n2 = 0; for (let i = 0; i < N; i++) if (a[i] !== 0) { s2 += a[i]; n2++; } if (n2) row(`${vname(v)} change`, `${sfmt(s2 / n2, v === "Albedo" ? 3 : 1)} on ${n2.toLocaleString()} cells`); }
+  row(`Mean ΔT in changed cells`, nEd ? `${sfmt(sIn / nEd, 3)} ${U}` : "—");
+  row(`Total (all cells)`, `${sfmt(sAll, 1)} ${U}·cells`);
+  row(`Cells cooled ≥ 0.1 ${U}`, nCool.toLocaleString());
+  if (P) row("Residents in those cells", Math.round(people).toLocaleString());
+  const v = curLever(); const val = v && DS.levers[v] ? DS.levers[v].val : null;
+  if (val) row("Emulator check", `patch means within ${fmt(val.patch_abs, 3)} ${U} (median, ${fmt(100 * val.patch_rel, 0)}%) of the full model`);
+  if (nEd > 3000) row("Note", "Large edits: saturation is not emulated — use Scenarios for city-wide changes");
+}
+if (DS && DS.levers) {
+  for (const v of Object.keys(DS.levers)) $("leverSel").append(el("option", { value: v }, vname(v)));
+  const setDose = () => { const d = DS.levers[curLever()]; if (d) $("doseIn").value = d.dose; };
+  setDose(); $("leverSel").addEventListener("change", () => { setDose(); if (cur && cur.key === "__design") render(); });
+  $("undoBtn").addEventListener("click", () => { const s2 = undoStack.pop(); if (!s2) return; for (const k of Object.keys(PLAN)) delete PLAN[k]; Object.assign(PLAN, s2); deltaDirty = true; render(); });
+  $("clearBtn").addEventListener("click", () => { snapshot(); for (const k of Object.keys(PLAN)) delete PLAN[k]; deltaDirty = true; render(); });
+  $("csvBtn").addEventListener("click", async () => { const lines = ["id,lever,change"]; for (const [v, a] of Object.entries(PLAN)) for (let i = 0; i < N; i++) if (a[i] !== 0) lines.push(`${IDS[i]},${v},${+a[i].toFixed(4)}`);
+    const txt = lines.join("\n"); try { await navigator.clipboard.writeText(txt); $("csvBtn").textContent = `Copied ${lines.length - 1} rows`; } catch (e) {
+      const a = el("a", { href: URL.createObjectURL(new Blob([txt], { type: "text/csv" })), download: "design_plan.csv" }); document.body.append(a); a.click(); a.remove(); $("csvBtn").textContent = "Downloaded"; }
+    setTimeout(() => { $("csvBtn").textContent = "Copy plan (CSV)"; }, 2500); });
 }
 
 /* ---------- tooltip ---------- */
@@ -625,7 +789,7 @@ function accuracy() {
   const p = DATA.physics || {}; const pc = $("physicsCard");
   if (p.L_m) { pc.append(el("h3", {}, "Fitted heat-transport physics"));
     const txt = el("p", { class: "prose" });
-    txt.textContent = `The physics model solves a steady heat-transport equation, (1 − L²∇² + v·∇)φ = q, driven by a surface energy balance built from albedo, shade, vegetation, impervious storage and water. Fitted on each fold: heat spreads over L ≈ ${fmt(p.L_m.mean, 0)} m (± ${fmt(p.L_m.sd, 0)}), source gain a ≈ ${fmt(p.a.mean, 1)}. ` + (p.v_norm_m && p.v_norm_m.mean > 1 ? `Advection kept: ${fmt(p.v_norm_m.mean, 0)} m.` : "No advection: there is no wind record for this campaign, so the wind term is switched off.") + ` On held-out blocks it scores R² ${fmt(m.physics ? m.physics.r2 : NaN, 2)} by itself.`;
+    txt.textContent = `The physics model solves a steady heat-transport equation, (1 − L²∇² + v·∇)φ = q, driven by a surface energy balance built from albedo, shade, vegetation, impervious storage and water. Fitted on each fold: heat spreads over L ≈ ${fmt(p.L_m.mean, 0)} m (± ${fmt(p.L_m.sd, 0)}), source gain a ≈ ${fmt(p.a.mean, 1)}. ` + (p.v_norm_m && p.v_norm_m.mean > 1 ? `Advection by the campaign wind kept: drift ${fmt(p.v_norm_m.mean, 0)} m.` : DATA.forcing ? "Advection by the campaign-day wind was tested and dropped: it did not improve held-out accuracy." : "No advection: no wind record was supplied, so the wind term is off.") + ` On held-out blocks it scores R² ${fmt(m.physics ? m.physics.r2 : NaN, 2)} by itself.`;
     pc.append(txt); }
 }
 function distanceChart(rows) {
@@ -858,6 +1022,96 @@ function budget() {
   $("chart-pareto").append(svg);
 }
 
+/* ---------- uncertainty ---------- */
+const rng2 = (x, d = 2) => x ? `${sfmt(x[0], d)} … ${sfmt(x[1], d)}` : "—";
+function uncertainty() {
+  const u = DATA.uncertainty; if (!u || !u.scenarios || !u.scenarios.length) return;
+  $("uncCard").hidden = false;
+  $("uncCap").textContent = `Each component answers a different question. Estimation: how much the answer moves when the model is refitted on other parts of the city (95%, jackknife over folds). Specification: the range across reasonable analysis choices (multiverse). Attribution: the canopy effect divided by how much of a planted effect the pipeline recovers on this city's layout (simulation check). The envelope is their union: a plausible range for reading, not a confidence interval. ⚠ marks scenarios where the model lies outside the independent causal band.`;
+  const t = el("table"); const h = el("tr"); ["Scenario", `Estimate (${U})`, "Estimation 95%", "Specification", "Attribution", "Envelope", "Causal band"].forEach((x, i) => h.append(el("th", { class: i ? "r" : "" }, x))); t.append(h);
+  for (const r of u.scenarios) { const tr = el("tr"); tr.append(el("td", {}, r.scenario), el("td", { class: "r" }, sfmt(r.estimate, 2)), el("td", { class: "r" }, rng2(r.estimation_95)), el("td", { class: "r" }, rng2(r.specification)), el("td", { class: "r" }, rng2(r.attribution)));
+    const te = el("td", { class: "r" }, rng2(r.envelope) + " "); if (r.envelope) te.append(r.envelope_excludes_zero ? pill("good", "excludes 0") : pill("warn", "includes 0")); tr.append(te);
+    const tc = el("td", { class: "r" }, rng2(r.causal_band) + (r.model_within_causal === false ? " ⚠" : "")); tr.append(tc); t.append(tr); }
+  $("tbl-unc").append(t);
+}
+
+/* ---------- planner view ---------- */
+function table(head, rows, right = (i) => i > 0) { const t = el("table"); const h = el("tr"); head.forEach((x, i) => h.append(el("th", { class: right(i) ? "r" : "" }, x))); t.append(h);
+  for (const r of rows) { const tr = el("tr"); r.forEach((x, i) => { const td = el("td", { class: right(i) ? "r" : "" }); if (x instanceof Node) td.append(x); else td.textContent = x; tr.append(td); }); t.append(tr); } return t; }
+function planner() {
+  const P = DATA.planner; if (!P) return; $("planner").hidden = false; $("navPlanner").hidden = false;
+  const thr = P.thresholds || [90, 95]; const t0 = thr[0];
+  $("plannerText").textContent = `People, not cells: ${Math.round(P.people_total).toLocaleString()} residents live in the study area (HRSL). Exposure counts residents in cells at or above a threshold on an afternoon like the campaign's; hot days count such afternoons per summer from the airport's 1995–2014 record shifted by each cell's measured difference from the airport. The adaptation package is "${P.package}".`;
+  const ex = P.exposure || []; const find = (c, a) => ex.find((r) => r.case === c && r.adapted === a);
+  const box = $("plannerKpis"); const td0 = find("today", false), mid = find("SSP2-4.5 2041-2060", false), mida = find("SSP2-4.5 2041-2060", true);
+  if (td0) kpi(box, `Residents in cells ≥ ${t0} °F today`, Math.round(td0[`people_ge_${t0}`]).toLocaleString(), "", `${fmt(100 * td0[`share_people_ge_${t0}`], 0)}% of residents, campaign-like afternoon`);
+  if (mid) kpi(box, `… SSP2-4.5, 2041–2060`, Math.round(mid[`people_ge_${t0}`]).toLocaleString(), "", mida ? `${Math.round(mida[`people_ge_${t0}`]).toLocaleString()} with the package` : "");
+  const hd = (P.hot_days || {}).cases || []; const hdt = hd.find((c) => c.case === "today" && c.offset_scale === 1), hdm = hd.find((c) => c.case === "SSP2-4.5 2041-2060" && c.offset_scale === 1);
+  if (hdt) kpi(box, `Hot afternoons ≥ ${t0} °F per summer`, fmt(hdt[`days_ge_${t0}`], 1), "days", "cell average, today");
+  if (hdm) kpi(box, "… SSP2-4.5, 2041–2060", fmt(hdm[`days_ge_${t0}`], 1), "days", hdm[`days_ge_${t0}_adapted`] !== undefined ? `${fmt(hdm[`days_ge_${t0}_adapted`], 1)} with the package` : "");
+  $("expCap").textContent = `Residents in cells whose afternoon temperature reaches each threshold. Futures add the CMIP6 median summer warming; "with package" adds the package's re-predicted cooling.`;
+  $("tbl-pexp").append(table(["Case", "Package", ...thr.map((x) => `≥ ${x} °F`), `Person-weighted mean (${U})`],
+    ex.map((r) => [r.case, r.adapted ? "with" : "—", ...thr.map((x) => Math.round(r[`people_ge_${x}`]).toLocaleString()), fmt(r.person_mean_temp, 1)]), (i) => i > 1));
+  if (hd.length) { $("hdCap").textContent = `Mean days per summer (June–August) at or above each threshold, averaged over cells; person-days sum residents × days. "Lower bound" halves each cell's difference from the airport, for days less clear and calm than the campaign's.`;
+    const rows = hd.map((c) => [c.case, c.label, ...thr.map((x) => fmt(c[`days_ge_${x}`], 1) + (c[`days_ge_${x}_adapted`] !== undefined ? ` → ${fmt(c[`days_ge_${x}_adapted`], 1)}` : "")), Math.round(c[`person_days_ge_${t0}`] / 1000).toLocaleString() + "k"]);
+    $("tbl-hd").append(table(["Case", "Scaling", ...thr.map((x) => `days ≥ ${x} °F (→ with package)`), `person-days ≥ ${t0}`], rows, (i) => i > 1)); }
+  const eq = P.equity || {}; const ek = Object.keys(eq);
+  if (ek.length) { $("eqCap").textContent = "Mean cooling from the package by quintile (1 = lowest). The concentration index is > 0 when cooling concentrates in the higher quintiles, < 0 in the lower ones; near 0 means evenly shared.";
+    const rows = ek.map((k) => { const q = eq[k].quintiles; return [k, ...q.map((x) => fmt(x.mean_cooling, 2)), sfmt(eq[k].concentration_index, 3)]; });
+    $("tbl-eq").append(table(["Ranking", "Q1", "Q2", "Q3", "Q4", "Q5", "Concentration"], rows)); }
+  const z = P.zones || []; if (z.length) { $("zoneCap").textContent = "Zone 0 is everything outside the named neighbourhoods.";
+    $("tbl-zone").append(table(["Zone", "Cells", `Mean (${U})`, "Residents", "Room for canopy (pp)", `Package cooling (${U})`], z.map((r) => [String(r.zone), r.n_cells.toLocaleString(), fmt(r.temperature, 1), Math.round(r.people).toLocaleString(), fmt(r.plantable_pp, 0), r.package_cooling !== undefined ? fmt(r.package_cooling, 2) : "—"]))); }
+  const ls = P.logger_sites, ba = P.before_after; const pl = P.plantable || {};
+  $("campCap").textContent = `Plantable space: on average ${fmt(pl.mean_headroom_pp, 0)} pp more canopy fits per cell (${fmt(100 * (pl.share_cells_no_room || 0), 0)}% of cells have no room); the budget plan is capped by it. ` +
+    (ls ? `${ls.n} logger sites are proposed (map theme Planner → Suggested logger sites). ` : "") + (ba && ba.n_pairs ? `For a before/after check of the budget plan, ${ba.n_pairs} treated cells are paired with untreated look-alikes at least 1 km away (median covariate distance ${fmt(ba.median_covariate_distance, 2)} sd).` : "");
+  if (DATA.sites) $("tbl-sites").append(table(["Site", "Role", "Canopy (%)", "Impervious (%)"], DATA.sites.cell.map((c, k) => [String(k + 1), DATA.sites.role[k], fmt(DATA.sites.canopy[k], 0), fmt(DATA.sites.impervious[k], 0)])));
+}
+
+/* ---------- methods & validation ---------- */
+function validation() {
+  const qa = DATA.qa || {}; const fl = $("flagList");
+  for (const f of qa.flags || []) { const li = el("li"); li.append(pill(f.severity === "warn" ? "warn" : "good", f.severity === "warn" ? "check" : "note"), el("span", {}, f.message)); fl.append(li); }
+  if (!(qa.flags || []).length) fl.append(el("li", {}, "No data findings."));
+  const fo = DATA.forcing, fb = $("forcingBox"); const ph = (DATA.config_physics || {});
+  if (fo) { fb.append(el("p", {}, `${fo.date}, ${fo.hours_local[0]}:00–${fo.hours_local[1]}:00 local (${fo.tz}); wind from ${fo.wind_source}${fo.station ? ` (station ${fo.station})` : ""}.`));
+    const ul = el("ul", { class: "plain" }); (fo.checks || []).forEach((c) => ul.append(el("li", {}, c))); fb.append(ul); }
+  else fb.append(el("p", {}, "Generic daytime forcing (no campaign-day weather supplied)."));
+  const adv = DATA.physics_advection; if (adv) fb.append(el("p", { class: "cap" }, `Advection by that wind was ${adv.kept ? "kept" : "dropped"} after an out-of-fold test (held-out RMSE with − without: ${sfmt(adv.delta_rmse_mean, 3)} ± ${fmt(adv.delta_rmse_se, 3)} ${U}).`));
+  const b = DATA.baselines;
+  if (b) { $("baseCap").textContent = `Each baseline was fitted on exactly the same folds and scored on the same held-out blocks. Δ is baseline minus stack (positive = the stack is better); the SE treats blocks as the independent units. Verdict: ${b.verdict}.`;
+    const rows = Object.values(b.rows).map((r) => [r.label, fmt(r.rmse, 2), fmt(r.r2, 2), sfmt(r.delta_rmse, 2), `${sfmt(r.delta_mse, 2)} ± ${fmt(r.delta_mse_se, 2)}`, `${fmt(100 * r.frac_blocks_stack_better, 0)}%`]);
+    rows.unshift(["Stacked model", fmt(Object.values(b.rows)[0].stack_rmse, 2), fmt(DATA.metrics.stacker.r2, 2), "", "", ""]);
+    $("tbl-base").append(table(["Model", `RMSE (${U})`, "R²", `ΔRMSE`, "ΔMSE ± SE", "Blocks where stack better"], rows)); }
+  else $("baseCap").textContent = "Baselines were not run for this result set.";
+  const pz = DATA.placebo;
+  if (pz && pz.rows) { $("placeboCard").hidden = false;
+    $("placeboCap").textContent = `Each placebo is a full re-fit at ${fmt(pz.coarse_m || 0, 0)} m. "Shift" moves the canopy and impervious layers half the map away (same values, wrong place); "rotate" turns them 180°; "grf" adds a random smooth layer. Effects are per +1 sd of the layer; a placebo passes when its effect is within 2 SE of zero or under 10% of the real layer's. Model passes ${pz.n_pass_model}/${pz.n_placebos}, causal check passes ${pz.n_pass_causal}/${pz.n_placebos}.`;
+    const rows = pz.rows.map((r) => { const m = r.model.reduce((a, x) => Math.abs(x.dose_sd - 1) < Math.abs(a.dose_sd - 1) ? x : a); const v = r.verdict;
+      const verdict = el("span"); if (!r.placebo) verdict.append(document.createTextNode("real layer (reference)")); else { verdict.append(pill(v.model_pass ? "good" : "crit", v.model_pass ? "model passes" : "model fails"), document.createTextNode(" "), pill(v.causal_ci_covers_zero ? "good" : "crit", v.causal_ci_covers_zero ? "causal passes" : "causal fails")); }
+      return [r.kind, vname(r.variable), `${sfmt(m.mean_delta, 2)} ± ${fmt(m.se, 2)}`, v && v.ratio_to_real != null ? `${fmt(100 * v.ratio_to_real, 0)}%` : "", r.causal_theta_sum_per_sd != null ? `${sfmt(r.causal_theta_sum_per_sd, 2)} ± ${fmt(r.causal_se_per_sd, 2)}` : "—", verdict]; });
+    $("tbl-placebo").append(table(["Run", "Layer", `Model Δ per sd (${U})`, "vs real", `Causal per sd (${U})`, "Verdict"], rows, (i) => i >= 2 && i <= 4)); }
+  const sc = DATA.simcheck;
+  if (sc && sc.generators && Object.keys(sc.generators).length) { $("simCard").hidden = false;
+    const bc = sc.bias_correction || {};
+    $("simCap").textContent = `A known canopy effect (−0.25 ${U} for +10 pp city-wide) was planted on the city's real land-cover layout under several generators, passed through an emulation of how the temperature product is made (route sampling, a land-cover model filling every cell, whole-degree rounding), and re-estimated by the full pipeline. Effect share = estimated / true (1 = unbiased). ` +
+      (bc.share_range ? (bc.stable ? `The share is stable across generators (median ${fmt(bc.share_median_across_generators, 2)}).` : `The share varies across generators (${fmt(bc.share_range[0], 2)} to ${fmt(bc.share_range[1], 2)}), so no single correction applies.`) : "");
+    const rows = Object.entries(sc.generators).map(([k, g]) => [k, `${g.n} (${g.n_gate_pass})`, g.share_median != null ? `${fmt(g.share_median, 2)}` + (g.share_iqr ? ` (${fmt(g.share_iqr[0], 2)}–${fmt(g.share_iqr[1], 2)})` : "") : "—", fmt(g.rank_corr_mean, 2), g.ci_coverage != null ? `${fmt(100 * g.ci_coverage, 0)}%` : "—", g.causal_ci_coverage != null ? `${fmt(100 * g.causal_ci_coverage, 0)}%` : "—", fmt(g.oof_r2_mean, 2), k === "null" ? `model ${fmt(100 * (g.false_positive_rate || 0), 0)}% · causal ${fmt(100 * (g.causal_false_positive_rate || 0), 0)}%` : ""]);
+    $("tbl-sim").append(table(["Generator", "Runs (gate pass)", "Effect share (IQR)", "Rank corr.", "95% CI covers truth", "Causal CI covers", "Held-out R²", "False positives"], rows)); }
+  const mv = DATA.multiverse;
+  if (mv && mv.effects) { $("mvCard").hidden = false; const names = Object.keys(mv.runs);
+    $("mvCap").textContent = `Each column re-runs the pipeline (60 m cells) with one choice changed. Effect signs are stable in at least ${fmt(100 * mv.sign_stability_min, 0)}% of variants for every scenario. Priority maps (where each extra unit cools most) agree with the baseline at median Kendall τ ${fmt(mv.median_kendall_tau, 2)} and top-10% overlap ${fmt(mv.median_top_decile_jaccard, 2)}.`;
+    $("tbl-mv").append(table(["Scenario", ...names.map((n) => mv.runs[n].label), "Sign stable"], Object.entries(mv.effects).map(([sname, e]) => [sname, ...names.map((n) => e.values[n] != null ? sfmt(e.values[n], 2) : "—"), `${fmt(100 * e.sign_stability, 0)}%`])));
+    const pr = mv.priority || {}; const levers = Object.keys(Object.values(pr)[0] || {});
+    $("tbl-mv2").append(table(["Variant", "Held-out R²", ...levers.map((v) => `${vname(v)}: τ / top-10%`)], Object.entries(pr).map(([n, d]) => [mv.runs[n].label, fmt(mv.runs[n].r2, 3), ...levers.map((v) => d[v] ? `${fmt(d[v].kendall_tau, 2)} / ${fmt(d[v].top_decile_jaccard, 2)}` : "—")]))); }
+  const li = DATA.literature;
+  if (li && li.rows && li.rows.some((r) => r.sparc_C != null)) { $("litCard").hidden = false;
+    $("litCap").textContent = "SPARC's city-wide cooling for a uniform change, scaled to +0.10 canopy cover or albedo and converted to °C, beside published rates. Other cities, methods and scales: agreement within a factor of two is what consistency can mean here. Values marked 'abstract' were taken from the paper's abstract; check the full text before citing. The albedo layer in these data may not be broadband.";
+    $("tbl-lit").append(table(["Lever", "Published", "Source", "SPARC (°C per +0.10)", "Within ×2"], li.rows.map((r) => [r.quantity, r.value, `${r.citation} (${r.status})`, r.sparc_C != null ? fmt(r.sparc_C, 2) + (r.sparc_se_C ? ` ± ${fmt(r.sparc_se_C, 2)}` : "") : "—", r.within_factor_2 === undefined ? "—" : r.within_factor_2 ? "yes" : "no"]), (i) => i === 3)); }
+  const pv = DATA.provenance || {}; const rb = $("reproBox"); const rr = (k, v) => rb.append(el("dt", {}, k), el("dd", { class: "mono", style: "text-align:left;word-break:break-all" }, v || "—"));
+  rr("Code commit", ((pv.git || {}).commit || DATA.commit || "").slice(0, 12)); rr("Core code SHA-256", (pv.code_sha256 || "").slice(0, 16)); rr("Input data SHA-256", (pv.input_sha256 || "").slice(0, 16)); rr("Config SHA-256", (pv.config_sha256 || "").slice(0, 16));
+  rr("Python", (pv.platform || {}).python);
+}
+
 /* ---------- caveats & footer ---------- */
 function caveats() {
   const ul = $("caveatList"); const qa = DATA.qa || {}; const items = [];
@@ -865,11 +1119,14 @@ function caveats() {
   if (fi > 0.3) items.push(`The temperature product is rounded: ${fmt(100 * fi, 0)}% of readings are whole degrees, so errors below about 0.3 ${U} are noise.`);
   const main = ((DATA.cv_distance && DATA.cv_distance.rows) || []).find((r) => r.main);
   if (main) items.push(`Accuracy varies by area: held-out fold R² ranges from ${fmt(main.fold_r2_min, 2)} to ${fmt(main.fold_r2_max, 2)}, so some neighbourhoods are predicted much better than others.`);
-  items.push("Fitted effects are attenuated. On a synthetic city with known answers, the model recovers about half of the true canopy effect with the right spatial pattern. Treat scenario magnitudes as conservative.");
+  const sc = DATA.simcheck && DATA.simcheck.bias_correction;
+  if (sc && sc.share_range) items.push(`Effect sizes carry attribution uncertainty: when a known canopy effect is planted on this city's layout and passed through the same kind of temperature product, the pipeline recovers ${fmt(sc.share_range[0], 2)}–${fmt(sc.share_range[1], 2)} times the truth depending on how the effect is generated (see Methods & validation).`);
+  else items.push("Fitted effects may be attenuated: on a synthetic city with known answers the model recovers about two-thirds of the true canopy effect. Treat scenario magnitudes as approximate.");
+  const pz = DATA.placebo; if (pz && pz.n_placebos && pz.n_pass_model < pz.n_placebos) items.push(`Placebo layers (canopy and paving moved to the wrong place) still received some modelled effect in ${pz.n_placebos - pz.n_pass_model} of ${pz.n_placebos} tests: a smooth layer can pick up chance large-scale patterns. Compare real effects with that floor, and lean on the causal check, which passed ${pz.n_pass_causal} of ${pz.n_placebos}.`);
   const ext = (DATA.scenarios || []).filter((x) => x.frac_extrapolated > 0.2).map((x) => x.name);
   if (ext.length) items.push(`These scenarios push more than 20% of edited cells beyond observed conditions: ${ext.join(", ")}. Treat them as extrapolation, not predictions.`);
   const pv = DATA.physics && DATA.physics.v_norm_m;
-  if (pv && pv.mean < 1) items.push("The physics model runs without advection (no wind record was supplied) and with a generic energy balance for the configured time window.");
+  if (pv && pv.mean < 1 && !DATA.forcing) items.push("The physics model runs without advection (no wind record was supplied) and with a generic energy balance for the configured time window.");
   if (CL) items.push("Climate futures use the delta method: today's measured pattern plus each model's change in summer average daily highs. They assume land-cover effects stay the same as the climate warms, and the hottest days may warm more than the seasonal average.");
   for (const c of DATA.caveats_extra || []) items.push(c);
   for (const t of items) ul.append(el("li", {}, t));
@@ -878,7 +1135,7 @@ function caveats() {
 }
 
 function init() {
-  buildLuts(); facts(); kpis(); accuracy(); influence(); curves(); scenarios(); climate(); causal(); budget(); caveats();
+  buildLuts(); facts(); kpis(); accuracy(); influence(); curves(); scenarios(); uncertainty(); climate(); causal(); budget(); planner(); validation(); caveats();
   let g0 = GROUPS[0]; try { const s = localStorage.getItem("phm-group"); if (s && GROUPS.includes(s)) g0 = s; } catch (e) {}
   setGroup(g0);
 }

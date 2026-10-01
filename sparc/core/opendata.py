@@ -71,10 +71,11 @@ def read_window(url: str, bounds: tuple[float, float, float, float]):
 
 
 def raster_to_points(arr: np.ndarray, transform, data, cfg, mode: str = "sum", classes: dict | None = None,
-                     sub: int = 3, nodata=None) -> dict[str, np.ndarray]:
-    """Aggregate a lon/lat raster onto the study grid and sample at the points.
+                     sub: int = 3, nodata=None, src_crs: str = "EPSG:4326") -> dict[str, np.ndarray]:
+    """Aggregate a raster (in ``src_crs``) onto the study grid and sample at the points.
 
     ``mode="sum"``: total of the pixel values falling in each cell (counts);
+    ``mode="mean"``: their mean (continuous fields);
     ``mode="fractions"``: share of each class code in ``classes`` per cell."""
     from pyproj import Transformer
 
@@ -87,7 +88,7 @@ def raster_to_points(arr: np.ndarray, transform, data, cfg, mode: str = "sum", c
     jj, ii = np.meshgrid((np.arange(nx * k) + 0.5) / k, (np.arange(ny * k) + 0.5) / k)
     lon = transform.c + jj * transform.a + ii * transform.b
     lat = transform.f + jj * transform.d + ii * transform.e
-    tr = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
+    tr = Transformer.from_crs(src_crs, crs, always_xy=True)
     x, y = tr.transform(lon.ravel(), lat.ravel())
     ix = np.rint((np.asarray(x) * s - g.x0) / g.dx).astype(np.int64)
     iy = np.rint((np.asarray(y) * s - g.y0) / g.dy).astype(np.int64)
@@ -103,6 +104,11 @@ def raster_to_points(arr: np.ndarray, transform, data, cfg, mode: str = "sum", c
     if mode == "sum":
         tot = np.bincount(flat, weights=v / (k * k), minlength=size)
         return {"sum": tot[cell]}
+    if mode == "mean":
+        n = np.bincount(flat, minlength=size).astype(float)
+        tot = np.bincount(flat, weights=v, minlength=size)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return {"mean": np.where(n > 0, tot / n, np.nan)[cell]}
     if mode == "fractions":
         n = np.bincount(flat, minlength=size).astype(float)
         out = {}

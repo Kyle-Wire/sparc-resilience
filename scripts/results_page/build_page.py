@@ -4,7 +4,9 @@
 
 Reads the run directory written by ``sparc core run`` (manifest.json,
 predictions.parquet, response_*.parquet, scenario_deltas.parquet,
-allocation.parquet, optimize.json, checkpoint.pkl for the CV folds) and writes
+allocation.parquet, optimize.json, checkpoint.pkl for the CV folds), plus the
+optional post-run studies (planner/, emulator.npz/.json, placebo.json, and the
+uncertainty / simcheck / multiverse blocks merged into the manifest) and writes
 one self-contained HTML page: a map explorer (temperature, land cover, cooling
 footprints, saturation, scenarios, budget plan, CV folds) plus charts and
 tables for accuracy vs distance, area of influence, dose-response, scenarios,
@@ -68,13 +70,23 @@ def _clean(o):
     return o
 
 
-def collect(run: Path, cfg) -> dict:
+def collect(run: Path, cfg, placebo_path: Path | None = None) -> dict:
     from sparc.core.data import load_core_data
+
+    placebo = None
+    for cand in ([placebo_path] if placebo_path else []) + [run / "placebo.json"]:
+        if cand and Path(cand).exists():
+            placebo = json.loads(Path(cand).read_text(encoding="utf-8"))
+            placebo = {k: placebo.get(k) for k in ("rows", "n_pass_model", "n_pass_causal", "n_placebos", "coarse_m",
+                                                   "layer_correlation_with_original")}
+            break
 
     m = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
     co = (m.get("qa") or {}).get("coarse")
     if co:                                   # a coarse-mode run: rebuild the same aggregated cells
         cfg.raw["data"]["coarse_m"] = float(co["cell_m"])
+    if (m.get("qa") or {}).get("subsample_window_n") and not cfg.data.get("subsample"):
+        cfg.raw["data"]["subsample"] = int(m["qa"]["subsample_window_n"])     # a --fast run's window
     data = load_core_data(cfg)
     g = data.grid
     pred = pd.read_parquet(run / "predictions.parquet")
@@ -132,6 +144,46 @@ def collect(run: Path, cfg) -> dict:
         L["alloc_dose"] = _enc(a["dose"])
         L["alloc_delta"] = _enc(a["closed_loop_delta"])
 
+    # planner layers (sparc core planner) and next-campaign sites
+    pl_dir = run / "planner"
+    sites = None
+    if (pl_dir / "planner_cells.parquet").exists():
+        pc = pd.read_parquet(pl_dir / "planner_cells.parquet")
+        if np.array_equal(pc["id"].to_numpy(), data.ids):
+            L["people"] = _enc(pc["people"])
+            L["plantable"] = _enc(pc["plantable_canopy_pp"])
+            for c in pc.columns:
+                if c.startswith("hot_days_ge_"):
+                    L["hd_" + c[len("hot_days_ge_"):]] = _enc(pc[c])
+    if (pl_dir / "logger_sites.csv").exists():
+        ls = pd.read_csv(pl_dir / "logger_sites.csv")
+        sites = {"cell": ls["cell"].astype(int).tolist(), "role": ls["role"].tolist(),
+                 "canopy": ls["canopy"].round(1).tolist(), "impervious": ls["impervious"].round(1).tolist()}
+
+    # design tool: linear emulator (sparc core emulator)
+    design = None
+    if (run / "emulator.npz").exists() and (run / "emulator.json").exists():
+        em = np.load(run / "emulator.npz")
+        meta = json.loads((run / "emulator.json").read_text(encoding="utf-8"))
+        if np.array_equal(em["ids"], data.ids):
+            levers = {}
+            for var, d in meta["levers"].items():
+                v = d["validation"]
+                levers[var] = {
+                    "own": _enc(em[f"{var}__own"]),
+                    "chans": [{"sigma": c["sigma_cells"], "coef": _enc(em[c["coef"]]),
+                               "w": None if c["unit_weight"] else _enc(em[c["weight"]])} for c in d["channels"]],
+                    "dq": _enc(em[f"{var}__dq"]) if d["physics"] and f"{var}__dq" in em.files else None,
+                    "bounds": d["bounds"], "direction": d["direction"],
+                    "dose": float(d.get("design_dose", v["dose"])),
+                    "val": {"dose": v["dose"], "patch_abs": v["patch_mean_abs_err_median"],
+                            "patch_rel": v["patch_mean_rel_err_median"], "pass": v["patch_pass_rate"],
+                            "p95": v["p95_cell_err_median"], "uniform_rel": v["uniform"]["rel_err"]},
+                }
+            K = em["physics_kernel"].astype("float32") if "physics_kernel" in em.files else None
+            design = {"levers": levers, "kernel": None if K is None else
+                      {"k": int((K.shape[0] - 1) // 2), "b64": _b64(K)}}
+
     corners = None
     crs = cfg.data.get("crs")
     if crs:
@@ -161,9 +213,15 @@ def collect(run: Path, cfg) -> dict:
         "response": m.get("response"), "curves": jl("response_curves.json"), "scenarios": m.get("scenarios"),
         "causal": m.get("causal"), "optimize": jl("optimize.json") or m.get("optimize"),
         "climate": m.get("climate"),
+        "baselines": m.get("baselines"), "provenance": m.get("provenance"), "literature": m.get("literature"),
+        "planner": m.get("planner"), "uncertainty": m.get("uncertainty"), "simcheck": m.get("simcheck"),
+        "multiverse": m.get("multiverse"), "placebo": placebo, "design": design, "sites": sites,
+        "physics_advection": m.get("physics_advection"), "forcing": ((m.get("config") or {}).get("physics") or {})
+        .get("forcing_info"), "optimize_meta": {k: (m.get("optimize") or {}).get(k) for k in ("constraint", "objective")},
         "actionable": cfg.actionable, "units": data.target_units, "background": float(data.background),
         "geom": {"nx": g.nx, "ny": g.ny, "dx": g.dx, "n": int(data.n), "corners": corners,
-                 "ix": _b64(g.ix.astype(np.uint16)), "iy": _b64(g.iy.astype(np.uint16))},
+                 "ix": _b64(g.ix.astype(np.uint16)), "iy": _b64(g.iy.astype(np.uint16)),
+                 "ids": _b64(np.asarray(data.ids).astype(np.uint32))},
         "layers": L, "fold": _b64(fold), "excl": _b64(excl), "n_folds": int(folds.n_folds),
         "scen_layers": scen_layers, "caveats_extra": list(rep.get("caveats") or []),
     })
@@ -174,13 +232,14 @@ def main(argv=None) -> int:
     ap.add_argument("run_dir")
     ap.add_argument("config")
     ap.add_argument("--out", default=None, help="output HTML (default: <run dir>/results.html)")
+    ap.add_argument("--placebo", default=None, help="placebo.json from sparc core placebo")
     args = ap.parse_args(argv)
 
     from sparc.core.config import load_core_config
 
     cfg = load_core_config(args.config)
     run = Path(args.run_dir)
-    blob = collect(run, cfg)
+    blob = collect(run, cfg, Path(args.placebo) if args.placebo else None)
     rep = cfg.raw.get("report") or {}
     html = (HERE / "template.html").read_text(encoding="utf-8")
     html = (html.replace("{{TITLE}}", str(rep.get("title", "Urban Heat Model")))

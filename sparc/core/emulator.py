@@ -48,9 +48,7 @@ def build_emulator(resp, var: str, kernel_cells: int | None = None, max_kernel_c
 
     data, g, ens = resp.data, resp.data.grid, resp.ens
     x = data.frame[var].to_numpy(float)
-    doses = [abs(float(d)) for d in (resp.cfg.actionable.get(var) or {}).get("doses", []) if float(d) != 0]
-    h = float(step) if step else (float(np.median(doses)) if doses else
-                                  0.05 * (np.nanpercentile(x, 95) - np.nanpercentile(x, 5)) or 1e-3)
+    h = float(step) if step else design_dose(resp.cfg, var, x)
     delta = resp._step(var, h)
     base_fp = ens.fold_predictions(resp.base_ctx, phys_override=resp._phys_base)
     fr = resp._edited(var, x + delta)
@@ -98,6 +96,17 @@ def build_emulator(resp, var: str, kernel_cells: int | None = None, max_kernel_c
         phys = {"kernel": kern / len(terms), "dq": dq / len(terms), "kernel_cells": k}
     return {"variable": var, "own": own, "channels": channels, "physics": phys,
             "n": int(data.n), "grid": {"nx": g.nx, "ny": g.ny}, "step": float(h)}
+
+
+def design_dose(cfg, var: str, x: np.ndarray) -> float:
+    """A typical design change of a lever: the lower-quartile configured dose,
+    capped at one standard deviation of the layer (so it stays inside the
+    observed range for most cells), to two significant figures."""
+    doses = sorted(abs(float(d)) for d in (cfg.actionable.get(var) or {}).get("doses", []) if float(d) != 0)
+    sd = float(np.nanstd(x))
+    d = doses[len(doses) // 4] if doses else sd
+    d = min(d, sd) if sd > 0 else d
+    return float(f"{d:.2g}")
 
 
 def emulate(em: dict, grid, dx: np.ndarray) -> np.ndarray:
@@ -184,8 +193,7 @@ def emulator_for_run(run_dir, cfg, validate_doses: dict | None = None, n_patches
     arrays, meta = {}, {"levers": {}, "kernel_cells": None}
     for var, spec in cfg.actionable.items():
         em = build_emulator(resp, var)
-        doses = [float(d) for d in spec.get("doses", []) if float(d) > 0]
-        dose = (validate_doses or {}).get(var) or (doses[len(doses) // 2] if doses else 1.0)
+        dose = (validate_doses or {}).get(var) or design_dose(cfg, var, data.frame[var].to_numpy(float))
         dose = -abs(dose) if str(spec.get("direction", "increase")) == "decrease" else abs(dose)
         val = validate(eng, em, var, dose, n_patches=n_patches)
         arrays[f"{var}__own"] = em["own"]
@@ -202,7 +210,7 @@ def emulator_for_run(run_dir, cfg, validate_doses: dict | None = None, n_patches
             arrays[f"{var}__dq"] = em["physics"]["dq"]
             arrays["physics_kernel"] = em["physics"]["kernel"]
             meta["kernel_cells"] = em["physics"]["kernel_cells"]
-        meta["levers"][var] = {"channels": chans, "physics": bool(em["physics"]), "validation": val,
+        meta["levers"][var] = {"channels": chans, "physics": bool(em["physics"]), "validation": val, "design_dose": dose,
                                "bounds": list(eng._bounds(var)), "direction": spec.get("direction", "increase")}
         log.info("emulator %s: patch-mean error median %.3f (rel %.0f%%), p95 cell error %.3f, uniform rel %.0f%%",
                  var, val["patch_mean_abs_err_median"], 100 * val["patch_mean_rel_err_median"],

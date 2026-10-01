@@ -119,9 +119,9 @@ def placebo_config(cfg, kind: str, tested: list[str], sds: dict[str, float], dos
 
 def _clean_input(cfg, frame: pd.DataFrame | None = None) -> pd.DataFrame:
     """The input table with the rows ``prepare_frame`` keeps, in its order."""
-    from sparc.core.data import _read_csv
+    from sparc.core.data import read_input
 
-    df = _read_csv(cfg.data_path) if frame is None else frame
+    df = read_input(cfg) if frame is None else frame
     d = cfg.data
     needed = [d["target"], d["x"], d["y"]] + cfg.predictors
     keep = np.isfinite(df[needed].to_numpy(dtype=float)).all(axis=1)

@@ -330,6 +330,21 @@ def prepare_frame(df: pd.DataFrame, cfg: CoreConfig) -> CoreData:
     )
 
 
+def read_input(cfg: CoreConfig) -> pd.DataFrame:
+    """The configured table, with ``data.join`` tables merged by id (e.g. open-data
+    features from ``sparc core features``: ``join: {path: ..., on: OBJECTID}``)."""
+    df = _read_csv(cfg.data_path)
+    for j in cfg.data.get("join") or []:
+        path = cfg.resolve_path(j["path"])
+        extra = pd.read_parquet(path) if str(path).endswith(".parquet") else _read_csv(path)
+        key = j.get("on") or cfg.data.get("id")
+        right = j.get("right_on", "id" if "id" in extra.columns else key)
+        extra = extra.rename(columns={right: key}) if right != key else extra
+        cols = [c for c in extra.columns if c != key and c not in df.columns]
+        df = df.merge(extra[[key] + cols], on=key, how="left")
+    return df
+
+
 def load_core_data(cfg: CoreConfig) -> CoreData:
     """S0: read the configured table and return QA'd, encoded :class:`CoreData`."""
-    return prepare_frame(_read_csv(cfg.data_path), cfg)
+    return prepare_frame(read_input(cfg), cfg)

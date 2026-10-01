@@ -1,0 +1,84 @@
+{
+ "provenance": {
+  "worldcover": "N39W072",
+  "dem": "Copernicus_DSM_COG_10_N41_00_W072_00_DEM",
+  "sentinel2": {
+   "scenes": [
+    "S2A_19TCG_20200716_0_L2A",
+    "S2B_19TCG_20200711_0_L2A",
+    "S2B_19TCG_20200718_0_L2A",
+    "S2B_19TCG_20200728_0_L2A",
+    "S2A_19TBG_20200706_0_L2A",
+    "S2A_19TBG_20200716_0_L2A",
+    "S2A_19TBG_20200726_0_L2A",
+    "S2B_19TBG_20200718_0_L2A",
+    "S2B_19TBG_20200721_0_L2A",
+    "S2B_19TBG_20200728_0_L2A"
+   ],
+   "max_cloud": 20.0,
+   "months": [
+    [
+     2020,
+     7
+    ]
+   ],
+   "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+  }
+ },
+ "agreement": [
+  {
+   "role": "canopy",
+   "city_column": "Pct_Canopy",
+   "pearson_r": 0.7732852247288655,
+   "r2_linear": 0.597970038783972,
+   "spearman": 0.7283270896919017,
+   "city_mean": 27.442096488181207,
+   "open_mean": 27.395684511888017
+  },
+  {
+   "role": "impervious",
+   "city_column": "Pct_Impervious",
+   "pearson_r": 0.7561420771100876,
+   "r2_linear": 0.5717508407763577,
+   "spearman": 0.7161122892964725,
+   "city_mean": 63.635001371090105,
+   "open_mean": 62.60399995335676
+  },
+  {
+   "role": "ndvi",
+   "city_column": "NDVI",
+   "pearson_r": 0.9083678798137267,
+   "r2_linear": 0.825132205077285,
+   "spearman": 0.9082774471736094,
+   "city_mean": 0.19774917638474251,
+   "open_mean": 0.38398209750961565
+  },
+  {
+   "role": "albedo",
+   "city_column": "Albedo",
+   "pearson_r": 0.7829549599403793,
+   "r2_linear": 0.6130184692952411,
+   "spearman": 0.7232286543394614,
+   "city_mean": 0.4019221836377397,
+   "open_mean": 0.15280227480675052
+  },
+  {
+   "role": "elevation",
+   "city_column": "Elevation_m",
+   "pearson_r": 0.9785026148915292,
+   "r2_linear": 0.9574673673495604,
+   "spearman": 0.9740962742476963,
+   "city_mean": 22.428399115189848,
+   "open_mean": 25.14069508644052
+  },
+  {
+   "role": "water_distance",
+   "city_column": "Distance_from_water_m",
+   "pearson_r": 0.4623920593865691,
+   "r2_linear": 0.21380641658375243,
+   "spearman": 0.5183894927548226,
+   "city_mean": 404.2388850295241,
+   "open_mean": 737.4457686903464
+  }
+ ]
+}
