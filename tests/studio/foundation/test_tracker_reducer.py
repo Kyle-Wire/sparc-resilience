@@ -258,3 +258,22 @@ def test_snapshot_plan_is_always_wire_valid():
     assert plan[0]["label"] == "S0" and plan[0]["state"] == "will_run" and plan[1]["state"] == "skipped"
     for node in plan:
         PlanNode.model_validate(node)
+
+
+def test_snapshots_of_a_core_run_are_wire_valid(synth_run_dir):
+    """Every 20th prefix of the recorded core run gives a ``TrackerSnapshot`` the response model accepts."""
+    from sparc.studio.jobs.eta import projection_eta
+    from sparc.studio.schemas.common import TrackerSnapshot
+
+    job = {"id": "j_x", "kind": "run.core", "lane": "heavy", "executor": "process", "label": "Run",
+           "status": "running", "created_utc": "2026-10-01T00:00:00Z"}
+    st = tracker.new_state()
+    checked = 0
+    for i, (cursor, raw) in enumerate(iter_lines(synth_run_dir / "events.jsonl")):
+        tracker.reduce(st, parse_line(raw), cursor)
+        if i % 20 == 0:
+            parts = tracker.snapshot_parts(st, eta=projection_eta(st))
+            TrackerSnapshot.model_validate({"job": job, **parts, "resources": []})
+            checked += 1
+    snap = TrackerSnapshot.model_validate({"job": job, **tracker.snapshot_parts(st), "resources": []})
+    assert checked > 5 and snap.plan and {n.id for n in snap.plan} <= set(tracker.STAGE_IDS)
