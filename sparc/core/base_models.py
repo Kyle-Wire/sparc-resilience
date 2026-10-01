@@ -61,11 +61,13 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
 
+from sparc.core import progress
 from sparc.core.grid import Grid
 
 log = logging.getLogger(__name__)
@@ -315,14 +317,26 @@ class MGWRModel:
                 pred = sum(b[j][te_rows, te_cols] * xs[j][te_rows, te_cols] for j in range(len(names)))
                 return float(np.mean((pred - y[inner_te]) ** 2))
 
+            # One debug tick per score() call (a short backfit); the cancel check after each one bounds
+            # cancel latency inside an MGWR fit to a few seconds at full resolution.
+            n_scores = sum(1 + sum(1 for c in self.candidates if c != mults[n]) for n in names)
+            done = 0
+
+            def scored(value, name, mult):
+                nonlocal done
+                done += 1
+                progress.tick(done, n_scores, unit="mgwr_score", label=f"{name} ×{mult:g}", lvl="debug", mse=value)
+                progress.check_cancel()
+                return value
+
             for n in names:  # one coordinate-wise pass
-                best_mult, best_s = mults[n], score(mults)
+                best_mult, best_s = mults[n], scored(score(mults), n, mults[n])
                 for c in self.candidates:
                     if c == mults[n]:
                         continue
                     trial = dict(mults)
                     trial[n] = c
-                    s = score(trial)
+                    s = scored(score(trial), n, c)
                     if s < best_s:
                         best_s, best_mult = s, c
                 mults[n] = best_mult
@@ -360,6 +374,17 @@ class MGWRModel:
 # ---------------------------------------------------------------------------
 
 
+def _thread_budget(n_jobs: int) -> int:
+    """``n_jobs`` capped by the process thread budget (``OMP_NUM_THREADS``, which ``progress.set_threads`` /
+    ``limit_threads`` and Studio workers set).  With one thread the forests also predict bit-reproducibly:
+    parallel tree predictions are summed in completion order."""
+    try:
+        budget = int(os.environ.get("OMP_NUM_THREADS") or 0)
+    except ValueError:
+        budget = 0
+    return max(1, min(int(n_jobs), budget)) if budget > 0 else int(n_jobs)
+
+
 class GWRFModel:
     name = "gwrf"
 
@@ -390,10 +415,12 @@ class GWRFModel:
         self.anchors = km.cluster_centers_
         tree = cKDTree(ctr)
         self.local_models = []
-        for a in self.anchors:
+        for i, a in enumerate(self.anchors):
+            progress.tick(i + 1, k, unit="gwrf_anchor", lvl="debug")
+            progress.check_cancel()
             _, nn = tree.query(a, k=min(self.local_n, len(train_idx)))
             rf = RandomForestRegressor(n_estimators=self.n_trees, min_samples_leaf=5, max_features=0.6,
-                                       n_jobs=self.n_jobs, random_state=self.seed).fit(Ztr[nn], ytr[nn])
+                                       n_jobs=_thread_budget(self.n_jobs), random_state=self.seed).fit(Ztr[nn], ytr[nn])
             self.local_models.append(rf)
         if k > 1:
             d, _ = cKDTree(self.anchors).query(self.anchors, k=2)
@@ -414,9 +441,11 @@ class GWRFModel:
         w = np.exp(-0.5 * (d / self.anchor_bw) ** 2) + 1e-12
         w = w / w.sum(axis=1, keepdims=True)
         local = np.zeros(ctx.n)
+        jobs = _thread_budget(getattr(self, "n_jobs", 4))
         for a, rf in enumerate(self.local_models):
             rows, slot = np.nonzero(idx == a)
             if rows.size:
+                rf.n_jobs = jobs                     # a runtime setting: fitted trees are unchanged
                 local[rows] += w[rows, slot] * rf.predict(Z[rows])
         return self.local_weight * local + (1.0 - self.local_weight) * g_pred
 

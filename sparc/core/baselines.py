@@ -29,6 +29,8 @@ import logging
 
 import numpy as np
 
+from sparc.core import progress
+
 log = logging.getLogger(__name__)
 
 BASELINES = ("regression_kriging", "hgb_xy", "hgb", "idw", "hgb_focal")
@@ -93,19 +95,24 @@ def baseline_oof(X: np.ndarray, coords: np.ndarray, y: np.ndarray, folds, models
     out = {m: np.full(y.size, np.nan) for m in models}
     for k, (tr, te) in enumerate(folds.split()):
         for m in models:
-            if m == "regression_kriging":
-                p = _regression_kriging(X, coords, y, tr, te, seed + k)
-            elif m == "hgb_xy":
-                p = _hgb(np.column_stack([X, coords]), y, tr, te, seed + k)
-            elif m == "hgb":
-                p = _hgb(X, y, tr, te, seed + k)
-            elif m == "idw":
-                p = _idw(coords, y, tr, te)
-            elif m == "hgb_focal":
-                p = _hgb(np.asarray(XF, float), y, tr, te, seed + k)
-            else:
-                raise ValueError(f"unknown baseline {m!r}")
-            out[m][te] = p
+            progress.check_cancel()
+            with progress.task("baseline_model", key=m, unit=f"baseline_fit:{m}") as sp:
+                if m == "regression_kriging":
+                    p = _regression_kriging(X, coords, y, tr, te, seed + k)
+                elif m == "hgb_xy":
+                    p = _hgb(np.column_stack([X, coords]), y, tr, te, seed + k)
+                elif m == "hgb":
+                    p = _hgb(X, y, tr, te, seed + k)
+                elif m == "idw":
+                    p = _idw(coords, y, tr, te)
+                elif m == "hgb_focal":
+                    p = _hgb(np.asarray(XF, float), y, tr, te, seed + k)
+                else:
+                    raise ValueError(f"unknown baseline {m!r}")
+                out[m][te] = p
+                if te.size:
+                    sp.metrics["heldout_rmse"] = float(np.sqrt(np.mean((p - y[te]) ** 2)))
+        progress.tick(k + 1, folds.n_folds, unit="baseline_fold")
         log.info("baselines: fold %d/%d done", k + 1, folds.n_folds)
     return out
 
@@ -142,6 +149,9 @@ def compare_baselines(X, coords, y, stack_oof, folds, models=BASELINES, seed: in
                else f"best baseline {best} is better than the stack" if rows[best]["baseline_better"]
                else f"stack not distinguishable from {best} (|ΔMSE| ≤ 2 SE)" if not rows[best]["stack_better"]
                else "stack better than the best baseline; not better than every baseline")
+    if not rows[best]["stack_better"]:
+        progress.warn("baselines.stack_not_better", verdict, best_baseline=best,
+                      delta_rmse=rows[best]["delta_rmse"], block_m=float(folds.block_m))
     return {"block_m": float(folds.block_m), "buffer_m": float(folds.buffer_m), "rows": rows,
             "best_baseline": best, "verdict": verdict}
 
@@ -149,14 +159,18 @@ def compare_baselines(X, coords, y, stack_oof, folds, models=BASELINES, seed: in
 def load_run(run_dir, cfg):
     """(data, folds, manifest, predictions) of a finished run, rebuilt without
     the checkpoint: the data from the config (coarse cells if the run was
-    coarse) and the folds from the manifest's CV settings (deterministic)."""
+    coarse) and the folds from the manifest's CV settings (deterministic).
+
+    Runs made from an in-memory table (placebo children) are rebuilt from
+    their ``input_frame.parquet`` instead of ``data.path``: the table they
+    were fitted on differs from the file (shifted, rotated or added layers)."""
     import json
     from pathlib import Path
 
     import pandas as pd
 
     from sparc.core.cv import make_spatial_folds
-    from sparc.core.data import load_core_data
+    from sparc.core.data import load_core_data, prepare_frame
 
     run_dir = Path(run_dir)
     m = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -165,7 +179,11 @@ def load_run(run_dir, cfg):
         cfg.raw["data"]["coarse_m"] = float(co["cell_m"])
     if m.get("qa", {}).get("subsample_window_n") and not cfg.data.get("subsample"):
         cfg.raw["data"]["subsample"] = int(m["qa"]["subsample_window_n"])
-    data = load_core_data(cfg)
+    frame_file = (m.get("provenance") or {}).get("input_frame") or "input_frame.parquet"
+    if (run_dir / frame_file).exists():
+        data = prepare_frame(pd.read_parquet(run_dir / frame_file), cfg)
+    else:
+        data = load_core_data(cfg)
     pred = pd.read_parquet(run_dir / "predictions.parquet")
     if not np.array_equal(pred["id"].to_numpy(), data.ids):
         raise ValueError(f"{run_dir}: predictions do not match the config's data")
@@ -179,19 +197,23 @@ def load_run(run_dir, cfg):
 
 def baselines_for_run(run_dir, cfg, models=BASELINES) -> dict:
     """Score the baselines against a finished run and record them in its
-    manifest (``baselines``) and ``baselines.json``."""
-    import json
+    manifest (``baselines``, via :func:`sparc.core.runio.update_manifest`)
+    and ``baselines.json``."""
     from pathlib import Path
 
+    from sparc.core import runio
     from sparc.core.features import build_context
 
-    data, folds, m, pred = load_run(run_dir, cfg)
     run_dir = Path(run_dir)
-    ranges = (m.get("influence") or {}).get("ranges_m") or {}
-    XF = build_context(data.frame, data, ranges, cfg).XF.to_numpy(float) if ranges else None
-    res = compare_baselines(data.X.to_numpy(float), data.coords, data.y, pred["dT_pred"].to_numpy(float), folds,
-                            models=models, seed=int(cfg.raw["cv"].get("seed", 0)), XF=XF)
-    (run_dir / "baselines.json").write_text(json.dumps(res, indent=1), encoding="utf-8")
-    m["baselines"] = res
-    (run_dir / "manifest.json").write_text(json.dumps(m, indent=1, default=str), encoding="utf-8")
+    with progress.run_dir_scope(run_dir):
+        with progress.task("load_run"):
+            data, folds, m, pred = load_run(run_dir, cfg)
+        ranges = (m.get("influence") or {}).get("ranges_m") or {}
+        XF = build_context(data.frame, data, ranges, cfg).XF.to_numpy(float) if ranges else None
+        res = compare_baselines(data.X.to_numpy(float), data.coords, data.y, pred["dT_pred"].to_numpy(float),
+                                folds, models=models, seed=int(cfg.raw["cv"].get("seed", 0)), XF=XF)
+        runio.write_json_atomic(run_dir / "baselines.json", res, indent=1)
+        progress.artifact(run_dir / "baselines.json", role="baselines")
+        runio.update_manifest(run_dir, {"baselines": res}, source="baselines")
+        progress.artifact(run_dir / "manifest.json", role="manifest")
     return res

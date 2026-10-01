@@ -25,6 +25,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from sparc.core import progress
+
 log = logging.getLogger(__name__)
 
 HRSL = "https://dataforgood-fb-data.s3.amazonaws.com/hrsl-cogs/{layer}/{layer}-latest.vrt"
@@ -139,15 +141,19 @@ def fetch_layers(data, cfg, hrsl=HRSL_LAYERS, worldcover: bool = True) -> pd.Dat
     b = _bounds(lon, lat)
     out = {"id": data.ids, "x_m": data.x, "y_m": data.y_coord}
     for name, layer in (hrsl or {}).items():
-        arr, tr, nod = read_window(HRSL.format(layer=layer), b)
-        arr = np.where(np.isfinite(arr), arr, 0.0)
-        out[name] = raster_to_points(arr, tr, data, cfg, mode="sum", sub=3)["sum"]
+        progress.check_cancel()
+        with progress.task("remote_object", key=f"hrsl:{layer}", unit="remote_object"):
+            arr, tr, nod = read_window(HRSL.format(layer=layer), b)
+            arr = np.where(np.isfinite(arr), arr, 0.0)
+            out[name] = raster_to_points(arr, tr, data, cfg, mode="sum", sub=3)["sum"]
         log.info("layers: %s total %.0f", name, out[name].sum())
     if worldcover:
         tiles = worldcover_tiles(b)
         if len(tiles) != 1:
             raise NotImplementedError(f"study area spans several WorldCover tiles {tiles}")
-        arr, tr, nod = read_window(WORLDCOVER.format(tile=tiles[0]), b)
+        progress.check_cancel()
+        with progress.task("remote_object", key=f"worldcover:{tiles[0]}", unit="remote_object"):
+            arr, tr, nod = read_window(WORLDCOVER.format(tile=tiles[0]), b)
         fr = raster_to_points(arr, tr, data, cfg, mode="fractions", classes=WC_CLASSES, sub=1, nodata=0)
         for k, v in fr.items():
             out[f"lc_{k}"] = v
@@ -165,6 +171,8 @@ def load_layers(cfg, data) -> pd.DataFrame | None:
     p = cfg.resolve_path(path)
     if not Path(p).exists():
         log.warning("planner layers %s not found (run `sparc core layers`)", p)
+        progress.warn("layers.missing", f"planner layers {p} not found (fetch people and land cover first)",
+                      path=str(p))
         return None
     lay = pd.read_parquet(p)
     co = (data.qa or {}).get("coarse")
@@ -186,5 +194,7 @@ def load_layers(cfg, data) -> pd.DataFrame | None:
         return lay
     lay = lay.set_index("id").reindex(data.ids)
     if lay.isna().all(axis=1).any():
-        log.warning("planner layers: %d points have no layer values", int(lay.isna().all(axis=1).sum()))
+        n_empty = int(lay.isna().all(axis=1).sum())
+        log.warning("planner layers: %d points have no layer values", n_empty)
+        progress.warn("layers.empty_points", f"{n_empty} points have no layer values", n_points=n_empty)
     return lay.reset_index()

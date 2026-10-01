@@ -4,15 +4,27 @@
     sparc core forcing --project configs/core_providence.yml --date 2020-07-18 --hours 15-16 \
                        --station 72507014765 --out configs/forcing/providence_2020-07-18.json
     sparc core synth --out output/core/synthetic_city.csv [--seed 0]
+    sparc core studio [...]                         (SPARC Studio; same as `sparc studio`)
     python -m sparc.core run --project ...          (same, without the legacy CLI)
+
+Every subcommand takes ``--progress PATH`` (structured progress events, as
+``SPARC_PROGRESS``) and ``--job-id``.  A first SIGTERM / Ctrl-C stops at the
+next safe point, a second one at once; a cancelled command exits with 130.
 """
 
 from __future__ import annotations
 
 import argparse
+import functools
 import logging
+import os
 import sys
 from pathlib import Path
+
+EXIT_CANCELLED = 130
+STUDIO_INSTALL_HINT = 'pip install "sparc[studio]"'
+# Studio's server dependencies: any of them missing means "not installed" (the core CI has none of them)
+STUDIO_DEPS = ("fastapi", "starlette", "uvicorn", "threadpoolctl")
 
 
 def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
@@ -157,7 +169,75 @@ def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
     p_syn.add_argument("--seed", type=int, default=0)
     p_syn.set_defaults(func=cmd_core_synth)
 
+    for p in subs.choices.values():
+        _add_progress_args(p)
 
+    # Listed for --help only: `studio` argv is handed to Studio before argparse runs (run_studio)
+    p_st = subs.add_parser("studio", add_help=False,
+                           help=f"SPARC Studio, the local web app (same as `sparc studio`; {STUDIO_INSTALL_HINT})")
+    p_st.add_argument("studio_argv", nargs=argparse.REMAINDER)
+    p_st.set_defaults(func=cmd_core_studio)
+
+
+def _add_progress_args(p: argparse.ArgumentParser) -> None:
+    g = p.add_argument_group("progress (SPARC Studio)")
+    g.add_argument("--progress", metavar="PATH", default=None,
+                   help="append structured progress events (JSON lines) to PATH; same as SPARC_PROGRESS=PATH")
+    g.add_argument("--job-id", default=None, help="job id stamped on every progress event (SPARC_JOB_ID)")
+
+
+def tracked_command(fn):
+    """Wrap a ``cmd_*`` handler for progress and cancellation.
+
+    Applies ``--progress`` / ``--job-id`` to the environment (so pool workers
+    inherit them), calls ``progress.configure_from_env()`` and
+    ``progress.install_signal_handlers()``, and turns ``Cancelled`` into exit
+    code 130.
+    """
+
+    @functools.wraps(fn)
+    def run(args) -> int:
+        from sparc.core import progress
+
+        if getattr(args, "progress", None):
+            os.environ[progress.ENV_SINK] = os.path.abspath(args.progress)
+        if getattr(args, "job_id", None):
+            os.environ[progress.ENV_JOB] = str(args.job_id)
+        progress.configure_from_env()
+        progress.install_signal_handlers()
+        try:
+            return int(fn(args) or 0)
+        except progress.Cancelled:
+            print("cancelled", file=sys.stderr)
+            return EXIT_CANCELLED
+
+    return run
+
+
+def run_studio(argv) -> int:
+    """Hand ``argv`` verbatim to ``sparc.studio.cli.main`` (imported lazily).
+
+    Prints the install hint and returns 2 when ``sparc.studio`` or one of its
+    server dependencies cannot be imported.
+    """
+    import importlib
+
+    try:
+        studio_cli = importlib.import_module("sparc.studio.cli")
+        for dep in STUDIO_DEPS:
+            importlib.import_module(dep)
+    except ImportError as exc:
+        print(f"SPARC Studio is not available ({exc}).", file=sys.stderr)
+        print(f"Install it with:  {STUDIO_INSTALL_HINT}", file=sys.stderr)
+        return 2
+    return int(studio_cli.main(list(argv)) or 0)
+
+
+def cmd_core_studio(args) -> int:
+    return run_studio(args.studio_argv)
+
+
+@tracked_command
 def cmd_core_run(args) -> int:
     from sparc.core.pipeline import ALL_STAGES, run_core
 
@@ -180,6 +260,7 @@ def cmd_core_run(args) -> int:
     return 0
 
 
+@tracked_command
 def cmd_core_baselines(args) -> int:
     from sparc.core.baselines import baselines_for_run
     from sparc.core.config import load_core_config
@@ -194,6 +275,7 @@ def cmd_core_baselines(args) -> int:
     return 0
 
 
+@tracked_command
 def cmd_core_placebo(args) -> int:
     import json
 
@@ -219,10 +301,14 @@ def cmd_core_placebo(args) -> int:
     return 0
 
 
+@tracked_command
 def cmd_core_reproduce(args) -> int:
     from sparc.core.pipeline import ALL_STAGES
     from sparc.core.reproduce import reproduce
 
+    if not (Path(args.run_dir) / "manifest.json").is_file():
+        print(f"ERROR: {args.run_dir} is not a run directory (no manifest.json)", file=sys.stderr)
+        return 2
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
     if args.threads:
         import torch
@@ -237,6 +323,7 @@ def cmd_core_reproduce(args) -> int:
     return 0 if out["pass"] else 1
 
 
+@tracked_command
 def cmd_core_simcheck(args) -> int:
     from sparc.core.config import load_core_config
     from sparc.core.simcheck import run_simcheck, simcheck_markdown
@@ -249,6 +336,7 @@ def cmd_core_simcheck(args) -> int:
     return 0
 
 
+@tracked_command
 def cmd_core_simcheck_summary(args) -> int:
     import json
 
@@ -265,6 +353,7 @@ def cmd_core_simcheck_summary(args) -> int:
     return 0
 
 
+@tracked_command
 def cmd_core_multiverse(args) -> int:
     from sparc.core.config import load_core_config
     from sparc.core.multiverse import multiverse_markdown, run_multiverse
@@ -280,6 +369,7 @@ def cmd_core_multiverse(args) -> int:
     return 0
 
 
+@tracked_command
 def cmd_core_uncertainty(args) -> int:
     from sparc.core.uncertainty import uncertainty_markdown, uncertainty_report
 
@@ -288,6 +378,7 @@ def cmd_core_uncertainty(args) -> int:
     return 0
 
 
+@tracked_command
 def cmd_core_layers(args) -> int:
     from sparc.core.config import load_core_config
     from sparc.core.data import load_core_data
@@ -305,6 +396,7 @@ def cmd_core_layers(args) -> int:
     return 0
 
 
+@tracked_command
 def cmd_core_planner(args) -> int:
     import json
 
@@ -319,6 +411,7 @@ def cmd_core_planner(args) -> int:
     return 0
 
 
+@tracked_command
 def cmd_core_emulator(args) -> int:
     from sparc.core.config import load_core_config
     from sparc.core.emulator import emulator_for_run
@@ -332,6 +425,7 @@ def cmd_core_emulator(args) -> int:
     return 0
 
 
+@tracked_command
 def cmd_core_features(args) -> int:
     import json
 
@@ -363,6 +457,7 @@ def cmd_core_features(args) -> int:
     return 0
 
 
+@tracked_command
 def cmd_core_writeup(args) -> int:
     import json
 
@@ -376,6 +471,7 @@ def cmd_core_writeup(args) -> int:
     return 0
 
 
+@tracked_command
 def cmd_core_forcing(args) -> int:
     import json
 
@@ -405,6 +501,7 @@ def cmd_core_forcing(args) -> int:
     return 0
 
 
+@tracked_command
 def cmd_core_benchmark(args) -> int:
     import json
 
@@ -425,6 +522,7 @@ def cmd_core_benchmark(args) -> int:
     return 0
 
 
+@tracked_command
 def cmd_core_climate(args) -> int:
     from sparc.core.climate import cmip6_change_factors
 
@@ -443,6 +541,7 @@ def cmd_core_climate(args) -> int:
     return 0
 
 
+@tracked_command
 def cmd_core_synth(args) -> int:
     import json
 
@@ -459,6 +558,9 @@ def cmd_core_synth(args) -> int:
 
 
 def main(argv=None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["studio"]:
+        return run_studio(argv[1:])
     parser = argparse.ArgumentParser(prog="python -m sparc.core", description="SPARC core pipeline")
     add_core_subparsers(parser)
     args = parser.parse_args(argv)

@@ -12,6 +12,8 @@ Usage
     sparc report   --project project.yml
     sparc server   [--port 8008] [--dev]
     sparc desktop  [--port 8008]
+    sparc core     run --project configs/core_providence.yml   (the core S0–S7 pipeline)
+    sparc studio   [...]                                       (SPARC Studio; pip install "sparc[studio]")
 
 If the package is **not** pip-installed you can also run::
 
@@ -1189,6 +1191,34 @@ def cmd_audit_causal(args):
         sys.exit(1)
 
 
+def cmd_studio(args):
+    """SPARC Studio (normally reached through the pre-argparse dispatch in ``main``)."""
+    from sparc.core.cli import run_studio
+    return run_studio(args.studio_argv)
+
+
+def _studio_argv(argv):
+    """Studio's argv when the command is ``studio`` or ``core studio``, else None.
+
+    Leading ``--verbosity``/``-V`` options are skipped; anything else before
+    the command (``-h``) is left to argparse.
+    """
+    i = 0
+    while i < len(argv) and argv[i].startswith('-'):
+        if argv[i] in ('--verbosity', '-V'):
+            i += 2
+        elif argv[i].startswith('--verbosity=') or (argv[i].startswith('-V') and len(argv[i]) > 2):
+            i += 1
+        else:
+            return None
+    rest = argv[i:]
+    if rest[:1] == ['studio']:
+        return rest[1:]
+    if rest[:2] == ['core', 'studio']:
+        return rest[2:]
+    return None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog='sparc',
@@ -1262,8 +1292,16 @@ def build_parser() -> argparse.ArgumentParser:
         'core',
         help='Core pipeline: influence → GW base models + physics → stacker → saturation → scenarios → causal audit → budget',
     )
-    from sparc.core.cli import add_core_subparsers
+    from sparc.core.cli import STUDIO_INSTALL_HINT, add_core_subparsers
     add_core_subparsers(p_core)
+
+    # --- studio --- (listed for --help; main() hands `studio ...` to Studio before argparse)
+    p_studio = subparsers.add_parser(
+        'studio', add_help=False,
+        help=f'SPARC Studio, the local web app for the core pipeline ({STUDIO_INSTALL_HINT})',
+    )
+    p_studio.add_argument('studio_argv', nargs=argparse.REMAINDER)
+    p_studio.set_defaults(func=cmd_studio)
 
     p_audit = subparsers.add_parser(
         'audit', help='Causal-inference audit utilities (Wager 2025).',
@@ -1340,9 +1378,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main():
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    # `sparc studio ...` and `sparc core studio ...` reach Studio's own parser verbatim (--help included)
+    studio_argv = _studio_argv(argv)
+    if studio_argv is not None:
+        from sparc.core.cli import run_studio
+        sys.exit(run_studio(studio_argv))
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     # Install verbosity filter before any subcommand prints. The CLI flag
     # wins over the env var; if neither is set, default is "normal".
     # Skip for utility commands (init, validate, report, audit) — they use
@@ -1354,6 +1398,9 @@ def main():
             _install_verbosity(getattr(args, 'verbosity', None) or os.environ.get('SPARC_VERBOSITY'))
         except Exception:
             pass  # Verbosity is a UX nicety -- never block the pipeline on it.
+    if args.command in ('core', 'studio'):
+        # Exit codes propagate (130 = cancelled); the legacy commands below keep their behaviour.
+        sys.exit(args.func(args) or 0)
     try:
         args.func(args)
     except Exception as exc:

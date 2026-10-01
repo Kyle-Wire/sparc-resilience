@@ -1,0 +1,79 @@
+/* Design tokens (SPEC §12.7). Surfaces, ink, accents and semantic colours are ported from
+   scripts/results_page/template.html; --nodata, --hatch, the --st-* status tokens and --demo
+   are new. Canvas renderers read the same values from theme/palette.ts THEME_COLORS. */
+:root {
+  --page: #f5f6f4;
+  --surface: #fcfcfb;
+  --surface-2: #f0f1ee;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #7a7974;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --line: rgba(11, 11, 11, 0.10);
+  --line-strong: rgba(11, 11, 11, 0.22);
+  --accent: #2a78d6;
+  --accent-ink: #1c5cab;
+  --on-accent: #ffffff;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a;
+  --gray-mark: #b9b8b1;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+  --good-ink: #006300; --warn-ink: #8a5a00; --serious-ink: #9c4a1f; --crit-ink: #a8282a;
+  --chip: #eceeea;
+  --shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+
+  --nodata: #e4e4df;
+  --hatch: #52514e;
+  --demo: #8a5a00;
+  --demo-bg: #fdf1d6;
+
+  --st-queued: #7a7974;
+  --st-running: #2a78d6;
+  --st-done: #006300;
+  --st-cached: #5b6f86;
+  --st-skipped: #9a998f;
+  --st-failed: #a8282a;
+  --st-cancelled: #8a5a00;
+  --st-interrupted: #9c4a1f;
+  --st-stale: #8a5a00;
+  --st-blocked: #7a4fb0;
+
+  --font-display: "Archivo", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  --radius: 10px;
+  --radius-sm: 8px;
+  --gutter: 20px;
+  --sidebar-w: 232px;
+  --topbar-h: 52px;
+  --content-max: 1440px;
+  --content-min: 1120px;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page: #0f100f; --surface: #1a1a19; --surface-2: #222220; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #9a998f;
+    --grid: #2c2c2a; --axis: #383835; --line: rgba(255, 255, 255, 0.10); --line-strong: rgba(255, 255, 255, 0.24);
+    --accent: #3987e5; --accent-ink: #86b6ef; --on-accent: #ffffff; --s1: #3987e5; --s2: #d95926; --s3: #199e70; --gray-mark: #5e5d58;
+    --good-ink: #0ca30c; --warn-ink: #fab219; --serious-ink: #ec835a; --crit-ink: #e66767; --chip: #242423;
+    --shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+    --nodata: #2a2a28; --hatch: #c3c2b7; --demo: #fab219; --demo-bg: #3a2f12;
+    --st-queued: #9a998f; --st-running: #86b6ef; --st-done: #3fbf3f; --st-cached: #9fb3cc; --st-skipped: #7f7e76;
+    --st-failed: #e66767; --st-cancelled: #fab219; --st-interrupted: #ec835a; --st-stale: #fab219; --st-blocked: #b89be0;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --page: #0f100f; --surface: #1a1a19; --surface-2: #222220; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #9a998f;
+  --grid: #2c2c2a; --axis: #383835; --line: rgba(255, 255, 255, 0.10); --line-strong: rgba(255, 255, 255, 0.24);
+  --accent: #3987e5; --accent-ink: #86b6ef; --on-accent: #ffffff; --s1: #3987e5; --s2: #d95926; --s3: #199e70; --gray-mark: #5e5d58;
+  --good-ink: #0ca30c; --warn-ink: #fab219; --serious-ink: #ec835a; --crit-ink: #e66767; --chip: #242423;
+  --shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  --nodata: #2a2a28; --hatch: #c3c2b7; --demo: #fab219; --demo-bg: #3a2f12;
+  --st-queued: #9a998f; --st-running: #86b6ef; --st-done: #3fbf3f; --st-cached: #9fb3cc; --st-skipped: #7f7e76;
+  --st-failed: #e66767; --st-cancelled: #fab219; --st-interrupted: #ec835a; --st-stale: #fab219; --st-blocked: #b89be0;
+  color-scheme: dark;
+}

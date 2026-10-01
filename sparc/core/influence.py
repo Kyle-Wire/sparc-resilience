@@ -74,6 +74,7 @@ import pandas as pd
 from scipy import fft as sfft
 
 from sparc.core import operators as ops
+from sparc.core import progress
 from sparc.core.grid import Grid
 
 log = logging.getLogger(__name__)
@@ -526,6 +527,8 @@ def fit_ring_profile(resid_raster: np.ndarray, x_raster: np.ndarray, mask: np.nd
     zeros = np.zeros(M)
     if rows.sum() < M + K + 10:
         log.warning("ring_influence: only %d usable cells; returning the own-cell range", int(rows.sum()))
+        progress.warn("influence.few_cells", f"only {int(rows.sum())} usable cells for the ring regression; "
+                      "the predictor gets the own-cell range", n_cells=int(rows.sum()), min_cells=int(M + K + 10))
         return RingFit(own, zeros, zeros, edges, "none", 0.0, 0.0, float("inf"), False, float("nan"), K)
 
     Z = np.concatenate([F[:, rows], C[:, rows]], axis=0).T
@@ -860,6 +863,8 @@ def compute_influence(data, cfg_influence: dict | None, residual: np.ndarray | N
         xm = mask & np.isfinite(x_rast)
         if xm.sum() < 10 or np.nanstd(x_rast[xm]) == 0:
             log.warning("influence: predictor %r is constant or empty; range set to the minimum", c)
+            progress.warn("influence.constant_predictor", f"predictor {c!r} is constant or empty; its influence range "
+                          "is set to the minimum", predictor=c, range_m=r_lo)
             ranges[c], betas[c] = r_lo, []
             continue
         tgt = grid.rasterize(partial[c]) if c in partial else r_rast

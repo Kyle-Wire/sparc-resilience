@@ -1,0 +1,17 @@
+# Re-include this project's sources in case a user-level or parent ignore file
+# excludes common web paths (`src`, `index.html`, `package.json`, `tsconfig.json`,
+# `vite.config.ts`, `assets`, `public`) at any depth.
+!src
+!index.html
+!package.json
+!tsconfig.json
+!vite.config.ts
+!assets
+!public
+
+node_modules/
+dist/
+coverage/
+.vite/
+*.local
+*.tsbuildinfo

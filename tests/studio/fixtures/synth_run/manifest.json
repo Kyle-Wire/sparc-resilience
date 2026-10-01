@@ -1,0 +1,3034 @@
+{
+  "name": "synthetic_demo",
+  "created_utc": "2026-10-01T21:21:49+00:00",
+  "git_commit": "5a04f44",
+  "versions": {
+    "python": "3.11.15",
+    "numpy": "1.26.4",
+    "pandas": "3.0.6",
+    "scipy": "1.16.3",
+    "sklearn": "1.5.2",
+    "torch": "2.14.0+cu130"
+  },
+  "fast_mode": true,
+  "config": {
+    "name": "synthetic_demo",
+    "data": {
+      "path": "data/city.csv",
+      "target": "T",
+      "target_units": "degF",
+      "id": "id",
+      "x": "x",
+      "y": "y",
+      "coord_unit": "m",
+      "crs": "EPSG:32619",
+      "reproject_to": null,
+      "background": "median",
+      "subsample": 8000,
+      "cell_m": null,
+      "coarse_m": null,
+      "join": [],
+      "zone": null
+    },
+    "predictors": [
+      "canopy",
+      "impervious",
+      "albedo",
+      "ndvi",
+      "elevation",
+      "water_dist"
+    ],
+    "encodings": {
+      "categorical": [],
+      "circular_degrees": []
+    },
+    "qa": {
+      "clip": {
+        "canopy": [
+          0,
+          100
+        ],
+        "impervious": [
+          0,
+          100
+        ],
+        "albedo": [
+          0.02,
+          0.9
+        ]
+      }
+    },
+    "actionable": {
+      "canopy": {
+        "min": 0,
+        "max": 100,
+        "doses": [
+          0,
+          5,
+          10,
+          15,
+          20,
+          30,
+          40
+        ],
+        "cost_per_unit": 1.0,
+        "direction": "increase",
+        "unit": "pp"
+      },
+      "impervious": {
+        "min": 0,
+        "max": 100,
+        "doses": [
+          0,
+          5,
+          10,
+          20
+        ],
+        "direction": "decrease",
+        "unit": "pp"
+      },
+      "albedo": {
+        "min": 0.02,
+        "max": 0.9,
+        "doses": [
+          0,
+          0.05,
+          0.1,
+          0.15,
+          0.2
+        ],
+        "direction": "increase",
+        "unit": "albedo"
+      }
+    },
+    "coupling": [],
+    "mediators": {
+      "ndvi": {
+        "parents": [
+          "canopy",
+          "impervious"
+        ],
+        "context": [
+          "elevation"
+        ],
+        "monotone": {
+          "canopy": 1,
+          "impervious": -1
+        }
+      }
+    },
+    "physics": {
+      "enabled": true,
+      "window": "day",
+      "sw_down": 800.0,
+      "lw_net": -100.0,
+      "forcing": null,
+      "roles": {
+        "albedo": "albedo",
+        "canopy": "canopy",
+        "impervious": "impervious",
+        "ndvi": "ndvi",
+        "elevation": "elevation",
+        "water_distance": "water_dist"
+      },
+      "wind": [
+        0.03333333333333333,
+        0.0
+      ],
+      "tau_s": 1800.0,
+      "L_max_m": 2000.0,
+      "v_max_m": 1000.0,
+      "fit_advection": "auto",
+      "select_advection": true,
+      "max_iter": 60
+    },
+    "influence": {
+      "max_lag_m": 2000.0,
+      "n_rings": 10,
+      "n_perm": 9,
+      "scales": [
+        0.5,
+        1.0,
+        2.0
+      ],
+      "mass": 0.9
+    },
+    "cv": {
+      "n_folds": 3,
+      "block_m": "auto",
+      "buffer_m": "auto",
+      "seed": 42,
+      "distance_curve": {
+        "enabled": false,
+        "block_m": [
+          0,
+          500,
+          1000
+        ]
+      },
+      "baselines": [
+        "hgb_xy",
+        "hgb_focal",
+        "idw"
+      ]
+    },
+    "models": {
+      "ols": true,
+      "mgwr": true,
+      "gwrf": true,
+      "gam": true,
+      "physics": true,
+      "spatial_plus": []
+    },
+    "stacker": {
+      "hidden": 64,
+      "physics_mode": "feature",
+      "epochs": 200,
+      "lr": 0.003,
+      "weight_decay": 0.0001,
+      "lambda_pde": 1.0,
+      "tune_lambda": [
+        0.0,
+        0.1
+      ],
+      "use_features": true,
+      "val_fraction": 0.25,
+      "eval_every": 10,
+      "patience": 10,
+      "min_gain": 0.01,
+      "allow_residual_off": true,
+      "coverage": 0.9,
+      "seed": 0
+    },
+    "response": {
+      "min_valid_doses": 4,
+      "ds_grid": 32
+    },
+    "scenarios": [
+      {
+        "name": "Canopy Increase",
+        "variable": "canopy",
+        "direction": "increase",
+        "increments": [
+          5,
+          10,
+          20
+        ]
+      },
+      {
+        "name": "Impervious Decrease",
+        "variable": "impervious",
+        "direction": "decrease",
+        "increments": [
+          10,
+          20
+        ]
+      },
+      {
+        "name": "Albedo Increase",
+        "variable": "albedo",
+        "direction": "increase",
+        "increments": [
+          0.05,
+          0.1
+        ]
+      }
+    ],
+    "joint_scenarios": [
+      {
+        "name": "Cooling package",
+        "interventions": [
+          {
+            "variable": "canopy",
+            "direction": "increase",
+            "increment": 10
+          },
+          {
+            "variable": "impervious",
+            "direction": "decrease",
+            "increment": 10
+          },
+          {
+            "variable": "albedo",
+            "direction": "increase",
+            "increment": 0.05
+          }
+        ]
+      }
+    ],
+    "causal": {
+      "enabled": true,
+      "treatments": [
+        "canopy"
+      ],
+      "confounders": {
+        "canopy": [
+          "impervious",
+          "albedo",
+          "elevation",
+          "water_dist"
+        ]
+      },
+      "exclude_controls": {},
+      "contrast": {
+        "canopy": 10
+      },
+      "spatial_basis_scale_m": "auto",
+      "n_boot": 200,
+      "dag_audit": false
+    },
+    "climate": {
+      "enabled": true,
+      "source": "table",
+      "table": "inputs/climate/demo_cmip6.csv",
+      "site": null,
+      "experiments": [
+        "ssp126",
+        "ssp245",
+        "ssp370",
+        "ssp585"
+      ],
+      "periods": {
+        "2021-2040": [
+          2021,
+          2040
+        ],
+        "2041-2060": [
+          2041,
+          2060
+        ],
+        "2081-2100": [
+          2081,
+          2100
+        ]
+      },
+      "months": [
+        6,
+        7,
+        8
+      ],
+      "variable": "tasmax",
+      "thresholds": null,
+      "adaptation": null,
+      "cache": "cache"
+    },
+    "optimize": {
+      "enabled": true,
+      "variable": "canopy",
+      "budget": 2000.0,
+      "cost_per_unit": 1.0,
+      "plantable": true,
+      "objective": "cooling",
+      "equity_column": null,
+      "equity_focus": 0.0
+    },
+    "output": {
+      "dir": "runs",
+      "scenario_detail": true
+    },
+    "planner": {
+      "layers": "inputs/layers/demo_layers.parquet"
+    },
+    "report": {
+      "title": "Synthetic city (DEMO)",
+      "place": "a fictional city (synthetic data)"
+    }
+  },
+  "qa": {
+    "n_input": 1120,
+    "n_dropped_nonfinite": 0,
+    "subsample_window_n": 1120,
+    "clipped": {},
+    "target_fraction_integer_valued": 0.0008928571428571428,
+    "target_fraction_half_valued": 0.0026785714285714286,
+    "target_fractional_histogram": [
+      0.09910714285714285,
+      0.08660714285714285,
+      0.07589285714285714,
+      0.08839285714285715,
+      0.07857142857142857,
+      0.09732142857142857,
+      0.11964285714285715,
+      0.12857142857142856,
+      0.13303571428571428,
+      0.09285714285714286
+    ],
+    "target_n_unique": 881,
+    "target_rounding_noise_sd": 0.008625819491779428,
+    "cell_m": 30.0,
+    "grid_shape": [
+      42,
+      42
+    ],
+    "grid_fill_fraction": 0.6349206349206349,
+    "cell_collisions": 0.0,
+    "background_source": "field_median",
+    "background": 87.919,
+    "dose_scale": {
+      "canopy": {
+        "sd": 18.405292317197734,
+        "doses": [
+          5.0,
+          10.0,
+          15.0,
+          20.0,
+          30.0,
+          40.0
+        ],
+        "doses_in_sd": [
+          0.2716609936875627,
+          0.5433219873751254,
+          0.8149829810626881,
+          1.0866439747502508,
+          1.6299659621253761,
+          2.1732879495005015
+        ],
+        "median_cell_to_percentile": [
+          57.410714285714285,
+          65.17857142857143,
+          72.32142857142857,
+          79.82142857142858,
+          98.39285714285714,
+          100.0
+        ]
+      },
+      "impervious": {
+        "sd": 21.995624857198525,
+        "doses": [
+          5.0,
+          10.0,
+          20.0
+        ],
+        "doses_in_sd": [
+          0.2273179340192123,
+          0.4546358680384246,
+          0.9092717360768492
+        ],
+        "median_cell_to_percentile": [
+          44.19642857142857,
+          37.857142857142854,
+          23.660714285714285
+        ]
+      },
+      "albedo": {
+        "sd": 0.060185476571766046,
+        "doses": [
+          0.05,
+          0.1,
+          0.15,
+          0.2
+        ],
+        "doses_in_sd": [
+          0.8307652086193796,
+          1.6615304172387593,
+          2.4922956258581386,
+          3.3230608344775185
+        ],
+        "median_cell_to_percentile": [
+          78.92857142857143,
+          92.41071428571429,
+          100.0,
+          100.0
+        ]
+      }
+    },
+    "flags": [
+      {
+        "code": "cover_overlap",
+        "severity": "info",
+        "message": "canopy + impervious exceeds 100% on 13% of cells (canopy overhanging pavement), so no sum constraint is imposed between them."
+      },
+      {
+        "code": "dose_scale_albedo",
+        "severity": "info",
+        "message": "albedo doses 0.2 exceed 3 sd of the layer (sd 0.0602); their effects lean on extrapolation (see the scenarios' extrapolated share)."
+      },
+      {
+        "code": "window",
+        "severity": "info",
+        "message": "Fast window: only 1,120 points around the centre \u2014 a smoke-test extent, too small for the spatial-block CV to mean what it does on the full area."
+      }
+    ]
+  },
+  "n_points": 1120,
+  "timings_s": {
+    "S0": 0.02,
+    "S1": 1.94,
+    "S2_S3": 15.43,
+    "baselines": 1.61,
+    "S4": 5.47,
+    "S5": 1.5,
+    "S6": 5.14,
+    "S7": 0.19
+  },
+  "provenance": {
+    "input_sha256": "4bfb0ca0ba3bb0dae1afea03e2d761d9657b5e7915cc046d5d56506819e79cbc",
+    "input_kind": "file",
+    "data_path": "data/city.csv",
+    "config_dir": "/tmp/sparc-fixture/project",
+    "config_sha256": "58f0d8cabbf39f4b04f04e8228033ad8690490d470cd21beeb42c4dbaf2f6c3a",
+    "code_sha256": "9ef8fac0551ae9655ab83bffaa4650667cf5d07745c6ab264d8ad64d72b61245",
+    "git": {
+      "commit": "5a04f4472c57375b762fef21344d0a99a686dfd2",
+      "core_dirty": true
+    },
+    "platform": {
+      "python": "3.11.15",
+      "system": "Linux",
+      "machine": "x86_64"
+    },
+    "lock_file": "environment.txt"
+  },
+  "influence": {
+    "ranges_m": {
+      "canopy": 315.0,
+      "impervious": 315.0,
+      "albedo": 60.0,
+      "ndvi": 315.0,
+      "elevation": 305.82057928792074,
+      "water_dist": 60.0
+    },
+    "target_resid_range_m": 630.0,
+    "L_prior_m": 222.73863607376245,
+    "block_size_m": 630.0,
+    "anisotropy": {
+      "target": {
+        "ratio": 0.6940195746035569,
+        "theta_deg": 179.2124116674951,
+        "ci_width_deg": 201.05792974380046,
+        "reliable": false,
+        "ranges_m": {
+          "0.0": 914.9197999429016,
+          "45.0": 715.6907592375837,
+          "90.0": 629.8663838073761,
+          "135.0": 722.4692044296057
+        },
+        "ratio_boot_sd": 0.2504496100169318,
+        "n_boot": 19
+      },
+      "canopy": {
+        "ratio": 0.2790972359089554,
+        "theta_deg": 127.86744919658506,
+        "ci_width_deg": 104.56894066506013,
+        "reliable": false,
+        "ranges_m": {
+          "0.0": 295.02963662184743,
+          "45.0": 250.46569499285022,
+          "90.0": 360.73598808641333,
+          "135.0": 1010.8643362476506
+        },
+        "ratio_boot_sd": 0.28154025722220843,
+        "n_boot": 19
+      },
+      "impervious": {
+        "ratio": 0.6411440801596454,
+        "theta_deg": 161.65808447285377,
+        "ci_width_deg": 83.13758589702167,
+        "reliable": false,
+        "ranges_m": {
+          "0.0": 633.2741440004681,
+          "45.0": 449.028223691682,
+          "90.0": 442.8330991595528,
+          "135.0": 575.5822329670372
+        },
+        "ratio_boot_sd": 0.13527068483189994,
+        "n_boot": 19
+      },
+      "albedo": {
+        "ratio": 0.6793759931907369,
+        "theta_deg": 151.727758293309,
+        "ci_width_deg": 94.43489904863452,
+        "reliable": false,
+        "ranges_m": {
+          "0.0": 361.20316146135343,
+          "45.0": 223.90070193800832,
+          "90.0": 277.40462461753486,
+          "135.0": 290.1179950781763
+        },
+        "ratio_boot_sd": 0.09434804319731074,
+        "n_boot": 19
+      },
+      "ndvi": {
+        "ratio": 0.0,
+        "theta_deg": 134.59592575433578,
+        "ci_width_deg": 115.08685408246032,
+        "reliable": false,
+        "ranges_m": {
+          "0.0": 431.64116523938543,
+          "45.0": 287.0156576266206,
+          "90.0": 438.50182289334674,
+          "135.0": 1751.7336644707614
+        },
+        "ratio_boot_sd": 0.28691303266899326,
+        "n_boot": 19
+      },
+      "elevation": {
+        "ratio": 0.954463128335432,
+        "theta_deg": 123.39474910890108,
+        "ci_width_deg": 165.73983062018524,
+        "reliable": false,
+        "ranges_m": {
+          "0.0": 827.6380664601622,
+          "45.0": 726.3922562517067,
+          "90.0": 845.114470413503,
+          "135.0": 754.6657086997286
+        },
+        "ratio_boot_sd": 0.34146202853718804,
+        "n_boot": 19
+      },
+      "water_dist": {
+        "ratio": 0.46651199838927293,
+        "theta_deg": 19.962699274619837,
+        "ci_width_deg": 132.6909370166587,
+        "reliable": false,
+        "ranges_m": {
+          "0.0": 1326.02132849775,
+          "45.0": 834.4823322291544,
+          "90.0": 649.1359937497127,
+          "135.0": 582.6028395020714
+        },
+        "ratio_boot_sd": 0.21364494697467137,
+        "n_boot": 19
+      }
+    }
+  },
+  "cv": {
+    "n_folds": 3,
+    "block_m": 390.0,
+    "buffer_m": 130.0,
+    "test_sizes": [
+      373,
+      375,
+      372
+    ],
+    "n_blocks": 16
+  },
+  "metrics": {
+    "ols": {
+      "rmse": 1.0482362748194787,
+      "mae": 0.7758586536812723,
+      "r2": -0.7389231556428568,
+      "bias": 0.46338410822102005,
+      "n": 1120
+    },
+    "mgwr": {
+      "rmse": 0.9312787344475938,
+      "mae": 0.7164807895893808,
+      "r2": -0.37252857038217035,
+      "bias": 0.41369473957718145,
+      "n": 1120
+    },
+    "gwrf": {
+      "rmse": 0.4675276934533487,
+      "mae": 0.37776595206271285,
+      "r2": 0.6540791789100682,
+      "bias": 0.06698191642794844,
+      "n": 1120
+    },
+    "gam": {
+      "rmse": 0.514371400804998,
+      "mae": 0.4291316221898825,
+      "r2": 0.5812877675750991,
+      "bias": 0.025474733002570308,
+      "n": 1120
+    },
+    "physics": {
+      "rmse": 0.3191438930079599,
+      "mae": 0.27761865618941683,
+      "r2": 0.838811112409118,
+      "bias": -0.01073130980266303,
+      "n": 1120
+    },
+    "base_mean": {
+      "rmse": 0.5063887363600633,
+      "mae": 0.41688706321422675,
+      "r2": 0.5941831313154412,
+      "bias": 0.19176083748521142,
+      "n": 1120
+    },
+    "stacker": {
+      "rmse": 0.3419943733759523,
+      "mae": 0.2982232207857921,
+      "r2": 0.8149027599102482,
+      "bias": -0.00252225980239938,
+      "n": 1120,
+      "interval_coverage": 0.8901785714285714,
+      "interval_target": 0.9,
+      "interval_mean_halfwidth": 0.5041255735247974,
+      "interval_diagnostics": {
+        "overall": {
+          "n": 1120,
+          "global": 0.8901785714285714,
+          "adaptive": 0.8883928571428571,
+          "halfwidth_global": 0.5041255735247974,
+          "halfwidth_adaptive": 0.5102652395164949
+        },
+        "by_fold": {
+          "0": {
+            "n": 373,
+            "global": 0.9973190348525469,
+            "adaptive": 0.9973190348525469,
+            "halfwidth_global": 0.543820199853598,
+            "halfwidth_adaptive": 0.5476500458177302
+          },
+          "1": {
+            "n": 375,
+            "global": 0.8106666666666666,
+            "adaptive": 0.8106666666666666,
+            "halfwidth_global": 0.47668646808804177,
+            "halfwidth_adaptive": 0.48216547756249795
+          },
+          "2": {
+            "n": 372,
+            "global": 0.8629032258064516,
+            "adaptive": 0.8575268817204301,
+            "halfwidth_global": 0.49198462975635826,
+            "halfwidth_adaptive": 0.5011063093616241
+          }
+        },
+        "by_distance": {
+          "0-180 m": {
+            "n": 315,
+            "global": 0.9428571428571428,
+            "adaptive": 0.9301587301587302,
+            "halfwidth_global": 0.5070503561259395,
+            "halfwidth_adaptive": 0.5000624207189404
+          },
+          "180-240 m": {
+            "n": 254,
+            "global": 0.889763779527559,
+            "adaptive": 0.8858267716535433,
+            "halfwidth_global": 0.5033018466685645,
+            "halfwidth_adaptive": 0.5047859679575498
+          },
+          "240-330 m": {
+            "n": 323,
+            "global": 0.804953560371517,
+            "adaptive": 0.8080495356037152,
+            "halfwidth_global": 0.5021101514384828,
+            "halfwidth_adaptive": 0.5056937316712746
+          },
+          "330-577 m": {
+            "n": 228,
+            "global": 0.9385964912280702,
+            "adaptive": 0.9473684210526315,
+            "halfwidth_global": 0.5038575973669156,
+            "halfwidth_adaptive": 0.536941642723547
+          }
+        }
+      }
+    }
+  },
+  "lambda_pde": null,
+  "lambda_scores": {
+    "mean": 0.5063887363600633,
+    "off": 0.3419943733759523,
+    "0.0": 0.4124297612172355,
+    "0.1": 0.43929926283172827
+  },
+  "physics": {
+    "L_m": {
+      "mean": 145.38078082112654,
+      "sd": 26.11174720266586
+    },
+    "vx_m": {
+      "mean": 0.0,
+      "sd": 0.0
+    },
+    "vy_m": {
+      "mean": 0.0,
+      "sd": 0.0
+    },
+    "v_norm_m": {
+      "mean": 0.0,
+      "sd": 0.0
+    },
+    "a": {
+      "mean": 34.991456372667216,
+      "sd": 9.055504303512516
+    },
+    "b": {
+      "mean": 0.21281970140530992,
+      "sd": 0.06541069515507245
+    },
+    "gamma": {
+      "mean": 0.010333744518670722,
+      "sd": 0.004292817689352286
+    },
+    "beta_x": {
+      "mean": -0.0001322680706749515,
+      "sd": 3.456166967917013e-05
+    },
+    "beta_y": {
+      "mean": -0.00023656599464243297,
+      "sd": 0.00025609001244063695
+    },
+    "s": {
+      "mean": 0.6599764630546875,
+      "sd": 0.04165140481853716
+    },
+    "kappa_canopy": {
+      "mean": 0.11759863882934259,
+      "sd": 0.020990714757132035
+    },
+    "shade_c0": {
+      "mean": 0.4000000000000001,
+      "sd": 5.551115123125783e-17
+    },
+    "shade_width": {
+      "mean": 0.10000000000000005,
+      "sd": 1.3877787807814457e-17
+    },
+    "a1": {
+      "mean": 0.29478933092614384,
+      "sd": 0.009019606757829753
+    },
+    "a1n": {
+      "mean": 0.5,
+      "sd": 0.0
+    },
+    "e0": {
+      "mean": 0.19221065288564632,
+      "sd": 0.38141806762686564
+    },
+    "e1": {
+      "mean": 2.138865500907057,
+      "sd": 0.21268777320824697
+    },
+    "e2": {
+      "mean": 1.090593725432065,
+      "sd": 0.2724061921458199
+    },
+    "e3": {
+      "mean": 1.762134949494735,
+      "sd": 0.5621667528033923
+    },
+    "w": {
+      "mean": 144.38647398913338,
+      "sd": 32.95658369088096
+    },
+    "q_mean": {
+      "mean": 0.1336304798514877,
+      "sd": 0.03596313568757327
+    },
+    "train_rmse": {
+      "mean": 0.11341963274980287,
+      "sd": 0.007469086655702866
+    },
+    "train_r2": {
+      "mean": 0.9745892710890535,
+      "sd": 0.007415267143570567
+    },
+    "pad_cells": {
+      "mean": 32.0,
+      "sd": 0.0
+    }
+  },
+  "physics_advection": {
+    "kept": false,
+    "delta_rmse_mean": 0.03009386256077423,
+    "delta_rmse_se": 0.03724758756450523,
+    "per_fold_delta_rmse": [
+      0.007041197001377453,
+      0.10296821320642657,
+      -0.01972782252548133
+    ]
+  },
+  "stacker": [
+    {
+      "weights": {
+        "ols": 0.0,
+        "mgwr": 0.0,
+        "gwrf": 0.0,
+        "gam": 0.24694633111970293,
+        "physics": 0.753053668880297
+      },
+      "residual_gated_off": true,
+      "val_mse_base": null,
+      "val_mse_with_residual": null,
+      "best_epoch": 0
+    },
+    {
+      "weights": {
+        "ols": 0.0222551012254977,
+        "mgwr": 0.0,
+        "gwrf": 0.0,
+        "gam": 0.0,
+        "physics": 0.9777448987745023
+      },
+      "residual_gated_off": true,
+      "val_mse_base": null,
+      "val_mse_with_residual": null,
+      "best_epoch": 0
+    },
+    {
+      "weights": {
+        "ols": 0.0,
+        "mgwr": 0.05558107259789283,
+        "gwrf": 0.16302520922519562,
+        "gam": 0.0,
+        "physics": 0.7813937181769115
+      },
+      "residual_gated_off": true,
+      "val_mse_base": null,
+      "val_mse_with_residual": null,
+      "best_epoch": 0
+    }
+  ],
+  "stacker_choice": "convex (NNLS) blend of base models",
+  "spatial_plus": [],
+  "baselines": {
+    "block_m": 390.0,
+    "buffer_m": 130.0,
+    "rows": {
+      "hgb_xy": {
+        "label": "gradient boosting, covariates + x,y",
+        "rmse": 0.6712875158306163,
+        "r2": 0.28685283117264837,
+        "stack_rmse": 0.3419943733759523,
+        "delta_mse": 0.33366677748922974,
+        "delta_mse_se": 0.12138285946675946,
+        "delta_rmse": 0.329293142454664,
+        "z": 2.7488788693481387,
+        "stack_better": true,
+        "baseline_better": false,
+        "frac_blocks_stack_better": 0.75,
+        "n_blocks": 16
+      },
+      "hgb_focal": {
+        "label": "gradient boosting on the stack's inputs (covariates + neighbourhood features)",
+        "rmse": 0.47656521140706376,
+        "r2": 0.6405763138310151,
+        "stack_rmse": 0.3419943733759523,
+        "delta_mse": 0.11015424930264917,
+        "delta_mse_se": 0.06239952210773266,
+        "delta_rmse": 0.13457083803111147,
+        "z": 1.7653059764218715,
+        "stack_better": false,
+        "baseline_better": false,
+        "frac_blocks_stack_better": 0.875,
+        "n_blocks": 16
+      },
+      "idw": {
+        "label": "inverse-distance interpolation (no covariates)",
+        "rmse": 0.6443679230426813,
+        "r2": 0.34290245120584806,
+        "stack_rmse": 0.3419943733759523,
+        "delta_mse": 0.2982498688255285,
+        "delta_mse_se": 0.16095756698318014,
+        "delta_rmse": 0.302373549666729,
+        "z": 1.8529720249604371,
+        "stack_better": false,
+        "baseline_better": false,
+        "frac_blocks_stack_better": 0.8125,
+        "n_blocks": 16
+      }
+    },
+    "best_baseline": "hgb_focal",
+    "verdict": "stack not distinguishable from hgb_focal (|\u0394MSE| \u2264 2 SE)"
+  },
+  "response": {
+    "canopy": {
+      "variable": "canopy",
+      "direction": "increase",
+      "frac_saturating": 1.0,
+      "frac_censored": 0.0,
+      "frac_linear": 0.0,
+      "frac_sigmoid": 0.0,
+      "median_d90": 31.83846576748709,
+      "median_max_cooling": 1.8402911636317847,
+      "mean_own_effect": -0.004646842130803387,
+      "mean_footprint_effect": -0.13588439582953157,
+      "footprint_to_own_ratio": 29.242309509240563,
+      "own_fold_means": [
+        -0.0045474419832093,
+        -0.004554145243336114,
+        -0.0048389391658647495
+      ],
+      "footprint_fold_means": [
+        -0.13013080627550738,
+        -0.16742052819901002,
+        -0.11010185301407723
+      ]
+    },
+    "impervious": {
+      "variable": "impervious",
+      "direction": "decrease",
+      "frac_saturating": 0.3678571428571429,
+      "frac_censored": 0.125,
+      "frac_linear": 0.48035714285714287,
+      "frac_sigmoid": 0.0008928571428571428,
+      "median_d90": null,
+      "median_max_cooling": 1.3488966041003412,
+      "mean_own_effect": 0.00040907943346653325,
+      "mean_footprint_effect": 0.019148652652769674,
+      "footprint_to_own_ratio": 46.80913066321684,
+      "own_fold_means": [
+        -0.00047179270481492996,
+        0.0008929083379385333,
+        0.0008061226672759963
+      ],
+      "footprint_fold_means": [
+        0.011331626173314778,
+        0.03287128348524726,
+        0.013243048299746984
+      ]
+    },
+    "albedo": {
+      "variable": "albedo",
+      "direction": "increase",
+      "frac_saturating": 0.25625,
+      "frac_censored": 0.20357142857142857,
+      "frac_linear": 0.74375,
+      "frac_sigmoid": 0.0,
+      "median_d90": null,
+      "median_max_cooling": 4.05132617326863,
+      "mean_own_effect": -0.24833372320194677,
+      "mean_footprint_effect": -4.349510795944598,
+      "footprint_to_own_ratio": 17.51478107710544,
+      "own_fold_means": [
+        -0.356859238916977,
+        -0.14201339239319283,
+        -0.24612853829567038
+      ],
+      "footprint_fold_means": [
+        -3.687853944377293,
+        -5.112195292040049,
+        -4.248483151416452
+      ]
+    }
+  },
+  "scenarios": [
+    {
+      "name": "Canopy Increase +5",
+      "mean_delta": -0.6218780473242606,
+      "mean_delta_se": 0.1636103741669042,
+      "p10_delta": -1.0358703525365158,
+      "p90_delta": -0.30491396255081626,
+      "mean_delta_sd": 0.16800778125582774,
+      "frac_extrapolated": 0.4758928571428571,
+      "mean_realized": {
+        "canopy": 5.0
+      },
+      "causal_linear": {
+        "delta": -0.2052248509212945,
+        "lo": -0.27363517313111724,
+        "hi": -0.13681452871147176,
+        "model_within": false
+      }
+    },
+    {
+      "name": "Canopy Increase +10",
+      "mean_delta": -1.0316500390097199,
+      "mean_delta_se": 0.28149278439991643,
+      "p10_delta": -1.697750727351196,
+      "p90_delta": -0.503336755398642,
+      "mean_delta_sd": 0.2845318485905357,
+      "frac_extrapolated": 0.7276785714285714,
+      "mean_realized": {
+        "canopy": 10.0
+      },
+      "causal_linear": {
+        "delta": -0.410449701842589,
+        "lo": -0.5472703462622345,
+        "hi": -0.2736290574229435,
+        "model_within": false
+      }
+    },
+    {
+      "name": "Canopy Increase +20",
+      "mean_delta": -1.499782904389928,
+      "mean_delta_se": 0.45712536374258744,
+      "p10_delta": -2.436254717763016,
+      "p90_delta": -0.746269945976983,
+      "mean_delta_sd": 0.4585729682109684,
+      "frac_extrapolated": 1.0,
+      "mean_realized": {
+        "canopy": 20.0
+      },
+      "causal_linear": {
+        "delta": -0.820899403685178,
+        "lo": -1.094540692524469,
+        "hi": -0.547258114845887,
+        "model_within": false
+      }
+    },
+    {
+      "name": "Impervious Decrease \u221210",
+      "mean_delta": -0.18214703373566943,
+      "mean_delta_se": 0.15428216256864394,
+      "p10_delta": -0.24671777416196106,
+      "p90_delta": -0.11803807789811743,
+      "mean_delta_sd": 0.15862539795566072,
+      "frac_extrapolated": 0.34285714285714286,
+      "mean_realized": {
+        "impervious": -9.99791875
+      }
+    },
+    {
+      "name": "Impervious Decrease \u221220",
+      "mean_delta": -0.34979080681655583,
+      "mean_delta_se": 0.3064843475902563,
+      "p10_delta": -0.4927175704796419,
+      "p90_delta": -0.21473644094844388,
+      "mean_delta_sd": 0.309610854882552,
+      "frac_extrapolated": 0.6821428571428572,
+      "mean_realized": {
+        "impervious": -19.293013392857144
+      }
+    },
+    {
+      "name": "Albedo Increase +0.05",
+      "mean_delta": -0.21770505595474576,
+      "mean_delta_se": 0.040135917685862124,
+      "p10_delta": -0.3164068049720289,
+      "p90_delta": -0.1290394545607827,
+      "mean_delta_sd": 0.0470178028712321,
+      "frac_extrapolated": 0.22410714285714287,
+      "mean_realized": {
+        "albedo": 0.05
+      }
+    },
+    {
+      "name": "Albedo Increase +0.1",
+      "mean_delta": -0.43601259017370364,
+      "mean_delta_se": 0.07773175896173032,
+      "p10_delta": -0.6342047081806629,
+      "p90_delta": -0.258509525422733,
+      "mean_delta_sd": 0.08508498980202121,
+      "frac_extrapolated": 0.5366071428571428,
+      "mean_realized": {
+        "albedo": 0.1
+      }
+    },
+    {
+      "name": "Cooling package",
+      "mean_delta": -1.3051926100310534,
+      "mean_delta_se": 0.37836199473127574,
+      "p10_delta": -2.0748908705659526,
+      "p90_delta": -0.6813637120107432,
+      "mean_delta_sd": 0.3817764384252109,
+      "frac_extrapolated": 0.7482142857142857,
+      "mean_realized": {
+        "canopy": 10.0,
+        "impervious": -9.99791875,
+        "albedo": 0.05
+      }
+    }
+  ],
+  "climate": {
+    "present": {
+      "mean": 88.1562169642857,
+      "share_at_or_above": {
+        "90.0": 0.03482142857142857,
+        "95.0": 0.0
+      }
+    },
+    "thresholds": [
+      90.0,
+      95.0
+    ],
+    "projections": [
+      {
+        "experiment": "ssp126",
+        "label": "SSP1-2.6",
+        "period": "2021-2040",
+        "n_models": 6,
+        "warming": {
+          "median": 1.701,
+          "p10": 1.3365,
+          "p90": 2.187,
+          "min": 1.215,
+          "max": 2.3489999999999998,
+          "by_model": {
+            "DEMO-A": 1.215,
+            "DEMO-B": 1.4580000000000002,
+            "DEMO-C": 1.62,
+            "DEMO-D": 1.782,
+            "DEMO-E": 2.025,
+            "DEMO-F": 2.3489999999999998
+          }
+        },
+        "variants": [
+          {
+            "name": "no adaptation",
+            "mean": 89.8572169642857,
+            "adaptation_mean_delta": 0.0,
+            "offset_share_of_median_warming": null,
+            "share_at_or_above": {
+              "90.0": {
+                "median": 0.3075892857142857,
+                "p10": 0.21919642857142857,
+                "p90": 0.6129464285714286
+              },
+              "95.0": {
+                "median": 0.0,
+                "p10": 0.0,
+                "p90": 0.0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "experiment": "ssp126",
+        "label": "SSP1-2.6",
+        "period": "2041-2060",
+        "n_models": 6,
+        "warming": {
+          "median": 2.457,
+          "p10": 1.9304999999999999,
+          "p90": 3.1590000000000003,
+          "min": 1.755,
+          "max": 3.3930000000000002,
+          "by_model": {
+            "DEMO-A": 1.755,
+            "DEMO-B": 2.106,
+            "DEMO-C": 2.3400000000000003,
+            "DEMO-D": 2.574,
+            "DEMO-E": 2.9250000000000003,
+            "DEMO-F": 3.3930000000000002
+          }
+        },
+        "variants": [
+          {
+            "name": "no adaptation",
+            "mean": 90.6132169642857,
+            "adaptation_mean_delta": 0.0,
+            "offset_share_of_median_warming": null,
+            "share_at_or_above": {
+              "90.0": {
+                "median": 0.8107142857142857,
+                "p10": 0.4214285714285715,
+                "p90": 0.978125
+              },
+              "95.0": {
+                "median": 0.0,
+                "p10": 0.0,
+                "p90": 0.0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "experiment": "ssp126",
+        "label": "SSP1-2.6",
+        "period": "2081-2100",
+        "n_models": 6,
+        "warming": {
+          "median": 2.835,
+          "p10": 2.2275,
+          "p90": 3.6449999999999996,
+          "min": 2.025,
+          "max": 3.9149999999999996,
+          "by_model": {
+            "DEMO-A": 2.025,
+            "DEMO-B": 2.43,
+            "DEMO-C": 2.7,
+            "DEMO-D": 2.9699999999999998,
+            "DEMO-E": 3.375,
+            "DEMO-F": 3.9149999999999996
+          }
+        },
+        "variants": [
+          {
+            "name": "no adaptation",
+            "mean": 90.9912169642857,
+            "adaptation_mean_delta": 0.0,
+            "offset_share_of_median_warming": null,
+            "share_at_or_above": {
+              "90.0": {
+                "median": 0.9441964285714286,
+                "p10": 0.6397321428571429,
+                "p90": 0.9977678571428572
+              },
+              "95.0": {
+                "median": 0.0,
+                "p10": 0.0,
+                "p90": 0.0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "experiment": "ssp245",
+        "label": "SSP2-4.5",
+        "period": "2021-2040",
+        "n_models": 6,
+        "warming": {
+          "median": 1.8900000000000001,
+          "p10": 1.485,
+          "p90": 2.4299999999999997,
+          "min": 1.35,
+          "max": 2.61,
+          "by_model": {
+            "DEMO-A": 1.35,
+            "DEMO-B": 1.62,
+            "DEMO-C": 1.8,
+            "DEMO-D": 1.9800000000000002,
+            "DEMO-E": 2.25,
+            "DEMO-F": 2.61
+          }
+        },
+        "variants": [
+          {
+            "name": "no adaptation",
+            "mean": 90.0462169642857,
+            "adaptation_mean_delta": 0.0,
+            "offset_share_of_median_warming": null,
+            "share_at_or_above": {
+              "90.0": {
+                "median": 0.390625,
+                "p10": 0.25044642857142857,
+                "p90": 0.7767857142857142
+              },
+              "95.0": {
+                "median": 0.0,
+                "p10": 0.0,
+                "p90": 0.0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "experiment": "ssp245",
+        "label": "SSP2-4.5",
+        "period": "2041-2060",
+        "n_models": 6,
+        "warming": {
+          "median": 3.213,
+          "p10": 2.5244999999999997,
+          "p90": 4.131,
+          "min": 2.295,
+          "max": 4.437,
+          "by_model": {
+            "DEMO-A": 2.295,
+            "DEMO-B": 2.754,
+            "DEMO-C": 3.06,
+            "DEMO-D": 3.366,
+            "DEMO-E": 3.825,
+            "DEMO-F": 4.437
+          }
+        },
+        "variants": [
+          {
+            "name": "no adaptation",
+            "mean": 91.3692169642857,
+            "adaptation_mean_delta": 0.0,
+            "offset_share_of_median_warming": null,
+            "share_at_or_above": {
+              "90.0": {
+                "median": 0.9830357142857142,
+                "p10": 0.8227678571428572,
+                "p90": 1.0
+              },
+              "95.0": {
+                "median": 0.0,
+                "p10": 0.0,
+                "p90": 0.0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "experiment": "ssp245",
+        "label": "SSP2-4.5",
+        "period": "2081-2100",
+        "n_models": 6,
+        "warming": {
+          "median": 4.914,
+          "p10": 3.8609999999999998,
+          "p90": 6.3180000000000005,
+          "min": 3.51,
+          "max": 6.7860000000000005,
+          "by_model": {
+            "DEMO-A": 3.51,
+            "DEMO-B": 4.212,
+            "DEMO-C": 4.680000000000001,
+            "DEMO-D": 5.148,
+            "DEMO-E": 5.8500000000000005,
+            "DEMO-F": 6.7860000000000005
+          }
+        },
+        "variants": [
+          {
+            "name": "no adaptation",
+            "mean": 93.0702169642857,
+            "adaptation_mean_delta": 0.0,
+            "offset_share_of_median_warming": null,
+            "share_at_or_above": {
+              "90.0": {
+                "median": 1.0,
+                "p10": 0.9995535714285715,
+                "p90": 1.0
+              },
+              "95.0": {
+                "median": 0.022767857142857142,
+                "p10": 0.0,
+                "p90": 0.24285714285714283
+              }
+            }
+          }
+        ]
+      },
+      {
+        "experiment": "ssp370",
+        "label": "SSP3-7.0",
+        "period": "2021-2040",
+        "n_models": 6,
+        "warming": {
+          "median": 1.8900000000000001,
+          "p10": 1.485,
+          "p90": 2.4299999999999997,
+          "min": 1.35,
+          "max": 2.61,
+          "by_model": {
+            "DEMO-A": 1.35,
+            "DEMO-B": 1.62,
+            "DEMO-C": 1.8,
+            "DEMO-D": 1.9800000000000002,
+            "DEMO-E": 2.25,
+            "DEMO-F": 2.61
+          }
+        },
+        "variants": [
+          {
+            "name": "no adaptation",
+            "mean": 90.0462169642857,
+            "adaptation_mean_delta": 0.0,
+            "offset_share_of_median_warming": null,
+            "share_at_or_above": {
+              "90.0": {
+                "median": 0.390625,
+                "p10": 0.25044642857142857,
+                "p90": 0.7767857142857142
+              },
+              "95.0": {
+                "median": 0.0,
+                "p10": 0.0,
+                "p90": 0.0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "experiment": "ssp370",
+        "label": "SSP3-7.0",
+        "period": "2041-2060",
+        "n_models": 6,
+        "warming": {
+          "median": 3.7800000000000002,
+          "p10": 2.97,
+          "p90": 4.859999999999999,
+          "min": 2.7,
+          "max": 5.22,
+          "by_model": {
+            "DEMO-A": 2.7,
+            "DEMO-B": 3.24,
+            "DEMO-C": 3.6,
+            "DEMO-D": 3.9600000000000004,
+            "DEMO-E": 4.5,
+            "DEMO-F": 5.22
+          }
+        },
+        "variants": [
+          {
+            "name": "no adaptation",
+            "mean": 91.9362169642857,
+            "adaptation_mean_delta": 0.0,
+            "offset_share_of_median_warming": null,
+            "share_at_or_above": {
+              "90.0": {
+                "median": 1.0,
+                "p10": 0.95625,
+                "p90": 1.0
+              },
+              "95.0": {
+                "median": 0.0,
+                "p10": 0.0,
+                "p90": 0.026339285714285714
+              }
+            }
+          }
+        ]
+      },
+      {
+        "experiment": "ssp370",
+        "label": "SSP3-7.0",
+        "period": "2081-2100",
+        "n_models": 6,
+        "warming": {
+          "median": 6.993,
+          "p10": 5.4945,
+          "p90": 8.991,
+          "min": 4.995,
+          "max": 9.657,
+          "by_model": {
+            "DEMO-A": 4.995,
+            "DEMO-B": 5.994000000000001,
+            "DEMO-C": 6.66,
+            "DEMO-D": 7.3260000000000005,
+            "DEMO-E": 8.325000000000001,
+            "DEMO-F": 9.657
+          }
+        },
+        "variants": [
+          {
+            "name": "no adaptation",
+            "mean": 95.1492169642857,
+            "adaptation_mean_delta": 0.0,
+            "offset_share_of_median_warming": null,
+            "share_at_or_above": {
+              "90.0": {
+                "median": 1.0,
+                "p10": 1.0,
+                "p90": 1.0
+              },
+              "95.0": {
+                "median": 0.515625,
+                "p10": 0.103125,
+                "p90": 0.9959821428571429
+              }
+            }
+          }
+        ]
+      },
+      {
+        "experiment": "ssp585",
+        "label": "SSP5-8.5",
+        "period": "2021-2040",
+        "n_models": 6,
+        "warming": {
+          "median": 2.079,
+          "p10": 1.6335,
+          "p90": 2.673,
+          "min": 1.4849999999999999,
+          "max": 2.871,
+          "by_model": {
+            "DEMO-A": 1.4849999999999999,
+            "DEMO-B": 1.782,
+            "DEMO-C": 1.9800000000000002,
+            "DEMO-D": 2.178,
+            "DEMO-E": 2.475,
+            "DEMO-F": 2.871
+          }
+        },
+        "variants": [
+          {
+            "name": "no adaptation",
+            "mean": 90.2352169642857,
+            "adaptation_mean_delta": 0.0,
+            "offset_share_of_median_warming": null,
+            "share_at_or_above": {
+              "90.0": {
+                "median": 0.5151785714285715,
+                "p10": 0.2888392857142857,
+                "p90": 0.8924107142857143
+              },
+              "95.0": {
+                "median": 0.0,
+                "p10": 0.0,
+                "p90": 0.0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "experiment": "ssp585",
+        "label": "SSP5-8.5",
+        "period": "2041-2060",
+        "n_models": 6,
+        "warming": {
+          "median": 4.5360000000000005,
+          "p10": 3.564,
+          "p90": 5.832000000000001,
+          "min": 3.24,
+          "max": 6.264,
+          "by_model": {
+            "DEMO-A": 3.24,
+            "DEMO-B": 3.8880000000000003,
+            "DEMO-C": 4.32,
+            "DEMO-D": 4.752000000000001,
+            "DEMO-E": 5.4,
+            "DEMO-F": 6.264
+          }
+        },
+        "variants": [
+          {
+            "name": "no adaptation",
+            "mean": 92.6922169642857,
+            "adaptation_mean_delta": 0.0,
+            "offset_share_of_median_warming": null,
+            "share_at_or_above": {
+              "90.0": {
+                "median": 1.0,
+                "p10": 0.9941964285714286,
+                "p90": 1.0
+              },
+              "95.0": {
+                "median": 0.0035714285714285713,
+                "p10": 0.0,
+                "p90": 0.1455357142857143
+              }
+            }
+          }
+        ]
+      },
+      {
+        "experiment": "ssp585",
+        "label": "SSP5-8.5",
+        "period": "2081-2100",
+        "n_models": 6,
+        "warming": {
+          "median": 8.693999999999999,
+          "p10": 6.831,
+          "p90": 11.178,
+          "min": 6.210000000000001,
+          "max": 12.006,
+          "by_model": {
+            "DEMO-A": 6.210000000000001,
+            "DEMO-B": 7.452,
+            "DEMO-C": 8.28,
+            "DEMO-D": 9.107999999999999,
+            "DEMO-E": 10.35,
+            "DEMO-F": 12.006
+          }
+        },
+        "variants": [
+          {
+            "name": "no adaptation",
+            "mean": 96.8502169642857,
+            "adaptation_mean_delta": 0.0,
+            "offset_share_of_median_warming": null,
+            "share_at_or_above": {
+              "90.0": {
+                "median": 1.0,
+                "p10": 1.0,
+                "p90": 1.0
+              },
+              "95.0": {
+                "median": 0.9946428571428572,
+                "p10": 0.5116071428571428,
+                "p90": 1.0
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "adaptation": [],
+    "site": {
+      "lat": 41.82060700431168,
+      "lon": -71.39018525808176
+    },
+    "source": "table",
+    "variable": "tasmax",
+    "months": [
+      6,
+      7,
+      8
+    ],
+    "baseline": "1995-2014",
+    "n_models": 6,
+    "units": "degF"
+  },
+  "causal": {
+    "canopy": {
+      "dml_theta": -0.019801743695743515,
+      "dml_se": 0.0034983624713803237,
+      "theta_own": -0.01543805292367806,
+      "se_own": 0.0037133019494666884,
+      "theta_nbr": -0.025606917260580838,
+      "se_nbr": 0.0069086310688210775,
+      "theta_sum": -0.0410449701842589,
+      "se_sum": 0.006980645123451299,
+      "dr_ess": 226.64544938894497,
+      "sensitivity": {
+        "e_value": {
+          "d": -0.2868044374019189,
+          "rr": 1.2982173290325736,
+          "e_value": 1.920431845391599,
+          "contrast": 10.0,
+          "sd_resid_y": 0.6904266849956007,
+          "e_value_ci": 1.6326811185730046,
+          "ci_bound": -0.012345160595918135
+        },
+        "robustness": {
+          "partial_r2": 0.35602867950917716,
+          "f": 0.7435483746043656,
+          "q": 1.0,
+          "alpha": 0.05,
+          "rv_q": 0.5168389122304016,
+          "rv_q_alpha": 0.36729295247468224,
+          "f_crit": 0.28179374405013574,
+          "t_crit": 2.131449545559323,
+          "design_effect": 4.406698320989037,
+          "t_cluster": -5.660289308995041,
+          "significant_cluster": true,
+          "dof_blocks": 15
+        }
+      },
+      "audit": {
+        "adoption_vs_theta_sum": {
+          "model": -0.12437560946485209,
+          "model_se": 0.02313800100917727,
+          "causal": -0.0410449701842589,
+          "causal_se": 0.006980645123451299,
+          "diff": -0.08333063928059319,
+          "z": -3.447961538874427,
+          "rel_diff": 0.6699918065860172,
+          "flag": true,
+          "sign_agree": true,
+          "sign_flag": false,
+          "verdict": "magnitude differs"
+        },
+        "own_vs_theta_own": {
+          "model": -0.004646842130803387,
+          "model_se": 0.0001358606800699561,
+          "causal": -0.01543805292367806,
+          "causal_se": 0.0037133019494666884,
+          "diff": 0.010791210792874673,
+          "z": 2.904152518728802,
+          "rel_diff": 0.6990007642948088,
+          "flag": true,
+          "sign_agree": true,
+          "sign_flag": false,
+          "verdict": "magnitude differs"
+        },
+        "own_pd_vs_dr_curve": {
+          "n_common": 25,
+          "max_abs_diff": 6.0465999152356344,
+          "max_ratio": 0.55035274494401,
+          "t_at_max": 34.50504166666666,
+          "centered": true,
+          "flag": false,
+          "verdict": "consistent"
+        },
+        "blp_calibration": {
+          "coef": 0.0960648184344866,
+          "se": 0.04192429087983647,
+          "p": 0.03683198067784731,
+          "p_vs_one": 1.0590332177334966e-12,
+          "ate_coef": -0.02140181645920806,
+          "ate_se": 0.0030321521735215233,
+          "ate_p": 3.884131704804308e-06,
+          "sd_s": 0.05249826961107157,
+          "n": 1120
+        }
+      }
+    },
+    "_flags": [
+      {
+        "treatment": "canopy",
+        "check": "adoption_vs_theta_sum",
+        "verdict": "magnitude differs"
+      },
+      {
+        "treatment": "canopy",
+        "check": "own_vs_theta_own",
+        "verdict": "magnitude differs"
+      }
+    ]
+  },
+  "optimize": {
+    "variable": "canopy",
+    "budget": 2000.0,
+    "planned_total_cooling": 583.343489322814,
+    "realized_total_cooling": 623.8560371386659,
+    "realized_mean_cooling_treated": 0.8066589452077031,
+    "realized_mean_cooling_all": 0.5570143188738088,
+    "n_cells_treated": 232,
+    "mean_dose_treated": 8.620689655172377,
+    "total_cost": 1999.9999999999914,
+    "gini": 0.9463902787705507,
+    "min_dose_dropped_cost": 0.0,
+    "planned_benefit": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.6329217953026536,
+      0.0,
+      1.7803614044823288,
+      0.0,
+      0.0,
+      1.904744753394375,
+      0.0,
+      1.8335648501687805,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.7548594940408124,
+      0.0,
+      0.0,
+      0.0,
+      1.423893325203398,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.9711377625804876,
+      1.9312878264704985,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.4148724551515246,
+      0.0,
+      0.0,
+      1.388278675122125,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.390745137773323,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.6590503908833871,
+      0.0,
+      1.7627262460669035,
+      0.0,
+      1.9566282111002895,
+      0.0,
+      0.0,
+      0.0,
+      2.2216139389203065,
+      2.18661532616137,
+      0.0,
+      2.134384464745862,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.8557924234487289,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.428955652241534,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.6117035138604734,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      3.677651546508023,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.9586766964793854,
+      1.3880055375738873,
+      0.0,
+      1.7289924776258325,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.3966756309842214,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      2.1261822730852082,
+      2.2168121440208135,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      3.998860346988552,
+      3.876861329130688,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4.020244023059137,
+      0.0,
+      4.453229258224501,
+      0.0,
+      1.5651672653780138,
+      1.562506314936048,
+      1.494109772153047,
+      0.0,
+      1.4715216417905568,
+      1.3969548604907516,
+      1.6196166462599546,
+      1.64838844408848,
+      1.7693203689924646,
+      1.7239896670254884,
+      1.6350153685996054,
+      1.4149239959067115,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.7009022918561334,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4.793413358740253,
+      1.4615988754648899,
+      1.6485564904036902,
+      1.7596786970293363,
+      5.065678482268397,
+      1.615373843456314,
+      1.7985503510600318,
+      1.8405693349620664,
+      2.03262820185138,
+      2.105013416438317,
+      2.007536542280346,
+      1.806883041676685,
+      1.6273300918821345,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.5995111307452297,
+      1.7674530798796448,
+      5.134912298080377,
+      1.6147315060027467,
+      1.9681763956448406,
+      2.0163003148440977,
+      2.076790441903241,
+      2.1834569407527757,
+      2.0290202247866627,
+      1.8099151692290802,
+      1.6172889245127753,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      2.0461260994965125,
+      0.0,
+      3.915687446249747,
+      0.0,
+      4.779148040504161,
+      1.6102965405304899,
+      1.6602480739711432,
+      1.7568383696981902,
+      1.6511368776421227,
+      1.5518961551895056,
+      2.0495888561462983,
+      2.056068183552072,
+      4.401673274945757,
+      4.1200024880212816,
+      1.9408209060705992,
+      1.7147178659536064,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      2.0908936801103666,
+      2.147267177937613,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.6645685041729745,
+      1.4350153889189967,
+      0.0,
+      1.6157671575064916,
+      1.6724982334417071,
+      4.263359829147818,
+      1.7854966716124887,
+      2.013520493611084,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.4068566966384675,
+      0.0,
+      0.0,
+      1.4332388704071768,
+      0.0,
+      1.6085819978890383,
+      0.0,
+      0.0,
+      1.5199943143735573,
+      1.4805037703816064,
+      1.5534643485696344,
+      1.4885181495938664,
+      1.8921223596713708,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      3.7214618019632124,
+      0.0,
+      0.0,
+      4.257960203994104,
+      1.4362076805233812,
+      4.482028243079108,
+      1.4613966045048603,
+      0.0,
+      4.5661187406457096,
+      0.0,
+      0.0,
+      1.4208213430430687,
+      4.1816388603178165,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.756687154763571,
+      0.0,
+      3.805623365894932,
+      0.0,
+      0.0,
+      1.4168106739471993,
+      1.47921856896485,
+      4.656443448776223,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.9851376781901062,
+      0.0,
+      0.0,
+      4.326105910203357,
+      0.0,
+      0.0,
+      4.664761307883773,
+      0.0,
+      0.0,
+      4.485203747990339,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4.60778804812378,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      2.2198180638479905,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4.998841657669767,
+      0.0,
+      0.0,
+      4.936616052207986,
+      0.0,
+      0.0,
+      0.0,
+      4.397439588463489,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      3.642398035479559,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4.726044037644892,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4.577780225868568,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4.895729810467188,
+      5.0477004354117225,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      5.0986744231959085,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4.367637459263873,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      5.003461752871905,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4.174281272987375,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4.152675156663635,
+      0.0,
+      4.201760238178805,
+      0.0,
+      3.9035479674172215,
+      3.91420259524992,
+      4.076203878881518,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      2.240310221729121,
+      0.0,
+      1.5937929569955331,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      3.6549409420404633,
+      0.0,
+      0.0,
+      3.7771872886133577,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.593776635713406,
+      0.0,
+      0.0,
+      0.0,
+      1.6709853142706081,
+      0.0,
+      1.971889203608495,
+      0.0,
+      3.7372278378947197,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.949356469974942,
+      0.0,
+      0.0,
+      1.5722977659214517,
+      0.0,
+      0.0,
+      1.8926514429713002,
+      0.0,
+      2.121535251411074,
+      0.0,
+      0.0,
+      0.0,
+      2.2138607374493797,
+      0.0,
+      2.1996698060685076,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      2.179737237481392,
+      0.0,
+      2.1553505107315747,
+      0.0,
+      0.0,
+      2.0546854195321793,
+      2.042915018748537,
+      0.0,
+      3.9044165836651814,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      3.694941760280299,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.8575149618714837,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.8991794386893068,
+      0.0,
+      0.0,
+      3.636995522887415,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4.160454492551,
+      0.0,
+      0.0,
+      3.9776558800095083,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.994300512689603,
+      0.0,
+      1.8444944129320182,
+      0.0,
+      1.8536671136518157,
+      2.162045194482734,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4.553241326373204,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      2.000012617439025,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.7051027338254703,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.83582003834134,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4.125598199474826,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.9201164728900608,
+      0.0,
+      1.8289685390083792,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.761168141979848,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.7942368946414808,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      2.1473393498262,
+      0.0,
+      0.0,
+      0.0,
+      1.7567452308246423,
+      0.0,
+      0.0,
+      1.6322556604631877,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.76289826650882,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4.178833680525189,
+      0.0,
+      3.6586129453016603,
+      0.0,
+      0.0,
+      2.2272031035359054,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      2.231382984208401,
+      1.9143307904579814,
+      0.0,
+      0.0,
+      1.6788701391318495,
+      1.63157634565289,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.7514394432791285,
+      1.7758731784372839,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.791098434270216,
+      0.0,
+      1.8079852990745837,
+      0.0,
+      0.0,
+      0.0,
+      3.746456826112695,
+      3.976859579742949,
+      0.0,
+      0.0,
+      0.0,
+      4.156278613854341,
+      3.9116055573732416,
+      0.0,
+      3.8785787912667207,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.6703382028885005,
+      0.0,
+      1.8804634967351574,
+      0.0,
+      1.8624904472008428,
+      1.7705560860180412,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4.162568213955829,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4.0362735212055565,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      2.0398084194667856,
+      0.0,
+      1.822245804048934,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.6618675473756657,
+      0.0,
+      0.0,
+      1.7593486311466437,
+      0.0,
+      1.7559984025371465,
+      1.8417634930084867,
+      1.9402637767242756,
+      0.0,
+      0.0,
+      0.0,
+      2.1790619434119987,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4.026937209874526,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.8861488289612816,
+      0.0,
+      0.0,
+      1.9946714419632394,
+      0.0,
+      0.0,
+      3.739107646416839,
+      3.8223802574553214,
+      0.0,
+      0.0,
+      4.3230137679122285,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      3.782246161655208,
+      0.0,
+      0.0,
+      2.2467858468894017,
+      0.0,
+      0.0,
+      0.0,
+      1.9924859460208555,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.6985392381398088,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      3.6576356140883854,
+      2.230747282887996,
+      2.1500978759426483,
+      0.0,
+      0.0,
+      0.0,
+      4.079085519910069,
+      3.964721678141153,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      2.141952108292123,
+      0.0,
+      2.074017076938259,
+      2.0385141176476633,
+      2.0053749078015266,
+      0.0,
+      0.0,
+      0.0,
+      1.7192821082896215,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.5173873410917953,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      2.0433457973037417,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      2.0356508948604586,
+      0.0,
+      1.915800075481191,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.7536554018175732,
+      0.0,
+      0.0,
+      1.5312765139108275,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "constraint": "plantable space (WorldCover open land + 20% of built-up area)",
+    "objective": "total cooling"
+  },
+  "literature": {
+    "rows": [
+      {
+        "key": "krayenhoff2021",
+        "quantity": "canopy",
+        "per": "+0.10 canopy cover",
+        "low_C": 0.3,
+        "high_C": 0.3,
+        "value": "\u22480.3 \u00b0C cooling per +0.10 tree canopy cover",
+        "conditions": "systematic review of numerical models (47 higher-quality studies); afternoon, clear sky, summer; near-surface air",
+        "citation": "Krayenhoff et al. 2021, Environ. Res. Lett. 16, 053007",
+        "status": "abstract",
+        "sparc_C": 0.5731389105609555,
+        "sparc_se_C": 0.1563848802221758,
+        "sparc_scenario": "Canopy Increase +10",
+        "ratio_to_mid": 1.9104630352031848,
+        "within_factor_2": true
+      },
+      {
+        "key": "ziter2019",
+        "quantity": "canopy",
+        "per": "+0.10 canopy cover",
+        "low_C": 0.07,
+        "high_C": 0.15,
+        "value": "0 \u2192 100% canopy: \u22120.7 \u00b0C (10 m radius), \u22121.3 \u00b0C (30 m), > \u22121.5 \u00b0C (60\u201390 m); nonlinear, cooling accelerates above ~40% canopy at block scale",
+        "conditions": "bicycle transects, Madison WI, summer daytime; per-0.10 range is the linear average of the 10 m and 60\u201390 m totals (the real curve is steeper above 40%)",
+        "citation": "Ziter et al. 2019, PNAS 116, 7575\u20137580",
+        "status": "abstract",
+        "sparc_C": 0.5731389105609555,
+        "sparc_se_C": 0.1563848802221758,
+        "sparc_scenario": "Canopy Increase +10",
+        "ratio_to_mid": 5.210353732372322,
+        "within_factor_2": false
+      },
+      {
+        "key": "krayenhoff2021",
+        "quantity": "albedo",
+        "per": "+0.10 neighbourhood albedo",
+        "low_C": 0.2,
+        "high_C": 0.6,
+        "value": "\u22480.2\u20130.6 \u00b0C cooling per +0.10 neighbourhood albedo",
+        "conditions": "numerical models; afternoon, clear sky, summer",
+        "citation": "Krayenhoff et al. 2021",
+        "status": "abstract",
+        "sparc_C": 0.2422292167631687,
+        "sparc_se_C": 0.043184310534294626,
+        "sparc_scenario": "Albedo Increase +0.1",
+        "ratio_to_mid": 0.6055730419079217,
+        "within_factor_2": true
+      },
+      {
+        "key": "santamouris2014",
+        "quantity": "albedo",
+        "per": "+0.10 city albedo",
+        "low_C": 0.3,
+        "high_C": 0.9,
+        "value": "city-wide +0.1 albedo: \u22480.3 K mean and \u22480.9 K peak ambient temperature decrease",
+        "conditions": "review of simulation studies; peak (\u2248 afternoon) is the comparable figure",
+        "citation": "Santamouris 2014, Solar Energy 103, 682\u2013703",
+        "status": "abstract",
+        "sparc_C": 0.2422292167631687,
+        "sparc_se_C": 0.043184310534294626,
+        "sparc_scenario": "Albedo Increase +0.1",
+        "ratio_to_mid": 0.40371536127194785,
+        "within_factor_2": true
+      }
+    ],
+    "sparc": {
+      "canopy": {
+        "scenario": "Canopy Increase +10",
+        "realized_dose": 10.0,
+        "cooling_C": 0.5731389105609555,
+        "se_C": 0.1563848802221758,
+        "frac_extrapolated": 0.7276785714285714,
+        "causal_C": 0.22802761213477168
+      },
+      "albedo": {
+        "scenario": "Albedo Increase +0.1",
+        "realized_dose": 0.1,
+        "cooling_C": 0.2422292167631687,
+        "se_C": 0.043184310534294626,
+        "frac_extrapolated": 0.5366071428571428,
+        "causal_C": null
+      }
+    },
+    "notes": {}
+  },
+  "schema_version": 2,
+  "stages_run": [
+    "S0",
+    "S1",
+    "S2_S3",
+    "baselines",
+    "S4",
+    "S5",
+    "climate",
+    "S6",
+    "S7"
+  ],
+  "timings_detail": {
+    "stages": {
+      "S0": 0.034,
+      "S1": 1.941,
+      "S2_S3": 15.425,
+      "baselines": 1.605,
+      "S4": 5.455,
+      "S5": 1.436,
+      "climate": 0.051,
+      "S6": 5.117,
+      "S7": 0.188
+    },
+    "ensemble": {
+      "base_models_s": 10.747725248336792,
+      "stackers_s": 3.7440555095672607,
+      "stacker_candidates_s": {
+        "mean": 0.002,
+        "nnls": 0.002,
+        "residual:0": 1.701,
+        "residual:0.1": 2.038
+      }
+    },
+    "fold_model_s": {
+      "ols": [
+        0.019,
+        0.017,
+        0.016
+      ],
+      "mgwr": [
+        0.58,
+        0.543,
+        0.537
+      ],
+      "gwrf": [
+        0.423,
+        0.394,
+        0.306
+      ],
+      "gam": [
+        0.087,
+        0.086,
+        0.08
+      ],
+      "physics": [
+        4.131,
+        1.717,
+        1.806
+      ]
+    },
+    "physics_fit_s": [
+      0.2212424120000378,
+      0.2818267770001057,
+      0.1914257789999283
+    ]
+  },
+  "run_meta": {
+    "origin": "fixture",
+    "generator": "write_demo_project"
+  }
+}

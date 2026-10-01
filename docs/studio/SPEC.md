@@ -1993,7 +1993,7 @@ python -m sparc.core studio …   ≡   python -m sparc.studio …   ≡   sparc
 
 **Start:**
 1. Resolve the workspace.
-2. If `studio.lock.json` names a live pid (psutil + `create_time`) and its `/api/health` answers, print and open that URL, then exit 0.
+2. If `studio.lock.json` names a live pid (psutil + `create_time`) and its `/api/health` answers, print and open that URL, then exit 0. If that pid is live but `/api/health` does not answer within 10 s (still starting, or hung), print why and **exit 1** rather than start a second server (and scheduler) on the same workspace.
 3. Otherwise **bind the socket in the CLI** (preferred port, falling back to an ephemeral port if busy; `--port 0` asks for an ephemeral one) and hand the bound socket to uvicorn. The real port is known before the lock is written. **The occupant is never killed.**
 4. Write the lock (with the real port), generate the token, run uvicorn (`log_level=warning`) on the bound socket, and open `/auth?t=…` unless `--no-browser`.
 
@@ -2347,6 +2347,7 @@ These belong to the backend foundation item.
 - `index.html`
 - `assets/*-<hash>.{js,css,woff2}`
 - `BUILD_INFO.json`: `{src_sha256` over `studio-web/src` + `package-lock.json` + `vite.config.ts` + `index.html`, `vite, react}`. It has **no timestamp**, so rebuilding unchanged sources gives byte-identical output and the CI rebuild-diff can pass.
+  - `src_sha256` is computed exactly as `sourceHash()` in `studio-web/vite.config.ts`: every file under `studio-web/src` (skipping names that start with `.`), plus `package-lock.json`, `vite.config.ts` and `index.html`; POSIX paths relative to `studio-web/`, sorted by code point; SHA-256 over `relpath + "\0" + bytes + "\0"` per file. `scripts/check_studio_assets.py` reimplements it.
 
 The built assets are **committed**, so pip users need no Node.
 

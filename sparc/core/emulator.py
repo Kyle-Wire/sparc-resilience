@@ -33,6 +33,7 @@ import logging
 import numpy as np
 
 from sparc.core import operators as ops
+from sparc.core import progress
 
 log = logging.getLogger(__name__)
 
@@ -144,8 +145,10 @@ def validate(engine, em: dict, var: str, dose: float, n_patches: int = 12, radii
     lo, hi = engine._bounds(var)
     x = data.frame[var].to_numpy(float)
     rows = []
+    n_total = len(radii_m) * n_patches
     for r_m in radii_m:
         for c in rng.choice(data.n, n_patches, replace=False):
+            progress.tick(len(rows) + 1, n_total, unit="patch", label=f"{r_m:g} m patch")
             sel = _patch(g, int(c), r_m / g.dx, data)
             dx = np.where(sel, np.clip(x + dose, lo, hi) - x, 0.0)
             exact = engine.run(ScenarioSpec(name="patch", interventions=[
@@ -172,49 +175,81 @@ def validate(engine, em: dict, var: str, dose: float, n_patches: int = 12, radii
 
 def emulator_for_run(run_dir, cfg, validate_doses: dict | None = None, n_patches: int = 8) -> dict:
     """Build and validate emulators for every actionable lever of a finished
-    run (from its checkpoint); writes ``emulator.npz`` and ``emulator.json``."""
-    import json
+    run (from its checkpoint); writes ``emulator.npz`` and ``emulator.json``
+    and records a per-lever trust summary as the manifest's ``emulator``
+    section.  Each lever is a ``task lever[v/V]`` with one tick per
+    validation patch."""
     import pickle
     from pathlib import Path
 
+    from sparc.core import runio
     from sparc.core.baselines import load_run
     from sparc.core.mediators import MediatorChain
     from sparc.core.response import ResponseEngine
     from sparc.core.scenarios import ScenarioEngine
 
     run_dir = Path(run_dir)
-    data, folds, m, pred = load_run(run_dir, cfg)
-    with open(run_dir / "checkpoint.pkl", "rb") as fh:
-        st = pickle.load(fh)
-    ens, inf = st["ensemble"], st["influence"]
-    med = MediatorChain(cfg.mediators).fit(data.frame) if cfg.mediators else None
-    eng = ScenarioEngine(data, cfg, ens, dict(inf.ranges_m), med)
-    resp = ResponseEngine(eng, influence_scales=cfg.raw["influence"].get("scales", (0.5, 1.0, 2.0)))
-    arrays, meta = {}, {"levers": {}, "kernel_cells": None}
-    for var, spec in cfg.actionable.items():
-        em = build_emulator(resp, var)
-        dose = (validate_doses or {}).get(var) or design_dose(cfg, var, data.frame[var].to_numpy(float))
-        dose = -abs(dose) if str(spec.get("direction", "increase")) == "decrease" else abs(dose)
-        val = validate(eng, em, var, dose, n_patches=n_patches)
-        arrays[f"{var}__own"] = em["own"]
-        chans = []
-        for c, ch in enumerate(em["channels"]):
-            arrays[f"{var}__coef{c}"] = ch["coef"]
-            wkey = f"{var}__w__{ch['column']}"
-            if wkey not in arrays:
-                arrays[wkey] = ch["weight"]
-            chans.append({"column": ch["column"], "feature": ch["feature"], "sigma_cells": ch["sigma_cells"],
-                          "coef": f"{var}__coef{c}", "weight": wkey,
-                          "unit_weight": bool(np.allclose(ch["weight"], 1.0))})
-        if em["physics"]:
-            arrays[f"{var}__dq"] = em["physics"]["dq"]
-            arrays["physics_kernel"] = em["physics"]["kernel"]
-            meta["kernel_cells"] = em["physics"]["kernel_cells"]
-        meta["levers"][var] = {"channels": chans, "physics": bool(em["physics"]), "validation": val, "design_dose": dose,
-                               "bounds": list(eng._bounds(var)), "direction": spec.get("direction", "increase")}
-        log.info("emulator %s: patch-mean error median %.3f (rel %.0f%%), p95 cell error %.3f, uniform rel %.0f%%",
-                 var, val["patch_mean_abs_err_median"], 100 * val["patch_mean_rel_err_median"],
-                 val["p95_cell_err_median"], 100 * val["uniform"]["rel_err"])
-    np.savez_compressed(run_dir / "emulator.npz", ids=data.ids, **arrays)
-    (run_dir / "emulator.json").write_text(json.dumps(meta, indent=1, default=float), encoding="utf-8")
+    with progress.run_dir_scope(run_dir):
+        with progress.task("load_run"):
+            data, folds, m, pred = load_run(run_dir, cfg)
+        with progress.task("unpickle"):
+            with open(run_dir / "checkpoint.pkl", "rb") as fh:
+                st = pickle.load(fh)
+        ens, inf = st["ensemble"], st["influence"]
+        with progress.task("engine_init"):
+            med = MediatorChain(cfg.mediators).fit(data.frame) if cfg.mediators else None
+            eng = ScenarioEngine(data, cfg, ens, dict(inf.ranges_m), med)
+            resp = ResponseEngine(eng, influence_scales=cfg.raw["influence"].get("scales", (0.5, 1.0, 2.0)))
+        arrays, meta = {}, {"levers": {}, "kernel_cells": None}
+        levers = list(cfg.actionable.items())
+        for i, (var, spec) in enumerate(levers, start=1):
+            progress.check_cancel()
+            with progress.task("lever", k=i, n=len(levers), key=var) as sp:
+                em = build_emulator(resp, var)
+                dose = (validate_doses or {}).get(var) or design_dose(cfg, var, data.frame[var].to_numpy(float))
+                dose = -abs(dose) if str(spec.get("direction", "increase")) == "decrease" else abs(dose)
+                val = validate(eng, em, var, dose, n_patches=n_patches)
+                sp.metrics.update(patch_pass_rate=val["patch_pass_rate"],
+                                  patch_mean_abs_err_median=val["patch_mean_abs_err_median"])
+            arrays[f"{var}__own"] = em["own"]
+            chans = []
+            for c, ch in enumerate(em["channels"]):
+                arrays[f"{var}__coef{c}"] = ch["coef"]
+                wkey = f"{var}__w__{ch['column']}"
+                if wkey not in arrays:
+                    arrays[wkey] = ch["weight"]
+                chans.append({"column": ch["column"], "feature": ch["feature"], "sigma_cells": ch["sigma_cells"],
+                              "coef": f"{var}__coef{c}", "weight": wkey,
+                              "unit_weight": bool(np.allclose(ch["weight"], 1.0))})
+            if em["physics"]:
+                arrays[f"{var}__dq"] = em["physics"]["dq"]
+                arrays["physics_kernel"] = em["physics"]["kernel"]
+                meta["kernel_cells"] = em["physics"]["kernel_cells"]
+            meta["levers"][var] = {"channels": chans, "physics": bool(em["physics"]), "validation": val,
+                                   "design_dose": dose, "bounds": list(eng._bounds(var)),
+                                   "direction": spec.get("direction", "increase")}
+            log.info("emulator %s: patch-mean error median %.3f (rel %.0f%%), p95 cell error %.3f, uniform rel %.0f%%",
+                     var, val["patch_mean_abs_err_median"], 100 * val["patch_mean_rel_err_median"],
+                     val["p95_cell_err_median"], 100 * val["uniform"]["rel_err"])
+        runio.write_npz_atomic(run_dir / "emulator.npz", compressed=True, ids=data.ids, **arrays)
+        progress.artifact(run_dir / "emulator.npz", role="emulator")
+        runio.write_json_atomic(run_dir / "emulator.json", meta, indent=1)
+        progress.artifact(run_dir / "emulator.json", role="emulator")
+        runio.update_manifest(run_dir, {"emulator": emulator_summary(meta)}, source="emulator")
+        progress.artifact(run_dir / "manifest.json", role="manifest")
     return meta
+
+
+def emulator_summary(meta: dict) -> dict:
+    """The manifest's ``emulator`` section: per-lever trust numbers from the validation (no arrays)."""
+    levers = {}
+    for var, lv in (meta.get("levers") or {}).items():
+        v = lv.get("validation") or {}
+        levers[var] = {"design_dose": lv.get("design_dose"), "physics": lv.get("physics"),
+                       "n_channels": len(lv.get("channels") or []),
+                       "patch_pass_rate": v.get("patch_pass_rate"),
+                       "patch_mean_abs_err_median": v.get("patch_mean_abs_err_median"),
+                       "patch_mean_rel_err_median": v.get("patch_mean_rel_err_median"),
+                       "p95_cell_err_median": v.get("p95_cell_err_median"),
+                       "uniform_rel_err": (v.get("uniform") or {}).get("rel_err")}
+    return {"files": ["emulator.npz", "emulator.json"], "kernel_cells": meta.get("kernel_cells"), "levers": levers}

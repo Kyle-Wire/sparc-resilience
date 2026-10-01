@@ -26,10 +26,13 @@ from __future__ import annotations
 
 import copy
 import logging
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from scipy import ndimage
+
+from sparc.core import progress
 
 log = logging.getLogger(__name__)
 
@@ -171,9 +174,22 @@ def judge(placebo: dict, real: dict | None) -> dict:
             "model_below_10pct_of_real": small, "model_pass": within or small, "causal_ci_covers_zero": causal_zero}
 
 
+def child_run_dir(children_dir, name: str, kind: str, coarse: float | None) -> Path:
+    """``<children_dir>/<name>_placebo_<kind>[_coarse<M>]``: where one placebo re-fit is written."""
+    return Path(children_dir) / (f"{name}_placebo_{kind}" + (f"_coarse{float(coarse):g}" if coarse else ""))
+
+
 def run_placebo_suite(cfg, kinds=KINDS, coarse: float | None = 60.0, seed: int = 0,
-                      grf_range_m: float = 600.0, write: bool = True, frame: pd.DataFrame | None = None) -> dict:
-    """Run the placebo re-fits and tabulate placebo vs real effects."""
+                      grf_range_m: float = 600.0, write: bool = True, frame: pd.DataFrame | None = None,
+                      children_dir=None, resume: bool = False, run_meta: dict | None = None) -> dict:
+    """Run the placebo re-fits and tabulate placebo vs real effects.
+
+    Each kind is a ``task placebo_kind[<kind>]`` in ``context(placebo=<kind>)``
+    whose nested ``run_core`` reports its own run.  With ``children_dir`` the
+    re-fits are written to :func:`child_run_dir` (otherwise under
+    ``output.dir`` as before); ``resume`` reuses each child's checkpoint, so
+    an interrupted suite continues per kind.  ``run_meta`` is passed to every
+    child with ``role = "placebo:<kind>"``."""
     from sparc.core.config import CoreConfig
     from sparc.core.data import prepare_frame
     from sparc.core.pipeline import run_core
@@ -191,30 +207,35 @@ def run_placebo_suite(cfg, kinds=KINDS, coarse: float | None = 60.0, seed: int =
     stages = ("S0", "S1", "S2", "S3", "S4", "S5", "S6")
     runs, layer_corr = {}, {}
     for kind in kinds:
-        d = df.copy()
-        if kind == "grf":
-            d[GRF] = grf_layer(fine.grid, fine.frame[layers[0]].to_numpy(float), grf_range_m, seed)
-            tested = layers + [GRF]
-        else:
-            for v in layers:
-                orig = fine.frame[v].to_numpy(float)
-                d[v] = shift_layer(orig, fine.grid) if kind == "shift" else rotate_layer(orig, fine.grid)
-                layer_corr[f"{kind}:{v}"] = layer_correlation(orig, d[v].to_numpy(float))
-            tested = list(layers)
-        probe = copy.deepcopy(cfg)
-        if kind == "grf":
-            probe.raw["predictors"] = list(probe.raw["predictors"]) + [GRF]
-        if coarse:
-            probe.raw["data"]["coarse_m"] = float(coarse)
-        pdat = prepare_frame(d, probe)
-        sds = {v: float(pdat.frame[v].std()) for v in tested}
-        pc = placebo_config(cfg, kind, tested, sds)
-        if coarse:
-            pc.raw["data"]["coarse_m"] = float(coarse)
-        log.info("placebo %s: re-fitting (%s)", kind, ", ".join(tested))
-        res = run_core(pc, stages=stages, frame=d, write=write)
-        runs[kind] = {"effects": _effects(res, tested), "metrics": res.manifest.get("metrics", {}).get("stacker"),
-                      "run_dir": str(res.run_dir) if res.run_dir else None}
+        progress.check_cancel()
+        with progress.context(placebo=kind), progress.task("placebo_kind", key=kind) as sp:
+            d = df.copy()
+            if kind == "grf":
+                d[GRF] = grf_layer(fine.grid, fine.frame[layers[0]].to_numpy(float), grf_range_m, seed)
+                tested = layers + [GRF]
+            else:
+                for v in layers:
+                    orig = fine.frame[v].to_numpy(float)
+                    d[v] = shift_layer(orig, fine.grid) if kind == "shift" else rotate_layer(orig, fine.grid)
+                    layer_corr[f"{kind}:{v}"] = layer_correlation(orig, d[v].to_numpy(float))
+                tested = list(layers)
+            probe = copy.deepcopy(cfg)
+            if kind == "grf":
+                probe.raw["predictors"] = list(probe.raw["predictors"]) + [GRF]
+            if coarse:
+                probe.raw["data"]["coarse_m"] = float(coarse)
+            pdat = prepare_frame(d, probe)
+            sds = {v: float(pdat.frame[v].std()) for v in tested}
+            pc = placebo_config(cfg, kind, tested, sds)
+            if coarse:
+                pc.raw["data"]["coarse_m"] = float(coarse)
+            log.info("placebo %s: re-fitting (%s)", kind, ", ".join(tested))
+            child_dir = child_run_dir(children_dir, cfg.name, kind, coarse) if children_dir and write else None
+            meta = {**(run_meta or {}), "role": f"placebo:{kind}"}
+            res = run_core(pc, stages=stages, frame=d, write=write, resume=resume, run_dir=child_dir, run_meta=meta)
+            runs[kind] = {"effects": _effects(res, tested), "metrics": res.manifest.get("metrics", {}).get("stacker"),
+                          "run_dir": str(res.run_dir) if res.run_dir else None}
+            sp.metrics["stacker_r2"] = (runs[kind]["metrics"] or {}).get("r2")
     real = runs.get("grf", {}).get("effects", {})
     table = []
     for kind, r in runs.items():

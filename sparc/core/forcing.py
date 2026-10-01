@@ -42,7 +42,8 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
-from sparc.core.climate import http_fetch, site_weights
+from sparc.core import progress
+from sparc.core.climate import http_fetch, retry_wait, site_weights
 
 log = logging.getLogger(__name__)
 
@@ -65,7 +66,6 @@ _COORDS = {"latitude", "longitude", "time", "utc_date", "forecast_initial_time",
 # --------------------------------------------------------------------------- #
 def http_range(url: str, start: int, end: int, retries: int = 4) -> tuple[bytes, int]:
     """Bytes ``start..end`` (inclusive) of ``url`` and the object's total size."""
-    import time
     import urllib.request
 
     for attempt in range(retries + 1):
@@ -74,10 +74,10 @@ def http_range(url: str, start: int, end: int, retries: int = 4) -> tuple[bytes,
             with urllib.request.urlopen(req, timeout=180) as r:
                 size = int(r.headers["Content-Range"].split("/")[1])
                 return r.read(), size
-        except Exception:                       # noqa: BLE001 - retried, then re-raised
+        except Exception as exc:                # noqa: BLE001 - retried, then re-raised
             if attempt == retries:
                 raise
-            time.sleep(2.0 * 2 ** attempt)
+            retry_wait(url, attempt, 2.0 * 2 ** attempt, repr(exc)[:200])
     raise RuntimeError("unreachable")
 
 
@@ -225,6 +225,8 @@ def era5_site(site_lat: float, site_lon: float, times_utc: list[dt.datetime],
         h.close()
     except Exception as exc:                    # noqa: BLE001 - land weighting is optional
         log.warning("ERA5 land-sea mask unavailable (%s); unweighted bilinear", exc)
+        progress.warn("forcing.lsm_unavailable", f"ERA5 land-sea mask unavailable ({exc}); unweighted bilinear "
+                      "interpolation", error=repr(exc)[:300])
         land = None
     out: dict = {"times_utc": [t.strftime("%Y-%m-%dT%H:%MZ") for t in times_utc], "values": {}, "series": {}}
     listings: dict[str, list[str]] = {}
@@ -246,28 +248,34 @@ def era5_site(site_lat: float, site_lon: float, times_utc: list[dt.datetime],
         return opened[key]
 
     try:
+        # one remote object (ERA5 file block) per variable
         for name, code in analyses.items():
-            vals = []
-            for t in times_utc:
-                h, _, var, cells, box = site_field(_era5_key(keys(f"e5.oper.an.sfc/{t:%Y%m}/"), code, t))
-                ti = int(np.flatnonzero(h["time"][:] == _hours_since_epoch(t))[0])
-                vals.append(float(_weighted(h[var][ti, box[0], box[1]], cells, box)))
-            out["series"][name] = vals
-            out["values"][name] = float(np.mean(vals))
+            progress.check_cancel()
+            with progress.task("remote_object", key=f"era5:{name}", unit="remote_object"):
+                vals = []
+                for t in times_utc:
+                    h, _, var, cells, box = site_field(_era5_key(keys(f"e5.oper.an.sfc/{t:%Y%m}/"), code, t))
+                    ti = int(np.flatnonzero(h["time"][:] == _hours_since_epoch(t))[0])
+                    vals.append(float(_weighted(h[var][ti, box[0], box[1]], cells, box)))
+                out["series"][name] = vals
+                out["values"][name] = float(np.mean(vals))
         # accumulation over the hour ending at t comes from the 06Z/18Z forecast
         # initialised before it (steps 1–12 are hourly, not cumulative)
         ends = times_utc[1:] if len(times_utc) > 1 else times_utc
         for name, code in accumulations.items():
-            vals = []
-            for t in ends:
-                init = accumulation_init(t)
-                h, _, var, cells, box = site_field(_era5_key(keys(f"e5.oper.fc.sfc.accumu/{init:%Y%m}/"), code, init))
-                ii = int(np.flatnonzero(h["forecast_initial_time"][:] == _hours_since_epoch(init))[0])
-                step = int(round((t - init).total_seconds() / 3600.0))
-                si = int(np.flatnonzero(h["forecast_hour"][:] == step)[0])
-                vals.append(float(_weighted(h[var][ii, si, box[0], box[1]], cells, box)) / 3600.0)
-            out["series"][name] = vals
-            out["values"][name] = float(np.mean(vals))
+            progress.check_cancel()
+            with progress.task("remote_object", key=f"era5:{name}", unit="remote_object"):
+                vals = []
+                for t in ends:
+                    init = accumulation_init(t)
+                    h, _, var, cells, box = site_field(_era5_key(keys(f"e5.oper.fc.sfc.accumu/{init:%Y%m}/"), code,
+                                                                 init))
+                    ii = int(np.flatnonzero(h["forecast_initial_time"][:] == _hours_since_epoch(init))[0])
+                    step = int(round((t - init).total_seconds() / 3600.0))
+                    si = int(np.flatnonzero(h["forecast_hour"][:] == step)[0])
+                    vals.append(float(_weighted(h[var][ii, si, box[0], box[1]], cells, box)) / 3600.0)
+                out["series"][name] = vals
+                out["values"][name] = float(np.mean(vals))
     finally:
         out["bytes_read"] = int(sum(f.n_bytes for _, f, *_ in opened.values()))
         for h, *_ in opened.values():
@@ -301,8 +309,9 @@ def station_obs(station: str, start_utc: dt.datetime, end_utc: dt.datetime,
         if raw is None:
             raise FileNotFoundError(f"no Global Hourly file for station {station} in {year}")
         if cache is not None:
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_bytes(raw)
+            from sparc.core import runio
+
+            runio.write_bytes_atomic(cache, raw)
     df = pd.read_csv(io.BytesIO(raw), dtype=str, low_memory=False)
     t = pd.to_datetime(df["DATE"], utc=True)
     pad = pd.Timedelta(minutes=30)              # hourly METARs are issued at ~:51
@@ -406,10 +415,14 @@ def campaign_forcing(site_lat: float, site_lon: float, date: str, hours: tuple[i
     }
     st = None
     if station:
-        try:
-            st = station_obs(station, times[0], times[-1], fetch=fetch, cache_dir=cache_dir)
-        except Exception as exc:                # noqa: BLE001 - the station is a cross-check
-            log.warning("station %s unavailable: %s", station, exc)
+        progress.check_cancel()
+        with progress.task("remote_object", key=f"isd:{station}", unit="remote_object"):
+            try:
+                st = station_obs(station, times[0], times[-1], fetch=fetch, cache_dir=cache_dir)
+            except Exception as exc:            # noqa: BLE001 - the station is a cross-check
+                log.warning("station %s unavailable: %s", station, exc)
+                progress.warn("forcing.station_unavailable", f"station {station} unavailable: {exc}",
+                              station=station, error=repr(exc)[:300])
     src = wind_source if wind_source != "auto" else ("station" if st else "era5")
     if src == "station" and not st:
         raise ValueError("wind_source=station but no station observations")

@@ -28,6 +28,9 @@ class CoreData:
     qa: dict = field(default_factory=dict)
     target_units: str = "degF"
     zones: np.ndarray | None = None   # optional zone / neighbourhood code per point (reporting only)
+    # Auxiliary per-point columns carried through S0 but never modelled (e.g. ``optimize.equity_column``):
+    # filtered, subsampled and coarsened exactly like the frame, so they stay aligned with ``ids``.
+    aux: dict[str, np.ndarray] | None = None
 
     @property
     def n(self) -> int:
@@ -59,7 +62,14 @@ class CoreData:
             qa=self.qa,
             target_units=self.target_units,
             zones=self.zones,
+            aux=getattr(self, "aux", None),
         )
+
+
+def aux_columns(cfg: CoreConfig) -> list[str]:
+    """Columns S0 carries along without modelling them (the equity score of S7)."""
+    eq = (cfg.raw.get("optimize") or {}).get("equity_column")
+    return [str(eq)] if eq else []
 
 
 def _read_csv(path) -> pd.DataFrame:
@@ -191,13 +201,14 @@ def _fine_to_coarse(xs: np.ndarray, ys: np.ndarray, dx_fine: float, cell_m: floa
 
 
 def coarsen(df: pd.DataFrame, frame: pd.DataFrame, xs: np.ndarray, ys: np.ndarray, dx_fine: float, cell_m: float,
-            cfg: CoreConfig):
+            cfg: CoreConfig, aux=()):
     """Average fine lattice cells onto ``cell_m`` squares over the full extent.
 
-    Continuous columns (target, predictors, a background column) are cell
-    means, circular columns circular means, categorical columns and the zone
-    the most common value; the id is the first member's.  Coordinates become
-    the coarse cell centres.  Returns ``(df, frame, x, y, members)``."""
+    Continuous columns (target, predictors, a background column, the
+    ``aux`` columns) are cell means (``aux``: of the finite members),
+    circular columns circular means, categorical columns and the zone the
+    most common value; the id is the first member's.  Coordinates become the
+    coarse cell centres.  Returns ``(df, frame, x, y, members)``."""
     if cell_m < 1.5 * dx_fine:
         raise ValueError(f"data.coarse_m={cell_m:g} must be at least 1.5× the input cell ({dx_fine:g} m)")
     inv, members, cx, cy = _fine_to_coarse(xs, ys, dx_fine, cell_m)
@@ -231,6 +242,13 @@ def coarsen(df: pd.DataFrame, frame: pd.DataFrame, xs: np.ndarray, ys: np.ndarra
         out[d["id"]] = df[d["id"]].to_numpy()[first]
     if d.get("zone") and d["zone"] in df.columns:
         out[d["zone"]] = mode(df[d["zone"]].to_numpy())
+    for c in aux:
+        if c in df.columns and c not in out:
+            v = pd.to_numeric(df[c], errors="coerce").to_numpy(float)
+            ok = np.isfinite(v)
+            n_ok = np.bincount(inv, weights=ok.astype(float), minlength=k)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                out[c] = np.where(n_ok > 0, np.bincount(inv, weights=np.where(ok, v, 0.0), minlength=k) / n_ok, np.nan)
     return pd.DataFrame(out), out_frame, cx, cy, members
 
 
@@ -286,7 +304,7 @@ def prepare_frame(df: pd.DataFrame, cfg: CoreConfig) -> CoreData:
     cm = d.get("coarse_m")
     if cm:
         fine_dx = grid.dx
-        df, frame, xs, ys, members = coarsen(df, frame, xs, ys, fine_dx, float(cm), cfg)
+        df, frame, xs, ys, members = coarsen(df, frame, xs, ys, fine_dx, float(cm), cfg, aux=aux_columns(cfg))
         grid = Grid.from_points(xs, ys, cell=float(cm))
         full = int(round(float(cm) / fine_dx)) ** 2
         qa["coarse"] = {"cell_m": float(cm), "fine_cell_m": float(fine_dx), "n_fine": int(members.sum()),
@@ -314,6 +332,8 @@ def prepare_frame(df: pd.DataFrame, cfg: CoreConfig) -> CoreData:
 
     ids = df[d["id"]].to_numpy() if d.get("id") and d["id"] in df.columns else np.arange(len(df))
     zones = df[d["zone"]].to_numpy() if d.get("zone") and d["zone"] in df.columns else None
+    # Same rows as the frame: the non-finite filter, window and coarse cells above all apply to ``df``.
+    aux = {c: pd.to_numeric(df[c], errors="coerce").to_numpy(float) for c in aux_columns(cfg) if c in df.columns}
     return CoreData(
         frame=frame,
         X=encode_features(frame, cfg.raw.get("encodings")),
@@ -327,6 +347,7 @@ def prepare_frame(df: pd.DataFrame, cfg: CoreConfig) -> CoreData:
         qa=qa,
         target_units=str(d.get("target_units", "")),
         zones=zones,
+        aux=aux or None,
     )
 
 

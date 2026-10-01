@@ -1,0 +1,17 @@
+{
+  "_source": "Hand-written from docs/studio/SPEC.md §6.3 (ramp stops and golden LUT entries at indices 0, 64, 128, 191, 255; n = 256).",
+  "n": 256,
+  "indices": [0, 64, 128, 191, 255],
+  "ramps": {
+    "seqLight": ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"],
+    "seqDark": ["#1d2f45", "#184f95", "#256abf", "#3987e5", "#6da7ec", "#9ec5f4", "#cde2fb"],
+    "divLight": ["#0d366b", "#256abf", "#6da7ec", "#f0efec", "#f19a8f", "#d6403f", "#8a1f22"],
+    "divDark": ["#9ec5f4", "#3987e5", "#1f4f8a", "#383835", "#8f3434", "#e66767", "#f6b3ab"]
+  },
+  "golden": {
+    "seqLight": ["#cde2fb", "#85b6f0", "#3987e5", "#1e5caa", "#0d366b"],
+    "seqDark": ["#1d2f45", "#1e5caa", "#3a87e5", "#85b6f0", "#cde2fb"],
+    "divLight": ["#0d366b", "#4a89d6", "#f0eeeb", "#e57168", "#8a1f22"],
+    "divDark": ["#9ec5f4", "#2c6ab6", "#393835", "#b94d4d", "#f6b3ab"]
+  }
+}

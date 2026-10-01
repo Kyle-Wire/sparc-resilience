@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "status": "succeeded",
+  "pid": 4557,
+  "job": "j_fixture",
+  "host": "vm",
+  "started_utc": "2026-10-01T21:21:18Z",
+  "updated_utc": "2026-10-01T21:21:49Z",
+  "stage": "finish",
+  "done": [
+    "S3",
+    "S4",
+    "S5",
+    "S6",
+    "baselines",
+    "climate"
+  ],
+  "fingerprint": "68c17c7b36fce387",
+  "events_path": "/tmp/sparc-fixture/events.jsonl",
+  "error": null,
+  "meta": {
+    "n_points": 1120,
+    "cell_m": 30.0,
+    "grid_shape": [
+      42,
+      42
+    ],
+    "coarse_m": null,
+    "subsample_window_n": 1120,
+    "cv": {
+      "n_folds": 3,
+      "block_m": 390.0,
+      "buffer_m": 130.0,
+      "seed": 42
+    }
+  }
+}

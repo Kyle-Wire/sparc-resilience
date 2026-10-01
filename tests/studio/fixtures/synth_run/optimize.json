@@ -1,0 +1,47 @@
+{
+  "variable": "canopy",
+  "budget": 2000.0,
+  "planned_total_cooling": 583.343489322814,
+  "realized_total_cooling": 623.8560371386659,
+  "realized_mean_cooling_treated": 0.8066589452077031,
+  "realized_mean_cooling_all": 0.5570143188738088,
+  "n_cells_treated": 232,
+  "mean_dose_treated": 8.620689655172377,
+  "total_cost": 1999.9999999999914,
+  "gini": 0.9463902787705507,
+  "min_dose_dropped_cost": 0.0,
+  "pareto": {
+    "points": [
+      {
+        "budget": 500.0,
+        "total_benefit": 192.86768022255498,
+        "n_cells": 75,
+        "n_segments": 75,
+        "gini": 0.9865975696926376
+      },
+      {
+        "budget": 1000.0,
+        "total_benefit": 342.9961438150137,
+        "n_cells": 142,
+        "n_segments": 150,
+        "gini": 0.9731951393852752
+      },
+      {
+        "budget": 2000.0,
+        "total_benefit": 583.343489322814,
+        "n_cells": 232,
+        "n_segments": 300,
+        "gini": 0.9463902787705507
+      },
+      {
+        "budget": 4000.0,
+        "total_benefit": 920.1503748765288,
+        "n_cells": 331,
+        "n_segments": 600,
+        "gini": 0.8927805575411001
+      }
+    ]
+  },
+  "constraint": "plantable space (WorldCover open land + 20% of built-up area)",
+  "objective": "total cooling"
+}
