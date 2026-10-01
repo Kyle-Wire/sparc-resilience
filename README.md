@@ -251,26 +251,45 @@ sparc run -p project.yml -s 4      # Scenario simulation
 | **S5** Scenarios | Add/set/scale edits with bounds, mediators (e.g. NDVI ← canopy) and re-featurisation through the trained stack, with fold-spread uncertainty and extrapolation flags |
 | **S6** Causal validation | Spatial DML, spillover (own vs neighbour), R-learner CATE, doubly robust dose-response, E-value and Cinelli–Hazlett RV, and a model-vs-causal audit |
 | **Climate** | CMIP6 change factors for every pathway and period (24 models, read straight from the public AWS archive) applied to the observed map, combined with each adaptation package: future temperature, heat-threshold exposure, and the share of warming each package offsets |
-| **S7** Budget | Concave-segment allocation under a budget, optional equity weighting, and a closed-loop re-prediction check |
+| **S7** Budget | Concave-segment allocation under a budget, capped by plantable space (WorldCover) and optionally weighted by residents or equity scores, with a closed-loop re-prediction check |
 
 ```bash
-pip install -e .                  # or: pip install -r requirements-core.txt
-sparc core run --project configs/core_providence.yml --fast     # ~20 min smoke run (8k-point window)
-sparc core run --project configs/core_providence.yml            # full run, all stages (~40 min on 3 threads)
-sparc core run --project configs/core_providence.yml --cv-curve --resume   # + skill-vs-distance CV table; resume after an interruption
-python scripts/results_page/build_page.py output/core/providence/providence_uhi configs/core_providence.yml   # interactive results page
-sparc core climate --lat 41.826 --lon -71.403 --out configs/climate/my_city.csv   # CMIP6 change factors for any site
-sparc core benchmark                                            # effect-recovery benchmark (planted truths)
-sparc core synth --out ./synthetic_city                         # synthetic city with planted truths
-pytest tests/core -m "not slow"                                 # unit + synthetic + Providence tests
+pip install -e ".[climate]"       # or: pip install -r requirements-core.txt
+# inputs from open data (any city)
+sparc core forcing  -p configs/core_providence.yml --date 2020-07-29 --hours 15-16 --station 72507014765 \
+                    --out configs/forcing/providence_2020-07-29.json     # campaign-day ERA5 + station forcing
+sparc core layers   -p configs/core_providence.yml --out configs/layers/providence_layers.parquet   # HRSL people + WorldCover
+sparc core features -p configs/core_providence.yml --out configs/layers/providence_open_features.parquet \
+                    --s2-tiles 19TCG,19TBG                               # predictors from Sentinel-2 / WorldCover / DEM
+sparc core climate  --lat 41.826 --lon -71.403 --out configs/climate/my_city.csv   # CMIP6 change factors for any site
+# the model
+sparc core run -p configs/core_providence.yml --fast            # smoke run (8k-point window)
+sparc core run -p configs/core_providence.yml --cv-curve        # full run, all stages (+ skill vs distance; --resume after an interruption)
+sparc core run -p configs/core_providence.yml --coarse 60       # full extent on 60 m cells (validation studies)
+# validation studies
+sparc core baselines   <run dir> -p <config>                    # kriging / boosting / IDW on the same folds, paired by block
+sparc core placebo     -p <config> --coarse 60                  # shifted / rotated / random layers must show ~no effect
+sparc core simcheck    -p <config> --design physics=20,additive=20,null=20 --out <dir>   # planted effects on the real layout
+sparc core multiverse  -p <config> --out <dir>                  # effect and priority-map stability across analysis choices
+sparc core uncertainty <run dir> --multiverse <dir> --simcheck <dirs>   # estimation / specification / attribution
+sparc core reproduce   <run dir>                                # re-run from the manifest and compare
+sparc core benchmark                                            # effect recovery on the synthetic city
+# for planners
+sparc core planner  <run dir> -p <config>                       # residents, hot days, equity, zones, hexes, GeoTIFF/GPKG
+sparc core emulator <run dir> -p <config>                       # fast emulator for the page's design tool (validated)
+python scripts/results_page/build_page.py <run dir> <config> --placebo <placebo.json>   # interactive results page
+pytest tests/core -m "not slow"
 ```
 
 Each run writes a directory containing:
-- `manifest.json`, `report.md`
-- `predictions.parquet`
+- `manifest.json` (with provenance: input/config/code hashes), `report.md`, `methods.md`, `model_card.md`, `environment.txt`
+- `predictions.parquet`, `baselines.json`, `cv_distance.json`
 - `influence.json`, `physics.json`
 - `response_<var>.parquet`
-- `scenarios.json`, `causal.json`, `optimize.json`
+- `scenarios.json`, `scenario_deltas.parquet`, `climate.json`, `causal.json`, `optimize.json`, `allocation.parquet`
+- after the post-run commands: `planner/` (tables, hexagons, GeoTIFFs, GeoPackage), `emulator.npz/.json`, `uncertainty.json/.md`
+
+See [`docs/planner_guide.md`](docs/planner_guide.md) for reading the outputs and [`docs/results/reconciliation.md`](docs/results/reconciliation.md) for how these numbers relate to earlier SPARC releases.
 
 The legacy `sparc run` stages below still work, and their defects have been fixed in place. New work should target the core.
 

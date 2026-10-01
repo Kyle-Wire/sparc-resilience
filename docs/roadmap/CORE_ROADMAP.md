@@ -483,6 +483,103 @@ The core is a lean, self-contained package (numpy, scipy, pandas, scikit-learn, 
   The core flags these, and the large-change numbers should not be used.
 - **Results:** `docs/results/providence_core.md`. The interactive page is built by `scripts/results_page/build_page.py` from any run directory.
 
+## Appendix D — Trust, planner and any-city round (2026-10-01)
+
+**Goal of the round.** A researcher meeting SPARC for the first time should find:
+- the evidence to trust it;
+- the outputs a planner needs;
+- a way to run it on another city from open data.
+
+Findings that changed the code are marked ⚑.
+
+**Correctness and provenance**
+- Decision quantities are fold-averaged (no 2 km seams), and their uncertainty is the delete-a-group jackknife.
+- Intervals are reported per fold and per zone, with a distance-adaptive alternative.
+- Coarse full-extent mode (`--coarse 60`) gives the validation studies 13.9k cells over the same 23 blocks.
+- S0 data findings:
+  - the target is a classed product (72% whole degrees);
+  - albedo is not broadband: mean 0.40, where Sentinel-2 broadband gives 0.155;
+  - canopy overlaps pavement on 38% of cells;
+  - dose scale.
+- ⚑ **Campaign date.** The RI Heat Watch traverses ran on **2020-07-29**, not 07-18. The target matches the 15–16 EDT traverse.
+  - ERA5 forcing: SW↓ 636 W/m², clear-sky index 0.87.
+  - KPVD: 87.5 °F, wind 7.7 m/s from S.
+
+**Researcher trust**
+- **Baselines on the same folds** (2 km blocks), against stack RMSE 1.14 °F. The stack beats every baseline by more than 2 block-clustered SE:
+
+  | Baseline | RMSE (°F) | Held-out R² |
+  |---|---|---|
+  | Boosting on the stack's own neighbourhood features | 1.37 | 0.36 |
+  | Boosting + x,y | 1.45 | — |
+  | Regression-kriging | 1.58 | — |
+  | Boosting without location | 1.75 | — |
+  | IDW | 1.88 | — |
+
+  - The neighbourhood features account for part of the gain. The geographically weighted and physics models plus the stacker account for the rest (R² 0.36 → 0.56).
+- ⚑ **Placebos exposed a prior-driven canopy effect.** With the old physics priors (shading strength s ~ N(0.6, 0.1)), a canopy layer moved half the map away still got −0.44 °F per sd (45% of the real effect). Decomposition:
+  - The physics model held s ≈ 0.53 for the placebo: about 2/3 of the spurious effect.
+  - The statistical models also picked up chance large-scale correlation of the smooth layer.
+  - The causal check (DML with a spatial basis) passed.
+
+  Physics-only test (`s` and the effect of +1 sd canopy):
+
+  | Prior sd | Real canopy | Shifted | Rotated |
+  |---|---|---|---|
+  | 0.1 | s 0.56, −1.30 °F | s 0.53, −0.69 °F | s 0.51, −0.94 °F |
+  | 0.3 | s 0.34, −1.03 °F | s 0.09, −0.27 °F | s 0.13, −0.50 °F |
+  | 1.0 | s 0.03, −0.27 °F | s 0.01, −0.11 °F | s 0.04, −0.25 °F |
+
+  - Held-out R² was 0.533, 0.548 and 0.543 respectively.
+  - Priors are now sd 0.3 and configurable (`physics.priors`).
+  - The canopy-specific shading channel is weakly identified from one afternoon; vegetation cooling is shared with NDVI.
+- **Literature panel.**
+  - Canopy: 0.14 °C per +0.10 cover. Ziter et al. 2019 report 0.07–0.15; the Krayenhoff et al. 2021 model review reports 0.3.
+  - Albedo: 0.44 °C per +0.10, inside 0.2–0.6 (Krayenhoff) and 0.3–0.9 (Santamouris 2014), with the scale caveat above.
+- **Reproducibility.**
+  - Hashes and `environment.txt` in every run.
+  - `sparc core reproduce` reproduces a fast run bit for bit.
+  - Golden synthetic numbers in CI.
+  - `Dockerfile.core`.
+- **Documentation:** auto-written `methods.md` and `model_card.md`; `docs/references.bib`; `docs/planner_guide.md`; `docs/results/reconciliation.md`.
+
+**Validation studies**
+- ⚑ **Simulation check.** The first batch was much noisier than Providence (held-out R² ≈ 0.1 against 0.56). Generators now match the real explained-variance share.
+- The multiverse and the uncertainty report keep their components separate. The page shows them.
+
+**Planner pack.** HRSL residents (all, 60+, under 5) and WorldCover land cover give:
+- exposure today and in each future, with and without the package;
+- equity quintiles and a concentration index;
+- hot afternoons per summer from KPVD 1995–2014 with CMIP6 deltas;
+- plantable space, which caps S7;
+- zone and hexagon tables;
+- GeoTIFF and GeoPackage export;
+- logger sites and before/after pairs.
+
+Not done: quantile delta mapping with daily CMIP6 (the seasonal delta is used) and the nClimGrid cross-check.
+
+**Design tool.** A linear emulator of the fold-averaged model (own, neighbourhood channels, physics Green's kernel; secant at a design dose) runs in the browser.
+- Fast-run validation, canopy patches: median error 0.02 °F (13%).
+- Large uniform edits overshoot, because saturation is not emulated. The page says so.
+
+**Any-city builder.** `sparc core features` builds all six predictors from WorldCover, Sentinel-2 (S3 listing, cloud-masked median) and the Copernicus DEM in about a minute. Agreement with brown4:
+
+| Feature | Pearson r |
+|---|---|
+| Elevation | 0.98 |
+| NDVI | 0.89 |
+| Canopy | 0.77 |
+| Impervious | 0.76 |
+| Albedo | 0.63 |
+| Water distance | 0.46 |
+
+Canopy and impervious fall short of the 0.8 / 0.7 R² targets. The usual remedy is the Meta 1 m canopy-height map, but its bucket refuses listing from here. The refit with open features is in `configs/core_providence_open.yml`.
+
+**Deferred:**
+- multi-city transfer (needs the other cities' CAPA data);
+- the multi-intervention cost optimiser;
+- a night-time model.
+
 ## Appendix B — References
 
 - **Assran et al. (2023):** *Self-Supervised Learning from Images with a Joint-Embedding Predictive Architecture* (I-JEPA).
