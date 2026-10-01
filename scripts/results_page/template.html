@@ -726,6 +726,7 @@ function designStats(row) {
   if (val) row("Emulator check", `patch means within ${fmt(val.patch_abs, 3)} ${U} (median, ${fmt(100 * val.patch_rel, 0)}%) of the full model`);
   if (nEd > 3000) row("Note", "Large edits: saturation is not emulated — use Scenarios for city-wide changes");
 }
+window.SPARC_DESIGN = { plan: PLAN, delta: () => designDelta(), dirty: () => { deltaDirty = true; } };   // for tests and power users
 if (DS && DS.levers) {
   for (const v of Object.keys(DS.levers)) $("leverSel").append(el("option", { value: v }, vname(v)));
   const setDose = () => { const d = DS.levers[curLever()]; if (d) $("doseIn").value = d.dose; };
