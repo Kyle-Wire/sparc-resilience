@@ -6,8 +6,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { errorMessage } from "../../api/client";
 import { invalidate } from "../../api/resource";
-import type { CheckpointInfo, Conversion, DictionaryRow, FileEntry } from "../../api/runs";
-import { deleteCheckpoint, fetchFileText, fileRawUrl, useFileTable, useRunDetailFull, useRunDictionary, useRunFiles } from "../../api/runs";
+import type { CheckpointInfo, Conversion, DictionaryRow, FileEntry, FileText } from "../../api/runs";
+import { deleteCheckpoint, fetchFileText, fileRawUrl, useFileTable, useGridMeta, useRunDetailFull, useRunDictionary, useRunFiles } from "../../api/runs";
 import type { OutputEntry } from "../../api/types";
 import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
@@ -17,11 +17,11 @@ import { Icon } from "../../components/ui/Icon";
 import { Markdown } from "../../components/ui/Markdown";
 import { StatusChip } from "../../components/ui/StatusChip";
 import { Table } from "../../components/ui/Table";
-import { useRunOutputs } from "../../layouts/resources";
+import { runIsLive, useRunOutputs } from "../../layouts/resources";
 import { codecs, useUrlState } from "../../router";
 import { toast } from "../../stores/ui";
 import { fmtBytes, fmtDateTime, fmtDuration } from "../../theme/format";
-import { Block, useRid } from "./common";
+import { Block, LiveBanner, useRid } from "./common";
 import { OUTPUT_STATE_TEXT, cellText, outputStateStatus, producedByText } from "./format";
 
 const ext = (p: string) => (/\.([a-z0-9]+)$/i.exec(p)?.[1] ?? "").toLowerCase();
@@ -138,24 +138,38 @@ function TablePreview({ rid, path }: { rid: string; path: string }) {
   );
 }
 
+/** Bytes of a text file a preview reads (the rest stays on disk; Download has it all). */
+export const PREVIEW_BYTES = 256 * 1024;
+
 function TextPreview({ rid, path }: { rid: string; path: string }) {
-  const [state, setState] = useState<{ text: string | null; error: unknown }>({ text: null, error: null });
+  const [state, setState] = useState<{ file: FileText | null; error: unknown }>({ file: null, error: null });
   useEffect(() => {
     const ctrl = new AbortController();
-    setState({ text: null, error: null });
-    fetchFileText(rid, path, ctrl.signal).then(
-      (text) => setState({ text, error: null }),
-      (error: unknown) => !ctrl.signal.aborted && setState({ text: null, error }),
+    setState({ file: null, error: null });
+    fetchFileText(rid, path, ctrl.signal, PREVIEW_BYTES).then(
+      (file) => !ctrl.signal.aborted && setState({ file, error: null }),
+      (error: unknown) => !ctrl.signal.aborted && setState({ file: null, error }),
     );
     return () => ctrl.abort();
   }, [rid, path]);
   if (state.error) return <EmptyState error={state.error} />;
-  if (state.text === null) return <p className="cap">Loading preview…</p>;
-  const cap = 200_000;
-  const text = state.text.length > cap ? state.text.slice(0, cap) : state.text;
-  if (ext(path) === "md") return <Markdown source={text} />;
+  if (state.file === null) return <p className="cap">Loading preview…</p>;
+  const { text, truncated, bytes } = state.file;
+  const note = truncated ? (
+    <p className="cap" data-truncated="true">
+      Showing the first {fmtBytes(PREVIEW_BYTES)}
+      {bytes !== null ? ` of ${fmtBytes(bytes)}` : ""}; download the file for the rest.
+    </p>
+  ) : null;
+  if (ext(path) === "md")
+    return (
+      <div className="stack" style={{ gap: 6 }}>
+        {note}
+        <Markdown source={text} />
+      </div>
+    );
   let shown = text;
-  if (ext(path) === "json" && state.text.length <= cap) {
+  if (ext(path) === "json" && !truncated) {
     try {
       shown = JSON.stringify(JSON.parse(text), null, 2);
     } catch {
@@ -164,7 +178,7 @@ function TextPreview({ rid, path }: { rid: string; path: string }) {
   }
   return (
     <div className="stack" style={{ gap: 6 }}>
-      {state.text.length > cap ? <p className="cap">Showing the first {fmtBytes(cap)}; download the file for the rest.</p> : null}
+      {note}
       <pre className="mono" style={{ maxHeight: 480, overflow: "auto", background: "var(--chip)", padding: 10, borderRadius: 8, fontSize: "0.8rem" }}>
         {shown}
       </pre>
@@ -172,7 +186,12 @@ function TextPreview({ rid, path }: { rid: string; path: string }) {
   );
 }
 
-function Preview({ rid, path, entry }: { rid: string; path: string; entry: OutputEntry | undefined }) {
+/** Why a conversion is unavailable for this run, or null (SPEC §6.7: no CRS, no GeoJSON). */
+export function conversionBlocked(c: Conversion, noCrs: boolean): string | null {
+  return c === "geojson" && noCrs ? "This run has no CRS, so GeoJSON (lon/lat) is unavailable" : null;
+}
+
+function Preview({ rid, path, entry, noCrs }: { rid: string; path: string; entry: OutputEntry | undefined; noCrs: boolean }) {
   const e = ext(path);
   const convs = conversionsFor(path, entry?.formats ?? []);
   return (
@@ -183,11 +202,24 @@ function Preview({ rid, path, entry }: { rid: string; path: string; entry: Outpu
           <a className="btn small" href={fileRawUrl(rid, path)} download>
             <Icon name="download" /> Download
           </a>
-          {convs.map((c) => (
-            <a key={c} className="btn small ghost" href={fileRawUrl(rid, path, c)} download title={c === "csv" && e === "parquet" ? "CSV with id and lon/lat columns" : undefined}>
-              {CONV_LABEL[c]}
-            </a>
-          ))}
+          {convs.map((c) => {
+            const blocked = conversionBlocked(c, noCrs);
+            return blocked ? (
+              <span key={c} className="btn small ghost" aria-disabled="true" title={blocked}>
+                {CONV_LABEL[c]}
+              </span>
+            ) : (
+              <a
+                key={c}
+                className="btn small ghost"
+                href={fileRawUrl(rid, path, c)}
+                download
+                title={c === "csv" && e === "parquet" ? (noCrs ? "CSV with the id column (no CRS, so no lon/lat)" : "CSV with id and lon/lat columns") : undefined}
+              >
+                {CONV_LABEL[c]}
+              </a>
+            );
+          })}
         </>
       }
     >
@@ -305,6 +337,9 @@ export function CheckpointCard({ rid, cp }: { rid: string; cp: CheckpointInfo })
 export default function Files() {
   const rid = useRid();
   const outputs = useRunOutputs(rid);
+  // Unknown until the grid is readable (mid-run before S0): keep conversions offered then.
+  const gridMeta = useGridMeta(rid);
+  const noCrs = gridMeta.data ? !gridMeta.data.crs : false;
   const detail = useRunDetailFull(rid);
   const [selected, setSelected] = useUrlState("f", codecs.optString());
   const byOutput = useMemo(() => new Map((outputs.data?.outputs ?? []).map((o) => [o.id, o])), [outputs.data]);
@@ -319,6 +354,7 @@ export default function Files() {
       <h2 id="files-title" style={{ margin: 0 }}>
         Files
       </h2>
+      {runIsLive(detail.data?.run.status) ? <LiveBanner>This run is still running: files marked "being written" are not final yet.</LiveBanner> : null}
       <Block title="Run directory">
         <div className="tablewrap" style={{ maxHeight: 520, overflowY: "auto" }}>
           <table className="tbl" aria-label="Run files">
@@ -340,7 +376,11 @@ export default function Files() {
           </table>
         </div>
       </Block>
-      {selected ? <Preview rid={rid} path={selected} entry={byFile.get(selected)} /> : <p className="cap">Select a file to preview it, download it or convert it.</p>}
+      {selected ? (
+        <Preview rid={rid} path={selected} entry={byFile.get(selected)} noCrs={noCrs} />
+      ) : (
+        <p className="cap">Select a file to preview it, download it or convert it.</p>
+      )}
       <Block title="Data dictionary">
         <Dictionary rid={rid} />
       </Block>

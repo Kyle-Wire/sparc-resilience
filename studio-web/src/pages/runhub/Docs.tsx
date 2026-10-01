@@ -14,7 +14,7 @@ import { Link, useRoute } from "../../router";
 import { useJobs } from "../../stores/jobs";
 import { toast } from "../../stores/ui";
 import { fmtDateTime } from "../../theme/format";
-import { useRid } from "./common";
+import { LiveBanner, useRid, useRunIsLive } from "./common";
 
 const PRODUCER: Record<DocId, string> = {
   report: "the run itself (written at run end)",
@@ -62,7 +62,8 @@ function DocBody({ rid, doc }: { rid: string; doc: DocEntry }) {
   }
   if (content.error) return <EmptyState error={content.error} />;
   if (!content.data) return <p className="cap">Loading {doc.title}…</p>;
-  const frozen = content.data.frozen || doc.frozen;
+  // report.md cannot be re-rendered from the manifest (SPEC §6.4 Docs): always "as of run end".
+  const frozen = content.data.frozen || doc.frozen || doc.id === "report";
   return (
     <article className="card" aria-label={doc.title}>
       <header>
@@ -88,6 +89,7 @@ export default function Docs() {
   const rid = useRid();
   const { params } = useRoute();
   const docs = useRunDocs(rid);
+  const runLive = useRunIsLive(rid);
   const list = docs.data ?? [];
   const chosen = list.find((d) => d.id === params.doc) ?? list.find((d) => d.present) ?? list[0] ?? null;
   return (
@@ -98,6 +100,7 @@ export default function Docs() {
         </h2>
         <RegenerateButton rid={rid} />
       </header>
+      {runLive ? <LiveBanner>This run is still running: documents appear as the run and its post-run actions write them.</LiveBanner> : null}
       {docs.error ? <EmptyState error={docs.error} /> : null}
       {!docs.data && !docs.error ? <p className="cap">Loading documents…</p> : null}
       {docs.data ? (
@@ -109,7 +112,7 @@ export default function Docs() {
                   <Link to={`/r/${encodeURIComponent(rid)}/docs/${d.id}`} aria-current={chosen?.id === d.id ? "page" : undefined} className={d.present ? undefined : "muted"}>
                     {d.title}
                   </Link>
-                  {!d.present ? <span className="cap"> · not yet</span> : d.frozen ? <span className="cap"> · as of run end</span> : null}
+                  {!d.present ? <span className="cap"> · not yet</span> : d.frozen || d.id === "report" ? <span className="cap"> · as of run end</span> : null}
                 </li>
               ))}
             </ul>

@@ -150,18 +150,57 @@ export function fmtDistance(m: number | null | undefined): string {
 
 // ---------------------------------------------------------------- response curves
 
+const sigma = (z: number) => 1 / (1 + Math.exp(-z));
+
+/**
+ * Width w of core's sigmoid from its inflection D0 and d90 (the dose reaching 90% of the
+ * maximum): d90 = D0 + w·logit(0.9·(1 − s0) + s0) with s0 = σ(−D0/w). The right-hand side
+ * grows with w, so bisection on a log scale finds it. Null when no w fits.
+ */
+export function sigmoidWidth(D0: number, d90: number): number | null {
+  if (!(D0 >= 0) || !(d90 > D0)) return null;
+  const g = (w: number) => {
+    const s0 = sigma(-D0 / w);
+    const p = 0.9 * (1 - s0) + s0;
+    return D0 + w * Math.log(p / (1 - p)) - d90;
+  };
+  let lo = Math.max(1e-9, (d90 - D0) * 1e-6);
+  let hi = (d90 - D0) * 10 + D0 + 1;
+  if (g(lo) > 0 || g(hi) < 0) return null;
+  for (let i = 0; i < 100; i++) {
+    const mid = Math.sqrt(lo * hi);
+    if (g(mid) < 0) lo = mid;
+    else hi = mid;
+  }
+  return Math.sqrt(lo * hi);
+}
+
 /**
  * A cell's fitted dose–benefit curve. The server sends sampled `dose`/`benefit`; when it sends
- * only the parameters, the saturating form B(D) = A·(1 − exp(−D/d_s)) is rebuilt here over
- * [0, dmax] (core `response.fit_saturation`). Linear and sigmoid fits need their sampled
- * points (their slope and width are not part of the parameters).
+ * only the parameters, the curve is rebuilt here over [0, dmax] from the forms of core
+ * `response.fit_saturation`:
+ * - saturating B(D) = A·(1 − exp(−D/d_s));
+ * - sigmoid B(D) = A·[σ((D − D0)/w) − σ(−D0/w)] / [1 − σ(−D0/w)], with D0 the inflection and
+ *   the width w recovered from d90 (sigmoidWidth).
+ * Linear fits and censored curves (no d_s, or no d90 for a sigmoid) need their sampled points.
  */
 export function curvePoints(c: CellCurve, n = 25): { dose: number[]; benefit: number[] } {
   if (c.dose.length && c.dose.length === c.benefit.length) return { dose: c.dose, benefit: c.benefit };
-  if (c.model === "saturating" && isNum(c.A) && isNum(c.ds) && c.ds > 0) {
-    const top = isNum(c.dmax) && c.dmax > 0 ? c.dmax : isNum(c.d90) ? c.d90 * 1.5 : c.ds * 3;
-    const dose = Array.from({ length: n }, (_, i) => (top * i) / (n - 1));
-    return { dose, benefit: dose.map((d) => (c.A as number) * (1 - Math.exp(-d / (c.ds as number)))) };
+  const A = c.A;
+  if (!isNum(A)) return { dose: [], benefit: [] };
+  const grid = (top: number) => Array.from({ length: n }, (_, i) => (top * i) / (n - 1));
+  if (c.model === "saturating" && isNum(c.ds) && c.ds > 0) {
+    const ds = c.ds;
+    const dose = grid(isNum(c.dmax) && c.dmax > 0 ? c.dmax : isNum(c.d90) ? c.d90 * 1.5 : ds * 3);
+    return { dose, benefit: dose.map((d) => A * (1 - Math.exp(-d / ds))) };
+  }
+  if (c.model === "sigmoid" && isNum(c.inflection) && isNum(c.d90)) {
+    const D0 = c.inflection;
+    const w = sigmoidWidth(D0, c.d90);
+    if (w === null) return { dose: [], benefit: [] };
+    const s0 = sigma(-D0 / w);
+    const dose = grid(isNum(c.dmax) && c.dmax > 0 ? c.dmax : c.d90 * 1.25);
+    return { dose, benefit: dose.map((d) => (A * (sigma((d - D0) / w) - s0)) / (1 - s0)) };
   }
   return { dose: [], benefit: [] };
 }

@@ -8,6 +8,7 @@ import type { DocEntry, FileEntry } from "../../../api/runs";
 import type { Job, RunOutputs } from "../../../api/types";
 import { navigate } from "../../../router";
 import { useJobs } from "../../../stores/jobs";
+import { fmtBytes } from "../../../theme/format";
 import { byText, click, flush, mockFetch, render, typeInto, waitFor, type MockHandler } from "../../../test/render";
 import { viewFixture } from "../__fixtures__/views";
 import Docs from "../Docs";
@@ -15,7 +16,7 @@ import Files from "../Files";
 import MapTab from "../MapTab";
 import Overview from "../Overview";
 import Provenance from "../Provenance";
-import { mapRoutes, runDetail, runSummary, unframedCharts } from "./helpers";
+import { gridMeta, mapRoutes, runDetail, runSummary, unframedCharts } from "./helpers";
 
 let seq = 0;
 const nextRid = (p: string) => `r_${p}${++seq}`;
@@ -93,7 +94,8 @@ describe("Overview", () => {
 
 describe("Docs", () => {
   const docs: DocEntry[] = [
-    { id: "report", file: "report.md", title: "Report", mtime: "2026-10-01T21:21:49Z", present: true, regenerable: false, frozen: true },
+    // the report is labelled "as of run end" even if the server does not flag it frozen
+    { id: "report", file: "report.md", title: "Report", mtime: "2026-10-01T21:21:49Z", present: true, regenerable: false, frozen: false },
     { id: "methods", file: "methods.md", title: "Methods", mtime: "2026-10-01T21:21:49Z", present: true, regenerable: true, frozen: false },
     { id: "uncertainty", file: "uncertainty.md", title: "Uncertainty", mtime: null, present: false, regenerable: false, frozen: false },
   ];
@@ -106,7 +108,7 @@ describe("Docs", () => {
       <Docs />,
       {
         [`GET /api/runs/${rid}/docs`]: { body: docs },
-        [`GET /api/runs/${rid}/docs/report`]: { body: { markdown: "# Report\n\nCooling <script>alert(1)</script> **0.41 °F**.", mtime: "2026-10-01T21:21:49Z", frozen: true } },
+        [`GET /api/runs/${rid}/docs/report`]: { body: { markdown: "# Report\n\nCooling <script>alert(1)</script> **0.41 °F**.", mtime: "2026-10-01T21:21:49Z", frozen: false } },
         [`GET /api/runs/${rid}/docs/methods`]: { body: { markdown: "## Methods\n\nSpatial CV.", mtime: "2026-10-01T21:21:49Z", frozen: false } },
         [`POST /api/runs/${rid}/actions/writeup`]: (_u, init) => {
           posted.push(JSON.parse(String(init.body)));
@@ -118,7 +120,7 @@ describe("Docs", () => {
     expect(container.querySelector(".md h1")!.textContent).toBe("Report");
     expect(container.querySelector(".md script")).toBeNull();
     expect(container.querySelector(".md")!.textContent).toContain("<script>");
-    expect(container.textContent).toContain("as of run end");
+    expect(container.querySelector("article")!.textContent).toContain("as of run end");
     click(byText(container, "button", "Regenerate methods & model card"));
     await flush(4);
     expect(posted).toEqual([{}]);
@@ -256,6 +258,66 @@ describe("Files", () => {
     click(byText(dialog as HTMLElement, "button", "Delete 1.2 MB"));
     await flush(4);
     expect(deleted).toBe(1);
+    m.restore();
+  });
+});
+
+describe("Files previews", () => {
+  it("reads only the start of a large text file, handles an empty one, and disables GeoJSON without a CRS", async () => {
+    const rid = nextRid("filesprev");
+    const big = "x".repeat(300 * 1024);
+    const ranges: (string | null)[] = [];
+    const entry = (name: string, bytes: number): FileEntry => ({ name, relpath: name, dir: false, bytes, mtime: null, output_id: null, state: null, in_manifest: false });
+    const outputs: RunOutputs = {
+      outputs: [
+        {
+          id: "predictions",
+          label: "Held-out predictions",
+          group: "model",
+          state: "present",
+          produced_by: "stage:S2_S3",
+          view: "accuracy",
+          formats: ["parquet", "csv", "geojson"],
+          files: [{ relpath: "predictions.parquet", bytes: 10, mtime: "" }],
+          action: null,
+        },
+      ],
+      tabs: [],
+    };
+    const { container, m } = await mount(
+      `/r/${rid}/files`,
+      <Files />,
+      {
+        [`GET /api/runs/${rid}`]: { body: runDetail(rid) },
+        [`GET /api/runs/${rid}/outputs`]: { body: outputs },
+        [`GET /api/runs/${rid}/grid`]: { body: { ...gridMeta(), crs: null, has_lonlat: false } },
+        [`GET /api/runs/${rid}/files`]: { body: [entry("simcheck.jsonl", big.length), entry("empty.json", 0), entry("predictions.parquet", 10)] },
+        [`GET /api/runs/${rid}/files/table`]: { body: { columns: [{ name: "id", dtype: "int64" }], rows: [[1]], n_rows: 1 } },
+        [`GET /api/runs/${rid}/dictionary`]: { body: [] },
+        [`GET /api/runs/${rid}/files/raw`]: (u, init) => {
+          ranges.push(new Headers(init.headers).get("Range"));
+          // a server without Range support sends the whole file: the client still stops early
+          if (u.searchParams.get("path") === "empty.json") return { status: 416, body: { error: { code: "range", message: "unsatisfiable" } } };
+          return { raw: big, headers: { "content-type": "text/plain", "Content-Length": String(big.length) } };
+        },
+      },
+      (c) => c.querySelector('tr[data-path="simcheck.jsonl"]'),
+    );
+    click(byText(container.querySelector('tr[data-path="simcheck.jsonl"]')!, "button", "simcheck.jsonl"));
+    await waitFor(() => container.querySelector('[data-truncated="true"]'), 3000, "truncated preview");
+    expect(ranges[0]).toBe(`bytes=0-${256 * 1024 - 1}`);
+    expect(container.querySelector('[data-truncated="true"]')!.textContent).toContain(`Showing the first ${fmtBytes(256 * 1024)} of ${fmtBytes(big.length)}`);
+    expect(container.querySelector("pre")!.textContent!.length).toBe(256 * 1024);
+    click(byText(container.querySelector('tr[data-path="empty.json"]')!, "button", "empty.json"));
+    await waitFor(() => !container.textContent?.includes("Loading preview"), 3000, "empty preview");
+    expect(container.querySelector("pre")!.textContent).toBe("");
+    expect(container.querySelector('[data-truncated="true"]')).toBeNull();
+    // no CRS: GeoJSON is offered but disabled with the reason; CSV stays a download
+    click(byText(container.querySelector('tr[data-path="predictions.parquet"]')!, "button", "predictions.parquet"));
+    await waitFor(() => byText(container, '[aria-disabled="true"]', "GeoJSON"), 3000, "disabled GeoJSON");
+    expect(byText(container, '[aria-disabled="true"]', "GeoJSON")!.getAttribute("title")).toContain("no CRS");
+    expect([...container.querySelectorAll("a[download]")].map((a) => a.getAttribute("href"))).toContain(`/api/runs/${rid}/files/raw?path=predictions.parquet&as=csv`);
+    expect([...container.querySelectorAll("a[download]")].some((a) => a.getAttribute("href")!.includes("as=geojson"))).toBe(false);
     m.restore();
   });
 });

@@ -17,6 +17,32 @@ import { unitLabel } from "../../theme/format";
 import { Block, GenericTableView, Section, ViewPage, useRid } from "./common";
 
 type Source = NonNullable<UncertaintySections["sources"]>[number];
+type Row = NonNullable<UncertaintySections["rows"]>[number];
+
+/**
+ * Caption of the layered intervals: which scenarios keep their sign under the widest
+ * (envelope) interval. ΔT < 0 is cooler, so an envelope entirely below zero still cools and
+ * one entirely above zero still warms; every other scenario could be zero.
+ */
+export function envelopeCaption(rows: Row[]): string {
+  const envelope = (r: Row) => r.layers.find((l) => /envelope/i.test(l.id)) ?? null;
+  const withEnv = rows.filter((r) => envelope(r) !== null);
+  if (!withEnv.length) return `${rows.length} scenario${rows.length === 1 ? "" : "s"}; no envelope interval yet (attach studies below to widen the evidence).`;
+  const cools = withEnv.filter((r) => {
+    const e = envelope(r)!;
+    return excludesZero(e) && (e.hi as number) < 0;
+  });
+  const warms = withEnv.filter((r) => {
+    const e = envelope(r)!;
+    return excludesZero(e) && (e.lo as number) > 0;
+  });
+  const names = (rs: Row[]) => rs.map((r) => r.label).join(", ");
+  const parts = [`${cools.length} of ${withEnv.length} scenarios still cool under the widest (envelope) interval${cools.length ? ` (${names(cools)})` : ""}`];
+  if (warms.length) parts.push(`${warms.length} still warm${warms.length === 1 ? "s" : ""} (${names(warms)})`);
+  const zero = withEnv.length - cools.length - warms.length;
+  if (zero) parts.push(`${zero} could be zero`);
+  return parts.join("; ") + ".";
+}
 
 function SourceRow({ rid, s }: { rid: string; s: Source }) {
   const [busy, setBusy] = useState(false);
@@ -49,11 +75,11 @@ function SourceRow({ rid, s }: { rid: string; s: Source }) {
         <Button size="small" busy={busy} onClick={() => void toggle()}>
           {s.attached ? "Detach" : "Attach"}
         </Button>
-      ) : (
+      ) : !s.attached ? (
         <Link to={`/r/${encodeURIComponent(rid)}/validation`} className="btn small">
           Run study
         </Link>
-      )}
+      ) : null}
     </li>
   );
 }
@@ -71,19 +97,7 @@ export default function Uncertainty() {
         return (
           <>
             <Section title="Layered intervals" data={s.rows}>
-              {(rows) => {
-                const env = rows.filter((r) => r.layers.some((l) => /envelope/i.test(l.id) && excludesZero(l)));
-                return (
-                  <IntervalStack
-                    title="Uncertainty by source"
-                    units={`${u} (negative = cooler)`}
-                    rows={rows}
-                    valueLabel="City-mean ΔT"
-                    unit={u}
-                    caption={`${env.length} of ${rows.length} scenarios keep a cooling effect even under the widest (envelope) interval${env.length ? `: ${env.map((r) => r.label).join(", ")}` : ""}.`}
-                  />
-                );
-              }}
+              {(rows) => <IntervalStack title="Uncertainty by source" units={`${u} (negative = cooler)`} rows={rows} valueLabel="City-mean ΔT" unit={u} caption={envelopeCaption(rows)} />}
             </Section>
             <Section title="Climate spread" data={s.climate}>
               {(t) => (

@@ -5,7 +5,7 @@
 // per-run selection (URL `sel`, legend-histogram brushes, drawn shapes) and the analysis-
 // tools drawer (Region stats, Breakdown, Relationships, Correlogram).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { resolveMask } from "../../api/analysis";
+import { resolveMask, useRegions } from "../../api/analysis";
 import { errorMessage } from "../../api/client";
 import { layerExportUrl, useCell, useRunDetailFull, useView } from "../../api/runs";
 import { countBits } from "../../api/binary";
@@ -22,10 +22,11 @@ import type { PickMode } from "../../map/tools/pick";
 import type { ToolId } from "../../map/tools/types";
 import { runLayerLoader, useRunGrid, useRunLayers, type LayerValues } from "../../map/data";
 import { rowAt, type GridData } from "../../map/grid";
+import { runIsLive } from "../../layouts/resources";
 import { codecs, useUrlState } from "../../router";
 import { useRunSelection, type RunSelection } from "../../stores/selection";
 import { fmtInt, unitLabel } from "../../theme/format";
-import { useRid } from "./common";
+import { LiveBanner, useRid } from "./common";
 import { curvePoints, hexMeans } from "./format";
 import { BreakdownTool } from "./tools/BreakdownTool";
 import { CorrelogramTool } from "./tools/CorrelogramTool";
@@ -85,6 +86,38 @@ function CellInspector({ rid, row, close, layers, focusKey, unit }: { rid: strin
   return <Inspector cell={data} layers={layers} targetUnit={unit} loading={cell.loading} error={cell.error} onClose={close} focusKey={focusKey} />;
 }
 
+/**
+ * The project's saved regions (api.md §6.3, listed on every run of the project): picking one
+ * makes it the run's selection (`sel=rg_…`), resolved on this run by the server.
+ */
+function SavedRegions({ rid, sel }: { rid: string; sel: RunSelection }) {
+  const regions = useRegions(rid);
+  const list = regions.data ?? [];
+  if (!list.length) return null;
+  const cur = sel.spec && "kind" in sel.spec && sel.spec.kind === "region" ? sel.spec.id : "";
+  return (
+    <label className="row cap">
+      Saved region
+      <select
+        value={cur}
+        aria-label="Saved region"
+        onChange={(e) => {
+          const r = list.find((x) => x.id === e.target.value);
+          if (r) sel.set({ kind: "region", id: r.id }, { label: r.name, source: "region" });
+          else sel.clear();
+        }}
+      >
+        <option value="">none</option>
+        {list.map((r) => (
+          <option key={r.id} value={r.id} title={r.portable === false ? "Drawn in run coordinates (no CRS): it may not resolve on other runs" : undefined}>
+            {r.name} ({fmtInt(r.n_cells)} cells{r.portable === false ? ", not portable" : ""})
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 /** A row near the middle of the grid (default centre of the influence circle). */
 function centreRow(g: GridData): number {
   const r = rowAt(g, g.nx / 2, g.ny / 2);
@@ -105,6 +138,7 @@ export default function MapTab() {
   const rid = useRid();
   const detail = useRunDetailFull(rid);
   const finished = isFinishedRun(detail.data?.run.status);
+  const runLive = runIsLive(detail.data?.run.status);
   const grid = useRunGrid(rid, { immutable: finished });
   const layers = useRunLayers(rid);
   const [layerKey, setLayerKey] = useUrlState("layer", codecs.optString());
@@ -129,6 +163,12 @@ export default function MapTab() {
   const curMeta = all.find((l) => l.key === cur) ?? null;
 
   const base = useMemo(() => (g ? runLayerLoader(rid, g.meta.etag) : null), [rid, g]);
+  // The analysis tools work on per-cell values, never on the hexagon means painted in hex mode
+  // (a Relationships brush must select the cells whose own values fall in the box).
+  const rawLoad = useCallback(
+    (meta: LayerMeta): Promise<LayerValues> => (base ? base(meta) : Promise.reject(new Error("The grid is not loaded yet"))),
+    [base],
+  );
   const hexCache = useRef(new WeakMap<LayerValues, Map<number, Float32Array>>());
   const loadLayer = useCallback(
     async (meta: LayerMeta): Promise<LayerValues> => {
@@ -190,7 +230,7 @@ export default function MapTab() {
   if (!all.length) return <EmptyState title="No map layers yet" body="Layers appear as soon as the run writes predictions.parquet (after S2_S3)." />;
 
   const unit = unitLabel(g.meta.units.target);
-  const toolProps: ToolProps = { rid, grid: g, groups, layerKey: cur, selection: sel, loadLayer, unit };
+  const toolProps: ToolProps = { rid, grid: g, groups, layerKey: cur, selection: sel, loadLayer: rawLoad, unit };
   const noCrs = !g.meta.crs;
   const exportLink = (fmt: "tif" | "csv" | "geojson", label: string) =>
     cur && !(noCrs && fmt !== "csv") ? (
@@ -254,6 +294,7 @@ export default function MapTab() {
           </label>
         ) : null}
       </div>
+      {runLive ? <LiveBanner>This run is still running: new layers appear, and changed ones refresh, as each output is written.</LiveBanner> : null}
       <div className="row cap" role="status" aria-live="polite" data-testid="selection-status">
         <span>
           <strong>Selection:</strong> {selectionText(sel)}
@@ -265,6 +306,7 @@ export default function MapTab() {
             Clear
           </button>
         ) : null}
+        <SavedRegions rid={rid} sel={sel} />
         {hex ? <span>· showing {hex} m hexagon means</span> : null}
       </div>
       <MapView

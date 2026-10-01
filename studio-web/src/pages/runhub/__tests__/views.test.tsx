@@ -23,7 +23,7 @@ import Provenance from "../Provenance";
 import Response from "../Response";
 import Scenarios from "../Scenarios";
 import Uncertainty from "../Uncertainty";
-import { mapRoutes, runDetail, unframedCharts } from "./helpers";
+import { binResponse, LAYER_GROUPS, layerMeta, mapRoutes, runDetail, unframedCharts } from "./helpers";
 
 const PAGES: { view: ViewName; tab: string; Page: ComponentType }[] = [
   { view: "overview", tab: "", Page: Overview },
@@ -163,6 +163,26 @@ describe("view behaviour", () => {
     const r = await renderView(page, viewFixture("influence"), { [`GET /api/runs/${rid}`]: { body: runDetail(rid, { status: "running" }) } });
     try {
       expect(r.container.querySelector('[data-live="true"]')).not.toBeNull();
+    } finally {
+      r.restore();
+    }
+  });
+
+  it("Causal maps the CATE and model slopes when causal_cells.parquet exists", async () => {
+    const page = PAGES.find((p) => p.view === "causal")!;
+    const rid = `r_view${seq + 1}`;
+    const groups = [
+      ...LAYER_GROUPS,
+      { id: "causal", label: "Causal", layers: [layerMeta({ key: "cate_canopy", label: "CATE canopy", scale: "div", center: 0, stats: { n: 7, lo: -0.1, hi: 0, mean: -0.05, p1: -0.1, p2: -0.1, p50: -0.05, p98: 0, p99: 0 } })] },
+    ];
+    const r = await renderView(page, viewFixture("causal"), {
+      [`GET /api/runs/${rid}/layers`]: { body: { groups } },
+      [`GET /api/runs/${rid}/layers/cate_canopy.bin`]: () => binResponse(Float32Array.from([-0.1, -0.08, -0.06, -0.05, -0.03, -0.01, 0])),
+    });
+    try {
+      await waitFor(() => r.container.querySelector('[role="application"]'), 3000, "CATE map");
+      expect(r.container.querySelector(".map-side h3")!.textContent).toBe("CATE canopy");
+      expect([...r.container.querySelectorAll("a")].some((a) => a.getAttribute("href") === `/r/${rid}/map?layer=cate_canopy`)).toBe(true);
     } finally {
       r.restore();
     }

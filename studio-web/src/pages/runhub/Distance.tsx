@@ -58,7 +58,9 @@ export default function Distance() {
       title="Distance & baselines"
       intro="How skill holds up further from the training data, and whether the stack beats simple baselines on the same blocks."
     >
-      {(s) => (
+      {(s, vm) => {
+        const u = unitLabel(vm.units.target);
+        return (
         <>
           <Section title="Verdict" data={s.verdict}>
             {(v) => (
@@ -76,11 +78,12 @@ export default function Distance() {
               {(b) => (
                 <Forest
                   title="Stack vs baselines"
-                  units="ΔMSE (baseline − stack)"
+                  units={`ΔMSE (baseline − stack), ${u ? `${u}²` : "target units²"}`}
                   rows={b.map((r) => ({ id: r.id, label: r.label, est: r.delta_mse, se: r.delta_mse_se }))}
                   z={2}
                   better={{ side: "positive", label: "stack better" }}
                   valueLabel="ΔMSE"
+                  unit={u ? `${u}²` : undefined}
                   decimals={3}
                   caption={`${b.filter((r) => r.stack_better).length} of ${b.length} baselines are beaten by more than 2 SE; ${b.filter((r) => r.baseline_better).length} beat the stack.`}
                 />
@@ -107,7 +110,8 @@ export default function Distance() {
             </Section>
           </div>
         </>
-      )}
+        );
+      }}
     </ViewPage>
   );
 }

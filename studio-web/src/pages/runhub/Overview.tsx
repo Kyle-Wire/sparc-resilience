@@ -186,6 +186,11 @@ function OutputsGrid({ outputs, rid }: { outputs: OutputCell[]; rid: string }) {
   );
 }
 
+/** A finding's stored `url_state` when it is a same-origin app path ("/r/…?…"), else null. */
+export function internalPath(url: string | null | undefined): string | null {
+  return url && url.startsWith("/") && !url.startsWith("//") && !url.startsWith("/\\") ? url : null;
+}
+
 const STUDY_STATUS: Record<string, string> = { not_run: "not_run", queued: "queued", running: "running", done: "done", stale: "stale", failed: "failed" };
 
 export default function Overview() {
@@ -260,7 +265,7 @@ export default function Overview() {
                     <ul style={{ margin: 0, paddingLeft: 18 }}>
                       {f.map((x) => (
                         <li key={x.id}>
-                          <Link to={x.url_state || `/r/${encodeURIComponent(rid)}`}>{x.title}</Link> <span className="cap">{fmtDateTime(x.created_utc)}</span>
+                          <Link to={internalPath(x.url_state) ?? `/r/${encodeURIComponent(rid)}`}>{x.title}</Link> <span className="cap">{fmtDateTime(x.created_utc)}</span>
                           {x.note_md ? <p className="cap">{x.note_md}</p> : null}
                         </li>
                       ))}

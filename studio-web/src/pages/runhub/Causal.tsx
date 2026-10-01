@@ -10,12 +10,30 @@ import { Link, codecs, useUrlState } from "../../router";
 import { fmtNum, fmtPct, unitLabel } from "../../theme/format";
 import { Block, GenericTableView, OlderCode, Section, ViewPage, useRid, useUnits } from "./common";
 import { fmtDistance, humanize } from "./format";
+import { RunLayerMap } from "./RunLayerMap";
 
 type Treatment = Sections<CausalTreatment> & { label: string; unit: string };
+type Blp = NonNullable<NonNullable<CausalTreatment["cate"]>["blp"]>;
+
+/**
+ * The best-linear-predictor calibration test in words (core `causal.blp_calibration`):
+ * R_Y = β₁·R_T + β₂·R_T·(s − s̄); β₂ ≈ 1 means the CATE is a calibrated predictor of the
+ * effect, β₂ ≈ 0 that it carries no real heterogeneity; p tests β₂ = 0.
+ */
+export function blpWords(blp: Blp | null | undefined): string {
+  if (!blp) return "No BLP calibration test in this run.";
+  if (blp.coef === null) return "The CATE is constant across cells, so the BLP calibration test is not identified.";
+  const stats = [blp.se !== null ? `SE ${fmtNum(blp.se, 2)}` : null, blp.p !== null ? `p = ${fmtNum(blp.p, 3)}` : null].filter((x): x is string => x !== null);
+  const head = `BLP calibration slope β₂ = ${fmtNum(blp.coef, 2)}${stats.length ? ` (${stats.join(", ")})` : ""}`;
+  if (blp.p !== null && blp.p < 0.05 && blp.coef > 0)
+    return `${head}: the effect differs between cells as the CATE says${blp.coef < 0.5 ? ", though the CATE exaggerates the spread" : blp.coef > 1.5 ? ", more strongly than the CATE suggests" : ""}.`;
+  return `${head}: no evidence that the effect differs between cells; read the spread of the box as noise.`;
+}
 
 function DrCurve({ t, name }: { t: Treatment; name: string }) {
   const u = unitLabel(useUnits().target);
-  const map = `/r/${encodeURIComponent(useRid())}/map?layer=`;
+  const rid = useRid();
+  const map = `/r/${encodeURIComponent(rid)}/map?layer=`;
   const dr = t.dr_curve;
   if (!dr) return <OlderCode title="Dose–response curve" />;
   const series: LineSeries[] = [{ id: "dr", label: "Doubly-robust estimate (own exposure)", x: dr.t, y: dr.theta, lo: dr.lo, hi: dr.hi, emphasis: true }];
@@ -46,17 +64,18 @@ function DrCurve({ t, name }: { t: Treatment; name: string }) {
         caption={`Effective sample size ${fmtNum(dr.ess, 0)}; ${fmtPct(dr.clipped_frac, 0)} of the weights clipped.${dr.note ? ` ${dr.note}` : ""}${pd ? " The dashed curve is what the model implies for the same own-cell exposure." : ""}`}
       />
       {!pd ? <OlderCode title="Model partial-dependence overlay" /> : null}
-      <p className="cap">
-        Maps:{" "}
-        {t.cate_layer ? (
-          <>
-            <Link to={map + encodeURIComponent(t.cate_layer)}>CATE per cell</Link> · <Link to={map + encodeURIComponent(`mslope_${name}`)}>model adoption slope</Link> ·{" "}
-            <Link to={map + encodeURIComponent(`mslope_own_${name}`)}>model own-cell slope</Link>
-          </>
-        ) : (
-          "not in this run (older code)"
-        )}
-      </p>
+      {t.cate_layer ? (
+        <Block title={`${t.label}: CATE and model slopes per cell`}>
+          <p className="cap">
+            The causal effect per cell (CATE) beside the model's own slopes, from causal_cells.parquet:{" "}
+            <Link to={map + encodeURIComponent(t.cate_layer)}>CATE</Link> · <Link to={map + encodeURIComponent(`mslope_${name}`)}>model adoption slope</Link> ·{" "}
+            <Link to={map + encodeURIComponent(`mslope_own_${name}`)}>model own-cell slope</Link>.
+          </p>
+          <RunLayerMap rid={rid} keys={[t.cate_layer, `mslope_${name}`, `mslope_own_${name}`]} title={`${t.label}: CATE and model slopes`} height={340} />
+        </Block>
+      ) : (
+        <OlderCode title="CATE and model-slope maps" />
+      )}
     </div>
   );
 }
@@ -121,11 +140,7 @@ function TreatmentView({ name, t }: { name: string; t: Treatment }) {
               whiskerLabel="5th–95th percentile"
               decimals={4}
               zeroLine
-              caption={
-                c.blp
-                  ? `BLP calibration slope ${fmtNum(c.blp.coef, 2)} (SE ${fmtNum(c.blp.se, 2)}, p = ${fmtNum(c.blp.p, 3)}): ${c.blp.coef !== null && c.blp.coef > 0.5 ? "the heterogeneity is real" : "the heterogeneity is weakly supported"}.`
-                  : undefined
-              }
+              caption={blpWords(c.blp)}
             />
           )}
         </Section>

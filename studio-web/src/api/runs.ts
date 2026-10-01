@@ -8,7 +8,7 @@
 // "not in this run (older code)" for those instead of failing.
 import { api, apiUrl, errorFromResponse, getBin } from "./client";
 import { useResource } from "./resource";
-import type { Action, Availability, GridMeta, Job, Likely, OutputState, Page, RunStatus, RunSummary, StageId } from "./types";
+import type { Action, Availability, GridMeta, Job, Likely, OutputState, Page, RunSummary, StageId } from "./types";
 import type { CellInfo } from "../map/Inspector";
 
 export type { CellInfo, CellCurve } from "../map/Inspector";
@@ -601,9 +601,25 @@ export function fileRawUrl(rid: string, path: string, as?: Conversion | null): s
   return apiUrl(`${runBase(rid)}/files/raw`, { path, as: as ?? undefined });
 }
 
-/** `GET /api/runs/{rid}/files/raw` as text (small JSON and markdown previews). */
-export async function fetchFileText(rid: string, path: string, signal?: AbortSignal): Promise<string> {
-  const res = await fetch(fileRawUrl(rid, path), { credentials: "same-origin", signal });
+export type FileText = { text: string; truncated: boolean; bytes: number | null };
+
+/** Total size from `Content-Range: bytes 0-99/1234` (a 206) or `Content-Length` (a 200). */
+function totalBytes(res: Response): number | null {
+  const cr = /\/(\d+)\s*$/.exec(res.headers.get("Content-Range") ?? "");
+  if (cr) return Number(cr[1]);
+  const cl = res.headers.get("Content-Length");
+  return res.status === 200 && cl !== null && /^\d+$/.test(cl) ? Number(cl) : null;
+}
+
+/**
+ * The start of a run file as text, for previews (`GET /api/runs/{rid}/files/raw`). Asks for
+ * the first `maxBytes` with a Range request (native files support it) and never reads more
+ * than that from the body even when the server sends the whole file, so a large .jsonl or
+ * log cannot be pulled into the page.
+ */
+export async function fetchFileText(rid: string, path: string, signal?: AbortSignal, maxBytes = 256 * 1024): Promise<FileText> {
+  const res = await fetch(fileRawUrl(rid, path), { credentials: "same-origin", signal, headers: { Range: `bytes=0-${maxBytes - 1}` } });
+  if (res.status === 416) return { text: "", truncated: false, bytes: 0 }; // an empty file has no byte 0
   if (!res.ok) {
     let body: unknown = null;
     try {
@@ -613,7 +629,40 @@ export async function fetchFileText(rid: string, path: string, signal?: AbortSig
     }
     throw errorFromResponse(res.status, body, res.statusText);
   }
-  return res.text();
+  const bytes = totalBytes(res);
+  const chunks: Uint8Array[] = [];
+  let got = 0;
+  let more = false;
+  const reader = res.body?.getReader();
+  if (reader) {
+    try {
+      while (got < maxBytes) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        got += value.byteLength;
+      }
+      if (got >= maxBytes) more = !(await reader.read()).done || got > maxBytes;
+    } finally {
+      void reader.cancel().catch(() => undefined);
+    }
+  } else {
+    const all = new Uint8Array(await res.arrayBuffer());
+    chunks.push(all);
+    got = all.byteLength;
+  }
+  const buf = new Uint8Array(Math.min(got, maxBytes));
+  let off = 0;
+  for (const c of chunks) {
+    if (off >= buf.length) break;
+    const take = c.subarray(0, buf.length - off);
+    buf.set(take, off);
+    off += take.length;
+  }
+  const truncated = more || got > maxBytes || (bytes !== null && bytes > buf.length);
+  // A cut can split a multi-byte character; drop the partial tail rather than show U+FFFD.
+  const text = new TextDecoder("utf-8").decode(buf).replace(/\uFFFD$/, "");
+  return { text, truncated, bytes };
 }
 
 /** `DELETE /api/runs/{rid}/checkpoint` (also evicts the run from the engine host). */
@@ -724,11 +773,4 @@ export async function getCompareLayer(a: string, b: string, key: string, signal?
 
 export function postPriority(a: string, b: string, layer: string): Promise<PriorityAgreement> {
   return api.post<PriorityAgreement>("/api/compare/priority", { a, b, layer });
-}
-
-// ---------------------------------------------------------------- small helpers
-
-/** Whether a run's outputs can still change (a job is or may be writing). */
-export function runStatusIsLive(status: RunStatus | null | undefined): boolean {
-  return status === "running" || status === "queued" || status === "external_live";
 }

@@ -8,6 +8,10 @@ import { grid3 } from "../../../test/grid";
 import { configTree, flattenScalars } from "../Compare";
 import { conversionsFor } from "../Files";
 import { residSelection } from "../Accuracy";
+import { blpWords } from "../Causal";
+import { internalPath } from "../Overview";
+import { spillText } from "../Response";
+import { envelopeCaption } from "../Uncertainty";
 import {
   agreementWords,
   confidenceWords,
@@ -22,6 +26,7 @@ import {
   outputStateStatus,
   producedByText,
   rangeWords,
+  sigmoidWidth,
 } from "../format";
 
 const L = (estimate: number, lo: number | null, hi: number | null) => ({ estimate, lo, hi, se: null, confidence: "unknown" as const, phrase: "" });
@@ -96,7 +101,26 @@ describe("cell curves", () => {
     expect(sat.benefit[0]).toBe(0);
     expect(sat.benefit[1]).toBeCloseTo(2 * (1 - Math.exp(-1)), 10);
     expect(sat.benefit[4]).toBeCloseTo(2 * (1 - Math.exp(-4)), 10);
+    // a censored sigmoid (no d90) and a linear fit cannot be rebuilt from the parameters
     expect(curvePoints({ model: "sigmoid", A: 2, ds: null, inflection: 20, d90: null, dmax: 40, dose: [], benefit: [] })).toEqual({ dose: [], benefit: [] });
+    expect(curvePoints({ model: "linear", A: null, ds: null, inflection: null, d90: null, dmax: 40, dose: [], benefit: [] })).toEqual({ dose: [], benefit: [] });
+  });
+
+  it("rebuilds a sigmoid from A, the inflection and d90 (core fit_saturation form)", () => {
+    // core: B = A·[σ((D−D0)/w) − σ(−D0/w)] / [1 − σ(−D0/w)]; d90 = D0 + w·logit(0.9·(1−s0) + s0)
+    const sig = (z: number) => 1 / (1 + Math.exp(-z));
+    const [A, D0, w] = [1.5, 20, 4];
+    const s0 = sig(-D0 / w);
+    const p90 = 0.9 * (1 - s0) + s0;
+    const d90 = D0 + w * Math.log(p90 / (1 - p90));
+    expect(sigmoidWidth(D0, d90)).toBeCloseTo(w, 6);
+    expect(sigmoidWidth(20, 15)).toBeNull(); // d90 before the inflection: no width fits
+    const c = curvePoints({ model: "sigmoid", A, ds: null, inflection: D0, d90, dmax: 40, dose: [], benefit: [] }, 41);
+    expect(c.dose[0]).toBe(0);
+    expect(c.dose[40]).toBe(40);
+    expect(c.benefit[0]).toBeCloseTo(0, 10);
+    for (const i of [10, 20, 25, 40]) expect(c.benefit[i]).toBeCloseTo((A * (sig((c.dose[i] - D0) / w) - s0)) / (1 - s0), 6);
+    expect(c.benefit[20]).toBeLessThan(0.5 * A + 1e-9); // the inflection sits half-way up (less the s0 offset)
   });
 });
 
@@ -163,5 +187,41 @@ describe("files and compare helpers", () => {
     expect(agreementWords(0.72)).toBe("strong agreement (τ +0.72)");
     expect(agreementWords(0.25)).toBe("weak agreement (τ +0.25)");
     expect(agreementWords(null)).toBe("—");
+  });
+});
+
+describe("computed captions", () => {
+  it("words the footprint / own-cell ratio from its value", () => {
+    expect(spillText(4)).toBe("Footprint / own-cell ratio 4.0: 75% of the effect of a change lands in neighbouring cells, more than in the changed cell itself.");
+    expect(spillText(1.25)).toBe("Footprint / own-cell ratio 1.3: 20% of the effect of a change lands in neighbouring cells.");
+    expect(spillText(0.5)).toContain("offsetting part of the own-cell effect");
+    expect(spillText(-2)).toContain("outweigh the own-cell effect");
+    expect(spillText(null)).toBe("No footprint / own-cell ratio for this lever.");
+  });
+
+  it("counts cooling, warming and could-be-zero envelopes separately", () => {
+    const row = (label: string, lo: number, hi: number) => ({ id: label, label, estimate: (lo + hi) / 2, layers: [{ id: "envelope", label: "Envelope", lo, hi }] });
+    expect(envelopeCaption([row("A", -1, -0.1), row("B", 0.1, 0.4), row("C", -0.5, 0.2)])).toBe(
+      "1 of 3 scenarios still cool under the widest (envelope) interval (A); 1 still warms (B); 1 could be zero.",
+    );
+    expect(envelopeCaption([row("A", -1, -0.1)])).toBe("1 of 1 scenarios still cool under the widest (envelope) interval (A).");
+    expect(envelopeCaption([{ id: "x", label: "X", estimate: -1, layers: [{ id: "estimation", label: "Estimation", lo: -2, hi: -0.5 }] }])).toContain("no envelope interval yet");
+  });
+
+  it("reads the BLP calibration test from its p-value, not the slope alone", () => {
+    expect(blpWords({ coef: 0.9, se: 0.2, p: 0.001 })).toBe("BLP calibration slope β₂ = 0.90 (SE 0.20, p = 0.001): the effect differs between cells as the CATE says.");
+    expect(blpWords({ coef: 0.9, se: 0.8, p: 0.26 })).toContain("no evidence that the effect differs between cells");
+    expect(blpWords({ coef: 0.3, se: 0.1, p: 0.01 })).toContain("the CATE exaggerates the spread");
+    expect(blpWords({ coef: null, se: null, p: null })).toContain("not identified");
+    expect(blpWords(null)).toBe("No BLP calibration test in this run.");
+  });
+
+  it("links a finding only to an app path", () => {
+    expect(internalPath("/r/r1/map?layer=obs")).toBe("/r/r1/map?layer=obs");
+    expect(internalPath("//evil.example/x")).toBeNull();
+    expect(internalPath("/\\evil.example/x")).toBeNull(); // browsers read "/\" as "//"
+    expect(internalPath("https://evil.example/")).toBeNull();
+    expect(internalPath("javascript:alert(1)")).toBeNull();
+    expect(internalPath("")).toBeNull();
   });
 });

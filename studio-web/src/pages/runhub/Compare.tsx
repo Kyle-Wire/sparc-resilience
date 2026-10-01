@@ -19,7 +19,7 @@ import { Table } from "../../components/ui/Table";
 import { MapView } from "../../map/MapView";
 import { runLayerLoader, useRunGrid, useRunLayers } from "../../map/data";
 import { Link, codecs, useRoute, useUrlState } from "../../router";
-import { fmtDateTime, fmtNum, fmtSigned, unitLabel } from "../../theme/format";
+import { fmtDateTime, fmtDuration, fmtNum, fmtSigned, unitLabel } from "../../theme/format";
 import { Block } from "./common";
 import { agreementWords, cellText, humanize, likelyText } from "./format";
 
@@ -202,7 +202,7 @@ function DifferenceMap({ a, b, sameGrid }: { a: string; b: string; sameGrid: boo
   );
 }
 
-function PriorityAgreement({ a, b, sameGrid, layers }: { a: string; b: string; sameGrid: boolean; layers: string[] }) {
+function PriorityAgreement({ a, b, sameGrid, layers, catalogues }: { a: string; b: string; sameGrid: boolean; layers: string[]; catalogues: "loading" | "ready" | Error }) {
   const res = useResource(
     sameGrid && layers.length ? `compare:${a}:${b}:priority:${layers.join(",")}` : null,
     async () => Promise.all(layers.map(async (l) => ({ layer: l, r: await postPriority(a, b, l) }))),
@@ -214,6 +214,8 @@ function PriorityAgreement({ a, b, sameGrid, layers }: { a: string; b: string; s
         Priority agreement needs the same grid.
       </p>
     );
+  if (catalogues === "loading") return <p className="cap">Loading the layer catalogues of both runs…</p>;
+  if (catalogues instanceof Error) return <EmptyState error={catalogues} />;
   if (!layers.length) return <p className="cap">No footprint (priority) layers in common.</p>;
   if (res.error instanceof ApiError && res.error.code === "grid_mismatch")
     return (
@@ -370,7 +372,11 @@ export default function Compare() {
               caption={(() => {
                 const ta = c.timings.reduce((s, t) => s + (t.a ?? 0), 0);
                 const tb = c.timings.reduce((s, t) => s + (t.b ?? 0), 0);
-                return `A took ${fmtNum(ta, 0)} s in total, B ${fmtNum(tb, 0)} s.`;
+                const slow = c.timings.reduce<{ stage: string; d: number } | null>((m, t) => {
+                  const d = t.a !== null && t.b !== null ? t.b - t.a : null;
+                  return d !== null && (!m || Math.abs(d) > Math.abs(m.d)) ? { stage: t.stage, d } : m;
+                }, null);
+                return `A took ${fmtDuration(ta)} in total, B ${fmtDuration(tb)}.${slow && slow.d !== 0 ? ` The largest difference is ${slow.stage}: B ${slow.d > 0 ? "slower" : "faster"} by ${fmtDuration(Math.abs(slow.d))}.` : ""}`;
               })()}
             />
           </div>
@@ -443,7 +449,13 @@ export default function Compare() {
             <DifferenceMap a={c.a.id} b={c.b.id} sameGrid={c.same.grid} />
           </Block>
           <Block title="Priority agreement">
-            <PriorityAgreement a={c.a.id} b={c.b.id} sameGrid={c.same.grid} layers={priority} />
+            <PriorityAgreement
+              a={c.a.id}
+              b={c.b.id}
+              sameGrid={c.same.grid}
+              layers={priority}
+              catalogues={la.error ?? lb.error ?? (la.data && lb.data ? "ready" : "loading")}
+            />
           </Block>
         </>
       ) : null}

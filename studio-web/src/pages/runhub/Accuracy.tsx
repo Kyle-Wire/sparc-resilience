@@ -344,8 +344,11 @@ export default function Accuracy() {
                 z.length ? (
                   <BoxStrip
                     title="Residuals by zone"
+                    units={`${unitLabel(vm.units.target)} (observed − predicted)`}
                     groups={z}
                     valueLabel="Residual"
+                    unit={unitLabel(vm.units.target)}
+                    decimals={2}
                     zeroLine
                     groupLabel="Zone"
                     caption={`${z.length} zones; boxes are quartiles, whiskers the 10th–90th percentile.`}
@@ -359,8 +362,11 @@ export default function Accuracy() {
               {(f) => (
                 <BoxStrip
                   title="Residuals by fold"
+                  units={`${unitLabel(vm.units.target)} (observed − predicted)`}
                   groups={f}
                   valueLabel="Residual"
+                  unit={unitLabel(vm.units.target)}
+                  decimals={2}
                   zeroLine
                   groupLabel="Fold"
                   onGroupClick={() => navigate(`/r/${encodeURIComponent(rid)}/map?layer=fold`)}

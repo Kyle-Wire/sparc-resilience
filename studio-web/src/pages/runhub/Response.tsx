@@ -19,9 +19,12 @@ function DoseResponse({ name, lever }: { name: string; lever: ResponseLever }) {
   const hi = c.benefit.map((b, i) => (b === null || c.se[i] === null ? null : b + 1.96 * (c.se[i] as number)));
   const hollow = c.frac_extrapolated.map((f) => f !== null && f > 0.2);
   const last = c.dose.length - 1;
+  const top = last > 0 ? c.benefit[last] : null;
+  // Benefit is cooling (positive = cooler); a negative benefit warms the city.
+  const effect = top === null ? "" : top >= 0 ? `cools the city by ${fmtValue(top, u, 2)}` : `warms the city by ${fmtValue(-top, u, 2)}`;
   const caption =
-    last > 0 && c.benefit[last] !== null
-      ? `${lever.direction === "decrease" ? "Lowering" : "Raising"} ${lever.label} by ${fmtValue(c.dose[last], lu, 2)} cools the city by ${fmtValue(c.benefit[last], u, 2)} on average (±${fmtValue(1.96 * (c.se[last] ?? 0), u, 2)}). ${hollow.some(Boolean) ? `Hollow points: more than 20% of cells pushed beyond the observed range (${fmtPct(c.frac_extrapolated[last], 0)} at the top dose).` : ""}`
+    top !== null
+      ? `${lever.direction === "decrease" ? "Lowering" : "Raising"} ${lever.label} by ${fmtValue(c.dose[last], lu, 2)} ${effect} on average${c.se[last] !== null ? ` (±${fmtValue(1.96 * (c.se[last] as number), u, 2)}, 95%)` : ""}. ${hollow.some(Boolean) ? `Hollow points: more than 20% of cells pushed beyond the observed range (${fmtPct(c.frac_extrapolated[last], 0)} at the top dose).` : ""}`
       : undefined;
   const shortfall = c.realized_dose.map((r, i) => (r === null ? null : c.dose[i] - r));
   const maxShort = Math.max(0, ...shortfall.filter((v): v is number => v !== null));
@@ -66,6 +69,19 @@ const SHAPES: { key: keyof NonNullable<ResponseLever["shapes"]>; label: string }
   { key: "insufficient", label: "too few doses" },
 ];
 
+/**
+ * What the footprint / own-cell ratio r says. The footprint sums the change over every cell
+ * (the changed cell included), so the share landing in neighbouring cells is 1 − 1/r.
+ */
+export function spillText(ratio: number | null): string {
+  if (ratio === null || !Number.isFinite(ratio) || ratio === 0) return "No footprint / own-cell ratio for this lever.";
+  const r = `Footprint / own-cell ratio ${fmtNum(ratio, 1)}`;
+  if (ratio < 0) return `${r}: the neighbouring cells change in the opposite direction and outweigh the own-cell effect.`;
+  if (ratio < 1) return `${r}: the neighbouring cells change in the opposite direction, offsetting part of the own-cell effect.`;
+  const share = 1 - 1 / ratio;
+  return `${r}: ${fmtPct(share, 0)} of the effect of a change lands in neighbouring cells${share > 0.5 ? ", more than in the changed cell itself" : ""}.`;
+}
+
 function Effects({ lever }: { lever: ResponseLever }) {
   const u = unitLabel(useUnits().target);
   const lu = unitLabel(lever.unit);
@@ -94,7 +110,7 @@ function Effects({ lever }: { lever: ResponseLever }) {
       )}
       {e ? (
         <p className="cap">
-          Footprint / own ratio {fmtNum(e.ratio, 1)}: most of the cooling from a change lands in neighbouring cells.
+          {spillText(e.ratio)}
           {e.median_d90 !== null ? ` Half the cells reach 90% of their maximum cooling by ${fmtValue(e.median_d90, lu, 1)}.` : ""}
           {e.median_max_cooling !== null ? ` Median maximum cooling ${fmtValue(e.median_max_cooling, u, 2)}.` : ""}
         </p>

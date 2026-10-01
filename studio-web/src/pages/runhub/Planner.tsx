@@ -6,7 +6,7 @@
 import { useMemo, useState } from "react";
 import { api, errorMessage } from "../../api/client";
 import type { PlannerSections } from "../../api/runs";
-import { fileRawUrl, useView } from "../../api/runs";
+import { fileRawUrl, useGridMeta, useView } from "../../api/runs";
 import type { Job } from "../../api/types";
 import { Bars, LineBand, SmallMultiples } from "../../charts";
 import { Button } from "../../components/ui/Button";
@@ -122,6 +122,8 @@ function Equity({ eq }: { eq: NonNullable<PlannerSections["equity"]> }) {
 
 function Gis({ rid, gis, hexFiles }: { rid: string; gis: NonNullable<PlannerSections["gis"]>; hexFiles: NonNullable<PlannerSections["hex_files"]> | null }) {
   const [open, setOpen] = useState<string | null>(null);
+  const gridMeta = useGridMeta(rid);
+  const noCrs = gridMeta.data ? !gridMeta.data.crs : false;
   const files = [...gis, ...(hexFiles ?? []).map((h) => ({ relpath: h.relpath, kind: `hexagons ${h.size_m} m (${h.format})`, bytes: null, layer: null }))];
   if (!files.length) return <p className="cap">No GIS files in this planner pack.</p>;
   return (
@@ -143,8 +145,13 @@ function Gis({ rid, gis, hexFiles }: { rid: string; gis: NonNullable<PlannerSect
                   Download
                 </a>
                 {isCsv ? (
-                  <a className="btn small ghost" href={fileRawUrl(rid, f.relpath, "csv")} download title="Row indices converted to ids with lon/lat">
-                    CSV with lon/lat
+                  <a
+                    className="btn small ghost"
+                    href={fileRawUrl(rid, f.relpath, "csv")}
+                    download
+                    title={noCrs ? "Row indices converted to ids (this run has no CRS, so no lon/lat)" : "Row indices converted to ids with lon/lat"}
+                  >
+                    {noCrs ? "CSV with ids" : "CSV with lon/lat"}
                   </a>
                 ) : null}
                 {f.layer ? (
