@@ -95,6 +95,8 @@ def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
     p_sc.add_argument("--epochs", type=int, default=200)
     p_sc.add_argument("--workers", type=int, default=1)
     p_sc.add_argument("--threads", type=int, default=1, help="torch threads per worker")
+    p_sc.add_argument("--product", choices=("rf", "direct"), default="rf",
+                      help="target emulation: rf (route sampling + forest + classing) or direct (noise + classing)")
     p_sc.add_argument("--out", required=True, help="results directory (resumable)")
     p_sc.set_defaults(func=cmd_core_simcheck)
 
@@ -242,7 +244,7 @@ def cmd_core_simcheck(args) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
     design = {k.strip(): int(v) for k, v in (kv.split("=") for kv in args.design.split(",") if kv.strip())}
     summ = run_simcheck(load_core_config(args.project), design, args.out, coarse=args.coarse or None,
-                        epochs=args.epochs, workers=args.workers, threads=args.threads)
+                        epochs=args.epochs, workers=args.workers, threads=args.threads, product=args.product)
     print(simcheck_markdown(summ))
     return 0
 

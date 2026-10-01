@@ -238,11 +238,24 @@ def _product_features(layout: Layout) -> np.ndarray:
 
 
 def emulate_product(T: np.ndarray, layout: Layout, rng, features: np.ndarray, street_m: float = 300.0,
-                    sample_frac: float = 0.08, sensor_sd: float = 0.3, int_share: float | None = None) -> np.ndarray:
+                    sample_frac: float = 0.08, sensor_sd: float = 0.3, int_share: float | None = None,
+                    mode: str = "rf") -> np.ndarray:
     """Traverse sampling on a street grid of paved cells → random forest on
-    land-cover predictors → whole-degree classing (share of the real target)."""
+    land-cover predictors → whole-degree classing (share of the real target).
+
+    ``mode="direct"`` skips the sampling and the random forest (sensor noise and
+    classing only): the control that tells product-made structure (the forest
+    learns canopy as a proxy for what it cannot see) from the model's own bias."""
     from sklearn.ensemble import RandomForestRegressor
 
+    share = layout.data.qa.get("target_fraction_integer_valued", 0.0) if int_share is None else int_share
+    if mode == "direct":
+        prod = T + sensor_sd * rng.standard_normal(T.size)
+        pick = rng.random(prod.size) < share
+        prod[pick] = np.round(prod[pick])
+        return prod
+    if mode != "rf":
+        raise ValueError(f"unknown product mode {mode!r}")
     g = layout.grid
     k = max(int(round(street_m / g.dx)), 2)
     oy, ox = rng.integers(0, k, size=2)
@@ -255,7 +268,6 @@ def emulate_product(T: np.ndarray, layout: Layout, rng, features: np.ndarray, st
     rf = RandomForestRegressor(n_estimators=120, min_samples_leaf=5, max_features=0.5, n_jobs=1,
                                random_state=int(rng.integers(1 << 31)))
     prod = rf.fit(features[s], y).predict(features)
-    share = layout.data.qa.get("target_fraction_integer_valued", 0.0) if int_share is None else int_share
     pick = rng.random(prod.size) < share
     prod[pick] = np.round(prod[pick])
     return prod
@@ -300,7 +312,7 @@ def gate_stats(product: np.ndarray, layout: Layout, X: np.ndarray, real: dict | 
 
 
 def draw(kind: str, layout: Layout, seed: int, real: dict, features: np.ndarray, X: np.ndarray,
-         max_tries: int = 3, signal_share: float = 0.6) -> tuple[np.ndarray, Generator, dict]:
+         max_tries: int = 3, signal_share: float = 0.6, product: str = "rf") -> tuple[np.ndarray, Generator, dict]:
     """One gated simulated target: (product, generator, gate stats).  The
     planted signal explains ``signal_share`` of the real target's variance
     (Providence's held-out R² is 0.56; the product adds smoothing on top)."""
@@ -313,7 +325,7 @@ def draw(kind: str, layout: Layout, seed: int, real: dict, features: np.ndarray,
         noise = resid_sd * (0.85 * _grf_points(layout.grid, real["residual_range_m"], rng)
                             + math.sqrt(1 - 0.85 ** 2) * rng.standard_normal(sig.size))
         T = real["mean"] + sig + noise
-        prod = emulate_product(T, layout, rng, features)
+        prod = emulate_product(T, layout, rng, features, mode=product)
         st = gate_stats(prod, layout, X, real)
         st["attempt"] = attempt
         st["signal_share"] = float(sig.var() / T.var())
@@ -361,13 +373,13 @@ def _coarse_mean(values: np.ndarray, layout: Layout, coarse: float | None) -> np
 
 
 def run_replicate(layout: Layout, kind: str, seed: int, real: dict, features: np.ndarray, X: np.ndarray,
-                  coarse: float | None = 90.0, epochs: int = 200) -> dict:
+                  coarse: float | None = 90.0, epochs: int = 200, product: str = "rf") -> dict:
     from scipy.stats import spearmanr
 
     from sparc.core.pipeline import run_core
 
     t0 = time.time()
-    prod, gen, gate = draw(kind, layout, seed, real, features, X)
+    prod, gen, gate = draw(kind, layout, seed, real, features, X, product=product)
     df = layout.df.copy()
     df[TARGET] = prod
     cfg = sim_config(layout.cfg, coarse, epochs)
@@ -386,7 +398,7 @@ def run_replicate(layout: Layout, kind: str, seed: int, real: dict, features: np
     th, th_se = c.get("theta_sum"), c.get("se_sum")
     true_pp = t_mean / real_fine
     out = {
-        "generator": kind, "seed": seed, "gate": gate, "seconds": round(time.time() - t0, 1),
+        "generator": kind, "product": product, "seed": seed, "gate": gate, "seconds": round(time.time() - t0, 1),
         "true_mean_delta": t_mean, "true_realised_dose": real_fine,
         "model_mean_delta": m_mean, "model_se": m_se, "model_realised_dose": model_dose,
         "share": (m_mean / true_scaled) if abs(true_scaled) > 1e-9 else None,
@@ -428,7 +440,7 @@ def _covariates(layout: Layout) -> np.ndarray:
 
 
 def _worker(args):
-    cfg_raw, base_dir, kind, seed, coarse, epochs, threads = args
+    cfg_raw, base_dir, kind, seed, coarse, epochs, threads, product = args
     import torch
 
     from sparc.core.config import core_config_from_dict
@@ -440,16 +452,18 @@ def _worker(args):
     real = real_reference(layout, X)
     feats = _product_features(layout)
     try:
-        return run_replicate(layout, kind, seed, real, feats, X, coarse=coarse, epochs=epochs)
+        return run_replicate(layout, kind, seed, real, feats, X, coarse=coarse, epochs=epochs, product=product)
     except Exception as exc:                    # noqa: BLE001 - recorded, the study continues
         log.exception("simcheck %s/%d failed", kind, seed)
-        return {"generator": kind, "seed": seed, "error": repr(exc)}
+        return {"generator": kind, "product": product, "seed": seed, "error": repr(exc)}
 
 
 def run_simcheck(cfg, design: dict[str, int], out_dir: str | Path, coarse: float | None = 90.0, epochs: int = 200,
-                 workers: int = 1, threads: int = 1) -> dict:
+                 workers: int = 1, threads: int = 1, product: str = "rf") -> dict:
     """Run ``design`` = {generator: n replicates}, resuming from
-    ``out_dir/simcheck.jsonl``; returns :func:`summarize`."""
+    ``out_dir/simcheck.jsonl``; returns :func:`summarize`.  ``product`` is the
+    target emulation (``rf``: route sampling + forest + classing; ``direct``:
+    noise + classing only)."""
     from concurrent.futures import ProcessPoolExecutor, as_completed
 
     out_dir = Path(out_dir)
@@ -459,11 +473,11 @@ def run_simcheck(cfg, design: dict[str, int], out_dir: str | Path, coarse: float
     if path.exists():
         for line in path.read_text(encoding="utf-8").splitlines():
             r = json.loads(line)
-            if "error" not in r:
+            if "error" not in r and r.get("product", "rf") == product:
                 done.add((r["generator"], r["seed"]))
     jobs = [(k, s) for k, n in design.items() for s in range(n) if (k, s) not in done]
     log.info("simcheck: %d replicates to run (%d done)", len(jobs), len(done))
-    args = [(cfg.raw, str(cfg.base_dir), k, s, coarse, epochs, threads) for k, s in jobs]
+    args = [(cfg.raw, str(cfg.base_dir), k, s, coarse, epochs, threads, product) for k, s in jobs]
     with ProcessPoolExecutor(max_workers=max(1, workers)) as ex:
         futs = [ex.submit(_worker, a) for a in args]
         for f in as_completed(futs):
@@ -489,10 +503,12 @@ def summarize(rows: list[dict], real_r2: float | None = None, r2_tol: float = 0.
     ``r2_tol`` fail the data-matching gate too."""
     ok = [r for r in rows if "error" not in r]
     gens = {}
-    for kind in GENERATORS:
-        rs = [r for r in ok if r["generator"] == kind]
+    modes = sorted({r.get("product", "rf") for r in ok}, key=lambda m: (m != "rf", m))
+    for mode, kind in [(m, k) for m in modes for k in GENERATORS]:
+        rs = [r for r in ok if r["generator"] == kind and r.get("product", "rf") == mode]
         if not rs:
             continue
+        label = kind if mode == "rf" else f"{kind}/{mode}"
         passed = [r for r in rs if (r.get("gate") or {}).get("pass")
                   and (real_r2 is None or r.get("oof_r2") is None or abs(r["oof_r2"] - real_r2) <= r2_tol)]
         use = passed or rs
@@ -510,8 +526,9 @@ def summarize(rows: list[dict], real_r2: float | None = None, r2_tol: float = 0.
         if kind == "null":
             g["false_positive_rate"] = _rate(r.get("significant") for r in use)
             g["causal_false_positive_rate"] = _rate(r.get("causal_significant") for r in use)
-        gens[kind] = g
-    shares = [g["share_median"] for k, g in gens.items() if k != "null" and g.get("share_median") is not None]
+        gens[label] = g
+    shares = [g["share_median"] for k, g in gens.items()
+              if k in GENERATORS and k != "null" and g.get("share_median") is not None]
     corr = {}
     if shares:
         med = float(np.median(shares))
@@ -536,7 +553,7 @@ def simcheck_markdown(summ: dict) -> str:
                  + (f" ({f(iqr[0])}–{f(iqr[1])})" if iqr else "") + f" | {f(g['rank_corr_mean'])} | "
                  f"{f(g['ci_coverage'])} | {f(g['causal_ci_coverage'])} | {f(g['interval_coverage_mean'])} | "
                  + (f"model {f(g.get('false_positive_rate'))}, causal {f(g.get('causal_false_positive_rate'))}"
-                    if k == "null" else "") + " |")
+                    if k.split("/")[0] == "null" else "") + " |")
     b = summ.get("bias_correction") or {}
     if b:
         L += ["", (f"Effect share is stable across generators (spread {b['relative_spread']:.0%}): city-wide canopy "
@@ -555,7 +572,7 @@ def merge_results(dirs) -> list[dict]:
         if path.exists():
             for line in path.read_text(encoding="utf-8").splitlines():
                 r = json.loads(line)
-                key = (r.get("generator"), r.get("seed"))
+                key = (r.get("generator"), r.get("product", "rf"), r.get("seed"))
                 if "error" not in r or key not in rows:
                     rows[key] = r
     return list(rows.values())

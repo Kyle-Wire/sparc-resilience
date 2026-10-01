@@ -70,3 +70,19 @@ def test_summary_rates_and_bias_correction():
     assert b["stable"] and b["correction_factor"] == pytest.approx(1.0 / np.median([0.945, 0.95]))
     assert summ["n_errors"] == 1
     assert "null" in S.simcheck_markdown(summ)
+
+
+def test_direct_product_skips_forest_and_is_summarised_apart(layout):
+    rng = np.random.default_rng(2)
+    gen = S.Generator("null", layout, rng)
+    T = 88.0 + gen.signal(gen.C0, gen.I0)
+    prod = S.emulate_product(T, layout, rng, S._product_features(layout), int_share=0.5, mode="direct")
+    assert np.mean(np.isclose(prod, np.round(prod))) == pytest.approx(0.5, abs=0.05)
+    assert np.std(prod - T) < 0.45                               # sensor noise + classing only, no forest
+    with pytest.raises(ValueError):
+        S.emulate_product(T, layout, rng, S._product_features(layout), mode="kriging")
+    rows = [{"generator": "null", "product": p, "seed": s, "gate": {"pass": True}, "share": None,
+             "significant": p == "rf", "causal_significant": False} for p in ("rf", "direct") for s in range(4)]
+    g = S.summarize(rows)["generators"]
+    assert g["null"]["false_positive_rate"] == 1.0 and g["null/direct"]["false_positive_rate"] == 0.0
+    assert "null/direct" in S.simcheck_markdown(S.summarize(rows))
