@@ -276,6 +276,32 @@ def cross_conformal_halfwidth(y: np.ndarray, oof: np.ndarray, fold_id: np.ndarra
     return hw
 
 
+def cross_conformal_adaptive(y: np.ndarray, oof: np.ndarray, fold_id: np.ndarray, difficulty: np.ndarray,
+                             coverage: float = 0.9) -> np.ndarray:
+    """Normalised (locally adaptive) cross-conformal half-widths.
+
+    A scale σ̂(u) = max(a + b·u, floor) is fitted to |residual| against a
+    difficulty score u (here log(1 + distance to training / cell)) on the
+    *other* folds; the conformal quantile of |r|/σ̂ from those folds then
+    scales σ̂ at each point of fold k.  Validity is the same as the global
+    version; widths follow how far a point is from training data."""
+    res = np.abs(np.asarray(y, float) - np.asarray(oof, float))
+    u = np.asarray(difficulty, float)
+    hw = np.empty_like(res)
+    for k in np.unique(fold_id):
+        o = fold_id != k
+        A = np.column_stack([np.ones(o.sum()), u[o]])
+        coef = np.linalg.lstsq(A, res[o], rcond=None)[0]
+        floor = max(1e-6, 0.25 * float(np.median(res[o])))
+        sig_o = np.maximum(A @ coef, floor)
+        n = int(o.sum())
+        level = min(1.0, np.ceil((n + 1) * coverage) / n)
+        q = np.quantile(res[o] / sig_o, level)
+        sig_k = np.maximum(coef[0] + coef[1] * u[fold_id == k], floor)
+        hw[fold_id == k] = q * sig_k
+    return hw
+
+
 def global_conformal_halfwidth(y: np.ndarray, oof: np.ndarray, coverage: float = 0.9) -> float:
     res = np.abs(y - oof)
     n = res.size

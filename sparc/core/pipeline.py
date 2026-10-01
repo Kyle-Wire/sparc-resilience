@@ -213,6 +213,12 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
         done.add("S3")
         _save_checkpoint(run_dir, state)
     result.ensemble = ens
+    if data.zones is not None and ens.halfwidth_adaptive is not None:
+        from sparc.core.ensemble import interval_diagnostics
+
+        ens.metrics["stacker"]["interval_diagnostics"] = interval_diagnostics(
+            data.y, ens.oof_pred, ens.halfwidth, ens.halfwidth_adaptive, folds.fold_id, ens.dist_train,
+            groups={"zone": data.zones})
     timings["S2_S3"] = time.time() - t
     if run_dir:
         out = pd.DataFrame({"id": data.ids, "x_m": data.x, "y_m": data.y_coord, "fold": folds.fold_id,
@@ -220,6 +226,12 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
                             "pred": ens.oof_pred + data.background,
                             "pi_lo": ens.oof_pred + data.background - ens.halfwidth,
                             "pi_hi": ens.oof_pred + data.background + ens.halfwidth})
+        if ens.halfwidth_adaptive is not None:
+            out["pi_lo_adaptive"] = ens.oof_pred + data.background - ens.halfwidth_adaptive
+            out["pi_hi_adaptive"] = ens.oof_pred + data.background + ens.halfwidth_adaptive
+            out["dist_train_m"] = ens.dist_train
+        if data.zones is not None:
+            out["zone"] = data.zones
         for c in ens.oof_base.columns:
             out[f"oof_{c}"] = ens.oof_base[c].to_numpy(float) + data.background
         out.to_parquet(run_dir / "predictions.parquet", index=False)

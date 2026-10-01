@@ -127,8 +127,45 @@ def test_stacker_is_never_worse_than_best_base_model(synthetic_run):
 
 
 def test_cross_conformal_coverage(synthetic_run):
-    cov = synthetic_run.ensemble.metrics["stacker"]["interval_coverage"]
-    assert 0.85 <= cov <= 0.95
+    st = synthetic_run.ensemble.metrics["stacker"]
+    assert 0.85 <= st["interval_coverage"] <= 0.95
+    diag = st["interval_diagnostics"]
+    assert 0.85 <= diag["overall"]["adaptive"] <= 0.95
+    assert len(diag["by_fold"]) == synthetic_run.ensemble.folds.n_folds and len(diag["by_distance"]) == 4
+    # adaptive widths grow with distance from the training data
+    hw = [v["halfwidth_adaptive"] for v in diag["by_distance"].values()]
+    assert hw[-1] > hw[0]
+
+
+def test_adaptive_conformal_is_conditionally_better_calibrated():
+    from sparc.core.stacker import cross_conformal_adaptive, cross_conformal_halfwidth
+
+    rng = np.random.default_rng(3)
+    n = 6000
+    u = rng.uniform(0, 3, n)                                  # difficulty (e.g. log distance)
+    y = rng.standard_normal(n) * (0.2 + u)                    # heteroscedastic residuals
+    fold = rng.integers(0, 5, n)
+    g = cross_conformal_halfwidth(y, np.zeros(n), fold, 0.9)
+    a = cross_conformal_adaptive(y, np.zeros(n), fold, u, 0.9)
+    hard, easy = u > 2.5, u < 0.5
+    cov = lambda hw, m: np.mean(np.abs(y[m]) <= hw[m])       # noqa: E731
+    assert abs(np.mean(np.abs(y) <= a) - 0.9) < 0.02
+    assert abs(cov(a, hard) - 0.9) < abs(cov(g, hard) - 0.9)  # global under-covers the hard cells
+    assert abs(cov(a, easy) - 0.9) < abs(cov(g, easy) - 0.9)  # and over-covers the easy ones
+
+
+def test_scenario_delta_is_fold_averaged_with_jackknife_se(synthetic_run):
+    from sparc.core.mediators import MediatorChain
+    from sparc.core.scenarios import Intervention, ScenarioEngine, ScenarioSpec
+
+    r = synthetic_run
+    eng = ScenarioEngine(r.data, r.cfg, r.ensemble, r.influence.ranges_m, MediatorChain(r.cfg.mediators).fit(r.data.frame))
+    res = eng.run(ScenarioSpec("c5", [Intervention("canopy", "add", 5.0)]))
+    K = res.delta_folds.shape[0]
+    assert np.allclose(res.delta, res.delta_folds.mean(axis=0))
+    assert np.allclose(res.delta_sd, res.delta_folds.std(axis=0) * np.sqrt(K - 1))
+    s = res.summary()
+    assert s["mean_delta_se"] == pytest.approx(res.delta_folds.mean(axis=1).std() * np.sqrt(K - 1))
 
 
 def test_zero_scenario_is_exact_identity(synthetic_run):

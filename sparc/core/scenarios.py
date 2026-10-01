@@ -62,9 +62,14 @@ class ScenarioResult:
 
     def summary(self) -> dict:
         d = self.delta
+        se = None
+        if self.delta_folds is not None and len(self.delta_folds) > 1:
+            m = np.asarray(self.delta_folds, float).mean(axis=1)
+            se = float(m.std() * np.sqrt(len(m) - 1))      # jackknife SE of the city-wide mean
         return {
             "name": self.name,
             "mean_delta": float(np.mean(d)),
+            "mean_delta_se": se,
             "p10_delta": float(np.percentile(d, 10)),
             "p90_delta": float(np.percentile(d, 90)),
             "mean_delta_sd": float(np.mean(self.delta_sd)),
@@ -216,13 +221,14 @@ class ScenarioEngine:
         new, realized = self.apply(spec)
         ctx, exceed = self.scenario_context(new)
         fold = self.ens.fold_predictions(ctx)
-        scen = self.ens.honest(fold)
         d_fold = fold - self._base_fold
+        delta = self.ens.decision(d_fold)                 # fold-averaged: no seams, no fold-specific gains
+        scen = self.baseline + delta
         extr = self._mahal(new[self.cfg.predictors].to_numpy(float)) / self._d95
         changed = np.zeros(len(new), dtype=bool)
         for v in realized.values():
             changed |= np.abs(v) > 0
         extr = np.where(changed, np.maximum(extr, np.where(exceed > 0, 1.0 + exceed, 0.0)), 0.0)
-        return ScenarioResult(name=spec.name, baseline=self.baseline, scenario=scen, delta=scen - self.baseline,
-                              delta_sd=d_fold.std(axis=0), extrapolation=extr, realized=realized,
+        return ScenarioResult(name=spec.name, baseline=self.baseline, scenario=scen, delta=delta,
+                              delta_sd=self.ens.jackknife_sd(d_fold), extrapolation=extr, realized=realized,
                               frame=new if keep_frame else None, delta_folds=d_fold)

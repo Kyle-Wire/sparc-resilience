@@ -156,6 +156,19 @@ def render_report(result) -> str:
         L += ["", f"Stacker: {lam_txt} (out-of-fold RMSE by candidate: {m.get('lambda_scores')}); "
               f"{int(100 * s.get('interval_target', 0.9))}% cross-conformal interval coverage "
               f"{_f(s.get('interval_coverage'), 3)} (mean half-width {_f(s.get('interval_mean_halfwidth'), 3)} {u}).", ""]
+        diag = s.get("interval_diagnostics")
+        if diag:
+            L += ["**Interval honesty** — pooled coverage is nearly guaranteed by construction, so coverage is also "
+                  "shown per fold, by distance from training data and per zone (global vs distance-adaptive "
+                  "cross-conformal intervals):", "", "| group | n | global coverage | adaptive coverage | "
+                  f"global ± ({u}) | adaptive ± ({u}) |", "|---|---|---|---|---|---|"]
+            for gname, groups in diag.items():
+                rows = {"all": groups} if gname == "overall" else groups
+                for k, v in rows.items():
+                    label = "all" if gname == "overall" else f"{gname.replace('by_', '')} {k}"
+                    L.append(f"| {label} | {v['n']} | {_f(v['global'], 3)} | {_f(v['adaptive'], 3)} | "
+                             f"{_f(v['halfwidth_global'], 2)} | {_f(v['halfwidth_adaptive'], 2)} |")
+            L.append("")
         if m.get("stacker"):
             st = m["stacker"]
             wts = [x.get("weights") or {} for x in st]
@@ -197,13 +210,13 @@ def render_report(result) -> str:
               "neighbourhood (drives the optimiser). Saturation is fitted to neighbourhood-adoption sweeps "
               "against the realised neighbourhood dose; 'censored' = no knee within the tested doses/headroom.", ""]
     if "scenarios" in m:
-        L += ["## S5 — Scenarios", "", f"| scenario | mean Δ ({u}) | p10 | p90 | fold sd | extrapolated | "
+        L += ["## S5 — Scenarios", "", f"| scenario | mean Δ ({u}) | p10 | p90 | SE of mean (jackknife) | extrapolated | "
               f"linear causal Δ (95%) |", "|---|---|---|---|---|---|---|"]
         for s in m["scenarios"]:
             c = s.get("causal_linear")
             ctext = (f"{_f(c['delta'])} ({_f(c['lo'])} to {_f(c['hi'])})" + ("" if c["model_within"] else " ⚑")) if c else "—"
             L.append(f"| {s['name']} | {_f(s['mean_delta'])} | {_f(s['p10_delta'])} | {_f(s['p90_delta'])} | "
-                     f"{_f(s['mean_delta_sd'])} | {_f(s['frac_extrapolated'], 3)} | {ctext} |")
+                     f"{_f(s.get('mean_delta_se', s['mean_delta_sd']))} | {_f(s['frac_extrapolated'], 3)} | {ctext} |")
         L += ["", "Linear causal Δ: the S6 own + neighbour effect × the mean realised change (a local-slope "
               "extrapolation); ⚑ = the model's mean Δ lies outside its 95% band.", ""]
     if m.get("climate"):

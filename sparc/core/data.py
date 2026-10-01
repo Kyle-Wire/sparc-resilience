@@ -27,6 +27,7 @@ class CoreData:
     ids: np.ndarray
     qa: dict = field(default_factory=dict)
     target_units: str = "degF"
+    zones: np.ndarray | None = None   # optional zone / neighbourhood code per point (reporting only)
 
     @property
     def n(self) -> int:
@@ -160,6 +161,7 @@ def prepare_frame(df: pd.DataFrame, cfg: CoreConfig) -> CoreData:
     qa["target_fraction_integer_valued"] = frac_integer
 
     ids = df[d["id"]].to_numpy() if d.get("id") and d["id"] in df.columns else np.arange(len(df))
+    zones = df[d["zone"]].to_numpy() if d.get("zone") and d["zone"] in df.columns else None
     return CoreData(
         frame=frame,
         X=encode_features(frame, cfg.raw.get("encodings")),
@@ -172,6 +174,7 @@ def prepare_frame(df: pd.DataFrame, cfg: CoreConfig) -> CoreData:
         ids=ids,
         qa=qa,
         target_units=str(d.get("target_units", "")),
+        zones=zones,
     )
 
 

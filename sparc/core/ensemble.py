@@ -28,7 +28,8 @@ import pandas as pd
 
 from sparc.core.base_models import FeatureContext, PhysicsBaseModel, build_base_models
 from sparc.core.cv import SpatialFolds
-from sparc.core.stacker import PhysicsInformedStacker, StackerInputs, cross_conformal_halfwidth
+from sparc.core.stacker import (PhysicsInformedStacker, StackerInputs, cross_conformal_adaptive,
+                                cross_conformal_halfwidth)
 
 log = logging.getLogger(__name__)
 
@@ -68,6 +69,8 @@ class FittedEnsemble:
     physics_selection: dict | None = None
     stacker_info: list | None = None
     stacker_choice: str = ""
+    halfwidth_adaptive: np.ndarray | None = None
+    dist_train: np.ndarray | None = None      # distance (m) from each point to its fold's training data
 
     @property
     def has_physics(self) -> bool:
@@ -98,12 +101,67 @@ class FittedEnsemble:
         return np.vstack([st.physics.predict(ctx) for st in self.stacks])
 
     def honest(self, fold_preds: np.ndarray) -> np.ndarray:
-        """Pick, for each point, the prediction of the stack that never saw it."""
+        """Pick, for each point, the prediction of the stack that never saw it.
+        For *baseline predictions and CV only* — decision quantities (scenario
+        Δ, sensitivities, rankings) use :meth:`decision`."""
         return fold_preds[self.folds.fold_id, np.arange(fold_preds.shape[1])]
+
+    @staticmethod
+    def decision(fold_values: np.ndarray) -> np.ndarray:
+        """Fold-averaged value of a decision quantity (Δ, sensitivity).  The
+        honest per-cell pick would stitch five models together: 2 km seams in
+        Δ maps, and fold-specific parameters (e.g. the physics gain) leaking
+        into rankings."""
+        return np.asarray(fold_values, float).mean(axis=0)
+
+    @staticmethod
+    def jackknife_sd(fold_values: np.ndarray) -> np.ndarray:
+        """Delete-a-group jackknife SE from the K fold models (each trained
+        without one group): sd·√(K−1).  The raw fold spread understates the
+        estimation uncertainty because the folds share K−2 groups."""
+        v = np.asarray(fold_values, float)
+        return v.std(axis=0) * np.sqrt(max(v.shape[0] - 1, 1))
 
     def predict(self, ctx: FeatureContext) -> dict:
         fp = self.fold_predictions(ctx)
         return {"honest": self.honest(fp), "folds": fp}
+
+
+def training_distance(coords: np.ndarray, folds: SpatialFolds) -> np.ndarray:
+    """Distance (m) from every point to the nearest training point of the
+    fold model that predicts it out of fold — how far it extrapolates."""
+    from scipy.spatial import cKDTree
+
+    out = np.zeros(len(coords))
+    for k, (tr, te) in enumerate(folds.split()):
+        if tr.size and te.size:
+            out[te] = cKDTree(coords[tr]).query(coords[te], k=1)[0]
+    return out
+
+
+def interval_diagnostics(y, pred, hw, hw_ad, fold_id, dist, groups: dict | None = None) -> dict:
+    """Coverage of the global and adaptive intervals overall, per fold, per
+    distance-to-training quartile and per extra grouping (e.g. zones).
+    Pooled coverage is nearly guaranteed by construction; the conditional
+    breakdowns are what show whether the intervals are honest where it
+    matters."""
+    r = np.abs(np.asarray(y) - np.asarray(pred))
+
+    def cov(mask):
+        return {"n": int(mask.sum()), "global": float(np.mean(r[mask] <= hw[mask])) if mask.any() else None,
+                "adaptive": float(np.mean(r[mask] <= hw_ad[mask])) if mask.any() else None,
+                "halfwidth_global": float(np.mean(hw[mask])) if mask.any() else None,
+                "halfwidth_adaptive": float(np.mean(hw_ad[mask])) if mask.any() else None}
+
+    out = {"overall": cov(np.ones_like(r, dtype=bool)),
+           "by_fold": {str(int(k)): cov(fold_id == k) for k in np.unique(fold_id)}}
+    qs = np.quantile(dist, [0.25, 0.5, 0.75])
+    edges = [-np.inf, *qs, np.inf]
+    out["by_distance"] = {f"{lo if np.isfinite(lo) else 0:.0f}-{hi if np.isfinite(hi) else dist.max():.0f} m":
+                          cov((dist > lo) & (dist <= hi)) for lo, hi in zip(edges[:-1], edges[1:])}
+    for name, g in (groups or {}).items():
+        out[f"by_{name}"] = {str(v): cov(g == v) for v in np.unique(g)}
+    return out
 
 
 def _select_advection(ctx, folds, stacks, fold_base_preds, pcfg, L_init, seed) -> dict:
@@ -230,12 +288,15 @@ def fit_ensemble(ctx: FeatureContext, folds: SpatialFolds, cfg, *, ranges_m: dic
 
     cov = float(scfg.get("coverage", 0.9))
     hw = cross_conformal_halfwidth(y, oof_pred, folds.fold_id, cov)
+    dist = training_distance(ctx.coords, folds)
+    hw_ad = cross_conformal_adaptive(y, oof_pred, folds.fold_id, np.log1p(dist / ctx.grid.dx), cov)
     metrics = {name: _metrics(y, oof[name].to_numpy(float)) for name in base_names}
     metrics["base_mean"] = _metrics(y, oof[base_names].mean(axis=1).to_numpy(float))
     metrics["stacker"] = _metrics(y, oof_pred)
     metrics["stacker"]["interval_coverage"] = float(np.mean(np.abs(y - oof_pred) <= hw))
     metrics["stacker"]["interval_target"] = cov
     metrics["stacker"]["interval_mean_halfwidth"] = float(np.mean(hw))
+    metrics["stacker"]["interval_diagnostics"] = interval_diagnostics(y, oof_pred, hw, hw_ad, folds.fold_id, dist)
     wnames = other + (["physics"] if phys_oof is not None and str(scfg.get("physics_mode", "feature")) != "backbone" else [])
     stacker_info = [st.summary(wnames) for st in stackers]
     return FittedEnsemble(folds=folds, stacks=stacks, base_names=base_names, oof_base=oof, oof_pred=oof_pred,
@@ -243,4 +304,4 @@ def fit_ensemble(ctx: FeatureContext, folds: SpatialFolds, cfg, *, ranges_m: dic
                           lambda_scores=scores,
                           timings={"base_models_s": t_base, "stackers_s": t_stack},
                           physics_selection=physics_selection, stacker_info=stacker_info,
-                          stacker_choice=stacker_choice)
+                          stacker_choice=stacker_choice, halfwidth_adaptive=hw_ad, dist_train=dist)

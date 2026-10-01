@@ -25,7 +25,8 @@ core:
     y: POINT_Y
     crs: "EPSG:3438"
     coord_unit: us_survey_foot
-    background: median          # no ERA5 for this campaign → field median
+    background: median          # ΔT reference = field median (ERA5 forcing is used by the physics only)
+    zone: Location              # neighbourhood / zone codes (0 = unassigned) — reporting only
 
   predictors:
     - Pct_Canopy

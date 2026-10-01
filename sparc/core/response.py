@@ -255,8 +255,8 @@ class ResponseEngine:
                 adj = g.sample(ops.solve(np.nan_to_num(gr), L, (-v[0], -v[1]), dx=g.dx, dy=g.dy))
                 foot[k] += pt["a"] * adj * pt["dq"]
         return {
-            "own": self.ens.honest(own), "own_sd": own.std(axis=0),
-            "footprint": self.ens.honest(foot), "footprint_sd": foot.std(axis=0),
+            "own": self.ens.decision(own), "own_sd": self.ens.jackknife_sd(own),
+            "footprint": self.ens.decision(foot), "footprint_sd": self.ens.jackknife_sd(foot),
             "own_folds": own, "footprint_folds": foot,
             "mediators_moved": [c for c in moved if c != var],
         }
@@ -288,9 +288,9 @@ class ResponseEngine:
                     po[k] = self._phys_base[k] + float(p["a"]) * g0 * (pm.source_points(fr) - q0[k])
             ctx = self.eng.clip_ctx(build_context(fr, data, self.eng.ranges_m, self.cfg, F_override=F2))
             fp = self.ens.fold_predictions(ctx, phys_override=po)
-            means.append(float(self.ens.honest(fp).mean()))
-            sds.append(float(fp.mean(axis=1).std()))
-        return {"t": [float(v) for v in t_grid], "y": means, "fold_sd": sds}
+            means.append(float(fp.mean()))
+            sds.append(float(fp.mean(axis=1).std() * np.sqrt(max(fp.shape[0] - 1, 1))))
+        return {"t": [float(v) for v in t_grid], "y": means, "se": sds}
 
     # ----------------------------------------------------------- sweeps
     def sweep(self, var: str) -> VariableResponse:
@@ -307,7 +307,7 @@ class ResponseEngine:
         rows = []
         for i, d in enumerate(doses):
             if d == 0.0:
-                rows.append({"dose": 0.0, "mean_benefit": 0.0, "fold_sd": 0.0, "frac_extrapolated": 0.0})
+                rows.append({"dose": 0.0, "mean_benefit": 0.0, "mean_se": 0.0, "frac_extrapolated": 0.0})
                 continue
             res = self.eng.run(ScenarioSpec(name=f"{var} {d:g}", interventions=[Intervention(var, "add", sign * d)],
                                             dose=d, variable=var))
@@ -315,7 +315,8 @@ class ResponseEngine:
             B[i] = -res.delta
             own[i] = realized
             Dn[i] = self._neigh_dose(realized, var)
-            rows.append({"dose": d, "mean_benefit": float(B[i].mean()), "fold_sd": float(res.delta_sd.mean()),
+            se = res.summary()["mean_delta_se"]
+            rows.append({"dose": d, "mean_benefit": float(B[i].mean()), "mean_se": float(se if se is not None else 0.0),
                          "frac_extrapolated": float(np.mean(res.extrapolation > 1.0)),
                          "mean_realized_dose": float(realized.mean())})
         # A dose is valid for a cell while its own dose is not capped (headroom).
