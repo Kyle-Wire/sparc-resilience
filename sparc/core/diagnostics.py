@@ -68,8 +68,16 @@ def curve_row(label: str, folds: SpatialFolds, ens: FittedEnsemble, y: np.ndarra
     }
 
 
+def _baseline_cells(b: dict | None) -> dict:
+    if not b:
+        return {}
+    return {k: {"rmse": r["rmse"], "r2": r["r2"], "delta_rmse": r["delta_rmse"], "stack_better": r["stack_better"],
+                "baseline_better": r["baseline_better"]} for k, r in b["rows"].items()}
+
+
 def cv_distance_curve(ctx, data, cfg, influence, main_ensemble: FittedEnsemble, main_folds: SpatialFolds,
-                      block_sizes=(0, 500, 1000), seed: int = 42) -> dict:
+                      block_sizes=(0, 500, 1000), seed: int = 42, baselines: bool | list = True,
+                      main_baselines: dict | None = None) -> dict:
     """Refit the base models + stacker on each extra partition and tabulate
     out-of-fold skill against block size.  ``0`` means random points.
 
@@ -97,9 +105,17 @@ def cv_distance_curve(ctx, data, cfg, influence, main_ensemble: FittedEnsemble, 
         ens = fit_ensemble(ctx, folds, cfg, ranges_m=ranges, intercept_range_m=influence.target_resid_range_m,
                            L_init=influence.L_prior_m, seed=seed)
         rows.append(curve_row(label, folds, ens, data.y))
+        if baselines:
+            from sparc.core.baselines import BASELINES, compare_baselines
+
+            rows[-1]["baselines"] = _baseline_cells(compare_baselines(
+                data.X.to_numpy(float), data.coords, data.y, ens.oof_pred, folds, seed=seed,
+                models=BASELINES if baselines is True else tuple(baselines), XF=ctx.XF.to_numpy(float)))
         log.info("cv curve: %s → stacker R² %.3f (RMSE %.3f)", label, rows[-1]["stacker"]["r2"],
                  rows[-1]["stacker"]["rmse"])
     rows.append(curve_row(f"{main_folds.block_m:.0f} m blocks (main)", main_folds, main_ensemble, data.y, main=True))
+    if baselines and main_baselines:
+        rows[-1]["baselines"] = _baseline_cells(main_baselines)
     rows.sort(key=lambda r: r["block_m"])
     return {"rows": rows, "n_folds": int(n_folds),
             "note": "Stacking, model selection and intervals use the main blocks; this curve is reporting only."}
@@ -160,6 +176,7 @@ def run_benchmark(seed: int = 0, spatial_plus_ab: bool = True, epochs: int = 150
         cfg.raw["stacker"]["tune_lambda"] = [0.0, 0.1]
         cfg.raw["actionable"] = {"canopy": {"min": 0, "max": 100, "doses": [0, 5, 10, 15, 20, 30, 40]}}
         cfg.raw["causal"]["enabled"] = False
+        cfg.raw["cv"]["baselines"] = False
         res = run_core(cfg, stages=("S0", "S1", "S2", "S3", "S4"), frame=city.frame, write=False)
         runs["spatial_plus" if sp else "standard"] = effect_recovery(res, city)
         log.info("benchmark (%s): stack share %.2f, footprint share %.2f",

@@ -124,6 +124,7 @@ def synthetic_run(synthetic_city):
     cfg.raw["stacker"]["tune_lambda"] = [0.0, 0.1]
     cfg.raw["actionable"] = {"canopy": {"min": 0, "max": 100, "doses": [0, 5, 10, 15, 20, 30, 40]}}
     cfg.raw["causal"]["enabled"] = False
+    cfg.raw["cv"]["baselines"] = ["hgb_focal", "idw"]
     return run_core(cfg, stages=("S0", "S1", "S2", "S3", "S4", "S5", "S7"), frame=synthetic_city.frame, write=False)
 
 
@@ -360,6 +361,7 @@ def _small_synthetic_cfg(out_dir=None):
     cfg.raw["models"] = {"ols": True, "mgwr": False, "gwrf": False, "gam": False, "physics": True}
     cfg.raw["stacker"]["epochs"] = 30
     cfg.raw["stacker"]["tune_lambda"] = [0.0]
+    cfg.raw["cv"]["baselines"] = ["idw"]
     if out_dir is not None:
         cfg.raw["output"]["dir"] = str(out_dir)
     return cfg

@@ -71,6 +71,9 @@ DEFAULTS: dict[str, Any] = {
         "n_folds": 5, "block_m": "auto", "buffer_m": "auto", "seed": 42,
         # Reporting-only skill-vs-distance curve (0 = random points, a leaky reference).
         "distance_curve": {"enabled": False, "block_m": [0, 500, 1000]},
+        # Reference baselines on the same folds (true = all; or a list of
+        # regression_kriging, hgb_xy, hgb, idw, hgb_focal; false = off).
+        "baselines": True,
     },
     "models": {"ols": True, "mgwr": True, "gwrf": True, "gam": True, "physics": True,
                # Spatial+: covariate terms see only what the model's spatial term cannot

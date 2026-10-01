@@ -73,6 +73,7 @@ class CoreResult:
     causal: dict = field(default_factory=dict)
     optimize: dict = field(default_factory=dict)
     cv_distance: dict = field(default_factory=dict)
+    baselines: dict = field(default_factory=dict)
     climate: dict = field(default_factory=dict)
     manifest: dict = field(default_factory=dict)
 
@@ -168,6 +169,8 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
         cfg.raw["stacker"]["epochs"] = min(200, int(cfg.raw["stacker"]["epochs"]))
         cfg.raw["stacker"]["tune_lambda"] = [0.0, 0.1]
         cfg.raw["influence"]["n_perm"] = min(9, int(cfg.raw["influence"].get("n_perm", 19)))
+        if cfg.raw["cv"].get("baselines", True) is True:
+            cfg.raw["cv"]["baselines"] = ["hgb_xy", "hgb_focal", "idw"]     # no GP fits in smoke runs
     stages = set(stages)
     timings: dict[str, float] = {}
     t0 = time.time()
@@ -244,6 +247,28 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
         if ens.has_physics:
             _write_json(run_dir / "physics.json", [st.physics.params for st in ens.stacks])
 
+    # ------------------------------------------------- reference baselines
+    bl = cfg.raw["cv"].get("baselines", True)
+    if bl:
+        t = time.time()
+        if "baselines" in done:
+            result.baselines = state["baselines"]
+        else:
+            from sparc.core.baselines import compare_baselines
+
+            from sparc.core.baselines import BASELINES
+
+            result.baselines = compare_baselines(data.X.to_numpy(float), data.coords, data.y, ens.oof_pred, folds,
+                                                 models=BASELINES if bl is True else tuple(bl),
+                                                 seed=int(cfg.raw["cv"].get("seed", 0)), XF=ctx.XF.to_numpy(float))
+            state["baselines"] = result.baselines
+            done.add("baselines")
+            _save_checkpoint(run_dir, state)
+        log.info("baselines: %s", result.baselines["verdict"])
+        timings["baselines"] = time.time() - t
+        if run_dir:
+            _write_json(run_dir / "baselines.json", result.baselines)
+
     # ------------------------------------------------- CV distance diagnostic
     dcfg = cfg.raw["cv"].get("distance_curve") or {}
     if dcfg.get("enabled"):
@@ -255,7 +280,9 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
 
             result.cv_distance = cv_distance_curve(ctx, data, cfg, influence, ens, folds,
                                                    block_sizes=dcfg.get("block_m", (0, 500, 1000)),
-                                                   seed=int(cfg.raw["cv"].get("seed", 42)))
+                                                   seed=int(cfg.raw["cv"].get("seed", 42)),
+                                                   baselines=cfg.raw["cv"].get("baselines", True),
+                                                   main_baselines=result.baselines or None)
             state["cv_distance"] = result.cv_distance
             done.add("cv_curve")
             _save_checkpoint(run_dir, state)

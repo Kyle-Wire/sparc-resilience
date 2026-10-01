@@ -93,6 +93,8 @@ def build_manifest(result, timings: dict, fast: bool, folds=None) -> dict:
         m["stacker"] = ens.stacker_info
         m["stacker_choice"] = ens.stacker_choice
         m["spatial_plus"] = (result.cfg.raw.get("models") or {}).get("spatial_plus")
+    if getattr(result, "baselines", None):
+        m["baselines"] = result.baselines
     if getattr(result, "cv_distance", None):
         m["cv_distance"] = result.cv_distance
     if result.responses:
@@ -205,6 +207,15 @@ def render_report(result) -> str:
         if adv:
             L += [f"**Advection:** {'kept' if adv['kept'] else 'dropped'} — held-out RMSE with − without advection "
                   f"= {_f(adv['delta_rmse_mean'], 4)} ± {_f(adv['delta_rmse_se'], 4)} {u} (kept only if lower by > 1 SE).", ""]
+    if m.get("baselines"):
+        b = m["baselines"]
+        L += ["### Stack vs standard baselines (same folds, paired by CV block)", "",
+              "| baseline | RMSE | R² | ΔRMSE vs stack | ΔMSE ± SE (block-clustered) | blocks where stack better |",
+              "|---|---|---|---|---|---|"]
+        for k, r in b["rows"].items():
+            L.append(f"| {r['label']} | {_f(r['rmse'])} | {_f(r['r2'])} | {r['delta_rmse']:+.3f} | "
+                     f"{r['delta_mse']:+.3f} ± {_f(r['delta_mse_se'])} | {r['frac_blocks_stack_better']:.0%} |")
+        L += ["", f"Positive Δ = the stack is better. **Verdict:** {b['verdict']}.", ""]
     if m.get("cv_distance"):
         rows = m["cv_distance"]["rows"]
         names = list(rows[0]["models"]) if rows else []
@@ -217,6 +228,16 @@ def render_report(result) -> str:
                      f"{_f(r['train_fraction_kept'], 2)} | {_f(r['stacker']['r2'])} | {_f(r['stacker']['rmse'])} | "
                      f"{_f(r['fold_r2_min'], 2)} – {_f(r['fold_r2_max'], 2)} | "
                      + " | ".join(_f(r["models"].get(n, {}).get("r2")) for n in names) + " |")
+        bnames = sorted({k for r in rows for k in (r.get("baselines") or {})})
+        if bnames:
+            L += ["", "| CV partition | stacker R² | " + " | ".join(f"{n} R²" for n in bnames) + " |",
+                  "|---|---|" + "---|" * len(bnames)]
+            for r in rows:
+                bl = r.get("baselines") or {}
+                L.append(f"| {r['label']} | {_f(r['stacker']['r2'])} | " + " | ".join(
+                    (_f(bl[n]["r2"]) + (" ▲" if bl[n]["baseline_better"] else " ▼" if bl[n]["stack_better"] else ""))
+                    if n in bl else "—" for n in bnames) + " |")
+            L += ["", "▼ stack better by > 2 block-clustered SE, ▲ baseline better.", ""]
         L += ["", "Random points leave every test point next to training data, so that row mostly measures "
               "interpolation and overstates skill for new areas. The main blocks (≥ the target's residual "
               "correlation range, buffer = block/3) measure prediction for an unseen neighbourhood; stacking, "

@@ -63,6 +63,11 @@ def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
     p_fo.add_argument("--out", required=True, help="forcing JSON (reference it as physics.forcing)")
     p_fo.set_defaults(func=cmd_core_forcing)
 
+    p_bl = subs.add_parser("baselines", help="score standard baselines on a finished run's folds (paired by block)")
+    p_bl.add_argument("run_dir")
+    p_bl.add_argument("--project", "-p", required=True, help="the run's core config")
+    p_bl.set_defaults(func=cmd_core_baselines)
+
     p_syn = subs.add_parser("synth", help="write the synthetic test city (with planted truths) to CSV")
     p_syn.add_argument("--out", required=True)
     p_syn.add_argument("--seed", type=int, default=0)
@@ -88,6 +93,20 @@ def cmd_core_run(args) -> int:
               f"coverage {s.get('interval_coverage', float('nan')):.3f}")
     if res.run_dir:
         print(f"outputs → {res.run_dir}  (see report.md)")
+    return 0
+
+
+def cmd_core_baselines(args) -> int:
+    from sparc.core.baselines import baselines_for_run
+    from sparc.core.config import load_core_config
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    res = baselines_for_run(args.run_dir, load_core_config(args.project))
+    s = res["rows"][res["best_baseline"]]["stack_rmse"]
+    print(f"stack RMSE {s:.3f}")
+    for k, r in res["rows"].items():
+        print(f"  {k:20s} RMSE {r['rmse']:.3f}  R² {r['r2']:.3f}  ΔMSE {r['delta_mse']:+.3f} ± {r['delta_mse_se']:.3f}")
+    print("verdict:", res["verdict"])
     return 0
 
 
