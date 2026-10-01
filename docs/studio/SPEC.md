@@ -914,7 +914,7 @@ Categorical maps use at most three colours plus grey.
 
 ### 6.4 Run hub tabs
 
-Every chart is built from the SVG kit (§12.5). Each one has a **Table view**, SVG/PNG export, CSV copy and **Pin to Findings**. Every number carries units and the cooler/warmer wording.
+Every chart is built from the SVG kit (§12.6). Each one has a **Table view**, SVG/PNG export, CSV copy and **Pin to Findings**. Every number carries units and the cooler/warmer wording.
 
 **Overview**
 - Header: name, mode chips, created, commit plus dirty flag, versions, n cells, grid, run dir, DEMO badge.
@@ -2232,6 +2232,8 @@ Markers are `slow`, `network`, `e2e` and `studio`. CI runs everything except `ne
 **`test_study_params.py`** (slow): placebo `children_dir`/`resume`; multiverse `extra_variants`; reproduce `out_dir`; `run_meta` recorded.
 
 ### 14.2 Studio backend (`tests/studio/`)
+
+Test files live in `tests/studio/<group>/` (`foundation`, `projects`, `runs`, `engine`, `studies`), so each work item owns its own directory. Shared fixtures are in `tests/studio/conftest.py` (foundation): a temp-workspace app, an authenticated client, and fixture loaders. The ETA calibration test embeds the recorded Providence numbers as constants, because `output/` is gitignored.
 
 | Test | Owner | What it checks |
 |---|---|---|
