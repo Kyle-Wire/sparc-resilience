@@ -68,6 +68,15 @@ def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
     p_bl.add_argument("--project", "-p", required=True, help="the run's core config")
     p_bl.set_defaults(func=cmd_core_baselines)
 
+    p_pl = subs.add_parser("placebo", help="negative controls: re-fit with shifted/rotated/random layers (coarse)")
+    p_pl.add_argument("--project", "-p", required=True)
+    p_pl.add_argument("--kinds", default="grf,shift,rotate")
+    p_pl.add_argument("--coarse", type=float, default=60.0, help="cell size in m (0 = native resolution)")
+    p_pl.add_argument("--seed", type=int, default=0)
+    p_pl.add_argument("--grf-range", type=float, default=600.0, help="random-field correlation range (m)")
+    p_pl.add_argument("--threads", type=int, default=0)
+    p_pl.set_defaults(func=cmd_core_placebo)
+
     p_syn = subs.add_parser("synth", help="write the synthetic test city (with planted truths) to CSV")
     p_syn.add_argument("--out", required=True)
     p_syn.add_argument("--seed", type=int, default=0)
@@ -107,6 +116,31 @@ def cmd_core_baselines(args) -> int:
     for k, r in res["rows"].items():
         print(f"  {k:20s} RMSE {r['rmse']:.3f}  R² {r['r2']:.3f}  ΔMSE {r['delta_mse']:+.3f} ± {r['delta_mse_se']:.3f}")
     print("verdict:", res["verdict"])
+    return 0
+
+
+def cmd_core_placebo(args) -> int:
+    import json
+
+    from sparc.core.config import load_core_config
+    from sparc.core.placebo import placebo_markdown, run_placebo_suite
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    if args.threads:
+        import torch
+
+        torch.set_num_threads(int(args.threads))
+    cfg = load_core_config(args.project)
+    res = run_placebo_suite(cfg, kinds=tuple(k.strip() for k in args.kinds.split(",") if k.strip()),
+                            coarse=args.coarse or None, seed=args.seed, grf_range_m=args.grf_range)
+    out = cfg.output_dir / f"{cfg.name}_placebo"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "placebo.json").write_text(json.dumps(res, indent=1, default=str), encoding="utf-8")
+    md = placebo_markdown(res, cfg.data.get("target_units", ""))
+    (out / "placebo.md").write_text(md + "\n", encoding="utf-8")
+    print(md)
+    print(f"model passes {res['n_pass_model']}/{res['n_placebos']}, causal passes "
+          f"{res['n_pass_causal']}/{res['n_placebos']}  →  {out}")
     return 0
 
 
