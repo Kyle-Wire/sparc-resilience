@@ -135,6 +135,13 @@ core:
     contrast: {Pct_Canopy: 10, Pct_Impervious: -10, Albedo: 0.1}
     dag_audit: false
 
+  climate:                       # CMIP6 projections × adaptation (delta method)
+    enabled: true
+    source: table                # regenerate: sparc core climate --lat 41.826 --lon -71.403 --out configs/climate/providence_cmip6_tasmax_jja.csv
+    table: climate/providence_cmip6_tasmax_jja.csv
+    site: [41.826, -71.403]      # Providence (Brown University)
+    thresholds: [90, 95]         # °F
+
   optimize:
     enabled: true
     variable: Pct_Canopy

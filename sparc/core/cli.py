@@ -34,6 +34,18 @@ def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
     p_bm.add_argument("--threads", type=int, default=0)
     p_bm.set_defaults(func=cmd_core_benchmark)
 
+    p_cl = subs.add_parser("climate", help="CMIP6 change factors at a site (AWS Pangeo archive) → CSV")
+    p_cl.add_argument("--lat", type=float, required=True)
+    p_cl.add_argument("--lon", type=float, required=True)
+    p_cl.add_argument("--out", required=True, help="CSV of per-model change factors")
+    p_cl.add_argument("--cache", default="output/core/cache", help="catalogue cache directory")
+    p_cl.add_argument("--experiments", default="ssp126,ssp245,ssp370,ssp585")
+    p_cl.add_argument("--months", default="6,7,8", help="season (default June–August)")
+    p_cl.add_argument("--variable", default="tasmax", choices=["tasmax", "tas"])
+    p_cl.add_argument("--models", default="", help="comma list (default: every model with all experiments)")
+    p_cl.add_argument("--workers", type=int, default=4)
+    p_cl.set_defaults(func=cmd_core_climate)
+
     p_syn = subs.add_parser("synth", help="write the synthetic test city (with planted truths) to CSV")
     p_syn.add_argument("--out", required=True)
     p_syn.add_argument("--seed", type=int, default=0)
@@ -79,6 +91,24 @@ def cmd_core_benchmark(args) -> int:
     md = benchmark_markdown(bench)
     (out / "benchmark.md").write_text(md + "\n", encoding="utf-8")
     print(md)
+    return 0
+
+
+def cmd_core_climate(args) -> int:
+    from sparc.core.climate import cmip6_change_factors
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    df = cmip6_change_factors(args.lat, args.lon, args.cache,
+                              experiments=tuple(e.strip() for e in args.experiments.split(",") if e.strip()),
+                              months=tuple(int(m) for m in args.months.split(",")), variable=args.variable,
+                              models=[m.strip() for m in args.models.split(",") if m.strip()] or None,
+                              max_workers=args.workers)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out, index=False)
+    print(f"{df.model.nunique() if len(df) else 0} models → {out}")
+    if len(df):
+        print(df.groupby(["experiment", "period"]).delta_K.describe()[["count", "50%", "min", "max"]].round(2))
     return 0
 
 

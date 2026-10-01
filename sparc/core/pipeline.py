@@ -10,6 +10,7 @@ Outputs (``cfg.output.dir``/<run name>/):
 * ``response_<var>.parquet`` + ``response_curves.json`` — S4 maps and curves
 * ``scenarios.json`` (+ ``scenario_deltas.parquet``) — S5
 * ``cv_distance.json`` — optional skill-vs-distance CV curve
+* ``climate.json`` — CMIP6 projections × adaptation (threshold exposure, offsets)
 * ``causal.json`` — S6 estimates, sensitivity and model-vs-causal audit
 * ``optimize.json`` (+ ``allocation.parquet``) — S7
 * ``report.md`` — human-readable summary
@@ -72,6 +73,7 @@ class CoreResult:
     causal: dict = field(default_factory=dict)
     optimize: dict = field(default_factory=dict)
     cv_distance: dict = field(default_factory=dict)
+    climate: dict = field(default_factory=dict)
     manifest: dict = field(default_factory=dict)
 
 
@@ -288,6 +290,16 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
         if run_dir and deltas:
             _write_json(run_dir / "scenarios.json", result.scenarios)
             pd.DataFrame(deltas).assign(id=data.ids).to_parquet(run_dir / "scenario_deltas.parquet", index=False)
+        if (cfg.raw.get("climate") or {}).get("enabled"):
+            if "climate" in done:
+                result.climate = state["climate"]
+            else:
+                result.climate = climate_stage(cfg, data, result.scenarios, deltas)
+                state["climate"] = result.climate
+                done.add("climate")
+                _save_checkpoint(run_dir, state)
+            if run_dir:
+                _write_json(run_dir / "climate.json", result.climate)
     timings["S5"] = time.time() - t
 
     # ------------------------------------------------------------------ S6
@@ -341,6 +353,71 @@ def run_core(cfg: CoreConfig | str | Path, stages=ALL_STAGES, fast: bool = False
                 run_dir / "allocation.parquet", index=False)
     timings["S7"] = time.time() - t
     return _finish(result, timings, fast, folds=folds)
+
+
+def _site_latlon(cfg: CoreConfig, data: CoreData) -> tuple[float, float]:
+    from pyproj import Transformer
+
+    crs = cfg.data.get("crs")
+    if not crs:
+        raise ValueError("climate: set climate.site: [lat, lon] (the data have no CRS)")
+    tr = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+    s = cfg.coord_scale
+    lon, lat = tr.transform(float(np.mean(data.x)) / s, float(np.mean(data.y_coord)) / s)
+    return float(lat), float(lon)
+
+
+def default_adaptation(scenarios: list[dict], max_extrapolated: float = 0.2) -> list[str]:
+    """Packages (several variables) plus, per variable, the largest dose that
+    stays within observed conditions."""
+    names, best = [], {}
+    for sc in scenarios:
+        real = sc.get("mean_realized") or {}
+        if sc.get("frac_extrapolated", 1.0) > max_extrapolated:
+            continue
+        if len(real) > 1:
+            names.append(sc["name"])
+        elif len(real) == 1:
+            (v, d), = real.items()
+            if v not in best or abs(d) > abs(best[v][1]):
+                best[v] = (sc["name"], d)
+    return names + [n for n, _ in best.values()]
+
+
+def climate_stage(cfg: CoreConfig, data: CoreData, scenarios: list[dict], deltas: dict) -> dict:
+    """CMIP6 change factors × observed field × adaptation scenarios."""
+    from sparc.core.climate import cmip6_change_factors, summarize_projections
+
+    cc = cfg.raw["climate"]
+    lat, lon = (float(cc["site"][0]), float(cc["site"][1])) if cc.get("site") else _site_latlon(cfg, data)
+    if cc.get("source", "table") == "table":
+        path = cfg.resolve_path(cc.get("table"))
+        if path is None or not path.exists():
+            raise FileNotFoundError(f"climate.table not found: {path} (write one with `sparc core climate`)")
+        factors = pd.read_csv(path)
+    else:
+        cache = cfg.output_dir / str(cc.get("cache", "cache"))
+        factors = cmip6_change_factors(lat, lon, cache, experiments=tuple(cc["experiments"]),
+                                       periods={k: tuple(v) for k, v in cc["periods"].items()},
+                                       months=tuple(cc["months"]), variable=cc["variable"])
+        cache.mkdir(parents=True, exist_ok=True)
+        factors.to_csv(cache / f"cmip6_{cc['variable']}_{lat:.3f}_{lon:.3f}.csv", index=False)
+    factors = factors[factors["experiment"].isin(cc["experiments"]) & factors["period"].isin(list(cc["periods"]))]
+    units = (data.target_units or "").lower()
+    fahrenheit = units in ("degf", "f", "°f", "fahrenheit")
+    thresholds = cc.get("thresholds") or ([90.0, 95.0] if fahrenheit else [32.0, 35.0])
+    names = cc.get("adaptation") or default_adaptation(scenarios)
+    adapt = {n: deltas[n] for n in names if n in deltas}
+    out = summarize_projections(np.asarray(data.target_raw, float), factors, adapt, thresholds,
+                                to_units=1.8 if fahrenheit else 1.0)
+    out.update({"site": {"lat": lat, "lon": lon}, "source": cc.get("source", "table"),
+                "variable": cc["variable"], "months": list(cc["months"]),
+                "baseline": str(factors["baseline"].iloc[0]) if "baseline" in factors and len(factors) else "1995-2014",
+                "n_models": int(factors["model"].nunique()), "units": data.target_units})
+    log.info("climate: %d models; median %s warming %s", out["n_models"],
+             "2041-2060 SSP2-4.5", next((f"{p['warming']['median']:+.2f}" for p in out["projections"]
+                                         if p["experiment"] == "ssp245" and p["period"] == "2041-2060"), "n/a"))
+    return out
 
 
 def causal_crosscheck(scenarios: list[dict], causal: dict) -> list[dict]:

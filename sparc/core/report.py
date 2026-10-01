@@ -99,6 +99,8 @@ def build_manifest(result, timings: dict, fast: bool, folds=None) -> dict:
         m["response"] = {v: r.summary for v, r in result.responses.items()}
     if result.scenarios:
         m["scenarios"] = result.scenarios
+    if getattr(result, "climate", None):
+        m["climate"] = result.climate
     if result.causal:
         m["causal"] = _causal_summary(result.causal)
     if result.optimize:
@@ -204,6 +206,25 @@ def render_report(result) -> str:
                      f"{_f(s['mean_delta_sd'])} | {_f(s['frac_extrapolated'], 3)} | {ctext} |")
         L += ["", "Linear causal Δ: the S6 own + neighbour effect × the mean realised change (a local-slope "
               "extrapolation); ⚑ = the model's mean Δ lies outside its 95% band.", ""]
+    if m.get("climate"):
+        c = m["climate"]
+        thr = c["thresholds"][-1]
+        L += ["## Climate projections (CMIP6 delta method)", "",
+              f"Change in {'-'.join(str(x) for x in c['months'])} mean daily {c['variable']} vs {c['baseline']}, "
+              f"{c['n_models']} CMIP6 models at {c['site']['lat']:.3f}°, {c['site']['lon']:.3f}° "
+              f"(land-weighted bilinear).  Future = observed + model warming (+ adaptation Δ).", "",
+              f"| pathway | period | warming median (10–90%) | share ≥ {thr:g} {u}: no adaptation | " +
+              " | ".join(f"with {a}" for a in c["adaptation"]) + " |",
+              "|---|---|---|---|" + "---|" * len(c["adaptation"])]
+        L.append(f"| today | — | — | {_f(100 * c['present']['share_at_or_above'][str(float(thr))], 1)}% |" +
+                 " — |" * len(c["adaptation"]))
+        for p in c["projections"]:
+            w = p["warming"]
+            cells = [f"{_f(100 * v['share_at_or_above'][str(float(thr))]['median'], 1)}%" for v in p["variants"]]
+            L.append(f"| {p['label']} | {p['period']} | {_f(w['median'], 2)} ({_f(w['p10'], 2)} to {_f(w['p90'], 2)}) | "
+                     + " | ".join(cells) + " |")
+        L += ["", "Delta method: the adaptation effect is assumed not to change with background warming; daily "
+              "extremes may warm more than the seasonal mean of daily maxima.", ""]
     if "causal" in m:
         L += ["## S6 — Causal validation", "",
               "| treatment | DML θ ± SE | θ_own | θ_nbr | θ_own+θ_nbr | audit |", "|---|---|---|---|---|---|"]

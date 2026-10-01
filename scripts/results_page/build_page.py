@@ -153,6 +153,7 @@ def collect(run: Path, cfg) -> dict:
         "physics": m.get("physics"), "cv_distance": m.get("cv_distance"),
         "response": m.get("response"), "curves": jl("response_curves.json"), "scenarios": m.get("scenarios"),
         "causal": m.get("causal"), "optimize": jl("optimize.json") or m.get("optimize"),
+        "climate": m.get("climate"),
         "actionable": cfg.actionable, "units": data.target_units, "background": float(data.background),
         "geom": {"nx": g.nx, "ny": g.ny, "dx": g.dx, "n": int(data.n), "corners": corners,
                  "ix": _b64(g.ix.astype(np.uint16)), "iy": _b64(g.iy.astype(np.uint16))},

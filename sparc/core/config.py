@@ -106,6 +106,21 @@ DEFAULTS: dict[str, Any] = {
         "n_boot": 200,
         "dag_audit": False,
     },
+    "climate": {
+        "enabled": False,
+        # "table": per-model change factors from a CSV (``sparc core climate`` writes one);
+        # "cmip6": fetch from the AWS Pangeo CMIP6 archive at run time (cached).
+        "source": "table",
+        "table": None,
+        "site": None,                    # [lat, lon]; default: centroid of the data
+        "experiments": ["ssp126", "ssp245", "ssp370", "ssp585"],
+        "periods": {"2021-2040": [2021, 2040], "2041-2060": [2041, 2060], "2081-2100": [2081, 2100]},
+        "months": [6, 7, 8],
+        "variable": "tasmax",
+        "thresholds": None,              # target units; default 90/95 °F or 32/35 °C
+        "adaptation": None,              # scenario names; default: packages + largest in-support dose per variable
+        "cache": "cache",                # relative to output.dir
+    },
     "optimize": {
         "enabled": True,
         "variable": None,

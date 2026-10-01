@@ -148,6 +148,7 @@ footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
     <li><a href="#influence">Area of influence</a></li>
     <li><a href="#saturation">Saturation</a></li>
     <li><a href="#scenarios">Scenarios</a></li>
+    <li id="navClimate" hidden><a href="#climate">Climate futures</a></li>
     <li><a href="#causal">Causal check</a></li>
     <li><a href="#budget">Budget plan</a></li>
     <li><a href="#caveats">Caveats</a></li>
@@ -174,6 +175,8 @@ footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
       <label class="cap" for="layerSel" style="margin-left:4px">Layer</label>
       <select id="layerSel"></select>
       <span id="foldWrap" hidden><label class="cap" for="foldSel">Held-out fold</label> <select id="foldSel"></select></span>
+      <span id="climWrap" hidden><label class="cap" for="projSel">Projection</label> <select id="projSel"></select>
+        <label class="cap" for="adaptSel">Adaptation</label> <select id="adaptSel"></select></span>
     </div>
     <div class="explorer">
       <div class="mapbox">
@@ -247,6 +250,26 @@ footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
     </header>
     <div class="card chart"><div id="chart-scen"></div>
       <details><summary>Table view</summary><div class="tablewrap" id="tbl-scen"></div></details>
+    </div>
+  </section>
+
+  <section class="block" id="climate" hidden>
+    <header>
+      <h2>Climate futures</h2>
+      <p class="prose" id="climText"></p>
+    </header>
+    <div class="grid2">
+      <div class="card chart">
+        <h3>Projected summer warming</h3>
+        <p class="cap" id="climCap"></p>
+        <div id="chart-climate"></div>
+        <details><summary>Table view (every model)</summary><div class="tablewrap" id="tbl-clim-models"></div></details>
+      </div>
+      <div class="card">
+        <h3 id="exposureTitle">Heat exposure</h3>
+        <p class="cap" id="exposureCap"></p>
+        <div class="tablewrap" id="tbl-exposure"></div>
+      </div>
     </div>
   </section>
 
@@ -350,7 +373,7 @@ function buildLuts() { const d = isDark(); LUTS = { seq: lut(d ? RAMPS.seqDark :
 const A = DATA.actionable || {};
 const has = (k) => !!DATA.layers[k];
 const LAYERS = [];
-const add = (o) => { if (o.key === "__folds" || has(o.key)) LAYERS.push(o); };
+const add = (o) => { if (o.key.startsWith("__") || has(o.key)) LAYERS.push(o); };
 add({ group: "Temperature", key: "obs", name: "Observed air temperature", unit: U, scale: "div", center: DATA.background, d: 1, desc: `Measured air temperature. Colours are relative to the city median (${fmt(DATA.background, 1)} ${U}).` });
 add({ group: "Temperature", key: "pred", name: "Predicted (held-out)", unit: U, scale: "div", center: DATA.background, d: 1, desc: "Each cell is predicted by the fold model that never saw its 2 km block, so this is what the model knows without local data." });
 add({ group: "Temperature", key: "err", name: "Error (observed − predicted)", unit: U, scale: "div", center: 0, d: 2, desc: "Red: warmer than predicted. Blue: cooler. Large coherent patches are local heat sources or sinks the inputs do not capture." });
@@ -373,6 +396,12 @@ for (const [v, nm] of [["Pct_Canopy", "Canopy"], ["Pct_Impervious", "Impervious 
 for (const s of DATA.scen_layers || []) add({ group: "Scenarios", key: s.key, name: s.name, unit: U, scale: "div", center: 0, d: 2, desc: "Re-predicted change in air temperature at every cell for this scenario (mean of the five fold models)." });
 add({ group: "Budget plan", key: "alloc_dose", name: "Planned canopy increase", unit: "pp", scale: "seq", d: 1, zeroBlank: true, desc: "Where the budget-optimal plan adds canopy, and how much. Untreated cells are blank." });
 add({ group: "Budget plan", key: "alloc_delta", name: "Re-predicted ΔT of the plan", unit: U, scale: "div", center: 0, d: 3, desc: "The whole plan applied at once and re-predicted through the model (closed-loop check)." });
+const CL = DATA.climate;
+const THR = CL ? CL.thresholds[CL.thresholds.length - 1] : null;
+if (CL) {
+  add({ group: "Climate futures", key: "__clim_temp", name: "Future air temperature", unit: U, scale: "climtemp", center: DATA.background, d: 1, desc: "Observed temperature plus the CMIP6 multi-model median warming for the chosen pathway and period, plus the chosen adaptation scenario's re-predicted change. Colours keep today's scale, so warming shows as a shift to red." });
+  add({ group: "Climate futures", key: "__clim_thr", name: `Cells at or above ${THR} ${U}`, scale: "climthr", desc: `Cells whose projected temperature reaches ${THR} ${U} under the chosen pathway, period and adaptation.` });
+}
 add({ group: "CV design", key: "__folds", name: "Spatial cross-validation folds", scale: "folds", desc: "For the chosen fold: blue cells are held out for testing, orange cells are dropped from training as a buffer, grey cells train the models. Every accuracy number on this page comes from this design." });
 const GROUPS = [...new Set(LAYERS.map((l) => l.group))];
 
@@ -382,8 +411,17 @@ canvas.width = G.nx; canvas.height = G.ny;
 const img = ctx2.createImageData(G.nx, G.ny);
 let cur = null, curFold = 0, domain = null;
 
+let climSel = { proj: 0, adapt: "" };
+function climDelta() { const p = CL.projections[climSel.proj]; return p ? p.warming.median : 0; }
+function climValues() {
+  const obs = layer("obs"); const out = new Float32Array(N); const dT = climDelta();
+  const sl = (DATA.scen_layers || []).find((x) => x.name === climSel.adapt); const sc = sl ? layer(sl.key) : null;
+  for (let i = 0; i < N; i++) out[i] = obs[i] + dT + (sc ? sc[i] : 0);
+  return out;
+}
 function layerValues(Ly) {
   if (Ly.key === "__folds") return null;
+  if (Ly.scale === "climtemp" || Ly.scale === "climthr") return climValues();
   return layer(Ly.key);
 }
 function computeDomain(Ly) {
@@ -397,6 +435,11 @@ function computeDomain(Ly) {
     const lo = Ly.zeroBlank ? 0 : L.p[1] * m; let hi = L.p[3] * m; if (!(hi > lo)) hi = lo + 1e-9;
     return [lo, null, hi];
   }
+  if (Ly.scale === "climtemp") {
+    const O = DATA.layers.obs, c = DATA.background; const wmax = Math.max(...CL.projections.map((p) => p.warming.median));
+    const span = Math.max(Math.abs(O.p[1] - c), Math.abs(O.p[3] + wmax - c));
+    return [c - span, c, c + span];
+  }
   return null;
 }
 function colorFor(Ly, v) {
@@ -409,11 +452,13 @@ function render() {
   const vals = layerValues(Ly); const m = Ly.mult || 1;
   const cat = CAT(); const grayc = hex2rgb(css("--gray-mark")).map((x) => Math.round(x * 255));
   const nodata = hex2rgb(isDark() ? "#2a2a28" : "#e4e4df").map((x) => Math.round(x * 255));
-  if (Ly.scale !== "folds" && Ly.scale !== "cat") domain = computeDomain(Ly);
+  if (Ly.scale !== "folds" && Ly.scale !== "cat" && Ly.scale !== "climthr") domain = computeDomain(Ly);
   for (let i = 0; i < N; i++) {
     const p = ((G.ny - 1 - IY[i]) * G.nx + IX[i]) * 4; let c;
     if (Ly.scale === "folds") { c = FOLD[i] === curFold ? cat[0] : ((EXCL[i] >> curFold) & 1) ? cat[1] : grayc; }
     else if (Ly.scale === "cat") { const k = vals[i]; c = k === 0 ? nodata : cat[k - 1]; }
+    else if (Ly.scale === "climthr") { c = vals[i] >= THR ? cat[1] : grayc; }
+    else if (Ly.scale === "climtemp") { c = colorFor({ scale: "div" }, vals[i]); }
     else { const v = vals[i]; if (!isFinite(v) || (Ly.zeroBlank && v <= 0)) { if (Ly.zeroBlank && isFinite(v)) c = nodata; else continue; } else c = colorFor(Ly, v * m); }
     data[p] = c[0]; data[p + 1] = c[1]; data[p + 2] = c[2]; data[p + 3] = 255;
   }
@@ -440,23 +485,24 @@ function drawOverlay() {
 function drawLegend() {
   const Ly = cur; const box = $("legend"); box.replaceChildren();
   $("layerName").textContent = Ly.name; $("layerDesc").textContent = Ly.desc || "";
-  if (Ly.scale === "folds" || Ly.scale === "cat") {
-    const labs = Ly.scale === "folds" ? ["Held out (test)", "Buffer: dropped from training", "Training"] : DATA.layers[Ly.key].labels.slice(1);
-    const cols = Ly.scale === "folds" ? [V("--s1"), V("--s2"), V("--gray-mark")] : [V("--s1"), V("--s2"), V("--s3")];
+  if (Ly.scale === "folds" || Ly.scale === "cat" || Ly.scale === "climthr") {
+    const labs = Ly.scale === "folds" ? ["Held out (test)", "Buffer: dropped from training", "Training"] : Ly.scale === "climthr" ? [`At or above ${THR} ${U}`, `Below ${THR} ${U}`] : DATA.layers[Ly.key].labels.slice(1);
+    const cols = Ly.scale === "folds" ? [V("--s1"), V("--s2"), V("--gray-mark")] : Ly.scale === "climthr" ? [V("--s2"), V("--gray-mark")] : [V("--s1"), V("--s2"), V("--s3")];
     const wrap = el("div", { class: "swatches" });
     labs.forEach((t, i) => { const r = el("div"); const s = el("span", { class: "sw" }); s.style.background = cols[i]; r.append(s, document.createTextNode(t)); wrap.append(r); });
     box.append(wrap); return;
   }
   const c = el("canvas", { width: 256, height: 1 }); const g2 = c.getContext("2d"); const id = g2.createImageData(256, 1);
-  const L = Ly.scale === "div" ? LUTS.div : LUTS.seq;
+  const L = (Ly.scale === "div" || Ly.scale === "climtemp") ? LUTS.div : LUTS.seq;
   for (let i = 0; i < 256; i++) { id.data.set([L[i * 3], L[i * 3 + 1], L[i * 3 + 2], 255], i * 4); }
   g2.putImageData(id, 0, 0); c.setAttribute("role", "img"); c.setAttribute("aria-label", "colour scale");
   const t = el("div", { class: "ticks" });
   const [a, mid, b] = domain; const d = Ly.d ?? 2; const u = Ly.unit ? ` ${Ly.unit}` : "";
   const f = (v) => Ly.scale === "div" && Ly.center === 0 ? sfmt(v, d) : fmt(v, d);
-  t.append(el("span", {}, "≤ " + f(a)), el("span", {}, Ly.scale === "div" ? f(mid) + u : ""), el("span", {}, "≥ " + f(b) + (Ly.scale === "div" ? "" : u)));
+  const dv = Ly.scale === "div" || Ly.scale === "climtemp";
+  t.append(el("span", {}, "≤ " + f(a)), el("span", {}, dv ? f(mid) + u : ""), el("span", {}, "≥ " + f(b) + (dv ? "" : u)));
   box.append(c, t);
-  if (Ly.scale === "div") { const n = el("div", { class: "ticks" }); n.append(el("span", {}, "cooler"), el("span", {}, "warmer")); box.append(n); }
+  if (Ly.scale === "div" || Ly.scale === "climtemp") { const n = el("div", { class: "ticks" }); n.append(el("span", {}, "cooler"), el("span", {}, "warmer")); box.append(n); }
 }
 function drawStats() {
   const Ly = cur; const dl = $("layerStats"); dl.replaceChildren();
@@ -467,6 +513,10 @@ function drawStats() {
     row("Block size", `${fmt(DATA.cv.block_m, 0)} m`); row("Buffer", `${fmt(DATA.cv.buffer_m, 0)} m`); row("Blocks with data", String(DATA.cv.n_blocks)); return;
   }
   const vals = layerValues(Ly);
+  if (Ly.scale === "climthr") { let k = 0; for (let i = 0; i < N; i++) if (vals[i] >= THR) k++;
+    const p = CL.projections[climSel.proj];
+    row(`At or above ${THR} ${U}`, `${fmt(100 * k / N, 1)}%`); row("Today", `${fmt(100 * CL.present.share_at_or_above[String(Number(THR).toFixed(1))] , 1)}%`);
+    row("Warming used", `${sfmt(p.warming.median, 2)} ${U} (median of ${p.n_models} models)`); return; }
   if (Ly.scale === "cat") { const labs = DATA.layers[Ly.key].labels; const cnt = new Array(labs.length).fill(0); for (let i = 0; i < N; i++) cnt[vals[i]]++;
     labs.forEach((l, k) => { if (k > 0 || cnt[0] > 0) row(l, `${fmt(100 * cnt[k] / N, 1)}%`); }); return; }
   const m = Ly.mult || 1; let s = 0, n = 0; const arr = [];
@@ -489,6 +539,7 @@ function readout(ev) {
   const Ly = cur; let main;
   if (Ly.scale === "folds") main = FOLD[i] === curFold ? "Held out (test)" : ((EXCL[i] >> curFold) & 1) ? "Buffer: dropped from training" : `Training (in fold ${FOLD[i] + 1}'s test set)`;
   else if (Ly.scale === "cat") main = DATA.layers[Ly.key].labels[layer(Ly.key)[i]];
+  else if (Ly.scale === "climtemp" || Ly.scale === "climthr") { const v = climValues()[i]; main = `${fmt(v, 1)} ${U}` + (Ly.scale === "climthr" ? (v >= THR ? ` · at or above ${THR}` : ` · below ${THR}`) : ""); }
   else { const v = layer(Ly.key)[i] * (Ly.mult || 1); main = !isFinite(v) ? "no estimate" : ((Ly.scale === "div" && Ly.center === 0 ? sfmt(v, Ly.d ?? 2) : fmt(v, Ly.d ?? 2)) + (Ly.unit ? " " + Ly.unit : "")); }
   box.append(el("div", { class: "big" }, main), el("div", { class: "dim" }, latlon(cx, cy)));
   const ctxl = el("div", { class: "dim" });
@@ -504,6 +555,7 @@ function setGroup(g) {
   const sel = $("layerSel"); sel.replaceChildren();
   LAYERS.filter((l) => l.group === g).forEach((l) => { const o = el("option", { value: l.key }, l.name); sel.append(o); });
   $("foldWrap").hidden = g !== "CV design";
+  $("climWrap").hidden = g !== "Climate futures";
   setLayer(sel.value);
   try { localStorage.setItem("phm-group", g); } catch (e) {}
 }
@@ -512,6 +564,14 @@ GROUPS.forEach((g) => { const b = el("button", { type: "button", "data-g": g, "a
 $("layerSel").addEventListener("change", (e) => setLayer(e.target.value));
 for (let k = 0; k < DATA.n_folds; k++) $("foldSel").append(el("option", { value: String(k) }, `Fold ${k + 1}`));
 $("foldSel").addEventListener("change", (e) => { curFold = +e.target.value; render(); });
+if (CL) {
+  CL.projections.forEach((p, k) => $("projSel").append(el("option", { value: String(k) }, `${p.label} · ${p.period} (${sfmt(p.warming.median, 1)} ${U})`)));
+  const d0 = CL.projections.findIndex((p) => p.experiment === "ssp245" && p.period === "2041-2060"); climSel.proj = d0 >= 0 ? d0 : 0; $("projSel").value = String(climSel.proj);
+  $("adaptSel").append(el("option", { value: "" }, "No adaptation"));
+  CL.adaptation.forEach((a) => $("adaptSel").append(el("option", { value: a }, a)));
+  $("projSel").addEventListener("change", (e) => { climSel.proj = +e.target.value; render(); });
+  $("adaptSel").addEventListener("change", (e) => { climSel.adapt = e.target.value; render(); });
+}
 
 /* ---------- tooltip ---------- */
 const tip = $("tip");
@@ -534,6 +594,8 @@ function kpis() {
   kpi(box, "90% prediction intervals", fmt(100 * s.interval_coverage, 1), "% covered", `±${fmt(s.interval_mean_halfwidth, 2)} ${U} on average`);
   const cs = (DATA.scenarios || []).find((x) => /canopy/i.test(x.name) && /\b10\b/.test(x.name));
   if (cs) kpi(box, "Canopy +10 pp everywhere", sfmt(cs.mean_delta, 2), U, "mean change in air temperature");
+  if (CL) { const mp = CL.projections.find((p) => p.experiment === "ssp245" && p.period === "2041-2060");
+    if (mp) kpi(box, "Summer warming by 2041–2060 (SSP2-4.5)", sfmt(mp.warming.median, 1), U, `median of ${mp.n_models} CMIP6 models (${sfmt(mp.warming.p10, 1)} to ${sfmt(mp.warming.p90, 1)})`); }
   const gp = (DATA.scenarios || []).find((x) => /package/i.test(x.name));
   if (gp) kpi(box, gp.name, sfmt(gp.mean_delta, 2), U, `${fmt(100 * gp.frac_extrapolated, 0)}% of edited cells beyond observed conditions`);
 }
@@ -694,6 +756,56 @@ function scenarios() {
   $("tbl-scen").append(t);
 }
 
+/* ---------- climate ---------- */
+function climate() {
+  if (!CL) return; $("climate").hidden = false; $("navClimate").hidden = false;
+  const tkey = (t) => Number(t).toFixed(1);
+  const P = CL.projections; const mid = P.find((p) => p.experiment === "ssp245" && p.period === "2041-2060") || P[0];
+  $("climText").textContent = `Projected change in summer (${CL.months.map((m) => ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][m - 1]).join("–")}) average daily highs from ${CL.n_models} CMIP6 climate models, for four emission pathways and three periods against ${CL.baseline}, at ${CL.site.lat.toFixed(3)}°N ${Math.abs(CL.site.lon).toFixed(3)}°W (neighbouring model cells weighted by land fraction). Each future map is today's measured temperature plus a model's warming, plus an adaptation scenario's re-predicted change. Under the middle pathway (SSP2-4.5) the models put mid-century (2041–2060) warming at ${sfmt(mid.warming.median, 1)} ${U} (10–90% of models: ${sfmt(mid.warming.p10, 1)} to ${sfmt(mid.warming.p90, 1)}). Use the map's Climate futures theme to see any combination.`;
+  $("climCap").textContent = `Dots: median of ${CL.n_models} models. Bars: 10th to 90th percentile across models; thin line: full range.`;
+  const periods = [...new Set(P.map((p) => p.period))];
+  const W = 520, rowH = 22, gapH = 26, ml = 92, mr = 54, mt = 6;
+  const H = mt + periods.length * gapH + P.length * rowH + 26; const iw = W - ml - mr;
+  const xmax = Math.ceil(Math.max(...P.map((p) => p.warming.max)) + 0.5); const x = (v) => ml + iw * Math.max(0, v) / xmax;
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Projected summer warming by pathway and period" });
+  for (let v = 0; v <= xmax; v += xmax > 8 ? 2 : 1) { svg.append(sv("line", { x1: x(v), x2: x(v), y1: mt, y2: H - 22, stroke: V("--grid") })); svg.append(sv("text", { x: x(v), y: H - 6, "text-anchor": "middle", class: "t-axis" }, `+${v} ${U}`)); }
+  let yy = mt;
+  for (const per of periods) {
+    yy += gapH; svg.append(sv("text", { x: 0, y: yy - 8, class: "t-strong" }, per));
+    for (const p of P.filter((q) => q.period === per)) {
+      const w = p.warming, cy = yy + rowH / 2;
+      svg.append(sv("text", { x: ml - 10, y: cy + 4, "text-anchor": "end", class: "t-label" }, p.label));
+      svg.append(sv("line", { x1: x(w.min), x2: x(w.max), y1: cy, y2: cy, stroke: V("--accent"), "stroke-width": 1, "stroke-opacity": 0.6 }));
+      svg.append(sv("line", { x1: x(w.p10), x2: x(w.p90), y1: cy, y2: cy, stroke: V("--accent"), "stroke-width": 5, "stroke-linecap": "round", "stroke-opacity": 0.35 }));
+      svg.append(sv("circle", { cx: x(w.median), cy, r: 4.5, fill: V("--accent"), stroke: V("--surface"), "stroke-width": 2 }));
+      svg.append(sv("text", { x: W - mr + 8, y: cy + 4, class: "t-strong" }, `${sfmt(w.median, 1)}`));
+      const hit = sv("rect", { x: ml, y: yy, width: iw, height: rowH, fill: "transparent" });
+      hit.addEventListener("pointermove", (ev) => showTip(ev, (t) => { t.append(el("div", { class: "v" }, `${sfmt(w.median, 2)} ${U}`), el("div", {}, `${p.label} · ${p.period}`), el("div", { class: "cap" }, `10–90%: ${sfmt(w.p10, 2)} to ${sfmt(w.p90, 2)} · range ${sfmt(w.min, 2)} to ${sfmt(w.max, 2)} · ${p.n_models} models`)); }));
+      hit.addEventListener("pointerleave", hideTip); svg.append(hit);
+      yy += rowH;
+    }
+  }
+  $("chart-climate").append(svg);
+  // per-model table
+  const models = Object.keys(P[0].warming.by_model).sort();
+  const t = el("table"); const h = el("tr"); h.append(el("th", {}, "Model")); P.forEach((p) => h.append(el("th", { class: "r" }, `${p.label} ${p.period}`))); t.append(h);
+  for (const m of models) { const tr = el("tr"); tr.append(el("td", {}, m)); P.forEach((p) => tr.append(el("td", { class: "r" }, sfmt(p.warming.by_model[m], 2)))); t.append(tr); }
+  $("tbl-clim-models").append(t);
+  // exposure table
+  const thr = CL.thresholds[CL.thresholds.length - 1];
+  $("exposureTitle").textContent = `Share of the study area at or above ${thr} ${U}`;
+  $("exposureCap").textContent = `Today ${fmt(100 * CL.present.share_at_or_above[tkey(thr)], 1)}% of cells reach ${thr} ${U}. Values are the median over climate models (hover for the 10–90% range). The last row of each period shows how much of the median warming each adaptation package offsets on average.`;
+  const vnames = P[0].variants.map((v) => v.name);
+  const tb = el("table"); const hh = el("tr"); hh.append(el("th", {}, "Pathway"), el("th", {}, "Period")); vnames.forEach((n) => hh.append(el("th", { class: "r" }, n === "no adaptation" ? "No adaptation" : n))); tb.append(hh);
+  for (const p of P) { const tr = el("tr"); tr.append(el("td", {}, p.label), el("td", {}, p.period));
+    for (const v of p.variants) { const s2 = v.share_at_or_above[tkey(thr)]; const td = el("td", { class: "r" }, `${fmt(100 * s2.median, 1)}%`); td.title = `10–90% of models: ${fmt(100 * s2.p10, 1)}–${fmt(100 * s2.p90, 1)}%`; tr.append(td); }
+    tb.append(tr); }
+  const off = el("tr"); off.append(el("td", { class: "cap" }, "Offset of mid-century SSP2-4.5 warming"), el("td", {}, ""));
+  for (const v of mid.variants) off.append(el("td", { class: "r cap" }, v.offset_share_of_median_warming == null ? "—" : `${fmt(100 * v.offset_share_of_median_warming, 0)}%`));
+  tb.append(off);
+  $("tbl-exposure").append(tb);
+}
+
 /* ---------- causal ---------- */
 function causal() {
   const C = DATA.causal; const box = $("tbl-causal");
@@ -750,6 +862,7 @@ function caveats() {
   if (ext.length) items.push(`These scenarios push more than 20% of edited cells beyond observed conditions: ${ext.join(", ")}. Treat them as extrapolation, not predictions.`);
   const pv = DATA.physics && DATA.physics.v_norm_m;
   if (pv && pv.mean < 1) items.push("The physics model runs without advection (no wind record was supplied) and with a generic energy balance for the configured time window.");
+  if (CL) items.push("Climate futures use the delta method: today's measured pattern plus each model's change in summer average daily highs. They assume land-cover effects stay the same as the climate warms, and the hottest days may warm more than the seasonal average.");
   for (const c of DATA.caveats_extra || []) items.push(c);
   for (const t of items) ul.append(el("li", {}, t));
   const tm = DATA.timings || {}; const tot = Object.values(tm).reduce((a, b) => a + b, 0);
@@ -757,7 +870,7 @@ function caveats() {
 }
 
 function init() {
-  buildLuts(); facts(); kpis(); accuracy(); influence(); curves(); scenarios(); causal(); budget(); caveats();
+  buildLuts(); facts(); kpis(); accuracy(); influence(); curves(); scenarios(); climate(); causal(); budget(); caveats();
   let g0 = GROUPS[0]; try { const s = localStorage.getItem("phm-group"); if (s && GROUPS.includes(s)) g0 = s; } catch (e) {}
   setGroup(g0);
 }
