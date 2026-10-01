@@ -19,7 +19,7 @@ export function pickSelection(g: GridData, mode: PickMode, keys: (number | strin
   let n = 0;
   for (let r = 0; r < g.n; r++) {
     const k = mode.by === "zone" ? zoneValue(g, r) : hexKeyOfRow(g, r, mode.size_m);
-    if (set.has(String(k))) {
+    if (k !== null && set.has(String(k))) {
       mask[r] = 1;
       n++;
     }
@@ -29,11 +29,14 @@ export function pickSelection(g: GridData, mode: PickMode, keys: (number | strin
   return { kind: "selection", spec, mask, label: `${what} · ${fmtInt(n)} cells`, portable: true };
 }
 
-/** Zone label of a row: GridMeta.zones maps zone codes to their names when present. */
-export function zoneValue(g: GridData, r: number): number | string {
+/**
+ * Zone of a row, or null. grid.bin's `zone` is an index into GridMeta.zones for numeric and
+ * string zones alike (−1 = no zone, api.md §6.2), so codes that do not fit int16 survive.
+ */
+export function zoneValue(g: GridData, r: number): number | string | null {
   const z = g.zone[r];
-  const names = g.meta.zones;
-  return names.length && z >= 0 && z < names.length && typeof names[0] === "string" ? names[z] : z;
+  const zones = g.meta.zones;
+  return z >= 0 && z < zones.length ? zones[z] : null;
 }
 
 export function pickTool(g: GridData, mode: PickMode, additive: () => boolean = () => false): MapTool {
@@ -47,6 +50,7 @@ export function pickTool(g: GridData, mode: PickMode, additive: () => boolean = 
       const r = rowAt(g, p.px, p.py);
       if (r < 0) return null;
       const k = mode.by === "zone" ? zoneValue(g, r) : hexKeyOfRow(g, r, mode.size_m);
+      if (k === null) return null; // a cell without a zone picks nothing
       if (additive()) {
         keys = keys.some((x) => String(x) === String(k)) ? keys.filter((x) => String(x) !== String(k)) : [...keys, k];
       } else keys = [k];

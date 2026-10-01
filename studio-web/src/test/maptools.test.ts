@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyBrush, brushTool, circleTool, editedRows, hexKeyOfRow, pickSelection, pickTool, polygonTool, rectTool, type BrushSettings } from "../map/tools";
+import { applyBrush, brushTool, circleTool, editedRows, hexKeyOfRow, pickSelection, pickTool, polygonTool, rectTool, zoneValue, type BrushSettings } from "../map/tools";
 import { hexCenter, hexKey, makeGrid, niceLength, rowsInRadius } from "../map/grid";
 import { gridMeta, grid3 } from "./grid";
 
@@ -100,6 +100,25 @@ describe("selection tools", () => {
     if (h.kind !== "selection") throw new Error("expected a selection");
     expect(h.spec).toMatchObject({ kind: "hex", size_m: 250 });
     expect(h.mask[0]).toBe(1);
+  });
+  it("reads grid.bin zone as an index into GridMeta.zones for string and numeric codes (−1 = none)", () => {
+    const ix = Int32Array.from([0, 1, 2]);
+    const iy = Int32Array.from([0, 0, 0]);
+    // A numeric code beyond int16 and a row without a zone
+    const num = makeGrid(gridMeta(3, 1, 3, { zones: [7, 90210] }), ix, iy, undefined, undefined, Int16Array.from([1, 0, -1]));
+    expect([0, 1, 2].map((r) => zoneValue(num, r))).toEqual([90210, 7, null]);
+    const t = pickTool(num, { by: "zone" });
+    const a = t.up({ px: 0.5, py: 0.5 });
+    if (!a || a.kind !== "selection") throw new Error("expected a selection");
+    expect(a.spec).toEqual({ kind: "zones", values: [90210] });
+    expect([...a.mask]).toEqual([1, 0, 0]);
+    expect(t.up({ px: 2.5, py: 0.5 })).toBeNull();
+    const str = makeGrid(gridMeta(3, 1, 3, { zones: ["Downtown", "Elmwood"] }), ix, iy, undefined, undefined, Int16Array.from([0, 1, 1]));
+    const b = pickSelection(str, { by: "zone" }, ["Elmwood"]);
+    if (b.kind !== "selection") throw new Error("expected a selection");
+    expect([...b.mask]).toEqual([0, 1, 1]);
+    // No zone array in grid.bin: every row has no zone
+    expect(zoneValue(makeGrid(gridMeta(3, 1, 3, { zones: [1] }), ix, iy), 0)).toBeNull();
   });
 });
 

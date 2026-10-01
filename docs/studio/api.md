@@ -46,7 +46,7 @@ The pydantic models that implement these schemas live in `sparc/studio/schemas/c
 
 - `GET /auth?t=<token>[&next=<path>]` sets the cookie `sparc_studio` (HttpOnly; SameSite=Strict; Path=/; Secure when the request is https) and responds `302 Location: next` (default `/`). `next` must be a same-origin path (leading `/`, not `//`, no scheme); otherwise it is replaced by `/`. A wrong token returns `401` with an HTML message.
 - Every `/api/*` route except `GET /api/health` requires either the cookie or `Authorization: Bearer <token>`. Missing auth returns `401 unauthorized`.
-- The `Host` header must be in the allowlist; otherwise `400 bad_host`. Unsafe methods (POST, PUT, PATCH, DELETE) must carry an `Origin` (or `Referer`) matching the serving origin; otherwise `403 bad_origin`.
+- The `Host` header must be in the allowlist; otherwise `400 bad_host`. Unsafe methods (POST, PUT, PATCH, DELETE) must carry an `Origin` (or `Referer`) matching the serving origin; otherwise `403 bad_origin`. Exception: a request authenticated with `Authorization: Bearer` that carries **neither** `Origin` nor `Referer` is accepted (scripts and tests; a browser cannot attach that header cross-site without a CORS preflight, which Studio never grants). A mismatching `Origin`/`Referer` is still `403`.
 
 ### 0.3 Error envelope
 
@@ -150,6 +150,10 @@ type GridMeta = { n: number; nx: number; ny: number; dx_m: number; x0_m: number;
   bounds_lonlat: [number, number, number, number]|null;     // [west, south, east, north]
   corners: { sw: [number,number], se: [number,number], nw: [number,number], ne: [number,number] }|null; // [lat, lon]
   ids_kind: "int"|"str"; zones: (number|string)[]; n_folds: number|null; units: { target: string };
+  // x0_m/y0_m: run-frame metres of the centre of cell (ix=0, iy=0) (sparc.core.grid.Grid; iy grows north).
+  // corners: [lat, lon] of the corner cell centres: sw = (0, 0), se = (nx−1, 0), nw = (0, ny−1), ne = (nx−1, ny−1);
+  //   clients interpolate lon/lat bilinearly between them for EPSG:4326 selections.
+  // zones: the distinct zone codes; grid.bin's `zone` indexes this list.
   background: number|null; etag: string };
 
 type Availability = "ready"|"partial"|"running"|"missing"|"stale";
@@ -270,7 +274,8 @@ Errors:
   checkpoints: {action: string, done: string[], bytes: number|null, ts: number}[];
   resources: {ts: number, rss_mb: number, cpu_pct: number, n_procs: number}[];   // last 15 min, 10 s resolution
   heartbeat_gaps: {from_ts: number, to_ts: number}[];
-  children: {job_id: string|null, run_id: string|null, key: string, label: string, status: string, progress: number|null, metrics: object}[] }
+  children: {job_id: string|null, run_id: string|null, key: string, label: string, status: string, progress: number|null, metrics: object}[];
+  log_capped: boolean }                  // events.jsonl passed 200 MB: debug lines are kept on disk only (SPEC §5.6)
 type Span = { span_id: string; parent_id: string|null; kind: "run"|"stage"|"task"; name: string; key: string|null;
   k: number|null; n: number|null; unit: string|null; status: "running"|"ok"|"error"|"cancelled";
   started_ts: number; ended_ts: number|null; elapsed_s: number|null; ctx: object; metrics: object };
@@ -284,11 +289,12 @@ Progress in the snapshot (`job.progress`, `stages[].progress`) is cost-weighted 
 Query: `under?` (span id), `max_depth?` (default 4) → `200 Span[]`.
 
 ### `GET /api/jobs/{jid}/events`
-Query: `after?` (cursor, default 0), `limit?` (default 1000, max 5000), `types?` (comma list), `min_lvl?`.
+Query: `after?` (cursor; omitted = from the first line), `limit?` (default 1000, max 5000), `types?` (comma list), `min_lvl?`.
 → `200 {events: Event[], next_cursor: number, eof: boolean}`. Each event carries `cursor` (byte offset) in addition to the envelope.
+`after=X` returns events whose cursor is greater than X. Cursor 0 is the first line's byte offset, so `after=0` skips that line; omit `after` to read from the start.
 
 ### `GET /api/jobs/{jid}/logs`
-Query: `after?`, `level?` (min level), `logger?`, `stage?`, `q?` (substring), `limit?` (default 500).
+Query: `after?` (as for `/events`: cursor > X; omitted = from the first line), `level?` (min level), `logger?`, `stage?`, `q?` (substring), `limit?` (default 500).
 → `200 {lines: {cursor: number, ts: number, level: string, logger: string, msg: string, path: string[]}[], next_cursor: number}`.
 
 ### `GET /api/jobs/{jid}/logs/raw`
@@ -734,6 +740,7 @@ Query: `path`, `limit?=200`, `columns?` → `200 {columns: {name, dtype}[], rows
 
 **`GET /api/runs/{rid}/grid.bin`**
 Packed `ix:int32, iy:int32, lon:float32, lat:float32, zone:int16`. `lon`/`lat` are NaN when there is no CRS. Uses the `X-SPARC-Offsets` header.
+`zone` is an index into `GridMeta.zones` for numeric and string zone codes alike (`-1` = no zone, and every row is `-1` when the config has no zone column), so codes that do not fit int16 survive. A `{kind: "zones"}` selection carries the codes themselves (`GridMeta.zones[zone]`), not the indices.
 
 **`GET /api/runs/{rid}/grid/ids.bin`** → Int64[n]. Errors: `409 string_ids`, in which case use `GET /api/runs/{rid}/grid/ids.json` → `string[]`.
 

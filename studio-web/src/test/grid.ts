@@ -20,7 +20,8 @@ export function gridMeta(nx: number, ny: number, n: number, extra: Partial<GridM
 export function grid3(): GridData {
   const ix = Int32Array.from([0, 1, 0, 2, 0, 1, 2]);
   const iy = Int32Array.from([2, 2, 1, 1, 0, 0, 0]);
-  return makeGrid(gridMeta(3, 3, 7), ix, iy, undefined, undefined, Int16Array.from([1, 1, 1, 2, 2, 2, 2]));
+  // zone holds indices into meta.zones: rows 0..2 are zone 1, rows 3..6 zone 2
+  return makeGrid(gridMeta(3, 3, 7, { zones: [1, 2] }), ix, iy, undefined, undefined, Int16Array.from([0, 0, 0, 1, 1, 1, 1]));
 }
 
 /** A blobby synthetic city with exactly n observed cells on an nx×ny lattice. */

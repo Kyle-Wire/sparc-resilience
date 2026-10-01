@@ -31,6 +31,14 @@ def test_rank_agreement_identical_and_shuffled():
     assert abs(rnd["kendall_tau"]) < 0.1 and rnd["top_decile_jaccard"] < 0.2
 
 
+def test_rank_agreement_all_nan_map_is_nan_not_an_error():
+    a = np.random.default_rng(0).normal(size=50)
+    out = M.rank_agreement(a, np.full(50, np.nan))
+    assert np.isnan(out["kendall_tau"]) and np.isnan(out["top_decile_jaccard"])
+    assert M._median_finite([out["kendall_tau"], 0.4, 0.8]) == pytest.approx(0.6)
+    assert M._median_finite([out["kendall_tau"]]) is None
+
+
 def test_summarize_effect_and_priority_stability(tmp_path):
     ids = np.arange(500)
     rng = np.random.default_rng(1)

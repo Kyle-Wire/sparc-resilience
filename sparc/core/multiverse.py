@@ -155,10 +155,17 @@ def rank_agreement(a: np.ndarray, b: np.ndarray, top: float = 0.10) -> dict:
 
     ok = np.isfinite(a) & np.isfinite(b)
     a, b = a[ok], b[ok]
+    if a.size == 0:   # no cell finite in both maps (e.g. an all-NaN marginal-benefit map): nothing to rank
+        return {"kendall_tau": float("nan"), "top_decile_jaccard": float("nan")}
     k = max(int(round(top * a.size)), 1)
     ta, tb = set(np.argsort(-np.abs(a))[:k]), set(np.argsort(-np.abs(b))[:k])
     return {"kendall_tau": float(kendalltau(np.abs(a), np.abs(b)).statistic),
             "top_decile_jaccard": len(ta & tb) / len(ta | tb)}
+
+
+def _median_finite(xs) -> float | None:
+    xs = [x for x in xs if np.isfinite(x)]
+    return float(np.median(xs)) if xs else None
 
 
 def summarize(out_dir, names=None) -> dict:
@@ -195,8 +202,8 @@ def summarize(out_dir, names=None) -> dict:
         "runs": {n: {k: r[k] for k in ("label", "r2", "rmse", "block_m", "stacker_choice", "seconds")} for n, r in runs.items()},
         "effects": effects, "priority": priority,
         "sign_stability_min": float(min(e["sign_stability"] for e in effects.values())) if effects else None,
-        "median_kendall_tau": float(np.median([x["kendall_tau"] for x in stab])) if stab else None,
-        "median_top_decile_jaccard": float(np.median([x["top_decile_jaccard"] for x in stab])) if stab else None,
+        "median_kendall_tau": _median_finite([x["kendall_tau"] for x in stab]),
+        "median_top_decile_jaccard": _median_finite([x["top_decile_jaccard"] for x in stab]),
     }
 
 

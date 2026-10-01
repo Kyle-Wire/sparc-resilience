@@ -32,7 +32,7 @@ export function parseGridBin(meta: GridMeta, buffer: ArrayBuffer, offsets: Offse
   const n = ix.length;
   const lon = (a.lon as Float32Array) ?? new Float32Array(n).fill(NaN);
   const lat = (a.lat as Float32Array) ?? new Float32Array(n).fill(NaN);
-  const zone = (a.zone as Int16Array) ?? new Int16Array(n);
+  const zone = (a.zone as Int16Array) ?? new Int16Array(n).fill(-1);
   return makeGrid(meta, ix, iy, lon, lat, zone);
 }
 
@@ -47,7 +47,7 @@ export function makeGrid(meta: GridMeta, ix: Int32Array, iy: Int32Array, lon?: F
     iy,
     lon: lon ?? new Float32Array(n).fill(NaN),
     lat: lat ?? new Float32Array(n).fill(NaN),
-    zone: zone ?? new Int16Array(n),
+    zone: zone ?? new Int16Array(n).fill(-1), // index into meta.zones, −1 = none
     cellToPt: buildCellToPt(ix, iy, meta.nx, meta.ny),
     rowToPix: buildRowToPix(ix, iy, meta.nx, meta.ny),
   };
