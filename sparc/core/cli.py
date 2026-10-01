@@ -103,6 +103,15 @@ def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
     p_ss.add_argument("--out", default=None, help="write simcheck_summary.json/.md here")
     p_ss.set_defaults(func=cmd_core_simcheck_summary)
 
+    p_mv = subs.add_parser("multiverse", help="re-run under alternative analysis choices; effect + priority stability")
+    p_mv.add_argument("--project", "-p", required=True)
+    p_mv.add_argument("--variants", default="", help="comma list (default: all; see sparc.core.multiverse.VARIANTS)")
+    p_mv.add_argument("--coarse", type=float, default=60.0)
+    p_mv.add_argument("--workers", type=int, default=1)
+    p_mv.add_argument("--threads", type=int, default=1)
+    p_mv.add_argument("--out", required=True)
+    p_mv.set_defaults(func=cmd_core_multiverse)
+
     p_syn = subs.add_parser("synth", help="write the synthetic test city (with planted truths) to CSV")
     p_syn.add_argument("--out", required=True)
     p_syn.add_argument("--seed", type=int, default=0)
@@ -212,6 +221,21 @@ def cmd_core_simcheck_summary(args) -> int:
         out.mkdir(parents=True, exist_ok=True)
         (out / "simcheck_summary.json").write_text(json.dumps(summ, indent=1, default=float), encoding="utf-8")
         (out / "simcheck_summary.md").write_text(md + "\n", encoding="utf-8")
+    print(md)
+    return 0
+
+
+def cmd_core_multiverse(args) -> int:
+    from sparc.core.config import load_core_config
+    from sparc.core.multiverse import multiverse_markdown, run_multiverse
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    cfg = load_core_config(args.project)
+    variants = [v.strip() for v in args.variants.split(",") if v.strip()] or None
+    summ = run_multiverse(cfg, args.out, variants=variants, coarse=args.coarse or None, workers=args.workers,
+                          threads=args.threads)
+    md = multiverse_markdown(summ, cfg.data.get("target_units", ""))
+    (Path(args.out) / "multiverse_summary.md").write_text(md + "\n", encoding="utf-8")
     print(md)
     return 0
 
