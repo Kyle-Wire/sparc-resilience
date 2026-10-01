@@ -137,6 +137,15 @@ export const useUi = create<UiState>((set, get) => ({
   },
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
   setNotifications: (on) => {
+    // Opt-in browser notifications on job end (SPEC §3.1): enabling asks for the permission
+    // once (call this from the click that enables it, so the browser shows the prompt).
+    if (on && typeof Notification !== "undefined" && Notification.permission === "default") {
+      try {
+        void Promise.resolve(Notification.requestPermission()).catch(() => {});
+      } catch {
+        /* old callback-only API or blocked */
+      }
+    }
     writeLocal("notifications", on);
     set({ notifications: on });
   },

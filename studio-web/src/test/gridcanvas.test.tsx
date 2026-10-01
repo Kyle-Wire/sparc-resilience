@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { act, createRef } from "react";
 import type { LayerMeta } from "../api/types";
 import { buildCellToPt, colorize, mapPalette, outlinePath } from "../map/colour";
@@ -194,6 +194,46 @@ describe("GridCanvas", () => {
     fire("pointermove", 60, 1);
     expect(view!.state.tx).toBe(20);
     expect(stage.getAttribute("data-dragging")).toBeNull();
+  });
+
+  it("redraws the canvas when the view changes, not on hover", async () => {
+    const draws: number[] = [];
+    const ctx = new Proxy({} as Record<string, unknown>, {
+      get: (_t, k) =>
+        k === "drawImage"
+          ? () => void draws.push(1)
+          : k === "createImageData"
+            ? (w: number, h: number) => ({ data: new Uint8ClampedArray(w * h * 4), width: w, height: h })
+            : () => {},
+      set: () => true,
+    });
+    const gc = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation((() => ctx) as unknown as typeof HTMLCanvasElement.prototype.getContext);
+    try {
+      const g = grid3();
+      let view: ReturnType<typeof useMapView> | null = null;
+      function Host() {
+        const v = useMapView({ scale: 10, tx: 0, ty: 0 });
+        view = v;
+        return <GridCanvas grid={g} view={v} dark={false} values={Float32Array.from([0, 1, 2, 3, 4, 5, 6])} domain={seq(0, 6)} label="3x3" />;
+      }
+      const { container } = render(<Host />);
+      await flush(3);
+      await act(async () => await new Promise((r) => setTimeout(r, 40))); // let the frame run
+      const first = draws.length;
+      expect(first).toBeGreaterThan(0);
+      const stage = container.querySelector('[role="application"]')!;
+      for (const x of [3, 9, 15, 21, 27])
+        act(() => {
+          stage.dispatchEvent(new PointerEvent("pointermove", { clientX: x, clientY: 5, bubbles: true }));
+        });
+      await act(async () => await new Promise((r) => setTimeout(r, 40)));
+      expect(draws.length).toBe(first); // hover only re-renders the SVG overlay
+      act(() => view!.panBy(5, 0));
+      await act(async () => await new Promise((r) => setTimeout(r, 40)));
+      expect(draws.length).toBeGreaterThan(first);
+    } finally {
+      gc.mockRestore();
+    }
   });
 
   it("moves a keyboard cursor and announces the cell in an aria-live region; Enter pins", async () => {

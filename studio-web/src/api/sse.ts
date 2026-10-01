@@ -7,7 +7,8 @@
 //   duplicates either;
 // - reconnects with backoff 1 → 2 → 4 → 8 → 16 → 30 s (reset once a connection opens);
 // - after three failures in a row, falls back to polling every 5 s (global: GET
-//   /api/jobs?status=active; job: GET /api/jobs/{jid}/events?after=) and keeps retrying the
+//   /api/jobs?status=active; job: GET /api/jobs/{jid}/events?after=, reading a backlog page
+//   after page, from the first line when no cursor is known yet) and keeps retrying the
 //   stream in the background; the connection pill then reads "polling";
 // - handles `resync`: global → listeners refetch active jobs and open resources;
 //   job → reconnect immediately from `after` (the server closed the stream on overflow);

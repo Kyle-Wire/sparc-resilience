@@ -83,7 +83,7 @@ export function GridCanvas(props: GridCanvasProps) {
   const [hover, setHover] = useState<RasterPoint | null>(null);
   const [live, setLive] = useState("");
   const [dragging, setDragging] = useState(false);
-  const [, bump] = useState(0);
+  const [paintSeq, bump] = useState(0);
   const lastMs = useRef(0);
   const drag = useRef<{ x: number; y: number; moved: boolean; pan: boolean } | null>(null);
   const space = useRef(false);
@@ -235,10 +235,15 @@ export function GridCanvas(props: GridCanvasProps) {
     recolor();
     bump((x) => x + 1);
   }, [recolor]);
-  useEffect(() => rehatch(), [rehatch]);
+  useEffect(() => {
+    rehatch();
+    schedule();
+  }, [rehatch, schedule]);
+  // Redraw only when something drawn changed (view, size, raster, opacity, clip, theme), not
+  // on every render: hover and cursor updates re-render the overlay but not the canvas.
   useEffect(() => {
     schedule();
-  });
+  }, [draw, paintSeq, schedule]);
   useEffect(
     () => () => {
       if (frame.current && typeof cancelAnimationFrame === "function") cancelAnimationFrame(frame.current);

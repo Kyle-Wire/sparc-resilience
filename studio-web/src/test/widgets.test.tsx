@@ -165,6 +165,18 @@ describe("FileDrop", () => {
     expect(container.textContent).toContain("Uploaded 8 B");
     expect(container.querySelector('[role="progressbar"]')!.getAttribute("aria-valuenow")).toBe("100");
   });
+
+  it("clears the picker after a choice, so the same file can be chosen again", () => {
+    const got: string[] = [];
+    const { container } = render(<FileDrop label="Upload CSV" onFiles={(fs) => got.push(...fs.map((f) => f.name))} />);
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    let value = "C:\\fakepath\\brown4.csv";
+    Object.defineProperty(input, "value", { get: () => value, set: (v: string) => void (value = v), configurable: true });
+    Object.defineProperty(input, "files", { value: [new File(["x"], "brown4.csv")] });
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(got).toEqual(["brown4.csv"]);
+    expect(value).toBe("");
+  });
 });
 
 describe("dev token bootstrap", () => {

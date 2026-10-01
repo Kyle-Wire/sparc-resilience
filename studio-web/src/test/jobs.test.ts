@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GlobalEvent, Job } from "../api/types";
 import { ApiError } from "../api/client";
 import { clearResources, mutate, peekResource } from "../api/resource";
@@ -100,5 +100,38 @@ describe("jobs store while polling", () => {
     });
     expect(useJobs.getState().jobs.j_1).toBeUndefined();
     expect(useUi.getState().toasts).toEqual([]);
+  });
+});
+
+describe("job-end browser notifications (opt-in)", () => {
+  it("enabling asks for permission once; a hidden tab gets a notification when a job ends", async () => {
+    const shown: { title: string; tag?: string }[] = [];
+    let asked = 0;
+    class FakeNotification {
+      static permission: NotificationPermission = "default";
+      static requestPermission() {
+        asked++;
+        FakeNotification.permission = "granted";
+        return Promise.resolve("granted" as NotificationPermission);
+      }
+      constructor(title: string, opts?: NotificationOptions) {
+        shown.push({ title, tag: opts?.tag });
+      }
+    }
+    vi.stubGlobal("Notification", FakeNotification);
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    try {
+      useUi.getState().setNotifications(true);
+      expect(asked).toBe(1);
+      useJobs.getState().reset();
+      useJobs.getState().setActive([job({ id: "j_7", status: "running", label: "Full run" })]);
+      await reconcilePolledJobs([], async (id) => job({ id, status: "failed", label: "Full run", error: { type: "ValueError", message: "bad config" } }));
+      expect(shown).toEqual([{ title: "SPARC Studio: Full run failed", tag: "j_7" }]);
+    } finally {
+      hidden.mockRestore();
+      vi.unstubAllGlobals();
+      useUi.getState().setNotifications(false);
+      useUi.setState({ toasts: [] });
+    }
   });
 });

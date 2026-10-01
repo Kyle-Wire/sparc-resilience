@@ -31,9 +31,9 @@ export function FileDrop<R = unknown>({ label, hint, accept, multiple, disabled,
   const [over, setOver] = useState(false);
   const [progress, setProgress] = useState<Progress[]>([]);
 
-  const handle = async (list: FileList | null) => {
-    if (!list || !list.length || disabled) return;
-    const files = multiple ? [...list] : [list[0]];
+  const handle = async (list: File[]) => {
+    if (!list.length || disabled) return;
+    const files = multiple ? list : [list[0]];
     onFiles?.(files);
     if (!upload) return;
     setProgress(files.map((f) => ({ name: f.name, sent: 0, total: f.size })));
@@ -57,7 +57,7 @@ export function FileDrop<R = unknown>({ label, hint, accept, multiple, disabled,
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
     setOver(false);
-    void handle(e.dataTransfer.files);
+    void handle([...(e.dataTransfer.files ?? [])]);
   };
 
   return (
@@ -85,7 +85,19 @@ export function FileDrop<R = unknown>({ label, hint, accept, multiple, disabled,
       >
         <strong>{label}</strong>
         <span className="cap">{hint ?? "Drop a file here, or click to choose one."}</span>
-        <input ref={input} type="file" hidden accept={accept} multiple={multiple} onChange={(e) => void handle(e.target.files)} />
+        <input
+          ref={input}
+          type="file"
+          hidden
+          accept={accept}
+          multiple={multiple}
+          onChange={(e) => {
+            const files = [...(e.target.files ?? [])];
+            // Clear the picker so choosing the same file again (after fixing it) fires again.
+            e.target.value = "";
+            void handle(files);
+          }}
+        />
       </div>
       {progress.map((p) => (
         <div key={p.name} className="stack" style={{ gap: 4 }}>
