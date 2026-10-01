@@ -87,6 +87,22 @@ def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
     p_rp.add_argument("--threads", type=int, default=0)
     p_rp.set_defaults(func=cmd_core_reproduce)
 
+    p_sc = subs.add_parser("simcheck", help="recover planted effects on the city's real layout (coarse, many runs)")
+    p_sc.add_argument("--project", "-p", required=True)
+    p_sc.add_argument("--design", default="physics=20,additive=20,null=20,own_only=8,coarse_scale=8,confounded=8",
+                      help="generator=replicates, comma separated")
+    p_sc.add_argument("--coarse", type=float, default=90.0)
+    p_sc.add_argument("--epochs", type=int, default=200)
+    p_sc.add_argument("--workers", type=int, default=1)
+    p_sc.add_argument("--threads", type=int, default=1, help="torch threads per worker")
+    p_sc.add_argument("--out", required=True, help="results directory (resumable)")
+    p_sc.set_defaults(func=cmd_core_simcheck)
+
+    p_ss = subs.add_parser("simcheck-summary", help="merge simcheck result directories and summarise")
+    p_ss.add_argument("dirs", nargs="+")
+    p_ss.add_argument("--out", default=None, help="write simcheck_summary.json/.md here")
+    p_ss.set_defaults(func=cmd_core_simcheck_summary)
+
     p_syn = subs.add_parser("synth", help="write the synthetic test city (with planted truths) to CSV")
     p_syn.add_argument("--out", required=True)
     p_syn.add_argument("--seed", type=int, default=0)
@@ -170,6 +186,34 @@ def cmd_core_reproduce(args) -> int:
         print(f"  {'✓' if c['ok'] else ('✗' if c['hard'] else '·')} {c['check']}: {c['detail']}")
     print("REPRODUCED" if out["pass"] else "NOT REPRODUCED", "→", out["reproduction"])
     return 0 if out["pass"] else 1
+
+
+def cmd_core_simcheck(args) -> int:
+    from sparc.core.config import load_core_config
+    from sparc.core.simcheck import run_simcheck, simcheck_markdown
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    design = {k.strip(): int(v) for k, v in (kv.split("=") for kv in args.design.split(",") if kv.strip())}
+    summ = run_simcheck(load_core_config(args.project), design, args.out, coarse=args.coarse or None,
+                        epochs=args.epochs, workers=args.workers, threads=args.threads)
+    print(simcheck_markdown(summ))
+    return 0
+
+
+def cmd_core_simcheck_summary(args) -> int:
+    import json
+
+    from sparc.core.simcheck import merge_results, simcheck_markdown, summarize
+
+    summ = summarize(merge_results(args.dirs))
+    md = simcheck_markdown(summ)
+    if args.out:
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "simcheck_summary.json").write_text(json.dumps(summ, indent=1, default=float), encoding="utf-8")
+        (out / "simcheck_summary.md").write_text(md + "\n", encoding="utf-8")
+    print(md)
+    return 0
 
 
 def cmd_core_forcing(args) -> int:
