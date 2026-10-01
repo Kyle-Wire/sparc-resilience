@@ -366,6 +366,7 @@ The core is a lean, self-contained package (numpy, scipy, pandas, scikit-learn, 
 | S4 saturation and marginal effects | `response.py` | Done: neighbourhood-adoption sweeps; per-cell saturating fit against realised neighbourhood dose, with censoring; own-only vs footprint marginals (analytic chain rule through the focal kernels and the physics Green's function, mediator-aware) |
 | S5 scenarios | `scenarios.py`, `mediators.py` | Done: add/set/scale, bounds, optional baseline-relative coupling, mediator abduction, re-featurisation through the trained stack, fold-spread uncertainty, extrapolation flags |
 | S6 causal validation | `causal.py` | Done: spatial DML; exposure-mapping spillover (θ_own, θ_nbr); R-learner CATE with BLP calibration; Kennedy DR dose-response; E-value and Cinelli–Hazlett RV; model-vs-causal audit on matched estimands; optional MC³ DAG audit |
+| S5c climate futures | `climate.py` | Done: CMIP6 change factors (24 models × SSP1-2.6/2-4.5/3-7.0/5-8.5 × 2021–2040/2041–2060/2081–2100, June–August daily highs, land-weighted at the site) read straight from the AWS Pangeo archive; future = observed + model warming + adaptation Δ; heat-threshold exposure with model ranges and the share of warming each package offsets |
 | S7 budget and equity | `optimize.py` | Done: concave segments from footprint × saturation into `sparc.scenario.budget`; closed-loop re-prediction of the chosen allocation |
 | P7 multi-city / PI-JEPA | — | Not started. Needs the multi-city dataset and a GPU; the specification is ADR-0002 |
 
@@ -433,25 +434,35 @@ The core is a lean, self-contained package (numpy, scipy, pandas, scikit-learn, 
   - On Brown the blend is GAM 0.59 + physics 0.35. The physics model alone scores R² 0.51 on unseen blocks (L ≈ 240 m, no advection).
   - On the synthetic city the blend puts about 0.88 on physics, which generated the data.
   - `physics_mode: feature` stays the default. Forcing physics as the backbone overstated canopy and albedo effects against the causal estimates.
-- **Fitted effects are attenuated (known limitation, next step).** On the synthetic city with planted truths, the stack recovers **53%** of the planted canopy footprint, with spatial correlation 0.87. Shares by base model, measured before the blend change:
+- **Fitted effects are attenuated, less so now (tracked by `sparc core benchmark`).** On the synthetic city with planted truths, the effect-recovery benchmark gives:
 
-  | Model | Share of planted effect |
+  | | Share of planted canopy effect | Spatial correlation | Stack held-out R² |
+  |---|---|---|---|
+  | Before | 53% (footprint map) | 0.87 | 0.855 |
+  | Now | 63% (footprint map), 67% (uniform +5 pp scenario) | 0.95 | 0.878 |
+
+  Per model (uniform +5 pp scenario):
+
+  | Model | Share |
   |---|---|
-  | physics | 63% |
-  | MGWR | 45% |
-  | OLS | 43% |
+  | physics | 72% (was 63%) |
+  | MGWR | 50% |
+  | OLS | 47% |
+  | GAM | 35% |
   | GRF | 31% |
-  | GAM | 28% |
 
-  Three causes:
-  - flexible spatial terms (intercept surfaces, RBF smooths) absorb part of a spatially smooth covariate's effect;
-  - trees flatten effects;
-  - the linear shade term cannot follow a saturating response.
+  What worked, what didn't:
+  - **Saturating canopy shade in the physics source.** 1 − s·(1 − e^{−c/κ})/(1 − e^{−1/κ}) with κ learned under a weak prior. κ is recovered (0.16 vs 0.15 planted), and the physics model both de-attenuates and predicts better. On Brown κ fits 1.8–5 (near-linear) and accuracy is unchanged.
+  - **Spatial+ (Dupont et al. 2022) is implemented but opt-in** (`models.spatial_plus: [mgwr]`):
+    - On the synthetic city it raises MGWR from 50% to 69% at the same accuracy.
+    - On the full Providence data it lowers MGWR's held-out R² from 0.39 to 0.31, with no stack gain. Covariate–temperature relations there are scale-dependent, which violates Spatial+'s premise.
+    - A two-stage variant (refit the intercept against the full covariates) exploded on smooth focal features and was dropped.
+  - **Spatial+ does not help the GAM** (35% → 36%). Its attenuation is the prediction-tuned ridge shrinkage: with no spatial basis at all it still recovers 36%.
+  - **Stacker candidates now include an equal-weight mean**, alongside the NNLS blend and the gated residual (the forecast-combination puzzle). It is chosen only when fitted weights do not transfer across blocks; on full Providence the NNLS blend still wins.
 
-  MGWR originally sat at 10% because it saw only raw, own-cell inputs; giving it the influence-range focal features fixed that and also halved its RMSE. Next steps:
-  - Spatial+ residualised covariates in MGWR/GAM (Dupont et al. 2022);
-  - a saturating shade term in the physics source;
-  - audit-calibrated scenario magnitudes.
+  Remaining levers:
+  - effect-aware ridge penalties for the GAM;
+  - reporting the causal-linear scenario band next to every model scenario. This is now done: `causal_linear` in `scenarios.json`.
 - **On Brown the S6 audit agrees on the effects that drive scenarios.** The model's neighbourhood-adoption slopes match the causal θ_own + θ_nbr:
 
   | Treatment | Model | Causal |

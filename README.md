@@ -250,6 +250,7 @@ sparc run -p project.yml -s 4      # Scenario simulation
 | **S4** Saturation | Neighbourhood-adoption dose sweeps; per-cell saturating fits (d90, headroom, censoring); own-cell vs footprint marginal effects |
 | **S5** Scenarios | Add/set/scale edits with bounds, mediators (e.g. NDVI ← canopy) and re-featurisation through the trained stack, with fold-spread uncertainty and extrapolation flags |
 | **S6** Causal validation | Spatial DML, spillover (own vs neighbour), R-learner CATE, doubly robust dose-response, E-value and Cinelli–Hazlett RV, and a model-vs-causal audit |
+| **Climate** | CMIP6 change factors for every pathway and period (24 models, read straight from the public AWS archive) applied to the observed map, combined with each adaptation package: future temperature, heat-threshold exposure, and the share of warming each package offsets |
 | **S7** Budget | Concave-segment allocation under a budget, optional equity weighting, and a closed-loop re-prediction check |
 
 ```bash
@@ -258,6 +259,8 @@ sparc core run --project configs/core_providence.yml --fast     # ~20 min smoke 
 sparc core run --project configs/core_providence.yml            # full run, all stages (~40 min on 3 threads)
 sparc core run --project configs/core_providence.yml --cv-curve --resume   # + skill-vs-distance CV table; resume after an interruption
 python scripts/results_page/build_page.py output/core/providence/providence_uhi configs/core_providence.yml   # interactive results page
+sparc core climate --lat 41.826 --lon -71.403 --out configs/climate/my_city.csv   # CMIP6 change factors for any site
+sparc core benchmark                                            # effect-recovery benchmark (planted truths)
 sparc core synth --out ./synthetic_city                         # synthetic city with planted truths
 pytest tests/core -m "not slow"                                 # unit + synthetic + Providence tests
 ```
