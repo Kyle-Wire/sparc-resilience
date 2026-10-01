@@ -269,7 +269,8 @@ def test_link_features_new_project(client, demo):
     client.put(f"/api/projects/{pid}/files/features/open_features.parquet", content=df.to_parquet(index=False))
     path = "inputs/features/open_features.parquet"
     prev = client.post(f"/api/projects/{pid}/link", json={"kind": "features_new_project", "path": path}).json()
-    assert prev["applied"] is False and "open_canopy" in prev["yaml_diff"] and prev["new_project_id"] is None
+    assert prev["applied"] is False and "open_canopy" in prev["yaml_diff"]
+    assert "new_project_id" not in prev and "version" not in prev          # optional fields: absent, not null
     out = client.post(f"/api/projects/{pid}/link", json={"kind": "features_new_project", "path": path,
                                                          "apply": True}).json()
     new = client.get(f"/api/projects/{out['new_project_id']}").json()
@@ -304,6 +305,18 @@ def test_open_project_raw_renames_by_role(tmp_path):
 def test_input_views_unknown(client, demo):
     assert client.get(f"/api/projects/{demo['id']}/inputs/bogus/view").json()["error"]["code"] == "unknown_view"
     assert client.get(f"/api/projects/{demo['id']}/inputs/forcing/view").status_code == 404
+
+
+def test_station_ids_are_plain(client, demo):
+    """Station ids name cache files (``ghcn_<id>.csv``, ``global_hourly_<id>_<year>.csv``): letters and digits."""
+    pid = demo["id"]
+    for bad in ("../../x", "USW000/14765", "a b"):
+        assert client.post(f"/api/projects/{pid}/inputs/ghcn", json={"station": bad}).status_code == 422, bad
+        r = client.post(f"/api/projects/{pid}/inputs/forcing", json={"date": "2020-07-29", "hours": [15, 16],
+                                                                      "tz": "UTC", "station": bad})
+        assert r.status_code == 422, bad
+    r = client.post(f"/api/projects/{pid}/inputs/features", json={"s2_tiles": ["19TCG", "../x"]})
+    assert r.status_code == 422
 
 
 def test_kinds_are_listed_with_hosts(client):

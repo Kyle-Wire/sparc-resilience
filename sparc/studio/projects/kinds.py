@@ -26,8 +26,9 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import re
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -36,8 +37,10 @@ from sparc.studio.jobs.kinds import job_kind
 log = logging.getLogger("sparc.studio.projects")
 
 __all__ = ["ForcingParams", "LayersParams", "FeaturesParams", "Cmip6Params", "GhcnParams", "StationsParams",
-           "INPUT_KINDS"]
+           "INPUT_KINDS", "STATION_ID"]
 
+#: station ids (ISD USAF+WBAN, GHCN-Daily) - they name cache files, so nothing but letters and digits
+STATION_ID = r"^[A-Za-z0-9]{1,16}$"
 INPUT_KINDS = ("input.forcing", "input.layers", "input.features", "input.cmip6", "input.ghcn", "input.stations")
 HOSTS = {
     "input.forcing": ("nsf-ncar-era5.s3.amazonaws.com", "noaa-global-hourly-pds.s3.amazonaws.com"),
@@ -64,7 +67,7 @@ class ForcingParams(_Params):
     tz: str = Field(..., description="IANA time zone, e.g. America/New_York")
     lat: float | None = Field(None, ge=-90, le=90)
     lon: float | None = Field(None, ge=-180, le=180)
-    station: str | None = Field(None, description="ISD station USAF+WBAN, e.g. 72507014765")
+    station: str | None = Field(None, pattern=STATION_ID, description="ISD station USAF+WBAN, e.g. 72507014765")
     wind_source: Literal["auto", "station", "era5"] = "auto"
     link: bool = True
 
@@ -106,7 +109,8 @@ class LayersParams(_Params):
 class FeaturesParams(_Params):
     months: list[str] | None = Field(None, description="months of the Sentinel-2 composite, YYYY-MM")
     max_cloud: float = Field(20.0, ge=0, le=100)
-    s2_tiles: list[str] | None = None
+    s2_tiles: list[Annotated[str, Field(pattern=r"^\d{1,2}[A-Za-z]{3}$")]] | None = Field(
+        None, description="Sentinel-2 MGRS tiles, e.g. 19TCG")
     target: Literal["new_project", "this_project"] = "new_project"
 
     @field_validator("months")
@@ -147,7 +151,7 @@ class Cmip6Params(_Params):
 
 
 class GhcnParams(_Params):
-    station: str | None = Field(None, description="GHCN-Daily station id, e.g. USW00014765")
+    station: str | None = Field(None, pattern=STATION_ID, description="GHCN-Daily station id, e.g. USW00014765")
 
 
 class StationsParams(_Params):
@@ -402,6 +406,8 @@ def run_ghcn(ctx, p: GhcnParams) -> dict:
     station = p.station or get_dotted(raw, "planner.ghcn_station")
     if not station:
         raise ValueError("no station: pass one or set planner.ghcn_station")
+    if not re.fullmatch(STATION_ID, str(station)):
+        raise ValueError(f"{station!r} is not a GHCN-Daily station id (letters and digits, e.g. USW00014765)")
     with progress.task("remote_object", key=f"ghcn:{station}", unit="remote_object"):
         s = ghcn_tmax(str(station), cache_dir=ctx.cache_dir)
     if not len(s):

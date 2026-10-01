@@ -175,20 +175,25 @@ def scan_projects(db, workspace) -> dict:
 # ---------------------------------------------------------------------------
 
 def run_summary(row: dict, studies: list[str] | None = None) -> dict:
-    """A ``runs`` row as api.md ``RunSummary``."""
+    """A ``runs`` row as api.md ``RunSummary`` (the same values ``GET /api/runs`` gives: the registry keeps
+    ``duration_s`` and ``n_scenarios`` in ``stages_json``; the timestamps are the fallback)."""
     from sparc.studio.workspace import parse_utc
 
+    info = dbmod.loads(row.get("stages_json"), {}) or {}
+    info = info if isinstance(info, dict) else {}
     mode = str(row.get("mode") or "custom")
     mode = "coarse" if mode.startswith("coarse") else (mode if mode in RUN_MODES else "custom")
-    t0, t1 = parse_utc(row.get("created_utc")), parse_utc(row.get("finished_utc"))
+    duration = info.get("duration_s")
+    if duration is None:
+        t0, t1 = parse_utc(row.get("created_utc")), parse_utc(row.get("finished_utc"))
+        duration = round(t1 - t0, 3) if t0 is not None and t1 is not None else None
     gd = row.get("git_dirty")
     return {"id": row["id"], "project_id": row.get("project_id"), "label": row.get("label"),
             "origin": row.get("origin") or "studio", "status": row.get("status") or "imported", "mode": mode,
             "coarse_m": row.get("coarse_m"), "created_utc": row.get("created_utc"),
-            "finished_utc": row.get("finished_utc"),
-            "duration_s": round(t1 - t0, 3) if t0 is not None and t1 is not None else None,
+            "finished_utc": row.get("finished_utc"), "duration_s": duration,
             "n_points": row.get("n_points"), "r2": row.get("r2"), "rmse": row.get("rmse"),
-            "coverage": row.get("coverage"), "n_scenarios": row.get("n_scenarios"),
+            "coverage": row.get("coverage"), "n_scenarios": info.get("n_scenarios", row.get("n_scenarios")),
             "checkpoint_bytes": row.get("checkpoint_bytes"), "has_emulator": bool(row.get("has_emulator")),
             "studies": list(studies or []), "git_commit": row.get("git_commit"),
             "git_dirty": None if gd is None else bool(gd), "demo": bool(row.get("demo")),

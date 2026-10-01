@@ -511,8 +511,8 @@ def launch_raw(raw: dict, project_dir: str | os.PathLike, workspace=None) -> dic
     """``raw`` as a Studio launch would snapshot it (SPEC §4.3): path keys absolute, ``climate.cache`` the
     workspace cache, ``output.dir`` the project's ``runs`` folder."""
     out = absolutize_paths(raw, project_dir)
-    if workspace is not None:
-        set_dotted(out, "climate.cache", str(Path(workspace.cache_dir)))
+    if workspace is not None:                    # resolved, as the launch snapshot writes it
+        set_dotted(out, "climate.cache", str(Path(workspace.cache_dir).resolve()))
     set_dotted(out, "output.dir", str((Path(project_dir) / "runs").resolve()))
     return out
 

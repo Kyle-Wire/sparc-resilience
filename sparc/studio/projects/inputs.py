@@ -18,6 +18,7 @@ only reads ``<ws>/cache/isd-history.csv``; it never downloads.
 from __future__ import annotations
 
 import math
+import re
 import threading
 from pathlib import Path
 from typing import Any, Callable
@@ -321,7 +322,8 @@ def inputs_state(raw: dict, project_dir: str | Path, workspace=None) -> dict:
     station = get_dotted(raw, "planner.ghcn_station")
     if isinstance(rec, dict) and rec.get("station"):
         out["ghcn"] = {"station": str(rec["station"]), "years": list(rec.get("years") or [None, None])}
-    elif station and workspace is not None and (Path(workspace.cache_dir) / f"ghcn_{station}.csv").is_file():
+    elif station and workspace is not None and re.fullmatch(r"[A-Za-z0-9]{1,16}", str(station)) and \
+            (Path(workspace.cache_dir) / f"ghcn_{station}.csv").is_file():
         out["ghcn"] = {"station": str(station), "years": _ghcn_years(Path(workspace.cache_dir) / f"ghcn_{station}.csv")}
     return out
 

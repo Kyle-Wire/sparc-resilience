@@ -13,6 +13,7 @@ from typing import Any
 
 from sparc.studio.projects.config_schema import ROLE_NAMES
 from sparc.studio.projects.config_service import effective_config
+from sparc.studio.projects.files import is_csv_name
 from sparc.studio.projects.validate import validate_deep
 
 __all__ = ["readiness", "readiness_score", "LABELS"]
@@ -21,6 +22,10 @@ LABELS = {"data": "Data file", "columns": "Columns mapped", "levers": "Levers", 
           "forcing": "Campaign forcing", "climate_table": "Climate table", "people_layers": "People & land cover",
           "config_valid": "Config valid", "runs": "Runs", "emulator": "Emulator", "studies": "Studies"}
 STUDY_KINDS = ("baselines", "placebo", "multiverse", "simcheck", "uncertainty")
+#: post-run outputs a run folder holds once that action ran (baselines and uncertainty are not study folders)
+RUN_FILE_STUDIES = {"baselines": "baselines.json", "uncertainty": "uncertainty.json", "placebo": "placebo.json"}
+#: study statuses that do not count as done
+_NOT_DONE = ("queued", "blocked", "starting", "running", "cancelling", "failed", "cancelled", "interrupted")
 
 
 def _row(key: str, state: str, detail: str, action: dict | None = None) -> dict:
@@ -68,6 +73,9 @@ def readiness(db, project: dict, raw: dict, *, issues: list[dict] | None = None)
         out.append(_row("data", "missing", "no data file", _open("Add data", f"{setup}/data")))
     elif not _resolve(pdir, str(path)).is_file():
         out.append(_row("data", "missing", f"{path} not found", _open("Fix data file", f"{setup}/data")))
+    elif not is_csv_name(Path(str(path)).name):
+        out.append(_row("data", "missing", f"{Path(str(path)).name} is not a CSV (core reads the point table as CSV)",
+                        _open("Fix data file", f"{setup}/data")))
     else:
         data_ok = True
         out.append(_row("data", "ok", f"{Path(str(path)).name} · {_size(_resolve(pdir, str(path)))}"))
@@ -75,7 +83,7 @@ def readiness(db, project: dict, raw: dict, *, issues: list[dict] | None = None)
     # columns
     col_errors = [i for i in errors if i["path"] in ("data.target", "data.x", "data.y", "data.id")
                   or (i["path"].startswith("predictors") and i["code"] in ("missing_column", "not_numeric"))]
-    preds = list(eff.get("predictors") or [])
+    preds = list(eff.get("predictors") or []) if isinstance(eff.get("predictors"), list) else []
     if not data_ok:
         out.append(_row("columns", "missing", "add a data file first", _open("Map columns", f"{setup}/data")))
     elif col_errors or not d.get("target"):
@@ -205,13 +213,19 @@ def readiness(db, project: dict, raw: dict, *, issues: list[dict] | None = None)
                         {"kind": "build_emulator", "label": "Build emulator", "method": "POST",
                          "path": f"/api/runs/{arow['id']}/actions/emulator", "body": {}}))
 
-    # studies
+    # studies: study folders of the project (placebo, multiverse, simcheck) plus the post-run outputs in the
+    # active run's folder (baselines.json, uncertainty.json; a CLI placebo leaves placebo.json there too)
     if not good:
         out.append(_row("studies", "n/a", "no finished run"))
     else:
-        kinds = {r["kind"] for r in db.fetchall("SELECT DISTINCT kind FROM studies WHERE project_id = ?", (pid,))}
-        done = [k for k in STUDY_KINDS if k in kinds]
         rid = active or good[0]["id"]
+        marks = ",".join("?" for _ in _NOT_DONE)
+        kinds = {r["kind"] for r in db.fetchall(f"SELECT DISTINCT kind FROM studies WHERE project_id = ? AND "
+                                                f"(status IS NULL OR status NOT IN ({marks}))", (pid, *_NOT_DONE))}
+        run_dir = db.fetchval("SELECT run_dir FROM runs WHERE id = ?", (rid,))
+        if run_dir:
+            kinds |= {k for k, f in RUN_FILE_STUDIES.items() if (Path(run_dir) / f).is_file()}
+        done = [k for k in STUDY_KINDS if k in kinds]
         if len(done) == len(STUDY_KINDS):
             out.append(_row("studies", "ok", ", ".join(done)))
         else:

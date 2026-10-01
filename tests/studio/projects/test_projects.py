@@ -518,6 +518,8 @@ def test_impact_preview(client, demo, synth_run_dir):
     raw["stacker"]["tune_lambda"] = [0.0, 0.5, 2.0]
     out = client.post(f"/api/projects/{pid}/config/impact", json={"raw": raw}).json()
     assert out["changed_sections"] == ["core"]
+    # the fixture is a fast run, and --fast fixes tune_lambda: a fast re-run is not affected by this edit
+    assert "core" not in out["runs"][0]["changed_sections"]
     raw["cv"]["seed"] = 7
     out = client.post(f"/api/projects/{pid}/config/impact", json={"raw": raw}).json()
     run = out["runs"][0]
@@ -559,3 +561,225 @@ def test_startup_scan_registers_folders(make_app, tmp_path):
     with TestClient(app2, headers=AUTH) as c:
         wait_for(lambda: c.get("/api/projects").json(), 10, what="the startup scan")
         assert [x["id"] for x in c.get("/api/projects").json()] == [p["id"]]
+
+
+def test_impact_flags_core_for_a_full_studio_run(client, ctx, demo):
+    """A full run launched by Studio (launch.json, checkpoint.json written from its snapshot): the saved config
+    changes nothing; an edited ``stacker.tune_lambda`` changes ``core`` and refits from S1."""
+    from sparc.core.pipeline import fingerprint_sections
+    from sparc.studio.projects.config_service import build_core_config, launch_raw
+
+    pid, pdir = demo["id"], Path(demo["dir"])
+    raw = client.get(f"/api/projects/{pid}/config").json()["raw"]
+    run_dir = pdir / "runs" / "20261001-120000-full-ab12"
+    (run_dir / "studio").mkdir(parents=True)
+    snap = launch_raw(raw, pdir, ctx.workspace)
+    (run_dir / "studio" / "launch.json").write_text(json.dumps(
+        {"run_id": run_dir.name, "project_id": pid, "config_raw": snap, "config_dir": str(pdir),
+         "args": {"stages": ["S0", "S1", "S2", "S3"], "fast": False, "coarse": None, "cv_curve": None}}))
+    sections = fingerprint_sections(build_core_config(snap, pdir), False)
+    (run_dir / "checkpoint.json").write_text(json.dumps({"schema": 1, "done": ["S3", "baselines"],
+                                                         "sections": sections}))
+    run = client.post(f"/api/projects/{pid}/config/impact").json()["runs"][0]
+    assert run["changed_sections"] == [] and run["refit_from"] is None
+    raw["stacker"]["tune_lambda"] = [0.0, 0.5, 2.0]
+    out = client.post(f"/api/projects/{pid}/config/impact", json={"raw": raw}).json()
+    run = out["runs"][0]
+    assert out["changed_sections"] == ["core"] and run["changed_sections"] == ["core"]
+    assert run["refit_from"] == "S1" and run["checkpoint_done"] == ["S3", "baselines"]
+
+
+# ---------------------------------------------------------------------------
+# review regressions
+# ---------------------------------------------------------------------------
+
+def test_delete_only_touches_project_files(client, demo):
+    pid, pdir = demo["id"], Path(demo["dir"])
+    (pdir / "runs" / "r1").mkdir(parents=True)
+    (pdir / "runs" / "r1" / "checkpoint.json").write_text("{}")
+    for path in ("config.yml", "project.json", "runs/r1/checkpoint.json", str(pdir / "config.yml")):
+        r = client.delete(f"/api/projects/{pid}/files", params={"path": path})
+        assert r.status_code == 422 and r.json()["error"]["detail"]["errors"][0]["code"] == "not_a_project_file", path
+    assert (pdir / "config.yml").is_file() and (pdir / "project.json").is_file()
+    assert (pdir / "runs" / "r1" / "checkpoint.json").is_file()
+    assert client.delete(f"/api/projects/{pid}/files", params={"path": "data/nope.csv"}).status_code == 404
+
+
+def test_upload_with_a_bad_suffix_writes_nothing(client):
+    p = create(client, "Up", "blank")["project"]
+    assert client.put(f"/api/projects/{p['id']}/files/other/run.exe", content=b"x").status_code == 415
+    assert not (Path(p["dir"]) / "other").exists()
+
+
+def test_data_path_must_be_a_csv(client, demo):
+    pid, pdir = demo["id"], Path(demo["dir"])
+    df = pd.read_csv(pdir / "data" / "city.csv")
+    client.put(f"/api/projects/{pid}/files/data/city.parquet", content=df.to_parquet(index=False))
+    raw = client.get(f"/api/projects/{pid}/config").json()["raw"]
+    raw["data"]["path"] = "data/city.parquet"
+    rep = client.post(f"/api/projects/{pid}/config/validate", json={"raw": raw}).json()
+    assert rep["ok"] is False and ("data.path", "data_not_csv") in {(i["path"], i["code"]) for i in rep["issues"]}
+    r = client.post(f"/api/projects/{pid}/data/check", json={"config_patch": {"data": {"path": "data/city.parquet"}}})
+    assert r.status_code == 422 and r.json()["error"]["detail"]["errors"][0]["code"] == "data_not_csv"
+    # a compressed CSV is what core (pandas.read_csv) reads too
+    with gzip.open(pdir / "data" / "city.csv.gz", "wb") as f:
+        f.write((pdir / "data" / "city.csv").read_bytes())
+    raw["data"]["path"] = "data/city.csv.gz"
+    rep = client.post(f"/api/projects/{pid}/config/validate", json={"raw": raw}).json()
+    assert [i for i in rep["issues"] if i["level"] == "error"] == []
+    c = client.post(f"/api/projects/{pid}/data/check", json={"config_patch": {"data": {"path": "data/city.csv.gz"}}})
+    assert c.status_code == 200 and c.json()["n_points"] == len(df)
+    put_raw(client, pid, {**raw, "data": {**raw["data"], "path": "data/city.parquet"}})
+    rows = spine(client, pid)
+    assert rows["data"]["state"] == "missing" and "not a CSV" in rows["data"]["detail"]
+
+
+def test_blank_names_are_refused(client, tmp_path):
+    r = client.post("/api/projects", json={"name": "   ", "template": "blank"})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "validation"
+    p = create(client, "  Padded  ", "blank")["project"]
+    assert p["name"] == "Padded" and p["slug"] == "padded"
+    cfg = _external_config(tmp_path)
+    r = client.post("/api/projects/import", json={"config_path": str(cfg), "name": "  "})
+    assert r.status_code == 201 and r.json()["project"]["name"].strip() != ""
+
+
+def test_archived_flag_adds_archived_projects(client):
+    a = create(client, "Active", "blank")["project"]
+    b = create(client, "Old", "blank")["project"]
+    client.patch(f"/api/projects/{b['id']}", json={"archived": True})
+    assert [p["id"] for p in client.get("/api/projects").json()] == [a["id"]]
+    assert {p["id"] for p in client.get("/api/projects", params={"archived": True}).json()} == {a["id"], b["id"]}
+
+
+def test_detail_runs_match_the_registry_summary(client, ctx, demo):
+    ctx.db.insert("runs", {"id": "20261001-120000-full-c3d4", "project_id": demo["id"], "run_dir": "/tmp/x/run2",
+                           "studio_dir": "/tmp/x/run2/studio", "origin": "imported", "status": "complete",
+                           "mode": "full", "created_utc": "2026-10-01T12:00:00Z", "finished_utc": None,
+                           "stages_json": json.dumps({"duration_s": 6096.6, "n_scenarios": 12})})
+    run = client.get(f"/api/projects/{demo['id']}").json()["runs"][0]
+    assert run["duration_s"] == 6096.6 and run["n_scenarios"] == 12
+
+
+def test_studies_row_counts_post_run_outputs(client, ctx, demo, tmp_path):
+    run_dir = tmp_path / "run_full"
+    run_dir.mkdir()
+    ctx.db.insert("runs", {"id": "20261001-120000-full-e5f6", "project_id": demo["id"], "run_dir": str(run_dir),
+                           "studio_dir": str(run_dir / "studio"), "origin": "imported", "status": "complete",
+                           "mode": "full", "created_utc": "2026-10-01T12:00:00Z"})
+    row = spine(client, demo["id"])["studies"]
+    assert row["state"] == "warn" and "not run: baselines, placebo, multiverse, simcheck, uncertainty" in row["detail"]
+    for name in ("baselines.json", "uncertainty.json"):
+        (run_dir / name).write_text("{}")
+    for i, (kind, status) in enumerate((("placebo", "succeeded"), ("multiverse", "imported"), ("simcheck", "running"))):
+        ctx.db.insert("studies", {"id": f"st_{i}", "project_id": demo["id"], "kind": kind, "status": status})
+    row = spine(client, demo["id"])["studies"]
+    assert row["state"] == "warn" and row["detail"].endswith("not run: simcheck")
+    ctx.db.execute("UPDATE studies SET status = 'succeeded' WHERE kind = 'simcheck'")
+    row = spine(client, demo["id"])["studies"]
+    assert row["state"] == "ok" and row["action"] is None
+
+
+def test_providence_import_tolerates_refused_runs(client, monkeypatch, tmp_path):
+    """The example project exists before its runs are imported: a refused run is a warning, not an error."""
+    from sparc.studio.errors import ApiError
+    from sparc.studio.projects import templates
+
+    src = templates.providence_sources()
+    out_dir = tmp_path / "checkout" / "output" / "core" / "providence"
+    for name in ("providence_uhi", "providence_uhi_fast"):
+        (out_dir / name).mkdir(parents=True)
+    (out_dir / "providence_uhi" / "manifest.json").write_text(json.dumps({"fast_mode": False}))   # no config
+    (out_dir / "providence_uhi_fast" / "manifest.json").write_text(json.dumps({"config": {"name": "x"}}))
+    monkeypatch.setattr(templates, "providence_sources", lambda: {**src, "root": tmp_path / "checkout"})
+
+    async def contract(sctx, module, func, *args, **kwargs):
+        if func == "import_run" and args[0].name == "providence_uhi_fast":
+            raise ApiError("mismatch", "the CV folds rebuilt from the config differ from the run's")
+        return {"id": f"run-{args[0].name}"} if func == "import_run" else templates.MISSING
+
+    monkeypatch.setattr(templates, "call_contract", contract)
+    out = create(client, "Providence", "providence_example")
+    assert out["imported_runs"] == ["run-providence_uhi"]
+    assert any("providence_uhi_fast was not imported: the CV folds" in w for w in out["warnings"])
+    assert "providence_uhi has no provenance config; Studio uses the example config for it." in out["warnings"]
+    assert not any(w.startswith("providence_uhi_fast has no provenance") for w in out["warnings"])
+
+
+def test_import_config_is_all_or_nothing(client, ctx, monkeypatch, tmp_path):
+    from sparc.studio.errors import ApiError
+    from sparc.studio.projects import templates
+
+    cfg = _external_config(tmp_path)
+    old, good, bad = tmp_path / "run_old", tmp_path / "run_good", tmp_path / "run_bad"
+    for d in (old, good, bad):
+        d.mkdir()
+    ctx.db.insert("runs", {"id": "r_old", "project_id": "p_other", "run_dir": str(old), "studio_dir": str(old),
+                           "origin": "imported", "status": "imported"})
+    side = ctx.workspace.imports_dir / "r_good" / "studio"
+
+    async def contract(sctx, module, func, d, project_id, **kwargs):
+        if d.name == "run_bad":
+            raise ApiError("needs_config", "this run has no usable config: pass config_path")
+        if d.name == "run_old":                      # an already indexed run moves to the importing project
+            ctx.db.update("runs", {"id": "r_old"}, {"project_id": project_id})
+            return {"id": "r_old"}
+        side.mkdir(parents=True)
+        (side / "import.json").write_text("{}")
+        ctx.db.insert("runs", {"id": "r_good", "project_id": project_id, "run_dir": str(d),
+                               "studio_dir": str(side), "origin": "imported", "status": "imported"})
+        return {"id": "r_good"}
+
+    monkeypatch.setattr(templates, "call_contract", contract)
+    r = client.post("/api/projects/import", json={"config_path": str(cfg), "name": "Both",
+                                                   "run_dirs": [str(old), str(good), str(bad)]})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "needs_config"
+    assert client.get("/api/projects").json() == []
+    assert ctx.db.fetchall("SELECT id, project_id FROM runs") == [{"id": "r_old", "project_id": "p_other"}]
+    assert not side.parent.exists()                  # a reindex cannot bring the aborted import back
+
+
+def test_inspect_survives_list_columns(client, demo):
+    df = pd.DataFrame({"id": [1, 2, 3], "tags": [["a"], ["b", "c"], []], "zone_list": [[1], [2], [3]]})
+    r = client.put(f"/api/projects/{demo['id']}/files/data/nested.parquet", content=df.to_parquet(index=False))
+    assert r.status_code == 201, r.text
+    cols = {c["name"]: c for c in r.json()["inspect"]["columns"]}
+    assert cols["tags"]["n_unique"] is None and cols["id"]["n_unique"] == 3
+    s = client.post(f"/api/projects/{demo['id']}/columns/suggest", json={"path": "data/nested.parquet"})
+    assert s.status_code == 200 and s.json()["zone"] is None
+
+
+def test_predictors_of_the_wrong_type_give_one_error(client, demo):
+    raw = client.get(f"/api/projects/{demo['id']}/config").json()["raw"]
+    raw["predictors"] = "canopy"
+    issues = client.post(f"/api/projects/{demo['id']}/config/validate", json={"raw": raw}).json()["issues"]
+    pred = [i for i in issues if i["path"].startswith("predictors")]
+    assert [(i["path"], i["code"]) for i in pred] == [("predictors", "type")]
+
+
+def test_server_stays_torch_free(tmp_path):
+    """Creating, checking, validating and previewing a project never imports torch in the server (SPEC §4.1)."""
+    import subprocess
+    import textwrap
+
+    code = textwrap.dedent(f"""
+        import sys
+        from fastapi.testclient import TestClient
+        from sparc.studio.app import create_app
+        from sparc.studio.settings import StudioSettings
+        app = create_app(StudioSettings(workspace={str(tmp_path / "ws")!r}, token="t", public_hosts=["testserver"]))
+        with TestClient(app, headers={{"Authorization": "Bearer t", "Origin": "http://testserver"}}) as c:
+            pid = c.post("/api/projects", json={{"name": "D", "template": "synthetic_demo",
+                                                 "options": {{"n": 24}}}}).json()["project"]["id"]
+            for path in ("", "/config", "/inputs", "/files"):
+                assert c.get(f"/api/projects/{{pid}}" + path).status_code == 200, path
+            for path in ("/data/check", "/config/validate", "/config/impact"):
+                assert c.post(f"/api/projects/{{pid}}" + path, json={{}}).status_code == 200, path
+        heavy = [m for m in ("torch", "sklearn", "mgwr", "pygam", "econml", "dowhy") if m in sys.modules]
+        print("HEAVY", heavy)
+    """)
+    root = Path(__file__).resolve().parents[3]
+    env = {**__import__("os").environ, "PYTHONPATH": str(root), "OMP_NUM_THREADS": "1"}
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=180, cwd=root, env=env)
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert "HEAVY []" in out.stdout, out.stdout

@@ -208,28 +208,73 @@ async def call_contract(sctx, module: str, func: str, *args, **kwargs) -> Any:
 
 
 async def _import_runs(sctx, project_id: str, run_dirs: list[Path], study_dirs: list[tuple[Path, str | None]], *,
-                       config_path: Path | None, trust_pickles: bool, target_run: str | None = None) \
-        -> tuple[list[dict], list[dict], list[str]]:
-    """Import run and study folders in place; ``(runs, studies, warnings)``."""
+                       config_path: Path | None, trust_pickles: bool, target_run: str | None = None,
+                       tolerate: bool = False, record: list | None = None) -> tuple[list[dict], list[dict], list[str]]:
+    """Import run and study folders in place; ``(runs, studies, warnings)``.
+
+    An import the callee refuses (``ApiError``: ``needs_config``, ``mismatch`` …) or fails is raised, or -
+    with ``tolerate`` (the Providence example, whose project exists already) - reported as a warning.
+    ``record`` collects the imported run summaries as they land, so a caller can roll back after a raise.
+    """
     runs, studies, warnings = [], [], []
+    record = record if record is not None else []
     for d in run_dirs:
         sctx.paths.allow(d)
-        res = await call_contract(sctx, "sparc.studio.runs.registry", "import_run", d, project_id,
-                                  config_path=config_path, trust_pickles=trust_pickles)
+        try:
+            res = await call_contract(sctx, "sparc.studio.runs.registry", "import_run", d, project_id,
+                                      config_path=config_path, trust_pickles=trust_pickles)
+        except Exception as exc:
+            if not tolerate:
+                raise
+            log.warning("run import of %s failed: %s", d, exc)
+            warnings.append(f"{d.name} was not imported: {getattr(exc, 'message', exc)}")
+            continue
         if res is MISSING:
             warnings.append(f"{UNAVAILABLE}: {d.name} was not imported")
             continue
         runs.append(res if isinstance(res, dict) else {"id": str(res)})
+        record.append(runs[-1])
     first = target_run or (runs[0].get("id") if runs else None)
     for d, kind in study_dirs:
         sctx.paths.allow(d)
-        res = await call_contract(sctx, "sparc.studio.studies.service", "import_study_dir", d, project_id,
-                                  kind=kind, target_run_id=first)
+        try:
+            res = await call_contract(sctx, "sparc.studio.studies.service", "import_study_dir", d, project_id,
+                                      kind=kind, target_run_id=first)
+        except Exception as exc:
+            if not tolerate:
+                raise
+            log.warning("study import of %s failed: %s", d, exc)
+            warnings.append(f"study folder {d.name} was not imported: {getattr(exc, 'message', exc)}")
+            continue
         if res is MISSING:
             warnings.append(f"{UNAVAILABLE}: study folder {d.name} was not imported")
             continue
         studies.append(res if isinstance(res, dict) else {"id": str(res)})
     return runs, studies, warnings
+
+
+def _rollback_imports(sctx, project_id: str, run_ids: list[str], before: dict[str, str | None]) -> None:
+    """Undo an aborted import for its (new, now deleted) project: runs that were indexed before go back to
+    their project; runs this import added lose their row and their ``<ws>/imports/<run_id>`` side folder (so a
+    reindex does not bring them back); study rows of the project are dropped."""
+    imports = Path(sctx.workspace.imports_dir).resolve()
+
+    def fn(conn):
+        for rid in run_ids:
+            if rid in before:
+                conn.execute("UPDATE runs SET project_id = ? WHERE id = ?", (before[rid], rid))
+            else:
+                conn.execute("DELETE FROM runs WHERE id = ?", (rid,))
+                conn.execute("DELETE FROM stage_timings WHERE run_id = ?", (rid,))
+        conn.execute("DELETE FROM runs WHERE project_id = ?", (project_id,))
+        conn.execute("DELETE FROM studies WHERE project_id = ?", (project_id,))
+        conn.execute("DELETE FROM study_links WHERE run_id NOT IN (SELECT id FROM runs)")
+
+    sctx.db.run(fn)
+    for rid in run_ids:
+        side = (imports / str(rid)).resolve()
+        if rid not in before and side.parent == imports and side.is_dir():
+            shutil.rmtree(side, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +301,10 @@ def _claim(sctx, name: str) -> tuple[str, Path]:
 async def create_from_template(sctx, name: str, template: str, options: dict | None = None) -> dict:
     """``POST /api/projects``: ``{project_row, imported_runs, warnings}``."""
     options = dict(options or {})
+    name = (name or "").strip()
+    if not name:
+        raise ApiError("validation", "the project name must not be blank",
+                       detail={"errors": [{"path": "name", "message": "blank", "code": "blank"}]})
     if template not in TEMPLATES:
         raise ApiError("validation", f"unknown template {template!r}",
                        detail={"errors": [{"path": "template", "message": f"one of {', '.join(TEMPLATES)}",
@@ -305,11 +354,17 @@ async def create_from_template(sctx, name: str, template: str, options: dict | N
                 study_dirs.extend((p, kind) for p in sorted(out_dir.glob(pattern)) if p.is_dir())
             runs, _studies, w = await _import_runs(sctx, row["id"], run_dirs, study_dirs,
                                                    config_path=Path(row["config_path"]),
-                                                   trust_pickles=bool(options.get("trust_pickles", False)))
+                                                   trust_pickles=bool(options.get("trust_pickles", False)),
+                                                   tolerate=True)
             imported = [r.get("id") for r in runs if r.get("id")]
             warnings.extend(w)
             if imported:
-                warnings.append("The full run has no provenance config; Studio uses the example config for it.")
+                from sparc.studio.workspace import read_json
+
+                for d in run_dirs:                   # older runs whose manifest has no config use the example's
+                    manifest = read_json(d / "manifest.json")
+                    if isinstance(manifest, dict) and not isinstance(manifest.get("config"), dict):
+                        warnings.append(f"{d.name} has no provenance config; Studio uses the example config for it.")
     return {"row": row, "imported_runs": imported, "warnings": warnings}
 
 
@@ -351,7 +406,7 @@ async def import_config(sctx, *, config_path: str, name: str | None = None, copy
     for d in [Path(p).expanduser() for p in (run_dirs or []) + (study_dirs or [])]:
         if not d.is_dir():
             raise ApiError("not_found", f"folder not found: {d}", detail={"path": str(d)})
-    name = (name or str(raw.get("name") or cpath.stem)).strip()
+    name = (name or "").strip() or str(raw.get("name") or "").strip() or cpath.stem
     slug, pdir = _claim(sctx, name)
     warnings = ["Comments of the imported YAML are not kept in the project's config."]
     try:
@@ -388,12 +443,16 @@ async def import_config(sctx, *, config_path: str, name: str | None = None, copy
     except BaseException:
         shutil.rmtree(pdir, ignore_errors=True)
         raise
+    before = {r["id"]: r.get("project_id") for r in sctx.db.fetchall("SELECT id, project_id FROM runs")}
+    landed: list[dict] = []
     try:
         runs, studies, w = await _import_runs(
             sctx, row["id"], [Path(p).expanduser().resolve() for p in run_dirs or []],
             [(Path(p).expanduser().resolve(), None) for p in study_dirs or []],
-            config_path=cpath, trust_pickles=trust_pickles)
-    except ApiError:
+            config_path=cpath, trust_pickles=trust_pickles, record=landed)
+    except Exception:                            # an all-or-nothing import: no project, no orphan run rows
         await asyncio.to_thread(service.delete_project, sctx.db, sctx.workspace, row["id"], files=True)
+        await asyncio.to_thread(_rollback_imports, sctx, row["id"], [r["id"] for r in landed if r.get("id")],
+                                before)
         raise
     return {"row": row, "runs": runs, "studies": studies, "warnings": warnings + w}

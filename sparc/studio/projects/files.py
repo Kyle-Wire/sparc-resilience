@@ -24,9 +24,9 @@ from sparc.studio.errors import ApiError
 from sparc.studio.security import safe_path
 from sparc.studio.workspace import utc_iso
 
-__all__ = ["KIND_DIRS", "FILE_KINDS", "TABLE_SUFFIXES", "kind_dir", "resolve_path", "read_table_head",
-           "read_columns", "count_rows", "inspect_file", "suggest_columns", "list_files", "used_by", "jsonable",
-           "config_file_refs"]
+__all__ = ["KIND_DIRS", "FILE_KINDS", "TABLE_SUFFIXES", "kind_dir", "in_kind_dirs", "resolve_path",
+           "read_table_head", "read_columns", "count_rows", "inspect_file", "suggest_columns", "list_files", "used_by",
+           "jsonable", "config_file_refs", "is_csv_name"]
 
 KIND_DIRS = {"data": "data", "join": "data", "layers": "inputs/layers", "features": "inputs/features",
              "forcing": "inputs/forcing", "climate": "inputs/climate", "other": "other"}
@@ -43,6 +43,14 @@ def kind_dir(project_dir: str | os.PathLike, kind: str) -> Path:
                        detail={"errors": [{"path": "kind", "message": f"one of {', '.join(FILE_KINDS)}",
                                            "code": "unknown_kind"}]})
     return Path(project_dir) / KIND_DIRS[kind]
+
+
+def in_kind_dirs(project_dir: str | os.PathLike, path: str | os.PathLike) -> bool:
+    """Whether ``path`` lies in one of the project's file folders (``data/``, ``inputs/<kind>/``, ``other/``),
+    i.e. it is a file ``GET /files`` lists - never ``config.yml``, ``project.json`` or a run folder."""
+    pdir = Path(project_dir).resolve()
+    target = Path(path).resolve()
+    return any((pdir / sub).resolve() in target.parents for sub in set(KIND_DIRS.values()))
 
 
 def resolve_path(project_dir: str | os.PathLike, raw: str, roots: Iterable[str | os.PathLike] = ()) -> Path:
@@ -68,12 +76,33 @@ def resolve_path(project_dir: str | os.PathLike, raw: str, roots: Iterable[str |
 # reading tables
 # ---------------------------------------------------------------------------
 
+_CSV_COMPRESSED = {".gz": "gzip", ".bz2": "bz2", ".xz": "lzma"}
+
+
+def is_csv_name(name: str) -> bool:
+    """A CSV (``.csv``, or ``.csv.gz|.bz2|.xz``, which ``pandas.read_csv`` - and so core - reads too)."""
+    n = str(name).lower()
+    return n.endswith(".csv") or any(n.endswith(".csv" + c) for c in _CSV_COMPRESSED)
+
+
 def _suffix(path: Path) -> str:
+    if is_csv_name(path.name):
+        return ".csv"
     s = path.suffix.lower()
     if s not in TABLE_SUFFIXES:
         raise ApiError("bad_suffix", f"{path.name}: only CSV and parquet tables can be read",
                        detail={"suffix": s, "allowed": list(TABLE_SUFFIXES)})
     return s
+
+
+def _open_raw(path: Path):
+    """The file's bytes as a stream (decompressed for ``.csv.gz`` and friends)."""
+    comp = _CSV_COMPRESSED.get(path.suffix.lower())
+    if comp is None:
+        return open(path, "rb")
+    import importlib
+
+    return importlib.import_module(comp).open(path, "rb")
 
 
 def read_table_head(path: str | os.PathLike, rows: int | None = 50000, columns: list[str] | None = None) -> pd.DataFrame:
@@ -128,14 +157,15 @@ def count_rows(path: str | os.PathLike) -> tuple[int, bool]:
 
         return int(pq.ParquetFile(path).metadata.num_rows), True
     size = path.stat().st_size
-    if size > _COUNT_LIMIT:
+    compressed = path.suffix.lower() in _CSV_COMPRESSED
+    if size > _COUNT_LIMIT and not compressed:
         with open(path, "rb") as f:
             head = f.read(4 * 1024 ** 2)
         lines = max(head.count(b"\n"), 1)
         return max(int(size / len(head) * lines) - 1, 0), False
     n = 0
     last = b""
-    with open(path, "rb") as f:
+    with _open_raw(path) as f:
         while True:
             chunk = f.read(4 * 1024 ** 2)
             if not chunk:
@@ -169,6 +199,10 @@ def jsonable(v: Any) -> Any:
             return str(v)
     if isinstance(v, (bytes, bytearray)):
         return v.decode("utf-8", "replace")
+    if isinstance(v, (np.ndarray, list, tuple)):          # parquet list cells
+        return [jsonable(x) for x in v]
+    if isinstance(v, dict):                                # parquet struct cells
+        return {str(k): jsonable(x) for k, x in v.items()}
     try:
         if pd.isna(v):
             return None
@@ -180,14 +214,17 @@ def jsonable(v: Any) -> Any:
 def _column_info(name: str, s: pd.Series) -> dict:
     numeric = pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s)
     vals = pd.to_numeric(s, errors="coerce") if numeric else None
-    sample = []
-    for v in s.dropna().unique()[:SAMPLE_VALUES]:
-        sample.append(jsonable(v))
+    try:
+        sample = [jsonable(v) for v in s.dropna().unique()[:SAMPLE_VALUES]]
+        n_unique: int | None = int(s.nunique(dropna=True))
+    except TypeError:                              # unhashable cells (parquet list/struct columns)
+        sample = [jsonable(v) for v in s.dropna().head(SAMPLE_VALUES)]
+        n_unique = None
     finite = vals[np.isfinite(vals.to_numpy(float))] if numeric else None
     return {"name": str(name), "dtype": str(s.dtype), "n_null": int(s.isna().sum()),
             "min": jsonable(finite.min()) if numeric and len(finite) else None,
             "max": jsonable(finite.max()) if numeric and len(finite) else None,
-            "n_unique": int(s.nunique(dropna=True)), "sample": sample}
+            "n_unique": n_unique, "sample": sample}
 
 
 def inspect_file(path: str | os.PathLike, rows: int = 50000) -> dict:
@@ -220,6 +257,14 @@ _ROLES = {"canopy": re.compile(r"(canopy|tree)", re.I),
           "elevation": re.compile(r"(elev|^dem$|altitude|^height)", re.I),
           "water_distance": re.compile(r"(water.*dist|dist.*water|d_?water)", re.I)}
 _ROUND_M = (1.0, 2.0, 5.0, 10.0, 20.0, 25.0, 30.0, 50.0, 100.0, 200.0, 250.0, 500.0, 1000.0)
+
+
+def _nunique(s: pd.Series) -> int | None:
+    """Distinct non-null values; None for unhashable cells (parquet list/struct columns)."""
+    try:
+        return int(s.nunique(dropna=True))
+    except TypeError:
+        return None
 
 
 def _best(cols: list[str], pat: re.Pattern, *, exclude: set[str] = frozenset()) -> str | None:
@@ -275,7 +320,7 @@ def suggest_columns(path: str | os.PathLike, rows: int = 20000) -> dict:
                 break
         conf["id"] = 0.5 if ident else 0.0
     else:
-        conf["id"] = 0.9 if df[ident].dropna().is_unique else 0.5
+        conf["id"] = 0.9 if _nunique(df[ident]) == int(df[ident].notna().sum()) else 0.5
     used = {c for c in (x, y, ident) if c}
     target = _best([c for c in numeric if c not in used], _TARGET)
     conf["target"] = 0.8 if target else 0.0
@@ -287,8 +332,8 @@ def suggest_columns(path: str | os.PathLike, rows: int = 20000) -> dict:
     for c in cols:
         if c in used or c == target or not _ZONE.search(c):
             continue
-        nun = df[c].nunique(dropna=True)
-        if 1 < nun <= max(200, int(0.05 * len(df))):
+        nun = _nunique(df[c])
+        if nun is not None and 1 < nun <= max(200, int(0.05 * len(df))):
             zone = c
             break
     conf["zone"] = 0.7 if zone else 0.0

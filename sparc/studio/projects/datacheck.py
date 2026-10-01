@@ -172,7 +172,7 @@ def data_check(raw: dict, project_dir: str | Path, patch: dict | None = None) ->
     from threadpoolctl import threadpool_limits
 
     from sparc.core.data import prepare_frame, read_input
-    from sparc.studio.projects.files import count_rows
+    from sparc.studio.projects.files import count_rows, is_csv_name
 
     merged = deep_merge(raw, patch)
     cfg = build_core_config(merged, project_dir)
@@ -187,6 +187,10 @@ def data_check(raw: dict, project_dir: str | Path, patch: dict | None = None) ->
     path = cfg.data_path
     if not Path(path).is_file():
         raise ApiError("not_found", f"data file not found: {d.get('path')}", detail={"path": str(d.get("path"))})
+    if not is_csv_name(Path(path).name):
+        raise _bad([{"path": "data.path", "message": f"{Path(path).name} is not a CSV (core reads the point table "
+                     "as CSV; join parquet tables through data.join)", "code": "data_not_csv"}],
+                   "the point table must be a CSV")
     try:
         n_rows, _exact = count_rows(path)
     except ApiError:
@@ -239,12 +243,13 @@ def data_check(raw: dict, project_dir: str | Path, patch: dict | None = None) ->
     qa = data.qa
     rows = np.asarray(data.ids, dtype=np.int64)
     zones: list = []
-    if data.zones is not None:
+    if data.zones is not None:                       # codes as the run grid lists them (api.md GridMeta.zones)
         uz = [z.item() if hasattr(z, "item") else z for z in pd.unique(pd.Series(data.zones).dropna())]
+        uz = list(dict.fromkeys(int(z) if isinstance(z, float) and z.is_integer() else z for z in uz))
         try:
             uz = sorted(uz)
-        except TypeError:                            # mixed kinds: keep first-seen order
-            pass
+        except TypeError:                            # mixed kinds: sort by their text
+            uz = sorted(uz, key=str)
         zones = uz[:500]
     token_seed = hashlib.sha1(f"{project_dir}:{time.time()}".encode()).hexdigest()[:16]
     meta, lon, lat = grid_meta(data, d, cfg.coord_scale, units={"target": str(d.get("target_units") or "")},

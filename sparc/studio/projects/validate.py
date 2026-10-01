@@ -189,7 +189,8 @@ def validate_deep(raw: dict, project_dir: str | os.PathLike, *, rows: int = SAMP
         return v if isinstance(v, dict) else {}
 
     d = sec("data")
-    preds = [str(p) for p in (eff.get("predictors") or []) if isinstance(p, (str, int, float))]
+    plist = eff.get("predictors") if isinstance(eff.get("predictors"), list) else []   # else: the type error says it
+    preds = [str(p) for p in plist if isinstance(p, (str, int, float))]
     pset = set(preds)
     act = {str(k): (v if isinstance(v, dict) else {}) for k, v in (eff.get("actionable") or {}).items()} \
         if isinstance(eff.get("actionable"), dict) else {}
@@ -210,7 +211,7 @@ def validate_deep(raw: dict, project_dir: str | os.PathLike, *, rows: int = SAMP
     if unit not in UNIT_TO_METRES:
         out.add("error", "data.coord_unit", "bad_coord_unit",
                 f"coord_unit {unit!r} is not one of {', '.join(sorted(UNIT_TO_METRES))}")
-    if not preds:
+    if not preds and "predictors" not in out.typed:
         out.add("error", "predictors", "no_predictors", "List at least one predictor column")
 
     # -- files and columns ---------------------------------------------------------------------
@@ -218,9 +219,15 @@ def validate_deep(raw: dict, project_dir: str | os.PathLike, *, rows: int = SAMP
     if not d.get("path"):
         out.add("error", "data.path", "required", "data.path (the point table) is required")
     else:
+        from sparc.studio.projects.files import is_csv_name
+
         p = _resolve(pdir, str(d["path"]))
         if not p.is_file():
             out.add("error", "data.path", "missing_file", f"data file not found: {d['path']}")
+        elif not is_csv_name(p.name):
+            out.add("error", "data.path", "data_not_csv",
+                    f"{p.name}: core reads the point table as CSV; convert it, or join a parquet table to a CSV "
+                    "through data.join")
         else:
             try:
                 cols = dict(table_columns(p, rows))

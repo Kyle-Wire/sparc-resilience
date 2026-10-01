@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from sparc.studio.schemas.common import Action, Issue, Job
 
@@ -88,6 +88,14 @@ class ProjectCreate(_Body):
     template: Literal["blank", "synthetic_demo", "providence_example"]
     options: ProjectOptions | None = None
 
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("the name must not be blank")
+        return v
+
 
 class ProjectCreated(BaseModel):
     project: Project
@@ -102,6 +110,11 @@ class ProjectImport(_Body):
     run_dirs: list[str] = Field(default_factory=list)
     study_dirs: list[str] = Field(default_factory=list)
     trust_pickles: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v: str | None) -> str | None:
+        return (v.strip() or None) if isinstance(v, str) else v       # blank: the config's own name
 
 
 class ProjectImported(BaseModel):

@@ -55,7 +55,7 @@ from sparc.studio.projects.schemas import (
 )
 from sparc.studio.projects.validate import validate_deep, validate_report
 from sparc.studio.schemas.common import Ok
-from sparc.studio.security import stream_upload, upload_cap_bytes
+from sparc.studio.security import check_upload_suffix, stream_upload, upload_cap_bytes
 
 router = APIRouter(tags=["projects"])
 
@@ -96,9 +96,9 @@ def _out(sctx: StudioContext, row: dict) -> dict:
 
 @router.get("/projects", response_model=list[Project])
 async def list_projects(archived: bool = Query(False), sctx: StudioContext = Depends(get_ctx)):
-    """Projects (active ones by default), most recently updated first."""
+    """Projects, most recently updated first: the active ones, plus the archived ones with ``archived=true``."""
     def build():
-        return [_out(sctx, r) for r in service.rows(sctx.db, archived=archived)]
+        return [_out(sctx, r) for r in service.rows(sctx.db, archived=None if archived else False)]
     return await asyncio.to_thread(build)
 
 
@@ -174,6 +174,7 @@ async def upload_file(pid: str, kind: str, filename: str, request: Request,
     if not _NAME.match(filename) or filename.startswith(".") or filename in ("..",):
         raise ApiError("validation", f"bad file name {filename!r}",
                        detail={"errors": [{"path": "filename", "message": "a plain file name", "code": "bad_name"}]})
+    check_upload_suffix(filename)                    # 415 before anything touches the disk
     d.mkdir(parents=True, exist_ok=True)
     dest = pfiles.resolve_path(row["dir"], str(Path(pfiles.KIND_DIRS[kind]) / filename))
     if dest.exists() and str(x_overwrite or "").strip() not in ("1", "true", "yes"):
@@ -211,10 +212,14 @@ async def inspect_file(pid: str, path: str = Query(...), rows: int = Query(50000
 
 @router.delete("/projects/{pid}/files", response_model=Ok)
 async def delete_file(pid: str, path: str = Query(...), sctx: StudioContext = Depends(get_ctx)):
-    """Delete a project file; ``409 in_use`` when the config references it."""
+    """Delete a project file (one ``GET /files`` lists); ``409 in_use`` when the config references it."""
     def run():
         row = _row(sctx, pid)
         p = pfiles.resolve_path(row["dir"], path)
+        if not pfiles.in_kind_dirs(row["dir"], p):
+            raise ApiError("validation", f"{path} is not an uploaded or fetched file (data/, inputs/, other/)",
+                           detail={"errors": [{"path": "path", "message": "only files under data/, inputs/ and "
+                                               "other/ can be deleted", "code": "not_a_project_file"}]})
         if not p.is_file():
             raise ApiError("not_found", f"no such file: {path}")
         users = pfiles.used_by(service.project_raw(row), row["dir"], p)
@@ -401,9 +406,10 @@ def _climate_meta(p: Path) -> tuple[dict | None, list[str] | None]:
     return (periods or None), exps
 
 
-@router.post("/projects/{pid}/link", response_model=LinkOut)
+@router.post("/projects/{pid}/link", response_model=LinkOut, response_model_exclude_none=True)
 async def link_input(pid: str, body: LinkRequest, sctx: StudioContext = Depends(get_ctx)):
-    """Preview (``apply: false``) or apply linking a fetched or uploaded input into the config."""
+    """Preview (``apply: false``) or apply linking a fetched or uploaded input into the config (``version`` and
+    ``new_project_id`` are present only when they apply)."""
     from sparc.studio.projects import inputs as pin
 
     def run():
