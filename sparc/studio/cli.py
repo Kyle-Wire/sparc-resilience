@@ -12,7 +12,9 @@ Start-up:
 1. resolve the workspace (``--workspace``, ``$SPARC_STUDIO_HOME``, ``~/sparc-studio``);
 2. if ``studio.lock.json`` names a live server (pid + ``create_time``) whose
    ``/api/health`` answers for this workspace, print (and open) its URL and
-   exit 0;
+   exit 0; if that process is alive but does not answer within 10 s (still
+   starting, or hung), exit 1 rather than run a second scheduler on the
+   same workspace;
 3. bind the socket here - the preferred port, else an ephemeral one (``--port
    0`` asks for one); the occupant of a busy port is never touched;
 4. write the lock (with the real port) and the token, run uvicorn on the bound
@@ -38,10 +40,11 @@ from pathlib import Path
 
 from sparc.studio import __version__
 
-__all__ = ["main", "add_studio_arguments", "build_parser", "read_lock", "live_server_url", "bind_socket",
-           "StudioServer", "settings_from_args"]
+__all__ = ["main", "add_studio_arguments", "build_parser", "read_lock", "live_server_url", "wait_for_occupant",
+           "bind_socket", "StudioServer", "settings_from_args"]
 
 DEFAULT_PORT = 8765
+OCCUPANT_WAIT_S = 10.0          # how long a live lock holder may take to answer /api/health
 log = logging.getLogger("sparc.studio")
 
 
@@ -85,13 +88,19 @@ def read_lock(workspace) -> dict | None:
     return lock if isinstance(lock, dict) else None
 
 
-def _pid_matches(lock: dict) -> bool:
+def _pid_matches(lock: dict, *, strict: bool = False) -> bool:
+    """The lock's pid is alive (and, when the lock recorded it, has the same ``create_time``).
+
+    ``strict``: a lock without a recorded ``create_time`` never matches (a reused pid cannot be told apart).
+    """
     try:
         import psutil
 
         p = psutil.Process(int(lock["pid"]))
         ctime = lock.get("create_time")
-        return ctime is None or abs(p.create_time() - float(ctime)) < 0.01
+        if ctime is None:
+            return not strict
+        return abs(p.create_time() - float(ctime)) < 0.01
     except Exception:
         return False
 
@@ -101,9 +110,10 @@ def live_server_url(workspace, timeout: float = 2.0) -> str | None:
     lock = read_lock(workspace)
     if not lock or not lock.get("port") or not _pid_matches(lock):
         return None
-    base = f"http://127.0.0.1:{int(lock['port'])}"
+    # the lock's own URL: loopback, or the bind address (e.g. [::1]) - both are in that server's Host allowlist
+    base = str(lock.get("url") or f"http://127.0.0.1:{int(lock['port'])}").rstrip("/")
     try:
-        req = urllib.request.Request(base + "/api/health", headers={"Host": f"127.0.0.1:{int(lock['port'])}"})
+        req = urllib.request.Request(base + "/api/health")
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         with opener.open(req, timeout=timeout) as resp:
             body = json.loads(resp.read().decode("utf-8"))
@@ -111,7 +121,25 @@ def live_server_url(workspace, timeout: float = 2.0) -> str | None:
         return None
     if not body.get("ok") or Path(body.get("workspace", "")).resolve() != workspace.root:
         return None
-    return lock.get("url") or base
+    return base
+
+
+def wait_for_occupant(workspace, *, wait_s: float | None = None,
+                      poll_s: float = 0.5) -> tuple[str | None, int | None]:
+    """``(url, None)`` when a live server answers for ``workspace``; ``(None, pid)`` when the lock names a
+    live Studio process that does not answer within ``wait_s`` (default :data:`OCCUPANT_WAIT_S`; it is
+    still starting - a long ``--reindex`` - or hung); ``(None, None)`` when nobody holds the workspace."""
+    deadline = time.monotonic() + (OCCUPANT_WAIT_S if wait_s is None else wait_s)
+    while True:
+        url = live_server_url(workspace)
+        if url:
+            return url, None
+        lock = read_lock(workspace)
+        if not lock or not _pid_matches(lock, strict=True):
+            return None, None
+        if time.monotonic() >= deadline:
+            return None, int(lock["pid"])
+        time.sleep(poll_s)
 
 
 def _auth_url(base: str, token: str | None) -> str:
@@ -124,6 +152,7 @@ def _auth_url(base: str, token: str | None) -> str:
 
 def bind_socket(host: str, port: int) -> socket.socket:
     """A listening socket on ``host:port``; when that port is busy, on a free ephemeral port instead."""
+    host = host.strip("[]")                    # "[::1]" → "::1"
     family = socket.AF_INET6 if ":" in host else socket.AF_INET
 
     def _bind(p: int) -> socket.socket:
@@ -222,7 +251,13 @@ def main(argv: list[str] | None = None) -> int:
     from sparc.studio.workspace import resolve_workspace, utc_now, write_json_atomic, write_private
 
     ws = resolve_workspace(args.workspace)
-    url = live_server_url(ws)
+    url, holder = wait_for_occupant(ws)
+    if holder is not None:
+        # two servers on one workspace would both schedule its jobs; the occupant is never touched
+        print(f"sparc studio: another SPARC Studio process (pid {holder}) holds {ws.root} but its "
+              f"/api/health does not answer; wait for it to finish starting, or stop it and run again",
+              file=sys.stderr)
+        return 1
     if url:
         token = None
         try:

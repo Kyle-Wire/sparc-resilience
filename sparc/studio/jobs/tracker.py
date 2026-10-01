@@ -573,7 +573,7 @@ def _update_current(state) -> None:
         if sp is not None and sp["status"] == "running":
             run_sp = sp
             break
-    state["current_path"] = list(run_sp["path"]) if run_sp else None
+    state["current_path"] = [str(p) for p in run_sp["path"]] if run_sp else None
     stage = None
     for sid in reversed(state["running"]):
         sp = state["spans"].get(sid)
@@ -759,6 +759,25 @@ def _has_ancestor(spans: dict, sp: dict, anc: str) -> bool:
     return False
 
 
+def _plan_out(plan: list[dict] | None) -> list[dict] | None:
+    """Plan nodes in the wire shape of ``PlanNode`` (api.md §1).  The projection keeps whatever a
+    ``run.plan`` carried; here a node without a label is labelled with its id, an unknown state counts as
+    skipped (as in the stage rail) and a node whose id is not a stage id is left out, so one odd event can
+    never make the tracker endpoint fail."""
+    if plan is None:
+        return None
+    out = []
+    for node in plan:
+        if node.get("id") not in STAGE_IDS:
+            continue
+        node = dict(node)
+        node["label"] = str(node.get("label") or node["id"])
+        state = node.get("state", "will_run")
+        node["state"] = state if state in ("will_run", "skipped", "cached") else "skipped"
+        out.append(node)
+    return out
+
+
 def snapshot_parts(state, *, eta: dict | None = None) -> dict:
     """The projection part of ``TrackerSnapshot`` (api.md §3; ``job`` and ``resources`` are added by the caller)."""
     stages = None
@@ -775,7 +794,7 @@ def snapshot_parts(state, *, eta: dict | None = None) -> dict:
                 for w in state["warnings"].values()]
     return {
         "cursor": state["cursor"],
-        "plan": state["plan"],
+        "plan": _plan_out(state["plan"]),
         "stages": stages,
         "spans": spans_list(state),
         "metrics_latest": state["metrics_latest"],

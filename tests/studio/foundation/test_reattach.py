@@ -115,3 +115,35 @@ def test_job_that_finished_while_down_keeps_its_result(make_app, wait_job):
     with TestClient(app2, headers=AUTH) as client:
         job = client.get(f"/api/jobs/{jid}").json()
         assert job["status"] == "succeeded" and job["result"]["ok"] is True
+
+
+def test_reindex_keeps_a_live_job_and_reattaches_it(make_app, wait_job, tmp_path):
+    """``--reindex`` while a job runs: the rebuilt row stays live, reattach tails it to the end and the job
+    takes its run's write lock again (``run_locks`` is emptied by the reindex)."""
+    run_dir = tmp_path / "runs" / "r1"
+    run_dir.mkdir(parents=True)
+    app = make_app()
+    with TestClient(app, headers=AUTH) as client:
+        app.state.studio.db.insert("runs", {"id": "r1", "run_dir": str(run_dir), "studio_dir": str(run_dir / "studio"),
+                                            "origin": "studio", "status": "complete"})
+        r = client.post("/api/jobs", json={"kind": "test.lock", "params": {"seconds": 4.0}, "run_id": "r1"})
+        jid = r.json()["id"]
+        wait_job(client, jid, ("running",))
+        pid = app.state.studio.db.fetchval("SELECT pid FROM jobs WHERE id = ?", (jid,))
+        ws = app.state.studio.workspace
+    try:
+        for suffix in ("", "-wal", "-shm"):
+            p = ws.root / f"studio.sqlite{suffix}"
+            if p.exists():
+                p.unlink()
+        app2 = make_app(reindex=True)
+        with TestClient(app2, headers=AUTH) as client:
+            db = app2.state.studio.db
+            assert client.get(f"/api/jobs/{jid}").json()["status"] == "running"
+            assert jid in app2.state.studio.jobs.tailers
+            assert db.fetchval("SELECT job_id FROM run_locks WHERE run_id = 'r1'") == jid
+            done = wait_job(client, jid, timeout=30)
+            assert done["status"] == "succeeded" and done["result"]["run_id"] == "r1"
+            assert db.fetchval("SELECT COUNT(*) FROM run_locks") == 0
+    finally:
+        _kill(pid)

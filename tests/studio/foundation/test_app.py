@@ -351,3 +351,32 @@ def test_help_through_core_delegation(argv):
     proc = subprocess.run([sys.executable, *argv], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
     assert proc.returncode == 0, proc.stderr
     assert "sparc studio" in proc.stdout and "--workspace" in proc.stdout and "--dump-openapi" in proc.stdout
+
+
+def test_cli_never_starts_a_second_server_beside_a_silent_holder(tmp_path, monkeypatch, capsys):
+    """The lock names a live process (same pid and create_time) whose /api/health does not answer: the CLI
+    waits, then exits 1 without touching it - two servers would both schedule the workspace's jobs."""
+    import psutil
+
+    from sparc.studio import cli
+    from sparc.studio.workspace import Workspace, write_json_atomic
+
+    ws = Workspace(tmp_path / "ws").ensure()
+    holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        port = cli.bind_socket("127.0.0.1", 0)
+        closed = port.getsockname()[1]
+        port.close()                                          # nothing listens there
+        write_json_atomic(ws.lock_path, {"pid": holder.pid, "port": closed, "url": f"http://127.0.0.1:{closed}",
+                                         "create_time": psutil.Process(holder.pid).create_time()}, private=True)
+        monkeypatch.setattr(cli, "OCCUPANT_WAIT_S", 0.3)
+        assert cli.wait_for_occupant(ws) == (None, holder.pid)
+        rc = cli.main(["--workspace", str(ws.root), "--port", "0", "--no-browser", "--token", "t"])
+        assert rc == 1 and f"pid {holder.pid}" in capsys.readouterr().err
+        assert holder.poll() is None and json.loads(ws.lock_path.read_text())["pid"] == holder.pid
+        # a lock whose process is gone (or whose pid now belongs to another process) does not hold anything
+        write_json_atomic(ws.lock_path, {"pid": holder.pid, "port": closed, "create_time": 1.0}, private=True)
+        assert cli.wait_for_occupant(ws) == (None, None)
+    finally:
+        holder.kill()
+        holder.wait()

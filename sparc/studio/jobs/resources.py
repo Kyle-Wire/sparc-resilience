@@ -194,10 +194,11 @@ class ResourceSampler:
                 self.last_store[jid] = now
                 store.append((jid, sample["ts"], sample["rss_mb"], sample["cpu_pct"], sample["n_procs"],
                               sample["threads"]))
-        for jid in list(self.latest):
-            if jid not in jobs:
+        for jid in set(self.latest) | set(self.peak):
+            if jid not in jobs:                   # finished: forget it (jobs.peak_rss_mb keeps the peak)
                 self.latest.pop(jid, None)
                 self.last_store.pop(jid, None)
+                self.peak.pop(jid, None)
         if store or peaks:
             def _write(conn):
                 if store:

@@ -23,7 +23,7 @@ from sparc.studio.errors import ApiError
 from sparc.studio.jobs import tracker
 from sparc.studio.jobs.eta import CostModel, host_id, scale
 from sparc.studio.jobs.manager import job_out
-from sparc.studio.jobs.tailer import read_events
+from sparc.studio.jobs.tailer import LOG_CAP_BYTES, read_events
 from sparc.studio.schemas.common import (
     ACTIVE_STATUSES,
     EventsPage,
@@ -161,7 +161,11 @@ async def tracker_snapshot(jid: str, sctx: StudioContext = Depends(get_ctx)):
         job["progress"] = state.get("progress")
         job.update(eta_s=eta.get("eta_s"), eta_lo=eta.get("eta_lo"), eta_hi=eta.get("eta_hi"),
                    stage=state.get("stage"), current_path=state.get("current_path"))
-    return {"job": job, **parts, "resources": _resources(sctx, jid)}
+    try:
+        capped = _events_path(row, sctx).stat().st_size > LOG_CAP_BYTES
+    except OSError:
+        capped = False
+    return {"job": job, **parts, "resources": _resources(sctx, jid), "log_capped": capped}
 
 
 @router.get("/jobs/{jid}/spans", response_model=list[Span])

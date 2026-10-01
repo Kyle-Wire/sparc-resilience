@@ -417,8 +417,11 @@ def rebuild_job_rows(db, job_dir: str | os.PathLike) -> bool:
         rows.add(cursor, ev, st)
     rows.dirty_spans = set(st["spans"])
     status = (result or {}).get("status") or st.get("status") or state_json.get("status") or "interrupted"
-    if status in ("queued", "blocked", "starting", "running", "cancelling"):
-        status = "interrupted"                 # nothing is live during a reindex
+    if status == "blocked":
+        status = "queued"                      # the scheduler re-derives the reason
+    # starting / running / cancelling stay live: the server's reattach (which runs right after a
+    # ``--reindex`` start-up) checks pid + create_time + cmdline and tails the job, or marks it interrupted.
+    # Turning them into ``interrupted`` here would orphan a worker that is still running.
     eta = projection_eta(st)
     row = {
         "id": job["id"], "kind": job.get("kind", "?"), "lane": job.get("lane", "none"),

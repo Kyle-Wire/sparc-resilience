@@ -241,3 +241,20 @@ def test_synth_run_fixture_replays_to_done(synth_run_dir):
     assert st["run_status"] == "succeeded" and st["progress"] == 1.0
     states = {s["state"] for s in st["stages"].values()}
     assert states <= {"done", "skipped", "cached", "disabled", "not_requested"}
+
+
+def test_snapshot_plan_is_always_wire_valid():
+    """A ``run.plan`` node without a label, with an unknown state or a non-stage id never breaks the tracker
+    endpoint: the snapshot labels it with its id, counts an unknown state as skipped, drops a foreign id."""
+    from sparc.studio.schemas.common import PlanNode
+
+    st = _run([ev("run.plan", nodes=[
+        {"id": "S0", "units": {"s0_load": 1}},
+        {"id": "replicates", "label": "Replicates", "state": "will_run", "units": {"replicate:null": 4}},
+        {"id": "S4", "label": "Response", "state": "weird", "units": {}},
+    ], total_units={})])
+    plan = tracker.snapshot_parts(st)["plan"]
+    assert [n["id"] for n in plan] == ["S0", "S4"]
+    assert plan[0]["label"] == "S0" and plan[0]["state"] == "will_run" and plan[1]["state"] == "skipped"
+    for node in plan:
+        PlanNode.model_validate(node)

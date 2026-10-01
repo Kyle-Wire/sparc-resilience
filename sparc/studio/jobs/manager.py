@@ -56,6 +56,7 @@ LANE_SLOT_KEYS = {"heavy": "heavy_slots", "medium": "medium_slots", "network": "
 OOM_FRACTION = 0.8
 NETCHECK_TTL_S = 600.0
 RETENTION_EVERY_S = 1800.0
+PENDING = ("queued", "blocked")
 
 
 def job_out(row: dict) -> dict:
@@ -71,10 +72,35 @@ def job_out(row: dict) -> dict:
         "finished_utc": row.get("finished_utc"), "progress": row.get("progress"),
         "eta_s": row.get("eta_s"), "eta_lo": row.get("eta_lo"), "eta_hi": row.get("eta_hi"),
         "stage": row.get("stage"), "current_path": dbmod.loads(row.get("current_path")),
-        "exit_code": row.get("exit_code"), "error": dbmod.loads(row.get("error_json")),
+        "exit_code": row.get("exit_code"), "error": _error_out(dbmod.loads(row.get("error_json"))),
         "blocked": dbmod.loads(row.get("blocked_json")), "result": dbmod.loads(row.get("result_json")),
         "peak_rss_mb": row.get("peak_rss_mb"), "threads": row.get("threads"),
     }
+
+
+def _error_out(err: Any) -> dict | None:
+    """A stored error in the ``Job.error`` shape ``{type, message, ...}`` (a kind's ``result.json`` may carry
+    a bare string or omit a key; one such job must not break ``GET /api/jobs``)."""
+    if err is None or err == {}:
+        return None
+    if not isinstance(err, dict):
+        return {"type": "Error", "message": str(err)}
+    return {**err, "type": str(err.get("type") or "Error"), "message": str(err.get("message") or "")}
+
+
+def _valid_actions(actions, kind: str) -> list[dict]:
+    """The ``Action``-shaped entries of a blocked reason (api.md §0.3); others are dropped and logged."""
+    from pydantic import ValidationError
+
+    from sparc.studio.schemas.common import Action
+
+    out = []
+    for a in actions or []:
+        try:
+            out.append(Action.model_validate(a).model_dump(exclude_none=True))
+        except ValidationError:
+            log.warning("%s: dropping a blocked action that is not an Action: %r", kind, a)
+    return out
 
 
 class JobManager:
@@ -97,6 +123,7 @@ class JobManager:
         self._wake = asyncio.Event()
         self._sched_task: asyncio.Task | None = None
         self._sched_lock = asyncio.Lock()
+        self._status_lock = asyncio.Lock()
         self._stopping = False
         self._netcheck: dict[str, tuple[float, dict]] = {}
         self._replays: dict[str, tuple[tuple, dict]] = {}
@@ -315,26 +342,39 @@ class JobManager:
 
     # ------------------------------------------------------------------ status
 
-    async def _set_status(self, job_id: str, status: str, *, publish: bool = True, **fields) -> dict | None:
-        row = self.get_row(job_id)
-        if row is None:
-            return None
-        prev = row["status"]
-        values = {"status": status, **fields}
-        if status in FINAL_STATUSES and "finished_utc" not in values:
-            values["finished_utc"] = utc_now()
-        if status not in ("blocked",) and "blocked_json" not in values:
-            values["blocked_json"] = None
-        await self.db.aupdate("jobs", {"id": job_id}, values)
-        if prev != status:
+    async def _set_status(self, job_id: str, status: str, *, publish: bool = True,
+                          only_from: tuple[str, ...] | None = None, **fields) -> dict | None:
+        """Move a job to ``status`` (plus ``fields``); returns the new row, or None when the job is gone.
+
+        Transitions are serialised by one lock, so a check-then-set is atomic: with ``only_from`` the
+        transition happens only when the current status is one of those (else None) - a cancel that
+        lands while the scheduler is starting the same job can never be undone by it, and vice versa.
+        The ``job.status`` line is appended before the row changes, so whoever sees the new status in
+        SQLite also finds its line in ``events.jsonl``.
+        """
+        async with self._status_lock:
+            row = self.get_row(job_id)
+            if row is None:
+                return None
+            prev = row["status"]
+            if only_from is not None and prev not in only_from:
+                return None
+            values = {"status": status, **fields}
+            if status in FINAL_STATUSES and "finished_utc" not in values:
+                values["finished_utc"] = utc_now()
+            if status not in ("blocked",) and "blocked_json" not in values:
+                values["blocked_json"] = None
             error = dbmod.loads(values.get("error_json")) if "error_json" in values else dbmod.loads(
                 row.get("error_json"))
             exit_code = values.get("exit_code", row.get("exit_code"))
-            try:
-                append_event(Path(row["job_dir"]) / "events.jsonl", "job.status", job_id=job_id, status=status,
-                             exit_code=exit_code, error=error)
-            except OSError:
-                log.exception("cannot append job.status for %s", job_id)
+            if prev != status:
+                try:
+                    append_event(Path(row["job_dir"]) / "events.jsonl", "job.status", job_id=job_id, status=status,
+                                 exit_code=exit_code, error=error)
+                except OSError:
+                    log.exception("cannot append job.status for %s", job_id)
+            await self.db.aupdate("jobs", {"id": job_id}, values)
+        if prev != status:
             self._write_state(row, status=status)
             if publish:
                 self.hub.publish("job.status", {"job_id": job_id, "status": status, "prev_status": prev,
@@ -354,14 +394,18 @@ class JobManager:
             log.exception("cannot write %s", path)
 
     async def _block(self, row: dict, reason: str, actions: list | None = None) -> None:
-        blocked = {"reason": reason, "actions": list(actions or [])}
+        blocked = {"reason": str(reason), "actions": _valid_actions(actions, row["kind"])}
         if row["status"] == "blocked" and dbmod.loads(row.get("blocked_json")) == blocked:
             return
-        await self._set_status(row["id"], "blocked", blocked_json=dbmod.dumps(blocked))
+        if row["status"] == "blocked":         # same status, new reason: no transition, just the details
+            await self.db.aexecute("UPDATE jobs SET blocked_json = ? WHERE id = ? AND status = 'blocked'",
+                                   (dbmod.dumps(blocked), row["id"]))
+            return
+        await self._set_status(row["id"], "blocked", blocked_json=dbmod.dumps(blocked), only_from=PENDING)
 
     async def _unblock(self, row: dict) -> None:
         if row["status"] == "blocked":
-            await self._set_status(row["id"], "queued")
+            await self._set_status(row["id"], "queued", only_from=("blocked",))
 
     # ------------------------------------------------------------------ scheduling
 
@@ -395,18 +439,22 @@ class JobManager:
                     running[r["lane"]] += 1
                     threads_used += int(r.get("threads") or 1)
                 heavy_running = heavy_running or r["lane"] == "heavy"
-            for row in self._rows_by_status(("queued", "blocked")):
+            for pending in self._rows_by_status(PENDING):
+                row = self.get_row(pending["id"])      # earlier steps of this pass awaited: re-read it
+                if row is None or row["status"] not in PENDING:
+                    continue
                 k = kindsmod.get_kind(row["kind"])
                 if k is None:
-                    await self._fail(row, "UnknownKind", f"job kind {row['kind']!r} is not available")
+                    await self._fail(row, "UnknownKind", f"job kind {row['kind']!r} is not available",
+                                     only_from=PENDING)
                     continue
                 if row.get("after_job_id"):
                     dep = self.get_row(row["after_job_id"])
                     if dep is None or dep["status"] in ("failed", "cancelled", "interrupted"):
                         what = "is missing" if dep is None else dep["status"]
-                        await self._set_status(row["id"], "cancelled", error_json=dbmod.dumps(
-                            {"type": "DependencyFailed", "message": f"job {row['after_job_id']} {what}"}))
-                        await self._call_on_finish(row["id"])
+                        if await self._set_status(row["id"], "cancelled", only_from=PENDING, error_json=dbmod.dumps(
+                                {"type": "DependencyFailed", "message": f"job {row['after_job_id']} {what}"})):
+                            await self._call_on_finish(row["id"])
                         continue
                     if dep["status"] != "succeeded":
                         await self._block(row, f"waiting for {dep.get('label') or dep['kind']} ({dep['id']})")
@@ -435,7 +483,7 @@ class JobManager:
                 failures = await self._preflight(row, k, settings)
                 fatal = [f for f in failures if f.get("fatal")]
                 if fatal:
-                    await self._fail(row, "PreflightFailed", fatal[0]["reason"], detail=fatal[0])
+                    await self._fail(row, "PreflightFailed", fatal[0]["reason"], detail=fatal[0], only_from=PENDING)
                     continue
                 if failures:
                     await self._block(row, failures[0]["reason"], failures[0].get("actions"))
@@ -482,18 +530,21 @@ class JobManager:
     async def _start(self, row: dict, k, threads: int) -> bool:
         executor = self.executors.get(row["executor"])
         if executor is None:
-            await self._fail(row, "NoExecutor", f"no {row['executor']!r} executor is available")
+            await self._fail(row, "NoExecutor", f"no {row['executor']!r} executor is available", only_from=PENDING)
             return False
         jid = row["id"]
+        started = utc_now()
+        # claim the job: a cancel that landed since the scheduler read it wins
+        if await self._set_status(jid, "starting", only_from=PENDING, threads=threads, started_utc=started,
+                                  host_id=host_id()) is None:
+            return False
+        self._starting.add(jid)
         if k.locks_run and row.get("run_id"):
             await self.db.aexecute("INSERT OR REPLACE INTO run_locks (run_id, job_id, acquired_utc) VALUES (?,?,?)",
                                    (row["run_id"], jid, utc_now()))
         context = self._context(row)
         row = {**row, "threads": threads}
         self._write_job_json(row, k, context)
-        started = utc_now()
-        self._starting.add(jid)
-        await self._set_status(jid, "starting", threads=threads, started_utc=started, host_id=host_id())
         self._write_state(row, status="starting", started_utc=started, executor=row["executor"])
         tailer = self._make_tailer(row, flushed_cursor=int(row.get("last_cursor") if row.get("last_cursor")
                                                              is not None else -1))
@@ -557,7 +608,7 @@ class JobManager:
                     if not tailer.worker_seen:
                         self.start_failed.add(jid)
                         log.warning("job %s: worker did not start within %.0f s", jid, self.cfg.start_timeout_s)
-                        await self._set_status(jid, "failed", error_json=dbmod.dumps(
+                        await self._set_status(jid, "failed", only_from=LIVE_STATUSES, error_json=dbmod.dumps(
                             {"type": "StartTimeout", "message": "worker did not start"}))
                         await executor.kill(self.get_row(jid) or row)
                 await asyncio.wait({wait}, timeout=0.5)
@@ -573,9 +624,7 @@ class JobManager:
         t = ev.get("type")
         if jid in self._starting and t not in ("job.status", "cancel.requested"):
             self._starting.discard(jid)
-            row = self.get_row(jid)
-            if row is not None and row["status"] == "starting":
-                await self._set_status(jid, "running")
+            await self._set_status(jid, "running", only_from=("starting",))
         if t == "artifact":
             self._output_written(jid, ev)
         tailer = self.tailers.get(jid)
@@ -610,12 +659,13 @@ class JobManager:
 
     # ------------------------------------------------------------------ finishing
 
-    async def _fail(self, row: dict, etype: str, message: str, *, detail: dict | None = None) -> None:
+    async def _fail(self, row: dict, etype: str, message: str, *, detail: dict | None = None,
+                    only_from: tuple[str, ...] | None = None) -> None:
         err = {"type": etype, "message": message}
         if detail:
             err["detail"] = {k: v for k, v in detail.items() if k not in ("actions",)}
-        await self._set_status(row["id"], "failed", error_json=dbmod.dumps(err))
-        await self._call_on_finish(row["id"])
+        if await self._set_status(row["id"], "failed", only_from=only_from, error_json=dbmod.dumps(err)):
+            await self._call_on_finish(row["id"])
 
     async def _finalize(self, jid: str, exit_info: ExitInfo, *, forced: tuple[str, dict] | None = None) -> None:
         """Work has ended: drain the events, decide the final status, release locks, run ``on_finish``."""
@@ -722,23 +772,28 @@ class JobManager:
         if row["lane"] == "none" or row["executor"] == "external":
             raise ApiError("not_cancellable", "external runs cannot be cancelled from Studio",
                            detail={"pid": row.get("pid"), "hint": "stop the process where it was started"})
+        if status in PENDING:
+            if await self._set_status(job_id, "cancelled", only_from=PENDING, error_json=None):
+                await self._call_on_finish(job_id)
+                self.wake()
+                return self.get(job_id)
+            row = self.get_row(job_id) or row        # the scheduler started it meanwhile: cancel the live job
+            status = row["status"]
         if status in FINAL_STATUSES:
             raise ApiError("not_cancellable", f"the job already {status}", detail={"status": status})
-        if status in ("queued", "blocked"):
-            await self._set_status(job_id, "cancelled", error_json=None)
-            await self._call_on_finish(job_id)
-            self.wake()
-            return self.get(job_id)
         if status == "cancelling" and by == "user":
             return self.get(job_id)
         job_dir = Path(row["job_dir"])
         append_event(job_dir / "events.jsonl", "cancel.requested", job_id=job_id, by=by)
         (job_dir / "cancel").touch()
         if status != "cancelling":
-            await self._set_status(job_id, "cancelling")
+            await self._set_status(job_id, "cancelling", only_from=("starting", "running"))
+        row = self.get_row(job_id)
+        if row is None or row["status"] != "cancelling":
+            return self.get(job_id)              # it ended meanwhile: never signal a pid that is not ours any more
         executor = self.executors.get(row["executor"])
         if executor is not None:
-            await executor.cancel(self.get_row(job_id))
+            await executor.cancel(row)
         return self.get(job_id)
 
     def cancel_requested_at(self, row: dict) -> float | None:
@@ -768,10 +823,15 @@ class JobManager:
         (job_dir / "cancel").touch()
         self.killed.add(job_id)
         if row["status"] != "cancelling":
-            await self._set_status(job_id, "cancelling")
+            await self._set_status(job_id, "cancelling", only_from=("starting", "running"))
+        row = self.get_row(job_id)
+        if row is None or row["status"] != "cancelling":    # it ended meanwhile: nothing left to kill
+            self.killed.discard(job_id)
+            status = row["status"] if row else "gone"
+            raise ApiError("not_cancellable", f"the job is {status}", detail={"status": status})
         executor = self.executors.get(row["executor"])
         if executor is not None:
-            await executor.kill(self.get_row(job_id))
+            await executor.kill(row)
         return self.get(job_id)
 
     async def retry(self, job_id: str) -> dict:
@@ -860,10 +920,19 @@ class JobManager:
             tailer = self._make_tailer(row, flushed_cursor=flushed)
             self.tailers[row["id"]] = tailer
             if ok:
+                k = kindsmod.get_kind(row["kind"])
+                if k is not None and k.locks_run and row.get("run_id"):
+                    # the lock row may be gone (--reindex empties run_locks); the live job still holds the run
+                    await self.db.aexecute("INSERT OR IGNORE INTO run_locks (run_id, job_id, acquired_utc) "
+                                           "VALUES (?,?,?)", (row["run_id"], row["id"], utc_now()))
                 if row["status"] == "starting":
                     self._starting.add(row["id"])
                 tailer.start()
                 await tailer.poll()
+                if row["status"] == "starting" and tailer.worker_seen:
+                    # its first events were flushed before the restart, so no new one may arrive soon
+                    self._starting.discard(row["id"])
+                    await self._set_status(row["id"], "running", only_from=("starting",))
                 self.watchers[row["id"]] = asyncio.create_task(self._watch(row["id"], executor, reattached=True),
                                                                name=f"watch-{row['id']}")
                 out["reattached"].append(row["id"])

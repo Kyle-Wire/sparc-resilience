@@ -154,10 +154,12 @@ SETTINGS_KEYS: tuple[str, ...] = tuple(Settings.model_fields)
 def default_settings() -> dict:
     m = machine()
     cpu = m["cpu_count"]
+    heavy = max(1, cpu - 1)
     return {
         "thread_budget": cpu,
-        "threads_heavy": max(1, cpu - 1),
-        "engine_threads": 2,
+        "threads_heavy": heavy,
+        # 2, but never so many that the defaults break their own budget rule (a 1-CPU machine gets 1)
+        "engine_threads": max(1, min(2, cpu + 1 - heavy)),
         "heavy_slots": 1,
         "medium_slots": 1,
         "network_slots": 2,

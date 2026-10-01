@@ -546,3 +546,85 @@ def test_job_context_resolves_dirs_and_run_config(tmp_path):
     assert str(ctx.run_config().base_dir) == "/launch/dir" and ctx.launch["args"] == {"fast": True}
     ctx.emit_result({"a": 1})
     assert ctx.result == {"a": 1}
+
+
+# ---------------------------------------------------------------------------
+# status transitions are atomic and ordered
+# ---------------------------------------------------------------------------
+
+def test_cancel_wins_over_a_stale_start(client, ctx):
+    """The scheduler read a queued job, then awaited; a cancel landed meanwhile: the start must not undo it."""
+    from sparc.studio.jobs import kinds
+
+    client.post("/api/queue/pause")
+    try:
+        jid = submit(client, "test.sleep", seconds=5)["id"]
+        stale = ctx.jobs.get_row(jid)
+        assert stale["status"] == "queued"
+        assert client.post(f"/api/jobs/{jid}/cancel").json()["status"] == "cancelled"
+        started = client.portal.call(ctx.jobs._start, stale, kinds.get_kind("test.sleep"), 1)
+        assert started is False
+        row = ctx.jobs.get_row(jid)
+        assert row["status"] == "cancelled" and row["pid"] is None and jid not in ctx.jobs.tailers
+        statuses = [ev["status"] for ev in events_of(ctx, jid) if ev["type"] == "job.status"]
+        assert statuses == ["queued", "cancelled"]
+        # … and a stale block cannot resurrect it either
+        client.portal.call(ctx.jobs._block, stale, "waiting for something")
+        assert ctx.jobs.get_row(jid)["status"] == "cancelled"
+    finally:
+        client.post("/api/queue/resume")
+
+
+def test_status_line_is_on_disk_before_the_row_changes(client, ctx, wait_job, monkeypatch):
+    """Whoever sees a new status in SQLite (e.g. a job stream deciding to send ``end``) finds its line."""
+    seen = []
+    orig = ctx.db.aupdate
+
+    async def aupdate(table, key, values):
+        if table == "jobs" and "status" in values:
+            lines = [ev for ev in events_of(ctx, key["id"]) if ev["type"] == "job.status"]
+            seen.append((values["status"], lines[-1]["status"] if lines else None))
+        return await orig(table, key, values)
+
+    monkeypatch.setattr(ctx.db, "aupdate", aupdate)
+    jid = submit(client, "test.sleep", seconds=0.2)["id"]
+    assert wait_job(client, jid)["status"] == "succeeded"
+    assert [s for s, _ in seen] == ["starting", "running", "succeeded"]
+    assert all(row == line for row, line in seen), seen
+
+
+def test_default_settings_fit_the_thread_budget(monkeypatch):
+    from sparc.studio import settings as settings_mod
+
+    for cpu, engine in ((1, 1), (2, 2), (8, 2)):
+        monkeypatch.setattr(settings_mod, "machine", lambda cpu=cpu: {"cpu_count": cpu, "mem_total_gb": 4.0})
+        d = settings_mod.default_settings()
+        s = settings_mod.Settings(**d)                        # the defaults satisfy their own budget rule
+        assert s.thread_budget == cpu and s.threads_heavy == max(1, cpu - 1) and s.engine_threads == engine
+
+
+def test_odd_stored_errors_and_actions_never_break_the_job_list(client, ctx, wait_job):
+    from sparc.studio.jobs.manager import _valid_actions
+
+    jid = submit(client, "test.sleep", seconds=0.1)["id"]
+    wait_job(client, jid)
+    for stored, expected in (('"plain text"', {"type": "Error", "message": "plain text"}),
+                             ('{"message": "no type"}', {"type": "Error", "message": "no type"}),
+                             ('{}', None)):
+        ctx.db.execute("UPDATE jobs SET error_json = ? WHERE id = ?", (stored, jid))
+        err = client.get(f"/api/jobs/{jid}").json()["error"]
+        assert (err if err is None else {k: err[k] for k in ("type", "message")}) == expected
+        assert client.get("/api/jobs").status_code == 200
+    kept = _valid_actions([{"kind": "evict_engine", "label": "Evict"}, {"kind": "open", "label": "Show", "path": "/x"},
+                           "not an action"], "test.sleep")
+    assert kept == [{"kind": "open", "label": "Show", "path": "/x"}]
+
+
+def test_tracker_reports_the_log_cap(client, wait_job, monkeypatch):
+    from sparc.studio.routes import jobs as jobs_routes
+
+    jid = submit(client, "test.sleep", seconds=0.1)["id"]
+    wait_job(client, jid)
+    assert client.get(f"/api/jobs/{jid}/tracker").json()["log_capped"] is False
+    monkeypatch.setattr(jobs_routes, "LOG_CAP_BYTES", 100)              # stands in for 200 MB
+    assert client.get(f"/api/jobs/{jid}/tracker").json()["log_capped"] is True

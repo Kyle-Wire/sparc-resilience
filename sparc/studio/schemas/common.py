@@ -660,6 +660,8 @@ class TrackerSnapshot(BaseModel):
     resources: list[ResourceRow]
     heartbeat_gaps: list[HeartbeatGap]
     children: list[ChildRow]
+    log_capped: bool = Field(False, description="events.jsonl passed 200 MB: debug lines stay on disk only "
+                                                "(SPEC §5.6); the UI shows a note")
 
 
 class EventsPage(BaseModel):
