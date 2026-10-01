@@ -430,3 +430,21 @@ def test_providence_fast_run(providence_config_path, brown_csv, tmp_path):
     assert 0.8 <= m["stacker"]["interval_coverage"] <= 0.97
     assert (res.run_dir / "report.md").exists()
     assert (res.run_dir / "predictions.parquet").exists()
+
+
+def test_emulator_matches_exact_engine_on_patches(synthetic_run):
+    from sparc.core.emulator import build_emulator, emulate, validate
+    from sparc.core.mediators import MediatorChain
+    from sparc.core.response import ResponseEngine
+    from sparc.core.scenarios import ScenarioEngine
+
+    r = synthetic_run
+    med = MediatorChain(r.cfg.mediators).fit(r.data.frame) if r.cfg.mediators else None
+    eng = ScenarioEngine(r.data, r.cfg, r.ensemble, r.influence.ranges_m, med)
+    resp = ResponseEngine(eng)
+    em = build_emulator(resp, "canopy")
+    assert em["channels"] and em["physics"] is not None
+    assert np.allclose(emulate(em, r.data.grid, np.zeros(r.data.n)), 0.0)
+    v = validate(eng, em, "canopy", 10.0, n_patches=3, radii_m=(90.0,))
+    assert v["patch_mean_abs_err_median"] < 0.05 and v["p95_cell_err_median"] < 0.1
+    assert v["patches"][0]["emu_patch_mean"] < 0                       # canopy cools in both

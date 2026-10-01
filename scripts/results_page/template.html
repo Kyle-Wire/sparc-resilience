@@ -139,7 +139,7 @@ details[open] summary { margin-bottom: 8px; }
 .btn:hover { border-color: var(--accent); }
 .btn:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 input[type="number"] { font: inherit; font-size: 0.86rem; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); width: 6.5em; }
-.flags { display: grid; gap: 8px; }
+.flags { display: grid; gap: 8px; padding: 0; margin: 0; }
 .flags li { list-style: none; display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; font-size: 0.88rem; color: var(--ink-2); }
 .badge { font-size: 0.8rem; color: var(--ink-2); background: var(--chip); border-radius: 8px; padding: 8px 10px; }
 .callout { border-left: 3px solid var(--warning); padding: 10px 14px; background: var(--surface); border-radius: 0 8px 8px 0; font-size: 0.9rem; color: var(--ink-2); }
@@ -1052,9 +1052,13 @@ function planner() {
   $("expCap").textContent = `Residents in cells whose afternoon temperature reaches each threshold. Futures add the CMIP6 median summer warming; "with package" adds the package's re-predicted cooling.`;
   $("tbl-pexp").append(table(["Case", "Package", ...thr.map((x) => `≥ ${x} °F`), `Person-weighted mean (${U})`],
     ex.map((r) => [r.case, r.adapted ? "with" : "—", ...thr.map((x) => Math.round(r[`people_ge_${x}`]).toLocaleString()), fmt(r.person_mean_temp, 1)]), (i) => i > 1));
-  if (hd.length) { $("hdCap").textContent = `Mean days per summer (June–August) at or above each threshold, averaged over cells; person-days sum residents × days. "Lower bound" halves each cell's difference from the airport, for days less clear and calm than the campaign's.`;
-    const rows = hd.map((c) => [c.case, c.label, ...thr.map((x) => fmt(c[`days_ge_${x}`], 1) + (c[`days_ge_${x}_adapted`] !== undefined ? ` → ${fmt(c[`days_ge_${x}_adapted`], 1)}` : "")), Math.round(c[`person_days_ge_${t0}`] / 1000).toLocaleString() + "k"]);
-    $("tbl-hd").append(table(["Case", "Scaling", ...thr.map((x) => `days ≥ ${x} °F (→ with package)`), `person-days ≥ ${t0}`], rows, (i) => i > 1)); }
+  $("tbl-pexp").querySelectorAll("td:first-child").forEach((td) => { td.style.whiteSpace = "nowrap"; });
+  if (hd.length) { $("hdCap").textContent = `Mean days per summer (June–August) at or above each threshold, averaged over cells, then with the package. In brackets: the lower bound, which halves each cell's difference from the airport for days less clear and calm than the campaign's. Person-days sum residents × days.`;
+    const main = hd.filter((c) => c.offset_scale === 1); const low = (c) => hd.find((x) => x.case === c.case && x.offset_scale !== 1);
+    const cell = (c, x) => { const lb = low(c); return `${fmt(c[`days_ge_${x}`], 1)}` + (c[`days_ge_${x}_adapted`] !== undefined ? ` → ${fmt(c[`days_ge_${x}_adapted`], 1)}` : "") + (lb ? ` (${fmt(lb[`days_ge_${x}`], 1)})` : ""); };
+    const rows = main.map((c) => [c.case, ...thr.map((x) => cell(c, x)), Math.round(c[`person_days_ge_${t0}`] / 1000).toLocaleString() + "k"]);
+    const t = table(["Case", ...thr.map((x) => `≥ ${x} °F`), `Person-days ≥ ${t0}`], rows); t.querySelectorAll("td:first-child").forEach((td) => { td.style.whiteSpace = "nowrap"; });
+    $("tbl-hd").append(t); }
   const eq = P.equity || {}; const ek = Object.keys(eq);
   if (ek.length) { $("eqCap").textContent = "Mean cooling from the package by quintile (1 = lowest). The concentration index is > 0 when cooling concentrates in the higher quintiles, < 0 in the lower ones; near 0 means evenly shared.";
     const rows = ek.map((k) => { const q = eq[k].quintiles; return [k, ...q.map((x) => fmt(x.mean_cooling, 2)), sfmt(eq[k].concentration_index, 3)]; });
@@ -1064,7 +1068,9 @@ function planner() {
   const ls = P.logger_sites, ba = P.before_after; const pl = P.plantable || {};
   $("campCap").textContent = `Plantable space: on average ${fmt(pl.mean_headroom_pp, 0)} pp more canopy fits per cell (${fmt(100 * (pl.share_cells_no_room || 0), 0)}% of cells have no room); the budget plan is capped by it. ` +
     (ls ? `${ls.n} logger sites are proposed (map theme Planner → Suggested logger sites). ` : "") + (ba && ba.n_pairs ? `For a before/after check of the budget plan, ${ba.n_pairs} treated cells are paired with untreated look-alikes at least 1 km away (median covariate distance ${fmt(ba.median_covariate_distance, 2)} sd).` : "");
-  if (DATA.sites) $("tbl-sites").append(table(["Site", "Role", "Canopy (%)", "Impervious (%)"], DATA.sites.cell.map((c, k) => [String(k + 1), DATA.sites.role[k], fmt(DATA.sites.canopy[k], 0), fmt(DATA.sites.impervious[k], 0)])));
+  if (DATA.sites) { const d = el("details"); d.append(el("summary", {}, `Logger sites (${DATA.sites.cell.length})`));
+    d.append(table(["Site", "Role", "Canopy (%)", "Impervious (%)"], DATA.sites.cell.map((c, k) => [String(k + 1), DATA.sites.role[k], fmt(DATA.sites.canopy[k], 0), fmt(DATA.sites.impervious[k], 0)]), (i) => i >= 2));
+    $("tbl-sites").append(d); }
 }
 
 /* ---------- methods & validation ---------- */
@@ -1131,7 +1137,7 @@ function caveats() {
   for (const c of DATA.caveats_extra || []) items.push(c);
   for (const t of items) ul.append(el("li", {}, t));
   const tm = DATA.timings || {}; const tot = Object.values(tm).reduce((a, b) => a + b, 0);
-  $("foot").textContent = `Generated from the run "${DATA.name}" (${DATA.created}). Total compute ${fmt(tot / 60, 0)} min on 3 CPU threads. Source: sparc/core in the sparc-resilience repository.`;
+  $("foot").textContent = `Generated from the run "${DATA.name}" (${DATA.created}). Total compute ${fmt(tot / 60, 0)} min. Source: sparc/core in the sparc-resilience repository.`;
 }
 
 function init() {
