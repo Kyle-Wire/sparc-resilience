@@ -232,7 +232,7 @@ type View<Hand, Gen, Pth extends string> = Fit<Wire<Gen>, Hand, Pth, "view">;
 type In<Hand, Gen, Pth extends string> = Fit<Hand, Gen, Pth, "in">;
 
 /** `Rs` must be `true` apart from the listed known errors, and every known error must still occur. */
-type Gate<Rs, Kn extends string = never> =
+export type Gate<Rs, Kn extends string = never> =
   [Exclude<Rs, true | Kn>] extends [never]
     ? [Exclude<Kn, Rs>] extends [never] ? true : `stale allowance: ${Exclude<Kn, Rs>}`
     : Exclude<Rs, true | Kn>;
@@ -270,22 +270,12 @@ export interface TrackingChecks {
   settingsPutBody: Expect<In<Arg<typeof T.putSettings, 0>, Req<"/api/settings", "put">, "PUT /api/settings body">>;
   projectSettings: Expect<View<P.StudioSettings, Res<"/api/settings", "get">, "GET /api/settings (projects)">>;
   threadsHeavy: Expect<View<{ threads_heavy?: number }, Res<"/api/settings", "get">, "GET /api/settings (studies)">>;
-  system: Expect<Gate<Out<T.SystemInfo, Res<"/api/system", "get">, "GET /api/system">,
-    // Versions and WebBuild are optional on the server (a package that is not installed, a
-    // BUILD_INFO.json without them); SystemInfo types them as strings (frontend-tracking)
-    | "GET /api/system.versions.fastapi: source may be null"
-    | "GET /api/system.versions.numpy: source may be null"
-    | "GET /api/system.versions.pandas: source may be null"
-    | "GET /api/system.web_build.react: source may be null"
-    | "GET /api/system.web_build.vite: source may be null">>;
+  system: Expect<Out<T.SystemInfo, Res<"/api/system", "get">, "GET /api/system">>;
   netcheck: Expect<Out<T.NetcheckResult, Res<"/api/system/netcheck", "post">, "POST /api/system/netcheck">>;
   netcheckInputs: Expect<Out<Ret<typeof I.netcheck>, Res<"/api/system/netcheck", "post">, "POST /api/system/netcheck (inputs)">>;
   netcheckBody: Expect<In<{ hosts?: string[] }, Req<"/api/system/netcheck", "post">, "POST /api/system/netcheck body">>;
-  // a cache folder that vanishes while it is measured has no mtime (frontend-tracking, frontend-projects)
-  storage: Expect<Gate<Out<T.StorageInfo, Res<"/api/storage", "get">, "GET /api/storage">,
-    "GET /api/storage.cache[].mtime: source may be null">>;
-  storageSummary: Expect<Gate<View<P.StorageSummary, Res<"/api/storage", "get">, "GET /api/storage (projects)">,
-    "GET /api/storage (projects).cache[].mtime: source may be null">>;
+  storage: Expect<Out<T.StorageInfo, Res<"/api/storage", "get">, "GET /api/storage">>;
+  storageSummary: Expect<View<P.StorageSummary, Res<"/api/storage", "get">, "GET /api/storage (projects)">>;
   deleteCache: Expect<Out<Ret<typeof T.deleteCache>, Res<"/api/storage/cache/{name}", "delete">, "DELETE /api/storage/cache/{name}">>;
 
   jobs: Expect<Out<C.Page<C.Job>, Res<"/api/jobs", "get">, "GET /api/jobs">>;
@@ -330,12 +320,7 @@ export interface ProjectChecks {
   deleteFile: Expect<Out<Ret<typeof P.deleteFile>, Res<"/api/projects/{pid}/files", "delete">, "DELETE /api/projects/{pid}/files">>;
   suggest: Expect<Out<P.ColumnSuggestion, Res<"/api/projects/{pid}/columns/suggest", "post">, "POST /api/projects/{pid}/columns/suggest">>;
   suggestBody: Expect<In<{ path: string }, Req<"/api/projects/{pid}/columns/suggest", "post">, "POST /api/projects/{pid}/columns/suggest body">>;
-  dataCheck: Expect<Gate<Out<P.DataCheck, Res<"/api/projects/{pid}/data/check", "post">, "POST /api/projects/{pid}/data/check">,
-    // DataCheck lacks the check's elapsed_s; a lever without spread has no sd and no dose in sd
-    // units (null), which DataCheck types as numbers (frontend-projects)
-    | "POST /api/projects/{pid}/data/check: target lacks elapsed_s"
-    | "POST /api/projects/{pid}/data/check.dose_scale[*].doses_in_sd[]: source may be null"
-    | "POST /api/projects/{pid}/data/check.dose_scale[*].sd: source may be null">>;
+  dataCheck: Expect<Out<P.DataCheck, Res<"/api/projects/{pid}/data/check", "post">, "POST /api/projects/{pid}/data/check">>;
   dataCheckBody: Expect<In<{ config_patch?: Arg<typeof P.checkData, 1> }, Req<"/api/projects/{pid}/data/check", "post">, "POST /api/projects/{pid}/data/check body">>;
 
   config: Expect<Out<P.ConfigDoc, Res<"/api/projects/{pid}/config", "get">, "GET /api/projects/{pid}/config">>;
@@ -347,9 +332,7 @@ export interface ProjectChecks {
   validateBody: Expect<In<Arg<typeof P.validateConfig, 1>, Req<"/api/projects/{pid}/config/validate", "post">, "POST /api/projects/{pid}/config/validate body">>;
   impact: Expect<Out<P.ImpactResult, Res<"/api/projects/{pid}/config/impact", "post">, "POST /api/projects/{pid}/config/impact">>;
   impactBody: Expect<In<Arg<typeof P.configImpact, 1>, Req<"/api/projects/{pid}/config/impact", "post">, "POST /api/projects/{pid}/config/impact body">>;
-  history: Expect<Gate<Out<P.ConfigHistoryEntry[], Res<"/api/projects/{pid}/config/history", "get">, "GET /api/projects/{pid}/config/history">,
-    // a history file without a readable time has saved_utc null (frontend-projects)
-    "GET /api/projects/{pid}/config/history[].saved_utc: source may be null">>;
+  history: Expect<Out<P.ConfigHistoryEntry[], Res<"/api/projects/{pid}/config/history", "get">, "GET /api/projects/{pid}/config/history">>;
   historyVersion: Expect<Out<Ret<typeof P.configAtVersion>, Res<"/api/projects/{pid}/config/history/{version}", "get">, "GET /api/projects/{pid}/config/history/{version}">>;
   link: Expect<Out<P.LinkResult, Res<"/api/projects/{pid}/link", "post">, "POST /api/projects/{pid}/link">>;
   linkBody: Expect<In<P.LinkBody, Req<"/api/projects/{pid}/link", "post">, "POST /api/projects/{pid}/link body">>;
@@ -375,22 +358,14 @@ export interface ProjectChecks {
 export interface RunChecks {
   runs: Expect<Out<C.Page<C.RunSummary>, Res<"/api/runs", "get">, "GET /api/runs">>;
   projectRuns: Expect<Out<C.Page<C.RunSummary>, Res<"/api/projects/{pid}/runs", "get">, "GET /api/projects/{pid}/runs">>;
-  plan: Expect<Gate<Out<P.RunPlan, Res<"/api/projects/{pid}/runs/plan", "post">, "POST /api/projects/{pid}/runs/plan">,
-    // SnapshotMatch fields are null when the checkpoint sidecar cannot tell (frontend-projects)
-    | "POST /api/projects/{pid}/runs/plan.resumable.matches_snapshot.data: source may be null"
-    | "POST /api/projects/{pid}/runs/plan.resumable.matches_snapshot.code: source may be null"
-    | "POST /api/projects/{pid}/runs/plan.resumable.matches_snapshot.config: source may be null">>;
+  plan: Expect<Out<P.RunPlan, Res<"/api/projects/{pid}/runs/plan", "post">, "POST /api/projects/{pid}/runs/plan">>;
   planBody: Expect<In<P.RunPlanBody, Req<"/api/projects/{pid}/runs/plan", "post">, "POST /api/projects/{pid}/runs/plan body">>;
   launch: Expect<Out<P.LaunchResult, Res<"/api/projects/{pid}/runs", "post">, "POST /api/projects/{pid}/runs">>;
   launchBody: Expect<In<P.LaunchBody, Req<"/api/projects/{pid}/runs", "post">, "POST /api/projects/{pid}/runs body">>;
   importRun: Expect<Out<C.RunSummary, Res<"/api/runs/import", "post">, "POST /api/runs/import">>;
   importRunBody: Expect<In<P.ImportRunBody, Req<"/api/runs/import", "post">, "POST /api/runs/import body">>;
   trustBody: Expect<In<{ dir: string; project_id: string | null; config_path?: string; trust_pickles: boolean }, Req<"/api/runs/import", "post">, "POST /api/runs/import body (trust)">>;
-  detail: Expect<Gate<Out<R.RunDetail, Res<"/api/runs/{rid}", "get">, "GET /api/runs/{rid}">,
-    // as for the launch plan (frontend-run-hub)
-    | "GET /api/runs/{rid}.checkpoint.matches_snapshot.data: source may be null"
-    | "GET /api/runs/{rid}.checkpoint.matches_snapshot.code: source may be null"
-    | "GET /api/runs/{rid}.checkpoint.matches_snapshot.config: source may be null">>;
+  detail: Expect<Out<R.RunDetail, Res<"/api/runs/{rid}", "get">, "GET /api/runs/{rid}">>;
   detailShell: Expect<View<RunDetailHead, Res<"/api/runs/{rid}", "get">, "GET /api/runs/{rid} (shell)">>;
   detailLite: Expect<View<T.RunDetailLite, Res<"/api/runs/{rid}", "get">, "GET /api/runs/{rid} (tracking)">>;
   launchSource: Expect<View<P.RunLaunchSource, Res<"/api/runs/{rid}", "get">, "GET /api/runs/{rid} (launch)">>;
@@ -434,13 +409,7 @@ export interface RunChecks {
   breakdownBody: Expect<In<A.BreakdownRequest, Req<"/api/runs/{rid}/stats/breakdown", "post">, "POST /api/runs/{rid}/stats/breakdown body">>;
   hexbin: Expect<Out<A.Hexbin, Res<"/api/runs/{rid}/stats/hexbin", "post">, "POST /api/runs/{rid}/stats/hexbin">>;
   hexbinBody: Expect<In<A.HexbinRequest, Req<"/api/runs/{rid}/stats/hexbin", "post">, "POST /api/runs/{rid}/stats/hexbin body">>;
-  acf: Expect<Gate<Out<A.Acf, Res<"/api/runs/{rid}/stats/acf", "post">, "POST /api/runs/{rid}/stats/acf">,
-    // the ACF arrays carry null for lags without pairs (NaN on the server); Acf types them as
-    // number[] (frontend-run-hub)
-    | "POST /api/runs/{rid}/stats/acf.acf[]: source may be null"
-    | "POST /api/runs/{rid}/stats/acf.band_mean[]: source may be null"
-    | "POST /api/runs/{rid}/stats/acf.band_sd[]: source may be null"
-    | "POST /api/runs/{rid}/stats/acf.lags_m[]: source may be null">>;
+  acf: Expect<Out<A.Acf, Res<"/api/runs/{rid}/stats/acf", "post">, "POST /api/runs/{rid}/stats/acf">>;
   acfBody: Expect<In<A.AcfRequest, Req<"/api/runs/{rid}/stats/acf", "post">, "POST /api/runs/{rid}/stats/acf body">>;
 
   compareRuns: Expect<Out<R.CompareRuns, Res<"/api/compare/runs", "get">, "GET /api/compare/runs">>;
@@ -491,12 +460,9 @@ export interface LabChecks {
   impacts: Expect<Out<L.Impacts, Res<"/api/results/{res_id}/impacts", "post">, "POST /api/results/{res_id}/impacts">>;
   impactsBody: Expect<In<L.ImpactsRequest, Req<"/api/results/{res_id}/impacts", "post">, "POST /api/results/{res_id}/impacts body">>;
   resultDelete: Expect<Out<Ret<typeof L.deleteResult>, Res<"/api/results/{res_id}", "delete">, "DELETE /api/results/{res_id}">>;
-  // equity rows hold null for a group without cells (Comparison.equity says number; frontend-lab)
-  compare: Expect<Gate<Out<L.Comparison, Res<"/api/runs/{rid}/compare", "post">, "POST /api/runs/{rid}/compare">,
-    "POST /api/runs/{rid}/compare.equity[*][*]: source may be null">>;
+  compare: Expect<Out<L.Comparison, Res<"/api/runs/{rid}/compare", "post">, "POST /api/runs/{rid}/compare">>;
   compareBody: Expect<In<{ items: L.ItemRef[] } & Arg<typeof L.createComparison, 2>, Req<"/api/runs/{rid}/compare", "post">, "POST /api/runs/{rid}/compare body">>;
-  comparison: Expect<Gate<Out<L.Comparison, Res<"/api/comparisons/{cid}", "get">, "GET /api/comparisons/{cid}">,
-    "GET /api/comparisons/{cid}.equity[*][*]: source may be null">>;
+  comparison: Expect<Out<L.Comparison, Res<"/api/comparisons/{cid}", "get">, "GET /api/comparisons/{cid}">>;
   comparisons: Expect<Out<L.ComparisonListItem[], Res<"/api/runs/{rid}/comparisons", "get">, "GET /api/runs/{rid}/comparisons">>;
   comparisonDelete: Expect<Out<Ret<typeof L.deleteComparison>, Res<"/api/comparisons/{cid}", "delete">, "DELETE /api/comparisons/{cid}">>;
   climateFactors: Expect<Out<L.ClimateFactors, Res<"/api/runs/{rid}/climate/factors", "get">, "GET /api/runs/{rid}/climate/factors">>;

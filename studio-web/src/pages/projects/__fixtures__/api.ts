@@ -224,6 +224,7 @@ export const CHECK: DataCheck = {
   extent_m: [2850, 2850],
   columns_missing: [],
   preview_token: "tok1",
+  elapsed_s: 0.42,
   preview_columns: ["T", "canopy", "impervious"],
 };
 

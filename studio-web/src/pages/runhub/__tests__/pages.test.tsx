@@ -405,7 +405,8 @@ describe("analysis tools", () => {
             { x: 225, y: 85 },
           ],
         }),
-        [`POST /api/runs/${rid}/stats/acf`]: capture("acf", { lags_m: [30, 60, 90], acf: [0.8, 0.4, 0.1], band_mean: [0, 0, 0], band_sd: [0.1, 0.1, 0.1] }),
+        // the last lag has no pairs: the server sends null there, and the chart leaves it out
+        [`POST /api/runs/${rid}/stats/acf`]: capture("acf", { lags_m: [30, 60, 90, 120], acf: [0.8, 0.4, 0.1, null], band_mean: [0, 0, 0, null], band_sd: [0.1, 0.1, 0.1, null] }),
       },
       (c) => c.querySelector('[data-tool="breakdown"] figure.chart-frame'),
     );

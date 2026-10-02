@@ -172,7 +172,12 @@ function placeboCaption(rows: PlaceboRow[]): string {
   const real = rows.filter((r) => !r.placebo);
   const pl = rows.filter((r) => r.placebo);
   const big = pl.filter((r) => r.verdict && !r.verdict.model_pass);
-  const parts = [`Blue: the real layers' effects (reference); grey: placebo layers, which should sit near zero.`];
+  // the real layers' effects come from the random-field (grf) re-fit: without it there is no reference
+  const parts = [
+    real.length
+      ? `Blue: the real layers' effects (reference); grey: placebo layers, which should sit near zero.`
+      : `Grey: placebo layers, which should sit near zero. The real layers' reference effects come from the random-field re-fit, which this study did not run, so there is no ratio to the real effect.`,
+  ];
   if (real.length && pl.length) parts.push(big.length ? `${big.length} placebo layer${big.length === 1 ? "" : "s"} show an effect beyond 2 SE and above 10% of the real one.` : "No placebo layer shows an effect beyond 2 SE and 10% of the real one.");
   parts.push("Orange diamond: the causal estimate per sd.");
   return parts.join(" ");

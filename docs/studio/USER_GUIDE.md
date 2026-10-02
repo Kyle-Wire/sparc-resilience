@@ -688,6 +688,5 @@ wait
 
 - The legacy desktop app (`sparc-desktop/`, the `sparc/server/` API) is unchanged and remains available until Studio reaches parity with it.
 - The ETA of a resumed run does not discount cached stages at first ([§5](#progress-and-eta)).
-- Three pages scroll sideways on phone-width screens (390 px): the run's Docs tab, the run's Track tab and Mission Control.
 - Brush strokes saved in an earlier session reopen as per-cell edits; they can be removed but not repainted.
 - Windows and macOS are not tested in CI.

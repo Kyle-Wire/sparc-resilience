@@ -143,8 +143,5 @@ The design is in [`SPEC.md`](SPEC.md), the HTTP contract in [`api.md`](api.md); 
 ## Known issues
 
 - The ETA shown when a run is resumed does not discount the stages that will come from the checkpoint, so it can overstate a resume until those stages finish.
-- On phone-width screens (390 px) the run's Docs and Track tabs and Mission Control scroll sideways.
-- Opening a finished job with a very long event log (about 20,000 events) can briefly stall the page (frames of 105–116 ms against a 100 ms budget).
 - Brush strokes saved in an earlier session reopen as per-cell edits that can be removed but not repainted.
 - The engine host's Windows named-pipe transport and, generally, Windows and macOS process handling are implemented but not tested in CI.
-- While a study's child run is fitting, a server restart can briefly index it as a live CLI run; the study re-links it when the child or the study finishes.

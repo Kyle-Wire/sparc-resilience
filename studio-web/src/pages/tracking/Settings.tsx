@@ -442,10 +442,10 @@ function About() {
     ["Host id", d.host_id],
     ["SPARC", d.versions.sparc],
     ["Python", d.versions.python],
-    ["numpy / pandas", `${d.versions.numpy} / ${d.versions.pandas}`],
+    ["numpy / pandas", `${d.versions.numpy ?? "not installed"} / ${d.versions.pandas ?? "not installed"}`],
     ["torch", d.versions.torch ?? "not installed"],
-    ["FastAPI", d.versions.fastapi],
-    ["Web build", d.web_build ? `${d.web_build.src_sha256.slice(0, 12)} · Vite ${d.web_build.vite} · React ${d.web_build.react}` : "development server"],
+    ["FastAPI", d.versions.fastapi ?? "not installed"],
+    ["Web build", d.web_build ? `${d.web_build.src_sha256.slice(0, 12)} · Vite ${d.web_build.vite ?? "?"} · React ${d.web_build.react ?? "?"}` : "development server"],
   ];
   return (
     <dl className="kv">

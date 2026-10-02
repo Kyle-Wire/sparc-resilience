@@ -130,7 +130,8 @@ export function hexbin(rid: string, body: HexbinRequest, signal?: AbortSignal): 
 
 export type AcfRequest = { layer: string; max_lag_m?: number; n_perm?: number };
 
-export type Acf = { lags_m: number[]; acf: number[]; band_mean: number[]; band_sd: number[] };
+/** `null` for lags without pairs. */
+export type Acf = { lags_m: (number | null)[]; acf: (number | null)[]; band_mean: (number | null)[]; band_sd: (number | null)[] };
 
 /** `POST /api/runs/{rid}/stats/acf` (influence.fft_acf with a permutation band). */
 export function acf(rid: string, body: AcfRequest, signal?: AbortSignal): Promise<Acf> {

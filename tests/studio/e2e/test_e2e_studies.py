@@ -47,7 +47,8 @@ def test_e2e_placebo_shift(studio_server, studio_page):
     job = _study_job(server, "study.placebo")
     assert job["params"]["kinds"] == ["shift"] and job["params"]["coarse_m"] == 60, job["params"]
     sp.goto(f"/jobs/{job['id']}")
-    page.get_by_role("link", name=re.compile(r"^\d{8}-\d{6}-")).first.wait_for(timeout=600_000)   # the child run's row
+    # the child run's row in Mission Control's child matrix (the header's run link names the parent)
+    page.get_by_role("link", name="Child run", exact=True).first.wait_for(timeout=600_000)
     sp.shot("placebo mission control")
     done = server.wait_job(job["id"], timeout=3600)
     assert done["status"] == "succeeded", done

@@ -319,9 +319,6 @@ def test_tracker_20000_events_streaming(streamed_job):
         f"longest frame {streamed_job['live_longest']:.0f} ms while streaming; slowest frames {streamed_job['frames']}"
 
 
-@pytest.mark.xfail(strict=False, reason="opening a finished 20,000-event job folds its log in frames of 105–116 ms on "
-                                        "a 4-core runner (reported to frontend-tracking: fold replayLog pages across "
-                                        "frames)")
 def test_tracker_20000_events_replayed_log(perf_site, streamed_job, studio_page):
     jid = streamed_job["jid"]
     sp: StudioPage = studio_page(perf_site["server"])

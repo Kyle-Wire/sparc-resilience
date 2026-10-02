@@ -34,15 +34,9 @@ PAGES = [
     "/jobs/{jid}",
 ]
 
-# Pages that still scroll sideways at 390 px. Each is reported to its owner; the strict xfail
-# turns into a failure once the page is fixed, so the entry has to be removed then.
-WIDE_AT_390 = {
-    "/r/{rid}/docs": "the Documents header and document picker rows do not wrap (page 680 px wide; frontend-run-hub)",
-    "/r/{rid}/track": "Mission Control's bottom tab strip widens its card and the job picker sizes to its longest "
-                      "option (frontend-foundation .stack/.card children need min-width: 0; frontend-tracking)",
-    "/jobs/{jid}": "Mission Control's bottom tab strip widens its card (frontend-foundation .stack/.card children "
-                   "need min-width: 0)",
-}
+# Pages that still scroll sideways at 390 px, each with the reason and its owner. The strict xfail
+# turns into a failure once the page is fixed, so the entry has to be removed then. None at 1.0.
+WIDE_AT_390: dict[str, str] = {}
 
 FOCUSED = """() => {
   const e = document.activeElement;

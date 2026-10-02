@@ -36,6 +36,9 @@ kbd { border: 1px solid var(--line-strong); border-bottom-width: 2px; border-rad
 .prose { max-width: 70ch; color: var(--ink-2); }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .stack { display: grid; gap: 12px; }
+/* grid and flex children may shrink below their content's width, so a wide table, log line or tab strip
+   scrolls or wraps inside its own box instead of widening the page (390 px, SPEC §14.5) */
+.stack > *, .card > * { min-width: 0; }
 .spacer { flex: 1; }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 14px; }
 .grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 14px; }

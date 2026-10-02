@@ -180,7 +180,8 @@ export function suggestColumns(pid: string, path: string): Promise<ColumnSuggest
 
 export type DataCheckFlag = { code: string; severity: "warn" | "info"; message: string };
 
-export type DoseScaleEntry = { sd: number; doses: number[]; doses_in_sd: number[]; percentile_reached: number[] };
+/** A lever without spread has no `sd` and no doses in sd units (`null`). */
+export type DoseScaleEntry = { sd: number | null; doses: number[]; doses_in_sd: (number | null)[]; percentile_reached: number[] };
 
 export type DataCheck = {
   n_points: number;
@@ -196,6 +197,8 @@ export type DataCheck = {
   extent_m: [number, number];
   columns_missing: string[];
   preview_token: string;
+  /** Seconds the check took. */
+  elapsed_s: number | null;
   /** Columns with a preview binary (additive field; absent on older servers). */
   preview_columns?: string[];
 };
@@ -249,7 +252,8 @@ export type ValidateResult = { ok: boolean; issues: Issue[]; fast_overrides: Rec
 export type ImpactRun = { run_id: string; label: string; checkpoint_done: string[]; changed_sections: string[]; refit_from: StageId | null; phrase: string };
 export type ImpactResult = { changed_sections: string[]; runs: ImpactRun[] };
 
-export type ConfigHistoryEntry = { version: number; saved_utc: string; note: string | null };
+/** `saved_utc` is `null` for a history file without a readable time. */
+export type ConfigHistoryEntry = { version: number; saved_utc: string | null; note: string | null };
 
 export type ConfigBody = { yaml: string; note?: string } | { raw: ConfigRaw; note?: string };
 
@@ -335,7 +339,8 @@ export type CheckpointInfo = {
   done: string[];
   saved_utc: string | null;
   fingerprint: string | null;
-  matches_snapshot: { data: boolean; code: boolean; config: boolean } | null;
+  /** Each field is `null` when the checkpoint sidecar cannot tell. */
+  matches_snapshot: { data: boolean | null; code: boolean | null; config: boolean | null } | null;
   changed_sections: string[];
   resumable: boolean;
   reuses: StageId[];
@@ -398,7 +403,7 @@ export type StudioSettings = {
 export type StorageSummary = {
   workspace_bytes: number;
   free_bytes: number;
-  cache: { name: string; bytes: number; mtime: string }[];
+  cache: { name: string; bytes: number; mtime: string | null }[];
   runs: { run_id: string; label: string | null; project_id: string | null; outputs_bytes: number; checkpoint_bytes: number }[];
   jobs_bytes: number;
 };
