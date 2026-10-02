@@ -424,13 +424,15 @@ def _causal_section(m: dict, run: Path) -> dict | None:
 
 
 def _corners(cfg, g) -> dict | None:
-    crs = cfg.data.get("crs")
+    """``[lat, lon]`` of the corner cell centres.  The run frame is ``data.reproject_to`` (metres) when the data
+    were reprojected, else ``data.crs`` scaled to metres by its coordinate unit."""
+    crs = cfg.data.get("reproject_to") or cfg.data.get("crs")
     if not crs:
         return None
     from pyproj import Transformer
 
     tr = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
-    s = cfg.coord_scale
+    s = 1.0 if cfg.data.get("reproject_to") else cfg.coord_scale
     x1, y1 = g.x0 + (g.nx - 1) * g.dx, g.y0 + (g.ny - 1) * g.dy
 
     def ll(xm, ym):

@@ -17,21 +17,36 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import zipfile
 from pathlib import Path
 
 from sparc.studio import db as dbmod
-from sparc.studio.errors import ApiError
+from sparc.studio.errors import ApiError, validation_error
 from sparc.studio.workspace import new_id, read_json, utc_now, write_json_atomic
 
 log = logging.getLogger("sparc.studio.exports")
 
-__all__ = ["IMAGE_TYPES", "IMAGE_MAX_BYTES", "finding_out", "get_row", "get_row_or_none", "list_findings",
-           "create_finding", "patch_finding", "delete_finding", "image_path", "set_image", "finding_blocks",
-           "export_findings", "findings_dir"]
+__all__ = ["IMAGE_TYPES", "IMAGE_MAX_BYTES", "PNG_SIGNATURE", "image_ok", "finding_out", "get_row", "get_row_or_none",
+           "list_findings", "create_finding", "patch_finding", "delete_finding", "image_path", "set_image",
+           "finding_blocks", "export_findings", "findings_dir"]
 
 IMAGE_TYPES = {"image/png": ".png", "image/svg+xml": ".svg"}
 IMAGE_MAX_BYTES = 10 * 2 ** 20
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+#: what may precede an SVG's root element: an XML declaration, comments, a doctype, whitespace
+_SVG_PROLOG = re.compile(r"^(?:<\?xml[^>]*\?>|<!--.*?-->|<!DOCTYPE[^>]*>|\s+)*", re.S | re.I)
+
+
+def image_ok(path: Path, suffix: str) -> bool:
+    """Whether the uploaded file holds what its type says: the PNG signature, or an SVG document (an ``<svg``
+    root element after the prolog)."""
+    with open(path, "rb") as f:
+        head = f.read(4096)
+    if suffix == ".png":
+        return head.startswith(PNG_SIGNATURE)
+    text = head.decode("utf-8", errors="replace").lstrip("\ufeff")
+    return text[_SVG_PROLOG.match(text).end():].startswith("<svg")
 
 
 def findings_dir(db, project_id: str) -> Path:
@@ -96,6 +111,10 @@ def create_finding(db, body: dict) -> dict:
         r = db.fetchone("SELECT project_id FROM runs WHERE id = ?", (body["run_id"],))
         if r is None:
             raise ApiError("not_found", f"no run {body['run_id']!r}")
+        if r.get("project_id") and r["project_id"] != pid:
+            raise validation_error([{"path": "run_id", "code": "mismatch",
+                                     "message": f"run {body['run_id']} belongs to another project"}],
+                                   "the run belongs to another project")
     pos = db.fetchval("SELECT MAX(position) FROM findings WHERE project_id = ?", (pid,))
     now = utc_now()
     row = {"id": new_id("fd"), "project_id": pid, "run_id": body.get("run_id"), "view": body.get("view") or "",
@@ -290,7 +309,8 @@ def _reindex(db, workspace) -> dict:
         doc = read_json(mirror)
         if not isinstance(doc, dict) or not doc.get("id"):
             continue
-        img = mirror.parent / doc["image"] if doc.get("image") else None
+        name = Path(str(doc.get("image") or "")).name      # a bare file name next to the mirror, nothing else
+        img = mirror.parent / name if name and Path(name).suffix in IMAGE_TYPES.values() else None
         db.insert("findings", {
             "id": doc["id"], "project_id": doc.get("project_id"), "run_id": doc.get("run_id"),
             "view": doc.get("view"), "url_state": doc.get("url_state"), "title": doc.get("title"),

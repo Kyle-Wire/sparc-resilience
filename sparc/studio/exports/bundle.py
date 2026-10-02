@@ -40,6 +40,7 @@ def select_files(run_dir: Path, cfg_raw: dict | None, outputs: list[str] | None 
     from sparc.core.catalog import is_ignored, match_output
 
     run_dir = Path(run_dir)
+    root = run_dir.resolve()
     specs = _specs(cfg_raw)
     want = set(outputs) if outputs else None
     out = []
@@ -61,7 +62,14 @@ def select_files(run_dir: Path, cfg_raw: dict | None, outputs: list[str] | None 
                 continue
             if want is not None and spec.id not in want and not (spec.id == "checkpoint" and include_checkpoint):
                 continue
-            out.append((spec.id, rel, Path(dirpath) / name))
+            path = Path(dirpath) / name
+            if path.is_symlink():                   # a link out of the run folder is never packed
+                try:
+                    if root not in path.resolve(strict=True).parents:
+                        continue
+                except OSError:                     # dangling
+                    continue
+            out.append((spec.id, rel, path))
     return out
 
 

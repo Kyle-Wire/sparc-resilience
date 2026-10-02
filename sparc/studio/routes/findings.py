@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -79,7 +80,8 @@ async def delete_finding(fid: str, sctx: StudioContext = Depends(get_ctx)):
 
 @router.put("/findings/{fid}/image", response_model=ImageUrl)
 async def put_image(fid: str, request: Request, sctx: StudioContext = Depends(get_ctx)):
-    """Raw ``image/png`` or ``image/svg+xml`` body (≤ 10 MB), validated by content type and size."""
+    """Raw ``image/png`` or ``image/svg+xml`` body (≤ 10 MB), validated by content type, size and content (the
+    PNG signature, an ``<svg`` root) before it replaces the finding's image."""
     row = F.get_row(sctx.db, fid)
     ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
     suffix = F.IMAGE_TYPES.get(ctype)
@@ -87,11 +89,16 @@ async def put_image(fid: str, request: Request, sctx: StudioContext = Depends(ge
         raise ApiError("bad_suffix", f"content type {ctype or '(none)'!r} is not an accepted image",
                        detail={"content_type": ctype, "allowed": sorted(F.IMAGE_TYPES)})
     dest = F.findings_dir(sctx.db, row["project_id"]) / f"{fid}{suffix}"
-    await stream_upload(request, dest, max_bytes=F.IMAGE_MAX_BYTES, allowed_suffixes=(suffix,),
-                        content_types=(ctype,))
-    if suffix == ".png" and dest.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
-        dest.unlink()
-        raise ApiError("bad_suffix", "the body is not a PNG image", detail={"content_type": ctype})
+    staged = dest.with_name(f".{fid}.incoming{suffix}")      # the current image stays until the new one checks out
+    try:
+        await stream_upload(request, staged, max_bytes=F.IMAGE_MAX_BYTES, allowed_suffixes=(suffix,),
+                            content_types=(ctype,))
+        if not await asyncio.to_thread(F.image_ok, staged, suffix):
+            raise ApiError("bad_suffix", f"the body is not {'a PNG' if suffix == '.png' else 'an SVG'} image",
+                           detail={"content_type": ctype})
+        os.replace(staged, dest)
+    finally:
+        staged.unlink(missing_ok=True)
     out = await asyncio.to_thread(F.set_image, sctx.db, fid, dest)
     return {"image_url": out["image_url"]}
 

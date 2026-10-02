@@ -383,7 +383,9 @@ def _findings(env) -> list[dict]:
     from sparc.studio.exports import findings as F
 
     if env.finding_ids:
-        rows = [r for r in (F.get_row_or_none(env.db, fid) for fid in env.finding_ids) if r is not None]
+        pid = env.project.get("id")
+        rows = [r for r in (F.get_row_or_none(env.db, fid) for fid in env.finding_ids)
+                if r is not None and (not pid or r.get("project_id") == pid)]      # never another project's
     else:
         rows = env.db.fetchall("SELECT * FROM findings WHERE run_id = ? ORDER BY position, created_utc",
                                (env.ctx.run_id,))

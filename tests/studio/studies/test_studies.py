@@ -76,6 +76,19 @@ def test_post_actions_run_on_the_launch_snapshot(client, ctx, fixture_run, fake_
     assert rows["planner"]["state"] == "done" and rows["planner"]["job_id"]
 
 
+def test_writeup_reads_the_merged_manifest(client, ctx, fixture_run, fake_studies, wait_job):
+    """``post.writeup`` writes from the merged manifest: a section only its stage file carries still counts."""
+    rid, rd = fixture_run
+    m = json.loads((rd / "manifest.json").read_text())
+    m.pop("climate")                                       # climate.json still holds it
+    (rd / "manifest.json").write_text(json.dumps(m))
+    ctx.services["reader"].forget(rid)
+    job = _post(client, f"/api/runs/{rid}/actions/writeup")
+    _done(client, wait_job, job)
+    assert "## Climate futures" in (rd / "methods.md").read_text()
+    assert "climate" not in json.loads((rd / "manifest.json").read_text())      # the manifest itself is untouched
+
+
 def test_planner_without_layers_is_refused(client, ctx, demo, place_run):
     def drop(raw):
         raw.pop("planner", None)
@@ -349,6 +362,36 @@ def test_attach_hook_enqueues_through_the_server_loop(client, ctx, fixture_run, 
     _done(client, wait_job, job)
     # a second finish while one is waiting does not queue a duplicate
     assert service.get_row(ctx.db, row["id"])["status"] == "succeeded"
+
+
+def test_a_cancelled_study_rederives_its_running_child(client, ctx, fixture_run):
+    """A child registered while it ran (``running``) is re-derived when the study ends, here cancelled."""
+    import os
+    import socket
+
+    from sparc.studio.studies import kinds, service
+    from sparc.studio.workspace import utc_now
+    from tests.studio.studies.fakes import SYNTH
+
+    rid, _ = fixture_run
+    pid = ctx.db.fetchone("SELECT project_id FROM runs WHERE id = ?", (rid,))["project_id"]
+    row = service.create_study(ctx.db, project_id=pid, kind="placebo", target_run_id=rid, params={"kinds": ["shift"]},
+                               status="running")
+    child = Path(row["out_dir"]) / "children" / "synth_placebo_shift_coarse120"
+    shutil.copytree(SYNTH, child, ignore=shutil.ignore_patterns("events.jsonl", "FIXTURE.json", "manifest.json"))
+    state = json.loads((child / "run_state.json").read_text())
+    state.update(status="running", pid=os.getpid(), host=socket.gethostname(), started_utc=utc_now())
+    (child / "run_state.json").write_text(json.dumps(state))
+    job = {"id": "j_test", "study_id": row["id"], "run_id": rid, "project_id": pid, "status": "cancelled"}
+    cid = kinds._register_child(ctx, job, child)
+    got = ctx.db.fetchone("SELECT origin, status, parent_run_id FROM runs WHERE id = ?", (cid,))
+    assert got == {"origin": "study_child", "status": "running", "parent_run_id": rid}
+    state["status"] = "cancelled"                          # the pass was cancelled while it fitted this child
+    (child / "run_state.json").write_text(json.dumps(state))
+    kinds.study_on_finish(ctx, job, None)
+    got = ctx.db.fetchone("SELECT origin, status FROM runs WHERE id = ?", (cid,))
+    assert got["origin"] == "study_child" and got["status"] in ("partial", "cancelled")
+    assert service.get_row(ctx.db, row["id"])["status"] == "cancelled"
 
 
 # ---------------------------------------------------------------------------

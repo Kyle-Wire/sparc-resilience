@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from sparc.studio.app import StudioContext, get_ctx
-from sparc.studio.errors import ApiError
+from sparc.studio.errors import ApiError, validation_error
 from sparc.studio.exports import store
 from sparc.studio.exports.kinds import ReportSection
 from sparc.studio.schemas.common import Job, Ok
@@ -121,6 +121,11 @@ async def report_preview(pid: str, body: PreviewRequest, sctx: StudioContext = D
     if ctx.project_id and ctx.project_id != pid:
         raise ApiError("validation", f"run {body.run_id} belongs to another project",
                        detail={"errors": [{"path": "run_id", "message": "other project", "code": "mismatch"}]})
+    for key, table in (("result_ids", "results"), ("plan_ids", "plans"), ("finding_ids", "findings")):
+        bad = await asyncio.to_thread(store.unknown_ids, sctx.db, table, getattr(body, key), pid)
+        if bad:                             # as POST /api/exports refuses them for export.report
+            raise validation_error([{"path": key, "code": "unknown_id", "message": f"not in this project: {bad}"}],
+                                   f"unknown {table}")
     html = await asyncio.to_thread(build_report, ctx, sctx.db, body.sections, result_ids=body.result_ids or [],
                                    plan_ids=body.plan_ids or [], finding_ids=body.finding_ids, fmt="html",
                                    project=project)

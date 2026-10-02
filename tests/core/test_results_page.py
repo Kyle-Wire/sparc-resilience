@@ -233,6 +233,12 @@ def test_corners_and_page_lat_lon_know_the_hemisphere(tmp_path):
     cfg = SimpleNamespace(data={"crs": "EPSG:32756"}, coord_scale=1.0)     # UTM 56S (Sydney)
     c = _corners(cfg, g)
     assert c["sw"][0] < -30 and c["sw"][1] > 150
+    # data reprojected at load (data.reproject_to): the run frame is that CRS in metres, not data.crs scaled
+    from pyproj import Transformer
+
+    rep = SimpleNamespace(data={"crs": "EPSG:4326", "reproject_to": "EPSG:32756"}, coord_scale=1.0)
+    lon, lat = Transformer.from_crs("EPSG:32756", "EPSG:4326", always_xy=True).transform(334000.0, 6250000.0)
+    assert _corners(rep, g)["sw"] == pytest.approx([lat, lon])
     if shutil.which("node") is None:
         pytest.skip("node is not available")
     src = TEMPLATE.read_text("utf-8")

@@ -259,6 +259,56 @@ def test_findings_crud_image_and_export(client, ctx, demo, fixture_run, wait_job
     assert not (Path(demo["dir"]) / "findings" / f"{second['id']}.json").exists()
 
 
+def test_bad_images_never_replace_a_good_one(client, demo, fixture_run):
+    """A body that is not what its type says is refused before it lands: the finding keeps its image."""
+    rid, _ = fixture_run
+    f = client.post("/api/findings", json={"project_id": demo["id"], "run_id": rid, "view": "v", "url_state": "",
+                                           "title": "t", "snapshot": {}}).json()
+    assert client.put(f"/api/findings/{f['id']}/image", content=PNG, headers={"Content-Type": "image/png"}).status_code \
+        == 200
+    bad = client.put(f"/api/findings/{f['id']}/image", content=b"GIF89a not a png",
+                     headers={"Content-Type": "image/png"})
+    assert bad.status_code == 415 and bad.json()["error"]["code"] == "bad_suffix"
+    assert client.get(f"/api/findings/{f['id']}/image").content == PNG
+    html_as_svg = client.put(f"/api/findings/{f['id']}/image", content=b"<html><script>alert(1)</script></html>",
+                             headers={"Content-Type": "image/svg+xml"})
+    assert html_as_svg.status_code == 415
+    assert client.get(f"/api/findings/{f['id']}/image").content == PNG
+    d = Path(demo["dir"]) / "findings"
+    assert sorted(p.name for p in d.iterdir()) == sorted([f"{f['id']}.json", f"{f['id']}.png"])   # no leftovers
+
+
+def test_other_projects_objects_are_refused(client, demo, fixture_run):
+    """Findings, report previews and exports only take objects of their own project."""
+    rid, _ = fixture_run
+    other = client.post("/api/projects", json={"name": "Other city", "template": "blank"})
+    assert other.status_code == 201, other.text
+    opid = other.json()["project"]["id"]
+    r = client.post("/api/findings", json={"project_id": opid, "run_id": rid, "view": "v", "url_state": "",
+                                           "title": "t", "snapshot": {}})
+    assert r.status_code == 422 and r.json()["error"]["detail"]["errors"][0]["path"] == "run_id"
+    theirs = client.post("/api/findings", json={"project_id": opid, "view": "v", "url_state": "",
+                                                "title": "not yours", "snapshot": {"secret": 42}}).json()
+    r = client.post(f"/api/projects/{demo['id']}/report/preview",
+                    json={"run_id": rid, "sections": ["findings"], "finding_ids": [theirs["id"]]})
+    assert r.status_code == 422 and r.json()["error"]["detail"]["errors"][0]["path"] == "finding_ids"
+    r = client.post("/api/exports", json={"kind": "findings", "project_id": demo["id"],
+                                          "params": {"ids": [theirs["id"]], "format": "html"}})
+    assert r.status_code == 422
+
+
+def test_bundle_leaves_out_links_out_of_the_run(client, demo, fixture_run, wait_job, tmp_path):
+    rid, rd = fixture_run
+    secret = tmp_path / "secret.txt"
+    secret.write_text("not part of the run")
+    (rd / "environment.txt").unlink()
+    (rd / "environment.txt").symlink_to(secret)
+    ex = _export(client, wait_job, demo["id"], "bundle", {"run_id": rid})
+    z = _zip(client, ex)
+    assert f"{rid}/environment.txt" not in z.namelist() and f"{rid}/manifest.json" in z.namelist()
+    assert not any(b"not part of the run" in z.read(n) for n in z.namelist())
+
+
 def test_reindex_rebuilds_exports_and_findings(client, ctx, demo, fixture_run, wait_job):
     from sparc.studio import db as dbmod
 
@@ -353,3 +403,17 @@ def test_report_reads_results_and_plans_from_their_on_disk_formats(client, ctx, 
     assert "Shading the hottest blocks cools the city by 0.21 °F." in html
     assert "Canopy budget" in html and "1,500 on canopy treats 120 cells" in html and "90% of plan" in html
     assert html.count("data:image/png;base64,") == 2                      # the result's ΔT map and the plan's doses
+
+
+def test_climate_sentences_without_warming_numbers():
+    """Projections that carry no warming numbers (an older or partial climate section) are skipped, not fatal."""
+    from sparc.studio.exports.narrative import climate_sentences, summary_sentences  # noqa: F401
+
+    assert climate_sentences({"climate": {"projections": [{"label": "SSP2-4.5", "period": "2041-2060"}]}}, "°F") == [
+        "This run has no climate projections with warming numbers."]
+    m = {"climate": {"n_models": 3, "projections": [
+        {"label": "SSP2-4.5", "experiment": "ssp245", "period": "2041-2060", "n_models": 3,
+         "warming": {"median": 2.1, "p10": 1.5, "p90": 2.9}},
+        {"label": "SSP5-8.5", "experiment": "ssp585", "period": "2081-2100"}]}}
+    out = climate_sentences(m, "°F")
+    assert out[0].startswith("3 CMIP6 models: under SSP2-4.5 by 2041–2060 summer highs warm by +2.1 °F")

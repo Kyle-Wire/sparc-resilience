@@ -22,7 +22,7 @@ from sparc.studio.workspace import new_id, read_json, utc_now, write_json_atomic
 log = logging.getLogger("sparc.studio.exports")
 
 __all__ = ["KINDS", "RUN_KINDS", "REF_PARAM", "export_out", "get_row", "list_exports", "create_export", "reconcile",
-           "complete", "delete_export", "export_dir", "write_record"]
+           "complete", "delete_export", "export_dir", "write_record", "unknown_ids"]
 
 KINDS = ("bundle", "gis", "page", "report", "findings", "decision_pack", "plan_pack", "compare_pack")
 #: kinds whose params name the run they export
@@ -199,7 +199,8 @@ _LABELS = {"bundle": "Run bundle", "gis": "GIS pack", "page": "Results page", "r
            "compare_pack": "Compare pack"}
 
 
-def _unknown_ids(db, table: str, ids, project_id: str) -> list[str]:
+def unknown_ids(db, table: str, ids, project_id: str) -> list[str]:
+    """The ids of ``ids`` that are not ``table`` rows of the project (results: of the project's runs)."""
     bad = []
     for i in ids or []:
         if table == "results":
@@ -218,7 +219,7 @@ def _precheck(sctx, kind: str, params: dict, run_id: str | None, project_id: str
     db = sctx.db
     for key, table in (("result_ids", "results"), ("plan_ids", "plans"), ("finding_ids", "findings"),
                        ("ids", "findings")):
-        bad = _unknown_ids(db, table, params.get(key), project_id)
+        bad = unknown_ids(db, table, params.get(key), project_id)
         if bad:
             raise validation_error([{"path": f"params.{key}", "code": "unknown_id",
                                      "message": f"not in this project: {bad}"}], f"unknown {table}")

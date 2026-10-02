@@ -49,8 +49,8 @@ log = logging.getLogger("sparc.studio.studies")
 
 __all__ = ["BaselinesParams", "PlannerParams", "EmulatorParams", "UncertaintyParams", "WriteupParams",
            "PlaceboParams", "SimcheckParams", "MultiverseParams", "ReproduceParams", "BenchmarkParams",
-           "PARAMS", "run_config", "estimate_kind", "enqueue_uncertainty", "child_meta", "GHCN_HOST",
-           "BASELINE_MODELS", "CORE_STAGES"]
+           "PARAMS", "run_config", "merged_manifest", "estimate_kind", "enqueue_uncertainty", "child_meta",
+           "GHCN_HOST", "BASELINE_MODELS", "CORE_STAGES"]
 
 GHCN_HOST = "noaa-ghcn-pds.s3.amazonaws.com"
 #: ``sparc.core.baselines.BASELINES`` (kept here so validating params never imports the core models)
@@ -399,6 +399,20 @@ def post_uncertainty(ctx, params: UncertaintyParams) -> dict:
     return {"n_scenarios": len(out.get("scenarios") or []), "sources": out.get("sources") or {}}
 
 
+def merged_manifest(ctx) -> dict:
+    """The run's merged manifest (SPEC §6.2), as the run hub reads it: ``manifest.json`` plus the sections only
+    their stage files carry (``causal.json``, ``optimize.json``, ``climate.json`` …) - a run stopped before its
+    manifest was finalised still gets them."""
+    import time
+
+    from sparc.studio.runs.reader import RunContext
+
+    row = ctx.db.fetchone("SELECT * FROM runs WHERE id = ?", (ctx.run_id,)) if ctx.run_id else None
+    if row is None:
+        return json.loads((Path(ctx.run_dir) / "manifest.json").read_text(encoding="utf-8"))
+    return RunContext(row, ("writeup", time.time())).manifest
+
+
 @job_kind("post.writeup", lane="medium", label="Methods & model card", params=WriteupParams, needs_run=True,
           locks_run=True, on_finish=_post_on_finish, estimate=_post_estimate("writeup"))
 def post_writeup(ctx, params: WriteupParams) -> dict:
@@ -406,7 +420,7 @@ def post_writeup(ctx, params: WriteupParams) -> dict:
     from sparc.core.writeup import methods_markdown, model_card_markdown
 
     run_dir = Path(ctx.run_dir)
-    m = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))     # the merged manifest
+    m = merged_manifest(ctx)
     files = []
     for name, text in (("methods.md", methods_markdown(m)), ("model_card.md", model_card_markdown(m))):
         runio.write_text_atomic(run_dir / name, text)
@@ -531,14 +545,15 @@ def study_on_finish(sctx, job: dict, result) -> None:
     elif old.get("label") and not summary.get("label"):
         summary["label"] = old["label"]
     service.update_study(db, sid, hub=sctx.hub, status=status, summary=summary)
+    # every child is re-derived (a cancelled or failed pass leaves the child it was fitting "running"), then the
+    # parent run
+    _refresh_children(sctx, job)
     reg = sctx.services.get("registry")
-    if reg is not None:
-        for rid in [*ids, job.get("run_id")]:
-            if rid:
-                try:
-                    reg.refresh(rid)
-                except Exception:
-                    log.exception("refreshing run %s failed", rid)
+    if reg is not None and job.get("run_id"):
+        try:
+            reg.refresh(job["run_id"])
+        except Exception:
+            log.exception("refreshing run %s failed", job["run_id"])
     if status == "succeeded" and kind in service.ATTACHABLE:
         try:
             auto = bool(sctx.settings().auto_uncertainty)

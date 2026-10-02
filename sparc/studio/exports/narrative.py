@@ -132,15 +132,26 @@ def summary_sentences(ctx, unit: str, headline: str | None = None) -> list[str]:
     cl = climate_mid(m)
     if cl is not None:
         w = cl["warming"]
-        out.append(f"By {cl['period'].replace('-', '–')} under {cl.get('label') or cl.get('experiment')}, "
+        out.append(f"By {_period(cl)} under {cl.get('label') or cl.get('experiment')}, "
                    f"{cl.get('n_models')} climate models put summer warming at {sfmt(w.get('median'), 1)} {unit} "
                    f"(10–90% of models {sfmt(w.get('p10'), 1)} to {sfmt(w.get('p90'), 1)}).")
     return out
 
 
-def climate_mid(m: dict) -> dict | None:
+def _projections(m: dict) -> list[dict]:
+    """The climate projections that carry a median warming (others - a partial section - are left out)."""
     cl = m.get("climate") or {}
-    P = [p for p in cl.get("projections") or [] if isinstance(p, dict) and isinstance(p.get("warming"), dict)]
+    return [p for p in cl.get("projections") or [] if isinstance(p, dict) and isinstance(p.get("warming"), dict)
+            and _num(p["warming"].get("median")) is not None]
+
+
+def _period(p: dict) -> str:
+    return str(p.get("period") or "").replace("-", "–")
+
+
+def climate_mid(m: dict) -> dict | None:
+    """The mid-century SSP2-4.5 projection (else the first one with a warming)."""
+    P = _projections(m)
     if not P:
         return None
     return next((p for p in P if p.get("experiment") == "ssp245" and p.get("period") == "2041-2060"), P[0])
@@ -261,16 +272,18 @@ def plan_sentences(plan: dict, unit: str) -> str:
 
 def climate_sentences(m: dict, unit: str) -> list[str]:
     cl = m.get("climate") or {}
-    P = [p for p in cl.get("projections") or [] if isinstance(p, dict)]
-    if not P:
+    if not cl.get("projections"):
         return ["This run has no climate projections."]
+    P = _projections(m)
+    if not P:
+        return ["This run has no climate projections with warming numbers."]
     out = []
     mid = climate_mid(m)
-    hi = max(P, key=lambda p: (p.get("warming") or {}).get("median") or -1e9)
+    hi = max(P, key=lambda p: float(p["warming"]["median"]))
     out.append(f"{cl.get('n_models') or mid.get('n_models')} CMIP6 models: under {mid.get('label')} by "
-               f"{mid['period'].replace('-', '–')} summer highs warm by {sfmt(mid['warming'].get('median'), 1)} {unit}; "
+               f"{_period(mid)} summer highs warm by {sfmt(mid['warming'].get('median'), 1)} {unit}; "
                f"the largest median warming is {sfmt(hi['warming'].get('median'), 1)} {unit} "
-               f"({hi.get('label')}, {hi['period'].replace('-', '–')}).")
+               f"({hi.get('label')}, {_period(hi)}).")
     pres = cl.get("present") or {}
     thr = (cl.get("thresholds") or [None])[0]
     share = (pres.get("share_at_or_above") or {}).get(f"{float(thr):.1f}") if thr is not None else None
