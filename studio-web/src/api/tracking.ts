@@ -382,8 +382,10 @@ export type SystemInfo = {
   workspace: string;
   workspace_bytes: number;
   host_id: string;
-  versions: { python: string; sparc: string; numpy: string; pandas: string; torch: string | null; fastapi: string };
-  web_build: { src_sha256: string; vite: string; react: string } | null;
+  /** `null` for a package that is not installed. */
+  versions: { python: string; sparc: string; numpy: string | null; pandas: string | null; torch: string | null; fastapi: string | null };
+  /** `null` keys when BUILD_INFO.json lacks them. */
+  web_build: { src_sha256: string; vite: string | null; react: string | null } | null;
 };
 
 export function getSystem(signal?: AbortSignal): Promise<SystemInfo> {
@@ -399,7 +401,8 @@ export function netcheck(hosts?: string[]): Promise<NetcheckResult> {
 export type StorageInfo = {
   workspace_bytes: number;
   free_bytes: number;
-  cache: { name: string; bytes: number; mtime: string }[];
+  /** `mtime` is `null` for a cache folder that vanished while it was measured. */
+  cache: { name: string; bytes: number; mtime: string | null }[];
   runs: { run_id: string; label: string | null; project_id: string | null; outputs_bytes: number; checkpoint_bytes: number }[];
   studies: { study_id: string; bytes: number }[];
   jobs_bytes: number;

@@ -281,7 +281,9 @@ export function CheckpointCard({ rid, cp }: { rid: string; cp: CheckpointInfo })
     }
   };
   const snap = cp.matches_snapshot;
-  const mismatched = snap ? (["data", "code", "config"] as const).filter((k) => !snap[k]) : [];
+  // a field is null when the checkpoint sidecar cannot tell (an older checkpoint)
+  const mismatched = snap ? (["data", "code", "config"] as const).filter((k) => snap[k] === false) : [];
+  const unknown = snap ? (["data", "code", "config"] as const).filter((k) => snap[k] === null) : [];
   return (
     <Block
       title="Checkpoint"
@@ -303,7 +305,7 @@ export function CheckpointCard({ rid, cp }: { rid: string; cp: CheckpointInfo })
           <dt>Stages done</dt>
           <dd>{cp.done.join(", ") || "—"}</dd>
           <dt>Matches launch snapshot</dt>
-          <dd>{snap ? (mismatched.length ? `no: ${mismatched.join(", ")} changed` : "yes") : "—"}</dd>
+          <dd>{snap ? (mismatched.length ? `no: ${mismatched.join(", ")} changed` : unknown.length ? `cannot tell for ${unknown.join(", ")}` : "yes") : "—"}</dd>
           {cp.changed_sections.length ? (
             <>
               <dt>Changed sections</dt>

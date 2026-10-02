@@ -1,4 +1,4 @@
-"""Generated caveats of a run - the results page's ``caveats()`` logic (``scripts/results_page/template.html``)
+"""Generated caveats of a run - the results page's ``caveats()`` logic (``sparc/core/results_page/template.html``)
 in Python, item for item and in the same order (SPEC §6.4 Overview).
 
 Cross-item contract (SPEC §10.2): ``caveats_for(run_ctx) -> list[str]``, used by the run-hub views and by

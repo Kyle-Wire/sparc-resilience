@@ -17,9 +17,24 @@ export function CorrelogramTool({ rid, groups, layerKey }: ToolProps) {
   const body: AcfRequest | null = key ? { layer: key, n_perm: 19, ...(maxLag ? { max_lag_m: maxLag } : {}) } : null;
   const res = useAnalysis(rid, "acf", body, acf);
   const d = res.data;
-  const lo = d ? d.band_mean.map((m, i) => m - 1.96 * d.band_sd[i]) : [];
-  const hi = d ? d.band_mean.map((m, i) => m + 1.96 * d.band_sd[i]) : [];
-  const reach = d ? d.lags_m.filter((_lag, i) => d.acf[i] > hi[i]).reduce((m, v) => Math.max(m, v), -1) : -1;
+  // lags without pairs come back as null: plot only the lags with an autocorrelation and a band
+  const pts = useMemo(() => {
+    const out = { x: [] as number[], y: [] as number[], mean: [] as number[], lo: [] as number[], hi: [] as number[] };
+    if (!d) return out;
+    d.lags_m.forEach((lag, i) => {
+      const a = d.acf[i];
+      const m = d.band_mean[i];
+      const sd = d.band_sd[i];
+      if (lag == null || a == null || m == null || sd == null) return;
+      out.x.push(lag);
+      out.y.push(a);
+      out.mean.push(m);
+      out.lo.push(m - 1.96 * sd);
+      out.hi.push(m + 1.96 * sd);
+    });
+    return out;
+  }, [d]);
+  const reach = pts.x.filter((_lag, i) => pts.y[i] > pts.hi[i]).reduce((m, v) => Math.max(m, v), -1);
   return (
     <div className="stack" data-tool="correlogram">
       <div className="row">
@@ -33,8 +48,8 @@ export function CorrelogramTool({ rid, groups, layerKey }: ToolProps) {
           title={`Correlogram of ${meta.label}`}
           units="autocorrelation"
           series={[
-            { id: "band", label: "19-permutation band (95%)", x: d.lags_m, y: d.band_mean, lo, hi, muted: true, dashed: true, points: false },
-            { id: "acf", label: meta.label, x: d.lags_m, y: d.acf, emphasis: true },
+            { id: "band", label: "19-permutation band (95%)", x: pts.x, y: pts.mean, lo: pts.lo, hi: pts.hi, muted: true, dashed: true, points: false },
+            { id: "acf", label: meta.label, x: pts.x, y: pts.y, emphasis: true },
           ]}
           xLabel="Lag"
           xUnit="m"

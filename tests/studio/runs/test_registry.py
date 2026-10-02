@@ -336,3 +336,46 @@ def test_live_run_imported_outside_the_watch_roots_is_followed(client, ctx, tmp_
     tick(client, ctx)
     assert wait_job(client, job["id"], timeout=20)["status"] == "succeeded"
     assert run_row(ctx, rd)["status"] == "complete"
+
+
+def test_fitting_study_child_is_running_not_a_cli_run(client, ctx, watch_root):
+    """A study child that is fitting has a live ``run_state.json`` and no ``run.core`` job of its own: the
+    registry reads it as ``running`` under its study (never ``external_live``), the watcher starts no
+    ``run.external`` pseudo-job for it, and its id survives a reindex once its manifest exists."""
+    rd = ctx.workspace.projects_dir / "city" / "studies" / "st_child" / "children" / "city_placebo_grf"
+    rd.mkdir(parents=True)
+    started = _now(-5)
+    _state(rd, stage="S2_S3", job="j_study", started_utc=started)
+    ctx.services["registry"].scan()
+    row = run_row(ctx, rd)
+    assert row["origin"] == "study_child" and row["study_id"] == "st_child" and row["status"] == "running"
+    assert row["id"].startswith(started[:10].replace("-", "") + "-" + started[11:19].replace(":", "") + "-")
+    tick(client, ctx)
+    assert external_job(ctx, row["id"]) is None and run_row(ctx, rd)["status"] == "running"
+    # a row an older server flipped to external_live is put back on the next watcher pass, without a pseudo-job
+    ctx.db.update("runs", {"id": row["id"]}, {"origin": "external_live", "status": "external_live"})
+    tick(client, ctx)
+    back = run_row(ctx, rd)
+    assert back["origin"] == "study_child" and back["status"] == "running" and external_job(ctx, row["id"]) is None
+    # the fit ends: the manifest (written at the end, later than the start) must not change the id
+    (rd / "manifest.json").write_text(json.dumps({"name": "city_placebo_grf", "created_utc": _now(1200),
+                                                  "run_meta": {"study_id": "st_child", "origin": "study_child"}}))
+    _state(rd, status="succeeded", stage="finish", started_utc=started)
+    ctx.services["registry"].refresh(row["id"])
+    assert run_row(ctx, rd)["status"] == "complete"
+    ctx.db.execute("DELETE FROM runs")
+    ctx.services["registry"].scan()
+    assert run_row(ctx, rd)["id"] == row["id"]
+
+
+def test_live_run_naming_a_study_in_a_watch_root_is_not_followed(client, ctx, watch_root):
+    """A study child found through a watch root (its manifest's ``run_meta`` names the study) is not a CLI run."""
+    rd = watch_root / "city_mv_no_physics"
+    rd.mkdir()
+    (rd / "manifest.json").write_text(json.dumps({"name": "city_mv_no_physics", "created_utc": _now(-60),
+                                                  "run_meta": {"study_id": "st_mv", "origin": "study_child"}}))
+    _state(rd, stage="S1")
+    tick(client, ctx)
+    row = run_row(ctx, rd)
+    assert row["status"] == "running" and row["origin"] != "external_live"
+    assert external_job(ctx, row["id"]) is None

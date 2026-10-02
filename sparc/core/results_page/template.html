@@ -1,3 +1,8 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{TITLE}}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -148,6 +153,8 @@ ul.plain { margin: 0; padding-left: 1.1em; display: grid; gap: 6px; color: var(-
 footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
+</head>
+<body>
 
 <nav class="nav" aria-label="Sections">
   <ul>
@@ -178,7 +185,7 @@ footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
   <section class="block" id="map">
     <header>
       <h2>Map explorer</h2>
-      <p class="prose">Pick a theme, then a layer. Hover or tap a cell for its value. Each pixel is one 30 m cell; blank areas had no observations. Blue is cooler and red is warmer, relative to the city median or to no change.</p>
+      <p class="prose">Pick a theme, then a layer. Hover or tap a cell for its value. Each pixel is one {{CELL}}; blank areas had no observations. Blue is cooler and red is warmer, relative to the city median or to no change.</p>
     </header>
     <div class="controls">
       <div class="seg" id="groups" role="group" aria-label="Map theme"></div>
@@ -230,7 +237,7 @@ footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
         <details><summary>Table view</summary><div class="tablewrap" id="tbl-distance"></div></details>
       </div>
       <div class="card">
-        <h3>Models on the main 2 km blocks</h3>
+        <h3>Models on the main {{BLOCK}} blocks</h3>
         <p class="cap" id="modelCap"></p>
         <div class="tablewrap" id="tbl-models"></div>
       </div>
@@ -252,7 +259,7 @@ footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
   <section class="block" id="saturation">
     <header>
       <h2>Where does more cooling still pay off?</h2>
-      <p class="prose">Every cell's neighbourhood was given increasing doses of each intervention and re-predicted through the full model. The curves show the city-wide mean cooling; the band is a 95% interval from a jackknife over the five fold models. Per cell, a saturating curve A·(1 − e<sup>−dose/d</sup>) was fitted against the dose the neighbourhood actually received, which gives the maximum cooling, the dose that reaches 90% of it, and today's marginal benefit. See the <a href="#map">Saturation</a> theme on the map.</p>
+      <p class="prose">Every cell's neighbourhood was given increasing doses of each intervention and re-predicted through the full model. The curves show the city-wide mean cooling; the band is a 95% interval from a jackknife over the {{N_FOLDS}} fold models. Per cell, a saturating curve A·(1 − e<sup>−dose/d</sup>) was fitted against the dose the neighbourhood actually received, which gives the maximum cooling, the dose that reaches 90% of it, and today's marginal benefit. See the <a href="#map">Saturation</a> theme on the map.</p>
     </header>
     <div class="grid3" id="curves"></div>
     <div class="card"><div class="tablewrap" id="tbl-sat"></div></div>
@@ -261,7 +268,7 @@ footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
   <section class="block" id="scenarios">
     <header>
       <h2>Adaptation scenarios</h2>
-      <p class="prose">Each scenario edits the land cover, updates NDVI through its fitted dependence on canopy and impervious cover, rebuilds the neighbourhood features and re-predicts through the five fold models. Bars show the mean change in air temperature; whiskers span the 10th to 90th percentile across cells. Scenarios that push many cells outside the observed range of conditions are flagged. The orange marks are an independent check: the causal own + neighbour effect from the causal check below, times the average change each scenario applies, with its 95% band. It is a straight-line extrapolation, so expect it to drift from the model at large doses where the response saturates.</p>
+      <p class="prose">Each scenario edits the land cover, updates NDVI through its fitted dependence on canopy and impervious cover, rebuilds the neighbourhood features and re-predicts through the {{N_FOLDS}} fold models. Bars show the mean change in air temperature; whiskers span the 10th to 90th percentile across cells. Scenarios that push many cells outside the observed range of conditions are flagged. The orange marks are an independent check: the causal own + neighbour effect from the causal check below, times the average change each scenario applies, with its 95% band. It is a straight-line extrapolation, so expect it to drift from the model at large doses where the response saturates.</p>
     </header>
     <div class="card chart"><div id="chart-scen"></div>
       <details><summary>Table view</summary><div class="tablewrap" id="tbl-scen"></div></details>
@@ -308,7 +315,7 @@ footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
       <p class="prose" id="budgetText"></p>
     </header>
     <div class="kpis" id="budgetKpis"></div>
-    <div class="card chart" id="paretoCard" hidden><h3>Cooling vs budget</h3><p class="cap" id="paretoCap">Total planned cooling (°F summed over cells) as the budget scales.</p><div id="chart-pareto"></div></div>
+    <div class="card chart" id="paretoCard" hidden><h3>Cooling vs budget</h3><p class="cap" id="paretoCap">Total planned cooling (summed over cells) as the budget scales.</p><div id="chart-pareto"></div></div>
   </section>
 
   <section class="block" id="planner" hidden>
@@ -374,9 +381,17 @@ const sfmt = (v, d = 2) => (v === null || v === undefined || !isFinite(v)) ? "�
 const el = (tag, attrs = {}, text) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (text !== undefined) e.textContent = text; return e; };
 const sv = (tag, attrs = {}, text) => { const e = document.createElementNS(SVGNS, tag); for (const [k, v] of Object.entries(attrs)) { if ((k === "fill" || k === "stroke") && String(v).startsWith("var(")) e.style.setProperty(k, v); else e.setAttribute(k, v); } if (text !== undefined) e.textContent = text; return e; };
 const V = (n) => `var(${n})`;
-const VAR = { Pct_Canopy: "Tree canopy", Pct_Impervious: "Impervious cover", Albedo: "Albedo", NDVI: "NDVI", Elevation_m: "Elevation", Distance_from_water_m: "Distance to water", target: "Air temperature residual" };
+// display names, map catalogue, levers and roles are generated from the run's config (sparc.core.results_page)
+const VAR = DATA.var_names || { target: "Air temperature residual" };
 const vname = (v) => VAR[v] || v;
-const U = DATA.units === "degF" ? "°F" : (DATA.units || "");
+const U = DATA.unit_label || (DATA.units === "degF" ? "°F" : (DATA.units || ""));
+const LEV = DATA.levers || {};
+const lev = (v) => LEV[v] || { label: vname(v), unit: "unit", albedo_like: /albedo/i.test(v), decimals: 1, dose_decimals: 1, edit_decimals: 0 };
+const ROLES = DATA.roles || {};
+const BLOCK_TXT = DATA.block_txt || "held-out";
+/* "41.8240°N, 71.4128°W"; south and east come out as °S / °E */
+const latlonText = (lat, lon, d = 4, sep = ", ") => `${Math.abs(lat).toFixed(d)}°${lat < 0 ? "S" : "N"}${sep}${Math.abs(lon).toFixed(d)}°${lon < 0 ? "W" : "E"}`;
+const csvCell = (s) => /[",\n]/.test(String(s)) ? `"${String(s).replace(/"/g, '""')}"` : String(s);
 
 /* ---------- decode layers ---------- */
 function b64bytes(s) { const bin = atob(s); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return a; }
@@ -400,7 +415,9 @@ function layer(key) {
   }
   decoded[key] = out; return out;
 }
-const FOLD = b64bytes(DATA.fold), EXCL = b64bytes(DATA.excl);
+const FOLD = b64bytes(DATA.fold);                              // held-out fold of each cell, 255 = never
+const EXCL = (Array.isArray(DATA.excl) ? DATA.excl : []).map(b64bytes);   // per fold: 1 = buffer, dropped from training
+const inBuffer = (i, k) => !!(EXCL[k] && EXCL[k][i]);
 
 /* ---------- colour (OKLab interpolation) ---------- */
 const hex2rgb = (h) => { h = h.replace("#", ""); return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255); };
@@ -425,47 +442,11 @@ let LUTS = {};
 function buildLuts() { const d = isDark(); LUTS = { seq: lut(d ? RAMPS.seqDark : RAMPS.seqLight), div: lut(d ? RAMPS.divDark : RAMPS.divLight) }; }
 
 /* ---------- layer catalogue ---------- */
-const A = DATA.actionable || {};
 const has = (k) => !!DATA.layers[k];
-const LAYERS = [];
-const add = (o) => { if (o.key.startsWith("__") || has(o.key)) LAYERS.push(o); };
-add({ group: "Temperature", key: "obs", name: "Observed air temperature", unit: U, scale: "div", center: DATA.background, d: 1, desc: `Measured air temperature. Colours are relative to the city median (${fmt(DATA.background, 1)} ${U}).` });
-add({ group: "Temperature", key: "pred", name: "Predicted (held-out)", unit: U, scale: "div", center: DATA.background, d: 1, desc: "Each cell is predicted by the fold model that never saw its 2 km block, so this is what the model knows without local data." });
-add({ group: "Temperature", key: "err", name: "Error (observed − predicted)", unit: U, scale: "div", center: 0, d: 2, desc: "Red: warmer than predicted. Blue: cooler. Large coherent patches are local heat sources or sinks the inputs do not capture." });
-add({ group: "Temperature", key: "hw", name: "90% interval half-width", unit: U, scale: "seq", d: 2, desc: "Cross-conformal interval: 90% of held-out cells fall within this distance of the prediction." });
-add({ group: "Land cover", key: "in_Pct_Canopy", name: "Tree canopy", unit: "%", scale: "seq", d: 0, desc: "Share of the cell under tree canopy." });
-add({ group: "Land cover", key: "in_Pct_Impervious", name: "Impervious cover", unit: "%", scale: "seq", d: 0, desc: "Share of the cell that is paved or built." });
-add({ group: "Land cover", key: "in_NDVI", name: "NDVI", unit: "", scale: "seq", d: 2, desc: "Vegetation greenness. In scenarios it follows canopy and impervious cover through a fitted monotone model." });
-add({ group: "Land cover", key: "in_Albedo", name: "Albedo", unit: "", scale: "seq", d: 3, desc: "Surface reflectance (0–1)." });
-add({ group: "Cooling effects", key: "fp_Pct_Canopy", name: "Canopy: footprint per +1 pp", unit: `${U}`, scale: "div", center: 0, d: 4, desc: "Total temperature change summed over every cell affected when this cell gains 1 percentage point of canopy (through neighbourhood features and heat transport). This is what the budget optimiser ranks." });
-add({ group: "Cooling effects", key: "own_Pct_Canopy", name: "Canopy: own-cell effect per +1 pp", unit: `${U}`, scale: "div", center: 0, d: 5, desc: "Change in this cell's own temperature only, with its neighbours held fixed. Much smaller than the footprint: canopy cools its surroundings more than itself." });
-add({ group: "Cooling effects", key: "fp_Pct_Impervious", name: "Impervious: footprint per +1 pp", unit: `${U}`, scale: "div", center: 0, d: 4, desc: "Total temperature change when this cell gains 1 pp of impervious cover. Removing pavement reverses the sign." });
-add({ group: "Cooling effects", key: "fp_Albedo", name: "Albedo: footprint per +0.01", unit: `${U}`, scale: "div", center: 0, d: 4, mult: 0.01, desc: "Total temperature change when this cell's albedo rises by 0.01." });
-for (const [v, nm] of [["Pct_Canopy", "Canopy"], ["Pct_Impervious", "Impervious removal"], ["Albedo", "Albedo"]]) {
-  const unit = v === "Albedo" ? "" : "pp";
-  add({ group: "Saturation", key: `cls_${v}`, name: `${nm}: response shape`, scale: "cat", desc: "Saturating: cooling levels off within the tested doses. Linear: no knee yet. Accelerating: little effect at first, then a sharp rise before levelling off. Grey: too little headroom to tell." });
-  add({ group: "Saturation", key: `marg_${v}`, name: `${nm}: cooling per unit at today's level`, unit: `${U}/${unit || "unit"}`, scale: "seq", d: 3, desc: "Initial slope of the fitted curve: the cooling the first unit of change would buy here. High values are the best places to act first." });
-  add({ group: "Saturation", key: `A_${v}`, name: `${nm}: maximum cooling`, unit: U, scale: "seq", d: 2, desc: "Plateau of the fitted saturating curve (for linear cells, the cooling at the largest dose tested)." });
-  add({ group: "Saturation", key: `d90_${v}`, name: `${nm}: dose for 90% of the maximum`, unit: unit, scale: "seq", d: v === "Albedo" ? 2 : 1, desc: "Neighbourhood dose that gets 90% of the achievable cooling. Small values mean the benefit saturates quickly." });
-}
-for (const s of DATA.scen_layers || []) add({ group: "Scenarios", key: s.key, name: s.name, unit: U, scale: "div", center: 0, d: 2, desc: "Re-predicted change in air temperature at every cell for this scenario (mean of the five fold models)." });
-add({ group: "Budget plan", key: "alloc_dose", name: "Planned canopy increase", unit: "pp", scale: "seq", d: 1, zeroBlank: true, desc: "Where the budget-optimal plan adds canopy, and how much. Untreated cells are blank." });
-add({ group: "Budget plan", key: "alloc_delta", name: "Re-predicted ΔT of the plan", unit: U, scale: "div", center: 0, d: 3, desc: "The whole plan applied at once and re-predicted through the model (closed-loop check)." });
+const LAYERS = (DATA.catalog || []).filter((o) => o.key.startsWith("__") || has(o.key));
 const CL = DATA.climate;
 let THR = CL ? CL.thresholds[0] : null;
-if (CL) {
-  add({ group: "Climate futures", key: "__clim_temp", name: "Future air temperature", unit: U, scale: "climtemp", center: DATA.background, d: 1, desc: "Observed temperature plus the CMIP6 multi-model median warming for the chosen pathway and period, plus the chosen adaptation scenario's re-predicted change. Colours keep today's scale, so warming shows as a shift to red." });
-  add({ group: "Climate futures", key: "__clim_thr", name: "Cells at or above the heat threshold", scale: "climthr", desc: "Cells whose projected temperature reaches the threshold chosen in the Heat exposure table (Climate futures section) under the chosen pathway, period and adaptation." });
-}
-add({ group: "Planner", key: "people", name: "Residents per cell (HRSL)", unit: "people", scale: "seq", d: 1, desc: "Residential population from Meta/CIESIN's High Resolution Settlement Layer (census-based, circa 2010s), summed onto each cell. Daytime presence differs." });
-add({ group: "Planner", key: "plantable", name: "Room for more canopy", unit: "pp", scale: "seq", d: 0, desc: "Canopy a cell could still gain: open green and bare land (ESA WorldCover 2021) plus a fifth of its built-up area for street trees and lots, never above 100% minus today's canopy. The budget plan respects it." });
-add({ group: "Planner", key: "hd_90_today", name: "Hot afternoons ≥ 90 °F per summer (today)", unit: "days", scale: "seq", d: 1, desc: "Summer days (June–August, 1995–2014 airport record) whose afternoon reaches 90 °F in this cell: the airport's daily maximum plus the cell's campaign-afternoon difference from the airport." });
-add({ group: "Planner", key: "hd_90_ssp245_mid", name: "Hot afternoons ≥ 90 °F (SSP2-4.5, 2041–2060)", unit: "days", scale: "seq", d: 1, desc: "As today, with each CMIP6 model's summer warming added to the airport record (median over models)." });
-add({ group: "Planner", key: "hd_95_today", name: "Hot afternoons ≥ 95 °F per summer (today)", unit: "days", scale: "seq", d: 1, desc: "As above for 95 °F." });
-if (DATA.sites) add({ group: "Planner", key: "__sites", name: "Suggested logger sites", scale: "sites", desc: "Where new temperature loggers would most sharpen the canopy effect: low- and high-canopy cells at matched impervious cover, favouring places where the fold models disagree most, at least 400 m apart." });
 const DS = DATA.design;
-if (DS && Object.keys(DS.levers || {}).length) add({ group: "Design", key: "__design", name: "Your design: change in air temperature", unit: U, scale: "design", center: 0, d: 3, desc: "Paint changes on the map with the brush; the change in afternoon air temperature updates as you go. It comes from a linear emulator of the fitted model (fold-averaged), checked against the full model on random patches; use the Scenarios theme for city-wide changes." });
-add({ group: "CV design", key: "__folds", name: "Spatial cross-validation folds", scale: "folds", desc: "For the chosen fold: blue cells are held out for testing, orange cells are dropped from training as a buffer, grey cells train the models. Every accuracy number on this page comes from this design." });
 const GROUPS = [...new Set(LAYERS.map((l) => l.group))];
 
 /* ---------- map ---------- */
@@ -520,7 +501,7 @@ function render() {
   if (Ly.scale !== "folds" && Ly.scale !== "cat" && Ly.scale !== "climthr") domain = computeDomain(Ly);
   for (let i = 0; i < N; i++) {
     const p = ((G.ny - 1 - IY[i]) * G.nx + IX[i]) * 4; let c;
-    if (Ly.scale === "folds") { c = FOLD[i] === curFold ? cat[0] : ((EXCL[i] >> curFold) & 1) ? cat[1] : grayc; }
+    if (Ly.scale === "folds") { c = FOLD[i] === curFold ? cat[0] : inBuffer(i, curFold) ? cat[1] : grayc; }
     else if (Ly.scale === "sites") { c = nodata; }
     else if (Ly.scale === "design") { const v = vals[i]; c = Math.abs(v) < 1e-4 ? nodata : colorFor({ scale: "div" }, v); }
     else if (Ly.scale === "cat") { const k = vals[i]; c = k === 0 ? grayc : cat[k - 1]; }
@@ -537,7 +518,9 @@ function drawOverlay() {
   const w = svg.clientWidth || canvas.clientWidth, h = svg.clientHeight || canvas.clientHeight;
   svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
   const pxPerM = w / (G.nx * G.dx);
-  const km = 2; const len = km * 1000 * pxPerM;
+  const extentKm = G.nx * G.dx / 1000;
+  const km = [0.1, 0.2, 0.25, 0.5, 1, 2, 5, 10, 20, 50].filter((k) => k <= extentKm / 3).pop() || 0.1;
+  const len = km * 1000 * pxPerM;
   const x0 = 14, y0 = h - 18;
   const ink = V("--ink"), bg = V("--surface");
   svg.append(sv("rect", { x: x0 - 6, y: y0 - 22, width: len + 46, height: 32, rx: 6, fill: bg, "fill-opacity": 0.85 }));
@@ -584,7 +567,7 @@ function drawStats() {
   const Ly = cur; const dl = $("layerStats"); dl.replaceChildren();
   const row = (k, v) => dl.append(el("dt", {}, k), el("dd", {}, v));
   if (Ly.scale === "folds") {
-    let te = 0, ex = 0; for (let i = 0; i < N; i++) { if (FOLD[i] === curFold) te++; else if ((EXCL[i] >> curFold) & 1) ex++; }
+    let te = 0, ex = 0; for (let i = 0; i < N; i++) { if (FOLD[i] === curFold) te++; else if (inBuffer(i, curFold)) ex++; }
     row("Held-out cells", te.toLocaleString()); row("Buffer cells dropped", ex.toLocaleString()); row("Training cells", (N - te - ex).toLocaleString());
     row("Block size", `${fmt(DATA.cv.block_m, 0)} m`); row("Buffer", `${fmt(DATA.cv.buffer_m, 0)} m`); row("Blocks with data", String(DATA.cv.n_blocks)); return;
   }
@@ -607,7 +590,7 @@ const corner = G.corners;
 function latlon(cx, cy) { if (!corner) return ""; const fx = cx / (G.nx - 1), fy = 1 - cy / (G.ny - 1);
   const lat = (1 - fx) * (1 - fy) * corner.sw[0] + fx * (1 - fy) * corner.se[0] + (1 - fx) * fy * corner.nw[0] + fx * fy * corner.ne[0];
   const lon = (1 - fx) * (1 - fy) * corner.sw[1] + fx * (1 - fy) * corner.se[1] + (1 - fx) * fy * corner.nw[1] + fx * fy * corner.ne[1];
-  return `${lat.toFixed(4)}°N, ${Math.abs(lon).toFixed(4)}°W`; }
+  return latlonText(lat, lon); }
 function readout(ev) {
   const r = canvas.getBoundingClientRect(); const cx = Math.floor((ev.clientX - r.left) / r.width * G.nx), cy = Math.floor((ev.clientY - r.top) / r.height * G.ny);
   const box = $("readout"); box.replaceChildren();
@@ -616,15 +599,15 @@ function readout(ev) {
   if (i < 0) { box.append(el("span", { class: "dim" }, `No observation · ${latlon(cx, cy)}`)); return; }
   const Ly = cur; let main;
   if (Ly.scale === "sites") { const k = DATA.sites.cell.indexOf(i); main = k >= 0 ? `Logger site (${DATA.sites.role[k]})` : "—"; }
-  else if (Ly.scale === "design") { const v = designDelta()[i]; const ch = Object.keys(PLAN).filter((v2) => PLAN[v2][i] !== 0).map((v2) => `${vname(v2)} ${sfmt(PLAN[v2][i], v2 === "Albedo" ? 2 : 0)}`).join(", ");
+  else if (Ly.scale === "design") { const v = designDelta()[i]; const ch = Object.keys(PLAN).filter((v2) => PLAN[v2][i] !== 0).map((v2) => `${vname(v2)} ${sfmt(PLAN[v2][i], lev(v2).edit_decimals)}`).join(", ");
     main = `${sfmt(v, 3)} ${U}` + (ch ? ` · edited: ${ch}` : ""); }
-  else if (Ly.scale === "folds") main = FOLD[i] === curFold ? "Held out (test)" : ((EXCL[i] >> curFold) & 1) ? "Buffer: dropped from training" : `Training (in fold ${FOLD[i] + 1}'s test set)`;
+  else if (Ly.scale === "folds") main = FOLD[i] === curFold ? "Held out (test)" : inBuffer(i, curFold) ? "Buffer: dropped from training" : FOLD[i] === 255 ? "Training (never held out)" : `Training (in fold ${FOLD[i] + 1}'s test set)`;
   else if (Ly.scale === "cat") main = DATA.layers[Ly.key].labels[layer(Ly.key)[i]];
   else if (Ly.scale === "climtemp" || Ly.scale === "climthr") { const v = climValues()[i]; main = `${fmt(v, 1)} ${U}` + (Ly.scale === "climthr" ? (v >= THR ? ` · at or above ${THR}` : ` · below ${THR}`) : ""); }
   else { const v = layer(Ly.key)[i] * (Ly.mult || 1); main = !isFinite(v) ? "no estimate" : ((Ly.scale === "div" && Ly.center === 0 ? sfmt(v, Ly.d ?? 2) : fmt(v, Ly.d ?? 2)) + (Ly.unit ? " " + Ly.unit : "")); }
   box.append(el("div", { class: "big" }, main), el("div", { class: "dim" }, latlon(cx, cy)));
   const ctxl = el("div", { class: "dim" });
-  const o = layer("obs"), c = layer("in_Pct_Canopy"), im = layer("in_Pct_Impervious");
+  const o = layer("obs"), c = ROLES.canopy ? layer("in_" + ROLES.canopy) : null, im = ROLES.impervious ? layer("in_" + ROLES.impervious) : null;
   ctxl.textContent = `Observed ${fmt(o[i], 1)} ${U}` + (c ? ` · canopy ${fmt(c[i], 0)}%` : "") + (im ? ` · impervious ${fmt(im[i], 0)}%` : "");
   box.append(ctxl);
 }
@@ -656,7 +639,7 @@ if (CL) {
 }
 
 /* ---------- design tool: linear emulator of the fitted model ---------- */
-const IDS = new Uint32Array(b64bytes(G.ids).buffer);
+const IDS = G.ids ? new Uint32Array(b64bytes(G.ids).buffer) : (G.ids_text || []);   // text ids when not uint32
 const rIdx = new Int32Array(G.nx * G.ny).fill(-1);            // raster (iy·nx + ix) → point
 for (let i = 0; i < N; i++) rIdx[IY[i] * G.nx + IX[i]] = i;
 const PLAN = {};                                               // lever → Float32Array of changes
@@ -719,7 +702,7 @@ function designStats(row) {
   for (const a of Object.values(PLAN)) for (let i = 0; i < N; i++) if (a[i] !== 0) edited[i] = 1;
   for (let i = 0; i < N; i++) { sAll += d[i]; if (edited[i]) { nEd++; sIn += d[i]; } if (d[i] <= -0.1) { nCool++; if (P && isFinite(P[i])) people += P[i]; } }
   row("Cells changed", nEd.toLocaleString());
-  for (const [v, a] of Object.entries(PLAN)) { let s2 = 0, n2 = 0; for (let i = 0; i < N; i++) if (a[i] !== 0) { s2 += a[i]; n2++; } if (n2) row(`${vname(v)} change`, `${sfmt(s2 / n2, v === "Albedo" ? 3 : 1)} on ${n2.toLocaleString()} cells`); }
+  for (const [v, a] of Object.entries(PLAN)) { let s2 = 0, n2 = 0; for (let i = 0; i < N; i++) if (a[i] !== 0) { s2 += a[i]; n2++; } if (n2) row(`${vname(v)} change`, `${sfmt(s2 / n2, lev(v).decimals)} on ${n2.toLocaleString()} cells`); }
   row(`Mean ΔT in changed cells`, nEd ? `${sfmt(sIn / nEd, 3)} ${U}` : "—");
   row(`Total (all cells)`, `${sfmt(sAll, 1)} ${U}·cells`);
   row(`Cells cooled ≥ 0.1 ${U}`, nCool.toLocaleString());
@@ -735,7 +718,7 @@ if (DS && DS.levers) {
   setDose(); $("leverSel").addEventListener("change", () => { setDose(); if (cur && cur.key === "__design") render(); });
   $("undoBtn").addEventListener("click", () => { const s2 = undoStack.pop(); if (!s2) return; for (const k of Object.keys(PLAN)) delete PLAN[k]; Object.assign(PLAN, s2); deltaDirty = true; render(); });
   $("clearBtn").addEventListener("click", () => { snapshot(); for (const k of Object.keys(PLAN)) delete PLAN[k]; deltaDirty = true; render(); });
-  $("csvBtn").addEventListener("click", async () => { const lines = ["id,lever,change"]; for (const [v, a] of Object.entries(PLAN)) for (let i = 0; i < N; i++) if (a[i] !== 0) lines.push(`${IDS[i]},${v},${+a[i].toFixed(4)}`);
+  $("csvBtn").addEventListener("click", async () => { const lines = ["id,lever,change"]; for (const [v, a] of Object.entries(PLAN)) for (let i = 0; i < N; i++) if (a[i] !== 0) lines.push(`${csvCell(IDS[i])},${csvCell(v)},${+a[i].toFixed(4)}`);
     const txt = lines.join("\n"); $("csvBox").value = txt;
     try { await navigator.clipboard.writeText(txt); $("csvBtn").textContent = `Copied ${lines.length - 1} rows`; }
     catch (e) { $("csvWrap").hidden = false; $("csvBox").focus(); $("csvBox").select(); $("csvBtn").textContent = "Select the text below"; }
@@ -759,7 +742,7 @@ function facts() {
 function kpi(box, label, value, unit, note) { const k = el("div", { class: "kpi" }); k.append(el("span", { class: "label" }, label)); const v = el("span", { class: "value" }, value); if (unit) v.append(el("small", {}, unit)); k.append(v); if (note) k.append(el("span", { class: "note" }, note)); box.append(k); }
 function kpis() {
   const s = DATA.metrics.stacker; const box = $("kpis");
-  kpi(box, "Accuracy on unseen 2 km areas", fmt(s.r2, 2), "R²", `RMSE ${fmt(s.rmse, 2)} ${U} · whole areas held out`);
+  kpi(box, `Accuracy on unseen ${BLOCK_TXT} areas`, fmt(s.r2, 2), "R²", `RMSE ${fmt(s.rmse, 2)} ${U} · whole areas held out`);
   kpi(box, "90% prediction intervals", fmt(100 * s.interval_coverage, 1), "% covered", `±${fmt(s.interval_mean_halfwidth, 2)} ${U} on average`);
   const cs = (DATA.scenarios || []).find((x) => /canopy/i.test(x.name) && /\b10\b/.test(x.name));
   if (cs) kpi(box, "Canopy +10 pp everywhere", sfmt(cs.mean_delta, 2), U, "mean change in air temperature");
@@ -856,7 +839,7 @@ function curves() {
   const C = DATA.curves || {}; const box = $("curves");
   for (const [v, obj] of Object.entries(C)) {
     const cv = obj.curve; const s = obj.summary; const dose = cv.dose, ben = cv.mean_benefit, sd = cv.mean_se || cv.fold_sd || dose.map(() => 0), ex = cv.frac_extrapolated || dose.map(() => 0);
-    const unit = v === "Albedo" ? "" : "pp"; const verb = s.direction === "decrease" ? "removed" : "added";
+    const L0 = lev(v); const unit = L0.albedo_like ? "" : (L0.unit || ""); const verb = s.direction === "decrease" ? "removed" : "added";
     const card = el("div", { class: "card chart" }); card.append(el("h3", {}, `${vname(v)} ${verb}`));
     const W = 340, H = 220, ml = 40, mr = 14, mt = 12, mb = 36; const iw = W - ml - mr, ih = H - mt - mb;
     const xmax = Math.max(...dose), ymax = Math.max(...ben.map((b, i) => b + 1.96 * sd[i])) * 1.1 || 1;
@@ -864,7 +847,7 @@ function curves() {
     const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Mean cooling vs dose for ${vname(v)}` });
     const step = ymax > 2 ? 0.5 : ymax > 1 ? 0.25 : 0.1;
     for (let b = 0; b <= ymax; b += step) { svg.append(sv("line", { x1: ml, x2: W - mr, y1: y(b), y2: y(b), stroke: V("--grid") })); svg.append(sv("text", { x: ml - 6, y: y(b) + 4, "text-anchor": "end", class: "t-axis" }, b.toFixed(step < 0.25 ? 1 : 2))); }
-    dose.forEach((d, i) => svg.append(sv("text", { x: x(d), y: H - mb + 16, "text-anchor": "middle", class: "t-axis" }, v === "Albedo" ? d.toFixed(2) : String(d))));
+    dose.forEach((d, i) => svg.append(sv("text", { x: x(d), y: H - mb + 16, "text-anchor": "middle", class: "t-axis" }, L0.albedo_like ? d.toFixed(2) : String(d))));
     svg.append(sv("text", { x: ml + iw / 2, y: H - 4, "text-anchor": "middle", class: "t-label" }, `dose (${unit || "albedo units"}) · y: cooling (${U})`));
     const up = dose.map((d, i) => `${x(d)},${y(ben[i] + 1.96 * sd[i])}`), dn = dose.map((d, i) => `${x(d)},${y(Math.max(0, ben[i] - 1.96 * sd[i]))}`).reverse();
     svg.append(sv("polygon", { points: [...up, ...dn].join(" "), fill: V("--accent"), "fill-opacity": 0.12 }));
@@ -880,7 +863,7 @@ function curves() {
   }
   const t = el("table"); const h = el("tr"); ["Intervention", "Saturating", "Linear", "Censored", "Median dose for 90% of max", `Median max cooling (${U})`, `Own-cell effect / unit (${U})`, `Footprint / unit (${U})`].forEach((x2, i) => h.append(el("th", { class: i ? "r" : "" }, x2))); t.append(h);
   for (const [v, s] of Object.entries(DATA.response || {})) { const tr = el("tr"); const verb = s.direction === "decrease" ? "removed" : "added";
-    tr.append(el("td", {}, `${vname(v)} ${verb}`), el("td", { class: "r" }, `${fmt(100 * s.frac_saturating, 0)}%`), el("td", { class: "r" }, `${fmt(100 * s.frac_linear, 0)}%`), el("td", { class: "r" }, `${fmt(100 * s.frac_censored, 0)}%`), el("td", { class: "r" }, fmt(s.median_d90, v === "Albedo" ? 2 : 1)), el("td", { class: "r" }, fmt(s.median_max_cooling, 2)), el("td", { class: "r" }, sfmt(s.mean_own_effect, 4)), el("td", { class: "r" }, sfmt(s.mean_footprint_effect, 4))); t.append(tr); }
+    tr.append(el("td", {}, `${vname(v)} ${verb}`), el("td", { class: "r" }, `${fmt(100 * s.frac_saturating, 0)}%`), el("td", { class: "r" }, `${fmt(100 * s.frac_linear, 0)}%`), el("td", { class: "r" }, `${fmt(100 * s.frac_censored, 0)}%`), el("td", { class: "r" }, fmt(s.median_d90, lev(v).dose_decimals)), el("td", { class: "r" }, fmt(s.median_max_cooling, 2)), el("td", { class: "r" }, sfmt(s.mean_own_effect, 4)), el("td", { class: "r" }, sfmt(s.mean_footprint_effect, 4))); t.append(tr); }
   $("tbl-sat").append(t);
 }
 
@@ -930,7 +913,7 @@ function climate() {
   if (!CL) return; $("climate").hidden = false; $("navClimate").hidden = false;
   const tkey = (t) => Number(t).toFixed(1);
   const P = CL.projections; const mid = P.find((p) => p.experiment === "ssp245" && p.period === "2041-2060") || P[0];
-  $("climText").textContent = `Projected change in summer (${CL.months.map((m) => ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][m - 1]).join("–")}) average daily highs from ${CL.n_models} CMIP6 climate models, for four emission pathways and three periods against ${CL.baseline}, at ${CL.site.lat.toFixed(3)}°N ${Math.abs(CL.site.lon).toFixed(3)}°W (neighbouring model cells weighted by land fraction). Each future map is today's measured temperature plus a model's warming, plus an adaptation scenario's re-predicted change. Under the middle pathway (SSP2-4.5) the models put mid-century (2041–2060) warming at ${sfmt(mid.warming.median, 1)} ${U} (10–90% of models: ${sfmt(mid.warming.p10, 1)} to ${sfmt(mid.warming.p90, 1)}). Use the map's Climate futures theme to see any combination.`;
+  $("climText").textContent = `Projected change in summer (${CL.months.map((m) => ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][m - 1]).join("–")}) average daily highs from ${CL.n_models} CMIP6 climate models, for four emission pathways and three periods against ${CL.baseline}, at ${latlonText(CL.site.lat, CL.site.lon, 3, " ")} (neighbouring model cells weighted by land fraction). Each future map is today's measured temperature plus a model's warming, plus an adaptation scenario's re-predicted change. Under the middle pathway (SSP2-4.5) the models put mid-century (2041–2060) warming at ${sfmt(mid.warming.median, 1)} ${U} (10–90% of models: ${sfmt(mid.warming.p10, 1)} to ${sfmt(mid.warming.p90, 1)}). Use the map's Climate futures theme to see any combination.`;
   $("climCap").textContent = `Dots: median of ${CL.n_models} models. Bars: 10th to 90th percentile across models; thin line: full range.`;
   const periods = [...new Set(P.map((p) => p.period))];
   const W = 520, rowH = 22, gapH = 26, ml = 92, mr = 54, mt = 6;
@@ -986,7 +969,7 @@ function exposure() {
 function causal() {
   const C = DATA.causal; const box = $("tbl-causal");
   if (!C || !Object.keys(C).filter((k) => !k.startsWith("_")).length) { box.append(el("p", { class: "cap" }, "Causal validation did not run for this result set.")); return; }
-  const per = (v) => v === "Albedo" ? 0.1 : 1, pu = (v) => v === "Albedo" ? "per +0.1" : "per +1 pp";
+  const per = (v) => lev(v).albedo_like ? 0.1 : 1, pu = (v) => lev(v).albedo_like ? "per +0.1" : `per +1 ${lev(v).unit || "unit"}`;
   const t = el("table"); const h = el("tr"); ["Treatment", "Check", `Model (${U})`, `Causal (${U})`, "Verdict"].forEach((x2, i) => h.append(el("th", { class: i >= 2 && i <= 3 ? "r" : "" }, x2))); t.append(h);
   const label = { adoption_vs_theta_sum: "Neighbourhood adoption vs own + neighbour effect", own_vs_theta_own: "Own cell vs own-cell effect", own_pd_vs_dr_curve: "Own-cell dose curve vs doubly robust curve" };
   for (const [tr, c] of Object.entries(C)) { if (tr.startsWith("_")) continue; const aud = c.audit || {}; let first = true;
@@ -1002,10 +985,10 @@ function causal() {
 /* ---------- budget ---------- */
 function budget() {
   const o = DATA.optimize; if (!o || !o.budget) { $("budgetText").textContent = "The budget step did not run for this result set."; return; }
-  const v = vname(o.variable).toLowerCase(); $("budgetTitle").textContent = `Budget plan for ${v}`;
-  $("budgetText").textContent = `Given ${fmt(o.budget, 0)} dose units of ${v} to place (1 unit = +1 pp on one ${fmt((DATA.qa || {}).cell_m, 0)} m cell), the optimiser ranks every cell's next increments by footprint cooling, respecting each cell's headroom and the saturation curve, and fills the budget greedily. The finished plan is then applied all at once and re-predicted through the model, so interactions between neighbouring plantings are counted.`;
+  const v = vname(o.variable).toLowerCase(); const OU = lev(o.variable).unit || "unit"; $("budgetTitle").textContent = `Budget plan for ${v}`;
+  $("budgetText").textContent = `Given ${fmt(o.budget, 0)} dose units of ${v} to place (1 unit = +1 ${OU} on one ${fmt((DATA.qa || {}).cell_m, 0)} m cell), the optimiser ranks every cell's next increments by footprint cooling, respecting each cell's headroom and the saturation curve, and fills the budget greedily. The finished plan is then applied all at once and re-predicted through the model, so interactions between neighbouring plantings are counted.`;
   const box = $("budgetKpis");
-  kpi(box, "Cells treated", (o.n_cells_treated || 0).toLocaleString(), "", `mean +${fmt(o.mean_dose_treated, 1)} pp each`);
+  kpi(box, "Cells treated", (o.n_cells_treated || 0).toLocaleString(), "", `mean +${fmt(o.mean_dose_treated, 1)} ${OU} each`);
   kpi(box, "Planned total cooling", fmt(o.planned_total_cooling, 0), `${U}·cells`, "sum of footprint gains from the curves");
   kpi(box, "Re-predicted total cooling", fmt(o.realized_total_cooling, 0), `${U}·cells`, `${fmt(100 * o.realized_total_cooling / o.planned_total_cooling, 0)}% of plan once neighbours interact`);
   kpi(box, "Mean cooling in treated cells", fmt(o.realized_mean_cooling_treated, 2), U, `city-wide mean ${fmt(o.realized_mean_cooling_all, 3)} ${U}`);
@@ -1018,8 +1001,7 @@ function budget() {
   for (let k = 0; k <= 4; k++) { const v2 = ym * k / 4; svg.append(sv("line", { x1: ml, x2: W - mr, y1: y(v2), y2: y(v2), stroke: V("--grid") })); svg.append(sv("text", { x: ml - 6, y: y(v2) + 4, "text-anchor": "end", class: "t-axis" }, fmt(v2, 0))); }
   xs0.forEach((v2) => svg.append(sv("text", { x: x(v2), y: H - mb + 18, "text-anchor": "middle", class: "t-axis" }, `${v2}×`)));
   svg.append(sv("text", { x: ml + iw / 2, y: H - 4, "text-anchor": "middle", class: "t-label" }, `budget multiple (1× = ${fmt(o.budget, 0)} dose units)`));
-  const k1 = xs0.indexOf(1), k2 = xs0.indexOf(2);
-  if (k1 >= 0 && k2 >= 0) $("paretoCap").textContent = `Total planned cooling (°F summed over cells) as the budget scales. Doubling the budget from 1× to 2× raises total cooling ${fmt(ys0[k2] / ys0[k1], 2)}×, so returns diminish only slightly at this scale: plenty of high-benefit cells remain.`;
+  if (DATA.pareto_caption) $("paretoCap").textContent = DATA.pareto_caption;   // written from the frontier's numbers
   svg.append(sv("path", { d: xs0.map((v2, i) => `${i ? "L" : "M"} ${x(v2)} ${y(ys0[i])}`).join(" "), fill: "none", stroke: V("--accent"), "stroke-width": 2 }));
   xs0.forEach((v2, i) => { svg.append(sv("circle", { cx: x(v2), cy: y(ys0[i]), r: 4.5, fill: V("--accent"), stroke: V("--surface"), "stroke-width": 2 }));
     const hit = sv("circle", { cx: x(v2), cy: y(ys0[i]), r: 12, fill: "transparent" }); hit.addEventListener("pointermove", (ev) => showTip(ev, (t) => t.append(el("div", { class: "v" }, `${fmt(ys0[i], 0)} ${U}·cells`), el("div", {}, `${v2}× budget (${fmt(v2 * o.budget, 0)} units)`)))); hit.addEventListener("pointerleave", hideTip); svg.append(hit); });
@@ -1049,20 +1031,20 @@ function planner() {
   $("plannerText").textContent = `People, not cells: ${Math.round(P.people_total).toLocaleString()} residents live in the study area (HRSL). Exposure counts residents in cells at or above a threshold on an afternoon like the campaign's; hot days count such afternoons per summer from the airport's 1995–2014 record shifted by each cell's measured difference from the airport. The adaptation package is "${P.package}".`;
   const ex = P.exposure || []; const find = (c, a) => ex.find((r) => r.case === c && r.adapted === a);
   const box = $("plannerKpis"); const td0 = find("today", false), mid = find("SSP2-4.5 2041-2060", false), mida = find("SSP2-4.5 2041-2060", true);
-  if (td0) kpi(box, `Residents in cells ≥ ${t0} °F today`, Math.round(td0[`people_ge_${t0}`]).toLocaleString(), "", `${fmt(100 * td0[`share_people_ge_${t0}`], 0)}% of residents, campaign-like afternoon`);
+  if (td0) kpi(box, `Residents in cells ≥ ${t0} ${U} today`, Math.round(td0[`people_ge_${t0}`]).toLocaleString(), "", `${fmt(100 * td0[`share_people_ge_${t0}`], 0)}% of residents, campaign-like afternoon`);
   if (mid) kpi(box, `… SSP2-4.5, 2041–2060`, Math.round(mid[`people_ge_${t0}`]).toLocaleString(), "", mida ? `${Math.round(mida[`people_ge_${t0}`]).toLocaleString()} with the package` : "");
   const hd = (P.hot_days || {}).cases || []; const hdt = hd.find((c) => c.case === "today" && c.offset_scale === 1), hdm = hd.find((c) => c.case === "SSP2-4.5 2041-2060" && c.offset_scale === 1);
-  if (hdt) kpi(box, `Hot afternoons ≥ ${t0} °F per summer`, fmt(hdt[`days_ge_${t0}`], 1), "days", "cell average, today");
+  if (hdt) kpi(box, `Hot afternoons ≥ ${t0} ${U} per summer`, fmt(hdt[`days_ge_${t0}`], 1), "days", "cell average, today");
   if (hdm) kpi(box, "… SSP2-4.5, 2041–2060", fmt(hdm[`days_ge_${t0}`], 1), "days", hdm[`days_ge_${t0}_adapted`] !== undefined ? `${fmt(hdm[`days_ge_${t0}_adapted`], 1)} with the package` : "");
   $("expCap").textContent = `Residents in cells whose afternoon temperature reaches each threshold. Futures add the CMIP6 median summer warming; "with package" adds the package's re-predicted cooling.`;
-  $("tbl-pexp").append(table(["Case", "Package", ...thr.map((x) => `≥ ${x} °F`), `Person-weighted mean (${U})`],
+  $("tbl-pexp").append(table(["Case", "Package", ...thr.map((x) => `≥ ${x} ${U}`), `Person-weighted mean (${U})`],
     ex.map((r) => [r.case, r.adapted ? "with" : "—", ...thr.map((x) => Math.round(r[`people_ge_${x}`]).toLocaleString()), fmt(r.person_mean_temp, 1)]), (i) => i > 1));
   $("tbl-pexp").querySelectorAll("td:first-child").forEach((td) => { td.style.whiteSpace = "nowrap"; });
   if (hd.length) { $("hdCap").textContent = `Mean days per summer (June–August) at or above each threshold, averaged over cells, then with the package. In brackets: the lower bound, which halves each cell's difference from the airport for days less clear and calm than the campaign's. Person-days sum residents × days.`;
     const main = hd.filter((c) => c.offset_scale === 1); const low = (c) => hd.find((x) => x.case === c.case && x.offset_scale !== 1);
     const cell = (c, x) => { const lb = low(c); return `${fmt(c[`days_ge_${x}`], 1)}` + (c[`days_ge_${x}_adapted`] !== undefined ? ` → ${fmt(c[`days_ge_${x}_adapted`], 1)}` : "") + (lb ? ` (${fmt(lb[`days_ge_${x}`], 1)})` : ""); };
     const rows = main.map((c) => [c.case, ...thr.map((x) => cell(c, x)), Math.round(c[`person_days_ge_${t0}`] / 1000).toLocaleString() + "k"]);
-    const t = table(["Case", ...thr.map((x) => `≥ ${x} °F`), `Person-days ≥ ${t0}`], rows); t.querySelectorAll("td:first-child").forEach((td) => { td.style.whiteSpace = "nowrap"; });
+    const t = table(["Case", ...thr.map((x) => `≥ ${x} ${U}`), `Person-days ≥ ${t0}`], rows); t.querySelectorAll("td:first-child").forEach((td) => { td.style.whiteSpace = "nowrap"; });
     $("tbl-hd").append(t); }
   const eq = P.equity || {}; const ek = Object.keys(eq);
   if (ek.length) { $("eqCap").textContent = "Mean cooling from the package by quintile (1 = lowest). The concentration index is > 0 when cooling concentrates in the higher quintiles, < 0 in the lower ones; near 0 means evenly shared.";
@@ -1106,11 +1088,11 @@ function validation() {
     const bc = sc.bias_correction || {};
     $("simCap").textContent = `A known canopy effect (−0.25 ${U} for +10 pp city-wide) was planted on the city's real land-cover layout under several generators, passed through an emulation of how the temperature product is made (route sampling, a land-cover model filling every cell, whole-degree rounding), and re-estimated by the full pipeline. Effect share = estimated / true (1 = unbiased). ` +
       (bc.share_range ? (bc.stable ? `The share is stable across generators (median ${fmt(bc.share_median_across_generators, 2)}).` : (bc.n_generators || 2) < 2 ? `Only one effect generator has run so far, so no correction is applied.` : `The share varies across generators (${fmt(bc.share_range[0], 2)} to ${fmt(bc.share_range[1], 2)}), so no single correction applies.`) : "");
-    const rows = Object.entries(sc.generators).map(([k, g]) => [k, `${g.n} (${g.n_gate_pass})`, g.share_median != null ? `${fmt(g.share_median, 2)}` + (g.share_iqr ? ` (${fmt(g.share_iqr[0], 2)}–${fmt(g.share_iqr[1], 2)})` : "") : "—", fmt(g.rank_corr_mean, 2), g.ci_coverage != null ? `${fmt(100 * g.ci_coverage, 0)}%` : "—", g.causal_ci_coverage != null ? `${fmt(100 * g.causal_ci_coverage, 0)}%` : "—", fmt(g.oof_r2_mean, 2), k.split("/")[0] === "null" ? `model ${fmt(100 * (g.false_positive_rate || 0), 0)}% · causal ${fmt(100 * (g.causal_false_positive_rate || 0), 0)}%` + (g.null_mean_delta != null ? ` · spurious Δ ${sfmt(g.null_mean_delta, 2)} °F` : "") : ""]);
+    const rows = Object.entries(sc.generators).map(([k, g]) => [k, `${g.n} (${g.n_gate_pass})`, g.share_median != null ? `${fmt(g.share_median, 2)}` + (g.share_iqr ? ` (${fmt(g.share_iqr[0], 2)}–${fmt(g.share_iqr[1], 2)})` : "") : "—", fmt(g.rank_corr_mean, 2), g.ci_coverage != null ? `${fmt(100 * g.ci_coverage, 0)}%` : "—", g.causal_ci_coverage != null ? `${fmt(100 * g.causal_ci_coverage, 0)}%` : "—", fmt(g.oof_r2_mean, 2), k.split("/")[0] === "null" ? `model ${fmt(100 * (g.false_positive_rate || 0), 0)}% · causal ${fmt(100 * (g.causal_false_positive_rate || 0), 0)}%` + (g.null_mean_delta != null ? ` · spurious Δ ${sfmt(g.null_mean_delta, 2)} ${U}` : "") : ""]);
     $("tbl-sim").append(table(["Generator", "Runs (gate pass)", "Effect share (IQR)", "Rank corr.", "95% CI covers truth", "Causal CI covers", "Held-out R²", "False positives"], rows)); }
   const mv = DATA.multiverse;
   if (mv && mv.effects) { $("mvCard").hidden = false; const names = Object.keys(mv.runs);
-    $("mvCap").textContent = `Each column re-runs the pipeline (60 m cells) with one choice changed. Effect signs are stable in at least ${fmt(100 * mv.sign_stability_min, 0)}% of variants for every scenario. Priority maps (where each extra unit cools most) agree with the baseline at median Kendall τ ${fmt(mv.median_kendall_tau, 2)} and top-10% overlap ${fmt(mv.median_top_decile_jaccard, 2)}.`;
+    $("mvCap").textContent = `Each column re-runs the pipeline (${fmt(mv.coarse_m || 60, 0)} m cells) with one choice changed. Effect signs are stable in at least ${fmt(100 * mv.sign_stability_min, 0)}% of variants for every scenario. Priority maps (where each extra unit cools most) agree with the baseline at median Kendall τ ${fmt(mv.median_kendall_tau, 2)} and top-10% overlap ${fmt(mv.median_top_decile_jaccard, 2)}.`;
     $("tbl-mv").append(table(["Scenario", ...names.map((n) => mv.runs[n].label), "Sign stable"], Object.entries(mv.effects).map(([sname, e]) => [sname, ...names.map((n) => e.values[n] != null ? sfmt(e.values[n], 2) : "—"), `${fmt(100 * e.sign_stability, 0)}%`])));
     const pr = mv.priority || {}; const levers = Object.keys(Object.values(pr)[0] || {});
     $("tbl-mv2").append(table(["Variant", "Held-out R²", ...levers.map((v) => `${vname(v)}: τ / top-10%`)], Object.entries(pr).map(([n, d]) => [mv.runs[n].label, fmt(mv.runs[n].r2, 3), ...levers.map((v) => d[v] ? `${fmt(d[v].kendall_tau, 2)} / ${fmt(d[v].top_decile_jaccard, 2)}` : "—")]))); }
@@ -1160,3 +1142,5 @@ new MutationObserver(rerender).observe(document.documentElement, { attributes: t
 window.addEventListener("resize", () => drawOverlay());
 })();
 </script>
+</body>
+</html>

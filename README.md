@@ -32,6 +32,7 @@ Published in [*Urban Climate* (2025)](https://doi.org/10.1016/j.uclim.2025.10267
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Core Pipeline (single city)](#core-pipeline-single-city)
+- [SPARC Studio](#sparc-studio)
 - [Desktop App](#desktop-app)
 - [Results: Urban Heat Island](#results-urban-heat-island-brown-uhi)
 - [Results: ForceSMIP Climate Forcing Attribution](#results-forcesmip-climate-forcing-attribution)
@@ -292,6 +293,29 @@ Each run writes a directory containing:
 See [`docs/planner_guide.md`](docs/planner_guide.md) for reading the outputs and [`docs/results/reconciliation.md`](docs/results/reconciliation.md) for how these numbers relate to earlier SPARC releases.
 
 The legacy `sparc run` stages below still work, and their defects have been fixed in place. New work should target the core.
+
+---
+
+## SPARC Studio
+
+SPARC Studio is the local web app for the core pipeline: set up a city from a CSV (or start from the synthetic demo or the Providence example), launch and track runs with live progress, ETA ranges, cancel and resume, explore every output on a 30 m map, design and verify cooling scenarios in the Scenario Lab, run the validation studies, and export decision packs, GIS layers, reports and findings. It runs on your machine (`127.0.0.1`), needs no accounts and no Node, and its jobs keep running when the browser closes.
+
+```bash
+pip install "sparc[studio]"         # from a checkout: pip install -e ".[studio]"
+sparc studio                        # prints a one-time link (http://127.0.0.1:8765/auth?t=…) and opens it
+```
+
+```bash
+# runnable
+sparc studio --help > /dev/null && echo "SPARC Studio is installed"
+```
+
+![The Scenario Lab: an exact result with its likely range](docs/studio/img/lab-exact-result.png)
+
+- **[User guide](docs/studio/USER_GUIDE.md)**: installation, the workspace, ten task walkthroughs, tracking, outputs and exports, the Scenario Lab, studies, settings and troubleshooting.
+- [Developer guide](docs/studio/DEVELOPING.md), [release notes](docs/studio/RELEASE_NOTES.md) (read them if you have runs from earlier releases: their checkpoints cannot be resumed), the [specification](docs/studio/SPEC.md) and the [HTTP API](docs/studio/api.md).
+
+The legacy desktop app below (`sparc-desktop/`, with its `sparc/server/` API) is unchanged and remains available until Studio reaches parity with it.
 
 ---
 
@@ -582,11 +606,13 @@ sparc-resilience/
 │   ├── report/              # Report generation
 │   ├── registry/            # Artifact store (SQLite), city registry, domain template registry
 │   ├── server/              # Local pipeline/IPC server for the desktop app
+│   ├── studio/              # SPARC Studio server (FastAPI) and its pre-built web app (static/)
 │   └── templates/           # Domain templates (13 domains)
 ├── examples/                # Example projects (Brown UHI)
-├── tests/                   # Unit + regression tests; tests/core = core pipeline (CI)
-├── docs/                    # MANUAL, PIPELINE_GUIDE, CONTRIBUTING, INTERPRETATION_GUIDE
+├── tests/                   # Unit + regression tests; tests/core = core pipeline, tests/studio = SPARC Studio (CI)
+├── docs/                    # MANUAL, PIPELINE_GUIDE, CONTRIBUTING, INTERPRETATION_GUIDE; studio/ = SPARC Studio docs
 ├── sparc-desktop/           # Tauri v2 + React desktop application
+├── studio-web/              # SPARC Studio web app source (React + TypeScript, Vite)
 ├── scripts/                 # Helper scripts
 ├── pyproject.toml           # Package metadata and dependencies
 ├── README.md

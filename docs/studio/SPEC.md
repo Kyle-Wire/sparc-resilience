@@ -1,6 +1,6 @@
 # SPARC Studio — Product and Technical Specification
 
-Status: **approved design, ready for implementation** (revised after the completeness review, see §18) · Branch: `pi-jepa-dev` · Date: 2026-10-01
+Status: **as built** — SPARC Studio 1.0.0, 2026-10-02 (designed 2026-10-01, revised after the completeness review, §18). §19 is the changelog: every place where the implementation differs from the design text, milestone by milestone. The user and developer guides are [`USER_GUIDE.md`](USER_GUIDE.md) and [`DEVELOPING.md`](DEVELOPING.md); [`RELEASE_NOTES.md`](RELEASE_NOTES.md) covers the core changes.
 Companion: [`api.md`](api.md) is the exact HTTP/SSE contract. If this file and `api.md` disagree, `api.md` wins for wire formats and this file wins for behaviour.
 
 SPARC Studio is a new local web app for the modern `sparc/core` pipeline (S0–S7 plus post-run studies). One user goes from a CSV of street-level temperatures to defensible, exportable cooling decisions, and always knows:
@@ -85,7 +85,7 @@ Each journey is an acceptance scenario. The e2e suite (§14.5) automates J1, J2 
 
 **J1 — Ten-minute tour with no data.**
 1. `pip install "sparc[studio]"`, then `sparc studio`.
-2. The terminal prints `SPARC Studio → http://127.0.0.1:8765/` and opens the browser through the one-time `/auth?t=…` link.
+2. The terminal prints the workspace and the one-time link (`SPARC Studio 1.0.0 - workspace ~/sparc-studio`, then `Open http://127.0.0.1:8765/auth?t=…`) and opens the browser on that link.
 3. On Home, choose **Try a synthetic city**. Studio writes the synthetic CSV and `truth.json`, plus DEMO people/land-cover layers and a DEMO CMIP6-style climate table, all at a fictional location (EPSG:32619). It also writes a runnable `config.yml`.
 4. The project overview readiness spine is all green. The primary button reads **Launch first run**.
 5. Launch preselects **Fast**. The plan graph shows S0…S7, with S6 "will run" (canopy treatment), and estimates "≈4–6 min on this machine".
@@ -1586,7 +1586,7 @@ All of these are tracked jobs. They run against the **parent run's launch snapsh
 |---|---|---|---|---|---|
 | `post.baselines` | action | `baselines.baselines_for_run(run_dir, cfg, models)` | medium | baselines.json; manifest via `update_manifest` | Model subset selectable |
 | `post.planner` | action | `planner.planner_pack(run_dir, cfg, package, thresholds, hex_sizes, export, cache_dir=<ws>/cache)` | medium | planner/*; manifest | Requires `planner.layers`; GHCN optional (network) |
-| `post.emulator` | action | `emulator.emulator_for_run(run_dir, cfg, n_patches)` | heavy | emulator.npz/.json | Requires checkpoint |
+| `post.emulator` | action | `emulator.emulator_for_run(run_dir, cfg, n_patches)` | heavy | emulator.npz/.json | Requires checkpoint, checked when the job starts (so it can wait in a Launch "then" chain) |
 | `post.uncertainty` | action | `uncertainty.uncertainty_report(run_dir, multiverse_dir, simcheck_dirs, placebo_path, real_r2_gate)` | medium | uncertainty.json/.md, placebo.json; manifest | **Auto-enqueued** when an attached study finishes (setting `auto_uncertainty`, default on) |
 | `post.writeup` | action | `writeup.methods_markdown` / `model_card_markdown` on the merged manifest | medium | methods.md, model_card.md | report.md is not re-rendered (frozen at run end) |
 | `study.placebo` | study | `placebo.run_placebo_suite(cfg, kinds, coarse, seed, grf_range_m, children_dir, resume=True, run_meta)` | heavy | study dir: placebo.json/.md (written by the kind with `placebo_markdown`, as the CLI does) + 1 child run per kind | Needs canopy/impervious roles |
@@ -1612,7 +1612,7 @@ All study and post-run writes use `runio` atomic helpers. For `study.simcheck` a
     - relaxation length: `L` vs the physics `L_m` mean ± sd;
     - canopy influence radius: `influence_radius_90` vs the S1 canopy range;
     - noise floor: `noise_sd` vs the held-out stack RMSE (a sanity bound: RMSE should not fall below the planted noise; the synthetic target is not rounded, so `qa.target_rounding_noise_sd` does not apply).
-- **Attach/detach.** A study can be attached to a run, which feeds its uncertainty. Attaching re-enqueues `post.uncertainty`.
+- **Attach/detach.** A study can be attached to a run, which feeds its uncertainty. Placebo, simcheck and multiverse studies launched from a run are attached to it when they are created. Attaching a finished study re-enqueues `post.uncertainty`, and so does detaching one when the run already has an uncertainty report (so the report drops it).
 - **Stale.** A study is stale vs its run when the run's checkpoint fingerprint differs from the one recorded when the study ran.
 
 ---
@@ -1627,7 +1627,7 @@ All study and post-run writes use `runio` atomic helpers. For `study.simcheck` a
 - **`synthetic_demo`** (§9.2).
 - **`providence_example`**:
   - copies `brown4.csv`, `configs/forcing/providence_2020-07-29.json`, `configs/climate/providence_cmip6_tasmax_jja.csv` and `configs/layers/providence_layers.parquet` into the project, and rewrites `configs/core_providence.yml` paths relative to the project dir;
-  - sources: a repo checkout when present, else the packaged copy in `sparc/studio/examples/providence/` (`brown4.csv.gz` ≈1.3 MB, decompressed on create; the other files as-is);
+  - sources: a repo checkout when present, else the packaged copy in `sparc/studio/examples/providence/` (`brown4.csv.gz` ≈1.6 MB, decompressed on create; the other files as-is);
   - option `import_existing_runs` (default true when `output/core/providence/` exists): registers `providence_uhi`, `providence_uhi_fast` and the `placebo`, `simcheck*` and `multiverse` study folders **in place** (`origin=imported`). The projects item does this through the cross-item contracts of §10.2: `sparc.studio.runs.registry.import_run(...)` and `sparc.studio.studies.service.import_study_dir(...)`, imported lazily. When either module is not installed yet, the project is still created and the response carries a warning ("run import unavailable in this build").
 - **`existing_config`** (`POST /api/projects/import`): imports a YAML with paths absolutised, and optionally `copy_data`, run dirs and study dirs.
 
@@ -2108,7 +2108,7 @@ These are the core changes. The old app is not touched, and pickled classes gain
     - returns `{dose[n], planned_benefit[n], planned_total_cooling, n_cells_treated (cells), mean_dose_treated, total_cost, gini, min_dose_dropped_cost, pareto{points[{budget, total_benefit, n_cells, n_segments, gini}]}}`;
     - `min_dose` is a post-filter: allocations below it are set to 0 after the greedy pass, and the freed budget is reported, not re-spent;
     - `optimise_allocation` becomes `planned_allocation` + closed loop.
-    - `optimizer_layers` is made public (the private alias is kept).
+    - `optimizer_layers` (in `pipeline.py`) is made public (the private alias is kept).
 16. **Lazy exports.** `sparc/core/__init__.py` lazily exports `plan_stages` and `open_run`.
 
 **Owner `backend-engine`:**
@@ -2512,7 +2512,7 @@ Test files live in `tests/studio/<group>/` (`foundation`, `projects`, `runs`, `e
 
 The harness starts `python -m sparc.studio --workspace <tmp> --port 0 --no-browser --token e2e` as a subprocess and reads the URL from `studio.lock.json`. **Any console error fails a test.** Screenshots are taken per step in light and dark themes.
 
-1. **`test_e2e_replay.py`** (fast, deterministic, every CI run; `SPARC_STUDIO_RUNNER=replay:tests/studio/fixtures/synth_run`, time compression ×20):
+1. **`test_e2e_replay.py`** (fast, deterministic, every CI run; `SPARC_STUDIO_RUNNER=replay:tests/studio/fixtures/synth_run`, replayed at ×1 — at the runner's default ×20 the 31 s fixture ends in under 2 s, too fast to reload mid-run):
    - create the synthetic demo **with the fixture's `n` and `seed` from `FIXTURE.json`** (`options: {n: 40, seed: 0}`). The project's data is then byte-identical to the data the fixture was produced from, so `RunReader` id and fold checks pass on the replayed outputs. Walk the setup pages; launch Fast;
    - the replay runner rewrites `job`, `pid` and `ts` (as in api.md §14) and also `run.dir.run_dir` and `run_state.json.events_path`/`pid` to the new run's values;
    - the plan graph matches the fixture; the rail reaches done in order; the fold × model heatmap fills;
@@ -2635,7 +2635,7 @@ The parallel work breakdown is returned to the orchestrator. Ownership is exclus
 | `frontend-lab` | frontend | frontend-foundation | `studio-web/src/pages/lab/**`, `api/lab.ts` |
 | `frontend-studies-exports` | frontend | frontend-foundation | `studio-web/src/pages/studies/**`, `api/{studies,exports,findings}.ts` |
 | `integration-e2e` | test | all of the above | `tests/studio/e2e/**`, contract fixtures, `sparc/studio/static/**`, contract check, `.github/workflows/studio.yml`, **the one-line `--ignore=tests/studio` edit to `.github/workflows/tests.yml`**, `scripts/check_studio_assets.py` |
-| `docs` | docs | integration-e2e | `docs/studio/**` (incl. updating this spec to as-built, `doctest.py` and the api-doc check script), README section |
+| `docs` | docs | integration-e2e | `docs/studio/**` (incl. updating this spec to as-built, `doctest.py` and the api-doc check script `check_api_doc.py`), README section |
 
 **Ownership notes:**
 - **No file is owned by two items.** Shared directories are split by file: `tests/studio/fixtures/` holds the foundation's selftest files, core-instrumentation's `synth_run/` and integration's reducer golden.
@@ -2720,11 +2720,99 @@ A completeness review checked this spec and `api.md` against the operation, outp
 
 ## 19. As-built changes
 
-Behaviour that differs from the text above as built, grouped by milestone. Wire-level details are in `api.md` §19. The `docs` item extends this section when the spec is brought up to date.
+This is the changelog of the specification after the completeness review (§18). It lists, milestone by milestone, every behaviour that differs from the text above as built, including the deviations each work item reported during implementation and review, and ends with the gaps still open at release. Wire-level details are in `api.md` §19. Where the body of this spec was brought up to date (the status line, J1 step 2, §8's emulator and attach rules, §9.1, §11 item 15, §14.5 item 1, §17.1), the entry here records the change.
+
+### Foundation (core progress, core instrumentation, backend and frontend foundations)
+
+**Core progress (`progress.py`, `runio.py`, CLI)**
+- `span()` also takes `kind="run"` (`run.start`/`run.end`), so `run:<name>` path elements exist; span handles expose `.metrics`, `.summary` and `.set(**fields)` for closing fields. `tick()` and `metric()` take `lvl=` so debug-level ticks and metrics are gated by level (§5.5).
+- `artifact` events carry the run-relative path in `path` and the span ancestry in `span_path`; any other clashing field is written `<key>_`; `job` is `""` without a configured job id (api.md §19).
+- `limit_threads`/`set_threads` **never import torch**: they call `torch.set_num_threads` only if torch is already imported and otherwise rely on `OMP/MKL/OPENBLAS_NUM_THREADS` (checked to hold for a torch imported later). This keeps the server torch-free (§4.1, §5.5). A torch first imported inside a `limit_threads` block keeps that count after the block.
+- `job_scope(job_id, *, sink, cancel_file=None)` takes the job id positionally or by keyword.
+- Additive helpers: `progress.sink_path()`, `runio.atomic_open`, `runio.write_bytes_atomic`, `cli.tracked_command`, `cli.run_studio`, `EXIT_CANCELLED`, `STUDIO_DEPS`, `STUDIO_INSTALL_HINT`. The install hint prints "SPARC Studio is not available (…)" and "Install it with: pip install "sparc[studio]"".
+- `sparc core reproduce` on a folder without `manifest.json` exits 2 with a message (it raised), and a failed reproduction's exit status now propagates through `sparc core`.
+- `LogBridge` does not change logger levels; the host decides verbosity (the CLI and the job worker configure `logging` at INFO).
+- `runio.update_manifest` on a folder without `manifest.json` starts an empty manifest instead of raising (documented; parallel items relied on it).
+- `progress.py` is about 900 lines (mostly docstrings) against the estimated 350.
+
+**Core instrumentation (`pipeline.py` and the instrumented modules)**
+- `checkpoint_save` units are planned on **every** node that saves a checkpoint (S2_S3, baselines, cv_curve, S4, S5, climate, S6), not only S2_S3 as the §5.4 table shows, so planned units equal observed units.
+- `climate_model` units sit on the `climate` node (its own stage span, where the downloads happen), not on S5; `run.plan` is re-emitted with the real model count through an `on_models` callback.
+- `CHECKPOINT_KEY` maps S1 → S3 as well as S2_S3 → S3 (S1's influence result is restored from the S3 checkpoint); both become cached when S3 is done.
+- The engine's baseline pass (`engine_init`) runs lazily in the first stage that needs the engine (normally S4), whose timing includes it; a fully cached resume skips it. S6 plans its 8 engine passes and audit step only for treatments that have an S4 response.
+- Extended signatures: `plan_stages(…, *, block_m, write)`, `fingerprint_sections(…, *, coarse, cv_curve)`; `checkpoint_status` also returns `fingerprint` and `fingerprint_match` and reads the mode args from `studio/launch.json` or the manifest when `fast is None`; `multiverse.run_variant(…, changes, run_meta)`; `run_core` reads an optional `optimize.min_dose` (default 0).
+- A `plan_stages` call made before S1 (Launch, the first `run.plan` with `cv.block_m: auto`) cannot know the main CV block, so it may plan one extra CV-curve partition; `run_core` corrects it with a re-emitted `run.plan` after S1.
+- A distance curve whose partitions are all skipped is `stage.skip{no_partitions}` plus `cv.partition_skipped` warnings (it used to write a `cv_distance.json` holding only the main-block row).
+- `optimize.json` Pareto points are `{budget, total_benefit, n_cells, n_segments, gini}` (`n_treated` counted segments).
+- `run.plan` events omit `null` `est_*` fields and may drop labels to fit one 4 KB line; `plan_stages()` returns full nodes.
+- GWRF forests use `n_jobs` capped by `OMP_NUM_THREADS` at fit and predict time, so one-thread predictions are bit-reproducible.
+- Missing equity scores are replaced by the mean score before the optimiser.
+- Atomic writes also cover the CMIP6 catalogue cache, the GHCN and ISD caches, planner GeoTIFFs and the GeoPackage.
+- The fixture's run files sit at the top level of `tests/studio/fixtures/synth_run/` (next to `events.jsonl` and `FIXTURE.json`) so the replay runner copies them by artifact path; `scripts/make_studio_fixtures.py` works in a fixed folder with a fixed data mtime, so recorded paths and the fingerprint are stable.
+- Python and numpy warnings still reach the `LogBridge` as `log.*` warning events.
+- The code digest covers every top-level `sparc/core/*.py` except `progress.py` and `runio.py`, so adding `catalog.py` (M1) and `session.py` (M3) changed it again, as §11 anticipates; the committed fixture's `code_sha256` follows the code it was recorded with.
+
+**Backend foundation**
+- Bearer-authenticated unsafe requests without `Origin`/`Referer` are accepted (§10.8 "scripts and tests may send Bearer"); a mismatching `Origin`/`Referer` is still 403.
+- An omitted `after` on the event and log endpoints reads from the first line (cursor 0 is the first line's offset).
+- `TrackerSnapshot.log_capped` reports the 200 MB debug cut-off (§5.6).
+- The CLI exits 1 instead of starting a second server when the lock names a live Studio process that does not answer `/api/health` within 10 s (§10.9 now says so).
+- The terminal prints `SPARC Studio <version> - workspace <dir>` and `Open <url>/auth?t=…` (J1 step 2 updated).
+- The network host check of the scheduler preflight (§10.4) is advisory, not a blocking check; `/api/system/netcheck` and the offline setting cover the user-facing side.
+- `--reindex` empties the rebuildable tables, and each feature package registers a reindex hook for its own (runs, studies, exports, findings, scenarios, engine results); project rows are registered from `project.json` at reindex and at every start.
+- `@job_kind` also takes `preflight`, `retry_params` and `threads` hooks.
+- On a one-CPU machine `engine_threads` defaults to 1, so the defaults satisfy `threads_heavy + engine_threads ≤ thread_budget + 1`.
+
+**Frontend foundation**
+- TypeScript is pinned to 5.9.3: `openapi-typescript` 7.13 needs TypeScript 5.
+- `@fontsource/archivo` has no width axis, so the display face renders at normal width (`font-stretch: 87%` has no effect).
+- The `GridCanvas` < 10 ms check times the recolour step (`colorize()` into the pixel buffer); canvas drawing cannot run in jsdom.
+- `HexbinScatter` draws rectangular 2-D bins, because `/stats/hexbin` returns `x_edges`, `y_edges` and `counts`.
+- `RouteDef` has an optional `fullWidth`; Mission Control, the run track, map and Lab routes use it.
+- The tab title reads `(2 running) ▶ 42% S2_S3 · SPARC Studio` with several running jobs.
+- `layouts/resources.ts` defines the shell's `ProjectDetail` and `RunDetailHead` types and hooks (cache keys `project:<pid>`, `run:<rid>`, `run:<rid>:outputs`); `contract.check.ts` checks them too.
+- The final-status toast fetches `GET /api/jobs/{jid}` for its headline numbers.
+- `grid.bin`'s `zone` is an index into `GridMeta.zones` (`-1` = none).
+- The chart kit's `Bars` and `DotRange` have no reference-line prop, so the Accuracy interval-honesty panels show the 0.90 target through outlined groups, the caption and the legend instead of a line (§6.4).
+
+### M1–M2 (browse, run & track)
+
+**Projects and setup**
+- `POST /api/projects` takes `options.trust_pickles` (default false) for the Providence run import; imported checkpoints stay untrusted otherwise (§10.8). The Lab's trust dialog re-imports a run with trust when the user confirms.
+- Slug collisions are `409 conflict` (no automatic suffix) except the `<name>_open` project; a project deleted without its files keeps its folder, marked deleted, so its slug stays taken.
+- Config saves: `If-Match` is optional; an identical save returns the current version. The wizard saves with one atomic `PUT /config {raw}` (never a half-saved config), not a `PATCH` per section.
+- Input jobs that link into the config edit `config.yml` in the worker under the project lock and leave `.config_note.json`; the server records the version from the job's events (workers still never write SQLite). The UI starts input jobs with `link: false` (the CMIP6 and forcing cards have an opt-in "Link into the config when done"), so each ends with **Link into config** showing the YAML diff first, as J2 step 6 describes.
+- `input.cmip6` also links `climate.experiments` when the fetched SSPs differ; `input.ghcn` sets `planner.ghcn_station` only when unset. `features_join` on a project that has predictors appends the `open_*` predictors and maps only unmapped roles; bootstrap mode replaces predictors and roles; neither creates levers.
+- `Project.report` overrides are stored in `project.json`, not in `config.yml`.
+- File kinds map to folders `data|join → data/`, `layers|features|forcing|climate → inputs/<kind>/`, `other → other/`.
+- The impact preview compares in non-fast mode at the top level and uses each run's own mode arguments per run (a fast run shows no `core` change for a `tune_lambda` edit).
+- Join tables use core's keys `key`/`right_key` (not "on / right_on").
+- Inputs has its own route `/p/:pid/setup/inputs` (same Setup page) so it can carry its nav entry; `/p/:pid/setup` redirects to the data step.
+- Setup's completion dots for scenarios, analysis and about come from the draft and its validation (the readiness spine has no rows for them).
+- The CRS picker is a curated offline EPSG list (WGS84, Web Mercator, UTM zones on WGS84/NAD83/ETRS89, common State Plane and national grids) and accepts any typed EPSG code; there is no EPSG search endpoint.
+- The data check applies `config_patch` as a JSON Merge Patch and its preview carries the `planner.layers` columns, so the People & land cover card can draw its map.
+- The packaged `brown4.csv.gz` is 1.6 MB (§9.1 updated).
+- `GET /api/projects?archived=true` includes archived projects with the active ones.
+- The input cards show a job strip and links to Mission Control and the job tray rather than redrawing per-object progress (CMIP6 models, Sentinel-2 scenes) inside the card.
+
+**Runs, run hub and tracking**
+- `RunSummary.studies` = attached study ids; stages a finished run skipped carry **Re-run with <stage>** (Launch prefilled with `?from=<run_id>`), because a resume replays the run's own snapshot and cannot add a stage; `overview.outputs_grid` lists expected outputs plus pending post-run actions and skipped stages; `overview.studies` always has eight chips; uncertainty sources are matched to studies by `studies.out_dir`; Status Board cells show queued post-run jobs as running with reason `queued`; the runs routes answer `503 not_ready` while the registry starts; a cancel-requested job that exits on SIGTERM ends `cancelled` (api.md §19 has the wire details).
+- A Studio run that completes becomes its project's active run when the project has none; deleting the active run clears it.
+- Resume (§5.9) is refused only for a run without a launch snapshot (a CLI run), a complete run, or while a job runs on it. A checkpoint that no longer matches the snapshot does not block it: the checkpoint card says "a resume refits", and the resume reuses nothing.
+- Imported runs with a manifest but no `run_state.json` get `created_utc` = manifest time − Σ `timings_s`.
+- Skipped stages read from a manifest carry the `plan_stages` reasons; Status Board cells show `disabled` for config-disabled stages; `overview.timings` includes `finish`.
+- `DELETE /api/runs/{rid}/checkpoint` works on runs imported in place (an explicit checkpoint-card action).
+- The output catalog adds an `optional` flag, a `studio` root and extra ignored globs.
+- The view sections' inner shapes are defined by the run hub's TypeScript types (`studio-web/src/api/runs.ts`), which the server builds (api.md §6.1 fixes only the keys).
+- Hexagon mode is computed in the browser; map-legend and Relationships brushes become uploaded mask blobs (a copied URL works within the same workspace and run); the Accuracy histogram brush is a portable filter.
+- Interval honesty (Accuracy) outlines groups more than 5 points under the 0.90 target, and states the target in the caption and legend (see the frontend foundation entry on reference lines). Response shows the realised dose as a second "requested vs realised dose" chart next to the dose–response line, because the line-and-band chart has no secondary axis.
+- A missing causal DAG audit reads "No DAG audit in this run" (it is off unless configured), not "older code".
+- "Open in Lab" on a configured scenario opens `/r/:rid/lab/library?configured=<slug>`; "Clone to edit" creates a Lab scenario from the configured scenario's `doc` and opens it.
+- Tracking: a page opened mid-run replays the job's event log (up to about 48 MB) for exact progress, otherwise it rebuilds approximate counters from the snapshot and says so (no exact reducer state in the snapshot). The baselines forest plots per-fold baseline MSE minus the stack's pooled out-of-fold MSE; the S7 panel shows totals and links to the Budget view (Pareto points are not events); timeline warning ticks come from `GET /events?types=warning`; epoch losses are kept beside the reducer state; jobs without a plan show only the stages seen; per-stage estimates on the rail are the client cost split scaled to the header ETA; **Duplicate with changes** opens Launch with `?from=<run_id>`.
 
 ### M3 (Scenario Lab)
 
-- **Core code fingerprint.** `sparc/core/session.py` (`open_run`, `config_for_run`) is a top-level core module, so adding it changed the core code digest (§11). Checkpoints written before it report `code_match: false`, and exact results computed from them read as stale. This is the documented consequence of adding a core module.
+- **Core code fingerprint.** `sparc/core/session.py` (`open_run`, `config_for_run`) is a top-level core module, so adding it changed the core code digest (§11). Checkpoints whose `checkpoint.json` was written before it report `code_match: false` (checkpoints without the sidecar, from before the core instrumentation, report `null`: the code that wrote them is unknown), and exact results computed before the change read as stale; results computed afterwards record the new digest and are current. This is the documented consequence of adding a core module.
 - **Scenario status** (§7.4): a preview marks a draft `previewed`. The Lab previews each edit before its autosave, so a save whose `{edits, options}` match the latest preview stays `previewed`. Other content changes make the scenario a `draft` again.
 - **Shared exact cache** (§7.4, §7.7): when a scenario's exact run is a cache hit on a result made for another scenario with identical content, the result is copied as this scenario's own. It is then listed, opened in the inspector, compared and packed like any other.
 - **Engine actions**: the memory refusal's evict action is `POST /api/runs/{rid}/engine/evict`, because actions are POST/GET only. Exact requests on a run that is not loaded run the memory preflight. While such a request loads a cold run, the run's engine state is `loading`, carrying that request's job id. Plans, scenarios and sweeps cannot be deleted while a job on them runs (`409 active`).
@@ -2734,6 +2822,73 @@ Behaviour that differs from the text above as built, grouped by milestone. Wire-
 - **Scenario Lab nav entry** (§3.1): `Project.last_run.has_checkpoint` keeps the entry disabled until the run it opens has a checkpoint. That run is the active run, else the latest one.
 - **Compare** (§7.12): every pair is read A − B (item a minus item b), in the table, the paired SE and the difference layer.
 - **Climate explorer** (§7.11): the explore reply carries today's exposure as `present` (the `summarize_projections` dict). Each projection carries the selected statistic's warming, which drives the client-side future maps.
-- **Decision packs** (§7.13): realised-change maps show the size of the change (lightest = unchanged), and the narrative states likely ranges from the smaller to the larger value. Pack downloads need `POST /api/exports` (`[S]`, M4). Until that exists, the Lab's pack buttons report the missing route, and the pack kinds run when submitted as jobs.
-- **Emulator**: the `build_emulator` action targets `POST /api/runs/{rid}/actions/emulator` (`post.emulator`, M4). Until then the preview reports `no_emulator` with the action, and exact runs work.
+- **Decision packs** (§7.13): realised-change maps show the size of the change (lightest = unchanged), and the narrative states likely ranges from the smaller to the larger value. Pack downloads go through `POST /api/exports`, which arrived in M4; until then the Lab's pack buttons reported the missing route.
+- **Emulator**: the `build_emulator` action targets `POST /api/runs/{rid}/actions/emulator` (`post.emulator`, added in M4). Without an emulator the preview reports `no_emulator` with that action, and exact runs work.
+- **Spill** is the total change inside and outside the edited cells plus `outside_share`; rings step by `max(30 m, cell size)` out to 2 km.
+- **Engine host**: it disables progress-tick throttling while serving a request (every fold ticks); at server shutdown it keeps running while an engine job is live, unless jobs are being stopped; a host that recycles itself writes `engine/recycle.json` and the executor re-opens the most recently used run at most once per 300 s; `SPARC_STUDIO_ENGINE_SLACK_GB` (default 1.0) is added to memory needs.
+- **Incompatible checkpoints** (§7.6): the state is stored in `<run>/studio/engine/status.json` keyed on the checkpoint, and its action is **Refit S2/S3** = a re-run of the run from its launch snapshot (`POST /api/runs/{rid}/rerun`). The untrusted-checkpoint action re-imports the run with `trust_pickles`.
+- **Packs** are zip files; a decision pack is a draft when its scenario has no exact result, a plan pack when the plan is unverified (`exports.options_json.draft`).
+- **Compare** regions are region ids or `zone:<code>`, and results always include `all`.
+- **Hatching** on the design map: edited cells are always tinted and are hatched only when the preview is flagged unreliable (J6: a local edit is not hatched); result layers hatch cells with extrapolation > 1.
+- **Sweep fits**: only the saturating fit has a closed form from the reported A and d_s; the linear fit is drawn as the least-squares line through the origin, and the sigmoid fit shows only its d90 line.
+- **Climate warming** values are in target units, as `summarize_projections` produces them.
 
+### M4 (studies, exports, findings, results page, integration)
+
+**Studies and post-run actions (backend)**
+- Studio placebo, simcheck and multiverse studies are **attached** to their target run at creation, so a finished study feeds that run's uncertainty report without a separate attach (§8 updated). Detaching a finished study also re-enqueues `post.uncertainty` when the run already has a report.
+- `post.emulator` is registered without `needs_checkpoint` and checks the checkpoint in a start-time preflight, so it can wait in a Launch "then" chain; `POST /actions/emulator` still refuses a run without a checkpoint (§8 updated).
+- `post.writeup` uses the merged manifest (stage-file sections included), as §8 says; the first build read raw `manifest.json`.
+- A simcheck parent folder whose replicates sit in sub-folders (Providence `simcheck/{null,null_direct,physics}`) is imported as **one study per sub-folder**, each matching its `uncertainty.json` source; an empty folder (`simcheck_a`) is refused and reported as a warning by the Providence example.
+- `Study.status` uses the job statuses (`succeeded` for imported folders). A reproduction's child keeps origin `reproduction`; placebo and multiverse children are `study_child`.
+- When a study ends, every child it has is re-derived, so a cancelled or failed pass never leaves its fitting child marked running.
+- A fitting study child has a live `run_state.json` and no `run.core` job of its own. The runs registry reads such a row (origin `study_child` or `reproduction`, a `study_id`, or a manifest whose `run_meta` names a study) as `running`, never `external_live`, and its watcher never starts a `run.external` pseudo-job for it, so a full rescan (a server restart) while a child fits leaves it alone. A row an older server flipped to `external_live` is put back to `study_child` on the next pass. Study-child ids use `run_state.started_utc` before the manifest time, so a child indexed while it ran keeps its id after `--reindex`. The studies hooks still re-derive child rows at `run.dir`, `run.end` and the end of the study.
+- Study requirement codes are config keys or run files (`manifest`, `predictions`, `checkpoint`, `planner.layers`, `physics.roles.canopy`, `physics.roles.impervious`, `data.path`, `manifest.config`, `config_dir`).
+- `study.reproduce` gets `config_dir` from `launch.json`, else the folder of the config given at import, else the manifest's `provenance.config_dir`.
+
+**Exports, reports and findings (backend)**
+- The results-page builder lives in `sparc/core/results_page/` with `build_results_page()`, its template and `python -m sparc.core.results_page`; `scripts/results_page/build_page.py` is a short shim, the old template is gone, and `check_page.py` targets the packaged builder and gained `--build`, an HTML-shell check and a walk through every CV fold. On Providence the page differs from the old one only by the computed Pareto caption and the added `hd_95_ssp245_mid`; the null-artefact caveat, the single-generator wording and the uncertainty "vs null" column are unchanged. Corners of runs with `data.reproject_to` are computed in the reprojected frame.
+- `POST /api/exports` validates everything it can before creating the row (ids in the project, outputs, layers, CRS, placebo study) and refuses a client-sent `export_id`; each export keeps an `export.json` record, and a `running` row whose job ended is reconciled when read.
+- The GIS pack is **one zip**, and a Markdown findings export is a zip with its images, because `Export.path` is a single file; the Markdown report embeds its images as data URIs.
+- Bundles never follow symlinks out of the run folder.
+- Reports: the sections are `summary, accuracy, validation, scenarios, plans, climate, equity, caveats, limitations, provenance, findings` in that order (`SECTIONS`, their titles and one builder per section in `_BUILDERS` of `sparc/studio/exports/report.py`); every number is written from the run's files (no canned text); images are data-URI `<img>` elements, at most six maps of about 360 px; SVG is never inlined; climate sentences without warming numbers are left out instead of failing.
+- Findings: a run of another project is refused; image uploads are staged and content-checked before they replace the current image; the findings reindex keeps only bare image names.
+- The report preview checks its ids against the project, as the export does.
+
+**Studies, exports and findings (web app)**
+- Report and findings export requests always send their id lists (possibly empty), so the selection is explicit; the bundle always sends its output list and needs at least one output (an empty list would mean "all").
+- The Findings notebook loads a project's findings and filters by run in the browser, so reordering under a run filter keeps hidden findings' positions; on `/findings` reordering needs a chosen project.
+- The literature card has no launch form (the response stage computes the panel).
+- A finished simcheck replicate without a share (null generators) is drawn in the no-data colour with "–", so it is not mistaken for pending; gate failures are hatched.
+- The report preview is made inert before it reaches the sandboxed iframe: scripts, frames, `on*` handlers, `javascript:` URLs, `<meta http-equiv=refresh>` and `<base>` are removed and a CSP meta forbidding scripts is added.
+- Running studies refresh their views every 10 s (status events only fire on status changes); the Studies hub matrix refreshes while any cell runs.
+- The multiverse form launches every built-in variant by default; custom variant keys are validated as the server does; reproduction tolerances must be above zero; **Run again** starts from the last study's parameters.
+- The emulator card reads the manifest's `emulator` section (falling back to `emulator.json`).
+- Only studies the server accepts are offered: finished placebo studies for the results page, finished studies as uncertainty sources, Studio simchecks to continue; imported studies are never offered for file deletion.
+
+**Integration (contract, end to end, CI)**
+- The replay journey plays the fixture at ×1 (§14.5 updated) and creates its demo through the API with the fixture's `n = 40, seed = 0` (the one-click demo uses n = 96).
+- The real fast-run journey cancels twice (during S2_S3, and again once S4 runs) to prove that resume reuses cached stages, then walks the Lab, compare, climate, plans and a decision pack.
+- `contract.check.ts` checks request bodies for type and nullability only. Its `Gate<…>` allowances for known client nullability differences fail the typecheck once they no longer apply; at release the list is empty, because the client types of tracking, projects, the run hub and the Lab were made nullable where the server sends `null` (api.md §19).
+- The accessibility test also requires an accessible name on every link. Every page fits 390 px: the children of `.stack` and `.card` have `min-width: 0` (foundation), so Mission Control's tab strip, the job picker, log lines and the Docs tab's documents scroll or wrap inside their own boxes.
+- The performance fixture has 54,901 cells (the synthetic generator at n = 281, real predictions). The tracker folds a replayed event log in slices of 500 events and yields to the browser between slices, so opening a finished 20,000-event job meets the 100 ms frame budget, as the live-streaming case does.
+- The Providence journey uses `$SPARC_PROVIDENCE_RUNS` or `output/core/providence`, copying a run outside the repository to a temp folder before importing it.
+- The wheel smoke test builds from a hard-linked copy of the sources (no `build/` left in the tree); locally it installs with `--no-deps` plus the server dependencies, and CI installs the full `[studio]` extra with CPU torch.
+- `tests.yml`'s legacy job passes `--ignore=tests/core --ignore=tests/studio`. CI sets `SPARC_E2E_REQUIRE_BROWSER=1` and `SPARC_CONTRACT_REQUIRE_TS=1`, so a missing browser or Node fails instead of skipping; the old-app guard falls back to the pushed range (`github.event.before`) on pushes to the default branch.
+
+### Documentation
+
+- `docs/studio/doctest.py` runs every fenced shell block marked `# runnable` in the user and developer guides, the release notes and the README against a fresh temporary workspace, and also checks every other shell command statically (`sparc studio` and `sparc core <command>` flags parse with the real parsers and `--project` configs exist, scripts and test paths exist, npm scripts and `sparc` modules exist, `python -c` snippets compile and import names that exist; `<placeholders>` are not checked). The runnable examples call the API with `curl -fsS`, so an HTTP error fails the block. `# runnable (needs: node)` marks blocks that need `studio-web/node_modules`; unmet needs fail in CI.
+- `docs/studio/check_api_doc.py` diffs api.md's endpoint definitions against the generated OpenAPI document (191 operations at release, none missing or extra); api.md's route spellings now use the server's parameter names, and `POST /api/runs/{rid}/engine/evict` has its own definition.
+- The guides' screenshots (`docs/studio/img/`) come from the end-to-end runs; Home, the project overview, Activity, Settings and the Studies hub were captured with the same harness on the replay runner, and the exact-result inspector comes from the M3 milestone check (the e2e journeys do not scroll to it).
+
+### Known gaps at release
+
+These spec points are not met by 1.0.0; each is tracked with its owner.
+- **ETA after resume**: the estimate does not discount cached stages at first (a resumed fast run showed ≈16 min for a 40 s resume).
+- **Uncertainty sources and relative paths**: `uncertainty.json` sources written as relative paths (Providence: `output/core/providence/simcheck/null/`) are matched against the server's working directory, so they match the imported study rows only when the server runs from the repository root.
+- **0.90 reference line** on the Accuracy interval-honesty charts needs a `refLines` prop on the chart kit's `Bars` (§6.4); the target is conveyed by outlines, caption and legend.
+- **Brush strokes** saved in an earlier session reload as per-cell edits that can be removed but not repainted (no blob read endpoint).
+- **Tests**: the Providence tests skip unless `SPARC_PROVIDENCE_RUNS` (or `output/core/providence`) is available.
+- **Test coverage**: some paths are exercised only through typecheck and shared helpers, not a dedicated page test (Lab promote, ladder, batch run, sweep creation and design-CSV import); the run hub's `views.json` fixture was generated once by a script that is not in the repository (the server's `runs/views.py` now builds the same shapes); the long-running study views (simcheck grid, multiverse, reproduce) were checked live only through a placebo study.
+- **Platforms**: the engine host's Windows `AF_PIPE` transport and Windows/macOS process handling are implemented but untested; the engine's mid-load `loading` progress and the idle-shutdown watchdog have no automated test.

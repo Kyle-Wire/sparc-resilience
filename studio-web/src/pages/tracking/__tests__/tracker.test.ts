@@ -3,7 +3,7 @@
 // ETA and the Python golden.
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { getEvents, TrackerSnapshot } from "../../../api/tracking";
 import type { StreamManager } from "../../../api/sse";
 import type { JobEvent, JobStatus } from "../../../api/types";
@@ -227,6 +227,27 @@ describe("snapshot then events after the cursor", () => {
         if (k % 11 === 0) expect(toContract(resumed)).toEqual(toContract(replay(sample.slice(0, k + 1))));
       }
       expect(plain(resumed)).toEqual(plain(full));
+    }
+  });
+
+  it("folds a long log in slices, yielding to the browser between them, to the same state", async () => {
+    // 1,500 extra log lines inside S0: a first page of 1,600 events is folded in four slices of at most 500,
+    // with a yield (a 0 ms timer) between slices, then the rest of the log
+    const log = sample.findIndex((e) => e.type === "log");
+    const long = [...sample.slice(0, log + 1), ...Array.from({ length: 1500 }, () => sample[log]), ...sample.slice(log + 1)].map((e, i) => ({
+      ...e,
+      seq: i + 1,
+      cursor: i * 100,
+    }));
+    const { fetchEvents } = eventsApi(long, 1600);
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const exact = await replayLog("j_long", long[long.length - 1].cursor, fetchEvents);
+      expect(exact).not.toBeNull();
+      expect(plain(exact!)).toEqual(plain(replay(long)));
+      expect(timers.mock.calls.filter((c) => c[1] === 0).length).toBeGreaterThanOrEqual(3);
+    } finally {
+      timers.mockRestore();
     }
   });
 

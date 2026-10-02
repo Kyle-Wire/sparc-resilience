@@ -2,6 +2,8 @@
 
 This document is the wire contract for `sparc/studio` (server) and `studio-web` (client). Behaviour is specified in [`SPEC.md`](SPEC.md). On wire-format questions this file wins.
 
+Status: **as built** (SPARC Studio 1.0.0, 2026-10-02). The body describes the implemented contract; §19 lists every place where the build differs from the reviewed design, milestone by milestone. `python docs/studio/check_api_doc.py` checks that the endpoint definitions below match the server's OpenAPI document route for route.
+
 Each endpoint is tagged with its **owner** work item:
 - `[F]` backend-foundation
 - `[P]` backend-projects
@@ -448,15 +450,15 @@ Body: `{config_patch?: object}` (a deep-merged override, so unsaved form values 
   flags: { code: string; severity: "warn"|"info"; message: string }[];
   dose_scale: Record<string, { sd: number; doses: number[]; doses_in_sd: number[]; percentile_reached: number[] }>;
   coarse: object|null; extent_m: [number, number]; columns_missing: string[]; preview_token: string;
-  preview_columns: string[]; elapsed_s: number }   // the columns `{column}.bin` serves for this token
+  preview_columns: string[]; elapsed_s: number }   // the columns `<column>.bin` serves for this token
 ```
 
 Errors: `422 validation` (missing target/x/y, unreadable file), `404` (data file). Runs inline, typically under 2 s; files over 2 M rows return `413 too_large_inline`.
 
-**`GET /api/projects/{pid}/data/preview/{preview_token}/grid.bin`**
+**`GET /api/projects/{pid}/data/preview/{token}/grid.bin`** (`token` = the check's `preview_token`)
 Packed `ix:int32, iy:int32, lon:float32, lat:float32` (§0.4) plus a `GridMeta` JSON in the `X-SPARC-Grid` header.
 
-**`GET /api/projects/{pid}/data/preview/{preview_token}/{column}.bin`**
+**`GET /api/projects/{pid}/data/preview/{token}/{name}`** (`name` = `<column>.bin`; any other name is `404`)
 Float32 column in row order. Tokens expire after 30 min. The columns are the table's numeric columns plus, when `planner.layers` names a readable table, its numeric columns (`people`, `people_60_plus`, `people_under_5`, `lc_*`) aligned as the planner reads them: joined by id, or summed (people) and averaged (fractions) per coarse cell. A data column of the same name wins.
 
 ### 5.3 Config
@@ -789,7 +791,7 @@ Errors: `422 validation` (unknown column or namespace, bad geometry), `422 needs
 
 **`GET /api/runs/{rid}/regions`** → `200 {id, name, spec: SelectionSpec, n_cells, created_utc}[]`.
 **`POST /api/runs/{rid}/regions`** Body `{name, spec}` → `201 {id, name, spec, n_cells}`.
-**`DELETE /api/runs/{rid}/regions/{id}`** → `200 {ok: true}`.
+**`DELETE /api/runs/{rid}/regions/{rgid}`** → `200 {ok: true}`.
 
 Regions are stored per project and resolved per run. A region created on one run is listed on every run of the project, with a `portable` flag.
 
@@ -896,6 +898,8 @@ Errors:
 - `409 untrusted_pickle`
 
 **`DELETE /api/runs/{rid}/engine`** → `200` engine status (the run is evicted).
+
+**`POST /api/runs/{rid}/engine/evict`** → the same as `DELETE /api/runs/{rid}/engine` (the body is ignored). It exists so an `Action`, which is POST or GET only, can evict a run; the `engine_memory` refusal's action uses it.
 
 ### 7.3 Levers, emulator, preview, compile
 
@@ -1149,20 +1153,20 @@ Params are validated by pydantic per kind (`additionalProperties: false`). `resu
 | `input.ghcn` `[P]` | `{station}` | `{path, years: [number, number]}` |
 | `input.stations` `[P]` | `{}` | `{path, n_stations}` |
 | `post.baselines` `[S]` | `{models?: string[]}` | `{verdict, best_baseline, rows: object}` |
-| `post.planner` `[S]` | `{package?: string /* configured slug or exact name */, thresholds?: number[], hex_sizes?: number[], export?: boolean}` | `{people_total, package, files: string[], hot_days: boolean}` |
-| `post.emulator` `[S]` | `{patches?: number = 8}` | `{levers: Record<string, {patch_pass_rate, uniform_rel_err}>}` |
+| `post.planner` `[S]` | `{package?: string /* configured slug or exact name */, thresholds?: number[], hex_sizes?: number[], export?: boolean = true}` | `{people_total, package, files: string[], hot_days: boolean}` |
+| `post.emulator` `[S]` | `{patches?: number = 8}` (1–64). The checkpoint is checked when the job **starts** (a `preflight`), not when it is queued, so it can sit in a Launch `then` chain | `{levers: Record<string, {patch_pass_rate, uniform_rel_err}>}` |
 | `post.uncertainty` `[S]` | `{multiverse_study?: string, simcheck_studies?: string[], placebo_study?: string, real_r2_gate?: boolean}` (default: attached studies) | `{n_scenarios, sources}` |
 | `post.writeup` `[S]` | `{}` | `{files: string[]}` |
-| `study.placebo` `[S]` | `{kinds: ("grf"\|"shift"\|"rotate")[], coarse_m: number\|null = 60, seed: number = 0, grf_range_m: number = 600}` | `{n_pass_model, n_pass_causal, n_placebos, children: string[]}` |
+| `study.placebo` `[S]` | `{kinds: ("grf"\|"shift"\|"rotate")[] = all three, coarse_m: number\|null = 60, seed: number = 0, grf_range_m: number = 600}` | `{n_pass_model, n_pass_causal, n_placebos, children: string[] /* child run dirs */}` |
 | `study.simcheck` `[S]` | `{design: Record<"physics"\|"additive"\|"own_only"\|"coarse_scale"\|"confounded"\|"null", number>, coarse_m: number\|null = 90, epochs: number = 200, workers: number = 1, threads: number = 1, continue_study_id?: string}` | `{n_rows, n_errors, summary: object}` |
-| `study.multiverse` `[S]` | `{variants?: string[], custom_variants?: Record<string, Record<string, unknown>>, coarse_m: number\|null = 60, workers: number = 1, threads: number = 1}` | `{sign_stability_min, median_kendall_tau, children: string[]}` |
-| `study.reproduce` `[S]` | `{stages?: string[] = ["S0","S1","S2","S3"], tol_r2?: number = 0.01, tol_effect?: number = 0.05}`. The server passes `config_dir` from the parent's `launch.json` or import config and `out_dir` = the child run dir; neither is a client param | `{pass: boolean, child_run_id, n_hard_fail: number}` |
+| `study.multiverse` `[S]` | `{variants?: string[], custom_variants?: Record<string, Record<string, unknown>>, coarse_m: number\|null = 60, workers: number = 1, threads: number = 1}` | `{sign_stability_min, median_kendall_tau, children: string[] /* child run dirs */}` |
+| `study.reproduce` `[S]` | `{stages?: string[] = ["S0","S1","S2","S3"], tol_r2?: number = 0.01, tol_effect?: number = 0.05}`. The server passes `config_dir` from the parent's `launch.json` or import config and `out_dir` = the child run dir; neither is a client param | `{pass: boolean, child_run_id: null, child_run_dir: string, n_hard_fail: number}` (the server links the child run from `run.dir`; it keeps origin `reproduction`) |
 | `study.benchmark` `[S]` | `{seed?: 0, ab?: true, epochs?: 150, n?: 96}` | `{runs: object}` (the kind writes `benchmark.json`/`.md` in the study dir) |
 | `export.bundle` `[S]` | `{export_id, run_id, outputs?: string[], include_checkpoint?: boolean = false}` | `{export_id, path, bytes}` |
-| `export.gis` `[S]` | `{export_id, run_id, layers?: string[]}` | `{export_id, path, bytes, files: string[]}` |
+| `export.gis` `[S]` | `{export_id, run_id, layers?: string[]}` | `{export_id, path, bytes, files: string[]}`. `path` is one zip: `geotiff/*.tif`, `hexagons.gpkg` (layers `hex_250m`, `hex_500m`), `logger_sites.csv`, `before_after_pairs.csv` (with lon/lat) and `README.txt` |
 | `export.page` `[S]` | `{export_id, run_id, placebo_study?: string}` | `{export_id, path, bytes}` |
-| `export.report` `[S]` | `{export_id, run_id, sections: string[], result_ids?: string[], plan_ids?: string[], finding_ids?: string[], format: "html"\|"md"}` | `{export_id, path, bytes}` |
-| `export.findings` `[S]` | `{export_id, project_id, run_id?, ids?: string[], format: "md"\|"html"}` | `{export_id, path, bytes}` |
+| `export.report` `[S]` | `{export_id, run_id, sections: string[] /* ≥ 1, §10 */, result_ids?: string[], plan_ids?: string[], finding_ids?: string[], format: "html"\|"md" = "html"}` | `{export_id, path, bytes}`. Markdown embeds its maps and chart as data-URI images, so it stays one file |
+| `export.findings` `[S]` | `{export_id, project_id, run_id?, ids?: string[], format: "md"\|"html" = "html"}` | `{export_id, path, bytes}`. `md` writes `findings_md.zip` (`findings.md` + `images/`) |
 | `export.decision_pack` `[E]` | `{export_id, result_id, thresholds?: number[]}` | `{export_id, path, bytes, draft: boolean}` |
 | `export.plan_pack` `[E]` | `{export_id, plan_id}` | `{export_id, path, bytes}` |
 | `export.compare_pack` `[E]` | `{export_id, comparison_id}` | `{export_id, path, bytes}` |
@@ -1184,10 +1188,16 @@ type StudyStatusRow = { kind: "baselines"|"planner"|"emulator"|"uncertainty"|"wr
   state: "not_run"|"queued"|"running"|"done"|"stale"|"failed"; study_id: string|null; job_id: string|null; updated_utc: string|null;
   headline: string|null; estimate: { est_s: number, est_lo: number, est_hi: number }|null; attached: boolean|null; action: Action|null;
   requirements: { ok: boolean, missing: string[] } };
+  // missing: config keys or run files, e.g. "manifest", "predictions", "checkpoint", "planner.layers",
+  //          "physics.roles.canopy", "physics.roles.impervious", "data.path" (a frame-input run), "manifest.config", "config_dir"
 type Study = { id: string; project_id: string; kind: string; target_run_id: string|null; job_id: string|null; out_dir: string;
-  status: string; params: object; summary: object|null; origin: "studio"|"imported"; created_utc: string; updated_utc: string;
+  status: string;   // the job statuses: "queued"|"running"|"succeeded"|"failed"|"cancelled"|"interrupted"; imported folders "succeeded"
+  params: object; summary: object|null;   // summary may carry "headline" (overview chip) and "label" (uncertainty source label)
+  origin: "studio"|"imported"; created_utc: string; updated_utc: string;
   children: RunSummary[]; attached_runs: string[]; stale_vs: string[] };
 ```
+
+`out_dir` is the study folder core writes into (for a multiverse or a simulation check, the path `uncertainty.json` names in its `sources`), so run views can match uncertainty sources to study rows. Studies have a mirror file `studies/<study_id>/study.json` that `--reindex` reads back.
 
 ### Status and launch
 
@@ -1195,13 +1205,16 @@ type Study = { id: string; project_id: string; kind: string; target_run_id: stri
 
 **`POST /api/runs/{rid}/actions/{kind}`**
 `kind ∈ baselines|planner|emulator|uncertainty|writeup`. Body: the kind's params (§8) → `202 Job`.
-Errors: `422 requirements` (`detail.missing`, e.g. `planner.layers`), `409 no_checkpoint` (emulator).
+Errors: `404 unknown_kind`, `422 requirements` (`detail.missing`, e.g. `planner.layers`), `409 no_checkpoint` (emulator), `422 validation` (params; an unknown `package` for the planner; uncertainty study ids that are not studies of that kind).
 
 **`POST /api/runs/{rid}/studies/{kind}`**
 `kind ∈ placebo|simcheck|multiverse|reproduce`. Body: params → `202 {study: Study, job: Job}`.
+A placebo, simulation-check or multiverse study is **attached** to its target run when it is created, so when it finishes it feeds that run's uncertainty report (auto `post.uncertainty`) without a separate attach.
 Errors:
+- `404 unknown_kind`;
 - `422 requirements` (e.g. roles canopy and impervious missing for placebo/simcheck);
-- `422 validation` when `workers × threads > threads_heavy` (simcheck, multiverse).
+- `422 validation` when `workers × threads > threads_heavy` (simcheck, multiverse), for an unknown multiverse variant or a custom variant that reuses a built-in name, for a run without a project, or when `continue_study_id` is not a simcheck study of this project;
+- `409 active` (the simcheck to continue is still running), `409 imported_in_place` (an imported simcheck cannot be continued).
 
 **`GET /api/runs/{rid}/truth`**
 Synthetic (demo) projects only. It compares `truth.json` (SPEC §9.2) with the run → `200`:
@@ -1215,10 +1228,10 @@ Synthetic (demo) projects only. It compares `truth.json` (SPEC §9.2) with the r
 Errors: `404 not_found` (not a demo project, or `truth.json` missing).
 
 **`POST /api/projects/{pid}/studies/benchmark`**
-Body: params → `202 {study, job}`.
+Body: params → `202 {study, job}`. Errors: `404 not_found` (project).
 
 **`POST /api/studies/estimate`**
-Body: `{kind: string, run_id?: string, params: object}` → `200 {est_s, est_lo, est_hi, est_peak_rss_gb, est_disk_gb, n_children}`.
+Body: `{kind: string, run_id?: string, params: object}` → `200 {est_s, est_lo, est_hi, est_peak_rss_gb, est_disk_gb, n_children}`. `run_id` is omitted for the benchmark and sent for every other kind. Errors: `404 unknown_kind`, `404 not_found` (run), `422 validation` (params).
 
 ### Reading and managing studies
 
@@ -1231,22 +1244,24 @@ Query: `kind?` → `200 Study[]`.
 
 | Kind | Response |
 |---|---|
-| placebo | `{rows, layer_correlation, n_pass_model, n_pass_causal, children: {kind, run_id, status, verdict}[]}` |
-| simcheck | `{design, grid: {generator, seed, status: "pending"\|"running"\|"done"\|"gate_fail"\|"error", share, ci_covers, causal_covers, seconds, gate_attempt}[], generators: object, bias_correction, eta_s}` |
-| multiverse | `{variants: {name, label, status, r2, rmse, seconds, run_id}[], effects: object, priority: object, stability: object}` |
-| reproduce | `{pass, checks: {check, ok, hard, detail}[], original, reproduction}` |
+| placebo | `{rows, layer_correlation, n_pass_model, n_pass_causal, n_placebos, children: {kind, run_id: string\|null, status, verdict: "passes"\|"model fails"\|"causal fails"\|"fails"\|null}[]}`. A kind not started yet is a child with `run_id: null` and status `pending` (or `missing` once the study ended without it) |
+| simcheck | `{design, grid: {generator, seed, status: "pending"\|"running"\|"done"\|"gate_fail"\|"error", share, ci_covers, causal_covers, seconds, gate_attempt}[], generators: object, bias_correction: object\|null, eta_s: number\|null}`. Read live from `simcheck.jsonl`. `generator` is the generator name, or `<generator>/<product>` for a non-default product (e.g. `null/direct`); an imported folder's design is what ran |
+| multiverse | `{variants: {name, label, status: "done"\|"running"\|"pending"\|"failed", r2, rmse, seconds, run_id}[], effects: object, priority: object, stability: {sign_stability_min, median_kendall_tau, median_top_decile_jaccard}}`. Effects and priority are computed from the finished variants while the study runs |
+| reproduce | `{pass, checks: {check, ok, hard, detail}[], original, reproduction}` (from the child run's `reproduce.json`) |
 | benchmark | `{runs}` |
 
-**`POST /api/studies/{stid}/resume`** → `202 Job`.
+Errors: `404 unknown_view` for a kind without a view (post-run actions).
+
+**`POST /api/studies/{stid}/resume`** → `202 Job`. Errors: `409 not_resumable` (an imported folder, or the study's run no longer exists), `409 active`.
 
 **`POST /api/studies/{stid}/attach`** · **`POST /api/studies/{stid}/detach`**
-Body: `{run_id}` → `200 {study: Study, job: Job|null}`. Attaching enqueues `post.uncertainty` when `auto_uncertainty` is on.
+Body: `{run_id}` → `200 {study: Study, job: Job|null}`. When `auto_uncertainty` is on and the study has finished, attaching enqueues `post.uncertainty`, and so does detaching when the run already has an `uncertainty.json` (the report then drops the study). `job` is that job, else `null`.
 
 **`POST /api/studies/simcheck/merge`**
 Body: `{study_ids: string[]}` → `200 {summary: object, markdown: string}` (inline).
 
 **`DELETE /api/studies/{stid}`**
-Query: `files=false` → `200 {ok: true}`. Errors: `409 active`.
+Query: `files=false` → `200 {ok: true}`. `files=true` removes the folder of a Studio-made study; an imported folder is never deleted. Errors: `409 active`.
 
 ---
 
@@ -1256,7 +1271,12 @@ Query: `files=false` → `200 {ok: true}`. Errors: `409 active`.
 Body: `{kind: "bundle"|"gis"|"page"|"report"|"findings"|"decision_pack"|"plan_pack"|"compare_pack", project_id: string, params: object}`. The params are those of the `export.<kind>` job (§8), without `export_id`.
 → `202 {export: Export, job: Job}`.
 
-The route (owned by `[S]`) creates the `exports` row, injects `export_id`, and enqueues `export.<kind>` by name. The pack kinds are owned by `[E]`; the job registry dispatches them. Files go to `projects/<slug>/exports/<export_id>/`. The `exports` row is completed by the kind's `on_finish` hook (SPEC §10.2).
+The route (owned by `[S]`) checks the request, creates the `exports` row, injects `export_id`, and enqueues `export.<kind>` by name. The pack kinds are owned by `[E]`; the job registry dispatches them. Files go to `projects/<slug>/exports/<export_id>/`, next to a record `export.json` that `--reindex` reads back. The `exports` row is completed by the kind's `on_finish` hook (SPEC §10.2) with `status`, `path` and `bytes` (and, for packs, `options.draft`). A row still `running` whose job has finished is reconciled from the job when it is read, listed or downloaded.
+
+Errors (all before the row is created):
+- `404 unknown_kind` (an unknown kind, or a kind not registered in this build), `404 not_found` (project, run, result, plan or comparison);
+- `422 validation`: `params.export_id` sent by the client (`code: server_filled`), a run of another project (`mismatch`), `result_ids`/`plan_ids`/`finding_ids` outside the project (`unknown_id`), unknown bundle `outputs` (`unknown_output`), unknown GIS `layers` (`unknown_layer`), a `placebo_study` whose folder has no `placebo.json` (`study`), or params the kind's model refuses;
+- `422 needs_crs` (GIS pack of a run without a CRS).
 
 ```ts
 type Export = { id: string; project_id: string; run_id: string|null; kind: string; ref: string|null; options: object; job_id: string;
@@ -1267,12 +1287,12 @@ type Export = { id: string; project_id: string; run_id: string|null; kind: strin
 
 **`GET /api/exports/{eid}`** → `200 Export`.
 
-**`GET /api/exports/{eid}/download`** → file (streamed). Errors: `409 not_ready`.
+**`GET /api/exports/{eid}/download`** → file (streamed, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`; `.zip`, `.html`, `.md` or `.json`). Errors: `409 not_ready` (still running, or no file).
 
-**`DELETE /api/exports/{eid}`** → `200 {ok: true}`.
+**`DELETE /api/exports/{eid}`** → `200 {ok: true}` (the row and its folder). Errors: `409 active` while its job runs.
 
 **`POST /api/projects/{pid}/report/preview`**
-Body: `{run_id, sections: ("summary"|"accuracy"|"validation"|"scenarios"|"plans"|"climate"|"equity"|"caveats"|"limitations"|"provenance"|"findings")[], result_ids?, plan_ids?, finding_ids?}` → `200 {html: string}`.
+Body: `{run_id, sections: ("summary"|"accuracy"|"validation"|"scenarios"|"plans"|"climate"|"equity"|"caveats"|"limitations"|"provenance"|"findings")[] /* ≥ 1 */, result_ids?, plan_ids?, finding_ids?}` → `200 {html: string}`. Every number in the text is written from the run's files and the picked results; images are data-URI `<img>` elements (at most six maps of about 360 px), and SVG is never inlined. Errors: `422 validation` for a run of another project (`mismatch`) or ids outside the project (`unknown_id`), as `POST /api/exports` does for `export.report`; `503 not_ready` while the runs registry starts.
 
 ---
 
@@ -1286,11 +1306,11 @@ type Finding = { id: string; project_id: string; run_id: string|null; view: stri
 | Endpoint | Body / query | Response |
 |---|---|---|
 | `GET /api/findings` | `project?`, `run?` | `200 Finding[]` (ordered by `position`) |
-| `POST /api/findings` | `{project_id, run_id?, view, url_state, title, note_md?: "", snapshot: object}` | `201 Finding` |
-| `PUT /api/findings/{id}/image` | raw `image/png` or `image/svg+xml` (≤ 10 MB) | `200 {image_url}` |
-| `GET /api/findings/{id}/image` | — | the image |
-| `PATCH /api/findings/{id}` | `{title?, note_md?, position?}` | `200 Finding` |
-| `DELETE /api/findings/{id}` | — | `200 {ok: true}` |
+| `POST /api/findings` | `{project_id, run_id?, view, url_state, title, note_md?: "", snapshot: object}` | `201 Finding`. `422 validation` (`path: run_id`, `code: mismatch`) for a run of another project |
+| `PUT /api/findings/{fid}/image` | raw `image/png` or `image/svg+xml` (≤ 10 MB). The body is staged and checked (PNG signature, or an `<svg` root after the prolog) before it replaces the current image | `200 {image_url}`. `415 bad_suffix` for another content type or a body that is not what its type says; `413 too_large` |
+| `GET /api/findings/{fid}/image` | — | the image; SVG is served with `Content-Security-Policy: sandbox` |
+| `PATCH /api/findings/{fid}` | `{title?, note_md?, position?}` | `200 Finding` |
+| `DELETE /api/findings/{fid}` | — | `200 {ok: true}` |
 
 ---
 
@@ -1323,6 +1343,8 @@ These file formats are contracts. Items read each other's files by format, not b
 launch.json                       # SPEC §4.3
 cache/grid.npz                    # ix, iy (int32), ids, lon, lat (float32), zone; keyed by "key" entry
 engine/base_fold.npy              # float64 K×n; engine/base_fold.json {ckpt_key, code_sha}
+engine/status.json                # the host's "incompatible" record for this checkpoint (kept until the checkpoint changes)
+import.json                       # runs imported in place: {config_path, trust_pickles, …} given at import
 results/<res_id>/spec.json        # {scenario_id, revision, content_hash, compiled: {levers: …}, run_id, ckpt_key, code_sha}
 results/<res_id>/summary.json     # Result (api §7.5) minus impacts
 results/<res_id>/cells.parquet    # id, delta, delta_sd, extrapolation, realized_<var>… (float32)
@@ -1340,13 +1362,17 @@ Exports are **not** stored here. They live under the project (§12.4).
 ### 12.4 Project dir (`<ws>/projects/<slug>/`)
 
 ```
-project.json  config.yml  data/  inputs/{forcing,climate,layers,features}/  runs/<run_id>/  studies/<study_id>/
-exports/<export_id>/…                 # every export kind; never inside a run dir
+project.json  config.yml  data/  inputs/{forcing,climate,layers,features}/  runs/<run_id>/
+studies/<study_id>/study.json         # the study row's mirror (imported studies keep only this file here)
+studies/<study_id>/…                  # a Studio study's outputs; child runs under children/
+exports/<export_id>/export.json       # the export row's record; the export's file(s) next to it. Never inside a run dir
 scenarios/<sid>.json                  # {"schema": 1, "revisions": [ScenarioDoc + id/revision/parent_id/content_hash/status], "archived": bool}
 findings/<fid>.json  findings/<fid>.png|svg   # Finding minus image_url, plus "image": filename|null
 ```
 
-The scenario mirror is written by `[E]` on every create, patch or fork, and the findings mirror by `[S]` on every change. Both are atomic (tmp + rename). `sparc studio --reindex` rebuilds the `scenarios` and `findings` tables from them.
+The scenario mirror is written by `[E]` on every create, patch or fork, and the findings, study and export records by `[S]` on every change. All are atomic (tmp + rename). `sparc studio --reindex` rebuilds the `scenarios`, `findings`, `studies`/`study_links` and `exports` tables from them; the findings reindex keeps only bare `.png`/`.svg` image names.
+
+Workspace-level engine files: `engine/host.json` (pid, create_time, the socket path actually bound, authkey), `engine/host.log`, and `engine/recycle.json`, written by a host that recycles itself so the next one re-opens its most recently used run.
 
 ### 12.3 Job dir (`<ws>/jobs/<jid>/`)
 
@@ -1435,6 +1461,8 @@ cancel        (presence = cancel requested)
 | 409 | `conflict_revision` | Scenario has exact results; fork instead |
 | 409 | `active` | A job is running on the target |
 | 409 | `not_cancellable` / `not_resumable` / `not_ready` | State does not permit the action (`detail` explains) |
+| 409 | `precondition` | A job kind's precondition failed when it was queued (e.g. `needs_checkpoint`) |
+| 503 | `not_ready` | The server is still starting: the job manager, the inputs routes or the runs registry is not up yet. Retry shortly |
 | 409 | `no_checkpoint` | Operation needs `checkpoint.pkl` |
 | 409 | `engine_memory` | Memory budget/preflight refused (`detail.needed_gb`, `available_gb`, `holders`) |
 | 409 | `untrusted_pickle` | Run imported without pickle trust |
@@ -1446,6 +1474,8 @@ cancel        (presence = cancel requested)
 | 422 | `yaml_error` | YAML parse error (`detail.line`, `column`) |
 | 422 | `needs_crs` / `needs_layers` / `needs_responses` / `needs_config` / `requirements` / `template_unavailable` / `mismatch` | Precondition on data/config |
 | 500 | `internal` | Unexpected; `detail.trace_id` (logged server-side) |
+
+A method the route does not support (`405`) is answered with code `not_found`.
 
 ---
 
@@ -1568,7 +1598,22 @@ Wire-level changes made with SPEC §18. The `docs` item later appends "As-built 
 
 ## 19. As-built changes
 
-The `docs` item extends this section when the spec is brought up to date. Entries are grouped by milestone.
+This section is the changelog of the contract after the completeness review (§18): every place where the implementation differs from, or adds to, the reviewed design, grouped by milestone. Where the difference matters to clients, the body above already describes the as-built behaviour, and the entry here records the change. Behaviour-level changes are in SPEC §19.
+
+### Foundation (core progress, backend and frontend foundations)
+
+- **Events on the wire** (§17, SPEC §5.3). On `artifact` events the envelope `path` is replaced by the run-relative file path (a string, as the `artifact` row of SPEC §5.3 says); the span ancestry of that event moves to `span_path`. For any other event, a type field that clashes with an envelope key is written as `<key>_`. The envelope `job` is `""` (not `null`) when no job id was configured. Reducers must not read the breadcrumb from `path` on `artifact` events.
+- `span()` also accepts `kind="run"`, which emits `run.start` and `run.end` (with `status`, `elapsed_s`, `timings_s`, `done`, `error`), so `run:<name>` path elements exist. `tick()` and `metric()` take `lvl=` (default `info`), so debug-level ticks and metrics are filtered by `SPARC_PROGRESS_LEVEL`.
+- `run.plan` events leave out `null` `est_*` fields, and drop node labels when the payload would exceed the 4 KB line limit; readers treat a missing field as `null`. `plan_stages()` itself returns full nodes.
+- **Auth** (§0.2): a request authenticated with `Authorization: Bearer` that carries neither `Origin` nor `Referer` is accepted for unsafe methods (scripts, tests); a mismatching `Origin`/`Referer` is still `403 bad_origin`.
+- **Event and log paging** (§3): `GET /api/jobs/{jid}/events` and `/logs` read from the first line when `after` is omitted; `after=X` returns cursors greater than X, and cursor 0 is the first line.
+- `TrackerSnapshot.log_capped` (§3) is true once `events.jsonl` passed 200 MB (debug lines are then kept on disk only).
+- The snapshot has no exact reducer state: a client that opens a running job replays the job's event log through `GET /api/jobs/{jid}/events` (up to about 48 MB) to rebuild exact progress, then follows the stream from the snapshot's `cursor`. Beyond that size it starts from the snapshot's fields, and its progress is approximate until the next stage ends.
+- `grid.bin`'s `zone` array is always an index into `GridMeta.zones`, with `-1` for "no zone" (§6.2), so numeric codes beyond int16 and string zones both work. `GridMeta.corners` and `x0_m`/`y0_m` follow `sparc.core.grid.Grid` as written in §1.
+- The job registry's `@job_kind` also takes `preflight(sctx, job, params)`, `retry_params(sctx, job)` and `threads(settings, params)` hooks (DEVELOPING.md §4). The scheduler's network host check is advisory: offline tests of network kinds are not blocked by it.
+- `sparc studio --reindex` empties the rebuildable tables, and every feature package registers a `sparc.studio.db.reindex_hook` that rebuilds its own rows from its files (runs from the run folders; studies, exports, findings and scenarios from their mirrors, §12.4; engine results, plans, sweeps and comparisons from the runs' `studio/` folders). Project rows are not emptied: missing ones are registered from `project.json` at reindex and at every server start.
+- On a one-CPU machine the default `engine_threads` is 1, so the defaults satisfy their own rule (`threads_heavy + engine_threads ≤ thread_budget + 1`).
+- `405 Method Not Allowed` responses use the error code `not_found` (§16).
 
 ### M1–M2 (browse, run & track)
 
@@ -1582,6 +1627,25 @@ The `docs` item extends this section when the spec is brought up to date. Entrie
 - The runs routes return `503 not_ready` while the runs registry is still starting, as the jobs and inputs routes do while the server starts.
 - A job with a cancel request (status `cancelling`, or its `cancel` file present) whose worker exits with `-15`/`143` ends `cancelled`, not `failed`. This covers SIGTERM arriving before the worker or the replay runner installed its handlers.
 - `POST /api/projects/{pid}/data/check`: `config_patch` is a JSON Merge Patch, and the preview carries the `planner.layers` columns (§5.2).
+- Projects (`[P]`), additive fields: `DataCheck.preview_columns` and `elapsed_s`; `input.features` results also carry `open_project_dir` and `bootstrap`, `input.cmip6` results `site`, `input.ghcn` results `station`; the input views also return `path` (forcing also `physics`, layers `n`, features `provenance`, climate `summary.n`).
+- `POST /api/projects` `options` accept `trust_pickles` (default `false`), passed to the run import of the Providence example. Imported checkpoints stay untrusted unless the client opts in (SPEC §10.8).
+- Slug collisions answer `409 conflict` for `POST /api/projects` and `/projects/import` (no automatic suffix). Only the `<name>_open` project made by the features job or `link` gets a suffixed slug. `DELETE /api/projects/{pid}?files=false` keeps the folder and marks `project.json` `deleted_utc`, so a reindex never restores it and the slug stays taken.
+- `If-Match` is optional on `PUT /api/projects/{pid}/config` and `PATCH …/sections/{section}`: without it the save is unconditional, a stale one is `409 conflict`. A save whose text equals the current version returns that version without a new history row.
+- Input jobs that link into the config edit `config.yml` in the worker, under the project's config lock, and leave `.config_note.json`; the server records the new config version in the job's `result` through the `on_event` hook before the job is reported final.
+- `input.cmip6` also links `climate.experiments` when the fetched SSPs differ from the config's. `input.ghcn` has no `link` param: it sets `planner.ghcn_station` only when that key is unset.
+- `link` with `features_join` on a project that already has predictors appends the `open_*` predictors and points only unmapped roles at them; bootstrap mode replaces predictors and roles. Neither creates levers. Join entries use core's keys `key` / `right_key`.
+- `Project.report` holds the title, place and area overrides set by `PATCH /api/projects/{pid}` (stored in `project.json`), falling back to the config's `report` block; the PATCH does not edit `config.yml`.
+- File kinds map to folders: `data` and `join` → `data/`; `layers`, `features`, `forcing`, `climate` → `inputs/<kind>/`; `other` → `other/`. Path parameters may be absolute only inside the workspace or folders registered at import.
+- `POST /api/projects/{pid}/config/impact`: the top-level `changed_sections` compares saved and edited configs in non-fast mode; each run row uses that run's own mode args (`launch.json` `args`, else the manifest's `fast`), so a fast run shows no `core` change for a `stacker.tune_lambda` edit, which fast mode overrides.
+- `GET /api/projects?archived=true` lists archived projects **in addition to** active ones.
+- A Studio run that completes becomes its project's active run when the project has none (or its active run is gone); deleting the active run clears `active_run_id`.
+- `POST /api/runs/{rid}/resume` answers `409 not_resumable` for a run without a launch snapshot (made by the CLI), a complete run, or, with `use_current_config`, a run without a project or whose current project config does not load; `409 active` while a job runs on it. A checkpoint that no longer matches the launch snapshot is **not** a refusal: `CheckpointInfo.resumable` stays true with `reuses: []` and `reason: "the checkpoint does not match the launch snapshot (<sections> changed): a resume refits"`, and the resume refits every stage.
+- Skipped stages in manifest-sourced stage rows carry the `plan_stages` reasons (e.g. `disabled_by_config:cv.distance_curve.enabled`); Status Board cells show `disabled` for `disabled_by_config` skips. `overview.timings` includes a `finish` row (seconds `null`).
+- `DELETE /api/runs/{rid}/checkpoint` also removes `checkpoint.pkl`/`.json` of runs imported in place (an explicit action from the checkpoint card); `DELETE /api/runs/{rid}?what=outputs|all` still needs `force_files=true` for them.
+- The output catalog (`/api/meta.output_catalog`) adds an `optional` flag, a `studio` root for the Studio side folder, and extra ignored globs (`**/*.tmp`, `**/__pycache__/**`, `children/**`, `FIXTURE.json`).
+- View sections (§6.1): api.md fixes the section keys; their inner shapes are those of `studio-web/src/api/runs.ts` (`OverviewSections` … `ProvenanceSections`), which the server builds. Notably `accuracy.obs_pred_bins.counts` is x-major (predicted bin, observed bin), `resid_hist` is `{edges, counts}`, KPIs use `format: "delta"` for temperature changes and `"percent"` for 0–1 fractions, `scenarios.rows[].slug` is `scenario_slug(name)`, and row references (`top_cells[].row`, planner `sites[].row`, `pairs[].treated/control`) are run row indices.
+- The run hub computes hexagon means in the browser (the same keys as `sparc.core.planner.hex_ids`) instead of calling `GET /api/runs/{rid}/hex`. Map-legend and Relationships brushes become `{kind: "blob"}` selections (`PUT /api/runs/{rid}/blobs?kind=mask`), so they fit in a URL; the Accuracy histogram brush is the portable `{kind: "filter", column: "pred:resid", op: "between"}`.
+- Mission Control reads warning times for its timeline from `GET /api/jobs/{jid}/events?types=warning`; Pareto points are not events, so the S7 panel links to the Budget view.
 
 ### M3 (Scenario Lab)
 
@@ -1598,6 +1662,35 @@ The `docs` item extends this section when the spec is brought up to date. Entrie
 - The Lab's Compare page `/r/:rid/lab/compare` accepts `?cid=<comparison id>` next to `?items=`. `items` are encoded `res:<id>`, `configured:<slug>`, `plan:<id>` or `baseline`.
 - `Project.last_run.has_checkpoint` (§5) is true once the latest run's `checkpoint.pkl` exists, which can happen while the run is still going (after S3). The project nav's Scenario Lab entry uses it to stay disabled until the run it would open has a checkpoint (SPEC §3.1).
 - Engine host transport (§13): when `<ws>/engine/host.sock` is longer than `AF_UNIX` allows (about 100 bytes, as with a deeply nested workspace), the host binds a short per-workspace socket in the temp directory (`sparc-engine-<uid>-<hash>.sock`, owner-only). `host.json` `sock` is the path actually bound, and clients connect to that.
-- Packs and `POST /api/exports` (contract for `[S]`, M4): the route inserts the `exports` row **before** it queues `export.decision_pack`, `export.plan_pack` or `export.compare_pack`, passing `export_id` plus `result_id`, `plan_id` or `comparison_id`. The kind's `on_finish` (`pack_on_finish`) completes that row with `status`, `path` and `bytes`, and records the pack's `draft` flag in `options_json.draft`. `Export.draft` is read from there. Until `[S]` lands, `POST /api/exports` has no route: the server answers `405` with code `not_found`, and the Lab's Decision pack, Plan pack and Compare pack buttons show that error. The pack kinds themselves work when submitted through `POST /api/jobs` with an `export_id`.
-- `build_emulator` actions point at `POST /api/runs/{rid}/actions/emulator` (`post.emulator`, `[S]`, M4). Until then the Lab offers the action, the preview reports `404 no_emulator`, and exact runs work.
-- `sparc/core/session.py` is a top-level core module, so it is part of the core code digest (SPEC §11). Checkpoints written before it was added report `code_match: false`, and their exact results are marked stale (`stale: true`). This is the documented consequence of adding a core module, not a fault in the run.
+- Packs and `POST /api/exports` (contract for `[S]`, M4): the route inserts the `exports` row **before** it queues `export.decision_pack`, `export.plan_pack` or `export.compare_pack`, passing `export_id` plus `result_id`, `plan_id` or `comparison_id`. The kind's `on_finish` (`pack_on_finish`) completes that row with `status`, `path` and `bytes`, and records the pack's `draft` flag in `options_json.draft`. `Export.draft` is read from there. Until `[S]` landed in M4, `POST /api/exports` had no route (`405`, code `not_found`) and the Lab's pack buttons showed that error; M4 added the route as described here (§10).
+- `build_emulator` actions point at `POST /api/runs/{rid}/actions/emulator` (`post.emulator`, `[S]`). The route arrived in M4; before it, the action failed and exact runs still worked. Without an emulator the preview reports `404 no_emulator` with that action.
+- `sparc/core/session.py` is a top-level core module, so it is part of the core code digest (SPEC §11). Checkpoints whose `checkpoint.json` was written before it was added report `code_match: false` (`null` for checkpoints without that sidecar), and exact results computed before the change are marked stale (`stale: true`); results computed afterwards record the new `code_sha` and are not stale. This is the documented consequence of adding a core module, not a fault in the run.
+- Result `spill` (§7.5) is the total change inside and outside the edited cells plus `outside_share`; the ring profile steps by `max(30 m, cell size)` out to 2 km.
+- Compare (§7.6): `regions` are saved region ids (`rg_…`) or `zone:<code>`, and every comparison's regions include `all`. `ItemRef` is one flattened model in the OpenAPI document (`{kind, id?, slug?}`). `equity` values are `null` for a group without cells.
+- The engine host turns off progress-tick throttling while it serves a request, so every fold reports its tick.
+- Engine state files: the `incompatible` state is recorded in `<run>/studio/engine/status.json` against the checkpoint, and its action is **Refit S2/S3** = `POST /api/runs/{rid}/rerun {use_current_config: false}`. The untrusted-checkpoint action is `POST /api/runs/import {dir, project_id, trust_pickles: true}`. A host that recycles itself writes `engine/recycle.json`; the executor re-opens the most recently used run at most once per 300 s. The engine memory estimate adds `SPARC_STUDIO_ENGINE_SLACK_GB` (default 1.0).
+- At server shutdown the engine host keeps running while an engine job is live (so it can be reattached), unless jobs are being stopped.
+- Packs are zip files. A decision pack is `draft` when its scenario has no exact result; a plan pack when its plan is unverified.
+
+### M4 (studies, exports, findings, integration)
+
+- **`POST /api/exports`** (§10) validates the request before it creates the `exports` row: kind registered, project and run (`mismatch` for another project's run), result, plan and finding ids in the project (`unknown_id`), bundle outputs (`unknown_output`), GIS layers (`unknown_layer`) and CRS (`422 needs_crs`), the results page's placebo study (`study`). A client-sent `export_id` is refused (`code: server_filled`). Each export keeps a record `exports/<export_id>/export.json`; a `running` row whose job has ended is reconciled when it is read, listed or downloaded; `DELETE` is `409 active` while its job runs.
+- **`export.gis`** returns one zip (`geotiff/*.tif`, `hexagons.gpkg` with `hex_250m` and `hex_500m`, `logger_sites.csv` and `before_after_pairs.csv` with lon/lat, `README.txt`), because `Export.path` is a single file. **`export.findings`** in `md` writes `findings_md.zip` (`findings.md` plus `images/`). The Markdown report embeds its maps and chart as data-URI images, so it stays one file. `export.report` and `export.findings` default to `format: "html"`.
+- **Bundles** never pack symlinks that resolve outside the run folder (or dangle).
+- **Report preview** (`POST /api/projects/{pid}/report/preview`) checks the run and the `result_ids`/`plan_ids`/`finding_ids` against the project (`422 validation`, `mismatch` / `unknown_id`) as `POST /api/exports` does, and the report builder keeps only the project's findings.
+- **Findings**: `POST /api/findings` refuses a run of another project (`422 validation`, `path: run_id`, `code: mismatch`). `PUT /api/findings/{fid}/image` stages the body and checks it (PNG signature, or an `<svg` root after the prolog) before it replaces the current image; a body that is not what its content type says is `415 bad_suffix`, and the current image stays.
+- **Studies**: placebo, simulation-check and multiverse studies launched from a run are attached to it at creation. Detaching a finished study also enqueues `post.uncertainty` when the run already has an `uncertainty.json` (§9). `Study.status` uses the job statuses, and imported folders are `succeeded`. `summary` may carry `headline` and `label`.
+- **`post.emulator`** is registered without `needs_checkpoint` and checks `checkpoint.pkl` in a start-time preflight, because `needs_checkpoint` is checked at queue time and would refuse a Launch `then` chain (the run has no checkpoint yet when the chain is queued). `POST /api/runs/{rid}/actions/emulator` still answers `409 no_checkpoint` itself.
+- **`post.writeup`** writes `methods.md` and `model_card.md` from the **merged** manifest (`manifest.json` plus the stage files' sections), as SPEC §8 says.
+- **Study results** (§8): placebo results also carry `n_placebos`; placebo and multiverse `children` are child run folders; the reproduce result is `{pass, child_run_id: null, child_run_dir, n_hard_fail}` (the server links the child from its `run.dir` event). A reproduction's child keeps origin `reproduction`; placebo and multiverse children are `study_child`.
+- **Study views** (§9): placebo children include kinds not started yet (`run_id: null`, `pending` or `missing`) and verdict words; simcheck generator labels may be `<generator>/<product>` (e.g. `null/direct`) and `bias_correction`/`eta_s` may be `null`; multiverse variant statuses are `done`, `running`, `pending` or `failed`, and `stability` holds `sign_stability_min`, `median_kendall_tau` and `median_top_decile_jaccard`.
+- **Import of study folders** (`import_study_dir`): a simulation-check folder whose replicates sit in sub-folders (Providence `simcheck/{null,null_direct,physics}`) becomes one study per sub-folder, so each matches its `uncertainty.json` source path; the call returns the first. An empty folder is refused with `422 validation` (the Providence example reports it as a warning).
+- **Requirement codes** in `StudyStatusRow.requirements.missing` are config keys or run files (§9). `POST /api/studies/estimate` takes no `run_id` for the benchmark.
+- **Study children while they run**: a study child that is fitting has a live `run_state.json` and no `run.core` job of its own. The runs registry reports such a row (origin `study_child` or `reproduction`, a `study_id`, or a manifest whose `run_meta.study_id` is set) as `status: "running"` with its own origin, never `external_live`, and the watch-root watcher starts no `run.external` pseudo-job for it, also on a full rescan after a restart. Study-child run ids take `run_state.started_utc` before `manifest.created_utc`, so `sparc studio --reindex` finds the same id for a child indexed while it ran. The studies hooks re-derive the child rows at `run.dir`, `run.end` and at the end of the study (every child then, so a cancelled pass never leaves one `running`).
+- **Contract checks**: `tests/studio/openapi.snapshot.json` freezes the OpenAPI document; `studio-web/src/api/contract.check.ts` checks about 170 response and request shapes of the hand-written client types against the generated `schema.gen.ts`. Request bodies are checked for type and nullability only (defaulted server fields are marked required by the generator). Known differences can be allowed per check with `Gate<…>` (each allowance fails the typecheck once it no longer applies); none is left at release. The client types now accept `null` where the server sends it: `SystemInfo.versions.{numpy,pandas,fastapi}` and `web_build.{vite,react}`, `cache[].mtime`, `DataCheck.dose_scale[*].sd` and `doses_in_sd[]`, `ConfigHistoryEntry.saved_utc`, `matches_snapshot.{data,code,config}` (plan and run detail), the `Acf` arrays (lags without pairs) and `Comparison.equity` values (a group without cells); `DataCheck` has `elapsed_s`.
+- **Replay runner speed**: the end-to-end replay journey runs the fixture at `SPARC_STUDIO_REPLAY_SPEED=1` (§14) so it can reload mid-run; the runner's default stays 20.
+
+### Documentation
+
+- Route spellings in this file now use the server's parameter names: `/api/projects/{pid}/data/preview/{token}/grid.bin` and `/{token}/{name}` (where `name` is `<column>.bin`), `/api/runs/{rid}/regions/{rgid}` and `/api/findings/{fid}…`. `POST /api/runs/{rid}/engine/evict` has its own definition in §7.2.
+- `docs/studio/check_api_doc.py` compares the endpoint definitions of this file (headings, bold endpoint lines and first table cells; not the changelog sections) with the generated OpenAPI document and fails on any missing or extra route. At this release: 191 operations, 0 missing, 0 extra.

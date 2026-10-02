@@ -10,7 +10,8 @@ A run row is derived from ``launch.json``, ``run_state.json``, ``checkpoint.json
 **Status** (SPEC §5.8): ``queued`` / ``running`` while a ``run.core`` job is active; ``external_live`` for a
 CLI run still going (its process alive on this host - core rewrites ``run_state.json`` only at stage
 boundaries - or, from another host, ``run_state.json`` or its progress file written in the last 2 minutes);
-else from ``run_state.status`` -
+a study child (``study_child`` / ``reproduction``, or a row or manifest naming a study) in the same state is
+``running`` under its study's job and is never followed by a pseudo-job; else from ``run_state.status`` -
 ``complete``, and for cancelled / failed / interrupted runs ``partial`` when the checkpoint done set is not
 empty; a manifest without ``run_state.json`` (older code) is ``complete``; an imported folder with neither
 is ``imported``.
@@ -22,7 +23,8 @@ through directory names; legacy study folders without ``run_meta`` fall back to 
 
 **Run ids.**  Studio runs use the directory name (``YYYYMMDD-HHMMSS-<mode>-<4 hex>``); imported and
 watched runs get the same shape from the manifest (or run_state) time, the mode and a hash of the path,
-so a reindex finds the same id again.
+so a reindex finds the same id again.  Study children use the run_state start time first: they are indexed
+while they run (no manifest yet), and the id must not change once the manifest exists.
 
 Cross-item contract (SPEC §10.2): :func:`import_run` ``(dir, project_id, config_path=None,
 trust_pickles=False) -> RunSummary``.
@@ -57,6 +59,8 @@ RUN_FILES = ("manifest.json", "run_state.json", "predictions.parquet", "studio/l
 _SKIP_DIRS = {"studio", "planner", "geotiff", "cache", "__pycache__", "engine", "results", "plans", "sweeps",
               "comparisons", "blobs", "exports", "data", "inputs", "scenarios", "findings", ".git", "node_modules"}
 _ACTIVE_JOB = ("queued", "blocked", "starting", "running", "cancelling")
+#: origins of runs a study's job tracks (never CLI runs, SPEC §4.3)
+_CHILD_ORIGINS = ("study_child", "reproduction")
 _PATTERNS = [
     (re.compile(r"^(?P<parent>.+)_placebo_(?P<x>grf|shift|rotate)(_coarse[0-9.]+)?$"), "placebo:{x}"),
     (re.compile(r"^(?P<parent>.+)_mv_(?P<x>[A-Za-z0-9_]+)$"), "variant:{x}"),
@@ -275,8 +279,11 @@ class Registry:
 
     # ------------------------------------------------------------------ indexing
 
-    def _imported_id(self, run_dir: Path, args: dict, manifest: dict | None, state: dict | None) -> str:
-        ts = parse_utc((manifest or {}).get("created_utc")) or parse_utc((state or {}).get("started_utc"))
+    def _imported_id(self, run_dir: Path, args: dict, manifest: dict | None, state: dict | None,
+                     child: bool = False) -> str:
+        m_ts = parse_utc((manifest or {}).get("created_utc"))
+        s_ts = parse_utc((state or {}).get("started_utc"))
+        ts = (s_ts if s_ts is not None else m_ts) if child else (m_ts if m_ts is not None else s_ts)
         if ts is None:
             try:
                 ts = run_dir.stat().st_mtime
@@ -312,7 +319,8 @@ class Registry:
             run_id = (launch or {}).get("run_id") or (run_dir.name if origin in ("studio", "study_child") and launch
                                                       else None)
         if run_id is None:
-            run_id = self._imported_id(run_dir, args, manifest, state)
+            child = origin in _CHILD_ORIGINS or bool(study_id) or _names_study(manifest)
+            run_id = self._imported_id(run_dir, args, manifest, state, child=child)
         if studio_dir is None:
             studio_dir = self.ws.imports_dir / run_id / "studio"
             studio_dir.mkdir(parents=True, exist_ok=True)
@@ -454,16 +462,22 @@ class Registry:
 
     def _status(self, row, state, manifest, active, last, done, rec, launch=None) -> tuple[str, str]:
         origin = row.get("origin") or "imported"
+        child = self._study_child(row, manifest)
         if active is not None:
-            if active["kind"] == "run.external":
+            if active["kind"] == "run.external" and not child:
                 return "external_live", "external_live"
+            if active["kind"] == "run.external":     # a pseudo-job an older server started for a study child
+                return "running", ("study_child" if origin == "external_live" else origin)
             return ("queued" if active["status"] in ("queued", "blocked") else "running"), origin
         st = (state or {}).get("status")
         if origin == "external_live":
-            origin = "imported"
+            origin = "study_child" if child else "imported"
         if st == "running":
-            if self._externally_live(state) and (last is None or last["kind"] == "run.external"):
-                return "external_live", "external_live"
+            if self._externally_live(state):
+                if child:                        # fitting under its study's job (SPEC §5.11), not a CLI run
+                    return "running", origin
+                if last is None or last["kind"] == "run.external":
+                    return "external_live", "external_live"
             if last is not None and last["status"] in ("queued", "blocked", "starting", "running", "cancelling"):
                 return "running", origin
             return ("partial" if done else "interrupted"), origin
@@ -486,6 +500,12 @@ class Registry:
                 return "queued", origin                  # launched, its job not created yet
             return "imported", origin
         return "imported", origin
+
+    @staticmethod
+    def _study_child(row: dict, manifest: dict | None) -> bool:
+        """A study's child run (placebo, multiverse, reproduction): its study's job tracks it, so a live
+        ``run_state.json`` is never read as a CLI run."""
+        return row.get("origin") in _CHILD_ORIGINS or bool(row.get("study_id")) or _names_study(manifest)
 
     def _externally_live(self, state: dict | None) -> bool:
         """A CLI run still going (SPEC §5.14): ``run_state.status == running`` and its process alive on this
@@ -694,7 +714,9 @@ class Registry:
                 candidates.append((Path(row["run_dir"]), row))
         for rd, row in candidates:
             state = _json(rd / "run_state.json")
-            if row.get("origin") == "studio" or not self._externally_live(state):
+            # a study child is tracked by its study's job, never as a CLI run (the manifest is read only when live)
+            if row.get("origin") == "studio" or not self._externally_live(state) \
+                    or self._study_child(row, _json(rd / "manifest.json")):
                 if row.get("status") == "external_live":
                     self.refresh(row["id"])          # it stopped reporting without a pseudo-job: re-derive
                 continue
@@ -860,6 +882,11 @@ class Registry:
             except Exception:
                 log.exception("external run watcher failed")
             await asyncio.sleep(WATCH_INTERVAL_S)
+
+
+def _names_study(manifest: dict | None) -> bool:
+    """The manifest's ``run_meta`` links the run to a study (a finished study child)."""
+    return bool(((manifest or {}).get("run_meta") or {}).get("study_id"))
 
 
 def _fresh(state: dict) -> bool:

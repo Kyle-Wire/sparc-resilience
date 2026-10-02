@@ -18,7 +18,7 @@ import pytest
 from tests.studio.runs.conftest import REPO, RUN_ID
 
 WEB_VIEWS = REPO / "studio-web" / "src" / "pages" / "runhub" / "__fixtures__" / "views.json"
-TEMPLATE = REPO / "scripts" / "results_page" / "template.html"
+TEMPLATE = REPO / "sparc" / "core" / "results_page" / "template.html"
 VIEWS = ("overview", "data", "accuracy", "distance", "influence", "response", "scenarios", "climate", "causal",
          "budget", "planner", "uncertainty", "provenance")
 #: maps keyed by data (levers, treatments, models, thresholds …): their values share one shape

@@ -154,8 +154,8 @@ def test_launch_chains_then_jobs(client, ctx, demo, replay_runner, wait_job, mon
     assert wait_job(client, jid, timeout=60)["status"] == "cancelled"
     for j in chain:
         assert wait_job(client, j["id"], timeout=30)["status"] == "cancelled"
-    bad = client.post(f"/api/projects/{demo['id']}/runs", json={"mode": "fast", "then": ["post.emulator"]})
-    assert bad.status_code == 422                                # not registered in this build
+    bad = client.post(f"/api/projects/{demo['id']}/runs", json={"mode": "fast", "then": ["post.nope"]})
+    assert bad.status_code == 422                                # not a registered kind
 
 
 def test_cancel_then_resume_reports_cached_stages(client, ctx, demo, replay_runner, wait_job, monkeypatch):

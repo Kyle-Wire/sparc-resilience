@@ -317,7 +317,7 @@ function CompareBody({ rid, pid, cmp, grid, catalog, unit }: { rid: string; pid:
           rowKey={(r) => r[0]}
           columns={[
             { key: "group", label: "Group", value: (r) => r[0] },
-            ...Object.keys(equityGroups[0][1]).map((k) => ({ key: k, label: k, align: "right" as const, value: (r: [string, Record<string, number>]) => r[1][k] ?? null, render: (r: [string, Record<string, number>]) => fmtSigned(r[1][k], 3) })),
+            ...Object.keys(equityGroups[0][1]).map((k) => ({ key: k, label: k, align: "right" as const, value: (r: [string, Record<string, number | null>]) => r[1][k] ?? null, render: (r: [string, Record<string, number | null>]) => fmtSigned(r[1][k], 3) })),
           ]}
           rows={equityGroups}
         />

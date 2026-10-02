@@ -592,7 +592,8 @@ export type Comparison = {
   id: string;
   items: ComparisonItem[];
   pairs: ComparisonPair[];
-  equity: Record<string, Record<string, number>>;
+  /** A group without cells is `null`. */
+  equity: Record<string, Record<string, number | null>>;
   exposure: Record<string, unknown>[];
   cooling_per_cost: Record<string, number | null>;
   needs_exact: ItemRef[];

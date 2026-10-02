@@ -1227,6 +1227,16 @@ function rebuildCounters(s: TrackerState): void {
  */
 export const EXACT_REPLAY_MAX_BYTES = 48 * 1024 * 1024;
 const REPLAY_PAGE = 5000;
+/**
+ * Events folded at a time while replaying: the fold yields to the browser between slices, so a
+ * 20,000-event log never blocks a frame for longer than the 100 ms budget (SPEC §14.5).
+ */
+const REPLAY_SLICE = 500;
+
+/** A new task, so rendering and input can run between replay slices. */
+function nextTask(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 /**
  * The projection at cursor `upTo`, exactly as the server's: every event of the job's log up
@@ -1240,7 +1250,11 @@ export async function replayLog(jid: string, upTo: number, fetchEvents: typeof g
   for (;;) {
     const page = await fetchEvents(jid, { after, limit: REPLAY_PAGE }, signal);
     const upto = page.events.filter((e) => e.cursor <= upTo);
-    if (upto.length) state = applyEvents(state, upto);
+    for (let i = 0; i < upto.length; i += REPLAY_SLICE) {
+      if (i) await nextTask();
+      if (signal?.aborted) return null;
+      state = applyEvents(state, upto.slice(i, i + REPLAY_SLICE));
+    }
     if (state.cursor >= upTo || upto.length < page.events.length) break;
     if (page.eof || !page.events.length || page.next_cursor === after) break;
     after = page.next_cursor;

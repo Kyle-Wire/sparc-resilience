@@ -24,7 +24,8 @@ export type CheckpointInfo = {
   done: string[];
   saved_utc: string | null;
   fingerprint: string | null;
-  matches_snapshot: { data: boolean; code: boolean; config: boolean } | null;
+  /** Each field is `null` when the checkpoint sidecar cannot tell. */
+  matches_snapshot: { data: boolean | null; code: boolean | null; config: boolean | null } | null;
   changed_sections: string[];
   resumable: boolean;
   reuses: StageId[];
