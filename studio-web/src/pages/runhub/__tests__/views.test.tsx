@@ -260,6 +260,93 @@ describe("view behaviour", () => {
     }
   });
 
+  it("Distance says why a stage the config disabled has no section, with the Overview's remedy, not 'older code'", async () => {
+    const page = PAGES.find((p) => p.view === "distance")!;
+    const rid = `r_view${seq + 1}`;
+    const vm = viewFixture("distance");
+    vm.sections.curve = null;
+    const detail = runDetail(rid);
+    detail.stages = [
+      { id: "baselines", state: "done", seconds: 2, source: "manifest", reason: null },
+      { id: "cv_curve", state: "skipped", seconds: null, source: "manifest", reason: "disabled_by_config:cv.distance_curve.enabled" },
+    ];
+    const overview = viewFixture("overview");
+    const rerun = { kind: "open" as const, label: "Re-run with the CV curve", method: "GET" as const, path: `/p/p_1/launch?from=${rid}` };
+    overview.sections.outputs_grid = [
+      { id: "cv_distance", label: "Skill vs distance", group: "trust", state: "missing", produced_by: "stage:cv_curve", view: "distance", action: rerun },
+    ];
+    const r = await renderView(page, vm, {
+      [`GET /api/runs/${rid}`]: { body: detail },
+      [`GET /api/runs/${rid}/views/overview`]: { body: overview },
+    });
+    try {
+      await waitFor(() => r.container.querySelector("[data-absent]")?.querySelector("button"), 3000, "the re-run action");
+      expect(r.container.querySelectorAll("[data-older-code]").length).toBe(0);
+      const note = r.container.querySelector("[data-absent]")!;
+      expect(note.textContent).toContain("Skill vs block size");
+      expect(note.textContent).toContain("disabled in the config (cv.distance_curve.enabled)");
+      expect(note.querySelector("button")!.textContent).toBe("Re-run with the CV curve");
+    } finally {
+      r.restore();
+    }
+  });
+
+  it("Distance keeps 'older code' when the run's stage rows cannot explain a null section", async () => {
+    const vm = viewFixture("distance");
+    vm.sections.curve = null;
+    const r = await renderView(PAGES.find((p) => p.view === "distance")!, vm);
+    try {
+      expect(r.container.querySelectorAll("[data-older-code]").length).toBe(1);
+      expect(r.container.querySelector("[data-absent]")).toBeNull();
+      expect(r.calls.some((c) => c.url.includes("/views/overview"))).toBe(false);
+    } finally {
+      r.restore();
+    }
+  });
+
+  it("Planner says why hot days, equity and zones are absent from a pack it read, not 'older code'", async () => {
+    const vm = viewFixture("planner");
+    vm.sections.hot_days = null;
+    vm.sections.equity = null;
+    vm.sections.zones = null;
+    const r = await renderView(PAGES.find((p) => p.view === "planner")!, vm);
+    try {
+      expect(r.container.querySelectorAll("[data-older-code]").length).toBe(0);
+      const notes = [...r.container.querySelectorAll("[data-absent]")].map((n) => n.textContent ?? "");
+      expect(notes).toHaveLength(3);
+      expect(notes.find((t) => t.startsWith("Hot days"))).toContain("planner.ghcn_station");
+      expect(notes.find((t) => t.startsWith("Equity"))).toContain("package");
+      expect(notes.find((t) => t.startsWith("Zones"))).toContain("zone column");
+    } finally {
+      r.restore();
+    }
+  });
+
+  it("Planner equity bars are labelled as mean cooling in the target unit, by quintile of the measure", async () => {
+    const vm = viewFixture("planner");
+    vm.units = { ...vm.units, target: "°F" };
+    vm.sections.equity = {
+      measures: ["population density", "share aged 60+"],
+      quintiles: [1, 2, 3, 4, 5].map((q) => ({ label: `Q${q}`, values: { "population density": 0.1 * q, "share aged 60+": 0.05 * q } })),
+      concentration: [
+        { label: "population density", value: 0.02 },
+        { label: "share aged 60+", value: -0.05 },
+      ],
+    };
+    const r = await renderView(PAGES.find((p) => p.view === "planner")!, vm);
+    try {
+      const fig = [...r.container.querySelectorAll("figure.chart-frame")].find((f) => (f.getAttribute("data-chart") ?? "").toLowerCase().includes("population density"))!;
+      expect(fig).toBeDefined();
+      const head = [...fig.querySelectorAll("details.table-view th")].map((th) => th.textContent ?? "");
+      expect(head.some((h) => h.startsWith("Mean cooling") && h.includes("°F"))).toBe(true);
+      expect(head.some((h) => h.startsWith("population density"))).toBe(false);
+      expect(fig.textContent).toContain("Units: °F (positive = cooler)");
+      expect(fig.querySelector("svg.chart")!.textContent).toContain("Mean cooling (°F)");
+    } finally {
+      r.restore();
+    }
+  });
+
   it("a missing view shows the server's action as a button", async () => {
     const vm = olderCodeFixture("planner");
     vm.availability = "missing";

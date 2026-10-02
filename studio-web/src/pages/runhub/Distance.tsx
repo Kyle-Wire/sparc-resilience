@@ -1,10 +1,11 @@
 // Distance & baselines (SPEC §6.4): skill vs CV block size on a log axis (stack with its
 // fold band, base models and baselines in grey, the main design marked, the random-points
-// "leaky reference"), the baseline forest (ΔMSE ± 2 SE), the verdict and block wins.
+// "leaky reference"), the baseline forest (ΔMSE ± 2 SE), the verdict and block wins. A
+// section of a stage the run skipped says why, with the Overview's "Re-run with …" remedy.
 import type { DistanceSections } from "../../api/runs";
 import { Bars, Forest, LineBand, type LineSeries, type RefLine } from "../../charts";
 import { fmtNum, fmtPct, unitLabel } from "../../theme/format";
-import { Section, ViewPage, useUnits } from "./common";
+import { Section, ViewPage, useRid, useSkippedStage, useUnits } from "./common";
 import { fmtDistance } from "./format";
 
 function SkillCurve({ c }: { c: NonNullable<DistanceSections["curve"]> }) {
@@ -52,6 +53,9 @@ function SkillCurve({ c }: { c: NonNullable<DistanceSections["curve"]> }) {
 }
 
 export default function Distance() {
+  const rid = useRid();
+  const noCurve = useSkippedStage(rid, "cv_curve", "The skill-vs-distance stage");
+  const noBaselines = useSkippedStage(rid, "baselines", "The baselines stage");
   return (
     <ViewPage
       view="distance"
@@ -62,7 +66,7 @@ export default function Distance() {
         const u = unitLabel(vm.units.target);
         return (
         <>
-          <Section title="Verdict" data={s.verdict}>
+          <Section title="Verdict" data={s.verdict} absent={noBaselines}>
             {(v) => (
               <div className="callout" data-tone={v.stack_wins === false ? undefined : "info"} role="status">
                 <strong>Verdict:</strong> {v.text}
@@ -70,11 +74,11 @@ export default function Distance() {
               </div>
             )}
           </Section>
-          <Section title="Skill vs block size" data={s.curve}>
+          <Section title="Skill vs block size" data={s.curve} absent={noCurve}>
             {(c) => <SkillCurve c={c} />}
           </Section>
           <div className="grid2">
-            <Section title="Baseline forest" data={s.baselines}>
+            <Section title="Baseline forest" data={s.baselines} absent={noBaselines}>
               {(b) => (
                 <Forest
                   title="Stack vs baselines"
@@ -89,7 +93,7 @@ export default function Distance() {
                 />
               )}
             </Section>
-            <Section title="Block wins" data={s.block_wins}>
+            <Section title="Block wins" data={s.block_wins} absent={noBaselines}>
               {(w) => (
                 <Bars
                   title="Share of blocks the stack wins"

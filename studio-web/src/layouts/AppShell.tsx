@@ -15,7 +15,7 @@ import { Badge, modeLabel } from "../components/ui/Badge";
 import { Link, matchRoute, navigate, runTabHref, useLocation, useRegistry, useRoute, type Registry, type RouteDef } from "../router";
 import { activeJobs, connectJobs, tabTitle, useJobs } from "../stores/jobs";
 import { useUi, type Command, type ThemePref } from "../stores/ui";
-import { fmtDate, fmtNum, fmtPct } from "../theme/format";
+import { fmtDate, fmtDateTime, fmtNum, fmtPct } from "../theme/format";
 import { useProject, useProjects, useRecentRuns, useRunDetail } from "./resources";
 
 const THEMES: { value: ThemePref; icon: IconName; label: string }[] = [
@@ -135,8 +135,25 @@ export function ProjectNav({ registry, project }: { registry: Registry; project:
   );
 }
 
-function ActiveRunChip({ projectRuns, run, activeRunId }: { projectRuns: RunSummary[]; run: RunSummary | null; activeRunId: string | null }) {
+/**
+ * Switcher option text per run id: label, mode, start time, R² and status (the chip's own
+ * facts, SPEC §3.1), so a fast and a coarse run of one config differ. Runs that still read
+ * the same get their id appended.
+ */
+export function runOptionLabels(runs: RunSummary[]): Map<string, string> {
+  const base = runs.map((r) =>
+    [r.label || r.id, modeLabel(r.mode, r.coarse_m), r.created_utc ? fmtDateTime(r.created_utc) : null, r.r2 !== null ? `R² ${fmtNum(r.r2, 3)}` : null, r.status]
+      .filter((x): x is string => !!x)
+      .join(" · "),
+  );
+  const seen = new Map<string, number>();
+  for (const t of base) seen.set(t, (seen.get(t) ?? 0) + 1);
+  return new Map(runs.map((r, i) => [r.id, (seen.get(base[i]) ?? 0) > 1 && r.label ? `${base[i]} · ${r.id}` : base[i]]));
+}
+
+export function ActiveRunChip({ projectRuns, run, activeRunId }: { projectRuns: RunSummary[]; run: RunSummary | null; activeRunId: string | null }) {
   const current = run ?? projectRuns.find((r) => r.id === activeRunId) ?? null;
+  const optionLabels = useMemo(() => runOptionLabels(projectRuns), [projectRuns]);
   if (!current && !projectRuns.length) return null;
   return (
     <span className="row hide-narrow" style={{ gap: 6 }}>
@@ -155,7 +172,7 @@ function ActiveRunChip({ projectRuns, run, activeRunId }: { projectRuns: RunSumm
           {current ? null : <option value="">Open a run…</option>}
           {projectRuns.map((r) => (
             <option key={r.id} value={r.id}>
-              {r.label || r.id} · {r.status}
+              {optionLabels.get(r.id)}
             </option>
           ))}
         </select>

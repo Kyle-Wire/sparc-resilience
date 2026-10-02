@@ -1,11 +1,12 @@
 // Shared run-hub building blocks (SPEC §6.4): the ViewModel page wrapper (live banner,
-// missing-output empty state with the server's action, caveats), per-section older-code
-// placeholders, KPI tiles, flags, generic tables and the Findings pin for non-chart blocks.
+// missing-output empty state with the server's action, caveats), per-section placeholders
+// (older code, or the known reason a section is absent), KPI tiles, flags, generic tables and
+// the Findings pin for non-chart blocks.
 import { Component, createContext, useContext, useState, type ErrorInfo, type ReactNode } from "react";
 import { api, errorMessage } from "../../api/client";
 import type { GenericTable, Sections, ViewFlag, ViewKpi, ViewModelOf, ViewName, ViewSections, ViewUnits } from "../../api/runs";
 import { useRunDetailFull, useView } from "../../api/runs";
-import type { Finding, FindingCreate } from "../../api/types";
+import type { Action, Finding, FindingCreate, StageId } from "../../api/types";
 import { Badge } from "../../components/ui/Badge";
 import { ActionButton, EmptyState } from "../../components/ui/EmptyState";
 import { Icon } from "../../components/ui/Icon";
@@ -15,6 +16,7 @@ import { Table, type Column } from "../../components/ui/Table";
 import { runIsLive } from "../../layouts/resources";
 import { useRoute } from "../../router";
 import { toast, useUi } from "../../stores/ui";
+import { planReasonText } from "../projects/model/plan";
 import { cellText, kpiDisplay, missingText, tableColumns } from "./format";
 
 /** The `:rid` of the current run route. */
@@ -58,6 +60,43 @@ export function OlderCode({ title }: { title: ReactNode }) {
   );
 }
 
+/** Why a section is absent when the reason is known (a stage the run skipped, data the run lacks): one sentence. */
+export type Absence = { reason: ReactNode; action?: Action | null };
+
+/** Placeholder for a section absent for a known reason, with its remedy when there is one. */
+export function NotInRun({ title, reason, action }: { title: ReactNode } & Absence) {
+  return (
+    <div className="callout" data-tone="info" data-absent="true">
+      <strong>{title}</strong>: not in this run. {reason}
+      {action ? (
+        <>
+          {" "}
+          <ActionButton action={action} size="small" variant="default" />
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+const SKIPPED_STATES = new Set(["skipped", "disabled", "not_requested"]);
+
+/**
+ * Why `stage` did not run in this run, from the run's stage rows (`RunDetail.stages`, the
+ * plan's skip reason), with the remedy the Overview's outputs grid offers for it ("Re-run
+ * with …"); `what` names the stage at the start of a sentence ("The baselines stage"). Null
+ * when the stage ran or is pending, or when the run cannot say: an older manifest without a
+ * stage list reads "not in this run", and its sections stay "older code".
+ */
+export function useSkippedStage(rid: string, stage: StageId, what: string): Absence | null {
+  const row = useRunDetailFull(rid).data?.stages.find((s) => s.id === stage);
+  const skipped = !!row && SKIPPED_STATES.has(row.state) && row.reason !== "not in this run";
+  const overview = useView(skipped ? rid : null, skipped ? "overview" : null);
+  if (!skipped) return null;
+  const why = row.reason && row.reason !== "not run" ? planReasonText(row.reason) : null;
+  const action = overview.data?.sections.outputs_grid?.find((o) => o.produced_by === `stage:${stage}` && o.action)?.action ?? null;
+  return { reason: why ? `${what} did not run: ${why}.` : `${what} did not run.`, action };
+}
+
 type BoundaryProps = { title: ReactNode; children: ReactNode };
 
 /** Keeps one malformed section from taking the whole view down. */
@@ -83,11 +122,22 @@ export class SectionBoundary extends Component<BoundaryProps, { error: Error | n
 }
 
 /**
- * One ViewModel section: renders `children(data)` when the section is present, or the
- * older-code placeholder when it is null.
+ * One ViewModel section: renders `children(data)` when the section is present. A null section
+ * says why when the caller knows (`absent`: a stage the config disabled, data the run has no
+ * column for), else it is the older-code placeholder.
  */
-export function Section<T>({ title, data, children }: { title: ReactNode; data: T | null | undefined; children: (d: NonNullable<T>) => ReactNode }) {
-  if (data === null || data === undefined) return <OlderCode title={title} />;
+export function Section<T>({
+  title,
+  data,
+  absent,
+  children,
+}: {
+  title: ReactNode;
+  data: T | null | undefined;
+  absent?: Absence | null;
+  children: (d: NonNullable<T>) => ReactNode;
+}) {
+  if (data === null || data === undefined) return absent ? <NotInRun title={title} {...absent} /> : <OlderCode title={title} />;
   return <SectionBoundary title={title}>{children(data as NonNullable<T>)}</SectionBoundary>;
 }
 
