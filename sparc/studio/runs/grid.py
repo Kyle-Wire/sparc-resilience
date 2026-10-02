@@ -13,7 +13,8 @@ Conventions (api.md §1, §6.2):
   ``nw = (0, ny−1)``, ``ne = (nx−1, ny−1)`` (clients interpolate bilinearly between them).
 * ``zones``: the distinct zone codes; ``grid.bin``'s ``zone`` (int16) indexes this list, ``-1`` = no zone.
 * lon/lat: pyproj ``crs → EPSG:4326`` on ``x_m / coord_scale`` (``reproject_to`` when set, scale 1);
-  NaN without a CRS.
+  NaN without a CRS.  A ``data.crs`` pyproj cannot read counts as no CRS (``crs`` None), so every format
+  that needs earth coordinates answers ``422 needs_crs`` instead of failing on it.
 
 The result is cached in ``<studio_dir>/cache/grid.npz`` (``ix``, ``iy`` int32, ``ids``, ``lon``, ``lat``
 float32, ``zone`` int16 plus the zone list and the frame) keyed by ``manifest.created_utc`` or the
@@ -22,6 +23,7 @@ float32, ``zone`` int16 plus the zone list and the frame) keyed by ``manifest.cr
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
@@ -31,7 +33,7 @@ from pathlib import Path
 import numpy as np
 
 __all__ = ["RunGrid", "build_grid", "load_cached", "save_cached", "grid_meta", "pack_arrays", "grid_bin",
-           "lonlat_transformer", "to_run_xy"]
+           "lonlat_transformer", "to_run_xy", "usable_crs", "crs_problem"]
 
 GRID_CACHE = "cache/grid.npz"
 _CACHE_VERSION = 2
@@ -127,16 +129,45 @@ class RunGrid:
 # lon/lat
 # ---------------------------------------------------------------------------
 
+@functools.lru_cache(maxsize=256)
+def _crs_parse_error(crs: str | int) -> str | None:
+    from pyproj import CRS
+
+    try:
+        CRS.from_user_input(crs)
+    except Exception as exc:             # noqa: BLE001 - pyproj's CRSError, or any parse failure
+        return (str(exc).splitlines() or [type(exc).__name__])[0][:160]
+    return None
+
+
+def crs_problem(crs) -> str | None:
+    """Why pyproj cannot read ``crs`` (``data.crs`` / ``data.reproject_to``), or None when it can or it is unset."""
+    if crs is None or crs == "":
+        return None
+    if isinstance(crs, bool) or not isinstance(crs, (str, int)):
+        return f"{crs!r} is not a CRS (use an EPSG code such as EPSG:32619)"
+    err = _crs_parse_error(crs)
+    return None if err is None else f"{crs!r} is not a CRS pyproj knows ({err})"
+
+
+def usable_crs(crs) -> str | None:
+    """``crs`` as text when pyproj can read it, else None: an invalid CRS counts as no CRS."""
+    if crs is None or crs == "" or crs_problem(crs) is not None:
+        return None
+    return str(crs)
+
+
 def run_crs(cfg_raw: dict | None) -> tuple[str | None, float]:
-    """``(crs, coord_scale)`` of a run frame: ``reproject_to`` with scale 1, else ``crs`` with the coord unit."""
+    """``(crs, coord_scale)`` of a run frame: ``reproject_to`` with scale 1, else ``crs`` with the coord unit
+    (``crs`` None when unset or not a CRS pyproj can read)."""
     from sparc.core.config import UNIT_TO_METRES
 
     d = (cfg_raw or {}).get("data") or {}
+    d = d if isinstance(d, dict) else {}
     if d.get("reproject_to"):
-        return str(d["reproject_to"]), 1.0
-    crs = d.get("crs")
+        return usable_crs(d["reproject_to"]), 1.0
     unit = str(d.get("coord_unit") or "m").lower()
-    return (str(crs) if crs else None), float(UNIT_TO_METRES.get(unit, 1.0))
+    return usable_crs(d.get("crs")), float(UNIT_TO_METRES.get(unit, 1.0))
 
 
 def lonlat_transformer(crs: str):
@@ -249,7 +280,7 @@ def load_cached(studio_dir: str | os.PathLike | None, key: str) -> RunGrid | Non
                 return None
             return RunGrid(ix=z["ix"], iy=z["iy"], x0=meta["x0"], y0=meta["y0"], dx=meta["dx"], nx=meta["nx"],
                            ny=meta["ny"], ids=z["ids"], lon=z["lon"], lat=z["lat"], zone=z["zone"],
-                           zones=meta.get("zones") or [], crs=meta.get("crs"),
+                           zones=meta.get("zones") or [], crs=usable_crs(meta.get("crs")),
                            coord_scale=float(meta.get("coord_scale") or 1.0), key=key)
     except (OSError, KeyError, ValueError):
         return None

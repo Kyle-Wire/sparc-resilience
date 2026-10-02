@@ -160,3 +160,44 @@ def test_validate_report_previews(raw, demo_dir):
     cp = coarse_preview(raw, demo_dir)
     assert cp["cell_m"] == 60.0 and cp["fine_cell_m"] == 30.0 and 0 < cp["n_cells"] < cp["n_input"] and cp["ok"]
     assert coarse_preview(raw, demo_dir, cell_m=30.0)["ok"] is False
+
+
+@pytest.mark.parametrize("path, value", [
+    ("scenarios", True), ("data.join", 5), ("causal.treatments", True), ("optimize.variable", ["x"]),
+    ("physics.roles.albedo", ["x"]), ("causal.confounders.canopy", [[1]]), ("mediators.ndvi.context", [[1]]),
+    ("joint_scenarios", True), ("joint_scenarios.0.interventions.0.variable", ["x"]), ("coupling", True),
+    ("encodings.categorical", True), ("encodings.circular_degrees", [[1]]), ("scenarios.0.increments", True),
+    ("scenarios.0.variable", ["x"]), ("data", True), ("influence", True), ("data.coarse_m", "abc")])
+def test_values_of_the_wrong_type_are_issues_not_crashes(raw, demo_dir, path, value):
+    """A save is committed before it is validated, and the project list builds its spine from these checks: a value
+    of the wrong type is the schema's type error, never an exception."""
+    from sparc.studio.projects.config_service import set_dotted
+
+    set_dotted(raw, path, value)
+    issues = validate_deep(copy.deepcopy(raw), demo_dir)
+    assert not [i for i in issues if i["code"] == "validation_failed"], issues
+    assert [i for i in issues if i["level"] == "error" and i["code"] == "type"], issues
+    rep = validate_report(raw, demo_dir)
+    assert rep["ok"] is False and isinstance(rep["fast_overrides"], dict)
+
+
+def test_an_internal_failure_is_one_issue(raw, demo_dir, monkeypatch):
+    from sparc.studio.projects import validate as v
+
+    def boom(*a, **k):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(v, "_validate_deep", boom)
+    issues = validate_deep(raw, demo_dir)
+    assert [(i["level"], i["path"], i["code"]) for i in issues] == [("error", "", "validation_failed")]
+    assert "RuntimeError: unexpected" in issues[0]["message"]
+
+
+@pytest.mark.parametrize("key", ["crs", "reproject_to"])
+@pytest.mark.parametrize("bad", ["garbage", "EPSG 32619", "EPSG:99999"])
+def test_a_crs_pyproj_cannot_read_is_an_error(raw, demo_dir, key, bad):
+    raw["data"][key] = bad
+    errs = [i for i in validate_deep(raw, demo_dir) if i["level"] == "error"]
+    assert [(i["path"], i["code"]) for i in errs if i["code"] == "bad_crs"] == [(f"data.{key}", "bad_crs")]
+    raw["data"][key] = "EPSG:32619"
+    assert "bad_crs" not in {i["code"] for i in validate_deep(raw, demo_dir)}

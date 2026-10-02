@@ -906,6 +906,67 @@ def test_a_report_field_of_the_wrong_type_keeps_the_project_readable(client, val
     assert listed.json()[0]["report"][k] == want
 
 
+@pytest.mark.parametrize("section, value", [("scenarios", True), ("data", {"path": "data/city.csv", "join": 5}),
+                                            ("causal", {"treatments": True}), ("optimize", {"variable": ["x"]})])
+def test_a_save_with_values_of_the_wrong_type_returns_its_version(client, demo, section, value):
+    """The save is committed before it is validated: a value the checks cannot iterate or hash is a type issue in
+    the ``200`` answer (never a 500 that tells the editor the save failed while version N+1 is on disk), and the
+    project list still builds."""
+    pid = demo["id"]
+    v = client.get(f"/api/projects/{pid}/config").json()["version"]
+    r = client.patch(f"/api/projects/{pid}/config/sections/{section}", json={"value": value},
+                     headers={"If-Match": str(v)})
+    assert r.status_code == 200, r.text
+    assert r.json()["version"] == v + 1 and any(i["code"] == "type" for i in r.json()["issues"])
+    assert client.get(f"/api/projects/{pid}/config").json()["version"] == v + 1
+    assert client.get("/api/projects").status_code == 200
+    assert spine(client, pid)["config_valid"]["state"] == "missing"
+    val = client.post(f"/api/projects/{pid}/config/validate", json={})
+    assert val.status_code == 200 and val.json()["ok"] is False
+    r = client.put(f"/api/projects/{pid}/config", json={"yaml": "core:\n  name: bad\n  scenarios: true\n"},
+                   headers={"If-Match": str(v + 1)})
+    assert r.status_code == 200 and r.json()["version"] == v + 2, r.text
+
+
+def test_impact_of_a_blank_project(client, demo):
+    """A config without data.path (every new blank project) still compares: its data section is "no data", so a
+    name edit changes nothing and adding the data file changes the data (and core) sections."""
+    pid = create(client, "Blank one", "blank")["project"]["id"]
+    r = client.post(f"/api/projects/{pid}/config/impact", json={})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"changed_sections": [], "runs": []}
+    text = client.get(f"/api/projects/{pid}/config").json()["yaml"]
+    r = client.post(f"/api/projects/{pid}/config/impact", json={"yaml": text.replace("blank_one", "renamed")})
+    assert r.status_code == 200 and r.json()["changed_sections"] == [], r.text
+    raw = client.get(f"/api/projects/{pid}/config").json()["raw"]
+    raw["data"]["path"] = "data/city.csv"
+    r = client.post(f"/api/projects/{pid}/config/impact", json={"raw": raw})
+    assert r.status_code == 200 and "data" in r.json()["changed_sections"], r.text
+    # an edit core cannot fingerprint (a join that is not a list) may change every section
+    raw = client.get(f"/api/projects/{demo['id']}/config").json()["raw"]
+    raw["data"]["join"] = "notalist"
+    r = client.post(f"/api/projects/{demo['id']}/config/impact", json={"raw": raw})
+    assert r.status_code == 200, r.text
+    assert "data" in r.json()["changed_sections"] and "s7" in r.json()["changed_sections"]
+
+
+@pytest.mark.parametrize("patch, path", [
+    ({"actionable": {"canopy": 10}}, "actionable.canopy"), ({"qa": {"clip": {"canopy": 5}}}, "qa.clip.canopy"),
+    ({"physics": {"roles": ["canopy"]}}, "physics.roles"), ({"data": {"target": ["T"]}}, "data.target"),
+    ({"data": {"cell_m": -5}}, "data.cell_m"), ({"data": {"cell_m": "abc"}}, "data.cell_m"),
+    ({"data": {"cell_m": 0}}, "data.cell_m"), ({"predictors": [True]}, "predictors"),
+    ({"data": {"path": True}}, "data.path"), ({"data": {"join": [5]}}, "data.join.0"),
+    ({"data": {"reproject_to": "garbage"}}, "data.reproject_to"), ({"data": {"crs": "garbage",
+                                                                             "reproject_to": "EPSG:3857"}}, "data.crs")])
+def test_data_check_of_a_config_s0_cannot_use_is_422(client, demo, patch, path):
+    """api.md §5.2: a config S0 cannot use is ``422 validation`` with the offending paths in ``detail.errors``."""
+    r = client.post(f"/api/projects/{demo['id']}/data/check", json={"config_patch": patch})
+    assert r.status_code == 422, r.text
+    err = r.json()["error"]
+    assert err["code"] == "validation"
+    assert path in [e["path"] for e in err["detail"]["errors"]], err
+
+
 def test_server_stays_torch_free(tmp_path):
     """Creating, checking, validating and previewing a project never imports torch in the server (SPEC §4.1)."""
     import subprocess

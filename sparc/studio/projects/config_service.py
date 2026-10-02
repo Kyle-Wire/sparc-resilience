@@ -163,7 +163,9 @@ def set_dotted(raw: dict, path: str, value: Any) -> dict:
 def path_keys(raw: dict) -> list[str]:
     """Dotted keys of ``raw`` that hold file paths (``data.join.<i>.path`` included), set or not."""
     keys = list(PATH_KEYS)
-    for i, _j in enumerate((raw.get("data") or {}).get("join") or []):
+    data = raw.get("data") if isinstance(raw, dict) else None
+    joins = data.get("join") if isinstance(data, dict) else None
+    for i, _j in enumerate(joins if isinstance(joins, list) else []):
         keys.append(f"data.join.{i}.path")
     return keys
 
@@ -521,6 +523,26 @@ def _phrase(changed: list[str], stage: str | None) -> str:
     return f"A re-run with this config would refit from {stage} ({what} changed)."
 
 
+def _config_sections(cfg) -> dict[str, str] | None:
+    """``fingerprint_sections`` of a config as a re-run without mode arguments would see it, or None when
+    core cannot fingerprint it (a section of the wrong type: validation reports it).
+
+    A config without ``data.path`` (every new blank project) has no input identity; its ``data`` section is
+    the hash of an empty table, so the other sections still compare and adding the data file shows as a
+    ``data`` change.
+    """
+    import pandas as pd
+
+    from sparc.core.pipeline import fingerprint_sections
+
+    try:
+        no_data = not (isinstance(cfg.raw.get("data"), dict) and cfg.raw["data"].get("path"))
+        return fingerprint_sections(cfg, False, pd.DataFrame() if no_data else None)
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError) as exc:
+        log.info("impact: cannot fingerprint the config: %s", exc)
+        return None
+
+
 def launch_raw(raw: dict, project_dir: str | os.PathLike, workspace=None) -> dict:
     """``raw`` as a Studio launch would snapshot it (SPEC §4.3): path keys absolute, ``climate.cache`` the
     workspace cache, ``output.dir`` the project's ``runs`` folder."""
@@ -545,11 +567,17 @@ def impact(db, project: dict, edited_raw: dict, workspace=None) -> dict:
 
     pdir = Path(project["dir"])
     text = read_text(project)
-    cur_raw = core_block(parse_yaml(text)) if text.strip() else {}
-    cur = fingerprint_sections(build_core_config(cur_raw, pdir), False)
+    try:
+        cur_raw = core_block(parse_yaml(text)) if text.strip() else {}
+    except ApiError:                     # broken YAML written outside Studio: nothing to compare with
+        cur_raw = None
+    cur = _config_sections(build_core_config(cur_raw, pdir)) if cur_raw is not None else None
     new_cfg = build_core_config(edited_raw, pdir)
-    new = fingerprint_sections(new_cfg, False)
-    changed = [s for s in FINGERPRINT_SECTIONS if cur.get(s) != new.get(s)]
+    new = _config_sections(new_cfg)
+    if cur is None or new is None:       # a config core cannot fingerprint: every section may change
+        changed = list(FINGERPRINT_SECTIONS)
+    else:
+        changed = [s for s in FINGERPRINT_SECTIONS if cur.get(s) != new.get(s)]
     launch_cfg = None
     runs = []
     for r in _project_runs(db, project):
@@ -557,12 +585,6 @@ def impact(db, project: dict, edited_raw: dict, workspace=None) -> dict:
         side = read_json(d / "checkpoint.json") or {}
         old = side.get("sections") or {}
         args = _run_args(d)
-        if (d / "studio" / "launch.json").is_file():
-            if launch_cfg is None:
-                launch_cfg = build_core_config(launch_raw(edited_raw, pdir, workspace), pdir)
-            cfg = launch_cfg
-        else:
-            cfg = new_cfg
         frame = None
         if (d / "input_frame.parquet").is_file():
             try:
@@ -570,6 +592,12 @@ def impact(db, project: dict, edited_raw: dict, workspace=None) -> dict:
             except Exception:
                 frame = None
         try:
+            if (d / "studio" / "launch.json").is_file():
+                if launch_cfg is None:
+                    launch_cfg = build_core_config(launch_raw(edited_raw, pdir, workspace), pdir)
+                cfg = launch_cfg
+            else:
+                cfg = new_cfg
             sec = fingerprint_sections(cfg, bool(args.get("fast", False)), frame, coarse=args.get("coarse"),
                                        cv_curve=args.get("cv_curve"))
         except Exception as exc:                 # an unreadable config cannot be compared; say so
