@@ -33,6 +33,15 @@ describe("brush: Float32 edits, clamped, idempotent", () => {
     expect(edit[2]).toBe(0);
     expect(edit[4]).toBe(0); // NaN base: never edited
   });
+  it("follows the engine's support rule for inputs already outside the bounds", () => {
+    const out = Float32Array.from([105, -3]);
+    const s = (amount: number): BrushSettings => ({ amount, mode: "add", radius_m: 60, base: out, bounds: [0, 100] });
+    const edit = new Float32Array(2);
+    applyBrush(edit, [0, 1], s(10));
+    expect([edit[0], edit[1]]).toEqual([0, 10]); // never pushed further out, never turned into a decrease
+    applyBrush(edit, [0, 1], s(-10));
+    expect([edit[0], edit[1]]).toEqual([-10, 0]);
+  });
   it("erases", () => {
     const edit = new Float32Array(6);
     applyBrush(edit, [0, 3], settings());

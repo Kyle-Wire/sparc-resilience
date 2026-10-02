@@ -260,7 +260,7 @@ export type Project = {
   headline_scenario: string | null;
   cost_model: Record<string, { per_unit: number }>;
   n_runs: number;
-  last_run: { id: string; status: string; created_utc: string; r2: number | null } | null;
+  last_run: { id: string; status: string; created_utc: string; r2: number | null; has_checkpoint?: boolean } | null;
   active_jobs: number;
   readiness_score: { done: number; total: number };
 };

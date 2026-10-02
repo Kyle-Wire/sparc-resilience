@@ -72,13 +72,17 @@ export function Axis({ scale, orient, at, grid = 0, title, ticks, tickCount, for
 }
 
 /** Category axis for band scales (labels truncated to `maxChars`). */
-export function BandAxis({ scale, orient, at, title, maxChars = 18 }: { scale: BandScale; orient: "bottom" | "left"; at: number; title?: string; maxChars?: number }) {
+export function BandAxis({ scale, orient, at, title, maxChars = 18, titleGap }: { scale: BandScale; orient: "bottom" | "left"; at: number; title?: string; maxChars?: number; titleGap?: number }) {
   const cut = (s: string) => (s.length > maxChars ? s.slice(0, maxChars - 1) + "…" : s);
   if (orient === "bottom") {
     const rotate = scale.keys.length > 8;
+    // Labels every `every`-th band so neighbours never overlap: rotated labels need ~20 px between
+    // bands, flat ones their own width (~6.5 px a character).
+    const longest = Math.max(0, ...scale.keys.map((k) => cut(k).length));
+    const every = Math.max(1, Math.ceil((rotate ? 20 : longest * 6.5 + 6) / Math.max(1e-9, Math.abs(scale.step))));
     return (
       <g aria-hidden="true">
-        {scale.keys.map((k) => (
+        {scale.keys.map((k, i) => (i % every ? null :
           <text
             key={k}
             className="t-axis"
@@ -89,7 +93,7 @@ export function BandAxis({ scale, orient, at, title, maxChars = 18 }: { scale: B
           </text>
         ))}
         {title ? (
-          <text className="t-label" x={(scale(scale.keys[0] ?? "") + scale(scale.keys[scale.keys.length - 1] ?? "") + scale.bandwidth) / 2} y={at + (rotate ? 52 : 32)} textAnchor="middle">
+          <text className="t-label" x={(scale(scale.keys[0] ?? "") + scale(scale.keys[scale.keys.length - 1] ?? "") + scale.bandwidth) / 2} y={at + (titleGap ?? (rotate ? 52 : 32))} textAnchor="middle">
             {title}
           </text>
         ) : null}

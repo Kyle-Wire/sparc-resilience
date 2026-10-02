@@ -370,7 +370,7 @@ type Project = { id: string; slug: string; name: string; dir: string; config_pat
   report: { title: string|null; place: string|null; area: string|null };
   headline_scenario: string|null;   // configured slug or sc_ id
   cost_model: Record<string, {per_unit: number}>;
-  n_runs: number; last_run: {id: string, status: string, created_utc: string, r2: number|null}|null;
+  n_runs: number; last_run: {id: string, status: string, created_utc: string, r2: number|null, has_checkpoint: boolean}|null;
   active_jobs: number; readiness_score: {done: number, total: number} };
 type ReadinessRow = { key: "data"|"columns"|"levers"|"roles"|"forcing"|"climate_table"|"people_layers"|"config_valid"
   |"runs"|"emulator"|"studies"; label: string; state: "ok"|"warn"|"missing"|"n/a"; detail: string; action: Action|null };
@@ -1582,3 +1582,22 @@ The `docs` item extends this section when the spec is brought up to date. Entrie
 - The runs routes return `503 not_ready` while the runs registry is still starting, as the jobs and inputs routes do while the server starts.
 - A job with a cancel request (status `cancelling`, or its `cancel` file present) whose worker exits with `-15`/`143` ends `cancelled`, not `failed`. This covers SIGTERM arriving before the worker or the replay runner installed its handlers.
 - `POST /api/projects/{pid}/data/check`: `config_patch` is a JSON Merge Patch, and the preview carries the `planner.layers` columns (§5.2).
+
+### M3 (Scenario Lab)
+
+- `POST /api/runs/{rid}/engine/evict` does what `DELETE /api/runs/{rid}/engine` does (the body is ignored), so an `Action` (POST/GET only) can evict a run. The `engine_memory` refusal's action uses it.
+- `GET /api/runs/{rid}/engine` also reports `loading`, with `job_id` set to the exact request's job (`engine.scenario`, `engine.batch`, …, not only `engine.open`), while that request is loading a cold run. The Lab shows it as the same loading state.
+- `PreviewRequest` has an optional `scenario_id`, and the Lab sends it once the draft is saved. It marks a `draft` scenario `previewed`. The Lab previews an edit (120 ms) before it autosaves it (2 s), so a save whose `{edits, options}` equal the scenario's latest preview keeps `previewed`. Any other content change makes it a `draft` again. The server keeps this in memory, so a restart only loses the status hint.
+- `409 superseded` on `POST /api/runs/{rid}/preview` applies only while a newer `request_seq` for the run is in flight or waiting. Once the run's previews are idle, any `request_seq` is accepted again, so a reloaded page whose sequence restarts at 1 is not locked out.
+- `POST /api/scenarios/{sid}/run` always returns `{cached, job}`, with the unused one `null`: `200` on a cache hit, `202` with the job otherwise.
+- A cache hit on `POST /api/scenarios/{sid}/run` can be a result computed for **another** scenario with the same content (the cache key is content, run, checkpoint and code). That result is copied to a new result of `sid`, and `cached.id` is the copy, with `cached.scenario_id = sid`. The scenario then lists, inspects, compares and packs it as its own, and keeps it if the other scenario is deleted. The scenario's own result is preferred when there is one.
+- Exact requests on a run that is not loaded run the engine memory preflight and can return `409 engine_memory`. These are scenario run, run-batch, ladder, configured rerun-exact, sweeps and plan verify/frontier. A cache hit is exempt. `POST /api/runs/{rid}/plans` keeps the plan and returns `job: null` when the verify job is refused.
+- `DELETE /api/plans/{plid}` and `DELETE /api/scenarios/{sid}` return `409 active` while a job on them is running, as `DELETE /api/sweeps/{swid}` does.
+- `POST /api/runs/{rid}/climate/explore` returns `present` as §7.7 says: `summarize_projections`' dict `{mean, share_at_or_above}` for today. It also returns `statistic` (the warming statistic asked for), and each `projections[].warming.selected` holds that statistic's warming, which drives the client-side future maps.
+- Compare sign convention: `pairs[].city`, `pairs[].regions` and the `cmp:<cid>:<a>__<b>` difference layer are **A − B** (item `a` minus item `b`). A negative value means A cools more than B.
+- The Lab's Compare page `/r/:rid/lab/compare` accepts `?cid=<comparison id>` next to `?items=`. `items` are encoded `res:<id>`, `configured:<slug>`, `plan:<id>` or `baseline`.
+- `Project.last_run.has_checkpoint` (§5) is true once the latest run's `checkpoint.pkl` exists, which can happen while the run is still going (after S3). The project nav's Scenario Lab entry uses it to stay disabled until the run it would open has a checkpoint (SPEC §3.1).
+- Engine host transport (§13): when `<ws>/engine/host.sock` is longer than `AF_UNIX` allows (about 100 bytes, as with a deeply nested workspace), the host binds a short per-workspace socket in the temp directory (`sparc-engine-<uid>-<hash>.sock`, owner-only). `host.json` `sock` is the path actually bound, and clients connect to that.
+- Packs and `POST /api/exports` (contract for `[S]`, M4): the route inserts the `exports` row **before** it queues `export.decision_pack`, `export.plan_pack` or `export.compare_pack`, passing `export_id` plus `result_id`, `plan_id` or `comparison_id`. The kind's `on_finish` (`pack_on_finish`) completes that row with `status`, `path` and `bytes`, and records the pack's `draft` flag in `options_json.draft`. `Export.draft` is read from there. Until `[S]` lands, `POST /api/exports` has no route: the server answers `405` with code `not_found`, and the Lab's Decision pack, Plan pack and Compare pack buttons show that error. The pack kinds themselves work when submitted through `POST /api/jobs` with an `export_id`.
+- `build_emulator` actions point at `POST /api/runs/{rid}/actions/emulator` (`post.emulator`, `[S]`, M4). Until then the Lab offers the action, the preview reports `404 no_emulator`, and exact runs work.
+- `sparc/core/session.py` is a top-level core module, so it is part of the core code digest (SPEC §11). Checkpoints written before it was added report `code_match: false`, and their exact results are marked stale (`stale: true`). This is the documented consequence of adding a core module, not a fault in the run.

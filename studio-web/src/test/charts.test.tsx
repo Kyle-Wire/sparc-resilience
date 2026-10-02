@@ -160,6 +160,16 @@ describe("chart kit: every chart renders inside ChartFrame", () => {
     expect(container.querySelector(".tip")).toBeNull();
   });
 
+  it("thins crowded category labels so neighbours never overlap (34 spill rings)", () => {
+    const rings = [{ r0_m: 0, r1_m: 0, mean: -1.6, se: 0.2, n: 2155 }, ...Array.from({ length: 33 }, (_, i) => ({ r0_m: i * 30, r1_m: (i + 1) * 30, mean: -0.8 / (i + 1), se: 0.05, n: 300 }))];
+    const C = KIT.RingProfile as ComponentType<Record<string, unknown>>;
+    const { container } = render(<C title="Spill" rings={rings} unit="°F" width={560} />);
+    const labels = [...container.querySelectorAll("svg.chart text.t-axis")].map((t) => t.textContent ?? "").filter((t) => /edited| m$/.test(t));
+    expect(labels[0]).toBe("edited");
+    expect(labels.length).toBeGreaterThan(5);
+    expect(labels.length).toBeLessThan(rings.length);
+  });
+
   it("Pin to Findings posts the snapshot and uploads the SVG image", async () => {
     const m = mockFetch({
       "POST /api/findings": { status: 201, body: { id: "fd_1", project_id: "p_1" } },
