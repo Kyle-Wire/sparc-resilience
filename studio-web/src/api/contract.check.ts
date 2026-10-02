@@ -1,5 +1,6 @@
-// Contract check (SPEC §13.3, §14.4): the hand-written wire types of src/api/*.ts against the
-// types generated from the server's OpenAPI document (schema.gen.ts, `npm run gen:api`).
+// Contract check (SPEC §13.3, §14.4): the hand-written wire types of src/api/*.ts (and the two
+// shell resources of src/layouts/resources.ts) against the types generated from the server's
+// OpenAPI document (schema.gen.ts, `npm run gen:api`).
 //
 // Type-only: nothing here is imported by the app, bundled or run. `npm run typecheck` fails when
 // a check below does not resolve to `true`; the error names the endpoint and field, e.g.
@@ -39,6 +40,7 @@ import type * as R from "./runs";
 import type * as St from "./studies";
 import type * as T from "./tracking";
 import type * as C from "./types";
+import type { ProjectDetail as ShellProjectDetail, RunDetailHead } from "../layouts/resources";
 
 type S = components["schemas"];
 
@@ -317,6 +319,7 @@ export interface ProjectChecks {
   importProject: Expect<Out<P.ImportProjectResult, Res<"/api/projects/import", "post">, "POST /api/projects/import">>;
   importBody: Expect<In<P.ImportProjectBody, Req<"/api/projects/import", "post">, "POST /api/projects/import body">>;
   detail: Expect<Out<P.ProjectDetail, Res<"/api/projects/{pid}", "get">, "GET /api/projects/{pid}">>;
+  detailShell: Expect<Out<ShellProjectDetail, Res<"/api/projects/{pid}", "get">, "GET /api/projects/{pid} (shell)">>;
   patch: Expect<Out<C.Project, Res<"/api/projects/{pid}", "patch">, "PATCH /api/projects/{pid}">>;
   patchBody: Expect<In<P.ProjectPatch, Req<"/api/projects/{pid}", "patch">, "PATCH /api/projects/{pid} body">>;
   remove: Expect<Out<Ret<typeof P.deleteProject>, Res<"/api/projects/{pid}", "delete">, "DELETE /api/projects/{pid}">>;
@@ -388,6 +391,7 @@ export interface RunChecks {
     | "GET /api/runs/{rid}.checkpoint.matches_snapshot.data: source may be null"
     | "GET /api/runs/{rid}.checkpoint.matches_snapshot.code: source may be null"
     | "GET /api/runs/{rid}.checkpoint.matches_snapshot.config: source may be null">>;
+  detailShell: Expect<View<RunDetailHead, Res<"/api/runs/{rid}", "get">, "GET /api/runs/{rid} (shell)">>;
   detailLite: Expect<View<T.RunDetailLite, Res<"/api/runs/{rid}", "get">, "GET /api/runs/{rid} (tracking)">>;
   launchSource: Expect<View<P.RunLaunchSource, Res<"/api/runs/{rid}", "get">, "GET /api/runs/{rid} (launch)">>;
   remove: Expect<Out<Ret<typeof T.deleteRunData>, Res<"/api/runs/{rid}", "delete">, "DELETE /api/runs/{rid}">>;
@@ -410,6 +414,8 @@ export interface RunChecks {
   files: Expect<Out<R.FileEntry[], Res<"/api/runs/{rid}/files", "get">, "GET /api/runs/{rid}/files">>;
   fileTable: Expect<Out<R.FileTable, Res<"/api/runs/{rid}/files/table", "get">, "GET /api/runs/{rid}/files/table">>;
   dictionary: Expect<Out<R.DictionaryRow[], Res<"/api/runs/{rid}/dictionary", "get">, "GET /api/runs/{rid}/dictionary">>;
+  // the map kit's layer catalogue (src/map/data.ts); each LayerMeta is a free object on the server
+  layers: Expect<Out<{ groups: C.LayerGroup[] }, Res<"/api/runs/{rid}/layers", "get">, "GET /api/runs/{rid}/layers">>;
   grid: Expect<Out<C.GridMeta, Res<"/api/runs/{rid}/grid", "get">, "GET /api/runs/{rid}/grid">>;
   cell: Expect<Out<R.CellInfo, Res<"/api/runs/{rid}/cells/{index}", "get">, "GET /api/runs/{rid}/cells/{index}">>;
 
@@ -445,6 +451,7 @@ export interface RunChecks {
 // ---------------------------------------------------------------- Scenario Lab (api.md §7)
 
 export interface LabChecks {
+  engineHost: Expect<Out<L.EngineHostStatus, Res<"/api/engine", "get">, "GET /api/engine">>;
   engine: Expect<Out<L.RunEngineStatus, Res<"/api/runs/{rid}/engine", "get">, "GET /api/runs/{rid}/engine">>;
   engineOpen: Expect<Out<C.Job | L.RunEngineStatus, Res<"/api/runs/{rid}/engine/open", "post">, "POST /api/runs/{rid}/engine/open">>;
   engineClose: Expect<Out<L.RunEngineStatus, Res<"/api/runs/{rid}/engine", "delete">, "DELETE /api/runs/{rid}/engine">>;

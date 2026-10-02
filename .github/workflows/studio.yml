@@ -70,7 +70,7 @@ jobs:
           git diff --exit-code studio-web/src/api/schema.gen.ts
           npm --prefix studio-web run typecheck
           npm --prefix studio-web test
-          python -m pytest tests/studio/test_reducer_contract.py tests/studio/test_openapi_snapshot.py -q -o addopts=""
+          SPARC_CONTRACT_REQUIRE_TS=1 python -m pytest tests/studio/test_reducer_contract.py tests/studio/test_openapi_snapshot.py -q -o addopts=""
           npm --prefix studio-web run build
           git diff --exit-code sparc/studio/static
           untracked="$(git status --porcelain --untracked-files=all sparc/studio/static)"
@@ -84,6 +84,7 @@ jobs:
       - name: End-to-end (replay, real fast run, accessibility)
         env:
           SPARC_E2E_ARTIFACTS: ${{ runner.temp }}/e2e
+          SPARC_E2E_REQUIRE_BROWSER: "1"
         run: >
           python -m pytest -q -o addopts="" --timeout=1800
           tests/studio/e2e/test_e2e_replay.py
@@ -122,11 +123,14 @@ jobs:
           base_ref="${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}"
           before="${{ github.event.before }}"
           git fetch --no-tags origin "$base_ref" || true
-          if base="$(git merge-base "origin/$base_ref" HEAD 2>/dev/null)"; then
-            :
-          elif [ -n "$before" ] && git cat-file -e "$before^{commit}" 2>/dev/null; then
+          head="$(git rev-parse HEAD)"
+          base="$(git merge-base "origin/$base_ref" HEAD 2>/dev/null || true)"
+          # a push to the default branch itself has HEAD as its merge base: check the pushed commits
+          if { [ -z "$base" ] || [ "$base" = "$head" ]; } && [ -n "$before" ] \
+              && git cat-file -e "$before^{commit}" 2>/dev/null; then
             base="$before"
-          else
+          fi
+          if [ -z "$base" ]; then
             echo "No merge base with origin/$base_ref: cannot check that the old app is untouched"
             exit 1
           fi
@@ -164,6 +168,7 @@ jobs:
       - name: Slow studio tests, studies and Providence journeys, performance budgets
         env:
           SPARC_E2E_ARTIFACTS: ${{ runner.temp }}/e2e
+          SPARC_E2E_REQUIRE_BROWSER: "1"
         run: python -m pytest tests/studio -q -o addopts="" -m "slow and not network" --timeout=3600 -rxX
 
       - name: Upload nightly screenshots

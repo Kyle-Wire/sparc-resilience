@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from pathlib import Path
 
 from .conftest import SYNTH_RUN, StudioPage, drag_on, rail_states, wait_for, wait_view_ready
 
@@ -129,6 +130,18 @@ def test_e2e_replay(studio_server, studio_page):
     page.locator("[aria-label=Stages] .rail-chip").first.wait_for()
     final = server.wait_job(jid, timeout=120)
     assert final["status"] == "succeeded", final
+
+    # the runner replayed the fixture as this job's run (api.md §14): this job and the runner's pid
+    # on every event, run.dir and the copied run_state.json pointing at the new run and its job log
+    run_dir = Path(server.get(f"/api/runs/{rid}")["header"]["run_dir"])
+    assert run_dir.resolve().is_relative_to(server.workspace.resolve()), run_dir
+    head = server.get(f"/api/jobs/{jid}/events", params={"types": "run.start,run.dir", "limit": 10})["events"]
+    assert {e["type"] for e in head} == {"run.start", "run.dir"}
+    state = json.loads((run_dir / "run_state.json").read_text("utf-8"))
+    assert state["job"] == jid and all(e["job"] == jid for e in head), (state, head)
+    assert {e["pid"] for e in head} == {state["pid"]}, (state, head)
+    assert next(e for e in head if e["type"] == "run.dir")["run_dir"] == str(run_dir)
+    assert Path(state["events_path"]).resolve() == (server.workspace / "jobs" / jid / "events.jsonl").resolve(), state
 
     def all_done():
         rail = rail_states(page)

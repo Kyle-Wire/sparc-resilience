@@ -10,7 +10,9 @@
   the dark theme. Screenshots go to ``$SPARC_E2E_ARTIFACTS/<test>/`` when that is set (CI uploads
   it), else to the test's temporary folder.
 * Chromium is ``$PLAYWRIGHT_CHROMIUM`` or the preinstalled one; the tests skip without it or
-  without the Python ``playwright`` package. Browsers are never downloaded.
+  without the Python ``playwright`` package, unless ``SPARC_E2E_REQUIRE_BROWSER=1`` (CI), which
+  turns that skip into a failure so a broken browser install cannot pass the journeys
+  vacuously. Browsers are never downloaded.
 
 Every test here carries the ``e2e`` marker.
 """
@@ -222,15 +224,21 @@ def studio_server(tmp_path):
 # the browser
 # ---------------------------------------------------------------------------
 
+def _no_browser(reason: str):
+    if os.environ.get("SPARC_E2E_REQUIRE_BROWSER") == "1":
+        pytest.fail(f"{reason}, and SPARC_E2E_REQUIRE_BROWSER=1 forbids skipping the browser journeys")
+    pytest.skip(reason)
+
+
 @pytest.fixture(scope="session")
 def browser():
     exe = chromium_path()
     if exe is None:
-        pytest.skip("Chromium not found (set PLAYWRIGHT_CHROMIUM)")
+        _no_browser("Chromium not found (set PLAYWRIGHT_CHROMIUM)")
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        pytest.skip("the playwright Python package is not installed")
+        _no_browser("the playwright Python package is not installed")
     with sync_playwright() as pw:
         b = pw.chromium.launch(executable_path=exe, headless=True, args=["--disable-gpu", "--no-sandbox"])
         yield b

@@ -6,7 +6,8 @@ recorded synthetic run ``tests/studio/fixtures/synth_run/events.jsonl``. After *
 they must agree: identical stage states, done units, warnings and artifacts, and progress within
 1e-9. The client side runs in vitest (``studio-web/src/contract/reducer.contract.test.ts``) and
 writes its projections to ``SPARC_CONTRACT_OUT``; the test is skipped when Node or the web
-dependencies are absent.
+dependencies are absent, unless ``SPARC_CONTRACT_REQUIRE_TS=1`` (the CI step that runs it after
+``npm ci``), which makes that a failure so the comparison can never pass by being skipped.
 
 Both sides are also held to the committed golden projection
 ``tests/studio/fixtures/reducer_projection.golden.json`` (progress after each event, stage
@@ -149,6 +150,8 @@ def _node_ready() -> str | None:
 def test_ts_reducer_matches_python(tmp_path):
     reason = _node_ready()
     if reason:
+        if os.environ.get("SPARC_CONTRACT_REQUIRE_TS") == "1":
+            pytest.fail(f"{reason}, and SPARC_CONTRACT_REQUIRE_TS=1 requires the TS side")
         pytest.skip(reason)
     out = tmp_path / "ts_projection.json"
     env = dict(os.environ, SPARC_CONTRACT_OUT=str(out), CI="1", NO_COLOR="1")

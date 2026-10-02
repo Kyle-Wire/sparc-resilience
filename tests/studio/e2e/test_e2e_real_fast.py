@@ -180,7 +180,10 @@ def test_e2e_real_fast(studio_server, studio_page):
     rerun = page.get_by_role("button", name=re.compile(r"^Re-run"))
     if rerun.count():      # the configured scenario has no per-fold results yet: re-run it exactly
         rerun.first.click()
-        wait_for(lambda: _newest_job(server, "engine.rerun_configured")["status"] == "succeeded", 300, "the configured re-run")
+        wait_for(lambda: server.get("/api/jobs", params={"kind": "engine.rerun_configured", "limit": 1})["items"], 30,
+                 "the configured re-run job")
+        rerun_job = server.wait_job(_newest_job(server, "engine.rerun_configured")["id"], timeout=300)
+        assert rerun_job["status"] == "succeeded", rerun_job
     pair_row = pairs.locator("tbody tr").first
     wait_for(lambda: "paired" in pair_row.inner_text().lower() and "needs exact" not in pair_row.inner_text().lower(), 180,
              "the paired SE of the pair")
@@ -226,8 +229,9 @@ def test_e2e_real_fast(studio_server, studio_page):
     assert server.get(f"/api/exports/{pack['id']}")["status"] == "ready"
     sp.goto(f"/p/{pid}/exports")
     history = page.get_by_role("table", name="Export history")
-    link = history.locator("tr", has_text=pack["id"]).get_by_role("link", name="Download") \
-        if history.locator("tr", has_text=pack["id"]).count() else history.get_by_role("link", name="Download").first
+    link = history.locator(f"tr[data-export='{pack['id']}']").get_by_role("link", name="Download")
+    link.wait_for()
+    assert link.get_attribute("href") == f"/api/exports/{pack['id']}/download"
     with page.expect_download() as dl:
         link.click()
     with zipfile.ZipFile(dl.value.path()) as z:

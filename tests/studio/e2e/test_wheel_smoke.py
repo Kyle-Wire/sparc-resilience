@@ -1,6 +1,10 @@
 """Wheel smoke test (SPEC §14.6 step 7): the built wheel serves the committed SPA with no Node and no checkout.
 
-1. Build the wheel (``pip wheel . --no-deps``), or take ``$SPARC_SMOKE_WHEEL``.
+1. Build the wheel (``pip wheel --no-deps``), or take ``$SPARC_SMOKE_WHEEL``. The wheel is built
+   from a copy of the checkout's files (tracked and not ignored), never in place: setuptools
+   keeps its ``build/`` folder between builds and never prunes it, so building in the checkout
+   would leave ``build/`` and ``*.egg-info`` behind and let files removed from the sources
+   (an old hashed asset, a deleted module) slip into later wheels.
 2. It carries ``sparc/studio/static``: ``index.html``, ``BUILD_INFO.json`` and every hashed asset
    that ``index.html`` loads.
 3. Install it into a clean virtual environment (no system site-packages). With
@@ -20,6 +24,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -43,6 +48,26 @@ def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     return proc
 
 
+def _source_copy(dest: Path) -> Path:
+    """The files a wheel is built from (the root's files and ``sparc/``, tracked or new but not
+    ignored), hard-linked (or copied) into ``dest``."""
+    listed = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                            capture_output=True, timeout=120)
+    assert listed.returncode == 0, f"git ls-files failed: {listed.stderr.decode(errors='replace')}"
+    names = [n for n in listed.stdout.decode("utf-8").split("\0") if n and ("/" not in n or n.startswith("sparc/"))]
+    assert "pyproject.toml" in names and "sparc/studio/static/index.html" in names, "not a SPARC checkout"
+    for name in names:
+        src, dst = ROOT / name, dest / name
+        if not src.is_file():          # listed but deleted in the working tree
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(src, dst)
+        except OSError:
+            shutil.copy2(src, dst)
+    return dest
+
+
 def _clean_env() -> dict:
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(("SPARC_STUDIO", "PYTHON", "VIRTUAL_ENV")) and k not in ("SPARC_PROGRESS",)}
@@ -57,7 +82,8 @@ def test_wheel_serves_the_spa(tmp_path):
         wheel_path = Path(wheel)
     else:
         dist = tmp_path / "dist"
-        _run([sys.executable, "-m", "pip", "wheel", str(ROOT), "--no-deps", "-q", "-w", str(dist)], env=_clean_env())
+        src = _source_copy(tmp_path / "src")
+        _run([sys.executable, "-m", "pip", "wheel", str(src), "--no-deps", "-q", "-w", str(dist)], env=_clean_env())
         wheel_path = next(dist.glob("sparc-*.whl"))
 
     # 2. its static files
