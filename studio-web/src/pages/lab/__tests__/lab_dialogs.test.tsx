@@ -5,14 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { clearResources } from "../../../api/resource";
 import type { ScenarioTemplate } from "../../../api/lab";
-import type { Job } from "../../../api/types";
+import type { Job, SelectionSpec } from "../../../api/types";
 import { byText, click, flush, mockFetch, render, typeInto, waitFor } from "../../../test/render";
 import { AcrossRunsPanel, latestAcross } from "../components/AcrossRuns";
 import { DeleteScenarioDialog } from "../components/Dialogs";
+import { ResultInspector } from "../components/ResultInspector";
 import { SelectionBuilder } from "../components/SelectionBuilder";
 import { TemplateGallery } from "../components/TemplateGallery";
 import { makeGrid } from "../../../map/grid";
-import { L, LEVERS, PID, RID, gridMeta, scenario } from "../__fixtures__/lab";
+import { L, LEVERS, PID, RID, gridMeta, result, scenario } from "../__fixtures__/lab";
 
 let fetchMock: ReturnType<typeof mockFetch> | null = null;
 
@@ -117,6 +118,43 @@ describe("Selection builder tint", () => {
   });
 });
 
+describe("Selection builder with a stored (server-shaped) selection", () => {
+  // The server echoes unset optional fields as null: a saved "Top %" has `k: null, within: null`,
+  // a top-k `frac: null`, a buffer in metres `lever_range: null`.
+  const RESOLVE = { n_cells: 2, area_km2: 0.0018, people: 20, medians: {}, mask: btoa(String.fromCharCode(0b0000011)), portable: true, warnings: [] };
+  const g = () => makeGrid(gridMeta(), Int32Array.from([0, 1, 0, 2, 0, 1, 2]), Int32Array.from([2, 2, 1, 1, 0, 0, 0]));
+  const builder = (value: unknown) =>
+    render(<SelectionBuilder rid={RID} grid={g()} value={value as SelectionSpec} onChange={() => {}} columns={[]} regions={[]} levers={LEVERS} idPrefix="t" />);
+
+  it("counts a Top % whose k and within are null instead of reporting it invalid", async () => {
+    let resolved = 0;
+    fetchMock = mockFetch({ [`POST /api/runs/${RID}/selection/resolve`]: () => (resolved++, { body: RESOLVE }) });
+    const { container } = builder({ kind: "top", column: "pred:target", frac: 0.1, k: null, direction: "highest", within: null });
+    await waitFor(() => byText(container, '[data-testid="sel-count"]', "2 cells"), 5000, "count");
+    expect(container.textContent).not.toContain("not a selection");
+    expect(container.querySelector(".sel-desc")!.textContent).toBe("highest 10% by pred:target");
+    click(byText(container, ".sel-summary button", "Edit"));
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="Share (%)"]')!.value).toBe("10");
+    expect(resolved).toBeGreaterThan(0);
+  });
+
+  it("shows the count field for a top-k whose frac is null and the radius for a buffer whose lever_range is null", async () => {
+    fetchMock = mockFetch({ [`POST /api/runs/${RID}/selection/resolve`]: { body: RESOLVE } });
+    const top = builder({ kind: "top", column: "pred:target", frac: null, k: 50, direction: "lowest", within: null });
+    await waitFor(() => byText(top.container, '[data-testid="sel-count"]', "2 cells"), 5000, "top count");
+    expect(top.container.querySelector(".sel-desc")!.textContent).toBe("lowest 50 cells by pred:target");
+    click(byText(top.container, ".sel-summary button", "Edit"));
+    expect(top.container.querySelector<HTMLInputElement>('input[aria-label="Cells"]')!.value).toBe("50");
+    expect(top.container.querySelector('input[aria-label="Share (%)"]')).toBeNull();
+    const buf = builder({ kind: "buffer", of: { kind: "zones", values: [1] }, radius_m: 120, lever_range: null });
+    await waitFor(() => byText(buf.container, '[data-testid="sel-count"]', "2 cells"), 5000, "buffer count");
+    expect(buf.container.querySelector(".sel-desc")!.textContent).toBe("120 m around zone 1");
+    click(byText(buf.container, ".sel-summary button", "Edit"));
+    expect(buf.container.querySelector<HTMLInputElement>('input[aria-label="Radius"]')!.value).toBe("120");
+    expect(buf.container.querySelector('select[aria-label="Lever range"]')).toBeNull();
+  });
+});
+
 function acrossJob(id: string, sid: string, status: Job["status"], result: Job["result"] = null): Job {
   return {
     id, kind: "scenario.across_runs", lane: "heavy", executor: "process", label: "Check across runs", status, project_id: PID, run_id: null, study_id: null, scenario_id: sid,
@@ -154,5 +192,24 @@ describe("Check across runs output", () => {
     expect(container.textContent).toContain("2 of 3 runs evaluated");
     expect(container.textContent).toContain("Sign stability 100%");
     expect(byText(container, ".edit-issues li", "r_old: no checkpoint")).not.toBeNull();
+  });
+});
+
+describe("Result inspector cost", () => {
+  it("calls a negative cooling_per_cost warming in the plain card and the Cost KPI", async () => {
+    // A canopy-loss scenario warms the city: cost_table's cooling_per_cost (positive = cooler) is negative.
+    const warm = result("res_w", {
+      city: L(0.84, 0.7, 0.98, 0.07),
+      summary: { ...result("res_w").summary, city: L(0.84, 0.7, 0.98, 0.07), edited: L(1.9, 1.6, 2.2, 0.15) },
+      cost: { total: 100, per_lever: { Pct_Canopy: 100 }, cooling_per_cost: -0.6117 },
+      plain: { headline: "", confidence: "", qualifiers: [], buys: ["-611.73 °F·cells of cooling per 1,000 cost units"] },
+    });
+    fetchMock = mockFetch({ "GET /api/results/res_w": { body: warm } });
+    const { container } = render(<ResultInspector rid={RID} resId="res_w" pid={PID} unit="degF" nFolds={3} />);
+    await waitFor(() => container.querySelector(".plain-result"), 5000, "inspector");
+    const text = container.textContent ?? "";
+    expect(text).toContain("What it buys: 611.700 °F·cells of warming per 1,000 cost units.");
+    expect(text).toContain("611.700 °F·cells of warming per 1k");
+    expect(text).not.toContain("of cooling per");
   });
 });

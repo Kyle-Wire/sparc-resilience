@@ -131,8 +131,9 @@ export type SelectionSpec =
   | { kind: "blob"; blob_id: string }
   | { kind: "hex"; size_m: 250 | 500; keys: number[] }
   | { kind: "filter"; column: string; op: "<" | "<=" | ">" | ">=" | "==" | "between" | "in"; value: number | string | [number, number] | (number | string)[] }
-  | { kind: "top"; column: string; frac?: number; k?: number; direction: "highest" | "lowest"; within?: SelectionSpec }
-  | { kind: "buffer"; of: SelectionSpec; radius_m?: number; lever_range?: string }
+  // Stored docs echo an unset optional field as null (`k: null, within: null`): treat null as absent.
+  | { kind: "top"; column: string; frac?: number | null; k?: number | null; direction: "highest" | "lowest"; within?: SelectionSpec | null }
+  | { kind: "buffer"; of: SelectionSpec; radius_m?: number | null; lever_range?: string | null }
   | { kind: "region"; id: string }
   | { op: "and" | "or" | "minus"; args: SelectionSpec[] }
   | { op: "not"; arg: SelectionSpec };

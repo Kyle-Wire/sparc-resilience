@@ -16,6 +16,21 @@ type Treatment = Sections<CausalTreatment> & { label: string; unit: string };
 type Blp = NonNullable<NonNullable<CausalTreatment["cate"]>["blp"]>;
 
 /**
+ * The units of a treatment. The server's `unit` is already the effect unit, target per lever
+ * unit ("°F per pp"), so it is shown as it is; the dose (the x of the dose–response curve) is
+ * in the lever's own unit ("pp").
+ */
+export function treatmentUnits(unit: string | null | undefined, name: string, targetUnit: string, leverUnits: Record<string, string>): { effect: string; dose: string } {
+  const u = unit ?? "";
+  const i = u.indexOf(" per ");
+  const target = unitLabel(i >= 0 ? u.slice(0, i) : targetUnit);
+  const lever = i >= 0 ? u.slice(i + " per ".length) : u;
+  const effect = `${target || "effect"} per ${unitLabel(lever) || "unit"}`;
+  const dose = unitLabel(leverUnits[name]) || (lever && lever !== "unit" ? unitLabel(lever) : "");
+  return { effect, dose };
+}
+
+/**
  * The best-linear-predictor calibration test in words (core `causal.blp_calibration`):
  * R_Y = β₁·R_T + β₂·R_T·(s − s̄); β₂ ≈ 1 means the CATE is a calibrated predictor of the
  * effect, β₂ ≈ 0 that it carries no real heterogeneity; p tests β₂ = 0.
@@ -31,7 +46,9 @@ export function blpWords(blp: Blp | null | undefined): string {
 }
 
 function DrCurve({ t, name }: { t: Treatment; name: string }) {
-  const u = unitLabel(useUnits().target);
+  const units = useUnits();
+  const u = unitLabel(units.target);
+  const dose = treatmentUnits(t.unit, name, units.target, units.levers).dose;
   const rid = useRid();
   const map = `/r/${encodeURIComponent(rid)}/map?layer=`;
   const dr = t.dr_curve;
@@ -57,7 +74,7 @@ function DrCurve({ t, name }: { t: Treatment; name: string }) {
         units={u}
         series={series}
         xLabel={t.label}
-        xUnit={unitLabel(t.unit)}
+        xUnit={dose}
         yLabel="Temperature"
         yUnit={u}
         decimals={2}
@@ -81,8 +98,8 @@ function DrCurve({ t, name }: { t: Treatment; name: string }) {
 }
 
 function TreatmentView({ name, t }: { name: string; t: Treatment }) {
-  const u = unitLabel(useUnits().target);
-  const per = `${u} per ${unitLabel(t.unit) || "unit"}`;
+  const units = useUnits();
+  const per = treatmentUnits(t.unit, name, units.target, units.levers).effect;
   return (
     <div className="stack">
       <div className="grid2">

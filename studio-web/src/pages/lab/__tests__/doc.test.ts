@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { EDIT_MODES, type Edit, type ScenarioDoc } from "../../../api/lab";
 import type { SelectionSpec } from "../../../api/types";
+import { isSelectionSpec } from "../../../stores/selection";
 import {
   DocError,
   combineSelection,
@@ -151,6 +152,37 @@ describe("edits", () => {
     expect(f.amount).toBeUndefined();
     expect(editProblems({ ...newEdit("Pct_Canopy", "fill_headroom"), amount: 1.5 })).toEqual(["The share of headroom must be between 0 and 1."]);
     expect(usableEdits([newEdit("A", "add", 1), { lever: "A", mode: "add" }])).toHaveLength(1);
+  });
+});
+
+// The server echoes an unset optional field as null (pydantic defaults, e.g. SelTop.within);
+// the "Shade the hottest X%" template's edit comes back exactly like this after a save or reload.
+describe("server-shaped docs (unset optional fields as null)", () => {
+  const serverTop = { kind: "top", column: "pred:target", frac: 0.1, k: null, direction: "highest", within: null } as unknown as SelectionSpec;
+  const serverEdit = { lever: "Pct_Canopy", mode: "add", amount: 10, percentile: null, paved_share: null, per_cell_ref: null, where: serverTop, label: null } as unknown as Edit;
+
+  it("a top selection with within: null is valid and its edit is usable", () => {
+    expect(validateSelection(serverTop, "where")).toEqual([]);
+    expect(isSelectionSpec(serverTop)).toBe(true);
+    expect(editProblems(serverEdit)).toEqual([]);
+    expect(usableEdits([serverEdit])).toHaveLength(1);
+    expect(validateSelection({ op: "and", args: [serverTop, { kind: "zones", values: [3] }] })).toEqual([]);
+    // null is still not a selection where one is required
+    expect(validateSelection({ kind: "buffer", of: null, radius_m: 120, lever_range: null })).toEqual(["selection.of: not a selection"]);
+  });
+
+  it("parses a stored doc whose unset fields are null", () => {
+    const doc = parseDoc({ name: "Shade the hottest 10%", notes: "", tags: [], anchor_run_id: null, edits: [serverEdit], regions: {}, costs: {}, options: { clip_to_support: true, mediators: true, expert: false } });
+    expect(doc.edits).toHaveLength(1);
+    expect(doc.edits[0]).toEqual({ lever: "Pct_Canopy", mode: "add", amount: 10, where: serverTop });
+    expect(parseDoc({ name: "x", edits: [{ lever: "A", mode: "add", amount: 1, where: null }] }).edits[0]).toEqual({ lever: "A", mode: "add", amount: 1 });
+  });
+
+  it("describes count-based tops and lever-range buffers whose other field is null", () => {
+    expect(describeSelection(serverTop)).toBe("highest 10% by target");
+    expect(describeSelection({ kind: "top", column: "pred:target", frac: null, k: 50, direction: "lowest", within: null } as unknown as SelectionSpec)).toBe("lowest 50 cells by target");
+    expect(describeSelection({ kind: "buffer", of: { kind: "all" }, radius_m: null, lever_range: "Pct_Canopy" } as unknown as SelectionSpec)).toBe("Pct_Canopy range around all cells");
+    expect(describeSelection({ kind: "buffer", of: { kind: "all" }, radius_m: 120, lever_range: null } as unknown as SelectionSpec)).toBe("120 m around all cells");
   });
 });
 

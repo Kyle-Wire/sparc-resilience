@@ -133,7 +133,8 @@ function PrimitiveEditor({ node, path, ctx }: { node: Extract<SelectionSpec, { k
       );
     }
     case "top": {
-      const byFrac = node.frac !== undefined || node.k === undefined;
+      // Stored selections echo the unused one of frac / k as null.
+      const byFrac = node.frac != null || node.k == null;
       return (
         <div className="sel-form">
           <select aria-label="Direction" value={node.direction} onChange={(e) => put({ ...node, direction: e.target.value as "highest" | "lowest" })}>
@@ -141,7 +142,7 @@ function PrimitiveEditor({ node, path, ctx }: { node: Extract<SelectionSpec, { k
             <option value="lowest">Lowest</option>
           </select>
           {byFrac ? (
-            <NumberField label="Share (%)" unit="%" min={0.1} max={100} value={node.frac !== undefined ? Number((node.frac * 100).toPrecision(6)) : 10} onChange={(x) => put({ ...node, frac: (x ?? 10) / 100, k: undefined })} />
+            <NumberField label="Share (%)" unit="%" min={0.1} max={100} value={node.frac != null ? Number((node.frac * 100).toPrecision(6)) : 10} onChange={(x) => put({ ...node, frac: (x ?? 10) / 100, k: undefined })} />
           ) : (
             <NumberField label="Cells" min={1} step={1} value={node.k ?? 100} onChange={(x) => put({ ...node, k: Math.max(1, Math.round(x ?? 100)), frac: undefined })} />
           )}
@@ -164,11 +165,11 @@ function PrimitiveEditor({ node, path, ctx }: { node: Extract<SelectionSpec, { k
       );
     }
     case "buffer": {
-      const byLever = node.lever_range !== undefined;
+      const byLever = node.lever_range != null;
       return (
         <div className="sel-form">
           {byLever ? (
-            <select aria-label="Lever range" value={node.lever_range} onChange={(e) => put({ ...node, lever_range: e.target.value })}>
+            <select aria-label="Lever range" value={node.lever_range ?? ""} onChange={(e) => put({ ...node, lever_range: e.target.value })}>
               {ctx.levers.map((l) => (
                 <option key={l.var} value={l.var}>
                   {l.label} influence range

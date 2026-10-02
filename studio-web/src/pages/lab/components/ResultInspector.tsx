@@ -18,7 +18,7 @@ import { Table } from "../../../components/ui/Table";
 import { useJobs } from "../../../stores/jobs";
 import { toast } from "../../../stores/ui";
 import { fmtDateTime, fmtInt, fmtNum, fmtPct, fmtSigned, fmtSignedValue, unitLabel } from "../../../theme/format";
-import { buysLines, cityLine, plainWording, withRange } from "../model/plain";
+import { buysLines, cityLine, perCostText, plainWording, withRange } from "../model/plain";
 import { useTray } from "../model/tray";
 import { AcrossRunsPanel } from "./AcrossRuns";
 
@@ -258,7 +258,7 @@ export function ResultInspector({ rid, resId, pid, unit, nFolds, onShowLayer }: 
             <Kpi label="Edited area" value={s.edited ? fmtSigned(s.edited.estimate, 3) : "—"} unit={u} note={s.edited?.phrase} />
             <Kpi label="City-wide" value={fmtSigned(r.city.estimate, 4)} unit={u} note={cityLine(r.city, unit)} />
             <Kpi label="Cooling outside the edits" value={fmtPct(r.spill.outside_share)} note="spill beyond the edited cells" />
-            <Kpi label="Cost" value={fmtNum(r.cost.total, 0)} note={r.cost.cooling_per_cost !== null ? `${fmtNum(Math.abs(r.cost.cooling_per_cost) * 1000, 3)} ${u}·cells per 1k` : undefined} />
+            <Kpi label="Cost" value={fmtNum(r.cost.total, 0)} note={r.cost.cooling_per_cost !== null ? perCostText(r.cost.cooling_per_cost, unit, "1k") : undefined} />
           </KpiRow>
           {r.preview_vs_exact ? (
             <p className="cap" data-preview-vs-exact="true">

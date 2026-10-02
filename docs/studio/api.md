@@ -139,6 +139,8 @@ type SelectionSpec =
   | { op: "not"; arg: SelectionSpec };
 // column namespaces: predictor:<c> | layer:<c> | pred:<target|pred|resid|halfwidth|dist_train_m> | response:<var>:<c>
 //                    | planner:<c> | configured:<slug> | result:<res_id>:delta
+// Stored docs and responses carry an unset optional field as null (top {frac|k: null, within: null},
+// buffer {radius_m|lever_range: null}, Edit {percentile, paved_share, per_cell_ref, where, label: null}); null means absent.
 
 type LayerMeta = { key: string; group: string; label: string; unit: string; scale: "seq"|"div"|"cat";
   center: number|null; decimals: number; mult: number; zero_blank: boolean; labels: string[]|null;
@@ -1028,7 +1030,7 @@ Body: raw CSV with columns `id,lever,change` (a per-cell increment) **or** `id,l
   extrapolated_edited: number;
   realized: Record<string, { requested_mean: number; realized_mean: number; requested_total: number; realized_total: number; clipped_share: number }>;
   mediators: Record<string, { mean_change: number }>;
-  cost: { total: number; per_lever: Record<string, number>; cooling_per_cost: number|null };
+  cost: { total: number; per_lever: Record<string, number>; cooling_per_cost: number|null };  // −Σ delta / total: positive = cooler
   causal_check: { delta: number; lo: number; hi: number; model_within: boolean }|null;
   uncertainty: { estimation_95: [number,number]|null; specification: [number,number]|null; attribution: [number,number]|null;
                  causal_band: [number,number]|null; envelope: [number,number]|null; envelope_excludes_zero: boolean|null; sources: string[] }|null;
@@ -1646,6 +1648,7 @@ This section is the changelog of the contract after the completeness review (§1
 - View sections (§6.1): api.md fixes the section keys; their inner shapes are those of `studio-web/src/api/runs.ts` (`OverviewSections` … `ProvenanceSections`), which the server builds. Notably `accuracy.obs_pred_bins.counts` is x-major (predicted bin, observed bin), `resid_hist` is `{edges, counts}`, KPIs use `format: "delta"` for temperature changes and `"percent"` for 0–1 fractions, `scenarios.rows[].slug` is `scenario_slug(name)`, and row references (`top_cells[].row`, planner `sites[].row`, `pairs[].treated/control`) are run row indices.
 - The run hub computes hexagon means in the browser (the same keys as `sparc.core.planner.hex_ids`) instead of calling `GET /api/runs/{rid}/hex`. Map-legend and Relationships brushes become `{kind: "blob"}` selections (`PUT /api/runs/{rid}/blobs?kind=mask`), so they fit in a URL; the Accuracy histogram brush is the portable `{kind: "filter", column: "pred:resid", op: "between"}`.
 - Mission Control reads warning times for its timeline from `GET /api/jobs/{jid}/events?types=warning`; Pareto points are not events, so the S7 panel links to the Budget view.
+- View units (review, 2026-10-02): `causal.treatments[t].unit` is the **effect** unit, target per lever unit (`"°F per pp"`); the dose of `dr_curve.t` is in `units.levers[t]`. `response.literature.sparc[].cooling` (± `se`, `causal`) is a **rate per the literature step** (+0.10 cover or albedo, i.e. +10 pp of canopy), rescaled by core `literature.sparc_effects` from the uniform scenario whose realised `dose` is nearest the step, not that scenario's own cooling; the Response tab says so. The rows do not yet carry that scenario's `frac_extrapolated`; the client flags it (hollow point) when present.
 
 ### M3 (Scenario Lab)
 
@@ -1671,6 +1674,8 @@ This section is the changelog of the contract after the completeness review (§1
 - Engine state files: the `incompatible` state is recorded in `<run>/studio/engine/status.json` against the checkpoint, and its action is **Refit S2/S3** = `POST /api/runs/{rid}/rerun {use_current_config: false}`. The untrusted-checkpoint action is `POST /api/runs/import {dir, project_id, trust_pickles: true}`. A host that recycles itself writes `engine/recycle.json`; the executor re-opens the most recently used run at most once per 300 s. The engine memory estimate adds `SPARC_STUDIO_ENGINE_SLACK_GB` (default 1.0).
 - At server shutdown the engine host keeps running while an engine job is live (so it can be reattached), unless jobs are being stopped.
 - Packs are zip files. A decision pack is `draft` when its scenario has no exact result; a plan pack when its plan is unverified.
+- Unset optional fields come back as `null` (review, 2026-10-02): a stored scenario doc echoes them as pydantic defaults, e.g. a "Top %" `where` is `{kind: "top", …, frac: 0.1, k: null, within: null}` (the "Shade the hottest X%" and "Prioritise by footprint" templates) and a buffer in metres has `lever_range: null`. Clients treat `null` like an absent field; the Lab's validator, selection builder and descriptions do (before, a reloaded "Top %" edit was dropped as invalid, so it had no preview and Run exact stayed disabled).
+- `Result.cost.cooling_per_cost` is `−Σ delta / total cost`, so **positive = cooler**; a negative value is warming bought per cost unit, and the Lab's "What it buys" line and Cost KPI say "warming" for it.
 
 ### M4 (studies, exports, findings, integration)
 

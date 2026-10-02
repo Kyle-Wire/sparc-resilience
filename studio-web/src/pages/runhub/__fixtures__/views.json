@@ -1104,7 +1104,7 @@
       "treatments": {
         "canopy": {
           "label": "canopy",
-          "unit": "pp",
+          "unit": "°F per pp",
           "forest": [
             { "id": "own", "label": "θ own cell", "est": -0.015438, "se": 0.003713, "lo": -0.023353, "hi": -0.007523, "model": -0.004647 },
             { "id": "nbr", "label": "θ neighbourhood", "est": -0.025607, "se": 0.006909, "lo": -0.040332, "hi": -0.010882, "model": null },

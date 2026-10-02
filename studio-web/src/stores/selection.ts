@@ -65,7 +65,7 @@ export function isSelectionSpec(v: unknown): v is SelectionSpec {
   const o = v as Record<string, unknown>;
   if (typeof o.kind === "string") {
     if (!KINDS.has(o.kind)) return false;
-    if (o.kind === "top" && o.within !== undefined) return isSelectionSpec(o.within);
+    if (o.kind === "top" && o.within !== undefined && o.within !== null) return isSelectionSpec(o.within);
     if (o.kind === "buffer") return isSelectionSpec(o.of);
     return true;
   }

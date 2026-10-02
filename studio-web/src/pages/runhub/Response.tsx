@@ -7,7 +7,7 @@ import { Bars, DotRange, LineBand, SmallMultiples, type DotRangeRow } from "../.
 import { Seg } from "../../components/ui/Seg";
 import { Table } from "../../components/ui/Table";
 import { Link, codecs, useUrlState } from "../../router";
-import { fmtNum, fmtPct, fmtSigned, fmtValue, unitLabel } from "../../theme/format";
+import { fmtNum, fmtPct, fmtSig, fmtSigned, fmtValue, unitLabel } from "../../theme/format";
 import { Block, OlderCode, Section, ViewPage, useRid, useUnits } from "./common";
 
 function DoseResponse({ name, lever }: { name: string; lever: ResponseLever }) {
@@ -136,11 +136,35 @@ function Effects({ lever }: { lever: ResponseLever }) {
   );
 }
 
-function Literature({ lit, lever }: { lit: NonNullable<ResponseSections["literature"]>; lever: string }) {
+/**
+ * The literature panel's caption. SPARC's number is a rate: core `literature.sparc_effects` takes
+ * the uniform scenario whose realised dose is nearest +0.10 (10 pp of canopy) and rescales its
+ * city-mean cooling to "per +0.10", so it is not that scenario's own cooling unless the dose is
+ * exactly the step. A scenario with more than 20% of cells extrapolated is flagged.
+ */
+export function literatureCaption(
+  m: { scenario: string; dose: number | null; cooling: number | null; frac_extrapolated?: number | null },
+  rows: { low: number | null; high: number | null }[],
+  per: string,
+  unit: string,
+  leverUnit: string,
+): string | undefined {
+  const c = m.cooling;
+  if (c === null) return undefined;
+  const lu = unitLabel(leverUnit);
+  const dose = m.dose !== null ? ` (realised dose ${fmtSig(m.dose, 3)}${lu ? (lu === "%" ? "%" : ` ${lu}`) : ""})` : "";
+  const overlap = rows.some((r) => r.low !== null && r.low <= c * 2 && (r.high ?? r.low) >= c / 2);
+  const extrap = m.frac_extrapolated !== undefined && m.frac_extrapolated !== null && m.frac_extrapolated > 0.2 ? ` That scenario pushes ${fmtPct(m.frac_extrapolated, 0)} of cells beyond the observed range, so treat the rate with caution.` : "";
+  return `SPARC: ${c >= 0 ? `${fmtValue(c, unit, 2)} of cooling` : `${fmtValue(-c, unit, 2)} of warming`} per ${per}, scaled from ${m.scenario}${dose}; published values ${overlap ? "overlap its factor-of-2 band" : "fall outside its factor-of-2 band"}.${extrap}`;
+}
+
+function Literature({ lit, lever, leverUnit }: { lit: NonNullable<ResponseSections["literature"]>; lever: string; leverUnit: string }) {
   const rows = lit.rows.filter((r) => r.quantity === lever);
   const mine = lit.sparc.filter((r) => r.quantity === lever);
   if (!rows.length && !mine.length) return <p className="cap">No published values for this lever.</p>;
   const unit = unitLabel(rows[0]?.unit ?? mine[0]?.unit ?? "");
+  // Published values and SPARC's are all rates per the same step ("+0.10 canopy cover").
+  const per = rows[0]?.per ?? "+0.10";
   const dot: DotRangeRow[] = [
     ...rows.map((r) => ({
       id: r.key,
@@ -152,12 +176,13 @@ function Literature({ lit, lever }: { lit: NonNullable<ResponseSections["literat
     })),
     ...mine.map((m) => ({
       id: `sparc-${m.scenario}`,
-      label: `SPARC: ${m.scenario}`,
+      label: `SPARC per ${per} · from ${m.scenario}`,
       est: m.cooling,
       lo: m.cooling !== null && m.se !== null ? m.cooling - 1.96 * m.se : null,
       hi: m.cooling !== null && m.se !== null ? m.cooling + 1.96 * m.se : null,
       lo2: m.cooling !== null ? m.cooling / 2 : null,
       hi2: m.cooling !== null ? m.cooling * 2 : null,
+      hollow: m.frac_extrapolated !== undefined && m.frac_extrapolated !== null && m.frac_extrapolated > 0.2,
       check: m.causal !== null ? { est: m.causal, label: "causal estimate" } : null,
     })),
   ];
@@ -165,18 +190,14 @@ function Literature({ lit, lever }: { lit: NonNullable<ResponseSections["literat
     <div className="stack">
       <DotRange
         title="Literature check"
-        units={`cooling, ${unit}`}
+        units={`cooling per ${per}, ${unit}`}
         rows={dot}
-        valueLabel="Cooling"
+        valueLabel={`Cooling per ${per}`}
         unit={unit}
         rangeLabel="published range / SPARC 95%"
         outerLabel="factor-of-2 band"
         decimals={2}
-        caption={
-          mine.length && mine[0].cooling !== null
-            ? `SPARC's ${mine[0].scenario} cools by ${fmtValue(mine[0].cooling, unit, 2)}; published values ${rows.some((r) => r.low !== null && mine[0].cooling !== null && r.low <= mine[0].cooling * 2 && (r.high ?? r.low) >= mine[0].cooling / 2) ? "overlap its factor-of-2 band" : "fall outside its factor-of-2 band"}.`
-            : undefined
-        }
+        caption={mine.length ? literatureCaption(mine[0], rows, per, unit, leverUnit) : undefined}
       />
       <Table
         caption="Published values"
@@ -265,7 +286,7 @@ export default function Response() {
                   </div>
                   <Effects lever={L} />
                   <Section title="Literature" data={s.literature}>
-                    {(lit) => <Literature lit={lit} lever={cur} />}
+                    {(lit) => <Literature lit={lit} lever={cur} leverUnit={L.unit} />}
                   </Section>
                 </div>
               );

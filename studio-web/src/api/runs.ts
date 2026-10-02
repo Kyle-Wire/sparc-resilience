@@ -327,7 +327,12 @@ export type ResponseSections = {
   levers: Record<string, ResponseLever>;
   literature: {
     rows: { key: string; quantity: string; per: string; low: number | null; high: number | null; unit: string; value: string; status: string | null; citation: string | null }[];
-    sparc: { quantity: string; scenario: string; dose: number | null; cooling: number | null; se: number | null; causal: number | null; unit: string }[];
+    /**
+     * SPARC's cooling as a rate per the literature step (+0.10 cover or albedo), rescaled from the
+     * uniform scenario whose realised `dose` is nearest that step (core literature.sparc_effects).
+     * `frac_extrapolated`, when sent, is that scenario's extrapolated share of cells.
+     */
+    sparc: { quantity: string; scenario: string; dose: number | null; cooling: number | null; se: number | null; causal: number | null; unit: string; frac_extrapolated?: number | null }[];
   };
 };
 
@@ -392,6 +397,7 @@ export type ClimateSections = {
 
 export type CausalTreatment = {
   label: string;
+  /** The effect unit, target per lever unit ("°F per pp"); the dose itself is in `units.levers[t]`. */
   unit: string;
   forest: { id: string; label: string; est: number | null; se: number | null; lo: number | null; hi: number | null; model: number | null }[];
   audit: { check: string; label: string; verdict: string; flag: boolean; model: number | null; causal: number | null }[];
