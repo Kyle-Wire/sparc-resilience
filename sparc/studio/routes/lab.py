@@ -189,7 +189,9 @@ async def post_preview(rid: str, body: S.PreviewRequest, sctx: StudioContext = D
     payload, headers = await asyncio.to_thread(preview, ctx, body, db=sctx.db, reader=_reader(sctx),
                                                project_dir=_project_dir(sctx, ctx.project_id))
     if body.scenario_id:
-        await asyncio.to_thread(library.mark_previewed, sctx.db, body.scenario_id)
+        shown = {"name": "preview", "edits": [e.model_dump(mode="json") for e in body.edits],
+                 "options": body.options.model_dump(mode="json") if body.options is not None else {}}
+        await asyncio.to_thread(library.mark_previewed, sctx.db, body.scenario_id, shown)
     return Response(payload, media_type="application/octet-stream", headers=headers)
 
 
@@ -308,7 +310,13 @@ async def _run_scenario(sctx: StudioContext, sid: str, run_id: str, force: bool)
                                {"path": f"edits.{w.get('edit_index')}", "message": w["message"], "code": w["code"]}
                                for w in comp.blocking]})
         hit = None if force else store.find_cached(sctx.db, run_id, comp.content_hash,
-                                                   store.checkpoint_key(ctx.run_dir), store.code_sha())
+                                                   store.checkpoint_key(ctx.run_dir), store.code_sha(),
+                                                   prefer_scenario=sid)
+        if hit is not None and hit.get("scenario_id") != sid:
+            # computed for another scenario with the same content: this scenario gets its own copy
+            doc = library._doc(row)
+            hit = store.adopt_result(sctx.db, hit, {"id": sid, "revision": row.get("revision"),
+                                                    "name": doc.get("name") or row.get("name")})
         return hit
 
     hit = await asyncio.to_thread(check)

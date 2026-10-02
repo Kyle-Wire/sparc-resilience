@@ -672,15 +672,26 @@ export type ClimateProjection = {
 
 export type PresentClimate = { mean: number; share_at_or_above: Record<string, number> };
 
+/** Residents at or above each threshold, today or in a future, without or with an adaptation. */
+export type PeopleExposureRow = {
+  experiment: string | null;
+  label: string;
+  period: string | null;
+  variant: string;
+  warming: number | null;
+  people_ge: Record<string, number>;
+  share_people_ge: Record<string, number>;
+};
+
 export type ClimateExplore = {
-  /** api.md: summarize_projections' `present` (today); as built the server sends `true` here and today in `present_today`. */
-  present: boolean | PresentClimate;
-  present_today?: PresentClimate | null;
+  /** Today's observed exposure: summarize_projections' `present` dict (api.md §7.7). */
+  present: PresentClimate;
+  /** The warming statistic the reply was built for (each projection's `warming.selected`). */
   statistic?: ClimateStatistic;
   thresholds: number[];
   projections: ClimateProjection[];
   adaptation: string[];
-  people_exposure: Record<string, unknown>[] | null;
+  people_exposure: PeopleExposureRow[] | null;
   units: string | Record<string, unknown>;
 };
 

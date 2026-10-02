@@ -43,7 +43,9 @@ kbd { border: 1px solid var(--line-strong); border-bottom-width: 2px; border-rad
 /* ------------------------------------------------------------------ shell */
 .skip-link { position: absolute; left: 8px; top: -60px; z-index: 100; background: var(--accent); color: var(--on-accent); padding: 8px 12px; border-radius: var(--radius-sm); text-decoration: none; }
 .skip-link:focus { top: 8px; }
-.shell { display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); min-height: 100vh; }
+/* The sidebar column's surface and edge are painted on the shell, so they run the full page height on
+   long pages (and in full-page captures) while the sticky sidebar keeps the nav in view. */
+.shell { display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); min-height: 100vh; background: linear-gradient(to right, var(--surface) calc(var(--sidebar-w) - 1px), var(--line) calc(var(--sidebar-w) - 1px), var(--line) var(--sidebar-w), transparent var(--sidebar-w)); }
 .shell-sidebar { position: sticky; top: 0; height: 100vh; overflow-y: auto; border-right: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; gap: 6px; padding: 12px 10px; }
 .shell-brand { display: flex; align-items: center; gap: 8px; padding: 4px 6px 10px; font-family: var(--font-display); font-stretch: 87%; font-weight: 700; font-size: 1.05rem; color: var(--ink); text-decoration: none; }
 .shell-brand .logo { width: 22px; height: 22px; border-radius: 6px; background: var(--accent); display: inline-grid; place-items: center; color: var(--on-accent); font-size: 0.8rem; }
@@ -79,7 +81,7 @@ kbd { border: 1px solid var(--line-strong); border-bottom-width: 2px; border-rad
 
 @media (max-width: 860px) {
   :root { --gutter: 16px; }
-  .shell { grid-template-columns: minmax(0, 1fr); }
+  .shell { grid-template-columns: minmax(0, 1fr); background: none; }
   .shell-sidebar { position: fixed; z-index: 60; left: 0; top: 0; width: min(300px, 86vw); transform: translateX(-102%); visibility: hidden; transition: transform 0.18s ease, visibility 0.18s; box-shadow: var(--shadow); }
   .shell-sidebar[data-open="true"] { transform: none; visibility: visible; }
   .shell-backdrop { position: fixed; inset: 0; z-index: 55; background: rgba(0, 0, 0, 0.3); }
@@ -351,6 +353,9 @@ details.table-view[open] summary { margin-bottom: 8px; }
 /* ------------------------------------------------------------------ map */
 .mapview { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; align-items: start; }
 .mapview.no-side { grid-template-columns: minmax(0, 1fr); }
+/* The map column's own track may shrink below the canvas's current pixel width; otherwise the canvas
+   (sized from the stage) holds the column open and the map runs under the side panel. */
+.mapview > .stack { grid-template-columns: minmax(0, 1fr); }
 @media (max-width: 860px) { .mapview { grid-template-columns: minmax(0, 1fr); } }
 .map-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .map-stage { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; min-height: 280px; touch-action: none; }
@@ -383,7 +388,7 @@ details.table-view[open] summary { margin-bottom: 8px; }
 }
 
 @media print {
-  .shell { display: block; }
+  .shell { display: block; background: none; }
   .shell-sidebar, .shell-topbar, .toasts, .chart-tools, .skip-link { display: none !important; }
   .shell-content { max-width: none; padding: 0; }
   .card, .kpi { break-inside: avoid; }

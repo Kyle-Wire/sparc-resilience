@@ -16,6 +16,7 @@ status/…], "archived": bool}``), rewritten atomically on every create, patch o
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import logging
@@ -26,7 +27,7 @@ import numpy as np
 
 from sparc.studio import db as dbmod
 from sparc.studio.db import reindex_hook
-from sparc.studio.engine.compile import content_hash, doc_dict
+from sparc.studio.engine.compile import canonical_doc, content_hash, doc_dict
 from sparc.studio.errors import ApiError
 from sparc.studio.workspace import new_id, read_json, utc_now, write_json_atomic
 
@@ -170,8 +171,10 @@ def patch(db, workspace, sid: str, body: dict) -> dict:
                    updated_utc=utc_now())
     if body.get("archived") is not None:
         updates["archived"] = 1 if body["archived"] else 0
-    if updates.get("content_hash") != row["content_hash"] and row.get("status") in ("previewed",):
-        updates["status"] = "draft"
+    if updates.get("content_hash") != row["content_hash"] and row.get("status") in ("draft", "previewed"):
+        # The Lab previews an edit (120 ms) before it autosaves it (2 s): content its latest preview
+        # showed stays "previewed"; any other new content is a draft again.
+        updates["status"] = "previewed" if _PREVIEWED.get(sid) == preview_key(d) else "draft"
     db.update("scenarios", {"id": sid}, updates)
     sync_status(db, sid)
     write_mirror(db, workspace, sid)
@@ -232,7 +235,27 @@ def sync_status(db, sid: str) -> str | None:
     return new
 
 
-def mark_previewed(db, sid: str) -> None:
+# The evaluated content ({edits, options}) of each scenario's latest preview, so a save of exactly
+# that content keeps "previewed". Process-local and bounded: a restart only loses this status hint.
+_PREVIEWED: dict[str, str] = {}
+_PREVIEWED_MAX = 1024
+
+
+def preview_key(doc: Any) -> str:
+    """Hash of the part of a doc a preview evaluates: its canonical edits and options."""
+    c = canonical_doc(doc)
+    text = json.dumps({"edits": c["edits"], "options": c["options"]}, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def mark_previewed(db, sid: str, doc: Any = None) -> None:
+    """A preview of ``doc`` (``{edits, options}``) was shown for scenario ``sid``: a draft becomes ``previewed``."""
+    if doc is not None:
+        _PREVIEWED.pop(sid, None)
+        _PREVIEWED[sid] = preview_key(doc)
+        while len(_PREVIEWED) > _PREVIEWED_MAX:
+            _PREVIEWED.pop(next(iter(_PREVIEWED)))
     row = db.fetchone("SELECT status FROM scenarios WHERE id = ?", (sid,))
     if row is not None and (row.get("status") or "draft") == "draft":
         db.update("scenarios", {"id": sid}, {"status": "previewed"})

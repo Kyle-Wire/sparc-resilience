@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 
@@ -260,3 +261,30 @@ def test_loading_state_reports_progress_and_step(client, ctx, synth_run):
     st = client.get(f"/api/runs/{rid}/engine").json()
     assert st["state"] == "error" and st["error"]["message"] == "truncated"
     assert st["action"]["kind"] == "open_engine"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="AF_UNIX paths only (Windows uses a named pipe)")
+def test_host_starts_in_a_deep_workspace(tmp_path):
+    """A workspace whose ``engine/host.sock`` is longer than AF_UNIX allows binds a short temp-dir socket
+    instead; ``host.json`` records it, clients reach the host through it, and a stop removes it."""
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from sparc.studio.engine.client import EngineClient
+    from sparc.studio.engine.host import unix_bind_path
+
+    deep = tmp_path.joinpath(*(["a-rather-long-workspace-folder-name"] * 4))
+    nominal = deep / "engine" / "host.sock"
+    assert len(str(nominal)) > 108
+    bound = unix_bind_path(nominal)
+    assert len(bound) <= 100 and bound == unix_bind_path(nominal) != unix_bind_path(tmp_path / "engine" / "host.sock")
+    assert unix_bind_path(tmp_path / "host.sock") == str(tmp_path / "host.sock")
+
+    cl = EngineClient(SimpleNamespace(engine_dir=deep / "engine"), idle_min=5.0, threads=1)
+    try:
+        info = cl.start()
+        assert info["sock"] == bound and Path(bound).exists()
+        assert cl.status() is not None
+    finally:
+        cl.stop()
+    assert not Path(bound).exists() and cl.info() is None

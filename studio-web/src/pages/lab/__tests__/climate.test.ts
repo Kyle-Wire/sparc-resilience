@@ -70,11 +70,9 @@ describe("future temperature (client side)", () => {
     expect(decodeStatistic("model:")).toBe("median");
   });
 
-  it("reads today's exposure from `present` (api.md) or `present_today` (as built)", () => {
+  it("reads today's exposure from `present` (api.md §7.7)", () => {
     const today = { mean: 88.1, share_at_or_above: { "90.0": 0.29, "95.0": 0.02 } };
     expect(presentToday({ present: today })).toEqual(today);
-    expect(presentToday({ present: true, present_today: today })).toEqual(today);
-    expect(presentToday({ present: true })).toBeNull();
     expect(presentToday(null)).toBeNull();
     expect(shareAt(today.share_at_or_above, 90)).toBe(0.29);
     expect(shareAt(today.share_at_or_above, 95)).toBe(0.02);

@@ -101,7 +101,11 @@ class EngineClient:
         """Remove ``host.json`` and the socket of a host that is gone."""
         if self.info() is not None:
             return
-        for p in (self.host_json, self.engine_dir / "host.sock"):
+        stale = read_json(self.host_json)
+        socks = {self.engine_dir / "host.sock"}
+        if isinstance(stale, dict) and stale.get("family", "AF_UNIX") == "AF_UNIX" and stale.get("sock"):
+            socks.add(Path(stale["sock"]))       # the short temp-dir socket of a deep workspace
+        for p in (self.host_json, *socks):
             try:
                 p.unlink()
             except OSError:

@@ -53,7 +53,8 @@ import numpy as np
 
 log = logging.getLogger("sparc.studio.engine.host")
 
-__all__ = ["main", "Host", "safe_loads", "HOST_JSON", "SOCK_NAME", "HOST_LOG", "RECYCLE_JSON", "address_for"]
+__all__ = ["main", "Host", "safe_loads", "HOST_JSON", "SOCK_NAME", "HOST_LOG", "RECYCLE_JSON", "address_for",
+           "unix_bind_path"]
 
 HOST_JSON = "host.json"
 SOCK_NAME = "host.sock"
@@ -101,6 +102,28 @@ def address_for(engine_dir: Path) -> tuple[str, str]:
         h = hashlib.sha1(str(Path(engine_dir).resolve()).encode()).hexdigest()[:12]
         return rf"\\.\pipe\sparc-studio-engine-{h}", "AF_PIPE"
     return str(Path(engine_dir) / SOCK_NAME), "AF_UNIX"
+
+
+# sun_path holds 108 bytes on Linux and 104 on macOS, including the terminating NUL.
+_SUN_PATH_MAX = 100
+
+
+def unix_bind_path(sock: Path) -> str:
+    """The path the host binds for the nominal ``<ws>/engine/host.sock``.
+
+    A workspace deep in the file system gives a socket path longer than ``AF_UNIX`` allows; the host
+    then binds a short per-workspace path in the temp directory instead (owner-only, like the
+    nominal one).  ``host.json`` records the path actually bound, which is what clients connect to.
+    """
+    import hashlib
+    import tempfile
+
+    path = str(sock)
+    if len(os.fsencode(path)) <= _SUN_PATH_MAX:
+        return path
+    h = hashlib.sha1(path.encode("utf-8")).hexdigest()[:16]
+    uid = os.getuid() if hasattr(os, "getuid") else 0
+    return os.path.join(tempfile.gettempdir(), f"sparc-engine-{uid}-{h}.sock")
 
 
 def _rss_mb() -> float:
@@ -549,7 +572,7 @@ def main(argv: list[str] | None = None) -> int:
                         handlers=[logging.FileHandler(engine_dir / HOST_LOG, encoding="utf-8")], force=True)
     address, family = address_for(engine_dir)
     if family == "AF_UNIX":
-        address = str(Path(args.sock).resolve())
+        address = unix_bind_path(Path(args.sock).resolve())
         try:
             os.unlink(address)
         except FileNotFoundError:

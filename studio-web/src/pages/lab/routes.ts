@@ -14,12 +14,20 @@ export function labRunOf(project: Project): string | null {
   return project.active_run_id ?? project.last_run?.id ?? null;
 }
 
-/** Why the Scenario Lab entry is greyed out (null when it can open). */
+/** Why the Scenario Lab entry is greyed out (null when it can open): no run, or the run it would
+ *  open has no checkpoint yet (`last_run.has_checkpoint`, SPEC §3.1). */
 export function labDisabledReason(project: Project): string | null {
   const rid = labRunOf(project);
   if (!rid) return "No run yet. Launch a run first: the Lab needs a run with a checkpoint.";
-  const st = project.last_run && project.last_run.id === rid ? project.last_run.status : null;
-  if (!project.active_run_id && (st === "queued" || st === "running")) return "The first run is still running. The Lab opens once it has saved a checkpoint (after S3).";
+  const last = project.last_run && project.last_run.id === rid ? project.last_run : null;
+  const running = last?.status === "queued" || last?.status === "running";
+  if (last?.has_checkpoint === false) {
+    return running
+      ? "The run is still running. The Lab opens once it has saved a checkpoint (after S3)."
+      : "The latest run has no checkpoint. Launch a run that reaches S3, or make a run with a checkpoint the project's active run.";
+  }
+  // A server that does not report checkpoints: the first run is assumed to have none while it runs.
+  if (last?.has_checkpoint === undefined && !project.active_run_id && running) return "The first run is still running. The Lab opens once it has saved a checkpoint (after S3).";
   return null;
 }
 

@@ -274,6 +274,19 @@ def test_reindex_registers_project_folders(client, ctx, demo):
     assert client.get(f"/api/projects/{demo['id']}").json()["config_version"] >= 1
 
 
+def test_last_run_reports_its_checkpoint(client, ctx, demo, tmp_path):
+    """``last_run.has_checkpoint`` lets the Scenario Lab entry open only once a checkpoint exists (SPEC §3.1)."""
+    rd = tmp_path / "run_ck"
+    rd.mkdir()
+    ctx.db.insert("runs", {"id": "20261001-130000-fast-c3d4", "project_id": demo["id"], "run_dir": str(rd),
+                           "studio_dir": str(rd / "studio"), "origin": "studio", "status": "running",
+                           "mode": "fast", "created_utc": "2026-10-01T13:00:00Z", "has_emulator": 0})
+    assert client.get(f"/api/projects/{demo['id']}").json()["project"]["last_run"]["has_checkpoint"] is False
+    (rd / "checkpoint.pkl").write_bytes(b"x")
+    last = client.get(f"/api/projects/{demo['id']}").json()["project"]["last_run"]
+    assert last["id"] == "20261001-130000-fast-c3d4" and last["has_checkpoint"] is True
+
+
 def test_detail_lists_runs_from_the_runs_table(client, ctx, demo):
     ctx.db.insert("runs", {"id": "20261001-120000-fast-a1b2", "project_id": demo["id"], "run_dir": "/tmp/x/run1",
                            "studio_dir": "/tmp/x/run1/studio", "origin": "studio", "status": "complete",
@@ -283,6 +296,7 @@ def test_detail_lists_runs_from_the_runs_table(client, ctx, demo):
     run = d["runs"][0]
     assert run["id"] == "20261001-120000-fast-a1b2" and run["duration_s"] == 300.0 and run["mode"] == "fast"
     assert d["project"]["n_runs"] == 1 and d["project"]["last_run"]["r2"] == 0.8
+    assert d["project"]["last_run"]["has_checkpoint"] is False        # no checkpoint.pkl in /tmp/x/run1
     rows = {r["key"]: r for r in d["readiness"]}
     assert rows["runs"]["state"] == "warn"                            # fast only
     assert rows["emulator"]["action"]["kind"] == "build_emulator"

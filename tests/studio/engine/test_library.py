@@ -181,6 +181,30 @@ def test_design_csv_round_trip(client, ctx, demo, run_ctx, synth_run):
     np.testing.assert_allclose(np.frombuffer(raw[8:], dtype="<f4"), [4, 6], rtol=1e-5)
 
 
+def test_cache_hit_of_another_scenario_is_adopted(client, ctx, demo, run_ctx, synth_run):
+    """Two scenarios with the same content share the cache key: the second one's "Run exact" is a cache hit that
+    it gets as its own result (listed, exact, inspectable), and deleting the first keeps it."""
+    rid, rd = synth_run
+    (rd / "checkpoint.pkl").write_bytes(b"not a real checkpoint")
+    a = _create(client, demo["id"])
+    b = _create(client, demo["id"], {**DOC, "name": "Same content, other name"})
+    assert a["content_hash"] == b["content_hash"]
+    made = make_result(ctx, run_ctx, scenario={"id": a["id"], "content_hash": a["content_hash"]})
+    r = client.post(f"/api/scenarios/{b['id']}/run", json={"run_id": rid})
+    assert r.status_code == 200 and r.json()["job"] is None
+    hit = r.json()["cached"]
+    assert hit["scenario_id"] == b["id"] and hit["id"] != made["id"]
+    got = client.get(f"/api/scenarios/{b['id']}").json()
+    assert got["status"] == "exact" and [x["id"] for x in got["results"]] == [hit["id"]]
+    res = client.get(f"/api/results/{hit['id']}").json()
+    assert res["scenario"]["id"] == b["id"] and res["scenario"]["name"] == "Same content, other name"
+    assert res["city"]["estimate"] == pytest.approx(client.get(f"/api/results/{made['id']}").json()["city"]["estimate"])
+    # a second run of b hits its own copy; deleting a (and its results) leaves b's result in place
+    assert client.post(f"/api/scenarios/{b['id']}/run", json={"run_id": rid}).json()["cached"]["id"] == hit["id"]
+    assert client.delete(f"/api/scenarios/{a['id']}", params={"results": True}).status_code == 200
+    assert client.get(f"/api/results/{hit['id']}").status_code == 200
+
+
 def test_preview_marks_scenario_previewed(client, ctx, demo, run_ctx, synth_run, fake_emulator):
     rid, rd = synth_run
     fake_emulator(rd, run_ctx)
@@ -188,3 +212,12 @@ def test_preview_marks_scenario_previewed(client, ctx, demo, run_ctx, synth_run,
     r = client.post(f"/api/runs/{rid}/preview", json={"edits": DOC["edits"], "request_seq": 1, "scenario_id": sc["id"]})
     assert r.status_code == 200
     assert client.get(f"/api/scenarios/{sc['id']}").json()["status"] == "previewed"
+    # The Lab previews an edit before autosaving it: saving the content just previewed keeps
+    # "previewed" (a name change does too); saving content no preview showed is a draft again.
+    edited = [{**DOC["edits"][0], "amount": 15}]
+    r = client.post(f"/api/runs/{rid}/preview", json={"edits": edited, "request_seq": 2, "scenario_id": sc["id"]})
+    assert r.status_code == 200
+    s = client.patch(f"/api/scenarios/{sc['id']}", json={"doc": {**DOC, "name": "Corridor 15", "edits": edited}}).json()
+    assert s["status"] == "previewed"
+    s = client.patch(f"/api/scenarios/{sc['id']}", json={"doc": {**DOC, "edits": [{**edited[0], "amount": 25}]}}).json()
+    assert s["status"] == "draft"

@@ -4,14 +4,9 @@
 // target unit (core summarize_projections multiplies delta_K by to_units).
 import type { ClimateExplore, ClimateStatistic, PresentClimate, WarmingRow } from "../../../api/lab";
 
-/**
- * Today's observed exposure of an explore reply: `present` (api.md, the summarize_projections
- * dict) or, as built, `present_today` next to `present: true`.
- */
-export function presentToday(data: Pick<ClimateExplore, "present" | "present_today"> | null | undefined): PresentClimate | null {
-  if (!data) return null;
-  if (data.present && typeof data.present === "object") return data.present;
-  return data.present_today ?? null;
+/** Today's observed exposure of an explore reply: `present`, the summarize_projections dict (api.md §7.7). */
+export function presentToday(data: Pick<ClimateExplore, "present"> | null | undefined): PresentClimate | null {
+  return data?.present && typeof data.present === "object" ? data.present : null;
 }
 
 /** The share of a `{"90.0": 0.3}`-style record at threshold T (keys are numbers as text). */

@@ -118,3 +118,37 @@ def test_plan_and_compare_packs(client, ctx, demo, run_ctx, synth_run, wait_job)
     assert {"brief.html", "items.csv", "pairs.csv", "diff_0__1.tif", "summary.json", "README.txt"} <= set(z.namelist())
     pairs = pd.read_csv(io.BytesIO(z.read("pairs.csv")))
     assert bool(pairs["paired"].iloc[0]) is True
+
+
+def test_narrative_range_reads_from_the_smaller_to_the_larger_cooling():
+    from sparc.studio.scenarios.packs import narrative
+
+    res = {"city": {"estimate": -0.656, "lo": -0.81, "hi": -0.50},
+           "regions": [{"name": "edited", "mean": {"estimate": -1.66, "lo": -2.07, "hi": -1.25}}]}
+    assert "by 1.66 °F (likely range 1.25–2.07 °F)" in narrative("Corridor", res, "°F", 10, 1.0, False)
+
+
+def test_realised_change_maps_show_the_size_of_the_change():
+    """Unchanged cells take the lightest colour and a decrease reads like an increase of the same size."""
+    import io
+
+    from PIL import Image
+
+    from sparc.studio.scenarios.packs import map_png
+
+    class G:                                   # a 2 × 2 run grid
+        nx = ny = 2
+
+        @staticmethod
+        def raster(v):
+            return np.asarray(v, dtype=np.float64).reshape(2, 2)
+
+    def px(values):
+        im = np.asarray(Image.open(io.BytesIO(map_png(G, np.asarray(values), magnitude=True))).convert("RGBA"))
+        return {tuple(im[0, 0]), tuple(im[0, -1]), tuple(im[-1, 0]), tuple(im[-1, -1])}, im
+
+    cut, im = px([0.0, 0.0, -10.0, -10.0])
+    grow, _ = px([0.0, 0.0, 10.0, 10.0])
+    assert cut == grow and len(cut) == 2
+    light, dark = sorted(cut, key=lambda c: -sum(c[:3]))
+    assert sum(light[:3]) > sum(dark[:3])

@@ -66,6 +66,12 @@ describe("route registry", () => {
     expect(labDisabledReason(none)).toMatch(/Launch a run first/);
     const running = { ...base, active_run_id: null, last_run: { id: "r1", status: "running", created_utc: "", r2: null } } as Project;
     expect(labDisabledReason(running)).toMatch(/still running/);
+    // With last_run.has_checkpoint the entry opens exactly when the run has a checkpoint.
+    const before = { ...base, last_run: { id: "r9", status: "running", created_utc: "", r2: null, has_checkpoint: false } } as Project;
+    expect(labDisabledReason(before)).toMatch(/still running/);
+    expect(labDisabledReason({ ...before, last_run: { ...before.last_run!, has_checkpoint: true } } as Project)).toBeNull();
+    const failed = { ...base, active_run_id: null, last_run: { id: "r2", status: "failed", created_utc: "", r2: null, has_checkpoint: false } } as Project;
+    expect(labDisabledReason(failed)).toMatch(/no checkpoint/);
   });
 });
 

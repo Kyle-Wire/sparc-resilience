@@ -83,8 +83,10 @@ export function TrustDialog({ rid, error, onClose, onTrusted }: { rid: string; e
           <Button onClick={onClose} disabled={busy}>
             Use preview only
           </Button>
-          <Button variant="danger" busy={busy} onClick={() => void trust()} disabled={!dir && !error.action?.path}>
-            {error.action?.label ?? "Trust and open the engine"}
+          {/* The server's action label repeats the risk the callout below names; it stays as the tooltip so
+              the button is short enough for the dialog. */}
+          <Button variant="danger" busy={busy} onClick={() => void trust()} disabled={!dir && !error.action?.path} title={error.action?.label}>
+            Trust and open the engine
           </Button>
         </>
       }

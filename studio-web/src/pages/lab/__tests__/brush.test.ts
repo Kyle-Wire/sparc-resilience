@@ -120,12 +120,13 @@ describe("brush strokes", () => {
     b.paint("albedo", [0, 1], { mode: "add", amount: -2, base, bounds });
     expect(Math.fround(base[0] + e[0])).toBeCloseTo(0.1, 6);
     expect(e[1]).toBe(0);
-    // the live map tool path: applyBrush (strict) then the rule, as DesignMap does on each dab
+    // the live map tool path: applyBrush (which follows the same rule) then the re-check, as
+    // DesignMap does on each dab; the re-check finds nothing left to fix
     const live = new Float32Array(3);
     const s = { mode: "add" as const, amount: 0.1, radius_m: 60, base, bounds };
     applyBrush(live, [0, 1, 2], s);
-    expect(live[0]).toBeLessThan(0); // what the map kit alone would paint
-    expect(applySupportRule(live, [0, 1, 2], s)).toEqual([0]);
+    expect(live[0]).toBe(0); // the high cell is not pulled back to the upper bound by an add
+    expect(applySupportRule(live, [0, 1, 2], s)).toEqual([]);
     const once = new BrushLayers(3);
     once.paint("albedo", [0, 1, 2], { mode: "add", amount: 0.1, base, bounds });
     expect(Array.from(live)).toEqual(Array.from(once.array("albedo")));

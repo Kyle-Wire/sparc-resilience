@@ -2717,3 +2717,23 @@ A completeness review checked this spec and `api.md` against the operation, outp
 - backend-engine adds the sweep and comparison listings and the scenario mirror files;
 - integration-e2e also owns the `tests.yml` one-line edit;
 - frontend-projects declares nav entries for Setup, Inputs and Launch (not Overview).
+
+## 19. As-built changes
+
+Behaviour that differs from the text above as built, grouped by milestone. Wire-level details are in `api.md` §19. The `docs` item extends this section when the spec is brought up to date.
+
+### M3 (Scenario Lab)
+
+- **Core code fingerprint.** `sparc/core/session.py` (`open_run`, `config_for_run`) is a top-level core module, so adding it changed the core code digest (§11). Checkpoints written before it report `code_match: false`, and exact results computed from them read as stale. This is the documented consequence of adding a core module.
+- **Scenario status** (§7.4): a preview marks a draft `previewed`. The Lab previews each edit before its autosave, so a save whose `{edits, options}` match the latest preview stays `previewed`. Other content changes make the scenario a `draft` again.
+- **Shared exact cache** (§7.4, §7.7): when a scenario's exact run is a cache hit on a result made for another scenario with identical content, the result is copied as this scenario's own. It is then listed, opened in the inspector, compared and packed like any other.
+- **Engine actions**: the memory refusal's evict action is `POST /api/runs/{rid}/engine/evict`, because actions are POST/GET only. Exact requests on a run that is not loaded run the memory preflight. While such a request loads a cold run, the run's engine state is `loading`, carrying that request's job id. Plans, scenarios and sweeps cannot be deleted while a job on them runs (`409 active`).
+- **Engine host socket** (§7.6): on POSIX the host binds `<ws>/engine/host.sock`. When that path is longer than `AF_UNIX` allows, it binds a short owner-only socket in the temp directory instead, and `host.json` records the path it actually bound. The Windows `AF_PIPE` address is still untested.
+- **Brush clamping** (§12.5): the map kit's brush clamps each cell to `[min(lo, base), max(hi, base)]`, the engine's `_bounds` rule. A cell already outside the lever bounds is never pushed further out, and an add never becomes a decrease.
+- **Saved brush strokes** stay a per-cell `blob:` edit of their lever (label "brush"). A reopened scenario cannot load them back into the brush layer, because there is no blob read endpoint. New strokes become another per-cell edit that adds to the saved one, and the Lab says so.
+- **Scenario Lab nav entry** (§3.1): `Project.last_run.has_checkpoint` keeps the entry disabled until the run it opens has a checkpoint. That run is the active run, else the latest one.
+- **Compare** (§7.12): every pair is read A − B (item a minus item b), in the table, the paired SE and the difference layer.
+- **Climate explorer** (§7.11): the explore reply carries today's exposure as `present` (the `summarize_projections` dict). Each projection carries the selected statistic's warming, which drives the client-side future maps.
+- **Decision packs** (§7.13): realised-change maps show the size of the change (lightest = unchanged), and the narrative states likely ranges from the smaller to the larger value. Pack downloads need `POST /api/exports` (`[S]`, M4). Until that exists, the Lab's pack buttons report the missing route, and the pack kinds run when submitted as jobs.
+- **Emulator**: the `build_emulator` action targets `POST /api/runs/{rid}/actions/emulator` (`post.emulator`, M4). Until then the preview reports `no_emulator` with the action, and exact runs work.
+

@@ -84,17 +84,27 @@ def _lut_cmap(name: str):
     return ListedColormap([tuple(c / 255.0 for c in rgb) for rgb in lut(RAMPS[name], 256)])
 
 
-def map_png(grid, values: np.ndarray, *, diverging: bool = True) -> bytes:
-    """A PNG of per-cell ``values`` on the run grid with the shared OKLab LUT (``divLight`` / ``seqLight``)."""
+def map_png(grid, values: np.ndarray, *, diverging: bool = True, magnitude: bool = False) -> bytes:
+    """A PNG of per-cell ``values`` on the run grid with the shared OKLab LUT (``divLight`` / ``seqLight``).
+
+    ``magnitude`` maps ``|values|`` from 0 (unchanged cells, the lightest colour) to the 98th percentile of the
+    changed cells, so an edit map reads "darker = larger change" whatever its sign.
+    """
     import matplotlib
 
     matplotlib.use("Agg", force=False)
     from matplotlib.image import imsave
 
     v = np.asarray(values, dtype=np.float64)
+    if magnitude:
+        v = np.abs(v)
     ras = grid.raster(v)[::-1]
     ok = np.isfinite(ras)
-    if diverging:
+    if magnitude:
+        moved = v[np.isfinite(v) & (v > 0)]
+        vmin, vmax = 0.0, (float(np.percentile(moved, 98)) if moved.size else 1.0) or 1.0
+        cmap = _lut_cmap("seqLight")
+    elif diverging:
         m = float(np.nanpercentile(np.abs(v[np.isfinite(v)]), 98)) if np.isfinite(v).any() else 1.0
         m = m if m > 0 else 1.0
         vmin, vmax, cmap = -m, m, _lut_cmap("divLight")
@@ -185,8 +195,9 @@ def narrative(name: str, res: dict, unit: str, n_cells: int, area_km2: float, dr
     if focus:
         est = float(focus.get("estimate") or 0.0)
         word = "cools" if est < 0 else "warms" if est > 0 else "does not change"
+        near, far = sorted((abs(float(focus.get("lo") or 0.0)), abs(float(focus.get("hi") or 0.0))))
         rng = "" if draft or focus.get("lo") is None else \
-            f" (likely range {_fmt(abs(focus['lo']), 2)}–{_fmt(abs(focus['hi']), 2)} {unit})" \
+            f" (likely range {_fmt(near, 2)}–{_fmt(far, 2)} {unit})" \
             if focus["lo"] * focus["hi"] > 0 else f" (likely range {_fmt(focus['lo'], 2, True)} to " \
                                                   f"{_fmt(focus['hi'], 2, True)} {unit})"
         parts.append(f"Where it acts it {word} afternoon temperatures by {_fmt(abs(est), 2)} {unit}{rng}.")
@@ -288,7 +299,7 @@ figure{{display:inline-block;margin:.5rem 1rem .5rem 0;max-width:46%}} img{{max-
 {('<ul>' + quals + '</ul>') if quals else ''}
 {('<h2>What it buys</h2><ul>' + buys + '</ul>') if buys else ''}
 <h2>Maps</h2>
-{img('delta', f'ΔT ({unit}; blue = cooler)')}{''.join(img(k, f'realised change of {k[9:]}') for k in maps if k.startswith('realized_'))}
+{img('delta', f'ΔT ({unit}; blue = cooler)')}{''.join(img(k, f'realised change of {k[9:]} (size of the change; darker = larger, lightest = unchanged)') for k in maps if k.startswith('realized_'))}
 <h2>Key numbers</h2>
 <table><tr><th>quantity</th><th>value</th></tr>
 <tr><td>City mean ΔT</td><td>{_esc(_likely_text(city, unit, draft))}</td></tr>
@@ -426,7 +437,7 @@ def _decision_contents(ctx, stage: Path, *, name: str, scenario: dict | None, re
     maps = {"delta": map_png(g, delta)}
     for v, arr in realized.items():
         write_geotiff(g, arr, stage / f"realized_{v}.tif")
-        maps[f"realized_{v}"] = map_png(g, arr, diverging=False)
+        maps[f"realized_{v}"] = map_png(g, arr, magnitude=True)
     hex_files = _hex_csvs(ctx, delta, stage)
     edited = np.zeros(g.n, dtype=bool)
     for arr in realized.values():

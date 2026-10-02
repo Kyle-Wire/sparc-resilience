@@ -5,7 +5,7 @@
 // ≥ T exceedance are computed in the browser (observed + warming statistic + adaptation ΔT).
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { errorMessage } from "../../api/client";
-import { exploreClimate, getResultLayer, useClimateFactors, useRunScenarios, useScenarios, type ClimateExplore, type ItemRef, type WarmingRow } from "../../api/lab";
+import { exploreClimate, getResultLayer, useClimateFactors, useRunScenarios, useScenarios, type ClimateExplore, type ItemRef, type PeopleExposureRow, type WarmingRow } from "../../api/lab";
 import type { LayerGroup, LayerMeta } from "../../api/types";
 import { Bars, DotRange, Gauge } from "../../charts";
 import { EmptyState } from "../../components/ui/EmptyState";
@@ -17,7 +17,7 @@ import { runLayerLoader, useRunGrid, useRunLayers, type LayerValues } from "../.
 import { quantiles } from "../../map/domain";
 import { codecs, useRoute, useUrlState } from "../../router";
 import { useUi } from "../../stores/ui";
-import { fmtNum, fmtPct, fmtSignedValue, unitLabel } from "../../theme/format";
+import { fmtInt, fmtNum, fmtPct, fmtSignedValue, unitLabel } from "../../theme/format";
 import { LabFrame } from "./components/LabFrame";
 import { decodeStatistic, encodeStatistic, exceedance, futureTemperature, presentToday, shareAt, shareAtOrAbove, statisticLabel, warmingValue } from "./model/climate";
 import { decodeItemRef, encodeItemRef, itemLayerKey } from "./model/doc";
@@ -331,14 +331,25 @@ export default function Climate() {
             </div>
           ) : null}
           {data.people_exposure?.length ? (
-            <Table
+            <Table<PeopleExposureRow>
               caption="Residents at or above each threshold"
               csvName="people-exposure"
-              columns={Object.keys(data.people_exposure[0]).map((k) => ({
-                key: k,
-                label: k.replace(/_/g, " "),
-                value: (r: Record<string, unknown>) => (typeof r[k] === "number" || typeof r[k] === "string" ? (r[k] as number | string) : r[k] === null || r[k] === undefined ? null : JSON.stringify(r[k])),
-              }))}
+              rowKey={(r, i) => `${r.experiment ?? "today"}-${r.period ?? ""}-${r.variant}-${i}`}
+              columns={[
+                { key: "case", label: "Case", value: (r) => (r.period ? `${r.label} ${r.period}` : r.label) },
+                { key: "variant", label: "Adaptation", value: (r) => r.variant },
+                { key: "warming", label: "Warming", unit: u, align: "right", value: (r) => r.warming, render: (r) => (r.warming !== null ? fmtNum(r.warming, 2) : "—") },
+                ...data.thresholds.map((th) => ({
+                  key: `ge_${th}`,
+                  label: `≥ ${fmtNum(th, 1)} ${u}`,
+                  align: "right" as const,
+                  value: (r: PeopleExposureRow) => shareAt(r.people_ge, th),
+                  render: (r: PeopleExposureRow) => {
+                    const n = shareAt(r.people_ge, th);
+                    return n === null ? "—" : `${fmtInt(Math.round(n))} (${fmtPct(shareAt(r.share_people_ge, th))})`;
+                  },
+                })),
+              ]}
               rows={data.people_exposure}
             />
           ) : null}

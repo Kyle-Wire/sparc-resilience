@@ -236,7 +236,7 @@ def project_out(db, row: dict, *, readiness_score: dict | None = None, raw: dict
             except (TypeError, ValueError):
                 cost[str(var)] = {"per_unit": 1.0}
     n_runs = int(db.fetchval("SELECT COUNT(*) FROM runs WHERE project_id = ?", (row["id"],), default=0) or 0)
-    last = db.fetchone("SELECT id, status, created_utc, r2 FROM runs WHERE project_id = ? "
+    last = db.fetchone("SELECT id, status, created_utc, r2, run_dir FROM runs WHERE project_id = ? "
                        "ORDER BY created_utc DESC LIMIT 1", (row["id"],))
     marks = ",".join("?" for _ in ACTIVE_STATUSES)
     n_active = int(db.fetchval(f"SELECT COUNT(*) FROM jobs WHERE project_id = ? AND status IN ({marks})",
@@ -248,7 +248,10 @@ def project_out(db, row: dict, *, readiness_score: dict | None = None, raw: dict
             "report": report, "headline_scenario": m.get("headline_scenario"), "cost_model": cost,
             "n_runs": n_runs,
             "last_run": ({"id": last["id"], "status": last["status"], "created_utc": last.get("created_utc") or "",
-                          "r2": last.get("r2")} if last else None),
+                          "r2": last.get("r2"),
+                          # the Scenario Lab entry opens once the run has saved its checkpoint (SPEC §3.1)
+                          "has_checkpoint": bool(last.get("run_dir"))
+                          and (Path(last["run_dir"]) / "checkpoint.pkl").is_file()} if last else None),
             "active_jobs": n_active, "readiness_score": readiness_score or {"done": 0, "total": 0}}
 
 

@@ -30,12 +30,12 @@ import numpy as np
 from sparc.studio import db as dbmod
 from sparc.studio.db import reindex_hook
 from sparc.studio.errors import ApiError
-from sparc.studio.workspace import read_json, utc_now, write_json_atomic
+from sparc.studio.workspace import new_id, read_json, utc_now, write_json_atomic
 
 log = logging.getLogger("sparc.studio.engine")
 
 __all__ = ["result_dir", "plan_dir", "sweep_dir", "comparison_dir", "checkpoint_key", "code_sha", "write_cells",
-           "write_result", "insert_result_row", "find_cached", "summary_out", "result_row", "load_result",
+           "write_result", "insert_result_row", "find_cached", "adopt_result", "summary_out", "result_row", "load_result",
            "delete_result", "refresh_stale", "scenario_results", "run_results", "read_cells", "read_folds",
            "reindex_results", "result_array", "RESULT_FIELDS"]
 
@@ -161,15 +161,48 @@ def result_row(db, res_id: str) -> dict:
 
 
 def find_cached(db, run_id: str, content_hash: str, ckpt: str | None, code: str | None,
-                kind: str = "exact") -> dict | None:
-    """The newest non-stale result with this cache key whose files are still there."""
+                kind: str = "exact", prefer_scenario: str | None = None) -> dict | None:
+    """The newest non-stale result with this cache key whose files are still there (``prefer_scenario``'s own
+    results first)."""
     rows = db.fetchall("SELECT * FROM results WHERE run_id = ? AND content_hash = ? AND ckpt_key IS ? AND "
                        "code_sha IS ? AND kind = ? AND stale = 0 ORDER BY created_utc DESC",
                        (run_id, content_hash, ckpt, code, kind))
+    rows.sort(key=lambda r: prefer_scenario is None or r.get("scenario_id") != prefer_scenario)
     for r in rows:
         if r.get("dir") and (Path(r["dir"]) / "summary.json").exists():
             return r
     return None
+
+
+def adopt_result(db, row: dict, scenario: dict) -> dict:
+    """A cache hit made for another scenario with the same content: copy that result directory under a new
+    result id for ``scenario`` (``{id, revision, name}``), so the scenario lists it, can be inspected, compared
+    and packed, and keeps it when the other scenario's results are deleted.  Returns the new row."""
+    src = Path(row["dir"])
+    rid = new_id("result")
+    dst = src.parent / rid
+    tmp = src.parent / f".{rid}.adopting"
+    shutil.copytree(src, tmp)
+    who = {"id": scenario["id"], "revision": int(scenario.get("revision") or 1), "name": scenario.get("name")}
+    spec = read_json(tmp / "spec.json") or {}
+    spec.update(id=rid, scenario_id=who["id"], revision=who["revision"], name=who["name"], adopted_from=row["id"])
+    write_json_atomic(tmp / "spec.json", spec)
+    summ = read_json(tmp / "summary.json") or {}
+    summ["scenario"] = who
+    if isinstance(summ.get("summary"), dict):
+        summ["summary"].update(id=rid, scenario_id=who["id"])
+    if isinstance(summ.get("spec"), dict):
+        summ["spec"].update(id=rid, scenario_id=who["id"], revision=who["revision"], name=who["name"])
+    write_json_atomic(tmp / "summary.json", summ)
+    os.replace(tmp, dst)
+    new = insert_result_row(db, dst)
+    try:
+        from sparc.studio.scenarios import library
+
+        library.sync_status(db, who["id"])
+    except Exception:
+        log.exception("scenario status refresh failed")
+    return new if new is not None else row
 
 
 def summary_out(row: dict, unit: str = "°F") -> dict:
@@ -332,7 +365,7 @@ def reindex_results(db, workspace) -> dict:
             root = sd / sub
             if not root.is_dir():
                 continue
-            for d in sorted(p for p in root.iterdir() if p.is_dir()):
+            for d in sorted(p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")):
                 try:
                     row = _row_from_dir(d) if fn is None else fn(d, run)
                     if row is None:

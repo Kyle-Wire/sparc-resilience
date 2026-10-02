@@ -22,15 +22,19 @@ export type BrushSettings = {
 /**
  * Apply one dab to `edit` in place: for each row, edit = fround(clamp(base + amount) − base)
  * (or 0 when erasing). Rows with a non-finite base are left unedited. Returns rows changed.
+ * The clamp is the engine's support rule (SPEC §7.3, `_bounds`): [min(lo, base), max(hi, base)],
+ * so a cell whose input already lies outside the bounds is never pushed further out, and an
+ * add never turns into a decrease.
  */
 export function applyBrush(edit: Float32Array, rows: number[], s: BrushSettings): number[] {
   const changed: number[] = [];
-  const [lo, hi] = s.bounds;
   for (const r of rows) {
     const b = s.base[r];
     let next: number;
     if (s.mode === "erase" || !Number.isFinite(b)) next = 0;
     else {
+      const lo = Math.min(s.bounds[0], b);
+      const hi = Math.max(s.bounds[1], b);
       const target = Math.min(hi, Math.max(lo, b + s.amount));
       next = Math.fround(Math.fround(target) - b);
       // Float32 rounding must never push base + edit outside the bounds.

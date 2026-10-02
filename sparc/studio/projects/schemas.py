@@ -39,6 +39,7 @@ class LastRun(BaseModel):
     status: str
     created_utc: str
     r2: float | None = None
+    has_checkpoint: bool = False
 
 
 class ReadinessScore(BaseModel):

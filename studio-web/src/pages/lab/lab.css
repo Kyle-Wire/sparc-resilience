@@ -13,8 +13,12 @@
 
 .lab-panes { align-items: start; }
 .lab-pane { display: grid; gap: 12px; min-width: 0; align-content: start; }
+/* The map's side panel sits beside the map only when the map pane itself is wide enough (it is
+   ~450 px between the editor and compile panes on a 1440 px screen): a container query, since the
+   pane's width depends on the sidebar and on which panes are collapsed, not on the viewport. */
+.lab-map { container-type: inline-size; }
 .lab-map .mapview { grid-template-columns: minmax(0, 1fr) 260px; }
-@media (max-width: 1400px) { .lab-map .mapview { grid-template-columns: minmax(0, 1fr); } }
+@container (max-width: 820px) { .lab-map .mapview { grid-template-columns: minmax(0, 1fr); } }
 
 .scenario-editor { gap: 10px; }
 .scenario-editor textarea { width: 100%; resize: vertical; }

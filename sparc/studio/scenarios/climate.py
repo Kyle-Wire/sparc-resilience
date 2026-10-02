@@ -167,6 +167,7 @@ def explore(db, ctx, body: dict, cache_dir=None) -> dict:
                 people_exposure.append(row(p["experiment"], p["label"], p["period"], name, w, d))
     from sparc.studio.runs.common import clean
 
-    return clean({"present": True, "thresholds": out["thresholds"], "projections": out["projections"],
+    # ``present`` is summarize_projections' own dict (today's mean and shares at or above), as api.md §7.7.
+    return clean({"present": out["present"], "thresholds": out["thresholds"], "projections": out["projections"],
                   "adaptation": out["adaptation"], "people_exposure": people_exposure,
-                  "units": ctx.units.get("target", "°F"), "statistic": statistic, "present_today": out["present"]})
+                  "units": ctx.units.get("target", "°F"), "statistic": statistic})

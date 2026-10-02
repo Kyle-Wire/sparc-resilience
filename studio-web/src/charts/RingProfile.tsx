@@ -31,9 +31,11 @@ function Plot(p: RingProfileProps) {
   const ctx = useChart();
   const auto = useChartWidth(640);
   const W = p.width ?? auto;
-  const H = p.height ?? 260;
-  const M = { top: 12, right: 16, bottom: 46, left: 62 };
+  const H = p.height ?? (p.rings.length > 8 ? 300 : 260);
   const keys = p.rings.map(ringLabel);
+  // Many rings get rotated distance labels (BandAxis): leave room for them and the axis title.
+  const many = keys.length > 8;
+  const M = { top: 12, right: 16, bottom: many ? 84 : 46, left: 62 };
   const band = bandScale(keys, [M.left, W - M.right], 0.25, 0.1);
   const e = extent([0, ...p.rings.flatMap((r) => [r.mean, r.mean !== null && r.se ? r.mean - 1.96 * r.se : null, r.mean !== null && r.se ? r.mean + 1.96 * r.se : null])]) ?? [-1, 0];
   const sy = linearScale(niceDomain(e[0], e[1]), [H - M.bottom, M.top]);
@@ -41,7 +43,7 @@ function Plot(p: RingProfileProps) {
   return (
     <svg className="chart" viewBox={`0 0 ${W} ${H}`} role="group" aria-label={p.title}>
       <Axis scale={sy} orient="left" at={M.left} grid={W - M.left - M.right} title={axisTitle(p.valueLabel ?? "Mean ΔT", p.unit)} signed />
-      <BandAxis scale={band} orient="bottom" at={H - M.bottom} title="Distance from the edited cells" />
+      <BandAxis scale={band} orient="bottom" at={H - M.bottom} title="Distance from the edited cells" titleGap={many ? 72 : undefined} />
       <line className="zero" x1={M.left} x2={W - M.right} y1={sy(0)} y2={sy(0)} />
       {p.rings.map((r, i) => {
         if (r.mean === null || !Number.isFinite(r.mean)) return null;

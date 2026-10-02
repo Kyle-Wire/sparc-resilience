@@ -132,6 +132,8 @@ def test_climate_explore_equals_summarize_projections(client, run_ctx, synth_run
     want = summarize_projections(np.asarray(run_ctx.data.target_raw, float), factors, {"Cooling package": delta},
                                  [88.0, 92.5], to_units=1.8)
     assert got["thresholds"] == [88.0, 92.5] and got["adaptation"] == ["Cooling package"]
+    assert got["present"]["mean"] == pytest.approx(want["present"]["mean"])
+    assert got["present"]["share_at_or_above"] == pytest.approx(want["present"]["share_at_or_above"])
     assert len(got["projections"]) == len(want["projections"])
     for g, w in zip(got["projections"], want["projections"]):
         assert (g["experiment"], g["period"]) == (w["experiment"], w["period"])

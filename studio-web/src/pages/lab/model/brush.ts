@@ -143,8 +143,9 @@ export function snapshotsEqual(a: BrushSnapshot, b: BrushSnapshot): boolean {
 /**
  * The engine's support rule for cells whose input lies outside the lever bounds (SPEC §7.3,
  * `_bounds`): the result is clamped to [min(lo, base), max(hi, base)], so it is never pushed
- * further out and an "add" never turns into a decrease (the map kit's applyBrush clamps to
- * [lo, hi] strictly). Re-computes those rows of `edit` in place; returns the rows it changed.
+ * further out and an "add" never turns into a decrease. The map kit's applyBrush applies the
+ * same rule; this re-check keeps the Lab's edit arrays right whichever path painted them.
+ * Re-computes those rows of `edit` in place; returns the rows it changed.
  */
 export function applySupportRule(edit: Float32Array, rows: Iterable<number>, s: Pick<BrushSettings, "mode" | "amount" | "base" | "bounds">): number[] {
   const fixed: number[] = [];

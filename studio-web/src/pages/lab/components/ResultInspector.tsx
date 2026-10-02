@@ -101,10 +101,10 @@ function ImpactsBlock({ resId, impacts, unit, onImpacts }: { resId: string; impa
             <Bars
               key={g}
               title={`Cooling by ${g.replace(/_/g, " ")} quintile`}
-              units={`${u} (negative = cooler)`}
+              units={`${u} (positive = cooler)`}
               categories={e.quintiles.map((q) => `Q${q.quintile}`)}
-              series={[{ id: "cool", label: "Mean change", values: e.quintiles.map((q) => q.mean_cooling) }]}
-              valueLabel="Mean ΔT"
+              series={[{ id: "cool", label: "Mean cooling", values: e.quintiles.map((q) => q.mean_cooling) }]}
+              valueLabel="Mean cooling"
               unit={u}
               categoryLabel="Quintile (1 = lowest)"
               caption={`Concentration index ${fmtSigned(e.concentration_index, 3)} (negative: the cooling favours the lower quintiles of ${g.replace(/_/g, " ")}).`}

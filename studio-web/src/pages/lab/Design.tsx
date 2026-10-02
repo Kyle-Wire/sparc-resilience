@@ -199,7 +199,8 @@ function Workbench({ rid, sid, pid, grid, groups, levers, scenario }: WorkbenchP
   );
   useEffect(() => () => controller.dispose(), [controller]);
   const usable = useMemo(() => usableEdits(doc.edits), [doc.edits]);
-  const emuPresent = emulator.data?.present !== false;
+  // Preview only once the run is known to have an emulator (no 404 no_emulator on every open of a run without one).
+  const emuPresent = emulator.data?.present === true;
   const requestPreview = useCallback(() => {
     const brushPayload = store.brushLayers.previewPayload();
     if (!emuPresent) return;

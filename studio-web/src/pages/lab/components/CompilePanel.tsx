@@ -98,7 +98,7 @@ export function CompilePanel(p: CompilePanelProps) {
               <ul className="edit-issues">
                 {c.warnings.map((w, i) => (
                   <li key={i} data-level={w.blocking ? "error" : "warn"}>
-                    {w.edit_index !== null ? `Edit ${w.edit_index + 1}: ` : ""}
+                    {w.edit_index !== null && !/^edit \d/i.test(w.message) ? `Edit ${w.edit_index + 1}: ` : ""}
                     {w.blocking ? "Blocked — " : ""}
                     {w.message}
                   </li>
