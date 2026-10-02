@@ -374,12 +374,14 @@ def _rm_checkpoint(ctx) -> int:
 
 
 async def _evict_engine(sctx: StudioContext, rid: str) -> None:
+    """Close ``rid`` in the engine host.  ``EngineService.evict`` blocks until the host's work lock is free (up to
+    120 s while it serves another run), so it runs in a thread, never on the event loop."""
     eng = sctx.services.get("engine")
     fn = getattr(eng, "evict", None) if eng is not None else None
     if fn is None:
         return
     try:
-        res = fn(rid)
+        res = await asyncio.to_thread(fn, rid)
         if asyncio.iscoroutine(res):
             await res
     except Exception:

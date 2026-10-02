@@ -1972,7 +1972,7 @@ CREATE TABLE settings (key TEXT PRIMARY KEY, value_json TEXT);
   - No `python-multipart`.
 - **Pickles.**
   - Unpickled only from runs under the workspace, or from runs imported with explicit confirmation. The import dialog names the risk: "checkpoint files execute code when loaded; import only folders you produced".
-  - The engine host never loads a checkpoint the registry has not marked trusted.
+  - The engine host never loads a checkpoint the registry has not marked trusted, and neither does any job that unpickles one (`post.emulator`).
 - **Subprocesses** use argument lists, never `shell=True`.
 - **Other routes.**
   - `GET /openapi.json` requires auth like `/api/*`.
@@ -2875,6 +2875,14 @@ This is the changelog of the specification after the completeness review (§18).
 - The Providence journey uses `$SPARC_PROVIDENCE_RUNS` or `output/core/providence`, copying a run outside the repository to a temp folder before importing it.
 - The wheel smoke test builds from a hard-linked copy of the sources (no `build/` left in the tree); locally it installs with `--no-deps` plus the server dependencies, and CI installs the full `[studio]` extra with CPU torch.
 - `tests.yml`'s legacy job passes `--ignore=tests/core --ignore=tests/studio`. CI sets `SPARC_E2E_REQUIRE_BROWSER=1` and `SPARC_CONTRACT_REQUIRE_TS=1`, so a missing browser or Node fails instead of skipping; the old-app guard falls back to the pushed range (`github.event.before`) on pushes to the default branch.
+
+### Review fixes (2026-10-02)
+
+- **Trusted pickles** (§10.8): the scenario emulator (`post.emulator`) unpickles the run's checkpoint, so it follows the engine's rule: a run imported without trusting its checkpoint is refused (`409 untrusted_pickle` with the trust action) when the emulator is asked for, and the job's start-time preflight refuses it too.
+- **Readiness spine** (§9.3): a config section saved with the wrong type (`climate: on`, `data: 5`, `physics.roles` as a list) counts as empty for the spine, and the error shows in the *Config valid* row; the project list and project pages stay readable so the config can be fixed in Studio. `Project.report` shows numbers in the config's `report` block as text and other non-strings as empty.
+- **Import with `copy_data`** (§9.1): inputs that share a file name (the data table `a/data.csv` and a join `b/data.csv`) are copied side by side (`data/data.csv`, `data/data-2.csv`) with a warning instead of the later overwriting the earlier.
+- **Imported run ids** (§4.3, §9.1): an imported folder's `studio/launch.json` is untrusted input; its `run_id` names the side folder `imports/<run_id>/` only when it is a plain id that no other run folder holds (a copied Studio run gets its own id), and a refused import removes only the side folder it created.
+- **Deleting a run, its checkpoint or its outputs** waits for the engine host to evict the run in a worker thread, so a long engine request on another run no longer freezes the server.
 
 ### Documentation
 

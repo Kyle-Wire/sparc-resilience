@@ -403,6 +403,8 @@ Errors:
 Body: `{name?: string, config_path: string, copy_data?: boolean = false, run_dirs?: string[], study_dirs?: string[], trust_pickles?: boolean = false}`
 → `201 {project: Project, runs: RunSummary[], studies: Study[], warnings: string[]}`.
 
+With `copy_data`, the data table, the join tables and the input files are copied into the project (`data/`, `inputs/<kind>/`). A file whose name another copied input already uses is copied as `<stem>-2<suffix>` (then `-3`, …) with a warning, and a file named by two keys is copied once.
+
 Errors: `404` (path), `422` (config invalid; `detail.errors`), `422 needs_config` (a run lacks provenance and no config fits it).
 
 ### `GET /api/projects/{pid}`
@@ -602,6 +604,8 @@ Errors: `422` (config errors), `409 preflight_failed` (`detail.preflight`, `acti
 
 ### `POST /api/runs/import`
 Body: `{dir: string, project_id?: string, config_path?: string, trust_pickles?: boolean = false}` → `201 RunSummary`.
+
+The run keeps the `run_id` of the folder's own `studio/launch.json` only when it is a plain id (`[A-Za-z0-9][A-Za-z0-9._-]*`, no `..`, at most 128 characters) that no other run folder holds; otherwise its id is derived like any imported run's (SPEC §4.3).
 
 Errors: `404`, `422 needs_config`, `422 mismatch` (ids or folds differ from the config).
 
@@ -1207,7 +1211,7 @@ type Study = { id: string; project_id: string; kind: string; target_run_id: stri
 
 **`POST /api/runs/{rid}/actions/{kind}`**
 `kind ∈ baselines|planner|emulator|uncertainty|writeup`. Body: the kind's params (§8) → `202 Job`.
-Errors: `404 unknown_kind`, `422 requirements` (`detail.missing`, e.g. `planner.layers`), `409 no_checkpoint` (emulator), `422 validation` (params; an unknown `package` for the planner; uncertainty study ids that are not studies of that kind).
+Errors: `404 unknown_kind`, `422 requirements` (`detail.missing`, e.g. `planner.layers`), `409 no_checkpoint` (emulator), `409 untrusted_pickle` (emulator: the run was imported without trusting its checkpoint, SPEC §10.8; `action` re-imports it with `trust_pickles`), `422 validation` (params; an unknown `package` for the planner; uncertainty study ids that are not studies of that kind).
 
 **`POST /api/runs/{rid}/studies/{kind}`**
 `kind ∈ placebo|simcheck|multiverse|reproduce`. Body: params → `202 {study: Study, job: Job}`.
@@ -1694,6 +1698,14 @@ This section is the changelog of the contract after the completeness review (§1
 - **Study children while they run**: a study child that is fitting has a live `run_state.json` and no `run.core` job of its own. The runs registry reports such a row (origin `study_child` or `reproduction`, a `study_id`, or a manifest whose `run_meta.study_id` is set) as `status: "running"` with its own origin, never `external_live`, and the watch-root watcher starts no `run.external` pseudo-job for it, also on a full rescan after a restart. Study-child run ids take `run_state.started_utc` before `manifest.created_utc`, so `sparc studio --reindex` finds the same id for a child indexed while it ran. The studies hooks re-derive the child rows at `run.dir`, `run.end` and at the end of the study (every child then, so a cancelled pass never leaves one `running`).
 - **Contract checks**: `tests/studio/openapi.snapshot.json` freezes the OpenAPI document; `studio-web/src/api/contract.check.ts` checks about 170 response and request shapes of the hand-written client types against the generated `schema.gen.ts`. Request bodies are checked for type and nullability only (defaulted server fields are marked required by the generator). Known differences can be allowed per check with `Gate<…>` (each allowance fails the typecheck once it no longer applies); none is left at release. The client types now accept `null` where the server sends it: `SystemInfo.versions.{numpy,pandas,fastapi}` and `web_build.{vite,react}`, `cache[].mtime`, `DataCheck.dose_scale[*].sd` and `doses_in_sd[]`, `ConfigHistoryEntry.saved_utc`, `matches_snapshot.{data,code,config}` (plan and run detail), the `Acf` arrays (lags without pairs) and `Comparison.equity` values (a group without cells); `DataCheck` has `elapsed_s`.
 - **Replay runner speed**: the end-to-end replay journey runs the fixture at `SPARC_STUDIO_REPLAY_SPEED=1` (§14) so it can reload mid-run; the runner's default stays 20.
+
+### Review fixes (2026-10-02)
+
+- **`post.emulator` and untrusted checkpoints** (§9, SPEC §10.8): the emulator unpickles `checkpoint.pkl`, so `POST /api/runs/{rid}/actions/emulator` answers `409 untrusted_pickle` (with the trust action `POST /api/runs/import {dir, project_id, config_path, trust_pickles: true}`) for a run imported without `trust_pickles`, as the engine does. A `post.emulator` job that reaches the scheduler another way (`POST /api/jobs`) fails its start-time preflight with `error.detail.code = "untrusted_pickle"` before any worker starts.
+- **Config sections of the wrong type** (§5): a saved config whose `data`, `physics`, `physics.roles`, `climate`, `optimize` or `planner` is not a mapping (`climate: on`, `data: 5`) no longer makes `GET /api/projects` and `GET /api/projects/{pid}` fail; the readiness spine treats the section as empty and the type error shows in the `config_valid` row.
+- **`Project.report`** values are strings or `null`: a number in the config's `report` block (`title: 2024`, `area: 12.5`) is returned as text, any other non-string as `null`. The save itself still reports the type issue.
+- **`POST /api/projects/import` with `copy_data`** never overwrites one copied input with another of the same file name: the later one is copied as `<stem>-2<suffix>` with a warning, and a file named by two keys is copied once (§5).
+- **Run import ids** (§6): `POST /api/runs/import` (and the run folders of `POST /api/projects/import`) use the `run_id` of a folder's own `studio/launch.json` only when it is a plain id no other folder holds; an absolute path, a `..` or a taken id falls back to the derived id. A refused import removes only the `<ws>/imports/<run_id>/` side folder it created.
 
 ### Documentation
 

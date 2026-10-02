@@ -332,12 +332,35 @@ def post_planner(ctx, params: PlannerParams) -> dict:
             "hot_days": bool(out.get("hot_days"))}
 
 
+def untrusted_checkpoint(sctx, run_id: str) -> dict | None:
+    """``None`` when ``run_id``'s ``checkpoint.pkl`` may be unpickled, else ``{message, action}`` of the
+    ``409 untrusted_pickle`` refusal.  ``post.emulator`` unpickles the checkpoint in its worker, so it obeys the
+    engine host's trusted-pickle rule (SPEC §10.8): runs under the workspace, or imported with ``trust_pickles``."""
+    from sparc.studio.engine.service import TRUST_RISK, get_service
+
+    svc = get_service(sctx)
+    if svc.trusted(run_id):
+        return None
+    row = sctx.db.fetchone("SELECT * FROM runs WHERE id = ?", (run_id,))
+    action = None
+    if row is not None:
+        try:
+            action = svc.trust_action(row)
+        except Exception:                           # the refusal stands without its remedy
+            action = None
+    return {"message": "this run was imported without trusting its checkpoint: " + TRUST_RISK, "action": action}
+
+
 def _emulator_preflight(sctx, job: dict, params) -> list[dict]:
     """The checkpoint is checked when the job starts, not when it is queued: a launch's "then" chain queues
-    ``post.emulator`` before its run has written ``checkpoint.pkl``."""
+    ``post.emulator`` before its run has written ``checkpoint.pkl``.  An untrusted checkpoint is never
+    unpickled (SPEC §10.8)."""
     row = sctx.db.fetchone("SELECT run_dir FROM runs WHERE id = ?", (job.get("run_id"),))
     if row is None or not (Path(row["run_dir"]) / "checkpoint.pkl").is_file():
         return [{"reason": "the run has no checkpoint.pkl", "fatal": True, "code": "no_checkpoint"}]
+    bad = untrusted_checkpoint(sctx, job["run_id"])
+    if bad is not None:
+        return [{"reason": bad["message"], "fatal": True, "code": "untrusted_pickle"}]
     return []
 
 

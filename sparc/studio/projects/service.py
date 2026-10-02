@@ -219,13 +219,24 @@ def active_jobs(db, pid: str) -> list[dict]:
                                             f"ORDER BY created_utc DESC", (pid, *ACTIVE_STATUSES))]
 
 
+def _report_text(v: Any) -> str | None:
+    """A ``report`` title, place or area as ``Project.report`` carries it: a saved config may hold any YAML value
+    there (``title: 2024``, which validation reports), so numbers become text and other types ``None``."""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return str(v)
+    return None
+
+
 def project_out(db, row: dict, *, readiness_score: dict | None = None, raw: dict | None = None) -> dict:
     """A ``projects`` row as api.md ``Project``."""
     m = _meta(row)
     raw = project_raw(row) if raw is None else raw
     rep_cfg = raw.get("report") if isinstance(raw.get("report"), dict) else {}
-    rep_meta = m.get("report") or {}
-    report = {k: (rep_meta.get(k) if rep_meta.get(k) is not None else rep_cfg.get(k))
+    rep_meta = m.get("report") if isinstance(m.get("report"), dict) else {}
+    report = {k: (_report_text(rep_meta.get(k)) if _report_text(rep_meta.get(k)) is not None
+                  else _report_text(rep_cfg.get(k)))
               for k in ("title", "place", "area")}
     cost = dict(m.get("cost_model") or {})
     for var, spec in (raw.get("actionable") or {}).items() if isinstance(raw.get("actionable"), dict) else []:
