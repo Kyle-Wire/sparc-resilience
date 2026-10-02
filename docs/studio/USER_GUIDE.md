@@ -110,11 +110,11 @@ for i in $(seq 1 90); do
   sleep 1
 done
 echo "Open $URL/auth?t=$TOKEN in a browser"
-curl -s -H "Authorization: Bearer $TOKEN" "$URL/api/system"; echo
-curl -s -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+curl -fsS -H "Authorization: Bearer $TOKEN" "$URL/api/system"; echo
+curl -fsS -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"offline": true}' "$URL/api/settings"; echo
 ls "$WS"
-curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{}' "$URL/api/shutdown"; echo
+curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{}' "$URL/api/shutdown"; echo
 wait
 ```
 
@@ -635,12 +635,13 @@ The process vanished (server killed, sleep, out of memory). Open the run: the ch
 
 ### Resume refuses, or would refit everything
 
-- **"not resumable"** comes in three cases: the run has no launch snapshot (it was made with the command line, not launched from Studio: launch a new run of the project from **Launch**), the run is already complete, or a job is still running on it.
+- **Resume is refused** in three cases, and the dialog says which: the run has no launch snapshot (it was made with the command line, not launched from Studio: launch a new run of the project from **Launch**), the run is already complete, or a job is still running on it. **Resume with current project config** is also refused for a run that belongs to no project, or when the current project config does not load.
 - **"the checkpoint does not match the launch snapshot (… changed): a resume refits"** means the data file or the pipeline code changed since the run was launched; the card names which. A resume still runs, but reuses nothing. If the code changed because you upgraded, see the next item. To refit on purpose with your edited project config, use **Resume with current project config**, which shows its impact first.
 
 ### Incompatible checkpoints and stale results
 
-- **Checkpoints from before this release cannot be resumed.** This release changed the pipeline code that a checkpoint's fingerprint covers (see [`RELEASE_NOTES.md`](RELEASE_NOTES.md)). Such runs still open: every output stays viewable and the Lab can still load their checkpoints, but their engine reports `code_match: false` and their exact results are marked **stale**.
+- **Checkpoints from before this release cannot be resumed.** This release changed the pipeline code that a checkpoint's fingerprint covers (see [`RELEASE_NOTES.md`](RELEASE_NOTES.md)). Such runs still open: every output stays viewable and the Lab can still load their checkpoints. They have no `checkpoint.json`, so the engine cannot tell which code wrote them (`code_match: null`).
+- **Code changed since a checkpoint was saved**: for checkpoints written by this release, a later change of the pipeline code makes the engine report `code_match: false`; the Lab still loads the checkpoint, a resume refits (see above), and exact results computed before the change are marked **stale**.
 - **Engine "incompatible"**: the checkpoint cannot be loaded by this version (a class it pickled no longer exists). The engine chip offers **Refit S2/S3**, which re-runs the run from its launch snapshot as a new run; meanwhile you can work with previews only.
 - **Stale results** (a banner on a result) were computed before the run's checkpoint or the pipeline code changed. They stay readable; **Run exact** again to refresh them.
 - **Untrusted checkpoint**: an imported run's checkpoint is not loaded until you confirm it is yours ([J10](#j10--bring-existing-work-in)).
@@ -670,8 +671,8 @@ for i in $(seq 1 120); do
     && curl -sf "$URL/api/health" > /dev/null && break
   sleep 1
 done
-curl -s -H "Authorization: Bearer reindex" "$URL/api/projects"; echo
-curl -s -X POST -H "Authorization: Bearer reindex" -H "Content-Type: application/json" -d '{}' "$URL/api/shutdown"; echo
+curl -fsS -H "Authorization: Bearer reindex" "$URL/api/projects"; echo
+curl -fsS -X POST -H "Authorization: Bearer reindex" -H "Content-Type: application/json" -d '{}' "$URL/api/shutdown"; echo
 wait
 ```
 

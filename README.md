@@ -302,7 +302,7 @@ SPARC Studio is the local web app for the core pipeline: set up a city from a CS
 
 ```bash
 pip install "sparc[studio]"         # from a checkout: pip install -e ".[studio]"
-sparc studio                        # opens http://127.0.0.1:8765/ in your browser
+sparc studio                        # prints a one-time link (http://127.0.0.1:8765/auth?t=…) and opens it
 ```
 
 ```bash
@@ -606,11 +606,13 @@ sparc-resilience/
 │   ├── report/              # Report generation
 │   ├── registry/            # Artifact store (SQLite), city registry, domain template registry
 │   ├── server/              # Local pipeline/IPC server for the desktop app
+│   ├── studio/              # SPARC Studio server (FastAPI) and its pre-built web app (static/)
 │   └── templates/           # Domain templates (13 domains)
 ├── examples/                # Example projects (Brown UHI)
-├── tests/                   # Unit + regression tests; tests/core = core pipeline (CI)
-├── docs/                    # MANUAL, PIPELINE_GUIDE, CONTRIBUTING, INTERPRETATION_GUIDE
+├── tests/                   # Unit + regression tests; tests/core = core pipeline, tests/studio = SPARC Studio (CI)
+├── docs/                    # MANUAL, PIPELINE_GUIDE, CONTRIBUTING, INTERPRETATION_GUIDE; studio/ = SPARC Studio docs
 ├── sparc-desktop/           # Tauri v2 + React desktop application
+├── studio-web/              # SPARC Studio web app source (React + TypeScript, Vite)
 ├── scripts/                 # Helper scripts
 ├── pyproject.toml           # Package metadata and dependencies
 ├── README.md

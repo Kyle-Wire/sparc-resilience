@@ -22,21 +22,22 @@ Studio needs no Node: the web app is pre-built inside the package. The `studio` 
 
 ## One-time change: checkpoints from earlier releases cannot be resumed
 
-A run's `checkpoint.pkl` is reused by `--resume` (and by Studio's Resume) only when the run's **fingerprint** still matches. The fingerprint hashes the effective config, the mode arguments, the data file's identity and a **digest of the pipeline code**: every top-level `sparc/core/*.py`. This release instruments those modules for progress reporting and adds new ones (`catalog.py`, `session.py`, the results-page package), so the code digest of every earlier checkpoint differs.
+A run's `checkpoint.pkl` is reused by `--resume` (and by Studio's Resume) only when the run's **fingerprint** still matches. The fingerprint hashes the effective config, the mode arguments, the data file's identity and a **digest of the pipeline code**: every top-level `sparc/core/*.py` (sub-packages such as `sparc/core/results_page/` are not part of it). This release instruments those modules for progress reporting and adds new ones (`catalog.py`, `session.py`), so the code digest of every earlier checkpoint differs.
 
 What this means:
 
 - **Resume refits from the start.** `sparc core run --resume` on an older run prints "checkpoint … is from a different config/data/code version — ignoring it", emits a `checkpoint.mismatch` warning and runs every stage. In Studio, runs made before this release come from the command line and have no launch snapshot, so they cannot be resumed there either: relaunch them from Launch. For any Studio run whose checkpoint no longer matches, the checkpoint card says "the checkpoint does not match the launch snapshot (code changed): a resume refits", and a resume reuses nothing.
-- **Everything else keeps working.** Old checkpoints still unpickle: no pickled class gained a required attribute. Every output of an older run stays viewable in Studio, the run can be imported, and the Scenario Lab can still load its checkpoint. Its engine reports `code_match: false`, and exact results computed from it are marked **stale** (they are still shown).
+- **Everything else keeps working.** Old checkpoints still unpickle: no pickled class gained a required attribute. Every output of an older run stays viewable in Studio, the run can be imported, and the Scenario Lab can still load its checkpoint (once you trust it). Earlier checkpoints have no `checkpoint.json` sidecar, so the engine cannot compare their code and reports `code_match: null` (unknown); exact results computed from them now are ordinary results.
+- **From now on a code change is visible.** Checkpoints written by this release carry `checkpoint.json` with their code digest. After a later edit of a fingerprinted core module (or an upgrade that brings one), their engine reports `code_match: false`, and exact results computed before the change are marked **stale** (they are still shown; **Run exact** again to refresh them).
 - **Future instrumentation edits will not repeat this.** `sparc/core/progress.py` and `sparc/core/runio.py` are now excluded from the code digest, so changes to progress reporting or atomic I/O no longer invalidate checkpoints. Editing any other core module changes the digest, as before.
 
-Check a run without loading its checkpoint (never unpickles, so it is instant even for a 500 MB checkpoint):
+Check a run without loading its checkpoint (never unpickles, so it is instant even for a 500 MB checkpoint). Pass the config a resume would use to compare the data and config too:
 
 ```bash
-python -c "from sparc.core.pipeline import checkpoint_status; print(checkpoint_status('output/core/providence/providence_uhi_fast'))"
+python -c "from sparc.core.pipeline import checkpoint_status; print(checkpoint_status('output/core/providence/providence_uhi_fast', 'configs/core_providence.yml'))"
 ```
 
-`matches.code` and `fingerprint_match` are `false` for checkpoints written by earlier code. Runs written by this release also carry a `checkpoint.json` sidecar, so the answer then names which section changed (`data`, `core`, `s4`, `s5`, `climate`, `s6`, `s7`, `code`).
+A checkpoint written by earlier code has no `checkpoint.json`: the answer has `present: True` but `fingerprint`, `done`, `matches.code` and `fingerprint_match` are all `None` (unknown), and `sparc core run --resume` will refit it. A checkpoint written by this release carries the sidecar, so the answer is definite: `matches.code` is `false` after a code change, and with a config `changed_sections` names what differs (`data`, `core`, `s4`, `s5`, `climate`, `s6`, `s7`, `code`) and `fingerprint_match` says whether `--resume` would reuse the checkpoint.
 
 ---
 

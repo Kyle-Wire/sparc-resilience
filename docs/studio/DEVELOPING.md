@@ -232,7 +232,7 @@ Real lines from the committed fixture run (`tests/studio/fixtures/synth_run/even
 
 ```json
 {"v":1,"type":"stage.start","seq":4,"ts":1790889678.197,"t_rel":0.024,"pid":4557,"job":"j_fixture","lvl":"info","span":"4557:2","parent":"4557:1","path":["run:synthetic_demo","stage:S0"],"ctx":{},"stage":"S0","label":"Data and QA","est_s":null}
-{"v":1,"type":"task.end","seq":36,"ts":1790889680.225,"t_rel":2.052,"pid":4557,"job":"j_fixture","lvl":"info","span":"4557:6","parent":"4557:5","path":["run:synthetic_demo","stage:S2_S3","task:fold[1/3]","task:base_model[ols]"],"ctx":{},"name":"base_model","key":"ols","k":null,"n":null,"unit":"base_fit:ols","status":"ok","elapsed_s":0.0188,"metrics":{"fit_s":0.019,"heldout_rmse":1.39,"heldout_r2":-1.95}}
+{"v":1,"type":"task.end","seq":36,"ts":1790889680.225,"t_rel":2.052,"pid":4557,"job":"j_fixture","lvl":"info","span":"4557:6","parent":"4557:5","path":["run:synthetic_demo","stage:S2_S3","task:fold[1/3]","task:base_model[ols]"],"ctx":{},"name":"base_model","key":"ols","k":null,"n":null,"unit":"base_fit:ols","status":"ok","elapsed_s":0.0188,"metrics":{"fit_s":0.019,"heldout_rmse":1.3937025717870912,"heldout_r2":-1.9482167761071572}}
 {"v":1,"type":"artifact","seq":32,"ts":1790889680.185,"t_rel":2.012,"pid":4557,"job":"j_fixture","lvl":"info","span":"4557:1","parent":null,"path":"influence.json","ctx":{},"role":"influence","bytes":14498,"stage":"S1","span_path":["run:synthetic_demo"]}
 {"v":1,"type":"checkpoint","seq":146,"ts":1790889695.611,"t_rel":17.438,"pid":4557,"job":"j_fixture","lvl":"info","span":"4557:4","parent":"4557:1","path":["run:synthetic_demo","stage:S2_S3"],"ctx":{},"action":"saved","done":["S3"],"bytes":3497666,"elapsed_s":0.199,"fingerprint":"68c17c7b36fce387","changed_sections":null}
 {"v":1,"type":"stage.skip","seq":180,"ts":1790889697.23,"t_rel":19.057,"pid":4557,"job":"j_fixture","lvl":"info","span":"4557:1","parent":null,"path":["run:synthetic_demo"],"ctx":{},"stage":"cv_curve","reason":"disabled_by_config:cv.distance_curve.enabled"}
@@ -326,7 +326,7 @@ print("stages:", {k: v["state"] for k, v in tracker["stages"].items()})
 tabs = call("GET", f"/api/runs/{launch['run']['id']}/outputs")["tabs"]
 print("run tabs:", ", ".join(f"{t['id']}={t['availability']}" for t in tabs))
 PY
-curl -s -X POST -H "Authorization: Bearer dev" -H "Content-Type: application/json" -d '{"stop_jobs": true}' "$URL/api/shutdown"; echo
+curl -fsS -X POST -H "Authorization: Bearer dev" -H "Content-Type: application/json" -d '{"stop_jobs": true}' "$URL/api/shutdown"; echo
 wait
 ```
 
@@ -393,7 +393,7 @@ python docs/studio/check_api_doc.py              # api.md defines every route of
 python docs/studio/doctest.py --lint-only        # every command in the guides parses and names real files
 ```
 
-`python docs/studio/doctest.py` (no arguments) additionally runs every `# runnable` block of `USER_GUIDE.md`, `DEVELOPING.md`, `RELEASE_NOTES.md` and the README against a fresh temporary workspace, with this checkout first on `PYTHONPATH`; `--list` shows the blocks, `--only TEXT` runs a subset, `-v` prints their output. Blocks marked `# runnable (needs: node)` need `studio-web/node_modules`; they are skipped locally without it and fail in CI (`CI` set) or with `--strict`. CI runs it as step 8 of `.github/workflows/studio.yml`.
+The static check parses `sparc studio …` and `sparc core <command> …` with the real argument parsers (a `--project` config must exist), checks that scripts, test paths, npm scripts and `sparc` modules exist, and compiles `python -c` snippets and checks the names they import from `sparc`; `<placeholders>` such as `<run dir>` stand for any value. `python docs/studio/doctest.py` (no arguments) additionally runs every `# runnable` block of `USER_GUIDE.md`, `DEVELOPING.md`, `RELEASE_NOTES.md` and the README against a fresh temporary workspace, with this checkout first on `PYTHONPATH`; `--list` shows the blocks, `--only TEXT` runs a subset, `-v` prints their output. Blocks marked `# runnable (needs: node)` need `studio-web/node_modules`; they are skipped locally without it and fail in CI (`CI` set) or with `--strict`. CI runs it as step 8 of `.github/workflows/studio.yml`.
 
 ## 9. Tests: matrix and markers
 

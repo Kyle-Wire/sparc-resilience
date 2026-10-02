@@ -20,10 +20,13 @@ README's SPARC Studio section) show commands in fenced ``bash`` blocks. Two chec
    programs. A block whose needs are not met is skipped, or fails under ``--strict`` and in CI
    (``CI`` set), so the CI step cannot pass without running everything.
 2. **Every other shell command is checked statically**, so a document cannot drift silently:
-   ``sparc studio …`` / ``python -m sparc.studio …`` flags must parse with the real argument
-   parser, ``python <script>`` and ``python -m pytest <paths>`` must name files that exist,
-   ``python -m sparc…`` must name an importable module, and ``npm --prefix studio-web run <x>``
-   must name a script of ``studio-web/package.json``.
+   ``sparc studio …`` / ``python -m sparc.studio …`` and ``sparc core <command> …`` /
+   ``python -m sparc.core <command> …`` must parse with the real argument parsers (and a
+   ``--project`` config must exist), ``python <script>`` and ``python -m pytest <paths>`` /
+   ``pytest <paths>`` must name files that exist, ``python -m sparc…`` must name an importable
+   module, ``python -c CODE`` must compile and every name it imports from ``sparc`` must exist,
+   and ``npm --prefix studio-web run <x>`` must name a script of ``studio-web/package.json``.
+   ``<placeholders>`` (``<run dir>``, ``<config>``) stand for any value and are not checked.
 
 Usage::
 
@@ -36,7 +39,9 @@ Exit status 0 when every check passes, 1 otherwise.
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
+import importlib
 import importlib.util
 import io
 import json
@@ -53,6 +58,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+# the static checks import this checkout's `sparc`, never another installed copy
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 DOCS = ROOT / "docs" / "studio"
 DEFAULT_FILES = [DOCS / "USER_GUIDE.md", DOCS / "DEVELOPING.md", DOCS / "RELEASE_NOTES.md", ROOT / "README.md"]
 SHELL_LANGS = {"bash", "sh", "shell"}
@@ -61,6 +69,11 @@ FENCE = re.compile(r"^(?P<indent>\s*)(?P<fence>```+)\s*(?P<info>[\w+-]*)")
 HEREDOC = re.compile(r"<<-?\s*(['\"]?)(?P<tag>[A-Za-z_][A-Za-z0-9_]*)\1")
 OPERATORS = {"&&", "||", ";", "|", "&", "(", ")", ";;"}
 TOOLS = ("curl", "git", "npm")
+PLACEHOLDER = "__placeholder__"
+PLACEHOLDERS = re.compile(r"<[A-Za-z][^<>\n]*?>")          # <run dir>, <config>, <placebo.json>
+REDIRECT_ALONE = re.compile(r"^\d*(>>?|<|<<-?|&>)$")         # the target is the next token
+REDIRECT_JOINED = re.compile(r"^\d*(>>?|<|&>)\S+$")          # 2>/dev/null, >out.txt, <<EOF
+DUP_FD = re.compile(r"\d*[<>]&\d+")                          # 2>&1 (its & is not a background operator)
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +175,9 @@ def logical_lines(text: str) -> list[tuple[int, str]]:
 
 
 def simple_commands(line: str) -> list[list[str]]:
-    """``a && b | c &`` → ``[[a…], [b…], [c…]]`` (env assignments and ``$(…)`` contents not expanded)."""
+    """``a && b | c &`` → ``[[a…], [b…], [c…]]`` (env assignments and ``$(…)`` contents not expanded,
+    redirections dropped, ``<placeholders>`` replaced by :data:`PLACEHOLDER`)."""
+    line = DUP_FD.sub(" ", PLACEHOLDERS.sub(PLACEHOLDER, line))
     lex = shlex.shlex(line, posix=True, punctuation_chars=";&|()")
     lex.whitespace_split = True
     lex.commenters = "#"
@@ -189,29 +204,96 @@ def simple_commands(line: str) -> list[list[str]]:
             while cmd and (cmd[0].startswith("-") or re.match(r"^\d+[smh]?$", cmd[0])
                            or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", cmd[0])):
                 cmd = cmd[1:]
-        cmd = [t for t in cmd if not re.match(r"^\d?[<>]", t)]      # redirections
+        cmd = _strip_redirections(cmd)
         if cmd:
             out.append(cmd)
     return out
 
 
+def _strip_redirections(cmd: list[str]) -> list[str]:
+    out, skip = [], False
+    for tok in cmd:
+        if skip:
+            skip = False
+        elif REDIRECT_ALONE.match(tok):
+            skip = True                     # `> /dev/null`: the operator and its target
+        elif not REDIRECT_JOINED.match(tok):
+            out.append(tok)
+    return out
+
+
+def _free(arg: str) -> bool:
+    """An argument whose value is not known statically (a shell variable or a ``<placeholder>``)."""
+    return "$" in arg or PLACEHOLDER in arg
+
+
 def _studio_parser():
-    sys.path.insert(0, str(ROOT))
     from sparc.studio.cli import build_parser
 
     return build_parser()
 
 
-def _parse_studio(args: list[str]) -> str | None:
-    """``None`` when ``sparc studio <args>`` parses; else the parser's complaint."""
-    argv = ["0" if "$" in a else a for a in args]
+def _core_parser():
+    from sparc.core.cli import add_core_subparsers
+
+    parser = argparse.ArgumentParser(prog="sparc core")
+    add_core_subparsers(parser)
+    return parser
+
+
+def _parse(parser, args: list[str]) -> tuple[argparse.Namespace | None, str | None]:
+    """``(namespace, None)`` when ``args`` parse (``(None, None)`` for ``--help``/``--version``); else the
+    parser's complaint."""
+    argv = ["0" if _free(a) else a for a in args]
     err = io.StringIO()
     try:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
-            _studio_parser().parse_args(argv)
+            return parser.parse_args(argv), None
     except SystemExit as exc:
         if exc.code not in (0, None):
-            return err.getvalue().strip().splitlines()[-1] if err.getvalue().strip() else f"exit {exc.code}"
+            return None, err.getvalue().strip().splitlines()[-1] if err.getvalue().strip() else f"exit {exc.code}"
+    return None, None
+
+
+def _parse_studio(args: list[str]) -> str | None:
+    """``None`` when ``sparc studio <args>`` parses; else the parser's complaint."""
+    return _parse(_studio_parser(), args)[1]
+
+
+def _parse_core(args: list[str]) -> str | None:
+    """``None`` when ``sparc core <args>`` parses and its ``--project`` config exists; else the problem."""
+    if args[:1] == ["studio"]:
+        return _parse_studio(args[1:])
+    _ns, problem = _parse(_core_parser(), args)
+    if problem:
+        return problem
+    for i, a in enumerate(args):                 # the value as written (the parse saw free values as "0")
+        project = args[i + 1] if a in ("-p", "--project") and i + 1 < len(args) else (
+            a.split("=", 1)[1] if a.startswith("--project=") else None)
+        if project and not _free(project) and not (ROOT / project).exists():
+            return f"config not found: {project}"
+    return None
+
+
+def _check_python_code(code: str) -> str | None:
+    """``python -c CODE``: it compiles, and every name it imports from ``sparc`` exists."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as exc:
+        return f"python -c does not compile: {exc.msg}"
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and (node.module or "").split(".")[0] == "sparc":
+            try:
+                mod = importlib.import_module(node.module)
+            except ImportError as exc:
+                return f"python -c imports {node.module}: {exc}"
+            missing = [a.name for a in node.names if a.name != "*" and not hasattr(mod, a.name)]
+            if missing:
+                return f"python -c: {node.module} has no {', '.join(missing)}"
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name.split(".")[0] == "sparc" and importlib.util.find_spec(a.name) is None:
+                    return f"python -c: no module {a.name}"
     return None
 
 
@@ -226,29 +308,39 @@ def _path_exists(arg: str) -> bool:
     return (ROOT / arg.split("::", 1)[0]).exists()
 
 
+def _check_pytest(args: list[str]) -> str | None:
+    bad = [a for a in args if not a.startswith("-") and ("/" in a or a.endswith(".py"))
+           and not _free(a) and not _path_exists(a)]
+    return f"pytest path not found: {', '.join(bad)}" if bad else None
+
+
 def lint_command(cmd: list[str]) -> str | None:
     """A problem with one simple command, or ``None``."""
     head, args = cmd[0], cmd[1:]
     if head == "sparc" and args[:1] == ["studio"]:
         return _parse_studio(args[1:])
-    if head == "sparc" and args[:2] == ["core", "studio"]:
-        return _parse_studio(args[2:])
+    if head == "sparc" and args[:1] == ["core"]:
+        return _parse_core(args[1:])
+    if head == "pytest":
+        return _check_pytest(args)
     if head in ("python", "python3"):
+        if args[:1] == ["-c"] and len(args) > 1:
+            return _check_python_code(args[1])
         if args[:1] == ["-m"] and len(args) > 1:
             mod, rest = args[1], args[2:]
-            if mod in ("sparc.studio", "sparc.core") and (mod == "sparc.studio" or rest[:1] == ["studio"]):
-                return _parse_studio(rest if mod == "sparc.studio" else rest[1:])
+            if mod == "sparc.studio":
+                return _parse_studio(rest)
+            if mod == "sparc.core":
+                return _parse_core(rest)
             if mod == "pytest":
-                bad = [a for a in rest if not a.startswith("-") and ("/" in a or a.endswith(".py"))
-                       and "$" not in a and not _path_exists(a)]
-                return f"pytest path not found: {', '.join(bad)}" if bad else None
+                return _check_pytest(rest)
             if mod.startswith("sparc"):
                 with contextlib.suppress(ModuleNotFoundError, ValueError):
                     if importlib.util.find_spec(mod) is not None:
                         return None
                 return f"no module {mod}"
             return None
-        if args and not args[0].startswith("-") and args[0].endswith(".py") and "$" not in args[0]:
+        if args and not args[0].startswith("-") and args[0].endswith(".py") and not _free(args[0]):
             return None if _path_exists(args[0]) else f"script not found: {args[0]}"
         return None
     if head == "npm" and "run" in args:
