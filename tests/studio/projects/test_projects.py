@@ -404,6 +404,52 @@ def test_data_check_patch_and_errors(client, demo):
     assert r.status_code == 404
 
 
+def test_data_check_patch_is_a_merge_patch(client, demo):
+    """``null`` in ``config_patch`` deletes the saved key (RFC 7386), so a draft that removed a lever, its QA clip
+    and its role is checked as drafted; nested nulls under a new mapping are dropped too."""
+    from sparc.studio.projects.datacheck import deep_merge
+
+    assert deep_merge({"a": {"b": 1, "c": 2}, "l": [1]},
+                      {"a": {"b": None, "d": {"e": None, "f": 1}}, "l": [2], "z": None}) == \
+        {"a": {"c": 2, "d": {"f": 1}}, "l": [2]}
+    pid = demo["id"]
+    patch = {"actionable": {"albedo": None}, "qa": {"clip": {"albedo": None}}, "physics": {"roles": {"albedo": None}},
+             "data": {"crs": None}}
+    r = client.post(f"/api/projects/{pid}/data/check", json={"config_patch": patch})
+    assert r.status_code == 200, r.text
+    c = r.json()
+    assert set(c["dose_scale"]) == {"canopy", "impervious"}
+    g = client.get(f"/api/projects/{pid}/data/preview/{c['preview_token']}/grid.bin")
+    meta = json.loads(g.headers["x-sparc-grid"])
+    assert meta["crs"] is None and meta["has_lonlat"] is False
+
+
+def test_data_check_preview_has_the_planner_layers(client, demo):
+    """The People & land cover card maps the ``planner.layers`` columns from the check's preview: joined by id,
+    and summed (people) or averaged (fractions) per coarse cell as the planner reads them."""
+    pid, pdir = demo["id"], Path(demo["dir"])
+    lay = pd.read_parquet(pdir / "inputs" / "layers" / "demo_layers.parquet")
+    c = client.post(f"/api/projects/{pid}/data/check", json={}).json()
+    want = {"people", "people_60_plus", "people_under_5", "lc_tree", "lc_built"}
+    assert want <= set(c["preview_columns"]) and "x_m" not in c["preview_columns"]
+    tok, n = c["preview_token"], c["n_points"]
+    people = np.frombuffer(client.get(f"/api/projects/{pid}/data/preview/{tok}/people.bin").content, "<f4")
+    ids = np.frombuffer(client.get(f"/api/projects/{pid}/data/preview/{tok}/id.bin").content, "<f4").astype(int)
+    assert len(people) == n
+    np.testing.assert_allclose(people, lay.set_index("id").loc[ids, "people"].to_numpy(), rtol=1e-6)
+    c = client.post(f"/api/projects/{pid}/data/check", json={"config_patch": {"data": {"coarse_m": 90}}}).json()
+    assert c["n_points"] < n and "people" in c["preview_columns"]
+    tok = c["preview_token"]
+    people = np.frombuffer(client.get(f"/api/projects/{pid}/data/preview/{tok}/people.bin").content, "<f4")
+    tree = np.frombuffer(client.get(f"/api/projects/{pid}/data/preview/{tok}/lc_tree.bin").content, "<f4")
+    assert len(people) == c["n_points"]
+    assert people.sum() == pytest.approx(lay["people"].sum(), rel=1e-4)
+    assert 0 <= tree.min() and tree.max() <= 1
+    raw = client.get(f"/api/projects/{pid}/config").json()["raw"]
+    c = client.post(f"/api/projects/{pid}/data/check", json={"config_patch": {"planner": {"layers": None}}}).json()
+    assert "people" not in c["preview_columns"] and raw["planner"]["layers"]
+
+
 # ---------------------------------------------------------------------------
 # config
 # ---------------------------------------------------------------------------
@@ -561,6 +607,26 @@ def test_startup_scan_registers_folders(make_app, tmp_path):
     with TestClient(app2, headers=AUTH) as c:
         wait_for(lambda: c.get("/api/projects").json(), 10, what="the startup scan")
         assert [x["id"] for x in c.get("/api/projects").json()] == [p["id"]]
+
+
+def test_absolutize_paths_keeps_join_lists(tmp_path):
+    """``data.join.<i>.path`` is resolved inside the list: the joins and their other keys survive (config import,
+    the launch snapshot and the impact preview all go through ``absolutize_paths``)."""
+    from sparc.studio.projects.config_service import absolutize_paths, set_dotted
+
+    raw = {"data": {"path": "a.csv", "join": [{"path": "b.csv", "key": "id"},
+                                              {"path": "/abs/c.parquet", "key": "id", "right_key": "pid"}]}}
+    out = absolutize_paths(raw, tmp_path)
+    assert out["data"]["path"] == str((tmp_path / "a.csv").resolve())
+    assert out["data"]["join"] == [{"path": str((tmp_path / "b.csv").resolve()), "key": "id"},
+                                   {"path": "/abs/c.parquet", "key": "id", "right_key": "pid"}]
+    assert raw["data"]["join"][0]["path"] == "b.csv"
+    doc = {"l": [1, [2, 3]], "s": None}
+    set_dotted(doc, "l.1.0", 9)
+    set_dotted(doc, "s.t.u", 1)
+    assert doc == {"l": [1, [9, 3]], "s": {"t": {"u": 1}}}
+    with pytest.raises(IndexError):
+        set_dotted(doc, "l.5", 0)
 
 
 def test_impact_flags_core_for_a_full_studio_run(client, ctx, demo):

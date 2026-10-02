@@ -11,7 +11,9 @@ Each check stores a preview under a token (30 min, LRU): the packed grid
 (``ix, iy: int32, lon, lat: float32``, api.md §0.4) with its ``GridMeta`` and
 every numeric column as Float32 in row order (predictors as QA-clipped,
 coarse cells as their first member's value except predictors and the
-target, which are cell means).
+target, which are cell means), plus the ``planner.layers`` columns (people,
+land cover) aligned as the planner reads them.  ``config_patch`` is applied
+as a JSON Merge Patch (``null`` deletes a key).
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import secrets
 import threading
 import time
@@ -35,16 +38,26 @@ from sparc.studio.projects.config_service import build_core_config
 __all__ = ["data_check", "PreviewStore", "pack_arrays", "grid_meta", "deep_merge", "INLINE_MAX_ROWS",
            "PREVIEW_TTL_S", "points_lonlat"]
 
+log = logging.getLogger(__name__)
+
 INLINE_MAX_ROWS = 2_000_000
 PREVIEW_TTL_S = 30 * 60.0
 _ROW = "__sparc_row__"
 
 
 def deep_merge(base: dict, patch: dict | None) -> dict:
+    """``base`` with ``patch`` applied as a JSON Merge Patch (RFC 7386, api.md §5.2).
+
+    Mappings merge recursively, a ``None`` deletes its key (so a draft that
+    removed a lever, a ``qa.clip`` column or a role is checked as drafted),
+    and any other value (lists included) replaces.
+    """
     out = copy.deepcopy(base or {})
     for k, v in (patch or {}).items():
-        if isinstance(v, dict) and isinstance(out.get(k), dict):
-            out[k] = deep_merge(out[k], v)
+        if v is None:
+            out.pop(k, None)
+        elif isinstance(v, dict):
+            out[k] = deep_merge(out[k] if isinstance(out.get(k), dict) else {}, v)
         else:
             out[k] = copy.deepcopy(v)
     return out
@@ -167,6 +180,44 @@ def _bad(errors: list[dict], message: str) -> ApiError:
     return ApiError("validation", message, detail={"errors": errors})
 
 
+def _layer_columns(cfg, data, df: pd.DataFrame, ids_col: str | None, rows: np.ndarray) -> dict[str, np.ndarray]:
+    """The ``planner.layers`` columns (people*, lc_*) aligned with the checked points.
+
+    Aligned as the planner reads them (``sparc.core.opendata.load_layers``):
+    joined by id, or re-aggregated to the coarse cells (people summed,
+    fractions averaged).  Empty when the config has no readable layers table
+    or the table does not line up with the points.
+    """
+    path = (cfg.raw.get("planner") or {}).get("layers")
+    p = cfg.resolve_path(path) if isinstance(path, str) and path.strip() else None
+    if p is None or not Path(p).is_file():
+        return {}
+    try:
+        if (data.qa or {}).get("coarse"):
+            from sparc.core.opendata import load_layers
+
+            lay = load_layers(cfg, data)             # cells by geometry; ids are not used
+        else:
+            lay = pd.read_parquet(p)
+            if ids_col is None or "id" not in lay.columns:
+                return {}
+            ids = df[ids_col].to_numpy()[rows]
+            lay = lay.drop_duplicates("id").set_index("id").reindex(ids).reset_index(drop=True)
+    except (OSError, ValueError, KeyError, TypeError, ImportError) as exc:
+        log.debug("planner layers %s left out of the preview: %s", p, exc)
+        return {}
+    if lay is None or len(lay) != len(rows):
+        return {}
+    out = {}
+    for c in lay.columns:
+        if c in ("id", "x_m", "y_m") or not pd.api.types.is_numeric_dtype(lay[c]) or pd.api.types.is_bool_dtype(lay[c]):
+            continue
+        v = lay[c].to_numpy(float)
+        if np.isfinite(v).any():
+            out[str(c)] = np.asarray(v, dtype=np.float32)
+    return out
+
+
 def data_check(raw: dict, project_dir: str | Path, patch: dict | None = None) -> tuple[dict, dict]:
     """S0 on the project's data: ``(response, preview payload)`` (see the module docstring)."""
     from threadpoolctl import threadpool_limits
@@ -267,6 +318,9 @@ def data_check(raw: dict, project_dir: str | Path, patch: dict | None = None) ->
         else:
             v = pd.to_numeric(df[c], errors="coerce").to_numpy(float)[rows]
         columns[str(c)] = np.asarray(v, dtype=np.float32)
+    with threadpool_limits(1):
+        for c, v in _layer_columns(cfg, data, df, ids_col, rows).items():
+            columns.setdefault(c, v)                 # a data column of the same name wins
     dose = {}
     for var, s in (qa.get("dose_scale") or {}).items():
         dose[var] = {"sd": s.get("sd"), "doses": s.get("doses") or [], "doses_in_sd": s.get("doses_in_sd") or [],

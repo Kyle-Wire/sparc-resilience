@@ -242,6 +242,19 @@ def test_imported_run_ids_follow_the_documented_shape(ctx, watch_root):
     assert not (rd / "studio").exists()
 
 
+def test_imported_run_without_run_state_starts_before_its_manifest(ctx, watch_root):
+    """Core writes the manifest when a run ends: an imported run with no run_state.json started that time less its
+    stage timings (the id keeps the manifest time, as documented)."""
+    rd = watch_root / "city_old"
+    rd.mkdir()
+    (rd / "manifest.json").write_text(json.dumps({"name": "city_old", "created_utc": "2026-09-30T17:34:37+00:00",
+                                                  "timings_s": {"S0": 60.0, "S1": 29.6, "S6": None}}))
+    row = ctx.services["registry"].index_run_dir(rd, origin="imported")
+    assert row["id"].startswith("20260930-173437-")
+    assert row["finished_utc"] == "2026-09-30T17:34:37Z" and row["created_utc"] == "2026-09-30T17:33:07Z"
+    assert json.loads(row["stages_json"])["duration_s"] == pytest.approx(89.6)
+
+
 def test_run_core_kind_hooks(ctx, demo, place_run):
     from sparc.studio.jobs.kinds import KINDS
     from sparc.studio.runs import kinds as K

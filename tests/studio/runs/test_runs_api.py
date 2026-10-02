@@ -317,6 +317,19 @@ def test_status_board_and_timeline(client, demo, fixture_run):
     assert secs["S2_S3"] > 0 and all(s["state"] in ("done", "cached", "skipped", "failed") for s in tl["stages"])
 
 
+def test_waiting_post_jobs_are_running_cells_with_a_reason():
+    """A post-run job queued behind its run (a launch's "then" chain) shows as a running cell whose reason is
+    "queued" (BoardCell has no queued state); a started job has no reason."""
+    from sparc.studio.runs.statusboard import _job_cell
+
+    base = {"state": "not_run", "seconds": None, "progress": None, "reason": None, "job_id": None,
+            "study_id": None, "action": None}
+    for st, reason in (("queued", "queued"), ("blocked", "blocked"), ("running", None), ("cancelling", None)):
+        c = _job_cell({"id": "j1", "status": st, "progress": 0.25 if st == "running" else None}, base)
+        assert (c["state"], c["reason"], c["job_id"]) == ("running", reason, "j1")
+    assert _job_cell({"id": "j2", "status": "succeeded"}, base)["state"] == "done"
+
+
 def test_manifest_config_provenance_environment(client, demo, fixture_run, synth):
     rid, _ = fixture_run
     m = client.get(f"/api/runs/{rid}/manifest").json()

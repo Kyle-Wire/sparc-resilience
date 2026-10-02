@@ -133,16 +133,30 @@ def get_dotted(raw: dict, path: str, default: Any = None) -> Any:
 
 
 def set_dotted(raw: dict, path: str, value: Any) -> dict:
-    """Set ``a.b.c`` in place (intermediate mappings are created; a None section becomes a mapping)."""
+    """Set ``a.b.c`` in place (intermediate mappings are created; a None section becomes a mapping).
+
+    A digit part steps into an existing list (``data.join.0.path``) rather than
+    replacing the list with a mapping; an index past the end raises ``IndexError``.
+    """
     parts = path.split(".")
-    cur = raw
-    for part in parts[:-1]:
-        nxt = cur.get(part)
-        if not isinstance(nxt, dict):
+    cur: Any = raw
+    for i, part in enumerate(parts[:-1]):
+        keep_list = parts[i + 1].isdigit()
+        if isinstance(cur, list):
+            nxt = cur[int(part)]
+        else:
+            nxt = cur.get(part)
+        if not (isinstance(nxt, dict) or (keep_list and isinstance(nxt, list))):
             nxt = {}
-            cur[part] = nxt
+            if isinstance(cur, list):
+                cur[int(part)] = nxt
+            else:
+                cur[part] = nxt
         cur = nxt
-    cur[parts[-1]] = value
+    if isinstance(cur, list):
+        cur[int(parts[-1])] = value
+    else:
+        cur[parts[-1]] = value
     return raw
 
 

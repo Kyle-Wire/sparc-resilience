@@ -105,8 +105,15 @@ export function GridCanvas(props: GridCanvasProps) {
     return () => ro.disconnect();
   }, []);
 
+  // Fit once, and again when the box or grid changes while the view is still the automatic fit
+  // (a card whose layout settles after mount); a panned or zoomed view is kept.
+  const fitKey = useRef("");
   useEffect(() => {
-    if (view.needsFit) view.fit(grid.nx, grid.ny, size.w, size.h);
+    const key = `${grid.nx}x${grid.ny}@${size.w}x${size.h}`;
+    if (view.needsFit || (view.auto && fitKey.current !== key)) {
+      fitKey.current = key;
+      view.fit(grid.nx, grid.ny, size.w, size.h);
+    }
   }, [view, grid.nx, grid.ny, size.w, size.h]);
 
   // ---------------------------------------------------------------- recolour
@@ -247,6 +254,7 @@ export function GridCanvas(props: GridCanvasProps) {
   useEffect(
     () => () => {
       if (frame.current && typeof cancelAnimationFrame === "function") cancelAnimationFrame(frame.current);
+      frame.current = 0; // a StrictMode remount must be able to schedule again
     },
     [],
   );
@@ -296,7 +304,8 @@ export function GridCanvas(props: GridCanvasProps) {
 
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
     if (passive || e.button !== 0) return;
-    wrap.current?.focus();
+    // no scroll: a map partly below the fold must not move under the pointer between down and up
+    wrap.current?.focus({ preventScroll: true });
     const pan = !tool || tool.pans || space.current;
     drag.current = { x: e.clientX, y: e.clientY, moved: false, pan };
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);

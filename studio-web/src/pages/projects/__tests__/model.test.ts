@@ -11,7 +11,7 @@ import { configuredScenarioNames, ladderNames, pyG, scenarioSlug, scenarioSlugs 
 import { checklistRows, parseSelection, requestStages, toggleStage } from "../model/stages";
 import { stepDot, stepIssues } from "../model/steps";
 import { applySuggestion } from "../model/suggest";
-import { checkPatch } from "../setup/actions";
+import { checkPatch, previewGroups } from "../setup/actions";
 import { locatePath, yamlPathIndex } from "../model/yamlPaths";
 import { CHECK, DEMO_YAML, demoRaw, ISSUES, PREFLIGHT_ERROR, planNodes, projectDetail, runPlan, SUGGESTION } from "../__fixtures__/api";
 
@@ -165,15 +165,58 @@ describe("suggestions", () => {
 });
 
 describe("data check patch", () => {
-  it("sends the draft, with data keys the draft removed set back to their defaults", () => {
+  it("sends the draft, with null for every key the draft removed (a merge patch)", () => {
     const saved = { data: { path: "data/city.csv", target: "T", zone: "district", crs: "EPSG:32619", coarse_m: 60, x: "X" }, predictors: ["a"] };
     const draft = { data: { path: "data/city.csv", target: "T" }, predictors: ["a", "b"] };
     const patch = checkPatch(saved, draft);
-    // the server deep-merges onto the saved config: removed keys must be sent explicitly
-    expect(patch.data).toEqual({ path: "data/city.csv", target: "T", zone: null, crs: null, coarse_m: null, x: "x" });
+    // the server applies the patch to the saved config as a JSON Merge Patch: null deletes the saved key
+    expect(patch.data).toEqual({ path: "data/city.csv", target: "T", zone: null, crs: null, coarse_m: null, x: null });
     expect(patch.predictors).toEqual(["a", "b"]);
     // nothing removed: the draft itself
     expect(checkPatch(saved, saved)).toBe(saved);
+  });
+  it("deletes removed levers, clips and roles at any depth and leaves the draft untouched", () => {
+    const saved = {
+      actionable: { canopy: { min: 0, max: 100 }, albedo: { min: 0.02, max: 0.9 } },
+      qa: { clip: { canopy: [0, 100], albedo: [0.02, 0.9] } },
+      physics: { roles: { canopy: "canopy", albedo: "albedo" }, tau_s: 1800 },
+      planner: { layers: "inputs/layers/l.parquet" },
+      climate: null,
+    };
+    const draft = {
+      actionable: { canopy: { min: 0, max: 50 } },
+      qa: { clip: { canopy: [0, 100] } },
+      physics: { roles: { canopy: "canopy" } },
+      planner: "inputs/layers/l.parquet",
+    };
+    const patch = checkPatch(saved, draft);
+    expect(patch).toEqual({
+      actionable: { canopy: { min: 0, max: 50 }, albedo: null },
+      qa: { clip: { canopy: [0, 100], albedo: null } },
+      physics: { roles: { canopy: "canopy", albedo: null }, tau_s: null },
+      planner: "inputs/layers/l.parquet",
+    });
+    expect(draft.actionable).toEqual({ canopy: { min: 0, max: 50 } });
+    expect(draft.physics).toEqual({ roles: { canopy: "canopy" } });
+  });
+});
+
+describe("data check preview layers", () => {
+  it("groups the planner.layers columns of the preview apart from the data's", () => {
+    const check = { ...CHECK, preview_columns: ["T", "canopy", "impervious", "lc_tree", "people", "x"] };
+    const raw = { data: { path: "data/city.csv", target: "T" }, predictors: ["canopy", "impervious"], planner: { layers: "inputs/layers/l.parquet" } };
+    const groups = previewGroups(check, raw, null);
+    expect(groups.map((g) => [g.id, g.layers.map((l) => l.key)])).toEqual([
+      ["target", ["T"]],
+      ["predictors", ["canopy", "impervious"]],
+      ["layers", ["people", "lc_tree"]],
+      ["other", ["x"]],
+    ]);
+    expect(groups[2].layers[0].source).toEqual({ file: "inputs/layers/l.parquet", column: "people" });
+    expect(groups[2].layers[1].unit).toBe("share");
+    // without planner.layers they are ordinary data columns
+    const plain = previewGroups(check, { ...raw, planner: {} }, null);
+    expect(plain.map((g) => g.id)).toEqual(["target", "predictors", "other"]);
   });
 });
 

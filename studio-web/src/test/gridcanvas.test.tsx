@@ -172,6 +172,46 @@ describe("GridCanvas", () => {
     expect((15 - s.ty) / s.scale).toBeCloseTo(1.5, 9);
   });
 
+  it("refits on a resize until the view is panned or zoomed", async () => {
+    const g = grid3();
+    let box = { width: 300, height: 300 };
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      () => ({ x: 0, y: 0, left: 0, top: 0, right: box.width, bottom: box.height, width: box.width, height: box.height, toJSON() {} }) as DOMRect,
+    );
+    const observers: (() => void)[] = [];
+    class RO {
+      constructor(cb: () => void) {
+        observers.push(cb);
+      }
+      observe() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", RO);
+    try {
+      let view: ReturnType<typeof useMapView> | null = null;
+      function Host() {
+        const v = useMapView();
+        view = v;
+        return <GridCanvas grid={g} view={v} dark={false} values={null} domain={null} label="3x3" />;
+      }
+      render(<Host />);
+      await flush();
+      expect(view!.state.scale).toBeCloseTo((300 - 16) / 3, 9);
+      box = { width: 150, height: 300 }; // a side panel took part of the card
+      act(() => observers.forEach((f) => f()));
+      await flush();
+      expect(view!.state.scale).toBeCloseTo((150 - 16) / 3, 9);
+      act(() => view!.panBy(5, 0));
+      box = { width: 600, height: 600 };
+      act(() => observers.forEach((f) => f()));
+      await flush();
+      expect(view!.state.scale).toBeCloseTo((150 - 16) / 3, 9); // the user's view is kept
+    } finally {
+      rect.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("a cancelled pointer ends the pan instead of panning on later moves", async () => {
     const g = grid3();
     let view: ReturnType<typeof useMapView> | null = null;

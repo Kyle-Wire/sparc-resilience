@@ -10,23 +10,34 @@ import { getList, getRecord, getString } from "../model/dotted";
 import { applySuggestion } from "../model/suggest";
 import { rawKey, useDrafts } from "./store";
 
-/** core DEFAULTS of the `data` keys whose default is not null (sparc.core.config.DEFAULTS). */
-const DATA_DEFAULTS: Record<string, unknown> = { x: "x", y: "y", coord_unit: "m", target_units: "degF", background: "median", join: [] };
+const isRec = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+/** `after` plus `null` for every key `before` holds that `after` dropped, at any depth; null when nothing was dropped. */
+function withRemovals(before: Record<string, unknown>, after: Record<string, unknown>): Record<string, unknown> | null {
+  let out: Record<string, unknown> | null = null;
+  for (const k of Object.keys(before)) {
+    const b = before[k];
+    const a = after[k];
+    if (b === undefined || b === null) continue;
+    let v: unknown;
+    if (a === undefined) v = null;
+    else if (isRec(a) && isRec(b)) v = withRemovals(b, a) ?? undefined;
+    if (v === undefined) continue;
+    out ??= { ...after };
+    out[k] = v;
+  }
+  return out;
+}
 
 /**
- * The `config_patch` of a data check: the draft, plus every `data.*` key the draft removed
- * set back to its DEFAULTS value. The server deep-merges the patch onto the saved config,
- * so a key cleared in the form (zone, crs, id, subsample, coarse_m, cell_m…) would
- * otherwise still apply from the saved copy and the check would not describe the draft.
+ * The `config_patch` of a data check: the draft, plus `null` for every key the draft removed
+ * from the saved config, at any depth. The server applies the patch to the saved config as a
+ * JSON Merge Patch (api.md §5.2: `null` deletes a key), so a removed lever, `qa.clip.<col>`,
+ * `physics.roles.<role>` or cleared data key (zone, crs, id, subsample, coarse_m, cell_m…)
+ * does not still apply from the saved copy, and the check describes the draft.
  */
 export function checkPatch(saved: ConfigRaw, raw: ConfigRaw): ConfigRaw {
-  const before = getRecord<unknown>(saved, "data");
-  const after = getRecord<unknown>(raw, "data");
-  const cleared = Object.keys(before).filter((k) => before[k] !== undefined && before[k] !== null && after[k] === undefined);
-  if (!cleared.length) return raw;
-  const data: Record<string, unknown> = { ...after };
-  for (const k of cleared) data[k] = k in DATA_DEFAULTS ? DATA_DEFAULTS[k] : null;
-  return { ...raw, data };
+  return withRemovals(saved, raw) ?? raw;
 }
 
 /** Run S0 on the draft (unsaved form values are sent as `config_patch`). */
@@ -93,9 +104,10 @@ export function previewLoader(pid: string, token: string): (meta: LayerMeta) => 
 }
 
 /**
- * Layer catalogue of a data check preview: the target first, then predictors, then any other
- * preview column. Stats come from the header inspect when present (percentiles are left
- * null so the map derives its range from the values).
+ * Layer catalogue of a data check preview: the target first, then predictors, then the
+ * `planner.layers` columns the server joins in (people*, lc_*; data columns of the same name
+ * win), then any other preview column. Stats come from the header inspect when present
+ * (percentiles are left null so the map derives its range from the values).
  */
 export function previewGroups(check: DataCheck, raw: unknown, inspect: FileInspect | null | undefined): LayerGroup[] {
   const target = getString(raw, "data.target");
@@ -104,9 +116,31 @@ export function previewGroups(check: DataCheck, raw: unknown, inspect: FileInspe
   const levers = getRecord<{ unit?: string }>(raw, "actionable");
   const cols = check.preview_columns ?? [...(target ? [target] : []), ...predictors];
   const byName = new Map((inspect?.columns ?? []).map((c) => [c.name, c]));
+  const layersPath = getString(raw, "planner.layers");
+  const isLayer = (c: string) => !!layersPath && /^(people|lc_)/.test(c) && !byName.has(c) && c !== target && !predictors.includes(c);
   const meta = (name: string): LayerMeta => {
     const ic = byName.get(name);
     const isTarget = name === target;
+    if (isLayer(name)) {
+      const people = name.startsWith("people");
+      return {
+        key: name,
+        group: "layers",
+        label: name,
+        unit: people ? "people" : "share",
+        scale: "seq",
+        center: null,
+        decimals: people ? 1 : 2,
+        mult: 1,
+        zero_blank: false,
+        labels: null,
+        desc: people ? "Residents per cell from planner.layers (HRSL), joined by id" : "Land-cover share of the cell from planner.layers (WorldCover), joined by id",
+        sign_note: null,
+        source: { file: layersPath ?? "", column: name },
+        dtype: "float32",
+        stats: { n: check.n_points, lo: null, hi: null, mean: null, p1: null, p2: null, p50: null, p98: null, p99: null },
+      };
+    }
     return {
       key: name,
       group: isTarget ? "target" : "predictors",
@@ -127,10 +161,13 @@ export function previewGroups(check: DataCheck, raw: unknown, inspect: FileInspe
   };
   const tgt = cols.filter((c) => c === target);
   const preds = cols.filter((c) => c !== target && predictors.includes(c));
-  const other = cols.filter((c) => c !== target && !predictors.includes(c));
+  const rank = (c: string) => (c.startsWith("people") ? 0 : 1);
+  const lay = cols.filter(isLayer).sort((a, b) => rank(a) - rank(b)); // residents first, then land cover
+  const other = cols.filter((c) => c !== target && !predictors.includes(c) && !isLayer(c));
   const groups: LayerGroup[] = [];
   if (tgt.length) groups.push({ id: "target", label: "Temperature", layers: tgt.map(meta) });
   if (preds.length) groups.push({ id: "predictors", label: "Predictors", layers: preds.map(meta) });
+  if (lay.length) groups.push({ id: "layers", label: "People & land cover", layers: lay.map(meta) });
   if (other.length) groups.push({ id: "other", label: "Other columns", layers: other.map(meta) });
   return groups;
 }

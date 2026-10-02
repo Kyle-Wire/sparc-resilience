@@ -189,6 +189,8 @@ describe("routing to run views", () => {
   it("formats board cells and their links", () => {
     expect(boardCellChip({ state: "done", seconds: 4520, progress: null, reason: null, job_id: null, study_id: null, action: null })).toEqual({ status: "done", text: "done", meta: "1 h 15 m" });
     expect(boardCellChip(undefined).text).toBe("not run");
+    expect(boardCellChip({ state: "running", seconds: null, progress: null, reason: "queued", job_id: "j1", study_id: null, action: null })).toEqual({ status: "queued", text: "queued", meta: null });
+    expect(boardCellChip({ state: "running", seconds: null, progress: 0.42, reason: null, job_id: "j1", study_id: null, action: null })).toEqual({ status: "running", text: "running", meta: "42%" });
     expect(boardCellHref("r1", "S4", "stage", { state: "done", seconds: 1, progress: null, reason: null, job_id: null, study_id: null, action: null })).toBe("/r/r1/response");
     expect(boardCellHref("r1", "planner", "post", { state: "done", seconds: 1, progress: null, reason: null, job_id: "j1", study_id: null, action: null })).toBe("/r/r1/planner");
     expect(boardCellHref("r1", "planner", "post", { state: "not_run", seconds: null, progress: null, reason: null, job_id: null, study_id: null, action: null })).toBeNull();

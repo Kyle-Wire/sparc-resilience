@@ -802,6 +802,8 @@ export function boardCellChip(cell: StatusCell | undefined): { status: string; t
     case "done":
       return { status: "done", text: "done", meta: cell.seconds !== null ? secondsText(cell.seconds) : null };
     case "running":
+      // a job still waiting (a launch's "then" chain, the queue) is a running cell with reason queued/blocked
+      if (cell.reason === "queued" || cell.reason === "blocked") return { status: cell.reason, text: cell.reason, meta: null };
       return { status: "running", text: "running", meta: cell.progress !== null ? `${Math.round(cell.progress * 100)}%` : null };
     case "skipped":
       return { status: "skipped", text: "skipped", meta: cell.reason ? reasonText(cell.reason) : null };

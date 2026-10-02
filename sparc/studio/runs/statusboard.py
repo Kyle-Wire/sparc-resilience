@@ -182,7 +182,10 @@ def _job_seconds(j: dict) -> float | None:
 def _job_cell(j: dict, base: dict) -> dict:
     st = j["status"]
     if st in ("queued", "blocked", "starting", "running", "cancelling"):
-        return {**base, "state": "running", "progress": fnum(j.get("progress")), "job_id": j["id"]}
+        # BoardCell has no queued state: a job still waiting (e.g. in a launch's "then" chain) is a running cell
+        # whose reason says so
+        return {**base, "state": "running", "progress": fnum(j.get("progress")), "job_id": j["id"],
+                "reason": st if st in ("queued", "blocked") else None}
     if st in ("failed", "interrupted", "cancelled"):
         return {**base, "state": "failed", "reason": st, "job_id": j["id"]}
     return {**base, "state": "done", "seconds": _job_seconds(j), "job_id": j["id"]}
@@ -259,7 +262,7 @@ def board_row(ctx, db, rows: list[dict], *, resumable: bool) -> dict[str, dict]:
             st = str(s.get("status") or "")
             state = ("running" if st in ("queued", "running", "starting") else
                      "failed" if st in ("failed", "interrupted", "cancelled") else "done")
-            c = cell(state=state, study_id=s["id"], job_id=s.get("job_id"))
+            c = cell(state=state, study_id=s["id"], job_id=s.get("job_id"), reason="queued" if st == "queued" else None)
             if state == "done" and fp and s.get("run_fingerprint") and s["run_fingerprint"] != fp:
                 c.update(state="stale", reason="the run was refitted after this study")
             cells[k] = c

@@ -7,7 +7,7 @@
 // - the climate stage rides on S5; baselines and the CV curve hang off S2–S3.
 // The plan request sends only the explicit choices, so the server marks implied stages
 // `will_run` with `reason: required_by:<stage>` (the plan graph shows "required by S6").
-import type { RequestStage } from "../../../api/projects";
+import type { LaunchArgs, RequestStage } from "../../../api/projects";
 
 export type ChecklistId = "S0" | "S1" | "S2_S3" | "S4" | "S5" | "S6" | "S7";
 
@@ -109,4 +109,23 @@ export function parseSelection(list: readonly string[]): ChecklistId[] {
 export function isFullSelection(selection: Iterable<ChecklistId>): boolean {
   const chosen = new Set(selection);
   return ORDER.every((s) => chosen.has(s));
+}
+
+/**
+ * Launch's query parameters (`mode`, `coarse`, `stages`, `cv`) for an earlier run's launch
+ * snapshot, so `?from=<run_id>` (the "Re-run with …" remedy of a stage a finished run did not
+ * compute) opens Launch with that run's choices. A full selection and the configured CV curve
+ * are the defaults and give null (absent) values.
+ */
+export function launchQueryFrom(args: LaunchArgs): { mode: "fast" | "coarse" | "full"; coarse: string | null; stages: string | null; cv: "on" | "off" | null } {
+  const coarse = typeof args.coarse === "number" && args.coarse > 0 ? args.coarse : null;
+  const mode = coarse !== null ? "coarse" : args.fast ? "fast" : "full";
+  const asked = new Set((args.stages ?? []).map((x) => (x === "S2" || x === "S3" ? "S2_S3" : x)));
+  const chosen = ORDER.filter((s) => asked.has(s));
+  return {
+    mode,
+    coarse: coarse !== null ? String(coarse) : null,
+    stages: chosen.length && chosen.length < ORDER.length ? chosen.join(",") : null,
+    cv: args.cv_curve === true ? "on" : args.cv_curve === false ? "off" : null,
+  };
 }

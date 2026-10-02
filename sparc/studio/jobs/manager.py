@@ -714,6 +714,8 @@ class JobManager:
             return "cancelled", None, None
         if code == 130:
             return "cancelled", None, None
+        if code in (-15, 143) and self._cancel_was_requested(row):
+            return "cancelled", None, None       # SIGTERM landed before the worker installed its handlers
         if code == 0:
             return "succeeded", None, (state or {}).get("result")
         if code is None:
@@ -795,6 +797,10 @@ class JobManager:
         if executor is not None:
             await executor.cancel(row)
         return self.get(job_id)
+
+    def _cancel_was_requested(self, row: dict) -> bool:
+        return row.get("status") == "cancelling" or (bool(row.get("job_dir")) and
+                                                     self.cancel_requested_at(row) is not None)
 
     def cancel_requested_at(self, row: dict) -> float | None:
         try:

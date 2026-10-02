@@ -3,16 +3,20 @@
 // checklist with core's dependency rules; the CV-curve toggle, threads and a "then run"
 // chain; the PlanGraph of the chosen mode; the preflight list with one-click actions; and
 // Start, which launches the run and opens Mission Control. Start stays disabled while a
-// preflight check fails with severity "error" or the config has errors.
-import { useMemo, useState } from "react";
+// preflight check fails with severity "error" or the config has errors. `?from=<run_id>`
+// prefills mode, stages, CV curve and threads from that run's launch snapshot (the remedy
+// links of stages a finished run did not compute); explicit query parameters win.
+import { useEffect, useMemo, useState } from "react";
 import { ApiError, errorMessage } from "../../api/client";
 import {
   blockingPreflight,
+  getRunLaunch,
   launchRun,
   planRun,
   THEN_ACTIONS,
   useMetaInfo,
   useStudioSettings,
+  type RunLaunchSource,
   type RunMode,
   type RunPlan,
   type RunPlanBody,
@@ -28,12 +32,12 @@ import { Icon } from "../../components/ui/Icon";
 import { NumberField } from "../../components/ui/NumberField";
 import { Seg } from "../../components/ui/Seg";
 import { useProject } from "../../layouts/resources";
-import { codecs, Link, navigate, useRoute, useUrlState } from "../../router";
+import { codecs, Link, navigate, setQuery, useRoute, useUrlState } from "../../router";
 import { useJobs } from "../../stores/jobs";
 import { toast } from "../../stores/ui";
 import { fmtBytes, fmtDuration, fmtDurationRange, fmtNum } from "../../theme/format";
 import { PlanGraph } from "./components/PlanGraph";
-import { ALL_CHOICES, checklistRows, parseSelection, requestStages, toggleStage, type ChecklistId } from "./model/stages";
+import { ALL_CHOICES, checklistRows, launchQueryFrom, parseSelection, requestStages, toggleStage, type ChecklistId } from "./model/stages";
 import "./projects.css";
 
 const MODES: readonly RunMode[] = ["fast", "coarse", "full"];
@@ -146,8 +150,33 @@ function Preflight({ plan, onAction }: { plan: RunPlan; onAction: () => void }) 
   );
 }
 
+/**
+ * `?from=<run_id>`: once that run's detail loads, fill the query parameters the URL does not
+ * already set and the thread count from its launch snapshot, then drop `from` (the URL state
+ * carries the choices from there). Returns the source run for the "prefilled from" note.
+ */
+function usePrefillFrom(query: URLSearchParams, setThreads: (n: number | null) => void) {
+  const from = query.get("from");
+  const source = useResource<RunLaunchSource>(from ? `launch-from:${from}` : null, (s) => getRunLaunch(from!, s));
+  const [applied, setApplied] = useState<{ rid: string; label: string; snapshot: boolean } | null>(null);
+  useEffect(() => {
+    const d = source.data;
+    if (!from || !d || d.run.id !== from) return;
+    const args = d.launch?.args ?? null;
+    if (args) {
+      const q = launchQueryFrom(args);
+      const patch: Record<string, string | null> = { from: null };
+      for (const [k, v] of Object.entries(q)) if (!query.has(k) && v !== null && !(k === "mode" && v === "fast")) patch[k] = v;
+      if (typeof args.threads === "number" && args.threads > 0) setThreads(args.threads);
+      setQuery(patch);
+    } else setQuery({ from: null });
+    setApplied({ rid: d.run.id, label: d.run.label || d.run.id, snapshot: !!args });
+  }, [from, source.data]); // the query and setter are read at apply time only
+  return { applied, loading: !!from && source.loading, error: from ? source.error : null, from };
+}
+
 export default function Launch() {
-  const { params } = useRoute();
+  const { params, query } = useRoute();
   const pid = params.pid ?? "";
   const project = useProject(pid || null);
   const meta = useMetaInfo();
@@ -160,6 +189,7 @@ export default function Launch() {
   const selection = stagesQ.length ? parseSelection(stagesQ) : [...ALL_CHOICES];
   const [cv, setCv] = useUrlState("cv", codecs.enum<CvChoice>(["config", "on", "off"], "config"));
   const [threads, setThreads] = useState<number | null>(null);
+  const prefill = usePrefillFrom(query, setThreads);
   const [then, setThen] = useState<ThenAction[]>([]);
   const [label, setLabel] = useState("");
   const [notes, setNotes] = useState("");
@@ -220,6 +250,28 @@ export default function Launch() {
           </Link>
         </div>
       </header>
+
+      {prefill.applied ? (
+        <div className="callout" data-tone="info" role="status" data-prefill={prefill.applied.rid}>
+          {prefill.applied.snapshot ? (
+            <>
+              Prefilled from run <Link to={`/r/${encodeURIComponent(prefill.applied.rid)}`}>{prefill.applied.label}</Link>: its mode, stages, CV curve and threads. Enable what it skipped, then start a new run.
+            </>
+          ) : (
+            <>
+              Run <Link to={`/r/${encodeURIComponent(prefill.applied.rid)}`}>{prefill.applied.label}</Link> has no launch snapshot to prefill from; the choices below are the defaults.
+            </>
+          )}
+        </div>
+      ) : prefill.error ? (
+        <div className="callout" data-tone="warn" role="alert">
+          Could not read run {prefill.from} to prefill from: {errorMessage(prefill.error)}
+        </div>
+      ) : prefill.loading ? (
+        <p className="cap" role="status">
+          <span className="spinner" aria-hidden="true" /> Reading run {prefill.from}…
+        </p>
+      ) : null}
 
       <section className="mode-cards" aria-label="Run mode">
         {MODES.map((m) => (

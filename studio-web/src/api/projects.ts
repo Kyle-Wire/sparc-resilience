@@ -368,6 +368,16 @@ export function launchRun(pid: string, body: LaunchBody): Promise<LaunchResult> 
   return api.post<LaunchResult>(`${base(pid)}/runs`, body);
 }
 
+/** The `args` of a run's launch snapshot (`launch.json`, SPEC §4.3), as `GET /api/runs/{rid}` returns them. */
+export type LaunchArgs = { stages?: string[] | null; fast?: boolean | null; coarse?: number | null; cv_curve?: boolean | null; threads?: number | null };
+
+/** The slice of `GET /api/runs/{rid}` (RunDetail) Launch reads for `?from=<run_id>`. */
+export type RunLaunchSource = { run: RunSummary; launch: { project_id?: string | null; args?: LaunchArgs | null } | null };
+
+export function getRunLaunch(rid: string, signal?: AbortSignal): Promise<RunLaunchSource> {
+  return api.get<RunLaunchSource>(`/api/runs/${enc(rid)}`, undefined, signal);
+}
+
 /** A preflight blocks Start when it failed with severity "error". */
 export function blockingPreflight(plan: Pick<RunPlan, "preflight"> | null | undefined): PreflightCheck[] {
   return (plan?.preflight ?? []).filter((p) => !p.ok && p.severity === "error");

@@ -94,6 +94,37 @@ describe("launch", () => {
     m.restore();
   });
 
+  it("?from=<run_id> prefills from that run's launch snapshot (the Re-run with … remedy), explicit parameters win", async () => {
+    const calls: PlanCall[] = [];
+    const rid = "20261001-120000-coarse-ab12";
+    const detail = {
+      run: runSummary({ id: rid, label: "first coarse", mode: "coarse", coarse_m: 120, status: "complete" }),
+      launch: { project_id: PID, args: { stages: ["S0", "S1", "S2", "S3", "S4", "S5"], fast: false, coarse: 120, cv_curve: false, threads: 3 } },
+    };
+    const m = mockFetch(launchRoutes(() => runPlan(), calls, { [`GET /api/runs/${rid}`]: { body: detail } }));
+    const { container } = renderAt(`/p/${PID}/launch?from=${rid}`, <Launch />);
+    await waitFor(() => container.querySelector(`[data-prefill="${rid}"]`), 5000, "prefill note");
+    await waitFor(() => calls.some((c) => c.mode === "coarse" && c.coarse_m === 120 && c.threads === 3), 5000, "prefilled plan");
+    expect(calls.find((c) => c.mode === "coarse" && c.coarse_m === 120)).toMatchObject({ stages: ["S0", "S1", "S2", "S3", "S4", "S5"], cv_curve: false, threads: 3 });
+    expect(container.querySelector('[data-mode="coarse"] .mode-pick')!.getAttribute("aria-pressed")).toBe("true");
+    expect(container.querySelector<HTMLInputElement>('[data-stage="S6"] input')!.checked).toBe(false);
+    expect(container.querySelector(`[data-prefill="${rid}"]`)!.textContent).toContain("first coarse");
+    const q = new URLSearchParams(window.location.search);
+    expect(q.get("from")).toBeNull();
+    expect(q.get("stages")).toBe("S0,S1,S2_S3,S4,S5");
+    expect(q.get("cv")).toBe("off");
+    m.restore();
+    resetAll();
+    // a parameter in the URL is kept over the run's
+    const m2 = mockFetch(launchRoutes(() => runPlan(), [], { [`GET /api/runs/${rid}`]: { body: detail } }));
+    const r2 = renderAt(`/p/${PID}/launch?from=${rid}&mode=full`, <Launch />);
+    await waitFor(() => r2.container.querySelector(`[data-prefill="${rid}"]`), 5000, "prefill note");
+    await flush(3);
+    expect(r2.container.querySelector('[data-mode="full"] .mode-pick')!.getAttribute("aria-pressed")).toBe("true");
+    expect(new URLSearchParams(window.location.search).get("cv")).toBe("off");
+    m2.restore();
+  });
+
   it("Start is disabled while preflight has an error, with the action offered", async () => {
     const m = mockFetch(launchRoutes(() => runPlan({ preflight: [...runPlan().preflight, PREFLIGHT_ERROR] }), []));
     const { container } = renderAt(`/p/${PID}/launch`, <Launch />);

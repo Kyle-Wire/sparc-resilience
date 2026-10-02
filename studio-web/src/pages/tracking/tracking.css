@@ -69,7 +69,7 @@
 
 /* project overview */
 .spine { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
-.spine li { display: grid; grid-template-columns: minmax(140px, 190px) minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.spine li { display: grid; grid-template-columns: minmax(140px, 240px) minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--line); }
 .spine li:last-child { border-bottom: 0; }
 @media (max-width: 860px) { .spine li { grid-template-columns: minmax(0, 1fr); gap: 4px; } }
 .board-wrap { overflow-x: auto; max-width: 100%; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }

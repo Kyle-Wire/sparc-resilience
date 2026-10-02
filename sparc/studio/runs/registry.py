@@ -379,8 +379,13 @@ class Registry:
         status, origin = self._status(row, state, manifest, active, last, done, rec, launch)
         prov = (manifest or {}).get("provenance") or {}
         st = ((manifest or {}).get("metrics") or {}).get("stacker") or {}
-        created = ((launch or {}).get("created_utc") or (state or {}).get("started_utc")
-                   or (manifest or {}).get("created_utc"))
+        timings = dict((manifest or {}).get("timings_s") or {})
+        stage_s = float(sum(v for v in timings.values() if fnum(v) is not None)) if timings else None
+        created = (launch or {}).get("created_utc") or (state or {}).get("started_utc")
+        if not created and manifest and manifest.get("created_utc"):
+            # core writes the manifest when the run ends: its start is that time less the stage timings
+            t = parse_utc(manifest["created_utc"])
+            created = utc_iso(t - stage_s) if t is not None and stage_s else manifest["created_utc"]
         if created and not str(created).endswith("Z"):
             created = utc_iso(parse_utc(created)) or created
         finished = None
@@ -391,10 +396,9 @@ class Registry:
                 finished = utc_iso(parse_utc(manifest["created_utc"]))
             elif last and last.get("finished_utc"):
                 finished = last["finished_utc"]
-        timings = dict((manifest or {}).get("timings_s") or {})
         duration = None
         if timings:
-            duration = float(sum(v for v in timings.values() if fnum(v) is not None))
+            duration = stage_s
         elif created and finished:
             a, b = parse_utc(created), parse_utc(finished)
             duration = (b - a) if a and b and b >= a else None
