@@ -271,7 +271,8 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 0.86rem; }
 .md p, .md ul, .md ol, .md pre, .md table, .md blockquote { margin: 0 0 0.8em; }
 .md pre { background: var(--chip); padding: 10px 12px; border-radius: var(--radius-sm); overflow: auto; }
 .md table { border-collapse: collapse; font-size: 0.86rem; display: block; overflow-x: auto; }
-.md th, .md td { border-bottom: 1px solid var(--line); padding: 5px 9px; text-align: left; }
+/* table cells keep whole words: a wide table scrolls instead of breaking cells into letters */
+.md th, .md td { border-bottom: 1px solid var(--line); padding: 5px 9px; text-align: left; overflow-wrap: normal; }
 .md blockquote { border-left: 3px solid var(--line-strong); padding-left: 12px; color: var(--muted); }
 
 /* code area and diff */

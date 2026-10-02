@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearResources } from "../api/resource";
 import type { Project, RunOutputs } from "../api/types";
-import { ProjectNav } from "../layouts/AppShell";
+import { currentProjectNav, ProjectNav } from "../layouts/AppShell";
 import { RunLayout, RunTabs } from "../layouts/RunLayout";
-import { buildRegistry, navigate, registry as appRegistry, RegistryProvider, type RouteModule } from "../router";
+import { buildRegistry, matchRoute, navigate, registry as appRegistry, RegistryProvider, type RouteModule } from "../router";
 import { App } from "../App";
 import { StreamManager, setStreams, type EventSourceLike } from "../api/sse";
 import { click, flush, mockFetch, render, waitFor } from "./render";
@@ -149,6 +149,21 @@ describe("route registry", () => {
       fetch.restore();
       setStreams(null);
     }
+  });
+
+  it("marks one project nav entry current: its own route, else the longest target prefix; the root only on itself", () => {
+    const reg = appRegistry;
+    const entries = reg.projectNav.flatMap((n) => {
+      const to = n.to("p_1", project);
+      return to === null ? [] : [{ id: n.id, to, route: n.route }];
+    });
+    const at = (path: string) => currentProjectNav(entries, path, matchRoute(reg.compiled, path)?.route ?? null);
+    expect(at("/p/p_1")).toBe("overview");
+    expect(at("/p/p_1/setup/levers")).toBe("setup");
+    expect(at("/p/p_1/setup/inputs")).toBe("inputs");
+    expect(at("/p/p_1/launch")).toBe("launch");
+    expect(at("/p/p_1/runs")).toBe("runs");
+    expect(at("/p/p_1/config")).toBeNull();
   });
 
   it("ProjectNav renders declared entries, hides null targets and greys disabled ones", () => {

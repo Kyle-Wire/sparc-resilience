@@ -1,0 +1,1328 @@
+{
+  "overview": {
+    "view": "overview",
+    "availability": "ready",
+    "missing": [],
+    "units": { "target": "degF", "levers": { "canopy": "pp", "impervious": "pp", "albedo": "albedo" } },
+    "caveats": ["Generic physics forcing: the run did not use the campaign day's radiation and wind."],
+    "demo": true,
+    "sections": {
+      "kpis": [
+        { "id": "r2", "label": "Held-out R²", "value": 0.815, "decimals": 3, "format": "number" },
+        { "id": "rmse", "label": "RMSE", "value": 0.342, "unit": "degF", "decimals": 2 },
+        { "id": "coverage", "label": "90% interval coverage", "value": 0.8902, "format": "percent", "decimals": 1, "target": 0.9, "target_label": "target" },
+        { "id": "halfwidth", "label": "Interval half-width", "value": 0.504, "unit": "degF", "decimals": 2, "target": 0.0086, "target_label": "noise floor" },
+        {
+          "id": "headline",
+          "label": "Canopy Increase +10",
+          "value": -1.0317,
+          "format": "delta",
+          "unit": "degF",
+          "likely": { "estimate": -1.03165, "se": 0.281493, "lo": -1.583376, "hi": -0.479924, "confidence": "confident_cools", "phrase": "" }
+        },
+        {
+          "id": "package",
+          "label": "Cooling package",
+          "value": -1.3052,
+          "format": "delta",
+          "unit": "degF",
+          "likely": { "estimate": -1.305193, "se": 0.378362, "lo": -2.046782, "hi": -0.563603, "confidence": "confident_cools", "phrase": "" },
+          "band": null
+        },
+        { "id": "warming", "label": "Mid-century warming (SSP2-4.5)", "value": 3.213, "unit": "degF", "format": "signed" },
+        { "id": "budget", "label": "Realised budget cooling", "value": 623.9, "unit": "degF·cells", "decimals": 0 }
+      ],
+      "timings": [
+        { "stage": "S0", "label": "Data", "seconds": 0.02, "state": "done", "reason": null },
+        { "stage": "S1", "label": "Influence", "seconds": 1.94, "state": "done", "reason": null },
+        { "stage": "S2_S3", "label": "Models + stacker", "seconds": 15.43, "state": "done", "reason": null },
+        { "stage": "baselines", "label": "Baselines", "seconds": 1.61, "state": "done", "reason": null },
+        { "stage": "cv_curve", "label": "CV curve", "seconds": null, "state": "skipped", "reason": "disabled_by_config:cv.distance_curve" },
+        { "stage": "S4", "label": "Response", "seconds": 5.47, "state": "done", "reason": null },
+        { "stage": "S5", "label": "Scenarios", "seconds": 1.5, "state": "done", "reason": null },
+        { "stage": "climate", "label": "Climate", "seconds": null, "state": "skipped", "reason": null },
+        { "stage": "S6", "label": "Causal", "seconds": 5.14, "state": "done", "reason": null },
+        { "stage": "S7", "label": "Budget", "seconds": 0.19, "state": "done", "reason": null }
+      ],
+      "flags": [
+        {
+          "code": "cover_overlap",
+          "severity": "info",
+          "message": "canopy + impervious exceeds 100% on 13% of cells (canopy overhanging pavement), so no sum constraint is imposed between them."
+        },
+        {
+          "code": "dose_scale_albedo",
+          "severity": "info",
+          "message": "albedo doses 0.2 exceed 3 sd of the layer (sd 0.0602); their effects lean on extrapolation (see the scenarios' extrapolated share)."
+        },
+        {
+          "code": "window",
+          "severity": "info",
+          "message": "Fast window: only 1,120 points around the centre — a smoke-test extent, too small for the spatial-block CV to mean what it does on the full area."
+        }
+      ],
+      "outputs_grid": [
+        { "id": "predictions", "label": "Held-out predictions", "group": "model", "state": "present", "produced_by": "stage:S2_S3", "view": "accuracy", "action": null },
+        { "id": "influence", "label": "Influence", "group": "model", "state": "present", "produced_by": "stage:S1", "view": "influence", "action": null },
+        { "id": "baselines", "label": "Baselines", "group": "trust", "state": "present", "produced_by": "stage:baselines", "view": "distance", "action": null },
+        {
+          "id": "cv_distance",
+          "label": "CV distance curve",
+          "group": "trust",
+          "state": "missing",
+          "produced_by": "stage:cv_curve",
+          "view": "distance",
+          "action": { "kind": "run_job", "label": "Re-run with the CV curve", "method": "POST", "path": "/api/runs/r_fx/rerun", "body": {} }
+        },
+        { "id": "response_curves", "label": "Response curves", "group": "effects", "state": "present", "produced_by": "stage:S4", "view": "response", "action": null },
+        { "id": "scenarios", "label": "Configured scenarios", "group": "decisions", "state": "present", "produced_by": "stage:S5", "view": "scenarios", "action": null },
+        { "id": "causal", "label": "Causal audit", "group": "effects", "state": "present", "produced_by": "stage:S6", "view": "causal", "action": null },
+        { "id": "optimize", "label": "Budget allocation", "group": "decisions", "state": "present", "produced_by": "stage:S7", "view": "budget", "action": null },
+        {
+          "id": "planner",
+          "label": "Planner pack",
+          "group": "planner",
+          "state": "missing",
+          "produced_by": "post:planner",
+          "view": "planner",
+          "action": { "kind": "run_job", "label": "Run planner pack", "method": "POST", "path": "/api/runs/r_fx/actions/planner", "body": {} }
+        },
+        { "id": "methods", "label": "Methods", "group": "docs", "state": "present", "produced_by": "stage:finish", "view": "markdown", "action": null }
+      ],
+      "studies": [
+        { "kind": "baselines", "state": "done", "headline": "stack not distinguishable from hgb_focal (|ΔMSE| ≤ 2 SE)", "study_id": null },
+        { "kind": "placebo", "state": "not_run", "headline": null, "study_id": null },
+        { "kind": "uncertainty", "state": "not_run", "headline": null, "study_id": null }
+      ],
+      "limitations": [
+        "Daytime (afternoon) model of one campaign day; it is never applied to night.",
+        "Scenario cells outside the observed combination of predictors are extrapolations (share reported)."
+      ],
+      "findings": []
+    }
+  },
+  "data": {
+    "view": "data",
+    "availability": "ready",
+    "missing": [],
+    "units": { "target": "degF", "levers": { "canopy": "pp", "impervious": "pp", "albedo": "albedo" } },
+    "caveats": [],
+    "demo": true,
+    "sections": {
+      "qa_tiles": [
+        { "id": "n_input", "label": "Input points", "value": 1120, "format": "int" },
+        { "id": "dropped", "label": "Dropped (non-finite)", "value": 0, "format": "int" },
+        { "id": "clipped", "label": "Clipped values", "value": 0, "format": "int" },
+        { "id": "fill", "label": "Grid fill", "value": 0.6349, "format": "percent" },
+        { "id": "collisions", "label": "Cell collisions", "value": 0.0, "format": "percent" },
+        { "id": "background", "label": "Background", "value": 87.92, "unit": "degF", "note": "field median" },
+        { "id": "noise", "label": "Rounding noise floor", "value": 0.0086, "unit": "degF", "decimals": 3 }
+      ],
+      "flags": [
+        {
+          "code": "cover_overlap",
+          "severity": "info",
+          "message": "canopy + impervious exceeds 100% on 13% of cells (canopy overhanging pavement), so no sum constraint is imposed between them."
+        },
+        {
+          "code": "dose_scale_albedo",
+          "severity": "info",
+          "message": "albedo doses 0.2 exceed 3 sd of the layer (sd 0.0602); their effects lean on extrapolation (see the scenarios' extrapolated share)."
+        },
+        {
+          "code": "window",
+          "severity": "info",
+          "message": "Fast window: only 1,120 points around the centre — a smoke-test extent, too small for the spatial-block CV to mean what it does on the full area."
+        }
+      ],
+      "frac_hist": {
+        "edges": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+        "shares": [0.09911, 0.08661, 0.07589, 0.08839, 0.07857, 0.09732, 0.11964, 0.12857, 0.13304, 0.09286],
+        "integer_share": 0.00089,
+        "half_share": 0.00268,
+        "noise_sd": 0.00863
+      },
+      "dose_scale": [
+        {
+          "lever": "canopy",
+          "unit": "pp",
+          "sd": 18.4053,
+          "doses": [5.0, 10.0, 15.0, 20.0, 30.0, 40.0],
+          "doses_in_sd": [0.272, 0.543, 0.815, 1.087, 1.63, 2.173],
+          "percentile": [57.4, 65.2, 72.3, 79.8, 98.4, 100.0]
+        },
+        { "lever": "impervious", "unit": "pp", "sd": 21.9956, "doses": [5.0, 10.0, 20.0], "doses_in_sd": [0.227, 0.455, 0.909], "percentile": [44.2, 37.9, 23.7] },
+        {
+          "lever": "albedo",
+          "unit": "albedo",
+          "sd": 0.0602,
+          "doses": [0.05, 0.1, 0.15, 0.2],
+          "doses_in_sd": [0.831, 1.662, 2.492, 3.323],
+          "percentile": [78.9, 92.4, 100.0, 100.0]
+        }
+      ],
+      "predictor_hists": [
+        {
+          "name": "dist_train_m",
+          "label": "Distance to training data",
+          "unit": "m",
+          "edges": [
+            134.1641, 161.8452, 189.5263, 217.2073, 244.8884, 272.5695, 300.2506, 327.9317, 355.6128, 383.2939, 410.975, 438.6561, 466.3372, 494.0183, 521.6993, 549.3804, 577.0615
+          ],
+          "counts": [193, 131, 139, 118, 112, 106, 31, 82, 47, 40, 33, 28, 22, 20, 12, 6]
+        },
+        {
+          "name": "target",
+          "label": "Observed temperature",
+          "unit": "degF",
+          "edges": [86.463, 86.7056, 86.9481, 87.1907, 87.4332, 87.6758, 87.9184, 88.1609, 88.4035, 88.6461, 88.8886, 89.1312, 89.3738, 89.6163, 89.8589, 90.1014, 90.344],
+          "counts": [11, 22, 32, 84, 149, 261, 151, 103, 63, 36, 37, 35, 49, 37, 27, 23]
+        }
+      ],
+      "corr_matrix": {
+        "names": ["target", "pred", "oof_gam", "oof_physics"],
+        "values": [
+          [1.0, 0.913, 0.801, 0.929],
+          [0.913, 1.0, 0.887, 0.995],
+          [0.801, 0.887, 1.0, 0.861],
+          [0.929, 0.995, 0.861, 1.0]
+        ]
+      },
+      "zone_counts": [],
+      "coarse": [
+        { "label": "Cell size", "value": 30.0, "unit": "m", "decimals": 0 },
+        { "label": "Grid", "value": "42 × 42" },
+        { "label": "Subsample window", "value": 1120, "decimals": 0 }
+      ],
+      "joins": []
+    }
+  },
+  "accuracy": {
+    "view": "accuracy",
+    "availability": "ready",
+    "missing": [],
+    "units": { "target": "degF", "levers": { "canopy": "pp", "impervious": "pp", "albedo": "albedo" } },
+    "caveats": [],
+    "demo": true,
+    "sections": {
+      "models": [
+        { "model": "ols", "label": "OLS", "kind": "base", "r2": -0.7389, "rmse": 1.0482, "mae": 0.7759, "bias": 0.4634, "weight": 0.0074, "n": 1120 },
+        { "model": "mgwr", "label": "MGWR", "kind": "base", "r2": -0.3725, "rmse": 0.9313, "mae": 0.7165, "bias": 0.4137, "weight": 0.0185, "n": 1120 },
+        { "model": "gwrf", "label": "GWRF", "kind": "base", "r2": 0.6541, "rmse": 0.4675, "mae": 0.3778, "bias": 0.067, "weight": 0.0543, "n": 1120 },
+        { "model": "gam", "label": "GAM", "kind": "base", "r2": 0.5813, "rmse": 0.5144, "mae": 0.4291, "bias": 0.0255, "weight": 0.0823, "n": 1120 },
+        { "model": "physics", "label": "Physics", "kind": "base", "r2": 0.8388, "rmse": 0.3191, "mae": 0.2776, "bias": -0.0107, "weight": 0.8374, "n": 1120 },
+        { "model": "base_mean", "label": "Equal-weight mean", "kind": "mean", "r2": 0.5942, "rmse": 0.5064, "mae": 0.4169, "bias": 0.1918, "weight": null, "n": 1120 },
+        { "model": "stacker", "label": "Stack", "kind": "stack", "r2": 0.8149, "rmse": 0.342, "mae": 0.2982, "bias": -0.0025, "weight": null, "n": 1120 }
+      ],
+      "obs_pred_bins": {
+        "x_edges": [
+          86.912, 87.105, 87.298, 87.491, 87.685, 87.878, 88.071, 88.264, 88.457, 88.65, 88.843, 89.036, 89.229, 89.422, 89.615, 89.808, 90.002, 90.195, 90.388, 90.581, 90.774
+        ],
+        "y_edges": [
+          86.463, 86.657, 86.851, 87.045, 87.239, 87.433, 87.627, 87.821, 88.015, 88.209, 88.403, 88.598, 88.792, 88.986, 89.18, 89.374, 89.568, 89.762, 89.956, 90.15, 90.344
+        ],
+        "counts": [
+          [4, 4, 1, 3, 9, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+          [0, 3, 6, 5, 14, 9, 26, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+          [2, 3, 8, 8, 2, 7, 58, 43, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+          [0, 6, 4, 6, 32, 26, 35, 37, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+          [0, 0, 0, 7, 17, 23, 33, 21, 33, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+          [0, 0, 0, 0, 5, 21, 34, 13, 9, 19, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+          [0, 0, 0, 0, 0, 2, 18, 21, 19, 17, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+          [0, 0, 0, 0, 0, 1, 10, 16, 26, 19, 17, 4, 0, 0, 0, 0, 0, 0, 0, 0],
+          [0, 0, 0, 0, 0, 0, 1, 4, 12, 5, 21, 14, 3, 0, 0, 0, 0, 0, 0, 0],
+          [0, 0, 0, 0, 0, 0, 0, 0, 1, 3, 5, 8, 14, 10, 4, 0, 0, 0, 0, 0],
+          [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 7, 12, 9, 4, 1, 0, 0, 0],
+          [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 5, 9, 6, 0, 0, 0],
+          [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 8, 3, 0, 0],
+          [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 8, 1, 3, 5, 1, 0],
+          [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 8, 2, 1, 4, 0],
+          [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 9, 1, 3, 1],
+          [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 6, 0, 0],
+          [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 4, 0],
+          [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 9, 4],
+          [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 13]
+        ],
+        "spearman": 0.805
+      },
+      "resid_hist": {
+        "edges": [
+          -0.915, -0.8458, -0.7765, -0.7073, -0.6381, -0.5689, -0.4997, -0.4305, -0.3612, -0.292, -0.2228, -0.1536, -0.0844, -0.0151, 0.0541, 0.1233, 0.1925, 0.2617, 0.331, 0.4002,
+          0.4694, 0.5386, 0.6078, 0.677, 0.7463
+        ],
+        "counts": [1, 1, 5, 9, 21, 20, 60, 84, 97, 66, 59, 69, 53, 60, 62, 62, 54, 73, 89, 87, 53, 20, 10, 5]
+      },
+      "resid_by_zone": [],
+      "resid_by_fold": [
+        { "q": [-0.1954, -0.0559, 0.142, 0.3372, 0.426], "mean": 0.1308, "n": 373, "label": "Fold 1" },
+        { "q": [-0.3943, -0.1961, 0.2688, 0.4304, 0.5253], "mean": 0.1552, "n": 375, "label": "Fold 2" },
+        { "q": [-0.5482, -0.4112, -0.3022, -0.1489, 0.0032], "mean": -0.28, "n": 372, "label": "Fold 3" }
+      ],
+      "interval_honesty": {
+        "target": 0.9,
+        "global": 0.8902,
+        "adaptive": 0.8884,
+        "halfwidth": 0.5041,
+        "by_fold": [
+          { "label": "Fold 1", "n": 373, "global": 0.9973, "adaptive": 0.9973, "halfwidth_global": 0.5438, "halfwidth_adaptive": 0.5477 },
+          { "label": "Fold 2", "n": 375, "global": 0.8107, "adaptive": 0.8107, "halfwidth_global": 0.4767, "halfwidth_adaptive": 0.4822 },
+          { "label": "Fold 3", "n": 372, "global": 0.8629, "adaptive": 0.8575, "halfwidth_global": 0.492, "halfwidth_adaptive": 0.5011 }
+        ],
+        "by_distance": [
+          { "label": "0-180 m", "n": 315, "global": 0.9429, "adaptive": 0.9302, "halfwidth_global": 0.5071, "halfwidth_adaptive": 0.5001 },
+          { "label": "180-240 m", "n": 254, "global": 0.8898, "adaptive": 0.8858, "halfwidth_global": 0.5033, "halfwidth_adaptive": 0.5048 },
+          { "label": "240-330 m", "n": 323, "global": 0.805, "adaptive": 0.808, "halfwidth_global": 0.5021, "halfwidth_adaptive": 0.5057 },
+          { "label": "330-577 m", "n": 228, "global": 0.9386, "adaptive": 0.9474, "halfwidth_global": 0.5039, "halfwidth_adaptive": 0.5369 }
+        ],
+        "by_zone": []
+      },
+      "stacker": {
+        "candidates": [
+          { "name": "mean", "rmse": 0.5064 },
+          { "name": "off", "rmse": 0.342 },
+          { "name": "0.0", "rmse": 0.4124 },
+          { "name": "0.1", "rmse": 0.4393 }
+        ],
+        "chosen": "off",
+        "models": ["ols", "mgwr", "gwrf", "gam", "physics"],
+        "folds": [
+          {
+            "fold": 0,
+            "weights": { "ols": 0.0, "mgwr": 0.0, "gwrf": 0.0, "gam": 0.2469, "physics": 0.7531 },
+            "residual_kept": false,
+            "val_mse_base": null,
+            "val_mse_with_residual": null,
+            "best_epoch": 0
+          },
+          {
+            "fold": 1,
+            "weights": { "ols": 0.0223, "mgwr": 0.0, "gwrf": 0.0, "gam": 0.0, "physics": 0.9777 },
+            "residual_kept": false,
+            "val_mse_base": null,
+            "val_mse_with_residual": null,
+            "best_epoch": 0
+          },
+          {
+            "fold": 2,
+            "weights": { "ols": 0.0, "mgwr": 0.0556, "gwrf": 0.163, "gam": 0.0, "physics": 0.7814 },
+            "residual_kept": false,
+            "val_mse_base": null,
+            "val_mse_with_residual": null,
+            "best_epoch": 0
+          }
+        ],
+        "spatial_plus": []
+      },
+      "physics": {
+        "params": [
+          { "name": "L_m", "label": "Relaxation length L", "mean": 145.3808, "sd": 26.1117, "prior": "≈ 100–400 m", "unit": "m" },
+          { "name": "a", "label": "Heating amplitude a", "mean": 34.9915, "sd": 9.0555, "prior": null, "unit": null },
+          { "name": "gamma", "label": "gamma", "mean": 0.0103, "sd": 0.0043, "prior": null, "unit": null },
+          { "name": "s", "label": "Shade strength s", "mean": 0.66, "sd": 0.0417, "prior": null, "unit": null },
+          { "name": "kappa_canopy", "label": "kappa_canopy", "mean": 0.1176, "sd": 0.021, "prior": null, "unit": null },
+          { "name": "a1", "label": "Albedo sensitivity a1", "mean": 0.2948, "sd": 0.009, "prior": null, "unit": null }
+        ],
+        "folds": [{ "param": "L_m", "values": [119.269, 150.603, 166.27] }],
+        "warnings": []
+      },
+      "advection": { "verdict": "advection not kept (ΔRMSE within noise)", "selected": false, "fold_delta_rmse": [0.007, 0.103, -0.0197] },
+      "forcing": {
+        "date": null,
+        "hours": null,
+        "sw_down": 800.0,
+        "lw_net": -100.0,
+        "wind_speed": 2.0,
+        "wind_dir_deg": 225.0,
+        "station": null,
+        "checks": ["generic forcing (no campaign forcing configured)"]
+      },
+      "cv_design": { "n_folds": 3, "block_m": 390.0, "buffer_m": 130.0, "n_blocks": 16, "test_sizes": [373, 375, 372] },
+      "live": false
+    }
+  },
+  "distance": {
+    "view": "distance",
+    "availability": "ready",
+    "missing": [],
+    "units": { "target": "degF", "levers": { "canopy": "pp", "impervious": "pp", "albedo": "albedo" } },
+    "caveats": [],
+    "demo": true,
+    "sections": {
+      "curve": {
+        "block_m": [180, 390, 780],
+        "metric": "r2",
+        "series": [
+          { "id": "stacker", "label": "Stack", "kind": "stack", "values": [0.86, 0.815, 0.74], "lo": [0.8, 0.76, 0.66], "hi": [0.9, 0.86, 0.8] },
+          { "id": "gam", "label": "GAM", "kind": "base", "values": [0.64, 0.58, 0.49] },
+          { "id": "idw", "label": "IDW", "kind": "baseline", "values": [0.42, 0.34, 0.2] }
+        ],
+        "main_block_m": 390.0,
+        "random": [{ "id": "random", "label": "random points", "value": 0.93 }]
+      },
+      "baselines": [
+        {
+          "id": "hgb_xy",
+          "label": "gradient boosting, covariates + x,y",
+          "rmse": 0.6713,
+          "r2": 0.2869,
+          "delta_mse": 0.3337,
+          "delta_mse_se": 0.1214,
+          "stack_better": true,
+          "baseline_better": false
+        },
+        {
+          "id": "hgb_focal",
+          "label": "gradient boosting on the stack's inputs (covariates + neighbourhood features)",
+          "rmse": 0.4766,
+          "r2": 0.6406,
+          "delta_mse": 0.1102,
+          "delta_mse_se": 0.0624,
+          "stack_better": false,
+          "baseline_better": false
+        },
+        {
+          "id": "idw",
+          "label": "inverse-distance interpolation (no covariates)",
+          "rmse": 0.6444,
+          "r2": 0.3429,
+          "delta_mse": 0.2982,
+          "delta_mse_se": 0.161,
+          "stack_better": false,
+          "baseline_better": false
+        }
+      ],
+      "verdict": { "text": "stack not distinguishable from hgb_focal (|ΔMSE| ≤ 2 SE)", "best_baseline": "hgb_focal", "stack_wins": false },
+      "block_wins": [
+        { "id": "hgb_xy", "label": "gradient boosting, covariates + x,y", "frac": 0.75, "n_blocks": 16 },
+        { "id": "hgb_focal", "label": "gradient boosting on the stack's inputs (covariates + neighbourhood features)", "frac": 0.875, "n_blocks": 16 },
+        { "id": "idw", "label": "inverse-distance interpolation (no covariates)", "frac": 0.8125, "n_blocks": 16 }
+      ]
+    }
+  },
+  "influence": {
+    "view": "influence",
+    "availability": "ready",
+    "missing": [],
+    "units": { "target": "degF", "levers": { "canopy": "pp", "impervious": "pp", "albedo": "albedo" } },
+    "caveats": [],
+    "demo": true,
+    "sections": {
+      "ranges": [
+        { "predictor": "canopy", "label": "canopy", "range_m": 315.0, "raw_range_m": 448.81272608862344 },
+        { "predictor": "impervious", "label": "impervious", "range_m": 315.0, "raw_range_m": 548.126927832028 },
+        { "predictor": "albedo", "label": "albedo", "range_m": 60.0, "raw_range_m": 15.0 },
+        { "predictor": "ndvi", "label": "ndvi", "range_m": 315.0, "raw_range_m": 468.6707840081576 },
+        { "predictor": "elevation", "label": "elevation", "range_m": 305.82057928792074, "raw_range_m": 305.82057928792074 },
+        { "predictor": "water_dist", "label": "water dist", "range_m": 60.0, "raw_range_m": 15.0 }
+      ],
+      "correlogram": {
+        "lags_m": [
+          30.0, 51.151849245121795, 77.09190418330465, 110.25077703887507, 143.8533462024006, 173.47911252289168, 205.69110570040775, 238.9356169066755, 268.95490306848734,
+          300.86914820223984, 331.8487961415033, 362.394525256257, 394.59626649062847, 425.50033694863936, 455.5127142396733, 487.3165605108414, 518.7597080928296,
+          549.446347117555, 580.9599306568388, 611.6935098600477
+        ],
+        "acf": [0.8502, 0.8426, 0.8216, 0.7749, 0.7198, 0.6557, 0.5825, 0.4973, 0.4358, 0.3453, 0.2819, 0.2053, 0.138, 0.0752, 0.033, -0.0136, -0.0339, -0.0615, -0.0796, -0.0964],
+        "band_mean": [
+          0.007, 0.0049, 0.0012, -0.0007, -0.0038, -0.0005, 0.0006, 0.0006, 0.0006, -0.0033, 0.001, -0.005, -0.0009, 0.0027, -0.0011, -0.0035, -0.0012, -0.002, -0.0033, -0.0024
+        ],
+        "band_sd": [0.0212, 0.015, 0.0136, 0.0079, 0.0084, 0.0082, 0.0055, 0.0075, 0.0061, 0.0064, 0.0083, 0.0041, 0.0107, 0.0063, 0.0068, 0.0073, 0.0035, 0.0074, 0.0045, 0.0053],
+        "directional": {
+          "0": [0.8477, 0.8529, 0.8188, 0.8014, 0.7489, 0.7071, 0.6312, 0.5602, 0.5096, 0.4484, 0.3909, 0.3216, 0.2554, 0.2067, 0.1526, 0.1006, 0.04, -0.0245, -0.0967, -0.1562],
+          "45": [null, 0.8484, 0.8322, 0.7912, 0.7446, 0.6866, 0.6155, 0.5334, 0.4568, 0.3776, 0.3106, 0.2374, 0.1793, 0.1179, 0.0729, 0.0388, 0.0215, -0.03, -0.0274, -0.0809],
+          "90": [
+            0.8527, 0.817, 0.7813, 0.7396, 0.6277, 0.5752, 0.4646, 0.3361, 0.2699, 0.1647, 0.0659, -0.0173, -0.0802, -0.1221, -0.1568, -0.1772, -0.1901, -0.1791, -0.18, -0.1821
+          ],
+          "135": [null, 0.8516, 0.8249, 0.7784, 0.7319, 0.6698, 0.6176, 0.5404, 0.4854, 0.4028, 0.3536, 0.2652, 0.1835, 0.1189, 0.0547, 0.0197, 0.0151, 0.0385, 0.0836, 0.1433]
+        }
+      },
+      "rings": [
+        {
+          "predictor": "canopy",
+          "label": "canopy",
+          "edges_m": [0.0, 15.0, 51.213203436, 63.541019662, 75.967426534, 114.083269132, 142.082039325, 196.669922549, 263.198957655, 350.499055506, 469.094627914, 630.0],
+          "betas": [-0.0424, -0.1654, -0.0599, -0.1068, -0.2332, -0.1725, -0.3312, -0.3044, -0.3032, -0.2554, -0.1709],
+          "family": "green",
+          "significant": true,
+          "scale_m": 161.5
+        },
+        {
+          "predictor": "impervious",
+          "label": "impervious",
+          "edges_m": [0.0, 15.0, 51.213203436, 63.541019662, 75.967426534, 114.083269132, 142.082039325, 196.669922549, 263.198957655, 350.499055506, 469.094627914, 630.0],
+          "betas": [0.0017, 0.0132, 0.0065, 0.013, 0.0379, 0.0365, 0.0957, 0.1269, 0.1804, 0.2124, 0.1771],
+          "family": "gauss",
+          "significant": true,
+          "scale_m": 293.6
+        },
+        {
+          "predictor": "albedo",
+          "label": "albedo",
+          "edges_m": [0.0, 15.0, 51.213203436, 63.541019662, 75.967426534, 114.083269132, 142.082039325, 196.669922549, 263.198957655, 350.499055506, 469.094627914, 630.0],
+          "betas": [-0.0019, -0.0147, -0.007, -0.0138, -0.0374, -0.0325, -0.0705, -0.0655, -0.0517, -0.022, -0.0033],
+          "family": "gauss",
+          "significant": false,
+          "scale_m": 155.7
+        },
+        {
+          "predictor": "ndvi",
+          "label": "ndvi",
+          "edges_m": [0.0, 15.0, 51.213203436, 63.541019662, 75.967426534, 114.083269132, 142.082039325, 196.669922549, 263.198957655, 350.499055506, 469.094627914, 630.0],
+          "betas": [-0.0036, -0.0285, -0.014, -0.0277, -0.0792, -0.0742, -0.1853, -0.2239, -0.2725, -0.2439, -0.1271],
+          "family": "gauss",
+          "significant": true,
+          "scale_m": 227.8
+        },
+        {
+          "predictor": "elevation",
+          "label": "elevation",
+          "edges_m": [0.0, 15.0, 51.213203436, 63.541019662, 75.967426534, 114.083269132, 142.082039325, 196.669922549, 263.198957655, 350.499055506, 469.094627914, 630.0],
+          "betas": [-0.0028, -0.0219, -0.0103, -0.0201, -0.053, -0.0443, -0.089, -0.0718, -0.0451, -0.0131, -0.0011],
+          "family": "gauss",
+          "significant": true,
+          "scale_m": 137.1
+        },
+        {
+          "predictor": "water_dist",
+          "label": "water dist",
+          "edges_m": [0.0, 15.0, 51.213203436, 63.541019662, 75.967426534, 114.083269132, 142.082039325, 196.669922549, 263.198957655, 350.499055506, 469.094627914, 630.0],
+          "betas": [-0.0006, -0.0051, -0.0025, -0.005, -0.0146, -0.014, -0.0368, -0.0489, -0.0695, -0.0818, -0.0682],
+          "family": "gauss",
+          "significant": false,
+          "scale_m": 293.6
+        }
+      ],
+      "anisotropy": [
+        { "predictor": "target", "label": "target", "ratio": 0.694, "theta_deg": 179.2, "reliable": false, "ranges_m": { "0": 914.9, "45": 715.7, "90": 629.9, "135": 722.5 } },
+        { "predictor": "canopy", "label": "canopy", "ratio": 0.279, "theta_deg": 127.9, "reliable": false, "ranges_m": { "0": 295.0, "45": 250.5, "90": 360.7, "135": 1010.9 } },
+        {
+          "predictor": "impervious",
+          "label": "impervious",
+          "ratio": 0.641,
+          "theta_deg": 161.7,
+          "reliable": false,
+          "ranges_m": { "0": 633.3, "45": 449.0, "90": 442.8, "135": 575.6 }
+        },
+        { "predictor": "albedo", "label": "albedo", "ratio": 0.679, "theta_deg": 151.7, "reliable": false, "ranges_m": { "0": 361.2, "45": 223.9, "90": 277.4, "135": 290.1 } },
+        { "predictor": "ndvi", "label": "ndvi", "ratio": 0.0, "theta_deg": 134.6, "reliable": false, "ranges_m": { "0": 431.6, "45": 287.0, "90": 438.5, "135": 1751.7 } },
+        {
+          "predictor": "elevation",
+          "label": "elevation",
+          "ratio": 0.954,
+          "theta_deg": 123.4,
+          "reliable": false,
+          "ranges_m": { "0": 827.6, "45": 726.4, "90": 845.1, "135": 754.7 }
+        },
+        {
+          "predictor": "water_dist",
+          "label": "water dist",
+          "ratio": 0.467,
+          "theta_deg": 20.0,
+          "reliable": false,
+          "ranges_m": { "0": 1326.0, "45": 834.5, "90": 649.1, "135": 582.6 }
+        }
+      ],
+      "priors": { "L_prior_m": 222.7, "block_size_m": 630.0, "resid_range_m": 630.0 }
+    }
+  },
+  "response": {
+    "view": "response",
+    "availability": "ready",
+    "missing": [],
+    "units": { "target": "degF", "levers": { "canopy": "pp", "impervious": "pp", "albedo": "albedo" } },
+    "caveats": [],
+    "demo": true,
+    "sections": {
+      "levers": {
+        "canopy": {
+          "label": "canopy",
+          "unit": "pp",
+          "direction": "increase",
+          "curve": {
+            "dose": [0.0, 5.0, 10.0, 15.0, 20.0, 30.0, 40.0],
+            "benefit": [0.0, 0.6219, 1.0317, 1.3212, 1.4998, 1.7295, 1.8529],
+            "se": [0.0, 0.1636, 0.2815, 0.3825, 0.4571, 0.5589, 0.6226],
+            "frac_extrapolated": [0.0, 0.4759, 0.7277, 1.0, 1.0, 1.0, 1.0],
+            "realized_dose": [null, 5.0, 10.0, 15.0, 20.0, 30.0, 40.0]
+          },
+          "shapes": { "saturating": 1.0, "linear": 0.0, "sigmoid": 0.0, "censored": 0.0 },
+          "effects": { "own": -0.004647, "footprint": -0.135884, "ratio": 29.24, "median_d90": 31.84, "median_max_cooling": 1.84 },
+          "fold_means": { "own": [-0.004547, -0.004554, -0.004839], "footprint": [-0.130131, -0.167421, -0.110102] }
+        },
+        "impervious": {
+          "label": "impervious",
+          "unit": "pp",
+          "direction": "decrease",
+          "curve": {
+            "dose": [0.0, 5.0, 10.0, 20.0],
+            "benefit": [0.0, 0.0941, 0.1821, 0.3498],
+            "se": [0.0, 0.0735, 0.1543, 0.3065],
+            "frac_extrapolated": [0.0, 0.2188, 0.3429, 0.6821],
+            "realized_dose": [null, 5.0, 9.9979, 19.293]
+          },
+          "shapes": { "saturating": 0.3679, "linear": 0.4804, "sigmoid": 0.0009, "censored": 0.125 },
+          "effects": { "own": 0.000409, "footprint": 0.019149, "ratio": 46.81, "median_d90": null, "median_max_cooling": 1.349 },
+          "fold_means": { "own": [-0.000472, 0.000893, 0.000806], "footprint": [0.011332, 0.032871, 0.013243] }
+        },
+        "albedo": {
+          "label": "albedo",
+          "unit": "albedo",
+          "direction": "increase",
+          "curve": {
+            "dose": [0.0, 0.05, 0.1, 0.15, 0.2],
+            "benefit": [0.0, 0.2177, 0.436, 0.6537, 0.8662],
+            "se": [0.0, 0.0401, 0.0777, 0.1148, 0.1577],
+            "frac_extrapolated": [0.0, 0.2241, 0.5366, 0.8875, 0.9902],
+            "realized_dose": [null, 0.05, 0.1, 0.15, 0.2]
+          },
+          "shapes": { "saturating": 0.2562, "linear": 0.7438, "sigmoid": 0.0, "censored": 0.2036 },
+          "effects": { "own": -0.248334, "footprint": -4.349511, "ratio": 17.51, "median_d90": null, "median_max_cooling": 4.051 },
+          "fold_means": { "own": [-0.356859, -0.142013, -0.246129], "footprint": [-3.687854, -5.112195, -4.248483] }
+        }
+      },
+      "literature": {
+        "rows": [
+          {
+            "key": "krayenhoff2021",
+            "quantity": "canopy",
+            "per": "+0.10 canopy cover",
+            "low": 0.3,
+            "high": 0.3,
+            "unit": "degC",
+            "value": "≈0.3 °C cooling per +0.10 tree canopy cover",
+            "status": "abstract",
+            "citation": "Krayenhoff et al. 2021, Environ. Res. Lett. 16, 053007"
+          },
+          {
+            "key": "ziter2019",
+            "quantity": "canopy",
+            "per": "+0.10 canopy cover",
+            "low": 0.07,
+            "high": 0.15,
+            "unit": "degC",
+            "value": "0 → 100% canopy: −0.7 °C (10 m radius), −1.3 °C (30 m), > −1.5 °C (60–90 m); nonlinear, cooling accelerates above ~40% canopy at block scale",
+            "status": "abstract",
+            "citation": "Ziter et al. 2019, PNAS 116, 7575–7580"
+          },
+          {
+            "key": "krayenhoff2021",
+            "quantity": "albedo",
+            "per": "+0.10 neighbourhood albedo",
+            "low": 0.2,
+            "high": 0.6,
+            "unit": "degC",
+            "value": "≈0.2–0.6 °C cooling per +0.10 neighbourhood albedo",
+            "status": "abstract",
+            "citation": "Krayenhoff et al. 2021"
+          },
+          {
+            "key": "santamouris2014",
+            "quantity": "albedo",
+            "per": "+0.10 city albedo",
+            "low": 0.3,
+            "high": 0.9,
+            "unit": "degC",
+            "value": "city-wide +0.1 albedo: ≈0.3 K mean and ≈0.9 K peak ambient temperature decrease",
+            "status": "abstract",
+            "citation": "Santamouris 2014, Solar Energy 103, 682–703"
+          }
+        ],
+        "sparc": [
+          { "quantity": "canopy", "scenario": "Canopy Increase +10", "dose": 10.0, "cooling": 0.5731, "se": 0.1564, "causal": 0.228, "unit": "degC" },
+          { "quantity": "albedo", "scenario": "Albedo Increase +0.1", "dose": 0.1, "cooling": 0.2422, "se": 0.0432, "causal": null, "unit": "degC" }
+        ]
+      }
+    }
+  },
+  "scenarios": {
+    "view": "scenarios",
+    "availability": "ready",
+    "missing": [],
+    "units": { "target": "degF", "levers": { "canopy": "pp", "impervious": "pp", "albedo": "albedo" } },
+    "caveats": [],
+    "demo": true,
+    "sections": {
+      "rows": [
+        {
+          "slug": "canopy-increase-plus-5",
+          "name": "Canopy Increase +5",
+          "kind": "single",
+          "lever": "canopy",
+          "dose": 5.0,
+          "delta": { "estimate": -0.621878, "se": 0.16361, "lo": -0.942554, "hi": -0.301202, "confidence": "confident_cools", "phrase": "" },
+          "p10": -1.0359,
+          "p90": -0.3049,
+          "frac_extrapolated": 0.4759,
+          "causal": { "delta": -0.2052, "lo": -0.2736, "hi": -0.1368, "model_within": false },
+          "tier": "configured",
+          "has_folds": true,
+          "realized": { "canopy": 5.0 }
+        },
+        {
+          "slug": "canopy-increase-plus-10",
+          "name": "Canopy Increase +10",
+          "kind": "single",
+          "lever": "canopy",
+          "dose": 10.0,
+          "delta": { "estimate": -1.03165, "se": 0.281493, "lo": -1.583376, "hi": -0.479924, "confidence": "confident_cools", "phrase": "" },
+          "p10": -1.6978,
+          "p90": -0.5033,
+          "frac_extrapolated": 0.7277,
+          "causal": { "delta": -0.4104, "lo": -0.5473, "hi": -0.2736, "model_within": false },
+          "tier": "configured",
+          "has_folds": true,
+          "realized": { "canopy": 10.0 }
+        },
+        {
+          "slug": "canopy-increase-plus-20",
+          "name": "Canopy Increase +20",
+          "kind": "single",
+          "lever": "canopy",
+          "dose": 20.0,
+          "delta": { "estimate": -1.499783, "se": 0.457125, "lo": -2.395749, "hi": -0.603817, "confidence": "confident_cools", "phrase": "" },
+          "p10": -2.4363,
+          "p90": -0.7463,
+          "frac_extrapolated": 1.0,
+          "causal": { "delta": -0.8209, "lo": -1.0945, "hi": -0.5473, "model_within": false },
+          "tier": "configured",
+          "has_folds": true,
+          "realized": { "canopy": 20.0 }
+        },
+        {
+          "slug": "impervious-decrease-minus-10",
+          "name": "Impervious Decrease −10",
+          "kind": "single",
+          "lever": "impervious",
+          "dose": 10.0,
+          "delta": { "estimate": -0.182147, "se": 0.154282, "lo": -0.48454, "hi": 0.120246, "confidence": "could_be_zero", "phrase": "" },
+          "p10": -0.2467,
+          "p90": -0.118,
+          "frac_extrapolated": 0.3429,
+          "causal": null,
+          "tier": "configured",
+          "has_folds": true,
+          "realized": { "impervious": -9.9979 }
+        },
+        {
+          "slug": "impervious-decrease-minus-20",
+          "name": "Impervious Decrease −20",
+          "kind": "single",
+          "lever": "impervious",
+          "dose": 20.0,
+          "delta": { "estimate": -0.349791, "se": 0.306484, "lo": -0.9505, "hi": 0.250919, "confidence": "could_be_zero", "phrase": "" },
+          "p10": -0.4927,
+          "p90": -0.2147,
+          "frac_extrapolated": 0.6821,
+          "causal": null,
+          "tier": "configured",
+          "has_folds": true,
+          "realized": { "impervious": -19.293 }
+        },
+        {
+          "slug": "albedo-increase-plus-0-05",
+          "name": "Albedo Increase +0.05",
+          "kind": "single",
+          "lever": "albedo",
+          "dose": 0.05,
+          "delta": { "estimate": -0.217705, "se": 0.040136, "lo": -0.296371, "hi": -0.139039, "confidence": "confident_cools", "phrase": "" },
+          "p10": -0.3164,
+          "p90": -0.129,
+          "frac_extrapolated": 0.2241,
+          "causal": null,
+          "tier": "configured",
+          "has_folds": true,
+          "realized": { "albedo": 0.05 }
+        },
+        {
+          "slug": "albedo-increase-plus-0-1",
+          "name": "Albedo Increase +0.1",
+          "kind": "single",
+          "lever": "albedo",
+          "dose": 0.1,
+          "delta": { "estimate": -0.436013, "se": 0.077732, "lo": -0.588367, "hi": -0.283658, "confidence": "confident_cools", "phrase": "" },
+          "p10": -0.6342,
+          "p90": -0.2585,
+          "frac_extrapolated": 0.5366,
+          "causal": null,
+          "tier": "configured",
+          "has_folds": true,
+          "realized": { "albedo": 0.1 }
+        },
+        {
+          "slug": "cooling-package",
+          "name": "Cooling package",
+          "kind": "joint",
+          "lever": null,
+          "dose": null,
+          "delta": { "estimate": -1.305193, "se": 0.378362, "lo": -2.046782, "hi": -0.563603, "confidence": "confident_cools", "phrase": "" },
+          "p10": -2.0749,
+          "p90": -0.6814,
+          "frac_extrapolated": 0.7482,
+          "causal": null,
+          "tier": "configured",
+          "has_folds": true,
+          "realized": { "canopy": 10.0, "impervious": -9.9979, "albedo": 0.05 }
+        }
+      ],
+      "ladders": [
+        {
+          "lever": "albedo",
+          "label": "albedo",
+          "unit": "albedo",
+          "points": [
+            { "dose": 0.05, "slug": "albedo-increase-plus-0-05", "estimate": -0.217705, "lo": -0.296371, "hi": -0.139039, "hollow": true },
+            { "dose": 0.1, "slug": "albedo-increase-plus-0-1", "estimate": -0.436013, "lo": -0.588367, "hi": -0.283658, "hollow": true }
+          ]
+        },
+        {
+          "lever": "canopy",
+          "label": "canopy",
+          "unit": "pp",
+          "points": [
+            { "dose": 5.0, "slug": "canopy-increase-plus-5", "estimate": -0.621878, "lo": -0.942554, "hi": -0.301202, "hollow": true },
+            { "dose": 10.0, "slug": "canopy-increase-plus-10", "estimate": -1.03165, "lo": -1.583376, "hi": -0.479924, "hollow": true },
+            { "dose": 20.0, "slug": "canopy-increase-plus-20", "estimate": -1.499783, "lo": -2.395749, "hi": -0.603817, "hollow": true }
+          ]
+        },
+        {
+          "lever": "impervious",
+          "label": "impervious",
+          "unit": "pp",
+          "points": [
+            { "dose": 10.0, "slug": "impervious-decrease-minus-10", "estimate": -0.182147, "lo": -0.48454, "hi": 0.120246, "hollow": true },
+            { "dose": 20.0, "slug": "impervious-decrease-minus-20", "estimate": -0.349791, "lo": -0.9505, "hi": 0.250919, "hollow": true }
+          ]
+        }
+      ],
+      "has_detail": true
+    }
+  },
+  "climate": {
+    "view": "climate",
+    "availability": "ready",
+    "missing": [],
+    "units": { "target": "degF", "levers": { "canopy": "pp", "impervious": "pp", "albedo": "albedo" } },
+    "caveats": [],
+    "demo": true,
+    "sections": {
+      "warming": [
+        {
+          "id": "ssp126:2021-2040",
+          "experiment": "ssp126",
+          "label": "SSP1-2.6",
+          "period": "2021-2040",
+          "n_models": 6,
+          "median": 1.701,
+          "p10": 1.337,
+          "p90": 2.187,
+          "min": 1.215,
+          "max": 2.349,
+          "by_model": { "DEMO-A": 1.215, "DEMO-B": 1.458, "DEMO-C": 1.62, "DEMO-D": 1.782, "DEMO-E": 2.025, "DEMO-F": 2.349 }
+        },
+        {
+          "id": "ssp126:2041-2060",
+          "experiment": "ssp126",
+          "label": "SSP1-2.6",
+          "period": "2041-2060",
+          "n_models": 6,
+          "median": 2.457,
+          "p10": 1.93,
+          "p90": 3.159,
+          "min": 1.755,
+          "max": 3.393,
+          "by_model": { "DEMO-A": 1.755, "DEMO-B": 2.106, "DEMO-C": 2.34, "DEMO-D": 2.574, "DEMO-E": 2.925, "DEMO-F": 3.393 }
+        },
+        {
+          "id": "ssp126:2081-2100",
+          "experiment": "ssp126",
+          "label": "SSP1-2.6",
+          "period": "2081-2100",
+          "n_models": 6,
+          "median": 2.835,
+          "p10": 2.228,
+          "p90": 3.645,
+          "min": 2.025,
+          "max": 3.915,
+          "by_model": { "DEMO-A": 2.025, "DEMO-B": 2.43, "DEMO-C": 2.7, "DEMO-D": 2.97, "DEMO-E": 3.375, "DEMO-F": 3.915 }
+        },
+        {
+          "id": "ssp245:2021-2040",
+          "experiment": "ssp245",
+          "label": "SSP2-4.5",
+          "period": "2021-2040",
+          "n_models": 6,
+          "median": 1.89,
+          "p10": 1.485,
+          "p90": 2.43,
+          "min": 1.35,
+          "max": 2.61,
+          "by_model": { "DEMO-A": 1.35, "DEMO-B": 1.62, "DEMO-C": 1.8, "DEMO-D": 1.98, "DEMO-E": 2.25, "DEMO-F": 2.61 }
+        },
+        {
+          "id": "ssp245:2041-2060",
+          "experiment": "ssp245",
+          "label": "SSP2-4.5",
+          "period": "2041-2060",
+          "n_models": 6,
+          "median": 3.213,
+          "p10": 2.524,
+          "p90": 4.131,
+          "min": 2.295,
+          "max": 4.437,
+          "by_model": { "DEMO-A": 2.295, "DEMO-B": 2.754, "DEMO-C": 3.06, "DEMO-D": 3.366, "DEMO-E": 3.825, "DEMO-F": 4.437 }
+        },
+        {
+          "id": "ssp245:2081-2100",
+          "experiment": "ssp245",
+          "label": "SSP2-4.5",
+          "period": "2081-2100",
+          "n_models": 6,
+          "median": 4.914,
+          "p10": 3.861,
+          "p90": 6.318,
+          "min": 3.51,
+          "max": 6.786,
+          "by_model": { "DEMO-A": 3.51, "DEMO-B": 4.212, "DEMO-C": 4.68, "DEMO-D": 5.148, "DEMO-E": 5.85, "DEMO-F": 6.786 }
+        },
+        {
+          "id": "ssp370:2021-2040",
+          "experiment": "ssp370",
+          "label": "SSP3-7.0",
+          "period": "2021-2040",
+          "n_models": 6,
+          "median": 1.89,
+          "p10": 1.485,
+          "p90": 2.43,
+          "min": 1.35,
+          "max": 2.61,
+          "by_model": { "DEMO-A": 1.35, "DEMO-B": 1.62, "DEMO-C": 1.8, "DEMO-D": 1.98, "DEMO-E": 2.25, "DEMO-F": 2.61 }
+        },
+        {
+          "id": "ssp370:2041-2060",
+          "experiment": "ssp370",
+          "label": "SSP3-7.0",
+          "period": "2041-2060",
+          "n_models": 6,
+          "median": 3.78,
+          "p10": 2.97,
+          "p90": 4.86,
+          "min": 2.7,
+          "max": 5.22,
+          "by_model": { "DEMO-A": 2.7, "DEMO-B": 3.24, "DEMO-C": 3.6, "DEMO-D": 3.96, "DEMO-E": 4.5, "DEMO-F": 5.22 }
+        },
+        {
+          "id": "ssp370:2081-2100",
+          "experiment": "ssp370",
+          "label": "SSP3-7.0",
+          "period": "2081-2100",
+          "n_models": 6,
+          "median": 6.993,
+          "p10": 5.495,
+          "p90": 8.991,
+          "min": 4.995,
+          "max": 9.657,
+          "by_model": { "DEMO-A": 4.995, "DEMO-B": 5.994, "DEMO-C": 6.66, "DEMO-D": 7.326, "DEMO-E": 8.325, "DEMO-F": 9.657 }
+        },
+        {
+          "id": "ssp585:2021-2040",
+          "experiment": "ssp585",
+          "label": "SSP5-8.5",
+          "period": "2021-2040",
+          "n_models": 6,
+          "median": 2.079,
+          "p10": 1.633,
+          "p90": 2.673,
+          "min": 1.485,
+          "max": 2.871,
+          "by_model": { "DEMO-A": 1.485, "DEMO-B": 1.782, "DEMO-C": 1.98, "DEMO-D": 2.178, "DEMO-E": 2.475, "DEMO-F": 2.871 }
+        },
+        {
+          "id": "ssp585:2041-2060",
+          "experiment": "ssp585",
+          "label": "SSP5-8.5",
+          "period": "2041-2060",
+          "n_models": 6,
+          "median": 4.536,
+          "p10": 3.564,
+          "p90": 5.832,
+          "min": 3.24,
+          "max": 6.264,
+          "by_model": { "DEMO-A": 3.24, "DEMO-B": 3.888, "DEMO-C": 4.32, "DEMO-D": 4.752, "DEMO-E": 5.4, "DEMO-F": 6.264 }
+        },
+        {
+          "id": "ssp585:2081-2100",
+          "experiment": "ssp585",
+          "label": "SSP5-8.5",
+          "period": "2081-2100",
+          "n_models": 6,
+          "median": 8.694,
+          "p10": 6.831,
+          "p90": 11.178,
+          "min": 6.21,
+          "max": 12.006,
+          "by_model": { "DEMO-A": 6.21, "DEMO-B": 7.452, "DEMO-C": 8.28, "DEMO-D": 9.108, "DEMO-E": 10.35, "DEMO-F": 12.006 }
+        }
+      ],
+      "models_table": {
+        "columns": [
+          { "key": "model", "label": "Model" },
+          { "key": "ssp126:2021-2040", "label": "SSP1-2.6 2021-2040", "unit": "degF" },
+          { "key": "ssp126:2041-2060", "label": "SSP1-2.6 2041-2060", "unit": "degF" },
+          { "key": "ssp126:2081-2100", "label": "SSP1-2.6 2081-2100", "unit": "degF" },
+          { "key": "ssp245:2021-2040", "label": "SSP2-4.5 2021-2040", "unit": "degF" },
+          { "key": "ssp245:2041-2060", "label": "SSP2-4.5 2041-2060", "unit": "degF" },
+          { "key": "ssp245:2081-2100", "label": "SSP2-4.5 2081-2100", "unit": "degF" },
+          { "key": "ssp370:2021-2040", "label": "SSP3-7.0 2021-2040", "unit": "degF" },
+          { "key": "ssp370:2041-2060", "label": "SSP3-7.0 2041-2060", "unit": "degF" },
+          { "key": "ssp370:2081-2100", "label": "SSP3-7.0 2081-2100", "unit": "degF" },
+          { "key": "ssp585:2021-2040", "label": "SSP5-8.5 2021-2040", "unit": "degF" },
+          { "key": "ssp585:2041-2060", "label": "SSP5-8.5 2041-2060", "unit": "degF" },
+          { "key": "ssp585:2081-2100", "label": "SSP5-8.5 2081-2100", "unit": "degF" }
+        ],
+        "rows": [
+          ["DEMO-A", 1.215, 1.755, 2.025, 1.35, 2.295, 3.51, 1.35, 2.7, 4.995, 1.485, 3.24, 6.21],
+          ["DEMO-B", 1.458, 2.106, 2.43, 1.62, 2.754, 4.212, 1.62, 3.24, 5.994, 1.782, 3.888, 7.452],
+          ["DEMO-C", 1.62, 2.34, 2.7, 1.8, 3.06, 4.68, 1.8, 3.6, 6.66, 1.98, 4.32, 8.28],
+          ["DEMO-D", 1.782, 2.574, 2.97, 1.98, 3.366, 5.148, 1.98, 3.96, 7.326, 2.178, 4.752, 9.108],
+          ["DEMO-E", 2.025, 2.925, 3.375, 2.25, 3.825, 5.85, 2.25, 4.5, 8.325, 2.475, 5.4, 10.35],
+          ["DEMO-F", 2.349, 3.393, 3.915, 2.61, 4.437, 6.786, 2.61, 5.22, 9.657, 2.871, 6.264, 12.006]
+        ]
+      },
+      "exposure": {
+        "thresholds": [90.0, 95.0],
+        "present": { "90": 0.0348, "95": 0.0 },
+        "groups": [
+          {
+            "id": "ssp126:2021-2040:no adaptation",
+            "label": "SSP1-2.6 2021-2040",
+            "experiment": "ssp126",
+            "period": "2021-2040",
+            "variant": "no adaptation",
+            "share": { "90": { "median": 0.3076, "p10": 0.2192, "p90": 0.6129 }, "95": { "median": 0.0, "p10": 0.0, "p90": 0.0 } }
+          },
+          {
+            "id": "ssp126:2041-2060:no adaptation",
+            "label": "SSP1-2.6 2041-2060",
+            "experiment": "ssp126",
+            "period": "2041-2060",
+            "variant": "no adaptation",
+            "share": { "90": { "median": 0.8107, "p10": 0.4214, "p90": 0.9781 }, "95": { "median": 0.0, "p10": 0.0, "p90": 0.0 } }
+          },
+          {
+            "id": "ssp126:2081-2100:no adaptation",
+            "label": "SSP1-2.6 2081-2100",
+            "experiment": "ssp126",
+            "period": "2081-2100",
+            "variant": "no adaptation",
+            "share": { "90": { "median": 0.9442, "p10": 0.6397, "p90": 0.9978 }, "95": { "median": 0.0, "p10": 0.0, "p90": 0.0 } }
+          },
+          {
+            "id": "ssp245:2021-2040:no adaptation",
+            "label": "SSP2-4.5 2021-2040",
+            "experiment": "ssp245",
+            "period": "2021-2040",
+            "variant": "no adaptation",
+            "share": { "90": { "median": 0.3906, "p10": 0.2504, "p90": 0.7768 }, "95": { "median": 0.0, "p10": 0.0, "p90": 0.0 } }
+          },
+          {
+            "id": "ssp245:2041-2060:no adaptation",
+            "label": "SSP2-4.5 2041-2060",
+            "experiment": "ssp245",
+            "period": "2041-2060",
+            "variant": "no adaptation",
+            "share": { "90": { "median": 0.983, "p10": 0.8228, "p90": 1.0 }, "95": { "median": 0.0, "p10": 0.0, "p90": 0.0 } }
+          },
+          {
+            "id": "ssp245:2081-2100:no adaptation",
+            "label": "SSP2-4.5 2081-2100",
+            "experiment": "ssp245",
+            "period": "2081-2100",
+            "variant": "no adaptation",
+            "share": { "90": { "median": 1.0, "p10": 0.9996, "p90": 1.0 }, "95": { "median": 0.0228, "p10": 0.0, "p90": 0.2429 } }
+          },
+          {
+            "id": "ssp370:2021-2040:no adaptation",
+            "label": "SSP3-7.0 2021-2040",
+            "experiment": "ssp370",
+            "period": "2021-2040",
+            "variant": "no adaptation",
+            "share": { "90": { "median": 0.3906, "p10": 0.2504, "p90": 0.7768 }, "95": { "median": 0.0, "p10": 0.0, "p90": 0.0 } }
+          },
+          {
+            "id": "ssp370:2041-2060:no adaptation",
+            "label": "SSP3-7.0 2041-2060",
+            "experiment": "ssp370",
+            "period": "2041-2060",
+            "variant": "no adaptation",
+            "share": { "90": { "median": 1.0, "p10": 0.9563, "p90": 1.0 }, "95": { "median": 0.0, "p10": 0.0, "p90": 0.0263 } }
+          },
+          {
+            "id": "ssp370:2081-2100:no adaptation",
+            "label": "SSP3-7.0 2081-2100",
+            "experiment": "ssp370",
+            "period": "2081-2100",
+            "variant": "no adaptation",
+            "share": { "90": { "median": 1.0, "p10": 1.0, "p90": 1.0 }, "95": { "median": 0.5156, "p10": 0.1031, "p90": 0.996 } }
+          },
+          {
+            "id": "ssp585:2021-2040:no adaptation",
+            "label": "SSP5-8.5 2021-2040",
+            "experiment": "ssp585",
+            "period": "2021-2040",
+            "variant": "no adaptation",
+            "share": { "90": { "median": 0.5152, "p10": 0.2888, "p90": 0.8924 }, "95": { "median": 0.0, "p10": 0.0, "p90": 0.0 } }
+          },
+          {
+            "id": "ssp585:2041-2060:no adaptation",
+            "label": "SSP5-8.5 2041-2060",
+            "experiment": "ssp585",
+            "period": "2041-2060",
+            "variant": "no adaptation",
+            "share": { "90": { "median": 1.0, "p10": 0.9942, "p90": 1.0 }, "95": { "median": 0.0036, "p10": 0.0, "p90": 0.1455 } }
+          },
+          {
+            "id": "ssp585:2081-2100:no adaptation",
+            "label": "SSP5-8.5 2081-2100",
+            "experiment": "ssp585",
+            "period": "2081-2100",
+            "variant": "no adaptation",
+            "share": { "90": { "median": 1.0, "p10": 1.0, "p90": 1.0 }, "95": { "median": 0.9946, "p10": 0.5116, "p90": 1.0 } }
+          }
+        ]
+      },
+      "offset": [],
+      "thresholds": [90.0, 95.0]
+    }
+  },
+  "causal": {
+    "view": "causal",
+    "availability": "ready",
+    "missing": [],
+    "units": { "target": "degF", "levers": { "canopy": "pp", "impervious": "pp", "albedo": "albedo" } },
+    "caveats": [],
+    "demo": true,
+    "sections": {
+      "treatments": {
+        "canopy": {
+          "label": "canopy",
+          "unit": "pp",
+          "forest": [
+            { "id": "own", "label": "θ own cell", "est": -0.015438, "se": 0.003713, "lo": -0.023353, "hi": -0.007523, "model": -0.004647 },
+            { "id": "nbr", "label": "θ neighbourhood", "est": -0.025607, "se": 0.006909, "lo": -0.040332, "hi": -0.010882, "model": null },
+            { "id": "sum", "label": "θ own + neighbourhood", "est": -0.041045, "se": 0.006981, "lo": -0.055924, "hi": -0.026166, "model": -0.124376 }
+          ],
+          "audit": [
+            { "check": "adoption_vs_theta_sum", "label": "adoption vs theta sum", "verdict": "magnitude differs", "flag": true, "model": -0.124376, "causal": -0.041045 },
+            { "check": "own_vs_theta_own", "label": "own vs theta own", "verdict": "magnitude differs", "flag": true, "model": -0.004647, "causal": -0.015438 },
+            { "check": "own_pd_vs_dr_curve", "label": "own pd vs dr curve", "verdict": "consistent", "flag": false, "model": null, "causal": null }
+          ],
+          "dr_curve": {
+            "t": [
+              0.0, 10.451, 12.169, 13.887, 15.605, 17.324, 19.042, 20.76, 22.478, 24.196, 25.914, 27.632, 29.351, 31.069, 32.787, 34.505, 36.223, 37.941, 39.659, 41.378, 43.096,
+              44.814, 46.532, 48.25, 49.968, 51.686
+            ],
+            "theta": [
+              -0.3372, -0.9869, -1.3434, -1.6726, -1.92, -2.1077, -2.2603, -2.3578, -2.3549, -2.2622, -2.1737, -2.2075, -2.4458, -2.8988, -3.4569, -3.8957, -3.9815, -3.5804,
+              -2.7162, -1.5736, -0.3597, 0.8891, 2.2658, 3.7155, 4.7967, 4.3859
+            ],
+            "lo": [
+              -0.948, -3.215, -4.2849, -5.0519, -5.4074, -5.4251, -5.2965, -5.4176, -5.4747, -5.8194, -6.2022, -6.6083, -6.9927, -7.6593, -8.3706, -8.9752, -9.0903, -8.6136,
+              -7.4707, -6.2212, -5.5298, -6.0897, -7.5937, -10.4331, -14.3816, -19.1001
+            ],
+            "hi": [
+              0.4784, 0.4169, 0.3847, 0.4212, 0.472, 0.4072, 0.3474, 0.2562, 0.2323, 0.6324, 0.8292, 0.9217, 0.8428, 0.389, 0.615, 0.6977, 1.132, 1.7944, 2.2482, 2.4791, 3.5021,
+              6.5757, 11.1362, 16.5886, 22.5982, 27.9148
+            ],
+            "ess": 226.6,
+            "clipped_frac": 0.1223,
+            "note": "own-exposure curve (Kennedy et al. 2017 assume no interference): compare with a model's OWN-ONLY partial-dependence curve"
+          },
+          "model_pd_curve": {
+            "t": [10.451, 17.11733333333333, 24.393500000000003, 31.1865, 38.755, 45.36966666666666, 51.686499999999995],
+            "y": [0.2567, 0.2172, 0.1955, 0.182, 0.1672, 0.1596, 0.1595],
+            "se": [0.1305, 0.1352, 0.1331, 0.1302, 0.1316, 0.1292, 0.121]
+          },
+          "cate": { "q": [-0.05626, -0.031799, -0.020957, -0.011759, 0.003473], "mean": -0.022783, "sd": 0.017045, "blp": { "coef": 0.0961, "se": 0.0419, "p": 0.0368 } },
+          "cate_layer": "cate_canopy",
+          "sensitivity": { "e_value": 1.92, "e_value_ci": 1.633, "rv_q": 0.5168, "rv_q_alpha": 0.3673, "design_effect": 4.407 },
+          "controls": {
+            "names": ["impervious", "albedo", "elevation", "water_dist"],
+            "basis_scale_m": 1000.0,
+            "hole_scale_ratio": 0.65,
+            "hole_warning": false,
+            "nuisance_r2": { "Y": 0.2456, "canopy": -0.4685 }
+          }
+        }
+      },
+      "flags": [
+        { "treatment": "canopy", "check": "adoption_vs_theta_sum", "verdict": "magnitude differs" },
+        { "treatment": "canopy", "check": "own_vs_theta_own", "verdict": "magnitude differs" }
+      ],
+      "dag_audit": null
+    }
+  },
+  "budget": {
+    "view": "budget",
+    "availability": "ready",
+    "missing": [],
+    "units": { "target": "degF", "levers": { "canopy": "pp", "impervious": "pp", "albedo": "albedo" } },
+    "caveats": [],
+    "demo": true,
+    "sections": {
+      "kpis": [
+        { "id": "treated", "label": "Cells treated", "value": 232, "format": "int" },
+        { "id": "dose", "label": "Mean dose", "value": 8.62, "unit": "pp" },
+        { "id": "planned", "label": "Planned cooling", "value": 583.3, "unit": "degF·cells", "decimals": 0 },
+        { "id": "realised", "label": "Realised cooling", "value": 623.9, "unit": "degF·cells", "decimals": 0, "note": "spillover non-additivity: realised differs from planned" },
+        { "id": "cost", "label": "Cost", "value": 2000.0, "decimals": 0 },
+        { "id": "gini", "label": "Gini", "value": 0.946, "decimals": 2 },
+        { "id": "constraint", "label": "Constraint", "value": "plantable space (WorldCover open land + 20% of built-up area)", "format": "text" },
+        { "id": "objective", "label": "Objective", "value": "total cooling", "format": "text" }
+      ],
+      "pareto": {
+        "points": [
+          { "budget": 500.0, "total_benefit": 192.87, "n_segments": 75, "gini": 0.987 },
+          { "budget": 1000.0, "total_benefit": 343.0, "n_segments": 150, "gini": 0.973 },
+          { "budget": 2000.0, "total_benefit": 583.34, "n_segments": 300, "gini": 0.946 },
+          { "budget": 4000.0, "total_benefit": 920.15, "n_segments": 600, "gini": 0.893 }
+        ],
+        "realised": [{ "budget": 2000.0, "total_benefit": 623.86 }],
+        "budget": 2000.0,
+        "unit": "degF·cells",
+        "budget_unit": "pp·cells"
+      },
+      "caption": "Doubling the budget from 1,000 to 2,000 pp·cells buys 1.6× the cooling (diminishing returns).",
+      "top_cells": [
+        { "rank": 1, "row": 0, "id": 1000, "lon": -71.4, "lat": 41.82, "dose": 10.0, "benefit": 1.9, "zone": null },
+        { "rank": 2, "row": 7, "id": 1007, "lon": -71.399, "lat": 41.821, "dose": 10.0, "benefit": 1.85, "zone": null },
+        { "rank": 3, "row": 14, "id": 1014, "lon": -71.398, "lat": 41.822, "dose": 10.0, "benefit": 1.8, "zone": null },
+        { "rank": 4, "row": 21, "id": 1021, "lon": -71.397, "lat": 41.823, "dose": 10.0, "benefit": 1.75, "zone": null },
+        { "rank": 5, "row": 28, "id": 1028, "lon": -71.396, "lat": 41.824, "dose": 10.0, "benefit": 1.7, "zone": null }
+      ],
+      "status": "ok"
+    }
+  },
+  "planner": {
+    "view": "planner",
+    "availability": "ready",
+    "missing": [],
+    "units": { "target": "degF", "levers": { "canopy": "pp", "impervious": "pp", "albedo": "albedo" } },
+    "caveats": [],
+    "demo": true,
+    "sections": {
+      "exposure": {
+        "thresholds": [90.0, 95.0],
+        "groups": [
+          { "id": "today", "label": "Today", "share": [0.035, 0.0] },
+          { "id": "ssp245:2041-2060", "label": "SSP2-4.5 2041–2060", "share": [0.98, 0.0], "lo": [0.82, 0.0], "hi": [1.0, 0.0] }
+        ]
+      },
+      "person_mean": {
+        "columns": [
+          { "key": "case", "label": "Case" },
+          { "key": "t", "label": "Person-mean temperature", "unit": "degF" }
+        ],
+        "rows": [
+          ["Today", 88.2],
+          ["SSP2-4.5 2041–2060", 91.4]
+        ]
+      },
+      "hot_days": { "unit": "days per year", "panels": [{ "id": "today", "label": "Today", "thresholds": [90, 95], "campaign": [21.0, 4.0], "lower": [9.0, 1.0] }] },
+      "equity": {
+        "measures": ["mean cooling"],
+        "quintiles": [
+          { "label": "Q1", "values": { "mean cooling": 0.35 } },
+          { "label": "Q2", "values": { "mean cooling": 0.4 } },
+          { "label": "Q3", "values": { "mean cooling": 0.45 } },
+          { "label": "Q4", "values": { "mean cooling": 0.5 } },
+          { "label": "Q5", "values": { "mean cooling": 0.55 } }
+        ],
+        "concentration": [{ "label": "share aged 60+", "value": 0.04 }]
+      },
+      "plantable": [{ "id": "plantable", "label": "Plantable space", "value": 0.31, "format": "percent" }],
+      "zones": {
+        "columns": [
+          { "key": "zone", "label": "Zone" },
+          { "key": "people", "label": "Residents" },
+          { "key": "t", "label": "Mean temperature", "unit": "degF" }
+        ],
+        "rows": [
+          ["1", 1200, 88.4],
+          ["2", 950, 87.6]
+        ]
+      },
+      "hex_files": [{ "size_m": 250, "relpath": "planner/hex_250m.csv", "format": "csv" }],
+      "sites": [{ "row": 3, "id": 1003, "lon": -71.41, "lat": 41.82, "label": "Site 1" }],
+      "pairs": [{ "treated": 3, "control": 9 }],
+      "gis": [{ "relpath": "planner/geotiff/people.tif", "kind": "GeoTIFF", "bytes": 52000, "layer": "people" }]
+    }
+  },
+  "uncertainty": {
+    "view": "uncertainty",
+    "availability": "ready",
+    "missing": [],
+    "units": { "target": "degF", "levers": { "canopy": "pp", "impervious": "pp", "albedo": "albedo" } },
+    "caveats": [],
+    "demo": true,
+    "sections": {
+      "rows": [
+        {
+          "id": "canopy-increase-plus-5",
+          "label": "Canopy Increase +5",
+          "estimate": -0.621878,
+          "layers": [
+            { "id": "estimation", "label": "Estimation (folds)", "lo": -0.942554, "hi": -0.301202 },
+            { "id": "envelope", "label": "Envelope", "lo": -1.4138, "hi": -0.1506 }
+          ]
+        },
+        {
+          "id": "canopy-increase-plus-10",
+          "label": "Canopy Increase +10",
+          "estimate": -1.03165,
+          "layers": [
+            { "id": "estimation", "label": "Estimation (folds)", "lo": -1.583376, "hi": -0.479924 },
+            { "id": "envelope", "label": "Envelope", "lo": -2.3751, "hi": -0.24 }
+          ]
+        },
+        {
+          "id": "canopy-increase-plus-20",
+          "label": "Canopy Increase +20",
+          "estimate": -1.499783,
+          "layers": [
+            { "id": "estimation", "label": "Estimation (folds)", "lo": -2.395749, "hi": -0.603817 },
+            { "id": "envelope", "label": "Envelope", "lo": -3.5936, "hi": -0.3019 }
+          ]
+        }
+      ],
+      "climate": {
+        "columns": [
+          { "key": "p", "label": "Projection" },
+          { "key": "spread", "label": "Model spread", "unit": "degF" }
+        ],
+        "rows": [["SSP2-4.5 2041–2060", 2.14]]
+      },
+      "sources": [{ "kind": "multiverse", "label": "Multiverse", "study_id": null, "attached": false, "state": "not_run" }]
+    }
+  },
+  "provenance": {
+    "view": "provenance",
+    "availability": "ready",
+    "missing": [],
+    "units": { "target": "degF", "levers": { "canopy": "pp", "impervious": "pp", "albedo": "albedo" } },
+    "caveats": [],
+    "demo": true,
+    "sections": {
+      "hashes": {
+        "input_sha256": "4bfb0ca0ba3bb0dae1afea03e2d761d9657b5e7915cc046d5d56506819e79cbc",
+        "config_sha256": "58f0d8cabbf39f4b04f04e8228033ad8690490d470cd21beeb42c4dbaf2f6c3a",
+        "code_sha256": "9ef8fac0551ae9655ab83bffaa4650667cf5d07745c6ab264d8ad64d72b61245"
+      },
+      "git": { "commit": "5a04f4472c57375b762fef21344d0a99a686dfd2", "dirty": true },
+      "platform": { "python": "3.11.15", "system": "Linux", "machine": "x86_64" },
+      "launch": {
+        "studio_version": "1.0.0",
+        "run_id": "r_fx",
+        "args": { "stages": ["S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7"], "fast": true, "coarse": null, "cv_curve": null, "threads": 1 }
+      }
+    }
+  }
+}

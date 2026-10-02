@@ -12,7 +12,7 @@ import { JobTray } from "../components/ui/JobTray";
 import { Toasts } from "../components/ui/Toast";
 import { Tooltip } from "../components/ui/Tooltip";
 import { Badge, modeLabel } from "../components/ui/Badge";
-import { Link, navigate, runTabHref, useRegistry, useRoute, type Registry } from "../router";
+import { Link, matchRoute, navigate, runTabHref, useLocation, useRegistry, useRoute, type Registry, type RouteDef } from "../router";
 import { activeJobs, connectJobs, tabTitle, useJobs } from "../stores/jobs";
 import { useUi, type Command, type ThemePref } from "../stores/ui";
 import { fmtDate, fmtNum, fmtPct } from "../theme/format";
@@ -78,15 +78,40 @@ function ProjectSwitcher({ projectId }: { projectId: string | null }) {
   );
 }
 
+/**
+ * The project nav entry the current page belongs to: the entry its route declared, else the
+ * entry whose target is the longest prefix of the path. The project root (Overview) prefixes
+ * every project page, so it is current only on its own route.
+ */
+export function currentProjectNav(entries: { id: string; to: string; route: RouteDef }[], pathname: string, route: RouteDef | null): string | null {
+  const own = entries.find((e) => e.route === route);
+  if (own) return own.id;
+  let best: string | null = null;
+  let len = -1;
+  for (const e of entries) {
+    const p = e.to.split(/[?#]/)[0].replace(/\/+$/, "");
+    if (/^\/p\/[^/]+$/.test(p)) continue;
+    if ((pathname === p || pathname.startsWith(p + "/")) && p.length > len) {
+      best = e.id;
+      len = p.length;
+    }
+  }
+  return best;
+}
+
 /** The project nav built from route modules' `projectNav` declarations (SPEC §3.1, §12.3). */
 export function ProjectNav({ registry, project }: { registry: Registry; project: Project | null }) {
+  const loc = useLocation();
   if (!project) return null;
+  const entries = registry.projectNav.flatMap((n) => {
+    const to = n.to(project.id, project);
+    return to === null ? [] : [{ n, id: n.id, to, route: n.route }];
+  });
+  const current = currentProjectNav(entries, loc.pathname, matchRoute(registry.compiled, loc.pathname)?.route ?? null);
   return (
     <nav aria-label="Project">
       <ul className="shell-nav">
-        {registry.projectNav.map((n) => {
-          const to = n.to(project.id, project);
-          if (to === null) return null;
+        {entries.map(({ n, to }) => {
           const reason = n.disabledReason?.(project) ?? null;
           const emph = n.id === "lab";
           return (
@@ -98,7 +123,7 @@ export function ProjectNav({ registry, project }: { registry: Registry; project:
                   </span>
                 </Tooltip>
               ) : (
-                <Link to={to} activeMatch="prefix" className={emph ? "emph" : undefined}>
+                <Link to={to} aria-current={n.id === current ? "page" : undefined} className={emph ? "emph" : undefined}>
                   {n.label}
                 </Link>
               )}

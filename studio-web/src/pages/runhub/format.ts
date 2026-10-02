@@ -1,0 +1,257 @@
+// View-model formatting for the run hub (SPEC §1.2 principle 9, §6.4): every number carries
+// its unit and temperature changes read "cooler"/"warmer". Pure functions, unit-tested.
+import type { CellCurve, GenericTable, MissingOutput, ViewKpi, ViewUnits } from "../../api/runs";
+import type { Likely, OutputState } from "../../api/types";
+import { hexKey, type GridData } from "../../map/grid";
+import { EMPTY, fmtInt, fmtNum, fmtPct, fmtRange, fmtSigned, fmtSignedValue, fmtTempChange, fmtValue, unitLabel } from "../../theme/format";
+
+const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+
+const TEMP_UNITS = new Set(["°F", "°C", "K"]);
+
+/** Whether a unit is a temperature (changes in it are worded cooler/warmer). */
+export function isTempUnit(unit: string | null | undefined): boolean {
+  return TEMP_UNITS.has(unitLabel(unit));
+}
+
+/** Display unit of the target ("°F"). */
+export function targetUnit(units: ViewUnits | null | undefined): string {
+  return unitLabel(units?.target ?? "");
+}
+
+/**
+ * A temperature change and its likely range in words:
+ * "0.62 °F cooler (likely range 0.30–0.94 °F cooler)"; ranges spanning zero read
+ * "likely range 0.10 °F cooler to 0.05 °F warmer".
+ */
+export function likelyText(l: Pick<Likely, "estimate" | "lo" | "hi"> | null | undefined, unit: string, decimals = 2): string {
+  if (!l || !isNum(l.estimate)) return EMPTY;
+  const head = isTempUnit(unit) ? fmtTempChange(l.estimate, unit, decimals) : fmtSignedValue(l.estimate, unit, decimals);
+  if (!isNum(l.lo) || !isNum(l.hi)) return head;
+  return `${head} (likely range ${rangeWords(l.lo, l.hi, unit, decimals)})`;
+}
+
+/** A range of changes in cooler/warmer words for temperatures, signed numbers otherwise. */
+export function rangeWords(lo: number, hi: number, unit: string, decimals = 2): string {
+  if (!isTempUnit(unit)) return fmtRange(lo, hi, unit, decimals);
+  if (hi < 0) return `${fmtRange(-hi, -lo, unit, decimals)} cooler`;
+  if (lo > 0) return `${fmtRange(lo, hi, unit, decimals)} warmer`;
+  return `${fmtTempChange(lo, unit, decimals)} to ${fmtTempChange(hi, unit, decimals)}`;
+}
+
+/** Plain-language confidence of a likely range. */
+export function confidenceWords(l: Pick<Likely, "lo" | "hi" | "confidence"> | null | undefined): string {
+  if (!l) return "";
+  if (l.confidence === "confident_cools") return "Confident it cools.";
+  if (l.confidence === "confident_warms") return "Confident it warms.";
+  if (l.confidence === "could_be_zero") return "Could be zero.";
+  if (isNum(l.lo) && isNum(l.hi)) return l.hi < 0 ? "Confident it cools." : l.lo > 0 ? "Confident it warms." : "Could be zero.";
+  return "No uncertainty estimate.";
+}
+
+export type KpiDisplay = { value: string; unit: string; note: string | null };
+
+/** The tile text for a ViewModel KPI. */
+export function kpiDisplay(k: ViewKpi, units?: ViewUnits | null): KpiDisplay {
+  const unit = unitLabel(k.unit ?? (k.format === "delta" ? (units?.target ?? "") : ""));
+  const d = k.decimals ?? 2;
+  const notes: string[] = [];
+  let value: string;
+  let shownUnit = unit;
+  if (typeof k.value === "string") value = k.value;
+  else if (k.format === "percent") {
+    value = fmtPct(k.value, k.decimals ?? 0);
+    shownUnit = "";
+  } else if (k.format === "int") value = fmtInt(k.value);
+  else if (k.format === "delta") {
+    if (isTempUnit(unit) && isNum(k.value)) {
+      value = fmtTempChange(k.value, unit, d);
+      shownUnit = "";
+    } else value = fmtSigned(k.value, d);
+  } else if (k.format === "signed") value = fmtSigned(k.value, d);
+  else value = fmtNum(k.value, d);
+  if (k.likely && isNum(k.likely.lo) && isNum(k.likely.hi)) notes.push(`likely range ${rangeWords(k.likely.lo, k.likely.hi, unit, d)}`);
+  if (isNum(k.target ?? null)) {
+    const t = k.target as number;
+    const tv = k.format === "percent" ? fmtPct(t, k.decimals ?? 0) : fmtValue(t, unit, d);
+    notes.push(`${k.target_label ?? "target"} ${tv}`);
+  }
+  if (k.band && isNum(k.band.lo) && isNum(k.band.hi)) notes.push(`${k.band.label} ${rangeWords(k.band.lo, k.band.hi, unit, d)}`);
+  if (k.note) notes.push(k.note);
+  return { value, unit: shownUnit, note: notes.length ? notes.join(" · ") : null };
+}
+
+/** "stage:S6" → "stage S6"; "post:planner" → "the planner post-run action"; "study:placebo" → "the placebo study". */
+export function producedByText(p: string | null | undefined): string {
+  if (!p) return "an unknown step";
+  const [kind, name] = p.split(":");
+  if (kind === "stage") return `stage ${name}`;
+  if (kind === "post") return `the ${name} post-run action`;
+  if (kind === "study") return `the ${name} study`;
+  if (kind === "studio") return `Studio (${name})`;
+  return p;
+}
+
+/** One sentence per missing output ("causal: produced by stage S6"). */
+export function missingText(m: MissingOutput): string {
+  return `${m.output} — produced by ${producedByText(m.produced_by)}`;
+}
+
+/** Status tone (StatusChip) for an output state. */
+export function outputStateStatus(state: OutputState | string | null | undefined): string {
+  switch (state) {
+    case "present":
+      return "done";
+    case "writing":
+      return "running";
+    case "partial":
+      return "partial";
+    case "stale":
+      return "stale";
+    case "missing":
+      return "missing";
+    default:
+      return "queued";
+  }
+}
+
+export const OUTPUT_STATE_TEXT: Record<string, string> = {
+  present: "present",
+  stale: "stale",
+  missing: "missing",
+  writing: "being written",
+  partial: "partly written",
+};
+
+/** A GenericTable as kit `ChartTable`/`Table` input (header labels with units). */
+export function tableColumns(t: GenericTable): { key: string; label: string; unit?: string }[] {
+  return t.columns.map((c) => ({ key: c.key, label: c.label, unit: c.unit ? unitLabel(c.unit) : undefined }));
+}
+
+/** A cell of a generic table: numbers keep 3 significant decimals and the Unicode minus. */
+export function cellText(v: unknown, decimals = 3): string {
+  if (v === null || v === undefined || v === "") return EMPTY;
+  if (typeof v === "number") return Number.isInteger(v) ? fmtInt(v) : fmtNum(v, decimals);
+  if (typeof v === "boolean") return v ? "yes" : "no";
+  return String(v);
+}
+
+/** Pretty label of a snake_case or dotted key ("lambda_scores" → "Lambda scores"). */
+export function humanize(key: string): string {
+  const s = key.replace(/[_.]+/g, " ").trim();
+  return s ? s[0].toUpperCase() + s.slice(1) : key;
+}
+
+/** Metres in the nicest unit: 315 m, 1.2 km. */
+export function fmtDistance(m: number | null | undefined): string {
+  if (!isNum(m)) return EMPTY;
+  return Math.abs(m) >= 1000 ? `${fmtNum(m / 1000, 1)} km` : `${fmtInt(m)} m`;
+}
+
+// ---------------------------------------------------------------- response curves
+
+const sigma = (z: number) => 1 / (1 + Math.exp(-z));
+
+/**
+ * Width w of core's sigmoid from its inflection D0 and d90 (the dose reaching 90% of the
+ * maximum): d90 = D0 + w·logit(0.9·(1 − s0) + s0) with s0 = σ(−D0/w). The right-hand side
+ * grows with w, so bisection on a log scale finds it. Null when no w fits.
+ */
+export function sigmoidWidth(D0: number, d90: number): number | null {
+  if (!(D0 >= 0) || !(d90 > D0)) return null;
+  const g = (w: number) => {
+    const s0 = sigma(-D0 / w);
+    const p = 0.9 * (1 - s0) + s0;
+    return D0 + w * Math.log(p / (1 - p)) - d90;
+  };
+  let lo = Math.max(1e-9, (d90 - D0) * 1e-6);
+  let hi = (d90 - D0) * 10 + D0 + 1;
+  if (g(lo) > 0 || g(hi) < 0) return null;
+  for (let i = 0; i < 100; i++) {
+    const mid = Math.sqrt(lo * hi);
+    if (g(mid) < 0) lo = mid;
+    else hi = mid;
+  }
+  return Math.sqrt(lo * hi);
+}
+
+/**
+ * A cell's fitted dose–benefit curve. The server sends sampled `dose`/`benefit`; when it sends
+ * only the parameters, the curve is rebuilt here over [0, dmax] from the forms of core
+ * `response.fit_saturation`:
+ * - saturating B(D) = A·(1 − exp(−D/d_s));
+ * - sigmoid B(D) = A·[σ((D − D0)/w) − σ(−D0/w)] / [1 − σ(−D0/w)], with D0 the inflection and
+ *   the width w recovered from d90 (sigmoidWidth).
+ * Linear fits and censored curves (no d_s, or no d90 for a sigmoid) need their sampled points.
+ */
+export function curvePoints(c: CellCurve, n = 25): { dose: number[]; benefit: number[] } {
+  if (c.dose.length && c.dose.length === c.benefit.length) return { dose: c.dose, benefit: c.benefit };
+  const A = c.A;
+  if (!isNum(A)) return { dose: [], benefit: [] };
+  const grid = (top: number) => Array.from({ length: n }, (_, i) => (top * i) / (n - 1));
+  if (c.model === "saturating" && isNum(c.ds) && c.ds > 0) {
+    const ds = c.ds;
+    const dose = grid(isNum(c.dmax) && c.dmax > 0 ? c.dmax : isNum(c.d90) ? c.d90 * 1.5 : ds * 3);
+    return { dose, benefit: dose.map((d) => A * (1 - Math.exp(-d / ds))) };
+  }
+  if (c.model === "sigmoid" && isNum(c.inflection) && isNum(c.d90)) {
+    const D0 = c.inflection;
+    const w = sigmoidWidth(D0, c.d90);
+    if (w === null) return { dose: [], benefit: [] };
+    const s0 = sigma(-D0 / w);
+    const dose = grid(isNum(c.dmax) && c.dmax > 0 ? c.dmax : c.d90 * 1.25);
+    return { dose, benefit: dose.map((d) => (A * (sigma((d - D0) / w) - s0)) / (1 - s0)) };
+  }
+  return { dose: [], benefit: [] };
+}
+
+// ---------------------------------------------------------------- hex mode
+
+/**
+ * Hex choropleth: every row takes the mean of the finite values in its hexagon (pointy-top
+ * hexagons of `size_m` across flats in the run frame, the planner's hex keys). Rows with no
+ * value stay NaN.
+ */
+export function hexMeans(grid: GridData, values: ArrayLike<number>, size_m: number): Float32Array {
+  const n = Math.min(grid.n, values.length);
+  const keys = new Float64Array(n);
+  const sum = new Map<number, number>();
+  const cnt = new Map<number, number>();
+  const { x0_m, y0_m, dx_m } = grid.meta;
+  for (let r = 0; r < n; r++) {
+    const k = hexKey(x0_m + grid.ix[r] * dx_m, y0_m + grid.iy[r] * dx_m, size_m);
+    keys[r] = k;
+    const v = values[r];
+    if (!Number.isFinite(v)) continue;
+    sum.set(k, (sum.get(k) ?? 0) + v);
+    cnt.set(k, (cnt.get(k) ?? 0) + 1);
+  }
+  const out = new Float32Array(n);
+  for (let r = 0; r < n; r++) {
+    const c = cnt.get(keys[r]) ?? 0;
+    out[r] = c ? (sum.get(keys[r]) as number) / c : NaN;
+  }
+  return out;
+}
+
+/** Rows whose (x, y) values fall inside a box (Relationships brush → selection mask). */
+export function maskFromBox(x: ArrayLike<number>, y: ArrayLike<number>, box: { x: [number, number]; y: [number, number] }): Uint8Array {
+  const n = Math.min(x.length, y.length);
+  const out = new Uint8Array(n);
+  const [x0, x1] = [Math.min(...box.x), Math.max(...box.x)];
+  const [y0, y1] = [Math.min(...box.y), Math.max(...box.y)];
+  for (let i = 0; i < n; i++) {
+    const a = x[i];
+    const b = y[i];
+    if (a >= x0 && a <= x1 && b >= y0 && b <= y1) out[i] = 1;
+  }
+  return out;
+}
+
+/** Rank agreement chip text for a priority comparison. */
+export function agreementWords(tau: number | null | undefined): string {
+  if (!isNum(tau)) return EMPTY;
+  const a = Math.abs(tau);
+  const w = a >= 0.7 ? "strong" : a >= 0.4 ? "moderate" : a >= 0.2 ? "weak" : "little";
+  return `${w} agreement (τ ${fmtSigned(tau, 2)})`;
+}

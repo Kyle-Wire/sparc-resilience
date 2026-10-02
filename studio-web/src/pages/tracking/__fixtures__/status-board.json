@@ -1,0 +1,699 @@
+{
+ "columns": [
+  {
+   "id": "S0",
+   "label": "S0",
+   "group": "stage"
+  },
+  {
+   "id": "S1",
+   "label": "S1",
+   "group": "stage"
+  },
+  {
+   "id": "S2_S3",
+   "label": "S2–S3",
+   "group": "stage"
+  },
+  {
+   "id": "baselines",
+   "label": "Baselines",
+   "group": "stage"
+  },
+  {
+   "id": "cv_curve",
+   "label": "CV curve",
+   "group": "stage"
+  },
+  {
+   "id": "S4",
+   "label": "S4",
+   "group": "stage"
+  },
+  {
+   "id": "S5",
+   "label": "S5",
+   "group": "stage"
+  },
+  {
+   "id": "climate",
+   "label": "Climate",
+   "group": "stage"
+  },
+  {
+   "id": "S6",
+   "label": "S6",
+   "group": "stage"
+  },
+  {
+   "id": "S7",
+   "label": "S7",
+   "group": "stage"
+  },
+  {
+   "id": "planner",
+   "label": "Planner",
+   "group": "post"
+  },
+  {
+   "id": "emulator",
+   "label": "Emulator",
+   "group": "post"
+  },
+  {
+   "id": "uncertainty",
+   "label": "Uncertainty",
+   "group": "post"
+  },
+  {
+   "id": "writeup",
+   "label": "Writeup",
+   "group": "post"
+  },
+  {
+   "id": "placebo",
+   "label": "Placebo",
+   "group": "study"
+  },
+  {
+   "id": "multiverse",
+   "label": "Multiverse",
+   "group": "study"
+  },
+  {
+   "id": "simcheck",
+   "label": "Simcheck",
+   "group": "study"
+  },
+  {
+   "id": "reproduce",
+   "label": "Reproduce",
+   "group": "study"
+  }
+ ],
+ "rows": [
+  {
+   "run": {
+    "id": "20261001-101500-fast-ab12",
+    "project_id": "p_demo",
+    "label": "First fast run",
+    "origin": "studio",
+    "status": "complete",
+    "mode": "fast",
+    "coarse_m": null,
+    "created_utc": "2026-10-01T10:15:00Z",
+    "finished_utc": null,
+    "duration_s": null,
+    "n_points": 1120,
+    "r2": 0.81,
+    "rmse": null,
+    "coverage": null,
+    "n_scenarios": null,
+    "checkpoint_bytes": 4149145,
+    "has_emulator": false,
+    "studies": [],
+    "git_commit": "a1b2c3d4e5",
+    "git_dirty": false,
+    "demo": true,
+    "pinned": false,
+    "parent_run_id": null,
+    "study_id": null,
+    "last_job_id": null
+   },
+   "cells": {
+    "S0": {
+     "state": "done",
+     "seconds": 0.3,
+     "progress": null,
+     "reason": null,
+     "job_id": "j_a1",
+     "study_id": null,
+     "action": null
+    },
+    "S1": {
+     "state": "done",
+     "seconds": 1.9,
+     "progress": null,
+     "reason": null,
+     "job_id": "j_a1",
+     "study_id": null,
+     "action": null
+    },
+    "S2_S3": {
+     "state": "done",
+     "seconds": 15.4,
+     "progress": null,
+     "reason": null,
+     "job_id": "j_a1",
+     "study_id": null,
+     "action": null
+    },
+    "baselines": {
+     "state": "disabled",
+     "seconds": null,
+     "progress": null,
+     "reason": "disabled_by_config:baselines.enabled",
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "cv_curve": {
+     "state": "skipped",
+     "seconds": null,
+     "progress": null,
+     "reason": "not_requested",
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "S4": {
+     "state": "done",
+     "seconds": 5.5,
+     "progress": null,
+     "reason": null,
+     "job_id": "j_a1",
+     "study_id": null,
+     "action": null
+    },
+    "S5": {
+     "state": "done",
+     "seconds": 1.5,
+     "progress": null,
+     "reason": null,
+     "job_id": "j_a1",
+     "study_id": null,
+     "action": null
+    },
+    "climate": {
+     "state": "done",
+     "seconds": 0.1,
+     "progress": null,
+     "reason": null,
+     "job_id": "j_a1",
+     "study_id": null,
+     "action": null
+    },
+    "S6": {
+     "state": "done",
+     "seconds": 5.1,
+     "progress": null,
+     "reason": null,
+     "job_id": "j_a1",
+     "study_id": null,
+     "action": null
+    },
+    "S7": {
+     "state": "done",
+     "seconds": 0.2,
+     "progress": null,
+     "reason": null,
+     "job_id": "j_a1",
+     "study_id": null,
+     "action": null
+    },
+    "planner": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": {
+      "kind": "run_job",
+      "label": "Run planner",
+      "method": "POST",
+      "path": "/api/runs/20261001-101500-fast-ab12/actions/planner",
+      "body": {}
+     }
+    },
+    "emulator": {
+     "state": "done",
+     "seconds": 412.0,
+     "progress": null,
+     "reason": null,
+     "job_id": "j_a2",
+     "study_id": null,
+     "action": null
+    },
+    "uncertainty": {
+     "state": "stale",
+     "seconds": null,
+     "progress": null,
+     "reason": "multiverse finished after the envelopes",
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "writeup": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": {
+      "kind": "run_job",
+      "label": "Run writeup",
+      "method": "POST",
+      "path": "/api/runs/20261001-101500-fast-ab12/actions/writeup",
+      "body": {}
+     }
+    },
+    "placebo": {
+     "state": "done",
+     "seconds": 1820.0,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": "st_p1",
+     "action": null
+    },
+    "multiverse": {
+     "state": "running",
+     "seconds": null,
+     "progress": 0.4,
+     "reason": null,
+     "job_id": "j_a3",
+     "study_id": "st_m1",
+     "action": null
+    },
+    "simcheck": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": {
+      "kind": "run_job",
+      "label": "Run simcheck",
+      "method": "POST",
+      "path": "/api/runs/20261001-101500-fast-ab12/studies/simcheck",
+      "body": {}
+     }
+    },
+    "reproduce": {
+     "state": "failed",
+     "seconds": null,
+     "progress": null,
+     "reason": "R² differs by 0.04",
+     "job_id": null,
+     "study_id": "st_r1",
+     "action": null
+    }
+   }
+  },
+  {
+   "run": {
+    "id": "20261001-120000-coarse60-cd34",
+    "project_id": "p_demo",
+    "label": null,
+    "origin": "studio",
+    "status": "running",
+    "mode": "coarse",
+    "coarse_m": 60.0,
+    "created_utc": "2026-10-01T12:00:00Z",
+    "finished_utc": null,
+    "duration_s": null,
+    "n_points": 1120,
+    "r2": null,
+    "rmse": null,
+    "coverage": null,
+    "n_scenarios": null,
+    "checkpoint_bytes": null,
+    "has_emulator": false,
+    "studies": [],
+    "git_commit": "a1b2c3d4e5",
+    "git_dirty": false,
+    "demo": true,
+    "pinned": false,
+    "parent_run_id": null,
+    "study_id": null,
+    "last_job_id": null
+   },
+   "cells": {
+    "S0": {
+     "state": "done",
+     "seconds": 0.4,
+     "progress": null,
+     "reason": null,
+     "job_id": "j_b1",
+     "study_id": null,
+     "action": null
+    },
+    "S1": {
+     "state": "done",
+     "seconds": 1.7,
+     "progress": null,
+     "reason": null,
+     "job_id": "j_b1",
+     "study_id": null,
+     "action": null
+    },
+    "S2_S3": {
+     "state": "running",
+     "seconds": null,
+     "progress": 0.62,
+     "reason": null,
+     "job_id": "j_b1",
+     "study_id": null,
+     "action": null
+    },
+    "baselines": {
+     "state": "skipped",
+     "seconds": null,
+     "progress": null,
+     "reason": "not_requested",
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "cv_curve": {
+     "state": "skipped",
+     "seconds": null,
+     "progress": null,
+     "reason": "not_requested",
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "S4": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "S5": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "climate": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "S6": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "S7": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "planner": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "emulator": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "uncertainty": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "writeup": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "placebo": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "multiverse": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "simcheck": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "reproduce": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    }
+   }
+  },
+  {
+   "run": {
+    "id": "20260930-090000-full-ef56",
+    "project_id": "p_demo",
+    "label": "Overnight full run",
+    "origin": "studio",
+    "status": "partial",
+    "mode": "full",
+    "coarse_m": null,
+    "created_utc": "2026-09-30T09:00:00Z",
+    "finished_utc": null,
+    "duration_s": null,
+    "n_points": 1120,
+    "r2": null,
+    "rmse": null,
+    "coverage": null,
+    "n_scenarios": null,
+    "checkpoint_bytes": 525000000,
+    "has_emulator": false,
+    "studies": [],
+    "git_commit": "a1b2c3d4e5",
+    "git_dirty": false,
+    "demo": true,
+    "pinned": false,
+    "parent_run_id": null,
+    "study_id": null,
+    "last_job_id": null
+   },
+   "cells": {
+    "S0": {
+     "state": "done",
+     "seconds": 0.3,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "S1": {
+     "state": "cached",
+     "seconds": null,
+     "progress": null,
+     "reason": "checkpoint",
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "S2_S3": {
+     "state": "cached",
+     "seconds": null,
+     "progress": null,
+     "reason": "checkpoint",
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "baselines": {
+     "state": "done",
+     "seconds": 61.0,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "cv_curve": {
+     "state": "failed",
+     "seconds": null,
+     "progress": null,
+     "reason": "cancelled by the user",
+     "job_id": "j_c1",
+     "study_id": null,
+     "action": null
+    },
+    "S4": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "S5": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "climate": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "S6": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "S7": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "planner": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "emulator": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": {
+      "kind": "build_emulator",
+      "label": "Build emulator",
+      "method": "POST",
+      "path": "/api/runs/20260930-090000-full-ef56/actions/emulator",
+      "body": {}
+     }
+    },
+    "uncertainty": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "writeup": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "placebo": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "multiverse": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "simcheck": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    },
+    "reproduce": {
+     "state": "not_run",
+     "seconds": null,
+     "progress": null,
+     "reason": null,
+     "job_id": null,
+     "study_id": null,
+     "action": null
+    }
+   }
+  }
+ ]
+}

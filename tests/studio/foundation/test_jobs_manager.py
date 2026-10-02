@@ -403,6 +403,23 @@ def test_out_of_memory_labelling(ctx):
     assert status == "failed" and error["message"] == "the worker exited with code 3"
 
 
+def test_sigterm_after_a_cancel_is_cancelled(ctx, tmp_path):
+    """A cancel whose SIGTERM arrives before the worker (or the replay runner) installed its handlers ends the
+    process with -15/143: that is the requested cancel, not a failure; an unrequested SIGTERM still fails."""
+    from sparc.studio.jobs.executors import ExitInfo
+
+    mgr = ctx.jobs
+    for code in (-15, 143):
+        status, error, _ = mgr._final_status({"id": "j_c", "status": "cancelling", "job_dir": str(tmp_path)},
+                                             ExitInfo(code), None, None)
+        assert (status, error) == ("cancelled", None)
+    row = {"id": "j_t", "status": "running", "job_dir": str(tmp_path)}
+    status, error, _ = mgr._final_status(row, ExitInfo(-15), None, None)
+    assert status == "failed" and error["message"] == "the worker exited with signal 15"
+    (tmp_path / "cancel").touch()
+    assert mgr._final_status(row, ExitInfo(-15), None, None)[0] == "cancelled"
+
+
 def test_storage_low_is_broadcast(tmp_path, monkeypatch):
     import asyncio
     import shutil

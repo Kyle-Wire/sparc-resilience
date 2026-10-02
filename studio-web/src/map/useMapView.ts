@@ -11,6 +11,8 @@ export type MapViewApi = {
   state: ViewState;
   /** True until the first fit to a viewport. */
   needsFit: boolean;
+  /** True while the view is the automatic fit (no pan, zoom or set since): a resize refits it. */
+  auto: boolean;
   set: (s: ViewState) => void;
   /** Fit an nx×ny raster centred in a w×h viewport. */
   fit: (nx: number, ny: number, w: number, h: number) => void;
@@ -39,24 +41,36 @@ export function zoomView(v: ViewState, cx: number, cy: number, factor: number, m
 export function useMapView(initial?: ViewState): MapViewApi {
   const [state, setState] = useState<ViewState>(initial ?? { scale: 1, tx: 0, ty: 0 });
   const [needsFit, setNeedsFit] = useState(!initial);
+  const [auto, setAuto] = useState(false);
   const minRef = useRef(1);
   const stateRef = useRef(state);
   stateRef.current = state;
 
-  const set = useCallback((s: ViewState) => setState(s), []);
+  const set = useCallback((s: ViewState) => {
+    setAuto(false);
+    setState(s);
+  }, []);
   const fit = useCallback((nx: number, ny: number, w: number, h: number) => {
     const v = fitView(nx, ny, w, h);
     minRef.current = Math.min(1, v.scale);
     setState(v);
     setNeedsFit(false);
+    setAuto(true);
   }, []);
-  const zoomAt = useCallback((cx: number, cy: number, factor: number) => setState((v) => zoomView(v, cx, cy, factor, minRef.current)), []);
-  const panBy = useCallback((dx: number, dy: number) => setState((v) => ({ ...v, tx: v.tx + dx, ty: v.ty + dy })), []);
+  const zoomAt = useCallback((cx: number, cy: number, factor: number) => {
+    setAuto(false);
+    setState((v) => zoomView(v, cx, cy, factor, minRef.current));
+  }, []);
+  const panBy = useCallback((dx: number, dy: number) => {
+    setAuto(false);
+    setState((v) => ({ ...v, tx: v.tx + dx, ty: v.ty + dy }));
+  }, []);
 
   return useMemo(
     () => ({
       state,
       needsFit,
+      auto,
       set,
       fit,
       zoomAt,
@@ -65,6 +79,6 @@ export function useMapView(initial?: ViewState): MapViewApi {
       toScreen: (px: number, py: number) => [state.tx + px * state.scale, state.ty + py * state.scale] as [number, number],
       toRaster: (sx: number, sy: number) => [(sx - state.tx) / state.scale, (sy - state.ty) / state.scale] as [number, number],
     }),
-    [state, needsFit, set, fit, zoomAt, panBy],
+    [state, needsFit, auto, set, fit, zoomAt, panBy],
   );
 }

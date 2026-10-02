@@ -438,7 +438,7 @@ Body: `{path: string}` → `200 {target, id, x, y, zone, coord_unit, crs_guess: 
 ### 5.2 Data check (S0 inline) and preview
 
 **`POST /api/projects/{pid}/data/check`**
-Body: `{config_patch?: object}` (a deep-merged override, so unsaved form values can be checked)
+Body: `{config_patch?: object}` (a deep-merged override, so unsaved form values can be checked). It is applied to the saved config as a JSON Merge Patch (RFC 7386): mappings merge, `null` deletes the key (so a draft that removed a lever, a `qa.clip` column, a role or a data key is checked as drafted), and any other value, lists included, replaces.
 → `200`:
 
 ```ts
@@ -447,7 +447,8 @@ Body: `{config_patch?: object}` (a deep-merged override, so unsaved form values 
   background: { value: number; source: string }; noise_floor: number|null;
   flags: { code: string; severity: "warn"|"info"; message: string }[];
   dose_scale: Record<string, { sd: number; doses: number[]; doses_in_sd: number[]; percentile_reached: number[] }>;
-  coarse: object|null; extent_m: [number, number]; columns_missing: string[]; preview_token: string }
+  coarse: object|null; extent_m: [number, number]; columns_missing: string[]; preview_token: string;
+  preview_columns: string[]; elapsed_s: number }   // the columns `{column}.bin` serves for this token
 ```
 
 Errors: `422 validation` (missing target/x/y, unreadable file), `404` (data file). Runs inline, typically under 2 s; files over 2 M rows return `413 too_large_inline`.
@@ -456,7 +457,7 @@ Errors: `422 validation` (missing target/x/y, unreadable file), `404` (data file
 Packed `ix:int32, iy:int32, lon:float32, lat:float32` (§0.4) plus a `GridMeta` JSON in the `X-SPARC-Grid` header.
 
 **`GET /api/projects/{pid}/data/preview/{preview_token}/{column}.bin`**
-Float32 column in row order. Tokens expire after 30 min.
+Float32 column in row order. Tokens expire after 30 min. The columns are the table's numeric columns plus, when `planner.layers` names a readable table, its numeric columns (`people`, `people_60_plus`, `people_under_5`, `lc_*`) aligned as the planner reads them: joined by id, or summed (people) and averaged (fractions) per coarse cell. A data column of the same name wins.
 
 ### 5.3 Config
 
@@ -1564,3 +1565,20 @@ Wire-level changes made with SPEC §18. The `docs` item later appends "As-built 
 - `GET /api/projects/{pid}/forcing/stations` never downloads; it returns `404` with a `fetch_input` action instead.
 - `state.json` carries `executor`.
 - Tick coalescing never drops `k == 1` or `k == n` ticks.
+
+## 19. As-built changes
+
+The `docs` item extends this section when the spec is brought up to date. Entries are grouped by milestone.
+
+### M1–M2 (browse, run & track)
+
+- `RunSummary.studies` lists the ids of the studies **attached** to the run (`study_links.attached = 1`), in the runs endpoints and the project endpoints alike.
+- Stages a finished run did not compute carry the remedy `{kind: "open", label: "Re-run with <the stage>", method: "GET", path: "/p/{pid}/launch?from=<run_id>"}` (Status Board cells and missing outputs). A resume cannot add them, because it replays the run's own launch snapshot. Launch reads `?from=<run_id>` and prefills mode, coarse cell, stages, CV curve and threads from that run's `launch.args` (`GET /api/runs/{rid}` → `launch`); query parameters already in the URL win.
+- `overview.outputs_grid` lists every output the run has or should have, plus one row per post-run action that has not run and per stage the run skipped (its primary output, carrying the remedy). Optional files a planner pack or a study would add are left out.
+- `overview.studies` always has eight chips, in this order: `baselines, planner, emulator, uncertainty, placebo, multiverse, simcheck, reproduce`. Each is `{kind, state: "done"|"running"|"failed"|"stale"|"not_run", headline: string|null, study_id: string|null}`, built from the run's Status Board cells. `headline` comes from the study summary's `headline`, else from the manifest or the summary (`placebo`: `n_placebos`, `n_pass_model`, `n_pass_causal`; `multiverse`: `sign_stability_min`; `simcheck`: `bias_correction.share_range`; `reproduce`: `pass`).
+- `uncertainty.sources` rows are `{kind, label, study_id, attached, state}`. The folders listed in `uncertainty.json` `sources` (multiverse dir, simcheck dirs) are matched to the studies index by `studies.out_dir`, so that column must stay the study folder core writes into those sources. The project's other multiverse, simcheck and placebo studies follow. A study's `summary.label` names its row when present.
+- Status Board cells have no `queued` state: a post-run job or study still waiting (e.g. in a launch's `then` chain) is a `running` cell with `reason: "queued"` (or `"blocked"`), and the board shows it as queued.
+- An imported run with a manifest but no `run_state.json` gets `created_utc` = the manifest's `created_utc` (written when the run ended) less the sum of its `timings_s`. Its id keeps the manifest time.
+- The runs routes return `503 not_ready` while the runs registry is still starting, as the jobs and inputs routes do while the server starts.
+- A job with a cancel request (status `cancelling`, or its `cancel` file present) whose worker exits with `-15`/`143` ends `cancelled`, not `failed`. This covers SIGTERM arriving before the worker or the replay runner installed its handlers.
+- `POST /api/projects/{pid}/data/check`: `config_patch` is a JSON Merge Patch, and the preview carries the `planner.layers` columns (§5.2).
