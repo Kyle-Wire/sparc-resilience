@@ -1,0 +1,85 @@
+/* Studies, exports and findings pages. Built on the foundation tokens and classes; only the
+   layouts and widgets of this group live here (class prefixes vt- validation, sg- simcheck
+   grid, rb- report builder, fd- findings, sx- shared). */
+
+.sx-page { display: grid; gap: 16px; min-width: 0; }
+.sx-intro { max-width: 78ch; color: var(--ink-2); font-size: 0.92rem; margin: 0; }
+.sx-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 0.84rem; color: var(--ink-2); }
+.sx-meta b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.sx-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.sx-mono { font-family: var(--font-mono); font-size: 0.78rem; overflow-wrap: anywhere; }
+.sx-checks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.sx-checks label { display: inline-flex; gap: 6px; align-items: center; font-size: 0.86rem; }
+.sx-checks.column { display: grid; gap: 6px; }
+.sx-formgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr)); gap: 10px 14px; align-items: end; }
+.sx-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.sx-problems { margin: 0; padding-left: 18px; color: var(--crit-ink); font-size: 0.84rem; }
+
+/* validation tab */
+.vt-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(460px, 100%), 1fr)); gap: 14px; align-items: start; }
+.vt-card { scroll-margin-top: 80px; }
+.vt-card[data-wide="true"] { grid-column: 1 / -1; }
+.vt-card > header h3 { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.vt-headline { font-size: 0.9rem; color: var(--ink); margin: 0; }
+.vt-launch { border-top: 1px solid var(--line); padding-top: 10px; display: grid; gap: 10px; }
+.vt-launch > summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
+.vt-launch[open] > summary { margin-bottom: 4px; }
+.vt-req { display: grid; gap: 4px; }
+.vt-req ul { margin: 0; padding-left: 18px; }
+.vt-cost { font-size: 0.82rem; color: var(--ink-2); }
+.vt-cost b { font-variant-numeric: tabular-nums; color: var(--ink); }
+.vt-launch fieldset, .sx-page .card > fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.vt-launch legend, .sx-page .card > fieldset > legend { padding: 0; margin-bottom: 4px; }
+.vt-launch .numfield input { width: 6em; }
+
+/* simcheck grid */
+.sg-wrap { overflow: auto; max-width: 100%; position: relative; }
+.sg-grid { border-collapse: separate; border-spacing: 2px; font-size: 0.74rem; }
+.sg-grid th { font-weight: 500; color: var(--ink-2); padding: 0 6px 0 0; text-align: right; white-space: nowrap; }
+.sg-grid thead th { text-align: center; padding: 0; font-size: 0.68rem; color: var(--muted); }
+.sg-grid td { width: 22px; min-width: 22px; height: 20px; border-radius: 3px; text-align: center; font-variant-numeric: tabular-nums; line-height: 1; }
+.sg-grid td[data-status="error"] { font-weight: 700; }
+.sg-grid td[data-status="running"] { outline: 2px solid var(--st-running); outline-offset: -2px; }
+.sg-grid td[data-status="gate_fail"] { background-image: repeating-linear-gradient(45deg, transparent 0 3px, rgba(0, 0, 0, 0.28) 3px 4px); }
+.sg-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 0.78rem; color: var(--ink-2); }
+.sg-legend i { display: inline-block; width: 14px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 4px; }
+.sg-ramp { display: inline-flex; align-items: center; gap: 4px; }
+.sg-ramp span.bar { width: 110px; height: 10px; border-radius: 3px; display: inline-block; }
+
+/* custom multiverse variants */
+.mv-variant { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; display: grid; gap: 6px; }
+.mv-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto; gap: 6px; align-items: center; }
+.mv-json { font-family: var(--font-mono); font-size: 0.76rem; background: var(--chip); padding: 6px 8px; border-radius: var(--radius-sm); white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+
+/* studies hub matrix */
+.hub-matrix { border-collapse: collapse; font-size: 0.82rem; width: 100%; }
+.hub-matrix th, .hub-matrix td { border-bottom: 1px solid var(--line); padding: 5px 6px; text-align: left; vertical-align: middle; }
+.hub-matrix thead th { font-size: 0.74rem; color: var(--ink-2); font-weight: 600; white-space: nowrap; }
+.hub-matrix td a { text-decoration: none; }
+
+/* report builder */
+.rb { display: grid; grid-template-columns: minmax(280px, 380px) minmax(0, 1fr); gap: 14px; align-items: start; }
+@media (max-width: 1000px) { .rb { grid-template-columns: minmax(0, 1fr); } }
+.rb-side { display: grid; gap: 12px; min-width: 0; }
+.rb-side fieldset { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; margin: 0; display: grid; gap: 6px; min-width: 0; }
+.rb-side legend { font-size: 0.8rem; font-weight: 600; color: var(--ink-2); padding: 0 4px; }
+.rb-side .sx-checks label small { color: var(--muted); }
+.rb-pick { max-height: 180px; overflow: auto; }
+.rb-preview { display: grid; gap: 8px; min-width: 0; }
+.rb-frame { width: 100%; height: min(78vh, 900px); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: #fff; }
+
+/* findings */
+.fd-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.fd-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: start; }
+.fd-item[data-dragging="true"] { opacity: 0.5; }
+.fd-item[data-drop="true"] { box-shadow: 0 -3px 0 0 var(--accent); }
+.fd-handle { display: grid; gap: 2px; justify-items: center; }
+.fd-handle .grip { cursor: grab; color: var(--muted); font-size: 1rem; line-height: 1; user-select: none; }
+.fd-thumb { width: 168px; max-height: 120px; object-fit: contain; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
+.fd-body { display: grid; gap: 6px; min-width: 0; }
+.fd-body h3 { font-size: 1rem; margin: 0; }
+.fd-note textarea { width: 100%; min-height: 7em; font: inherit; font-family: var(--font-mono); font-size: 0.82rem; }
+@media (max-width: 700px) {
+  .fd-item { grid-template-columns: auto minmax(0, 1fr); }
+  .fd-item .fd-thumb { grid-column: 2; width: 100%; }
+}
