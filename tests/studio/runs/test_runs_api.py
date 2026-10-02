@@ -128,6 +128,36 @@ def test_launch_replay_completes(client, ctx, demo, replay_runner, wait_job):
     assert n_events > 0
 
 
+def test_launch_chains_then_jobs(client, ctx, demo, replay_runner, wait_job, monkeypatch):
+    """``then`` queues the post-run jobs one after another (``after_job_id``); a cancelled run cancels them."""
+    from pydantic import BaseModel, ConfigDict
+
+    from sparc.studio.jobs.kinds import KINDS, JobKind
+
+    class NoParams(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+    for kind in ("post.planner", "post.writeup"):               # the studies item registers the real ones
+        monkeypatch.setitem(KINDS, kind, JobKind(kind=kind, fn=lambda ctx, p: {}, lane="medium", executor="process",
+                                                 label=kind, params=NoParams, needs_run=True, locks_run=True))
+    monkeypatch.setenv("SPARC_STUDIO_REPLAY_SPEED", "4")
+    r = client.post(f"/api/projects/{demo['id']}/runs", json={"mode": "fast", "then": ["post.planner", "post.writeup"]})
+    assert r.status_code == 202, r.text
+    body = r.json()
+    jid, chain = body["job"]["id"], body["chain"]
+    assert [j["kind"] for j in chain] == ["post.planner", "post.writeup"]
+    assert chain[0]["after_job_id"] == jid and chain[1]["after_job_id"] == chain[0]["id"]
+    assert all(j["run_id"] == body["run"]["id"] and j["status"] in ("queued", "blocked") for j in chain)
+    wait_for(lambda: any(e["type"] == "stage.start" for e in client.get(f"/api/jobs/{jid}/events").json()["events"]),
+             60, what="the run to start")
+    assert client.post(f"/api/jobs/{jid}/cancel").status_code in (200, 202)
+    assert wait_job(client, jid, timeout=60)["status"] == "cancelled"
+    for j in chain:
+        assert wait_job(client, j["id"], timeout=30)["status"] == "cancelled"
+    bad = client.post(f"/api/projects/{demo['id']}/runs", json={"mode": "fast", "then": ["post.emulator"]})
+    assert bad.status_code == 422                                # not registered in this build
+
+
 def test_cancel_then_resume_reports_cached_stages(client, ctx, demo, replay_runner, wait_job, monkeypatch):
     monkeypatch.setenv("SPARC_STUDIO_REPLAY_SPEED", "6")
     body = client.post(f"/api/projects/{demo['id']}/runs", json={"mode": "fast"}).json()
@@ -222,6 +252,12 @@ def test_import_in_place(client, ctx, demo, synth, tmp_path):
 
     assert pickle_trusted(run["id"]) is True
     assert client.get(f"/api/runs/{run['id']}/config").json()["source"] == "import"
+    # a restarted server registers the folder (and the import config's folder) as path roots again
+    from sparc.studio.security import PathGuard
+
+    ctx.paths = PathGuard(ctx.workspace.root)
+    ctx.services["registry"].scan()
+    assert {src.resolve(), Path(demo["config_path"]).resolve().parent} <= set(ctx.paths.roots())
     # idempotent: the same folder keeps its id
     again = client.post("/api/runs/import", json={"dir": str(src), "config_path": demo["config_path"],
                                                   "project_id": demo["id"]})
@@ -288,7 +324,15 @@ def test_manifest_config_provenance_environment(client, demo, fixture_run, synth
     cfg = client.get(f"/api/runs/{rid}/config").json()
     assert cfg["source"] == "launch" and cfg["config_dir"] == demo["dir"]
     assert cfg["effective"]["cv"]["n_folds"] == 3                       # fast mode applied
-    assert "data:" in cfg["yaml"] and isinstance(cfg["vs_project_diff"], list)
+    assert "data:" in cfg["yaml"] and cfg["vs_project_diff"] == []      # launch snapshot vs the same config
+    import yaml
+
+    cfgp = Path(demo["config_path"])
+    raw = yaml.safe_load(cfgp.read_text())
+    raw.get("core", raw)["cv"]["seed"] = 7
+    cfgp.write_text(yaml.safe_dump(raw))
+    diff = client.get(f"/api/runs/{rid}/config").json()["vs_project_diff"]
+    assert [d["path"] for d in diff] == ["cv.seed"] and diff[0]["project"] == 7
     prov = client.get(f"/api/runs/{rid}/provenance").json()
     assert prov["launch"]["run_id"] == rid and prov["environment"]
     env = client.get(f"/api/runs/{rid}/environment").json()
@@ -386,7 +430,11 @@ def test_docs_files_and_dictionary(client, fixture_run, synth):
     rep = client.get(f"/api/runs/{rid}/docs/report").json()
     assert rep["markdown"] == (synth / "report.md").read_text(encoding="utf-8")
 
+    outside = rd.parent.parent / "outside"
+    outside.mkdir()
+    (rd / "linked").symlink_to(outside)                       # a link out of the run folder is never listed
     files = {f["relpath"]: f for f in client.get(f"/api/runs/{rid}/files").json()}
+    assert "linked" not in files
     assert files["predictions.parquet"]["output_id"] == "predictions" and files["studio"]["dir"] is True
     assert files["predictions.parquet"]["in_manifest"] is False and files["causal.json"]["in_manifest"] is True
     raw = client.get(f"/api/runs/{rid}/files/raw", params={"path": "influence.json"})

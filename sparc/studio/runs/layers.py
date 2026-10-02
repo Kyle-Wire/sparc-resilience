@@ -46,8 +46,8 @@ from sparc.studio.runs.common import LRU, clean, file_stat, read_json_cached
 
 log = logging.getLogger("sparc.studio.runs")
 
-__all__ = ["LayerDef", "layer_defs", "layer_array", "layer_catalog", "layer_meta", "layer_etag", "layer_stats",
-           "GROUP_LABELS", "CLS_LABELS", "resolve_layer", "lever_info"]
+__all__ = ["LayerDef", "layer_defs", "layer_array", "layer_catalog", "layer_meta", "layer_etag", "layer_stable",
+           "layer_stats", "GROUP_LABELS", "CLS_LABELS", "resolve_layer", "lever_info"]
 
 LAYER_CACHE = LRU(256 * 1024 ** 2)
 GROUP_LABELS = OrderedDict([
@@ -196,6 +196,7 @@ def _build_defs(ctx) -> "OrderedDict[str, LayerDef]":
     # ---------------------------------------------------------------- inputs
     levers = lever_info(ctx)
     data = ctx.data
+    in_src = _input_sources(ctx)
     if data is not None:
         raw = ctx.cfg_raw
         roles = (raw.get("physics") or {}).get("roles") or {}
@@ -215,12 +216,13 @@ def _build_defs(ctx) -> "OrderedDict[str, LayerDef]":
                     add(LayerDef(c, "inputs", lab, "", "cat",
                                  (lambda c=c, look=look: np.array([look.get(str(v), 255) for v in ctx.data.frame[c].to_numpy()],
                                                                   dtype=np.uint8)),
-                                 {"file": "data", "column": c}, labels=levels, dtype="uint8", decimals=0))
+                                 {"file": "data", "column": c}, labels=levels, dtype="uint8", decimals=0,
+                                 sources=in_src))
                 continue
             desc = f"Predictor {c}" + (f" (physics role {role_of[c]})" if c in role_of else "") + \
                    (" - an actionable lever" if c in levers else "")
             add(LayerDef(c, "inputs", lab, unit, "seq", (lambda c=c: _f32(ctx.data.frame[c].to_numpy(float))),
-                         {"file": "data", "column": c}, desc=desc))
+                         {"file": "data", "column": c}, desc=desc, sources=in_src))
     g = ctx.grid
     if g is not None and g.zones and len(g.zones) <= 254:
         add(LayerDef("zone", "inputs", "Zone", "", "cat",
@@ -358,6 +360,7 @@ def _build_defs(ctx) -> "OrderedDict[str, LayerDef]":
 
     # ---------------------------------------------------------------- planner & people
     lay = people_layers(ctx)
+    lay_src = in_src + _planner_layers_source(ctx)
     if lay is not None:
         for c in lay.columns:
             if c in ("id", "x_m", "y_m"):
@@ -369,7 +372,7 @@ def _build_defs(ctx) -> "OrderedDict[str, LayerDef]":
             add(LayerDef(c, "planner", label, unit, "seq",
                          (lambda c=c: _f32(people_layers(ctx)[c].to_numpy(float))),
                          {"file": str((ctx.cfg_raw.get("planner") or {}).get("layers")), "column": c},
-                         decimals=2 if c.startswith("lc_") else 1))
+                         decimals=2 if c.startswith("lc_") else 1, sources=lay_src))
     pc = ctx.parquet("planner/planner_cells.parquet")
     if pc is not None and "plantable_canopy_pp" in pc.columns:
         add(LayerDef("plantable_pp", "planner", "Plantable canopy headroom", "pp", "seq",
@@ -380,7 +383,8 @@ def _build_defs(ctx) -> "OrderedDict[str, LayerDef]":
         can = ((ctx.cfg_raw.get("physics") or {}).get("roles") or {}).get("canopy")
         if can and can in data.frame.columns:
             add(LayerDef("plantable_pp", "planner", "Plantable canopy headroom", "pp", "seq",
-                         lambda: _plantable(ctx), {"file": "planner.layers", "column": "plantable"}, decimals=1))
+                         lambda: _plantable(ctx), {"file": "planner.layers", "column": "plantable"}, decimals=1,
+                         sources=lay_src))
     if pc is not None:
         for c in pc.columns:
             if c.startswith("hot_days_ge_"):
@@ -390,6 +394,33 @@ def _build_defs(ctx) -> "OrderedDict[str, LayerDef]":
                              sources=("planner/planner_cells.parquet",)))
 
     return defs
+
+
+def _input_sources(ctx) -> tuple[str, ...]:
+    """The files the input layers are rebuilt from (the data and join tables, or ``input_frame.parquet``): their
+    stat keys the layers' ETag and cache, so an edited data file never serves cached values."""
+    if ctx.exists("input_frame.parquet"):
+        return ("input_frame.parquet",)
+    cfg = ctx.cfg
+    if cfg is None:
+        return ()
+    out = []
+    try:
+        out.append(str(cfg.data_path))
+    except ValueError:
+        pass
+    for j in cfg.data.get("join") or []:
+        p = cfg.resolve_path(j.get("path")) if isinstance(j, dict) else None
+        if p is not None:
+            out.append(str(p))
+    return tuple(out)
+
+
+def _planner_layers_source(ctx) -> tuple[str, ...]:
+    cfg = ctx.cfg
+    rel = (ctx.cfg_raw.get("planner") or {}).get("layers")
+    p = cfg.resolve_path(rel) if cfg is not None and rel else None
+    return (str(p),) if p is not None else ()
 
 
 def _curve_class(df) -> np.ndarray:
@@ -608,6 +639,21 @@ def layer_array(ctx, key: str) -> np.ndarray:
                        detail={"output": key, "produced_by": None, "expected_path": None})
     LAYER_CACHE.put(ck, arr)
     return arr
+
+
+def layer_stable(ctx, key: str) -> bool:
+    """Whether a finished run's layer can never change under its URL: built only from the run's own outputs
+    (not from project files such as the data or ``planner.layers``, nor from ``planner/``, which a post-run
+    action rewrites)."""
+    d = _def_for(ctx, key)
+    studio = str(ctx.studio_dir)
+    for src in d.sources:
+        if Path(src).is_absolute():
+            if not (src == studio or src.startswith(studio.rstrip("/") + "/")):
+                return False
+        elif src.startswith("planner/"):
+            return False
+    return True
 
 
 def layer_etag(ctx, key: str) -> str:

@@ -1,8 +1,9 @@
 """RunReader: lazily loaded, cached views of one run directory (SPEC §6.2).
 
 A :class:`RunContext` per run, cached in a byte-capped LRU (768 MB across runs) and keyed by the run id
-plus the stat of ``manifest.json``, ``run_state.json``, ``predictions.parquet`` and ``launch.json`` - a
-finished run keeps one context, a running one gets a fresh context whenever a stage writes.  Attributes:
+plus the stat of ``manifest.json``, ``run_state.json``, ``predictions.parquet``, ``launch.json`` and the
+snapshot's data file - a finished run keeps one context, a running one gets a fresh context whenever a stage
+writes.  Attributes:
 
 * ``cfg`` - the run's config, resolved in the order of SPEC §4.3: ``launch.json`` (config_raw +
   config_dir, mode overrides from its args) → ``manifest.config`` + ``provenance.config_dir`` → the
@@ -172,6 +173,12 @@ class RunContext:
         cancelled runs can be resumed in place, which rewrites files under the same URLs, so they stay
         ``no-store``."""
         return self.status in ("complete", "imported")
+
+    @property
+    def owned(self) -> bool:
+        """Studio wrote this run (launched it, or a study did): its folder changes only through Studio.  A run
+        imported in place may be rewritten by another CLI run into the same folder."""
+        return self.row.get("origin") in ("studio", "study_child", "reproduction")
 
     @property
     def name(self) -> str:
@@ -347,10 +354,23 @@ class RunContext:
         sc = m.get("scenarios") or []
         out["scenarios"] = bool(sc) and isinstance(sc, list) and "mean_delta_se" not in (sc[0] or {})
         resp = m.get("response") or {}
-        out["response"] = bool(resp) and any(isinstance(v, dict) and "frac_sigmoid" not in v for v in resp.values())
+        out["response"] = (bool(resp) and any(isinstance(v, dict) and "frac_sigmoid" not in v for v in resp.values())
+                           or self._maps_lack("inflection_dose"))
         qa = m.get("qa") or {}
         out["qa"] = bool(qa) and "flags" not in qa
         return out
+
+    def _maps_lack(self, column: str) -> bool:
+        """Whether some ``response_<var>.parquet`` lacks ``column`` (read from the parquet schema only)."""
+        import pyarrow.parquet as pq
+
+        for p in self.run_dir.glob("response_*.parquet"):
+            try:
+                if column not in pq.read_schema(p).names:
+                    return True
+            except Exception:
+                continue
+        return False
 
     @property
     def manifest(self) -> dict:
@@ -686,10 +706,15 @@ class RunReader:
     def _key(self, row: dict) -> tuple:
         run_dir = Path(row["run_dir"])
         studio = Path(row["studio_dir"]) if row.get("studio_dir") else run_dir / "studio"
+        launch = read_json_cached(studio / "launch.json") or {}
+        raw = launch.get("config_raw") if isinstance(launch.get("config_raw"), dict) else {}
+        data_path = (raw.get("data") or {}).get("path") if isinstance(raw.get("data"), dict) else None
         return (row["id"], row.get("status"), file_stat(run_dir / "manifest.json"),
                 file_stat(run_dir / "run_state.json"), file_stat(run_dir / "predictions.parquet"),
                 file_stat(run_dir / "checkpoint.json"), file_stat(studio / "launch.json"),
-                file_stat(studio / "import.json"))
+                file_stat(studio / "import.json"),
+                # the snapshot's data file (absolute): a replaced file rebuilds the data and input layers
+                file_stat(data_path) if isinstance(data_path, str) and os.path.isabs(data_path) else None)
 
     def row(self, run_id: str) -> dict:
         from sparc.studio.errors import ApiError

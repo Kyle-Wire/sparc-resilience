@@ -131,16 +131,67 @@ def test_cli_run_without_events_file_synthesises_stages(client, ctx, watch_root,
     assert run_row(ctx, rd)["status"] == "partial"                    # S3 is in the checkpoint
 
 
+def _dead_pid() -> int:
+    import subprocess
+    import sys
+
+    p = subprocess.Popen([sys.executable, "-c", "pass"])
+    p.wait()
+    return p.pid
+
+
 def test_stale_heartbeat_is_not_live(client, ctx, watch_root):
     rd = watch_root / "city_stale"
     rd.mkdir()
-    _state(rd, updated_utc=_now(-600))
+    _state(rd, updated_utc=_now(-600), pid=_dead_pid())
     tick(client, ctx)
     row = run_row(ctx, rd)
     assert row["status"] == "interrupted" and external_job(ctx, row["id"]) is None
-    _state(rd, updated_utc=_now(-600), done=["S3"])
+    _state(rd, updated_utc=_now(-600), pid=_dead_pid(), done=["S3"])
     ctx.services["registry"].refresh(row["id"])
     assert run_row(ctx, rd)["status"] == "partial"
+    # a pid that now belongs to a process started after the run is not the run's process
+    _state(rd, updated_utc=_now(-600), started_utc=_now(-7200), done=["S3"])
+    ctx.services["registry"].refresh(row["id"])
+    assert run_row(ctx, rd)["status"] == "partial"
+
+
+def test_long_stage_of_a_live_process_stays_live(client, ctx, watch_root, wait_job):
+    """Core rewrites ``run_state.json`` only at stage boundaries: an hour-long stage of a CLI run whose process
+    is alive is still live; once the process is gone and the heartbeat is stale, the pseudo-job is interrupted."""
+    rd = watch_root / "city_long"
+    rd.mkdir()
+    _state(rd, stage="S2_S3", updated_utc=_now(-3000))
+    tick(client, ctx)
+    row = run_row(ctx, rd)
+    job = external_job(ctx, row["id"])
+    assert row["status"] == "external_live" and job is not None
+    tick(client, ctx)
+    assert client.get(f"/api/jobs/{job['id']}").json()["status"] == "running"
+    _state(rd, stage="S2_S3", updated_utc=_now(-3000), pid=_dead_pid())
+    tick(client, ctx)
+    done = wait_job(client, job["id"], timeout=20)
+    assert done["status"] == "interrupted" and "2 minutes" in done["error"]["message"]
+    assert run_row(ctx, rd)["status"] == "interrupted"
+
+
+def test_progress_file_heartbeat_keeps_a_run_live(client, ctx, watch_root):
+    """A CLI run on another host (no pid check) stays live while its progress file is written to."""
+    rd = watch_root / "city_remote"
+    rd.mkdir()
+    ev = Events(rd / "events.jsonl", "city_remote")
+    ev.add("run.start", name="city_remote", stages=["S0"], fast=True, coarse=None, resume=False, cv_curve=None,
+           config_sha256="", code_sha256="", run_meta={})
+    _state(rd, host="another-host", updated_utc=_now(-3000), events_path=str(rd / "events.jsonl"))
+    tick(client, ctx)
+    assert run_row(ctx, rd)["status"] == "external_live"
+    old = time.time() - 600
+    os.utime(rd / "events.jsonl", (old, old))
+    ctx.services["registry"].refresh(run_row(ctx, rd)["id"])
+    job = external_job(ctx, run_row(ctx, rd)["id"])
+    tick(client, ctx)
+    assert wait_for(lambda: client.get(f"/api/jobs/{job['id']}").json()["status"] == "interrupted", 20,
+                    what="the pseudo-job to end")
 
 
 def test_lineage_explicit_and_inferred(client, ctx, watch_root):
@@ -167,6 +218,7 @@ def test_lineage_explicit_and_inferred(client, ctx, watch_root):
     assert info[c]["link"] == "inferred" and info[c]["role"] == "placebo:grf"
     assert info[v]["link"] == "inferred" and info[v]["role"] == "variant:no_physics"
     assert info[e]["link"] == "explicit"
+    assert page[e]["origin"] == "reproduction" and page[c]["origin"] == "imported"   # run_meta role
     detail = client.get(f"/api/runs/{c}").json()
     assert any(f["code"] == "lineage.inferred" for f in detail["flags"])
     kids = {k["id"] for k in client.get(f"/api/runs/{pid}").json()["children"]}
@@ -215,3 +267,59 @@ def test_run_core_kind_hooks(ctx, demo, place_run):
     assert K.run_core_retry_params(ctx, job) == {"run_id": rid, "resume": True}
     with pytest.raises(Exception):
         K.RunCoreParams(run_id=rid, bogus=1)
+
+
+def test_pseudo_job_is_tailed_again_after_a_restart(make_app, tmp_path):
+    """The job manager leaves ``run.external`` rows to the registry: after a server restart the registry tails
+    the pseudo-job again and keeps synthesising stage events from ``run_state.json`` where it stopped."""
+    from fastapi.testclient import TestClient
+
+    from tests.studio.conftest import AUTH
+
+    root = tmp_path / "cli_runs"
+    rd = root / "city_quiet"
+    rd.mkdir(parents=True)
+    _state(rd, stage="S2_S3")
+    first = make_app()
+    with TestClient(first, headers=AUTH) as c1:
+        ctx1 = first.state.studio
+        assert c1.put("/api/settings", json={"watch_roots": [str(root)]}).status_code == 200
+        tick(c1, ctx1)
+        jid = external_job(ctx1, run_row(ctx1, rd)["id"])["id"]
+        assert jid in ctx1.jobs.tailers
+    second = make_app()                                   # same workspace
+    with TestClient(second, headers=AUTH) as c2:
+        ctx2 = second.state.studio
+        tick(c2, ctx2)
+        assert jid in ctx2.jobs.tailers and c2.get(f"/api/jobs/{jid}").json()["status"] == "running"
+
+        def types():
+            return [(e["type"], e.get("stage")) for e in c2.get(f"/api/jobs/{jid}/events").json()["events"]
+                    if not e["type"].startswith("job.")]
+
+        _state(rd, stage="S4", done=["S3"])
+        tick(c2, ctx2)
+        wait_for(lambda: ("stage.start", "S4") in types(), 20, what="the stage after the restart")
+        assert types().count(("run.start", None)) == 1 and types().count(("stage.start", "S2_S3")) == 1
+        seqs = [e["seq"] for e in c2.get(f"/api/jobs/{jid}/events").json()["events"] if e.get("seq")]
+        assert len(seqs) == len(set(seqs))                # the sequence continues, no duplicates
+        _state(rd, status="succeeded", stage="finish", done=["S3"])
+        tick(c2, ctx2)
+        wait_for(lambda: c2.get(f"/api/jobs/{jid}").json()["status"] == "succeeded", 20, what="the end")
+        assert ("run.end", None) in types() and run_row(ctx2, rd)["status"] == "complete"
+
+
+def test_live_run_imported_outside_the_watch_roots_is_followed(client, ctx, tmp_path, wait_job):
+    rd = tmp_path / "elsewhere" / "city_live"
+    rd.mkdir(parents=True)
+    (rd / "manifest.json").write_text(json.dumps({"name": "city_live", "created_utc": _now(-60)}))
+    _state(rd, stage="S1")
+    ctx.services["registry"].index_run_dir(rd, origin="imported")
+    tick(client, ctx)
+    row = run_row(ctx, rd)
+    job = external_job(ctx, row["id"])
+    assert row["status"] == "external_live" and job is not None and job["status"] == "running"
+    _state(rd, status="succeeded", stage="finish")
+    tick(client, ctx)
+    assert wait_job(client, job["id"], timeout=20)["status"] == "succeeded"
+    assert run_row(ctx, rd)["status"] == "complete"

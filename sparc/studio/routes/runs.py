@@ -13,6 +13,7 @@ import asyncio
 import base64
 import json
 import shutil
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,7 @@ from sparc.studio.runs import launch as launchmod
 from sparc.studio.runs import outputs as outmod
 from sparc.studio.runs import registry as regmod
 from sparc.studio.runs import statusboard as sb
-from sparc.studio.runs.common import clean
+from sparc.studio.runs.common import clean, file_stat
 from sparc.studio.runs.reader import RunReader, load_config_raw
 from sparc.studio.runs.schemas import (
     DictionaryRow,
@@ -112,18 +113,35 @@ def _last_run_job(sctx: StudioContext, rid: str) -> dict | None:
                             "ORDER BY created_utc DESC, rowid DESC", (rid,))
 
 
+#: ``{job_id: (events file stat, {"stages": …})}`` of finished run jobs: the Status Board and the run pages read
+#: the stage states of every run, and replaying a long finished events file on each request does not scale
+_STAGES: "OrderedDict[str, tuple[tuple | None, dict]]" = OrderedDict()
+_STAGES_MAX = 4096
+
+
 async def projection(sctx: StudioContext, rid: str) -> tuple[dict | None, bool]:
-    """``(tracker state of the run's latest run job, job active?)``."""
+    """``({"stages": …} of the run's latest run job's tracker state, job active?)``."""
     job = _last_run_job(sctx, rid)
     if job is None or sctx.jobs is None:
         return None, False
+    active = job["status"] in ACTIVE_STATUSES
+    st = None
+    if not active and job["id"] not in sctx.jobs.tailers:
+        st = file_stat(sctx.jobs.events_path(job))
+        hit = _STAGES.get(job["id"])
+        if hit is not None and hit[0] == st:
+            _STAGES.move_to_end(job["id"])
+            return hit[1], False
     try:
         state, _eta = await sctx.jobs.projection(job["id"])
-    except ApiError:
-        return None, False
     except Exception:
         return None, False
-    return state, job["status"] in ACTIVE_STATUSES
+    out = {"stages": state.get("stages")}
+    if not active and st is not None:
+        _STAGES[job["id"]] = (st, out)
+        while len(_STAGES) > _STAGES_MAX:
+            _STAGES.popitem(last=False)
+    return out, active
 
 
 def live_stages(proj: dict | None, active: bool) -> dict | None:
@@ -487,14 +505,21 @@ def get_manifest(rid: str, sctx: StudioContext = Depends(get_ctx)) -> dict:
     return clean({**ctx.manifest, "_sections": ctx.sections})
 
 
-def _project_raw_for(sctx: StudioContext, ctx) -> dict | None:
+def _project_raw_for(sctx: StudioContext, ctx, *, snapshot: bool) -> dict | None:
+    """The project's current raw config; with ``snapshot`` in its launch-snapshot form (paths absolute, the
+    workspace cache, the project's ``runs``: SPEC §4.3), so a diff against a Studio run's ``launch.json``
+    shows real edits rather than the path rewriting every launch does."""
     if not ctx.project_id:
         return None
-    p = sctx.db.fetchone("SELECT config_path FROM projects WHERE id = ?", (ctx.project_id,))
+    p = sctx.db.fetchone("SELECT config_path, dir FROM projects WHERE id = ?", (ctx.project_id,))
     if p is None or not Path(p["config_path"]).is_file():
         return None
     try:
-        return load_config_raw(p["config_path"])
+        raw = load_config_raw(p["config_path"])
+        if snapshot:
+            raw = launchmod.absolutise(raw, Path(p["config_path"]).resolve().parent,
+                                       cache_dir=sctx.workspace.cache_dir, runs_dir=Path(p["dir"]) / "runs")
+        return raw
     except Exception:
         return None
 
@@ -508,7 +533,8 @@ def get_config(rid: str, sctx: StudioContext = Depends(get_ctx)):
 
     ctx = run_context(sctx, rid)
     imp = (ctx.import_rec or {}).get("config_path")
-    if ctx.launch and ctx.launch.get("config_raw") is not None:
+    from_launch = bool(ctx.launch and ctx.launch.get("config_raw") is not None)
+    if from_launch:
         raw = ctx.launch["config_raw"]
     elif isinstance((ctx.manifest_raw or {}).get("config"), dict):
         raw = ctx.manifest_raw["config"]
@@ -519,7 +545,7 @@ def get_config(rid: str, sctx: StudioContext = Depends(get_ctx)):
                        detail={"run_id": rid})
     raw = raw.get("core", raw)
     effective = ctx.cfg.raw if ctx.cfg is not None else _deep_merge(DEFAULTS, raw)
-    proj = _project_raw_for(sctx, ctx)
+    proj = _project_raw_for(sctx, ctx, snapshot=from_launch)
     vs_project = config_diff(raw, proj, a_key="run", b_key="project") if proj is not None else []
     fe, fd = flatten(effective), flatten(DEFAULTS)
     vs_def = [{"path": p, "value": clean(v), "default": clean(fd.get(p))} for p, v in fe.items()

@@ -330,7 +330,13 @@ def list_files(ctx, path: str | None = None) -> list[dict]:
     manifest = ctx.manifest_raw or {}
     out = []
     for p in sorted(base.iterdir(), key=lambda q: (not q.is_dir(), q.name)):
-        rel = str(p.resolve().relative_to(root)).replace(os.sep, "/") if p.resolve() != root else p.name
+        try:
+            rp = p.resolve()
+        except OSError:
+            continue
+        if rp != root and root not in rp.parents:
+            continue                               # a symlink out of the run folder: never listed or sized
+        rel = str(p.relative_to(root)).replace(os.sep, "/")
         if p.name == ".sparc.lock" or (p.is_file() and p.name.endswith(".tmp")):
             continue
         is_dir = p.is_dir()

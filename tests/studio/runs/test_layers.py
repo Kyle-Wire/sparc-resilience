@@ -103,6 +103,43 @@ def test_caching_headers_and_304(client, fixture_run):
         assert client.get(f"/api/runs/{rid}/{path}", headers={"If-None-Match": r.headers["etag"]}).status_code == 304
 
 
+def test_layers_that_can_change_are_revalidated(client, ctx, fixture_run, synth, tmp_path):
+    """A finished run's own outputs are immutable; layers rebuilt from project files (the data, planner
+    layers) and every layer of a run imported in place are revalidated (``no-cache`` + ETag → 304)."""
+    rid, _ = fixture_run
+    for key, cc in (("pred", IMMUTABLE), ("fp_canopy", IMMUTABLE), ("canopy", "private, no-cache"),
+                    ("people", "private, no-cache")):
+        r = client.get(f"/api/runs/{rid}/layers/{key}.bin")
+        assert r.status_code == 200 and r.headers["cache-control"] == cc, key
+        again = client.get(f"/api/runs/{rid}/layers/{key}.bin", headers={"If-None-Match": r.headers["etag"]})
+        assert again.status_code == 304 and again.headers["cache-control"] == cc, key
+    import shutil
+
+    src = tmp_path / "cli" / "run"
+    shutil.copytree(synth, src, ignore=shutil.ignore_patterns("events.jsonl", "FIXTURE.json"))
+    row = ctx.services["registry"].index_run_dir(src, origin="imported")
+    for path in ("layers/pred.bin", "grid.bin"):
+        r = client.get(f"/api/runs/{row['id']}/{path}")
+        assert r.status_code == 200 and r.headers["cache-control"] == "private, no-cache", path
+        assert client.get(f"/api/runs/{row['id']}/{path}",
+                          headers={"If-None-Match": r.headers["etag"]}).status_code == 304
+
+
+def test_input_layers_follow_the_data_file(client, demo, fixture_run):
+    """Input layers are rebuilt from the snapshot's data file: replacing it (same ids) changes the values and the
+    ETag, so an immutable cached copy is never served for the new data."""
+    rid, _ = fixture_run
+    first = client.get(f"/api/runs/{rid}/layers/canopy.bin")
+    assert first.status_code == 200
+    data = Path(demo["dir"]) / "data" / "city.csv"
+    df = pd.read_csv(data)
+    df["canopy"] = df["canopy"] * 0.5
+    df.to_csv(data, index=False)
+    second = client.get(f"/api/runs/{rid}/layers/canopy.bin", headers={"If-None-Match": first.headers["etag"]})
+    assert second.status_code == 200 and second.headers["etag"] != first.headers["etag"]
+    np.testing.assert_allclose(f32(second.content), f32(first.content) * 0.5, rtol=1e-5, equal_nan=True)
+
+
 def test_grid_meta_and_packed_grid(client, fixture_run, synth):
     from pyproj import Transformer
 

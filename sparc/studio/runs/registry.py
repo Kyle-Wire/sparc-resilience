@@ -8,7 +8,9 @@ A run row is derived from ``launch.json``, ``run_state.json``, ``checkpoint.json
 ``jobs`` table, so ``sparc studio --reindex`` rebuilds it from disk (:func:`_reindex`).
 
 **Status** (SPEC §5.8): ``queued`` / ``running`` while a ``run.core`` job is active; ``external_live`` for a
-CLI run whose ``run_state.json`` heartbeat is under 2 minutes old; else from ``run_state.status`` -
+CLI run still going (its process alive on this host - core rewrites ``run_state.json`` only at stage
+boundaries - or, from another host, ``run_state.json`` or its progress file written in the last 2 minutes);
+else from ``run_state.status`` -
 ``complete``, and for cancelled / failed / interrupted runs ``partial`` when the checkpoint done set is not
 empty; a manifest without ``run_state.json`` (older code) is ``complete``; an imported folder with neither
 is ``imported``.
@@ -177,6 +179,13 @@ class Registry:
             except Exception:
                 pass
 
+    def _allow_imported(self, run_dir: Path, studio_dir: Path | None) -> None:
+        """Register a run imported in place (and the config folder given at import) as a path root (SPEC §10.8)."""
+        self._allow(run_dir)
+        rec = _json(Path(studio_dir) / "import.json") if studio_dir is not None else None
+        if rec and rec.get("config_path"):
+            self._allow(Path(rec["config_path"]).parent)
+
     def project_for_dir(self, run_dir: Path) -> dict | None:
         """The project whose directory contains ``run_dir``."""
         rd = str(Path(run_dir).resolve())
@@ -289,6 +298,8 @@ class Registry:
         run_dir = Path(run_dir).resolve()
         existing = self.db.fetchone("SELECT * FROM runs WHERE run_dir = ?", (str(run_dir),))
         if existing is not None:
+            if existing.get("origin") not in ("studio", "study_child"):
+                self._allow_imported(run_dir, Path(existing["studio_dir"]))   # path roots after a restart
             return self.refresh(existing["id"], publish=publish) or existing
         launch = _json(Path(studio_dir or run_dir / "studio") / "launch.json")
         manifest = _json(run_dir / "manifest.json")
@@ -318,7 +329,7 @@ class Registry:
                 "origin": origin, "study_id": study_id, "status": "imported", "created_utc": None}
         self.db.insert("runs", base, replace=True)
         if origin not in ("studio", "study_child"):
-            self._allow(run_dir)
+            self._allow_imported(run_dir, Path(studio_dir))
         row = self.refresh(run_id, publish=False) or base
         if publish:
             self._publish("run.indexed", {"run_id": run_id, "project_id": row.get("project_id"),
@@ -365,7 +376,7 @@ class Registry:
             args = {"fast": bool(manifest.get("fast_mode")), "coarse": (co or {}).get("cell_m")}
         active, last = self._jobs(row["id"])
         done = sorted(set((state or {}).get("done") or []) | set((ckpt or {}).get("done") or []))
-        status, origin = self._status(row, state, manifest, active, last, done, rec)
+        status, origin = self._status(row, state, manifest, active, last, done, rec, launch)
         prov = (manifest or {}).get("provenance") or {}
         st = ((manifest or {}).get("metrics") or {}).get("stacker") or {}
         created = ((launch or {}).get("created_utc") or (state or {}).get("started_utc")
@@ -394,6 +405,9 @@ class Registry:
             n_scen = len(s2) if isinstance(s2, list) else None
         meta = (manifest or {}).get("run_meta") or {}
         lineage = self._lineage(row, run_dir, manifest, meta)
+        if origin != "external_live" and ("reproduction" in (lineage.get("role"), meta.get("origin"),
+                                                               (launch or {}).get("origin"), (launch or {}).get("role"))):
+            origin = "reproduction"              # SPEC §4.3 run origins: a reproduction child keeps its own
         old_stages = dbmod.loads(row.get("stages_json"), {}) or {}
         stages_info = {**(old_stages if isinstance(old_stages, dict) else {}),
                        "requested": args.get("stages"), "timings_s": timings or None, "n_scenarios": n_scen,
@@ -434,7 +448,7 @@ class Registry:
             out["label"] = name or None
         return out
 
-    def _status(self, row, state, manifest, active, last, done, rec) -> tuple[str, str]:
+    def _status(self, row, state, manifest, active, last, done, rec, launch=None) -> tuple[str, str]:
         origin = row.get("origin") or "imported"
         if active is not None:
             if active["kind"] == "run.external":
@@ -463,17 +477,26 @@ class Registry:
                 if ls == "succeeded":
                     return "complete", origin
             if origin in ("studio", "study_child", "reproduction") and last is None:
+                if (launch or {}).get("job_id"):         # its job ran (and was deleted) without writing a thing
+                    return "interrupted", origin
                 return "queued", origin                  # launched, its job not created yet
             return "imported", origin
         return "imported", origin
 
     def _externally_live(self, state: dict | None) -> bool:
+        """A CLI run still going (SPEC §5.14): ``run_state.status == running`` and its process alive on this
+        host - core rewrites ``run_state.json`` only at stage boundaries, so a long stage (an hour of S2_S3) is
+        live while its pid is - or, when the process cannot be checked (another host, no pid), a heartbeat
+        under 2 minutes old (:func:`_fresh`)."""
         if not state or state.get("status") != "running":
             return False
-        ts = parse_utc(state.get("updated_utc"))
-        if ts is None or time.time() - ts > EXTERNAL_FRESH_S:
-            return False
-        return _pid_alive(state)
+        alive = _pid_alive(state)
+        return alive is True or (alive is None and _fresh(state))
+
+    def _gone(self, state: dict) -> bool:
+        """A running CLI run that stopped: no heartbeat for 2 minutes and its process is gone (or cannot be
+        checked from this host)."""
+        return not _fresh(state) and _pid_alive(state) is not True
 
     def _lineage(self, row: dict, run_dir: Path, manifest: dict | None, meta: dict) -> dict:
         out: dict[str, Any] = {}
@@ -613,7 +636,7 @@ class Registry:
         if project_id and row.get("project_id") != project_id:
             self.db.update("runs", {"id": run_id}, {"project_id": project_id})
             row = self.refresh(run_id) or row
-        self._allow(run_dir)
+        self._allow_imported(run_dir, studio)
         return self.summary(row)
 
     def _verify(self, ctx, config_path) -> None:
@@ -644,9 +667,11 @@ class Registry:
     # ------------------------------------------------------------------ external (CLI) runs
 
     def watch_once(self) -> list[dict]:
-        """Index new runs in watch roots; returns ``[{run_id, events_path, pid, project_id, label}]`` of runs
-        that are live now and have no pseudo-job yet."""
+        """Index new runs in watch roots; returns ``[{run_id, events_path, pid, project_id, label}]`` of the runs
+        (in watch roots, or imported in place elsewhere) that are live now and have no pseudo-job yet."""
         live = []
+        candidates: list[tuple[Path, dict]] = []
+        seen: set[str] = set()
         for root in self._watch_roots():
             for rd in self._walk_runs(root, depth=4):
                 rdr = str(rd.resolve())
@@ -657,17 +682,24 @@ class Registry:
                     row = self.db.fetchone("SELECT * FROM runs WHERE run_dir = ?", (rdr,))
                     if row is None:
                         continue
-                state = _json(rd / "run_state.json")
-                if not self._externally_live(state):
-                    continue
-                active, _ = self._jobs(row["id"])
-                if active is not None:
-                    continue
-                if row.get("origin") == "studio":
-                    continue
-                live.append({"run_id": row["id"], "events_path": (state or {}).get("events_path"),
-                             "pid": (state or {}).get("pid"), "project_id": row.get("project_id"),
-                             "label": row.get("label") or rd.name})
+                seen.add(rdr)
+                candidates.append((rd, row))
+        # runs imported in place outside the watch roots: a CLI run still going there is followed the same way
+        for row in self.db.fetchall("SELECT * FROM runs WHERE origin IN ('imported', 'external_live')"):
+            if row["run_dir"] not in seen:
+                candidates.append((Path(row["run_dir"]), row))
+        for rd, row in candidates:
+            state = _json(rd / "run_state.json")
+            if row.get("origin") == "studio" or not self._externally_live(state):
+                if row.get("status") == "external_live":
+                    self.refresh(row["id"])          # it stopped reporting without a pseudo-job: re-derive
+                continue
+            active, _ = self._jobs(row["id"])
+            if active is not None:
+                continue
+            live.append({"run_id": row["id"], "events_path": (state or {}).get("events_path"),
+                         "pid": (state or {}).get("pid"), "project_id": row.get("project_id"),
+                         "label": row.get("label") or rd.name})
         return live
 
     async def watch_tick(self) -> None:
@@ -695,8 +727,41 @@ class Registry:
             jobs.attach_external(job["id"], synth / "events.jsonl")
         self.refresh(item["run_id"])
 
+    def _reattach_external(self, jobs, job: dict, state: dict) -> None:
+        """Tail a running pseudo-job again after a server restart (the job manager leaves ``run.external`` rows
+        to the registry): the run's events file, or the events Studio synthesises from ``run_state.json``, with
+        the synthesis state (sequence, current stage, started/ended) recovered from what was already written."""
+        if job["id"] in getattr(jobs, "tailers", {}):
+            return
+        ev = state.get("events_path")
+        if ev and Path(ev).is_file():
+            jobs.attach_external(job["id"], ev)
+            return
+        synth = Path(job.get("job_dir") or "")
+        if not job.get("job_dir") or synth.resolve().parent != self.ws.jobs_dir.resolve():
+            return                               # a CLI events file that went away: nothing to tail
+        path = synth / "events.jsonl"
+        rec = {"path": path, "stage": None, "done": set(), "seq": 0, "started": False}
+        from sparc.studio.jobs.tailer import iter_lines, parse_line
+
+        for _cursor, raw in iter_lines(path, 0):
+            e = parse_line(raw)
+            rec["seq"] = max(rec["seq"], int(e.get("seq") or 0))
+            t = e.get("type")
+            if t == "run.start":
+                rec["started"] = True
+            elif t == "stage.start":
+                rec["stage"] = e.get("stage")
+            elif t == "stage.end" and e.get("stage") == rec["stage"]:
+                rec["stage"] = None
+            elif t == "run.end":
+                rec["ended"] = True
+        self._ext_synth[job["id"]] = rec
+        jobs.attach_external(job["id"], path)
+
     async def _follow_external(self, jobs) -> None:
-        rows = self.db.fetchall("SELECT id, run_id, status FROM jobs WHERE kind = 'run.external' AND status = 'running'")
+        rows = self.db.fetchall("SELECT id, run_id, status, job_dir FROM jobs WHERE kind = 'run.external' "
+                                "AND status = 'running'")
         for r in rows:
             run = self.db.fetchone("SELECT run_dir FROM runs WHERE id = ?", (r["run_id"],))
             if run is None:
@@ -704,6 +769,10 @@ class Registry:
                                            error={"type": "Interrupted", "message": "the run was removed"})
                 continue
             state = _json(Path(run["run_dir"]) / "run_state.json") or {}
+            try:
+                self._reattach_external(jobs, r, state)        # in the loop: tailers are asyncio tasks
+            except Exception:
+                log.exception("re-attaching the pseudo-job %s failed", r["id"])
             if r["id"] in self._ext_synth:
                 await asyncio.to_thread(self._synthesise, r["id"], r["run_id"])
             st = state.get("status")
@@ -711,15 +780,13 @@ class Registry:
                 await jobs.detach_external(r["id"], st, error=state.get("error") if st == "failed" else None)
                 self._ext_synth.pop(r["id"], None)
                 self.refresh(r["run_id"])
-            elif st == "running" and not self._externally_live(state):
-                ts = parse_utc(state.get("updated_utc"))
-                if ts is None or time.time() - ts > EXTERNAL_FRESH_S:
-                    await jobs.detach_external(r["id"], "interrupted",
-                                               error={"type": "Interrupted",
-                                                      "message": "the CLI run stopped reporting (no heartbeat for "
-                                                                 "2 minutes and its process is gone)"})
-                    self._ext_synth.pop(r["id"], None)
-                    self.refresh(r["run_id"])
+            elif st == "running" and self._gone(state):
+                await jobs.detach_external(r["id"], "interrupted",
+                                           error={"type": "Interrupted",
+                                                  "message": "the CLI run stopped reporting (no heartbeat for "
+                                                             "2 minutes and its process is gone)"})
+                self._ext_synth.pop(r["id"], None)
+                self.refresh(r["run_id"])
 
     def _synthesise(self, job_id: str, run_id: str) -> None:
         """Append stage events derived from ``run_state.json`` (a CLI run without a progress file)."""
@@ -791,22 +858,43 @@ class Registry:
             await asyncio.sleep(WATCH_INTERVAL_S)
 
 
-def _pid_alive(state: dict) -> bool:
-    """True when the run's pid is alive on this host (or the run reports from another host)."""
+def _fresh(state: dict) -> bool:
+    """A heartbeat under 2 minutes old: ``run_state.updated_utc``, or the run's progress file (its heartbeat
+    event every 15 s)."""
+    now = time.time()
+    ts = parse_utc(state.get("updated_utc"))
+    if ts is not None and now - ts <= EXTERNAL_FRESH_S:
+        return True
+    ev = state.get("events_path")
+    if ev:
+        try:
+            return now - os.stat(ev).st_mtime <= EXTERNAL_FRESH_S
+        except OSError:
+            return False
+    return False
+
+
+def _pid_alive(state: dict) -> bool | None:
+    """Whether the run's process is alive on this host: True, False (gone, or the pid now belongs to a process
+    started after the run), None when it cannot be told (another host, no pid)."""
     import socket
 
     pid = state.get("pid")
     host = state.get("host")
-    if host and host != socket.gethostname():
-        return True
-    if not pid:
-        return True
+    if (host and host != socket.gethostname()) or not pid:
+        return None
     try:
         import psutil
 
-        return psutil.pid_exists(int(pid))
-    except Exception:
-        return True
+        proc = psutil.Process(int(pid))
+        if proc.status() == psutil.STATUS_ZOMBIE:
+            return False
+        started = parse_utc(state.get("started_utc"))
+        return started is None or proc.create_time() <= started + 60.0
+    except Exception as exc:
+        if type(exc).__name__ in ("NoSuchProcess", "ZombieProcess"):
+            return False
+        return None
 
 
 def run_summary(row: dict, studies: list[str] | None = None) -> dict:

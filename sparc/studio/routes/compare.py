@@ -28,13 +28,15 @@ async def get_compare(a: str = Query(...), b: str = Query(...), sctx: StudioCont
 @router.get("/compare/layer.bin")
 def get_compare_layer(request: Request, a: str = Query(...), b: str = Query(...), key: str = Query(...),
                       sctx: StudioContext = Depends(get_ctx)):
-    from sparc.studio.runs.layers import layer_etag
+    from sparc.studio.runs.layers import layer_etag, layer_stable
 
     ca, cb = run_context(sctx, a), run_context(sctx, b)
     arr = C.layer_diff(ca, cb, key)
     etag = '"' + hashlib.sha1(f"{layer_etag(ca, key)}|{layer_etag(cb, key)}".encode()).hexdigest() + '"'
-    both = SimpleNamespace(finished=ca.finished and cb.finished)      # immutable only when both runs are finished
-    return binary(request, both, arr.astype("<f4").tobytes(), dtype="float32", length=int(arr.size), etag=etag)
+    # cacheable only when both runs are finished; immutable only when both layers are
+    both = SimpleNamespace(finished=ca.finished and cb.finished, owned=ca.owned and cb.owned)
+    return binary(request, both, arr.astype("<f4").tobytes(), dtype="float32", length=int(arr.size), etag=etag,
+                  stable=layer_stable(ca, key) and layer_stable(cb, key))
 
 
 @router.post("/compare/priority", response_model=PriorityResponse)

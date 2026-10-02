@@ -179,9 +179,15 @@ def layer_diff(ca, cb, key: str) -> np.ndarray:
     from sparc.studio.runs.layers import layer_array
 
     _need_same(ca, cb)
-    a = np.asarray(layer_array(ca, key), dtype=np.float32)
-    b = np.asarray(layer_array(cb, key), dtype=np.float32)
-    return (b - a).astype(np.float32)
+
+    def values(ctx) -> np.ndarray:
+        arr = layer_array(ctx, key)
+        v = np.asarray(arr, dtype=np.float32)
+        if arr.dtype == np.uint8:
+            v[arr == 255] = np.nan               # categorical "no data" stays missing in the difference
+        return v
+
+    return (values(cb) - values(ca)).astype(np.float32)
 
 
 def priority_agreement(ca, cb, layer: str) -> dict:

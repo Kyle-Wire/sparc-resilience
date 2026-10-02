@@ -20,6 +20,7 @@ import asyncio
 import copy
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -425,6 +426,7 @@ async def _create_run(sctx, project: dict, raw: dict, cdir: Path, args: dict, pl
                                      label=f"Run {label or run_id} ({mode_tag(args)})")
     except Exception:
         await sctx.db.aexecute("DELETE FROM runs WHERE id = ?", (run_id,))
+        shutil.rmtree(run_dir, ignore_errors=True)   # only launch.json: a rescan must not find a run never queued
         raise
     launch["job_id"] = job["id"]
     write_json_atomic(studio / "launch.json", launch)

@@ -136,11 +136,15 @@ def column_values(ctx, column: str) -> np.ndarray:
 
     def layer(key):
         try:
-            return np.asarray(L.layer_array(ctx, key), dtype=np.float64)
+            a = L.layer_array(ctx, key)
         except ApiError as exc:
             if exc.code in ("unknown_layer", "output_missing"):
                 raise _bad(f"unknown column {column!r}: {exc.message}", "column", "unknown_column")
             raise
+        v = np.asarray(a, dtype=np.float64)
+        if a.dtype == np.uint8:
+            v[a == 255] = np.nan                 # a categorical layer's "no data"
+        return v
 
     ns, _, rest = column.partition(":")
     if not rest:

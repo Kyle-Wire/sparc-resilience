@@ -56,7 +56,8 @@ def test_warm_layer_fetch_at_providence_size(client, ctx, tmp_path):
     assert meta["n"] == N_CELLS and (meta["ny"], meta["nx"]) == (336, 289)          # one padding cell per side
     first = client.get(f"/api/runs/{rid}/layers/pred.bin")
     assert first.status_code == 200 and f32(first.content).size == N_CELLS
-    assert first.headers["cache-control"].endswith("immutable")
+    # imported in place: a later CLI run may rewrite the folder, so the browser revalidates (304) every fetch
+    assert first.headers["cache-control"] == "private, no-cache" and first.headers["etag"]
     ms = _best_ms(lambda: client.get(f"/api/runs/{rid}/layers/pred.bin"))
     assert ms < 50, f"warm layer fetch took {ms:.1f} ms"
     ms304 = _best_ms(lambda: client.get(f"/api/runs/{rid}/layers/pred.bin",

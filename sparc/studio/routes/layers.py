@@ -3,7 +3,10 @@
 Binary arrays are little-endian with ``X-SPARC-Dtype`` / ``X-SPARC-Length`` (packed bodies add
 ``X-SPARC-Offsets``).  Finished runs send a strong ``ETag`` plus ``Cache-Control: private,
 max-age=31536000, immutable`` and answer a matching ``If-None-Match`` with ``304``; running runs send
-``no-store``.
+``no-store``.  Arrays that can change under the same URL after a run finished - a run imported in place (a CLI
+run may write into its folder again), layers rebuilt from project files (the data, ``planner.layers``) or
+rewritten by a post-run action (``planner/``) - send ``private, no-cache`` with the ETag instead, so the browser
+revalidates them (a ``304`` while unchanged).
 """
 
 from __future__ import annotations
@@ -51,6 +54,7 @@ from sparc.studio.workspace import new_id, utc_now
 router = APIRouter(tags=["layers"])
 
 IMMUTABLE = "private, max-age=31536000, immutable"
+REVALIDATE = "private, no-cache"
 BLOB_MAX_BYTES = 64 * 1024 ** 2
 
 
@@ -62,8 +66,21 @@ def _grid_or_404(ctx):
     return g
 
 
+def cache_control(ctx, stable: bool = True) -> str:
+    """``no-store`` while the run can still write; ``immutable`` for a finished Studio run's own outputs;
+    revalidation for what may change under the same URL (see the module docstring)."""
+    if not ctx.finished:
+        return "no-store"
+    return IMMUTABLE if stable and getattr(ctx, "owned", True) else REVALIDATE
+
+
+def not_modified(request: Request, ctx, etag: str) -> bool:
+    inm = request.headers.get("if-none-match")
+    return bool(ctx.finished and inm and etag in [t.strip() for t in inm.split(",")])
+
+
 def binary(request: Request, ctx, body: bytes, *, dtype: str | None, length: int | None, etag: str,
-           extra: dict | None = None) -> Response:
+           extra: dict | None = None, stable: bool = True) -> Response:
     """A binary response with the api.md §0.4–0.5 headers (304 on a matching ``If-None-Match``)."""
     headers = {"ETag": etag}
     if dtype:
@@ -71,9 +88,8 @@ def binary(request: Request, ctx, body: bytes, *, dtype: str | None, length: int
     if length is not None:
         headers["X-SPARC-Length"] = str(length)
     headers.update(extra or {})
-    headers["Cache-Control"] = IMMUTABLE if ctx.finished else "no-store"
-    inm = request.headers.get("if-none-match")
-    if ctx.finished and inm and etag in [t.strip() for t in inm.split(",")]:
+    headers["Cache-Control"] = cache_control(ctx, stable)
+    if not_modified(request, ctx, etag):
         return Response(status_code=304, headers={k: v for k, v in headers.items()
                                                   if k in ("ETag", "Cache-Control")})
     return Response(body, media_type="application/octet-stream", headers=headers)
@@ -150,12 +166,13 @@ def get_layer_bin(rid: str, key: str, request: Request, sctx: StudioContext = De
     ctx = run_context(sctx, rid)
     _grid_or_404(ctx)
     etag = L.layer_etag(ctx, key)
-    if ctx.finished and request.headers.get("if-none-match") == etag:
-        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": IMMUTABLE})
+    stable = L.layer_stable(ctx, key)
+    if not_modified(request, ctx, etag):
+        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": cache_control(ctx, stable)})
     arr = L.layer_array(ctx, key)
     dtype = "uint8" if arr.dtype == np.uint8 else "float32"
     body = arr.astype("<f4" if dtype == "float32" else np.uint8, copy=False).tobytes()
-    return binary(request, ctx, body, dtype=dtype, length=int(arr.size), etag=etag)
+    return binary(request, ctx, body, dtype=dtype, length=int(arr.size), etag=etag, stable=stable)
 
 
 @router.get("/runs/{rid}/folds/{k}.bin")
