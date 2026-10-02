@@ -76,6 +76,25 @@ describe("home", () => {
     m.restore();
   });
 
+  it("a name taken by an archived project (409) moves on to the next free name", async () => {
+    const posts: { name: string }[] = [];
+    const m = mockFetch(
+      homeRoutes({
+        "POST /api/projects": (_u: URL, init: RequestInit) => {
+          posts.push(JSON.parse(String(init.body)));
+          if (posts.length === 1) return { status: 409, body: { error: { code: "conflict", message: "a project with slug synthetic-city-2 exists" } } };
+          return { status: 201, body: { project: project({ id: "p_new3", name: "Synthetic city 3" }), imported_runs: [], warnings: [] } };
+        },
+      }),
+    );
+    const { container } = renderAt("/", <Home />);
+    await waitFor(() => container.querySelector('[data-project="p_demo"]'), 5000, "cards");
+    click(byText(container, '[aria-label="Quickstarts"] button', "Try a synthetic city"));
+    await waitFor(() => window.location.pathname === "/p/p_new3", 5000, "navigated");
+    expect(posts.map((p) => p.name)).toEqual(["Synthetic city 2", "Synthetic city 3"]);
+    m.restore();
+  });
+
   it("New blank project asks for a name and opens the data step", async () => {
     const posts: unknown[] = [];
     const m = mockFetch(

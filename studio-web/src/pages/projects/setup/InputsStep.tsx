@@ -6,7 +6,7 @@
 // - Open predictors (Sentinel-2 / open layers; bootstrap mode for a city with no predictors);
 // - CMIP6 change factors.
 // Per-object progress is the job's own (job tray, JobStrip, Mission Control).
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ApiError, errorMessage } from "../../../api/client";
 import {
   getStations,
@@ -46,7 +46,9 @@ import { fmtInt, fmtNum, fmtRelative, fmtSig } from "../../../theme/format";
 import { useCfg } from "../components/cfg";
 import { LinkDialog } from "../components/LinkDialog";
 import { NetCheck } from "../components/NetCheck";
+import { StepIssues } from "../components/StepIssues";
 import { getList, getRecord, getString } from "../model/dotted";
+import { stepIssues } from "../model/steps";
 import { previewGroups, previewLoader, usePreviewGrid } from "./actions";
 import { DEFAULT_PERIODS, SSPS } from "./AnalysisStep";
 
@@ -195,10 +197,16 @@ function LatLon({ lat, lon, onChange }: { lat: number | null; lon: number | null
 
 // ---------------------------------------------------------------- campaign forcing
 
+/** The 404 of `forcing/stations` when the ISD index is not cached (api.md §5.4), not any 404. */
+export function isMissingStationIndex(e: unknown): e is ApiError {
+  return e instanceof ApiError && e.status === 404 && (e.detail?.missing === "isd-history.csv" || e.action?.kind === "fetch_input");
+}
+
 function StationPicker({ pid, lat, lon, value, onChange }: { pid: string; lat: number | null; lon: number | null; value: string; onChange: (s: string) => void }) {
   const [stations, setStations] = useState<Station[] | null>(null);
   const [error, setError] = useState<ApiError | Error | null>(null);
   const [busy, setBusy] = useState(false);
+  const indexJob = useInputJob(pid, "stations");
   const find = async () => {
     if (lat === null || lon === null) return;
     setBusy(true);
@@ -212,7 +220,12 @@ function StationPicker({ pid, lat, lon, value, onChange }: { pid: string; lat: n
       setBusy(false);
     }
   };
-  const missingIndex = error instanceof ApiError && error.status === 404;
+  const missingIndex = isMissingStationIndex(error);
+  // Once the station-list job finishes, repeat the lookup that found the index missing.
+  const indexDone = indexJob?.status === "succeeded" ? indexJob.id : null;
+  useEffect(() => {
+    if (indexDone && missingIndex) void find();
+  }, [indexDone]); // only on the job's success: `find` and the error change on every lookup
   return (
     <div className="field station-picker">
       <span className="field-label">Station (nearest ISD stations)</span>
@@ -226,13 +239,16 @@ function StationPicker({ pid, lat, lon, value, onChange }: { pid: string; lat: n
         <div className="callout" data-tone="info">
           The station list is not cached yet (NOAA ISD index, ≈3 MB). Fetch it once as a job; Studio never downloads inside a page request.
           <div className="row" style={{ marginTop: 6 }}>
-            <ActionButton
-              size="small"
-              action={
-                (error as ApiError).action ?? { kind: "fetch_input", label: "Fetch station list", method: "POST", path: `/api/projects/${encodeURIComponent(pid)}/inputs/stations`, body: {} }
-              }
-            />
+            {indexJob && isActiveStatus(indexJob.status) ? (
+              <JobStrip jobId={indexJob.id} />
+            ) : (
+              <ActionButton
+                size="small"
+                action={error.action ?? { kind: "fetch_input", label: "Fetch station list", method: "POST", path: `/api/projects/${encodeURIComponent(pid)}/inputs/stations`, body: {} }}
+              />
+            )}
           </div>
+          {indexJob?.status === "failed" ? <span className="cap">The station list job failed: {indexJob.error?.message ?? "see the job log"}.</span> : null}
         </div>
       ) : error ? (
         <span className="cap">Station lookup failed: {errorMessage(error)}</span>
@@ -259,9 +275,7 @@ function StationPicker({ pid, lat, lon, value, onChange }: { pid: string; lat: n
                   {s.name} <span className="mono cap">{s.usaf_wban}</span>
                 </td>
                 <td className="r num">{fmtNum(s.dist_km, 1)} km</td>
-                <td className="cap">
-                  {s.begin}–{s.end}
-                </td>
+                <td className="cap">{s.begin || s.end ? `${s.begin ?? "?"}–${s.end ?? "?"}` : "—"}</td>
               </tr>
             ))}
           </tbody>
@@ -823,7 +837,7 @@ function Summary() {
       {item("People & land cover", !!s.layers, s.layers?.linked, s.layers ? `${fmtInt(s.layers.people_total)} residents` : "")}
       {item("Open predictors", !!s.features, s.features?.linked, s.features?.path ?? "")}
       {item("CMIP6 change factors", !!s.climate, s.climate?.linked, s.climate ? `${fmtInt(s.climate.n_models)} models` : "")}
-      {s.ghcn ? item("GHCN daily", true, true, `${s.ghcn.station} · ${s.ghcn.years.join("–")}`) : null}
+      {s.ghcn ? item("GHCN daily", true, true, `${s.ghcn.station} · ${s.ghcn.years.map((y) => y ?? "?").join("–")}`) : null}
     </ul>
   );
 }
@@ -833,6 +847,7 @@ export function InputsStep() {
   const check = c.draft.check;
   return (
     <div className="stack setup-step" data-step="inputs">
+      <StepIssues issues={stepIssues("inputs", c.draft.issues)} />
       <p className="cap">
         Each input is a tracked network job: it keeps running if you leave the page, and its progress is in the job tray. Every result ends with <b>Link into config</b>, which shows the YAML
         change first.

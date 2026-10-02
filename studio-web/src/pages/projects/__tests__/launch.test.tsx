@@ -82,6 +82,18 @@ describe("launch", () => {
     m.restore();
   });
 
+  it("a deep link prefills mode, coarse cell, stages and CV curve (Mission Control's Duplicate with changes)", async () => {
+    const calls: PlanCall[] = [];
+    const m = mockFetch(launchRoutes(() => runPlan(), calls));
+    const { container } = renderAt(`/p/${PID}/launch?mode=coarse&coarse=90&stages=S0,S1,S2_S3,S4&cv=off`, <Launch />);
+    await waitFor(() => calls.some((c) => c.mode === "coarse"), 5000, "coarse plan");
+    expect(calls.find((c) => c.mode === "coarse")).toMatchObject({ mode: "coarse", coarse_m: 90, stages: ["S0", "S1", "S2", "S3", "S4"], cv_curve: false });
+    expect(container.querySelector('[data-mode="coarse"] .mode-pick')!.getAttribute("aria-pressed")).toBe("true");
+    expect(container.querySelector('[data-mode="coarse"] .mode-name')!.textContent).toBe("Coarse 90 m");
+    expect(container.querySelector<HTMLInputElement>('[data-stage="S6"] input')!.checked).toBe(false);
+    m.restore();
+  });
+
   it("Start is disabled while preflight has an error, with the action offered", async () => {
     const m = mockFetch(launchRoutes(() => runPlan({ preflight: [...runPlan().preflight, PREFLIGHT_ERROR] }), []));
     const { container } = renderAt(`/p/${PID}/launch`, <Launch />);

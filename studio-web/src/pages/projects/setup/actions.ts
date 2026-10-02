@@ -1,7 +1,7 @@
 // Wizard actions shared by the steps: the inline data check on the draft (S0, api.md §5.2),
 // the column suggestion for a data file, and the preview grid/layers of a check.
 import { errorMessage } from "../../../api/client";
-import { checkData, fetchPreviewColumn, fetchPreviewGrid, suggestColumns, type DataCheck, type FileInspect } from "../../../api/projects";
+import { checkData, fetchPreviewColumn, fetchPreviewGrid, suggestColumns, type ConfigRaw, type DataCheck, type FileInspect } from "../../../api/projects";
 import { useResource } from "../../../api/resource";
 import type { LayerGroup, LayerMeta } from "../../../api/types";
 import { parseGridBin, type GridData } from "../../../map/grid";
@@ -9,6 +9,25 @@ import { toast } from "../../../stores/ui";
 import { getList, getRecord, getString } from "../model/dotted";
 import { applySuggestion } from "../model/suggest";
 import { rawKey, useDrafts } from "./store";
+
+/** core DEFAULTS of the `data` keys whose default is not null (sparc.core.config.DEFAULTS). */
+const DATA_DEFAULTS: Record<string, unknown> = { x: "x", y: "y", coord_unit: "m", target_units: "degF", background: "median", join: [] };
+
+/**
+ * The `config_patch` of a data check: the draft, plus every `data.*` key the draft removed
+ * set back to its DEFAULTS value. The server deep-merges the patch onto the saved config,
+ * so a key cleared in the form (zone, crs, id, subsample, coarse_m, cell_m…) would
+ * otherwise still apply from the saved copy and the check would not describe the draft.
+ */
+export function checkPatch(saved: ConfigRaw, raw: ConfigRaw): ConfigRaw {
+  const before = getRecord<unknown>(saved, "data");
+  const after = getRecord<unknown>(raw, "data");
+  const cleared = Object.keys(before).filter((k) => before[k] !== undefined && before[k] !== null && after[k] === undefined);
+  if (!cleared.length) return raw;
+  const data: Record<string, unknown> = { ...after };
+  for (const k of cleared) data[k] = k in DATA_DEFAULTS ? DATA_DEFAULTS[k] : null;
+  return { ...raw, data };
+}
 
 /** Run S0 on the draft (unsaved form values are sent as `config_patch`). */
 export async function runDataCheck(pid: string): Promise<DataCheck | null> {
@@ -18,7 +37,7 @@ export async function runDataCheck(pid: string): Promise<DataCheck | null> {
   const key = rawKey(d.raw);
   st.setCheck(pid, { checking: true, checkError: null });
   try {
-    const check = await checkData(pid, d.raw);
+    const check = await checkData(pid, checkPatch(d.saved, d.raw));
     useDrafts.getState().setCheck(pid, { check, checkKey: key, checking: false, checkError: null });
     return check;
   } catch (e) {

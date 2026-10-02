@@ -11,6 +11,7 @@ import { configuredScenarioNames, ladderNames, pyG, scenarioSlug, scenarioSlugs 
 import { checklistRows, parseSelection, requestStages, toggleStage } from "../model/stages";
 import { stepDot, stepIssues } from "../model/steps";
 import { applySuggestion } from "../model/suggest";
+import { checkPatch } from "../setup/actions";
 import { locatePath, yamlPathIndex } from "../model/yamlPaths";
 import { CHECK, DEMO_YAML, demoRaw, ISSUES, PREFLIGHT_ERROR, planNodes, projectDetail, runPlan, SUGGESTION } from "../__fixtures__/api";
 
@@ -104,6 +105,9 @@ describe("plan view model", () => {
     expect(s4.units).toBe("22 engine passes · 1 checkpoint save");
     expect(s4.estimate).toBe("≈4–6 min");
     expect(views.find((v) => v.id === "S1")!.estimate).toBeNull();
+    // sub-second nodes read "< 1 s", not "≈0.3 s"; short ones keep the point estimate
+    expect(views.find((v) => v.id === "S0")!.estimate).toBe("< 1 s");
+    expect(views.find((v) => v.id === "finish")!.estimate).toBe("≈2 s");
     expect(unitSummary({ "base_fit:mgwr": 3, "base_fit:gam": 3, "causal_step:dml": 1 })).toBe("6 base fits · 1 causal step");
   });
 
@@ -157,6 +161,19 @@ describe("suggestions", () => {
     const start = { data: { target: "AAT", x: "POINT_X" } };
     expect(getPath(applySuggestion(start, SUGGESTION).raw, "data.target")).toBe("AAT");
     expect(getPath(applySuggestion(start, SUGGESTION, { overwrite: true }).raw, "data.target")).toBe("T");
+  });
+});
+
+describe("data check patch", () => {
+  it("sends the draft, with data keys the draft removed set back to their defaults", () => {
+    const saved = { data: { path: "data/city.csv", target: "T", zone: "district", crs: "EPSG:32619", coarse_m: 60, x: "X" }, predictors: ["a"] };
+    const draft = { data: { path: "data/city.csv", target: "T" }, predictors: ["a", "b"] };
+    const patch = checkPatch(saved, draft);
+    // the server deep-merges onto the saved config: removed keys must be sent explicitly
+    expect(patch.data).toEqual({ path: "data/city.csv", target: "T", zone: null, crs: null, coarse_m: null, x: "x" });
+    expect(patch.predictors).toEqual(["a", "b"]);
+    // nothing removed: the draft itself
+    expect(checkPatch(saved, saved)).toBe(saved);
   });
 });
 

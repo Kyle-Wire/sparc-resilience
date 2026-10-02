@@ -5,7 +5,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useJobs } from "../../../stores/jobs";
 import { byText, click, flush, mockFetch, typeInto, waitFor, type MockHandler } from "../../../test/render";
-import { InputsStep } from "../setup/InputsStep";
+import { ApiError } from "../../../api/client";
+import { InputsStep, isMissingStationIndex } from "../setup/InputsStep";
 import { demoRaw, job, PID } from "../__fixtures__/api";
 import { projectRoutes, renderStep, resetAll, seedDraft } from "./helpers";
 
@@ -36,6 +37,14 @@ function forcingCard(): HTMLElement {
 }
 
 describe("inputs step", () => {
+  it("only the missing-index 404 offers the station-list job", () => {
+    const missing = new ApiError(404, "not_found", "not cached", { missing: "isd-history.csv" }, null);
+    const other = new ApiError(404, "not_found", "no such project", null, null);
+    expect(isMissingStationIndex(missing)).toBe(true);
+    expect(isMissingStationIndex(other)).toBe(false);
+    expect(isMissingStationIndex(new Error("x"))).toBe(false);
+  });
+
   it("pre-checks the hosts of each job and shows which answer", async () => {
     const m = mockFetch(routes());
     seedDraft();
@@ -51,23 +60,27 @@ describe("inputs step", () => {
 
   it("offers Fetch station list when the ISD index is not cached, and launches the forcing job", async () => {
     const posted: { url: string; body: unknown }[] = [];
+    let indexCached = false;
     const record = (status: number, body: unknown): MockHandler => (u, init) => {
       posted.push({ url: u.pathname, body: JSON.parse(String(init.body ?? "{}")) });
       return { status, body };
     };
     const m = mockFetch(
       routes({
-        [`GET ${base}/forcing/stations`]: {
-          status: 404,
-          body: {
-            error: {
-              code: "not_found",
-              message: "isd-history.csv is not cached",
-              detail: { missing: "isd-history.csv" },
-              action: { kind: "fetch_input", label: "Fetch station list", method: "POST", path: `${base}/inputs/stations` },
-            },
-          },
-        },
+        [`GET ${base}/forcing/stations`]: () =>
+          indexCached
+            ? { body: [{ usaf_wban: "72507014765", name: "PROVIDENCE T F GREEN", lat: 41.722, lon: -71.433, dist_km: 11.6, begin: "1942-08-01", end: null }] }
+            : {
+                status: 404,
+                body: {
+                  error: {
+                    code: "not_found",
+                    message: "isd-history.csv is not cached",
+                    detail: { missing: "isd-history.csv" },
+                    action: { kind: "fetch_input", label: "Fetch station list", method: "POST", path: `${base}/inputs/stations` },
+                  },
+                },
+              },
         [`POST ${base}/inputs/stations`]: record(202, job({ id: "j_st", kind: "input.stations", label: "Station list" })),
         [`POST ${base}/inputs/forcing`]: record(202, job({ id: "j_fo", kind: "input.forcing", label: "Campaign forcing" })),
       }),
@@ -83,6 +96,15 @@ describe("inputs step", () => {
     expect(forcingCard().textContent).toContain("never downloads inside a page request");
     click(fetchBtn);
     await waitFor(() => posted.some((p) => p.url.endsWith("/inputs/stations")), 5000, "stations job");
+    // while the station-list job runs the card shows it; when it succeeds the lookup repeats
+    await waitFor(() => forcingCard().querySelector(".station-picker .jobstrip"), 5000, "station job strip");
+    indexCached = true;
+    useJobs.getState().upsert(job({ id: "j_st", kind: "input.stations", label: "Station list", status: "succeeded", project_id: PID }));
+    await waitFor(() => forcingCard().querySelector('[aria-label="Nearby stations"]'), 5000, "stations listed");
+    const row = forcingCard().querySelector('[aria-label="Nearby stations"] tbody tr')!;
+    expect(row.textContent).toContain("PROVIDENCE T F GREEN");
+    expect(row.textContent).toContain("1942-08-01–?");
+    click(forcingCard().querySelector('input[aria-label="Use PROVIDENCE T F GREEN"]'));
     // the start button waits for a date
     const start = byText(forcingCard(), "button", "Fetch forcing") as HTMLButtonElement;
     expect(start.disabled).toBe(true);
@@ -97,6 +119,7 @@ describe("inputs step", () => {
       tz: "America/New_York",
       lat: 41.826,
       lon: -71.403,
+      station: "72507014765",
       wind_source: "auto",
       link: false,
     });

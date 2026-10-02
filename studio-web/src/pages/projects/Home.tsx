@@ -345,7 +345,19 @@ function Quickstarts({ projects }: { projects: Project[] }) {
   const synthetic = async () => {
     setBusy(true);
     try {
-      const r = await createProject({ name: uniqueName("Synthetic city", projects), template: "synthetic_demo" });
+      // One click, no dialog: the name must be free. Home lists only active projects, so an
+      // archived "Synthetic city" (or a name with the same slug) answers 409; try the next one.
+      const taken: Pick<Project, "name">[] = [...projects];
+      let r: CreateProjectResult | null = null;
+      for (let attempt = 0; !r; attempt++) {
+        const name = uniqueName("Synthetic city", taken);
+        try {
+          r = await createProject({ name, template: "synthetic_demo" });
+        } catch (e) {
+          if (!(e instanceof ApiError && e.code === "conflict") || attempt >= 20) throw e;
+          taken.push({ name });
+        }
+      }
       announceCreated(r);
       navigate(`/p/${encodeURIComponent(r.project.id)}`);
     } catch (e) {

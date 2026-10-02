@@ -84,9 +84,10 @@ export function planNodeViews(nodes: readonly PlanNode[]): PlanNodeView[] {
   return ordered.map((n) => {
     let estimate: string | null = null;
     if (n.state === "will_run") {
-      // Below 10 s a range reads as noise ("0–0 s"): show the point estimate.
+      // Below 10 s a range reads as noise ("0–0 s"): show the point estimate; below 1 s
+      // (data load, finish) "≈0.0 s" says less than "< 1 s".
       if (n.est_lo !== null && n.est_hi !== null && n.est_hi > n.est_lo && n.est_hi >= 10) estimate = `≈${fmtDurationRange(n.est_lo, n.est_hi)}`;
-      else if (n.est_s !== null) estimate = `≈${fmtDuration(n.est_s)}`;
+      else if (n.est_s !== null) estimate = n.est_s < 1 ? "< 1 s" : `≈${fmtDuration(n.est_s)}`;
     }
     return { id: n.id, label: n.label, state: n.state, reason: planReasonText(n.reason), estimate, units: n.state === "will_run" ? unitSummary(n.units) : "" };
   });

@@ -87,7 +87,7 @@ export type InputsSummary = {
   climate: { path: string; n_models: number; experiments: string[]; periods: string[]; linked: boolean } | null;
   layers: { path: string; n: number; people_total: number; linked: boolean } | null;
   features: { path: string; agreement: Record<string, unknown>[]; linked: boolean } | null;
-  ghcn: { station: string; years: [number, number] } | null;
+  ghcn: { station: string; years: [number | null, number | null] } | null;
 };
 
 export type ForcingView = {
@@ -135,7 +135,8 @@ export function useInputView<K extends InputViewKind>(pid: string | null, kind: 
 
 // ---------------------------------------------------------------- stations and hosts
 
-export type Station = { usaf_wban: string; name: string; lat: number; lon: number; dist_km: number; begin: string; end: string };
+/** `begin`/`end`: the station record's first and last dates (null when the index lacks them). */
+export type Station = { usaf_wban: string; name: string; lat: number; lon: number; dist_km: number; begin: string | null; end: string | null };
 
 /**
  * Nearest ISD stations from the cached index. When `isd-history.csv` is not cached the
