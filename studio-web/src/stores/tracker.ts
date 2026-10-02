@@ -10,7 +10,11 @@
 //
 // Mission Control loads `GET /api/jobs/{jid}/tracker` (snapshot + cursor), turns it into a
 // state with `fromSnapshot`, then streams the job's events with `after=cursor`; the stream
-// manager delivers them once per animation frame and `applyEvents` folds each batch.
+// manager delivers them once per animation frame and `applyEvents` folds each batch. The
+// wire snapshot is a summary (spans to depth 4, no unit counters, no child sub-projections),
+// so the state rebuilt from it is shown at once and then replaced by the exact one: the job's
+// event log up to the snapshot cursor (`GET /api/jobs/{jid}/events`, paged) folded from the
+// first line, plus the events streamed meanwhile.
 //
 // Purity: `applyEvents` never mutates its input. It copies containers on first write within
 // a batch (a small copy-on-write draft), so untouched parts keep their identity and React
@@ -980,7 +984,10 @@ export function planOut(plan: PlanNode[] | null): PlanNode[] | null {
     .map((n) => ({ ...n, label: String(n.label || n.id), state: n.state === "will_run" || n.state === "skipped" || n.state === "cached" ? n.state : n.state === undefined ? "will_run" : "skipped" }));
 }
 
-/** The tracker snapshot wire shape of a state (api.md §3), with the raw projection attached. */
+/**
+ * The tracker snapshot wire shape of a state (api.md §3), as `tracker.py::snapshot_parts` builds
+ * it: spans to depth 4 (aggregated beyond 2,000 rows), no unit counters, child rows only.
+ */
 export function toSnapshot(s: TrackerState, job: Job, resources: ResourceRow[] = []): TrackerSnapshot {
   let stages: TrackerSnapshot["stages"] = null;
   if (s.stages !== null) {
@@ -1002,7 +1009,6 @@ export function toSnapshot(s: TrackerState, job: Job, resources: ResourceRow[] =
     heartbeat_gaps: s.heartbeat_gaps,
     children: childrenRows(s),
     log_capped: false,
-    projection: JSON.parse(JSON.stringify(s)) as unknown,
   };
 }
 
@@ -1050,32 +1056,15 @@ function pathElement(sp: Span): string {
   return el;
 }
 
-function isProjection(v: unknown): v is TrackerState {
-  return isDict(v) && isDict(v.spans) && isDict(v.done_units) && isDict(v.planned_units) && Array.isArray(v.running) && "progress" in v;
-}
-
-export type FromSnapshot = {
-  state: TrackerState;
-  /** True when counters were rebuilt from the snapshot fields (no server projection). */
-  reconstructed: boolean;
-};
-
 /**
- * A reducer state equivalent to the server's at `snap.cursor`. With the server projection
- * attached (`projection`) the state is that projection verbatim, so applying the events after
- * the cursor gives exactly the state a replay from the first event gives. Without it the
- * counters behind progress (done units per stage, partial ticks) are rebuilt from the spans,
- * stage progress, checkpoints and job fields of the snapshot.
+ * A reducer state close to the server's at `snap.cursor`, rebuilt from the wire snapshot: what
+ * it shows (stages, plan, spans, metrics, warnings, artifacts, checkpoints, gaps, child rows)
+ * is carried over, and the counters behind progress (done units per stage, partial ticks) are
+ * derived from the spans, stage progress, checkpoints and job fields. The snapshot leaves out
+ * spans deeper than four levels and the child sub-projections, so this is the first paint
+ * only: `openTracker` replaces it with the exact state of `replayLog` once the log is read.
  */
-export function fromSnapshot(snap: TrackerSnapshot): FromSnapshot {
-  if (isProjection(snap.projection)) {
-    const st = JSON.parse(JSON.stringify(snap.projection)) as TrackerState;
-    return { state: { ...newTrackerState(), ...st, cursor: isNum(st.cursor) ? st.cursor : snap.cursor }, reconstructed: false };
-  }
-  return { state: reconstruct(snap), reconstructed: true };
-}
-
-function reconstruct(snap: TrackerSnapshot): TrackerState {
+export function fromSnapshot(snap: TrackerSnapshot): TrackerState {
   const s = newTrackerState();
   const job = snap.job;
   s.cursor = snap.cursor;
@@ -1229,6 +1218,36 @@ function rebuildCounters(s: TrackerState): void {
   s.stage_partial = per;
 }
 
+// ---------------------------------------------------------------- exact state from the event log
+
+/**
+ * Event logs up to this size (the snapshot cursor is a byte offset) are replayed from the first
+ * line after the snapshot loads; larger ones (debug-level logs near the 200 MB cap) keep the
+ * state rebuilt from the snapshot.
+ */
+export const EXACT_REPLAY_MAX_BYTES = 48 * 1024 * 1024;
+const REPLAY_PAGE = 5000;
+
+/**
+ * The projection at cursor `upTo`, exactly as the server's: every event of the job's log up
+ * to and including that cursor (`GET /api/jobs/{jid}/events`, the same validated lines the
+ * server's tailer folds), applied from the first line. Null when the log does not reach
+ * `upTo` (no log file, e.g. a pseudo-job synthesised from `run_state.json`).
+ */
+export async function replayLog(jid: string, upTo: number, fetchEvents: typeof getEvents = getEvents, signal?: AbortSignal): Promise<TrackerState | null> {
+  let state = newTrackerState();
+  let after: number | null = null;
+  for (;;) {
+    const page = await fetchEvents(jid, { after, limit: REPLAY_PAGE }, signal);
+    const upto = page.events.filter((e) => e.cursor <= upTo);
+    if (upto.length) state = applyEvents(state, upto);
+    if (state.cursor >= upTo || upto.length < page.events.length) break;
+    if (page.eof || !page.events.length || page.next_cursor === after) break;
+    after = page.next_cursor;
+  }
+  return state.cursor === upTo ? state : null;
+}
+
 // ---------------------------------------------------------------- ETA (port of eta.projection_eta)
 
 /** Per-unit rate history (median and quartiles, normalised to 54,701 cells and 4 threads). */
@@ -1342,8 +1361,10 @@ export type TrackerEntry = {
   error: Error | null;
   job: Job | null;
   state: TrackerState;
-  /** Counters were rebuilt from the snapshot (the server sent no projection). */
+  /** The state is the one rebuilt from the snapshot: the exact replay of the log has not replaced it (yet). */
   reconstructed: boolean;
+  /** The event log is being replayed to replace the rebuilt state. */
+  replaying: boolean;
   resources: ResourceRow[];
   /** The last DIAG_EVENTS events seen live (Copy diagnostics). */
   recent: JobEvent[];
@@ -1371,7 +1392,8 @@ export function logLineFromEvent(raw: JobEvent | Ev): LogLine | null {
 
 export const DIAG_EVENTS = 200;
 const EPOCH_KEEP = 2000;
-const LOG_KEEP = 5000;
+/** Live log lines an entry keeps (the Logs tab re-reads the log when older ones were dropped). */
+export const LOG_KEEP = 5000;
 /** Resource samples kept client-side (15 min at the 2 s live cadence). */
 const RESOURCE_KEEP = 450;
 
@@ -1385,7 +1407,7 @@ export const useTracker = create<TrackerStore>((set, get) => ({
   entries: {},
   put: (jid, patch) => {
     const cur = get().entries[jid];
-    const base: TrackerEntry = cur ?? { jid, phase: "loading", error: null, job: null, state: newTrackerState(), reconstructed: false, resources: [], recent: [], ended: null, epochs: [], logs: [], logCapped: false };
+    const base: TrackerEntry = cur ?? { jid, phase: "loading", error: null, job: null, state: newTrackerState(), reconstructed: false, replaying: false, resources: [], recent: [], ended: null, epochs: [], logs: [], logCapped: false };
     set({ entries: { ...get().entries, [jid]: { ...base, ...patch } } });
   },
   drop: (jid) => {
@@ -1444,14 +1466,23 @@ export async function loadEpochHistory(jid: string, fetchEvents: typeof getEvent
   return out.length;
 }
 
-type Session = { refs: number; handle: JobStreamHandle | null; abort: AbortController };
+type Session = {
+  refs: number;
+  handle: JobStreamHandle | null;
+  abort: AbortController;
+  /** Events streamed while the exact state is being replayed from the log (null when not replaying). */
+  backfill: JobEvent[] | null;
+};
 const sessions = new Map<string, Session>();
 
-export type TrackerDeps = { streams?: StreamManager; fetchSnapshot?: typeof getTracker; fetchJob?: typeof getJob };
+export type TrackerDeps = { streams?: StreamManager; fetchSnapshot?: typeof getTracker; fetchJob?: typeof getJob; fetchEvents?: typeof getEvents };
 
 /**
  * Start tracking a job: load the snapshot, then (for a job that can still change) stream
- * its events from the snapshot cursor. Reference counted; returns the release function.
+ * its events from the snapshot cursor. When the server sends no projection, the event log
+ * up to the cursor is replayed in the background and the exact state replaces the one rebuilt
+ * from the snapshot (events streamed meanwhile are applied on top). Reference counted;
+ * returns the release function.
  */
 export function openTracker(jid: string, deps: TrackerDeps = {}): () => void {
   const store = useTracker.getState();
@@ -1460,17 +1491,36 @@ export function openTracker(jid: string, deps: TrackerDeps = {}): () => void {
     existing.refs += 1;
     return () => releaseTracker(jid);
   }
-  const session: Session = { refs: 1, handle: null, abort: new AbortController() };
+  const session: Session = { refs: 1, handle: null, abort: new AbortController(), backfill: null };
   sessions.set(jid, session);
   store.put(jid, { phase: "loading", error: null });
   const fetchSnapshot = deps.fetchSnapshot ?? getTracker;
   const fetchJob = deps.fetchJob ?? getJob;
+  const fetchEvents = deps.fetchEvents ?? getEvents;
   fetchSnapshot(jid, session.abort.signal).then(
     (snap) => {
       if (sessions.get(jid) !== session) return;
-      const { state, reconstructed } = fromSnapshot(snap);
+      const state = fromSnapshot(snap);
       const final = isFinalStatus(snap.job.status);
-      useTracker.getState().put(jid, { phase: final ? "ended" : "live", job: snap.job, state, reconstructed, resources: snap.resources ?? [], recent: [], ended: final ? snap.job.status : null, error: null, epochs: [], logs: [], logCapped: !!snap.log_capped });
+      const exactable = snap.cursor >= 0 && snap.cursor <= EXACT_REPLAY_MAX_BYTES;
+      useTracker.getState().put(jid, { phase: final ? "ended" : "live", job: snap.job, state, reconstructed: snap.cursor >= 0, replaying: exactable, resources: snap.resources ?? [], recent: [], ended: final ? snap.job.status : null, error: null, epochs: [], logs: [], logCapped: !!snap.log_capped });
+      if (exactable) {
+        session.backfill = [];
+        replayLog(jid, snap.cursor, fetchEvents, session.abort.signal).then(
+          (exact) => {
+            const buffered = session.backfill ?? [];
+            session.backfill = null;
+            if (!useTracker.getState().entries[jid] || sessions.get(jid) !== session) return;
+            if (exact) useTracker.getState().put(jid, { state: applyEvents(exact, buffered), reconstructed: false, replaying: false });
+            else useTracker.getState().put(jid, { replaying: false });
+          },
+          () => {
+            // keep the state rebuilt from the snapshot
+            session.backfill = null;
+            if (useTracker.getState().entries[jid] && sessions.get(jid) === session) useTracker.getState().put(jid, { replaying: false });
+          },
+        );
+      }
       if (final) return;
       const streams = deps.streams ?? getStreams();
       session.handle = streams.openJob(jid, {
@@ -1478,6 +1528,7 @@ export function openTracker(jid: string, deps: TrackerDeps = {}): () => void {
         onEvents: (batch) => {
           const cur = useTracker.getState().entries[jid];
           if (!cur || sessions.get(jid) !== session) return;
+          if (session.backfill) for (const e of batch) if (e.type !== "resource") session.backfill.push(e);
           useTracker.setState({ entries: { ...useTracker.getState().entries, [jid]: foldBatch(cur, batch) } });
         },
         onEnd: (status) => {

@@ -6,13 +6,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useResource } from "../../../api/resource";
 import {
   getLogs,
+  getResources,
   getRunConfig,
   getRunDetail,
   getRunProvenance,
   getSystem,
+  isFinalStatus,
   logsRawUrl,
   type LogLine,
   type RawStream,
+  type ResourceRow,
 } from "../../../api/tracking";
 import type { Job, Meta } from "../../../api/types";
 import { Sparkline } from "../../../charts";
@@ -28,7 +31,7 @@ import { VirtualList } from "../../../components/ui/VirtualList";
 import { copyText } from "../../../components/ui/download";
 import { codecs, Link, useUrlState } from "../../../router";
 import { toast } from "../../../stores/ui";
-import { STAGE_IDS, type TrackerEntry, type TrackerState } from "../../../stores/tracker";
+import { LOG_KEEP, STAGE_IDS, type TrackerEntry, type TrackerState } from "../../../stores/tracker";
 import { fmtBytes, fmtDateTime, fmtNum } from "../../../theme/format";
 import { artifactTab, matchesLog, warningTab, type LogFilter } from "../model";
 
@@ -50,6 +53,33 @@ const LEVEL_OPTIONS = [
   { value: "error", label: "errors only" },
 ] as const;
 
+const LOG_PAGE = 5000;
+/** Lines the Logs tab keeps (the newest); the downloads hold everything. */
+export const LOG_VIEW_MAX = 50_000;
+
+/**
+ * Every line of a job's log that passes the filters (`GET /api/jobs/{jid}/logs`, page after
+ * page), keeping the newest LOG_VIEW_MAX. `next_cursor` is where the server stopped reading.
+ */
+export async function loadLogLines(jid: string, f: LogFilter, signal?: AbortSignal, fetchLogs: typeof getLogs = getLogs): Promise<{ lines: LogLine[]; next_cursor: number; truncated: boolean }> {
+  let after: number | null = null;
+  let lines: LogLine[] = [];
+  let truncated = false;
+  let next = -1;
+  for (;;) {
+    const page = await fetchLogs(jid, { after, level: f.level, logger: f.logger || undefined, stage: f.stage || undefined, q: f.q || undefined, limit: LOG_PAGE }, signal);
+    lines = lines.concat(page.lines);
+    if (lines.length > LOG_VIEW_MAX) {
+      lines = lines.slice(-LOG_VIEW_MAX);
+      truncated = true;
+    }
+    next = page.next_cursor;
+    if (page.lines.length < LOG_PAGE || page.next_cursor === after) break;
+    after = page.next_cursor;
+  }
+  return { lines, next_cursor: next, truncated };
+}
+
 function LogsTab({ entry }: { entry: TrackerEntry }) {
   const jid = entry.jid;
   const [level, setLevel] = useUrlState("lvl", codecs.enum(["debug", "info", "warning", "error"] as const, "info"));
@@ -64,12 +94,17 @@ function LogsTab({ entry }: { entry: TrackerEntry }) {
     return () => clearTimeout(h);
   }, [qText]);
   const key = `job:${jid}:logs:${level}|${logger}|${stage}|${q}`;
-  const res = useResource(key, (s) => getLogs(jid, { level, logger: logger || undefined, stage: stage || undefined, q: q || undefined, limit: 5000 }, s), { tags: [`job:${jid}`], keepPrevious: true });
-  const lines: LogLine[] = useMemo(() => {
-    const server = res.data?.lines ?? [];
-    const edge = Math.max(res.data?.next_cursor ?? -1, server.length ? server[server.length - 1].cursor : -1);
-    return [...server, ...entry.logs.filter((l) => l.cursor > edge && matchesLog(l, filter))];
-  }, [res.data, entry.logs, level, logger, stage, q]);
+  const res = useResource(key, (s) => loadLogLines(jid, filter, s), { tags: [`job:${jid}`], keepPrevious: true });
+  const server = res.data?.lines;
+  const edge = Math.max(res.data?.next_cursor ?? -1, server?.length ? server[server.length - 1].cursor : -1);
+  const lines: LogLine[] = useMemo(() => [...(server ?? []), ...entry.logs.filter((l) => l.cursor > edge && matchesLog(l, filter))], [server, edge, entry.logs, level, logger, stage, q]);
+  // The entry keeps only the newest LOG_KEEP live lines: once lines after the page's read have
+  // been dropped, read the log again so the list has no hole.
+  const gap = !!res.data && entry.logs.length >= LOG_KEEP && entry.logs[0].cursor > edge;
+  const reload = res.reload;
+  useEffect(() => {
+    if (gap) void reload();
+  }, [gap, reload]);
   const scroller = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (follow && scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
@@ -128,6 +163,9 @@ function LogsTab({ entry }: { entry: TrackerEntry }) {
           Copy
         </Button>
       </div>
+      {res.data?.truncated ? (
+        <p className="mc-note">Showing the newest {LOG_VIEW_MAX.toLocaleString("en")} matching lines; the downloads below hold every line.</p>
+      ) : null}
       {res.error && !res.data ? (
         <EmptyState error={res.error} />
       ) : lines.length ? (
@@ -283,15 +321,33 @@ function CheckpointsTab({ state }: { state: TrackerState }) {
 
 // ---------------------------------------------------------------- resources
 
+/**
+ * The samples to draw: the job's stored history (one per 10 s since it started, read once) before
+ * the first sample the tracker holds, then the tracker's (the snapshot's last 15 min and the live
+ * 2 s samples). Without the history a job opened after it ended, or more than 15 min into it,
+ * would show nothing, or only its tail.
+ */
+export function resourceSeries(history: readonly ResourceRow[] | undefined, tracked: readonly ResourceRow[]): ResourceRow[] {
+  const first = tracked.length ? tracked[0].ts : Infinity;
+  return [...(history ?? []).filter((r) => r.ts < first), ...tracked];
+}
+
 function ResourcesTab({ entry, job }: { entry: TrackerEntry; job: Job }) {
   const sys = useResource("system", (s) => getSystem(s), { tags: ["storage"] });
-  const rs = entry.resources;
-  if (!rs.length) return <p className="mc-note">Resource samples arrive every 2 s while the job runs.</p>;
+  const started = job.started_utc ? Date.parse(job.started_utc) / 1000 : null;
+  const history = useResource(started !== null && Number.isFinite(started) ? `job:${job.id}:resources-since-start` : null, (s) => getResources(job.id, started!, s), { tags: [`job:${job.id}`] });
+  const rs = useMemo(() => resourceSeries(history.data, entry.resources), [history.data, entry.resources]);
+  const final = isFinalStatus(job.status);
+  if (!rs.length) {
+    if (history.loading) return <p className="mc-note">Loading resource samples…</p>;
+    return <p className="mc-note">{final ? "No resource samples were recorded for this job." : "Resource samples arrive every 2 s while the job runs."}</p>;
+  }
   const last = rs[rs.length - 1];
   const peak = Math.max(job.peak_rss_mb ?? 0, ...rs.map((r) => r.rss_mb));
   const availMb = sys.data ? sys.data.mem_available_gb * 1024 : null;
   const usable = availMb !== null ? availMb + last.rss_mb : null;
-  const high = usable !== null && last.rss_mb > 0.8 * usable;
+  // The memory banner is about a live process (free memory is read now).
+  const high = !final && usable !== null && last.rss_mb > 0.8 * usable;
   const xs = rs.map((r) => r.ts - rs[0].ts);
   return (
     <div className="stack">
@@ -301,16 +357,16 @@ function ResourcesTab({ entry, job }: { entry: TrackerEntry; job: Job }) {
         </div>
       ) : null}
       <KpiRow label="Resources">
-        <Kpi label="Memory (RSS)" value={fmtNum(last.rss_mb / 1024, 2)} unit="GB" note={`peak ${fmtNum(peak / 1024, 2)} GB`} tone={high ? "crit" : undefined} />
+        <Kpi label={final ? "Memory (RSS), last sample" : "Memory (RSS)"} value={fmtNum(last.rss_mb / 1024, 2)} unit="GB" note={`peak ${fmtNum(peak / 1024, 2)} GB`} tone={high ? "crit" : undefined} />
         <Kpi label="CPU" value={fmtNum(last.cpu_pct, 0)} unit="%" note={job.threads ? `${job.threads} threads allowed` : undefined} />
         <Kpi label="Processes" value={fmtNum(last.n_procs, 0)} />
         <Kpi label="Free RAM" value={sys.data ? fmtNum(sys.data.mem_available_gb, 1) : "—"} unit="GB" note={sys.data ? `of ${fmtNum(sys.data.mem_total_gb, 1)} GB` : undefined} />
         <Kpi label="Free disk" value={sys.data ? fmtNum(sys.data.disk_free_gb, 1) : "—"} unit="GB" />
       </KpiRow>
       <div className="grid3">
-        <Sparkline title="Memory (RSS)" values={rs.map((r) => r.rss_mb)} x={xs} units="MB" decimals={0} area ref={usable !== null ? 0.8 * usable : undefined} pin={false} caption={usable !== null ? "dashed line: 80% of usable memory" : undefined} />
-        <Sparkline title="CPU" values={rs.map((r) => r.cpu_pct)} x={xs} units="%" decimals={0} pin={false} />
-        <Sparkline title="Processes" values={rs.map((r) => r.n_procs)} x={xs} units="processes" decimals={0} pin={false} />
+        <Sparkline title="Memory (RSS)" values={rs.map((r) => r.rss_mb)} x={xs} units="MB" unit="MB" decimals={0} area ref={!final && usable !== null ? 0.8 * usable : undefined} pin={false} caption={!final && usable !== null ? "dashed line: 80% of usable memory" : undefined} />
+        <Sparkline title="CPU" values={rs.map((r) => r.cpu_pct)} x={xs} units="%" unit="%" decimals={0} pin={false} />
+        <Sparkline title="Processes" values={rs.map((r) => r.n_procs)} x={xs} units="processes" unit="processes" decimals={0} pin={false} />
       </div>
     </div>
   );
@@ -412,7 +468,9 @@ export function BottomTabs({ entry, job, meta }: { entry: TrackerEntry; job: Job
           <ConfigTab job={job} />
         )}
       </Tabs>
-      {entry.reconstructed && entry.phase === "live" ? <p className="mc-note">Progress before this page opened is rebuilt from the server's summary; the server's own figures may differ slightly until the next stage ends.</p> : null}
+      {entry.reconstructed && !entry.replaying && entry.phase === "live" ? (
+        <p className="mc-note">Progress before this page opened is rebuilt from the server's summary, because this job's event log could not be replayed here (it is very large, or not available); the figures may differ slightly from the server's until the next stage ends.</p>
+      ) : null}
     </section>
   );
 }

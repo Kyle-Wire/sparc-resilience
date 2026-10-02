@@ -55,13 +55,17 @@ export function stageHistoryChart(rows: StageHistoryRow[], stage: string | null)
   runs.sort((a, b) => commits.indexOf(a.commit) - commits.indexOf(b.commit));
   const stages = stage ? [stage] : STAGE_IDS.filter((s) => rows.some((r) => r.stage === s));
   const categories = runs.map((r) => `${r.commit ? r.commit.slice(0, 7) : "no commit"} · ${r.label}`);
+  // run → stage → seconds (the first row of a pair wins, as the newest comes first)
+  const seconds = new Map<string, Map<string, number>>();
+  for (const r of rows) {
+    const per = seconds.get(r.run_id) ?? new Map<string, number>();
+    if (!per.has(r.stage)) per.set(r.stage, r.seconds);
+    seconds.set(r.run_id, per);
+  }
   const series = stages.map((s) => ({
     id: s,
     label: s,
-    values: runs.map((run) => {
-      const hit = rows.find((r) => r.run_id === run.run_id && r.stage === s);
-      return hit ? hit.seconds : null;
-    }),
+    values: runs.map((run) => seconds.get(run.run_id)?.get(s) ?? null),
   }));
   return { categories, series };
 }
@@ -69,10 +73,11 @@ export function stageHistoryChart(rows: StageHistoryRow[], stage: string | null)
 function StageHistory({ pid }: { pid: string | null }) {
   const [stage, setStage] = useUrlState("stage", codecs.string(""));
   const res = useResource(`timings:${pid ?? "all"}`, (s) => getTimings({ project: pid ?? undefined, limit: 2000 }, s), { tags: ["runs"] });
+  const rows = res.data?.stage_history;
+  const chart = useMemo(() => (rows?.length ? stageHistoryChart(rows, stage || null) : null), [rows, stage]);
   if (res.error && !res.data) return <EmptyState error={res.error} />;
-  const rows = res.data?.stage_history ?? [];
-  if (!rows.length) return <p className="cap">{res.loading ? "Loading timings…" : "No stage timings recorded yet."}</p>;
-  const { categories, series } = stageHistoryChart(rows, stage || null);
+  if (!rows?.length || !chart) return <p className="cap">{res.loading ? "Loading timings…" : "No stage timings recorded yet."}</p>;
+  const { categories, series } = chart;
   return (
     <div className="stack">
       <div className="field" style={{ maxWidth: 260 }}>

@@ -148,7 +148,20 @@ function SettingsForm() {
           <Toggle checked={draft.offline} onChange={(v) => set({ offline: v })}>
             Offline: hide actions that need the network
           </Toggle>
-          <Toggle checked={draft.notifications} onChange={(v) => set({ notifications: v })}>
+          <Toggle
+            checked={draft.notifications}
+            onChange={(v) => {
+              // Ask for the permission inside the click (browsers ignore requests made later, after the save).
+              if (v && typeof Notification !== "undefined" && Notification.permission === "default") {
+                try {
+                  void Promise.resolve(Notification.requestPermission()).catch(() => {});
+                } catch {
+                  /* callback-only API or blocked */
+                }
+              }
+              set({ notifications: v });
+            }}
+          >
             Browser notification when a job ends (asks for permission)
           </Toggle>
         </div>
@@ -208,6 +221,9 @@ function StorageManager() {
   const [ask, setAsk] = useState<DeleteAsk | null>(null);
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
+  // A run imported in place keeps its files outside the workspace: the server deletes them only
+  // when asked again with force_files (409 imported_in_place names the folder).
+  const [outside, setOutside] = useState<string | null>(null);
   if (res.error && !res.data) return <EmptyState error={res.error} />;
   const st = res.data;
   if (!st) return <p className="cap">Measuring the workspace…</p>;
@@ -239,20 +255,24 @@ function StorageManager() {
   const close = () => {
     setAsk(null);
     setTyped("");
+    setOutside(null);
   };
   const confirm = async () => {
     if (!ask || !typedOk) return;
     setBusy(true);
     try {
-      const r = ask.kind === "cache" ? await deleteCache(ask.name) : await deleteRunData(ask.run.run_id, ask.what);
+      const r = ask.kind === "cache" ? await deleteCache(ask.name) : await deleteRunData(ask.run.run_id, ask.what, outside !== null);
       toast("success", `Freed ${fmtBytes(r.freed_bytes)}`);
       invalidate("storage");
       if (ask.kind === "run") invalidate(`run:${ask.run.run_id}`);
       await res.reload();
-      setAsk(null);
-      setTyped("");
+      close();
     } catch (e) {
-      toast("error", "Nothing was deleted", { body: errorMessage(e), action: e instanceof ApiError && e.action ? e.action : undefined });
+      if (e instanceof ApiError && e.code === "imported_in_place" && outside === null) {
+        setOutside(typeof e.detail?.run_dir === "string" ? e.detail.run_dir : "");
+      } else {
+        toast("error", "Nothing was deleted", { body: errorMessage(e), action: e instanceof ApiError && e.action ? e.action : undefined });
+      }
     } finally {
       setBusy(false);
     }
@@ -321,7 +341,7 @@ function StorageManager() {
               Cancel
             </Button>
             <Button variant="danger" busy={busy} disabled={!typedOk} onClick={() => void confirm()}>
-              Delete
+              {outside !== null ? "Delete outside the workspace" : "Delete"}
             </Button>
           </>
         }
@@ -335,8 +355,13 @@ function StorageManager() {
                 ? `The checkpoint (${fmtBytes(ask.run.checkpoint_bytes)}) is removed: the run can no longer be resumed, and the Scenario Lab cannot open it.`
                 : ask.what === "outputs"
                   ? `The run's output files (${fmtBytes(ask.run.outputs_bytes)}) are removed; Studio's own records of the run are kept.`
-                  : "The run directory, its outputs, checkpoint and Studio records are removed. This cannot be undone."}
+                  : "Studio's records of the run are removed, with its directory when that lives in the workspace (a run imported in place keeps its folder). This cannot be undone."}
             </p>
+            {outside !== null ? (
+              <div className="callout" data-tone="crit" role="alert">
+                This run was imported in place{outside ? ` from ${outside}` : ""}, outside the workspace, so nothing was deleted yet. Confirm again to delete its {ask.what === "checkpoint" ? "checkpoint" : "output files"} in that folder.
+              </div>
+            ) : null}
             {needTyped ? (
               <label className="field">
                 <span className="field-label">Type the run id ({ask.run.run_id}) to confirm</span>

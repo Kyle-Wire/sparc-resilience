@@ -1,8 +1,12 @@
 // The tracker reducer (stores/tracker.ts): replay of the hand-written fixture, unit accounting,
-// warnings dedup, purity, snapshot resume, nested children, ETA and the Python golden.
+// warnings dedup, purity, snapshot resume (snapshot + log replay + stream), nested children,
+// ETA and the Python golden.
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { getEvents, TrackerSnapshot } from "../../../api/tracking";
+import type { StreamManager } from "../../../api/sse";
+import type { JobEvent, JobStatus } from "../../../api/types";
 import {
   applyEvent,
   applyEvents,
@@ -11,18 +15,21 @@ import {
   fromSnapshot,
   metricKey,
   newTrackerState,
+  openTracker,
   projectionEta,
   pyJsonList,
   replay,
+  replayLog,
   sha1Hex,
   stageOf,
   toContract,
   toSnapshot,
+  useTracker,
   type TrackerState,
 } from "../../../stores/tracker";
 import sampleText from "../__fixtures__/events.sample.jsonl?raw";
 import liveText from "../__fixtures__/s2s3.sample.jsonl?raw";
-import { makeJob, parseJsonl } from "./events";
+import { makeJob, parseJsonl, type CursorEvent } from "./events";
 
 const sample = parseJsonl(sampleText);
 const live = parseJsonl(liveText);
@@ -185,38 +192,62 @@ describe("purity and structural sharing", () => {
   });
 });
 
+/** A fake `GET /api/jobs/{jid}/events` over a parsed log: `after` exclusive, small pages (paging is exercised). */
+function eventsApi(log: CursorEvent[], pageSize = 17) {
+  const calls: (number | null)[] = [];
+  const fetchEvents = async (_jid: string, q: { after?: number | null } = {}) => {
+    const after = q.after ?? null;
+    calls.push(after);
+    const rest = log.filter((e) => after === null || e.cursor > after);
+    const events = rest.slice(0, pageSize);
+    const last = events.length ? events[events.length - 1].cursor : after ?? -1;
+    return { events, next_cursor: last, eof: events.length === rest.length };
+  };
+  return { fetchEvents: fetchEvents as unknown as typeof getEvents, calls };
+}
+
+/** The wire snapshot the server would send at `state` (api.md §3; no reducer internals). */
+const wire = (state: TrackerState, job = makeJob({ status: state.status ?? "running" })) => JSON.parse(JSON.stringify(toSnapshot(state, job))) as TrackerSnapshot;
+
 describe("snapshot then events after the cursor", () => {
   const full = replay(sample);
   const job = makeJob();
 
-  it("equals applying every event from the first one (server projection attached)", () => {
-    for (let cut = 0; cut < sample.length; cut += 7) {
-      const at = replay(sample.slice(0, cut + 1));
-      const snap = JSON.parse(JSON.stringify(toSnapshot(at, job)));
+  it("equals applying every event from the first one (snapshot, the log up to its cursor, then the rest)", async () => {
+    const { fetchEvents } = eventsApi(sample);
+    for (let cut = 0; cut < sample.length; cut += 3) {
+      const snap = wire(replay(sample.slice(0, cut + 1)), job);
       expect(snap.cursor).toBe(sample[cut].cursor);
-      const { state, reconstructed } = fromSnapshot(snap);
-      expect(reconstructed).toBe(false);
-      const rest = sample.filter((e) => e.cursor > snap.cursor);
-      const resumed = applyEvents(state, rest);
+      const exact = await replayLog("j_sample", snap.cursor, fetchEvents);
+      expect(exact).not.toBeNull();
+      let resumed = exact!;
+      // event by event, the resumed state matches the full replay at the same point
+      for (let k = cut + 1; k < sample.length; k++) {
+        resumed = applyEvent(resumed, sample[k]);
+        if (k % 11 === 0) expect(toContract(resumed)).toEqual(toContract(replay(sample.slice(0, k + 1))));
+      }
       expect(plain(resumed)).toEqual(plain(full));
-      expect(toContract(resumed)).toEqual(toContract(full));
     }
   });
 
-  it("rebuilds counters from the wire fields when the server sends no projection", () => {
+  it("returns null when the log does not reach the snapshot cursor", async () => {
+    const { fetchEvents } = eventsApi(sample.slice(0, 40));
+    expect(await replayLog("j_sample", sample[60].cursor, fetchEvents)).toBeNull();
+    const none = eventsApi([]);
+    expect(await replayLog("j_sample", sample[5].cursor, none.fetchEvents)).toBeNull();
+  });
+
+  it("rebuilds a close state from the wire fields alone (the first paint)", () => {
     for (let cut = 3; cut < sample.length; cut += 5) {
       const at = replay(sample.slice(0, cut + 1));
-      const snap = JSON.parse(JSON.stringify(toSnapshot(at, makeJob({ status: at.status ?? "running" }))));
-      delete snap.projection;
-      const { state, reconstructed } = fromSnapshot(snap);
-      expect(reconstructed).toBe(true);
+      const state = fromSnapshot(wire(at));
       // what the snapshot shows is carried over exactly
       expect(toContract(state).stages).toEqual(toContract(at).stages);
       expect(toContract(state).warnings).toEqual(toContract(at).warnings);
       expect(toContract(state).artifacts).toEqual(toContract(at).artifacts);
       // progress is rebuilt from the stages' own progress
       expect(Math.abs((state.progress ?? 0) - (at.progress ?? 0))).toBeLessThan(1e-6);
-      const resumed = applyEvents(state, sample.filter((e) => e.cursor > snap.cursor));
+      const resumed = applyEvents(state, sample.filter((e) => e.cursor > at.cursor));
       const c = toContract(resumed);
       expect(c.stages).toEqual(toContract(full).stages);
       expect(c.warnings).toEqual(toContract(full).warnings);
@@ -228,12 +259,72 @@ describe("snapshot then events after the cursor", () => {
   it("rebuilds span paths, running spans and the current path", () => {
     const iMgwr = live.findIndex((e) => e.type === "task.start" && e.name === "base_model" && e.key === "mgwr" && e.path.includes("task:fold[2/3]"));
     const at = replay(live.slice(0, iMgwr + 1));
-    const snap = JSON.parse(JSON.stringify(toSnapshot(at, makeJob({ id: "j_live" }))));
-    delete snap.projection;
-    const { state } = fromSnapshot(snap);
+    const state = fromSnapshot(wire(at, makeJob({ id: "j_live" })));
     expect(state.current_path).toEqual(at.current_path);
     expect(state.running).toEqual(at.running);
     expect(state.stage).toBe("S2_S3");
+  });
+});
+
+describe("openTracker", () => {
+  type Sub = { after?: number | null; onEvents: (b: JobEvent[]) => void; onEnd?: (s: JobStatus) => void };
+  function fakeStreams() {
+    const subs: Sub[] = [];
+    const streams = { openJob: (_jid: string, sub: Sub) => (subs.push(sub), { jid: _jid, close: () => {} }) } as unknown as StreamManager;
+    return { streams, subs };
+  }
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+
+  it("shows the rebuilt state, then the exact one from the log with the events streamed meanwhile", async () => {
+    const cut = sample.findIndex((e) => e.type === "task.start" && e.name === "stacker_candidate");
+    const at = replay(sample.slice(0, cut + 1));
+    const snap = wire(at, makeJob({ id: "j_ot", status: "running" }));
+    const log = eventsApi(sample);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const fetchEvents = (async (jid: string, q: { after?: number | null }) => {
+      await gate;
+      return log.fetchEvents(jid, q);
+    }) as unknown as typeof getEvents;
+    const { streams, subs } = fakeStreams();
+    const close = openTracker("j_ot", { streams, fetchSnapshot: async () => snap, fetchEvents });
+    await settle();
+    const first = useTracker.getState().entries.j_ot;
+    expect(first.phase).toBe("live");
+    expect(first.reconstructed).toBe(true);
+    expect(first.replaying).toBe(true);
+    expect(subs).toHaveLength(1);
+    expect(subs[0].after).toBe(snap.cursor);
+    // live events arrive before the log has been read
+    const rest = sample.filter((e) => e.cursor > snap.cursor);
+    subs[0].onEvents(rest.slice(0, 25));
+    expect(useTracker.getState().entries.j_ot.state.cursor).toBe(rest[24].cursor);
+    release();
+    for (let i = 0; i < 20 && useTracker.getState().entries.j_ot.replaying; i++) await settle();
+    const exact = useTracker.getState().entries.j_ot;
+    expect(exact.reconstructed).toBe(false);
+    expect(exact.replaying).toBe(false);
+    expect(plain(exact.state)).toEqual(plain(replay(sample.slice(0, sample.indexOf(rest[24]) + 1))));
+    subs[0].onEvents(rest.slice(25));
+    expect(plain(useTracker.getState().entries.j_ot.state)).toEqual(plain(replay(sample)));
+    close();
+    expect(useTracker.getState().entries.j_ot).toBeUndefined();
+  });
+
+  it("keeps the rebuilt state when the log cannot be read", async () => {
+    const at = replay(sample.slice(0, 50));
+    const snap = wire(at, makeJob({ id: "j_nolog", status: "running" }));
+    const { streams } = fakeStreams();
+    const fetchEvents = (async () => {
+      throw new Error("gone");
+    }) as unknown as typeof getEvents;
+    const close = openTracker("j_nolog", { streams, fetchSnapshot: async () => snap, fetchEvents });
+    for (let i = 0; i < 10; i++) await settle();
+    const e = useTracker.getState().entries.j_nolog;
+    expect(e.reconstructed).toBe(true);
+    expect(e.replaying).toBe(false);
+    expect(toContract(e.state).stages).toEqual(toContract(at).stages);
+    close();
   });
 });
 
@@ -242,7 +333,7 @@ describe("live batches", () => {
     const iCand = live.findIndex((e) => e.type === "task.start" && e.name === "stacker_fold" && e.unit === "stacker_fit:residual");
     const entry = {
       jid: "j_live", phase: "live" as const, error: null, job: makeJob({ id: "j_live", status: "running" }), state: replay(live.slice(0, iCand)),
-      reconstructed: false, resources: [], recent: [], ended: null, epochs: [], logs: [], logCapped: false,
+      reconstructed: false, replaying: false, resources: [], recent: [], ended: null, epochs: [], logs: [], logCapped: false,
     };
     const rest = live.slice(iCand);
     const env = { v: 1 as const, seq: 0, t_rel: 0, pid: 1, job: "j_live", lvl: "info" as const, span: null, parent: null, path: [], ctx: {} };
@@ -317,9 +408,11 @@ describe("Python projection golden (tests/studio/fixtures, foundation selftest)"
   const dir = resolve(process.cwd(), "..", "tests", "studio", "fixtures");
   const evPath = resolve(dir, "selftest_events.jsonl");
   const goldenPath = resolve(dir, "selftest_projection.golden.json");
-  const present = existsSync(evPath) && existsSync(goldenPath);
 
-  it.runIf(present)("reproduces the Python reducer's full state and contract", () => {
+  it("reproduces the Python reducer's full state and contract", () => {
+    // the foundation commits both files: a missing one is a failure, not a skip
+    expect(existsSync(evPath), evPath).toBe(true);
+    expect(existsSync(goldenPath), goldenPath).toBe(true);
     const events = parseJsonl(readFileSync(evPath, "utf8"));
     const golden = JSON.parse(readFileSync(goldenPath, "utf8")) as { state: unknown; contract: unknown };
     const s = replay(events);

@@ -82,10 +82,8 @@ export type ChildRow = {
 };
 
 /**
- * `GET /api/jobs/{jid}/tracker` (api.md §3). `projection` is an optional additive field: the
- * server's raw projection state (`sparc/studio/jobs/tracker.py`), requested with
- * `?projection=1`. With it the client resumes exactly where the server stands; without it
- * the client rebuilds its counters from the fields above (stores/tracker.ts `fromSnapshot`).
+ * `GET /api/jobs/{jid}/tracker` (api.md §3). stores/tracker.ts turns it into a reducer state
+ * (`fromSnapshot`) and then makes that state exact from the job's event log (`replayLog`).
  */
 export type TrackerSnapshot = {
   job: Job;
@@ -103,7 +101,6 @@ export type TrackerSnapshot = {
   children: ChildRow[];
   /** events.jsonl passed 200 MB: debug lines stay on disk only (SPEC §5.6); the UI shows a note. */
   log_capped?: boolean;
-  projection?: unknown;
 };
 
 export type LogLine = { cursor: number; ts: number; level: string; logger: string; msg: string; path: string[] };
@@ -131,7 +128,7 @@ export function getJob(jid: string, signal?: AbortSignal): Promise<Job> {
 }
 
 export function getTracker(jid: string, signal?: AbortSignal): Promise<TrackerSnapshot> {
-  return api.get<TrackerSnapshot>(`/api/jobs/${enc(jid)}/tracker`, { projection: 1 }, signal);
+  return api.get<TrackerSnapshot>(`/api/jobs/${enc(jid)}/tracker`, undefined, signal);
 }
 
 export function getSpans(jid: string, q: { under?: string; max_depth?: number } = {}, signal?: AbortSignal): Promise<Span[]> {
@@ -333,6 +330,9 @@ export type StudyView = {
   // multiverse
   variants?: { name: string; label: string; status: string; r2: number | null; rmse: number | null; seconds: number | null; run_id: string | null }[];
   effects?: Record<string, unknown>;
+  /** variant → lever → {kendall_tau, top_decile_jaccard} against the baseline priority map. */
+  priority?: Record<string, Record<string, { kendall_tau: number | null; top_decile_jaccard: number | null }>>;
+  stability?: Record<string, unknown>;
   // reproduce
   pass?: boolean;
   checks?: { check: string; ok: boolean; hard: boolean; detail: string }[];

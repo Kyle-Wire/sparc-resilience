@@ -130,6 +130,32 @@ export function defaultStage(s: TrackerState): StageId {
   return best;
 }
 
+// ---------------------------------------------------------------- duplicate with changes
+
+const CHECKLIST: readonly string[] = ["S0", "S1", "S2_S3", "S4", "S5", "S6", "S7"];
+
+/**
+ * "Duplicate with changes": the Launch page of the job's project prefilled with this run's
+ * mode, coarse cell size, requested stages and CV-curve choice (its `mode`, `coarse`, `stages`
+ * and `cv` query parameters), or a study's Validation tab. Null for other kinds.
+ */
+export function duplicateHref(job: Pick<Job, "kind" | "project_id" | "run_id">, run: { mode: string; coarse_m: number | null } | null, s: TrackerState): string | null {
+  if (job.kind.startsWith("study.") && job.run_id) return `/r/${encodeURIComponent(job.run_id)}/validation`;
+  if (job.kind !== "run.core" || !job.project_id) return null;
+  const r = s.run;
+  const q = new URLSearchParams();
+  const mode = run && run.mode !== "custom" ? run.mode : r && typeof r.fast === "boolean" ? (r.coarse ? "coarse" : r.fast ? "fast" : "full") : null;
+  if (mode === "fast" || mode === "coarse" || mode === "full") q.set("mode", mode);
+  const coarse = run?.coarse_m ?? r?.coarse ?? null;
+  if (mode === "coarse" && typeof coarse === "number" && coarse > 0) q.set("coarse", String(coarse));
+  const asked = new Set((r?.stages ?? []).map((x) => (x === "S2" || x === "S3" ? "S2_S3" : x)));
+  const stages = CHECKLIST.filter((x) => asked.has(x));
+  if (stages.length && stages.length < CHECKLIST.length) q.set("stages", stages.join(","));
+  if (r?.cv_curve === true || r?.cv_curve === false) q.set("cv", r.cv_curve ? "on" : "off");
+  const qs = q.toString();
+  return `/p/${encodeURIComponent(job.project_id)}/launch${qs ? `?${qs}` : ""}`;
+}
+
 // ---------------------------------------------------------------- span helpers
 
 /** `name[k/n]` / `name[key]` of a path element → {name, k, n, key}. */
@@ -646,6 +672,38 @@ export function childCells(s: TrackerState): ChildCell[] {
   });
 }
 
+export type PriorityRow = { variant: string; tau: number | null; jaccard: number | null; levers: number };
+
+function median(xs: number[]): number | null {
+  if (!xs.length) return null;
+  const v = [...xs].sort((a, b) => a - b);
+  const m = v.length >> 1;
+  return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+}
+
+/**
+ * Priority stability of a multiverse (`view.priority`, as `multiverse.summarize` writes it:
+ * variant → lever → {kendall_tau, top_decile_jaccard} against the baseline priority map):
+ * per variant, the median over levers of Kendall's τ and of the top-decile Jaccard overlap.
+ */
+export function priorityStability(priority: unknown): PriorityRow[] {
+  if (!priority || typeof priority !== "object") return [];
+  const out: PriorityRow[] = [];
+  for (const [variant, levers] of Object.entries(priority as Record<string, unknown>)) {
+    if (!levers || typeof levers !== "object") continue;
+    const taus: number[] = [];
+    const jacs: number[] = [];
+    for (const v of Object.values(levers as Record<string, { kendall_tau?: unknown; top_decile_jaccard?: unknown } | null>)) {
+      const t = num(v?.kendall_tau);
+      const j = num(v?.top_decile_jaccard);
+      if (t !== null) taus.push(t);
+      if (j !== null) jacs.push(j);
+    }
+    out.push({ variant, tau: median(taus), jaccard: median(jacs), levers: Object.keys(levers as object).length });
+  }
+  return out;
+}
+
 export type SimCell = { generator: string; seed: number; status: "pending" | "running" | "done" | "error" | "gate_fail"; share: number | null; seconds: number | null; redraw: boolean };
 
 /**
@@ -683,6 +741,42 @@ export function simcheckGrid(s: TrackerState, job: Pick<Job, "params">, view?: {
     put({ generator: m[1], seed, status: prev?.status === "error" ? "error" : "done", share: v.value, seconds: prev?.seconds ?? null, redraw: prev?.redraw ?? false });
   }
   return { generators, seeds: Array.from({ length: maxSeed }, (_, i) => i), cells };
+}
+
+// ---------------------------------------------------------------- queue order
+
+type QueuedJob = Pick<Job, "id" | "priority" | "created_utc">;
+
+/** True when the scheduler visits `a` before `b` (priority descending, then oldest first). */
+function visitsBefore(a: QueuedJob, pa: number, b: QueuedJob, pb: number): boolean {
+  return pa > pb || (pa === pb && a.created_utc < b.created_utc);
+}
+
+/**
+ * Priority changes that swap the queued job at `i` with its neighbour above (`dir` −1) or below
+ * (+1) and move nothing else. The scheduler orders a lane by priority, then age, so one new
+ * priority can jump a job past several neighbours of equal priority; both ways of restoring the
+ * order (raising jobs from the bottom up, lowering them from the top down) are tried and the
+ * one that patches fewer jobs is returned.
+ */
+export function queueMovePatches(lane: readonly QueuedJob[], i: number, dir: -1 | 1): { id: string; priority: number }[] {
+  const j = i + dir;
+  if (i < 0 || j < 0 || i >= lane.length || j >= lane.length) return [];
+  const order = [...lane];
+  [order[i], order[j]] = [order[j], order[i]];
+  const n = order.length;
+  const raise = order.map((x) => x.priority);
+  for (let k = n - 2; k >= 0; k--) {
+    if (!visitsBefore(order[k], raise[k], order[k + 1], raise[k + 1])) raise[k] = raise[k + 1] + (order[k].created_utc < order[k + 1].created_utc ? 0 : 1);
+  }
+  const lower = order.map((x) => x.priority);
+  for (let k = 1; k < n; k++) {
+    if (!visitsBefore(order[k - 1], lower[k - 1], order[k], lower[k])) lower[k] = lower[k - 1] - (order[k - 1].created_utc < order[k].created_utc ? 0 : 1);
+  }
+  const diff = (p: number[]) => order.flatMap((x, k) => (p[k] !== x.priority ? [{ id: x.id, priority: p[k] }] : []));
+  const up = diff(raise);
+  const down = diff(lower);
+  return down.length < up.length ? down : up;
 }
 
 // ---------------------------------------------------------------- status board

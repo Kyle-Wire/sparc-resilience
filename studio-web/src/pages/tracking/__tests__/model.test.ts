@@ -14,11 +14,14 @@ import {
   cvPartitions,
   defaultStage,
   doseCurves,
+  duplicateHref,
   foldModelGrid,
   ganttRows,
   globMatch,
   matchesLog,
   pathCrumbs,
+  priorityStability,
+  queueMovePatches,
   railItems,
   reasonText,
   scenarioFeed,
@@ -189,6 +192,87 @@ describe("routing to run views", () => {
     expect(boardCellHref("r1", "S4", "stage", { state: "done", seconds: 1, progress: null, reason: null, job_id: null, study_id: null, action: null })).toBe("/r/r1/response");
     expect(boardCellHref("r1", "planner", "post", { state: "done", seconds: 1, progress: null, reason: null, job_id: "j1", study_id: null, action: null })).toBe("/r/r1/planner");
     expect(boardCellHref("r1", "planner", "post", { state: "not_run", seconds: null, progress: null, reason: null, job_id: null, study_id: null, action: null })).toBeNull();
+  });
+});
+
+describe("duplicate with changes", () => {
+  const start = (f: Record<string, unknown>) => replay([{ ...base, type: "run.start", ts: 1, span: "1:1", path: ["run:x"], name: "x", resume: false, config_sha256: "", code_sha256: "", run_meta: {}, ...f }]);
+  const job = { kind: "run.core", project_id: "p_1", run_id: "r_1" };
+
+  it("prefills Launch with the run's mode, coarse size, stages and CV-curve choice", () => {
+    const s = start({ stages: ["S0", "S1", "S2", "S3", "S4"], fast: false, coarse: 90, cv_curve: false });
+    expect(duplicateHref(job, { mode: "coarse", coarse_m: 90 }, s)).toBe("/p/p_1/launch?mode=coarse&coarse=90&stages=S0%2CS1%2CS2_S3%2CS4&cv=off");
+    // without the run row the mode comes from run.start; a full stage list and a config CV choice are left out
+    const all = start({ stages: ["S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7"], fast: true, coarse: null, cv_curve: null });
+    expect(duplicateHref(job, null, all)).toBe("/p/p_1/launch?mode=fast");
+    expect(duplicateHref(job, { mode: "full", coarse_m: null }, start({ stages: [], fast: false, coarse: null, cv_curve: true }))).toBe("/p/p_1/launch?mode=full&cv=on");
+  });
+
+  it("sends a study to the run's Validation tab and has no target for other kinds", () => {
+    const s = replay([]);
+    expect(duplicateHref({ kind: "study.placebo", project_id: "p_1", run_id: "r_1" }, null, s)).toBe("/r/r_1/validation");
+    expect(duplicateHref({ kind: "export.bundle", project_id: "p_1", run_id: "r_1" }, null, s)).toBeNull();
+    expect(duplicateHref({ kind: "run.core", project_id: null, run_id: "r_1" }, null, s)).toBeNull();
+  });
+});
+
+describe("queue order", () => {
+  type Q = { id: string; priority: number; created_utc: string };
+  /** The scheduler's order: priority descending, then oldest first. */
+  const schedule = (lane: Q[]) => [...lane].sort((a, b) => b.priority - a.priority || a.created_utc.localeCompare(b.created_utc)).map((j) => j.id);
+  const t = (m: number) => `2026-10-01T11:${String(m).padStart(2, "0")}:00Z`;
+
+  it("swaps one neighbour pair even among equal priorities", () => {
+    const lane: Q[] = [
+      { id: "a", priority: 0, created_utc: t(1) },
+      { id: "b", priority: 0, created_utc: t(2) },
+      { id: "c", priority: 0, created_utc: t(3) },
+    ];
+    // raising c past b alone would also lift it past a; lowering b is the one-patch fix
+    expect(queueMovePatches(lane, 2, -1)).toEqual([{ id: "b", priority: -1 }]);
+    // a down past b: raising b (one patch) beats lowering a and then c (two)
+    expect(queueMovePatches(lane, 0, 1)).toEqual([{ id: "b", priority: 1 }]);
+    expect(queueMovePatches(lane, 0, -1)).toEqual([]);
+    expect(queueMovePatches(lane, 2, 1)).toEqual([]);
+  });
+
+  it("produces exactly the swapped order for any lane", () => {
+    let seed = 7;
+    let checked = 0;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+    for (let trial = 0; trial < 300; trial++) {
+      const n = 2 + Math.floor(rnd() * 6);
+      const lane0: Q[] = Array.from({ length: n }, (_, k) => ({ id: `j${k}`, priority: Math.floor(rnd() * 3) - 1, created_utc: t(Math.floor(rnd() * 50)) }));
+      const ids = schedule(lane0);
+      const lane = ids.map((id) => lane0.find((j) => j.id === id)!);
+      const i = Math.floor(rnd() * n);
+      const dir = rnd() < 0.5 ? -1 : 1;
+      if (i + dir < 0 || i + dir >= n) continue;
+      const want = [...ids];
+      [want[i], want[i + dir]] = [want[i + dir], want[i]];
+      const patched = lane.map((j) => ({ ...j }));
+      for (const p of queueMovePatches(lane, i, dir as -1 | 1)) patched.find((j) => j.id === p.id)!.priority = p.priority;
+      // equal creation times are ordered by row id on the server: only check lanes where age decides
+      if (new Set(lane.map((j) => j.created_utc)).size < n) continue;
+      expect(schedule(patched)).toEqual(want);
+      checked += 1;
+    }
+    expect(checked).toBeGreaterThan(100);
+  });
+});
+
+describe("multiverse priority stability", () => {
+  it("takes the median τ and overlap over levers per variant, skipping missing values", () => {
+    const rows = priorityStability({
+      coarse90: { canopy: { kendall_tau: 0.8, top_decile_jaccard: 0.7 }, albedo: { kendall_tau: 0.6, top_decile_jaccard: 0.5 }, impervious: { kendall_tau: 0.7, top_decile_jaccard: null } },
+      no_physics: { canopy: { kendall_tau: null, top_decile_jaccard: null } },
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ variant: "coarse90", levers: 3, jaccard: 0.6 });
+    expect(rows[0].tau).toBeCloseTo(0.7, 12);
+    expect(rows[1]).toEqual({ variant: "no_physics", tau: null, jaccard: null, levers: 1 });
+    expect(priorityStability(undefined)).toEqual([]);
+    expect(priorityStability({ bad: 3 })).toEqual([]);
   });
 });
 

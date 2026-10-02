@@ -1,7 +1,9 @@
 // Pipeline Status Board (SPEC §5.12): one row per run (mode, label, created, status) and one
 // column per stage, post-run action and study. Each cell is a status chip (icon + text): done
 // (seconds), cached, running (%), failed, skipped (reason), stale, not run (+ launch). Clicking a
-// chip opens the tracker span or the analysis view.
+// chip opens the tracker span or the analysis view. While a cell runs the board is refetched
+// every 10 s, so its percentage keeps moving between job status changes.
+import { useEffect } from "react";
 import { useResource } from "../../api/resource";
 import { getStatusBoard, type StatusBoard as Board } from "../../api/tracking";
 import { Badge, modeLabel } from "../../components/ui/Badge";
@@ -78,9 +80,19 @@ export function StatusBoardTable({ board }: { board: Board }) {
   );
 }
 
+/** Running cells show a stage's progress, which no global event carries: the board refreshes this often while any cell runs. */
+export const BOARD_REFRESH_MS = 10_000;
+
 /** The board of a project (`GET /api/projects/{pid}/status-board`). */
 export function StatusBoard({ pid }: { pid: string }) {
   const res = useResource(`project:${pid}:status-board`, (s) => getStatusBoard(pid, s), { tags: [`project:${pid}`, "runs", "jobs", "studies"], keepPrevious: true });
+  const running = !!res.data?.rows.some((r) => Object.values(r.cells).some((c) => c.state === "running"));
+  const reload = res.reload;
+  useEffect(() => {
+    if (!running) return;
+    const h = setInterval(() => void reload(), BOARD_REFRESH_MS);
+    return () => clearInterval(h);
+  }, [running, reload]);
   if (res.error && !res.data) return <EmptyState error={res.error} />;
   if (!res.data) return <p className="cap">Loading the status board…</p>;
   return <StatusBoardTable board={res.data} />;

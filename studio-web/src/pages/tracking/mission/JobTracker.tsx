@@ -91,7 +91,7 @@ export function JobTracker({ jid, deps }: { jid: string; deps?: TrackerDeps }) {
       {job.kind.startsWith("study.") ? <ChildMatrix job={job} state={state} /> : null}
       <div className="mc-body">
         <section className="card" aria-label="Timeline">
-          <GanttPanel jid={jid} state={state} nowS={nowMs / 1000} zoom={stageQ} onStage={(s) => (STAGE_IDS as readonly string[]).includes(s) && setStageQ(s)} />
+          <GanttPanel jid={jid} state={state} logs={entry.logs} nowS={nowMs / 1000} zoom={stageQ} onStage={(s) => (STAGE_IDS as readonly string[]).includes(s) && setStageQ(s)} />
         </section>
         {hasStages ? (
           <StagePanel

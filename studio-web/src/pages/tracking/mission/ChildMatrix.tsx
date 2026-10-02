@@ -1,13 +1,14 @@
 // Study child matrices above the generic tracker (SPEC §5.11): placebo columns (mini rail, child
-// run link, verdict chip), multiverse rows (status, R², seconds, scenario × variant heatmap),
-// the simcheck generator × seed grid (share coloured around 1, pending grey, error red, a dot for
-// a gate redraw; per-generator strip with IQR; ETA = mean seconds × remaining ÷ workers) and the
-// reproduce child rail with its checklist. Live data comes from the job's events (nested runs
-// and replicate tasks); the study view adds verdicts and checks the events do not carry.
+// run link, verdict chip), multiverse rows (status, R², seconds, scenario × variant heatmap and
+// the priority-stability τ / Jaccard chart), the simcheck generator × seed grid (share coloured
+// around 1, pending grey, error red, a dot for a gate redraw; per-generator strip with IQR; ETA =
+// mean seconds × remaining ÷ workers) and the reproduce child rail with its checklist. Live data
+// comes from the job's events (nested runs and replicate tasks); the study view adds verdicts,
+// checks and the priority agreement the events do not carry.
 import { useResource } from "../../../api/resource";
 import { getStudyView, type StudyView } from "../../../api/tracking";
 import type { Job } from "../../../api/types";
-import { BoxStrip, Heatmap } from "../../../charts";
+import { Bars, BoxStrip, Heatmap } from "../../../charts";
 import { Card } from "../../../components/ui/Card";
 import { StatusChip } from "../../../components/ui/StatusChip";
 import { Link } from "../../../router";
@@ -15,7 +16,7 @@ import { useDark } from "../../../stores/ui";
 import type { TrackerState } from "../../../stores/tracker";
 import { fmtDuration, fmtNum, fmtPct } from "../../../theme/format";
 import { rampColor } from "../../../theme/palette";
-import { childCells, railItems, simcheckGrid, type ChildCell } from "../model";
+import { childCells, priorityStability, railItems, simcheckGrid, type ChildCell } from "../model";
 import { StageRail } from "./StageRail";
 
 function childStatus(c: ChildCell | undefined, viewStatus?: string | null): string {
@@ -77,6 +78,9 @@ function Multiverse({ job, state, view }: { job: Job; state: TrackerState; view:
     return { name, label: v?.label ?? name, status, r2, seconds: sp?.elapsed_s ?? v?.seconds ?? null, run_id: c?.run_id ?? v?.run_id ?? null, deltas };
   });
   const scenarios = [...new Set(rows.flatMap((r) => Object.keys(r.deltas)))];
+  const stability = priorityStability(view?.priority);
+  const labelOf = (name: string) => rows.find((r) => r.name === name)?.label ?? name;
+  const stable = stability.filter((r) => r.tau !== null && r.jaccard !== null && r.tau >= 0.6 && r.jaccard >= 0.6).length;
   return (
     <div className="stack">
       <div className="tablewrap">
@@ -121,6 +125,24 @@ function Multiverse({ job, state, view }: { job: Job; state: TrackerState; view:
           valueLabel="Mean Δ"
           rowLabel="Variant"
           colLabel="Scenario"
+          pin={false}
+        />
+      ) : null}
+      {stability.length ? (
+        <Bars
+          title="Priority stability by variant"
+          caption={`${stable} of ${stability.length} finished variant${stability.length === 1 ? "" : "s"} keep the baseline's priority map (τ and overlap both at least 0.6); median over levers`}
+          categories={stability.map((r) => labelOf(r.variant))}
+          series={[
+            { id: "tau", label: "Kendall's τ vs baseline", values: stability.map((r) => r.tau) },
+            { id: "jaccard", label: "Top-decile overlap (Jaccard)", values: stability.map((r) => r.jaccard) },
+          ]}
+          orientation="h"
+          mode="grouped"
+          valueLabel="Agreement with the baseline map"
+          categoryLabel="Variant"
+          decimals={2}
+          domain={[Math.min(0, ...stability.map((r) => r.tau ?? 0)), 1]}
           pin={false}
         />
       ) : null}

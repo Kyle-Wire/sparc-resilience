@@ -18,7 +18,7 @@ import { DIAG_EVENTS, toContract, type TrackerState } from "../../../stores/trac
 import { toast } from "../../../stores/ui";
 import { fmtDuration, fmtEta, fmtPct } from "../../../theme/format";
 import { FORCE_STOP_GRACE_S, useCancellingSince } from "../hooks";
-import { pathCrumbs, workerPid } from "../model";
+import { duplicateHref, pathCrumbs, workerPid } from "../model";
 
 export type Eta = { eta_s: number | null; eta_lo: number | null; eta_hi: number | null };
 
@@ -32,11 +32,19 @@ function failMessage(what: string, e: unknown) {
 export async function diagnostics(job: Job, state: TrackerState, recent: JobEvent[]): Promise<string> {
   let events: unknown[] = recent;
   if (events.length < DIAG_EVENTS && state.cursor > 0) {
-    // Lines are at most 4 KB: this byte window holds at least the last 200 complete lines.
+    // Lines are at most 4 KB: this byte window holds at least the last 200 complete lines. It is
+    // read to its end (short lines can make it longer than one page), keeping the newest.
     try {
-      const page = await getEvents(job.id, { after: Math.max(-1, state.cursor - DIAG_EVENTS * 4096), limit: 5000 });
       const seen = new Set(recent.map((e) => e.cursor));
-      events = [...page.events.filter((e) => !seen.has(e.cursor)), ...recent].slice(-DIAG_EVENTS);
+      let tail: JobEvent[] = [];
+      let after = Math.max(-1, state.cursor - DIAG_EVENTS * 4096);
+      for (let page = 0; page < 10; page++) {
+        const res = await getEvents(job.id, { after, limit: 5000 });
+        tail = [...tail, ...res.events.filter((e) => e.cursor <= state.cursor && !seen.has(e.cursor))].slice(-DIAG_EVENTS);
+        if (res.eof || !res.events.length || res.next_cursor >= state.cursor || res.next_cursor === after) break;
+        after = res.next_cursor;
+      }
+      events = [...tail, ...recent].slice(-DIAG_EVENTS);
     } catch {
       /* keep what was streamed */
     }
@@ -101,12 +109,7 @@ export function Header({
   };
 
   const openOutputs = job.run_id ? `/r/${encodeURIComponent(job.run_id)}` : job.study_id ? `/studies/${encodeURIComponent(job.study_id)}` : job.kind.startsWith("export.") && job.project_id ? `/p/${encodeURIComponent(job.project_id)}/exports` : null;
-  const duplicate =
-    job.kind === "run.core" && job.project_id && job.run_id
-      ? `/p/${encodeURIComponent(job.project_id)}/launch?from=${encodeURIComponent(job.run_id)}`
-      : job.kind.startsWith("study.") && job.run_id
-        ? `/r/${encodeURIComponent(job.run_id)}/validation`
-        : null;
+  const duplicate = duplicateHref(job, run, state);
 
   return (
     <header className="card mc-head" aria-label="Job">

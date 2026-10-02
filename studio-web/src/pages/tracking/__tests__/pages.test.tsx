@@ -1,6 +1,7 @@
 // Project overview (Status Board, readiness spine, primary CTA), Activity, run history, Settings
 // and the route declarations of the tracking pages.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { act } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearResources } from "../../../api/resource";
 import type { StatusBoard as Board } from "../../../api/tracking";
 import type { Project, ReadinessRow, RunSummary } from "../../../api/types";
@@ -9,11 +10,11 @@ import { navigate, registry } from "../../../router";
 import { useJobs } from "../../../stores/jobs";
 import { byText, click, flush, mockFetch, render, typeInto, waitFor } from "../../../test/render";
 import boardJson from "../__fixtures__/status-board.json";
-import Activity from "../Activity";
+import Activity, { canRestart } from "../Activity";
 import ProjectOverview, { primaryCta } from "../ProjectOverview";
 import RunHistory, { compareTarget, stageHistoryChart } from "../RunHistory";
 import Settings, { settingsIssues, settingsPatch } from "../Settings";
-import { StatusBoard, StatusBoardTable } from "../StatusBoard";
+import { BOARD_REFRESH_MS, StatusBoard, StatusBoardTable } from "../StatusBoard";
 import { makeJob } from "./events";
 
 const board = boardJson as unknown as Board;
@@ -88,6 +89,30 @@ describe("Pipeline Status Board", () => {
     expect(useJobs.getState().jobs.j_new?.status).toBe("queued");
   });
 
+  it("refetches while a cell is running, and stops once nothing runs", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      let n = 0;
+      const idle = { ...board, rows: board.rows.map((r) => ({ ...r, cells: Object.fromEntries(Object.entries(r.cells).map(([k, c]) => [k, c.state === "running" ? { ...c, state: "done" as const } : c])) })) };
+      fetchMock = mockFetch({ "GET /api/projects/p_demo/status-board": () => ({ body: ++n < 3 ? board : idle }) });
+      const { container } = render(<StatusBoard pid="p_demo" />);
+      await waitFor(() => container.querySelector("table.board"), 5000, "board");
+      expect(n).toBe(1);
+      act(() => void vi.advanceTimersByTime(BOARD_REFRESH_MS));
+      await flush();
+      expect(n).toBe(2);
+      act(() => void vi.advanceTimersByTime(BOARD_REFRESH_MS));
+      await flush();
+      expect(n).toBe(3);
+      expect(container.querySelector('td[data-state="running"]')).toBeNull();
+      act(() => void vi.advanceTimersByTime(3 * BOARD_REFRESH_MS));
+      await flush();
+      expect(n).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("loads the board of a project from its endpoint", async () => {
     fetchMock = mockFetch({ "GET /api/projects/p_demo/status-board": { body: board } });
     const { container } = render(<StatusBoard pid="p_demo" />);
@@ -158,6 +183,33 @@ describe("Activity", () => {
     expect(patch).toEqual({ method: "PATCH", url: "/api/jobs/j_c", body: { priority: 1 } });
     await waitFor(() => byText(container, "a", "Old run"), 5000, "history");
     expect(byText(container, "td", "boom")).not.toBeNull();
+  });
+});
+
+describe("Activity history actions", () => {
+  it("offers Resume or Retry for finished jobs Studio can start again, not for command-line runs", async () => {
+    expect(canRestart({ kind: "run.core", status: "failed" })).toBe(true);
+    expect(canRestart({ kind: "post.planner", status: "interrupted" })).toBe(true);
+    expect(canRestart({ kind: "run.core", status: "succeeded" })).toBe(false);
+    expect(canRestart({ kind: "run.external", status: "interrupted" })).toBe(false);
+    const ext = makeJob({ id: "j_ext", kind: "run.external", executor: "external", lane: "none", label: "CLI run", status: "interrupted", finished_utc: "2026-10-01T09:00:00Z" });
+    const post = makeJob({ id: "j_post", kind: "post.planner", label: "Planner pack", status: "failed", finished_utc: "2026-10-01T09:30:00Z" });
+    fetchMock = mockFetch({
+      "GET /api/queue": { body: { paused: false, lanes: [] } },
+      "GET /api/jobs": (url: URL) => ({ body: { items: url.searchParams.get("status") === "interrupted" ? [ext] : [ext, post], next_cursor: null } }),
+      "GET /api/meta": { body: { job_kinds: [], warning_codes: [], output_catalog: [] } },
+      "GET /api/projects": { body: [] },
+    });
+    const { container } = render(<Activity />);
+    const rowOf = (label: string) => byText(container, "tbody tr a", label)?.closest("tr") ?? null;
+    await waitFor(() => rowOf("Planner pack"), 5000, "history");
+    expect(byText(rowOf("Planner pack")!, "button", "Retry")).not.toBeNull();
+    expect([...rowOf("CLI run")!.querySelectorAll("button")].map((b) => b.textContent)).not.toContain("Retry");
+    expect([...rowOf("CLI run")!.querySelectorAll("button")].map((b) => b.textContent)).not.toContain("Resume");
+    // the interrupted card says why there is no button
+    const card = await waitFor(() => [...container.querySelectorAll("ul.spine > li")].find((li) => li.textContent?.includes("CLI run")), 5000, "interrupted card");
+    expect(card.querySelector("button")).toBeNull();
+    expect(card.textContent).toContain("started from the command line");
   });
 });
 
@@ -234,6 +286,31 @@ describe("Settings", () => {
     await waitFor(() => container.textContent?.includes("/nope is not a directory"), 5000, "server error");
     expect(fetchMock.calls.find((c) => c.method === "PUT")!.body).toEqual({ watch_roots: ["/nope"] });
     expect(byText(container, "td", "ghcn_x.csv")).not.toBeNull();
+  });
+});
+
+describe("storage manager", () => {
+  it("asks again before deleting files of a run imported in place (force_files)", async () => {
+    const run = { run_id: "20260901-090000-full-ee11", label: "CLI run", project_id: "p_demo", outputs_bytes: 9e8, checkpoint_bytes: 5e8 };
+    fetchMock = mockFetch({
+      "GET /api/settings": { body: { thread_budget: 4, threads_heavy: 3, engine_threads: 2, heavy_slots: 1, medium_slots: 1, network_slots: 2, engine_max_runs: 2, engine_mem_budget_gb: 6, engine_idle_min: 30, auto_uncertainty: true, watch_roots: [], upload_max_gb: 2, keep_job_logs_days: null, offline: false, notifications: false, basemap_url: null } },
+      "GET /api/system": { body: { cpu_count: 4, cpu_model: "test", mem_total_gb: 16, mem_available_gb: 8, disk_free_gb: 100, workspace: "/w", workspace_bytes: 1e9, host_id: "abc", versions: { python: "3.11", sparc: "1.0", numpy: "2", pandas: "2", torch: null, fastapi: "0.1" }, web_build: null } },
+      "GET /api/storage": { body: { workspace_bytes: 1e9, free_bytes: 1e11, cache: [], runs: [run], studies: [], jobs_bytes: 0 } },
+      [`DELETE /api/runs/${run.run_id}?what=outputs`]: { status: 409, body: { error: { code: "imported_in_place", message: "this run was imported in place", detail: { run_dir: "/data/cli/run1" } } } },
+      [`DELETE /api/runs/${run.run_id}?what=outputs&force_files=true`]: { body: { freed_bytes: 9e8 } },
+    });
+    const { container } = render(<Settings />);
+    const btn = await waitFor(() => [...container.querySelectorAll("td button")].find((b) => b.textContent === "Outputs"), 5000, "storage row");
+    click(btn);
+    const del = await waitFor(() => [...document.querySelectorAll<HTMLButtonElement>(".dialog button")].find((b) => b.textContent === "Delete"), 5000, "dialog");
+    click(del);
+    await waitFor(() => document.querySelector(".dialog [role=alert]")?.textContent?.includes("/data/cli/run1"), 5000, "in-place warning");
+    click([...document.querySelectorAll<HTMLButtonElement>(".dialog button")].find((b) => b.textContent === "Delete outside the workspace")!);
+    await flush();
+    expect(fetchMock.calls.filter((c) => c.method === "DELETE").map((c) => c.url)).toEqual([
+      `/api/runs/${run.run_id}?what=outputs`,
+      `/api/runs/${run.run_id}?what=outputs&force_files=true`,
+    ]);
   });
 });
 

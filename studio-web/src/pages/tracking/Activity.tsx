@@ -31,6 +31,7 @@ import { activeJobs, useJobs } from "../../stores/jobs";
 import { toast } from "../../stores/ui";
 import { fmtDateTime, fmtDuration, fmtRelative } from "../../theme/format";
 import { useMeta } from "./hooks";
+import { queueMovePatches } from "./model";
 import "./tracking.css";
 
 const HISTORY_STATUSES = ["succeeded", "failed", "cancelled", "interrupted"] as const;
@@ -39,6 +40,14 @@ function duration(j: Job): number | null {
   if (!j.started_utc) return null;
   const end = j.finished_utc ? Date.parse(j.finished_utc) : Date.now();
   return (end - Date.parse(j.started_utc)) / 1000;
+}
+
+/**
+ * Whether a finished job can be started again from here: a `run.external` pseudo-job only
+ * follows a command-line run (Studio cannot start it again; its run can be rerun from the run page).
+ */
+export function canRestart(j: Pick<Job, "kind" | "status">): boolean {
+  return j.status !== "succeeded" && j.kind !== "run.external";
 }
 
 /** Resume a run job from its checkpoint, or retry any other job; opens the new job. */
@@ -60,18 +69,14 @@ function QueueCard() {
   if (queue.error && !queue.data) return <EmptyState error={queue.error} />;
   const q = queue.data;
   const move = async (lane: string[], i: number, dir: -1 | 1) => {
-    const id = lane[i];
-    const other = jobs[lane[i + dir]];
-    const self = jobs[id];
-    if (!other || !self) return;
-    // the queue is ordered by priority (desc), then age: step just past the neighbour
-    const priority = dir === -1 ? other.priority + 1 : other.priority - 1;
+    const queued = lane.map((id) => jobs[id]);
+    if (queued.some((j) => !j)) return;
     try {
-      useJobs.getState().upsert(await setJobPriority(id, priority));
-      await queue.reload();
+      for (const p of queueMovePatches(queued, i, dir)) useJobs.getState().upsert(await setJobPriority(p.id, p.priority));
     } catch (e) {
       toast("error", "Could not reorder the queue", { body: errorMessage(e) });
     }
+    await queue.reload();
   };
   return (
     <Card
@@ -192,7 +197,7 @@ function History() {
       sortable: false,
       render: (j) => (
         <span className="row" style={{ gap: 4 }}>
-          {j.status !== "succeeded" ? (
+          {canRestart(j) ? (
             <Button size="small" variant="ghost" onClick={() => void resumeOrRetry(j)}>
               {j.kind === "run.core" ? "Resume" : "Retry"}
             </Button>
@@ -306,9 +311,13 @@ export default function Activity() {
                 <span className="cap">
                   {j.error?.message ?? "process vanished"} · {fmtRelative(j.finished_utc ?? j.created_utc)}
                 </span>
-                <Button size="small" variant="primary" icon="play" onClick={() => void resumeOrRetry(j)}>
-                  {j.kind === "run.core" ? "Resume" : "Retry"}
-                </Button>
+                {canRestart(j) ? (
+                  <Button size="small" variant="primary" icon="play" onClick={() => void resumeOrRetry(j)}>
+                    {j.kind === "run.core" ? "Resume" : "Retry"}
+                  </Button>
+                ) : (
+                  <span className="cap">started from the command line</span>
+                )}
               </li>
             ))}
           </ul>
