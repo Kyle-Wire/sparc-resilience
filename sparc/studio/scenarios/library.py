@@ -189,8 +189,14 @@ def fork(db, workspace, sid: str, *, name: str | None = None, doc: Any = None) -
 
 def delete(db, workspace, sid: str, *, results: bool = False, force: bool = False) -> None:
     from sparc.studio.engine import store
+    from sparc.studio.schemas.common import ACTIVE_STATUSES
 
     row = get_row(db, sid)
+    marks = ",".join("?" for _ in ACTIVE_STATUSES)
+    live = db.fetchone(f"SELECT id FROM jobs WHERE scenario_id = ? AND status IN ({marks})", (sid, *ACTIVE_STATUSES))
+    if live is not None:
+        raise ApiError("active", "an exact run of this scenario is still running: cancel it first",
+                       detail={"job_id": live["id"]})
     kids = _children(db, sid)
     if kids and not force:
         raise ApiError("has_children", f"scenario {sid} has {len(kids)} later revision(s): pass force=true",

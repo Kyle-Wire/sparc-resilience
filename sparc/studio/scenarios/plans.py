@@ -337,9 +337,17 @@ def list_plans(db, run_id: str) -> list[dict]:
 
 
 def delete(db, plid: str) -> None:
+    """Remove a plan, its directory and its closed-loop result; ``409 active`` while a verify job runs."""
     from sparc.studio.engine import store
+    from sparc.studio.schemas.common import ACTIVE_STATUSES
 
     row = plan_row(db, plid)
+    marks = ",".join("?" for _ in ACTIVE_STATUSES)
+    for j in db.fetchall(f"SELECT id, params_json FROM jobs WHERE kind IN ('engine.plan_verify', "
+                         f"'engine.plan_frontier', 'export.plan_pack') AND status IN ({marks})", tuple(ACTIVE_STATUSES)):
+        if (dbmod.loads(j.get("params_json"), {}) or {}).get("plan_id") == plid:
+            raise ApiError("active", "a job on this plan is still running: cancel it first",
+                           detail={"job_id": j["id"]})
     rid = row.get("verified_result_id") or (read_json(Path(row["dir"]) / "realised.json") or {}).get("result_id")
     if rid and db.fetchone("SELECT id FROM results WHERE id = ?", (rid,)):
         store.delete_result(db, rid)

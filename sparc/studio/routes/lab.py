@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,7 @@ from sparc.studio.scenarios import schemas as S
 from sparc.studio.schemas.common import ACTIVE_STATUSES, LIVE_STATUSES, Job, Ok
 
 router = APIRouter(tags=["lab"])
+log = logging.getLogger("sparc.studio.engine")
 
 DESIGN_MAX_BYTES = 256 * 1024 ** 2
 
@@ -237,6 +239,9 @@ async def from_template(pid: str, body: S.FromTemplate, sctx: StudioContext = De
 
     library.project_row(sctx.db, pid)
     ctx = _ctx(sctx, body.run_id)
+    if ctx.project_id and ctx.project_id != pid:
+        raise ApiError("validation", f"run {body.run_id} belongs to another project",
+                       detail={"errors": [{"path": "run_id", "message": "another project", "code": "project"}]})
     doc = await asyncio.to_thread(templates.build, ctx, body.template, body.params)
     row = await asyncio.to_thread(library.create, sctx.db, sctx.workspace, pid, doc)
     return _scenario(sctx, row, _unit(ctx))
@@ -309,6 +314,7 @@ async def _run_scenario(sctx: StudioContext, sid: str, run_id: str, force: bool)
     hit = await asyncio.to_thread(check)
     if hit is not None:
         return JSONResponse({"cached": store.summary_out(hit, _unit(ctx)), "job": None}, status_code=200)
+    await asyncio.to_thread(svc.preflight, run_id)          # the engine is needed: memory, unless loaded
     job = await _jobs(sctx).submit("engine.scenario", {"run_id": run_id, "scenario_id": sid,
                                                        "revision": int(row.get("revision") or 1)},
                                    run_id=run_id, scenario_id=sid, project_id=row.get("project_id"),
@@ -325,7 +331,7 @@ async def run_scenario(sid: str, body: S.RunScenarioRequest, sctx: StudioContext
 @router.post("/scenarios/run-batch", status_code=202, response_model=S.JobOut)
 async def run_batch(body: S.BatchRequest, sctx: StudioContext = Depends(get_ctx)):
     _has_checkpoint(sctx, body.run_id)
-    await asyncio.to_thread(get_service(sctx).preflight, body.run_id, memory=False)
+    await asyncio.to_thread(get_service(sctx).preflight, body.run_id)
     rows = [library.get_row(sctx.db, s) for s in body.scenario_ids]
     job = await _jobs(sctx).submit("engine.batch", {"run_id": body.run_id, "scenario_ids": body.scenario_ids},
                                    run_id=body.run_id, project_id=rows[0].get("project_id"),
@@ -337,14 +343,18 @@ async def run_batch(body: S.BatchRequest, sctx: StudioContext = Depends(get_ctx)
 async def make_ladder(sid: str, body: S.LadderRequest, sctx: StudioContext = Depends(get_ctx)):
     row = library.get_row(sctx.db, sid)
     _lid, docs = library.ladder_docs(row, body.edit_index, body.amounts)
+    run_id = body.run_id or library._doc(row).get("anchor_run_id")
+    run = sctx.db.fetchone("SELECT run_dir FROM runs WHERE id = ?", (run_id,)) if run_id else None
+    if body.run_id and run is None:
+        raise ApiError("not_found", f"no run {body.run_id!r}")
+    exact = run is not None and (Path(run["run_dir"]) / "checkpoint.pkl").is_file()
+    if exact:                                    # refuse (untrusted pickle, memory) before forking anything
+        await asyncio.to_thread(get_service(sctx).preflight, run_id)
     made = []
     for d in docs:
         made.append(await asyncio.to_thread(library.fork, sctx.db, sctx.workspace, sid, doc=d))
-    run_id = body.run_id or library._doc(row).get("anchor_run_id")
     job = None
-    if run_id and sctx.db.fetchone("SELECT id FROM runs WHERE id = ?", (run_id,)) is not None and \
-            (Path(sctx.db.fetchone("SELECT run_dir FROM runs WHERE id = ?", (run_id,))["run_dir"])
-             / "checkpoint.pkl").is_file():
+    if exact:
         job = await _jobs(sctx).submit("engine.batch", {"run_id": run_id, "scenario_ids": [m["id"] for m in made]},
                                        run_id=run_id, project_id=row.get("project_id"),
                                        label=f"Ladder: {len(made)} doses")
@@ -422,7 +432,7 @@ async def run_scenarios(rid: str, sctx: StudioContext = Depends(get_ctx)):
 async def rerun_configured(rid: str, slug: str, sctx: StudioContext = Depends(get_ctx)):
     ctx = _ctx(sctx, rid)
     _has_checkpoint(sctx, rid)
-    await asyncio.to_thread(get_service(sctx).preflight, rid, memory=False)
+    await asyncio.to_thread(get_service(sctx).preflight, rid)
     match = next((s for s in ctx.configured_scenarios() if s["slug"] == slug), None)
     if match is None:
         raise ApiError("not_found", f"no configured scenario {slug!r} on this run")
@@ -448,7 +458,10 @@ async def get_result(res_id: str, sctx: StudioContext = Depends(get_ctx)):
         if res.get("impacts") is None:
             try:
                 res["impacts"] = impacts_for_result(ctx, cur, cache_dir=sctx.workspace.cache_dir)
-            except ApiError:
+            except ApiError:                     # no people layers: the result has no impacts section
+                res["impacts"] = None
+            except Exception:                    # optional section: never fail the result itself
+                log.exception("impacts of %s failed", res_id)
                 res["impacts"] = None
         return res
 
@@ -565,7 +578,7 @@ async def post_sweep(rid: str, body: S.SweepRequest, sctx: StudioContext = Depen
 
     ctx = _ctx(sctx, rid)
     _has_checkpoint(sctx, rid)
-    await asyncio.to_thread(get_service(sctx).preflight, rid, memory=False)
+    await asyncio.to_thread(get_service(sctx).preflight, rid)
     sel = body.model_dump(mode="json", exclude_none=True).get("selection")
     params = await asyncio.to_thread(sweeps.create, sctx.db, ctx, body.lever, body.doses, sel)
     job = await _jobs(sctx).submit("engine.sweep", {"run_id": rid, "sweep_id": params["id"]}, run_id=rid,

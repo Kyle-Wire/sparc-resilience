@@ -68,11 +68,30 @@ def test_preview_equals_core_emulate(client, ctx, run_ctx, synth_run, fake_emula
 
 
 def test_newer_request_supersedes_older(client, synth_run, run_ctx, fake_emulator):
+    """An older request_seq is superseded while a newer one for the run is in flight; once the run's previews
+    are idle, a restarted sequence (a reloaded page) is served again."""
+    from sparc.studio.engine import preview as P
+
     rid, rd = synth_run
     fake_emulator(rd, run_ctx)
-    assert client.post(f"/api/runs/{rid}/preview", json={"edits": EDITS, "request_seq": 5}).status_code == 200
-    r = client.post(f"/api/runs/{rid}/preview", json={"edits": EDITS, "request_seq": 3})
-    assert r.status_code == 409 and r.json()["error"]["code"] == "superseded"
+    gate, started = threading.Event(), threading.Event()
+
+    def busy():
+        started.set()
+        gate.wait(10)
+
+    t = threading.Thread(target=P.FLIGHTS.run, args=(rid, 5, busy))
+    t.start()
+    try:
+        assert started.wait(5)
+        r = client.post(f"/api/runs/{rid}/preview", json={"edits": EDITS, "request_seq": 3})
+        assert r.status_code == 409 and r.json()["error"]["code"] == "superseded"
+        assert r.json()["error"]["detail"] == {"request_seq": 3, "latest_seq": 5}
+    finally:
+        gate.set()
+        t.join(5)
+    r = client.post(f"/api/runs/{rid}/preview", json={"edits": EDITS, "request_seq": 1})
+    assert r.status_code == 200 and json.loads(r.headers["X-SPARC-Summary"])["request_seq"] == 1
 
 
 def test_queued_request_is_superseded_by_a_newer_one():
@@ -159,3 +178,29 @@ def test_levers_and_emulator_info(client, synth_run, run_ctx, fake_emulator):
     assert lv["canopy"]["sd"] == pytest.approx(18.405, rel=1e-3)
     info = client.get(f"/api/runs/{rid}/emulator").json()
     assert info["present"] and info["levers"]["canopy"]["trust"] == "good" and info["action"] is None
+
+
+def test_older_request_arriving_during_a_newer_one_is_superseded_at_once():
+    """Out-of-order arrival: an older request that arrives while a newer one is in flight never waits."""
+    from sparc.studio.engine.preview import PreviewFlights
+    from sparc.studio.errors import ApiError
+
+    flights = PreviewFlights()
+    gate, started = threading.Event(), threading.Event()
+    calls = []
+
+    def slow():
+        started.set()
+        gate.wait(5)
+        return "newer"
+
+    t = threading.Thread(target=flights.run, args=("r", 7, slow))
+    t.start()
+    started.wait(5)
+    with pytest.raises(ApiError) as exc:
+        flights.run("r", 6, lambda: calls.append(6))
+    assert exc.value.code == "superseded" and calls == []
+    gate.set()
+    t.join(5)
+    assert flights.run("r", 2, lambda: "restarted") == "restarted"     # idle: a new page's sequence
+    assert flights.run("other-run", 1, lambda: "independent") == "independent"

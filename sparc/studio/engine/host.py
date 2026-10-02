@@ -132,18 +132,21 @@ class Entry:
     est_rss_mb: float
     code_match: bool | None
     load_seconds: dict = field(default_factory=dict)
+    evaluated: bool = False              # an engine pass ran on this session (the load-time one counts)
 
 
 class Host:
     """The request loop, the LRU and the lifecycle of the engine host (see the module docstring)."""
 
-    def __init__(self, listener=None, *, engine_dir: Path | None = None, idle_min: float = 30.0):
+    def __init__(self, listener=None, *, engine_dir: Path | None = None, idle_min: float = 30.0,
+                 watch_s: float = 5.0):
         self.listener = listener
         self.engine_dir = Path(engine_dir) if engine_dir else None
         self.sessions: "OrderedDict[str, Entry]" = OrderedDict()
         self.max_runs = 2
         self.budget_gb = 6.0
         self.idle_min = float(idle_min)
+        self.watch_s = float(watch_s)
         self.slack_gb = float(os.environ.get(SLACK_ENV) or 1.0)
         self.work = threading.Lock()
         self.state_lock = threading.Lock()
@@ -180,7 +183,8 @@ class Host:
             pass
 
     def _watchdog(self) -> None:
-        while not self.stopping.wait(5.0):
+        """Stop the host after ``idle_min`` minutes with no loaded run and no request in progress."""
+        while not self.stopping.wait(self.watch_s):
             with self.state_lock:
                 idle = (not self.sessions and self.busy is None and
                         time.monotonic() - self.last_activity > self.idle_min * 60.0)
@@ -348,10 +352,38 @@ class Host:
             return {"load_seconds": entry.load_seconds, "rss_mb": round(_rss_mb(), 1),
                     "code_match": entry.code_match, "est_rss_mb": round(entry.est_rss_mb, 1)}
         entry.session.set_threads(int(req.get("threads") or 1))
-        out = ops.run_op(op, entry.session, payload, job_id=req.get("job_id"))
+        from sparc.core.session import IncompatibleCheckpoint
+
+        try:
+            out = ops.run_op(op, entry.session, payload, job_id=req.get("job_id"))
+        except IncompatibleCheckpoint as exc:
+            if entry.evaluated:                  # it evaluated before: not drift, report the original error
+                raise (exc.__cause__ or exc) from None
+            self._incompatible_at_first_use(run_id, entry, exc)
+            raise
         with self.state_lock:
+            entry.evaluated = True
             entry.last_used_utc = _now()
         return out
+
+    def _incompatible_at_first_use(self, run_id: str, entry: "Entry", exc: BaseException) -> None:
+        """The first evaluation of a session opened from a cached baseline pass failed with pickle drift: record
+        ``incompatible`` (until the checkpoint changes), evict the session and drop the cached pass so the next
+        open evaluates at load time."""
+        from sparc.core.session import checkpoint_key
+
+        ck = checkpoint_key(entry.run_dir)
+        info = {"type": "Incompatible", "message": str(exc)[:1000], "ckpt_key": ck}
+        self.incompatible[run_id] = info
+        self._write_status(entry.studio_dir, {"state": "incompatible", "error": info, "ckpt_key": ck,
+                                              "updated_utc": _now()})
+        if entry.studio_dir:
+            for name in ("base_fold.json", "base_fold.npy"):
+                try:
+                    (Path(entry.studio_dir) / "engine" / name).unlink()
+                except OSError:
+                    pass
+        self.evict(run_id)
 
     # ------------------------------------------------------------------ the LRU
 
@@ -373,7 +405,9 @@ class Host:
         return victim
 
     def ensure(self, run_id: str, run_dir: str, payload: dict, threads: int) -> Entry:
-        """The loaded session of ``run_id`` (loading it, and evicting by count first, when needed)."""
+        """The loaded session of ``run_id``, loading it when needed.  Before a load, least recently used sessions
+        are evicted to stay within ``max_runs`` and to leave room in the memory budget for the new run's
+        estimated RSS (≈ 3.5 × checkpoint bytes + 0.3 GB); after it, by the measured RSS."""
         from sparc.core import progress
         from sparc.core.session import IncompatibleCheckpoint, checkpoint_key, open_run
 
@@ -389,6 +423,14 @@ class Host:
         studio_dir = payload.get("studio_dir")
         ck = checkpoint_key(run_dir)
         while len(self.sessions) >= self.max_runs:
+            self._evict_lru()
+        from sparc.studio.engine.service import estimate_rss_gb
+
+        try:
+            need_mb = estimate_rss_gb(os.path.getsize(Path(run_dir) / "checkpoint.pkl")) * 1024.0
+        except OSError:
+            need_mb = 0.0
+        while self.sessions and _rss_mb() + need_mb > self.budget_gb * 1024.0:
             self._evict_lru()
         base, base_meta = self._base_fold(studio_dir, ck)
         before = _rss_mb()
@@ -414,7 +456,8 @@ class Host:
         now = _now()
         entry = Entry(session=session, run_dir=str(run_dir), studio_dir=studio_dir, loaded_utc=now, last_used_utc=now,
                       est_rss_mb=max(0.0, rss - before), code_match=session.code_match,
-                      load_seconds={**session.load_seconds, "total": round(time.perf_counter() - t0, 3)})
+                      load_seconds={**session.load_seconds, "total": round(time.perf_counter() - t0, 3)},
+                      evaluated=base is None)
         with self.state_lock:
             self.sessions[run_id] = entry
             self.sessions.move_to_end(run_id)

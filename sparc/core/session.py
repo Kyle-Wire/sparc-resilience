@@ -259,8 +259,8 @@ class RunSession:
         if self._resp is None:
             from sparc.core.response import ResponseEngine
 
-            self._resp = ResponseEngine(self.engine, influence_scales=self.cfg.raw["influence"].get(
-                "scales", (0.5, 1.0, 2.0)))
+            scales = (self.cfg.raw.get("influence") or {}).get("scales") or (0.5, 1.0, 2.0)
+            self._resp = ResponseEngine(self.engine, influence_scales=scales)
         return self._resp
 
     @property

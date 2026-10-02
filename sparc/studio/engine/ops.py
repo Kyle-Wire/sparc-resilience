@@ -59,11 +59,20 @@ def build_spec(interventions: list[dict], name: str):
 
 
 def evaluate(session, interventions: list[dict], options: dict | None, name: str):
-    """``(ScenarioResult, mediator deltas)`` of one scenario on ``session`` (one engine pass, K fold ticks)."""
+    """``(ScenarioResult, mediator deltas)`` of one scenario on ``session`` (one engine pass, K fold ticks).
+
+    An ``AttributeError`` / ``ImportError`` inside the engine pass is pickle drift (the fitted models no longer
+    match the installed code, e.g. a scikit-learn upgrade after a cached baseline pass skipped the load-time
+    evaluation): it is raised as :class:`~sparc.core.session.IncompatibleCheckpoint`."""
+    from sparc.core.session import IncompatibleCheckpoint
+
     spec = build_spec(interventions, name)
     eng = session.engine
     with scenario_options(eng, options):
-        res = eng.run(spec, keep_frame=True)
+        try:
+            res = eng.run(spec, keep_frame=True)
+        except (AttributeError, ImportError) as exc:
+            raise IncompatibleCheckpoint(f"{type(exc).__name__}: {exc}") from exc
         med_names = list(eng.mediators.models) if eng.mediators is not None else []
     base = session.data.frame
     mediators = {}

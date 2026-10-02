@@ -44,7 +44,8 @@ log = logging.getLogger("sparc.studio.engine")
 
 __all__ = ["prepare_request", "EngineOpenParams", "EngineScenarioParams", "EngineBatchParams",
            "RerunConfiguredParams", "EngineSweepParams", "PlanVerifyParams", "AcrossRunsParams",
-           "DecisionPackParams", "PlanPackParams", "ComparePackParams", "across_runs_estimate", "run_row_payload"]
+           "DecisionPackParams", "PlanPackParams", "ComparePackParams", "across_runs_estimate", "run_row_payload",
+           "index_job_results"]
 
 
 class EngineOpenParams(BaseModel):
@@ -333,11 +334,26 @@ def _open_preflight(sctx, job: dict, params) -> list[dict]:
     return []
 
 
-def _publish_results(sctx, job: dict, ids: list[str]) -> None:
+def _job_params(job: dict) -> dict:
+    p = job.get("params")
+    if not isinstance(p, dict):
+        p = dbmod.loads(job.get("params_json"), {}) or {}
+    return p
+
+
+def index_job_results(sctx, job: dict, result: dict | None) -> list[dict]:
+    """Index what a succeeded engine job wrote (idempotent): its result directories, the statuses and mirrors
+    of their scenarios, a sweep's curve and a plan's verified result.
+
+    The executor calls this before the job turns ``succeeded`` (so a client that sees the job end already finds
+    the results and the new scenario status); ``on_finish`` calls it again and publishes ``scenario.result``.
+    ``job`` is a ``jobs`` row or a ``Job``."""
     from sparc.studio.engine import store
     from sparc.studio.scenarios import library
 
-    for rid in ids:
+    rows = []
+    synced: set[str] = set()
+    for rid in _result_ids(result):
         row = sctx.db.fetchone("SELECT * FROM results WHERE id = ?", (rid,))
         if row is None:
             for d in _result_dirs(sctx, job, rid):
@@ -346,10 +362,27 @@ def _publish_results(sctx, job: dict, ids: list[str]) -> None:
                     break
         if row is None:
             continue
-        if row.get("scenario_id"):
-            library.sync_status(sctx.db, row["scenario_id"])
-            library.write_mirror(sctx.db, sctx.workspace, row["scenario_id"])
-        sctx.hub.publish("scenario.result", {"scenario_id": row.get("scenario_id"), "result_id": rid,
+        rows.append(row)
+        sid = row.get("scenario_id")
+        if sid and sid not in synced:
+            synced.add(sid)
+            library.sync_status(sctx.db, sid)
+            library.write_mirror(sctx.db, sctx.workspace, sid)
+    params = _job_params(job)
+    if job.get("kind") == "engine.sweep" and params.get("sweep_id"):
+        srow = sctx.db.fetchone("SELECT dir FROM sweeps WHERE id = ?", (params["sweep_id"],))
+        if srow is not None:
+            curve = read_json(Path(srow["dir"]) / "curve.json")
+            sctx.db.update("sweeps", {"id": params["sweep_id"]}, {"summary_json": dbmod.dumps(curve),
+                                                                  "job_id": job["id"]})
+    if job.get("kind") == "engine.plan_verify" and params.get("plan_id") and (result or {}).get("result_id"):
+        sctx.db.update("plans", {"id": params["plan_id"]}, {"verified_result_id": result["result_id"]})
+    return rows
+
+
+def _publish_results(sctx, job: dict, result: dict | None) -> None:
+    for row in index_job_results(sctx, job, result):
+        sctx.hub.publish("scenario.result", {"scenario_id": row.get("scenario_id"), "result_id": row["id"],
                                              "run_id": row["run_id"], "kind": row["kind"]})
 
 
@@ -389,17 +422,17 @@ def engine_on_finish(sctx, job: dict, result) -> None:
         svc.publish(job.get("run_id"), st, rss_mb=(result or {}).get("rss_mb"))
         return
     if job["status"] == "succeeded":
-        _publish_results(sctx, job, _result_ids(result))
-    params = job.get("params") or {}
-    if job["kind"] == "engine.sweep" and params.get("sweep_id"):
-        row = sctx.db.fetchone("SELECT dir FROM sweeps WHERE id = ?", (params["sweep_id"],))
-        if row is not None:
-            curve = read_json(Path(row["dir"]) / "curve.json")
-            sctx.db.update("sweeps", {"id": params["sweep_id"]}, {"summary_json": dbmod.dumps(curve),
-                                                                  "job_id": job["id"]})
-    if job["kind"] == "engine.plan_verify" and job["status"] == "succeeded" and params.get("plan_id"):
-        sctx.db.update("plans", {"id": params["plan_id"]}, {"verified_result_id": (result or {}).get("result_id")})
-    svc.publish(job.get("run_id"), "ready" if job["status"] == "succeeded" else "error")
+        _publish_results(sctx, job, result)
+    elif job["kind"] == "engine.sweep" and _job_params(job).get("sweep_id"):
+        sctx.db.update("sweeps", {"id": _job_params(job)["sweep_id"]}, {"job_id": job["id"]})
+    # a failed scenario leaves the engine loaded: publish the run's actual engine state, not "error"
+    rid = job.get("run_id")
+    if rid:
+        try:
+            st = svc.run_status(rid)
+            svc.publish(rid, st["state"], progress=st.get("progress"), rss_mb=st.get("rss_mb"))
+        except Exception:                       # the run went away meanwhile
+            log.debug("engine status of %s unavailable", rid, exc_info=True)
 
 
 _ENGINE = dict(lane="engine", executor="engine", needs_run=True, needs_checkpoint=True, long=False,
@@ -523,12 +556,24 @@ def _across_estimate(sctx, job: dict, params) -> dict | None:
             "peak_ram_gb": e["peak_rss_gb"]}
 
 
+def _open_for_check(row: dict, threads: int):
+    """``open_run`` as the engine host does it: the import-time config as the fallback and the cached baseline
+    pass when it still matches the checkpoint and code."""
+    from sparc.core.session import checkpoint_key, config_for_run, open_run
+    from sparc.studio.engine.host import Host
+
+    sd = Path(row["studio_dir"]) if row.get("studio_dir") else Path(row["run_dir"]) / "studio"
+    fb = (read_json(sd / "import.json") or {}).get("config_path")
+    cfg = config_for_run(row["run_dir"], fallback=fb if fb and Path(fb).is_file() else None, studio_dir=sd)
+    base, _meta = Host._base_fold(str(sd), checkpoint_key(row["run_dir"]))
+    return open_run(row["run_dir"], cfg, threads=threads, base_fold=base, studio_dir=sd)
+
+
 @job_kind("scenario.across_runs", lane="heavy", executor="process", label="Check across runs",
           params=AcrossRunsParams, long=True, estimate=_across_estimate)
 def across_runs_job(ctx, params: AcrossRunsParams) -> dict:
     """Evaluate a portable scenario on several runs, one engine at a time in this process (SPEC §7.12)."""
     from sparc.core import progress
-    from sparc.core.session import open_run
     from sparc.studio.engine import ops
     from sparc.studio.engine.compile import compile_scenario
     from sparc.studio.runs.common import likely
@@ -552,7 +597,7 @@ def across_runs_job(ctx, params: AcrossRunsParams) -> dict:
                     comp = compile_scenario(rctx, doc, db=db)
                     if comp.blocking:
                         raise ValueError("; ".join(w["message"] for w in comp.blocking))
-                    session = open_run(row["run_dir"], threads=int(ctx.threads), studio_dir=row.get("studio_dir"))
+                    session = _open_for_check(row, int(ctx.threads))
                     res, _med = ops.evaluate(session, comp.interventions(), comp.options, doc.get("name") or "scenario")
                     from sparc.studio.engine import stats as S
 

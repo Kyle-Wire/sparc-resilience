@@ -7,7 +7,8 @@ server context at start.  For each ``engine.*`` job:
   starts a thread that prepares the request on the server (the kind's ``prepare``: compile the scenario,
   resolve masks, allocate result ids - :mod:`sparc.studio.engine.kinds`) and sends it to the host;
 * the **host** reports into the job's ``events.jsonl`` and writes ``<job_dir>/result.json``; **wait**
-  resolves once that file exists (exit code 0 / 1 / 130);
+  resolves once that file exists (exit code 0 / 1 / 130), after indexing a succeeded job's results
+  (:func:`~sparc.studio.engine.kinds.index_job_results`) so they exist before the job turns ``succeeded``;
 * **cancel**: the manager has already touched the job's ``cancel`` file; the host raises ``Cancelled`` between
   folds and stays alive (a request not sent yet is not sent);
 * **kill** = host restart: the host's process group is killed, which evicts every engine; this job ends
@@ -173,6 +174,14 @@ class EngineExecutor:
         while True:
             if res_path.exists():
                 res = read_json(res_path) or {}
+                if res.get("status") == "succeeded" and self.sctx is not None:
+                    # index before the job turns "succeeded": a client that sees it end finds its results
+                    from sparc.studio.engine.kinds import index_job_results
+
+                    try:
+                        await asyncio.to_thread(index_job_results, self.sctx, job, res.get("result"))
+                    except Exception:
+                        log.exception("indexing the results of %s failed", jid)
                 with self._lock:
                     self.threads.pop(jid, None)
                     self.killed.discard(jid)

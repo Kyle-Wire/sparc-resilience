@@ -53,7 +53,7 @@ async def _verify(sctx: StudioContext, row: dict, frontier: bool) -> dict:
     run = sctx.db.fetchone("SELECT run_dir FROM runs WHERE id = ?", (rid,))
     if run is None or not (Path(run["run_dir"]) / "checkpoint.pkl").is_file():
         raise ApiError("no_checkpoint", "verifying a plan needs the run's checkpoint.pkl", detail={"run_id": rid})
-    await asyncio.to_thread(get_service(sctx).preflight, rid, memory=False)
+    await asyncio.to_thread(get_service(sctx).preflight, rid)
     kind = "engine.plan_frontier" if frontier else "engine.plan_verify"
     return await _jobs(sctx).submit(kind, {"plan_id": row["id"]}, run_id=rid, project_id=row.get("project_id"),
                                     label=f"{'Verify frontier' if frontier else 'Verify'}: {row.get('name') or row['id']}")
@@ -74,8 +74,8 @@ async def create_plan(rid: str, body: S.PlanCreate, sctx: StudioContext = Depend
     if body.verify and (ctx.run_dir / "checkpoint.pkl").is_file():
         try:
             job = await _verify(sctx, row, False)
-        except ApiError as exc:
-            if exc.code not in ("untrusted_pickle",):
+        except ApiError as exc:                 # the plan stands; Verify can be started later
+            if exc.code not in ("untrusted_pickle", "engine_memory", "no_checkpoint"):
                 raise
     return {"plan": plans.plan_out(row), "job": job}
 

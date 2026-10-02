@@ -8,7 +8,9 @@ do.  Everything runs in the API process under ``threadpool_limits(1)``:
   ``emulate`` takes (``own``, per channel ``coef`` / ``weight`` / ``sigma_cells``, the physics ``dq`` and
   kernel), on the run's core ``Grid`` (``RunContext.data.grid``, the grid the emulator was built on);
 * requests are **single-flight, latest-wins per run**: a request whose ``request_seq`` is older than one
-  already seen, or that waited behind a computation while a newer one arrived, returns ``409 superseded``;
+  already in flight or waiting, or that waited behind a computation while a newer one arrived, returns
+  ``409 superseded``.  Once a run's previews are idle any ``request_seq`` is accepted again, so a reloaded
+  page (whose sequence restarts at 1) is not locked out by the numbers of an earlier one;
 * the response is a packed body (``delta`` float32[n], ``edited`` bitset bytes) with ``X-SPARC-Offsets``
   and ``X-SPARC-Summary``.
 
@@ -252,11 +254,12 @@ class _Flight:
     def __init__(self):
         self.meta = threading.Lock()
         self.run = threading.Lock()
-        self.latest: int | None = None
+        self.latest: int | None = None          # the newest request_seq of the current burst
+        self.pending = 0                        # requests in flight or waiting
 
 
 class PreviewFlights:
-    """Per-run single-flight, latest-wins gate (``409 superseded`` for stale requests)."""
+    """Per-run single-flight, latest-wins gate (``409 superseded`` for stale requests, see the module docstring)."""
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -272,14 +275,21 @@ class PreviewFlights:
     def run(self, run_id: str, seq: int, fn):
         f = self._flight(run_id)
         with f.meta:
-            if f.latest is not None and seq < f.latest:
+            if f.pending and f.latest is not None and seq < f.latest:
                 raise _superseded(seq, f.latest)
             f.latest = seq
-        with f.run:
+            f.pending += 1
+        try:
+            with f.run:
+                with f.meta:
+                    if f.latest > seq:
+                        raise _superseded(seq, f.latest)
+                return fn()
+        finally:
             with f.meta:
-                if f.latest is not None and f.latest > seq:
-                    raise _superseded(seq, f.latest)
-            return fn()
+                f.pending -= 1
+                if f.pending == 0:
+                    f.latest = None
 
 
 def _superseded(seq: int, latest: int) -> ApiError:
@@ -340,14 +350,16 @@ def preview(ctx, body, *, db=None, reader=None, project_dir=None, flights: Previ
             return comp, delta, hatched, reasons, em
 
     comp, delta, hatched, reasons, em = (flights or FLIGHTS).run(ctx.run_id, seq, work)
-    edited = comp.edited
-    total = float(np.sum(delta))
-    outside = float(np.sum(delta[~edited])) if edited is not None else 0.0
+    edited = comp.edited if comp.edited is not None else np.zeros(delta.size, dtype=bool)
+    # the summary header is JSON without NaN (api.md §0.1); a cell without an emulator value counts as 0
+    fin = np.where(np.isfinite(delta), delta, 0.0)
+    total = float(np.sum(fin))
+    outside = float(np.sum(fin[~edited]))
     trusts = [em.trust.get(v, "none") for v, cells in comp.lever_cells.items() if cells.any()]
     trust = "none" if "none" in trusts else "rough" if "rough" in trusts else "good"
-    summary = {"mean": float(np.mean(delta)) if delta.size else 0.0,
-               "edited_mean": float(np.mean(delta[edited])) if edited is not None and edited.any() else 0.0,
-               "n_edited": int(edited.sum()) if edited is not None else 0,
+    summary = {"mean": float(np.mean(fin)) if fin.size else 0.0,
+               "edited_mean": float(np.mean(fin[edited])) if edited.any() else 0.0,
+               "n_edited": int(edited.sum()),
                "outside_share": (outside / total) if abs(total) > 1e-12 else 0.0,
                "trust": trust, "hatched": bool(hatched), "reasons": reasons, "request_seq": seq}
     payload, offsets = pack_arrays([("delta", delta.astype(np.float32)),

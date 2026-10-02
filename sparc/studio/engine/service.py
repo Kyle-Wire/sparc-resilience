@@ -9,8 +9,9 @@ workspace plus
 * :meth:`~EngineService.run_status` - ``GET /api/runs/{rid}/engine``: ``no_checkpoint`` → ``incompatible``
   (``studio/engine/status.json`` written by the host, valid while the checkpoint is unchanged) → ``queued`` /
   ``loading`` (an ``engine.open`` job; its tracker gives progress and the step) → ``busy`` / ``ready``
-  (loaded in the host) → ``error`` (the last open failed) → ``cold``;
-* :meth:`~EngineService.preflight` - checkpoint, pickle trust and memory before an ``engine.open``:
+  (loaded in the host) → ``loading`` (an exact request the host is serving loads the cold run first) →
+  ``error`` (the last open failed) → ``cold``;
+* :meth:`~EngineService.preflight` - checkpoint, pickle trust and memory before a request that loads a run:
   ``409 no_checkpoint``, ``409 untrusted_pickle`` (the action re-imports the run with trust, naming the
   risk), ``409 engine_memory`` (estimated RSS ≈ 3.5 × checkpoint bytes + 0.3 GB, plus 1 GB, must fit in
   available memory; ``detail.holders`` lists loaded runs and live jobs, ``action`` evicts the least recently
@@ -59,7 +60,6 @@ class EngineService:
                                    threads=settings.engine_threads)
         self._lock = threading.Lock()
         self._status: tuple[float, dict | None] | None = None
-        self.recycled_mru: str | None = None
 
     # ------------------------------------------------------------------ host
 
@@ -77,8 +77,6 @@ class EngineService:
         st = self.client.status(timeout=5.0)
         with self._lock:
             self._status = (now, st)
-        if st is not None and st.get("runs"):
-            self.recycled_mru = st["runs"][-1]["run_id"]
         return st
 
     def invalidate(self) -> None:
@@ -260,6 +258,14 @@ class EngineService:
             if loaded.get("code_match") is not None:
                 out["code_match"] = loaded["code_match"]
             return out
+        busy = ((self.host_status() or {}).get("busy") or {}) if self.client.alive() else {}
+        if busy.get("run_id") == rid and busy.get("job_id"):
+            # an exact request on a cold run: the host loads the run first
+            out.update(state="loading", job_id=busy["job_id"])
+            jrow = self.sctx.db.fetchone("SELECT * FROM jobs WHERE id = ?", (busy["job_id"],))
+            if jrow is not None:
+                out.update(progress=jrow.get("progress"), step=self._step(jrow))
+            return out
         if not self.trusted(rid):
             out.update(state="error", error={"type": "UntrustedPickle",
                                              "message": "this run was imported without trusting its checkpoint: "
@@ -304,7 +310,9 @@ class EngineService:
     # ------------------------------------------------------------------ preflight
 
     def preflight(self, rid: str, *, memory: bool = True) -> None:
-        """Checks before opening a run's engine (see the module docstring); raises ``ApiError``."""
+        """Checks before a request that opens a run's engine (``engine.open``, and any exact request on a run that
+        is not loaded, which the host loads first); raises ``ApiError``.  The memory check is skipped while the
+        run is loaded or an ``engine.open`` of it is already queued or loading (that one passed it)."""
         row = self._row(rid)
         nbytes = self.checkpoint_bytes(row)
         if nbytes is None:
@@ -314,7 +322,7 @@ class EngineService:
             raise ApiError("untrusted_pickle", "this run was imported without trusting its checkpoint: "
                            + TRUST_RISK, detail={"run_id": rid, "run_dir": str(row["run_dir"])},
                            action=self.trust_action(row))
-        if memory and self.loaded(rid) is None:
+        if memory and self.loaded(rid) is None and self.open_job(rid) is None:
             self.memory_check(rid, nbytes)
 
     def memory_check(self, rid: str, nbytes: int) -> None:
