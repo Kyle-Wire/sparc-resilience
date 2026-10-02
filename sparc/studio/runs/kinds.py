@@ -6,7 +6,9 @@
 ``run_core(cfg, run_dir=…, run_meta=…, **args)``.  Resume reuses the snapshot byte for byte; only
 ``threads`` may differ (job params).  The server-side hooks keep the run row current: ``on_event``
 (``run.start``, ``stage.end``, ``checkpoint``, ``run.end``) and ``on_finish`` re-derive it through the
-registry.  ``retry`` of a ``run.core`` job is a resume when the run has a checkpoint.
+registry.  ``retry`` of a ``run.core`` job is a resume when the run has a checkpoint, with the guards of a
+resume (:func:`~sparc.studio.runs.launch.retry_run`); a resume that reaches the scheduler once its run is
+complete fails its start-time preflight (``not_resumable``) instead of re-running the finished run.
 
 This module is imported by the server (to list kinds) and by workers; heavy imports stay inside the job
 function.
@@ -62,11 +64,27 @@ def run_core_on_event(sctx, job: dict, event: dict) -> None:
 
 
 def run_core_on_finish(sctx, job: dict, result) -> None:
+    _sweep_tmp(sctx, job)
     _refresh(sctx, job)
     reader = getattr(sctx, "services", {}).get("reader") if sctx is not None else None
     if reader is not None and job.get("run_id"):
         reader.forget(job["run_id"])
     _adopt_as_active(sctx, job)
+
+
+def _sweep_tmp(sctx, job: dict) -> None:
+    """A worker killed while it wrote a file (Force stop or the OOM killer during a checkpoint save) leaves the
+    hidden temporary - up to a whole checkpoint - in the run folder: the worker is gone now, so remove it."""
+    if sctx is None or not job.get("run_id"):
+        return
+    from sparc.core import runio
+
+    try:
+        row = sctx.db.fetchone("SELECT run_dir FROM runs WHERE id = ?", (job["run_id"],))
+        if row is not None:
+            runio.remove_stale_tmp(row["run_dir"])
+    except Exception:
+        log.exception("sweeping the temporaries of run %s failed", job.get("run_id"))
 
 
 def _adopt_as_active(sctx, job: dict) -> None:
@@ -138,10 +156,37 @@ def run_core_retry_params(sctx, job: dict) -> dict:
     return params
 
 
+async def run_core_retry(sctx, job: dict) -> dict:
+    """``POST /jobs/{jid}/retry``: the resume guards apply (``409 active``, ``409 not_resumable``)."""
+    from sparc.studio.runs.launch import retry_run
+
+    return await retry_run(sctx, job)
+
+
+def run_core_preflight(sctx, job: dict, params) -> list[dict]:
+    """A resume whose run is complete by the time it would start (queued behind the job that finished it,
+    or through ``POST /api/jobs``) is refused: it would re-run S0, S7 and finish over the finished run."""
+    resume = params.get("resume") if isinstance(params, dict) else getattr(params, "resume", False)
+    if not resume or sctx is None:
+        return []
+    row = sctx.db.fetchone("SELECT run_dir FROM runs WHERE id = ?", (job.get("run_id"),))
+    if row is None:
+        return []
+    rd = Path(row["run_dir"])
+    try:
+        state = json.loads((rd / "run_state.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        state = None
+    done = (state.get("status") == "succeeded") if isinstance(state, dict) else (rd / "manifest.json").is_file()
+    if done:
+        return [{"reason": "the run is complete: nothing to resume", "fatal": True, "code": "not_resumable"}]
+    return []
+
+
 @job_kind("run.core", lane="heavy", executor="process", label="Pipeline run", params=RunCoreParams, needs_run=True,
           locks_run=True, long=True, network_hosts=(), estimate=run_core_estimate, on_event=run_core_on_event,
           on_event_types=("run.start", "stage.end", "checkpoint", "run.end"), on_finish=run_core_on_finish,
-          retry_params=run_core_retry_params)
+          retry_params=run_core_retry_params, retry=run_core_retry, preflight=run_core_preflight)
 def run_core_job(ctx, params: RunCoreParams) -> dict:
     """Run (or resume) the pipeline from the run's launch snapshot (SPEC §4.3)."""
     from sparc.core import progress

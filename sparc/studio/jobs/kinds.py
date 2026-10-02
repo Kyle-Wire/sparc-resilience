@@ -21,6 +21,8 @@ pull torch) inside the job function, never at module level.
 * ``estimate(sctx, job, params) -> {units?, n_cells?, est_s?, est_lo?, est_hi?, peak_ram_gb?, disk_bytes?}``;
 * ``preflight(sctx, job, params) -> [{reason, actions?, fatal?}]`` (extra checks before start);
 * ``retry_params(sctx, job) -> params`` (``POST /jobs/{jid}/retry``; default: the same params);
+* ``retry(sctx, job) -> Job`` (a coroutine on the server's loop, not a thread): replaces the whole retry of a
+  finished job when it needs checks of its own (``run.core`` keeps the resume guards, SPEC §4.3);
 * ``threads(settings, params) -> int`` (default: by lane, SPEC §10.5).
 
 ``sctx`` is the server's :class:`~sparc.studio.app.StudioContext` (``db``,
@@ -73,6 +75,7 @@ class JobKind:
     on_finish: Callable | None = None
     preflight: Callable | None = None
     retry_params: Callable | None = None
+    retry: Callable | None = None
     threads: Callable | None = None
     module: str = ""
     extra: dict = field(default_factory=dict)
@@ -120,7 +123,7 @@ def job_kind(kind: str, *, lane: str, executor: str = "process", label: str | No
              estimate: Callable | None = None, on_event: Callable | None = None,
              on_event_types: tuple[str, ...] | list[str] = DEFAULT_HOOK_TYPES, on_finish: Callable | None = None,
              preflight: Callable | None = None, retry_params: Callable | None = None,
-             threads: Callable | None = None, **extra) -> Callable[[Callable], Callable]:
+             retry: Callable | None = None, threads: Callable | None = None, **extra) -> Callable[[Callable], Callable]:
     """Register the decorated function ``fn(ctx: JobContext, params) -> dict | None`` as job kind ``kind``."""
     if lane not in LANES:
         raise ValueError(f"lane must be one of {LANES}, not {lane!r}")
@@ -132,7 +135,7 @@ def job_kind(kind: str, *, lane: str, executor: str = "process", label: str | No
             kind=kind, fn=fn, lane=lane, executor=executor, label=label or kind, params=params, needs_run=needs_run,
             needs_checkpoint=needs_checkpoint, locks_run=locks_run, network_hosts=tuple(network_hosts), long=long,
             estimate=estimate, on_event=on_event, on_event_types=tuple(on_event_types), on_finish=on_finish,
-            preflight=preflight, retry_params=retry_params, threads=threads,
+            preflight=preflight, retry_params=retry_params, retry=retry, threads=threads,
             module=getattr(fn, "__module__", "") or "", extra=dict(extra))
         return fn
 

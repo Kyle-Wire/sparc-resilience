@@ -159,8 +159,29 @@ def _size(p: Path) -> int:
         return 0
 
 
-def tab_availability(ctx, entries: list[dict], *, job_active: bool) -> list[dict]:
-    """One ``{id, availability, missing[]}`` per run tab id (SPEC §3.2)."""
+def _makes(kind: str) -> tuple[str, ...]:
+    """The ``produced_by`` values (``stage:`` / ``progress:`` as prefixes) of the outputs a job kind writes:
+    ``run.core`` the stages, ``post.planner`` ``post:planner``, ``study.placebo`` ``study:placebo``, …"""
+    if kind in ("run.core", "run.external"):
+        return ("stage:", "progress:")
+    group, _, name = kind.partition(".")
+    return (f"{group}:{name}",) if name else ()
+
+
+def tab_availability(ctx, entries: list[dict], *, job_active: bool, active_kinds=None) -> list[dict]:
+    """One ``{id, availability, missing[]}`` per run tab id (SPEC §3.2).
+
+    ``job_active``: a job runs on the run (the Track tab follows it).  ``active_kinds``: the kinds of the
+    active jobs; a tab whose outputs are all missing is ``running`` ("being computed") only while one of them
+    makes those outputs (``None``: any active job counts)."""
+    made = None if active_kinds is None else {m for k in active_kinds for m in _makes(k)}
+
+    def making(rows) -> bool:
+        if made is None:
+            return job_active
+        return any(e["produced_by"] == m or (m.endswith(":") and e["produced_by"].startswith(m))
+                   for e in rows for m in made)
+
     tabs = []
     for tab in RUN_TAB_IDS:
         if tab in FIXED_TABS:
@@ -183,7 +204,7 @@ def tab_availability(ctx, entries: list[dict], *, job_active: bool) -> list[dict
         if tab == "data" and not counted:
             # the Data & QA tab reads the manifest's qa section, or S0's metadata while the run continues
             qa = bool(((ctx.manifest_raw or {}).get("qa"))) or bool(ctx.meta.get("n_points"))
-            avail = "ready" if qa else ("running" if job_active else "missing")
+            avail = "ready" if qa else ("running" if making([{"produced_by": "stage:S0"}]) else "missing")
             tabs.append({"id": tab, "availability": avail, "missing": [] if qa else [
                 {"output": "manifest", "produced_by": "stage:S0", "action": None}]})
             continue
@@ -195,7 +216,7 @@ def tab_availability(ctx, entries: list[dict], *, job_active: bool) -> list[dict
         if not counted:
             avail = "running" if job_active else "missing"
         elif all(s in ("missing", "writing") for s in states):
-            avail = "running" if any(s == "writing" for s in states) or job_active else "missing"
+            avail = "running" if any(s == "writing" for s in states) or making(counted) else "missing"
         elif any(s == "stale" for s in states):
             avail = "stale"
         elif any(s in ("missing", "partial", "writing") for s in states):

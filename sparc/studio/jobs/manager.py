@@ -128,6 +128,7 @@ class JobManager:
         self._netcheck: dict[str, tuple[float, dict]] = {}
         self._replays: dict[str, tuple[tuple, dict]] = {}
         self._starting: set[str] = set()
+        self._run_submit: dict[str, asyncio.Lock] = {}
         self.paused = False
 
     # ------------------------------------------------------------------ lifecycle
@@ -840,6 +841,14 @@ class JobManager:
             await executor.kill(row)
         return self.get(job_id)
 
+    def run_submit_lock(self, run_id: str) -> asyncio.Lock:
+        """The lock a caller holds from checking a run's jobs to queueing its own (resume, retry of
+        ``run.core``), so two requests at once cannot both pass an "already active" check."""
+        lock = self._run_submit.get(run_id)
+        if lock is None:
+            lock = self._run_submit[run_id] = asyncio.Lock()
+        return lock
+
     async def retry(self, job_id: str) -> dict:
         row = self.get_row(job_id)
         if row is None:
@@ -849,6 +858,8 @@ class JobManager:
         k = kindsmod.get_kind(row["kind"])
         if k is None:
             raise ApiError("unknown_kind", f"unknown job kind {row['kind']!r}")
+        if k.retry is not None:
+            return await k.retry(self.sctx, job_out(row))
         params = dbmod.loads(row.get("params_json"), {}) or {}
         if k.retry_params is not None:
             params = await asyncio.to_thread(k.retry_params, self.sctx, job_out(row)) or params
@@ -876,6 +887,9 @@ class JobManager:
             raise ApiError("active", "finished jobs only: cancel it first", detail={"status": row["status"]})
 
         def _rm(conn):
+            if row["status"] == "succeeded":     # its dependency is met: queued dependents no longer wait on it
+                conn.execute(f"UPDATE jobs SET after_job_id = NULL WHERE after_job_id = ? AND status IN "
+                             f"({','.join('?' for _ in PENDING)})", (job_id, *PENDING))
             for table in ("spans", "metrics", "warnings", "artifacts", "checkpoints", "resource_samples"):
                 conn.execute(f"DELETE FROM {table} WHERE job_id = ?", (job_id,))
             conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))

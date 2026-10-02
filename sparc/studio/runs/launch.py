@@ -34,7 +34,7 @@ from sparc.studio.workspace import new_run_id, utc_now, write_json_atomic
 log = logging.getLogger("sparc.studio.runs")
 
 __all__ = ["ALL_STAGES", "THEN_KINDS", "project_row", "absolutise", "mode_args", "mode_tag", "compute_plan",
-           "launch_run", "resume_run", "rerun_run", "checkpoint_info", "impact"]
+           "launch_run", "resume_run", "retry_run", "rerun_run", "checkpoint_info", "impact"]
 
 ALL_STAGES = ("S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7")
 THEN_KINDS = ("post.planner", "post.emulator", "post.uncertainty", "post.writeup", "post.baselines")
@@ -442,14 +442,8 @@ async def _create_run(sctx, project: dict, raw: dict, cdir: Path, args: dict, pl
     return {"run": reg.summary(new or row), "job": sctx.jobs.get(job["id"]), "chain": chain}
 
 
-async def resume_run(sctx, rid: str, body: dict) -> dict:
-    """``POST /api/runs/{rid}/resume`` → ``Job``.
-
-    Resume replays ``launch.json`` (only ``threads`` may differ).  ``use_current_config`` first renames it to
-    ``launch.<n>.json`` and snapshots the project's current config with its impact (SPEC §4.3); a refused
-    resume carries ``detail.checkpoint`` and, with ``use_current_config``, ``detail.impact``."""
-    reg = sctx.services["registry"]
-    reader = sctx.services["reader"]
+def _run_row_without_jobs(sctx, rid: str) -> dict:
+    """The run's row; ``409 active`` while any job is queued or running on it."""
     row = sctx.db.fetchone("SELECT * FROM runs WHERE id = ?", (rid,))
     if row is None:
         raise ApiError("not_found", f"no run {rid!r}")
@@ -457,6 +451,25 @@ async def resume_run(sctx, rid: str, body: dict) -> dict:
                               "('queued','blocked','starting','running','cancelling')", (rid,))
     if active is not None:
         raise ApiError("active", "a job is already running on this run", detail={"job_id": active["id"]})
+    return row
+
+
+async def resume_run(sctx, rid: str, body: dict) -> dict:
+    """``POST /api/runs/{rid}/resume`` → ``Job``.
+
+    Resume replays ``launch.json`` (only ``threads`` may differ).  ``use_current_config`` first renames it to
+    ``launch.<n>.json`` and snapshots the project's current config with its impact (SPEC §4.3); a refused
+    resume carries ``detail.checkpoint`` and, with ``use_current_config``, ``detail.impact``.  The checks and
+    the queueing hold the run's submit lock, so of two resumes at once one is queued and the other is
+    ``409 active``."""
+    async with sctx.jobs.run_submit_lock(rid):
+        return await _resume_locked(sctx, rid, body)
+
+
+async def _resume_locked(sctx, rid: str, body: dict) -> dict:
+    reg = sctx.services["registry"]
+    reader = sctx.services["reader"]
+    row = _run_row_without_jobs(sctx, rid)
     ctx = reader.for_row(row)
     info = await asyncio.to_thread(checkpoint_info, ctx, sctx.db, active=False)
     detail: dict[str, Any] = {"checkpoint": info}
@@ -511,6 +524,36 @@ async def resume_run(sctx, rid: str, body: dict) -> dict:
     await sctx.db.aupdate("runs", {"id": rid}, {"last_job_id": job["id"]})
     await asyncio.to_thread(reg.refresh, rid)
     return job
+
+
+async def retry_run(sctx, job: dict) -> dict:
+    """``POST /api/jobs/{jid}/retry`` of a finished ``run.core`` job → ``Job`` (the kind's ``retry`` hook).
+
+    The retry runs the run again from its launch snapshot - a resume when it has a checkpoint
+    (:func:`~sparc.studio.runs.kinds.run_core_retry_params`) - under the guards of :func:`resume_run`:
+    ``409 active`` while a job is queued or running on the run, ``409 not_resumable`` for a run that is
+    complete or has no launch snapshot.  The new job becomes the run's last job."""
+    from sparc.studio.runs.kinds import run_core_retry_params
+
+    rid = job.get("run_id")
+    if not rid:
+        raise ApiError("not_found", "the job names no run")
+    async with sctx.jobs.run_submit_lock(rid):
+        row = _run_row_without_jobs(sctx, rid)
+        ctx = sctx.services["reader"].for_row(row)
+        if not ctx.launch:
+            raise ApiError("not_resumable", "this run has no launch snapshot (it was not launched by Studio): "
+                           "rerun it", detail={"run_id": rid})
+        if row["status"] == "complete":
+            raise ApiError("not_resumable", "the run is complete: nothing to retry (rerun it for a new run)",
+                           detail={"run_id": rid})
+        params = await asyncio.to_thread(run_core_retry_params, sctx, job)
+        new = await sctx.jobs.submit("run.core", params, project_id=job.get("project_id") or row.get("project_id"),
+                                     run_id=rid, study_id=job.get("study_id"), priority=int(job.get("priority") or 0),
+                                     parent_job_id=job["id"], label=job.get("label"))
+        await sctx.db.aupdate("runs", {"id": rid}, {"last_job_id": new["id"]})
+    await asyncio.to_thread(sctx.services["registry"].refresh, rid)
+    return new
 
 
 async def rerun_run(sctx, rid: str, body: dict) -> dict:

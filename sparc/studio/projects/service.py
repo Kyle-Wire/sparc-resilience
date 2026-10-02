@@ -33,10 +33,13 @@ log = logging.getLogger("sparc.studio.projects")
 
 __all__ = ["PROJECT_JSON", "get_row", "rows", "claim_dir", "write_record", "read_record", "register_dir",
            "create_project", "project_out", "run_summary", "project_runs", "active_jobs", "patch_project",
-           "touch", "delete_project", "scan_projects", "project_raw"]
+           "touch", "delete_project", "scan_projects", "project_raw", "OWN_RUNS_SQL"]
 
 PROJECT_JSON = "project.json"
 RUN_MODES = ("fast", "coarse", "full", "custom")
+#: SQL condition on ``runs`` for the project's own runs: not a study's child (a placebo or multiverse refit, a
+#: reproduction), which is listed with its origin but is never the project's "last run" or a readiness run
+OWN_RUNS_SQL = "COALESCE(origin, '') NOT IN ('study_child', 'reproduction') AND study_id IS NULL"
 
 
 # ---------------------------------------------------------------------------
@@ -247,8 +250,8 @@ def project_out(db, row: dict, *, readiness_score: dict | None = None, raw: dict
             except (TypeError, ValueError):
                 cost[str(var)] = {"per_unit": 1.0}
     n_runs = int(db.fetchval("SELECT COUNT(*) FROM runs WHERE project_id = ?", (row["id"],), default=0) or 0)
-    last = db.fetchone("SELECT id, status, created_utc, r2, run_dir FROM runs WHERE project_id = ? "
-                       "ORDER BY created_utc DESC LIMIT 1", (row["id"],))
+    last = db.fetchone(f"SELECT id, status, created_utc, r2, run_dir FROM runs WHERE project_id = ? AND "
+                       f"{OWN_RUNS_SQL} ORDER BY created_utc DESC LIMIT 1", (row["id"],))
     marks = ",".join("?" for _ in ACTIVE_STATUSES)
     n_active = int(db.fetchval(f"SELECT COUNT(*) FROM jobs WHERE project_id = ? AND status IN ({marks})",
                                (row["id"], *ACTIVE_STATUSES), default=0) or 0)

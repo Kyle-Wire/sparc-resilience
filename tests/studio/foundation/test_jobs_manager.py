@@ -149,6 +149,21 @@ def test_after_job_chain(client, ctx, wait_job):
     assert done["status"] == "cancelled" and done["error"]["type"] == "DependencyFailed"
 
 
+def test_deleting_a_succeeded_dependency_keeps_its_dependents(client, ctx, wait_job):
+    """A chained job starts when its dependency **succeeds** (SPEC §10.3): deleting that finished job (Activity,
+    or retention) while the dependent still waits for a slot must not cancel it as ``DependencyFailed``."""
+    a = submit(client, "test.sleep", seconds=0.1)
+    assert wait_job(client, a["id"])["status"] == "succeeded"
+    assert client.post("/api/queue/pause").status_code == 200           # the dependent waits for its slot
+    b = submit(client, "test.sleep", seconds=0.1, after_job_id=a["id"])
+    assert client.delete(f"/api/jobs/{a['id']}").status_code == 200
+    for _ in range(3):
+        client.portal.call(ctx.jobs.schedule)
+    assert status(client, b["id"]) == "queued", client.get(f"/api/jobs/{b['id']}").json()
+    assert client.post("/api/queue/resume").status_code == 200
+    assert wait_job(client, b["id"])["status"] == "succeeded"
+
+
 def test_per_run_lock_blocks(client, ctx, wait_job, tmp_path):
     add_run(ctx, "r1", tmp_path)
     add_run(ctx, "r2", tmp_path)

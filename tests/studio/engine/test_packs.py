@@ -152,3 +152,19 @@ def test_realised_change_maps_show_the_size_of_the_change():
     assert cut == grow and len(cut) == 2
     light, dark = sorted(cut, key=lambda c: -sum(c[:3]))
     assert sum(light[:3]) > sum(dark[:3])
+
+
+def test_pack_provenance_names_the_code_commit_of_runs_with_a_null_git_commit():
+    """Studio-launched runs written before the fix have ``manifest.git_commit: null`` but
+    ``provenance.git.commit`` set: the decision brief's provenance table names that commit, as the run Overview
+    and the report export do."""
+    from types import SimpleNamespace
+
+    from sparc.studio.scenarios.packs import _provenance
+
+    full = "07a4e7d59daea143a7f9f09a3751a5f9268b6e10"
+    ctx = SimpleNamespace(run_id="r1", run_dir="/tmp/r1", checkpoint_json={},
+                          manifest_raw={"git_commit": None, "provenance": {"git": {"commit": full}}})
+    assert _provenance(ctx, {})["git commit"] == full
+    ctx.manifest_raw = {"git_commit": "07a4e7d"}                          # older manifests: the short hash
+    assert _provenance(ctx, {})["git commit"] == "07a4e7d"

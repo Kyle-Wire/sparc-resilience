@@ -209,6 +209,109 @@ def _mark_cancelled(rd: Path) -> None:
     (rd / "manifest.json").unlink()
 
 
+def _run_core_jobs(ctx, rid: str) -> list[dict]:
+    return ctx.db.fetchall("SELECT id, status, params_json FROM jobs WHERE run_id = ? AND kind = 'run.core' "
+                           "ORDER BY created_utc", (rid,))
+
+
+@pytest.mark.parametrize("current", [False, True])
+def test_concurrent_resumes_queue_one_job(client, ctx, demo, place_run, monkeypatch, current):
+    """Two resume requests at once (a double click, two tabs) used to both pass the "active job" check before
+    either queued its job, so a second ``run.core`` re-ran the run once the first had completed it (and, with
+    ``use_current_config``, renamed ``launch.json`` twice).  One is queued; the other is ``409 active``."""
+    import threading
+
+    from sparc.studio.runs import launch as launchmod
+
+    rd = place_run(demo, edit=_mark_cancelled)
+    rid = RUN_ID
+    assert client.post("/api/queue/pause").status_code == 200       # nothing starts: only the queue is checked
+    slow = launchmod.checkpoint_info
+
+    def slow_info(*a, **kw):
+        time.sleep(0.3)                                               # both requests are past the check by now
+        return slow(*a, **kw)
+
+    monkeypatch.setattr(launchmod, "checkpoint_info", slow_info)
+    gate = threading.Barrier(2)
+    out: list = []
+
+    def resume():
+        gate.wait()
+        out.append(client.post(f"/api/runs/{rid}/resume", json={"use_current_config": current}))
+
+    threads = [threading.Thread(target=resume) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    codes = sorted(r.status_code for r in out)
+    assert codes == [202, 409], [r.text for r in out]
+    refused = next(r for r in out if r.status_code == 409).json()["error"]
+    assert refused["code"] == "active"
+    jobs = _run_core_jobs(ctx, rid)
+    assert len(jobs) == 1 and jobs[0]["id"] == next(r for r in out if r.status_code == 202).json()["id"]
+    hist = sorted(p.name for p in (rd / "studio").glob("launch.*.json"))
+    assert hist == (["launch.1.json"] if current else [])
+
+
+def test_retry_of_a_run_core_job_keeps_the_resume_guards(client, ctx, demo, place_run):
+    """``POST /api/jobs/{jid}/retry`` of an old ``run.core`` job is a resume: it is refused like one (``409
+    active`` while a job runs on the run, ``409 not_resumable`` once the run is complete), never a second
+    pipeline pass over the run."""
+    rd = place_run(demo, edit=_mark_cancelled)
+    rid = RUN_ID
+    assert client.post("/api/queue/pause").status_code == 200
+    first = client.post(f"/api/runs/{rid}/resume", json={})
+    assert first.status_code == 202, first.text
+    old = first.json()["id"]
+    assert client.post(f"/api/jobs/{old}/cancel").json()["status"] == "cancelled"
+    again = client.post(f"/api/runs/{rid}/resume", json={})
+    assert again.status_code == 202, again.text
+
+    r = client.post(f"/api/jobs/{old}/retry")                         # another job is queued on the run
+    assert r.status_code == 409 and r.json()["error"]["code"] == "active", r.text
+    assert r.json()["error"]["detail"]["job_id"] == again.json()["id"]
+    assert len(_run_core_jobs(ctx, rid)) == 2
+
+    assert client.post(f"/api/jobs/{again.json()['id']}/cancel").json()["status"] == "cancelled"
+    r = client.post(f"/api/jobs/{old}/retry")                         # a partial run: the retry resumes it
+    assert r.status_code == 202, r.text
+    assert r.json()["params"]["resume"] is True and r.json()["parent_job_id"] == old
+    assert client.get(f"/api/runs/{rid}").json()["run"]["last_job_id"] == r.json()["id"]
+    assert client.post(f"/api/jobs/{r.json()['id']}/cancel").json()["status"] == "cancelled"
+
+    st = json.loads((rd / "run_state.json").read_text())             # the run completes (another way)
+    st.update(status="succeeded")
+    (rd / "run_state.json").write_text(json.dumps(st))
+    ctx.services["registry"].refresh(rid)
+    assert run_status(client, rid) == "complete"
+    r = client.post(f"/api/jobs/{old}/retry")
+    assert r.status_code == 409 and r.json()["error"]["code"] == "not_resumable", r.text
+    assert len(_run_core_jobs(ctx, rid)) == 3
+
+
+def test_a_queued_resume_of_a_run_completed_meanwhile_does_not_start(client, ctx, demo, place_run, replay_runner,
+                                                                    wait_job):
+    """Start-time backstop: a ``run.core`` resume that reaches the scheduler once its run is complete (queued
+    through ``POST /api/jobs``, which has no run-level checks) fails its preflight instead of re-running the
+    finished run's S0, S7 and finish."""
+    rd = place_run(demo, edit=_mark_cancelled)
+    rid = RUN_ID
+    assert client.post("/api/queue/pause").status_code == 200
+    r = client.post("/api/jobs", json={"kind": "run.core", "run_id": rid, "params": {"run_id": rid, "resume": True}})
+    assert r.status_code == 202, r.text
+    st = json.loads((rd / "run_state.json").read_text())
+    st.update(status="succeeded")
+    (rd / "run_state.json").write_text(json.dumps(st))
+    before = (rd / "run_state.json").stat().st_mtime_ns
+    assert client.post("/api/queue/resume").status_code == 200
+    job = wait_job(client, r.json()["id"], timeout=30)
+    assert job["status"] == "failed" and job["error"]["detail"]["code"] == "not_resumable", job
+    assert (rd / "run_state.json").stat().st_mtime_ns == before
+    assert run_status(client, rid) == "complete"
+
+
 def test_rerun_creates_a_new_run(client, demo, fixture_run, replay_runner, wait_job):
     rid, _ = fixture_run
     r = client.post(f"/api/runs/{rid}/rerun", json={"label": "again"})
@@ -413,6 +516,25 @@ def test_patch_and_delete(client, ctx, demo, fixture_run):
     assert ctx.db.fetchone("SELECT id FROM runs WHERE id = ?", (rid,)) is None
 
 
+@pytest.mark.skipif(os.name != "posix", reason="SIGKILL and pid checks are POSIX")
+def test_temporaries_of_a_killed_worker_are_removed(client, ctx, demo, fixture_run):
+    """A worker killed while it saved the checkpoint (Force stop, the OOM killer) left
+    ``.checkpoint.pkl.<pid>.<tid>.tmp`` - up to a whole checkpoint - that nothing removed: the end of the
+    ``run.core`` job sweeps it, and deleting the checkpoint frees one left by an older server too."""
+    from sparc.studio.runs.kinds import run_core_on_finish
+    from tests.core.test_runio import killed_writer_tmp
+
+    rid, rd = fixture_run
+    stale = killed_writer_tmp(rd / "checkpoint.pkl")
+    run_core_on_finish(ctx, {"id": "j_x", "run_id": rid, "project_id": demo["id"]}, None)
+    assert not stale.exists() and (rd / "checkpoint.json").exists()
+
+    stale = killed_writer_tmp(rd / "checkpoint.pkl")
+    ck = (rd / "checkpoint.json").stat().st_size
+    assert client.delete(f"/api/runs/{rid}/checkpoint").json()["freed_bytes"] == ck + 65536
+    assert not stale.exists() and not (rd / "checkpoint.json").exists()
+
+
 def test_delete_waits_for_the_engine_off_the_event_loop(client, ctx, fixture_run):
     """Deleting a checkpoint evicts the run from the engine host, which waits for the host's work lock (up to
     120 s while it serves another run): the wait must not freeze every other request."""
@@ -458,6 +580,34 @@ def test_delete_waits_for_the_engine_off_the_event_loop(client, ctx, fixture_run
 # ---------------------------------------------------------------------------
 # outputs, views, docs, files, dictionary
 # ---------------------------------------------------------------------------
+
+def test_a_tab_is_being_computed_only_by_a_job_that_makes_it(client, ctx, fixture_run):
+    """While only ``post.emulator`` ran on a finished run, the Planner and Uncertainty tabs read "being
+    computed" (any active job counted); now a tab is ``running`` only while an active job makes its outputs."""
+    rid, _ = fixture_run
+
+    def fake_job(kind: str) -> str:
+        jid = "j_" + kind.replace(".", "_")
+        ctx.db.insert("jobs", {"id": jid, "kind": kind, "lane": "heavy", "executor": "process", "params_json": "{}",
+                               "status": "running", "job_dir": str(ctx.workspace.job_dir(jid)), "run_id": rid,
+                               "created_utc": "2026-10-02T00:00:00Z"})
+        return jid
+
+    def tabs() -> dict:
+        return {t["id"]: t["availability"] for t in client.get(f"/api/runs/{rid}/outputs").json()["tabs"]}
+
+    em = fake_job("post.emulator")
+    t = tabs()
+    assert t["planner"] == "missing" and t["uncertainty"] == "missing", t
+    assert t["track"] == "running" and t["accuracy"] == "ready"
+    assert client.get(f"/api/runs/{rid}/views/planner").json()["availability"] == "missing"
+    ctx.db.update("jobs", {"id": em}, {"status": "succeeded"})
+    pl = fake_job("post.planner")
+    t = tabs()
+    assert t["planner"] == "running" and t["uncertainty"] == "missing", t
+    ctx.db.update("jobs", {"id": pl}, {"status": "succeeded"})
+    assert tabs()["planner"] == "missing" and tabs()["track"] == "ready"
+
 
 def test_outputs_and_tabs(client, fixture_run):
     rid, _ = fixture_run

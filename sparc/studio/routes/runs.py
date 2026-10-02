@@ -364,13 +364,15 @@ def patch_run(rid: str, body: RunPatch, sctx: StudioContext = Depends(get_ctx)):
 
 
 def _rm_checkpoint(ctx) -> int:
+    from sparc.core import runio
+
     freed = 0
     for name in ("checkpoint.pkl", "checkpoint.json"):
         p = ctx.run_dir / name
         if p.exists():
             freed += p.stat().st_size
             p.unlink()
-    return freed
+    return freed + runio.remove_stale_tmp(ctx.run_dir)    # a save a killed worker never finished
 
 
 async def _evict_engine(sctx: StudioContext, rid: str) -> None:
@@ -602,11 +604,14 @@ def get_environment(rid: str, diff_with: str | None = None, sctx: StudioContext 
 
 async def outputs_env(sctx: StudioContext, ctx) -> dict:
     proj, active = await projection(sctx, ctx.run_id)
-    any_active = active_job(sctx, ctx.run_id) is not None
+    marks = ",".join("?" for _ in ACTIVE_STATUSES)
+    kinds = {r["kind"] for r in sctx.db.fetchall(f"SELECT kind FROM jobs WHERE run_id = ? AND status IN ({marks})",
+                                                 (ctx.run_id, *ACTIVE_STATUSES))}
+    any_active = bool(kinds)
     live = live_stages(proj, active)
     entries = await asyncio.to_thread(outmod.output_entries, ctx, live=live,
                                       resumable=sb.can_resume(ctx, any_active))
-    tabs = outmod.tab_availability(ctx, entries, job_active=any_active)
+    tabs = outmod.tab_availability(ctx, entries, job_active=any_active, active_kinds=kinds)
     return {"proj": proj, "active": active, "entries": entries, "tabs": tabs}
 
 

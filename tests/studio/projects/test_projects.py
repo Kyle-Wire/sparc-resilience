@@ -334,6 +334,32 @@ def test_detail_lists_runs_from_the_runs_table(client, ctx, demo):
     assert rows["emulator"]["action"]["kind"] == "build_emulator"
 
 
+def test_study_children_are_not_the_projects_last_run(client, ctx, demo):
+    """A placebo refit (origin ``study_child``) or a reproduction finishing after the project's run is not the
+    project's "Last run" (Home, Scenario Lab entry) and does not count in the readiness spine's runs and
+    emulator rows: its skill is a placebo's, its layers shifted."""
+    common = {"project_id": demo["id"], "status": "complete", "has_emulator": 0}
+    ctx.db.insert("runs", {**common, "id": "20261001-120000-fast-a1b2", "run_dir": "/tmp/x/run1",
+                           "studio_dir": "/tmp/x/run1/studio", "origin": "studio", "mode": "fast",
+                           "created_utc": "2026-10-01T12:00:00Z", "r2": 0.879})
+    ctx.db.insert("runs", {**common, "id": "20261001-130000-full-c3d4", "run_dir": "/tmp/x/st/children/shift",
+                           "studio_dir": "/tmp/x/st/children/shift/studio", "origin": "study_child",
+                           "study_id": "st_mmbvwob5", "parent_run_id": "20261001-120000-fast-a1b2",
+                           "mode": "coarse", "coarse_m": 60.0, "created_utc": "2026-10-01T13:00:00Z", "r2": 0.793})
+    ctx.db.insert("runs", {**common, "id": "20261001-140000-fast-e5f6", "run_dir": "/tmp/x/st2/children/repro",
+                           "studio_dir": "/tmp/x/st2/children/repro/studio", "origin": "reproduction",
+                           "mode": "fast", "created_utc": "2026-10-01T14:00:00Z", "r2": 0.88})
+    d = client.get(f"/api/projects/{demo['id']}").json()
+    assert d["project"]["last_run"]["id"] == "20261001-120000-fast-a1b2" and d["project"]["last_run"]["r2"] == 0.879
+    listed = next(p for p in client.get("/api/projects").json() if p["id"] == demo["id"])
+    assert listed["last_run"]["id"] == "20261001-120000-fast-a1b2"
+    rows = {r["key"]: r for r in d["readiness"]}
+    assert rows["runs"]["detail"] == "1 run: fast (fast only)", rows["runs"]
+    assert "20261001-120000-fast-a1b2" in rows["emulator"]["detail"]
+    assert rows["emulator"]["action"]["path"] == "/api/runs/20261001-120000-fast-a1b2/actions/emulator"
+    assert {r["id"] for r in d["runs"]} >= {"20261001-130000-full-c3d4"}   # still listed (origin filters them)
+
+
 # ---------------------------------------------------------------------------
 # files
 # ---------------------------------------------------------------------------

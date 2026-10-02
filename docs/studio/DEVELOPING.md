@@ -142,6 +142,7 @@ What the decorator takes:
 | `on_event(sctx, job, event)`, `on_event_types` | Server-side hook for selected event types (default `run.dir`, `run.start`, `artifact`), e.g. registering a study's child runs live |
 | `on_finish(sctx, job, result)` | Server-side hook after the final status: insert `results`/`plans`/`exports` rows, attach studies, enqueue `post.uncertainty` |
 | `retry_params(sctx, job)` | The params `POST /api/jobs/{jid}/retry` uses (default: the same params) |
+| `retry(sctx, job)` | A coroutine (on the server's event loop, not a worker thread) that replaces the whole retry when it needs checks of its own; returns the new `Job`. `run.core` uses it to keep the resume guards (`409 active`, `409 not_resumable`) |
 | `threads(settings, params)` | The thread count the job gets (default: by lane, SPEC §10.5) |
 | `long` | Listed in `/api/meta.job_kinds`, so clients can tell long-running kinds apart |
 
