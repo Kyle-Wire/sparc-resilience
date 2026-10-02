@@ -2,7 +2,25 @@
 // statistic + the adaptation's ΔT, and the ≥ T exceedance map, computed in the browser so
 // switching period, statistic, threshold or adaptation is instant. Warming values are in the
 // target unit (core summarize_projections multiplies delta_K by to_units).
-import type { ClimateStatistic, WarmingRow } from "../../../api/lab";
+import type { ClimateExplore, ClimateStatistic, PresentClimate, WarmingRow } from "../../../api/lab";
+
+/**
+ * Today's observed exposure of an explore reply: `present` (api.md, the summarize_projections
+ * dict) or, as built, `present_today` next to `present: true`.
+ */
+export function presentToday(data: Pick<ClimateExplore, "present" | "present_today"> | null | undefined): PresentClimate | null {
+  if (!data) return null;
+  if (data.present && typeof data.present === "object") return data.present;
+  return data.present_today ?? null;
+}
+
+/** The share of a `{"90.0": 0.3}`-style record at threshold T (keys are numbers as text). */
+export function shareAt(rec: Record<string, number> | null | undefined, t: number): number | null {
+  if (!rec) return null;
+  const k = Object.keys(rec).find((x) => Number(x) === t);
+  const v = k === undefined ? undefined : rec[k];
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
 
 /** The warming of one experiment × period under a statistic (median / p10 / p90 / one model). */
 export function warmingValue(row: Pick<WarmingRow, "median" | "p10" | "p90" | "by_model">, stat: ClimateStatistic): number | null {

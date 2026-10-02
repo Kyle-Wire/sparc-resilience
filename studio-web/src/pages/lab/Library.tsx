@@ -10,7 +10,6 @@ import { ApiError, errorMessage } from "../../api/client";
 import { invalidate } from "../../api/resource";
 import {
   createScenario,
-  deleteScenario,
   forkScenario,
   getScenario,
   patchScenario,
@@ -37,7 +36,7 @@ import { Link, codecs, navigate, useRoute, useUrlState } from "../../router";
 import { useJobs } from "../../stores/jobs";
 import { toast, useUi } from "../../stores/ui";
 import { fmtPct, fmtRelative, fmtSigned, unitLabel } from "../../theme/format";
-import { AcrossRunsDialog, LadderDialog, PromoteDialog } from "./components/Dialogs";
+import { AcrossRunsDialog, DeleteScenarioDialog, LadderDialog, PromoteDialog } from "./components/Dialogs";
 import { MemoryDialog, TrustDialog } from "./components/EngineChip";
 import { LabFrame, labHref } from "./components/LabFrame";
 import { lineage, ladderDoses, ladderGroups, type LineageNode } from "./model/library";
@@ -53,7 +52,13 @@ export function likelyShort(l: Likely | null | undefined, unit: string, d = 3): 
   return `${fmtSigned(l.estimate, d)} ${u}${l.lo !== null && l.hi !== null ? ` (${fmtSigned(l.lo, d)} to ${fmtSigned(l.hi, d)})` : ""}`;
 }
 
-type Dialog = { kind: "ladder"; scenario: Scenario } | { kind: "across"; sid: string } | { kind: "promote"; sid: string } | null;
+type Dialog = { kind: "ladder"; scenario: Scenario } | { kind: "across"; sid: string } | { kind: "promote"; sid: string } | { kind: "delete"; sid: string; name: string } | null;
+
+/** The edit a ladder starts on: the first one with an amount (per-cell edits have none). */
+export function firstLadderEdit(s: Scenario): number {
+  const i = s.doc.edits.findIndex((e) => e.mode !== "per_cell");
+  return i < 0 ? 0 : i;
+}
 
 function Ladders({ list, unit }: { list: ScenarioSummary[]; unit: string }) {
   const groups = useMemo(() => ladderGroups(list), [list]);
@@ -386,7 +391,7 @@ export default function Library() {
                       else if (v === "across") setDialog({ kind: "across", sid: s.id });
                       else if (v === "promote") setDialog({ kind: "promote", sid: s.id });
                       else if (v === "archive") void act(s.id, () => patchScenario(s.id, { archived: s.status !== "archived" }), s.status === "archived" ? "Restored" : "Archived");
-                      else if (v === "delete") void act(s.id, () => deleteScenario(s.id), "Deleted");
+                      else if (v === "delete") setDialog({ kind: "delete", sid: s.id, name: s.name });
                     }}
                   >
                     <option value="">More…</option>
@@ -420,7 +425,19 @@ export default function Library() {
         />
       ) : null}
       {refusal?.error.code === "engine_memory" ? <MemoryDialog error={refusal.error} onClose={() => setRefusal(null)} /> : null}
-      {dialog?.kind === "ladder" ? <LadderDialog sid={dialog.scenario.id} rid={rid} edits={dialog.scenario.doc.edits} editIndex={0} onClose={() => setDialog(null)} /> : null}
+      {dialog?.kind === "ladder" ? <LadderDialog sid={dialog.scenario.id} rid={rid} edits={dialog.scenario.doc.edits} editIndex={firstLadderEdit(dialog.scenario)} onClose={() => setDialog(null)} /> : null}
+      {dialog?.kind === "delete" ? (
+        <DeleteScenarioDialog
+          sid={dialog.sid}
+          name={dialog.name}
+          onDeleted={() => {
+            toast("success", "Deleted");
+            setSelected((cur) => cur.filter((x) => x !== dialog.sid));
+            invalidate(`project:${pid}:scenarios`);
+          }}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
       {dialog?.kind === "across" && pid ? <AcrossRunsDialog sid={dialog.sid} pid={pid} rid={rid} onClose={() => setDialog(null)} /> : null}
       {dialog?.kind === "promote" ? <PromoteDialog sid={dialog.sid} onClose={() => setDialog(null)} /> : null}
     </LabFrame>

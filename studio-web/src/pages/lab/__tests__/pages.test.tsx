@@ -249,12 +249,14 @@ describe("Check across runs", () => {
 
 describe("Plan budget slider", () => {
   it("sends at most one preview per 150 ms under rapid input, ending with the final budget", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const bodies: { budget: number }[] = [];
+    const sentAt: number[] = [];
     fetchMock = mockFetch({
       ...runRoutes(),
       [`POST /api/runs/${RID}/plans/preview`]: (_u, init) => {
         bodies.push(JSON.parse(String(init.body)));
+        sentAt.push(Date.now());
         return {
           body: { planned_total: 100, n_cells_treated: 3, mean_dose_treated: 10, total_cost: 30, gini: 0.2, min_dose_dropped_cost: 0, pareto: [{ budget: 20000, benefit: 100, n_cells: 3, n_segments: 3, gini: 0.2 }], dose: "AAAAAA==", constraint: "plantable", objective: "cooling", caption: "Plan" },
         };
@@ -282,6 +284,9 @@ describe("Plan budget slider", () => {
     const during = bodies.length - initial;
     expect(during).toBeGreaterThanOrEqual(2); // live updates while dragging
     expect(during).toBeLessThanOrEqual(Math.ceil(DURATION / PLAN_PREVIEW_MS) + 1);
+    // no two previews closer than 150 ms on the (fake) clock
+    const gaps = sentAt.slice(1).map((t, i) => t - sentAt[i]);
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(PLAN_PREVIEW_MS);
     // the final request carries the final budget (the one the slider shows)
     const lastBudget = bodies.at(-1)!.budget;
     const shownBudget = container.querySelector(".slider output")!.textContent!.replace(/,/g, "");

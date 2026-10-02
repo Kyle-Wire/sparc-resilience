@@ -2,7 +2,7 @@
 // the engine chip and the compare tray count. Every Lab page renders inside it.
 import type { ReactNode } from "react";
 import { Link, useLocation } from "../../../router";
-import { useTray } from "../model/tray";
+import { compareHref, trayRefs, useTray } from "../model/tray";
 import { EngineChip } from "./EngineChip";
 import "../lab.css";
 
@@ -19,13 +19,16 @@ const SECTIONS: { sub: string; label: string; match: RegExp }[] = [
 
 export function LabFrame({ rid, title, actions, children, hideEngine }: { rid: string; title: ReactNode; actions?: ReactNode; children: ReactNode; hideEngine?: boolean }) {
   const loc = useLocation();
-  const tray = useTray((s) => s.byRun[rid]?.length ?? 0);
+  const trayItems = useTray((s) => s.byRun[rid]);
+  const tray = trayItems?.length ?? 0;
+  // With two or more pinned items, "Compare" opens them (the tray's own Compare button does too).
+  const hrefOf = (sub: string) => (sub === "compare" && tray >= 2 && !/\/lab\/compare/.test(loc.pathname) ? compareHref(rid, trayRefs(trayItems).map((i) => i.ref)) : labHref(rid, sub));
   return (
     <div className="lab">
       <div className="lab-head">
         <nav className="lab-nav" aria-label="Scenario Lab">
           {SECTIONS.map((s) => (
-            <Link key={s.label} to={labHref(rid, s.sub)} aria-current={s.match.test(loc.pathname) ? "page" : undefined}>
+            <Link key={s.label} to={hrefOf(s.sub)} aria-current={s.match.test(loc.pathname) ? "page" : undefined}>
               {s.label}
               {s.sub === "compare" && tray ? <span className="badge">{tray}</span> : null}
             </Link>

@@ -7,6 +7,7 @@
 //   and the whole run catalogue are one click away.
 // - Rect / circle / polygon / zone and hex picks become a selection offered to the edits.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useStore } from "zustand";
 import { getResultLayer, type Lever, type PreviewResult, type ResultField } from "../../../api/lab";
 import type { LayerGroup, LayerMeta } from "../../../api/types";
 import { NumberField } from "../../../components/ui/NumberField";
@@ -17,8 +18,8 @@ import type { GridData } from "../../../map/grid";
 import { BRUSH_RADII_M, type BrushSettings } from "../../../map/tools/brush";
 import type { PickMode } from "../../../map/tools/pick";
 import { fmtInt, fmtPct, fmtSigned, unitLabel } from "../../../theme/format";
-import { leverBounds } from "../model/brush";
-import type { DraftStore } from "../model/draft";
+import { applySupportRule, leverBounds } from "../model/brush";
+import { BRUSH_LABEL, type DraftStore } from "../model/draft";
 import { resultLayerMetas, syntheticMeta, withGroup } from "../model/layers";
 import { TrustBadge } from "./TrustBadge";
 
@@ -72,6 +73,9 @@ export function DesignMap(p: DesignMapProps) {
   const [base, setBase] = useState<{ lever: string; values: Float32Array } | null>(null);
   const [hatchMask, setHatchMask] = useState<Uint8Array | null>(null);
   const lever = levers.find((l) => l.var === brushLever) ?? levers[0];
+  // A brush edit saved in an earlier session is a per-cell blob edit of the doc; new strokes
+  // become a second one and add to it (the saved strokes cannot be re-opened for painting).
+  const savedBrush = useStore(store, (s) => s.doc.edits.findIndex((e) => e.mode === "per_cell" && e.label === BRUSH_LABEL && e.lever === lever?.var && !!e.per_cell_ref?.startsWith("blob:")));
   const loadRun = useMemo(() => runLayerLoader(p.rid, grid.meta.etag), [p.rid, grid.meta.etag]);
 
   useEffect(() => {
@@ -104,7 +108,9 @@ export function DesignMap(p: DesignMapProps) {
         ? {
             edit: brushEdit,
             settings: () => settingsRef.current ?? { amount: 0, mode: "erase" as const, radius_m: 60, base: new Float32Array(grid.n), bounds: [-Infinity, Infinity] as [number, number] },
-            onChange: () => {
+            onChange: (rows: number[]) => {
+              // The map kit clamps to [lo, hi]; cells already outside follow the engine's rule.
+              if (settingsRef.current) applySupportRule(brushEdit, rows, settingsRef.current);
               store.brushLayers.touch(lever!.var);
               onBrushRows();
             },
@@ -232,6 +238,11 @@ export function DesignMap(p: DesignMapProps) {
             <p className="cap">
               {base?.lever === lever.var ? "Choose the brush tool above the map and paint. Repainting replaces, never adds up." : leverMeta ? "Loading the lever's inputs…" : "This lever's input layer is not in the run catalogue."}
             </p>
+            {savedBrush >= 0 ? (
+              <p className="cap" data-saved-brush="true">
+                Edit {savedBrush + 1} holds this lever's brush strokes from an earlier session. New strokes are saved as another per-cell edit and add to it; remove edit {savedBrush + 1} to start over.
+              </p>
+            ) : null}
           </div>
         ) : (
           <p className="cap">No actionable levers.</p>

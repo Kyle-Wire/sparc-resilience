@@ -2,6 +2,8 @@
 // rows. Painting goes through the map kit's applyBrush, so a stroke OVERWRITES the cells it
 // touches with clamp(base + amount) − base computed against the exact Float32 inputs:
 // repainting the same cells never accumulates and base + edit never leaves the lever bounds.
+// Cells whose input already lies outside the bounds follow the engine's support rule instead
+// (SPEC §7.3 `_bounds`: never pushed further out, and never moved against the stroke).
 // Layers snapshot to a sparse form for undo, travel to the preview as SparseEdit payloads
 // and upload as edit blobs (Int32 idx then Float32 val) when the draft is saved.
 import { denseToSparse, editBlobBody, encodeSparseEdit } from "../../../api/binary";
@@ -46,7 +48,11 @@ export class BrushLayers {
   /** Paint (or erase) rows of one lever; returns the rows whose edit changed. */
   paint(lever: string, rows: number[], stroke: BrushStroke, radius_m = 0): number[] {
     const settings: BrushSettings = { amount: stroke.amount, mode: stroke.mode, radius_m, base: stroke.base, bounds: stroke.bounds };
-    const changed = applyBrush(this.array(lever), rows, settings);
+    const edit = this.array(lever);
+    const before = rows.map((r) => edit[r]);
+    applyBrush(edit, rows, settings);
+    applySupportRule(edit, rows, settings);
+    const changed = rows.filter((r, i) => edit[r] !== before[i]);
     if (changed.length) this.touch(lever);
     return changed;
   }
@@ -132,6 +138,33 @@ export function snapshotsEqual(a: BrushSnapshot, b: BrushSnapshot): boolean {
     for (let i = 0; i < x.idx.length; i++) if (x.idx[i] !== y.idx[i] || x.val[i] !== y.val[i]) return false;
   }
   return true;
+}
+
+/**
+ * The engine's support rule for cells whose input lies outside the lever bounds (SPEC §7.3,
+ * `_bounds`): the result is clamped to [min(lo, base), max(hi, base)], so it is never pushed
+ * further out and an "add" never turns into a decrease (the map kit's applyBrush clamps to
+ * [lo, hi] strictly). Re-computes those rows of `edit` in place; returns the rows it changed.
+ */
+export function applySupportRule(edit: Float32Array, rows: Iterable<number>, s: Pick<BrushSettings, "mode" | "amount" | "base" | "bounds">): number[] {
+  const fixed: number[] = [];
+  if (s.mode === "erase") return fixed;
+  const [lo, hi] = s.bounds;
+  for (const r of rows) {
+    const b = s.base[r];
+    if (!Number.isFinite(b) || (b >= lo && b <= hi)) continue;
+    const l = Math.min(lo, b);
+    const h = Math.max(hi, b);
+    const target = Math.min(h, Math.max(l, b + s.amount));
+    let next = Math.fround(Math.fround(target) - b);
+    if (Math.fround(b + next) > h) next = Math.fround(next - (Math.fround(b + next) - h));
+    if (Math.fround(b + next) < l) next = Math.fround(next + (l - Math.fround(b + next)));
+    if (edit[r] !== next) {
+      edit[r] = next;
+      fixed.push(r);
+    }
+  }
+  return fixed;
 }
 
 /**

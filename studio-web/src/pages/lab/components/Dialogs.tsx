@@ -5,11 +5,15 @@
 //   from the estimate endpoint BEFORE Start is enabled; runs without checkpoints are refused
 //   with their reason;
 // - Promote to config: eligibility, the exact generated scenario names and the YAML diff,
-//   then write a new project config version (the current run is never touched).
-import { useEffect, useMemo, useRef, useState } from "react";
-import { errorMessage } from "../../../api/client";
+//   then write a new project config version (the current run is never touched);
+// - Confirm (deletes of plans and sweeps) and Delete scenario: nothing is deleted without
+//   asking; a scenario with later revisions (409 has_children) is deleted only when the user
+//   agrees to re-link them to its parent (force).
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ApiError, errorMessage } from "../../../api/client";
 import { invalidate } from "../../../api/resource";
 import {
+  deleteScenario,
   estimateAcrossRuns,
   makeLadder,
   promoteScenario,
@@ -66,7 +70,7 @@ export function LadderDialog({ sid, rid, edits, editIndex, onClose, onDone }: { 
           <Button onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} disabled={!edit || parsed.values.length < 2 || parsed.bad.length > 0} onClick={() => void go()}>
+          <Button variant="primary" busy={busy} disabled={!edit || edit.mode === "per_cell" || parsed.values.length < 2 || parsed.bad.length > 0} onClick={() => void go()}>
             Create {parsed.values.length} revisions
           </Button>
         </>
@@ -295,3 +299,122 @@ export function PromoteDialog({ sid, onClose }: { sid: string; onClose: () => vo
   );
 }
 
+
+// ---------------------------------------------------------------- confirm and delete
+
+export function ConfirmDialog({
+  title,
+  children,
+  confirmLabel,
+  onConfirm,
+  onClose,
+}: {
+  title: string;
+  children: ReactNode;
+  confirmLabel: string;
+  onConfirm: () => Promise<void>;
+  onClose: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const go = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await onConfirm();
+      onClose();
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      busy={busy}
+      title={title}
+      footer={
+        <>
+          <Button onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="danger" busy={busy} onClick={() => void go()}>
+            {confirmLabel}
+          </Button>
+        </>
+      }
+    >
+      {children}
+      {error ? (
+        <p className="callout" data-tone="crit" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </Dialog>
+  );
+}
+
+/**
+ * Delete a scenario revision after asking. Its exact results are kept unless ticked. A
+ * revision with later revisions answers `409 has_children`; the dialog then says how many
+ * and deletes only on a second confirmation (force: they are re-linked to its parent).
+ */
+export function DeleteScenarioDialog({ sid, name, onDeleted, onClose }: { sid: string; name: string; onDeleted: () => void; onClose: () => void }) {
+  const [results, setResults] = useState(false);
+  const [children, setChildren] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const go = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteScenario(sid, { results, force: children !== null });
+      onDeleted();
+      onClose();
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "has_children") {
+        const kids = e.detail?.children;
+        setChildren(Array.isArray(kids) ? kids.length : 1);
+      } else setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      busy={busy}
+      title="Delete this scenario?"
+      footer={
+        <>
+          <Button onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="danger" busy={busy} onClick={() => void go()}>
+            {children !== null ? "Delete and re-link its revisions" : "Delete"}
+          </Button>
+        </>
+      }
+    >
+      <p>
+        <strong>{name}</strong> ({sid}) will be removed from the library. This cannot be undone.
+      </p>
+      <label className="row">
+        <input type="checkbox" checked={results} onChange={(e) => setResults(e.target.checked)} /> Also delete its exact results (otherwise they stay viewable)
+      </label>
+      {children !== null ? (
+        <p className="callout" role="alert" data-has-children="true">
+          It has {children} later revision{children === 1 ? "" : "s"}. They are kept and re-linked to its parent.
+        </p>
+      ) : null}
+      {error ? (
+        <p className="callout" data-tone="crit" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </Dialog>
+  );
+}

@@ -30,7 +30,7 @@ import {
   type PlanParams,
   type PlanPreview,
 } from "../../api/lab";
-import type { LayerGroup, LayerMeta } from "../../api/types";
+import { isActiveStatus, type LayerGroup, type LayerMeta } from "../../api/types";
 import { Pareto } from "../../charts";
 import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
@@ -50,11 +50,13 @@ import { Link, navigate, useRoute } from "../../router";
 import { useJobs } from "../../stores/jobs";
 import { toast, useUi } from "../../stores/ui";
 import { fmtDateTime, fmtInt, fmtNum, fmtPct, unitLabel } from "../../theme/format";
+import { ConfirmDialog } from "./components/Dialogs";
 import { LabFrame, labHref } from "./components/LabFrame";
 import { columnOptions } from "./components/SelectionBuilder";
 import { syntheticMeta } from "./model/layers";
 import { fieldKitCsv, fieldKitGeoJson, parseNumberList } from "./model/library";
 import { rateLimit } from "./model/timing";
+import { useTray } from "./model/tray";
 
 export const PLAN_PREVIEW_MS = 150;
 
@@ -390,6 +392,11 @@ function PlanDetail({ rid, plid, grid, pid }: { rid: string; plid: string; grid:
   const plan = usePlan(plid, rid);
   const [busy, setBusy] = useState<string | null>(null);
   const [job, setJob] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const pin = useTray((s) => s.pin);
+  // A verify or frontier job of this plan, including the one "Save plan" started.
+  const running = useJobs((s) => Object.values(s.jobs).find((j) => (j.kind === "engine.plan_verify" || j.kind === "engine.plan_frontier") && j.params?.plan_id === plid && isActiveStatus(j.status))?.id ?? null);
+  const shownJob = job ?? running;
   const extra = useMemo(() => {
     const unit = grid.meta.units.target;
     const list = [
@@ -465,22 +472,30 @@ function PlanDetail({ rid, plid, grid, pid }: { rid: string; plid: string; grid:
         >
           Plan pack
         </Button>
-        <Button
-          size="small"
-          variant="danger"
-          busy={busy === "delete"}
-          onClick={() =>
-            void act("delete", async () => {
-              await deletePlan(plid);
-              invalidate(`run:${rid}:lab`);
-              navigate(labHref(rid, "plans"));
-            })
-          }
-        >
+        <Button size="small" variant="ghost" icon="pin" onClick={() => (pin(rid, { kind: "plan", id: plid }, p.name) ? toast("success", "Pinned to the compare tray") : toast("warning", "The compare tray holds 4 items"))}>
+          Pin to compare
+        </Button>
+        <Button size="small" variant="danger" onClick={() => setConfirmDelete(true)}>
           Delete
         </Button>
       </div>
-      {job ? <JobStrip jobId={job} /> : null}
+      {confirmDelete ? (
+        <ConfirmDialog
+          title="Delete this plan?"
+          confirmLabel="Delete plan"
+          onClose={() => setConfirmDelete(false)}
+          onConfirm={async () => {
+            await deletePlan(plid);
+            invalidate(`run:${rid}:lab`);
+            navigate(labHref(rid, "plans"));
+          }}
+        >
+          <p>
+            <strong>{p.name}</strong> and its stored allocation will be deleted. Scenarios made from it with Plan → scenario lose their per-cell source.
+          </p>
+        </ConfirmDialog>
+      ) : null}
+      {shownJob ? <JobStrip jobId={shownJob} /> : null}
       <KpiRow label="Plan">
         <Kpi label="Planned benefit" value={fmtNum(p.planned.planned_total, 1)} unit={`${u}·cells`} note="open loop" />
         <Kpi

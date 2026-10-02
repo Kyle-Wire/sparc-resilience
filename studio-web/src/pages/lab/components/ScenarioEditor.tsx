@@ -65,6 +65,8 @@ export function ScenarioEditor(p: ScenarioEditorProps) {
   const expert = !!doc.options?.expert;
   const warningsFor = (i: number) => p.compile?.warnings.filter((w) => w.edit_index === i) ?? [];
   const global = p.compile?.warnings.filter((w) => w.edit_index === null) ?? [];
+  // SPEC §7.10: single-lever plans combined in one package are allowed but not jointly optimal.
+  const planRefs = new Set(doc.edits.flatMap((e) => (e.mode === "per_cell" && e.per_cell_ref?.startsWith("plan:") ? [e.per_cell_ref] : [])));
 
   const setEdit = (i: number, e: Edit, coalesce?: string) => change((d) => ({ ...d, edits: d.edits.map((x, k) => (k === i ? e : x)) }), { coalesce });
   const addEdit = () => {
@@ -192,6 +194,11 @@ export function ScenarioEditor(p: ScenarioEditorProps) {
             ))}
             <p className="cap">Saved as a per-cell edit of each lever (label “brush”).</p>
           </div>
+        ) : null}
+        {planRefs.size > 1 ? (
+          <p className="callout" role="note" data-not-jointly-optimal="true">
+            Combines {planRefs.size} single-lever plans: not jointly optimal (each plan was optimised on its own).
+          </p>
         ) : null}
         {global.length ? (
           <ul className="edit-issues">

@@ -2,7 +2,8 @@
 // scenarios, plans and the baseline. Small multiples of each item's ΔT on one locked
 // diverging scale; the A − B difference map with swipe; a per-cell scatter; the KPI table
 // with pairwise differences and PAIRED SE (or a "needs exact" chip); regions, equity,
-// exposure and cooling per cost; the compare pack export.
+// exposure and cooling per cost; the compare pack export. Every pair is A − B with A the
+// earlier item (the server's pair `a`), as in its difference layer and SE(A − B).
 import { useEffect, useMemo, useState } from "react";
 import { errorMessage, getBin } from "../../api/client";
 import { mutate } from "../../api/resource";
@@ -167,8 +168,9 @@ function CompareBody({ rid, pid, cmp, grid, catalog, unit }: { rid: string; pid:
   const u = unitLabel(unit);
   const p = cmp.pairs[Math.min(pair, cmp.pairs.length - 1)];
   const label = (i: number) => cmp.items[i]?.label ?? `#${i + 1}`;
+  const pairLabel = (q: { a: number; b: number }) => `${label(q.a)} − ${label(q.b)}`;
   const groups = useMemo<LayerGroup[]>(() => {
-    const diff = cmp.pairs.map((q) => syntheticMeta({ key: q.layer_key, label: `${label(q.b)} − ${label(q.a)}`, unit, sign_note: "B − A; negative = B cooler" }, null));
+    const diff = cmp.pairs.map((q) => syntheticMeta({ key: q.layer_key, label: pairLabel(q), unit, sign_note: "A − B; negative = A cooler than B" }, null));
     const items = cmp.items.map((i) => syntheticMeta({ key: `item:${encodeItemRef(i.ref)}`, label: i.label, unit, sign_note: "negative = cooler" }, null));
     return [
       { id: "diff", label: "Differences", layers: diff },
@@ -253,13 +255,13 @@ function CompareBody({ rid, pid, cmp, grid, catalog, unit }: { rid: string; pid:
         rows={cmp.items}
       />
       <Table
-        caption="Pairwise differences (B − A)"
+        caption="Pairwise differences (A − B)"
         csvName="compare-pairs"
         rowKey={(q) => q.layer_key}
         highlight={(q) => q === p}
         onRowClick={(q) => setPair(cmp.pairs.indexOf(q))}
         columns={[
-          { key: "pair", label: "Pair", value: (q) => `${label(q.b)} − ${label(q.a)}` },
+          { key: "pair", label: "Pair (A − B)", value: (q) => pairLabel(q) },
           {
             key: "city",
             label: "City mean difference",
@@ -288,10 +290,9 @@ function CompareBody({ rid, pid, cmp, grid, catalog, unit }: { rid: string; pid:
       {p ? (
         <div className="grid2">
           <section className="stack">
-            <h3>
-              Difference map: {label(p.b)} − {label(p.a)}
-            </h3>
-            <MapView grid={grid} groups={groups} loadLayer={load} layerKey={p.layer_key} height={420} title={`${label(p.b)} minus ${label(p.a)}`} />
+            <h3>Difference map: {pairLabel(p)}</h3>
+            <p className="cap">Negative (blue) where {label(p.a)} is cooler than {label(p.b)}.</p>
+            <MapView grid={grid} groups={groups} loadLayer={load} layerKey={p.layer_key} height={420} title={`${label(p.a)} minus ${label(p.b)}`} />
           </section>
           {a && b ? (
             <HexbinScatter

@@ -209,6 +209,11 @@ describe("Compare", () => {
     expect(byText(container, "button", "Re-run exactly")).not.toBeNull();
     await waitFor(() => container.querySelectorAll(".mini-maps figure").length === 2, 5000, "small multiples");
     expect(container.querySelector(".mini-maps")!.textContent).toContain("Cool roofs");
+    // pairs read A − B, as the server computes them (diff = A − B, SE(A − B))
+    expect(byText(container, "caption", "Pairwise differences (A − B)")).not.toBeNull();
+    expect(byText(container, "td", "Downtown cool corridor − Cool roofs")).not.toBeNull();
+    expect(byText(container, "h3", "Difference map: Downtown cool corridor − Cool roofs")).not.toBeNull();
+    expect(container.textContent).not.toContain("Cool roofs − Downtown cool corridor");
     // only one comparison was created
     expect(fetchMock.calls.filter((c) => c.method === "POST").length).toBe(1);
   });

@@ -297,6 +297,9 @@ export function SelectionBuilder(props: SelectionBuilderProps) {
   const [open, setOpen] = useState(false);
   const [how, setHow] = useState<"replace" | "and" | "or" | "minus">("and");
   const ctrl = useRef<AbortController | null>(null);
+  // Only the builder being worked on tints the map: several edits each have one, and a
+  // count landing for another edit must not repaint the tint.
+  const focused = useRef(false);
   const problems = useMemo(() => validateSelection(root, "where"), [root]);
   const key = JSON.stringify(root);
   const columnLabel = (c: string) => columns.find((o) => o.value === c || o.value.endsWith(":" + c))?.label ?? c;
@@ -314,7 +317,7 @@ export function SelectionBuilder(props: SelectionBuilderProps) {
             setReply(r);
             setError(null);
             setCounting(false);
-            onMask?.(selectionMask(r, grid.n));
+            if (focused.current) onMask?.(selectionMask(r, grid.n));
           },
           (e: unknown) => {
             if (c.signal.aborted) return;
@@ -356,7 +359,16 @@ export function SelectionBuilder(props: SelectionBuilderProps) {
   };
 
   return (
-    <div className="selbuilder" onFocus={() => reply && onMask?.(selectionMask(reply, grid.n))}>
+    <div
+      className="selbuilder"
+      onFocus={() => {
+        focused.current = true;
+        if (reply) onMask?.(selectionMask(reply, grid.n));
+      }}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) focused.current = false;
+      }}
+    >
       <datalist id={`${idPrefix}-columns`}>
         {columns.map((c) => (
           <option key={c.value} value={c.value}>

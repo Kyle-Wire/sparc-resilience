@@ -18,8 +18,9 @@ import { Table } from "../../../components/ui/Table";
 import { useJobs } from "../../../stores/jobs";
 import { toast } from "../../../stores/ui";
 import { fmtDateTime, fmtInt, fmtNum, fmtPct, fmtSigned, fmtSignedValue, unitLabel } from "../../../theme/format";
-import { buysLines, cityLine, plainWording } from "../model/plain";
+import { buysLines, cityLine, plainWording, withRange } from "../model/plain";
 import { useTray } from "../model/tray";
+import { AcrossRunsPanel } from "./AcrossRuns";
 
 /** Spill rings for the chart: ring 0 (r_m = 0) is the edited set; ring k spans (r_{k−1}, r_k]. */
 export function spillRings(rings: Result["spill"]["rings"]): Ring[] {
@@ -168,7 +169,8 @@ export function ResultInspector({ rid, resId, pid, unit, nFolds, onShowLayer }: 
   if (!r) return <p className="cap">Loading the result…</p>;
   const u = unitLabel(unit);
   const s = r.summary;
-  const main = s.edited ?? r.city;
+  // The card computes its confidence from lo/hi; fill them from the SE when absent (SPEC §7.7).
+  const main = withRange(s.edited ?? r.city);
   const causalDisagrees = r.causal_check ? !r.causal_check.model_within : false;
   const wording = plainWording({ edited: s.edited, city: r.city, unit, fracExtrapolatedEdited: r.extrapolated_edited ?? s.frac_extrapolated_edited, causalDisagrees, buys: buysLines(r, unit) });
   const known = new Set(wording.qualifiers.map((q) => q.toLowerCase()));
@@ -369,6 +371,8 @@ export function ResultInspector({ rid, resId, pid, unit, nFolds, onShowLayer }: 
           caption={`${r.uncertainty?.envelope_excludes_zero ? "The full envelope excludes zero." : "The full envelope includes zero."} Sources: ${r.uncertainty?.sources.join(", ") || "fold jackknife only"}.`}
         />
       ) : null}
+
+      {r.scenario ? <AcrossRunsPanel pid={pid} sid={r.scenario.id} unit={unit} /> : null}
 
       <ImpactsBlock resId={resId} impacts={r.impacts} unit={unit} onImpacts={(i) => mutate(`result:${resId}`, (prev: Result | undefined) => (prev ? { ...prev, impacts: i } : prev) as Result)} />
     </section>

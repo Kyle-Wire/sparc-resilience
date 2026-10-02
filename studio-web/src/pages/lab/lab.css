@@ -18,8 +18,9 @@
 
 .scenario-editor { gap: 10px; }
 .scenario-editor textarea { width: 100%; resize: vertical; }
-.save-status[data-save="error"] { color: var(--critical-ink, var(--critical)); }
+.save-status[data-save="error"] { color: var(--crit-ink); }
 .save-status[data-dirty] { color: var(--ink-2); }
+.lab .hint[data-tone="crit"] { color: var(--crit-ink); }
 
 .edit-row { display: grid; gap: 8px; }
 .edit-row > header { display: flex; align-items: center; gap: 4px; }
@@ -28,7 +29,7 @@
 .edit-grid select, .edit-grid input { min-width: 0; max-width: 100%; }
 .edit-where { display: grid; gap: 4px; }
 .edit-issues { margin: 0; padding-left: 1.1em; font-size: 0.84rem; color: var(--ink-2); }
-.edit-issues li[data-level="error"] { color: var(--critical-ink, var(--critical)); }
+.edit-issues li[data-level="error"] { color: var(--crit-ink); }
 .edit-issues li[data-level="warn"]::marker { color: var(--warning); }
 
 .selbuilder { display: grid; gap: 4px; }
@@ -59,7 +60,7 @@ tr.focus-row, .focus-row { outline: 2px solid var(--accent); outline-offset: -2p
 
 .yaml-diff { background: var(--chip); padding: 10px 12px; border-radius: var(--radius-sm); overflow: auto; max-height: 50vh; font-size: 0.82rem; }
 .yaml-diff [data-op="add"] { color: var(--good-ink, var(--good)); }
-.yaml-diff [data-op="del"] { color: var(--critical-ink, var(--critical)); }
+.yaml-diff [data-op="del"] { color: var(--crit-ink); }
 
 .lab-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 10px 14px; align-items: end; }
 .lab-split { display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); gap: 14px; align-items: start; }

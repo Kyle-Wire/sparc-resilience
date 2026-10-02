@@ -203,6 +203,7 @@ export type AutosaveEvents = {
 };
 
 export const BRUSH_LABEL = "brush";
+export const UNTITLED = "Untitled scenario";
 
 /**
  * The doc as saved: the editor's edits plus one per-cell edit per brushed lever, pointing at
@@ -210,7 +211,9 @@ export const BRUSH_LABEL = "brush";
  */
 export function docForSave(doc: ScenarioDoc, brushRefs: Record<string, string>): ScenarioDoc {
   const extra: Edit[] = Object.entries(brushRefs).map(([lever, blobId]) => ({ lever, mode: "per_cell", per_cell_ref: `blob:${blobId}`, label: BRUSH_LABEL }));
-  return extra.length ? { ...doc, edits: [...doc.edits, ...extra] } : doc;
+  // The server requires a name; a field cleared while retyping saves as the placeholder.
+  const named = doc.name.trim() ? doc : { ...doc, name: UNTITLED };
+  return extra.length ? { ...named, edits: [...named.edits, ...extra] } : named;
 }
 
 /** Blob refs of brushed levers whose current layer is already uploaded (for compiling the saved doc). */

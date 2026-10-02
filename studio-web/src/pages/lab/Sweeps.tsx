@@ -6,7 +6,7 @@ import { useMemo, useState } from "react";
 import { errorMessage } from "../../api/client";
 import { invalidate } from "../../api/resource";
 import { createSweep, deleteSweep, useLevers, useRegions, useSweep, useSweeps, type Lever, type SweepListItem } from "../../api/lab";
-import type { SelectionSpec } from "../../api/types";
+import { isActiveStatus, type JobStatus, type SelectionSpec } from "../../api/types";
 import { LineBand, type LineSeries } from "../../charts";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
@@ -19,6 +19,7 @@ import { Link, navigate, useRoute } from "../../router";
 import { useJobs } from "../../stores/jobs";
 import { toast } from "../../stores/ui";
 import { fmtDateTime, fmtNum, fmtPct, fmtSigned, unitLabel } from "../../theme/format";
+import { ConfirmDialog } from "./components/Dialogs";
 import { LabFrame, labHref } from "./components/LabFrame";
 import { SelectionBuilder, columnOptions } from "./components/SelectionBuilder";
 import { parseNumberList } from "./model/library";
@@ -86,7 +87,7 @@ function NewSweep({ rid, grid, levers }: { rid: string; grid: GridData; levers: 
 
 function SweepView({ rid, swid, unit, item }: { rid: string; swid: string; unit: string; item: SweepListItem | undefined }) {
   const sw = useSweep(swid, rid);
-  const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState(false);
   if (sw.error && !sw.data) return <EmptyState error={sw.error} />;
   const s = sw.data;
   if (!s) return <p className="cap">Loading the sweep…</p>;
@@ -115,17 +116,11 @@ function SweepView({ rid, swid, unit, item }: { rid: string; swid: string; unit:
   const pipe = pipelineCurve(s.pipeline_curve, dominantSign(main.map((l) => l.estimate)));
   if (pipe) series.push({ id: "pipeline", label: "Pipeline response curve", x: pipe.x, y: pipe.y, dashed: true, muted: true });
   const remove = async () => {
-    setBusy(true);
-    try {
-      await deleteSweep(swid);
-      invalidate(`run:${rid}:lab`);
-      navigate(labHref(rid, "sweeps"));
-    } catch (e) {
-      toast("error", "Could not delete the sweep", { body: errorMessage(e) });
-    } finally {
-      setBusy(false);
-    }
+    await deleteSweep(swid);
+    invalidate(`run:${rid}:lab`);
+    navigate(labHref(rid, "sweeps"));
   };
+  const active = isActiveStatus(s.status as JobStatus);
   return (
     <section className="stack" aria-label="Sweep">
       <div className="row">
@@ -134,10 +129,15 @@ function SweepView({ rid, swid, unit, item }: { rid: string; swid: string; unit:
         </h3>
         <StatusChip status={s.status} />
         <span className="spacer" />
-        <Button size="small" variant="danger" busy={busy} onClick={() => void remove()} disabled={s.status === "running" || s.status === "queued"}>
+        <Button size="small" variant="danger" onClick={() => setConfirm(true)} disabled={active} title={active ? "Cancel the sweep's job first" : undefined}>
           Delete
         </Button>
       </div>
+      {confirm ? (
+        <ConfirmDialog title="Delete this sweep?" confirmLabel="Delete sweep" onConfirm={remove} onClose={() => setConfirm(false)}>
+          <p>The sweep and its {s.points.length} exact point results will be deleted.</p>
+        </ConfirmDialog>
+      ) : null}
       {item?.job_id ? <JobStrip jobId={item.job_id} /> : null}
       {curve.length ? (
         <LineBand

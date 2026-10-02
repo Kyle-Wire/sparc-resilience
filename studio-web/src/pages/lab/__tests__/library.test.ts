@@ -7,7 +7,9 @@ import { budgetRange, decodeDose, defaultParams } from "../Plans";
 import { spillRings, uncertaintyLayers } from "../components/ResultInspector";
 import { exactAdvice } from "../components/CompilePanel";
 import { newEdit } from "../model/doc";
-import { fieldKitCsv, fieldKitGeoJson, ladderDoses, ladderGroups, lineage, parseNumberList } from "../model/library";
+import { fieldKitCsv, fieldKitGeoJson, ladderDoses, ladderGroups, lineage, parseNumberList, parseSites } from "../model/library";
+import { firstLadderEdit } from "../Library";
+import { missingParams } from "../components/TemplateGallery";
 import { dominantSign, fitOverlay, overlayXs, pipelineCurve } from "../model/sweep";
 import { debounce, rateLimit } from "../model/timing";
 import { bytesToBase64 } from "../../../api/binary";
@@ -60,6 +62,39 @@ describe("ladders", () => {
   it("parses number lists", () => {
     expect(parseNumberList("5, 10;20  30")).toEqual({ values: [5, 10, 20, 30], bad: [] });
     expect(parseNumberList("−2, x")).toEqual({ values: [-2], bad: ["x"] });
+  });
+
+  it("starts a ladder on the first edit that has an amount", () => {
+    const sc = (edits: ReturnType<typeof newEdit>[]) => ({ doc: { name: "n", edits } }) as Parameters<typeof firstLadderEdit>[0];
+    expect(firstLadderEdit(sc([{ lever: "Pct_Canopy", mode: "per_cell", per_cell_ref: "blob:bl_1" }, newEdit("Albedo", "set", 0.35)]))).toBe(1);
+    expect(firstLadderEdit(sc([newEdit("Albedo", "set", 0.35)]))).toBe(0);
+  });
+});
+
+describe("Around sites template", () => {
+  it("reads typed lon, lat lines and reports what is not a pair", () => {
+    expect(parseSites("-71.41, 41.82\n−71.40 41.83\n\n-71.39;41.80")).toEqual({ sites: [[-71.41, 41.82], [-71.4, 41.83], [-71.39, 41.8]], bad: [] });
+    expect(parseSites("-71.41, 41.82, 5\nnorth gate\n200, 41")).toEqual({ sites: [], bad: ["-71.41, 41.82, 5", "north gate", "200, 41"] });
+    expect(parseSites("  ")).toEqual({ sites: [], bad: [] });
+  });
+
+  it("reads an uploaded points CSV by its lon/lat header in any column order", () => {
+    const csv = "site_id,latitude,longitude,notes\n1,41.82,-71.41,school\r\n2,41.83,-71.40,park\n3,,-71.39,no lat\n4,41.84,-71.38,";
+    expect(parseSites(csv)).toEqual({ sites: [[-71.41, 41.82], [-71.4, 41.83], [-71.38, 41.84]], bad: ["3,,-71.39,no lat"] });
+    expect(parseSites("lon\tlat\n-71.41\t41.82").sites).toEqual([[-71.41, 41.82]]);
+  });
+
+  it("keeps Create disabled until the required sites are given", () => {
+    const t = {
+      id: "around_sites",
+      label: "Around sites",
+      desc: "",
+      requires: [],
+      params_schema: { properties: { sites: { type: "array" as const, title: "sites [lon, lat]" }, radius_m: { type: "number" as const, default: 200 } }, required: ["sites"] },
+    };
+    expect(missingParams(t, { radius_m: 200 })).toEqual(["sites"]);
+    expect(missingParams(t, { sites: [] })).toEqual(["sites"]);
+    expect(missingParams(t, { sites: [[-71.4, 41.8]] })).toEqual([]);
   });
 });
 

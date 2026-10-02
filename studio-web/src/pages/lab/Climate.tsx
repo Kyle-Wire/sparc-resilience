@@ -19,7 +19,7 @@ import { codecs, useRoute, useUrlState } from "../../router";
 import { useUi } from "../../stores/ui";
 import { fmtNum, fmtPct, fmtSignedValue, unitLabel } from "../../theme/format";
 import { LabFrame } from "./components/LabFrame";
-import { decodeStatistic, encodeStatistic, exceedance, futureTemperature, shareAtOrAbove, statisticLabel, warmingValue } from "./model/climate";
+import { decodeStatistic, encodeStatistic, exceedance, futureTemperature, presentToday, shareAt, shareAtOrAbove, statisticLabel, warmingValue } from "./model/climate";
 import { decodeItemRef, encodeItemRef, itemLayerKey } from "./model/doc";
 import { syntheticMeta } from "./model/layers";
 import { parseNumberList } from "./model/library";
@@ -197,7 +197,7 @@ export default function Climate() {
   const tKey = (rec: Record<string, unknown>) => (t === null ? "" : Object.keys(rec).find((k) => Number(k) === t) ?? String(t));
   const projections = data?.projections ?? [];
   const variants = projections[0]?.variants.map((v) => v.name) ?? [];
-  const present = data && typeof data.present === "object" ? data.present : null;
+  const present = presentToday(data);
   const gaugeProj = projections.find((p) => /245/.test(p.experiment) && /2041/.test(p.period)) ?? projections[0];
 
   return (
@@ -300,7 +300,7 @@ export default function Climate() {
             series={variants.map((name, k) => ({
               id: name,
               label: name,
-              values: [k === 0 && present ? (present.share_at_or_above[tKey(present.share_at_or_above)] ?? null) : null, ...projections.map((p) => p.variants[k]?.share_at_or_above[tKey(p.variants[k].share_at_or_above)]?.median ?? null)],
+              values: [k === 0 && present && t !== null ? shareAt(present.share_at_or_above, t) : null, ...projections.map((p) => p.variants[k]?.share_at_or_above[tKey(p.variants[k].share_at_or_above)]?.median ?? null)],
               lo: [null, ...projections.map((p) => p.variants[k]?.share_at_or_above[tKey(p.variants[k].share_at_or_above)]?.p10 ?? null)],
               hi: [null, ...projections.map((p) => p.variants[k]?.share_at_or_above[tKey(p.variants[k].share_at_or_above)]?.p90 ?? null)],
               muted: k === 0 && variants.length > 1,

@@ -5,7 +5,7 @@ import type { WarmingRow } from "../../../api/lab";
 import { colorize, mapPalette } from "../../../map/colour";
 import { computeDomain } from "../../../map/domain";
 import { grid3 } from "../../../test/grid";
-import { decodeStatistic, encodeStatistic, exceedance, futureTemperature, shareAtOrAbove, warmingValue } from "../model/climate";
+import { decodeStatistic, encodeStatistic, exceedance, futureTemperature, presentToday, shareAt, shareAtOrAbove, warmingValue } from "../model/climate";
 import { syntheticMeta } from "../model/layers";
 
 const OBS = Float32Array.from([86, 88, 89.5, 90, 91, NaN, 87]);
@@ -68,5 +68,16 @@ describe("future temperature (client side)", () => {
     for (const s of ["median", "p10", "p90", { model: "MIROC6" }] as const) expect(decodeStatistic(encodeStatistic(s))).toEqual(s);
     expect(decodeStatistic(null)).toBe("median");
     expect(decodeStatistic("model:")).toBe("median");
+  });
+
+  it("reads today's exposure from `present` (api.md) or `present_today` (as built)", () => {
+    const today = { mean: 88.1, share_at_or_above: { "90.0": 0.29, "95.0": 0.02 } };
+    expect(presentToday({ present: today })).toEqual(today);
+    expect(presentToday({ present: true, present_today: today })).toEqual(today);
+    expect(presentToday({ present: true })).toBeNull();
+    expect(presentToday(null)).toBeNull();
+    expect(shareAt(today.share_at_or_above, 90)).toBe(0.29);
+    expect(shareAt(today.share_at_or_above, 95)).toBe(0.02);
+    expect(shareAt(today.share_at_or_above, 100)).toBeNull();
   });
 });

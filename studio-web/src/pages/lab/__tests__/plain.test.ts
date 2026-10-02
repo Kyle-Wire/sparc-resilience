@@ -4,7 +4,8 @@
 import { describe, expect, it } from "vitest";
 import type { Result } from "../../../api/lab";
 import type { Likely } from "../../../api/types";
-import { buysLines, cityLine, confidenceWord, extrapolationQualifier, headline, interval95, plainWording } from "../model/plain";
+import { CONFIDENCE_TEXT, confidenceOf } from "../../../components/ui/PlainResult";
+import { buysLines, cityLine, confidenceWord, extrapolationQualifier, headline, interval95, plainWording, withRange } from "../model/plain";
 
 const L = (estimate: number, lo: number | null, hi: number | null, se: number | null = null): Likely => ({ estimate, lo, hi, se, confidence: "unknown", phrase: "" });
 
@@ -17,6 +18,18 @@ describe("confidence wording", () => {
     expect(confidenceWord(L(0.3, 0.1, 0.5))).toBe("Confident it warms");
     expect(confidenceWord(L(0.3, 0, 0.5))).toBe("Could be zero");
     expect(confidenceWord(L(0.3, null, null))).toBe("No uncertainty estimate");
+  });
+
+  it("the inspector card words every SE-only result exactly as confidenceWord does", () => {
+    // The card (foundation PlainResult) reads lo/hi; withRange fills them from ±1.96·SE.
+    for (const est of [-0.5, -0.2, -0.05, 0, 0.05, 0.3])
+      for (const se of [0.01, 0.1, 0.3]) {
+        const l = L(est, null, null, se);
+        expect(CONFIDENCE_TEXT[confidenceOf(withRange(l))]).toBe(`${confidenceWord(l)}.`);
+      }
+    const given = L(-0.4, -0.5, -0.3, 0.05);
+    expect(withRange(given)).toBe(given); // an explicit range is kept as sent
+    expect(withRange(L(-0.4, null, null, null))).toEqual(L(-0.4, null, null, null));
   });
 
   it("falls back to est ± 1.96·SE when lo/hi are missing", () => {

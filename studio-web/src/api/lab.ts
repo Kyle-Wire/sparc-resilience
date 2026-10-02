@@ -390,6 +390,23 @@ export function startAcrossRuns(sid: string, runIds: string[]): Promise<Job> {
   return api.post<Job>(`/api/scenarios/${enc(sid)}/across-runs`, { run_ids: runIds });
 }
 
+/** `scenario.across_runs` job result (api.md §8): one row per run, sign stability and spread. */
+export type AcrossRunsResult = {
+  rows: { run_id: string; city: Likely | null; ok: boolean; error: string | null }[];
+  sign_stability: number | null;
+  spread: number | null;
+};
+
+/**
+ * The project's "check across runs" jobs (newest first, `GET /api/jobs?kind=…&project=`); the
+ * caller picks a scenario's by `scenario_id`. Refreshed by every job event (`jobs` tag).
+ */
+export function useAcrossRunsJobs(pid: string | null) {
+  return useResource<Page<Job>>(pid ? `project:${pid}:lab:across` : null, (s) => api.get<Page<Job>>("/api/jobs", { kind: "scenario.across_runs", project: pid!, limit: 100 }, s), {
+    tags: pid ? ["jobs", `project:${pid}`] : [],
+  });
+}
+
 export type PromoteResult = { eligible: boolean; reason: string | null; yaml_diff: string | null; names: string[]; version: number | null };
 
 export function promoteScenario(sid: string, apply = false): Promise<PromoteResult> {
@@ -653,8 +670,13 @@ export type ClimateProjection = {
   variants: ClimateVariant[];
 };
 
+export type PresentClimate = { mean: number; share_at_or_above: Record<string, number> };
+
 export type ClimateExplore = {
-  present: boolean | { mean: number; share_at_or_above: Record<string, number> };
+  /** api.md: summarize_projections' `present` (today); as built the server sends `true` here and today in `present_today`. */
+  present: boolean | PresentClimate;
+  present_today?: PresentClimate | null;
+  statistic?: ClimateStatistic;
   thresholds: number[];
   projections: ClimateProjection[];
   adaptation: string[];

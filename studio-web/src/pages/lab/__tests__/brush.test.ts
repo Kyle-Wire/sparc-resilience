@@ -2,7 +2,8 @@
 // Float32 inputs, snapshot/restore, and their wire forms (preview SparseEdit, edit blob body).
 import { describe, expect, it } from "vitest";
 import { decodeSparseEdit } from "../../../api/binary";
-import { BrushLayers, leverBounds, snapshotsEqual } from "../model/brush";
+import { BrushLayers, applySupportRule, leverBounds, snapshotsEqual } from "../model/brush";
+import { applyBrush } from "../../../map/tools/brush";
 
 // Inputs that are not exactly representable in Float32 (as in a real predictors table).
 const BASE = Float32Array.from([12.3, 97.7, 0.1, 55.55, 99.99, 3.3]);
@@ -102,5 +103,31 @@ describe("brush strokes", () => {
     const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
     expect([dv.getInt32(0, true), dv.getInt32(4, true)]).toEqual([1, 4]);
     expect([dv.getFloat32(8, true), dv.getFloat32(12, true)]).toEqual([2.5, 2.5]);
+  });
+
+  it("cells already outside the bounds follow the engine's support rule (never pushed out, never moved against the stroke)", () => {
+    // albedo bounds [0.1, 0.9]; row 0 is above (0.95), row 1 below (0.05), row 2 inside
+    const base = Float32Array.from([0.95, 0.05, 0.5]);
+    const bounds: [number, number] = [0.1, 0.9];
+    const b = new BrushLayers(3);
+    expect(b.paint("albedo", [0, 1, 2], { mode: "add", amount: 0.1, base, bounds })).toEqual([1, 2]);
+    const e = b.array("albedo");
+    expect(e[0]).toBe(0); // adding cannot lower a cell above the bound (strict clamping would give −0.05)
+    expect(Math.fround(base[1] + e[1])).toBeCloseTo(0.15, 6); // moves up toward the bounds
+    expect(Math.fround(base[2] + e[2])).toBeCloseTo(0.6, 6);
+    for (let k = 0; k < 3; k++) expect(b.paint("albedo", [0, 1, 2], { mode: "add", amount: 0.1, base, bounds })).toEqual([]); // idempotent
+    // a decrease lowers the high cell (down to the lower bound at most) and leaves the low one
+    b.paint("albedo", [0, 1], { mode: "add", amount: -2, base, bounds });
+    expect(Math.fround(base[0] + e[0])).toBeCloseTo(0.1, 6);
+    expect(e[1]).toBe(0);
+    // the live map tool path: applyBrush (strict) then the rule, as DesignMap does on each dab
+    const live = new Float32Array(3);
+    const s = { mode: "add" as const, amount: 0.1, radius_m: 60, base, bounds };
+    applyBrush(live, [0, 1, 2], s);
+    expect(live[0]).toBeLessThan(0); // what the map kit alone would paint
+    expect(applySupportRule(live, [0, 1, 2], s)).toEqual([0]);
+    const once = new BrushLayers(3);
+    once.paint("albedo", [0, 1, 2], { mode: "add", amount: 0.1, base, bounds });
+    expect(Array.from(live)).toEqual(Array.from(once.array("albedo")));
   });
 });

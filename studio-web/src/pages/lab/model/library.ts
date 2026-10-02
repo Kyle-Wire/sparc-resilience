@@ -80,6 +80,46 @@ export function parseNumberList(text: string): { values: number[]; bad: string[]
   return { values, bad };
 }
 
+// ---------------------------------------------------------------- sites (the "Around sites" template)
+
+const LON_COL = /^(lon|lng|long|longitude|x)$/i;
+const LAT_COL = /^(lat|latitude|y)$/i;
+
+/**
+ * Points as `[lon, lat]` pairs from typed text ("lon, lat" per line) or an uploaded CSV whose
+ * header names the columns (lon/lng/longitude/x and lat/latitude/y, in any position). Values
+ * outside ±180 / ±90 and lines that are not two numbers are reported, not guessed.
+ */
+export function parseSites(text: string): { sites: [number, number][]; bad: string[] } {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const sites: [number, number][] = [];
+  const bad: string[] = [];
+  if (!lines.length) return { sites, bad };
+  // Delimited lines keep their empty cells (columns must not shift); bare "lon lat" splits on spaces.
+  const split = (l: string) => (/[,;\t]/.test(l) ? l.split(/[,;\t]/) : l.split(/\s+/)).map((c) => c.trim().replace(/^"|"$/g, ""));
+  const head = split(lines[0]);
+  let ix = 0;
+  let iy = 1;
+  let start = 0;
+  const hx = head.findIndex((c) => LON_COL.test(c));
+  const hy = head.findIndex((c) => LAT_COL.test(c));
+  if (hx >= 0 && hy >= 0) {
+    ix = hx;
+    iy = hy;
+    start = 1;
+  }
+  for (const l of lines.slice(start)) {
+    const cells = split(l);
+    const num = (c: string | undefined) => (c ? Number(c.replace("−", "-")) : NaN); // an empty cell is missing, not 0
+    const lon = num(cells[ix]);
+    const lat = num(cells[iy]);
+    if (start === 0 && cells.length !== 2) bad.push(l);
+    else if (!Number.isFinite(lon) || !Number.isFinite(lat) || Math.abs(lon) > 180 || Math.abs(lat) > 90) bad.push(l);
+    else sites.push([lon, lat]);
+  }
+  return { sites, bad };
+}
+
 // ---------------------------------------------------------------- field kit downloads
 
 export function fieldKitCsv(kit: FieldKit, which: "cells" | "sites" | "pairs"): string {

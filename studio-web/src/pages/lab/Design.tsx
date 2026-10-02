@@ -6,7 +6,7 @@
 //   map; the brush paints per-lever edit arrays;
 // - the compile panel recommends an exact run when the preview cannot be trusted, and Run
 //   exact shows fold ticks; the latest exact result on this run opens in the inspector.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import { ApiError, errorMessage } from "../../api/client";
 import { packBits } from "../../api/binary";
@@ -212,7 +212,10 @@ function Workbench({ rid, sid, pid, grid, groups, levers, scenario }: WorkbenchP
     controller.request({ edits: usable, brush: Object.keys(brushPayload).length ? brushPayload : undefined, options: doc.options, ...(sid ? { scenario_id: sid } : {}) });
   }, [controller, store, usable, doc.options, emuPresent]);
   const previewKey = useMemo(() => contentKey({ ...doc, edits: usable }), [doc, usable]);
-  useEffect(() => requestPreview(), [previewKey, brush, requestPreview]);
+  // Re-preview only when the evaluated content or the brush changes (not on name or notes).
+  const requestRef = useRef(requestPreview);
+  requestRef.current = requestPreview;
+  useEffect(() => requestRef.current(), [previewKey, brush, emuPresent]);
 
   // Compile: debounced 300 ms on the evaluated content (brushed levers count once uploaded).
   const savedVersion = useStore(store, (s) => s.savedVersion);
@@ -353,6 +356,7 @@ function Workbench({ rid, sid, pid, grid, groups, levers, scenario }: WorkbenchP
             <TemplateGallery
               pid={pid}
               rid={rid}
+              levers={levers}
               onCreated={(s) => {
                 mutate(`scenario:${s.id}`, s);
                 invalidate(`project:${s.project_id}:scenarios`);
@@ -452,7 +456,9 @@ export default function Design() {
   }
   return (
     <>
-      <Workbench rid={rid} sid={sid} pid={pid} grid={grid.data} groups={layers.data ?? []} levers={levers.data} scenario={scenario.data} />
+      {/* Keyed by scenario: opening another one starts with its own preview, compile and job
+          (its draft, with undo history, lives on in the draft registry). */}
+      <Workbench key={`${rid}|${sid ?? "new"}`} rid={rid} sid={sid} pid={pid} grid={grid.data} groups={layers.data ?? []} levers={levers.data} scenario={scenario.data} />
       {!pid ? (
         <p className="cap">
           This run is not in a project, so scenarios cannot be saved. <Button size="small" variant="ghost" onClick={() => navigate("/projects")}>Projects</Button>

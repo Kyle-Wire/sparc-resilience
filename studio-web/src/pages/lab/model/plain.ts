@@ -18,6 +18,16 @@ export function interval95(l: Pick<Likely, "estimate" | "se" | "lo" | "hi">): [n
   return null;
 }
 
+/**
+ * The Likely with its 95% range filled in from ±1.96·SE when the server sent only the SE, so
+ * every card (headline range and confidence line) words it exactly as `confidenceWord` does.
+ */
+export function withRange(l: Likely): Likely {
+  if (l.lo !== null && l.hi !== null && Number.isFinite(l.lo) && Number.isFinite(l.hi)) return l;
+  const iv = interval95(l);
+  return iv ? { ...l, lo: iv[0], hi: iv[1] } : l;
+}
+
 export function confidenceWord(l: Pick<Likely, "estimate" | "se" | "lo" | "hi">): ConfidenceWord {
   const iv = interval95(l);
   if (!iv) return "No uncertainty estimate";
