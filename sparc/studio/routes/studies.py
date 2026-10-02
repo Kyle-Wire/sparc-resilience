@@ -263,6 +263,11 @@ async def run_action(rid: str, kind: str, body: dict[str, Any] | None = Body(Non
                        detail={"run_id": rid, "missing": req["missing"]})
     if not req["ok"]:
         raise _requirements_error(kind, req, rid)
+    if kind == "emulator":                     # the job unpickles checkpoint.pkl (SPEC §10.8)
+        bad = await asyncio.to_thread(K.untrusted_checkpoint, sctx, rid)
+        if bad is not None:
+            raise ApiError("untrusted_pickle", bad["message"], detail={"run_id": rid, "run_dir": str(ctx.run_dir)},
+                           action=bad["action"])
     p = _validate(kind, body)
     await _check_action_params(sctx, ctx, kind, p)
     return await _jobs(sctx).submit(f"post.{kind}", p, run_id=rid, project_id=ctx.project_id,

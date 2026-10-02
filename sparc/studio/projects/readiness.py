@@ -55,12 +55,18 @@ def _size(p: Path) -> str:
     return f"{n:.1f} GB"
 
 
+def _sec(v: Any) -> dict:
+    """A config section as a mapping: a saved config may hold any type there (``climate: on``, ``data: 5``), which
+    validation reports as an issue; the spine must still build."""
+    return v if isinstance(v, dict) else {}
+
+
 def readiness(db, project: dict, raw: dict, *, issues: list[dict] | None = None) -> list[dict]:
     """The spine of ``project`` (a ``projects`` row) with raw config ``raw``."""
     pid = project["id"]
     pdir = Path(project["dir"])
     eff = effective_config(raw, pdir)
-    d = eff.get("data") or {}
+    d = _sec(eff.get("data"))
     issues = validate_deep(raw, pdir) if issues is None else issues
     errors = [i for i in issues if i["level"] == "error"]
     setup = f"/p/{pid}/setup"
@@ -96,7 +102,7 @@ def readiness(db, project: dict, raw: dict, *, issues: list[dict] | None = None)
                         None if d.get("id") else _open("Set the id column", f"{setup}/data")))
 
     # levers
-    act = eff.get("actionable") if isinstance(eff.get("actionable"), dict) else {}
+    act = _sec(eff.get("actionable"))
     lever_errors = [i for i in errors if i["path"].startswith("actionable")]
     if not preds:
         out.append(_row("levers", "missing", "no predictors yet", _open("Choose predictors", f"{setup}/levers")))
@@ -106,10 +112,11 @@ def readiness(db, project: dict, raw: dict, *, issues: list[dict] | None = None)
     elif lever_errors:
         out.append(_row("levers", "missing", lever_errors[0]["message"], _open("Fix levers", f"{setup}/levers")))
     else:
-        out.append(_row("levers", "ok", f"{len(act)} lever{'s' if len(act) != 1 else ''}: {', '.join(act)}"))
+        out.append(_row("levers", "ok", f"{len(act)} lever{'s' if len(act) != 1 else ''}: {', '.join(map(str, act))}"))
 
     # roles
-    roles = ((eff.get("physics") or {}).get("roles") or {})
+    phys = _sec(eff.get("physics"))
+    roles = _sec(phys.get("roles"))
     mapped = [r for r in ROLE_NAMES if roles.get(r) and roles.get(r) in preds]
     role_errors = [i for i in errors if i["path"].startswith("physics.roles")]
     k = len(mapped)
@@ -129,7 +136,6 @@ def readiness(db, project: dict, raw: dict, *, issues: list[dict] | None = None)
 
     crs = d.get("crs") or d.get("reproject_to")
     # forcing
-    phys = eff.get("physics") or {}
     forcing = phys.get("forcing")
     if not phys.get("enabled", True):
         out.append(_row("forcing", "n/a", "physics disabled"))
@@ -139,7 +145,7 @@ def readiness(db, project: dict, raw: dict, *, issues: list[dict] | None = None)
         if f_err:
             out.append(_row("forcing", "missing", f_err[0]["message"], _open("Fix forcing", f"{setup}/inputs")))
         else:
-            info = phys.get("forcing_info") or {}
+            info = _sec(phys.get("forcing_info"))
             when = f" ({info['date']})" if info.get("date") else ""
             out.append(_row("forcing", "ok", f"{fp.name}{when}: SW↓ {phys.get('sw_down')} W/m², "
                                              f"LW net {phys.get('lw_net')} W/m²"))
@@ -148,7 +154,7 @@ def readiness(db, project: dict, raw: dict, *, issues: list[dict] | None = None)
                         _open("Fetch campaign forcing", f"{setup}/inputs")))
 
     # climate table
-    clim = eff.get("climate") or {}
+    clim = _sec(eff.get("climate"))
     if not clim.get("enabled"):
         out.append(_row("climate_table", "n/a", "climate projections are off",
                         _open("Set up climate", f"{setup}/analysis")))
@@ -163,9 +169,9 @@ def readiness(db, project: dict, raw: dict, *, issues: list[dict] | None = None)
                         f"{clim.get('table')} not found" if clim.get("table") else "no change-factor table", action))
 
     # people layers
-    planner = eff.get("planner") if isinstance(eff.get("planner"), dict) else {}
+    planner = _sec(eff.get("planner"))
     layers = planner.get("layers")
-    people_obj = str((eff.get("optimize") or {}).get("objective", "cooling")) == "people"
+    people_obj = str(_sec(eff.get("optimize")).get("objective", "cooling")) == "people"
     if layers and _resolve(pdir, str(layers)).is_file():
         out.append(_row("people_layers", "ok", Path(str(layers)).name))
     else:

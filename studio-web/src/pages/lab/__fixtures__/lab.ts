@@ -177,7 +177,7 @@ export function result(id: string, extra: Partial<Result> = {}): Result {
     extrapolated_edited: 0.23,
     realized: { Pct_Canopy: { requested_mean: 10, realized_mean: 9.2, requested_total: 30, realized_total: 27.6, clipped_share: 0.08 } },
     mediators: { NDVI: { mean_change: 0.04 } },
-    cost: { total: 27.6, per_lever: { Pct_Canopy: 27.6 }, cooling_per_cost: -0.074 },
+    cost: { total: 27.6, per_lever: { Pct_Canopy: 27.6 }, cooling_per_cost: 0.074 }, // positive = cooler (stats.cost_table)
     causal_check: { delta: -0.03, lo: -0.05, hi: -0.01, model_within: true },
     uncertainty: { estimation_95: [-0.03, -0.012], specification: null, attribution: null, causal_band: [-0.05, -0.01], envelope: [-0.05, -0.005], envelope_excludes_zero: true, sources: ["estimation"] },
     impacts: null,

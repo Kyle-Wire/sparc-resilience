@@ -118,6 +118,31 @@ def test_emulator_needs_the_checkpoint(client, fixture_run, fake_studies, calls,
     assert res["levers"]["canopy"] == {"patch_pass_rate": 0.9, "uniform_rel_err": 0.05}
 
 
+def test_emulator_refuses_an_untrusted_checkpoint(client, demo, synth, tmp_path, fake_studies, calls, wait_job):
+    """``post.emulator`` unpickles ``checkpoint.pkl``: a run imported without ``trust_pickles`` is refused like the
+    engine refuses it (SPEC §10.8), by the action route and, for any other way in, by the start-time preflight."""
+    src = tmp_path / "outside" / "shared_run"
+    shutil.copytree(synth, src, ignore=shutil.ignore_patterns("events.jsonl"))
+    (src / "checkpoint.pkl").write_bytes(b"not a real checkpoint")
+    r = client.post("/api/runs/import", json={"dir": str(src), "project_id": demo["id"],
+                                              "config_path": demo["config_path"]})
+    assert r.status_code == 201, r.text
+    rid = r.json()["id"]
+    r = client.post(f"/api/runs/{rid}/actions/emulator", json={})
+    assert r.status_code == 409, r.text
+    err = r.json()["error"]
+    assert err["code"] == "untrusted_pickle" and "execute code" in err["message"]
+    assert err["action"]["path"] == "/api/runs/import" and err["action"]["body"]["trust_pickles"] is True
+    job = _post(client, "/api/jobs", {"kind": "post.emulator", "run_id": rid, "params": {}})
+    job = wait_job(client, job["id"])
+    assert job["status"] == "failed" and job["error"]["detail"]["code"] == "untrusted_pickle", job
+    assert calls(job) == []                                     # the worker never ran
+    assert client.post("/api/runs/import", json=err["action"]["body"]).status_code == 201
+    job = _post(client, f"/api/runs/{rid}/actions/emulator", {"patches": 3})
+    _done(client, wait_job, job)
+    assert calls(job)[0]["n_patches"] == 3
+
+
 def test_unknown_kinds_and_params(client, fixture_run):
     rid, _ = fixture_run
     assert client.post(f"/api/runs/{rid}/actions/nope", json={}).json()["error"]["code"] == "unknown_kind"

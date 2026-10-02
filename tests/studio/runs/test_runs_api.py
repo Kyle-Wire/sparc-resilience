@@ -269,6 +269,51 @@ def test_import_in_place(client, ctx, demo, synth, tmp_path):
     assert client.get(f"/api/runs/{run['id']}").status_code == 404
 
 
+@pytest.mark.parametrize("how", ["absolute", "relative"])
+def test_import_never_uses_an_unsafe_launch_run_id(client, ctx, demo, synth, tmp_path, how):
+    """An imported folder's ``studio/launch.json`` is untrusted: a ``run_id`` that is not one plain path segment
+    must neither name the side folder (``<ws>/imports/<run_id>``) nor be removed when the import is refused."""
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "thesis.txt").write_text("keep me")
+    rid = str(victim) if how == "absolute" else os.path.relpath(victim, ctx.workspace.imports_dir)
+
+    def plant(d: Path) -> None:
+        (d / "studio").mkdir(exist_ok=True)
+        (d / "studio" / "launch.json").write_text(json.dumps({"run_id": rid}))
+
+    bare = tmp_path / "downloaded"
+    bare.mkdir()
+    (bare / "manifest.json").write_text("{}")
+    plant(bare)
+    r = client.post("/api/runs/import", json={"dir": str(bare)})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "needs_config", r.text
+    assert sorted(p.name for p in victim.iterdir()) == ["thesis.txt"]      # neither removed nor written into
+
+    src = _outside_copy(synth, tmp_path / "outside" / "synth_fast", plant)
+    r = client.post("/api/runs/import", json={"dir": str(src), "project_id": demo["id"],
+                                              "config_path": demo["config_path"]})
+    assert r.status_code == 201, r.text
+    run = r.json()
+    assert "/" not in run["id"] and ".." not in run["id"]
+    assert (ctx.workspace.imports_dir / run["id"] / "studio" / "import.json").is_file()
+    assert sorted(p.name for p in victim.iterdir()) == ["thesis.txt"]
+
+
+def test_import_of_a_copied_studio_run_keeps_the_original(client, ctx, demo, fixture_run, tmp_path):
+    """A Studio run folder copied elsewhere carries the original's ``launch.json`` ``run_id``: importing the copy
+    gets its own id instead of replacing the original's row."""
+    rid, rd = fixture_run
+    copy = tmp_path / "elsewhere" / rid
+    shutil.copytree(rd, copy)
+    r = client.post("/api/runs/import", json={"dir": str(copy), "project_id": demo["id"],
+                                              "config_path": demo["config_path"]})
+    assert r.status_code == 201, r.text
+    assert r.json()["id"] != rid
+    assert Path(ctx.db.fetchval("SELECT run_dir FROM runs WHERE id = ?", (rid,))).resolve() == rd.resolve()
+    assert client.get(f"/api/runs/{rid}").json()["run"]["origin"] == "studio"
+
+
 def test_import_verifies_ids_and_folds(client, demo, synth, tmp_path):
     def shuffle_ids(d):
         p = pd.read_parquet(d / "predictions.parquet")
@@ -366,6 +411,48 @@ def test_patch_and_delete(client, ctx, demo, fixture_run):
     out = client.delete(f"/api/runs/{rid}").json()
     assert out["freed_bytes"] > 500_000 and not rd.exists()
     assert ctx.db.fetchone("SELECT id FROM runs WHERE id = ?", (rid,)) is None
+
+
+def test_delete_waits_for_the_engine_off_the_event_loop(client, ctx, fixture_run):
+    """Deleting a checkpoint evicts the run from the engine host, which waits for the host's work lock (up to
+    120 s while it serves another run): the wait must not freeze every other request."""
+    import asyncio
+    import threading
+
+    rid, _ = fixture_run
+    entered, release = threading.Event(), threading.Event()
+    seen: dict = {}
+
+    class SlowEngine:
+        def evict(self, run_id):
+            try:
+                asyncio.get_running_loop()
+                seen["on_loop"] = True
+            except RuntimeError:
+                seen["on_loop"] = False
+            entered.set()
+            release.wait(5)
+            return True
+
+    old = ctx.services.get("engine")
+    ctx.services["engine"] = SlowEngine()
+    out: dict = {}
+    t = threading.Thread(target=lambda: out.update(r=client.delete(f"/api/runs/{rid}/checkpoint")))
+    t.start()
+    try:
+        assert entered.wait(10)
+        t0 = time.monotonic()
+        assert client.get("/api/health").status_code == 200
+        elapsed = time.monotonic() - t0
+    finally:
+        release.set()
+        t.join(30)
+        if old is None:
+            ctx.services.pop("engine", None)
+        else:
+            ctx.services["engine"] = old
+    assert out["r"].status_code == 200 and seen["on_loop"] is False
+    assert elapsed < 2.0
 
 
 # ---------------------------------------------------------------------------

@@ -163,7 +163,8 @@ export function validateSelection(spec: unknown, path = "selection"): string[] {
       const hasFrac = isNum(o.frac) && o.frac > 0 && o.frac <= 1;
       const hasK = isNum(o.k) && o.k >= 1;
       if (!hasFrac && !hasK) return bad("enter a share (0–1] or a count");
-      return o.within === undefined ? [] : validateSelection(o.within, `${path}.within`);
+      // A stored doc echoes an unset `within` as null (api.md §1): null means no limit.
+      return o.within === undefined || o.within === null ? [] : validateSelection(o.within, `${path}.within`);
     }
     case "buffer": {
       const radius = isNum(o.radius_m) && o.radius_m > 0;
@@ -181,7 +182,8 @@ export function validateSelection(spec: unknown, path = "selection"): string[] {
 function editFromJson(v: unknown, i: number): { edit: Edit | null; problems: string[] } {
   const p = `edits[${i}]`;
   if (!v || typeof v !== "object") return { edit: null, problems: [`${p}: not an object`] };
-  const o = v as Record<string, unknown>;
+  // A stored doc echoes unset optional fields as null (api.md §1): read null as absent.
+  const o = Object.fromEntries(Object.entries(v as Record<string, unknown>).filter(([, x]) => x !== null));
   const problems: string[] = [];
   if (typeof o.lever !== "string" || !o.lever) problems.push(`${p}.lever: missing`);
   if (!EDIT_MODES.includes(o.mode as EditMode)) problems.push(`${p}.mode: unknown mode "${String(o.mode)}"`);
@@ -273,7 +275,7 @@ export function selectionAt(root: SelectionSpec, path: SelPath): SelectionSpec |
     if (!cur) return null;
     if (typeof step === "number") cur = isMulti(cur) ? cur.args[step] : undefined;
     else if (step === "arg") cur = isNot(cur) ? cur.arg : undefined;
-    else if (step === "within") cur = "kind" in cur && cur.kind === "top" ? cur.within : undefined;
+    else if (step === "within") cur = "kind" in cur && cur.kind === "top" ? (cur.within ?? undefined) : undefined;
     else cur = "kind" in cur && cur.kind === "buffer" ? cur.of : undefined;
   }
   return cur ?? null;
@@ -370,12 +372,12 @@ export function describeSelection(spec: SelectionSpec | undefined, ctx: Describe
       return `${col(spec.column)} ${OP_TEXT[spec.op]} ${num(v)}`;
     }
     case "top": {
-      const how = spec.frac !== undefined ? `${num(Math.round(spec.frac * 1000) / 10)}%` : `${spec.k} cells`;
+      const how = spec.frac != null ? `${num(Math.round(spec.frac * 1000) / 10)}%` : `${spec.k} cells`;
       const within = spec.within ? ` within ${describeSelection(spec.within, ctx, depth + 1)}` : "";
       return `${spec.direction} ${how} by ${col(spec.column)}${within}`;
     }
     case "buffer":
-      return `${spec.radius_m !== undefined ? `${num(spec.radius_m)} m` : `${spec.lever_range} range`} around ${describeSelection(spec.of, ctx, depth + 1)}`;
+      return `${spec.radius_m != null ? `${num(spec.radius_m)} m` : `${spec.lever_range} range`} around ${describeSelection(spec.of, ctx, depth + 1)}`;
     case "region":
       return ctx.regionName?.(spec.id) ?? `region ${spec.id}`;
   }

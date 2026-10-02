@@ -68,6 +68,16 @@ _PATTERNS = [
 ]
 
 _ACTIVE: "Registry | None" = None
+#: a run id read from a folder's own ``launch.json`` names a side folder ``<ws>/imports/<run_id>``: one plain
+#: path segment only (never absolute, never ``..``)
+_RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
+
+def _launch_run_id(launch: dict | None) -> str | None:
+    """The ``run_id`` of a ``launch.json`` when it is a safe id, else ``None`` (the caller derives one).  An
+    imported folder's ``launch.json`` is untrusted input: its id becomes a path under the workspace."""
+    rid = (launch or {}).get("run_id")
+    return rid if isinstance(rid, str) and _RUN_ID_RE.fullmatch(rid) and ".." not in rid else None
 
 
 def active_registry(sctx=None) -> "Registry":
@@ -316,8 +326,8 @@ class Registry:
             co = (manifest.get("qa") or {}).get("coarse")
             args = {"fast": bool(manifest.get("fast_mode")), "coarse": (co or {}).get("cell_m")}
         if run_id is None:
-            run_id = (launch or {}).get("run_id") or (run_dir.name if origin in ("studio", "study_child") and launch
-                                                      else None)
+            run_id = _launch_run_id(launch) or (run_dir.name if origin in ("studio", "study_child") and launch
+                                                else None)
         if run_id is None:
             child = origin in _CHILD_ORIGINS or bool(study_id) or _names_study(manifest)
             run_id = self._imported_id(run_dir, args, manifest, state, child=child)
@@ -634,14 +644,22 @@ class Registry:
             if not args and manifest:
                 co = (manifest.get("qa") or {}).get("coarse")
                 args = {"fast": bool(manifest.get("fast_mode")), "coarse": (co or {}).get("cell_m")}
-            run_id = (launch or {}).get("run_id") or self._imported_id(run_dir, args, manifest, state)
+            run_id = _launch_run_id(launch)
+            if run_id is not None:                   # an id another folder holds is not taken over
+                other = self.db.fetchone("SELECT run_dir FROM runs WHERE id = ?", (run_id,))
+                if other is not None and Path(other["run_dir"]).resolve() != run_dir:
+                    run_id = None
+            run_id = run_id or self._imported_id(run_dir, args, manifest, state)
             studio = (run_dir / "studio") if (in_ws and launch) else self.ws.imports_dir / run_id / "studio"
         rec = {"schema": 1, "dir": str(run_dir), "project_id": project_id,
                "config_path": str(Path(config_path).resolve()) if config_path else None,
                "trust_pickles": bool(trust_pickles), "imported_utc": utc_now(), "origin": "imported"}
         probe_row = {"id": run_id, "run_dir": str(run_dir), "studio_dir": str(studio), "status": "imported"}
         tmp_rec = None
+        created = None                               # the side folder this call made (removed if refused)
         if studio != run_dir / "studio":
+            if not studio.parent.exists() and studio.parent.parent.resolve() == self.ws.imports_dir.resolve():
+                created = studio.parent
             studio.mkdir(parents=True, exist_ok=True)
             tmp_rec = studio / "import.json"
             old = _json(tmp_rec)
@@ -650,10 +668,12 @@ class Registry:
         try:
             self._verify(ctx, config_path)
         except ApiError:
-            if tmp_rec is not None and existing is None:
-                shutil.rmtree(studio.parent, ignore_errors=True)
+            if created is not None:
+                shutil.rmtree(created, ignore_errors=True)
             elif tmp_rec is not None and old is not None:
                 write_json_atomic(tmp_rec, old)
+            elif tmp_rec is not None:
+                tmp_rec.unlink(missing_ok=True)
             raise
         origin = "imported" if not (in_ws and (run_dir / "studio" / "launch.json").exists()) else "studio"
         row = self.index_run_dir(run_dir, origin=origin, studio_dir=studio, run_id=run_id, project_id=project_id)

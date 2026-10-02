@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { Result } from "../../../api/lab";
 import type { Likely } from "../../../api/types";
 import { CONFIDENCE_TEXT, confidenceOf } from "../../../components/ui/PlainResult";
-import { buysLines, cityLine, confidenceWord, extrapolationQualifier, headline, interval95, plainWording, withRange } from "../model/plain";
+import { buysLines, cityLine, confidenceWord, extrapolationQualifier, headline, interval95, perCostText, plainWording, withRange } from "../model/plain";
 
 const L = (estimate: number, lo: number | null, hi: number | null, se: number | null = null): Likely => ({ estimate, lo, hi, se, confidence: "unknown", phrase: "" });
 
@@ -78,7 +78,8 @@ describe("qualifiers and headline", () => {
 
   it("states what the scenario buys", () => {
     const r = {
-      cost: { total: 5000, per_lever: {}, cooling_per_cost: -0.0004 },
+      // Server convention (stats.cost_table): cooling_per_cost = −Σ delta / total, positive = cooler.
+      cost: { total: 5000, per_lever: {}, cooling_per_cost: 0.0004 },
       impacts: {
         thresholds: [90],
         exposure: [
@@ -100,5 +101,13 @@ describe("qualifiers and headline", () => {
       "Offsets 41% of SSP245 2041-2060 median warming.",
       "0.400 °F·cells of cooling per 1,000 cost units.",
     ]);
+  });
+
+  it("says warming, not cooling, per cost for a scenario that warms (negative cooling_per_cost)", () => {
+    // "Canopy loss −10 hottest": the server's plain.buys reads "−611.73 °F·cells of cooling per 1,000 cost units".
+    const warm = { cost: { total: 100, per_lever: {}, cooling_per_cost: -0.6117 }, impacts: null } as Pick<Result, "cost" | "impacts">;
+    expect(buysLines(warm, "degF")).toEqual(["611.700 °F·cells of warming per 1,000 cost units."]);
+    expect(perCostText(-0.6117, "degF", "1k")).toBe("611.700 °F·cells of warming per 1k");
+    expect(perCostText(0.6117, "degF", "1k")).toBe("611.700 °F·cells of cooling per 1k");
   });
 });

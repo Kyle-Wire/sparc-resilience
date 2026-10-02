@@ -99,6 +99,16 @@ export function plainWording(p: PlainInput): PlainWording {
   };
 }
 
+/**
+ * Cooling per 1,000 cost units in words. `cooling_per_cost` follows the server (stats.cost_table:
+ * −Σ delta / total cost, positive = cooler), so a negative value is warming bought per cost.
+ */
+export function perCostText(coolingPerCost: number, unit: string, per = "1,000 cost units"): string {
+  const v = coolingPerCost * 1000;
+  const warming = v < 0 && Number(Math.abs(v).toFixed(3)) !== 0;
+  return `${fmtNum(Math.abs(v), 3)} ${unitLabel(unit)}·cells of ${warming ? "warming" : "cooling"} per ${per}`;
+}
+
 /** "What it buys" lines from a result's impacts and cost (SPEC §7.7). */
 export function buysLines(r: Pick<Result, "cost" | "impacts">, unit: string): string[] {
   const u = unitLabel(unit);
@@ -124,7 +134,7 @@ export function buysLines(r: Pick<Result, "cost" | "impacts">, unit: string): st
     if (off && Number.isFinite(off.offset_share)) out.push(`Offsets ${fmtPct(off.offset_share)} of ${off.experiment.toUpperCase()} ${off.period} median warming.`);
   }
   if (r.cost.cooling_per_cost !== null && Number.isFinite(r.cost.cooling_per_cost)) {
-    out.push(`${fmtNum(Math.abs(r.cost.cooling_per_cost) * 1000, 3)} ${u}·cells of cooling per 1,000 cost units.`);
+    out.push(`${perCostText(r.cost.cooling_per_cost, unit)}.`);
   }
   return out;
 }

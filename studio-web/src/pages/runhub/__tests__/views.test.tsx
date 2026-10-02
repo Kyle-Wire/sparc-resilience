@@ -188,6 +188,50 @@ describe("view behaviour", () => {
     }
   });
 
+  it("Causal shows the server's effect unit once and the dose-response x axis in the lever unit", async () => {
+    const page = PAGES.find((p) => p.view === "causal")!;
+    const vm = viewFixture("causal");
+    // The server sends the treatment unit as the effect unit (views._causal: "<target> per <lever unit>").
+    vm.units = { target: "°F", levers: { canopy: "pp" } };
+    vm.sections.treatments!.canopy.unit = "°F per pp";
+    const r = await renderView(page, vm);
+    try {
+      const text = r.container.textContent ?? "";
+      expect(text).toContain("Units: °F per pp");
+      expect(text).toContain("Effect per unit (°F per pp)");
+      expect(text).toContain("CATE (°F per pp)");
+      expect(text).not.toContain("per °F per");
+      const dr = [...r.container.querySelectorAll("figure.chart-frame")].find((f) => f.getAttribute("data-chart")?.includes("dose–response"))!;
+      expect(dr).toBeDefined();
+      expect(dr.textContent).toContain("canopy (pp)");
+      expect(dr.textContent).not.toContain("canopy (°F per pp)");
+    } finally {
+      r.restore();
+    }
+  });
+
+  it("Response's literature panel gives SPARC's number as a rate per +0.10, scaled from the nearest scenario", async () => {
+    const page = PAGES.find((p) => p.view === "response")!;
+    const vm = viewFixture("response");
+    // Only +20 configured: core rescales its city-mean cooling (0.833 °C) by 10/20 to a per-+0.10 rate.
+    const lit = vm.sections.literature!;
+    lit.sparc = lit.sparc.map((m) => (m.quantity === "canopy" ? { ...m, scenario: "Canopy Increase +20", dose: 20, cooling: 0.4166, se: 0.127, frac_extrapolated: 1 } : m));
+    const r = await renderView(page, vm);
+    try {
+      const fig = [...r.container.querySelectorAll("figure.chart-frame")].find((f) => f.getAttribute("data-chart") === "Literature check")!;
+      expect(fig).toBeDefined();
+      const cap = fig.querySelector("figcaption")!.textContent!;
+      expect(cap).toContain("SPARC: 0.42 °C of cooling per +0.10 canopy cover, scaled from Canopy Increase +20 (realised dose 20 pp)");
+      expect(cap).toContain("100% of cells beyond the observed range");
+      expect(cap).not.toContain("cools by");
+      expect(fig.textContent).toContain("Units: cooling per +0.10 canopy cover, °C");
+      const dot = [...fig.querySelectorAll("[aria-label]")].map((e) => e.getAttribute("aria-label") ?? "").find((a) => a.startsWith("SPARC per +0.10 canopy cover · from Canopy Increase +20"));
+      expect(dot).toContain("extrapolated");
+    } finally {
+      r.restore();
+    }
+  });
+
   it("the Budget caption comes from the ViewModel", async () => {
     const page = PAGES.find((p) => p.view === "budget")!;
     for (const caption of ["Doubling the budget buys 1.6× the cooling.", "Tripling the budget buys 2.1× the cooling."]) {

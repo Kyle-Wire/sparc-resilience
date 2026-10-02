@@ -217,6 +217,38 @@ def test_import_config_copy_data(client, tmp_path):
     assert (pdir / "data/city.csv").read_bytes() == (cfg.parent / "data/city.csv").read_bytes()
 
 
+def test_import_config_copy_data_keeps_files_with_the_same_name(client, tmp_path):
+    """``copy_data`` copies the main table and every join into ``data/``: inputs that share a file name must not
+    overwrite each other (the main table would silently become the join table)."""
+    cfg = _external_config(tmp_path)
+    ext = cfg.parent
+    city = pd.read_csv(ext / "data" / "city.csv")
+    (ext / "a").mkdir()
+    (ext / "b").mkdir()
+    (ext / "c").mkdir()
+    city.to_csv(ext / "a" / "data.csv", index=False)
+    city[["id"]].assign(shade=1.0).to_csv(ext / "b" / "data.csv", index=False)
+    city[["id"]].assign(trees=2.0).to_csv(ext / "c" / "data.csv", index=False)
+    doc = yaml.safe_load(cfg.read_text())
+    doc["core"]["data"]["path"] = "a/data.csv"
+    doc["core"]["data"]["join"] = [{"path": "b/data.csv", "key": "id"}, {"path": "c/data.csv", "key": "id"},
+                                   {"path": "b/data.csv", "key": "id"}]
+    cfg.write_text(yaml.safe_dump(doc))
+    r = client.post("/api/projects/import", json={"config_path": str(cfg), "name": "Same names", "copy_data": True})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    pid, pdir = body["project"]["id"], Path(body["project"]["dir"])
+    data = client.get(f"/api/projects/{pid}/config").json()["raw"]["data"]
+    assert data["path"] == "data/data.csv"
+    assert [j["path"] for j in data["join"]] == ["data/data-2.csv", "data/data-3.csv", "data/data-2.csv"]
+    assert (pdir / "data" / "data.csv").read_bytes() == (ext / "a" / "data.csv").read_bytes()
+    assert (pdir / "data" / "data-2.csv").read_bytes() == (ext / "b" / "data.csv").read_bytes()
+    assert (pdir / "data" / "data-3.csv").read_bytes() == (ext / "c" / "data.csv").read_bytes()
+    assert sum("was copied as data/data-2.csv" in w for w in body["warnings"]) >= 1
+    assert not [e for e in client.post(f"/api/projects/{pid}/config/validate", json={}).json()["issues"]
+                if e["level"] == "error" and e["path"].startswith(("data.", "predictors"))]
+
+
 def test_import_config_errors(client, tmp_path):
     r = client.post("/api/projects/import", json={"config_path": str(tmp_path / "none.yml")})
     assert r.status_code == 404
@@ -835,6 +867,43 @@ def test_predictors_of_the_wrong_type_give_one_error(client, demo):
     issues = client.post(f"/api/projects/{demo['id']}/config/validate", json={"raw": raw}).json()["issues"]
     pred = [i for i in issues if i["path"].startswith("predictors")]
     assert [(i["path"], i["code"]) for i in pred] == [("predictors", "type")]
+
+
+@pytest.mark.parametrize("text", ["climate: on", "physics: true", "optimize: true", "data: 5", "physics: [1]",
+                                  "physics:\n    roles: [canopy, impervious]", "climate: x",
+                                  "physics:\n    forcing_info: 3", "actionable: {1: {}}"])
+def test_a_section_of_the_wrong_type_keeps_the_project_readable(client, text):
+    """Saving never fails on validation issues (api.md §5.3), so the project list and detail must still build when
+    a config section holds a scalar or a list: the type error shows in the ``config_valid`` row."""
+    pid = create(client, "Typo", "blank")["project"]["id"]
+    other = create(client, "Other", "blank")["project"]["id"]
+    r = client.put(f"/api/projects/{pid}/config", json={"yaml": f"core:\n  {text}\n"})
+    assert r.status_code == 200, r.text
+    assert any(i["level"] == "error" for i in r.json()["issues"])
+    listed = client.get("/api/projects")
+    assert listed.status_code == 200, listed.text
+    assert {p["id"] for p in listed.json()} == {pid, other}
+    assert client.get("/api/projects", params={"archived": True}).status_code == 200
+    rows = spine(client, pid)
+    assert rows["config_valid"]["state"] == "missing"
+
+
+@pytest.mark.parametrize("value", [{"area": 12.5}, {"title": 2024}, {"place": True}, {"place": [1]},
+                                   {"title": {"a": 1}}])
+def test_a_report_field_of_the_wrong_type_keeps_the_project_readable(client, value):
+    """``Project.report`` is strings or null: a number in the config's ``report`` block is shown as text, anything
+    else as null (the save itself reports the type issue)."""
+    pid = create(client, "Report", "blank")["project"]["id"]
+    r = client.patch(f"/api/projects/{pid}/config/sections/report", json={"value": value})
+    assert r.status_code == 200 and any(i["path"].startswith("report.") for i in r.json()["issues"]), r.text
+    listed = client.get("/api/projects")
+    assert listed.status_code == 200, listed.text
+    detail = client.get(f"/api/projects/{pid}")
+    assert detail.status_code == 200, detail.text
+    (k, v), = value.items()
+    want = str(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    assert detail.json()["project"]["report"][k] == want
+    assert listed.json()[0]["report"][k] == want
 
 
 def test_server_stays_torch_free(tmp_path):

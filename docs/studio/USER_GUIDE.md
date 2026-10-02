@@ -327,7 +327,7 @@ When an attached study finishes, the **uncertainty report** is rebuilt automatic
 
 ![The Providence example with its imported runs](img/providence-project.png)
 
-**Import a config / run folder** does the same for your own CLI work: point it at a core YAML config, run folders and study folders. Checkpoint files are Python pickles, which run code when loaded, so imported checkpoints are **untrusted** until you confirm they are your own ("Trust this run's checkpoint?"); until then the Lab refuses to load them.
+**Import a config / run folder** does the same for your own CLI work: point it at a core YAML config, run folders and study folders. Checkpoint files are Python pickles, which run code when loaded, so imported checkpoints are **untrusted** until you confirm they are your own ("Trust this run's checkpoint?"); until then the Lab refuses to load them, and **Build emulator** is refused too (it loads the checkpoint).
 
 ---
 

@@ -368,12 +368,25 @@ async def create_from_template(sctx, name: str, template: str, options: dict | N
     return {"row": row, "imported_runs": imported, "warnings": warnings}
 
 
-def _copy_into(pdir: Path, src: Path, sub: str) -> str:
+def _copy_into(pdir: Path, src: Path, sub: str, copied: dict[Path, str] | None = None) -> str:
+    """Copy ``src`` into ``pdir/sub`` and return its project-relative path.  ``copied`` (source → that path) is
+    shared by one import: a file named twice is copied once, and a different file with a name already taken
+    (``a/data.csv`` and a join's ``b/data.csv``) gets ``<stem>-2<suffix>`` instead of overwriting the first."""
+    key = src.resolve()
+    if copied is not None and key in copied and copied[key].startswith(f"{sub}/"):
+        return copied[key]
     dst_dir = pdir / sub
     dst_dir.mkdir(parents=True, exist_ok=True)
     dst = dst_dir / src.name
+    n = 2
+    while dst.exists():
+        dst = dst_dir / f"{src.stem}-{n}{src.suffix}"
+        n += 1
     shutil.copyfile(src, dst)
-    return f"{sub}/{src.name}"
+    rel = f"{sub}/{dst.name}"
+    if copied is not None:
+        copied[key] = rel
+    return rel
 
 
 async def import_config(sctx, *, config_path: str, name: str | None = None, copy_data: bool = False,
@@ -413,6 +426,7 @@ async def import_config(sctx, *, config_path: str, name: str | None = None, copy
         final = abs_raw
         if copy_data:
             final = absolutize_paths(abs_raw, base)          # a deep copy: the copies' paths replace these
+            copied: dict[Path, str] = {}
             for key in path_keys(final):
                 v = get_dotted(final, key)
                 if not isinstance(v, str) or not v:
@@ -423,7 +437,10 @@ async def import_config(sctx, *, config_path: str, name: str | None = None, copy
                     continue
                 sub = {"physics.forcing": "inputs/forcing", "climate.table": "inputs/climate",
                        "planner.layers": "inputs/layers"}.get(key, "data")
-                set_dotted(final, key, await asyncio.to_thread(_copy_into, pdir, p, sub))
+                rel = await asyncio.to_thread(_copy_into, pdir, p, sub, copied)
+                if Path(rel).name != p.name:
+                    warnings.append(f"{key}: {v} was copied as {rel} (another input already uses {sub}/{p.name})")
+                set_dotted(final, key, rel)
         else:
             sctx.paths.allow(base)
             for key in path_keys(final):

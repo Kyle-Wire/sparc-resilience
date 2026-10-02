@@ -155,6 +155,38 @@ describe("Design workbench", () => {
     expect((last.body as { doc: { name: string } }).doc.name).toBe("Corridor v3");
     expect(byText(container, ".save-status", "revision 2")).not.toBeNull();
   }, 30000);
+
+  it("previews, compiles and can run a stored 'Shade the hottest X%' scenario (top selection echoed with k: null, within: null)", async () => {
+    // GET /api/scenarios/{sid} after the template: pydantic echoes unset optional fields as null.
+    const where = { kind: "top", column: "pred:target", frac: 0.1, k: null, direction: "highest", within: null };
+    const edit = { lever: "Pct_Canopy", mode: "add", amount: 10, percentile: null, paved_share: null, per_cell_ref: null, where, label: null };
+    const sc = scenario("sc_t", { doc: doc({ name: "Shade the hottest 10%", anchor_run_id: null, edits: [edit as never] }) });
+    const sent: { preview: unknown[]; compile: unknown[] } = { preview: [], compile: [] };
+    fetchMock = mockFetch({
+      ...runRoutes(),
+      "GET /api/scenarios/sc_t": { body: sc },
+      [`POST /api/runs/${RID}/preview`]: (_u, init) => {
+        const body = JSON.parse(String(init.body));
+        sent.preview.push(body.edits);
+        return previewBody(body.request_seq as number, [-0.6, 0, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0, 0]);
+      },
+      [`POST /api/runs/${RID}/compile`]: (_u, init) => {
+        sent.compile.push(JSON.parse(String(init.body)).scenario.edits);
+        return { body: { content_hash: "h", portable: true, levers: {}, union_cells: 1, people: 12, warnings: [], est_exact_s: 2, emulator: { usable: true, hatched: false, reasons: [] } } };
+      },
+    });
+    navigate(`/r/${RID}/lab/s/sc_t`, { replace: true });
+    const { container } = render(<Design />);
+    await waitFor(() => container.querySelector<HTMLInputElement>(".scenario-editor input")?.value === "Shade the hottest 10%", 8000, "editor");
+    await waitFor(() => sent.preview.length > 0, 8000, "preview request");
+    await waitFor(() => byText(container, ".compile-panel dd", "12"), 8000, "compile people");
+    expect((sent.preview.at(-1) as { where: unknown }[])[0].where).toEqual(where);
+    expect((sent.compile.at(-1) as unknown[]).length).toBe(1);
+    expect(container.textContent).not.toContain("not a selection");
+    expect(container.textContent).not.toContain("Add an edit to compile it");
+    const run = byText(container, "button", "Run exact") as HTMLButtonElement;
+    expect(run.disabled).toBe(false);
+  }, 30000);
 });
 
 describe("Engine chip", () => {

@@ -139,6 +139,8 @@ type SelectionSpec =
   | { op: "not"; arg: SelectionSpec };
 // column namespaces: predictor:<c> | layer:<c> | pred:<target|pred|resid|halfwidth|dist_train_m> | response:<var>:<c>
 //                    | planner:<c> | configured:<slug> | result:<res_id>:delta
+// Stored docs and responses carry an unset optional field as null (top {frac|k: null, within: null},
+// buffer {radius_m|lever_range: null}, Edit {percentile, paved_share, per_cell_ref, where, label: null}); null means absent.
 
 type LayerMeta = { key: string; group: string; label: string; unit: string; scale: "seq"|"div"|"cat";
   center: number|null; decimals: number; mult: number; zero_blank: boolean; labels: string[]|null;
@@ -401,6 +403,8 @@ Errors:
 Body: `{name?: string, config_path: string, copy_data?: boolean = false, run_dirs?: string[], study_dirs?: string[], trust_pickles?: boolean = false}`
 → `201 {project: Project, runs: RunSummary[], studies: Study[], warnings: string[]}`.
 
+With `copy_data`, the data table, the join tables and the input files are copied into the project (`data/`, `inputs/<kind>/`). A file whose name another copied input already uses is copied as `<stem>-2<suffix>` (then `-3`, …) with a warning, and a file named by two keys is copied once.
+
 Errors: `404` (path), `422` (config invalid; `detail.errors`), `422 needs_config` (a run lacks provenance and no config fits it).
 
 ### `GET /api/projects/{pid}`
@@ -600,6 +604,8 @@ Errors: `422` (config errors), `409 preflight_failed` (`detail.preflight`, `acti
 
 ### `POST /api/runs/import`
 Body: `{dir: string, project_id?: string, config_path?: string, trust_pickles?: boolean = false}` → `201 RunSummary`.
+
+The run keeps the `run_id` of the folder's own `studio/launch.json` only when it is a plain id (`[A-Za-z0-9][A-Za-z0-9._-]*`, no `..`, at most 128 characters) that no other run folder holds; otherwise its id is derived like any imported run's (SPEC §4.3).
 
 Errors: `404`, `422 needs_config`, `422 mismatch` (ids or folds differ from the config).
 
@@ -1028,7 +1034,7 @@ Body: raw CSV with columns `id,lever,change` (a per-cell increment) **or** `id,l
   extrapolated_edited: number;
   realized: Record<string, { requested_mean: number; realized_mean: number; requested_total: number; realized_total: number; clipped_share: number }>;
   mediators: Record<string, { mean_change: number }>;
-  cost: { total: number; per_lever: Record<string, number>; cooling_per_cost: number|null };
+  cost: { total: number; per_lever: Record<string, number>; cooling_per_cost: number|null };  // −Σ delta / total: positive = cooler
   causal_check: { delta: number; lo: number; hi: number; model_within: boolean }|null;
   uncertainty: { estimation_95: [number,number]|null; specification: [number,number]|null; attribution: [number,number]|null;
                  causal_band: [number,number]|null; envelope: [number,number]|null; envelope_excludes_zero: boolean|null; sources: string[] }|null;
@@ -1205,7 +1211,7 @@ type Study = { id: string; project_id: string; kind: string; target_run_id: stri
 
 **`POST /api/runs/{rid}/actions/{kind}`**
 `kind ∈ baselines|planner|emulator|uncertainty|writeup`. Body: the kind's params (§8) → `202 Job`.
-Errors: `404 unknown_kind`, `422 requirements` (`detail.missing`, e.g. `planner.layers`), `409 no_checkpoint` (emulator), `422 validation` (params; an unknown `package` for the planner; uncertainty study ids that are not studies of that kind).
+Errors: `404 unknown_kind`, `422 requirements` (`detail.missing`, e.g. `planner.layers`), `409 no_checkpoint` (emulator), `409 untrusted_pickle` (emulator: the run was imported without trusting its checkpoint, SPEC §10.8; `action` re-imports it with `trust_pickles`), `422 validation` (params; an unknown `package` for the planner; uncertainty study ids that are not studies of that kind).
 
 **`POST /api/runs/{rid}/studies/{kind}`**
 `kind ∈ placebo|simcheck|multiverse|reproduce`. Body: params → `202 {study: Study, job: Job}`.
@@ -1646,6 +1652,7 @@ This section is the changelog of the contract after the completeness review (§1
 - View sections (§6.1): api.md fixes the section keys; their inner shapes are those of `studio-web/src/api/runs.ts` (`OverviewSections` … `ProvenanceSections`), which the server builds. Notably `accuracy.obs_pred_bins.counts` is x-major (predicted bin, observed bin), `resid_hist` is `{edges, counts}`, KPIs use `format: "delta"` for temperature changes and `"percent"` for 0–1 fractions, `scenarios.rows[].slug` is `scenario_slug(name)`, and row references (`top_cells[].row`, planner `sites[].row`, `pairs[].treated/control`) are run row indices.
 - The run hub computes hexagon means in the browser (the same keys as `sparc.core.planner.hex_ids`) instead of calling `GET /api/runs/{rid}/hex`. Map-legend and Relationships brushes become `{kind: "blob"}` selections (`PUT /api/runs/{rid}/blobs?kind=mask`), so they fit in a URL; the Accuracy histogram brush is the portable `{kind: "filter", column: "pred:resid", op: "between"}`.
 - Mission Control reads warning times for its timeline from `GET /api/jobs/{jid}/events?types=warning`; Pareto points are not events, so the S7 panel links to the Budget view.
+- View units (review, 2026-10-02): `causal.treatments[t].unit` is the **effect** unit, target per lever unit (`"°F per pp"`); the dose of `dr_curve.t` is in `units.levers[t]`. `response.literature.sparc[].cooling` (± `se`, `causal`) is a **rate per the literature step** (+0.10 cover or albedo, i.e. +10 pp of canopy), rescaled by core `literature.sparc_effects` from the uniform scenario whose realised `dose` is nearest the step, not that scenario's own cooling; the Response tab says so. The rows do not yet carry that scenario's `frac_extrapolated`; the client flags it (hollow point) when present.
 
 ### M3 (Scenario Lab)
 
@@ -1671,6 +1678,8 @@ This section is the changelog of the contract after the completeness review (§1
 - Engine state files: the `incompatible` state is recorded in `<run>/studio/engine/status.json` against the checkpoint, and its action is **Refit S2/S3** = `POST /api/runs/{rid}/rerun {use_current_config: false}`. The untrusted-checkpoint action is `POST /api/runs/import {dir, project_id, trust_pickles: true}`. A host that recycles itself writes `engine/recycle.json`; the executor re-opens the most recently used run at most once per 300 s. The engine memory estimate adds `SPARC_STUDIO_ENGINE_SLACK_GB` (default 1.0).
 - At server shutdown the engine host keeps running while an engine job is live (so it can be reattached), unless jobs are being stopped.
 - Packs are zip files. A decision pack is `draft` when its scenario has no exact result; a plan pack when its plan is unverified.
+- Unset optional fields come back as `null` (review, 2026-10-02): a stored scenario doc echoes them as pydantic defaults, e.g. a "Top %" `where` is `{kind: "top", …, frac: 0.1, k: null, within: null}` (the "Shade the hottest X%" and "Prioritise by footprint" templates) and a buffer in metres has `lever_range: null`. Clients treat `null` like an absent field; the Lab's validator, selection builder and descriptions do (before, a reloaded "Top %" edit was dropped as invalid, so it had no preview and Run exact stayed disabled).
+- `Result.cost.cooling_per_cost` is `−Σ delta / total cost`, so **positive = cooler**; a negative value is warming bought per cost unit, and the Lab's "What it buys" line and Cost KPI say "warming" for it.
 
 ### M4 (studies, exports, findings, integration)
 
@@ -1689,6 +1698,14 @@ This section is the changelog of the contract after the completeness review (§1
 - **Study children while they run**: a study child that is fitting has a live `run_state.json` and no `run.core` job of its own. The runs registry reports such a row (origin `study_child` or `reproduction`, a `study_id`, or a manifest whose `run_meta.study_id` is set) as `status: "running"` with its own origin, never `external_live`, and the watch-root watcher starts no `run.external` pseudo-job for it, also on a full rescan after a restart. Study-child run ids take `run_state.started_utc` before `manifest.created_utc`, so `sparc studio --reindex` finds the same id for a child indexed while it ran. The studies hooks re-derive the child rows at `run.dir`, `run.end` and at the end of the study (every child then, so a cancelled pass never leaves one `running`).
 - **Contract checks**: `tests/studio/openapi.snapshot.json` freezes the OpenAPI document; `studio-web/src/api/contract.check.ts` checks about 170 response and request shapes of the hand-written client types against the generated `schema.gen.ts`. Request bodies are checked for type and nullability only (defaulted server fields are marked required by the generator). Known differences can be allowed per check with `Gate<…>` (each allowance fails the typecheck once it no longer applies); none is left at release. The client types now accept `null` where the server sends it: `SystemInfo.versions.{numpy,pandas,fastapi}` and `web_build.{vite,react}`, `cache[].mtime`, `DataCheck.dose_scale[*].sd` and `doses_in_sd[]`, `ConfigHistoryEntry.saved_utc`, `matches_snapshot.{data,code,config}` (plan and run detail), the `Acf` arrays (lags without pairs) and `Comparison.equity` values (a group without cells); `DataCheck` has `elapsed_s`.
 - **Replay runner speed**: the end-to-end replay journey runs the fixture at `SPARC_STUDIO_REPLAY_SPEED=1` (§14) so it can reload mid-run; the runner's default stays 20.
+
+### Review fixes (2026-10-02)
+
+- **`post.emulator` and untrusted checkpoints** (§9, SPEC §10.8): the emulator unpickles `checkpoint.pkl`, so `POST /api/runs/{rid}/actions/emulator` answers `409 untrusted_pickle` (with the trust action `POST /api/runs/import {dir, project_id, config_path, trust_pickles: true}`) for a run imported without `trust_pickles`, as the engine does. A `post.emulator` job that reaches the scheduler another way (`POST /api/jobs`) fails its start-time preflight with `error.detail.code = "untrusted_pickle"` before any worker starts.
+- **Config sections of the wrong type** (§5): a saved config whose `data`, `physics`, `physics.roles`, `climate`, `optimize` or `planner` is not a mapping (`climate: on`, `data: 5`) no longer makes `GET /api/projects` and `GET /api/projects/{pid}` fail; the readiness spine treats the section as empty and the type error shows in the `config_valid` row.
+- **`Project.report`** values are strings or `null`: a number in the config's `report` block (`title: 2024`, `area: 12.5`) is returned as text, any other non-string as `null`. The save itself still reports the type issue.
+- **`POST /api/projects/import` with `copy_data`** never overwrites one copied input with another of the same file name: the later one is copied as `<stem>-2<suffix>` with a warning, and a file named by two keys is copied once (§5).
+- **Run import ids** (§6): `POST /api/runs/import` (and the run folders of `POST /api/projects/import`) use the `run_id` of a folder's own `studio/launch.json` only when it is a plain id no other folder holds; an absolute path, a `..` or a taken id falls back to the derived id. A refused import removes only the `<ws>/imports/<run_id>/` side folder it created.
 
 ### Documentation
 
