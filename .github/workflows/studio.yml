@@ -1,0 +1,175 @@
+name: studio
+
+# SPARC Studio checks (docs/studio/SPEC.md §14.6). Every push and pull request runs the
+# checks job; the nightly schedule (and a manual dispatch) adds the slow suites, the
+# studies and Providence journeys and the performance budgets.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: studio-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: "1"
+  OMP_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+
+jobs:
+  checks:
+    name: studio checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # the old-app guard diffs against the merge base
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: studio-web/package-lock.json
+
+      - name: Install (CPU torch, package with the studio extra, Playwright)
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[studio,dev]" pytest-timeout playwright build
+          python -m playwright install --with-deps chromium
+          echo "PLAYWRIGHT_CHROMIUM=$(python -c 'from playwright.sync_api import sync_playwright; p = sync_playwright().start(); print(p.chromium.executable_path); p.stop()')" >> "$GITHUB_ENV"
+
+      # 1
+      - name: Lint
+        run: ruff check sparc/studio sparc/core/progress.py sparc/core/runio.py
+
+      # 2
+      - name: Core tests
+        run: python -m pytest tests/core -q -o addopts="" -m "not slow and not integration" --timeout=900
+
+      # 3
+      - name: Studio backend tests
+        run: python -m pytest tests/studio -q -o addopts="" -m "not slow and not network and not e2e" --timeout=900
+
+      # 4
+      - name: Web app (install, generated API types, typecheck, tests incl. the TS reducer contract, build)
+        run: |
+          npm --prefix studio-web ci
+          npm --prefix studio-web run gen:api
+          git diff --exit-code studio-web/src/api/schema.gen.ts
+          npm --prefix studio-web run typecheck
+          npm --prefix studio-web test
+          python -m pytest tests/studio/test_reducer_contract.py tests/studio/test_openapi_snapshot.py -q -o addopts=""
+          npm --prefix studio-web run build
+          git diff --exit-code sparc/studio/static
+          untracked="$(git status --porcelain --untracked-files=all sparc/studio/static)"
+          if [ -n "$untracked" ]; then echo "the rebuild differs from the committed assets:"; echo "$untracked"; exit 1; fi
+
+      # 5
+      - name: Committed assets match their sources
+        run: python scripts/check_studio_assets.py
+
+      # 6
+      - name: End-to-end (replay, real fast run, accessibility)
+        env:
+          SPARC_E2E_ARTIFACTS: ${{ runner.temp }}/e2e
+        run: >
+          python -m pytest -q -o addopts="" --timeout=1800
+          tests/studio/e2e/test_e2e_replay.py
+          tests/studio/e2e/test_e2e_real_fast.py
+          tests/studio/e2e/test_e2e_a11y_responsive.py
+
+      - name: Upload e2e screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: studio-e2e-screenshots
+          path: ${{ runner.temp }}/e2e
+          if-no-files-found: ignore
+
+      # 7
+      - name: Wheel smoke test (build, clean venv, sparc studio serves index.html)
+        run: |
+          python -m build --wheel --outdir "${{ runner.temp }}/dist"
+          export SPARC_SMOKE_WHEEL="$(ls "${{ runner.temp }}"/dist/sparc-*.whl)"
+          export SPARC_SMOKE_FULL=1
+          export SPARC_SMOKE_PREINSTALL="torch --index-url https://download.pytorch.org/whl/cpu"
+          python -m pytest -q -o addopts="" --timeout=1800 tests/studio/e2e/test_wheel_smoke.py
+
+      # 8
+      - name: Documentation doctest
+        run: |
+          if [ -f docs/studio/doctest.py ]; then
+            python docs/studio/doctest.py
+          else
+            echo "docs/studio/doctest.py not present yet: skipped"
+          fi
+
+      # 9
+      - name: The old app is untouched
+        run: |
+          base_ref="${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}"
+          before="${{ github.event.before }}"
+          git fetch --no-tags origin "$base_ref" || true
+          if base="$(git merge-base "origin/$base_ref" HEAD 2>/dev/null)"; then
+            :
+          elif [ -n "$before" ] && git cat-file -e "$before^{commit}" 2>/dev/null; then
+            base="$before"
+          else
+            echo "No merge base with origin/$base_ref: cannot check that the old app is untouched"
+            exit 1
+          fi
+          changed="$(git diff --name-only "$base"...HEAD -- sparc-desktop sparc/server)"
+          if [ -n "$changed" ]; then
+            echo "Studio changes must not touch the old app (sparc-desktop/, sparc/server/):"
+            echo "$changed"
+            exit 1
+          fi
+
+  nightly:
+    name: studio nightly (slow, studies, Providence, performance)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install (CPU torch, package with the studio extra, Playwright)
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[studio,dev]" pytest-timeout playwright
+          python -m playwright install --with-deps chromium
+          echo "PLAYWRIGHT_CHROMIUM=$(python -c 'from playwright.sync_api import sync_playwright; p = sync_playwright().start(); print(p.chromium.executable_path); p.stop()')" >> "$GITHUB_ENV"
+
+      - name: Slow core tests
+        run: python -m pytest tests/core -q -o addopts="" -m "slow and not network" --timeout=3600
+
+      - name: Slow studio tests, studies and Providence journeys, performance budgets
+        env:
+          SPARC_E2E_ARTIFACTS: ${{ runner.temp }}/e2e
+        run: python -m pytest tests/studio -q -o addopts="" -m "slow and not network" --timeout=3600 -rxX
+
+      - name: Upload nightly screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: studio-nightly-screenshots
+          path: ${{ runner.temp }}/e2e
+          if-no-files-found: ignore

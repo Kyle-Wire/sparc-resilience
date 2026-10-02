@@ -47,4 +47,4 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e ".[dev,server]" python-docx httpx pytest-timeout
       - name: Legacy tests
-        run: python -m pytest tests -q -o addopts="" --ignore=tests/core --timeout=900
+        run: python -m pytest tests -q -o addopts="" --ignore=tests/core --ignore=tests/studio --timeout=900
