@@ -2,7 +2,7 @@
 // verdict table and Δ per sd vs real, simcheck grid + share strip + coverage + false positives +
 // bias-correction card, multiverse heatmaps and R² by variant, the reproduce checklist and the
 // benchmark effect shares. Shared by the Validation tab cards and the study page.
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import {
   useStudyView,
   type BenchmarkView,
@@ -601,9 +601,42 @@ export function BenchmarkResult({ view }: { view: BenchmarkView }) {
 
 // ---------------------------------------------------------------- dispatch
 
-/** Loads a study's view and renders it for its kind. */
-export function StudyViewPanel({ kind, studyId, units, workers, childRunId, empty }: { kind: ViewKind; studyId: string; units: string; workers?: number; childRunId?: string | null; empty?: ReactNode }) {
+/**
+ * While a study runs its view grows (simcheck replicates, multiverse variants, placebo re-fits),
+ * but `study.updated` only fires on status changes: a live panel refetches this often. A request
+ * still in flight is left to finish, so a slow view is never restarted before it answers.
+ */
+export const VIEW_REFRESH_MS = 10_000;
+
+/** Loads a study's view and renders it for its kind; `live` refreshes it while the study runs. */
+export function StudyViewPanel({
+  kind,
+  studyId,
+  units,
+  workers,
+  childRunId,
+  empty,
+  live = false,
+}: {
+  kind: ViewKind;
+  studyId: string;
+  units: string;
+  workers?: number;
+  childRunId?: string | null;
+  empty?: ReactNode;
+  live?: boolean;
+}) {
   const res = useStudyView(studyId, kind);
+  const loading = useRef(res.loading);
+  loading.current = res.loading;
+  const reload = res.reload;
+  useEffect(() => {
+    if (!live) return;
+    const h = setInterval(() => {
+      if (!loading.current && !(typeof document !== "undefined" && document.hidden)) void reload();
+    }, VIEW_REFRESH_MS);
+    return () => clearInterval(h);
+  }, [live, reload]);
   if (res.error && !res.data) return <EmptyState error={res.error} title="Could not load the study results" />;
   if (!res.data) return res.loading ? <p className="cap">Loading results…</p> : <>{empty ?? null}</>;
   const v = res.data;

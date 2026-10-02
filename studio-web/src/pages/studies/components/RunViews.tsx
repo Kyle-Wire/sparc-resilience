@@ -147,14 +147,31 @@ export function LiteratureResult({ rid }: { rid: string }) {
 
 // ---------------------------------------------------------------- emulator
 
-type EmulatorSummary = {
-  levers?: Record<string, { patch_pass_rate?: number | null; patch_mean_abs_err_median?: number | null; patch_mean_rel_err_median?: number | null; uniform_rel_err?: number | null; physics?: boolean | null }>;
-};
+type EmulatorLever = { patch_pass_rate?: number | null; patch_mean_abs_err_median?: number | null; patch_mean_rel_err_median?: number | null; uniform_rel_err?: number | null; physics?: boolean | null };
+export type EmulatorSummary = { levers?: Record<string, EmulatorLever> };
+
+/** emulator.json's per-lever validation block (`levers[v].validation`, with `uniform.rel_err`). */
+type EmulatorFile = { levers?: Record<string, { physics?: boolean | null; validation?: EmulatorLever & { uniform?: { rel_err?: number | null } | null } | null }> };
+
+/**
+ * The emulator's per-lever trust numbers: the manifest's `emulator` section (core's
+ * `emulator_summary`), else the same numbers read from emulator.json (runs whose manifest
+ * predates the section). The catalog output `emulator` serves emulator.npz, so it is not used.
+ */
+export async function fetchEmulatorSummary(rid: string, signal?: AbortSignal): Promise<EmulatorSummary> {
+  const m = await api.get<{ emulator?: EmulatorSummary | null }>(`/api/runs/${encodeURIComponent(rid)}/manifest`, undefined, signal);
+  if (m.emulator?.levers && Object.keys(m.emulator.levers).length) return m.emulator;
+  const f = await api.get<EmulatorFile>(`/api/runs/${encodeURIComponent(rid)}/files/raw`, { path: "emulator.json" }, signal);
+  const levers: Record<string, EmulatorLever> = {};
+  for (const [v, lv] of Object.entries(f.levers ?? {})) {
+    const val = lv.validation ?? {};
+    levers[v] = { ...val, physics: lv.physics ?? null, uniform_rel_err: val.uniform_rel_err ?? val.uniform?.rel_err ?? null };
+  }
+  return { levers };
+}
 
 export function EmulatorResult({ rid }: { rid: string }) {
-  const res = useResource<EmulatorSummary>(`run:${rid}:outputs:emulator`, (s) => api.get<EmulatorSummary>(`/api/runs/${encodeURIComponent(rid)}/outputs/emulator`, undefined, s), {
-    tags: [`run:${rid}:outputs`],
-  });
+  const res = useResource<EmulatorSummary>(`run:${rid}:outputs:emulator-summary`, (s) => fetchEmulatorSummary(rid, s), { tags: [`run:${rid}:outputs`] });
   if (res.error && !res.data) return <NotYet what="No emulator yet: build it to enable the Lab's instant preview." />;
   const levers = Object.entries(res.data?.levers ?? {});
   if (!levers.length) return <NotYet what={res.loading ? "Loading…" : "The emulator has no levers."} />;
@@ -198,10 +215,25 @@ export function WriteupResult({ rid }: { rid: string }) {
 // ---------------------------------------------------------------- truth vs recovered
 
 function truthNote(r: TruthRow): string {
-  if (r.quantity === "noise_sd") return "sanity bound: the held-out RMSE should not fall below the planted noise";
+  if (r.quantity === "noise_sd") {
+    // A bound, not a recovery: the held-out RMSE should not fall below the planted noise.
+    if (r.recovered === null) return "sanity bound: the held-out RMSE should not fall below the planted noise";
+    return r.recovered >= r.truth ? "bound holds: the held-out RMSE is above the planted noise" : "below the planted noise: the held-out error looks too good (check for leakage)";
+  }
   if (r.share === null) return "";
   const off = Math.abs(r.share - 1);
   return off <= 0.2 ? "recovered within 20%" : r.share < 1 ? `attenuated (${fmtPct(r.share)} of the truth)` : `overstated (${fmtPct(r.share)} of the truth)`;
+}
+
+/**
+ * The recovered value's 95% interval as a share of the truth, low end first. A negative truth
+ * (a cooling scenario) flips the order of the divided ends, so they are sorted.
+ */
+export function shareInterval(r: Pick<TruthRow, "recovered" | "se" | "truth">): [number, number] | null {
+  if (r.recovered === null || r.se === null || !r.truth) return null;
+  const a = (r.recovered - 1.96 * r.se) / r.truth;
+  const b = (r.recovered + 1.96 * r.se) / r.truth;
+  return a <= b ? [a, b] : [b, a];
 }
 
 export function TruthCard({ rid }: { rid: string }) {
@@ -212,7 +244,8 @@ export function TruthCard({ rid }: { rid: string }) {
   }
   const rows = res.data?.rows ?? [];
   if (!rows.length) return <p className="cap">{res.loading ? "Loading…" : "No planted quantities to compare."}</p>;
-  const ratio = rows.filter((r) => r.share !== null);
+  // The noise floor is a bound (RMSE ≥ noise), not a quantity to recover: it stays out of the share plot.
+  const ratio = rows.filter((r) => r.share !== null && r.quantity !== "noise_sd");
   return (
     <div className="stack">
       <div className="tablewrap">
@@ -252,13 +285,10 @@ export function TruthCard({ rid }: { rid: string }) {
         <DotRange
           title="Recovered ÷ planted"
           units="1 = recovered exactly"
-          rows={ratio.map((r) => ({
-            id: `${r.quantity}-${r.scenario ?? ""}`,
-            label: r.label,
-            est: r.share,
-            lo: r.recovered !== null && r.se !== null && r.truth ? (r.recovered - 1.96 * r.se) / r.truth : null,
-            hi: r.recovered !== null && r.se !== null && r.truth ? (r.recovered + 1.96 * r.se) / r.truth : null,
-          }))}
+          rows={ratio.map((r) => {
+            const band = shareInterval(r);
+            return { id: `${r.quantity}-${r.scenario ?? ""}`, label: r.label, est: r.share, lo: band?.[0] ?? null, hi: band?.[1] ?? null };
+          })}
           valueLabel="Share of the truth"
           decimals={2}
           rangeLabel="95% interval"

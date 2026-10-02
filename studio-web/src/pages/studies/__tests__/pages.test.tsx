@@ -3,7 +3,7 @@
 // reproduce checklist, benchmark shares, baselines forest, layered intervals) and Truth vs
 // recovered on demo runs; attach/detach; the hub's matrix links; the study page's child runs,
 // resume, simcheck merge and delete.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearResources } from "../../../api/resource";
 import { STUDY_KINDS } from "../../../api/studies";
 import { ProjectLayout } from "../../../layouts/ProjectLayout";
@@ -11,7 +11,7 @@ import { RunLayout } from "../../../layouts/RunLayout";
 import { navigate } from "../../../router";
 import { useJobs } from "../../../stores/jobs";
 import { byText, click, flush, mockFetch, render, waitFor, type MockHandler } from "../../../test/render";
-import StudiesHub, { cellHref, hubColumns } from "../StudiesHub";
+import StudiesHub, { cellHref, hubColumns, MATRIX_REFRESH_MS } from "../StudiesHub";
 import StudyPage, { canResume } from "../StudyPage";
 import Validation, { cardRows } from "../Validation";
 import { job, PID, projectDetail, RID, run, runDetail, simcheckView, statusRow, study } from "../__fixtures__/api";
@@ -140,7 +140,11 @@ describe("Validation tab", () => {
     const truth = container.querySelector('[aria-label="Truth vs recovered"]')!;
     expect(truth.querySelector('table[aria-label="Truth vs recovered"]')!.querySelectorAll("tbody tr")).toHaveLength(3);
     expect(truth.textContent).toContain("attenuated (60% of the truth)");
-    expect(truth.textContent).toContain("1 of 2 planted quantities are recovered within 20%");
+    expect(truth.textContent).toContain("1 of 2 planted quantities are recovered within 20%"); // the noise bound is not counted
+    expect(truth.textContent).toContain("bound holds");
+    const sharePlot = truth.querySelector('figure[data-chart="Recovered ÷ planted"]')!;
+    expect(sharePlot.textContent).toContain("Canopy +10 pp");
+    expect(sharePlot.textContent).not.toContain("Noise floor");
     expect(m.calls.some((c) => c.url === `/api/runs/${RID}/truth`)).toBe(true);
     m.restore();
   });
@@ -240,6 +244,35 @@ describe("Studies hub", () => {
   });
 });
 
+describe("Studies hub refresh", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("refetches the matrix while a cell runs", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const cell = (state: string) => ({ state, seconds: null, progress: 0.4, reason: null, job_id: "j_m", study_id: null, action: null });
+    const m = mockFetch({
+      [`GET /api/projects/${PID}`]: { body: projectDetail() },
+      [`GET /api/projects/${PID}/status-board`]: { body: { columns: [{ id: "multiverse", label: "Multiverse", group: "study" }], rows: [{ run: run(), cells: { multiverse: cell("running") } }] } },
+      [`GET /api/projects/${PID}/studies`]: { body: [] },
+      "GET /api/settings": { body: { threads_heavy: 4 } },
+      "POST /api/studies/estimate": { body: { est_s: 120, est_lo: 100, est_hi: 160, est_peak_rss_gb: 1, est_disk_gb: 0.01, n_children: 0 } },
+    });
+    navigate(`/p/${PID}/studies`, { replace: true });
+    const { container } = render(
+      <ProjectLayout pid={PID}>
+        <StudiesHub />
+      </ProjectLayout>,
+    );
+    await waitFor(() => container.querySelector('[aria-label="Studies by run"]'), 4000, "matrix");
+    const boards = () => m.calls.filter((c) => c.url === `/api/projects/${PID}/status-board`).length;
+    const before = boards();
+    vi.advanceTimersByTime(MATRIX_REFRESH_MS);
+    await flush(3);
+    expect(boards()).toBe(before + 1);
+    m.restore();
+  });
+});
+
 describe("Study page", () => {
   it("resumes only studies that ended without finishing", () => {
     expect(canResume({ status: "failed", origin: "studio" })).toBe(true);
@@ -303,6 +336,28 @@ describe("Study page", () => {
     await flush(4);
     expect(m.calls.find((c) => c.method === "DELETE")!.url).toBe("/api/studies/st_s?files=true");
     expect(window.location.pathname).toBe(`/p/${PID}/studies`);
+    m.restore();
+  });
+
+  it("never offers to delete an imported study's folder", async () => {
+    const st = study("st_imp", "multiverse", { origin: "imported" });
+    const m = mockFetch({
+      "GET /api/studies/st_imp": { body: st },
+      "GET /api/studies/st_imp/view": { body: { variants: [], effects: {}, priority: {}, stability: null } },
+      [`GET /api/runs/${RID}/views/overview`]: { body: vm("overview", {}) },
+      "DELETE /api/studies/st_imp": { body: { ok: true } },
+    });
+    navigate("/studies/st_imp", { replace: true });
+    const { container } = render(<StudyPage />);
+    await waitFor(() => byText(container, "button", "Delete"), 4000, "study page");
+    expect(byText(container, "button", "Resume")).toBeNull(); // imported folders are read-only
+    click(byText(container, "button", "Delete"));
+    await flush(2);
+    expect(byText(document.body, ".dialog label", "Also delete its folder")).toBeNull();
+    expect(document.body.textContent).toContain("never touched");
+    click(byText(document.body, ".dialog button", "Delete"));
+    await flush(4);
+    expect(m.calls.find((c) => c.method === "DELETE")!.url).toBe("/api/studies/st_imp?files=false");
     m.restore();
   });
 

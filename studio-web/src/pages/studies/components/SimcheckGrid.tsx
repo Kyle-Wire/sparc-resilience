@@ -59,8 +59,9 @@ export function SimcheckGrid({ view, workers = 1 }: { view: SimcheckView | null 
                   const c = grid.cells.get(cellKey(g, s));
                   if (!c) return <td key={s} data-status="none" aria-hidden="true" />;
                   const look = simCellLook(c, g, s, grid.span, dark);
+                  // backgroundColor, not the `background` shorthand: the stylesheet hatches gate failures with background-image.
                   return (
-                    <td key={s} data-status={c.status} data-redraw={look.redraw || undefined} data-fill={look.fill} style={{ background: look.fill, color: look.ink }} title={look.label} aria-label={look.label}>
+                    <td key={s} data-status={c.status} data-redraw={look.redraw || undefined} data-fill={look.fill} style={{ backgroundColor: look.fill, color: look.ink }} title={look.label} aria-label={look.label}>
                       {look.marker}
                     </td>
                   );
@@ -72,7 +73,7 @@ export function SimcheckGrid({ view, workers = 1 }: { view: SimcheckView | null 
       </div>
       <div className="sg-legend" aria-label="Grid legend">
         <span className="sg-ramp">
-          share {fmtNum(Math.max(0, 1 - grid.span), 1)}
+          share {fmtNum(1 - grid.span, 1)}
           <span className="bar" style={{ background: ramp }} aria-hidden="true" />
           {fmtNum(1 + grid.span, 1)} (1 = exact)
         </span>

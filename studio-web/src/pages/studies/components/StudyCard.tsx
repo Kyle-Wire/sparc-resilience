@@ -20,6 +20,7 @@ import { Link } from "../../../router";
 import { fmtRelative } from "../../../theme/format";
 import { AttachToggle, estimateText } from "./common";
 import type { FormContext } from "./KindForms";
+import { formFromParams } from "../model/params";
 import { LaunchPanel } from "./LaunchPanel";
 import { BaselinesResult, EmulatorResult, LiteratureResult, PlannerResult, UncertaintyResult, WriteupResult } from "./RunViews";
 import { StudyViewPanel } from "./StudyViews";
@@ -48,6 +49,9 @@ const STATE_TEXT: Record<StudyState, string> = {
   failed: "failed",
 };
 
+/** Kinds whose status row names a study whose params a new launch can start from. */
+const STUDY_PARAMS_KINDS = new Set<StudyKind>(["placebo", "simcheck", "multiverse", "reproduce", "benchmark"]);
+
 /** Whether the card has something to show as a result for this row. */
 export function hasResult(row: StudyStatusRow): boolean {
   if (row.kind === "literature") return row.state !== "not_run";
@@ -55,8 +59,9 @@ export function hasResult(row: StudyStatusRow): boolean {
   return row.state === "done" || row.state === "stale";
 }
 
-function Result({ row, rid, units, workers }: { row: StudyStatusRow; rid: string; units: string; workers?: number }) {
-  if (hasStudyView(row.kind) && row.study_id) return <StudyViewPanel kind={row.kind} studyId={row.study_id} units={units} workers={workers} />;
+function Result({ row, rid, units }: { row: StudyStatusRow; rid: string; units: string }) {
+  const live = row.state === "running" || row.state === "queued";
+  if (hasStudyView(row.kind) && row.study_id) return <StudyViewPanel kind={row.kind} studyId={row.study_id} units={units} live={live} />;
   switch (row.kind) {
     case "baselines":
       return <BaselinesResult rid={rid} headline={row.headline} />;
@@ -98,6 +103,8 @@ export function StudyCard({ row, rid, pid, units, ctx, open, extra }: StudyCardP
   const attachable = ATTACHABLE_KINDS.includes(row.kind) && !!row.study_id && row.attached !== null;
   const wide = row.kind === "simcheck" || row.kind === "multiverse" || row.kind === "placebo";
   const blocked = !row.requirements.ok;
+  // "Run again" starts from the latest study's settings (its custom variants, design, kinds…).
+  const prior = row.study_id && STUDY_PARAMS_KINDS.has(row.kind) ? ctx.studies.find((s) => s.id === row.study_id) ?? null : null;
   return (
     <Card
       as="article"
@@ -148,7 +155,16 @@ export function StudyCard({ row, rid, pid, units, ctx, open, extra }: StudyCardP
             {row.state === "not_run" ? "Set up and run" : "Run again"}
             {blocked ? <span className="cap"> · {row.requirements.missing.length || "some"} requirement{row.requirements.missing.length === 1 ? "" : "s"} missing</span> : null}
           </summary>
-          <LaunchPanel kind={row.kind} rid={rid} pid={pid} requirements={row.requirements} ctx={{ ...ctx, runId: rid }} />
+          {prior ? <p className="cap">Starts from the settings of the last study ({prior.id}).</p> : null}
+          <LaunchPanel
+            key={prior?.id ?? "new"}
+            kind={row.kind}
+            rid={rid}
+            pid={pid}
+            requirements={row.requirements}
+            ctx={{ ...ctx, runId: rid }}
+            initial={prior ? formFromParams(row.kind as LaunchableKind, prior.params) : undefined}
+          />
         </details>
       ) : row.action ? (
         <div className="sx-actions">

@@ -168,7 +168,7 @@ function Header({ study }: { study: Study }) {
   const remove = async () => {
     setBusy("delete");
     try {
-      await deleteStudy(study.id, withFiles);
+      await deleteStudy(study.id, withFiles && study.origin === "studio");
       toast("success", `${label} deleted`);
       invalidate("studies");
       if (study.target_run_id) invalidate(`run:${study.target_run_id}:studies`);
@@ -237,10 +237,14 @@ function Header({ study }: { study: Study }) {
         danger
         busy={busy === "delete"}
       >
-        <p>The study is removed from Studio{study.attached_runs.length ? ` and detached from ${study.attached_runs.length} run(s)` : ""}. Its child runs stay.</p>
-        <Check checked={withFiles} onChange={setWithFiles}>
-          Also delete its folder on disk
-        </Check>
+        <p>The study is removed from Studio{study.attached_runs.length ? ` and detached from ${study.attached_runs.length} run(s)` : ""}.</p>
+        {study.origin === "studio" ? (
+          <Check checked={withFiles} onChange={setWithFiles}>
+            Also delete its folder on disk and the child runs it holds
+          </Check>
+        ) : (
+          <p className="cap">The imported folder on disk is never touched; only Studio's record of it goes.</p>
+        )}
       </ConfirmDialog>
     </header>
   );
@@ -294,7 +298,15 @@ export default function StudyPage() {
       ) : null}
       {hasStudyView(kind) ? (
         <Card title="Results" eyebrow={KIND_LABELS[kind]}>
-          <StudyViewPanel kind={kind} studyId={study.id} units={units} workers={workers} childRunId={kind === "reproduce" ? study.children[0]?.id ?? null : null} empty={<p className="cap">No results yet.</p>} />
+          <StudyViewPanel
+            kind={kind}
+            studyId={study.id}
+            units={units}
+            workers={workers}
+            childRunId={kind === "reproduce" ? study.children[0]?.id ?? null : null}
+            empty={<p className="cap">No results yet.</p>}
+            live={ACTIVE.has(study.status)}
+          />
         </Card>
       ) : null}
       {kind === "simcheck" ? <SimcheckMergePanel study={study} /> : null}

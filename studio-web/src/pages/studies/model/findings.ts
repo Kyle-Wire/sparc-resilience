@@ -91,7 +91,8 @@ export function findingRuns(findings: readonly Finding[]): string[] {
  */
 export function findingHref(f: Pick<Finding, "url_state" | "view" | "run_id" | "project_id">): string {
   const u = (f.url_state ?? "").trim();
-  if (u.startsWith("/") && !u.startsWith("//")) return u;
+  // Only same-origin app paths: //host and /\host are protocol-relative URLs to another site.
+  if (u.startsWith("/") && !u.startsWith("//") && !u.startsWith("/\\")) return u;
   const q = u.replace(/^\?/, "");
   let path: string;
   try {

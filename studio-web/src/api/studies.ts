@@ -373,8 +373,9 @@ export function useProjectStudies(pid: string | null) {
   });
 }
 
+/** One study; also refetched on run events (`runs`), so child runs show up as they are indexed. */
 export function useStudy(stid: string | null) {
-  return useResource<Study>(stid ? `study:${stid}` : null, (s) => getStudy(stid!, s), { tags: stid ? [`study:${stid}`, "studies"] : [] });
+  return useResource<Study>(stid ? `study:${stid}` : null, (s) => getStudy(stid!, s), { tags: stid ? [`study:${stid}`, "studies", "runs"] : [] });
 }
 
 /** Same cache key as the tracker's child matrix, so both read one entry. */

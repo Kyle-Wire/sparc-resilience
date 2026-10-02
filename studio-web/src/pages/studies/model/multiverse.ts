@@ -24,7 +24,10 @@ export type OverrideRow = { key: string; value: string };
 export type CustomVariantDraft = { name: string; rows: OverrideRow[] };
 
 const NAME_RE = /^[a-z][a-z0-9_]*$/;
-const KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z0-9_-]+)*$/;
+/** A dotted config path, as the server validates it: identifier segments joined by dots. */
+const KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+/** Segments that would reach an object's prototype instead of a config key. */
+const UNSAFE_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 
 /**
  * An override value as typed: JSON when it parses (numbers, true/false, null, lists, objects,
@@ -65,21 +68,22 @@ export function customVariantsJson(drafts: readonly CustomVariantDraft[]): { val
     else if (!NAME_RE.test(name)) errors.push(`${where}: use lower-case letters, digits and underscores, starting with a letter.`);
     else if (BUILTIN_NAMES.includes(name)) errors.push(`${where} reuses a built-in variant name.`);
     else if (seen.has(name)) errors.push(`${where} is defined twice.`);
-    const changes: Record<string, unknown> = {};
+    // A Map keeps any key as data (an object literal would treat "__proto__" specially).
+    const changes = new Map<string, unknown>();
     for (const r of d.rows) {
       const key = r.key.trim();
       if (!key && !r.value.trim()) continue;
-      if (!KEY_RE.test(key)) {
+      if (!KEY_RE.test(key) || key.split(".").some((s) => UNSAFE_SEGMENTS.has(s))) {
         errors.push(`${where}: “${key || "(empty)"}” is not a dotted config key such as cv.block_m.`);
         continue;
       }
-      if (key in changes) errors.push(`${where} sets ${key} twice.`);
-      changes[key] = parseOverrideValue(r.value);
+      if (changes.has(key)) errors.push(`${where} sets ${key} twice.`);
+      changes.set(key, parseOverrideValue(r.value));
     }
-    if (!Object.keys(changes).length) errors.push(`${where} changes nothing: add a dotted key and a value.`);
+    if (!changes.size) errors.push(`${where} changes nothing: add a dotted key and a value.`);
     if (name && NAME_RE.test(name) && !BUILTIN_NAMES.includes(name) && !seen.has(name)) {
       seen.add(name);
-      if (Object.keys(changes).length) value[name] = changes;
+      if (changes.size) value[name] = Object.fromEntries(changes);
     }
   });
   return { value, errors };

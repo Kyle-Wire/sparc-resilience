@@ -1,7 +1,7 @@
 // Studies hub (`/p/:pid/studies`, SPEC §3.2, §8): the per-run status matrix of post-run actions
 // and studies (from the project Status Board), the project's studies list filtered by kind, and
 // the project-wide effect benchmark launch (it needs no run).
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { KIND_LABELS, useProjectStudies, useStatusBoard, useThreadsHeavy, type BoardCell, type Study, type StudyKind } from "../../api/studies";
 import type { RunSummary } from "../../api/types";
 import { Card } from "../../components/ui/Card";
@@ -36,8 +36,18 @@ function cellText(cell: BoardCell): string | undefined {
   return undefined;
 }
 
+/** Running cells carry progress that no global event updates: the matrix refetches this often while one runs. */
+export const MATRIX_REFRESH_MS = 10_000;
+
 function Matrix({ pid }: { pid: string }) {
   const board = useStatusBoard(pid);
+  const running = !!board.data?.rows.some((r) => Object.values(r.cells).some((c) => c.state === "running"));
+  const reload = board.reload;
+  useEffect(() => {
+    if (!running) return;
+    const h = setInterval(() => void reload(), MATRIX_REFRESH_MS);
+    return () => clearInterval(h);
+  }, [running, reload]);
   if (board.error && !board.data) return <EmptyState error={board.error} title="Could not load the status matrix" />;
   if (!board.data) return <p className="cap">Loading…</p>;
   const cols = hubColumns(board.data.columns);

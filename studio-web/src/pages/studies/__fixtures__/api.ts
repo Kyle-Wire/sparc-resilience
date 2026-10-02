@@ -146,7 +146,7 @@ export function study(id: string, kind: string, extra: Partial<Study> = {}): Stu
     target_run_id: RID,
     job_id: null,
     out_dir: `/w/projects/demo/studies/${id}`,
-    status: "done",
+    status: "succeeded",
     params: {},
     summary: null,
     origin: "studio",

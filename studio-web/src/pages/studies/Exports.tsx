@@ -42,6 +42,9 @@ import "./studies.css";
 
 const enc = encodeURIComponent;
 
+/** Study statuses of a finished study (`succeeded` from the job, `done`/`complete` on older rows). */
+const FINISHED_STUDY = new Set(["succeeded", "done", "complete"]);
+
 /** Create an export, put it at the top of the history and announce its job. */
 async function startExport<K extends ExportKind>(pid: string, kind: K, params: ExportParams[K]): Promise<Export | null> {
   try {
@@ -100,11 +103,16 @@ function PickList<T extends { id: string }>({ legend, items, picked, onChange, r
 
 export function ReportBuilder({ pid, rid }: { pid: string; rid: string }) {
   const [sel, setSel] = useState<ReportSelection>({ runId: rid, sections: [...DEFAULT_SECTIONS], resultIds: [], planIds: [], findingIds: [] });
-  useEffect(() => setSel((s) => (s.runId === rid ? s : { ...s, runId: rid, resultIds: [], planIds: [] })), [rid]);
   const results = useRunScenarios(rid);
   const scenarios = useScenarios(pid, { run: rid }, rid);
   const plans = usePlans(rid);
   const findings = useFindings(pid);
+  // Another run (only a run change resets the picks): its results and plans differ, and only the
+  // project-wide findings stay on offer.
+  useEffect(() => {
+    const projectWide = new Set((findings.data ?? []).filter((f) => f.run_id === null).map((f) => f.id));
+    setSel((s) => (s.runId === rid ? s : { ...s, runId: rid, resultIds: [], planIds: [], findingIds: s.findingIds.filter((id) => projectWide.has(id)) }));
+  }, [rid]);
   const [preview, setPreview] = useState<{ html: string | null; error: string | null; loading: boolean }>({ html: null, error: null, loading: false });
   const [busy, setBusy] = useState<"html" | "md" | null>(null);
 
@@ -282,10 +290,11 @@ function BundleCard({ pid, run }: { pid: string; run: RunSummary }) {
         </p>
       ) : null}
       <div className="sx-actions">
-        <Button icon="download" busy={busy} disabled={!chosen.length && !ckpt} onClick={() => void go()}>
+        {/* An empty `outputs` list means "every output" to the server, so at least one is required. */}
+        <Button icon="download" busy={busy} disabled={!chosen.length} onClick={() => void go()}>
           Build bundle
         </Button>
-        {total ? <span className="cap">≈ {fmtBytes(total)} before compression</span> : null}
+        {!chosen.length && choices.length ? <span className="cap">Pick at least one output.</span> : total ? <span className="cap">≈ {fmtBytes(total)} before compression</span> : null}
       </div>
     </Card>
   );
@@ -303,6 +312,10 @@ function GisCard({ pid, run }: { pid: string; run: RunSummary }) {
       {noCrs ? (
         <p className="callout" role="note">
           This run has no coordinate reference system, so GeoTIFF, GeoPackage and lon/lat cannot be written. Set the data CRS in Setup → Data and run again.
+        </p>
+      ) : grid.error && !grid.data ? (
+        <p className="callout" role="note">
+          The run's grid could not be read, so its layers cannot be exported yet: {errorMessage(grid.error)}
         </p>
       ) : null}
       <div className="sx-actions">
@@ -325,8 +338,8 @@ function GisCard({ pid, run }: { pid: string; run: RunSummary }) {
 
 function PageCard({ pid, run }: { pid: string; run: RunSummary }) {
   const studies = useProjectStudies(pid);
-  // Finished placebo suites (any study of the kind that is not still running or failed).
-  const placebo = (studies.data ?? []).filter((s) => s.kind === "placebo" && !["queued", "starting", "running", "cancelling", "failed"].includes(s.status));
+  // Finished placebo suites only: a cancelled or interrupted one has no placebo.json to read.
+  const placebo = (studies.data ?? []).filter((s) => s.kind === "placebo" && FINISHED_STUDY.has(s.status));
   const [study, setStudy] = useState("");
   const [busy, setBusy] = useState(false);
   return (

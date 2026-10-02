@@ -11,7 +11,7 @@ import { CustomVariants } from "../components/CustomVariants";
 import { LaunchPanel } from "../components/LaunchPanel";
 import { StudyCard } from "../components/StudyCard";
 import { customVariantsJson, draftsFromJson, parseOverrideValue, type CustomVariantDraft } from "../model/multiverse";
-import { defaultForm, paramProblems, paramsFor, type Forms } from "../model/params";
+import { defaultForm, formFromParams, paramProblems, paramsFor, type Forms } from "../model/params";
 import { job, PID, RID, statusRow, study } from "../__fixtures__/api";
 
 /** The params api.md §8 allows for each kind (additionalProperties: false). */
@@ -51,7 +51,13 @@ describe("paramsFor: the default forms", () => {
       workers: 1,
       threads: 1,
     });
-    expect(paramsFor("multiverse", defaultForm("multiverse"))).toEqual({ variants: ["baseline"], coarse_m: 60, workers: 1, threads: 1 });
+    // every built-in variant, as the CLI runs by default (core order)
+    expect(paramsFor("multiverse", defaultForm("multiverse"))).toEqual({
+      variants: ["baseline", "blocks_1km", "blocks_3km", "generic_forcing", "no_mediator", "no_physics", "spatial_plus", "focal_scale_1", "lag_1km", "no_gwrf"],
+      coarse_m: 60,
+      workers: 1,
+      threads: 1,
+    });
     expect(paramsFor("reproduce", defaultForm("reproduce"))).toEqual({ stages: ["S0", "S1", "S2", "S3"], tol_r2: 0.01, tol_effect: 0.05 });
     expect(paramsFor("benchmark", defaultForm("benchmark"))).toEqual({ seed: 0, ab: true, epochs: 150, n: 96 });
     for (const k of KINDS) {
@@ -79,6 +85,42 @@ describe("paramsFor: the default forms", () => {
     expect(paramProblems("placebo", { ...defaultForm("placebo"), kinds: [] }, null)).toHaveLength(1);
     expect(paramProblems("simcheck", { ...defaultForm("simcheck"), design: { physics: 0, additive: 0, own_only: 0, coarse_scale: 0, confounded: 0, null: 0 } }, null)[0]).toMatch(/no replicates/);
     expect(paramProblems("planner", { ...defaultForm("planner"), thresholds: "ninety" }, null)[0]).toMatch(/Thresholds/);
+    // the server requires tolerances > 0
+    expect(paramProblems("reproduce", { ...defaultForm("reproduce"), tol_r2: 0 }, null)[0]).toMatch(/greater than zero/);
+    expect(paramProblems("reproduce", { ...defaultForm("reproduce"), tol_effect: 0 }, null)).toHaveLength(1);
+  });
+});
+
+describe("formFromParams: run again with a study's settings", () => {
+  it("rebuilds the form so the same params are posted again", () => {
+    const edited: { [K in "placebo" | "simcheck" | "multiverse" | "reproduce" | "benchmark"]: Forms[K] } = {
+      placebo: { ...defaultForm("placebo"), kinds: ["shift"], fine: true, seed: 3, grf_range_m: 900 },
+      simcheck: { ...defaultForm("simcheck"), design: { physics: 2, additive: 0, own_only: 0, coarse_scale: 1, confounded: 0, null: 2 }, coarse_m: 120, epochs: 50, workers: 2, threads: 2 },
+      multiverse: { ...defaultForm("multiverse"), variants: ["baseline", "no_gwrf"], custom: [{ name: "big", rows: [{ key: "cv.block_m", value: "2500" }] }], fine: true },
+      reproduce: { stages: ["S0", "S1", "S2", "S3", "S4"], tol_r2: 0.02, tol_effect: 0.1 },
+      benchmark: { seed: 4, ab: false, epochs: 30, n: 48 },
+    };
+    for (const kind of Object.keys(edited) as (keyof typeof edited)[]) {
+      const params = paramsFor(kind, edited[kind] as never) as unknown as Record<string, unknown>;
+      expect(paramsFor(kind, formFromParams(kind, params) as never), kind).toEqual(params);
+    }
+    // a continued simulation check is not continued again; missing params keep the defaults
+    expect(formFromParams("simcheck", { design: { physics: 1 }, continue_study_id: "st_old" }).continue_study_id).toBe("");
+    expect(formFromParams("placebo", null)).toEqual(defaultForm("placebo"));
+    // a study stored without a variant list ran every built-in variant
+    expect(formFromParams("multiverse", { variants: null, coarse_m: 60, workers: 1, threads: 1 }).variants).toEqual(defaultForm("multiverse").variants);
+  });
+
+  it("a card for a finished study launches again with that study's params", async () => {
+    const prior = study("st_m1", "multiverse", { params: { variants: ["baseline", "blocks_3km"], custom_variants: { big: { "cv.block_m": 2500 } }, coarse_m: null, workers: 1, threads: 2 } });
+    const m = mockFetch(routesFor("multiverse"));
+    const { container } = render(<StudyCard row={statusRow("multiverse", { state: "done", study_id: "st_m1" })} rid={RID} pid={PID} units="°F" ctx={{ studies: [prior], threadsHeavy: 4 }} />);
+    expect(container.textContent).toContain("Starts from the settings of the last study (st_m1)");
+    click(container.querySelector('[data-launch="multiverse"]'));
+    await flush(4);
+    const post = m.calls.find((c) => c.url === `/api/runs/${RID}/studies/multiverse`)!;
+    expect(post.body).toEqual({ variants: ["baseline", "blocks_3km"], custom_variants: { big: { "cv.block_m": 2500 } }, coarse_m: null, workers: 1, threads: 2 });
+    m.restore();
   });
 });
 
@@ -119,6 +161,16 @@ describe("custom multiverse variants", () => {
     expect(r.errors.join("\n")).toMatch(/changes nothing/);
     // only well-formed, non-empty, first-defined variants are kept (the errors block the launch anyway)
     expect(r.value).toEqual({ dup: { "ok.key": 3 }, twice: { "a.b": 2 } });
+  });
+
+  it("accepts only keys the server accepts (identifier segments) and never prototype keys", () => {
+    const bad = (key: string) => customVariantsJson([{ name: "v", rows: [{ key, value: "1" }] }]);
+    for (const key of ["cv.2nd", "a.b-c", "cv.", ".cv", "a..b", "__proto__", "a.__proto__.b", "models.constructor"]) {
+      expect(bad(key).errors.join(), key).toMatch(/not a dotted config key/);
+      expect(bad(key).value, key).toEqual({});
+    }
+    expect(bad("cv._private").errors).toEqual([]);
+    expect(bad("physics.lw_net").value).toEqual({ v: { "physics.lw_net": 1 } });
   });
 
   it("the editor builds the JSON from typed rows", () => {
@@ -181,6 +233,10 @@ describe("LaunchPanel posts each kind to its endpoint", () => {
   it("multiverse: ticked variants and a custom variant reach the body", async () => {
     const m = mockFetch(routesFor("multiverse"));
     const { container } = render(<LaunchPanel kind="multiverse" rid={RID} pid={PID} ctx={{ studies: [], threadsHeavy: 4 }} />);
+    // every built-in variant starts ticked; the baseline cannot be unticked
+    expect([...container.querySelectorAll('[aria-label="Built-in variants"] input:checked')]).toHaveLength(10);
+    click(byText(container, "button", "Baseline only"));
+    expect((byText(container, "label", "baseline")!.querySelector("input") as HTMLInputElement).checked).toBe(true);
     click(byText(container, "label", "1 km CV blocks")!.querySelector("input"));
     click(byText(container, "label", "no GW random forest")!.querySelector("input"));
     click(byText(container, "button", "Add custom variant"));

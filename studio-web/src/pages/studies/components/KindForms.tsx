@@ -50,11 +50,20 @@ function studyOption(s: Study): string {
   return `${label ?? s.id} · ${s.status} · ${fmtDate(s.created_utc)}${s.target_run_id ? ` · run ${s.target_run_id}` : ""}`;
 }
 
-/** Studies of one kind usable as a source: finished first, this run's first. */
+/** Statuses of a study that ended; `succeeded` is the finished one (`done`/`complete` on older rows). */
+const FINISHED = new Set(["succeeded", "done", "complete"]);
+const ACTIVE = new Set(["queued", "blocked", "starting", "running", "cancelling"]);
+
+/** Studies of one kind, this run's first, newest first. */
 function studiesOf(ctx: FormContext, kind: string): Study[] {
   return ctx.studies
     .filter((s) => s.kind === kind)
     .sort((a, b) => Number(b.target_run_id === ctx.runId) - Number(a.target_run_id === ctx.runId) || b.created_utc.localeCompare(a.created_utc));
+}
+
+/** Finished studies of one kind: the uncertainty report reads their final summaries. */
+function finishedOf(ctx: FormContext, kind: string): Study[] {
+  return studiesOf(ctx, kind).filter((s) => FINISHED.has(s.status));
 }
 
 function CellSize({ id, fine, coarse, onChange, hint }: { id: string; fine: boolean; coarse: number; onChange: (fine: boolean, coarse: number) => void; hint?: ReactNode }) {
@@ -139,9 +148,9 @@ function EmulatorEditor({ form, onChange }: EditorProps<"emulator">) {
 function UncertaintyEditor({ form, onChange, ctx }: EditorProps<"uncertainty">) {
   const f = form as UncertaintyForm;
   const id = useId();
-  const mv = studiesOf(ctx, "multiverse");
-  const sc = studiesOf(ctx, "simcheck");
-  const pl = studiesOf(ctx, "placebo");
+  const mv = finishedOf(ctx, "multiverse");
+  const sc = finishedOf(ctx, "simcheck");
+  const pl = finishedOf(ctx, "placebo");
   return (
     <div className="stack" style={{ gap: 10 }}>
       <Seg
@@ -185,7 +194,7 @@ function UncertaintyEditor({ form, onChange, ctx }: EditorProps<"uncertainty">) 
                 </Check>
               ))
             ) : (
-              <span className="cap">No simulation-check studies in this project.</span>
+              <span className="cap">No finished simulation-check study in this project.</span>
             )}
           </fieldset>
         </div>
@@ -231,7 +240,8 @@ export function SimcheckEditor({ form, onChange, ctx }: EditorProps<"simcheck">)
   const id = useId();
   const total = designTotal(f.design);
   const setN = (g: SimGenerator, n: number) => onChange({ ...f, design: { ...f.design, [g]: Math.max(0, Math.round(n)) } });
-  const prior = studiesOf(ctx, "simcheck").filter((s) => !ctx.runId || s.target_run_id === ctx.runId);
+  // Only this run's Studio studies that are not running can be continued (the server refuses the others).
+  const prior = studiesOf(ctx, "simcheck").filter((s) => (!ctx.runId || s.target_run_id === ctx.runId) && s.origin === "studio" && !ACTIVE.has(s.status));
   return (
     <div className="stack" style={{ gap: 10 }}>
       <div className="tablewrap">
@@ -358,10 +368,10 @@ function ReproduceEditor({ form, onChange }: EditorProps<"reproduce">) {
       </fieldset>
       <div className="sx-formgrid">
         <FormField id={`${id}-r2`} label="R² tolerance">
-          <NumberField id={`${id}-r2`} value={f.tol_r2} min={0} max={1} step={0.005} onChange={(v) => onChange({ ...f, tol_r2: v ?? 0.01 })} />
+          <NumberField id={`${id}-r2`} value={f.tol_r2} min={0.0001} max={1} step={0.005} onChange={(v) => onChange({ ...f, tol_r2: v ?? 0.01 })} />
         </FormField>
         <FormField id={`${id}-eff`} label="Effect tolerance (relative)">
-          <NumberField id={`${id}-eff`} value={f.tol_effect} min={0} max={1} step={0.01} onChange={(v) => onChange({ ...f, tol_effect: v ?? 0.05 })} />
+          <NumberField id={`${id}-eff`} value={f.tol_effect} min={0.0001} max={1} step={0.01} onChange={(v) => onChange({ ...f, tol_effect: v ?? 0.05 })} />
         </FormField>
       </div>
     </div>

@@ -90,6 +90,7 @@ export function truthRows(): TruthRow[] {
   return [
     { quantity: "canopy_scenario", label: "Canopy +10 pp, city mean ΔT", truth: -1.0, recovered: -0.85, se: 0.05, share: 0.85, unit: "°F", scenario: "canopy +10" },
     { quantity: "footprint_mean", label: "Mean canopy footprint per pp", truth: -0.1, recovered: -0.06, se: null, share: 0.6, unit: "°F/pp", scenario: null },
-    { quantity: "noise_sd", label: "Noise floor", truth: 0.3, recovered: 0.34, se: null, share: null, unit: "°F", scenario: null },
+    // the server reports a share for the noise floor too (recovered ÷ truth); it is a bound, not a recovery
+    { quantity: "noise_sd", label: "Noise floor", truth: 0.3, recovered: 0.34, se: null, share: 0.34 / 0.3, unit: "°F", scenario: null },
   ];
 }

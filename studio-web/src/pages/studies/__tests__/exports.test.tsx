@@ -11,7 +11,7 @@ import { fmtBytes } from "../../../theme/format";
 import { byText, click, flush, mockFetch, render, waitFor, type MockHandler } from "../../../test/render";
 import Exports, { ExportHistory, ReportBuilder } from "../Exports";
 import { DEFAULT_SECTIONS, inertPreview, orderedSections, previewBody, reportParams, withSelection, type ReportSelection } from "../model/report";
-import { exportRow, finding, job, output, PID, projectDetail, RID } from "../__fixtures__/api";
+import { exportRow, finding, job, output, PID, projectDetail, RID, study } from "../__fixtures__/api";
 
 const HOSTILE = `<!doctype html><html><head><title>Report</title><script>window.parent.hacked = 1</script></head>
 <body onload="steal()"><h1>Demo city report</h1><img src="x.png" onerror="steal()"><a href="javascript:steal()">link</a>
@@ -70,6 +70,17 @@ describe("report model", () => {
     expect(out).toContain("<h1>Demo city report</h1>");
     expect(out).toContain("<circle");
     expect(out).toMatch(/Content-Security-Policy/);
+  });
+
+  it("drops <base> and <meta http-equiv> (a refresh would navigate the frame away), keeping its own CSP", () => {
+    const out = inertPreview(
+      `<html><head><meta charset="utf-8"><base href="https://example.org/"><meta http-equiv="refresh" content="0;url=https://example.org"></head><body><p>ok</p></body></html>`,
+    );
+    expect(out).not.toMatch(/<base/i);
+    expect(out).not.toMatch(/refresh/i);
+    expect(out).toMatch(/charset/);
+    expect(out.match(/http-equiv/gi)).toHaveLength(1);
+    expect(out).toContain("script-src 'none'");
   });
 });
 
@@ -160,6 +171,27 @@ describe("ExportHistory", () => {
 });
 
 describe("Exports page", () => {
+  it("explains a disabled GIS pack when the run's grid cannot be read", async () => {
+    const m = mockFetch(
+      builderRoutes({
+        [`GET /api/projects/${PID}`]: { body: projectDetail() },
+        [`GET /api/runs/${RID}/outputs`]: { body: { outputs: [], tabs: [] } },
+        [`GET /api/runs/${RID}/grid`]: { status: 404, body: { error: { code: "output_missing", message: "The run has no predictions yet" } } },
+        [`GET /api/projects/${PID}/studies`]: { body: [] },
+      }),
+    );
+    navigate(`/p/${PID}/exports`, { replace: true });
+    const { container } = render(
+      <ProjectLayout pid={PID}>
+        <Exports />
+      </ProjectLayout>,
+    );
+    const gis = await waitFor(() => container.querySelector('[aria-label="GIS pack"]'), 4000, "gis card");
+    await waitFor(() => gis.textContent!.includes("no predictions yet"), 3000, "grid error");
+    expect((byText(gis, "button", "Build GIS pack") as HTMLButtonElement).disabled).toBe(true);
+    m.restore();
+  });
+
   it("bundles the ticked outputs with the checkpoint (size warning) and disables the GIS pack without a CRS", async () => {
     const m = mockFetch(
       builderRoutes({
@@ -171,7 +203,9 @@ describe("Exports page", () => {
           },
         },
         [`GET /api/runs/${RID}/grid`]: { body: { n: 4, nx: 2, ny: 2, dx_m: 30, x0_m: 0, y0_m: 0, crs: null, coord_scale: 1, has_lonlat: false, bounds_lonlat: null, corners: null, ids_kind: "int", zones: [], n_folds: 5, units: { target: "°F" }, background: null, etag: "g" } },
-        [`GET /api/projects/${PID}/studies`]: { body: [] },
+        [`GET /api/projects/${PID}/studies`]: {
+          body: [study("st_ok", "placebo"), study("st_cancelled", "placebo", { status: "cancelled" }), study("st_run", "placebo", { status: "running" }), study("st_sim", "simcheck")],
+        },
       }),
     );
     navigate(`/p/${PID}/exports`, { replace: true });
@@ -197,7 +231,16 @@ describe("Exports page", () => {
     await waitFor(() => gis.textContent!.includes("no coordinate reference system"), 3000, "crs note");
     expect((byText(gis, "button", "Build GIS pack") as HTMLButtonElement).disabled).toBe(true);
 
+    // an empty `outputs` list would mean "every output" to the server: at least one is required
+    click(byText(bundle, "button", "None"));
+    await flush(2);
+    expect((byText(bundle, "button", "Build bundle") as HTMLButtonElement).disabled).toBe(true);
+    expect(bundle.textContent).toContain("Pick at least one output");
+
     const page = container.querySelector('[aria-label="Standalone results page"]')!;
+    // only finished placebo suites can feed the page
+    await waitFor(() => page.querySelectorAll("#page-placebo option").length > 1, 3000, "placebo options");
+    expect([...page.querySelectorAll<HTMLOptionElement>("#page-placebo option")].map((o) => o.value)).toEqual(["", "st_ok"]);
     click(byText(page, "button", "Build results page"));
     await flush(4);
     const pagePost = m.calls.filter((c) => c.method === "POST" && c.url === "/api/exports").find((c) => (c.body as { kind: string }).kind === "page")!;

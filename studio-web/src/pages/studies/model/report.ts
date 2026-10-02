@@ -44,15 +44,16 @@ const URL_ATTRS = /^(href|src|xlink:href|action|formaction|srcdoc)$/i;
 
 /**
  * The preview HTML made inert for the sandboxed iframe: script, iframe, object and embed
- * elements, `on*` handlers and `javascript:` URLs are removed, and a CSP meta forbids scripts.
- * The iframe's empty `sandbox` already blocks scripts; this keeps the document itself clean.
+ * elements, `<base>`, `<meta http-equiv>` (a refresh would navigate the frame away), `on*`
+ * handlers and `javascript:` URLs are removed, and a CSP meta forbids scripts. The iframe's
+ * empty `sandbox` already blocks scripts; this keeps the document itself clean.
  */
 export function inertPreview(html: string): string {
   if (typeof DOMParser === "undefined") {
     return html.replace(/<script\b[\s\S]*?<\/script\s*>/gi, "").replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
   }
   const doc = new DOMParser().parseFromString(html, "text/html");
-  for (const el of [...doc.querySelectorAll("script, iframe, object, embed, frame, frameset")]) el.remove();
+  for (const el of [...doc.querySelectorAll("script, iframe, object, embed, frame, frameset, base, meta[http-equiv]")]) el.remove();
   for (const el of [...doc.querySelectorAll("*")]) {
     for (const a of [...el.attributes]) {
       if (/^on/i.test(a.name) || (URL_ATTRS.test(a.name) && /^\s*(javascript|vbscript):/i.test(a.value))) el.removeAttribute(a.name);

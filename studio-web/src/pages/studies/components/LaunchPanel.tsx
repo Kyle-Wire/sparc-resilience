@@ -29,7 +29,6 @@ export type LaunchPanelProps<K extends LaunchableKind> = {
   ctx: FormContext;
   /** Start from these form values (e.g. a study's previous params). */
   initial?: Forms[K];
-  launchLabel?: string;
   onLaunched?: (r: LaunchResult) => void;
 };
 
@@ -50,7 +49,7 @@ export function RequirementList({ missing }: { missing: string[] }) {
   );
 }
 
-export function LaunchPanel<K extends LaunchableKind>({ kind, rid, pid, requirements, ctx, initial, launchLabel, onLaunched }: LaunchPanelProps<K>) {
+export function LaunchPanel<K extends LaunchableKind>({ kind, rid, pid, requirements, ctx, initial, onLaunched }: LaunchPanelProps<K>) {
   const [form, setForm] = useState<Forms[K]>(() => initial ?? defaultForm(kind));
   const [busy, setBusy] = useState(false);
   const [serverMissing, setServerMissing] = useState<string[]>([]);
@@ -154,7 +153,7 @@ export function LaunchPanel<K extends LaunchableKind>({ kind, rid, pid, requirem
       ) : null}
       <div className="sx-actions">
         <Button variant="primary" icon="play" busy={busy} disabled={blocked || problems.length > 0} onClick={() => void launch()} data-launch={kind}>
-          {launchLabel ?? `Run ${KIND_LABELS[kind].toLowerCase()}`}
+          {`Run ${KIND_LABELS[kind].toLowerCase()}`}
         </Button>
         {blocked ? <span className="cap">Disabled until the requirements above are met.</span> : null}
       </div>

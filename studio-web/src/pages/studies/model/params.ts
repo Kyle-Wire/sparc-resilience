@@ -19,7 +19,7 @@ import {
   type StudyParams,
   type UncertaintyParams,
 } from "../../../api/studies";
-import { BASELINE_VARIANT, customVariantsJson, type CustomVariantDraft } from "./multiverse";
+import { BASELINE_VARIANT, BUILTIN_NAMES, customVariantsJson, draftsFromJson, type CustomVariantDraft } from "./multiverse";
 
 /** sparc.core.baselines.BASELINES with their labels. */
 export const BASELINE_MODELS: readonly { id: string; label: string }[] = [
@@ -84,7 +84,8 @@ export function defaultForm<K extends LaunchableKind>(kind: K): Forms[K] {
     writeup: {},
     placebo: { kinds: [...PLACEBO_KINDS], fine: false, coarse_m: 60, seed: 0, grf_range_m: 600 },
     simcheck: { design: { ...DEFAULT_DESIGN }, fine: false, coarse_m: 90, epochs: 200, workers: 1, threads: 1, continue_study_id: "" },
-    multiverse: { variants: [BASELINE_VARIANT], custom: [], fine: false, coarse_m: 60, workers: 1, threads: 1 },
+    // Every built-in variant, as `sparc core multiverse` runs by default (baseline alone compares nothing).
+    multiverse: { variants: [...BUILTIN_NAMES], custom: [], fine: false, coarse_m: 60, workers: 1, threads: 1 },
     reproduce: { stages: ["S0", "S1", "S2", "S3"], tol_r2: 0.01, tol_effect: 0.05 },
     benchmark: { seed: 0, ab: true, epochs: 150, n: 96 },
   };
@@ -193,6 +194,67 @@ export function paramsFor<K extends LaunchableKind>(kind: K, form: Forms[K]): St
   throw new Error(`unknown kind ${String(kind)}`);
 }
 
+const num = (v: unknown, fallback: number): number => (typeof v === "number" && Number.isFinite(v) ? v : fallback);
+
+/** The cell-size fields of a stored `coarse_m` (null = the fine grid). */
+function cellOf(v: unknown, fallback: number): { fine: boolean; coarse_m: number } {
+  return v === null ? { fine: true, coarse_m: fallback } : { fine: false, coarse_m: num(v, fallback) };
+}
+
+/**
+ * A launch form back from a study's stored params (`Study.params`), so "Run again" starts from
+ * the last study's settings; anything missing or unknown keeps the default. A simulation check
+ * starts a new study (`continue_study_id` is never carried over).
+ */
+export function formFromParams<K extends LaunchableKind>(kind: K, params: Record<string, unknown> | null | undefined): Forms[K] {
+  const base = defaultForm(kind);
+  if (!params) return base;
+  const list = (v: unknown): unknown[] | null => (Array.isArray(v) ? v : null);
+  switch (kind) {
+    case "placebo": {
+      const f = base as PlaceboForm;
+      const kinds = PLACEBO_KINDS.filter((k) => (list(params.kinds) ?? f.kinds).includes(k));
+      const out: PlaceboForm = { ...f, ...cellOf(params.coarse_m, f.coarse_m), kinds: kinds.length ? kinds : f.kinds, seed: num(params.seed, f.seed), grf_range_m: num(params.grf_range_m, f.grf_range_m) };
+      return out as Forms[K];
+    }
+    case "simcheck": {
+      const f = base as SimcheckForm;
+      const d = params.design && typeof params.design === "object" ? (params.design as Record<string, unknown>) : {};
+      const design = Object.fromEntries(SIM_GENERATORS.map((g) => [g, Math.max(0, Math.round(num(d[g], params.design ? 0 : f.design[g])))])) as Record<SimGenerator, number>;
+      const out: SimcheckForm = { ...f, ...cellOf(params.coarse_m, f.coarse_m), design, epochs: num(params.epochs, f.epochs), workers: num(params.workers, f.workers), threads: num(params.threads, f.threads), continue_study_id: "" };
+      return out as Forms[K];
+    }
+    case "multiverse": {
+      const f = base as MultiverseForm;
+      const v = list(params.variants);
+      const custom = params.custom_variants && typeof params.custom_variants === "object" ? (params.custom_variants as Record<string, Record<string, unknown>>) : null;
+      const out: MultiverseForm = {
+        ...f,
+        ...cellOf(params.coarse_m, f.coarse_m),
+        // no list = every built-in variant (core's default)
+        variants: v ? BUILTIN_NAMES.filter((n) => n === BASELINE_VARIANT || v.includes(n)) : [...BUILTIN_NAMES],
+        custom: draftsFromJson(custom),
+        workers: num(params.workers, f.workers),
+        threads: num(params.threads, f.threads),
+      };
+      return out as Forms[K];
+    }
+    case "reproduce": {
+      const f = base as ReproduceForm;
+      const st = list(params.stages);
+      const out: ReproduceForm = { stages: st ? REPRODUCE_STAGES.filter((x) => st.includes(x)) : f.stages, tol_r2: num(params.tol_r2, f.tol_r2), tol_effect: num(params.tol_effect, f.tol_effect) };
+      return out as Forms[K];
+    }
+    case "benchmark": {
+      const f = base as BenchmarkForm;
+      const out: BenchmarkForm = { seed: num(params.seed, f.seed), ab: typeof params.ab === "boolean" ? params.ab : f.ab, epochs: num(params.epochs, f.epochs), n: num(params.n, f.n) };
+      return out as Forms[K];
+    }
+    default:
+      return base;
+  }
+}
+
 /** Why a form cannot be launched yet (empty = ready). `threadsHeavy` bounds workers × threads. */
 export function paramProblems<K extends LaunchableKind>(kind: K, form: Forms[K], threadsHeavy: number | null): string[] {
   const out: string[] = [];
@@ -250,7 +312,8 @@ export function paramProblems<K extends LaunchableKind>(kind: K, form: Forms[K],
     }
     case "reproduce": {
       const f = form as ReproduceForm;
-      if (!(f.tol_r2 >= 0) || !(f.tol_effect >= 0)) out.push("Tolerances cannot be negative.");
+      // A zero tolerance would fail on float noise alone; the server refuses it too.
+      if (!(f.tol_r2 > 0) || !(f.tol_effect > 0)) out.push("Tolerances must be greater than zero.");
       break;
     }
     case "benchmark": {

@@ -57,6 +57,9 @@ describe("findings model", () => {
     expect(findingHref(finding("a", 0, { url_state: "?layer=pred&sel=rg_1", view: "/r/:rid/map" }))).toBe(`/r/${RID}/map?layer=pred&sel=rg_1`);
     expect(findingHref(finding("a", 0, { url_state: "", view: "/p/:pid/compare", run_id: null }))).toBe(`/p/${PID}/compare`);
     expect(findingHref(finding("a", 0, { url_state: "x=1", view: "accuracy" }))).toBe(`/r/${RID}?x=1`);
+    // protocol-relative URLs never leave the app: they are read as a query on the finding's route
+    expect(findingHref(finding("a", 0, { url_state: "//example.org/x" }))).toBe(`/r/${RID}/accuracy?//example.org/x`);
+    expect(findingHref(finding("a", 0, { url_state: "/\\example.org/x" })).startsWith(`/r/${RID}/accuracy?`)).toBe(true);
   });
 
   it("reads a chart snapshot as a table", () => {
