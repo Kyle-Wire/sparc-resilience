@@ -597,7 +597,8 @@ def _response(ctx, env) -> dict:
                  "citation": r.get("citation")} for r in lit.get("rows") or [] if isinstance(r, dict)]
         sparc = [{"quantity": q, "scenario": v.get("scenario"), "dose": fnum(v.get("realized_dose")),
                   "cooling": fnum(v.get("cooling_C")), "se": fnum(v.get("se_C")), "causal": fnum(v.get("causal_C")),
-                  "unit": "°C"} for q, v in (lit.get("sparc") or {}).items() if isinstance(v, dict)]
+                  "frac_extrapolated": fnum(v.get("frac_extrapolated")), "unit": "°C"}
+                 for q, v in (lit.get("sparc") or {}).items() if isinstance(v, dict)]
         literature = {"rows": rows, "sparc": sparc}
     return {"levers": out or None, "literature": literature}
 
@@ -892,10 +893,12 @@ def _budget(ctx, env) -> dict:
     if al is not None and "dose" in al.columns:
         dose = al["dose"].to_numpy(float)
         cl = al["closed_loop_delta"].to_numpy(float) if "closed_loop_delta" in al.columns else None
-        order = np.argsort(-np.nan_to_num(dose, nan=-np.inf), kind="stable")[:25]
+        # the treated cells that cool most (closed loop, as the table shows), ties and cells without a
+        # closed-loop value by dose, then by row - never the row order of the many cells sharing one dose
+        treated = np.flatnonzero(np.isfinite(dose) & (dose > 0))
+        benefit = -cl[treated] if cl is not None else np.full(treated.size, np.nan)
+        order = treated[np.lexsort((treated, -dose[treated], -np.nan_to_num(benefit, nan=-np.inf)))][:25]
         for rank, i in enumerate(order, start=1):
-            if not np.isfinite(dose[i]) or dose[i] <= 0:
-                break
             top.append({"rank": rank, "row": int(i), "id": clean(al["id"].iloc[i]) if "id" in al.columns else int(i),
                         "lon": fnum(g.lon[i]) if g is not None else None, "lat": fnum(g.lat[i]) if g is not None else None,
                         "dose": fnum(dose[i]), "benefit": fnum(-cl[i]) if cl is not None else None,

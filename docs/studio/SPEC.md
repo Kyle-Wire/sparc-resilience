@@ -2894,6 +2894,10 @@ This is the changelog of the specification after the completeness review (§18).
 - **"Being computed"** (§3.2): a run tab is shown as being computed only while a job that makes its outputs runs (the run itself for stage outputs, a planner pack for the Planner tab, …); building the emulator no longer marks Planner and Uncertainty as being computed. Track follows any job on the run.
 - **Study children** (§4.3, §5.11): a placebo or multiverse refit and a reproduction are not the project's "Last run" (Home, the Scenario Lab entry) and do not count in the readiness spine; they are still listed with their origin in the run lists.
 - **Commit of a run** (§11): `manifest.git_commit` and the report's commit line name the commit of the code that ran (git in the core package's folder, as `provenance.git`), not of the worker's working directory, so Studio runs no longer report `commit None`; decision packs read `provenance.git.commit` first. `sparc/core/report.py` is fingerprinted, so checkpoints written before this fix report `code_match: false` and their exact results are marked stale (§11 item 6).
+- **Report headline** (§6.7, §9.3 about): the report's summary leads with the headline scenario chosen in Setup → About (stored as its slug), as the run Overview does; before, the report matched names only and fell back to its automatic pick.
+- **Budget top cells** (§6.4): the table lists the treated cells that cool most (closed loop), in that order, ties by dose; before, it ranked by dose alone, so cells sharing a dose came in row order and the table did not match its "by cooling" caption.
+- **Literature panel** (§6.4 Response): the SPARC rows carry the extrapolated share of the scenario they scale from.
+- **Findings export** (§6.10): a pinned chart's numbers are exported as a table with every row and the column labels and units as written (`City-mean ΔT (°F)`), not as JSON cut at 400 characters; other nested snapshot values are written in full.
 
 ### Documentation
 

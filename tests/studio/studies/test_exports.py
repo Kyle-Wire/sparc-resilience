@@ -184,6 +184,33 @@ def test_report_preview_sections_and_caveats_from_numbers(client, ctx, demo, fix
     assert r.status_code == 422
 
 
+def test_report_summary_leads_with_the_projects_headline_slug(client, ctx, demo, fixture_run):
+    """``headline_scenario`` is a configured-scenario slug (what Setup → About stores and the Overview matches):
+    the report's summary leads with that scenario, not the automatic pick; a name still works."""
+    import re
+
+    rid, _ = fixture_run
+    reader = ctx.services["reader"].get(rid)
+    slug = next(c["slug"] for c in reader.configured_scenarios() if c["name"] == "Albedo Increase +0.1")
+    assert slug == "albedo-increase-plus-0-1"
+
+    def lead() -> str:
+        html = client.post(f"/api/projects/{demo['id']}/report/preview",
+                           json={"run_id": rid, "sections": ["summary"]}).json()["html"]
+        return re.search(r"“([^”]+)” changes the city-mean", html).group(1)
+
+    auto = lead()
+    assert auto != "Albedo Increase +0.1"                                 # the test needs a non-default pick
+    assert client.patch(f"/api/projects/{demo['id']}", json={"headline_scenario": slug}).status_code == 200
+    ov = client.get(f"/api/runs/{rid}/views/overview").json()["sections"]["kpis"]
+    assert any(k["id"] == "headline" and k["label"] == "Albedo Increase +0.1" for k in ov)
+    assert lead() == "Albedo Increase +0.1"
+    client.patch(f"/api/projects/{demo['id']}", json={"headline_scenario": "Impervious Decrease −20"})
+    assert lead() == "Impervious Decrease −20"
+    client.patch(f"/api/projects/{demo['id']}", json={"headline_scenario": "no-such-scenario"})
+    assert lead() == auto
+
+
 def test_report_export_html_and_markdown(client, demo, fixture_run, wait_job):
     rid, _ = fixture_run
     sections = ["summary", "accuracy", "validation", "scenarios", "plans", "climate", "equity", "caveats",
@@ -257,6 +284,44 @@ def test_findings_crud_image_and_export(client, ctx, demo, fixture_run, wait_job
     assert client.delete(f"/api/findings/{second['id']}").json() == {"ok": True}
     assert client.get(f"/api/findings/{second['id']}/image").status_code == 404
     assert not (Path(demo["dir"]) / "findings" / f"{second['id']}.json").exists()
+
+
+def test_chart_pin_tables_export_every_row_with_their_units(client, demo, fixture_run, wait_job):
+    """A kit chart pins ``{kind, title, caption, units, table: {columns: [{key, label, unit?}], rows}}``: the
+    findings export (HTML and Markdown) and the report's Findings section show that table with every row and
+    the column labels and units as written, and other nested values are never cut or ASCII-escaped."""
+    rid, _ = fixture_run
+    names = ["Canopy Increase +5", "Canopy Increase +10", "Canopy Increase +20", "Impervious Decrease −10",
+             "Impervious Decrease −20", "Albedo Increase +0.05", "Albedo Increase +0.1", "Cooling package"]
+    cols = [{"key": "label", "label": "Scenario"}, {"key": "est", "label": "City-mean ΔT", "unit": "°F"},
+            {"key": "lo", "label": "Likely low", "unit": "°F"}, {"key": "hi", "label": "Likely high", "unit": "°F"},
+            {"key": "p10", "label": "P10", "unit": "°F"}, {"key": "p90", "label": "P90", "unit": "°F"},
+            {"key": "ext", "label": "Extrapolated share"}, {"key": "tier", "label": "Tier"}]
+    rows = [[n, -0.1 - 0.123456789 * i, -0.2 - 0.1 * i, -0.01 * i, -0.3, 0.05, 0.1 * i, None]
+            for i, n in enumerate(names)]
+    long = {"bins": [[i, i * 0.5] for i in range(60)], "label": "Ω region"}
+    snap = {"kind": "chart", "title": "City-mean change per scenario", "caption": "Δ vs today", "units": "°F",
+            "table": {"columns": cols, "rows": rows}, "extra": long}
+    f = client.post("/api/findings", json={"project_id": demo["id"], "run_id": rid, "view": "runhub.scenarios",
+                                           "url_state": "", "title": "Per scenario", "snapshot": snap}).json()
+    assert client.get("/api/findings", params={"project": demo["id"]}).json()[0]["snapshot"]["table"]["rows"] == rows
+
+    def check(text: str) -> None:
+        assert "\\u0394" not in text and "\\u00b0" not in text
+        assert "City-mean ΔT (°F)" in text and "Likely low (°F)" in text and "Extrapolated share" in text
+        for i, n in enumerate(names):
+            assert n in text and f"{-0.1 - 0.123456789 * i:.6g}" in text, n
+        assert "[59, 29.5]" in text and "Ω region" in text                 # nested values in full
+
+    ex = _export(client, wait_job, demo["id"], "findings", {"format": "html", "ids": [f["id"]]})
+    check(client.get(f"/api/exports/{ex['id']}/download").text)
+    ex2 = _export(client, wait_job, demo["id"], "findings", {"format": "md", "ids": [f["id"]]})
+    md = _zip(client, ex2).read("findings/findings.md").decode()
+    check(md)
+    assert "| Scenario | City-mean ΔT (°F) | Likely low (°F) |" in md
+    html = client.post(f"/api/projects/{demo['id']}/report/preview",
+                       json={"run_id": rid, "sections": ["findings"], "finding_ids": [f["id"]]}).json()["html"]
+    check(html)
 
 
 def test_bad_images_never_replace_a_good_one(client, demo, fixture_run):
