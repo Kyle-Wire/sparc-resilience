@@ -334,6 +334,32 @@ def test_detail_lists_runs_from_the_runs_table(client, ctx, demo):
     assert rows["emulator"]["action"]["kind"] == "build_emulator"
 
 
+def test_study_children_are_not_the_projects_last_run(client, ctx, demo):
+    """A placebo refit (origin ``study_child``) or a reproduction finishing after the project's run is not the
+    project's "Last run" (Home, Scenario Lab entry) and does not count in the readiness spine's runs and
+    emulator rows: its skill is a placebo's, its layers shifted."""
+    common = {"project_id": demo["id"], "status": "complete", "has_emulator": 0}
+    ctx.db.insert("runs", {**common, "id": "20261001-120000-fast-a1b2", "run_dir": "/tmp/x/run1",
+                           "studio_dir": "/tmp/x/run1/studio", "origin": "studio", "mode": "fast",
+                           "created_utc": "2026-10-01T12:00:00Z", "r2": 0.879})
+    ctx.db.insert("runs", {**common, "id": "20261001-130000-full-c3d4", "run_dir": "/tmp/x/st/children/shift",
+                           "studio_dir": "/tmp/x/st/children/shift/studio", "origin": "study_child",
+                           "study_id": "st_mmbvwob5", "parent_run_id": "20261001-120000-fast-a1b2",
+                           "mode": "coarse", "coarse_m": 60.0, "created_utc": "2026-10-01T13:00:00Z", "r2": 0.793})
+    ctx.db.insert("runs", {**common, "id": "20261001-140000-fast-e5f6", "run_dir": "/tmp/x/st2/children/repro",
+                           "studio_dir": "/tmp/x/st2/children/repro/studio", "origin": "reproduction",
+                           "mode": "fast", "created_utc": "2026-10-01T14:00:00Z", "r2": 0.88})
+    d = client.get(f"/api/projects/{demo['id']}").json()
+    assert d["project"]["last_run"]["id"] == "20261001-120000-fast-a1b2" and d["project"]["last_run"]["r2"] == 0.879
+    listed = next(p for p in client.get("/api/projects").json() if p["id"] == demo["id"])
+    assert listed["last_run"]["id"] == "20261001-120000-fast-a1b2"
+    rows = {r["key"]: r for r in d["readiness"]}
+    assert rows["runs"]["detail"] == "1 run: fast (fast only)", rows["runs"]
+    assert "20261001-120000-fast-a1b2" in rows["emulator"]["detail"]
+    assert rows["emulator"]["action"]["path"] == "/api/runs/20261001-120000-fast-a1b2/actions/emulator"
+    assert {r["id"] for r in d["runs"]} >= {"20261001-130000-full-c3d4"}   # still listed (origin filters them)
+
+
 # ---------------------------------------------------------------------------
 # files
 # ---------------------------------------------------------------------------
@@ -904,6 +930,67 @@ def test_a_report_field_of_the_wrong_type_keeps_the_project_readable(client, val
     want = str(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
     assert detail.json()["project"]["report"][k] == want
     assert listed.json()[0]["report"][k] == want
+
+
+@pytest.mark.parametrize("section, value", [("scenarios", True), ("data", {"path": "data/city.csv", "join": 5}),
+                                            ("causal", {"treatments": True}), ("optimize", {"variable": ["x"]})])
+def test_a_save_with_values_of_the_wrong_type_returns_its_version(client, demo, section, value):
+    """The save is committed before it is validated: a value the checks cannot iterate or hash is a type issue in
+    the ``200`` answer (never a 500 that tells the editor the save failed while version N+1 is on disk), and the
+    project list still builds."""
+    pid = demo["id"]
+    v = client.get(f"/api/projects/{pid}/config").json()["version"]
+    r = client.patch(f"/api/projects/{pid}/config/sections/{section}", json={"value": value},
+                     headers={"If-Match": str(v)})
+    assert r.status_code == 200, r.text
+    assert r.json()["version"] == v + 1 and any(i["code"] == "type" for i in r.json()["issues"])
+    assert client.get(f"/api/projects/{pid}/config").json()["version"] == v + 1
+    assert client.get("/api/projects").status_code == 200
+    assert spine(client, pid)["config_valid"]["state"] == "missing"
+    val = client.post(f"/api/projects/{pid}/config/validate", json={})
+    assert val.status_code == 200 and val.json()["ok"] is False
+    r = client.put(f"/api/projects/{pid}/config", json={"yaml": "core:\n  name: bad\n  scenarios: true\n"},
+                   headers={"If-Match": str(v + 1)})
+    assert r.status_code == 200 and r.json()["version"] == v + 2, r.text
+
+
+def test_impact_of_a_blank_project(client, demo):
+    """A config without data.path (every new blank project) still compares: its data section is "no data", so a
+    name edit changes nothing and adding the data file changes the data (and core) sections."""
+    pid = create(client, "Blank one", "blank")["project"]["id"]
+    r = client.post(f"/api/projects/{pid}/config/impact", json={})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"changed_sections": [], "runs": []}
+    text = client.get(f"/api/projects/{pid}/config").json()["yaml"]
+    r = client.post(f"/api/projects/{pid}/config/impact", json={"yaml": text.replace("blank_one", "renamed")})
+    assert r.status_code == 200 and r.json()["changed_sections"] == [], r.text
+    raw = client.get(f"/api/projects/{pid}/config").json()["raw"]
+    raw["data"]["path"] = "data/city.csv"
+    r = client.post(f"/api/projects/{pid}/config/impact", json={"raw": raw})
+    assert r.status_code == 200 and "data" in r.json()["changed_sections"], r.text
+    # an edit core cannot fingerprint (a join that is not a list) may change every section
+    raw = client.get(f"/api/projects/{demo['id']}/config").json()["raw"]
+    raw["data"]["join"] = "notalist"
+    r = client.post(f"/api/projects/{demo['id']}/config/impact", json={"raw": raw})
+    assert r.status_code == 200, r.text
+    assert "data" in r.json()["changed_sections"] and "s7" in r.json()["changed_sections"]
+
+
+@pytest.mark.parametrize("patch, path", [
+    ({"actionable": {"canopy": 10}}, "actionable.canopy"), ({"qa": {"clip": {"canopy": 5}}}, "qa.clip.canopy"),
+    ({"physics": {"roles": ["canopy"]}}, "physics.roles"), ({"data": {"target": ["T"]}}, "data.target"),
+    ({"data": {"cell_m": -5}}, "data.cell_m"), ({"data": {"cell_m": "abc"}}, "data.cell_m"),
+    ({"data": {"cell_m": 0}}, "data.cell_m"), ({"predictors": [True]}, "predictors"),
+    ({"data": {"path": True}}, "data.path"), ({"data": {"join": [5]}}, "data.join.0"),
+    ({"data": {"reproject_to": "garbage"}}, "data.reproject_to"), ({"data": {"crs": "garbage",
+                                                                             "reproject_to": "EPSG:3857"}}, "data.crs")])
+def test_data_check_of_a_config_s0_cannot_use_is_422(client, demo, patch, path):
+    """api.md §5.2: a config S0 cannot use is ``422 validation`` with the offending paths in ``detail.errors``."""
+    r = client.post(f"/api/projects/{demo['id']}/data/check", json={"config_patch": patch})
+    assert r.status_code == 422, r.text
+    err = r.json()["error"]
+    assert err["code"] == "validation"
+    assert path in [e["path"] for e in err["detail"]["errors"]], err
 
 
 def test_server_stays_torch_free(tmp_path):

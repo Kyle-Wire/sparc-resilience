@@ -3,7 +3,10 @@
 Every file a run directory gains is written to a hidden temporary sibling
 (``.<name>.<pid>.<thread>.tmp``), flushed to disk and moved into place with
 ``os.replace``.  A reader, or a process killed mid-write, therefore sees
-either the old file or the new one, never half of one.
+either the old file or the new one, never half of one.  A writer killed
+outright (SIGKILL, the OOM killer) leaves its temporary behind; the next
+atomic write of the same file removes the temporaries of writers that no
+longer exist, and :func:`remove_stale_tmp` sweeps a whole folder.
 
 ``update_manifest`` is the one way post-run actions (baselines, planner,
 uncertainty, emulator, studies) edit ``manifest.json``: under
@@ -18,9 +21,11 @@ Like ``progress.py`` this module is excluded from the resume fingerprint.
 from __future__ import annotations
 
 import datetime as _dt
+import glob as _glob
 import json
 import math
 import os
+import re
 import threading
 import time
 from contextlib import contextmanager
@@ -37,7 +42,8 @@ except ImportError:
     msvcrt = None
 
 __all__ = ["LOCK_NAME", "MANIFEST_NAME", "atomic_open", "write_json_atomic", "write_text_atomic",
-           "write_bytes_atomic", "write_parquet_atomic", "write_npz_atomic", "run_lock", "update_manifest"]
+           "write_bytes_atomic", "write_parquet_atomic", "write_npz_atomic", "remove_stale_tmp", "run_lock",
+           "update_manifest"]
 
 LOCK_NAME = ".sparc.lock"
 MANIFEST_NAME = "manifest.json"
@@ -68,6 +74,63 @@ def _tmp_path(path: Path) -> Path:
     return path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
 
 
+_TMP_RE = re.compile(r"^\.(?P<name>.+)\.(?P<pid>\d+)\.(?P<tid>\d+)\.tmp$")
+
+
+def _pid_gone(pid: int) -> bool:
+    """Whether no process ``pid`` runs on this host (a zombie counts as gone).  Unknown → ``False``."""
+    if os.name != "posix" or pid <= 0:
+        return False                               # os.kill(pid, 0) is not a probe on Windows
+    if pid == os.getpid():
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:                                # EPERM: alive, another user's
+        return False
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as f:
+            return f.read().rsplit(b")", 1)[1].split()[0] == b"Z"
+    except (OSError, IndexError):
+        return False
+
+
+def _stale_tmps(directory: Path, name: str | None = None):
+    """``(path, bytes)`` of the atomic-write temporaries in ``directory`` (of file ``name`` only, when given)
+    whose writer process no longer exists."""
+    pattern = f".{_glob.escape(name)}.*.tmp" if name is not None else ".*.tmp"
+    try:
+        entries = list(Path(directory).glob(pattern))
+    except OSError:
+        return
+    for p in entries:
+        m = _TMP_RE.match(p.name)
+        if m is None or (name is not None and m.group("name") != name) or not _pid_gone(int(m.group("pid"))):
+            continue
+        try:
+            yield p, p.stat().st_size
+        except OSError:
+            continue
+
+
+def _unlink_all(found) -> int:
+    freed = 0
+    for p, size in found:
+        try:
+            p.unlink()
+            freed += size
+        except OSError:
+            pass
+    return freed
+
+
+def remove_stale_tmp(directory) -> int:
+    """Remove the temporaries that writers killed mid-write left in ``directory`` (not its sub-folders);
+    returns the bytes freed.  Temporaries of live processes are kept."""
+    return _unlink_all(_stale_tmps(Path(directory)))
+
+
 @contextmanager
 def atomic_open(path, mode: str = "wb", encoding: str | None = None) -> Iterator[IO]:
     """Open a temporary sibling of ``path`` for writing; on success it is fsynced and moved onto ``path``.
@@ -79,6 +142,7 @@ def atomic_open(path, mode: str = "wb", encoding: str | None = None) -> Iterator
         raise ValueError("atomic_open writes whole files: use a 'w' mode")
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    _unlink_all(_stale_tmps(path.parent, path.name))   # left by a writer of this file killed mid-write
     tmp = _tmp_path(path)
     try:
         with open(tmp, mode, encoding=encoding) as f:

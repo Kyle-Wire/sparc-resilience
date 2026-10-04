@@ -152,3 +152,25 @@ def test_post_run_actions_record_their_sections_through_update_manifest(tmp_path
     for k in ("baselines", "emulator", "planner", "uncertainty", "post_run"):
         assert again[k] == m[k], k
     assert set(POST_RUN_KEYS) - {"simcheck", "multiverse", "placebo"} <= set(again)
+
+
+def test_git_commit_is_the_code_checkout_not_the_working_directory(tmp_path, monkeypatch):
+    """A Studio worker runs in its job folder (outside the source checkout): ``manifest.git_commit`` and the
+    report's "commit" line read ``git`` in the core package's folder, as ``provenance.git`` does, never in the
+    working directory (``None`` there, or another repository's commit)."""
+    import subprocess
+    from pathlib import Path
+
+    from sparc.core import report
+
+    core = Path(report.__file__).resolve().parent
+    try:
+        want = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=core, text=True,
+                                       stderr=subprocess.DEVNULL).strip()
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip("the core sources are not a git checkout")
+    elsewhere = tmp_path / "jobs" / "j_x"
+    elsewhere.mkdir(parents=True)
+    subprocess.check_call(["git", "init", "-q", str(tmp_path)])        # the cwd is another repository
+    monkeypatch.chdir(elsewhere)
+    assert report._git_commit() == want

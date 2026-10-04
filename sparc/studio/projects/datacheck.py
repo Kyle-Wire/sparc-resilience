@@ -149,6 +149,8 @@ def grid_meta(data, data_cfg: dict, coord_scale: float, *, units: dict, zones: l
     (0, 0) is ``sw``; rows grow north), the frame ``studio-web``'s map
     interpolates between.
     """
+    from sparc.studio.runs.grid import usable_crs
+
     g = data.grid
     n = int(data.n)
     ll = points_lonlat(data.x, data.y_coord, data_cfg, coord_scale)
@@ -165,7 +167,7 @@ def grid_meta(data, data_cfg: dict, coord_scale: float, *, units: dict, zones: l
     else:
         lon = lat = np.full(n, np.nan)
     meta = {"n": n, "nx": int(g.nx), "ny": int(g.ny), "dx_m": float(g.dx), "x0_m": float(g.x0),
-            "y0_m": float(g.y0), "crs": data_cfg.get("reproject_to") or data_cfg.get("crs"),
+            "y0_m": float(g.y0), "crs": usable_crs(data_cfg.get("reproject_to") or data_cfg.get("crs")),
             "coord_scale": float(coord_scale), "has_lonlat": ll is not None, "bounds_lonlat": bounds,
             "corners": corners, "ids_kind": ids_kind, "zones": zones, "n_folds": n_folds, "units": units,
             "background": float(data.background) if np.isfinite(data.background) else None, "etag": etag}
@@ -180,6 +182,60 @@ def _bad(errors: list[dict], message: str) -> ApiError:
     return ApiError("validation", message, detail={"errors": errors})
 
 
+#: config sections S0 reads (``read_input`` and ``prepare_frame``)
+_S0_SECTIONS = ("data", "qa", "predictors", "encodings", "actionable", "physics")
+
+
+def _s0_failed(merged: dict, exc: Exception, path: str, code: str, what: str) -> ApiError:
+    """``422 validation`` for an S0 failure: the schema's type errors in the sections S0 reads when there are
+    any (``actionable.canopy: 10``, ``qa.clip.canopy: 5``), else the failure itself at ``path``."""
+    from sparc.studio.projects.validate import type_errors
+
+    typed = [e for e in type_errors(merged) if e["path"].split(".")[0] in _S0_SECTIONS]
+    if typed:
+        return _bad(typed, "fix the config values of the wrong type first: "
+                    + ", ".join(e["path"] for e in typed[:5]) + (" …" if len(typed) > 5 else ""))
+    return _bad([{"path": path, "message": str(exc)[:300], "code": code}], f"{what}: {exc}")
+
+
+def _shape_errors(raw: dict) -> list[dict]:
+    """Values S0 cannot use at all, checked before it runs: ``data`` not a mapping, a column name that is a
+    list or mapping, ``predictors`` not a list of names, a cell size that is not a positive number."""
+    def name(v) -> bool:
+        return isinstance(v, (str, int, float))
+
+    d = raw.get("data")
+    if not isinstance(d, dict):
+        return [{"path": "data", "message": "data must be a mapping", "code": "type"}]
+    out = []
+    for k in ("target", "x", "y", "id", "zone"):
+        v = d.get(k)
+        if v is not None and not name(v):
+            out.append({"path": f"data.{k}", "message": f"data.{k} must be a column name", "code": "type"})
+    if d.get("path") is not None and not isinstance(d.get("path"), str):
+        out.append({"path": "data.path", "message": "data.path must be a file path", "code": "type"})
+    preds = raw.get("predictors")
+    if preds is not None and not (isinstance(preds, list) and all(isinstance(p, str) for p in preds)):
+        out.append({"path": "predictors", "message": "predictors must be a list of column names", "code": "type"})
+    if d.get("reproject_to"):                        # S0 projects x/y from data.crs to data.reproject_to
+        from sparc.studio.runs.grid import crs_problem
+
+        for k in ("crs", "reproject_to"):
+            why = crs_problem(d.get(k))
+            if why:
+                out.append({"path": f"data.{k}", "message": f"data.{k}: {why}", "code": "bad_crs"})
+    for k in ("cell_m", "coarse_m"):
+        v = d.get(k)
+        if v is None or (k == "coarse_m" and v in (0, False)):
+            continue                                 # unset: inferred from the lattice / no coarse cells
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            out.append({"path": f"data.{k}", "message": f"data.{k} must be a number of metres", "code": "type"})
+        elif not (np.isfinite(v) and v > 0):
+            out.append({"path": f"data.{k}", "message": f"data.{k} must be a positive number of metres",
+                        "code": "not_positive"})
+    return out
+
+
 def _layer_columns(cfg, data, df: pd.DataFrame, ids_col: str | None, rows: np.ndarray) -> dict[str, np.ndarray]:
     """The ``planner.layers`` columns (people*, lc_*) aligned with the checked points.
 
@@ -188,7 +244,8 @@ def _layer_columns(cfg, data, df: pd.DataFrame, ids_col: str | None, rows: np.nd
     fractions averaged).  Empty when the config has no readable layers table
     or the table does not line up with the points.
     """
-    path = (cfg.raw.get("planner") or {}).get("layers")
+    planner = cfg.raw.get("planner")
+    path = planner.get("layers") if isinstance(planner, dict) else None
     p = cfg.resolve_path(path) if isinstance(path, str) and path.strip() else None
     if p is None or not Path(p).is_file():
         return {}
@@ -227,6 +284,9 @@ def data_check(raw: dict, project_dir: str | Path, patch: dict | None = None) ->
 
     merged = deep_merge(raw, patch)
     cfg = build_core_config(merged, project_dir)
+    shape = _shape_errors(cfg.raw)
+    if shape:
+        raise _bad(shape, "fix the config values S0 cannot use first: " + ", ".join(e["path"] for e in shape))
     d = cfg.data
     missing = [{"path": f"data.{k}", "message": f"data.{k} is required", "code": "required"}
                for k in ("target", "x", "y") if not d.get(k)]
@@ -259,6 +319,8 @@ def data_check(raw: dict, project_dir: str | Path, patch: dict | None = None) ->
         except (ValueError, KeyError, OSError, UnicodeDecodeError, pd.errors.ParserError) as exc:
             raise _bad([{"path": "data.path", "message": str(exc)[:300], "code": "unreadable"}],
                        f"cannot read the data: {exc}")
+        except (TypeError, AttributeError, IndexError) as exc:    # a data.join entry of the wrong shape
+            raise _s0_failed(merged, exc, "data.join", "unreadable", "cannot read the data")
         absent = [{"path": f"data.{k}", "message": f"column {d[k]!r} is not in the data", "code": "missing_column"}
                   for k in ("target", "x", "y") if d[k] not in df.columns]
         if absent:
@@ -268,9 +330,11 @@ def data_check(raw: dict, project_dir: str | Path, patch: dict | None = None) ->
             if not pd.api.types.is_numeric_dtype(df[d[k]]):
                 raise _bad([{"path": f"data.{k}", "message": f"column {d[k]!r} is not numeric",
                              "code": "not_numeric"}], f"column {d[k]!r} is not numeric")
-        preds = list(cfg.predictors)
+        preds = list(cfg.raw.get("predictors") or [])
         columns_missing = [p for p in preds if p not in df.columns]
-        cats = set((cfg.raw.get("encodings") or {}).get("categorical") or [])
+        enc = cfg.raw.get("encodings")
+        cats = enc.get("categorical") if isinstance(enc, dict) else None
+        cats = {c for c in cats if isinstance(c, str)} if isinstance(cats, list) else set()
         usable = []
         for p in preds:
             if p in columns_missing:
@@ -288,8 +352,8 @@ def data_check(raw: dict, project_dir: str | Path, patch: dict | None = None) ->
         df[_ROW] = np.arange(len(df), dtype=np.int64)
         try:
             data = prepare_frame(df, cfg)
-        except (ValueError, KeyError) as exc:
-            raise _bad([{"path": "data", "message": str(exc)[:300], "code": "s0_failed"}], f"S0 failed: {exc}")
+        except (ValueError, KeyError, TypeError, AttributeError, IndexError) as exc:
+            raise _s0_failed(merged, exc, "data", "s0_failed", "S0 failed")
     elapsed = time.perf_counter() - t0
     qa = data.qa
     rows = np.asarray(data.ids, dtype=np.int64)

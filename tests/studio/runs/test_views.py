@@ -120,6 +120,43 @@ def test_section_contents_follow_the_client_rules(client, fixture_run, synth):
         assert tr["cate_layer"] in (None, f"cate_{t}")
 
 
+def test_budget_top_cells_rank_by_cooling_not_by_row(client, demo, place_run):
+    """"Top cells by cooling": among the treated cells, the 25 with the most closed-loop cooling, in that order;
+    the many cells sharing one dose are not listed in row order, and without ``closed_loop_delta`` the larger
+    doses come first."""
+    rid, rd = RUN_ID, place_run(demo)
+    alloc = pd.read_parquet(rd / "allocation.parquet")
+    treated = alloc[alloc["dose"] > 0]
+    assert treated["dose"].round(6).value_counts().max() > 25                    # many cells share one dose
+    top = get_view(client, rid, "budget")["sections"]["top_cells"]
+    assert [c["rank"] for c in top] == list(range(1, 26))
+    best = (-treated["closed_loop_delta"]).sort_values(ascending=False, kind="stable")
+    assert [c["row"] for c in top] == [int(i) for i in best.index[:25]]
+    benefit = [c["benefit"] for c in top]
+    assert benefit == sorted(benefit, reverse=True) and benefit[0] == pytest.approx(best.iloc[0])
+    assert all(c["dose"] > 0 for c in top)
+    # without the closed-loop column: by dose, ties by row
+    rd2 = place_run(demo, "20260101-000000-nocl-0001",
+                    edit=lambda d: pd.read_parquet(d / "allocation.parquet").drop(columns="closed_loop_delta")
+                    .to_parquet(d / "allocation.parquet"))
+    top2 = get_view(client, "20260101-000000-nocl-0001", "budget")["sections"]["top_cells"]
+    assert rd2.is_dir() and all(c["benefit"] is None for c in top2)
+    by_dose = treated["dose"].sort_values(ascending=False, kind="stable")
+    assert [c["row"] for c in top2] == [int(i) for i in by_dose.index[:25]]
+
+
+def test_response_literature_sends_the_extrapolated_share(client, fixture_run, synth):
+    """The literature panel's SPARC rows carry the extrapolated share of the scenario they scale from
+    (``manifest.literature.sparc.<quantity>.frac_extrapolated``)."""
+    rid, _ = fixture_run
+    lit = json.loads((synth / "manifest.json").read_text())["literature"]["sparc"]
+    rows = get_view(client, rid, "response")["sections"]["literature"]["sparc"]
+    assert {r["quantity"] for r in rows} == set(lit)
+    for r in rows:
+        assert r["scenario"] == lit[r["quantity"]]["scenario"]
+        assert r["frac_extrapolated"] == pytest.approx(lit[r["quantity"]]["frac_extrapolated"])
+
+
 def test_causal_view_reads_the_manifest_layout(client, demo, place_run):
     """Without causal.json the view is built from the manifest's per-treatment summary
     (``{<treatment>: {...}, _flags: [...]}``), not left empty."""

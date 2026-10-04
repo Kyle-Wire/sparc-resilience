@@ -3,6 +3,8 @@
 // chips, plantable KPIs, the sortable zone table, hex choropleth links (250 / 500 m), logger
 // sites and before/after pairs as map overlays, the GIS gallery (GeoTIFF previews,
 // hexagons.gpkg, CSVs with lon/lat added on export) and "Re-run planner with package…".
+// Hot days, equity and zones are optional parts of a pack (no station record, no adaptation
+// package, no zone column): a pack without them says why, not "older code".
 import { useMemo, useState } from "react";
 import { api, errorMessage } from "../../api/client";
 import type { PlannerSections } from "../../api/runs";
@@ -16,7 +18,7 @@ import { Link } from "../../router";
 import { useJobs } from "../../stores/jobs";
 import { toast } from "../../stores/ui";
 import { fmtBytes, fmtNum, fmtPct, unitLabel } from "../../theme/format";
-import { Block, GenericTableView, KpiTiles, OlderCode, Section, ViewPage, useRid, useUnits } from "./common";
+import { Block, GenericTableView, KpiTiles, OlderCode, Section, ViewPage, useRid, useUnits, type Absence } from "./common";
 import { RunLayerMap } from "./RunLayerMap";
 
 function Exposure({ e }: { e: NonNullable<PlannerSections["exposure"]> }) {
@@ -76,7 +78,22 @@ function HotDays({ h }: { h: NonNullable<PlannerSections["hot_days"]> }) {
   );
 }
 
+/**
+ * Why an optional part of a planner pack is absent (core `planner_pack`): hot days need a
+ * station (the run config's `planner.ghcn_station`, else the forcing station) and its daily
+ * history, equity an adaptation package, the zone table a `data.zone` column.
+ */
+const PACK_ABSENT: Record<"hot_days" | "equity" | "zones", Absence> = {
+  hot_days: {
+    reason:
+      "The planner pack had no weather-station record to count hot days: the run's config names no GHCN-Daily station (planner.ghcn_station) or forcing station, or the station's daily history could not be downloaded.",
+  },
+  equity: { reason: "The planner pack had no adaptation package (a joint scenario) whose cooling it could share out by quintile; Re-run the planner pack can name one." },
+  zones: { reason: "The run's data has no zone column (data.zone), so the pack has no zone table." },
+};
+
 function Equity({ eq }: { eq: NonNullable<PlannerSections["equity"]> }) {
+  const u = unitLabel(useUnits().target);
   const [m, setM] = useState(eq.measures[0] ?? "");
   const cur = eq.measures.includes(m) ? m : eq.measures[0];
   return (
@@ -94,11 +111,13 @@ function Equity({ eq }: { eq: NonNullable<PlannerSections["equity"]> }) {
       </div>
       {cur ? (
         <Bars
-          title="Equity quintiles"
+          title={`Cooling by ${cur} quintile`}
+          units={u ? `${u} (positive = cooler)` : "positive = cooler"}
           categories={eq.quintiles.map((q) => q.label)}
-          categoryLabel="Quintile"
-          series={[{ id: cur, label: cur, values: eq.quintiles.map((q) => q.values[cur] ?? null) }]}
-          valueLabel={cur}
+          categoryLabel={`Quintile of ${cur} (1 = lowest)`}
+          series={[{ id: cur, label: "Mean cooling", values: eq.quintiles.map((q) => q.values[cur] ?? null) }]}
+          valueLabel="Mean cooling"
+          unit={u || undefined}
           decimals={2}
           actions={
             eq.measures.length > 1 ? (
@@ -111,7 +130,7 @@ function Equity({ eq }: { eq: NonNullable<PlannerSections["equity"]> }) {
               </select>
             ) : undefined
           }
-          caption="Quintiles of the equity column (1 = lowest); a flat profile shares the benefit evenly."
+          caption={`The package's mean cooling (positive = cooler) in each quintile of ${cur} (1 = lowest); a flat profile shares the benefit evenly.`}
         />
       ) : (
         <p className="cap">No equity measures in this planner pack.</p>
@@ -214,6 +233,8 @@ export default function Planner() {
   return (
     <ViewPage view="planner" title="Planner pack" intro="Who is exposed, where to act, and the files to take into the field and into GIS.">
       {(s) => {
+        // The view read a pack (exposure is always built from one): its null parts have known reasons.
+        const absent = (k: keyof typeof PACK_ABSENT) => (s.exposure !== null ? PACK_ABSENT[k] : null);
         const overlays: OverlayFeature[] = [];
         if (s.sites?.length)
           overlays.push({ type: "points", id: "sites", label: "Logger sites", points: s.sites.map((p) => ({ row: p.row, label: p.label ?? String(p.id), tone: "s2" as const })) });
@@ -236,17 +257,17 @@ export default function Planner() {
                 )}
               </Section>
             </div>
-            <Section title="Hot days" data={s.hot_days}>
+            <Section title="Hot days" data={s.hot_days} absent={absent("hot_days")}>
               {(h) => <HotDays h={h} />}
             </Section>
-            <Section title="Equity" data={s.equity}>
+            <Section title="Equity" data={s.equity} absent={absent("equity")}>
               {(eq) => (
                 <Block title="Equity">
                   <Equity eq={eq} />
                 </Block>
               )}
             </Section>
-            <Section title="Zones" data={s.zones}>
+            <Section title="Zones" data={s.zones} absent={absent("zones")}>
               {(z) => (
                 <Block
                   title="Zones"

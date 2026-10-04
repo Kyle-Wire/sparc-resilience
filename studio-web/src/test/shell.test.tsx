@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { App } from "../App";
 import { clearResources } from "../api/resource";
 import { StreamManager, setStreams, type EventSourceLike } from "../api/sse";
+import type { RunSummary } from "../api/types";
+import { ActiveRunChip } from "../layouts/AppShell";
 import { navigate } from "../router";
 import { useJobs } from "../stores/jobs";
 import { useUi } from "../stores/ui";
@@ -78,6 +80,55 @@ describe("AppShell", () => {
     click(tray);
     expect(byText(container, ".jobtray-panel a", "Full run")!.getAttribute("href")).toBe("/jobs/j_1");
     expect(container.querySelector(".conn-pill")!.getAttribute("data-state")).toBe("live");
+  });
+
+  it("the run switcher tells same-config runs apart by mode, start time and R²", () => {
+    const run = (id: string, extra: Partial<RunSummary>): RunSummary => ({
+      id,
+      project_id: "p_1",
+      label: "synthetic_demo",
+      origin: "studio",
+      status: "complete",
+      mode: "fast",
+      coarse_m: null,
+      created_utc: "2026-10-02T18:12:09Z",
+      finished_utc: null,
+      duration_s: null,
+      n_points: 7,
+      r2: 0.812,
+      rmse: null,
+      coverage: null,
+      n_scenarios: null,
+      checkpoint_bytes: null,
+      has_emulator: false,
+      studies: [],
+      git_commit: null,
+      git_dirty: null,
+      demo: false,
+      pinned: false,
+      parent_run_id: null,
+      study_id: null,
+      last_job_id: null,
+      ...extra,
+    });
+    const runs = [
+      run("r_fast", {}),
+      run("r_coarse", { mode: "coarse", coarse_m: 60, created_utc: "2026-10-02T18:40:00Z", r2: 0.774 }),
+      // Same label, mode, minute, R² and status: only the id can tell it apart.
+      run("r_twin", { created_utc: "2026-10-02T18:12:40Z" }),
+    ];
+    const { container } = render(<ActiveRunChip projectRuns={runs} run={null} activeRunId="r_fast" />);
+    const texts = [...container.querySelectorAll('select[aria-label="Switch run"] option')].map((o) => o.textContent ?? "");
+    expect(texts).toHaveLength(3);
+    expect(new Set(texts).size).toBe(3);
+    expect(texts[0]).toContain("FAST");
+    expect(texts[0]).toContain("R² 0.812");
+    expect(texts[1]).toContain("COARSE 60");
+    expect(texts[1]).toContain("R² 0.774");
+    expect(texts[0]).toMatch(/2026-10-02 \d\d:\d\d/);
+    expect(texts[2]).toContain("r_twin");
+    expect(texts[0]).toContain("r_fast");
+    expect(texts[1]).not.toContain("r_coarse");
   });
 
   it("opens the command palette with Ctrl+K and toggles the theme", async () => {

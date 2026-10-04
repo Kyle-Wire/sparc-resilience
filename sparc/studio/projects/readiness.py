@@ -191,8 +191,10 @@ def readiness(db, project: dict, raw: dict, *, issues: list[dict] | None = None)
                                                              if warns else "")))
 
     # runs
-    runs = db.fetchall("SELECT id, mode, status, has_emulator, created_utc FROM runs WHERE project_id = ? "
-                       "ORDER BY created_utc DESC", (pid,))
+    from sparc.studio.projects.service import OWN_RUNS_SQL
+
+    runs = db.fetchall(f"SELECT id, mode, status, has_emulator, created_utc FROM runs WHERE project_id = ? AND "
+                       f"{OWN_RUNS_SQL} ORDER BY created_utc DESC", (pid,))   # a study's children are not counted
     good = [r for r in runs if r["status"] in ("complete", "imported", "partial")]
     if not runs:
         out.append(_row("runs", "missing", "no runs yet", _open("Launch first run", f"/p/{pid}/launch")))

@@ -182,16 +182,42 @@ def _flatten(obj, prefix: str = "", out: list | None = None, depth: int = 0) -> 
     elif isinstance(obj, list) and depth < 3 and all(not isinstance(x, (dict, list)) for x in obj):
         out.append((prefix, ", ".join(_scalar(x) for x in obj)))
     elif isinstance(obj, (dict, list)):
-        out.append((prefix, json.dumps(obj, default=str)[:400]))
+        out.append((prefix, _json(obj)))
     else:
         out.append((prefix, _scalar(obj)))
     return out
 
 
+def _json(v) -> str:
+    """Nested values in full, with their text as written (``ΔT``, ``°F``), never cut."""
+    return json.dumps(v, default=str, ensure_ascii=False)
+
+
 def _scalar(v) -> str:
     if isinstance(v, float):
         return f"{v:.6g}"
+    if isinstance(v, (dict, list)):
+        return _json(v)
     return "—" if v is None else str(v)
+
+
+def _snapshot_table(snapshot: dict) -> dict | None:
+    """The ``table: {columns, rows}`` a chart pin (``ChartFrame``) snapshots, as a report table with every row:
+    each column headed by its ``label`` (else ``key``) and ``(unit)``, as the Findings page shows it."""
+    t = snapshot.get("table")
+    if not isinstance(t, dict) or not isinstance(t.get("columns"), list) or not isinstance(t.get("rows"), list):
+        return None
+    head = []
+    for c in t["columns"]:
+        if isinstance(c, dict):
+            label = str(c.get("label") if c.get("label") is not None else c.get("key") or "")
+            head.append(f"{label} ({c['unit']})" if c.get("unit") else label)
+        else:
+            head.append(_scalar(c))
+    rows = [[_scalar(x) for x in r] for r in t["rows"] if isinstance(r, list)]
+    width = max([len(head), *(len(r) for r in rows)])
+    return {"t": "table", "head": head + [""] * (width - len(head)), "rows": [r + [""] * (width - len(r)) for r in rows],
+            "caption": "Numbers on screen (as shown when the finding was pinned)."}
 
 
 def finding_blocks(db, row: dict, *, images: str = "inline", image_name: str | None = None) -> list[dict]:
@@ -202,7 +228,12 @@ def finding_blocks(db, row: dict, *, images: str = "inline", image_name: str | N
     blocks: list[dict] = [{"t": "h", "level": 3, "text": f["title"] or "(untitled finding)"}]
     if f["note_md"]:
         blocks.append({"t": "md", "text": f["note_md"]})
-    snap = _flatten(f["snapshot"]) if f["snapshot"] else []
+    snapshot = f["snapshot"]
+    table = _snapshot_table(snapshot) if isinstance(snapshot, dict) else None
+    if table is not None:
+        blocks.append(table)
+        snapshot = {k: v for k, v in snapshot.items() if k != "table"}
+    snap = _flatten(snapshot) if snapshot else []
     if snap:
         blocks.append({"t": "table", "head": ["Value on screen", ""], "rows": [[k, v] for k, v in snap],
                        "caption": "Snapshotted numbers (as shown when the finding was pinned)."})

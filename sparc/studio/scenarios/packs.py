@@ -405,7 +405,8 @@ def _provenance(ctx, spec: dict) -> dict:
     return {"run": ctx.run_id, "run_dir": str(ctx.run_dir), "content_hash": spec.get("content_hash"),
             "checkpoint": spec.get("ckpt_key"), "checkpoint fingerprint": side.get("fingerprint"),
             "core code sha256": spec.get("code_sha"), "config sha256": ((m.get("provenance") or {}).get("config_sha256")),
-            "git commit": m.get("git_commit"), "result": spec.get("id")}
+            "git commit": ((m.get("provenance") or {}).get("git") or {}).get("commit") or m.get("git_commit"),
+            "result": spec.get("id")}
 
 
 def _decision_contents(ctx, stage: Path, *, name: str, scenario: dict | None, res: dict, spec: dict, delta,

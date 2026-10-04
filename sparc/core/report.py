@@ -5,14 +5,17 @@ from __future__ import annotations
 import platform
 import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
 
 import numpy as np
 
 
 def _git_commit() -> str | None:
+    """The commit of the code that runs (git in the core package's folder, as ``provenance.git_state``), never
+    of the working directory: a Studio worker runs in its job folder."""
     try:
-        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL,
-                                       text=True).strip()
+        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=Path(__file__).resolve().parent,
+                                       stderr=subprocess.DEVNULL, text=True).strip() or None
     except Exception:
         return None
 

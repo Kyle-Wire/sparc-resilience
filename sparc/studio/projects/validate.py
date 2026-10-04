@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
 import threading
 from collections import OrderedDict
@@ -37,7 +38,10 @@ from pydantic import BaseModel, ValidationError
 from sparc.studio.projects.config_schema import ROLE_NAMES, CoreConfigModel
 from sparc.studio.projects.config_service import build_core_config, merged_raw
 
-__all__ = ["validate_deep", "validate_report", "fast_overrides", "coarse_preview", "table_columns", "has_errors"]
+__all__ = ["validate_deep", "validate_report", "fast_overrides", "coarse_preview", "table_columns", "has_errors",
+           "type_errors"]
+
+log = logging.getLogger("sparc.studio.projects")
 
 SAMPLE_ROWS = 50000
 _COLS_CACHE: "OrderedDict[tuple, dict[str, bool]]" = OrderedDict()
@@ -110,6 +114,15 @@ def _schema_issues(eff: dict, out: _Issues) -> None:
     _unknown_keys(eff, CoreConfigModel, "", out)
 
 
+def type_errors(raw: dict) -> list[dict]:
+    """``[{path, message, code: "type"}]``: the schema's type errors of ``raw`` merged with DEFAULTS."""
+    from sparc.core.provenance import _str_keys
+
+    out = _Issues()
+    _schema_issues(merged_raw(_str_keys(raw or {})), out)
+    return [{"path": i["path"], "message": i["message"], "code": "type"} for i in out.rows if i["code"] == "type"]
+
+
 def _models_in(annotation) -> tuple[list[type], str]:
     """``(models, shape)`` of a field annotation: shape is ``model`` (a sub-model, possibly optional),
     ``map`` (dict of models), ``list`` (list of models) or ``other``."""
@@ -173,10 +186,39 @@ def _num(v) -> float | None:
     return f if np.isfinite(f) else None
 
 
+def _list(v) -> list:
+    """``v`` when it is a list, else ``[]`` (a wrong type is the schema's type issue, not a crash)."""
+    return v if isinstance(v, list) else []
+
+
+def _has(container, v) -> bool:
+    """``v in container``, False for an unhashable ``v`` (a list or mapping where a name belongs)."""
+    try:
+        return v in container
+    except TypeError:
+        return False
+
+
 def validate_deep(raw: dict, project_dir: str | os.PathLike, *, rows: int = SAMPLE_ROWS) -> list[dict]:
-    """Every check of SPEC §9.4 on the raw ``core:`` block; returns ``Issue`` rows (errors first)."""
+    """Every check of SPEC §9.4 on the raw ``core:`` block; returns ``Issue`` rows (errors first).
+
+    It never raises on a config: a value of the wrong type is reported by the
+    schema check, and an unexpected failure of the checks themselves is one
+    ``validation_failed`` error (a save is already committed when this runs,
+    and the project list builds its readiness spine from it).
+    """
+    try:
+        return _validate_deep(raw, project_dir, rows=rows)
+    except Exception as exc:                          # noqa: BLE001 - reported as an issue, logged with its trace
+        log.exception("validate_deep failed on %s", project_dir)
+        return [{"level": "error", "path": "", "code": "validation_failed",
+                 "message": f"Studio could not finish checking this config ({type(exc).__name__}: {exc})"}]
+
+
+def _validate_deep(raw: dict, project_dir: str | os.PathLike, *, rows: int = SAMPLE_ROWS) -> list[dict]:
     from sparc.core.config import UNIT_TO_METRES
     from sparc.core.provenance import _str_keys
+    from sparc.studio.runs.grid import crs_problem
 
     pdir = Path(project_dir)
     out = _Issues()
@@ -197,6 +239,11 @@ def validate_deep(raw: dict, project_dir: str | os.PathLike, *, rows: int = SAMP
     phys, causal, clim, opt = sec("physics"), sec("causal"), sec("climate"), sec("optimize")
     planner = eff.get("planner") if isinstance(eff.get("planner"), dict) else {}
     crs = d.get("crs") or d.get("reproject_to")
+    for key in ("crs", "reproject_to"):
+        why = crs_problem(d.get(key))
+        if why:
+            out.add("error", f"data.{key}", "bad_crs", f"data.{key}: {why}; maps, GeoTIFF/GeoJSON exports, open data "
+                    "and the climate site need a CRS pyproj can read")
 
     # -- required keys and units ------------------------------------------------------------
     if not d.get("target"):
@@ -233,7 +280,7 @@ def validate_deep(raw: dict, project_dir: str | os.PathLike, *, rows: int = SAMP
                 cols = dict(table_columns(p, rows))
             except Exception as exc:                 # noqa: BLE001 - reported, not raised
                 out.add("error", "data.path", "unreadable", f"cannot read {d['path']}: {getattr(exc, 'message', exc)}")
-    for i, j in enumerate(d.get("join") or []):
+    for i, j in enumerate(_list(d.get("join"))):
         if not isinstance(j, dict) or not j.get("path"):
             out.add("error", f"data.join.{i}.path", "required", "each join needs a path")
             continue
@@ -248,16 +295,16 @@ def validate_deep(raw: dict, project_dir: str | os.PathLike, *, rows: int = SAMP
             continue
         key = j.get("key") or j.get("on") or j.get("True") or d.get("id")
         right = j.get("right_key") or j.get("right_on") or ("id" if "id" in jcols else key)
-        if cols is not None and key and key not in cols:
+        if cols is not None and key and not _has(cols, key):
             out.add("error", f"data.join.{i}.key", "missing_column", f"join key {key!r} is not a data column")
-        if right and right not in jcols:
+        if right and not _has(jcols, right):
             out.add("error", f"data.join.{i}.right_key", "missing_column",
                     f"join key {right!r} is not a column of {Path(str(j['path'])).name}")
         if cols is not None:
             for c, isnum in jcols.items():
                 if c != right and c not in cols:
                     cols[c] = isnum
-    categorical = set((sec("encodings").get("categorical") or []))
+    categorical = {c for c in _list(sec("encodings").get("categorical")) if isinstance(c, (str, int, float))}
 
     def need_column(path: str, col: Any, *, numeric: bool = True, level: str = "error") -> None:
         if cols is None or col in (None, ""):
@@ -279,8 +326,8 @@ def validate_deep(raw: dict, project_dir: str | os.PathLike, *, rows: int = SAMP
         need_column(f"predictors.{i}", c)
     need_column("optimize.equity_column", opt.get("equity_column"))
     for kind in ("categorical", "circular_degrees"):
-        for i, c in enumerate(sec("encodings").get(kind) or []):
-            if c not in pset:
+        for i, c in enumerate(_list(sec("encodings").get(kind))):
+            if not _has(pset, c):
                 out.add("warn", f"encodings.{kind}.{i}", "encoding_not_predictor", f"{c!r} is not a predictor")
 
     # -- levers ----------------------------------------------------------------------------------
@@ -311,9 +358,9 @@ def validate_deep(raw: dict, project_dir: str | os.PathLike, *, rows: int = SAMP
         direction = str(spec.get("direction", "increase")).lower()
         if direction not in ("increase", "decrease"):
             out.add("error", f"{base}.direction", "bad_direction", f"{var}: direction must be increase or decrease")
-    for i, c in enumerate(eff.get("coupling") or []):
-        for k, col in enumerate((c or {}).get("sum") or [] if isinstance(c, dict) else []):
-            if col not in pset:
+    for i, c in enumerate(_list(eff.get("coupling"))):
+        for k, col in enumerate(_list(c.get("sum")) if isinstance(c, dict) else []):
+            if not _has(pset, col):
                 out.add("error", f"coupling.{i}.sum.{k}", "coupling_not_predictor", f"{col!r} is not a predictor")
     meds = eff.get("mediators") if isinstance(eff.get("mediators"), dict) else {}
     for med, spec in meds.items():
@@ -321,8 +368,8 @@ def validate_deep(raw: dict, project_dir: str | os.PathLike, *, rows: int = SAMP
             out.add("error", f"mediators.{med}", "mediator_not_predictor", f"mediator {med!r} is not a predictor")
         spec = spec if isinstance(spec, dict) else {}
         for key in ("parents", "context"):
-            for k, c in enumerate(spec.get(key) or []):
-                if c not in pset:
+            for k, c in enumerate(_list(spec.get(key))):
+                if not _has(pset, c):
                     out.add("error", f"mediators.{med}.{key}.{k}", "mediator_not_predictor",
                             f"mediator {key[:-1] if key == 'parents' else key} {c!r} is not a predictor")
 
@@ -334,7 +381,7 @@ def validate_deep(raw: dict, project_dir: str | os.PathLike, *, rows: int = SAMP
         if role not in ROLE_NAMES:
             out.add("warn", f"physics.roles.{role}", "unknown_role",
                     f"{role!r} is not a physics role ({', '.join(ROLE_NAMES)})")
-        if col not in pset:
+        if not _has(pset, col):
             out.add("error", f"physics.roles.{role}", "role_not_predictor",
                     f"role {role} is mapped to {col!r}, which is not a predictor")
     mapped = {r for r, c in roles.items() if c}
@@ -358,33 +405,33 @@ def validate_deep(raw: dict, project_dir: str | os.PathLike, *, rows: int = SAMP
                 out.add("error", "physics.forcing", "forcing_invalid", f"forcing file {forcing} is not valid: {exc}")
 
     # -- scenarios -----------------------------------------------------------------------------------
-    for i, s in enumerate(eff.get("scenarios") or []):
+    for i, s in enumerate(_list(eff.get("scenarios"))):
         if not isinstance(s, dict):
             continue
         var = s.get("variable")
-        if var not in act:
+        if not _has(act, var):
             out.add("error", f"scenarios.{i}.variable", "scenario_not_actionable",
                     f"scenario {s.get('name')!r}: {var!r} is not a lever (add it to actionable)")
             continue
         lo, hi = _num(act[var].get("min")), _num(act[var].get("max"))
-        for k, inc in enumerate(s.get("increments") or []):
+        for k, inc in enumerate(_list(s.get("increments"))):
             x = _num(inc)
             if x is not None and lo is not None and hi is not None and abs(x) > hi - lo:
                 out.add("warn", f"scenarios.{i}.increments.{k}", "increment_out_of_bounds",
                         f"scenario {s.get('name')!r}: +{x:g} exceeds the lever's range {lo:g}–{hi:g}")
-    for i, j in enumerate(eff.get("joint_scenarios") or []):
+    for i, j in enumerate(_list(eff.get("joint_scenarios"))):
         if not isinstance(j, dict):
             continue
-        for k, iv in enumerate(j.get("interventions") or []):
-            var = (iv or {}).get("variable") if isinstance(iv, dict) else None
-            if var not in act:
+        for k, iv in enumerate(_list(j.get("interventions"))):
+            var = iv.get("variable") if isinstance(iv, dict) else None
+            if not _has(act, var):
                 out.add("error", f"joint_scenarios.{i}.interventions.{k}.variable", "scenario_not_actionable",
                         f"package {j.get('name')!r}: {var!r} is not a lever")
 
     # -- causal --------------------------------------------------------------------------------------
     if causal.get("enabled", True):
-        for i, t in enumerate(causal.get("treatments") or []):
-            if t not in pset:
+        for i, t in enumerate(_list(causal.get("treatments"))):
+            if not _has(pset, t):
                 out.add("error", f"causal.treatments.{i}", "causal_not_predictor",
                         f"causal treatment {t!r} is not a predictor")
         for key in ("confounders", "exclude_controls"):
@@ -392,8 +439,8 @@ def validate_deep(raw: dict, project_dir: str | os.PathLike, *, rows: int = SAMP
             for t, lst in m.items():
                 if t not in pset:
                     out.add("error", f"causal.{key}.{t}", "causal_not_predictor", f"{t!r} is not a predictor")
-                for k, c in enumerate(lst or [] if isinstance(lst, list) else []):
-                    if c not in pset:
+                for k, c in enumerate(_list(lst)):
+                    if not _has(pset, c):
                         out.add("error", f"causal.{key}.{t}.{k}", "causal_not_predictor",
                                 f"{key[:-1].replace('_', ' ')} {c!r} is not a predictor")
         contrast = causal.get("contrast") if isinstance(causal.get("contrast"), dict) else {}
@@ -434,7 +481,7 @@ def validate_deep(raw: dict, project_dir: str | os.PathLike, *, rows: int = SAMP
                     f"people/land-cover layers not found: {layers}")
     if opt.get("enabled", True):
         var = opt.get("variable")
-        if var and var not in act:
+        if var and not _has(act, var):
             out.add("error", "optimize.variable", "optimize_not_actionable",
                     f"optimize.variable {var!r} is not a lever")
         if people and not layers:
@@ -475,7 +522,7 @@ def fast_overrides(raw: dict, project_dir: str | os.PathLike) -> dict:
     before = _leaves(copy.deepcopy(cfg.raw))
     try:
         after = _leaves(apply_mode_overrides(cfg, fast=True).raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, AttributeError, KeyError):   # a section of the wrong type: the issues say it
         return {}
     return {k: {"from": before.get(k), "to": v} for k, v in after.items() if before.get(k) != v}
 
@@ -485,8 +532,8 @@ def coarse_preview(raw: dict, project_dir: str | os.PathLike, cell_m: float | No
     from sparc.core.grid import estimate_lattice_spacing
     from sparc.studio.projects.files import read_table_head
 
-    d = merged_raw(raw).get("data") or {}
-    if not d.get("path") or d.get("reproject_to"):
+    d = merged_raw(raw).get("data")
+    if not isinstance(d, dict) or not d.get("path") or d.get("reproject_to"):
         return None
     p = _resolve(Path(project_dir), str(d["path"]))
     x, y = d.get("x"), d.get("y")
@@ -504,9 +551,11 @@ def coarse_preview(raw: dict, project_dir: str | os.PathLike, cell_m: float | No
         if len(xs) < 3:
             return None
         fine = float(d.get("cell_m") or estimate_lattice_spacing(xs, ys))
+        cm = float(cell_m or d.get("coarse_m") or 60.0)
     except Exception:                                 # noqa: BLE001 - a preview, never an error
         return None
-    cm = float(cell_m or d.get("coarse_m") or 60.0)
+    if not (np.isfinite(cm) and cm > 0 and np.isfinite(fine) and fine > 0):
+        return None
     ix = np.floor((xs - xs.min() + 0.5 * fine) / cm).astype(np.int64)
     iy = np.floor((ys - ys.min() + 0.5 * fine) / cm).astype(np.int64)
     n_cells = int(np.unique(iy * (int(ix.max()) + 1) + ix).size)

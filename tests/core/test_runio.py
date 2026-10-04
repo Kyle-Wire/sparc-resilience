@@ -221,3 +221,41 @@ def test_run_lock_excludes_other_processes(tmp_path):
         assert waited > 0.2
     finally:
         p.wait(timeout=30)
+
+
+def killed_writer_tmp(target: Path) -> Path:
+    """A process killed with SIGKILL inside ``atomic_open(target)`` (Studio's Force stop, the OOM killer while
+    pickling a checkpoint): its hidden temporary sibling stays behind.  Returns that file."""
+    code = ("import sys, time\nfrom sparc.core import runio\n"
+            "with runio.atomic_open(sys.argv[1], 'wb') as f:\n"
+            "    f.write(b'x' * 65536); f.flush(); print('ready', flush=True); time.sleep(60)\n")
+    p = subprocess.Popen([sys.executable, "-c", code, str(target)], stdout=subprocess.PIPE, cwd=ROOT)
+    try:
+        assert p.stdout.readline().strip() == b"ready"
+    finally:
+        p.kill()
+        p.wait(10)
+        p.stdout.close()
+    left = list(target.parent.glob(f".{target.name}.{p.pid}.*.tmp"))
+    assert len(left) == 1, sorted(x.name for x in target.parent.iterdir())
+    return left[0]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="SIGKILL and pid checks are POSIX")
+def test_temporaries_of_killed_writers_are_swept(tmp_path):
+    """Nothing removed the temporary of a writer killed mid-write (its name holds the dead pid, so the next
+    write never reuses it): the next atomic write of that file removes it, and ``remove_stale_tmp`` sweeps a
+    folder; a live writer's temporary is never touched."""
+    target = tmp_path / "checkpoint.pkl"
+    stale = killed_writer_tmp(target)
+    live = tmp_path / f".checkpoint.pkl.{os.getpid()}.1.tmp"            # this process: alive
+    live.write_bytes(b"in progress")
+    runio.write_bytes_atomic(target, b"new checkpoint")
+    assert not stale.exists() and live.exists() and target.read_bytes() == b"new checkpoint"
+
+    other = killed_writer_tmp(tmp_path / "checkpoint.json")
+    unrelated = tmp_path / ".notes.tmp"
+    unrelated.write_text("not ours")
+    assert runio.remove_stale_tmp(tmp_path) == 65536
+    assert not other.exists() and live.exists() and unrelated.exists()
+    assert runio.remove_stale_tmp(tmp_path / "missing") == 0

@@ -221,3 +221,43 @@ def test_preview_marks_scenario_previewed(client, ctx, demo, run_ctx, synth_run,
     assert s["status"] == "previewed"
     s = client.patch(f"/api/scenarios/{sc['id']}", json={"doc": {**DOC, "edits": [{**edited[0], "amount": 25}]}}).json()
     assert s["status"] == "draft"
+
+
+def test_deleting_a_run_drops_its_results_plans_and_comparisons(client, ctx, demo, run_ctx, synth_run):
+    """``DELETE /api/runs/{rid}`` removes the run folder, and with it ``studio/results|plans|sweeps|comparisons|
+    blobs``: their rows go too, so a scenario whose only exact result lived there is no longer ``exact`` (it can
+    be edited again) and the plan and comparison of the deleted run answer 404 instead of serving its data."""
+    rid, rd = synth_run
+    sc = _create(client, demo["id"])
+    other = _create(client, demo["id"], {**DOC, "name": "Untouched"})
+    made = make_result(ctx, run_ctx, scenario={"id": sc["id"], "content_hash": sc["content_hash"]})
+    from sparc.studio.scenarios import library
+
+    library.sync_status(ctx.db, sc["id"])
+    library.write_mirror(ctx.db, ctx.workspace, sc["id"])
+    assert client.get(f"/api/scenarios/{sc['id']}").json()["status"] == "exact"
+    plan = client.post(f"/api/runs/{rid}/plans", json={"params": {"lever": "canopy", "budget": 2000}, "name": "Trees",
+                                                        "verify": False})
+    assert plan.status_code == 201, plan.text
+    plid = plan.json()["plan"]["id"]
+    cmp_ = client.post(f"/api/runs/{rid}/compare", json={"items": [{"kind": "result", "id": made["id"]},
+                                                                   {"kind": "baseline"}], "regions": []})
+    assert cmp_.status_code == 201, cmp_.text
+    region = client.post(f"/api/runs/{rid}/regions", json={"name": "Hot", "spec": {"kind": "filter", "column": "obs",
+                                                                                  "op": ">", "value": 88.5}})
+    assert region.status_code == 201, region.text
+
+    assert client.delete(f"/api/runs/{rid}").status_code == 200 and not rd.exists()
+    for table in ("results", "plans", "sweeps", "comparisons", "blobs", "regions"):
+        assert ctx.db.fetchval(f"SELECT COUNT(*) FROM {table} WHERE run_id = ?", (rid,)) == 0, table
+    got = client.get(f"/api/scenarios/{sc['id']}").json()
+    assert got["status"] == "draft" and got["results"] == []
+    listed = {x["id"]: x for x in client.get(f"/api/projects/{demo['id']}/scenarios").json()}
+    assert listed[sc["id"]]["latest"] is None and listed[sc["id"]]["status"] == "draft"
+    assert listed[other["id"]]["status"] == "draft"
+    mirror = json.loads((Path(demo["dir"]) / "scenarios" / f"{sc['id']}.json").read_text())
+    assert mirror["revisions"][0]["status"] == "draft"
+    doc2 = {**DOC, "edits": [{**DOC["edits"][0], "amount": 12}]}
+    assert client.patch(f"/api/scenarios/{sc['id']}", json={"doc": doc2}).status_code == 200
+    assert client.get(f"/api/plans/{plid}").status_code == 404
+    assert client.get(f"/api/comparisons/{cmp_.json()['id']}").status_code == 404

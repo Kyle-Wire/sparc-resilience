@@ -59,6 +59,10 @@ RUN_FILES = ("manifest.json", "run_state.json", "predictions.parquet", "studio/l
 _SKIP_DIRS = {"studio", "planner", "geotiff", "cache", "__pycache__", "engine", "results", "plans", "sweeps",
               "comparisons", "blobs", "exports", "data", "inputs", "scenarios", "findings", ".git", "node_modules"}
 _ACTIVE_JOB = ("queued", "blocked", "starting", "running", "cancelling")
+#: tables whose rows belong to one run: indexed from its ``studio/`` folder (engine results, plans, sweeps,
+#: comparisons, blobs) or bound to its grid (regions); deleting the run drops them (exports and findings live
+#: in the project and stay)
+_RUN_ROWS = ("results", "plans", "sweeps", "comparisons", "blobs", "regions")
 #: origins of runs a study's job tracks (never CLI runs, SPEC §4.3)
 _CHILD_ORIGINS = ("study_child", "reproduction")
 _PATTERNS = [
@@ -704,9 +708,34 @@ class Registry:
 
     # ------------------------------------------------------------------ deletion helpers
 
-    def forget(self, run_id: str) -> None:
-        self.db.execute("DELETE FROM runs WHERE id = ?", (run_id,))
-        self.db.execute("DELETE FROM stage_timings WHERE run_id = ?", (run_id,))
+    def forget(self, run_id: str) -> list[str]:
+        """Drop a deleted run's rows: the run, its stage timings and the rows indexed from its ``studio/``
+        folder or bound to its grid (:data:`_RUN_ROWS`), then recompute the status (and mirror) of every
+        scenario that had a result on it, so none stays ``exact`` on a result that is gone.  Returns those
+        scenario ids."""
+        sids = [r["scenario_id"] for r in self.db.fetchall(
+            "SELECT DISTINCT scenario_id FROM results WHERE run_id = ? AND scenario_id IS NOT NULL", (run_id,))]
+
+        def fn(conn) -> None:
+            conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+            for table in ("stage_timings", *_RUN_ROWS):
+                conn.execute(f"DELETE FROM {table} WHERE run_id = ?", (run_id,))
+
+        self.db.run(fn)
+        if sids:
+            import importlib
+
+            try:
+                lib = importlib.import_module("sparc.studio.scenarios.library")
+            except ModuleNotFoundError:
+                return sids
+            for sid in sids:
+                try:
+                    lib.sync_status(self.db, sid)
+                    lib.write_mirror(self.db, self.ws, sid)
+                except Exception:
+                    log.exception("cannot refresh scenario %s after deleting run %s", sid, run_id)
+        return sids
 
     # ------------------------------------------------------------------ external (CLI) runs
 

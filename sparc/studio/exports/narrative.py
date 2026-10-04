@@ -75,12 +75,22 @@ def confidence_phrase(est, lo, hi) -> str:
 
 def headline_scenario(m: dict, preferred: str | None = None) -> dict | None:
     """The configured scenario the summary leads with: the project's headline, else the strongest cooling
-    among those mostly within observed conditions, else the strongest cooling."""
+    among those mostly within observed conditions, else the strongest cooling.
+
+    ``preferred`` is the project's ``headline_scenario``: a configured-scenario slug (``scenario_slug`` of the
+    manifest's names, in order, as ``RunContext.configured_scenarios`` and the Overview read it) or a name."""
+    from sparc.core.catalog import scenario_slug
+
     rows = [s for s in m.get("scenarios") or [] if isinstance(s, dict) and _num(s.get("mean_delta")) is not None]
     if not rows:
         return None
     if preferred:
-        hit = next((s for s in rows if s.get("name") == preferred), None)
+        slugs: dict[str, str] = {}
+        for s in m.get("scenarios") or []:
+            if isinstance(s, dict) and s.get("name"):
+                slugs.setdefault(str(s["name"]), scenario_slug(str(s["name"]), slugs.values()))
+        hit = next((s for s in rows if slugs.get(str(s.get("name"))) == preferred), None) or \
+            next((s for s in rows if s.get("name") == preferred), None)
         if hit is not None:
             return hit
     for limit in (0.2, 0.5):                # mostly within observed conditions first

@@ -81,3 +81,37 @@ def test_run_without_crs_needs_crs(client, demo, place_run):
     poly = {"kind": "polygon", "crs": "EPSG:4326", "rings": [[[-71.4, 41.8], [-71.3, 41.8], [-71.3, 41.9]]]}
     r = client.post(f"/api/runs/{RUN_ID}/selection/resolve", json={"selection": poly})
     assert r.status_code == 422 and r.json()["error"]["code"] == "needs_crs"
+
+
+@pytest.mark.parametrize("bad", ["garbage", "EPSG 32619"])
+def test_run_with_an_unreadable_crs_needs_crs(client, demo, place_run, bad):
+    """A ``data.crs`` pyproj cannot read counts as no CRS: the grid has none, the formats that need earth
+    coordinates answer ``422 needs_crs`` (never a 500 or an empty FeatureCollection) and the others still work."""
+    def bad_crs(raw: dict) -> None:
+        raw["data"]["crs"] = bad
+        raw["data"].pop("reproject_to", None)
+
+    place_run(demo, edit_config=bad_crs)
+    meta = client.get(f"/api/runs/{RUN_ID}/grid").json()
+    assert meta["crs"] is None and meta["has_lonlat"] is False and meta["corners"] is None
+    for fmt in ("tif", "geojson"):
+        r = client.get(f"/api/runs/{RUN_ID}/export/layer/pred", params={"fmt": fmt})
+        assert r.status_code == 422 and r.json()["error"]["code"] == "needs_crs", (fmt, r.text)
+    csv = client.get(f"/api/runs/{RUN_ID}/export/layer/pred", params={"fmt": "csv"})
+    assert csv.status_code == 200 and csv.text.splitlines()[0] == "id,pred"
+    hexes = client.get(f"/api/runs/{RUN_ID}/hex", params={"size": 250, "layers": "obs"})
+    assert hexes.status_code == 200, hexes.text
+    assert hexes.json()["hex"] and all(h["lon"] is None for h in hexes.json()["hex"])
+    assert client.get(f"/api/runs/{RUN_ID}/hex", params={"size": 250, "layers": "obs", "fmt": "csv"}).status_code == 200
+    for fmt in ("geojson", "gpkg"):
+        r = client.get(f"/api/runs/{RUN_ID}/hex", params={"size": 250, "layers": "obs", "fmt": fmt})
+        assert r.status_code == 422 and r.json()["error"]["code"] == "needs_crs", (fmt, r.text)
+    r = client.get(f"/api/runs/{RUN_ID}/files/raw", params={"path": "predictions.parquet", "as": "geojson"})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "needs_crs", r.text
+    r = client.get(f"/api/runs/{RUN_ID}/files/raw", params={"path": "predictions.parquet", "as": "csv"})
+    assert r.status_code == 200 and "lon" not in r.text.splitlines()[0].split(",")
+    poly = {"kind": "polygon", "crs": "EPSG:4326", "rings": [[[-71.4, 41.8], [-71.3, 41.8], [-71.3, 41.9]]]}
+    r = client.post(f"/api/runs/{RUN_ID}/selection/resolve", json={"selection": poly})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "needs_crs", r.text
+    r = client.post("/api/exports", json={"kind": "gis", "project_id": demo["id"], "params": {"run_id": RUN_ID}})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "needs_crs", r.text
