@@ -672,6 +672,25 @@ User guide: `docs/studio/USER_GUIDE.md`. Developer guide: `docs/studio/DEVELOPIN
 - Futures shift today's afternoon by the median warming (delta method); they do not model future humidity or heat-wave frequency.
 - The live preview is the linear emulator; exact results verify it.
 
+## Appendix G — Isolating canopy's causal effect (2026-10-05)
+
+**Why.** Canopy is the one lever the uncertainty report calls Not established: the map is a forest-made product, and its canopy dependence is as large when the simulation plants no effect as the real estimate. The question was whether any design can isolate canopy's effect, and at what scale.
+
+**What was built** (`sparc/core/identify`, outside the code fingerprint):
+- simulated heat-watch campaigns on the real layout (routes, vehicles, drift, sensor offsets) and the map a forest makes from them;
+- design layers: canopy in distance rings with a flexible near-field response and the exact +10 pp edit, wind sectors, piecewise geography;
+- estimators: street differences along each pass, read as the effect of canopy within 100 m / 300 m / 1 km; the upwind–downwind signature; levels and map foils;
+- the identification lab: every design on six worlds × 12 campaigns, scored against its own estimand (exact disk-edit reach profiles), with verdicts;
+- the real-data path: CAPA traverse files placed on the grid (projection, snapping, passes, 1 Hz collapse) and estimated with the lab's verdicts; `python -m sparc.core.identify lab | estimate | map | simulate`;
+- a results-page section, "Can canopy's own effect be isolated?".
+
+**Findings** ([canopy_identification.md](../results/canopy_identification.md)):
+- Street differences within 100 m are trustworthy: bias ≤ 0.02 °F in every world, including the advected and confounded ones; 8% false positives with no effect.
+- Within 300 m: direction only. Within 1 km and city-wide: not identified by one campaign (a kilometre-scale effect and a canopy-tracking kilometre-scale confounder are observationally equivalent).
+- The same estimator on the forest-made map reports an effect in 58% of no-effect worlds (0% on the traverses): the product, not the method, breaks identification. The real map shows no street-scale canopy effect (−0.01 °F, CI −0.08 to +0.06).
+
+**Open.** Run `estimate` on Providence's raw traverses (OSF `tdsy7`, unreachable from the development environment). Kilometre-scale identification needs repeat campaigns under different winds, before/after canopy change, or pooling the wind signature across cities.
+
 ## Appendix B — References
 
 - **Assran et al. (2023):** *Self-Supervised Learning from Images with a Joint-Embedding Predictive Architecture* (I-JEPA).

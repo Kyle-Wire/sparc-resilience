@@ -273,6 +273,8 @@ sparc core placebo     -p <config> --coarse 60                  # shifted / rota
 sparc core simcheck    -p <config> --design physics=20,additive=20,null=20 --out <dir>   # planted effects on the real layout
 sparc core multiverse  -p <config> --out <dir>                  # effect and priority-map stability across analysis choices
 sparc core uncertainty <run dir> --multiverse <dir> --simcheck <dirs>   # estimation / specification / attribution
+python -m sparc.core.identify lab      -p <config>                      # which canopy designs recover a planted effect on this layout
+python -m sparc.core.identify estimate -p <config> --traverses <dir>    # canopy's causal effect from raw heat-watch traverses
 sparc core reproduce   <run dir>                                # re-run from the manifest and compare
 sparc core benchmark                                            # effect recovery on the synthetic city
 # for planners
@@ -290,7 +292,7 @@ Each run writes a directory containing:
 - `scenarios.json`, `scenario_deltas.parquet`, `climate.json`, `causal.json`, `optimize.json`, `allocation.parquet`
 - after the post-run commands: `planner/` (tables, hexagons, GeoTIFFs, GeoPackage), `emulator.npz/.json`, `uncertainty.json/.md`
 
-See [`docs/planner_guide.md`](docs/planner_guide.md) for reading the outputs and [`docs/results/reconciliation.md`](docs/results/reconciliation.md) for how these numbers relate to earlier SPARC releases.
+See [`docs/planner_guide.md`](docs/planner_guide.md) for reading the outputs and [`docs/results/reconciliation.md`](docs/results/reconciliation.md) for how these numbers relate to earlier SPARC releases. What can and cannot be said causally about canopy: [`docs/results/canopy_identification.md`](docs/results/canopy_identification.md).
 
 The legacy `sparc run` stages below still work, and their defects have been fixed in place. New work should target the core.
 

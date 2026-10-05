@@ -221,3 +221,24 @@ def test_cli_simulate_then_estimate(providence_config_path, brown_csv, tmp_path)
     assert rows["street_100"]["hi"] < 0                   # the planted own-cell cooling is found
     assert res["headline"]["main"] == "street_100" and res["headline"]["street_100"]["excludes_zero"]
     assert (tmp_path / "identify_estimate.md").read_text().startswith("# Canopy effect from the traverses")
+
+
+def test_results_page_reads_the_identification_outputs(tmp_path):
+    from sparc.core.results_page import _identify_section
+
+    rows = []
+    for gen, truth in (("null", 0.0), ("additive", -0.2)):
+        for rep in range(3):
+            rows.append({"estimator": "street_100", "kind": "effect", "where": "street", "level": "traverse",
+                         "generator": gen, "rep": rep, "estimate": truth + 0.01 * (rep - 1), "se": 0.03,
+                         "truth": truth, "truth_total": truth, "advects": False})
+    run = tmp_path / "city" / "run"
+    run.mkdir(parents=True)
+    assert _identify_section(run) is None
+    out = tmp_path / "city" / "identify"
+    out.mkdir()
+    (out / "identify_lab.json").write_text(json.dumps(V.summarize(rows)))
+    sec = _identify_section(run)
+    d = sec["designs"]["street_100"]
+    assert d["status"] == "trustworthy" and set(d["worlds"]) == {"null", "additive"}
+    assert sec["n_reps"] == {"null": 3, "additive": 3} and sec["estimate"] is None

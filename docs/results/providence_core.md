@@ -161,7 +161,7 @@ City-wide mean cooling by neighbourhood dose (°F):
 - The specification range scales each multiverse variant's change to this run as a ratio to the multiverse baseline (the multiverse runs on 60 m cells).
 - The envelope is the union of the components: a plausible range for reading, not a confidence interval.
 - **Impervious and the package are the robust findings.** Their envelopes exclude zero, and every analysis variant agrees on the sign.
-- **Canopy is not established by this campaign.** The estimate is the same size as the spurious change the pipeline reports when the simulation plants no canopy effect (see [Validation](#validation-studies)).
+- **Canopy is not established by this campaign.** The estimate is the same size as the spurious change the pipeline reports when the simulation plants no canopy effect (see [Validation](#validation-studies)). Where it can be isolated, and how, is in [Isolating the causal effect of canopy](canopy_identification.md): a street-difference design on the raw traverse readings recovers the block-scale effect (canopy within 100 m) in every simulated world, while the same design on the map reports an effect in 58% of worlds with none.
 
 ## Climate futures (CMIP6, delta method)
 

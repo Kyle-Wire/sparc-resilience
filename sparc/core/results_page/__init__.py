@@ -431,6 +431,27 @@ def _causal_section(m: dict, run: Path) -> dict | None:
     return _causal_summary(raw) or None
 
 
+def _identify_section(run: Path) -> dict | None:
+    """Canopy identification (``python -m sparc.core.identify``): the lab's verdicts, the map designs on the
+    real target and, when a campaign's traverses were analysed, their estimate.  Read from ``identify/``
+    next to the run (or inside it)."""
+    for d in (run / "identify", run.parent / "identify"):
+        lab = _stage_file(d, "identify_lab.json")
+        if not lab:
+            continue
+        keep = ("mean", "sd", "mean_se", "truth", "bias", "coverage", "excludes_zero", "advects")
+        designs = {k: {"label": v["label"], "estimand": v["estimand"], "level": v["level"], "kind": v["kind"],
+                       "status": v["verdict"]["status"], "reasons": v["verdict"]["reasons"],
+                       "worlds": {w: {f: x.get(f) for f in keep} for w, x in v["generators"].items()}}
+                   for k, v in lab.get("designs", {}).items()}
+        mp = _stage_file(d, "identify_map.json") or {}
+        est = _stage_file(d, "identify_estimate.json")
+        if est:
+            est = {k: est.get(k) for k in ("source", "window", "qa", "headline")}
+        return {"n_reps": lab.get("n_reps"), "designs": designs, "map": mp.get("designs"), "estimate": est}
+    return None
+
+
 def _corners(cfg, g) -> dict | None:
     """``[lat, lon]`` of the corner cell centres.  The run frame is ``data.reproject_to`` (metres) when the data
     were reprojected, else ``data.crs`` scaled to metres by its coordinate unit."""
@@ -610,7 +631,7 @@ def collect(run, cfg, placebo_path=None) -> dict:
         "physics": m.get("physics"), "cv_distance": m.get("cv_distance") or jl("cv_distance.json"),
         "response": m.get("response"), "curves": jl("response_curves.json"),
         "scenarios": m.get("scenarios") or jl("scenarios.json"),
-        "causal": _causal_section(m, run), "optimize": optimize, "climate": climate,
+        "causal": _causal_section(m, run), "identify": _identify_section(run), "optimize": optimize, "climate": climate,
         "baselines": m.get("baselines") or jl("baselines.json"), "provenance": m.get("provenance"),
         "literature": m.get("literature"), "planner": m.get("planner"), "uncertainty": m.get("uncertainty"),
         "heat": heat_risk, "verdicts": verdicts,
