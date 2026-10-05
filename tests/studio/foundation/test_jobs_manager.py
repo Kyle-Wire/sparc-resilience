@@ -168,7 +168,8 @@ def test_per_run_lock_blocks(client, ctx, wait_job, tmp_path):
     add_run(ctx, "r1", tmp_path)
     add_run(ctx, "r2", tmp_path)
     assert client.put("/api/settings", json={"medium_slots": 2}).status_code == 200
-    a = submit(client, "test.lock", seconds=1.5, run_id="r1")
+    # a holds r1's lock until it is cancelled, so the checks below do not race its end on a slow machine
+    a = submit(client, "test.lock", seconds=120, run_id="r1")
     wait_job(client, a["id"], ("running",))
     assert ctx.db.fetchval("SELECT job_id FROM run_locks WHERE run_id = 'r1'") == a["id"]
     b = submit(client, "test.lock", seconds=0.1, run_id="r1")
@@ -177,6 +178,8 @@ def test_per_run_lock_blocks(client, ctx, wait_job, tmp_path):
     assert blocked["blocked"]["reason"] == "waiting for test.lock on this run"
     assert wait_job(client, c["id"])["status"] == "succeeded"                  # other run, free lane slot
     assert status(client, b["id"]) == "blocked"
+    assert client.post(f"/api/jobs/{a['id']}/cancel").status_code == 202      # releasing r1's lock unblocks b
+    assert wait_job(client, a["id"])["status"] == "cancelled"
     assert wait_job(client, b["id"])["status"] == "succeeded"
     assert ctx.db.fetchval("SELECT COUNT(*) FROM run_locks") == 0
 

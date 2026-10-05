@@ -32,6 +32,7 @@ import sys
 import time
 from pathlib import Path
 
+from sparc.core import runio
 from sparc.studio.events import encode_line
 
 __all__ = ["replay", "main", "CHECKPOINT_KEY", "cached_stages"]
@@ -70,7 +71,7 @@ def _copy(src: Path, dst: Path) -> None:
         return
     tmp = dst.with_name(f".{dst.name}.{os.getpid()}.tmp")
     shutil.copyfile(src, tmp)
-    os.replace(tmp, dst)
+    runio.replace(tmp, dst)
 
 
 def cached_stages(done) -> set[str]:

@@ -21,6 +21,7 @@ import re
 import zipfile
 from pathlib import Path
 
+from sparc.core import runio
 from sparc.studio import db as dbmod
 from sparc.studio.errors import ApiError, validation_error
 from sparc.studio.workspace import new_id, read_json, utc_now, write_json_atomic
@@ -306,7 +307,7 @@ def export_findings(db, project_id: str, out_dir: Path, *, run_id: str | None = 
         path = out_dir / "findings.html"
         tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
         tmp.write_text(render_html(title, sub, blocks), encoding="utf-8")
-        os.replace(tmp, path)
+        runio.replace(tmp, path)
     else:
         blocks = []
         images = []
@@ -324,7 +325,7 @@ def export_findings(db, project_id: str, out_dir: Path, *, run_id: str | None = 
             zf.writestr("findings/findings.md", render_markdown(title, sub, blocks))
             for ip, name in images:
                 zf.write(ip, f"findings/images/{name}")
-        os.replace(tmp, path)
+        runio.replace(tmp, path)
     return {"path": str(path), "bytes": path.stat().st_size}
 
 

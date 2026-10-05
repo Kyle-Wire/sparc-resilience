@@ -15,6 +15,8 @@ import os
 import zipfile
 from pathlib import Path
 
+from sparc.core import runio
+
 __all__ = ["select_files", "build_bundle", "readme_text", "check_outputs", "STORED_SUFFIXES"]
 
 #: formats that are already compressed (stored, not deflated)
@@ -145,7 +147,7 @@ def build_bundle(run: dict, run_dir: Path, cfg_raw: dict | None, out_zip: Path, 
                     progress_cb(i + 1, len(files), rel)
             zf.writestr(f"{top}/README.txt", readme_text(run, cfg_raw, files))
             zf.writestr(f"{top}/contents.json", json.dumps({"run_id": run.get("id"), "files": contents}, indent=1))
-        os.replace(tmp, out_zip)
+        runio.replace(tmp, out_zip)
     finally:
         if tmp.exists():
             tmp.unlink()

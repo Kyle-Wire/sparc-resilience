@@ -19,11 +19,11 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
-import os
 import shutil
 from pathlib import Path
 from typing import Any
 
+from sparc.core import runio
 from sparc.studio import __version__
 from sparc.studio import db as dbmod
 from sparc.studio.errors import ApiError
@@ -506,7 +506,7 @@ async def _resume_locked(sctx, rid: str, body: dict) -> dict:
             n += 1
         old = read_json_cached(studio / "launch.json") or {}
         previous = studio / f"launch.{n}.json"
-        os.replace(studio / "launch.json", previous)
+        runio.replace(studio / "launch.json", previous)
         new_launch = {**old, "config_raw": absolutise(raw, cdir, cache_dir=sctx.workspace.cache_dir,
                                                       runs_dir=Path(project["dir"]) / "runs"),
                       "config_dir": str(cdir), "created_utc": utc_now(), "previous": previous.name,
@@ -519,7 +519,7 @@ async def _resume_locked(sctx, rid: str, body: dict) -> dict:
                                      label=f"Resume {row.get('label') or rid}")
     except Exception:
         if previous is not None:              # the resume never started: the run keeps its snapshot
-            os.replace(previous, studio / "launch.json")
+            runio.replace(previous, studio / "launch.json")
         raise
     await sctx.db.aupdate("runs", {"id": rid}, {"last_job_id": job["id"]})
     await asyncio.to_thread(reg.refresh, rid)

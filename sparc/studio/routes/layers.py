@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import secrets
 import shutil
 from pathlib import Path
@@ -23,6 +22,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse, Response
 from starlette.background import BackgroundTask
 
+from sparc.core import runio
 from sparc.studio.app import StudioContext, get_ctx
 from sparc.studio.errors import ApiError
 from sparc.studio.routes.runs import run_context
@@ -445,7 +445,7 @@ async def put_blob(rid: str, request: Request, kind: str = Query(...), sctx: Stu
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
     tmp.write_bytes(raw)
-    os.replace(tmp, path)
+    runio.replace(tmp, path)
     await sctx.db.ainsert("blobs", {"id": bid, "run_id": rid, "kind": kind, "path": str(path), "bytes": len(raw),
                                     "created_utc": utc_now()})
     return {"blob_id": bid, "bytes": len(raw)}

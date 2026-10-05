@@ -20,6 +20,8 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from sparc.core import runio
+
 __all__ = ["build_gis", "gis_layers", "HEX_SIZES"]
 
 HEX_SIZES = (250.0, 500.0)
@@ -153,7 +155,7 @@ def build_gis(ctx, out_zip: Path, layers: list[str] | None = None, progress_cb=N
                         comp = zipfile.ZIP_STORED if p.suffix in (".tif", ".gpkg") else zipfile.ZIP_DEFLATED
                         zf.write(p, arc, compress_type=comp)
                         files.append(arc)
-            os.replace(tmp, out_zip)
+            runio.replace(tmp, out_zip)
         finally:
             if tmp.exists():
                 tmp.unlink()

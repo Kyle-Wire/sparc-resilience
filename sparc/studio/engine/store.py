@@ -27,6 +27,7 @@ from typing import Any
 
 import numpy as np
 
+from sparc.core import runio
 from sparc.studio import db as dbmod
 from sparc.studio.db import reindex_hook
 from sparc.studio.errors import ApiError
@@ -194,7 +195,7 @@ def adopt_result(db, row: dict, scenario: dict) -> dict:
     if isinstance(summ.get("spec"), dict):
         summ["spec"].update(id=rid, scenario_id=who["id"], revision=who["revision"], name=who["name"])
     write_json_atomic(tmp / "summary.json", summ)
-    os.replace(tmp, dst)
+    runio.replace(tmp, dst)
     new = insert_result_row(db, dst)
     try:
         from sparc.studio.scenarios import library

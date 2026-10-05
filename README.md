@@ -302,8 +302,11 @@ SPARC Studio is the local web app for the core pipeline: set up a city from a CS
 
 ```bash
 pip install "sparc[studio]"         # from a checkout: pip install -e ".[studio]"
+python -m sparc.studio.selfcheck    # optional: checks the whole journey on this machine (2-5 min)
 sparc studio                        # prints a one-time link (http://127.0.0.1:8765/auth?t=…) and opens it
 ```
+
+Step-by-step setup for Windows, macOS and Linux (virtual environment, CPU-only torch) is in the [user guide, §1](docs/studio/USER_GUIDE.md#install-on-your-own-machine-step-by-step).
 
 ```bash
 # runnable

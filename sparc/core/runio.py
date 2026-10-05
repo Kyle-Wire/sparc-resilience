@@ -131,6 +131,24 @@ def remove_stale_tmp(directory) -> int:
     return _unlink_all(_stale_tmps(Path(directory)))
 
 
+def replace(src, dst, *, attempts: int = 25, delay_s: float = 0.02) -> None:
+    """``os.replace(src, dst)`` that rides out a transient Windows sharing violation.
+
+    On Windows another process holding ``dst`` open (a reader tailing a
+    manifest, an antivirus scan) makes ``os.replace`` raise ``PermissionError``
+    for a moment; retry with a short backoff (about 3 s in all) before giving
+    up. Elsewhere the first error is raised as is.
+    """
+    for i in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if os.name != "nt" or i == attempts - 1:
+                raise
+            time.sleep(delay_s * min(2 ** i, 8))
+
+
 @contextmanager
 def atomic_open(path, mode: str = "wb", encoding: str | None = None) -> Iterator[IO]:
     """Open a temporary sibling of ``path`` for writing; on success it is fsynced and moved onto ``path``.
@@ -149,7 +167,7 @@ def atomic_open(path, mode: str = "wb", encoding: str | None = None) -> Iterator
             yield f
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        replace(tmp, path)
     except BaseException:
         try:
             os.unlink(tmp)

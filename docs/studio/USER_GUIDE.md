@@ -30,10 +30,42 @@ Two words are used throughout:
 
 ### Requirements
 
-- Python 3.10 or newer, on Linux, macOS or Windows. (CI tests Linux; process handling on macOS and Windows is designed for but not tested.)
+- Python 3.10 or newer (3.11 recommended), on Windows, macOS or Linux. CI runs the full journey (`python -m sparc.studio.selfcheck`) and the test suites on all three.
 - Memory: a fast run needs about 1 GB; a full run at 30 m on a city the size of Providence (54,701 cells) peaks at about 3 GB, and the Scenario Lab keeps 1.6–2.5 GB per loaded full run. 8 GB of RAM is enough for one full run at a time; 16 GB is comfortable.
 - Disk: a full run with its checkpoint is about 0.6 GB.
 - A current browser (Chromium, Firefox or Safari). Node is **not** needed: the web app ships pre-built inside the package.
+
+### Install on your own machine (step by step)
+
+Use a fresh virtual environment so Studio's packages do not clash with anything else. Torch is installed first from the CPU-only index: it is smaller and SPARC does not need a GPU.
+
+**Windows** (PowerShell, from the folder where you cloned the repository):
+
+```powershell
+py -3.11 -m venv .venv
+.venv\Scripts\Activate.ps1          # if scripts are blocked: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+python -m pip install --upgrade pip
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install -e ".[studio]"
+python -m sparc.studio.selfcheck    # about 2-5 minutes; every step should say PASS
+sparc studio                        # opens Studio in your browser
+```
+
+**macOS / Linux** (Terminal):
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install torch                   # Linux: add --index-url https://download.pytorch.org/whl/cpu for the CPU build
+pip install -e ".[studio]"
+python -m sparc.studio.selfcheck    # about 2-5 minutes; every step should say PASS
+sparc studio
+```
+
+`python -m sparc.studio.selfcheck` starts a real server in a throw-away folder and runs the core journey through it: the synthetic demo project, a fast run cancelled mid-fit and resumed from its checkpoint, the Scenario Lab engine, an exact scenario, a decision pack, and a clean shutdown with no processes left behind. If a step fails it prints why and keeps the folder (with `server.log`) so you can look; `--keep` keeps it either way and `-v` prints the full server log.
+
+Next time, activate the environment (`.venv\Scripts\Activate.ps1` on Windows, `source .venv/bin/activate` elsewhere) and run `sparc studio`. Your projects live in the workspace folder (`~/sparc-studio` by default, see §2), not in the repository, so updating the code never touches them.
 
 ### Install
 

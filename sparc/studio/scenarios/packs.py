@@ -36,6 +36,7 @@ from typing import Any
 
 import numpy as np
 
+from sparc.core import runio
 from sparc.studio.errors import ApiError
 
 log = logging.getLogger("sparc.studio.scenarios")
@@ -145,7 +146,7 @@ def write_geotiff(grid, values: np.ndarray, path: Path) -> None:
         with rasterio.open(tmp, "w", driver="GTiff", height=grid.ny, width=grid.nx, count=1, dtype="float32",
                            crs=grid.crs or None, transform=tr, nodata=np.nan, compress="deflate") as dst:
             dst.write(ras, 1)
-        os.replace(tmp, path)
+        runio.replace(tmp, path)
     finally:
         if tmp.exists():
             tmp.unlink()
@@ -374,7 +375,7 @@ def _write_zip(stage: Path, out: Path) -> int:
         for p in sorted(stage.rglob("*")):
             if p.is_file():
                 z.write(p, p.relative_to(stage).as_posix())
-    os.replace(tmp, out)
+    runio.replace(tmp, out)
     return int(out.stat().st_size)
 
 

@@ -145,6 +145,56 @@ jobs:
           done
           exit $status
 
+  portability:
+    # Studio on the platforms people run it on. The self-check drives the real journey through the
+    # API (server, demo project, run, cancel, resume, engine, exact scenario, decision pack, clean
+    # shutdown), then the backend and core suites run. Failures are written as annotations so they
+    # can be read from the check run without downloading logs.
+    name: studio on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install (CPU torch, package with the studio extra)
+        run: |
+          python -m pip install --upgrade pip
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            pip install torch --index-url https://download.pytorch.org/whl/cpu
+          else
+            pip install torch
+          fi
+          pip install -e ".[studio,dev]" pytest-timeout
+
+      - name: Self-check (the start-to-end journey)
+        run: python -m sparc.studio.selfcheck --run-timeout 1800
+
+      - name: Studio backend tests
+        if: always()
+        run: |
+          python -m pytest tests/studio -q -o addopts="" -m "not slow and not network and not e2e" --timeout=900 \
+            --junitxml=studio-junit.xml || true
+          python scripts/junit_annotations.py studio-junit.xml --title "studio tests (${{ matrix.os }})"
+
+      - name: Core tests
+        if: always()
+        run: |
+          python -m pytest tests/core -q -o addopts="" -m "not slow and not integration" --timeout=900 \
+            --junitxml=core-junit.xml || true
+          python scripts/junit_annotations.py core-junit.xml --title "core tests (${{ matrix.os }})"
+
   nightly:
     name: studio nightly (slow, studies, Providence, performance)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

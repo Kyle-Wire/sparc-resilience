@@ -191,7 +191,7 @@ def write_private(path: str | os.PathLike, text: str) -> Path:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        runio.replace(tmp, path)
     except BaseException:
         try:
             os.unlink(tmp)

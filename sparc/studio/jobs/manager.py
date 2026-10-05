@@ -670,9 +670,12 @@ class JobManager:
 
     async def _finalize(self, jid: str, exit_info: ExitInfo, *, forced: tuple[str, dict] | None = None) -> None:
         """Work has ended: drain the events, decide the final status, release locks, run ``on_finish``."""
-        tailer = self.tailers.pop(jid, None)
+        # drain while the tailer is still registered: _on_event finds the job's kind (server-side on_event
+        # hooks, output tracking) through self.tailers, so events read by the final drain must not miss it
+        tailer = self.tailers.get(jid)
         if tailer is not None:
             await tailer.stop(drain=True)
+        self.tailers.pop(jid, None)
         self.watchers.pop(jid, None)
         row = self.get_row(jid)
         if row is None:

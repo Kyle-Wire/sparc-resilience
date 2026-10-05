@@ -259,3 +259,35 @@ def test_temporaries_of_killed_writers_are_swept(tmp_path):
     assert runio.remove_stale_tmp(tmp_path) == 65536
     assert not other.exists() and live.exists() and unrelated.exists()
     assert runio.remove_stale_tmp(tmp_path / "missing") == 0
+
+
+def test_replace_rides_out_a_windows_sharing_violation(tmp_path, monkeypatch):
+    """On Windows a reader holding the target open makes os.replace fail for a moment: retry, then succeed."""
+    import os as _os
+
+    from sparc.core import runio
+
+    src, dst = tmp_path / "a", tmp_path / "b"
+    src.write_text("new", "utf-8")
+    dst.write_text("old", "utf-8")
+    real, calls = _os.replace, []
+
+    def flaky(a, b):
+        calls.append(1)
+        if len(calls) < 3:
+            raise PermissionError(13, "The process cannot access the file because it is being used")
+        real(a, b)
+
+    monkeypatch.setattr(runio.os, "replace", flaky)
+    monkeypatch.setattr(runio.os, "name", "nt")
+    monkeypatch.setattr(runio.time, "sleep", lambda s: None)
+    runio.replace(src, dst)
+    assert dst.read_text("utf-8") == "new" and len(calls) == 3
+    monkeypatch.setattr(runio.os, "name", "posix")                 # elsewhere the first error is raised
+    calls.clear()
+    src.write_text("x", "utf-8")
+    import pytest as _pytest
+
+    with _pytest.raises(PermissionError):
+        runio.replace(src, dst)
+    assert len(calls) == 1

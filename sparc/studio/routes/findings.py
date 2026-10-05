@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from sparc.core import runio
 from sparc.studio.app import StudioContext, get_ctx
 from sparc.studio.errors import ApiError
 from sparc.studio.exports import findings as F
@@ -96,7 +96,7 @@ async def put_image(fid: str, request: Request, sctx: StudioContext = Depends(ge
         if not await asyncio.to_thread(F.image_ok, staged, suffix):
             raise ApiError("bad_suffix", f"the body is not {'a PNG' if suffix == '.png' else 'an SVG'} image",
                            detail={"content_type": ctype})
-        os.replace(staged, dest)
+        runio.replace(staged, dest)
     finally:
         staged.unlink(missing_ok=True)
     out = await asyncio.to_thread(F.set_image, sctx.db, fid, dest)

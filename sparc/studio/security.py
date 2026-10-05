@@ -40,6 +40,7 @@ from starlette.datastructures import Headers
 from starlette.requests import cookie_parser
 from starlette.responses import JSONResponse
 
+from sparc.core import runio
 from sparc.studio.errors import ApiError, error_body
 
 __all__ = [
@@ -323,7 +324,7 @@ async def stream_upload(request, dest: str | os.PathLike, *, max_bytes: int,
                 buf.clear()
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, dest)
+        runio.replace(tmp, dest)
     except BaseException:
         try:
             os.unlink(tmp)
