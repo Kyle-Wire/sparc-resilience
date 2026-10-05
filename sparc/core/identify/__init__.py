@@ -33,8 +33,14 @@ zero when none is planted, on the city's real layout:
 * :mod:`~sparc.core.identify.validate` runs every design on every generator
   (null, additive, own_only, physics, coarse_scale, confounded) and reports
   bias, the null artefact, false-positive rate and interval coverage.
-* :mod:`~sparc.core.identify.traverses` applies the validated designs to a
-  real campaign's traverse points (CAPA Heat Watch raw traverses).
+* :mod:`~sparc.core.identify.windshift` is the kilometre-scale design: the
+  same streets compared across runs under different winds (cell fixed
+  effects, run-specific smooth controls, a rotation test); :mod:`kmlab`
+  measures its false alarms and power.
+* :mod:`~sparc.core.identify.traverses` reads a real campaign as downloaded
+  (CAPA Heat Watch, e.g. OSF ``wu9v7`` for Providence), splits it into runs,
+  and applies the validated designs: block-scale effects per run, a floor on
+  city-wide cooling, and the kilometre test.
 
 Like :mod:`sparc.core.heat` this package sits below ``sparc/core`` and is
 not part of the resume fingerprint.  Run it with ``python -m

@@ -689,7 +689,21 @@ User guide: `docs/studio/USER_GUIDE.md`. Developer guide: `docs/studio/DEVELOPIN
 - Within 300 m: direction only. Within 1 km and city-wide: not identified by one campaign (a kilometre-scale effect and a canopy-tracking kilometre-scale confounder are observationally equivalent).
 - The same estimator on the forest-made map reports an effect in 58% of no-effect worlds (0% on the traverses): the product, not the method, breaks identification. The real map shows no street-scale canopy effect (−0.01 °F, CI −0.08 to +0.06).
 
-**Open.** Run `estimate` on Providence's raw traverses (OSF `tdsy7`, unreachable from the development environment). Kilometre-scale identification needs repeat campaigns under different winds, before/after canopy change, or pooling the wind signature across cities.
+**Kilometre scale (second round).**
+- Four designs were built and tested for the kilometre-scale value:
+  - 1 km rings;
+  - a physics-constrained extrapolation of the near-field kernel;
+  - the same streets compared across runs under different winds, with a rotation test;
+  - before/after a planting programme.
+- None identifies it from one city's campaign: a city holds only a handful of independent kilometre-sized patches, and weather and confounding vary at that scale.
+- What is identified is a floor: city-wide cooling is at least the 300 m effect. The one-sided 95% bound held in ≥ 92% of lab campaigns in every world.
+- The wind-shift test is shipped as a valid test: 0% false alarms in six no-advection worlds. It is underpowered on one day (8% power).
+- The real-data path now reads an OSF download as it is (nested zips, point shapefiles in any CRS, °C, junk files listed), splits the day into runs by time gaps, reports each run, and fetches each run's wind from the forcing station.
+- New commands: `inspect` and `kmlab`.
+
+**Open.**
+- Run `estimate` on Providence's traverses (OSF `wu9v7`).
+- Pool the floor and the wind-shift test across many cities' Heat Watch campaigns: the only route to the kilometre-scale value.
 
 ## Appendix B — References
 

@@ -9,15 +9,18 @@ everything else that comes with leafy streets?
 |---|---|---|
 | within 100 m of a point (about a city block) | **Yes.** The design recovers the true effect in every simulated world (bias ≤ 0.02 °F) and stays at zero when canopy does nothing. | Street differences on the raw traverse readings |
 | within 300 m | **Direction only.** The sign is reliable; the size depends on how far the cooling of a tree spreads. | Same design |
-| within 1 km, or city-wide | **No.** A kilometre-scale canopy effect and a kilometre-scale confounder that tracks canopy leave the same traces in one campaign. | Needs repeated campaigns (different winds, before/after canopy change) or many cities |
+| city-wide (+10 pp everywhere) | **A floor, yes.** If canopy never warms the air at a distance, a city-wide edit cools a street at least as much as the same edit within 300 m of it. The one-sided 95% floor held in ≥ 92% of simulated campaigns in every world. | Same design |
+| within 1 km, or the city-wide value itself | **No, not from one city's campaign.** A kilometre-scale canopy effect and a kilometre-scale confounder that tracks canopy leave the same traces. Four designs were built to break this (below); none can with one city's data. | Many cities' campaigns pooled |
+| the part of kilometre-scale cooling the wind carries | **Testable, but one day is too little.** The same streets are compared across runs under different winds. The test never raised a false alarm in the lab, including with a confounder whose effect changes through the day, but it detects real advection in only 8% of one-day campaigns. | Same streets, different winds |
 | anything, from the interpolated map | **No.** The design that works on the measurements reports a canopy effect in 58% of worlds where there is none when run on the map. | — |
 
-So canopy's causal effect *can* be isolated at the scale of a block, but only from the vehicle
-traverses, not from the gridded temperature map. Providence's raw traverses (CAPA Heat Watch, OSF
-project `tdsy7`) could not be downloaded from the development environment. The method is built,
-validated on Providence's own layout, and ready to run on them ([below](#running-it-on-the-real-traverses)).
+So canopy's causal effect *can* be isolated at the scale of a block, and bounded from one side at the
+scale of the city, but only from the vehicle traverses, not from the gridded temperature map. The
+Providence traverses are on OSF (project `wu9v7`). The method is built, validated on Providence's own
+layout, and runs on the downloaded folder as it is ([below](#running-it-on-the-real-traverses)).
 
-Code: `sparc/core/identify/`. Lab output: `output/core/providence/identify/identify_lab.{json,md}`.
+Code: `sparc/core/identify/`. Lab output: `output/core/providence/identify/identify_lab.{json,md}` and
+`identify_kmlab.{json,md}`.
 Results page: section "Can canopy's own effect be isolated?".
 
 ## Why the map cannot answer it
@@ -158,51 +161,106 @@ equivalent within one campaign. Older, leafier and wealthier districts are such 
 the 1 km reading recovers 129% of a real kilometre-scale effect (`coarse_scale`) but 12% of the truth
 when such a factor is present (`confounded`).
 
-No spatial-contrast design on one campaign can separate the two. The city-wide numbers the scenarios
-report therefore rest on the model and its physics prior, not on identified variation. The
-uncertainty report already flags canopy as **Not established**.
+### What one campaign does identify at the city scale: a floor
 
-What would identify the kilometre scale:
+The city-wide edit equals the edit within 300 m plus the edit beyond it. If canopy never warms the air
+at a distance, the part beyond 300 m can only add cooling. A city-wide +10 pp therefore cools a street
+at least as much as +10 pp within 300 m of it.
 
-1. **Repeat campaigns under different winds.** The same street has different upwind canopy on
-   different days, while its confounders stay put. Street fixed effects then identify the advected
-   part.
-2. **Before/after canopy change.** Campaigns years apart around plantings or tree losses give a
-   difference-in-differences on canopy change.
-3. **Many cities.** Pooling the wind signature over CAPA's campaigns (dozens of cities) gives it
-   power that one campaign lacks.
+The one-sided 95% bound of the street design (estimate + 1.645 SE) is that floor. In the lab it lay
+above the true city-wide change at street points in:
+
+- 100% of campaigns in every world with an effect;
+- 92% of campaigns with no effect.
+
+It is tight where cooling is local (it reaches 89–97% of the truth in the local worlds) and loose
+where cooling spreads (22% in the advected world). The real-data report gives it as "street air cools
+by at least … °F".
+
+The assumption is physical, not statistical. A tree shades and transpires; neither warms the air a few
+hundred metres away. Sheltering from the wind could in principle, which is why the floor is stated with
+its assumption.
+
+### What was tried for the kilometre value, and why none works on one city
+
+| Design | Idea | Lab result |
+|---|---|---|
+| 1 km rings in the street differences | Read canopy out to 1 km | Unbiased in four worlds; collapses to 12% of the truth with a canopy-tracking 2 km factor |
+| Physics-constrained extrapolation | Fit the advection–diffusion kernel to the near-field shape (100 m vs 300 m, upwind vs downwind) and extrapolate | Precise only when cooling is local. With wide kernels, 95% intervals ran from −10 to +7 °F, and a no-effect world returned −9.5 °F |
+| Same streets, different winds (shipped) | Compare each street with itself across runs. The wind changes which canopy is upwind while nothing about the street changes. Run-specific smooth controls absorb a confounder whose effect changes through the day. Inference rotates every run's wind together | Never a false alarm, in any of 6 no-advection worlds (shore cooling carried by the wind included). Finds real advection in 8% of one-day campaigns; four days do not help, because the run-specific controls that remove the time-varying confounder also absorb most of the advected signal |
+| Before/after a planting programme | Difference-in-differences on canopy change (8 zones of 500 m, +30 pp, 3 runs before and 3 after) | The 1 km and 3 km readings scatter by ±0.3 to ±1.6 °F |
+
+They all fail for the same reason: a city holds only a handful of independent kilometre-sized
+patches, and weather and confounding vary at exactly that scale. More of the same campaign does not
+fix it.
+
+Two things would:
+
+- **Many cities' campaigns pooled.** CAPA has run Heat Watch in dozens of cities, and SPARC's open-data
+  features can build the layers for any of them. Each city adds independent kilometre-sized patches,
+  and the floor and the wind-shift test pool directly.
+- **A very large canopy change.** A change spanning several kilometres and many neighbourhoods,
+  measured before and after on the same routes, would also identify it.
+
+The city-wide numbers the scenarios report rest on the model and its physics prior, not on identified
+variation. The uncertainty report already flags canopy as **Not established**. The floor is the part a
+planner can lean on.
 
 ## Running it on the real traverses
 
-The raw traverses are on OSF, next to the map: <https://osf.io/tdsy7/files>. They are archives of
-CSVs or shapefiles for the morning, afternoon and evening runs.
+The Providence traverses are on OSF: <https://osf.io/wu9v7/>. Download the project's files ("Download
+as zip" on the Files tab), unzip them, and point SPARC at the folder as it is. Zips inside it are
+unpacked; rasters, boundary polygons and summary tables are skipped and listed.
 
-1. Download the afternoon archive (or all of them) into a folder, for example `data/capa/providence/`.
-2. In PowerShell (Windows) or bash, from the repository:
+In PowerShell, from the repository with the environment active (`.venv\Scripts\Activate.ps1`):
 
-   ```
-   python -m sparc.core.identify lab      -p configs/core_providence.yml --reps 12 --workers 4
-   python -m sparc.core.identify estimate -p configs/core_providence.yml --traverses data/capa/providence --window midday --timezone America/New_York
-   ```
+```powershell
+# 1. What is in the download: files read or skipped, the runs of the day, overlap with the grid
+python -m sparc.core.identify inspect  -p configs/core_providence.yml --traverses "C:\Users\<you>\Downloads\wu9v7-osfstorage-archive"
 
-   The lab takes about 10 minutes on 4 cores and writes the verdicts the estimate is judged by.
-3. The answer is written to `output/core/providence/identify/identify_estimate.{json,md}`. It gives the
-   effect within 100 m, 300 m and 1 km with 95% intervals, each with its lab verdict, plus the wind
-   signature and QA: points on the grid, passes, vehicles, duration.
-4. Rebuild the results page to show it in the "From traverses" column:
+# 2. Validate the designs on Providence's layout (about 10 minutes on 4 cores, once)
+python -m sparc.core.identify lab      -p configs/core_providence.yml
 
-   ```
-   python -m sparc.core.results_page output/core/providence/providence_uhi configs/core_providence.yml
-   ```
+# 3. The answer: every run, the floor and the kilometre test
+python -m sparc.core.identify estimate -p configs/core_providence.yml --traverses "C:\Users\<you>\Downloads\wu9v7-osfstorage-archive"
+
+# 4. The kilometre test's power under the campaign's real winds (step 3 prints them)
+python -m sparc.core.identify kmlab    -p configs/core_providence.yml --winds 290:2.0 170:7.7 210:4.0
+
+# 5. Show it on the results page ("From traverses" column)
+python -m sparc.core.results_page output/core/providence/providence_uhi configs/core_providence.yml
+```
+
+- **Step 3: winds.** Step 3 reads each run's wind from the Providence airport station in the forcing
+  file (NOAA Global Hourly, so it needs internet). Without internet, give the winds yourself, e.g.
+  `--wind morning=290:2.0 midday=170:7.7 evening=210:4.0`.
+- **Step 3: timestamps.** If the timestamps carry a time zone, add `--timezone America/New_York`.
+  If `inspect` shows runs at 10–11 h, 19–20 h and 23–24 h instead of 6–7, 15–16 and 19–20, the times
+  are UTC without saying so: add `--utc` to `inspect` and `estimate`.
+- **Outputs.** Everything is written to `output/core/providence/identify/`:
+  `identify_estimate.md` is the readable answer, `identify_estimate.json` the full record.
+
+What the estimate reports:
+
+- **The headline run** (the afternoon by default; `--window morning|evening|night|all`): the effect
+  of +10 pp canopy within 100 m, 300 m and 1 km of a street point, each with its 95% interval and its
+  lab verdict.
+- **The city-wide floor.**
+- **By time of day**: the block-scale effect in each run.
+- **The kilometre scale**: the wind-shift test across runs, with each run's wind and the rotation
+  p-value.
 
 Reading the files:
 
-- CSV, GeoJSON, shapefile and zip archives are accepted, nested zips included.
+- CSV, GeoJSON, GeoPackage, shapefile and zip archives are accepted, nested zips included. Every
+  file is either read or listed as skipped with the reason.
 - Columns are detected by name:
-  - time: `datetime`, `timestamp`, ...;
-  - position: `lat`/`lon`;
-  - temperature: `T_F` (°F, or a °C name converted to °F);
+  - time: `datetime`, `timestamp`, `date` + `time`, ...;
+  - position: `lat`/`lon`, or the geometry of a point layer in any coordinate system, reprojected;
+  - temperature: `T_F`, `temp_f`, `TempF`, ... in °F, or the °C equivalents, converted;
   - vehicle: `car`, `vehicle`, `route`, `sensor`, ..., otherwise the source file.
+- A run is a cluster of readings with no gap over 1.5 h, named by its local time. An overnight run
+  becomes its own "night" run, not part of the morning.
 - Points are projected into the model's frame (EPSG:3438 in metres) and snapped to the nearest cell.
 - A pass breaks at gaps over 30 s or jumps over 200 m.
 - Samples of one pass in the same cell are averaged: a 1 Hz logger takes about three per 30 m cell.
@@ -227,8 +285,8 @@ in `tests/core/test_identify.py`.
   differences are insensitive to the last of these.
 - **The estimand is the effect at street points.** City-wide extrapolation from streets is an
   assumption: streets have less canopy than the rest of the city.
-- **One time window.** Canopy's effect differs between morning, afternoon and evening. Run `--window`
-  for each.
+- **Time of day.** Canopy's effect differs between morning, afternoon and evening. The estimate
+  reports each run; the lab validates the afternoon's design.
 - **Street-scale confounders do not cancel.** Something that changes along a street together with
   canopy within 100 m would bias the estimate. Impervious surface, albedo and terrain are differenced
   as controls. Traffic and building shade are not observed.

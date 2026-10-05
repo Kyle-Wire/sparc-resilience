@@ -242,3 +242,139 @@ def test_results_page_reads_the_identification_outputs(tmp_path):
     d = sec["designs"]["street_100"]
     assert d["status"] == "trustworthy" and set(d["worlds"]) == {"null", "additive"}
     assert sec["n_reps"] == {"null": 3, "additive": 3} and sec["estimate"] is None
+
+
+# --------------------------------------------------------------------------- #
+# Real archives, runs, the kilometre design and the floor                      #
+# --------------------------------------------------------------------------- #
+def _points_csv(cfg, lay, cells, start, temp=88.0, car=1):
+    from sparc.core.identify.traverses import grid_to_lonlat
+
+    g = lay.grid
+    lon, lat = grid_to_lonlat(cfg, g.x0 + g.ix[cells] * g.dx, g.y0 + g.iy[cells] * g.dy)
+    t = pd.Timestamp(start) + pd.to_timedelta(np.arange(len(cells)) * 3, unit="s")
+    return pd.DataFrame({"datetime": t.strftime("%Y-%m-%d %H:%M:%S"), "lat": lat, "lon": lon,
+                         "T_F": temp + 0.01 * np.arange(len(cells)), "car": car})
+
+
+def test_scan_reads_an_osf_style_folder_and_reports_every_file(providence, tmp_path):
+    import zipfile
+
+    import geopandas as gpd
+    from shapely.geometry import Point, Polygon
+
+    from sparc.core.identify.traverses import inspect_markdown, scan_traverses
+
+    cfg, lay = providence
+    row = np.flatnonzero(lay.grid.iy == int(np.median(lay.grid.iy)))[:40]
+    root = tmp_path / "wu9v7-osfstorage-archive" / "Providence"
+    (root / "traverses").mkdir(parents=True)
+    am = _points_csv(cfg, lay, row, "2020-07-29 06:10:00")
+    am.to_csv(tmp_path / "am_trav.csv", index=False)
+    with zipfile.ZipFile(root / "traverses" / "am_traverses.zip", "w") as z:
+        z.write(tmp_path / "am_trav.csv", "am_trav.csv")
+    af = _points_csv(cfg, lay, row, "2020-07-29 15:05:00", temp=91.0, car=2)
+    gdf = gpd.GeoDataFrame({"TempF": af["T_F"], "date": af["datetime"].str[:10], "time": af["datetime"].str[11:],
+                            "route": [1, 2] * 20, "X": 0.0, "Y": 0.0},
+                           geometry=[Point(xy) for xy in zip(af["lon"], af["lat"])], crs="EPSG:4326").to_crs("EPSG:3438")
+    gdf["X"], gdf["Y"] = gdf.geometry.x, gdf.geometry.y          # projected feet, which must not be read as degrees
+    gdf.to_file(root / "traverses" / "af_trav.shp")
+    night = _points_csv(cfg, lay, row, "2020-07-30 00:20:00", temp=84.0)
+    night.rename(columns={"T_F": "temp_c"}).assign(temp_c=lambda d: (d["temp_c"] - 32) * 5 / 9).to_csv(
+        root / "traverses" / "late.csv", index=False)
+    gpd.GeoDataFrame({"n": [1]}, geometry=[Polygon([(-71.5, 41.7), (-71.3, 41.7), (-71.3, 41.9)])],
+                     crs="EPSG:4326").to_file(root / "study_area.shp")
+    (root / "af_t_f.tif").write_bytes(b"II*\x00")
+    pd.DataFrame({"zone": [1], "mean_t": [88.0]}).to_csv(root / "summary.csv", index=False)
+
+    pts, report = scan_traverses(tmp_path / "wu9v7-osfstorage-archive")
+    status = {r["file"].split("/")[-1]: r["status"] for r in report}
+    assert status == {"am_trav.csv": "read", "af_trav.shp": "read", "late.csv": "read", "study_area.shp": "skipped",
+                      "af_t_f.tif": "skipped", "summary.csv": "skipped"}
+    assert sorted(pts["window"].unique()) == ["midday", "morning", "night"]
+    assert pts.loc[pts["window"] == "night", "temp_f"].mean() == pytest.approx(84.2, abs=0.05)   # °C converted
+    assert pts.loc[pts["window"] == "midday", "vehicle_key"].nunique() == 2                       # the route column
+    assert pts["lat"].between(41.7, 41.95).all()
+    md = inspect_markdown(pts, report, cfg, lay)
+    assert "On the project grid: 100%" in md and "2020-07-30 night" in md and "not a point layer" in md
+
+
+def test_windshift_is_quiet_without_advection_and_finds_it_with(layout, L):
+    from sparc.core.identify.windshift import sector_table, wind_shift
+
+    table = sector_table(layout, reach_m=600.0, step_deg=30)
+    g = layout.grid
+    rng = np.random.default_rng(0)
+    winds = {"am": 270, "pm": 180, "ev": 90}
+    cells = np.flatnonzero(layout.col("impervious") > 30)
+    def runs(advect):
+        frames = []
+        for k, (name, d) in enumerate(winds.items()):
+            a = table["contrasts"][("canopy", d)][0]
+            T = 88.0 + 0.3 * rng.standard_normal(g.iy.size) - (0.02 * a if advect else 0.0)
+            frames.append(pd.DataFrame({"cell": cells, "run": name, "t_s": rng.uniform(0, 3600, cells.size),
+                                        "vehicle": 10 * k + rng.integers(0, 3, cells.size), "temp": T[cells]}))
+        return pd.concat(frames, ignore_index=True)
+    quiet = wind_shift(runs(False), L, table, winds, g)
+    loud = wind_shift(runs(True), L, table, winds, g)
+    assert quiet["p_rotation"] > 0.05 and quiet["n_rotations"] == 11
+    assert loud["estimate"] < -0.1 and loud["p_cooling"] <= 1 / 12 + 1e-9
+    assert loud["spread_deg"] == 180.0
+
+
+def test_floor_stats_validate_the_bound():
+    rows = []
+    for gen, total, est in (("null", 0.0, 0.0), ("additive", -0.27, -0.18)):
+        for rep in range(8):
+            rows.append({"estimator": "street_300", "generator": gen, "rep": rep, "estimate": est + 0.01 * (rep - 4),
+                         "se": 0.05, "truth_street_total": total})
+    fs = V.floor_stats(rows, "street_300")
+    assert fs["valid"] and fs["worlds"]["additive"]["holds"] == 1.0
+    bad = [dict(r, estimate=-0.6) for r in rows if r["generator"] == "additive"]
+    assert not V.floor_stats(bad, "street_300")["valid"]
+
+
+def test_kmlab_summary_verdict():
+    from sparc.core.identify.kmlab import km_markdown, summarize_km
+
+    rows = [{"generator": g, "rep": r, "estimate": e, "se": 0.02, "p_rotation": p, "p_cooling": pc, "null_sd": 0.02,
+             "winds": [[290, 2.0], [170, 7.7]]}
+            for g, e, p, pc in (("null", 0.0, 0.5, 0.5), ("physics", -0.08, 0.02, 0.01)) for r in range(8)]
+    summ = summarize_km(rows)
+    d = summ["designs"]["wind_shift"]
+    assert d["verdict"]["status"] == "trustworthy" and d["generators"]["physics"]["finds_cooling"] == 1.0
+    assert "Kilometre lab" in km_markdown(summ)
+
+
+def test_estimate_compares_runs_and_reads_the_kilometre_scale(providence, tmp_path):
+    from sparc.core.identify.campaign import simulate
+    from sparc.core.identify.traverses import campaign_csv, estimate, estimate_markdown
+
+    cfg, lay = providence
+    rng = np.random.default_rng(1)
+    T = 88.0 + rng.normal(0, 0.5, lay.grid.iy.size)
+    for start in ("2020-07-29 06:00:00", "2020-07-29 15:00:00"):
+        camp = simulate(lay, T, rng, np.zeros((T.size, 1)), product=False)
+        (tmp_path / f"run_{start[11:13]}.csv").write_bytes(campaign_csv(camp.samples, cfg, lay, start=start))
+    res = estimate(cfg, tmp_path, layout=lay, winds={"morning": (290, 2.0), "midday": (170, 7.7)}, fetch_winds=False)
+    assert res["window"] == "midday" and len(res["runs"]) == 2
+    assert all(r["street"]["street_100"] for r in res["runs"])
+    km = res["kilometre"]
+    assert km["status"] == "estimated" and km["result"]["n_rotations"] == 35 and km["result"]["spread_deg"] == 120.0
+    assert "floor" in res["headline"]
+    md = estimate_markdown(res)
+    assert "## By time of day" in md and "Kilometre scale" in md and "City-wide" in md
+    no_wind = estimate(cfg, tmp_path, layout=lay, fetch_winds=False)
+    assert no_wind["kilometre"]["status"] == "needs winds"
+
+
+def test_utc_timestamps_are_moved_to_local_time(tmp_path):
+    from sparc.core.identify.traverses import scan_traverses
+
+    t = pd.date_range("2020-07-29 10:10", periods=5, freq="3s")          # 06:10 EDT, written as UTC
+    pd.DataFrame({"datetime": t.strftime("%Y-%m-%d %H:%M:%S"), "lat": 41.82, "lon": -71.41, "T_F": 80.0}).to_csv(
+        tmp_path / "t.csv", index=False)
+    raw, _ = scan_traverses(tmp_path)
+    loc, _ = scan_traverses(tmp_path, utc_to="America/New_York")
+    assert raw["window"].iloc[0] == "morning" and raw["time"].iloc[0].hour == 10
+    assert loc["time"].iloc[0].hour == 6 and loc["run"].iloc[0] == "2020-07-29 morning"

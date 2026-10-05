@@ -742,4 +742,4 @@ wait
 - The legacy desktop app (`sparc-desktop/`, the `sparc/server/` API) is unchanged and remains available until Studio reaches parity with it.
 - The ETA of a resumed run does not discount cached stages at first ([§5](#progress-and-eta)).
 - Brush strokes saved in an earlier session reopen as per-cell edits; they can be removed but not repainted.
-- Windows and macOS are not tested in CI.
+- Windows and macOS run the self-check and the Studio test suites in CI; the slow nightly suites run on Linux only.

@@ -104,7 +104,7 @@ def replicate(kind: str, rep: int, layout, L, features, real, seed: int = 0, whi
         est = ESTIMAND[r["estimator"]]
         r.update(generator=kind, rep=rep, advects=kind == "physics", n_samples=int(len(camp.samples)),
                  drift_f_per_h=camp.drift_f_per_h, truth=None if est == "contrast" else truth[r["where"]][est],
-                 truth_total=truth["city"]["total"])
+                 truth_total=truth["city"]["total"], truth_street_total=truth["street"]["total"])
         if "city_estimate" in r:
             r["truth_city"] = truth["city"][est]
         r["seconds"] = round(time.time() - t0, 1)
@@ -185,9 +185,47 @@ def _order(kind: str) -> int:
     return GENERATORS.index(kind) if kind in GENERATORS else 99
 
 
+Z_ONE = 1.6448536269514722          # one-sided 95%
+FLOOR_DESIGNS = ("street_100", "street_300")
+
+
+def _street_totals(rows: list[dict]) -> dict:
+    """True city-wide effect at street points per (world, replicate): stored on every row since the floor was
+    added, otherwise the levels design's truth (whose estimand it is)."""
+    out = {(r["generator"], r["rep"]): r["truth_street_total"] for r in rows if r.get("truth_street_total") is not None}
+    for r in rows:
+        if r["estimator"] == "levels" and r.get("truth") is not None:
+            out.setdefault((r["generator"], r["rep"]), r["truth"])
+    return out
+
+
+def floor_stats(rows: list[dict], name: str) -> dict | None:
+    """Is the near-field estimate a valid floor on city-wide cooling?  Under "canopy never warms the air at a
+    distance", +10 pp everywhere cools a street point at least as much as +10 pp within the design's reach,
+    so the one-sided 95% bound ``estimate + 1.645 se`` should lie above the true city-wide change (at
+    street points) in at least 95% of campaigns of every world."""
+    tot = _street_totals(rows)
+    per = {}
+    for kind in sorted({r["generator"] for r in rows if r["estimator"] == name}, key=_order):
+        rs = [r for r in rows if r["estimator"] == name and r["generator"] == kind and (kind, r["rep"]) in tot]
+        if not rs:
+            continue
+        fl = np.array([r["estimate"] + Z_ONE * r["se"] for r in rs])
+        t = np.array([tot[(kind, r["rep"])] for r in rs])
+        per[kind] = {"n": len(rs), "holds": float(np.mean(t <= fl + 1e-12)), "mean_floor": float(fl.mean()),
+                     "truth_total": float(t.mean()),
+                     "tightness": float(np.mean([r["estimate"] for r in rs]) / t.mean()) if abs(t.mean()) > 1e-6 else None}
+    if not per:
+        return None
+    worst = min(v["holds"] for v in per.values())
+    need = min(0.9, 1.0 - 1.0 / max(min(v["n"] for v in per.values()), 1))
+    return {"worlds": per, "valid": bool(worst >= need), "worst_hold": worst}
+
+
 def summarize(rows: list[dict]) -> dict:
     """Per design and generator: mean estimate, its truth, bias, spread, RMSE, 95% coverage and how often
-    the interval excludes zero (false positives under ``null``, power otherwise)."""
+    the interval excludes zero (false positives under ``null``, power otherwise); for the street designs,
+    whether they are a valid floor on city-wide cooling."""
     out: dict = {"designs": {}, "n_rows": len(rows),
                  "n_reps": {k: len({r["rep"] for r in rows if r["generator"] == k}) for k in GENERATORS
                             if any(r["generator"] == k for r in rows)}}
@@ -219,6 +257,10 @@ def summarize(rows: list[dict]) -> dict:
         out["designs"][name] = {"label": LABELS[name], "kind": mine[0]["kind"], "estimand": ESTIMAND[name],
                                 "where": mine[0]["where"], "level": mine[0]["level"], "generators": per,
                                 "verdict": design_verdict(per, mine[0]["kind"])}
+        if name in FLOOR_DESIGNS:
+            fs = floor_stats(rows, name)
+            if fs:
+                out["designs"][name]["floor"] = fs
     return out
 
 

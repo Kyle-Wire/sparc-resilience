@@ -442,13 +442,21 @@ def _identify_section(run: Path) -> dict | None:
         keep = ("mean", "sd", "mean_se", "truth", "bias", "coverage", "excludes_zero", "advects")
         designs = {k: {"label": v["label"], "estimand": v["estimand"], "level": v["level"], "kind": v["kind"],
                        "status": v["verdict"]["status"], "reasons": v["verdict"]["reasons"],
-                       "worlds": {w: {f: x.get(f) for f in keep} for w, x in v["generators"].items()}}
+                       "worlds": {w: {f: x.get(f) for f in keep} for w, x in v["generators"].items()},
+                       **({"floor": v["floor"]} if v.get("floor") else {})}
                    for k, v in lab.get("designs", {}).items()}
         mp = _stage_file(d, "identify_map.json") or {}
         est = _stage_file(d, "identify_estimate.json")
         if est:
-            est = {k: est.get(k) for k in ("source", "window", "qa", "headline")}
-        return {"n_reps": lab.get("n_reps"), "designs": designs, "map": mp.get("designs"), "estimate": est}
+            km = est.get("kilometre") or {}
+            est = {k: est.get(k) for k in ("source", "window", "run", "qa", "headline")} | {
+                "runs": [{k: r.get(k) for k in ("run", "window", "n", "street")} for r in est.get("runs") or []],
+                "kilometre": {k: km.get(k) for k in ("status", "reason", "winds", "result", "lab_status")}}
+        kml = _stage_file(d, "identify_kmlab.json")
+        kmd = ((kml or {}).get("designs") or {}).get("wind_shift")
+        return {"n_reps": lab.get("n_reps"), "designs": designs, "map": mp.get("designs"), "estimate": est,
+                "kmlab": {"winds": kmd.get("winds"), "status": kmd["verdict"]["status"], "reasons": kmd["verdict"]["reasons"],
+                          "worlds": kmd["generators"]} if kmd else None}
     return None
 
 
