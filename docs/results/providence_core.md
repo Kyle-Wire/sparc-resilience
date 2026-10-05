@@ -218,6 +218,41 @@ The planner pack combines HRSL residents (174k in the study area), ESA WorldCove
 
 **Plantable space.** Open land plus a fifth of built-up area leaves room for 20 pp more canopy per cell on average; 13% of cells have none. The budget plan respects this cap.
 
+## Heat stress (NWS heat index) and verdicts
+
+Air temperature becomes the US National Weather Service heat index with the campaign dewpoint, 16.7 °C, measured at the airport (KPVD) during the campaign hours. Relative humidity then ranges from 35% in the hottest cells to 53% in the coolest. One dewpoint applies to every cell: moisture is close to uniform across a city on one afternoon. Residents are the planner pack's 174k.
+
+| Case | Residents at Extreme caution or worse (heat index ≥ 90 °F) | at Danger or worse (≥ 103 °F) |
+|---|---|---|
+| Campaign afternoon | 36,700 (21%) | none |
+| … with the Green Infrastructure Package | 3,700 (2%) | none |
+| SSP2-4.5, 2041–2060 (+3.0 °F) | 143k–174k | none |
+| … with the package | 55k–172k | none |
+| SSP2-4.5, 2081–2100 (+4.6 °F) | 163k–174k | up to 15k |
+| SSP3-7.0, 2041–2060 (+3.6 °F) | 141k–174k | up to 12k |
+| SSP5-8.5, 2081–2100 (+9.4 °F) | nearly all | up to all 174k |
+
+- **Heat index on the campaign afternoon.** The typical resident felt 89 °F; the hottest cell reached 94 °F.
+- **Futures** add the CMIP6 median warming. Each range spans two humidity assumptions: constant dewpoint (moisture unchanged, the lower end) and constant relative humidity (moisture rises with warming, the upper end). It also spans the models' 10th to 90th percentile warming.
+- **The wide ranges are real.** Many residents sit just below the 90 °F and 103 °F category edges, so the humidity assumption alone can move most of the city across one.
+
+**Verdicts.** Each scenario's uncertainty components combine into one word:
+- **Robust**: the envelope excludes zero and the analysis variants agree on the sign.
+- **Direction only**: the sign holds but the range reaches zero.
+- **Not established**: the change is indistinguishable from the simulation's no-effect artefact, or most edited cells are extrapolated.
+
+| Scenario | Verdict |
+|---|---|
+| Canopy +5 to +30 | Not established (indistinguishable from the null artefact) |
+| Impervious −5 | Direction only |
+| Impervious −10, −20, −30 | Robust |
+| Albedo +0.05 | Direction only |
+| Albedo +0.1 | Direction only, 23% extrapolated |
+| Albedo +0.2 | Not established (all edited cells beyond observed conditions) |
+| Green Infrastructure Package | Robust, 26% extrapolated |
+
+`sparc.core.heat` computes these; SPARC Studio's Heat tab and the results page show them.
+
 ## S6: Causal validation
 
 Spatial DML with the 2 km blocks for cross-fitting, plus exposure-mapping spillover. These numbers do not depend on the physics model, so they match the previous run.

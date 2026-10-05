@@ -451,13 +451,14 @@ sparc core run --project configs/core_providence.yml --fast --progress progress.
 | | Influence | Influence ranges per predictor, correlograms, rings, anisotropy, priors |
 | Effects | Response | Dose–response curves per lever with their shapes and fold means, and the literature comparison |
 | | Causal | Per treatment: forest, audit, doubly-robust curve against the model's own curve, CATE maps, sensitivity |
-| Decisions | Scenarios | The configured scenarios with likely ranges, ladders, per-fold detail |
+| Decisions | Heat | The heat brief: how hot the campaign afternoon felt (NWS heat index), residents by heat-risk category today, with the adaptation package and in each climate future, what helps and how sure ([Heat stress](#heat-stress-and-verdicts)) |
+| | Scenarios | The configured scenarios with likely ranges, ladders, per-fold detail and each one's verdict |
 | | Climate | Warming by SSP and period, models, exposure, adaptation offset, thresholds |
 | | Budget | The S7 allocation: KPIs, Pareto curve, top cells |
 | | Planner | Exposure, person-weighted means, hot days, equity, plantable space, zones, hexagons, logger sites and pairs, GIS files |
 | | Lab | The Scenario Lab ([§7](#7-scenario-lab)) |
 | Trust | Validation | Study cards ([§8](#8-studies)) |
-| | Uncertainty | Layered intervals per scenario and the studies they draw on |
+| | Uncertainty | Layered intervals per scenario, the verdict each supports, and the studies they draw on |
 | | Provenance | Hashes, git, platform, packages and their differences, effective config, launch snapshot, Reproduce |
 | Run | Track | Mission Control for the run's jobs |
 | | Map | The map explorer and analysis tools |
@@ -465,6 +466,25 @@ sparc core run --project configs/core_providence.yml --fast --progress progress.
 | | Files | Every file with its catalogue entry, the data dictionary, previews, raw downloads and conversions, and the checkpoint card |
 
 Every tab opens even mid-run. A missing output names the stage or study that produces it and offers the action ("Resume to compute S6", "Run planner pack"). A stage a finished run skipped offers **Re-run with <stage>**, which opens Launch prefilled from that run. Sections that older code did not write say "not in this run (older code)".
+
+### Heat stress and verdicts
+
+Air temperature alone understates danger: humidity slows sweating, so the same air temperature feels hotter on a muggier day. The **Heat** tab turns each cell's measured temperature into the US National Weather Service **heat index** using the campaign's dewpoint (from the forcing file: the airport station's, else ERA5's) and counts residents in the NWS categories:
+
+| Category | Heat index | What can happen |
+|---|---|---|
+| Caution | 80–90 °F | fatigue with prolonged exposure or activity |
+| Extreme caution | 90–103 °F | heat cramps and heat exhaustion possible |
+| Danger | 103–125 °F | heat cramps or exhaustion likely, heat stroke possible |
+| Extreme danger | ≥ 125 °F | heat stroke highly likely |
+
+The tab opens with a five-part brief written from the numbers: **how hot it felt**, **who is exposed**, **as the climate warms**, **what helps** and **how sure**. Below it: key numbers, residents by category today, with the adaptation package (the config's first joint scenario) and under each climate pathway (switch the period and the humidity assumption), the distribution of the heat index across the city, the heat-risk map, a futures table and the verdict table.
+
+- **Futures** add each pathway's median warming to the campaign afternoon. Future humidity is uncertain, so every future is a range between **constant dewpoint** (moisture unchanged, the lower end) and **constant relative humidity** (moisture rises with warming, the upper end), widened by the climate models' 10th–90th percentile warming. The heat index is steep near the category edges, so a few tenths of a degree can move many residents across one; read the ranges, not one number.
+- **What-if humidity**: pick a preset (dry 10 °C to oppressive 24 °C) or type a dewpoint to recompute everything for a muggier or drier afternoon. A run without campaign humidity asks for one instead of guessing.
+- **Verdicts** turn each scenario's uncertainty into one word: **Robust** (the plausible range excludes no change and every analysis variant agrees on the sign), **Direction only** (the sign holds but the size could be close to zero) or **Not established** (it cannot be told apart from what the pipeline reports when the simulation plants no effect, or most edited cells are beyond the conditions the model was trained on). An asterisk marks a qualifier such as extrapolation; hover for the reasons. Verdicts need the uncertainty envelopes (Uncertainty tab).
+- In the **Map** explorer, the "Heat stress" group holds the heat index and the heat-risk category, today and with the package.
+- In the **Scenario Lab**, an exact result's impacts lead with the design's heat risk: how many residents it moves out of Extreme caution or worse, today and in each future. The decision pack and the report export ("Heat stress" section) carry the same numbers.
 
 ### Findings
 
@@ -545,6 +565,7 @@ The result card speaks plain language by default:
 - **Confident it cools** when the whole 95% range is on the cool side, **Confident it warms** on the warm side, **Could be zero** otherwise.
 - Qualifiers when they apply: "partly outside observed conditions (23% of edited cells)", "independent causal check disagrees", "preview only — not verified".
 - What it buys: residents moved below a temperature threshold today and mid-century, cooling per unit cost, the share of mid-century warming it offsets.
+- Heat risk (when the run has campaign humidity): residents the design moves out of the NWS Extreme caution category or worse, today and in each future ([Heat stress](#heat-stress-and-verdicts)).
 
 The **expert** toggle shows the standard errors, the jackknife over folds, cell counts and method notes. Below the card: region breakdowns (edited cells, edited cells plus their influence ring, outside, every zone and saved region), the ring profile of the spill, realised against requested dose per lever (and what mediators like NDVI did), cost, the causal band, the uncertainty envelope from attached studies, and impacts (exposure today and under the climate futures, equity quintiles, hot days avoided when station data is cached).
 

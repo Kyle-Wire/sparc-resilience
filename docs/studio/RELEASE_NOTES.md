@@ -1,4 +1,18 @@
-# Release notes — SPARC Studio 1.0
+# Release notes — SPARC Studio
+
+## Since 1.0: heat stress, verdicts, Windows and macOS
+
+- **Heat tab** (run hub, Decisions): the US National Weather Service heat index of every cell with the campaign dewpoint, residents in each NWS category (Caution, Extreme caution, Danger, Extreme danger) today, with the adaptation package and in each CMIP6 future, as a range between constant dewpoint and constant relative humidity; a five-part plain brief (how hot, who, as the climate warms, what helps, how sure); a what-if dewpoint control. See [Heat stress and verdicts](USER_GUIDE.md#heat-stress-and-verdicts).
+- **Verdicts**: every configured scenario reads **Robust**, **Direction only** or **Not established**, with the reasons, from its uncertainty envelopes and the no-effect simulation (Scenarios, Uncertainty and Heat tabs; results page).
+- **Heat risk of a design**: an exact Lab result's impacts lead with the residents it moves out of Extreme caution or worse, today and in each future; the decision pack and the report export ("Heat stress" section) carry it. Impacts cached before this are recomputed once.
+- **Map**: "Heat stress" layers (heat index and NWS category, today and with the package) in warm category colours.
+- **Results page**: a Heat stress section and verdict pills.
+- **Windows and macOS**: CI runs the start-to-end self-check (`python -m sparc.studio.selfcheck`) and the fast suites on both. Fixed: on Windows the Scenario Lab's engine host never exited after Studio stopped (a named-pipe wait that closing does not interrupt), and Studio could not kill it afterwards; atomic file replacement retries through Windows sharing violations.
+- **No change to checkpoints**: the heat code sits in `sparc/core/heat/` (outside the resume fingerprint), so existing runs resume as before.
+
+---
+
+# SPARC Studio 1.0
 
 SPARC Studio 1.0.0 ships in the `sparc` package (1.0.14) as the `studio` extra. Date: 2026-10-02.
 
