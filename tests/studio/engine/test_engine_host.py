@@ -221,6 +221,14 @@ def test_sweep_plans_rerun_and_across_runs(client, ctx, demo, engine_run, place_
     assert all(p["region"] is not None and p["realized"] > 0 for p in sw["curve"])
     assert sw["fit"]["model"] in ("linear", "saturating", "sigmoid", "insufficient")
     assert sw["status"] == "succeeded" and sw["pipeline_curve"]
+    # two fits, each on its own axis: the requested dose (the curve's x) and the neighbourhood dose
+    from sparc.studio.scenarios.sweeps import fit_curve
+
+    benefit = [0.0] + [-p["region"]["estimate"] for p in sw["curve"]]
+    neigh = [p["neighbourhood_dose"] for p in sw["curve"]]
+    assert all(0 < nd < p["dose"] for nd, p in zip(neigh, sw["curve"]))      # regional: smoothed below the dose
+    assert sw["fit"] == pytest.approx(fit_curve([0.0, 5, 10, 20, 30], benefit, "dose"))
+    assert sw["fit_neighbourhood"] == pytest.approx(fit_curve([0.0] + neigh, benefit, "neighbourhood_dose"))
     kinds = {x["kind"] for x in client.get(f"/api/runs/{rid}/scenarios").json()["results"]}
     assert kinds == {"sweep_point"}
     # plan: verify (closed loop) and the frontier
@@ -270,6 +278,22 @@ def test_sweep_plans_rerun_and_across_runs(client, ctx, demo, engine_run, place_
                   timeout=180)
     unc = client.get(f"/api/results/{rj['result']['result_id']}").json()["uncertainty"]
     assert unc["specification"] is not None and "specification: check across runs" in unc["sources"]
+    # exact first, then the check: the shown (cached) result takes the band when the check finishes
+    doc2 = {**SHADE, "name": "Shade 5", "edits": [{**SHADE["edits"][0], "amount": 5}]}
+    sc2 = _scenario(client, demo["id"], doc2)
+    r2 = wait_job(client, client.post(f"/api/scenarios/{sc2['id']}/run", json={"run_id": rid}).json()["job"]["id"],
+                  timeout=180)
+    res2 = r2["result"]["result_id"]
+    assert client.get(f"/api/results/{res2}").json()["uncertainty"]["specification"] is None
+    aj2 = client.post(f"/api/scenarios/{sc2['id']}/across-runs", json={"run_ids": [rid, rid_b]}).json()
+    assert wait_job(client, aj2["id"], timeout=300)["status"] == "succeeded"
+    # the job's on_finish hook (right after it turns "succeeded") refreshes the stored result
+    unc2 = wait_for(lambda: (u := client.get(f"/api/results/{res2}").json()["uncertainty"])["specification"] and u,
+                    timeout=30, what="the band on the cached result")
+    assert "specification: check across runs" in unc2["sources"]
+    again = client.post(f"/api/scenarios/{sc2['id']}/run", json={"run_id": rid}).json()     # as the Lab does: no force
+    assert again["job"] is None and again["cached"]["id"] == res2
+    assert client.get(f"/api/results/{res2}").json()["uncertainty"] == unc2
 
 
 def test_host_recycles_and_reopens_the_mru_run(client, ctx, demo, engine_run, wait_job, monkeypatch):
@@ -286,3 +310,56 @@ def test_host_recycles_and_reopens_the_mru_run(client, ctx, demo, engine_run, wa
     time.sleep(2.0)
     assert ctx.db.fetchval("SELECT COUNT(*) FROM jobs WHERE kind = 'engine.open'") == 2
     wait_for(lambda: client.get("/api/engine").json()["state"] == "absent", 30, what="the recycled host to exit")
+
+
+def test_a_job_queued_behind_a_recycle_runs_on_the_next_host(client, ctx, demo, engine_run, wait_job, monkeypatch):
+    """Every request recycles the host here.  The second exact scenario starts as soon as the first one's result
+    is written, while that host is still going away: it must run on the next host, not fail with "engine host
+    exited (cannot reach the engine host: [Errno 2] No such file or directory)"."""
+    from sparc.studio.engine.executor import ENGINE_EXECUTOR
+
+    monkeypatch.setenv("SPARC_STUDIO_ENGINE_SLACK_GB", "-1000")
+    monkeypatch.setattr(ENGINE_EXECUTOR, "reopened", {})          # an earlier test's re-open of this run id
+    rid, _ = engine_run
+    a = _scenario(client, demo["id"], {**SHADE, "name": "a"})
+    b = _scenario(client, demo["id"], {**SHADE, "name": "b", "edits": [{**SHADE["edits"][0], "amount": 5}]})
+    ja = client.post(f"/api/scenarios/{a['id']}/run", json={"run_id": rid}).json()["job"]["id"]
+    jb = client.post(f"/api/scenarios/{b['id']}/run", json={"run_id": rid}).json()["job"]["id"]
+    done_a, done_b = wait_job(client, ja, timeout=240), wait_job(client, jb, timeout=240)
+    assert done_a["status"] == "succeeded", done_a
+    assert done_b["status"] == "succeeded", done_b
+    assert "recycling" in (Path(ctx.workspace.engine_dir) / "host.log").read_text()
+    # the server re-opens the run after a recycle (that host recycles too): leave no host behind
+    reopen = wait_for(lambda: ctx.db.fetchone("SELECT * FROM jobs WHERE kind = 'engine.open'"), 60,
+                      what="the re-open job")
+    assert wait_job(client, reopen["id"], timeout=180)["status"] == "succeeded"
+    wait_for(lambda: client.get("/api/engine").json()["state"] == "absent", 30, what="the recycled host to exit")
+
+
+
+def test_shutdown_with_stop_jobs_cancels_a_running_engine_job(client, ctx, demo, engine_run, wait_job):
+    """POST /api/shutdown {stop_jobs: true} with an engine job running: the job ends cancelled (the host is asked
+    to stop it between folds before it is stopped), not "failed: engine host exited"; the host is gone."""
+    import psutil
+
+    from sparc.studio.db import Database
+
+    rid, _ = engine_run
+    _open(client, wait_job, rid)
+    pid = _host_pid(client)
+    ids = [_scenario(client, demo["id"], {**SHADE, "name": f"q{i}", "edits": [{**SHADE["edits"][0], "amount": 1 + i}]})["id"]
+           for i in range(40)]
+    jid = client.post("/api/scenarios/run-batch", json={"run_id": rid, "scenario_ids": ids}).json()["job"]["id"]
+    wait_for(lambda: any(e["type"] == "tick" and e.get("unit") == "engine_pass"
+                         for e in _events(ctx.workspace, jid)), 120, what="the first fold tick")
+    assert client.post("/api/shutdown", json={"stop_jobs": True}).status_code == 202
+    client.__exit__(None, None, None)                    # the server shuts down, stopping its jobs
+    db = Database(ctx.workspace.db_path)
+    try:
+        row = db.fetchone("SELECT status, error_json FROM jobs WHERE id = ?", (jid,))
+    finally:
+        db.close()
+    assert row["status"] == "cancelled", row
+    res = json.loads((Path(ctx.workspace.job_dir(jid)) / "result.json").read_text())
+    assert res["status"] == "cancelled" and (res.get("error") or {}).get("type") != "EngineExit", res
+    assert not psutil.pid_exists(pid) or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE

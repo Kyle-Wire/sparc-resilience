@@ -424,6 +424,60 @@ describe("helpers", () => {
   });
 });
 
+describe("items without a plan (engine sweeps, batches, frontiers)", () => {
+  // a 40-dose sweep read 100% at dose 4: the fallback was the latest shallowest tick, the folds of the current dose
+  const e = (type: string, path: string[], span: string, f: Record<string, unknown> = {}): JobEvent =>
+    ({ v: 1, type, seq: 0, ts: 100, pid: 1, job: "j", lvl: "info", span, parent: null, path, ctx: {}, ...f }) as unknown as JobEvent;
+  const dose = (k: number, n = 4): JobEvent[] => {
+    const p = ["task:sweep", `task:dose[${k}/${n}]`];
+    const sp = `1:${10 + k}`;
+    return [
+      e("task.start", p, sp, { name: "dose", key: String(k), k, n, parent: "1:3" }),
+      ...[1, 2, 3].map((f) => e("tick", p, sp, { k: f, n: 3, unit: "engine_pass", frac: Math.round((f / 3) * 1e6) / 1e6, parent: "1:3" })),
+      e("task.end", p, sp, { name: "dose", key: String(k), k, n, status: "ok", parent: "1:3" }),
+    ];
+  };
+  const load = [
+    e("task.start", ["task:unpickle"], "1:2", { name: "unpickle" }),
+    e("tick", ["task:unpickle"], "1:2", { k: 1, n: 2, unit: "unpickle", frac: 0.5 }),
+    e("task.end", ["task:unpickle"], "1:2", { name: "unpickle", status: "ok" }),
+  ];
+  const events = [...load, e("task.start", ["task:sweep"], "1:3", { name: "sweep" }), ...[1, 2, 3, 4].flatMap((k) => dose(k))];
+
+  it("moves once from 0 to 1 over the items, as the Python reducer does", () => {
+    let s = newTrackerState();
+    const prog: (number | null)[] = [];
+    for (const ev of events) {
+      s = applyEvent(s, ev);
+      prog.push(s.progress);
+    }
+    expect(prog[1]).toBeCloseTo(0.5, 9);
+    const items = prog.slice(load.length + 1) as number[];
+    expect(items).toEqual([...items].sort((a, b) => a - b));
+    expect(items[3]).toBeCloseTo(0.25, 9);
+    expect(items[6]).toBeCloseTo(0.25 + 0.25 / 3, 6);
+    expect(Math.max(...items.slice(0, 15))).toBeLessThan(0.76);
+    expect(items[items.length - 1]).toBeCloseTo(1, 9);
+  });
+
+  it("nests item levels: (k − 1 + inner) / n at each level", () => {
+    const s = replay([
+      e("task.start", ["task:a[2/4]"], "2:1", { name: "a", k: 2, n: 4 }),
+      e("task.start", ["task:a[2/4]", "task:b[1/2]"], "2:2", { name: "b", k: 1, n: 2 }),
+      e("tick", ["task:a[2/4]", "task:b[1/2]", "task:x"], "2:3", { k: 1, n: 2, unit: "engine_pass" }),
+    ]);
+    expect(s.progress).toBeCloseTo((2 - 1 + (1 - 1 + 0.5) / 2) / 4, 12);
+  });
+
+  it("resumes from a snapshot at the open item (the fraction inside it arrives with its next tick)", () => {
+    const cut = load.length + 1 + 5 + 2; // inside dose 2, after its second tick
+    const snap = toSnapshot(replay(events.slice(0, cut)), makeJob({ kind: "engine.sweep", status: "running" }));
+    const s = fromSnapshot(JSON.parse(JSON.stringify(snap)) as TrackerSnapshot);
+    expect(s.progress).toBeCloseTo(0.25, 9);
+    expect(applyEvent(s, events[cut]).progress).toBeCloseTo(replay(events.slice(0, cut + 1)).progress!, 9);
+  });
+});
+
 describe("Python projection golden (tests/studio/fixtures, foundation selftest)", () => {
   // vitest runs from studio-web/ (npm --prefix studio-web test); the fixtures sit in the repo's tests/
   const dir = resolve(process.cwd(), "..", "tests", "studio", "fixtures");

@@ -158,13 +158,23 @@ def _new_result(studio_dir: str) -> dict:
     return {"id": rid, "dir": str(result_dir(studio_dir, rid))}
 
 
-def _specification(sctx, scenario_id: str) -> list[float] | None:
-    """City means of the latest successful "check across runs" of the scenario (its specification band)."""
-    row = sctx.db.fetchone("SELECT result_json FROM jobs WHERE kind = 'scenario.across_runs' AND scenario_id = ? "
-                           "AND status = 'succeeded' ORDER BY finished_utc DESC", (scenario_id,))
-    res = dbmod.loads((row or {}).get("result_json"), {}) or {}
-    vals = [r["city"]["estimate"] for r in res.get("rows") or [] if r.get("ok") and r.get("city")]
+def _across_band(res: dict) -> list[float] | None:
+    """The range of the run means of a "check across runs" result (None with fewer than two runs)."""
+    vals = [r["city"]["estimate"] for r in (res or {}).get("rows") or [] if r.get("ok") and r.get("city")]
     return [float(min(vals)), float(max(vals))] if len(vals) >= 2 else None
+
+
+def _specification(sctx, scenario_id: str, content_hash: str | None) -> list[float] | None:
+    """The specification band of the scenario's content: the run means of its latest successful "check across
+    runs" **of that content** (the result records the ``content_hash`` it evaluated; a check of a draft that was
+    edited since, or one recorded before checks named their content, is not this content's band)."""
+    rows = sctx.db.fetchall("SELECT result_json FROM jobs WHERE kind = 'scenario.across_runs' AND scenario_id = ? "
+                            "AND status = 'succeeded' ORDER BY finished_utc DESC", (scenario_id,))
+    for row in rows:
+        res = dbmod.loads(row.get("result_json"), {}) or {}
+        if content_hash and res.get("content_hash") == content_hash:
+            return _across_band(res)
+    return None
 
 
 def compiled_item(sctx, ctx, srow: dict, common: dict, *, threads: int = 1) -> dict:
@@ -198,7 +208,8 @@ def compiled_item(sctx, ctx, srow: dict, common: dict, *, threads: int = 1) -> d
             "interventions": comp.interventions(), "regions": comp.regions, "per_unit": comp.costs,
             "requested": comp.requested, "lever_cells": comp.lever_cells,
             "warnings": [w for w in comp.warnings if not w.get("blocking")], "compiled": comp.lever_summary(),
-            "preview_delta": preview_delta, "specification": _specification(sctx, srow["id"]), "kind": "exact"}
+            "preview_delta": preview_delta, "specification": _specification(sctx, srow["id"], comp.content_hash),
+            "kind": "exact"}
 
 
 def prepare_request(sctx, job: dict) -> tuple[str, dict]:
@@ -328,7 +339,9 @@ def _open_preflight(sctx, job: dict, params) -> list[dict]:
     try:
         get_service(sctx).preflight(rid, memory=False)
     except ApiError as exc:
-        fatal = exc.code in ("no_checkpoint", "untrusted_pickle")
+        # an unfinished run that is still running only waits (blocked) for its manifest; a stopped one cannot load
+        fatal = exc.code in ("no_checkpoint", "untrusted_pickle") or (
+            exc.code == "output_missing" and not (exc.detail or {}).get("running"))
         return [{"reason": exc.message, "fatal": fatal, "code": exc.code,
                  "actions": [exc.action] if exc.action else []}]
     return []
@@ -569,8 +582,37 @@ def _open_for_check(row: dict, threads: int):
     return open_run(row["run_dir"], cfg, threads=threads, base_fold=base, studio_dir=sd)
 
 
+def across_on_finish(sctx, job: dict, result) -> None:
+    """A finished check across runs is the specification band of the scenario's exact results **of the content
+    it evaluated**: their stored uncertainty blocks take it now (an exact run of the same content is a cache hit
+    that is never recomputed), and ``scenario.result`` tells clients to re-read them."""
+    from sparc.studio.engine import stats as S
+    from sparc.studio.workspace import write_json_atomic
+
+    if job.get("status") != "succeeded" or not isinstance(result, dict) or not result.get("content_hash"):
+        return
+    params = job.get("params") if isinstance(job.get("params"), dict) else dbmod.loads(job.get("params_json"), {})
+    sid = (params or {}).get("scenario_id") or job.get("scenario_id")
+    if not sid:
+        return
+    band = _across_band(result)
+    for row in sctx.db.fetchall("SELECT id, dir, run_id, kind FROM results WHERE scenario_id = ? AND "
+                                "content_hash = ? AND kind = 'exact'", (sid, result["content_hash"])):
+        path = Path(row["dir"]) / "summary.json" if row.get("dir") else None
+        summ = read_json(path) if path is not None else None
+        if not isinstance(summ, dict) or not isinstance(summ.get("uncertainty"), dict):
+            continue
+        new = S.with_specification(summ["uncertainty"], band)
+        if new == summ["uncertainty"]:
+            continue
+        summ["uncertainty"] = new
+        write_json_atomic(path, summ)
+        sctx.hub.publish("scenario.result", {"scenario_id": sid, "result_id": row["id"], "run_id": row["run_id"],
+                                             "kind": row["kind"]})
+
+
 @job_kind("scenario.across_runs", lane="heavy", executor="process", label="Check across runs",
-          params=AcrossRunsParams, long=True, estimate=_across_estimate)
+          params=AcrossRunsParams, long=True, estimate=_across_estimate, on_finish=across_on_finish)
 def across_runs_job(ctx, params: AcrossRunsParams) -> dict:
     """Evaluate a portable scenario on several runs, one engine at a time in this process (SPEC §7.12)."""
     from sparc.core import progress
@@ -618,7 +660,9 @@ def across_runs_job(ctx, params: AcrossRunsParams) -> dict:
     signs = [np.sign(v) for v in vals]
     majority = max(set(signs), key=signs.count) if signs else 0
     return {"rows": rows, "sign_stability": (signs.count(majority) / len(signs)) if signs else None,
-            "spread": (float(max(vals) - min(vals)) if vals else None)}
+            "spread": (float(max(vals) - min(vals)) if vals else None),
+            "content_hash": srow.get("content_hash")}
+
 
 
 # ---------------------------------------------------------------------------

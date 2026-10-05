@@ -161,7 +161,7 @@ export function AcrossRunsDialog({ sid, pid, rid, onClose }: { sid: string; pid:
       }
     >
       <p className="cap">
-        Evaluates this scenario on each chosen run, one engine at a time inside a heavy job (not the engine host). The spread feeds the result's specification band.
+        Evaluates this scenario on each chosen run, one engine at a time inside a heavy job (not the engine host). The spread becomes the specification band of this version of the scenario: its exact results take it when the check ends (editing a draft afterwards needs a new check).
       </p>
       {runs.error ? <p className="callout" data-tone="crit">{errorMessage(runs.error)}</p> : null}
       <fieldset className="stack" style={{ gap: 4, border: 0, padding: 0 }}>

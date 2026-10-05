@@ -30,8 +30,14 @@ ends.  Completions are attributed to the stage in the event's ancestry.
 **Progress** = Σ_U w(U)·min(planned_U, done_U + partial_U) / Σ_U w(U)·planned_U
 with ``w`` the seed rates (:func:`sparc.studio.jobs.eta.unit_weight`) and
 ``planned`` summed over the plan's ``will_run`` nodes.  Without a plan it is
-the mean child progress (study jobs) or the ``frac`` of the latest
-shallowest tick.  It is 1.0 once the own run or the job has succeeded.
+the mean child progress (study jobs); else, when tasks that count items
+(``k`` of ``n``, ``k`` from 1: the item in progress) are open, the nested
+item fraction (``kn``): each such task, from the innermost out, gives
+``(k − 1 + inner) / n`` where ``inner`` is the fraction inside it (the latest
+tick inside the innermost one; 1 once it ended ok), so a 40-dose sweep whose
+doses tick 3 folds each moves from 0 to 1 once instead of 40 times; else the
+``frac`` of the latest shallowest tick.  It is 1.0 once the own run or the
+job has succeeded.
 """
 
 from __future__ import annotations
@@ -71,7 +77,7 @@ def new_state() -> dict:
         "hb_last": {}, "heartbeat_gaps": [],
         "planned_units": {}, "done_units": {}, "stage_done": {}, "partial": {}, "stage_partial": {},
         "unit_obs": {}, "stage_elapsed": {},
-        "progress": None, "current_path": None, "stage": None, "tick": None,
+        "progress": None, "current_path": None, "stage": None, "tick": None, "kn": [],
         "status": None, "exit_code": None, "error": None, "result": None,
         "run_status": None, "finished": False, "cancel": None,
         "children": {}, "child_of": {},
@@ -314,10 +320,32 @@ def _stage_skip(state, ev, path, cursor):
 
 def _task_start(state, ev, path, cursor):
     _span_event(state, ev, path)
+    k, n = ev.get("k"), ev.get("n")
+    if _num(k) is not None and _num(n) is not None and n > 0 and path:
+        # an item k of n starts: it nests in the open item levels that are its ancestors
+        kn = [lv for lv in state["kn"] if lv["depth"] < len(path) and path[lv["depth"] - 1] == lv["label"]]
+        kn.append({"span": ev.get("span"), "label": path[-1], "depth": len(path), "k": float(k), "n": float(n),
+                   "frac": 0.0})
+        state["kn"] = kn
+
+
+def _kn_level(state, path) -> int | None:
+    """Index of the innermost item level whose task contains an event at ``path``."""
+    for i in range(len(state["kn"]) - 1, -1, -1):
+        lv = state["kn"][i]
+        if lv["depth"] <= len(path) and path[lv["depth"] - 1] == lv["label"]:
+            return i
+    return None
 
 
 def _task_end(state, ev, path, cursor):
     _span_event(state, ev, path)
+    for i, lv in enumerate(state["kn"]):
+        if ev.get("span") is not None and lv["span"] == ev.get("span"):
+            if ev.get("status") == "ok":
+                lv["frac"] = 1.0
+            del state["kn"][i + 1:]
+            break
     span = ev.get("span")
     if span and state["partial"].pop(span, None) is not None:
         _recompute_partial(state)
@@ -345,6 +373,10 @@ def _tick(state, ev, path, cursor):
         cur = state["tick"]
         if cur is None or depth <= cur["depth"]:
             state["tick"] = {"depth": depth, "frac": max(0.0, min(1.0, float(frac)))}
+        i = _kn_level(state, path)
+        if i is not None:
+            del state["kn"][i + 1:]
+            state["kn"][i]["frac"] = max(0.0, min(1.0, float(frac)))
     if not unit or not isinstance(k, (int, float)) or not isinstance(n, (int, float)) or n <= 0:
         return
     stage = stage_of(path)
@@ -591,6 +623,8 @@ def _update_progress(state) -> None:
         if p is None and state["children"]:
             ps = [c["state"]["progress"] or 0.0 for c in state["children"].values()]
             p = sum(ps) / len(ps)
+        if p is None and state["kn"]:
+            p = _kn_progress(state["kn"])
         if p is None and state["tick"] is not None:
             p = state["tick"]["frac"]
         state["progress"] = None if p is None else round(min(1.0, max(0.0, p)), 12)
@@ -606,6 +640,14 @@ def _update_progress(state) -> None:
                 st["progress"] = _node_progress(state, node)
             else:
                 st["progress"] = None
+
+
+def _kn_progress(kn: list) -> float:
+    """Nested item fraction: ``(k − 1 + inner) / n`` from the innermost item level out."""
+    p = kn[-1]["frac"]
+    for lv in reversed(kn):
+        p = (min(lv["k"], lv["n"]) - 1.0 + p) / lv["n"]
+    return p
 
 
 def _own_progress(state) -> float | None:

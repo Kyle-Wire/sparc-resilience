@@ -2,8 +2,9 @@
 ``export.compare_pack`` job kinds.
 
 Packs are built from **exact** results.  A pack of a scenario that has no exact result (``result_id`` is the
-scenario id) is built from the emulator preview, stamped **DRAFT**, watermarked and carries no standard
-errors.  Every pack is a zip under ``projects/<slug>/exports/<export_id>/``:
+scenario id), or of a plan that is not verified, is built from the emulator preview (``404 no_emulator``
+without it), stamped **DRAFT**, watermarked and carries no standard errors.  A plan's planned benefit is never
+used as a ΔT map: each treated cell holds the cooling its dose brings to its whole neighbourhood (°·cells).  Every pack is a zip under ``projects/<slug>/exports/<export_id>/``:
 
 * ``brief.html`` - self-contained: title and place, a summary paragraph written from the numbers, ΔT and
   realised-dose maps rendered server-side with the shared OKLab LUTs (``matplotlib.image.imsave``), the KPI
@@ -39,7 +40,7 @@ from sparc.studio.errors import ApiError
 
 log = logging.getLogger("sparc.studio.scenarios")
 
-__all__ = ["decision_pack", "plan_pack", "compare_pack", "write_geotiff", "map_png", "README_TEXT"]
+__all__ = ["decision_pack", "plan_pack", "compare_pack", "write_geotiff", "map_png", "README_TEXT", "equity_reading"]
 
 README_TEXT = """SPARC decision pack
 ===================
@@ -70,6 +71,11 @@ hex_250m.csv, hex_500m.csv   hexagon summaries (cooling = −ΔT, people summed,
 
 _DRAFT_NOTE = ("DRAFT: this pack was built from the linear emulator preview, not an exact engine run. It carries "
                "no standard errors; run the scenario exactly before using these numbers.")
+_DEMO_NOTE = ("DEMO DATA: this pack comes from the synthetic demo city, placed at a fictional location. Its numbers "
+              "describe no real place and must not be used for planning.")
+_PLAN_DRAFT_NOTE = ("DRAFT: the plan is not verified, so this pack was built from the linear emulator preview of its "
+                    "doses, not an exact closed-loop run. It carries no standard errors; verify the plan before "
+                    "using these numbers.")
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +175,36 @@ def _likely_text(lk: dict | None, unit: str, draft: bool) -> str:
     return f"{est} {unit} ({_fmt(lk.get('lo'), 3, True)} to {_fmt(lk.get('hi'), 3, True)})"
 
 
+def _num(v) -> float | None:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if np.isfinite(f) else None
+
+
+def equity_reading(ci, resident_mean_cooling) -> str:
+    """What a concentration index says, for the direction of the change.  The index divides by the mean cooling,
+    so it is the same for a cooling and a warming of the same shape: for a scenario that warms on net, > 0 means
+    the warming (not the benefit) concentrates in the higher quintiles."""
+    c, mu = _num(ci), _num(resident_mean_cooling)
+    if c is None or mu is None:
+        return "not computed"
+    if mu == 0:
+        return "no net change to share out"
+    what = "cooling" if mu > 0 else "warming"
+    if abs(c) < 0.05:
+        return f"the {what} is shared about evenly"
+    return f"the {what} concentrates in the {'higher' if c > 0 else 'lower'} quintiles"
+
+
+def _share_text(v, draft: bool) -> str:
+    """A share as a percentage; a value that was never computed says so (never "0%")."""
+    if v is None:
+        return "not computed (preview)" if draft else "not computed"
+    return f"{_fmt(100 * float(v), 0)}%"
+
+
 def _model_card_limitations(run_dir: Path) -> list[str]:
     p = Path(run_dir) / "model_card.md"
     try:
@@ -210,6 +246,9 @@ def narrative(name: str, res: dict, unit: str, n_cells: int, area_km2: float, dr
     fx = res.get("extrapolated_edited")
     if fx:
         parts.append(f"{fx:.0%} of the edited cells are outside the conditions the model was trained on.")
+    elif fx is None and n_cells:
+        parts.append("Whether the edited cells are outside the conditions the model was trained on was not "
+                     "computed" + (" for this preview." if draft else "."))
     cc = res.get("causal_check")
     if cc:
         parts.append("The independent causal estimate " + ("agrees with" if cc.get("model_within") else
@@ -226,7 +265,7 @@ def narrative(name: str, res: dict, unit: str, n_cells: int, area_km2: float, dr
 
 def _brief_html(*, title: str, place: str, paragraph: str, res: dict, impacts: dict | None, maps: dict[str, bytes],
                 caveats: list[str], limitations: list[str], provenance: dict, unit: str, draft: bool,
-                extra_sections: str = "") -> str:
+                extra_sections: str = "", draft_note: str = _DRAFT_NOTE, demo: bool = False) -> str:
     def img(name: str, cap: str) -> str:
         if name not in maps:
             return ""
@@ -247,11 +286,17 @@ def _brief_html(*, title: str, place: str, paragraph: str, res: dict, impacts: d
     exp_html = ""
     off_html = ""
     if impacts:
-        eq_rows = "".join(f"<tr><td>{_esc(k)}</td><td>{_fmt(v.get('concentration_index'), 3, True)}</td></tr>"
-                          for k, v in (impacts.get("equity") or {}).items())
+        eq = impacts.get("equity") or {}
+        eq_rows = "".join(f"<tr><td>{_esc(k)}</td><td>{_fmt(v.get('concentration_index'), 3, True)}</td>"
+                          f"<td>{_esc(equity_reading(v.get('concentration_index'), v.get('resident_mean_cooling')))}"
+                          "</td></tr>" for k, v in eq.items())
         if eq_rows:
-            eq_html = ("<h2>Who benefits</h2><table><tr><th>ranking</th><th>concentration index (&gt; 0: benefit "
-                       f"concentrates at the top)</th></tr>{eq_rows}</table>")
+            warms = any((_num(v.get("resident_mean_cooling")) or 0.0) < 0 for v in eq.values())
+            eq_html = (f"<h2>{'Who is affected' if warms else 'Who benefits'}</h2><table><tr><th>ranking</th>"
+                       f"<th>concentration index</th><th>reading</th></tr>{eq_rows}</table>"
+                       "<p>The index has the same sign for a cooling and for a warming of the same shape: &gt; 0 means "
+                       "the change concentrates in the higher quintiles of the ranking, &lt; 0 in the lower ones; the "
+                       "reading says whether that change is a cooling or a warming.</p>")
         thr = impacts.get("thresholds") or []
         ex_rows = "".join("<tr><td>{}</td><td>{}</td>{}</tr>".format(
             _esc(e["case"]), "with scenario" if e["adapted"] else "without",
@@ -276,8 +321,10 @@ def _brief_html(*, title: str, place: str, paragraph: str, res: dict, impacts: d
     quals = "".join(f"<li>{_esc(q)}</li>" for q in plain.get("qualifiers") or [])
     buys = "".join(f"<li>{_esc(b)}</li>" for b in plain.get("buys") or [])
     city = res.get("city") or {}
-    watermark = ('<div class="wm" aria-hidden="true">DRAFT</div><p class="draft">' + _esc(_DRAFT_NOTE) + "</p>") \
+    watermark = ('<div class="wm" aria-hidden="true">DRAFT</div><p class="draft">' + _esc(draft_note) + "</p>") \
         if draft else ""
+    if demo:
+        watermark += '<p class="draft"><strong>DEMO DATA</strong> ' + _esc(_DEMO_NOTE[len("DEMO DATA: "):]) + "</p>"
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{_esc(title)}</title>
@@ -304,7 +351,7 @@ figure{{display:inline-block;margin:.5rem 1rem .5rem 0;max-width:46%}} img{{max-
 <table><tr><th>quantity</th><th>value</th></tr>
 <tr><td>City mean ΔT</td><td>{_esc(_likely_text(city, unit, draft))}</td></tr>
 <tr><td>10th–90th percentile of cell ΔT</td><td>{_fmt(res.get('p10'), 3, True)} to {_fmt(res.get('p90'), 3, True)} {unit}</td></tr>
-<tr><td>Edited cells outside observed conditions</td><td>{_fmt(100 * (res.get('extrapolated_edited') or 0), 0)}%</td></tr>
+<tr><td>Edited cells outside observed conditions</td><td>{_share_text(res.get('extrapolated_edited'), draft)}</td></tr>
 <tr><td>Share of the change outside the edited cells</td><td>{_fmt(100 * ((res.get('spill') or {}).get('outside_share') or 0), 0)}%</td></tr>
 <tr><td>Cost (units)</td><td>{_fmt((res.get('cost') or {}).get('total'), 0)}</td></tr></table>
 <h2>Regions</h2><table><tr><th>region</th><th>cells</th><th>mean ΔT (likely range)</th><th>total ({unit}·cells)</th><th>cells cooled ≥ 0.1</th></tr>{''.join(rows)}</table>
@@ -411,7 +458,7 @@ def _provenance(ctx, spec: dict) -> dict:
 
 def _decision_contents(ctx, stage: Path, *, name: str, scenario: dict | None, res: dict, spec: dict, delta,
                        delta_sd, extrapolation, realized: dict, draft: bool, thresholds=None, cache_dir=None,
-                       extra_sections: str = "", extra_readme: str = "") -> None:
+                       extra_sections: str = "", extra_readme: str = "", draft_note: str = _DRAFT_NOTE) -> None:
     from sparc.studio.runs.caveats import caveats_for
     from sparc.studio.runs.common import clean
     from sparc.studio.scenarios.impacts import compute_impacts
@@ -431,8 +478,9 @@ def _decision_contents(ctx, stage: Path, *, name: str, scenario: dict | None, re
             res["city"] = {**res["city"], "se": None, "lo": None, "hi": None, "confidence": "unknown"}
     (stage / "scenario.json").write_text(json.dumps(clean({"scenario": scenario, "spec": spec}), indent=1,
                                                     allow_nan=False), encoding="utf-8")
-    (stage / "summary.json").write_text(json.dumps(clean({**res, "impacts": impacts, "draft": draft}), indent=1,
-                                                   allow_nan=False), encoding="utf-8")
+    demo = _is_demo(ctx, res)
+    (stage / "summary.json").write_text(json.dumps(clean({**res, "impacts": impacts, "draft": draft, "demo": demo}),
+                                                   indent=1, allow_nan=False), encoding="utf-8")
     _cells_frame(ctx, delta, delta_sd, extrapolation, realized).to_csv(stage / "cells.csv", index=False)
     write_geotiff(g, delta, stage / "delta.tif")
     maps = {"delta": map_png(g, delta)}
@@ -445,18 +493,27 @@ def _decision_contents(ctx, stage: Path, *, name: str, scenario: dict | None, re
         edited |= np.abs(np.asarray(arr)) > 0
     para = narrative(name, res, unit, int(edited.sum()), float(edited.sum() * g.dx * g.dx / 1e6), draft)
     clim = (ctx.manifest.get("climate") or {}).get("site") or {}
-    place = f"{ctx.name} · run {ctx.run_id}" + (f" · {clim['lat']:.3f}, {clim['lon']:.3f}" if clim.get("lat") is not None
-                                                else "")
-    brief = _brief_html(title=f"{'DRAFT — ' if draft else ''}{name}", place=place, paragraph=para, res=res,
-                        impacts=impacts, maps=maps, caveats=caveats_for(ctx),
+    if demo:                                 # the demo city's coordinates are a fictional placement
+        place = f"{ctx.name} · run {ctx.run_id} · synthetic DEMO city at a fictional location"
+    else:
+        place = f"{ctx.name} · run {ctx.run_id}" + (f" · {clim['lat']:.3f}, {clim['lon']:.3f}"
+                                                    if clim.get("lat") is not None else "")
+    brief = _brief_html(title=f"{'DEMO DATA — ' if demo else ''}{'DRAFT — ' if draft else ''}{name}", place=place,
+                        paragraph=para, res=res, impacts=impacts, maps=maps, caveats=caveats_for(ctx),
                         limitations=_model_card_limitations(ctx.run_dir), provenance=_provenance(ctx, spec),
-                        unit=unit, draft=draft, extra_sections=extra_sections)
+                        unit=unit, draft=draft, extra_sections=extra_sections, draft_note=draft_note, demo=demo)
     (stage / "brief.html").write_text(brief, encoding="utf-8")
     levers = ", ".join(f"{v}: {u}" for v, u in (ctx.units.get("levers") or {}).items()) or "see the config"
     extra = ("hexagons.gpkg         hexagons as polygons\n" if "hexagons.gpkg" in hex_files else "") + extra_readme
-    (stage / "README.txt").write_text(README_TEXT.format(unit=unit, levers=levers, extra=extra,
-                                                         draft=("\n" + _DRAFT_NOTE + "\n") if draft else ""),
+    notes = (("\n" + draft_note + "\n") if draft else "") + (("\n" + _DEMO_NOTE + "\n") if demo else "")
+    (stage / "README.txt").write_text(README_TEXT.format(unit=unit, levers=levers, extra=extra, draft=notes),
                                       encoding="utf-8")
+
+
+def _is_demo(ctx, res: dict | None = None) -> bool:
+    """A run of a DEMO project (the synthetic city, SPEC §9.2): its packs say so on every page."""
+    row = getattr(ctx, "row", None) or {}
+    return bool(row.get("demo") or (res or {}).get("demo"))
 
 
 def _export_dir(ctx_job, export_id: str) -> Path:
@@ -513,6 +570,35 @@ def _draft_from_scenario(db, ctx, sid: str) -> tuple[dict, dict, dict]:
                        "realized": comp.realized}
 
 
+def _draft_from_plan(db, ctx, prow: dict, name: str) -> tuple[dict, dict]:
+    """A preview-only result of an unverified plan: the emulator's ΔT of the plan's doses (no SEs).
+
+    The plan's ``planned_benefit`` cannot stand in for it: each treated cell holds the cooling its dose brings to
+    its whole neighbourhood (a footprint total, °·cells), so as a map it puts all the cooling on the treated
+    cells, 3-4× too much there and none around them."""
+    from sparc.studio.engine import stats as S
+    from sparc.studio.engine.compile import compile_scenario
+    from sparc.studio.engine.preview import compute_delta, load_emulator
+    from sparc.studio.scenarios.plans import to_scenario_doc
+    from sparc.studio.workspace import utc_now
+
+    em = load_emulator(ctx)
+    if em is None:
+        raise ApiError("no_emulator", "the pack of an unverified plan needs the run's emulator preview: verify the "
+                       "plan (exact closed loop) or build the emulator")
+    plan_id = prow["id"]
+    comp = compile_scenario(ctx, to_scenario_doc(prow), db=db)
+    delta = compute_delta(em, comp.dx(), comp.n)
+    spec = {"id": f"draft:{plan_id}", "kind": "preview", "plan_id": plan_id, "content_hash": comp.content_hash,
+            "compiled": comp.lever_summary(), "run_id": ctx.run_id, "created_utc": utc_now()}
+    res = S.build_result(result_id=f"draft:{plan_id}", kind="plan", run_id=ctx.run_id, created_utc=utc_now(),
+                         job_id=None, delta=delta, delta_sd=None, extrapolation=None, folds=None,
+                         realized=comp.realized, grid=ctx.grid, unit=ctx.units.get("target", "°F"),
+                         name=f"Plan: {name}", requested=comp.requested, lever_cells=comp.lever_cells,
+                         regions=comp.regions, per_unit=comp.costs, draft=True, spec=spec)
+    return res, {"spec": spec, "delta": delta, "delta_sd": None, "extrapolation": None, "realized": comp.realized}
+
+
 # ---------------------------------------------------------------------------
 # the three packs
 # ---------------------------------------------------------------------------
@@ -561,14 +647,12 @@ def _slug(s: str) -> str:
 
 
 def plan_pack(jctx, export_id: str, plan_id: str) -> dict:
-    """``export.plan_pack``: the decision-pack contents of the plan (its closed-loop result, else a DRAFT of
-    the planned benefit) plus the field kit and the Pareto table."""
+    """``export.plan_pack``: the decision-pack contents of the plan (its closed-loop result, else a DRAFT from
+    the emulator preview of its doses) plus the field kit and the Pareto table."""
     import pandas as pd
 
-    from sparc.studio import db as dbmod
-    from sparc.studio.engine import stats as S
     from sparc.studio.scenarios.plans import field_kit, plan_out
-    from sparc.studio.workspace import read_json, utc_now
+    from sparc.studio.workspace import read_json
 
     db = jctx.db
     prow = db.fetchone("SELECT * FROM plans WHERE id = ?", (plan_id,))
@@ -578,39 +662,34 @@ def plan_pack(jctx, export_id: str, plan_id: str) -> dict:
     plan = plan_out(prow)
     realised = read_json(Path(prow["dir"]) / "realised.json") or {}
     draft = not realised.get("result_id")
-    params = dbmod.loads(prow.get("params_json"), {}) or {}
-    lever = params.get("lever")
     if not draft:
         _row, res, arr = _stored_result(db, realised["result_id"])
     else:
-        benefit = np.asarray(np.load(Path(prow["dir"]) / "planned_benefit.npy", allow_pickle=False), dtype=np.float64)
-        dose = np.asarray(np.load(Path(prow["dir"]) / "dose.npy", allow_pickle=False), dtype=np.float64)
-        sign = -1.0 if (read_json(Path(prow["dir"]) / "params.json") or {}).get("direction") == "decrease" else 1.0
-        spec = {"id": f"draft:{plan_id}", "kind": "plan", "plan_id": plan_id, "run_id": ctx.run_id,
-                "created_utc": utc_now()}
-        res = S.build_result(result_id=f"draft:{plan_id}", kind="plan", run_id=ctx.run_id, created_utc=utc_now(),
-                             job_id=None, delta=-benefit, delta_sd=None, extrapolation=None, folds=None,
-                             realized={lever: sign * dose}, grid=ctx.grid, unit=ctx.units.get("target", "°F"),
-                             name=plan["name"], draft=True, spec=spec)
-        arr = {"spec": spec, "delta": -benefit, "delta_sd": None, "extrapolation": None,
-               "realized": {lever: sign * dose}}
+        res, arr = _draft_from_plan(db, ctx, prow, plan["name"])
     kit = field_kit(db, ctx, prow)
     out_dir = _export_dir(jctx, export_id)
     planned = plan.get("planned") or {}
+    unit = ctx.units.get("target", "°F")
+    real_total = (plan.get("realised") or {}).get("total")
     extra = (f"<h2>Budget plan</h2><p>{_esc(planned.get('caption') or '')}</p>"
-             f"<p>Planned cooling {_fmt(planned.get('planned_total'), 1)} vs realised "
-             f"{_fmt((plan.get('realised') or {}).get('total'), 1)} (°·cells; the closed loop includes spillover "
-             f"non-additivity).</p>")
+             f"<p>Planned cooling {_fmt(planned.get('planned_total'), 1)} {_esc(unit)}·cells vs realised "
+             + (f"{_fmt(real_total, 1)} {_esc(unit)}·cells (the closed loop includes spillover non-additivity)."
+                if real_total is not None else "not computed (the plan is not verified).")
+             + " The planned figure adds each treated cell's footprint cooling: the cooling its dose brings to its "
+               "whole neighbourhood, so it is a total, not the change at that cell.</p>")
     with tempfile.TemporaryDirectory(prefix="pack-") as td:
         stage = Path(td) / "plan_pack"
         stage.mkdir()
         _decision_contents(ctx, stage, name=f"Plan: {plan['name']}", scenario=None, res=res, spec=arr["spec"],
                            delta=arr["delta"], delta_sd=arr["delta_sd"], extrapolation=arr["extrapolation"],
                            realized=arr["realized"], draft=draft, cache_dir=jctx.cache_dir, extra_sections=extra,
-                           extra_readme=("field_list.csv        ranked treated cells with ids and lon/lat\n"
-                                         "logger_sites.csv      logger sites that sharpen the canopy effect\n"
-                                         "before_after_pairs.csv  treated/control pairs for evaluation\n"
-                                         "pareto.csv            planned benefit by budget\n"))
+                           draft_note=_PLAN_DRAFT_NOTE, extra_readme=(
+                               "field_list.csv        ranked treated cells with ids and lon/lat; planned_benefit is\n"
+                               f"                      the cell's footprint cooling ({unit}·cells: the cooling its\n"
+                               "                      dose brings to its neighbourhood), not the change at the cell\n"
+                               "logger_sites.csv      logger sites that sharpen the canopy effect\n"
+                               "before_after_pairs.csv  treated/control pairs for evaluation\n"
+                               f"pareto.csv            planned cooling by budget ({unit}·cells)\n"))
         pd.DataFrame(kit["cells"]).to_csv(stage / "field_list.csv", index=False)
         pd.DataFrame(kit["sites"], columns=["id", "lon", "lat", "role", "canopy", "impervious", "effect_sd"]).to_csv(
             stage / "logger_sites.csv", index=False)
@@ -638,6 +717,7 @@ def compare_pack(jctx, export_id: str, comparison_id: str) -> dict:
     unit = ctx.units.get("target", "°F")
     out_dir = _export_dir(jctx, export_id)
     draft = any(not it.get("has_folds") for it in summ.get("items") or [])
+    demo = _is_demo(ctx)
     with tempfile.TemporaryDirectory(prefix="pack-") as td:
         stage = Path(td) / "compare_pack"
         stage.mkdir()
@@ -659,7 +739,8 @@ def compare_pack(jctx, export_id: str, comparison_id: str) -> dict:
                 write_geotiff(ctx.grid, d, stage / f"diff_{a}__{b}.tif")
                 maps[f"diff_{a}__{b}"] = map_png(ctx.grid, d)
         pd.DataFrame(rows).to_csv(stage / "pairs.csv", index=False)
-        (stage / "summary.json").write_text(json.dumps(summ, indent=1, allow_nan=False), encoding="utf-8")
+        (stage / "summary.json").write_text(json.dumps({**summ, "demo": demo}, indent=1, allow_nan=False),
+                                            encoding="utf-8")
         figs = "".join(
             f'<figure><img alt="{k}" src="data:image/png;base64,{base64.b64encode(v).decode()}"><figcaption>'
             f'{_esc(items[int(k.split("_")[1])]["label"])} − {_esc(items[int(k.split("__")[1])]["label"])} '
@@ -671,11 +752,12 @@ def compare_pack(jctx, export_id: str, comparison_id: str) -> dict:
                        f"<td>{_fmt(it.get('cost'), 0)}</td></tr>" for it in items)
         page = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Comparison {comparison_id}</title>
+<title>{'DEMO DATA — ' if demo else ''}Comparison {comparison_id}</title>
 <style>body{{font:15px/1.5 system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem}}
 table{{border-collapse:collapse;width:100%}} td,th{{border-bottom:1px solid #eee;padding:.25rem .5rem;text-align:left}}
 figure{{display:inline-block;max-width:46%;margin:.5rem}} img{{max-width:100%;image-rendering:pixelated}}</style></head>
-<body><h1>Scenario comparison</h1><p>{_esc(ctx.name)} · run {_esc(ctx.run_id)}</p>
+<body><h1>{'DEMO DATA — ' if demo else ''}Scenario comparison</h1><p>{_esc(ctx.name)} · run {_esc(ctx.run_id)}</p>
+{'<p><strong>' + _esc(_DEMO_NOTE) + '</strong></p>' if demo else ''}
 {'<p><strong>Some items have no fold-level results: their differences use independent SEs or none (re-run them exactly).</strong></p>' if draft else ''}
 <h2>Items</h2><table><tr><th>item</th><th>city mean ΔT (likely range)</th><th>cost</th></tr>{irow}</table>
 <h2>Paired differences</h2><table><tr><th>pair</th><th>difference ({unit})</th><th>SE</th><th>method</th></tr>{prow}</table>
@@ -686,7 +768,8 @@ figure{{display:inline-block;max-width:46%;margin:.5rem}} img{{max-width:100%;im
         (stage / "brief.html").write_text(page, encoding="utf-8")
         (stage / "README.txt").write_text(
             f"SPARC compare pack\n\nΔT in {unit}; negative = cooler. diff_<a>__<b>.tif = item a minus item b.\n"
-            "items.csv: per-item city means; pairs.csv: paired differences (SE from shared folds when 'paired').\n",
+            "items.csv: per-item city means; pairs.csv: paired differences (SE from shared folds when 'paired').\n"
+            + (f"\n{_DEMO_NOTE}\n" if demo else ""),
             encoding="utf-8")
         zpath = out_dir / f"compare_pack_{comparison_id}.zip"
         nbytes = _write_zip(stage, zpath)

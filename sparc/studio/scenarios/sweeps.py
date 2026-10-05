@@ -3,8 +3,16 @@
 ``POST /api/runs/{rid}/sweeps`` writes ``<studio_dir>/sweeps/<swid>/params.json`` (lever, doses, optional
 selection) and enqueues ``engine.sweep``, which runs the engine once per dose on the selection
 (:func:`sparc.studio.engine.ops.op_sweep`), stores each point as a ``sweep_point`` result, fits
-``response.fit_saturation`` on the region-mean benefit against the neighbourhood dose and writes
-``curve.json``.  The pipeline's own S4 curve (``response_curves.json``) is returned for overlay.
+``response.fit_saturation`` on the region-mean benefit and writes ``curve.json``.  The pipeline's own S4 curve
+(``response_curves.json``) is returned for overlay.
+
+Two fits, each on its own dose axis (:func:`fit_curve`): ``fit`` against the **requested dose** - the x axis
+the curve, the overlay and the pipeline's curve are drawn on - and ``fit_neighbourhood`` against the mean
+**neighbourhood dose** over the selection (the Gaussian-smoothed dose around each cell, SPEC §7.9), with each
+point's ``neighbourhood_dose``.  For a regional sweep the neighbourhood dose is a fraction of the requested
+one, so its ``d_s`` and ``d90`` are on a different scale and are never drawn on the requested-dose axis.
+A ``curve.json`` written before the fits named their ``axis`` holds the neighbourhood fit as ``fit``:
+:func:`sweep_out` reports it as ``fit_neighbourhood`` and refits ``fit`` on the requested doses of its points.
 """
 
 from __future__ import annotations
@@ -15,7 +23,31 @@ from sparc.studio import db as dbmod
 from sparc.studio.errors import ApiError
 from sparc.studio.workspace import new_id, read_json, utc_now, write_json_atomic
 
-__all__ = ["create", "sweep_row", "sweep_out", "list_sweeps", "delete", "sweep_status"]
+__all__ = ["create", "sweep_row", "sweep_out", "list_sweeps", "delete", "sweep_status", "fit_curve"]
+
+
+def fit_curve(x, y, axis: str) -> dict | None:
+    """``response.fit_saturation`` of benefit ``y`` (positive = cooler) on doses ``x`` (both starting at the
+    untreated point 0, 0): ``{model, A, ds, d90, axis}`` with ``ds``/``d90`` in the units of ``axis``; None with
+    fewer than three points."""
+    import numpy as np
+
+    from sparc.core.response import fit_saturation
+
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    ok = np.isfinite(x) & np.isfinite(y)
+    x, y = x[ok], y[ok]
+    if x.size < 3:
+        return None
+    f = fit_saturation(x[:, None], y[:, None], np.ones((x.size, 1), dtype=bool), min_valid=min(4, x.size))
+
+    def num(a):
+        v = float(np.asarray(a).reshape(-1)[0])
+        return v if np.isfinite(v) else None
+
+    return {"model": str(np.asarray(f["model"]).reshape(-1)[0]), "A": num(f["A"]), "ds": num(f["ds"]),
+            "d90": num(f["d90"]), "axis": axis}
 
 
 def create(db, ctx, lever: str, doses: list[float], selection: dict | None) -> dict:
@@ -63,13 +95,28 @@ def sweep_status(db, row: dict) -> str:
     return "succeeded" if curve else "queued"
 
 
+def _fits(curve: dict) -> tuple[dict | None, dict | None]:
+    """``(fit on the requested dose, fit on the neighbourhood dose)`` of a ``curve.json``."""
+    fit, neigh = curve.get("fit"), curve.get("fit_neighbourhood")
+    if isinstance(fit, dict) and "axis" not in fit:
+        # written before the fits named their axis: that fit was on the neighbourhood dose
+        neigh = {**fit, "axis": "neighbourhood_dose"}
+        pts = sorted((p for p in curve.get("curve") or [] if isinstance(p, dict)), key=lambda p: float(p["dose"]))
+        est = [((p.get("region") or p.get("city")) or {}).get("estimate") for p in pts]
+        fit = fit_curve([0.0] + [float(p["dose"]) for p in pts],
+                        [0.0] + [-float(e) if e is not None else float("nan") for e in est], "dose")
+    return fit, neigh
+
+
 def sweep_out(db, ctx, row: dict) -> dict:
     params = dbmod.loads(row.get("params_json"), {}) or {}
     curve = read_json(Path(row["dir"]) / "curve.json") or {}
     resp = (ctx.json("response_curves.json") or {}).get(params.get("lever")) if ctx is not None else None
+    fit, neigh = _fits(curve)
     return {"params": params, "status": sweep_status(db, row),
             "curve": [{k: v for k, v in p.items() if k != "result_id"} for p in curve.get("curve") or []],
-            "fit": curve.get("fit"), "pipeline_curve": (resp or {}).get("curve") if isinstance(resp, dict) else None,
+            "fit": fit, "fit_neighbourhood": neigh,
+            "pipeline_curve": (resp or {}).get("curve") if isinstance(resp, dict) else None,
             "points": list(curve.get("points") or [])}
 
 

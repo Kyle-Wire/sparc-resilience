@@ -154,6 +154,41 @@ def test_ticks_partial_and_k_equals_n():
     assert st["partial"] == {} and st["stage_partial"] == {}
 
 
+def test_items_without_a_plan_progress_once():
+    """A job without a plan whose items (task dose k of n) each tick their own folds: progress is the nested
+    item fraction, monotone from 0 to 1, not the folds' 0 → 1 restarted on every item (a 40-dose sweep read
+    100% at dose 4); ticks before the first item (loading a cold run) still show."""
+    def dose(k, n=4):
+        p = ("task:sweep", f"task:dose[{k}/{n}]")
+        sp = f"1:{10 + k}"
+        return [ev("task.start", p, sp, name="dose", k=k, n=n)] + \
+            [ev("tick", p, sp, k=f, n=3, unit="engine_pass", frac=round(f / 3, 6)) for f in (1, 2, 3)] + \
+            [ev("task.end", p, sp, name="dose", k=k, n=n, status="ok")]
+
+    load = [ev("task.start", ("task:unpickle",), "1:2", name="unpickle"),
+            ev("tick", ("task:unpickle",), "1:2", k=1, n=2, unit="unpickle", frac=0.5),
+            ev("task.end", ("task:unpickle",), "1:2", name="unpickle", status="ok")]
+    events = load + [ev("task.start", ("task:sweep",), "1:3", name="sweep")]
+    for k in range(1, 5):
+        events += dose(k)
+    st = tracker.new_state()
+    prog = []
+    for i, e in enumerate(events):
+        tracker.reduce(st, e, i)
+        prog.append(st["progress"])
+    assert prog[1] == pytest.approx(0.5)                         # the load's own tick before any item
+    items = prog[len(load) + 1:]
+    assert items == sorted(items) and items[-1] == pytest.approx(1.0)
+    assert items[3] == pytest.approx(0.25) and items[4] == pytest.approx(0.25)   # dose 1 of 4 done, between items
+    assert items[5] == pytest.approx(0.25) and items[6] == pytest.approx(0.25 + 0.25 / 3)
+    assert max(items[:15]) < 0.76                                # dose 4 of 4 has not started
+    # a nested item level: (k − 1 + inner) / n at each level
+    st = _run([ev("task.start", ("task:a[2/4]",), "2:1", name="a", k=2, n=4),
+               ev("task.start", ("task:a[2/4]", "task:b[1/2]"), "2:2", name="b", k=1, n=2),
+               ev("tick", ("task:a[2/4]", "task:b[1/2]", "task:x"), "2:3", k=1, n=2, unit="engine_pass")])
+    assert st["progress"] == pytest.approx((2 - 1 + (1 - 1 + 0.5) / 2) / 4)
+
+
 def test_stage_states_and_finish():
     st = _run([ev("run.start", span="1:1", name="r"), PLAN,
                ev("stage.skip", stage="S0", reason="checkpoint"),

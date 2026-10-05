@@ -9,7 +9,9 @@
 * cap: plantable headroom (canopy role + planner layers, editable paved share) and/or a region (the cap is 0
   outside the selection);
 * ``min_dose``: core's post-filter (the freed budget is reported as ``min_dose_dropped_cost``, not re-spent);
-* objective: cooling, or people (HRSL smoothed at the lever's influence range, ``pipeline.optimizer_layers``);
+* objective: cooling, or people (HRSL smoothed at the lever's influence range, ``pipeline.optimizer_layers``):
+  the people objective only ranks the cells; the planned totals, ``planned_benefit`` and the Pareto benefits are
+  the plan's unweighted cooling (°·cells), and the weighted total is in the caption (:func:`_unweighted`);
 * equity: share aged 60+, share under 5, density or a column, normalised to 0–1, with a focus 0–1;
 * Pareto multipliers.
 
@@ -235,12 +237,46 @@ def planned(ctx, params: dict, *, db=None, project_dir=None, budget: float | Non
     from sparc.core.optimize import planned_allocation
 
     inp = plan_inputs(ctx, params, db=db, project_dir=project_dir)
+    b = float(budget if budget is not None else inp["budget"])
     with threadpool_limits(1):
-        out = planned_allocation(inp["vr"], float(budget if budget is not None else inp["budget"]),
-                                 cost_per_unit=inp["cost"], equity_scores=inp["equity"], equity_focus=inp["focus"],
-                                 multipliers=inp["multipliers"], cap=inp["cap"], benefit_weight=inp["weight"],
-                                 min_dose=inp["min_dose"])
+        out = planned_allocation(inp["vr"], b, cost_per_unit=inp["cost"], equity_scores=inp["equity"],
+                                 equity_focus=inp["focus"], multipliers=inp["multipliers"], cap=inp["cap"],
+                                 benefit_weight=inp["weight"], min_dose=inp["min_dose"])
+        if inp["weight"] is not None and "status" not in out:
+            out = _unweighted(out, inp, b)
     return out, inp
+
+
+def _unweighted(out: dict, inp: dict, budget: float) -> dict:
+    """The plan's cooling when the objective weighted it (``objective: people``).
+
+    Core ranks the segments by cooling × ``benefit_weight`` (residents around the cell, mean 1 over the cells)
+    and reports those weighted sums as ``planned_benefit``, ``planned_total_cooling`` and the Pareto benefits.
+    Every segment's weighted benefit is its cooling × its cell's weight, so dividing by the weight gives the
+    cooling of the same allocation (°·cells, comparable with the closed loop and with a cooling plan).  The
+    Pareto allocations are re-solved to sum their cooling; the weighted total is kept as ``planned_objective``.
+    """
+    from sparc.core.optimize import build_segments
+    from sparc.scenario.budget import optimize
+
+    w = np.asarray(inp["weight"], dtype=np.float64)
+    safe = np.where(w > 0, w, 1.0)          # weight 0 makes every segment of the cell worthless: never allocated
+    cool = np.where(w > 0, np.asarray(out["planned_benefit"], dtype=np.float64) / safe, 0.0)
+    seg = build_segments(inp["vr"], inp["cost"], cap=inp["cap"], benefit_weight=w)
+    cells = seg["cell"].to_numpy()
+    ben = seg["benefit_per_unit"].to_numpy(float)
+    costs = seg["cost_per_unit"].to_numpy(float)
+    xmax = seg["x_max"].to_numpy(float)
+    unw = ben / safe[cells]
+    eq = None if inp["equity"] is None else np.asarray(inp["equity"], dtype=float)[cells]
+    points = []
+    for p, m in zip(out["pareto"]["points"], inp["multipliers"]):
+        r = optimize(ben, budget * float(m), costs=costs, x_max=xmax, solver="greedy", equity_scores=eq,
+                     equity_focus=inp["focus"])
+        points.append({**p, "total_benefit": float(np.sum(unw * np.asarray(r.allocation, dtype=float))),
+                       "objective_benefit": float(p["total_benefit"])})
+    return {**out, "planned_benefit": cool, "planned_total_cooling": float(cool.sum()),
+            "planned_objective": float(out["planned_total_cooling"]), "pareto": {**out["pareto"], "points": points}}
 
 
 def _summary(ctx, out: dict, inp: dict) -> dict:
@@ -259,6 +295,10 @@ def _summary(ctx, out: dict, inp: dict) -> dict:
            f"(mean dose {out['mean_dose_treated']:.3g} {lever_unit}), planned cooling "
            f"{out['planned_total_cooling']:,.4g} {unit}·cells summed over the city; {inp['constraint']}; "
            f"objective {inp['objective']}.")
+    if out.get("planned_objective") is not None:
+        cap += (f" The objective weights each cell's cooling by the residents around it (the weights average 1 "
+                f"over the cells); its weighted total is {out['planned_objective']:,.4g}, while the planned "
+                f"cooling and the Pareto benefits are the plan's unweighted cooling.")
     if out.get("min_dose_dropped_cost"):
         cap += (f" Allocations below {inp['min_dose']:g} {lever_unit} were dropped, leaving "
                 f"{out['min_dose_dropped_cost']:,.4g} of the budget unspent.")

@@ -10,9 +10,11 @@ workspace plus
   (``studio/engine/status.json`` written by the host, valid while the checkpoint is unchanged) → ``queued`` /
   ``loading`` (an ``engine.open`` job; its tracker gives progress and the step) → ``busy`` / ``ready``
   (loaded in the host) → ``loading`` (an exact request the host is serving loads the cold run first) →
-  ``error`` (the last open failed) → ``cold``;
-* :meth:`~EngineService.preflight` - checkpoint, pickle trust and memory before a request that loads a run:
-  ``409 no_checkpoint``, ``409 untrusted_pickle`` (the action re-imports the run with trust, naming the
+  ``error`` (``RunNotFinished``: a checkpoint but no manifest, with a Resume action; ``UntrustedPickle``; or the
+  last open failed) → ``cold``;
+* :meth:`~EngineService.preflight` - checkpoint, a finished run, pickle trust and memory before a request
+  that loads a run: ``409 no_checkpoint``, ``404 output_missing`` (``detail.output: "manifest"``: the run
+  stopped before it finished, or still runs; the action resumes it), ``409 untrusted_pickle`` (the action re-imports the run with trust, naming the
   risk), ``409 engine_memory`` (estimated RSS ≈ 3.5 × checkpoint bytes + 0.3 GB, plus 1 GB, must fit in
   available memory; ``detail.holders`` lists loaded runs and live jobs, ``action`` evicts the least recently
   used run or stops the biggest job).
@@ -211,6 +213,45 @@ class EngineService:
                 "body": {"dir": str(row["run_dir"]), "project_id": row.get("project_id"),
                          "config_path": rec.get("config_path"), "trust_pickles": True}}
 
+    def unfinished(self, row: dict) -> dict | None:
+        """A run with ``checkpoint.pkl`` but no ``manifest.json`` (cancelled, failed or interrupted after S3, or
+        still running): the engine cannot load it, since the host rebuilds the run's data and folds from the
+        manifest, which core writes when the run finishes.  ``{message, running, action}`` (the action resumes
+        the run, or opens Launch from it), else None."""
+        rd = Path(row["run_dir"])
+        if not (rd / "checkpoint.pkl").is_file() or (rd / "manifest.json").is_file():
+            return None
+        from sparc.studio.schemas.common import ACTIVE_STATUSES
+
+        rid = row["id"]
+        marks = ",".join("?" for _ in ACTIVE_STATUSES)
+        running = self.sctx.db.fetchone(f"SELECT id FROM jobs WHERE run_id = ? AND kind IN ('run.core', 'run.external') "
+                                        f"AND status IN ({marks})", (rid, *ACTIVE_STATUSES)) is not None
+        if running:
+            return {"running": True, "action": None,
+                    "message": "this run is still running: exact scenarios need the finished run (its manifest.json), "
+                               "so the engine opens once the run finishes"}
+        action = None
+        reader = self.sctx.services.get("reader")
+        try:
+            from sparc.studio.runs.statusboard import can_resume
+
+            ctx = reader.get(rid) if reader is not None else None
+            if ctx is not None and can_resume(ctx, False):
+                action = {"kind": "resume", "label": "Resume the run to finish it", "method": "POST",
+                          "path": f"/api/runs/{rid}/resume", "body": {}}
+        except Exception:                   # noqa: BLE001 - no action rather than no answer
+            action = None
+        if action is None and row.get("project_id"):
+            from urllib.parse import quote
+
+            action = {"kind": "open", "label": "Launch a new run from this one", "method": "GET",
+                      "path": f"/p/{quote(row['project_id'])}/launch?from={quote(rid)}"}
+        return {"running": False, "action": action,
+                "message": "this run stopped before it finished: it has a checkpoint but no manifest.json, which the "
+                           "engine needs to rebuild the run's data and folds; resume the run to completion to run "
+                           "exact scenarios on it"}
+
     def run_status(self, rid: str) -> dict:
         """``GET /api/runs/{rid}/engine`` (api.md §7.2)."""
         row = self._row(rid)
@@ -266,6 +307,11 @@ class EngineService:
             if jrow is not None:
                 out.update(progress=jrow.get("progress"), step=self._step(jrow))
             return out
+        unf = self.unfinished(row)
+        if unf is not None:
+            out.update(state="error", error={"type": "RunNotFinished", "message": unf["message"]},
+                       action=unf["action"])
+            return out
         if not self.trusted(rid):
             out.update(state="error", error={"type": "UntrustedPickle",
                                              "message": "this run was imported without trusting its checkpoint: "
@@ -318,6 +364,12 @@ class EngineService:
         if nbytes is None:
             raise ApiError("no_checkpoint", "this run has no checkpoint.pkl (it did not reach S3); exact "
                                             "scenarios need one", detail={"run_id": rid})
+        unf = self.unfinished(row)
+        if unf is not None:
+            raise ApiError("output_missing", unf["message"],
+                           detail={"output": "manifest", "produced_by": "stage:finish",
+                                   "expected_path": str(Path(row["run_dir"]) / "manifest.json"), "run_id": rid,
+                                   "running": unf["running"]}, action=unf["action"])
         if not self.trusted(rid):
             raise ApiError("untrusted_pickle", "this run was imported without trusting its checkpoint: "
                            + TRUST_RISK, detail={"run_id": rid, "run_dir": str(row["run_dir"])},

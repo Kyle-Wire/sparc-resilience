@@ -24,11 +24,11 @@ import math
 
 import numpy as np
 
-from sparc.studio.runs.common import clean, jackknife_se, likely
+from sparc.studio.runs.common import clean, fmt_temp, jackknife_se, likely
 
-__all__ = ["masked_mean", "masked_se", "masked_likely", "paired_se", "pair_likely", "region_row", "auto_masks",
-           "ring_profile", "spill", "realized_table", "cost_table", "causal_check", "uncertainty_block",
-           "plain_card", "build_result", "result_summary_fields", "RING_MAX_M", "RING_MIN_W"]
+__all__ = ["masked_mean", "masked_se", "masked_likely", "paired_se", "pair_likely", "pair_phrase", "region_row",
+           "auto_masks", "ring_profile", "spill", "realized_table", "cost_table", "causal_check", "uncertainty_block",
+           "plain_card", "build_result", "result_summary_fields", "with_specification", "RING_MAX_M", "RING_MIN_W"]
 
 RING_MAX_M = 2000.0
 RING_MIN_W = 30.0
@@ -80,9 +80,11 @@ def paired_se(folds_a: np.ndarray | None, folds_b: np.ndarray | None, mask: np.n
     return masked_se(a - b, mask)
 
 
-def pair_likely(delta_a, folds_a, se_a, delta_b, folds_b, se_b, mask, unit: str, what: str = "") -> dict | None:
+def pair_likely(delta_a, folds_a, se_a, delta_b, folds_b, se_b, mask, unit: str, *, labels: tuple[str, str] =
+                ("A", "B"), where: str = "") -> dict | None:
     """Likely of A − B over ``mask`` with ``paired`` true when the fold-paired SE applies; else the
-    independent SE ``√(SE_A² + SE_B²)`` (paired false)."""
+    independent SE ``√(SE_A² + SE_B²)`` (paired false).  The numbers and ``confidence`` are those of A − B;
+    the ``phrase`` is relative (:func:`pair_phrase`): a difference never reads as A warming the city."""
     da = masked_mean(delta_a, mask)
     db = masked_mean(delta_b, mask)
     if da is None or db is None:
@@ -91,9 +93,49 @@ def pair_likely(delta_a, folds_a, se_a, delta_b, folds_b, se_b, mask, unit: str,
     paired = se is not None
     if se is None and se_a is not None and se_b is not None:
         se = math.sqrt(float(se_a) ** 2 + float(se_b) ** 2)
-    out = likely(da - db, se, unit, what=what) or likely(0.0, None, unit)
+    out = likely(da - db, se, unit) or likely(0.0, None, unit)
+    out["phrase"] = pair_phrase(out, da, db, unit, labels, where=where)
     out["paired"] = paired
     return out
+
+
+def pair_phrase(lk: dict, mean_a: float, mean_b: float, unit: str, labels: tuple[str, str] = ("A", "B"), *,
+                where: str = "", decimals: int = 2) -> str:
+    """Plain-language A − B in relative terms.  Both cool: "A cools the city 0.97 °F less than B"; both warm:
+    "A warms the city 0.20 °F more than B"; otherwise each one's own effect ("A cools the city by 0.50 °F and
+    B warms it by 0.30 °F, a 0.80 °F difference").  The tail speaks of the difference ("Confident there is a
+    difference." / "Could be no difference."), never of A cooling or warming."""
+    a, b = labels
+    diff = float(lk["estimate"])
+    mag = fmt_temp(diff, unit, decimals)
+    w = f" {where}" if where else ""
+
+    def does(m: float, obj: str) -> str:
+        if m < 0:
+            return f"cools{obj} by {fmt_temp(m, unit, decimals)}"
+        if m > 0:
+            return f"warms{obj} by {fmt_temp(m, unit, decimals)}"
+        return f"leaves{obj or ' it'} unchanged"
+
+    if diff == 0:
+        head = f"{a} and {b} have the same mean effect{' on ' + where if where else ''}"
+    elif mean_a < 0 and mean_b < 0:
+        head = f"{a} cools{w} {mag} {'more' if diff < 0 else 'less'} than {b}"
+    elif mean_a > 0 and mean_b > 0:
+        head = f"{a} warms{w} {mag} {'less' if diff < 0 else 'more'} than {b}"
+    else:
+        head = f"{a} {does(mean_a, w)} and {b} {does(mean_b, ' it' if where else '')}, a {mag} difference"
+    lo, hi = lk.get("lo"), lk.get("hi")
+    if lo is not None and hi is not None:
+        if lo * hi > 0:
+            x, y = sorted((abs(lo), abs(hi)))
+            head += f" (likely range {x:.{decimals}f}–{y:.{decimals}f} {unit})"
+        else:
+            head += f" (A − B likely {lo:+.{decimals}f} to {hi:+.{decimals}f} {unit})".replace("-", "−")
+    tail = {"confident_cools": "Confident there is a difference.", "confident_warms": "Confident there is a "
+            "difference.", "could_be_zero": "Could be no difference.",
+            "unknown": "No uncertainty estimate."}[lk["confidence"]]
+    return f"{head}. {tail}"
 
 
 # ---------------------------------------------------------------------------
@@ -237,23 +279,39 @@ def uncertainty_block(summ: dict, cfg_raw: dict, manifest: dict | None, *, speci
            .get("scenarios") or [None])[0]
     if row is None:
         return None
+    return _finish_block(row, specification)
+
+
+def _finish_block(row: dict, specification: list | None) -> dict:
+    """The block from its bands: a multiverse ``specification`` wins over the "check across runs" band; the
+    envelope spans the estimation, specification and attribution bands."""
     sources = []
+    spec = row.get("specification")
     if row.get("estimation_95"):
         sources.append("estimation: fold-to-fold jackknife")
-    if row.get("specification"):
+    if spec:
         sources.append("specification: multiverse")
     elif specification:
-        row["specification"] = [float(min(specification)), float(max(specification))]
+        spec = [float(min(specification)), float(max(specification))]
         sources.append("specification: check across runs")
     if row.get("attribution"):
         sources.append("attribution: simulation check")
     if row.get("causal_band"):
         sources.append("causal band: independent causal estimate")
-    parts = [x for x in (row.get("estimation_95"), row.get("specification"), row.get("attribution")) if x]
+    parts = [x for x in (row.get("estimation_95"), spec, row.get("attribution")) if x]
     env = [float(min(p[0] for p in parts)), float(max(p[1] for p in parts))] if parts else None
-    return {"estimation_95": row.get("estimation_95"), "specification": row.get("specification"),
+    return {"estimation_95": row.get("estimation_95"), "specification": spec,
             "attribution": row.get("attribution"), "causal_band": row.get("causal_band"), "envelope": env,
             "envelope_excludes_zero": (bool(env[1] < 0 or env[0] > 0) if env else None), "sources": sources}
+
+
+def with_specification(unc: dict | None, specification: list | None) -> dict | None:
+    """A stored result's uncertainty block with its "check across runs" band replaced by ``specification``
+    (None removes it), the envelope and sources recomputed; a multiverse band is kept as it is."""
+    if not isinstance(unc, dict) or "specification: multiverse" in (unc.get("sources") or []):
+        return unc
+    row = {k: unc.get(k) for k in ("estimation_95", "attribution", "causal_band")}
+    return _finish_block({**row, "specification": None}, specification)
 
 
 # ---------------------------------------------------------------------------
@@ -399,7 +457,8 @@ def build_result(*, result_id: str, kind: str, run_id: str, created_utc: str, jo
            "p10": float(np.percentile(delta, 10)), "p90": float(np.percentile(delta, 90)),
            "mean_delta_sd": float(np.mean(delta_sd)) if delta_sd is not None else None,
            "regions": regions_out, "spill": spill(edited, grid, delta, folds, ranges),
-           "extrapolated_edited": float(sumf["frac_extrapolated_edited"] or 0.0),
+           # None when not computed (a preview has no extrapolation scores, or nothing was edited): never 0
+           "extrapolated_edited": sumf["frac_extrapolated_edited"],
            "realized": realized_table(realized, requested, lever_cells), "mediators": med, "cost": cost,
            "causal_check": cl, "uncertainty": unc, "impacts": None, "preview_vs_exact": pve, "plain": plain,
            "warnings": [{"code": str(w.get("code")), "message": str(w.get("message"))} for w in warnings or []],

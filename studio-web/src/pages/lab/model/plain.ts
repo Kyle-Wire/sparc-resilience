@@ -7,7 +7,7 @@
 //   verified".
 import type { Impacts, Result } from "../../../api/lab";
 import type { Likely } from "../../../api/types";
-import { fmtInt, fmtNum, fmtPct, fmtValue, unitLabel } from "../../../theme/format";
+import { fmtInt, fmtNum, fmtPct, fmtSigned, fmtValue, unitLabel } from "../../../theme/format";
 
 export type ConfidenceWord = "Confident it cools" | "Confident it warms" | "Could be zero" | "No uncertainty estimate";
 
@@ -137,4 +137,20 @@ export function buysLines(r: Pick<Result, "cost" | "impacts">, unit: string): st
     out.push(`${perCostText(r.cost.cooling_per_cost, unit)}.`);
   }
   return out;
+}
+
+/**
+ * The caption of an equity group's concentration index.  The index divides by the mean cooling, so a cooling
+ * and a warming of the same shape have the same index: for a scenario that warms on net, positive means the
+ * warming (not the benefit) concentrates in the higher quintiles.  `residentMeanCooling` (positive = cooler)
+ * names the direction; without it (impacts cached before it) the caption speaks of "the change".
+ */
+export function concentrationCaption(ci: number | null | undefined, residentMeanCooling: number | null | undefined, group: string): string {
+  const g = group.replace(/_/g, " ");
+  if (ci === null || ci === undefined || !Number.isFinite(ci)) return `Concentration index not computed for ${g}.`;
+  const mu = residentMeanCooling;
+  const head = `Concentration index ${fmtSigned(ci, 3)}`;
+  if (mu === 0) return `${head}: the scenario makes no net change to share out across the quintiles of ${g}.`;
+  const what = mu === null || mu === undefined || !Number.isFinite(mu) ? "the change (cooling or warming)" : mu > 0 ? "the cooling" : "the warming";
+  return `${head} (positive: ${what} concentrates in the higher quintiles of ${g}; negative: in the lower ones).`;
 }

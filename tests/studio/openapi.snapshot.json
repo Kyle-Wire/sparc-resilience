@@ -13450,6 +13450,11 @@
           "has_folds": {
             "type": "boolean",
             "title": "Has Folds"
+          },
+          "per_cell": {
+            "type": "boolean",
+            "title": "Per Cell",
+            "default": true
           }
         },
         "type": "object",
@@ -13482,7 +13487,14 @@
             "title": "Regions"
           },
           "layer_key": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Layer Key"
           }
         },
@@ -13490,8 +13502,7 @@
         "required": [
           "a",
           "b",
-          "city",
-          "layer_key"
+          "city"
         ],
         "title": "ComparePair"
       },
@@ -21538,7 +21549,14 @@
             "$ref": "#/components/schemas/Spill"
           },
           "extrapolated_edited": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Extrapolated Edited"
           },
           "realized": {
@@ -21627,7 +21645,6 @@
           "city",
           "regions",
           "spill",
-          "extrapolated_edited",
           "realized",
           "mediators",
           "cost",
@@ -25872,6 +25889,16 @@
               }
             ]
           },
+          "fit_neighbourhood": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SweepFit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "pipeline_curve": {
             "anyOf": [
               {
@@ -25956,6 +25983,15 @@
               }
             ],
             "title": "D90"
+          },
+          "axis": {
+            "type": "string",
+            "enum": [
+              "dose",
+              "neighbourhood_dose"
+            ],
+            "title": "Axis",
+            "default": "dose"
           }
         },
         "type": "object",
@@ -25986,6 +26022,17 @@
           "realized": {
             "type": "number",
             "title": "Realized"
+          },
+          "neighbourhood_dose": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Neighbourhood Dose"
           },
           "frac_extrapolated": {
             "type": "number",

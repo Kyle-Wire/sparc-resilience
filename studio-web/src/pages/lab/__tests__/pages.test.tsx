@@ -215,6 +215,24 @@ describe("Engine chip", () => {
     await waitFor(() => !document.querySelector('[role="dialog"]'), 5000, "dialog closed");
   });
 
+  it("offers Resume, not Open engine, for a run that stopped before it finished", async () => {
+    // a run cancelled after S3 has a checkpoint but no manifest: every "Open engine" failed with FileNotFoundError
+    fetchMock = mockFetch({
+      ...runRoutes(),
+      [`GET /api/runs/${RID}/engine`]: {
+        body: {
+          state: "error", progress: null, step: null, rss_mb: null, est_rss_mb: 300, code_match: null, loaded_utc: null, last_used_utc: null, job_id: null,
+          error: { type: "RunNotFinished", message: "this run stopped before it finished: it has a checkpoint but no manifest.json" },
+          action: { kind: "resume", label: "Resume the run to finish it", method: "POST", path: `/api/runs/${RID}/resume`, body: {} },
+        },
+      },
+    });
+    const { container } = render(<EngineChip rid={RID} />);
+    await waitFor(() => byText(container, "button", "Resume the run to finish it"), 5000, "resume button");
+    expect(container.textContent).toContain("stopped before it finished");
+    expect(byText(container, "button", "Open engine")).toBeNull();
+  });
+
   it("explains a memory refusal with the server's numbers and action", async () => {
     fetchMock = mockFetch({
       ...runRoutes(),

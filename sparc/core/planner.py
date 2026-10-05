@@ -100,7 +100,11 @@ def concentration_index(benefit: np.ndarray, rank_by: np.ndarray, weights: np.nd
 
 
 def benefit_by_group(cooling: np.ndarray, layers: pd.DataFrame, n_q: int = 5) -> dict:
-    """Mean cooling (positive = cooler) per quintile of density and vulnerability."""
+    """Mean cooling (positive = cooler) per quintile of density and vulnerability.
+
+    The concentration index divides by the mean cooling, so it has the same sign for a cooling and for a warming
+    of the same shape: > 0 means the *change* concentrates in the higher quintiles.  ``resident_mean_cooling``
+    (the resident-weighted mean cooling over the ranked cells, the index's denominator) says which it is."""
     out = {}
     p = np.nan_to_num(layers["people"].to_numpy(float))
     groups = {"population density": p}
@@ -116,8 +120,10 @@ def benefit_by_group(cooling: np.ndarray, layers: pd.DataFrame, n_q: int = 5) ->
             sel = np.flatnonzero(ok)[q.to_numpy() == k]
             rows.append({"quintile": k + 1, "mean_cooling": float(np.mean(cooling[sel])),
                          "people": float(p[sel].sum()), "value_range": [float(np.min(v[sel])), float(np.max(v[sel]))]})
+        w = p[ok] + 1e-9
         out[label] = {"quintiles": rows,
-                      "concentration_index": concentration_index(cooling[ok], v[ok], weights=p[ok] + 1e-9)}
+                      "concentration_index": concentration_index(cooling[ok], v[ok], weights=w),
+                      "resident_mean_cooling": float(np.sum(w * cooling[ok]) / np.sum(w))}
     return out
 
 

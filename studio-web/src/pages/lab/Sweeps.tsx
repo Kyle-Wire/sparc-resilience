@@ -1,7 +1,9 @@
 // Sweeps (`/r/:rid/lab/sweeps/:swid?`, SPEC §7.9): one lever at custom doses, optionally in a
 // region, run exactly per dose (engine.sweep). The curve shows the region and city mean ΔT
 // with their likely-range ribbons (hollow points when mostly extrapolated), the fitted
-// saturation overlay and the pipeline's own response curve.
+// saturation overlay and the pipeline's own response curve. The overlay, its d90 line and the
+// caption use the fit on the requested dose (the x axis); the fit on the neighbourhood dose
+// (smaller for a regional sweep) is only quoted, in its own units.
 import { useMemo, useState } from "react";
 import { errorMessage } from "../../api/client";
 import { invalidate } from "../../api/resource";
@@ -23,7 +25,7 @@ import { ConfirmDialog } from "./components/Dialogs";
 import { LabFrame, labHref } from "./components/LabFrame";
 import { SelectionBuilder, columnOptions } from "./components/SelectionBuilder";
 import { parseNumberList } from "./model/library";
-import { dominantSign, fitOverlay, overlayXs, pipelineCurve } from "./model/sweep";
+import { dominantSign, fitOverlay, overlayXs, pipelineCurve, sweepFitText } from "./model/sweep";
 
 function NewSweep({ rid, grid, levers }: { rid: string; grid: GridData; levers: Lever[] }) {
   const regions = useRegions(rid);
@@ -85,14 +87,19 @@ function NewSweep({ rid, grid, levers }: { rid: string; grid: GridData; levers: 
   );
 }
 
-function SweepView({ rid, swid, unit, item }: { rid: string; swid: string; unit: string; item: SweepListItem | undefined }) {
+function SweepView({ rid, swid, unit, item, levers }: { rid: string; swid: string; unit: string; item: SweepListItem | undefined; levers: Lever[] }) {
   const sw = useSweep(swid, rid);
   const [confirm, setConfirm] = useState(false);
   if (sw.error && !sw.data) return <EmptyState error={sw.error} />;
   const s = sw.data;
   if (!s) return <p className="cap">Loading the sweep…</p>;
   const u = unitLabel(unit);
+  const lu = unitLabel(levers.find((l) => l.var === s.params.lever)?.unit ?? "");
+  const doseUnit = lu ? ` ${lu}` : "";
   const curve = [...s.curve].sort((a, b) => a.dose - b.dose);
+  // only a fit on the requested dose belongs on this x axis
+  const fitOnDose = s.fit && (s.fit.axis ?? "dose") === "dose" ? s.fit : null;
+  const nf = s.fit_neighbourhood ?? null;
   const xs = curve.map((p) => p.dose);
   const hasRegion = curve.some((p) => p.region);
   const main = curve.map((p) => p.region ?? p.city);
@@ -111,8 +118,8 @@ function SweepView({ rid, swid, unit, item }: { rid: string; swid: string; unit:
     muted: hasRegion,
   });
   const ox = overlayXs(xs);
-  const fit = fitOverlay(s.fit, ox, curve.map((p, i) => ({ x: p.dose, y: main[i].estimate })));
-  if (fit) series.push({ id: "fit", label: `Fit (${s.fit?.model})`, x: ox, y: fit, dashed: true });
+  const fit = fitOverlay(fitOnDose, ox, curve.map((p, i) => ({ x: p.dose, y: main[i].estimate })));
+  if (fit) series.push({ id: "fit", label: `Fit (${fitOnDose?.model})`, x: ox, y: fit, dashed: true });
   const pipe = pipelineCurve(s.pipeline_curve, dominantSign(main.map((l) => l.estimate)));
   if (pipe) series.push({ id: "pipeline", label: "Pipeline response curve", x: pipe.x, y: pipe.y, dashed: true, muted: true });
   const remove = async () => {
@@ -144,14 +151,12 @@ function SweepView({ rid, swid, unit, item }: { rid: string; swid: string; unit:
           title="Response to the swept lever"
           units={`${u} (negative = cooler)`}
           series={series}
-          xLabel="Dose"
+          xLabel={`Requested dose${doseUnit}`}
           yLabel="Mean ΔT"
           yUnit={u}
           yInclude={[0]}
-          refLines={[{ axis: "y", value: 0 }, ...(s.fit?.d90 ? [{ axis: "x" as const, value: s.fit.d90, label: "d90" }] : [])]}
-          caption={`${hasRegion ? "Region and city" : "City"} mean ΔT with the likely range at each dose; hollow points are mostly extrapolated.${
-            s.fit ? ` Fit: ${s.fit.model}${s.fit.A !== null ? `, A = ${fmtNum(s.fit.A, 3)}` : ""}${s.fit.ds !== null ? `, d_s = ${fmtNum(s.fit.ds, 2)}` : ""}${s.fit.d90 !== null ? `, 90% of the effect by ${fmtNum(s.fit.d90, 2)}` : ""}.` : ""
-          }`}
+          refLines={[{ axis: "y", value: 0 }, ...(fitOnDose?.d90 ? [{ axis: "x" as const, value: fitOnDose.d90, label: "d90" }] : [])]}
+          caption={`${hasRegion ? "Region and city" : "City"} mean ΔT with the likely range at each requested dose; hollow points are mostly extrapolated.${sweepFitText(fitOnDose, nf, doseUnit)}`}
         />
       ) : (
         <p className="cap">No points yet{s.status === "running" ? ": the sweep is running." : "."}</p>
@@ -165,6 +170,7 @@ function SweepView({ rid, swid, unit, item }: { rid: string; swid: string; unit:
           { key: "city", label: "City mean", unit: u, align: "right", value: (p) => p.city.estimate, render: (p) => `${fmtSigned(p.city.estimate, 4)}${p.city.se !== null ? ` ± ${fmtNum(1.96 * p.city.se, 4)}` : ""}` },
           { key: "region", label: "Region mean", unit: u, align: "right", value: (p) => p.region?.estimate ?? null, render: (p) => (p.region ? `${fmtSigned(p.region.estimate, 3)}${p.region.se !== null ? ` ± ${fmtNum(1.96 * p.region.se, 3)}` : ""}` : "—") },
           { key: "realized", label: "Realised dose", align: "right", value: (p) => p.realized, render: (p) => fmtNum(p.realized, 2) },
+          { key: "neigh", label: "Neighbourhood dose", align: "right", value: (p) => p.neighbourhood_dose ?? null, render: (p) => fmtNum(p.neighbourhood_dose ?? null, 2) },
           { key: "ex", label: "Extrapolated", align: "right", value: (p) => p.frac_extrapolated, render: (p) => fmtPct(p.frac_extrapolated) },
         ]}
         rows={curve}
@@ -203,7 +209,7 @@ export default function Sweeps() {
             empty={<span className="cap">{sweeps.data ? "No sweeps yet." : "Loading…"}</span>}
           />
         </div>
-        {swid ? <SweepView rid={rid} swid={swid} unit={unit} item={sweeps.data?.find((s) => s.id === swid)} /> : <p className="cap">Choose a sweep, or run a new one.</p>}
+        {swid ? <SweepView rid={rid} swid={swid} unit={unit} item={sweeps.data?.find((s) => s.id === swid)} levers={levers.data} /> : <p className="cap">Choose a sweep, or run a new one.</p>}
       </div>
     </LabFrame>
   );

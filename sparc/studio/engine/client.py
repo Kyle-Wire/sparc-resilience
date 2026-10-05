@@ -9,6 +9,11 @@ a new host.
 Each request is its own connection: connect (``authkey`` from ``host.json``), send one dict, wait for one
 reply.  A host that dies mid-request raises :class:`HostGone`; a failed request raises :class:`EngineError`
 with the host's ``{type, message, traceback_tail}``.
+
+A host that is exiting by itself (recycle, idle stop) can be reached in a short window: its socket is
+gone before its ``host.json``, or it refuses the request with ``HostStopping``.  Nothing ran then, so the
+request waits for that host to exit and is sent once more to the next host (started as usual).  A host
+process this client started is reaped as soon as it exits (no zombie under the server).
 """
 
 from __future__ import annotations
@@ -24,7 +29,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from sparc.studio.engine.host import HOST_JSON, HOST_LOG, address_for
+from sparc.studio.engine.host import HOST_JSON, HOST_LOG, STOPPING, address_for
 from sparc.studio.workspace import read_json
 
 log = logging.getLogger("sparc.studio.engine")
@@ -32,11 +37,16 @@ log = logging.getLogger("sparc.studio.engine")
 __all__ = ["EngineClient", "EngineError", "HostGone", "START_TIMEOUT_S"]
 
 START_TIMEOUT_S = 60.0
+STOP_WAIT_S = 15.0                                       # how long a request waits for an exiting host to go
 _IS_WIN = os.name == "nt"
 
 
 class HostGone(RuntimeError):
     """The host is not running, or exited before replying."""
+
+
+class _NotSent(RuntimeError):
+    """The request never ran: the host could not be reached, or refused it because it is stopping."""
 
 
 class EngineError(RuntimeError):
@@ -50,6 +60,13 @@ class EngineError(RuntimeError):
 
     def as_dict(self) -> dict:
         return {"type": self.type, "message": self.message, "traceback_tail": self.traceback_tail}
+
+
+def _reap_when_done(proc: subprocess.Popen) -> None:
+    try:
+        proc.wait()
+    except Exception:                                    # noqa: BLE001 - a reaper never raises
+        pass
 
 
 def _alive(pid: int | None, create_time: float | None) -> bool:
@@ -147,6 +164,9 @@ class EngineClient:
             finally:
                 log_f.close()
             self._proc = proc
+            # reap the host whenever it exits (recycle, idle stop, kill): nothing else waits for it
+            threading.Thread(target=_reap_when_done, args=(proc,), name=f"engine-host-reaper-{proc.pid}",
+                             daemon=True).start()
             try:
                 deadline = time.monotonic() + timeout
                 while time.monotonic() < deadline:
@@ -215,20 +235,51 @@ class EngineClient:
 
     # ------------------------------------------------------------------ requests
 
+    def wait_gone(self, info: dict, timeout: float = STOP_WAIT_S) -> bool:
+        """Wait until the host of ``info`` has exited (or ``host.json`` names another live host)."""
+        deadline = time.monotonic() + timeout
+        while True:
+            if not _alive(info.get("pid"), info.get("create_time")):
+                return True
+            cur = read_json(self.host_json)
+            if isinstance(cur, dict) and cur.get("pid") not in (None, info.get("pid")) and \
+                    _alive(cur.get("pid"), cur.get("create_time")):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.05)
+
     def request(self, op: str, *, job_id: str | None = None, job_dir: str | None = None, run_id: str | None = None,
                 run_dir: str | None = None, threads: int = 1, payload: dict | None = None, start: bool = True,
                 timeout: float | None = None) -> dict:
-        """Send one request; returns the host's ``result``.  ``timeout`` bounds the wait for the reply."""
+        """Send one request; returns the host's ``result``.  ``timeout`` bounds the wait for the reply.
+
+        With ``start``, a host that is exiting by itself (its socket gone, or a ``HostStopping`` refusal) is
+        waited for and the request is sent once more to the next host; nothing ran on the first one."""
+        for attempt in (0, 1):
+            info = self.ensure() if start else self.info()
+            if info is None:
+                raise HostGone("the engine host is not running")
+            try:
+                return self._send_once(info, op, job_id=job_id, job_dir=job_dir, run_id=run_id, run_dir=run_dir,
+                                       threads=threads, payload=payload, timeout=timeout)
+            except _NotSent as exc:
+                if not start or attempt:
+                    raise HostGone(str(exc)) from exc.__cause__
+                log.info("engine host %s is going away (%s): retrying %s on the next host", info.get("pid"), exc, op)
+                self.wait_gone(info)
+        raise HostGone("the engine host is not reachable")           # not reached
+
+    def _send_once(self, info: dict, op: str, *, job_id, job_dir, run_id, run_dir, threads, payload,
+                   timeout) -> dict:
+        from multiprocessing import AuthenticationError
         from multiprocessing.connection import Client
 
-        info = self.ensure() if start else self.info()
-        if info is None:
-            raise HostGone("the engine host is not running")
         try:
             conn = Client(info["sock"], family=info.get("family") or "AF_UNIX",
                           authkey=bytes.fromhex(info["authkey_hex"]))
-        except (OSError, EOFError) as exc:
-            raise HostGone(f"cannot reach the engine host: {exc}") from exc
+        except (OSError, EOFError, AuthenticationError) as exc:
+            raise _NotSent(f"cannot reach the engine host: {exc}") from exc
         rid = uuid.uuid4().hex
         try:
             conn.send({"op": op, "request_id": rid, "job_id": job_id, "job_dir": job_dir, "run_id": run_id,
@@ -246,7 +297,10 @@ class EngineClient:
         if not isinstance(reply, dict):
             raise EngineError({"type": "BadReply", "message": f"unexpected reply {type(reply).__name__}"})
         if not reply.get("ok"):
-            raise EngineError(reply.get("error") or {})
+            err = reply.get("error") or {}
+            if err.get("type") == STOPPING:
+                raise _NotSent(err.get("message") or "the engine host is stopping")
+            raise EngineError(err)
         return reply.get("result") or {}
 
     def status(self, timeout: float = 5.0) -> dict | None:

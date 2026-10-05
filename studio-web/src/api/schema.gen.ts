@@ -3446,6 +3446,11 @@ export interface components {
             has_folds: boolean;
             /** Label */
             label: string;
+            /**
+             * Per Cell
+             * @default true
+             */
+            per_cell: boolean;
             /** Ref */
             ref: {
                 [key: string]: unknown;
@@ -3459,7 +3464,7 @@ export interface components {
             b: number;
             city: components["schemas"]["PairedLikely"];
             /** Layer Key */
-            layer_key: string;
+            layer_key?: string | null;
             /** Regions */
             regions?: {
                 [key: string]: components["schemas"]["PairedLikely"];
@@ -5980,7 +5985,7 @@ export interface components {
             /** Demo */
             demo: boolean;
             /** Extrapolated Edited */
-            extrapolated_edited: number;
+            extrapolated_edited?: number | null;
             impacts?: components["schemas"]["Impacts"] | null;
             /** Mean Delta Sd */
             mean_delta_sd?: number | null;
@@ -7296,6 +7301,7 @@ export interface components {
             /** Curve */
             curve: components["schemas"]["SweepPoint"][];
             fit?: components["schemas"]["SweepFit"] | null;
+            fit_neighbourhood?: components["schemas"]["SweepFit"] | null;
             /** Params */
             params: {
                 [key: string]: unknown;
@@ -7319,6 +7325,12 @@ export interface components {
         SweepFit: {
             /** A */
             A?: number | null;
+            /**
+             * Axis
+             * @default dose
+             * @enum {string}
+             */
+            axis: "dose" | "neighbourhood_dose";
             /** D90 */
             d90?: number | null;
             /** Ds */
@@ -7333,6 +7345,8 @@ export interface components {
             dose: number;
             /** Frac Extrapolated */
             frac_extrapolated: number;
+            /** Neighbourhood Dose */
+            neighbourhood_dose?: number | null;
             /** Realized */
             realized: number;
             region?: components["schemas"]["Likely"] | null;

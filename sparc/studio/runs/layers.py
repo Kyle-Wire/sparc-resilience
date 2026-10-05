@@ -527,8 +527,11 @@ def _studio_layer_defs(ctx) -> list[LayerDef]:
             plid = pdir.name
             params = read_json_cached(pdir / "params.json") or {}
             name = params.get("name") or plid
+            # planned_benefit: each treated cell holds the cooling its dose brings to its whole neighbourhood (a
+            # footprint total, °·cells), not the change at that cell; the closed loop is the per-cell ΔT
             for field_, label, scale, sign in (("dose", "dose", "seq", None),
-                                               ("planned_benefit", "planned cooling", "seq", _BENEFIT),
+                                               ("planned_benefit", "planned cooling (footprint total on the treated "
+                                                "cell)", "seq", _BENEFIT),
                                                ("closed_loop_delta", "closed-loop ΔT", "div", _COOLER)):
                 if field_ == "closed_loop_delta":
                     rj = read_json_cached(pdir / "realised.json") or {}
@@ -537,7 +540,8 @@ def _studio_layer_defs(ctx) -> list[LayerDef]:
                 elif not (pdir / f"{field_}.npy").exists():
                     continue
                 out.append(LayerDef(f"plan:{plid}:{field_}", "studio_plans", f"{name}: {label}",
-                                    tu if field_ != "dose" else "", scale,
+                                    "" if field_ == "dose" else f"{tu}·cells" if field_ == "planned_benefit" else tu,
+                                    scale,
                                     (lambda k=f"plan:{plid}:{field_}": resolve_layer(ctx, k)),
                                     {"file": f"studio/plans/{plid}", "column": field_},
                                     center=0.0 if scale == "div" else None, zero_blank=field_ == "dose",

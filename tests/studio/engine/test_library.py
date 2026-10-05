@@ -181,6 +181,27 @@ def test_design_csv_round_trip(client, ctx, demo, run_ctx, synth_run):
     np.testing.assert_allclose(np.frombuffer(raw[8:], dtype="<f4"), [4, 6], rtol=1e-5)
 
 
+def test_design_csv_import_rejects_bad_cells(client, ctx, demo, run_ctx, synth_run):
+    """A number column with text in it ("abc") is a 422 that names the row, not a 500; an id the run does not
+    have ("inf", "ghost") is an unknown id; empty and NA cells are skipped."""
+    rid, _ = synth_run
+    ids = np.asarray(run_ctx.grid.ids)
+    r = client.post(f"/api/runs/{rid}/designs/import", content=f"id,lever,change\n{ids[0]},canopy,2\nzz,canopy,abc\n"
+                    .encode(), headers={"Content-Type": "text/csv"})
+    assert r.status_code == 422, r.text
+    err = r.json()["error"]
+    assert err["code"] == "validation" and err["detail"]["errors"][0]["code"] == "number"
+    assert "row 3" in err["detail"]["errors"][0]["message"] and "abc" in err["detail"]["errors"][0]["message"]
+    for bad_id in ("inf", "-inf", "nan", "1e400"):
+        body = f"id,lever,change\n{ids[0]},canopy,2\n{bad_id},canopy,1\n{ids[1]},canopy,N/A\n{ids[2]},canopy,\n"
+        r = client.post(f"/api/runs/{rid}/designs/import", content=body.encode(), headers={"Content-Type": "text/csv"})
+        assert r.status_code == 201, (bad_id, r.text)
+        imp = r.json()
+        assert imp["levers"] == ["canopy"] and len(imp["unknown_ids"]) == 1 and imp["n_rows"] == 4
+        raw = Path(ctx.db.fetchone("SELECT path FROM blobs WHERE id = ?", (imp["blobs"]["canopy"],))["path"]).read_bytes()
+        np.testing.assert_allclose(np.frombuffer(raw[4:], dtype="<f4"), [2.0])
+
+
 def test_cache_hit_of_another_scenario_is_adopted(client, ctx, demo, run_ctx, synth_run):
     """Two scenarios with the same content share the cache key: the second one's "Run exact" is a cache hit that
     it gets as its own result (listed, exact, inspectable), and deleting the first keeps it."""
@@ -261,3 +282,54 @@ def test_deleting_a_run_drops_its_results_plans_and_comparisons(client, ctx, dem
     assert client.patch(f"/api/scenarios/{sc['id']}", json={"doc": doc2}).status_code == 200
     assert client.get(f"/api/plans/{plid}").status_code == 404
     assert client.get(f"/api/comparisons/{cmp_.json()['id']}").status_code == 404
+
+
+def _finished_check(ctx, sid: str, result: dict, finished: str) -> dict:
+    """A succeeded ``scenario.across_runs`` job row with ``result`` (what the heavy job leaves behind)."""
+    from sparc.studio.workspace import new_id
+
+    job = {"id": new_id("job"), "kind": "scenario.across_runs", "lane": "heavy", "executor": "process",
+           "scenario_id": sid, "params_json": json.dumps({"scenario_id": sid, "run_ids": ["a", "b"]}),
+           "status": "succeeded", "job_dir": "/nonexistent", "created_utc": finished, "finished_utc": finished,
+           "result_json": json.dumps(result)}
+    ctx.db.insert("jobs", job)
+    return job
+
+
+def test_across_runs_band_is_the_checked_contents_and_reaches_its_results(client, ctx, demo, run_ctx, synth_run):
+    """The spread across runs is the specification band of the content it evaluated: an exact result of that
+    content (served from the cache afterwards, never recomputed) takes it when the check finishes, and a draft
+    edited after its check does not inherit it."""
+    from sparc.studio.engine import kinds
+    from sparc.studio.engine.compile import compile_scenario
+
+    rid, _ = synth_run
+    sc = _create(client, demo["id"])
+    assert compile_scenario(run_ctx, sc["doc"], db=ctx.db).content_hash == sc["content_hash"]
+    row = make_result(ctx, run_ctx, scenario=sc)              # exact first: no band yet
+    before = client.get(f"/api/results/{row['id']}").json()["uncertainty"]
+    assert before["specification"] is None and before["envelope_excludes_zero"] is True
+    check = {"rows": [{"run_id": "a", "ok": True, "city": {"estimate": -0.9}, "error": None},
+                      {"run_id": "b", "ok": True, "city": {"estimate": 0.2}, "error": None}],
+             "sign_stability": 0.5, "spread": 1.1, "content_hash": sc["content_hash"]}
+    job = _finished_check(ctx, sc["id"], check, "2026-10-05T01:00:00Z")
+    kinds.across_on_finish(ctx, {**job, "params": json.loads(job["params_json"])}, check)
+    after = client.get(f"/api/results/{row['id']}").json()["uncertainty"]
+    assert after["specification"] == [-0.9, 0.2] and "specification: check across runs" in after["sources"]
+    assert after["envelope"][0] <= -0.9 and after["envelope"][1] >= 0.2 and after["envelope_excludes_zero"] is False
+    assert after["estimation_95"] == before["estimation_95"] and after["causal_band"] == before["causal_band"]
+    assert kinds._specification(ctx, sc["id"], sc["content_hash"]) == [-0.9, 0.2]
+    # a check of a draft that is edited afterwards is not the band of the new content
+    draft = _create(client, demo["id"], {**DOC, "name": "Draft"})
+    _finished_check(ctx, draft["id"], {**check, "content_hash": draft["content_hash"]}, "2026-10-05T02:00:00Z")
+    edited = client.patch(f"/api/scenarios/{draft['id']}", json={"doc": {
+        **DOC, "name": "Draft", "edits": [{**DOC["edits"][0], "amount": 30}]}}).json()
+    assert edited["content_hash"] != draft["content_hash"]
+    srow = ctx.db.fetchone("SELECT * FROM scenarios WHERE id = ?", (draft["id"],))
+    item = kinds.compiled_item(ctx, run_ctx, srow, {"studio_dir": str(run_ctx.studio_dir)})
+    assert item["specification"] is None
+    assert kinds._specification(ctx, draft["id"], draft["content_hash"]) == [-0.9, 0.2]
+    # a check recorded before checks named their content is not tied to any content
+    legacy = _create(client, demo["id"], {**DOC, "name": "Legacy"})
+    _finished_check(ctx, legacy["id"], {k: v for k, v in check.items() if k != "content_hash"}, "2026-10-05T03:00:00Z")
+    assert kinds._specification(ctx, legacy["id"], legacy["content_hash"]) is None

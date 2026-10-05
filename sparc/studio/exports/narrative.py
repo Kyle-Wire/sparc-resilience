@@ -315,7 +315,14 @@ def equity_sentences(m: dict, opt: dict) -> list[str]:
             continue
         where = ("concentrates in the higher quintiles" if ci > 0.05 else "concentrates in the lower quintiles"
                  if ci < -0.05 else "is shared about evenly")
-        out.append(f"Ranked by {k}, the package's cooling {where} (concentration index {sfmt(ci, 3)}).")
+        # the index has the same sign for a cooling and a warming of the same shape: name which one it is
+        mu = _num((e or {}).get("resident_mean_cooling"))
+        if mu is None:                   # planner packs written before it: the sign of the quintile means
+            q = [x for x in (e or {}).get("quintiles") or [] if _num(x.get("mean_cooling")) is not None]
+            tot = sum(_num(x.get("people")) or 0.0 for x in q)
+            mu = sum((_num(x.get("people")) or 0.0) * _num(x["mean_cooling"]) for x in q) / tot if tot else None
+        what = "change" if not mu else "cooling" if mu > 0 else "warming"
+        out.append(f"Ranked by {k}, the package's {what} {where} (concentration index {sfmt(ci, 3)}).")
     g = _num((opt or {}).get("gini"))
     if g is not None:
         out.append(f"The budget plan's doses have a Gini coefficient of {fmt(g)} "

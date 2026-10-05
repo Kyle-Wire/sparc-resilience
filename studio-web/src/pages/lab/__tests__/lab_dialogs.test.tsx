@@ -7,7 +7,7 @@ import { clearResources } from "../../../api/resource";
 import type { ScenarioTemplate } from "../../../api/lab";
 import type { Job, SelectionSpec } from "../../../api/types";
 import { byText, click, flush, mockFetch, render, typeInto, waitFor } from "../../../test/render";
-import { AcrossRunsPanel, latestAcross } from "../components/AcrossRuns";
+import { AcrossRunsPanel, bandNote, latestAcross } from "../components/AcrossRuns";
 import { DeleteScenarioDialog } from "../components/Dialogs";
 import { ResultInspector } from "../components/ResultInspector";
 import { SelectionBuilder } from "../components/SelectionBuilder";
@@ -173,6 +173,7 @@ describe("Check across runs output", () => {
     ],
     sign_stability: 1,
     spread: 0.009,
+    content_hash: "h_a",
   };
 
   it("picks the scenario's newest finished check and a newer one still running", () => {
@@ -192,6 +193,18 @@ describe("Check across runs output", () => {
     expect(container.textContent).toContain("2 of 3 runs evaluated");
     expect(container.textContent).toContain("Sign stability 100%");
     expect(byText(container, ".edit-issues li", "r_old: no checkpoint")).not.toBeNull();
+    // without the shown result's content the spread is not called its band
+    expect(container.textContent).not.toContain("the specification band of this result");
+  });
+
+  it("calls the spread the result's specification band only for a check of the result's content", async () => {
+    expect(bandNote("h_a", "h_a")).toBe("the specification band of this result");
+    expect(bandNote("h_a", "h_b")).toMatch(/earlier version of the scenario, not this result's specification band/);
+    expect(bandNote(undefined, "h_a")).toMatch(/not this result's specification band/);
+    fetchMock = mockFetch({ "GET /api/jobs": { body: { items: [acrossJob("j1", "sc_a", "succeeded", RESULT)], next_cursor: null } } });
+    const { container } = render(<AcrossRunsPanel pid={PID} sid="sc_a" unit="degF" contentHash="h_a" />);
+    await waitFor(() => container.querySelector('svg.chart[aria-label="The same scenario on other runs"]'), 5000, "dot plot");
+    expect(container.textContent).toContain("(the specification band of this result)");
   });
 });
 

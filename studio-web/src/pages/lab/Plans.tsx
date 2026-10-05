@@ -315,7 +315,7 @@ export function PlanForm({ rid, grid, levers, onSaved }: { rid: string; grid: Gr
   );
 }
 
-function FieldKitBlock({ plid, name }: { plid: string; name: string }) {
+function FieldKitBlock({ plid, name, unit }: { plid: string; name: string; unit: string }) {
   const [kit, setKit] = useState<FieldKit | null>(null);
   const [busy, setBusy] = useState(false);
   const load = async () => {
@@ -374,7 +374,8 @@ function FieldKitBlock({ plid, name }: { plid: string; name: string }) {
           { key: "lat", label: "Lat", align: "right", value: (c) => c.lat, render: (c) => fmtNum(c.lat, 5) },
           { key: "zone", label: "Zone", value: (c) => c.zone },
           { key: "dose", label: "Dose", align: "right", value: (c) => c.dose, render: (c) => fmtNum(c.dose, 2) },
-          { key: "pb", label: "Planned benefit", align: "right", value: (c) => c.planned_benefit, render: (c) => fmtNum(c.planned_benefit, 3) },
+          // the cell's footprint cooling: what its dose cools around it, summed (target·cells), not ΔT at the cell
+          { key: "pb", label: "Planned benefit (footprint)", unit: `${unitLabel(unit)}·cells`, align: "right", value: (c) => c.planned_benefit, render: (c) => fmtNum(c.planned_benefit, 3) },
           { key: "cl", label: "Closed-loop ΔT", align: "right", value: (c) => c.closed_loop_delta, render: (c) => fmtNum(c.closed_loop_delta, 3) },
           { key: "people", label: "People", align: "right", value: (c) => c.people, render: (c) => fmtInt(c.people) },
           { key: "pp", label: "Plantable headroom", align: "right", value: (c) => c.plantable_pp, render: (c) => fmtNum(c.plantable_pp, 1) },
@@ -400,7 +401,8 @@ function PlanDetail({ rid, plid, grid, pid }: { rid: string; plid: string; grid:
   const extra = useMemo(() => {
     const unit = grid.meta.units.target;
     const list = [
-      { meta: syntheticMeta({ key: "plan:planned_benefit", label: "Planned benefit", unit, scale: "seq" }, null), load: () => getPlanLayer(plid, "planned_benefit") },
+      // a footprint total on each treated cell (target·cells: the cooling its dose brings to its neighbourhood)
+      { meta: syntheticMeta({ key: "plan:planned_benefit", label: "Planned benefit (footprint total on the treated cell)", unit: `${unit}·cells`, scale: "seq" }, null), load: () => getPlanLayer(plid, "planned_benefit") },
     ];
     if (plan.data?.realised) list.push({ meta: syntheticMeta({ key: "plan:closed_loop_delta", label: "Closed-loop ΔT (exact)", unit, sign_note: "negative = cooler" }, null), load: () => getPlanLayer(plid, "closed_loop_delta") });
     return list;
@@ -552,7 +554,7 @@ function PlanDetail({ rid, plid, grid, pid }: { rid: string; plid: string; grid:
         </section>
       </div>
       <DoseMap grid={grid} dose={dose} extra={extra} title={p.name} />
-      <FieldKitBlock plid={plid} name={p.name} />
+      <FieldKitBlock plid={plid} name={p.name} unit={grid.meta.units.target} />
     </div>
   );
 }

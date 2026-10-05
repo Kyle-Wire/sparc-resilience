@@ -23,7 +23,10 @@ that restarted meanwhile still finds it.  A cancel raises ``Cancelled`` between 
 memory (``engine_mem_budget_gb``; the limits ride on every request).  Eviction drops the least recently used
 session and runs ``gc.collect()``.  When the RSS still exceeds the budget + 1 GB (allocator fragmentation)
 the host finishes the request and exits ("recycle"); the server restarts it lazily and re-opens the most
-recently used run.  It also exits after ``engine_idle_min`` minutes without a loaded run.
+recently used run.  It also exits after ``engine_idle_min`` minutes without a loaded run.  A stopping host
+closes its listener and then removes ``host.json`` (so the next request starts a new host instead of
+connecting to a socket that is gone), and refuses a work request that reaches it meanwhile with
+``HostStopping`` without running it; the client then retries once on the next host.
 
 **Opening a run** uses ``<studio_dir>/engine/base_fold.npy`` (float64 K × n; ``base_fold.json`` keys it by
 checkpoint mtime+size and code sha) and writes it after a fresh baseline pass.  An ``AttributeError`` /
@@ -53,8 +56,8 @@ import numpy as np
 
 log = logging.getLogger("sparc.studio.engine.host")
 
-__all__ = ["main", "Host", "safe_loads", "HOST_JSON", "SOCK_NAME", "HOST_LOG", "RECYCLE_JSON", "address_for",
-           "unix_bind_path"]
+__all__ = ["main", "Host", "safe_loads", "HOST_JSON", "SOCK_NAME", "HOST_LOG", "RECYCLE_JSON", "STOPPING",
+           "address_for", "unix_bind_path"]
 
 HOST_JSON = "host.json"
 SOCK_NAME = "host.sock"
@@ -63,6 +66,7 @@ RECYCLE_JSON = "recycle.json"
 _IS_WIN = os.name == "nt"
 WORK_OPS = ("open", "close", "scenario", "batch", "rerun_configured", "sweep", "plan_verify", "plan_frontier")
 SLACK_ENV = "SPARC_STUDIO_ENGINE_SLACK_GB"
+STOPPING = "HostStopping"
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +188,7 @@ class Host:
 
     def serve(self) -> None:
         threading.Thread(target=self._watchdog, name="engine-idle", daemon=True).start()
+        handlers: list[threading.Thread] = []
         while not self.stopping.is_set():
             try:
                 conn = self.listener.accept()
@@ -194,15 +199,36 @@ class Host:
             except Exception:                    # an authentication failure: drop that client only
                 log.warning("rejected a connection: %s", traceback.format_exc(limit=1).strip())
                 continue
-            threading.Thread(target=self._handle, args=(conn,), name="engine-conn", daemon=True).start()
+            th = threading.Thread(target=self._handle, args=(conn,), name="engine-conn", daemon=True)
+            th.start()
+            handlers = [h for h in handlers if h.is_alive()] + [th]
+        # let the connections that are answering (a reply, a refusal while stopping) finish before the process exits
+        deadline = time.monotonic() + 2.0
+        for th in handlers:
+            th.join(max(0.0, deadline - time.monotonic()))
 
     def stop(self) -> None:
+        """Stop serving: close the listener (which removes the socket) and then remove ``host.json``, so no
+        client sees a live host it cannot reach, and the next request starts a new host at once."""
         if self.stopping.is_set():
             return
         self.stopping.set()
         try:
             self.listener.close()
         except Exception:
+            pass
+        self._release_host_json()
+
+    def _release_host_json(self) -> None:
+        if self.engine_dir is None:
+            return
+        from sparc.studio.workspace import read_json
+
+        try:
+            cur = read_json(self.engine_dir / HOST_JSON) or {}
+            if cur.get("pid") == os.getpid():
+                (self.engine_dir / HOST_JSON).unlink()
+        except OSError:
             pass
 
     def _watchdog(self) -> None:
@@ -243,6 +269,13 @@ class Host:
                                             "traceback_tail": ""}})
                 return
             with self.work:
+                if self.stopping.is_set() or self.recycle:
+                    # this host is exiting (recycle, idle stop, shutdown): nothing ran, the client retries on the
+                    # next host
+                    self._send(conn, {"request_id": req.get("request_id"), "ok": False,
+                                      "error": {"type": STOPPING, "message": "the engine host is stopping",
+                                                "traceback_tail": ""}})
+                    return
                 reply = self.execute(req)
                 if self.recycle:
                     log.warning("host RSS %.0f MB exceeds the budget + %.1f GB after eviction: recycling",
@@ -610,8 +643,9 @@ def main(argv: list[str] | None = None) -> int:
             cur = read_json(engine_dir / HOST_JSON) or {}
             if cur.get("pid") == os.getpid():
                 (engine_dir / HOST_JSON).unlink()
-            if family == "AF_UNIX" and os.path.exists(address):
-                os.unlink(address)
+                # only while host.json was ours: once released, the socket path may be a new host's
+                if family == "AF_UNIX" and os.path.exists(address):
+                    os.unlink(address)
         except OSError:
             pass
         log.info("engine host %d stopped%s", os.getpid(), " (recycle)" if host.recycle else "")

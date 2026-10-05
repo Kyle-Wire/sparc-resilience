@@ -390,11 +390,15 @@ export function startAcrossRuns(sid: string, runIds: string[]): Promise<Job> {
   return api.post<Job>(`/api/scenarios/${enc(sid)}/across-runs`, { run_ids: runIds });
 }
 
-/** `scenario.across_runs` job result (api.md §8): one row per run, sign stability and spread. */
+/**
+ * `scenario.across_runs` job result (api.md §8): one row per run, sign stability and spread, and the
+ * `content_hash` of the scenario content it evaluated (absent in checks recorded before it was kept).
+ */
 export type AcrossRunsResult = {
   rows: { run_id: string; city: Likely | null; ok: boolean; error: string | null }[];
   sign_stability: number | null;
   spread: number | null;
+  content_hash?: string | null;
 };
 
 /**
@@ -512,7 +516,8 @@ export type ExposureRow = { case: string; adapted: boolean; person_mean_temp: nu
 export type Impacts = {
   thresholds: number[];
   exposure: ExposureRow[];
-  equity: Record<string, { quintiles: { quintile: number; mean_cooling: number; people: number; value_range: [number, number] }[]; concentration_index: number }>;
+  // resident_mean_cooling: the resident-weighted mean cooling the index divides by (absent from impacts cached before it)
+  equity: Record<string, { quintiles: { quintile: number; mean_cooling: number; people: number; value_range: [number, number] }[]; concentration_index: number; resident_mean_cooling?: number | null }>;
   hot_days: { station: string; cases: Record<string, unknown>[] } | null;
   hot_days_action: Action | null;
   zones: Record<string, unknown>[];
@@ -536,7 +541,7 @@ export type Result = {
     rings: { r_m: number; mean: number | null; se: number | null; n: number }[];
     lever_ranges: Record<string, number>;
   };
-  extrapolated_edited: number;
+  extrapolated_edited: number | null;
   realized: Record<string, { requested_mean: number; realized_mean: number; requested_total: number; realized_total: number; clipped_share: number }>;
   mediators: Record<string, { mean_change: number }>;
   cost: { total: number; per_lever: Record<string, number>; cooling_per_cost: number | null };
@@ -582,11 +587,17 @@ export function deleteResult(resId: string): Promise<{ ok: true }> {
 
 // ---------------------------------------------------------------- compare (§7.6)
 
-export type ComparisonItem = { ref: ItemRef; label: string; city: Likely; edited: Likely | null; cost: number | null; has_folds: boolean };
+/**
+ * `per_cell: false` is an unverified plan: its planned benefit is a footprint total on each treated cell
+ * (target·cells), so only its city mean, total and cost are compared (no edited area, regions, equity,
+ * exposure or difference map).
+ */
+export type ComparisonItem = { ref: ItemRef; label: string; city: Likely; edited: Likely | null; cost: number | null; has_folds: boolean; per_cell: boolean };
 
 export type PairedLikely = Likely & { paired: boolean };
 
-export type ComparisonPair = { a: number; b: number; city: PairedLikely; regions: Record<string, PairedLikely>; layer_key: string };
+/** `layer_key` is null when an item of the pair has no per-cell ΔT (no difference map). */
+export type ComparisonPair = { a: number; b: number; city: PairedLikely; regions: Record<string, PairedLikely>; layer_key: string | null };
 
 export type Comparison = {
   id: string;
@@ -710,13 +721,20 @@ export function exploreClimate(rid: string, body: ClimateExploreRequest, signal?
 
 // ---------------------------------------------------------------- sweeps (§7.8)
 
-export type SweepPoint = { dose: number; city: Likely; region: Likely | null; realized: number; frac_extrapolated: number };
+/** `neighbourhood_dose`: the selection's mean Gaussian-smoothed dose (null in sweeps run before it was kept). */
+export type SweepPoint = { dose: number; city: Likely; region: Likely | null; realized: number; neighbourhood_dose?: number | null; frac_extrapolated: number };
+
+/** `ds` and `d90` are in the units of `axis`: the requested dose (the curve's x axis) or the neighbourhood dose. */
+export type SweepFit = { model: string; A: number | null; ds: number | null; d90: number | null; axis?: "dose" | "neighbourhood_dose" };
 
 export type Sweep = {
   params: { lever: string; doses: number[]; selection?: SelectionSpec | null } & Record<string, unknown>;
   status: string;
   curve: SweepPoint[];
-  fit: { model: string; A: number | null; ds: number | null; d90: number | null } | null;
+  /** On the requested dose: what the overlay, the d90 line and the caption use. */
+  fit: SweepFit | null;
+  /** On the selection's mean neighbourhood dose (SPEC §7.9); never drawn on the requested-dose axis. */
+  fit_neighbourhood?: SweepFit | null;
   pipeline_curve: Record<string, unknown> | null;
   points: string[];
 };
