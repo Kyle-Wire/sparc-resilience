@@ -34,9 +34,17 @@ def _kill(pid):
         kill_tree(pid)
     except (ProcessLookupError, psutil.Error):
         pass
+    _reap_child(pid)
+
+
+def _reap_child(pid):
+    """Wait for a child job process to exit (and collect it on POSIX)."""
     try:
-        os.waitpid(pid, 0)                     # it is a child of this test process
-    except (ChildProcessError, OSError):
+        if os.name == "nt":                    # os.waitpid takes a process handle there, not a pid
+            psutil.Process(pid).wait(30)
+        else:
+            os.waitpid(pid, 0)                 # it is a child of this test process
+    except (ChildProcessError, OSError, psutil.Error):
         pass
 
 
@@ -108,10 +116,7 @@ def test_create_time_mismatch_is_not_reattached(make_app, wait_job):
 def test_job_that_finished_while_down_keeps_its_result(make_app, wait_job):
     jid, pid, ws = _start_job(make_app, wait_job, seconds=1.0)
     wait_for(lambda: (ws.job_dir(jid) / "result.json").exists(), 30, what="the job to finish")
-    try:
-        os.waitpid(pid, 0)
-    except ChildProcessError:
-        pass
+    _reap_child(pid)
     app2 = make_app()
     with TestClient(app2, headers=AUTH) as client:
         job = client.get(f"/api/jobs/{jid}").json()

@@ -373,7 +373,7 @@ def test_worker_env_round_trip():
     with progress.stage("S1"), progress.context(a=1):
         env = progress.worker_env()
     assert env[progress.ENV_SINK] == "stderr" and env[progress.ENV_LEVEL] == "debug"
-    assert env[progress.ENV_JOB] == "j_x" and env[progress.ENV_CANCEL] == "/tmp/none"
+    assert env[progress.ENV_JOB] == "j_x" and env[progress.ENV_CANCEL] == os.path.abspath("/tmp/none")
     assert env["span"][2] == ["stage:S1"] and env["span"][3] == "S1" and env["ctx"] == {"a": 1}
     json.dumps(env)                                            # plain data: picklable for initargs
 
