@@ -278,6 +278,22 @@ def test_sweep_plans_rerun_and_across_runs(client, ctx, demo, engine_run, place_
                   timeout=180)
     unc = client.get(f"/api/results/{rj['result']['result_id']}").json()["uncertainty"]
     assert unc["specification"] is not None and "specification: check across runs" in unc["sources"]
+    # exact first, then the check: the shown (cached) result takes the band when the check finishes
+    doc2 = {**SHADE, "name": "Shade 5", "edits": [{**SHADE["edits"][0], "amount": 5}]}
+    sc2 = _scenario(client, demo["id"], doc2)
+    r2 = wait_job(client, client.post(f"/api/scenarios/{sc2['id']}/run", json={"run_id": rid}).json()["job"]["id"],
+                  timeout=180)
+    res2 = r2["result"]["result_id"]
+    assert client.get(f"/api/results/{res2}").json()["uncertainty"]["specification"] is None
+    aj2 = client.post(f"/api/scenarios/{sc2['id']}/across-runs", json={"run_ids": [rid, rid_b]}).json()
+    assert wait_job(client, aj2["id"], timeout=300)["status"] == "succeeded"
+    # the job's on_finish hook (right after it turns "succeeded") refreshes the stored result
+    unc2 = wait_for(lambda: (u := client.get(f"/api/results/{res2}").json()["uncertainty"])["specification"] and u,
+                    timeout=30, what="the band on the cached result")
+    assert "specification: check across runs" in unc2["sources"]
+    again = client.post(f"/api/scenarios/{sc2['id']}/run", json={"run_id": rid}).json()     # as the Lab does: no force
+    assert again["job"] is None and again["cached"]["id"] == res2
+    assert client.get(f"/api/results/{res2}").json()["uncertainty"] == unc2
 
 
 def test_host_recycles_and_reopens_the_mru_run(client, ctx, demo, engine_run, wait_job, monkeypatch):

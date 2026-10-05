@@ -390,11 +390,15 @@ export function startAcrossRuns(sid: string, runIds: string[]): Promise<Job> {
   return api.post<Job>(`/api/scenarios/${enc(sid)}/across-runs`, { run_ids: runIds });
 }
 
-/** `scenario.across_runs` job result (api.md §8): one row per run, sign stability and spread. */
+/**
+ * `scenario.across_runs` job result (api.md §8): one row per run, sign stability and spread, and the
+ * `content_hash` of the scenario content it evaluated (absent in checks recorded before it was kept).
+ */
 export type AcrossRunsResult = {
   rows: { run_id: string; city: Likely | null; ok: boolean; error: string | null }[];
   sign_stability: number | null;
   spread: number | null;
+  content_hash?: string | null;
 };
 
 /**

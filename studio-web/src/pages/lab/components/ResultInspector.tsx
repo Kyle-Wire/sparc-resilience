@@ -372,7 +372,7 @@ export function ResultInspector({ rid, resId, pid, unit, nFolds, onShowLayer }: 
         />
       ) : null}
 
-      {r.scenario ? <AcrossRunsPanel pid={pid} sid={r.scenario.id} unit={unit} /> : null}
+      {r.scenario ? <AcrossRunsPanel pid={pid} sid={r.scenario.id} unit={unit} contentHash={typeof r.spec.content_hash === "string" ? r.spec.content_hash : null} /> : null}
 
       <ImpactsBlock resId={resId} impacts={r.impacts} unit={unit} onImpacts={(i) => mutate(`result:${resId}`, (prev: Result | undefined) => (prev ? { ...prev, impacts: i } : prev) as Result)} />
     </section>

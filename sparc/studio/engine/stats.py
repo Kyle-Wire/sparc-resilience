@@ -28,7 +28,7 @@ from sparc.studio.runs.common import clean, jackknife_se, likely
 
 __all__ = ["masked_mean", "masked_se", "masked_likely", "paired_se", "pair_likely", "region_row", "auto_masks",
            "ring_profile", "spill", "realized_table", "cost_table", "causal_check", "uncertainty_block",
-           "plain_card", "build_result", "result_summary_fields", "RING_MAX_M", "RING_MIN_W"]
+           "plain_card", "build_result", "result_summary_fields", "with_specification", "RING_MAX_M", "RING_MIN_W"]
 
 RING_MAX_M = 2000.0
 RING_MIN_W = 30.0
@@ -237,23 +237,39 @@ def uncertainty_block(summ: dict, cfg_raw: dict, manifest: dict | None, *, speci
            .get("scenarios") or [None])[0]
     if row is None:
         return None
+    return _finish_block(row, specification)
+
+
+def _finish_block(row: dict, specification: list | None) -> dict:
+    """The block from its bands: a multiverse ``specification`` wins over the "check across runs" band; the
+    envelope spans the estimation, specification and attribution bands."""
     sources = []
+    spec = row.get("specification")
     if row.get("estimation_95"):
         sources.append("estimation: fold-to-fold jackknife")
-    if row.get("specification"):
+    if spec:
         sources.append("specification: multiverse")
     elif specification:
-        row["specification"] = [float(min(specification)), float(max(specification))]
+        spec = [float(min(specification)), float(max(specification))]
         sources.append("specification: check across runs")
     if row.get("attribution"):
         sources.append("attribution: simulation check")
     if row.get("causal_band"):
         sources.append("causal band: independent causal estimate")
-    parts = [x for x in (row.get("estimation_95"), row.get("specification"), row.get("attribution")) if x]
+    parts = [x for x in (row.get("estimation_95"), spec, row.get("attribution")) if x]
     env = [float(min(p[0] for p in parts)), float(max(p[1] for p in parts))] if parts else None
-    return {"estimation_95": row.get("estimation_95"), "specification": row.get("specification"),
+    return {"estimation_95": row.get("estimation_95"), "specification": spec,
             "attribution": row.get("attribution"), "causal_band": row.get("causal_band"), "envelope": env,
             "envelope_excludes_zero": (bool(env[1] < 0 or env[0] > 0) if env else None), "sources": sources}
+
+
+def with_specification(unc: dict | None, specification: list | None) -> dict | None:
+    """A stored result's uncertainty block with its "check across runs" band replaced by ``specification``
+    (None removes it), the envelope and sources recomputed; a multiverse band is kept as it is."""
+    if not isinstance(unc, dict) or "specification: multiverse" in (unc.get("sources") or []):
+        return unc
+    row = {k: unc.get(k) for k in ("estimation_95", "attribution", "causal_band")}
+    return _finish_block({**row, "specification": None}, specification)
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,9 @@
 // "Check across runs" output (SPEC §7.12): the latest finished check of a scenario as a dot
-// plot of the city-mean ΔT ± its likely range per run, with the sign stability and the spread
-// (the range of the run means is the result's specification band). A check still running
-// shows its progress; runs that could not evaluate the scenario are listed with the reason.
+// plot of the city-mean ΔT ± its likely range per run, with the sign stability and the spread.
+// The range of the run means is the specification band of the content the check evaluated
+// (its `content_hash`): the caption calls it the shown result's band only when the result is of
+// that content; a check of an earlier version of a draft is labelled as such. A check still
+// running shows its progress; runs that could not evaluate the scenario are listed with the reason.
 import { useAcrossRunsJobs, type AcrossRunsResult } from "../../../api/lab";
 import { isActiveStatus, type Job } from "../../../api/types";
 import { DotRange } from "../../../charts";
@@ -18,7 +20,14 @@ export function latestAcross(jobs: Job[], sid: string): { done: (Job & { result:
   return { done: done ?? null, active };
 }
 
-export function AcrossRunsPanel({ pid, sid, unit }: { pid: string | null; sid: string; unit: string }) {
+/** What the spread is to the shown result: its specification band only for a check of the result's content. */
+export function bandNote(checked: string | null | undefined, shown: string | null | undefined): string {
+  if (checked && shown && checked === shown) return "the specification band of this result";
+  if (!checked) return "not tied to a version of the scenario, so not this result's specification band";
+  return "from an earlier version of the scenario, not this result's specification band";
+}
+
+export function AcrossRunsPanel({ pid, sid, unit, contentHash }: { pid: string | null; sid: string; unit: string; contentHash?: string | null }) {
   const jobs = useAcrossRunsJobs(pid);
   const { done, active } = latestAcross(jobs.data?.items ?? [], sid);
   if (!done && !active) return null;
@@ -40,7 +49,7 @@ export function AcrossRunsPanel({ pid, sid, unit }: { pid: string | null; sid: s
             unit={u}
             signed
             rangeLabel="Likely range"
-            caption={`${ok.length} of ${r.rows.length} runs evaluated (${fmtDateTime(done!.finished_utc)}). Sign stability ${fmtPct(r.sign_stability)}; spread of the run means ${fmtNum(r.spread, 3)} ${u} (the result's specification band).`}
+            caption={`${ok.length} of ${r.rows.length} runs evaluated (${fmtDateTime(done!.finished_utc)}). Sign stability ${fmtPct(r.sign_stability)}; spread of the run means ${fmtNum(r.spread, 3)} ${u} (${bandNote(r.content_hash, contentHash)}).`}
           />
           {failed.length ? (
             <ul className="edit-issues">
