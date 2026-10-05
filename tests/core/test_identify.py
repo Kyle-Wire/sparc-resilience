@@ -1,0 +1,223 @@
+"""Canopy identification: design layers, the street-differences estimator, the lab's scoring, and the
+real-traverse path (projection, passes, CLI)."""
+
+from __future__ import annotations
+
+import json
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from sparc.core import simcheck as S
+from sparc.core.identify import estimators as E
+from sparc.core.identify import layers as LY
+from sparc.core.identify import validate as V
+
+
+@pytest.fixture(scope="module")
+def layout(synthetic_core_data, synthetic_city):
+    cfg, data = synthetic_core_data
+    return S.Layout(cfg=cfg, df=synthetic_city.frame, data=data, roles=cfg.raw["physics"]["roles"])
+
+
+@pytest.fixture(scope="module")
+def L(layout):
+    return LY.build_layers(layout)
+
+
+# --------------------------------------------------------------------------- #
+# Layers                                                                       #
+# --------------------------------------------------------------------------- #
+def test_ring_mean_matches_brute_force(layout):
+    g = layout.grid
+    v = np.random.default_rng(0).uniform(0, 100, g.iy.size)
+    got = LY.ring_mean(v, g, 100.0, 300.0)
+    x, y = g.ix * g.dx, g.iy * g.dy
+    for i in np.random.default_rng(1).choice(v.size, 25, replace=False):
+        d = np.hypot(x - x[i], y - y[i])
+        sel = (d > 100.0 + 1e-6) & (d <= 300.0 + 1e-6)
+        assert got[i] == pytest.approx(v[sel].mean(), rel=1e-6)
+
+
+def test_sector_mean_points_the_right_way(layout):
+    g = layout.grid
+    north = (g.iy * g.dy).astype(float)                  # a field that grows northward
+    up = LY.sector_mean(north, g, (0.0, 1.0), 300.0)     # the sector to the north of each cell
+    down = LY.sector_mean(north, g, (0.0, -1.0), 300.0)
+    inner = (g.iy > g.iy.min() + 12) & (g.iy < g.iy.max() - 12)          # (an empty sector takes the mean)
+    assert np.mean(up[inner] > north[inner]) > 0.95 and np.mean(down[inner] < north[inner]) > 0.95
+    assert np.median(up[inner] - north[inner]) == pytest.approx(np.median(north[inner] - down[inner]), rel=0.1)
+
+
+def test_canopy_terms_are_flexible_near_and_linear_far(L):
+    terms = L.canopy_terms()
+    assert terms[:6] == ["cb0_0", "cb1_0", "cb2_0", "cb0_r100", "cb1_r100", "cb2_r100"]
+    assert terms[6:] == ["cb0_r300", "cb0_r1000"]
+    assert L.canopy_terms(100) == terms[:6]
+
+
+def test_edit_layers_hold_the_uniform_dose(L, layout):
+    c = np.clip(layout.col("canopy"), 0, 100)
+    assert np.allclose(L.values["edit_cb0_0"], np.minimum(c + 10, 100) - c)
+    # basis term (c − 15)+ moves by the part of the +10 pp above the knot
+    assert np.allclose(L.values["edit_cb1_0"], np.maximum(np.minimum(c + 10, 100) - 15, 0) - np.maximum(c - 15, 0))
+    assert np.allclose(L.values["edit_cb0_r300"], LY.ring_mean(np.minimum(c + 10, 100) - c, layout.grid, 100, 300))
+
+
+# --------------------------------------------------------------------------- #
+# Estimators                                                                   #
+# --------------------------------------------------------------------------- #
+def test_cluster_ols_recovers_coefficients_and_scales_errors():
+    rng = np.random.default_rng(0)
+    n, G = 4000, 40
+    g = rng.integers(0, G, n)
+    X = np.column_stack([np.ones(n), rng.normal(size=n), rng.normal(size=n) * 50])
+    y = X @ np.array([1.0, -2.0, 0.03]) + rng.normal(size=G)[g] + rng.normal(size=n)
+    b, V_ = E.cluster_ols(y, X, g)
+    assert b == pytest.approx([1.0, -2.0, 0.03], abs=0.4)
+    assert np.sqrt(V_[0, 0]) > 0.1                       # the shared cluster shock widens the intercept's error
+
+
+def test_pairs_stay_within_one_pass():
+    df = pd.DataFrame({"seg": [0, 0, 0, 1, 1, 0], "vehicle": [0, 0, 0, 0, 0, 1], "t_s": [0, 3, 6, 9, 12, 0]})
+    i, j = E.sfd_pairs(df, lags=(1, 2))
+    pairs = sorted(zip(i.tolist(), j.tolist()))
+    assert pairs == [(0, 1), (0, 2), (1, 2), (3, 4)]
+
+
+def _noise_free(kind, layout, seed=0):
+    from sparc.core.identify.campaign import simulate
+
+    rng = np.random.default_rng(seed)
+    gen = S.Generator(kind, layout, rng)
+    T = 88.0 + gen.signal(gen.C0, gen.I0)
+    camp = simulate(layout, T, rng, S._product_features(layout), street_m=150.0, product=False,
+                    drift_f_per_h=(1.0, 1.0), vehicle_sd=0.3, sensor_sd=0.0)
+    return gen, camp
+
+
+def test_street_design_recovers_a_local_effect_and_ignores_drift(layout, L):
+    gen, camp = _noise_free("own_only", layout)
+    pts = np.unique(camp.samples["cell"].to_numpy())
+    pts = np.random.default_rng(0).choice(pts, min(300, pts.size), replace=False)
+    truth = V.reach_profile(gen, layout, pts, reaches=(100,))
+    rows = {r["estimator"]: r for r in E.street_effects(camp.samples, L)}
+    assert rows["street_100"]["estimate"] == pytest.approx(truth["within_100"], rel=0.15)
+    # warming drift and vehicle offsets alone (no canopy effect) give nothing
+    gen0, camp0 = _noise_free("null", layout)
+    r0 = {r["estimator"]: r for r in E.street_effects(camp0.samples, L)}
+    assert abs(r0["street_100"]["estimate"]) < 0.02
+
+
+def test_run_all_returns_every_design_with_its_estimand(layout, L):
+    gen, camp = _noise_free("additive", layout)
+    rows = E.run_all(camp.samples, gen.signal(gen.C0, gen.I0) + 88.0, L, layout.grid)
+    got = {r["estimator"]: r for r in rows}
+    assert set(got) == set(E.ESTIMATORS)
+    for name, r in got.items():
+        assert r["estimand"] == E.ESTIMAND[name]
+        assert np.isfinite(r["estimate"]) and r["se"] >= 0 and r["lo"] <= r["estimate"] <= r["hi"]
+    assert got["updown"]["kind"] == "contrast"
+
+
+# --------------------------------------------------------------------------- #
+# The lab's scoring                                                            #
+# --------------------------------------------------------------------------- #
+def _per(mean, truth, cov=1.0, excl=0.0, n=8):
+    return {"n": n, "mean": mean, "truth": truth, "bias": mean - truth, "coverage": cov, "excludes_zero": excl}
+
+
+def test_verdicts():
+    clean = _per(0.01, 0.0)
+    ok = V.design_verdict({"null": clean, "additive": _per(-0.25, -0.26), "physics": _per(-0.10, -0.11)}, "effect")
+    assert ok["status"] == "trustworthy" and ok["trustworthy"]
+    low = V.design_verdict({"null": clean, "additive": _per(-0.15, -0.27, cov=0.5)}, "effect")
+    assert low["status"] == "conservative" and low["understates"] == ["additive"]
+    over = V.design_verdict({"null": clean, "additive": _per(-0.26, -0.27), "coarse_scale": _per(-0.60, -0.22, cov=0.2)},
+                            "effect")
+    assert over["status"] == "partial" and over["misses"] == ["coarse_scale"]
+    sign = V.design_verdict({"null": clean, "additive": _per(-0.26, -0.27), "physics": _per(-0.06, -0.11, cov=0.6),
+                             "coarse_scale": _per(-0.09, -0.047, cov=0.5)}, "effect")
+    assert sign["status"] == "direction only"
+    biased = V.design_verdict({"null": _per(-0.2, 0.0, excl=0.6), "additive": _per(-0.25, -0.26)}, "effect")
+    assert biased["status"] == "not trustworthy" and not biased["clean_null"]
+    sig = V.design_verdict({"null": {"excludes_zero": 0.0, "mean": 0.0, "advects": False},
+                            "physics": {"excludes_zero": 0.1, "mean": -0.05, "advects": True}}, "contrast")
+    assert sig["status"] == "underpowered"
+
+
+def test_replicate_and_summary(layout, L):
+    feats = S._product_features(layout)
+    real = {"mean": 88.0, "sd": 1.5, "residual_range_m": 400.0}
+    rows = []
+    for kind in ("null", "own_only"):
+        rows += V.replicate(kind, 0, layout, L, feats, real, which=("street_100", "updown", "map_street_300"))
+    assert {r["estimator"] for r in rows} == {"street_100", "updown", "map_street_300"}
+    own = [r for r in rows if r["generator"] == "own_only" and r["estimator"] == "street_100"][0]
+    assert own["truth"] < 0 and own["truth_city"] < 0 and "city_estimate" in own
+    assert all(r["truth"] == 0.0 for r in rows if r["generator"] == "null" and r["kind"] == "effect")
+    summ = V.summarize(rows)
+    assert set(summ["designs"]) == {"street_100", "updown", "map_street_300"}
+    md = V.lab_markdown(summ)
+    assert "Canopy identification lab" in md and "Street differences" in md
+
+
+# --------------------------------------------------------------------------- #
+# Real traverses (Providence frame)                                            #
+# --------------------------------------------------------------------------- #
+@pytest.fixture(scope="module")
+def providence(brown_csv, providence_config_path):
+    from sparc.core.config import load_core_config
+
+    cfg = load_core_config(providence_config_path)
+    return cfg, S.load_layout(cfg)
+
+
+def test_campaign_csv_round_trips_through_projection_and_passes(providence, tmp_path):
+    from sparc.core.identify.campaign import simulate
+    from sparc.core.identify.traverses import campaign_csv, read_traverses, to_campaign
+
+    cfg, lay = providence
+    rng = np.random.default_rng(0)
+    T = 88.0 + rng.normal(0, 1, lay.grid.iy.size)
+    camp = simulate(lay, T, rng, np.zeros((T.size, 1)), product=False)
+    path = tmp_path / "traverses.csv"
+    path.write_bytes(campaign_csv(camp.samples, cfg, lay))
+    pts = read_traverses(path)
+    assert {"time", "lat", "lon", "temp_f", "vehicle_key"} <= set(pts.columns)
+    assert pts["vehicle_key"].nunique() == camp.samples["vehicle"].nunique()      # the car column
+    df, qa = to_campaign(pts, cfg, lay, window=None)
+    assert qa["share_on_grid"] == 1.0
+    assert np.array_equal(np.sort(df["cell"].to_numpy()), np.sort(camp.samples["cell"].to_numpy()))
+    assert abs(qa["n_passes"] - camp.samples["seg"].nunique()) <= 0.05 * camp.samples["seg"].nunique()
+    assert qa["median_step_m"] == pytest.approx(lay.grid.dx, rel=0.05)
+
+
+def test_one_hertz_samples_collapse_to_one_visit_per_cell(providence):
+    from sparc.core.identify.traverses import grid_to_lonlat, to_campaign
+
+    cfg, lay = providence
+    g = lay.grid
+    i0 = int(np.flatnonzero((g.iy == np.median(g.iy).astype(int)))[10])
+    cells = [i0] * 3 + [i0 + 1] * 3                      # three samples in each of two neighbouring cells
+    lon, lat = grid_to_lonlat(cfg, g.x0 + g.ix[cells] * g.dx, g.y0 + g.iy[cells] * g.dy)
+    pts = pd.DataFrame({"time": pd.date_range("2020-07-29 15:00", periods=6, freq="1s"), "lat": lat, "lon": lon,
+                        "temp_f": [88, 88.2, 88.4, 89, 89, 89], "window": "midday", "vehicle_key": "a"})
+    df, qa = to_campaign(pts, cfg, lay)
+    assert df["cell"].tolist() == [i0, i0 + 1] and df["temp"].tolist() == pytest.approx([88.2, 89.0])
+    assert qa["n_passes"] == 1
+
+
+def test_cli_simulate_then_estimate(providence_config_path, brown_csv, tmp_path):
+    from sparc.core.identify.__main__ import main
+
+    csv = tmp_path / "sim.csv"
+    assert main(["simulate", "-p", str(providence_config_path), "--world", "own_only", "--out", str(csv)]) == 0
+    assert main(["estimate", "-p", str(providence_config_path), "--traverses", str(csv), "--window", "all",
+                 "--out", str(tmp_path)]) == 0
+    res = json.loads((tmp_path / "identify_estimate.json").read_text())
+    rows = {r["estimator"]: r for r in res["designs"]}
+    assert rows["street_100"]["hi"] < 0                   # the planted own-cell cooling is found
+    assert res["headline"]["main"] == "street_100" and res["headline"]["street_100"]["excludes_zero"]
+    assert (tmp_path / "identify_estimate.md").read_text().startswith("# Canopy effect from the traverses")
