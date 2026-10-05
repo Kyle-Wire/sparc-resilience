@@ -536,7 +536,7 @@ export type Result = {
     rings: { r_m: number; mean: number | null; se: number | null; n: number }[];
     lever_ranges: Record<string, number>;
   };
-  extrapolated_edited: number;
+  extrapolated_edited: number | null;
   realized: Record<string, { requested_mean: number; realized_mean: number; requested_total: number; realized_total: number; clipped_share: number }>;
   mediators: Record<string, { mean_change: number }>;
   cost: { total: number; per_lever: Record<string, number>; cooling_per_cost: number | null };

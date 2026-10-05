@@ -21538,7 +21538,14 @@
             "$ref": "#/components/schemas/Spill"
           },
           "extrapolated_edited": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Extrapolated Edited"
           },
           "realized": {
@@ -21627,7 +21634,6 @@
           "city",
           "regions",
           "spill",
-          "extrapolated_edited",
           "realized",
           "mediators",
           "cost",

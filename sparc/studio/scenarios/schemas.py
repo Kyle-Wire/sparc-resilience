@@ -480,7 +480,7 @@ class Result(BaseModel):
     mean_delta_sd: float | None = None
     regions: list[ResultRegion]
     spill: Spill
-    extrapolated_edited: float
+    extrapolated_edited: float | None = None
     realized: dict[str, Realized]
     mediators: dict[str, dict[str, float]]
     cost: Cost

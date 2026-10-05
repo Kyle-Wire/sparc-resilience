@@ -5980,7 +5980,7 @@ export interface components {
             /** Demo */
             demo: boolean;
             /** Extrapolated Edited */
-            extrapolated_edited: number;
+            extrapolated_edited?: number | null;
             impacts?: components["schemas"]["Impacts"] | null;
             /** Mean Delta Sd */
             mean_delta_sd?: number | null;

@@ -1033,7 +1033,7 @@ Body: raw CSV with columns `id,lever,change` (a per-cell increment) **or** `id,l
              frac_cooled_01: number; frac_cooled_05: number }[];
   spill: { inside: number; outside: number; outside_share: number;
            rings: { r_m: number; mean: number; se: number|null; n: number }[]; lever_ranges: Record<string, number> };
-  extrapolated_edited: number;
+  extrapolated_edited: number|null;   // null when not computed (a preview, or nothing edited)
   realized: Record<string, { requested_mean: number; realized_mean: number; requested_total: number; realized_total: number; clipped_share: number }>;
   mediators: Record<string, { mean_change: number }>;
   cost: { total: number; per_lever: Record<string, number>; cooling_per_cost: number|null };  // −Σ delta / total: positive = cooler
@@ -1724,6 +1724,7 @@ This section is the changelog of the contract after the completeness review (§1
 - **`response.literature.sparc[]`** (§6) carries `frac_extrapolated`: the share of cells beyond observed conditions in the scenario the rate is scaled from (`manifest.literature.sparc.<quantity>.frac_extrapolated`, `null` when absent).
 - **Findings export and the report's Findings section** (§10, §11): a snapshot with `table: {columns, rows}` (every kit chart pin) is written as a table with every row, each column headed by its `label` (else `key`) and `(unit)`; the rest of the snapshot is listed as before. Nested values are written in full as JSON with their characters as written: no 400-character cut and no `\u` escapes.
 - **People-objective plans report cooling** (§7.9): with `objective: "people"` the allocation is still chosen by resident-weighted cooling, but `planned_total`, `pareto[].benefit`, the `planned_benefit` layer and field-kit column, and the `planned` of `engine.plan_frontier` are the plan's **unweighted** cooling (°·cells), comparable with `realised.total` and with a cooling plan of the same budget. The weighted total (cooling × the relative resident density around each cell, mean 1) is named in `caption`. Before, these were the weighted sums, so a people plan claimed more cooling than the cooling-optimal plan (405.9 vs 354.5 °F·cells at budget 1,000 on the demo city; its cooling is 336.2).
+- **`Result.extrapolated_edited`** (§7.5) is `null` when the share was not computed (a result without extrapolation scores, such as the emulator preview a DRAFT pack is built from, or a scenario that edits no cell), as `summary.frac_extrapolated_edited` already was; it was `0`. A pack's brief then reads "not computed (preview)" in its key numbers and says so in its summary paragraph, instead of "0%" of the edited cells outside the observed conditions.
 
 ### Documentation
 

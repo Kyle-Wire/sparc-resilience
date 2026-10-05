@@ -399,7 +399,8 @@ def build_result(*, result_id: str, kind: str, run_id: str, created_utc: str, jo
            "p10": float(np.percentile(delta, 10)), "p90": float(np.percentile(delta, 90)),
            "mean_delta_sd": float(np.mean(delta_sd)) if delta_sd is not None else None,
            "regions": regions_out, "spill": spill(edited, grid, delta, folds, ranges),
-           "extrapolated_edited": float(sumf["frac_extrapolated_edited"] or 0.0),
+           # None when not computed (a preview has no extrapolation scores, or nothing was edited): never 0
+           "extrapolated_edited": sumf["frac_extrapolated_edited"],
            "realized": realized_table(realized, requested, lever_cells), "mediators": med, "cost": cost,
            "causal_check": cl, "uncertainty": unc, "impacts": None, "preview_vs_exact": pve, "plain": plain,
            "warnings": [{"code": str(w.get("code")), "message": str(w.get("message"))} for w in warnings or []],

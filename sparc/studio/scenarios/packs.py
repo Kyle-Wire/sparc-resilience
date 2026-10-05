@@ -169,6 +169,13 @@ def _likely_text(lk: dict | None, unit: str, draft: bool) -> str:
     return f"{est} {unit} ({_fmt(lk.get('lo'), 3, True)} to {_fmt(lk.get('hi'), 3, True)})"
 
 
+def _share_text(v, draft: bool) -> str:
+    """A share as a percentage; a value that was never computed says so (never "0%")."""
+    if v is None:
+        return "not computed (preview)" if draft else "not computed"
+    return f"{_fmt(100 * float(v), 0)}%"
+
+
 def _model_card_limitations(run_dir: Path) -> list[str]:
     p = Path(run_dir) / "model_card.md"
     try:
@@ -210,6 +217,9 @@ def narrative(name: str, res: dict, unit: str, n_cells: int, area_km2: float, dr
     fx = res.get("extrapolated_edited")
     if fx:
         parts.append(f"{fx:.0%} of the edited cells are outside the conditions the model was trained on.")
+    elif fx is None and n_cells:
+        parts.append("Whether the edited cells are outside the conditions the model was trained on was not "
+                     "computed" + (" for this preview." if draft else "."))
     cc = res.get("causal_check")
     if cc:
         parts.append("The independent causal estimate " + ("agrees with" if cc.get("model_within") else
@@ -304,7 +314,7 @@ figure{{display:inline-block;margin:.5rem 1rem .5rem 0;max-width:46%}} img{{max-
 <table><tr><th>quantity</th><th>value</th></tr>
 <tr><td>City mean ΔT</td><td>{_esc(_likely_text(city, unit, draft))}</td></tr>
 <tr><td>10th–90th percentile of cell ΔT</td><td>{_fmt(res.get('p10'), 3, True)} to {_fmt(res.get('p90'), 3, True)} {unit}</td></tr>
-<tr><td>Edited cells outside observed conditions</td><td>{_fmt(100 * (res.get('extrapolated_edited') or 0), 0)}%</td></tr>
+<tr><td>Edited cells outside observed conditions</td><td>{_share_text(res.get('extrapolated_edited'), draft)}</td></tr>
 <tr><td>Share of the change outside the edited cells</td><td>{_fmt(100 * ((res.get('spill') or {}).get('outside_share') or 0), 0)}%</td></tr>
 <tr><td>Cost (units)</td><td>{_fmt((res.get('cost') or {}).get('total'), 0)}</td></tr></table>
 <h2>Regions</h2><table><tr><th>region</th><th>cells</th><th>mean ΔT (likely range)</th><th>total ({unit}·cells)</th><th>cells cooled ≥ 0.1</th></tr>{''.join(rows)}</table>

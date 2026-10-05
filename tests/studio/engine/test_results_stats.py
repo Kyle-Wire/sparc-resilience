@@ -92,6 +92,21 @@ def test_spill_shares_and_rings(run_ctx):
     assert rz["requested_mean"] == rz["realized_mean"] == 10.0 and rz["clipped_share"] == 0.0
 
 
+def test_extrapolated_edited_is_null_when_not_computed(run_ctx):
+    """A preview (no extrapolation scores) or a scenario that edits nothing has no extrapolated share: null,
+    never 0 (a draft pack's brief printed "Edited cells outside observed conditions: 0%")."""
+    res = _core_result(run_ctx)
+    n = res.delta.size
+    common = dict(result_id="r", kind="exact", run_id=run_ctx.run_id, created_utc="t", job_id=None, delta=res.delta,
+                  delta_sd=None, folds=None, grid=run_ctx.grid, unit="°F")
+    draft = S.build_result(extrapolation=None, realized=res.realized, draft=True, **common)
+    assert draft["summary"]["frac_extrapolated_edited"] is None and draft["extrapolated_edited"] is None
+    nothing = S.build_result(extrapolation=res.extrapolation, realized={"canopy": np.zeros(n)}, **common)
+    assert nothing["extrapolated_edited"] is None
+    inside = S.build_result(extrapolation=np.zeros(n), realized=res.realized, **common)
+    assert inside["extrapolated_edited"] == 0.0           # computed and none outside: a real 0
+
+
 @pytest.mark.parametrize("est,se", [(-0.5, 0.1), (-0.5, 0.3), (-0.05, 0.02), (0.3, 0.1), (0.3, 0.2), (-0.1, 0.0511),
                                     (-0.1, 0.0510)])
 def test_confidence_iff_interval_below_zero(est, se):

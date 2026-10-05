@@ -89,6 +89,10 @@ def test_preview_only_pack_is_draft(client, ctx, demo, run_ctx, synth_run, wait_
 
     summ = json.loads(z.read("summary.json"))
     assert summ["draft"] is True and summ["city"]["se"] is None and summ["city"]["lo"] is None
+    # the preview computes no extrapolation scores: the brief says so instead of a definite "0%"
+    assert summ["extrapolated_edited"] is None and summ["summary"]["frac_extrapolated_edited"] is None
+    assert "Edited cells outside observed conditions</td><td>not computed (preview)</td>" in brief
+    assert "was not computed for this preview" in brief
     assert "DRAFT" in z.read("README.txt").decode()
     opts = json.loads(ctx.db.fetchone("SELECT options_json FROM exports WHERE id = ?", (eid,))["options_json"])
     assert opts["draft"] is True
