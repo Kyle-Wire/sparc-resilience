@@ -588,6 +588,57 @@ The refit on open features only (`configs/core_providence_open.yml`, 60 m) meets
 - the multi-intervention cost optimiser;
 - a night-time model.
 
+## Appendix E — SPARC Studio 1.0 (2026-10-01 to 10-05)
+
+**What it is.** A local web app for the core pipeline, from a CSV of street temperatures to exported cooling decisions. `sparc studio` starts a FastAPI server on 127.0.0.1:8765 and opens the prebuilt React app (`sparc/studio/static`). It replaces the old frontend for the core pipeline. `sparc-desktop/` and `sparc/server/` are untouched and stay until parity is confirmed.
+
+User guide: `docs/studio/USER_GUIDE.md`. Developer guide: `docs/studio/DEVELOPING.md`. Specification and wire contract: `docs/studio/SPEC.md` and `api.md`; §19 of each lists the as-built changes.
+
+**What a user can do:**
+- **Set up a project** from a CSV, the bundled Providence example or a synthetic demo. This covers the data check with a preview map, a config editor with validation and an impact preview, and open-data input jobs (forcing, layers, features, CMIP6, GHCN, stations).
+- **Track runs.** Mission Control shows the stage rail, the fold × model grid, ETA, logs, warnings and resources. Runs can be cancelled, resumed from the last checkpoint and reattached after a server restart, and CLI runs are followed live. There is also an Activity list, a Status Board and run history.
+- **Read outputs.** The run hub has 17 tabs: overview, data, accuracy, distance, influence, response, causal, scenarios, climate, budget, planner, uncertainty, provenance, track, map, docs and files. The map explorer has analysis tools (region stats, breakdown, relationships, correlogram), plus run compare.
+- **Simulate in the Scenario Lab.**
+  - Design: edits by lever with a selection builder or brush, a live emulator preview with reliability badges, and compile checks.
+  - Exact results: computed on a long-lived engine with fold-jackknife ranges, spill rings, residents and equity, and climate offset.
+  - Around the results: a library with forks, compare, budget plans, sweeps, the climate explorer and decision packs.
+- **Validate and export.**
+  - Validation: post-run actions and studies (baselines, planner, emulator, uncertainty, placebo, simulation check, multiverse, reproduction, benchmark), launched and tracked from Studio.
+  - Exports: run bundle, GIS pack, standalone results page and report builder, plus the Findings notebook.
+
+**Core changes it needed** (additive; existing runs still load):
+- `sparc/core/progress.py`: structured events, cancellation and thread limits.
+- `runio.py`: atomic writes and a locked manifest.
+- Planning and run state: `plan_stages`, `run_state.json`, `checkpoint.json`.
+- New outputs: `scenario_detail.npz`, `causal_cells.parquet`, `input_frame.parquet`.
+- New modules: `catalog.py` and `session.py`.
+- The results-page builder moved to `sparc/core/results_page`; `scripts/results_page` keeps working through shims.
+- One-time effect: the new core files change the resume fingerprint, so checkpoints made before this update re-run S2–S3 on resume.
+
+**How it was built and checked.**
+- **Design.** Six readers catalogued the pipeline. Three designs were proposed and scored by three judges; the scenario-first design won and borrowed the tracking- and analysis-first designs' best parts. A critic then closed 21 gaps and 19 contradictions.
+- **Build.** 15 work items were built in four milestones: browse; run & track; Scenario Lab; studies, exports, end-to-end tests and docs. Each item had an implementer, an adversarial reviewer that fixed what it found, and fix rounds. Each milestone ended with an integration pass and a live Chromium walkthrough.
+- **Whole-app review.** Five reviewers looked at correctness, security, job lifecycle, the user journey and scientific integrity, and raised 48 findings.
+  - Each finding had to be reproduced; high and critical ones needed two of three skeptics to agree.
+  - The 30 most severe were verified this way, 28 were confirmed, and the 18 lower-severity ones were reproduced before any fix.
+  - Result: 44 fixed, each with a regression test, and 4 refuted as documented behaviour. Two of the 44 were the same comparison-wording defect, reported through two lenses.
+
+  Fixes that mattered most:
+  - **Security (critical):** an untrusted checkpoint could be unpickled through the emulator action. Run import could also delete or write folders outside the run.
+  - **Wrong numbers:** unverified budget plans overstated local cooling 3–4×, and the sweep fit was drawn on the wrong dose axis.
+  - **Unearned or wrong claims:** draft packs claimed "0% extrapolated" without computing it, and a caveat quoted an uncomputed canopy recovery share. Pairwise comparisons said "warms" when both scenarios cooled.
+- **Final state** (d90e6a9):
+  - core 254, Studio 579 and web 679 tests pass, plus 70 end-to-end browser tests;
+  - the OpenAPI document matches api.md (191 operations), the docs doctest passes, and the committed web build is reproducible.
+
+**Known gaps** (SPEC §19, "Known gaps at release"):
+- the ETA after a resume does not discount cached stages;
+- relative source paths in `uncertainty.json` match study rows only when the server runs from the repository root;
+- no 0.90 reference line on the interval-honesty bars;
+- brush strokes from an earlier session reload as per-cell edits;
+- some Lab paths are covered only by typecheck;
+- Windows and macOS are untested.
+
 ## Appendix B — References
 
 - **Assran et al. (2023):** *Self-Supervised Learning from Images with a Joint-Embedding Predictive Architecture* (I-JEPA).
