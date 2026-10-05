@@ -195,12 +195,13 @@ def compare(db, ctx, items: list, *, regions: list[str] | None = None, threshold
             fb = B["folds"] if B["folds"] is not None else (np.zeros_like(A["folds"]) if B["zero"] and A["folds"]
                                                              is not None else None)
             city = S.pair_likely(A["delta"], fa, A["se"], B["delta"], fb, B["se"], np.ones(n, dtype=bool), unit,
-                                 what=f"{A['label']} vs {B['label']}")
+                                 labels=(A["label"], B["label"]), where="the city")
             rr = {}
             key = None
             if A["per_cell"] and B["per_cell"]:
                 for nm, mk in regs.items():
-                    lk = S.pair_likely(A["delta"], fa, A["se"], B["delta"], fb, B["se"], mk, unit)
+                    lk = S.pair_likely(A["delta"], fa, A["se"], B["delta"], fb, B["se"], mk, unit,
+                                       labels=(A["label"], B["label"]))
                     if lk is not None:
                         rr[nm] = lk
                 diff = (A["delta"] - B["delta"]).astype(np.float32)

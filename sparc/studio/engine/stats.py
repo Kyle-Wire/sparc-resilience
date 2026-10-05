@@ -24,10 +24,10 @@ import math
 
 import numpy as np
 
-from sparc.studio.runs.common import clean, jackknife_se, likely
+from sparc.studio.runs.common import clean, fmt_temp, jackknife_se, likely
 
-__all__ = ["masked_mean", "masked_se", "masked_likely", "paired_se", "pair_likely", "region_row", "auto_masks",
-           "ring_profile", "spill", "realized_table", "cost_table", "causal_check", "uncertainty_block",
+__all__ = ["masked_mean", "masked_se", "masked_likely", "paired_se", "pair_likely", "pair_phrase", "region_row",
+           "auto_masks", "ring_profile", "spill", "realized_table", "cost_table", "causal_check", "uncertainty_block",
            "plain_card", "build_result", "result_summary_fields", "with_specification", "RING_MAX_M", "RING_MIN_W"]
 
 RING_MAX_M = 2000.0
@@ -80,9 +80,11 @@ def paired_se(folds_a: np.ndarray | None, folds_b: np.ndarray | None, mask: np.n
     return masked_se(a - b, mask)
 
 
-def pair_likely(delta_a, folds_a, se_a, delta_b, folds_b, se_b, mask, unit: str, what: str = "") -> dict | None:
+def pair_likely(delta_a, folds_a, se_a, delta_b, folds_b, se_b, mask, unit: str, *, labels: tuple[str, str] =
+                ("A", "B"), where: str = "") -> dict | None:
     """Likely of A − B over ``mask`` with ``paired`` true when the fold-paired SE applies; else the
-    independent SE ``√(SE_A² + SE_B²)`` (paired false)."""
+    independent SE ``√(SE_A² + SE_B²)`` (paired false).  The numbers and ``confidence`` are those of A − B;
+    the ``phrase`` is relative (:func:`pair_phrase`): a difference never reads as A warming the city."""
     da = masked_mean(delta_a, mask)
     db = masked_mean(delta_b, mask)
     if da is None or db is None:
@@ -91,9 +93,49 @@ def pair_likely(delta_a, folds_a, se_a, delta_b, folds_b, se_b, mask, unit: str,
     paired = se is not None
     if se is None and se_a is not None and se_b is not None:
         se = math.sqrt(float(se_a) ** 2 + float(se_b) ** 2)
-    out = likely(da - db, se, unit, what=what) or likely(0.0, None, unit)
+    out = likely(da - db, se, unit) or likely(0.0, None, unit)
+    out["phrase"] = pair_phrase(out, da, db, unit, labels, where=where)
     out["paired"] = paired
     return out
+
+
+def pair_phrase(lk: dict, mean_a: float, mean_b: float, unit: str, labels: tuple[str, str] = ("A", "B"), *,
+                where: str = "", decimals: int = 2) -> str:
+    """Plain-language A − B in relative terms.  Both cool: "A cools the city 0.97 °F less than B"; both warm:
+    "A warms the city 0.20 °F more than B"; otherwise each one's own effect ("A cools the city by 0.50 °F and
+    B warms it by 0.30 °F, a 0.80 °F difference").  The tail speaks of the difference ("Confident there is a
+    difference." / "Could be no difference."), never of A cooling or warming."""
+    a, b = labels
+    diff = float(lk["estimate"])
+    mag = fmt_temp(diff, unit, decimals)
+    w = f" {where}" if where else ""
+
+    def does(m: float, obj: str) -> str:
+        if m < 0:
+            return f"cools{obj} by {fmt_temp(m, unit, decimals)}"
+        if m > 0:
+            return f"warms{obj} by {fmt_temp(m, unit, decimals)}"
+        return f"leaves{obj or ' it'} unchanged"
+
+    if diff == 0:
+        head = f"{a} and {b} have the same mean effect{' on ' + where if where else ''}"
+    elif mean_a < 0 and mean_b < 0:
+        head = f"{a} cools{w} {mag} {'more' if diff < 0 else 'less'} than {b}"
+    elif mean_a > 0 and mean_b > 0:
+        head = f"{a} warms{w} {mag} {'less' if diff < 0 else 'more'} than {b}"
+    else:
+        head = f"{a} {does(mean_a, w)} and {b} {does(mean_b, ' it' if where else '')}, a {mag} difference"
+    lo, hi = lk.get("lo"), lk.get("hi")
+    if lo is not None and hi is not None:
+        if lo * hi > 0:
+            x, y = sorted((abs(lo), abs(hi)))
+            head += f" (likely range {x:.{decimals}f}–{y:.{decimals}f} {unit})"
+        else:
+            head += f" (A − B likely {lo:+.{decimals}f} to {hi:+.{decimals}f} {unit})".replace("-", "−")
+    tail = {"confident_cools": "Confident there is a difference.", "confident_warms": "Confident there is a "
+            "difference.", "could_be_zero": "Could be no difference.",
+            "unknown": "No uncertainty estimate."}[lk["confidence"]]
+    return f"{head}. {tail}"
 
 
 # ---------------------------------------------------------------------------

@@ -524,7 +524,7 @@ Scenarios autosave every two seconds; undo and redo cover the last 50 steps. The
 
 ### Compare and check across runs
 
-**Compare** takes two to four items (exact results, configured scenarios, plans, the baseline): locked-scale maps, the A − B difference map with swipe, a KPI table with **paired** standard errors, regions, equity, exposure, cost and causal bands. Differences always read A − B: a negative value means A cools more. Paired errors use the shared fold models, so they are much tighter than comparing two independent ranges; configured scenarios of older runs offer **Re-run exactly for paired SE**. An unverified plan has no per-cell ΔT: it is compared by its city mean, cost and cooling per cost only, without edited-area, regional, equity, exposure or difference maps, until you verify it.
+**Compare** takes two to four items (exact results, configured scenarios, plans, the baseline): locked-scale maps, the A − B difference map with swipe, a KPI table with **paired** standard errors, regions, equity, exposure, cost and causal bands. Differences always read A − B: a negative value means A cools more. The confidence line says it in words, for example "Shade cools the city 0.97 °F less than Cooling package (likely range 0.77–1.16 °F). Confident there is a difference." Paired errors use the shared fold models, so they are much tighter than comparing two independent ranges; configured scenarios of older runs offer **Re-run exactly for paired SE**. An unverified plan has no per-cell ΔT: it is compared by its city mean, cost and cooling per cost only, without edited-area, regional, equity, exposure or difference maps, until you verify it.
 
 ![Compare: paired difference with its likely range](img/lab-compare.png)
 

@@ -55,6 +55,39 @@ def test_paired_se():
     assert lk["paired"] is False and lk["se"] == pytest.approx(indep)
 
 
+def test_pair_phrase_is_relative():
+    """A − B of two cooling scenarios reads as one cooling less than the other, never "Warms A vs B …
+    Confident it warms" (both items here cool the city); the numbers and confidence are those of A − B."""
+    rng = np.random.default_rng(2)
+    K, n = 5, 300
+    common = rng.normal(0, 0.1, (K, n))
+    common -= common.mean()
+    jitter = rng.normal(0, 0.01, (K, n))
+    jitter -= jitter.mean()
+
+    def pair(ma, mb, where="the city"):
+        a, b = ma + common, mb + common + jitter
+        return S.pair_likely(a.mean(0), a, S.masked_se(a), b.mean(0), b, S.masked_se(b), np.ones(n, bool), "°F",
+                             labels=("Shade", "Cooling package"), where=where)
+
+    lk = pair(-0.34, -1.307)
+    assert lk["estimate"] == pytest.approx(0.967, abs=0.01) and lk["confidence"] == "confident_warms"
+    assert lk["phrase"].startswith("Shade cools the city 0.97 °F less than Cooling package (likely range ")
+    assert lk["phrase"].endswith("Confident there is a difference.")
+    assert "Warms" not in lk["phrase"] and "warms" not in lk["phrase"]
+    assert pair(-1.307, -0.34)["phrase"].startswith("Shade cools the city 0.97 °F more than Cooling package")
+    assert pair(0.5, 0.2)["phrase"].startswith("Shade warms the city 0.30 °F more than Cooling package")
+    assert pair(-0.5, 0.3)["phrase"].startswith("Shade cools the city by 0.50 °F and Cooling package warms it by "
+                                                "0.30 °F, a 0.80 °F difference")
+    assert pair(-0.3, -0.3002)["phrase"].endswith("Could be no difference.")
+    zero = np.zeros(n)
+    b = -0.3 + common
+    lk = S.pair_likely(zero, np.zeros_like(b), 0.0, b.mean(0), b, S.masked_se(b), np.ones(n, bool), "°F",
+                       labels=("Baseline", "Shade"), where="the city")
+    assert lk["phrase"].startswith("Baseline leaves the city unchanged and Shade cools it by 0.30 °F, a 0.30 °F "
+                                   "difference")
+
+
 def test_paired_se_on_configured_scenarios(run_ctx):
     det = run_ctx.scenario_detail()
     fa = np.asarray(det["folds"]["Canopy Increase +10"], dtype=np.float64)
@@ -180,6 +213,11 @@ def test_compare_endpoint_paired(client, ctx, run_ctx, synth_run):
     assert pairs[(0, 1)]["city"]["paired"] is True
     assert pairs[(0, 1)]["city"]["se"] == pytest.approx(S.paired_se(fa, fb), rel=1e-5)
     assert pairs[(0, 2)]["city"]["se"] == pytest.approx(S.masked_se(fa), rel=1e-5)     # vs baseline: A's own SE
+    # both items cool the city: the pair is worded relative to each other, never as A warming it
+    ph = pairs[(0, 1)]["city"]["phrase"]
+    assert cmp_["items"][0]["city"]["estimate"] < 0 and cmp_["items"][1]["city"]["estimate"] < 0
+    assert ph.startswith(f"{cmp_['items'][0]['label']} cools the city ") and " than " in ph
+    assert "warms" not in ph.lower() and "Confident it" not in ph
     assert cmp_["needs_exact"] == []
     lay = client.get(f"/api/runs/{rid}/layers/{pairs[(0, 1)]['layer_key']}.bin")
     assert lay.status_code == 200
