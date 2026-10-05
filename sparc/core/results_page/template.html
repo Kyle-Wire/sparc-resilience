@@ -725,6 +725,27 @@ canvas.addEventListener("pointerdown", (ev) => { if (!cur || cur.key !== "__desi
 canvas.addEventListener("pointermove", (ev) => { if (!painting) return; paintAt(ev); const t = performance.now(); if (t - lastPaint > 150) { lastPaint = t; render(); } });
 const endPaint = () => { if (!painting) return; painting = false; render(); };
 canvas.addEventListener("pointerup", endPaint); canvas.addEventListener("pointercancel", endPaint);
+/* NWS heat index (as sparc.core.heat): residents a design moves across the Extreme caution (90 °F) and Danger (103 °F) edges */
+function heatIndexF(t, r) {
+  const simple = 0.5 * (t + 61 + (t - 68) * 1.2 + r * 0.094);
+  if ((simple + t) / 2 < 80) return simple;
+  let hi = -42.379 + 2.04901523 * t + 10.14333127 * r - 0.22475541 * t * r - 6.83783e-3 * t * t - 5.481717e-2 * r * r + 1.22874e-3 * t * t * r + 8.5282e-4 * t * r * r - 1.99e-6 * t * t * r * r;
+  if (r < 13 && t >= 80 && t <= 112) hi -= ((13 - r) / 4) * Math.sqrt(Math.max(0, (17 - Math.abs(t - 95)) / 17));
+  else if (r > 85 && t >= 80 && t <= 87) hi += ((r - 85) / 10) * ((87 - t) / 5);
+  return hi;
+}
+function hiAt(temp, td) {
+  const f = DATA.units === "degF" || /F/.test(U) ? temp : temp * 9 / 5 + 32, c = (f - 32) * 5 / 9;
+  const es = (x) => 6.112 * Math.exp(17.62 * x / (243.12 + x));
+  return heatIndexF(f, Math.min(100, Math.max(0, 100 * es(td) / es(c))));
+}
+function designHeat(d, P) {
+  const H = DATA.heat, obs = layer("obs"); if (!H || H.dewpoint_C == null || !obs) return null;
+  const td = H.dewpoint_C; let ecB = 0, ecA = 0, w = 0, sB = 0, sA = 0;
+  for (let i = 0; i < N; i++) { const t = obs[i]; if (!isFinite(t)) continue; const p = P ? (isFinite(P[i]) ? P[i] : 0) : 1; if (p <= 0) continue;
+    const b = hiAt(t, td), a = d[i] ? hiAt(t + d[i], td) : b; if (b >= 90) ecB += p; if (a >= 90) ecA += p; w += p; sB += p * b; sA += p * a; }
+  return { ecB, ecA, dHi: w ? (sA - sB) / w : 0 };
+}
 function designStats(row) {
   const d = designDelta(); let nEd = 0, sIn = 0, nCool = 0, sAll = 0, people = 0; const P = layer("people"); const edited = new Uint8Array(N);
   for (const a of Object.values(PLAN)) for (let i = 0; i < N; i++) if (a[i] !== 0) edited[i] = 1;
@@ -735,6 +756,13 @@ function designStats(row) {
   row(`Total (all cells)`, `${sfmt(sAll, 1)} ${U}·cells`);
   row(`Cells cooled ≥ 0.1 ${U}`, nCool.toLocaleString());
   if (P) row("Residents in those cells", Math.round(people).toLocaleString());
+  const hs = designHeat(d, P);
+  if (hs) {
+    const who = P ? "Residents" : "Cells", moved = hs.ecB - hs.ecA;
+    row(`${who} at NWS Extreme caution or worse`, `${Math.round(hs.ecB).toLocaleString()} → ${Math.round(hs.ecA).toLocaleString()}` +
+      (Math.round(moved) > 0 ? ` (${Math.round(moved).toLocaleString()} moved out)` : Math.round(moved) < 0 ? ` (${Math.round(-moved).toLocaleString()} more)` : ""));
+    row("Heat index felt", `${sfmt(hs.dHi, 2)} °F (campaign afternoon, dewpoint ${fmt(DATA.heat.dewpoint_C, 1)} °C)`);
+  }
   const v = curLever(); const val = v && DS.levers[v] ? DS.levers[v].val : null;
   if (val) row("Emulator check", `patch means within ${fmt(val.patch_abs, 3)} ${U} (median, ${fmt(100 * val.patch_rel, 0)}%) of the full model`);
   if (nEd > 3000) row("Note", "Large edits: saturation is not emulated — use Scenarios for city-wide changes");
