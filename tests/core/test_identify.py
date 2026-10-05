@@ -260,7 +260,7 @@ def _points_csv(cfg, lay, cells, start, temp=88.0, car=1):
 def test_scan_reads_an_osf_style_folder_and_reports_every_file(providence, tmp_path):
     import zipfile
 
-    import geopandas as gpd
+    gpd = pytest.importorskip("geopandas")
     from shapely.geometry import Point, Polygon
 
     from sparc.core.identify.traverses import inspect_markdown, scan_traverses
@@ -378,3 +378,34 @@ def test_utc_timestamps_are_moved_to_local_time(tmp_path):
     loc, _ = scan_traverses(tmp_path, utc_to="America/New_York")
     assert raw["window"].iloc[0] == "morning" and raw["time"].iloc[0].hour == 10
     assert loc["time"].iloc[0].hour == 6 and loc["run"].iloc[0] == "2020-07-29 morning"
+
+
+def test_capa_heat_watch_tables_use_the_local_clock_and_the_sensor(tmp_path):
+    """The CAPA traverse layers (am/af/pm/mi_trav): local time in dttm_lc next to the GPS clock in UTC
+    (dttm_tc, date "290720" + time "100001"), t_f/t_c, one logger file per sensor, positions in the .shp."""
+    gpd = pytest.importorskip("geopandas")
+    from shapely.geometry import Point
+
+    from sparc.core.identify.traverses import scan_traverses
+
+    n = 12
+    utc = pd.date_range("2020-07-29 10:00:00", periods=n, freq="1s")
+    loc = utc - pd.Timedelta(hours=4)
+    df = pd.DataFrame({"hasFix": 1, "date": "290720", "time": utc.strftime("%H%M%S"), "spdKmhr": 30.0,
+                       "t_c": 21.8, "t_f": 71.24, "rh": 68.4,
+                       "file": ["CAPA1061_290720_095119.093_0.csv"] * 6 + ["CAPA1079_290720_095024_0.csv"] * 6,
+                       "dttm_tc": utc.strftime("%Y-%m-%d %H:%M:%S"), "dttm_lc": loc.strftime("%Y-%m-%d %H:%M:%S"),
+                       "tz": "America/New_York", "trav_id": "am"})
+    gdf = gpd.GeoDataFrame(df, geometry=[Point(-71.41 + 1e-4 * i, 41.82) for i in range(n)], crs="EPSG:4326")
+    gdf.to_file(tmp_path / "am_trav.shp")
+    pts, report = scan_traverses(tmp_path)
+    assert [r["status"] for r in report] == ["read"]
+    assert pts["time"].iloc[0] == pd.Timestamp("2020-07-29 06:00:00") and set(pts["window"]) == {"morning"}
+    assert sorted(pts["vehicle_key"].str.split(":").str[-1].unique()) == ["CAPA1061", "CAPA1079"]
+    assert pts["temp_f"].iloc[0] == pytest.approx(71.24)
+    # the attribute table alone (no .shp next to it) is reported, not silently dropped
+    lone = tmp_path / "only_dbf"
+    lone.mkdir()
+    (tmp_path / "am_trav.dbf").rename(lone / "am_trav.dbf")
+    pts2, report2 = scan_traverses(lone)
+    assert len(pts2) == 0 and report2[0]["status"] == "skipped" and ".shp" in report2[0]["reason"]

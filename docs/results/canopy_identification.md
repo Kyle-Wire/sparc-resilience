@@ -250,10 +250,19 @@ What the estimate reports:
 - **The kilometre scale**: the wind-shift test across runs, with each run's wind and the rotation
   p-value.
 
+The Providence download holds four runs as shapefiles: `am_trav` (06–07 EDT), `af_trav` (15–16),
+`pm_trav` (19–20) and `mi_trav` (00–01 the next night). Each run has six sensors (CAPA1061 … CAPA1085)
+and about 15,000 one-second readings. A shapefile is several files with the same name: `.shp` (the
+positions), `.dbf` (the readings), `.shx` and `.prj`. Keep them together; a `.dbf` on its own has no
+positions and is reported as such.
+
 Reading the files:
 
 - CSV, GeoJSON, GeoPackage, shapefile and zip archives are accepted, nested zips included. Every
   file is either read or listed as skipped with the reason.
+- CAPA tables carry the local clock (`dttm_lc`) next to the GPS clock in UTC (`dttm_tc`, and `date` +
+  `time` such as `290720` / `100001`). The local clock is used.
+- The sensor named in `file` (e.g. `CAPA1061_290720_095119.093_0.csv`) is the vehicle.
 - Columns are detected by name:
   - time: `datetime`, `timestamp`, `date` + `time`, ...;
   - position: `lat`/`lon`, or the geometry of a point layer in any coordinate system, reprojected;

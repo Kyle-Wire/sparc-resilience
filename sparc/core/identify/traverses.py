@@ -47,6 +47,10 @@ VECTORS = (".geojson", ".json", ".shp", ".gpkg", ".kml")
 _TEMP_F = re.compile(r"^(t|temp|temperature|air_?temp|air_?temperature|ta)_?(deg_?)?(f|fahrenheit|degf)$")
 _TEMP_C = re.compile(r"^(t|temp|temperature|air_?temp|air_?temperature|ta)_?(deg_?)?(c|celsius|degc)$")
 _COORD_NAMES = {"lat", "latitude", "y", "lon", "long", "longitude", "lng", "x"}
+# CAPA Heat Watch tables carry the local clock (dttm_lc) next to the GPS clock in UTC (dttm_tc, and date
+# "290720" + time "100001"); the local one is the reading's time
+_LOCAL_TIME = ("dttm_lc", "datetime_lc", "datetime_local", "local_datetime", "dttm_local", "date_time_local")
+_UTC_TIME = ("dttm_tc", "datetime_utc", "utc_datetime", "dttm_utc")
 
 
 # --------------------------------------------------------------------------- #
@@ -74,8 +78,29 @@ def _standardise(df: pd.DataFrame) -> pd.DataFrame:
             ren[c] = "temp_f"
         elif _TEMP_C.match(n) and "temp_c" not in ren.values():
             ren[c] = "temp_c"
+    norm = {_norm(c): c for c in df.columns}
+    local = next((norm[n] for n in _LOCAL_TIME if n in norm), None)
+    if local is not None:
+        ren[local] = "datetime"
+        for n in ("datetime", "date_time", "timestamp", "time_stamp", "time", "date"):
+            if n in norm and norm[n] != local:
+                ren[norm[n]] = f"gps_{n}"                 # the UTC GPS clock: kept, not used as the time
+    elif not any(n in norm for n in ("datetime", "date_time", "timestamp", "time_stamp", "local_time", "time_local")):
+        utc = next((norm[n] for n in _UTC_TIME if n in norm), None)
+        if utc is not None:
+            ren[utc] = "datetime"
+    if "file" in norm and not any(n in norm for n in ID_COLUMNS):
+        # one logger file per sensor and run: the sensor id (e.g. CAPA1061) is the vehicle
+        sensor = df[norm["file"]].astype(str).str.extract(r"^([A-Za-z]+\d+)", expand=False)
+        df = df.assign(sensor=sensor.fillna(df[norm["file"]].astype(str)))
     out = df.rename(columns=ren)
     geom = getattr(out, "geometry", None) if "geometry" in out.columns else None
+    if geom is not None and len(geom) and geom.isna().all():
+        geom = None
+        out = pd.DataFrame(out.drop(columns="geometry"))
+    if geom is None and not any(_norm(c) in _COORD_NAMES for c in out.columns):
+        raise ValueError("no positions (lat/lon or a point geometry); a .dbf is only a shapefile's attribute "
+                         "table: the .shp, .shx and .prj with the same name hold the positions")
     if geom is not None:
         if not len(geom) or not (geom.geom_type == "Point").mean() > 0.9:
             raise ValueError("not a point layer")
@@ -108,8 +133,13 @@ def _read_any(f: Path) -> pd.DataFrame:
     if low.endswith(TABLES):
         sep = "\t" if low.endswith(".tsv") else None
         return pd.read_csv(f, sep=sep, engine="python" if sep is None else "c")
-    import geopandas as gpd
+    try:
+        import geopandas as gpd
+    except ImportError as exc:  # pragma: no cover - geopandas is a dependency of the full install
+        raise ValueError("reading shapefiles, GeoJSON and GeoPackage needs geopandas (pip install geopandas)") from exc
 
+    if low.endswith(".dbf"):
+        return pd.DataFrame(gpd.read_file(f, ignore_geometry=True))
     return gpd.read_file(f)
 
 
@@ -149,7 +179,8 @@ def scan_traverses(path: str | Path, timezone: str | None = None, utc_to: str | 
             if err:
                 report.append({"file": name, "status": "skipped", "reason": err})
                 continue
-            if not low.endswith(TABLES + VECTORS):
+            lone_dbf = low.endswith(".dbf") and not f.with_suffix(".shp").exists() and not f.with_suffix(".SHP").exists()
+            if not low.endswith(TABLES + VECTORS) and not lone_dbf:
                 if not low.endswith((".dbf", ".shx", ".prj", ".cpg", ".sbn", ".sbx", ".xml", ".qmd", ".qix")):
                     report.append({"file": name, "status": "skipped", "reason": f"not a table or vector layer ({f.suffix or 'no extension'})"})
                 continue
