@@ -310,6 +310,26 @@ def _brief_html(*, title: str, place: str, paragraph: str, res: dict, impacts: d
                            for o in impacts.get("climate_offset") or [] if o.get("offset_share") is not None)
         if off_rows:
             off_html = f"<h2>Climate offset</h2><table><tr><th>future</th><th>share of median warming cancelled</th></tr>{off_rows}</table>"
+        heat = impacts.get("heat") or {}
+        if heat.get("rows"):
+            hum = {"observed": "campaign humidity", "constant_dewpoint": "constant dewpoint (lower)",
+                   "constant_rh": "constant relative humidity (upper)"}
+            who = "residents" if heat.get("measure") == "people" else "cells"
+            h_rows = "".join(
+                f"<tr><td>{_esc('Campaign afternoon' if r['case'] == 'today' else r['case'])}</td>"
+                f"<td>{_esc(hum.get(r['humidity'], r['humidity']))}</td>"
+                f"<td>{_fmt(r['before']['ec_or_worse'], 0)} → {_fmt(r['after']['ec_or_worse'], 0)}</td>"
+                f"<td>{_fmt(r['before']['danger_or_worse'], 0)} → {_fmt(r['after']['danger_or_worse'], 0)}</td>"
+                f"<td>{_fmt(r['mean_hi_change'], 2, True)}</td></tr>" for r in heat["rows"])
+            heat_html = (f"<h2>Heat risk (NWS heat index)</h2><p>{_esc(heat.get('headline') or '')}</p>"
+                         f"<table><tr><th>case</th><th>humidity</th><th>{who} at Extreme caution or worse "
+                         f"(before → after)</th><th>{who} at Danger or worse (before → after)</th>"
+                         f"<th>change in heat index felt (°F)</th></tr>{h_rows}</table>"
+                         f"<p>Heat index from each cell's temperature and the campaign dewpoint "
+                         f"({_fmt(heat.get('dewpoint_C'), 1)} °C, {_esc(heat.get('source') or '')}); Extreme caution is "
+                         f"a heat index of 90 °F or more (heat cramps and exhaustion possible), Danger 103 °F or more. "
+                         f"Futures add the CMIP6 median warming under two humidity assumptions.</p>")
+            off_html += heat_html
     cc = res.get("causal_check")
     cc_html = ""
     if cc:

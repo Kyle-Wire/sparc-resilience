@@ -226,3 +226,39 @@ describe("Result inspector cost", () => {
     expect(text).not.toContain("of cooling per");
   });
 });
+
+describe("Result inspector heat risk", () => {
+  it("leads the impacts with the design's NWS heat-risk change, before → after per case", async () => {
+    const c = (ec: number, dg: number, hi: number) => ({ counts: {}, ec_or_worse: ec, danger_or_worse: dg, mean_hi: hi, max_hi: hi + 5 });
+    const impacts = {
+      thresholds: [90],
+      exposure: [],
+      equity: {},
+      hot_days: null,
+      hot_days_action: null,
+      zones: [],
+      hexes: { "250": [], "500": [] },
+      climate_offset: [],
+      heat: {
+        dewpoint_C: 16.7,
+        source: "measured at the airport",
+        measure: "people" as const,
+        method: "NWS",
+        headline: "On the campaign afternoon this design moves 33k residents out of Extreme caution or worse (37k → 3.7k).",
+        rows: [
+          { case: "today", humidity: "observed" as const, warming_F: 0, before: c(36669, 0, 89), after: c(3728, 0, 87.2), ec_avoided: 32941, danger_avoided: 0, mean_hi_change: -1.83 },
+          { case: "SSP2-4.5 2041-2060", humidity: "constant_rh" as const, warming_F: 3, before: c(173000, 900, 93), after: c(150000, 0, 91), ec_avoided: 23000, danger_avoided: 900, mean_hi_change: -2.1 },
+        ],
+      },
+    };
+    fetchMock = mockFetch({ "GET /api/results/res_h": { body: result("res_h", { impacts }) } });
+    const { container } = render(<ResultInspector rid={RID} resId="res_h" pid={PID} unit="degF" nFolds={3} />);
+    await waitFor(() => container.querySelector('[aria-label="Heat risk"]'), 5000, "heat risk");
+    const text = container.querySelector('[aria-label="Heat risk"]')!.textContent ?? "";
+    expect(text).toContain("moves 33k residents out of Extreme caution or worse");
+    expect(text).toContain("36,669 → 3,728");
+    expect(text).toContain("Campaign afternoon");
+    expect(text).toContain("constant RH");
+    expect(text).toContain("16.7 °C");
+  });
+});

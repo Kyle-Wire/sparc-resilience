@@ -22,8 +22,8 @@ log = logging.getLogger("sparc.studio.exports")
 
 __all__ = ["BundleParams", "GisParams", "PageParams", "ReportParams", "FindingsParams", "export_on_finish"]
 
-ReportSection = Literal["summary", "accuracy", "validation", "scenarios", "plans", "climate", "equity", "caveats",
-                        "limitations", "provenance", "findings"]
+ReportSection = Literal["summary", "accuracy", "validation", "scenarios", "plans", "climate", "heat", "equity",
+                        "caveats", "limitations", "provenance", "findings"]
 
 
 class BundleParams(BaseModel):

@@ -16916,6 +16916,18 @@
             },
             "type": "array",
             "title": "Climate Offset"
+          },
+          "heat": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heat"
           }
         },
         "additionalProperties": true,
@@ -27264,6 +27276,7 @@
                 "scenarios",
                 "plans",
                 "climate",
+                "heat",
                 "equity",
                 "caveats",
                 "limitations",

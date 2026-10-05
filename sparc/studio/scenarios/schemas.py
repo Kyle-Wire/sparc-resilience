@@ -395,6 +395,7 @@ class Impacts(BaseModel):
     zones: list[dict[str, Any]]
     hexes: dict[str, list[dict[str, Any]]]
     climate_offset: list[dict[str, Any]]
+    heat: dict[str, Any] | None = None
 
 
 class ResultScenarioRef(BaseModel):

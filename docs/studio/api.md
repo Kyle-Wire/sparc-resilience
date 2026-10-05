@@ -1052,7 +1052,14 @@ type Impacts = { thresholds: number[];
   equity: Record<string, { quintiles: { quintile: number; mean_cooling: number; people: number; value_range: [number, number] }[]; concentration_index: number }>;
   hot_days: { station: string; cases: object[] }|null; hot_days_action: Action|null;
   zones: object[]; hexes: { "250": object[]; "500": object[] };
-  climate_offset: { experiment: string; period: string; offset_share: number }[] };
+  climate_offset: { experiment: string; period: string; offset_share: number }[];
+  // NWS heat-index risk before/after (null without campaign humidity): residents (else cells) at Extreme caution or
+  // worse and at Danger or worse, today and per future × humidity assumption, with a plain headline
+  heat?: { dewpoint_C: number; source: string|null; measure: "people"|"cells"; headline: string; method: string;
+           rows: { case: string; humidity: "observed"|"constant_dewpoint"|"constant_rh"; warming_F: number;
+                   before: HeatCase; after: HeatCase; ec_avoided: number; danger_avoided: number;
+                   mean_hi_change: number }[] }|null };
+// HeatCase = { counts: Record<category, number>; ec_or_worse: number; danger_or_worse: number; mean_hi: number; max_hi: number }
 ```
 
 **`GET /api/results/{res_id}/layers/{field}.bin`**
@@ -1305,7 +1312,7 @@ type Export = { id: string; project_id: string; run_id: string|null; kind: strin
 **`DELETE /api/exports/{eid}`** → `200 {ok: true}` (the row and its folder). Errors: `409 active` while its job runs.
 
 **`POST /api/projects/{pid}/report/preview`**
-Body: `{run_id, sections: ("summary"|"accuracy"|"validation"|"scenarios"|"plans"|"climate"|"equity"|"caveats"|"limitations"|"provenance"|"findings")[] /* ≥ 1 */, result_ids?, plan_ids?, finding_ids?}` → `200 {html: string}`. Every number in the text is written from the run's files and the picked results; images are data-URI `<img>` elements (at most six maps of about 360 px), and SVG is never inlined. Errors: `422 validation` for a run of another project (`mismatch`) or ids outside the project (`unknown_id`), as `POST /api/exports` does for `export.report`; `503 not_ready` while the runs registry starts.
+Body: `{run_id, sections: ("summary"|"accuracy"|"validation"|"scenarios"|"plans"|"climate"|"heat"|"equity"|"caveats"|"limitations"|"provenance"|"findings")[] /* ≥ 1 */, result_ids?, plan_ids?, finding_ids?}` → `200 {html: string}`. Every number in the text is written from the run's files and the picked results; images are data-URI `<img>` elements (at most six maps of about 360 px), and SVG is never inlined. Errors: `422 validation` for a run of another project (`mismatch`) or ids outside the project (`unknown_id`), as `POST /api/exports` does for `export.report`; `503 not_ready` while the runs registry starts.
 
 ---
 

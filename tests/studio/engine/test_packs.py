@@ -285,3 +285,24 @@ def test_pack_provenance_names_the_code_commit_of_runs_with_a_null_git_commit():
     assert _provenance(ctx, {})["git commit"] == full
     ctx.manifest_raw = {"git_commit": "07a4e7d"}                          # older manifests: the short hash
     assert _provenance(ctx, {})["git commit"] == "07a4e7d"
+
+
+def test_brief_reports_heat_risk_with_campaign_humidity(run_ctx, monkeypatch):
+    """With a campaign dewpoint the decision brief carries the NWS heat-risk section: residents at Extreme caution
+    or worse before → after; a cooling design "moves … out of", a warming one "puts … more"."""
+    from sparc.studio.runs import heat as hv
+    from sparc.studio.scenarios import packs
+    from sparc.studio.scenarios.impacts import compute_impacts
+
+    monkeypatch.setattr(hv, "campaign_humidity", lambda _ctx: (21.0, "test station"))
+    det = run_ctx.scenario_detail()
+    cool = np.asarray(det["folds"]["Canopy Increase +10"], dtype=np.float64).mean(axis=0) * 5.0
+    for delta, word in ((cool, "out of Extreme caution"), (-cool, "more ")):
+        imp = compute_impacts(run_ctx, delta, futures=[])
+        heat = imp["heat"]
+        assert heat["rows"][0]["case"] == "today"
+        brief = packs._brief_html(title="t", place="p", paragraph="", res={}, impacts=imp, maps={}, caveats=[],
+                                  limitations=[], provenance={}, unit="°F", draft=False)
+        assert "<h2>Heat risk (NWS heat index)</h2>" in brief and "21.0 °C" in brief
+        if abs(heat["rows"][0]["ec_avoided"]) >= 0.5:
+            assert word in heat["headline"]

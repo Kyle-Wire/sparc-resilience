@@ -45,6 +45,61 @@ export function uncertaintyLayers(u: NonNullable<Result["uncertainty"]>): Interv
   return out;
 }
 
+const HUMIDITY_LABEL: Record<string, string> = { observed: "campaign", constant_dewpoint: "constant dewpoint", constant_rh: "constant RH" };
+
+/** Heat risk of the design (NWS heat index): residents at Extreme caution or worse and at Danger or worse,
+ *  before → after, on the campaign afternoon and in each future under both humidity assumptions. */
+function HeatRisk({ heat }: { heat: NonNullable<Impacts["heat"]> }) {
+  const today = heat.rows[0];
+  const who = heat.measure === "people" ? "Residents" : "Cells";
+  const n = (v: number) => fmtInt(Math.round(v));
+  return (
+    <section className="card stack" aria-label="Heat risk" style={{ gap: 8 }}>
+      <h4 style={{ margin: 0 }}>Heat risk (NWS heat index)</h4>
+      <p style={{ margin: 0, fontWeight: 600 }}>
+        {heat.headline}
+      </p>
+      {today ? (
+        <KpiRow label="Heat risk key numbers">
+          <Kpi label={`${who} at Extreme caution or worse`} value={`${n(today.before.ec_or_worse)} → ${n(today.after.ec_or_worse)}`} tone={today.ec_avoided > 0 ? "good" : today.ec_avoided < 0 ? "crit" : undefined} />
+          <Kpi label={`${who} at Danger or worse`} value={`${n(today.before.danger_or_worse)} → ${n(today.after.danger_or_worse)}`} />
+          <Kpi label="Heat index felt" value={fmtSigned(today.mean_hi_change, 2)} unit="°F" tone={today.mean_hi_change < 0 ? "good" : today.mean_hi_change > 0 ? "crit" : undefined} />
+        </KpiRow>
+      ) : null}
+      <Table
+        caption={`${who} by NWS heat-risk category, before → after the design`}
+        csvName="heat-risk"
+        rowKey={(r, i) => `${r.case}-${r.humidity}-${i}`}
+        columns={[
+          { key: "case", label: "Case", value: (r) => (r.case === "today" ? "Campaign afternoon" : r.case) },
+          { key: "hum", label: "Humidity", value: (r) => HUMIDITY_LABEL[r.humidity] ?? r.humidity },
+          {
+            key: "ec",
+            label: "Extreme caution or worse",
+            align: "right",
+            value: (r) => r.after.ec_or_worse,
+            render: (r) => `${n(r.before.ec_or_worse)} → ${n(r.after.ec_or_worse)}`,
+          },
+          { key: "eca", label: "Moved out", align: "right", value: (r) => r.ec_avoided, render: (r) => n(r.ec_avoided) },
+          {
+            key: "dg",
+            label: "Danger or worse",
+            align: "right",
+            value: (r) => r.after.danger_or_worse,
+            render: (r) => `${n(r.before.danger_or_worse)} → ${n(r.after.danger_or_worse)}`,
+          },
+          { key: "dhi", label: "Heat index felt", unit: "°F", align: "right", value: (r) => r.mean_hi_change, render: (r) => fmtSigned(r.mean_hi_change, 2) },
+        ]}
+        rows={heat.rows}
+      />
+      <p className="cap">
+        Dewpoint {fmtNum(heat.dewpoint_C, 1)} °C ({heat.source ?? "campaign"}). Extreme caution is a heat index of 90 °F or more (heat cramps and exhaustion possible); Danger 103 °F or
+        more. Futures add each pathway&apos;s median warming under constant dewpoint (lower) and constant relative humidity (upper).
+      </p>
+    </section>
+  );
+}
+
 function ImpactsBlock({ resId, impacts, unit, onImpacts }: { resId: string; impacts: Impacts | null; unit: string; onImpacts: (i: Impacts) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | Error | null>(null);
@@ -77,6 +132,7 @@ function ImpactsBlock({ resId, impacts, unit, onImpacts }: { resId: string; impa
   return (
     <section className="stack" aria-label="Impacts">
       <h3>Impacts</h3>
+      {impacts.heat ? <HeatRisk heat={impacts.heat} /> : null}
       <Table
         caption="Residents at or above each threshold, without and with the scenario"
         csvName="exposure"

@@ -30,6 +30,12 @@ def test_heat_without_campaign_humidity_asks_for_a_dewpoint(client, fixture_run)
     assert s["today"] is None and s["brief"] is None
     tabs = {t["id"]: t["availability"] for t in client.get(f"/api/runs/{rid}/outputs").json()["tabs"]}
     assert tabs["heat"] == "ready"
+    from sparc.studio.exports.report import report_blocks
+    from sparc.studio.routes.runs import run_context
+
+    text = json.dumps(report_blocks(run_context(client.app.state.studio, rid), client.app.state.studio.db, ["heat"],
+                                    project={}, maps=False))
+    assert "needs the campaign's humidity" in text
     # no campaign humidity: no heat layers
     keys = {m["key"] for g in client.get(f"/api/runs/{rid}/layers").json()["groups"] for m in g["layers"]}
     assert "heat_index" not in keys
@@ -157,6 +163,57 @@ def test_providence_heat(client, ctx, providence_runs, tmp_path, monkeypatch):
     assert canopy and all(v["verdict"] == "not_established" for v in canopy)
     keys = {m["key"] for g in client.get(f"/api/runs/{rid}/layers").json()["groups"] for m in g["layers"]}
     assert {"heat_index", "heat_cat", "heat_index_pkg", "heat_cat_pkg"} <= keys
+    from sparc.studio.exports.report import report_blocks
+    from sparc.studio.routes.runs import run_context
+
+    blocks = report_blocks(run_context(client.app.state.studio, rid), client.app.state.studio.db, ["heat"],
+                           project={}, maps=False)
+    text = json.dumps(blocks)
+    assert "Heat stress" in text and "Extreme caution or worse" in text and "Robust" in text
     hi = f32(client.get(f"/api/runs/{rid}/layers/heat_index.bin").content)
     assert hi.size == len(pd.read_parquet(light / "predictions.parquet"))
     assert 80 < float(np.nanmedian(hi)) < 110
+
+
+def test_design_heat_counts_residents_moved_out_of_dangerous_heat(monkeypatch):
+    """Lab impacts: a design's per-cell change before/after, today and per future and humidity assumption."""
+    from types import SimpleNamespace
+
+    from sparc.studio.runs import heat as hv
+
+    temps = np.linspace(86.0, 96.0, 200)                    # °F, around the Extreme caution edge
+    people = np.full(200, 10.0)
+    delta = np.full(200, -1.5)
+    ctx = SimpleNamespace(target_units="degF")
+    monkeypatch.setattr(hv, "campaign_humidity", lambda _ctx: (16.7, "measured at the airport"))
+    out = hv.design_heat(ctx, temps, people, delta, {"SSP2-4.5 2041-2060": 3.0})
+    assert out["measure"] == "people" and out["dewpoint_C"] == 16.7
+    assert [(r["case"], r["humidity"]) for r in out["rows"]] == [
+        ("today", "observed"), ("SSP2-4.5 2041-2060", "constant_dewpoint"), ("SSP2-4.5 2041-2060", "constant_rh")]
+    today = out["rows"][0]
+    hi_b = heatmod.heat_index_today(temps, "degF", 16.7)
+    hi_a = heatmod.heat_index_today(temps + delta, "degF", 16.7)
+    assert today["before"]["ec_or_worse"] == pytest.approx(10.0 * np.sum(hi_b >= 90))
+    assert today["after"]["ec_or_worse"] == pytest.approx(10.0 * np.sum(hi_a >= 90))
+    assert today["ec_avoided"] > 0 and today["mean_hi_change"] < 0
+    assert "moves" in out["headline"] and "out of Extreme caution or worse" in out["headline"]
+    fut = out["rows"][2]
+    assert fut["warming_F"] == pytest.approx(3.0) and fut["before"]["mean_hi"] > today["before"]["mean_hi"]
+    monkeypatch.setattr(hv, "campaign_humidity", lambda _ctx: (None, None))
+    assert hv.design_heat(ctx, temps, people, delta, {}) is None
+
+
+def test_lab_impacts_carry_heat_risk_when_the_run_has_campaign_humidity(client, demo, place_run, monkeypatch):
+    """compute_impacts adds the heat section (null without campaign humidity, never failing the impacts)."""
+    from sparc.studio.routes.runs import run_context
+    from sparc.studio.runs import heat as hv
+    from sparc.studio.scenarios.impacts import compute_impacts
+
+    rid = place_run(demo, "20260101-000000-impc-0001").name
+    ctx = run_context(client.app.state.studio, rid)
+    delta = np.full(ctx.n, -1.0)
+    plain = compute_impacts(ctx, delta, futures=[])
+    assert plain["heat"] is None and plain["exposure"]
+    monkeypatch.setattr(hv, "campaign_humidity", lambda _ctx: (20.0, "test"))
+    out = compute_impacts(ctx, delta, futures=[])
+    assert out["heat"]["rows"][0]["case"] == "today" and out["heat"]["rows"][0]["ec_avoided"] >= 0

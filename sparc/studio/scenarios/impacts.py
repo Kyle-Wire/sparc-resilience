@@ -9,7 +9,10 @@
   the series is not cached, ``hot_days`` is null and ``hot_days_action`` fetches it (an ``input.ghcn`` job) -
   nothing is downloaded inside a request;
 * **zones** and **hexes** (250 m and 500 m) - cooling, residents and temperature per zone / hexagon;
-* **climate offset** - the share of each future's median warming the city-mean cooling cancels.
+* **climate offset** - the share of each future's median warming the city-mean cooling cancels;
+* **heat** - NWS heat-index risk with the campaign dewpoint: residents at Extreme caution or worse and at Danger
+  or worse before and after the design, today and in each future under both humidity assumptions (null without
+  campaign humidity; :func:`sparc.studio.runs.heat.design_heat`).
 
 Results are cached in ``results/<res_id>/impacts_<hash>.json`` keyed by the parameters (the defaults also as
 ``impacts_default.json``, which ``GET /api/results/{id}`` includes).
@@ -33,8 +36,12 @@ __all__ = ["compute_impacts", "impacts_for_result", "default_futures", "hot_days
 FUTURES = (("ssp245", "2041-2060"), ("ssp245", "2081-2100"), ("ssp585", "2041-2060"), ("ssp585", "2081-2100"))
 
 
+#: bumped when the impacts gain a section, so results cached before it are recomputed (2: heat risk)
+IMPACTS_VERSION = 2
+
+
 def params_hash(thresholds, futures) -> str:
-    text = json.dumps({"thresholds": thresholds, "futures": futures}, sort_keys=True)
+    text = json.dumps({"thresholds": thresholds, "futures": futures, "v": IMPACTS_VERSION}, sort_keys=True)
     return hashlib.sha1(text.encode()).hexdigest()[:12]
 
 
@@ -159,8 +166,16 @@ def compute_impacts(ctx, delta, *, thresholds=None, futures=None, cache_dir=None
         hexes[str(size)] = h.to_dict(orient="records")
     offset = [{"experiment": e, "period": p, "label": lab,
                "offset_share": (-float(np.mean(delta)) / w) if w > 0 else None} for e, p, lab, w in warming]
+    heat = None
+    try:
+        from sparc.studio.runs.heat import design_heat
+
+        heat = design_heat(ctx, obs, people, delta, {lab: w for _e, _p, lab, w in warming})
+    except Exception as exc:                       # the rest of the impacts stand without it
+        log.warning("heat risk skipped: %s", exc)
     return clean({"thresholds": thr, "exposure": exposure, "equity": equity, "hot_days": hd,
-                  "hot_days_action": hd_action, "zones": zones, "hexes": hexes, "climate_offset": offset})
+                  "hot_days_action": hd_action, "zones": zones, "hexes": hexes, "climate_offset": offset,
+                  "heat": heat})
 
 
 def impacts_for_result(ctx, row: dict, *, thresholds=None, futures=None, cache_dir=None) -> dict:

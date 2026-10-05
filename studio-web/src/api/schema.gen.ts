@@ -4577,6 +4577,10 @@ export interface components {
             exposure: {
                 [key: string]: unknown;
             }[];
+            /** Heat */
+            heat?: {
+                [key: string]: unknown;
+            } | null;
             /** Hexes */
             hexes: {
                 [key: string]: {
@@ -7029,7 +7033,7 @@ export interface components {
             /** Run Id */
             run_id: string;
             /** Sections */
-            sections: ("summary" | "accuracy" | "validation" | "scenarios" | "plans" | "climate" | "equity" | "caveats" | "limitations" | "provenance" | "findings")[];
+            sections: ("summary" | "accuracy" | "validation" | "scenarios" | "plans" | "climate" | "heat" | "equity" | "caveats" | "limitations" | "provenance" | "findings")[];
         };
         /** LinkRequest */
         sparc__studio__routes__studies__LinkRequest: {

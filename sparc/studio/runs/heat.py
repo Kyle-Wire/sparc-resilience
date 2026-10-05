@@ -21,7 +21,7 @@ from sparc.core import heat as heatmod
 from sparc.studio.runs.common import fnum
 
 __all__ = ["heat_view", "verdict_map", "campaign_humidity", "heat_layers_available", "today_heat_index",
-           "adapted_heat_index", "package_name", "headline_future", "DEWPOINT_PRESETS", "HEAT_KEYS"]
+           "adapted_heat_index", "package_name", "headline_future", "design_heat", "DEWPOINT_PRESETS", "HEAT_KEYS"]
 
 HEAT_KEYS = ("brief", "humidity", "categories", "kpis", "today", "futures", "hist", "verdicts")
 #: dewpoints a user can try when the campaign's humidity is unknown (or to ask "what if more humid")
@@ -342,6 +342,54 @@ def headline_future(futures: list[dict]) -> dict | None:
 
 def _pkg_phrase(pkg: str) -> str:
     return pkg if pkg.lower().rstrip().endswith("package") else f"{pkg} package"
+
+
+def design_heat(ctx, temps, people, delta, futures: dict[str, float]) -> dict | None:
+    """Heat risk of a per-cell change ``delta`` (a Lab design), before and after, on the campaign afternoon and in
+    each future (``{label: median warming in target units}``); None without campaign humidity.
+
+    ``rows``: one per case and humidity assumption, with the residents (``measure``) at Extreme caution or worse
+    and at Danger or worse before and after, and the number moved out of each."""
+    td, src = campaign_humidity(ctx)
+    if td is None:
+        return None
+    temps = np.asarray(temps, dtype=float)
+    by_people = people is not None
+    risk = heatmod.heat_risk(temps, ctx.target_units, td, people=people, futures=futures,
+                             adaptation=np.asarray(delta, dtype=float))
+    cases = risk["cases"]
+
+    def pick(label, adapted, hum):
+        return next(c for c in cases if c["case"] == label and c["adapted"] == adapted and c["humidity"] == hum)
+
+    rows = []
+    for label in ["today", *futures]:
+        for hum in (("observed",) if label == "today" else heatmod.HUMIDITY_ASSUMPTIONS):
+            b, a = _case_row(pick(label, False, hum), by_people), _case_row(pick(label, True, hum), by_people)
+            rows.append({"case": label, "humidity": hum,
+                         "warming_F": 0.0 if label == "today" else float(heatmod.delta_to_f(futures[label],
+                                                                                            ctx.target_units)),
+                         "before": b, "after": a, "ec_avoided": b["ec_or_worse"] - a["ec_or_worse"],
+                         "danger_avoided": b["danger_or_worse"] - a["danger_or_worse"],
+                         "mean_hi_change": a["mean_hi"] - b["mean_hi"]})
+    today = rows[0]
+    n = today["ec_avoided"]
+    who = "residents" if by_people else "cells"
+    felt = "typical resident" if by_people else "average cell"
+    b_ec, a_ec = today["before"]["ec_or_worse"], today["after"]["ec_or_worse"]
+    num = lambda x: _fmt_n(abs(x), by_people).split(" ")[0]  # noqa: E731
+    dhi = today["mean_hi_change"]
+    if n >= 0.5:
+        headline = (f"On the campaign afternoon this design moves {num(n)} {who} out of Extreme caution or worse "
+                    f"({num(b_ec)} → {num(a_ec)}) and lowers the heat index the {felt} feels by {-dhi:.1f} °F.")
+    elif n <= -0.5:
+        headline = (f"On the campaign afternoon this design puts {num(n)} more {who} at Extreme caution or worse "
+                    f"({num(b_ec)} → {num(a_ec)}) and raises the heat index the {felt} feels by {dhi:.1f} °F.")
+    else:
+        headline = (f"On the campaign afternoon this design does not change how many {who} are at Extreme caution "
+                    f"or worse ({num(b_ec)}); the heat index the {felt} feels changes by {dhi:+.2f} °F.")
+    return {"dewpoint_C": td, "source": src, "measure": "people" if by_people else "cells", "headline": headline,
+            "rows": rows, "method": heatmod.SOURCE}
 
 
 def _kpis(today, today_pkg, futures, by_people, total, pkg) -> list[dict]:

@@ -523,6 +523,29 @@ export type Impacts = {
   zones: Record<string, unknown>[];
   hexes: { "250": Record<string, unknown>[]; "500": Record<string, unknown>[] };
   climate_offset: { experiment: string; period: string; offset_share: number }[];
+  /** NWS heat-index risk before and after the design (null without campaign humidity; absent from impacts
+   *  cached before it). */
+  heat?: DesignHeat | null;
+};
+
+export type DesignHeatCase = { counts: Record<string, number>; ec_or_worse: number; danger_or_worse: number; mean_hi: number; max_hi: number };
+
+export type DesignHeat = {
+  dewpoint_C: number;
+  source: string | null;
+  measure: "people" | "cells";
+  headline: string;
+  method: string;
+  rows: {
+    case: string;
+    humidity: "observed" | "constant_dewpoint" | "constant_rh";
+    warming_F: number;
+    before: DesignHeatCase;
+    after: DesignHeatCase;
+    ec_avoided: number;
+    danger_avoided: number;
+    mean_hi_change: number;
+  }[];
 };
 
 export type Result = {

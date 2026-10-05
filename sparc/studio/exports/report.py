@@ -29,10 +29,11 @@ from sparc.studio.workspace import read_json, utc_now
 __all__ = ["SECTIONS", "build_report", "render_html", "render_markdown", "png_bytes", "map_png", "bar_chart_svg",
            "md_to_html", "report_blocks"]
 
-SECTIONS = ("summary", "accuracy", "validation", "scenarios", "plans", "climate", "equity", "caveats", "limitations",
-            "provenance", "findings")
+SECTIONS = ("summary", "accuracy", "validation", "scenarios", "plans", "climate", "heat", "equity", "caveats",
+            "limitations", "provenance", "findings")
 _TITLES = {"summary": "Summary", "accuracy": "How accurate is the model?", "validation": "Validation",
-           "scenarios": "Scenarios", "plans": "Budget plans", "climate": "Climate futures", "equity": "Equity",
+           "scenarios": "Scenarios", "plans": "Budget plans", "climate": "Climate futures",
+           "heat": "Heat stress: who is exposed, what helps, how sure", "equity": "Equity",
            "caveats": "Read these before using the numbers", "limitations": "Limitations",
            "provenance": "Provenance", "findings": "Findings"}
 SEQ = ("#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b")
@@ -334,6 +335,50 @@ def _climate(env) -> list[dict]:
     return out
 
 
+def _heat(env) -> list[dict]:
+    """The Heat tab in prose and tables: NWS heat-index exposure today, with the package and in each future, and
+    each scenario's verdict."""
+    from sparc.studio.runs.heat import heat_view
+
+    v = heat_view(env.ctx)
+    h = v.get("humidity") or {}
+    if not v.get("today"):
+        return [_p("Heat stress needs the campaign's humidity (a forcing file with a station or ERA5 dewpoint); this "
+                   "run has none. The Heat tab can still show what-if dewpoints.")]
+    out = [_p(f"{b['title']}. {b['text']}") for b in v.get("brief") or []]
+    t = v["today"]
+    who = "Residents" if t["measure"] == "people" else "Cells"
+    n = lambda x: f"{x:,.0f}"  # noqa: E731
+    rows = [["Campaign afternoon", "—", n(t["unadapted"]["ec_or_worse"]), n(t["unadapted"]["danger_or_worse"]),
+             N.fmt(t["unadapted"]["mean_hi"], 1)]]
+    if t.get("adapted"):
+        rows.append([f"With {t.get('package') or 'the package'}", "—", n(t["adapted"]["ec_or_worse"]),
+                     n(t["adapted"]["danger_or_worse"]), N.fmt(t["adapted"]["mean_hi"], 1)])
+    for f in v.get("futures") or []:
+        u = f["unadapted"]
+        ec, dg = u["ec_range_full"], u["danger_range_full"]
+        rows.append([f"{f['label']} {f['period']}", f"+{N.fmt(f['warming_F'], 1)}", f"{n(ec[0])}–{n(ec[1])}",
+                     f"{n(dg[0])}–{n(dg[1])}", f"{N.fmt(u['constant_dewpoint']['mean_hi'], 1)}–"
+                                              f"{N.fmt(u['constant_rh']['mean_hi'], 1)}"])
+    out.append(_table(["Case", "Warming (°F)", f"{who} at Extreme caution or worse", f"{who} at Danger or worse",
+                       "Heat index felt (°F)"], rows,
+                      f"NWS heat index with a dewpoint of {N.fmt(h.get('dewpoint_C'), 1)} °C ({h.get('source')}). "
+                      "Future ranges span the climate models' 10th–90th percentile warming and the two humidity "
+                      "assumptions (constant dewpoint to constant relative humidity)."))
+    ver = v.get("verdicts") or []
+    if ver:
+        out.append(_table(["Scenario", f"City-mean change ({env.unit})", "Plausible range", "Verdict", "Why"],
+                          [[r["scenario"], N.sfmt(r["estimate"], 2),
+                            (f"{N.sfmt(r['envelope'][0], 2)} to {N.sfmt(r['envelope'][1], 2)}"
+                             if r.get("envelope") else "—"), r.get("label") or "—",
+                            "; ".join((r.get("reasons") or []) + [f"note: {q}" for q in r.get("qualifiers") or []])]
+                           for r in ver],
+                          "Robust: the plausible range excludes no change and the analysis variants agree on the sign. "
+                          "Direction only: the sign holds but the size could be near zero. Not established: it cannot "
+                          "be told apart from no effect, or the model is extrapolating."))
+    return out
+
+
 def _equity(env) -> list[dict]:
     m = env.ctx.manifest or {}
     opt = env.ctx.json("optimize.json") or m.get("optimize") or {}
@@ -398,7 +443,7 @@ def _findings(env) -> list[dict]:
 
 
 _BUILDERS = {"summary": _summary, "accuracy": _accuracy, "validation": _validation, "scenarios": _scenarios,
-             "plans": _plans, "climate": _climate, "equity": _equity, "caveats": _caveats,
+             "plans": _plans, "climate": _climate, "heat": _heat, "equity": _equity, "caveats": _caveats,
              "limitations": _limitations, "provenance": _provenance, "findings": _findings}
 
 

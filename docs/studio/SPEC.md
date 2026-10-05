@@ -2920,6 +2920,8 @@ This is the changelog of the specification after the completeness review (§18).
 - **Heat layers**: `heat_index`, `heat_cat` and, with a joint scenario, `heat_index_pkg`, `heat_cat_pkg` (group "Heat stress"), only when the run has a campaign dewpoint. Categorical layers take an optional `palette` (`"heat"`: warm NWS category colours on the map and in its legend).
 - **Verdicts**: every configured scenario row and uncertainty row carries `verdict` (Robust / Direction only / Not established, with reasons and qualifiers) from `sparc.core.heat.effect_verdict` once the run has uncertainty envelopes. The Scenarios table, the Uncertainty tab and the Heat tab show it.
 - **Results page**: a Heat stress section (residents by category, humidity band) and verdict pills in the uncertainty table; heat layers on its map.
+- **Lab impacts** gain `heat` (`design_heat`): residents at Extreme caution or worse and at Danger or worse before → after the design, on the campaign afternoon and in each future under both humidity assumptions, with a plain headline ("moves N residents out of …" / "puts N more …"). The result inspector leads its impacts with it, the decision brief adds a "Heat risk" section, and impacts cached before this (version 1) are recomputed.
+- **Report export** gains a `heat` section (the brief, the exposure table and the verdict table).
 
 ### Documentation
 

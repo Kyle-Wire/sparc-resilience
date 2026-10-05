@@ -37,7 +37,7 @@ export type Export = {
 };
 
 export type ReportSection =
-  | "summary" | "accuracy" | "validation" | "scenarios" | "plans" | "climate"
+  | "summary" | "accuracy" | "validation" | "scenarios" | "plans" | "climate" | "heat"
   | "equity" | "caveats" | "limitations" | "provenance" | "findings";
 
 export const REPORT_SECTIONS: readonly { id: ReportSection; label: string; hint: string }[] = [
@@ -47,6 +47,7 @@ export const REPORT_SECTIONS: readonly { id: ReportSection; label: string; hint:
   { id: "scenarios", label: "Scenarios", hint: "Configured scenarios and the selected exact results" },
   { id: "plans", label: "Plans", hint: "The selected budget plans" },
   { id: "climate", label: "Climate", hint: "Mid-century warming and exposure" },
+  { id: "heat", label: "Heat stress", hint: "Residents by NWS heat-risk category, what helps, verdicts" },
   { id: "equity", label: "Equity", hint: "Who the cooling reaches" },
   { id: "caveats", label: "Caveats", hint: "Generated from the numbers" },
   { id: "limitations", label: "Limitations", hint: "From the model card" },
