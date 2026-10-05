@@ -203,13 +203,16 @@ class EngineClient:
             self._reap()
             time.sleep(0.05)
         if _alive(info.get("pid"), info.get("create_time")):
-            self.kill()
+            # the host removes host.json as it starts stopping: kill the process we know, not host.json's
+            self.kill(info)
         self._reap()
         self.cleanup_stale()
 
-    def kill(self) -> bool:
-        """SIGKILL the host's process group (Force stop / restart); True when one was running."""
-        info = read_json(self.host_json) or {}
+    def kill(self, info: dict | None = None) -> bool:
+        """SIGKILL the host's process group (Force stop / restart); True when one was running.
+
+        ``info``: the host to kill (default: the one ``host.json`` names)."""
+        info = info or read_json(self.host_json) or {}
         pid = info.get("pid")
         if not pid or not _alive(pid, info.get("create_time")):
             self.cleanup_stale()

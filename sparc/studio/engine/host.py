@@ -162,6 +162,30 @@ class Entry:
     evaluated: bool = False              # an engine pass ran on this session (the load-time one counts)
 
 
+def _pipe_wake_args(listener) -> tuple[str, bytes | None] | None:
+    """``(address, authkey)`` of a named-pipe listener (Windows), else None (sockets wake every second)."""
+    if listener is None or not _IS_WIN:
+        return None
+    try:
+        address = listener.address
+    except Exception:
+        return None
+    if not isinstance(address, str) or not address.startswith("\\\\.\\pipe\\"):
+        return None
+    return address, getattr(listener, "_authkey", None)
+
+
+def _wake_pipe(address: str, authkey: bytes | None) -> None:
+    from multiprocessing.connection import Client
+
+    for _ in range(3):
+        try:
+            Client(address, family="AF_PIPE", authkey=authkey).close()
+            return
+        except Exception:
+            time.sleep(0.2)
+
+
 class Host:
     """The request loop, the LRU and the lifecycle of the engine host (see the module docstring)."""
 
@@ -213,11 +237,16 @@ class Host:
         if self.stopping.is_set():
             return
         self.stopping.set()
+        wake = _pipe_wake_args(self.listener)
         try:
             self.listener.close()
         except Exception:
             pass
         self._release_host_json()
+        if wake is not None:
+            # a named-pipe accept() blocks without a timeout and closing the listener does not wake it: connect
+            # once so serve() sees ``stopping`` and the process exits
+            threading.Thread(target=_wake_pipe, args=wake, name="engine-wake", daemon=True).start()
 
     def _release_host_json(self) -> None:
         if self.engine_dir is None:

@@ -10,6 +10,18 @@ import time
 import pytest
 
 
+@pytest.fixture
+def short_dir():
+    """A short folder for AF_UNIX sockets: macOS temp folders (``/private/var/folders/…``) are too long for one."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    d = Path(tempfile.mkdtemp(prefix="se-", dir="/tmp" if sys.platform != "win32" else None))
+    yield d
+    shutil.rmtree(d, ignore_errors=True)
+
+
 def test_engine_states_without_a_host(client, ctx, synth_run):
     rid, rd = synth_run
     st = client.get(f"/api/runs/{rid}/engine").json()
@@ -312,7 +324,7 @@ def test_loading_state_reports_progress_and_step(client, ctx, synth_run):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="AF_UNIX paths only (Windows uses a named pipe)")
-def test_host_starts_in_a_deep_workspace(tmp_path):
+def test_host_starts_in_a_deep_workspace(tmp_path, short_dir):
     """A workspace whose ``engine/host.sock`` is longer than AF_UNIX allows binds a short temp-dir socket
     instead; ``host.json`` records it, clients reach the host through it, and a stop removes it."""
     from pathlib import Path
@@ -325,8 +337,8 @@ def test_host_starts_in_a_deep_workspace(tmp_path):
     nominal = deep / "engine" / "host.sock"
     assert len(str(nominal)) > 108
     bound = unix_bind_path(nominal)
-    assert len(bound) <= 100 and bound == unix_bind_path(nominal) != unix_bind_path(tmp_path / "engine" / "host.sock")
-    assert unix_bind_path(tmp_path / "host.sock") == str(tmp_path / "host.sock")
+    assert len(bound) <= 100 and bound == unix_bind_path(nominal) != unix_bind_path(deep / "other" / "host.sock")
+    assert unix_bind_path(short_dir / "host.sock") == str(short_dir / "host.sock")
 
     cl = EngineClient(SimpleNamespace(engine_dir=deep / "engine"), idle_min=5.0, threads=1)
     try:
@@ -403,7 +415,7 @@ def test_a_request_to_a_host_whose_socket_is_gone_goes_to_the_next_host(tmp_path
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="AF_UNIX paths only (Windows uses a named pipe)")
-def test_a_request_refused_by_a_stopping_host_goes_to_the_next_host(tmp_path):
+def test_a_request_refused_by_a_stopping_host_goes_to_the_next_host(tmp_path, short_dir):
     """A host that is stopping answers a work request with HostStopping without running it; the client waits for
     that host to exit and sends the request once to the next host."""
     import secrets
@@ -421,7 +433,7 @@ def test_a_request_refused_by_a_stopping_host_goes_to_the_next_host(tmp_path):
     ed.mkdir()
     sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     key = secrets.token_bytes(32)
-    addr = str(tmp_path / "old.sock")
+    addr = str(short_dir / "old.sock")
     lst = Listener(addr, family="AF_UNIX", authkey=key)
     write_json_atomic(ed / "host.json", {"pid": sleeper.pid, "create_time": psutil.Process(sleeper.pid).create_time(),
                                          "sock": addr, "family": "AF_UNIX", "authkey_hex": key.hex()})
@@ -533,3 +545,40 @@ def test_a_run_that_stopped_before_it_finished_offers_resume_not_open_engine(cli
     (rd / "manifest.json").write_bytes(manifest)
     st = client.get(f"/api/runs/{rid}/engine").json()
     assert st["state"] == "cold" and st["action"]["kind"] == "open_engine"
+
+
+def test_stop_kills_a_host_that_removed_host_json_but_did_not_exit(tmp_path):
+    """A host removes ``host.json`` as soon as it starts stopping; one that then fails to exit (a Windows named-pipe
+    accept() that closing the listener does not wake) is still killed by the client's stop, which kills the
+    process it asked to stop rather than whichever host ``host.json`` names (none, by then)."""
+    import secrets
+    import subprocess
+    from types import SimpleNamespace
+
+    import psutil
+
+    from sparc.studio.engine.client import EngineClient
+    from sparc.studio.workspace import write_json_atomic
+
+    ed = tmp_path / "engine"
+    ed.mkdir()
+    kw = {"start_new_session": True} if sys.platform != "win32" else {}
+    stuck = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"], **kw)
+    try:
+        write_json_atomic(ed / "host.json", {"pid": stuck.pid, "create_time": psutil.Process(stuck.pid).create_time(),
+                                             "sock": str(ed / "host.sock"), "family": "AF_UNIX",
+                                             "authkey_hex": secrets.token_bytes(32).hex()})
+        cl = EngineClient(SimpleNamespace(engine_dir=ed), idle_min=5.0, threads=1)
+
+        def shutdown_request(op, **kw):
+            assert op == "shutdown"
+            (ed / "host.json").unlink()                 # the host starts stopping … and never exits
+            return {"stopping": True}
+
+        cl.request = shutdown_request
+        cl.stop(timeout=0.5)
+        assert stuck.wait(timeout=10) is not None
+        assert not (ed / "host.json").exists()
+    finally:
+        if stuck.poll() is None:
+            stuck.kill()

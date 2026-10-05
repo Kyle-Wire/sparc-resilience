@@ -160,6 +160,8 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
 

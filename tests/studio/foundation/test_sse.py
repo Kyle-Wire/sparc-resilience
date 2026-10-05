@@ -137,10 +137,12 @@ def test_tick_coalescing_on_the_wire(server):
     ticks = [e["data"] for e in evs if e.get("event") == "tick" and e["data"]["span"] == "pool:1"]
     file_ticks = [ev for _, ev in read_jsonl(path) if ev["type"] == "tick" and ev["span"] == "pool:1"]
     assert len(file_ticks) == n                                       # disk keeps every line
-    assert len(ticks) < n / 2                                         # the wire is thinned …
+    # the writer aims for 2 s; a loaded runner sleeps longer, so bound by the time the ticks actually took
+    span_s = max(file_ticks[-1]["ts"] - file_ticks[0]["ts"], 0.05 * (n - 1))
+    assert len(ticks) < min(n, 4 * span_s + 4)                         # the wire is thinned to ≤ 4 Hz …
     assert ticks[0]["k"] == 1 and ticks[-1]["k"] == n                 # … but never loses k == 1 or k == n
     mid = [t["ts"] for t in ticks if t["k"] not in (1, n)]
-    assert len(mid) <= 2 * 4 + 2                                      # ~2 s at ≤ 4 Hz
+    assert len(mid) <= 4 * span_s + 2
     # released ≥ 250 ms apart on arrival; the recorded ts can differ by the tailer's poll jitter
     assert all(b - a >= 0.1 for a, b in zip(mid, mid[1:]))
     assert evs[-1]["event"] == "end"

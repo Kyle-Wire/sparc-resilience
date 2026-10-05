@@ -23,6 +23,12 @@ def main(argv=None) -> int:
     p.add_argument("--title", default="pytest")
     p.add_argument("--max", type=int, default=40)
     a = p.parse_args(argv)
+    # Windows runners pipe stdout as cp1252: test output with °F or "…" must not crash the report
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     try:
         root = ET.parse(a.xml).getroot()
     except (OSError, ET.ParseError) as exc:

@@ -313,6 +313,11 @@ def run(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):          # a cp1252 pipe (Windows CI, redirected output)
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
     p = argparse.ArgumentParser(prog="python -m sparc.studio.selfcheck",
                                 description="Check that SPARC Studio works on this machine (about 2-5 minutes).")
     p.add_argument("--dir", help="folder for the throw-away workspace (default: a new temporary folder)")
