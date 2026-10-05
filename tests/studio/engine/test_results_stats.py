@@ -189,6 +189,45 @@ def test_compare_endpoint_paired(client, ctx, run_ctx, synth_run):
     assert client.get(f"/api/runs/{rid}/comparisons").json() == []
 
 
+def test_compare_unverified_plan_has_only_city_totals(client, ctx, run_ctx, synth_run):
+    """An unverified plan's planned benefit is a footprint total on each treated cell (°F·cells), not a ΔT map:
+    its city mean (Σ/n) and cost are compared, but no edited-area mean, regions, equity, exposure or difference
+    map (it read "edited −2.62 °F" where core's own closed loop cools treated cells by 0.81 °F)."""
+    from pathlib import Path
+
+    rid, _ = synth_run
+    plan = client.post(f"/api/runs/{rid}/plans", json={"params": {"lever": "canopy", "budget": 2000}, "name": "P",
+                                                        "verify": False}).json()["plan"]
+    row = make_result(ctx, run_ctx)
+    region = client.post(f"/api/runs/{rid}/regions", json={"name": "Hot", "spec": {
+        "kind": "top", "column": "pred:target", "frac": 0.3, "direction": "highest"}}).json()
+    r = client.post(f"/api/runs/{rid}/compare", json={"items": [
+        {"kind": "plan", "id": plan["id"]}, {"kind": "result", "id": row["id"]}, {"kind": "baseline"}],
+        "regions": [region["id"]]})
+    assert r.status_code == 201, r.text
+    cmp_ = r.json()
+    it = cmp_["items"][0]
+    n = run_ctx.grid.n
+    assert it["label"] == "Plan: P (planned)" and it["per_cell"] is False and it["edited"] is None
+    assert it["city"]["estimate"] == pytest.approx(-plan["planned"]["planned_total"] / n, rel=1e-5)
+    assert cmp_["items"][1]["per_cell"] is True and cmp_["items"][2]["per_cell"] is True
+    pairs = {(p["a"], p["b"]): p for p in cmp_["pairs"]}
+    for k in ((0, 1), (0, 2)):
+        assert pairs[k]["layer_key"] is None and pairs[k]["regions"] == {}
+        assert pairs[k]["city"]["estimate"] is not None
+    assert pairs[(1, 2)]["layer_key"] == f"cmp:{cmp_['id']}:1__2" and pairs[(1, 2)]["regions"]
+    cdir = Path(ctx.db.fetchone("SELECT dir FROM comparisons WHERE id = ?", (cmp_["id"],))["dir"])
+    assert sorted(f.name for f in cdir.glob("diff_*.npy")) == ["diff_1__2.npy"]
+    assert it["label"] not in cmp_["equity"]
+    assert all(e["item"] != it["label"] for e in cmp_["exposure"])
+    assert cmp_["cooling_per_cost"][it["label"]] == pytest.approx(
+        plan["planned"]["planned_total"] / plan["planned"]["total_cost"], rel=1e-5)
+    assert {"kind": "plan", "id": plan["id"]} in cmp_["needs_exact"]
+    meta = {m["key"]: m for g in client.get(f"/api/runs/{rid}/layers").json()["groups"] for m in g["layers"]}
+    pb = meta[f"plan:{plan['id']}:planned_benefit"]
+    assert pb["unit"] == "°F·cells" and "footprint total" in pb["label"]
+
+
 def test_reindex_rebuilds_lab_tables(client, ctx, run_ctx, synth_run):
     from sparc.studio.db import reindex
     from sparc.studio.scenarios import plans

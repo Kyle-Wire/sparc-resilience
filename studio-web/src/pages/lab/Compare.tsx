@@ -170,7 +170,7 @@ function CompareBody({ rid, pid, cmp, grid, catalog, unit }: { rid: string; pid:
   const label = (i: number) => cmp.items[i]?.label ?? `#${i + 1}`;
   const pairLabel = (q: { a: number; b: number }) => `${label(q.a)} − ${label(q.b)}`;
   const groups = useMemo<LayerGroup[]>(() => {
-    const diff = cmp.pairs.map((q) => syntheticMeta({ key: q.layer_key, label: pairLabel(q), unit, sign_note: "A − B; negative = A cooler than B" }, null));
+    const diff = cmp.pairs.flatMap((q) => (q.layer_key ? [syntheticMeta({ key: q.layer_key, label: pairLabel(q), unit, sign_note: "A − B; negative = A cooler than B" }, null)] : []));
     const items = cmp.items.map((i) => syntheticMeta({ key: `item:${encodeItemRef(i.ref)}`, label: i.label, unit, sign_note: "negative = cooler" }, null));
     return [
       { id: "diff", label: "Differences", layers: diff },
@@ -213,6 +213,7 @@ function CompareBody({ rid, pid, cmp, grid, catalog, unit }: { rid: string; pid:
     }
   };
   const regionNames = [...new Set(cmp.pairs.flatMap((q) => Object.keys(q.regions)))];
+  const planned = cmp.items.filter((i) => i.per_cell === false);
   const equityGroups = Object.entries(cmp.equity);
   return (
     <div className="stack">
@@ -233,6 +234,12 @@ function CompareBody({ rid, pid, cmp, grid, catalog, unit }: { rid: string; pid:
             );
           })}
         </div>
+      ) : null}
+      {planned.length ? (
+        <p className="cap" role="note">
+          {planned.map((i) => i.label).join(", ")}: not verified. A plan's planned benefit is the cooling each treated cell's dose brings to its whole neighbourhood ({u}·cells), not the change at that cell, so only the city mean (the
+          total over all cells), the cost and the cooling per cost are compared; the edited area, regions, equity, exposure and difference maps need the plan verified (exact closed loop).
+        </p>
       ) : null}
       <div className="row">
         <span className="spacer" />
@@ -257,7 +264,7 @@ function CompareBody({ rid, pid, cmp, grid, catalog, unit }: { rid: string; pid:
       <Table
         caption="Pairwise differences (A − B)"
         csvName="compare-pairs"
-        rowKey={(q) => q.layer_key}
+        rowKey={(q) => `${q.a}__${q.b}`}
         highlight={(q) => q === p}
         onRowClick={(q) => setPair(cmp.pairs.indexOf(q))}
         columns={[
@@ -291,8 +298,14 @@ function CompareBody({ rid, pid, cmp, grid, catalog, unit }: { rid: string; pid:
         <div className="grid2">
           <section className="stack">
             <h3>Difference map: {pairLabel(p)}</h3>
-            <p className="cap">Negative (blue) where {label(p.a)} is cooler than {label(p.b)}.</p>
-            <MapView grid={grid} groups={groups} loadLayer={load} layerKey={p.layer_key} height={420} title={`${label(p.a)} minus ${label(p.b)}`} />
+            {p.layer_key ? (
+              <>
+                <p className="cap">Negative (blue) where {label(p.a)} is cooler than {label(p.b)}.</p>
+                <MapView grid={grid} groups={groups} loadLayer={load} layerKey={p.layer_key} height={420} title={`${label(p.a)} minus ${label(p.b)}`} />
+              </>
+            ) : (
+              <p className="cap">No difference map: an unverified plan has no per-cell ΔT. Verify the plan to map it.</p>
+            )}
           </section>
           {a && b ? (
             <HexbinScatter

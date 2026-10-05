@@ -582,11 +582,17 @@ export function deleteResult(resId: string): Promise<{ ok: true }> {
 
 // ---------------------------------------------------------------- compare (§7.6)
 
-export type ComparisonItem = { ref: ItemRef; label: string; city: Likely; edited: Likely | null; cost: number | null; has_folds: boolean };
+/**
+ * `per_cell: false` is an unverified plan: its planned benefit is a footprint total on each treated cell
+ * (target·cells), so only its city mean, total and cost are compared (no edited area, regions, equity,
+ * exposure or difference map).
+ */
+export type ComparisonItem = { ref: ItemRef; label: string; city: Likely; edited: Likely | null; cost: number | null; has_folds: boolean; per_cell: boolean };
 
 export type PairedLikely = Likely & { paired: boolean };
 
-export type ComparisonPair = { a: number; b: number; city: PairedLikely; regions: Record<string, PairedLikely>; layer_key: string };
+/** `layer_key` is null when an item of the pair has no per-cell ΔT (no difference map). */
+export type ComparisonPair = { a: number; b: number; city: PairedLikely; regions: Record<string, PairedLikely>; layer_key: string | null };
 
 export type Comparison = {
   id: string;

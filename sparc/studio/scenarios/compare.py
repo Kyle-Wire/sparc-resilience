@@ -5,8 +5,13 @@ Items (``ItemRef``) are exact results, configured scenarios, plans and the basel
 * ``result`` - ``results/<id>/cells.parquet`` delta and ``folds.npy``;
 * ``configured`` - the ``sc:<slug>`` layer (``scenario_deltas.parquet``) with folds from
   ``scenario_detail.npz``, else from a ``configured`` result made by "Re-run exactly";
-* ``plan`` - the plan's closed-loop result when verified, else the planned benefit (no folds);
+* ``plan`` - the plan's closed-loop result when verified, else the planned benefit (no folds, **no per-cell
+  ΔT**: each treated cell holds the cooling its dose brings to its whole neighbourhood, °·cells, so only sums
+  and the city mean - Σ/n - are meaningful; ``per_cell: false``);
 * ``baseline`` - Δ = 0 everywhere (its folds are zero: A − baseline has A's own SE).
+
+An item without a per-cell ΔT has no edited-area mean, no regional or equity breakdown, no exposure rows and
+no difference map (its pairs' ``layer_key`` is null); its city mean, total and cooling per cost are reported.
 
 Pairs get ``SE(A−B) = std_k(mean_i(Δ_A,ki − Δ_B,ki))·√(K−1)`` when both items have folds of the same fold
 models (``paired: true``); otherwise ``√(SE_A² + SE_B²)`` (``paired: false``), and items without folds are
@@ -51,7 +56,9 @@ def _folds_ok(f, n: int) -> np.ndarray | None:
 
 
 def resolve_item(ctx, db, ref: Any) -> dict:
-    """``{ref, label, delta[n], folds[K,n] | None, se, cost, kind}`` of an item on the run of ``ctx``."""
+    """``{ref, label, delta[n], folds[K,n] | None, se, cost, zero, edited, per_cell}`` of an item on the run of
+    ``ctx``.  ``per_cell`` is False for an unverified plan: its ``delta`` is only good for sums and the city
+    mean (see the module docstring)."""
     from sparc.studio.engine import stats as S
     from sparc.studio.engine import store
     from sparc.studio.runs import layers as L
@@ -61,7 +68,7 @@ def resolve_item(ctx, db, ref: Any) -> dict:
     kind = d["kind"]
     if kind == "baseline":
         return {"ref": d, "label": "Baseline (today)", "delta": np.zeros(n), "folds": None, "se": 0.0, "cost": 0.0,
-                "zero": True, "edited": np.zeros(n, dtype=bool)}
+                "zero": True, "edited": np.zeros(n, dtype=bool), "per_cell": True}
     if kind == "result":
         row = store.result_row(db, d["id"])
         if row["run_id"] != ctx.run_id:
@@ -78,7 +85,7 @@ def resolve_item(ctx, db, ref: Any) -> dict:
             if c.startswith("realized_"):
                 edited |= np.abs(cells[c].to_numpy(np.float64)) > 0
         return {"ref": d, "label": str(label), "delta": delta, "folds": folds, "se": S.masked_se(folds),
-                "cost": ((summ.get("cost") or {}).get("total")), "zero": False, "edited": edited}
+                "cost": ((summ.get("cost") or {}).get("total")), "zero": False, "edited": edited, "per_cell": True}
     if kind == "configured":
         slug = d["slug"]
         match = next((s for s in ctx.configured_scenarios() if s["slug"] == slug), None)
@@ -106,7 +113,7 @@ def resolve_item(ctx, db, ref: Any) -> dict:
         cost = sum(abs(float(m)) * n * per_unit[v] for v, m in (s.get("mean_realized") or {}).items()) \
             if s.get("mean_realized") else None
         return {"ref": d, "label": match["name"], "delta": delta, "folds": folds, "se": se, "cost": cost,
-                "zero": False, "edited": np.ones(n, dtype=bool)}
+                "zero": False, "edited": np.ones(n, dtype=bool), "per_cell": True}
     if kind == "plan":
         prow = db.fetchone("SELECT * FROM plans WHERE id = ?", (d["id"],))
         if prow is None or prow["run_id"] != ctx.run_id:
@@ -123,12 +130,14 @@ def resolve_item(ctx, db, ref: Any) -> dict:
                 delta = store.read_cells(Path(rrow["dir"]))["delta"].to_numpy(np.float64)
                 folds = _folds_ok(store.read_folds(Path(rrow["dir"])), n)
                 return {"ref": d, "label": label, "delta": delta, "folds": folds, "se": S.masked_se(folds),
-                        "cost": planned.get("total_cost"), "zero": False, "edited": treated}
+                        "cost": planned.get("total_cost"), "zero": False, "edited": treated, "per_cell": True}
             except ApiError:
                 pass
+        # Not verified: the planned benefit is a footprint total on each treated cell (°·cells), not a ΔT map.
+        # Its sum (and so the city mean, Σ/n) is the planned cooling; nothing per cell is.
         benefit = np.asarray(np.load(pdir / "planned_benefit.npy", allow_pickle=False), dtype=np.float64)
         return {"ref": d, "label": label + " (planned)", "delta": -benefit, "folds": None, "se": None,
-                "cost": planned.get("total_cost"), "zero": False, "edited": treated}
+                "cost": planned.get("total_cost"), "zero": False, "edited": treated, "per_cell": False}
     raise ApiError("validation", f"unknown item kind {kind!r}",
                    detail={"errors": [{"path": "items", "message": "unknown kind", "code": "kind"}]})
 
@@ -173,10 +182,10 @@ def compare(db, ctx, items: list, *, regions: list[str] | None = None, threshold
         edited = it["edited"]
         city = likely(float(np.mean(it["delta"])), it["se"], unit, what="the city") or likely(0.0, None, unit)
         ed = S.masked_likely(it["delta"], it["folds"], edited, unit, what="the edited area") if edited.any() \
-            and not edited.all() else None
+            and not edited.all() and it["per_cell"] else None
         out_items.append({"ref": it["ref"], "label": it["label"], "city": city, "edited": ed,
                           "cost": float(it["cost"]) if it["cost"] is not None else None,
-                          "has_folds": it["folds"] is not None or it["zero"]})
+                          "has_folds": it["folds"] is not None or it["zero"], "per_cell": it["per_cell"]})
     pairs = []
     for a in range(len(res)):
         for b in range(a + 1, len(res)):
@@ -188,14 +197,17 @@ def compare(db, ctx, items: list, *, regions: list[str] | None = None, threshold
             city = S.pair_likely(A["delta"], fa, A["se"], B["delta"], fb, B["se"], np.ones(n, dtype=bool), unit,
                                  what=f"{A['label']} vs {B['label']}")
             rr = {}
-            for nm, mk in regs.items():
-                lk = S.pair_likely(A["delta"], fa, A["se"], B["delta"], fb, B["se"], mk, unit)
-                if lk is not None:
-                    rr[nm] = lk
-            diff = (A["delta"] - B["delta"]).astype(np.float32)
-            with runio.atomic_open(cdir / f"diff_{a}__{b}.npy", "wb") as fh:
-                np.save(fh, diff, allow_pickle=False)
-            pairs.append({"a": a, "b": b, "city": city, "regions": rr, "layer_key": f"cmp:{cid}:{a}__{b}"})
+            key = None
+            if A["per_cell"] and B["per_cell"]:
+                for nm, mk in regs.items():
+                    lk = S.pair_likely(A["delta"], fa, A["se"], B["delta"], fb, B["se"], mk, unit)
+                    if lk is not None:
+                        rr[nm] = lk
+                diff = (A["delta"] - B["delta"]).astype(np.float32)
+                with runio.atomic_open(cdir / f"diff_{a}__{b}.npy", "wb") as fh:
+                    np.save(fh, diff, allow_pickle=False)
+                key = f"cmp:{cid}:{a}__{b}"
+            pairs.append({"a": a, "b": b, "city": city, "regions": rr, "layer_key": key})
     equity: dict[str, dict] = {}
     exposure: list[dict] = []
     lay = L.people_layers(ctx) if ctx.data is not None else None
@@ -207,7 +219,7 @@ def compare(db, ctx, items: list, *, regions: list[str] | None = None, threshold
         thr = thresholds or (ctx.cfg_raw.get("climate") or {}).get("thresholds") or (
             [90.0, 95.0] if unit == "°F" else [32.0, 35.0])
         for it in res:
-            if it["zero"]:
+            if it["zero"] or not it["per_cell"]:
                 continue
             try:
                 g = benefit_by_group(-it["delta"], lay)

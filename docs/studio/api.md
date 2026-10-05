@@ -1065,9 +1065,10 @@ Body: `{thresholds?: number[], futures?: {experiment: string, period: string}[]}
 Body: `{items: ItemRef[] /* 2–4 */, regions?: string[], thresholds?: number[]}` → `201 Comparison`:
 
 ```ts
-{ id: string; items: { ref: ItemRef; label: string; city: Likely; edited: Likely|null; cost: number|null; has_folds: boolean }[];
+{ id: string; items: { ref: ItemRef; label: string; city: Likely; edited: Likely|null; cost: number|null; has_folds: boolean;
+           per_cell: boolean /* false: an unverified plan, city totals only (§19) */ }[];
   pairs: { a: number; b: number; city: Likely & { paired: boolean }; regions: Record<string, Likely & { paired: boolean }>;
-           layer_key: string }[];
+           layer_key: string|null /* null when an item has no per-cell ΔT */ }[];
   equity: Record<string, Record<string, number>>; exposure: object[]; cooling_per_cost: Record<string, number|null>;
   needs_exact: ItemRef[] }
 ```
@@ -1725,6 +1726,7 @@ This section is the changelog of the contract after the completeness review (§1
 - **Findings export and the report's Findings section** (§10, §11): a snapshot with `table: {columns, rows}` (every kit chart pin) is written as a table with every row, each column headed by its `label` (else `key`) and `(unit)`; the rest of the snapshot is listed as before. Nested values are written in full as JSON with their characters as written: no 400-character cut and no `\u` escapes.
 - **People-objective plans report cooling** (§7.9): with `objective: "people"` the allocation is still chosen by resident-weighted cooling, but `planned_total`, `pareto[].benefit`, the `planned_benefit` layer and field-kit column, and the `planned` of `engine.plan_frontier` are the plan's **unweighted** cooling (°·cells), comparable with `realised.total` and with a cooling plan of the same budget. The weighted total (cooling × the relative resident density around each cell, mean 1) is named in `caption`. Before, these were the weighted sums, so a people plan claimed more cooling than the cooling-optimal plan (405.9 vs 354.5 °F·cells at budget 1,000 on the demo city; its cooling is 336.2).
 - **`Result.extrapolated_edited`** (§7.5) is `null` when the share was not computed (a result without extrapolation scores, such as the emulator preview a DRAFT pack is built from, or a scenario that edits no cell), as `summary.frac_extrapolated_edited` already was; it was `0`. A pack's brief then reads "not computed (preview)" in its key numbers and says so in its summary paragraph, instead of "0%" of the edited cells outside the observed conditions.
+- **Unverified plans are not per-cell ΔT** (§7.6, §7.7, §7.9, §7.13): a plan's `planned_benefit` holds, on each treated cell, the cooling its dose brings to its whole neighbourhood (a footprint total, °·cells); only its sum (and the city mean, sum / n) is a planned cooling. Compare marks an unverified plan item `per_cell: false`: it reports its city mean, cost and cooling per cost, but `edited: null`, no regions in its pairs, no equity or exposure rows, and no difference map (`pairs[].layer_key: null`, no `diff_*.npy`). `POST /api/runs/{rid}/climate/explore` answers `422 validation` (`detail.errors[0].code: "unverified"`) for an unverified plan adaptation. The plan pack of an unverified plan (DRAFT) is built from the emulator preview of the plan's doses, as a scenario's draft pack is, and its job fails with `no_emulator` when the run has none; its brief and README say to verify the plan. The `plan:<plid>:planned_benefit` layer is labelled "planned cooling (footprint total on the treated cell)" with unit `°F·cells` (target·cells). Before, the footprint totals were used as a per-cell ΔT: on the demo city an unverified 2,000-unit canopy plan read "edited area −2.62 °F" and "0% of the change outside the edited cells", where core's closed loop of the same plan cools treated cells by 0.81 °F with most of the cooling outside them.
 
 ### Documentation
 

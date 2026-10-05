@@ -13450,6 +13450,11 @@
           "has_folds": {
             "type": "boolean",
             "title": "Has Folds"
+          },
+          "per_cell": {
+            "type": "boolean",
+            "title": "Per Cell",
+            "default": true
           }
         },
         "type": "object",
@@ -13482,7 +13487,14 @@
             "title": "Regions"
           },
           "layer_key": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Layer Key"
           }
         },
@@ -13490,8 +13502,7 @@
         "required": [
           "a",
           "b",
-          "city",
-          "layer_key"
+          "city"
         ],
         "title": "ComparePair"
       },

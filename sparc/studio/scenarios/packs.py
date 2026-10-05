@@ -2,8 +2,9 @@
 ``export.compare_pack`` job kinds.
 
 Packs are built from **exact** results.  A pack of a scenario that has no exact result (``result_id`` is the
-scenario id) is built from the emulator preview, stamped **DRAFT**, watermarked and carries no standard
-errors.  Every pack is a zip under ``projects/<slug>/exports/<export_id>/``:
+scenario id), or of a plan that is not verified, is built from the emulator preview (``404 no_emulator``
+without it), stamped **DRAFT**, watermarked and carries no standard errors.  A plan's planned benefit is never
+used as a ΔT map: each treated cell holds the cooling its dose brings to its whole neighbourhood (°·cells).  Every pack is a zip under ``projects/<slug>/exports/<export_id>/``:
 
 * ``brief.html`` - self-contained: title and place, a summary paragraph written from the numbers, ΔT and
   realised-dose maps rendered server-side with the shared OKLab LUTs (``matplotlib.image.imsave``), the KPI
@@ -70,6 +71,9 @@ hex_250m.csv, hex_500m.csv   hexagon summaries (cooling = −ΔT, people summed,
 
 _DRAFT_NOTE = ("DRAFT: this pack was built from the linear emulator preview, not an exact engine run. It carries "
                "no standard errors; run the scenario exactly before using these numbers.")
+_PLAN_DRAFT_NOTE = ("DRAFT: the plan is not verified, so this pack was built from the linear emulator preview of its "
+                    "doses, not an exact closed-loop run. It carries no standard errors; verify the plan before "
+                    "using these numbers.")
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +240,7 @@ def narrative(name: str, res: dict, unit: str, n_cells: int, area_km2: float, dr
 
 def _brief_html(*, title: str, place: str, paragraph: str, res: dict, impacts: dict | None, maps: dict[str, bytes],
                 caveats: list[str], limitations: list[str], provenance: dict, unit: str, draft: bool,
-                extra_sections: str = "") -> str:
+                extra_sections: str = "", draft_note: str = _DRAFT_NOTE) -> str:
     def img(name: str, cap: str) -> str:
         if name not in maps:
             return ""
@@ -286,7 +290,7 @@ def _brief_html(*, title: str, place: str, paragraph: str, res: dict, impacts: d
     quals = "".join(f"<li>{_esc(q)}</li>" for q in plain.get("qualifiers") or [])
     buys = "".join(f"<li>{_esc(b)}</li>" for b in plain.get("buys") or [])
     city = res.get("city") or {}
-    watermark = ('<div class="wm" aria-hidden="true">DRAFT</div><p class="draft">' + _esc(_DRAFT_NOTE) + "</p>") \
+    watermark = ('<div class="wm" aria-hidden="true">DRAFT</div><p class="draft">' + _esc(draft_note) + "</p>") \
         if draft else ""
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -421,7 +425,7 @@ def _provenance(ctx, spec: dict) -> dict:
 
 def _decision_contents(ctx, stage: Path, *, name: str, scenario: dict | None, res: dict, spec: dict, delta,
                        delta_sd, extrapolation, realized: dict, draft: bool, thresholds=None, cache_dir=None,
-                       extra_sections: str = "", extra_readme: str = "") -> None:
+                       extra_sections: str = "", extra_readme: str = "", draft_note: str = _DRAFT_NOTE) -> None:
     from sparc.studio.runs.caveats import caveats_for
     from sparc.studio.runs.common import clean
     from sparc.studio.scenarios.impacts import compute_impacts
@@ -460,12 +464,12 @@ def _decision_contents(ctx, stage: Path, *, name: str, scenario: dict | None, re
     brief = _brief_html(title=f"{'DRAFT — ' if draft else ''}{name}", place=place, paragraph=para, res=res,
                         impacts=impacts, maps=maps, caveats=caveats_for(ctx),
                         limitations=_model_card_limitations(ctx.run_dir), provenance=_provenance(ctx, spec),
-                        unit=unit, draft=draft, extra_sections=extra_sections)
+                        unit=unit, draft=draft, extra_sections=extra_sections, draft_note=draft_note)
     (stage / "brief.html").write_text(brief, encoding="utf-8")
     levers = ", ".join(f"{v}: {u}" for v, u in (ctx.units.get("levers") or {}).items()) or "see the config"
     extra = ("hexagons.gpkg         hexagons as polygons\n" if "hexagons.gpkg" in hex_files else "") + extra_readme
     (stage / "README.txt").write_text(README_TEXT.format(unit=unit, levers=levers, extra=extra,
-                                                         draft=("\n" + _DRAFT_NOTE + "\n") if draft else ""),
+                                                         draft=("\n" + draft_note + "\n") if draft else ""),
                                       encoding="utf-8")
 
 
@@ -523,6 +527,35 @@ def _draft_from_scenario(db, ctx, sid: str) -> tuple[dict, dict, dict]:
                        "realized": comp.realized}
 
 
+def _draft_from_plan(db, ctx, prow: dict, name: str) -> tuple[dict, dict]:
+    """A preview-only result of an unverified plan: the emulator's ΔT of the plan's doses (no SEs).
+
+    The plan's ``planned_benefit`` cannot stand in for it: each treated cell holds the cooling its dose brings to
+    its whole neighbourhood (a footprint total, °·cells), so as a map it puts all the cooling on the treated
+    cells, 3-4× too much there and none around them."""
+    from sparc.studio.engine import stats as S
+    from sparc.studio.engine.compile import compile_scenario
+    from sparc.studio.engine.preview import compute_delta, load_emulator
+    from sparc.studio.scenarios.plans import to_scenario_doc
+    from sparc.studio.workspace import utc_now
+
+    em = load_emulator(ctx)
+    if em is None:
+        raise ApiError("no_emulator", "the pack of an unverified plan needs the run's emulator preview: verify the "
+                       "plan (exact closed loop) or build the emulator")
+    plan_id = prow["id"]
+    comp = compile_scenario(ctx, to_scenario_doc(prow), db=db)
+    delta = compute_delta(em, comp.dx(), comp.n)
+    spec = {"id": f"draft:{plan_id}", "kind": "preview", "plan_id": plan_id, "content_hash": comp.content_hash,
+            "compiled": comp.lever_summary(), "run_id": ctx.run_id, "created_utc": utc_now()}
+    res = S.build_result(result_id=f"draft:{plan_id}", kind="plan", run_id=ctx.run_id, created_utc=utc_now(),
+                         job_id=None, delta=delta, delta_sd=None, extrapolation=None, folds=None,
+                         realized=comp.realized, grid=ctx.grid, unit=ctx.units.get("target", "°F"),
+                         name=f"Plan: {name}", requested=comp.requested, lever_cells=comp.lever_cells,
+                         regions=comp.regions, per_unit=comp.costs, draft=True, spec=spec)
+    return res, {"spec": spec, "delta": delta, "delta_sd": None, "extrapolation": None, "realized": comp.realized}
+
+
 # ---------------------------------------------------------------------------
 # the three packs
 # ---------------------------------------------------------------------------
@@ -571,14 +604,12 @@ def _slug(s: str) -> str:
 
 
 def plan_pack(jctx, export_id: str, plan_id: str) -> dict:
-    """``export.plan_pack``: the decision-pack contents of the plan (its closed-loop result, else a DRAFT of
-    the planned benefit) plus the field kit and the Pareto table."""
+    """``export.plan_pack``: the decision-pack contents of the plan (its closed-loop result, else a DRAFT from
+    the emulator preview of its doses) plus the field kit and the Pareto table."""
     import pandas as pd
 
-    from sparc.studio import db as dbmod
-    from sparc.studio.engine import stats as S
     from sparc.studio.scenarios.plans import field_kit, plan_out
-    from sparc.studio.workspace import read_json, utc_now
+    from sparc.studio.workspace import read_json
 
     db = jctx.db
     prow = db.fetchone("SELECT * FROM plans WHERE id = ?", (plan_id,))
@@ -588,39 +619,34 @@ def plan_pack(jctx, export_id: str, plan_id: str) -> dict:
     plan = plan_out(prow)
     realised = read_json(Path(prow["dir"]) / "realised.json") or {}
     draft = not realised.get("result_id")
-    params = dbmod.loads(prow.get("params_json"), {}) or {}
-    lever = params.get("lever")
     if not draft:
         _row, res, arr = _stored_result(db, realised["result_id"])
     else:
-        benefit = np.asarray(np.load(Path(prow["dir"]) / "planned_benefit.npy", allow_pickle=False), dtype=np.float64)
-        dose = np.asarray(np.load(Path(prow["dir"]) / "dose.npy", allow_pickle=False), dtype=np.float64)
-        sign = -1.0 if (read_json(Path(prow["dir"]) / "params.json") or {}).get("direction") == "decrease" else 1.0
-        spec = {"id": f"draft:{plan_id}", "kind": "plan", "plan_id": plan_id, "run_id": ctx.run_id,
-                "created_utc": utc_now()}
-        res = S.build_result(result_id=f"draft:{plan_id}", kind="plan", run_id=ctx.run_id, created_utc=utc_now(),
-                             job_id=None, delta=-benefit, delta_sd=None, extrapolation=None, folds=None,
-                             realized={lever: sign * dose}, grid=ctx.grid, unit=ctx.units.get("target", "°F"),
-                             name=plan["name"], draft=True, spec=spec)
-        arr = {"spec": spec, "delta": -benefit, "delta_sd": None, "extrapolation": None,
-               "realized": {lever: sign * dose}}
+        res, arr = _draft_from_plan(db, ctx, prow, plan["name"])
     kit = field_kit(db, ctx, prow)
     out_dir = _export_dir(jctx, export_id)
     planned = plan.get("planned") or {}
+    unit = ctx.units.get("target", "°F")
+    real_total = (plan.get("realised") or {}).get("total")
     extra = (f"<h2>Budget plan</h2><p>{_esc(planned.get('caption') or '')}</p>"
-             f"<p>Planned cooling {_fmt(planned.get('planned_total'), 1)} vs realised "
-             f"{_fmt((plan.get('realised') or {}).get('total'), 1)} (°·cells; the closed loop includes spillover "
-             f"non-additivity).</p>")
+             f"<p>Planned cooling {_fmt(planned.get('planned_total'), 1)} {_esc(unit)}·cells vs realised "
+             + (f"{_fmt(real_total, 1)} {_esc(unit)}·cells (the closed loop includes spillover non-additivity)."
+                if real_total is not None else "not computed (the plan is not verified).")
+             + " The planned figure adds each treated cell's footprint cooling: the cooling its dose brings to its "
+               "whole neighbourhood, so it is a total, not the change at that cell.</p>")
     with tempfile.TemporaryDirectory(prefix="pack-") as td:
         stage = Path(td) / "plan_pack"
         stage.mkdir()
         _decision_contents(ctx, stage, name=f"Plan: {plan['name']}", scenario=None, res=res, spec=arr["spec"],
                            delta=arr["delta"], delta_sd=arr["delta_sd"], extrapolation=arr["extrapolation"],
                            realized=arr["realized"], draft=draft, cache_dir=jctx.cache_dir, extra_sections=extra,
-                           extra_readme=("field_list.csv        ranked treated cells with ids and lon/lat\n"
-                                         "logger_sites.csv      logger sites that sharpen the canopy effect\n"
-                                         "before_after_pairs.csv  treated/control pairs for evaluation\n"
-                                         "pareto.csv            planned benefit by budget\n"))
+                           draft_note=_PLAN_DRAFT_NOTE, extra_readme=(
+                               "field_list.csv        ranked treated cells with ids and lon/lat; planned_benefit is\n"
+                               f"                      the cell's footprint cooling ({unit}·cells: the cooling its\n"
+                               "                      dose brings to its neighbourhood), not the change at the cell\n"
+                               "logger_sites.csv      logger sites that sharpen the canopy effect\n"
+                               "before_after_pairs.csv  treated/control pairs for evaluation\n"
+                               f"pareto.csv            planned cooling by budget ({unit}·cells)\n"))
         pd.DataFrame(kit["cells"]).to_csv(stage / "field_list.csv", index=False)
         pd.DataFrame(kit["sites"], columns=["id", "lon", "lat", "role", "canopy", "impervious", "effect_sd"]).to_csv(
             stage / "logger_sites.csv", index=False)

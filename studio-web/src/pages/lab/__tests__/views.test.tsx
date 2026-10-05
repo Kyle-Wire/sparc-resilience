@@ -180,8 +180,8 @@ describe("Climate × adaptation", () => {
 const CMP: Comparison = {
   id: "cmp_1",
   items: [
-    { ref: { kind: "result", id: "res_1" }, label: "Downtown cool corridor", city: L(-0.021, -0.03, -0.012, 0.0046), edited: L(-0.62, -0.8, -0.44, 0.09), cost: 27.6, has_folds: true },
-    { ref: { kind: "configured", slug: "cool-roofs" }, label: "Cool roofs", city: L(-0.01, -0.03, 0.01, 0.01), edited: null, cost: 400, has_folds: false },
+    { ref: { kind: "result", id: "res_1" }, label: "Downtown cool corridor", city: L(-0.021, -0.03, -0.012, 0.0046), edited: L(-0.62, -0.8, -0.44, 0.09), cost: 27.6, has_folds: true, per_cell: true },
+    { ref: { kind: "configured", slug: "cool-roofs" }, label: "Cool roofs", city: L(-0.01, -0.03, 0.01, 0.01), edited: null, cost: 400, has_folds: false, per_cell: true },
   ],
   pairs: [{ a: 0, b: 1, city: { ...L(0.011, -0.005, 0.027, 0.008), paired: false }, regions: {}, layer_key: "cmp:cmp_1:a__b" }],
   equity: {},
@@ -216,5 +216,30 @@ describe("Compare", () => {
     expect(container.textContent).not.toContain("Cool roofs − Downtown cool corridor");
     // only one comparison was created
     expect(fetchMock.calls.filter((c) => c.method === "POST").length).toBe(1);
+  });
+
+  it("says an unverified plan has only city totals and draws no difference map for it", async () => {
+    const plan: Comparison = {
+      ...CMP,
+      id: "cmp_2",
+      items: [{ ref: { kind: "plan", id: "plan_1" }, label: "Plan: Trees (planned)", city: { ...L(-0.54, -0.54, -0.54, 0), se: null, lo: null, hi: null }, edited: null, cost: 2000, has_folds: false, per_cell: false }, CMP.items[0]],
+      pairs: [{ a: 0, b: 1, city: { ...L(-0.52, -0.52, -0.52, 0), paired: false }, regions: {}, layer_key: null }],
+      needs_exact: [{ kind: "plan", id: "plan_1" }],
+    };
+    fetchMock = mockFetch({
+      ...runRoutes(),
+      [`POST /api/runs/${RID}/compare`]: { status: 201, body: plan },
+      "GET /api/comparisons/cmp_2": { body: plan },
+      "GET /api/results/res_1/layers/delta.bin": () => bin(Float32Array.from([-0.5, 0, -1.2, -0.3, 0, -0.4, 0])),
+    });
+    navigate(`/r/${RID}/lab/compare?items=${encodeURIComponent("plan:plan_1,res:res_1")}`, { replace: true });
+    const { container } = render(<Compare />);
+    await waitFor(() => byText(container, "h3", "Difference map: Plan: Trees (planned) − Downtown cool corridor"), 8000, "pair");
+    expect(byText(container, ".cap", "No difference map: an unverified plan has no per-cell ΔT")).not.toBeNull();
+    const note = byText(container, ".cap", "Plan: Trees (planned): not verified.");
+    expect(note).not.toBeNull();
+    expect(note!.textContent).toContain("°F·cells");
+    expect(fetchMock.calls.some((c) => c.url.includes("/layers/cmp"))).toBe(false);
+    await flush(2);
   });
 });

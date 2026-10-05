@@ -519,6 +519,7 @@ class CompareItem(BaseModel):
     edited: Likely | None = None
     cost: float | None = None
     has_folds: bool
+    per_cell: bool = True      # False: an unverified plan (city mean, total and cost only; no per-cell ΔT)
 
 
 class PairedLikely(Likely):
@@ -530,7 +531,7 @@ class ComparePair(BaseModel):
     b: int
     city: PairedLikely
     regions: dict[str, PairedLikely] = Field(default_factory=dict)
-    layer_key: str
+    layer_key: str | None = None   # no difference map when an item has no per-cell ΔT
 
 
 class Comparison(BaseModel):

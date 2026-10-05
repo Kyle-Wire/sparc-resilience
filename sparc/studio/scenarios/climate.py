@@ -133,6 +133,13 @@ def explore(db, ctx, body: dict, cache_dir=None) -> dict:
         it = resolve_item(ctx, db, ref)
         if it.get("zero"):
             continue
+        if not it["per_cell"]:
+            # exposure and shares need each cell's ΔT; an unverified plan only has footprint totals per treated cell
+            raise ApiError("validation", f"{it['label']} is not verified: its planned benefit is the cooling each "
+                           "treated cell brings to its whole neighbourhood (°·cells), not a per-cell ΔT. Verify the "
+                           "plan (exact closed loop) to use it as an adaptation.",
+                           detail={"errors": [{"path": "adaptations", "message": "plan not verified",
+                                               "code": "unverified"}]})
         name = it["label"]
         while name in adapt:
             name += " ′"

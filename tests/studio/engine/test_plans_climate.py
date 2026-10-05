@@ -146,6 +146,18 @@ def test_climate_explore_equals_summarize_projections(client, run_ctx, synth_run
     assert got["people_exposure"] and set(got["people_exposure"][0]["people_ge"]) == {"88", "92.5"}
 
 
+def test_climate_refuses_an_unverified_plan(client, synth_run):
+    """Exposure needs each cell's ΔT; an unverified plan only has footprint totals on its treated cells."""
+    rid, _ = synth_run
+    plan = client.post(f"/api/runs/{rid}/plans", json={"params": {"lever": "canopy", "budget": 2000}, "name": "P",
+                                                        "verify": False}).json()["plan"]
+    r = client.post(f"/api/runs/{rid}/climate/explore", json={"adaptations": [{"kind": "plan", "id": plan["id"]}]})
+    assert r.status_code == 422, r.text
+    err = r.json()["error"]
+    assert err["code"] == "validation" and err["detail"]["errors"][0]["code"] == "unverified"
+    assert "not verified" in err["message"]
+
+
 def test_climate_without_factors_is_404(client, ctx, synth_run):
     from pathlib import Path
 

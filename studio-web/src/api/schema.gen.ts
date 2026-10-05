@@ -3446,6 +3446,11 @@ export interface components {
             has_folds: boolean;
             /** Label */
             label: string;
+            /**
+             * Per Cell
+             * @default true
+             */
+            per_cell: boolean;
             /** Ref */
             ref: {
                 [key: string]: unknown;
@@ -3459,7 +3464,7 @@ export interface components {
             b: number;
             city: components["schemas"]["PairedLikely"];
             /** Layer Key */
-            layer_key: string;
+            layer_key?: string | null;
             /** Regions */
             regions?: {
                 [key: string]: components["schemas"]["PairedLikely"];

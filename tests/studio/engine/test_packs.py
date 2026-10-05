@@ -98,8 +98,11 @@ def test_preview_only_pack_is_draft(client, ctx, demo, run_ctx, synth_run, wait_
     assert opts["draft"] is True
 
 
-def test_plan_and_compare_packs(client, ctx, demo, run_ctx, synth_run, wait_job):
-    rid, _ = synth_run
+def test_plan_and_compare_packs(client, ctx, demo, run_ctx, synth_run, wait_job, fake_emulator):
+    from sparc.studio.engine.preview import compute_delta, load_emulator
+
+    rid, rd = synth_run
+    fake_emulator(rd, run_ctx)
     plan = client.post(f"/api/runs/{rid}/plans", json={"params": {"lever": "canopy", "budget": 1500}, "name": "Trees",
                                                         "verify": False}).json()["plan"]
     _eid, res = _run_pack(client, ctx, wait_job, "export.plan_pack", {"plan_id": plan["id"]}, demo["id"],
@@ -108,11 +111,30 @@ def test_plan_and_compare_packs(client, ctx, demo, run_ctx, synth_run, wait_job)
     names = set(z.namelist())
     assert {"brief.html", "cells.csv", "delta.tif", "field_list.csv", "logger_sites.csv", "before_after_pairs.csv",
             "pareto.csv", "README.txt"} <= names
-    assert res["draft"] is True                       # not verified: planned numbers only
+    assert res["draft"] is True                       # not verified: the emulator preview of its doses
+    import json
+
     import pandas as pd
 
     fl = pd.read_csv(io.BytesIO(z.read("field_list.csv")))
     assert {"rank", "id", "lon", "lat", "dose"} <= set(fl.columns) and len(fl) == plan["planned"]["n_cells_treated"]
+    # the ΔT is the emulator's preview of the plan's doses, never the planned benefit (a footprint total per
+    # treated cell, °F·cells): that map put all the cooling on the treated cells and "0%" outside them
+    dose = np.frombuffer(client.get(f"/api/plans/{plan['id']}/layers/dose.bin").content, dtype="<f4")
+    benefit = np.frombuffer(client.get(f"/api/plans/{plan['id']}/layers/planned_benefit.bin").content, dtype="<f4")
+    want = compute_delta(load_emulator(run_ctx), {"canopy": dose.astype(np.float64)}, run_ctx.grid.n)
+    cells = pd.read_csv(io.BytesIO(z.read("cells.csv")))
+    np.testing.assert_allclose(cells["delta"].to_numpy(), want, rtol=1e-5, atol=1e-9)
+    assert not np.allclose(cells["delta"].to_numpy(), -benefit)
+    np.testing.assert_allclose(cells["realised_canopy"].to_numpy(), dose, rtol=1e-6)
+    summ = json.loads(z.read("summary.json"))
+    assert summ["city"]["estimate"] == pytest.approx(float(np.mean(want)), rel=1e-6)
+    assert summ["spill"]["outside_share"] > 0
+    brief = z.read("brief.html").decode()
+    assert "DRAFT" in brief and "verify the plan" in brief and "footprint cooling" in brief
+    assert "°F·cells vs realised not computed" in brief
+    readme = z.read("README.txt").decode()
+    assert "verify the plan" in readme and "footprint cooling (°F·cells" in readme
     row = make_result(ctx, run_ctx)
     cmp_ = client.post(f"/api/runs/{rid}/compare", json={"items": [{"kind": "result", "id": row["id"]},
                                                                    {"kind": "configured", "slug": "cooling-package"}]}).json()
@@ -122,6 +144,24 @@ def test_plan_and_compare_packs(client, ctx, demo, run_ctx, synth_run, wait_job)
     assert {"brief.html", "items.csv", "pairs.csv", "diff_0__1.tif", "summary.json", "README.txt"} <= set(z.namelist())
     pairs = pd.read_csv(io.BytesIO(z.read("pairs.csv")))
     assert bool(pairs["paired"].iloc[0]) is True
+
+
+def test_unverified_plan_pack_needs_the_emulator(client, ctx, demo, synth_run, wait_job):
+    """Without an emulator there is no per-cell preview of an unverified plan: the pack is refused (verify the
+    plan or build the emulator), as a scenario's draft decision pack is."""
+    rid, _ = synth_run
+    plan = client.post(f"/api/runs/{rid}/plans", json={"params": {"lever": "canopy", "budget": 1500}, "name": "Trees",
+                                                        "verify": False}).json()["plan"]
+    import anyio
+
+    from sparc.studio.workspace import new_id
+
+    job = client.portal.call(_submit, ctx, "export.plan_pack", {"plan_id": plan["id"]}, demo["id"],
+                             new_id("export")) if hasattr(client, "portal") else \
+        anyio.run(_submit, ctx, "export.plan_pack", {"plan_id": plan["id"]}, demo["id"], new_id("export"))
+    done = wait_job(client, job["id"], timeout=180)
+    assert done["status"] == "failed"
+    assert "emulator" in str(done.get("error")) and "verify the plan" in str(done.get("error"))
 
 
 def test_narrative_range_reads_from_the_smaller_to_the_larger_cooling():
