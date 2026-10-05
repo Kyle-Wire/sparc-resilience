@@ -576,21 +576,24 @@ class SweepPoint(BaseModel):
     city: Likely
     region: Likely | None = None
     realized: float
+    neighbourhood_dose: float | None = None      # mean over the selection; null in sweeps run before it was kept
     frac_extrapolated: float
 
 
 class SweepFit(BaseModel):
     model: str
     A: float | None = None
-    ds: float | None = None
-    d90: float | None = None
+    ds: float | None = None       # in the units of ``axis``
+    d90: float | None = None      # in the units of ``axis``
+    axis: Literal["dose", "neighbourhood_dose"] = "dose"
 
 
 class Sweep(BaseModel):
     params: dict[str, Any]
     status: str
     curve: list[SweepPoint]
-    fit: SweepFit | None = None
+    fit: SweepFit | None = None                  # on the requested dose (the curve's x axis)
+    fit_neighbourhood: SweepFit | None = None    # on the selection's mean neighbourhood dose (SPEC §7.9)
     pipeline_curve: dict[str, Any] | None = None
     points: list[str]
 

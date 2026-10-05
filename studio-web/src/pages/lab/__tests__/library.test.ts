@@ -10,7 +10,7 @@ import { newEdit } from "../model/doc";
 import { fieldKitCsv, fieldKitGeoJson, ladderDoses, ladderGroups, lineage, parseNumberList, parseSites } from "../model/library";
 import { firstLadderEdit } from "../Library";
 import { missingParams } from "../components/TemplateGallery";
-import { dominantSign, fitOverlay, overlayXs, pipelineCurve } from "../model/sweep";
+import { dominantSign, fitOverlay, overlayXs, pipelineCurve, sweepFitText } from "../model/sweep";
 import { debounce, rateLimit } from "../model/timing";
 import { bytesToBase64 } from "../../../api/binary";
 
@@ -141,6 +141,15 @@ describe("sweeps", () => {
     expect(dominantSign([-1, -2, 3])).toBe(-1);
     expect(pipelineCurve({ dose: [0, 10], benefit: [0, 0.4] }, -1)).toEqual({ x: [0, 10], y: [-0, -0.4] });
     expect(pipelineCurve({ nope: 1 }, 1)).toBeNull();
+  });
+
+  it("states each fit's d_s and d90 on its own dose axis", () => {
+    const t = sweepFitText({ model: "saturating", A: 1.545, ds: 13.83, d90: 31.84, axis: "dose" }, { model: "saturating", A: 1.545, ds: 3.14, d90: 7.22, axis: "neighbourhood_dose" }, " pp");
+    expect(t).toContain("Fit on the requested dose: saturating, A = 1.545, d_s = 13.83 pp, 90% of the effect by a requested dose of 31.84 pp.");
+    expect(t).toContain("On the neighbourhood dose");
+    expect(t).toContain("d_s = 3.14, d90 = 7.22 pp.");
+    expect(t).not.toContain("effect by 7.22");
+    expect(sweepFitText(null, null)).toBe("");
   });
 });
 

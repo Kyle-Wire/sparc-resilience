@@ -7301,6 +7301,7 @@ export interface components {
             /** Curve */
             curve: components["schemas"]["SweepPoint"][];
             fit?: components["schemas"]["SweepFit"] | null;
+            fit_neighbourhood?: components["schemas"]["SweepFit"] | null;
             /** Params */
             params: {
                 [key: string]: unknown;
@@ -7324,6 +7325,12 @@ export interface components {
         SweepFit: {
             /** A */
             A?: number | null;
+            /**
+             * Axis
+             * @default dose
+             * @enum {string}
+             */
+            axis: "dose" | "neighbourhood_dose";
             /** D90 */
             d90?: number | null;
             /** Ds */
@@ -7338,6 +7345,8 @@ export interface components {
             dose: number;
             /** Frac Extrapolated */
             frac_extrapolated: number;
+            /** Neighbourhood Dose */
+            neighbourhood_dose?: number | null;
             /** Realized */
             realized: number;
             region?: components["schemas"]["Likely"] | null;

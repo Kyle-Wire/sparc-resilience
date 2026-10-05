@@ -716,13 +716,20 @@ export function exploreClimate(rid: string, body: ClimateExploreRequest, signal?
 
 // ---------------------------------------------------------------- sweeps (§7.8)
 
-export type SweepPoint = { dose: number; city: Likely; region: Likely | null; realized: number; frac_extrapolated: number };
+/** `neighbourhood_dose`: the selection's mean Gaussian-smoothed dose (null in sweeps run before it was kept). */
+export type SweepPoint = { dose: number; city: Likely; region: Likely | null; realized: number; neighbourhood_dose?: number | null; frac_extrapolated: number };
+
+/** `ds` and `d90` are in the units of `axis`: the requested dose (the curve's x axis) or the neighbourhood dose. */
+export type SweepFit = { model: string; A: number | null; ds: number | null; d90: number | null; axis?: "dose" | "neighbourhood_dose" };
 
 export type Sweep = {
   params: { lever: string; doses: number[]; selection?: SelectionSpec | null } & Record<string, unknown>;
   status: string;
   curve: SweepPoint[];
-  fit: { model: string; A: number | null; ds: number | null; d90: number | null } | null;
+  /** On the requested dose: what the overlay, the d90 line and the caption use. */
+  fit: SweepFit | null;
+  /** On the selection's mean neighbourhood dose (SPEC §7.9); never drawn on the requested-dose axis. */
+  fit_neighbourhood?: SweepFit | null;
   pipeline_curve: Record<string, unknown> | null;
   points: string[];
 };

@@ -221,6 +221,14 @@ def test_sweep_plans_rerun_and_across_runs(client, ctx, demo, engine_run, place_
     assert all(p["region"] is not None and p["realized"] > 0 for p in sw["curve"])
     assert sw["fit"]["model"] in ("linear", "saturating", "sigmoid", "insufficient")
     assert sw["status"] == "succeeded" and sw["pipeline_curve"]
+    # two fits, each on its own axis: the requested dose (the curve's x) and the neighbourhood dose
+    from sparc.studio.scenarios.sweeps import fit_curve
+
+    benefit = [0.0] + [-p["region"]["estimate"] for p in sw["curve"]]
+    neigh = [p["neighbourhood_dose"] for p in sw["curve"]]
+    assert all(0 < nd < p["dose"] for nd, p in zip(neigh, sw["curve"]))      # regional: smoothed below the dose
+    assert sw["fit"] == pytest.approx(fit_curve([0.0, 5, 10, 20, 30], benefit, "dose"))
+    assert sw["fit_neighbourhood"] == pytest.approx(fit_curve([0.0] + neigh, benefit, "neighbourhood_dose"))
     kinds = {x["kind"] for x in client.get(f"/api/runs/{rid}/scenarios").json()["results"]}
     assert kinds == {"sweep_point"}
     # plan: verify (closed loop) and the frontier

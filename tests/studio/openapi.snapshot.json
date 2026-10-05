@@ -25889,6 +25889,16 @@
               }
             ]
           },
+          "fit_neighbourhood": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SweepFit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "pipeline_curve": {
             "anyOf": [
               {
@@ -25973,6 +25983,15 @@
               }
             ],
             "title": "D90"
+          },
+          "axis": {
+            "type": "string",
+            "enum": [
+              "dose",
+              "neighbourhood_dose"
+            ],
+            "title": "Axis",
+            "default": "dose"
           }
         },
         "type": "object",
@@ -26003,6 +26022,17 @@
           "realized": {
             "type": "number",
             "title": "Realized"
+          },
+          "neighbourhood_dose": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Neighbourhood Dose"
           },
           "frac_extrapolated": {
             "type": "number",

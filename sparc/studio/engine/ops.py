@@ -241,11 +241,12 @@ def op_rerun_configured(session, payload: dict, *, job_id: str | None = None) ->
 
 
 def op_sweep(session, payload: dict, *, job_id: str | None = None) -> dict:
-    """``engine.sweep``: one exact run per dose with the selection mask, then ``response.fit_saturation`` on the
-    region-mean benefit against the neighbourhood dose (SPEC §7.9)."""
-    from sparc.core.response import fit_saturation
+    """``engine.sweep``: one exact run per dose with the selection mask, then ``response.fit_saturation`` of the
+    region-mean benefit against the requested dose (``fit``, the curve's x axis) and against the selection's mean
+    neighbourhood dose (``fit_neighbourhood``, SPEC §7.9; see :mod:`sparc.studio.scenarios.sweeps`)."""
     from sparc.studio.engine import stats as S
     from sparc.studio.runs.common import likely
+    from sparc.studio.scenarios.sweeps import fit_curve
     from sparc.studio.workspace import utc_now, write_json_atomic
 
     ctx = run_context(payload["run_row"], session)
@@ -256,7 +257,7 @@ def op_sweep(session, payload: dict, *, job_id: str | None = None) -> dict:
     mask = np.ones(session.data.n, dtype=bool) if where is None else np.asarray(where, dtype=bool)
     items = list(payload.get("items") or [])
     unit = env["units"]
-    curve, ids, D, B = [], [], [0.0], [0.0]
+    curve, ids, X, D, B = [], [], [0.0], [0.0], [0.0]
     for k, item in enumerate(items, start=1):
         progress.check_cancel()
         dose = float(item["dose"])
@@ -276,26 +277,17 @@ def op_sweep(session, payload: dict, *, job_id: str | None = None) -> dict:
             reg = S.masked_likely(res.delta, res.delta_folds, mask, unit, what="the selection") \
                 if where is not None else None
             neigh = session.resp._neigh_dose(real, lever)
+            X.append(dose)
             D.append(float(np.mean(neigh[mask])))
             B.append(-float(np.mean(res.delta[mask])))
             fx = float(np.mean(res.extrapolation[edited] > 1.0)) if edited.any() else 0.0
             curve.append({"dose": dose, "city": summ["city"] or likely(0.0, None, unit), "region": reg,
-                          "realized": float(real[mask].mean()) if mask.any() else 0.0, "frac_extrapolated": fx,
-                          "result_id": summ["id"]})
+                          "realized": float(real[mask].mean()) if mask.any() else 0.0,
+                          "neighbourhood_dose": D[-1], "frac_extrapolated": fx, "result_id": summ["id"]})
             sp.metrics.update(mean_benefit=-float(np.mean(res.delta)), frac_extrapolated=fx)
             ids.append(summ["id"])
-    fit = None
-    if len(D) >= 3:
-        f = fit_saturation(np.asarray(D)[:, None], np.asarray(B)[:, None], np.ones((len(D), 1), dtype=bool),
-                           min_valid=min(4, len(D)))
-
-        def num(a):
-            v = float(np.asarray(a).reshape(-1)[0])
-            return v if np.isfinite(v) else None
-
-        fit = {"model": str(np.asarray(f["model"]).reshape(-1)[0]), "A": num(f["A"]), "ds": num(f["ds"]),
-               "d90": num(f["d90"])}
-    out = {"curve": curve, "fit": fit, "points": ids, "finished_utc": utc_now()}
+    out = {"curve": curve, "fit": fit_curve(X, B, "dose"), "fit_neighbourhood": fit_curve(D, B, "neighbourhood_dose"),
+           "points": ids, "finished_utc": utc_now()}
     sdir = Path(payload["sweep_dir"])
     write_json_atomic(sdir / "curve.json", out)
     return {"sweep_id": payload.get("sweep_id"), "points": ids, "results": ids}

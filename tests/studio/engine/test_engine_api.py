@@ -96,6 +96,54 @@ def test_sweep_listing_and_delete(client, ctx, run_ctx, synth_run):
     assert bad.status_code in (409, 422)
 
 
+def test_sweep_fit_is_on_the_dose_axis_the_curve_is_drawn_on(client, ctx, run_ctx, synth_run):
+    """The overlay, its d90 line and caption are drawn on the requested dose.  A regional sweep's neighbourhood
+    dose is a fraction of it (here ≈ 0.23×), so a fit on the neighbourhood dose put "90% of the effect by 7.2"
+    on an axis where the points saturate near 32.  ``fit`` is on the requested dose; the neighbourhood fit is
+    ``fit_neighbourhood``.  A curve.json written before (its fit has no axis) is read the same way."""
+    from pathlib import Path
+
+    import numpy as np
+
+    from sparc.studio.scenarios import sweeps
+
+    sel = {"kind": "top", "column": "pred:target", "frac": 0.03, "direction": "highest"}
+    params = sweeps.create(ctx.db, run_ctx, "canopy", [5, 10, 20, 30, 40], sel)
+    doses = [5.0, 10.0, 20.0, 30.0, 40.0]
+    region = [-0.476, -0.796, -1.163, -1.355, -1.484]      # a fresh run's regional sweep (review evidence)
+    neigh = [1.135, 2.269, 4.538, 6.808, 9.077]
+
+    def lk(v):
+        return {"estimate": v, "se": 0.01, "lo": v - 0.02, "hi": v + 0.02, "confidence": "confident_cools",
+                "phrase": ""}
+
+    pts = [{"dose": d, "city": lk(r / 20), "region": lk(r), "realized": d, "frac_extrapolated": 0.0,
+            "result_id": f"res_{i}"} for i, (d, r) in enumerate(zip(doses, region))]
+    legacy_fit = sweeps.fit_curve([0.0] + neigh, [0.0] + [-r for r in region], "neighbourhood_dose")
+    legacy_fit.pop("axis")
+    sdir = Path(ctx.db.fetchone("SELECT dir FROM sweeps WHERE id = ?", (params["id"],))["dir"])
+    (sdir / "curve.json").write_text(json.dumps({"curve": pts, "fit": legacy_fit, "points": []}))
+    out = client.get(f"/api/sweeps/{params['id']}").json()
+    fit, nf = out["fit"], out["fit_neighbourhood"]
+    assert fit["axis"] == "dose" and nf["axis"] == "neighbourhood_dose"
+    assert nf["ds"] == pytest.approx(legacy_fit["ds"]) and nf["d90"] == pytest.approx(legacy_fit["d90"])
+    assert fit["model"] == "saturating" and fit["d90"] > 3 * nf["d90"]
+    # the overlay as Sweeps.tsx draws it (sign·A·(1 − e^(−d/d_s)) at the requested dose) passes through the points
+    for d, r in zip(doses, region):
+        assert -fit["A"] * (1 - np.exp(-d / fit["ds"])) == pytest.approx(r, abs=0.05)
+    assert abs(-nf["A"] * (1 - np.exp(-5.0 / nf["ds"])) - region[0]) > 0.5     # the old overlay at dose 5
+    # a sweep written now carries both fits and each point's neighbourhood dose
+    for p, nd in zip(pts, neigh):
+        p["neighbourhood_dose"] = nd
+    new = {"curve": pts, "fit": sweeps.fit_curve([0.0] + doses, [0.0] + [-r for r in region], "dose"),
+           "fit_neighbourhood": {**legacy_fit, "axis": "neighbourhood_dose"}, "points": []}
+    (sdir / "curve.json").write_text(json.dumps(new))
+    out2 = client.get(f"/api/sweeps/{params['id']}").json()
+    assert out2["fit"]["d90"] == pytest.approx(fit["d90"]) and out2["fit_neighbourhood"]["axis"] == "neighbourhood_dose"
+    assert [p["neighbourhood_dose"] for p in out2["curve"]] == neigh
+    assert out["curve"][0]["neighbourhood_dose"] is None
+
+
 def test_scenario_run_checks_memory_unless_cached(client, ctx, demo, run_ctx, synth_run, monkeypatch):
     """An exact run on a run that is not loaded makes the host load it: the memory preflight applies, except for
     a cache hit, which needs no engine."""

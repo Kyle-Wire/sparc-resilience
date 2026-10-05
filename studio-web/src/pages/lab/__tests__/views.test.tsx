@@ -86,11 +86,12 @@ const SWEEP: Sweep = {
   params: { lever: "Pct_Canopy", doses: [5, 10, 20] },
   status: "succeeded",
   curve: [
-    { dose: 5, city: L(-0.01, -0.015, -0.005, 0.0025), region: L(-0.2, -0.25, -0.15, 0.025), realized: 4.8, frac_extrapolated: 0 },
-    { dose: 10, city: L(-0.018, -0.024, -0.012, 0.003), region: L(-0.34, -0.4, -0.28, 0.03), realized: 9.5, frac_extrapolated: 0.1 },
-    { dose: 20, city: L(-0.026, -0.034, -0.018, 0.004), region: L(-0.48, -0.58, -0.38, 0.05), realized: 18, frac_extrapolated: 0.35 },
+    { dose: 5, city: L(-0.01, -0.015, -0.005, 0.0025), region: L(-0.2, -0.25, -0.15, 0.025), realized: 4.8, neighbourhood_dose: 1.1, frac_extrapolated: 0 },
+    { dose: 10, city: L(-0.018, -0.024, -0.012, 0.003), region: L(-0.34, -0.4, -0.28, 0.03), realized: 9.5, neighbourhood_dose: 2.2, frac_extrapolated: 0.1 },
+    { dose: 20, city: L(-0.026, -0.034, -0.018, 0.004), region: L(-0.48, -0.58, -0.38, 0.05), realized: 18, neighbourhood_dose: 4.4, frac_extrapolated: 0.35 },
   ],
-  fit: { model: "saturating", A: 0.55, ds: 9, d90: 20.7 },
+  fit: { model: "saturating", A: 0.55, ds: 9, d90: 20.7, axis: "dose" },
+  fit_neighbourhood: { model: "saturating", A: 0.55, ds: 2, d90: 4.6, axis: "neighbourhood_dose" },
   pipeline_curve: { dose: [0, 10, 20], benefit: [0, 0.3, 0.45] },
   points: ["res_s1", "res_s2", "res_s3"],
 };
@@ -105,9 +106,15 @@ describe("Sweeps", () => {
     navigate(`/r/${RID}/lab/sweeps/sw_1`, { replace: true });
     const { container } = render(<Sweeps />);
     await waitFor(() => container.querySelector('svg.chart[aria-label="Response to the swept lever"]'), 8000, "sweep chart");
-    expect(byText(container, "figure", "Fit: saturating, A = 0.550, d_s = 9.00")).not.toBeNull();
+    // the caption's d_s and d90 are the fit on the requested dose (the x axis); the neighbourhood fit is quoted apart
+    const fig = byText(container, "figure", "Fit on the requested dose: saturating, A = 0.550, d_s = 9.00")!;
+    expect(fig).not.toBeNull();
+    expect(fig.textContent).toMatch(/90% of the effect by a requested dose of 20\.70/);
+    expect(fig.textContent).toMatch(/On the neighbourhood dose .*not this axis\): d_s = 2\.00, d90 = 4\.60/);
+    expect(fig.textContent).not.toMatch(/effect by 4\.60/);
     const points = [...container.querySelectorAll("table.tbl")].find((t) => t.querySelector("caption")?.textContent === "Sweep points")!;
     expect(points.querySelectorAll("tbody tr").length).toBe(3);
+    expect(points.textContent).toContain("Neighbourhood dose");
   });
 });
 

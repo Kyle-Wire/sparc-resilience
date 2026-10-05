@@ -1479,8 +1479,8 @@ This uses the shared fold models and is usually much tighter than independent SE
 `engine.sweep` job:
 - inputs: lever, custom doses, optional region;
 - runs `engine.run` per dose with the `where` mask;
-- fits `response.fit_saturation` on the region-mean benefit and neighbourhood dose;
-- output: curve (mean benefit ± SE, region and city, realised dose, % extrapolated), fit (model, A, d_s, d90), overlaid on the pipeline's `response_curves`;
+- fits `response.fit_saturation` on the region-mean benefit and neighbourhood dose (`fit_neighbourhood`), and on the requested dose (`fit`, the curve's x axis; §19);
+- output: curve (mean benefit ± SE, region and city, realised dose, neighbourhood dose, % extrapolated), fit (model, A, d_s, d90, axis), overlaid on the pipeline's `response_curves`;
 - each point is stored as a `sweep_point` result.
 
 ### 7.10 Budget plans
@@ -2901,6 +2901,7 @@ This is the changelog of the specification after the completeness review (§18).
 - **People-objective plans** (§7.10): the people objective ranks cells by cooling weighted by the residents around them; the plan's planned cooling, its Pareto curve, the planned-benefit map and the field kit report the allocation's actual (unweighted) cooling in °·cells, and the caption gives the weighted total separately. Before, the weighted sums were shown as °F·cells of cooling, so a people plan appeared to cool more than the cooling-optimal plan.
 - **Extrapolation not computed** (§7.7, §7.13): a DRAFT pack (emulator preview) has no extrapolation scores; its brief now says the share of edited cells outside the observed conditions was "not computed (preview)" instead of stating 0%, and the result's `extrapolated_edited` is null rather than 0.
 - **Unverified plans** (§7.10–§7.13): the planned benefit of a plan is a footprint total on each treated cell (the cooling its dose brings to its neighbourhood, °·cells), never a per-cell ΔT. Compare shows an unverified plan's city mean, cost and cooling per cost only (no edited-area mean, regions, equity, exposure or difference map, with a note to verify the plan); Climate × adaptation refuses it; its plan pack is a DRAFT built from the emulator preview of its doses (refused without an emulator); the planned-benefit map is labelled in °·cells. Before, compare, climate and the draft pack read the footprint totals as ΔT, overstating the cooling on treated cells 3–4× and showing none around them.
+- **Sweep fits** (§7.9): a sweep is fitted twice, on the requested dose (drawn as the overlay, its d90 line and caption, on the chart's dose axis) and on the selection's mean neighbourhood dose (quoted in the caption in its own units, with a neighbourhood-dose column in the points table). Before, the neighbourhood-dose fit was drawn and captioned on the requested-dose axis, so a regional sweep claimed to saturate several times sooner than its points do.
 
 ### Documentation
 
