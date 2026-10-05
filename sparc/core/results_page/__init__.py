@@ -346,6 +346,14 @@ def layer_catalog(cfg, layers: dict, *, units: str, background: float, block_m=N
         add(group="Climate futures", key="__clim_thr", name="Cells at or above the heat threshold", scale="climthr",
             desc="Cells whose projected temperature reaches the threshold chosen in the Heat exposure table (Climate "
                  "futures section) under the chosen pathway, period and adaptation.")
+    add(group="Heat stress", key="heat_index", name="Heat index (NWS), campaign afternoon", unit="°F", scale="seq",
+        d=1, desc="Apparent temperature from the measured air temperature and the campaign's dewpoint (uniform "
+                  "across the city, so each cell's relative humidity follows from its own temperature), using the "
+                  "US National Weather Service heat index.")
+    add(group="Heat stress", key="heat_cat", name="Heat-risk category (NWS)", scale="heatcat",
+        desc="NWS heat-index categories: Caution 80–90 °F (fatigue with prolonged exposure), Extreme caution "
+             "90–103 °F (heat cramps and exhaustion possible), Danger 103–125 °F (heat stroke possible), Extreme "
+             "danger ≥ 125 °F (heat stroke highly likely).")
     add(group="Planner", key="people", name="Residents per cell (HRSL)", unit="people", scale="seq", d=1,
         desc="Residential population from Meta/CIESIN's High Resolution Settlement Layer (census-based, circa "
              "2010s), summed onto each cell. Daytime presence differs.")
@@ -533,6 +541,24 @@ def collect(run, cfg, placebo_path=None) -> dict:
             for c in pc.columns:
                 if c.startswith("hot_days_ge_"):
                     L["hd_" + c[len("hot_days_ge_"):]] = _enc(pc[c])
+    # heat stress (NWS heat index) and plain verdicts per scenario
+    from sparc.core import heat as heatmod
+
+    people = None
+    if (pl_dir / "planner_cells.parquet").exists() and "people" in L:
+        people = pc["people"].to_numpy(float)
+    heat_risk = None
+    try:
+        heat_risk = heatmod.run_heat_risk(run, people=people, config_dir=getattr(cfg, "base_dir", None))
+    except Exception:                                     # noqa: BLE001 - the page builds without it
+        heat_risk = None
+    if heat_risk:
+        hi = heatmod.heat_index_today(data.target_raw, data.target_units, heat_risk["dewpoint_C"])
+        L["heat_index"] = _enc(hi)
+        L["heat_cat"] = {"kind": "cat", "b64": _b64(heatmod.category_codes(hi).astype(np.uint8)),
+                         "labels": [c[1] for c in heatmod.CATEGORIES]}
+    verdicts = {r["scenario"]: heatmod.effect_verdict(r)
+                for r in ((m.get("uncertainty") or {}).get("scenarios") or []) if r.get("scenario")}
     if (pl_dir / "logger_sites.csv").exists():
         ls = pd.read_csv(pl_dir / "logger_sites.csv")
         sites = {"cell": ls["cell"].astype(int).tolist(), "role": ls["role"].tolist(),
@@ -587,6 +613,7 @@ def collect(run, cfg, placebo_path=None) -> dict:
         "causal": _causal_section(m, run), "optimize": optimize, "climate": climate,
         "baselines": m.get("baselines") or jl("baselines.json"), "provenance": m.get("provenance"),
         "literature": m.get("literature"), "planner": m.get("planner"), "uncertainty": m.get("uncertainty"),
+        "heat": heat_risk, "verdicts": verdicts,
         "simcheck": m.get("simcheck"), "multiverse": m.get("multiverse"), "placebo": placebo, "design": design,
         "sites": sites, "physics_advection": m.get("physics_advection"),
         "forcing": ((m.get("config") or {}).get("physics") or {}).get("forcing_info"),

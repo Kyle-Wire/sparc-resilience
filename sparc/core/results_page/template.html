@@ -21,6 +21,7 @@
   --accent: #2a78d6;
   --accent-ink: #1c5cab;
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a;
+  --hc1: #f2c14e; --hc2: #ec8a2c; --hc3: #d4402f; --hc4: #8c1c2e;
   --gray-mark: #b9b8b1;
   --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
   --good-ink: #006300; --warn-ink: #8a5a00; --crit-ink: #a8282a;
@@ -35,6 +36,8 @@
     --grid: #2c2c2a; --axis: #383835; --line: rgba(255, 255, 255, 0.10);
     --accent: #3987e5; --accent-ink: #86b6ef; --s1: #3987e5; --s2: #d95926; --s3: #199e70; --gray-mark: #5e5d58;
     --good-ink: #0ca30c; --warn-ink: #fab219; --crit-ink: #e66767; --chip: #242423;
+  --hc1: #e9c46a; --hc2: #f08c3a; --hc3: #e8564a; --hc4: #c2364a;
+    --hc1: #e9c46a; --hc2: #f08c3a; --hc3: #e8564a; --hc4: #c2364a;
     color-scheme: dark;
   }
 }
@@ -43,6 +46,7 @@
   --grid: #2c2c2a; --axis: #383835; --line: rgba(255, 255, 255, 0.10);
   --accent: #3987e5; --accent-ink: #86b6ef; --s1: #3987e5; --s2: #d95926; --s3: #199e70; --gray-mark: #5e5d58;
   --good-ink: #0ca30c; --warn-ink: #fab219; --crit-ink: #e66767; --chip: #242423;
+  --hc1: #e9c46a; --hc2: #f08c3a; --hc3: #e8564a; --hc4: #c2364a;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -163,6 +167,7 @@ footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
     <li><a href="#influence">Area of influence</a></li>
     <li><a href="#saturation">Saturation</a></li>
     <li><a href="#scenarios">Scenarios</a></li>
+    <li id="navHeat" hidden><a href="#heat">Heat stress</a></li>
     <li id="navClimate" hidden><a href="#climate">Climate futures</a></li>
     <li><a href="#causal">Causal check</a></li>
     <li><a href="#budget">Budget plan</a></li>
@@ -277,6 +282,19 @@ footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
       <h3>How sure are these numbers?</h3>
       <p class="cap" id="uncCap"></p>
       <div class="tablewrap" id="tbl-unc"></div>
+    </div>
+  </section>
+
+  <section class="block" id="heat" hidden>
+    <header>
+      <h2>Heat stress</h2>
+      <p class="prose" id="heatText"></p>
+    </header>
+    <div class="card chart">
+      <h3>Residents by heat-index risk category</h3>
+      <p class="cap" id="heatCap"></p>
+      <div id="chart-heat"></div>
+      <details><summary>Table view</summary><div class="tablewrap" id="tbl-heat"></div></details>
     </div>
   </section>
 
@@ -493,18 +511,21 @@ function colorFor(Ly, v) {
   const [a, , b] = domain; let t = (v - a) / ((b - a) || 1e-9); t = Math.min(1, Math.max(0, t)); const k = Math.round(t * 255) * 3; return [LUTS.seq[k], LUTS.seq[k + 1], LUTS.seq[k + 2]];
 }
 const CAT = () => [css("--s1"), css("--s2"), css("--s3")].map(hex2rgb).map((c) => c.map((x) => Math.round(x * 255)));
+const HCV = ["--hc1", "--hc2", "--hc3", "--hc4"];
+const HCAT = () => HCV.map((v) => css(v)).map(hex2rgb).map((c) => c.map((x) => Math.round(x * 255)));
 function render() {
   const Ly = cur; const data = img.data; data.fill(0);
   const vals = layerValues(Ly); const m = Ly.mult || 1;
-  const cat = CAT(); const grayc = hex2rgb(css("--gray-mark")).map((x) => Math.round(x * 255));
+  const cat = CAT(); const hcat = HCAT(); const grayc = hex2rgb(css("--gray-mark")).map((x) => Math.round(x * 255));
   const nodata = hex2rgb(isDark() ? "#2a2a28" : "#e4e4df").map((x) => Math.round(x * 255));
-  if (Ly.scale !== "folds" && Ly.scale !== "cat" && Ly.scale !== "climthr") domain = computeDomain(Ly);
+  if (Ly.scale !== "folds" && Ly.scale !== "cat" && Ly.scale !== "heatcat" && Ly.scale !== "climthr") domain = computeDomain(Ly);
   for (let i = 0; i < N; i++) {
     const p = ((G.ny - 1 - IY[i]) * G.nx + IX[i]) * 4; let c;
     if (Ly.scale === "folds") { c = FOLD[i] === curFold ? cat[0] : inBuffer(i, curFold) ? cat[1] : grayc; }
     else if (Ly.scale === "sites") { c = nodata; }
     else if (Ly.scale === "design") { const v = vals[i]; c = Math.abs(v) < 1e-4 ? nodata : colorFor({ scale: "div" }, v); }
     else if (Ly.scale === "cat") { const k = vals[i]; c = k === 0 ? grayc : cat[k - 1]; }
+    else if (Ly.scale === "heatcat") { const k = vals[i]; c = k === 0 ? grayc : hcat[k - 1]; }
     else if (Ly.scale === "climthr") { c = vals[i] >= THR ? cat[1] : grayc; }
     else if (Ly.scale === "climtemp") { c = colorFor({ scale: "div" }, vals[i]); }
     else { const v = vals[i]; if (!isFinite(v) || (Ly.zeroBlank && v <= 0)) { if (Ly.zeroBlank && isFinite(v)) c = nodata; else continue; } else c = colorFor(Ly, v * m); }
@@ -544,6 +565,11 @@ function drawLegend() {
     [["Low-canopy site", V("--s2")], ["High-canopy site", V("--s3")]].forEach(([t, c]) => { const r = el("div"); const s2 = el("span", { class: "sw" }); s2.style.background = c; s2.style.borderRadius = "50%"; r.append(s2, document.createTextNode(t)); wrap.append(r); });
     box.append(wrap); return;
   }
+  if (Ly.scale === "heatcat") {
+    const labs = DATA.layers[Ly.key].labels; const wrap = el("div", { class: "swatches" });
+    [1, 2, 3, 4, 0].forEach((k) => { const r = el("div"); const sw = el("span", { class: "sw" }); sw.style.background = k ? V(HCV[k - 1]) : V("--gray-mark"); r.append(sw, document.createTextNode(labs[k])); wrap.append(r); });
+    box.append(wrap); return;
+  }
   if (Ly.scale === "folds" || Ly.scale === "cat" || Ly.scale === "climthr") {
     const labs = Ly.scale === "folds" ? ["Held out (test)", "Buffer: dropped from training", "Training"] : Ly.scale === "climthr" ? [`At or above ${THR} ${U}`, `Below ${THR} ${U}`] : [...DATA.layers[Ly.key].labels.slice(1), DATA.layers[Ly.key].labels[0]];
     const cols = Ly.scale === "folds" ? [V("--s1"), V("--s2"), V("--gray-mark")] : Ly.scale === "climthr" ? [V("--s2"), V("--gray-mark")] : [V("--s1"), V("--s2"), V("--s3"), V("--gray-mark")];
@@ -578,6 +604,8 @@ function drawStats() {
     const p = CL.projections[climSel.proj];
     row(`At or above ${THR} ${U}`, `${fmt(100 * k / N, 1)}%`); row(`Today at or above ${THR} ${U}`, `${fmt(100 * CL.present.share_at_or_above[String(Number(THR).toFixed(1))], 1)}%`);
     row("Warming used", `${sfmt(p.warming.median, 2)} ${U} (median of ${p.n_models} models)`); return; }
+  if (Ly.scale === "heatcat") { const labs = DATA.layers[Ly.key].labels; const cnt = new Array(labs.length).fill(0); for (let i = 0; i < N; i++) cnt[vals[i]]++;
+    labs.forEach((l, k) => row(l, `${fmt(100 * cnt[k] / N, 1)}% of cells`)); return; }
   if (Ly.scale === "cat") { const labs = DATA.layers[Ly.key].labels; const cnt = new Array(labs.length).fill(0); for (let i = 0; i < N; i++) cnt[vals[i]]++;
     labs.forEach((l, k) => { if (k > 0 || cnt[0] > 0) row(l, `${fmt(100 * cnt[k] / N, 1)}%`); }); return; }
   const m = Ly.mult || 1; let s = 0, n = 0; const arr = [];
@@ -602,7 +630,7 @@ function readout(ev) {
   else if (Ly.scale === "design") { const v = designDelta()[i]; const ch = Object.keys(PLAN).filter((v2) => PLAN[v2][i] !== 0).map((v2) => `${vname(v2)} ${sfmt(PLAN[v2][i], lev(v2).edit_decimals)}`).join(", ");
     main = `${sfmt(v, 3)} ${U}` + (ch ? ` · edited: ${ch}` : ""); }
   else if (Ly.scale === "folds") main = FOLD[i] === curFold ? "Held out (test)" : inBuffer(i, curFold) ? "Buffer: dropped from training" : FOLD[i] === 255 ? "Training (never held out)" : `Training (in fold ${FOLD[i] + 1}'s test set)`;
-  else if (Ly.scale === "cat") main = DATA.layers[Ly.key].labels[layer(Ly.key)[i]];
+  else if (Ly.scale === "cat" || Ly.scale === "heatcat") main = DATA.layers[Ly.key].labels[layer(Ly.key)[i]];
   else if (Ly.scale === "climtemp" || Ly.scale === "climthr") { const v = climValues()[i]; main = `${fmt(v, 1)} ${U}` + (Ly.scale === "climthr" ? (v >= THR ? ` · at or above ${THR}` : ` · below ${THR}`) : ""); }
   else { const v = layer(Ly.key)[i] * (Ly.mult || 1); main = !isFinite(v) ? "no estimate" : ((Ly.scale === "div" && Ly.center === 0 ? sfmt(v, Ly.d ?? 2) : fmt(v, Ly.d ?? 2)) + (Ly.unit ? " " + Ly.unit : "")); }
   box.append(el("div", { class: "big" }, main), el("div", { class: "dim" }, latlon(cx, cy)));
@@ -900,12 +928,80 @@ function scenarios() {
   $("chart-scen").append(el("div", { class: "legend-row" }, ""));
   const lr = $("chart-scen").lastChild; const a = el("span"); const ia = el("i", { class: "box" }); ia.style.background = V("--s1"); a.append(ia, document.createTextNode("model, within observed conditions")); const b = el("span"); const ib = el("i", { class: "box" }); ib.style.border = `1.5px solid ${V("--s1")}`; b.append(ib, document.createTextNode("model, more than 20% of edited cells beyond observed conditions")); lr.append(a, b);
   if (cl.length) { const c2 = el("span"); const ic = el("i"); ic.style.background = V("--s2"); c2.append(ic, document.createTextNode("linear causal estimate and 95% band")); lr.append(c2); }
-  const t = el("table"); const h = el("tr"); ["Scenario", `Mean (${U})`, `10th pct`, `90th pct`, "SE of mean (jackknife)", "Beyond observed", `Linear causal (${U}, 95%)`].forEach((x2, i) => h.append(el("th", { class: i ? "r" : "" }, x2))); t.append(h);
+  const t = el("table"); const h = el("tr"); ["Scenario", `Mean (${U})`, `10th pct`, `90th pct`, "SE of mean (jackknife)", "Beyond observed", `Linear causal (${U}, 95%)`, "Verdict"].forEach((x2, i) => h.append(el("th", { class: i ? "r" : "" }, x2))); t.append(h);
   for (const s of S) { const tr = el("tr"); tr.append(el("td", {}, s.name), el("td", { class: "r" }, sfmt(s.mean_delta, 3)), el("td", { class: "r" }, sfmt(s.p10_delta, 2)), el("td", { class: "r" }, sfmt(s.p90_delta, 2)), el("td", { class: "r" }, `±${fmt(s.mean_delta_se ?? s.mean_delta_sd, 3)}`)); const td = el("td", { class: "r" }); td.append(s.frac_extrapolated > 0.2 ? pill("warn", `${fmt(100 * s.frac_extrapolated, 0)}%`) : document.createTextNode(`${fmt(100 * s.frac_extrapolated, 0)}%`)); tr.append(td);
     const tc = el("td", { class: "r" }); const cc = s.causal_linear;
     if (cc) { tc.append(document.createTextNode(`${sfmt(cc.delta, 2)} (${sfmt(cc.lo, 2)} to ${sfmt(cc.hi, 2)}) `)); tc.append(cc.model_within ? pill("good", "model inside") : pill("warn", "model outside")); } else tc.textContent = "—";
-    tr.append(tc); t.append(tr); }
+    tr.append(tc); const tv = el("td", { class: "r" }); tv.append(verdictPill(s.name)); tr.append(tv); t.append(tr); }
   $("tbl-scen").append(t);
+  if (DATA.verdicts && Object.keys(DATA.verdicts).length) $("tbl-scen").append(el("p", { class: "cap" }, "Verdict: Robust = the plausible range (estimation, analysis choices and attribution together) excludes zero and every analysis variant agrees on the sign. Direction only = the sign is stable but the range reaches zero. Not established = a simulation with no planted effect produces a similar change, or most edited cells are beyond the conditions the model was trained on. * = see the qualifier on hover (extrapolation, or outside the causal check)."));
+}
+
+
+/* ---------- heat stress (NWS heat index) ---------- */
+const HC_KEYS = ["below", "caution", "extreme_caution", "danger", "extreme_danger"];
+const HC_LABS = ["Below caution", "Caution", "Extreme caution", "Danger", "Extreme danger"];
+const hcColor = (k) => k ? V(HCV[k - 1]) : V("--gray-mark");
+const kfmt = (v) => v >= 1e4 ? `${fmt(v / 1000, 0)}k` : v >= 1000 ? `${fmt(v / 1000, 1)}k` : fmt(v, 0);
+function heatStress() {
+  const H = DATA.heat; if (!H || !H.cases || !H.cases.length) return;
+  $("heat").hidden = false; $("navHeat").hidden = false;
+  const ppl = H.cases[0].people != null; const pkg = H.package;
+  const find = (label, adapted, hum) => H.cases.find((c) => c.case === label && c.adapted === adapted && (hum ? c.humidity === hum : true));
+  const today = find("today", false), todayA = find("today", true);
+  const worse = (c) => ppl ? c.people_extreme_caution_or_worse : (c.cells.extreme_caution + c.cells.danger + c.cells.extreme_danger);
+  const total = ppl ? Object.values(today.people).reduce((a, b) => a + b, 0) : Object.values(today.cells).reduce((a, b) => a + b, 0);
+  const share = (v) => `${fmt(100 * v / Math.max(total, 1e-9), 0)}%`;
+  const [rlo, rhi] = H.rh_today_range;
+  let txt = `Air temperature alone understates the danger: humidity slows how fast the body cools by sweating. The US National Weather Service heat index combines the two into an apparent temperature with four risk categories. During the campaign the dewpoint was ${fmt(H.dewpoint_C, 1)} °C (${H.dewpoint_source}); moisture is close to uniform across a city, so relative humidity ranged from ${fmt(rlo, 0)}% in the hottest cells to ${fmt(rhi, 0)}% in the coolest.`;
+  if (ppl) txt += ` On that afternoon ${fmt(worse(today), 0)} residents (${share(worse(today))}) lived in cells at Extreme caution or worse` + (todayA ? `; the ${pkg} would bring that to ${fmt(worse(todayA), 0)}.` : ".");
+  $("heatText").textContent = txt;
+  // which futures to show: the middle and high pathways, mid- and late-century (as the planner pack)
+  const labels = [...new Set(H.cases.map((c) => c.case))].filter((l) => l !== "today");
+  let fut = labels.filter((l) => /SSP2-4\.5|SSP5-8\.5|ssp245|ssp585/.test(l) && /2041-2060|2081-2100/.test(l));
+  if (!fut.length) fut = labels.slice(0, 2);
+  const rows = [{ label: "Today (campaign afternoon)", c: today }];
+  if (todayA) rows.push({ label: "Today with the package", c: todayA, adapted: true });
+  for (const l of fut) {
+    rows.push({ label: l, c: find(l, false, "constant_dewpoint"), hi: find(l, false, "constant_rh") });
+    if (find(l, true, "constant_dewpoint")) rows.push({ label: `${l} with the package`, c: find(l, true, "constant_dewpoint"), hi: find(l, true, "constant_rh"), adapted: true });
+  }
+  const W = 980, ml = 250, mr = 210, rowH = 34, mt = 6; const iw = W - ml - mr;
+  const H2 = mt + rows.length * rowH + 6;
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H2}`, role: "img", "aria-label": "Share of residents in each heat-index risk category, today and in climate futures" });
+  rows.forEach((r, i) => {
+    const y = mt + i * rowH; const val = (c) => HC_KEYS.map((k) => ppl ? c.people[k] : c.cells[k]);
+    const draw = (c, yy, h, faint) => { let x0 = ml; val(c).forEach((v, k) => { const w = iw * v / Math.max(total, 1e-9); if (w <= 0) return;
+      const seg = sv("rect", { x: x0, y: yy, width: Math.max(w, 0.5), height: h, fill: hcColor(k), opacity: faint ? 0.85 : 1 });
+      seg.addEventListener("pointermove", (ev) => showTip(ev, (t) => { t.append(el("div", { class: "v" }, `${HC_LABS[k]}: ${ppl ? fmt(v, 0) + " residents" : fmt(v, 0) + " cells"} (${share(v)})`), el("div", {}, r.label), el("div", { class: "cap" }, c.humidity === "constant_rh" ? "if relative humidity stays the same (moisture rises): upper bound" : c.humidity === "constant_dewpoint" ? "if moisture stays the same (relative humidity falls): lower bound" : "measured humidity")); }));
+      seg.addEventListener("pointerleave", hideTip); svg.append(seg); x0 += w; }); };
+    svg.append(sv("text", { x: ml - 10, y: y + 15, "text-anchor": "end", class: r.adapted ? "t-label" : "t-strong" }, r.label));
+    draw(r.c, y + 3, r.hi ? 13 : 20, false);
+    if (r.hi) draw(r.hi, y + 18, 7, true);
+    const a = worse(r.c), b = r.hi ? worse(r.hi) : null;
+    const lo = Math.min(a, b ?? a), hi = Math.max(a, b ?? a);
+    const n = kfmt(lo) === kfmt(hi) ? kfmt(lo) : `${kfmt(lo)}–${kfmt(hi)}`, sh = share(lo) === share(hi) ? share(lo) : `${share(lo)}–${share(hi)}`;
+    svg.append(sv("text", { x: W - mr + 10, y: y + 15, class: "t-strong" }, `${n} (${sh})`));
+  });
+  $("chart-heat").append(svg);
+  const lr = el("div", { class: "legend-row" });
+  [1, 2, 3, 4, 0].forEach((k) => { const sp = el("span"); const ib = el("i", { class: "box" }); ib.style.background = hcColor(k); sp.append(ib, document.createTextNode(HC_LABS[k])); lr.append(sp); });
+  $("chart-heat").append(lr);
+  $("heatCap").textContent = `Each bar splits ${ppl ? "the residents" : "the cells"} by the heat-index category of their cell. Right: ${ppl ? "residents" : "cells"} at Extreme caution or worse. Future humidity is uncertain, so each future has two bars: the thick one keeps today's moisture (relative humidity falls as it warms: the lower bound), the thin one keeps today's relative humidity (moisture rises: the upper bound). Futures add the CMIP6 multi-model median summer warming to the measured afternoon.` + (pkg ? ` "With the package" adds the ${pkg}'s re-predicted cooling.` : "");
+  const head = ["Case", "Humidity", ...HC_LABS, "Person-mean heat index", "Hottest cell"];
+  const trs = [];
+  for (const r of rows) for (const c of [r.c, r.hi].filter(Boolean)) trs.push([r.label, c.humidity === "observed" ? "measured" : c.humidity === "constant_rh" ? "constant relative humidity" : "constant dewpoint",
+    ...HC_KEYS.map((k) => ppl ? fmt(c.people[k], 0) : fmt(c.cells[k], 0)), `${fmt(ppl ? c.person_mean_hi : c.cell_mean_hi, 1)} °F`, `${fmt(c.max_hi, 1)} °F`]);
+  $("tbl-heat").append(table(head, trs, (i) => i > 1));
+}
+
+/* ---------- plain verdicts ---------- */
+function verdictPill(name) {
+  const v = (DATA.verdicts || {})[name]; if (!v || v.verdict === "unknown") return document.createTextNode("—");
+  const kind = v.verdict === "robust" ? "good" : v.verdict === "direction" ? "warn" : "crit";
+  const p = pill(kind, v.label); p.title = [...v.reasons, ...v.qualifiers].join("; ");
+  if (v.qualifiers.length) { const w = el("span"); w.append(p, el("span", { class: "dim" }, " *")); w.title = p.title; return w; }
+  return p;
 }
 
 /* ---------- climate ---------- */
@@ -1014,11 +1110,11 @@ function uncertainty() {
   const u = DATA.uncertainty; if (!u || !u.scenarios || !u.scenarios.length) return;
   $("uncCard").hidden = false;
   $("uncCap").textContent = `Each component answers a different question. Estimation: how much the answer moves when the model is refitted on other parts of the city (95%, jackknife over folds). Specification: the range across reasonable analysis choices (multiverse). Attribution: the canopy effect divided by how much of a planted effect the pipeline recovers on this city's layout (simulation check). The envelope is their union: a plausible range for reading, not a confidence interval. ⚠ marks scenarios where the model lies outside the independent causal band. "vs null" compares canopy estimates with the change the pipeline reports when the simulation plants no canopy effect at all; an estimate that is not distinguishable from that cannot be credited to canopy on this evidence.`;
-  const t = el("table"); const h = el("tr"); ["Scenario", `Estimate (${U})`, "Estimation 95%", "Specification", "Attribution", "Envelope", "Causal band", "vs null"].forEach((x, i) => h.append(el("th", { class: i ? "r" : "" }, x))); t.append(h);
+  const t = el("table"); const h = el("tr"); ["Scenario", `Estimate (${U})`, "Estimation 95%", "Specification", "Attribution", "Envelope", "Causal band", "vs null", "Verdict"].forEach((x, i) => h.append(el("th", { class: i ? "r" : "" }, x))); t.append(h);
   for (const r of u.scenarios) { const tr = el("tr"); tr.append(el("td", {}, r.scenario), el("td", { class: "r" }, sfmt(r.estimate, 2)), el("td", { class: "r" }, rng2(r.estimation_95)), el("td", { class: "r" }, rng2(r.specification)), el("td", { class: "r" }, rng2(r.attribution)));
     const te = el("td", { class: "r" }, rng2(r.envelope) + " "); if (r.envelope) te.append(r.envelope_excludes_zero ? pill("good", "excludes 0") : pill("warn", "includes 0")); tr.append(te);
     const tc = el("td", { class: "r" }, rng2(r.causal_band) + (r.model_within_causal === false ? " ⚠" : "")); tr.append(tc);
-    const tn = el("td", { class: "r" }); for (const a of r.null_artifact || []) { const d = el("div"); d.append(document.createTextNode(`${a.product === "rf" ? "product" : "direct"} ${sfmt(a.delta, 2)} `), pill(a.distinguishable ? "good" : "warn", a.distinguishable ? "distinct" : "not distinct")); tn.append(d); } if (!(r.null_artifact || []).length) tn.textContent = "—"; tr.append(tn); t.append(tr); }
+    const tn = el("td", { class: "r" }); for (const a of r.null_artifact || []) { const d = el("div"); d.append(document.createTextNode(`${a.product === "rf" ? "product" : "direct"} ${sfmt(a.delta, 2)} `), pill(a.distinguishable ? "good" : "warn", a.distinguishable ? "distinct" : "not distinct")); tn.append(d); } if (!(r.null_artifact || []).length) tn.textContent = "—"; tr.append(tn); const tv = el("td", { class: "r" }); tv.append(verdictPill(r.scenario)); tr.append(tv); t.append(tr); }
   $("tbl-unc").append(t);
 }
 
@@ -1131,7 +1227,7 @@ function caveats() {
 }
 
 function init() {
-  buildLuts(); facts(); kpis(); accuracy(); influence(); curves(); scenarios(); uncertainty(); climate(); causal(); budget(); planner(); validation(); caveats();
+  buildLuts(); facts(); kpis(); accuracy(); influence(); curves(); scenarios(); uncertainty(); heatStress(); climate(); causal(); budget(); planner(); validation(); caveats();
   let g0 = GROUPS[0]; try { const s = localStorage.getItem("phm-group"); if (s && GROUPS.includes(s)) g0 = s; } catch (e) {}
   setGroup(g0);
 }
