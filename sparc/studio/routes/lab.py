@@ -4,7 +4,8 @@ the scenario library, results, comparisons, climate × adaptation and sweeps.  B
 
 At server start (``ready`` phase) the engine service reconnects to a live engine host (``pid`` +
 ``create_time`` match) or removes its stale files.  At a clean shutdown the host is stopped - unless an engine
-job is still running and jobs are left running, so it can be reattached on the next start.
+job is still running and jobs are left running, so it can be reattached on the next start.  When jobs stop
+with the server, the running engine jobs are cancelled first and end ``cancelled``.
 """
 
 from __future__ import annotations
@@ -44,16 +45,47 @@ def _reconnect(sctx: StudioContext) -> None:
 
 
 @shutdown_hook("engine.host", order=60)
-def _stop_host(sctx: StudioContext) -> None:
+async def _stop_host(sctx: StudioContext) -> None:
     svc = sctx.services.get("engine")
     if svc is None:
         svc = get_service(sctx)
     stop_jobs = bool(sctx.stop_jobs or sctx.config.stop_jobs_on_exit)
     marks = ",".join("?" for _ in LIVE_STATUSES)
-    live = sctx.db.fetchone(f"SELECT id FROM jobs WHERE executor = 'engine' AND status IN ({marks})", LIVE_STATUSES)
-    if live is not None and not stop_jobs:
+    live = sctx.db.fetchall(f"SELECT id, job_dir FROM jobs WHERE executor = 'engine' AND status IN ({marks})",
+                            LIVE_STATUSES)
+    if live and not stop_jobs:
         return                                  # an engine job keeps running: the host survives the restart
-    svc.shutdown()
+    if live:
+        await _cancel_engine_jobs(sctx, live)
+    await asyncio.to_thread(svc.shutdown)
+
+
+async def _cancel_engine_jobs(sctx: StudioContext, rows: list[dict], wait_s: float = 10.0) -> None:
+    """Shutdown with ``stop_jobs``: the running engine jobs are cancelled before the host stops (the host stops
+    them between folds and they end ``cancelled``), and are marked killed, so one the host stop interrupts still
+    ends ``cancelled``, never ``failed: engine host exited``."""
+    import time
+
+    from sparc.studio.engine.executor import ENGINE_EXECUTOR
+
+    executor = (getattr(sctx.jobs, "executors", None) or {}).get("engine") or ENGINE_EXECUTOR
+    for r in rows:
+        executor.killed.add(r["id"])
+        if sctx.jobs is not None:
+            try:
+                await sctx.jobs.cancel(r["id"], by="shutdown")
+            except ApiError:
+                pass
+    deadline = time.monotonic() + min(wait_s, float(sctx.config.shutdown_grace_s))
+
+    def settled(r: dict) -> bool:
+        if r.get("job_dir") and (Path(r["job_dir"]) / "result.json").exists():
+            return True
+        row = sctx.db.fetchone("SELECT status FROM jobs WHERE id = ?", (r["id"],))
+        return row is None or row["status"] not in LIVE_STATUSES
+
+    while time.monotonic() < deadline and not all(settled(r) for r in rows):
+        await asyncio.sleep(0.1)
 
 
 def _reader(sctx: StudioContext):

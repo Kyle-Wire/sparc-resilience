@@ -139,8 +139,8 @@ class EngineExecutor:
         info = read_json(path)
         if not isinstance(info, dict):
             return
-        # the host writes the marker just before it exits: let that host go first
-        _wait_for(lambda: (svc.client.info() or {}).get("pid") != info.get("pid"), 10.0)
+        # the host writes the marker just before it exits (it drops host.json first): let that process go first
+        svc.client.wait_gone({"pid": info.get("pid"), "create_time": None}, 10.0)
         try:
             path.unlink()
         except OSError:
@@ -232,11 +232,3 @@ class EngineExecutor:
 ENGINE_EXECUTOR = EngineExecutor()
 register_executor("engine", ENGINE_EXECUTOR)
 
-
-def _wait_for(pred, timeout: float, interval: float = 0.05) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if pred():
-            return True
-        time.sleep(interval)
-    return bool(pred())

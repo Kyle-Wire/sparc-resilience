@@ -336,3 +336,158 @@ def test_host_starts_in_a_deep_workspace(tmp_path):
     finally:
         cl.stop()
     assert not Path(bound).exists() and cl.info() is None
+
+
+# ---------------------------------------------------------------------------
+# a host that exits by itself (recycle, idle stop): no zombie, no lost request
+# ---------------------------------------------------------------------------
+
+def _gone(pid: int, timeout: float) -> bool:
+    import psutil
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            psutil.Process(pid).status()
+        except psutil.NoSuchProcess:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX process reaping")
+def test_a_host_that_exits_by_itself_is_reaped(tmp_path):
+    """A host that exits on its own (here a shutdown request; recycle and the idle stop end the same way) is
+    reaped by the client that started it, without stop() or kill(): no <defunct> child under the server."""
+    from types import SimpleNamespace
+
+    from sparc.studio.engine.client import EngineClient
+
+    cl = EngineClient(SimpleNamespace(engine_dir=tmp_path / "engine"), idle_min=5.0, threads=1)
+    pid = cl.start()["pid"]
+    try:
+        cl.request("shutdown", start=False, timeout=5.0)
+        assert _gone(pid, 10.0), "the exited host is left as a zombie"
+        assert not (tmp_path / "engine" / "host.json").exists()
+    finally:
+        cl.kill()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="AF_UNIX paths only (Windows uses a named pipe)")
+def test_a_request_to_a_host_whose_socket_is_gone_goes_to_the_next_host(tmp_path):
+    """A host that is exiting has closed its listener (the socket is gone) while its pid still runs: the request
+    was never sent, so it waits for that host to exit and goes to a new host, instead of failing with
+    "engine host exited (cannot reach the engine host: [Errno 2] No such file or directory)"."""
+    import os
+    import signal
+    from types import SimpleNamespace
+
+    from sparc.studio.engine.client import EngineClient
+
+    cl = EngineClient(SimpleNamespace(engine_dir=tmp_path / "engine"), idle_min=5.0, threads=1)
+    old = cl.start()
+    try:
+        os.unlink(old["sock"])                                   # the recycle window: socket gone, host.json not yet
+        def kill_old():
+            try:
+                os.kill(old["pid"], signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+        threading.Timer(0.5, kill_old).start()
+        assert cl.request("close", payload={}) == {"closed": False}
+        new = cl.info()
+        assert new is not None and new["pid"] != old["pid"] and _gone(old["pid"], 5.0)
+    finally:
+        cl.kill()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="AF_UNIX paths only (Windows uses a named pipe)")
+def test_a_request_refused_by_a_stopping_host_goes_to_the_next_host(tmp_path):
+    """A host that is stopping answers a work request with HostStopping without running it; the client waits for
+    that host to exit and sends the request once to the next host."""
+    import secrets
+    import subprocess
+    from multiprocessing.connection import Listener
+    from types import SimpleNamespace
+
+    import psutil
+
+    from sparc.studio.engine.client import EngineClient
+    from sparc.studio.engine.host import STOPPING, safe_loads
+    from sparc.studio.workspace import write_json_atomic
+
+    ed = tmp_path / "engine"
+    ed.mkdir()
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    key = secrets.token_bytes(32)
+    addr = str(tmp_path / "old.sock")
+    lst = Listener(addr, family="AF_UNIX", authkey=key)
+    write_json_atomic(ed / "host.json", {"pid": sleeper.pid, "create_time": psutil.Process(sleeper.pid).create_time(),
+                                         "sock": addr, "family": "AF_UNIX", "authkey_hex": key.hex()})
+    seen = []
+
+    def stopping_host():
+        with lst.accept() as conn:
+            req = safe_loads(conn.recv_bytes())
+            seen.append(req["op"])
+            conn.send({"request_id": req["request_id"], "ok": False,
+                       "error": {"type": STOPPING, "message": "the engine host is stopping", "traceback_tail": ""}})
+        lst.close()
+        sleeper.kill()
+        sleeper.wait()
+
+    th = threading.Thread(target=stopping_host, daemon=True)
+    th.start()
+    cl = EngineClient(SimpleNamespace(engine_dir=ed), idle_min=5.0, threads=1)
+    try:
+        assert cl.request("close", payload={}) == {"closed": False}
+        assert seen == ["close"] and cl.info()["pid"] not in (None, sleeper.pid)
+    finally:
+        cl.kill()
+        sleeper.kill()
+        th.join(5)
+
+
+def test_a_stopping_host_refuses_work_and_releases_host_json(tmp_path):
+    """Once stopping (or flagged to recycle) the host runs no further work request: it answers HostStopping and
+    writes no result; stop() closes the listener and then removes its own host.json (not another host's)."""
+    import os
+    import pickle
+
+    from sparc.studio.engine.host import HOST_JSON, STOPPING, Host
+
+    class Conn:
+        def __init__(self, req):
+            self.raw, self.sent = pickle.dumps(req), []
+
+        def recv_bytes(self):
+            return self.raw
+
+        def send(self, obj):
+            self.sent.append(obj)
+
+        def close(self):
+            pass
+
+    ed = tmp_path / "engine"
+    ed.mkdir()
+    jd = tmp_path / "job"
+    jd.mkdir()
+    lst = _FakeListener()
+    host = Host(lst, engine_dir=ed)
+    host.recycle = True
+    c = Conn({"op": "close", "request_id": "r1", "job_id": "j1", "job_dir": str(jd), "payload": {}})
+    host._handle(c)
+    assert c.sent[0]["ok"] is False and c.sent[0]["error"]["type"] == STOPPING
+    assert not (jd / "result.json").exists()
+    s = Conn({"op": "status", "request_id": "r2"})
+    host._handle(s)
+    assert s.sent[0]["ok"] is True                       # status is still answered
+    (ed / HOST_JSON).write_text(json.dumps({"pid": os.getpid() + 1}))
+    host.stop()
+    assert lst.closed.is_set() and (ed / HOST_JSON).exists()      # another host's file is left alone
+    host2 = Host(_FakeListener(), engine_dir=ed)
+    (ed / HOST_JSON).write_text(json.dumps({"pid": os.getpid()}))
+    host2.stop()
+    assert not (ed / HOST_JSON).exists()
