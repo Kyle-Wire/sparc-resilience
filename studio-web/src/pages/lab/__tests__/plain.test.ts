@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { Result } from "../../../api/lab";
 import type { Likely } from "../../../api/types";
 import { CONFIDENCE_TEXT, confidenceOf } from "../../../components/ui/PlainResult";
-import { buysLines, cityLine, confidenceWord, extrapolationQualifier, headline, interval95, perCostText, plainWording, withRange } from "../model/plain";
+import { buysLines, cityLine, concentrationCaption, confidenceWord, extrapolationQualifier, headline, interval95, perCostText, plainWording, withRange } from "../model/plain";
 
 const L = (estimate: number, lo: number | null, hi: number | null, se: number | null = null): Likely => ({ estimate, lo, hi, se, confidence: "unknown", phrase: "" });
 
@@ -109,5 +109,25 @@ describe("qualifiers and headline", () => {
     expect(buysLines(warm, "degF")).toEqual(["611.700 °F·cells of warming per 1,000 cost units."]);
     expect(perCostText(-0.6117, "degF", "1k")).toBe("611.700 °F·cells of warming per 1k");
     expect(perCostText(0.6117, "degF", "1k")).toBe("611.700 °F·cells of cooling per 1k");
+  });
+});
+
+describe("concentration index caption", () => {
+  // the index divides by the mean cooling: a warming of the same shape has the same index, so the caption
+  // must not call it a benefit (canopy loss whose warming falls on the densest quintile read "+0.102 … cooling")
+  it("names the cooling for a scenario that cools on net", () => {
+    expect(concentrationCaption(0.102, 0.8, "population_density")).toBe(
+      "Concentration index +0.102 (positive: the cooling concentrates in the higher quintiles of population density; negative: in the lower ones).",
+    );
+  });
+  it("names the warming for a scenario that warms on net", () => {
+    const c = concentrationCaption(0.102, -0.8, "population density");
+    expect(c).toContain("the warming concentrates in the higher quintiles");
+    expect(c).not.toContain("cooling");
+  });
+  it("speaks of the change when the direction is unknown, and of no net change at zero", () => {
+    expect(concentrationCaption(-0.2, undefined, "share aged 60+")).toContain("the change (cooling or warming) concentrates");
+    expect(concentrationCaption(0, 0, "share under 5")).toContain("no net change");
+    expect(concentrationCaption(null, 1, "x")).toBe("Concentration index not computed for x.");
   });
 });

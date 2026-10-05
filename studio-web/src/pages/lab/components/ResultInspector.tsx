@@ -18,7 +18,7 @@ import { Table } from "../../../components/ui/Table";
 import { useJobs } from "../../../stores/jobs";
 import { toast } from "../../../stores/ui";
 import { fmtDateTime, fmtInt, fmtNum, fmtPct, fmtSigned, fmtSignedValue, unitLabel } from "../../../theme/format";
-import { buysLines, cityLine, perCostText, plainWording, withRange } from "../model/plain";
+import { buysLines, cityLine, concentrationCaption, perCostText, plainWording, withRange } from "../model/plain";
 import { useTray } from "../model/tray";
 import { AcrossRunsPanel } from "./AcrossRuns";
 
@@ -107,7 +107,7 @@ function ImpactsBlock({ resId, impacts, unit, onImpacts }: { resId: string; impa
               valueLabel="Mean cooling"
               unit={u}
               categoryLabel="Quintile (1 = lowest)"
-              caption={`Concentration index ${fmtSigned(e.concentration_index, 3)} (negative: the cooling favours the lower quintiles of ${g.replace(/_/g, " ")}).`}
+              caption={concentrationCaption(e.concentration_index, e.resident_mean_cooling, g)}
             />
           ))}
         </div>

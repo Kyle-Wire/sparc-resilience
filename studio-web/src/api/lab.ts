@@ -516,7 +516,8 @@ export type ExposureRow = { case: string; adapted: boolean; person_mean_temp: nu
 export type Impacts = {
   thresholds: number[];
   exposure: ExposureRow[];
-  equity: Record<string, { quintiles: { quintile: number; mean_cooling: number; people: number; value_range: [number, number] }[]; concentration_index: number }>;
+  // resident_mean_cooling: the resident-weighted mean cooling the index divides by (absent from impacts cached before it)
+  equity: Record<string, { quintiles: { quintile: number; mean_cooling: number; people: number; value_range: [number, number] }[]; concentration_index: number; resident_mean_cooling?: number | null }>;
   hot_days: { station: string; cases: Record<string, unknown>[] } | null;
   hot_days_action: Action | null;
   zones: Record<string, unknown>[];

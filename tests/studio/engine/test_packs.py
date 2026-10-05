@@ -73,6 +73,79 @@ def test_decision_pack_for_an_exact_result(client, ctx, demo, run_ctx, synth_run
     assert exp["status"] == "ready" and exp["path"] == res["path"] and exp["bytes"] == res["bytes"]
 
 
+def test_demo_packs_say_demo_data(client, ctx, demo, run_ctx, synth_run, wait_job):
+    """A pack of the synthetic DEMO city says DEMO DATA in its title, a banner, README and summary, and does not
+    print the fictional placement as real coordinates; a pack of a real project prints them and no DEMO note."""
+    import json
+    import re
+
+    rid, _ = synth_run
+    assert ctx.db.fetchval("SELECT demo FROM runs WHERE id = ?", (rid,)) == 1
+    row = make_result(ctx, run_ctx)
+    _eid, res = _run_pack(client, ctx, wait_job, "export.decision_pack", {"result_id": row["id"]}, demo["id"])
+    z = _zip(res["path"])
+    brief = z.read("brief.html").decode()
+    header = re.search(r"<header>(.*?)</header>", brief, re.S).group(1)
+    assert "<h1>DEMO DATA — " in header and "fictional location" in header
+    assert not re.search(r"-?\d+\.\d{3}, -?\d+\.\d{3}", header)             # no lat, lon
+    assert "<title>DEMO DATA — " in brief and "must not be used for planning" in brief
+    assert "DEMO DATA" in z.read("README.txt").decode()
+    assert json.loads(z.read("summary.json"))["demo"] is True
+    cmp_ = client.post(f"/api/runs/{rid}/compare", json={"items": [{"kind": "result", "id": row["id"]},
+                                                                   {"kind": "baseline"}]}).json()
+    _eid, cres = _run_pack(client, ctx, wait_job, "export.compare_pack", {"comparison_id": cmp_["id"]}, demo["id"])
+    cz = _zip(cres["path"])
+    assert "DEMO DATA" in cz.read("brief.html").decode() and "DEMO DATA" in cz.read("README.txt").decode()
+    # the same run in a real project: coordinates, no DEMO marking
+    ctx.db.execute("UPDATE runs SET demo = 0 WHERE id = ?", (rid,))
+    _eid, res = _run_pack(client, ctx, wait_job, "export.decision_pack", {"result_id": row["id"]}, demo["id"])
+    z = _zip(res["path"])
+    brief = z.read("brief.html").decode()
+    assert "DEMO" not in brief and "DEMO" not in z.read("README.txt").decode()
+    assert re.search(r"<header>.*?-?\d+\.\d{3}, -?\d+\.\d{3}.*?</header>", brief, re.S)
+
+
+def test_who_benefits_names_a_warming(run_ctx):
+    """The concentration index is the same for a cooling and a warming of the same shape: a scenario that warms
+    the city reads "the warming concentrates in …", never "benefit concentrates at the top"."""
+    from sparc.core.planner import benefit_by_group
+    from sparc.studio.runs import layers as L
+    from sparc.studio.scenarios import packs
+    from sparc.studio.scenarios.impacts import compute_impacts
+
+    det = run_ctx.scenario_detail()
+    cool = np.asarray(det["folds"]["Canopy Increase +10"], dtype=np.float64).mean(axis=0)     # ΔT < 0
+    lay = L.people_layers(run_ctx)
+    a, b = benefit_by_group(-cool, lay), benefit_by_group(cool, lay)
+    for k in a:
+        assert a[k]["concentration_index"] == pytest.approx(b[k]["concentration_index"])       # sign-invariant
+        assert a[k]["resident_mean_cooling"] > 0 > b[k]["resident_mean_cooling"]
+    briefs = {}
+    for name, delta in (("cools", cool), ("warms", -cool)):
+        imp = compute_impacts(run_ctx, delta)
+        briefs[name] = packs._brief_html(title=name, place="p", paragraph="", res={}, impacts=imp, maps={},
+                                         caveats=[], limitations=[], provenance={}, unit="°F", draft=False)
+    assert "benefit concentrates at the top" not in briefs["cools"] + briefs["warms"]
+    assert "<h2>Who benefits</h2>" in briefs["cools"] and "the cooling " in briefs["cools"]
+    assert "the warming" not in briefs["cools"]
+    assert "<h2>Who is affected</h2>" in briefs["warms"] and "the warming " in briefs["warms"]
+    assert "the cooling " not in briefs["warms"]
+    assert packs.equity_reading(0.102, -0.8) == "the warming concentrates in the higher quintiles"
+    assert packs.equity_reading(-0.2, 0.5) == "the cooling concentrates in the lower quintiles"
+    assert packs.equity_reading(0.01, 0.5) == "the cooling is shared about evenly"
+    assert packs.equity_reading(0.3, None) == "not computed"
+
+
+def test_report_equity_sentence_names_a_warming():
+    from sparc.studio.exports.narrative import equity_sentences
+
+    q = [{"quintile": i + 1, "mean_cooling": -0.5 - 0.1 * i, "people": 100.0} for i in range(5)]
+    m = {"planner": {"equity": {"population density": {"quintiles": q, "concentration_index": 0.102}}}}
+    assert equity_sentences(m, {})[0].startswith("Ranked by population density, the package's warming concentrates")
+    m["planner"]["equity"]["population density"]["resident_mean_cooling"] = 0.7
+    assert equity_sentences(m, {})[0].startswith("Ranked by population density, the package's cooling concentrates")
+
+
 def test_preview_only_pack_is_draft(client, ctx, demo, run_ctx, synth_run, wait_job, fake_emulator):
     rid, rd = synth_run
     fake_emulator(rd, run_ctx)
