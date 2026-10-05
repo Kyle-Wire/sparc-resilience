@@ -29,7 +29,7 @@ PAGES = [
     "/p/{pid}", "/p/{pid}/setup/data", "/p/{pid}/setup/inputs", "/p/{pid}/config", "/p/{pid}/launch", "/p/{pid}/runs",
     "/p/{pid}/studies", "/p/{pid}/exports", "/p/{pid}/findings",
     "/r/{rid}", "/r/{rid}/data", "/r/{rid}/accuracy", "/r/{rid}/distance", "/r/{rid}/influence", "/r/{rid}/response",
-    "/r/{rid}/causal", "/r/{rid}/scenarios", "/r/{rid}/climate", "/r/{rid}/budget", "/r/{rid}/validation",
+    "/r/{rid}/causal", "/r/{rid}/heat", "/r/{rid}/scenarios", "/r/{rid}/climate", "/r/{rid}/budget", "/r/{rid}/validation",
     "/r/{rid}/provenance", "/r/{rid}/map", "/r/{rid}/files", "/r/{rid}/lab", "/r/{rid}/docs", "/r/{rid}/track",
     "/jobs/{jid}",
 ]
