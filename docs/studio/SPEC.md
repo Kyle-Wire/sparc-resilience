@@ -2560,7 +2560,7 @@ The harness starts `python -m sparc.studio --workspace <tmp> --port 0 --no-brows
 6. `pytest tests/studio/e2e/test_e2e_replay.py tests/studio/e2e/test_e2e_real_fast.py`
 7. Wheel smoke test: build, install into a clean venv, run `sparc studio --no-browser --port 0`, and `GET /` returns index.html with hashed assets.
 8. If `docs/studio/doctest.py` exists (added later by the docs item), run it. The integration item adds this step with an existence guard, so the docs item never edits the workflow.
-9. Guard for the old app: `git diff --name-only <merge-base>...HEAD -- sparc-desktop sparc/server` must be empty.
+9. Guard for the old app: the `sparc-desktop` and `sparc/server` trees at HEAD must equal those at the pinned baseline commit `STUDIO_BASELINE` (the last commit before Studio work). See §19.
 
 **Existing workflow.** `.github/workflows/tests.yml` already has a `legacy` job that runs `pytest tests --ignore=tests/core` with the `[server]` extra, which includes FastAPI. Without a change it would collect `tests/studio/**`, including slow, e2e and Node-dependent tests. The integration item therefore owns one edit to that file: add `--ignore=tests/studio` to the legacy job. Its `core` job installs only `requirements-core.txt`, so the new `tests/core` files must not need FastAPI, psutil or Node (the studio delegation test uses the install-hint path).
 
@@ -2874,7 +2874,7 @@ This is the changelog of the specification after the completeness review (§18).
 - The performance fixture has 54,901 cells (the synthetic generator at n = 281, real predictions). The tracker folds a replayed event log in slices of 500 events and yields to the browser between slices, so opening a finished 20,000-event job meets the 100 ms frame budget, as the live-streaming case does.
 - The Providence journey uses `$SPARC_PROVIDENCE_RUNS` or `output/core/providence`, copying a run outside the repository to a temp folder before importing it.
 - The wheel smoke test builds from a hard-linked copy of the sources (no `build/` left in the tree); locally it installs with `--no-deps` plus the server dependencies, and CI installs the full `[studio]` extra with CPU torch.
-- `tests.yml`'s legacy job passes `--ignore=tests/core --ignore=tests/studio`. CI sets `SPARC_E2E_REQUIRE_BROWSER=1` and `SPARC_CONTRACT_REQUIRE_TS=1`, so a missing browser or Node fails instead of skipping; the old-app guard falls back to the pushed range (`github.event.before`) on pushes to the default branch.
+- `tests.yml`'s legacy job passes `--ignore=tests/core --ignore=tests/studio`. CI sets `SPARC_E2E_REQUIRE_BROWSER=1` and `SPARC_CONTRACT_REQUIRE_TS=1`, so a missing browser or Node fails instead of skipping; the old-app guard compares the `sparc-desktop` and `sparc/server` trees at HEAD with a pinned baseline commit (`STUDIO_BASELINE`, the last commit before Studio work), because `pi-jepa-dev` shares no history with `main` and the merge-base/push-range version failed in CI. Update the baseline when the old app is changed on purpose.
 
 ### Review fixes (2026-10-02)
 
