@@ -181,6 +181,27 @@ def test_design_csv_round_trip(client, ctx, demo, run_ctx, synth_run):
     np.testing.assert_allclose(np.frombuffer(raw[8:], dtype="<f4"), [4, 6], rtol=1e-5)
 
 
+def test_design_csv_import_rejects_bad_cells(client, ctx, demo, run_ctx, synth_run):
+    """A number column with text in it ("abc") is a 422 that names the row, not a 500; an id the run does not
+    have ("inf", "ghost") is an unknown id; empty and NA cells are skipped."""
+    rid, _ = synth_run
+    ids = np.asarray(run_ctx.grid.ids)
+    r = client.post(f"/api/runs/{rid}/designs/import", content=f"id,lever,change\n{ids[0]},canopy,2\nzz,canopy,abc\n"
+                    .encode(), headers={"Content-Type": "text/csv"})
+    assert r.status_code == 422, r.text
+    err = r.json()["error"]
+    assert err["code"] == "validation" and err["detail"]["errors"][0]["code"] == "number"
+    assert "row 3" in err["detail"]["errors"][0]["message"] and "abc" in err["detail"]["errors"][0]["message"]
+    for bad_id in ("inf", "-inf", "nan", "1e400"):
+        body = f"id,lever,change\n{ids[0]},canopy,2\n{bad_id},canopy,1\n{ids[1]},canopy,N/A\n{ids[2]},canopy,\n"
+        r = client.post(f"/api/runs/{rid}/designs/import", content=body.encode(), headers={"Content-Type": "text/csv"})
+        assert r.status_code == 201, (bad_id, r.text)
+        imp = r.json()
+        assert imp["levers"] == ["canopy"] and len(imp["unknown_ids"]) == 1 and imp["n_rows"] == 4
+        raw = Path(ctx.db.fetchone("SELECT path FROM blobs WHERE id = ?", (imp["blobs"]["canopy"],))["path"]).read_bytes()
+        np.testing.assert_allclose(np.frombuffer(raw[4:], dtype="<f4"), [2.0])
+
+
 def test_cache_hit_of_another_scenario_is_adopted(client, ctx, demo, run_ctx, synth_run):
     """Two scenarios with the same content share the cache key: the second one's "Run exact" is a cache hit that
     it gets as its own result (listed, exact, inspectable), and deleting the first keeps it."""

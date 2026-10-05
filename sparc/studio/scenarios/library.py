@@ -518,17 +518,27 @@ def import_design(db, ctx, raw: bytes) -> dict:
     pos = {v: i for i, v in enumerate(ids)}
     unknown: list = []
     per_lever: dict[str, dict[int, float]] = {}
-    for rid, lever, v in zip(df[cols["id"]], df[cols["lever"]].astype(str), df[cols[mode]].astype(float)):
+    raw_vals = df[cols[mode]]
+    vals = pd.to_numeric(raw_vals, errors="coerce")
+    bad = [i for i in np.flatnonzero(vals.isna().to_numpy() & raw_vals.notna().to_numpy())]
+    if bad:                                  # text in a number column ("abc"); empty cells and NA stay skipped
+        raise ApiError("validation", f"the {cols[mode]} column of the design CSV must be numeric: "
+                       f"{len(bad)} row(s) are not numbers",
+                       detail={"errors": [{"path": f"{cols[mode]}[{int(i) + 2}]",
+                                           "message": f"row {int(i) + 2}: {str(raw_vals.iloc[i])[:40]!r} is not a "
+                                                      f"number", "code": "number"} for i in bad[:20]]})
+    for rid, lever, v in zip(df[cols["id"]], df[cols["lever"]].astype(str), vals.astype(float)):
         key = str(rid)
         r = pos.get(key)
         if r is None:
             try:
                 r = pos.get(str(int(float(key))))
-            except ValueError:
+            except (ValueError, OverflowError):     # "ghost", "inf", "nan": an id this run does not have
                 r = None
         if r is None:
             if len(unknown) < 1000:
-                unknown.append(rid.item() if hasattr(rid, "item") else rid)
+                u = rid.item() if hasattr(rid, "item") else rid
+                unknown.append(u if not isinstance(u, float) or np.isfinite(u) else str(u))   # "inf", "nan"
             continue
         if lever not in preds:
             raise ApiError("validation", f"{lever!r} is not a predictor of this run",
