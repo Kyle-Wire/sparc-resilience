@@ -1,0 +1,1 @@
+import{p as e,x as t}from"./router-BdYEEJwx.js";import{t as n}from"./JobTracker-CuX623bi.js";var r=t();function i(){let{params:t}=e();return t.jid?(0,r.jsx)(n,{jid:t.jid},t.jid):null}export{i as default};

@@ -8,6 +8,7 @@ import { Button } from "../../../components/ui/Button";
 import { JobStrip } from "../../../components/ui/JobStrip";
 import { Table } from "../../../components/ui/Table";
 import { fmtDuration, fmtInt, fmtNum, fmtPct, unitLabel } from "../../../theme/format";
+import type { HeatPreview } from "../model/heatPreview";
 import { EngineChip } from "./EngineChip";
 import { TrustBadge } from "./TrustBadge";
 
@@ -40,7 +41,57 @@ export type CompilePanelProps = {
   running: boolean;
   jobId: string | null;
   onRunExact: () => void;
+  /** Live heat risk of the preview (runs with campaign humidity). */
+  heat?: HeatPreview | null;
 };
+
+/** The preview's heat risk: residents the draft moves across the NWS Extreme caution and Danger edges. */
+export function HeatPreviewCard({ heat }: { heat: HeatPreview }) {
+  const s = heat.shift;
+  const who = s.measure === "people" ? "residents" : "cells";
+  const n = (v: number) => fmtInt(Math.round(v));
+  const moved = s.ecBefore - s.ecAfter;
+  return (
+    <section className="card" aria-label="Heat risk preview">
+      <header>
+        <h3>Heat risk</h3>
+        <Badge tone="accent">preview</Badge>
+      </header>
+      <p style={{ margin: "0 0 6px", fontWeight: 600 }}>
+        {Math.round(moved) > 0
+          ? `Moves about ${n(moved)} ${who} out of Extreme caution or worse.`
+          : Math.round(moved) < 0
+            ? `Puts about ${n(-moved)} more ${who} at Extreme caution or worse.`
+            : `No change in ${who} at Extreme caution or worse.`}
+      </p>
+      <dl className="kv">
+        <dt>Extreme caution or worse</dt>
+        <dd className="num">
+          {n(s.ecBefore)} → {n(s.ecAfter)}
+        </dd>
+        <dt>Danger or worse</dt>
+        <dd className="num">
+          {n(s.dangerBefore)} → {n(s.dangerAfter)}
+        </dd>
+        <dt>Heat index felt</dt>
+        <dd className="num">{`${s.meanHiChange <= 0 ? "−" : "+"}${fmtNum(Math.abs(s.meanHiChange), 2)} °F`}</dd>
+      </dl>
+      {heat.caveats.length ? (
+        <ul className="edit-issues" aria-label="Evidence caveats">
+          {heat.caveats.map((c, i) => (
+            <li key={i} data-level="warn">
+              {c}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <p className="cap">
+        NWS heat index on the campaign afternoon (dewpoint {fmtNum(heat.dewpointC, 1)} °C). From the linear preview; the exact result&apos;s impacts verify it and add the climate
+        futures.
+      </p>
+    </section>
+  );
+}
 
 export function CompilePanel(p: CompilePanelProps) {
   const c = p.compile;
@@ -110,6 +161,7 @@ export function CompilePanel(p: CompilePanelProps) {
           <p className="cap">Add an edit to compile it.</p>
         ) : null}
       </section>
+      {p.heat ? <HeatPreviewCard heat={p.heat} /> : null}
       <section className="card">
         <header>
           <h3>Exact</h3>

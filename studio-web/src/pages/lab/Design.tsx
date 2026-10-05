@@ -54,6 +54,7 @@ import { columnOptions, type MapPick } from "./components/SelectionBuilder";
 import { TemplateGallery } from "./components/TemplateGallery";
 import { contentKey, serializeDoc, usableEdits } from "./model/doc";
 import { createAutosave, docForSave, getDraft, isDirty, moveDraft, uploadedBrushRefs, type DraftStore } from "./model/draft";
+import { useHeatPreview } from "./model/heatPreview";
 import { PreviewController } from "./model/preview";
 import { debounce } from "./model/timing";
 
@@ -120,6 +121,9 @@ function Workbench({ rid, sid, pid, grid, groups, levers, scenario }: WorkbenchP
   const [panes, setPanes] = useState<{ left: boolean; right: boolean }>({ left: true, right: true });
   const [brushTick, setBrushTick] = useState(0);
   const [refusal, setRefusal] = useState<ApiError | null>(null);
+  const heatLevers = useMemo(() => Object.keys(compile?.value.levers ?? {}), [compile]);
+  const leverLabel = useCallback((v: string) => levers.find((l) => l.var === v)?.label ?? v, [levers]);
+  const heatPreview = useHeatPreview(rid, grid, groups, preview?.delta ?? null, heatLevers, leverLabel);
 
   // Load the server copy into a fresh draft, or into a clean one the server has moved past
   // (renamed in the library, say). A server update that only adds results or changes the
@@ -408,6 +412,7 @@ function Workbench({ rid, sid, pid, grid, groups, levers, scenario }: WorkbenchP
             running={running}
             jobId={shownJob}
             onRunExact={() => void runExact()}
+            heat={heatPreview}
           />
         </aside>
       </div>
