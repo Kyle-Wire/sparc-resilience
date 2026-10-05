@@ -17,6 +17,7 @@ export const routes: RouteDef[] = [
   { path: "/r/:rid/influence", component: lazy(() => import("./Influence")), title: "Influence", runTab: { id: "influence", label: "Influence", group: "Model", order: 50 } },
   { path: "/r/:rid/response", component: lazy(() => import("./Response")), title: "Response", runTab: { id: "response", label: "Response", group: "Effects", order: 10 } },
   { path: "/r/:rid/causal", component: lazy(() => import("./Causal")), title: "Causal audit", runTab: { id: "causal", label: "Causal", group: "Effects", order: 20 } },
+  { path: "/r/:rid/heat", component: lazy(() => import("./Heat")), title: "Heat brief", runTab: { id: "heat", label: "Heat", group: "Decisions", order: 5 } },
   {
     path: "/r/:rid/scenarios",
     component: lazy(() => import("./Scenarios")),

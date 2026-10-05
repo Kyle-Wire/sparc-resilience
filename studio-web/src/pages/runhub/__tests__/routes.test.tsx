@@ -14,7 +14,7 @@ import { runDetail } from "./helpers";
 const GROUPS: Record<string, string[]> = {
   Model: ["overview", "data", "accuracy", "distance", "influence"],
   Effects: ["response", "causal"],
-  Decisions: ["scenarios", "climate", "budget", "planner"],
+  Decisions: ["heat", "scenarios", "climate", "budget", "planner"],
   Trust: ["uncertainty", "provenance"],
   Run: ["map", "docs", "files"],
 };

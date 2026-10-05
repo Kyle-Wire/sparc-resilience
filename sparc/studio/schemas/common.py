@@ -322,6 +322,8 @@ class LayerMeta(BaseModel):
     source: LayerSource | None = None
     dtype: Literal["float32", "uint8"] = "float32"
     stats: LayerStats
+    palette: Literal["heat"] | None = Field(None, description='cat layers: a named colour set ("heat": the NWS '
+                                                              'heat-index categories)')
 
 
 class GridCorners(BaseModel):

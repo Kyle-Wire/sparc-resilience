@@ -16,7 +16,7 @@ import pytest
 from tests.studio.conftest import wait_for
 from tests.studio.runs.conftest import RUN_ID, create_demo
 
-VIEWS = ("overview", "data", "accuracy", "distance", "influence", "response", "scenarios", "climate", "causal",
+VIEWS = ("overview", "data", "accuracy", "distance", "influence", "response", "scenarios", "climate", "heat", "causal",
          "budget", "planner", "uncertainty", "provenance")
 
 

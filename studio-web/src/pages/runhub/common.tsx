@@ -4,7 +4,7 @@
 // the Findings pin for non-chart blocks.
 import { Component, createContext, useContext, useState, type ErrorInfo, type ReactNode } from "react";
 import { api, errorMessage } from "../../api/client";
-import type { GenericTable, Sections, ViewFlag, ViewKpi, ViewModelOf, ViewName, ViewSections, ViewUnits } from "../../api/runs";
+import type { GenericTable, Sections, Verdict, ViewFlag, ViewKpi, ViewModelOf, ViewName, ViewParams, ViewSections, ViewUnits } from "../../api/runs";
 import { useRunDetailFull, useView } from "../../api/runs";
 import type { Action, Finding, FindingCreate, StageId } from "../../api/types";
 import { Badge } from "../../components/ui/Badge";
@@ -184,6 +184,8 @@ export type ViewPageProps<V extends ViewName> = {
   actions?: ReactNode;
   /** Show the caveats expanded (Overview). */
   caveatsOpen?: boolean;
+  /** Query parameters of the view (the Heat tab's what-if dewpoint). */
+  params?: ViewParams;
   children: (sections: Sections<ViewSections[V]>, vm: ViewModelOf<V>) => ReactNode;
 };
 
@@ -192,9 +194,9 @@ export type ViewPageProps<V extends ViewName> = {
  * missing-output empty state with its action, the live banner while the run writes, the
  * view's caveats, then the sections.
  */
-export function ViewPage<V extends ViewName>({ view, title, intro, live, liveText, actions, caveatsOpen, children }: ViewPageProps<V>) {
+export function ViewPage<V extends ViewName>({ view, title, intro, live, liveText, actions, caveatsOpen, params, children }: ViewPageProps<V>) {
   const rid = useRid();
-  const res = useView(rid, view);
+  const res = useView(rid, view, params);
   const runLive = useRunIsLive(rid);
   const vm = res.data;
   const isLive = !!vm && (runLive || vm.availability === "running" || (live ? live(vm) : false));
@@ -332,6 +334,34 @@ export function PinButton({ title, snapshot, view }: { title: string; snapshot: 
     <button type="button" className="btn small ghost" onClick={() => void pin()} disabled={busy} aria-label={`Pin ${title} to Findings`}>
       {busy ? <span className="spinner" aria-hidden="true" /> : <Icon name="pin" />} Pin
     </button>
+  );
+}
+
+const VERDICT_TONE: Record<Verdict["verdict"], "good" | "warn" | "crit" | "neutral"> = {
+  robust: "good",
+  direction: "warn",
+  not_established: "crit",
+  unknown: "neutral",
+};
+const VERDICT_ICON = { robust: "check", direction: "alert", not_established: "x", unknown: "minus" } as const;
+
+/** The plain verdict on a scenario's change (Robust / Direction only / Not established); the reasons and
+ *  qualifiers are in the tooltip and, with `detail`, written out below the pill. */
+export function VerdictPill({ verdict, detail }: { verdict: Pick<Verdict, "verdict" | "label" | "reasons" | "qualifiers"> | null | undefined; detail?: boolean }) {
+  if (!verdict || !verdict.verdict) return <span className="cap">—</span>;
+  const why = [...(verdict.reasons ?? []), ...(verdict.qualifiers ?? []).map((q) => `note: ${q}`)].join("; ");
+  const pill = (
+    <Pill tone={VERDICT_TONE[verdict.verdict] ?? "neutral"} icon={VERDICT_ICON[verdict.verdict] ?? "minus"} title={why || undefined}>
+      {verdict.label}
+      {verdict.qualifiers?.length ? " *" : ""}
+    </Pill>
+  );
+  if (!detail) return pill;
+  return (
+    <span className="stack" style={{ gap: 2 }}>
+      {pill}
+      {why ? <span className="cap">{why}</span> : null}
+    </span>
   );
 }
 

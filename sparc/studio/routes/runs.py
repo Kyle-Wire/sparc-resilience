@@ -709,7 +709,9 @@ def _headline(sctx: StudioContext, ctx) -> str | None:
 
 
 @router.get("/runs/{rid}/views/{view}", response_model=ViewModel)
-async def get_view(rid: str, view: str, sctx: StudioContext = Depends(get_ctx)):
+async def get_view(rid: str, view: str, sctx: StudioContext = Depends(get_ctx),
+                   dewpoint_C: float | None = Query(None, ge=-30.0, le=35.0,  # noqa: N803 - the wire name
+                                                    description="heat view: a what-if dewpoint (°C)")):
     from sparc.studio.runs.views import VIEWS, build_view
 
     if view not in VIEWS:
@@ -718,7 +720,8 @@ async def get_view(rid: str, view: str, sctx: StudioContext = Depends(get_ctx)):
     oenv = await outputs_env(sctx, ctx)
     rows = sb.stage_rows(ctx, oenv["proj"])
     env = {"outputs": oenv["entries"], "tabs": oenv["tabs"], "stage_rows": rows,
-           "labels": sb.STAGE_LABELS, "demo": bool(ctx.row.get("demo")), "headline_scenario": _headline(sctx, ctx)}
+           "labels": sb.STAGE_LABELS, "demo": bool(ctx.row.get("demo")), "headline_scenario": _headline(sctx, ctx),
+           "params": {"dewpoint_C": dewpoint_C} if view == "heat" else {}}
     if view in ("overview", "uncertainty"):
         env["studies_index"] = study_index(sctx, ctx)
     if view == "overview":

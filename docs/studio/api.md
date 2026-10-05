@@ -147,7 +147,8 @@ type LayerMeta = { key: string; group: string; label: string; unit: string; scal
   desc: string; sign_note: string|null; source: { file: string, column: string|null }|null;
   dtype: "float32"|"uint8";
   stats: { n: number; lo: number|null; hi: number|null; mean: number|null; p1: number|null; p2: number|null;
-           p50: number|null; p98: number|null; p99: number|null } };
+           p50: number|null; p98: number|null; p99: number|null };
+  palette?: "heat"|null };   // cat layers: "heat" colours the five NWS heat-index categories
 
 type GridMeta = { n: number; nx: number; ny: number; dx_m: number; x0_m: number; y0_m: number;
   crs: string|null; coord_scale: number; has_lonlat: boolean;
@@ -691,7 +692,8 @@ Query: `diff_with?=<rid>` → `200 {packages: string[], diff?: {added: string[],
 Query: `ids=a,b,c` → `200 {results: Record<string, unknown>, missing: {id, produced_by, action}[]}`.
 
 **`GET /api/runs/{rid}/views/{view}`**
-`view ∈ overview|data|accuracy|distance|influence|response|scenarios|climate|causal|budget|planner|uncertainty|provenance`
+`view ∈ overview|data|accuracy|distance|influence|response|scenarios|climate|heat|causal|budget|planner|uncertainty|provenance`.
+Query (heat only): `dewpoint_C` (−30…35 °C), a what-if dewpoint in place of the campaign's.
 → `200 ViewModel`:
 
 ```ts
@@ -710,12 +712,13 @@ Section keys per view. Each key is present or `null`.
 | `distance` | `curve, baselines, verdict, block_wins` |
 | `influence` | `ranges, correlogram, rings, anisotropy, priors` |
 | `response` | `levers: {var: {curve, shapes, effects, fold_means}}, literature` |
-| `scenarios` | `rows, ladders, has_detail` |
+| `scenarios` | `rows, ladders, has_detail` (each row carries `verdict: {verdict, label, reasons, qualifiers}` once uncertainty envelopes exist) |
 | `climate` | `warming, models_table, exposure, offset, thresholds` |
+| `heat` | `brief, humidity, categories, kpis, today, futures, hist, verdicts`: NWS heat index from each cell's temperature and the campaign dewpoint; residents (else cells) per category today, with the first joint scenario, and per CMIP6 future under constant dewpoint and constant RH (ranges widened by the models' p10–p90 warming); `humidity.needs_input` when the run has no campaign humidity |
 | `causal` | `treatments: {t: {forest, audit, dr_curve, model_pd_curve, cate, cate_layer, sensitivity, controls}}, flags, dag_audit` (`model_pd_curve` and `cate_layer` are null on older runs) |
 | `budget` | `kpis, pareto, caption, top_cells, status` (`status` = `"ok"` or core's `"no positive-benefit segments"`) |
 | `planner` | `exposure, person_mean, hot_days, equity, plantable, zones, hex_files, sites, pairs, gis` |
-| `uncertainty` | `rows, climate, sources` |
+| `uncertainty` | `rows, climate, sources` (each row carries `verdict`) |
 | `provenance` | `hashes, git, platform, launch` |
 
 Errors: `404 unknown_view`.

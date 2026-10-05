@@ -5516,6 +5516,26 @@
               "type": "string",
               "title": "View"
             }
+          },
+          {
+            "name": "dewpoint_C",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "maximum": 35.0,
+                  "minimum": -30.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "heat view: a what-if dewpoint (\u00b0C)",
+              "title": "Dewpoint C"
+            },
+            "description": "heat view: a what-if dewpoint (\u00b0C)"
           }
         ],
         "responses": {

@@ -66,7 +66,7 @@ RAMPS: dict[str, list[str]] = {
 CAT = ["#2a78d6", "#eb6834", "#1baf7a", "#b9b8b1"]
 
 RUN_TAB_IDS = ("overview", "data", "accuracy", "distance", "influence", "response", "causal", "scenarios", "climate",
-               "budget", "planner", "lab", "validation", "uncertainty", "provenance", "track", "map", "docs", "files")
+               "heat", "budget", "planner", "lab", "validation", "uncertainty", "provenance", "track", "map", "docs", "files")
 EDIT_MODES = ("add", "set", "scale", "floor", "ceiling", "fill_headroom", "to_percentile", "per_cell")
 MODES = [
     {"id": "fast", "label": "Fast", "desc": "Quick check: fewer models and tuning steps; minutes, not hours."},

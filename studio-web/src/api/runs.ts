@@ -87,6 +87,7 @@ export type ViewName =
   | "response"
   | "scenarios"
   | "climate"
+  | "heat"
   | "causal"
   | "budget"
   | "planner"
@@ -102,6 +103,7 @@ export const VIEW_NAMES: readonly ViewName[] = [
   "response",
   "scenarios",
   "climate",
+  "heat",
   "causal",
   "budget",
   "planner",
@@ -353,6 +355,8 @@ export type ScenarioRow = {
   tier: string | null;
   has_folds: boolean;
   realized: Record<string, number | null>;
+  /** Plain verdict from the run's uncertainty envelopes (absent until they are computed). */
+  verdict?: Verdict | null;
 };
 
 export type ScenariosSections = {
@@ -391,6 +395,81 @@ export type ClimateSections = {
   /** Share of the median warming an adaptation variant offsets. */
   offset: { id: string; label: string; variant: string; share: number | null }[];
   thresholds: number[];
+};
+
+// -- heat stress (sparc.core.heat: NWS heat index, residents by category, verdicts)
+
+/** Robust / Direction only / Not established, with the reasons and qualifiers behind it. */
+export type Verdict = {
+  verdict: "robust" | "direction" | "not_established" | "unknown";
+  label: string;
+  reasons: string[];
+  qualifiers: string[];
+};
+
+export type HeatCategoryId = "below" | "caution" | "extreme_caution" | "danger" | "extreme_danger";
+
+/** One exposure case: residents (or cells) per NWS category and the heat index they feel (°F). */
+export type HeatCase = {
+  counts: Record<HeatCategoryId, number>;
+  ec_or_worse: number;
+  danger_or_worse: number;
+  mean_hi: number;
+  max_hi: number;
+};
+
+export type HeatFutureArm = {
+  constant_dewpoint: HeatCase;
+  constant_rh: HeatCase;
+  /** Low–high of the count at Extreme caution or worse across the two humidity assumptions. */
+  ec_range_humidity: [number, number];
+  /** … across humidity and the models' 10th–90th percentile warming. */
+  ec_range_full: [number, number];
+  danger_range_humidity: [number, number];
+  danger_range_full: [number, number];
+};
+
+export type HeatSections = {
+  brief: { id: string; title: string; text: string; tone: "neutral" | "good" | "warn" | "crit" }[];
+  humidity: {
+    dewpoint_C: number | null;
+    source: string | null;
+    campaign_dewpoint_C: number | null;
+    campaign_source: string | null;
+    user_set: boolean;
+    needs_input: boolean;
+    rh_range: [number, number] | null;
+    presets: { label: string; dewpoint_C: number }[];
+    assumptions: { constant_dewpoint: string; constant_rh: string };
+    method: string;
+  };
+  categories: { id: HeatCategoryId; label: string; lo_F: number | null; hi_F: number | null; note: string }[];
+  kpis: ViewKpi[];
+  today: { measure: "people" | "cells"; total: number; package: string | null; unadapted: HeatCase; adapted: HeatCase | null };
+  futures: {
+    id: string;
+    experiment: string;
+    label: string;
+    period: string;
+    warming_F: number;
+    warming_lo_F: number | null;
+    warming_hi_F: number | null;
+    unadapted: HeatFutureArm;
+    adapted: HeatFutureArm | null;
+  }[];
+  /** Today's heat index (°F) distribution, weighted by residents when known. */
+  hist: { edges: number[]; counts: number[]; adapted_counts: number[] | null; measure: "people" | "cells" };
+  verdicts: {
+    scenario: string;
+    slug: string;
+    verdict: Verdict["verdict"] | null;
+    label: string | null;
+    reasons: string[];
+    qualifiers: string[];
+    estimate: number | null;
+    envelope: [number | null, number | null] | null;
+    frac_extrapolated: number | null;
+  }[];
 };
 
 // -- causal audit (causal.json, causal_cells.parquet)
@@ -463,7 +542,7 @@ export type PlannerSections = {
 // -- uncertainty (uncertainty.json)
 
 export type UncertaintySections = {
-  rows: { id: string; label: string; estimate: number | null; layers: { id: string; label: string; lo: number | null; hi: number | null }[] }[];
+  rows: { id: string; label: string; estimate: number | null; layers: { id: string; label: string; lo: number | null; hi: number | null }[]; verdict?: Verdict | null }[];
   climate: GenericTable;
   sources: { kind: string; label: string; study_id: string | null; attached: boolean; state: string | null }[];
 };
@@ -486,6 +565,7 @@ export type ViewSections = {
   response: ResponseSections;
   scenarios: ScenariosSections;
   climate: ClimateSections;
+  heat: HeatSections;
   causal: CausalSections;
   budget: BudgetSections;
   planner: PlannerSections;
@@ -495,13 +575,25 @@ export type ViewSections = {
 
 export type ViewModelOf<V extends ViewName> = ViewModel<ViewSections[V]>;
 
-export function getView<V extends ViewName>(rid: string, view: V, signal?: AbortSignal): Promise<ViewModelOf<V>> {
-  return api.get<ViewModelOf<V>>(`${runBase(rid)}/views/${view}`, undefined, signal);
+/** Query parameters a view takes (the Heat tab's what-if dewpoint, °C). */
+export type ViewParams = { dewpoint_C?: number | null };
+
+function viewQuery(params?: ViewParams): Record<string, number> | undefined {
+  if (!params) return undefined;
+  const q: Record<string, number> = {};
+  if (params.dewpoint_C !== null && params.dewpoint_C !== undefined && Number.isFinite(params.dewpoint_C)) q.dewpoint_C = params.dewpoint_C;
+  return Object.keys(q).length ? q : undefined;
+}
+
+export function getView<V extends ViewName>(rid: string, view: V, signal?: AbortSignal, params?: ViewParams): Promise<ViewModelOf<V>> {
+  return api.get<ViewModelOf<V>>(`${runBase(rid)}/views/${view}`, viewQuery(params), signal);
 }
 
 /** A run ViewModel. Refetched when the run writes outputs (`output.written` → `run:<rid>:views`). */
-export function useView<V extends ViewName>(rid: string | null, view: V | null) {
-  return useResource<ViewModelOf<V>>(rid && view ? `run:${rid}:views:${view}` : null, (s) => getView(rid!, view!, s), {
+export function useView<V extends ViewName>(rid: string | null, view: V | null, params?: ViewParams) {
+  const q = viewQuery(params);
+  const suffix = q ? `?${new URLSearchParams(Object.entries(q).map(([k, v]) => [k, String(v)])).toString()}` : "";
+  return useResource<ViewModelOf<V>>(rid && view ? `run:${rid}:views:${view}${suffix}` : null, (s) => getView(rid!, view!, s, params), {
     tags: rid ? [`run:${rid}`, `run:${rid}:views`] : [],
     keepPrevious: true,
   });

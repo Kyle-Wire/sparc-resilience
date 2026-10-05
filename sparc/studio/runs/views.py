@@ -32,6 +32,7 @@ SECTION_KEYS: dict[str, tuple[str, ...]] = {
     "response": ("levers", "literature"),
     "scenarios": ("rows", "ladders", "has_detail"),
     "climate": ("warming", "models_table", "exposure", "offset", "thresholds"),
+    "heat": ("brief", "humidity", "categories", "kpis", "today", "futures", "hist", "verdicts"),
     "causal": ("treatments", "flags", "dag_audit"),
     "budget": ("kpis", "pareto", "caption", "top_cells", "status"),
     "planner": ("exposure", "person_mean", "hot_days", "equity", "plantable", "zones", "hex_files", "sites", "pairs",
@@ -630,6 +631,9 @@ def _scenario_rows(ctx) -> list[dict]:
     except Exception:
         specs = {}
     slugs = {s["name"]: s["slug"] for s in ctx.configured_scenarios()}
+    from sparc.studio.runs.heat import verdict_map
+
+    verdicts = verdict_map(ctx)
     out = []
     for s in sc:
         if not isinstance(s, dict) or not s.get("name"):
@@ -649,6 +653,7 @@ def _scenario_rows(ctx) -> list[dict]:
                        "model_within": cl.get("model_within")} if isinstance(cl, dict) else None,
             "tier": _tier(fnum(s.get("frac_extrapolated"))), "has_folds": bool(det and name in det["folds"]),
             "realized": {k2: fnum(v) for k2, v in (s.get("mean_realized") or {}).items()},
+            "verdict": verdicts.get(name),
         })
     return out
 
@@ -720,6 +725,12 @@ def _climate(ctx, env) -> dict:
     return {"warming": warming, "models_table": table,
             "exposure": {"thresholds": thresholds, "present": {k2: present.get(k2) for k2 in tkeys}, "groups": groups},
             "offset": offset, "thresholds": thresholds}
+
+
+def _heat(ctx, env) -> dict:
+    from sparc.studio.runs.heat import heat_view
+
+    return heat_view(ctx, env.get("params") or {})
 
 
 def _tkey(t) -> str:
@@ -1020,7 +1031,9 @@ def _uncertainty(ctx, env) -> dict:
     if not isinstance(u, dict) or not u:
         return dict.fromkeys(SECTION_KEYS["uncertainty"])
     from sparc.core.catalog import scenario_slug
+    from sparc.studio.runs.heat import verdict_map
 
+    verdicts = verdict_map(ctx)
     rows = []
     taken: set[str] = set()
     for s in u.get("scenarios") or []:
@@ -1032,7 +1045,8 @@ def _uncertainty(ctx, env) -> dict:
                 layers.append({"id": key, "label": label, "lo": fnum(v[0]), "hi": fnum(v[1])})
         slug = scenario_slug(str(s.get("scenario")), taken)
         taken.add(slug)
-        rows.append({"id": slug, "label": str(s.get("scenario")), "estimate": fnum(s.get("estimate")), "layers": layers})
+        rows.append({"id": slug, "label": str(s.get("scenario")), "estimate": fnum(s.get("estimate")), "layers": layers,
+                     "verdict": verdicts.get(str(s.get("scenario")))})
     tu = ctx.units.get("target")
     clim = u.get("climate") or []
     ctab = _table([("experiment", "Scenario", None), ("period", "Period", None), ("n_models", "Models", None),
@@ -1120,7 +1134,7 @@ def _provenance(ctx, env) -> dict:
 
 _BUILDERS: dict[str, Callable] = {"overview": _overview, "data": _data, "accuracy": _accuracy, "distance": _distance,
                                   "influence": _influence, "response": _response, "scenarios": _scenarios,
-                                  "climate": _climate, "causal": _causal, "budget": _budget, "planner": _planner,
+                                  "climate": _climate, "heat": _heat, "causal": _causal, "budget": _budget, "planner": _planner,
                                   "uncertainty": _uncertainty, "provenance": _provenance}
 
 

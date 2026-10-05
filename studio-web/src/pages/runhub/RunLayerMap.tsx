@@ -22,7 +22,9 @@ export function RunLayerMap({ rid, keys, title, height = 380, overlays }: { rid:
   if (grid.error || layers.error) return <EmptyState error={grid.error ?? layers.error} />;
   if (!grid.data || !layers.data || !load) return <p className="cap">Loading the map…</p>;
   if (!groups.length) return <p className="cap">None of these layers ({keys.join(", ")}) is in this run.</p>;
-  const cur = key ?? groups[0].layers[0].key;
+  // the first of `keys` the run has (callers list them in order of preference)
+  const present = new Set(groups.flatMap((g) => g.layers.map((l) => l.key)));
+  const cur = key ?? keys.find((k) => present.has(k)) ?? groups[0].layers[0].key;
   return (
     <div className="stack" style={{ gap: 6 }}>
       <MapView grid={grid.data} groups={groups} loadLayer={load} layerKey={cur} onLayerChange={setKey} height={height} title={title} overlays={overlays} />

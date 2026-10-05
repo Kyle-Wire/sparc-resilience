@@ -17,6 +17,8 @@ export type Domain = {
   zeroBlank: boolean;
   /** Category count for cat layers. */
   nCat: number;
+  /** A named colour set for cat layers ("heat": the NWS heat-index categories). */
+  palette?: "heat" | null;
 };
 
 /** Linear-interpolated quantiles of the finite values (optionally only v > 0). */
@@ -49,7 +51,7 @@ export function computeDomain(meta: LayerMeta, values?: ArrayLike<number> | null
   const zeroBlank = !!meta.zero_blank;
   if (meta.scale === "cat") {
     const nCat = Math.max(2, meta.labels?.length ?? Math.round((meta.stats.hi ?? 3) + 1));
-    return { kind: "cat", lo: 0, hi: nCat - 1, center: null, mult: 1, zeroBlank: false, nCat };
+    return { kind: "cat", lo: 0, hi: nCat - 1, center: null, mult: 1, zeroBlank: false, nCat, palette: meta.palette ?? null };
   }
   if (opts.lock && opts.lock.kind === meta.scale) return { ...opts.lock, mult, zeroBlank };
 

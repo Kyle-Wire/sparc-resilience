@@ -14,7 +14,7 @@ import { Link } from "../../router";
 import { useJobs } from "../../stores/jobs";
 import { toast } from "../../stores/ui";
 import { unitLabel } from "../../theme/format";
-import { Block, GenericTableView, Section, ViewPage, useRid } from "./common";
+import { Block, GenericTableView, Section, VerdictPill, ViewPage, useRid } from "./common";
 
 type Source = NonNullable<UncertaintySections["sources"]>[number];
 type Row = NonNullable<UncertaintySections["rows"]>[number];
@@ -98,6 +98,37 @@ export default function Uncertainty() {
           <>
             <Section title="Layered intervals" data={s.rows}>
               {(rows) => <IntervalStack title="Uncertainty by source" units={`${u} (negative = cooler)`} rows={rows} valueLabel="City-mean ΔT" unit={u} caption={envelopeCaption(rows)} />}
+            </Section>
+            <Section title="Verdicts" data={s.rows}>
+              {(rows) =>
+                rows.some((r) => r.verdict) ? (
+                  <Block title="What the evidence supports">
+                    <p className="cap prose">
+                      Robust: the plausible range excludes no change and every analysis variant agrees on the sign. Direction only: the sign holds but the size could be close to
+                      zero. Not established: the change cannot be told apart from what the pipeline reports when no effect is planted, the intervals disagree, or most edited
+                      cells are beyond the conditions the model was trained on. * marks a qualifier (extrapolation, or outside the causal band).
+                    </p>
+                    <table className="tbl" aria-label="Verdict per scenario">
+                      <thead>
+                        <tr>
+                          <th scope="col">Scenario</th>
+                          <th scope="col">Verdict and why</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((r) => (
+                          <tr key={r.id}>
+                            <td>{r.label}</td>
+                            <td>
+                              <VerdictPill verdict={r.verdict} detail />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </Block>
+                ) : null
+              }
             </Section>
             <Section title="Climate spread" data={s.climate}>
               {(t) => (

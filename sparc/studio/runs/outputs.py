@@ -36,7 +36,7 @@ __all__ = ["RUN_TAB_IDS", "FIXED_TABS", "stages_run", "output_entries", "tab_ava
            "dictionary", "markdown_html", "DOCS"]
 
 RUN_TAB_IDS = ("overview", "data", "accuracy", "distance", "influence", "response", "causal", "scenarios", "climate",
-               "budget", "planner", "lab", "validation", "uncertainty", "provenance", "track", "map", "docs", "files")
+               "heat", "budget", "planner", "lab", "validation", "uncertainty", "provenance", "track", "map", "docs", "files")
 FIXED_TABS = ("track", "map", "files", "provenance", "lab", "validation")
 DOCS = [
     ("report", "report.md", "Run report", "run"),
@@ -198,6 +198,17 @@ def tab_availability(ctx, entries: list[dict], *, job_active: bool, active_kinds
             else:
                 avail = "ready"
             tabs.append({"id": tab, "availability": avail, "missing": missing})
+            continue
+        if tab == "heat":
+            # the Heat tab reads the held-out predictions (observed temperature) and whatever else is there
+            pe = next((e for e in entries if e["id"] == "predictions"), None)
+            st = (pe or {}).get("state", "missing")
+            if st in ("present", "stale", "partial"):
+                tabs.append({"id": tab, "availability": "stale" if st == "stale" else "ready", "missing": []})
+            else:
+                tabs.append({"id": tab, "availability": "running" if st == "writing" or making([pe or {
+                    "produced_by": "stage:S2_S3"}]) else "missing", "missing": [
+                    {"output": "predictions", "produced_by": "stage:S2_S3", "action": (pe or {}).get("action")}]})
             continue
         mine = [e for e in entries if e["view"] == tab]
         counted = [e for e in mine if e["_expected"] or e["state"] != "missing"]

@@ -13,7 +13,7 @@ import { Table } from "../../components/ui/Table";
 import { Link, navigate } from "../../router";
 import { toast, useUi } from "../../stores/ui";
 import { fmtPct, fmtValue, unitLabel } from "../../theme/format";
-import { Block, Section, ViewPage, useRid, useUnits } from "./common";
+import { Block, Section, VerdictPill, ViewPage, useRid, useUnits } from "./common";
 import { confidenceWords, likelyText } from "./format";
 
 function CloneButton({ rid, slug }: { rid: string; slug: string }) {
@@ -54,6 +54,7 @@ function ScenarioTable({ rows, rid }: { rows: ScenarioRow[]; rid: string }) {
         { key: "name", label: "Scenario", value: (r) => r.name },
         { key: "delta", label: "City-mean change", unit: u, align: "right", value: (r) => r.delta.estimate, render: (r) => likelyText(r.delta, u) },
         { key: "conf", label: "Confidence", value: (r) => confidenceWords(r.delta) },
+        { key: "verdict", label: "Verdict", value: (r) => r.verdict?.label ?? "—", render: (r) => <VerdictPill verdict={r.verdict} /> },
         { key: "extrap", label: "Extrapolated", align: "right", value: (r) => r.frac_extrapolated, render: (r) => fmtPct(r.frac_extrapolated, 0) },
         { key: "tier", label: "Tier", value: (r) => r.tier ?? "—" },
         { key: "folds", label: "Has folds", value: (r) => (r.has_folds ? "yes" : "no") },

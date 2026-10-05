@@ -5,7 +5,7 @@ import { useMemo } from "react";
 import type { LayerMeta } from "../api/types";
 import { Histogram, histogram } from "../charts/Histogram";
 import { fmtInt, fmtNum, fmtPct, fmtSigned, unitLabel } from "../theme/format";
-import { catColors, rampColor } from "../theme/palette";
+import { catColors, heatColors, rampColor } from "../theme/palette";
 import { categoryCounts, layerSummary, type Domain } from "./domain";
 
 export type LegendProps = {
@@ -27,6 +27,7 @@ export type LegendProps = {
 export function categorySwatches(meta: LayerMeta, dark: boolean, nCat?: number): { label: string; color: string }[] {
   const labels = meta.labels?.length ? meta.labels : Array.from({ length: nCat ?? 0 }, (_, k) => `Class ${k}`);
   const { colors, gray } = catColors(dark);
+  if (meta.palette === "heat" && labels.length <= 5) return labels.map((l, k) => ({ label: l, color: heatColors(dark)[k] }));
   if (labels.length > 4) return labels.map((l, k) => ({ label: l, color: rampColor("seq", k / (labels.length - 1), dark) }));
   return labels.map((l, k) => ({ label: l, color: k === 0 ? gray : colors[k - 1] }));
 }

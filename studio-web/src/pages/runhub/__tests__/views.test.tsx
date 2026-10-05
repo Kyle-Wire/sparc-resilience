@@ -8,13 +8,14 @@ import type { ComponentType } from "react";
 import { clearResources } from "../../../api/resource";
 import type { ViewModelOf, ViewName } from "../../../api/runs";
 import { navigate } from "../../../router";
-import { flush, mockFetch, render, waitFor, type MockHandler } from "../../../test/render";
+import { byText, click, flush, mockFetch, render, waitFor, type MockHandler } from "../../../test/render";
 import { olderCodeFixture, sectionKeys, viewFixture } from "../__fixtures__/views";
 import Accuracy from "../Accuracy";
 import Budget from "../Budget";
 import Causal from "../Causal";
 import Climate from "../Climate";
 import DataQa from "../DataQa";
+import Heat from "../Heat";
 import Distance from "../Distance";
 import Influence from "../Influence";
 import Overview from "../Overview";
@@ -34,6 +35,7 @@ const PAGES: { view: ViewName; tab: string; Page: ComponentType }[] = [
   { view: "response", tab: "response", Page: Response },
   { view: "scenarios", tab: "scenarios", Page: Scenarios },
   { view: "climate", tab: "climate", Page: Climate },
+  { view: "heat", tab: "heat", Page: Heat },
   { view: "causal", tab: "causal", Page: Causal },
   { view: "budget", tab: "budget", Page: Budget },
   { view: "planner", tab: "planner", Page: Planner },
@@ -110,7 +112,8 @@ describe("run-hub views with full fixtures", () => {
 describe("older-code runs (every section null)", () => {
   afterEach(() => clearResources());
 
-  for (const p of PAGES) {
+  // The Heat view is computed by Studio from any finished run (never an older-code output).
+  for (const p of PAGES.filter((x) => x.view !== "heat")) {
     it(`${p.view}: renders and says "not in this run (older code)" for each section`, async () => {
       const r = await renderView(p, olderCodeFixture(p.view));
       try {
@@ -134,6 +137,62 @@ describe("older-code runs (every section null)", () => {
 
 describe("view behaviour", () => {
   afterEach(() => clearResources());
+
+  it("Heat shows the brief, the exposure chart and verdicts, and re-asks the server for a what-if dewpoint", async () => {
+    const page = PAGES.find((p) => p.view === "heat")!;
+    const rid = `r_view${seq + 1}`;
+    const humid = viewFixture("heat");
+    humid.sections.humidity!.dewpoint_C = 21;
+    humid.sections.humidity!.user_set = true;
+    humid.sections.humidity!.source = "your setting";
+    const r = await renderView(page, viewFixture("heat"), { [`GET /api/runs/${rid}/views/heat?dewpoint_C=21`]: { body: humid } });
+    try {
+      const text = r.container.textContent ?? "";
+      expect(r.container.querySelector('[aria-label="Heat brief"]')!.textContent).toContain("Extreme caution or worse");
+      expect(text).toContain("Residents by heat-risk category");
+      expect(text).toContain("Robust");
+      expect(text).toContain("Not established");
+      expect(r.container.querySelector('[aria-label="Exposure in each climate future"]')).not.toBeNull();
+      click(byText(r.container, "button", "Humid (21 °C)"));
+      await waitFor(() => r.calls.some((c) => c.url.endsWith("/views/heat?dewpoint_C=21")), 3000, "what-if request");
+      await waitFor(() => r.container.textContent?.includes("your setting"), 3000, "what-if view");
+      // a what-if dewpoint hides the campaign-dewpoint map
+      expect(r.container.querySelector('[aria-label="Heat brief"]')).not.toBeNull();
+    } finally {
+      r.restore();
+    }
+  });
+
+  it("Heat asks for a dewpoint when the run has no campaign humidity", async () => {
+    const page = PAGES.find((p) => p.view === "heat")!;
+    const vm = viewFixture("heat");
+    const h = vm.sections.humidity!;
+    Object.assign(h, { dewpoint_C: null, source: null, campaign_dewpoint_C: null, campaign_source: null, needs_input: true, rh_range: null });
+    for (const k of ["brief", "kpis", "today", "futures", "hist"] as const) vm.sections[k] = null;
+    const r = await renderView(page, vm);
+    try {
+      expect(r.container.textContent).toContain("no campaign humidity");
+      expect(byText(r.container, "button", "Typical summer (16 °C)")).not.toBeNull();
+      expect(r.container.textContent).not.toContain("could not be displayed");
+    } finally {
+      r.restore();
+    }
+  });
+
+  it("Scenarios and Uncertainty show each scenario's verdict", async () => {
+    const sc = await renderView(PAGES.find((p) => p.view === "scenarios")!, viewFixture("scenarios"));
+    try {
+      expect(sc.container.textContent).toContain("Direction only");
+    } finally {
+      sc.restore();
+    }
+    const un = await renderView(PAGES.find((p) => p.view === "uncertainty")!, viewFixture("uncertainty"));
+    try {
+      expect(un.container.querySelector('[aria-label="Verdict per scenario"]')!.textContent).toContain("Robust");
+    } finally {
+      un.restore();
+    }
+  });
 
   it("Accuracy shows a live banner when sections.live is true, and none otherwise", async () => {
     const page = PAGES.find((p) => p.view === "accuracy")!;

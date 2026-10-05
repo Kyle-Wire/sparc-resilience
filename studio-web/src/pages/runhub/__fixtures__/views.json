@@ -655,7 +655,8 @@
           "causal": { "delta": -0.2052, "lo": -0.2736, "hi": -0.1368, "model_within": false },
           "tier": "configured",
           "has_folds": true,
-          "realized": { "canopy": 5.0 }
+          "realized": { "canopy": 5.0 },
+          "verdict": { "verdict": "direction", "label": "Direction only", "reasons": ["every analysis variant agrees on the sign (100%), but the plausible range reaches zero"], "qualifiers": ["48% of edited cells are beyond observed conditions"] }
         },
         {
           "slug": "canopy-increase-plus-10",
@@ -1093,6 +1094,906 @@
       "thresholds": [90.0, 95.0]
     }
   },
+  "heat": {
+    "view": "heat",
+    "availability": "ready",
+    "missing": [],
+    "units": { "target": "°F", "levers": {"Pct_Canopy": "pp", "Pct_Impervious": "pp", "Albedo": "reflectance"} },
+    "caveats": [
+      "The temperature product is rounded: 72% of readings are whole degrees, so errors below about 0.3 °F are noise.",
+      "Accuracy varies by area: held-out fold R² ranges from 0.26 to 0.73, so some neighbourhoods are predicted much better than others.",
+      "Effect sizes carry attribution uncertainty: when a known canopy effect is planted on this city's layout and passed through the same kind of temperature product, the pipeline recovers about 1.13 times the truth (one effect generator so far) (see Methods & validation).",
+      "Canopy effects are not established by this data: when the simulation plants no canopy effect at all and imitates how the temperature product was made (a land-cover model filling unsampled streets), the pipeline still reports −0.18 °F for \"Canopy Increase +10\", as large as the real estimate (−0.19 °F). Without that land-cover fill the spurious change is −0.06 °F, so most of it is written into the target by the product itself. Raw traverse readings, not the gridded product, are needed to settle canopy.",
+      "Placebo layers (canopy and paving moved to the wrong place) still received some modelled effect in 1 of 5 tests: a smooth layer can pick up chance large-scale patterns. Compare real effects with that floor, and lean on the causal check, which passed 4 of 5.",
+      "These scenarios push more than 20% of edited cells beyond observed conditions: Albedo Increase +0.1, Albedo Increase +0.2, Green Infrastructure Package. Treat them as extrapolation, not predictions.",
+      "Climate futures use the delta method: today's measured pattern plus each model's change in summer average daily highs. They assume land-cover effects stay the same as the climate warms, and the hottest days may warm more than the seasonal average.",
+      "For tree canopy the causal check agrees with the model on the neighbourhood effect, but finds a small warming association for a cell's own canopy once its neighbours are accounted for, where the model sees almost none. Both agree that canopy's cooling comes from the surrounding area rather than the cell itself.",
+      "Numbers from the earlier pipeline (R² 0.944, 'z-units') came from a leaky evaluation and a neural stacker that never trained. AAT_z is air temperature in °F. Use this page instead."
+    ],
+    "demo": false,
+    "sections": {
+      "brief": [
+        {
+          "id": "how_hot",
+          "title": "How hot it felt",
+          "text": "With a dewpoint of 16.7 °C (measured at PROVIDENCE, RI US during the campaign hours), the heat index on the campaign afternoon reached 94 °F in the hottest cell; the typical resident felt 89 °F.",
+          "tone": "neutral"
+        },
+        {
+          "id": "who",
+          "title": "Who is exposed",
+          "text": "37k residents (21% of residents) were at Extreme caution or worse (heat index 90 °F or more: heat cramps and exhaustion possible); none at Danger.",
+          "tone": "warn"
+        },
+        {
+          "id": "future",
+          "title": "As the climate warms",
+          "text": "Under SSP2-4.5 by 2041-2060 (+3.0 °F, the median of the climate models), 143k–174k residents would be at Extreme caution or worse on a comparable afternoon, none yet at Danger. Ranges span the climate models' 10th–90th percentile warming and the two humidity assumptions. In the hottest future (SSP5-8.5 2081-2100, +9.4 °F), up to 174k residents would be at Danger or worse.",
+          "tone": "crit"
+        },
+        {
+          "id": "helps",
+          "title": "What helps",
+          "text": "The Green Infrastructure Package would bring today's count at Extreme caution or worse from 37k to 3.7k residents (33k fewer); under SSP2-4.5 2041-2060 it would cut those at Extreme caution or worse from 143k–174k residents to 55k–172k residents. Verdict on its cooling: Robust.",
+          "tone": "good"
+        },
+        {
+          "id": "sure",
+          "title": "How sure",
+          "text": "Of 12 adaptation scenarios, 4 are Robust (the cooling holds across every uncertainty check), 3 Direction only (cooling, but it could be close to none) and 5 Not established (it cannot be told apart from no effect). Heat-index counts use one dewpoint for the whole city; futures carry the humidity band.",
+          "tone": "neutral"
+        }
+      ],
+      "humidity": {
+        "dewpoint_C": 16.7,
+        "source": "measured at PROVIDENCE, RI US during the campaign hours",
+        "campaign_dewpoint_C": 16.7,
+        "campaign_source": "measured at PROVIDENCE, RI US during the campaign hours",
+        "user_set": false,
+        "needs_input": false,
+        "rh_range": [35.4, 52.6],
+        "presets": [
+          { "label": "Dry (10 °C)", "dewpoint_C": 10.0 },
+          { "label": "Typical summer (16 °C)", "dewpoint_C": 16.0 },
+          { "label": "Humid (21 °C)", "dewpoint_C": 21.0 },
+          { "label": "Oppressive (24 °C)", "dewpoint_C": 24.0 }
+        ],
+        "assumptions": {
+          "constant_dewpoint": "moisture unchanged as it warms, so relative humidity falls (lower bound)",
+          "constant_rh": "relative humidity unchanged, so moisture rises with warming (upper bound)"
+        },
+        "method": "US National Weather Service heat index (Rothfusz 1990 regression with NWS adjustments)"
+      },
+      "categories": [
+        { "id": "below", "label": "Below caution", "lo_F": null, "hi_F": 80.0, "note": "no heat-index risk category" },
+        { "id": "caution", "label": "Caution", "lo_F": 80.0, "hi_F": 90.0, "note": "fatigue possible with prolonged exposure or activity" },
+        { "id": "extreme_caution", "label": "Extreme caution", "lo_F": 90.0, "hi_F": 103.0, "note": "heat cramps and heat exhaustion possible" },
+        { "id": "danger", "label": "Danger", "lo_F": 103.0, "hi_F": 125.0, "note": "heat cramps or heat exhaustion likely; heat stroke possible with prolonged exposure" },
+        { "id": "extreme_danger", "label": "Extreme danger", "lo_F": 125.0, "hi_F": null, "note": "heat stroke highly likely" }
+      ],
+      "kpis": [
+        {
+          "id": "ec_today",
+          "label": "Residents at Extreme caution or worse",
+          "value": 36668.637,
+          "unit": "people",
+          "decimals": 0,
+          "format": "int",
+          "likely": null,
+          "target": null,
+          "target_label": null,
+          "band": null,
+          "note": "21% of residents",
+          "tone": "warn"
+        },
+        {
+          "id": "mean_hi",
+          "label": "Heat index felt by the typical resident",
+          "value": 89.032,
+          "unit": "°F",
+          "decimals": 1,
+          "format": "number",
+          "likely": null,
+          "target": null,
+          "target_label": null,
+          "band": null,
+          "note": null,
+          "tone": null
+        },
+        {
+          "id": "max_hi",
+          "label": "Hottest cell's heat index",
+          "value": 94.297,
+          "unit": "°F",
+          "decimals": 1,
+          "format": "number",
+          "likely": null,
+          "target": null,
+          "target_label": null,
+          "band": null,
+          "note": null,
+          "tone": null
+        },
+        {
+          "id": "ec_pkg",
+          "label": "With the Green Infrastructure Package",
+          "value": 3728.038,
+          "unit": "people",
+          "decimals": 0,
+          "format": "int",
+          "likely": null,
+          "target": null,
+          "target_label": null,
+          "band": null,
+          "note": "-32,941 vs today",
+          "tone": "good"
+        },
+        {
+          "id": "ec_future",
+          "label": "SSP2-4.5 2041-2060: at Extreme caution or worse",
+          "value": 158557.707,
+          "unit": "people",
+          "decimals": 0,
+          "format": "int",
+          "likely": null,
+          "target": null,
+          "target_label": null,
+          "band": { "lo": 143470.421, "hi": 173644.993, "label": "range" },
+          "note": "across climate models and humidity assumptions",
+          "tone": "crit"
+        }
+      ],
+      "today": {
+        "measure": "people",
+        "total": 173660.721,
+        "package": "Green Infrastructure Package",
+        "unadapted": {
+          "counts": { "below": 0.0, "caution": 136992.084, "extreme_caution": 36668.637, "danger": 0.0, "extreme_danger": 0.0 },
+          "ec_or_worse": 36668.637,
+          "danger_or_worse": 0.0,
+          "mean_hi": 89.032,
+          "max_hi": 94.297
+        },
+        "adapted": {
+          "counts": { "below": 1.491, "caution": 169931.193, "extreme_caution": 3728.038, "danger": 0.0, "extreme_danger": 0.0 },
+          "ec_or_worse": 3728.038,
+          "danger_or_worse": 0.0,
+          "mean_hi": 87.203,
+          "max_hi": 92.328
+        }
+      },
+      "futures": [
+        {
+          "id": "ssp126:2021-2040",
+          "experiment": "ssp126",
+          "label": "SSP1-2.6",
+          "period": "2021-2040",
+          "warming_F": 1.798,
+          "warming_lo_F": 1.07,
+          "warming_hi_F": 2.807,
+          "unadapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 34065.159, "extreme_caution": 139595.562, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 139595.562,
+              "danger_or_worse": 0.0,
+              "mean_hi": 90.881,
+              "max_hi": 96.315
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 12880.734, "extreme_caution": 160779.987, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 160779.987,
+              "danger_or_worse": 0.0,
+              "mean_hi": 91.67,
+              "max_hi": 97.196
+            },
+            "ec_range_humidity": [139595.562, 160779.987],
+            "ec_range_full": [87526.914, 170231.96],
+            "danger_range_humidity": [0.0, 0.0],
+            "danger_range_full": [0.0, 0.0]
+          },
+          "adapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 137505.546, "extreme_caution": 36155.175, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 36155.175,
+              "danger_or_worse": 0.0,
+              "mean_hi": 88.977,
+              "max_hi": 94.294
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 137267.602, "extreme_caution": 36393.119, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 36393.119,
+              "danger_or_worse": 0.0,
+              "mean_hi": 88.956,
+              "max_hi": 94.536
+            },
+            "ec_range_humidity": [36155.175, 36393.119],
+            "ec_range_full": [15327.698, 99985.367],
+            "danger_range_humidity": [0.0, 0.0],
+            "danger_range_full": [0.0, 0.0]
+          }
+        },
+        {
+          "id": "ssp126:2041-2060",
+          "experiment": "ssp126",
+          "label": "SSP1-2.6",
+          "period": "2041-2060",
+          "warming_F": 2.628,
+          "warming_lo_F": 1.525,
+          "warming_hi_F": 4.18,
+          "unadapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 12366.3, "extreme_caution": 161294.422, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 161294.422,
+              "danger_or_worse": 0.0,
+              "mean_hi": 91.758,
+              "max_hi": 97.262
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 3809.16, "extreme_caution": 169851.561, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 169851.561,
+              "danger_or_worse": 0.0,
+              "mean_hi": 92.978,
+              "max_hi": 98.609
+            },
+            "ec_range_humidity": [161294.422, 169851.561],
+            "ec_range_full": [136234.355, 173581.467],
+            "danger_range_humidity": [0.0, 0.0],
+            "danger_range_full": [0.0, 0.0]
+          },
+          "adapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 90197.342, "extreme_caution": 83463.379, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 83463.379,
+              "danger_or_worse": 0.0,
+              "mean_hi": 89.821,
+              "max_hi": 95.219
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 82778.238, "extreme_caution": 90882.483, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 90882.483,
+              "danger_or_worse": 0.0,
+              "mean_hi": 90.139,
+              "max_hi": 95.867
+            },
+            "ec_range_humidity": [83463.379, 90882.483],
+            "ec_range_full": [28501.116, 165264.14],
+            "danger_range_humidity": [0.0, 0.0],
+            "danger_range_full": [0.0, 0.0]
+          }
+        },
+        {
+          "id": "ssp126:2081-2100",
+          "experiment": "ssp126",
+          "label": "SSP1-2.6",
+          "period": "2081-2100",
+          "warming_F": 2.426,
+          "warming_lo_F": 1.522,
+          "warming_hi_F": 4.507,
+          "unadapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 29322.614, "extreme_caution": 144338.107, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 144338.107,
+              "danger_or_worse": 0.0,
+              "mean_hi": 91.543,
+              "max_hi": 97.03
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 9990.234, "extreme_caution": 163670.487, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 163670.487,
+              "danger_or_worse": 0.0,
+              "mean_hi": 92.653,
+              "max_hi": 98.259
+            },
+            "ec_range_humidity": [144338.107, 163670.487],
+            "ec_range_full": [136234.355, 173633.811],
+            "danger_range_humidity": [0.0, 0.0],
+            "danger_range_full": [0.0, 0.0]
+          },
+          "adapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 107228.022, "extreme_caution": 66432.699, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 66432.699,
+              "danger_or_worse": 0.0,
+              "mean_hi": 89.613,
+              "max_hi": 94.993
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 90309.864, "extreme_caution": 83350.857, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 83350.857,
+              "danger_or_worse": 0.0,
+              "mean_hi": 89.845,
+              "max_hi": 95.537
+            },
+            "ec_range_humidity": [66432.699, 83350.857],
+            "ec_range_full": [28368.227, 169838.707],
+            "danger_range_humidity": [0.0, 0.0],
+            "danger_range_full": [0.0, 0.0]
+          }
+        },
+        {
+          "id": "ssp245:2021-2040",
+          "experiment": "ssp245",
+          "label": "SSP2-4.5",
+          "period": "2021-2040",
+          "warming_F": 1.783,
+          "warming_lo_F": 1.234,
+          "warming_hi_F": 3.34,
+          "unadapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 34227.91, "extreme_caution": 139432.812, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 139432.812,
+              "danger_or_worse": 0.0,
+              "mean_hi": 90.865,
+              "max_hi": 96.297
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 13117.242, "extreme_caution": 160543.479, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 160543.479,
+              "danger_or_worse": 0.0,
+              "mean_hi": 91.647,
+              "max_hi": 97.17
+            },
+            "ec_range_humidity": [139432.812, 160543.479],
+            "ec_range_full": [89126.921, 173191.601],
+            "danger_range_humidity": [0.0, 0.0],
+            "danger_range_full": [0.0, 0.0]
+          },
+          "adapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 137758.406, "extreme_caution": 35902.315, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 35902.315,
+              "danger_or_worse": 0.0,
+              "mean_hi": 88.961,
+              "max_hi": 94.276
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 137694.881, "extreme_caution": 35965.84, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 35965.84,
+              "danger_or_worse": 0.0,
+              "mean_hi": 88.935,
+              "max_hi": 94.512
+            },
+            "ec_range_humidity": [35902.315, 35965.84],
+            "ec_range_full": [18135.926, 144276.099],
+            "danger_range_humidity": [0.0, 0.0],
+            "danger_range_full": [0.0, 0.0]
+          }
+        },
+        {
+          "id": "ssp245:2041-2060",
+          "experiment": "ssp245",
+          "label": "SSP2-4.5",
+          "period": "2041-2060",
+          "warming_F": 3.029,
+          "warming_lo_F": 2.331,
+          "warming_hi_F": 4.848,
+          "unadapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 11222.085, "extreme_caution": 162438.636, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 162438.636,
+              "danger_or_worse": 0.0,
+              "mean_hi": 92.186,
+              "max_hi": 97.722
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 3032.689, "extreme_caution": 170628.032, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 170628.032,
+              "danger_or_worse": 0.0,
+              "mean_hi": 93.629,
+              "max_hi": 99.308
+            },
+            "ec_range_humidity": [162438.636, 170628.032],
+            "ec_range_full": [143470.421, 173644.993],
+            "danger_range_humidity": [0.0, 0.0],
+            "danger_range_full": [0.0, 0.0]
+          },
+          "adapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 82380.774, "extreme_caution": 91279.947, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 91279.947,
+              "danger_or_worse": 0.0,
+              "mean_hi": 90.234,
+              "max_hi": 95.67
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 47283.539, "extreme_caution": 126377.182, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 126377.182,
+              "danger_or_worse": 0.0,
+              "mean_hi": 90.73,
+              "max_hi": 96.526
+            },
+            "ec_range_humidity": [91279.947, 126377.182],
+            "ec_range_full": [55476.106, 171877.38],
+            "danger_range_humidity": [0.0, 0.0],
+            "danger_range_full": [0.0, 0.0]
+          }
+        },
+        {
+          "id": "ssp245:2081-2100",
+          "experiment": "ssp245",
+          "label": "SSP2-4.5",
+          "period": "2081-2100",
+          "warming_F": 4.585,
+          "warming_lo_F": 3.339,
+          "warming_hi_F": 6.996,
+          "unadapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 497.477, "extreme_caution": 173163.244, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 173163.244,
+              "danger_or_worse": 0.0,
+              "mean_hi": 93.877,
+              "max_hi": 99.523
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 23.556, "extreme_caution": 173637.165, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 173637.165,
+              "danger_or_worse": 0.0,
+              "mean_hi": 96.28,
+              "max_hi": 102.125
+            },
+            "ec_range_humidity": [173163.244, 173637.165],
+            "ec_range_full": [163255.663, 173660.721],
+            "danger_range_humidity": [0.0, 0.0],
+            "danger_range_full": [0.0, 14690.814]
+          },
+          "adapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 12635.281, "extreme_caution": 161025.44, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 161025.44,
+              "danger_or_worse": 0.0,
+              "mean_hi": 91.869,
+              "max_hi": 97.44
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 3464.763, "extreme_caution": 170195.958, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 170195.958,
+              "danger_or_worse": 0.0,
+              "mean_hi": 93.147,
+              "max_hi": 99.193
+            },
+            "ec_range_humidity": [161025.44, 170195.958],
+            "ec_range_full": [109712.891, 173659.23],
+            "danger_range_humidity": [0.0, 0.0],
+            "danger_range_full": [0.0, 43.044]
+          }
+        },
+        {
+          "id": "ssp370:2021-2040",
+          "experiment": "ssp370",
+          "label": "SSP3-7.0",
+          "period": "2021-2040",
+          "warming_F": 1.847,
+          "warming_lo_F": 1.228,
+          "warming_hi_F": 3.55,
+          "unadapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 33605.124, "extreme_caution": 140055.597, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 140055.597,
+              "danger_or_worse": 0.0,
+              "mean_hi": 90.932,
+              "max_hi": 96.37
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 12435.649, "extreme_caution": 161225.072, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 161225.072,
+              "danger_or_worse": 0.0,
+              "mean_hi": 91.746,
+              "max_hi": 97.277
+            },
+            "ec_range_humidity": [140055.597, 161225.072],
+            "ec_range_full": [89042.926, 173241.349],
+            "danger_range_humidity": [0.0, 0.0],
+            "danger_range_full": [0.0, 0.0]
+          },
+          "adapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 136767.686, "extreme_caution": 36893.035, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 36893.035,
+              "danger_or_worse": 0.0,
+              "mean_hi": 89.026,
+              "max_hi": 94.348
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 136086.681, "extreme_caution": 37574.041, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 37574.041,
+              "danger_or_worse": 0.0,
+              "mean_hi": 89.024,
+              "max_hi": 94.613
+            },
+            "ec_range_humidity": [36893.035, 37574.041],
+            "ec_range_full": [18031.379, 150116.944],
+            "danger_range_humidity": [0.0, 0.0],
+            "danger_range_full": [0.0, 0.0]
+          }
+        },
+        {
+          "id": "ssp370:2041-2060",
+          "experiment": "ssp370",
+          "label": "SSP3-7.0",
+          "period": "2041-2060",
+          "warming_F": 3.646,
+          "warming_lo_F": 2.046,
+          "warming_hi_F": 6.691,
+          "unadapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 3976.96, "extreme_caution": 169683.761, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 169683.761,
+              "danger_or_worse": 0.0,
+              "mean_hi": 92.851,
+              "max_hi": 98.433
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 391.706, "extreme_caution": 173269.015, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 173269.015,
+              "danger_or_worse": 0.0,
+              "mean_hi": 94.656,
+              "max_hi": 100.404
+            },
+            "ec_range_humidity": [169683.761, 173269.015],
+            "ec_range_full": [141336.482, 173660.721],
+            "danger_range_humidity": [0.0, 0.0],
+            "danger_range_full": [0.0, 12150.354]
+          },
+          "adapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 35412.608, "extreme_caution": 138248.113, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 138248.113,
+              "danger_or_worse": 0.0,
+              "mean_hi": 90.876,
+              "max_hi": 96.368
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 18565.292, "extreme_caution": 155095.429, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 155095.429,
+              "danger_or_worse": 0.0,
+              "mean_hi": 91.665,
+              "max_hi": 97.563
+            },
+            "ec_range_humidity": [138248.113, 155095.429],
+            "ec_range_full": [40286.439, 173648.422],
+            "danger_range_humidity": [0.0, 0.0],
+            "danger_range_full": [0.0, 16.195]
+          }
+        },
+        {
+          "id": "ssp370:2081-2100",
+          "experiment": "ssp370",
+          "label": "SSP3-7.0",
+          "period": "2081-2100",
+          "warming_F": 7.841,
+          "warming_lo_F": 4.576,
+          "warming_hi_F": 11.602,
+          "unadapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 1.491, "extreme_caution": 173644.953, "danger": 14.277, "extreme_danger": 0.0 },
+              "ec_or_worse": 173659.23,
+              "danger_or_worse": 14.277,
+              "mean_hi": 97.54,
+              "max_hi": 103.345
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 0.0, "extreme_caution": 93377.88, "danger": 80282.841, "extreme_danger": 0.0 },
+              "ec_or_worse": 173660.721,
+              "danger_or_worse": 80282.841,
+              "mean_hi": 102.462,
+              "max_hi": 108.555
+            },
+            "ec_range_humidity": [173659.23, 173660.721],
+            "ec_range_full": [173160.749, 173660.721],
+            "danger_range_humidity": [14.277, 80282.841],
+            "danger_range_full": [0.0, 173648.422]
+          },
+          "adapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 66.357, "extreme_caution": 173594.364, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 173594.364,
+              "danger_or_worse": 0.0,
+              "mean_hi": 95.438,
+              "max_hi": 101.224
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 0.0, "extreme_caution": 172582.806, "danger": 1077.915, "extreme_danger": 0.0 },
+              "ec_or_worse": 173660.721,
+              "danger_or_worse": 1077.915,
+              "mean_hi": 98.841,
+              "max_hi": 105.318
+            },
+            "ec_range_humidity": [173594.364, 173660.721],
+            "ec_range_full": [160938.43, 173660.721],
+            "danger_range_humidity": [0.0, 1077.915],
+            "danger_range_full": [0.0, 169912.164]
+          }
+        },
+        {
+          "id": "ssp585:2021-2040",
+          "experiment": "ssp585",
+          "label": "SSP5-8.5",
+          "period": "2021-2040",
+          "warming_F": 2.005,
+          "warming_lo_F": 1.216,
+          "warming_hi_F": 3.597,
+          "unadapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 32587.547, "extreme_caution": 141073.175, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 141073.175,
+              "danger_or_worse": 0.0,
+              "mean_hi": 91.098,
+              "max_hi": 96.55
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 11665.793, "extreme_caution": 161994.928, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 161994.928,
+              "danger_or_worse": 0.0,
+              "mean_hi": 91.991,
+              "max_hi": 97.544
+            },
+            "ec_range_humidity": [141073.175, 161994.928],
+            "ec_range_full": [88962.217, 173253.363],
+            "danger_range_humidity": [0.0, 0.0],
+            "danger_range_full": [0.0, 0.0]
+          },
+          "adapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 134204.592, "extreme_caution": 39456.129, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 39456.129,
+              "danger_or_worse": 0.0,
+              "mean_hi": 89.186,
+              "max_hi": 94.524
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 131366.394, "extreme_caution": 42294.327, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 42294.327,
+              "danger_or_worse": 0.0,
+              "mean_hi": 89.246,
+              "max_hi": 94.863
+            },
+            "ec_range_humidity": [39456.129, 42294.327],
+            "ec_range_full": [17750.853, 152339.025],
+            "danger_range_humidity": [0.0, 0.0],
+            "danger_range_full": [0.0, 0.0]
+          }
+        },
+        {
+          "id": "ssp585:2041-2060",
+          "experiment": "ssp585",
+          "label": "SSP5-8.5",
+          "period": "2041-2060",
+          "warming_F": 4.137,
+          "warming_lo_F": 3.005,
+          "warming_hi_F": 6.522,
+          "unadapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 3245.165, "extreme_caution": 170415.557, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 170415.557,
+              "danger_or_worse": 0.0,
+              "mean_hi": 93.386,
+              "max_hi": 99.001
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 81.577, "extreme_caution": 173579.144, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 173579.144,
+              "danger_or_worse": 0.0,
+              "mean_hi": 95.496,
+              "max_hi": 101.296
+            },
+            "ec_range_humidity": [170415.557, 173579.144],
+            "ec_range_full": [162393.489, 173660.721],
+            "danger_range_humidity": [0.0, 0.0],
+            "danger_range_full": [0.0, 4196.354]
+          },
+          "adapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 27444.84, "extreme_caution": 146215.881, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 146215.881,
+              "danger_or_worse": 0.0,
+              "mean_hi": 91.393,
+              "max_hi": 96.927
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 8931.561, "extreme_caution": 164729.16, "danger": 0.0, "extreme_danger": 0.0 },
+              "ec_or_worse": 164729.16,
+              "danger_or_worse": 0.0,
+              "mean_hi": 92.431,
+              "max_hi": 98.407
+            },
+            "ec_range_humidity": [146215.881, 164729.16],
+            "ec_range_full": [90694.602, 173644.993],
+            "danger_range_humidity": [0.0, 0.0],
+            "danger_range_full": [0.0, 0.0]
+          }
+        },
+        {
+          "id": "ssp585:2081-2100",
+          "experiment": "ssp585",
+          "label": "SSP5-8.5",
+          "period": "2081-2100",
+          "warming_F": 9.369,
+          "warming_lo_F": 5.793,
+          "warming_hi_F": 13.593,
+          "unadapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 0.0, "extreme_caution": 170701.702, "danger": 2959.019, "extreme_danger": 0.0 },
+              "ec_or_worse": 173660.721,
+              "danger_or_worse": 2959.019,
+              "mean_hi": 99.303,
+              "max_hi": 105.151
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 0.0, "extreme_caution": 10947.08, "danger": 162713.641, "extreme_danger": 0.0 },
+              "ec_or_worse": 173660.721,
+              "danger_or_worse": 162713.641,
+              "mean_hi": 105.661,
+              "max_hi": 111.822
+            },
+            "ec_range_humidity": [173660.721, 173660.721],
+            "ec_range_full": [173566.956, 173660.721],
+            "danger_range_humidity": [2959.019, 162713.641],
+            "danger_range_full": [0.0, 173660.721]
+          },
+          "adapted": {
+            "constant_dewpoint": {
+              "counts": { "below": 0.0, "caution": 1.491, "extreme_caution": 173643.035, "danger": 16.195, "extreme_danger": 0.0 },
+              "ec_or_worse": 173659.23,
+              "danger_or_worse": 16.195,
+              "mean_hi": 97.17,
+              "max_hi": 103.023
+            },
+            "constant_rh": {
+              "counts": { "below": 0.0, "caution": 0.0, "extreme_caution": 136282.495, "danger": 37378.226, "extreme_danger": 0.0 },
+              "ec_or_worse": 173660.721,
+              "danger_or_worse": 37378.226,
+              "mean_hi": 101.811,
+              "max_hi": 108.446
+            },
+            "ec_range_humidity": [173659.23, 173660.721],
+            "ec_range_full": [170520.121, 173660.721],
+            "danger_range_humidity": [16.195, 37378.226],
+            "danger_range_full": [0.0, 173659.23]
+          }
+        }
+      ],
+      "hist": {
+        "edges": [79.0, 80.0, 81.0, 82.0, 83.0, 84.0, 85.0, 86.0, 87.0, 88.0, 89.0, 90.0, 91.0, 92.0, 93.0, 94.0, 95.0, 96.0],
+        "counts": [0.0, 0.0, 0.0, 12.299, 48.767, 346.591, 2937.564, 7922.011, 21439.225, 54267.417, 50018.209, 22339.085, 10636.612, 3185.541, 493.121, 14.277, 0.0],
+        "adapted_counts": [1.491, 0.0, 17.219, 74.904, 1389.09, 7652.418, 19476.21, 54238.321, 51655.978, 24777.832, 10649.221, 3017.85, 657.028, 53.159, 0.0, 0.0, 0.0],
+        "measure": "people"
+      },
+      "verdicts": [
+        {
+          "scenario": "Canopy Increase +5",
+          "slug": "canopy-increase-plus-5",
+          "verdict": "not_established",
+          "label": "Not established",
+          "reasons": ["a simulation with no planted effect produces a similar change (-0.09)"],
+          "qualifiers": [],
+          "estimate": -0.087,
+          "envelope": [-0.227, 0.053],
+          "frac_extrapolated": 0.055
+        },
+        {
+          "scenario": "Canopy Increase +10",
+          "slug": "canopy-increase-plus-10",
+          "verdict": "not_established",
+          "label": "Not established",
+          "reasons": ["a simulation with no planted effect produces a similar change (-0.18)"],
+          "qualifiers": [],
+          "estimate": -0.187,
+          "envelope": [-0.456, 0.083],
+          "frac_extrapolated": 0.056
+        },
+        {
+          "scenario": "Canopy Increase +20",
+          "slug": "canopy-increase-plus-20",
+          "verdict": "not_established",
+          "label": "Not established",
+          "reasons": ["a simulation with no planted effect produces a similar change (-0.35)"],
+          "qualifiers": [],
+          "estimate": -0.395,
+          "envelope": [-0.926, 0.136],
+          "frac_extrapolated": 0.061
+        },
+        {
+          "scenario": "Canopy Increase +30",
+          "slug": "canopy-increase-plus-30",
+          "verdict": "not_established",
+          "label": "Not established",
+          "reasons": ["a simulation with no planted effect produces a similar change (-0.52)"],
+          "qualifiers": [],
+          "estimate": -0.587,
+          "envelope": [-1.361, 0.187],
+          "frac_extrapolated": 0.071
+        },
+        {
+          "scenario": "Impervious Decrease −5",
+          "slug": "impervious-decrease-minus-5",
+          "verdict": "direction",
+          "label": "Direction only",
+          "reasons": ["every analysis variant agrees on the sign (100%), but the plausible range reaches zero"],
+          "qualifiers": [],
+          "estimate": -0.204,
+          "envelope": [-0.432, 0.024],
+          "frac_extrapolated": 0.041
+        },
+        {
+          "scenario": "Impervious Decrease −10",
+          "slug": "impervious-decrease-minus-10",
+          "verdict": "robust",
+          "label": "Robust",
+          "reasons": ["its plausible range excludes zero and every analysis variant agrees on the sign (100%)"],
+          "qualifiers": [],
+          "estimate": -0.403,
+          "envelope": [-0.775, -0.03],
+          "frac_extrapolated": 0.05
+        },
+        {
+          "scenario": "Impervious Decrease −20",
+          "slug": "impervious-decrease-minus-20",
+          "verdict": "robust",
+          "label": "Robust",
+          "reasons": ["its plausible range excludes zero and every analysis variant agrees on the sign (100%)"],
+          "qualifiers": [],
+          "estimate": -0.828,
+          "envelope": [-1.409, -0.247],
+          "frac_extrapolated": 0.091
+        },
+        {
+          "scenario": "Impervious Decrease −30",
+          "slug": "impervious-decrease-minus-30",
+          "verdict": "robust",
+          "label": "Robust",
+          "reasons": ["its plausible range excludes zero and every analysis variant agrees on the sign (100%)"],
+          "qualifiers": [],
+          "estimate": -1.326,
+          "envelope": [-2.082, -0.57],
+          "frac_extrapolated": 0.175
+        },
+        {
+          "scenario": "Albedo Increase +0.05",
+          "slug": "albedo-increase-plus-0-05",
+          "verdict": "direction",
+          "label": "Direction only",
+          "reasons": ["every analysis variant agrees on the sign (100%), but the plausible range reaches zero"],
+          "qualifiers": [],
+          "estimate": -0.421,
+          "envelope": [-0.965, 0.124],
+          "frac_extrapolated": 0.076
+        },
+        {
+          "scenario": "Albedo Increase +0.1",
+          "slug": "albedo-increase-plus-0-1",
+          "verdict": "direction",
+          "label": "Direction only",
+          "reasons": ["every analysis variant agrees on the sign (100%), but the plausible range reaches zero"],
+          "qualifiers": ["23% of edited cells are beyond observed conditions"],
+          "estimate": -0.854,
+          "envelope": [-1.829, 0.121],
+          "frac_extrapolated": 0.229
+        },
+        {
+          "scenario": "Albedo Increase +0.2",
+          "slug": "albedo-increase-plus-0-2",
+          "verdict": "not_established",
+          "label": "Not established",
+          "reasons": ["100% of edited cells are beyond the conditions the model was trained on"],
+          "qualifiers": ["100% of edited cells are beyond observed conditions"],
+          "estimate": -1.437,
+          "envelope": [-3.215, 0.341],
+          "frac_extrapolated": 1.0
+        },
+        {
+          "scenario": "Green Infrastructure Package",
+          "slug": "green-infrastructure-package",
+          "verdict": "robust",
+          "label": "Robust",
+          "reasons": ["its plausible range excludes zero and every analysis variant agrees on the sign (100%)"],
+          "qualifiers": ["26% of edited cells are beyond observed conditions"],
+          "estimate": -1.723,
+          "envelope": [-2.8, -0.647],
+          "frac_extrapolated": 0.264
+        }
+      ]
+    }
+  },
   "causal": {
     "view": "causal",
     "availability": "ready",
@@ -1272,7 +2173,8 @@
           "layers": [
             { "id": "estimation", "label": "Estimation (folds)", "lo": -0.942554, "hi": -0.301202 },
             { "id": "envelope", "label": "Envelope", "lo": -1.4138, "hi": -0.1506 }
-          ]
+          ],
+          "verdict": { "verdict": "robust", "label": "Robust", "reasons": ["its plausible range excludes zero"], "qualifiers": [] }
         },
         {
           "id": "canopy-increase-plus-10",

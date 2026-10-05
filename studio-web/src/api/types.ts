@@ -172,6 +172,8 @@ export type LayerMeta = {
   source: { file: string; column: string | null } | null;
   dtype: "float32" | "uint8";
   stats: LayerStats;
+  /** A named colour set for cat layers ("heat": the NWS heat-index categories). */
+  palette?: "heat" | null;
 };
 
 export type LayerGroup = { id: string; label: string; layers: LayerMeta[] };
@@ -226,11 +228,11 @@ export type Likely = {
 /** The fixed run-tab vocabulary shared with the server (SPEC §3.2). */
 export type RunTabId =
   | "overview" | "data" | "accuracy" | "distance" | "influence" | "response" | "causal" | "scenarios" | "climate"
-  | "budget" | "planner" | "lab" | "validation" | "uncertainty" | "provenance" | "track" | "map" | "docs" | "files";
+  | "heat" | "budget" | "planner" | "lab" | "validation" | "uncertainty" | "provenance" | "track" | "map" | "docs" | "files";
 
 export const RUN_TAB_IDS: readonly RunTabId[] = [
   "overview", "data", "accuracy", "distance", "influence", "response", "causal", "scenarios", "climate",
-  "budget", "planner", "lab", "validation", "uncertainty", "provenance", "track", "map", "docs", "files",
+  "heat", "budget", "planner", "lab", "validation", "uncertainty", "provenance", "track", "map", "docs", "files",
 ];
 
 export type RunTabStatus = {

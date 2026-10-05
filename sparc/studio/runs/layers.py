@@ -53,7 +53,7 @@ LAYER_CACHE = LRU(256 * 1024 ** 2)
 GROUP_LABELS = OrderedDict([
     ("temperature", "Temperature"), ("inputs", "Inputs"), ("cv", "CV design"), ("effects", "Effects"),
     ("causal", "Causal"), ("scenarios", "Scenarios (configured)"), ("budget", "Budget"),
-    ("planner", "Planner & people"), ("studio_results", "Studio results"), ("studio_plans", "Budget plans"),
+    ("planner", "Planner & people"), ("heat", "Heat stress"), ("studio_results", "Studio results"), ("studio_plans", "Budget plans"),
     ("studio_compare", "Comparisons"),
 ])
 CLS_LABELS = ["censored or too little headroom", "saturating", "linear", "S-shaped"]
@@ -79,6 +79,7 @@ class LayerDef:
     sign_note: str | None = None
     dtype: str = "float32"
     sources: tuple[str, ...] = field(default_factory=tuple)    # files whose stat keys the ETag
+    palette: str | None = None                                 # cat colour set ("heat")
 
 
 def lever_info(ctx) -> dict[str, dict]:
@@ -393,6 +394,40 @@ def _build_defs(ctx) -> "OrderedDict[str, LayerDef]":
                              {"file": "planner/planner_cells.parquet", "column": c}, decimals=1,
                              sources=("planner/planner_cells.parquet",)))
 
+    # ---------------------------------------------------------------- heat stress (NWS heat index)
+    from sparc.studio.runs import heat as heatv
+
+    if heatv.heat_layers_available(ctx):
+        from sparc.core.heat import CATEGORIES, category_codes
+
+        cfg_src = (str(ctx.cfg_source),) if ctx.cfg_source else ()
+        hsrc = ("predictions.parquet",) + cfg_src
+        td, td_src = heatv.campaign_humidity(ctx)
+        add(LayerDef("heat_index", "heat", "Heat index (NWS), campaign afternoon", "°F", "seq",
+                     lambda: _f32(heatv.today_heat_index(ctx)),
+                     {"file": "predictions.parquet", "column": "target"}, decimals=1, sources=hsrc,
+                     desc=f"Apparent temperature from each cell's air temperature and the campaign dewpoint "
+                          f"({td:.1f} °C, {td_src}): the US National Weather Service heat index."))
+        add(LayerDef("heat_cat", "heat", "Heat-risk category (NWS)", "", "cat",
+                     lambda: category_codes(heatv.today_heat_index(ctx)).astype(np.uint8),
+                     {"file": "predictions.parquet", "column": "target"}, labels=[c[1] for c in CATEGORIES],
+                     dtype="uint8", decimals=0, sources=hsrc, palette="heat",
+                     desc="NWS heat-index categories: Caution 80–90 °F (fatigue with prolonged exposure), Extreme "
+                          "caution 90–103 °F (heat cramps and exhaustion possible), Danger 103–125 °F (heat stroke "
+                          "possible), Extreme danger ≥ 125 °F (heat stroke highly likely)."))
+        pkg = heatv.package_name(ctx)
+        if pkg:
+            add(LayerDef("heat_index_pkg", "heat", f"Heat index with {pkg}", "°F", "seq",
+                         lambda: _f32(heatv.adapted_heat_index(ctx)),
+                         {"file": "scenario_deltas.parquet", "column": pkg}, decimals=1,
+                         sources=hsrc + ("scenario_deltas.parquet",),
+                         desc="The campaign afternoon's heat index after the adaptation package's modelled cooling, "
+                              "same dewpoint."))
+            add(LayerDef("heat_cat_pkg", "heat", f"Heat-risk category with {pkg}", "", "cat",
+                         lambda: category_codes(heatv.adapted_heat_index(ctx)).astype(np.uint8),
+                         {"file": "scenario_deltas.parquet", "column": pkg}, labels=[c[1] for c in CATEGORIES],
+                         dtype="uint8", decimals=0, sources=hsrc + ("scenario_deltas.parquet",), palette="heat"))
+
     return defs
 
 
@@ -698,7 +733,7 @@ def layer_meta(ctx, key: str) -> dict:
     return clean({"key": d.key, "group": d.group, "label": d.label, "unit": d.unit, "scale": d.scale,
                   "center": center if d.scale == "div" else None, "decimals": int(d.decimals), "mult": float(d.mult),
                   "zero_blank": bool(d.zero_blank), "labels": d.labels, "desc": d.desc, "sign_note": d.sign_note,
-                  "source": d.source, "dtype": d.dtype, "stats": stats})
+                  "source": d.source, "dtype": d.dtype, "stats": stats, "palette": d.palette})
 
 
 def layer_catalog(ctx) -> dict:

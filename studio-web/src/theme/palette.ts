@@ -135,6 +135,17 @@ export function rampColor(kind: "seq" | "div", t: number, dark: boolean): string
   return lutHex(table, i);
 }
 
+/** NWS heat-index categories (below caution, caution, extreme caution, danger, extreme danger): warm, ordered
+ *  colours for the `palette: "heat"` categorical layers and the Heat tab's charts (tokens --hc0…--hc4). */
+export const HEAT_COLORS: Record<"light" | "dark", [string, string, string, string, string]> = {
+  light: ["#c9cec6", "#f2c14e", "#ec8a2c", "#d4402f", "#8c1c2e"],
+  dark: ["#4a4d48", "#e9c46a", "#f08c3a", "#e8564a", "#c2364a"],
+};
+
+export function heatColors(dark: boolean): [string, string, string, string, string] {
+  return dark ? HEAT_COLORS.dark : HEAT_COLORS.light;
+}
+
 /** Categorical colours: at most three plus grey (SPEC §6.3). */
 export function catColors(dark: boolean): { colors: [string, string, string]; gray: string } {
   const c = themeColors(dark);

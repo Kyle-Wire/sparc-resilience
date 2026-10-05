@@ -14245,7 +14245,10 @@ export interface operations {
     };
     get_view_api_runs__rid__views__view__get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description heat view: a what-if dewpoint (°C) */
+                dewpoint_C?: number | null;
+            };
             header?: never;
             path: {
                 rid: string;
