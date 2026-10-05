@@ -349,6 +349,20 @@ def test_caveats_match_the_results_page(node, synth, tmp_path):
     assert "in 2 of 3 tests" in text and ours[-1] == "A project caveat."
 
 
+def test_caveat_without_simcheck_states_no_uncomputed_share(synth):
+    """Without a simulation check the recovered share is not computed for the run, so the caveat names no share
+    (no canned "about two-thirds") and no direction: on the demo the run recovers 80-91% of the truth, and other
+    seeds overstate it."""
+    from sparc.studio.runs.caveats import caveats_for
+
+    m = json.loads((synth / "manifest.json").read_text())
+    assert not m.get("simcheck")
+    cav = caveats_for(SimpleNamespace(manifest=m, cfg_raw=m.get("config") or {}, run_dir=synth))
+    eff = [c for c in cav if c.startswith("Effect sizes")]
+    assert len(eff) == 1 and "not computed" in eff[0] and "too small or too large" in eff[0], cav
+    assert not any("two-thirds" in c or "attenuated" in c for c in cav)
+
+
 def test_caveats_match_the_results_page_on_providence(node, providence_runs):
     full = providence_runs / "providence_uhi"
     if not (full / "manifest.json").is_file():

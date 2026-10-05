@@ -105,8 +105,9 @@ def caveats_for(ctx) -> list[str]:
                      "city's layout and passed through the same kind of temperature product, the pipeline recovers "
                      f"{share} (see Methods & validation).")
     else:
-        items.append("Fitted effects may be attenuated: on a synthetic city with known answers the model recovers "
-                     "about two-thirds of the true canopy effect. Treat scenario magnitudes as approximate.")
+        items.append("Effect sizes are not checked against known answers yet: how much of a planted canopy effect "
+                     "the pipeline recovers on this city is not computed until a simulation check runs, so "
+                     "scenario magnitudes may be too small or too large. Treat them as approximate.")
     null = _null_artifact_caveat(m, units)
     if null:
         items.append(null)

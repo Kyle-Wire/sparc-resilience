@@ -197,7 +197,7 @@ Each walkthrough is one of the ten user journeys Studio was designed around (SPE
 
 7. When the run succeeds, the overview's primary button becomes **Open Scenario Lab**. In the Lab, start from the template **Shade the hottest 10%**. The preview map appears almost at once.
 8. **Run exact**. The engine loads the run (a couple of seconds for a fast run), the folds tick (three on a fast run) and the result card reads in plain language, for example: "Cools the edited area by 0.41 °F (likely range 0.30–0.52 °F). Confident it cools. 12% of the cooling lands outside the edited cells." ([§7](#7-scenario-lab))
-9. Open **Validation**. Because the city is synthetic, a **Truth vs recovered** card compares the planted effects with what the run recovered (the fitted effects are typically attenuated to about two-thirds of the truth, and the card says so).
+9. Open **Validation**. Because the city is synthetic, a **Truth vs recovered** card compares the planted effects with what the run recovered (each row says whether the run recovered the truth within 20%, attenuated it or overstated it, with the recovered share; a run without a simulation check does not claim a share in its caveats).
 10. Back in the Lab result, export a **Decision pack**; it appears in Exports with a download link ([§6](#6-outputs-and-exports)).
 
 ### J2 — A new city from your own CSV
