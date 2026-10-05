@@ -31,7 +31,11 @@ def _export(client, wait_job, pid: str, kind: str, params: dict, status: str = "
     assert out["job"]["params"]["export_id"] == out["export"]["id"] and out["job"]["kind"] == f"export.{kind}"
     j = wait_job(client, out["job"]["id"], timeout=180)
     assert j["status"] == status, j
-    return client.get(f"/api/exports/{out['export']['id']}").json()
+    # the job's on_finish hook completes the export just after the job is final
+    from tests.studio.conftest import wait_for
+
+    return wait_for(lambda: (e := client.get(f"/api/exports/{out['export']['id']}").json())["status"] != "running"
+                    and e, 30, what="the export completed")
 
 
 def _zip(client, ex: dict) -> zipfile.ZipFile:

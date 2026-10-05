@@ -29,6 +29,13 @@ def _run_pack(client, ctx, wait_job, kind, params, project_id, *, with_row=True)
         anyio.run(_submit, ctx, kind, params, project_id, eid)
     done = wait_job(client, job["id"], timeout=180)
     assert done["status"] == "succeeded", done
+    if with_row:
+        # the job's on_finish hook completes the exports row just after the job is final (a slow runner shows
+        # the job "succeeded" a moment before the row is "ready")
+        from tests.studio.conftest import wait_for
+
+        wait_for(lambda: (ctx.db.fetchone("SELECT status FROM exports WHERE id = ?", (eid,)) or {}).get("status")
+                 != "running", 30, what=f"exports row {eid} completed")
     return eid, done["result"]
 
 
