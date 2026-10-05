@@ -42,6 +42,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from sparc.core import runio
 from sparc.studio import db as dbmod
 from sparc.studio.errors import ApiError
 from sparc.studio.runs.common import fnum, read_json_cached
@@ -900,7 +901,7 @@ class Registry:
                done=list(state.get("done") or []), error=state.get("error"))
             s["ended"] = True
         if lines:
-            fd = os.open(s["path"], os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
+            fd = runio.open_append(s["path"])
             try:
                 for line in lines:
                     os.write(fd, line)

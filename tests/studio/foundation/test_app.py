@@ -185,7 +185,7 @@ def test_system_storage_and_health(client, ctx):
     sysinfo = client.get("/api/system").json()
     assert sysinfo["cpu_count"] >= 1 and sysinfo["host_id"] and sysinfo["versions"]["python"]
     assert "torch" in sysinfo["versions"]
-    (ctx.workspace.cache_dir / "ghcn_X.csv").write_text("a,b\n1,2\n")
+    (ctx.workspace.cache_dir / "ghcn_X.csv").write_bytes(b"a,b\n1,2\n")         # 8 bytes on every platform
     st = client.get("/api/storage").json()
     assert [c["name"] for c in st["cache"]] == ["ghcn_X.csv"] and st["free_bytes"] > 0
     assert client.delete("/api/storage/cache/ghcn_X.csv").json()["freed_bytes"] == 8
@@ -296,8 +296,10 @@ def test_cli_start_reuse_and_shutdown(tmp_path):
         lock_path = ws / "studio.lock.json"
         wait_for(lambda: lock_path.exists(), 60, what="the lock file")
         lock = json.loads(lock_path.read_text())
-        assert lock["pid"] == proc.pid and lock["port"] > 0 and oct(lock_path.stat().st_mode)[-3:] == "600"
-        assert oct((ws / "token").stat().st_mode)[-3:] == "600" and (ws / "token").read_text().strip() == "t"
+        owner_only = sys.platform == "win32" or (oct(lock_path.stat().st_mode)[-3:] == "600" and
+                                                 oct((ws / "token").stat().st_mode)[-3:] == "600")   # no POSIX modes
+        assert lock["pid"] == proc.pid and lock["port"] > 0 and owner_only
+        assert (ws / "token").read_text().strip() == "t"
         base = f"http://127.0.0.1:{lock['port']}"
         health = wait_for(lambda: _try(lambda: _get(base + "/api/health")), 60, what="health")
         assert health["ok"] is True and health["workspace"] == str(ws.resolve())

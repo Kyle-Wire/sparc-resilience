@@ -81,10 +81,11 @@ def test_launch_snapshot_follows_the_config_service_rule(ctx, demo):
     assert mine["climate"]["cache"] == str(ctx.workspace.cache_dir.resolve())
     assert mine["output"]["dir"] == str((pdir / "runs").resolve())
     # join tables keep their list form and their keys
-    raw["data"]["join"] = [{"path": "data/extra.csv", "key": "id"}, {"path": "/abs/x.csv", "key": "id"}]
+    absolute = str(Path(pdir.anchor) / "abs" / "x.csv")                  # absolute on every platform
+    raw["data"]["join"] = [{"path": "data/extra.csv", "key": "id"}, {"path": absolute, "key": "id"}]
     joined = absolutise(raw, pdir, cache_dir=ctx.workspace.cache_dir, runs_dir=pdir / "runs")["data"]["join"]
     assert joined == [{"path": str((pdir / "data/extra.csv").resolve()), "key": "id"},
-                      {"path": "/abs/x.csv", "key": "id"}]
+                      {"path": absolute, "key": "id"}]
 
 
 def test_resume_impact_compares_the_launch_form(ctx, demo, place_run):

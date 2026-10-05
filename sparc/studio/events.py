@@ -334,7 +334,9 @@ def append_event(events_path, type_: str, *, job_id: str, t0: float | None = Non
     data = encode_line(ev)
     path = os.fspath(events_path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
+    from sparc.core import runio
+
+    fd = runio.open_append(path)
     try:
         os.write(fd, data)
     finally:

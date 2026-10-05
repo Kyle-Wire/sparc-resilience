@@ -245,7 +245,9 @@ def _open_sink(sink) -> tuple[int | Callable, bool, str | None]:
         return int(spec[3:]), False, spec
     path = os.path.abspath(spec)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
+    from sparc.core.runio import open_append
+
+    fd = open_append(path)
     return fd, True, path
 
 

@@ -158,7 +158,7 @@ def test_executor_uses_replay_for_run_core(monkeypatch, tmp_path):
     assert spawn_command(job)[1:3] == ["-m", "sparc.studio.jobs.worker"]
     monkeypatch.setenv("SPARC_STUDIO_RUNNER", "replay:tests/studio/fixtures/synth_run")
     cmd = spawn_command(job)
-    assert cmd[1:3] == ["-m", "sparc.studio.jobs.replay"] and cmd[3].endswith("tests/studio/fixtures/synth_run")
+    assert cmd[1:3] == ["-m", "sparc.studio.jobs.replay"] and Path(cmd[3]).parts[-3:] == ("studio", "fixtures", "synth_run")
     assert cmd[-2:] == ["--speed", "20"]
     assert spawn_command({**job, "kind": "test.sleep"})[2] == "sparc.studio.jobs.worker"
 

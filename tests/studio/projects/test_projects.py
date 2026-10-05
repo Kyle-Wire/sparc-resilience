@@ -686,12 +686,13 @@ def test_absolutize_paths_keeps_join_lists(tmp_path):
     the launch snapshot and the impact preview all go through ``absolutize_paths``)."""
     from sparc.studio.projects.config_service import absolutize_paths, set_dotted
 
+    absolute = str(Path(tmp_path.anchor) / "abs" / "c.parquet")      # /abs/… on POSIX, C:\abs\… on Windows
     raw = {"data": {"path": "a.csv", "join": [{"path": "b.csv", "key": "id"},
-                                              {"path": "/abs/c.parquet", "key": "id", "right_key": "pid"}]}}
+                                              {"path": absolute, "key": "id", "right_key": "pid"}]}}
     out = absolutize_paths(raw, tmp_path)
     assert out["data"]["path"] == str((tmp_path / "a.csv").resolve())
     assert out["data"]["join"] == [{"path": str((tmp_path / "b.csv").resolve()), "key": "id"},
-                                   {"path": "/abs/c.parquet", "key": "id", "right_key": "pid"}]
+                                   {"path": absolute, "key": "id", "right_key": "pid"}]
     assert raw["data"]["join"][0]["path"] == "b.csv"
     doc = {"l": [1, [2, 3]], "s": None}
     set_dotted(doc, "l.1.0", 9)

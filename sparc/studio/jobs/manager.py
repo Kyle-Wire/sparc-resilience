@@ -49,6 +49,9 @@ from sparc.studio.schemas.common import ACTIVE_STATUSES, FINAL_STATUSES, LIVE_ST
 from sparc.studio.workspace import new_id, read_json, utc_iso, utc_now, write_json_atomic
 
 log = logging.getLogger("sparc.studio.jobs")
+#: exit codes of a worker ended by Studio's cancel signal before its own handler ran: SIGTERM (POSIX) and
+#: STATUS_CONTROL_C_EXIT (Windows CTRL_BREAK_EVENT; unsigned and signed)
+_TERMINATED_CODES = (-15, 143, 0xC000013A, 0xC000013A - 2 ** 32)
 
 __all__ = ["JobManager", "job_out", "LANE_SLOT_KEYS"]
 
@@ -117,6 +120,9 @@ class JobManager:
         self.watchers: dict[str, asyncio.Task] = {}
         self.samples: dict[str, dict] = {}
         self.killed: set[str] = set()
+        #: jobs whose final status is written and whose on_finish hook has not returned yet (the hook completes the
+        #: job's side effects: an export row, a study's children; tests and shutdown wait on it)
+        self.finishing: set[str] = set()
         self.start_failed: set[str] = set()
         self.cost_model = CostModel()
         self.sampler: ResourceSampler | None = None
@@ -694,17 +700,21 @@ class JobManager:
             values["result_json"] = dbmod.dumps(result)
         if status == "succeeded":
             values.update(progress=1.0, eta_s=0.0, eta_lo=0.0, eta_hi=0.0)
-        if row["status"] == status:          # already final (start timeout): just record the details
-            await self.db.aupdate("jobs", {"id": jid}, values)
-        else:
-            await self._set_status(jid, status, **values)
-        await self.db.aexecute("DELETE FROM run_locks WHERE job_id = ?", (jid,))
-        self.hub.publish_job(jid, ("end", status))
-        self.killed.discard(jid)
-        self.start_failed.discard(jid)
-        self._starting.discard(jid)
-        self.samples.pop(jid, None)
-        await self._call_on_finish(jid)
+        self.finishing.add(jid)              # final from here until on_finish has run
+        try:
+            if row["status"] == status:      # already final (start timeout): just record the details
+                await self.db.aupdate("jobs", {"id": jid}, values)
+            else:
+                await self._set_status(jid, status, **values)
+            await self.db.aexecute("DELETE FROM run_locks WHERE job_id = ?", (jid,))
+            self.hub.publish_job(jid, ("end", status))
+            self.killed.discard(jid)
+            self.start_failed.discard(jid)
+            self._starting.discard(jid)
+            self.samples.pop(jid, None)
+            await self._call_on_finish(jid)
+        finally:
+            self.finishing.discard(jid)
         self.wake()
 
     def _final_status(self, row: dict, exit_info: ExitInfo, result_json: dict | None,
@@ -718,8 +728,8 @@ class JobManager:
             return "cancelled", None, None
         if code == 130:
             return "cancelled", None, None
-        if code in (-15, 143) and self._cancel_was_requested(row):
-            return "cancelled", None, None       # SIGTERM landed before the worker installed its handlers
+        if code in _TERMINATED_CODES and self._cancel_was_requested(row):
+            return "cancelled", None, None       # SIGTERM / CTRL_BREAK landed before the worker installed its handlers
         if code == 0:
             return "succeeded", None, (state or {}).get("result")
         if code is None:
@@ -756,17 +766,21 @@ class JobManager:
         return "failed", {"type": "WorkerExit", "message": f"the worker exited with {what}"}, None
 
     async def _call_on_finish(self, jid: str) -> None:
-        row = self.get_row(jid)
-        if row is None:
-            return
-        k = kindsmod.get_kind(row["kind"])
-        if k is None or k.on_finish is None:
-            return
-        job = job_out(row)
+        self.finishing.add(jid)
         try:
-            await asyncio.to_thread(k.on_finish, self.sctx, job, job.get("result"))
-        except Exception:
-            log.exception("on_finish hook of %s failed", k.kind)
+            row = self.get_row(jid)
+            if row is None:
+                return
+            k = kindsmod.get_kind(row["kind"])
+            if k is None or k.on_finish is None:
+                return
+            job = job_out(row)
+            try:
+                await asyncio.to_thread(k.on_finish, self.sctx, job, job.get("result"))
+            except Exception:
+                log.exception("on_finish hook of %s failed", k.kind)
+        finally:
+            self.finishing.discard(jid)
 
     # ------------------------------------------------------------------ actions
 

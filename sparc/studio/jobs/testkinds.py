@@ -93,9 +93,15 @@ def fail_kind(ctx: JobContext, params: TestParams) -> dict:
         raise RuntimeError(params.message or "test.fail: deliberate failure")
 
 
+def _ignore_cancel_signals() -> None:
+    """Ignore what Studio's cancel sends: SIGTERM / SIGINT, and CTRL_BREAK (SIGBREAK) on Windows."""
+    for name in ("SIGTERM", "SIGINT", "SIGBREAK"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), signal.SIG_IGN)
+
+
 def _ignore_and_sleep(seconds: float) -> None:
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    _ignore_cancel_signals()
     end = time.monotonic() + seconds
     while time.monotonic() < end:
         time.sleep(0.05)
@@ -105,8 +111,7 @@ def _ignore_and_sleep(seconds: float) -> None:
 def ignore_sigterm_kind(ctx: JobContext, params: TestParams) -> dict:
     import multiprocessing as mp
 
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    _ignore_cancel_signals()
     children = []
     mpctx = mp.get_context("spawn")
     for _ in range(params.workers or 0):

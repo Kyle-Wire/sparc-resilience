@@ -41,7 +41,7 @@ try:
 except ImportError:
     msvcrt = None
 
-__all__ = ["LOCK_NAME", "MANIFEST_NAME", "atomic_open", "write_json_atomic", "write_text_atomic",
+__all__ = ["LOCK_NAME", "MANIFEST_NAME", "open_append", "atomic_open", "write_json_atomic", "write_text_atomic",
            "write_bytes_atomic", "write_parquet_atomic", "write_npz_atomic", "remove_stale_tmp", "run_lock",
            "update_manifest"]
 
@@ -129,6 +129,44 @@ def remove_stale_tmp(directory) -> int:
     """Remove the temporaries that writers killed mid-write left in ``directory`` (not its sub-folders);
     returns the bytes freed.  Temporaries of live processes are kept."""
     return _unlink_all(_stale_tmps(Path(directory)))
+
+
+def open_append(path) -> int:
+    """A write-only file descriptor that appends every ``os.write`` atomically, creating the file.
+
+    POSIX ``O_APPEND`` writes land whole at the end of the file even with several writers (pool workers
+    reporting progress, the server appending ``job.status``).  Windows only emulates ``O_APPEND`` in the C
+    runtime (seek to the end, then write), so two processes can overwrite each other's lines; a handle
+    opened with ``FILE_APPEND_DATA`` access alone makes the system append each write atomically instead.
+    """
+    path = os.fspath(path)
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
+    if os.name != "nt":
+        return os.open(path, flags, 0o644)
+    try:
+        return _win_open_append(path)
+    except OSError:
+        return os.open(path, flags, 0o644)
+
+
+def _win_open_append(path: str) -> int:
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel32.CreateFileW
+    create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD,
+                       wintypes.DWORD, wintypes.HANDLE]
+    create.restype = wintypes.HANDLE
+    file_append_data, synchronize = 0x0004, 0x00100000
+    share = 0x1 | 0x2 | 0x4                      # read, write and delete: readers and other writers keep working
+    open_always, normal = 4, 0x80
+    h = create(path, file_append_data | synchronize, share, None, open_always, normal, None)
+    if h is None or h == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    # no _O_APPEND: the C runtime must not seek; the handle itself appends
+    return msvcrt.open_osfhandle(h, 0)
 
 
 def replace(src, dst, *, attempts: int = 25, delay_s: float = 0.02) -> None:

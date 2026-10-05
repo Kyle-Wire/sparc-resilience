@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import zipfile
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -49,7 +50,7 @@ def test_decision_pack_for_an_exact_result(client, ctx, demo, run_ctx, synth_run
     row = make_result(ctx, run_ctx)
     eid, res = _run_pack(client, ctx, wait_job, "export.decision_pack", {"result_id": row["id"]}, demo["id"])
     assert res["export_id"] == eid and res["draft"] is False and res["bytes"] > 0
-    assert f"/exports/{eid}/" in res["path"] and res["path"].endswith(".zip")
+    assert Path(res["path"]).parent.parts[-2:] == ("exports", eid) and res["path"].endswith(".zip")
     z = _zip(res["path"])
     names = set(z.namelist())
     assert {"brief.html", "scenario.json", "summary.json", "cells.csv", "delta.tif", "realized_canopy.tif",

@@ -483,11 +483,13 @@ def test_signal_handler_sets_flag_then_second_signal_raises():
     previous = signal.getsignal(signal.SIGTERM)
     progress.install_signal_handlers()
     assert signal.getsignal(signal.SIGTERM) is not previous
+    # raise_signal runs the installed handler on every platform (os.kill(own pid, SIGTERM) on Windows
+    # terminates the process outright, test runner included)
     with pytest.raises(progress.Cancelled), progress.task("sleeping"):
-        os.kill(os.getpid(), signal.SIGTERM)
+        signal.raise_signal(signal.SIGTERM)
         time.sleep(0.05)                             # handler ran: flag only, nothing raised
         assert progress.cancel_requested()
-        os.kill(os.getpid(), signal.SIGINT)          # the second signal raises inside the sleep
+        signal.raise_signal(signal.SIGINT)           # the second signal raises inside the sleep
         for _ in range(200):
             time.sleep(0.01)
     assert len(sink.of("cancel.ack")) == 1 and sink.of("task.end")[0]["status"] == "cancelled"

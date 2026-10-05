@@ -2922,6 +2922,11 @@ This is the changelog of the specification after the completeness review (§18).
 - **Results page**: a Heat stress section (residents by category, humidity band) and verdict pills in the uncertainty table; heat layers on its map.
 - **Lab impacts** gain `heat` (`design_heat`): residents at Extreme caution or worse and at Danger or worse before → after the design, on the campaign afternoon and in each future under both humidity assumptions, with a plain headline ("moves N residents out of …" / "puts N more …"). The result inspector leads its impacts with it, the decision brief adds a "Heat risk" section, and impacts cached before this (version 1) are recomputed.
 - **Report export** gains a `heat` section (the brief, the exposure table and the verdict table).
+- **Windows**:
+  - event logs open with `runio.open_append`, which appends atomically on Windows (`FILE_APPEND_DATA`);
+  - a worker that exits with STATUS_CONTROL_C_EXIT after a cancel is "cancelled", as SIGTERM's 143 is on POSIX;
+  - result file lists use `/`.
+- **Job manager**: `jobs.finishing` holds jobs whose final status is written but whose `on_finish` hook has not returned. A job is visible as final a moment before its hook completes the export row or the study's children; the test helpers wait on it.
 - **Live heat-risk preview** (Lab compile panel): the browser applies the preview's per-cell ΔT to the run's `obs` layer, computes the NWS heat index with the campaign dewpoint (`theme/heat.ts`, the same formula as `sparc.core.heat`, checked against it in tests) and counts the `people` layer across the categories. It names a lever whose configured single-lever scenarios are all Not established (or only Direction only).
 
 ### Documentation

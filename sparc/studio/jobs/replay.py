@@ -114,7 +114,7 @@ class _Writer:
     def __init__(self, events_path: Path, job_id: str):
         self.path = events_path
         self.job_id = job_id
-        self.fd = os.open(events_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
+        self.fd = runio.open_append(events_path)
         self.t0 = time.time()
 
     def write(self, ev: dict) -> None:
@@ -181,6 +181,8 @@ def replay(fixture_dir: str | os.PathLike, job_dir: str | os.PathLike, *, speed:
     resume = bool(params.get("resume"))
     signal.signal(signal.SIGTERM, _on_term)
     signal.signal(signal.SIGINT, _on_term)
+    if hasattr(signal, "SIGBREAK"):                  # Windows: Studio cancels with CTRL_BREAK_EVENT
+        signal.signal(signal.SIGBREAK, _on_term)
 
     fixture_state = {}
     try:

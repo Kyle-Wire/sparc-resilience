@@ -291,3 +291,38 @@ def test_replace_rides_out_a_windows_sharing_violation(tmp_path, monkeypatch):
     with _pytest.raises(PermissionError):
         runio.replace(src, dst)
     assert len(calls) == 1
+
+
+def _append_lines(path, tag, n):
+    import json as _json
+
+    from sparc.core import runio as _runio
+
+    fd = _runio.open_append(path)
+    try:
+        for i in range(n):
+            os.write(fd, (_json.dumps({"w": tag, "i": i, "pad": "x" * (40 + i % 60)}) + "\n").encode())
+    finally:
+        os.close(fd)
+
+
+def test_open_append_keeps_every_line_whole_with_several_writer_processes(tmp_path):
+    """Pool workers and the server append to one events.jsonl at once: every line must land whole (Windows
+    emulates O_APPEND with seek + write, so open_append opens with FILE_APPEND_DATA there)."""
+    import json as _json
+    import multiprocessing as mp
+
+    path = tmp_path / "events.jsonl"
+    ctx = mp.get_context("spawn")
+    procs = [ctx.Process(target=_append_lines, args=(str(path), k, 300)) for k in range(4)]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(60)
+        assert p.exitcode == 0
+    lines = path.read_bytes().split(b"\n")
+    assert lines[-1] == b""
+    rows = [_json.loads(x) for x in lines[:-1]]
+    assert len(rows) == 1200
+    for k in range(4):
+        assert sorted(r["i"] for r in rows if r["w"] == k) == list(range(300))

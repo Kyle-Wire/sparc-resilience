@@ -327,7 +327,7 @@ def post_planner(ctx, params: PlannerParams) -> dict:
         kw["hex_sizes"] = tuple(params.hex_sizes)
     out = planner_pack(run_dir, cfg, **kw)
     pdir = run_dir / "planner"
-    files = sorted(str(p.relative_to(run_dir)) for p in pdir.rglob("*") if p.is_file()) if pdir.is_dir() else []
+    files = sorted(p.relative_to(run_dir).as_posix() for p in pdir.rglob("*") if p.is_file()) if pdir.is_dir() else []
     return {"people_total": out.get("people_total"), "package": out.get("package"), "files": files,
             "hot_days": bool(out.get("hot_days"))}
 

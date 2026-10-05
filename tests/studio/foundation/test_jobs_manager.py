@@ -31,6 +31,14 @@ def events_of(ctx, jid):
 
 
 def pgid_members(pgid: int) -> list[int]:
+    """Live processes of a job's process group (POSIX); on Windows, which has no process groups to list, the job's
+    process tree rooted at ``pgid`` (the worker's pid)."""
+    if not hasattr(os, "getpgid"):
+        try:
+            root = psutil.Process(pgid)
+            return [root.pid] + [c.pid for c in root.children(recursive=True) if c.is_running()]
+        except psutil.Error:
+            return []
     out = []
     for p in psutil.process_iter(["pid"]):
         try:
@@ -218,7 +226,7 @@ def test_kill_after_grace_removes_whole_group(grace_client, wait_job):
     j = submit(client, "test.ignore_sigterm", seconds=120, workers=2)
     wait_job(client, j["id"], ("running",))
     pid = ctx.db.fetchval("SELECT pid FROM jobs WHERE id = ?", (j["id"],))
-    pgid = os.getpgid(pid)
+    pgid = os.getpgid(pid) if hasattr(os, "getpgid") else pid
     assert pgid == pid                                         # its own session / process group
     wait_for(lambda: len(pgid_members(pgid)) >= 3, 30, what="the worker's two children")
     members = pgid_members(pgid)
@@ -257,7 +265,8 @@ def test_kill_pool_job_removes_pool_children(client, ctx, wait_job):
     proc = psutil.Process(pid)
     wait_for(lambda: len(proc.children(recursive=True)) >= 2, 60, what="pool workers")
     children = [c.pid for c in proc.children(recursive=True)]
-    assert all(os.getpgid(c) == pid for c in children)
+    if hasattr(os, "getpgid"):
+        assert all(os.getpgid(c) == pid for c in children)
     assert client.post(f"/api/jobs/{j['id']}/kill", json={"force_now": True}).status_code == 202
     assert wait_job(client, j["id"], timeout=20)["status"] == "cancelled"
     wait_for(lambda: not pgid_members(pid), 10, what="pool processes to disappear")
@@ -376,7 +385,7 @@ def test_server_side_hooks_run_in_the_server(client, ctx, wait_job, monkeypatch)
     assert [t for _, _, t in seen].count("artifact") == 8
     assert {t for _, _, t in seen} == {"run.start", "run.dir", "artifact"}       # the default hook types
     assert finished == [(os.getpid(), "succeeded", finished[0][2])] and finished[0][2]["ok"] is True
-    assert ctx.db.get_setting(f"hook:{jid}").endswith("/run")
+    assert Path(ctx.db.get_setting(f"hook:{jid}")).name == "run"
 
 
 def test_memory_preflight_blocks_with_actions(client, ctx, wait_job, monkeypatch):
@@ -478,6 +487,8 @@ def test_worker_environment(ctx):
     assert env["PYTHONPATH"].split(os.pathsep)[0] == str(Path(sparc.__file__).resolve().parent.parent)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX sessions; Windows workers get their own process group "
+                                                 "(CREATE_NEW_PROCESS_GROUP), checked by the cancel tests")
 def test_worker_runs_in_its_own_session(client, ctx, wait_job):
     jid = submit(client, "test.sleep", seconds=5)["id"]
     wait_job(client, jid, ("running",))
@@ -574,11 +585,11 @@ def test_job_context_resolves_dirs_and_run_config(tmp_path):
     assert ctx.run_config().base_dir == tmp_path
     # 2. manifest.config + provenance.config_dir
     (run_dir / "manifest.json").write_text(json.dumps({"config": raw, "provenance": {"config_dir": "/m/dir"}}))
-    assert str(ctx.run_config().base_dir) == "/m/dir"
+    assert ctx.run_config().base_dir == Path("/m/dir")
     # 1. the launch snapshot wins
     (run_dir / "studio" / "launch.json").write_text(json.dumps({"config_raw": raw, "config_dir": "/launch/dir",
                                                                 "args": {"fast": True}}))
-    assert str(ctx.run_config().base_dir) == "/launch/dir" and ctx.launch["args"] == {"fast": True}
+    assert ctx.run_config().base_dir == Path("/launch/dir") and ctx.launch["args"] == {"fast": True}
     ctx.emit_result({"a": 1})
     assert ctx.result == {"a": 1}
 

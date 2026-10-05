@@ -64,10 +64,26 @@ def studio_config(tmp_path) -> Callable[..., Any]:
     return make
 
 
-def kill_leftover_jobs(workspace) -> None:
-    """Kill the process groups of jobs a test left running (jobs outlive their server by design)."""
+def kill_tree(pid: int) -> None:
+    """Kill a job's process group (POSIX) or its process tree (Windows has no process groups to signal)."""
     import signal
 
+    import psutil
+
+    if hasattr(os, "killpg"):
+        os.killpg(pid, signal.SIGKILL)
+        return
+    p = psutil.Process(pid)
+    for c in p.children(recursive=True):
+        try:
+            c.kill()
+        except psutil.Error:
+            pass
+    p.kill()
+
+
+def kill_leftover_jobs(workspace) -> None:
+    """Kill the process groups of jobs a test left running (jobs outlive their server by design)."""
     import psutil
 
     from sparc.studio.db import Database
@@ -85,7 +101,7 @@ def kill_leftover_jobs(workspace) -> None:
         try:
             p = psutil.Process(int(r["pid"]))
             if any(r["job_dir"] in part for part in p.cmdline()):
-                os.killpg(int(r["pid"]), signal.SIGKILL)
+                kill_tree(int(r["pid"]))
         except (psutil.Error, ProcessLookupError, PermissionError, OSError):
             continue
 
@@ -148,10 +164,18 @@ def wait_job():
         statuses = (statuses,) if isinstance(statuses, str) else tuple(statuses)
         last = {}
 
+        jobs = getattr(getattr(getattr(client, "app", None), "state", None), "studio", None)
+        jobs = getattr(jobs, "jobs", None)
+
         def check():
             nonlocal last
             last = client.get(f"/api/jobs/{jid}").json()
-            return last if last.get("status") in statuses else None
+            if last.get("status") not in statuses:
+                return None
+            # a final job's on_finish hook (export row, study children) has run too
+            if last.get("status") in FINAL and jobs is not None and jid in getattr(jobs, "finishing", ()):
+                return None
+            return last
 
         try:
             return wait_for(check, timeout, 0.05, f"job {jid} to reach {statuses}")

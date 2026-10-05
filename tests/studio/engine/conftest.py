@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import signal
 from pathlib import Path
 
 import numpy as np
@@ -49,8 +48,12 @@ def kill_host(workspace) -> None:
     info_path = Path(workspace.engine_dir) / "host.json"
     try:
         info = json.loads(info_path.read_text())
-        os.killpg(int(info["pid"]), signal.SIGKILL)
+        from tests.studio.conftest import kill_tree
+
+        kill_tree(int(info["pid"]))
     except (OSError, ValueError, KeyError, ProcessLookupError, PermissionError):
+        pass
+    except Exception:                          # psutil.NoSuchProcess on Windows: already gone
         pass
 
 

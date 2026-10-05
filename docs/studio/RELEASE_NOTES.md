@@ -7,7 +7,13 @@
 - **Heat risk of a design**: an exact Lab result's impacts lead with the residents it moves out of Extreme caution or worse, today and in each future; the decision pack and the report export ("Heat stress" section) carry it. Impacts cached before this are recomputed once.
 - **Map**: "Heat stress" layers (heat index and NWS category, today and with the package) in warm category colours.
 - **Results page**: a Heat stress section and verdict pills.
-- **Windows and macOS**: CI runs the start-to-end self-check (`python -m sparc.studio.selfcheck`) and the fast suites on both. Fixed: on Windows the Scenario Lab's engine host never exited after Studio stopped (a named-pipe wait that closing does not interrupt), and Studio could not kill it afterwards; atomic file replacement retries through Windows sharing violations.
+- **Windows and macOS**: CI runs the start-to-end self-check (`python -m sparc.studio.selfcheck`) and the fast suites on both. Fixed on Windows:
+  - the Scenario Lab's engine host never exited after Studio stopped (a named-pipe wait that closing does not interrupt), and Studio could not kill it afterwards;
+  - several processes appending to one event log (pool workers, the server) could overwrite each other's lines, because Windows only emulates append mode; event logs now open with an append-only handle, which appends each write atomically;
+  - a run cancelled before its worker installed its handler ended "failed" instead of "cancelled";
+  - post-run results listed files with backslashes;
+  - atomic file replacement retries through sharing violations.
+- **Line endings**: the repository checks out with LF on every platform (`.gitattributes`), so fixtures and recorded byte offsets match on Windows.
 - **No change to checkpoints**: the heat code sits in `sparc/core/heat/` (outside the resume fingerprint), so existing runs resume as before.
 
 ---

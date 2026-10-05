@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import os
-import signal
 
 import psutil
 from fastapi.testclient import TestClient
@@ -29,13 +28,15 @@ def _start_job(make_app, wait_job, kind="test.sleep", until=None, **params):
 
 
 def _kill(pid):
+    from tests.studio.conftest import kill_tree
+
     try:
-        os.killpg(pid, signal.SIGKILL)
-    except ProcessLookupError:
+        kill_tree(pid)
+    except (ProcessLookupError, psutil.Error):
         pass
     try:
         os.waitpid(pid, 0)                     # it is a child of this test process
-    except ChildProcessError:
+    except (ChildProcessError, OSError):
         pass
 
 
