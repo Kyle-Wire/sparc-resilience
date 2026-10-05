@@ -639,6 +639,39 @@ User guide: `docs/studio/USER_GUIDE.md`. Developer guide: `docs/studio/DEVELOPIN
 - some Lab paths are covered only by typecheck;
 - Windows and macOS are untested.
 
+## Appendix F — Heat stress, verdicts and portability (2026-10-05)
+
+**Why.** Air temperature alone understates danger, and a single number with an interval is easy to over-read. This round turns the pipeline's temperatures into the quantity health guidance uses (the NWS heat index and its categories), counts the people exposed, and gives every scenario a plain verdict.
+
+**What was built.**
+- `sparc/core/heat` (outside the code fingerprint; checkpoints unaffected):
+  - the NWS heat index (Rothfusz with the low- and high-humidity adjustments, parity with `forcing.heat_index_F`) and its categories;
+  - the campaign dewpoint (station, else ERA5);
+  - residents by category today, with the package and per CMIP6 future, as a constant-dewpoint to constant-RH band;
+  - `effect_verdict`: Robust / Direction only / Not established, from the envelope, sign stability, the rf null artefact and the extrapolated share (above 50% is Not established).
+- Results page (v9): a Heat stress section, verdict pills, heat layers, and live heat risk in the Design emulator.
+- SPARC Studio:
+  - a Heat tab: the server writes the brief, the dewpoint is a what-if control, futures carry the humidity band widened by the models' p10–p90 warming;
+  - heat layers with a warm category palette;
+  - verdicts on the Scenarios and Uncertainty tabs;
+  - the heat risk of each Lab design (exact impacts, decision brief, report section);
+  - a live heat-risk preview while designing that names levers whose scenarios are not established.
+- Portability:
+  - a start-to-end self-check (`python -m sparc.studio.selfcheck`) on Windows and macOS CI;
+  - Windows fixes: the engine host now exits (named-pipe wake) and is killed by the PID Studio asked to stop; atomic replace retries on sharing violations;
+  - UTF-8-safe CI reports.
+
+**Providence.**
+- 36.7k residents (21%) were at Extreme caution or worse on the campaign afternoon; 3.7k with the Green Infrastructure Package.
+- SSP2-4.5 mid-century: 143k–174k; with the package, 55k–172k.
+- Verdicts: impervious −10/−20/−30 Robust; the package Robust (26% extrapolated); canopy Not established (indistinguishable from the null artefact); albedo +0.2 Not established (fully extrapolated).
+
+**Limits.**
+- One dewpoint applies to the whole city.
+- The heat index is steep near category edges, so counts near an edge move a lot with small changes.
+- Futures shift today's afternoon by the median warming (delta method); they do not model future humidity or heat-wave frequency.
+- The live preview is the linear emulator; exact results verify it.
+
 ## Appendix B — References
 
 - **Assran et al. (2023):** *Self-Supervised Learning from Images with a Joint-Embedding Predictive Architecture* (I-JEPA).
