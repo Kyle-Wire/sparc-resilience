@@ -491,3 +491,45 @@ def test_a_stopping_host_refuses_work_and_releases_host_json(tmp_path):
     (ed / HOST_JSON).write_text(json.dumps({"pid": os.getpid()}))
     host2.stop()
     assert not (ed / HOST_JSON).exists()
+
+
+def test_a_run_that_stopped_before_it_finished_offers_resume_not_open_engine(client, ctx, demo, synth_run):
+    """A run cancelled (or failed, interrupted) after S3 has checkpoint.pkl but no manifest.json, which the host
+    needs to rebuild the run's data and folds: the engine says so and offers Resume, opening and exact runs are
+    refused with that remedy, instead of "Open engine" jobs that always fail with FileNotFoundError."""
+    from sparc.studio.engine.kinds import _open_preflight
+    from sparc.studio.workspace import utc_now
+
+    rid, rd = synth_run
+    (rd / "checkpoint.pkl").write_bytes(b"x" * 1000)
+    manifest = (rd / "manifest.json").read_bytes()
+    (rd / "manifest.json").unlink()
+    ctx.db.execute("UPDATE runs SET status = 'partial' WHERE id = ?", (rid,))
+    st = client.get(f"/api/runs/{rid}/engine").json()
+    assert st["state"] == "error" and st["error"]["type"] == "RunNotFinished" and "manifest.json" in st["error"]["message"]
+    assert st["action"]["kind"] == "resume" and st["action"]["path"] == f"/api/runs/{rid}/resume"
+    r = client.post(f"/api/runs/{rid}/engine/open")
+    assert r.status_code == 404, r.text
+    err = r.json()["error"]
+    assert err["code"] == "output_missing" and err["detail"]["output"] == "manifest"
+    assert err["action"]["path"] == f"/api/runs/{rid}/resume"
+    sc = client.post(f"/api/projects/{demo['id']}/scenarios", json={"doc": {
+        "name": "s", "edits": [{"lever": "canopy", "mode": "add", "amount": 3}]}}).json()
+    r = client.post(f"/api/scenarios/{sc['id']}/run", json={"run_id": rid})
+    assert r.status_code == 404 and r.json()["error"]["code"] == "output_missing"
+    assert ctx.db.fetchval("SELECT COUNT(*) FROM jobs WHERE kind LIKE 'engine.%'") == 0
+    job = {"id": "j_x", "run_id": rid}
+    assert _open_preflight(ctx, job, None)[0]["fatal"] is True
+    # still running (past S3): no remedy to offer, and a queued engine job waits for the manifest
+    ctx.db.insert("jobs", {"id": "j_run", "kind": "run.core", "lane": "heavy", "executor": "process", "run_id": rid,
+                           "params_json": "{}", "status": "running", "job_dir": "/nonexistent",
+                           "created_utc": utc_now()})
+    st = client.get(f"/api/runs/{rid}/engine").json()
+    assert st["state"] == "error" and st["error"]["type"] == "RunNotFinished" and st["action"] is None
+    assert "still running" in st["error"]["message"]
+    assert _open_preflight(ctx, job, None)[0]["fatal"] is False
+    # once it finished, the engine opens as usual
+    ctx.db.update("jobs", {"id": "j_run"}, {"status": "succeeded"})
+    (rd / "manifest.json").write_bytes(manifest)
+    st = client.get(f"/api/runs/{rid}/engine").json()
+    assert st["state"] == "cold" and st["action"]["kind"] == "open_engine"

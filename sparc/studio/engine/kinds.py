@@ -339,7 +339,9 @@ def _open_preflight(sctx, job: dict, params) -> list[dict]:
     try:
         get_service(sctx).preflight(rid, memory=False)
     except ApiError as exc:
-        fatal = exc.code in ("no_checkpoint", "untrusted_pickle")
+        # an unfinished run that is still running only waits (blocked) for its manifest; a stopped one cannot load
+        fatal = exc.code in ("no_checkpoint", "untrusted_pickle") or (
+            exc.code == "output_missing" and not (exc.detail or {}).get("running"))
         return [{"reason": exc.message, "fatal": fatal, "code": exc.code,
                  "actions": [exc.action] if exc.action else []}]
     return []

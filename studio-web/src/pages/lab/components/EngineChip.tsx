@@ -1,5 +1,6 @@
 // Engine status chip (SPEC §7.6): cold / loading x% ("Loading checkpoint 312/525 MB…") / ready /
-// busy / incompatible / no checkpoint, with "Open engine". Opening can be refused:
+// busy / incompatible / no checkpoint, with "Open engine" (a run that stopped before it finished
+// offers the server's "Resume" action instead). Opening can be refused:
 // - 409 untrusted_pickle: the run was imported without pickle trust. The trust dialog names
 //   the risk (checkpoint files execute code when loaded) before re-registering the run with
 //   trust_pickles, then opens the engine;
@@ -147,12 +148,16 @@ export function EngineChip({ rid }: { rid: string }) {
   };
   const text = state ? ENGINE_TEXT[state] : "engine";
   const meta = state === "loading" && progress !== null ? fmtPct(progress) : undefined;
-  const canOpen = state === "cold" || state === "error" || (state === null && !!status);
+  // a run that stopped before it finished has a checkpoint but no manifest: the engine cannot load it, so the
+  // chip offers the server's remedy (resume the run) instead of an "Open engine" that can only fail again
+  const unfinished = state === "error" && status?.error?.type === "RunNotFinished";
+  const canOpen = !unfinished && (state === "cold" || state === "error" || (state === null && !!status));
   return (
     <span className="lab-engine row" data-state={state ?? "unknown"}>
       <StatusChip status={state ?? "absent"} text={text} meta={meta} title={status?.step ?? (status?.error ? status.error.message : undefined)} />
       {state === "loading" && status?.step ? <span className="cap">{status.step}</span> : null}
-      {state === "incompatible" && status?.action ? <ActionButton action={status.action} size="small" variant="default" /> : null}
+      {(state === "incompatible" || unfinished) && status?.action ? <ActionButton action={status.action} size="small" variant="default" /> : null}
+      {unfinished ? <span className="cap">{status?.error?.message}</span> : null}
       {status?.code_match === false ? (
         <span className="cap" title="The checkpoint was written by different core code; exact results are marked stale.">
           code changed
