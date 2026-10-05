@@ -289,7 +289,7 @@ The **Overview** shows the headline numbers (held-out R², RMSE, 90% interval co
 ### J7 — Budget plan to field kit
 
 1. Lab → **Plans**: lever canopy, a budget of 20,000 pp·cells, the plantable cap on, objective "people", equity "share aged 60+" with focus 0.3.
-2. The planned allocation and its benefit-versus-budget curve update in under a second as you move the slider.
+2. The planned allocation and its benefit-versus-budget curve update in under a second as you move the slider. With the "people" objective the residents decide where to plant; the planned benefit and the curve stay the plan's cooling in °F·cells (the caption gives the resident-weighted total apart).
 3. **Verify exactly** re-predicts the whole allocation with the engine and reports planned against realised cooling, e.g. "planned 1,704 vs realised 1,037 °F·cells", labelled *spillover non-additivity*: neighbouring treatments overlap, so per-cell responses do not simply add up.
 
    ![A verified plan: planned, realised, cells treated, cost and the benefit curve](img/lab-plan-verified.png)
@@ -459,7 +459,7 @@ The **Exports** page has the report builder, one card per export and the project
 | Plan pack | The decision-pack contents plus the field list, logger sites, before/after pairs and the Pareto table |
 | Compare pack | Per-item summaries, paired differences, difference GeoTIFFs and a brief |
 
-Packs are built from **exact** results. A pack made from a scenario without an exact result, or from an unverified plan, is stamped **DRAFT** and carries no standard errors.
+Packs are built from **exact** results. A pack made from a scenario without an exact result, or from an unverified plan, is stamped **DRAFT**, carries no standard errors and is built from the emulator preview (so it needs the run's emulator); its extrapolation share reads "not computed (preview)". A plan's planned benefit is never used as a ΔT map: each treated cell holds the cooling its dose brings to its whole neighbourhood (°F·cells).
 
 Runs without a CRS cannot produce longitude/latitude, GeoTIFF, GeoPackage or GeoJSON; the buttons say so.
 
@@ -524,15 +524,15 @@ Scenarios autosave every two seconds; undo and redo cover the last 50 steps. The
 
 ### Compare and check across runs
 
-**Compare** takes two to four items (exact results, configured scenarios, plans, the baseline): locked-scale maps, the A − B difference map with swipe, a KPI table with **paired** standard errors, regions, equity, exposure, cost and causal bands. Differences always read A − B: a negative value means A cools more. Paired errors use the shared fold models, so they are much tighter than comparing two independent ranges; configured scenarios of older runs offer **Re-run exactly for paired SE**.
+**Compare** takes two to four items (exact results, configured scenarios, plans, the baseline): locked-scale maps, the A − B difference map with swipe, a KPI table with **paired** standard errors, regions, equity, exposure, cost and causal bands. Differences always read A − B: a negative value means A cools more. Paired errors use the shared fold models, so they are much tighter than comparing two independent ranges; configured scenarios of older runs offer **Re-run exactly for paired SE**. An unverified plan has no per-cell ΔT: it is compared by its city mean, cost and cooling per cost only, without edited-area, regional, equity, exposure or difference maps, until you verify it.
 
 ![Compare: paired difference with its likely range](img/lab-compare.png)
 
-**Check across runs** evaluates the same scenario on other runs of the project (fast, coarse, full, open-data, multiverse children), as one heavy job that shows its time and peak memory before it starts. The spread feeds the result's specification band.
+**Check across runs** evaluates the same scenario on other runs of the project (fast, coarse, full, open-data, multiverse children), as one heavy job that shows its time and peak memory before it starts. The spread becomes the specification band of the exact results of the version it checked, including ones computed before the check; a draft edited afterwards needs a new check.
 
 ### Sweeps and plans
 
-- **Sweeps** run one lever at a series of doses in a region and fit the saturation curve to the region's benefit, overlaid on the run's response curves.
+- **Sweeps** run one lever at a series of doses in a region and fit the saturation curve to the region's benefit against the requested dose (the chart's axis: the overlay, its d90 line and caption), overlaid on the run's response curves. The fit against the neighbourhood dose (the smoothed dose around each cell, smaller for a regional sweep) is quoted in its own units, with each point's neighbourhood dose in the table.
 - **Plans** ([J7](#j7--budget-plan-to-field-kit)) optimise a single-lever budget: budget slider, cost (a number or any cost column), caps (plantable headroom, a region), a minimum dose per treated cell (allocations below it are dropped and the freed budget is reported, not re-spent), objective (cooling or people reached) and equity (score source and focus). **Verify exactly** and **Verify frontier** run the allocation through the engine. Combining several single-lever plans in one scenario is allowed and labelled "not jointly optimal".
 
 ### Climate × adaptation
