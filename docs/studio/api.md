@@ -1108,7 +1108,7 @@ type PlanParams = { lever: string; budget: number;
   min_dose?: number; objective: "cooling"|"people";
   equity?: { source: "share_60_plus"|"share_under_5"|"density"|"column"; column?: string /* same forms as cost.column */; focus: number };
   multipliers?: number[] };
-type PlanPreview = { planned_total: number; n_cells_treated: number; mean_dose_treated: number; total_cost: number; gini: number;
+type PlanPreview = { planned_total: number /* the plan's cooling, °·cells (unweighted for objective "people") */; n_cells_treated: number; mean_dose_treated: number; total_cost: number; gini: number;
   min_dose_dropped_cost: number;   // budget freed by the min_dose post-filter, not re-spent
   pareto: { budget: number; benefit: number; n_cells: number; n_segments: number; gini: number }[];
   dose: string /* base64 Float32[n] */; constraint: string; objective: string; caption: string };
@@ -1723,6 +1723,7 @@ This section is the changelog of the contract after the completeness review (§1
 - **`budget.top_cells`** (§6): the treated cells (`dose > 0`) with the most closed-loop cooling (`benefit` = −`closed_loop_delta`), at most 25 and in that order; ties and cells without a closed-loop value by `dose` (larger first), then by row. Without `closed_loop_delta` in `allocation.parquet` they are ranked by dose, then row. Before, the ranking was by dose alone, so the many cells sharing one dose were listed in row order.
 - **`response.literature.sparc[]`** (§6) carries `frac_extrapolated`: the share of cells beyond observed conditions in the scenario the rate is scaled from (`manifest.literature.sparc.<quantity>.frac_extrapolated`, `null` when absent).
 - **Findings export and the report's Findings section** (§10, §11): a snapshot with `table: {columns, rows}` (every kit chart pin) is written as a table with every row, each column headed by its `label` (else `key`) and `(unit)`; the rest of the snapshot is listed as before. Nested values are written in full as JSON with their characters as written: no 400-character cut and no `\u` escapes.
+- **People-objective plans report cooling** (§7.9): with `objective: "people"` the allocation is still chosen by resident-weighted cooling, but `planned_total`, `pareto[].benefit`, the `planned_benefit` layer and field-kit column, and the `planned` of `engine.plan_frontier` are the plan's **unweighted** cooling (°·cells), comparable with `realised.total` and with a cooling plan of the same budget. The weighted total (cooling × the relative resident density around each cell, mean 1) is named in `caption`. Before, these were the weighted sums, so a people plan claimed more cooling than the cooling-optimal plan (405.9 vs 354.5 °F·cells at budget 1,000 on the demo city; its cooling is 336.2).
 
 ### Documentation
 

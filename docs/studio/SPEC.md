@@ -2898,6 +2898,7 @@ This is the changelog of the specification after the completeness review (§18).
 - **Budget top cells** (§6.4): the table lists the treated cells that cool most (closed loop), in that order, ties by dose; before, it ranked by dose alone, so cells sharing a dose came in row order and the table did not match its "by cooling" caption.
 - **Literature panel** (§6.4 Response): the SPARC rows carry the extrapolated share of the scenario they scale from.
 - **Findings export** (§6.10): a pinned chart's numbers are exported as a table with every row and the column labels and units as written (`City-mean ΔT (°F)`), not as JSON cut at 400 characters; other nested snapshot values are written in full.
+- **People-objective plans** (§7.10): the people objective ranks cells by cooling weighted by the residents around them; the plan's planned cooling, its Pareto curve, the planned-benefit map and the field kit report the allocation's actual (unweighted) cooling in °·cells, and the caption gives the weighted total separately. Before, the weighted sums were shown as °F·cells of cooling, so a people plan appeared to cool more than the cooling-optimal plan.
 
 ### Documentation
 

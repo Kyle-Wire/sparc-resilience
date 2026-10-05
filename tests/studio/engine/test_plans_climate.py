@@ -161,3 +161,37 @@ def test_climate_without_factors_is_404(client, ctx, synth_run):
     r = client.post(f"/api/runs/{rid}/climate/explore", json={"adaptations": []})
     assert r.status_code == 404 and r.json()["error"]["code"] == "no_climate_factors"
     assert r.json()["error"]["action"]["path"].endswith("/inputs/cmip6")
+
+
+def test_people_objective_reports_unweighted_cooling(client, run_ctx, synth_run):
+    """The people objective ranks cells by resident-weighted cooling; the plan's totals stay its cooling.
+
+    Core's sums are weighted by residents (mean weight 1), so a people plan claimed more °F·cells of cooling
+    than the cooling-optimal plan of the same budget (405.9 vs 354.5 at 1,000)."""
+    from sparc.core.optimize import planned_allocation
+    from sparc.studio.scenarios.plans import plan_inputs
+
+    rid, _ = synth_run
+    cool = client.post(f"/api/runs/{rid}/plans/preview", json={"lever": "canopy", "budget": 1000}).json()
+    ppl = client.post(f"/api/runs/{rid}/plans/preview", json={"lever": "canopy", "budget": 1000,
+                                                                "objective": "people"}).json()
+    inp = plan_inputs(run_ctx, {"lever": "canopy", "budget": 1000, "objective": "people"})
+    w = inp["weight"]
+    raw = planned_allocation(inp["vr"], 1000.0, benefit_weight=w)
+    treated = raw["dose"] > 0
+    want = float(np.sum(raw["planned_benefit"][treated] / w[treated]))
+    np.testing.assert_allclose(_dose(ppl["dose"]), raw["dose"], rtol=1e-6)
+    assert ppl["planned_total"] == pytest.approx(want, rel=1e-9)
+    assert ppl["planned_total"] <= cool["planned_total"] * (1 + 1e-9)       # the cooling optimum is the most cooling
+    assert raw["planned_total_cooling"] > cool["planned_total"]             # the weighted sum is not cooling
+    for a, b in zip(ppl["pareto"], cool["pareto"]):
+        assert a["budget"] == b["budget"] and a["benefit"] <= b["benefit"] * (1 + 1e-9)
+    assert ppl["pareto"][2]["benefit"] == pytest.approx(ppl["planned_total"], rel=1e-9)
+    assert f"{raw['planned_total_cooling']:,.4g}" in ppl["caption"] and "unweighted" in ppl["caption"]
+    assert "weighted total" not in cool["caption"]
+    plan = client.post(f"/api/runs/{rid}/plans", json={"params": {"lever": "canopy", "budget": 1000,
+                                                                   "objective": "people"}, "name": "People",
+                                                        "verify": False}).json()["plan"]
+    pb = np.frombuffer(client.get(f"/api/plans/{plan['id']}/layers/planned_benefit.bin").content, dtype="<f4")
+    assert float(pb.sum()) == pytest.approx(plan["planned"]["planned_total"], rel=1e-5)
+    np.testing.assert_allclose(pb[treated], raw["planned_benefit"][treated] / w[treated], rtol=1e-5)
