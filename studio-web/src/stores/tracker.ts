@@ -149,6 +149,9 @@ export type WarningEntry = WarningRow & { msg_hash: string };
 
 export type ChildEntry = { key: string; label: string; run_id: string | null; job_id: string | null; state: TrackerState };
 
+/** An open item level: a task counting items (`k` of `n`, `k` from 1) and the fraction done inside item `k`. */
+export type KnLevel = { span: string | null; label: string; depth: number; k: number; n: number; frac: number };
+
 /** The projection state (same keys and meaning as `tracker.py::new_state`). */
 export type TrackerState = {
   cursor: number;
@@ -180,6 +183,8 @@ export type TrackerState = {
   current_path: string[] | null;
   stage: string | null;
   tick: { depth: number; frac: number } | null;
+  /** Open item levels (tasks with k of n, outermost first): the nested item fraction of a job without a plan. */
+  kn: KnLevel[];
   status: JobStatus | null;
   exit_code: number | null;
   error: unknown;
@@ -201,7 +206,7 @@ export function newTrackerState(): TrackerState {
     hb_last: {}, heartbeat_gaps: [],
     planned_units: {}, done_units: {}, stage_done: {}, partial: {}, stage_partial: {},
     unit_obs: {}, stage_elapsed: {},
-    progress: null, current_path: null, stage: null, tick: null,
+    progress: null, current_path: null, stage: null, tick: null, kn: [],
     status: null, exit_code: null, error: null, result: null,
     run_status: null, finished: false, cancel: null,
     children: {}, child_of: {},
@@ -515,8 +520,40 @@ function onStageSkip(d: Draft, s: TrackerState, ev: Ev): void {
   stages[sid] = d.fresh(stageRow(cur, skipState(reason), reason));
 }
 
+function onTaskStart(d: Draft, s: TrackerState, ev: Ev, path: string[]): void {
+  spanEvent(d, s, ev, path);
+  const k = ev.k;
+  const n = ev.n;
+  if (isNum(k) && isNum(n) && n > 0 && path.length) {
+    // an item k of n starts: it nests in the open item levels that are its ancestors
+    const kn = s.kn.filter((lv) => lv.depth < path.length && path[lv.depth - 1] === lv.label);
+    kn.push({ span: orNull(ev.span) as string | null, label: path[path.length - 1], depth: path.length, k, n, frac: 0 });
+    s.kn = d.fresh(kn);
+  }
+}
+
+/** Index of the innermost item level whose task contains an event at `path`. */
+function knLevel(s: TrackerState, path: string[]): number | null {
+  for (let i = s.kn.length - 1; i >= 0; i--) {
+    const lv = s.kn[i];
+    if (lv.depth <= path.length && path[lv.depth - 1] === lv.label) return i;
+  }
+  return null;
+}
+
+/** Nested item fraction: `(k − 1 + inner) / n` from the innermost item level out. */
+function knProgress(kn: readonly KnLevel[]): number {
+  let p = kn[kn.length - 1].frac;
+  for (let i = kn.length - 1; i >= 0; i--) p = (Math.min(kn[i].k, kn[i].n) - 1 + p) / kn[i].n;
+  return p;
+}
+
 function onTaskEnd(d: Draft, s: TrackerState, ev: Ev, path: string[], cursor: number | null): void {
   spanEvent(d, s, ev, path);
+  if (ev.span !== null && ev.span !== undefined) {
+    const i = s.kn.findIndex((lv) => lv.span === ev.span);
+    if (i >= 0) s.kn = d.fresh(s.kn.slice(0, i + 1).map((lv, j) => (j === i && ev.status === "ok" ? { ...lv, frac: 1 } : lv)));
+  }
   const span = ev.span;
   const pkey = String(span ?? null);
   if (truthy(span) && pkey in s.partial) {
@@ -548,6 +585,8 @@ function onTick(d: Draft, s: TrackerState, ev: Ev, path: string[]): void {
   if (frac !== null && frac !== undefined && isNum(Number(frac))) {
     const cur = s.tick;
     if (cur === null || depth <= cur.depth) s.tick = { depth, frac: Math.max(0, Math.min(1, Number(frac))) };
+    const i = knLevel(s, path);
+    if (i !== null) s.kn = d.fresh(s.kn.slice(0, i + 1).map((lv, j) => (j === i ? { ...lv, frac: Math.max(0, Math.min(1, Number(frac))) } : lv)));
   }
   if (!truthy(unit) || !isNum(k) || !isNum(n) || n <= 0) return;
   const stage = stageOf(path);
@@ -679,7 +718,7 @@ const HANDLERS: Record<string, Handler> = {
   "stage.start": onStageStart,
   "stage.end": onStageEnd,
   "stage.skip": onStageSkip,
-  "task.start": (d, s, ev, path) => spanEvent(d, s, ev, path),
+  "task.start": onTaskStart,
   "task.end": onTaskEnd,
   tick: onTick,
   metric: onMetric,
@@ -811,6 +850,7 @@ function updateProgress(d: Draft, s: TrackerState): void {
     let p = ownProgress(s);
     const kids = Object.values(s.children);
     if (p === null && kids.length) p = kids.reduce((a, c) => a + (c.state.progress || 0), 0) / kids.length;
+    if (p === null && s.kn.length) p = knProgress(s.kn);
     if (p === null && s.tick !== null) p = s.tick.frac;
     s.progress = p === null ? null : pyRound(Math.min(1, Math.max(0, p)), 12);
   }
@@ -1124,6 +1164,14 @@ export function fromSnapshot(snap: TrackerSnapshot): TrackerState {
     for (const [u, n] of Object.entries(node.units ?? {})) s.planned_units[u] = (s.planned_units[u] ?? 0) + Number(n || 0);
   }
   rebuildCounters(s);
+  // open item levels from the running own tasks that count items (the fraction inside an item arrives with its next tick)
+  for (const sp of Object.values(s.spans).sort((a, b) => a.depth - b.depth)) {
+    if (sp.kind !== "task" || sp.status !== "running" || childIndex(sp.path) !== null) continue;
+    if (!isNum(sp.k) || !isNum(sp.n) || sp.n <= 0) continue;
+    const label = sp.path[sp.path.length - 1];
+    const chain = s.kn.filter((lv) => lv.depth < sp.depth && sp.path[lv.depth - 1] === lv.label);
+    s.kn = [...chain, { span: sp.span_id, label, depth: sp.depth, k: sp.k, n: sp.n, frac: 0 }];
+  }
   // children: their rows (sub-projections are not part of the wire snapshot)
   for (const row of snap.children) {
     const cs = newTrackerState();

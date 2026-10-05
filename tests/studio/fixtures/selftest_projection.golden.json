@@ -187,6 +187,16 @@
    "21207": 1790884949.178
   },
   "heartbeat_gaps": [],
+  "kn": [
+   {
+    "depth": 3,
+    "frac": 1.0,
+    "k": 2.0,
+    "label": "task:scenario[2/2]",
+    "n": 2.0,
+    "span": "21207:29"
+   }
+  ],
   "last_ts": 1790884949.246,
   "metric_series": {
    "candidate_rmse{candidate=mean}": [
