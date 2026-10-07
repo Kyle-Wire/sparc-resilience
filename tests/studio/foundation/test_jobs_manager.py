@@ -192,9 +192,37 @@ def test_per_run_lock_blocks(client, ctx, wait_job, tmp_path):
     assert ctx.db.fetchval("SELECT COUNT(*) FROM run_locks") == 0
 
 
+def _wait_first_tick(ctx, jid, timeout=60.0):
+    """Until the worker has ticked: its signal handlers are installed by then.  A cancel that lands earlier
+    (the job is "running" from spawn; Windows takes seconds to import) ends the process with the platform's
+    termination code instead of 130, which the manager also reports as cancelled."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if any(ev.get("type") == "tick" for ev in events_of(ctx, jid)):
+                return
+        except (OSError, ValueError):
+            pass
+        time.sleep(0.05)
+    raise AssertionError(f"job {jid} never ticked")
+
+
+def test_cancel_as_soon_as_running_reads_cancelled(client, ctx, wait_job):
+    """A cancel right after spawn may beat the worker's signal handlers: the process then ends with SIGTERM's or
+    CTRL_BREAK's code rather than 130, and the job must still read cancelled, not failed."""
+    from sparc.studio.jobs.manager import _TERMINATED_CODES
+
+    j = submit(client, "test.sleep", seconds=60)
+    wait_job(client, j["id"], ("running",))
+    assert client.post(f"/api/jobs/{j['id']}/cancel").status_code == 202
+    done = wait_job(client, j["id"], timeout=30)
+    assert done["status"] == "cancelled" and done["exit_code"] in (130, *_TERMINATED_CODES)
+
+
 def test_cancel_exits_130(client, ctx, wait_job):
     j = submit(client, "test.sleep", seconds=60)
     wait_job(client, j["id"], ("running",))
+    _wait_first_tick(ctx, j["id"])
     r = client.post(f"/api/jobs/{j['id']}/cancel")
     assert r.status_code == 202 and r.json()["status"] in ("cancelling", "cancelled")
     done = wait_job(client, j["id"], timeout=20)
