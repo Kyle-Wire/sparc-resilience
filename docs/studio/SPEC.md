@@ -599,7 +599,7 @@ seconds(unit) = rate(host, unit) × (n_cells / 54_701)^α(unit) × (4 / threads)
 **Range.** p25–p75 of the per-unit rate history, propagated as a sum. With fewer than 3 observations, ±25%.
 
 **Display.** Overall progress = Σ completed planned cost / Σ planned cost. This is smoother than a stage count. ETA is shown as "≈1 h 12 m (58 m–1 h 25 m)". The Launch screen shows the same numbers before Start, plus peak RAM and checkpoint disk:
-- peak RAM ≈ 55 kB × n_cells × K^0.5 + 0.8 GB (calibrated from `resource_samples` peaks);
+- peak RAM ≈ 28 kB × n_cells × K^0.5 + 0.75 GB (calibrated on measured peaks of Providence runs: 1.09 GB fast, 1.56 GB at 60 m; about 4.2 GB for the full 30 m run);
 - checkpoint ≈ 9.6 kB × n_cells.
 
 **Calibration test.** The seed table predicts the full Providence run's recorded `timings_s` total within 20%.

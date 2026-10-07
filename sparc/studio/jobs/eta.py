@@ -232,8 +232,13 @@ def estimate_nodes(nodes: list[dict], n_cells: float | None = None, threads: flo
 
 
 def peak_ram_gb(n_cells: float, k_folds: int = 5) -> float:
-    """Launch estimate of peak RAM: 55 kB × n_cells × K^0.5 + 0.8 GB."""
-    return 55e3 * float(n_cells) * max(int(k_folds), 1) ** 0.5 / 1e9 + 0.8
+    """Launch estimate of peak RAM: 28 kB × n_cells × K^0.5 + 0.75 GB.
+
+    Calibrated on measured peaks (process tree RSS) of Providence core runs: the fast run (8,037 cells,
+    3 folds) peaked at 1.09 GB and the 60 m run (13,945 cells, 5 folds) at 1.56 GB; this gives 1.14 and
+    1.62 GB, and about 4.2 GB for the full 30 m run (54,701 cells, 5 folds).  Core runs use threads, not
+    processes, so the thread count barely moves it.  The preflight adds a 1 GB margin."""
+    return 28e3 * float(n_cells) * max(int(k_folds), 1) ** 0.5 / 1e9 + 0.75
 
 
 def checkpoint_bytes(n_cells: float) -> int:

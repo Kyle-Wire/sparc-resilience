@@ -182,7 +182,10 @@ def test_cv_curve_partitions_at_095_of_s2_s3():
 
 
 def test_launch_estimates():
-    assert eta.peak_ram_gb(54_701, 5) == pytest.approx(55e3 * 54_701 * 5 ** 0.5 / 1e9 + 0.8)
+    assert eta.peak_ram_gb(54_701, 5) == pytest.approx(28e3 * 54_701 * 5 ** 0.5 / 1e9 + 0.75)
+    # measured peaks of Providence runs: the estimate stays above them, by less than a fifth
+    for n, k, measured in ((8_037, 3, 1.09), (13_945, 5, 1.56)):
+        assert measured <= eta.peak_ram_gb(n, k) <= 1.2 * measured
     assert eta.checkpoint_bytes(54_701) == pytest.approx(525e6, rel=0.01)
 
 
