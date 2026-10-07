@@ -30,7 +30,7 @@ Two words are used throughout:
 
 ### Requirements
 
-- Python 3.10 or newer (3.11 recommended), on Windows, macOS or Linux. CI runs the full journey (`python -m sparc.studio.selfcheck`) and the test suites on all three.
+- Python 3.11 (3.10 also works), on Windows, macOS or Linux. Python 3.12 and newer are not supported yet: the pinned causal-inference packages (dowhy 0.11, numba < 0.61) have no releases for them. If `py -3.11` says "No suitable Python runtime found", install 3.11 first (`winget install -e --id Python.Python.3.11`, or the 3.11 installer from python.org) and open a new PowerShell window. CI runs the full journey (`python -m sparc.studio.selfcheck`) and the test suites on all three.
 - Memory: a fast run needs about 1 GB; a full run at 30 m on a city the size of Providence (54,701 cells) peaks at about 3 GB, and the Scenario Lab keeps 1.6–2.5 GB per loaded full run. 8 GB of RAM is enough for one full run at a time; 16 GB is comfortable.
 - Disk: a full run with its checkpoint is about 0.6 GB.
 - A current browser (Chromium, Firefox or Safari). Node is **not** needed: the web app ships pre-built inside the package.

@@ -10,7 +10,7 @@
 
 **SPARC Labs LLC — Spatial Research Labs**
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10–3.11](https://img.shields.io/badge/python-3.10%E2%80%933.11-blue.svg)](https://www.python.org/downloads/release/python-3119/)
 [![DOI](https://img.shields.io/badge/DOI-10.1016%2Fj.uclim.2025.102671-green.svg)](https://doi.org/10.1016/j.uclim.2025.102671)
 [![License](https://img.shields.io/badge/license-Contact%20for%20License-grey.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#installation)
