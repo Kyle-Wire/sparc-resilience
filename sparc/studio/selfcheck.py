@@ -236,7 +236,10 @@ def run(args) -> int:
         job = server.wait_job(state["job"], args.run_timeout)
         if job["status"] != "succeeded":
             raise CheckFailed(f"the resumed run ended {job['status']}")
-        run = server.get(f"/api/runs/{state['rid']}")["run"]
+        # the job's final status is written before its on_finish hook re-derives the run in the registry
+        # (the UI gets that update as an event): give the run record a moment to settle
+        run = server.wait(lambda: (r := server.get(f"/api/runs/{state['rid']}")["run"])["status"]
+                          not in ("queued", "running") and r, 60, "the run record to settle")
         if run["status"] != "complete":
             raise CheckFailed(f"run status {run['status']} after the resume (expected complete)")
         r2 = ((job.get("result") or {}).get("metrics") or {}).get("r2")
