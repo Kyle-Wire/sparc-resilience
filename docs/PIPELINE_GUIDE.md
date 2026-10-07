@@ -55,7 +55,7 @@ All stages are driven by a single `project.yml` configuration file. See the [MAN
 
 ## Prerequisites
 
-1. **Python 3.10+** with SPARC installed:
+1. **Python 3.10 or 3.11** (3.12+ not supported yet) with SPARC installed:
    ```powershell
    pip install -e .
    ```

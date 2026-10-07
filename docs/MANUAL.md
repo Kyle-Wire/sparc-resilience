@@ -52,7 +52,7 @@ It is domain-agnostic: urban heat islands, climate forcing attribution, groundwa
 
 ## 2. Installation
 
-**Requirements:** Python 3.10+
+**Requirements:** Python 3.10 or 3.11 (3.12+ not supported yet)
 
 ```powershell
 cd GW3C_v2.0/GW3C_v2.1
