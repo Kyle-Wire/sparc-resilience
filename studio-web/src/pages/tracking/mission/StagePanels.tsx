@@ -1,7 +1,8 @@
 // Live stage panels of Mission Control (SPEC §5.10), driven by `metric` / `task` events through
-// the reducer state: S0 QA tiles and flags, S1 influence table, baselines forest, S4 dose–response
-// small multiples, S5 scenario feed (+ CMIP6 ticker), S6 treatment × step checklist, S7 planned vs
-// realised, finish documents; S2_S3 and cv_curve live in ModelPanels. Jobs without a stage plan
+// the reducer state: S0 data checks (phase 2: for a run, one line and a link to Model details ›
+// Data, the checks' one home; the tiles and flags only for a job without a run), S1 influence
+// table, baselines forest, S4 dose–response small multiples, S5 scenario feed (+ CMIP6 ticker), S6
+// treatment × step checklist, S7 planned vs realised, finish documents; S2_S3 and cv_curve live in ModelPanels. Jobs without a stage plan
 // (fetches, exports, engine requests) get the generic panel.
 import type { ReactNode } from "react";
 import type { Job, StageId } from "../../../api/types";
@@ -10,7 +11,7 @@ import { Card } from "../../../components/ui/Card";
 import { Kpi, KpiRow } from "../../../components/ui/Kpi";
 import { Pill } from "../../../components/ui/Pill";
 import { StatusChip } from "../../../components/ui/StatusChip";
-import { Link } from "../../../router";
+import { Link, runHref } from "../../../router";
 import type { TrackerState } from "../../../stores/tracker";
 import { fmtBytes, fmtInt, fmtNum, fmtPct, fmtRange, fmtSigned, fmtTempChange, fmtValue } from "../../../theme/format";
 import {
@@ -34,7 +35,28 @@ import { CvCurvePanel, S2S3Panel } from "./ModelPanels";
 
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
-function S0Panel({ state }: { state: TrackerState }) {
+/** S0 for a run: one line (cells kept, dropped, QA flags) and the link to the run's data checks. */
+function S0Line({ state, runId }: { state: TrackerState; runId: string }) {
+  const { summary, flags } = s0Summary(state);
+  const n = flags.reduce((a, f) => a + f.count, 0);
+  const flagText = n ? `${fmtInt(n)} QA flag${n === 1 ? "" : "s"}` : "no QA flags";
+  const st = state.stages?.S0?.state;
+  // A cached S0 has no summary in this job, but the run has its checks.
+  const link = summary || st === "cached" || st === "done" ? <Link to={runHref(runId, "details", "data")}>Data checks → Model details</Link> : null;
+  const input = summary ? num(summary.n_input) : null;
+  return (
+    <p className="mc-note" data-s0-line="">
+      {summary
+        ? `${fmtInt(num(summary.n_points))} cells${input !== null ? ` from ${fmtInt(input)} input rows` : ""} · ${fmtInt(num(summary.n_dropped))} dropped · ${flagText}.`
+        : `${idleNote(state, "S0", "The data checks appear when S0 finishes.")}${n ? ` ${flagText} so far.` : ""}`}
+      {link ? " " : null}
+      {link}
+    </p>
+  );
+}
+
+function S0Panel({ state, runId }: { state: TrackerState; runId: string | null }) {
+  if (runId) return <S0Line state={state} runId={runId} />;
   const { summary, flags } = s0Summary(state);
   const clipped = summary && summary.clipped && typeof summary.clipped === "object" ? Object.values(summary.clipped as Record<string, number>).reduce((a, b) => a + Number(b || 0), 0) : null;
   return (
@@ -324,7 +346,7 @@ function S7Panel({ state, runId }: { state: TrackerState; runId: string | null }
       {pareto ? (
         <div className="row">
           <StatusChip status={pareto.status === "ok" ? "done" : pareto.status} text="Pareto front" />
-          {pareto.status === "ok" && runId ? <Link to={`/r/${encodeURIComponent(runId)}/budget`}>Open the Budget view</Link> : null}
+          {pareto.status === "ok" && runId ? <Link to={runHref(runId, "lab", "plans")}>Open the Budget view</Link> : null}
         </div>
       ) : null}
     </div>
@@ -339,7 +361,7 @@ function FinishPanel({ state, runId }: { state: TrackerState; runId: string | nu
       {docs.map((d) => (
         <li key={d.relpath}>
           <StatusChip status="present" text="written" />
-          {runId && /\.md$/.test(d.relpath) ? <Link to={`/r/${encodeURIComponent(runId)}/docs`}>{d.relpath}</Link> : <span>{d.relpath}</span>}
+          {runId && /\.md$/.test(d.relpath) ? <Link to={runHref(runId, "details", "docs")}>{d.relpath}</Link> : <span>{d.relpath}</span>}
           <span className="cap">{fmtBytes(d.bytes)}</span>
         </li>
       ))}
@@ -402,13 +424,13 @@ export function StagePanel({
   let body: ReactNode;
   switch (stage) {
     case "S0":
-      body = <S0Panel state={state} />;
+      body = <S0Panel state={state} runId={runId} />;
       break;
     case "S1":
       body = <S1Panel state={state} />;
       break;
     case "S2_S3":
-      body = <S2S3Panel state={state} epochs={epochs} onLoadEpochs={onLoadEpochs} />;
+      body = <S2S3Panel state={state} runId={runId} epochs={epochs} onLoadEpochs={onLoadEpochs} />;
       break;
     case "baselines":
       body = <BaselinesPanel state={state} />;

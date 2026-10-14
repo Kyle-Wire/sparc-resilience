@@ -1,6 +1,26 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { lazy } from "react";
-import { Link, buildRegistry, codecs, compileRoutes, fillPath, matchRoute, navigate, RegistryProvider, runTabForRoute, setQuery, useRoute, useUrlState, type RouteDef } from "../router";
+import { RUN_TAB_IDS } from "../api/types";
+import {
+  Link,
+  buildRegistry,
+  codecs,
+  compileRoutes,
+  fillPath,
+  matchRoute,
+  navigate,
+  redirectTarget,
+  RegistryProvider,
+  runHref,
+  runTabForRoute,
+  runViewHref,
+  setQuery,
+  useRoute,
+  useUrlState,
+  VIEW_HREF,
+  withSearch,
+  type RouteDef,
+} from "../router";
 import { click, flush, render, waitFor } from "./render";
 
 const P = lazy(() => Promise.resolve({ default: () => null }));
@@ -178,8 +198,9 @@ describe("run tab of a route", () => {
     const reg = buildRegistry({
       "a/routes.ts": {
         routes: [
-          { ...def("/r/:rid"), runTab: { id: "overview", label: "Overview", group: "Model", order: 1 } },
-          { ...def("/r/:rid/lab"), runTab: { id: "lab", label: "Lab", group: "Decisions", order: 1 } },
+          { ...def("/r/:rid"), runTab: { id: "summary", label: "Summary", order: 1, views: ["overview"] } },
+          { ...def("/r/:rid/lab"), runTab: { id: "lab", label: "Lab", order: 2, views: ["lab"] } },
+          { ...def("/r/:rid/heat/:section?"), runTab: { id: "heat", label: "Heat risk", order: 3, views: ["heat"] } },
           def("/r/:rid/lab/library"),
           def("/r/:rid/unknown"),
         ],
@@ -187,7 +208,64 @@ describe("run tab of a route", () => {
     });
     const byPath = (p: string) => reg.routes.find((r) => r.path === p)!;
     expect(runTabForRoute(reg, byPath("/r/:rid/lab/library"))?.id).toBe("lab");
-    expect(runTabForRoute(reg, byPath("/r/:rid"))?.id).toBe("overview");
+    expect(runTabForRoute(reg, byPath("/r/:rid"))?.id).toBe("summary");
+    expect(runTabForRoute(reg, byPath("/r/:rid/heat/:section?"))?.id).toBe("heat");
     expect(runTabForRoute(reg, byPath("/r/:rid/unknown"))).toBeNull();
+  });
+});
+
+describe("run URLs", () => {
+  it("runHref builds the run tab and section URLs, encoding each segment", () => {
+    expect(runHref("r1")).toBe("/r/r1");
+    expect(runHref("r 1", "summary", "ignored")).toBe("/r/r%201");
+    expect(runHref("r1", "map")).toBe("/r/r1/map");
+    expect(runHref("r1", "effects")).toBe("/r/r1/effects");
+    expect(runHref("r1", "heat", "future")).toBe("/r/r1/heat/future");
+    expect(runHref("r1", "lab", "library")).toBe("/r/r1/lab/library");
+    expect(runHref("r1", "trust")).toBe("/r/r1/trust");
+    expect(runHref("r1", "details")).toBe("/r/r1/details");
+    expect(runHref("r1", "details", "docs/model card")).toBe("/r/r1/details/docs/model%20card");
+    expect(runHref("r1", "details", null)).toBe("/r/r1/details");
+  });
+
+  it("VIEW_HREF maps every server view id to its new page; runViewHref knows nothing else", () => {
+    expect(Object.keys(VIEW_HREF).sort()).toEqual([...RUN_TAB_IDS].sort());
+    expect(Object.fromEntries(RUN_TAB_IDS.map((v) => [v, VIEW_HREF[v]("r1")]))).toEqual({
+      overview: "/r/r1",
+      data: "/r/r1/details/data",
+      accuracy: "/r/r1/trust",
+      distance: "/r/r1/details/reach",
+      influence: "/r/r1/effects",
+      response: "/r/r1/effects",
+      causal: "/r/r1/details/causal",
+      scenarios: "/r/r1/lab/library",
+      climate: "/r/r1/heat/future",
+      heat: "/r/r1/heat",
+      budget: "/r/r1/lab/plans",
+      planner: "/r/r1/heat/people",
+      lab: "/r/r1/lab",
+      validation: "/r/r1/trust",
+      uncertainty: "/r/r1/trust",
+      provenance: "/r/r1/details/provenance",
+      track: "/r/r1/details/runlog",
+      map: "/r/r1/map",
+      docs: "/r/r1/details/docs",
+      files: "/r/r1/details/files",
+    });
+    expect(runViewHref("r1", "planner")).toBe("/r/r1/heat/people");
+    expect(runViewHref("r1", "table")).toBeNull();
+    expect(runViewHref("r1", "toString")).toBeNull();
+    expect(runViewHref("r1", null)).toBeNull();
+  });
+
+  it("withSearch merges the current query into a target (the target's keys win) and redirectTarget keeps the hash", () => {
+    expect(withSearch("/r/r1/trust", "")).toBe("/r/r1/trust");
+    expect(withSearch("/r/r1/trust", "?model=stack")).toBe("/r/r1/trust?model=stack");
+    expect(withSearch("/p/p1/exports?tab=notes", "?run=r1&tab=x")).toBe("/p/p1/exports?tab=notes&run=r1");
+    expect(withSearch("/a#h", "?q=1")).toBe("/a?q=1#h");
+    const route: RouteDef = { path: "/r/:rid/old", title: "Old", redirect: (p, search) => withSearch(`/r/${p.rid}/new`, search) };
+    expect(redirectTarget(route, { rid: "r1" }, { search: "?a=1", hash: "#x" })).toBe("/r/r1/new?a=1#x");
+    expect(redirectTarget({ ...route, redirect: () => "/r/r1/new#own" }, { rid: "r1" }, { search: "", hash: "#x" })).toBe("/r/r1/new#own");
+    expect(redirectTarget(def("/x"), {}, { search: "", hash: "" })).toBeNull();
   });
 });

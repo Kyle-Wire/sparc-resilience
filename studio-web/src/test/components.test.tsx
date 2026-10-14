@@ -6,7 +6,8 @@ import { ConnectionPill } from "../components/ui/ConnectionPill";
 import { collapseContext, Diff, diffLines } from "../components/ui/Diff";
 import { EmptyState } from "../components/ui/EmptyState";
 import { JobStrip } from "../components/ui/JobStrip";
-import { Markdown, renderMarkdown } from "../components/ui/Markdown";
+import { balancedKpiCols, Kpi, KpiRow } from "../components/ui/Kpi";
+import { Markdown, renderMarkdown, tidyTableHeaders } from "../components/ui/Markdown";
 import { NumberField } from "../components/ui/NumberField";
 import { confidenceOf, likelySentence, PlainResult } from "../components/ui/PlainResult";
 import { ProgressBar } from "../components/ui/ProgressBar";
@@ -77,6 +78,27 @@ describe("Markdown", () => {
     expect(container.querySelector(".md strong")!.textContent).toBe("world");
   });
 
+  it("reads a table whose header has empty trailing cells beyond its delimiter row (the report's climate table without adaptation)", () => {
+    const src = [
+      "## Climate projections (CMIP6 delta method)",
+      "",
+      "| pathway | period | warming median (10–90%) | share ≥ 95 °F: no adaptation |  |",
+      "|---|---|---|---|",
+      "| today | — | — | 12.0% |",
+      "| SSP2-4.5 | 2041–2060 | 1.90 (1.20 to 2.60) | 31.5% |",
+    ].join("\n");
+    const host = document.createElement("div");
+    host.innerHTML = renderMarkdown(src);
+    const table = host.querySelector("table")!;
+    expect([...table.querySelectorAll("thead th")].map((th) => th.textContent)).toEqual(["pathway", "period", "warming median (10–90%)", "share ≥ 95 °F: no adaptation"]);
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(2);
+    expect(host.textContent).not.toContain("|---|");
+    // a header with real extra cells, or any line inside a code fence, is left as written
+    expect(tidyTableHeaders("| a | b | c |\n|---|---|")).toBe("| a | b | c |\n|---|---|");
+    expect(tidyTableHeaders("```\n| a | |\n|---|\n```")).toBe("```\n| a | |\n|---|\n```");
+    expect(tidyTableHeaders("| a | b |\n|---|---|")).toBe("| a | b |\n|---|---|");
+  });
+
   it("never emits a script URL, however it is encoded", () => {
     const payloads = [
       "[a](javascript:alert(1))",
@@ -118,6 +140,27 @@ describe("Markdown", () => {
     const img = host.querySelector("img")!;
     expect([img.getAttribute("src"), img.getAttribute("alt"), img.getAttribute("title")]).toEqual(["figures/map.png", "map", "Map"]);
     expect(renderMarkdown("[x](//evil.example/p)")).not.toContain("href");
+  });
+});
+
+describe("KpiRow", () => {
+  it("never leaves one tile alone on the last line", () => {
+    expect([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(balancedKpiCols)).toEqual([1, 2, 3, 4, 5, 3, 4, 4, 3, 5, 4, 4]);
+    for (let n = 6; n <= 20; n++) {
+      const c = balancedKpiCols(n);
+      expect(n % c === 0 || n % c >= 2, `${n} tiles in ${c} columns`).toBe(true);
+    }
+    const { container } = render(
+      <KpiRow label="Six">
+        {[1, 2, 3, 4, 5, 6].map((i) => (
+          <Kpi key={i} label={`k${i}`} value={i} />
+        ))}
+        {null}
+      </KpiRow>,
+    );
+    const row = container.querySelector<HTMLElement>(".kpis")!;
+    expect(row.dataset.cols).toBe("3");
+    expect(row.style.getPropertyValue("--kpi-cols")).toBe("3");
   });
 });
 

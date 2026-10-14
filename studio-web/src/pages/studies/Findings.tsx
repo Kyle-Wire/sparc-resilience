@@ -2,7 +2,9 @@
 // order, each with its image, its markdown note (edited in place), the numbers that were on
 // screen, and "Open" back at the stored URL. Reordering (drag, or the move buttons) sends PATCH
 // position updates; the run filter lives in the URL; export writes Markdown (ZIP with images)
-// or self-contained HTML through `POST /api/exports` (kind "findings").
+// or self-contained HTML through `POST /api/exports` (kind "findings"). Phase 2: inside a project
+// the notebook is the "Notes" tab of Reports (`/p/:pid/exports?tab=notes`, ./Reports.tsx), shown
+// as `FindingsPanel` (this page without its title); `/findings` keeps the full titled page.
 import { useState, type DragEvent } from "react";
 import { errorMessage } from "../../api/client";
 import { createExport, exportDownloadUrl, useExport } from "../../api/exports";
@@ -266,7 +268,11 @@ function ExportBar({ pid, runFilter, visible }: { pid: string; runFilter: string
   );
 }
 
-export default function Findings() {
+const FINDINGS_INTRO =
+  "Views pinned with “Pin to Findings”: each keeps the numbers that were on screen, so an export reproduces exactly what you saw. Add notes, put them in order, and open any of them where it was pinned.";
+
+/** The notebook; `titled` adds its own page title (the standalone page), else the intro only (a Reports tab). */
+function FindingsView({ titled }: { titled: boolean }) {
   const { params } = useRoute();
   const routePid = params.pid ?? null;
   const [projectParam, setProjectParam] = useUrlState("project", codecs.optString());
@@ -310,15 +316,16 @@ export default function Findings() {
     }
   };
 
-  return (
-    <section className="sx-page" aria-labelledby="findings-title">
-      <header className="page-head">
-        <h1 id="findings-title">Findings</h1>
-        <p className="sx-intro">
-          Views pinned with “Pin to Findings”: each keeps the numbers that were on screen, so an export reproduces exactly what you saw. Add notes, put them in order, and open any
-          of them where it was pinned.
-        </p>
-      </header>
+  const body = (
+    <>
+      {titled ? (
+        <header className="page-head">
+          <h1 id="findings-title">Findings</h1>
+          <p className="sx-intro">{FINDINGS_INTRO}</p>
+        </header>
+      ) : (
+        <p className="sx-intro">{FINDINGS_INTRO}</p>
+      )}
       <Card>
         <div className="row" style={{ justifyContent: "space-between" }}>
           <div className="row">
@@ -385,6 +392,24 @@ export default function Findings() {
       <ConfirmDialog open={!!del} onClose={() => setDel(null)} onConfirm={() => del && void remove(del)} title="Delete this finding?" confirmLabel="Delete" danger busy={deleting}>
         <p>“{del?.title}” and its image are removed from the notebook. Exports made earlier keep their copy.</p>
       </ConfirmDialog>
-    </section>
+    </>
   );
+  return titled ? (
+    <section className="sx-page" aria-labelledby="findings-title">
+      {body}
+    </section>
+  ) : (
+    <div className="sx-page" data-panel="notes">
+      {body}
+    </div>
+  );
+}
+
+/** The project's notebook without its page title: the "Notes" tab of Reports (`/p/:pid/exports?tab=notes`). */
+export function FindingsPanel() {
+  return <FindingsView titled={false} />;
+}
+
+export default function Findings() {
+  return <FindingsView titled />;
 }

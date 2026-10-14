@@ -191,8 +191,8 @@ describe("routing to run views", () => {
     expect(boardCellChip(undefined).text).toBe("not run");
     expect(boardCellChip({ state: "running", seconds: null, progress: null, reason: "queued", job_id: "j1", study_id: null, action: null })).toEqual({ status: "queued", text: "queued", meta: null });
     expect(boardCellChip({ state: "running", seconds: null, progress: 0.42, reason: null, job_id: "j1", study_id: null, action: null })).toEqual({ status: "running", text: "running", meta: "42%" });
-    expect(boardCellHref("r1", "S4", "stage", { state: "done", seconds: 1, progress: null, reason: null, job_id: null, study_id: null, action: null })).toBe("/r/r1/response");
-    expect(boardCellHref("r1", "planner", "post", { state: "done", seconds: 1, progress: null, reason: null, job_id: "j1", study_id: null, action: null })).toBe("/r/r1/planner");
+    expect(boardCellHref("r1", "S4", "stage", { state: "done", seconds: 1, progress: null, reason: null, job_id: null, study_id: null, action: null })).toBe("/r/r1/effects");
+    expect(boardCellHref("r1", "planner", "post", { state: "done", seconds: 1, progress: null, reason: null, job_id: "j1", study_id: null, action: null })).toBe("/r/r1/heat/people");
     expect(boardCellHref("r1", "planner", "post", { state: "not_run", seconds: null, progress: null, reason: null, job_id: null, study_id: null, action: null })).toBeNull();
   });
 });
@@ -212,7 +212,7 @@ describe("duplicate with changes", () => {
 
   it("sends a study to the run's Validation tab and has no target for other kinds", () => {
     const s = replay([]);
-    expect(duplicateHref({ kind: "study.placebo", project_id: "p_1", run_id: "r_1" }, null, s)).toBe("/r/r_1/validation");
+    expect(duplicateHref({ kind: "study.placebo", project_id: "p_1", run_id: "r_1" }, null, s)).toBe("/r/r_1/trust");
     expect(duplicateHref({ kind: "export.bundle", project_id: "p_1", run_id: "r_1" }, null, s)).toBeNull();
     expect(duplicateHref({ kind: "run.core", project_id: null, run_id: "r_1" }, null, s)).toBeNull();
   });

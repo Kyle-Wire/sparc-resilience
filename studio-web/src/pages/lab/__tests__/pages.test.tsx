@@ -18,6 +18,7 @@ import Library from "../Library";
 import { forgetDrafts } from "../model/draft";
 import { labDisabledReason, labRunOf, routes as labRoutes } from "../routes";
 import { LEVERS, PID, RID, doc, gridMeta, previewBody, result, runRoutes, scenario } from "../__fixtures__/lab";
+import { viewFixture } from "../../runhub/__fixtures__/views";
 
 function job(id: string, kind: string): Job {
   return {
@@ -43,19 +44,22 @@ afterEach(() => {
 });
 
 describe("route registry", () => {
-  it("declares the Lab tab last in the Decisions group, and every Lab route", () => {
-    const decisions = registry.runTabs.filter((t) => t.group === "Decisions");
-    const lab = decisions.find((t) => t.id === "lab")!;
-    expect(lab).toBeTruthy();
-    expect(lab.order).toBeGreaterThan(40);
-    expect(decisions.at(-1)!.id).toBe("lab");
-    for (const p of ["/r/:rid/lab", "/r/:rid/lab/library", "/r/:rid/lab/s/:sid", "/r/:rid/lab/plans", "/r/:rid/lab/plans/:plid", "/r/:rid/lab/sweeps/:swid?", "/r/:rid/lab/climate", "/r/:rid/lab/compare"]) {
+  it("declares the Scenario Lab tab between Heat risk and Trust, covering the lab, scenarios and budget views, and every Lab route", () => {
+    const ids = registry.runTabs.map((t) => t.id);
+    const lab = registry.runTabs.find((t) => t.id === "lab")!;
+    expect(lab.label).toBe("Scenario Lab");
+    expect(lab.views).toEqual(["lab", "scenarios", "budget"]);
+    expect(ids.indexOf("lab")).toBe(ids.indexOf("heat") + 1);
+    expect(ids.indexOf("trust")).toBe(ids.indexOf("lab") + 1);
+    for (const p of ["/r/:rid/lab", "/r/:rid/lab/library", "/r/:rid/lab/s/:sid", "/r/:rid/lab/plans", "/r/:rid/lab/plans/:plid", "/r/:rid/lab/sweeps/:swid?", "/r/:rid/lab/compare"]) {
       expect(registry.routes.some((r) => r.path === p && labRoutes.includes(r)), p).toBe(true);
     }
+    // Climate × adaptation moved to Heat risk › Future climate (a legacy redirect now)
+    expect(labRoutes.some((r) => r.path === "/r/:rid/lab/climate")).toBe(false);
     expect(labRoutes.every((r) => r.fullWidth)).toBe(true);
   });
 
-  it("declares the Scenario Lab nav entry: the active run, greyed out without a run", () => {
+  it("declares the Scenario Lab nav entry: the active run, greyed out only without a run", () => {
     const nav = registry.projectNav.find((n) => n.id === "lab")!;
     expect(nav.label).toBe("Scenario Lab");
     const base = { id: "p_1", active_run_id: "r9", last_run: { id: "r9", status: "complete", created_utc: "", r2: 0.8 } } as Project;
@@ -64,14 +68,15 @@ describe("route registry", () => {
     const none = { ...base, active_run_id: null, last_run: null } as Project;
     expect(labRunOf(none)).toBeNull();
     expect(labDisabledReason(none)).toMatch(/Launch a run first/);
+    // Any run opens the Lab (Library, Plans and Compare work without a checkpoint; Design's engine
+    // line says when it has none): running, without a checkpoint, failed.
     const running = { ...base, active_run_id: null, last_run: { id: "r1", status: "running", created_utc: "", r2: null } } as Project;
-    expect(labDisabledReason(running)).toMatch(/still running/);
-    // With last_run.has_checkpoint the entry opens exactly when the run has a checkpoint.
-    const before = { ...base, last_run: { id: "r9", status: "running", created_utc: "", r2: null, has_checkpoint: false } } as Project;
-    expect(labDisabledReason(before)).toMatch(/still running/);
-    expect(labDisabledReason({ ...before, last_run: { ...before.last_run!, has_checkpoint: true } } as Project)).toBeNull();
+    expect(labDisabledReason(running)).toBeNull();
+    expect(nav.to("p_1", running)).toBe("/r/r1/lab");
+    const noCheckpoint = { ...base, last_run: { id: "r9", status: "complete", created_utc: "", r2: 0.8, has_checkpoint: false } } as Project;
+    expect(labDisabledReason(noCheckpoint)).toBeNull();
     const failed = { ...base, active_run_id: null, last_run: { id: "r2", status: "failed", created_utc: "", r2: null, has_checkpoint: false } } as Project;
-    expect(labDisabledReason(failed)).toMatch(/no checkpoint/);
+    expect(labDisabledReason(failed)).toBeNull();
   });
 });
 
@@ -350,6 +355,39 @@ describe("Plan budget slider", () => {
   });
 });
 
+describe("Plan form fields", () => {
+  it("shows the cost, paved share and minimum dose labels, not only their aria-labels", async () => {
+    fetchMock = mockFetch({
+      ...runRoutes(),
+      [`POST /api/runs/${RID}/plans/preview`]: {
+        body: { planned_total: 100, n_cells_treated: 3, mean_dose_treated: 10, total_cost: 30, gini: 0.2, min_dose_dropped_cost: 0, pareto: [], dose: "AAAAAA==", constraint: "plantable", objective: "cooling", caption: "Plan" },
+      },
+    });
+    const g = makeGrid(gridMeta(), Int32Array.from([0, 1, 0, 2, 0, 1, 2]), Int32Array.from([2, 2, 1, 1, 0, 0, 0]));
+    const { container } = render(<PlanForm rid={RID} grid={g} levers={LEVERS} onSaved={() => {}} />);
+    await flush(3);
+    const field = (name: string) => [...container.querySelectorAll("label.field")].find((l) => l.querySelector(":scope > .field-label")?.textContent === name);
+    for (const name of ["Cost per unit", "Paved share", "Minimum dose per treated cell"]) {
+      const input = field(name)?.querySelector<HTMLInputElement>(".numfield input");
+      expect(input, name).toBeTruthy();
+      expect(input!.getAttribute("aria-label")).toBe(name);
+    }
+    // the paved-share box is wide enough for its placeholder
+    expect(field("Paved share")!.querySelector<HTMLInputElement>("input")!.style.width).toBe("11em");
+  });
+});
+
+/** The scenarios ViewModel with two configured scenarios, the second without fold detail. */
+function configuredView() {
+  const vm = viewFixture("scenarios");
+  const [a] = vm.sections.rows!;
+  vm.sections.rows = [
+    { ...a, slug: "canopy-plus-10", name: "Canopy +10", has_folds: true },
+    { ...a, slug: "cool-roofs", name: "Cool roofs", has_folds: false },
+  ];
+  return vm;
+}
+
 describe("Library", () => {
   it("focuses the configured scenario of ?configured=<slug>", async () => {
     const scrolled = vi.fn();
@@ -357,15 +395,8 @@ describe("Library", () => {
     fetchMock = mockFetch({
       ...runRoutes(),
       [`GET /api/projects/${PID}/scenarios`]: { body: [{ id: "sc_a", revision: 1, parent_id: null, status: "exact", created_utc: "2026-10-01T10:00:00Z", updated_utc: "2026-10-01T10:00:00Z", name: "Downtown cool corridor", tags: ["district"], latest: result("res_1").summary }] },
-      [`GET /api/runs/${RID}/scenarios`]: {
-        body: {
-          configured: [
-            { slug: "canopy-plus-10", name: "Canopy +10", city: { estimate: -0.2, se: 0.02, lo: -0.24, hi: -0.16, confidence: "confident_cools", phrase: "" }, p10: -0.3, p90: 0, frac_extrapolated: 0.1, mean_realized: {}, causal_linear: null, has_folds: true, layer_key: "sc:canopy-plus-10", doc: doc() },
-            { slug: "cool-roofs", name: "Cool roofs", city: { estimate: -0.1, se: 0.05, lo: -0.2, hi: 0.0, confidence: "could_be_zero", phrase: "" }, p10: -0.2, p90: 0, frac_extrapolated: 0.4, mean_realized: {}, causal_linear: null, has_folds: false, layer_key: "sc:cool-roofs", doc: doc() },
-          ],
-          results: [],
-        },
-      },
+      // "Set up with this run" reads the run's configured scenarios from the scenarios view
+      [`GET /api/runs/${RID}/views/scenarios`]: { body: configuredView() },
     });
     navigate(`/r/${RID}/lab/library?configured=cool-roofs`, { replace: true });
     const { container } = render(<Library />);

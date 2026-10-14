@@ -4,9 +4,11 @@ One server (replay runner) and one replayed run serve every check:
 
 * the shell is a proper HTML document with landmarks; Tab starts at the skip link, which moves
   focus to the main region; the shell's controls are reached in order, each with a name and a
-  visible focus ring;
+  visible focus ring; the collapsed Advanced group opens from the keyboard;
 * the map's keyboard cursor moves cell by cell and the aria-live readout says where it is; Enter
   pins the cell inspector;
+* the old run tab and page URLs redirect to their new homes, replacing the history entry and
+  keeping the query and hash;
 * every button on the main pages has an accessible name (as the browser computes it);
 * at 390 px no page scrolls sideways (tables and tab strips scroll inside their own box).
 """
@@ -21,18 +23,36 @@ import pytest
 from .conftest import SYNTH_RUN, start_studio, wait_for
 
 PHONE = {"width": 390, "height": 844}
-PROJECT_NAV = ["Overview", "Setup", "Inputs", "Launch", "Runs", "Studies", "Exports", "Findings"]
+PROJECT_NAV = ["Overview", "Set up", "Runs", "Scenario Lab", "Reports"]
+ADVANCED_NAV = ["Studies", "Config editor", "Activity"]
 
-# Pages checked for names and for the phone layout ({pid}, {rid} and {jid} are filled in).
+# Pages checked for names and for the phone layout ({pid}, {rid} and {jid} are filled in): every
+# project page, every run tab and section (phase 2 information architecture), and a few old URLs
+# that now redirect (LEGACY below checks where they land).
 PAGES = [
     "/", "/projects", "/runs", "/jobs", "/settings", "/findings",
     "/p/{pid}", "/p/{pid}/setup/data", "/p/{pid}/setup/inputs", "/p/{pid}/config", "/p/{pid}/launch", "/p/{pid}/runs",
-    "/p/{pid}/studies", "/p/{pid}/exports", "/p/{pid}/findings",
-    "/r/{rid}", "/r/{rid}/data", "/r/{rid}/accuracy", "/r/{rid}/distance", "/r/{rid}/influence", "/r/{rid}/response",
-    "/r/{rid}/causal", "/r/{rid}/heat", "/r/{rid}/scenarios", "/r/{rid}/climate", "/r/{rid}/budget", "/r/{rid}/validation",
-    "/r/{rid}/provenance", "/r/{rid}/map", "/r/{rid}/files", "/r/{rid}/lab", "/r/{rid}/docs", "/r/{rid}/track",
+    "/p/{pid}/studies", "/p/{pid}/exports", "/p/{pid}/exports?tab=notes",
+    "/r/{rid}", "/r/{rid}/map", "/r/{rid}/effects",
+    "/r/{rid}/heat", "/r/{rid}/heat/people", "/r/{rid}/heat/future",
+    "/r/{rid}/lab", "/r/{rid}/lab/library", "/r/{rid}/lab/plans", "/r/{rid}/lab/compare",
+    "/r/{rid}/trust",
+    "/r/{rid}/details/data", "/r/{rid}/details/accuracy", "/r/{rid}/details/reach", "/r/{rid}/details/response",
+    "/r/{rid}/details/causal", "/r/{rid}/details/uncertainty", "/r/{rid}/details/runlog", "/r/{rid}/details/provenance",
+    "/r/{rid}/details/docs/methods", "/r/{rid}/details/files",
+    "/r/{rid}/accuracy", "/r/{rid}/scenarios", "/p/{pid}/findings",
     "/jobs/{jid}",
 ]
+
+# Old URLs (bookmarks, pinned findings, reports) → where they land now; the query and hash are kept.
+LEGACY = {
+    "/r/{rid}/accuracy": "/r/{rid}/trust",
+    "/r/{rid}/scenarios": "/r/{rid}/lab/library",
+    "/r/{rid}/climate?t=92#adapt": "/r/{rid}/heat/future?t=92#adapt",
+    "/r/{rid}/docs/methods": "/r/{rid}/details/docs/methods",
+    "/r/{rid}/track": "/r/{rid}/details/runlog",
+    "/p/{pid}/findings": "/p/{pid}/exports?tab=notes",
+}
 
 # Pages that still scroll sideways at 390 px, each with the reason and its owner. The strict xfail
 # turns into a failure once the page is fixed, so the entry has to be removed then. None at 1.0.
@@ -116,8 +136,22 @@ def test_keyboard_shell(site, studio_page):
         pytest.fail(f"30 Tab presses never reached the main region: {names}")
     nav = [n for n in names if n in PROJECT_NAV]
     assert nav == PROJECT_NAV, f"project navigation out of order: {names}"
-    assert "Settings" in names and "Activity" in names
+    # innerText follows CSS text-transform (the group heading is set in capitals)
+    folded = [n.casefold() for n in names]
+    assert "advanced" in folded and "settings" in folded, " | ".join(names)
+    assert folded.index("reports") < folded.index("advanced") < folded.index("settings"), " | ".join(names)
     sp.shot("keyboard focus in main")
+
+    # the collapsed Advanced group opens from the keyboard: Studies, Config editor, Activity
+    toggle = page.get_by_role("navigation", name="Project").get_by_role("button", name="Advanced")
+    assert toggle.get_attribute("aria-expanded") == "false"
+    toggle.focus()
+    page.keyboard.press("Enter")
+    group = page.locator("#shell-nav-advanced")
+    group.wait_for()
+    assert toggle.get_attribute("aria-expanded") == "true"
+    advanced = [re.sub(r"\s*\(\d+\)$", "", a.inner_text().strip()) for a in group.get_by_role("link").all()]
+    assert advanced == ADVANCED_NAV, advanced
 
     # the command palette opens from the keyboard and closes with Escape
     page.keyboard.press("Control+k")
@@ -160,6 +194,20 @@ def test_map_keyboard_cursor(site, studio_page):
     page.get_by_role("region", name="Pinned cell").wait_for()
     sp.shot("map keyboard cursor pinned")
     page.keyboard.press("Escape")
+
+
+@pytest.mark.parametrize("old", list(LEGACY))
+def test_legacy_urls_redirect(site, studio_page, old):
+    sp = studio_page(site["server"])
+    page = sp.page
+    sp.goto(_fill(old, site))
+    want = sp.base + _fill(LEGACY[old], site)
+    page.wait_for_url(want, timeout=15_000)
+    _settle(page)
+    # the redirect replaced the old entry: Back leaves both (a pushed entry would bounce back here)
+    page.go_back(wait_until="domcontentloaded")
+    page.wait_for_timeout(500)
+    assert page.url not in (want, sp.base + _fill(old, site)), page.url
 
 
 @pytest.mark.parametrize("path", PAGES)

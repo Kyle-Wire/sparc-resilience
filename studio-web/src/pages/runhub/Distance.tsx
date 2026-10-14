@@ -2,18 +2,57 @@
 // fold band, base models and baselines in grey, the main design marked, the random-points
 // "leaky reference"), the baseline forest (ΔMSE ± 2 SE), the verdict and block wins. A
 // section of a stage the run skipped says why, with the Overview's "Re-run with …" remedy.
+// The page is Model details › Reach; How much to trust this reads `skillAcross` for its check.
+// Under Model details (`detailsOnly`) the baseline verdict and the skipped-curve notice (with its
+// re-run) are left to How much to trust this, linked in one line each.
+import type { ReactNode } from "react";
 import type { DistanceSections } from "../../api/runs";
 import { Bars, Forest, LineBand, type LineSeries, type RefLine } from "../../charts";
+import { Link, runHref } from "../../router";
 import { fmtNum, fmtPct, unitLabel } from "../../theme/format";
-import { Section, ViewPage, useRid, useSkippedStage, useUnits } from "./common";
+import { Section, ViewPage, useRid, useSkippedStage, useUnits, type DetailPageProps } from "./common";
 import { fmtDistance } from "./format";
 
-function SkillCurve({ c }: { c: NonNullable<DistanceSections["curve"]> }) {
+type Curve = NonNullable<DistanceSections["curve"]>;
+
+/** The stack's skill at the smallest and the largest CV block size (null without a stack series or two blocks). */
+export type SkillAcross = { metric: Curve["metric"]; near: number; far: number; nearBlockM: number; farBlockM: number };
+
+export function skillAcross(c: Curve | null | undefined): SkillAcross | null {
+  if (!c) return null;
+  const stack = c.series.find((s) => s.kind === "stack");
+  if (!stack) return null;
+  const pts = c.block_m
+    .map((b, i) => ({ b, v: stack.values[i] }))
+    .filter((p): p is { b: number; v: number } => p.b > 0 && typeof p.v === "number" && Number.isFinite(p.v));
+  if (pts.length < 2) return null;
+  const first = pts[0];
+  const last = pts[pts.length - 1];
+  return { metric: c.metric, near: first.v, far: last.v, nearBlockM: first.b, farBlockM: last.b };
+}
+
+/**
+ * Skill against CV block size on a log axis. `stackOnly` draws the stack and its fold band
+ * alone (no base models, baselines or the leaky reference), for a small chart.
+ */
+export function SkillCurve({
+  c,
+  stackOnly,
+  height,
+  title,
+  caption: captionOverride,
+}: {
+  c: Curve;
+  stackOnly?: boolean;
+  height?: number;
+  title?: string;
+  caption?: string;
+}) {
   const u = unitLabel(useUnits().target);
   const keep = c.block_m.map((b, i) => (b > 0 ? i : -1)).filter((i) => i >= 0);
   const x = keep.map((i) => c.block_m[i]);
   const pick = (a: (number | null)[] | null | undefined) => (a ? keep.map((i) => a[i] ?? null) : undefined);
-  const series: LineSeries[] = c.series.map((s) => ({
+  const series: LineSeries[] = c.series.filter((s) => !stackOnly || s.kind === "stack").map((s) => ({
     id: s.id,
     label: s.label,
     x,
@@ -26,7 +65,7 @@ function SkillCurve({ c }: { c: NonNullable<DistanceSections["curve"]> }) {
   }));
   const refLines: RefLine[] = [];
   if (c.main_block_m !== null) refLines.push({ axis: "x", value: c.main_block_m, label: "main design" });
-  for (const r of c.random) if (r.value !== null) refLines.push({ axis: "y", value: r.value, label: `${r.label} (leaky reference)` });
+  if (!stackOnly) for (const r of c.random) if (r.value !== null) refLines.push({ axis: "y", value: r.value, label: `${r.label} (leaky reference)` });
   const stack = c.series.find((s) => s.kind === "stack");
   const firstLast = stack ? [stack.values[keep[0]], stack.values[keep[keep.length - 1]]] : [null, null];
   const metric = c.metric === "r2" ? "R²" : "RMSE";
@@ -36,7 +75,7 @@ function SkillCurve({ c }: { c: NonNullable<DistanceSections["curve"]> }) {
       : "Skill against CV block size; the band is the fold min–max.";
   return (
     <LineBand
-      title={`${metric} vs CV block size`}
+      title={title ?? `${metric} vs CV block size`}
       units={c.metric === "r2" ? "R² (held out)" : u}
       series={series}
       xLabel="Block size"
@@ -47,36 +86,61 @@ function SkillCurve({ c }: { c: NonNullable<DistanceSections["curve"]> }) {
       yUnit={c.metric === "rmse" ? u : undefined}
       refLines={refLines}
       decimals={3}
-      caption={caption}
+      height={height}
+      caption={captionOverride ?? caption}
     />
   );
 }
 
-export default function Distance() {
+/** One line pointing at the Trust check that owns a notice (Model details leaves the notice there). */
+function OnTrust({ rid, anchor, children }: { rid: string; anchor: string; children: ReactNode }) {
+  return (
+    <p className="cap" data-on-trust={anchor} style={{ margin: 0 }}>
+      {children} <Link to={`${runHref(rid, "trust")}#${anchor}`}>How much to trust this →</Link>
+    </p>
+  );
+}
+
+export default function Distance({
+  title = "Distance & baselines",
+  intro = "How skill holds up further from the training data, and whether the stack beats simple baselines on the same blocks.",
+  level,
+  detailsOnly,
+}: DetailPageProps = {}) {
   const rid = useRid();
   const noCurve = useSkippedStage(rid, "cv_curve", "The skill-vs-distance stage");
   const noBaselines = useSkippedStage(rid, "baselines", "The baselines stage");
   return (
-    <ViewPage
-      view="distance"
-      title="Distance & baselines"
-      intro="How skill holds up further from the training data, and whether the stack beats simple baselines on the same blocks."
-    >
+    <ViewPage view="distance" title={title} intro={intro} level={level}>
       {(s, vm) => {
         const u = unitLabel(vm.units.target);
         return (
         <>
-          <Section title="Verdict" data={s.verdict} absent={noBaselines}>
-            {(v) => (
-              <div className="callout" data-tone={v.stack_wins === false ? undefined : "info"} role="status">
-                <strong>Verdict:</strong> {v.text}
-                {v.best_baseline ? <span className="cap"> (strongest baseline: {v.best_baseline})</span> : null}
-              </div>
-            )}
-          </Section>
-          <Section title="Skill vs block size" data={s.curve} absent={noCurve}>
-            {(c) => <SkillCurve c={c} />}
-          </Section>
+          {detailsOnly ? (
+            s.verdict ? (
+              <OnTrust rid={rid} anchor="validation">
+                The verdict against the simple baselines is under Independent checks on
+              </OnTrust>
+            ) : null
+          ) : (
+            <Section title="Verdict" data={s.verdict} absent={noBaselines}>
+              {(v) => (
+                <div className="callout" data-tone={v.stack_wins === false ? undefined : "info"} role="status">
+                  <strong>Verdict:</strong> {v.text}
+                  {v.best_baseline ? <span className="cap"> (strongest baseline: {v.best_baseline})</span> : null}
+                </div>
+              )}
+            </Section>
+          )}
+          {detailsOnly && !s.curve && noCurve ? (
+            <OnTrust rid={rid} anchor="distance">
+              Skill against distance from the measurements was not tested in this run; why, and how to add it, is on
+            </OnTrust>
+          ) : (
+            <Section title="Skill vs block size" data={s.curve} absent={noCurve}>
+              {(c) => <SkillCurve c={c} />}
+            </Section>
+          )}
           <div className="grid2">
             <Section title="Baseline forest" data={s.baselines} absent={noBaselines}>
               {(b) => (

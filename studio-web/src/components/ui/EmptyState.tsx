@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import { ApiError, errorMessage, request } from "../../api/client";
 import type { Action, Job } from "../../api/types";
 import { navigate } from "../../router";
@@ -49,11 +49,14 @@ export function ActionButton({
   size = "normal",
   variant = "primary",
   onDone,
+  style,
 }: {
   action: Action;
   size?: "normal" | "small";
   variant?: "primary" | "default";
   onDone?: (result: unknown) => void;
+  /** Placement in its container (e.g. not stretched across a grid card). */
+  style?: CSSProperties;
 }) {
   const [busy, setBusy] = useState(false);
   return (
@@ -61,6 +64,7 @@ export function ActionButton({
       variant={variant}
       size={size}
       busy={busy}
+      style={style}
       onClick={async () => {
         setBusy(true);
         try {

@@ -3,8 +3,9 @@
 // Each feature folder declares its routes in `src/pages/<group>/routes.ts`:
 //
 //   export const routes: RouteDef[] = [
-//     { path: "/r/:rid/accuracy", component: lazy(() => import("./Accuracy")), title: "Accuracy",
-//       runTab: { id: "accuracy", label: "Accuracy", group: "Model", order: 30 } },
+//     { path: "/r/:rid/trust", component: lazy(() => import("./Trust")), title: "How much to trust this",
+//       runTab: { id: "trust", label: "How much to trust this", order: 60, views: ["accuracy", "validation"] } },
+//     { path: "/r/:rid/accuracy", title: "Accuracy", redirect: (p, search) => withSearch(runHref(p.rid, "trust"), search) },
 //   ];
 //
 // The registry collects them with `import.meta.glob("./pages/*/routes.ts", {eager: true})`;
@@ -32,10 +33,19 @@ export type { RunTabId } from "./api/types";
 
 // ---------------------------------------------------------------- route definitions
 
-export type RunTabGroup = "Model" | "Effects" | "Decisions" | "Trust" | "Run";
-export const RUN_TAB_GROUPS: readonly RunTabGroup[] = ["Model", "Effects", "Decisions", "Trust", "Run"];
-
-export type RunTabDef = { id: RunTabId; label: string; group: RunTabGroup; order: number };
+/**
+ * A run tab: one entry of the flat run tab bar. `views` are the server view ids
+ * (GET /api/runs/{rid}/outputs → tabs[]) the tab shows; its status dot aggregates theirs.
+ */
+export type RunTabDef = {
+  /** Stable id (data-tab, command palette): summary, map, effects, heat, lab, trust, details. */
+  id: string;
+  label: string;
+  order: number;
+  /** Technical tab (Model details): placed last, after a divider, styled quieter. */
+  advanced?: boolean;
+  views: RunTabId[];
+};
 
 export type ProjectNavDef = {
   id: string;
@@ -45,13 +55,27 @@ export type ProjectNavDef = {
   to: (pid: string, project: Project) => string | null;
   /** Non-null greys the entry out with this text as its tooltip. */
   disabledReason?: (project: Project) => string | null;
+  /** "advanced": listed in the sidebar's collapsed Advanced group. */
+  group?: "advanced";
+  /** Other route patterns this entry is current on (e.g. Launch highlights Set up). */
+  claims?: string[];
 };
+
+/**
+ * Where a redirect route sends the browser: `params` of the matched pattern and the current
+ * search ("?a=b" or ""). The app's renderer navigates there with `replace: true` and keeps the
+ * current hash unless the target has its own.
+ */
+export type RouteRedirect = (params: Record<string, string>, search: string) => string;
 
 export type RouteDef = {
   path: string;
   // Pages take no props (they read params with useRoute), so any component type is accepted.
-  component: LazyExoticComponent<ComponentType<any>>;
+  /** The page; a redirect route has none. */
+  component?: LazyExoticComponent<ComponentType<any>>;
   title: string;
+  /** Redirect instead of rendering (legacy URLs). */
+  redirect?: RouteRedirect;
   runTab?: RunTabDef;
   projectNav?: ProjectNavDef;
   /** Use the full content width (Mission Control, Map, Lab). */
@@ -181,7 +205,7 @@ export type ProjectNavEntry = ProjectNavDef & { route: RouteDef };
 export type Registry = {
   routes: RouteDef[];
   compiled: CompiledRoute[];
-  /** Run tabs in display order: by group (Model, Effects, Decisions, Trust, Run), then `order`. */
+  /** Run tabs in display order: planner tabs by `order`, then the advanced ones (Model details). */
   runTabs: RunTabEntry[];
   projectNav: ProjectNavEntry[];
   problems: string[];
@@ -206,9 +230,11 @@ export function buildRegistry(modules: Record<string, RouteModule>): Registry {
       }
       seenPath.add(r.path);
       routes.push(r);
+      if (!r.component && !r.redirect) problems.push(`${file}: route ${r.path} has neither a component nor a redirect`);
       if (r.runTab) {
-        if (!RUN_TAB_IDS.includes(r.runTab.id)) problems.push(`${file}: unknown run tab id "${r.runTab.id}"`);
-        else if (!RUN_TAB_GROUPS.includes(r.runTab.group)) problems.push(`${file}: unknown run tab group "${r.runTab.group}"`);
+        const badView = (r.runTab.views ?? []).find((v) => !RUN_TAB_IDS.includes(v));
+        if (!r.component) problems.push(`${file}: run tab "${r.runTab.id}" has no page`);
+        else if (badView !== undefined) problems.push(`${file}: run tab "${r.runTab.id}" lists unknown view "${badView}"`);
         else if (seenTab.has(r.runTab.id)) problems.push(`${file}: run tab "${r.runTab.id}" already declared by ${seenTab.get(r.runTab.id)}`);
         else {
           seenTab.set(r.runTab.id, file);
@@ -224,7 +250,7 @@ export function buildRegistry(modules: Record<string, RouteModule>): Registry {
       }
     }
   }
-  runTabs.sort((a, b) => RUN_TAB_GROUPS.indexOf(a.group) - RUN_TAB_GROUPS.indexOf(b.group) || a.order - b.order || a.label.localeCompare(b.label));
+  runTabs.sort((a, b) => Number(!!a.advanced) - Number(!!b.advanced) || a.order - b.order || a.label.localeCompare(b.label));
   projectNav.sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
   if (problems.length && typeof console !== "undefined") for (const p of problems) console.warn(`[routes] ${p}`);
   return { routes, compiled: compileRoutes(routes), runTabs, projectNav, problems };
@@ -274,6 +300,97 @@ export function runTabForRoute(reg: Registry, route: RouteDef | null): RunTabEnt
     }
   }
   return best && bestLen > 2 ? best : null;
+}
+
+// ---------------------------------------------------------------- run URLs
+
+/** The run tab sections, in tab order (Model details last). */
+export const RUN_SECTIONS = ["summary", "map", "effects", "heat", "lab", "trust", "details"] as const;
+export type RunSection = (typeof RUN_SECTIONS)[number];
+
+/** Heat risk sub-sections (`/r/:rid/heat/:section?`, default "today"). */
+export const HEAT_SECTIONS = ["today", "people", "future"] as const;
+export type HeatSection = (typeof HEAT_SECTIONS)[number];
+
+/** Model details sub-sections (`/r/:rid/details/:section?`, default "data"; docs take `/:doc`). */
+export const DETAIL_SECTIONS = ["data", "accuracy", "reach", "response", "causal", "uncertainty", "runlog", "provenance", "docs", "files"] as const;
+export type DetailSection = (typeof DETAIL_SECTIONS)[number];
+
+const SECTION_SEG: Record<RunSection, string> = { summary: "", map: "map", effects: "effects", heat: "heat", lab: "lab", trust: "trust", details: "details" };
+
+/**
+ * URL of a run page: `runHref("r1")` → `/r/r1`, `runHref("r1", "heat", "future")` →
+ * `/r/r1/heat/future`, `runHref("r1", "details", "docs/methods")` → `/r/r1/details/docs/methods`,
+ * `runHref("r1", "lab", "library")` → `/r/r1/lab/library`. `sub` may hold several "/"-separated
+ * segments; each is URL-encoded. Append "?query" or "#hash" yourself.
+ */
+export function runHref(rid: string, section: RunSection = "summary", sub?: string | null): string {
+  let p = `/r/${encodeURIComponent(rid)}`;
+  const seg = SECTION_SEG[section];
+  if (seg) p += "/" + seg;
+  if (seg && sub) {
+    const parts = sub.split("/").filter((x) => x.length > 0);
+    if (parts.length) p += "/" + parts.map(encodeURIComponent).join("/");
+  }
+  return p;
+}
+
+/**
+ * Where each server view id (RUN_TAB_IDS: outputs `tabs[]`, the output catalog's `view`,
+ * meta `warning_codes[].view`, stage links) is shown now. The legacy `/r/:rid/<view>` redirects
+ * use the same targets.
+ */
+export const VIEW_HREF: Record<RunTabId, (rid: string) => string> = {
+  overview: (rid) => runHref(rid),
+  data: (rid) => runHref(rid, "details", "data"),
+  accuracy: (rid) => runHref(rid, "trust"),
+  distance: (rid) => runHref(rid, "details", "reach"),
+  influence: (rid) => runHref(rid, "effects"),
+  response: (rid) => runHref(rid, "effects"),
+  causal: (rid) => runHref(rid, "details", "causal"),
+  scenarios: (rid) => runHref(rid, "lab", "library"),
+  climate: (rid) => runHref(rid, "heat", "future"),
+  heat: (rid) => runHref(rid, "heat"),
+  budget: (rid) => runHref(rid, "lab", "plans"),
+  planner: (rid) => runHref(rid, "heat", "people"),
+  lab: (rid) => runHref(rid, "lab"),
+  validation: (rid) => runHref(rid, "trust"),
+  uncertainty: (rid) => runHref(rid, "trust"),
+  provenance: (rid) => runHref(rid, "details", "provenance"),
+  track: (rid) => runHref(rid, "details", "runlog"),
+  map: (rid) => runHref(rid, "map"),
+  docs: (rid) => runHref(rid, "details", "docs"),
+  files: (rid) => runHref(rid, "details", "files"),
+};
+
+/** The page showing a server view id (see VIEW_HREF), or null for an id the app does not know. */
+export function runViewHref(rid: string, view: string | null | undefined): string | null {
+  if (!view || !Object.prototype.hasOwnProperty.call(VIEW_HREF, view)) return null;
+  return VIEW_HREF[view as RunTabId](rid);
+}
+
+/**
+ * Merge the current search into a redirect target: the target's own query keys first (they
+ * win), then the other current keys. `withSearch("/p/x/exports?tab=notes", "?run=r1")` →
+ * `/p/x/exports?tab=notes&run=r1`.
+ */
+export function withSearch(to: string, search: string): string {
+  const hashAt = to.indexOf("#");
+  const hash = hashAt >= 0 ? to.slice(hashAt) : "";
+  const base = hashAt >= 0 ? to.slice(0, hashAt) : to;
+  const qAt = base.indexOf("?");
+  const path = qAt >= 0 ? base.slice(0, qAt) : base;
+  const q = new URLSearchParams(qAt >= 0 ? base.slice(qAt + 1) : "");
+  for (const [k, v] of new URLSearchParams(search)) if (!q.has(k)) q.append(k, v);
+  const s = q.toString();
+  return path + (s ? "?" + s : "") + hash;
+}
+
+/** Full target of a redirect route for a location: its `redirect(params, search)` plus the current hash unless the target has one. */
+export function redirectTarget(route: RouteDef, params: Record<string, string>, loc: { search: string; hash: string }): string | null {
+  if (!route.redirect) return null;
+  const to = route.redirect(params, loc.search);
+  return to.includes("#") || !loc.hash ? to : to + loc.hash;
 }
 
 // ---------------------------------------------------------------- location store

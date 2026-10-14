@@ -2,6 +2,8 @@
 // follow-tail, copy, downloads, raw stderr), Warnings (grouped by code, linked to the output view),
 // Outputs (artifact feed linked to run tabs, even mid-run), Checkpoints, Resources (RSS, CPU and
 // process sparklines, peak, free RAM and disk, the 80% memory banner) and Config & provenance.
+// Embedded in a run's Model details (Run log), Outputs and Config & provenance are left out: each
+// is one line linking to its home there (Files, Provenance).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useResource } from "../../../api/resource";
 import {
@@ -29,7 +31,7 @@ import { Table, type Column } from "../../../components/ui/Table";
 import { Tabs } from "../../../components/ui/Tabs";
 import { VirtualList } from "../../../components/ui/VirtualList";
 import { copyText } from "../../../components/ui/download";
-import { codecs, Link, useUrlState } from "../../../router";
+import { codecs, Link, runHref, runViewHref, useUrlState } from "../../../router";
 import { toast } from "../../../stores/ui";
 import { LOG_KEEP, STAGE_IDS, type TrackerEntry, type TrackerState } from "../../../stores/tracker";
 import { fmtBytes, fmtDateTime, fmtNum } from "../../../theme/format";
@@ -239,6 +241,7 @@ function WarningsTab({ state, runId, meta, onShowLogs }: { state: TrackerState; 
       {list.map((g) => {
         const info = labelOf(g.code);
         const tab = warningTab(g.code, info?.view ?? null);
+        const tabHref = tab && runId ? runViewHref(runId, tab) : null;
         return (
           <li key={g.code}>
             <div>
@@ -255,7 +258,7 @@ function WarningsTab({ state, runId, meta, onShowLogs }: { state: TrackerState; 
               ))}
             </ul>
             <div className="row">
-              {tab && runId ? <Link to={`/r/${encodeURIComponent(runId)}/${tab}`}>Open {tab}</Link> : null}
+              {tabHref ? <Link to={tabHref}>Open {tab}</Link> : null}
               <Button size="small" variant="ghost" onClick={() => onShowLogs(g.code)}>
                 In logs
               </Button>
@@ -277,7 +280,8 @@ function OutputsTab({ state, runId, meta }: { state: TrackerState; runId: string
       label: "File",
       render: (a) => {
         const tab = artifactTab(a, meta?.output_catalog ?? null);
-        return tab && runId ? <Link to={`/r/${encodeURIComponent(runId)}/${tab}`}>{a.relpath}</Link> : <span className="mono">{a.relpath}</span>;
+        const href = tab && runId ? runViewHref(runId, tab) : null;
+        return href ? <Link to={href}>{a.relpath}</Link> : <span className="mono">{a.relpath}</span>;
       },
     },
     { key: "role", label: "Role" },
@@ -430,12 +434,18 @@ function ConfigTab({ job }: { job: Job }) {
 
 // ---------------------------------------------------------------- tabs
 
-export function BottomTabs({ entry, job, meta }: { entry: TrackerEntry; job: Job; meta: Meta | undefined }) {
-  const [tab, setTab] = useUrlState("tab", codecs.enum(BOTTOM_TABS, "logs"));
+/** The tabs left out when embedded in a run's Model details: their facts have a section there. */
+const MOVED_TABS: ReadonlySet<BottomTab> = new Set<BottomTab>(["outputs", "config"]);
+
+export function BottomTabs({ entry, job, meta, embedded = false }: { entry: TrackerEntry; job: Job; meta: Meta | undefined; embedded?: boolean }) {
+  const [tabQ, setTab] = useUrlState("tab", codecs.enum(BOTTOM_TABS, "logs"));
   const [, setLogger] = useUrlState("logger", codecs.string(""));
   const state = entry.state;
   const nWarn = Object.values(state.warnings).reduce((a, w) => a + w.count, 0);
-  const items = [
+  // Only a job with a run has those sections to point to.
+  const moved = embedded && !!job.run_id;
+  const tab: BottomTab = moved && MOVED_TABS.has(tabQ) ? "logs" : tabQ;
+  const all = [
     { id: "logs" as const, label: "Logs" },
     { id: "warnings" as const, label: "Warnings", badge: nWarn ? <span className="muted num">({nWarn})</span> : undefined },
     { id: "outputs" as const, label: "Outputs", badge: Object.keys(state.artifacts).length ? <span className="muted num">({Object.keys(state.artifacts).length})</span> : undefined },
@@ -443,8 +453,15 @@ export function BottomTabs({ entry, job, meta }: { entry: TrackerEntry; job: Job
     { id: "resources" as const, label: "Resources" },
     { id: "config" as const, label: "Config & provenance" },
   ];
+  const items = moved ? all.filter((i) => !MOVED_TABS.has(i.id)) : all;
   return (
     <section className="card" aria-label="Job details">
+      {moved ? (
+        <p className="mc-note" data-moved-tabs="true" style={{ margin: "0 0 8px" }}>
+          The files this run wrote are in <Link to={runHref(job.run_id!, "details", "files")}>Files</Link>; its config and provenance are in{" "}
+          <Link to={runHref(job.run_id!, "details", "provenance")}>Provenance</Link>.
+        </p>
+      ) : null}
       <Tabs items={items} value={tab} onChange={setTab} label="Job details">
         {tab === "logs" ? (
           <LogsTab entry={entry} />

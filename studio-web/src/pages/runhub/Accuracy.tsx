@@ -1,8 +1,9 @@
 // Accuracy (SPEC §6.4): per-model table with blend weights, obs-vs-pred hexbin, a residual
 // histogram brushable into the run's selection (shown on the map), residuals by zone and
-// fold, interval honesty, the stacker panel, physics card, advection verdict, forcing card
-// and the CV design card. Usable mid-run: the server computes metrics from
-// predictions.parquet and marks the ViewModel `live`.
+// fold, interval honesty, the stacker panel, physics card, advection verdict and the CV
+// design card. The forcing card (model input, not accuracy) is on Data & checks (./DataQa). Usable mid-run: the server computes metrics from
+// predictions.parquet and marks the ViewModel `live`. The complete page is Model details ›
+// Accuracy; How much to trust this reuses `finalModel` and `ObsPredChart`.
 import type { AccuracySections, CoverageRow, ModelRow } from "../../api/runs";
 import type { SelectionSpec } from "../../api/types";
 import { Bars, BoxStrip, DotRange, HexbinScatter, Histogram, SmallMultiples } from "../../charts";
@@ -12,7 +13,7 @@ import { Table } from "../../components/ui/Table";
 import { Link, navigate } from "../../router";
 import { encodeSelection, useRunSelection } from "../../stores/selection";
 import { fmtInt, fmtNum, fmtPct, fmtSigned, fmtValue, unitLabel } from "../../theme/format";
-import { Block, Section, ViewPage, useRid, useUnits } from "./common";
+import { Block, Section, ViewPage, useRid, useUnits, type DetailPageProps } from "./common";
 
 function ModelsTable({ rows }: { rows: ModelRow[] }) {
   const u = unitLabel(useUnits().target);
@@ -46,6 +47,49 @@ function ModelsTable({ rows }: { rows: ModelRow[] }) {
         },
       ]}
       rows={rows}
+    />
+  );
+}
+
+/** The run's final model row: the stack, else the model with the highest held-out R². */
+export function finalModel(rows: readonly ModelRow[] | null | undefined): ModelRow | null {
+  if (!rows?.length) return null;
+  const stack = rows.find((r) => r.kind === "stack");
+  if (stack) return stack;
+  return rows.reduce<ModelRow | null>((best, r) => (r.r2 !== null && (!best || best.r2 === null || r.r2 > best.r2) ? r : best), null) ?? rows[0];
+}
+
+/** Observed vs predicted held-out values (hexbin) with the 1:1 line. */
+export function ObsPredChart({
+  bins,
+  unit,
+  title = "Observed vs predicted",
+  caption,
+  height,
+}: {
+  bins: NonNullable<AccuracySections["obs_pred_bins"]>;
+  /** Target unit label (°F). */
+  unit: string;
+  title?: string;
+  caption?: string;
+  height?: number;
+}) {
+  const sp = bins.spearman;
+  return (
+    <HexbinScatter
+      title={title}
+      bins={bins}
+      xLabel="Predicted"
+      yLabel="Observed"
+      xUnit={unit || undefined}
+      yUnit={unit || undefined}
+      diagonal
+      spearman={sp ?? null}
+      height={height}
+      caption={
+        caption ??
+        (sp !== undefined && sp !== null ? `Spearman ρ = ${fmtNum(sp, 2)} between held-out predictions and observations; the dashed line is 1:1.` : "The dashed line is 1:1.")
+      }
     />
   );
 }
@@ -282,26 +326,16 @@ function PhysicsCard({ ph }: { ph: NonNullable<AccuracySections["physics"]> }) {
   );
 }
 
-function WindArrow({ deg, speed }: { deg: number | null; speed: number | null }) {
-  if (deg === null) return null;
-  // The arrow points where the wind blows to (from `deg`, clockwise from north).
-  return (
-    <svg width="40" height="40" viewBox="-20 -20 40 40" role="img" aria-label={`Wind from ${fmtNum(deg, 0)}° at ${fmtNum(speed, 1)} m/s`}>
-      <circle r="18" fill="none" style={{ stroke: "var(--line-strong)" }} />
-      <g transform={`rotate(${deg + 180})`}>
-        <path d="M0,-14 L5,-4 L1.5,-4 L1.5,12 L-1.5,12 L-1.5,-4 L-5,-4 Z" style={{ fill: "var(--ink-2)" }} />
-      </g>
-    </svg>
-  );
-}
-
-export default function Accuracy() {
+export default function Accuracy({
+  title = "Accuracy",
+  intro = "Held-out accuracy from spatially blocked cross-validation: every prediction here was made without the cell's own block.",
+}: DetailPageProps = {}) {
   const rid = useRid();
   return (
     <ViewPage
       view="accuracy"
-      title="Accuracy"
-      intro="Held-out accuracy from spatially blocked cross-validation: every prediction here was made without the cell's own block."
+      title={title}
+      intro={intro}
       live={(vm) => vm.sections.live === true}
       liveText="Live: these metrics are computed from predictions.parquet while the run continues. They refresh as outputs are written."
     >
@@ -316,23 +350,7 @@ export default function Accuracy() {
           </Section>
           <div className="grid2">
             <Section title="Observed vs predicted" data={s.obs_pred_bins}>
-              {(b) => (
-                <HexbinScatter
-                  title="Observed vs predicted"
-                  bins={b}
-                  xLabel="Predicted"
-                  yLabel="Observed"
-                  xUnit={unitLabel(vm.units.target) || undefined}
-                  yUnit={unitLabel(vm.units.target) || undefined}
-                  diagonal
-                  spearman={b.spearman ?? null}
-                  caption={
-                    b.spearman !== undefined && b.spearman !== null
-                      ? `Spearman ρ = ${fmtNum(b.spearman, 2)} between held-out predictions and observations; the dashed line is 1:1.`
-                      : "The dashed line is 1:1."
-                  }
-                />
-              )}
+              {(b) => <ObsPredChart bins={b} unit={unitLabel(vm.units.target)} />}
             </Section>
             <Section title="Residual histogram" data={s.resid_hist}>
               {(h) => <ResidualHistogram hist={h} />}
@@ -393,6 +411,7 @@ export default function Accuracy() {
               </Block>
             )}
           </Section>
+          {/* The advection verdict and the CV design share a row (the forcing card is on Data & checks). */}
           <div className="grid2">
             <Section title="Advection verdict" data={s.advection}>
               {(a) => {
@@ -421,55 +440,25 @@ export default function Accuracy() {
                 );
               }}
             </Section>
-            <Section title="Forcing card" data={s.forcing}>
-              {(f) => (
-                <Block title="Forcing">
-                  <div className="row" style={{ alignItems: "flex-start" }}>
-                    <WindArrow deg={f.wind_dir_deg} speed={f.wind_speed} />
-                    <dl className="kv" aria-label="Forcing">
-                      <dt>Date</dt>
-                      <dd>{f.date ?? "—"}</dd>
-                      <dt>Hours</dt>
-                      <dd>{f.hours ?? "—"}</dd>
-                      <dt>Shortwave down</dt>
-                      <dd>{fmtValue(f.sw_down, "W/m²", 0)}</dd>
-                      <dt>Net longwave</dt>
-                      <dd>{fmtValue(f.lw_net, "W/m²", 0)}</dd>
-                      <dt>Wind</dt>
-                      <dd>{f.wind_speed !== null ? `${fmtValue(f.wind_speed, "m/s", 1)}${f.wind_dir_deg !== null ? ` from ${fmtNum(f.wind_dir_deg, 0)}°` : ""}` : "—"}</dd>
-                      <dt>Station</dt>
-                      <dd>{f.station ?? "—"}</dd>
-                    </dl>
-                  </div>
-                  {f.checks.length ? (
-                    <ul className="cap" style={{ margin: 0, paddingLeft: 18 }}>
-                      {f.checks.map((c, i) => (
-                        <li key={i}>{c}</li>
-                      ))}
-                    </ul>
-                  ) : null}
+            <Section title="CV design" data={s.cv_design}>
+              {(cv) => (
+                <Block title="CV design" actions={<Link to={`/r/${encodeURIComponent(rid)}/map?layer=fold`}>Show folds on the map</Link>}>
+                  <dl className="kv" aria-label="CV design">
+                    <dt>Folds</dt>
+                    <dd>{fmtInt(cv.n_folds)}</dd>
+                    <dt>Block size</dt>
+                    <dd>{fmtValue(cv.block_m, "m", 0)}</dd>
+                    <dt>Buffer</dt>
+                    <dd>{fmtValue(cv.buffer_m, "m", 0)}</dd>
+                    <dt>Blocks</dt>
+                    <dd>{fmtInt(cv.n_blocks)}</dd>
+                    <dt>Test cells per fold</dt>
+                    <dd>{cv.test_sizes.map((n) => fmtInt(n)).join(" · ") || "—"}</dd>
+                  </dl>
                 </Block>
               )}
             </Section>
           </div>
-          <Section title="CV design" data={s.cv_design}>
-            {(cv) => (
-              <Block title="CV design" actions={<Link to={`/r/${encodeURIComponent(rid)}/map?layer=fold`}>Show folds on the map</Link>}>
-                <dl className="kv" aria-label="CV design">
-                  <dt>Folds</dt>
-                  <dd>{fmtInt(cv.n_folds)}</dd>
-                  <dt>Block size</dt>
-                  <dd>{fmtValue(cv.block_m, "m", 0)}</dd>
-                  <dt>Buffer</dt>
-                  <dd>{fmtValue(cv.buffer_m, "m", 0)}</dd>
-                  <dt>Blocks</dt>
-                  <dd>{fmtInt(cv.n_blocks)}</dd>
-                  <dt>Test cells per fold</dt>
-                  <dd>{cv.test_sizes.map((n) => fmtInt(n)).join(" · ") || "—"}</dd>
-                </dl>
-              </Block>
-            )}
-          </Section>
         </>
       )}
     </ViewPage>

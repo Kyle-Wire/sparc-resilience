@@ -2,7 +2,7 @@
 
 * A placebo suite with only the ``shift`` kind at coarse 60 m, on the n=96 synthetic city
   (≈1,600 coarse cells; the n=40/48 cities fall under 200 cells at 120 m and skip MGWR tuning):
-  launched from the run's Validation tab, tracked in Mission Control (one child run), ending with
+  launched from the study cards of the run's How much to trust this tab, tracked in Mission Control (one child run), ending with
   a verdict in the placebo table.
 * The project-wide effect benchmark on an n=48 synthetic city, launched from the Studies hub.
 """
@@ -32,7 +32,7 @@ def test_e2e_placebo_shift(studio_server, studio_page):
 
     sp: StudioPage = studio_page(server)
     page = sp.page
-    sp.goto(f"/r/{rid}/validation")
+    sp.goto(f"/r/{rid}/trust#validation")
     card = page.locator("[aria-label='Placebo tests']").first
     card.wait_for()
     card.get_by_label(re.compile(r"^Random field")).uncheck()
@@ -62,7 +62,7 @@ def test_e2e_placebo_shift(studio_server, studio_page):
     assert [c["kind"] for c in children] == ["shift"], view.get("children")
     assert server.get(f"/api/runs/{children[0]['run_id']}")["run"]["status"] == "complete"
 
-    sp.goto(f"/r/{rid}/validation")
+    sp.goto(f"/r/{rid}/trust#validation")
     table = page.get_by_role("table", name="Placebo verdicts")
     table.wait_for(timeout=60_000)
     text = table.inner_text()

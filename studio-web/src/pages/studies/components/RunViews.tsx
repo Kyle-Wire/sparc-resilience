@@ -9,10 +9,9 @@ import { useTruth, type TruthRow } from "../../../api/studies";
 import { Bars, DotRange, Forest, IntervalStack } from "../../../charts";
 import { excludesZero } from "../../../charts/IntervalStack";
 import { EmptyState } from "../../../components/ui/EmptyState";
-import { Link } from "../../../router";
+import { Link, runHref } from "../../../router";
 import { fmtNum, fmtPct, fmtValue, unitLabel } from "../../../theme/format";
 
-const rh = (rid: string) => `/r/${encodeURIComponent(rid)}`;
 
 function NotYet({ what }: { what: string }) {
   return <p className="cap">{what}</p>;
@@ -45,7 +44,7 @@ export function BaselinesResult({ rid, headline }: { rid: string; headline?: str
         decimals={3}
         caption={`${b.filter((r) => r.stack_better).length} of ${b.length} baselines are beaten by more than 2 SE; ${b.filter((r) => r.baseline_better).length} beat the stack. Whiskers: ± 2 block-clustered SE.`}
       />
-      <Link to={`${rh(rid)}/distance`}>Skill vs distance and block wins →</Link>
+      <Link to={runHref(rid, "details", "reach")}>Skill vs distance and block wins →</Link>
     </div>
   );
 }
@@ -71,7 +70,7 @@ export function UncertaintyResult({ rid }: { rid: string }) {
         unit={u}
         caption={env.length ? `${keep} of ${env.length} scenarios exclude zero under the widest (envelope) interval.` : "Estimation intervals only: no specification or attribution layer yet."}
       />
-      <Link to={`${rh(rid)}/uncertainty`}>Uncertainty tab (sources, climate spread) →</Link>
+      <Link to={`${runHref(rid, "trust")}#uncertainty`}>Uncertainty tab (sources, climate spread) →</Link>
     </div>
   );
 }
@@ -199,7 +198,8 @@ export function EmulatorResult({ rid }: { rid: string }) {
 export function PlannerResult({ rid }: { rid: string }) {
   return (
     <p className="cap">
-      Exposure, hot days, equity, plantable space, hexagons and logger sites are on the <Link to={`${rh(rid)}/planner`}>Planner tab</Link>.
+      Exposure, hot days and equity are on <Link to={runHref(rid, "heat", "people")}>Heat risk › Who is exposed</Link>; plantable space, hexagons and logger sites are on{" "}
+      <Link to={`${runHref(rid, "effects")}#where`}>What cools › Where to act</Link>.
     </p>
   );
 }
@@ -207,7 +207,7 @@ export function PlannerResult({ rid }: { rid: string }) {
 export function WriteupResult({ rid }: { rid: string }) {
   return (
     <p className="cap">
-      Read the <Link to={`${rh(rid)}/docs/methods`}>methods</Link> and the <Link to={`${rh(rid)}/docs/model_card`}>model card</Link>. The run report stays as written at the end of the run.
+      Read the <Link to={runHref(rid, "details", "docs/methods")}>methods</Link> and the <Link to={runHref(rid, "details", "docs/model_card")}>model card</Link>. The run report stays as written at the end of the run.
     </p>
   );
 }

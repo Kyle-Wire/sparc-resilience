@@ -80,9 +80,43 @@ const md = new Marked({
   },
 });
 
+const DELIMITER_ROW = /^ {0,3}\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+const FENCE = /^ {0,3}(```|~~~)/;
+
+/** The cells of a table row: split on unescaped pipes, without the optional outer pipes. */
+function rowCells(line: string): string[] {
+  let t = line.trim();
+  if (t.startsWith("|")) t = t.slice(1);
+  if (t.endsWith("|") && !t.endsWith("\\|")) t = t.slice(0, -1);
+  return t.split(/(?<!\\)\|/);
+}
+
+/**
+ * GFM only reads a table whose header has as many cells as its delimiter row. A writer that
+ * appends an empty trailing header cell (e.g. a report's climate table with no adaptation
+ * variants: `| … | share ≥ 90 °F: no adaptation | |` over four `---`) would print the table as
+ * raw pipe text; here such empty trailing header cells are dropped so it reads as a table.
+ * Code fences are left alone.
+ */
+export function tidyTableHeaders(source: string): string {
+  const lines = source.split("\n");
+  let fenced = false;
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (FENCE.test(lines[i])) fenced = !fenced;
+    if (fenced || !lines[i].includes("|") || !DELIMITER_ROW.test(lines[i + 1]) || !lines[i + 1].includes("-")) continue;
+    const head = rowCells(lines[i]);
+    const want = rowCells(lines[i + 1]).length;
+    if (head.length <= want) continue;
+    const extra = head.slice(want);
+    if (extra.some((c) => c.trim() !== "")) continue;
+    lines[i] = "| " + head.slice(0, want).map((c) => c.trim()).join(" | ") + " |";
+  }
+  return lines.join("\n");
+}
+
 /** Markdown → HTML with raw HTML escaped, unsafe links neutralised, remote images dropped. */
 export function renderMarkdown(source: string): string {
-  return md.parse(source ?? "", { async: false });
+  return md.parse(tidyTableHeaders(source ?? ""), { async: false });
 }
 
 /**

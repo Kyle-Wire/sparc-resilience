@@ -28,7 +28,7 @@ import { JobStrip } from "../../components/ui/JobStrip";
 import { Markdown } from "../../components/ui/Markdown";
 import { StatusChip } from "../../components/ui/StatusChip";
 import { downloadText, fileSlug } from "../../components/ui/download";
-import { Link, navigate, useRoute } from "../../router";
+import { Link, navigate, runHref, useRoute } from "../../router";
 import { toast, useUi } from "../../stores/ui";
 import { fmtDate, fmtDateTime, fmtDuration, fmtNum } from "../../theme/format";
 import { announceJob, AttachToggle, Check, runLabel } from "./components/common";
@@ -75,7 +75,7 @@ function ChildRuns({ study }: { study: Study }) {
               <td>
                 <span className="row" style={{ gap: 10 }}>
                   <Link to={`/r/${enc(c.id)}`}>Run</Link>
-                  <Link to={`/r/${enc(c.id)}/track`}>Tracker</Link>
+                  <Link to={runHref(c.id, "details", "runlog")}>Tracker</Link>
                 </span>
               </td>
             </tr>
@@ -211,7 +211,7 @@ function Header({ study }: { study: Study }) {
         <span>
           Run{" "}
           {study.target_run_id ? (
-            <Link to={`/r/${enc(study.target_run_id)}/validation`}>
+            <Link to={`${runHref(study.target_run_id, "trust")}#validation`}>
               <b>{study.target_run_id}</b>
             </Link>
           ) : (
@@ -318,7 +318,7 @@ export default function StudyPage() {
           <ul className="sx-list">
             {study.attached_runs.map((r) => (
               <li key={r} className="row" style={{ justifyContent: "space-between" }}>
-                <Link to={`/r/${enc(r)}/uncertainty`}>{r}</Link>
+                <Link to={`${runHref(r, "trust")}#uncertainty`}>{r}</Link>
                 <AttachToggle studyId={study.id} runId={r} attached label={KIND_LABELS[kind as StudyKind] ?? kind} />
               </li>
             ))}

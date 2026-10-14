@@ -375,3 +375,34 @@ def wait_view_ready(page, what: str, timeout: float = 60) -> None:
     wait_for(lambda: page.locator("main :is(h1, h2, h3)").count() >= 2 or page.locator("main .empty").count(),
              timeout, f"the {what} view")
     wait_for(lambda: not page.locator("main .spinner").count(), timeout, f"the {what} view to load")
+
+
+# The run tab bar (phase 2 information architecture), by `data-tab`, and the tabs with their own
+# section navigation inside `main` (its aria-label is the tab's name).
+RUN_TABS = ["summary", "map", "effects", "heat", "lab", "trust", "details"]
+RUN_SUBNAVS = ("Heat risk", "Scenario Lab", "Model details")
+
+
+def visit_run_pages(sp: StudioPage, rid: str, timeout: float = 30):
+    """Visit every run tab and every section of the tabs that have their own navigation (Heat risk's
+    sections, the Scenario Lab's pages, Model details' rail). Yields ``(label, href)`` once each page
+    has loaded; the caller checks it before the walk moves on."""
+    page = sp.page
+    sp.goto(f"/r/{rid}")
+    bar = page.get_by_role("navigation", name="Run views")
+    bar.get_by_role("link").first.wait_for()
+    tabs = bar.get_by_role("link").all()
+    assert [t.get_attribute("data-tab") for t in tabs] == RUN_TABS
+    queue = [(t.inner_text().split("\n")[0].strip(), t.get_attribute("href")) for t in tabs]
+    seen: set[str] = set()
+    while queue:
+        label, href = queue.pop(0)
+        if href in seen:
+            continue
+        seen.add(href)
+        sp.goto(href)
+        wait_view_ready(page, label, timeout)
+        yield label, href
+        for name in RUN_SUBNAVS:
+            for a in page.locator(f"main nav[aria-label='{name}'] a[href]").all():
+                queue.append((f"{label} › {a.inner_text().strip()}", a.get_attribute("href")))

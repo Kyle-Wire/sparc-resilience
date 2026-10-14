@@ -1,9 +1,9 @@
 // The shell on every page (SPEC §3.1): sidebar (project switcher, project nav declared by
-// route modules, Activity, Settings), top bar (breadcrumb, active-run chip, job tray, engine
-// dot, connection pill, command palette, theme toggle), toasts, the aria-live job announcer
-// and the browser tab title mirroring the most important running job. Brand styling (ramp
-// strip, gradient mark, textured sidebar) lives in ./shell.css.
-import { useEffect, useMemo, type ReactNode } from "react";
+// route modules with its collapsed Advanced group, Settings), top bar (breadcrumb, active-run
+// chip, job tray, engine dot, connection pill, command palette, theme toggle), toasts, the
+// aria-live job announcer and the browser tab title mirroring the most important running job.
+// Brand styling (ramp strip, gradient mark, textured sidebar) lives in ./shell.css.
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Project, RunSummary } from "../api/types";
 import { CommandPalette } from "../components/ui/CommandPalette";
 import { ConnectionPill } from "../components/ui/ConnectionPill";
@@ -13,10 +13,11 @@ import { JobTray } from "../components/ui/JobTray";
 import { Toasts } from "../components/ui/Toast";
 import { Tooltip } from "../components/ui/Tooltip";
 import { Badge, modeLabel } from "../components/ui/Badge";
-import { Link, matchRoute, navigate, runTabHref, useLocation, useRegistry, useRoute, type Registry, type RouteDef } from "../router";
+import { TRUST_GRADE_LABEL, trustGrade as gradeOf, type TrustGrade } from "../content/trust";
+import { Link, matchRoute, navigate, runHref, runTabHref, useLocation, useRegistry, useRoute, type ProjectNavDef, type Registry, type RouteDef } from "../router";
 import { activeJobs, connectJobs, tabTitle, useJobs } from "../stores/jobs";
 import { useUi, type Command, type ThemePref } from "../stores/ui";
-import { fmtDate, fmtDateTime, fmtNum, fmtPct } from "../theme/format";
+import { fmtDateTime, fmtNum, fmtPct } from "../theme/format";
 import { useProject, useProjects, useRecentRuns, useRunDetail } from "./resources";
 import "./shell.css";
 
@@ -81,13 +82,20 @@ function ProjectSwitcher({ projectId }: { projectId: string | null }) {
 }
 
 /**
- * The project nav entry the current page belongs to: the entry its route declared, else the
- * entry whose target is the longest prefix of the path. The project root (Overview) prefixes
- * every project page, so it is current only on its own route.
+ * The project nav entry the current page belongs to: the entry its route declared or claims
+ * (`claims`: Launch highlights Set up), else, on a run page, Scenario Lab for `/r/:rid/lab…`
+ * and Runs for every other `/r/:rid/…`, else the entry whose target is the longest prefix of
+ * the path. The project root (Overview) prefixes every project page, so it is current only on
+ * its own route.
  */
-export function currentProjectNav(entries: { id: string; to: string; route: RouteDef }[], pathname: string, route: RouteDef | null): string | null {
-  const own = entries.find((e) => e.route === route);
+export function currentProjectNav(entries: { id: string; to: string; route: RouteDef; claims?: string[] }[], pathname: string, route: RouteDef | null): string | null {
+  const own = entries.find((e) => e.route === route) ?? (route ? entries.find((e) => e.claims?.includes(route.path)) : undefined);
   if (own) return own.id;
+  const run = /^\/r\/[^/]+(\/[^/]+)?/.exec(pathname);
+  if (run) {
+    const want = run[1] === "/lab" ? "lab" : "runs";
+    if (entries.some((e) => e.id === want)) return want;
+  }
   let best: string | null = null;
   let len = -1;
   for (const e of entries) {
@@ -101,83 +109,182 @@ export function currentProjectNav(entries: { id: string; to: string; route: Rout
   return best;
 }
 
-/** The project nav built from route modules' `projectNav` declarations (SPEC §3.1, §12.3). */
+/** localStorage key of the sidebar's Advanced group open state ("1" open). */
+export const ADVANCED_NAV_KEY = "sparc.nav.advanced";
+
+function readAdvancedOpen(): boolean {
+  try {
+    return window.localStorage.getItem(ADVANCED_NAV_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeAdvancedOpen(open: boolean): void {
+  try {
+    window.localStorage.setItem(ADVANCED_NAV_KEY, open ? "1" : "0");
+  } catch {
+    /* storage blocked: the group just starts collapsed next time */
+  }
+}
+
+type NavItem = { n: ProjectNavDef; id: string; to: string; route: RouteDef; claims?: string[] };
+
+function NavEntry({ item, project, current, count }: { item: NavItem; project: Project; current: string | null; count?: number }) {
+  const { n, to } = item;
+  const reason = n.disabledReason?.(project) ?? null;
+  return (
+    <li>
+      {reason ? (
+        <Tooltip content={reason}>
+          <span className="nav-disabled" aria-disabled="true" tabIndex={0}>
+            {n.label}
+          </span>
+        </Tooltip>
+      ) : (
+        <Link to={to} aria-current={n.id === current ? "page" : undefined} className={n.id === "lab" ? "emph" : undefined}>
+          {n.label}
+          {count ? <span className="muted num">({count})</span> : null}
+        </Link>
+      )}
+    </li>
+  );
+}
+
+/**
+ * The project nav built from route modules' `projectNav` declarations (SPEC §3.1, §12.3): the
+ * main entries, then the "Advanced" group (`group: "advanced"`), collapsed by default; its open
+ * state persists in localStorage and it opens by itself while one of its pages is current.
+ */
 export function ProjectNav({ registry, project }: { registry: Registry; project: Project | null }) {
   const loc = useLocation();
-  if (!project) return null;
-  const entries = registry.projectNav.flatMap((n) => {
-    const to = n.to(project.id, project);
-    return to === null ? [] : [{ n, id: n.id, to, route: n.route }];
-  });
+  const jobs = useJobs((s) => s.jobs);
+  const entries: NavItem[] = project
+    ? registry.projectNav.flatMap((n) => {
+        const to = n.to(project.id, project);
+        return to === null ? [] : [{ n, id: n.id, to, route: n.route, claims: n.claims }];
+      })
+    : [];
   const current = currentProjectNav(entries, loc.pathname, matchRoute(registry.compiled, loc.pathname)?.route ?? null);
+  const main = entries.filter((e) => e.n.group !== "advanced");
+  const advanced = entries.filter((e) => e.n.group === "advanced");
+  const onAdvanced = advanced.some((e) => e.id === current);
+  // Opening on one of its pages is not remembered; a click is.
+  const [open, setOpen] = useState(() => onAdvanced || readAdvancedOpen());
+  useEffect(() => {
+    if (onAdvanced) setOpen(true);
+  }, [onAdvanced]);
+  if (!project) return null;
+  const running = activeJobs(jobs).length;
   return (
     <nav aria-label="Project">
       <ul className="shell-nav">
-        {entries.map(({ n, to }) => {
-          const reason = n.disabledReason?.(project) ?? null;
-          const emph = n.id === "lab";
-          return (
-            <li key={n.id}>
-              {reason ? (
-                <Tooltip content={reason}>
-                  <span className="nav-disabled" aria-disabled="true" tabIndex={0}>
-                    {n.label}
-                  </span>
-                </Tooltip>
-              ) : (
-                <Link to={to} aria-current={n.id === current ? "page" : undefined} className={emph ? "emph" : undefined}>
-                  {n.label}
-                </Link>
-              )}
-            </li>
-          );
-        })}
+        {main.map((e) => (
+          <NavEntry key={e.id} item={e} project={project} current={current} />
+        ))}
       </ul>
+      {advanced.length ? (
+        <div className="shell-nav-group">
+          <button
+            type="button"
+            className="shell-nav-toggle"
+            aria-expanded={open}
+            aria-controls="shell-nav-advanced"
+            onClick={() => {
+              setOpen(!open);
+              writeAdvancedOpen(!open);
+            }}
+          >
+            <Icon name={open ? "chevronDown" : "chevronRight"} size={14} />
+            Advanced
+          </button>
+          {open ? (
+            <ul className="shell-nav" id="shell-nav-advanced">
+              {advanced.map((e) => (
+                <NavEntry key={e.id} item={e} project={project} current={current} count={e.id === "activity" ? running : undefined} />
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
     </nav>
   );
 }
 
 /**
- * Switcher option text per run id: label, mode, start time, R² and status (the chip's own
- * facts, SPEC §3.1), so a fast and a coarse run of one config differ. Runs that still read
- * the same get their id appended.
+ * Switcher option text per run id: label, mode, start time and status, so a fast and a coarse
+ * run of one config differ. Runs that still read the same get their id appended. Accuracy
+ * numbers are not here: they live on How much to trust this (and Run history's columns).
  */
 export function runOptionLabels(runs: RunSummary[]): Map<string, string> {
   const base = runs.map((r) =>
-    [r.label || r.id, modeLabel(r.mode, r.coarse_m), r.created_utc ? fmtDateTime(r.created_utc) : null, r.r2 !== null ? `R² ${fmtNum(r.r2, 3)}` : null, r.status]
-      .filter((x): x is string => !!x)
-      .join(" · "),
+    [r.label || r.id, modeLabel(r.mode, r.coarse_m), r.created_utc ? fmtDateTime(r.created_utc) : null, r.status].filter((x): x is string => !!x).join(" · "),
   );
   const seen = new Map<string, number>();
   for (const t of base) seen.set(t, (seen.get(t) ?? 0) + 1);
   return new Map(runs.map((r, i) => [r.id, (seen.get(base[i]) ?? 0) > 1 && r.label ? `${base[i]} · ${r.id}` : base[i]]));
 }
 
+/**
+ * What the closed switcher shows for the current run: its name and start time, short enough to
+ * be read whole in the top bar. When another run of the project would read the same, the full
+ * option text (mode, status, id) is used instead, so the chip still tells them apart.
+ */
+export function runChipLabel(run: RunSummary, runs: RunSummary[], optionLabels: Map<string, string>): string {
+  const short = (r: RunSummary) => [r.label || r.id, r.created_utc ? fmtDateTime(r.created_utc) : null].filter((x): x is string => !!x).join(" · ");
+  const mine = short(run);
+  return runs.some((r) => r.id !== run.id && short(r) === mine) ? (optionLabels.get(run.id) ?? mine) : mine;
+}
+
+export type { TrustGrade };
+
+/**
+ * The run's trust grade for the chip's dot, by the same rule as How much to trust this and the
+ * Summary card (../content/trust.ts: held-out R², stepped down when the likely ranges miss their
+ * 90% target), from the cheap accuracy numbers on RunSummary; null when R² is unknown.
+ */
+export function trustGrade(r2: number | null | undefined, coverage?: number | null): TrustGrade | null {
+  return gradeOf({ r2, coverage })?.grade ?? null;
+}
+
+/**
+ * The top bar's run chip: one bordered chip holding DEMO, the run switcher (its closed face reads
+ * "name · start time", runChipLabel; the open list and the tooltip give mode and status too) and,
+ * right next to it, the trust grade as a dot with its word ("Good"), linking to How much to trust
+ * this, so it cannot be read as a connection light. No accuracy numbers (their home is the Trust
+ * tab), and no second copy of the run's name.
+ */
 export function ActiveRunChip({ projectRuns, run, activeRunId }: { projectRuns: RunSummary[]; run: RunSummary | null; activeRunId: string | null }) {
   const current = run ?? projectRuns.find((r) => r.id === activeRunId) ?? null;
   const optionLabels = useMemo(() => runOptionLabels(projectRuns), [projectRuns]);
   if (!current && !projectRuns.length) return null;
+  const grade = current ? trustGrade(current.r2, current.coverage) : null;
+  const switchable = projectRuns.length > 0;
   return (
-    <span className="row hide-narrow" style={{ gap: 6 }}>
-      {current ? (
-        <>
-          <Badge tone="mode">{modeLabel(current.mode, current.coarse_m)}</Badge>
-          {current.demo ? <Badge tone="demo">DEMO</Badge> : null}
-          <span className="cap num" title="Held-out R²">
-            R² {fmtNum(current.r2, 3)}
-          </span>
-          <span className="cap">{fmtDate(current.created_utc)}</span>
-        </>
-      ) : null}
-      {projectRuns.length ? (
-        <select aria-label="Switch run" value={current?.id ?? ""} onChange={(e) => e.target.value && navigate(`/r/${e.target.value}`)} style={{ maxWidth: "14em" }}>
+    <span className="run-chip hide-narrow" data-grade={grade ?? undefined}>
+      {current?.demo ? <Badge tone="demo">DEMO</Badge> : null}
+      {switchable ? (
+        <select
+          aria-label="Switch run"
+          className="run-chip-select"
+          value={current?.id ?? ""}
+          title={current ? (optionLabels.get(current.id) ?? undefined) : undefined}
+          onChange={(e) => e.target.value && navigate(runHref(e.target.value))}
+        >
           {current ? null : <option value="">Open a run…</option>}
           {projectRuns.map((r) => (
             <option key={r.id} value={r.id}>
-              {optionLabels.get(r.id)}
+              {r.id === current?.id ? runChipLabel(r, projectRuns, optionLabels) : optionLabels.get(r.id)}
             </option>
           ))}
         </select>
+      ) : null}
+      {current && grade ? (
+        <Link to={runHref(current.id, "trust")} className="run-chip-trust" data-grade={grade} title={`Trust: ${TRUST_GRADE_LABEL[grade]}. Open How much to trust this`}>
+          <span className="trust-dot" data-grade={grade} aria-hidden="true" />
+          <span className="sr-only">Trust: </span>
+          {TRUST_GRADE_LABEL[grade]}
+        </Link>
       ) : null}
     </span>
   );
@@ -186,7 +293,7 @@ export function ActiveRunChip({ projectRuns, run, activeRunId }: { projectRuns: 
 function Breadcrumb({ project, run, tabTitle: tab, pageTitle }: { project: Project | null; run: RunSummary | null; tabTitle: string | null; pageTitle: string | null }) {
   const items: { label: string; to?: string }[] = [];
   if (project) items.push({ label: project.name, to: `/p/${project.id}` });
-  if (run) items.push({ label: run.label || run.id, to: `/r/${run.id}` });
+  if (run) items.push({ label: run.label || run.id, to: runHref(run.id) });
   if (tab) items.push({ label: tab });
   else if (pageTitle && !(run && pageTitle === "Overview")) items.push({ label: pageTitle });
   return (
@@ -223,10 +330,10 @@ function useBaseCommands(registry: Registry, project: Project | null, runId: str
         const to = n.to(project.id, project);
         if (to && !n.disabledReason?.(project)) cmds.push({ id: `pnav:${n.id}`, label: n.label, group: project.name, run: () => navigate(to) });
       }
-    if (runId) for (const t of registry.runTabs) cmds.push({ id: `tab:${t.id}`, label: t.label, group: "This run", keywords: t.group, run: () => navigate(runTabHref(t, runId)) });
+    if (runId) for (const t of registry.runTabs) cmds.push({ id: `tab:${t.id}`, label: t.label, group: "This run", keywords: t.views.join(" "), run: () => navigate(runTabHref(t, runId)) });
     for (const j of activeJobs(jobs)) cmds.push({ id: `job:${j.id}`, label: j.label || j.kind, group: "Job", hint: j.status, keywords: j.kind, run: () => navigate(`/jobs/${j.id}`) });
     for (const p of projects ?? []) cmds.push({ id: `project:${p.id}`, label: p.name, group: "Project", run: () => navigate(`/p/${p.id}`) });
-    for (const r of runs?.items ?? []) cmds.push({ id: `run:${r.id}`, label: r.label || r.id, group: "Run", hint: `${r.mode} · ${r.status}`, keywords: r.id, run: () => navigate(`/r/${r.id}`) });
+    for (const r of runs?.items ?? []) cmds.push({ id: `run:${r.id}`, label: r.label || r.id, group: "Run", hint: `${r.mode} · ${r.status}`, keywords: r.id, run: () => navigate(runHref(r.id)) });
     return cmds;
   }, [registry, project, runId, jobs, projects, runs, setTheme]);
 }
@@ -288,12 +395,15 @@ export function AppShell({ children, pageTitle, fullWidth }: { children: ReactNo
         <ProjectNav registry={registry} project={project} />
         <nav className="shell-sidebar-bottom" aria-label="Workspace">
           <ul className="shell-nav">
-            <li>
-              <Link to="/jobs" activeMatch="prefix">
-                <Icon name="activity" /> Activity
-                {activeJobs(jobs).length ? <span className="muted num">({activeJobs(jobs).length})</span> : null}
-              </Link>
-            </li>
+            {project ? null : (
+              // With a project open, Activity is in the project nav's Advanced group.
+              <li>
+                <Link to="/jobs" activeMatch="prefix">
+                  <Icon name="activity" /> Activity
+                  {activeJobs(jobs).length ? <span className="muted num">({activeJobs(jobs).length})</span> : null}
+                </Link>
+              </li>
+            )}
             <li>
               <Link to="/settings" activeMatch="prefix">
                 <Icon name="settings" /> Settings

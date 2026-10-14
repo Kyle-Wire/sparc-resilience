@@ -1,7 +1,8 @@
 // Exports & reports (SPEC §6.7, api.md §10): the report preview renders in a sandboxed iframe
 // with no scripts; exports post kind "report" with the selected ids; the bundle sends its
 // output checklist and checkpoint toggle (with a size warning); runs without a CRS cannot build
-// a GIS pack; the history downloads and deletes.
+// a GIS pack; the history downloads and deletes. Reports (phase 2) shows it as its first tab with
+// the run's GIS & data files, and the Findings notebook as "Notes".
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { clearResources } from "../../../api/resource";
 import { ProjectLayout } from "../../../layouts/ProjectLayout";
@@ -9,7 +10,9 @@ import { navigate } from "../../../router";
 import { useJobs } from "../../../stores/jobs";
 import { fmtBytes } from "../../../theme/format";
 import { byText, click, flush, mockFetch, render, waitFor, type MockHandler } from "../../../test/render";
+import { viewFixture } from "../../runhub/__fixtures__/views";
 import Exports, { ExportHistory, ReportBuilder } from "../Exports";
+import Reports from "../Reports";
 import { DEFAULT_SECTIONS, inertPreview, orderedSections, previewBody, reportParams, withSelection, type ReportSelection } from "../model/report";
 import { exportRow, finding, job, output, PID, projectDetail, RID, study } from "../__fixtures__/api";
 
@@ -245,6 +248,50 @@ describe("Exports page", () => {
     await flush(4);
     const pagePost = m.calls.filter((c) => c.method === "POST" && c.url === "/api/exports").find((c) => (c.body as { kind: string }).kind === "page")!;
     expect(pagePost.body).toEqual({ kind: "page", project_id: PID, params: { run_id: RID } });
+    m.restore();
+  });
+});
+
+describe("Reports page", () => {
+  function reportsRoutes(): Record<string, MockHandler> {
+    const planner = viewFixture("planner");
+    planner.sections.pairs = []; // no before/after map in this test
+    return builderRoutes({
+      [`GET /api/projects/${PID}`]: { body: projectDetail() },
+      [`GET /api/runs/${RID}/outputs`]: { body: { outputs: [], tabs: [] } },
+      [`GET /api/runs/${RID}/grid`]: { status: 404, body: { error: { code: "output_missing", message: "The run has no predictions yet" } } },
+      [`GET /api/projects/${PID}/studies`]: { body: [] },
+      [`GET /api/runs/${RID}/views/planner`]: { body: planner },
+      "GET /api/projects": { body: [] },
+    });
+  }
+
+  it("shows one title, the exports tab with the run's GIS & data files, and the notes tab under ?tab=notes", async () => {
+    const m = mockFetch(reportsRoutes());
+    navigate(`/p/${PID}/exports`, { replace: true });
+    const { container } = render(
+      <ProjectLayout pid={PID}>
+        <Reports />
+      </ProjectLayout>,
+    );
+    await waitFor(() => container.querySelector('[aria-label="Run bundle"]'), 4000, "exports panel");
+    expect([...container.querySelectorAll("h1")].map((h) => h.textContent)).toEqual(["Reports"]);
+    expect([...container.querySelectorAll('[role="tab"]')].map((t) => [t.textContent, t.getAttribute("aria-selected")])).toEqual([
+      ["Reports & exports", "true"],
+      ["Notes", "false"],
+    ]);
+    // the planner pack's GIS gallery: per-file downloads, plus every file of the run in Model details
+    const files = container.querySelector('[aria-label="GIS & data files"]')!;
+    expect(byText(files, "a", "All files of this run")!.getAttribute("href")).toBe(`/r/${RID}/details/files`);
+    await waitFor(() => files.querySelector('ul[aria-label="GIS files"]'), 4000, "gis files");
+    const dl = [...files.querySelectorAll<HTMLAnchorElement>("a[download]")].map((a) => a.getAttribute("href"));
+    expect(dl).toContain(`/api/runs/${RID}/files/raw?path=${encodeURIComponent("planner/geotiff/people.tif")}`);
+
+    click(byText(container, '[role="tab"]', "Notes"));
+    await waitFor(() => container.querySelector('[data-panel="notes"]'), 4000, "notes panel");
+    expect(window.location.search).toBe("?tab=notes");
+    expect([...container.querySelectorAll("h1")].map((h) => h.textContent)).toEqual(["Reports"]);
+    expect(container.querySelector('[aria-label="Run bundle"]')).toBeNull();
     m.restore();
   });
 });

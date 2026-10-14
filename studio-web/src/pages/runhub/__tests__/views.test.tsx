@@ -19,12 +19,23 @@ import Heat from "../Heat";
 import Distance from "../Distance";
 import Influence from "../Influence";
 import Overview from "../Overview";
-import Planner from "../Planner";
+import Planner, { PlannerGisGallery, PlannerWhereToAct } from "../Planner";
 import Provenance from "../Provenance";
 import Response from "../Response";
 import Scenarios from "../Scenarios";
 import Uncertainty from "../Uncertainty";
 import { binResponse, LAYER_GROUPS, layerMeta, mapRoutes, runDetail, unframedCharts } from "./helpers";
+
+/** The planner pack's parts together: Who is exposed (the page), Where to act (What cools) and the GIS gallery (Reports). */
+function PlannerPack() {
+  return (
+    <>
+      <Planner />
+      <PlannerWhereToAct />
+      <PlannerGisGallery />
+    </>
+  );
+}
 
 const PAGES: { view: ViewName; tab: string; Page: ComponentType }[] = [
   { view: "overview", tab: "", Page: Overview },
@@ -38,7 +49,7 @@ const PAGES: { view: ViewName; tab: string; Page: ComponentType }[] = [
   { view: "heat", tab: "heat", Page: Heat },
   { view: "causal", tab: "causal", Page: Causal },
   { view: "budget", tab: "budget", Page: Budget },
-  { view: "planner", tab: "planner", Page: Planner },
+  { view: "planner", tab: "planner", Page: PlannerPack },
   { view: "uncertainty", tab: "uncertainty", Page: Uncertainty },
   { view: "provenance", tab: "provenance", Page: Provenance },
 ];
@@ -124,8 +135,9 @@ describe("older-code runs (every section null)", () => {
         // No view drops a section silently: one placeholder per section key at least, except
         // keys that are flags or parts of another section (live, has_detail, caption, status,
         // thresholds), the planner's field-kit lists (shown together on one map) and the
-        // optional DAG audit (off unless configured, so null is not "older code").
-        const folded = new Set(["live", "has_detail", "caption", "status", "thresholds", "hex_files", "sites", "pairs", "dag_audit"]);
+        // optional DAG audit (off unless configured, so null is not "older code"). The accuracy
+        // view's forcing card is shown on Data & checks (input QA), not on Accuracy.
+        const folded = new Set(["live", "has_detail", "caption", "status", "thresholds", "hex_files", "sites", "pairs", "dag_audit", ...(p.view === "accuracy" ? ["forcing"] : [])]);
         const shown = sectionKeys(p.view).filter((k) => !folded.has(k));
         expect(marks.length).toBeGreaterThanOrEqual(shown.length);
       } finally {
@@ -138,7 +150,7 @@ describe("older-code runs (every section null)", () => {
 describe("view behaviour", () => {
   afterEach(() => clearResources());
 
-  it("Heat shows the brief, the exposure chart and verdicts, and re-asks the server for a what-if dewpoint", async () => {
+  it("Heat › Today shows the brief and today's residents by category, not the futures or verdicts, and re-asks the server for a what-if dewpoint", async () => {
     const page = PAGES.find((p) => p.view === "heat")!;
     const rid = `r_view${seq + 1}`;
     const humid = viewFixture("heat");
@@ -148,15 +160,20 @@ describe("view behaviour", () => {
     const r = await renderView(page, viewFixture("heat"), { [`GET /api/runs/${rid}/views/heat?dewpoint_C=21`]: { body: humid } });
     try {
       const text = r.container.textContent ?? "";
-      expect(r.container.querySelector('[aria-label="Heat brief"]')!.textContent).toContain("Extreme caution or worse");
+      const brief = r.container.querySelector('[aria-label="Heat brief"]')!.textContent ?? "";
+      expect(brief).toContain("Extreme caution or worse");
+      // the futures live under Future climate, the verdicts on How much to trust this
+      expect(brief).not.toContain("As the climate warms");
+      expect(brief).not.toContain("How sure");
+      expect(r.container.querySelector('[aria-label="Heat key numbers"]')!.textContent).not.toContain("SSP");
       expect(text).toContain("Residents by heat-risk category");
-      expect(text).toContain("Robust");
-      expect(text).toContain("Not established");
-      expect(r.container.querySelector('[aria-label="Exposure in each climate future"]')).not.toBeNull();
+      expect(text).not.toContain("Not established");
+      expect(r.container.querySelector('[aria-label="Exposure in each climate future"]')).toBeNull();
       click(byText(r.container, "button", "Humid (21 °C)"));
       await waitFor(() => r.calls.some((c) => c.url.endsWith("/views/heat?dewpoint_C=21")), 3000, "what-if request");
       await waitFor(() => r.container.textContent?.includes("your setting"), 3000, "what-if view");
-      // a what-if dewpoint hides the campaign-dewpoint map
+      // the what-if dewpoint is page state, so Future climate uses it too
+      expect(new URLSearchParams(window.location.search).get("dewpoint")).toBe("21");
       expect(r.container.querySelector('[aria-label="Heat brief"]')).not.toBeNull();
     } finally {
       r.restore();
@@ -213,6 +230,41 @@ describe("view behaviour", () => {
       expect(b.container.querySelector('[data-live="true"]')).toBeNull();
     } finally {
       b.restore();
+    }
+  });
+
+  it("Data & checks holds the input QA: the forcing card beside the QA flags, the cell size in the grid-fill tile, the histogram full width without zones", async () => {
+    const page = PAGES.find((p) => p.view === "data")!;
+    const data = viewFixture("data");
+    data.sections.qa_tiles = [...(data.sections.qa_tiles ?? []), { id: "cell_m", label: "Cell size", value: 30, unit: "m", decimals: 1 } as NonNullable<typeof data.sections.qa_tiles>[number]];
+    data.sections.zone_counts = [];
+    const rid = `r_view${seq + 1}`;
+    const r = await renderView(page, data, { [`GET /api/runs/${rid}/views/accuracy`]: { body: viewFixture("accuracy") } });
+    try {
+      const forcing = await waitFor(() => r.container.querySelector('[data-forcing] [aria-label="Forcing"]'), 5000, "the forcing card");
+      expect(forcing.closest("[data-forcing]")!.textContent).toContain("QA flags");
+      const tiles = [...r.container.querySelectorAll('[aria-label="Data QA"] .kpi')];
+      expect(tiles.map((t) => t.querySelector(".label")!.textContent)).not.toContain("Cell size");
+      const fill = tiles.find((t) => t.querySelector(".label")!.textContent === "Grid fill")!;
+      expect(fill.querySelector(".note")!.textContent).toBe("of 30 m cells");
+      // 7 tiles in a row of at most 4: no lone tile on the last line
+      expect(r.container.querySelector('[aria-label="Data QA"]')!.getAttribute("data-cols")).toBe("4");
+      const noZones = r.container.querySelector("[data-no-zones]")!;
+      expect(noZones.querySelector('figure[data-chart="Fractional part of the target"]')).not.toBeNull();
+      expect(noZones.querySelector(":scope > p.cap")!.textContent).toBe("This run has no zone column.");
+      expect(r.container.querySelector(".grid2 figure[data-chart=\"Fractional part of the target\"]")).toBeNull();
+    } finally {
+      r.restore();
+    }
+  });
+
+  it("Accuracy leaves the forcing card to Data & checks", async () => {
+    const r = await renderView(PAGES.find((p) => p.view === "accuracy")!, viewFixture("accuracy"));
+    try {
+      expect(r.container.querySelector('[aria-label="Forcing"]')).toBeNull();
+      expect(r.container.querySelector('[aria-label="CV design"]')).not.toBeNull();
+    } finally {
+      r.restore();
     }
   });
 
@@ -308,6 +360,36 @@ describe("view behaviour", () => {
     }
   });
 
+  it("views leave the run-wide caveats to the Summary (only the full Overview lists them)", async () => {
+    for (const view of ["response", "climate", "distance"] as const) {
+      const vm = viewFixture(view);
+      vm.caveats = ["Generic physics forcing: the run did not use the campaign day's radiation and wind."];
+      const r = await renderView(PAGES.find((p) => p.view === view)!, vm);
+      try {
+        expect(r.container.textContent, view).not.toContain("Generic physics forcing");
+        expect(r.container.textContent, view).not.toMatch(/caveats? for this/);
+      } finally {
+        r.restore();
+        r.unmount();
+        clearResources();
+      }
+    }
+  });
+
+  it("Budget's worded key numbers (constraint, objective) read as one caption line below the number tiles", async () => {
+    const r = await renderView(PAGES.find((p) => p.view === "budget")!, viewFixture("budget"));
+    try {
+      const tiles = r.container.querySelector('[aria-label="Budget"]')!;
+      const labels = [...tiles.querySelectorAll(".kpi .label")].map((l) => l.textContent);
+      expect(labels).toEqual(["Cells treated", "Mean dose", "Planned cooling", "Realised cooling", "Cost", "Gini"]);
+      expect(r.container.querySelector("[data-kpi-text]")!.textContent).toBe(
+        "Constraint: plantable space (WorldCover open land + 20% of built-up area) · Objective: total cooling",
+      );
+    } finally {
+      r.restore();
+    }
+  });
+
   it("Budget explains core's 'no positive-benefit segments' instead of reporting it missing", async () => {
     const vm = viewFixture("budget");
     vm.sections.status = "no positive-benefit segments";
@@ -345,6 +427,36 @@ describe("view behaviour", () => {
       expect(note.textContent).toContain("Skill vs block size");
       expect(note.textContent).toContain("disabled in the config (cv.distance_curve.enabled)");
       expect(note.querySelector("button")!.textContent).toBe("Re-run with the CV curve");
+    } finally {
+      r.restore();
+    }
+  });
+
+  it("Distance under Model details leaves the skipped-curve notice (and its re-run) and the baseline verdict to Trust, one line each", async () => {
+    const rid = `r_view${seq + 1}`;
+    const vm = viewFixture("distance");
+    vm.sections.curve = null;
+    const detail = runDetail(rid);
+    detail.stages = [
+      { id: "baselines", state: "done", seconds: 2, source: "manifest", reason: null },
+      { id: "cv_curve", state: "skipped", seconds: null, source: "manifest", reason: "disabled_by_config:cv.distance_curve.enabled" },
+    ];
+    const overview = viewFixture("overview");
+    overview.sections.outputs_grid = [
+      { id: "cv_distance", label: "Skill vs distance", group: "trust", state: "missing", produced_by: "stage:cv_curve", view: "distance", action: { kind: "open", label: "Re-run with the CV curve", method: "GET", path: `/p/p_1/launch?from=${rid}` } },
+    ];
+    const r = await renderView({ view: "distance", tab: "details/reach", Page: () => <Distance detailsOnly /> }, vm, {
+      [`GET /api/runs/${rid}`]: { body: detail },
+      [`GET /api/runs/${rid}/views/overview`]: { body: overview },
+    });
+    try {
+      await waitFor(() => r.container.querySelector('[data-on-trust="distance"]'), 3000, "the line to Trust");
+      expect(r.container.querySelector('[data-on-trust="distance"] a')!.getAttribute("href")).toBe(`/r/${rid}/trust#distance`);
+      expect(r.container.querySelector('[data-on-trust="validation"] a')!.getAttribute("href")).toBe(`/r/${rid}/trust#validation`);
+      expect(r.container.textContent).not.toContain("Re-run with the CV curve");
+      expect(r.container.textContent).not.toContain("cv.distance_curve.enabled");
+      expect(r.container.textContent).not.toContain("stack not distinguishable");
+      expect(r.container.querySelectorAll("[data-absent], [data-older-code]").length).toBe(0);
     } finally {
       r.restore();
     }
@@ -406,15 +518,16 @@ describe("view behaviour", () => {
     }
   });
 
-  it("a missing view shows the server's action as a button", async () => {
+  it("a missing view shows one plain sentence and the server's action as a button, never the list of output keys", async () => {
     const vm = olderCodeFixture("planner");
     vm.availability = "missing";
-    vm.missing = [
-      { output: "planner", produced_by: "post:planner", action: { kind: "run_job", label: "Run planner pack", method: "POST", path: "/api/runs/x/actions/planner", body: {} } },
-    ];
+    const planner = { kind: "run_job" as const, label: "Run planner pack", method: "POST" as const, path: "/api/runs/x/actions/planner", body: {} };
+    vm.missing = ["planner", "planner_cells", "planner_hex:250", "logger_sites"].map((output) => ({ output, produced_by: "post:planner", action: planner }));
     const r = await renderView(PAGES.find((p) => p.view === "planner")!, vm);
     try {
-      expect(r.container.textContent).toContain("produced by the planner post-run action");
+      expect(r.container.textContent).toContain("Run the planner pack to see where to act, who is exposed, and the GIS files.");
+      expect(r.container.textContent).not.toContain("produced by");
+      expect(r.container.textContent).not.toContain("planner_cells");
       expect([...r.container.querySelectorAll("button")].some((b) => b.textContent === "Run planner pack")).toBe(true);
     } finally {
       r.restore();

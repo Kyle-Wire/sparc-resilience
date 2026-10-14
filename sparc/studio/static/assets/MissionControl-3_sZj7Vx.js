@@ -1,1 +1,0 @@
-import{p as e,x as t}from"./router-CwmTXie6.js";import{t as n}from"./JobTracker-DGte-n37.js";var r=t();function i(){let{params:t}=e();return t.jid?(0,r.jsx)(n,{jid:t.jid},t.jid):null}export{i as default};

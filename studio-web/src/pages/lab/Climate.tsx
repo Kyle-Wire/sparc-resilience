@@ -1,9 +1,14 @@
-// Climate × adaptation (`/r/:rid/lab/climate`, SPEC §7.11): pick adaptations (exact results and
-// configured scenarios), free thresholds, the warming statistic (median / p10 / p90 / one
-// model) and the SSP × period filters. Charts: warming dot-range with the per-model strip,
-// exposure bars (p10–p90 across models), offset gauges. Maps of future temperature and of
-// ≥ T exceedance are computed in the browser (observed + warming statistic + adaptation ΔT).
-import { useCallback, useEffect, useMemo, useState } from "react";
+// Climate × adaptation (SPEC §7.11): pick adaptations (exact results and configured scenarios),
+// free thresholds, the warming statistic (median / p10 / p90 / one model) and the SSP × period
+// filters. Charts: warming dot-range with the per-model strip, exposure bars (p10–p90 across
+// models), offset gauges. Maps of future temperature and of ≥ T exceedance are computed in the
+// browser (observed + warming statistic + adaptation ΔT).
+// Phase 2: the tool lives under Heat risk › Future climate as "Can adaptation keep up?"
+// (`ClimateAdaptation embedded`), below the run's own warming chart and future-temperature map,
+// so the embedded form leaves those out (each climate number once) and shows the scenario ×
+// projection matrix once at least one adaptation is picked. The default export is the complete
+// tool in the Lab's frame (the old `/r/:rid/lab/climate` URL redirects to Heat risk › Future).
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { errorMessage } from "../../api/client";
 import { exploreClimate, getResultLayer, useClimateFactors, useRunScenarios, useScenarios, type ClimateExplore, type ItemRef, type PeopleExposureRow, type WarmingRow } from "../../api/lab";
 import type { LayerGroup, LayerMeta } from "../../api/types";
@@ -34,6 +39,7 @@ function ClimateMaps({
   threshold,
   stat,
   unit,
+  embedded = false,
 }: {
   rid: string;
   warming: WarmingRow[];
@@ -41,11 +47,16 @@ function ClimateMaps({
   threshold: number | null;
   stat: ReturnType<typeof decodeStatistic>;
   unit: string;
+  /** Adapted futures only (the unadapted future map and the warming figures are shown above it). */
+  embedded?: boolean;
 }) {
   const grid = useRunGrid(rid);
   const layers = useRunLayers(rid);
   const [proj, setProj] = useState(0);
-  const [adapt, setAdapt] = useState<string>("");
+  const [chosen, setAdapt] = useState<string>("");
+  // Embedded, the map always shows one of the picked adaptations (no "No adaptation" choice).
+  const keys = adaptations.map((a) => encodeItemRef(a.ref));
+  const adapt = !embedded || keys.includes(chosen) ? chosen : keys[0] ?? "";
   const [obs, setObs] = useState<Float32Array | null>(null);
   const [delta, setDelta] = useState<{ key: string; values: Float32Array | null }>({ key: "", values: null });
   const load = useMemo(() => (grid.data ? runLayerLoader(rid, grid.data.meta.etag) : null), [rid, grid.data]);
@@ -108,7 +119,7 @@ function ClimateMaps({
           ))}
         </select>
         <select aria-label="Adaptation for the map" value={adapt} onChange={(e) => setAdapt(e.target.value)}>
-          <option value="">No adaptation</option>
+          {embedded ? null : <option value="">No adaptation</option>}
           {adaptations.map((a) => (
             <option key={encodeItemRef(a.ref)} value={encodeItemRef(a.ref)}>
               {a.label}
@@ -116,7 +127,11 @@ function ClimateMaps({
           ))}
         </select>
         <span className="cap">
-          Warming {w !== null ? fmtSignedValue(w, unit, 2) : "—"} ({statisticLabel(stat)}){share !== null ? ` · ${fmtPct(share)} of cells at or above ${fmtNum(threshold, 1)} ${unitLabel(unit)}` : ""}
+          {embedded
+            ? share !== null
+              ? `${fmtPct(share)} of cells at or above ${fmtNum(threshold, 1)} ${unitLabel(unit)} (${statisticLabel(stat)} warming)`
+              : null
+            : `Warming ${w !== null ? fmtSignedValue(w, unit, 2) : "—"} (${statisticLabel(stat)})${share !== null ? ` · ${fmtPct(share)} of cells at or above ${fmtNum(threshold, 1)} ${unitLabel(unit)}` : ""}`}
         </span>
       </div>
       {future ? <MapView grid={grid.data} groups={groups} loadLayer={loader} height={460} title="Future temperature" /> : <p className="cap">Loading observed temperatures…</p>}
@@ -124,9 +139,13 @@ function ClimateMaps({
   );
 }
 
-export default function Climate() {
-  const { params } = useRoute();
-  const rid = params.rid ?? "";
+/**
+ * Climate × adaptation for run `rid`. `embedded` (Heat risk › Future climate, "Can adaptation
+ * keep up?"): no Lab frame, no warming chart (the page's Warming chart is the one), and the
+ * exposure matrix, offset gauges, residents table and adapted-future map appear once an
+ * adaptation is picked (nothing is asked of the server before that).
+ */
+export function ClimateAdaptation({ rid, embedded = false }: { rid: string; embedded?: boolean }) {
   const detail = useRunDetail(rid);
   const ctxPid = useUi((s) => s.context.projectId);
   const pid = detail.data?.run.project_id ?? ctxPid;
@@ -153,6 +172,22 @@ export default function Climate() {
     return opts;
   }, [runSc.data, names]);
   const adaptations = useMemo(() => adaptRaw.map(decodeItemRef).filter((r): r is ItemRef => r !== null), [adaptRaw]);
+  // Toggle one adaptation chip; entries that are not item refs (an old `?adapt=1`) are dropped.
+  const toggleAdapt = (k: string) => {
+    const cur = adaptRaw.filter((x) => decodeItemRef(x) !== null);
+    setAdaptRaw(cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k]);
+  };
+  const picked = !embedded || adaptations.length > 0;
+  const frame = (children: ReactNode) =>
+    embedded ? (
+      <div className="stack" data-climate-adaptation="embedded">
+        {children}
+      </div>
+    ) : (
+      <LabFrame rid={rid} title="Climate × adaptation">
+        {children}
+      </LabFrame>
+    );
   const thresholds = useMemo(() => parseNumberList(tText).values, [tText]);
 
   const explore = useMemo(
@@ -168,7 +203,7 @@ export default function Climate() {
   );
   const bodyKey = JSON.stringify([adaptRaw, statRaw, thresholds, exps, pers]);
   useEffect(() => {
-    if (!factors.data?.present) return;
+    if (!factors.data?.present || !picked) return;
     explore({
       adaptations,
       ...(thresholds.length ? { thresholds } : {}),
@@ -178,17 +213,13 @@ export default function Climate() {
     });
     return () => explore.cancel();
     // bodyKey stands for the request body
-  }, [bodyKey, factors.data?.present, explore]);
+  }, [bodyKey, factors.data?.present, picked, explore]);
 
   if (factors.error && !factors.data) return <EmptyState error={factors.error} />;
   if (!factors.data || !grid.data) return <p className="cap">Loading…</p>;
   const f = factors.data;
   if (!f.present) {
-    return (
-      <LabFrame rid={rid} title="Climate × adaptation">
-        <EmptyState title="No climate change factors yet" body="Fetch CMIP6 change factors for this city to see future warming and how much each adaptation offsets." action={f.action} />
-      </LabFrame>
-    );
+    return frame(<EmptyState title="No climate change factors yet" body="Fetch CMIP6 change factors for this city to see future warming and how much each adaptation offsets." action={f.action} />);
   }
   const warming = f.warming.filter((w) => (!exps.length || exps.includes(w.experiment)) && (!pers.length || pers.includes(w.period)));
   const data = out.data;
@@ -200,8 +231,8 @@ export default function Climate() {
   const present = presentToday(data);
   const gaugeProj = projections.find((p) => /245/.test(p.experiment) && /2041/.test(p.period)) ?? projections[0];
 
-  return (
-    <LabFrame rid={rid} title="Climate × adaptation">
+  return frame(
+    <>
       <div className="lab-form">
         <div className="field">
           <span className="field-label">Statistic across models</span>
@@ -258,7 +289,7 @@ export default function Climate() {
           {options.map((o) => {
             const k = encodeItemRef(o.ref);
             return (
-              <button key={k} type="button" className="chip" aria-pressed={adaptRaw.includes(k)} onClick={() => setAdaptRaw(adaptRaw.includes(k) ? adaptRaw.filter((x) => x !== k) : [...adaptRaw, k])}>
+              <button key={k} type="button" className="chip" aria-pressed={adaptRaw.includes(k)} onClick={() => toggleAdapt(k)}>
                 {o.label}
               </button>
             );
@@ -266,27 +297,31 @@ export default function Climate() {
           {!options.length ? <span className="cap">No exact results or configured scenarios on this run yet.</span> : null}
         </div>
       </div>
-      {out.error ? <p className="callout" data-tone="crit">{out.error}</p> : null}
-      <DotRange
-        title="Warming by scenario and period"
-        units={`${u} above the baseline`}
-        rows={warming.map((w) => ({
-          id: `${w.experiment}-${w.period}`,
-          label: projLabel(w),
-          est: warmingValue(w, stat),
-          lo: w.p10,
-          hi: w.p90,
-          lo2: w.min,
-          hi2: w.max,
-          strip: Object.values(w.by_model).filter((v) => Number.isFinite(v)),
-        }))}
-        valueLabel="Warming"
-        unit={u}
-        rangeLabel="10th–90th percentile of models"
-        outerLabel="model range"
-        caption={`Dots: ${statisticLabel(stat)}; grey points: individual models.`}
-      />
-      {data && t !== null ? (
+      {out.error && picked ? <p className="callout" data-tone="crit">{out.error}</p> : null}
+      {embedded ? null : (
+        <DotRange
+          title="Warming by scenario and period"
+          units={`${u} above the baseline`}
+          rows={warming.map((w) => ({
+            id: `${w.experiment}-${w.period}`,
+            label: projLabel(w),
+            est: warmingValue(w, stat),
+            lo: w.p10,
+            hi: w.p90,
+            lo2: w.min,
+            hi2: w.max,
+            strip: Object.values(w.by_model).filter((v) => Number.isFinite(v)),
+          }))}
+          valueLabel="Warming"
+          unit={u}
+          rangeLabel="10th–90th percentile of models"
+          outerLabel="model range"
+          caption={`Dots: ${statisticLabel(stat)}; grey points: individual models.`}
+        />
+      )}
+      {!picked ? (
+        <p className="cap">Pick one or more adaptations above to see, for each climate projection, how much of the warming they offset and how many cells and residents stay at or above each threshold.</p>
+      ) : data && t !== null ? (
         <>
           <div className="row">
             <span className="cap">Threshold</span>
@@ -357,7 +392,23 @@ export default function Climate() {
       ) : out.loading ? (
         <p className="cap">Computing exposure…</p>
       ) : null}
-      <ClimateMaps rid={rid} warming={warming} adaptations={options.filter((o) => adaptRaw.includes(encodeItemRef(o.ref)))} threshold={t} stat={stat} unit={unit} />
-    </LabFrame>
+      {picked ? (
+        <ClimateMaps
+          rid={rid}
+          warming={warming}
+          adaptations={options.filter((o) => adaptRaw.includes(encodeItemRef(o.ref)))}
+          threshold={t}
+          stat={stat}
+          unit={unit}
+          embedded={embedded}
+        />
+      ) : null}
+    </>,
   );
+}
+
+/** The Climate × adaptation tool in the Lab's frame (the complete page, for run `:rid`). */
+export default function Climate() {
+  const { params } = useRoute();
+  return <ClimateAdaptation rid={params.rid ?? ""} />;
 }

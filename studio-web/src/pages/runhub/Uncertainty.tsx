@@ -1,6 +1,8 @@
 // Uncertainty (SPEC §6.4): layered intervals per scenario (estimation, specification,
 // attribution, causal band, envelope) around the estimate with a zero line and "excludes 0"
-// badges, the climate spread table, and the evidence sources with attach/detach.
+// badges, the climate spread table, and the evidence sources with attach/detach. The complete
+// page is Model details › Uncertainty; How much to trust this reuses `envelopeCaption` and
+// `ScenarioRanges` (the one place outside the Lab with each scenario's verdict pill).
 import { useState } from "react";
 import { api, errorMessage } from "../../api/client";
 import { invalidate } from "../../api/resource";
@@ -10,14 +12,69 @@ import { IntervalStack } from "../../charts";
 import { excludesZero } from "../../charts/IntervalStack";
 import { Button } from "../../components/ui/Button";
 import { StatusChip } from "../../components/ui/StatusChip";
-import { Link } from "../../router";
+import { Link, runHref } from "../../router";
 import { useJobs } from "../../stores/jobs";
 import { toast } from "../../stores/ui";
-import { unitLabel } from "../../theme/format";
-import { Block, GenericTableView, Section, VerdictPill, ViewPage, useRid } from "./common";
+import { EMPTY, fmtSignedValue, fmtTempChange, unitLabel } from "../../theme/format";
+import { Block, GenericTableView, Section, VerdictPill, ViewPage, useRid, type DetailPageProps } from "./common";
+import { isTempUnit, rangeWords } from "./format";
 
 type Source = NonNullable<UncertaintySections["sources"]>[number];
 type Row = NonNullable<UncertaintySections["rows"]>[number];
+
+const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+
+/** A scenario's widest (envelope) interval, null when the report has none for it. */
+export function envelopeOf(r: Pick<Row, "layers">): Row["layers"][number] | null {
+  return r.layers.find((l) => /envelope/i.test(l.id)) ?? null;
+}
+
+/** The widest interval a scenario has: its envelope, else the widest layer with both bounds. */
+export function widestOf(r: Pick<Row, "layers">): { lo: number; hi: number } | null {
+  const e = envelopeOf(r);
+  if (e && isNum(e.lo) && isNum(e.hi)) return { lo: e.lo, hi: e.hi };
+  let best: { lo: number; hi: number } | null = null;
+  for (const l of r.layers) if (isNum(l.lo) && isNum(l.hi) && (!best || l.hi - l.lo > best.hi - best.lo)) best = { lo: l.lo, hi: l.hi };
+  return best;
+}
+
+/**
+ * Each scenario's change with its widest range and its verdict pill (Robust / Direction only /
+ * Not established), one row per scenario. The layer-by-layer chart is the full page's.
+ */
+export function ScenarioRanges({ rows, unit, caption = "How wide each scenario's range is" }: { rows: readonly Row[]; unit: string; caption?: string }) {
+  if (!rows.length) return <p className="cap">No scenarios in the uncertainty report.</p>;
+  const verdicts = rows.some((r) => r.verdict);
+  return (
+    <table className="tbl" aria-label={caption} data-scenario-ranges="true">
+      <thead>
+        <tr>
+          <th scope="col">Scenario</th>
+          <th scope="col">Change, city average</th>
+          <th scope="col">Widest range</th>
+          {verdicts ? <th scope="col">What the evidence supports</th> : null}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => {
+          const w = widestOf(r);
+          return (
+            <tr key={r.id} data-scenario={r.id}>
+              <td>{r.label}</td>
+              <td className="num">{isNum(r.estimate) ? (isTempUnit(unit) ? fmtTempChange(r.estimate, unit, 2) : fmtSignedValue(r.estimate, unit, 2)) : EMPTY}</td>
+              <td className="num">{w ? rangeWords(w.lo, w.hi, unit, 2) : EMPTY}</td>
+              {verdicts ? (
+                <td>
+                  <VerdictPill verdict={r.verdict} />
+                </td>
+              ) : null}
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
 
 /**
  * Caption of the layered intervals: which scenarios keep their sign under the widest
@@ -25,7 +82,7 @@ type Row = NonNullable<UncertaintySections["rows"]>[number];
  * one entirely above zero still warms; every other scenario could be zero.
  */
 export function envelopeCaption(rows: Row[]): string {
-  const envelope = (r: Row) => r.layers.find((l) => /envelope/i.test(l.id)) ?? null;
+  const envelope = envelopeOf;
   const withEnv = rows.filter((r) => envelope(r) !== null);
   if (!withEnv.length) return `${rows.length} scenario${rows.length === 1 ? "" : "s"}; no envelope interval yet (attach studies below to widen the evidence).`;
   const cools = withEnv.filter((r) => {
@@ -76,7 +133,7 @@ function SourceRow({ rid, s }: { rid: string; s: Source }) {
           {s.attached ? "Detach" : "Attach"}
         </Button>
       ) : !s.attached ? (
-        <Link to={`/r/${encodeURIComponent(rid)}/validation`} className="btn small">
+        <Link to={`${runHref(rid, "trust")}#validation`} className="btn small">
           Run study
         </Link>
       ) : null}
@@ -84,13 +141,16 @@ function SourceRow({ rid, s }: { rid: string; s: Source }) {
   );
 }
 
-export default function Uncertainty() {
+export default function Uncertainty({
+  title = "Uncertainty",
+  intro = "Each scenario's estimate inside nested intervals: estimation (folds), specification (multiverse), attribution (simulation check), the causal band and their envelope.",
+}: DetailPageProps = {}) {
   const rid = useRid();
   return (
     <ViewPage
       view="uncertainty"
-      title="Uncertainty"
-      intro="Each scenario's estimate inside nested intervals: estimation (folds), specification (multiverse), attribution (simulation check), the causal band and their envelope."
+      title={title}
+      intro={intro}
     >
       {(s, vm) => {
         const u = unitLabel(vm.units.target);

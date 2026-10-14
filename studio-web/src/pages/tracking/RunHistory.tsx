@@ -1,7 +1,8 @@
 // `/runs` and `/p/:pid/runs` — run history (SPEC §3.2, §5.12): status, label, mode, started,
 // duration, R², RMSE, coverage, scenarios, checkpoint size, studies, commit (dirty flag) and
 // origin; filters with saved filter sets; select two runs → Compare; and the stage-duration
-// history chart grouped by commit (GET /api/timings) to spot performance regressions.
+// history chart grouped by commit (GET /api/timings) to spot performance regressions; on a
+// project's Runs page, the Pipeline Status Board (every run × every stage) below them.
 import { useEffect, useMemo, useState } from "react";
 import { errorMessage } from "../../api/client";
 import { useResource } from "../../api/resource";
@@ -19,6 +20,7 @@ import { codecs, Link, setQuery, useRoute, useUrlState } from "../../router";
 import { readLocal, toast, writeLocal } from "../../stores/ui";
 import { fmtBytes, fmtDate, fmtDuration, fmtNum, fmtPct } from "../../theme/format";
 import { STAGE_IDS } from "../../stores/tracker";
+import { StatusBoard } from "./StatusBoard";
 import "./tracking.css";
 
 type SavedFilter = { name: string; query: Record<string, string> };
@@ -266,6 +268,11 @@ export default function RunHistory() {
       <Card title="Stage-duration history" eyebrow="performance across runs">
         <StageHistory pid={pid} />
       </Card>
+      {pid ? (
+        <Card title="Pipeline Status Board" eyebrow="every run × every stage, post-run action and study">
+          <StatusBoard pid={pid} />
+        </Card>
+      ) : null}
     </div>
   );
 }

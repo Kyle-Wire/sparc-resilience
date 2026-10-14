@@ -1,4 +1,7 @@
 // Budget plans (`/r/:rid/lab/plans`, `/r/:rid/lab/plans/:plid`; SPEC §7.10, §2 J7).
+// - The first entry, "Plan from this run" (read-only; phase 2, the canonical home of the run's own
+//   S7 budget plan, formerly the Budget run tab): ../runhub/Budget's sections (key numbers,
+//   Pareto, dose and closed-loop maps, top cells). New plans start from the form under it.
 // - The params form (lever, budget on a log slider, scalar or column cost, plantable/region cap,
 //   minimum dose, objective, equity source and focus, Pareto multipliers) previews the planned
 //   allocation inline (< 1 s), at most once per 150 ms while the slider moves.
@@ -50,6 +53,7 @@ import { Link, navigate, useRoute } from "../../router";
 import { useJobs } from "../../stores/jobs";
 import { toast, useUi } from "../../stores/ui";
 import { fmtDateTime, fmtInt, fmtNum, fmtPct, unitLabel } from "../../theme/format";
+import { RunBudgetPlan } from "../runhub/Budget";
 import { ConfirmDialog } from "./components/Dialogs";
 import { LabFrame, labHref } from "./components/LabFrame";
 import { columnOptions } from "./components/SelectionBuilder";
@@ -207,7 +211,10 @@ export function PlanForm({ rid, grid, levers, onSaved }: { rid: string; grid: Gr
           {"column" in params.cost ? (
             <input list="plan-columns" aria-label="Cost column" placeholder="layer:… or csv:<path>:<column>" value={params.cost.column} onChange={(e) => set({ cost: { column: e.target.value } })} />
           ) : (
-            <NumberField label="Cost per unit" value={params.cost.scalar} min={0} onChange={(v) => set({ cost: { scalar: v ?? 1 } })} />
+            <label className="field">
+              <span className="field-label">Cost per unit</span>
+              <NumberField label="Cost per unit" value={params.cost.scalar} min={0} onChange={(v) => set({ cost: { scalar: v ?? 1 } })} />
+            </label>
           )}
         </div>
         <fieldset className="stack" style={{ gap: 4, border: 0, padding: 0 }}>
@@ -217,7 +224,20 @@ export function PlanForm({ rid, grid, levers, onSaved }: { rid: string; grid: Gr
             Plantable headroom{lever?.role === "canopy" && lever.headroom_available ? "" : " (canopy with planner layers only)"}
           </label>
           {params.cap.plantable ? (
-            <NumberField label="Paved share" value={params.cap.paved_share ?? null} min={0} max={1} step={0.05} nullable placeholder="config default" onChange={(v) => set({ cap: { ...params.cap, paved_share: v ?? undefined } })} />
+            <label className="field">
+              <span className="field-label">Paved share</span>
+              <NumberField
+                label="Paved share"
+                value={params.cap.paved_share ?? null}
+                min={0}
+                max={1}
+                step={0.05}
+                nullable
+                placeholder="config default"
+                style={{ width: "11em" }}
+                onChange={(v) => set({ cap: { ...params.cap, paved_share: v ?? undefined } })}
+              />
+            </label>
           ) : null}
           <select
             aria-label="Region cap"
@@ -232,7 +252,10 @@ export function PlanForm({ rid, grid, levers, onSaved }: { rid: string; grid: Gr
             ))}
           </select>
         </fieldset>
-        <NumberField label="Minimum dose per treated cell" unit={lever?.unit} value={params.min_dose ?? null} min={0} nullable placeholder="none" onChange={(v) => set({ min_dose: v ?? undefined })} />
+        <label className="field">
+          <span className="field-label">Minimum dose per treated cell</span>
+          <NumberField label="Minimum dose per treated cell" unit={lever?.unit} value={params.min_dose ?? null} min={0} nullable placeholder="none" onChange={(v) => set({ min_dose: v ?? undefined })} />
+        </label>
         <div className="field">
           <span className="field-label">Objective</span>
           <Seg<"cooling" | "people">
@@ -598,11 +621,27 @@ export default function Plans() {
       {plid ? (
         <PlanDetail rid={rid} plid={plid} grid={grid.data} pid={pid} />
       ) : (
-        <>
-          <PlanForm rid={rid} grid={grid.data} levers={levers.data} onSaved={(p) => navigate(labHref(rid, `plans/${encodeURIComponent(p.id)}`))} />
-          <h3>Saved plans</h3>
-          <PlanList rid={rid} />
-        </>
+        <div className="stack composer" data-composer="plans">
+          <section className="composer-section" data-plan="run">
+            <RunBudgetPlan
+              title="Plan from this run"
+              intro="The run's own budget allocation (S7): where a fixed amount of the lever buys the most cooling. Read-only: make a new plan below to change it."
+              actions={<Badge>read-only</Badge>}
+            />
+          </section>
+          <section className="composer-section stack" aria-labelledby="plans-new">
+            <h2 id="plans-new" className="composer-heading">
+              New plan
+            </h2>
+            <PlanForm rid={rid} grid={grid.data} levers={levers.data} onSaved={(p) => navigate(labHref(rid, `plans/${encodeURIComponent(p.id)}`))} />
+          </section>
+          <section className="composer-section stack" aria-labelledby="plans-saved">
+            <h2 id="plans-saved" className="composer-heading">
+              Saved plans
+            </h2>
+            <PlanList rid={rid} />
+          </section>
+        </div>
       )}
     </LabFrame>
   );

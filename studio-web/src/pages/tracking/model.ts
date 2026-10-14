@@ -5,6 +5,7 @@
 import type { ArtifactRow, LogLine, StatusBoard, StatusCell } from "../../api/tracking";
 import type { Job, PlanNode, RunTabId, StageId } from "../../api/types";
 import type { GanttRow } from "../../charts";
+import { VIEW_HREF } from "../../router";
 import { STAGE_IDS, stageOf, type SpanRow, type TrackerState } from "../../stores/tracker";
 
 // ---------------------------------------------------------------- stages
@@ -140,7 +141,7 @@ const CHECKLIST: readonly string[] = ["S0", "S1", "S2_S3", "S4", "S5", "S6", "S7
  * and `cv` query parameters), or a study's Validation tab. Null for other kinds.
  */
 export function duplicateHref(job: Pick<Job, "kind" | "project_id" | "run_id">, run: { mode: string; coarse_m: number | null } | null, s: TrackerState): string | null {
-  if (job.kind.startsWith("study.") && job.run_id) return `/r/${encodeURIComponent(job.run_id)}/validation`;
+  if (job.kind.startsWith("study.") && job.run_id) return VIEW_HREF.validation(job.run_id);
   if (job.kind !== "run.core" || !job.project_id) return null;
   const r = s.run;
   const q = new URLSearchParams();
@@ -829,13 +830,13 @@ export function boardCellHref(rid: string, column: string, group: string, cell: 
   if (group === "stage") {
     if (cell.job_id) return `/jobs/${encodeURIComponent(cell.job_id)}?stage=${encodeURIComponent(column)}`;
     const tab = stageTab(column);
-    return tab ? `/r/${encodeURIComponent(rid)}/${tab}` : null;
+    return tab ? VIEW_HREF[tab](rid) : null;
   }
   if (group === "study") {
     if (cell.study_id) return `/studies/${encodeURIComponent(cell.study_id)}`;
-    return `/r/${encodeURIComponent(rid)}/validation`;
+    return VIEW_HREF.validation(rid);
   }
-  const postTab: Record<string, string> = { planner: "planner", emulator: "lab", uncertainty: "uncertainty", writeup: "docs", baselines: "distance" };
+  const postTab: Record<string, RunTabId> = { planner: "planner", emulator: "lab", uncertainty: "uncertainty", writeup: "docs", baselines: "distance" };
   if (cell.state === "running" && cell.job_id) return `/jobs/${encodeURIComponent(cell.job_id)}`;
-  return postTab[column] ? `/r/${encodeURIComponent(rid)}/${postTab[column]}` : null;
+  return postTab[column] ? VIEW_HREF[postTab[column]](rid) : null;
 }

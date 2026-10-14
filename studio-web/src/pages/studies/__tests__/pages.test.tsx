@@ -205,7 +205,7 @@ describe("Studies hub", () => {
     expect(hubColumns(board.columns).map((c) => c.id)).toEqual(["baselines", "planner", "placebo", "multiverse"]);
     expect(cellHref(RID, "placebo", board.rows[0].cells.placebo as never)).toBe("/studies/st_p");
     expect(cellHref(RID, "multiverse", board.rows[0].cells.multiverse as never)).toBe("/jobs/j_m");
-    expect(cellHref(RID, "planner", board.rows[0].cells.planner as never)).toBe(`/r/${RID}/validation#study-planner`);
+    expect(cellHref(RID, "planner", board.rows[0].cells.planner as never)).toBe(`/r/${RID}/trust#study-planner`);
   });
 
   it("renders the matrix, the studies list and the benchmark launch", async () => {
@@ -309,7 +309,7 @@ describe("Study page", () => {
     await flush(3);
     const child = container.querySelector('tr[data-child="child-a"]')!;
     expect(byText(child, "a", "Run")!.getAttribute("href")).toBe("/r/child-a");
-    expect(byText(child, "a", "Tracker")!.getAttribute("href")).toBe("/r/child-a/track");
+    expect(byText(child, "a", "Tracker")!.getAttribute("href")).toBe("/r/child-a/details/runlog");
     expect(container.textContent).toContain("Median share 0.9 across 2 generators");
     expect(container.textContent).toContain("changed since this study ran");
     expect(container.querySelector("table.sg-grid")).not.toBeNull();

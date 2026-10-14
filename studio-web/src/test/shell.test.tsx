@@ -3,7 +3,7 @@ import { App } from "../App";
 import { clearResources } from "../api/resource";
 import { StreamManager, setStreams, type EventSourceLike } from "../api/sse";
 import type { RunSummary } from "../api/types";
-import { ActiveRunChip } from "../layouts/AppShell";
+import { ActiveRunChip, trustGrade } from "../layouts/AppShell";
 import { navigate } from "../router";
 import { useJobs } from "../stores/jobs";
 import { useUi } from "../stores/ui";
@@ -82,7 +82,7 @@ describe("AppShell", () => {
     expect(container.querySelector(".conn-pill")!.getAttribute("data-state")).toBe("live");
   });
 
-  it("the run switcher tells same-config runs apart by mode, start time and R²", () => {
+  it("the run switcher tells same-config runs apart by mode and start time (no accuracy numbers)", () => {
     const run = (id: string, extra: Partial<RunSummary>): RunSummary => ({
       id,
       project_id: "p_1",
@@ -114,7 +114,7 @@ describe("AppShell", () => {
     const runs = [
       run("r_fast", {}),
       run("r_coarse", { mode: "coarse", coarse_m: 60, created_utc: "2026-10-02T18:40:00Z", r2: 0.774 }),
-      // Same label, mode, minute, R² and status: only the id can tell it apart.
+      // Same label, mode, minute and status: only the id can tell it apart.
       run("r_twin", { created_utc: "2026-10-02T18:12:40Z" }),
     ];
     const { container } = render(<ActiveRunChip projectRuns={runs} run={null} activeRunId="r_fast" />);
@@ -122,13 +122,51 @@ describe("AppShell", () => {
     expect(texts).toHaveLength(3);
     expect(new Set(texts).size).toBe(3);
     expect(texts[0]).toContain("FAST");
-    expect(texts[0]).toContain("R² 0.812");
     expect(texts[1]).toContain("COARSE 60");
-    expect(texts[1]).toContain("R² 0.774");
+    for (const t of texts) expect(t).not.toContain("R²");
     expect(texts[0]).toMatch(/2026-10-02 \d\d:\d\d/);
     expect(texts[2]).toContain("r_twin");
     expect(texts[0]).toContain("r_fast");
     expect(texts[1]).not.toContain("r_coarse");
+  });
+
+  it("the run chip names the run once (its switcher) with a trust dot linking to the Trust tab, never R²", () => {
+    const base: RunSummary = {
+      id: "r_1", project_id: "p_1", label: "Summer run", origin: "studio", status: "complete", mode: "fast", coarse_m: null, created_utc: "2026-10-02T18:12:09Z",
+      finished_utc: null, duration_s: null, n_points: 7, r2: 0.812, rmse: 0.3, coverage: 0.9, n_scenarios: null, checkpoint_bytes: null, has_emulator: false,
+      studies: [], git_commit: null, git_dirty: null, demo: true, pinned: false, parent_run_id: null, study_id: null, last_job_id: null,
+    };
+    const { container, rerender } = render(<ActiveRunChip projectRuns={[base]} run={base} activeRunId={null} />);
+    const chip = container.querySelector(".run-chip")!;
+    // the switcher's selected option is the only place the chip names the run (label, mode, start)
+    const sel = chip.querySelector<HTMLSelectElement>('select[aria-label="Switch run"]')!;
+    expect(sel.value).toBe("r_1");
+    expect(sel.selectedOptions[0].textContent).toContain("Summer run");
+    expect(sel.selectedOptions[0].textContent).toContain("2026-10-02");
+    expect([...chip.childNodes].filter((n) => n !== sel && n.textContent?.includes("Summer run"))).toEqual([]);
+    expect(chip.textContent).toContain("DEMO");
+    expect(chip.textContent).not.toContain("R²");
+    expect(chip.textContent).not.toContain("0.812");
+    // the closed switcher reads "name · start time" in full (mode and status are in the open list and its tooltip)
+    expect(sel.selectedOptions[0].textContent).toMatch(/^Summer run · \d{4}-\d\d-\d\d \d\d:\d\d$/);
+    expect(sel.title).toContain("FAST");
+    // the grade sits inside the chip right after the switcher, as a ringed dot with its word
+    const dot = chip.querySelector("a.run-chip-trust")!;
+    expect(sel.nextElementSibling).toBe(dot);
+    expect(dot.querySelector(".trust-dot")).not.toBeNull();
+    expect(dot.getAttribute("data-grade")).toBe("good");
+    expect(dot.getAttribute("href")).toBe("/r/r_1/trust");
+    expect(dot.textContent).toBe("Trust: Good");
+    expect([...dot.childNodes].filter((n) => !(n instanceof HTMLElement && (n.classList.contains("sr-only") || n.getAttribute("aria-hidden")))).map((n) => n.textContent)).toEqual(["Good"]);
+    rerender(<ActiveRunChip projectRuns={[base]} run={{ ...base, r2: 0.45 }} activeRunId={null} />);
+    expect(container.querySelector("a.run-chip-trust")!.getAttribute("data-grade")).toBe("fair");
+    rerender(<ActiveRunChip projectRuns={[base]} run={{ ...base, r2: 0.1 }} activeRunId={null} />);
+    expect(container.querySelector("a.run-chip-trust")!.getAttribute("data-grade")).toBe("limited");
+    // no accuracy number known: no dot
+    rerender(<ActiveRunChip projectRuns={[base]} run={{ ...base, r2: null }} activeRunId={null} />);
+    expect(container.querySelector(".run-chip-trust, .trust-dot")).toBeNull();
+    expect(trustGrade(undefined)).toBeNull();
+    expect(trustGrade(Number.NaN)).toBeNull();
   });
 
   it("opens the command palette with Ctrl+K and toggles the theme", async () => {

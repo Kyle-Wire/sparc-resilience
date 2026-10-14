@@ -1,16 +1,23 @@
 // Response (SPEC §6.4), per lever: the dose–response line with its ±1.96 SE ribbon (hollow
 // points where more than 20% of cells are extrapolated) and the realised dose, curve shapes,
 // own vs footprint effects with fold means, links to the lever's maps, and the literature
-// panel (published ranges, SPARC ± SE, the causal point and a factor-of-2 band).
+// panel (published ranges, SPARC ± SE, the causal point and a factor-of-2 band). What cools
+// reuses the curve and the curve shapes (DoseResponseCurve, CurveShapes), so under Model details
+// (`detailsOnly`) this page leaves them out and keeps the technical extras: the realised dose,
+// the lever's maps, own vs footprint with fold means, and the literature check.
 import type { ResponseLever, ResponseSections } from "../../api/runs";
 import { Bars, DotRange, LineBand, SmallMultiples, type DotRangeRow } from "../../charts";
 import { Seg } from "../../components/ui/Seg";
 import { Table } from "../../components/ui/Table";
 import { Link, codecs, useUrlState } from "../../router";
 import { fmtNum, fmtPct, fmtSig, fmtSigned, fmtValue, unitLabel } from "../../theme/format";
-import { Block, OlderCode, Section, ViewPage, useRid, useUnits } from "./common";
+import { Block, OlderCode, Section, ViewPage, useRid, useUnits, type DetailPageProps } from "./common";
 
-function DoseResponse({ name, lever }: { name: string; lever: ResponseLever }) {
+/**
+ * One lever's dose–response line: city-mean cooling with its ±1.96 SE ribbon, hollow points
+ * where more than 20% of cells are extrapolated. Shared by this page and What cools.
+ */
+export function DoseResponseCurve({ name, lever }: { name: string; lever: ResponseLever }) {
   const u = unitLabel(useUnits().target);
   const lu = unitLabel(lever.unit);
   const c = lever.curve;
@@ -26,37 +33,54 @@ function DoseResponse({ name, lever }: { name: string; lever: ResponseLever }) {
     top !== null
       ? `${lever.direction === "decrease" ? "Lowering" : "Raising"} ${lever.label} by ${fmtValue(c.dose[last], lu, 2)} ${effect} on average${c.se[last] !== null ? ` (±${fmtValue(1.96 * (c.se[last] as number), u, 2)}, 95%)` : ""}. ${hollow.some(Boolean) ? `Hollow points: more than 20% of cells pushed beyond the observed range (${fmtPct(c.frac_extrapolated[last], 0)} at the top dose).` : ""}`
       : undefined;
+  return (
+    <LineBand
+      title={`${lever.label}: dose–response`}
+      units={`cooling, ${u} (positive = cooler)`}
+      series={[{ id: name, label: "City-mean cooling", x: c.dose, y: c.benefit, lo, hi, hollow }]}
+      xLabel={`${lever.label} ${lever.direction === "decrease" ? "decrease" : "increase"}`}
+      xUnit={lu}
+      yLabel="Cooling"
+      yUnit={u}
+      yInclude={[0]}
+      refLines={[{ axis: "y", value: 0 }]}
+      decimals={2}
+      caption={caption}
+    />
+  );
+}
+
+/** Requested vs realised dose: how much of each requested dose survives clipping to the lever bounds. */
+function RealisedDose({ lever }: { lever: ResponseLever }) {
+  const lu = unitLabel(lever.unit);
+  const c = lever.curve;
+  if (!c) return null;
   const shortfall = c.realized_dose.map((r, i) => (r === null ? null : c.dose[i] - r));
   const maxShort = Math.max(0, ...shortfall.filter((v): v is number => v !== null));
   return (
+    <LineBand
+      title={`${lever.label}: requested vs realised dose`}
+      units={lu}
+      series={[
+        { id: "realised", label: "Realised dose", x: c.dose, y: c.realized_dose },
+        { id: "requested", label: "Requested dose", x: c.dose, y: c.dose, dashed: true, muted: true, points: false },
+      ]}
+      xLabel="Requested dose"
+      xUnit={lu}
+      yLabel="Realised dose"
+      yUnit={lu}
+      decimals={2}
+      caption={maxShort > 0 ? `Clipping to the lever bounds loses up to ${fmtValue(maxShort, lu, 2)} of the requested dose.` : "Every requested dose is realised in full."}
+    />
+  );
+}
+
+function DoseResponse({ name, lever }: { name: string; lever: ResponseLever }) {
+  if (!lever.curve) return <OlderCode title="Dose–response curve" />;
+  return (
     <div className="grid2">
-      <LineBand
-        title={`${lever.label}: dose–response`}
-        units={`cooling, ${u} (positive = cooler)`}
-        series={[{ id: name, label: "City-mean cooling", x: c.dose, y: c.benefit, lo, hi, hollow }]}
-        xLabel={`${lever.label} ${lever.direction === "decrease" ? "decrease" : "increase"}`}
-        xUnit={lu}
-        yLabel="Cooling"
-        yUnit={u}
-        yInclude={[0]}
-        refLines={[{ axis: "y", value: 0 }]}
-        decimals={2}
-        caption={caption}
-      />
-      <LineBand
-        title={`${lever.label}: requested vs realised dose`}
-        units={lu}
-        series={[
-          { id: "realised", label: "Realised dose", x: c.dose, y: c.realized_dose },
-          { id: "requested", label: "Requested dose", x: c.dose, y: c.dose, dashed: true, muted: true, points: false },
-        ]}
-        xLabel="Requested dose"
-        xUnit={lu}
-        yLabel="Realised dose"
-        yUnit={lu}
-        decimals={2}
-        caption={maxShort > 0 ? `Clipping to the lever bounds loses up to ${fmtValue(maxShort, lu, 2)} of the requested dose.` : "Every requested dose is realised in full."}
-      />
+      <DoseResponseCurve name={name} lever={lever} />
+      <RealisedDose lever={lever} />
     </div>
   );
 }
@@ -68,6 +92,33 @@ const SHAPES: { key: keyof NonNullable<ResponseLever["shapes"]>; label: string }
   { key: "censored", label: "knee beyond tested doses" },
   { key: "insufficient", label: "too few doses" },
 ];
+
+/** Share of cells per fitted curve shape for one lever. Shared by this page and What cools. */
+export function CurveShapes({ lever }: { lever: ResponseLever }) {
+  const shapes = lever.shapes;
+  if (!shapes) return <OlderCode title="Curve shapes" />;
+  return (
+    <Bars
+      title="Curve shapes across cells"
+      categories={[lever.label]}
+      orientation="h"
+      mode="percent"
+      series={SHAPES.filter((x) => shapes[x.key] !== undefined && shapes[x.key] !== null).map((x) => ({
+        id: x.key,
+        label: x.label,
+        values: [shapes[x.key] ?? null],
+        // one look per category: s1/s2/s3 for the fitted shapes, hatched grey for a knee past the
+        // tested doses (the default cycle would reuse s1), solid grey for too few doses
+        muted: x.key === "insufficient" || x.key === "censored",
+        hatch: x.key === "censored",
+      }))}
+      valueLabel="cells"
+      decimals={0}
+      height={110}
+      caption={`Saturating ${fmtPct(shapes.saturating, 0)}, linear ${fmtPct(shapes.linear, 0)}, S-shaped ${fmtPct(shapes.sigmoid, 0)} of cells.`}
+    />
+  );
+}
 
 /**
  * What the footprint / own-cell ratio r says. The footprint sums the change over every cell
@@ -217,15 +268,43 @@ function Literature({ lit, lever, leverUnit }: { lit: NonNullable<ResponseSectio
   );
 }
 
-export default function Response() {
+/** Links to one lever's maps (footprint, own-cell, curve shape, d90, maximum cooling). */
+function LeverMaps({ rid, lever }: { rid: string; lever: string }) {
+  const base = `/r/${encodeURIComponent(rid)}/map?layer=`;
+  return (
+    <Block title="Maps for this lever">
+      <ul className="stack" style={{ listStyle: "none", padding: 0, margin: 0, gap: 4 }}>
+        <li>
+          <Link to={`${base}fp_${encodeURIComponent(lever)}`}>Footprint effect per unit</Link>
+        </li>
+        <li>
+          <Link to={`${base}own_${encodeURIComponent(lever)}`}>Own-cell effect per unit</Link>
+        </li>
+        <li>
+          <Link to={`${base}cls_${encodeURIComponent(lever)}`}>Curve shape per cell</Link>
+        </li>
+        <li>
+          <Link to={`${base}d90_${encodeURIComponent(lever)}`}>Dose reaching 90% of the maximum</Link>
+        </li>
+        <li>
+          <Link to={`${base}A_${encodeURIComponent(lever)}`}>Maximum cooling</Link>
+        </li>
+      </ul>
+      <p className="cap">Pin a cell on the map to see its own fitted curve.</p>
+    </Block>
+  );
+}
+
+export default function Response({
+  title = "Response",
+  intro = "What each lever does at increasing doses: city-mean cooling, curve shapes per cell, and how much of the effect spills into neighbouring cells.",
+  level,
+  detailsOnly,
+}: DetailPageProps = {}) {
   const rid = useRid();
   const [lever, setLever] = useUrlState("lever", codecs.optString());
   return (
-    <ViewPage
-      view="response"
-      title="Response"
-      intro="What each lever does at increasing doses: city-mean cooling, curve shapes per cell, and how much of the effect spills into neighbouring cells."
-    >
+    <ViewPage view="response" title={title} intro={intro} level={level}>
       {(s) => (
         <>
           {s.levers === null ? (
@@ -239,56 +318,24 @@ export default function Response() {
               if (!names.length) return <p className="cap">No actionable levers were swept in this run.</p>;
               const cur = lever && levers[lever] ? lever : names[0];
               const L = levers[cur];
-              const base = `/r/${encodeURIComponent(rid)}/map?layer=`;
               return (
                 <div className="stack">
                   <Seg<string> label="Lever" value={cur} onChange={(v) => setLever(v)} options={names.map((n) => ({ value: n, label: levers[n].label || n }))} />
-                  <DoseResponse name={cur} lever={L} />
-                  <div className="grid2">
-                    {L.shapes ? (
-                      <Bars
-                        title="Curve shapes across cells"
-                        categories={[L.label]}
-                        orientation="h"
-                        mode="percent"
-                        series={SHAPES.filter((x) => L.shapes?.[x.key] !== undefined && L.shapes?.[x.key] !== null).map((x) => ({
-                          id: x.key,
-                          label: x.label,
-                          values: [L.shapes?.[x.key] ?? null],
-                          // one look per category: s1/s2/s3 for the fitted shapes, hatched grey for a knee past the
-                          // tested doses (the default cycle would reuse s1), solid grey for too few doses
-                          muted: x.key === "insufficient" || x.key === "censored",
-                          hatch: x.key === "censored",
-                        }))}
-                        valueLabel="cells"
-                        decimals={0}
-                        height={110}
-                        caption={`Saturating ${fmtPct(L.shapes.saturating, 0)}, linear ${fmtPct(L.shapes.linear, 0)}, S-shaped ${fmtPct(L.shapes.sigmoid, 0)} of cells.`}
-                      />
-                    ) : (
-                      <OlderCode title="Curve shapes" />
-                    )}
-                    <Block title="Maps for this lever">
-                      <ul className="stack" style={{ listStyle: "none", padding: 0, margin: 0, gap: 4 }}>
-                        <li>
-                          <Link to={`${base}fp_${encodeURIComponent(cur)}`}>Footprint effect per unit</Link>
-                        </li>
-                        <li>
-                          <Link to={`${base}own_${encodeURIComponent(cur)}`}>Own-cell effect per unit</Link>
-                        </li>
-                        <li>
-                          <Link to={`${base}cls_${encodeURIComponent(cur)}`}>Curve shape per cell</Link>
-                        </li>
-                        <li>
-                          <Link to={`${base}d90_${encodeURIComponent(cur)}`}>Dose reaching 90% of the maximum</Link>
-                        </li>
-                        <li>
-                          <Link to={`${base}A_${encodeURIComponent(cur)}`}>Maximum cooling</Link>
-                        </li>
-                      </ul>
-                      <p className="cap">Pin a cell on the map to see its own fitted curve.</p>
-                    </Block>
-                  </div>
+                  {detailsOnly ? (
+                    // The curve and the curve shapes are on What cools (linked from the section intro).
+                    <div className="grid2">
+                      {L.curve ? <RealisedDose lever={L} /> : <OlderCode title="Requested vs realised dose" />}
+                      <LeverMaps rid={rid} lever={cur} />
+                    </div>
+                  ) : (
+                    <>
+                      <DoseResponse name={cur} lever={L} />
+                      <div className="grid2">
+                        <CurveShapes lever={L} />
+                        <LeverMaps rid={rid} lever={cur} />
+                      </div>
+                    </>
+                  )}
                   <Effects lever={L} />
                   <Section title="Literature" data={s.literature}>
                     {(lit) => <Literature lit={lit} lever={cur} leverUnit={L.unit} />}

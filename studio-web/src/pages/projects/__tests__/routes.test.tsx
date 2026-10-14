@@ -1,6 +1,7 @@
-// The projects route module (SPEC §3.2, §3.1, §12.3): the five routes are registered, the
-// nav entries Setup, Inputs and Launch are declared (Overview and Runs belong to tracking),
-// the foundation registry picks the module up, and the shell's ProjectNav links them.
+// The projects route module (SPEC §3.2, §3.1, §12.3; phase 2): the five routes are registered,
+// the nav entries "Set up" (current on every setup step and on Launch) and "Config editor"
+// (Advanced group) are declared (Overview and Runs belong to tracking), the foundation registry
+// picks the module up, and the shell's ProjectNav links them.
 import { afterEach, describe, expect, it } from "vitest";
 import { ProjectNav } from "../../../layouts/AppShell";
 import { buildRegistry, matchRoute, registry } from "../../../router";
@@ -20,15 +21,17 @@ describe("projects routes", () => {
     expect(routes.every((r) => !r.runTab)).toBe(true);
   });
 
-  it("declares the nav entries Setup, Inputs and Launch only, with their targets", () => {
-    expect(PROJECT_NAV_IDS).toEqual(["setup", "inputs", "launch"]);
+  it("declares the nav entries Set up (claiming the steps and Launch) and Config editor (Advanced)", () => {
+    expect(PROJECT_NAV_IDS).toEqual(["setup", "config"]);
     const nav = Object.fromEntries(routes.filter((r) => r.projectNav).map((r) => [r.projectNav!.id, r.projectNav!]));
     const p = project();
+    expect(nav.setup.label).toBe("Set up");
     expect(nav.setup.to("p_1", p)).toBe("/p/p_1/setup/data");
-    expect(nav.inputs.to("p_1", p)).toBe("/p/p_1/setup/inputs");
-    expect(nav.launch.to("p_1", p)).toBe("/p/p_1/launch");
-    expect(nav.setup.order).toBeLessThan(nav.inputs.order);
-    expect(nav.inputs.order).toBeLessThan(nav.launch.order);
+    expect(nav.setup.claims).toEqual(expect.arrayContaining(["/p/:pid/setup", "/p/:pid/setup/inputs", "/p/:pid/launch"]));
+    expect(nav.setup.group).toBeUndefined();
+    expect(nav.config.label).toBe("Config editor");
+    expect(nav.config.to("p_1", p)).toBe("/p/p_1/config");
+    expect(nav.config.group).toBe("advanced");
     expect(PROJECT_NAV_IDS).not.toContain("overview");
     expect(PROJECT_NAV_IDS).not.toContain("runs");
   });
@@ -51,14 +54,11 @@ describe("projects routes", () => {
     expect(registry.problems.filter((x) => x.includes("projects"))).toEqual([]);
   });
 
-  it("ProjectNav renders the entries as links", () => {
+  it("ProjectNav renders Set up as a link and Config editor under Advanced", () => {
     const reg = buildRegistry(MODULES);
     const { container } = render(<ProjectNav registry={reg} project={project({ id: "p_9" })} />);
-    const links = [...container.querySelectorAll("a")].map((a) => [a.textContent, a.getAttribute("href")]);
-    expect(links).toEqual([
-      ["Setup", "/p/p_9/setup/data"],
-      ["Inputs", "/p/p_9/setup/inputs"],
-      ["Launch", "/p/p_9/launch"],
-    ]);
+    const links = [...container.querySelectorAll("ul.shell-nav > li > a")].map((a) => [a.textContent, a.getAttribute("href")]);
+    expect(links[0]).toEqual(["Set up", "/p/p_9/setup/data"]);
+    expect(container.querySelector("button.shell-nav-toggle")!.textContent).toContain("Advanced");
   });
 });

@@ -2,7 +2,9 @@
 // held-out fold RMSE, the running cell pulses unless reduced motion is set), physics per fold,
 // the advection decision chip, the stacker candidate leaderboard with the 0.1% tie rule, the
 // debug-level epoch loss sparkline and the final skill against the 0.90 coverage target; and the
-// CV curve (R² vs block size) with the nested fold heatmap of the active partition.
+// CV curve (R² vs block size) with the nested fold heatmap of the active partition. The skill
+// tiles are this job's live training telemetry; once the stage is done they link to the run's
+// "How much to trust this" tab, the home of the run's accuracy.
 import { useState } from "react";
 import { Card } from "../../../components/ui/Card";
 import { Badge } from "../../../components/ui/Badge";
@@ -11,6 +13,7 @@ import { Kpi, KpiRow } from "../../../components/ui/Kpi";
 import { Pill } from "../../../components/ui/Pill";
 import { StatusChip } from "../../../components/ui/StatusChip";
 import { LineBand, Sparkline } from "../../../charts";
+import { Link, runHref } from "../../../router";
 import { useDark } from "../../../stores/ui";
 import type { TrackerState } from "../../../stores/tracker";
 import { fmtDuration, fmtNum, fmtPct, fmtSigned } from "../../../theme/format";
@@ -246,13 +249,24 @@ function EpochLoss({ epochs, onLoad, canLoad }: { epochs: { ts: number; value: n
   );
 }
 
-export function S2S3Panel({ state, epochs = [], onLoadEpochs }: { state: TrackerState; epochs?: { ts: number; value: number }[]; onLoadEpochs?: () => Promise<void> }) {
+export function S2S3Panel({
+  state,
+  runId = null,
+  epochs = [],
+  onLoadEpochs,
+}: {
+  state: TrackerState;
+  runId?: string | null;
+  epochs?: { ts: number; value: number }[];
+  onLoadEpochs?: () => Promise<void>;
+}) {
   const grid = foldModelGrid(state, "S2_S3");
   const r2 = metricValue(state, "stacker_r2");
   const rmse = metricValue(state, "stacker_rmse");
   const cov = metricValue(state, "interval_coverage");
   const hw = metricValue(state, "interval_halfwidth");
   const cached = state.stages?.S2_S3?.state === "cached";
+  const finished = cached || state.stages?.S2_S3?.state === "done";
   return (
     <div className="stack">
       {grid.models.length ? null : <p className="mc-note">{idleNote(state, "S2_S3", "Fits appear fold by fold as the base models train.")}</p>}
@@ -274,6 +288,11 @@ export function S2S3Panel({ state, epochs = [], onLoadEpochs }: { state: Tracker
           <Kpi label="90% interval coverage" value={fmtPct(cov, 1)} note="target 90%" tone={cov !== null && cov < 0.9 ? "warn" : cov !== null ? "good" : undefined} />
           {hw !== null ? <Kpi label="Interval half-width" value={fmtNum(hw, 3)} /> : null}
         </KpiRow>
+      ) : null}
+      {finished && runId ? (
+        <p className="mc-note">
+          <Link to={runHref(runId, "trust")}>How much to trust this run →</Link>
+        </p>
       ) : null}
     </div>
   );

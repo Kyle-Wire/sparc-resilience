@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from .conftest import ROOT, StudioPage, dd_of, wait_for, wait_view_ready
+from .conftest import ROOT, StudioPage, dd_of, visit_run_pages, wait_for
 
 pytestmark = pytest.mark.slow
 RUN = "providence_uhi_fast"
@@ -71,14 +71,9 @@ def test_e2e_providence(studio_server, studio_page, tmp_path):
                                                "trust_pickles": True})["id"]
     sp.shot("providence project")
 
-    # -- every tab renders ----------------------------------------------------------------------------
-    sp.goto(f"/r/{rid}")
-    tabs = page.get_by_role("navigation", name="Run views").get_by_role("link")
-    hrefs = [(t.inner_text().split("\n")[0].strip(), t.get_attribute("href")) for t in tabs.all()]
+    # -- every tab and section renders ------------------------------------------------------------------
     stale_marks = 0
-    for label, href in hrefs:
-        sp.goto(href)
-        wait_view_ready(page, f"{label} tab", 120)
+    for label, _href in visit_run_pages(sp, rid, 120):
         alerts = page.locator("main [role=alert]")
         assert not alerts.count(), f"{label}: {alerts.all_inner_texts()}"
         stale_marks += page.locator("main").get_by_text(re.compile(r"\bstale\b", re.I)).count()

@@ -1,9 +1,10 @@
-// Sweeps (`/r/:rid/lab/sweeps/:swid?`, SPEC §7.9): one lever at custom doses, optionally in a
-// region, run exactly per dose (engine.sweep). The curve shows the region and city mean ΔT
-// with their likely-range ribbons (hollow points when mostly extrapolated), the fitted
-// saturation overlay and the pipeline's own response curve. The overlay, its d90 line and the
-// caption use the fit on the requested dose (the x axis); the fit on the neighbourhood dose
-// (smaller for a regional sweep) is only quoted, in its own units.
+// Sweeps, titled "Try amounts" (`/r/:rid/lab/sweeps/:swid?`, SPEC §7.9; under the Lab's "More
+// tools" since phase 2): one lever at custom doses, optionally in a region, run exactly per dose
+// (engine.sweep). The curve shows the region and city mean ΔT with their likely-range ribbons
+// (hollow points when mostly extrapolated), the fitted saturation overlay and the pipeline's own
+// response curve. The overlay, its d90 line and the caption use the fit on the requested dose
+// (the x axis); the fit on the neighbourhood dose (smaller for a regional sweep) is only quoted,
+// in its own units.
 import { useMemo, useState } from "react";
 import { errorMessage } from "../../api/client";
 import { invalidate } from "../../api/resource";
@@ -190,7 +191,7 @@ export default function Sweeps() {
   if (!grid.data || !levers.data) return <p className="cap">Loading…</p>;
   const unit = grid.data.meta.units.target;
   return (
-    <LabFrame rid={rid} title="Sweeps">
+    <LabFrame rid={rid} title="Try amounts">
       <div className="lab-split">
         <div className="stack">
           <NewSweep rid={rid} grid={grid.data} levers={levers.data} />

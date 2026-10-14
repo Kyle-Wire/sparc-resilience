@@ -10,11 +10,11 @@ import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Markdown } from "../../components/ui/Markdown";
-import { Link, useRoute } from "../../router";
+import { Link, runHref, useRoute } from "../../router";
 import { useJobs } from "../../stores/jobs";
 import { toast } from "../../stores/ui";
 import { fmtDateTime } from "../../theme/format";
-import { LiveBanner, useRid, useRunIsLive } from "./common";
+import { LiveBanner, useRid, useRunIsLive, type DetailPageProps } from "./common";
 
 const PRODUCER: Record<DocId, string> = {
   report: "the run itself (written at run end)",
@@ -85,7 +85,7 @@ function DocBody({ rid, doc }: { rid: string; doc: DocEntry }) {
   );
 }
 
-export default function Docs() {
+export default function Docs({ title = "Documents", intro }: DetailPageProps = {}) {
   const rid = useRid();
   const { params } = useRoute();
   const docs = useRunDocs(rid);
@@ -96,10 +96,11 @@ export default function Docs() {
     <section className="stack" aria-labelledby="docs-title">
       <header className="row" style={{ justifyContent: "space-between" }}>
         <h2 id="docs-title" style={{ margin: 0 }}>
-          Documents
+          {title}
         </h2>
         <RegenerateButton rid={rid} />
       </header>
+      {intro ? <p className="cap prose">{intro}</p> : null}
       {runLive ? <LiveBanner>This run is still running: documents appear as the run and its post-run actions write them.</LiveBanner> : null}
       {docs.error ? <EmptyState error={docs.error} /> : null}
       {!docs.data && !docs.error ? <p className="cap">Loading documents…</p> : null}
@@ -109,7 +110,7 @@ export default function Docs() {
             <ul className="stack" style={{ listStyle: "none", padding: 0, margin: 0, gap: 4 }}>
               {list.map((d) => (
                 <li key={d.id}>
-                  <Link to={`/r/${encodeURIComponent(rid)}/docs/${d.id}`} aria-current={chosen?.id === d.id ? "page" : undefined} className={d.present ? undefined : "muted"}>
+                  <Link to={runHref(rid, "details", `docs/${d.id}`)} aria-current={chosen?.id === d.id ? "page" : undefined} className={d.present ? undefined : "muted"}>
                     {d.title}
                   </Link>
                   {!d.present ? <span className="cap"> · not yet</span> : d.frozen || d.id === "report" ? <span className="cap"> · as of run end</span> : null}

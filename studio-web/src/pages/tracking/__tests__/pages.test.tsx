@@ -11,7 +11,7 @@ import { useJobs } from "../../../stores/jobs";
 import { byText, click, flush, mockFetch, render, typeInto, waitFor } from "../../../test/render";
 import boardJson from "../__fixtures__/status-board.json";
 import Activity, { canRestart } from "../Activity";
-import ProjectOverview, { primaryCta } from "../ProjectOverview";
+import ProjectOverview, { currentAction, primaryCta, projectStages } from "../ProjectOverview";
 import RunHistory, { compareTarget, stageHistoryChart } from "../RunHistory";
 import Settings, { settingsIssues, settingsPatch } from "../Settings";
 import { BOARD_REFRESH_MS, StatusBoard, StatusBoardTable } from "../StatusBoard";
@@ -130,11 +130,44 @@ describe("project overview", () => {
     expect(primaryCta({ project, readiness, runs: [running] })).toMatchObject({ label: "Launch run" });
     const done = runSummary({ id: "r_done", status: "complete", checkpoint_bytes: 4_000_000 });
     expect(primaryCta({ project, readiness, runs: [running, done] })).toMatchObject({ label: "Open Scenario Lab", to: "/r/r_done/lab" });
+    // a finished run without a checkpoint: the hint says its results are there, never "no finished run"
+    const noCk = runSummary({ id: "r_nock", label: "Fast run", status: "complete", checkpoint_bytes: null });
+    const cta = primaryCta({ project, readiness, runs: [noCk] });
+    expect(cta).toMatchObject({ label: "Launch run", to: "/p/p_demo/launch" });
+    expect(cta.hint).toContain("Fast run is ready to explore");
+    expect(cta.hint).not.toMatch(/no finished run/i);
+    expect(primaryCta({ project, readiness, runs: [running] }).hint).toContain("still running");
   });
 
-  it("shows the readiness spine with icon + text chips and actions, and the board", async () => {
+  it("sends a readiness link to a moved page straight to its new home, in the new words", () => {
+    const open = (label: string, path: string) => ({ kind: "open" as const, label, method: "GET" as const, path });
+    expect(currentAction(open("Open validation", "/r/r_1/validation"), registry)).toEqual(open("See the checks", "/r/r_1/trust"));
+    expect(currentAction(open("Open docs", "/r/r_1/docs/methods?x=1#top"), registry)).toEqual(open("Open docs", "/r/r_1/details/docs/methods?x=1#top"));
+    // current pages and other kinds of action are left alone
+    expect(currentAction(open("Add data", "/p/p_demo/setup/data"), registry)).toEqual(open("Add data", "/p/p_demo/setup/data"));
+    expect(currentAction(readiness[1].action!, registry)).toBe(readiness[1].action);
+  });
+
+  it("places the project on its four stages: Set up → Run → Explore → Report", () => {
+    const at = (runs: RunSummary[], rows = readiness) => {
+      const j = projectStages({ project, readiness: rows, runs });
+      return { status: j.stages.map((x) => `${x.id}:${x.status}`), current: j.current };
+    };
+    expect(projectStages({ project, readiness, runs: [] }).stages.map((x) => x.label)).toEqual(["Set up", "Run", "Explore", "Report"]);
+    expect(at([], [{ ...readiness[0], state: "missing" }])).toEqual({ status: ["setup:todo", "run:todo", "explore:todo", "report:todo"], current: "setup" });
+    expect(at([])).toEqual({ status: ["setup:done", "run:todo", "explore:todo", "report:todo"], current: "run" });
+    expect(at([runSummary({ id: "r_live", status: "running" })])).toMatchObject({ status: ["setup:done", "run:running", "explore:todo", "report:todo"], current: "run" });
+    const done = runSummary({ id: "r_done", status: "complete" });
+    const j = projectStages({ project, readiness, runs: [done] });
+    expect(j.current).toBe("explore");
+    expect(j.stages.find((x) => x.id === "explore")!.href).toBe("/r/r_done");
+    expect(j.stages.find((x) => x.id === "report")!.href).toBe("/p/p_demo/exports");
+  });
+
+  it("shows the four stages, the readiness spine with icon + text chips and actions, and the latest runs with a trust dot (no R², no board)", async () => {
+    const graded = runSummary({ id: "r_good", label: "Good run", status: "complete", r2: 0.82, coverage: 0.9 });
     fetchMock = mockFetch({
-      "GET /api/projects/p_demo": { body: { project, readiness, runs: [], active_jobs: [], config_version: 3 } },
+      "GET /api/projects/p_demo": { body: { project, readiness, runs: [graded], active_jobs: [], config_version: 3 } },
       "GET /api/projects/p_demo/status-board": { body: { columns: board.columns, rows: [] } },
     });
     navigate("/p/p_demo", { replace: true });
@@ -148,8 +181,16 @@ describe("project overview", () => {
     expect(items.map((li) => li.querySelector(".status")!.textContent)).toEqual(["ok", "check", "missing", "n/a"]);
     for (const li of items) expect(li.querySelector(".status svg")).not.toBeNull();
     expect(items[2].querySelector("button")!.textContent).toBe("Fetch layers");
-    expect(byText(container, "a.btn.primary", "Launch first run")!.getAttribute("href")).toBe("/p/p_demo/launch");
-    await waitFor(() => byText(container, ".empty-title", "No runs yet"), 5000, "empty board");
+    const stages = container.querySelector('ol.project-stages[aria-label="Project stages"]')!;
+    expect([...stages.querySelectorAll(".stage-rail-label")].map((l) => l.firstChild!.textContent)).toEqual(["Set up", "Run", "Explore", "Report"]);
+    expect(stages.querySelector('[aria-current="step"]')!.textContent).toContain("Explore");
+    const table = [...container.querySelectorAll("table")].find((t) => t.querySelector("caption")?.textContent === "Latest runs")!;
+    expect([...table.querySelectorAll("thead th")].map((th) => th.textContent)).not.toContain("R²");
+    expect(table.querySelector('[data-trust="good"] .trust-dot')).not.toBeNull();
+    expect(table.textContent).not.toContain("0.82");
+    // the Pipeline Status Board is on the Runs page
+    expect(container.textContent).not.toContain("Pipeline Status Board");
+    expect(fetchMock.calls.some((c) => c.url.includes("status-board"))).toBe(false);
   });
 });
 
@@ -251,6 +292,23 @@ describe("run history", () => {
     const link = await waitFor(() => byText(container, "a.btn.primary", "Compare selected"), 5000, "compare link");
     expect(link.getAttribute("href")).toBe("/p/p_demo/compare?a=r_a&b=r_b");
   });
+
+  it("a project's Runs page carries the Pipeline Status Board; the all-runs history does not", async () => {
+    fetchMock = mockFetch({
+      "GET /api/projects/p_demo/runs": { body: { items: [], next_cursor: null } },
+      "GET /api/runs": { body: { items: [], next_cursor: null } },
+      "GET /api/timings": { body: { unit_rates: [], stage_history: [] } },
+      "GET /api/projects/p_demo/status-board": { body: board },
+    });
+    navigate("/p/p_demo/runs", { replace: true });
+    const { container, unmount } = render(<RunHistory />);
+    await waitFor(() => container.querySelector('table[aria-label="Pipeline status board"]'), 5000, "the board");
+    unmount();
+    navigate("/runs", { replace: true });
+    const all = render(<RunHistory />);
+    await flush(4);
+    expect(all.container.textContent).not.toContain("Pipeline Status Board");
+  });
 });
 
 describe("Settings", () => {
@@ -315,17 +373,21 @@ describe("storage manager", () => {
 });
 
 describe("routes", () => {
-  it("declares the tracking routes, the Overview and Runs nav entries and the Track tab", () => {
+  it("declares the tracking routes, the Overview, Runs and Activity nav entries; Track is Model details › Run log", () => {
     const paths = registry.routes.map((r) => r.path);
-    for (const p of ["/p/:pid", "/p/:pid/runs", "/runs", "/jobs", "/jobs/:jid", "/r/:rid/track", "/settings"]) expect(paths).toContain(p);
+    for (const p of ["/p/:pid", "/p/:pid/runs", "/runs", "/jobs", "/jobs/:jid", "/settings"]) expect(paths).toContain(p);
     const nav = Object.fromEntries(registry.projectNav.map((n) => [n.id, n]));
     expect(nav.overview.label).toBe("Overview");
     expect(nav.overview.to("p_1", project)).toBe("/p/p_1");
     expect(nav.runs.label).toBe("Runs");
     expect(nav.runs.to("p_1", project)).toBe("/p/p_1/runs");
     expect(nav.overview.order).toBeLessThan(nav.runs.order);
-    const track = registry.runTabs.find((t) => t.id === "track")!;
-    expect(track).toMatchObject({ label: "Track", group: "Run" });
+    expect(nav.activity).toMatchObject({ label: "Activity", group: "advanced" });
+    expect(nav.activity.to("p_1", project)).toBe("/jobs");
+    // the run's Track tab is gone: its URL redirects to Model details › Run log
+    expect(registry.runTabs.some((t) => t.id === "track")).toBe(false);
+    expect(registry.runTabs.find((t) => t.id === "details")!.views).toContain("track");
+    expect(registry.routes.find((r) => r.path === "/r/:rid/track")!.redirect!({ rid: "r1" }, "")).toBe("/r/r1/details/runlog");
     expect(registry.problems.filter((p) => p.includes("tracking"))).toEqual([]);
   });
 });

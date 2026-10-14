@@ -1,7 +1,11 @@
 // Scenario Lab routes (SPEC §3.2, §7; owner frontend-lab): Design (editor, map, live compile,
-// compare tray), the scenario + result page, the Library, budget Plans, Sweeps, Climate ×
-// adaptation and Compare. Declares the run tab "lab" (last in the Decisions group) and the
-// emphasised project nav entry "Scenario Lab" (§3.1).
+// compare tray), the scenario + result page, the Library (home of the run's configured
+// scenarios), budget Plans (home of the run's budget plan), Compare and, under More tools, Try
+// amounts (sweeps, `/r/:rid/lab/sweeps`). Declares the
+// run tab "lab" (Scenario Lab, between Heat risk and How much to trust this; its dot covers the
+// lab, scenarios and budget views) and the emphasised project nav entry "Scenario Lab" (§3.1).
+// Climate × adaptation moved to Heat risk › Future climate (`/r/:rid/lab/climate` redirects,
+// ../legacy/routes.ts).
 import { lazy } from "react";
 import type { Project } from "../../api/types";
 import type { RouteDef } from "../../router";
@@ -14,21 +18,11 @@ export function labRunOf(project: Project): string | null {
   return project.active_run_id ?? project.last_run?.id ?? null;
 }
 
-/** Why the Scenario Lab entry is greyed out (null when it can open): no run, or the run it would
- *  open has no checkpoint yet (`last_run.has_checkpoint`, SPEC §3.1). */
+/** Why the Scenario Lab entry is greyed out (null when it can open): only when the project has
+ *  no run yet. A run without a checkpoint still opens the Lab (its Library, Plans and Compare
+ *  work; Design says so in its engine line). */
 export function labDisabledReason(project: Project): string | null {
-  const rid = labRunOf(project);
-  if (!rid) return "No run yet. Launch a run first: the Lab needs a run with a checkpoint.";
-  const last = project.last_run && project.last_run.id === rid ? project.last_run : null;
-  const running = last?.status === "queued" || last?.status === "running";
-  if (last?.has_checkpoint === false) {
-    return running
-      ? "The run is still running. The Lab opens once it has saved a checkpoint (after S3)."
-      : "The latest run has no checkpoint. Launch a run that reaches S3, or make a run with a checkpoint the project's active run.";
-  }
-  // A server that does not report checkpoints: the first run is assumed to have none while it runs.
-  if (last?.has_checkpoint === undefined && !project.active_run_id && running) return "The first run is still running. The Lab opens once it has saved a checkpoint (after S3).";
-  return null;
+  return labRunOf(project) ? null : "No run yet. Launch a run first: the Lab opens on a run.";
 }
 
 export const routes: RouteDef[] = [
@@ -37,11 +31,11 @@ export const routes: RouteDef[] = [
     component: Design,
     title: "Scenario Lab",
     fullWidth: true,
-    runTab: { id: "lab", label: "Lab", group: "Decisions", order: 50 },
+    runTab: { id: "lab", label: "Scenario Lab", order: 50, views: ["lab", "scenarios", "budget"] },
     projectNav: {
       id: "lab",
       label: "Scenario Lab",
-      order: 60,
+      order: 40,
       to: (pid, project) => {
         const rid = labRunOf(project);
         // Without a run the entry is greyed out (never a link); its placeholder target is no
@@ -55,8 +49,7 @@ export const routes: RouteDef[] = [
   { path: "/r/:rid/lab/library", component: lazy(() => import("./Library")), title: "Scenario library", fullWidth: true },
   { path: "/r/:rid/lab/plans", component: Plans, title: "Budget plans", fullWidth: true },
   { path: "/r/:rid/lab/plans/:plid", component: Plans, title: "Budget plan", fullWidth: true },
-  { path: "/r/:rid/lab/sweeps/:swid?", component: lazy(() => import("./Sweeps")), title: "Sweeps", fullWidth: true },
-  { path: "/r/:rid/lab/climate", component: lazy(() => import("./Climate")), title: "Climate × adaptation", fullWidth: true },
+  { path: "/r/:rid/lab/sweeps/:swid?", component: lazy(() => import("./Sweeps")), title: "Try amounts", fullWidth: true },
   { path: "/r/:rid/lab/compare", component: lazy(() => import("./Compare")), title: "Compare scenarios", fullWidth: true },
 ];
 

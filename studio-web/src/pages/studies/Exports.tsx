@@ -1,9 +1,12 @@
-// Exports & reports (`/p/:pid/exports`, SPEC §6.7): the report builder (section picker, results,
-// plans and findings selection, live preview in a sandboxed iframe, export as HTML or Markdown,
-// print hint), the run bundle (output checklist, checkpoint toggle with its size), the GIS pack,
-// the standalone results page, and the export history with download and delete. Every export is
-// `POST /api/exports` (the server creates the row and the `export.<kind>` job).
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+// Exports & reports (SPEC §6.7): the report builder (section picker, results, plans and findings
+// selection, live preview in a sandboxed iframe, export as HTML or Markdown, print hint), the run
+// bundle (output checklist, checkpoint toggle with its size), the GIS pack, the standalone results
+// page, the run's GIS & data files (the planner pack's GIS gallery), and the export history with
+// download and delete. Every export is `POST /api/exports` (the server creates the row and the
+// `export.<kind>` job). Phase 2: the Reports page (`/p/:pid/exports`, ./Reports.tsx) shows
+// `ExportsPanel` (this page without its title) as its "Reports & exports" tab; the default export
+// keeps the full titled page.
+import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import { errorMessage, isApiError } from "../../api/client";
 import { createExport, deleteExport, EXPORT_LABELS, exportDownloadUrl, previewReport, REPORT_SECTIONS, useExports, type Export, type ExportKind, type ExportParams } from "../../api/exports";
 import { useFindings } from "../../api/findings";
@@ -20,7 +23,8 @@ import { EmptyState } from "../../components/ui/EmptyState";
 import { StatusChip } from "../../components/ui/StatusChip";
 import { useProjectContext } from "../../layouts/ProjectLayout";
 import { useRunOutputs } from "../../layouts/resources";
-import { codecs, Link, useRoute, useUrlState } from "../../router";
+import { SectionLoading } from "../../layouts/SectionNav";
+import { codecs, Link, runHref, useRoute, useUrlState } from "../../router";
 import { toast } from "../../stores/ui";
 import { fmtBytes, fmtDate, fmtRelative, fmtSignedValue } from "../../theme/format";
 import { announceJob, Check, runLabel } from "./components/common";
@@ -41,6 +45,9 @@ import {
 import "./studies.css";
 
 const enc = encodeURIComponent;
+
+// The planner pack's GIS gallery is a run page part (runhub/Planner.tsx); loaded with its card.
+const PlannerGisGallery = lazy(() => import("../runhub/Planner").then((m) => ({ default: m.PlannerGisGallery })));
 
 /** Study statuses of a finished study (`succeeded` from the job, `done`/`complete` on older rows). */
 const FINISHED_STUDY = new Set(["succeeded", "done", "complete"]);
@@ -376,6 +383,23 @@ function PageCard({ pid, run }: { pid: string; run: RunSummary }) {
   );
 }
 
+/** The run's ready-made files for GIS and the field (the planner pack's GIS gallery), plus every file of the run in Model details. */
+function FilesCard({ run }: { run: RunSummary }) {
+  return (
+    <Card
+      title="GIS & data files"
+      eyebrow="GeoTIFF · GeoPackage · CSV"
+      aria-label="GIS & data files"
+      className="rp-files"
+      actions={<Link to={runHref(run.id, "details", "files")}>All files of this run</Link>}
+    >
+      <Suspense fallback={<SectionLoading />}>
+        <PlannerGisGallery rid={run.id} />
+      </Suspense>
+    </Card>
+  );
+}
+
 // ---------------------------------------------------------------- history
 
 const STATUS_OF: Record<Export["status"], string> = { running: "running", ready: "ready", failed: "failed" };
@@ -475,7 +499,10 @@ export function ExportHistory({ pid }: { pid: string }) {
 
 // ---------------------------------------------------------------- page
 
-export default function Exports() {
+const EXPORTS_INTRO = "Build a project report from a run, or export its outputs. Every export is a tracked job; the files land in the project's exports folder and are listed below.";
+
+/** The page's content; `titled` adds its own page title (the standalone page), else the intro only (a Reports tab). */
+function ExportsView({ titled }: { titled: boolean }) {
   const { params } = useRoute();
   const pid = params.pid ?? "";
   const project = useProjectContext();
@@ -484,12 +511,16 @@ export default function Exports() {
   const fallback = project?.detail?.project.active_run_id ?? runs[0]?.id ?? null;
   const rid = runParam && runs.some((r) => r.id === runParam) ? runParam : fallback;
   const run = runs.find((r) => r.id === rid) ?? null;
-  return (
-    <section className="sx-page" aria-labelledby="exports-title">
-      <header className="page-head">
-        <h1 id="exports-title">Exports &amp; reports</h1>
-        <p className="sx-intro">Build a project report from a run, or export its outputs. Every export is a tracked job; the files land in the project's exports folder and are listed below.</p>
-      </header>
+  const body = (
+    <>
+      {titled ? (
+        <header className="page-head">
+          <h1 id="exports-title">Exports &amp; reports</h1>
+          <p className="sx-intro">{EXPORTS_INTRO}</p>
+        </header>
+      ) : (
+        <p className="sx-intro">{EXPORTS_INTRO}</p>
+      )}
       {project?.detail && !runs.length ? (
         <EmptyState title="No runs yet" body="Reports and exports are built from a run.">
           <Link to={`/p/${enc(pid)}/launch`} className="btn primary">
@@ -519,11 +550,30 @@ export default function Exports() {
             <GisCard pid={pid} run={run} />
             <PageCard pid={pid} run={run} />
           </div>
+          <FilesCard run={run} />
         </>
       ) : null}
       <Card title="Export history" eyebrow="This project">
         <ExportHistory pid={pid} />
       </Card>
-    </section>
+    </>
   );
+  return titled ? (
+    <section className="sx-page" aria-labelledby="exports-title">
+      {body}
+    </section>
+  ) : (
+    <div className="sx-page" data-panel="exports">
+      {body}
+    </div>
+  );
+}
+
+/** Exports & reports without its page title: the "Reports & exports" tab of Reports (`/p/:pid/exports`). */
+export function ExportsPanel() {
+  return <ExportsView titled={false} />;
+}
+
+export default function Exports() {
+  return <ExportsView titled />;
 }

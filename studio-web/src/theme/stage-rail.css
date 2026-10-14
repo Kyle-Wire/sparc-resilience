@@ -59,6 +59,8 @@
 .stage-rail[data-orientation="horizontal"][data-size="sm"] > .stage-rail-item { flex: 1 0 auto; }
 .stage-rail[data-orientation="horizontal"] > .stage-rail-item:not(:last-child)::before { top: calc(var(--sq) / 2 - var(--rail) / 2); height: var(--rail); left: calc(var(--sq) + 3px); right: calc(3px - var(--gap)); }
 .stage-rail[data-orientation="horizontal"] > .stage-rail-item[data-filled]::before { background: linear-gradient(to right, var(--stage-c), var(--stage-next)); }
+/* a label and note under each square start at the top, whatever the neighbours' wrapped notes */
+.stage-rail[data-orientation="horizontal"]:not([data-size="sm"]) > .stage-rail-item > .stage-rail-body { align-self: start; }
 /* compact horizontal rails sit the square beside its content; the segment spans the gap */
 .stage-rail[data-orientation="horizontal"][data-size="sm"] > .stage-rail-item { grid-template-columns: var(--sq) auto; align-items: center; }
 .stage-rail[data-orientation="horizontal"][data-size="sm"] > .stage-rail-item:not(:last-child)::before { top: calc(50% - var(--rail) / 2); left: calc(100% + 2px); right: auto; width: calc(var(--gap) - 4px); }

@@ -33,6 +33,9 @@ export type BarsProps = FrameOptions & {
   width?: number;
   height?: number;
   domain?: [number, number];
+  /** Horizontal bars: width (px) wanted for the category labels (default 140, about 18 characters);
+   *  capped at 45% of the chart so the bars keep room on a phone. Longer labels are cut with "…". */
+  labelGutter?: number;
   onBarClick?: (category: string, seriesId: string) => void;
 };
 
@@ -64,7 +67,8 @@ function Plot(p: BarsProps) {
   const n = p.categories.length;
   const auto = useChartWidth(640);
   const W = p.width ?? auto;
-  const M = horiz ? { top: 8, right: 20, bottom: 44, left: 140 } : { top: 12, right: 16, bottom: n > 8 ? 70 : 48, left: 58 };
+  const gutter = Math.round(Math.max(140, Math.min(p.labelGutter ?? 140, W * 0.45)));
+  const M = horiz ? { top: 8, right: 20, bottom: 44, left: gutter } : { top: 12, right: 16, bottom: n > 8 ? 70 : 48, left: 58 };
   const H = p.height ?? (horiz ? Math.max(120, M.top + M.bottom + n * (mode === "grouped" ? 10 + 14 * p.series.length : 26)) : 300);
   const colors = seriesColors(p.series);
   const d = p.decimals ?? 2;
@@ -134,7 +138,7 @@ function Plot(p: BarsProps) {
       {horiz ? (
         <>
           <Axis scale={vs} orient="bottom" at={H - M.bottom} grid={H - M.top - M.bottom} title={axisTitle(mode === "percent" ? `Share of ${p.valueLabel}` : p.valueLabel, unit)} />
-          <BandAxis scale={band} orient="left" at={M.left} />
+          <BandAxis scale={band} orient="left" at={M.left} maxChars={gutter > 140 ? Math.floor((gutter - 12) / 6.6) : undefined} />
           {dom[0] < 0 && dom[1] > 0 ? <line className="zero" x1={vs(0)} x2={vs(0)} y1={M.top} y2={H - M.bottom} /> : null}
         </>
       ) : (

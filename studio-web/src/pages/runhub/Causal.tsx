@@ -1,14 +1,16 @@
 // Causal audit (SPEC §6.4): per treatment, the forest of θ_own, θ_nbr and θ_sum (±1.96 SE)
 // beside the model slopes, audit verdict chips, the doubly-robust dose–response with the
 // model's own-cell partial-dependence curve overlaid, the CATE quantile box with BLP
-// calibration, CATE and model-slope maps, sensitivity, controls and the DAG audit.
+// calibration, CATE and model-slope maps, sensitivity, controls and the DAG audit. The complete
+// page is Model details › Cause-and-effect audit; How much to trust this reads one line per
+// lever from `causalAgreement`.
 import type { CausalTreatment, Sections } from "../../api/runs";
 import { BoxStrip, Forest, LineBand, type LineSeries } from "../../charts";
 import { Pill } from "../../components/ui/Pill";
 import { Seg } from "../../components/ui/Seg";
 import { Link, codecs, useUrlState } from "../../router";
 import { fmtNum, fmtPct, unitLabel } from "../../theme/format";
-import { Block, GenericTableView, OlderCode, Section, ViewPage, useRid, useUnits } from "./common";
+import { Block, GenericTableView, OlderCode, Section, ViewPage, useRid, useUnits, type DetailPageProps } from "./common";
 import { fmtDistance, humanize } from "./format";
 import { RunLayerMap } from "./RunLayerMap";
 
@@ -43,6 +45,39 @@ export function blpWords(blp: Blp | null | undefined): string {
   if (blp.p !== null && blp.p < 0.05 && blp.coef > 0)
     return `${head}: the effect differs between cells as the CATE says${blp.coef < 0.5 ? ", though the CATE exaggerates the spread" : blp.coef > 1.5 ? ", more strongly than the CATE suggests" : ""}.`;
   return `${head}: no evidence that the effect differs between cells; read the spread of the box as noise.`;
+}
+
+/** How a lever's independent (causal) estimate compares with the model's, in one plain line. */
+export type CausalAgreement = {
+  lever: string;
+  label: string;
+  /** agrees: every audit check consistent; size: same direction, different size or curve shape; conflict: opposite directions; unknown: no audit. */
+  status: "agrees" | "size" | "conflict" | "unknown";
+  line: string;
+};
+
+/** The audit check that compares the whole change (own cell + neighbours), else the first with both numbers. */
+function primaryCheck(audit: CausalTreatment["audit"]): CausalTreatment["audit"][number] | null {
+  return audit.find((a) => a.check === "adoption_vs_theta_sum") ?? audit.find((a) => a.model !== null && a.causal !== null) ?? null;
+}
+
+export function causalAgreement(name: string, t: Treatment, targetUnit: string, leverUnits: Record<string, string>): CausalAgreement {
+  const label = t.label || humanize(name);
+  const audit = t.audit ?? [];
+  if (!audit.length) return { lever: name, label, status: "unknown", line: `${label}: no independent check of this lever in this run.` };
+  const per = treatmentUnits(t.unit, name, targetUnit, leverUnits).effect;
+  const p = primaryCheck(audit);
+  const nums = p && p.model !== null && p.causal !== null ? ` (model ${fmtNum(p.model, 3)}, check ${fmtNum(p.causal, 3)} ${per})` : "";
+  if (audit.some((a) => /sign/i.test(a.verdict))) {
+    return { lever: name, label, status: "conflict", line: `${label}: the independent check points the other way${nums}. Treat this lever's effect as unproven.` };
+  }
+  if (audit.some((a) => a.flag && !/shape/i.test(a.verdict))) {
+    return { lever: name, label, status: "size", line: `${label}: the independent check agrees on the direction but finds a different size${nums}.` };
+  }
+  if (audit.some((a) => a.flag)) {
+    return { lever: name, label, status: "size", line: `${label}: the independent check agrees on the size${nums}, but the effect builds up differently as the amount grows.` };
+  }
+  return { lever: name, label, status: "agrees", line: `${label}: the independent check agrees with the model${nums}.` };
 }
 
 function DrCurve({ t, name }: { t: Treatment; name: string }) {
@@ -215,13 +250,16 @@ function TreatmentView({ name, t }: { name: string; t: Treatment }) {
   );
 }
 
-export default function Causal() {
+export default function Causal({
+  title = "Causal audit",
+  intro = "An independent check of the model's effects: double machine learning on the observed variation, with neighbourhood spillover, heterogeneity and sensitivity analysis.",
+}: DetailPageProps = {}) {
   const [tSel, setTSel] = useUrlState("t", codecs.optString());
   return (
     <ViewPage
       view="causal"
-      title="Causal audit"
-      intro="An independent check of the model's effects: double machine learning on the observed variation, with neighbourhood spillover, heterogeneity and sensitivity analysis."
+      title={title}
+      intro={intro}
     >
       {(s) => (
         <>

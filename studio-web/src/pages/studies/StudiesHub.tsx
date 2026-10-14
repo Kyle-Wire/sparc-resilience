@@ -8,7 +8,7 @@ import { Card } from "../../components/ui/Card";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { StatusChip } from "../../components/ui/StatusChip";
 import { useProjectContext } from "../../layouts/ProjectLayout";
-import { Link, codecs, useRoute, useUrlState } from "../../router";
+import { Link, codecs, runHref, useRoute, useUrlState } from "../../router";
 import { fmtDate, fmtPct, fmtRelative } from "../../theme/format";
 import { runLabel } from "./components/common";
 import { LaunchPanel } from "./components/LaunchPanel";
@@ -25,7 +25,7 @@ export function hubColumns<C extends { id: string; group: string }>(columns: rea
 export function cellHref(rid: string, column: string, cell: BoardCell | undefined): string {
   if (cell?.study_id) return `/studies/${enc(cell.study_id)}`;
   if (cell?.job_id && cell.state === "running") return `/jobs/${enc(cell.job_id)}`;
-  return `/r/${enc(rid)}/validation#study-${column}`;
+  return `${runHref(rid, "trust")}#study-${column}`;
 }
 
 function cellText(cell: BoardCell): string | undefined {
@@ -77,7 +77,7 @@ function Matrix({ pid }: { pid: string }) {
           {rows.map(({ run, cells }) => (
             <tr key={run.id} data-run={run.id}>
               <th scope="row">
-                <Link to={`/r/${enc(run.id)}/validation`}>{runLabel(run)}</Link>
+                <Link to={`${runHref(run.id, "trust")}#validation`}>{runLabel(run)}</Link>
               </th>
               {cols.map((c) => {
                 const cell = cells[c.id];
@@ -145,7 +145,7 @@ function StudyList({ studies, runs }: { studies: Study[]; runs: Map<string, RunS
                       {s.origin === "imported" ? <span className="cap"> · imported</span> : null}
                     </td>
                     <td>{KIND_LABELS[s.kind as StudyKind] ?? s.kind}</td>
-                    <td>{s.target_run_id ? <Link to={`/r/${enc(s.target_run_id)}/validation`}>{target ? runLabel(target) : s.target_run_id}</Link> : <span className="cap">project</span>}</td>
+                    <td>{s.target_run_id ? <Link to={`${runHref(s.target_run_id, "trust")}#validation`}>{target ? runLabel(target) : s.target_run_id}</Link> : <span className="cap">project</span>}</td>
                     <td>
                       <span className="row" style={{ gap: 4 }}>
                         <StatusChip status={s.status} />

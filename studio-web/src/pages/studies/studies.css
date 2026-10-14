@@ -1,6 +1,6 @@
 /* Studies, exports and findings pages. Built on the foundation tokens and classes; only the
    layouts and widgets of this group live here (class prefixes vt- validation, sg- simcheck
-   grid, rb- report builder, fd- findings, sx- shared). */
+   grid, rb- report builder, rp- reports, fd- findings, sx- shared). */
 
 .sx-page { display: grid; gap: 16px; min-width: 0; }
 .sx-intro { max-width: 78ch; color: var(--ink-2); font-size: 0.92rem; margin: 0; }
@@ -67,6 +67,10 @@
 .rb-pick { max-height: 180px; overflow: auto; }
 .rb-preview { display: grid; gap: 8px; min-width: 0; }
 .rb-frame { width: 100%; height: min(78vh, 900px); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: #fff; } /* the report is a print document: always paper-white, in both themes */
+
+/* reports: the GIS & data files card hosts the planner pack's own blocks without a second frame */
+.rp-files [data-planner-part] > .card { border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; padding: 12px 0 0; }
+.rp-files [data-planner-part] > .card > header h3 { font-size: 0.9rem; }
 
 /* findings */
 .fd-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }

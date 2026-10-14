@@ -68,7 +68,7 @@ kbd { font-size: 0.78em; border: 1px solid var(--line-strong); border-bottom-wid
 .shell-nav a, .shell-nav .nav-disabled { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: var(--radius-sm); color: var(--ink-2); text-decoration: none; font-size: 0.9rem; }
 .shell-nav a:hover { background: var(--chip); color: var(--ink); }
 .shell-nav a[aria-current="page"] { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--ink); font-weight: 600; }
-.shell-nav a.emph { font-weight: 600; color: var(--accent-ink); }
+.shell-nav a.emph { font-weight: 600; }
 .shell-nav .nav-disabled { color: var(--muted); cursor: not-allowed; }
 .shell-nav-label { padding: 10px 10px 2px; }
 .shell-sidebar-bottom { margin-top: auto; border-top: 1px solid var(--line); padding-top: 8px; }
@@ -241,6 +241,8 @@ button.chip[aria-pressed="true"] { border-color: var(--ink); color: var(--page);
 .output-row > .output-action { flex-basis: 100%; margin-top: 4px; }
 
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); gap: 12px; }
+/* at most --kpi-cols columns (KpiRow picks a count that leaves no lone tile on the last line), fewer when narrow */
+.kpis[data-cols] { grid-template-columns: repeat(auto-fit, minmax(min(100%, max(160px, (100% - (var(--kpi-cols) - 1) * 12px) / var(--kpi-cols))), 1fr)); }
 .kpi { background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 12px 14px 13px; display: grid; gap: 4px; align-content: start; min-width: 0; }
 .kpi .label { font-family: var(--font-mono); font-size: 10px; font-weight: 500; line-height: 1.4; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
 .kpi .value { font-family: var(--font-display); font-size: 1.75rem; font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; font-variant-numeric: tabular-nums; color: var(--ink); overflow-wrap: anywhere; }
@@ -423,13 +425,15 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 13px; }
 .chart-frame > header { display: flex; gap: 6px 12px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
 .chart-frame.vcard { gap: 12px; padding-bottom: 14px; }
 .chart-frame.vcard > :not(.vcard-head):not(.tip):not(.sr-only) { margin-inline: 16px; }
-/* Title column takes the free width (kicker ellipsised on one line, units on their own line below,
-   wrapping if long);
-   the export toolbar never wraps, so every chart card header has the same height. */
-.chart-frame .chart-title { display: grid; gap: 2px; min-width: 0; flex: 1; }
-.chart-frame .chart-title h3 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; line-height: 1.45; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-2); }
+/* Title column takes the free width; the title and the units wrap, never cut with an ellipsis.
+   The header wraps too: when the title would get less than ~22 characters beside the toolbar (an
+   extra action, a direction or threshold toggle), the toolbar drops below it, right-aligned. */
+.chart-frame.vcard > .vcard-head { flex-wrap: wrap; }
+.chart-frame .chart-title { display: grid; gap: 2px; min-width: 0; flex: 1 1 22ch; }
+.chart-frame .chart-title h3 { white-space: normal; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; line-height: 1.45; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-2); }
 .chart-frame .chart-units { display: block; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.04em; color: var(--muted); }
-.chart-frame .chart-tools { display: flex; flex: none; gap: 2px; flex-wrap: nowrap; align-items: center; margin-right: -6px; }
+/* One row while it fits; on a phone a long toolbar (an extra action, a direction toggle) wraps inside the card. */
+.chart-frame .chart-tools { display: flex; flex: none; gap: 2px; flex-wrap: wrap; justify-content: flex-end; max-width: 100%; align-items: center; margin-right: -6px; margin-left: auto; }
 .chart-frame .chart-tools > .btn.small.ghost { height: auto; font-family: var(--font-mono); font-size: 10px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); padding: 3px 6px; }
 .chart-frame .chart-tools > .btn.small.ghost:hover:not(:disabled) { color: var(--ink); }
 .chart-frame .chart-tools > .btn.small.ghost svg { width: 12px; height: 12px; }

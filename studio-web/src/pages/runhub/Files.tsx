@@ -21,7 +21,7 @@ import { runIsLive, useRunOutputs } from "../../layouts/resources";
 import { codecs, useUrlState } from "../../router";
 import { toast } from "../../stores/ui";
 import { fmtBytes, fmtDateTime, fmtDuration } from "../../theme/format";
-import { Block, LiveBanner, useRid } from "./common";
+import { Block, LiveBanner, useRid, type DetailPageProps } from "./common";
 import { OUTPUT_STATE_TEXT, cellText, outputStateStatus, producedByText } from "./format";
 
 const ext = (p: string) => (/\.([a-z0-9]+)$/i.exec(p)?.[1] ?? "").toLowerCase();
@@ -336,7 +336,7 @@ export function CheckpointCard({ rid, cp }: { rid: string; cp: CheckpointInfo })
   );
 }
 
-export default function Files() {
+export default function Files({ title = "Files", intro }: DetailPageProps = {}) {
   const rid = useRid();
   const outputs = useRunOutputs(rid);
   // Unknown until the grid is readable (mid-run before S0): keep conversions offered then.
@@ -354,8 +354,9 @@ export default function Files() {
   return (
     <section className="stack" aria-labelledby="files-title">
       <h2 id="files-title" style={{ margin: 0 }}>
-        Files
+        {title}
       </h2>
+      {intro ? <p className="cap prose">{intro}</p> : null}
       {runIsLive(detail.data?.run.status) ? <LiveBanner>This run is still running: files marked "being written" are not final yet.</LiveBanner> : null}
       <Block title="Run directory">
         <div className="tablewrap" style={{ maxHeight: 520, overflowY: "auto" }}>

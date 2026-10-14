@@ -27,10 +27,13 @@
 .rail-chip .rail-time { font-size: 0.74rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .rail-ck { color: var(--s3); font-size: 0.72rem; }
 .rail.mini .rail-chip { min-width: 0; padding: 2px 5px; }
-/* Mission Control's 01–11 strip: the cards share the width (flex 1 1 0) so all eleven fit at
-   ≥ 1000px; below that they keep an 84px minimum and the strip scrolls sideways (fallback only).
+/* Mission Control's 01–11 strip: a grid of equal cards, at least 84px wide, so all eleven share
+   one row at ≥ 1000px and wrap onto more rows in a narrower box (Model details › Run log, a
+   phone) instead of cutting the last cards off at the edge. The rail segment of a row's last
+   card would reach into the gap past the edge, so the strip clips sideways (no scroll box).
    Long status words ellipsise inside the card (the chip's title carries the full text). */
-.stage-rail.rail:not(.mini)[data-orientation="horizontal"] > .stage-rail-item { flex: 1 1 0; min-width: 84px; }
+.stage-rail.rail:not(.mini)[data-orientation="horizontal"] { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); overflow-x: clip; overflow-y: visible; }
+.stage-rail.rail:not(.mini)[data-orientation="horizontal"] > .stage-rail-item { min-width: 0; }
 .stage-rail.rail:not(.mini) .rail-chip { min-width: 0; width: 100%; }
 .stage-rail.rail:not(.mini) .rail-chip .status { max-width: 100%; }
 .stage-rail.rail:not(.mini) .rail-chip .status > span:first-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; }

@@ -1,11 +1,14 @@
 // Run overview (SPEC §6.4 Overview): header (name, mode chips, created, commit + dirty flag,
 // versions, n cells, grid, run dir, DEMO), the compact tracker while a job runs, KPI row,
 // stage timing bar, data-health flags, outputs availability grid, studies chips, caveats and
-// model-card limitations, and the run's findings.
+// model-card limitations, and the run's findings. No tab routes the full page any more (the
+// Summary tab is the run's landing page); its run record (header, stage timings, outputs grid)
+// is RunRecord, shown in Model details › Run log (compact there: `detailsOnly`).
 import { useMemo } from "react";
+import { useResource } from "../../api/resource";
 import type { OverviewSections, RunDetail } from "../../api/runs";
-import { RUN_TAB_IDS } from "../../api/types";
-import { useRunDetailFull } from "../../api/runs";
+import { useRunDetailFull, useView } from "../../api/runs";
+import { listJobs } from "../../api/tracking";
 import { Bars } from "../../charts";
 import { Badge, modeLabel } from "../../components/ui/Badge";
 import { ActionButton } from "../../components/ui/EmptyState";
@@ -13,14 +16,18 @@ import { Icon } from "../../components/ui/Icon";
 import { JobStrip } from "../../components/ui/JobStrip";
 import { StatusChip } from "../../components/ui/StatusChip";
 import { copyText } from "../../components/ui/download";
-import { Link } from "../../router";
+import { Link, runHref, runViewHref } from "../../router";
 import { toast } from "../../stores/ui";
 import { fmtDateTime, fmtDuration, fmtInt, fmtNum } from "../../theme/format";
 import { stageTone } from "../../theme/palette";
-import { Block, FlagList, KpiTiles, Section, ViewPage, useRid } from "./common";
+import { Block, FlagList, KpiTiles, Section, ViewPage, useRid, type DetailPageProps } from "./common";
 import { OUTPUT_STATE_TEXT, outputStateStatus, producedByText } from "./format";
 
-function Header({ detail }: { detail: RunDetail }) {
+/**
+ * The run header card. `compact` (Model details › Run log) leaves out the commit, the run
+ * directory and the versions: their home is Model details › Provenance.
+ */
+function Header({ detail, compact = false }: { detail: RunDetail; compact?: boolean }) {
   const h = detail.header;
   const run = detail.run;
   const versions = Object.entries(h.versions ?? {});
@@ -44,18 +51,22 @@ function Header({ detail }: { detail: RunDetail }) {
         <dd>{fmtDateTime(h.created_utc)}</dd>
         <dt>Origin</dt>
         <dd>{run.origin.replace(/_/g, " ")}</dd>
-        <dt>Commit</dt>
-        <dd className="mono">
-          {h.git_commit ?? "—"}
-          {h.git_dirty ? (
-            <>
-              {" "}
-              <Badge tone="warn" title="The working tree had uncommitted changes when this run started">
-                dirty
-              </Badge>
-            </>
-          ) : null}
-        </dd>
+        {compact ? null : (
+          <>
+            <dt>Commit</dt>
+            <dd className="mono">
+              {h.git_commit ?? "—"}
+              {h.git_dirty ? (
+                <>
+                  {" "}
+                  <Badge tone="warn" title="The working tree had uncommitted changes when this run started">
+                    dirty
+                  </Badge>
+                </>
+              ) : null}
+            </dd>
+          </>
+        )}
         <dt>Cells</dt>
         <dd>{fmtInt(h.n_points)}</dd>
         <dt>Grid</dt>
@@ -70,22 +81,26 @@ function Header({ detail }: { detail: RunDetail }) {
             <dd>{fmtDuration(run.duration_s)}</dd>
           </>
         ) : null}
-        <dt>Run directory</dt>
-        <dd className="mono" style={{ overflowWrap: "anywhere" }}>
-          {h.run_dir}{" "}
-          <button
-            type="button"
-            className="btn small ghost"
-            aria-label="Copy run directory"
-            onClick={async () => {
-              const ok = await copyText(h.run_dir);
-              toast(ok ? "success" : "warning", ok ? "Run directory copied" : "Copy failed: select the path instead");
-            }}
-          >
-            <Icon name="copy" />
-          </button>
-        </dd>
-        {versions.length ? (
+        {compact ? null : (
+          <>
+            <dt>Run directory</dt>
+            <dd className="mono" style={{ overflowWrap: "anywhere" }}>
+              {h.run_dir}{" "}
+              <button
+                type="button"
+                className="btn small ghost"
+                aria-label="Copy run directory"
+                onClick={async () => {
+                  const ok = await copyText(h.run_dir);
+                  toast(ok ? "success" : "warning", ok ? "Run directory copied" : "Copy failed: select the path instead");
+                }}
+              >
+                <Icon name="copy" />
+              </button>
+            </dd>
+          </>
+        )}
+        {versions.length && !compact ? (
           <>
             <dt>Versions</dt>
             <dd className="mono cap">{versions.map(([k, v]) => `${k} ${v}`).join(" · ")}</dd>
@@ -96,7 +111,7 @@ function Header({ detail }: { detail: RunDetail }) {
             <dt>Checkpoint</dt>
             <dd>
               {detail.checkpoint.present ? `saved, done: ${detail.checkpoint.done.join(", ") || "—"}` : (detail.checkpoint.reason ?? "none")}{" "}
-              <Link to={`/r/${encodeURIComponent(run.id)}/files#checkpoint`}>details</Link>
+              <Link to={`${runHref(run.id, "details", "files")}#checkpoint`}>details</Link>
             </dd>
           </>
         ) : null}
@@ -153,14 +168,13 @@ function StageTimingBar({ timings }: { timings: Timing[] }) {
 
 type OutputCell = NonNullable<OverviewSections["outputs_grid"]>[number];
 
-/** Where an output is shown: its run tab, or Files for viewer kinds (table, json, …). */
+/** Where an output is shown: the page of its view (VIEW_HREF), or Files for viewer kinds (table, json, …). */
 function outputHref(rid: string, view: string): string {
-  const base = `/r/${encodeURIComponent(rid)}`;
-  if (view === "overview") return base;
-  return (RUN_TAB_IDS as readonly string[]).includes(view) ? `${base}/${view}` : `${base}/files`;
+  return runViewHref(rid, view) ?? runHref(rid, "details", "files");
 }
 
-function OutputsGrid({ outputs, rid }: { outputs: OutputCell[]; rid: string }) {
+/** The outputs availability grid; `actions` (default on) adds each missing output's remedy next to its MISSING pill. */
+function OutputsGrid({ outputs, rid, actions = true }: { outputs: OutputCell[]; rid: string; actions?: boolean }) {
   const groups = useMemo(() => {
     const m = new Map<string, OutputCell[]>();
     for (const o of outputs) m.set(o.group, [...(m.get(o.group) ?? []), o]);
@@ -179,7 +193,7 @@ function OutputsGrid({ outputs, rid }: { outputs: OutputCell[]; rid: string }) {
                   <Link to={outputHref(rid, o.view)}>{o.label}</Link>
                 </span>
                 <StatusChip status={outputStateStatus(o.state)} text={OUTPUT_STATE_TEXT[o.state] ?? o.state} />
-                {o.state === "missing" && o.action ? (
+                {actions && o.state === "missing" && o.action ? (
                   <span className="output-action">
                     <ActionButton action={o.action} size="small" variant="default" />
                   </span>
@@ -198,6 +212,51 @@ export function internalPath(url: string | null | undefined): string | null {
   return url && url.startsWith("/") && !url.startsWith("//") && !url.startsWith("/\\") ? url : null;
 }
 
+/**
+ * The run record (Model details › Run log, above the job log): the header (created, origin,
+ * commit, cells, grid, duration, run directory, versions), the stage timing bar and the outputs
+ * availability grid (state pills only: each remedy is offered where its result is read, e.g. the
+ * skill-vs-distance re-run on How much to trust this).
+ *
+ * `detailsOnly` (how Model details › Run log renders it) keeps each fact in one place: no outputs
+ * grid (Files is its home), no commit, versions or run directory (Provenance is theirs), and the
+ * stage timing bar only when the run has no tracked job, because the job log below (RunTrack)
+ * already shows the stage times on its rail and timeline. Imported runs have no job log, so that
+ * is where their stage timings live.
+ */
+export function RunRecord({ detailsOnly = false }: DetailPageProps = {}) {
+  const rid = useRid();
+  const detail = useRunDetailFull(rid);
+  const overview = useView(rid, "overview");
+  const jobs = useResource(detailsOnly && rid ? `run:${rid}:jobs` : null, (sig) => listJobs({ run: rid, limit: 100 }, sig), { tags: rid ? [`run:${rid}`, "jobs"] : [] });
+  const s = overview.data && overview.data.availability !== "missing" ? overview.data.sections : null;
+  // Compact: the bar only once the run is known to have no job log (or the list cannot be read).
+  const showTimings = !detailsOnly || (jobs.data ? !jobs.data.items.length : !!jobs.error);
+  return (
+    <div className="stack" data-run-record="" data-compact={detailsOnly || undefined}>
+      {detail.data ? <Header detail={detail.data} compact={detailsOnly} /> : null}
+      {s ? (
+        <>
+          {showTimings ? (
+            <Section title="Stage timings" data={s.timings}>
+              {(t) => <StageTimingBar timings={t} />}
+            </Section>
+          ) : null}
+          {detailsOnly ? null : (
+            <Section title="Outputs" data={s.outputs_grid}>
+              {(o) => (
+                <Block title="Outputs">
+                  <OutputsGrid outputs={o} rid={rid} actions={false} />
+                </Block>
+              )}
+            </Section>
+          )}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 const STUDY_STATUS: Record<string, string> = { not_run: "not_run", queued: "queued", running: "running", done: "done", stale: "stale", failed: "failed" };
 
 export default function Overview() {
@@ -207,7 +266,7 @@ export default function Overview() {
     <div className="stack">
       <JobStrip runId={rid} />
       {detail.data ? <Header detail={detail.data} /> : null}
-      <ViewPage view="overview" title="Overview" caveatsOpen>
+      <ViewPage view="overview" title="Overview" showCaveats caveatsOpen>
         {(s) => (
           <>
             <Section title="Key numbers" data={s.kpis}>
@@ -234,7 +293,7 @@ export default function Overview() {
             </Section>
             <Section title="Studies" data={s.studies}>
               {(studies) => (
-                <Block title="Studies" actions={<Link to={`/r/${encodeURIComponent(rid)}/validation`}>Validation</Link>}>
+                <Block title="Studies" actions={<Link to={`${runHref(rid, "trust")}#validation`}>Validation</Link>}>
                   {studies.length ? (
                     <ul className="row" style={{ listStyle: "none", padding: 0, margin: 0 }} aria-label="Study status">
                       {studies.map((st) => (

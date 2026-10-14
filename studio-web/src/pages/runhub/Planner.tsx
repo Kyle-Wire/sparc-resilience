@@ -1,24 +1,28 @@
-// Planner pack (SPEC §6.4): exposure bars and the person-mean temperature table, hot-days
-// small multiples (campaign-like vs lower bound), equity quintiles with concentration-index
-// chips, plantable KPIs, the sortable zone table, hex choropleth links (250 / 500 m), logger
-// sites and before/after pairs as map overlays, the GIS gallery (GeoTIFF previews,
-// hexagons.gpkg, CSVs with lon/lat added on export) and "Re-run planner with package…".
+// Planner pack (SPEC §6.4), split by question (phase 2):
+// - Heat risk › Who is exposed (default export): exposure bars and the person-mean temperature
+//   table, hot-days small multiples (campaign-like vs lower bound), equity quintiles with
+//   concentration-index chips, and "Re-run planner with package…".
+// - PlannerWhereToAct (What cools › Where to act): plantable KPIs, the sortable zone table with
+//   hex choropleth links (250 / 500 m), and the logger sites as a map overlay.
+// - PlannerGisGallery (for Reports; not on Heat risk): the GIS gallery (GeoTIFF previews,
+//   hexagons.gpkg, CSVs with lon/lat added on export) and the before/after pairs.
 // Hot days, equity and zones are optional parts of a pack (no station record, no adaptation
 // package, no zone column): a pack without them says why, not "older code".
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { api, errorMessage } from "../../api/client";
-import type { PlannerSections } from "../../api/runs";
+import type { PlannerSections, ViewModelOf } from "../../api/runs";
 import { fileRawUrl, useGridMeta, useView } from "../../api/runs";
 import type { Job } from "../../api/types";
 import { Bars, LineBand, SmallMultiples } from "../../charts";
 import { Button } from "../../components/ui/Button";
+import { EmptyState } from "../../components/ui/EmptyState";
 import { Pill } from "../../components/ui/Pill";
 import type { OverlayFeature } from "../../map/Overlay";
-import { Link } from "../../router";
+import { Link, runHref } from "../../router";
 import { useJobs } from "../../stores/jobs";
 import { toast } from "../../stores/ui";
 import { fmtBytes, fmtNum, fmtPct, unitLabel } from "../../theme/format";
-import { Block, GenericTableView, KpiTiles, OlderCode, Section, ViewPage, useRid, useUnits, type Absence } from "./common";
+import { Block, GenericTableView, KpiTiles, MissingList, MissingState, OlderCode, Section, UnitsProvider, ViewPage, useRid, useUnits, type Absence } from "./common";
 import { RunLayerMap } from "./RunLayerMap";
 
 function Exposure({ e }: { e: NonNullable<PlannerSections["exposure"]> }) {
@@ -228,23 +232,20 @@ function RerunPlanner({ rid }: { rid: string }) {
   );
 }
 
+/** The pack read (exposure is always built from one): its null optional parts have known reasons. */
+function absentIn(s: { exposure: unknown }) {
+  return (k: keyof typeof PACK_ABSENT): Absence | null => (s.exposure !== null ? PACK_ABSENT[k] : null);
+}
+
+/** Heat risk › Who is exposed: exposure, person-mean temperature, hot days and equity. */
 export default function Planner() {
   const rid = useRid();
   return (
-    <ViewPage view="planner" title="Planner pack" intro="Who is exposed, where to act, and the files to take into the field and into GIS.">
+    <ViewPage view="planner" title="Who is exposed" intro="Who is exposed to heat today and in future climates, how many hot days a year, and how evenly the cooling is shared.">
       {(s) => {
-        // The view read a pack (exposure is always built from one): its null parts have known reasons.
-        const absent = (k: keyof typeof PACK_ABSENT) => (s.exposure !== null ? PACK_ABSENT[k] : null);
-        const overlays: OverlayFeature[] = [];
-        if (s.sites?.length)
-          overlays.push({ type: "points", id: "sites", label: "Logger sites", points: s.sites.map((p) => ({ row: p.row, label: p.label ?? String(p.id), tone: "s2" as const })) });
-        if (s.pairs?.length)
-          overlays.push({ type: "links", id: "pairs", label: "Before/after pairs", links: s.pairs.map((p) => ({ from: { row: p.treated }, to: { row: p.control } })), tone: "s3" });
+        const absent = absentIn(s);
         return (
           <>
-            <Section title="Plantable space" data={s.plantable}>
-              {(k) => <KpiTiles kpis={k} label="Plantable space" />}
-            </Section>
             <div className="grid2">
               <Section title="Exposure" data={s.exposure}>
                 {(e) => <Exposure e={e} />}
@@ -267,40 +268,9 @@ export default function Planner() {
                 </Block>
               )}
             </Section>
-            <Section title="Zones" data={s.zones} absent={absent("zones")}>
-              {(z) => (
-                <Block
-                  title="Zones"
-                  actions={
-                    <>
-                      <Link to={`/r/${encodeURIComponent(rid)}/map?hex=250`}>Hex map 250 m</Link>
-                      <Link to={`/r/${encodeURIComponent(rid)}/map?hex=500`}>500 m</Link>
-                    </>
-                  }
-                >
-                  <GenericTableView table={z} caption="Zones" csvName="planner-zones" />
-                </Block>
-              )}
-            </Section>
-            <Block title="Logger sites and before/after pairs">
-              {s.sites === null && s.pairs === null ? (
-                <OlderCode title="Logger sites and before/after pairs" />
-              ) : (
-                <>
-                  <p className="cap">
-                    {s.sites?.length ?? 0} logger sites (orange) and {s.pairs?.length ?? 0} before/after pairs (green links).
-                  </p>
-                  <RunLayerMap rid={rid} keys={["people", "obs", "plantable_pp"]} title="Field kit" overlays={overlays} />
-                </>
-              )}
-            </Block>
-            <Section title="GIS gallery" data={s.gis}>
-              {(g) => (
-                <Block title="GIS gallery">
-                  <Gis rid={rid} gis={g} hexFiles={s.hex_files} />
-                </Block>
-              )}
-            </Section>
+            <p className="cap" data-planner-next="true">
+              Where to plant, by zone and logger site: <Link to={`${runHref(rid, "effects")}#where`}>What cools › Where to act</Link>.
+            </p>
             <Block title="Re-run the planner pack">
               <RerunPlanner rid={rid} />
             </Block>
@@ -308,5 +278,116 @@ export default function Planner() {
         );
       }}
     </ViewPage>
+  );
+}
+
+/**
+ * A part of the planner pack shown outside its own page (no page title of its own): the
+ * loading, error and not-computed states, then `children(sections)` in the view's units.
+ */
+function PlannerPart({ rid, what, children }: { rid: string; what: string; children: (s: ViewModelOf<"planner">["sections"]) => ReactNode }) {
+  const res = useView(rid, "planner");
+  const vm = res.data;
+  if (!vm)
+    return res.error ? (
+      <EmptyState error={res.error} />
+    ) : (
+      <p className="cap" role="status">
+        <span className="spinner" aria-hidden="true" /> Loading {what.toLowerCase()}…
+      </p>
+    );
+  // One plain sentence and the planner pack's button, never the list of its output keys.
+  if (vm.availability === "missing") return <MissingState title={what} missing={vm.missing} fallback="The planner pack has not been written." />;
+  return (
+    <UnitsProvider units={vm.units}>
+      <div className="stack" data-planner-part={what}>
+        <MissingList missing={vm.missing} />
+        {children(vm.sections)}
+      </div>
+    </UnitsProvider>
+  );
+}
+
+/** What cools › Where to act: plantable space, the zone table (with hex maps) and the logger sites. */
+export function PlannerWhereToAct({ rid: ridProp }: { rid?: string } = {}) {
+  const routeRid = useRid();
+  const rid = ridProp ?? routeRid;
+  return (
+    <PlannerPart rid={rid} what="Where to act">
+      {(s) => {
+        const absent = absentIn(s);
+        const sites: OverlayFeature[] = s.sites?.length
+          ? [{ type: "points", id: "sites", label: "Logger sites", points: s.sites.map((p) => ({ row: p.row, label: p.label ?? String(p.id), tone: "s2" as const })) }]
+          : [];
+        return (
+          <>
+            <Section title="Plantable space" data={s.plantable}>
+              {(k) => (
+                <Block title="Plantable space">
+                  <KpiTiles kpis={k} label="Plantable space" />
+                </Block>
+              )}
+            </Section>
+            <Section title="Zones" data={s.zones} absent={absent("zones")}>
+              {(z) => (
+                <Block
+                  title="Zones"
+                  actions={
+                    <>
+                      <Link to={`${runHref(rid, "map")}?hex=250`}>Hex map 250 m</Link>
+                      <Link to={`${runHref(rid, "map")}?hex=500`}>500 m</Link>
+                    </>
+                  }
+                >
+                  <GenericTableView table={z} caption="Zones" csvName="planner-zones" />
+                </Block>
+              )}
+            </Section>
+            <Block title="Logger sites">
+              {s.sites === null ? (
+                <OlderCode title="Logger sites" />
+              ) : (
+                <>
+                  <p className="cap">{s.sites.length} logger sites (orange).</p>
+                  <RunLayerMap rid={rid} keys={["people", "obs", "plantable_pp"]} title="Field kit" overlays={sites} />
+                </>
+              )}
+            </Block>
+          </>
+        );
+      }}
+    </PlannerPart>
+  );
+}
+
+/** The planner pack's files for GIS and the field (Reports): the GIS gallery, hexagons and before/after pairs. */
+export function PlannerGisGallery({ rid: ridProp }: { rid?: string } = {}) {
+  const routeRid = useRid();
+  const rid = ridProp ?? routeRid;
+  return (
+    <PlannerPart rid={rid} what="GIS gallery">
+      {(s) => (
+        <>
+          <Section title="GIS gallery" data={s.gis}>
+            {(g) => (
+              <Block title="GIS gallery">
+                <Gis rid={rid} gis={g} hexFiles={s.hex_files} />
+              </Block>
+            )}
+          </Section>
+          {s.pairs?.length ? (
+            <Block title="Before/after pairs">
+              <p className="cap">{s.pairs.length} before/after pairs (green links).</p>
+              <RunLayerMap
+                rid={rid}
+                keys={["people", "obs", "plantable_pp"]}
+                title="Before/after pairs"
+                overlays={[{ type: "links", id: "pairs", label: "Before/after pairs", links: s.pairs.map((p) => ({ from: { row: p.treated }, to: { row: p.control } })), tone: "s3" }]}
+              />
+            </Block>
+          ) : null}
+        </>
+      )}
+    </PlannerPart>
   );
 }

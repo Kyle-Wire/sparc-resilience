@@ -1,7 +1,11 @@
-// Climate (SPEC §6.4): warming per SSP × period (median, p10–p90, min–max, per-model strip),
-// the model × projection table, exposure bars (share of cells ≥ T today vs futures and
-// adaptation variants, with a threshold toggle), the "% of median warming offset" gauges, a
-// future-temperature map computed client-side (observed + warming) and a link to Lab › Climate.
+// Climate (SPEC §6.4), the first part of Heat risk › Future climate (phase 2, the canonical home
+// of the climate numbers): warming per SSP × period (median, p10–p90, min–max, per-model strip,
+// with the model × projection table folded under it), exposure bars (share of cells ≥ T today vs
+// futures and adaptation variants, with a threshold toggle), the "% of median warming offset"
+// gauges (only for a run with adaptation variants, and never when Heat risk embeds the page:
+// there "Can adaptation keep up?", the Lab's Climate × adaptation matrix that follows on the same
+// page (#adapt), is the one home of the offset) and a future-temperature map computed
+// client-side (observed + warming).
 import { useMemo, useState } from "react";
 import type { ClimateSections, ClimateProjection } from "../../api/runs";
 import type { LayerGroup, LayerMeta } from "../../api/types";
@@ -14,6 +18,7 @@ import { findLayer } from "../../map/LayerPicker";
 import { Link } from "../../router";
 import { fmtNum, fmtPct, fmtSignedValue, unitLabel } from "../../theme/format";
 import { Block, GenericTableView, Section, ViewPage, useRid, useUnits } from "./common";
+import { heatHref, useDewpoint } from "./HeatRisk";
 
 const projLabel = (p: Pick<ClimateProjection, "label" | "period">) => `${p.label} ${p.period.replace("-", "–")}`;
 
@@ -67,6 +72,7 @@ function Exposure({ e }: { e: NonNullable<ClimateSections["exposure"]> }) {
   return (
     <Bars
       title={`Share of cells at or above ${fmtNum(Number(t), 0)} ${u}`}
+      labelGutter={Math.max(...cats.map((c) => c.length)) * 6.6 + 16}
       units="% of cells"
       categories={cats}
       orientation="h"
@@ -163,17 +169,59 @@ function addConst(values: ArrayLike<number>, d: number): Float32Array {
   return out;
 }
 
-export default function Climate() {
+function Offset({ o }: { o: NonNullable<ClimateSections["offset"]> }) {
+  return (
+    <SmallMultiples
+      title="Share of median warming offset"
+      items={o}
+      minPanelWidth={200}
+      panelTitle={(x) => `${x.label} · ${x.variant}`}
+      renderPanel={(x) => (
+        <Gauge
+          bare
+          title={x.label}
+          value={x.share}
+          min={0}
+          max={Math.max(1, x.share ?? 0)}
+          ticks={[1]}
+          label="of median warming offset"
+          format={(v) => fmtPct(v, 0)}
+          tone={(x.share ?? 0) >= 1 ? "good" : "accent"}
+          size={180}
+        />
+      )}
+      table={{
+        columns: [
+          { key: "p", label: "Projection" },
+          { key: "v", label: "Variant" },
+          { key: "s", label: "Share offset", unit: "%" },
+        ],
+        rows: o.map((x) => [x.label, x.variant, x.share === null ? null : x.share * 100]),
+      }}
+      caption="1 (the tick) means the adaptation fully cancels the median warming of that projection."
+    />
+  );
+}
+
+/**
+ * Future climate. `embedded` (Heat risk › Future climate, where "Can adaptation keep up?" follows
+ * on the same page): no offset gauges and no link down to that section.
+ */
+export default function Climate({ embedded }: { embedded?: boolean } = {}) {
   const rid = useRid();
+  const [dewpoint] = useDewpoint();
+  const adaptHref = `${heatHref(rid, "future", dewpoint)}#adapt`;
   return (
     <ViewPage
       view="climate"
-      title="Climate"
+      title="Future climate"
       intro="Downscaled CMIP6 change factors added to the campaign temperatures: how hot the city gets under each scenario, and how much configured adaptation offsets."
       actions={
-        <Link to={`/r/${encodeURIComponent(rid)}/lab/climate`} className="btn small">
-          Climate × adaptation in the Lab
-        </Link>
+        embedded ? undefined : (
+          <Link to={adaptHref} className="cap">
+            Can adaptation keep up? ↓
+          </Link>
+        )
       }
     >
       {(s) => (
@@ -181,60 +229,29 @@ export default function Climate() {
           <Section title="Warming" data={s.warming}>
             {(w) => <Warming w={w} />}
           </Section>
-          <div className="grid2">
+          <Section title="Model × projection table" data={s.models_table}>
+            {(t) => (
+              <details className="card" data-models-table="true">
+                <summary>Warming by model</summary>
+                <GenericTableView table={t} caption="Warming by model and projection" csvName="warming-by-model" />
+              </details>
+            )}
+          </Section>
+          {!embedded && s.offset?.length ? (
+            <div className="grid2">
+              <Section title="Exposure" data={s.exposure}>
+                {(e) => <Exposure e={e} />}
+              </Section>
+              <Section title="Warming offset" data={s.offset}>
+                {(o) => <Offset o={o} />}
+              </Section>
+            </div>
+          ) : (
+            // No adaptation variants (or Heat risk's matrix below owns the offset): the exposure spans the width.
             <Section title="Exposure" data={s.exposure}>
               {(e) => <Exposure e={e} />}
             </Section>
-            <Section title="Warming offset" data={s.offset}>
-              {(o) =>
-                o.length ? (
-                  <SmallMultiples
-                    title="Share of median warming offset"
-                    items={o}
-                    minPanelWidth={200}
-                    panelTitle={(x) => `${x.label} · ${x.variant}`}
-                    renderPanel={(x) => (
-                      <Gauge
-                        bare
-                        title={x.label}
-                        value={x.share}
-                        min={0}
-                        max={Math.max(1, x.share ?? 0)}
-                        ticks={[1]}
-                        label="of median warming offset"
-                        format={(v) => fmtPct(v, 0)}
-                        tone={(x.share ?? 0) >= 1 ? "good" : "accent"}
-                        size={180}
-                      />
-                    )}
-                    table={{
-                      columns: [
-                        { key: "p", label: "Projection" },
-                        { key: "v", label: "Variant" },
-                        { key: "s", label: "Share offset", unit: "%" },
-                      ],
-                      rows: o.map((x) => [x.label, x.variant, x.share === null ? null : x.share * 100]),
-                    }}
-                    caption="1 (the tick) means the adaptation fully cancels the median warming of that projection."
-                  />
-                ) : (
-                  <Block title="Warming offset">
-                    <p className="cap">
-                      No adaptation variants were configured for this run. Try scenarios against these futures in{" "}
-                      <Link to={`/r/${encodeURIComponent(rid)}/lab/climate`}>Lab › Climate</Link>.
-                    </p>
-                  </Block>
-                )
-              }
-            </Section>
-          </div>
-          <Section title="Model × projection table" data={s.models_table}>
-            {(t) => (
-              <Block title="Warming by model">
-                <GenericTableView table={t} caption="Warming by model and projection" csvName="warming-by-model" />
-              </Block>
-            )}
-          </Section>
+          )}
           <Section title="Future-temperature map" data={s.warming}>
             {(w) => (
               <Block title="Future temperature">

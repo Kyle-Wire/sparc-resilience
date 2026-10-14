@@ -31,7 +31,8 @@ export function mergeJob(tracked: Job | null, global: Job | undefined): Job | nu
   return { ...tracked, progress: global.progress ?? tracked.progress, eta_s: global.eta_s ?? tracked.eta_s, eta_lo: global.eta_lo ?? tracked.eta_lo, eta_hi: global.eta_hi ?? tracked.eta_hi };
 }
 
-export function JobTracker({ jid, deps }: { jid: string; deps?: TrackerDeps }) {
+/** `embedded`: inside a run's Model details (Run log), where Files and Provenance have their own sections (BottomTabs). */
+export function JobTracker({ jid, deps, embedded = false }: { jid: string; deps?: TrackerDeps; embedded?: boolean }) {
   const entry = useJobTracker(jid, deps);
   const globalJob = useJobs((s) => s.jobs[jid]);
   const globalProgress = useJobs((s) => s.progress[jid]);
@@ -109,7 +110,7 @@ export function JobTracker({ jid, deps }: { jid: string; deps?: TrackerDeps }) {
           <GenericPanel state={state} job={job} />
         )}
       </div>
-      <BottomTabs entry={entry} job={job} meta={meta.data} />
+      <BottomTabs entry={entry} job={job} meta={meta.data} embedded={embedded} />
     </div>
   );
 }

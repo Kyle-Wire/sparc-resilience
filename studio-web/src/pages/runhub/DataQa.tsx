@@ -1,12 +1,16 @@
-// Data & QA (SPEC §6.4): QA flags, tiles (input, dropped, clipped, grid fill, collisions,
-// background, noise floor), the fractional-part histogram (evidence of classed targets), the
+// Data & QA (SPEC §6.4): QA flags beside the forcing card (radiation, wind and station: the
+// run's input weather, read from the accuracy view; phase 2 moved it here from Accuracy, since
+// Data & checks is the home of input QA), tiles (input, dropped, clipped, grid fill with the
+// cell size, collisions, background, noise floor), the fractional-part histogram (evidence of
+// classed targets; full width, with a one-line note, when the run has no zone column), the
 // dose-scale table, predictor histograms, the correlation matrix, per-zone counts, coarse
 // aggregation stats and join provenance.
-import type { DataSections, KeyValue } from "../../api/runs";
+import type { AccuracySections, DataSections, KeyValue, ViewKpi } from "../../api/runs";
+import { useView } from "../../api/runs";
 import { Bars, Heatmap, Histogram, SmallMultiples } from "../../charts";
 import { Table } from "../../components/ui/Table";
 import { fmtNum, fmtPct, fmtValue, unitLabel } from "../../theme/format";
-import { Block, FlagList, KpiTiles, Section, ViewPage, useUnits } from "./common";
+import { Block, FlagList, KpiTiles, Section, ViewPage, useRid, useUnits, type DetailPageProps } from "./common";
 import { cellText } from "./format";
 
 type FracHist = NonNullable<DataSections["frac_hist"]>;
@@ -35,6 +39,89 @@ function FractionalParts({ h }: { h: FracHist }) {
       decimals={1}
       caption={parts.length ? parts.join("; ") + "." : undefined}
     />
+  );
+}
+
+/**
+ * The QA tiles with the cell size folded into the grid fill ("63.5%", "of 30 m cells"): one
+ * tile fewer, so the row breaks evenly. Unchanged when either tile is absent.
+ */
+export function foldCellSize(tiles: readonly ViewKpi[]): ViewKpi[] {
+  const fill = tiles.find((t) => t.id === "fill");
+  const cell = tiles.find((t) => t.id === "cell_m");
+  if (!fill || !cell || typeof cell.value !== "number" || !Number.isFinite(cell.value)) return [...tiles];
+  const of = `of ${fmtNum(cell.value, cell.value % 1 ? 1 : 0)} m cells`;
+  return tiles.filter((t) => t !== cell).map((t) => (t === fill ? { ...t, note: t.note ? `${of}; ${t.note}` : of } : t));
+}
+
+type Forcing = NonNullable<AccuracySections["forcing"]>;
+
+function WindArrow({ deg, speed }: { deg: number | null; speed: number | null }) {
+  if (deg === null) return null;
+  // The arrow points where the wind blows to (from `deg`, clockwise from north).
+  return (
+    <svg width="40" height="40" viewBox="-20 -20 40 40" role="img" aria-label={`Wind from ${fmtNum(deg, 0)}° at ${fmtNum(speed, 1)} m/s`}>
+      <circle r="18" fill="none" style={{ stroke: "var(--line-strong)" }} />
+      <g transform={`rotate(${deg + 180})`}>
+        <path d="M0,-14 L5,-4 L1.5,-4 L1.5,12 L-1.5,12 L-1.5,-4 L-5,-4 Z" style={{ fill: "var(--ink-2)" }} />
+      </g>
+    </svg>
+  );
+}
+
+
+/** The run's input weather (from the accuracy view's forcing card): date and hours, radiation, wind and station, with its checks. */
+export function ForcingCard({ f }: { f: Forcing }) {
+  return (
+    <Block title="Forcing">
+      <div className="row" style={{ alignItems: "flex-start" }}>
+        <WindArrow deg={f.wind_dir_deg} speed={f.wind_speed} />
+        <dl className="kv" aria-label="Forcing">
+          <dt>Date</dt>
+          <dd>{f.date ?? "—"}</dd>
+          <dt>Hours</dt>
+          <dd>{f.hours ?? "—"}</dd>
+          <dt>Shortwave down</dt>
+          <dd>{fmtValue(f.sw_down, "W/m²", 0)}</dd>
+          <dt>Net longwave</dt>
+          <dd>{fmtValue(f.lw_net, "W/m²", 0)}</dd>
+          <dt>Wind</dt>
+          <dd>{f.wind_speed !== null ? `${fmtValue(f.wind_speed, "m/s", 1)}${f.wind_dir_deg !== null ? ` from ${fmtNum(f.wind_dir_deg, 0)}°` : ""}` : "—"}</dd>
+          <dt>Station</dt>
+          <dd>{f.station ?? "—"}</dd>
+        </dl>
+      </div>
+      {f.checks.length ? (
+        <ul className="cap" style={{ margin: 0, paddingLeft: 18 }}>
+          {f.checks.map((c, i) => (
+            <li key={i}>{c}</li>
+          ))}
+        </ul>
+      ) : null}
+    </Block>
+  );
+}
+
+/** QA flags beside the forcing card when the run has one (the accuracy view carries it), else full width. */
+function FlagsAndForcing({ flags }: { flags: DataSections["flags"] | null | undefined }) {
+  const rid = useRid();
+  const acc = useView(rid || null, "accuracy");
+  const forcing = acc.data && acc.data.availability !== "missing" ? acc.data.sections.forcing : null;
+  const flagBlock = (
+    <Section title="QA flags" data={flags}>
+      {(f) => (
+        <Block title="QA flags">
+          <FlagList flags={f} />
+        </Block>
+      )}
+    </Section>
+  );
+  if (!forcing) return flagBlock;
+  return (
+    <div className="grid2" data-forcing="true">
+      {flagBlock}
+      <ForcingCard f={forcing} />
+    </div>
   );
 }
 
@@ -82,28 +169,35 @@ function KeyValues({ items, label }: { items: KeyValue[]; label: string }) {
   );
 }
 
-export default function DataQa() {
+export default function DataQa({
+  title = "Data & QA",
+  intro = "What went into the model: input checks, the grid, the lever doses and the predictors.",
+}: DetailPageProps = {}) {
   return (
-    <ViewPage view="data" title="Data & QA" intro="What went into the model: input checks, the grid, the lever doses and the predictors.">
+    <ViewPage view="data" title={title} intro={intro}>
       {(s) => (
         <>
           <Section title="QA tiles" data={s.qa_tiles}>
-            {(t) => <KpiTiles kpis={t} label="Data QA" />}
+            {(t) => <KpiTiles kpis={foldCellSize(t)} label="Data QA" />}
           </Section>
-          <Section title="QA flags" data={s.flags}>
-            {(f) => (
-              <Block title="QA flags">
-                <FlagList flags={f} />
-              </Block>
-            )}
-          </Section>
-          <div className="grid2">
-            <Section title="Fractional-part histogram" data={s.frac_hist}>
-              {(h) => <FractionalParts h={h} />}
-            </Section>
-            <Section title="Per-zone counts" data={s.zone_counts}>
-              {(z) =>
-                z.length ? (
+          <FlagsAndForcing flags={s.flags} />
+          {s.zone_counts && !s.zone_counts.length ? (
+            // No zone column: the histogram takes the full row, the note one line under it.
+            <div className="stack" style={{ gap: 6 }} data-no-zones="true">
+              <Section title="Fractional-part histogram" data={s.frac_hist}>
+                {(h) => <FractionalParts h={h} />}
+              </Section>
+              <p className="cap" style={{ margin: 0 }}>
+                This run has no zone column.
+              </p>
+            </div>
+          ) : (
+            <div className="grid2">
+              <Section title="Fractional-part histogram" data={s.frac_hist}>
+                {(h) => <FractionalParts h={h} />}
+              </Section>
+              <Section title="Per-zone counts" data={s.zone_counts}>
+                {(z) => (
                   <Bars
                     title="Points per zone"
                     categories={z.map((r) => r.zone)}
@@ -116,12 +210,10 @@ export default function DataQa() {
                       0,
                     )} points.`}
                   />
-                ) : (
-                  <p className="cap">This run has no zone column.</p>
-                )
-              }
-            </Section>
-          </div>
+                )}
+              </Section>
+            </div>
+          )}
           <Section title="Dose scale" data={s.dose_scale}>
             {(d) => (
               <Block title="Dose scale">

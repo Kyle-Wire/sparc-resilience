@@ -137,3 +137,4 @@ details.card.advanced > summary { cursor: pointer; }
   .plan-node { grid-template-columns: 24px minmax(0, 1fr); }
   .plan-est { grid-column: 2; }
 }
+.netcheck .pill { white-space: normal; max-width: 100%; border-radius: 8px; overflow-wrap: anywhere; }

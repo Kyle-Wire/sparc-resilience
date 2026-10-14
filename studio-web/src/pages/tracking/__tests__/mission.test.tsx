@@ -1,6 +1,7 @@
 // Mission Control components: the fold × model heatmap from base_model task.end metrics, the
 // stacker leaderboard from candidate_rmse metrics, Cancel / Force stop (fake timers), the stage
-// rail chips (icon + text) and reduced motion.
+// rail chips (icon + text) and reduced motion; S0 and the skill tiles link to the run's homes
+// for its data checks and accuracy (phase 2).
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearResources } from "../../../api/resource";
@@ -21,6 +22,7 @@ import { GanttPanel } from "../mission/GanttPanel";
 import { ChildMatrix } from "../mission/ChildMatrix";
 import { diagnostics } from "../mission/Header";
 import { S2S3Panel, StackerLeaderboard } from "../mission/ModelPanels";
+import { StagePanel } from "../mission/StagePanels";
 import { StageRail } from "../mission/StageRail";
 import { makeJob, parseJsonl, type CursorEvent } from "./events";
 
@@ -88,6 +90,28 @@ describe("fold × model heatmap", () => {
     expect(cellOf(container, "Fold 3", "mgwr")!.getAttribute("aria-label")).toContain("held-out RMSE 0.520");
     // final skill against the 0.90 coverage target
     expect(byText(container, ".kpi", "90% interval coverage")?.textContent).toContain("87.4%");
+  });
+
+  it("keeps the live skill tiles and links a finished stage to the run's trust tab", () => {
+    const state = replay(live);
+    expect(render(<S2S3Panel state={state} />).container.querySelector('a[href^="/r/"]')).toBeNull();
+    const { container } = render(<S2S3Panel state={state} runId="r_1" />);
+    expect(byText(container, ".kpi", "Held-out R²")).not.toBeNull();
+    expect(byText(container, "a", "How much to trust this run")!.getAttribute("href")).toBe("/r/r_1/trust");
+  });
+});
+
+describe("S0 panel", () => {
+  it("is one line linking to Model details › Data for a run; the QA tiles only for a job without a run", () => {
+    const state = replay(sample);
+    const run = render(<StagePanel stage="S0" state={state} runId="r_1" />);
+    const line = run.container.querySelector("[data-s0-line]")!;
+    expect(line.textContent).toContain("40 cells from 42 input rows · 2 dropped · 1 QA flag.");
+    expect(byText(line, "a", "Data checks")!.getAttribute("href")).toBe("/r/r_1/details/data");
+    expect(run.container.querySelector(".kpi")).toBeNull();
+    const noRun = render(<StagePanel stage="S0" state={state} runId={null} />);
+    expect(noRun.container.querySelector("[data-s0-line]")).toBeNull();
+    expect(byText(noRun.container, ".kpi", "Grid fill")).not.toBeNull();
   });
 });
 
@@ -453,6 +477,48 @@ describe("Resources tab", () => {
     const { container } = render(<BottomTabs entry={{ ...entryFor(job, [sample10(1790950000, 4000)]), phase: "live", ended: null }} job={job} meta={undefined} />);
     await waitFor(() => container.querySelector('[role="alert"]'), 5000, "memory banner");
     expect(container.querySelector('[role="alert"]')!.textContent).toContain("above 80%");
+  });
+});
+
+describe("BottomTabs embedded in Model details", () => {
+  let fm: ReturnType<typeof mockFetch> | null = null;
+  afterEach(() => {
+    fm?.restore();
+    fm = null;
+    navigate("/", { replace: true });
+  });
+
+  const entryFor = (job: Job): TrackerEntry => ({
+    jid: job.id, phase: "ended", error: null, job, state: replay(sample), reconstructed: false, replaying: false, resources: [], recent: [], ended: job.status, epochs: [], logs: [], logCapped: false,
+  });
+
+  it("leaves out Outputs and Config & provenance, each a link to its Model details section", async () => {
+    clearResources();
+    fm = mockFetch({ "GET /api/jobs/j_e/logs": { body: { lines: [], next_cursor: 0 } } });
+    const job = makeJob({ id: "j_e", status: "succeeded", run_id: "r_e" });
+    // an old link to a moved tab falls back to the logs
+    navigate("/r/r_e/details/runlog?tab=config", { replace: true });
+    const { container } = render(<BottomTabs entry={entryFor(job)} job={job} meta={undefined} embedded />);
+    const tabs = [...container.querySelectorAll('[role="tab"]')].map((t) => t.textContent ?? "");
+    expect(tabs.some((t) => t.startsWith("Outputs"))).toBe(false);
+    expect(tabs).not.toContain("Config & provenance");
+    expect(tabs).toContain("Logs");
+    expect(container.querySelector('[role="tab"][aria-selected="true"]')!.textContent).toBe("Logs");
+    const moved = container.querySelector("[data-moved-tabs]")!;
+    expect([...moved.querySelectorAll("a")].map((a) => [a.textContent, a.getAttribute("href")])).toEqual([
+      ["Files", "/r/r_e/details/files"],
+      ["Provenance", "/r/r_e/details/provenance"],
+    ]);
+  });
+
+  it("keeps every tab on the job page", () => {
+    const job = makeJob({ id: "j_f", status: "succeeded", run_id: "r_f" });
+    navigate("/jobs/j_f?tab=checkpoints", { replace: true });
+    const { container } = render(<BottomTabs entry={entryFor(job)} job={job} meta={undefined} />);
+    const tabs = [...container.querySelectorAll('[role="tab"]')].map((t) => t.textContent ?? "");
+    expect(tabs.some((t) => t.startsWith("Outputs"))).toBe(true);
+    expect(tabs).toContain("Config & provenance");
+    expect(container.querySelector("[data-moved-tabs]")).toBeNull();
   });
 });
 

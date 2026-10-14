@@ -64,6 +64,12 @@ export type FrameOptions = {
   handleRef?: Ref<ChartHandle>;
   actions?: ReactNode;
   className?: string;
+  /**
+   * In place of the "Table view" disclosure: a note (when the same numbers are listed right
+   * next to the chart, e.g. a table with each row's actions), or false for nothing. The CSV
+   * export keeps the chart's data either way.
+   */
+  tableView?: ReactNode | false;
 };
 
 type ChartCtx = {
@@ -289,7 +295,7 @@ export type ChartFrameProps = FrameOptions & {
 };
 
 /** The frame every kit chart renders inside. */
-export function ChartFrame({ title, caption, units, note, legend, bare, exportName, pin, handleRef, actions, className, table, children }: ChartFrameProps) {
+export function ChartFrame({ title, caption, units, note, legend, bare, exportName, pin, handleRef, actions, className, table, tableView, children }: ChartFrameProps) {
   const dark = useUi((s) => s.dark);
   const context = useUi((s) => s.context);
   const route = useRoute();
@@ -345,7 +351,7 @@ export function ChartFrame({ title, caption, units, note, legend, bare, exportNa
       } catch {
         /* the finding stands without an image */
       }
-      toast("success", "Pinned to Findings", { href: `/p/${pid}/findings`, linkLabel: "Open Findings" });
+      toast("success", "Pinned to Findings", { href: `/p/${encodeURIComponent(pid)}/exports?tab=notes`, linkLabel: "Open Findings" });
       return f;
     } catch (e) {
       toast("error", "Could not pin to Findings", { body: errorMessage(e) });
@@ -404,9 +410,11 @@ export function ChartFrame({ title, caption, units, note, legend, bare, exportNa
   return (
     <Ctx.Provider value={ctx}>
       <figure className={["chart-frame", "vcard", className ?? ""].filter(Boolean).join(" ")} aria-labelledby={titleId} style={{ margin: 0 }} data-chart={title}>
+        {/* The title wraps (never ellipsised); when it would get too narrow beside the toolbar,
+            the toolbar drops below it (theme/base.css .chart-frame.vcard > .vcard-head). */}
         <header className="vcard-head">
           <div className="chart-title">
-            <h3 id={titleId} className="kicker" title={title}>
+            <h3 id={titleId} className="kicker">
               {title}
             </h3>
             {units ? <p className="cap chart-units">Units: {units}</p> : null}
@@ -435,10 +443,14 @@ export function ChartFrame({ title, caption, units, note, legend, bare, exportNa
         </div>
         {legend ? <div className="legend-row">{legend}</div> : null}
         {caption ? <figcaption className="cap">{caption}</figcaption> : null}
-        <details className="table-view">
-          <summary>Table view</summary>
-          <Table columns={columns} rows={rows} caption={`${title} data`} csvName={name} />
-        </details>
+        {tableView === undefined || tableView === true ? (
+          <details className="table-view">
+            <summary>Table view</summary>
+            <Table columns={columns} rows={rows} caption={`${title} data`} csvName={name} />
+          </details>
+        ) : (
+          tableView || null
+        )}
         <div className="sr-only" aria-live="polite" role="status">
           {live}
         </div>

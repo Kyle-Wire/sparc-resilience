@@ -18,7 +18,7 @@ import re
 import time
 from pathlib import Path
 
-from .conftest import SYNTH_RUN, StudioPage, drag_on, rail_states, wait_for, wait_view_ready
+from .conftest import SYNTH_RUN, StudioPage, drag_on, rail_states, visit_run_pages, wait_for
 
 REPLAY_SPEED = "1"
 SETUP_STEPS = ["Levers", "Physics", "Inputs", "Scenarios", "Analysis", "About"]
@@ -115,9 +115,9 @@ def test_e2e_replay(studio_server, studio_page):
     assert predictions_live, "the replay ended before the Outputs feed showed predictions.parquet"
     sp.shot("mission control mid run")
 
-    # Accuracy opens mid-replay (a second tab) and says the run is still going.
+    # Model details › Accuracy opens mid-replay (a second tab) and says the run is still going.
     acc = studio_page(server)
-    acc.goto(f"/r/{rid}/accuracy")
+    acc.goto(f"/r/{rid}/details/accuracy")
     acc.page.locator(".runhub-view[data-view=accuracy]").wait_for()
     acc.page.locator(".runhub-view [data-live=true]").wait_for()
     assert server.job(jid)["status"] == "running"
@@ -169,17 +169,14 @@ def test_e2e_replay(studio_server, studio_page):
     cursors = [ln["cursor"] for ln in server_lines]
     assert cursors == sorted(cursors) and len(set(cursors)) == len(cursors)
 
-    # -- every run tab -----------------------------------------------------------------------------
-    sp.goto(f"/r/{rid}")
-    tabs = page.get_by_role("navigation", name="Run views").get_by_role("link")
-    hrefs = [(t.inner_text().split("\n")[0].strip(), t.get_attribute("href")) for t in tabs.all()]
-    assert len(hrefs) >= 15
-    for label, href in hrefs:
-        sp.goto(href)
-        wait_view_ready(page, f"{label} tab", 30)
+    # -- every run tab and every section of Heat risk, the Scenario Lab and Model details ----------
+    visited = []
+    for label, _href in visit_run_pages(sp, rid, 30):
         alerts = page.locator("main [role=alert]")
         assert not alerts.count(), f"{label}: {alerts.all_inner_texts()}"
         sp.shot(f"tab {label}")
+        visited.append(label)
+    assert len(visited) >= 20, visited
 
     # -- every map layer ---------------------------------------------------------------------------
     sp.goto(f"/r/{rid}/map")
@@ -214,7 +211,8 @@ def test_e2e_replay(studio_server, studio_page):
     # -- pin a finding → export the findings as HTML -----------------------------------------------
     page.get_by_role("button", name="Pin Region stats to Findings").click()
     wait_for(lambda: server.get("/api/findings", params={"project": pid}), 20, "the pinned finding")
-    sp.goto(f"/p/{pid}/findings")
+    sp.goto(f"/p/{pid}/findings")     # the old Findings URL opens Reports › Notes
+    page.wait_for_url(re.compile(rf"/p/{pid}/exports\?tab=notes$"))
     page.get_by_role("list", name="Findings").get_by_role("listitem").first.wait_for()
     page.get_by_role("button", name="Export HTML").click()
     download = page.get_by_role("group", name="Export findings").get_by_role("link", name="Download")

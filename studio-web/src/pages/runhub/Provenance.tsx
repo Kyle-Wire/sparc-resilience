@@ -15,7 +15,7 @@ import { copyText } from "../../components/ui/download";
 import { useJobs } from "../../stores/jobs";
 import { toast } from "../../stores/ui";
 import { fmtDateTime } from "../../theme/format";
-import { Block, Section, ViewPage, useRid } from "./common";
+import { Block, Section, ViewPage, useRid, type DetailPageProps } from "./common";
 import { humanize } from "./format";
 
 const show = (v: unknown) => (v === undefined ? "—" : typeof v === "string" ? v : JSON.stringify(v));
@@ -182,14 +182,17 @@ function Config({ rid }: { rid: string }) {
   );
 }
 
-export default function Provenance() {
+export default function Provenance({
+  title = "Provenance",
+  intro = "Everything needed to trust and repeat this run: hashes of the inputs, config and code, the software environment and the exact launch snapshot.",
+}: DetailPageProps = {}) {
   const rid = useRid();
   const detail = useRunDetailFull(rid);
   return (
     <ViewPage
       view="provenance"
-      title="Provenance"
-      intro="Everything needed to trust and repeat this run: hashes of the inputs, config and code, the software environment and the exact launch snapshot."
+      title={title}
+      intro={intro}
       actions={<ReproduceButton rid={rid} />}
     >
       {(s) => (

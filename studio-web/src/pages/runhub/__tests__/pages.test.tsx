@@ -14,7 +14,7 @@ import { viewFixture } from "../__fixtures__/views";
 import Docs from "../Docs";
 import Files from "../Files";
 import MapTab from "../MapTab";
-import Overview from "../Overview";
+import Overview, { RunRecord } from "../Overview";
 import Provenance from "../Provenance";
 import { gridMeta, mapRoutes, runDetail, runSummary, unframedCharts } from "./helpers";
 
@@ -88,6 +88,42 @@ describe("Overview", () => {
     expect(container.querySelector('[data-output="planner"][data-state="missing"]')!.textContent).toContain("Run planner pack");
     expect(container.querySelector("details.callout[open]")!.textContent).toContain("Generic physics forcing");
     expect(container.textContent).toContain("Daytime (afternoon) model");
+    m.restore();
+  });
+
+  it("RunRecord (Model details › Run log) keeps the header, stage timings and outputs grid, without KPIs or caveats", async () => {
+    const rid = nextRid("rec");
+    const { container, m } = await mount(
+      `/r/${rid}/details/runlog`,
+      <RunRecord />,
+      { [`GET /api/runs/${rid}`]: { body: runDetail(rid) }, [`GET /api/runs/${rid}/views/overview`]: { body: viewFixture("overview") } },
+      (c) => c.querySelector('[aria-label="Run header"]') && c.querySelector('[aria-label="Outputs availability"]'),
+    );
+    expect(container.querySelector('[aria-label="Run header"]')!.textContent).toContain("5a04f44");
+    expect(container.querySelector('[data-output="planner"][data-state="missing"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Run key numbers"]')).toBeNull();
+    expect(container.querySelector("details.callout")).toBeNull();
+    m.restore();
+  });
+
+  it("RunRecord detailsOnly (Run log) leaves the outputs to Files and the commit and run directory to Provenance; with no job log it keeps the stage timings", async () => {
+    const rid = nextRid("rec");
+    const { container, m } = await mount(
+      `/r/${rid}/details/runlog`,
+      <RunRecord detailsOnly />,
+      {
+        [`GET /api/runs/${rid}`]: { body: runDetail(rid) },
+        [`GET /api/runs/${rid}/views/overview`]: { body: viewFixture("overview") },
+        "GET /api/jobs": { body: { items: [], next_cursor: null } },
+      },
+      (c) => c.querySelector('[aria-label="Run header"]') && c.querySelector('figure[data-chart="Stage timings"]'),
+    );
+    const header = container.querySelector('[aria-label="Run header"]')!.textContent!;
+    expect(header).not.toContain("5a04f44");
+    expect(header).not.toContain(`/runs/${rid}`);
+    expect(header).toContain("3 × 3 cells at 30 m");
+    expect(container.querySelector('[aria-label="Copy run directory"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Outputs availability"]')).toBeNull();
     m.restore();
   });
 });

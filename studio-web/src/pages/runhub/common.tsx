@@ -1,10 +1,11 @@
 // Shared run-hub building blocks (SPEC §6.4): the ViewModel page wrapper (live banner,
-// missing-output empty state with the server's action, caveats), per-section placeholders
+// missing-output empty state in one sentence with the server's action, the run-wide caveats only
+// when asked: their home is the Summary), per-section placeholders
 // (older code, or the known reason a section is absent), KPI tiles, flags, generic tables and
 // the Findings pin for non-chart blocks.
 import { Component, createContext, useContext, useState, type ErrorInfo, type ReactNode } from "react";
 import { api, errorMessage } from "../../api/client";
-import type { GenericTable, Sections, Verdict, ViewFlag, ViewKpi, ViewModelOf, ViewName, ViewParams, ViewSections, ViewUnits } from "../../api/runs";
+import type { GenericTable, MissingOutput, Sections, Verdict, ViewFlag, ViewKpi, ViewModelOf, ViewName, ViewParams, ViewSections, ViewUnits } from "../../api/runs";
 import { useRunDetailFull, useView } from "../../api/runs";
 import type { Action, Finding, FindingCreate, StageId } from "../../api/types";
 import { Badge } from "../../components/ui/Badge";
@@ -17,7 +18,7 @@ import { runIsLive } from "../../layouts/resources";
 import { useRoute } from "../../router";
 import { toast, useUi } from "../../stores/ui";
 import { planReasonText } from "../projects/model/plan";
-import { cellText, kpiDisplay, missingText, tableColumns } from "./format";
+import { cellText, kpiDisplay, missingText, producedByText, tableColumns } from "./format";
 
 /** The `:rid` of the current run route. */
 export function useRid(): string {
@@ -141,9 +142,56 @@ export function Section<T>({
   return <SectionBoundary title={title}>{children(data as NonNullable<T>)}</SectionBoundary>;
 }
 
-/** Missing outputs of a view, each with the server's one-click remedy. */
+/** One plain sentence per producer whose outputs a view is missing (all of them share its remedy). */
+const PRODUCER_SENTENCE: Record<string, string> = {
+  "post:planner": "Run the planner pack to see where to act, who is exposed, and the GIS files.",
+  "post:uncertainty": "Compute the uncertainty envelopes to see how wide each scenario's range is.",
+  "post:baselines": "Score the baselines to see whether the model beats simpler ones.",
+  "post:writeup": "Regenerate the methods and model card to see them.",
+  "post:emulator": "Build the emulator to see this.",
+};
+
+/** Two remedies are the same button when they make the same request. */
+const sameAction = (a: Action | null, b: Action | null) => !!a && !!b && a.kind === b.kind && (a.path ?? "") === (b.path ?? "") && (a.method ?? "") === (b.method ?? "");
+
+/**
+ * The missing outputs of a view as one plain sentence and one remedy when they all share the
+ * same remedy (or none has one): "Run the planner pack to see …" with its button, never the
+ * list of output keys. Null when they need different remedies (the caller lists them).
+ */
+export function missingSummary(missing: readonly MissingOutput[]): { sentence: string; action: Action | null } | null {
+  if (!missing.length) return null;
+  const first = missing[0];
+  const oneAction = first.action ? missing.every((m) => sameAction(m.action, first.action)) : missing.every((m) => !m.action);
+  if (!oneAction) return null;
+  const producers = [...new Set(missing.map((m) => m.produced_by))];
+  const known = producers.length === 1 ? PRODUCER_SENTENCE[producers[0]] : undefined;
+  const sentence = known ?? `It comes from ${producers.map(producedByText).join(" and ")}, which ${producers.length === 1 ? "has" : "have"} not written it yet.`;
+  return { sentence, action: first.action };
+}
+
+/**
+ * The empty state of a view (or a part of one) whose outputs are all missing: one plain
+ * sentence and the remedy when they share one (missingSummary), else the list of what is missing.
+ */
+export function MissingState({ title, missing, fallback }: { title: string; missing: readonly MissingOutput[]; fallback?: string }) {
+  const one = missingSummary(missing);
+  if (one || !missing.length) {
+    return <EmptyState title={`${title}: not available for this run yet`} body={one?.sentence ?? fallback ?? "The outputs this view needs have not been written."} action={one?.action ?? null} />;
+  }
+  return <EmptyState title={`${title}: not available for this run yet`} body={missing.map(missingText).join("; ") + "."} action={missing.find((m) => m.action)?.action ?? null} />;
+}
+
+/** Missing outputs of a view: one sentence and remedy when they share one, else each with the server's one-click remedy. */
 export function MissingList({ missing }: { missing: ViewModelOf<ViewName>["missing"] }) {
   if (!missing.length) return null;
+  const one = missingSummary(missing);
+  if (one)
+    return (
+      <div className="callout" role="note" data-missing={missing.length}>
+        {one.sentence} {one.action ? <ActionButton action={one.action} size="small" variant="default" /> : null}
+      </div>
+    );
   return (
     <div className="callout" role="note">
       <strong>Not in this run yet:</strong>
@@ -163,7 +211,7 @@ export function Caveats({ caveats, open }: { caveats: string[]; open?: boolean }
   return (
     <details className="callout" data-tone="info" open={open}>
       <summary>
-        {caveats.length} caveat{caveats.length === 1 ? "" : "s"} for this view
+        {caveats.length} caveat{caveats.length === 1 ? "" : "s"} for this run
       </summary>
       <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
         {caveats.map((c, i) => (
@@ -174,6 +222,14 @@ export function Caveats({ caveats, open }: { caveats: string[]; open?: boolean }
   );
 }
 
+/**
+ * What Model details passes to the page of a section: the rail label as its title, `intro: null`
+ * (the section's one-line intro is above it), `level: 3` for a second page under that title, and
+ * `detailsOnly` to leave out the charts a planner tab already shows. Without props a page renders
+ * its full original content.
+ */
+export type DetailPageProps = { title?: string; intro?: ReactNode | null; level?: 2 | 3; detailsOnly?: boolean };
+
 export type ViewPageProps<V extends ViewName> = {
   view: V;
   title: string;
@@ -182,8 +238,17 @@ export type ViewPageProps<V extends ViewName> = {
   live?: (vm: ViewModelOf<V>) => boolean;
   liveText?: ReactNode;
   actions?: ReactNode;
+  /**
+   * Show the view's caveats. Off by default: the server's caveats are run-wide (the same list on
+   * every view), so their one home is the Summary's "Things to keep in mind".
+   */
+  showCaveats?: boolean;
   /** Show the caveats expanded (Overview). */
   caveatsOpen?: boolean;
+  /** Heading level of the title: 3 for a second page under a Model details section's title. */
+  level?: 2 | 3;
+  /** Show the title as a kicker (the brand's small uppercase label) rather than a section title: a group inside a page that has its own title. */
+  kicker?: boolean;
   /** Query parameters of the view (the Heat tab's what-if dewpoint). */
   params?: ViewParams;
   children: (sections: Sections<ViewSections[V]>, vm: ViewModelOf<V>) => ReactNode;
@@ -192,21 +257,22 @@ export type ViewPageProps<V extends ViewName> = {
 /**
  * A run tab rendered from `GET /api/runs/{rid}/views/{view}`: loading and error states, the
  * missing-output empty state with its action, the live banner while the run writes, the
- * view's caveats, then the sections.
+ * view's caveats when asked (`showCaveats`), then the sections.
  */
-export function ViewPage<V extends ViewName>({ view, title, intro, live, liveText, actions, caveatsOpen, params, children }: ViewPageProps<V>) {
+export function ViewPage<V extends ViewName>({ view, title, intro, live, liveText, actions, showCaveats = false, caveatsOpen, level = 2, kicker = false, params, children }: ViewPageProps<V>) {
   const rid = useRid();
   const res = useView(rid, view, params);
   const runLive = useRunIsLive(rid);
   const vm = res.data;
   const isLive = !!vm && (runLive || vm.availability === "running" || (live ? live(vm) : false));
+  const Heading = level === 3 ? "h3" : "h2";
   return (
     <section className="stack runhub-view" data-view={view} aria-labelledby={`view-${view}`}>
       <header className="row" style={{ justifyContent: "space-between" }}>
         <div className="row">
-          <h2 id={`view-${view}`} style={{ margin: 0 }}>
+          <Heading id={`view-${view}`} className={kicker ? "kicker" : undefined} style={{ margin: 0 }}>
             {title}
-          </h2>
+          </Heading>
           {vm?.demo ? (
             <Badge tone="demo" title="Synthetic demo data at a fictional location">
               DEMO
@@ -224,17 +290,11 @@ export function ViewPage<V extends ViewName>({ view, title, intro, live, liveTex
           <span className="spinner" aria-hidden="true" /> Loading {title.toLowerCase()}…
         </p>
       ) : null}
-      {vm && vm.availability === "missing" ? (
-        <EmptyState
-          title={`${title}: not available for this run yet`}
-          body={vm.missing.length ? vm.missing.map(missingText).join("; ") + "." : "The outputs this view needs have not been written."}
-          action={vm.missing.find((m) => m.action)?.action ?? null}
-        />
-      ) : null}
+      {vm && vm.availability === "missing" ? <MissingState title={title} missing={vm.missing} /> : null}
       {vm && vm.availability !== "missing" ? (
         <UnitsProvider units={vm.units}>
           <MissingList missing={vm.missing} />
-          <Caveats caveats={vm.caveats} open={caveatsOpen} />
+          {showCaveats ? <Caveats caveats={vm.caveats} open={caveatsOpen} /> : null}
           {children(vm.sections, vm)}
         </UnitsProvider>
       ) : null}
@@ -242,17 +302,39 @@ export function ViewPage<V extends ViewName>({ view, title, intro, live, liveTex
   );
 }
 
-/** ViewModel KPIs as tiles (units and cooler/warmer wording from kpiDisplay). */
+/** A KPI whose value is words, not a number (a budget's constraint, its objective). */
+export const isTextKpi = (k: ViewKpi) => k.format === "text" || typeof k.value === "string";
+
+/**
+ * ViewModel KPIs as tiles (units and cooler/warmer wording from kpiDisplay). Words are not
+ * numbers: text KPIs ("Constraint", "Objective") read as one caption line below the tiles.
+ */
 export function KpiTiles({ kpis, units, label }: { kpis: ViewKpi[]; units?: ViewUnits; label?: string }) {
   const ctxUnits = useUnits();
   if (!kpis.length) return <p className="cap">No key numbers for this run.</p>;
-  return (
+  const tiles = kpis.filter((k) => !isTextKpi(k));
+  const words = kpis.filter(isTextKpi).filter((k) => k.value !== null && k.value !== "");
+  const row = tiles.length ? (
     <KpiRow label={label}>
-      {kpis.map((k) => {
+      {tiles.map((k) => {
         const d = kpiDisplay(k, units ?? ctxUnits);
         return <Kpi key={k.id} label={k.label} value={d.value} unit={d.unit || undefined} note={d.note ?? undefined} tone={k.tone ?? undefined} />;
       })}
     </KpiRow>
+  ) : null;
+  if (!words.length) return row;
+  return (
+    <div className="stack" style={{ gap: 8 }}>
+      {row}
+      <p className="cap" style={{ margin: 0 }} data-kpi-text="true">
+        {words.map((k, i) => (
+          <span key={k.id}>
+            {i ? " · " : ""}
+            {k.label}: <span style={{ color: "var(--ink-2)" }}>{String(k.value)}</span>
+          </span>
+        ))}
+      </p>
+    </div>
   );
 }
 
@@ -322,7 +404,7 @@ export function PinButton({ title, snapshot, view }: { title: string; snapshot: 
         snapshot: { kind: "table", title, ...snapshot },
       };
       const f = await api.post<Finding>("/api/findings", body);
-      toast("success", "Pinned to Findings", { href: `/p/${context.projectId}/findings`, linkLabel: "Open Findings" });
+      toast("success", "Pinned to Findings", { href: `/p/${encodeURIComponent(context.projectId)}/exports?tab=notes`, linkLabel: "Open Findings" });
       return f;
     } catch (e) {
       toast("error", "Could not pin to Findings", { body: errorMessage(e) });

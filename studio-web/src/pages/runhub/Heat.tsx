@@ -1,15 +1,21 @@
-// Heat (the heat brief): how hot the campaign afternoon felt (NWS heat index from each cell's
-// temperature and the campaign dewpoint), who was exposed (residents per NWS category), how that
-// changes in each CMIP6 future (a band between constant dewpoint and constant relative humidity,
-// widened by the models' 10th–90th percentile warming), what the adaptation package buys, and how
-// sure each scenario's cooling is (Robust / Direction only / Not established). The dewpoint can
-// be changed to ask "what if the afternoon were more humid?" (the view's ?dewpoint_C=).
+// The Heat view, in two parts (phase 2):
+// - Heat risk › Today (default export, the canonical home of the heat-risk baseline): how hot the
+//   campaign afternoon felt (NWS heat index from each cell's temperature and the campaign
+//   dewpoint), who was exposed (residents per NWS category, with the adaptation package), where,
+//   and the heat-index distribution. The dewpoint can be changed to ask "what if the afternoon
+//   were more humid?" (the view's ?dewpoint_C=, kept in the page URL so Future climate uses it).
+// - HeatFutures (Heat risk › Future climate): residents per category in each CMIP6 future (a band
+//   between constant dewpoint and constant relative humidity, widened by the models' 10th–90th
+//   percentile warming), with and without the package. The warming itself is the Climate view's.
+// How sure each scenario's cooling is (the view's verdicts) lives on How much to trust this.
 import { useState } from "react";
 import type { HeatCase, HeatCategoryId, HeatSections } from "../../api/runs";
 import { Bars, Histogram } from "../../charts";
 import { Seg } from "../../components/ui/Seg";
+import { Link, runHref } from "../../router";
 import { fmtInt, fmtNum } from "../../theme/format";
-import { Block, KpiTiles, Section, VerdictPill, ViewPage, useRid } from "./common";
+import { Block, KpiTiles, Section, ViewPage, useRid } from "./common";
+import { heatHref, useDewpoint } from "./HeatRisk";
 import { RunLayerMap } from "./RunLayerMap";
 
 const CATS: HeatCategoryId[] = ["below", "caution", "extreme_caution", "danger", "extreme_danger"];
@@ -21,6 +27,9 @@ const CAT_COLOR: Record<HeatCategoryId, string> = {
   extreme_danger: "var(--hc4)",
 };
 const TONE: Record<HeatSections["brief"][number]["tone"], string | undefined> = { neutral: "info", good: "good", warn: undefined, crit: "crit" };
+/** Brief items and KPIs about the futures or the verdicts: their home is Future climate or Trust, not Today. */
+const NOT_TODAY_BRIEF = new Set(["future", "sure"]);
+const NOT_TODAY_KPIS = new Set(["ec_future"]);
 
 type Humidity = "constant_dewpoint" | "constant_rh";
 
@@ -100,24 +109,31 @@ function Brief({ items }: { items: NonNullable<HeatSections["brief"]> }) {
   );
 }
 
-/** Residents (or cells) per NWS category: today, with the package, and each future. */
-function Exposure({ s }: { s: Pick<HeatSections, "today" | "futures" | "categories"> }) {
+/**
+ * Residents (or cells) per NWS category: today and with the package ("today"), or each future
+ * of one period under one humidity assumption, with and without the package ("futures").
+ */
+function Exposure({ s, scope }: { s: Pick<HeatSections, "today" | "futures" | "categories">; scope: "today" | "futures" }) {
   const [hum, setHum] = useState<Humidity>("constant_dewpoint");
   const periods = [...new Set(s.futures.map((f) => f.period))];
   const [per, setPer] = useState<string>(periods.find((p) => p.startsWith("2041")) ?? periods[Math.floor(periods.length / 2)] ?? "");
   const t = s.today;
-  const rows: { label: string; c: HeatCase }[] = [{ label: "Today", c: t.unadapted }];
-  if (t.adapted) rows.push({ label: "Today · with package", c: t.adapted });
-  for (const f of s.futures.filter((x) => x.period === per)) {
-    rows.push({ label: f.label, c: f.unadapted[hum] });
-    if (f.adapted) rows.push({ label: `${f.label} · with package`, c: f.adapted[hum] });
+  const rows: { label: string; c: HeatCase }[] = [];
+  if (scope === "today") {
+    rows.push({ label: "Today", c: t.unadapted });
+    if (t.adapted) rows.push({ label: "Today · with package", c: t.adapted });
+  } else {
+    for (const f of s.futures.filter((x) => x.period === per)) {
+      rows.push({ label: f.label, c: f.unadapted[hum] });
+      if (f.adapted) rows.push({ label: `${f.label} · with package`, c: f.adapted[hum] });
+    }
   }
   const labelOf = (id: HeatCategoryId) => s.categories.find((c) => c.id === id)?.label ?? id;
   const measure = t.measure === "people" ? "Residents" : "Cells";
   const ec = t.unadapted.ec_or_worse;
   return (
     <Bars
-      title={`${measure} by heat-risk category`}
+      title={scope === "today" ? `${measure} by heat-risk category` : `${measure} by heat-risk category in each future`}
       units={t.measure === "people" ? "residents" : "cells"}
       categories={rows.map((r) => r.label)}
       orientation="h"
@@ -126,9 +142,9 @@ function Exposure({ s }: { s: Pick<HeatSections, "today" | "futures" | "categori
       valueLabel={measure}
       unit={t.measure === "people" ? "people" : "cells"}
       decimals={0}
-      highlight={["Today"]}
+      highlight={scope === "today" ? ["Today"] : undefined}
       actions={
-        s.futures.length ? (
+        scope === "futures" ? (
           <>
             {periods.length > 1 ? <Seg<string> label="Period" size="small" value={per} onChange={setPer} options={periods.map((p) => ({ value: p, label: period(p) }))} /> : null}
             <Seg<Humidity>
@@ -144,9 +160,13 @@ function Exposure({ s }: { s: Pick<HeatSections, "today" | "futures" | "categori
           </>
         ) : undefined
       }
-      caption={`Today ${people(ec, t.measure)} ${t.measure === "people" ? "residents are" : "are"} at Extreme caution or worse${
-        t.adapted ? `; with ${t.package ?? "the package"}, ${people(t.adapted.ec_or_worse, t.measure)}` : ""
-      }.${s.futures.length ? ` Futures (${period(per)}) add each pathway's median warming to the campaign afternoon; switch the humidity assumption to see the other end of the band.` : ""}`}
+      caption={
+        scope === "today"
+          ? `Today ${people(ec, t.measure)} ${t.measure === "people" ? "residents are" : "are"} at Extreme caution or worse${
+              t.adapted ? `; with ${t.package ?? "the package"}, ${people(t.adapted.ec_or_worse, t.measure)}` : ""
+            }.`
+          : `Futures (${period(per)}) add each pathway's median warming to the campaign afternoon; switch the humidity assumption to see the other end of the band.`
+      }
     />
   );
 }
@@ -186,6 +206,7 @@ function Distribution({ hist, categories }: { hist: NonNullable<HeatSections["hi
   );
 }
 
+/** Extreme caution+ and Danger+ in each future (ranges); today's counts are on Today, the warming in the Warming chart. */
 function Futures({ s }: { s: Pick<HeatSections, "today" | "futures"> }) {
   const m = s.today.measure;
   return (
@@ -194,9 +215,6 @@ function Futures({ s }: { s: Pick<HeatSections, "today" | "futures"> }) {
         <thead>
           <tr>
             <th scope="col">Future</th>
-            <th scope="col" className="r">
-              Warming (°F)
-            </th>
             <th scope="col" className="r">
               Extreme caution or worse
             </th>
@@ -216,26 +234,10 @@ function Futures({ s }: { s: Pick<HeatSections, "today" | "futures"> }) {
           </tr>
         </thead>
         <tbody>
-          <tr>
-            <td>Today (campaign afternoon)</td>
-            <td className="r">0</td>
-            <td className="r">{people(s.today.unadapted.ec_or_worse, m)}</td>
-            <td className="r">{people(s.today.unadapted.danger_or_worse, m)}</td>
-            {s.today.adapted ? (
-              <>
-                <td className="r">{people(s.today.adapted.ec_or_worse, m)}</td>
-                <td className="r">{people(s.today.adapted.danger_or_worse, m)}</td>
-              </>
-            ) : null}
-          </tr>
           {s.futures.map((f) => (
             <tr key={f.id}>
               <td>
                 {f.label} {period(f.period)}
-              </td>
-              <td className="r">
-                +{fmtNum(f.warming_F, 1)}
-                {f.warming_lo_F !== null && f.warming_hi_F !== null ? <span className="cap"> ({fmtNum(f.warming_lo_F, 1)}–{fmtNum(f.warming_hi_F, 1)})</span> : null}
               </td>
               <td className="r">{range(f.unadapted.ec_range_full, m)}</td>
               <td className="r">{range(f.unadapted.danger_range_full, m)}</td>
@@ -253,39 +255,6 @@ function Futures({ s }: { s: Pick<HeatSections, "today" | "futures"> }) {
         Ranges span the climate models&apos; 10th–90th percentile warming and the two humidity assumptions (constant dewpoint, the lower end; constant relative humidity, the upper
         end). The heat index is steep near the category edges, so a few tenths of a degree can move many residents across one.
       </p>
-    </div>
-  );
-}
-
-function Verdicts({ rows }: { rows: NonNullable<HeatSections["verdicts"]> }) {
-  return (
-    <div style={{ overflowX: "auto" }}>
-      <table className="tbl" aria-label="Verdict per adaptation scenario">
-        <thead>
-          <tr>
-            <th scope="col">Scenario</th>
-            <th scope="col" className="r">
-              City-mean change
-            </th>
-            <th scope="col" className="r">
-              Plausible range
-            </th>
-            <th scope="col">Verdict and why</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.slug}>
-              <td>{r.scenario}</td>
-              <td className="r">{r.estimate === null ? "—" : fmtNum(r.estimate, 2)}</td>
-              <td className="r">{r.envelope ? `${fmtNum(r.envelope[0], 2)} to ${fmtNum(r.envelope[1], 2)}` : "—"}</td>
-              <td>
-                <VerdictPill verdict={r.verdict ? { verdict: r.verdict, label: r.label ?? r.verdict, reasons: r.reasons, qualifiers: r.qualifiers } : null} detail />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </div>
   );
 }
@@ -314,14 +283,15 @@ function Method({ s }: { s: Pick<HeatSections, "categories" | "humidity"> }) {
   );
 }
 
+/** Heat risk › Today: the heat-risk baseline of the campaign afternoon. */
 export default function Heat() {
   const rid = useRid();
-  const [dewpoint, setDewpoint] = useState<number | null>(null);
+  const [dewpoint, setDewpoint] = useDewpoint();
   return (
     <ViewPage
       view="heat"
-      title="Heat brief"
-      intro="How hot the campaign afternoon felt, who was exposed, how that changes as the climate warms, what the adaptation package buys, and how sure each answer is. Heat risk uses the US National Weather Service heat index and its categories."
+      title="Heat risk today"
+      intro="How hot the campaign afternoon felt, who was exposed and what the adaptation package buys. Heat risk uses the US National Weather Service heat index and its categories."
       params={{ dewpoint_C: dewpoint }}
     >
       {(s) => (
@@ -333,9 +303,9 @@ export default function Heat() {
               </Block>
             )}
           </Section>
-          {s.brief ? <Brief items={s.brief} /> : null}
-          {s.kpis ? <KpiTiles kpis={s.kpis} label="Heat key numbers" /> : null}
-          {s.today && s.futures && s.categories ? <Exposure s={{ today: s.today, futures: s.futures, categories: s.categories }} /> : null}
+          {s.brief ? <Brief items={s.brief.filter((b) => !NOT_TODAY_BRIEF.has(b.id))} /> : null}
+          {s.kpis ? <KpiTiles kpis={s.kpis.filter((k) => !NOT_TODAY_KPIS.has(k.id))} label="Heat key numbers" /> : null}
+          {s.today && s.categories ? <Exposure s={{ today: s.today, futures: s.futures ?? [], categories: s.categories }} scope="today" /> : null}
           <div className="grid2">
             {s.hist && s.categories ? <Distribution hist={s.hist} categories={s.categories} /> : null}
             {s.humidity && !s.humidity.user_set && !s.humidity.needs_input ? (
@@ -344,32 +314,65 @@ export default function Heat() {
               </Block>
             ) : null}
           </div>
-          {s.today && s.futures?.length ? (
-            <Block title="As the climate warms">
-              <Futures s={{ today: s.today, futures: s.futures }} />
-            </Block>
-          ) : null}
-          <Section
-            title="How sure"
-            data={s.verdicts}
-            absent={{
-              reason: "The uncertainty envelopes are not computed for this run, so its scenarios have no verdict yet.",
-              action: { kind: "run_job", label: "Compute uncertainty envelopes", method: "POST", path: `/api/runs/${encodeURIComponent(rid)}/actions/uncertainty`, body: {} },
-            }}
-          >
-            {(v) => (
-              <Block title="How sure: verdict per scenario">
-                <Verdicts rows={v} />
-              </Block>
-            )}
-          </Section>
           {s.categories && s.humidity ? (
             <Block title="Method">
               <Method s={{ categories: s.categories, humidity: s.humidity }} />
             </Block>
           ) : null}
+          <p className="cap" data-heat-next="true">
+            How this changes as the climate warms: <Link to={heatHref(rid, "future", dewpoint)}>Future climate</Link>. How sure each scenario&apos;s cooling is:{" "}
+            <Link to={runHref(rid, "trust")}>How much to trust this</Link>.
+          </p>
         </>
       )}
+    </ViewPage>
+  );
+}
+
+/**
+ * Heat risk › Future climate: residents per NWS category in each future, with and without the
+ * package, at the dewpoint chosen under Today (the campaign's by default).
+ */
+export function HeatFutures() {
+  const rid = useRid();
+  const [dewpoint] = useDewpoint();
+  const today = heatHref(rid, "today", dewpoint);
+  return (
+    <ViewPage
+      view="heat"
+      title="Heat risk as the climate warms"
+      intro="Residents in each National Weather Service heat-risk category on a comparable afternoon in each climate future, with and without the adaptation package."
+      params={{ dewpoint_C: dewpoint }}
+    >
+      {(s) => {
+        if (!s.today || !s.futures || !s.categories)
+          return (
+            <p className="callout" role="note">
+              {s.humidity?.needs_input ? (
+                <>
+                  This run has no campaign humidity. Pick a dewpoint under <Link to={today}>Today</Link> to count residents at heat risk in each future.
+                </>
+              ) : (
+                "Heat risk in future climates is not available for this run."
+              )}
+            </p>
+          );
+        if (!s.futures.length) return <p className="cap">No climate futures for this run: it has no climate change factors yet (see Future climate above).</p>;
+        const h = s.humidity;
+        return (
+          <>
+            {h && h.dewpoint_C !== null ? (
+              <p className="cap">
+                Heat index with a dewpoint of {fmtNum(h.dewpoint_C, 1)} °C ({h.source ?? "assumed"}); change it under <Link to={today}>Today</Link>, where today&apos;s counts are.
+              </p>
+            ) : null}
+            <Exposure s={{ today: s.today, futures: s.futures, categories: s.categories }} scope="futures" />
+            <Block title="Extreme caution and Danger in each future">
+              <Futures s={{ today: s.today, futures: s.futures }} />
+            </Block>
+          </>
+        );
+      }}
     </ViewPage>
   );
 }
