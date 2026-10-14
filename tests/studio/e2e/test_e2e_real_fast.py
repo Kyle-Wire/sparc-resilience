@@ -202,11 +202,11 @@ def test_e2e_real_fast(studio_server, studio_page):
     sp.goto(f"/r/{rid}/lab/climate")     # the old Lab page redirects to its new home
     page.wait_for_url(re.compile(rf"/r/{rid}/heat/future"))
     page.get_by_role("group", name="Adaptations").get_by_role("button").first.click()
-    page.get_by_role("heading", name=re.compile(r"Share of places at or above")).first.wait_for(timeout=120_000)
+    page.get_by_role("heading", name=re.compile(r"Share of places with an air temperature at or above")).first.wait_for(timeout=120_000)
     thresholds = page.get_by_label("Thresholds (°F)")
     thresholds.fill("92")
     thresholds.press("Enter")
-    page.get_by_role("heading", name="Share of places at or above 92.0 °F").wait_for(timeout=60_000)
+    page.get_by_role("heading", name="Share of places with an air temperature at or above 92 °F").wait_for(timeout=60_000)
     sp.shot("climate threshold 92")
 
     # -- plan: the budget slider moves the Pareto curve and the totals; save and verify ---------------
